@@ -295,6 +295,100 @@ class ConnectedRoute(unittest.TestCase):
             for l in lines), lines)
 
 
+class ReusedSubject(unittest.TestCase):
+    """pro-blazer-v1 reuses fold-rango-v1's admitted spec and tools. The admitted helper pins its own subject (its
+    validate_spec accepts only spec.profile 'fold-rango-v1' and every proof names it), so the consumer compares the proof
+    with the subject its spec pins, and only while its localProof and whole tool set are exactly the subject's."""
+
+    def harness(self, **control):
+        h = Harness(self, **control)
+        fold = h.profiles['profiles']['fold-rango-v1']
+        blazer = copy.deepcopy(fold)
+        blazer.update(device='blazer', purpose='synthetic blazer copy of the ready fold profile',
+                      secrets={'keys': 'PIXEL_OS_SIGNING_KEYS_BLAZER_V1', 'passphrase': 'PIXEL_OS_SIGNING_PASSPHRASE_BLAZER_V1'})
+        h.profiles['profiles']['pro-blazer-v1'] = blazer
+        return h, blazer
+
+    def prove(self, h):
+        return sb.prove('pro-blazer-v1', h.profiles, h.env, SHA, h.proof_dir, h.fixture.lock, now=NOW)
+
+    def run_blazer(self, h, executor, binding='same'):
+        binding = h.binding() if binding == 'same' else binding
+        return sb.run('pro-blazer-v1', h.profiles, executor, h.fixture.state, h.fixture.lock, SHA, NOW,
+            workspace=lambda: h.fixture.workspace(), frankel=base.FRANKEL, proof=binding, run_identity=RUN)
+
+    def test_checked_in_blazer_profile_reuses_exactly_the_pinned_subject(self):
+        profiles = PROFILES['profiles']
+        blazer, fold = profiles['pro-blazer-v1'], profiles['fold-rango-v1']
+        self.assertEqual(blazer['localProof']['spec']['profile'], 'fold-rango-v1')
+        self.assertEqual(sb.proof_subject('pro-blazer-v1', blazer, PROFILES), ('fold-rango-v1', None))
+        proof = {'schema': 'roseos.fold-tool-proof.v2', 'profile': 'fold-rango-v1', 'environment': dict(sb.RUNNER_ENVIRONMENT),
+                 'tools': {t: {'path': f'/usr/bin/{t}', 'sha256': 'a' * 64} for t in sb.PROOF_TOOLS}}
+        self.assertEqual(sb.proof_problems('pro-blazer-v1', blazer, proof, PROFILES), [])
+        self.assertEqual(sb.proof_problems('fold-rango-v1', fold, proof, PROFILES), [])
+        # Without the reviewed set the reuse cannot be shown, and a proof naming the consumer is foreign.
+        self.assertEqual(sb.proof_problems('pro-blazer-v1', blazer, proof), ['proof-subject'])
+        self.assertEqual(sb.proof_problems('pro-blazer-v1', blazer, dict(proof, profile='pro-blazer-v1'), PROFILES),
+                         ['proof-foreign'])
+        self.assertEqual(sb.proof_problems('fold-rango-v1', fold, proof), [])  # the subject itself needs no reviewed set
+
+    def test_identical_copy_proves_binds_and_imports(self):
+        h, blazer = self.harness()
+        self.assertEqual(sb.readiness('pro-blazer-v1', h.profiles, NOW), [])
+        self.assertEqual(self.prove(h), ('proven', []))
+        binding = h.binding()
+        self.assertEqual((binding['profile'], binding['proof']['profile']), ('pro-blazer-v1', 'fold-rango-v1'))
+        executor = base.MockExecutor(archive=base.archive_bytes(prefix='blazer/'))
+        receipt, _ = self.run_blazer(h, executor)
+        self.assertEqual(receipt['status'], 'complete', receipt['reasons'])
+        self.assertEqual(h.log(), ['verify-under-lock', 'recheck'])
+        self.assertEqual({c[1] for c in executor.calls if c[0] == 'tool'}, {f'/opt/proven/{t}' for t in sb.PROOF_TOOLS})
+        self.assertEqual(blazer['tools']['openssl']['installed'], {'path': None, 'sha256': None})  # never rewritten
+
+    def test_reuse_refuses_unless_spec_and_tools_are_exactly_the_subjects(self):
+        def other_tool(profiles):
+            tool = profiles['profiles']['pro-blazer-v1']['tools']['avbtool']
+            tool['sourceSha256'] = '0' * 64
+
+        def other_local(profiles):
+            profiles['profiles']['pro-blazer-v1']['localProof']['admissionBasis'] = 'a different admission'
+
+        def no_subject(profiles):
+            profiles['profiles']['pro-blazer-v1']['localProof']['spec'] = dict(
+                profiles['profiles']['pro-blazer-v1']['localProof']['spec'], profile='not-a-reviewed-profile')
+
+        for name, change in (('tools differ', other_tool), ('localProof differs', other_local), ('no reviewed subject', no_subject)):
+            h, _ = self.harness()
+            change(h.profiles)
+            self.assertEqual(self.prove(h), ('refused', ['proof-subject', 'proof-foreign'] if name == 'no reviewed subject'
+                                             else ['proof-subject']), name)
+            self.assertFalse(h.proof_dir.exists(), name)
+            executor = base.MockExecutor(archive=base.archive_bytes(prefix='blazer/'))
+            receipt, _ = self.run_blazer(h, executor, binding=None)
+            self.assertEqual((receipt['status'], base.codes(receipt)), ('blocked', ['proof-missing']), name)
+            self.assertEqual(executor.calls, [], name)
+
+    def test_a_proof_bound_before_the_tools_diverged_is_refused_before_metadata(self):
+        h, _ = self.harness()
+        self.assertEqual(self.prove(h), ('proven', []))
+        h.profiles['profiles']['pro-blazer-v1']['tools']['generator']['sourceSha256'] = '1' * 64
+        executor = base.MockExecutor(archive=base.archive_bytes(prefix='blazer/'))
+        receipt, _ = self.run_blazer(h, executor)
+        self.assertEqual((receipt['status'], base.codes(receipt)), ('blocked', ['proof-subject']))
+        self.assertEqual(executor.calls, [])
+        self.assertEqual(h.log(), ['verify-under-lock'])  # refused before the helper's recheck
+
+    def test_foreign_subject_and_cross_profile_binding_still_refuse(self):
+        h, _ = self.harness(proofOverride={'profile': 'pro-blazer-v1'})
+        self.assertEqual(self.prove(h), ('refused', ['proof-foreign']))
+        h, _ = self.harness()
+        self.assertEqual(h.prove(), ('proven', []))  # a fold-rango-v1 binding ...
+        executor = base.MockExecutor(archive=base.archive_bytes(prefix='blazer/'))
+        receipt, _ = self.run_blazer(h, executor)  # ... is never accepted for pro-blazer-v1
+        self.assertEqual((receipt['status'], base.codes(receipt)), ('blocked', ['proof-binding']))
+        self.assertEqual(executor.calls, [])
+
+
 def _held(path):
     fd = os.open(path, os.O_RDWR)
     try:
