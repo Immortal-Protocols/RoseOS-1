@@ -318,7 +318,20 @@ class Fixture(unittest.TestCase):
         for code in codes:
             self.assertIn(code, text)
 
+def signing_bound(signing):
+    """True for a bound factory-signing identity, False for the unbound pair; never a guess about which is checked in."""
+    return signing['publicKey'] is not None
+
 class Contracts(Fixture):
+    def assertSigningState(self, signing):
+        """Either the unbound pair or one measured identity, never a partial or foreign shape (the loader enforces it)."""
+        self.assertEqual(signing['namespace'], 'factory images')
+        if signing_bound(signing):
+            self.assertRegex(signing['principal'], r'^[\w.@+-]+$')
+            self.assertRegex(signing['publicKey'], r'^ssh-ed25519 [A-Za-z0-9+/]+=*$')
+        else:
+            self.assertEqual((signing['principal'], signing['publicKey']), (None, None))
+
     def test_both_flavors_load_and_match_their_sources(self):
         for name, model in (('frankel', 'Pixel 10'), ('rango', 'Pixel 10 Pro Fold')):
             flavor = fp.load_flavor(name)
@@ -326,7 +339,7 @@ class Contracts(Fixture):
             self.assertTrue(flavor['artifacts']['factory']['dataWipe'] and flavor['artifacts']['factory']['requiresUnlockedBootloader'])
             self.assertFalse(flavor['artifacts']['ota']['dataWipe'] or flavor['artifacts']['factory']['currentlyProduced'])
             self.assertTrue(flavor['missingForFactory'] and all({'input', 'owner', 'next'} <= set(m) for m in flavor['missingForFactory']))
-            self.assertEqual((flavor['factorySigning']['namespace'], flavor['factorySigning']['publicKey']), ('factory images', None))
+            self.assertSigningState(flavor['factorySigning'])
             self.assertEqual(flavor['inventory']['observed'], [])
 
     def test_drift_from_device_contract_or_pinned_firmware_refuses_the_contract(self):
@@ -534,6 +547,37 @@ class ExplicitSignature(Fixture):
                                       '--work-dir', str(self.work), '--signature', str(sig)]), 3)
             self.assertNotIn('factory:rango-install-2026103101.zip.sig', out.getvalue())
             self.assertEqual(fp.main(['classify', str(archive), '--flavor', 'rango', '--signature', 'rel.sig']), 2)
+
+@unittest.skipUnless(SSH, 'needs OpenSSH ssh-keygen')
+class RangoSigningState(Fixture):
+    """Rango's factory-signing identity as explicit fixtures: unbound refuses, a test key verifies, and the checked-in
+    contract (unbound or bound) never verifies a synthetic signature. No checked-in state is pinned."""
+
+    def test_an_explicitly_unbound_rango_fixture_refuses_on_the_missing_identity(self):
+        self.edit_json('os/flavors/rango.json', lambda d: d['factorySigning'].update(principal=None, publicKey=None))
+        archive, tf = self.complete('rango')
+        result = self.classify(archive, 'rango', tf)
+        self.refused(result, 'factory-signing identity: pinned principal and ssh-ed25519 public key for rango')
+        self.assertFalse(result['signatureVerified'])
+
+    def test_a_bound_rango_fixture_verifies_only_its_own_key(self):
+        archive, tf = self.complete('rango')
+        self.assertTrue(self.classify(archive, 'rango', tf)['factoryReady'], 'the fixture key verifies')
+        other = self.keypair('other')
+        self.sign(archive, key=other)
+        self.refused(self.classify(archive, 'rango', tf, sign=False), 'signature-invalid')
+
+    def test_the_checked_in_contract_never_verifies_a_synthetic_signature(self):
+        signing = fp.load_flavor('rango')['factorySigning']
+        archive, tf = self.complete('rango')
+        self.sign(archive)  # the synthetic test key, never a checked-in identity
+        result = fp.classify(archive, 'rango', tf, BUILD, None, ROOT, **self.evidence('rango', tf))
+        self.assertFalse(result['signatureVerified'] or result['factoryReady'])
+        if signing_bound(signing):
+            self.refused(result, 'signature-invalid')
+            self.assertEqual(result['signature']['principal'], signing['principal'])
+        else:
+            self.refused(result, 'factory-signing identity: pinned principal and ssh-ed25519 public key for rango')
 
 @unittest.skipUnless(SSH, 'needs OpenSSH ssh-keygen')
 class Content(Fixture):
@@ -1203,7 +1247,9 @@ class Historical(Fixture):
         self.assertLessEqual(entry['targetFiles']['bytes'], release['input']['limits']['targetFilesBytes'])
         # Not a names-only observation, not an archive signing key, not readiness.
         self.assertEqual(rango['inventory']['observed'], [])
-        self.assertEqual((rango['factorySigning']['principal'], rango['factorySigning']['publicKey']), (None, None))
+        for value in (rango['factorySigning']['principal'], rango['factorySigning']['publicKey']):
+            if value is not None:  # whatever identity is bound, the historical record never carries it
+                self.assertNotIn(value, json.dumps(entry))
         self.assertNotIn(fp.pinned_avb_key(rango), json.dumps(entry))
         self.assertEqual([r['factoryReady'] for r in rango['retained']], [False])
         self.assertTrue(any('archive SSH signing identity' in x for x in entry['doesNotEstablish']))
