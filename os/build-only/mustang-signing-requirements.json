@@ -1,6 +1,6 @@
 {
   "schema": "roseos.mustang-signing-requirements.v1",
-  "status": "proposed; not provisioned, bound or executed",
+  "status": "containers created; profile unbound; signer IAM and credential bootstrap pending",
   "profile": "pro-mustang-v1",
   "device": "mustang",
   "project": "protocols-465723",
@@ -10,7 +10,7 @@
     "passphrase": "PIXEL_OS_SIGNING_PASSPHRASE_MUSTANG_V1"
   },
   "requirements": [
-    "Create two distinct empty Mustang containers without reusing any Rango/Blazer secret or one-shot grant",
+    "Recheck the two created Mustang containers empty as the explicitly authorized signer; no other-device secret or grant",
     "Bind the new OS profile to the existing approved key inventory, consumer and pinned tool-proof mechanism",
     "Confirm the existing signer can describe containers, list versions, add versions, and later access exactly those Mustang secrets",
     "If existing permissions do not suffice, stop and report; no IAM grant or credential change is authorized by the operator transfer",
@@ -19,10 +19,10 @@
   ],
   "compatibility": {
     "upstreamGenerateRelease": "Pinned GrapheneOS/script generate-release.sh explicitly includes Mustang in the rango|mustang|blazer|frankel gen10 case",
-    "existingHostSign": "The normal host-sign adapter is Frankel-bound; retained input adapter is Rango-bound. Neither currently admits a Mustang candidate.",
-    "factoryPackaging": "Existing host-factory-package requires admitted signed target-files and a pinned AVB identity and enforces checks removed by the sprint. A separate deliberately reduced Mustang path is still needed after binding signing.",
+    "existingHostSign": "Mustang adapter now supplies an exact target config, numeric Mustang secret versions from its bootstrap receipt and scoped structural key discovery; other routes retain default public-identity comparison.",
+    "factoryPackaging": "Mustang adapter reuses existing factory script derivation, bounded execution and extraction guards, deliberately omitting the sprint-removed checks while retaining basic installer format and output hashes.",
     "archiveSigning": "Separate archive signature status is omitted in this sprint; no Rango/Blazer archive-signing identity is selected"
   },
-  "runtime": "Source definitions created; containers, IAM/access binding, key generation and signing remain unexecuted. Existing access restrictions and action-time authorization still apply.",
+  "runtime": "Both containers were created and described on 2026-11-03. Creator versions.list denied; no keys, versions or IAM changes. See mustang-setup-evidence.json.",
   "profileDefinition": "os/signing-bootstrap/mustang.json"
 }

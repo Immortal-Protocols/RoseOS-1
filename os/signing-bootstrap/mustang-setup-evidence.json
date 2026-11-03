@@ -1,0 +1,39 @@
+{
+  "schema": "roseos.mustang-setup-evidence.v1",
+  "project": "protocols-465723",
+  "actor": "dev-infra@protocols-465723.iam.gserviceaccount.com",
+  "containers": {
+    "PIXEL_OS_SIGNING_KEYS_MUSTANG_V1": {
+      "name": "projects/1072799993443/secrets/PIXEL_OS_SIGNING_KEYS_MUSTANG_V1",
+      "createdAt": "2026-11-03T20:21:41.279761Z",
+      "creation": "confirmed by successful create response and describe readback",
+      "versionOccupancy": "unknown: versions.list PERMISSION_DENIED for dev-infra"
+    },
+    "PIXEL_OS_SIGNING_PASSPHRASE_MUSTANG_V1": {
+      "name": "projects/1072799993443/secrets/PIXEL_OS_SIGNING_PASSPHRASE_MUSTANG_V1",
+      "createdAt": "2026-11-03T20:21:42.449147Z",
+      "creation": "confirmed by successful create response and describe readback",
+      "versionOccupancy": "unknown: versions.list PERMISSION_DENIED for dev-infra"
+    }
+  },
+  "keysGenerated": false,
+  "secretVersionsAdded": false,
+  "iamChanges": false,
+  "bootstrapRoleObservation": {
+    "name": "projects/protocols-465723/roles/roseosModelsBootstrapV1",
+    "includedPermissions": ["secretmanager.secrets.get", "secretmanager.versions.add", "secretmanager.versions.list"],
+    "basis": "Successful existing-role describe by configured dev-infra identity on 2026-11-03; no role created or modified"
+  },
+  "builderRun": {
+    "id": "41711304208",
+    "source": "2d9934a9c9c01e0197f8e4623fdb6d72c6900ef3",
+    "status": "failed in controller before any VM start request or candidate job",
+    "failure": "builder describe failed (exit 1); underlying cause suppressed by existing adapter",
+    "controller": "roseos-build-controller@protocols-465723.iam.gserviceaccount.com",
+    "cleanup": "success; no start ownership recorded, so no STOP request sent",
+    "independentVmState": "unobserved",
+    "url": "https://github.com/Immortal-Protocols/RoseOS-1/actions/runs/41711304208"
+  },
+  "diagnosticAccess": "Configured dev-infra identity was denied logging.read for failed-controller audit inspection; no retry or alternate audit identity used.",
+  "remaining": "Resolve controller authentication/access; approve any new two-container signer IAM bindings and the journaled new-key bootstrap at action time. No denied operation retried."
+}

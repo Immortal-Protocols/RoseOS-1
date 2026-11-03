@@ -2,6 +2,9 @@
 
 This implements the source/preparation/integration/unsigned-compile portion of
 [Nathan’s Mustang plan](https://app.notion.com/p/40d7c646c81b81198e60cb76ca2ea603).
+For the implemented signing/package continuation and actual blocked runtime state,
+see [Mustang delivery](MUSTANG-DELIVERY.md).
+
 The target is **Pixel 10 Pro XL / mustang**. It is separate from Pixel 10 Pro
 (blazer), Pixel 10 Pro Fold (rango), and the excluded Pixel 11 Fold investigation.
 
@@ -80,22 +83,14 @@ no Mustang build, signed-installer, flash-ready or phone-acceptance claim.
 profile and container names and compatibility findings. They are source
 requirements, not created cloud resources or approved access bindings.
 
-The separate `os/signing-bootstrap/mustang.json` defines `pro-mustang-v1` and the
-loader recognizes it as **unbound**. No admitted container/public identity exists.
-The normal host-sign adapter is Frankel-bound and the retained adapter is
-Rango-bound. The common pinned upstream release script does support Mustang,
-but that alone does not admit the existing adapters. The existing factory
-packager enforces identity/content checks deliberately removed from this sprint;
-a compatible, scoped reduced path still needs implementation after signing is
-bound. No Rango/Blazer grant or key can fill this gap.
-
-The source definition names `PIXEL_OS_SIGNING_KEYS_MUSTANG_V1` and
-`PIXEL_OS_SIGNING_PASSPHRASE_MUSTANG_V1` and preserves the established inventory,
-consumer and same-run tool-proof mechanisms. Resource binding, effective access
-and the journaled bootstrap remain pending; a definition grants no permissions.
-No key generation, container creation, IAM change, signer login or signing has
-occurred. Independent source implementation reaches unsigned compilation; no
-compilation has executed.
+The separate `os/signing-bootstrap/mustang.json` defines `pro-mustang-v1` and
+remains **unbound**. The two distinct Mustang containers have since been created;
+creator `versions.list` was denied, no key material was generated or imported,
+and no signer IAM grant was added. Signing, reduced factory packaging and
+private export source are now implemented in the separate continuation described
+in [Mustang delivery](MUSTANG-DELIVERY.md). That guide and the setup evidence
+record the exact outstanding access/credential requirements and the controller
+failure. No Rango/Blazer grant, identity or artifact fills the gap.
 
 For a later authorized runtime, dispatch **Mustang unsigned candidate** at one
 main SHA after checking current runs. A successful unsigned compile still stops

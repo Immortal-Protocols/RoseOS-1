@@ -49,7 +49,7 @@
       "signature": "{device}-install-{build}.zip.sig (ssh-keygen -Y sign -n \"factory images\", only when the key directory holds id_ed25519)",
       "producer": "generate-release.sh after the OTA: img_from_target_files -> device/common/generate-factory-images-common.sh ({device}-factory-{build}.zip) -> fastboot -S 0x10000000 optimize-factory-image ({device}-install-{build}.zip)",
       "currentlyProduced": false,
-      "currentlyProducedBasis": "The new manual route reaches unsigned compilation only and has not executed. Mustang signing and factory packaging remain unbound; no factory output exists.",
+      "currentlyProducedBasis": "Unsigned and signing/package source routes exist, but no successful Mustang runtime or factory output exists yet.",
       "requiredMembers": [
         "flash-all.sh",
         "avb_pkmd.bin",
