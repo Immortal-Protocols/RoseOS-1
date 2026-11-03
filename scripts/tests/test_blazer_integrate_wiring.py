@@ -132,9 +132,11 @@ class Wiring(unittest.TestCase):
     def fake(self, fail=None, printed=None, allocation=None, tamper=None):
         calls = []
         self.tamper = tamper
+        self.envs = []
 
         def runner(argv, **kwargs):
             calls.append(argv)
+            self.envs.append(kwargs.get('env'))
             if len(argv) > 2 and argv[2] == 'reserve':
                 if fail == 'allocate':
                     return Result(1, json.dumps({'verdict': 'REFUSED'}))
@@ -195,6 +197,31 @@ class Wiring(unittest.TestCase):
         self.assertEqual((record['result'], [s['step'] for s in record['steps']]),
                          ('integrated', ['tools', 'inputs', 'allocate', 'seed', 'assemble', 'admit', 'render', 'candidate', 'reconcile']))
         self.assertEqual(record['build'], '2026110301')
+
+    def test_the_bound_wrapper_execs_the_bound_java_and_jar_by_absolute_path(self):
+        # host-sdk-layout.py writes exactly this wrapper; the bound sha256 is these bytes, so PATH and JAVA_HOME never
+        # choose the java it runs.
+        java, jar = BINDING['toolDependencies']['java']['path'], BINDING['toolDependencies']['apksigner.jar']['path']
+        self.assertIn('wrapper.write_text(f\'#!/bin/sh\\nexec "{java}" -jar "{tools}/lib/apksigner.jar" "$@"\\n\')',
+                      (ROOT/'scripts/host-sdk-layout.py').read_text())
+        wrapper = f'#!/bin/sh\nexec "{java}" -jar "{jar}" "$@"\n'.encode()
+        self.assertEqual(hashlib.sha256(wrapper).hexdigest(), BINDING['apksigner']['sha256'])
+
+    def test_every_step_runs_without_jvm_or_loader_injection_variables(self):
+        self.plan = self.resolved()
+        runner, calls = self.fake()
+        saved = {k: os.environ.get(k) for k in wiring.SCRUBBED}
+        os.environ.update({k: 'injected' for k in wiring.SCRUBBED})
+        try:
+            self.assertEqual(self.run_wiring(runner), 0)
+        finally:
+            for k, v in saved.items():
+                os.environ.pop(k) if v is None else os.environ.__setitem__(k, v)
+        self.assertEqual(len(self.envs), len(calls))
+        for env in self.envs:
+            self.assertIsNotNone(env)
+            self.assertFalse(set(wiring.SCRUBBED) & set(env))
+            self.assertEqual(env.get('PATH'), os.environ.get('PATH'))
 
     def test_the_first_failure_stops_everything_after_it(self):
         for fail in ('allocate', 'seed', 'assemble', 'admit', 'render', 'candidate', 'reconcile'):

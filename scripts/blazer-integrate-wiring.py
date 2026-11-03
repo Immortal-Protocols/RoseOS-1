@@ -33,6 +33,9 @@ failure.
       always: copies only integrate.json, the seed provenance, the admitted local-inputs.json, the rendered config and
       the newest reconcile receipt (regular files, never a link) into a new upload directory.
 
+Every step runs with the inherited environment minus SCRUBBED: the apksigner wrapper execs the bound java by absolute
+path (its bound bytes are host-sdk-layout.py's wrapper for these paths), so PATH and JAVA_HOME never select it, and the
+variables a JVM or the dynamic loader would honour to inject code or options are removed.
 The tree is changed only by step 6, host-reconcile.py under the shared lock with its own owner-conflict checks.
 Exit status: 0 integrated, 1 a step refused or failed, 2 invalid, 4 unbound.
 """
@@ -60,6 +63,8 @@ DEPENDENCIES = {'apksigner.jar': lambda tools, production: tools['apksigner']['p
                 'java': lambda tools, production: production/'prebuilts/jdk/jdk21/linux-x86/bin/java'}
 OBSERVATION = {'run', 'runAttempt', 'source', 'artifact', 'artifactZipSha256', 'report', 'reportSha256'}
 RECONCILE = ROOT/'os/build-only/blazer-reconcile.json'
+SCRUBBED = ('JAVA_TOOL_OPTIONS', 'JDK_JAVA_OPTIONS', '_JAVA_OPTIONS', 'CLASSPATH', 'JAVA_HOME', 'LD_PRELOAD',
+            'LD_LIBRARY_PATH', 'LD_AUDIT')
 SHA256 = re.compile(r'[0-9a-f]{64}')
 HOME = '/home/pixelbuild'
 # Read-only SDK tools may sit inside the production source root only below this exact prefix: they are executed and
@@ -270,6 +275,10 @@ def read_allocation(path, home, recipe):
     return build, work, integration
 
 
+def step_env():
+    return {k: v for k, v in os.environ.items() if k not in SCRUBBED}
+
+
 def run(plan, run_dir, run_id, attempt, root=ROOT, runner=subprocess.run, recipe=None, hasher=tool_sha256):
     run_dir = Path(run_dir)
     run_dir.mkdir(mode=0o700)
@@ -287,7 +296,7 @@ def run(plan, run_dir, run_id, attempt, root=ROOT, runner=subprocess.run, recipe
             return status
         argv = [sys.executable, str(root/'scripts/blazer-allocate.py'), 'reserve', '--home', str(plan['home']),
                 '--run-id', str(run_id), '--run-attempt', str(attempt), '--source', recipe, '--out', str(run_dir/'allocation.json')]
-        result = runner(argv, capture_output=True, text=True, timeout=STEPS['allocate'])
+        result = runner(argv, capture_output=True, text=True, timeout=STEPS['allocate'], env=step_env())
         record['steps'].append({'step': 'allocate', 'exit': result.returncode, 'result': last_json(result.stdout or result.stderr)})
         if result.returncode:
             return status
@@ -299,7 +308,7 @@ def run(plan, run_dir, run_id, attempt, root=ROOT, runner=subprocess.run, recipe
             return status
         work.mkdir(mode=0o700)
         for name, argv in commands(plan, recipe, root):
-            result = runner(argv, capture_output=True, text=True, timeout=STEPS[name])
+            result = runner(argv, capture_output=True, text=True, timeout=STEPS[name], env=step_env())
             record['steps'].append({'step': name, 'exit': result.returncode, 'result': last_json(result.stdout or result.stderr)})
             if result.returncode:
                 return status
@@ -312,7 +321,7 @@ def run(plan, run_dir, run_id, attempt, root=ROOT, runner=subprocess.run, recipe
                     return status
             if name == 'candidate':
                 checked = runner(['git', '-C', str(work/f'product-{recipe[:12]}'), 'rev-parse', 'HEAD'],
-                                 capture_output=True, text=True, timeout=60)
+                                 capture_output=True, text=True, timeout=60, env=step_env())
                 if checked.returncode or checked.stdout.strip() != recipe:
                     record['steps'][-1]['problem'] = 'the candidate checkout is not the recipe HEAD'
                     return status
@@ -322,7 +331,7 @@ def run(plan, run_dir, run_id, attempt, root=ROOT, runner=subprocess.run, recipe
                     record['steps'][-1]['problem'] = 'render printed another reconcile command than the fixed shape'
                     return status
                 command = printed
-        result = runner(command, capture_output=True, text=True, timeout=STEPS['reconcile'])
+        result = runner(command, capture_output=True, text=True, timeout=STEPS['reconcile'], env=step_env())
         record['steps'].append({'step': 'reconcile', 'exit': result.returncode,
                                 'result': last_json(result.stdout or result.stderr)})
         status = 0 if result.returncode == 0 else 1
