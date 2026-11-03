@@ -86,6 +86,9 @@ final class GlassSheen extends Drawable {
   Rect b = getBounds();
   if (b.isEmpty() || bands == null) return;
   int layer = c.saveLayerAlpha(b.left, b.top, b.right, b.bottom, Math.round(opacity * 255));
+  // Opaque paint for the shaders: a shader is modulated by the paint's alpha, and the highlight lines below leave it at
+  // .22, which would otherwise dim every frame after the first.
+  paint.setColor(0xff000000);
   paint.setShader(bands); c.drawRect(b, paint);
   paint.setShader(glow); c.drawRect(b, paint);
   paint.setShader(null);
@@ -102,6 +105,7 @@ final class GlassSheen extends Drawable {
    c.translate(x + sw / 2, b.top - .25f * b.height() + bh / 2);
    c.skew((float) Math.tan(Math.toRadians(-22)), 0);
    c.translate(-sw / 2, -bh / 2);
+   paint.setColor(0xff000000);
    paint.setShader(sweepBand);
    c.drawRect(0, 0, sw, bh, paint);
    paint.setShader(null);
