@@ -22,15 +22,16 @@ public final class RoseEdgeGestureTest {
     static int slow(int stock, float up) { return RoseEdgeGesture.release(true, false, false, false, false, stock, up); }
 
     public static void main(String[] args) {
-        // A slow, unpaused release over an app: below 36dp nothing changes; 36 up to 240 raises; 240 and beyond is Home.
-        expect(slow(L, 0) == RoseEdgeGesture.STOCK && slow(L, 35.9f) == RoseEdgeGesture.STOCK, "too short: Launcher3 decides");
-        expect(slow(L, -50) == RoseEdgeGesture.STOCK, "finger ended lower: Launcher3 decides");
-        expect(slow(L, 36) == RoseEdgeGesture.RAISE && slow(L, 120) == RoseEdgeGesture.RAISE
-                && slow(L, 239.9f) == RoseEdgeGesture.RAISE, "a short swipe raises the edge");
-        expect(slow(H, 100) == RoseEdgeGesture.RAISE, "a short slow swipe Launcher3 would send Home raises the edge instead");
-        expect(slow(H, 20) == RoseEdgeGesture.STOCK, "but a tiny one keeps Launcher3's own result");
-        expect(slow(L, 240) == RoseEdgeGesture.HOME && slow(H, 400) == RoseEdgeGesture.HOME, "a long swipe goes Home");
-        expect(slow(L, Float.NaN) == RoseEdgeGesture.STOCK, "no distance: Launcher3 decides");
+        // Launcher3's slow swipe Home (36dp or more, still moving up): below 240dp the edge rises; from 240dp, Home.
+        expect(slow(H, 36) == RoseEdgeGesture.RAISE && slow(H, 120) == RoseEdgeGesture.RAISE
+                && slow(H, 239.9f) == RoseEdgeGesture.RAISE, "a short slow swipe raises the edge instead of going Home");
+        expect(slow(H, 20) == RoseEdgeGesture.STOCK && slow(H, 35.9f) == RoseEdgeGesture.STOCK,
+                "under 36dp (which Launcher3 itself never sends Home slowly) its own result stands");
+        expect(slow(H, 240) == RoseEdgeGesture.HOME && slow(H, 400) == RoseEdgeGesture.HOME, "a long swipe goes Home");
+        expect(slow(H, Float.NaN) == RoseEdgeGesture.STOCK, "no distance: Launcher3 decides");
+        // Back to the app stays back to the app: too short, or the finger came back down before release.
+        for (float up : new float[] {-50, 0, 35.9f, 36, 120, 239.9f, 240, 400})
+            expect(slow(L, up) == RoseEdgeGesture.STOCK, "Launcher3's back-to-app (" + up + "dp) stands");
 
         // Launcher3's own rules always stand.
         for (float up : new float[] {10, 60, 200, 500}) {
@@ -46,8 +47,9 @@ public final class RoseEdgeGestureTest {
         }
 
         // With the edge up: 120dp goes Home, anything shorter leaves it up (never a second raise).
-        expect(RoseEdgeGesture.release(true, true, false, false, false, L, 119.9f) == RoseEdgeGesture.STAY, "raised: short swipe keeps it");
-        expect(RoseEdgeGesture.release(true, true, false, false, false, L, 0) == RoseEdgeGesture.STAY, "raised: a tap keeps it");
+        expect(RoseEdgeGesture.release(true, true, false, false, false, H, 119.9f) == RoseEdgeGesture.STAY, "raised: short swipe keeps it");
+        expect(RoseEdgeGesture.release(true, true, false, false, false, H, 36) == RoseEdgeGesture.STAY, "raised: never a second raise");
+        expect(RoseEdgeGesture.release(true, true, false, false, false, L, 200) == RoseEdgeGesture.STOCK, "raised: back-to-app stands");
         expect(RoseEdgeGesture.release(true, true, false, false, false, H, 120) == RoseEdgeGesture.HOME, "raised: 120dp goes Home");
 
         // Preview geometry: --pk = min(1, up / 120), --pk2 = clamp((up / 120 - 1) / 1.2, 0, 1).

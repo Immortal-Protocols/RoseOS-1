@@ -9,10 +9,11 @@ package com.android.quickstep.fallback;
  * exists and both sides compile together on the builder (#410 handoff), so today it changes nothing at runtime.
  *
  * Release over an app, distances in dp upward from the touch-down point:
- * - Launcher3's own decision always wins for a fling (Home), a pause (the switcher), a sideways quick switch, a cancel
- *   and every surface the edge does not apply to. The edge only refines a slow, unpaused release that Launcher3 would
- *   send back to the app or Home: from RAISE_DP up to, but not including, HOME_DP the edge rises instead.
- * - With the edge already up, a further swipe from the bottom goes Home at RAISED_HOME_DP; anything shorter leaves the
+ * - Launcher3's own decision always wins for a fling (any upward fling goes Home), a pause (the switcher), a sideways
+ *   quick switch, a cancel, a release with the finger moving back down (the app), and every surface the edge does not
+ *   apply to. The edge only refines Launcher3's slow swipe Home (AbsSwipeUpHandler.calculateEndTargetForNonFling at
+ *   47accce: velocity.y < 0 and mCanSlowSwipeGoHome, which needs 36dp): below HOME_DP the edge rises instead.
+ * - With the edge already up, a further slow swipe goes Home only from RAISED_HOME_DP; anything shorter leaves the
  *   edge as it is. Lowering it (swipe down on the edge, Escape, IME, leaving the app) belongs to the edge window.
  *
  * Live preview while the finger is down (never with reduced motion: the result then applies at once):
@@ -23,7 +24,7 @@ package com.android.quickstep.fallback;
  * Raised, the app's bottom stays LIFT_BOTTOM_DP up (the edge's height less its concave top), which is the inset the
  * edge provides for the app's real relayout.
  */
-final class RoseEdgeGesture {
+public final class RoseEdgeGesture {
     private RoseEdgeGesture() {}
 
     /** Release thresholds (app.js endDrag: dy < -36 raises; dy < -240, or dy < -120 with v < -0.9 px/ms, goes Home). */
@@ -56,8 +57,7 @@ final class RoseEdgeGesture {
      */
     static int release(boolean eligible, boolean raised, boolean cancelled, boolean fling, boolean paused, int stock,
             float upDp) {
-        if (!eligible || cancelled || fling || paused || stock == STOCK_RECENTS || stock == STOCK_NEW_TASK) return STOCK;
-        if (!(upDp == upDp)) return STOCK;
+        if (!eligible || cancelled || fling || paused || stock != STOCK_HOME || !(upDp == upDp)) return STOCK;
         if (raised) return upDp >= RAISED_HOME_DP ? HOME : STAY;
         if (upDp >= HOME_DP) return HOME;
         return upDp >= RAISE_DP ? RAISE : STOCK;

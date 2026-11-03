@@ -233,7 +233,8 @@ class RoseSwitcherTest(unittest.TestCase):
         result = subprocess.run(['javac', '-source', '11', '-target', '11', '-Xlint:-options', '-implicit:none',
             '-sourcepath', str(tmp/'src'), '-cp', str(jars[-1]), '-d', str(tmp/'out'),
             str(OVERLAY/'RoseAgentStrip.java'), str(OVERLAY/'RoseAgentWork.java'), str(OVERLAY/'RoseAgentFan.java'),
-            str(OVERLAY/'RoseFan.java'), str(OVERLAY/'RoseOxbloodField.java')], capture_output=True, text=True)
+            str(OVERLAY/'RoseFan.java'), str(OVERLAY/'RoseOxbloodField.java'), str(OVERLAY/'RoseEdgeGesture.java')],
+            capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_the_view_uses_only_existing_authority_and_opens_only_the_current_work(self):
