@@ -1086,9 +1086,12 @@ class BoundedRunner(unittest.TestCase):
 class FactoryPin(unittest.TestCase):
     def test_bound_pin_only_when_genuinely_bound(self):
         self.assertIsNone(fs.bound_pin({'namespace': 'factory images', 'principal': None, 'publicKey': None, 'status': 'missing'}))
-        for flavor in ('rango', 'frankel'):  # the checked-in pins are unbound: signing stays off
-            pin = json.loads((ROOT/f'os/flavors/{flavor}.json').read_text())['factorySigning']
-            self.assertIsNone(fs.bound_pin(pin))
+        for flavor in ('rango', 'frankel'):  # a committed pin is null (signing off) or genuinely bound; a bound pin's
+            pin = json.loads((ROOT/f'os/flavors/{flavor}.json').read_text())['factorySigning']  # receipt is checked by
+            if pin.get('publicKey') is None and pin.get('principal') is None:                  # factory-archive-sign check
+                self.assertIsNone(fs.bound_pin(pin))
+            else:
+                self.assertEqual(fs.bound_pin(pin)['principal'], pin['principal'])
         good = {'namespace': 'factory images', 'principal': 'roseos-factory-images-rango-v1', 'publicKey': fake_key()[1],
                 'status': 'bound'}
         self.assertEqual(fs.bound_pin(good)['principal'], 'roseos-factory-images-rango-v1')
@@ -1283,8 +1286,11 @@ class FactoryBootstrapProfile(unittest.TestCase):
         self.assertTrue(sb.guard(dict(env, ROSE_DEVICE='rango'), unbound, NOW))  # the dispatch shape is unchanged
 
     def test_checked_in_profile_is_unbound_and_refuses_before_anything(self):
-        reasons = sb.readiness('fold-rango-factory-v1', PROFILES, NOW)
-        self.assertEqual(reasons[0][0], 'profile-unbound')
+        unbound = copy.deepcopy(PROFILES)
+        unbound['profiles']['fold-rango-factory-v1']['status'] = 'unbound'
+        self.assertEqual(sb.readiness('fold-rango-factory-v1', unbound, NOW)[0][0], 'profile-unbound')
+        if PROFILES['profiles']['fold-rango-factory-v1']['status'] != 'resource-bound':
+            self.assertEqual(sb.readiness('fold-rango-factory-v1', PROFILES, NOW)[0][0], 'profile-unbound')
         profile = PROFILES['profiles']['fold-rango-factory-v1']
         self.assertEqual((profile['principal'], profile['archive']['format']), ('roseos-factory-images-rango-v1', 'openssh-ed25519'))
         self.assertEqual(profile['secrets'], {'keys': 'PIXEL_OS_FACTORY_SIGNING_KEY_RANGO_V1',
@@ -1488,20 +1494,102 @@ class FactorySelfCheck(unittest.TestCase):
 
 
 class FactoryProfileValidation(unittest.TestCase):
-    def test_null_expiries_are_never_enforced_or_assumed(self):
+    def test_access_is_proven_live_so_unrecorded_expiries_are_not_required(self):
+        # Owner decision: the run's credentialed metadata calls prove access (any expiry, revocation or wrong grant),
+        # so a ready factory profile needs no recorded timestamps; a recorded one is still enforced (next test).
         profiles = factory_ready_profiles()
-        profiles['profiles']['fold-rango-factory-v1']['access'].update(addVersionExpires=None, accessorExpires=None)
-        codes_ = [c for c, _ in sb.readiness('fold-rango-factory-v1', profiles, NOW)]
-        self.assertEqual(codes_, ['access-unknown', 'access-unknown'])
-        checked = PROFILES['profiles']['fold-rango-factory-v1']['access']
-        self.assertEqual((checked['addVersionExpires'], checked['accessorExpires'], checked['basis']), (None, None, None))
+        profiles['profiles']['fold-rango-factory-v1']['access'].update(addVersionExpires=None, accessorExpires=None, basis=None)
+        self.assertEqual(sb.readiness('fold-rango-factory-v1', profiles, NOW), [])
+        self.assertEqual(sb.guard(dict(GUARD_ENV, BOOTSTRAP_PROFILE='fold-rango-factory-v1'), profiles, NOW), [])
+        # Profiles of other formats keep the recorded-expiry rule.
+        fold = copy.deepcopy(READY)
+        fold['profiles']['fold-rango-v1']['access'].update(addVersionExpires=None)
+        self.assertIn('access-unknown', [c for c, _ in sb.readiness('fold-rango-v1', fold, NOW)])
+        checked = PROFILES['profiles']['fold-rango-factory-v1']['access']  # a committed record, if any, is never partial
+        self.assertTrue(checked['basis'] or (checked['addVersionExpires'] is None and checked['accessorExpires'] is None))
+
+    def test_after_the_first_live_check_a_denied_add_or_recheck_uses_up_the_run_and_is_never_retried(self):
+        profiles = factory_ready_profiles()
+        profiles['profiles']['fold-rango-factory-v1']['access'].update(addVersionExpires=None, accessorExpires=None, basis=None)
+        runner = KeygenMock()
+
+        class Executor(MockExecutor):
+            def tool_sha256(self, path):
+                self.calls.append(('tool', path))
+                return hashlib.sha256(b'ssh-keygen').hexdigest()
+
+            def generate(self, workspace, profile):
+                self.calls.append(('generate',))
+                return sb.generate_openssh(workspace, profile, runner=runner, token='SYNTHETIC-token')
+
+        class RecheckDenied(Executor):
+            def secret_state(self, project, secret):
+                denied = [c for c in self.calls if c[0] == 'generate']
+                self.calls.append(('metadata', secret))
+                if denied:
+                    raise sb.Unavailable('the access lapsed after the first check')
+                return {'exists': True, 'versions': []}
+        for name, executor, adds, expected in (
+                ('add denied', Executor(adds=[sb.Uncertain('versions.add denied')]), 1, 'recovery-needed'),
+                ('recheck denied', RecheckDenied(), 0, 'metadata-unavailable')):
+            with self.subTest(name):
+                fixture = Fixture(self)
+                receipt = sb.run('fold-rango-factory-v1', profiles, executor, fixture.state, fixture.lock, SHA, NOW,
+                                 workspace=lambda: fixture.workspace(), frankel=FRANKEL)[0]
+                self.assertIn(expected, codes(receipt))
+                self.assertIn('generate', executor.kinds())  # the key existed: this run is used up
+                self.assertEqual(executor.kinds().count('add'), adds)
+                self.assertTrue(receipt['cleanup']['workspaceRemoved'])
+                journal = json.loads((fixture.state/'fold-rango-factory-v1.json').read_text())
+                self.assertIn(journal['status'], ('recovery-needed', 'failed-before-commit'))
+                retry = sb.run('fold-rango-factory-v1', profiles, Executor(), fixture.state, fixture.lock, SHA, NOW,
+                               workspace=lambda: fixture.workspace(), frankel=FRANKEL)[0]
+                self.assertEqual(codes(retry), ['previous-attempt'])  # never retried or regenerated
+
+    def test_plan_tells_the_admin_to_grant_one_binding_per_secret(self):
+        grant = sb.plan('fold-rango-factory-v1', PROFILES)['grant']
+        self.assertIn('one binding per secret', grant)
+        self.assertIn('versions.add', grant)
+        self.assertIsNone(sb.plan('fold-rango-v1', PROFILES)['grant'])
+
+    def test_a_failed_live_access_call_stops_before_any_key_or_journal_and_can_be_retried(self):
+        profiles = factory_ready_profiles()
+        profiles['profiles']['fold-rango-factory-v1']['access'].update(addVersionExpires=None, accessorExpires=None, basis=None)
+        runner, fixture = KeygenMock(), Fixture(self)
+
+        class Executor(MockExecutor):
+            def tool_sha256(self, path):
+                self.calls.append(('tool', path))
+                return hashlib.sha256(b'ssh-keygen').hexdigest()
+
+            def generate(self, workspace, profile):
+                self.calls.append(('generate',))
+                return sb.generate_openssh(workspace, profile, runner=runner, token='SYNTHETIC-token')
+
+        def bootstrap(executor):
+            return sb.run('fold-rango-factory-v1', profiles, executor, fixture.state, fixture.lock, SHA, NOW,
+                          workspace=lambda: fixture.workspace(), frankel=FRANKEL)[0]
+        for denial in (sb.Unavailable('permission denied: the access expired'), sb.Unavailable('the grant was revoked')):
+            with self.subTest(str(denial)):
+                executor = Executor(states={'PIXEL_OS_FACTORY_SIGNING_PASSPHRASE_RANGO_V1': denial})
+                receipt = bootstrap(executor)
+                self.assertEqual((receipt['status'], codes(receipt)), ('blocked', ['metadata-unavailable']))
+                self.assertNotIn('generate', executor.kinds())
+                self.assertNotIn('add', executor.kinds())
+                self.assertFalse((fixture.state/'fold-rango-factory-v1.json').exists())  # nothing used up
+        retry = Executor()
+        self.assertEqual(bootstrap(retry)['status'], 'complete')
 
     def test_recorded_expiries_must_fit_the_approved_ceilings_with_a_basis(self):
         for change, code in (({'addVersionExpires': '2026-10-30T02:00:00Z'}, 'access-window'),   # 4 h 30 m
                              ({'accessorExpires': '2026-12-01T00:00:00Z'}, 'access-window'),     # > 30 d
                              ({'addVersionExpires': '2026-11-28T00:00:00Z'}, 'access-window'),   # after accessor
                              ({'basis': None}, 'access-unknown'),
-                             ({'addVersionExpires': '2026-10-29T21:45:00Z'}, 'access-expired')):  # inside the margin
+                             ({'addVersionExpires': '2026-10-29T21:45:00Z'}, 'access-expired'),  # inside the margin
+                             ({'accessorExpires': None, 'addVersionExpires': '2026-10-30T02:00:00Z'}, 'access-window'),
+                             ({'addVersionExpires': None, 'accessorExpires': '2026-12-01T00:00:00Z'}, 'access-window'),
+                             ({'addVersionExpires': None, 'basis': None}, 'access-unknown'),
+                             ({'addVersionExpires': 'tomorrow'}, 'access-unknown')):
             with self.subTest(change):
                 profiles = factory_ready_profiles()
                 profiles['profiles']['fold-rango-factory-v1']['access'].update(change)
@@ -1631,8 +1719,10 @@ class BlazerProfiles(unittest.TestCase):
     def test_factory_profile_shape_matches_rango_with_its_own_principal(self):
         rango, pro = PROFILES['profiles']['fold-rango-factory-v1'], PROFILES['profiles']['pro-blazer-factory-v1']
         self.assertEqual(pro['principal'], 'roseos-factory-images-blazer-v1')
-        def shape(profile):  # the measured identity may be bound for Rango first (SshKeygenEvidence checks both copies)
-            value = copy.deepcopy({k: v for k, v in profile.items() if k not in ('device', 'principal', 'purpose', 'secrets', 'missing')})
+        def shape(profile):  # bindings (status, access, the measured identity) may land for Rango first
+            value = copy.deepcopy({k: v for k, v in profile.items()
+                                   if k not in ('device', 'principal', 'purpose', 'secrets', 'missing', 'status', 'access',
+                                                'resourceBasis')})
             value['tools']['ssh-keygen'].pop('installed')
             return value
         self.assertEqual(shape(pro), shape(rango))
