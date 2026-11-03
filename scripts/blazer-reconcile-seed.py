@@ -3,7 +3,8 @@
 reconcile receipt that explains the isolated copy's integrated bytes, so host-reconcile.py can tell Rose-installed
 files from owner changes without restoring anything.
 
-  seed --frankel-receipts DIR --source-root SRC --source-run RUN --receipt-dir NEW
+  seed --frankel-receipts DIR --source-root SRC --source-run RUN --source-inventory FILE --source-inventory-sha256 H
+       --receipt-dir NEW
 
 The isolated blazer source tree is a byte copy of the Frankel-integrated production tree. host-reconcile.py replaces a
 file only when it is pristine (== HEAD), integration-owned, integration-reproduced or task-owned, where task-owned
@@ -16,8 +17,9 @@ the first receipt whose every entry matches SRC exactly: `after` sha256 equal to
 or the path absent where `after` is null. There is no closest match: if no receipt matches entirely, seed refuses and
 writes nothing. NEW must not exist; it gets exactly two files:
   0001-<that receipt's label>.json   the receipt's bytes unchanged (renumbered so later blazer receipts sort after it)
-  seed-provenance.json               which file it was (path, original name, sequence, sha256), the source run of the
-                                     copy, how many entries were checked; a name latest_receipt never reads
+  seed-provenance.json               which file it was (path, original name, sequence, sha256), the copy's source run
+                                     and its inventory (path and sha256, which must equal H), how many entries were
+                                     checked; a name latest_receipt never reads
 It claims only that those bytes were installed by that Frankel receipt. It decides no ownership itself: host-reconcile.py
 still refuses any byte no receipt or rule explains. Nothing is restored, reset, written to SRC or fetched.
 
@@ -119,11 +121,18 @@ def matches(receipt, source):
     return True, len(entries)
 
 
-def seed(frankel_receipts, source_root, source_run, receipt_dir):
+def seed(frankel_receipts, source_root, source_run, receipt_dir, inventory, inventory_sha256):
     receipts_dir = plain_dir(frankel_receipts, '--frankel-receipts')
     source = plain_dir(source_root, '--source-root')
     if not (isinstance(source_run, str) and source_run.isdigit() and source_run[0] != '0' and len(source_run) <= 20):
         raise Refused('--source-run must be the numeric run that made the copy')
+    if not (isinstance(inventory_sha256, str) and SHA.fullmatch(inventory_sha256)):
+        raise Refused('--source-inventory-sha256 must be a lowercase sha256')
+    inventory = Path(inventory)
+    if not inventory.is_absolute() or '..' in inventory.parts:
+        raise Refused('--source-inventory must be an absolute path')
+    if hashlib.sha256(read_regular(inventory)).hexdigest() != inventory_sha256:
+        raise Refused('--source-inventory is not the named copy inventory (sha256 differs)')
     out = Path(receipt_dir)
     if not out.is_absolute() or '..' in out.parts or os.path.lexists(out):
         raise Refused('--receipt-dir must be a new absolute path')
@@ -164,7 +173,8 @@ def seed(frankel_receipts, source_root, source_run, receipt_dir):
             provenance = {'schema': 'roseos.blazer-reconcile-seed.v1', 'seededAs': target.name,
                           'source': {'path': str(receipts_dir/name), 'name': name, 'sequence': int(sequence),
                                      'label': label, 'sha256': digest},
-                          'sourceRun': source_run, 'sourceRoot': str(source), 'entriesChecked': detail,
+                          'sourceRun': source_run, 'sourceRoot': str(source),
+                          'sourceInventory': {'path': str(inventory), 'sha256': inventory_sha256}, 'entriesChecked': detail,
                           'newerReceiptsNotMatching': misses,
                           'claim': 'every entry of this Frankel reconcile receipt matches the isolated copy exactly; '
                                    'nothing else is claimed'}
@@ -184,11 +194,13 @@ def seed(frankel_receipts, source_root, source_run, receipt_dir):
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument('command', choices=('seed',))
-    for flag in ('--frankel-receipts', '--source-root', '--source-run', '--receipt-dir'):
+    for flag in ('--frankel-receipts', '--source-root', '--source-run', '--source-inventory', '--source-inventory-sha256',
+                 '--receipt-dir'):
         p.add_argument(flag, required=True)
     a = p.parse_args(argv)
     try:
-        record = seed(a.frankel_receipts, a.source_root, a.source_run, a.receipt_dir)
+        record = seed(a.frankel_receipts, a.source_root, a.source_run, a.receipt_dir, a.source_inventory,
+                      a.source_inventory_sha256)
     except Refused as error:
         print(json.dumps({'verdict': 'REFUSED', 'error': str(error)}), file=sys.stderr)
         return 1

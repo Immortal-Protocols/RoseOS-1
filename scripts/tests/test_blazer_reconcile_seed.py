@@ -41,6 +41,8 @@ class Seed(unittest.TestCase):
         self.write('0041-2026110301.json', {UPDATER: sha(b'newer frankel route\n'), ROLE: sha(b'role patched\n')})
         (self.frankel/'0041-2026110301-backup').mkdir()
         self.out = self.tmp/'blazer-reconcile'
+        self.inventory = self.tmp/'inventory.json'
+        self.inventory.write_text('{"copy": "synthetic inventory"}')
 
     def write(self, name, afters, kind='reconcile', label=None):
         record = {'receiptType': kind, 'label': label or name[5:-5], 'changed': sorted(afters),
@@ -48,7 +50,8 @@ class Seed(unittest.TestCase):
         (self.frankel/name).write_text(json.dumps(record))
 
     def run_seed(self, **change):
-        args = dict(frankel_receipts=self.frankel, source_root=self.src, source_run='41473133543', receipt_dir=self.out)
+        args = dict(frankel_receipts=self.frankel, source_root=self.src, source_run='41554911849', receipt_dir=self.out,
+                    inventory=self.inventory, inventory_sha256=sha(self.inventory.read_bytes()))
         args.update(change)
         return seed.seed(**args)
 
@@ -58,6 +61,8 @@ class Seed(unittest.TestCase):
         self.assertEqual((self.out/'0001-2026103101.json').read_bytes(), (self.frankel/'0040-2026103101.json').read_bytes())
         self.assertEqual((record['source']['name'], record['source']['sequence'], record['entriesChecked']),
                          ('0040-2026103101.json', 40, 2))
+        self.assertEqual((record['sourceRun'], record['sourceInventory']),
+                         ('41554911849', {'path': str(self.inventory), 'sha256': sha(self.inventory.read_bytes())}))
         self.assertEqual(record['newerReceiptsNotMatching'], [{'receipt': '0041-2026110301.json', 'firstMismatch': UPDATER}])
         previous, count = reconcile.latest_receipt(self.out)
         self.assertEqual(count, 1)
@@ -99,8 +104,19 @@ class Seed(unittest.TestCase):
         with self.assertRaisesRegex(seed.Refused, 'no Frankel reconcile receipt matches'):
             self.run_seed()
 
+    def test_a_null_after_means_truly_absent_and_a_dangling_link_fails(self):
+        self.write('0042-2026110302.json', {UPDATER: sha(b'frankel route\n'), ROLE: sha(b'role patched\n'),
+                                            'build/make/gone.mk': None})
+        (self.src/'build/make').mkdir(parents=True)
+        (self.src/'build/make/gone.mk').symlink_to(self.tmp/'nowhere')
+        with self.assertRaises(seed.Refused):
+            self.run_seed()
+        self.assertFalse(os.path.lexists(self.out))
+
     def test_inputs_and_receipt_shapes_refuse(self):
-        for change, word in (({'source_run': '0'}, 'numeric'), ({'receipt_dir': self.tmp/'src/inside'}, 'outside'),
+        for change, word in (({'inventory_sha256': '0' * 64}, 'not the named copy inventory'),
+                             ({'inventory_sha256': 'X'}, 'lowercase sha256'), ({'inventory': Path('rel.json')}, 'absolute'),
+                             ({'source_run': '0'}, 'numeric'), ({'receipt_dir': self.tmp/'src/inside'}, 'outside'),
                              ({'receipt_dir': self.frankel/'x'}, 'outside'), ({'receipt_dir': Path('rel')}, 'new absolute'),
                              ({'frankel_receipts': self.tmp/'none'}, 'existing absolute directory')):
             with self.subTest(change=change), self.assertRaisesRegex(seed.Refused, word):
