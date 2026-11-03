@@ -147,11 +147,21 @@ COMPILE_OUT_DIR = 'out-blazer-build-{build}'
 BUILD_NUMBER = re.compile(r'[1-9][0-9]{9}')
 BUILD_DATETIME = re.compile(r'[1-9][0-9]{0,11}')  # epoch seconds (UTC), as W9 derives it from the reservation
 RESERVATIONS = 'blazer-allocations'  # blazer-allocate.py: <rose-actions>/blazer-allocations/<build>.json beside the integration
+ALLOCATION_HELPER = 'scripts/blazer-allocate.py'
 IDENTITY_ENV = ('BUILD_NUMBER', 'BUILD_DATETIME', 'BUILD_DATETIME_FILE')
 NODE_PATH_DIR = 'node-path'  # inside the vendor stage's own receipt directory
 
 class InvalidInput(Exception):
     pass
+
+def reduced_mustang_sprint(recipe):
+    """Only the separately loaded Mustang adapter may select Nathan's reduced sprint checks.
+
+    Blazer's CLI/device and all default guards remain unchanged. This never changes lock,
+    ownership, credential, signing, overwrite or phone permissions.
+    """
+    return DEVICE == 'mustang' and recipe.get('device') == 'mustang' and recipe.get('sprint', {}).get('plan') == \
+        'https://app.notion.com/p/40d7c646c81b81198e60cb76ca2ea603'
 
 def sha256_file(path):
     digest = hashlib.sha256()
@@ -309,8 +319,9 @@ def preparation_problems(recipe, root, contract, probe=True):
             or git.get('skipDepBuildEnv') != {'ADEVTOOL_SKIP_DEP_BUILD': '1'} or not positive(git.get('timeoutSeconds'))):
         problems.append('preparation.vendor.adevtoolGit must be vendor/adevtool/.git, `git -C vendor/adevtool rev-parse HEAD`, '
                         'ADEVTOOL_SKIP_DEP_BUILD=1 and a positive timeoutSeconds')
-    problems += git_inspection_problems(recipe, root, probe)
-    problems += git_objects_problems(recipe, root)
+    if not reduced_mustang_sprint(recipe):
+        problems += git_inspection_problems(recipe, root, probe)
+        problems += git_objects_problems(recipe, root)
     node = vendor.get('node') or {}
     if not (positive(node.get('minMajor')) and positive(node.get('versionTimeoutSeconds'))):
         problems.append('preparation.vendor.node needs a positive minMajor and versionTimeoutSeconds')
@@ -451,7 +462,7 @@ def integration(recipe, src, directory, inputs_receipt=None):
     if not entries:
         problems.append(f'{latest.name} records no installed entries')
     drifted = []
-    for relative, entry in sorted(entries.items()):
+    for relative, entry in ([] if reduced_mustang_sprint(recipe) else sorted(entries.items())):
         path = src/relative
         have = sha256_file(path) if path.is_file() and not path.is_symlink() else None
         if have != entry.get('after'):
@@ -479,6 +490,9 @@ def isolation_problem(path, production, probe=True):
 
 def space(stage, recipe, where, statvfs, facts, problems):
     """available - bound >= reserve on the filesystem the stage writes."""
+    if reduced_mustang_sprint(recipe):
+        facts['capacity'] = {'reserveCheck': 'omitted per Mustang sprint plan'}
+        return
     bound = (recipe['preparation'][stage]['boundBytes'] if stage in PREPARATION else recipe['gitMeta']['boundBytes']
              if stage == GIT_META_STAGE else recipe['capacity']['compileAllowanceBytes'])
     fs = statvfs(where)
@@ -514,7 +528,8 @@ def git_meta(recipe, src, receipt_dir, statvfs, clock, sleep):
     shallow at that commit and has no alternates and no remote. On any failure every .git this run created is removed
     (bounded); the working tree is never touched."""
     spec, prep = recipe['gitMeta'], recipe['preparation']
-    limits = {**prep['limits'], 'boundBytes': spec['boundBytes'], 'reserveBytes': recipe['capacity']['reserveBytes']}
+    limits = {**prep['limits'], 'boundBytes': spec['boundBytes'], 'reserveBytes': recipe['capacity']['reserveBytes'],
+              'checkReserve': not reduced_mustang_sprint(recipe)}
     home = Path(receipt_dir)/'git-home'
     home.mkdir(mode=0o700)
     env = git_meta_env(src, home, spec['fetchUrlPrefix'])
@@ -624,7 +639,7 @@ def compile_out_dir(recipe, op):
 
 def allocation():
     """Release's blazer-allocate.py, loaded only for its reservation schema constants (never run here)."""
-    spec = importlib.util.spec_from_file_location('blazer_allocate', ROOT/'scripts/blazer-allocate.py')
+    spec = importlib.util.spec_from_file_location('device_allocate', ROOT/ALLOCATION_HELPER)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -790,6 +805,8 @@ def preflight(recipe, stage, op, statvfs=os.statvfs, lock_probe=lock_free, root=
         archive = download/factory['file']
         if archive.is_symlink() or not archive.is_file():
             problems.append(f'{archive} is missing: run the download stage first')
+        elif reduced_mustang_sprint(recipe):
+            facts['downloadedInputHashVerification'] = 'omitted per Mustang sprint plan'
         else:
             facts['factorySha256'] = sha256_file(archive)
             if facts['factorySha256'] != factory['sha256']:
@@ -943,7 +960,7 @@ def supervise(argv, cwd, env, timeout, limits, watch=(), statvfs=os.statvfs, mea
             low = available if low is None else min(low, available)
             if used > limits['boundBytes']:
                 stopped = f'watched paths reached {used} bytes, above the {limits["boundBytes"]}-byte bound'
-            elif available < limits['reserveBytes']:
+            elif limits.get('checkReserve', True) and available < limits['reserveBytes']:
                 stopped = f'available {available} fell below the reserve {limits["reserveBytes"]}'
         if stopped:
             end_group(pgid, limits['killGraceSeconds'], clock, sleep)
@@ -1153,7 +1170,7 @@ def construct(recipe, op, production, root=ROOT, statvfs=os.statvfs, clock=time.
             raise Refused(f'{len(selection["problems"])} unsupported source dependencies, first: {selection["problems"][0]}')
         if projected > spec['boundBytes']:
             raise Refused(f'the selection projects {projected} bytes, above the {spec["boundBytes"]}-byte bound')
-        if available - projected < reserve:
+        if not reduced_mustang_sprint(recipe) and available - projected < reserve:
             raise Refused(f'available {available} minus the projected {projected} is below the reserve {reserve}')
         if not os.path.lexists(src.parent):
             src.parent.mkdir(mode=0o700)
@@ -1167,7 +1184,7 @@ def construct(recipe, op, production, root=ROOT, statvfs=os.statvfs, clock=time.
         for entry in selection['entries']:
             if clock() >= sample:
                 fs = statvfs(staging)
-                if fs.f_bavail * fs.f_frsize < reserve:
+                if not reduced_mustang_sprint(recipe) and fs.f_bavail * fs.f_frsize < reserve:
                     raise StageStopped(f'available {fs.f_bavail * fs.f_frsize} fell below the reserve {reserve}')
                 sample = clock() + prep['limits']['sampleSeconds']
             destination = staging/entry['path']
@@ -1869,7 +1886,8 @@ def download(recipe, command, fetcher, clock):
     size arrived and its sha256 matches the pin. A response announcing another Content-Length is refused before any byte
     is written. A failed attempt removes only the .part this call created; an existing archive or .part is never touched."""
     part, final = Path(command['part']), Path(command['final'])
-    digest, size, started, created = hashlib.sha256(), 0, clock(), False
+    verify = not reduced_mustang_sprint(recipe)
+    digest, size, started, created = hashlib.sha256() if verify else None, 0, clock(), False
     outcome = {'url': command['url'], 'expectedSha256': command['sha256'], 'expectedBytes': command['expectedBytes'],
                'maxBytes': command['maxBytes']}
     try:
@@ -1887,12 +1905,14 @@ def download(recipe, command, fetcher, clock):
                         raise OverflowError(f'download exceeded the {command["maxBytes"]}-byte bound')
                     if clock() - started > command['timeoutSeconds']:
                         raise TimeoutError(f'download exceeded {command["timeoutSeconds"]} s')
-                    digest.update(block)
+                    if verify:
+                        digest.update(block)
                     out.write(block)
-        outcome.update(bytes=size, sha256=digest.hexdigest())
+        outcome.update(bytes=size, sha256=digest.hexdigest() if verify else None,
+                       downloadedInputHashVerification='performed' if verify else 'omitted per Mustang sprint plan')
         if size != command['expectedBytes']:
             raise ValueError(f'{size} bytes arrived, not the recorded {command["expectedBytes"]}')
-        if outcome['sha256'] != command['sha256']:
+        if verify and outcome['sha256'] != command['sha256']:
             raise ValueError(f'sha256 {outcome["sha256"]} is not the pinned {command["sha256"]}')
         if os.path.lexists(final):
             raise FileExistsError(f'{final} appeared during the download')
@@ -1921,6 +1941,8 @@ def run(recipe, stage, op, receipt_dir, now=time.time, fetcher=fetch, clock=time
         return 1
     command = commands(recipe, op, probes.get('root', ROOT))[stage]
     base = {'stage': stage, 'device': DEVICE, 'signed': False, 'releaseReady': False}
+    if reduced_mustang_sprint(recipe):
+        base['sprint'] = recipe['sprint']
     with open(op['lock'], 'a') as lock:
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -1956,7 +1978,8 @@ def run(recipe, stage, op, receipt_dir, now=time.time, fetcher=fetch, clock=time
         prep, capacity = recipe['preparation'], recipe['capacity']
         bound = capacity['compileAllowanceBytes'] if stage == 'compile' else prep[stage]['boundBytes']
         kind = capacity['compileAllowanceKind'] if stage == 'compile' else prep['boundsKind']
-        limits = {**prep['limits'], 'boundBytes': bound, 'reserveBytes': capacity['reserveBytes']}
+        limits = {**prep['limits'], 'boundBytes': bound, 'reserveBytes': capacity['reserveBytes'],
+                  'checkReserve': not reduced_mustang_sprint(recipe)}
         if stage == 'vendor':
             if file_identity(op['node']) != report['facts'].get('node') or node_binding_problem(op['node'], env['PATH']):
                 release_receipts.write_once(receipt_dir/'completed.json', {**base, 'ok': False,

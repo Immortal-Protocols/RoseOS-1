@@ -115,7 +115,17 @@ class AddFailed(Exception):
 
 
 def load_profiles(root=ROOT):
-    return json.loads((root/PROFILES_PATH).read_text())
+    profiles = json.loads((root/PROFILES_PATH).read_text())
+    # Separate source definition keeps the active Rango/Blazer records intact.
+    # An unbound definition grants no access and readiness still refuses it.
+    mustang = root/'os/signing-bootstrap/mustang.json'
+    if mustang.is_file():
+        extra = json.loads(mustang.read_text())
+        if extra.get('schemaVersion') != 1 or set(extra.get('profiles', {})) != {'pro-mustang-v1'} \
+                or 'pro-mustang-v1' in profiles['profiles']:
+            raise ValueError('invalid or duplicate Mustang signing profile definition')
+        profiles['profiles'].update(extra['profiles'])
+    return profiles
 
 
 def parse_time(value):
