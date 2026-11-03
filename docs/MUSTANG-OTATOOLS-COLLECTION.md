@@ -33,7 +33,7 @@ defines `otatools-package` as a `java_genrule_host` producing `otatools.zip`.
 The corrected collector looks only in that module's Soong intermediates under
 the **original allocation's OUT_DIR**, requiring exactly one regular output.
 The host variant directory is discovered within that fixed module location;
-the actual file location and hash remain unconfirmed until collection runs.
+the actual file location and hash are recorded by the follow-up collection below.
 No generic filesystem search, other-device output or renamed archive is used.
 Build identity is also read from target-files even when another output is absent.
 
@@ -61,8 +61,26 @@ ownership cleanup remain; there is no new workflow context or execution mode.
 The two already-committed Mustang secret versions remain 1, with grants expiring
 2026-11-04T00:50:06Z. No bootstrap or grant extension is included.
 
+## Actual follow-up
+
+PR [#501](https://github.com/Immortal-Protocols/RoseOS-1/pull/501) merged as
+`7b5848c420d070d0219f0e99f05997ece245c748`. The existing delivery route
+[41738359336](https://github.com/Immortal-Protocols/RoseOS-1/actions/runs/41738359336)
+collected outputs successfully at **2026-11-03T23:21:54Z**. The actual archive is
+`soong/.intermediates/build/make/tools/otatools_package/otatools-package/linux_glibc_x86_64/gen/otatools.zip`
+inside the original OUT_DIR. It is **536,807,666 bytes**, SHA-256
+`f8fc065e87083a51f64c74be57f4f06611721645273b9ae45081148203cebc22`.
+The actual device/build/time is `mustang` / `2026110302` / `1793742435`.
+All three previously recorded output hashes are unchanged.
+
+The exact public [collection receipt](../os/mustang-delivery/41738359336/collection.json)
+has SHA-256 `fab683d83b11d946486050b1e9b9b927cccbdd555aa1060382e7cc8a0433853a`.
+It explicitly records `makeRerun=false`, `originalReceiptsModified=false` and
+`originalWorkflowConclusion=failure`. Signing then completed with command exit
+0; the [runtime handoff](MUSTANG-RUNTIME.md) records the downstream state.
+
 Source review and Python/JSON/YAML parsing were performed. The sprint's omitted
-test suites and verification remain undone. Actual output collection and later
-signing/package/delivery results are still required; this correction is source,
-not a successful collection or installer claim. The original sprint clock is not
-reset. Any delivery retains the required build-and-package candidate label.
+test suites and verification remain undone. Output collection and a successful
+signing command do not establish independent cryptographic verification or
+physical acceptance. The original sprint clock is not reset. Any delivery
+retains the required build-and-package candidate label.

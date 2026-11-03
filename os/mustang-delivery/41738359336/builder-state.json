@@ -1,0 +1,12 @@
+{
+  "observedAt": "2026-11-03T23:44:22.497999+00:00",
+  "project": "protocols-465723",
+  "zone": "us-west2-a",
+  "instance": {
+    "id": "685707771105568194",
+    "lastStartTimestamp": "2026-11-03T15:21:12.323-08:00",
+    "lastStopTimestamp": "2026-11-03T15:43:07.131-08:00",
+    "name": "immortal-os-builder",
+    "status": "TERMINATED"
+  }
+}
