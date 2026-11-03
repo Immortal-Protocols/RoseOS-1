@@ -282,23 +282,21 @@ class Bind(unittest.TestCase):
     def test_the_fields_satisfy_the_existing_consumers(self):
         fields, _ = OBS.binding_fields(self.data())
         binding = json.loads((ROOT/'os/retained-rango/factory-signing.json').read_text())
+        binding['sshKeygen'] = {'path': None, 'sha256': None}  # from the unmeasured state, whatever is committed
         self.assertIn('binding.sshKeygen.path/sha256 (measured installed identity)', SIGN.binding_problems(binding))
         binding.update(fields['binding'])
         self.assertNotIn('binding.sshKeygen.path/sha256 (measured installed identity)', SIGN.binding_problems(binding))
         profiles = json.loads((ROOT/'os/signing-bootstrap/profiles.json').read_text())['profiles']
         for name in ('fold-rango-factory-v1', 'pro-blazer-factory-v1'):
             identity = copy.deepcopy(profiles[name]['tools']['ssh-keygen'])
+            identity['installed'] = {'path': None, 'sha256': None}
             self.assertFalse(BOOT.tool_approved(identity))
             identity['installed'] = dict(fields['installed'])
             self.assertTrue(BOOT.tool_approved(identity))
             self.assertEqual(BOOT.tool_path(identity), '/usr/bin/ssh-keygen')
 
-    def test_the_committed_identities_stay_unbound_until_measured(self):
-        binding = json.loads((ROOT/'os/retained-rango/factory-signing.json').read_text())
-        self.assertEqual((binding['sshKeygen']['path'], binding['sshKeygen']['sha256']), (None, None))
-        profiles = json.loads((ROOT/'os/signing-bootstrap/profiles.json').read_text())['profiles']
-        for name in ('fold-rango-factory-v1', 'pro-blazer-factory-v1'):
-            self.assertEqual(profiles[name]['tools']['ssh-keygen']['installed'], {'path': None, 'sha256': None})
+    def test_the_committed_identities_follow_the_committed_evidence(self):
+        self.assertEqual(OBS.committed_problems(), [])  # null while unmeasured; bind's exact fields once measured
 
     def test_anything_less_than_a_complete_consistent_observation_is_refused(self):
         cases = {

@@ -158,7 +158,7 @@ def sign_from_binding(binding, archive, archive_sha256, lock_path, out, **kw):
 
 
 def sign(args, contract=flavor_contract, fetch=host_secrets.fetch_secret, runner=factory_signing.run_bounded,
-         lock=shared_lock, private=host_secrets.private_directory):
+         lock=shared_lock, private=host_secrets.private_directory, workspace_check=factory_signing.workspace_problem):
     begun = time.monotonic()
     if not re.fullmatch(r'[a-z][a-z0-9]{1,31}', args.device) or not re.fullmatch(r'[0-9]{10}', args.build):
         raise Refused('usage_refused: device must be a plain codename and build ten digits')
@@ -202,6 +202,9 @@ def sign(args, contract=flavor_contract, fetch=host_secrets.fetch_secret, runner
             link.symlink_to(archive)  # ssh-keygen writes link.sig here, never beside the retained archive
             mark = time.monotonic()
             with private('rose-factory-archive-sign-') as secrets:
+                problem = workspace_check(secrets)
+                if problem:  # before any secret is fetched
+                    raise Refused(problem)
                 try:
                     key = fetch(args.project, args.key_secret, args.key_version, secrets/factory_signing.KEY_FILE)
                     passfile = fetch(args.project, args.passphrase_secret, args.passphrase_version, secrets/'passphrase')

@@ -1238,8 +1238,9 @@ class FactoryArchiveSignTest(unittest.TestCase):
 
     def test_committed_binding_is_unbound_and_check_exits_4(self):
         committed = json.loads((SCRIPTS.parent/'os/retained-rango/factory-signing.json').read_text())
-        self.assertEqual((committed['keyVersion'], committed['passphraseVersion'], committed['sshKeygen']),
-                         (None, None, {'path': None, 'sha256': None}))
+        # The bootstrap receipt values stay unbound until the key setup; the measured ssh-keygen identity is checked
+        # against its committed evidence by test_signing_bootstrap.SshKeygenEvidence.
+        self.assertEqual((committed['keyVersion'], committed['passphraseVersion']), (None, None))
         stdout = io.StringIO()
         with contextlib.redirect_stdout(stdout):
             self.assertEqual(fas.main(['check']), 4)
@@ -1254,6 +1255,17 @@ class FactoryArchiveSignTest(unittest.TestCase):
                                 ({'project': 'X'}, 'binding.project'), ({'schema': 'other'}, 'binding: not')):
             with self.subTest(change):
                 self.assertTrue(any(m.startswith(missing) for m in fas.binding_problems(self.binding(**change), bound)))
+
+    def test_a_noexec_workspace_refuses_before_any_secret(self):
+        bound = lambda device: ('{device}-install-{build}.zip', self.pin)
+        fetched = []
+        with self.assertRaisesRegex(fas.Refused, '^workspace_noexec'):
+            fas.sign_from_binding(self.binding(), str(self.archive), sha(self.archive.read_bytes()),
+                                  str(self.root/'builder.lock'), str(self.root/'nx-run'), contract=bound,
+                                  fetch=lambda *a: fetched.append(a), runner=self.runner(),
+                                  workspace_check=lambda path: 'workspace_noexec: synthetic')
+        self.assertEqual(fetched, [])
+        self.assertFalse((self.root/'nx-run'/f'{self.archive.name}.sig').exists())
 
     def test_sign_from_binding_and_cli_refusal_is_one_line(self):
         bound = lambda device: ('{device}-install-{build}.zip', self.pin)

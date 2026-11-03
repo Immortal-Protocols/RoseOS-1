@@ -50,6 +50,15 @@ bind reads the observation file (at most 64 KiB), re-checks every bindable condi
    "binding": {"sshKeygen": {"path", "sha256"}},           -> os/retained-rango/factory-signing.json sshKeygen
    "observedVersion": {...}, "observationSha256": ...}     (record in the commit/PR as the evidence identity)
 It writes nothing and never invents a value: a hash appears only if a complete observation measured it.
+
+Committed evidence (os/signing-bootstrap/ssh-keygen-evidence.json, schema roseos.ssh-keygen-evidence.v1) ties every
+committed copy of the identity to one observation. committed_problems(root) is the pure check the tests run:
+  unmeasured  observation and run are null; every copy (both factory profiles' tools.ssh-keygen.installed and
+              factory-signing.json sshKeygen) is null; each factory profile still lists the measurement as missing.
+  measured    run names the os-release.yml blazer-prep ssh-keygen-observe run (id, attempt, workflow commit, its artifact
+              blazer-prep-ssh-keygen-observe-<run>-<attempt>); observation names the committed report bytes under
+              os/signing-bootstrap/ by path and sha256; bind accepts those bytes; the Rango profile and factory-signing.json
+              equal bind's fields; the Blazer profile is null or equal; a bound profile no longer lists the measurement.
 """
 import argparse
 import hashlib
@@ -363,6 +372,83 @@ def binding_fields(data):
             'observedVersion': {'source': 'package-database', 'upstream': parsed[0], 'package': PACKAGE,
                                 'packageVersion': package['version'], 'architecture': package.get('architecture')},
             'observationSha256': hashlib.sha256(data).hexdigest()}, []
+
+
+EVIDENCE_SCHEMA = 'roseos.ssh-keygen-evidence.v1'
+EVIDENCE = 'os/signing-bootstrap/ssh-keygen-evidence.json'
+EVIDENCE_DIR = 'os/signing-bootstrap'
+PROFILES = 'os/signing-bootstrap/profiles.json'
+BINDING = 'os/retained-rango/factory-signing.json'
+BOUND_PROFILE, SHARED_PROFILES = 'fold-rango-factory-v1', ('pro-blazer-factory-v1',)
+MEASURED_ENTRY = 'measured ssh-keygen installed identity and version on the builder'
+RUN = {'workflow': 'os-release.yml', 'mode': 'blazer-prep', 'stage': 'ssh-keygen-observe'}
+NULL_IDENTITY = {'path': None, 'sha256': None}
+
+
+def committed_problems(root=ROOT):
+    """[] when every committed copy of the builder's ssh-keygen identity agrees with the committed evidence; otherwise
+    one line per disagreement. Pure: reads only the four committed files under root, never a host."""
+    root = Path(root)
+    try:
+        evidence = json.loads((root/EVIDENCE).read_text())
+        profiles = json.loads((root/PROFILES).read_text())['profiles']
+        binding = json.loads((root/BINDING).read_text())
+    except (OSError, ValueError, KeyError) as error:
+        return [f'evidence: unreadable committed file ({type(error).__name__})']
+    if not isinstance(evidence, dict) or evidence.get('schema') != EVIDENCE_SCHEMA:
+        return [f'evidence: not a {EVIDENCE_SCHEMA} document']
+    copies = {name: ((profiles.get(name) or {}).get('tools') or {}).get('ssh-keygen', {}).get('installed')
+              for name in (BOUND_PROFILE, *SHARED_PROFILES)}
+    copies[BINDING] = binding.get('sshKeygen') if isinstance(binding, dict) else None
+    problems = []
+    status = evidence.get('status')
+    if status == 'unmeasured':
+        if evidence.get('observation') is not None or evidence.get('run') is not None:
+            problems.append('evidence: unmeasured evidence names an observation or run')
+        problems += [f'{name}: bound without measured evidence' for name, value in copies.items() if value != NULL_IDENTITY]
+        expected = None
+    elif status == 'measured':
+        expected, more = measured_fields(root, evidence)
+        problems += more
+        if expected is not None:
+            for name in (BOUND_PROFILE, BINDING):
+                if copies[name] != expected:
+                    problems.append(f'{name}: not the measured identity')
+            problems += [f'{name}: neither null nor the measured identity' for name in SHARED_PROFILES
+                         if copies[name] not in (NULL_IDENTITY, expected)]
+    else:
+        return ['evidence: status must be unmeasured or measured']
+    for name in (BOUND_PROFILE, *SHARED_PROFILES):
+        listed = MEASURED_ENTRY in ((profiles.get(name) or {}).get('missing') or [])
+        if listed != (copies[name] == NULL_IDENTITY):
+            problems.append(f'{name}: the missing list must name the measurement exactly while the identity is null')
+    return problems
+
+
+def measured_fields(root, evidence):
+    """(bind's installed fields, problems) for measured evidence: the named run, the exact committed report bytes."""
+    problems, run, observation = [], evidence.get('run'), evidence.get('observation')
+    if not isinstance(run, dict) or set(run) != {*RUN, 'runId', 'attempt', 'workflowSha', 'artifact'} \
+            or any(run.get(k) != v for k, v in RUN.items()) or not re.fullmatch(r'[1-9][0-9]{0,19}', str(run.get('runId'))) \
+            or not re.fullmatch(r'[1-9][0-9]{0,3}', str(run.get('attempt'))) \
+            or not re.fullmatch(r'[0-9a-f]{40}', str(run.get('workflowSha'))) \
+            or run.get('artifact') != f'blazer-prep-ssh-keygen-observe-{run.get("runId")}-{run.get("attempt")}':
+        problems.append('evidence.run: not the os-release.yml blazer-prep ssh-keygen-observe run, attempt, commit and artifact')
+    if not isinstance(observation, dict) or set(observation) != {'file', 'sha256'} \
+            or not re.fullmatch(r'[A-Za-z0-9_.-]+\.json', Path(str(observation.get('file'))).name) \
+            or str(Path(str(observation.get('file'))).parent) != EVIDENCE_DIR or not HEX64.fullmatch(str(observation.get('sha256'))):
+        return None, problems + [f'evidence.observation: not a file under {EVIDENCE_DIR} with its sha256']
+    try:
+        with open(root/observation['file'], 'rb') as f:
+            data = f.read(LIMITS['observationBytes'] + 1)
+    except OSError:
+        return None, problems + ['evidence.observation: the committed report is missing']
+    if hashlib.sha256(data).hexdigest() != observation['sha256']:
+        return None, problems + ['evidence.observation: sha256 is not the committed report bytes']
+    fields, refused = binding_fields(data)
+    if fields is None:
+        return None, problems + [f'evidence.observation: bind refuses ({"; ".join(refused)})']
+    return fields['installed'], problems
 
 
 def main(argv=None):

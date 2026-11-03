@@ -1062,6 +1062,10 @@ def _inside(name, profile, executor, journal, receipt, private, stop, created, f
     info = os.lstat(created)
     if not stat.S_ISDIR(info.st_mode) or stat.S_IMODE(info.st_mode) != 0o700 or info.st_uid != os.getuid():
         return stop('workspace-unprotected', 'workspace must be an owner-only directory')
+    if profile_outputs(profile) == OPENSSH_OUTPUTS:
+        problem = factory_signing.workspace_problem(created)
+        if problem:  # before the journal: nothing is generated or recorded, so the approved run is not used up
+            return stop('workspace-noexec', problem)
     # Runtime revalidation: pinned tool trees are recomputed again immediately before anything runs.
     for tool in sorted({step['tool'] for step in profile['generation'].get('recipe') or []}):
         identity = profile['tools'][tool]

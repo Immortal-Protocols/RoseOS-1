@@ -1,0 +1,8 @@
+{
+  "schema": "roseos.ssh-keygen-evidence.v1",
+  "status": "unmeasured",
+  "tool": "/usr/bin/ssh-keygen",
+  "observation": null,
+  "run": null,
+  "note": "The original builder's ssh-keygen identity for factory archive signing, shared by fold-rango-factory-v1, pro-blazer-factory-v1 and os/retained-rango/factory-signing.json. Unmeasured: every committed copy stays null. Measured only from a complete os-release.yml blazer-prep ssh-keygen-observe run that scripts/ssh-keygen-observe.py bind accepts: its report bytes are committed beside this file and named here with their sha256 and the run, attempt, workflow commit and artifact. A historical host fact, not current proof: every consumer re-hashes the tool at use. The version is package-reported, not printed by the binary."
+}
