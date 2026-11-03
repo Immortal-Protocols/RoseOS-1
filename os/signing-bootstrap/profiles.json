@@ -1407,7 +1407,7 @@
       "missing": [
         "owner/security approval of a new blazer factory-archive identity (BLAZER-SIGN proposal)",
         "the two empty secret containers, created by the admin",
-        "time-boxed bootstrap access (secrets.get, versions.list, versions.add, 4 h) and secretAccessor (30 d) for the signer on those two containers only",
+        "time-boxed bootstrap access (secrets.get, versions.list, versions.add as one binding per secret, at most 4 h, made at action time) and secretAccessor (30 d) for the signer on those two containers only",
         "one approved bootstrap run"
       ],
       "importRecovery": "The two-secret import is not atomic. Any uncertain or partial outcome (keys added but passphrase not, an add whose outcome is unknown) stops as recovery-needed and is journaled; every later run refuses on that journal (previous-attempt) and never regenerates a key or repeats an import. Recovery is a separate owner decision."

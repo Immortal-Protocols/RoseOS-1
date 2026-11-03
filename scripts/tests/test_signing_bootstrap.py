@@ -1547,6 +1547,12 @@ class FactoryProfileValidation(unittest.TestCase):
         self.assertEqual([c for c, _ in sb.readiness('fold-rango-factory-v1', pending, NOW)], ['profile-unbound'])
         self.assertTrue(sb.guard(dict(GUARD_ENV, BOOTSTRAP_PROFILE='fold-rango-factory-v1'), pending, NOW))
         self.assertFalse([n for n, p in PROFILES['profiles'].items() if p.get('status') == 'resource-bound' and p.get('missing')])
+        # While a live-check profile still lists its bootstrap grant, the entry asks for the one binding per secret.
+        for name, profile in PROFILES['profiles'].items():
+            grants = [m for m in profile.get('missing') or [] if 'versions.add' in str(m)]
+            if (profile.get('access') or {}).get('liveCheck') is True and grants:
+                with self.subTest(name):
+                    self.assertTrue(all('one binding per secret' in m and 'at most 4 h' in m for m in grants), grants)
 
     def test_after_the_first_live_check_a_denied_add_or_recheck_uses_up_the_run_and_is_never_retried(self):
         profiles = factory_ready_profiles()
