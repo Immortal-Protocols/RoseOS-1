@@ -106,7 +106,9 @@ def resolve(stage, binding_path=BINDING, root=ROOT, run_id=None, attempt=None):
     if stage not in (*h.PREPARATION, 'inspect', 'git-inspect', 'git-inspect-set'):
         raise Invalid(f'{stage!r} is not a preparation stage {h.PREPARATION}, inspect, git-inspect or git-inspect-set')
     try:
-        recipe = h.load(root/'os/build-only/blazer.json', root)
+        # git-inspect-set loads the recipe without probing (as the helper's own inspect-git-set does), so resolving it
+        # touches no host path; every other route keeps the probing load.
+        recipe = h.load(root/'os/build-only/blazer.json', root, probe=stage != 'git-inspect-set')
     except h.InvalidInput as error:
         raise Invalid(f'recipe: {error}')
     binding = json.loads(Path(binding_path).read_text())
