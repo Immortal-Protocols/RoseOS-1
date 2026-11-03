@@ -506,6 +506,34 @@ and writes `preflight.json`, `started.json` and `completed.json` there, write-on
     - **Gap:** host-reconcile needs each reconciled project's own Git repository in `S` (`rev-parse
       HEAD`, `clone --shared`). The isolated copy excludes all `.git`, so reconcile can't run on a
       copied tree until genuine metadata for those projects is supplied (see the Git metadata proposal).
+- **Git metadata** (`git-meta`, outside preparation; for Release's separate wiring):
+  `python3 scripts/blazer-build-only.py run --stage git-meta --host H --lock L --source-root S --receipt-dir NEW`
+  - **Why:** the isolated copy excludes every `.git`, but host-reconcile runs `rev-parse HEAD`,
+    `show HEAD:path`, `clone --shared` and a sparse `checkout --detach` on its six projects, and the
+    vendor stage runs `git -C vendor/adevtool rev-parse HEAD`. Each needs only the pinned commit,
+    its tree and its blobs.
+  - **Projects** (`gitMeta.projects`, validated against `os/pinned-manifest.xml`): `build/make`,
+    `build/release`, `frameworks/base`, `packages/apps/Launcher3`, `packages/apps/Updater`,
+    `packages/modules/Permission` and `vendor/adevtool`, at their `refs/tags/2026100600` commits. A
+    commit id is a content address, so equality proves the tree.
+  - **Per project:** a new `S/<path>/.git` (`git init --template=`, so no hooks); exactly the pin
+    fetched at depth 1 with no tags from the fixed `objectsSource` (`public-fetch`: the manifest's
+    GrapheneOS remote over https); then a detached `HEAD` via `update-ref --no-deref`. No command
+    checks out, resets or reads the working tree, so Rose-integrated bytes stay as copied.
+  - **Verified before the next project:** `HEAD` is the pin, its tree exists, `fsck
+    --connectivity-only` passes, `shallow` is exactly the pin, and there are no alternates and no
+    remote.
+  - **Environment:** inherited `GIT_*` is stripped; system and global config are ignored (no
+    `insteadOf`, credential helper or hooks path); no prompt; only the source's protocol is allowed;
+    `PATH=/usr/bin:/bin`; `GIT_CEILING_DIRECTORIES=S`.
+  - **Admission:** S is isolated, every project is an existing link-free directory, no `.git`
+    exists (nothing is replaced or merged), `/usr/bin/git` is executable, the lock is free, and
+    available − 8 GiB ≥ the reserve.
+  - **Bounds** (unmeasured proposals): 8 GiB sampled (and re-checked after each command), 1800 s per
+    project and 5400 s in all. On any failure every `.git` this run created is removed (bounded),
+    and the receipt names the failing project.
+  - The fetch needs Original Infra's runtime approval. A production read-only pack is an
+    alternative source, not implemented.
 - **Out of scope**: nothing here signs, publishes or flashes, and no runtime scope is approved.
 
 ## Callable contract
@@ -531,6 +559,21 @@ python3 scripts/tests/test_factory_package.py
 Exit status: 0 ready/packaged/observed, 3 refused (JSON on stdout), 2 usage or contract error.
 Optional flags: `--ssh-keygen PATH`, `--max-work-bytes N`, `--avb-public-key-sha256`,
 `--first-use-binding`.
+
+**Blazer.** `--flavor blazer` uses the same pinned generator (`device_common 1f5ba267`) and
+optimizer (`system/core 322ff512`) layout as Frankel and Rango. `load_flavor` re-derives it for
+`blazer` from the pinned `generate-release.sh` on every load: bootloader and radio from
+`OTA/android-info.txt`, `MAX_DOWNLOAD_SIZE 0x10000000`, and the generator's default GSC source
+`dauntless` (blazer isn't in the epic list).
+- A Blazer install archive is classified completely: members, firmware, GSC, images, super
+  segments, scripts and content.
+- It can't be factory-ready from this repository. `identity.avbPublicKeySha256` and
+  `factorySigning` stay null, so `avb_pkmd.bin` reports `identity:blazer avbPublicKeySha256`
+  missing and the signature reports the missing factory-signing identity.
+- An operator `--avb-public-key-sha256` never substitutes for that signing identity, and no
+  Frankel or Rango identity is inherited.
+- The remaining inputs are Signing's: a Blazer AVB key pin and a factory-signing principal and
+  public key, once approved.
 
 ## Missing for a real factory package (sole owner → next action)
 

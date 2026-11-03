@@ -107,6 +107,7 @@ python3 scripts/tests/test_rango_factory_observe.py
 python3 scripts/tests/test_rango_factory_observe_workflow.py
 # Blazer (Pixel 10 Pro) preparation workflow wiring (stand-ins and the fake builder adapter; no host, download or vendor run).
 python3 scripts/tests/test_blazer_prep_workflow.py
+python3 scripts/tests/test_blazer_compile_workflow.py
 # Fold factory package workflow wiring (stand-ins and mocks; no host, lock, generation or inspection run).
 python3 scripts/tests/test_rango_factory_package_workflow.py
 python3 scripts/tests/test_rango_factory_inspect_workflow.py
