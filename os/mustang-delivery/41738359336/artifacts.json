@@ -1,0 +1,46 @@
+{
+  "runId": "41738359336",
+  "source": "7b5848c420d070d0219f0e99f05997ece245c748",
+  "artifacts": [
+    {
+      "id": 13282110151,
+      "name": "mustang-delivery-receipt-41738359336-1",
+      "sizeBytes": 1223,
+      "expiresAt": "2026-11-10T23:43:12Z",
+      "digest": "sha256:23e0ea7165335fe62b90f6aad7d3307fc77ea2b22a9507dedc27c9e93489fbaf",
+      "expired": false
+    },
+    {
+      "id": 13280918248,
+      "name": "mustang-sign-receipt-41738359336-1",
+      "sizeBytes": 1895,
+      "expiresAt": "2026-11-10T23:35:03Z",
+      "digest": "sha256:c2ad75925d5a680ff2d72c2f4eeb473af5584525cebbaceba7676b068dc86e79",
+      "expired": false
+    },
+    {
+      "id": 13280698927,
+      "name": "mustang-candidate-41738359336-1",
+      "sizeBytes": 2108061108,
+      "expiresAt": "2026-11-10T23:42:12Z",
+      "digest": "sha256:c6aea80e23b5aeb775454692ff2da28ca8ff27495d79603e67ec2c0dfc1a6dae",
+      "expired": false
+    },
+    {
+      "id": 13280663979,
+      "name": "mustang-package-receipt-41738359336-1",
+      "sizeBytes": 1125,
+      "expiresAt": "2026-11-10T23:42:38Z",
+      "digest": "sha256:59e29e55a694230cc9a1f63a6fcd2f8a699ecc0997d88fd484b77304b40cb4f4",
+      "expired": false
+    },
+    {
+      "id": 13279808927,
+      "name": "mustang-collection-receipt-41738359336-1",
+      "sizeBytes": 4943,
+      "expiresAt": "2026-11-10T23:35:02Z",
+      "digest": "sha256:05f09b4f3ffdf57a08beb2ec2a798042d5eeb503e1801b124ebb61e104fe3dca",
+      "expired": false
+    }
+  ]
+}

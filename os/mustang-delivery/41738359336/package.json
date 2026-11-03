@@ -1,0 +1,39 @@
+{
+  "build": "2026110302",
+  "candidateSource": "2b521e732fa1537e54ff0a77880810ab1f34cf99",
+  "commandOutcome": {
+    "category": "ok",
+    "exitCode": 0
+  },
+  "compileCollectionReceiptSha256": "fab683d83b11d946486050b1e9b9b927cccbdd555aa1060382e7cc8a0433853a",
+  "compileCollectionRecovery": true,
+  "compileProducerConclusion": "failure",
+  "device": "mustang",
+  "format": "optimized-factory-installer",
+  "label": "build-and-package candidate; omitted verification remains undone; physical-device acceptance unproven",
+  "omittedChecks": [
+    "Downloaded input hash verification",
+    "Focused tests, including wrong-device/hash/missing-input negative cases",
+    "Existing-device regression tests and required CI/full-suite runs (post-hoc follow-up)",
+    "Independent isolated source/output path and safe-file-handling verification",
+    "Free-space checks against the selected route reserve",
+    "OS/AVB signing-result and intended-public-identity verification",
+    "Packaged Rose app/signer and compiled-controller-policy verification",
+    "Required-partition and firmware-coverage checks",
+    "Installer-to-signed-output content comparison, including dynamic partitions",
+    "Installer-reference, device-requirement and public-AVB-metadata checks",
+    "Separate archive-signature status reporting"
+  ],
+  "output": {
+    "file": "mustang-install-2026110302.zip",
+    "path": "/home/pixelbuild/rose-actions/mustang-package-41738359336-1/assets/mustang-install-2026110302.zip",
+    "sha256": "4eae7e7e54191f30168649e75f2cfefb10fdbff1bffbfc2655ec079a4a8cce5e",
+    "sizeBytes": 2108057621
+  },
+  "phoneValidated": false,
+  "recipeSource": "7b5848c420d070d0219f0e99f05997ece245c748",
+  "schema": "roseos.mustang-package-run.v1",
+  "status": "packaged-candidate",
+  "workRemoved": true,
+  "workRetained": false
+}

@@ -3,7 +3,8 @@
 This implements [Nathan’s reduced-check plan](https://app.notion.com/p/40d7c646c81b81198e60cb76ca2ea603)
 for **Pixel 10 Pro XL / mustang** on the existing original builder. Source,
 bootstrap, signing, packaging, downloaded checksums and physical acceptance are
-separate stages; the evidence below does not claim an installer exists.
+separate stages. The actual stage evidence is recorded below and in the
+[runtime handoff](MUSTANG-RUNTIME.md).
 
 ## Actual state
 
@@ -39,13 +40,55 @@ The completed unsigned run
 uses corrected source `2b521e732fa1537e54ff0a77880810ab1f34cf99`. Its hosted
 configuration guard and controller succeeded. Make ran from 21:47:35Z to
 23:00:48Z and returned 0, but output collection failed at the old otatools path.
-The original workflow remains failed, and actual build identity was uncollected.
+The original workflow remains failed, and its receipt left actual build identity
+uncollected.
 Cleanup succeeded; an independent read returned `TERMINATED`, last stop
 23:01:22Z. The [collection correction](MUSTANG-OTATOOLS-COLLECTION.md) pins this
 exact Make=0 case and requires fresh complete output collection before signer
 login in the existing delivery route. No Make restart or new bootstrap is included.
-Signing, packaging and export have not started. Earlier
-replacement `41719106957` was cancelled before compilation after source review
+PR [#501](https://github.com/Immortal-Protocols/RoseOS-1/pull/501) merged the
+correction as `7b5848c420d070d0219f0e99f05997ece245c748`. Follow-up delivery
+[41738359336](https://github.com/Immortal-Protocols/RoseOS-1/actions/runs/41738359336)
+completed the corrected collection at 23:21:54Z, confirmed actual device/build/time
+`mustang` / `2026110302` / `1793742435`, and preserved the original three hashes.
+The newly collected Soong otatools archive is 536,807,666 bytes, SHA-256
+`f8fc065e87083a51f64c74be57f4f06611721645273b9ae45081148203cebc22`.
+The [collection receipt](../os/mustang-delivery/41738359336/collection.json)
+records no Make rerun and no modification of the original failed receipts.
+
+Signing then returned command exit 0 and completed at 23:35:07Z, consuming the
+two Mustang numeric versions 1. The exact
+[sign receipt](../os/mustang-delivery/41738359336/sign.json) records signed
+target-files (4,884,085,713 bytes, SHA-256
+`baf24f4b433d66e7115e5fc5a15af1394482a59af10c08e222913a65e6bf7814`)
+and OTA (1,673,383,799 bytes, SHA-256
+`5347cf47bad561ce71f91704b332a7b3536cbca97d8614fc6e212414381cb76e`).
+Its signing-result and intended-identity verification fields remain false as
+instructed. Factory generation returned exit 0 at 23:42:12Z and removed its
+temporary work. Private upload and the separate hosted download/checksum job
+both succeeded; download checks completed at **23:43:12Z**, delivery and cleanup
+jobs completed at **23:43:15Z**, and terminal workflow metadata was updated at
+**23:43:16Z**. The original failed producer remains recorded as failed.
+
+The delivered **mustang-install-2026110302.zip** is **2,108,057,621 bytes**,
+SHA-256 `4eae7e7e54191f30168649e75f2cfefb10fdbff1bffbfc2655ec079a4a8cce5e`.
+The [private candidate artifact](https://github.com/Immortal-Protocols/RoseOS-1/actions/runs/41738359336/artifacts/13280698927)
+is 2,108,061,108 bytes and expires **2026-11-10T23:42:12Z**. It also includes
+`CANDIDATE.md`, the candidate receipt and `SHA256SUMS`. Exact public
+[package](../os/mustang-delivery/41738359336/package.json) and
+[delivery](../os/mustang-delivery/41738359336/delivery.json) receipts preserve the
+output identities, actual URL/expiry, omitted checks and successful delivered
+download checksums. They do not establish the omitted content/signing checks.
+
+Ownership cleanup succeeded at 23:43:15Z. An independent compute describe at
+23:44:22Z confirmed the original instance `685707771105568194` was `TERMINATED`,
+last stop 23:43:07Z. The exact [state observation](../os/mustang-delivery/41738359336/builder-state.json)
+is retained alongside the public receipts and artifact metadata. No delivery
+blocker remains; physical-device acceptance and the explicitly omitted
+verification are still unproven. Access still expires at 00:50:06Z; no extension
+was made.
+
+Earlier replacement `41719106957` was cancelled before compilation after source review
 found a deterministic rendering error. Its cleanup observed `TERMINATED` at
 21:17:18Z before the fresh run was dispatched. See
 [host-config correction](MUSTANG-HOST-CONFIG-CORRECTION.md) and the
@@ -88,7 +131,7 @@ Mustang modes hardcode Mustang and never enter the Frankel public publisher:
 
 - `mustang-build`: fresh preparation, allocation, integration and unsigned compile.
 - `mustang-bootstrap`: one journaled `pro-mustang-v1` bootstrap; already complete.
-- `mustang-delivery`: bind successful main producer runs using
+- `mustang-delivery`: bind main producer runs using
   `mustang_compile_run` and `mustang_bootstrap_run`, then sign, package, export
   privately and verify the delivered download's checksums.
 
