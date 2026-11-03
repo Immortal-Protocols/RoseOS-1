@@ -322,7 +322,7 @@
     {
       "input": "isolated source tree construction for preparation",
       "owner": "Infra (separately scoped)",
-      "next": "copy or reconstruct the pinned tree outside the production source root with no writable hardlinks and no assumed reflink, excluding outputs, signing material and caches; byte and time cost unknown and not in the 4.5 h / 144 GiB stage figures"
+      "next": "copy or reconstruct the pinned tree outside the production source root with no writable hardlinks and no assumed reflink, excluding outputs, signing material and caches; byte and time cost unknown and not in the 4.5 h / about 146.6 GiB download, vendor and lunch figures (download is now the exact 11,362,467,847-byte archive size)"
     },
     {
       "input": "physical first-install acceptance on a Pixel 10 Pro",

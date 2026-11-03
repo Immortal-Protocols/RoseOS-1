@@ -10,6 +10,8 @@
   "factory": {
     "file": "blazer-cp3a.261005.005-factory-cd7d12c2.zip",
     "sha256": "cd7d12c215f7cf1c45d6c77291690bfab1bf360cddd00d557390aed70a3418e3",
+    "sizeBytes": 11362467847,
+    "sizeBasis": "Content-Length and x-identity-content-length of one HTTP HEAD of the pinned URL on 2026-11-03 from a source session, not the builder, with no body transferred (last-modified Tue, 29 Sep 2026 23:23:23 GMT, etag \"6dee2d2\"). Public metadata only, not a download or content proof: the sha256 pin stays the identity, and the download stage refuses any other announced or received size. Run 41606163426 stopped at the earlier unverified 8 GiB bound because the archive is 10.58 GiB.",
     "url": "https://dl.google.com/dl/android/aosp/blazer-cp3a.261005.005-factory-cd7d12c2.zip"
   },
   "pins": {
@@ -149,10 +151,10 @@
       "method": "In-process ordinary byte copy into new inodes with alpha_source.plan_copy/copy_file (modes and mtimes kept; no reflink, hardlink, symlink forest, mount or subprocess). Exclusions are the alpha policy (repo metadata, keys, releases, outputs, .git, the adevtool unpack cache); includePaths are adevtool's deps the vendor stage needs (the adevtool_revision file and the complete host/linux-x86 distribution, copied as its own selection whose links may not leave it); the selected deps must hold the pinned revision and the tools (never the vendor stage's other needs). The tree is staged beside the source root and renamed into place only when complete; a stop removes only this run's staging directory."
     },
     "download": {
-      "boundBytes": 8589934592,
+      "boundBytes": 11362467847,
       "timeoutSeconds": 3600,
       "partSuffix": ".part",
-      "boundBasis": "8 GiB is an unverified proposal for the Pro factory ZIP: no Pro archive size is recorded, and the historical Frankel factory ZIP size is not Pro evidence. An archive above the bound stops and is removed, never kept."
+      "boundBasis": "Exactly factory.sizeBytes (11,362,467,847 bytes, the pinned URL's HEAD Content-Length): one byte more stops and removes the .part, a different announced Content-Length is refused before writing, and a rename needs exactly that size and the sha256 pin. 3600 s needs about 3.0 MiB/s sustained; the download duration is unmeasured."
     },
     "vendor": {
       "boundBytes": 137438953472,
@@ -201,7 +203,7 @@
       "basis": "Not a filesystem quota: every sampleSeconds the stage's watched paths are measured against its boundBytes and the filesystem's available bytes against capacity.reserveBytes, and an overrun or timeout stops the stage's process group (SIGTERM, then SIGKILL after killGraceSeconds). Writes between samples can overshoot. An enforced quota (project quota, loop device, cgroup io) and containment of descendants that start their own session need host-side authority and are not provided here."
     },
     "totalTimeoutSeconds": 23400,
-    "totalBasis": "6.5 hours: source 7200 + download 3600 + vendor 10800 + lunch 1800 seconds. The 294 GiB of proposal bounds (source 150, download 8, vendor 128, lunch 8) are checked one stage at a time against the 300 GiB reserve at each stage's start.",
+    "totalBasis": "6.5 hours: source 7200 + download 3600 + vendor 10800 + lunch 1800 seconds. The about 296.6 GiB of bounds (source 150, download 10.58 exact, vendor 128, lunch 8) are checked one stage at a time against the 300 GiB reserve at each stage's start.",
     "candidateLayout": {
       "children": {
         "sourceRoot": "source",
