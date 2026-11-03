@@ -51,6 +51,13 @@ dispatch:
       package database reports, the tool matched by the package list and md5sum with no diversion; not a behavioural
       proof of the binary.
 
+  output-observe: `blazer-output-observe.py observe --host immortal-os-builder` (Release) and nothing else: one
+      bounded, read-only observation of a finished compile's outputs at Flavors' fixed collector paths (the one
+      blazer-target_files*.zip with only its allowlisted build.prop, misc_info and android-info values; the otatools
+      ZIP with its bin/fastboot member; the four release-script files), under the same shared lock and no-follow walk,
+      within 900 s; its stdout is kept write-once as NEW/output-observation.json. complete:true measures, it does not
+      judge the identity: the reviewer compares the reported incremental with the allocated build.
+
   verdict --stage S --receipt-dir NEW: the success decision for the observation stages, run after the observer exits 0
       (blazer-binding-observe exits 0 whenever it printed a report, including complete:false). binding-observe passes only when its receipt (no link, at most
       64 KiB) is complete with no problems. ssh-keygen-observe is decided by Signing's own `ssh-keygen-observe.py bind
@@ -94,7 +101,10 @@ GIT_TARGET_SET = 'adevtool-projects-gitdir'
 GIT_OBJECTS_STAGE = {'outerSeconds': 180, 'jobMinutes': 14}
 # Stages that resolve from the recipe's text alone (the helper's lexical load): resolving them touches no host path.
 LEXICAL_STAGES = ('git-inspect-set', 'git-inspect-objects')
-OBSERVERS = {'binding-observe': ROOT/'scripts/blazer-binding-observe.py', 'ssh-keygen-observe': ROOT/'scripts/ssh-keygen-observe.py'}
+OBSERVERS = {'binding-observe': ROOT/'scripts/blazer-binding-observe.py', 'ssh-keygen-observe': ROOT/'scripts/ssh-keygen-observe.py',
+             'output-observe': ROOT/'scripts/blazer-output-observe.py'}
+# Observation stages decided by their own report: the schema each receipt must carry, complete with no problems.
+REPORT_SCHEMAS = {'binding-observe': 'roseos.blazer-binding-observation.v1', 'output-observe': 'roseos.blazer-output-observation.v1'}
 # Observation stages: the observer's own whole-run deadline (binding-observe 300 s, ssh-keygen-observe 120 s; neither
 # starts a process, so no child kill grace), a 120 s margin for Python start, the lock and output; then the outer kill
 # (30 s), the verdict step (60 s + 5 s kill) and the 10-minute job margin. Ceilings, not measurements.
@@ -102,10 +112,10 @@ VERDICT_SECONDS, VERDICT_KILL_SECONDS = 60, 5
 OBSERVE_BOUNDS = {stage: {'outerSeconds': seconds + 120,
                           'jobMinutes': math.ceil((seconds + 120 + KILL_AFTER_SECONDS + VERDICT_SECONDS
                                                    + VERDICT_KILL_SECONDS) / 60) + JOB_MARGIN_MINUTES}
-                  for stage, seconds in (('binding-observe', 300), ('ssh-keygen-observe', 120))}
+                  for stage, seconds in (('binding-observe', 300), ('ssh-keygen-observe', 120), ('output-observe', 900))}
 OBSERVATION_BYTES = 64 << 10
 BIND_RECEIPT = 'ssh-keygen-bind.json'
-RECEIPTS = {'binding-observe': ('binding-observation.json', 'observe'),
+RECEIPTS = {'binding-observe': ('binding-observation.json', 'observe'), 'output-observe': ('output-observation.json', 'observe'),
             'ssh-keygen-observe': ('ssh-keygen-observation.json', 'observe'), 'inspect': ('inspection.json', 'inspect'), 'git-inspect': ('git-inspection.json', 'inspect-git'),
             'git-inspect-set': ('git-target-set-inspection.json', 'inspect-git-set'),
             'git-inspect-objects': ('git-objects-inspection.json', 'inspect-git-objects')}
@@ -267,12 +277,12 @@ def verdict(stage, receipt_dir, run=None):
     receipts = Path(receipt_dir)
     name = RECEIPTS[stage][0]
     data = read_receipt(receipts/name)
-    if stage == 'binding-observe':
+    if stage in REPORT_SCHEMAS:
         try:
             report = json.loads(data)
         except ValueError:
             raise Invalid(f'{name} is not JSON') from None
-        ok = isinstance(report, dict) and report.get('schema') == 'roseos.blazer-binding-observation.v1' \
+        ok = isinstance(report, dict) and report.get('schema') == REPORT_SCHEMAS[stage] \
             and report.get('complete') is True and report.get('problems') == []
         problems = report.get('problems') if isinstance(report, dict) else None
         print(json.dumps({'verdict': 'COMPLETE' if ok else 'INCOMPLETE', 'receipt': name,

@@ -86,7 +86,7 @@ class Guard(unittest.TestCase):
             capture_output=True, cwd=ROOT).returncode
 
     def test_whole_guard_admits_exactly_the_bare_mode_with_one_preparation_stage(self):
-        for stage in ('source', 'download', 'vendor', 'lunch', 'inspect', 'git-inspect', 'git-inspect-set', 'git-inspect-objects', 'git-meta', 'binding-observe', 'ssh-keygen-observe'):
+        for stage in ('source', 'download', 'vendor', 'lunch', 'inspect', 'git-inspect', 'git-inspect-set', 'git-inspect-objects', 'git-meta', 'binding-observe', 'ssh-keygen-observe', 'output-observe'):
             with self.subTest(stage=stage):
                 self.assertEqual(self.run_guard(BLAZER_PREP_STAGE=stage), 0)
         for change in ({'BLAZER_PREP_STAGE': 'none'}, {'BLAZER_PREP_STAGE': None}, {'BLAZER_PREP_STAGE': 'compile'},
@@ -105,7 +105,7 @@ class Guard(unittest.TestCase):
         observe = dict(MODE='rango-factory-observe')
         self.assertEqual(self.run_guard(**observe, BLAZER_PREP_STAGE='none'), 0)
         self.assertEqual(self.run_guard(**observe, BLAZER_PREP_STAGE=None), 0)  # older callers never set it
-        for stage in ('source', 'download', 'vendor', 'lunch', 'inspect', 'git-inspect', 'git-inspect-set', 'git-inspect-objects', 'git-meta', 'binding-observe', 'ssh-keygen-observe'):
+        for stage in ('source', 'download', 'vendor', 'lunch', 'inspect', 'git-inspect', 'git-inspect-set', 'git-inspect-objects', 'git-meta', 'binding-observe', 'ssh-keygen-observe', 'output-observe'):
             self.assertNotEqual(self.run_guard(**observe, BLAZER_PREP_STAGE=stage), 0)
         line = '[[ "$MODE" == blazer-prep || "${BLAZER_PREP_STAGE:-none}" == none ]]'
         self.assertIn('          ' + line + '\n', jobs()['guard'])
@@ -117,7 +117,7 @@ class Guard(unittest.TestCase):
         self.assertIn('models-sign, rango-retained, blazer-prep, emulator-alpha-successor,', WORKFLOW)
         self.assertIn('      blazer_prep_stage:\n        description: blazer-prep only - the one preparation stage this run '
                       'executes (none for every other mode)\n        type: choice\n        options: [none, source, download, vendor, '
-                      'lunch, inspect, git-inspect, git-inspect-set, git-inspect-objects, git-meta, binding-observe, ssh-keygen-observe]\n        default: none\n', WORKFLOW)
+                      'lunch, inspect, git-inspect, git-inspect-set, git-inspect-objects, git-meta, binding-observe, ssh-keygen-observe, output-observe]\n        default: none\n', WORKFLOW)
         self.assertIn("  BLAZER_PREP_STAGE: ${{ inputs.blazer_prep_stage || 'none' }}\n", WORKFLOW)
         inputs = re.findall(r'(?m)^      (\w+):$', WORKFLOW.split('    inputs:\n', 1)[1].split('\npermissions:', 1)[0])
         self.assertIn('blazer_prep_stage', inputs)
@@ -562,6 +562,29 @@ class GitInspect(unittest.TestCase):
         self.assertEqual(wire('verdict', '--stage', 'ssh-keygen-observe', '--receipt-dir', str(receipts)).returncode, 2)  # write-once
         allowlist = step(jobs()['blazer-prep'], 'Allowlisted JSON receipts only')
         self.assertIn('ssh-keygen-observation.json ssh-keygen-bind.json;', allowlist)
+
+    def test_output_observe_runs_exactly_the_release_output_observer_with_its_bounds(self):
+        # Its own 900 s, a 120 s margin (it starts no process); the job adds the outer kill, the verdict and 10 min.
+        self.assertEqual(wiring.resolve('output-observe'), (['--host', 'immortal-os-builder'], 1020, 29))
+        receipts = self.tmp/'output-observe'
+        result = wire('run', '--stage', 'output-observe', '--receipt-dir', str(receipts))
+        self.assertEqual(result.returncode, 0, result.stderr)  # a report was printed: the verdict decides the stage
+        helper = json.loads(result.stdout.splitlines()[0])['helper']
+        self.assertEqual((Path(helper[0]).relative_to(ROOT).as_posix(), helper[1:]),
+                         ('scripts/blazer-output-observe.py', ['observe', '--host', 'immortal-os-builder']))
+        report = json.loads((receipts/'output-observation.json').read_text())
+        self.assertEqual((report['schema'], report['complete']), ('roseos.blazer-output-observation.v1', False))  # no lock here
+        result = wire('verdict', '--stage', 'output-observe', '--receipt-dir', str(receipts))
+        self.assertEqual((result.returncode, json.loads(result.stdout)['verdict']), (1, 'INCOMPLETE'))
+        good = receipts.parent/'good'
+        good.mkdir()
+        (good/'output-observation.json').write_text(json.dumps({'schema': 'roseos.blazer-output-observation.v1',
+                                                                  'complete': True, 'problems': []}))
+        self.assertEqual(wiring.verdict('output-observe', good), 0)
+        (good/'output-observation.json').write_text(json.dumps({'schema': 'roseos.blazer-binding-observation.v1',
+                                                                  'complete': True, 'problems': []}))
+        self.assertEqual(wiring.verdict('output-observe', good), 1)  # another observer's report never passes
+        self.assertIn('binding-observation.json output-observation.json ssh-keygen', step(jobs()['blazer-prep'], 'Allowlisted JSON receipts only'))
 
     def test_the_verdict_not_the_observer_exit_decides_an_observation_stage(self):
         def receipt(stage, data, name=None):
