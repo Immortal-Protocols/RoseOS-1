@@ -27,6 +27,8 @@ on:
       - 'scripts/tests/test_blazer_allocate.py'
       - 'scripts/blazer-binding-observe.py'
       - 'scripts/tests/test_blazer_binding_observe.py'
+      - 'scripts/blazer-output-observe.py'
+      - 'scripts/tests/test_blazer_output_observe.py'
       - 'scripts/ssh-keygen-observe.py'
       - 'scripts/tests/test_ssh_keygen_observe.py'
       - 'os/build-only/blazer-integrate-host.json'
@@ -173,6 +175,8 @@ on:
       - 'scripts/tests/test_blazer_allocate.py'
       - 'scripts/blazer-binding-observe.py'
       - 'scripts/tests/test_blazer_binding_observe.py'
+      - 'scripts/blazer-output-observe.py'
+      - 'scripts/tests/test_blazer_output_observe.py'
       - 'scripts/ssh-keygen-observe.py'
       - 'scripts/tests/test_ssh_keygen_observe.py'
       - 'os/build-only/blazer-integrate-host.json'
@@ -328,6 +332,14 @@ jobs:
           python3 scripts/tests/test_release_chain.py
           python3 scripts/tests/test_rango_factory_observe_workflow.py
           python3 scripts/tests/test_blazer_prep_workflow.py
+          python3 scripts/tests/test_blazer_candidate_bundle.py
+          python3 scripts/tests/test_blazer_reconcile_seed.py
+          python3 scripts/tests/test_blazer_integrate_wiring.py
+          python3 scripts/tests/test_blazer_allocate.py
+          python3 scripts/tests/test_blazer_compile_workflow.py
+          python3 scripts/tests/test_blazer_binding_observe.py
+          python3 scripts/tests/test_blazer_output_observe.py
+          python3 scripts/tests/test_ssh_keygen_observe.py
           python3 scripts/tests/test_rango_factory_package_workflow.py
           python3 scripts/tests/test_rango_factory_inspect_workflow.py
           python3 scripts/tests/test_launcher3_compile.py
