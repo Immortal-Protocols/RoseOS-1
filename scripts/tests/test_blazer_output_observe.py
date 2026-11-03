@@ -40,7 +40,10 @@ class Tree:
         self.target = self.inter/f'blazer-target_files-{BUILD}.zip'
         self.write_zip(self.target, members if members is not None else {
             'SYSTEM/build.prop': SYSTEM_PROP, 'VENDOR/etc/build.prop': VENDOR_PROP, 'META/misc_info.txt': MISC,
-            'OTA/android-info.txt': INFO, 'SYSTEM/app/Private.apk': 'PRIVATE-APK'})
+            'OTA/android-info.txt': INFO, 'SYSTEM/app/Private.apk': 'PRIVATE-APK',
+            'RADIO/bootloader.img': 'bootloader bytes', 'RADIO/radio.img': 'radio bytes',
+            'VENDOR/firmware/dauntless/evt.ec.bin': 'PRIVATE-GSC-BYTES', 'VENDOR/firmware/dauntless/nested/x.bin': 'n',
+            'IMAGES/system.img': 'system', 'IMAGES/vendor.img': 'vendor'})
         self.otatools = self.out/observer.OTATOOLS
         self.otatools.parent.mkdir(parents=True)
         self.write_zip(self.otatools, otatools if otatools is not None else {'bin/fastboot': FASTBOOT, 'releasetools/x.py': 'x'})
@@ -89,7 +92,25 @@ class Observe(unittest.TestCase):
         self.assertEqual(sorted(report['scripts']), sorted(observer.SCRIPTS))
         for relative, row in report['scripts'].items():
             self.assertEqual((row['state'], row['sha256']), ('present', sha(tree.source/relative)))
-        self.assertNotIn('PRIVATE', json.dumps(report))  # nothing outside the allowlist leaves the host
+        factory = target['factoryInputs']
+        self.assertEqual({k: v['state'] for k, v in factory['firmware'].items()}, {'bootloader': 'present', 'radio': 'present'})
+        self.assertEqual(factory['firmware']['radio']['size'], len('radio bytes'))
+        self.assertEqual(factory['gscFirmware']['source'], 'VENDOR/firmware/dauntless/')
+        self.assertEqual([(m['name'], m['nested']) for m in factory['gscFirmware']['members']],
+                         [('evt.ec.bin', False), ('nested/x.bin', True)])
+        self.assertEqual(factory['dynamicImagesMissing'], ['product'])  # misc_info lists product; no IMAGES/product.img
+        flavor = json.loads((ROOT/'os/flavors/blazer.json').read_text())
+        self.assertEqual(factory['flavorPins'], {'board': flavor['device']['board'], 'bootloader': flavor['firmware']['bootloader'],
+                                                 'baseband': flavor['firmware']['baseband']})
+        self.assertNotIn('PRIVATE', json.dumps(report))  # nothing outside the allowlist leaves the host: no member content
+
+    def test_absent_factory_inputs_are_findings_not_observation_failures(self):
+        tree = Tree(members={'SYSTEM/build.prop': SYSTEM_PROP, 'META/misc_info.txt': MISC, 'OTA/android-info.txt': INFO})
+        report = tree.observe()
+        self.assertTrue(report['complete'])
+        factory = report['targetFiles']['factoryInputs']
+        self.assertEqual(factory['firmware'], {'bootloader': {'state': 'absent'}, 'radio': {'state': 'absent'}})
+        self.assertEqual((factory['gscFirmware']['count'], factory['dynamicImagesMissing']), (0, ['system', 'vendor', 'product']))
 
     def test_the_identity_is_reported_never_judged(self):
         tree = Tree(members={'SYSTEM/build.prop': 'ro.build.version.incremental=eng.pixelbuild.20261103.155410\n',

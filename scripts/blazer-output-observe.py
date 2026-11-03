@@ -13,7 +13,10 @@ Exactly these paths, fixed in source (no argument chooses a path). S is the isol
                memberBytes and CRC-checked while read: every <PARTITION>/build.prop and <PARTITION>/etc/build.prop
                (only the ro.*build.{version.incremental,date.utc,fingerprint,id,type,tags} values), META/misc_info.txt
                (only ab_update, virtual_ab, dynamic_partition_list) and OTA/android-info.txt (only the board,
-               version-bootloader and version-baseband requirements)
+               version-bootloader and version-baseband requirements); and, from the central directory only (names,
+               sizes and CRC32, never content), the factory inputs scripts/factory-package.py requires: RADIO/bootloader.img
+               and RADIO/radio.img, the GSC firmware under os/flavors/blazer.json's gscFirmware.source, and each
+               dynamic partition's IMAGES/<part>.img, reported beside the flavor's committed board/firmware pins
   otatools     OUT/host/linux-x86/obj/ETC/otatools-packagelinux_glibc_x86_64_intermediates/
                otatools-packagelinux_glibc_x86_64 (an extensionless ZIP): its size and sha256, and the size and sha256
                of its bin/fastboot member (host-sign.py host.sign.factory.fastbootSha256)
@@ -67,6 +70,7 @@ MISC_KEYS = ('ab_update', 'virtual_ab', 'dynamic_partition_list')
 INFO_KEYS = ('board', 'version-bootloader', 'version-baseband')
 REQUIRED_MEMBERS = ('SYSTEM/build.prop', 'META/misc_info.txt', 'OTA/android-info.txt')
 FASTBOOT = 'bin/fastboot'
+MAX_LISTED = 64
 VALUE_CHARS = 512
 PRINTABLE = re.compile(r'[ -~]*')
 LIMITS = {'seconds': 900, 'targetFilesBytes': 32 << 30, 'otatoolsBytes': 4 << 30, 'scriptBytes': 1 << 20,
@@ -273,7 +277,28 @@ def target_files_members(archive, budget):
     values = lambda suffix: sorted({v for p in out['props'].values() for k, v in p.items()
                                     if isinstance(v, str) and k.endswith(suffix)})
     out['summary'] = {'incremental': values('build.version.incremental'), 'dateUtc': values('build.date.utc')}
+    out['factoryInputs'] = factory_inputs(infos, out['miscInfo'])
     return out, problems
+
+
+def factory_inputs(infos, misc_info, root=ROOT):
+    """Report-only, from the central directory (no member content): what factory-package.py's target inventory needs,
+    beside the flavor's committed pins. An absence here is a finding for the reviewer, not an observation failure."""
+    flavor = json.loads((root/'os/flavors/blazer.json').read_text())
+    source = flavor['artifacts']['factory']['generatorMembers']['gscFirmware']['source']
+    meta = lambda info: {'state': 'present', 'size': info.file_size, 'crc32': f'{info.CRC:08x}'}
+    firmware = {kind: (meta(infos[f'RADIO/{kind}.img']) if f'RADIO/{kind}.img' in infos else {'state': 'absent'})
+                for kind in ('bootloader', 'radio')}
+    gsc = sorted(n for n in infos if n.startswith(source) and not n.endswith('/'))
+    dynamic = (misc_info or {}).get('dynamic_partition_list', '') if isinstance(misc_info, dict) else ''
+    parts = [p for p in dynamic.split() if re.fullmatch(r'[a-z0-9_]{1,32}', p)]
+    return {'firmware': firmware,
+            'gscFirmware': {'source': source, 'count': len(gsc), 'truncated': len(gsc) > MAX_LISTED,
+                            'members': [{'name': clean(n[len(source):]), 'nested': '/' in n[len(source):], **meta(infos[n])}
+                                        for n in gsc[:MAX_LISTED]]},
+            'dynamicImagesMissing': [p for p in parts if f'IMAGES/{p}.img' not in infos],
+            'flavorPins': {'board': flavor['device']['board'], 'bootloader': flavor['firmware']['bootloader'],
+                           'baseband': flavor['firmware']['baseband']}}
 
 
 def observe_target_files(out, budget):
