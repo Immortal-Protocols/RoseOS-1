@@ -29,6 +29,11 @@ dispatch:
       bounded metadata of the fixed preparation.gitObjectsInspection objects directory, checked here to equal the
       helper's own spec); its stdout is kept write-once as NEW/git-objects-inspection.json.
 
+  git-meta: `blazer-build-only.py run --stage git-meta --host H --lock L --source-root S --receipt-dir NEW` (Flavors'
+      genuine Git metadata of the recipe's seven pinned projects in the isolated tree, fetched depth 1 from the public
+      pinned-manifest remote within gitMeta.boundBytes and timeoutSeconds, one shared cleanup budget on failure); the
+      outer bound is gitMeta.timeoutSeconds + the helper's cleanup budget + 360 s.
+
 Never compile: compile is not a preparation stage and is refused here. Exit status: 0 ok, 2 invalid, 4 unbound (a host
 fact is still null).
 """
@@ -46,7 +51,9 @@ HELPER = ROOT/'scripts/blazer-build-only.py'
 OUTER_MARGIN_SECONDS = 300
 KILL_AFTER_SECONDS = 30
 JOB_MARGIN_MINUTES = 10
-STAGE_INPUTS = {'source': ('sourceRoot',), 'download': ('downloadDir',), 'vendor': ('downloadDir', 'sourceRoot', 'node'), 'lunch': ('sourceRoot',)}
+STAGE_INPUTS = {'source': ('sourceRoot',), 'download': ('downloadDir',), 'vendor': ('downloadDir', 'sourceRoot', 'node'), 'lunch': ('sourceRoot',),
+                'git-meta': ('sourceRoot',)}
+GIT_META_MARGIN_SECONDS = 360
 INSPECT_INPUTS = ('sourceRoot', 'downloadDir', 'node')  # each passed only when bound
 # inspect: the helper's own bound (its cap is INSPECT_MAX_SECONDS), then an outer timeout and a 20-minute job.
 INSPECT = {'maxEntries': 200000, 'maxSeconds': 900, 'outerSeconds': 960, 'jobMinutes': 20}
@@ -115,8 +122,8 @@ def resolve(stage, binding_path=BINDING, root=ROOT, run_id=None, attempt=None):
     """(argv tail without --receipt-dir, outer_seconds, job_minutes) for one preparation stage or inspect. The hosted
     check of inspect validates the candidate template with a sample run (1, 1); run passes the real run id and attempt."""
     h = helper()
-    if stage not in (*h.PREPARATION, *RECEIPTS):
-        raise Invalid(f'{stage!r} is not a preparation stage {h.PREPARATION} or one of {", ".join(RECEIPTS)}')
+    if stage not in (*h.PREPARATION, h.GIT_META_STAGE, *RECEIPTS):
+        raise Invalid(f'{stage!r} is not a preparation stage {h.PREPARATION}, {h.GIT_META_STAGE} or one of {", ".join(RECEIPTS)}')
     try:
         # git-inspect-set and git-inspect-objects load the recipe without probing (as the helper's own commands do), so
         # resolving them touches no host path; every other route keeps the probing load.
@@ -180,6 +187,12 @@ def resolve(stage, binding_path=BINDING, root=ROOT, run_id=None, attempt=None):
         return argv, INSPECT['outerSeconds'], INSPECT['jobMinutes']
     if stage == 'vendor' and Path(binding['downloadDir']) in (Path(binding['sourceRoot']), *Path(binding['sourceRoot']).parents):
         raise Invalid('downloadDir must not be or contain the isolated source root')
+    if stage == h.GIT_META_STAGE:
+        timeout = recipe['gitMeta']['timeoutSeconds']
+        if not isinstance(timeout, int) or isinstance(timeout, bool) or not 0 < timeout <= h.GIT_META_MAX_SECONDS:
+            raise Invalid('recipe gitMeta.timeoutSeconds must be a positive integer within the helper cap')
+        outer = timeout + h.GIT_META_CLEANUP_SECONDS + GIT_META_MARGIN_SECONDS
+        return argv, outer, math.ceil((outer + KILL_AFTER_SECONDS) / 60) + JOB_MARGIN_MINUTES
     timeout = recipe['preparation'][stage]['timeoutSeconds']
     if not isinstance(timeout, int) or isinstance(timeout, bool) or timeout <= 0:
         raise Invalid(f'recipe preparation.{stage}.timeoutSeconds must be a positive integer')
