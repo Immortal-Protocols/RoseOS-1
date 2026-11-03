@@ -576,7 +576,7 @@
       },
       "missing": [
         "Both Mustang containers are created; occupancy must be checked by the authorized signer before generation (creator versions.list was denied)",
-        "Existing-identity action-time authorization and effective access for this Mustang setup; the operator transfer alone grants no IAM or credentials",
+        "Four-hour signer bindings and one bootstrap are explicitly approved, but the four IAM bindings remain unapplied: dev-infra lacks secretmanager.secrets.setIamPolicy; an existing IAM admin must apply them",
         "Live secrets.get and versions.list and time-boxed versions.add on those two only, plus expiring access to consume their payloads; no IAM changes in this source task",
         "One approved, journaled bootstrap run through the established route with same-run tool proof; no retry or regeneration after an uncertain outcome"
       ],

@@ -39,7 +39,7 @@
     "url": "https://github.com/Immortal-Protocols/RoseOS-1/actions/runs/41711304208"
   },
   "diagnosticAccess": "Configured dev-infra identity was denied logging.read for failed-controller audit inspection; no retry or alternate audit identity used.",
-  "remaining": "Resolve controller authentication/access; approve any new two-container signer IAM bindings and the journaled new-key bootstrap at action time. No denied operation retried.",
+  "remaining": "Existing GCP IAM admin must apply the four approved conditional bindings. Worker will read back the policies, bind the profile and run the single bootstrap. Unsigned build proceeds independently.",
   "controllerDiagnostic": {
     "run": "41713153197",
     "source": "30aa07226bf653ed74b49dbd8b7d0ec87438a767",
@@ -54,8 +54,34 @@
   },
   "providerInspection": "dev-infra workload-identity provider describe PERMISSION_DENIED; no retry or provider change",
   "signerApproval": {
-    "status": "approved by Nathan; not yet applied",
+    "status": "approved by Nathan; execution blocked by worker account capability",
     "scope": "Existing bootstrap role and secretAccessor on only the two Mustang containers, expiring four hours from action time; one new Mustang key bootstrap after controller access is resolved",
-    "reasonDeferred": "Preserve the access window while controller route is blocked"
+    "reasonDeferred": "dev-infra lacks secretmanager.secrets.setIamPolicy; no grant was applied"
+  },
+  "establishedRoute": {
+    "approval": "Nathan explicitly approved merge of PR492 and retry through os-release.yml",
+    "source": "216184cba518c3d2f5e86aedfdddfa3b1fa27834",
+    "run": "41714573501",
+    "controller": "success",
+    "builderStepStartedAt": "2026-11-03T20:40:43Z",
+    "status": "preparation/build step in progress; compile not yet confirmed",
+    "url": "https://github.com/Immortal-Protocols/RoseOS-1/actions/runs/41714573501"
+  },
+  "grantAttempt": {
+    "actor": "dev-infra@protocols-465723.iam.gserviceaccount.com",
+    "firstTarget": "PIXEL_OS_SIGNING_KEYS_MUSTANG_V1",
+    "firstRole": "projects/protocols-465723/roles/roseosModelsBootstrapV1",
+    "attemptedExpiry": "2026-11-04T00:41:38Z",
+    "commandExitCode": 1,
+    "firstGrant": "not applied, confirmed by successful IAM policy readback with no matching binding",
+    "otherThreeGrants": "not attempted",
+    "capabilityObservation": {
+      "permissions": [
+        "secretmanager.secrets.getIamPolicy"
+      ],
+      "missing": "secretmanager.secrets.setIamPolicy",
+      "method": "Secret Manager testIamPermissions on that exact secret; no mutation"
+    },
+    "result": "No IAM grant applied; no bootstrap or key material generated; existing IAM admin must perform the four approved bindings"
   }
 }
