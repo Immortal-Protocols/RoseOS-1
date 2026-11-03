@@ -208,7 +208,18 @@ class RoseSwitcherTest(unittest.TestCase):
                 'public static UserHandle of(int u){return null;} public int getIdentifier(){return 0;} }',
             'com/android/launcher3/R.java': 'package com.android.launcher3; public final class R { '
                 'public static final class dimen { public static final int rose_agent_strip_height = 1; } '
-                'public static final class id { public static final int action_buttons = 2; } }',
+                'public static final class id { public static final int action_buttons = 2; '
+                'public static final int scrim_view = 3; } }',
+            # Launcher3 47accce src/com/android/launcher3/views/ScrimView.java: the members the field uses.
+            'com/android/launcher3/views/ScrimView.java': 'package com.android.launcher3.views; '
+                'public class ScrimView extends android.view.View { '
+                'public ScrimView(android.content.Context c, android.util.AttributeSet a) { super(c, a); } '
+                'public int getBackgroundColor() { return 0; } '
+                'public void setDrawingController(ScrimDrawingController d) {} '
+                'public interface ScrimDrawingController { '
+                'default void drawOnScrimWithScale(android.graphics.Canvas c, float s) {} '
+                'default void drawOnScrimWithBottomOffset(android.graphics.Canvas c, int b) {} '
+                'void drawOnScrimWithScaleAndBottomOffset(android.graphics.Canvas c, float s, int b); } }',
             'com/android/quickstep/RecentsActivity.java': 'package com.android.quickstep; '
                 'public class RecentsActivity extends android.app.Activity {}',
             'com/android/launcher3/util/Executors.java': 'package com.android.launcher3.util; public class Executors { '
@@ -222,7 +233,7 @@ class RoseSwitcherTest(unittest.TestCase):
         result = subprocess.run(['javac', '-source', '11', '-target', '11', '-Xlint:-options', '-implicit:none',
             '-sourcepath', str(tmp/'src'), '-cp', str(jars[-1]), '-d', str(tmp/'out'),
             str(OVERLAY/'RoseAgentStrip.java'), str(OVERLAY/'RoseAgentWork.java'), str(OVERLAY/'RoseAgentFan.java'),
-            str(OVERLAY/'RoseFan.java')], capture_output=True, text=True)
+            str(OVERLAY/'RoseFan.java'), str(OVERLAY/'RoseOxbloodField.java')], capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_the_view_uses_only_existing_authority_and_opens_only_the_current_work(self):
@@ -1179,6 +1190,59 @@ class OxbloodSwitcherBackdropTest(unittest.TestCase):
             'RecentsActivity only gains the style; nothing of it is removed')
         stock_scrim = (FIXTURES/'RecentsActivity.java').read_text()
         self.assertIn(stock, stock_scrim)
+
+class OxbloodSwitcherFieldTest(unittest.TestCase):
+    """#410 S2: the switcher's Oxblood field (the contract's fields.rose, the pinned oxblood-rose.svg) drawn by OS
+    Product's own Launcher3 renderer on the fallback overview's scrim, through ScrimView's public drawing-controller seam,
+    at the scrim's own current opacity. Native renders and the comparison with Chromium's raster of the SVG are in
+    os/tests/native-render-switcher (RoseOxbloodFieldNativeTest)."""
+    STRIP = (OVERLAY/'RoseAgentStrip.java').read_text()
+    FIELD = (OVERLAY/'RoseOxbloodField.java').read_text()
+
+    def test_the_field_is_the_pinned_svg_shape_for_shape(self):
+        svg = (ROOT/'qa/oxblood/oxblood-contract.json').read_text()
+        import json
+        contract = json.loads(svg)
+        self.assertEqual(contract['fields']['rose']['source'], 'assets/oxblood-rose.svg')
+        self.assertEqual(contract['switcher']['field']['kind'], 'rose')
+        self.assertIn('scale = max(W/390, H/844); centred horizontally; top-aligned', contract['fields']['rose']['placement'])
+        for value in ('SHEET = {390, 118, 390, 292, 295, 580}', 'PLANE = {295, 580, 390, 515, 390, 844, 123, 844, 206, 642}',
+                'BASE = {0xFF120A0D, 0xFF0E080B, 0xFF12060A}', 'BASE_STOPS = {0f, .6f, 1f}',
+                'SHEET_COLORS = {0x598A3A4C, 0x008A3A4C}', 'PLANE_COLORS = {0xE67A1428, 0xFF36020D, 0xFF1A0207}',
+                'PLANE_STOPS = {0f, .45f, 1f}', 'GLINT = {0xE6FFF0F0, 0x00FF8A9A}',
+                'GLINT_X = 295, GLINT_Y = 580, GLINT_R = 26, BLUR_STD_DEV = 3',
+                'return Math.max(width / VIEW_W, height / VIEW_H);'):
+            self.assertIn(value, self.FIELD, value)
+        for forbidden in ('ValueAnimator', 'postDelayed', 'Handler(', 'SystemClock'):
+            self.assertNotIn(forbidden, self.FIELD, f'{forbidden}: static artwork')
+
+    def test_the_scrim_seam_is_the_pinned_upstream_api(self):
+        """The compile stub's ScrimView members are the pinned Launcher3 47accce ones, byte-pinned here."""
+        code = FIXTURES/'ScrimView.java'
+        self.assertEqual(hashlib.sha256(code.read_bytes()).hexdigest(), 'be8859147c13b41e1e9505be3e6e0423d75a4a8a6efd957a6b87e84e1908dd39')
+        source = code.read_text()
+        for member in ('public int getBackgroundColor() {', 'public void setDrawingController(ScrimDrawingController drawingController) {',
+                'public interface ScrimDrawingController {', 'void drawOnScrimWithScaleAndBottomOffset(\n                Canvas canvas, float scale, @Px int bottomOffsetPx);',
+                'mDrawingController.drawOnScrimWithScale(canvas, mHeaderScale);'):
+            self.assertIn(member, source, member)
+        layout = (FIXTURES/'fallback_recents_activity.xml').read_text()
+        self.assertIn('<com.android.launcher3.views.ScrimView', layout)
+        self.assertIn('android:id="@+id/scrim_view"', layout)
+
+    def test_the_field_rides_the_scrims_own_state_and_is_released(self):
+        attach = self.STRIP[self.STRIP.index('protected void onAttachedToWindow() {'):self.STRIP.index('protected void onDetachedFromWindow()')]
+        self.assertIn('View found = parent.findViewById(R.id.scrim_view);', attach)
+        self.assertIn('scrim.setDrawingController(fieldOnScrim);', attach)
+        self.assertIn('field.drawAsScrim(canvas, on.getWidth(), on.getHeight(), Color.alpha(on.getBackgroundColor()));',
+            self.STRIP, 'composited once as the scrim\'s own fill, at its current opacity')
+        self.assertIn('if (found instanceof ScrimView && reservedBelow(getContext()) > 0) {', attach,
+            'only in the RecentsActivity overview, where the Oxblood scrim style is applied')
+        self.assertIn('layer.setXfermode(new PorterDuffXfermode(PorterDuff.Mode.SRC));', self.FIELD)
+        self.assertIn('if (scrimAlpha <= 0 || width <= 0 || height <= 0) return;', self.FIELD)
+        detach = self.STRIP[self.STRIP.index('protected void onDetachedFromWindow() {'):self.STRIP.index('private void anchor()')]
+        self.assertIn('scrim.setDrawingController(null);', detach)
+        for state in ('RecentsState', 'setScrimColors', 'setBackgroundColor('):
+            self.assertNotIn(state, self.STRIP, f'{state}: no new state logic; the scrim keeps driving itself')
 
 class OxbloodHumanCardTest(unittest.TestCase):
     """#410: the smallest safe alignment of the human (top) carousel's own cards. Only colour values in the overview's

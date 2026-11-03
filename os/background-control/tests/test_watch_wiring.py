@@ -91,9 +91,60 @@ class WatchWiringTest(unittest.TestCase):
     def test_closing_the_viewer_never_stops_work(self):
         close = method('private void unavailable()')
         self.assertIn('finishAndRemoveTask();', close)
-        self.assertNotRegex(SOURCE, r'Controller\.(stop|agentStop|command|start)\(|StopReceiver|StopLedger')
-        # The viewer only reads controller state.
+        self.assertNotRegex(SOURCE, r'Controller\.(stop|agentStop|command|start|ownerStop|stopAll)\(|StopReceiver|StopLedger')
+        # The viewer never writes controller state directly.
         self.assertNotRegex(SOURCE, r'Controller\.\w+\s*=[^=]')
+        # #410 (Nathan-approved, amended deliberately): closing, Back, Home, picture-in-picture, errors and every lifecycle
+        # path still stop nothing; none of them reaches the viewer's Stop.
+        for signature in ('private void unavailable()', 'public void onCreate(Bundle saved)', 'protected void onNewIntent(Intent intent)',
+                          'private final Runnable refresh', 'private void detach()', 'private void fail(String message, Throwable error)',
+                          'protected void onStart()', 'protected void onStop()', 'protected void onDestroy()',
+                          'public void onConfigurationChanged(Configuration config)',
+                          'public void onPictureInPictureModeChanged(boolean inPip, Configuration config)', 'private void updateStop()',
+                          'private void confirmStop()', 'private void dismissConfirm()'):
+            self.assertNotIn('viewerStop', method(signature), signature)
+            if signature != 'private void confirmStop()':
+                self.assertNotIn('stopConfirmed(', method(signature), signature)
+        self.assertNotRegex(SOURCE, r'onBackPressed|OnBackInvokedCallback|onUserLeaveHint')
+
+    def test_only_the_confirmed_stop_reaches_the_bound_pair(self):
+        # The one exception (#410): the confirmation's positive button, once, for the session object seen when it was asked.
+        self.assertEqual(SOURCE.count('Controller.viewerStop('), 1)
+        self.assertEqual(SOURCE.count('stopConfirmed('), 2, 'its definition and the positive button only')
+        confirm = method('private void confirmStop()')
+        self.assertIn('if (stopping || attached == null || (confirm != null && confirm.isShowing())) return;', confirm)
+        self.assertIn('Object seen = attached;', confirm)
+        self.assertIn('WatchBinding asked = binding;', confirm)
+        self.assertIn('.setNegativeButton(ViewerStop.KEEP, null)', confirm)
+        self.assertIn('.setPositiveButton(ViewerStop.BUTTON, (dialog, which) -> stopConfirmed(seen, asked))', confirm)
+        self.assertIn('confirm.getButton(AlertDialog.BUTTON_POSITIVE).setFilterTouchesWhenObscured(true);', confirm)
+        self.assertIn('confirm.getButton(AlertDialog.BUTTON_NEGATIVE).setFilterTouchesWhenObscured(true);', confirm)
+        stop = method('private void stopConfirmed(Object seen, WatchBinding asked)')
+        self.assertLess(stop.index('if (stopping || isFinishing()) return;'), stop.index('stopping = true;'))
+        self.assertLess(stop.index('stopping = true;'), stop.index('Controller.viewerStop('))
+        # The pair it asked about, never the binding at tap time; a viewer re-bound or re-attached since passes no session
+        # object, so the controller refuses (replaced). A rebinding intent also dismisses the question.
+        self.assertIn('Controller.viewerStop(this, asked, seen == attached && asked.equals(binding) ? seen : null)', stop)
+        self.assertIn('if (!WatchBinding.next(binding, incoming).equals(binding)) dismissConfirm();', method('protected void onNewIntent(Intent intent)'))
+        self.assertIn('ViewerStop.Outcome outcome = ViewerStop.of(status, confirmed);', stop)
+        self.assertIn('if (outcome.closeViewer) { detach(); finishAndRemoveTask(); return; }', stop)
+
+    def test_the_stop_button_is_only_for_a_bound_full_screen_pair(self):
+        create = method('public void onCreate(Bundle saved)')
+        self.assertIn('if (binding.mode == WatchBinding.Mode.BOUND) addStopButton();', create)
+        self.assertEqual(SOURCE.count('addStopButton();'), 1)
+        add = method('private void addStopButton()')
+        self.assertIn('stopButton.setFilterTouchesWhenObscured(true);', add)
+        self.assertIn('stopButton.setVisibility(View.GONE);', add)
+        self.assertIn('stopButton.setOnClickListener(v -> confirmStop());', add)
+        update = method('private void updateStop()')
+        self.assertIn('boolean show = attached != null && !stopping && !isInPictureInPictureMode() && !isFinishing();', update)
+        # The question never outlives the view it asked about.
+        for signature in ('private void unavailable()', 'protected void onStop()', 'protected void onDestroy()'):
+            self.assertIn('dismissConfirm();', method(signature), signature)
+        self.assertIn('if (inPip) dismissConfirm();', method('public void onPictureInPictureModeChanged(boolean inPip, Configuration config)'))
+        # Unchanged secure viewer: FLAG_SECURE stays and it never shows over the lock screen (checked above).
+        self.assertIn('getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE);', create)
 
 class SelectionWiringTest(unittest.TestCase):
     """#156 M004: an overview selection is resolved by the controller against its own live session."""

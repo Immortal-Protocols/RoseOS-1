@@ -921,12 +921,12 @@ class SourceRunTest(Fixture):
     def test_missing_unusable_or_unpinned_deps_refuse_before_writing(self):
         bin_dir = self.production/'out_adevtool_deps/host/linux-x86/bin'
         cases = (
-            (lambda: (bin_dir/'aapt2').unlink(), "base: adevtool host tools missing or not executable: ['aapt2']"),
-            (lambda: os.chmod(bin_dir/'lz4', 0o644), "base: adevtool host tools missing or not executable: ['lz4']"),
+            (lambda: (bin_dir/'aapt2').unlink(), "deps: adevtool host tools missing, linked or not executable: ['aapt2']"),
+            (lambda: os.chmod(bin_dir/'lz4', 0o644), "deps: adevtool host tools missing, linked or not executable: ['lz4']"),
             (lambda: ((bin_dir/'toybox').unlink(), os.symlink('aapt2', bin_dir/'toybox')),
-             "base: adevtool host tools missing or not executable: ['toybox']"),
+             "deps: adevtool host tools missing, linked or not executable: ['toybox']"),
             (lambda: (self.production/'out_adevtool_deps/adevtool_revision').write_text('0' * 40 + '\n'),
-             'base: out_adevtool_deps/adevtool_revision is'),
+             'deps: out_adevtool_deps/adevtool_revision is'),
             (lambda: os.symlink('../../../../build/make/envsetup.sh', bin_dir/'outside'),
              'out_adevtool_deps/host/linux-x86: bin/outside -> ../../../../build/make/envsetup.sh leaves the source tree'),
             (lambda: os.symlink('../../../soong/build.ninja', bin_dir/'deps-only'),
@@ -942,14 +942,43 @@ class SourceRunTest(Fixture):
                 self.assertFalse(os.path.lexists(self.target.parent))
                 self.build_production()
 
+    def test_unrelated_vendor_lunch_and_kernel_needs_never_gate_the_copy(self):
+        """The copy is a preparatory snapshot: only the selected deps are checked; vendor keeps its own admission."""
+        for rel in ('vendor/adevtool/bin/run', 'build/envsetup.sh', 'prebuilts/build-tools/path/linux-x86'):
+            path = self.production/rel
+            shutil.rmtree(path) if path.is_dir() and not path.is_symlink() else path.unlink()
+        shutil.rmtree(self.production/self.recipe['kernelDir'])
+        self.assertEqual([p for p in bb.source_selection(self.synthetic, self.production, self.root)['problems']], [])
+        code, done = self.run_source()
+        self.assertEqual((code, done['complete']), (0, True), done)
+        vendor = ' '.join(bb.tree_problems(self.recipe, self.target))
+        for rel in ('vendor/adevtool/bin/run', 'build/envsetup.sh', self.recipe['kernelDir']):
+            self.assertIn(rel, vendor, 'the vendor stage still refuses on its own needs')
+
+    def test_the_revision_marker_is_exactly_the_pinned_hash_and_one_newline(self):
+        marker = self.production/'out_adevtool_deps/adevtool_revision'
+        pin = self.recipe['pins']['vendor/adevtool']
+        self.assertEqual(bb.deps_problems(self.recipe, self.production), [])
+        for content in (pin, pin + '\n\n', ' ' + pin + '\n', pin + '\r\n', pin.upper() + '\n', ''):
+            with self.subTest(repr(content)):
+                marker.write_text(content)
+                self.assertIn('not exactly the pinned hash and one newline', ' '.join(bb.deps_problems(self.recipe, self.production)))
+        marker.write_text(pin + '\n')
+        self.assertEqual(bb.deps_problems(self.recipe, self.production), [])
+        real = self.tmp/'marker-target'
+        real.write_text(pin + '\n')
+        marker.unlink()
+        os.symlink(real, marker)
+        self.assertIn('is None, not exactly', ' '.join(bb.deps_problems(self.recipe, self.production)), 'never read through a link')
+
     def test_include_paths_must_be_plain_and_are_never_read_through_links(self):
         deps = self.production/'out_adevtool_deps'
         real = self.tmp/'real-revision'
         real.write_text(self.recipe['adevtool']['revision'] if 'revision' in self.recipe['adevtool'] else 'x')
-        original = bb.tree_problems
+        original = bb.deps_problems
         calls = []
-        bb.tree_problems = lambda *a: calls.append(a) or original(*a)
-        self.addCleanup(setattr, bb, 'tree_problems', original)
+        bb.deps_problems = lambda *a: calls.append(a) or original(*a)
+        self.addCleanup(setattr, bb, 'deps_problems', original)
         cases = (
             (lambda: ((deps/'adevtool_revision').unlink(), os.symlink(real, deps/'adevtool_revision')),
              'out_adevtool_deps/adevtool_revision is not a regular file or real directory'),
@@ -964,7 +993,7 @@ class SourceRunTest(Fixture):
                 change()
                 selection = bb.source_selection(self.synthetic, self.production, self.root)
                 self.assertIn(pattern, ' '.join(selection['problems']))
-                self.assertEqual(calls, [], 'tree_problems (which reads adevtool_revision) never runs on an unsafe include')
+                self.assertEqual(calls, [], 'deps_problems (which reads adevtool_revision) never runs on an unsafe include')
                 shutil.rmtree(self.tmp/'host-real', True)
                 shutil.rmtree(self.tmp/'linux-real', True)
                 self.build_production()
