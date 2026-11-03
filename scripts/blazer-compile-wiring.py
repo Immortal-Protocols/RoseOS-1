@@ -25,7 +25,7 @@ blazer target-files on the original builder, in the isolated blazer-prep work tr
 Compile neither signs nor packages. Exit status: 0 ok, 1 refused, 2 invalid, 4 unbound.
 """
 import argparse
-import calendar
+import datetime
 import importlib.util
 import json
 import math
@@ -34,7 +34,6 @@ from pathlib import Path
 import re
 import subprocess
 import sys
-import time
 
 ROOT = Path(__file__).resolve().parents[1]
 BINDING = ROOT/'os/build-only/blazer-compile-host.json'
@@ -120,11 +119,13 @@ def plain(path):
 
 
 def build_datetime(reserved_at):
-    """The reservation's reservedAt (UTC, %Y-%m-%dT%H:%M:%SZ) as epoch seconds: the build's BUILD_DATETIME."""
+    """The reservation's reservedAt (UTC, %Y-%m-%dT%H:%M:%SZ) as epoch seconds: the build's BUILD_DATETIME. Parsed
+    exactly as the helper's reservation_datetime parses it, so the value passed is the one its admission requires."""
     try:
-        return str(calendar.timegm(time.strptime(str(reserved_at), '%Y-%m-%dT%H:%M:%SZ')))
-    except ValueError:
+        reserved = datetime.datetime.strptime(reserved_at, '%Y-%m-%dT%H:%M:%SZ').replace(tzinfo=datetime.timezone.utc)
+    except (TypeError, ValueError):
         raise Refused(f'the reservation time {str(reserved_at)[:32]!r} is not a UTC timestamp') from None
+    return str(int(reserved.timestamp()))
 
 
 def integration(recipe, source, home=HOME, root=ROOT):
@@ -146,6 +147,8 @@ def integration(recipe, source, home=HOME, root=ROOT):
             raise Refused(f'unreadable blazer reservation {path.name[:40]}') from None
         if record['source'] != recipe:
             continue
+        if not isinstance(build, str):  # the helper binds --build-number to the reservation's build string exactly
+            raise Refused(f'reservation {path.name[:40]} records its build as {type(build).__name__}, not a string')
         work, reconcile = base/f'blazer-integrate-{build}', base/f'blazer-reconcile-{build}'
         if (record['workDir'], record['integrationDir']) != (str(work), str(reconcile)):
             raise Refused(f'reservation {build} names other directories than its build derives')

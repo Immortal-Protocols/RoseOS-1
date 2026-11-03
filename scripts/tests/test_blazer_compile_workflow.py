@@ -68,7 +68,7 @@ class Wiring(unittest.TestCase):
         (base/'blazer-allocations'/f'{build}.json').write_text(json.dumps(record))
         if inputs:
             (work/'inputs').mkdir(parents=True)
-            (work/'inputs/local-inputs.json').write_text('{}')
+            (work/'inputs/local-inputs.json').write_text(json.dumps({'candidate': {'build': build}}))
         if applied:
             reconcile.mkdir()
             (reconcile/'0001-2026103101.json').write_text('{}')
@@ -114,6 +114,47 @@ class Wiring(unittest.TestCase):
         chosen = self.reserve(home, '2026110303')
         self.assertEqual(wiring.integration(RECIPE, Path(SOURCE), home), chosen)
         self.assertEqual((chosen['buildNumber'], chosen['buildDatetime']), ('2026110303', '1793718000'))
+
+    def test_the_helper_admits_exactly_the_identity_the_wiring_selects(self):
+        """Both sides' real code on the same reservation bytes: the --build-number/--build-datetime the wiring derives are
+        the ones Flavors' F1 admission (identity_problems, reservation_datetime) requires, and name its OUT_DIR."""
+        spec = importlib.util.spec_from_file_location('blazer_build_only', ROOT/'scripts/blazer-build-only.py')
+        helper = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(helper)
+        recipe = json.loads((ROOT/'os/build-only/blazer.json').read_text())
+        lock = '/home/pixelbuild/frankel-build.lock'
+
+        def admit(chosen, wall=1793718000 + 3600):
+            op = helper.operator(BINDING['host'], SOURCE, 48, lock, integration_dir=chosen['integrationDir'],
+                                 inputs_receipt=chosen['inputsReceipt'], build_number=chosen['buildNumber'],
+                                 build_datetime=chosen['buildDatetime'])
+            return op, helper.identity_problems(op, lambda: wall)
+
+        home = Path(tempfile.mkdtemp())
+        self.reserve(home, '2026110303')
+        chosen = wiring.integration(RECIPE, Path(SOURCE), home)
+        op, (problems, facts) = admit(chosen)
+        self.assertEqual(problems, [])
+        self.assertEqual((facts['reservedAtEpoch'], facts['inputsReceiptBuild'], facts['buildDatetimeUtc']),
+                         (1793718000, '2026110303', '2026-11-03T15:00:00Z'))
+        self.assertEqual(facts['reservation'], str(home/'rose-actions/blazer-allocations/2026110303.json'))
+        self.assertEqual(helper.compile_out_dir(recipe, op), 'out-blazer-build-2026110303')
+        # The helper refuses any other second or build, so the wiring's derivation is load-bearing, not advisory.
+        for change in ({'buildDatetime': '1793718001'}, {'buildNumber': '2026110304'}):
+            with self.subTest(change=change):
+                self.assertTrue(admit({**chosen, **change})[1][0])
+        # A reservation time either side cannot read is refused by both (a leap second included), never re-derived.
+        path = home/'rose-actions/blazer-allocations/2026110303.json'
+        record = json.loads(path.read_text())
+        for value in ('2026-11-03T15:00:60Z', '2026-11-03T15:00:00+00:00'):
+            with self.subTest(reservedAt=value):
+                path.write_text(json.dumps({**record, 'reservedAt': value}))
+                with self.assertRaises(wiring.Refused):
+                    wiring.integration(RECIPE, Path(SOURCE), home)
+                self.assertIn('has no UTC reservedAt', ' '.join(admit(chosen)[1][0]))
+        path.write_text(json.dumps({**record, 'build': 2026110303}))
+        with self.assertRaises(wiring.Refused):
+            wiring.integration(RECIPE, Path(SOURCE), home)  # a numeric build is never passed as the identity
 
     def test_a_bound_binding_resolves_the_accepted_argv_and_recipe_bounds(self):
         tail, outer, minutes = wiring.resolve(binding())
