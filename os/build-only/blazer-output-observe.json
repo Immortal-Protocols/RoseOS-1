@@ -1,0 +1,7 @@
+{
+  "schemaVersion": 1,
+  "kind": "rose-blazer-output-observe-target",
+  "basis": "BLAZER-OUTPUT-OBSERVE target (Release-owned): the one compile output directory scripts/blazer-output-observe.py observes, under os/build-only/blazer-prep-host.json sourceRoot S. outDir must be exactly one of two names: the build's own os/build-only/blazer.json compile.outDirTemplate directory (out-blazer-build-<build>, which every compile writes since F1/F2, 297122a), or the legacy fixed out-blazer-build that every compile before F1/F2 wrote and that F1/F2 compiles never read, move or write. This target is the legacy directory: the retained output of compile run 41668431465 (reported complete in Infra's relayed receipt), dispatched on the same commit as integrate run 41668005225, whose integration was allocated build 2026110303. That compile ran before F1/F2, so without BUILD_NUMBER or BUILD_DATETIME. build is the build its integration was allocated: the value the reviewer compares with the reported summary.incremental, not a claim about what those outputs carry. These are historical facts, not current host proof; the observer re-measures everything and reports what it finds. A later compile is targeted by a reviewed commit naming its build and out-blazer-build-<build>. Nothing here was run on any host.",
+  "build": "2026110303",
+  "outDir": "out-blazer-build"
+}

@@ -6,7 +6,11 @@ measured identities for a reviewed binding commit, which every consuming step re
   observe --host immortal-os-builder
 
 Exactly these paths, fixed in source (no argument chooses a path). S is the isolated blazer-prep work tree
-(os/build-only/blazer-prep-host.json sourceRoot) and OUT is S/<os/build-only/blazer.json compile.outDir>:
+(os/build-only/blazer-prep-host.json sourceRoot) and OUT is S/<outDir> of the committed target
+os/build-only/blazer-output-observe.json {build, outDir}. outDir is exactly one of two names: that build's own
+os/build-only/blazer.json compile.outDirTemplate directory (out-blazer-build-<build>, every compile since F1/F2), or
+the legacy fixed out-blazer-build that every compile before F1/F2 wrote; anything else refuses (exit 2). The report
+carries the target, so the build-identity gate compares summary.incremental with target.build:
   targetFiles  the one OUT/target/product/blazer/obj/PACKAGING/target_files_intermediates/blazer-target_files*.zip
                (Flavors' compile collector paths; zero or several matches are reported, never chosen between): its
                size, sha256, mode and mtime, then from its central directory only these members, each at most
@@ -99,6 +103,11 @@ LIMITS = {'seconds': 900, 'targetFilesBytes': 32 << 30, 'otatoolsBytes': 4 << 30
           'outputBytes': 64 << 10}
 READABLE_METHODS = (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED)
 OUT_DIR_NAME = re.compile(r'[A-Za-z0-9][A-Za-z0-9._-]{0,63}')
+TARGET = 'os/build-only/blazer-output-observe.json'
+TARGET_KEYS = {'schemaVersion', 'kind', 'basis', 'build', 'outDir'}
+TARGET_KIND = 'rose-blazer-output-observe-target'
+BUILD = re.compile(r'[1-9][0-9]{9}')  # blazer-allocate's YYYYMMDDNN
+LEGACY_OUT_DIR = 'out-blazer-build'  # the fixed OUT_DIR of every compile before F1/F2 (297122a), never one build's own
 
 
 class Budget:
@@ -118,12 +127,26 @@ class Stop(Exception):
 
 
 def paths(root=ROOT):
-    """(S, OUT) from the committed bindings: never an argument."""
+    """(S, OUT, target) from the committed bindings, never an argument: OUT is the target's outDir under S, which must
+    be exactly the target build's own compile.outDirTemplate directory or the legacy fixed out-blazer-build."""
     source = Path(json.loads((root/'os/build-only/blazer-prep-host.json').read_text())['sourceRoot'])
-    out_dir = json.loads((root/'os/build-only/blazer.json').read_text())['compile']['outDir']
-    if not source.is_absolute() or not OUT_DIR_NAME.fullmatch(str(out_dir)) or '..' in str(out_dir):
-        raise ValueError('the committed source root or compile OUT_DIR is malformed')
-    return source, source/out_dir
+    template = json.loads((root/'os/build-only/blazer.json').read_text())['compile']['outDirTemplate']
+    target = json.loads((root/TARGET).read_text())
+    if not source.is_absolute() or '..' in source.parts:
+        raise ValueError('the committed source root is malformed')
+    if (not isinstance(target, dict) or set(target) != TARGET_KEYS or target['schemaVersion'] != 1
+            or target['kind'] != TARGET_KIND):
+        raise ValueError(f'{TARGET} is not exactly an observation target')
+    build, out_dir = target['build'], target['outDir']
+    if not isinstance(build, str) or not BUILD.fullmatch(build):
+        raise ValueError('the observation target build must be a ten-digit YYYYMMDDNN string')
+    if (not isinstance(template, str) or template.count('{build}') != 1
+            or re.search(r'[{}]', template.replace('{build}', ''))):
+        raise ValueError('compile.outDirTemplate must hold {build} exactly once and no other field')
+    forms = {template.format(build=build): 'per-build', LEGACY_OUT_DIR: 'legacy'}
+    if not isinstance(out_dir, str) or out_dir not in forms or not OUT_DIR_NAME.fullmatch(out_dir):
+        raise ValueError(f'the observation target outDir must be {template.format(build=build)} or {LEGACY_OUT_DIR}')
+    return source, source/out_dir, {'build': build, 'outDir': out_dir, 'form': forms[out_dir]}
 
 
 def open_leaf(parent, leaf, path):
@@ -532,8 +555,8 @@ def observe_scripts(source, budget):
     return rows, problems
 
 
-def observe(host, root=ROOT, clock=time.monotonic, source=None, out=None, lock=None):
-    """source/out/lock exist for tests only; the CLI always observes the committed source root and compile OUT_DIR."""
+def observe(host, root=ROOT, clock=time.monotonic, source=None, out=None, lock=None, target=None):
+    """source/out/lock/target exist for tests only; the CLI always observes the committed source root and target."""
     if host != HOST:
         raise ValueError(f'--host must be {HOST}')
     lock = lock or base.lock_path(root)
@@ -543,11 +566,11 @@ def observe(host, root=ROOT, clock=time.monotonic, source=None, out=None, lock=N
                            'problems': [reason]}, sort_keys=True)
     try:
         if source is None:
-            source, out = paths(root)
+            source, out, target = paths(root)
         budget = Budget(clock)
         report = {'schema': SCHEMA, 'host': host, 'limits': dict(LIMITS), 'lock': {'held': True, 'path': str(lock)},
-                  'sourceRoot': str(source), 'outDir': str(out), 'problems': [],
-                  'gate': 'complete:true measures; the reviewer compares summary.incremental with the allocated build'}
+                  'sourceRoot': str(source), 'outDir': str(out), 'target': target, 'problems': [],
+                  'gate': 'complete:true measures; the reviewer compares summary.incremental with target.build'}
         for key, section in (('targetFiles', lambda: observe_target_files(out, budget)),
                              ('otatools', lambda: observe_otatools(out, budget)),
                              ('vendorBoot', lambda: observe_vendor_boot(out, budget)),

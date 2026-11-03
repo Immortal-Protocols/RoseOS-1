@@ -21,6 +21,7 @@ observer = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(observer)
 
 BUILD = '2026110303'
+NEXT = '2026110401'  # a later build: its compile writes out-blazer-build-<build> (F1/F2)
 SYSTEM_PROP = (f'ro.build.version.incremental={BUILD}\nro.build.date.utc=1793700000\n'
                f'ro.build.fingerprint=google/blazer/blazer:16/CP3A.261005.005/{BUILD}:user/release-keys\n'
                'ro.build.id=CP3A.261005.005\nro.build.type=user\nro.build.tags=release-keys\n'
@@ -45,13 +46,26 @@ def tearDownModule():
         temp.cleanup()
 
 
+def bindings(source, build, out_dir, template='out-blazer-build-{build}', **change):
+    """A temporary repository root holding only the three committed bindings paths() reads."""
+    TEMPS.append(tempfile.TemporaryDirectory())
+    root = Path(TEMPS[-1].name)
+    (root/'os/build-only').mkdir(parents=True)
+    (root/'os/build-only/blazer-prep-host.json').write_text(json.dumps({'sourceRoot': str(source)}))
+    (root/'os/build-only/blazer.json').write_text(json.dumps({'compile': {'outDirTemplate': template}}))
+    target = {'schemaVersion': 1, 'kind': observer.TARGET_KIND, 'basis': 'test', 'build': build, 'outDir': out_dir, **change}
+    (root/observer.TARGET).write_text(json.dumps({k: v for k, v in target.items() if v is not ...}))
+    return root
+
+
 class Tree:
-    """A synthetic isolated source tree S with OUT = S/out-blazer-build, and a lock file (removed after the module)."""
-    def __init__(self, members=None, otatools=None):
+    """A synthetic isolated source tree S with OUT = S/<out_name> (default the legacy out-blazer-build), and a lock file
+    (removed after the module)."""
+    def __init__(self, members=None, otatools=None, out_name='out-blazer-build'):
         TEMPS.append(tempfile.TemporaryDirectory())
         self.tmp = Path(TEMPS[-1].name)
         self.source = self.tmp/'source'
-        self.out = self.source/'out-blazer-build'
+        self.out = self.source/out_name
         self.inter = self.out/observer.TARGET_FILES_DIR
         self.inter.mkdir(parents=True)
         (self.inter/'blazer-target_files').mkdir()  # the unzipped tree beside the ZIP is never read
@@ -154,6 +168,39 @@ class Observe(unittest.TestCase):
         self.assertEqual(factory['firmware'], {'bootloader': {'state': 'absent'}, 'radio': {'state': 'absent'}})
         self.assertEqual((factory['gscFirmware']['count'], factory['dynamicImagesMissing']), (0, ['system', 'vendor', 'product']))
         self.assertEqual(factory['withoutImage'], ['abl', 'modem', 'boot'])
+
+    def test_the_committed_target_is_observed_and_reported_never_another_directory(self):
+        for out_name, build, form in (('out-blazer-build', BUILD, 'legacy'), (f'out-blazer-build-{NEXT}', NEXT, 'per-build')):
+            with self.subTest(form=form):
+                tree = Tree(out_name=out_name)
+                report = json.loads(observer.observe('immortal-os-builder', root=bindings(tree.source, build, out_name),
+                                                     lock=tree.lock))
+                self.assertEqual((report['complete'], report['problems']), (True, []))
+                self.assertEqual((report['outDir'], report['target']), (str(tree.out), {'build': build, 'outDir': out_name,
+                                                                                         'form': form}))
+                self.assertIn('target.build', report['gate'])
+                self.assertEqual(report['targetFiles']['sha256'], sha(tree.target))
+        # Another build's (or the legacy) output beside the target is never observed in the target's place.
+        tree = Tree(out_name=f'out-blazer-build-{NEXT}')
+        later = '2026110402'
+        report = json.loads(observer.observe('immortal-os-builder', root=bindings(tree.source, later, f'out-blazer-build-{later}'),
+                                             lock=tree.lock))
+        self.assertFalse(report['complete'])
+        self.assertEqual(report['outDir'], str(tree.source/f'out-blazer-build-{later}'))
+        self.assertEqual(report['targetFiles']['state'], 'absent')
+        self.assertEqual(report['target']['build'], later)
+        report = json.loads(observer.observe('immortal-os-builder', root=bindings(tree.source, NEXT, 'out-blazer-build'),
+                                             lock=tree.lock))
+        self.assertEqual((report['complete'], report['targetFiles']['state']), (False, 'absent'))
+        # An unusable target is invalid usage (exit 2), decided under the lock and released.
+        root = bindings(tree.source, NEXT, f'out-blazer-build-{BUILD}')
+        with self.assertRaises(ValueError):
+            observer.observe('immortal-os-builder', root=root, lock=tree.lock)
+        fd = os.open(tree.lock, os.O_RDONLY)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)  # the lock was released
+        finally:
+            os.close(fd)
 
     def test_the_identity_is_reported_never_judged(self):
         tree = Tree(members={'SYSTEM/build.prop': 'ro.build.version.incremental=eng.pixelbuild.20261103.155410\n',
@@ -444,17 +491,44 @@ class Guards(unittest.TestCase):
         self.assertEqual(first.get('state'), 'corrupt')
         self.assertIsInstance(report, dict)
 
-    def test_dot_names_are_refused_as_the_compile_out_dir(self):
-        temp = tempfile.TemporaryDirectory()
-        self.addCleanup(temp.cleanup)
-        root = Path(temp.name)
-        (root/'os/build-only').mkdir(parents=True)
-        (root/'os/build-only/blazer-prep-host.json').write_text(json.dumps({'sourceRoot': '/srv/source'}))
-        for bad in ('..', '.', '.hidden', 'a/b', ''):
-            with self.subTest(bad=bad):
-                (root/'os/build-only/blazer.json').write_text(json.dumps({'compile': {'outDir': bad}}))
+    def test_the_target_is_exactly_the_legacy_dir_or_the_builds_own_dir(self):
+        source = Path('/srv/source')
+        for build, out_dir, form in ((NEXT, f'out-blazer-build-{NEXT}', 'per-build'), (BUILD, 'out-blazer-build', 'legacy'),
+                                     (NEXT, 'out-blazer-build', 'legacy')):
+            with self.subTest(out_dir=out_dir, build=build):
+                self.assertEqual(observer.paths(bindings(source, build, out_dir)),
+                                 (source, source/out_dir, {'build': build, 'outDir': out_dir, 'form': form}))
+        refused = [  # (build, outDir, bindings() changes: target keys, or template=)
+            (NEXT, f'out-blazer-build-{BUILD}', {}),  # another build's own directory, never this target's
+            (NEXT, f'out-blazer-build-{NEXT}/', {}), (NEXT, f'/srv/source/out-blazer-build-{NEXT}', {}),
+            *((NEXT, bad, {}) for bad in ('..', '.', '.hidden', 'a/b', '', 'out-blazer-build/..', None, 5)),
+            *((bad, 'out-blazer-build', {}) for bad in (int(NEXT), '0026110401', '202611040', '2026110401x', '', None)),
+            (NEXT, 'out-blazer-build', {'extra': 1}), (NEXT, 'out-blazer-build', {'basis': ...}),
+            (NEXT, 'out-blazer-build', {'schemaVersion': 2}), (NEXT, 'out-blazer-build', {'kind': 'other'}),
+            # a template that is not exactly one {build} field naming one plain directory
+            *((NEXT, f'out-blazer-build-{NEXT}', {'template': bad}) for bad in (
+                'out-blazer-build', '{build}-{build}', 'out-{build}-{other}', 'out-{build:>12}', 'out-{build!r}',
+                'out/{build}', '../{build}', 'out-{build}}', None, 5)),
+            # ...including when outDir is exactly what that malformed template renders
+            (NEXT, f'{NEXT}-{NEXT}', {'template': '{build}-{build}'}), (NEXT, 'out-blazer-build', {'template': 'out-blazer-build'}),
+            (NEXT, f'out/{NEXT}', {'template': 'out/{build}'}), (NEXT, f'../{NEXT}', {'template': '../{build}'}),
+            (NEXT, f'.{NEXT}', {'template': '.{build}'})]
+        for build, out_dir, change in refused:
+            with self.subTest(build=build, out_dir=out_dir, change=change):
                 with self.assertRaises(ValueError):
-                    observer.paths(root)
+                    observer.paths(bindings(source, build, out_dir, **change))
+        root = bindings(source, NEXT, 'out-blazer-build')
+        (root/'os/build-only/blazer.json').write_text(json.dumps({'compile': {'outDir': 'out-blazer-build'}}))
+        with self.assertRaises(KeyError):  # the pre-F1/F2 recipe form names no template: never guessed
+            observer.paths(root)
+        for bad in ('srv/source', '/srv/../source'):
+            with self.subTest(source=bad), self.assertRaises(ValueError):
+                observer.paths(bindings(Path(bad), NEXT, 'out-blazer-build'))
+        root = bindings(source, NEXT, 'out-blazer-build')
+        for text in ('[]', json.dumps(sorted(observer.TARGET_KEYS)), 'null', '"out-blazer-build"'):
+            with self.subTest(target=text), self.assertRaises(ValueError):  # a list of the key names is no target either
+                (root/observer.TARGET).write_text(text)
+                observer.paths(root)
 
     def test_values_are_printable_ascii_within_value_chars(self):
         tree = Tree(members={'SYSTEM/build.prop': 'ro.build.version.incremental=2026110303\x0bro.build.id=EVIL\n'
@@ -613,10 +687,23 @@ class Fixed(unittest.TestCase):
         self.assertEqual(observer.VENDOR_BOOT, {k: collector.FILES[k][0] for k in ('vendorBootImage', 'vendorKernelBootImage')})
 
     def test_paths_come_only_from_the_committed_bindings(self):
-        source, out = observer.paths()
+        source, out, target = observer.paths()
         prep = json.loads((ROOT/'os/build-only/blazer-prep-host.json').read_text())
+        committed = json.loads((ROOT/observer.TARGET).read_text())
         self.assertEqual(source, Path(prep['sourceRoot']))
-        self.assertEqual(out, source/json.loads((ROOT/'os/build-only/blazer.json').read_text())['compile']['outDir'])
+        self.assertEqual(set(committed), observer.TARGET_KEYS)
+        self.assertEqual(out, source/committed['outDir'])
+        self.assertEqual(target, {'build': committed['build'], 'outDir': committed['outDir'],
+                                  'form': 'legacy' if committed['outDir'] == observer.LEGACY_OUT_DIR else 'per-build'})
+        # The legacy name is the fixed OUT_DIR compile used before F1/F2: the root of Flavors' per-build template family.
+        template = json.loads((ROOT/'os/build-only/blazer.json').read_text())['compile']['outDirTemplate']
+        self.assertEqual(template, observer.LEGACY_OUT_DIR + '-{build}')
+        spec = importlib.util.spec_from_file_location('blazer_build_only', ROOT/'scripts/blazer-build-only.py')
+        helper = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(helper)
+        self.assertEqual(helper.COMPILE_OUT_DIR, template)
+        self.assertEqual(helper.compile_out_dir({'compile': {'outDirTemplate': template}}, {'buildNumber': NEXT}),
+                         observer.paths(bindings(source, NEXT, f'out-blazer-build-{NEXT}'))[2]['outDir'])
         self.assertEqual(observer.main(['observe', '--host', 'other']), 2)
         text = (ROOT/'scripts/blazer-output-observe.py').read_text()
         body = text.split('"""', 2)[2]

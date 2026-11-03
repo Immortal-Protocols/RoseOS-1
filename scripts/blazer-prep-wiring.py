@@ -52,11 +52,14 @@ dispatch:
       proof of the binary.
 
   output-observe: `blazer-output-observe.py observe --host immortal-os-builder` (Release) and nothing else: one
-      bounded, read-only observation of a finished compile's outputs at Flavors' fixed collector paths (the one
-      blazer-target_files*.zip with only its allowlisted build.prop, misc_info and android-info values; the otatools
-      ZIP with its bin/fastboot member; the four release-script files), under the same shared lock and no-follow walk,
-      within 900 s; its stdout is kept write-once as NEW/output-observation.json. complete:true measures, it does not
-      judge the identity: the reviewer compares the reported incremental with the allocated build.
+      bounded, read-only observation of a finished compile's outputs in the OUT_DIR of the committed target
+      os/build-only/blazer-output-observe.json (exactly one build's own out-blazer-build-<build>, or the legacy fixed
+      out-blazer-build of the compiles before F1/F2), at Flavors' fixed collector paths (the one blazer-target_files*.zip
+      with only its allowlisted build.prop, misc_info, ab_partitions and android-info values and factory-input names;
+      the otatools ZIP with its bin/fastboot and factory generator members; the vendor boot images; the two release
+      scripts), under the same shared lock and no-follow walk, within 900 s; its stdout is kept write-once as
+      NEW/output-observation.json. complete:true measures, it does not judge the identity: the reviewer compares the
+      reported incremental with the report's target.build.
 
   verdict --stage S --receipt-dir NEW: the success decision for the observation stages, run after the observer exits 0
       (blazer-binding-observe exits 0 whenever it printed a report, including complete:false). binding-observe passes only when its receipt (no link, at most
