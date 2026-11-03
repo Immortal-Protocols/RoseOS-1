@@ -1580,6 +1580,7 @@ stays unbound until its approvals, containers, access and run exist. These two p
 on both secrets, after the signer login and before any key exists, check the access. A failure there (including a
 missing or occupied secret) stops the run with nothing used up. `versions.add` cannot be tested without adding, so the
 bootstrap grant is one binding per secret holding `secretmanager.secrets.get`, `secretmanager.versions.list` and
-`secretmanager.versions.add` with one expiry, and the run is dispatched well inside that window. A failed recheck or a
-denied add after generation uses up the run (`failed-before-commit` or `recovery-needed`). Each profile's
-`access.policy` states the full rule; `plan --profile P` prints the operations and the grant.
+`secretmanager.versions.add` with one expiry, and the run is dispatched well inside that window. A failure after that
+first check uses up the run (`failed-before-commit` or `recovery-needed`): for the two factory profiles at the
+pre-import recheck or the add, for `pro-blazer-v1` (no pre-import recheck) at the add. Each profile's `access.policy`
+states the full rule; `plan --profile P` prints the operations and the grant.

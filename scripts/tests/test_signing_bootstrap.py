@@ -1515,11 +1515,14 @@ class FactoryProfileValidation(unittest.TestCase):
                          {'fold-rango-factory-v1', 'pro-blazer-factory-v1', 'pro-blazer-v1'})
         checked = PROFILES['profiles']['fold-rango-factory-v1']['access']  # a committed record, if any, is never partial
         self.assertTrue(checked['basis'] or (checked['addVersionExpires'] is None and checked['accessorExpires'] is None))
-        # Each opted-in policy text claims the recorded-expiry ceilings only where they are enforced (openssh_problems).
+        # Each opted-in policy text claims the recorded-expiry ceilings only where they are enforced (openssh_problems),
+        # and a pre-import recheck only where the run makes one (recheckEmptyBeforeImport, _inside).
         for name, profile in PROFILES['profiles'].items():
             if (profile.get('access') or {}).get('liveCheck') is True:
                 openssh = profile['archive']['format'] == 'openssh-ed25519'
                 self.assertEqual('held to those ceilings' in profile['access']['policy'], openssh, name)
+                self.assertEqual('repeat just before the import' in profile['access']['policy'],
+                                 profile.get('recheckEmptyBeforeImport') is True, name)
 
     def test_after_the_first_live_check_a_denied_add_or_recheck_uses_up_the_run_and_is_never_retried(self):
         profiles = factory_ready_profiles()
@@ -1739,20 +1742,24 @@ class BlazerProfiles(unittest.TestCase):
     def test_factory_profile_shape_matches_rango_with_its_own_principal(self):
         rango, pro = PROFILES['profiles']['fold-rango-factory-v1'], PROFILES['profiles']['pro-blazer-factory-v1']
         self.assertEqual(pro['principal'], 'roseos-factory-images-blazer-v1')
-        def shape(profile):  # bindings (status, access, the measured identity) may land for Rango first
+        # status, access and resourceBasis are per-profile records; the measured identity is held equal-or-null to the
+        # committed evidence by ssh-keygen-observe.py committed_problems.
+        def shape(profile):
             value = copy.deepcopy({k: v for k, v in profile.items()
                                    if k not in ('device', 'principal', 'purpose', 'secrets', 'missing', 'status', 'access',
                                                 'resourceBasis')})
             value['tools']['ssh-keygen'].pop('installed')
             return value
         self.assertEqual(shape(pro), shape(rango))
+        # The committed Blazer profile lacks only its approvals: marking it resource-bound makes it ready as committed
+        # (measured tool, live access, no recorded expiry needed).
         ready = copy.deepcopy(PROFILES)
-        profile = ready['profiles']['pro-blazer-factory-v1']
-        profile['status'] = 'resource-bound'
-        profile['tools']['ssh-keygen']['installed'] = {'path': '/opt/synthetic/ssh-keygen', 'sha256': 'a' * 64}
-        profile['access'].update(addVersionExpires='2026-10-30T00:30:00Z', accessorExpires='2026-11-27T21:30:00Z',
-                                 basis='synthetic test readback')
+        ready['profiles']['pro-blazer-factory-v1']['status'] = 'resource-bound'
         self.assertEqual(sb.readiness('pro-blazer-factory-v1', ready, NOW), [])
+        recorded = copy.deepcopy(ready)  # a recorded expiry inside the ceilings, with its basis, is still accepted
+        recorded['profiles']['pro-blazer-factory-v1']['access'].update(
+            addVersionExpires='2026-10-30T00:30:00Z', accessorExpires='2026-11-27T21:30:00Z', basis='synthetic test readback')
+        self.assertEqual(sb.readiness('pro-blazer-factory-v1', recorded, NOW), [])
 
 
 if __name__ == '__main__':
