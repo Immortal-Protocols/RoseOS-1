@@ -22,6 +22,13 @@ may start only after that run and cleanup finish, using the corrected main
 source and the same FIFO. No healthy work belonging to another run is cancelled.
 The completed key bootstrap `41719073037` must not be repeated.
 
+GitHub accepted cancellation of `41719106957`; the preparation job was cancelled
+at 21:16:27Z and its allowlisted partial receipts were uploaded. No completed
+compile receipt was produced. Ownership cleanup observed `TERMINATED` at
+21:17:18Z and succeeded before fresh run `41720536968` was dispatched at
+21:18:06Z with merged correction `2b521e732fa1537e54ff0a77880810ab1f34cf99`.
+That fresh run passed hosted configuration admission and controller startup.
+
 Review consists of source/configuration inspection and parsing, plus the retained
 read-only configuration admission. Focused/negative tests, existing-device
 regression, required CI/full suites and the sprint's other verification omissions
