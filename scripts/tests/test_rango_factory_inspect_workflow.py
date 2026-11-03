@@ -251,6 +251,58 @@ class Inspect(Base):
 
 
 
+W = inspect_wiring
+
+
+class Signature(unittest.TestCase):
+    """The optional re-classify signature: null keeps classify unsigned; bound, both pins are re-hashed first."""
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.parent = self.tmp/'rose-actions'
+        root = self.parent/'rango-factory-sign-41700000000-1'
+        root.mkdir(parents=True)
+        self.sig = root/f'{W.pkg.INSTALL}.sig'
+        self.sig.write_bytes(b'-----BEGIN SSH SIGNATURE-----\n')
+        self.ssh = self.tmp/'ssh-keygen'
+        self.ssh.write_bytes(b'#!/bin/sh\n')
+        self.repo = self.tmp/'repo'
+        (self.repo/'os/retained-rango').mkdir(parents=True)
+        binding = json.loads((ROOT/W.SIGN_BINDING).read_text())
+        binding['sshKeygen'] = {'path': str(self.ssh), 'sha256': hashlib.sha256(self.ssh.read_bytes()).hexdigest()}
+        (self.repo/W.SIGN_BINDING).write_text(json.dumps(binding))
+        self.bound = {'runId': '41700000000', 'attempt': '1', 'sha256': hashlib.sha256(self.sig.read_bytes()).hexdigest()}
+        self.hash = lambda path: hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+    def test_the_committed_identity_is_null_and_classify_stays_unsigned(self):
+        self.assertEqual(W.SIGNATURE, {'runId': None, 'attempt': None, 'sha256': None})
+        self.assertIsNone(W.signature_check())
+        self.assertEqual(W.signature_args(), [])
+        argv = W.classify_argv(self.tmp, self.tmp/'a.zip', False, W.signature_args())
+        self.assertNotIn('--signature', argv)
+
+    def test_a_bound_identity_passes_both_pinned_files(self):
+        args = W.signature_args(self.repo, self.bound, self.parent, self.hash)
+        self.assertEqual(args, ['--signature', str(self.sig), '--ssh-keygen', str(self.ssh)])
+        argv = W.classify_argv(self.tmp, self.tmp/'a.zip', False, args)
+        self.assertEqual(argv[-4:], args)
+
+    def test_partial_unpinned_tool_and_mismatches_refuse(self):
+        for change in ({'sha256': None}, {'runId': '0'}, {'sha256': 'X' * 64}, {'extra': '1'}):
+            with self.subTest(change=change), self.assertRaises(W.pkg.Invalid):
+                W.signature_check(self.repo, {**self.bound, **change})
+        with self.assertRaises(W.Unbound):
+            W.signature_check(ROOT, self.bound)  # Signing's committed sshKeygen is still null
+        with self.assertRaisesRegex(W.Refused, 'signature_mismatch'):
+            W.signature_args(self.repo, {**self.bound, 'sha256': '0' * 64}, self.parent, self.hash)
+        self.ssh.write_bytes(b'changed')
+        with self.assertRaisesRegex(W.Refused, 'signature_mismatch: the ssh-keygen'):
+            W.signature_args(self.repo, self.bound, self.parent, self.hash)
+        self.sig.unlink()
+        self.sig.symlink_to(self.ssh)
+        with self.assertRaisesRegex(W.Refused, 'signature_missing'):
+            W.signature_args(self.repo, self.bound, self.parent, self.hash)
+
+
 WORKFLOW = (ROOT/'.github/workflows/os-release.yml').read_text()
 MODE = 'rango-factory-inspect'
 

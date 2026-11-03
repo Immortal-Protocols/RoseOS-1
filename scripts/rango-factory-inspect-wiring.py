@@ -55,6 +55,13 @@ spec.loader.exec_module(pkg)
 RETAINED = {'runId': '41515240855', 'attempt': '1', 'bytes': 2130374982,
             'sha256': 'e37db904490a99857dc1fe106b2eac1db12c71b32ac23372cfda474ab70d3b48'}
 TASK_NAME = 'rango-factory-inspect-{run_id}-{attempt}'
+# FOLD-ARCHIVE-SIGN re-classify: the detached signature a rango-factory-sign run wrote into its own new task root, as a
+# committed expected identity (run, attempt, sha256), and the ssh-keygen pinned in Signing's binding. All null: classify
+# runs unsigned exactly as before. Bound: the .sig is re-hashed (regular file, no link) and the pinned ssh-keygen
+# re-hashed before classify gets --signature and --ssh-keygen; any mismatch refuses. Never a key, never the archive.
+SIGNATURE = {'runId': None, 'attempt': None, 'sha256': None}
+SIGN_TASK_NAME = 'rango-factory-sign-{run_id}-{attempt}'
+SIGN_BINDING = 'os/retained-rango/factory-signing.json'
 # Wrapper ceilings (seconds), sized to the work, not measurements. verify hashes the 2.1 GB retained ZIP (about 21 s at a
 # conservative 100 MB/s); observe reads the target-files central directory; firmware hashes the 4.9 GB target-files and
 # reads at most two 1 GiB containers (about 70 s); classify reads the ZIP and the target-files images (about 7 GB) and
@@ -91,9 +98,48 @@ def check(root=ROOT, retained=RETAINED):
         raise Unbound(f'the retained run {retained["runId"]} attempt is not committed; its task root is not guessed')
     if not (isinstance(retained['attempt'], str) and retained['attempt'].isdigit() and retained['attempt'][0] != '0'):
         raise pkg.Invalid('the retained attempt must be a positive number')
+    signature_check(root)
     steps = sum(BOUNDS.values()) + KILL_GRACE_SECONDS * len(BOUNDS)
     outer = steps + OUTER_MARGIN_SECONDS
     return dict(BOUNDS), outer, math.ceil((outer + KILL_GRACE_SECONDS) / 60) + JOB_MARGIN_MINUTES
+
+
+def signature_check(root=ROOT, signature=None):
+    """None while the signature identity is entirely null; else its fields and the pinned ssh-keygen, shape-checked."""
+    signature = SIGNATURE if signature is None else signature
+    if set(signature) != {'runId', 'attempt', 'sha256'}:
+        raise pkg.Invalid('the signature identity must be exactly {runId, attempt, sha256}')
+    values = [signature[k] for k in ('runId', 'attempt', 'sha256')]
+    if all(v is None for v in values):
+        return None
+    if any(v is None for v in values):
+        raise pkg.Invalid('the signature identity is partly bound; bind the run, attempt and sha256 together')
+    for key in ('runId', 'attempt'):
+        if not (isinstance(signature[key], str) and signature[key].isdigit() and signature[key][0] != '0'):
+            raise pkg.Invalid(f'the signature {key} must be a positive number')
+    if not (isinstance(signature['sha256'], str) and len(signature['sha256']) == 64
+            and all(c in '0123456789abcdef' for c in signature['sha256'])):
+        raise pkg.Invalid('the signature sha256 must be a lowercase sha256')
+    ssh = json.loads((Path(root)/SIGN_BINDING).read_text())['sshKeygen']
+    if ssh.get('path') is None or ssh.get('sha256') is None:
+        raise Unbound(f'the signature is bound but {SIGN_BINDING} sshKeygen path/sha256 is not')
+    return {**signature, 'sshKeygen': ssh}
+
+
+def signature_args(root=ROOT, signature=None, parent=pkg.TASK_PARENT, hasher=None):
+    """[] while unbound; else ['--signature', SIG, '--ssh-keygen', SSH] after both are re-hashed against their pins."""
+    bound = signature_check(root, signature)
+    if bound is None:
+        return []
+    sig = Path(parent)/SIGN_TASK_NAME.format(run_id=bound['runId'], attempt=bound['attempt'])/f'{pkg.INSTALL}.sig'
+    ssh = Path(bound['sshKeygen']['path'])
+    digest = hasher or (lambda path: bounded_sha256(path, BOUNDS['verifySeconds']))
+    for label, path, expected in (('signature', sig, bound['sha256']), ('ssh-keygen', ssh, bound['sshKeygen']['sha256'])):
+        if not path.is_absolute() or not no_symlink(path) or not path.is_file():
+            raise Refused(f'signature_missing: the pinned {label} {path} is not a regular file reached without links')
+        if digest(path) != expected:
+            raise Refused(f'signature_mismatch: the {label} {path} is not its pinned sha256')
+    return ['--signature', str(sig), '--ssh-keygen', str(ssh)]
 
 
 def retained_root(retained, parent=pkg.TASK_PARENT):
@@ -185,10 +231,10 @@ def write_once(path, document):
         f.write(json.dumps(document, indent=2, sort_keys=True) + '\n')
 
 
-def classify_argv(root_dir, archive, firmware):
+def classify_argv(root_dir, archive, firmware, signature=()):
     argv = pkg.classify_argv(root_dir, firmware=firmware)
     argv[3] = str(archive)  # the retained ZIP, read only; every other argument is the package mode's
-    return argv
+    return argv + list(signature)
 
 
 def inspect(root_dir, run_id, attempt, retained, source=None, lock=None, popen=subprocess.Popen, hasher=None):
@@ -227,10 +273,12 @@ def inspect(root_dir, run_id, attempt, retained, source=None, lock=None, popen=s
             if firmware_status != 0:
                 raise Refused('firmware_failed: the firmware observation neither observed nor refused cleanly')
             firmware = pkg.firmware_observed(root_dir)
+            signature = signature_args(hasher=hasher)
+            summary['steps']['signature'] = signature[1] if signature else None
             pkg.new_dir(root_dir/'classify-work')
             fd = os.open(inspection/'classify.json', os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
             with os.fdopen(fd, 'w') as out:
-                code, late = bounded(classify_argv(root_dir, source/'package'/pkg.INSTALL, firmware),
+                code, late = bounded(classify_argv(root_dir, source/'package'/pkg.INSTALL, firmware, signature),
                                      BOUNDS['classifySeconds'], out, popen)
             summary['steps']['classify'] = {'exit': code, 'timedOut': late, 'firmwareObservation': firmware}
             if late or code not in (0, 3):
