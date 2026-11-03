@@ -76,8 +76,10 @@ The normal default Frankel/public-release modes remain unchanged; the three
 Mustang modes pin their own device and never enter the Frankel publisher.
 The normal `device` selector remains Frankel for shared infrastructure admission;
 actual Mustang inputs, compilation and signing are explicitly Mustang-bound.
-No runtime retry through the corrected route is made until Nathan resolves the
-route decision required by the plan’s no-alternate-route-after-denial bound.
+Nathan explicitly approved that correction and retry. PR492 merged as
+`216184cba518c3d2f5e86aedfdddfa3b1fa27834`; established-route run
+[41714573501](https://github.com/Immortal-Protocols/RoseOS-1/actions/runs/41714573501)
+passed its controller, and the preparation/build step started at 20:40:43 UTC.
 
 ## Concrete remaining authorization and bindings
 
@@ -92,8 +94,10 @@ most four hours after action time: that existing bootstrap role and
 only**, for `roseos-build-signer@protocols-465723.iam.gserviceaccount.com`.
 `mustang-signing-setup.py binding-plan --expires-at <UTC>` renders the exact
 commands but performs no IAM mutation. Nathan has explicitly approved those four-hour grants and one journaled
-Mustang key bootstrap. The grants are held until controller access is resolved
-so the window is not wasted. The operator transfer alone did not authorize them. No creator payload/list access
+Mustang key bootstrap. The controller route is resolved. The first grant command failed; IAM readback
+confirmed it was not applied. The worker account has policy-read but lacks
+`secretmanager.secrets.setIamPolicy`, so all four grants remain unapplied.
+An existing IAM admin must run the [approved commands](MUSTANG-ADMIN-GRANTS.md). The operator transfer alone did not authorize them. No creator payload/list access
 or project-wide grant is proposed.
 
 Once controller access is resolved and the setup is approved, the profile can
