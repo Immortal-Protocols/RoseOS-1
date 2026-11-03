@@ -728,7 +728,7 @@
       }
     },
     "fold-rango-factory-v1": {
-      "status": "unbound",
+      "status": "resource-bound",
       "purpose": "Rango factory-archive SSH signing identity: one new passphrase-encrypted Ed25519 key for ssh-keygen -Y sign -n \"factory images\" of rango-install-{build}.zip; never derived from or stored with the OS (OTA/AVB/APK) keys",
       "device": "rango",
       "principal": "roseos-factory-images-rango-v1",
@@ -771,15 +771,11 @@
         "accessorExpires": null,
         "minimumRemainingSeconds": 1800,
         "basis": null,
-        "policy": "Proposed ceilings only: bootstrap access <= 4 h and secretAccessor <= 30 d after grant, enforced by the actual IAM conditions. These fields are filled only from an IAM readback of those exact expiries (with basis); while null they are not enforced, assumed or substituted and readiness refuses (access-unknown). Recorded expiries beyond the ceilings refuse (access-window)."
+        "policy": "Access is checked live, not from recorded timestamps (owner decision 2026-11-03). After the signer login and under the lock, the run calls secrets describe and versions list on both secrets with the same credentials. If that first check fails (expiry, revocation, a missing grant), the run stops with metadata-unavailable before any key is generated or journaled, and nothing is used up. The same calls repeat just before the import; a failure there, or a denied version add, comes after the key exists and the journal is written, so it uses up the run (failed-before-commit or recovery-needed) and later runs refuse until the owner decides recovery. versions.add cannot be tested without adding, so the bootstrap grant must be one binding per secret holding secrets.get, versions.list and versions.add with a single expiry (a custom role like models-v0's roseosModelsBootstrapV1), and the run must be dispatched well inside its window. The time boxes (bootstrap access <= 4 h, secretAccessor <= 30 d) are enforced by the IAM conditions the admin sets, not checked here unless expiries are recorded; recorded expiries are optional and, when present, need a basis, are held to those ceilings and must leave minimumRemainingSeconds."
       },
-      "missing": [
-        "owner/security approval of the new identity (FOLD-FACTORY-IDENTITY proposal)",
-        "the two empty secret containers, created by the admin",
-        "time-boxed bootstrap access (secrets.get, versions.list, versions.add, 4 h) and secretAccessor (30 d) for the signer on those two containers only",
-        "one approved bootstrap run"
-      ],
-      "importRecovery": "The two-secret import is not atomic. Any uncertain or partial outcome (keys added but passphrase not, an add whose outcome is unknown) stops as recovery-needed and is journaled; every later run refuses on that journal (previous-attempt) and never regenerates a key or repeats an import. Recovery is a separate owner decision."
+      "missing": [],
+      "importRecovery": "The two-secret import is not atomic. Any uncertain or partial outcome (keys added but passphrase not, an add whose outcome is unknown) stops as recovery-needed and is journaled; every later run refuses on that journal (previous-attempt) and never regenerates a key or repeats an import. Recovery is a separate owner decision.",
+      "resourceBasis": "Owner relayed 2026-11-03: the new identity roseos-factory-images-rango-v1 approved (R1) and the rango-factory-sign signer login granted (R6); the admin created both empty secrets (R2), granted the signer secretAccessor on those two only for 30 d (R4), and at about 17:50 UTC granted the 4-h bootstrap access (R3: secrets.get, versions.list, versions.add on those two only). The run checks access live before anything is generated (see access.policy for what a later failure costs)."
     },
     "pro-blazer-v1": {
       "status": "unbound",
@@ -1401,7 +1397,7 @@
         "accessorExpires": null,
         "minimumRemainingSeconds": 1800,
         "basis": null,
-        "policy": "Proposed ceilings only: bootstrap access <= 4 h and secretAccessor <= 30 d after grant, enforced by the actual IAM conditions. These fields are filled only from an IAM readback of those exact expiries (with basis); while null they are not enforced, assumed or substituted and readiness refuses (access-unknown). Recorded expiries beyond the ceilings refuse (access-window)."
+        "policy": "Access is checked live, not from recorded timestamps (owner decision 2026-11-03). After the signer login and under the lock, the run calls secrets describe and versions list on both secrets with the same credentials. If that first check fails (expiry, revocation, a missing grant), the run stops with metadata-unavailable before any key is generated or journaled, and nothing is used up. The same calls repeat just before the import; a failure there, or a denied version add, comes after the key exists and the journal is written, so it uses up the run (failed-before-commit or recovery-needed) and later runs refuse until the owner decides recovery. versions.add cannot be tested without adding, so the bootstrap grant must be one binding per secret holding secrets.get, versions.list and versions.add with a single expiry (a custom role like models-v0's roseosModelsBootstrapV1), and the run must be dispatched well inside its window. The time boxes (bootstrap access <= 4 h, secretAccessor <= 30 d) are enforced by the IAM conditions the admin sets, not checked here unless expiries are recorded; recorded expiries are optional and, when present, need a basis, are held to those ceilings and must leave minimumRemainingSeconds."
       },
       "missing": [
         "owner/security approval of a new blazer factory-archive identity (BLAZER-SIGN proposal)",
