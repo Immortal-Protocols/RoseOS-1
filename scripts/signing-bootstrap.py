@@ -1250,8 +1250,13 @@ def plan(name, profiles):
             + ((profile.get('generation') or {}).get('missing') or [])}
 
 
+def interrupted(signum):
+    raise Blocked('interrupted', f'signal {signum}: stopped; the workspace is removed and any add is journaled for recovery')
+
+
 def main(argv=None, env=None):
     env = os.environ if env is None else env
+    factory_signing.stop_on_signals(interrupted)  # a stop still removes the RAM workspace and records recovery
     parser = argparse.ArgumentParser(description=__doc__.split('\n', 1)[0])
     sub = parser.add_subparsers(dest='command', required=True)
     sub.add_parser('guard')

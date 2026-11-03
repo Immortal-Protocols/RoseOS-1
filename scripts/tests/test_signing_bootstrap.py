@@ -17,6 +17,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import signal
 import subprocess
 import tarfile
 import tempfile
@@ -1368,6 +1369,78 @@ class FactoryWorkspaceExec(unittest.TestCase):
         retry = Executor()
         self.assertEqual(bootstrap(retry)['status'], 'complete')
         self.assertEqual([c[0] for c in retry.calls].count('add'), 2)
+
+
+class FactoryBootstrapStop(unittest.TestCase):
+    """A SIGTERM or SIGHUP (outer timeout, cancelled job) still removes the RAM workspace holding the fresh key, and an
+    interrupted import is journaled as recovery-needed, never retried. Signals are sent to this test process only."""
+
+    def setUp(self):
+        saved = {each: signal.getsignal(each) for each in fs.STOP_SIGNALS}
+        self.addCleanup(lambda: [signal.signal(each, handler) for each, handler in saved.items()])
+        sb.factory_signing.stop_on_signals(sb.interrupted)
+        self.profiles, self.runner, self.fixture = factory_ready_profiles(), KeygenMock(), Fixture(self)
+
+    def executor(self, stop_at):
+        runner, test = self.runner, self
+
+        class Executor(MockExecutor):
+            def tool_sha256(self, path):
+                self.calls.append(('tool', path))
+                return hashlib.sha256(b'ssh-keygen').hexdigest()
+
+            def generate(self, workspace, profile):
+                self.calls.append(('generate',))
+                test.workspace = Path(workspace)
+                identity = sb.generate_openssh(workspace, profile, runner=runner, token='SYNTHETIC-token')
+                if stop_at == 'generate':
+                    os.kill(os.getpid(), signal.SIGTERM)
+                    time.sleep(1)
+                return identity
+
+            def add_version(self, project, secret, file):
+                version = super().add_version(project, secret, file)
+                if stop_at == 'between-adds' and secret.endswith('KEY_RANGO_V1'):
+                    os.kill(os.getpid(), signal.SIGTERM)
+                    time.sleep(1)
+                return version
+        return Executor()
+
+    def run_bootstrap(self, executor):
+        return sb.run('fold-rango-factory-v1', self.profiles, executor, self.fixture.state, self.fixture.lock, SHA, NOW,
+                      workspace=lambda: self.fixture.workspace(), frankel=FRANKEL)[0]
+
+    def test_the_cli_installs_the_stop_handlers(self):
+        for each in fs.STOP_SIGNALS:
+            signal.signal(each, signal.SIG_DFL)
+        with contextlib.redirect_stdout(io.StringIO()):
+            sb.main(['plan', '--profile', 'fold-rango-factory-v1'], env={})
+        self.assertTrue(all(callable(signal.getsignal(each)) for each in fs.STOP_SIGNALS))
+
+    def test_a_stop_during_generation_removes_the_workspace_and_adds_nothing(self):
+        executor = self.executor('generate')
+        receipt = self.run_bootstrap(executor)
+        self.assertEqual(codes(receipt), ['interrupted'])
+        self.assertTrue(receipt['cleanup']['workspaceRemoved'])
+        self.assertFalse(self.workspace.exists())  # the fresh private key and passphrase are gone
+        self.assertNotIn('add', executor.kinds())
+        journal = json.loads((self.fixture.state/'fold-rango-factory-v1.json').read_text())
+        self.assertEqual(journal['status'], 'generating')  # a later run refuses previous-attempt: no silent regeneration
+        retry = self.executor(None)
+        self.assertEqual(codes(self.run_bootstrap(retry)), ['previous-attempt'])
+
+    def test_a_stop_inside_an_add_is_uncertain_and_recorded_for_recovery(self):
+        executor = self.executor('between-adds')  # lands inside the key add, before its outcome is returned
+        receipt = self.run_bootstrap(executor)
+        self.assertTrue(receipt['recoveryNeeded'])
+        self.assertIn('recovery-needed', codes(receipt))
+        self.assertEqual((receipt['secrets']['keys']['state'], receipt['secrets']['passphrase']['state']),
+                         ('uncertain', 'untouched'))  # never assumed committed; the passphrase is never added
+        self.assertEqual([c[0] for c in executor.calls].count('add'), 1)
+        self.assertTrue(receipt['cleanup']['workspaceRemoved'])
+        self.assertFalse(self.workspace.exists())
+        journal = json.loads((self.fixture.state/'fold-rango-factory-v1.json').read_text())
+        self.assertEqual(journal['status'], 'recovery-needed')
 
 
 class FactorySelfCheck(unittest.TestCase):

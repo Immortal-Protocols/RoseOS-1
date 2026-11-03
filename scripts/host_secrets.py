@@ -39,15 +39,19 @@ def private_directory(prefix):
                     file.write_bytes(b'\0' * file.stat().st_size)
         shutil.rmtree(path, ignore_errors=True)
 
-def fetch_secret(project, name, version, destination, gcloud='gcloud'):
-    """gcloud writes the secret straight to an owner-only file; nothing passes through argv or stdout."""
+def fetch_secret(project, name, version, destination, gcloud='gcloud', timeout=None):
+    """gcloud writes the secret straight to an owner-only file; nothing passes through argv or stdout. With timeout, a
+    gcloud that runs longer is killed and refused (timeout=None keeps the historical unbounded behaviour)."""
     if not SECRET_NAME.fullmatch(name) or not re.fullmatch(r'[1-9][0-9]*', str(version)):
         raise AdapterFailed('secret names and pinned numeric versions only')
     destination = Path(destination)
     old = os.umask(0o077)
     try:
         result = subprocess.run([gcloud, 'secrets', 'versions', 'access', str(version), '--secret', name,
-            '--project', project, '--out-file', str(destination), '--quiet'], capture_output=True, text=True)
+            '--project', project, '--out-file', str(destination), '--quiet'], capture_output=True, text=True,
+            timeout=timeout)
+    except subprocess.TimeoutExpired:
+        raise AdapterFailed(f'timed out reading secret {name} version {version} after {timeout} s') from None
     finally:
         os.umask(old)
     if result.returncode or not destination.is_file():
