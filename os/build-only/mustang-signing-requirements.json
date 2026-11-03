@@ -1,6 +1,6 @@
 {
   "schema": "roseos.mustang-signing-requirements.v1",
-  "status": "containers created; profile unbound; signer IAM and credential bootstrap pending",
+  "status": "resource-bound for one bootstrap; four conditional bindings confirmed; key material not generated yet",
   "profile": "pro-mustang-v1",
   "device": "mustang",
   "project": "protocols-465723",
@@ -23,6 +23,6 @@
     "factoryPackaging": "Mustang adapter reuses existing factory script derivation, bounded execution and extraction guards, deliberately omitting the sprint-removed checks while retaining basic installer format and output hashes.",
     "archiveSigning": "Separate archive signature status is omitted in this sprint; no Rango/Blazer archive-signing identity is selected"
   },
-  "runtime": "Both containers were created and described on 2026-11-03. Creator versions.list denied; no keys, versions or IAM changes. See mustang-setup-evidence.json.",
+  "runtime": "Both containers exist. All four exact signer bindings are confirmed, expiring 2026-11-04T00:50:06Z. Bootstrap remains unexecuted and must freshly check occupancy as the signer.",
   "profileDefinition": "os/signing-bootstrap/mustang.json"
 }
