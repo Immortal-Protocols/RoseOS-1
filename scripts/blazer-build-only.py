@@ -124,6 +124,7 @@ GIT_META_PATHS = ('build/make', 'build/release', 'frameworks/base', 'packages/ap
                   'packages/modules/Permission', 'vendor/adevtool')
 GIT_META_SOURCES = ('public-fetch',)
 GIT_META_MAX_SECONDS = 7200
+GIT_META_CLEANUP_SECONDS = 240
 BUILD_INDEX = 'os/tests/fixtures/adevtool-17df3b79/adevtool/config/build-index/build-index-main.yml.excerpt.json'
 FACTORY_URL = 'https://dl.google.com/dl/android/aosp/'
 TREE_NEEDS = ('vendor/adevtool/bin/run', 'build/envsetup.sh', 'prebuilts/build-tools/path/linux-x86',
@@ -508,10 +509,10 @@ def git_meta(recipe, src, receipt_dir, statvfs, clock, sleep):
         return result
 
     def failed(path, why):
-        removed = []
+        removed, until = [], clock() + GIT_META_CLEANUP_SECONDS  # one shared cleanup budget, not one per project
         for dotgit in created:
             if os.path.lexists(dotgit):
-                done, _ = remove_own(dotgit, 240, clock)
+                done, _ = remove_own(dotgit, max(0, until - clock()), clock)
                 removed.append({'gitDir': str(dotgit), 'removed': done})
         outcome.update(failedProject=path, error=why, createdRemoved=removed)
         return False, outcome
