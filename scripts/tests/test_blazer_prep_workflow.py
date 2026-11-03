@@ -545,11 +545,11 @@ class GitInspect(unittest.TestCase):
         self.assertIn('binding-observation.json', step(jobs()['blazer-prep'], 'Allowlisted JSON receipts only'))
 
     def test_ssh_keygen_observe_runs_exactly_signings_observer_with_its_bounds(self):
-        # Signing's own 300 s run, 2 s kill of its last query, a 120 s margin; job adds the outer kill, the verdict and 10 min.
-        self.assertEqual(wiring.resolve('ssh-keygen-observe'), (['--host', 'immortal-os-builder'], 422, 19))
+        # Signing's own 120 s (it starts no process), a 120 s margin; job adds the outer kill, the verdict and 10 min.
+        self.assertEqual(wiring.resolve('ssh-keygen-observe'), (['--host', 'immortal-os-builder'], 240, 16))
         receipts = self.tmp/'ssh'
         result = wire('run', '--stage', 'ssh-keygen-observe', '--receipt-dir', str(receipts))
-        self.assertEqual(result.returncode, 0, result.stderr)  # a report was printed: success is the verdict's, below
+        self.assertEqual(result.returncode, 3, result.stderr)  # incomplete (no lock here): the report is still printed
         helper = json.loads(result.stdout.splitlines()[0])['helper']
         self.assertEqual((Path(helper[0]).relative_to(ROOT).as_posix(), helper[1:]),
                          ('scripts/ssh-keygen-observe.py', ['observe', '--host', 'immortal-os-builder']))

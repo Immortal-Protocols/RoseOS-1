@@ -43,14 +43,16 @@ dispatch:
   ssh-keygen-observe: `ssh-keygen-observe.py observe --host immortal-os-builder` (Signing) and nothing else: one bounded,
       read-only observation of the builder's fixed /usr/bin/ssh-keygen identity and package-reported version, under the
       same shared lock, for factory signing on this builder; its stdout is kept write-once as
-      NEW/ssh-keygen-observation.json. It never runs ssh-keygen; it runs only Signing's allowlisted package queries
-      (dpkg-query/dpkg --verify or rpm), each in its own process group, clipped to the helper's 300 s run and at most
-      60 s each, killed 2 s after TERM, with 16 KiB of output. Those queries may read the package database and every
-      file of the owning package; no aggregate read cap applies to them. The version is what the package database
-      reports, not a behavioural proof of the binary.
+      NEW/ssh-keygen-observation.json. It runs no program: through the no-follow walk it reads only /usr/bin/ssh-keygen
+      and /var/lib/dpkg/status, info/openssh-client.list, info/openssh-client.md5sums and diversions, each rechecked,
+      within its own 120 s, 64 MiB for the tool, 32 MiB for status, 1 MiB for each other file, 200 MiB in all
+      (rechecks included) and a 16 KiB report. It exits 0 complete, 3 incomplete (report printed), 2 invalid usage; a
+      non-zero exit fails the stage before the verdict, and the receipt is still uploaded. The version is what the
+      package database reports, the tool matched by the package list and md5sum with no diversion; not a behavioural
+      proof of the binary.
 
-  verdict --stage S --receipt-dir NEW: the success decision for the observation stages, whose observer exits 0 whenever
-      it printed a report, including complete:false. binding-observe passes only when its receipt (no link, at most
+  verdict --stage S --receipt-dir NEW: the success decision for the observation stages, run after the observer exits 0
+      (blazer-binding-observe exits 0 whenever it printed a report, including complete:false). binding-observe passes only when its receipt (no link, at most
       64 KiB) is complete with no problems. ssh-keygen-observe is decided by Signing's own `ssh-keygen-observe.py bind
       --observation NEW/ssh-keygen-observation.json`, whose stdout is kept write-once as NEW/ssh-keygen-bind.json and
       whose exit is the verdict (0 bindable, 4 not bindable, 2 unreadable). Any other stage: nothing to decide, exit 0.
@@ -93,14 +95,14 @@ GIT_OBJECTS_STAGE = {'outerSeconds': 180, 'jobMinutes': 14}
 # Stages that resolve from the recipe's text alone (the helper's lexical load): resolving them touches no host path.
 LEXICAL_STAGES = ('git-inspect-set', 'git-inspect-objects')
 OBSERVERS = {'binding-observe': ROOT/'scripts/blazer-binding-observe.py', 'ssh-keygen-observe': ROOT/'scripts/ssh-keygen-observe.py'}
-# Observation stages: the observer's own whole-run deadline (300 s each), its last query's kill grace (ssh-keygen: 2 s),
-# a 120 s margin for Python start, the lock and output; then the outer kill (30 s), the verdict step (60 s + 5 s kill)
-# and the 10-minute job margin. Ceilings, not measurements.
+# Observation stages: the observer's own whole-run deadline (binding-observe 300 s, ssh-keygen-observe 120 s; neither
+# starts a process, so no child kill grace), a 120 s margin for Python start, the lock and output; then the outer kill
+# (30 s), the verdict step (60 s + 5 s kill) and the 10-minute job margin. Ceilings, not measurements.
 VERDICT_SECONDS, VERDICT_KILL_SECONDS = 60, 5
-OBSERVE_BOUNDS = {stage: {'outerSeconds': 300 + grace + 120,
-                          'jobMinutes': math.ceil((300 + grace + 120 + KILL_AFTER_SECONDS + VERDICT_SECONDS
+OBSERVE_BOUNDS = {stage: {'outerSeconds': seconds + 120,
+                          'jobMinutes': math.ceil((seconds + 120 + KILL_AFTER_SECONDS + VERDICT_SECONDS
                                                    + VERDICT_KILL_SECONDS) / 60) + JOB_MARGIN_MINUTES}
-                  for stage, grace in (('binding-observe', 0), ('ssh-keygen-observe', 2))}
+                  for stage, seconds in (('binding-observe', 300), ('ssh-keygen-observe', 120))}
 OBSERVATION_BYTES = 64 << 10
 BIND_RECEIPT = 'ssh-keygen-bind.json'
 RECEIPTS = {'binding-observe': ('binding-observation.json', 'observe'),
