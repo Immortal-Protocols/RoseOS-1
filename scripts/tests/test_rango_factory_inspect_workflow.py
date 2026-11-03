@@ -290,8 +290,18 @@ class Signature(unittest.TestCase):
         for change in ({'sha256': None}, {'runId': '0'}, {'sha256': 'X' * 64}, {'extra': '1'}):
             with self.subTest(change=change), self.assertRaises(W.pkg.Invalid):
                 W.signature_check(self.repo, {**self.bound, **change})
-        with self.assertRaises(W.Unbound):
-            W.signature_check(ROOT, self.bound)  # Signing's committed sshKeygen is still null
+        # A bound signature with an unmeasured ssh-keygen is Unbound, whatever Signing has committed: the repository
+        # here is synthetic, so this test never pins the committed state.
+        for unmeasured in ({'path': None, 'sha256': None}, {'path': str(self.ssh), 'sha256': None},
+                           {'path': None, 'sha256': hashlib.sha256(self.ssh.read_bytes()).hexdigest()}):
+            with self.subTest(sshKeygen=unmeasured):
+                repo = self.tmp/f'unmeasured-{unmeasured["path"] is None}-{unmeasured["sha256"] is None}'
+                (repo/'os/retained-rango').mkdir(parents=True)
+                binding = json.loads((ROOT/W.SIGN_BINDING).read_text())
+                binding['sshKeygen'] = unmeasured
+                (repo/W.SIGN_BINDING).write_text(json.dumps(binding))
+                with self.assertRaises(W.Unbound):
+                    W.signature_check(repo, self.bound)
         with self.assertRaisesRegex(W.Refused, 'signature_mismatch'):
             W.signature_args(self.repo, {**self.bound, 'sha256': '0' * 64}, self.parent, self.hash)
         self.ssh.write_bytes(b'changed')
