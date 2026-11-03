@@ -269,10 +269,17 @@ def read_inputs(path):
 def other_builder_paths(root=ROOT):
     paths = set()
     for relative in OTHER_BUILDERS:
-        host = json.loads((root/relative).read_text()).get('host', {})
+        document = json.loads((root/relative).read_text())
+        host = document.get('host', {})
+        # Release configs nest paths under host; the prep-host config uses host
+        # as its VM label and stores source/download paths at the top level.
+        if isinstance(host, str):
+            host = document
+        if not isinstance(host, dict):
+            raise Failed(f'{relative} has an unsupported host configuration')
         reconcile = host.get('integrate', {}).get('reconcile', {})
         paths |= {Path(p) for p in (host.get('sourceRoot'), host.get('lockPath'), host.get('reconcileReceiptDir'),
-            host.get('workDir'), host.get('inputsDir'), reconcile.get('receiptDir')) if p}
+            host.get('workDir'), host.get('inputsDir'), host.get('downloadDir'), reconcile.get('receiptDir')) if p}
     return paths
 
 def shared_lock(root=ROOT):

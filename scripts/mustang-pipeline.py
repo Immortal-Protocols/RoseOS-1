@@ -43,6 +43,7 @@ def config():
     # The hosted describe guard checks the same static route before starting the
     # builder. Keep this in the runtime path too, before creating a fresh attempt.
     integration.check_route(ROOT/'os/build-only/mustang-updater-route.json')
+    integration.other_builder_paths()
     return json.loads((ROOT/'os/build-only/mustang-host.json').read_text())
 
 
