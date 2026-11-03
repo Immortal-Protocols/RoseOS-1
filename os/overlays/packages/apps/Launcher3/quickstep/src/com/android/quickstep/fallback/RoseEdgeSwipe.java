@@ -16,7 +16,9 @@ import android.os.SystemProperties;
  * Off unless the system property persist.wm.debug.rose_edge is true. It is a build's switch: set at build time
  * (a product property, as the agent tray's is) or with setprop on userdebug/eng builds; a user build offers the owner
  * no way to set it. Whether Launcher3's SELinux domain may read it is assumed from the SystemUI tray's precedent and
- * must be confirmed on the builder. Off, the patched handler behaves exactly as stock Launcher3.
+ * must be confirmed on the builder. Off, the patched handler behaves as stock Launcher3, with one exception the patch
+ * makes regardless of this switch: its HOME starts share Launcher3's identity (ActivityOptions.setShareIdentityEnabled)
+ * so the home app can verify a gesture_nav_contract_v1 request before replying.
  *
  * On, it still does nothing (Launcher3 decides as before) over Home, for a trackpad, for a gesture that continues the
  * previous one, for a task that is not full screen, in split screen, without gesture navigation, on a locked device,
@@ -60,7 +62,7 @@ public final class RoseEdgeSwipe {
         this.keyguard = enabled ? context.getSystemService(KeyguardManager.class) : null;
     }
 
-    /** The build's switch: false means the patched handler behaves exactly as stock Launcher3. */
+    /** The build's switch: false means stock end targets and transforms (see the class comment for the one exception). */
     public boolean enabled() {
         return enabled;
     }

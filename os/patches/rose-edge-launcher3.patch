@@ -51,7 +51,7 @@ index afa87a5..b337029 100644
          }
      }
 diff --git a/quickstep/src/com/android/quickstep/FallbackSwipeHandler.java b/quickstep/src/com/android/quickstep/FallbackSwipeHandler.java
-index 8c46fbd..1fa6c73 100644
+index 8c46fbd..82865d9 100644
 --- a/quickstep/src/com/android/quickstep/FallbackSwipeHandler.java
 +++ b/quickstep/src/com/android/quickstep/FallbackSwipeHandler.java
 @@ -16,6 +16,7 @@
@@ -180,3 +180,31 @@ index 8c46fbd..1fa6c73 100644
      private void updateHomeActivityTransformDuringSwipeUp(
              SurfaceProperties builder, RemoteAnimationTarget app, TransformParams params) {
          if (mActiveAnimationFactory != null) {
+@@ -219,7 +305,10 @@ public class FallbackSwipeHandler extends
+             @Nullable TaskView targetTaskView,
+             @Nullable IBinder launchCookie,
+             @NonNull String reason) {
+-        ActivityOptions options = ActivityOptions.makeCustomAnimation(mContext, 0, 0);
++        // RoseOS (#410): share Launcher3's identity with the home app, so it can verify that a gesture_nav_contract_v1
++        // request really comes from the system recents component before it replies.
++        ActivityOptions options = ActivityOptions.makeCustomAnimation(mContext, 0, 0)
++                .setShareIdentityEnabled(true);
+         Intent intent = new Intent(mGestureState.getHomeIntent());
+         if (gestureContractAnimationFactory != null) {
+             TaskKey taskKey = null;
+diff --git a/quickstep/src/com/android/quickstep/window/RecentsWindowSwipeHandler.java b/quickstep/src/com/android/quickstep/window/RecentsWindowSwipeHandler.java
+index 8148e08..7dbbada 100644
+--- a/quickstep/src/com/android/quickstep/window/RecentsWindowSwipeHandler.java
++++ b/quickstep/src/com/android/quickstep/window/RecentsWindowSwipeHandler.java
+@@ -272,7 +272,10 @@ public class RecentsWindowSwipeHandler extends AbsSwipeUpHandler<RecentsWindowMa
+             @Nullable TaskView targetTaskView,
+             @Nullable IBinder launchCookie,
+             @NonNull String reason) {
+-        ActivityOptions options = ActivityOptions.makeCustomAnimation(mContext, 0, 0);
++        // RoseOS (#410): share Launcher3's identity with the home app, so it can verify that a gesture_nav_contract_v1
++        // request really comes from the system recents component before it replies.
++        ActivityOptions options = ActivityOptions.makeCustomAnimation(mContext, 0, 0)
++                .setShareIdentityEnabled(true);
+         Intent intent = new Intent(mGestureState.getHomeIntent());
+         if (gestureContractAnimationFactory != null) {
+             TaskKey taskKey = null;

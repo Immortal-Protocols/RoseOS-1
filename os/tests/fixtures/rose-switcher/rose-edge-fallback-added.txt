@@ -84,3 +84,7 @@ import com.android.quickstep.util.TaskViewSimulator;
                         .getDisplayRotation() == Surface.ROTATION_0;
     }
 
+        // RoseOS (#410): share Launcher3's identity with the home app, so it can verify that a gesture_nav_contract_v1
+        // request really comes from the system recents component before it replies.
+        ActivityOptions options = ActivityOptions.makeCustomAnimation(mContext, 0, 0)
+                .setShareIdentityEnabled(true);

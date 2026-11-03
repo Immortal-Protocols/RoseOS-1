@@ -1361,9 +1361,11 @@ EDGE_PINNED = {'AbsSwipeUpHandler.java': '7bd5815f17eed4c5e59cfe323f8f61ad6d3c5b
     'TopTaskTracker.java': '153de2f4898e8f90ef837b98682152c01124f3028760f49a0319d4a68de1aecc',
     'RecentsAnimationDeviceState.java': '083299e6b7bec5bbb908566566dcacf2b102d6c19d97bf1932e2e039fdd58388',
     'RemoteTargetGluer.java': '3ed7539dce2b071f0451ac294088e0a4d09f4d30f008c36ed93d4eb9b6aeab62',
-    'RecentsOrientedState.java': '6c008c0dff701471fa140a59f79eef76ae815950ac709e4acefe039723e3dd83'}
+    'RecentsOrientedState.java': '6c008c0dff701471fa140a59f79eef76ae815950ac709e4acefe039723e3dd83',
+    'RecentsWindowSwipeHandler.java': 'c080919fbc48e1871591d7da4ee42d154d60865d771d7a4331120d48a136a59c'}
 EDGE_TARGETS = {'AbsSwipeUpHandler.java': f'{QUICKSTEP}/AbsSwipeUpHandler.java',
-    'FallbackSwipeHandler.java': f'{QUICKSTEP}/FallbackSwipeHandler.java'}
+    'FallbackSwipeHandler.java': f'{QUICKSTEP}/FallbackSwipeHandler.java',
+    'RecentsWindowSwipeHandler.java': f'{QUICKSTEP}/window/RecentsWindowSwipeHandler.java'}
 
 class RoseEdgeSwipePatchTest(unittest.TestCase):
     """#410 E2a: rose-edge-launcher3.patch wires RoseEdgeGesture into Launcher3's fallback swipe handler, off unless
@@ -1395,11 +1397,27 @@ class RoseEdgeSwipePatchTest(unittest.TestCase):
         removed = [l for l in text.splitlines() if l.startswith('-') and not l.startswith('---')]
         self.assertEqual(removed, ['-        final GestureEndTarget endTarget = calculateEndTarget(',
             '-                velocityPxPerMs, endVelocityPxPerMs, isFling, isCancel, horizontalTouchSlopPassed);',
-            '-                taskViewSimulator.apply(transformParams);'])
+            '-                taskViewSimulator.apply(transformParams);',
+            '-        ActivityOptions options = ActivityOptions.makeCustomAnimation(mContext, 0, 0);',
+            '-        ActivityOptions options = ActivityOptions.makeCustomAnimation(mContext, 0, 0);'])
         self.assertNotIn('\t', ''.join(l for l in text.splitlines() if l.startswith('+')), 'Launcher3 indents with spaces')
         files = set(re.findall(r'^\+\+\+ b/(\S+)', PATCH.read_text(), re.M))
         self.assertFalse(files & set(EDGE_TARGETS.values()), 'disjoint from rose-switcher-launcher3.patch')
         self.patched()
+
+    def test_both_home_starts_share_launcher3s_identity_and_nothing_else(self):
+        """Home replies to gesture_nav_contract_v1 only after verifying the system recents component through the
+        Android 15 caller identity (Home's review, #410). The opt-in needs no permission and adds no authority: the
+        home app learns Launcher3's package and uid. It applies whether or not the edge switch is on."""
+        patched = self.patched()
+        opt_in = ('ActivityOptions options = ActivityOptions.makeCustomAnimation(mContext, 0, 0)\n'
+            '                .setShareIdentityEnabled(true);')
+        for name in ('FallbackSwipeHandler.java', 'RecentsWindowSwipeHandler.java'):
+            self.assertEqual(patched[name].count(opt_in), 1, name)
+            self.assertEqual(patched[name].count('makeCustomAnimation('), 1, f'{name}: the only home start')
+        rwsh = self.added_blocks('RecentsWindowSwipeHandler.java')
+        self.assertNotIn('Rose', rwsh.replace('RoseOS (#410)', ''), 'nothing else changes in the inactive handler')
+        self.assertEqual(len(rwsh.splitlines()), 4)
 
     def test_the_base_class_keeps_stock_behaviour(self):
         abs_ = self.patched()['AbsSwipeUpHandler.java']
@@ -1469,6 +1487,16 @@ class RoseEdgeSwipePatchTest(unittest.TestCase):
         rose = set(re.findall(r'public (?:static )?[\w\[\]<>]+ (\w+)\s*\(', overlay))
         methods = set(re.findall(r'\.(\w+)\(', code)) | set(re.findall(r'(?<![\w.])(\w+)\(', code))
         keywords = {'if', 'switch', 'return', 'super', 'new', 'RoseEdgeSwipe', 'Matrix', 'Rect'}
+        # Public SDK members the patch calls, checked against the platform's own android.jar below.
+        sdk = {'setShareIdentityEnabled': ('android.app.ActivityOptions',
+            'public android.app.ActivityOptions setShareIdentityEnabled(boolean);')}
+        import os
+        jars = sorted(Path(os.environ.get('ANDROID_HOME') or '/opt/roseos/android-sdk').glob('platforms/android-*/android.jar'))
+        for name, (cls, signature) in sdk.items():
+            if jars:
+                api = subprocess.run(['javap', '-cp', str(jars[-1]), cls], capture_output=True, text=True).stdout
+                self.assertIn(signature, api, f'{cls}.{name} in {jars[-1].parent.name}')
+        keywords |= set(sdk)
         checked = 0
         own = {f: (FIXTURES/f).read_text() for f in EDGE_TARGETS}
         for name in sorted(methods - defined - rose - keywords):
