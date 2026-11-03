@@ -767,6 +767,7 @@
         "note": "scripts/factory_signing.py generate_key: ssh-keygen -q -t ed25519 -a 100 -C '' -f <workspace>/id_ed25519 with stdin closed, a new session, core dumps off, a 60 s timeout and environment exactly PATH, LANG, SSH_ASKPASS_REQUIRE=force and SSH_ASKPASS=<pinned helper>; the passphrase is a random file read only by that helper. No passphrase in argv, environment, output or receipt."
       },
       "access": {
+        "liveCheck": true,
         "addVersionExpires": null,
         "accessorExpires": null,
         "minimumRemainingSeconds": 1800,
@@ -788,10 +789,12 @@
         "passphrase": "PIXEL_OS_SIGNING_PASSPHRASE_BLAZER_V1"
       },
       "access": {
+        "liveCheck": true,
         "addVersionExpires": null,
         "accessorExpires": null,
         "minimumRemainingSeconds": 1800,
-        "basis": null
+        "basis": null,
+        "policy": "Access is checked live, not from recorded timestamps (owner decision 2026-11-03). After the signer login and under the lock, the run calls secrets describe and versions list on both secrets with the same credentials. If that first check fails (expiry, revocation, a missing grant), the run stops with metadata-unavailable before any key is generated or journaled, and nothing is used up. The same calls repeat just before the import; a failure there, or a denied version add, comes after the key exists and the journal is written, so it uses up the run (failed-before-commit or recovery-needed) and later runs refuse until the owner decides recovery. versions.add cannot be tested without adding, so the bootstrap grant must be one binding per secret holding secrets.get, versions.list and versions.add with a single expiry (a custom role like models-v0's roseosModelsBootstrapV1), and the run must be dispatched well inside its window. The time boxes (bootstrap access <= 4 h, an expiring secretAccessor) are enforced by the IAM conditions the admin sets, not checked here unless expiries are recorded; recorded expiries are optional and, when present, need a basis, are held to those ceilings and must leave minimumRemainingSeconds."
       },
       "archive": {
         "format": "tar.gz",
@@ -1349,7 +1352,7 @@
       "missing": [
         "owner/security approval of a new blazer OS identity (BLAZER-SIGN proposal)",
         "the two empty secret containers PIXEL_OS_SIGNING_KEYS_BLAZER_V1 and PIXEL_OS_SIGNING_PASSPHRASE_BLAZER_V1, created by the admin",
-        "time-boxed bootstrap access (secrets.get, versions.list, versions.add) and an expiring secretAccessor for the signer on those two containers only, recorded here from an IAM readback",
+        "time-boxed bootstrap access (secrets.get, versions.list, versions.add as one binding per secret) and an expiring secretAccessor for the signer on those two containers only; checked live by the run",
         "one approved bootstrap run (same-run Fold tool proof on the builder)"
       ]
     },
@@ -1381,8 +1384,8 @@
         "ssh-keygen": {
           "kind": "installed",
           "installed": {
-            "path": null,
-            "sha256": null
+            "path": "/usr/bin/ssh-keygen",
+            "sha256": "2843cd46c617cf771c32e6f8a2a11585d83510ec528e3aeff8f7a7f0445420ba"
           },
           "requiredObservation": "installed path, sha256 and version (OpenSSH >= 8.4 for SSH_ASKPASS_REQUIRE=force) of ssh-keygen on the builder, then the synthetic self-check, in an approved run"
         }
@@ -1393,6 +1396,7 @@
         "note": "scripts/factory_signing.py generate_key: ssh-keygen -q -t ed25519 -a 100 -C '' -f <workspace>/id_ed25519 with stdin closed, a new session, core dumps off, a 60 s timeout and environment exactly PATH, LANG, SSH_ASKPASS_REQUIRE=force and SSH_ASKPASS=<pinned helper>; the passphrase is a random file read only by that helper. No passphrase in argv, environment, output or receipt."
       },
       "access": {
+        "liveCheck": true,
         "addVersionExpires": null,
         "accessorExpires": null,
         "minimumRemainingSeconds": 1800,
@@ -1403,7 +1407,6 @@
         "owner/security approval of a new blazer factory-archive identity (BLAZER-SIGN proposal)",
         "the two empty secret containers, created by the admin",
         "time-boxed bootstrap access (secrets.get, versions.list, versions.add, 4 h) and secretAccessor (30 d) for the signer on those two containers only",
-        "measured ssh-keygen installed identity and version on the builder",
         "one approved bootstrap run"
       ],
       "importRecovery": "The two-secret import is not atomic. Any uncertain or partial outcome (keys added but passphrase not, an add whose outcome is unknown) stops as recovery-needed and is journaled; every later run refuses on that journal (previous-attempt) and never regenerates a key or repeats an import. Recovery is a separate owner decision."

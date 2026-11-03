@@ -522,7 +522,7 @@ class Workflow(unittest.TestCase):
         self.assertIn("    if: always() && needs.controller.result != 'skipped'\n", JOBS['cleanup'])
         self.assertIn('  group: os-release-frankel\n', WORKFLOW)
         self.assertIn("      - name: Signing-bootstrap guard\n        if: inputs.mode == 'signing-bootstrap'\n", JOBS['guard'])
-        self.assertIn('options: [none, fold-rango-v1, models-v0, pro-blazer-v1, fold-rango-factory-v1]', WORKFLOW)
+        self.assertIn('options: [none, fold-rango-v1, models-v0, pro-blazer-v1, fold-rango-factory-v1, pro-blazer-factory-v1]', WORKFLOW)
         self.assertIn('        options: [frankel]\n', WORKFLOW)  # no device is admitted
 
     def guard_script(self):
@@ -1501,10 +1501,17 @@ class FactoryProfileValidation(unittest.TestCase):
         profiles['profiles']['fold-rango-factory-v1']['access'].update(addVersionExpires=None, accessorExpires=None, basis=None)
         self.assertEqual(sb.readiness('fold-rango-factory-v1', profiles, NOW), [])
         self.assertEqual(sb.guard(dict(GUARD_ENV, BOOTSTRAP_PROFILE='fold-rango-factory-v1'), profiles, NOW), [])
-        # Profiles of other formats keep the recorded-expiry rule.
+        # Only profiles that opt in (access.liveCheck) drop the recorded-expiry rule.
         fold = copy.deepcopy(READY)
         fold['profiles']['fold-rango-v1']['access'].update(addVersionExpires=None)
         self.assertIn('access-unknown', [c for c, _ in sb.readiness('fold-rango-v1', fold, NOW)])
+        fold['profiles']['fold-rango-v1']['access']['liveCheck'] = True
+        self.assertNotIn('access-unknown', [c for c, _ in sb.readiness('fold-rango-v1', fold, NOW)])
+        unopted = copy.deepcopy(profiles)
+        unopted['profiles']['fold-rango-factory-v1']['access'].pop('liveCheck')
+        self.assertIn('access-unknown', [c for c, _ in sb.readiness('fold-rango-factory-v1', unopted, NOW)])
+        self.assertEqual({n for n, p in PROFILES['profiles'].items() if (p.get('access') or {}).get('liveCheck') is True},
+                         {'fold-rango-factory-v1', 'pro-blazer-factory-v1', 'pro-blazer-v1'})
         checked = PROFILES['profiles']['fold-rango-factory-v1']['access']  # a committed record, if any, is never partial
         self.assertTrue(checked['basis'] or (checked['addVersionExpires'] is None and checked['accessorExpires'] is None))
 
@@ -1698,9 +1705,9 @@ class BlazerProfiles(unittest.TestCase):
                 profile = PROFILES['profiles'][name]
                 self.assertEqual((profile['status'], profile['device']), ('unbound', 'blazer'))
                 self.assertTrue(profile['missing'])
-                # pro-blazer-v1 is a dispatch choice (Release's handoff; the guard still refuses it while unbound);
-                # pro-blazer-factory-v1 is not yet one.
-                self.assertEqual(name in bootstrap_options(), name == 'pro-blazer-v1')
+                # Both are dispatch choices (pro-blazer-v1 by Release's handoff, pro-blazer-factory-v1 by the owner's
+                # 2026-11-03 instruction); the guard still refuses each while it is unbound.
+                self.assertIn(name, bootstrap_options())
 
     def test_blazer_secrets_are_new_and_distinct(self):
         profiles = PROFILES['profiles']

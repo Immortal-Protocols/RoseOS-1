@@ -157,7 +157,7 @@ def readiness(name, profiles, now):
         reasons += openssh_problems(profile, now)
     access = profile.get('access', {})
     margin = timedelta(seconds=access.get('minimumRemainingSeconds', 1800))
-    live = (profile.get('archive') or {}).get('format') == 'openssh-ed25519'
+    live = access.get('liveCheck') is True  # opted in: access is checked live by the run (owner decision 2026-11-03)
     for key in ('addVersionExpires', 'accessorExpires'):
         if live and access.get(key) is None:
             continue  # checked live: the run's credentialed metadata calls stop it before any key (see openssh_problems)
@@ -1257,7 +1257,7 @@ def plan(name, profiles):
             for s in secrets.values() for op in METADATA_OPERATIONS],
         'grant': ('one binding per secret, holding secretmanager.secrets.get, versions.list and versions.add with a single '
                   'expiry (a custom role); versions.add cannot be checked before the add, so split or partial grants can use up '
-                  'the run' if (profile.get('archive') or {}).get('format') == 'openssh-ed25519' else None),
+                  'the run' if (profile.get('access') or {}).get('liveCheck') is True else None),
         'add': [dict(ADD_OPERATION, operation=ADD_OPERATION['operation'].format(secret=s, project=profile.get('project'),
             file='<workspace file>')) for s in secrets.values()],
         'readiness': [{'code': c, 'detail': d} for c, d in readiness(name, profiles, datetime.now(timezone.utc))],
