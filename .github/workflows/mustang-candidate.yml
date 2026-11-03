@@ -5,6 +5,11 @@ run-name: Mustang unsigned candidate ${{ github.run_id }}
 # Mustang-specific existing authorization/profile is established. No phone action.
 on:
   workflow_dispatch:
+    inputs:
+      operation:
+        type: choice
+        options: [build, diagnose-access]
+        default: build
 
 permissions:
   contents: read
@@ -37,6 +42,7 @@ jobs:
 
   controller:
     needs: source
+    if: inputs.operation != 'diagnose-access'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     outputs:
@@ -62,8 +68,30 @@ jobs:
       - if: always()
         run: python3 scripts/actions-gcp-login.py logout
 
+  diagnose-access:
+    needs: source
+    if: inputs.operation == 'diagnose-access'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+      GCP_CONTROLLER_SERVICE_ACCOUNT: ${{ vars.GCP_CONTROLLER_SERVICE_ACCOUNT }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - run: python3 scripts/actions-gcp-login.py login "$GCP_CONTROLLER_SERVICE_ACCOUNT"
+      - name: Diagnose the same controller authentication without a VM request
+        run: python3 scripts/mustang-access-diagnose.py
+      - if: always()
+        run: python3 scripts/actions-gcp-login.py logout
+
   candidate:
     needs: [source, controller]
+    if: inputs.operation != 'diagnose-access'
     runs-on: [self-hosted, roseos-frankel-builder]
     # Original lifecycle fallback remains 12 h. This is an 11 h job cap,
     # independent of the four-hour delivery target, not a restarted deadline.
