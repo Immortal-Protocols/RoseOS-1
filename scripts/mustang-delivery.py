@@ -27,10 +27,10 @@ def number(value):
     return str(value)
 
 
-def pin_run(run_id,path,artifact):
+def pin_run(run_id,path,artifact,title_prefix):
     run=request('/actions/runs/'+number(run_id))
     if run.get('path')!=path or run.get('head_branch')!='main' or run.get('event')!='workflow_dispatch' \
-            or run.get('status')!='completed' or run.get('conclusion')!='success' or run.get('run_attempt')!=1:
+            or run.get('status')!='completed' or run.get('conclusion')!='success' or run.get('run_attempt')!=1 or not run.get('display_title','').startswith(title_prefix):
         raise ValueError('source run is not the completed single-attempt main workflow')
     sha=run.get('head_sha','')
     if not re.fullmatch(r'[0-9a-f]{40}',sha):raise ValueError('source SHA absent')
@@ -56,8 +56,8 @@ def guard(mode,compile_run,bootstrap_run,out):
     if mode=='bootstrap':
         if compile_run or bootstrap_run:raise ValueError('bootstrap accepts no prior-run pins')
     else:
-        binding['compile']=pin_run(compile_run,'.github/workflows/mustang-candidate.yml',f'mustang-receipts-{number(compile_run)}-1')
-        binding['bootstrap']=pin_run(bootstrap_run,'.github/workflows/mustang-delivery.yml',f'mustang-bootstrap-{number(bootstrap_run)}-1')
+        binding['compile']=pin_run(compile_run,'.github/workflows/os-release.yml',f'mustang-receipts-{number(compile_run)}-1','mustang-build ')
+        binding['bootstrap']=pin_run(bootstrap_run,'.github/workflows/os-release.yml',f'mustang-bootstrap-{number(bootstrap_run)}-1','mustang-bootstrap ')
     with Path(out).open('x') as f:json.dump(binding,f,indent=2)
     if mode=='sign-package' and os.environ.get('GITHUB_OUTPUT'):
         with open(os.environ['GITHUB_OUTPUT'],'a') as f:
