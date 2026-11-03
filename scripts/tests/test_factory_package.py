@@ -459,6 +459,82 @@ class Signature(Fixture):
         self.refused(self.classify(tampered, 'frankel', tf, sign=False), 'signature-invalid')
 
 @unittest.skipUnless(SSH, 'needs OpenSSH ssh-keygen')
+class ExplicitSignature(Fixture):
+    """--signature PATH: a detached signature in its own output root, beside no archive (Signing writes it there)."""
+
+    def signed_elsewhere(self, archive):
+        self.sign(archive)
+        root = self.tmp/'signing-out'
+        root.mkdir()
+        sig = root/(archive.name + '.sig')
+        Path(str(archive) + '.sig').rename(sig)  # the archive keeps no sibling signature
+        return sig
+
+    def test_an_explicit_signature_verifies_without_copying_the_archive(self):
+        archive, tf = self.complete('frankel')
+        sig = self.signed_elsewhere(archive)
+        before = sorted(p.name for p in sig.parent.iterdir())
+        result = self.classify(archive, 'frankel', tf, sign=False, signature=str(sig))
+        self.assertTrue(result['factoryReady'], result)
+        self.assertEqual((result['signature']['source'], result['signature']['path'], result['signature']['sha256']),
+                         ('explicit', str(sig), hashlib.sha256(sig.read_bytes()).hexdigest()))
+        self.assertEqual(sorted(p.name for p in sig.parent.iterdir()), before, 'no ZIP is copied beside the signature')
+        self.assertFalse(Path(str(archive) + '.sig').exists())
+        self.refused(self.classify(archive, 'frankel', tf, sign=False), 'factory:frankel-install-2026103101.zip.sig')
+        receipt = fp.package(archive, 'frankel', tf, self.tmp/'out', BUILD, None, self.root,
+                             signature=str(sig), **self.evidence('frankel', tf))
+        self.assertEqual((self.tmp/'out'/(archive.name + '.sig')).read_bytes(), sig.read_bytes())
+        self.assertEqual(receipt['files'][archive.name + '.sig'], hashlib.sha256(sig.read_bytes()).hexdigest())
+
+    def test_the_default_sibling_path_is_unchanged(self):
+        archive, tf = self.complete('rango')
+        result = self.classify(archive, 'rango', tf)
+        self.assertTrue(result['factoryReady'], result)
+        self.assertEqual((result['signature']['source'], result['signature']['path']), ('sibling', str(archive) + '.sig'))
+
+    def test_links_relative_paths_oversize_and_foreign_signatures_refuse(self):
+        archive, tf = self.complete('frankel')
+        sig = self.signed_elsewhere(archive)
+        with self.assertRaisesRegex(fp.ContractError, 'absolute path without'):
+            self.classify(archive, 'frankel', tf, sign=False, signature='signing-out/x.sig')
+        with self.assertRaisesRegex(fp.ContractError, 'absolute path without'):
+            self.classify(archive, 'frankel', tf, sign=False, signature=str(sig.parent/'..'/'signing-out'/sig.name))
+        link = self.tmp/'link.sig'
+        os.symlink(sig, link)
+        self.refused(self.classify(archive, 'frankel', tf, sign=False, signature=str(link)), 'factory:link.sig (detached signature)')
+        big = self.tmp/'big.sig'
+        big.write_bytes(b'x' * (fp.SIGNATURE_MAX_BYTES + 1))
+        self.refused(self.classify(archive, 'frankel', tf, sign=False, signature=str(big)), 'factory:big.sig')
+        foreign = self.write('other.zip', install('frankel', replace={'script.txt': b'# erase userdata\n# other\n'}))
+        self.sign(foreign)
+        self.refused(self.classify(archive, 'frankel', tf, sign=False, signature=str(foreign) + '.sig'), 'signature-invalid')
+
+    def test_an_archive_swapped_after_classification_is_an_identity_mismatch(self):
+        archive, tf = self.complete('frankel')
+        sig = self.signed_elsewhere(archive)
+        swapped = self.write('swapped.zip', install('frankel', replace={'script.txt': b'# erase userdata\n# swapped\n'}))
+        self.sign(swapped)
+        real = fp.read_signature
+        def swap_then_read(path):
+            # The swapped archive carries its own valid signature: ssh-keygen accepts it, the streamed hash does not.
+            os.replace(swapped, archive)
+            return real(Path(str(swapped) + '.sig'))
+        with mock.patch.object(fp, 'read_signature', swap_then_read):
+            result = self.classify(archive, 'frankel', tf, sign=False, signature=str(sig))
+        self.refused(result, 'identity-mismatch:the archive bytes verified differ from the bytes classified')
+        self.assertFalse(result['signatureVerified'])
+
+    def test_cli_takes_signature(self):
+        archive, tf = self.complete('rango')
+        sig = self.signed_elsewhere(archive)
+        with mock.patch.object(fp, 'ROOT', self.root), mock.patch('sys.stdout', io.StringIO()) as out, \
+                mock.patch('sys.stderr', io.StringIO()):
+            self.assertEqual(fp.main(['classify', str(archive), '--flavor', 'rango', '--build', BUILD,
+                                      '--work-dir', str(self.work), '--signature', str(sig)]), 3)
+            self.assertNotIn('factory:rango-install-2026103101.zip.sig', out.getvalue())
+            self.assertEqual(fp.main(['classify', str(archive), '--flavor', 'rango', '--signature', 'rel.sig']), 2)
+
+@unittest.skipUnless(SSH, 'needs OpenSSH ssh-keygen')
 class Content(Fixture):
     def segments(self, **change):
         return super_segments(super_partitions(**change))

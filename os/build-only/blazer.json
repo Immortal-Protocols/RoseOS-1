@@ -40,6 +40,52 @@
     "measure": "filesystem-available-drop",
     "basis": "First-build proposal, not a measurement: 8 h is a cap on one compile of the four make goals on the operator's builder, with SIGTERM then SIGKILL of the process group at the cap; actual duration is unmeasured. Outputs are kept on any stop. The tree must be isolated from the production source root and carry the admitted Rose integration; compile neither signs nor packages."
   },
+  "gitMeta": {
+    "projects": [
+      {
+        "path": "build/make",
+        "name": "platform_build",
+        "revision": "b0f697df8cc9519408ca0a404e918cd51bde0735"
+      },
+      {
+        "path": "build/release",
+        "name": "platform_build_release",
+        "revision": "0d3e510c9a11b9376b9c155f3425a64182798c22"
+      },
+      {
+        "path": "frameworks/base",
+        "name": "platform_frameworks_base",
+        "revision": "84183aff99be5e156dc0446a6fa2d4a7150f4bc3"
+      },
+      {
+        "path": "packages/apps/Launcher3",
+        "name": "platform_packages_apps_Launcher3",
+        "revision": "47accce386f2abdc84e87c05b5587be6e0b0854f"
+      },
+      {
+        "path": "packages/apps/Updater",
+        "name": "platform_packages_apps_Updater",
+        "revision": "52c34a55bd26f7856f9141d7e4237397084d6936"
+      },
+      {
+        "path": "packages/modules/Permission",
+        "name": "platform_packages_modules_Permission",
+        "revision": "4d6005dbabf3f2bf96e5215c5c2801809b051bf3"
+      },
+      {
+        "path": "vendor/adevtool",
+        "name": "adevtool",
+        "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c"
+      }
+    ],
+    "objectsSource": "public-fetch",
+    "fetchUrlPrefix": "https://github.com/GrapheneOS/",
+    "boundBytes": 8589934592,
+    "boundKind": "proposal",
+    "projectTimeoutSeconds": 1800,
+    "timeoutSeconds": 5400,
+    "basis": "Genuine Git metadata for an isolated copy, which excludes every .git: host-reconcile runs rev-parse HEAD, show HEAD:path, clone --shared and a sparse checkout on its six projects, and the vendor stage runs git -C vendor/adevtool rev-parse HEAD. Each needs only the pinned commit, its tree and blobs, so each project gets a depth-1 shallow repository of exactly its pinned-manifest revision (the refs/tags/2026100600 commits; a commit id is a content address, so equality proves the tree). objectsSource public-fetch: the manifest's own GrapheneOS remote over https; no production object, alternates or link. 8 GiB, 1800 s per project and 5400 s in all are unmeasured proposals. Needs Original Infra's runtime approval for the fetch; nothing here was fetched."
+  },
   "adevtool": {
     "depsDir": "out_adevtool_deps",
     "depsTools": [
