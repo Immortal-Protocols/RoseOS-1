@@ -314,11 +314,11 @@
   ],
   "factorySigning": {
     "namespace": "factory images",
-    "principal": null,
-    "publicKey": null,
-    "status": "missing",
+    "principal": "roseos-factory-images-rango-v1",
+    "publicKey": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIL+ENHK7uftrEJDUmgWEXIwNN6iYR5jijlgp5JJo99R6",
+    "status": "bound",
     "owner": "signing (Chief approval for any new identity)",
-    "basis": "generate-release.sh signs {device}-install-{build}.zip with ssh-keygen -Y sign -n \"factory images\" -f $KEY_DIR/id_ed25519 only when that key exists; os/signing-bootstrap/profiles.json: id_ed25519 is optional and not produced by generate-keys. No RoseOS factory-signing public key exists in approved inventory, so signatureVerified cannot pass. Never generated here and never derived from OTA/AVB keys.",
+    "basis": "generate-release.sh signs {device}-install-{build}.zip with ssh-keygen -Y sign -n \"factory images\" -f $KEY_DIR/id_ed25519 only when that key exists; os/signing-bootstrap/profiles.json: id_ed25519 is optional and not produced by generate-keys. The pin is bound from the fold-rango-factory-v1 bootstrap public receipt (os/retained-rango/factory-signing-bootstrap-receipt.json, run 41705002875 attempt 1); scripts/factory-archive-sign.py check cross-checks it. Never generated here and never derived from OTA/AVB keys.",
     "verifier": "ssh-keygen -Y verify -f <allowed_signers from this pin only> -I principal -n \"factory images\" -s ARCHIVE.sig"
   }
 }

@@ -1,0 +1,48 @@
+{
+  "cleanup": {
+    "workspaceCreated": true,
+    "workspaceRemoved": true
+  },
+  "device": "rango",
+  "operations": [
+    "gcloud secrets versions add PIXEL_OS_FACTORY_SIGNING_KEY_RANGO_V1 --project protocols-465723 --data-file <workspace>/id_ed25519 --format=json",
+    "gcloud secrets versions add PIXEL_OS_FACTORY_SIGNING_PASSPHRASE_RANGO_V1 --project protocols-465723 --data-file <workspace>/passphrase --format=json"
+  ],
+  "payloadReadback": "not performed",
+  "profile": "fold-rango-factory-v1",
+  "project": "protocols-465723",
+  "publicIdentity": {
+    "fingerprint": "SHA256:UWtOAQuE1ANNAEDNn98ENHBeGmLFaUIMySyk43Rv5tw",
+    "namespace": "factory images",
+    "principal": "roseos-factory-images-rango-v1",
+    "publicKey": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIL+ENHK7uftrEJDUmgWEXIwNN6iYR5jijlgp5JJo99R6",
+    "selfCheck": {
+      "decrypt": true,
+      "negativeRefused": true,
+      "signVerify": true
+    }
+  },
+  "reasons": [],
+  "recipeSha": "297122ab75fa05de44c5bfd0ca4892398680f504",
+  "recoveryNeeded": false,
+  "schema": "roseos.signing-bootstrap-receipt.v1",
+  "secrets": {
+    "keys": {
+      "committedVersion": "1",
+      "name": "PIXEL_OS_FACTORY_SIGNING_KEY_RANGO_V1",
+      "state": "committed"
+    },
+    "passphrase": {
+      "committedVersion": "1",
+      "name": "PIXEL_OS_FACTORY_SIGNING_PASSPHRASE_RANGO_V1",
+      "state": "committed"
+    }
+  },
+  "status": "complete",
+  "tools": {
+    "ssh-keygen": {
+      "installedSha256": "2843cd46c617cf771c32e6f8a2a11585d83510ec528e3aeff8f7a7f0445420ba",
+      "source": null
+    }
+  }
+}
