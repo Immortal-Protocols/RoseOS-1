@@ -9,8 +9,9 @@ Exactly these paths, fixed in source (no argument chooses a path). S is the isol
 (os/build-only/blazer-prep-host.json sourceRoot) and OUT is S/<outDir> of the committed target
 os/build-only/blazer-output-observe.json {build, outDir}. outDir is exactly one of two names: that build's own
 os/build-only/blazer.json compile.outDirTemplate directory (out-blazer-build-<build>, every compile since F1/F2), or
-the legacy fixed out-blazer-build that every compile before F1/F2 wrote; anything else refuses (exit 2). The report
-carries the target, so the build-identity gate compares summary.incremental with target.build:
+the legacy fixed out-blazer-build that every compile before F1/F2 wrote; anything else refuses (exit 2). The bindings
+are read only once the lock is held (an unusable target with the lock unavailable is that lock report). Every report
+past the lock carries the target, so the build-identity gate compares summary.incremental with target.build:
   targetFiles  the one OUT/target/product/blazer/obj/PACKAGING/target_files_intermediates/blazer-target_files*.zip
                (Flavors' compile collector paths; zero or several matches are reported, never chosen between): its
                size, sha256, mode and mtime, then from its central directory only these members, each at most
@@ -126,15 +127,33 @@ class Stop(Exception):
         self.state, self.detail = state, detail
 
 
+def committed(root, relative, unique=False):
+    """A committed JSON binding that must be an object; ValueError (exit 2) otherwise, and with unique for a repeated
+    key too (a target whose diff shows one outDir must never observe another)."""
+    def pairs(items):
+        if len({key for key, _ in items}) != len(items):
+            raise ValueError(f'{relative} repeats a key')
+        return dict(items)
+    try:
+        value = json.loads((root/relative).read_text(), **({'object_pairs_hook': pairs} if unique else {}))
+    except RecursionError:
+        raise ValueError(f'{relative} is nested too deeply') from None
+    if not isinstance(value, dict):
+        raise ValueError(f'{relative} is not a JSON object')
+    return value
+
+
 def paths(root=ROOT):
     """(S, OUT, target) from the committed bindings, never an argument: OUT is the target's outDir under S, which must
     be exactly the target build's own compile.outDirTemplate directory or the legacy fixed out-blazer-build."""
-    source = Path(json.loads((root/'os/build-only/blazer-prep-host.json').read_text())['sourceRoot'])
-    template = json.loads((root/'os/build-only/blazer.json').read_text())['compile']['outDirTemplate']
-    target = json.loads((root/TARGET).read_text())
-    if not source.is_absolute() or '..' in source.parts:
-        raise ValueError('the committed source root is malformed')
-    if (not isinstance(target, dict) or set(target) != TARGET_KEYS or target['schemaVersion'] != 1
+    source = committed(root, 'os/build-only/blazer-prep-host.json').get('sourceRoot')
+    compile_ = committed(root, 'os/build-only/blazer.json').get('compile')
+    template = compile_.get('outDirTemplate') if isinstance(compile_, dict) else None
+    target = committed(root, TARGET, unique=True)
+    if not isinstance(source, str) or not Path(source).is_absolute() or '..' in Path(source).parts:
+        raise ValueError('the committed source root is unbound or malformed')
+    source = Path(source)
+    if (set(target) != TARGET_KEYS or type(target['schemaVersion']) is not int or target['schemaVersion'] != 1
             or target['kind'] != TARGET_KIND):
         raise ValueError(f'{TARGET} is not exactly an observation target')
     build, out_dir = target['build'], target['outDir']
@@ -588,7 +607,7 @@ def observe(host, root=ROOT, clock=time.monotonic, source=None, out=None, lock=N
         os.close(held)  # releases the flock
     text = json.dumps(report, sort_keys=True, separators=(',', ':'))
     if len(text.encode()) + 1 > LIMITS['outputBytes']:  # print() adds the newline the receipt reader counts
-        text = json.dumps({'schema': SCHEMA, 'host': host, 'complete': False,
+        text = json.dumps({'schema': SCHEMA, 'host': host, 'complete': False, 'target': target, 'outDir': str(out),
                            'problems': ['output: the report exceeds outputBytes']}, sort_keys=True)
     return text
 

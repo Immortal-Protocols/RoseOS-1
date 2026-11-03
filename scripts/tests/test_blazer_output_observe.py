@@ -192,10 +192,16 @@ class Observe(unittest.TestCase):
         report = json.loads(observer.observe('immortal-os-builder', root=bindings(tree.source, NEXT, 'out-blazer-build'),
                                              lock=tree.lock))
         self.assertEqual((report['complete'], report['targetFiles']['state']), (False, 'absent'))
-        # An unusable target is invalid usage (exit 2), decided under the lock and released.
+        # An unusable target is invalid usage (exit 2), decided under the lock and released...
         root = bindings(tree.source, NEXT, f'out-blazer-build-{BUILD}')
         with self.assertRaises(ValueError):
             observer.observe('immortal-os-builder', root=root, lock=tree.lock)
+        # ...and never read while another job holds the lock: that is the lock report, with nothing else read.
+        with open(tree.lock) as held:
+            fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            report = json.loads(observer.observe('immortal-os-builder', root=root, lock=tree.lock))
+        self.assertEqual((report['complete'], report['lock']['held']), (False, False))
+        self.assertFalse({'target', 'outDir', 'targetFiles'} & set(report))
         fd = os.open(tree.lock, os.O_RDONLY)
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)  # the lock was released
@@ -355,9 +361,13 @@ class Observe(unittest.TestCase):
         tree = Tree()
         saved = dict(observer.LIMITS)
         self.addCleanup(observer.LIMITS.update, saved)
-        observer.LIMITS['outputBytes'] = 200
-        report = tree.observe()
+        observer.LIMITS['outputBytes'] = 400
+        report = json.loads(observer.observe('immortal-os-builder', root=bindings(tree.source, BUILD, 'out-blazer-build'),
+                                             lock=tree.lock))
         self.assertEqual((report['complete'], report['problems']), (False, ['output: the report exceeds outputBytes']))
+        # Still says which committed target it was for.
+        self.assertEqual((report['target'], report['outDir']),
+                         ({'build': BUILD, 'outDir': 'out-blazer-build', 'form': 'legacy'}, str(tree.out)))
 
 
 def patched(test, owner, name, value):
@@ -502,9 +512,13 @@ class Guards(unittest.TestCase):
             (NEXT, f'out-blazer-build-{BUILD}', {}),  # another build's own directory, never this target's
             (NEXT, f'out-blazer-build-{NEXT}/', {}), (NEXT, f'/srv/source/out-blazer-build-{NEXT}', {}),
             *((NEXT, bad, {}) for bad in ('..', '.', '.hidden', 'a/b', '', 'out-blazer-build/..', None, 5)),
-            *((bad, 'out-blazer-build', {}) for bad in (int(NEXT), '0026110401', '202611040', '2026110401x', '', None)),
+            *((bad, 'out-blazer-build', {}) for bad in (int(NEXT), '0026110401', '202611040', '2026110401x', '', None,
+                                                        '2' + '\uff10\uff12\uff16\uff11\uff11\uff10\uff14\uff10\uff11',  # fullwidth
+                                                        '2' + '\u0660\u0662\u0666\u0661\u0661\u0660\u0664\u0660\u0661',  # Arabic-Indic
+                                                        f'{NEXT}\n', f' {NEXT}')),
             (NEXT, 'out-blazer-build', {'extra': 1}), (NEXT, 'out-blazer-build', {'basis': ...}),
             (NEXT, 'out-blazer-build', {'schemaVersion': 2}), (NEXT, 'out-blazer-build', {'kind': 'other'}),
+            (NEXT, 'out-blazer-build', {'schemaVersion': True}), (NEXT, 'out-blazer-build', {'schemaVersion': 1.0}),
             # a template that is not exactly one {build} field naming one plain directory
             *((NEXT, f'out-blazer-build-{NEXT}', {'template': bad}) for bad in (
                 'out-blazer-build', '{build}-{build}', 'out-{build}-{other}', 'out-{build:>12}', 'out-{build!r}',
@@ -518,8 +532,26 @@ class Guards(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     observer.paths(bindings(source, build, out_dir, **change))
         root = bindings(source, NEXT, 'out-blazer-build')
-        (root/'os/build-only/blazer.json').write_text(json.dumps({'compile': {'outDir': 'out-blazer-build'}}))
-        with self.assertRaises(KeyError):  # the pre-F1/F2 recipe form names no template: never guessed
+        for recipe in ({'compile': {'outDir': 'out-blazer-build'}},  # the pre-F1/F2 recipe form names no template: never guessed
+                       {'compile': ['out-blazer-build-{build}']}, {'compile': 'out-blazer-build-{build}'}, {}, []):
+            with self.subTest(recipe=recipe), self.assertRaises(ValueError):
+                (root/'os/build-only/blazer.json').write_text(json.dumps(recipe))
+                observer.paths(root)
+        root = bindings(source, NEXT, 'out-blazer-build')
+        for prep in ({'sourceRoot': None}, {'sourceRoot': 5}, {}, ['/srv/source']):  # null is the binding's unbound marker
+            with self.subTest(prep=prep), self.assertRaises(ValueError):
+                (root/'os/build-only/blazer-prep-host.json').write_text(json.dumps(prep))
+                observer.paths(root)
+        root = bindings(source, NEXT, 'out-blazer-build')
+        valid = (root/observer.TARGET).read_text()
+        # A repeated key is refused, whichever value comes last: the diff must show the one directory observed.
+        for repeated in (valid.replace('"outDir":', f'"outDir": "out-blazer-build-{NEXT}", "outDir":'),
+                         valid.replace('"build":', '"build": "2026110402", "build":')):
+            with self.subTest(repeated=repeated[:60]), self.assertRaises(ValueError):
+                (root/observer.TARGET).write_text(repeated)
+                observer.paths(root)
+        (root/observer.TARGET).write_text('[' * 100000 + ']' * 100000)
+        with self.assertRaises(ValueError):  # nested beyond the parser's recursion limit: still exit 2, never a traceback
             observer.paths(root)
         for bad in ('srv/source', '/srv/../source'):
             with self.subTest(source=bad), self.assertRaises(ValueError):
@@ -702,6 +734,7 @@ class Fixed(unittest.TestCase):
         helper = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(helper)
         self.assertEqual(helper.COMPILE_OUT_DIR, template)
+        self.assertEqual(observer.BUILD.pattern, helper.BUILD_NUMBER.pattern)  # the same builds as the helper's --build-number
         self.assertEqual(helper.compile_out_dir({'compile': {'outDirTemplate': template}}, {'buildNumber': NEXT}),
                          observer.paths(bindings(source, NEXT, f'out-blazer-build-{NEXT}'))[2]['outDir'])
         self.assertEqual(observer.main(['observe', '--host', 'other']), 2)
