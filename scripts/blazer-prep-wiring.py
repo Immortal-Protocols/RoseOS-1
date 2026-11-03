@@ -37,7 +37,8 @@ dispatch:
   binding-observe: `blazer-binding-observe.py observe --host immortal-os-builder` (Release) and nothing else: one bounded,
       read-only observation of exactly the files, names and resources the blazer integration and compile bindings still
       need (no link followed, allowlisted identity fields only, at most 64 KiB); its stdout is kept write-once as
-      NEW/binding-observation.json. The helper takes no lock and writes nothing.
+      NEW/binding-observation.json. The observer holds the shared builder lock (exclusive, non-blocking; refused
+      immediately when held) for the whole observation and writes nothing.
 
 Never compile: compile is not a preparation stage and is refused here. Exit status: 0 ok, 2 invalid, 4 unbound (a host
 fact is still null).

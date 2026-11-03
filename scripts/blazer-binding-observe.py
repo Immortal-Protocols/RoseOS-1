@@ -25,9 +25,15 @@ mtime or inode reports `changed`. Directory names are enumerated from such a des
 and type only, never a revision or a completed git-meta. Receipt and policy JSON are parsed only within
 JSON_BYTES and only allowlisted identity fields are emitted (no other content). Nothing is written, invoked, signed,
 allocated or changed. Partial results report complete:false with every reason; the output is at most OUTPUT_BYTES.
+Serialization: the whole observation holds the existing shared builder lock (os/release-pipeline/frankel.json
+host.lockPath), the exclusive non-blocking flock every builder writer takes (the preparation and compile stages, the
+Frankel and blazer allocators, the rendered host-reconcile), so nothing it measures changes while it runs. The lock file
+is reached by the same no-follow walk and opened read-only, never created; held by another job, absent or unusable, the
+report is only complete:false with that reason and nothing is observed. It never waits, so the time bounds are unchanged.
 Exit status: 0 report printed (complete true or false), 2 invalid usage.
 """
 import argparse
+import fcntl
 import hashlib
 import json
 import os
@@ -293,13 +299,62 @@ def resources(proc=Path('/proc'), cgroup_root=Path('/sys/fs/cgroup'), statvfs=os
     return out
 
 
+def lock_path(root=ROOT):
+    return Path(json.loads((root/'os/release-pipeline/frankel.json').read_text())['host']['lockPath'])
+
+
+def take_lock(path):
+    """An fd holding the exclusive non-blocking flock on PATH, or the reason it is not held. Never creates or waits."""
+    try:
+        parent, leaf = open_parent(path)
+    except Walk as walk:
+        return None, f'lock {walk.state} at {walk.component}'
+    try:
+        try:
+            if stat.S_ISLNK(os.lstat(leaf, dir_fd=parent).st_mode):
+                return None, f'lock link at {path}'
+        except FileNotFoundError:
+            return None, 'lock absent'
+        fd = os.open(leaf, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=parent)
+    except FileNotFoundError:
+        return None, 'lock absent'
+    except OSError as error:
+        return None, f'lock unusable ({type(error).__name__})'
+    finally:
+        os.close(parent)
+    if not stat.S_ISREG(os.fstat(fd).st_mode):
+        os.close(fd)
+        return None, 'lock is not a regular file'
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        os.close(fd)
+        return None, 'lock_held: the shared builder lock is held by another job'
+    except OSError as error:
+        os.close(fd)
+        return None, f'lock unusable ({type(error).__name__})'
+    return fd, None
+
+
 def observe(host, root=ROOT, clock=time.monotonic, proc=Path('/proc'), cgroup_root=Path('/sys/fs/cgroup'), statvfs=os.statvfs,
-            home=HOME, files=None, source=None):
+            home=HOME, files=None, source=None, lock=None):
     """files/source/home exist for tests only; the CLI always observes targets() and the committed source root."""
     if host != HOST:
         raise ValueError(f'--host must be {HOST}')
+    held, reason = take_lock(lock or lock_path(root))
+    if held is None:
+        return json.dumps({'schema': SCHEMA, 'host': host, 'complete': False, 'lock': {'held': False, 'reason': reason},
+                           'problems': [reason]}, sort_keys=True)
+    try:
+        return observe_locked(host, root, clock, proc, cgroup_root, statvfs, home, files, source, lock or lock_path(root))
+    finally:
+        os.close(held)  # releases the flock
+
+
+def observe_locked(host, root, clock, proc, cgroup_root, statvfs, home, files, source, lock):
     budget = Budget(clock)
-    report = {'schema': SCHEMA, 'host': host, 'limits': dict(LIMITS), 'files': {}, 'identities': {}, 'problems': []}
+    report = {'schema': SCHEMA, 'host': host, 'limits': dict(LIMITS), 'lock': {'held': True, 'path': str(lock)},
+              'files': {}, 'identities': {}, 'problems': []}
     for role, path in (files or targets(root)).items():
         keep = role.startswith('receipt:') or role == 'policy'
         if path is None:

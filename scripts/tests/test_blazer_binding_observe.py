@@ -1,6 +1,7 @@
 """BLAZER-BINDING-OBSERVE: scripts/blazer-binding-observe.py observes exactly the fixed files, names and resources and
 nothing else: no link followed, no replacement missed, receipts and policy reduced to allowlisted identity fields,
 names only from two directory levels, bounded output. Synthetic trees and fake /proc, cgroup and statvfs only."""
+import fcntl
 import hashlib
 import importlib.util
 import json
@@ -63,10 +64,12 @@ class Observe(unittest.TestCase):
         cg.mkdir(parents=True)
         (cg/'cpu.max').write_text('max 100000\n')
         (cg/'memory.max').write_text('max\n')
+        self.lock = self.tmp/'frankel-build.lock'
+        self.lock.write_bytes(b'')
 
     def run_observe(self, **change):
         args = dict(host='immortal-os-builder', files=self.files, source=self.source, home=self.home, proc=self.proc,
-                    cgroup_root=self.tmp/'cgroup', statvfs=lambda p: FS)
+                    cgroup_root=self.tmp/'cgroup', statvfs=lambda p: FS, lock=self.lock)
         args.update(change)
         return json.loads(obs.observe(**args))
 
@@ -90,6 +93,60 @@ class Observe(unittest.TestCase):
         self.assertEqual((resources['memTotalBytes'], resources['cgroup']['cpu_max'], resources['storage']['availableBytes']),
                          (263000000 * 1024, 'max 100000', 1000 * 4096))
         self.assertLessEqual(len(json.dumps(report)), obs.LIMITS['outputBytes'])
+
+    def test_the_shared_lock_is_held_for_the_whole_observation(self):
+        seen = []
+        real = obs.observe_file
+
+        def probing(path, budget, keep=False):
+            fd = os.open(self.lock, os.O_RDONLY)
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                seen.append('free')
+            except BlockingIOError:
+                seen.append('held')
+            finally:
+                os.close(fd)
+            return real(path, budget, keep)
+        obs.observe_file = probing
+        try:
+            report = self.run_observe()
+        finally:
+            obs.observe_file = real
+        self.assertEqual(set(seen), {'held'})
+        self.assertEqual(report['lock'], {'held': True, 'path': str(self.lock)})
+        fd = os.open(self.lock, os.O_RDONLY)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)  # released afterwards
+        finally:
+            os.close(fd)
+
+    def test_a_held_absent_or_linked_lock_refuses_at_once_and_observes_nothing(self):
+        holder = os.open(self.lock, os.O_RDONLY)
+        fcntl.flock(holder, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        reads = []
+        real_read = obs.os.read
+        obs.os.read = lambda fd, n: reads.append(fd) or real_read(fd, n)
+        ticks = []
+        try:
+            report = self.run_observe(clock=lambda: ticks.append(1) or 0)
+        finally:
+            obs.os.read = real_read
+            os.close(holder)
+        self.assertEqual(report, {'schema': obs.SCHEMA, 'host': 'immortal-os-builder', 'complete': False,
+                                  'lock': {'held': False, 'reason': 'lock_held: the shared builder lock is held by another job'},
+                                  'problems': ['lock_held: the shared builder lock is held by another job']})
+        self.assertEqual((reads, ticks), ([], []))  # no file read, no budget started: it never waited
+        self.lock.unlink()
+        self.assertEqual(self.run_observe()['problems'], ['lock absent'])
+        self.assertFalse(self.lock.exists())  # never created
+        (self.tmp/'real.lock').write_bytes(b'')
+        self.lock.symlink_to(self.tmp/'real.lock')
+        self.assertEqual(self.run_observe()['problems'], [f'lock link at {self.lock}'])
+        self.lock.unlink()
+        self.lock.mkdir()
+        self.assertEqual(self.run_observe()['problems'], ['lock is not a regular file'])
+        self.assertEqual(str(obs.lock_path()), '/home/pixelbuild/frankel-build.lock')
 
     def test_links_are_reported_never_followed(self):
         outside = self.tmp/'outside'
