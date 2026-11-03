@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """LAUNCHER3-COMPILE adapter (Release-owned): a compile-only proof of RoseOS's Launcher3 changes against OS Product's
-input contract os/compile-contracts/launcher3-quickstep-lib.json (scripts/launcher3-compile-contract.py, #410/#440).
+input contract os/compile-contracts/launcher3-quickstep-lib.json (#410/#440). It reads the contract as data only and never
+loads OS Product's checker (scripts/launcher3-compile-contract.py), which B's tests use for parity.
 
   check                       hosted and on the builder: the contract is the pinned version (MANIFEST_SHA256), the
                               binding os/build-only/launcher3-compile-host.json is exact, and every input the selected
@@ -12,7 +13,7 @@ input contract os/compile-contracts/launcher3-quickstep-lib.json (scripts/launch
                                  SOURCE_BOUND_BYTES or available minus the projection is below RESERVE_BYTES;
                               2. classify every contract file in the copy and take exactly one branch:
                                  verifyIntegrated - every affected file equals its post-image (config.xml only through
-                                 OS Product's verify_integrated_config, with the bound policy receipt and frankel's
+                                 the contract's rewrite rules (verify_config), with the bound policy receipt and frankel's
                                  applyArgs) and every required overlay is present at its sha256; nothing is applied;
                                  reconstruct - needs an approved genuine-Git-object source, none is bound: refused;
                                  anything else (mixed, pre-images, unknown hashes, missing files) - refused, nothing
@@ -35,7 +36,6 @@ import argparse
 import contextlib
 import fcntl
 import hashlib
-import importlib.util
 import json
 import os
 from pathlib import Path
@@ -88,13 +88,6 @@ class Unbound(Exception):
 
 class Refused(Exception):
     pass
-
-
-def contract_module(root=ROOT):
-    spec = importlib.util.spec_from_file_location('launcher3_compile_contract', root/'scripts/launcher3-compile-contract.py')
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
 
 
 def sha256_bytes(data):
@@ -265,6 +258,99 @@ def candidate_final(tree, files, overlays):
             raise Refused(f'{item["target"]} is not at its candidate overlay image after the delta')
 
 
+CONFIG_CERT = re.compile(r'[0-9A-F]{64}')
+CONFIG_PACKAGE = re.compile(r'[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)+')
+CONFIG_KINDS = {'array': 'string-array', 'string': 'string', 'bool': 'bool'}
+CONFIG_ROWS = ('agent', 'targets')
+CONFIG_SCALARS = ('referenceDisplayAddress', 'lockedControl')
+
+
+def config_rules(entry):
+    """config.xml's integration rewrite as B-normalised data from the manifest entry (OS Product's templates and input
+    rules; B never loads OS Product's checker at run time). One row per element: name, kind, marker, and for an array
+    rows (agent|targets), when (None|a policy flag), open, item ({package}, {certificate}), close; for a scalar input
+    (referenceDisplayAddress|lockedControl) and template ({value}). Anything malformed is Invalid."""
+    rows = (entry.get('integrationRewrite') or {}).get('elements')
+    if not isinstance(rows, list) or not rows:
+        raise Invalid('config.xml has no integration rewrite rules in the contract')
+    names = set()
+    for row in rows:
+        if not isinstance(row, dict) or row.get('kind') not in CONFIG_KINDS or not isinstance(row.get('name'), str) \
+                or not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', row['name']) or row['name'] in names:
+            raise Invalid(f'config.xml rewrite rule {row!r} is malformed or repeated')
+        names.add(row['name'])
+        marker = row.get('marker')
+        if not isinstance(marker, str) or f'<{CONFIG_KINDS[row["kind"]]} name="{row["name"]}"' not in marker:
+            raise Invalid(f'{row["name"]}: the marker is not that element')
+        if row['kind'] == 'array':
+            keys = {'name', 'kind', 'marker', 'rows', 'when', 'open', 'item', 'close'}
+            valid = row.get('rows') in CONFIG_ROWS and (row.get('when') is None or isinstance(row.get('when'), str)) \
+                and all(isinstance(row.get(k), str) for k in ('open', 'item', 'close')) \
+                and '{package}' in row['item'] and '{certificate}' in row['item']
+        else:
+            keys = {'name', 'kind', 'marker', 'input', 'template'}
+            valid = row.get('input') in CONFIG_SCALARS and isinstance(row.get('template'), str) and '{value}' in row['template'] \
+                and (row['kind'] == 'bool') == (row['input'] == 'lockedControl')
+        if set(row) != keys or not valid:
+            raise Invalid(f'{row["name"]}: the rewrite rule is not a complete {row["kind"]} rule')
+    return rows
+
+
+def expected_config(rules, policy, reference=None, locked=False):
+    """{element name: exact text} that integration writes from these bound inputs; an element whose input is absent
+    stays at its marker. Refuses policy rows that are not a package with uppercase SHA-256 certificates."""
+    agent, targets = policy['agent'], list(policy['targets'])
+    for row in [agent] + targets:
+        if not isinstance(row.get('packageName'), str) or not CONFIG_PACKAGE.fullmatch(row['packageName']) \
+                or not row.get('certificates') or not all(isinstance(c, str) and CONFIG_CERT.fullmatch(c) for c in row['certificates']):
+            raise ValueError(f'policy row {row.get("packageName")!r}: not a package with uppercase SHA-256 certificates')
+    if reference is not None and not (str(reference).isdecimal() and 0 < int(reference) < 2**63):
+        raise ValueError('reference display address: not a positive signed-64-bit number')
+    out = {}
+    for rule in rules:
+        if rule['kind'] == 'array':
+            if rule['when'] is not None and not policy.get(rule['when'], False):
+                out[rule['name']] = rule['marker']
+                continue
+            items = [agent] if rule['rows'] == 'agent' else targets
+            out[rule['name']] = rule['open'] + ''.join(rule['item'].replace('{package}', r['packageName']).replace(
+                '{certificate}', c) for r in items for c in r['certificates']) + rule['close']
+        elif rule['input'] == 'referenceDisplayAddress':
+            out[rule['name']] = rule['marker'] if reference is None else rule['template'].replace('{value}', str(reference))
+        else:
+            out[rule['name']] = rule['template'].replace('{value}', 'true') if locked else rule['marker']
+    return out
+
+
+def verify_config(integrated, post_sha256, rules, policy, policy_sha256, bound_policy_sha256, reference=None, locked=False):
+    """Errors (empty when accepted) for an integrated config.xml: only with the policy receipt bound for this tree, each
+    rule's element present exactly once and exactly as integration writes it from the bound inputs, and the text with
+    exactly those elements put back to their markers equal to the post-image. Nothing else is normalised."""
+    if not bound_policy_sha256 or policy is None or policy_sha256 != bound_policy_sha256:
+        return ['the policy receipt is missing or not the one bound for this tree']
+    try:
+        expected = expected_config(rules, policy, reference, locked)
+    except (KeyError, TypeError, ValueError, AttributeError) as error:
+        return [f'policy inputs refused: {error}']
+    try:
+        text = integrated.decode('utf-8')
+    except UnicodeDecodeError:
+        return ['config.xml is not UTF-8']
+    errors = []
+    for rule in rules:
+        name, wanted = rule['name'], expected[rule['name']]
+        openings = re.findall(r'<(?:string-array|string|bool) name="%s"' % re.escape(name), text)
+        if len(openings) != 1:
+            errors.append(f'{name}: {len(openings)} elements, expected exactly one')
+        elif text.count(wanted) != 1:
+            errors.append(f'{name}: not the exact text integration writes from the bound inputs')
+        else:
+            text = text.replace(wanted, rule['marker'])
+    if not errors and sha256_bytes(text.encode('utf-8')) != post_sha256:
+        errors.append('config.xml differs from the post-image outside the policy elements')
+    return errors
+
+
 def load_manifest(path=MANIFEST, pinned=MANIFEST_SHA256):
     data = Path(path).read_bytes()
     if sha256_bytes(data) != pinned:
@@ -344,11 +430,9 @@ def read_bytes(path):
     return path.read_bytes()
 
 
-def classify(tree, manifest, policy=None, policy_sha256=None, bound_policy_sha256=None, reference=None, locked=False,
-             contract=None):
+def classify(tree, manifest, policy=None, policy_sha256=None, bound_policy_sha256=None, reference=None, locked=False):
     """{'branch', 'files', 'overlays', 'problems'}: verifyIntegrated only when every contract file is at its post-image
     and every required overlay is present at its sha256; otherwise None with every reason. Reads only; never applies."""
-    contract = contract or contract_module()
     tree, files, problems = Path(tree), [], []
     for project in manifest['projects']:
         for entry in project['files']:
@@ -358,8 +442,8 @@ def classify(tree, manifest, policy=None, policy_sha256=None, bound_policy_sha25
             if data is None:
                 row['state'] = 'missing'
             elif 'integrationRewrite' in entry:
-                errors = contract.verify_integrated_config(data, entry['post']['sha256'], policy, policy_sha256,
-                                                           bound_policy_sha256, reference, locked)
+                errors = verify_config(data, entry['post']['sha256'], config_rules(entry), policy, policy_sha256,
+                                       bound_policy_sha256, reference, locked)
                 row['state'] = 'post' if not errors else 'other'
                 if errors:
                     row['errors'] = errors[:5]

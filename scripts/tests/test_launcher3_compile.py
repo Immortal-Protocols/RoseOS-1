@@ -24,7 +24,17 @@ ROOT = Path(__file__).resolve().parents[2]
 spec = importlib.util.spec_from_file_location('launcher3_compile', ROOT/'scripts/launcher3-compile.py')
 adapter = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(adapter)
-contract = adapter.contract_module()
+
+
+def contract_module():
+    """OS Product's checker, loaded by these tests only: parity and refusal cross-checks against B's own parser."""
+    spec = importlib.util.spec_from_file_location('launcher3_compile_contract', ROOT/'scripts/launcher3-compile-contract.py')
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+contract = contract_module()
 BINDING = json.loads((ROOT/'os/build-only/launcher3-compile-host.json').read_text())
 GIB = 1 << 30
 
@@ -44,6 +54,28 @@ def run_cli(*argv):
 
 POLICY = {'agent': {'packageName': 'dev.pixel.voice', 'certificates': ['A' * 64]},
           'targets': [{'packageName': 'dev.pixel.calculator.agent', 'certificates': ['B' * 64]}], 'prototypeControl': False}
+
+
+def config_rules_from_checker():
+    """B-normalised rules equal to OS Product's checker templates (the manifest will carry them as data)."""
+    rules = []
+    for name, marker in contract.CONFIG_MARKERS.items():
+        if marker.endswith('/>'):
+            short = name[len('config_pixelComputerControl'):]
+            rules.append({'name': name, 'kind': 'array', 'marker': marker, 'rows': 'targets' if short == 'Targets' else 'agent',
+                          'when': 'prototypeControl' if short == 'PrototypeAgents' else None,
+                          'open': f'    <string-array name="{name}" translatable="false">\n',
+                          'item': '        <item>{package}:{certificate}</item>\n', 'close': '    </string-array>'})
+        elif '<bool' in marker:
+            rules.append({'name': name, 'kind': 'bool', 'marker': marker, 'input': 'lockedControl',
+                          'template': f'    <bool name="{name}">{{value}}</bool>'})
+        else:
+            rules.append({'name': name, 'kind': 'string', 'marker': marker, 'input': 'referenceDisplayAddress',
+                          'template': f'    <string name="{name}" translatable="false">{{value}}</string>'})
+    return rules
+
+
+RULES = config_rules_from_checker()
 
 
 class Synthetic:
@@ -75,7 +107,7 @@ class Synthetic:
                      'post': {'sha256': sha(self.config_post if rewrite else post),
                               'gitBlob': blob(self.config_post if rewrite else post)}}
             if rewrite:
-                entry['integrationRewrite'] = {'elements': list(contract.CONFIG_MARKERS)}
+                entry['integrationRewrite'] = {'elements': RULES}
             projects.setdefault(project, []).append(entry)
         self.manifest = {'schemaVersion': 1, 'kind': 'rose-launcher3-compile-inputs', 'target': 'Launcher3QuickStepLib',
                          'proves': 'compile only', 'identitySharing': {'appliesWithEdgeOff': True},
@@ -102,7 +134,7 @@ class Synthetic:
         return self.root
 
     def classify(self, **change):
-        args = dict(policy=POLICY, policy_sha256=self.policy_sha, bound_policy_sha256=self.policy_sha, contract=contract)
+        args = dict(policy=POLICY, policy_sha256=self.policy_sha, bound_policy_sha256=self.policy_sha)
         args.update(change)
         return adapter.classify(self.root, self.manifest, **args)
 
@@ -213,6 +245,119 @@ class Classify(unittest.TestCase):
     def test_not_an_input_overlays_are_not_required(self):
         self.s.write('post')
         self.assertEqual(len(self.s.classify()['overlays']), 1)
+
+
+class ConfigParity(unittest.TestCase):
+    """B's manifest-data parser against OS Product's checker: the same acceptance and refusal on every case."""
+    POLICIES = [POLICY, dict(POLICY, prototypeControl=True),
+                dict(POLICY, targets=POLICY['targets'] + [{'packageName': 'dev.pixel.two', 'certificates': ['C' * 64, 'D' * 64]}]),
+                dict(POLICY, agent={'packageName': 'dev.pixel.voice', 'certificates': ['a' * 64]}),
+                dict(POLICY, agent={'packageName': 'nodot', 'certificates': ['A' * 64]}),
+                dict(POLICY, targets=[{'packageName': 'dev.pixel.x', 'certificates': []}])]
+    INPUTS = [(None, False), ('7', False), (None, True), ('7', True), ('0', False), ('x', False)]
+
+    def post(self):
+        markers = '\n'.join(contract.CONFIG_MARKERS.values())
+        return f'<resources>\n{markers}\n    <bool name="other">true</bool>\n</resources>\n'
+
+    def integrated(self, policy, reference, locked):
+        text = self.post()
+        for name, wanted in contract.expected_config_elements(policy, reference, locked).items():
+            text = text.replace(contract.CONFIG_MARKERS[name], wanted)
+        return text
+
+    def mutations(self, text):
+        yield 'exact', text
+        yield 'outside', text.replace('<bool name="other">true', '<bool name="other">false')
+        yield 'locked', text.replace('LockedSessions">false', 'LockedSessions">true')
+        yield 'unlocked', text.replace('LockedSessions">true', 'LockedSessions">false')
+        yield 'cert', text.replace('A' * 64, 'E' * 64)
+        yield 'duplicate', text.replace('</resources>', contract.CONFIG_MARKERS['config_pixelComputerControlAgents'] + '\n</resources>')
+        yield 'missing', text.replace(contract.CONFIG_MARKERS['config_pixelComputerControlLockedSessions'], '')
+        yield 'whitespace', text.replace('        <item>', '         <item>', 1)
+        yield 'reference', text.replace('ReferenceDisplayAddress" translatable="false">7<', 'ReferenceDisplayAddress" translatable="false">8<')
+
+    def test_parser_and_checker_agree_on_every_case(self):
+        post = hashlib.sha256(self.post().encode()).hexdigest()
+        rules = adapter.config_rules({'integrationRewrite': {'elements': RULES}})
+        accepted = refused = 0
+        for policy in self.POLICIES:
+            try:
+                built = self.integrated(policy, *self.INPUTS[3 if policy is POLICY else 0])
+            except ValueError:
+                built = self.integrated(POLICY, None, False)
+            for reference, locked in self.INPUTS:
+                for name, text in self.mutations(built):
+                    for bound in ('p', None, 'q'):
+                        args = (text.encode(), post, policy, 'p', bound, reference, locked)
+                        with self.subTest(policy=policy, inputs=(reference, locked), case=name, bound=bound):
+                            ours = adapter.verify_config(args[0], post, rules, *args[2:])
+                            theirs = contract.verify_integrated_config(*args)
+                            self.assertEqual(not ours, not theirs)
+                            accepted += not ours
+                            refused += bool(ours)
+        self.assertGreater(accepted, 0)
+        self.assertGreater(refused, accepted)
+        self.assertTrue(adapter.verify_config(b'\xff', post, rules, POLICY, 'p', 'p'))
+
+    def test_a_repeated_element_refuses_even_when_the_post_image_repeats_it(self):
+        marker = contract.CONFIG_MARKERS['config_pixelComputerControlAgents']
+        post = self.post().replace('</resources>', marker + '\n</resources>')
+        text = post.replace(marker, contract.expected_config_elements(POLICY)['config_pixelComputerControlAgents'], 1)
+        for name in contract.CONFIG_MARKERS:
+            if name != 'config_pixelComputerControlAgents':
+                text = text.replace(contract.CONFIG_MARKERS[name], contract.expected_config_elements(POLICY)[name])
+        digest = hashlib.sha256(post.encode()).hexdigest()
+        args = (text.encode(), digest, POLICY, 'p', 'p')
+        self.assertTrue(contract.verify_integrated_config(*args))
+        self.assertIn('2 elements, expected exactly one',
+                      ' '.join(adapter.verify_config(args[0], digest, adapter.config_rules({'integrationRewrite': {'elements': RULES}}), *args[2:])))
+
+    def test_inputs_are_validated_even_when_the_text_matches_them(self):
+        def unchecked(policy, reference, locked):
+            text = self.post()
+            for rule in RULES:
+                if rule['kind'] == 'array':
+                    if rule['when'] and not policy.get(rule['when']):
+                        continue
+                    rows = [policy['agent']] if rule['rows'] == 'agent' else policy['targets']
+                    wanted = rule['open'] + ''.join(rule['item'].replace('{package}', r['packageName']).replace('{certificate}', c)
+                                                    for r in rows for c in r['certificates']) + rule['close']
+                elif rule['input'] == 'referenceDisplayAddress':
+                    if reference is None:
+                        continue
+                    wanted = rule['template'].replace('{value}', reference)
+                else:
+                    if not locked:
+                        continue
+                    wanted = rule['template'].replace('{value}', 'true')
+                text = text.replace(rule['marker'], wanted)
+            return text.encode()
+        post = hashlib.sha256(self.post().encode()).hexdigest()
+        rules = adapter.config_rules({'integrationRewrite': {'elements': RULES}})
+        self.assertFalse(adapter.verify_config(unchecked(POLICY, '7', True), post, rules, POLICY, 'p', 'p', '7', True))
+        for policy, reference in ((self.POLICIES[3], None), (self.POLICIES[4], None), (POLICY, '0'), (POLICY, str(2**63)),
+                                  (dict(POLICY, agent={'packageName': 'dev.x', 'certificates': ['A' * 63]}), None)):
+            with self.subTest(policy=policy, reference=reference):
+                args = (unchecked(policy, reference, False), post, policy, 'p', 'p', reference, False)
+                self.assertTrue(contract.verify_integrated_config(*args))
+                self.assertIn('policy inputs refused', ' '.join(adapter.verify_config(args[0], post, rules, *args[2:])))
+
+    def test_malformed_rules_are_invalid(self):
+        bad = [None, [], [dict(RULES[0], kind='list')], [RULES[0], RULES[0]], [dict(RULES[0], marker='<x/>')],
+               [dict(RULES[0], item='<item/>')], [dict(RULES[0], extra=1)], [dict(next(r for r in RULES if r['kind'] == 'string'), input='lockedControl')],
+               [dict(next(r for r in RULES if r['kind'] == 'bool'), input='referenceDisplayAddress')],
+               [{k: v for k, v in RULES[0].items() if k != 'close'}], [dict(RULES[0], name='a"b')]]
+        for rules in bad:
+            with self.subTest(rules=rules), self.assertRaises(adapter.Invalid):
+                adapter.config_rules({'integrationRewrite': {'elements': rules}})
+
+    def test_the_adapter_never_loads_os_products_checker(self):
+        source = (ROOT/'scripts/launcher3-compile.py').read_text()
+        code = source.split('\n"""\n', 1)[1]
+        self.assertNotIn('launcher3-compile-contract', code)
+        self.assertNotIn('importlib', code)
+        self.assertFalse([v for v in vars(adapter).values() if getattr(v, '__name__', '') == 'launcher3_compile_contract'])
 
 
 def pb_varint(value):
@@ -608,13 +753,8 @@ class Run(unittest.TestCase):
 
     def run_adapter(self, state='post', lock=None, code=0, stopped=None):
         lock = lock or (lambda path: contextlib.nullcontext())
-        saved = adapter.classify
-        adapter.classify = lambda tree, manifest, *a, **k: saved(tree, manifest, *a, contract=contract, **k)
-        try:
-            return adapter.run(self.binding, self.s.manifest, '41700000000', '1', lock=lock, copier=self.copier(state),
-                               compiler=self.compiler(code, stopped), policy_loader=lambda path: (POLICY, self.s.policy_sha))
-        finally:
-            adapter.classify = saved
+        return adapter.run(self.binding, self.s.manifest, '41700000000', '1', lock=lock, copier=self.copier(state),
+                           compiler=self.compiler(code, stopped), policy_loader=lambda path: (POLICY, self.s.policy_sha))
 
     def report(self):
         return json.loads((self.parent/'launcher3-compile-41700000000-1/receipts/report.json').read_text())
