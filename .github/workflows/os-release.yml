@@ -1382,14 +1382,16 @@ jobs:
   blazer-integrate:
     # BLAZER-INTEGRATE: the Rose integration of the isolated blazer-prep work tree (after git-meta), by the existing
     # owners' commands only, in order, each bounded, stopping at the first failure (scripts/blazer-integrate-wiring.py
-    # run): the reconcile seed from the one Frankel receipt that matches the copy (re-verifying the copy's expected
+    # run): the two SDK tools re-hashed against their expected sha256, a fresh collision-checked blazer build reserved
+    # under the shared lock (scripts/blazer-allocate.py; the work and reconcile directories derive from it), the reconcile seed from the one Frankel receipt that matches the copy (re-verifying the copy's expected
     # inventory), the already-signed candidate bundle, Flavors' admit and render, a local worktree of this checkout as
     # the candidate, then exactly the host-reconcile apply command render printed, under the nonblocking shared lock.
     # The tree changes only through host-reconcile's own owner-conflict checks; nothing is retried, reset or adopted.
     # Only integrate.json, the seed provenance, the admitted local-inputs.json, the rendered config and the newest
     # reconcile receipt are uploaded (7 days). No signing, compile, secret, OIDC token or publication; contents: read
-    # only. Time: six step ceilings (seed 600 s, assemble 300 s, admit 600 s, render 120 s, candidate 300 s, reconcile
-    # 3600 s), +30 s kill each, +300 s margin = outer 6000 s; job 111 minutes; ceilings, not measurements. Cleanup stops
+    # only. Time: eight step ceilings (tools 300 s, allocate 120 s, seed 600 s, assemble 300 s, admit 600 s, render 120 s,
+    # candidate 300 s, reconcile 3600 s), +30 s kill each, +300 s margin = outer 6480 s; job 119 minutes; ceilings, not
+    # measurements. Cleanup stops
     # the builder only if this run's controller started it. Runtime is not approved.
     needs: [guard, controller]
     if: inputs.mode == 'blazer-integrate'
@@ -1409,7 +1411,7 @@ jobs:
           [[ "$OUTER_SECONDS" =~ ^[1-9][0-9]{0,5}$ ]]
           python3 scripts/blazer-integrate-wiring.py check | grep -qx "outer_seconds=$OUTER_SECONDS"
           run_dir="$RUNNER_TEMP/blazer-integrate-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
-          timeout --kill-after=30s "${OUTER_SECONDS}s" python3 scripts/blazer-integrate-wiring.py run --run-dir "$run_dir"
+          timeout --kill-after=30s "${OUTER_SECONDS}s" python3 scripts/blazer-integrate-wiring.py run --run-dir "$run_dir" --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT"
       - name: Allowlisted reports
         if: always()
         run: python3 scripts/blazer-integrate-wiring.py report --run-dir "$RUNNER_TEMP/blazer-integrate-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" --upload-dir "$RUNNER_TEMP/blazer-integrate-upload-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
