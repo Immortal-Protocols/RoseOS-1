@@ -1,118 +1,120 @@
 # Mustang signing and private candidate delivery
 
-This continues [the unsigned Mustang source route](MUSTANG-SPRINT.md) under
-[Nathan’s reduced-check plan](https://app.notion.com/p/40d7c646c81b81198e60cb76ca2ea603).
-It implements the remaining signing, factory-package and private export source.
-It is not evidence of a successful Mustang build or installer.
+This implements [Nathan’s reduced-check plan](https://app.notion.com/p/40d7c646c81b81198e60cb76ca2ea603)
+for **Pixel 10 Pro XL / mustang** on the existing original builder. Source,
+bootstrap, signing, packaging, downloaded checksums and physical acceptance are
+separate stages; the evidence below does not claim an installer exists.
 
 ## Actual state
 
-Unsigned run [41711304208](https://github.com/Immortal-Protocols/RoseOS-1/actions/runs/41711304208)
-used `2d9934a9c9c01e0197f8e4623fdb6d72c6900ef3`. Its source job succeeded;
-the controller failed at `builder describe` (exit 1) before sending a VM start
-request. Preparation/compile were skipped. Cleanup succeeded without sending
-STOP because this operation never recorded start ownership. Current VM state
-remains unobserved. The underlying controller error was suppressed by the
-existing adapter; no access-denial cause is invented and no build is retried.
+The one approved bootstrap
+[41719073037](https://github.com/Immortal-Protocols/RoseOS-1/actions/runs/41719073037)
+used source `82a51373e1473df707731a78dc68786cf7245fed`, passed fresh tool proof,
+and reported `complete` with no reasons at 2026-11-03T21:10:21Z. Both Mustang-only
+containers committed numeric **version 1**. Its public receipt records
+`recoveryNeeded=false`, `workspaceRemoved=true` and no payload readback.
+Cleanup succeeded. Do not repeat this bootstrap.
 
-The configured `dev-infra@protocols-465723.iam.gserviceaccount.com` identity
-created the two distinct containers in `protocols-465723`:
+The public identity hashes are OTA certificate
+`93cc757e7f4e4e5c4ef7726fbeec9acc77b1f97d471c1cd0d62753cf94e471a8`
+and AVB public key
+`608b39aac976984e45ddbc39fc9ebc916f066656d8d4316395c9c408e06dbf2b`.
+The receipt is preserved in `os/signing-bootstrap/mustang-bootstrap-receipt.json`.
+Its private [artifact 13271233281](https://github.com/Immortal-Protocols/RoseOS-1/actions/runs/41719073037/artifacts/13271233281)
+is 2,193 bytes, SHA-256
+`c1fcd6007a41ed69f3b264476f1a952b2559ed2e15dfb8a7e27a2db9a8610549`,
+expiring 2026-11-10T21:10:21Z. It was downloaded through the GitHub connector;
+no secret payload was downloaded to this worker. The common tool-proof format
+retains its historical `fold-rango-v1` label; this proof was generated in the
+Mustang run, not consumed from a Rango artifact.
 
-- `PIXEL_OS_SIGNING_KEYS_MUSTANG_V1`, 2026-11-03 20:21:41 UTC.
-- `PIXEL_OS_SIGNING_PASSPHRASE_MUSTANG_V1`, 2026-11-03 20:21:42 UTC.
+Corrected unsigned run
+[41719106957](https://github.com/Immortal-Protocols/RoseOS-1/actions/runs/41719106957)
+uses the same source and has entered the established shared route. Its compile
+result is pending. Delivery signing, packaging and export have not started.
 
-Both creation responses and metadata readbacks confirmed the resources. The
-same actor’s `versions.list` was **PERMISSION_DENIED**, so present occupancy
-is unconfirmed. No payload was generated, added or read, and no IAM changed.
-Audit-log inspection was separately denied and was not retried.
-The nonsecret evidence is in `os/signing-bootstrap/mustang-setup-evidence.json`.
+## Approved resources and access
 
-## Implemented source
+The configured `dev-infra@protocols-465723.iam.gserviceaccount.com` created the
+two distinct containers in `protocols-465723` at 20:21:41Z and 20:21:42Z:
 
-`mustang-sign-package.py sign` consumes a completed Mustang compile receipt and
-a real `pro-mustang-v1` bootstrap receipt, bound by hosted GitHub run metadata.
-It preserves the compile/integration source SHA, actual build number/time,
-produced output hashes and the shared lock. The bootstrap pins **numeric
-versions in the two Mustang-only containers**; no other-device key or artifact
-is selected. The existing host-sign engine performs signing, with a
-Mustang-only structural key-directory callback in place of the sprint-removed
-intended-public-identity comparison. All default callers retain that comparison.
-The existing RAM key handling, cleanup, key-path wrappers and access controls
-remain. A bounded child runs the signing command; SIGTERM unwinds private-key
-cleanup. Signed target-files/OTA output sizes and hashes are recorded, without
-claiming independent cryptographic verification.
+- `PIXEL_OS_SIGNING_KEYS_MUSTANG_V1`
+- `PIXEL_OS_SIGNING_PASSPHRASE_MUSTANG_V1`
 
-`... package` runs without signer credentials. It reuses the existing factory-only
-script derivation, otatools extraction guards and bounded generator. The public
-AVB bytes produced by signing are supplied to the generator without the omitted
-public-identity comparison. The expected `mustang-install-<build>.zip` is
-identified by the basic optimized-factory format, then sized and hashed.
-No partition/firmware-coverage, app/policy, installer-reference, device-requirement,
-AVB metadata, dynamic-content comparison or separate archive-signature check is
-performed. On failure, partial nonsecret packaging work remains named in its
-receipt. On success, temporary packaging work is removed.
+Creation responses and describes confirmed both resources. Creator versions-list,
+audit-log and provider inspection denials were respected. The worker's first
+IAM write failed without applying a binding because it lacks `setIamPolicy`.
+Nathan applied the explicitly approved four bindings as an existing IAM admin;
+the worker confirmed their public policy metadata. Each container grants the
+existing `projects/protocols-465723/roles/roseosModelsBootstrapV1` role
+(`secrets.get`, `versions.list`, `versions.add`) and
+`roles/secretmanager.secretAccessor` to
+`roseos-build-signer@protocols-465723.iam.gserviceaccount.com`, expiring
+**2026-11-04T00:50:06Z**. No project-wide grant or additional identity was added.
+See `mustang-setup-evidence.json` and `mustang-access-binding.json` under
+`os/signing-bootstrap/`.
 
-The proposed `os-release.yml` Mustang modes separate bootstrap, signer, credential-free packager,
-private upload, hosted download/checksum verification and ownership-aware STOP.
-It uses the same non-cancelling shared FIFO and original builder. The hosted
-provenance guard refuses while the Mustang profile is unbound. The installer,
-notes, receipt and checksums are private Actions artifacts retained seven days.
-The final receipt records the actual private URL, API-reported expiry, sizes and
-verified delivered-download checksums. No public release or phone action exists.
+The separately approved bootstrap checked both containers empty as the signer,
+generated/imported once under its write-once journal and emitted its public
+receipt. Signing must pin its two numeric versions. No further generation,
+import retry or access-window extension is authorized or needed. The operator
+transfer alone did not authorize these grants or credentials.
 
-The authentication-only diagnostic
+## Established workflow and source
+
+PR #492 merged the explicitly approved route correction as
+`216184cba518c3d2f5e86aedfdddfa3b1fa27834`. The existing `os-release.yml`, original
+builder, controller identity, non-cancelling FIFO, shared lock and ownership-aware
+STOP are reused. No WIF/provider/service-account binding was changed. The three
+Mustang modes hardcode Mustang and never enter the Frankel public publisher:
+
+- `mustang-build`: fresh preparation, allocation, integration and unsigned compile.
+- `mustang-bootstrap`: one journaled `pro-mustang-v1` bootstrap; already complete.
+- `mustang-delivery`: bind successful main producer runs using
+  `mustang_compile_run` and `mustang_bootstrap_run`, then sign, package, export
+  privately and verify the delivered download's checksums.
+
+`mustang-sign-package.py sign` consumes completed compile and real bootstrap
+receipts bound by hosted GitHub metadata. It retains integration/compile source,
+actual device/build/time, produced hashes, numeric Mustang versions and lock.
+The host-sign engine uses scoped structural key discovery in place of the omitted
+intended-public-identity comparison. Existing callers retain their defaults.
+PR #496 merged as `5d3ca2f21320610ba952507b1317ee5f6f13df62` nests the decrypted
+working directory inside managed RAM cleanup for Mustang, as detailed in
+[signer cleanup](MUSTANG-SIGNER-CLEANUP.md). Signing is bounded; SIGTERM unwinds
+private cleanup. Signed target-files/OTA sizes and hashes do not establish
+independent cryptographic verification.
+
+Packaging runs without signer credentials and reuses the existing factory-only
+script derivation, extraction protections and bounded generator. Public AVB
+bytes from signing are supplied without the omitted identity comparison. The
+expected Mustang installer is identified by basic optimized-factory format,
+sized and hashed. Partial nonsecret packaging work is preserved on failure;
+temporary packaging work is removed on success. Installer, notes, receipt and
+checksums are private Actions artifacts retained seven days. Hosted download
+verification records actual URL, API expiry, sizes and checksum results.
+
+## Earlier failures and corrections
+
+Standalone run [41711304208](https://github.com/Immortal-Protocols/RoseOS-1/actions/runs/41711304208)
+failed controller describe before any VM start. Authentication-only diagnostic
 [41713153197](https://github.com/Immortal-Protocols/RoseOS-1/actions/runs/41713153197)
-confirmed **attributeConditionDenied** for the new workflow context, with zero
-compute requests or IAM changes. The configured admin could not describe that
-provider condition, so its exact allowlist is unknown and unchanged. The two
-new workflow entry files are removed by the proposed established-route patch;
-Git history and run evidence remain intact.
+reported `attributeConditionDenied` for the new workflow context with zero compute
+requests. That context was not retried; Nathan approved PR #492 and the existing
+route. The two new workflow entry files were removed; Git history remains.
 
-The reviewable correction wires `mustang-build`, `mustang-bootstrap` and
-`mustang-delivery` into the existing `os-release.yml` controller, shared FIFO and
-cleanup route. Producer provenance then requires that same workflow and a
-Mustang-specific run title. It changes no WIF/provider/service-account binding.
-The normal default Frankel/public-release modes remain unchanged; the three
-Mustang modes pin their own device and never enter the Frankel publisher.
-The normal `device` selector remains Frankel for shared infrastructure admission;
-actual Mustang inputs, compilation and signing are explicitly Mustang-bound.
-Nathan explicitly approved that correction and retry. PR492 merged as
-`216184cba518c3d2f5e86aedfdddfa3b1fa27834`; established-route run
-[41714573501](https://github.com/Immortal-Protocols/RoseOS-1/actions/runs/41714573501)
-passed its controller, and the preparation/build step started at 20:40:43 UTC.
+Established-route build [41714573501](https://github.com/Immortal-Protocols/RoseOS-1/actions/runs/41714573501)
+passed its controller, then failed at route admission before integration/compile.
+Bootstrap workflow [41717550485](https://github.com/Immortal-Protocols/RoseOS-1/actions/runs/41717550485)
+failed preflight before proof, signer login or key generation because its job
+lacked the existing provider/signer variables. PR #495 fixed both configuration
+errors as `82a51373e1473df707731a78dc68786cf7245fed`. Both cleanup jobs succeeded;
+[admission evidence](MUSTANG-ADMISSION-FIX.md) records exact errors and receipts.
+No failed attempt was adopted or resumed.
 
-## Concrete remaining authorization and bindings
-
-The existing role
-`projects/protocols-465723/roles/roseosModelsBootstrapV1` was read successfully.
-It contains exactly `secretmanager.secrets.get`, `secretmanager.versions.list`
-and `secretmanager.versions.add`; it is not a newly created role.
-
-A proposed minimal setup is **four conditional bindings**, each expiring at
-most four hours after action time: that existing bootstrap role and
-`roles/secretmanager.secretAccessor` on **each of the two Mustang containers
-only**, for `roseos-build-signer@protocols-465723.iam.gserviceaccount.com`.
-`mustang-signing-setup.py binding-plan --expires-at <UTC>` renders the exact
-commands but performs no IAM mutation. Nathan has explicitly approved those four-hour grants and one journaled
-Mustang key bootstrap. The controller route is resolved. The worker’s first grant failed without an
-applied binding because it lacks policy-write permission. Nathan then applied
-the four approved bindings through an existing IAM admin; readback confirmed
-all four with expiry **2026-11-04T00:50:06Z**. The profile is resource-bound for
-the one approved bootstrap. The exact metadata is in
-`os/signing-bootstrap/mustang-access-binding.json`; no key material has yet been
-generated or imported by this worker. The operator transfer alone did not authorize them. No creator payload/list access
-or project-wide grant is proposed.
-
-Once controller access is resolved and the setup is approved, the profile can
-be resource-bound from actual evidence. The established bootstrap must prove
-its tools in the same run, recheck both containers empty **as the signer**,
-generate/import once under its write-once journal, emit only its public receipt,
-and stop on any denial, occupied secret or uncertain/partial import. No key is
-regenerated and no add retried. The same fresh common tool proof is reused as a
-mechanism; no Rango receipt, key or artifact is consumed.
-
-Focused, regression, required CI and full-suite checks remain omitted as
-instructed. Source review and syntax/configuration parsing are distinct from
-runtime acceptance. Any eventual delivery must retain this label:
+Focused, existing-device regression, required CI/full-suite tests and all other
+checks listed in `os/build-only/mustang-sprint.json` remain omitted as instructed.
+No Rango/Blazer image, key or artifact is consumed. No public publication or phone
+action is performed. Any delivery must retain the label:
 **build-and-package candidate; omitted verification remains undone;
 physical-device acceptance unproven**.
