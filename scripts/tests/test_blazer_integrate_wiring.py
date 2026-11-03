@@ -374,7 +374,7 @@ def jobs():
 
 class Workflow(unittest.TestCase):
     def test_mode_check_job_and_ownership(self):
-        self.assertIn('blazer-compile, blazer-integrate]\n', WORKFLOW)
+        self.assertIn('blazer-compile, blazer-integrate, rango-factory-sign]\n', WORKFLOW)
         self.assertIn("      - name: Blazer integrate check\n        id: blazer-integrate\n        if: inputs.mode == "
                       "'blazer-integrate'\n        run: python3 scripts/blazer-integrate-wiring.py check >> \"$GITHUB_OUTPUT\"\n",
                       jobs()['guard'])
@@ -396,7 +396,7 @@ class Workflow(unittest.TestCase):
         own = "inputs.mode == 'blazer-compile' || inputs.mode == 'blazer-integrate'"
         self.assertEqual(jobs()['controller'].count(own), 2)
         self.assertEqual(jobs()['cleanup'].count(own), 1)
-        self.assertIn('blazer-compile, blazer-integrate, app-builder', re.search(r'(?m)^    needs: (.+)$', jobs()['cleanup'])[1])
+        self.assertIn('blazer-compile, blazer-integrate, rango-factory-sign, app-builder', re.search(r'(?m)^    needs: (.+)$', jobs()['cleanup'])[1])
 
 
 if __name__ == '__main__':

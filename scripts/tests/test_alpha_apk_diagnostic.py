@@ -302,7 +302,7 @@ class WorkflowTest(unittest.TestCase):
         return WORKFLOW[WORKFLOW.index('  alpha-apk-diagnostic:'):WORKFLOW.index('  publisher:')]
 
     def test_the_mode_is_explicit_read_only_and_cleaned_up(self):
-        self.assertIn('emulator-alpha-apk-diagnostic, emulator-alpha-verify-retained, app-reuse, emulator-alpha-export, rango-factory-observe, launcher3-compile, blazer-compile, blazer-integrate]', WORKFLOW)
+        self.assertIn('emulator-alpha-apk-diagnostic, emulator-alpha-verify-retained, app-reuse, emulator-alpha-export, rango-factory-observe, launcher3-compile, blazer-compile, blazer-integrate, rango-factory-sign]', WORKFLOW)
         job = self.job()
         self.assertIn("if: inputs.mode == 'emulator-alpha-apk-diagnostic'", job)
         self.assertIn('runs-on: [self-hosted, roseos-frankel-builder]', job)
