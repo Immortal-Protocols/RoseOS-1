@@ -1524,6 +1524,30 @@ class FactoryProfileValidation(unittest.TestCase):
                 self.assertEqual('repeat just before the import' in profile['access']['policy'],
                                  profile.get('recheckEmptyBeforeImport') is True, name)
 
+    def test_a_live_check_profile_must_recheck_and_a_bound_profile_lists_nothing_missing(self):
+        profiles = factory_ready_profiles()
+        profiles['profiles']['fold-rango-factory-v1']['access'].update(addVersionExpires=None, accessorExpires=None, basis=None)
+        self.assertEqual(sb.readiness('fold-rango-factory-v1', profiles, NOW), [])
+        # Without recorded expiries there is no margin, so the pre-import recheck is required with liveCheck.
+        for name in ('fold-rango-factory-v1', 'fold-rango-v1'):
+            source = profiles if name == 'fold-rango-factory-v1' else copy.deepcopy(READY)
+            with self.subTest(name):
+                bad = copy.deepcopy(source)
+                bad['profiles'][name]['access'].update(liveCheck=True, addVersionExpires=None, accessorExpires=None)
+                bad['profiles'][name].pop('recheckEmptyBeforeImport', None)
+                self.assertIn(('profile-invalid', 'access.liveCheck needs recheckEmptyBeforeImport true'),
+                              sb.readiness(name, bad, NOW))
+                bad['profiles'][name]['recheckEmptyBeforeImport'] = True
+                self.assertNotIn('profile-invalid', [c for c, _ in sb.readiness(name, bad, NOW)])
+        self.assertTrue(all(p.get('recheckEmptyBeforeImport') is True for p in PROFILES['profiles'].values()
+                            if (p.get('access') or {}).get('liveCheck') is True))
+        # A resource-bound profile that still lists a missing prerequisite is refused before anything else.
+        pending = copy.deepcopy(profiles)
+        pending['profiles']['fold-rango-factory-v1']['missing'] = ['one approved bootstrap run']
+        self.assertEqual([c for c, _ in sb.readiness('fold-rango-factory-v1', pending, NOW)], ['profile-unbound'])
+        self.assertTrue(sb.guard(dict(GUARD_ENV, BOOTSTRAP_PROFILE='fold-rango-factory-v1'), pending, NOW))
+        self.assertFalse([n for n, p in PROFILES['profiles'].items() if p.get('status') == 'resource-bound' and p.get('missing')])
+
     def test_after_the_first_live_check_a_denied_add_or_recheck_uses_up_the_run_and_is_never_retried(self):
         profiles = factory_ready_profiles()
         profiles['profiles']['fold-rango-factory-v1']['access'].update(addVersionExpires=None, accessorExpires=None, basis=None)
@@ -1751,10 +1775,13 @@ class BlazerProfiles(unittest.TestCase):
             value['tools']['ssh-keygen'].pop('installed')
             return value
         self.assertEqual(shape(pro), shape(rango))
-        # The committed Blazer profile lacks only its approvals: marking it resource-bound makes it ready as committed
-        # (measured tool, live access, no recorded expiry needed).
+        # The committed Blazer profile lacks only its approvals: status alone never admits it while its missing list
+        # names them; marked resource-bound with nothing missing it is ready as committed (measured tool, live access,
+        # no recorded expiry needed).
         ready = copy.deepcopy(PROFILES)
         ready['profiles']['pro-blazer-factory-v1']['status'] = 'resource-bound'
+        self.assertEqual([c for c, _ in sb.readiness('pro-blazer-factory-v1', ready, NOW)], ['profile-unbound'])
+        ready['profiles']['pro-blazer-factory-v1']['missing'] = []
         self.assertEqual(sb.readiness('pro-blazer-factory-v1', ready, NOW), [])
         recorded = copy.deepcopy(ready)  # a recorded expiry inside the ceilings, with its basis, is still accepted
         recorded['profiles']['pro-blazer-factory-v1']['access'].update(

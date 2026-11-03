@@ -1575,12 +1575,14 @@ scripts/signing-bootstrap.py plan --profile fold-rango-v1` prints the exact oper
 **Factory-archive profiles and live access (2026-11-03).** `fold-rango-factory-v1` (Rango) and `pro-blazer-factory-v1`
 (Blazer) each bootstrap one passphrase-encrypted Ed25519 factory-archive key with the builder's measured `ssh-keygen`
 (bound from `os/signing-bootstrap/ssh-keygen-evidence.json`). The Rango profile is resource-bound; the Blazer profile
-stays unbound until its approvals, containers, access and run exist. These two profiles and `pro-blazer-v1` opt in with
-`access.liveCheck`: no expiry is recorded, and the run's first credentialed `secrets describe` and `versions list` calls
-on both secrets, after the signer login and before any key exists, check the access. A failure there (including a
-missing or occupied secret) stops the run with nothing used up. `versions.add` cannot be tested without adding, so the
+stays unbound until its approvals, containers and `secretAccessor` exist and its one bootstrap run is approved. These two
+profiles and `pro-blazer-v1` opt in with `access.liveCheck`: no expiry is recorded, and the run's first credentialed
+`secrets describe` and `versions list` calls on both secrets, after the signer login and before any key exists, check
+the access. A failure there (including a missing or occupied secret) stops the run with nothing used up. A live-check
+profile must also recheck both secrets just before the import (`recheckEmptyBeforeImport`; readiness refuses it
+otherwise), and a resource-bound profile lists nothing missing. `versions.add` cannot be tested without adding, so the
 bootstrap grant is one binding per secret holding `secretmanager.secrets.get`, `secretmanager.versions.list` and
-`secretmanager.versions.add` with one expiry, and the run is dispatched well inside that window. A failure after that
-first check uses up the run (`failed-before-commit` or `recovery-needed`): for the two factory profiles at the
-pre-import recheck or the add, for `pro-blazer-v1` (no pre-import recheck) at the add. Each profile's `access.policy`
-states the full rule; `plan --profile P` prints the operations and the grant.
+`secretmanager.versions.add` with one expiry of at most 4 h, made at action time, and the run is dispatched well inside
+that window. A failed recheck or a denied add after generation uses up the run (`failed-before-commit` or
+`recovery-needed`). Each profile's `access.policy` states the full rule; `plan --profile P` prints the operations and
+the grant.
