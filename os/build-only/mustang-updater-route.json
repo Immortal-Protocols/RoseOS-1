@@ -11,6 +11,5 @@
     "metadataLine": "{build} {buildDateUtc} mustang stable"
   },
   "owner": "Mustang sprint",
-  "approvalRef": "https://app.notion.com/p/40d7c646c81b81198e60cb76ca2ea603",
-  "basis": "Device-qualified discovery configuration only; no feed or public release is created. Candidate delivery remains private."
+  "approvalRef": "https://app.notion.com/p/40d7c646c81b81198e60cb76ca2ea603"
 }
