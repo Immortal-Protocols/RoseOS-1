@@ -357,8 +357,10 @@ jobs:
         id: blazer-prep
         if: inputs.mode == 'blazer-prep'
         run: python3 scripts/blazer-prep-wiring.py check --stage "$BLAZER_PREP_STAGE" >> "$GITHUB_OUTPUT"
-      # Fails closed before the controller starts unless the profile is resource-bound with an approved inventory, tool
-      # identities and unexpired access, and every other option is at its non-publishing default.
+      # Fails closed before the controller starts unless the profile is resource-bound with an approved inventory and
+      # tool identities, any recorded access is unexpired, and every other option is at its non-publishing default. A
+      # profile whose access is checked live (signing-bootstrap.py readiness) is stopped instead by the run's first
+      # credentialed metadata calls, after the signer login and before any key exists.
       - name: Signing-bootstrap guard
         if: inputs.mode == 'signing-bootstrap'
         env:
@@ -1546,7 +1548,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
-      - name: Profile, tool and access preflight (before any login)
+      - name: Profile, tool and recorded-access preflight (before any login)
         run: python3 scripts/signing-bootstrap.py preflight --profile "$BOOTSTRAP_PROFILE" --recipe-sha "$GITHUB_SHA"
       # OCT30-INFRA-S016: profiles with a localProof (Fold) prove their four tools on this host under the shared lock with
       # the admitted helper, before any login; the bounded proof is bound to this run. Fixed summary codes only.

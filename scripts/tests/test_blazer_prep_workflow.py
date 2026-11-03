@@ -123,11 +123,10 @@ class Guard(unittest.TestCase):
         self.assertIn('blazer_prep_stage', inputs)
         self.assertLessEqual(len(inputs), 25)  # the GitHub workflow_dispatch input limit
         guard = jobs()['guard']
-        self.assertEqual(step(guard, 'Blazer preparation check'), "        id: blazer-prep\n        if: inputs.mode == "
+        # Exactly this step; the comment lines after it belong to the next step (Signing's guard), never pinned here.
+        self.assertEqual(code(step(guard, 'Blazer preparation check')), "        id: blazer-prep\n        if: inputs.mode == "
             "'blazer-prep'\n        run: python3 scripts/blazer-prep-wiring.py check --stage \"$BLAZER_PREP_STAGE\" >> "
-            "\"$GITHUB_OUTPUT\"\n      # Fails closed before the controller starts unless the profile is resource-bound "
-            "with an approved inventory, tool\n      # identities and unexpired access, and every other option is at its "
-            "non-publishing default.\n")
+            "\"$GITHUB_OUTPUT\"")
         self.assertIn('    outputs:\n      blazer_prep_outer_seconds: ${{ steps.blazer-prep.outputs.outer_seconds }}\n'
                       '      blazer_prep_job_minutes: ${{ steps.blazer-prep.outputs.job_minutes }}\n', guard)
         self.assertEqual(re.search(r'(?m)^    needs: (.+)$', jobs()['controller'])[1], 'guard')
