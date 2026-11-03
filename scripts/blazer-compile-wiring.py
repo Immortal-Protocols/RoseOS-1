@@ -14,13 +14,17 @@ blazer target-files on the original builder, in the isolated blazer-prep work tr
       blazer-integrate-<build>/inputs/local-inputs.json and a NNNN-blazer-<build>.json receipt in blazer-reconcile-<build>,
       both regular files with no link in the path. None or more than one refuses (exit 1) before the helper. Then exec
       of exactly `blazer-build-only.py run --stage compile --host H --lock L --source-root S --jobs J
-      --integration-dir blazer-reconcile-<build> --inputs-receipt R --receipt-dir NEW`. Integrate and compile are
-      therefore dispatched on the same commit: the helper's compile_problems also requires HEAD to be the admitted recipe.
-      The same reservation gives the build identity: --build-number <build> --build-datetime <reservedAt as epoch>, which
-      Flavors' helper exports as BUILD_NUMBER and BUILD_DATETIME, so the target-files carry the allocated build
-      (ro.build.version.incremental) that signing, packaging and the Updater check. The helper does every host check (isolation,
-      the integration binding, lock, space, its own timeout) and writes preflight.json, started.json and completed.json
-      (the collected target-files, otatools and boot image paths and hashes) write-once.
+      --integration-dir blazer-reconcile-<build> --inputs-receipt R --build-number <build>
+      --build-datetime <reservedAt as epoch seconds> --receipt-dir NEW`. Integrate and compile are therefore dispatched
+      on the same commit: the helper's compile_problems also requires HEAD to be the admitted recipe. The build identity
+      is the selected reservation's own: its build (a string) and its reservedAt (UTC %Y-%m-%dT%H:%M:%SZ, parsed as the
+      helper parses it; an unreadable or pre-1970 time refuses here), which Flavors' helper exports as BUILD_NUMBER and
+      BUILD_DATETIME, so the target-files carry the allocated build (ro.build.version.incremental) that signing,
+      packaging and the Updater check. The selection here is structural only; the identity admission is the helper's
+      (that R names this build, that the time is in the build's UTC day and not in the future, and that it equals the
+      reservation it re-reads), as are every host check (isolation, the integration binding, lock, space, its own
+      timeout). The helper writes preflight.json, started.json and completed.json (the collected target-files, otatools
+      and boot image paths and hashes) write-once.
 
 Compile neither signs nor packages. Exit status: 0 ok, 1 refused, 2 invalid, 4 unbound.
 """
@@ -43,6 +47,7 @@ INTEGRATION_FROM = 'scripts/blazer-allocate.py reservation whose source is this 
 HOME = Path('/home/pixelbuild')
 OUTER_MARGIN_SECONDS, KILL_AFTER_SECONDS, JOB_MARGIN_MINUTES = 300, 30, 10
 RECEIPTS = ('preflight.json', 'started.json', 'completed.json')
+BUILD_DATETIME = re.compile(r'[1-9][0-9]{0,11}')  # the helper's own --build-datetime shape (blazer-build-only.py)
 
 
 class Invalid(Exception):
@@ -125,7 +130,10 @@ def build_datetime(reserved_at):
         reserved = datetime.datetime.strptime(reserved_at, '%Y-%m-%dT%H:%M:%SZ').replace(tzinfo=datetime.timezone.utc)
     except (TypeError, ValueError):
         raise Refused(f'the reservation time {str(reserved_at)[:32]!r} is not a UTC timestamp') from None
-    return str(int(reserved.timestamp()))
+    value = str(int(reserved.timestamp()))
+    if not BUILD_DATETIME.fullmatch(value):  # at or before 1970-01-01T00:00:00Z: refused here, not as invalid input there
+        raise Refused(f'the reservation time {reserved_at} is not after the epoch')
+    return value
 
 
 def integration(recipe, source, home=HOME, root=ROOT):
