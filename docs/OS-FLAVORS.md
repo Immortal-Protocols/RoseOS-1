@@ -197,7 +197,7 @@ and writes `preflight.json`, `started.json` and `completed.json` there, write-on
 |---|---|---|---|
 | `source` | `--source-root ISO` | Copies the production source root (only read) into a new `ISO` in-process, byte by byte into new inodes, with the reviewed emulator-alpha code and exclusions, plus adevtool's deps (`adevtool_revision` and `host/linux-x86`). Details below. | 150 GiB, 7200 s |
 | `download` | `--download-dir D` | Streams the pinned `https://dl.google.com/dl/android/aosp/blazer-cp3a.261005.005-factory-cd7d12c2.zip` to `D/<file>.part`, then renames it to `D/<file>` only if sha256 = `cd7d12c2…18e3`. The byte count is checked as it streams. | 8 GiB (unverified for Pro), 3600 s |
-| `vendor` | `--download-dir D --source-root ISO --node N` | `N` must be named `node`, keep its preflight file identity, and be what the child `PATH` (`<receipt-dir>/node-path:/usr/bin:/bin`, a private directory holding only a `node` link to `N`) resolves; nothing else beside `N` (e.g. the rest of `/usr/local/bin`) is visible. Runs `N --version` (≥ 24), then `vendor/adevtool/bin/run generate-all -d blazer` in `ISO` with `ADEVTOOL_IMG_DOWNLOAD_DIR=D`. | 128 GiB, 10800 s |
+| `vendor` | `--download-dir D --source-root ISO --node N` | `N` must be named `node`, keep its preflight file identity, and be what the child `PATH` (`<receipt-dir>/node-path:/usr/bin:/bin`, a private directory holding only a `node` link to `N`) resolves; nothing else beside `N` (e.g. the rest of `/usr/local/bin`) is visible. Needs `vendor/adevtool/.git`. Runs `N --version` (≥ 24) and `git -C vendor/adevtool rev-parse HEAD` (must print exactly the pin), then `vendor/adevtool/bin/run generate-all -d blazer` in `ISO` with `ADEVTOOL_IMG_DOWNLOAD_DIR=D` and `ADEVTOOL_SKIP_DEP_BUILD=1` (no dependency rebuild); inherited `GIT_*` is stripped. | 128 GiB, 10800 s |
 | `lunch` | `--source-root ISO` | Runs `lunch blazer-cur-user` (`PATH=/usr/bin:/bin`), then checks `TARGET_PRODUCT=blazer`, `TARGET_RELEASE=cur`, `TARGET_BUILD_VARIANT=user`, `TARGET_DEVICE=blazer`, with `OUT_DIR=out-blazer-lunch`. No make. | 8 GiB, 1800 s |
 
 - **Time**: the stage timeouts total 23400 s (6.5 h), including the source copy.
@@ -241,8 +241,21 @@ and writes `preflight.json`, `started.json` and `completed.json` there, write-on
       `out_adevtool_deps`) unless `ADEVTOOL_SKIP_DEP_BUILD=1`, then fails writing the marker;
     - `generate-all` then calls `writeVersionCheckFile` (`src/blobs/build.ts`), which needs the same
       `rev-parse` and fails; the `.mk` it writes repeats that check at lunch.
-    - The vendor stage therefore cannot yet run on the snapshot. The correction is proposed
-      separately; nothing here fabricates git metadata.
+    - **Vendor now fails closed instead (vendor stage only, never the copy):**
+      - it always runs `generate-all` with `ADEVTOOL_SKIP_DEP_BUILD=1`, so adevtool never rebuilds
+        its deps inside preparation;
+      - the comparison that switch skips is made before generation instead: the marker is exactly
+        the pin plus one newline, and `git -C vendor/adevtool rev-parse HEAD` must print exactly the
+        same. It is supervised with a 60 s bound, inherited `GIT_*` is stripped and
+        `GIT_CEILING_DIRECTORIES` is the source root, so git never answers from a repository outside
+        the tree;
+      - preflight refuses a tree without `vendor/adevtool/.git`, and a git error or a different HEAD
+        refuses before anything is generated. The receipt records `adevtoolHead` and `skipDepBuild`;
+      - lunch gets the same `GIT_*` stripping and ceiling, because the generated version check calls
+        git there.
+    - This makes no snapshot usable (vendor refuses it up front) and relaxes no version check. Genuine
+      `vendor/adevtool` git metadata in a snapshot is a separate, unimplemented proposal; nothing here
+      fabricates or redirects git metadata.
   - Before writing, the full selection is walked (no entry cap). It refuses on any link escape,
     unsupported file type or unproven cache boundary, when the dense, block-rounded projection exceeds
     the bound, or when available − projection < reserve.
