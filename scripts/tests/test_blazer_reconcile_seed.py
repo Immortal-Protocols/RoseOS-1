@@ -137,6 +137,99 @@ class Seed(unittest.TestCase):
         with self.assertRaisesRegex(seed.Refused, 'not its file label'):
             self.run_seed()
 
+    def prior(self, build, afters=None, seeded_only=False, label=None):
+        """A prior blazer integration directory: the seeded Frankel copy, plus (unless seeded_only) its own receipt."""
+        directory = self.actions/f'blazer-reconcile-{build}'
+        directory.mkdir(parents=True)
+        (directory/'0001-2026103101.json').write_text((self.frankel/'0040-2026103101.json').read_text())
+        if not seeded_only:
+            record = {'receiptType': 'reconcile', 'label': label or f'blazer-{build}', 'changed': [UPDATER],
+                      'entries': {p: {'before': None, 'after': a, 'action': 'installed'} for p, a in (afters or {}).items()}}
+            (directory/f'0002-blazer-{build}.json').write_text(json.dumps(record))
+        return directory
+
+    def reintegrated(self):
+        """The copy after a completed blazer integration: its Updater file now holds blazer bytes."""
+        self.actions = self.tmp/'rose-actions'
+        (self.src/UPDATER).write_bytes(b'blazer route\n')
+        return {UPDATER: sha(b'blazer route\n'), ROLE: sha(b'role patched\n')}
+
+    def test_a_reintegration_seeds_from_the_newest_completed_blazer_integration(self):
+        afters = self.reintegrated()
+        with self.assertRaisesRegex(seed.Refused, 'no Frankel reconcile receipt matches'):
+            self.run_seed()  # without --prior-integrations the reconciled copy matches no Frankel receipt
+        self.prior('2026110301', seeded_only=True)  # a stopped integration: only its seeded copy, skipped
+        self.prior('2026110303', afters)
+        self.out = self.tmp/'blazer-reconcile-new'
+        record = self.run_seed(prior_integrations=self.actions)
+        self.assertEqual(sorted(p.name for p in self.out.iterdir()), ['0001-blazer-2026110303.json', 'seed-provenance.json'])
+        self.assertEqual((record['source']['kind'], record['source']['build'], record['source']['name']),
+                         ('blazer', '2026110303', '0002-blazer-2026110303.json'))
+        self.assertEqual((self.out/'0001-blazer-2026110303.json').read_bytes(),
+                         (self.actions/'blazer-reconcile-2026110303/0002-blazer-2026110303.json').read_bytes())
+        self.assertIn('blazer reconcile receipt', record['claim'])
+        previous, count = reconcile.latest_receipt(self.out)
+        self.assertEqual((count, {p: e['after'] for p, e in previous['entries'].items()}), (1, afters))
+        changes = {UPDATER: (b'candidate route\n', None)}
+        actions, conflicts = reconcile.plan(self.src, ['packages/apps/Updater', 'packages/modules/Permission'], set(),
+                                            changes, previous)
+        self.assertEqual(conflicts, [])  # the blazer bytes are task-owned through the seeded receipt
+        self.assertIn(UPDATER, actions)
+
+    def test_the_newest_matching_prior_wins_and_misses_are_recorded(self):
+        afters = self.reintegrated()
+        self.prior('2026110303', afters)
+        self.prior('2026110304', {UPDATER: sha(b'something else\n'), ROLE: sha(b'role patched\n')})
+        self.out = self.tmp/'blazer-reconcile-new'
+        record = self.run_seed(prior_integrations=self.actions)
+        self.assertEqual(record['source']['build'], '2026110303')
+        self.assertEqual([m['kind'] for m in record['newerReceiptsNotMatching']], ['blazer'])
+        self.setUp()
+        afters = self.reintegrated()
+        self.prior('2026110303', afters)
+        self.prior('2026110304', afters)
+        self.out = self.tmp/'blazer-reconcile-new'
+        self.assertEqual(self.run_seed(prior_integrations=self.actions)['source']['build'], '2026110304')
+
+    def test_with_no_matching_prior_the_frankel_receipt_still_seeds(self):
+        self.actions = self.tmp/'rose-actions'
+        self.prior('2026110303', {UPDATER: sha(b'blazer route\n'), ROLE: sha(b'role patched\n')})
+        self.out = self.tmp/'blazer-reconcile-new'
+        record = self.run_seed(prior_integrations=self.actions)  # the copy is still Frankel's: the prior does not match
+        self.assertEqual((record['source']['kind'], record['source']['name']), ('frankel', '0040-2026103101.json'))
+
+    def test_prior_links_labels_and_names_refuse_or_are_ignored(self):
+        afters = self.reintegrated()
+        target = self.prior('2026110303', afters)
+        moved = self.tmp/'moved-integration'
+        target.rename(moved)
+        (self.actions/'blazer-reconcile-2026110303').symlink_to(moved)
+        self.out = self.tmp/'blazer-reconcile-new'
+        with self.assertRaisesRegex(seed.Refused, 'not a plain directory'):
+            self.run_seed(prior_integrations=self.actions)
+        self.setUp()
+        afters = self.reintegrated()
+        directory = self.prior('2026110303', afters)
+        receipt = directory/'0002-blazer-2026110303.json'
+        receipt.rename(self.tmp/'receipt.json')
+        receipt.symlink_to(self.tmp/'receipt.json')
+        self.out = self.tmp/'blazer-reconcile-new'
+        with self.assertRaisesRegex(seed.Refused, 'not a regular file'):
+            self.run_seed(prior_integrations=self.actions)
+        self.setUp()
+        afters = self.reintegrated()
+        self.prior('2026110303', afters, label='blazer-2026110399')
+        self.out = self.tmp/'blazer-reconcile-new'
+        with self.assertRaisesRegex(seed.Refused, 'names label'):
+            self.run_seed(prior_integrations=self.actions)
+        self.setUp()
+        afters = self.reintegrated()
+        (self.actions/'blazer-reconcile-x').mkdir(parents=True)  # not a ten-digit build: never a candidate
+        (self.actions/'blazer-reconcile-x/0002-blazer-x.json').write_text('{}')
+        self.prior('2026110303', afters)
+        self.out = self.tmp/'blazer-reconcile-new'
+        self.assertEqual(self.run_seed(prior_integrations=self.actions)['source']['build'], '2026110303')
+
     def test_the_source_tree_and_frankel_receipts_are_never_written(self):
         before = {p: p.read_bytes() for p in [*self.src.rglob('*'), *self.frankel.rglob('*')] if p.is_file()}
         self.run_seed()
