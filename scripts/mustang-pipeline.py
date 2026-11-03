@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Mustang source/preparation/integration/unsigned-compile route on the original builder.
 
-No signing or credential path is selected here: current source has no admitted
-Mustang signing profile. Reuses the shared lock, allocator, production-copy
-mechanism, host-reconcile and compiler without consuming Blazer/Rango artifacts.
+No signing or credential path is selected by this unsigned route. Reuses the
+shared lock, allocator, production-copy mechanism, host-reconcile and compiler
+without consuming Blazer/Rango artifacts.
 A failed stage is never retried, resumed, reset or adopted automatically.
 """
 import argparse
@@ -40,6 +40,9 @@ def head():
 
 
 def config():
+    # The hosted describe guard checks the same static route before starting the
+    # builder. Keep this in the runtime path too, before creating a fresh attempt.
+    integration.check_route(ROOT/'os/build-only/mustang-updater-route.json')
     return json.loads((ROOT/'os/build-only/mustang-host.json').read_text())
 
 
@@ -79,7 +82,7 @@ def run(run_id, attempt):
         'source':source, 'runId':run_id, 'runAttempt':attempt, 'plan':PLAN,
         'root':str(run_root), 'label':recipe['sprint']['candidateLabel'], 'stages':{},
         'omittedChecks':omissions(), 'signed':False, 'published':False, 'phoneValidated':False,
-        'signing':{'status':'blocked', 'reason':cfg['signingBlocker']}}
+        'signing':{'status':'separate-bootstrap-and-delivery-required', 'reason':cfg['signingBlocker']}}
     env = {k:v for k,v in os.environ.items() if k not in SCRUBBED and not k.startswith('GIT_')}
     current = 'source'
 
@@ -145,7 +148,7 @@ def run(run_id, attempt):
             'receiptDir':str(reconcile), 'compiledAppAndPolicyVerification':'omitted'}
         stage('compile', allocation, inputs)
         report['unsignedCompileComplete'] = True
-        report['nextStage'] = 'blocked: Mustang-specific signing setup/route is not bound'
+        report['nextStage'] = 'separate mustang-delivery run after successful Mustang bootstrap; this unsigned run performs no signing'
         return 0
     except BaseException as error:
         report['failedStage'] = current
@@ -185,7 +188,7 @@ def main():
     if a.action=='describe':
         print(json.dumps({'device':'mustang', 'source':head(), 'host':config(), 'omittedChecks':omissions(),
             'stages':['source','git-meta','download','vendor','lunch','allocate','seed','integrate','compile'],
-            'signing':'unbound; operator transfer does not create a profile or authorize new access'},indent=2))
+            'signing':config()['signingBlocker']},indent=2))
         return 0
     if not a.run_id or not a.run_attempt:
         p.error('run/report require --run-id and --run-attempt')
