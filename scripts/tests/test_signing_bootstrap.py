@@ -918,15 +918,29 @@ def fake_key(cipher=b'aes256-ctr', kdf=b'bcrypt', rounds=100, keys=1, key_type=b
 class KeygenMock:
     """Stands in for ssh-keygen: records argv/env/cwd/seconds, checks the pinned helper is in place, writes fixtures."""
 
-    def __init__(self, key=None, pub=None, category='ok', extra=None):
+    def __init__(self, key=None, pub=None, category='ok', extra=None, derive='same', sign='ok', verify='ok', negative='nonzero_exit'):
         self.calls, self.key, self.pub, self.category, self.extra = [], key, pub, category, extra
+        self.derive, self.sign, self.verify, self.negative, self.public = derive, sign, verify, negative, None
 
-    def __call__(self, argv, env, cwd, seconds, stdin_path=None):
-        helper = Path(env['SSH_ASKPASS'])
-        self.calls.append({'argv': argv, 'env': dict(env), 'cwd': Path(cwd), 'seconds': seconds,
-                           'helper': helper.read_bytes(), 'helperMode': oct(helper.stat().st_mode & 0o777)})
+    def __call__(self, argv, env, cwd, seconds, stdin_path=None, keep_output=False):
+        helper = Path(env['SSH_ASKPASS']) if 'SSH_ASKPASS' in env else None
+        self.calls.append({'argv': argv, 'env': dict(env), 'cwd': Path(cwd), 'seconds': seconds, 'stdin': stdin_path,
+                           'keepOutput': keep_output, 'helper': helper.read_bytes() if helper else None,
+                           'helperMode': oct(helper.stat().st_mode & 0o777) if helper else None})
+        done = lambda category, **extra: dict({'exit': 0 if category == 'ok' else 1 if category == 'nonzero_exit' else None,
+                                              'category': category, 'outputBytes': 0, 'outputSha256': None}, **extra)
+        if argv[1] == '-y':  # self-check decrypt: prints the public key
+            public = self.public if self.derive == 'same' else fake_key()[1]
+            return done('ok', output=(public + '\n').encode()) if self.derive != 'fail' else done('nonzero_exit')
+        if argv[1:3] == ['-Y', 'sign']:
+            if self.sign == 'ok':
+                Path(argv[-1] + '.sig').write_text('-----BEGIN SSH SIGNATURE-----\nc3lu\n-----END SSH SIGNATURE-----\n')
+            return done(self.sign)
+        if argv[1:3] == ['-Y', 'verify']:
+            return done(self.verify if argv[argv.index('-n') + 1] == 'factory images' else self.negative)
         if self.category == 'ok':
             key, pub = (self.key, self.pub) if self.key else fake_key()
+            self.public = pub
             out = Path(argv[argv.index('-f') + 1])
             fd = os.open(out, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
             with os.fdopen(fd, 'wb') as f:
@@ -1133,7 +1147,8 @@ def factory_ready_profiles():
     profile = profiles['profiles']['fold-rango-factory-v1']
     profile.update(status='resource-bound')
     profile['tools']['ssh-keygen']['installed'] = {'path': TOOL, 'sha256': hashlib.sha256(b'ssh-keygen').hexdigest()}
-    profile['access'].update(addVersionExpires='2027-01-01T00:00:00Z', accessorExpires='2027-01-01T00:00:00Z')
+    profile['access'].update(addVersionExpires='2026-10-30T00:30:00Z', accessorExpires='2026-11-27T21:30:00Z',
+                             basis='synthetic test readback')
     return profiles
 
 
@@ -1174,6 +1189,202 @@ class FactoryBootstrapProfile(unittest.TestCase):
         self.assertRegex(identity['fingerprint'], r'^SHA256:[A-Za-z0-9+/]{43}$')
         self.assertNotIn('SYNTHETIC-token', json.dumps(receipt))
         self.assertEqual(runner.calls[0]['argv'][0], TOOL)  # the measured path, not a PATH lookup
+
+
+class FactorySelfCheck(unittest.TestCase):
+    """The pre-import decrypt/sign/verify/negative self-check, through the mocked ssh-keygen only."""
+
+    def generated(self, **kw):
+        ws, runner = owner_dir(self), KeygenMock(**kw)
+        identity = fs.generate_key(ws, TOOL, runner, token='SYNTHETIC-selfcheck-token')
+        return ws, runner, identity
+
+    def test_self_check_decrypts_signs_verifies_and_requires_a_negative(self):
+        ws, runner, identity = self.generated()
+        result = fs.self_check(ws, TOOL, identity, 'roseos-factory-images-rango-v1', runner)
+        self.assertEqual(result, {'decrypt': True, 'signVerify': True, 'negativeRefused': True})
+        derive, sign, verify, negative = runner.calls[1:]
+        self.assertEqual((derive['argv'][1:3], derive['keepOutput']), (['-y', '-f'], True))
+        self.assertEqual(derive['env']['SSH_ASKPASS_REQUIRE'], 'force')  # decrypt only through the helper
+        self.assertEqual(sign['argv'][1:5], ['-Y', 'sign', '-n', 'factory images'])
+        self.assertEqual(verify['argv'][verify['argv'].index('-n') + 1], 'factory images')
+        self.assertEqual(negative['argv'][negative['argv'].index('-n') + 1], fs.SELF_CHECK_NEGATIVE_NAMESPACE)
+        self.assertNotIn('SSH_ASKPASS', verify['env'])
+        self.assertEqual(sorted(os.listdir(ws)), ['id_ed25519', 'passphrase'])  # self-check material removed
+        self.assertNotIn('SYNTHETIC-selfcheck-token', json.dumps(runner.calls, default=str))
+
+    def test_each_failed_step_refuses_and_cleans_up(self):
+        for kw, pattern in (({'derive': 'other'}, 'does not decrypt to its public key'),
+                            ({'derive': 'fail'}, 'does not decrypt to its public key'),
+                            ({'sign': 'timeout'}, 'sign_failed'), ({'verify': 'nonzero_exit'}, 'verify_failed'),
+                            ({'negative': 'ok'}, 'another namespace did not fail'),
+                            ({'negative': 'timeout'}, 'another namespace did not fail')):
+            with self.subTest(kw):
+                ws, runner, identity = self.generated(**kw)
+                with self.assertRaisesRegex(fs.Refused, 'selfcheck_failed: .*' + pattern):
+                    fs.self_check(ws, TOOL, identity, 'roseos-factory-images-rango-v1', runner)
+                self.assertEqual(sorted(os.listdir(ws)), ['id_ed25519', 'passphrase'])
+
+    def test_bounded_runner_returns_output_only_when_asked(self):
+        def popen(argv, **kw):
+            return FakeProc(b'ssh-ed25519 AAAA\n')
+        with mock.patch.object(fs.os, 'killpg', lambda pid, sig: None):
+            kept = fs.run_bounded(['/opt/synthetic/tool'], {}, '/tmp', 5, popen=popen, keep_output=True)
+            hidden = fs.run_bounded(['/opt/synthetic/tool'], {}, '/tmp', 5, popen=popen)
+        self.assertEqual(kept['output'], b'ssh-ed25519 AAAA\n')
+        self.assertNotIn('output', hidden)
+
+
+class FactoryProfileValidation(unittest.TestCase):
+    def test_null_expiries_are_never_enforced_or_assumed(self):
+        profiles = factory_ready_profiles()
+        profiles['profiles']['fold-rango-factory-v1']['access'].update(addVersionExpires=None, accessorExpires=None)
+        codes_ = [c for c, _ in sb.readiness('fold-rango-factory-v1', profiles, NOW)]
+        self.assertEqual(codes_, ['access-unknown', 'access-unknown'])
+        checked = PROFILES['profiles']['fold-rango-factory-v1']['access']
+        self.assertEqual((checked['addVersionExpires'], checked['accessorExpires'], checked['basis']), (None, None, None))
+
+    def test_recorded_expiries_must_fit_the_approved_ceilings_with_a_basis(self):
+        for change, code in (({'addVersionExpires': '2026-10-30T02:00:00Z'}, 'access-window'),   # 4 h 30 m
+                             ({'accessorExpires': '2026-12-01T00:00:00Z'}, 'access-window'),     # > 30 d
+                             ({'addVersionExpires': '2026-11-28T00:00:00Z'}, 'access-window'),   # after accessor
+                             ({'basis': None}, 'access-unknown'),
+                             ({'addVersionExpires': '2026-10-29T21:45:00Z'}, 'access-expired')):  # inside the margin
+            with self.subTest(change):
+                profiles = factory_ready_profiles()
+                profiles['profiles']['fold-rango-factory-v1']['access'].update(change)
+                self.assertIn(code, [c for c, _ in sb.readiness('fold-rango-factory-v1', profiles, NOW)])
+
+    def test_profile_shape_is_closed(self):
+        for name, mutate in (('principal', lambda p: p.update(principal='Root User')),
+                             ('inventory', lambda p: p['keyInventory'].update(requiredByConsumer=['id_ed25519', 'x'])),
+                             ('extra tool', lambda p: p['tools'].update(openssl={'kind': 'installed', 'installed': {}})),
+                             ('recipe', lambda p: p['generation'].update(recipe=[])),
+                             ('no recheck', lambda p: p.update(recheckEmptyBeforeImport=False))):
+            with self.subTest(name):
+                profiles = factory_ready_profiles()
+                mutate(profiles['profiles']['fold-rango-factory-v1'])
+                self.assertIn('profile-invalid', [c for c, _ in sb.readiness('fold-rango-factory-v1', profiles, NOW)])
+        tool = PROFILES['profiles']['fold-rango-factory-v1']['tools']['ssh-keygen']['installed']
+        self.assertEqual(tool, {'path': None, 'sha256': None})  # never invented
+
+
+class FactoryImportRecovery(unittest.TestCase):
+    """The two-secret import is not atomic: partial or uncertain outcomes stop and are never retried or regenerated."""
+
+    def run_factory(self, fixture, adds, runner=None):
+        runner = runner or KeygenMock()
+
+        class Executor(MockExecutor):
+            def tool_sha256(self, path):
+                self.calls.append(('tool', path))
+                return hashlib.sha256(b'ssh-keygen').hexdigest()
+
+            def generate(self, workspace, profile):
+                self.calls.append(('generate',))
+                return sb.generate_openssh(workspace, profile, runner=runner, token='SYNTHETIC-token')
+        executor = Executor(adds=adds)
+        receipt = sb.run('fold-rango-factory-v1', factory_ready_profiles(), executor, fixture.state, fixture.lock, SHA, NOW,
+                         workspace=lambda: fixture.workspace(), frankel=FRANKEL)[0]
+        return receipt, executor, runner
+
+    def test_uncertain_or_partial_import_is_recovery_needed_and_never_repeated(self):
+        for adds, committed in (([sb.Uncertain('timeout')], {'keys': None, 'passphrase': None}),
+                                (['1', sb.AddFailed('denied')], {'keys': '1', 'passphrase': None}),
+                                (['1', sb.Uncertain('lost response')], {'keys': '1', 'passphrase': None})):
+            with self.subTest(adds):
+                fixture = Fixture(self)
+                receipt, executor, _ = self.run_factory(fixture, adds)
+                self.assertTrue(receipt['recoveryNeeded'], receipt['reasons'])
+                self.assertIn('recovery-needed', codes(receipt))
+                self.assertEqual({r: e['committedVersion'] for r, e in receipt['secrets'].items()}, committed)
+                self.assertEqual(fixture.journal('fold-rango-factory-v1')['status'], 'recovery-needed')
+                again, executor2, runner2 = self.run_factory(fixture, ['1', '1'])
+                self.assertEqual(codes(again), ['previous-attempt'])
+                self.assertTrue(again['recoveryNeeded'])
+                self.assertEqual(executor2.calls, [])  # no lock, metadata, generation or add
+                self.assertEqual(runner2.calls, [])    # and no ssh-keygen: never regenerated
+
+    def test_keys_add_refused_before_commit_is_failed_not_retried(self):
+        fixture = Fixture(self)
+        receipt, executor, _ = self.run_factory(fixture, [sb.AddFailed('denied')])
+        self.assertEqual((receipt['status'], receipt['recoveryNeeded']), ('failed', False))
+        self.assertEqual([c for c in executor.calls if c[0] == 'add'], [('add', 'PIXEL_OS_FACTORY_SIGNING_KEY_RANGO_V1')])
+        self.assertEqual(codes(self.run_factory(fixture, ['1', '1'])[0]), ['previous-attempt'])
+
+    def test_self_check_failure_adds_nothing(self):
+        fixture = Fixture(self)
+        receipt, executor, _ = self.run_factory(fixture, ['1', '1'], KeygenMock(negative='ok'))
+        self.assertIn('selfcheck-failed', codes(receipt))
+        self.assertEqual([c for c in executor.calls if c[0] == 'add'], [])
+        self.assertEqual(codes(self.run_factory(fixture, ['1', '1'])[0]), ['previous-attempt'])
+
+    def test_an_identity_without_a_complete_self_check_is_never_imported(self):
+        for reported in (None, {'decrypt': True, 'signVerify': True, 'negativeRefused': False}):
+            with self.subTest(reported):
+                fixture, runner = Fixture(self), KeygenMock()
+
+                class Executor(MockExecutor):
+                    def tool_sha256(self, path):
+                        return hashlib.sha256(b'ssh-keygen').hexdigest()
+
+                    def generate(self, workspace, profile):
+                        identity = dict(fs.generate_key(workspace, TOOL, runner), principal=profile['principal'])
+                        return identity if reported is None else dict(identity, selfCheck=reported)
+                executor = Executor()
+                receipt = sb.run('fold-rango-factory-v1', factory_ready_profiles(), executor, fixture.state, fixture.lock,
+                                 SHA, NOW, workspace=lambda: fixture.workspace(), frankel=FRANKEL)[0]
+                self.assertIn('selfcheck-failed', codes(receipt))
+                self.assertEqual([c for c in executor.calls if c[0] == 'add'], [])
+
+    def test_complete_run_records_the_self_check_before_import(self):
+        fixture = Fixture(self)
+        receipt, executor, runner = self.run_factory(fixture, ['1', '1'])
+        self.assertEqual(receipt['status'], 'complete', receipt['reasons'])
+        self.assertEqual(receipt['publicIdentity']['selfCheck'], {'decrypt': True, 'signVerify': True, 'negativeRefused': True})
+        steps = [c['argv'][1] if c['argv'][1] != '-Y' else c['argv'][2] for c in runner.calls]
+        self.assertEqual(steps, ['-q', '-y', 'sign', 'verify', 'verify'])
+        self.assertNotIn('SYNTHETIC-token', json.dumps(sb.public_receipt(receipt, [b'SYNTHETIC-token'])))
+
+
+class BlazerProfiles(unittest.TestCase):
+    """BLAZER-SIGN: the two Blazer bootstrap profiles exist but are unbound; nothing can run until approvals land."""
+
+    def test_both_profiles_are_unbound_and_refuse_before_anything(self):
+        for name in ('pro-blazer-v1', 'pro-blazer-factory-v1'):
+            with self.subTest(name):
+                self.assertEqual(sb.readiness(name, PROFILES, NOW)[0][0], 'profile-unbound')
+                profile = PROFILES['profiles'][name]
+                self.assertEqual((profile['status'], profile['device']), ('unbound', 'blazer'))
+                self.assertTrue(profile['missing'])
+                self.assertNotIn(name, re.search(r'options: \[none[^\]]*\]', WORKFLOW)[0])  # not a workflow option
+
+    def test_blazer_secrets_are_new_and_distinct(self):
+        profiles = PROFILES['profiles']
+        blazer = {v for n in ('pro-blazer-v1', 'pro-blazer-factory-v1') for v in profiles[n]['secrets'].values()}
+        others = {v for n, p in profiles.items() if not n.startswith('pro-blazer') for v in p['secrets'].values()}
+        self.assertEqual(len(blazer), 4)
+        self.assertFalse(blazer & others)
+        self.assertTrue(all('BLAZER_V1' in v for v in blazer))
+
+    def test_os_profile_reuses_the_reviewed_fold_recipe_and_tools(self):
+        fold, pro = PROFILES['profiles']['fold-rango-v1'], PROFILES['profiles']['pro-blazer-v1']
+        for key in ('generation', 'tools', 'keyInventory', 'archive', 'localProof', 'signer', 'project', 'avbAlgorithm'):
+            self.assertEqual(pro.get(key), fold.get(key), key)
+        self.assertEqual((pro['access']['addVersionExpires'], pro['access']['accessorExpires']), (None, None))
+
+    def test_factory_profile_shape_matches_rango_with_its_own_principal(self):
+        rango, pro = PROFILES['profiles']['fold-rango-factory-v1'], PROFILES['profiles']['pro-blazer-factory-v1']
+        self.assertEqual(pro['principal'], 'roseos-factory-images-blazer-v1')
+        self.assertEqual({k: v for k, v in pro.items() if k not in ('device', 'principal', 'purpose', 'secrets', 'missing')},
+                         {k: v for k, v in rango.items() if k not in ('device', 'principal', 'purpose', 'secrets', 'missing')})
+        ready = copy.deepcopy(PROFILES)
+        profile = ready['profiles']['pro-blazer-factory-v1']
+        profile['status'] = 'resource-bound'
+        profile['tools']['ssh-keygen']['installed'] = {'path': '/opt/synthetic/ssh-keygen', 'sha256': 'a' * 64}
+        profile['access'].update(addVersionExpires='2026-10-30T00:30:00Z', accessorExpires='2026-11-27T21:30:00Z',
+                                 basis='synthetic test readback')
+        self.assertEqual(sb.readiness('pro-blazer-factory-v1', ready, NOW), [])
 
 
 if __name__ == '__main__':
