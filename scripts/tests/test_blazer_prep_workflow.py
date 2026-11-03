@@ -86,7 +86,7 @@ class Guard(unittest.TestCase):
             capture_output=True, cwd=ROOT).returncode
 
     def test_whole_guard_admits_exactly_the_bare_mode_with_one_preparation_stage(self):
-        for stage in ('source', 'download', 'vendor', 'lunch', 'inspect', 'git-inspect', 'git-inspect-set', 'git-inspect-objects', 'git-meta', 'binding-observe'):
+        for stage in ('source', 'download', 'vendor', 'lunch', 'inspect', 'git-inspect', 'git-inspect-set', 'git-inspect-objects', 'git-meta', 'binding-observe', 'ssh-keygen-observe'):
             with self.subTest(stage=stage):
                 self.assertEqual(self.run_guard(BLAZER_PREP_STAGE=stage), 0)
         for change in ({'BLAZER_PREP_STAGE': 'none'}, {'BLAZER_PREP_STAGE': None}, {'BLAZER_PREP_STAGE': 'compile'},
@@ -105,7 +105,7 @@ class Guard(unittest.TestCase):
         observe = dict(MODE='rango-factory-observe')
         self.assertEqual(self.run_guard(**observe, BLAZER_PREP_STAGE='none'), 0)
         self.assertEqual(self.run_guard(**observe, BLAZER_PREP_STAGE=None), 0)  # older callers never set it
-        for stage in ('source', 'download', 'vendor', 'lunch', 'inspect', 'git-inspect', 'git-inspect-set', 'git-inspect-objects', 'git-meta', 'binding-observe'):
+        for stage in ('source', 'download', 'vendor', 'lunch', 'inspect', 'git-inspect', 'git-inspect-set', 'git-inspect-objects', 'git-meta', 'binding-observe', 'ssh-keygen-observe'):
             self.assertNotEqual(self.run_guard(**observe, BLAZER_PREP_STAGE=stage), 0)
         line = '[[ "$MODE" == blazer-prep || "${BLAZER_PREP_STAGE:-none}" == none ]]'
         self.assertIn('          ' + line + '\n', jobs()['guard'])
@@ -117,7 +117,7 @@ class Guard(unittest.TestCase):
         self.assertIn('models-sign, rango-retained, blazer-prep, emulator-alpha-successor,', WORKFLOW)
         self.assertIn('      blazer_prep_stage:\n        description: blazer-prep only - the one preparation stage this run '
                       'executes (none for every other mode)\n        type: choice\n        options: [none, source, download, vendor, '
-                      'lunch, inspect, git-inspect, git-inspect-set, git-inspect-objects, git-meta, binding-observe]\n        default: none\n', WORKFLOW)
+                      'lunch, inspect, git-inspect, git-inspect-set, git-inspect-objects, git-meta, binding-observe, ssh-keygen-observe]\n        default: none\n', WORKFLOW)
         self.assertIn("  BLAZER_PREP_STAGE: ${{ inputs.blazer_prep_stage || 'none' }}\n", WORKFLOW)
         inputs = re.findall(r'(?m)^      (\w+):$', WORKFLOW.split('    inputs:\n', 1)[1].split('\npermissions:', 1)[0])
         self.assertIn('blazer_prep_stage', inputs)
@@ -532,7 +532,7 @@ class GitInspect(unittest.TestCase):
         self.assertEqual(result.returncode, 2)  # run needs an absolute --receipt-dir
 
     def test_binding_observe_runs_exactly_the_release_observer(self):
-        self.assertEqual(wiring.resolve('binding-observe'), (['--host', 'immortal-os-builder'], 420, 17))
+        self.assertEqual(wiring.resolve('binding-observe'), (['--host', 'immortal-os-builder'], 420, 19))
         receipts = self.tmp/'observe'
         result = wire('run', '--stage', 'binding-observe', '--receipt-dir', str(receipts))
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -543,6 +543,59 @@ class GitInspect(unittest.TestCase):
         self.assertEqual(report['schema'], 'roseos.blazer-binding-observation.v1')
         self.assertEqual(wire('run', '--stage', 'binding-observe', '--receipt-dir', str(receipts)).returncode, 2)
         self.assertIn('binding-observation.json', step(jobs()['blazer-prep'], 'Allowlisted JSON receipts only'))
+
+    def test_ssh_keygen_observe_runs_exactly_signings_observer_with_its_bounds(self):
+        # Signing's own 300 s run, 2 s kill of its last query, a 120 s margin; job adds the outer kill, the verdict and 10 min.
+        self.assertEqual(wiring.resolve('ssh-keygen-observe'), (['--host', 'immortal-os-builder'], 422, 19))
+        receipts = self.tmp/'ssh'
+        result = wire('run', '--stage', 'ssh-keygen-observe', '--receipt-dir', str(receipts))
+        self.assertEqual(result.returncode, 0, result.stderr)  # a report was printed: success is the verdict's, below
+        helper = json.loads(result.stdout.splitlines()[0])['helper']
+        self.assertEqual((Path(helper[0]).relative_to(ROOT).as_posix(), helper[1:]),
+                         ('scripts/ssh-keygen-observe.py', ['observe', '--host', 'immortal-os-builder']))
+        report = json.loads((receipts/'ssh-keygen-observation.json').read_text())
+        self.assertEqual((report['schema'], report['complete']), ('roseos.ssh-keygen-observation.v1', False))  # no lock here
+        result = wire('verdict', '--stage', 'ssh-keygen-observe', '--receipt-dir', str(receipts))
+        self.assertEqual(result.returncode, 4, result.stderr)  # Signing's bind: not bindable
+        self.assertEqual(json.loads(result.stdout)['verdict'], 'NOT_BINDABLE')
+        self.assertIs(json.loads((receipts/'ssh-keygen-bind.json').read_text())['bindable'], False)
+        self.assertEqual(wire('verdict', '--stage', 'ssh-keygen-observe', '--receipt-dir', str(receipts)).returncode, 2)  # write-once
+        allowlist = step(jobs()['blazer-prep'], 'Allowlisted JSON receipts only')
+        self.assertIn('ssh-keygen-observation.json ssh-keygen-bind.json;', allowlist)
+
+    def test_the_verdict_not_the_observer_exit_decides_an_observation_stage(self):
+        def receipt(stage, data, name=None):
+            directory = Path(tempfile.mkdtemp())
+            (directory/(name or wiring.RECEIPTS[stage][0])).write_bytes(data)
+            return directory
+        good = {'schema': 'roseos.blazer-binding-observation.v1', 'complete': True, 'problems': []}
+        self.assertEqual(wiring.verdict('binding-observe', receipt('binding-observe', json.dumps(good).encode())), 0)
+        for bad in ({**good, 'complete': False}, {**good, 'problems': ['lock held by another job']}, {**good, 'schema': 'x'}, [1]):
+            with self.subTest(bad=bad):
+                self.assertEqual(wiring.verdict('binding-observe', receipt('binding-observe', json.dumps(bad).encode())), 1)
+        for data in (b'not json', b' ' * (wiring.OBSERVATION_BYTES + 1)):
+            with self.assertRaises(wiring.Invalid):
+                wiring.verdict('binding-observe', receipt('binding-observe', data))
+        linked = receipt('binding-observe', json.dumps(good).encode(), 'real.json')
+        (linked/'binding-observation.json').symlink_to(linked/'real.json')
+        with self.assertRaises(wiring.Invalid):
+            wiring.verdict('binding-observe', linked)
+        with self.assertRaises(wiring.Invalid):
+            wiring.verdict('binding-observe', Path(tempfile.mkdtemp()))  # no receipt is never a pass
+        calls = []
+        for code, expected in ((0, 0), (4, 4), (2, 2), (1, 2), (-9, 2)):
+            directory = receipt('ssh-keygen-observe', b'{}')
+
+            def run(argv, **kwargs):
+                calls.append(argv)
+                return subprocess.CompletedProcess(argv, code)
+            self.assertEqual(wiring.verdict('ssh-keygen-observe', directory, run=run), expected, code)
+            self.assertTrue((directory/'ssh-keygen-bind.json').is_file())
+        self.assertEqual(Path(calls[0][1]).relative_to(ROOT).as_posix(), 'scripts/ssh-keygen-observe.py')
+        self.assertEqual(calls[0][2:4], ['bind', '--observation'])
+        for stage in ('source', 'vendor', 'git-meta', 'inspect'):
+            self.assertEqual(wiring.verdict(stage, '/nonexistent'), 0)
+        self.assertEqual(wire('verdict', '--stage', 'binding-observe', '--receipt-dir', 'relative').returncode, 2)
 
     def test_existing_routes_are_unchanged(self):
         self.assertEqual(wiring.resolve('inspect', run_id='5', attempt='1')[1:], (960, 20))
@@ -598,7 +651,9 @@ class Job(unittest.TestCase):
         self.assertEqual(code_, 0)
         self.assertEqual(calls, ['python3 scripts/blazer-prep-wiring.py check --stage vendor',
             'timeout --kill-after=30s 11100s python3 scripts/blazer-prep-wiring.py run --stage vendor --receipt-dir '
-            '/runner/tmp/blazer-prep-1-1/run --run-id 41400000000 --attempt 1'])
+            '/runner/tmp/blazer-prep-1-1/run --run-id 41400000000 --attempt 1',
+            'timeout --kill-after=5s 60s python3 scripts/blazer-prep-wiring.py verdict --stage vendor --receipt-dir '
+            '/runner/tmp/blazer-prep-1-1/run'])
         for outer, check in (('1080', 'outer_seconds=11100\njob_minutes=196'), ('', 'outer_seconds=11100'),
                              ('11100s', 'outer_seconds=11100'), ('0', 'outer_seconds=0')):
             code_, calls = self.stage(outer, check)
