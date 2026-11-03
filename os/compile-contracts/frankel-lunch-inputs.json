@@ -8,7 +8,7 @@
   "release": "cur",
   "variant": "user"
  },
- "provenance": "every value is an expected value derived from the pinned public sources below; none is a host fact. An observer or adapter compares current bytes with them and never copies them into any receipt, bundle report or binding",
+ "provenance": "every value is an expected value derived from the pinned public sources below, except gitRequirement.genuineSource, which is marked historical context. None is a host fact. An observer or adapter compares current bytes with them and never copies them into any receipt, bundle report or binding",
  "sources": [
   {
    "path": "vendor/adevtool",
@@ -81,6 +81,38 @@
    "kind": "full"
   },
   {
+   "fixture": "vendor/adevtool/src/build/make.ts",
+   "project": "vendor/adevtool",
+   "path": "src/build/make.ts",
+   "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c",
+   "gitBlob": "07dc40ea2a3cf7ab84ba09d50726473078e389f6",
+   "kind": "full"
+  },
+  {
+   "fixture": "vendor/adevtool/src/commands/generate-all.ts",
+   "project": "vendor/adevtool",
+   "path": "src/commands/generate-all.ts",
+   "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c",
+   "gitBlob": "4609d74c8537091688745dffe99f74f69f274518",
+   "kind": "full"
+  },
+  {
+   "fixture": "vendor/adevtool/src/commands/collect-state.ts",
+   "project": "vendor/adevtool",
+   "path": "src/commands/collect-state.ts",
+   "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c",
+   "gitBlob": "ed301e6a412b9731544b1865774428baf44e58d8",
+   "kind": "full"
+  },
+  {
+   "fixture": "vendor/adevtool/vendor-skels/google_devices/frankel/frankel.mk.gz",
+   "project": "vendor/adevtool",
+   "path": "vendor-skels/google_devices/frankel/frankel.mk",
+   "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c",
+   "gitBlob": "24caa2897a2dd4bfdf2e844b185f996d210816af",
+   "kind": "gzip"
+  },
+  {
    "fixture": "vendor/adevtool/vendor-skels/google_devices/frankel/AndroidProducts.mk",
    "project": "vendor/adevtool",
    "path": "vendor-skels/google_devices/frankel/AndroidProducts.mk",
@@ -111,6 +143,14 @@
    "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c",
    "gitBlob": "663f38a01ef26b90862480445df0df4b007c2ed0",
    "kind": "full"
+  },
+  {
+   "fixture": "vendor/adevtool/vendor-specs/google_devices/frankel.yml.gz",
+   "project": "vendor/adevtool",
+   "path": "vendor-specs/google_devices/frankel.yml",
+   "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c",
+   "gitBlob": "42e61f9c365bc8a832c68a8bb6380141f791a37d",
+   "kind": "gzip"
   },
   {
    "fixture": "vendor/adevtool/config/mk/google_devices/device/frankel/device.mk",
@@ -161,70 +201,72 @@
    "kind": "full"
   },
   {
-   "fixture": "vendor/adevtool/vendor-skels/google_devices/frankel/frankel.mk.excerpt.json",
-   "project": "vendor/adevtool",
-   "path": "vendor-skels/google_devices/frankel/frankel.mk",
-   "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c",
-   "gitBlob": "24caa2897a2dd4bfdf2e844b185f996d210816af",
-   "kind": "excerpt"
-  },
-  {
-   "fixture": "vendor/adevtool/vendor-specs/google_devices/frankel.yml.excerpt.json",
-   "project": "vendor/adevtool",
-   "path": "vendor-specs/google_devices/frankel.yml",
-   "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c",
-   "gitBlob": "42e61f9c365bc8a832c68a8bb6380141f791a37d",
-   "kind": "excerpt"
-  },
-  {
-   "fixture": "vendor/adevtool/src/build/make.ts.excerpt.json",
-   "project": "vendor/adevtool",
-   "path": "src/build/make.ts",
-   "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c",
-   "gitBlob": "07dc40ea2a3cf7ab84ba09d50726473078e389f6",
-   "kind": "excerpt"
-  },
-  {
-   "fixture": "vendor/adevtool/src/commands/generate-all.ts.excerpt.json",
-   "project": "vendor/adevtool",
-   "path": "src/commands/generate-all.ts",
-   "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c",
-   "gitBlob": "4609d74c8537091688745dffe99f74f69f274518",
-   "kind": "excerpt"
-  },
-  {
-   "fixture": "build/make/envsetup.sh.excerpt.json",
+   "fixture": "build/make/envsetup.sh",
    "project": "build/make",
    "path": "envsetup.sh",
    "revision": "b0f697df8cc9519408ca0a404e918cd51bde0735",
    "gitBlob": "27f15f8da9f8ddcc1af70b03fc3bd48de10a0c13",
-   "kind": "excerpt"
+   "kind": "full"
   },
   {
-   "fixture": "build/make/core/version_util.mk.excerpt.json",
+   "fixture": "build/make/core/version_util.mk",
    "project": "build/make",
    "path": "core/version_util.mk",
    "revision": "b0f697df8cc9519408ca0a404e918cd51bde0735",
    "gitBlob": "ea80c8c9c2aa4965e9fcb294f8db117d717b0a95",
-   "kind": "excerpt"
+   "kind": "full"
   },
   {
-   "fixture": "build/make/core/build_id.mk.excerpt.json",
+   "fixture": "build/make/core/build_id.mk",
    "project": "build/make",
    "path": "core/build_id.mk",
    "revision": "b0f697df8cc9519408ca0a404e918cd51bde0735",
    "gitBlob": "ffc8991ece4f08f934d8ab647df0e98f405f4ecb",
-   "kind": "excerpt"
+   "kind": "full"
   },
   {
-   "fixture": "build/make/core/product_config.mk.excerpt.json",
+   "fixture": "build/make/core/product_config.mk",
    "project": "build/make",
    "path": "core/product_config.mk",
    "revision": "b0f697df8cc9519408ca0a404e918cd51bde0735",
    "gitBlob": "2bcc764b55a5a1d207a4b077d83f15e3c1130beb",
-   "kind": "excerpt"
+   "kind": "full"
   }
  ],
+ "environment": {
+  "unset": [
+   "GIT_*",
+   "BUILD_ID_frankel",
+   "PLATFORM_SECURITY_PATCH_frankel",
+   "TARGET_KERNEL_DIR",
+   "USE_STOCK_KERNEL"
+  ],
+  "setByLunchOnly": "BUILD_ID_frankel comes only from vendor/google_devices/frankel/cmds-for-envsetup.sh during lunch",
+  "why": "git reads GIT_* and stops at GIT_CEILING_DIRECTORIES (the copy root); BUILD_ID_frankel inherited from the caller hides a missing cmds-for-envsetup.sh; TARGET_KERNEL_DIR or USE_STOCK_KERNEL=true switches the kernel directory away from kernelModuleLists.dir and lunch still passes",
+  "sources": [
+   {
+    "project": "vendor/adevtool",
+    "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c",
+    "path": "config/mk/google_devices/device/frankel/device.mk",
+    "line": 3,
+    "text": "TARGET_KERNEL_DIR ?= device/google/laguna-kernels/6.6/grapheneos/muzel"
+   },
+   {
+    "project": "vendor/adevtool",
+    "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c",
+    "path": "vendor-skels/google_devices/frankel/frankel.mk",
+    "line": 129,
+    "text": "USE_STOCK_KERNEL ?= false"
+   },
+   {
+    "project": "build/make",
+    "revision": "b0f697df8cc9519408ca0a404e918cd51bde0735",
+    "path": "core/version_util.mk",
+    "line": 43,
+    "text": "BUILD_ID := $(BUILD_ID_$(TARGET_PRODUCT))"
+   }
+  ]
+ },
  "versionCheck": {
   "path": "vendor/google_devices/frankel/adevtool-version-check.mk",
   "writer": {
@@ -254,14 +296,37 @@
     "bytes": 201
    }
   },
-  "formRule": "only the error form is accepted. generate-all writes the warning form only with --noVerify, which also skips the comparison of the generated vendor module with its reference FileTreeSpec, so a warning-form module is unverified vendor provenance and is refused",
-  "formSource": {
-   "project": "vendor/adevtool",
-   "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c",
-   "path": "src/commands/generate-all.ts",
-   "line": 329,
-   "text": "await writeVersionCheckFile(config, vendorDirs, flags.noVerify)"
-  },
+  "formRule": "the error form is necessary, not sufficient. generate-all writes the warning form only with --noVerify, which skips the FileTreeSpec comparison, so a warning-form module is refused. The error form is also written when no comparison ran: generate-all --updateSpec, a working-tree change to vendor-specs/ or vendor-skels/ (the comparison reads the spec on disk), and collect-state's temporary module. So the error form shows only the version, and generatedVendor.observable must still be compared",
+  "formSources": [
+   {
+    "project": "vendor/adevtool",
+    "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c",
+    "path": "src/commands/generate-all.ts",
+    "line": 329,
+    "text": "await writeVersionCheckFile(config, vendorDirs, flags.noVerify)"
+   },
+   {
+    "project": "vendor/adevtool",
+    "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c",
+    "path": "src/commands/generate-all.ts",
+    "line": 307,
+    "text": "if (flags.updateSpec) {"
+   },
+   {
+    "project": "vendor/adevtool",
+    "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c",
+    "path": "src/commands/generate-all.ts",
+    "line": 469,
+    "text": "return path.join(VENDOR_MODULE_SPECS_DIR, config.device.vendor, `${config.device.name}.yml`)"
+   },
+   {
+    "project": "vendor/adevtool",
+    "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c",
+    "path": "src/commands/collect-state.ts",
+    "line": 285,
+    "text": "await writeVersionCheckFile(config, dirs)"
+   }
+  ],
   "includedFrom": {
    "path": "vendor/google_devices/frankel/frankel.mk",
    "line": 4,
@@ -315,12 +380,14 @@
    "link": "vendor/adevtool/.git",
    "linkText": "../../.repo/projects/vendor/adevtool.git",
    "gitdir": ".repo/projects/vendor/adevtool.git",
-   "basis": "repo checks a project out with .git as a link into .repo/projects; observation 41566744429 recorded this link text on the production tree, which is historical evidence, not current state"
+   "kind": "historical",
+   "basis": "repo checks a project out with .git as a link into .repo/projects; observation 41566744429 recorded this link text on the production tree. Historical context, not an expected value and not current state"
   },
   "acceptance": [
    "HEAD is exactly revision plus one newline",
-   "in the copy, with GIT_* stripped and GIT_CEILING_DIRECTORIES at the copy root, git -C vendor/adevtool rev-parse HEAD prints exactly revision, cat-file -t revision is commit and revision^{tree} is rootTree",
-   "these checks rule out an empty or redirected store but do not prove a complete one: the gitdir and the object store it uses are copied byte for byte from genuineSource under an approval that names exact paths and bounds"
+   "in the copy, with GIT_* unset and GIT_CEILING_DIRECTORIES at the copy root, git -C vendor/adevtool rev-parse HEAD prints exactly revision, cat-file -t revision is commit and revision^{tree} is rootTree",
+   "nothing redirects outside the copy: rev-parse --absolute-git-dir and --git-common-dir resolve inside the copy root; vendor/adevtool/.git is a directory or a link whose target is inside the copy, never a gitfile; no objects/info/alternates, commondir or gitdir file exists; every link in the gitdir resolves inside the copy root",
+   "none of these checks can tell a fabricated store that holds the commit and its tree from a genuine one: only an approved byte-for-byte copy from the genuine source, under exact paths and bounds, establishes it"
   ],
   "options": [
    {
@@ -330,7 +397,7 @@
    {
     "class": "redirect",
     "status": "refused",
-    "means": "GIT_DIR, a link, alternates or any other way of pointing the copy at the production gitdir"
+    "means": "GIT_DIR, a gitfile, a link, alternates or any other way of pointing the copy at the production gitdir or object store"
    },
    {
     "class": "fabrication",
@@ -340,12 +407,12 @@
    {
     "class": "relaxation",
     "status": "refused",
-    "means": "regenerating the vendor module with --noVerify, or editing, replacing or removing adevtool-version-check.mk or frankel.mk"
+    "means": "regenerating the vendor module with --noVerify or --updateSpec, a working-tree change under vendor/adevtool (including vendor-specs/ and vendor-skels/), or editing, replacing or removing adevtool-version-check.mk or frankel.mk"
    }
   ],
   "environment": {
    "GIT_CEILING_DIRECTORIES": "the copy root",
-   "strip": "GIT_*",
+   "unset": "GIT_*",
    "why": "without a ceiling git searches above the copy, and a parent repository would answer with a foreign HEAD"
   },
   "otherGit": "none: in the pinned public sources nothing else needs .git or a git process for this lunch and Launcher3QuickStepLib (every *.mk and *.bp of the pinned manifest was searched, #410); content the generated vendor module adds beyond its reference is not covered"
@@ -382,7 +449,7 @@
    "line": 26,
    "text": "BUILD_ID=CP2A.260605.016"
   },
-  "rule": "exactly one vendor/*/frankel/cmds-for-envsetup.sh must exist; none leaves BUILD_ID at the default and frankel.mk stops lunch; more than one makes envsetup exit"
+  "rule": "with BUILD_ID_frankel unset beforehand (environment.unset): no vendor/*/frankel/cmds-for-envsetup.sh leaves BUILD_ID at the default and frankel.mk stops lunch; more than one waits on stdin (read -s) and then exits the sourcing shell. The variable is exported into the shell that runs m"
  },
  "kernelModuleLists": {
   "dir": "device/google/laguna-kernels/6.6/grapheneos/muzel",
@@ -392,6 +459,13 @@
    "path": "config/mk/google_devices/device/frankel/device.mk",
    "line": 3,
    "text": "TARGET_KERNEL_DIR ?= device/google/laguna-kernels/6.6/grapheneos/muzel"
+  },
+  "switchedBy": {
+   "project": "vendor/adevtool",
+   "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c",
+   "path": "vendor-skels/google_devices/frankel/frankel.mk",
+   "line": 129,
+   "text": "USE_STOCK_KERNEL ?= false"
   },
   "files": [
    {
@@ -404,7 +478,15 @@
      "path": "config/mk/google_devices/common/BoardConfig-common-gs201-plus.mk",
      "line": 6,
      "text": "BOARD_VENDOR_KERNEL_RAMDISK_KERNEL_MODULES_LOAD_FILE := $(strip $(shell cat $(KERNEL_MODULE_DIR)/vendor_kernel_boot.modules.load))"
-    }
+    },
+    "lunchGuard": {
+     "project": "vendor/adevtool",
+     "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c",
+     "path": "config/mk/google_devices/common/BoardConfig-common-gs201-plus.mk",
+     "line": 8,
+     "text": "$(error vendor_kernel_boot.modules.load not found or empty)"
+    },
+    "rule": "a missing or empty file stops lunch with $(error)"
    },
    {
     "path": "device/google/laguna-kernels/6.6/grapheneos/muzel/vendor_dlkm.modules.load",
@@ -416,7 +498,15 @@
      "path": "config/mk/google_devices/common/BoardConfig-common-gs201-plus.mk",
      "line": 15,
      "text": "BOARD_VENDOR_KERNEL_MODULES_LOAD := $(strip $(shell cat $(KERNEL_MODULE_DIR)/vendor_dlkm.modules.load))"
-    }
+    },
+    "lunchGuard": {
+     "project": "vendor/adevtool",
+     "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c",
+     "path": "config/mk/google_devices/common/BoardConfig-common-gs201-plus.mk",
+     "line": 18,
+     "text": "$(error vendor_dlkm.modules.load not found or empty)"
+    },
+    "rule": "a missing or empty file stops lunch with $(error)"
    },
    {
     "path": "device/google/laguna-kernels/6.6/grapheneos/muzel/system_dlkm.modules.load",
@@ -428,10 +518,12 @@
      "path": "config/mk/google_devices/common/BoardConfig-common-gs201-plus.mk",
      "line": 30,
      "text": "BOARD_SYSTEM_KERNEL_MODULES_LOAD := $(strip $(shell cat $(KERNEL_MODULE_DIR)/system_dlkm.modules.load))"
-    }
+    },
+    "lunchGuard": null,
+    "rule": "read at lunch with no guard: a missing or empty file does not stop lunch, so an observer checks it is present at this blob"
    }
   ],
-  "rule": "each is read with $(shell cat ...) at lunch, and a missing or empty one stops it with $(error)"
+  "rule": "each file states its own rule; dir holds only with TARGET_KERNEL_DIR and USE_STOCK_KERNEL unset (environment.unset)"
  },
  "finderPrune": {
   "markers": [
@@ -526,7 +618,7 @@
    "gitBlob": "42e61f9c365bc8a832c68a8bb6380141f791a37d",
    "kind": "FileTreeSpec: sha256 of every regular file of the module, \"dir\" for each directory"
   },
-  "verification": "without --noVerify, generate-all compares the generated module with reference and fails on any difference; the version check is written after that comparison and is not in reference",
+  "verification": "generate-all compares the generated module with the spec file on disk only without --noVerify and without --updateSpec, and fails on any difference; the version check is written after that step and is not in the spec. Whether a comparison ran, and against which spec bytes, is not recorded in the module, so the observer compares observable itself",
   "verificationSource": {
    "project": "vendor/adevtool",
    "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c",
@@ -566,7 +658,8 @@
     "skeletonGitBlob": "663f38a01ef26b90862480445df0df4b007c2ed0"
    }
   ],
-  "notEstablished": "the host's generated bytes, and whether it was generated with --noVerify"
+  "observableScope": "these five build definitions only; the rest of the module (proprietary files, overlays, sepolicy) is not covered here",
+  "notEstablished": "the host's generated bytes, which flags generated them, and whether vendor/adevtool's working tree matched the pin at the time"
  },
- "branchUse": "every branch of launcher3-quickstep-lib.json runs this lunch, so each needs versionCheck satisfied by gitRequirement and the markers above present; none of this is a bundle report, a policy receipt or evidence about the three contract projects"
+ "branchUse": "every branch of launcher3-quickstep-lib.json runs this lunch, so each needs versionCheck satisfied by gitRequirement, environment applied and the markers above present; none of this is a bundle report, a policy receipt or evidence about the three contract projects"
 }

@@ -33,6 +33,38 @@
    "kind": "full"
   },
   {
+   "fixture": "vendor/adevtool/src/build/make.ts",
+   "project": "vendor/adevtool",
+   "path": "src/build/make.ts",
+   "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c",
+   "gitBlob": "07dc40ea2a3cf7ab84ba09d50726473078e389f6",
+   "kind": "full"
+  },
+  {
+   "fixture": "vendor/adevtool/src/commands/generate-all.ts",
+   "project": "vendor/adevtool",
+   "path": "src/commands/generate-all.ts",
+   "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c",
+   "gitBlob": "4609d74c8537091688745dffe99f74f69f274518",
+   "kind": "full"
+  },
+  {
+   "fixture": "vendor/adevtool/src/commands/collect-state.ts",
+   "project": "vendor/adevtool",
+   "path": "src/commands/collect-state.ts",
+   "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c",
+   "gitBlob": "ed301e6a412b9731544b1865774428baf44e58d8",
+   "kind": "full"
+  },
+  {
+   "fixture": "vendor/adevtool/vendor-skels/google_devices/frankel/frankel.mk.gz",
+   "project": "vendor/adevtool",
+   "path": "vendor-skels/google_devices/frankel/frankel.mk",
+   "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c",
+   "gitBlob": "24caa2897a2dd4bfdf2e844b185f996d210816af",
+   "kind": "gzip"
+  },
+  {
    "fixture": "vendor/adevtool/vendor-skels/google_devices/frankel/AndroidProducts.mk",
    "project": "vendor/adevtool",
    "path": "vendor-skels/google_devices/frankel/AndroidProducts.mk",
@@ -63,6 +95,14 @@
    "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c",
    "gitBlob": "663f38a01ef26b90862480445df0df4b007c2ed0",
    "kind": "full"
+  },
+  {
+   "fixture": "vendor/adevtool/vendor-specs/google_devices/frankel.yml.gz",
+   "project": "vendor/adevtool",
+   "path": "vendor-specs/google_devices/frankel.yml",
+   "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c",
+   "gitBlob": "42e61f9c365bc8a832c68a8bb6380141f791a37d",
+   "kind": "gzip"
   },
   {
    "fixture": "vendor/adevtool/config/mk/google_devices/device/frankel/device.mk",
@@ -113,68 +153,36 @@
    "kind": "full"
   },
   {
-   "fixture": "vendor/adevtool/vendor-skels/google_devices/frankel/frankel.mk.excerpt.json",
-   "project": "vendor/adevtool",
-   "path": "vendor-skels/google_devices/frankel/frankel.mk",
-   "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c",
-   "gitBlob": "24caa2897a2dd4bfdf2e844b185f996d210816af",
-   "kind": "excerpt"
-  },
-  {
-   "fixture": "vendor/adevtool/vendor-specs/google_devices/frankel.yml.excerpt.json",
-   "project": "vendor/adevtool",
-   "path": "vendor-specs/google_devices/frankel.yml",
-   "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c",
-   "gitBlob": "42e61f9c365bc8a832c68a8bb6380141f791a37d",
-   "kind": "excerpt"
-  },
-  {
-   "fixture": "vendor/adevtool/src/build/make.ts.excerpt.json",
-   "project": "vendor/adevtool",
-   "path": "src/build/make.ts",
-   "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c",
-   "gitBlob": "07dc40ea2a3cf7ab84ba09d50726473078e389f6",
-   "kind": "excerpt"
-  },
-  {
-   "fixture": "vendor/adevtool/src/commands/generate-all.ts.excerpt.json",
-   "project": "vendor/adevtool",
-   "path": "src/commands/generate-all.ts",
-   "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c",
-   "gitBlob": "4609d74c8537091688745dffe99f74f69f274518",
-   "kind": "excerpt"
-  },
-  {
-   "fixture": "build/make/envsetup.sh.excerpt.json",
+   "fixture": "build/make/envsetup.sh",
    "project": "build/make",
    "path": "envsetup.sh",
    "revision": "b0f697df8cc9519408ca0a404e918cd51bde0735",
    "gitBlob": "27f15f8da9f8ddcc1af70b03fc3bd48de10a0c13",
-   "kind": "excerpt"
+   "kind": "full"
   },
   {
-   "fixture": "build/make/core/version_util.mk.excerpt.json",
+   "fixture": "build/make/core/version_util.mk",
    "project": "build/make",
    "path": "core/version_util.mk",
    "revision": "b0f697df8cc9519408ca0a404e918cd51bde0735",
    "gitBlob": "ea80c8c9c2aa4965e9fcb294f8db117d717b0a95",
-   "kind": "excerpt"
+   "kind": "full"
   },
   {
-   "fixture": "build/make/core/build_id.mk.excerpt.json",
+   "fixture": "build/make/core/build_id.mk",
    "project": "build/make",
    "path": "core/build_id.mk",
    "revision": "b0f697df8cc9519408ca0a404e918cd51bde0735",
    "gitBlob": "ffc8991ece4f08f934d8ab647df0e98f405f4ecb",
-   "kind": "excerpt"
+   "kind": "full"
   },
   {
-   "fixture": "build/make/core/product_config.mk.excerpt.json",
+   "fixture": "build/make/core/product_config.mk",
    "project": "build/make",
    "path": "core/product_config.mk",
    "revision": "b0f697df8cc9519408ca0a404e918cd51bde0735",
    "gitBlob": "2bcc764b55a5a1d207a4b077d83f15e3c1130beb",
-   "kind": "excerpt"
+   "kind": "full"
   }
  ]
 }

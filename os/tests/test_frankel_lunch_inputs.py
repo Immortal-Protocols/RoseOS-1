@@ -20,8 +20,10 @@ SCRIPT = ROOT/'scripts/frankel-lunch-inputs.py'
 MANIFEST = ROOT/'os/compile-contracts/frankel-lunch-inputs.json'
 FIXTURES = ROOT/'os/tests/fixtures/frankel-lunch-inputs'
 PIN = '17df3b79a73e67ad68387b35c7d41c85e1d8103c'
-# `git rev-parse 17df3b79^{tree}` in a public clone of GrapheneOS/adevtool, recorded independently of the listing.
-ADEVTOOL_ROOT_TREE = 'f0863541755769c12b01f5e1a429bdc6cb704f07'
+# `git rev-parse <pin>^{tree}` in public clones of each project, recorded independently of the committed listings.
+ROOT_TREES = {'vendor/adevtool': 'f0863541755769c12b01f5e1a429bdc6cb704f07',
+    'build/make': '8cba4028c35f5cc4e4ebab97b01b6ca93700623f',
+    'device/google/laguna-kernels/6.6': '50a4ff771115c0cf74c49595d2730af299b5e201'}
 CHECK = 'vendor/google_devices/frankel/adevtool-version-check.mk'
 
 
@@ -37,15 +39,16 @@ def blob(data):
 
 
 class FrankelLunchInputsTest(unittest.TestCase):
-    # Pinned once agreed with Release (#410); a change needs re-agreement.
-    AGREED_SHA256 = '5026361d7e7f67032aef23490309f7a0d36f385f7dfeb2ed6802baac51373061'
+    # OS Product's proposed version (#410), not yet agreed with Release; once agreed, any change needs re-agreement.
+    PROPOSED_SHA256 = '80c3af821533ac5a3900b2b00c595503e84940cb0c5b4cec97ce19267d626043'
 
     def manifest(self):
         return json.loads(MANIFEST.read_text())
 
-    def env(self, root, ceiling=True):
-        env = {k: v for k, v in os.environ.items() if not k.startswith(('GIT_', 'MAKE'))}
-        env.update(HOME=str(root), GIT_CONFIG_NOSYSTEM='1', LC_ALL='C')
+    def env(self, root, ceiling=True, **extra):
+        """An allowlisted environment: nothing of the caller's git, make or XDG configuration reaches the demos."""
+        env = {'PATH': os.environ.get('PATH', '/usr/bin:/bin'), 'LC_ALL': 'C', 'HOME': str(root),
+            'XDG_CONFIG_HOME': str(root), 'GIT_CONFIG_NOSYSTEM': '1', 'GIT_CONFIG_GLOBAL': os.devnull, **extra}
         if ceiling:
             env['GIT_CEILING_DIRECTORIES'] = str(root)
         return env
@@ -71,7 +74,7 @@ class FrankelLunchInputsTest(unittest.TestCase):
             capture_output=True, text=True)
 
     def test_the_manifest_is_the_pinned_version_and_recomputes_offline(self):
-        self.assertEqual(hashlib.sha256(MANIFEST.read_bytes()).hexdigest(), self.AGREED_SHA256)
+        self.assertEqual(hashlib.sha256(MANIFEST.read_bytes()).hexdigest(), self.PROPOSED_SHA256)
         manifest = self.manifest()
         self.assertEqual((manifest['kind'], manifest['schemaVersion']), ('rose-frankel-lunch-inputs', 1))
         self.assertEqual(manifest['lunch'], {'target': 'frankel-cur-user', 'product': 'frankel', 'release': 'cur',
@@ -92,15 +95,14 @@ class FrankelLunchInputsTest(unittest.TestCase):
             raw = gzip.decompress((ROOT/source['listing']['path']).read_bytes())
             self.assertEqual(hashlib.sha256(raw).hexdigest(), source['listing']['sha256'])
             self.assertEqual(len(listing), source['listing']['paths'])
-        self.assertEqual(manifest['sources'][0]['rootTree'], ADEVTOOL_ROOT_TREE)
-        self.assertEqual(manifest['gitRequirement']['rootTree'], ADEVTOOL_ROOT_TREE)
+        self.assertEqual({s['path']: s['rootTree'] for s in manifest['sources']}, ROOT_TREES)
+        self.assertEqual(manifest['gitRequirement']['rootTree'], ROOT_TREES['vendor/adevtool'])
         for row in manifest['fixtures']:
             tree = module.listing(row['project'])
             self.assertEqual(tree[row['path']][1], row['gitBlob'], row['path'])
-            if row['kind'] == 'full':
-                self.assertEqual(blob((FIXTURES/row['fixture']).read_bytes()), row['gitBlob'])
-            else:
-                self.assertEqual(json.loads((FIXTURES/row['fixture']).read_text())['upstreamGitBlob'], row['gitBlob'])
+            data = (FIXTURES/row['fixture']).read_bytes()
+            self.assertEqual(blob(gzip.decompress(data) if row['kind'] == 'gzip' else data), row['gitBlob'], row['path'])
+            self.assertEqual(row['kind'] == 'gzip', row['fixture'].endswith('.gz'))
         self.assertTrue((FIXTURES/'vendor/adevtool/LICENSE').read_text().startswith('The MIT License'))
 
     def test_the_version_check_is_the_pinned_templates_exact_bytes(self):
@@ -113,8 +115,12 @@ class FrankelLunchInputsTest(unittest.TestCase):
             self.assertEqual(check['expected'][form], {'sha256': hashlib.sha256(text).hexdigest(), 'gitBlob': blob(text),
                 'bytes': len(text)})
         self.assertEqual(check['expected']['form'], 'error')
-        self.assertIn('a warning-form module is unverified vendor provenance and is refused', check['formRule'])
-        self.assertEqual(check['formSource']['text'], 'await writeVersionCheckFile(config, vendorDirs, flags.noVerify)')
+        self.assertIn('the error form is necessary, not sufficient', check['formRule'])
+        self.assertIn('generatedVendor.observable must still be compared', check['formRule'])
+        self.assertEqual([c['text'] for c in check['formSources']], [
+            'await writeVersionCheckFile(config, vendorDirs, flags.noVerify)', 'if (flags.updateSpec) {',
+            "return path.join(VENDOR_MODULE_SPECS_DIR, config.device.vendor, `${config.device.name}.yml`)",
+            'await writeVersionCheckFile(config, dirs)'])
         self.assertEqual((check['path'], check['includedFrom']), (CHECK, {'path': 'vendor/google_devices/frankel/frankel.mk',
             'line': 4, 'text': f'include {CHECK}'}))
         self.assertEqual(check['selectedBy']['text'], 'PRODUCT_MAKEFILES += $(LOCAL_DIR)/frankel.mk')
@@ -169,28 +175,34 @@ class FrankelLunchInputsTest(unittest.TestCase):
             {'genuine-copy': 'allowed', 'redirect': 'refused', 'fabrication': 'refused', 'relaxation': 'refused'})
         self.assertIn('separate approval with exact paths and bounds', git['options'][0]['status'])
         self.assertEqual(git['genuineSource']['linkText'], '../../.repo/projects/vendor/adevtool.git')
-        self.assertIn('historical evidence, not current state', git['genuineSource']['basis'])
+        self.assertIn('Historical context, not an expected value and not current state', git['genuineSource']['basis'])
         self.assertEqual(git['environment']['GIT_CEILING_DIRECTORIES'], 'the copy root')
-        self.assertEqual(len(git['acceptance']), 3)
-        self.assertIn('do not prove a complete one', git['acceptance'][2])
+        self.assertEqual(len(git['acceptance']), 4)
         self.assertIn('rootTree', git['acceptance'][1])
+        self.assertIn('nothing redirects outside the copy', git['acceptance'][2])
+        self.assertIn('none of these checks can tell a fabricated store', git['acceptance'][3])
+        self.assertEqual(git['genuineSource']['kind'], 'historical')
+        self.assertIn('except gitRequirement.genuineSource', self.manifest()['provenance'])
+        self.assertIn('--updateSpec', git['options'][3]['means'])
 
     def test_the_generated_vendor_observables_are_the_reference_spec(self):
         vendor = self.manifest()['generatedVendor']
-        spec = json.loads((FIXTURES/'vendor/adevtool/vendor-specs/google_devices/frankel.yml.excerpt.json').read_text())
-        entries = dict(line.split(': ', 1) for line in spec['lines'].values())
-        self.assertEqual(spec['absent'], ['adevtool-version-check.mk'])
+        spec = gzip.decompress((FIXTURES/'vendor/adevtool/vendor-specs/google_devices/frankel.yml.gz').read_bytes())
+        entries = dict(line.split(': ', 1) for line in spec.decode().splitlines())
+        self.assertNotIn('adevtool-version-check.mk', entries)
+        self.assertEqual(entries['frankel.mk'], 'e12dadf4bb07bebb73b3f66431dfc09f2fb9d6cf177479f243aae6d338873736')
         self.assertEqual([r['path'] for r in vendor['observable']], [f'vendor/google_devices/frankel/{n}' for n in
             ('frankel.mk', 'AndroidProducts.mk', 'BoardConfig.mk', 'Android.mk', 'cmds-for-envsetup.sh')])
         for row in vendor['observable']:
             name = row['path'].rsplit('/', 1)[1]
             self.assertEqual(row['sha256'], entries[name])
             skeleton = FIXTURES/'vendor/adevtool/vendor-skels/google_devices/frankel'/name
-            if skeleton.exists():
-                self.assertEqual(hashlib.sha256(skeleton.read_bytes()).hexdigest(), row['sha256'])
+            data = skeleton.read_bytes() if skeleton.exists() else gzip.decompress(Path(str(skeleton) + '.gz').read_bytes())
+            self.assertEqual(hashlib.sha256(data).hexdigest(), row['sha256'])
         self.assertEqual(vendor['generator'], {'project': 'vendor/adevtool', 'revision': PIN,
             'command': 'generate-all -d frankel'})
-        self.assertIn("host's generated bytes", vendor['notEstablished'])
+        self.assertIn("host's generated bytes, which flags generated them", vendor['notEstablished'])
+        self.assertIn('only without --noVerify and without --updateSpec', vendor['verification'])
 
     def test_build_id_kernel_lists_finder_markers_and_manifest_files(self):
         manifest = self.manifest()
@@ -201,10 +213,21 @@ class FrankelLunchInputsTest(unittest.TestCase):
         self.assertNotEqual(build_id['defaultWithout']['text'], 'BUILD_ID=CP3A.261005.005')
         kernel = manifest['kernelModuleLists']
         self.assertEqual(kernel['dir'], 'device/google/laguna-kernels/6.6/grapheneos/muzel')
+        gs201 = (FIXTURES/'vendor/adevtool/config/mk/google_devices/common/BoardConfig-common-gs201-plus.mk').read_text()
+        guards = {}
         for row in kernel['files']:
+            name = row['path'].rsplit('/', 1)[1]
             self.assertTrue(row['path'].startswith(kernel['dir'] + '/'))
-            self.assertNotEqual(row['gitBlob'], blob(b''), 'an empty list stops lunch')
-            self.assertIn('$(KERNEL_MODULE_DIR)/' + row['path'].rsplit('/', 1)[1], row['readBy']['text'])
+            self.assertNotEqual(row['gitBlob'], blob(b''))
+            self.assertIn('$(KERNEL_MODULE_DIR)/' + name, row['readBy']['text'])
+            guards[name] = row['lunchGuard'] is not None
+            self.assertEqual(guards[name], f'$(error {name} not found or empty)' in gs201)
+            self.assertIn('stops lunch' if guards[name] else 'no guard', row['rule'])
+        self.assertEqual(guards, {'vendor_kernel_boot.modules.load': True, 'vendor_dlkm.modules.load': True,
+            'system_dlkm.modules.load': False})
+        self.assertEqual(manifest['environment']['unset'], ['GIT_*', 'BUILD_ID_frankel', 'PLATFORM_SECURITY_PATCH_frankel',
+            'TARGET_KERNEL_DIR', 'USE_STOCK_KERNEL'])
+        self.assertEqual(kernel['switchedBy']['text'], 'USE_STOCK_KERNEL ?= false')
         module = load()
         tree = module.listing('vendor/adevtool')
         for marker in manifest['finderPrune']['markers']:
@@ -216,6 +239,83 @@ class FrankelLunchInputsTest(unittest.TestCase):
         self.assertEqual(manifest['manifestFiles'], expected)
         self.assertIn({'kind': 'linkfile', 'project': 'build/soong', 'src': 'root.bp', 'dest': 'Android.bp'},
             manifest['manifestFiles'])
+
+    def accepted(self, copy):
+        """A reference reading of gitRequirement.acceptance items 1-3 for a copy root (item 4 is provenance only)."""
+        work, root = copy/'vendor/adevtool', copy.resolve()
+        dot = work/'.git'
+        inside = lambda p: Path(os.path.realpath(p)) == root or root in Path(os.path.realpath(p)).parents
+        if dot.is_file() and not dot.is_symlink():
+            return 'gitfile'
+        if dot.is_symlink() and not inside(dot):
+            return 'link outside the copy'
+        gitdir = Path(os.path.realpath(dot))
+        for name in ('objects/info/alternates', 'commondir', 'gitdir'):
+            if (gitdir/name).exists():
+                return name
+        for path in [gitdir, *gitdir.rglob('*')]:
+            if path.is_symlink() and not inside(path):
+                return 'link outside the copy'
+        if (gitdir/'HEAD').read_text() != self.head + '\n':
+            return 'HEAD'
+        for argv in (['--absolute-git-dir'], ['--git-common-dir']):
+            out = self.git(copy, '-C', 'vendor/adevtool', 'rev-parse', '--path-format=absolute', *argv).stdout.strip()
+            if not inside(out):
+                return 'git dir outside the copy'
+        if self.git(copy, '-C', 'vendor/adevtool', 'cat-file', '-t', self.head, check=False).stdout.strip() != 'commit':
+            return 'commit'
+        return None
+
+    def test_the_acceptance_checks_refuse_redirects_that_pass_the_basic_checks(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            scratch = Path(scratch)
+            production = scratch/'production'
+            self.head = self.commit(production, production/'vendor/adevtool')
+            self.git(production, '-C', str(production/'vendor/adevtool'), 'checkout', '-q', '--detach')
+            gitdir = production/'vendor/adevtool/.git'
+            # A genuine byte copy of the gitdir into the copy is accepted.
+            genuine = scratch/'genuine'
+            (genuine/'vendor/adevtool').mkdir(parents=True)
+            shutil.copytree(gitdir, genuine/'vendor/adevtool/.git', symlinks=True)
+            self.assertIsNone(self.accepted(genuine))
+            redirects = {}
+            alternates = scratch/'alternates'
+            (alternates/'vendor/adevtool/.git/objects/info').mkdir(parents=True)
+            (alternates/'vendor/adevtool/.git/refs').mkdir()
+            (alternates/'vendor/adevtool/.git/HEAD').write_text(self.head + '\n')
+            (alternates/'vendor/adevtool/.git/objects/info/alternates').write_text(str(gitdir/'objects') + '\n')
+            redirects['objects/info/alternates'] = alternates
+            gitfile = scratch/'gitfile'
+            (gitfile/'vendor/adevtool').mkdir(parents=True)
+            (gitfile/'vendor/adevtool/.git').write_text(f'gitdir: {gitdir}\n')
+            redirects['gitfile'] = gitfile
+            linked = scratch/'linked'
+            (linked/'vendor/adevtool').mkdir(parents=True)
+            os.symlink(gitdir, linked/'vendor/adevtool/.git')
+            redirects['link outside the copy'] = linked
+            for reason, copy in redirects.items():
+                # Every redirect passes the basic checks (acceptance items 1 and 2)...
+                self.assertEqual(self.git(copy, '-C', 'vendor/adevtool', 'rev-parse', 'HEAD').stdout.strip(), self.head)
+                self.assertEqual(self.git(copy, '-C', 'vendor/adevtool', 'cat-file', '-t', self.head).stdout.strip(),
+                    'commit')
+                # ...and the structural checks (item 3) refuse it.
+                self.assertEqual(self.accepted(copy), reason)
+
+    @unittest.skipUnless(shutil.which('make'), 'needs GNU make')
+    def test_an_inherited_build_id_hides_a_missing_envsetup_script(self):
+        """Why environment.unset lists BUILD_ID_frankel: version_util.mk takes BUILD_ID from it, so an inherited value
+        passes frankel.mk's check although no cmds-for-envsetup.sh was sourced."""
+        frankel = gzip.decompress((FIXTURES/'vendor/adevtool/vendor-skels/google_devices/frankel/frankel.mk.gz')
+            .read_bytes()).decode().split('\n')
+        with tempfile.TemporaryDirectory() as scratch:
+            root = Path(scratch)
+            (root/'Makefile').write_text('TARGET_PRODUCT := frankel\nBUILD_ID := $(BUILD_ID_$(TARGET_PRODUCT))\n'
+                'ifeq ($(BUILD_ID),)\nBUILD_ID := CP2A.260605.016\nendif\n' + '\n'.join(frankel[5:8]) +
+                '\nall:\n\t@echo configured\n')
+            run = lambda **extra: subprocess.run(['make', '-s'], cwd=root, env=self.env(root, **extra),
+                capture_output=True, text=True)
+            self.assertNotEqual(run().returncode, 0, 'no script, clean environment: lunch stops')
+            self.assertEqual(run(BUILD_ID_frankel='CP3A.261005.005').returncode, 0, 'an inherited value hides it')
 
     def test_a_tampered_manifest_or_fixture_is_refused(self):
         module = load()
