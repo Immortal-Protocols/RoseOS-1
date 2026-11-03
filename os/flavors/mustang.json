@@ -227,25 +227,22 @@
   },
   "identity": {
     "avbPublicKeySha256": null,
-    "avbPublicKeySha256From": "unbound: no admitted Mustang signing receipt",
-    "otaCertificateSha256From": "unbound",
+    "avbPublicKeySha256From": "os/signing-bootstrap/mustang-bootstrap-receipt.json publicIdentity.avbPublicKeySha256",
+    "otaCertificateSha256From": "os/signing-bootstrap/mustang-bootstrap-receipt.json publicIdentity.otaCertificateSha256",
     "mustDifferFrom": "frankel, blazer and rango",
-    "signingKeys": "unbound; operator transfer permits no new IAM or credentials"
+    "signingKeys": "pro-mustang-v1: PIXEL_OS_SIGNING_KEYS_MUSTANG_V1 version 1 and PIXEL_OS_SIGNING_PASSPHRASE_MUSTANG_V1 version 1, committed once by bootstrap 41719073037; payloads never read by this contract"
   },
   "retained": [],
   "readiness": {
     "buildReady": false,
     "factoryReady": false,
     "phoneValidated": false,
-    "receipts": [],
-    "basis": "Source implementation only; no Mustang runtime evidence."
+    "receipts": [
+      "os/signing-bootstrap/mustang-bootstrap-receipt.json (bootstrap only; no compile or factory acceptance)"
+    ],
+    "basis": "The one approved Mustang bootstrap completed with committed versions, no recovery needed and workspace removed. Current unsigned run 41720536968 has no completed compile receipt; factory and physical acceptance remain unproven."
   },
   "missingForFactory": [
-    {
-      "input": "Mustang-specific admitted signing profile/key-container binding",
-      "owner": "Chief / established signing route",
-      "next": "Resolve the existing authorization/binding without adding IAM, credentials or borrowing other-device grants."
-    },
     {
       "input": "Actual Mustang build, package and private delivery receipts",
       "owner": "Mustang worker",
