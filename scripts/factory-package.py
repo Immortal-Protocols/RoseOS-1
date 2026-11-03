@@ -9,7 +9,7 @@ evidence: --target-files TF --target-files-observation OBS.json --firmware-obser
           --otatools ZIP --otatools-sha256 H [--ssh-keygen PATH] [--work-dir DIR] [--max-work-bytes N] [--signature ABS.sig]
           [--build B] [--avb-public-key-sha256 H] [--first-use-binding FIRST_USE.json]
 
-F is os/flavors/F.json (frankel or rango), cross-checked against os/devices/pixel10.json and the pinned adevtool
+F is os/flavors/F.json (frankel, rango or blazer), cross-checked against os/devices/pixel10.json and the pinned adevtool
 android-info.txt on every load. ARCHIVE is any candidate: an OTA, a target-files, an img zip, or the factory install
 archive {device}-install-{build}.zip that generate-release.sh produces with fastboot optimize-factory-image. Only the
 last can be factory-ready. Three separate tiers are reported:

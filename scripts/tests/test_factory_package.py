@@ -39,7 +39,8 @@ BOOTLOADER = 'deepspace-17.4-16119390'
 BASEBAND = 'g5400i-260604-260807-B-16035863'  # raw, as android-info.txt and the flavor carry it
 # Firmware member names as the pinned release script writes them (get_radio_image lowercases the version).
 BOOTLOADER_MEMBER, BASEBAND_MEMBER = BOOTLOADER.lower(), BASEBAND.lower()
-PKMD = {'frankel': b'synthetic frankel avb public key metadata', 'rango': b'synthetic rango avb public key metadata'}
+PKMD = {'frankel': b'synthetic frankel avb public key metadata', 'rango': b'synthetic rango avb public key metadata',
+        'blazer': b'synthetic blazer avb public key metadata'}
 SPARSE = b'\x3a\xff\x26\xed'
 GSC = {'evt.ec.bin': b'synthetic gsc evt', 'prod.ec.bin': b'synthetic gsc prod'}
 GENERATOR = SCRIPTS/'tests/fixtures/factory-package/device_common-1f5ba267'
@@ -784,6 +785,100 @@ class GscFirmware(Fixture):
         result = self.classify(self.write(f'rango-factory-{BUILD}.zip', intermediate), 'rango', self.complete('rango')[1])
         self.refused(result, 'not-factory:factory-intermediate')
         self.assertEqual(result['role'], 'factory-intermediate')
+
+class BlazerContract(Fixture):
+    """Blazer carries the same pinned generator and optimizer layout as Rango and Frankel, re-derived for blazer by name,
+    and no identity: its archives are classified completely but can never be factory-ready from this repository."""
+
+    def test_the_checked_in_contract_is_pinned_and_still_has_no_identity(self):
+        blazer, rango = fp.load_flavor('blazer'), fp.load_flavor('rango')
+        self.assertTrue(fp.pinned_layout(blazer))
+        same = lambda f: {k: v for k, v in f['artifacts']['factory'].items() if k not in ('currentlyProducedBasis',)}
+        self.assertEqual(same(blazer), same(rango), 'one device-independent pinned layout')
+        self.assertEqual({k: blazer['inventory'][k] for k in ('generatorFixture', 'optimizeFixture')},
+                         {k: rango['inventory'][k] for k in ('generatorFixture', 'optimizeFixture')})
+        self.assertEqual((blazer['identity']['avbPublicKeySha256'], fp.pinned_avb_key(blazer)), (None, None))
+        self.assertEqual((blazer['factorySigning']['principal'], blazer['factorySigning']['publicKey']), (None, None))
+        self.assertEqual({k: blazer['readiness'][k] for k in fp.READINESS_FLAGS}, dict.fromkeys(fp.READINESS_FLAGS, False))
+        self.assertFalse(any(m['input'].startswith('pinned generator and optimizer layout') for m in blazer['missingForFactory']))
+
+    def test_the_blazer_layout_is_rederived_from_the_pinned_script_and_fixtures(self):
+        for change, pattern in (
+                (lambda d: d['artifacts']['factory']['generatorMembers']['gscFirmware'].update(source='VENDOR/firmware/epic/'),
+                 'gscFirmware.source'),
+                (lambda d: d['artifacts']['factory']['scriptChecks'].update(maxDownloadSize='0x20000000'),
+                 'scriptChecks.maxDownloadSize'),
+                (lambda d: d['artifacts']['factory']['requiredMembers'].remove('android-info.zip'), 'requiredMembers'),
+                (lambda d: d['artifacts']['factory'].update(fastbootImages=['boot']), 'fastbootImages'),
+                (lambda d: d['inventory']['optimizeFixture'].update(excerptSha256='0' * 64), 'optimizeFixture excerpt sha256')):
+            with self.subTest(pattern):
+                original = (self.root/'os/flavors/blazer.json').read_text()
+                self.edit_json('os/flavors/blazer.json', change)
+                try:
+                    with self.assertRaisesRegex(fp.ContractError, f'blazer: contract disagrees with its sources: .*{pattern}'):
+                        fp.load_flavor('blazer', self.root)
+                finally:
+                    (self.root/'os/flavors/blazer.json').write_text(original)
+
+    def test_blazer_values_come_from_the_script_by_device_name(self):
+        script = self.root/'scripts/tests/fixtures/permission-apex/script/generate-release.sh'
+        original = script.read_text()
+        for old, new, pattern in (
+                ('elif [[ $DEVICE == @(rango|mustang|blazer|frankel) ]]; then\n    MAX_DOWNLOAD_SIZE',
+                 'elif [[ $DEVICE == @(rango|mustang|frankel) ]]; then\n    MAX_DOWNLOAD_SIZE', 'scriptChecks.maxDownloadSize'),
+                ('if [[ $DEVICE == @(yogi|kodiak|grizzly|cubs) ]]; then\n    GSCFIRMWARESRC="epic"',
+                 'if [[ $DEVICE == @(yogi|kodiak|grizzly|cubs|blazer) ]]; then\n    GSCFIRMWARESRC="epic"', 'gscFirmware.source')):
+            with self.subTest(pattern):
+                self.assertEqual(original.count(old), 1)
+                script.write_text(original.replace(old, new))
+                try:
+                    with self.assertRaisesRegex(fp.ContractError, f'blazer: contract disagrees with its sources: .*{pattern}'):
+                        fp.load_flavor('blazer', self.root)
+                finally:
+                    script.write_text(original)
+
+@unittest.skipUnless(SSH, 'needs OpenSSH ssh-keygen')
+class BlazerClassify(Fixture):
+    def test_a_complete_blazer_archive_refuses_without_genuine_identity_and_signature(self):
+        archive, tf = self.complete('blazer')
+        self.sign(archive)  # a synthetic signature exists, but no blazer principal is pinned to verify it against
+        result = self.classify(archive, 'blazer', tf, sign=False)
+        self.assertEqual((result['role'], result['device'], result['factoryReady'], result['signatureVerified']),
+                         ('factory-install', 'blazer', False, False))
+        self.refused(result, 'identity:blazer avbPublicKeySha256', 'factory-signing identity: pinned principal and ssh-ed25519 '
+                     'public key for blazer')
+        self.assertFalse(any('pinned generator layout' in m for m in result['missing']), 'the layout itself is complete')
+        self.assertEqual(result['problems'], [])
+        self.assertEqual(sorted(result['inventory']['dynamic']), sorted(DYNAMIC))
+        self.assertEqual(result['inventory']['avbPublicKeySha256'], hashlib.sha256(PKMD['blazer']).hexdigest())
+
+    def test_an_operator_avb_key_never_substitutes_for_the_missing_signing_identity(self):
+        archive, tf = self.complete('blazer')
+        result = self.classify(archive, 'blazer', tf, key=hashlib.sha256(PKMD['blazer']).hexdigest())
+        self.assertTrue(result['structurallyComplete'] and result['contentVerified'], result)
+        self.assertFalse(result['signatureVerified'] or result['factoryReady'])
+        self.refused(result, 'factory-signing identity: pinned principal and ssh-ed25519 public key for blazer')
+        # Neither Frankel's nor Rango's identity is inherited: their keys never verify or pin a blazer archive.
+        with self.assertRaisesRegex(fp.ContractError, 'differs from the pinned'):
+            self.classify(archive, 'rango', tf, key=hashlib.sha256(PKMD['blazer']).hexdigest())
+
+    def test_the_pinned_layout_passes_only_with_a_test_root_identity(self):
+        """The layout path end to end, under a temporary root holding a synthetic identity: never the checked-in contract,
+        never a readiness receipt, and the CLI refuses the synthetic observation it needs."""
+        archive, tf = self.complete('blazer')
+        self.edit_json('os/flavors/blazer.json', lambda d: (d['identity'].update(avbPublicKeySha256=hashlib.sha256(PKMD['blazer']).hexdigest()),
+            d['factorySigning'].update(principal='synthetic-factory@test', publicKey=' '.join(self.key.with_suffix('.pub').read_text().split()[:2]))))
+        result = self.classify(archive, 'blazer', tf)
+        self.assertTrue(result['factoryReady'], result)
+        self.assertTrue(result['evidence']['targetFilesObservation']['synthetic'])
+        self.assertFalse(fp.load_flavor('blazer')['readiness']['factoryReady'], 'the checked-in contract is unchanged')
+        self.assertEqual(fp.load_flavor('blazer', self.root)['readiness']['factoryReady'], False)
+
+    def test_cross_device_archives_refuse(self):
+        blazer, tf = self.complete('blazer')
+        self.refused(self.classify(blazer, 'rango', tf), 'wrong-device:archive directory blazer-install-2026103101')
+        rango = self.write(f'rango-install-{BUILD}.zip', install('rango'))
+        self.refused(self.classify(rango, 'blazer', tf), 'wrong-device:archive directory rango-install-2026103101')
 
 class PeerIdentity(Fixture):
     """FOLD-FACTORY-004: AVB pins compared across every flavor through the real loader, never recursively."""
