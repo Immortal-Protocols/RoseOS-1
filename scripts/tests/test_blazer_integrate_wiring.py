@@ -30,6 +30,11 @@ class Result:
         self.returncode, self.stdout, self.stderr = code, out, ''
 
 
+def render_output(out, command):
+    """Exactly what blazer_integration.py render prints on success (pinned against its source below)."""
+    return json.dumps({'verdict': 'OK', 'config': out, 'command': command}, indent=2) + '\n'
+
+
 class Wiring(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
@@ -129,7 +134,7 @@ class Wiring(unittest.TestCase):
             with self.subTest(bad=bad), self.assertRaises(wiring.Invalid):
                 wiring.resolve(self.binding(aapt={'path': production + bad, 'sha256': 'a' * 64}))
 
-    def fake(self, fail=None, printed=None, allocation=None, tamper=None):
+    def fake(self, fail=None, printed=None, allocation=None, tamper=None, render_out=None):
         calls = []
         self.tamper = tamper
         self.envs = []
@@ -168,8 +173,10 @@ class Wiring(unittest.TestCase):
                 (inputs/'local-inputs.json').write_text(json.dumps({'policy': {'path': str(inputs/'background-policy.json')},
                                                                     'signedApps': str(inputs/'signed-apps')}))
             if step == 'render':
+                if render_out is not None:
+                    return Result(0, render_out())
                 command = printed or wiring.expected_reconcile(self.plan, RECIPE)
-                return Result(0, json.dumps({'verdict': 'OK', 'command': command}))
+                return Result(0, render_output(argv[argv.index('--out') + 1], command))
             if argv[:3] == ['git', '-C', str(self.plan['workDir']/f'product-{RECIPE[:12]}')]:
                 return Result(0, RECIPE + '\n')
             return Result(0, json.dumps({'verdict': 'OK', 'step': step}))
@@ -241,6 +248,58 @@ class Wiring(unittest.TestCase):
         self.assertEqual(self.run_wiring(runner), 1)
         self.assertFalse([c for c in calls if c[0] in ('flock', 'bash')])
         self.assertIn('fixed shape', json.loads((self.tmp/'run/integrate.json').read_text())['steps'][-1]['problem'])
+
+    def test_the_renderers_multi_line_record_is_parsed_whole(self):
+        source = (ROOT/'scripts/blazer_integration.py').read_text()
+        self.assertIn("print(json.dumps({'verdict': 'OK', 'config': a.out, 'command': command}, indent=2))", source)
+        command = ['flock', '--nonblock', '/l', 'python3', 'host-reconcile.py', 'apply', '--label', 'blazer-2026110302']
+        text = render_output('/w/reconcile-config.json', command)
+        self.assertEqual(wiring.last_json(text), {'verdict': 'OK', 'config': '/w/reconcile-config.json', 'command': command})
+        # run 41664975868: the old line-wise parser returned this array element of the pretty record
+        self.assertEqual(text.splitlines()[-3].strip(), '"blazer-2026110302"')
+        self.assertEqual(wiring.last_json('progress line\n' + json.dumps({'verdict': 'OK'})), {'verdict': 'OK'})
+        for bad in (text + '"blazer-2026110302"\n', text[:-5], '"blazer-2026110302"', '42', 'null', '[1, 2]',
+                    '{"verdict": "OK"}\n[1]', '', None, 'not json'):
+            with self.subTest(bad=bad):
+                self.assertIsNone(wiring.last_json(bad))
+
+    def test_render_must_print_its_complete_ok_record_for_this_run(self):
+        self.setUp()
+        self.plan = self.resolved()
+        # Evaluated when render runs, against that run's own allocated work directory.
+        out = lambda: str(self.plan['workDir']/'reconcile-config.json')  # noqa: E731
+        fixed = lambda: wiring.expected_reconcile(self.plan, RECIPE)  # noqa: E731
+        cases = {
+            'trailing scalar': lambda: render_output(out(), fixed()) + '"blazer-2026110301"\n',
+            'scalar only': lambda: '"blazer-2026110301"\n',
+            'truncated': lambda: render_output(out(), fixed())[:-10],
+            'no config': lambda: json.dumps({'verdict': 'OK', 'command': fixed()}, indent=2),
+            'extra key': lambda: json.dumps({'verdict': 'OK', 'config': out(), 'command': fixed(), 'more': 1}, indent=2),
+            'not ok': lambda: json.dumps({'verdict': 'REFUSED', 'config': out(), 'command': fixed()}, indent=2),
+            'other config': lambda: render_output('/elsewhere/reconcile-config.json', fixed()),
+            'other command': lambda: render_output(out(), ['bash', '-c', 'anything']),
+        }
+        for name, output in cases.items():
+            with self.subTest(case=name):
+                self.setUp()
+                self.plan = self.resolved()
+                runner, calls = self.fake(render_out=output if name != 'other command' else None,
+                                          printed=['bash', '-c', 'anything'] if name == 'other command' else None)
+                self.assertEqual(self.run_wiring(runner), 1)
+                self.assertFalse([c for c in calls if c[0] in ('flock', 'bash')])
+                self.assertFalse([c for c in calls if 'worktree' in c])  # stopped at render, before the candidate
+                step = json.loads((self.tmp/'run/integrate.json').read_text())['steps'][-1]
+                self.assertEqual(step['step'], 'render')
+                self.assertEqual(step['problem'], 'render printed another reconcile command than the fixed shape'
+                                 if name == 'other command' else
+                                 'render printed no complete OK record {verdict, config, command} for this run')
+
+    def test_the_exact_render_record_for_this_run_reaches_the_fixed_reconcile(self):
+        self.plan = self.resolved()
+        runner, calls = self.fake(render_out=lambda: render_output(str(self.plan['workDir']/'reconcile-config.json'),
+                                                                   wiring.expected_reconcile(self.plan, RECIPE)))
+        self.assertEqual(self.run_wiring(runner), 0)
+        self.assertEqual(calls[-1], wiring.expected_reconcile(self.plan, RECIPE))
 
     def test_an_existing_derived_directory_or_a_foreign_allocation_stops_before_seed(self):
         self.plan = self.resolved()

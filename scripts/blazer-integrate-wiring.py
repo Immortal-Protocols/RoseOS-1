@@ -220,15 +220,34 @@ def commands(plan, recipe, root=ROOT):
 
 
 def last_json(text):
-    for line in reversed((text or '').strip().splitlines()):
-        try:
-            return json.loads(line)
-        except ValueError:
-            continue
+    """A step's result: one complete JSON object, or None. The whole output is tried first, because the owners' helpers
+    print multi-line records (blazer_integration.py admit and render use json.dumps(..., indent=2)); only when it is not
+    one document is the last line tried, for a one-line record after other output. Anything that is not an object - a
+    scalar, a list, one element of a pretty-printed record, a truncated document - is None, never a result."""
+    text = (text or '').strip() if isinstance(text, str) else ''
     try:
-        return json.loads(text)
-    except (ValueError, TypeError):
-        return None
+        value = json.loads(text)
+    except ValueError:
+        lines = text.splitlines()
+        try:
+            value = json.loads(lines[-1]) if lines else None
+        except ValueError:
+            value = None
+    return value if isinstance(value, dict) else None
+
+
+RENDER_KEYS = {'verdict', 'config', 'command'}
+
+
+def render_problem(result, plan, recipe):
+    """None when render printed exactly its OK record for this run: {verdict OK, config, command} with config the
+    --out this wiring passed and command exactly the fixed reconcile shape; otherwise the fixed reason."""
+    if not isinstance(result, dict) or set(result) != RENDER_KEYS or result['verdict'] != 'OK' \
+            or result['config'] != str(plan['workDir']/'reconcile-config.json'):
+        return 'render printed no complete OK record {verdict, config, command} for this run'
+    if result['command'] != expected_reconcile(plan, recipe):
+        return 'render printed another reconcile command than the fixed shape'
+    return None
 
 
 def expected_reconcile(plan, recipe):
@@ -326,11 +345,11 @@ def run(plan, run_dir, run_id, attempt, root=ROOT, runner=subprocess.run, recipe
                     record['steps'][-1]['problem'] = 'the candidate checkout is not the recipe HEAD'
                     return status
             if name == 'render':
-                printed = (record['steps'][-1]['result'] or {}).get('command')
-                if printed != expected_reconcile(plan, recipe):
-                    record['steps'][-1]['problem'] = 'render printed another reconcile command than the fixed shape'
+                problem = render_problem(record['steps'][-1]['result'], plan, recipe)
+                if problem:
+                    record['steps'][-1]['problem'] = problem
                     return status
-                command = printed
+                command = expected_reconcile(plan, recipe)
         result = runner(command, capture_output=True, text=True, timeout=STEPS['reconcile'], env=step_env())
         record['steps'].append({'step': 'reconcile', 'exit': result.returncode,
                                 'result': last_json(result.stdout or result.stderr)})
