@@ -100,6 +100,7 @@ python3 scripts/tests/test_blazer_integration.py
 python3 scripts/tests/test_blazer_candidate_bundle.py
 python3 scripts/tests/test_blazer_reconcile_seed.py
 python3 scripts/tests/test_blazer_integrate_wiring.py
+python3 scripts/tests/test_blazer_allocate.py
 python3 scripts/tests/test_blazer_binding_observe.py
 # Factory package verifier (pinned fixtures; the signature cases need OpenSSH ssh-keygen and skip without it).
 python3 scripts/tests/test_factory_package.py

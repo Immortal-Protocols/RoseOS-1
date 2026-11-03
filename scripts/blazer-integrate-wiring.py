@@ -7,8 +7,12 @@ failure.
       hosted and on the builder: os/build-only/blazer-integrate-host.json is exact, its paths are normalized absolute,
       isolated from the production source root and outside the source tree, and every host fact is bound. Exit 4 while
       any is null. Prints outer_seconds and job_minutes. Reads no host path.
-  blazer-integrate-wiring.py run --run-dir NEW
+  blazer-integrate-wiring.py run --run-dir NEW --run-id N --run-attempt N
       the same check, then exactly:
+        0. tools      aapt and apksigner re-hashed against their expected sha256 (regular files, no link in the path)
+        0. allocate   blazer-allocate.py reserve --home H --run-id N --run-attempt N --source HEAD --out NEW/allocation.json
+                      (a fresh collision-checked blazer build under the shared lock); WORK and INTEGRATION_DIR are the
+                      reservation's derived H/rose-actions/blazer-integrate-<build> and blazer-reconcile-<build>
         1. seed       blazer-reconcile-seed.py seed --frankel-receipts F --source-root S --source-run RUN
                       --source-inventory INV --source-inventory-sha256 H --receipt-dir INTEGRATION_DIR
         2. assemble   blazer-candidate-bundle.py assemble --apps-dir A --policy P --build B --product HEAD --aapt T
@@ -29,22 +33,30 @@ The tree is changed only by step 6, host-reconcile.py under the shared lock with
 Exit status: 0 integrated, 1 a step refused or failed, 2 invalid, 4 unbound.
 """
 import argparse
+import hashlib
 import json
 import math
 import os
 from pathlib import Path
 import re
+import stat
 import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 BINDING = ROOT/'os/build-only/blazer-integrate-host.json'
 KEYS = {'schemaVersion', 'kind', 'basis', 'host', 'lockFrom', 'sourceRootFrom', 'frankelReceiptsFrom', 'updaterRoute',
-        'sourceRun', 'sourceInventory', 'appsDir', 'policy', 'aapt', 'apksigner', 'build', 'integrationDir', 'workDir'}
-FACTS = ('sourceRun', 'sourceInventory.path', 'sourceInventory.sha256', 'appsDir', 'policy', 'aapt', 'apksigner', 'build',
-         'integrationDir', 'workDir')
+        'sourceRun', 'sourceInventory', 'appsDir', 'policy', 'aapt', 'apksigner'}
+FACTS = ('sourceRun', 'sourceInventory.path', 'sourceInventory.sha256', 'appsDir', 'policy', 'aapt.path', 'aapt.sha256',
+         'apksigner.path', 'apksigner.sha256')
+TOOLS = ('aapt', 'apksigner')
+HOME = '/home/pixelbuild'
+# Read-only SDK tools may sit inside the production source root only below this exact prefix: they are executed and
+# hashed, never written. Every data path keeps the full production-root rejection.
+TOOL_PREFIX = 'prebuilts/sdk/'
 # Wrapper ceilings (seconds) per step, sized to the work, not measurements.
-STEPS = {'seed': 600, 'assemble': 300, 'admit': 600, 'render': 120, 'candidate': 300, 'reconcile': 3600}
+STEPS = {'tools': 300, 'allocate': 120, 'seed': 600, 'assemble': 300, 'admit': 600, 'render': 120, 'candidate': 300,
+         'reconcile': 3600}
 KILL_GRACE_SECONDS, OUTER_MARGIN_SECONDS, JOB_MARGIN_MINUTES = 30, 300, 10
 PRODUCTION = 'os/release-pipeline/frankel.json host.sourceRoot'
 
@@ -82,37 +94,39 @@ def resolve(binding_path=BINDING, root=ROOT):
     for key, value in fixed.items():
         if binding[key] != value:
             raise Invalid(f'{key} must be {value}')
-    inventory = binding['sourceInventory']
-    if not isinstance(inventory, dict) or set(inventory) != {'path', 'sha256'}:
-        raise Invalid('sourceInventory must be exactly {path, sha256}')
-    values = {**{k: binding[k] for k in FACTS if '.' not in k}, 'sourceInventory.path': inventory['path'],
-              'sourceInventory.sha256': inventory['sha256']}
+    for name in ('sourceInventory', *TOOLS):
+        if not isinstance(binding[name], dict) or set(binding[name]) != {'path', 'sha256'}:
+            raise Invalid(f'{name} must be exactly {{path, sha256}}')
+    values = {k: (binding[k.split('.')[0]][k.split('.')[1]] if '.' in k else binding[k]) for k in FACTS}
     unbound = [k for k in FACTS if values[k] is None]
     if unbound:
         raise Unbound(f'integration needs host facts not yet bound in {Path(binding_path).name}: {", ".join(unbound)}')
     if not re.fullmatch(r'[1-9][0-9]{0,19}', str(values['sourceRun'])):
         raise Invalid('sourceRun must be the numeric run that made the copy')
-    if not re.fullmatch(r'[0-9a-f]{64}', str(values['sourceInventory.sha256'])):
-        raise Invalid('sourceInventory.sha256 must be a lowercase sha256')
-    if not re.fullmatch(r'[1-9][0-9]{9}', str(values['build'])):
-        raise Invalid('build must be the ten-digit allocated build number')
+    for name in ('sourceInventory.sha256', 'aapt.sha256', 'apksigner.sha256'):
+        if not re.fullmatch(r'[0-9a-f]{64}', str(values[name])):
+            raise Invalid(f'{name} must be a lowercase sha256')
     source = absolute('sourceRoot', pointer(root, binding['sourceRootFrom']))
     production = absolute('production', pointer(root, PRODUCTION))
-    paths = {name: absolute(name, values[name]) for name in
-             ('sourceInventory.path', 'appsDir', 'policy', 'aapt', 'apksigner', 'integrationDir', 'workDir')}
+    if Path(HOME)/'rose-actions' not in source.parents:
+        raise Invalid(f'the source root must sit under {HOME}/rose-actions')
+    paths = {name: absolute(name, values[name]) for name in ('sourceInventory.path', 'appsDir', 'policy')}
     for name, path in {**paths, 'sourceRoot': source}.items():
         if path == production or production in path.parents or path in production.parents:
             raise Invalid(f'{name} {path} is, contains or sits inside the production source root')
-    for name in ('integrationDir', 'workDir'):
-        if source in (paths[name], *paths[name].parents) or paths[name] in source.parents:
-            raise Invalid(f'{name} must be outside the source tree')
-    if paths['integrationDir'] == paths['workDir'] or paths['workDir'] in paths['integrationDir'].parents \
-            or paths['integrationDir'] in paths['workDir'].parents:
-        raise Invalid('integrationDir and workDir must be separate')
+    tools = {}
+    for name in TOOLS:
+        path = absolute(f'{name}.path', values[f'{name}.path'])
+        if path in production.parents or path == production:
+            raise Invalid(f'{name}.path {path} is or contains the production source root')
+        if production in path.parents and not str(path).startswith(f'{production}/{TOOL_PREFIX}'):
+            raise Invalid(f'{name}.path inside the production source root must be below {TOOL_PREFIX} (read-only SDK tools)')
+        tools[name] = {'path': path, 'sha256': values[f'{name}.sha256']}
     plan = {'source': source, 'lock': pointer(root, binding['lockFrom']), 'route': root/binding['updaterRoute'],
             'frankel': absolute('frankelReceipts', pointer(root, binding['frankelReceiptsFrom'])),
             'run': str(values['sourceRun']), 'inventory': paths['sourceInventory.path'],
-            'inventorySha256': values['sourceInventory.sha256'], 'build': str(values['build']), **paths}
+            'inventorySha256': values['sourceInventory.sha256'], 'appsDir': paths['appsDir'], 'policy': paths['policy'],
+            'tools': tools, 'aapt': tools['aapt']['path'], 'apksigner': tools['apksigner']['path'], 'home': Path(HOME)}
     outer = sum(STEPS.values()) + KILL_GRACE_SECONDS * len(STEPS) + OUTER_MARGIN_SECONDS
     return plan, outer, math.ceil((outer + KILL_GRACE_SECONDS) / 60) + JOB_MARGIN_MINUTES
 
@@ -168,19 +182,65 @@ def expected_reconcile(plan, recipe):
             '--label', f'blazer-{plan["build"]}']
 
 
-def run(plan, run_dir, root=ROOT, runner=subprocess.run, recipe=None):
+def tool_sha256(path):
+    """sha256 of a regular file reached with no link anywhere in its path; None otherwise."""
+    path = Path(path)
+    if any(p.is_symlink() for p in (path, *path.parents)):
+        return None
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    except OSError:
+        return None
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return None
+        digest = hashlib.sha256()
+        while True:
+            block = os.read(fd, 8 << 20)
+            if not block:
+                return digest.hexdigest()
+            digest.update(block)
+    finally:
+        os.close(fd)
+
+
+def read_allocation(path, home, recipe):
+    """The reservation the allocator wrote: its build and exactly the derived directories, or Invalid."""
+    record = json.loads(Path(path).read_text())
+    build = str(record.get('build'))
+    if not re.fullmatch(r'[1-9][0-9]{9}', build) or record.get('device') != 'blazer' or record.get('source') != recipe:
+        raise Invalid('the allocation is not a blazer reservation for this recipe')
+    work, integration = Path(home)/'rose-actions'/f'blazer-integrate-{build}', Path(home)/'rose-actions'/f'blazer-reconcile-{build}'
+    if (record.get('workDir'), record.get('integrationDir')) != (str(work), str(integration)):
+        raise Invalid('the allocation names other directories than its build derives')
+    return build, work, integration
+
+
+def run(plan, run_dir, run_id, attempt, root=ROOT, runner=subprocess.run, recipe=None, hasher=tool_sha256):
     run_dir = Path(run_dir)
     run_dir.mkdir(mode=0o700)
     recipe = recipe or head(root, runner)
-    work = plan['workDir']
-    if os.path.lexists(work):
-        raise Invalid(f'{work} exists; integration needs a new work directory')
-    work.mkdir(mode=0o700)
-    record = {'schema': 'roseos.blazer-integrate.v1', 'recipe': recipe, 'build': plan['build'], 'steps': []}
+    record = {'schema': 'roseos.blazer-integrate.v1', 'recipe': recipe, 'build': None, 'steps': []}
     status = 1
     try:
-        steps = commands(plan, recipe, root)
-        for name, argv in steps:
+        tools = {name: hasher(spec['path']) == spec['sha256'] for name, spec in plan['tools'].items()}
+        record['steps'].append({'step': 'tools', 'exit': 0 if all(tools.values()) else 1, 'result': tools})
+        if not all(tools.values()):
+            return status
+        argv = [sys.executable, str(root/'scripts/blazer-allocate.py'), 'reserve', '--home', str(plan['home']),
+                '--run-id', str(run_id), '--run-attempt', str(attempt), '--source', recipe, '--out', str(run_dir/'allocation.json')]
+        result = runner(argv, capture_output=True, text=True, timeout=STEPS['allocate'])
+        record['steps'].append({'step': 'allocate', 'exit': result.returncode, 'result': last_json(result.stdout or result.stderr)})
+        if result.returncode:
+            return status
+        build, work, integration = read_allocation(run_dir/'allocation.json', plan['home'], recipe)
+        plan = {**plan, 'build': build, 'workDir': work, 'integrationDir': integration}
+        record['build'] = build
+        if os.path.lexists(work) or os.path.lexists(integration):
+            record['steps'][-1]['problem'] = 'a derived directory already exists'
+            return status
+        work.mkdir(mode=0o700)
+        for name, argv in commands(plan, recipe, root):
             result = runner(argv, capture_output=True, text=True, timeout=STEPS[name])
             record['steps'].append({'step': name, 'exit': result.returncode, 'result': last_json(result.stdout or result.stderr)})
             if result.returncode:
@@ -213,12 +273,17 @@ def run(plan, run_dir, root=ROOT, runner=subprocess.run, recipe=None):
 
 
 def uploads(plan, run_dir):
-    receipts = sorted(Path(plan['integrationDir']).glob('[0-9][0-9][0-9][0-9]-*.json')) \
-        if Path(plan['integrationDir']).is_dir() and not Path(plan['integrationDir']).is_symlink() else []
-    files = {'integrate.json': Path(run_dir)/'integrate.json',
-             'seed-provenance.json': Path(plan['integrationDir'])/'seed-provenance.json',
-             'local-inputs.json': Path(plan['workDir'])/'inputs/local-inputs.json',
-             'reconcile-config.json': Path(plan['workDir'])/'reconcile-config.json'}
+    files = {'integrate.json': Path(run_dir)/'integrate.json', 'allocation.json': Path(run_dir)/'allocation.json'}
+    try:
+        recipe = json.loads((Path(run_dir)/'integrate.json').read_text())['recipe']
+        _, work, integration = read_allocation(Path(run_dir)/'allocation.json', plan['home'], recipe)
+    except (OSError, ValueError, KeyError, Invalid):
+        return files
+    receipts = sorted(integration.glob('[0-9][0-9][0-9][0-9]-*.json')) \
+        if integration.is_dir() and not integration.is_symlink() else []
+    files.update({'seed-provenance.json': integration/'seed-provenance.json',
+                  'local-inputs.json': work/'inputs/local-inputs.json',
+                  'reconcile-config.json': work/'reconcile-config.json'})
     if receipts:
         files['newest-reconcile-receipt.json'] = receipts[-1]
     return files
@@ -243,6 +308,8 @@ def main(argv=None):
     p.add_argument('command', choices=('check', 'run', 'report'))
     p.add_argument('--run-dir')
     p.add_argument('--upload-dir')
+    p.add_argument('--run-id')
+    p.add_argument('--run-attempt')
     p.add_argument('--binding', default=str(BINDING), help=argparse.SUPPRESS)
     a = p.parse_args(argv)
     try:
@@ -261,7 +328,9 @@ def main(argv=None):
             return 0
         if a.upload_dir:
             raise Invalid('run takes no --upload-dir')
-        return run(plan, a.run_dir)
+        if not (a.run_id and a.run_attempt):
+            raise Invalid('run needs --run-id and --run-attempt')
+        return run(plan, a.run_dir, a.run_id, a.run_attempt)
     except Unbound as error:
         print(json.dumps({'verdict': 'SETUP_MISSING', 'error': str(error)}), file=sys.stderr)
         return 4
