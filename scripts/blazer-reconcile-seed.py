@@ -131,8 +131,8 @@ def seed(frankel_receipts, source_root, source_run, receipt_dir, inventory, inve
     inventory = Path(inventory)
     if not inventory.is_absolute() or '..' in inventory.parts:
         raise Refused('--source-inventory must be an absolute path')
-    if hashlib.sha256(read_regular(inventory)).hexdigest() != inventory_sha256:
-        raise Refused('--source-inventory is not the named copy inventory (sha256 differs)')
+    if file_sha256(inventory) != inventory_sha256:  # streamed (the copy inventory is ~300 MB), no link followed
+        raise Refused('--source-inventory is not the named copy inventory (missing, a link, or sha256 differs)')
     out = Path(receipt_dir)
     if not out.is_absolute() or '..' in out.parts or os.path.lexists(out):
         raise Refused('--receipt-dir must be a new absolute path')

@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "kind": "rose-blazer-integrate-host",
-  "basis": "BLAZER-INTEGRATE workflow binding (Release-owned): the operator inputs that os-release.yml mode blazer-integrate chains through, in order, scripts/blazer-reconcile-seed.py seed, scripts/blazer-candidate-bundle.py assemble, scripts/blazer_integration.py admit and render (Flavors) and the rendered host-reconcile.py apply, on the blazer-prep isolated work tree (sourceRootFrom) after git-meta. The Frankel receipt directory, lock and source root come by pointer from their committed sources. sourceRun 41554911849 and sourceInventory.sha256 3c0f9af1... are the historical source copy's EXPECTED identities (Chief, 2026-11-03), never observed current state: seed re-hashes the inventory file at execution time and refuses on any mismatch; sourceInventory.path, the inventory file's location, is not yet known and stays null. Every other host fact is null until it is verified and committed: appsDir and policy (the already-signed Rose APKs with their sign-apk receipts and the background policy, from an existing signing run), aapt and apksigner (pinned tool paths), build (the allocated blazer build number), integrationDir (the new blazer reconcile receipt directory, compile's integrationDir) and workDir (a new directory for the bundle, admitted inputs, rendered config, candidate checkout and reconcile release directory). While any is null the hosted check exits 4 before the controller. Nothing here was read from or run on any host.",
+  "basis": "BLAZER-INTEGRATE workflow binding (Release-owned): the operator inputs that os-release.yml mode blazer-integrate chains through, in order: a re-hash of the two tools, scripts/blazer-allocate.py reserve (a fresh collision-checked blazer build under the shared lock, whose reservation derives the new work and reconcile directories), scripts/blazer-reconcile-seed.py seed, scripts/blazer-candidate-bundle.py assemble, scripts/blazer_integration.py admit and render (Flavors) and the rendered host-reconcile.py apply, on the blazer-prep isolated work tree (sourceRootFrom) after git-meta. The Frankel receipt directory, lock and source root come by pointer from their committed sources; no build number or work directory is committed. EXPECTED identities (Chief and Infra, 2026-11-03), never observed current state, each re-verified at execution and refused on any mismatch: sourceRun 41554911849 and sourceInventory (source.selection.tsv beside the copy, 308692830 bytes, sha256 3c0f9af1...), re-hashed by seed; aapt.path, the configured SDK tool, which may sit inside the production source root only below prebuilts/sdk/ because it is executed and hashed, never written. Null until verified and committed: aapt.sha256, apksigner path and sha256, appsDir and policy (the already-signed Rose APKs with their sign-apk receipts and the background policy). While any is null the hosted check exits 4 before the controller. Nothing here was read from or run on any host.",
   "host": "immortal-os-builder",
   "lockFrom": "os/release-pipeline/frankel.json host.lockPath",
   "sourceRootFrom": "os/build-only/blazer-prep-host.json sourceRoot",
@@ -9,14 +9,17 @@
   "updaterRoute": "os/build-only/blazer-updater-route.json",
   "sourceRun": "41554911849",
   "sourceInventory": {
-    "path": null,
+    "path": "/home/pixelbuild/rose-actions/blazer-prep-41473133543-1/source.selection.tsv",
     "sha256": "3c0f9af1cf2f931a6a6c238dc9297223730ca1477d8473b0853f72e2ad388c7d"
   },
   "appsDir": null,
   "policy": null,
-  "aapt": null,
-  "apksigner": null,
-  "build": null,
-  "integrationDir": null,
-  "workDir": null
+  "aapt": {
+    "path": "/home/pixelbuild/grapheneos-2026100600/prebuilts/sdk/tools/linux/bin/aapt",
+    "sha256": null
+  },
+  "apksigner": {
+    "path": null,
+    "sha256": null
+  }
 }
