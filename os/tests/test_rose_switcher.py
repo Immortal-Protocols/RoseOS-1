@@ -1570,7 +1570,7 @@ class Launcher3CompileContractTest(unittest.TestCase):
     SCRIPT = ROOT/'scripts/launcher3-compile-contract.py'
     MANIFEST = ROOT/'os/compile-contracts/launcher3-quickstep-lib.json'
     # The agreed version (#410). Changing the manifest changes this, and the change needs re-agreement with Release.
-    AGREED_SHA256 = '9d722c5116c4d551d2ba9f9a044ce2db4fd016a0cf41601d881dcc3151c2a208'
+    AGREED_SHA256 = '256bad1f6c51b5fdfe70b5d844505e0ea6360df2d6b102fb40d11e917d06f6e3'
 
     def contract(self):
         import importlib.util
@@ -1688,10 +1688,23 @@ class Launcher3CompileContractTest(unittest.TestCase):
         self.assertTrue(sharing['appliesWithEdgeOff'])
         self.assertIn('setShareIdentityEnabled(true)', sharing['change'])
         self.assertIn('no dedicated exported entry', sharing['consumer'])
-        self.assertFalse(sharing['consumerImplemented'], 'Home\'s gate is a stated requirement until it lands')
-        home = '\n'.join(p.read_text(errors='ignore') for p in (ROOT/'workspace/rose-agent/app/src').rglob('*.java'))
-        self.assertNotIn('gesture_nav_contract_icon_position', home, 'no Home reply exists yet: update consumerImplemented '
-            'and test the gate when it lands')
+        self.assertTrue(sharing['consumerImplemented'])
+        # Home's gate (#442), read here, never edited: the caller is checked before any of the sender's extras, against
+        # the platform's recents package with a shared uid, only on SDK 35+, and the reply is a RectF only.
+        app = ROOT/'workspace/rose-agent/app/src/dev/pixel/voice'
+        main, rules = (app/'MainActivity.java').read_text(), (app/'GestureContract.java').read_text()
+        gate = main[main.index(' void gestureContract(Intent i,boolean homeShown){'):main.index(' void sendGestureReply(')]
+        self.assertLess(gate.index('getCurrentCaller()'), gate.index('getBundleExtra(GestureContract.EXTRA)'),
+            'identity before any extra is read')
+        self.assertIn('GestureContract.caller(caller.getPackage(),caller.getUid(),recentsPackage())', gate)
+        self.assertIn('return recentsPackage != null && callerUid >= 0 && recentsPackage.equals(callerPackage);', rules)
+        self.assertIn('static final int MIN_SDK = 35;', rules)
+        self.assertIn('getIdentifier("config_recentsComponentName","string","android")', main)
+        reply = main[main.index(' void sendGestureReply('):main.index(' static String recentsPackage()')]
+        self.assertIn('data.putParcelable(GestureContract.ICON_POSITION,target);', reply)
+        for never in ('surface_control', 'finish_callback', 'ICON_SURFACE', 'ON_FINISH'):
+            self.assertNotIn(never, main + rules, f'RectF only: no {never}')
+        self.assertTrue((ROOT/'workspace/rose-agent/app/tests/GestureContractTest.java').exists(), 'Home tests its rules')
         tree = Path(tempfile.mkdtemp(prefix='launcher3-identity-'))
         self.addCleanup(shutil.rmtree, tree, True)
         for name, relative in EDGE_TARGETS.items():

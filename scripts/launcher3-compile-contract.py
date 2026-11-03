@@ -330,10 +330,11 @@ def build():
                 'quickstep/src/com/android/quickstep/window/RecentsWindowSwipeHandler.java (inactive here)'],
             'change': 'ActivityOptions.makeCustomAnimation(mContext, 0, 0).setShareIdentityEnabled(true)',
             'appliesWithEdgeOff': True,
-            'consumer': "requirement on Home, not implemented or tested in this repository yet: reply to "
-                "gesture_nav_contract_v1 only through a fail-closed caller gate (#410 6594409930 section 4); no "
-                "dedicated exported entry",
-            'consumerImplemented': False,
+            'consumer': "Home (workspace/rose-agent, #442): MainActivity.gestureContract replies to "
+                "gesture_nav_contract_v1 only after GestureContract.caller accepts getCurrentCaller() as the "
+                "config_recentsComponentName package with a shared uid, on SDK 35+, RectF only; no dedicated exported "
+                "entry",
+            'consumerImplemented': True,
         },
     }
 
