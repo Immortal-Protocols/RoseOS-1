@@ -2,7 +2,7 @@
 
 This implements the source/preparation/integration/unsigned-compile portion of
 [Nathan’s Mustang plan](https://app.notion.com/p/40d7c646c81b81198e60cb76ca2ea603).
-For the implemented signing/package continuation and actual blocked runtime state,
+For the implemented signing/package continuation and current runtime state,
 see [Mustang delivery](MUSTANG-DELIVERY.md).
 
 The target is **Pixel 10 Pro XL / mustang**. It is separate from Pixel 10 Pro
@@ -44,7 +44,7 @@ have not been observed on the builder by this source task.
 - `mustang-updater-route.json` configures device-qualified future Mustang
   discovery in the existing index. It creates no release or feed and selects
   no other device’s assets. Delivery remains private.
-- `.github/workflows/mustang-candidate.yml` is a manual unsigned route using
+- The merged `os-release.yml` mode `mustang-build` is a manual unsigned route using
   existing controller identity, builder selectors, non-cancelling shared FIFO,
   nonblocking host lock, ownership receipt and ownership-aware STOP cleanup.
   No signer login, signing secret or public publisher is present. Receipts are
@@ -77,24 +77,25 @@ review. It did not execute preparation, vendor/lunch, compilation, signing,
 packaging, export, cleanup/STOP, any test suite or any phone operation. There is
 no Mustang build, signed-installer, flash-ready or phone-acceptance claim.
 
-## Signing and package blocker
+## Signing and package continuation
 
-`os/build-only/mustang-signing-requirements.json` gives the precise proposed
-profile and container names and compatibility findings. They are source
-requirements, not created cloud resources or approved access bindings.
+`os/build-only/mustang-signing-requirements.json` records the exact profile,
+container names and compatibility findings. The separate `pro-mustang-v1`
+profile is now resource-bound: both distinct containers exist, Nathan applied
+the four approved conditional grants until 2026-11-04T00:50:06Z, and bootstrap
+run `41719073037` committed version 1 in each container once. Its public receipt
+records complete status, no recovery needed and temporary workspace removal.
+No further bootstrap is required. Creator metadata denials remain respected;
+no Rango/Blazer grant, identity or artifact fills a gap.
 
-The separate `os/signing-bootstrap/mustang.json` defines `pro-mustang-v1` and
-remains **unbound**. The two distinct Mustang containers have since been created;
-creator `versions.list` was denied, no key material was generated or imported,
-and no signer IAM grant was added. Signing, reduced factory packaging and
-private export source are now implemented in the separate continuation described
-in [Mustang delivery](MUSTANG-DELIVERY.md). That guide and the setup evidence
-record the exact outstanding access/credential requirements and the controller
-failure. No Rango/Blazer grant, identity or artifact fills the gap.
-
-For a later authorized runtime, dispatch **Mustang unsigned candidate** at one
-main SHA after checking current runs. A successful unsigned compile still stops
-before signing; its receipt names that blocker. The original sprint start,
+Signing, reduced factory packaging and private export are implemented through
+`os-release.yml mode=mustang-delivery`, consuming successful producer-run pins.
+The current corrected unsigned run is `41719106957`; no duplicate run should be
+dispatched. Its integration and compile remain on one main source SHA. A
+successful unsigned compile ends before the separate delivery stage. See
+[Mustang delivery](MUSTANG-DELIVERY.md) for actual stage outcomes and earlier
+configuration failures; none of those failures is a completed compilation.
+The original sprint start,
 absolute Pacific deadline and remaining budget must be recorded by Chief; this
 source implementation has no evidence for those values and does not restart the
 clock. The job cap is 11 hours, compile cap 8 hours, and existing independent

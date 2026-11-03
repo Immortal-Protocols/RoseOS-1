@@ -1,6 +1,6 @@
 {
   "schema": "roseos.mustang-signing-requirements.v1",
-  "status": "resource-bound for one bootstrap; four conditional bindings confirmed; key material not generated yet",
+  "status": "one bootstrap complete; Mustang keys and passphrase committed at numeric version 1; delivery signing pending",
   "profile": "pro-mustang-v1",
   "device": "mustang",
   "project": "protocols-465723",
@@ -23,6 +23,7 @@
     "factoryPackaging": "Mustang adapter reuses existing factory script derivation, bounded execution and extraction guards, deliberately omitting the sprint-removed checks while retaining basic installer format and output hashes.",
     "archiveSigning": "Separate archive signature status is omitted in this sprint; no Rango/Blazer archive-signing identity is selected"
   },
-  "runtime": "Both containers exist. All four exact signer bindings are confirmed, expiring 2026-11-04T00:50:06Z. Bootstrap remains unexecuted and must freshly check occupancy as the signer.",
-  "profileDefinition": "os/signing-bootstrap/mustang.json"
+  "runtime": "Bootstrap 41719073037 completed once with no recovery needed and workspace removed. Both Mustang containers have committed version 1, pinned by its public receipt. Four conditional signer bindings expire 2026-11-04T00:50:06Z. No further bootstrap is authorized or required.",
+  "profileDefinition": "os/signing-bootstrap/mustang.json",
+  "bootstrapEvidence": "os/signing-bootstrap/mustang-bootstrap-receipt.json"
 }
