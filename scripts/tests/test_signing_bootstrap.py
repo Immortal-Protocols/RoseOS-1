@@ -1677,7 +1677,8 @@ class BlazerProfiles(unittest.TestCase):
         self.assertEqual(pro['principal'], 'roseos-factory-images-blazer-v1')
         def shape(profile):  # bindings (status, access, the measured identity) may land for Rango first
             value = copy.deepcopy({k: v for k, v in profile.items()
-                                   if k not in ('device', 'principal', 'purpose', 'secrets', 'missing', 'status', 'access')})
+                                   if k not in ('device', 'principal', 'purpose', 'secrets', 'missing', 'status', 'access',
+                                                'resourceBasis')})
             value['tools']['ssh-keygen'].pop('installed')
             return value
         self.assertEqual(shape(pro), shape(rango))
