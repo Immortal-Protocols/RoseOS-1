@@ -174,6 +174,38 @@ public final class CurrentAppsReplyTest {
         expect(!r.apply(live(41, "ready", true, new ReplyApp(CALC, true, true))) && r.apps().isEmpty(), "the old instance's late reply never resurrects");
         Snapshot noInstance = CurrentApps.fromReply("reader-7", "none", null, null, 1L, Collections.<ReplyApp>emptyList(), null, null, true);
         expect(noInstance.registration.equals("reader-7"), "without instance: the reader's own registration");
+        // #410 AppCore finding: the running edge (and Rose's working button) mean authoritatively running only, i.e. the
+        // app's controller session reported exactly ready. Membership and Stop are unchanged; the card's chip stays truthful.
+        String[][] notRunning = {{"launching", "Starting"}, {"starting", "Starting"}, {"scheduled", "Starting"}, {"blocked", "Waiting"},
+            {"consent_required", "Waiting"}, {"cleanup_failed", "Still open"}, {"", "Open"}, {"mystery", "Open"}};
+        for (String[] c : notRunning) {
+            Snapshot b = CurrentApps.fromBindings("r", "live", 60L, apps(new ReplyApp(CALC, true, true, "s-0")), Arrays.asList(new Binding(0, "s-0", "rose-ws-0", CALC, c[0], true, true)), "e-1", true);
+            App a = b.apps.get(0);
+            expect(b.available && b.apps.size() == 1, c[0] + ": membership kept");
+            expect(!a.authoritativelyRunning(), c[0] + ": not authoritatively running (no lit edge)");
+            expect(CurrentApps.cardState(a).equals(c[1]), c[0] + ": chip says " + c[1] + ", got " + CurrentApps.cardState(a));
+            expect(a.stop != null && a.stop.sessionId.equals("s-0") && a.stop.controllerTaskId.equals("rose-ws-0"), c[0] + ": per-session Stop unchanged");
+        }
+        App ready = CurrentApps.fromBindings("r", "live", 61L, apps(new ReplyApp(CALC, true, true, "s-0")), Arrays.asList(new Binding(0, "s-0", "rose-ws-0", CALC, "ready", true, true)), "e-1", true).apps.get(0);
+        expect(ready.authoritativelyRunning() && CurrentApps.cardState(ready).equals("Running") && ready.stop != null, "ready: authoritatively running, Stop kept");
+        Snapshot mixed = CurrentApps.fromBindings("r", "live", 62L, apps(new ReplyApp(CALC, false, false, null), new ReplyApp(MAPS, true, true, "s-1"), new ReplyApp(PERM, true, true, "s-gone")),
+            Arrays.asList(new Binding(1, "s-1", "rose-ws-1", MAPS, "ready", true, true), new Binding(2, "s-gone", "t", PERM, "ready", false, true)), "e-1", true);
+        expect(!mixed.apps.get(0).authoritativelyRunning() && CurrentApps.cardState(mixed.apps.get(0)).equals("Open"), "lingering/unbound app: no edge, chip Open");
+        expect(mixed.apps.get(1).authoritativelyRunning(), "its ready neighbour still lights");
+        expect(!mixed.apps.get(2).authoritativelyRunning() && mixed.apps.get(2).stop == null, "a ready binding that isn't bound: no edge, no Stop");
+        for (String os : new String[]{"cleanup_failed", "consent_required", "scheduled", null}) {
+            App o = CurrentApps.fromReply("r", "live", "s-1", "rose-ws-1", 63L, apps(new ReplyApp(CALC, true, true)), null, os, true, "owned_devices").apps.get(0);
+            expect(o.state.equals(CurrentApps.STATE_RUNNING) && !o.authoritativelyRunning(), "owned_devices " + os + ": listed under control, not authoritatively running");
+        }
+        expect(CurrentApps.fromReply("r", "live", "s-1", "rose-ws-1", 64L, apps(new ReplyApp(CALC, true, true)), null, "ready", true, "owned_devices").apps.get(0).authoritativelyRunning(), "owned_devices with a ready session: running");
+        expect(!CurrentApps.fromReply("r", "live", null, null, 64L, apps(new ReplyApp(CALC, true, true)), null, "ready", true, "owned_devices").apps.get(0).authoritativelyRunning(), "owned_devices ready but no session: not running");
+        expect(live(65, "ready", true, new ReplyApp(CALC, true, true)).apps.get(0).authoritativelyRunning(), "session reply ready: running");
+        expect(!live(65, "launching", true, new ReplyApp(CALC, true, true)).apps.get(0).authoritativelyRunning() && !live(65, "blocked", true, new ReplyApp(CALC, true, true)).apps.get(0).authoritativelyRunning(), "session reply launching/blocked: not running");
+        expect(CurrentApps.sessionRunning("ready") && !CurrentApps.sessionRunning("launching") && !CurrentApps.sessionRunning("cleanup_failed") && !CurrentApps.sessionRunning(null) && !CurrentApps.sessionRunning("Ready"), "the one running status is exactly ready");
+        Tracker flip = new Tracker();
+        flip.apply(CurrentApps.fromBindings("r", "live", 70L, apps(new ReplyApp(CALC, true, true, "s-0")), Arrays.asList(new Binding(0, "s-0", "t", CALC, "ready", true, true)), "e-1", true));
+        expect(flip.apply(CurrentApps.fromBindings("r", "live", 71L, apps(new ReplyApp(CALC, true, true, "s-0")), Arrays.asList(new Binding(0, "s-0", "t", CALC, "cleanup_failed", true, true)), "e-1", true)), "ready -> cleanup_failed is a visible change (edge goes out)");
+        expect(!flip.apps().get(0).authoritativelyRunning(), "after the flip: not running");
         System.out.println("CurrentAppsReplyTest: " + checks + " checks passed");
     }
 }

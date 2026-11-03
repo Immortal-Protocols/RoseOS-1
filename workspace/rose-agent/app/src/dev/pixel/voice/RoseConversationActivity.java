@@ -174,7 +174,9 @@ public final class RoseConversationActivity extends Activity {
   String cap=OxbloodRose.caption(state,visual);if(!cap.contentEquals(caption.getText()))caption.setText(cap);
   // The pearl is the screen's spoken state (the caption is its visible twin, hidden so it isn't read twice).
   String said=RosePresenceModel.describe(visual);if(!said.contentEquals(pearlView.getContentDescription()==null?"":pearlView.getContentDescription()))pearlView.setContentDescription(said);
-  workGlyph.set(ctl.failure==TaskControl.ReadFailure.NONE&&("ready".equals(ctl.status)||"launching".equals(ctl.status)),reducedMotion());
+  // Working only while Rose's session is authoritatively running (reported exactly ready; #410 rose.workButton.working),
+  // the same definition as Background Work's running edge: never while launching, waiting or holding a failed close.
+  workGlyph.set(ctl.failure==TaskControl.ReadFailure.NONE&&CurrentApps.sessionRunning(ctl.status),reducedMotion());
   renderTask(s);
   if(overview!=null&&overview.isOpen()){pollApps();overview.refresh();}
  }
