@@ -128,9 +128,9 @@ test('Home layout, page/gesture and overview Java checks run against the product
 });
 
 test('the Rose entry opens App\'s conversation activity and only navigates',()=>{
- assert.match(main,/new RoseHomeView\(this,RoseHomeView\.homeApps\(getPackageManager\(\),getPackageName\(\),launchable,!folderApps\.isEmpty\(\)\),homeColumns\)\);/);
+ assert.match(main,/new RoseHomeView\(this,homeEntries,homeColumns,this::homeMeasured\)\);/,'Home fills its measured rows (#410 owner density correction)');
  // Home's columns come from the same planned/measured app area as the app pages (#410: four unlabelled 60dp cells).
- assert.match(main,/appPerPage=HomeAppLayout\.perPage\(width,height,cell,density\);homeColumns=HomeAppLayout\.homeColumns\(width\/density\);/);
+ assert.match(main,/homeColumns=HomeAppLayout\.homeColumns\(homeWidth\/density\);homeCapacity=HomeAppLayout\.homeCapacity\(homeWidth,homeHeight,homeCell,density\);/);
  // The tray's Rose well is the plain navigation hook and nothing else.
  assert.match(homeTray,/rose\.setOnClickListener\(v -> openRose\.run\(\)\);/);
  assert.match(homeTray,/rose\.setContentDescription\("Open Rose"\);/);
@@ -186,8 +186,9 @@ test('one persistent control bar: Home has no second shortcut dock over the tray
  // second bar (its own panel, an "All apps" tile) directly over HomeTray.
  for(const old of ['GradientDrawable','setCornerRadius','0xd9fafcf4','"All apps"','▦','dockTile','DockLabelView','LinearLayout'])
   assert.ok(!home.includes(old),'RoseHomeView still builds the old dock: '+old);
- // Home's grid is the app pages' HomeAppPage in Home's cells (#410), in the band above the fixed dots/edge, with no re-plan callback.
- assert.match(home,/HomeAppPage grid = new HomeAppPage\(activity, columns, HomeAppLayout\.HOME_CELL_DP, HomeAppLayout\.HOME_COL_GAP_DP, null\);/);
+ // Home's grid is the app pages' HomeAppPage in Home's cells (#410), filling below the date down to the fixed dots/edge;
+ // its measurement re-plans Home's capacity (#410 owner density correction).
+ assert.match(home,/HomeAppPage grid = new HomeAppPage\(activity, columns, HomeAppLayout\.HOME_CELL_DP, HomeAppLayout\.HOME_COL_GAP_DP, fit\);/);
  assert.match(home,/addView\(grid, new LayoutParams\(-1, -1\)\);/);
  // Its bottom padding is only the frame's inset (system bar + tray + dots), like the app pages: nothing is drawn under the tray.
  assert.match(home,/side \+ i\.getSystemWindowInsetRight\(\), i\.getSystemWindowInsetBottom\(\)\);/);
@@ -442,7 +443,11 @@ test('system and duplicate apps leave the app pages for one "…" System folder 
  assert.match(groups,/KEEP_OUT = \{"com\.anthropic\.claude", "com\.openai\.chatgpt", "com\.amazon\.mShop\.android\.shopping"\};/);
  assert.match(groups,/if \(has\(KEEP_OUT, packageName\)\) return MAIN;\n  if \(suite\) return SUITE;/);
  // Home's default apps come from every launchable app, the folder's included.
- assert.match(pages,/RoseHomeView\.homeApps\(getPackageManager\(\),getPackageName\(\),launchable,!folderApps\.isEmpty\(\)\)/);
+ assert.match(pages,/RoseHomeView\.homeApps\(getPackageManager\(\),getPackageName\(\),launchable,false\)/);
+ assert.match(pages,/int\[\] share=HomeAppLayout\.homeShare\(curated\.size\(\),!folderApps\.isEmpty\(\),rest\.size\(\),homeCapacity\);/);
+ assert.match(pages,/if\(!folderApps\.isEmpty\(\)\)homeEntries\.add\(null\);/,'the System folder is Home\'s last cell');
+ assert.match(pages,/for\(ResolveInfo app:entries\)if\(!onHome\.contains\(componentKey\(app\)\)\)appEntries\.add\(app\);/,'no app is placed twice to fill space');
+ assert.match(pages,/HomeAppLayout\.slice\(appEntries\.size\(\),appPerPage,i\)/,'the app pages continue the inventory after Home');
  assert.ok(pages.indexOf('launchable.addAll(systemApps)')<pages.indexOf('RoseHomeView.homeApps('));
  // The folder: one named cell, a dialog with the real cells; launching, HOME, a rebuild or teardown closes it.
  const folder=main.slice(main.indexOf(' View folderTile(boolean labelled){'),main.indexOf(' void closeSystemFolder(){'));
