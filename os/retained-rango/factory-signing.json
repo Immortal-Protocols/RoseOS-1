@@ -1,0 +1,13 @@
+{
+  "schema": "roseos.factory-archive-signing-binding.v1",
+  "device": "rango",
+  "build": "2026103001",
+  "project": "protocols-465723",
+  "signer": "roseos-build-signer@protocols-465723.iam.gserviceaccount.com",
+  "keySecret": "PIXEL_OS_FACTORY_SIGNING_KEY_RANGO_V1",
+  "keyVersion": null,
+  "passphraseSecret": "PIXEL_OS_FACTORY_SIGNING_PASSPHRASE_RANGO_V1",
+  "passphraseVersion": null,
+  "sshKeygen": {"path": null, "sha256": null},
+  "basis": "FOLD-ARCHIVE-SIGN: binding for scripts/factory-archive-sign.py. The containers are the fold-rango-factory-v1 bootstrap profile's (os/signing-bootstrap/profiles.json). keyVersion/passphraseVersion come only from that bootstrap's committed receipt; sshKeygen only from a measured installed identity on the builder; the public identity only from os/flavors/rango.json factorySigning (Flavors), bound from the same receipt. While any value is null, check exits 4 and sign refuses before any host or secret access. Nothing here is a key, secret or credential."
+}
