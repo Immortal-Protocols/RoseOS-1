@@ -1,0 +1,31 @@
+{
+  "plan": "https://app.notion.com/p/40d7c646c81b81198e60cb76ca2ea603",
+  "status": "source implementation; runtime evidence absent",
+  "omittedChecks": [
+    "Downloaded input hash verification",
+    "Focused tests, including wrong-device/hash/missing-input negative cases",
+    "Existing-device regression tests and required CI/full-suite runs (post-hoc follow-up)",
+    "Independent isolated source/output path and safe-file-handling verification",
+    "Free-space checks against the selected route reserve",
+    "OS/AVB signing-result and intended-public-identity verification",
+    "Packaged Rose app/signer and compiled-controller-policy verification",
+    "Required-partition and firmware-coverage checks",
+    "Installer-to-signed-output content comparison, including dynamic partitions",
+    "Installer-reference, device-requirement and public-AVB-metadata checks",
+    "Separate archive-signature status reporting"
+  ],
+  "retained": [
+    "Mustang target/source metadata review",
+    "Official input URL/hash pins (metadata only)",
+    "Shared queue, builder ownership and nonblocking shared lock",
+    "Existing access restrictions and openssh-client hold",
+    "Fresh allocation and distinct source/output directories",
+    "Integration and compile source-SHA binding",
+    "Expected output existence, device/build identity, sizes and hashes",
+    "Basic installer format identification when packaging becomes available",
+    "Private export and delivered-download checksum when delivery becomes available",
+    "Cleanup and independent STOP observation after authorized runtime"
+  ],
+  "postHoc": "Restore and run the omitted checks in a separate follow-up; none is a pass in this sprint.",
+  "deliveryLabel": "build-and-package candidate; omitted verification remains undone; physical-device acceptance unproven"
+}

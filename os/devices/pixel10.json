@@ -138,10 +138,41 @@
       },
       "forbiddenPatchSets": ["os/fold-port"],
       "forbiddenNote": "os/fold-port is the experimental original Pixel Fold (yogi) port: its allocator, stock-kernel-flag and product-tray patches never apply to rango, which uses the supported GrapheneOS rango kernel."
+    },
+    "mustang": {
+      "model": "Pixel 10 Pro XL",
+      "product": "mustang",
+      "adevtoolConfig": "config/device/mustang.yml",
+      "lunch": {
+        "expected": "mustang-cur-user",
+        "probe": "notExecuted",
+        "evidence": null
+      },
+      "kernelDir": "device/google/laguna-kernels/6.6/grapheneos/muzel",
+      "vendorInputs": {
+        "factoryImage": {
+          "file": "mustang-cp3a.261005.005-factory-099acc44.zip",
+          "sha256": "099acc44e2f87fe2735d92952081d64550ff08b4a6390bb6b001c8451695657e",
+          "status": "indexed",
+          "note": "adevtool build index value; this repository never downloaded or verified the archive"
+        },
+        "generated": "unknown",
+        "evidence": null
+      },
+      "display": {
+        "source": {
+          "width": 1344,
+          "height": 2992
+        },
+        "referenceDisplayAddress": null,
+        "referenceDisplayStatus": "notApplicable"
+      },
+      "forbiddenPatchSets": [
+        "os/fold-port"
+      ]
     }
   },
   "excluded": {
-    "mustang": "Pixel 10 Pro XL: in adevtool pixel-gen10 but outside this plan",
     "yogi": "original Pixel Fold: the os/fold-port experiment, not a supported target"
   }
 }

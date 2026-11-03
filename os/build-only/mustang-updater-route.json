@@ -1,0 +1,16 @@
+{
+  "schema": "roseos.mustang-updater-route.v1",
+  "device": "mustang",
+  "updaterUrl": "https://github.com/Immortal-Protocols/pixel-ota/releases/download/",
+  "releaseIndex": "https://api.github.com/repos/Immortal-Protocols/pixel-ota/releases",
+  "publishedChannel": "stable",
+  "producerContract": {
+    "tag": "mustang-{build}",
+    "metadataAsset": "mustang-stable",
+    "otaAsset": "mustang-ota_update-{build}.zip",
+    "metadataLine": "{build} {buildDateUtc} mustang stable"
+  },
+  "owner": "Mustang sprint",
+  "approvalRef": "https://app.notion.com/p/40d7c646c81b81198e60cb76ca2ea603",
+  "basis": "Device-qualified discovery configuration only; no feed or public release is created. Candidate delivery remains private."
+}

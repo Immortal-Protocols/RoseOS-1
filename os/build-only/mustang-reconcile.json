@@ -1,0 +1,86 @@
+{
+  "schemaVersion": 1,
+  "kind": "rose-mustang-reconcile-template",
+  "device": "mustang",
+  "basis": "Mustang-only Rose integration through existing host-reconcile; source SHA and allocation remain bound; compiled app/signer and policy verification omitted under https://app.notion.com/p/40d7c646c81b81198e60cb76ca2ea603",
+  "recipe": "os/build-only/mustang.json",
+  "reconcile": {
+    "projects": [
+      "frameworks/base",
+      "build/make",
+      "build/release",
+      "packages/apps/Updater",
+      "packages/modules/Permission",
+      "packages/apps/Launcher3"
+    ],
+    "integrationOwnedRoots": [
+      "packages/apps/PixelBackgroundControl",
+      "packages/apps/RosePreinstall"
+    ],
+    "sparsePaths": {
+      "frameworks/base": [
+        "core/res/res/values/config.xml"
+      ],
+      "build/make": [
+        "target/product/handheld_product.mk"
+      ],
+      "packages/apps/Updater": [
+        "res/values/config.xml"
+      ],
+      "packages/modules/Permission": [
+        "service/java/com/android/role/RoleService.java"
+      ]
+    },
+    "patcher": "trusted",
+    "applyArgs": [
+      "--background-policy",
+      "{policy}",
+      "--background-agent",
+      "{signed_apps}/dev.pixel.backgroundcontrol.apk",
+      "--agent-tray",
+      "--updater-url",
+      "{updater_url}",
+      "--updater-release-index",
+      "{updater_release_index}",
+      "--updater-published-channel",
+      "{updater_channel}",
+      "--preinstall-apk",
+      "{signed_apps}/dev.pixel.voice.apk",
+      "--preinstall-apk",
+      "{signed_apps}/dev.pixel.calculator.agent.apk"
+    ]
+  },
+  "candidateInputs": {
+    "schema": "roseos.mustang-candidate.v1",
+    "androidManifestBlob": "b57648423ffb20af35d1c7058a3b7c58bb049770",
+    "appSignerSha256": "650d47f91b7f5af3c530fef53fe92018aa4521efba065bcb1d6fc9b699060bfb",
+    "sdk": 37,
+    "prototypeControl": true,
+    "candidateFiles": [
+      "os/patches/rose-switcher-launcher3.patch",
+      "os/patches/updater-rose-channels.patch",
+      "os/patches/updater-rose-releases.patch",
+      "os/overlays/packages/apps/Updater/src/app/seamlessupdate/client/RoseReleases.java"
+    ],
+    "apps": [
+      {
+        "role": "agent",
+        "package": "dev.pixel.backgroundcontrol"
+      },
+      {
+        "role": "voice",
+        "package": "dev.pixel.voice"
+      },
+      {
+        "role": "target",
+        "package": "dev.pixel.calculator.agent"
+      }
+    ]
+  },
+  "updaterRoute": {
+    "status": "missing",
+    "schema": "roseos.mustang-updater-route.v1",
+    "missingInput": "--updater-route ROUTE.json from the release owner: device mustang, updaterUrl https://github.com/OWNER/REPO/releases/download/, releaseIndex https://api.github.com/repos/OWNER/REPO/releases, publishedChannel stable, the mustang producer contract (tag mustang-{build}, assets mustang-stable and mustang-ota_update-{build}.zip, metadata line '{build} {buildDateUtc} mustang stable'), owner and approvalRef",
+    "basis": "Device-qualified release discovery (RoseReleases) is the only route form admitted: each check resolves one mustang-N release. A releases/latest URL is refused because Latest names Frankel."
+  }
+}

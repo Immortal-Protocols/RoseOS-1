@@ -1,0 +1,16 @@
+{
+  "repository": "https://github.com/GrapheneOS/adevtool",
+  "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c",
+  "files": {
+    "mustang.yml": "config/device/mustang.yml",
+    "android-info.txt": "vendor-skels/google_devices/mustang/firmware/android-info.txt",
+    "build-index.json": "config/build-index/build-index-main.yml (Mustang CP3A.261005.005 block only)"
+  },
+  "retrievedAt": "2026-11-03",
+  "scope": "public source metadata only; no factory body downloaded",
+  "sprintPatch": {
+    "file": "adevtool-no-input-hash.patch",
+    "upstreamPath": "src/frontend/source.ts",
+    "scope": "Mustang only in fresh isolated source copy; removes intrinsic factory input hash verification per sprint; never applied to production"
+  }
+}
