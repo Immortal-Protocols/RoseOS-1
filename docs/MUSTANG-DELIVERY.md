@@ -66,8 +66,9 @@ and OTA (1,673,383,799 bytes, SHA-256
 Its signing-result and intended-identity verification fields remain false as
 instructed. Factory generation returned exit 0 at 23:42:12Z and removed its
 temporary work. Private upload and the separate hosted download/checksum job
-both succeeded; download checks completed at **23:43:12Z**, workflow complete
-at **23:43:15Z**. The original failed producer remains recorded as failed.
+both succeeded; download checks completed at **23:43:12Z**, delivery and cleanup
+jobs completed at **23:43:15Z**, and terminal workflow metadata was updated at
+**23:43:16Z**. The original failed producer remains recorded as failed.
 
 The delivered **mustang-install-2026110302.zip** is **2,108,057,621 bytes**,
 SHA-256 `4eae7e7e54191f30168649e75f2cfefb10fdbff1bffbfc2655ec079a4a8cce5e`.
