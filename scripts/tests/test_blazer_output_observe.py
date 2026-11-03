@@ -25,10 +25,16 @@ SYSTEM_PROP = (f'ro.build.version.incremental={BUILD}\nro.build.date.utc=1793700
                f'ro.build.fingerprint=google/blazer/blazer:16/CP3A.261005.005/{BUILD}:user/release-keys\n'
                'ro.build.id=CP3A.261005.005\nro.build.type=user\nro.build.tags=release-keys\n'
                'ro.build.display.id=PRIVATE-DISPLAY\nro.secret.token=PRIVATE-TOKEN\n')
-VENDOR_PROP = f'ro.vendor.build.version.incremental={BUILD}\nro.vendor.build.date.utc=1793700000\nro.vendor.extra=PRIVATE-VENDOR\n'
-MISC = 'ab_update=true\nvirtual_ab=true\ndynamic_partition_list=system vendor product\navb_key_path=/PRIVATE/key\n'
-INFO = 'require board=blazer\nrequire version-bootloader=bl-1|bl-2\nrequire version-baseband=bb-1\nrequire other=PRIVATE\n'
+VENDOR_PROP = (f'ro.vendor.build.version.incremental={BUILD}\nro.vendor.build.date.utc=1793700000\n'
+               'ro.product.vendor.device=blazer\nro.vendor.extra=PRIVATE-VENDOR\n')
+MISC = ('ab_update=true\nvirtual_ab=true\ndynamic_partition_list=system vendor product\navb_key_path=/PRIVATE/key\n'
+        'avb_system_add_hashtree_footer_args=--key /PRIVATE/avb.pem --prop com.android.build.system.fingerprint:'
+        f'google/blazer/blazer:16/CP3A.261005.005/{BUILD}:user/test-keys\n')
+INFO = ('require board=blazer\nrequire version-bootloader=bl-1|bl-2\nrequire version-baseband=bb-1\n'
+        'require partition-exists=vendor_kernel_boot\nrequire other=PRIVATE\n')
+AB = 'system\nvendor\nproduct\nabl\nmodem\nboot\n'
 FASTBOOT = b'\x7fELF fastboot'
+GENERATOR = {'device/common/generate-factory-images-common.sh': b'# generator\n', 'device/common/clear-factory-images-variables.sh': b'# clear\n'}
 
 
 TEMPS = []
@@ -52,13 +58,18 @@ class Tree:
         self.target = self.inter/f'blazer-target_files-{BUILD}.zip'
         self.write_zip(self.target, members if members is not None else {
             'SYSTEM/build.prop': SYSTEM_PROP, 'VENDOR/etc/build.prop': VENDOR_PROP, 'META/misc_info.txt': MISC,
-            'OTA/android-info.txt': INFO, 'SYSTEM/app/Private.apk': 'PRIVATE-APK',
+            'META/ab_partitions.txt': AB, 'OTA/android-info.txt': INFO, 'SYSTEM/app/Private.apk': 'PRIVATE-APK',
+            'IMAGES/boot.img': 'boot',
             'RADIO/bootloader.img': 'bootloader bytes', 'RADIO/radio.img': 'radio bytes',
             'VENDOR/firmware/dauntless/evt.ec.bin': 'PRIVATE-GSC-BYTES', 'VENDOR/firmware/dauntless/nested/x.bin': 'n',
             'IMAGES/system.img': 'system', 'IMAGES/vendor.img': 'vendor'})
         self.otatools = self.out/observer.OTATOOLS
         self.otatools.parent.mkdir(parents=True)
-        self.write_zip(self.otatools, otatools if otatools is not None else {'bin/fastboot': FASTBOOT, 'releasetools/x.py': 'x'})
+        self.write_zip(self.otatools, otatools if otatools is not None else {
+            'bin/fastboot': FASTBOOT, 'releasetools/x.py': 'x', 'bin/simg2img': 'simg2img', 'bin/lpunpack': 'lpunpack', **GENERATOR})
+        for relative in observer.VENDOR_BOOT.values():
+            (self.out/relative).parent.mkdir(parents=True, exist_ok=True)
+            (self.out/relative).write_bytes(observer.VENDOR_BOOT_MAGIC + b'\0' * 56)
         for relative in observer.SCRIPTS:
             path = self.source/relative
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -94,13 +105,29 @@ class Observe(unittest.TestCase):
             'ro.build.fingerprint': f'google/blazer/blazer:16/CP3A.261005.005/{BUILD}:user/release-keys',
             'ro.build.type': 'user', 'ro.build.tags': 'release-keys'})
         self.assertEqual(target['props']['VENDOR/etc/build.prop'],
-                         {'ro.vendor.build.version.incremental': BUILD, 'ro.vendor.build.date.utc': '1793700000'})
+                         {'ro.vendor.build.version.incremental': BUILD, 'ro.vendor.build.date.utc': '1793700000',
+                          'ro.product.vendor.device': 'blazer'})
         self.assertEqual(target['summary'], {'incremental': [BUILD], 'dateUtc': ['1793700000']})
-        self.assertEqual(target['miscInfo'], {'ab_update': 'true', 'virtual_ab': 'true', 'dynamic_partition_list': 'system vendor product'})
-        self.assertEqual(target['androidInfo'], {'board': ['blazer'], 'version-bootloader': ['bl-1', 'bl-2'], 'version-baseband': ['bb-1']})
+        self.assertEqual(target['miscInfo'], {'ab_update': 'true', 'virtual_ab': 'true', 'dynamic_partition_list': 'system vendor product',
+            'fingerprints': [{'name': 'com.android.build.system.fingerprint',
+                              'value': f'google/blazer/blazer:16/CP3A.261005.005/{BUILD}:user/test-keys'}]})
+        # factory-package.py android_info semantics: one raw value per line, never split on '|'
+        self.assertEqual(target['androidInfo'], {'board': ['blazer'], 'version-bootloader': ['bl-1|bl-2'], 'version-baseband': ['bb-1'],
+                                                 'partition-exists': ['vendor_kernel_boot']})
+        self.assertEqual(target['abPartitions'], {'names': ['system', 'vendor', 'product', 'abl', 'modem', 'boot'], 'count': 6,
+                                                  'truncated': False})
         ota = report['otatools']
         self.assertEqual((ota['state'], ota['sha256']), ('present', sha(tree.otatools)))
         self.assertEqual(ota['fastboot'], {'state': 'present', 'size': len(FASTBOOT), 'sha256': hashlib.sha256(FASTBOOT).hexdigest()})
+        for name in observer.GENERATOR:
+            self.assertEqual(ota[f'generator:{name}']['sha256'], hashlib.sha256(GENERATOR[f'device/common/{name}']).hexdigest())
+        pins = json.loads((ROOT/'os/flavors/blazer.json').read_text())['inventory']['generatorFixture']['files']
+        self.assertEqual(ota['generatorPins'], {name: pins[name] for name in observer.GENERATOR})
+        self.assertEqual({k: v['state'] for k, v in ota['binaries'].items()},
+                         {'bin/simg2img': 'present', 'bin/lpunpack': 'present', 'bin/fsck.erofs': 'absent'})
+        for key, relative in observer.VENDOR_BOOT.items():
+            row = report['vendorBoot'][key]
+            self.assertEqual((row['state'], row['sha256'], row['vndrbootMagic']), ('present', sha(tree.out/relative), True))
         self.assertEqual(sorted(report['scripts']), sorted(observer.SCRIPTS))
         for relative, row in report['scripts'].items():
             self.assertEqual((row['state'], row['sha256']), ('present', sha(tree.source/relative)))
@@ -111,22 +138,26 @@ class Observe(unittest.TestCase):
         self.assertEqual([(m['name'], m['nested']) for m in factory['gscFirmware']['members']],
                          [('evt.ec.bin', False), ('nested/x.bin', True)])
         self.assertEqual(factory['dynamicImagesMissing'], ['product'])  # misc_info lists product; no IMAGES/product.img
+        self.assertEqual(factory['withoutImage'], ['abl', 'modem'])  # A/B, not dynamic, no IMAGES/<part>.img: firmware-carried
         flavor = json.loads((ROOT/'os/flavors/blazer.json').read_text())
         self.assertEqual(factory['flavorPins'], {'board': flavor['device']['board'], 'bootloader': flavor['firmware']['bootloader'],
-                                                 'baseband': flavor['firmware']['baseband']})
+                                                 'baseband': flavor['firmware']['baseband'],
+                                                 'partitionExists': flavor['firmware']['partitionExists']})
         self.assertNotIn('PRIVATE', json.dumps(report))  # nothing outside the allowlist leaves the host: no member content
 
     def test_absent_factory_inputs_are_findings_not_observation_failures(self):
-        tree = Tree(members={'SYSTEM/build.prop': SYSTEM_PROP, 'META/misc_info.txt': MISC, 'OTA/android-info.txt': INFO})
+        tree = Tree(members={'SYSTEM/build.prop': SYSTEM_PROP, 'META/misc_info.txt': MISC, 'META/ab_partitions.txt': AB,
+                             'OTA/android-info.txt': INFO})
         report = tree.observe()
         self.assertTrue(report['complete'])
         factory = report['targetFiles']['factoryInputs']
         self.assertEqual(factory['firmware'], {'bootloader': {'state': 'absent'}, 'radio': {'state': 'absent'}})
         self.assertEqual((factory['gscFirmware']['count'], factory['dynamicImagesMissing']), (0, ['system', 'vendor', 'product']))
+        self.assertEqual(factory['withoutImage'], ['abl', 'modem', 'boot'])
 
     def test_the_identity_is_reported_never_judged(self):
         tree = Tree(members={'SYSTEM/build.prop': 'ro.build.version.incremental=eng.pixelbuild.20261103.155410\n',
-                             'META/misc_info.txt': MISC, 'OTA/android-info.txt': INFO})
+                             'META/misc_info.txt': MISC, 'META/ab_partitions.txt': AB, 'OTA/android-info.txt': INFO})
         report = tree.observe()
         self.assertTrue(report['complete'])
         self.assertEqual(report['targetFiles']['summary']['incremental'], ['eng.pixelbuild.20261103.155410'])
@@ -170,6 +201,10 @@ class Observe(unittest.TestCase):
         tree = Tree(members={'SYSTEM/build.prop': SYSTEM_PROP, 'META/misc_info.txt': MISC})
         report = tree.observe()
         self.assertIn('targetFiles: member OTA/android-info.txt absent', report['problems'])
+        tree = Tree(members={'SYSTEM/build.prop': SYSTEM_PROP, 'META/misc_info.txt': MISC, 'OTA/android-info.txt': INFO})
+        report = tree.observe()  # factory-package.py observe raises without META/ab_partitions.txt
+        self.assertIn('targetFiles: member META/ab_partitions.txt absent', report['problems'])
+        self.assertFalse(report['complete'])
         tree = Tree(otatools={'releasetools/x.py': 'x'})
         self.assertIn('otatools: member bin/fastboot absent', tree.observe()['problems'])
         tree = Tree()
@@ -267,7 +302,7 @@ class Observe(unittest.TestCase):
         self.addCleanup(setattr, observer, 'hash_fd', real)
         self.assertTrue(tree.observe()['complete'])
         self.assertEqual(set(seen), {'held'})
-        self.assertEqual(len(seen), 2 + len(observer.SCRIPTS))
+        self.assertEqual(len(seen), 2 + len(observer.VENDOR_BOOT) + len(observer.SCRIPTS))
 
     def test_the_output_is_capped(self):
         tree = Tree()
@@ -357,7 +392,10 @@ class Guards(unittest.TestCase):
 
     def test_the_central_directory_is_bounded_before_it_is_parsed(self):
         tree = Tree()
-        limits(self, zipEntries=2)
+        with zipfile.ZipFile(tree.otatools) as o, zipfile.ZipFile(tree.target) as t:
+            between = len(o.infolist())  # otatools fits; the larger target-files does not
+            self.assertLess(between, len(t.infolist()))
+        limits(self, zipEntries=between)
         parsed = []
         real = zipfile.ZipFile.__init__
         def spy(self_, *args, **kwargs):
@@ -377,7 +415,8 @@ class Guards(unittest.TestCase):
         at = data.rindex(b'PK\x05\x06')
         struct.pack_into('<HH', data, at + 8, 1, 1)  # entries on this disk / total: claim 1
         tree.target.write_bytes(bytes(data))
-        limits(self, zipEntries=2)
+        with zipfile.ZipFile(tree.otatools) as o:
+            limits(self, zipEntries=len(o.infolist()))
         self.assertEqual(tree.observe()['targetFiles']['state'], 'too-many-entries')
 
     def test_duplicate_member_names_are_refused(self):
@@ -532,6 +571,21 @@ class Guards(unittest.TestCase):
         self.assertEqual(tree.observe()['lock']['reason'], 'lock is not a regular file')
         self.assertNotIn(tree.lock.name, opened)
 
+    def test_a_symlink_zip_entry_is_never_hashed_as_the_file(self):
+        tree = Tree()
+        with zipfile.ZipFile(tree.otatools, 'w') as archive:
+            link = zipfile.ZipInfo('bin/fastboot')
+            link.external_attr = (0o120777 << 16)  # S_IFLNK: its "content" is a link target
+            archive.writestr(link, '/usr/bin/fastboot')
+            for name, data in GENERATOR.items():
+                archive.writestr(name, data)
+        self.assertEqual(tree.observe()['otatools']['fastboot'], {'state': 'link-entry'})
+
+    def test_a_vendor_boot_image_without_its_magic_is_reported(self):
+        tree = Tree()
+        (tree.out/observer.VENDOR_BOOT['vendorBootImage']).write_bytes(b'ANDROID!' + b'\0' * 56)
+        self.assertIs(tree.observe()['vendorBoot']['vendorBootImage']['vndrbootMagic'], False)
+
     def test_no_descriptor_is_left_open(self):
         tree = Tree()
         before = len(os.listdir('/proc/self/fd'))
@@ -548,6 +602,16 @@ def stat_is_target(st, tree):
 
 
 class Fixed(unittest.TestCase):
+    def test_the_observed_paths_are_flavors_compile_collector_paths(self):
+        spec = importlib.util.spec_from_file_location('blazer_build_only', ROOT/'scripts/blazer-build-only.py')
+        helper = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(helper)
+        collector = helper.collector()
+        self.assertEqual(observer.TARGET_FILES_DIR, collector.TARGET_FILES_DIR)
+        self.assertEqual(observer.TARGET_FILES_NAME.pattern, collector.TARGET_FILES_NAME.pattern)
+        self.assertEqual(observer.OTATOOLS, collector.FILES['otatools'][0])
+        self.assertEqual(observer.VENDOR_BOOT, {k: collector.FILES[k][0] for k in ('vendorBootImage', 'vendorKernelBootImage')})
+
     def test_paths_come_only_from_the_committed_bindings(self):
         source, out = observer.paths()
         prep = json.loads((ROOT/'os/build-only/blazer-prep-host.json').read_text())

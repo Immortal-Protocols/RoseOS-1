@@ -11,17 +11,24 @@ Exactly these paths, fixed in source (no argument chooses a path). S is the isol
                (Flavors' compile collector paths; zero or several matches are reported, never chosen between): its
                size, sha256, mode and mtime, then from its central directory only these members, each at most
                memberBytes and CRC-checked while read: every <PARTITION>/build.prop and <PARTITION>/etc/build.prop
-               (only the ro.*build.{version.incremental,date.utc,fingerprint,id,type,tags} values), META/misc_info.txt
-               (only ab_update, virtual_ab, dynamic_partition_list) and OTA/android-info.txt (only the board,
-               version-bootloader and version-baseband requirements); and, from the central directory only (names,
+               (only the ro.*build.{version.incremental,date.utc,fingerprint,id,type,tags} and ro.product[.*].device
+               values), META/misc_info.txt (only ab_update, virtual_ab, dynamic_partition_list and the
+               <name>.fingerprint:<value> tokens release-pipeline.py check_build_identity reads; never a whole
+               avb_*_args line), META/ab_partitions.txt (the partition names) and OTA/android-info.txt (only the
+               board, version-bootloader, version-baseband and partition-exists requirements, one raw value per
+               'require k=v' line as factory-package.py android_info reads them); and, from the central directory only (names,
                sizes and CRC32, never content), the factory inputs scripts/factory-package.py requires: RADIO/bootloader.img
                and RADIO/radio.img, the GSC firmware under os/flavors/blazer.json's gscFirmware.source, and each
                dynamic partition's IMAGES/<part>.img, reported beside the flavor's committed board/firmware pins
   otatools     OUT/host/linux-x86/obj/ETC/otatools-packagelinux_glibc_x86_64_intermediates/
-               otatools-packagelinux_glibc_x86_64 (an extensionless ZIP): its size and sha256, and the size and sha256
-               of its bin/fastboot member (host-sign.py host.sign.factory.fastbootSha256)
-  scripts      S/script/generate-release.sh, S/script/common.sh, S/device/common/generate-factory-images-common.sh and
-               S/device/common/clear-factory-images-variables.sh: size and sha256 (the release script host-sign derives)
+               otatools-packagelinux_glibc_x86_64 (an extensionless ZIP): its size and sha256; the size and sha256 of
+               its bin/fastboot member (host-sign.py host.sign.factory.fastbootSha256) and of its
+               device/common/generate-factory-images-common.sh and clear-factory-images-variables.sh (the generator the
+               release script sources after unzipping otatools, beside os/flavors/blazer.json generatorFixture pins);
+               and from the central directory the state, size and CRC32 of bin/simg2img, bin/lpunpack, bin/fsck.erofs
+  vendorBoot   OUT/target/product/blazer/vendor_boot.img and vendor_kernel_boot.img: size, sha256 and whether the
+               header magic is VNDRBOOT (the compile collector's other two outputs)
+  scripts      S/script/generate-release.sh and S/script/common.sh: size and sha256 (what host-sign reads with S as cwd)
 
 Every path is reached as scripts/blazer-binding-observe.py reaches its paths: a descriptor walk from / with each
 directory component opened O_DIRECTORY|O_NOFOLLOW relative to the previous descriptor and the leaf O_NOFOLLOW relative
@@ -68,20 +75,28 @@ PRODUCT = f'target/product/{DEVICE}'
 TARGET_FILES_DIR = f'{PRODUCT}/obj/PACKAGING/target_files_intermediates'
 TARGET_FILES_NAME = re.compile(re.escape(DEVICE) + r'-target_files[A-Za-z0-9._-]*\.zip')
 OTATOOLS = 'host/linux-x86/obj/ETC/otatools-packagelinux_glibc_x86_64_intermediates/otatools-packagelinux_glibc_x86_64'
-SCRIPTS = ('script/generate-release.sh', 'script/common.sh', 'device/common/generate-factory-images-common.sh',
-           'device/common/clear-factory-images-variables.sh')
+SCRIPTS = ('script/generate-release.sh', 'script/common.sh')
+GENERATOR = ('generate-factory-images-common.sh', 'clear-factory-images-variables.sh')  # otatools device/common/<name>
+OTATOOLS_BINARIES = ('bin/simg2img', 'bin/lpunpack', 'bin/fsck.erofs')
+VENDOR_BOOT = {'vendorBootImage': f'{PRODUCT}/vendor_boot.img', 'vendorKernelBootImage': f'{PRODUCT}/vendor_kernel_boot.img'}
+VENDOR_BOOT_MAGIC = b'VNDRBOOT'
 PROP_MEMBER = re.compile(r'[A-Z][A-Z0-9_]{0,31}/(?:etc/)?build\.prop')
-PROP_KEY = re.compile(r'ro\.(?:[a-z0-9_]{1,32}\.)?build\.(?:version\.incremental|date\.utc|fingerprint|id|type|tags)')
+PROP_KEY = re.compile(r'ro\.(?:[a-z0-9_]{1,32}\.)?build\.(?:version\.incremental|date\.utc|fingerprint|id|type|tags)'
+                      r'|ro\.product\.(?:[a-z0-9_]{1,32}\.)?device')
+FINGERPRINT_TOKEN = re.compile(r'([A-Za-z0-9_.]{1,96}\.fingerprint):(\S+)')
+PARTITION = re.compile(r'[a-z0-9_]{1,32}')
 MISC_KEYS = ('ab_update', 'virtual_ab', 'dynamic_partition_list')
-INFO_KEYS = ('board', 'version-bootloader', 'version-baseband')
-REQUIRED_MEMBERS = ('SYSTEM/build.prop', 'META/misc_info.txt', 'OTA/android-info.txt')
+INFO_KEYS = ('board', 'version-bootloader', 'version-baseband', 'partition-exists')
+INFO_LINE = re.compile(r'require ([\w-]+)=(.*)')
+REQUIRED_MEMBERS = ('SYSTEM/build.prop', 'META/misc_info.txt', 'META/ab_partitions.txt', 'OTA/android-info.txt')
 FASTBOOT = 'bin/fastboot'
 MAX_LISTED = 64
 VALUE_CHARS = 512
 PRINTABLE = re.compile(r'[ -~]*')
 LIMITS = {'seconds': 900, 'targetFilesBytes': 32 << 30, 'otatoolsBytes': 4 << 30, 'scriptBytes': 1 << 20,
           'memberBytes': 1 << 20, 'fastbootBytes': 128 << 20, 'propMembers': 32, 'zipEntries': 200000,
-          'centralDirectoryBytes': 64 << 20, 'nameEntries': 4096, 'outputBytes': 64 << 10}
+          'centralDirectoryBytes': 64 << 20, 'vendorBootBytes': 512 << 20, 'listed': 128, 'nameEntries': 4096,
+          'outputBytes': 64 << 10}
 READABLE_METHODS = (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED)
 OUT_DIR_NAME = re.compile(r'[A-Za-z0-9][A-Za-z0-9._-]{0,63}')
 
@@ -184,6 +199,8 @@ def readable(info):
         raise Stop('unsupported-compression', method=int(info.compress_type))
     if info.flag_bits & 0x1:
         raise Stop('encrypted')
+    if stat.S_ISLNK(info.external_attr >> 16):
+        raise Stop('link-entry')
 
 
 def read_member(archive, info, cap, budget):
@@ -294,24 +311,32 @@ def props(data):
 
 
 def misc(data):
-    found = {}
+    found, fingerprints = {}, []
     for line in lines(data):
         key, sep, value = line.partition('=')
         key = key.strip(' \t')
         if sep and key in MISC_KEYS:
             found[key] = clean(value)
+        fingerprints += [{'name': clean(name), 'value': clean(token)} for name, token in FINGERPRINT_TOKEN.findall(line)]
+    found['fingerprints'] = fingerprints[:LIMITS['listed']]
     return found
 
 
 def android_info(data):
+    """Exactly what factory-package.py android_info builds for these keys: one raw value per 'require k=v' line."""
     found = {}
     for line in lines(data):
-        word, _, rest = line.strip(' \t').partition(' ')
-        if word == 'require':
-            key, sep, value = rest.strip(' \t').partition('=')
-            if sep and key in INFO_KEYS:
-                found[key] = [clean(v) for v in value.split('|')][:16]
+        match = INFO_LINE.fullmatch(line.strip(' \t'))
+        if match and match.group(1) in INFO_KEYS:
+            values = found.setdefault(match.group(1), [])
+            if len(values) < 16:
+                values.append(clean(match.group(2)))
     return found
+
+
+def ab_partitions(data):
+    names = data.decode('utf-8', 'replace').split()
+    return [n for n in names if PARTITION.fullmatch(n)][:LIMITS['listed']], len(names)
 
 
 def target_files_members(archive, infos, budget):
@@ -330,21 +355,25 @@ def target_files_members(archive, infos, budget):
         except Stop as stop:
             out['props'][name] = {'state': stop.state, **stop.detail}
             problems.append(f'targetFiles: member {name} {stop.state}')
-    for key, name, parse in (('miscInfo', 'META/misc_info.txt', misc), ('androidInfo', 'OTA/android-info.txt', android_info)):
+    for key, name, parse in (('miscInfo', 'META/misc_info.txt', misc), ('androidInfo', 'OTA/android-info.txt', android_info),
+                             ('abPartitions', 'META/ab_partitions.txt', ab_partitions)):
         if name in infos:
             try:
                 out[key] = parse(read_member(archive, infos[name], LIMITS['memberBytes'], budget))
             except Stop as stop:
                 out[key] = {'state': stop.state, **stop.detail}
                 problems.append(f'targetFiles: member {name} {stop.state}')
+    if isinstance(out.get('abPartitions'), tuple):
+        names, total = out['abPartitions']
+        out['abPartitions'] = {'names': names, 'count': total, 'truncated': total > len(names)}
     values = lambda suffix: sorted({v for p in out['props'].values() for k, v in p.items()
                                     if isinstance(v, str) and k.endswith(suffix)})
     out['summary'] = {'incremental': values('build.version.incremental'), 'dateUtc': values('build.date.utc')}
-    out['factoryInputs'] = factory_inputs(infos, out['miscInfo'])
+    out['factoryInputs'] = factory_inputs(infos, out['miscInfo'], out.get('abPartitions'))
     return out, problems
 
 
-def factory_inputs(infos, misc_info, root=ROOT):
+def factory_inputs(infos, misc_info, ab=None, root=ROOT):
     """Report-only, from the central directory (no member content): what factory-package.py's target inventory needs,
     beside the flavor's committed pins. An absence here is a finding for the reviewer, not an observation failure."""
     flavor = json.loads((root/'os/flavors/blazer.json').read_text())
@@ -354,14 +383,20 @@ def factory_inputs(infos, misc_info, root=ROOT):
                 for kind in ('bootloader', 'radio')}
     gsc = sorted(n for n in infos if n.startswith(source) and not n.endswith('/'))
     dynamic = (misc_info or {}).get('dynamic_partition_list', '') if isinstance(misc_info, dict) else ''
-    parts = [p for p in dynamic.split() if re.fullmatch(r'[a-z0-9_]{1,32}', p)]
+    parts = [p for p in dynamic.split() if PARTITION.fullmatch(p)]
+    ab_names = ab.get('names', []) if isinstance(ab, dict) else []
+    # factory-package.py target_inventory: an A/B partition outside the dynamic list with no IMAGES/<part>.img must be
+    # firmware-carried (a roseos.factory-firmware-observation.v1 has to cover it)
+    without_image = [p for p in ab_names if p not in parts and f'IMAGES/{p}.img' not in infos]
     return {'firmware': firmware,
             'gscFirmware': {'source': source, 'count': len(gsc), 'truncated': len(gsc) > MAX_LISTED,
                             'members': [{'name': clean(n[len(source):]), 'nested': '/' in n[len(source):], **meta(infos[n])}
                                         for n in gsc[:MAX_LISTED]]},
             'dynamicImagesMissing': [p for p in parts if f'IMAGES/{p}.img' not in infos],
+            'withoutImage': without_image,
             'flavorPins': {'board': flavor['device']['board'], 'bootloader': flavor['firmware']['bootloader'],
-                           'baseband': flavor['firmware']['baseband']}}
+                           'baseband': flavor['firmware']['baseband'],
+                           'partitionExists': flavor['firmware'].get('partitionExists')}}
 
 
 def observe_target_files(out, budget):
@@ -436,22 +471,48 @@ def observe_otatools(out, budget):
         return {'path': str(path), 'state': stop.state, **stop.detail}, [f'otatools: {stop.state}']
     try:
         with Archive(fd, budget) as opened:
-            if FASTBOOT not in opened.infos:
-                row['fastboot'] = {'state': 'absent'}
-                problems = [f'otatools: member {FASTBOOT} absent']
-            else:
+            problems = []
+            members = [('fastboot', FASTBOOT, LIMITS['fastbootBytes'])] + \
+                [(f'generator:{name}', f'device/common/{name}', LIMITS['scriptBytes']) for name in GENERATOR]
+            for key, member, cap in members:
+                if member not in opened.infos:
+                    row[key] = {'state': 'absent'}
+                    problems.append(f'otatools: member {member} absent')
+                    continue
                 try:
-                    row['fastboot'] = hash_member(opened.archive, opened.infos[FASTBOOT], LIMITS['fastbootBytes'], budget)
-                    problems = []
+                    row[key] = hash_member(opened.archive, opened.infos[member], cap, budget)
                 except Stop as stop:
-                    row['fastboot'] = {'state': stop.state, **stop.detail}
-                    problems = [f'otatools: member {FASTBOOT} {stop.state}']
+                    row[key] = {'state': stop.state, **stop.detail}
+                    problems.append(f'otatools: member {member} {stop.state}')
+            row['binaries'] = {name: ({'state': 'present', 'size': opened.infos[name].file_size,
+                                       'crc32': f'{opened.infos[name].CRC:08x}'} if name in opened.infos else {'state': 'absent'})
+                               for name in OTATOOLS_BINARIES}
+            pins = json.loads((ROOT/'os/flavors/blazer.json').read_text())['inventory']['generatorFixture']['files']
+            row['generatorPins'] = {name: pins.get(name) for name in GENERATOR}
         unchanged(fd, before)
     except Stop as stop:
         return {'path': str(path), 'state': stop.state, **stop.detail}, [f'otatools: {stop.state}']
     finally:
         os.close(fd)
     return row, problems
+
+
+def observe_vendor_boot(out, budget):
+    rows, problems = {}, []
+    for key, relative in VENDOR_BOOT.items():
+        path = out/relative
+        try:
+            fd, before, row = observe_regular(path, LIMITS['vendorBootBytes'], budget)
+            try:
+                row['vndrbootMagic'] = os.pread(fd, len(VENDOR_BOOT_MAGIC), 0) == VENDOR_BOOT_MAGIC
+                unchanged(fd, before)
+            finally:
+                os.close(fd)
+        except Stop as stop:
+            row = {'path': str(path), 'state': stop.state, **stop.detail}
+            problems.append(f'vendorBoot: {key} {stop.state}')
+        rows[key] = row
+    return rows, problems
 
 
 def observe_scripts(source, budget):
@@ -489,6 +550,7 @@ def observe(host, root=ROOT, clock=time.monotonic, source=None, out=None, lock=N
                   'gate': 'complete:true measures; the reviewer compares summary.incremental with the allocated build'}
         for key, section in (('targetFiles', lambda: observe_target_files(out, budget)),
                              ('otatools', lambda: observe_otatools(out, budget)),
+                             ('vendorBoot', lambda: observe_vendor_boot(out, budget)),
                              ('scripts', lambda: observe_scripts(source, budget))):
             try:
                 report[key], problems = section()
