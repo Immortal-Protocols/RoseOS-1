@@ -163,8 +163,9 @@ class RecipeTest(Fixture):
             {'source': (150 << 30, 7200), 'download': (8 << 30, 3600), 'vendor': (128 << 30, 10800), 'lunch': (8 << 30, 1800)})
         self.assertEqual(prep['totalTimeoutSeconds'], 23400)
         self.assertEqual(prep['source']['cleanupSeconds'], 240)
-        self.assertEqual((prep['source']['includeRoots'], prep['source']['exclusionsFrom']),
-            (['out_adevtool_deps'], 'os/release-pipeline/cuttlefish-alpha.json preparation.exclusions'))
+        self.assertEqual((prep['source']['includePaths'], prep['source']['exclusionsFrom']),
+            (['out_adevtool_deps/adevtool_revision', 'out_adevtool_deps/host/linux-x86'],
+             'os/release-pipeline/cuttlefish-alpha.json preparation.exclusions'))
         policy = bb.pointer(ROOT, prep['source']['exclusionsFrom'])
         self.assertEqual((policy['rootNames'], policy['rootPrefixes'], policy['anywhereNames']),
             (['.repo', 'keys', 'releases', 'out'], ['out-', 'out_'], ['.git', '.repo']))
@@ -189,7 +190,7 @@ class RecipeTest(Fixture):
         self.assertEqual(rendered['vendor']['env'], {'ADEVTOOL_IMG_DOWNLOAD_DIR': str(self.download),
             'PATH': '<receipt-dir>/node-path:/usr/bin:/bin'})
         self.assertEqual(rendered['source'], {'base': '/home/pixelbuild/grapheneos-2026100600', 'target': str(self.src),
-            'staging': str(self.tmp/'.source-staging-<nonce>'), 'includeRoots': ['out_adevtool_deps'],
+            'staging': str(self.tmp/'.source-staging-<nonce>'), 'includePaths': ['out_adevtool_deps/adevtool_revision', 'out_adevtool_deps/host/linux-x86'],
             'exclusionsFrom': 'os/release-pipeline/cuttlefish-alpha.json preparation.exclusions', 'maxBytes': 150 << 30,
             'timeoutSeconds': 7200, 'processes': 0, 'method': self.recipe['preparation']['source']['method']})
         self.assertEqual(rendered['vendor'], {'cwd': str(self.src), 'env': {'ADEVTOOL_IMG_DOWNLOAD_DIR': str(self.download)},
@@ -226,7 +227,9 @@ class RecipeTest(Fixture):
             (lambda r: r['preparation']['candidateLayout'].update(ancestorBoundary='/'), 'ancestorBoundary must be the parent'),
             (lambda r: r['preparation'].update(stages=['download', 'vendor', 'lunch']), 'preparation.stages'),
             (lambda r: r['preparation']['source'].update(boundBytes=None), 'preparation.source needs a positive boundBytes'),
-            (lambda r: r['preparation']['source'].update(includeRoots=['out_adevtool_deps', 'out']), 'include exactly out_adevtool_deps'),
+            (lambda r: r['preparation']['source'].update(includePaths=['out_adevtool_deps']), 'must include exactly'),
+            (lambda r: r['preparation']['source'].update(includePaths=['out_adevtool_deps/adevtool_revision',
+                                                                       'out_adevtool_deps/host']), 'must include exactly'),
             (lambda r: r['preparation']['source'].update(stagingPrefix='.tmp-'), 'stage under .source-staging-'),
             (lambda r: r['preparation']['source'].update(cleanupSeconds=300), 'cleanupSeconds must be positive and below'),
             (lambda r: r['preparation']['source'].update(cleanupSeconds=0), 'cleanupSeconds must be positive and below'),
@@ -582,12 +585,19 @@ class SourceRunTest(Fixture):
         (p/'build/envsetup.sh').unlink()
         os.symlink('make/envsetup.sh', p/'build/envsetup.sh')  # a repo linkfile: relative, kept as is
         os.symlink(str(p/'build/make/envsetup.sh'), p/'build/absolute')  # absolute into the tree: rebased
-        os.symlink(str(p/'out_adevtool_deps/adevtool_revision'), p/'out_adevtool_deps/revision-link')  # in an include root
+        host = p/'out_adevtool_deps/host/linux-x86'
+        (host/'lib64').mkdir()
+        (host/'lib64/libc++.so').write_bytes(b'\x7fELF synthetic host library')
+        (host/'framework').mkdir()
+        (host/'framework/apksigner.jar').write_bytes(b'PK synthetic jar')
+        os.symlink(str(host/'lib64/libc++.so'), host/'bin/library-link')  # absolute inside the include: rebased
+        os.symlink('../lib64/libc++.so', host/'bin/relative-link')  # relative inside the include: kept
         (p/'vendor/adevtool/dl/unpacked/frankel-CP3A/system').mkdir(parents=True)
         (p/'vendor/adevtool/dl/.find-ignore').write_text('')
         os.symlink('/system/bin', p/'vendor/adevtool/dl/unpacked/frankel-CP3A/system/bin')  # the excluded cache boundary
         self.left = ('.repo/manifest.xml', 'keys/blazer/releasekey.pk8', 'releases/2026110201/ota.zip', 'out/soong/huge.bin',
-                     'out-blazer-lunch/x', 'out_other/y', 'device/google/blazer/.git/config', 'out_adevtool_deps/.git/HEAD',
+                     'out-blazer-lunch/x', 'out_other/y', 'device/google/blazer/.git/config', 'out_adevtool_deps/host/linux-x86/.git/HEAD',
+                     'out_adevtool_deps/soong/build.ninja',
                      'vendor/adevtool/dl/unpacked')
         for rel in self.left[:-1]:
             (p/rel).parent.mkdir(parents=True, exist_ok=True)
@@ -646,7 +656,11 @@ class SourceRunTest(Fixture):
         self.assertTrue(os.access(t/'out_adevtool_deps/host/linux-x86/bin/aapt2', os.X_OK))
         self.assertEqual(os.readlink(t/'build/envsetup.sh'), 'make/envsetup.sh')
         self.assertEqual(os.readlink(t/'build/absolute'), str(t/'build/make/envsetup.sh'), 'absolute links are rebased')
-        self.assertEqual(os.readlink(t/'out_adevtool_deps/revision-link'), str(t/'out_adevtool_deps/adevtool_revision'))
+        deps = t/'out_adevtool_deps/host/linux-x86'
+        self.assertEqual(os.readlink(deps/'bin/library-link'), str(deps/'lib64/libc++.so'), 'rebased inside the include')
+        self.assertEqual(os.readlink(deps/'bin/relative-link'), '../lib64/libc++.so')
+        self.assertEqual(sorted(p.name for p in (t/'out_adevtool_deps').iterdir()), ['adevtool_revision', 'host'],
+                         'only the revision marker and the host distribution are copied from the deps')
         self.assertEqual(oct(os.lstat(t/'prebuilts/readonly').st_mode & 0o777), '0o555')
         self.assertEqual(os.lstat(t/'device/google/blazer/device.mk').st_mtime_ns, 1_600_000_000_000_000_000)
         copied, original = os.lstat(t/'device/google/blazer/device.mk'), os.lstat(self.production/'device/google/blazer/device.mk')
@@ -838,6 +852,123 @@ class SourceRunTest(Fixture):
         self.assertEqual(sorted(p.name for p in self.target.parent.iterdir()) if self.target.parent.exists() else [], [])
         self.unverified(done)
 
+    SIX = ('.ninja_fifo', *(f'target/product/emu64x/system/lib64/{n}' for n in ('libc.so', 'libdl.so', 'libdl_android.so', 'libm.so')),
+           'siso_config/main')
+
+    def attempt_rejects(self):
+        """The six entries attempt 41547295738 refused, relative to out_adevtool_deps (a whole build OUT_DIR)."""
+        deps = self.production/'out_adevtool_deps'
+        os.mkfifo(deps/'.ninja_fifo')
+        lib = deps/'target/product/emu64x/system/lib64'
+        lib.mkdir(parents=True)
+        for name in ('libc.so', 'libdl.so', 'libdl_android.so', 'libm.so'):
+            os.symlink(f'/apex/com.android.runtime/lib64/bionic/{name}', lib/name)
+        (deps/'siso_config').mkdir()
+        os.symlink(str(self.production/'build/soong/siso_config'), deps/'siso_config/main')
+        return deps
+
+    def test_attempt_rejects_are_reproduced_then_never_selected_or_touched(self):
+        deps = self.attempt_rejects()
+        policy = bb.pointer(self.root, self.synthetic['preparation']['source']['exclusionsFrom'])
+        inner = {'rootNames': [], 'rootPrefixes': [], 'anywhereNames': list(policy['anywhereNames']), 'externalLinks': [],
+                 'cacheBoundaries': []}
+        old = bb.alpha_source.plan_copy(deps, inner)  # the former whole-deps selection
+        self.assertEqual(len(old['problems']), 6, old['problems'])
+        for rel in self.SIX:
+            self.assertTrue(any(problem.startswith(rel) for problem in old['problems']), rel)
+        self.assertIn('.ninja_fifo: unsupported file type', old['problems'])
+        touched, originals = [], {name: getattr(os, name) for name in ('lstat', 'readlink', 'open', 'stat')}
+        rejects = {os.fsencode(str(deps/rel)) for rel in self.SIX}
+        def spy(name):
+            def call(path, *a, **k):
+                if os.fsencode(os.fspath(path)) in rejects:
+                    touched.append((name, os.fspath(path)))
+                return originals[name](path, *a, **k)
+            return call
+        for name in originals:
+            setattr(os, name, spy(name))
+        try:
+            selection = bb.source_selection(self.synthetic, self.production, self.root)
+        finally:
+            for name, original in originals.items():
+                setattr(os, name, original)
+        self.assertEqual((selection['problems'], touched), ([], []), 'none of the six is walked, read or dereferenced')
+        paths = {e['path'] for e in selection['entries']}
+        self.assertFalse(any(p.startswith(('out_adevtool_deps/target', 'out_adevtool_deps/siso_config', 'out_adevtool_deps/.ninja'))
+                             for p in paths))
+        code, done = self.run_source()
+        self.assertEqual((code, done['complete']), (0, True), done)
+        for rel in self.SIX:
+            self.assertFalse(os.path.lexists(self.target/'out_adevtool_deps'/rel), rel)
+        self.unverified(done)
+
+    def test_the_complete_host_distribution_is_copied_and_recorded(self):
+        code, done = self.run_source()
+        self.assertEqual(code, 0, done)
+        host = 'out_adevtool_deps/host/linux-x86'
+        rows = {os.fsdecode(r[0]): r for r in self.records(done['selectionRecord']['path'])}
+        for rel in ('out_adevtool_deps/adevtool_revision', f'{host}/lib64/libc++.so', f'{host}/framework/apksigner.jar',
+                    *(f'{host}/bin/{tool}' for tool in self.recipe['adevtool']['depsTools'])):
+            copied = self.target/rel
+            self.assertEqual(copied.read_bytes(), (self.production/rel).read_bytes(), rel)
+            self.assertEqual((rows[rel][1], rows[rel][4].decode()), (b'file', bb.sha256_file(copied)), rel)
+        for parent in ('out_adevtool_deps', 'out_adevtool_deps/host'):
+            self.assertEqual(rows[parent][1], b'dir')
+            self.assertEqual(int(rows[parent][2], 8), os.lstat(self.production/parent).st_mode & 0o7777)
+        self.assertEqual(rows[f'{host}/bin/library-link'][1], b'link')
+        self.assertEqual(bb.tree_problems(self.recipe, self.target), [], 'the vendor stage accepts the copied deps')
+
+    def test_missing_unusable_or_unpinned_deps_refuse_before_writing(self):
+        bin_dir = self.production/'out_adevtool_deps/host/linux-x86/bin'
+        cases = (
+            (lambda: (bin_dir/'aapt2').unlink(), "base: adevtool host tools missing or not executable: ['aapt2']"),
+            (lambda: os.chmod(bin_dir/'lz4', 0o644), "base: adevtool host tools missing or not executable: ['lz4']"),
+            (lambda: ((bin_dir/'toybox').unlink(), os.symlink('aapt2', bin_dir/'toybox')),
+             "base: adevtool host tools missing or not executable: ['toybox']"),
+            (lambda: (self.production/'out_adevtool_deps/adevtool_revision').write_text('0' * 40 + '\n'),
+             'base: out_adevtool_deps/adevtool_revision is'),
+            (lambda: os.symlink('../../../../build/make/envsetup.sh', bin_dir/'outside'),
+             'out_adevtool_deps/host/linux-x86: bin/outside -> ../../../../build/make/envsetup.sh leaves the source tree'),
+            (lambda: os.symlink('../../../soong/build.ninja', bin_dir/'deps-only'),
+             'out_adevtool_deps/host/linux-x86: bin/deps-only -> ../../../soong/build.ninja leaves the source tree'),
+            (lambda: os.symlink(str(self.production/'build/make/envsetup.sh'), bin_dir/'absolute-out'), 'leaves the source tree'),
+            (lambda: os.mkfifo(bin_dir/'pipe'), 'out_adevtool_deps/host/linux-x86: bin/pipe: unsupported file type'))
+        for index, (change, pattern) in enumerate(cases):
+            with self.subTest(pattern):
+                change()
+                code, done = self.run_source(out=f'deps{index}')
+                self.assertEqual((code, done['written'], done['complete']), (1, False, False), done)
+                self.assertIn(pattern, ' '.join(done['selection']['problems']))
+                self.assertFalse(os.path.lexists(self.target.parent))
+                self.build_production()
+
+    def test_include_paths_must_be_plain_and_are_never_read_through_links(self):
+        deps = self.production/'out_adevtool_deps'
+        real = self.tmp/'real-revision'
+        real.write_text(self.recipe['adevtool']['revision'] if 'revision' in self.recipe['adevtool'] else 'x')
+        original = bb.tree_problems
+        calls = []
+        bb.tree_problems = lambda *a: calls.append(a) or original(*a)
+        self.addCleanup(setattr, bb, 'tree_problems', original)
+        cases = (
+            (lambda: ((deps/'adevtool_revision').unlink(), os.symlink(real, deps/'adevtool_revision')),
+             'out_adevtool_deps/adevtool_revision is not a regular file or real directory'),
+            (lambda: (deps/'adevtool_revision').unlink(), 'out_adevtool_deps/adevtool_revision is not a regular file'),
+            (lambda: ((deps/'host').rename(self.tmp/'host-real'), os.symlink(self.tmp/'host-real', deps/'host')),
+             'out_adevtool_deps/host is not a real directory'),
+            (lambda: ((deps/'host/linux-x86').rename(self.tmp/'linux-real'), os.symlink(self.tmp/'linux-real', deps/'host/linux-x86')),
+             'out_adevtool_deps/host/linux-x86 is not a regular file or real directory'))
+        for index, (change, pattern) in enumerate(cases):
+            with self.subTest(pattern):
+                calls.clear()
+                change()
+                selection = bb.source_selection(self.synthetic, self.production, self.root)
+                self.assertIn(pattern, ' '.join(selection['problems']))
+                self.assertEqual(calls, [], 'tree_problems (which reads adevtool_revision) never runs on an unsafe include')
+                shutil.rmtree(self.tmp/'host-real', True)
+                shutil.rmtree(self.tmp/'linux-real', True)
+                self.build_production()
+
     def test_projection_is_dense_and_block_rounded(self):
         entries = [{'type': 'file', 'size': 1}, {'type': 'file', 'size': 4096}, {'type': 'file', 'size': 0},
                    {'type': 'dir'}, {'type': 'link'}]
@@ -862,7 +993,7 @@ class SourceRunTest(Fixture):
         cases = (
             (lambda: os.symlink('/etc/hostname', self.production/'escape'), 'leaves the source tree'),
             (lambda: os.symlink('../../../../out/host/aapt2', self.production/'out_adevtool_deps/host/linux-x86/bin/extra'),
-             'out_adevtool_deps: host/linux-x86/bin/extra -> ../../../../out/host/aapt2 leaves the source tree'),
+             'out_adevtool_deps/host/linux-x86: bin/extra -> ../../../../out/host/aapt2 leaves the source tree'),
             (lambda: shutil.rmtree(self.production/'out_adevtool_deps'), 'out_adevtool_deps is not a real directory'),
             (lambda: (self.production/'vendor/adevtool/dl/.find-ignore').write_text('x'), 'prune marker'))
         for index, (change, pattern) in enumerate(cases):

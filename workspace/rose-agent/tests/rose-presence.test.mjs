@@ -60,7 +60,8 @@ test('Oxblood composition: header pearl and title, upper-right work entry, capti
  assert.match(activity,/taskTitle=presentedText\(ConversationPresentation\.TITLE_SP,ink\(\)/);assert.match(activity,/taskBody=presentedText\(ConversationPresentation\.BODY_SP,ink2\(\)/);
  assert.match(activity,/work\.setContentDescription\("Open Rose’s background work"\);work\.setOnClickListener\(v->openOverview\(\)\);/);
  assert.ok(!/work\.setEnabled\(false\)/.test(activity),'the work entry is never disabled');
- assert.match(activity,/workGlyph\.set\(ctl\.failure==TaskControl\.ReadFailure\.NONE&&\("ready"\.equals\(ctl\.status\)\|\|"launching"\.equals\(ctl\.status\)\),reducedMotion\(\)\);/);
+ assert.match(activity,/workGlyph\.set\(ctl\.failure==TaskControl\.ReadFailure\.NONE&&CurrentApps\.sessionRunning\(ctl\.status\),reducedMotion\(\)\);/);
+ assert.doesNotMatch(activity,/workGlyph\.set\([^;]*"launching"/,'the work button never lights while a session is only launching');
  assert.match(activity,/connect\.setBackground\(new OxbloodRose\.Pill\(density\)\);/);
  assert.match(activity,/connect\.setContentDescription\(live\?\(state\.phase==ConversationState\.Phase\.CONNECTING\?"Cancel connecting to Rose":"Disconnect from Rose"\):"Connect to Rose"\);/);
  assert.match(activity,/if\(!t\.visible\)\{shownTaskId="";shownTaskActive=false;return;\}/);

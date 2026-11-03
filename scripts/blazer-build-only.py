@@ -13,8 +13,10 @@ Preparation stages (never compile, sign, publish or flash; never in the producti
   source    --host --lock --source-root ISOLATED
             an ordinary in-process byte copy of the production source root (only read) into ISOLATED, which must not
             exist (one missing parent under the ancestor boundary is created owner-only): the emulator alpha's exclusion
-            policy (repo metadata, keys, releases, outputs, .git, the adevtool unpack cache) plus exactly adevtool's
-            host-tool deps; the full selection is measured before anything is written and refused above its bound, the
+            policy (repo metadata, keys, releases, outputs, .git, the adevtool unpack cache) plus exactly
+            out_adevtool_deps/adevtool_revision and the complete out_adevtool_deps/host/linux-x86 (nothing else of the
+            deps is walked), and only when the base already passes the vendor stage's tree checks; the full selection
+            is measured before anything is written and refused above its bound, the
             copy is staged beside ISOLATED and renamed into place only when complete, and a stop (timeout, SIGTERM,
             reserve) removes only this run's staging directory within cleanupSeconds (a remainder is left, named and
             blocks the next run); no subprocess, reflink, hardlink or mount. The result is a
@@ -202,8 +204,8 @@ def preparation_problems(recipe, root, contract):
     source = prep.get('source') or {}
     if not (positive(source.get('cleanupSeconds')) and source['cleanupSeconds'] < 300):
         problems.append('preparation.source.cleanupSeconds must be positive and below the 300 s outer-timeout margin')
-    if source.get('includeRoots') != [recipe['adevtool']['depsDir']] or source.get('stagingPrefix') != '.source-staging-':
-        problems.append(f'preparation.source must include exactly {recipe["adevtool"]["depsDir"]} and stage under .source-staging-')
+    if source.get('includePaths') != include_paths(recipe) or source.get('stagingPrefix') != '.source-staging-':
+        problems.append(f'preparation.source must include exactly {include_paths(recipe)} and stage under .source-staging-')
     try:
         policy = pointer(root, source['exclusionsFrom'])
         if not ({'.repo', 'keys', 'releases', 'out'} <= set(policy.get('rootNames', ())) and {'out-', 'out_'} <= set(
@@ -270,7 +272,7 @@ def commands(recipe, op, root=ROOT):
         spec = prep['source']
         rendered['source'] = {'base': pointer(root, prep['productionSourceRootFrom']), 'target': src,
             'staging': str(op['sourceRoot'].parent/(spec['stagingPrefix'] + '<nonce>')),
-            'exclusionsFrom': spec['exclusionsFrom'], 'includeRoots': list(spec['includeRoots']),
+            'exclusionsFrom': spec['exclusionsFrom'], 'includePaths': list(spec['includePaths']),
             'maxBytes': spec['boundBytes'], 'timeoutSeconds': spec['timeoutSeconds'], 'processes': 0, 'method': spec['method']}
         if op['downloadDir'] is not None:
             rendered['vendor'] = {'cwd': src, 'env': {recipe['generate']['downloadEnv']: str(op['downloadDir']),
@@ -633,10 +635,20 @@ class StageStopped(Exception):
 class Refused(Exception):
     """The source stage refused before writing anything."""
 
+def include_paths(recipe):
+    """adevtool's deps as the vendor stage consumes them: the adevtool_revision marker and the complete host/linux-x86
+    distribution (bin/ tools with their lib64/ libraries and framework/ JARs). Nothing else of the deps directory, which
+    can be a whole build OUT_DIR (FIFOs, device-path links, links back into the source), is selected or walked."""
+    deps = recipe['adevtool']['depsDir']
+    return [f'{deps}/adevtool_revision', f'{deps}/host/linux-x86']
+
 def source_selection(recipe, base, root, planner=alpha_source.plan_copy):
     """The full copy selection of BASE (a metadata walk with no entry cap, plus alpha's reads of build-definition files
-    for cache references): the alpha exclusion policy, and each include root as its own selection with only .git/.repo
-    excluded, so none of its links may leave it."""
+    for cache references): the alpha exclusion policy, then each include path: a regular file taken as is, or a
+    directory as its own selection with only .git/.repo excluded, so none of its links may leave it. Their parent
+    directories must be real directories and are created with their own modes; nothing else beside them is walked.
+    The base must also already satisfy the vendor stage's tree checks (tree_problems), so nothing is copied that
+    vendor would refuse."""
     spec = recipe['preparation']['source']
     policy = pointer(root, spec['exclusionsFrom'])
     plan = planner(base, policy)
@@ -644,20 +656,39 @@ def source_selection(recipe, base, root, planner=alpha_source.plan_copy):
     excluded = len(plan['excluded'])
     inner = {'rootNames': [], 'rootPrefixes': [], 'anywhereNames': list(policy['anywhereNames']), 'externalLinks': [],
              'cacheBoundaries': []}
-    for name in spec['includeRoots']:
-        sub = base/name
-        if sub.is_symlink() or not sub.is_dir():
-            problems.append(f'{name} is not a real directory in the production source root')
-            continue
-        part = planner(sub, inner)
-        entries.append({'path': name, 'type': 'dir', 'mode': stat.S_IMODE(os.lstat(sub).st_mode)})
-        for entry in part['entries']:
-            entry = dict(entry, path=f'{name}/{entry["path"]}')
-            if entry['type'] == 'link':
-                entry['target'] = os.path.normpath(f'{name}/{entry["target"]}')
-            entries.append(entry)
-        problems += [f'{name}: {problem}' for problem in part['problems']]
-        excluded += len(part['excluded'])
+    parents, included = set(), True
+    for rel in spec['includePaths']:
+        unsafe = None
+        for parent in reversed(Path(rel).parents[:-1]):  # out_adevtool_deps, then out_adevtool_deps/host
+            info = os.lstat(base/parent) if os.path.lexists(base/parent) else None
+            if info is None or not stat.S_ISDIR(info.st_mode):
+                unsafe = f'{parent} is not a real directory in the production source root'
+                break
+            if str(parent) not in parents:
+                parents.add(str(parent))
+                entries.append({'path': str(parent), 'type': 'dir', 'mode': stat.S_IMODE(info.st_mode)})
+        info = None if unsafe or not os.path.lexists(base/rel) else os.lstat(base/rel)
+        if unsafe:
+            problems.append(unsafe)
+            included = False
+        elif info is not None and stat.S_ISREG(info.st_mode):
+            entries.append({'path': rel, 'type': 'file', 'mode': stat.S_IMODE(info.st_mode), 'size': info.st_size,
+                            'ino': info.st_ino, 'mtime_ns': info.st_mtime_ns})
+        elif info is not None and stat.S_ISDIR(info.st_mode):
+            part = planner(base/rel, inner)
+            entries.append({'path': rel, 'type': 'dir', 'mode': stat.S_IMODE(info.st_mode)})
+            for entry in part['entries']:
+                entry = dict(entry, path=f'{rel}/{entry["path"]}')
+                if entry['type'] == 'link':
+                    entry['target'] = os.path.normpath(f'{rel}/{entry["target"]}')
+                entries.append(entry)
+            problems += [f'{rel}: {problem}' for problem in part['problems']]
+            excluded += len(part['excluded'])
+        else:
+            problems.append(f'{rel} is not a regular file or real directory in the production source root')
+            included = False
+    if included:  # tree_problems reads adevtool_revision: only once it is known to be a regular file, never a link
+        problems += [f'base: {problem}' for problem in tree_problems(recipe, base)]
     return {'entries': entries, 'problems': problems, 'excluded': excluded}
 
 def projected_bytes(entries, block):

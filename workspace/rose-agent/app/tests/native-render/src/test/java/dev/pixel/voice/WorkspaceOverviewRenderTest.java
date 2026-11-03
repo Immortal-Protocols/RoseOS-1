@@ -53,8 +53,9 @@ public class WorkspaceOverviewRenderTest {
         public void checkStops() { checks++; }
         void report(String reg, long gen, App... apps) { snapshot = new Snapshot(reg, gen, true, "", Arrays.asList(apps)); }
     }
-    static App app(String id, String pkg) { return new App(id, pkg, CurrentApps.STATE_RUNNING, null); }
-    static App viewable(String id, String pkg, String session, String task) { return new App(id, pkg, CurrentApps.STATE_RUNNING, new Preview(session, task)); }
+    // Synthetic members whose session is reported ready (authoritatively running), as the HiFi's running cards are.
+    static App app(String id, String pkg) { return new App(id, pkg, CurrentApps.STATE_RUNNING, null, "", null, "ready"); }
+    static App viewable(String id, String pkg, String session, String task) { return new App(id, pkg, CurrentApps.STATE_RUNNING, new Preview(session, task), "", null, "ready"); }
     static WorkspaceOverviewPanel panel(Host h) {
         WorkspaceOverviewPanel p = new WorkspaceOverviewPanel(RuntimeEnvironment.getApplication());
         p.bind(h, h); p.setIcons(pkg -> new ColorDrawable(0xffd97757)); p.setLabels(pkg -> CALC.equals(pkg) ? "Calculator" : MAPS.equals(pkg) ? "Maps" : "");
@@ -244,6 +245,38 @@ public class WorkspaceOverviewRenderTest {
         tagged(p, "app:s-1/" + MAPS).performClick(); layout(p);
         assertTrue("no second-session view: said plainly", texts(p).contains(WorkspaceOverviewPanel.WATCH_APP_UNAVAILABLE));
         for (String call : h.calls) assertFalse("never a watch for a bound app", call.startsWith("watch:"));
+    }
+
+    /** #410 AppCore finding: the lit running edge is for authoritatively running sessions only (reported exactly ready).
+     * Starting, scheduled, consent-pending, cleanup-failed, unknown and unbound apps keep their card, a truthful visible
+     * state chip and their per-session Stop, with no edge. */
+    @Test public void runningEdgeOnlyForAuthoritativelyRunningSessions() throws Exception {
+        WorkspaceOverviewPanel.STOPS.clear();
+        String[][] cases = {{"ready", "Running"}, {"launching", "Starting"}, {"starting", "Starting"}, {"scheduled", "Starting"}, {"blocked", "Waiting"},
+            {"consent_required", "Waiting"}, {"cleanup_failed", "Still open"}, {"mystery", "Open"}};
+        for (String[] c : cases) {
+            Host h = new Host(); h.snapshot = twoApps(1, c[0]);
+            WorkspaceOverviewPanel p = panel(h);
+            View maps = tagged(p, "app:s-1/" + MAPS), calc = tagged(p, "app:s-0/" + CALC);
+            assertNotNull(c[0] + ": card kept", maps);
+            boolean lit = maps.getForeground() instanceof WorkspaceOverviewView.RunningEdge;
+            assertEquals(c[0] + ": edge only when ready", "ready".equals(c[0]), lit);
+            assertTrue(c[0] + ": the ready neighbour stays lit", calc.getForeground() instanceof WorkspaceOverviewView.RunningEdge);
+            if (!"ready".equals(c[0])) assertTrue(c[0] + ": chip says " + c[1] + " " + texts(maps), texts(maps).contains(c[1]));
+            else assertFalse("ready: the chip is hidden while it runs", texts(maps).contains("Running"));
+            assertTrue(c[0] + ": card announces its state", maps.getContentDescription().toString().contains(c[1]));
+            assertNotNull(c[0] + ": its own Stop is unchanged", tagged(maps, "stop"));
+        }
+        Host u = new Host();
+        u.snapshot = CurrentApps.fromBindings("r", "live", 3L, Arrays.asList(new CurrentApps.ReplyApp(CALC, false, false, null)), null, "e-1", true);
+        View unbound = tagged(panel(u), "app:owned/" + CALC);
+        assertFalse("unbound/lingering: no edge", unbound.getForeground() instanceof WorkspaceOverviewView.RunningEdge);
+        assertTrue("unbound/lingering: chip Open", texts(unbound).contains("Open"));
+        Host f = new Host(); f.snapshot = twoApps(1, "ready"); WorkspaceOverviewPanel pf = panel(f);
+        assertTrue(tagged(pf, "app:s-1/" + MAPS).getForeground() instanceof WorkspaceOverviewView.RunningEdge);
+        f.snapshot = twoApps(2, "cleanup_failed"); pf.refresh(); layout(pf);
+        assertFalse("ready -> cleanup_failed: the edge goes out on refresh", tagged(pf, "app:s-1/" + MAPS).getForeground() instanceof WorkspaceOverviewView.RunningEdge);
+        assertTrue(texts(tagged(pf, "app:s-1/" + MAPS)).contains("Still open"));
     }
 
     @Test public void lingeringAppsStayWithoutControls() throws Exception {
