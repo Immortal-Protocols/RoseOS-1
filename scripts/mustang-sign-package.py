@@ -129,7 +129,7 @@ def execute_sign(config,env):
     if env.get('ROSE_RETAINED_INPUT') or env.get('ROSE_SIGN_RESUME_ARCHIVE'):
         raise ValueError('foreign retained-input/resume selector is not a Mustang signing route')
     hs=module('mustang_host_sign','host-sign.py')
-    return hs.main(config_path=config,env=env,discover_keys=structural_keys)
+    return hs.main(config_path=config,env=env,discover_keys=structural_keys,managed_decrypted_keys=True)
 
 
 def sign(compile_receipt,bootstrap_receipt,run_id,attempt):

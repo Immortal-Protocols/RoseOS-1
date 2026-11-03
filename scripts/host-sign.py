@@ -149,7 +149,7 @@ def write_key_path_wrappers(wrapper_dir, release_keys, trace=None):
         path.chmod(0o700)
 
 def derive_release_script(original, common_sh, key_dir, passfile, release_keys, wrapper_dir, trace=None, python=sys.executable,
-                          helper=str(ROOT/'scripts/host-decrypt-keys.py'), factory=None):
+                          helper=str(ROOT/'scripts/host-decrypt-keys.py'), factory=None, transient_root=None):
     """Exact-once edits of the upstream script; any drift in its shape stops the run instead of signing.
 
     release_keys is the absolute path of the `keys` link the script creates in its release directory (to the RAM key
@@ -164,7 +164,8 @@ def derive_release_script(original, common_sh, key_dir, passfile, release_keys, 
     factory (factory_inputs) keeps the tail after img_from_target_files instead of cutting it: the factory images
     source line and the optimize-factory-image call must each occur once, the otatools bin/fastboot is checked against
     the pinned sha256 immediately before that call, and the id_ed25519 ssh-keygen signing block (exactly once) is
-    removed, so no archive signature is made with an unbound key."""
+    removed, so no archive signature is made with an unbound key. Optional transient_root nests the upstream
+    decrypted directory inside the existing managed RAM workspace so its cleanup also reaches that copy."""
     def once(pattern, text, flags=0):
         found = list(re.finditer(pattern, text, flags))
         if len(found) != 1:
@@ -187,6 +188,13 @@ def derive_release_script(original, common_sh, key_dir, passfile, release_keys, 
     text = text[:source.start()] + 'source ' + shlex.quote(str(common_sh)) + text[source.end():]
     keys = once(r'^PERSISTENT_KEY_DIR=keys/\$DEVICE$', text, re.M)
     text = text[:keys.start()] + 'PERSISTENT_KEY_DIR=' + shlex.quote(str(key_dir)) + text[keys.end():]
+    if transient_root is not None:
+        transient_root = Path(transient_root)
+        if transient_root.parent != Path('/dev/shm') or transient_root.is_symlink() or not transient_root.is_dir():
+            raise AdapterFailed('managed decrypted keys require the private RAM workspace')
+        temporary = once(r'^KEY_DIR=\$\(mktemp -d /dev/shm/generate-release\.XXXXXXXXXX\)$', text, re.M)
+        text = text[:temporary.start()] + 'KEY_DIR=$(mktemp -d ' + \
+            shlex.quote(str(transient_root/'generate-release.XXXXXXXXXX')) + ')' + text[temporary.end():]
     decrypt = once(r'script/decrypt-keys\s+(\S+)', text)
     text = text[:decrypt.start()] + ' '.join(map(shlex.quote, (python, helper))) + ' ' + decrypt.group(1) + ' ' + \
         shlex.quote(str(passfile)) + text[decrypt.end():]
@@ -357,7 +365,8 @@ def retained_inputs(env, retained=None):
     except retained.Refused as error:
         raise AdapterFailed(str(error)) from None
 
-def main(config_path=ROOT/'os/release-pipeline/frankel.json', env=os.environ, gcloud='gcloud', discover_keys=None):
+def main(config_path=ROOT/'os/release-pipeline/frankel.json', env=os.environ, gcloud='gcloud', discover_keys=None,
+         managed_decrypted_keys=False):
     retained = retained_inputs(env) if env.get('ROSE_RETAINED_INPUT') else None
     config = retained[0] if retained else json.loads(Path(config_path).read_text())
     missing = missing_inputs(config)
@@ -378,6 +387,8 @@ def main(config_path=ROOT/'os/release-pipeline/frankel.json', env=os.environ, gc
     public = release_dir/'public'
     public.mkdir()
     with host_secrets.private_directory('rose-os-signing-') as private:
+        if managed_decrypted_keys and private.parent != Path('/dev/shm'):
+            raise AdapterFailed('managed decrypted keys require an available private RAM workspace')
         archive = host_secrets.fetch_secret(sign['project'], sign['keysSecret'], sign['secretVersion'], private/'keys.tar.gz', gcloud)
         passphrase = host_secrets.fetch_secret(sign['project'], sign['passphraseSecret'],
             sign.get('passphraseSecretVersion') or sign['secretVersion'], private/'passphrase', gcloud)
@@ -395,8 +406,11 @@ def main(config_path=ROOT/'os/release-pipeline/frankel.json', env=os.environ, gc
         # The wrappers hold no secret, only paths; they live on the task-owned release disk (RAM may be noexec).
         wrappers, trace_path = release_dir/'key-path-tools', release_dir/'sign-trace.jsonl'
         write_key_path_wrappers(wrappers, release_keys, trace_path)
+        derive_options = {'factory': factory}
+        if managed_decrypted_keys:
+            derive_options['transient_root'] = private
         derived = derive_release_script(original.decode(), source_root/'script/common.sh', key_dir, passphrase,
-            release_keys, wrappers, trace_path, factory=factory)
+            release_keys, wrappers, trace_path, **derive_options)
         script = private/'generate-release-derived.sh'
         script.write_text(derived)
         java = Path(sign['javaHome'])
