@@ -755,8 +755,8 @@
         "ssh-keygen": {
           "kind": "installed",
           "installed": {
-            "path": null,
-            "sha256": null
+            "path": "/usr/bin/ssh-keygen",
+            "sha256": "2843cd46c617cf771c32e6f8a2a11585d83510ec528e3aeff8f7a7f0445420ba"
           },
           "requiredObservation": "installed path, sha256 and version (OpenSSH >= 8.4 for SSH_ASKPASS_REQUIRE=force) of ssh-keygen on the builder, then the synthetic self-check, in an approved run"
         }
@@ -777,7 +777,6 @@
         "owner/security approval of the new identity (FOLD-FACTORY-IDENTITY proposal)",
         "the two empty secret containers, created by the admin",
         "time-boxed bootstrap access (secrets.get, versions.list, versions.add, 4 h) and secretAccessor (30 d) for the signer on those two containers only",
-        "measured ssh-keygen installed identity and version on the builder",
         "one approved bootstrap run"
       ],
       "importRecovery": "The two-secret import is not atomic. Any uncertain or partial outcome (keys added but passphrase not, an add whose outcome is unknown) stops as recovery-needed and is journaled; every later run refuses on that journal (previous-attempt) and never regenerates a key or repeats an import. Recovery is a separate owner decision."
