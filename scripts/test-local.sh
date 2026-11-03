@@ -119,6 +119,7 @@ python3 scripts/tests/test_launcher3_compile_workflow.py
 python3 scripts/tests/test_signing_bootstrap.py
 python3 scripts/tests/test_fold_bootstrap_proof.py
 python3 scripts/tests/test_fold_tool_proof.py
+python3 scripts/tests/test_ssh_keygen_observe.py
 python3 scripts/tests/test_models_signing_bootstrap.py
 python3 scripts/tests/test_models_apk_signing.py
 python3 scripts/tests/test_models_publication.py
