@@ -2,14 +2,14 @@
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Rose HiFi Prototype</title>
 <style>
-:root{--wallpaper:url(%%WALLPAPER%%);--brush:url(%%BRUSH%%)}
+:root{--wallpaper:url(%%WALLPAPER%%);--brush:url(%%BRUSH%%);--ox-home:url(%%OX_HOME%%);--ox-rose:url(%%OX_ROSE%%)}
 /*%%CSS%%*/
 </style></head>
 <body>
 <div class="page">
 <main class="stage" id="stage" aria-label="Rose HiFi prototype">
  <div class="fit" id="fit">
-  <section class="device" id="device" aria-label="Simulated RoseOS phone">
+  <section class="device" id="device" data-theme="oxblood" aria-label="Simulated RoseOS phone">
    <div class="screen" id="screen" data-view="home" data-result="false">
     <div class="punch" aria-hidden="true"></div>
 
@@ -22,17 +22,20 @@
      <nav class="page-dots" id="page-dots" aria-label="Home page"></nav>
      <div class="tray two" id="home-tray" role="toolbar" aria-label="Persistent tray">
       <button class="well" id="tray-rose" aria-label="Open Rose"><div class="rose-slot" id="slot-tray"></div></button>
-      <button class="well" id="tray-overview" aria-label="Open system switcher"><span class="overview-glyph" aria-hidden="true"><i></i><i></i><i></i></span></button>
+      <button class="well" id="tray-voice" aria-pressed="false" aria-label="Mute Rose's voice"></button>
+      <button class="well" id="tray-mic" aria-pressed="false" aria-label="Mute microphone"></button>
+      <button class="well" id="tray-overview" aria-label="Open system switcher"><span class="overview-glyph" aria-hidden="true"><i></i><i></i><i></i></span><svg class="stacks-glyph" viewBox="2 3 60 20" aria-hidden="true"><defs><linearGradient id="ruby-edge" x1="34" y1="0" x2="62" y2="0" gradientUnits="userSpaceOnUse"><stop offset=".5" stop-color="#eadbcd"/><stop offset=".8" stop-color="#ff4a5e"/></linearGradient></defs><g stroke-width="2" stroke-linejoin="round"><path d="M10 11h18l-6 10H4z" fill="none" stroke="#eadbcd"/><path d="M10 5h18l-6 10H4z" fill="#331019" stroke="#eadbcd"/><path d="M42 11h18l-6 10H36z" fill="none" stroke="url(#ruby-edge)"/><path d="M42 5h18l-6 10H36z" fill="#331019" stroke="#eadbcd"/></g></svg></button>
      </div>
     </section>
 
     <!-- Rose voice + results -->
     <section class="view" id="v-rose" data-active="false" aria-label="Rose">
      <div class="ivory-bg" aria-hidden="true"></div>
-     <header class="rose-head"><h2>Rose</h2></header>
+     <header class="rose-head"><h2>Rose</h2><button class="work-btn" id="rose-work" aria-label="Open Rose's background work"><span class="work-glyph" aria-hidden="true"><i></i><i></i><i></i><i></i></span></button></header>
      <div class="rose-stage" id="rose-stage"><div class="rose-slot" id="slot-stage"></div></div>
      <p class="rose-caption" id="rose-caption" aria-hidden="true"></p>
      <article class="rose-output" id="rose-output" aria-live="polite" aria-label="Rose results"></article>
+     <button class="conn-btn" id="rose-conn" aria-label="Disconnect from Rose"><span class="conn-ico" aria-hidden="true"></span><span class="conn-label">Disconnect</span></button>
      <div class="tray" role="toolbar" aria-label="Call controls">
       <button class="well" id="rose-mic" aria-pressed="false" aria-label="Mute microphone"></button>
       <button class="well" id="rose-end" aria-label="End call"></button>
@@ -47,8 +50,13 @@
 
     <div class="lock" id="lock" hidden><div class="wall" aria-hidden="true"></div><div class="time">9:41</div><div class="date">Thursday, October 29</div><button class="unlock" id="unlock">Unlock</button></div>
     <div class="notices" id="notices"></div>
+    <div class="peek-tray" id="peek-tray" role="toolbar" aria-label="System tray" hidden>
+     <button class="well" id="peek-rose" aria-label="Open Rose"><span class="peek-pearl" aria-hidden="true"></span></button>
+     <button class="well" id="peek-mic" aria-pressed="false" aria-label="Mute microphone"></button>
+     <button class="well" id="peek-overview" aria-label="Open system switcher"></button>
+    </div>
     <div id="sheet-host"></div>
-    <button class="home-bar" id="home-bar" aria-label="Go home"><i></i></button>
+    <button class="home-bar" id="home-bar" aria-label="Go home" aria-expanded="false"><i></i></button>
     <div class="glass" aria-hidden="true"></div>
     <canvas id="rose-canvas" aria-hidden="true"></canvas>
     <div class="rose-fallback" id="rose-fallback" role="img" aria-label="Rose" hidden><div class="orb"><span class="h up"></span><span class="h lo"></span></div><span class="ring"></span></div>
@@ -62,6 +70,7 @@
  <fieldset><legend>Device</legend>
   <div class="row"><button class="hbtn" id="h-folded" aria-pressed="true">Folded</button><button class="hbtn" id="h-unfolded" aria-pressed="false">Unfolded</button></div>
   <div class="row"><button class="hbtn" id="h-lock">Lock</button><button class="hbtn" id="h-reset">Reset</button></div>
+  <div class="row"><button class="hbtn" id="h-peek">Swipe up in app</button><button class="hbtn" id="h-mic" aria-pressed="false">Mic (universal)</button></div>
  </fieldset>
  <fieldset><legend>Voice</legend>
   <div class="row"><button class="hbtn" id="h-speak">Rose speaks</button><button class="hbtn" id="h-result">Next result</button></div>
@@ -69,6 +78,28 @@
  <fieldset><legend>Tasks</legend>
   <div class="row"><button class="hbtn" id="h-tasks">Start 3 tasks</button><button class="hbtn" id="h-attn">Needs choice</button><button class="hbtn" id="h-done">Finish one</button></div>
   <div class="tasklist hstatus" id="h-tasklist"></div>
+ </fieldset>
+ <fieldset><legend>Visual direction</legend>
+  <select id="h-theme" class="hbtn" aria-label="Visual direction">
+   <option value="oxblood">Oxblood (selected for the prototype)</option>
+   <option value="classic">Classic HiFi (previous look, tray options)</option>
+  </select>
+ </fieldset>
+ <fieldset><legend>Tray option</legend>
+  <label class="hcheck" for="h-tray">Explore</label>
+  <select id="h-tray" class="hbtn" aria-label="Bottom tray option">
+   <option value="">Current default</option>
+   <option value="1">1 · Slim full-width rail</option>
+   <option value="2">2 · Flush inset strip</option>
+   <option value="3">3 · Floating glass lenses</option>
+   <option value="4">4 · Quiet thin capsule</option>
+   <option value="5">5 · Bottom edge shelf</option>
+   <option value="6">6 · Split wings</option>
+   <option value="7">7 · Continuous glass</option>
+   <option value="8">8 · Porcelain band</option>
+   <option value="9">9 · Satin fine metal</option>
+   <option value="10">10 · Slender open frame</option>
+  </select>
  </fieldset>
  <fieldset><legend>Rendering</legend>
   <label class="hcheck"><input type="checkbox" id="h-reduced">Reduced motion</label>

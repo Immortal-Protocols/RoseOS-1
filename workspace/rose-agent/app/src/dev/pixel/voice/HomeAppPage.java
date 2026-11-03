@@ -4,25 +4,40 @@ import android.content.Context;
 import android.view.View;
 import android.view.ViewGroup;
 
-/** One Home app page over the shared wallpaper (OS-PAGING-158-M001): a fixed number of equal columns
- * (HomeAppLayout.columns of the inset width) and as many rows as the plan gave it, sitting at the bottom of
- * the page just above the fixed dots, rows HomeAppLayout.rowGap apart. Cells take their real measured height,
- * so the owner's font size is honoured, and each measurement is reported once per size so MainActivity can
- * re-plan the pages from the real inset viewport. No heading is drawn; the page's name is its content
- * description. Insets arrive as padding. */
+/** One Home page grid over the shared field (OS-PAGING-158-M001; #410 Oxblood materials, HomeAppLayout): a fixed
+ * number of columns of fixed-width cells (72dp app cells 6dp apart, or Home's 60dp cells 17.5dp apart), centred, and
+ * the rows the plan gave it from the top of its inset area down, at one pitch (HomeAppLayout.rowPitch) that lets a
+ * full page reach the reserve above the dots; a partial last page keeps the same rows from the top. Cells take their
+ * real measured height, so the owner's font size is honoured, and each measurement is reported once per size so
+ * MainActivity can re-plan the pages from the real inset viewport. No heading is drawn; the page's name is its content
+ * description. Insets (and Home's date) arrive as padding. */
 final class HomeAppPage extends ViewGroup {
  interface Fit { void measured(int width, int height, float cellHeight); }
 
  final int columns;
- final float density;
+ final float density, cellWidthDp, gapDp;
  final Fit fit;
  int reportedWidth = -1, reportedHeight = -1, cellHeight;
 
+ /** An app page: 72dp cells 6dp apart. */
  HomeAppPage(Context context, int columns, Fit fit) {
+  this(context, columns, HomeAppLayout.CELL_DP, HomeAppLayout.COL_GAP_DP, fit);
+ }
+
+ HomeAppPage(Context context, int columns, float cellWidthDp, float gapDp, Fit fit) {
   super(context);
   this.columns = Math.max(1, columns);
   this.density = context.getResources().getDisplayMetrics().density;
+  this.cellWidthDp = cellWidthDp;
+  this.gapDp = gapDp;
   this.fit = fit;
+  setClipChildren(false);
+ }
+
+ int cellWidth(int innerWidth) {
+  // Never wider than an equal share of the width (a very narrow screen), else the reference cell width.
+  int gap = Math.round(gapDp * density);
+  return Math.max(1, Math.min(Math.round(cellWidthDp * density), (innerWidth - (columns - 1) * gap) / columns));
  }
 
  @Override protected void onMeasure(int widthSpec, int heightSpec) {
@@ -30,7 +45,7 @@ final class HomeAppPage extends ViewGroup {
   setMeasuredDimension(width, height);
   int innerWidth = Math.max(0, width - getPaddingLeft() - getPaddingRight());
   int innerHeight = Math.max(0, height - getPaddingTop() - getPaddingBottom());
-  int cellWidth = innerWidth / columns;
+  int cellWidth = cellWidth(innerWidth);
   cellHeight = 0;
   for (int i = 0; i < getChildCount(); i++) {
    View child = getChildAt(i);
@@ -52,12 +67,14 @@ final class HomeAppPage extends ViewGroup {
   if (count == 0) return;
   int innerWidth = Math.max(0, getWidth() - getPaddingLeft() - getPaddingRight());
   int innerHeight = Math.max(0, getHeight() - getPaddingTop() - getPaddingBottom());
-  int cellWidth = innerWidth / columns, used = HomeAppLayout.usedRows(count, columns);
-  float gap = HomeAppLayout.rowGap(innerHeight, cellHeight, used, density);
-  float top = getPaddingTop() + HomeAppLayout.gridTop(innerHeight, cellHeight, used, density);
-  int left = getPaddingLeft() + (innerWidth - cellWidth * columns) / 2;
+  int cellWidth = cellWidth(innerWidth), gap = Math.round(gapDp * density);
+  int used = HomeAppLayout.usedRows(count, columns), fit = HomeAppLayout.rows(innerHeight, cellHeight, density);
+  // The pitch of a page of fit rows; content beyond them (before a re-plan lands) keeps the plain gap.
+  float pitch = used > fit ? cellHeight + HomeAppLayout.rowGap(density) : HomeAppLayout.rowPitch(innerHeight, fit, cellHeight, density);
+  float top = getPaddingTop();
+  int left = getPaddingLeft() + Math.round(HomeAppLayout.gridLeft(innerWidth, columns, cellWidth, gap));
   for (int i = 0; i < count; i++) {
-   int x = left + (i % columns) * cellWidth, y = Math.round(top + (i / columns) * (cellHeight + gap));
+   int x = left + (i % columns) * (cellWidth + gap), y = Math.round(top + (i / columns) * pitch);
    getChildAt(i).layout(x, y, x + cellWidth, y + cellHeight);
   }
  }

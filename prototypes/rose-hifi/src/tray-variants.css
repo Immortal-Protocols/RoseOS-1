@@ -1,0 +1,155 @@
+/* ---------- Bottom-tray exploration (HIFI-TRAY-OPTIONS, Nathan 2026-10-31 22:06 UTC) ----------
+   Ten opt-in tray directions. Active only when #screen has data-tray="1"…"10" (URL ?tray=N or the
+   harness selector). Without the attribute nothing here matches, so the working default is unchanged.
+   Every option keeps the same controls, labels, states and ≥44 px targets in Home (2 controls),
+   Rose (3 controls) and Rose's apps (3 controls); only silhouette, material and grouping change.
+   Brief: smaller/less bulky, use horizontal space, less texture. */
+
+/* Shared reset for every option: no brushed grain, no dome pseudo-layers, compact symbols. */
+.screen[data-tray] :is(#home-tray,#v-rose .tray,#v-agents .tray){height:56px;padding:0;border-radius:0;background:none;box-shadow:none;
+  -webkit-backdrop-filter:none;backdrop-filter:none;justify-content:space-between;align-items:center}
+.screen[data-tray] :is(#home-tray,#v-rose .tray,#v-agents .tray) .well{width:64px;height:46px;border-radius:23px;background:none;box-shadow:none;
+  -webkit-backdrop-filter:none;backdrop-filter:none;color:#273246}
+.screen[data-tray] :is(#home-tray,#v-rose .tray,#v-agents .tray) .well::before,
+.screen[data-tray] :is(#home-tray,#v-rose .tray,#v-agents .tray) .well::after{display:none}
+.screen[data-tray] :is(#v-rose,#v-agents) .tray .well svg{width:26px;height:26px}
+.screen[data-tray] :is(#v-rose,#v-agents) .tray .well svg.solid{width:28px;height:28px}
+.screen[data-tray] #home-tray .rose-slot canvas,.screen[data-tray] #home-tray .rose-slot .rose-fallback{width:76px;height:76px}
+.screen[data-tray] #home-tray .overview-glyph{transform:scale(.7)}
+.screen[data-tray] :is(#home-tray,#v-rose .tray,#v-agents .tray) .well.selected{box-shadow:0 0 0 1.5px rgba(80,140,255,.75),0 0 12px rgba(80,140,255,.45)}
+/* Position: Home trays sit near the edge; Rose/agents trays clear the gesture bar. */
+.screen[data-tray] #home-tray{bottom:16px}
+.screen[data-tray] :is(#v-rose,#v-agents) .tray{bottom:40px}
+.device.unfolded .screen[data-tray] :is(#home-tray,#v-rose .tray,#v-agents .tray){left:50%;right:auto;width:620px;margin-left:-310px}
+
+/* 1 — Slim full-width rail: one satin rail edge to edge, controls pushed to the ends. */
+.screen[data-tray="1"] :is(#home-tray,#v-rose .tray,#v-agents .tray){left:8px;right:8px;height:56px;border-radius:28px;padding:0 5px;
+  background:linear-gradient(180deg,#f1f3f5,#dde1e6 55%,#d2d7dd);box-shadow:inset 0 1px 0 #fff,inset 0 -1px 0 rgba(80,95,115,.28),0 0 0 .8px rgba(70,85,105,.45),0 8px 18px rgba(10,28,55,.26)}
+.screen[data-tray="1"] :is(#home-tray,#v-rose .tray,#v-agents .tray) .well{width:84px;height:46px;background:linear-gradient(180deg,rgba(255,255,255,.85),rgba(236,240,245,.6));
+  box-shadow:inset 0 1px 0 #fff,0 0 0 .8px rgba(90,105,128,.38),0 2px 4px rgba(20,35,60,.16)}
+
+/* 2 — Flush inset strip: a sunken band across the full bottom edge, controls set into it. */
+.screen[data-tray="2"] :is(#home-tray,#v-rose .tray,#v-agents .tray){left:0;right:0;bottom:0;height:78px;padding:0 26px 14px;
+  background:rgba(14,26,46,.36);-webkit-backdrop-filter:blur(18px) saturate(1.3);backdrop-filter:blur(18px) saturate(1.3);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.22),inset 0 10px 14px -10px rgba(0,0,0,.45)}
+.screen[data-tray="2"] :is(#v-rose,#v-agents) .tray{height:96px;padding-bottom:40px;background:rgba(214,222,234,.62);box-shadow:inset 0 1px 0 rgba(255,255,255,.9),inset 0 10px 14px -10px rgba(40,60,90,.35)}
+.screen[data-tray="2"] :is(#home-tray,#v-rose .tray,#v-agents .tray) .well{width:72px;height:46px;background:rgba(255,255,255,.12);box-shadow:inset 0 0 0 .8px rgba(255,255,255,.32)}
+.screen[data-tray="2"] :is(#v-rose,#v-agents) .tray .well{background:rgba(255,255,255,.7);box-shadow:inset 0 0 0 .8px rgba(90,105,128,.25)}
+.device.unfolded .screen[data-tray="2"] :is(#home-tray,#v-rose .tray,#v-agents .tray){left:0;right:0;width:auto;margin-left:0;padding-left:120px;padding-right:120px}
+
+/* 3 — Floating individual glass lenses, no bar: each control is its own small clear lens. */
+.screen[data-tray="3"] :is(#home-tray,#v-rose .tray,#v-agents .tray){left:22px;right:22px;height:60px}
+.screen[data-tray="3"] :is(#home-tray,#v-rose .tray,#v-agents .tray) .well{width:60px;height:60px;border-radius:50%;
+  background:radial-gradient(70% 60% at 50% 42%,rgba(255,255,255,.08) 45%,rgba(70,90,120,.16) 80%,rgba(255,255,255,.4) 97%),rgba(230,238,248,.16);
+  -webkit-backdrop-filter:blur(2px) brightness(1.06);backdrop-filter:blur(2px) brightness(1.06);
+  box-shadow:inset 0 0 0 1.2px rgba(255,255,255,.92),inset 0 -6px 8px -4px rgba(255,255,255,.7),0 0 0 1px rgba(75,90,112,.5),3px 7px 10px rgba(15,30,55,.3)}
+.screen[data-tray="3"] :is(#home-tray,#v-rose .tray,#v-agents .tray) .well::after{display:block;left:18%;right:18%;top:8%;height:26%;border-radius:50%;
+  background:linear-gradient(180deg,rgba(255,255,255,.85),rgba(255,255,255,0))}
+.screen[data-tray="3"] #home-tray .rose-slot canvas,.screen[data-tray="3"] #home-tray .rose-slot .rose-fallback{width:84px;height:84px}
+
+/* 4 — Quiet thin capsule: a translucent, low-contrast capsule; controls are glyphs only. */
+.screen[data-tray="4"] :is(#home-tray,#v-rose .tray,#v-agents .tray){left:34px;right:34px;height:52px;border-radius:26px;padding:0 3px;
+  background:rgba(255,255,255,.26);-webkit-backdrop-filter:blur(20px) saturate(1.4);backdrop-filter:blur(20px) saturate(1.4);
+  box-shadow:inset 0 0 0 .8px rgba(255,255,255,.55),0 6px 16px rgba(10,28,55,.16)}
+.screen[data-tray="4"] :is(#v-rose,#v-agents) .tray{background:rgba(255,255,255,.78);box-shadow:inset 0 0 0 .8px rgba(110,130,160,.28),0 6px 16px rgba(10,28,55,.1)}
+.screen[data-tray="4"] :is(#home-tray,#v-rose .tray,#v-agents .tray) .well{width:76px;height:46px}
+
+/* 5 — Bottom-attached edge shelf: a satin shelf grown from the bottom edge, rounded only on top. */
+.screen[data-tray="5"] :is(#home-tray,#v-rose .tray,#v-agents .tray){left:0;right:0;bottom:0;height:80px;border-radius:26px 26px 0 0;padding:0 30px 16px;
+  background:linear-gradient(180deg,#f6f7f9,#e2e6ea 30%,#d6dbe0);box-shadow:inset 0 1.5px 0 #fff,0 -1px 0 rgba(70,85,105,.32),0 -8px 20px rgba(10,28,55,.16)}
+.screen[data-tray="5"] :is(#v-rose,#v-agents) .tray{height:96px;padding-bottom:40px}
+.screen[data-tray="5"] :is(#home-tray,#v-rose .tray,#v-agents .tray) .well{width:76px;height:46px;background:linear-gradient(180deg,#fff,#eef1f5);
+  box-shadow:inset 0 1px 0 #fff,0 0 0 .8px rgba(90,105,128,.32),0 2px 3px rgba(20,35,60,.16)}
+.device.unfolded .screen[data-tray="5"] :is(#home-tray,#v-rose .tray,#v-agents .tray){left:0;right:0;width:auto;margin-left:0;padding-left:120px;padding-right:120px}
+
+/* 6 — Split wings, open middle: controls ride on wings attached to the side edges; the centre stays open. */
+.screen[data-tray="6"] :is(#home-tray,#v-rose .tray,#v-agents .tray){left:0;right:0;height:56px}
+.screen[data-tray="6"] :is(#home-tray,#v-rose .tray,#v-agents .tray) .well{width:96px;height:52px;
+  background:linear-gradient(180deg,#f3f5f7,#dce0e5 60%,#d1d6dc);box-shadow:inset 0 1px 0 #fff,0 0 0 .8px rgba(70,85,105,.42),0 6px 14px rgba(10,28,55,.24)}
+.screen[data-tray="6"] :is(#home-tray,#v-rose .tray,#v-agents .tray) .well:first-child{border-radius:0 26px 26px 0;padding-left:8px}
+.screen[data-tray="6"] :is(#home-tray,#v-rose .tray,#v-agents .tray) .well:last-child{border-radius:26px 0 0 26px;padding-right:8px}
+.screen[data-tray="6"] :is(#v-rose,#v-agents) .tray .well:nth-child(2){width:56px;height:56px;border-radius:50%;
+  background:radial-gradient(70% 60% at 50% 40%,#fff,#f3f5f8);box-shadow:inset 0 0 0 1px rgba(255,255,255,.9),0 0 0 .8px rgba(70,85,105,.35),0 6px 14px rgba(10,28,55,.2)}
+.device.unfolded .screen[data-tray="6"] :is(#home-tray,#v-rose .tray,#v-agents .tray){left:0;right:0;width:auto;margin-left:0}
+
+/* 7 — Continuous glass, no wells or grain: one clear slab; controls separated by hairlines. */
+.screen[data-tray="7"] :is(#home-tray,#v-rose .tray,#v-agents .tray){left:12px;right:12px;height:60px;border-radius:22px;padding:0 6px;justify-content:space-around;
+  background:linear-gradient(180deg,rgba(255,255,255,.36),rgba(255,255,255,.12));
+  -webkit-backdrop-filter:blur(14px) saturate(1.5) brightness(1.08);backdrop-filter:blur(14px) saturate(1.5) brightness(1.08);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.9),inset 0 -1px 0 rgba(255,255,255,.25),inset 0 0 0 .8px rgba(255,255,255,.45),0 10px 24px rgba(10,28,55,.22)}
+.screen[data-tray="7"] :is(#v-rose,#v-agents) .tray{background:linear-gradient(180deg,rgba(255,255,255,.7),rgba(232,239,248,.55));box-shadow:inset 0 1px 0 #fff,inset 0 0 0 .8px rgba(120,140,170,.3),0 10px 24px rgba(10,28,55,.12)}
+.screen[data-tray="7"] :is(#home-tray,#v-rose .tray,#v-agents .tray) .well{flex:1;height:46px;border-radius:0}
+.screen[data-tray="7"] :is(#home-tray,#v-rose .tray,#v-agents .tray) .well+.well{box-shadow:-1px 0 0 rgba(255,255,255,.45)}
+.screen[data-tray="7"] :is(#v-rose,#v-agents) .tray .well+.well{box-shadow:-1px 0 0 rgba(110,130,160,.25)}
+
+/* 8 — Opaque ivory/porcelain band: a glossy porcelain band, warm and fully opaque. */
+.screen[data-tray="8"] :is(#home-tray,#v-rose .tray,#v-agents .tray){left:12px;right:12px;height:60px;border-radius:30px;padding:0 7px;
+  background:radial-gradient(120% 160% at 28% 0%,#ffffff,#f5f2ed 58%,#e9e4dc);
+  box-shadow:inset 0 1.5px 0 #fff,inset 0 -2px 3px rgba(150,140,125,.22),0 0 0 .8px rgba(160,150,135,.45),0 10px 22px rgba(30,25,20,.2)}
+.screen[data-tray="8"] :is(#home-tray,#v-rose .tray,#v-agents .tray) .well{width:80px;height:46px;color:#3b3631}
+.screen[data-tray="8"] :is(#home-tray,#v-rose .tray,#v-agents .tray) .well:active{background:rgba(120,105,85,.08)}
+
+/* 9 — Smooth satin fine metal: the current metal idea, slimmer and wider, without brushed grain. */
+.screen[data-tray="9"] :is(#home-tray,#v-rose .tray,#v-agents .tray){left:10px;right:10px;height:62px;border-radius:20px;padding:0 9px;
+  background:linear-gradient(180deg,#eceef1 0%,#d9dde2 49%,#cdd2d8 51%,#dadde1 100%);
+  box-shadow:inset 0 1px 0 #fff,inset 0 -1px 0 rgba(90,100,115,.32),0 0 0 .8px rgba(70,85,105,.5),0 8px 18px rgba(10,28,55,.26)}
+.screen[data-tray="9"] :is(#home-tray,#v-rose .tray,#v-agents .tray) .well{width:82px;height:46px;border-radius:50%;
+  background:radial-gradient(86% 78% at 50% 46%,rgba(255,255,255,.08) 40%,rgba(70,90,120,.14) 82%,rgba(255,255,255,.32) 97%);
+  -webkit-backdrop-filter:blur(.5px) contrast(1.06);backdrop-filter:blur(.5px) contrast(1.06);
+  box-shadow:inset 0 0 0 1.1px rgba(255,255,255,.92),inset 0 -5px 7px -4px rgba(255,255,255,.7),0 0 0 1px rgba(75,90,112,.55),2px 5px 7px rgba(20,35,60,.26)}
+
+/* 10 — Slender open frame: a hairline frame with an open interior; controls are light glass pills. */
+.screen[data-tray="10"] :is(#home-tray,#v-rose .tray,#v-agents .tray){left:14px;right:14px;height:58px;border-radius:22px;padding:0 6px;
+  box-shadow:inset 0 0 0 1.4px rgba(255,255,255,.85),0 0 0 1px rgba(30,50,80,.22),inset 0 0 0 2.4px rgba(30,50,80,.12)}
+.screen[data-tray="10"] :is(#v-rose,#v-agents) .tray{box-shadow:inset 0 0 0 1.4px rgba(70,88,112,.45),inset 0 0 0 2.4px rgba(255,255,255,.7)}
+.screen[data-tray="10"] :is(#home-tray,#v-rose .tray,#v-agents .tray) .well{width:74px;height:44px;border-radius:22px;
+  background:rgba(255,255,255,.2);box-shadow:inset 0 0 0 1px rgba(255,255,255,.6)}
+.screen[data-tray="10"] :is(#v-rose,#v-agents) .tray .well{background:rgba(255,255,255,.7);box-shadow:inset 0 0 0 1px rgba(90,105,128,.28)}
+
+/* Draft review: orb sized to each control so it sits inside the pill; symbols a step larger. */
+.screen[data-tray] #home-tray .rose-slot canvas,.screen[data-tray] #home-tray .rose-slot .rose-fallback{width:62px;height:62px}
+.screen[data-tray="3"] #home-tray .rose-slot canvas,.screen[data-tray="3"] #home-tray .rose-slot .rose-fallback{width:74px;height:74px}
+.screen[data-tray="6"] #home-tray .rose-slot canvas,.screen[data-tray="6"] #home-tray .rose-slot .rose-fallback{width:68px;height:68px}
+.screen[data-tray] :is(#v-rose,#v-agents) .tray .well svg{width:28px;height:28px}
+.screen[data-tray] :is(#v-rose,#v-agents) .tray .well svg.solid{width:31px;height:31px}
+.screen[data-tray] #home-tray .overview-glyph{transform:scale(.68)}
+
+/* ---------- Rose's voice (output) mute on Home's tray — options 1–10 only ----------
+   Speaker/output mute, distinct from the microphone (input) mute, End call and Stop.
+   The untouched default keeps its two-control tray, so the control is hidden there. */
+.screen:not([data-tray]) #tray-voice{display:none}
+#tray-voice .voice-state{display:none}
+.screen[data-tray] #tray-voice svg{width:28px;height:28px}
+.screen[data-tray] #home-tray #tray-voice[data-voice-muted=true]{color:#c23d55;
+  background-color:rgba(232,80,100,.14);box-shadow:inset 0 0 0 1.5px rgba(200,60,85,.55)}
+.screen[data-tray] #home-tray #tray-voice[data-voice-muted=true]::after{display:block;content:'';position:absolute;left:auto;right:9px;top:7px;width:8px;height:8px;
+  border-radius:50%;background:#e0445f;box-shadow:0 0 0 2px rgba(255,255,255,.85)}
+/* Glass-lens and frame options keep their own surfaces under the muted tint. */
+.screen[data-tray="3"] #home-tray #tray-voice[data-voice-muted=true]{box-shadow:inset 0 0 0 1.6px rgba(200,60,85,.7),inset 0 -6px 8px -4px rgba(255,255,255,.7),0 0 0 1px rgba(75,90,112,.5),3px 7px 10px rgba(15,30,55,.3)}
+.screen[data-tray="3"] #home-tray #tray-voice[data-voice-muted=true]::after{left:auto;right:10px;top:8px;width:8px;height:8px;border-radius:50%;background:#e0445f}
+/* Dark inset strip (2): light symbol for contrast. */
+.screen[data-tray="2"] #home-tray #tray-voice{color:#fff}
+.screen[data-tray="2"] #home-tray #tray-voice[data-voice-muted=true]{color:#ffb4c2;background-color:rgba(232,80,100,.24)}
+/* Split wings (6): the voice control floats in the open middle, like Rose's end-call. */
+.screen[data-tray="6"] #home-tray .well:nth-child(2){width:56px;height:56px;border-radius:50%;padding:0;
+  background:radial-gradient(70% 60% at 50% 40%,#fff,#f3f5f8);box-shadow:inset 0 0 0 1px rgba(255,255,255,.9),0 0 0 .8px rgba(70,85,105,.35),0 6px 14px rgba(10,28,55,.2)}
+.screen[data-tray="6"] #home-tray #tray-voice[data-voice-muted=true]{background:radial-gradient(70% 60% at 50% 40%,#fff4f6,#fbe3e8);box-shadow:inset 0 0 0 1.5px rgba(200,60,85,.6),0 6px 14px rgba(10,28,55,.2)}
+/* Continuous glass (7): separators stay visible next to the tinted control. */
+.screen[data-tray="7"] #home-tray #tray-voice[data-voice-muted=true]{box-shadow:-1px 0 0 rgba(255,255,255,.45),inset 0 0 0 1.5px rgba(200,60,85,.5)}
+/* Translucent options over the wallpaper (2, 4, 7, 10): light symbols keep the voice state legible. */
+.screen:is([data-tray="2"],[data-tray="4"],[data-tray="7"],[data-tray="10"]) #home-tray #tray-voice{color:#fff;filter:drop-shadow(0 1px 1px rgba(10,25,50,.35))}
+.screen:is([data-tray="2"],[data-tray="4"],[data-tray="7"],[data-tray="10"]) #home-tray #tray-voice[data-voice-muted=true]{color:#ffc2cd;background-color:rgba(232,80,100,.28)}
+/* Glass lenses (3) also sit over the wallpaper: light muted symbol for contrast. */
+.screen[data-tray="3"] #home-tray #tray-voice[data-voice-muted=true]{color:#ffc2cd;background-color:rgba(232,80,100,.3)}
+
+/* ---------- HIFI delta 01 (2026-11-01): measured contrast/state-clarity fixes only ---------- */
+/* 3 — voice-on symbol was navy on a dark lens (2.7:1); light symbol like the other wallpaper options. */
+.screen[data-tray="3"] #home-tray #tray-voice{color:#fff;filter:drop-shadow(0 1px 1px rgba(10,25,50,.4))}
+/* 7 — muted tint was a square box touching the slab edges; inset rounded pill inside its segment. */
+.screen[data-tray="7"] #home-tray #tray-voice[data-voice-muted=true]{background-color:transparent;box-shadow:-1px 0 0 rgba(255,255,255,.45)}
+.screen[data-tray="7"] #home-tray #tray-voice[data-voice-muted=true]::before{display:block;content:'';position:absolute;inset:3px 10px;border-radius:20px;padding:0;
+  background:rgba(232,80,100,.28);box-shadow:inset 0 0 0 1.5px rgba(255,170,185,.6);-webkit-mask:none;mask:none;opacity:1;z-index:0}
+.screen[data-tray="7"] #home-tray #tray-voice[data-voice-muted=true]::after{right:16px;top:6px}
+.screen[data-tray="7"] #home-tray #tray-voice svg{position:relative;z-index:1}
+/* 9 — end-call X on the grey satin lens was 2.9:1; deeper coral. */
+.screen[data-tray="9"] #rose-end .end svg{color:#b8321f}

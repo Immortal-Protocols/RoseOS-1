@@ -195,16 +195,112 @@ and writes `preflight.json`, `started.json` and `completed.json` there, write-on
 
 | Stage | Required inputs | Does | Bound (proposal) |
 |---|---|---|---|
+| `source` | `--source-root ISO` | Copies the production source root (only read) into a new `ISO` in-process, byte by byte into new inodes, with the reviewed emulator-alpha code and exclusions, plus adevtool's deps (`adevtool_revision` and `host/linux-x86`). Details below. | 150 GiB, 7200 s |
 | `download` | `--download-dir D` | Streams the pinned `https://dl.google.com/dl/android/aosp/blazer-cp3a.261005.005-factory-cd7d12c2.zip` to `D/<file>.part`, then renames it to `D/<file>` only if sha256 = `cd7d12c2…18e3`. The byte count is checked as it streams. | 8 GiB (unverified for Pro), 3600 s |
-| `vendor` | `--download-dir D --source-root ISO --node N` | `N` must be named `node`, keep its preflight file identity, and be what the child `PATH` (`dirname(N):/usr/bin:/bin`) resolves. Runs `N --version` (≥ 24), then `vendor/adevtool/bin/run generate-all -d blazer` in `ISO` with `ADEVTOOL_IMG_DOWNLOAD_DIR=D`. | 128 GiB, 10800 s |
+| `vendor` | `--download-dir D --source-root ISO --node N` | `N` must be named `node`, keep its preflight file identity, and be what the child `PATH` (`<receipt-dir>/node-path:/usr/bin:/bin`, a private directory holding only a `node` link to `N`) resolves; nothing else beside `N` (e.g. the rest of `/usr/local/bin`) is visible. Needs `vendor/adevtool/.git`. Runs `N --version` (≥ 24) and `git -C vendor/adevtool rev-parse HEAD` (must print exactly the pin), then `vendor/adevtool/bin/run generate-all -d blazer` in `ISO` with `ADEVTOOL_IMG_DOWNLOAD_DIR=D` and `ADEVTOOL_SKIP_DEP_BUILD=1` (no dependency rebuild); inherited `GIT_*` is stripped. | 128 GiB, 10800 s |
 | `lunch` | `--source-root ISO` | Runs `lunch blazer-cur-user` (`PATH=/usr/bin:/bin`), then checks `TARGET_PRODUCT=blazer`, `TARGET_RELEASE=cur`, `TARGET_BUILD_VARIANT=user`, `TARGET_DEVICE=blazer`, with `OUT_DIR=out-blazer-lunch`. No make. | 8 GiB, 1800 s |
 
-- **Time**: the stage timeouts total 16200 s (4.5 h). That excludes building the isolated source
-  tree, whose byte and time cost is unknown and separately scoped.
-- **Space**: each stage needs available − bound ≥ 322122547200 bytes on the filesystem it writes.
-  - The preparation preflight's peak is the 144 GiB sum of the bounds. That sum plus the 300 GiB
-    reserve excludes the isolated source copy.
-  - No prior Blazer measurement is needed.
+- **Time**: the stage timeouts total 23400 s (6.5 h), including the source copy.
+- **Space**: each stage needs available − bound ≥ 322122547200 bytes on the filesystem it writes, checked
+  when that stage starts. No prior Blazer measurement is needed. (The separate admission report
+  `blazer-preparation-preflight.py` still sums only download, vendor and lunch.)
+- **Source construction** (`source`):
+  - Exclusions are `os/release-pipeline/cuttlefish-alpha.json` `preparation.exclusions`: root
+    `.repo`, `keys`, `releases`, `out`, `out-*`, `out_*`; `.git`/`.repo` anywhere; the adevtool unpack
+    cache.
+  - **adevtool deps.** From `out_adevtool_deps` only two paths are selected (`preparation.source.includePaths`):
+    - `adevtool_revision`, a regular file;
+    - the complete `host/linux-x86` distribution: the 14 tools in `bin/` plus the `lib64/` libraries
+      and `framework/` JARs they load. It is its own selection, and a link that leaves it refuses.
+  - **Why the rest of the deps is never walked.** The deps directory can be a whole build OUT_DIR
+    (historically `OUT_DIR=out_adevtool_deps`). Attempt 41547295738 refused on six such entries:
+    `.ninja_fifo`, four `target/product/emu64x/...` links into `/apex`, and a `siso_config` link into
+    `build/soong`. Nothing else under it is selected, walked or dereferenced.
+  - **Parents.** `out_adevtool_deps` and `out_adevtool_deps/host` must be real directories and keep
+    their modes.
+  - **Deps checks only.** Before writing, the selected deps must provide what their consumer reads
+    (`deps_problems`):
+    - `adevtool_revision` is exactly the pinned hash and one newline, read no-follow;
+    - every tool is a regular, unlinked, executable file.
+
+    These checks run only once the include paths are known to be plain. The vendor stage's other tree
+    needs (adevtool's run script, envsetup, prebuilts) and the kernel directory are its own admission,
+    never a gate on the snapshot.
+  - **Consumer trace.** Read from the public GrapheneOS adevtool source at `17df3b79`
+    (`src/config/paths.ts`, sha256 `418823cc…`, `getHostBinPath`):
+    - `adevtool_revision` is compared exactly with `git -C vendor/adevtool rev-parse HEAD` stdout;
+    - each program is `out_adevtool_deps/host/linux-x86/bin/<program>`, and the call sites name only
+      the 14 `depsTools`;
+    - nothing else under `out_adevtool_deps` is read. The tools' own runtime needs are not adevtool
+      code: `lib64/` and `framework/` are copied with `host/linux-x86`; whether the JAR-backed tools
+      (`apksigner`, `arsclib`) also need a Java runtime from outside it is not established here.
+  - **Later vendor gap (not a copy gate).** The snapshot has no `vendor/adevtool` `.git`, so in it
+    `git -C vendor/adevtool rev-parse HEAD` fails:
+    - `getHostBinPath` swallows that error, treats the deps as unbuilt and rebuilds them
+      (`scripts/run-build.sh`: `lunch sdk_phone64_x86_64` and `m` of the 14 tools into
+      `out_adevtool_deps`) unless `ADEVTOOL_SKIP_DEP_BUILD=1`, then fails writing the marker;
+    - `generate-all` then calls `writeVersionCheckFile` (`src/blobs/build.ts`), which needs the same
+      `rev-parse` and fails; the `.mk` it writes repeats that check at lunch.
+    - **Vendor now fails closed instead (vendor stage only, never the copy):**
+      - it always runs `generate-all` with `ADEVTOOL_SKIP_DEP_BUILD=1`, so adevtool never rebuilds
+        its deps inside preparation;
+      - the comparison that switch skips is made before generation instead: the marker is exactly
+        the pin plus one newline, and `git -C vendor/adevtool rev-parse HEAD` must print exactly the
+        same. It is supervised with a 60 s bound, inherited `GIT_*` is stripped and
+        `GIT_CEILING_DIRECTORIES` is the source root, so git never answers from a repository outside
+        the tree;
+      - preflight refuses a tree without `vendor/adevtool/.git`, and a git error or a different HEAD
+        refuses before anything is generated. The receipt records `adevtoolHead` and `skipDepBuild`;
+      - lunch gets the same `GIT_*` stripping and ceiling, because the generated version check calls
+        git there.
+    - This makes no snapshot usable (vendor refuses it up front) and relaxes no version check. Genuine
+      `vendor/adevtool` git metadata in a snapshot is a separate, unimplemented proposal; nothing here
+      fabricates or redirects git metadata.
+  - Before writing, the full selection is walked (no entry cap). It refuses on any link escape,
+    unsupported file type or unproven cache boundary, when the dense, block-rounded projection exceeds
+    the bound, or when available − projection < reserve.
+  - It refuses an existing `ISO` or a leftover `.source-staging-*` beside it. It creates at most one
+    missing parent (mode 0700) under `/home/pixelbuild`.
+  - The copy is staged as `.source-staging-<nonce>` beside `ISO` and renamed only when complete.
+  - A wall-clock timer, SIGTERM or the sampled reserve stops planning or copying. Only this run's
+    staging (and a parent it created, if empty) is removed, within `cleanupSeconds` (240 s, inside
+    Release's 300 s outer margin; removal of ~1.7 million files is unmeasured). Whatever is not removed
+    in time stays, is named (`stagingLeft`) and blocks the next `source` run until it is removed
+    deliberately.
+  - `completed.json` gives `refused` (nothing written) or `stopped` with `partial` entries/bytes of
+    the selection, `stagingRemoved`, `removedEntries`, `targetExists` and `selectionRecordExists`. A
+    complete copy records `selectionSha256` and `selectionRecord` (path, sha256, lines, bytes).
+  - **Selection record:** `<ISO>.selection.tsv` beside the tree, never inside it (e.g.
+    `R/source.selection.tsv`).
+    - One line per copied entry: path, type, octal mode, then size and file sha256, or the link text.
+      Raw filesystem bytes, with `\`, tab, CR and LF escaped, so no name is refused.
+    - Its sha256 is `selectionSha256`. It is created owner-only, made read-only once complete, and
+      never replaced: preflight refuses an existing record.
+    - Its size is bounded in advance (`selectionRecordBoundBytes`) and counted in the projection. A
+      stop removes it together with the staging directory, so a record never exists without its
+      complete tree.
+    - It keeps the original-byte evidence after vendor and lunch change the tree. It verifies no
+      project revision.
+  - No process starts. Per-file identity is checked against the plan, and the production lock is held
+    for the whole stage (up to 2 h, so production builds wait).
+  - Basis, historical, not current: the alpha's copy of the same root with these exclusions allocated
+    120.16 GiB (1,696,997 files) on 2026-10-28, and reflink is unsupported on that ext4. The Pro
+    inspect's truncated 1.13 TB reference walk counts outputs and repo metadata. It is never an
+    estimate: it already shows a full copy cannot fit (above 1,254,214,725,632 − reserve).
+  - **Provenance** (`completed.json` `provenance`, verbatim `SOURCE_PROVENANCE`): a
+    `production-working-tree-byte-snapshot` with `projectRevisionsVerified: false`,
+    `pinnedManifestVerified: false` and `resolvedManifest: null`.
+    - The copy holds the production working tree as found, its Frankel integration included, without
+      `.git` or `.repo`. Revisions cannot be re-derived from it.
+    - No manifest or resolved manifest read anywhere else is evidence for these bytes. The admission
+      report's manifest rule (`blazer-preparation-preflight.py`) therefore stays BLOCKED for the copy
+      by design.
+    - `selectionSha256` and the selection record identify only the copied bytes at copy time. Vendor
+      and lunch then change the tree, and nothing re-hashes it yet. `complete: true` means only that the
+      copy finished.
+    - Verifying project bytes against the pinned revisions would need a separately approved
+      comparison against the production `.repo` objects that accounts for the integration. This helper
+      does not do it.
 - **Byte limits are a sampled stop, not a filesystem quota.**
   - Every `limits.sampleSeconds` (5 s), the watched outputs are checked against the bound and the
     filesystem's available bytes against the reserve.
@@ -248,6 +344,47 @@ and writes `preflight.json`, `started.json` and `completed.json` there, write-on
     archive and `.part` metadata (not hashed).
   - `reference` (default: the production source root, read-only) gives the same tree facts plus a
     bounded total size.
+  - `adevtoolGit` (in each tree's facts, reference and candidate source; additive in schema v2;
+    gates nothing) is one level of `vendor/adevtool/.git`, metadata only:
+    - **The path itself:** `lstat`, never followed. A link reports its escaped text only. A regular
+      file (a gitfile) reports `lstat` only; its `gitdir:` text is not read. A link in a parent
+      component stops the inspection.
+    - **A real directory:** at most 256 entries are scanned, against the shared `--max-entries` and
+      `--max-seconds` budget. The first 64, sorted, are reported with name, type, mode and size; links
+      add their escaped text (at most 1024 bytes), whether it is absolute, and whether it lexically
+      leaves the tree. Nothing below that level is listed.
+    - **HEAD:** the only content read, and only as a regular unlinked file: `O_NOFOLLOW|O_NONBLOCK`,
+      re-checked as regular after opening. **At most 65 bytes are read and at most 64 accepted**: the
+      65th byte only detects an oversize HEAD and is never reported. It is reported only as `detached`
+      with a 40-hex revision or as a `refs/` name; anything else, or more than 64 bytes, is
+      `unrecognised` with its length and no content.
+    - **Never touched:** objects, refs contents, config, the index or hooks. No git process runs, and
+      nothing is written. Names and link texts are raw bytes with every non-printable byte and `\`
+      escaped.
+    - It is for a separately approved observation of the production layout. Original Infra owns that
+      execution; nothing here copies or selects git metadata.
+- **`inspect-git`** (git-only; for Release's selector wiring):
+  `python3 scripts/blazer-build-only.py inspect-git --host H`
+  - It takes no other argument: no lock, receipt directory, path or bound flag. Exit 0 means
+    inspected (an absent target included); 2 means invalid input. One JSON document goes to stdout.
+  - **Targets are fixed** in `preparation.gitInspection.targets` and validated on load and at call
+    time:
+    - `production`: `/home/pixelbuild/grapheneos-2026100600/vendor/adevtool/.git` (the production root
+      plus `vendor.adevtoolGit.metadataPath`);
+    - `candidate`: `/home/pixelbuild/rose-actions/blazer-prep-41473133543-1/source/vendor/adevtool/.git`
+      (under `/home/pixelbuild`, isolated from production; a fixed path, not a binding, not known to
+      exist).
+  - **Output** `roseos.blazer-git-inspection.v1`:
+    - constants `metadataOnly: true`, `processesStarted: 0`, `network: false`, `writes: false`,
+      `gitProcess: false`, `enablesPreparation: false`;
+    - `bounds` = `{scanEntries 256, listedEntries 64, linkTextBytes 1024, headAcceptedBytes 64,
+      headReadBytes 65, maxSeconds 60}`;
+    - `targets.production` and `targets.candidate`, each `git_facts` (as above) plus `absolutePath`;
+    - `truncated` and `elapsedSeconds`.
+  - **Touches only** each target's own metadata, one level inside it, its HEAD, and the `lstat` of
+    its ancestors (to refuse a link component). There is no tree, size, collision, Node, download or
+    candidate-path scan, no write, no git process and no gitfile content. The other modes are
+    unchanged.
   - `node.runner` is `node` as the runner's own `PATH` resolves it, and `node.candidate` is
     `--candidate-node`: path and realpath `lstat` identity, name and executable bit. Neither is ever
     executed.
@@ -255,10 +392,79 @@ and writes `preflight.json`, `started.json` and `completed.json` there, write-on
     reflink support (never assumed), the isolated-copy cost, the Pro archive size, and truncated walks.
   - It starts no process, opens no connection, reads no secret and writes nothing. The kernel may
     still update directory access times (relatime); contents, mtime and ctime are unchanged.
+- **`inspect-git-set`** (git-only, one explicit target set; observation O1):
+  `python3 scripts/blazer-build-only.py inspect-git-set --host H --target-set adevtool-projects-gitdir`
+  - A separate subcommand, so `inspect-git` and its approval never widen: `inspect-git` keeps exactly
+    its two targets and rejects `--target-set`. `inspect-git-set` takes only `--host` and one
+    `--target-set`; anything else, or an unknown set, exits 2 with nothing on stdout.
+  - **Target sets are fixed** in `preparation.gitInspection.targetSets` and validated on load and at
+    call time; the only set is `adevtool-projects-gitdir` with one target, `projectsGitdir`:
+    `/home/pixelbuild/grapheneos-2026100600/.repo/projects/vendor/adevtool.git` (the production
+    root plus `.repo/projects/<project>.git`). Observation 41566744429 found
+    `vendor/adevtool/.git` to be a link with that relative text; the helper never follows it and
+    names the gitdir directly.
+  - **Same bounds** as `inspect-git`, through the same `git_facts`: 60 s, scan 256 / report 64
+    entries, link text escaped and capped at 1024 bytes with absolute/leaves-tree flags, HEAD
+    `O_NOFOLLOW|O_NONBLOCK`, 65 bytes read and 64 accepted. A link at the target or above it is
+    reported (its text, or the first linked component) and never traversed. The `objects` link is
+    reported, not followed; objects, refs contents, `packed-refs`, `shallow` and config are never
+    opened.
+  - **Output** `roseos.blazer-git-target-set-inspection.v1`: the `inspect-git` constants and
+    `bounds`, plus `targetSet` and `targets.projectsGitdir` (`git_facts` plus `absolutePath`).
+  - **Touches only** the target, one level inside it, its HEAD and the `lstat` of its ancestors.
+    Validation checks the candidate target lexically, so no other path is touched. It is source
+    only: Release wiring and its execution are separate, and O2 (sizing the object store) and any
+    copy remain proposals.
+- **`inspect-git-objects`** (O2, metadata only; for a separately approved observation):
+  `python3 scripts/blazer-build-only.py inspect-git-objects --host immortal-os-builder`
+  - Takes only `--host`, which must be `immortal-os-builder`. Exit 0 means a report was written,
+    whether `complete` is true or false; 2 means invalid input, with nothing on stdout. Output is one
+    compact JSON document on one line, at most 64 KiB.
+  - **Fixed target** in `preparation.gitObjectsInspection`:
+    `/home/pixelbuild/grapheneos-2026100600/.repo/project-objects/adevtool.git/objects`. Original
+    Infra derived this lexically from O1's `objects` link (runtime 41586224611); its existence, layout
+    and size are unobserved. The block must equal the fixed host, path and bounds, or loading refuses.
+    Loading for this mode is lexical, so no other preparation probe runs.
+  - **Traversal:** the path is opened component by component from `/`, each with
+    `O_DIRECTORY|O_NOFOLLOW|O_NONBLOCK` relative to its parent's descriptor. Inside the tree:
+    - each listed name is `lstat`ed relative to its directory's descriptor;
+    - a directory is opened the same way and re-identified with `fstat`;
+    - link text is read (escaped, at most 128 bytes) but never followed;
+    - special files are never opened, and no other filesystem is entered;
+    - no file content is opened and no Git process runs.
+    `hooks` and `rr-cache` are excluded by name (never `lstat`ed). `info/alternates` and
+    `info/http-alternates` get existence and type only.
+  - **Bounds:** 100,000 listed entries, entries to depth 3 below the root (a directory at depth 3 is
+    not listed), a cooperative 120 s deadline checked before each entry (one blocking system call is
+    not interrupted), and 64 KiB of JSON. Groups, exceptions and the excluded list are capped at 32
+    each; excess groups fold into `(other)`.
+  - **Receipt** `roseos.blazer-git-objects-inspection.v1`:
+    - `target`: absolute path, `exists`, and the root's device, inode, mode and uid;
+    - `complete` and `incomplete`: an ordered list of `{reason, detail}`;
+    - `totals`: listed entries; count, apparent bytes and allocated bytes by type (a hardlinked
+      inode is allocated once); `hardlinkedRepeats`; `deepestEntry`;
+    - `groups`: the same figures by relative directory, with `[0-9a-f]{2}` for the loose-object
+      fan-out;
+    - `existenceOnly`, `excluded`, `exceptions` (path, kind, and for links the escaped text and
+      `unsafe`), and the constants for metadata only, no contents, links, filesystems, processes,
+      network or writes.
+  - **`complete:false` reasons**, each with partial totals: `absent`, `linked-component`,
+    `not-a-directory`, `inaccessible`, `replaced` (vanished, swapped for a link, or a different
+    identity at open), `cross-filesystem`, `unsafe-link` (absolute, or leaving the objects root),
+    `special`, `depth`, `entries`, `deadline` and `output` (trimmed to fit; `trimmed` names what).
+    A relative in-tree link is reported but leaves the report complete.
+  - **Feasibility (virtual, not a guarantee):** in a Linux container with a warm cache, a synthetic
+    tree of exactly 100,000 entries took about 0.8 s and 1.8 KB of JSON; one more entry gave
+    `complete:false` with reason `entries`. The production disk, its cold cache and its real layout
+    are unmeasured.
+  - Metadata totals prove no object integrity, reachability or provenance. A later metadata copy
+    needs its own approved HEAD/refs/shallow/safe-config scope.
+  - Workflow wiring is Release's. Its proposed stage `git-objects-inspect` is a 180 s outer timeout
+    plus a 30 s kill grace, a 15-minute job and 7-day private JSON retention, with the existing
+    start-ownership cleanup and STOP. These are proposals, not runtime approval.
 - **Not yet verified**: the only known source is historical production ext4. Paths such as
   `/home/pixelbuild/rose-actions/blazer-prep-<run-id>-<attempt>/{source,downloads,receipts}` are a
-  proposal, not verified paths. Building the isolated copy (no writable hardlinks, no assumed
-  reflink, with outputs, signing material and caches excluded) is separately scoped.
+  proposal, not verified paths. No `source` copy has run, and none is authorized.
 - **Out of scope**: `compile` is outside preparation and still needs a measured
   `compileAllowanceBytes`. Nothing here compiles, signs, publishes or flashes, and no runtime scope
   is approved.

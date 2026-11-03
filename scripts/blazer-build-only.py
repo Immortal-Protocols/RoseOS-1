@@ -10,14 +10,32 @@ generation with an explicit -d blazer, and the proposal bounds of each preparati
   blazer-build-only.py run       --stage S ... --receipt-dir NEW   preflight, then the stage under the lock
 
 Preparation stages (never compile, sign, publish or flash; never in the production source tree):
+  source    --host --lock --source-root ISOLATED
+            an ordinary in-process byte copy of the production source root (only read) into ISOLATED, which must not
+            exist (one missing parent under the ancestor boundary is created owner-only): the emulator alpha's exclusion
+            policy (repo metadata, keys, releases, outputs, .git, the adevtool unpack cache) plus exactly
+            out_adevtool_deps/adevtool_revision and the complete out_adevtool_deps/host/linux-x86 (nothing else of the
+            deps is walked), and only when those deps hold the pinned revision and the tools (never the vendor stage's
+            other tree or kernel needs); the full selection is measured before anything is written and refused above
+            its bound, the
+            copy is staged beside ISOLATED and renamed into place only when complete, and a stop (timeout, SIGTERM,
+            reserve) removes only this run's staging directory within cleanupSeconds (a remainder is left, named and
+            blocks the next run); no subprocess, reflink, hardlink or mount. The result is a
+            byte snapshot of the production working tree, Frankel integration included: its project revisions are
+            not verified (see SOURCE_PROVENANCE). The per-entry selection record (path, type, mode, size and file
+            sha256 or link text) is kept write-once beside the tree as ISOLATED.selection.tsv; its sha256 is
+            selectionSha256, so later stages' changes to the tree never erase the original-byte evidence
   download  --host --lock --download-dir
             stream the pinned official URL to DIR/<file>.part (byte and time bound), rename to DIR/<file> only when its
             sha256 equals the pin; an existing archive is never replaced; a failed attempt removes only its own .part
   vendor    --host --lock --download-dir --source-root ISOLATED --node PATH
-            `node --version` must meet the floor, then `vendor/adevtool/bin/run generate-all -d blazer` with
-            ADEVTOOL_IMG_DOWNLOAD_DIR=DIR in ISOLATED, which must not be, contain or sit inside the production source root
-            (os/release-pipeline/frankel.json host.sourceRoot); the verified archive, pins, host tools and kernel must be
-            present and every collision path absent; consumed bytes are measured afterwards against the bound
+            `node --version` must meet the floor and `git -C vendor/adevtool rev-parse HEAD` must print exactly the
+            pin (ISOLATED needs vendor/adevtool/.git; GIT_* stripped, GIT_CEILING_DIRECTORIES=ISOLATED), then
+            `vendor/adevtool/bin/run generate-all -d blazer` with ADEVTOOL_SKIP_DEP_BUILD=1 (adevtool never rebuilds its
+            deps) and ADEVTOOL_IMG_DOWNLOAD_DIR=DIR in ISOLATED, which must not be, contain or sit inside the production source root
+            (os/release-pipeline/frankel.json host.sourceRoot); the archive's sha256, the adevtool deps revision marker, the
+            host tools and the kernel directory must be present (project revisions are not checked) and every collision
+            path absent; consumed bytes are measured afterwards against the bound
   lunch     --host --lock --source-root ISOLATED
             `lunch blazer-cur-user` and the TARGET_PRODUCT/RELEASE/BUILD_VARIANT/DEVICE checks with OUT_DIR=out-blazer-lunch;
             no make goal
@@ -26,24 +44,38 @@ Build stage (outside preparation, unchanged): compile --host --jobs --lock --sou
 Every stage refuses on a symlink in an operator path, a held lock (probed non-blocking, held with LOCK_NB while
 running), an existing output (nothing is deleted, reused or overwritten except the stage's own .part) or available
 bytes minus the stage bound below capacity.reserveBytes. Bounds are labelled proposals, not measurements; the stage
-timeouts total 4.5 h, excluding construction of the isolated tree.
+timeouts total 6.5 h.
 
-vendor and lunch run in their own session and process group with PATH limited to /usr/bin:/bin (vendor: the verified
-node's directory first, so adevtool resolves exactly that file; its identity is re-checked just before the run). The
+vendor and lunch run in their own session and process group with PATH limited to /usr/bin:/bin (vendor: first a private
+directory in the receipt directory holding only a `node` link to the verified file, so adevtool resolves exactly that
+file and no other tool beside it, e.g. the rest of /usr/local/bin; its identity is re-checked just before the run). The
 byte limit is a sampled stop, not a filesystem quota: every preparation.limits.sampleSeconds the watched outputs are
 compared with the bound and the filesystem's available bytes with the reserve, and an overrun or the timeout ends the
 group (SIGTERM, then SIGKILL after killGraceSeconds); live members left after a normal exit are ended the same way.
 Writes between samples can overshoot, and descendants that start their own session are not reached: an enforced quota
 and full containment need host-side cgroup/quota configuration that this tool does not have.
 
+  blazer-build-only.py inspect-git --host H
+            git-only: one level of each fixed preparation.gitInspection target (production and candidate
+            vendor/adevtool/.git) and at most 65 bytes of its HEAD (64 accepted), nothing else; no other argument
+  blazer-build-only.py inspect-git-set --host H --target-set NAME
+            the same git-only inspection of exactly one explicit preparation.gitInspection.targetSets entry
+            (adevtool-projects-gitdir: the production .repo/projects/vendor/adevtool.git), same bounds; no other argument
+  blazer-build-only.py inspect-git-objects --host immortal-os-builder
+            O2 metadata only: the fixed preparation.gitObjectsInspection objects directory, walked through no-follow
+            directory descriptors (100,000 entries, depth 3, cooperative 120 s, JSON at most 64 KiB), no file content
+            opened, no link followed, no other filesystem; hooks and rr-cache excluded, info/alternates and
+            info/http-alternates existence and type only; complete:false names every limit or exception
   blazer-build-only.py inspect --host --lock [--source-root] [--download-dir] [--node] [--max-entries] [--max-seconds]
             metadata only, for a later approved observation (at most 20 minutes): lstat identities, isolation, statvfs,
-            pinned project presence, adevtool_revision (128 bytes), bounded collision/download sizes and the node file
-            identity and PATH resolution; starts no process, opens no connection and writes nothing
+            pinned project presence, adevtool_revision (128 bytes), bounded collision/download sizes, one level of
+            vendor/adevtool/.git with at most 65 bytes of its HEAD read, 64 accepted (git_facts), and the node file identity and PATH
+            resolution; starts no process, opens no connection and writes nothing
 Exit status: 0 ready/success, 1 not ready or the stage failed, 2 invalid input. Source tests use synthetic trees, a fake
 fetcher and a fake runner only.
 """
 import argparse
+import errno
 import fcntl
 import hashlib
 import json
@@ -52,6 +84,7 @@ from pathlib import Path
 import re
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
@@ -62,11 +95,12 @@ from xml.etree import ElementTree
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import release_receipts  # noqa: E402
 import blazer_integration  # noqa: E402
+import alpha_source  # noqa: E402  (the reviewed copy plan and per-file copy; only imported, never changed)
 
 ROOT = Path(__file__).resolve().parents[1]
 RECIPE = ROOT/'os/build-only/blazer.json'
 DEVICE = 'blazer'
-PREPARATION = ('download', 'vendor', 'lunch')
+PREPARATION = ('source', 'download', 'vendor', 'lunch')
 STAGES = PREPARATION + ('compile',)
 BUILD_INDEX = 'os/tests/fixtures/adevtool-17df3b79/adevtool/config/build-index/build-index-main.yml.excerpt.json'
 FACTORY_URL = 'https://dl.google.com/dl/android/aosp/'
@@ -76,6 +110,7 @@ HOST_LABEL = re.compile(r'[a-z0-9][a-z0-9.-]{0,62}')
 CHUNK = 1 << 20
 LUNCH_VARS = ('TARGET_PRODUCT', 'TARGET_RELEASE', 'TARGET_BUILD_VARIANT', 'TARGET_DEVICE')
 SAFE_PATH = '/usr/bin:/bin'
+NODE_PATH_DIR = 'node-path'  # inside the vendor stage's own receipt directory
 
 class InvalidInput(Exception):
     pass
@@ -106,8 +141,9 @@ def pointer(root, source):
         value = value[key]
     return value
 
-def load(path=RECIPE, root=ROOT):
-    """The recipe, checked against its checked-in sources; InvalidInput on any drift."""
+def load(path=RECIPE, root=ROOT, probe=True):
+    """The recipe, checked against its checked-in sources; InvalidInput on any drift. probe=False (inspect-git-set)
+    keeps the git-inspection candidate check lexical, so loading touches no host path."""
     recipe = json.loads(Path(path).read_text())
     problems = []
     if recipe.get('kind') != 'rose-build-only-recipe' or recipe.get('device') != DEVICE:
@@ -147,7 +183,7 @@ def load(path=RECIPE, root=ROOT):
         problems.append('capacity.allowanceRequired must be true: there is no isolated-host allowance exception')
     if not isinstance(capacity.get('reserveBytes'), int) or capacity['reserveBytes'] < 322122547200:
         problems.append('capacity.reserveBytes must be at least the 300 GiB reserve')
-    problems += preparation_problems(recipe, root, contract)
+    problems += preparation_problems(recipe, root, contract, probe)
     if problems:
         raise InvalidInput('; '.join(problems))
     return recipe
@@ -155,7 +191,7 @@ def load(path=RECIPE, root=ROOT):
 def positive(value):
     return isinstance(value, int) and not isinstance(value, bool) and value > 0
 
-def preparation_problems(recipe, root, contract):
+def preparation_problems(recipe, root, contract, probe=True):
     prep, problems = recipe.get('preparation') or {}, []
     if prep.get('stages') != list(PREPARATION):
         return [f'preparation.stages must be exactly {list(PREPARATION)}']
@@ -182,6 +218,25 @@ def preparation_problems(recipe, root, contract):
     unpacked = f'vendor/adevtool/dl/unpacked/{DEVICE}-{contract["shared"]["vendorBuildId"]}'
     if vendor.get('collisionPaths') != [f'vendor/google_devices/{DEVICE}', unpacked]:
         problems.append(f'preparation.vendor.collisionPaths must be the generated vendor tree and {unpacked}')
+    source = prep.get('source') or {}
+    if not (positive(source.get('cleanupSeconds')) and source['cleanupSeconds'] < 300):
+        problems.append('preparation.source.cleanupSeconds must be positive and below the 300 s outer-timeout margin')
+    if source.get('includePaths') != include_paths(recipe) or source.get('stagingPrefix') != '.source-staging-':
+        problems.append(f'preparation.source must include exactly {include_paths(recipe)} and stage under .source-staging-')
+    try:
+        policy = pointer(root, source['exclusionsFrom'])
+        if not ({'.repo', 'keys', 'releases', 'out'} <= set(policy.get('rootNames', ())) and {'out-', 'out_'} <= set(
+                policy.get('rootPrefixes', ())) and {'.git', '.repo'} <= set(policy.get('anywhereNames', ()))):
+            problems.append('preparation.source.exclusionsFrom must exclude repo metadata, keys, releases, outputs and .git')
+    except (KeyError, OSError, ValueError, TypeError, AttributeError):
+        problems.append('preparation.source.exclusionsFrom must resolve to the checked-in alpha exclusion policy')
+    git = vendor.get('adevtoolGit') or {}
+    if (git.get('metadataPath') != 'vendor/adevtool/.git' or git.get('argv') != ['git', '-C', 'vendor/adevtool', 'rev-parse', 'HEAD']
+            or git.get('skipDepBuildEnv') != {'ADEVTOOL_SKIP_DEP_BUILD': '1'} or not positive(git.get('timeoutSeconds'))):
+        problems.append('preparation.vendor.adevtoolGit must be vendor/adevtool/.git, `git -C vendor/adevtool rev-parse HEAD`, '
+                        'ADEVTOOL_SKIP_DEP_BUILD=1 and a positive timeoutSeconds')
+    problems += git_inspection_problems(recipe, root, probe)
+    problems += git_objects_problems(recipe, root)
     node = vendor.get('node') or {}
     if not (positive(node.get('minMajor')) and positive(node.get('versionTimeoutSeconds'))):
         problems.append('preparation.vendor.node needs a positive minMajor and versionTimeoutSeconds')
@@ -227,7 +282,7 @@ def symlink_in(path):
             return None
     return None
 
-def commands(recipe, op):
+def commands(recipe, op, root=ROOT):
     """The exact argv, cwd and extra environment of each stage, rendered from the recipe and the operator's inputs."""
     rendered = {}
     prep = recipe['preparation']
@@ -238,14 +293,22 @@ def commands(recipe, op):
             'maxBytes': prep['download']['boundBytes'], 'timeoutSeconds': prep['download']['timeoutSeconds']}
     if op['sourceRoot'] is not None:
         src = str(op['sourceRoot'])
+        spec = prep['source']
+        rendered['source'] = {'base': pointer(root, prep['productionSourceRootFrom']), 'target': src,
+            'staging': str(op['sourceRoot'].parent/(spec['stagingPrefix'] + '<nonce>')),
+            'exclusionsFrom': spec['exclusionsFrom'], 'includePaths': list(spec['includePaths']),
+            'maxBytes': spec['boundBytes'], 'timeoutSeconds': spec['timeoutSeconds'], 'processes': 0, 'method': spec['method']}
         if op['downloadDir'] is not None:
-            node_dir = str(op['node'].parent) if op['node'] else None
+            git = prep['vendor']['adevtoolGit']
             rendered['vendor'] = {'cwd': src, 'env': {recipe['generate']['downloadEnv']: str(op['downloadDir']),
-                    'PATH': f'{node_dir}:{SAFE_PATH}' if node_dir else SAFE_PATH},
+                    'PATH': f'<receipt-dir>/{NODE_PATH_DIR}:{SAFE_PATH}' if op['node'] else SAFE_PATH,
+                    'GIT_CEILING_DIRECTORIES': src, **git['skipDepBuildEnv']},
                 'argv': list(recipe['generate']['argv']), 'timeoutSeconds': prep['vendor']['timeoutSeconds'],
-                'nodeVersion': [str(op['node']) if op['node'] else 'node', '--version']}
+                'nodeVersion': [str(op['node']) if op['node'] else 'node', '--version'],
+                'adevtoolHead': list(git['argv']), 'adevtoolHeadTimeoutSeconds': git['timeoutSeconds']}
         checks = ' && '.join(f'echo {v}=${v}' for v in LUNCH_VARS[:3]) + ' && echo TARGET_DEVICE=$(get_build_var TARGET_DEVICE)'
-        rendered['lunch'] = {'cwd': src, 'env': {'OUT_DIR': prep['lunch']['outDir'], 'PATH': SAFE_PATH},
+        rendered['lunch'] = {'cwd': src, 'env': {'OUT_DIR': prep['lunch']['outDir'], 'PATH': SAFE_PATH,
+                                                 'GIT_CEILING_DIRECTORIES': src},
             'argv': ['bash', '-c', f'source build/envsetup.sh && lunch {recipe["lunch"]} && {checks}'],
             'timeoutSeconds': prep['lunch']['timeoutSeconds']}
         if op['jobs'] is not None:
@@ -306,12 +369,15 @@ def integration(recipe, src, directory, inputs_receipt=None):
     problems += blazer_integration.compile_problems(record, src, inputs_receipt)
     return problems, facts
 
-def isolation_problem(path, production):
+def isolation_problem(path, production, probe=True):
     """Why PATH is not isolated from the production source root, or None. Equal, inside, containing or the same inode
-    as the production tree all refuse; the production tree is never a preparation workspace."""
+    as the production tree all refuse; the production tree is never a preparation workspace. probe=False: the lexical
+    checks only, touching no path."""
     production = Path(production)
     if path == production or production in path.parents or path in production.parents:
         return f'{path} is, contains or sits inside the production source root {production}'
+    if not probe:
+        return None
     try:
         if path.exists() and production.exists() and os.path.samefile(path, production):
             return f'{path} is the production source root {production}'
@@ -337,15 +403,7 @@ def tree_problems(recipe, src):
     for needed in TREE_NEEDS:
         if not (src/needed).exists():
             problems.append(f'{needed} is missing from the source tree')
-    deps = src/recipe['adevtool']['depsDir']
-    revision = (deps/'adevtool_revision').read_text().strip() if (deps/'adevtool_revision').is_file() else None
-    if revision != recipe['pins']['vendor/adevtool']:
-        problems.append(f'{recipe["adevtool"]["depsDir"]}/adevtool_revision is {revision!r}, not the pinned revision')
-    tools = deps/'host/linux-x86/bin'
-    missing = [t for t in recipe['adevtool']['depsTools']
-        if not (tools/t).is_file() or (tools/t).is_symlink() or not os.access(tools/t, os.X_OK)]
-    if missing:
-        problems.append(f'adevtool host tools missing or not executable: {missing}')
+    problems += deps_problems(recipe, src)  # the same exact, no-follow marker and tool checks as the source stage
     if not (src/recipe['kernelDir']).is_dir():
         problems.append(f'{recipe["kernelDir"]} (pinned laguna kernel) is missing from the source tree')
     return problems
@@ -360,6 +418,31 @@ def vendor_tree_problems(recipe, src):
         problems.append('the generated vendor tree is not from the pinned adevtool revision (foreign provenance)')
     return problems
 
+def source_preflight(recipe, src, production, problems, facts):
+    """Admission of the source stage: the target is new and under the ancestor boundary, its parent exists or is the one
+    level the stage may create, no interrupted staging is left beside it and the production root is a real directory.
+    Returns where the stage writes (its nearest existing ancestor) for the space check."""
+    prep = recipe['preparation']
+    boundary, parent = Path(prep['candidateLayout']['ancestorBoundary']), src.parent
+    if os.path.lexists(src):
+        problems.append(f'{src} already exists; an isolated source tree is never replaced or reused')
+    if os.path.lexists(record_path(src)):
+        problems.append(f'{record_path(src)} already exists; a selection record is never replaced')
+    if boundary not in src.parents:
+        problems.append(f'{src} must sit under the ancestor boundary {boundary}')
+    facts['createsParent'] = not os.path.lexists(parent)
+    if not facts['createsParent']:
+        if parent.is_symlink() or not parent.is_dir():
+            problems.append(f'{parent} is not a directory')
+    elif not (parent.parent.is_dir() and boundary in parent.parents):
+        problems.append(f'{parent} does not exist and is not the one level the stage may create under {boundary}')
+    leftovers = sorted(p.name for p in parent.glob(prep['source']['stagingPrefix'] + '*')) if parent.is_dir() else []
+    if leftovers:
+        problems.append(f'an interrupted construction left {", ".join(leftovers)} in {parent}; inspect and remove it deliberately')
+    if symlink_in(production) or not production.is_dir():
+        problems.append(f'the production source root {production} is not an existing, link-free directory')
+    return nearest_existing(src)
+
 def preflight(recipe, stage, op, statvfs=os.statvfs, lock_probe=lock_free, root=ROOT):
     """{'ready': bool, 'problems': [...], 'facts': {...}} for one stage. Reads only; writes and runs nothing."""
     if stage not in STAGES:
@@ -372,8 +455,8 @@ def preflight(recipe, stage, op, statvfs=os.statvfs, lock_probe=lock_free, root=
     for name in ('sourceRoot', 'lock', 'downloadDir', 'integrationDir', 'inputsReceipt', 'node'):
         if op[name] is not None and symlink_in(op[name]):
             problems.append(f'{name} passes through a symlink ({symlink_in(op[name])})')
-    needs = {'download': ('downloadDir',), 'vendor': ('downloadDir', 'sourceRoot', 'node'), 'lunch': ('sourceRoot',),
-             'compile': ('sourceRoot',)}[stage]
+    needs = {'source': ('sourceRoot',), 'download': ('downloadDir',), 'vendor': ('downloadDir', 'sourceRoot', 'node'),
+             'lunch': ('sourceRoot',), 'compile': ('sourceRoot',)}[stage]
     absent = [n for n in needs if op[n] is None]
     if stage == 'compile' and op['jobs'] is None:
         absent.append('jobs')
@@ -396,6 +479,8 @@ def preflight(recipe, stage, op, statvfs=os.statvfs, lock_probe=lock_free, root=
             if os.path.lexists(path):
                 problems.append(f'{path} already exists; an existing archive or partial download is never replaced')
         where = download if download.exists() else download.parent
+    elif stage == 'source':
+        where = source_preflight(recipe, src, Path(production), problems, facts)
     else:
         if not src.is_dir():
             problems.append(f'source root {src} is not an existing directory')
@@ -415,6 +500,12 @@ def preflight(recipe, stage, op, statvfs=os.statvfs, lock_probe=lock_free, root=
         for rel in prep['vendor']['collisionPaths']:
             if os.path.lexists(src/rel):
                 problems.append(f'{rel} already exists; generate-all would replace it (nothing is deleted or reused)')
+        git = src/prep['vendor']['adevtoolGit']['metadataPath']
+        facts['adevtoolGit'] = meta(git)
+        if not os.path.lexists(git):
+            problems.append(f'{prep["vendor"]["adevtoolGit"]["metadataPath"]} is missing: no git version data for adevtool '
+                            '(its version check needs `git -C vendor/adevtool rev-parse HEAD`; a source-stage snapshot '
+                            'has no .git, so vendor cannot run on it)')
         node = op['node']
         if node.is_symlink() or not node.is_file() or not os.access(node, os.X_OK):
             problems.append(f'node {node} is not an executable regular file')
@@ -553,6 +644,290 @@ def supervise(argv, cwd, env, timeout, limits, watch=(), statvfs=os.statvfs, mea
         out.close()
     return result
 
+# What a source copy is and is not: completed.json carries this verbatim so no consumer can read the copy as verified.
+SOURCE_PROVENANCE = {
+    'kind': 'production-working-tree-byte-snapshot',
+    'projectRevisionsVerified': False,
+    'pinnedManifestVerified': False,
+    'resolvedManifest': None,
+    'integration': 'included as found in the production working tree (its Frankel/Rose integration is not removed, '
+                   're-applied or verified)',
+    'versionControlMetadata': 'excluded (.git and .repo): project revisions cannot be re-derived from the copy, and a '
+                              'manifest or resolved manifest read elsewhere is not evidence for these bytes',
+    'selectionSha256': 'identifies the copied paths, modes, sizes, link texts and file sha256s at copy time only; later '
+                       'stages change the tree by design (vendor output, OUT_DIR) and do not re-hash it',
+}
+
+class StageStopped(Exception):
+    """The source stage stopped after it started writing (timeout, SIGTERM, reserve or a base change)."""
+
+class Refused(Exception):
+    """The source stage refused before writing anything."""
+
+def deps_problems(recipe, base):
+    """Only what the selected deps themselves must provide, as their pinned consumer reads them (GrapheneOS adevtool
+    17df3b79 src/config/paths.ts getHostBinPath, sha256 418823cc..., read at that revision): adevtool_revision exactly
+    the pinned hash plus one newline (paths.ts compares the file with `git -C vendor/adevtool rev-parse HEAD` stdout;
+    read no-follow, at most 128 bytes) and each depsTool, the 14 programs every getHostBinPath call site names, a
+    regular, unlinked, executable file in host/linux-x86/bin. The vendor stage's other tree needs (adevtool's run
+    script, envsetup, prebuilts) and the kernel directory are its own admission, never a gate on the copy."""
+    deps, problems = base/recipe['adevtool']['depsDir'], []
+    want = (recipe['pins']['vendor/adevtool'] + '\n').encode()
+    try:
+        fd = os.open(deps/'adevtool_revision', os.O_RDONLY | os.O_NOFOLLOW)
+        try:
+            have = os.read(fd, 128)
+        finally:
+            os.close(fd)
+    except OSError:
+        have = None
+    if have != want:
+        problems.append(f'{recipe["adevtool"]["depsDir"]}/adevtool_revision is {have!r}, not exactly the pinned hash and '
+                        'one newline')
+    tools = deps/'host/linux-x86/bin'
+    missing = [t for t in recipe['adevtool']['depsTools']
+               if (tools/t).is_symlink() or not (tools/t).is_file() or not os.access(tools/t, os.X_OK)]
+    if missing:
+        problems.append(f'adevtool host tools missing, linked or not executable: {missing}')
+    return problems
+
+def include_paths(recipe):
+    """adevtool's deps as the vendor stage consumes them: the adevtool_revision marker and the complete host/linux-x86
+    distribution (bin/ tools with their lib64/ libraries and framework/ JARs). Nothing else of the deps directory, which
+    can be a whole build OUT_DIR (FIFOs, device-path links, links back into the source), is selected or walked."""
+    deps = recipe['adevtool']['depsDir']
+    return [f'{deps}/adevtool_revision', f'{deps}/host/linux-x86']
+
+def source_selection(recipe, base, root, planner=alpha_source.plan_copy):
+    """The full copy selection of BASE (a metadata walk with no entry cap, plus alpha's reads of build-definition files
+    for cache references): the alpha exclusion policy, then each include path: a regular file taken as is, or a
+    directory as its own selection with only .git/.repo excluded, so none of its links may leave it. Their parent
+    directories must be real directories and are created with their own modes; nothing else beside them is walked.
+    The selected deps must also provide what their consumer needs (deps_problems: the pinned revision and the tools);
+    the vendor stage's other admission (tree needs, kernel) is not a copy gate."""
+    spec = recipe['preparation']['source']
+    policy = pointer(root, spec['exclusionsFrom'])
+    plan = planner(base, policy)
+    entries, problems = list(plan['entries']), list(plan['problems'])
+    excluded = len(plan['excluded'])
+    inner = {'rootNames': [], 'rootPrefixes': [], 'anywhereNames': list(policy['anywhereNames']), 'externalLinks': [],
+             'cacheBoundaries': []}
+    parents, included = set(), True
+    for rel in spec['includePaths']:
+        unsafe = None
+        for parent in reversed(Path(rel).parents[:-1]):  # out_adevtool_deps, then out_adevtool_deps/host
+            info = os.lstat(base/parent) if os.path.lexists(base/parent) else None
+            if info is None or not stat.S_ISDIR(info.st_mode):
+                unsafe = f'{parent} is not a real directory in the production source root'
+                break
+            if str(parent) not in parents:
+                parents.add(str(parent))
+                entries.append({'path': str(parent), 'type': 'dir', 'mode': stat.S_IMODE(info.st_mode)})
+        info = None if unsafe or not os.path.lexists(base/rel) else os.lstat(base/rel)
+        if unsafe:
+            problems.append(unsafe)
+            included = False
+        elif info is not None and stat.S_ISREG(info.st_mode):
+            entries.append({'path': rel, 'type': 'file', 'mode': stat.S_IMODE(info.st_mode), 'size': info.st_size,
+                            'ino': info.st_ino, 'mtime_ns': info.st_mtime_ns})
+        elif info is not None and stat.S_ISDIR(info.st_mode):
+            part = planner(base/rel, inner)
+            entries.append({'path': rel, 'type': 'dir', 'mode': stat.S_IMODE(info.st_mode)})
+            for entry in part['entries']:
+                entry = dict(entry, path=f'{rel}/{entry["path"]}')
+                if entry['type'] == 'link':
+                    entry['target'] = os.path.normpath(f'{rel}/{entry["target"]}')
+                entries.append(entry)
+            problems += [f'{rel}: {problem}' for problem in part['problems']]
+            excluded += len(part['excluded'])
+        else:
+            problems.append(f'{rel} is not a regular file or real directory in the production source root')
+            included = False
+    if included:  # deps_problems reads adevtool_revision: only once it is known to be a regular file, never a link
+        problems += [f'deps: {problem}' for problem in deps_problems(recipe, base)]
+    return {'entries': entries, 'problems': problems, 'excluded': excluded}
+
+def projected_bytes(entries, block):
+    """Bytes the copy allocates at most block-rounded: every file is written densely (a sparse base file grows to its
+    apparent size), and the root, each directory and each link take one block."""
+    return block + sum(-(-e['size'] // block) * block if e['type'] == 'file' else block for e in entries)
+
+RECORD_SUFFIX = '.selection.tsv'
+RECORD_ESCAPES = {ord('\\'): b'\\\\', ord('\t'): b'\\t', ord('\n'): b'\\n', ord('\r'): b'\\r'}
+
+def record_field(text):
+    """A path or link text as its raw filesystem bytes (non-UTF-8 names included), with backslash, tab, CR and LF
+    escaped so that every selection-record line is unambiguous. Nothing is refused for its name."""
+    return b''.join(RECORD_ESCAPES.get(byte, bytes((byte,))) for byte in os.fsencode(text))
+
+def record_line(entry, digest_or_text):
+    """One selection-record line for a copied entry: path, type, octal mode, then size and file sha256, or the link text written. Directories carry
+    path, type and mode only."""
+    head = record_field(entry['path']) + b'\t' + entry['type'].encode()
+    if entry['type'] == 'dir':
+        return head + f'\t{entry["mode"]:o}\n'.encode()
+    if entry['type'] == 'file':
+        return head + f'\t{entry["mode"]:o}\t{entry["size"]}\t{digest_or_text}\n'.encode()
+    return head + b'\t' + record_field(digest_or_text) + b'\n'
+
+def record_bound(entries, src, block):
+    """Upper bound of the retained selection record's bytes, block-rounded: every path and link text fully escaped (twice its
+    bytes), a rebased link prefix, and 100 bytes per line for type, mode, size, sha256 and separators."""
+    prefix = len(os.fsencode(str(src))) + 1
+    total = sum(2 * len(os.fsencode(e['path'])) + 100 + (2 * (len(os.fsencode(e['text'])) + prefix) if e['type'] == 'link' else 0)
+                for e in entries)
+    return -(-total // block) * block
+
+def record_path(src):
+    """Where the source stage keeps its selection record: beside the tree (never inside it), e.g. R/source.selection.tsv."""
+    return src.parent/(src.name + RECORD_SUFFIX)
+
+def remove_own(path, seconds, clock=time.monotonic):
+    """Remove this run's own staging tree bottom-up within SECONDS: (removed, entries removed). Links are unlinked,
+    never followed; each directory gets owner write first (copied modes may be read-only). When the budget runs out
+    the rest is left in place, so a stop always finishes with a receipt instead of an unbounded removal."""
+    deadline, removed = clock() + seconds, 0
+    for base, dirs, files in os.walk(path, topdown=False):
+        os.chmod(base, stat.S_IMODE(os.lstat(base).st_mode) | stat.S_IRWXU)
+        for name in files + dirs:
+            if clock() >= deadline:
+                return False, removed
+            target = os.path.join(base, name)
+            if os.path.isdir(target) and not os.path.islink(target):
+                os.rmdir(target)
+            else:
+                os.unlink(target)
+            removed += 1
+    os.rmdir(path)
+    return True, removed + 1
+
+def construct(recipe, op, production, root=ROOT, statvfs=os.statvfs, clock=time.monotonic, planner=alpha_source.plan_copy,
+              copier=alpha_source.copy_file):
+    """The source stage after admission, under the lock: (ok, outcome). The production root is only read. The whole
+    selection is planned before anything is written; the copy is staged beside the source root and renamed into place
+    only when complete. A wall-clock timer (timeoutSeconds) and SIGTERM stop planning or copying at any point, and
+    available bytes are sampled against the reserve every sampleSeconds; a stop removes only this run's staging
+    directory and staged selection record (and the parent it created, when empty) within cleanupSeconds, leaving and naming any
+    remainder. The per-entry selection record is kept write-once beside the tree (record_path); its sha256 is
+    selectionSha256.
+    It identifies the copied bytes at copy time only and verifies no project revision. No process is started."""
+    prep, src = recipe['preparation'], op['sourceRoot']
+    spec, reserve = prep['source'], recipe['capacity']['reserveBytes']
+    outcome = {'base': str(production), 'target': str(src), 'boundBytes': spec['boundBytes'], 'boundKind': prep['boundsKind'],
+               'timeoutSeconds': spec['timeoutSeconds'], 'processesStarted': 0, 'written': False, 'complete': False,
+               'selectionSha256': None, 'provenance': dict(SOURCE_PROVENANCE)}
+    staging, staged_record, kept_record, record = None, None, None, None
+    created_parent, done, final_record = False, {'entries': 0, 'fileBytes': 0}, record_path(src)
+    def stop(signum, frame):
+        raise StageStopped('SIGTERM' if signum == signal.SIGTERM else f'exceeded {spec["timeoutSeconds"]} s')
+    previous = {sig: signal.signal(sig, stop) for sig in (signal.SIGALRM, signal.SIGTERM)}
+    signal.setitimer(signal.ITIMER_REAL, spec['timeoutSeconds'])
+    try:
+        selection = source_selection(recipe, production, root, planner)
+        fs = statvfs(nearest_existing(src))
+        bound = record_bound(selection['entries'], src, fs.f_frsize)
+        projected = projected_bytes(selection['entries'], fs.f_frsize) + bound
+        files = [e for e in selection['entries'] if e['type'] == 'file']
+        outcome['selection'] = {'entries': len(selection['entries']), 'files': len(files), 'projectedBytes': projected,
+            'selectionRecordBoundBytes': bound,
+            'apparentBytes': sum(e['size'] for e in files), 'excluded': selection['excluded'],
+            'problems': selection['problems'][:50]}
+        outcome['availableBytesBefore'] = available = fs.f_bavail * fs.f_frsize
+        if selection['problems']:
+            raise Refused(f'{len(selection["problems"])} unsupported source dependencies, first: {selection["problems"][0]}')
+        if projected > spec['boundBytes']:
+            raise Refused(f'the selection projects {projected} bytes, above the {spec["boundBytes"]}-byte bound')
+        if available - projected < reserve:
+            raise Refused(f'available {available} minus the projected {projected} is below the reserve {reserve}')
+        if not os.path.lexists(src.parent):
+            src.parent.mkdir(mode=0o700)
+            created_parent = True
+        staging = src.parent/(spec['stagingPrefix'] + os.urandom(6).hex())
+        staging.mkdir(mode=0o700)
+        outcome['written'] = True
+        staged_record = staging.with_name(staging.name + RECORD_SUFFIX)
+        record = os.fdopen(os.open(staged_record, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600), 'wb')
+        digest, directories, sample = hashlib.sha256(), [], clock() + prep['limits']['sampleSeconds']
+        for entry in selection['entries']:
+            if clock() >= sample:
+                fs = statvfs(staging)
+                if fs.f_bavail * fs.f_frsize < reserve:
+                    raise StageStopped(f'available {fs.f_bavail * fs.f_frsize} fell below the reserve {reserve}')
+                sample = clock() + prep['limits']['sampleSeconds']
+            destination = staging/entry['path']
+            if entry['type'] == 'dir':
+                destination.mkdir(mode=0o700)
+                directories.append(entry)
+                line = record_line(entry, None)
+            elif entry['type'] == 'file':
+                line = record_line(entry, copier(production/entry['path'], destination, entry))
+                done['fileBytes'] += entry['size']
+            else:
+                text = entry['text'] if entry['kind'] == 'relative' else str(src/entry['target'])
+                os.symlink(text, destination)
+                line = record_line(entry, text)
+            digest.update(line)
+            record.write(line)
+            done['entries'] += 1
+        for entry in reversed(directories):  # copied modes last, deepest first
+            os.chmod(staging/entry['path'], entry['mode'])
+        record.close()
+        record_bytes = staged_record.stat().st_size
+        if os.path.lexists(src) or os.path.lexists(final_record):
+            raise StageStopped(f'{src} or {final_record} appeared during the copy')
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        os.chmod(staged_record, 0o400)  # write-once: read-only once complete
+        os.rename(staged_record, final_record)
+        staged_record, kept_record = None, final_record
+        os.rename(staging, src)
+        staging = None
+        outcome.update(complete=True, sourceRoot=str(src), selectionSha256=digest.hexdigest(), copied=done,
+                       createdParent=created_parent,
+                       selectionRecord={'path': str(final_record), 'sha256': digest.hexdigest(), 'lines': done['entries'],
+                                 'bytes': record_bytes,
+                                 'format': 'path TAB type TAB octal mode [TAB size TAB sha256 | TAB link text]; raw '
+                                           'filesystem bytes with backslash, tab, CR and LF escaped',
+                                 'claims': 'the copied bytes at copy time only; no project revision is verified'})
+        return True, outcome
+    except BaseException as error:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)  # cleanup of this run's own staging is not interrupted
+        outcome['stagingRemoved'] = None
+        if record is not None and not record.closed:
+            record.close()
+        if staged_record is not None and os.path.lexists(staged_record):
+            os.unlink(staged_record)
+        # The kept record goes only while its tree is not in place: neither is ever left without the other.
+        if kept_record is not None and os.path.lexists(kept_record) and not os.path.lexists(src):
+            os.unlink(kept_record)
+        if staging is not None and os.path.lexists(staging):
+            outcome['cleanupSeconds'] = spec['cleanupSeconds']
+            try:
+                outcome['stagingRemoved'], outcome['removedEntries'] = remove_own(staging, spec['cleanupSeconds'], clock)
+            except OSError as cleanup:
+                outcome.update(stagingRemoved=False, cleanupError=type(cleanup).__name__)
+            if not outcome['stagingRemoved']:
+                outcome['stagingLeft'] = str(staging)  # blocks the next source run until it is removed deliberately
+        if created_parent:
+            try:
+                src.parent.rmdir()
+            except OSError:
+                pass
+        outcome['createdParentLeft'] = created_parent and os.path.lexists(src.parent)
+        outcome['targetExists'] = os.path.lexists(src)
+        outcome['selectionRecordExists'] = os.path.lexists(final_record)
+        if not isinstance(error, (StageStopped, Refused, OSError, alpha_source.PreparationFailed)):
+            raise
+        kind = 'refused' if isinstance(error, Refused) else 'stopped'
+        outcome[kind] = f'{type(error).__name__}: {error}' if isinstance(error, OSError) else str(error)
+        if 'selection' in outcome:
+            outcome['partial'] = dict(done, of=outcome['selection']['entries'])
+        return False, outcome
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)
+
 INSPECTION = 'roseos.blazer-preparation-inspection.v2'
 INSPECT_MAX_SECONDS = 1200
 
@@ -564,7 +939,8 @@ def meta(path):
         return {'path': str(path), 'exists': False}
     except OSError as error:
         return {'path': str(path), 'exists': None, 'error': type(error).__name__}
-    kind = 'link' if os.path.islink(path) else 'dir' if os.path.isdir(path) else 'file' if os.path.isfile(path) else 'other'
+    kind = ('link' if stat.S_ISLNK(st.st_mode) else 'dir' if stat.S_ISDIR(st.st_mode) else 'file' if stat.S_ISREG(st.st_mode)
+            else 'other')  # from the one lstat: no second, following stat
     return {'path': str(path), 'exists': True, 'type': kind, 'mode': oct(st.st_mode), 'uid': st.st_uid, 'device': st.st_dev,
             'inode': st.st_ino, 'size': st.st_size}
 
@@ -600,6 +976,437 @@ def filesystem(path, statvfs):
     return {'queried': str(probe), 'usable': True, 'availableBytes': fs.f_bavail * fs.f_frsize,
             'totalBytes': fs.f_blocks * fs.f_frsize, 'device': os.lstat(probe).st_dev}
 
+# HEAD: at most headReadBytes are read so that more than headAcceptedBytes is detected; the extra byte is never reported.
+GIT_INSPECT = {'scanEntries': 256, 'listedEntries': 64, 'linkTextBytes': 1024, 'headAcceptedBytes': 64, 'headReadBytes': 65}
+HEAD_DETACHED = re.compile(rb'([0-9a-f]{40})\n')
+HEAD_REF = re.compile(rb'ref: (refs/[A-Za-z0-9._/-]{1,200})\n')
+
+def sanitized(text, limit):
+    """Raw filesystem bytes of a name or link text, escaped (backslash, tab, CR, LF and every other non-printable byte
+    as \\xNN), at most LIMIT bytes before escaping; (text, truncated)."""
+    raw = os.fsencode(text)
+    out = ''.join(chr(b) if 0x20 <= b < 0x7f and b != 0x5c else f'\\x{b:02x}' for b in raw[:limit])
+    return out, len(raw) > limit
+
+def git_facts(src, rel, budget, clock):
+    """Metadata of one project's git metadata path, one level only (inspect; gates nothing). The path itself: lstat,
+    never followed (a link reports its text only). A regular file (a gitfile): lstat only, its content is not read. A
+    real directory: at most GIT_INSPECT['scanEntries'] entries scanned and the first listedEntries (sorted) reported
+    with type, mode and size, links with their escaped text and whether it lexically leaves the tree; HEAD alone is
+    read, only as a regular unlinked file, O_NOFOLLOW|O_NONBLOCK, at most headReadBytes (65) so that more than
+    headAcceptedBytes (64) is detected, and reported only as a detached 40-hex revision or a refs/ name. Objects, refs contents, config, the index and hooks are never opened; no git process runs."""
+    path = src/rel
+    facts = {'path': rel, 'meta': meta(path), 'symlinkComponent': str(symlink_in(path.parent) or '') or None,
+             'contentRead': 'HEAD only (at most 65 bytes read, 64 accepted)', 'gitProcess': False}
+    if facts['symlinkComponent'] or not facts['meta'].get('exists'):
+        return facts
+    kind = facts['meta']['type']
+    if kind == 'link':
+        facts['linkText'], facts['linkTextTruncated'] = sanitized(os.readlink(path), GIT_INSPECT['linkTextBytes'])
+        return facts
+    if kind == 'file':
+        facts['gitfile'] = 'present; its gitdir text is not read (inspection reads HEAD only)'
+        return facts
+    if kind != 'dir':
+        return facts
+    seen = []
+    with os.scandir(path) as it:
+        for entry in it:
+            if len(seen) >= GIT_INSPECT['scanEntries'] or budget['entries'] <= 0 or clock() > budget['deadline']:
+                facts['truncated'] = True
+                break
+            budget['entries'] -= 1
+            seen.append(entry.name)
+    facts.setdefault('truncated', False)
+    facts['entriesScanned'] = len(seen)
+    root = os.path.normpath(str(src))
+    listed = []
+    for name in sorted(seen)[:GIT_INSPECT['listedEntries']]:
+        info = meta(path/name)
+        row = {'name': sanitized(name, 255)[0], 'type': info.get('type'), 'mode': info.get('mode'), 'size': info.get('size')}
+        if info.get('type') == 'link':
+            text = os.readlink(path/name)
+            row['linkText'], row['linkTextTruncated'] = sanitized(text, GIT_INSPECT['linkTextBytes'])
+            row['linkAbsolute'] = os.path.isabs(text)
+            target = os.path.normpath(os.path.join(str(path), text))
+            row['linkLeavesTree'] = not (target == root or target.startswith(root + os.sep))
+        listed.append(row)
+    facts['entries'] = listed
+    facts['entriesListedOf'] = len(seen)
+    head = path/'HEAD'
+    head_meta = meta(head)
+    facts['head'] = {'meta': head_meta}
+    if head_meta.get('type') == 'file':
+        try:
+            fd = os.open(head, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)  # never blocks on a swapped-in FIFO
+            try:
+                if not stat.S_ISREG(os.fstat(fd).st_mode):
+                    facts['head']['error'] = 'not a regular file when opened'
+                    return facts
+                data = os.read(fd, GIT_INSPECT['headReadBytes'])
+            finally:
+                os.close(fd)
+        except OSError as error:
+            facts['head']['error'] = type(error).__name__
+            return facts
+        detached, ref = HEAD_DETACHED.fullmatch(data), HEAD_REF.fullmatch(data)
+        if len(data) > GIT_INSPECT['headAcceptedBytes']:
+            facts['head'].update(form='unrecognised', bytes=f'more than {GIT_INSPECT["headAcceptedBytes"]}')
+        elif detached:
+            facts['head'].update(form='detached', revision=detached.group(1).decode())
+        elif ref:
+            facts['head'].update(form='ref', ref=ref.group(1).decode())
+        else:
+            facts['head'].update(form='unrecognised', bytes=len(data))
+    elif head_meta.get('type') == 'link':
+        facts['head']['linkText'], facts['head']['linkTextTruncated'] = sanitized(os.readlink(head), GIT_INSPECT['linkTextBytes'])
+    return facts
+
+GIT_INSPECTION = 'roseos.blazer-git-inspection.v1'
+GIT_INSPECT_MAX_SECONDS = 60
+
+def git_inspection_problems(recipe, root=ROOT, probe=True):
+    """preparation.gitInspection: exactly the fixed production and candidate targets, each a source root plus
+    vendor.adevtoolGit.metadataPath, the candidate under the ancestor boundary and isolated from production, and
+    exactly the fixed targetSets. probe=False (inspect-git-set) checks the candidate lexically, touching no path."""
+    prep = recipe.get('preparation') or {}
+    spec, rel = prep.get('gitInspection') or {}, ((prep.get('vendor') or {}).get('adevtoolGit') or {}).get('metadataPath')
+    targets = spec.get('targets') or {}
+    try:
+        production = pointer(root, prep['productionSourceRootFrom'])
+        boundary = Path(prep['candidateLayout']['ancestorBoundary'])
+    except (KeyError, OSError, ValueError, TypeError):
+        return ['preparation.gitInspection needs the production source root and the ancestor boundary']
+    if set(targets) != {'production', 'candidate'} or spec.get('maxSeconds') != GIT_INSPECT_MAX_SECONDS or not rel:
+        return [f'preparation.gitInspection must name exactly production and candidate targets and maxSeconds '
+                f'{GIT_INSPECT_MAX_SECONDS}']
+    problems = []
+    if targets['production'] != f'{production}/{rel}':
+        problems.append(f'preparation.gitInspection production target must be {production}/{rel}')
+    candidate = str(targets['candidate'])
+    cand_root = candidate[:-len('/' + rel)] if candidate.endswith('/' + rel) else None
+    if (cand_root is None or not candidate.startswith('/') or os.path.normpath(candidate) != candidate
+            or boundary not in Path(candidate).parents or isolation_problem(Path(cand_root), Path(production), probe)):
+        problems.append(f'preparation.gitInspection candidate target must be a normalized source root under {boundary}, '
+                        f'isolated from the production root, plus {rel}')
+    project = rel[:-len('/.git')] if rel.endswith('/.git') else None
+    want = {'adevtool-projects-gitdir': {'projectsGitdir': {'root': production, 'path': f'.repo/projects/{project}.git'}}}
+    if spec.get('targetSets') != want:
+        problems.append(f'preparation.gitInspection.targetSets must be exactly {want}')
+    return problems
+
+def inspect_git(recipe, host, root=ROOT, clock=time.monotonic):
+    """The git-only inspection: git_facts of exactly the two fixed targets and nothing else (no tree, size, collision,
+    Node, download or candidate-path scan). Starts no process, opens no connection, writes nothing."""
+    if not HOST_LABEL.fullmatch(str(host or '')):
+        raise InvalidInput('--host must be the operator\'s builder label (lowercase letters, digits, . and -)')
+    problems = git_inspection_problems(recipe, root)
+    if problems:
+        raise InvalidInput('; '.join(problems))
+    spec, rel = recipe['preparation']['gitInspection'], recipe['preparation']['vendor']['adevtoolGit']['metadataPath']
+    started = clock()
+    budget = {'entries': 2 * GIT_INSPECT['scanEntries'], 'deadline': started + spec['maxSeconds']}
+    targets = {}
+    for name in ('production', 'candidate'):
+        path = spec['targets'][name]
+        facts = git_facts(Path(path[:-len('/' + rel)]), rel, budget, clock)
+        targets[name] = dict(facts, absolutePath=path)
+    return {'schema': GIT_INSPECTION, 'device': DEVICE, 'host': host, 'metadataOnly': True, 'processesStarted': 0,
+            'network': False, 'writes': False, 'gitProcess': False, 'enablesPreparation': False,
+            'bounds': {**GIT_INSPECT, 'maxSeconds': spec['maxSeconds']}, 'targets': targets,
+            'truncated': any(t.get('truncated') for t in targets.values()) or clock() > budget['deadline'],
+            'elapsedSeconds': round(clock() - started, 3)}
+
+GIT_TARGET_SET_INSPECTION = 'roseos.blazer-git-target-set-inspection.v1'
+
+def inspect_git_set(recipe, host, name, root=ROOT, clock=time.monotonic):
+    """An explicit, named target set of preparation.gitInspection.targetSets, with exactly git_facts' bounds; the
+    two-target inspect_git stays as it is, so a selector never widens it."""
+    if not HOST_LABEL.fullmatch(str(host or '')):
+        raise InvalidInput('--host must be the operator\'s builder label (lowercase letters, digits, . and -)')
+    problems = git_inspection_problems(recipe, root, probe=False)  # touches only the chosen set's paths
+    if problems:
+        raise InvalidInput('; '.join(problems))
+    spec = recipe['preparation']['gitInspection']
+    if name not in spec['targetSets']:
+        raise InvalidInput(f'--target-set must be one of {sorted(spec["targetSets"])}')
+    chosen = spec['targetSets'][name]
+    started = clock()
+    budget = {'entries': len(chosen) * GIT_INSPECT['scanEntries'], 'deadline': started + spec['maxSeconds']}
+    targets = {}
+    for key, target in chosen.items():
+        facts = git_facts(Path(target['root']), target['path'], budget, clock)
+        targets[key] = dict(facts, absolutePath=f'{target["root"]}/{target["path"]}')
+    return {'schema': GIT_TARGET_SET_INSPECTION, 'device': DEVICE, 'host': host, 'targetSet': name, 'metadataOnly': True,
+            'processesStarted': 0, 'network': False, 'writes': False, 'gitProcess': False, 'enablesPreparation': False,
+            'bounds': {**GIT_INSPECT, 'maxSeconds': spec['maxSeconds']}, 'targets': targets,
+            'truncated': any(t.get('truncated') for t in targets.values()) or clock() > budget['deadline'],
+            'elapsedSeconds': round(clock() - started, 3)}
+
+GIT_OBJECTS_INSPECTION = 'roseos.blazer-git-objects-inspection.v1'
+# The proposed bounds (Original Infra, O2) and the report's own caps; the recipe must repeat the bounds exactly.
+GIT_OBJECTS = {'maxEntries': 100000, 'maxDepth': 3, 'maxSeconds': 120, 'maxOutputBytes': 65536}
+GIT_OBJECTS_CAPS = {'groups': 32, 'exceptions': 32, 'excludedListed': 32, 'nameBytes': 128, 'linkTextBytes': 128}
+GIT_OBJECTS_EXCLUDED = ('hooks', 'rr-cache')
+GIT_OBJECTS_EXISTENCE_ONLY = ('info/alternates', 'info/http-alternates')
+GIT_OBJECTS_REASONS = ('absent', 'linked-component', 'not-a-directory', 'inaccessible', 'replaced', 'cross-filesystem',
+                       'unsafe-link', 'special', 'depth', 'entries', 'deadline', 'output')
+DIR_OPEN = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC
+FANOUT = re.compile(r'[0-9a-f]{2}')
+
+def git_objects_spec(production):
+    """The one fixed preparation.gitObjectsInspection, apart from its basis text."""
+    return {'host': 'immortal-os-builder', 'root': production, 'path': '.repo/project-objects/adevtool.git/objects',
+            **GIT_OBJECTS, 'excludeNames': list(GIT_OBJECTS_EXCLUDED), 'existenceOnly': list(GIT_OBJECTS_EXISTENCE_ONLY)}
+
+def git_objects_problems(recipe, root=ROOT):
+    """preparation.gitObjectsInspection must be exactly the fixed objects target, host and bounds (lexical only)."""
+    prep = recipe.get('preparation') or {}
+    try:
+        production = pointer(root, prep['productionSourceRootFrom'])
+    except (KeyError, OSError, ValueError, TypeError):
+        return ['preparation.gitObjectsInspection needs the production source root']
+    spec = dict(prep.get('gitObjectsInspection') or {})
+    basis = spec.pop('basis', None)
+    want = git_objects_spec(production)
+    if spec != want or not isinstance(basis, str):
+        return [f'preparation.gitObjectsInspection must be exactly {want} plus a basis text']
+    return []
+
+def entry_kind(mode):
+    return ('link' if stat.S_ISLNK(mode) else 'dir' if stat.S_ISDIR(mode) else 'file' if stat.S_ISREG(mode)
+            else 'special')
+
+class ObjectsWalk:
+    """One bounded, metadata-only walk below an already opened, no-follow directory descriptor. Directories are
+    opened only relative to their parent's descriptor with O_DIRECTORY|O_NOFOLLOW|O_NONBLOCK and re-identified
+    with fstat against the lstat that admitted them; nothing else is opened. Links are never followed (their text
+    is read, escaped and capped), special files are never opened, and no other filesystem is entered."""
+
+    def __init__(self, bounds, clock, started):
+        self.bounds, self.clock, self.deadline = bounds, clock, started + bounds['maxSeconds']
+        self.reasons, self.exceptions, self.exceptions_total = {}, [], 0
+        self.totals = {kind: {'count': 0, 'apparentBytes': 0, 'allocatedBytes': 0} for kind in ('file', 'dir', 'link', 'special')}
+        self.groups, self.folded, self.inodes, self.hardlinked = {}, set(), set(), 0
+        self.listed = self.max_depth = 0
+        self.excluded, self.excluded_total = [], 0
+        self.existence = {rel: {'observed': False} for rel in GIT_OBJECTS_EXISTENCE_ONLY}
+
+    def stop(self, reason, detail):
+        self.reasons.setdefault(reason, detail)
+
+    def halted(self):
+        if 'deadline' not in self.reasons and self.clock() > self.deadline:
+            self.stop('deadline', f'the cooperative {self.bounds["maxSeconds"]} s deadline passed')
+        return 'deadline' in self.reasons or 'entries' in self.reasons
+
+    def exception(self, rel, kind, **extra):
+        self.exceptions_total += 1
+        if len(self.exceptions) < GIT_OBJECTS_CAPS['exceptions']:
+            self.exceptions.append({'path': sanitized(rel, GIT_OBJECTS_CAPS['nameBytes'])[0], 'kind': kind, **extra})
+
+    def add(self, parent, kind, st):
+        key = '/'.join('[0-9a-f]{2}' if FANOUT.fullmatch(part) else sanitized(part, GIT_OBJECTS_CAPS['nameBytes'])[0]
+                       for part in parent.split('/')) if parent else '.'
+        if key not in self.groups and len(self.groups) >= GIT_OBJECTS_CAPS['groups']:
+            self.folded.add(key)
+            key = '(other)'
+        unique = (st.st_dev, st.st_ino) not in self.inodes
+        if unique:
+            self.inodes.add((st.st_dev, st.st_ino))
+        else:
+            self.hardlinked += 1
+        allocated = st.st_blocks * 512 if unique else 0
+        for row in (self.totals[kind], self.groups.setdefault(key, {}).setdefault(
+                kind, {'count': 0, 'apparentBytes': 0, 'allocatedBytes': 0})):
+            row['count'] += 1
+            row['apparentBytes'] += st.st_size
+            row['allocatedBytes'] += allocated
+
+    def walk(self, fd, rel, depth, device):
+        """List one directory (names only, bounded) and admit each entry by lstat relative to FD."""
+        names = []
+        try:
+            with os.scandir(fd) as it:
+                for entry in it:
+                    if self.halted():
+                        break
+                    if self.listed >= self.bounds['maxEntries']:
+                        self.stop('entries', f'{self.bounds["maxEntries"]} entries listed')
+                        break
+                    self.listed += 1
+                    names.append(entry.name)
+        except OSError as error:
+            self.exception(rel or '.', 'inaccessible', error=type(error).__name__)
+            self.stop('inaccessible', f'{rel or "."}: {type(error).__name__} while listing')
+            return
+        listed_whole = not self.halted() and 'entries' not in self.reasons
+        if listed_whole and (rel == 'info' or (rel == '' and 'info' not in names)):
+            for name in ('alternates', 'http-alternates'):
+                if rel == '' or name not in names:  # a complete listing without it observes its absence
+                    self.existence[f'info/{name}'] = {'observed': True, 'exists': False}
+        for name in sorted(names):
+            if self.halted():
+                return
+            child = f'{rel}/{name}' if rel else name
+            if name in GIT_OBJECTS_EXCLUDED:
+                self.excluded_total += 1
+                if len(self.excluded) < GIT_OBJECTS_CAPS['excludedListed']:
+                    self.excluded.append(sanitized(child, GIT_OBJECTS_CAPS['nameBytes'])[0])
+                continue
+            try:
+                st = os.stat(name, dir_fd=fd, follow_symlinks=False)
+            except FileNotFoundError:
+                self.exception(child, 'replaced', detail='vanished after listing')
+                self.stop('replaced', f'{child}: vanished after listing')
+                continue
+            except OSError as error:
+                self.exception(child, 'inaccessible', error=type(error).__name__)
+                self.stop('inaccessible', f'{child}: {type(error).__name__}')
+                continue
+            kind = entry_kind(st.st_mode)
+            if child in GIT_OBJECTS_EXISTENCE_ONLY:  # existence and type only: no size, no link text, never opened
+                self.existence[child] = {'observed': True, 'exists': True, 'type': kind}
+                continue
+            if st.st_dev != device:
+                self.exception(child, 'cross-filesystem', type=kind)
+                self.stop('cross-filesystem', f'{child}: on another filesystem')
+                continue
+            self.add(rel, kind, st)
+            self.max_depth = max(self.max_depth, depth + 1)
+            if kind == 'link':
+                try:
+                    text = os.readlink(name, dir_fd=fd)
+                except OSError as error:  # no longer a link: replaced after its lstat
+                    self.exception(child, 'replaced', error=type(error).__name__)
+                    self.stop('replaced', f'{child}: {type(error).__name__} reading the admitted link')
+                    continue
+                lexical = os.path.normpath(os.path.join(rel or '.', text))
+                unsafe = os.path.isabs(text) or lexical == '..' or lexical.startswith('../')
+                shown, cut = sanitized(text, GIT_OBJECTS_CAPS['linkTextBytes'])
+                self.exception(child, 'link', linkText=shown, linkTextTruncated=cut, unsafe=unsafe)
+                if unsafe:
+                    self.stop('unsafe-link', f'{child}: link text is absolute or leaves the objects root')
+            elif kind == 'special':
+                self.exception(child, 'special', mode=oct(st.st_mode))
+                self.stop('special', f'{child}: special file type {oct(stat.S_IFMT(st.st_mode))}')
+            elif kind == 'dir':
+                if depth + 1 >= self.bounds['maxDepth']:
+                    self.exception(child, 'depth')
+                    self.stop('depth', f'{child}: a directory at depth {depth + 1} is not listed')
+                    continue
+                self.descend(fd, name, child, depth + 1, st, device)
+
+    def descend(self, fd, name, child, depth, st, device):
+        try:
+            sub = os.open(name, DIR_OPEN, dir_fd=fd)
+        except OSError as error:
+            replaced = error.errno in (errno.ELOOP, errno.ENOTDIR, errno.ENOENT)
+            kind = 'replaced' if replaced else 'inaccessible'
+            self.exception(child, kind, error=type(error).__name__)
+            self.stop(kind, f'{child}: {type(error).__name__} opening the admitted directory')
+            return
+        try:
+            now = os.fstat(sub)
+            if (now.st_dev, now.st_ino) != (st.st_dev, st.st_ino) or not stat.S_ISDIR(now.st_mode):
+                self.exception(child, 'replaced', detail='identity changed between lstat and open')
+                self.stop('replaced', f'{child}: identity changed between lstat and open')
+                return
+            self.walk(sub, child, depth, device)
+        finally:
+            os.close(sub)
+
+def open_no_follow(path):
+    """Open absolute PATH component by component from /, each with O_DIRECTORY|O_NOFOLLOW relative to its parent's
+    descriptor: (fd, None) or (None, (reason, prefix)). A link or non-directory anywhere refuses."""
+    parts = Path(path).parts
+    fd, prefix = os.open('/', DIR_OPEN), Path('/')
+    try:
+        for part in parts[1:]:
+            prefix = prefix/part
+            try:
+                nxt = os.open(part, DIR_OPEN, dir_fd=fd)
+            except OSError as error:
+                reason = {errno.ENOENT: 'absent'}.get(error.errno, 'inaccessible')
+                if error.errno in (errno.ELOOP, errno.ENOTDIR):  # Linux gives either for a link with O_DIRECTORY
+                    try:  # the refused component's own lstat only, to name what it is
+                        reason = 'linked-component' if stat.S_ISLNK(os.stat(part, dir_fd=fd, follow_symlinks=False).st_mode) \
+                            else 'not-a-directory'
+                    except OSError:
+                        reason = 'replaced'
+                return None, (reason, f'{prefix}: {type(error).__name__}')
+            os.close(fd)
+            fd = nxt
+        result, fd = fd, None
+        return result, None
+    finally:
+        if fd is not None:
+            os.close(fd)
+
+def fit_report(report, limit):
+    """Compact JSON of REPORT at most LIMIT bytes; anything trimmed to fit is named and makes it incomplete."""
+    def text():
+        return json.dumps(report, separators=(',', ':'))
+    out = text()
+    for trim in ('exceptions', 'excluded', 'groups'):
+        if len(out.encode()) <= limit:
+            return out
+        if not any(r['reason'] == 'output' for r in report['incomplete']):
+            report['complete'] = False
+            report['incomplete'].append({'reason': 'output', 'detail': f'the report exceeded {limit} bytes; trimmed'})
+        report[trim] = [] if trim != 'groups' else {}
+        report.setdefault('trimmed', []).append(trim)
+        out = text()
+    if len(out.encode()) <= limit:
+        return out
+    # Still too large (only with a test-sized limit): the fixed-size core, always whole, never cut mid-document.
+    return json.dumps({k: report[k] for k in ('schema', 'complete', 'incomplete', 'totals', 'trimmed')}, separators=(',', ':'))
+
+def inspect_git_objects(recipe, host, root=ROOT, clock=time.monotonic, bounds=None):
+    """O2: bounded metadata of exactly the fixed objects directory (preparation.gitObjectsInspection). No other
+    preparation probe, no file content, no link followed, no other filesystem, no process, no write. BOUNDS exists
+    for tests only; the CLI always uses GIT_OBJECTS. Returns the compact JSON text (at most maxOutputBytes)."""
+    problems = git_objects_problems(recipe, root)
+    if problems:
+        raise InvalidInput('; '.join(problems))
+    spec = recipe['preparation']['gitObjectsInspection']
+    if host != spec['host']:
+        raise InvalidInput(f'--host must be {spec["host"]}')
+    bounds = dict(GIT_OBJECTS if bounds is None else bounds)
+    absolute = f'{spec["root"]}/{spec["path"]}'
+    started = clock()
+    run = ObjectsWalk(bounds, clock, started)
+    target = {'absolutePath': absolute, 'root': spec['root'], 'path': spec['path'], 'exists': None}
+    fd, refused = open_no_follow(absolute)
+    if refused:
+        run.stop(*refused)
+        target['exists'] = False if refused[0] == 'absent' else None
+    else:
+        try:
+            st = os.fstat(fd)
+            target.update(exists=True, device=st.st_dev, inode=st.st_ino, mode=oct(st.st_mode), uid=st.st_uid)
+            run.walk(fd, '', 0, st.st_dev)
+        finally:
+            os.close(fd)
+    incomplete = [{'reason': r, 'detail': d} for r, d in run.reasons.items()]
+    report = {
+        'schema': GIT_OBJECTS_INSPECTION, 'device': DEVICE, 'host': host, 'metadataOnly': True, 'contentsOpened': False,
+        'linksFollowed': False, 'filesystemsCrossed': False, 'gitProcess': False, 'processesStarted': 0,
+        'network': False, 'writes': False, 'enablesPreparation': False,
+        'proves': 'metadata only: not object integrity, reachability or provenance',
+        'deadlineKind': 'cooperative: checked before each entry; one blocking system call is not interrupted',
+        'bounds': bounds, 'target': target, 'complete': not incomplete, 'incomplete': incomplete,
+        'totals': {'listedEntries': run.listed, 'byType': run.totals,
+                   'apparentBytes': sum(t['apparentBytes'] for t in run.totals.values()),
+                   'allocatedBytes': sum(t['allocatedBytes'] for t in run.totals.values()),
+                   'hardlinkedRepeats': run.hardlinked, 'deepestEntry': run.max_depth},
+        'groups': run.groups, 'groupsFolded': len(run.folded),
+        'existenceOnly': run.existence,
+        'excluded': run.excluded, 'excludedTotal': run.excluded_total,
+        'exceptions': run.exceptions, 'exceptionsTotal': run.exceptions_total,
+        'elapsedSeconds': round(clock() - started, 3)}
+    return fit_report(report, bounds['maxOutputBytes'])
+
 def tree_facts(recipe, src, budget, clock):
     """Project presence, the adevtool revision marker (128 bytes) and bounded collision sizes of one tree."""
     prep = recipe['preparation']
@@ -613,6 +1420,7 @@ def tree_facts(recipe, src, budget, clock):
     facts['adevtoolRevisionPinned'] = recipe['pins']['vendor/adevtool']
     paths = [*prep['vendor']['collisionPaths'], prep['lunch']['outDir']]
     facts['collisions'] = {rel: bounded_bytes(src/rel, budget, clock) for rel in paths}
+    facts['adevtoolGit'] = git_facts(src, prep['vendor']['adevtoolGit']['metadataPath'], budget, clock)
     return facts
 
 def candidate_paths(candidate_root=None, layout=None, **explicit):
@@ -729,7 +1537,8 @@ def inspect(recipe, op, root=ROOT, statvfs=os.statvfs, max_entries=200000, max_s
     if not resolved:
         unknowns.append('no node on the runner PATH')
     unknowns += ['Node version (metadata only: never executed)', 'reflink support (never assumed)',
-                 'isolated source copy byte and time cost (separately scoped)', 'Pro factory archive size (8 GiB cap unverified)']
+                 'isolated source copy bytes (the source stage measures its full selection before writing; never this walk)',
+                 'Pro factory archive size (8 GiB cap unverified)']
     report['elapsedSeconds'] = round(clock() - started, 3)
     report['truncated'] = budget['entries'] <= 0 or clock() > budget['deadline']
     if report['truncated']:
@@ -786,7 +1595,7 @@ def run(recipe, stage, op, receipt_dir, now=time.time, fetcher=fetch, clock=time
     release_receipts.write_once(receipt_dir/'preflight.json', {**report, 'at': stamp(now)})
     if not report['ready']:
         return 1
-    command = commands(recipe, op)[stage]
+    command = commands(recipe, op, probes.get('root', ROOT))[stage]
     base = {'stage': stage, 'device': DEVICE, 'signed': False, 'releaseReady': False}
     with open(op['lock'], 'a') as lock:
         try:
@@ -794,12 +1603,24 @@ def run(recipe, stage, op, receipt_dir, now=time.time, fetcher=fetch, clock=time
         except BlockingIOError:
             release_receipts.write_once(receipt_dir/'completed.json', {**base, 'started': False, 'error': 'lock taken after preflight'})
             return 1
+        if stage == 'vendor':  # a private PATH entry holding only the verified node, never the rest of its directory
+            node_dir = receipt_dir/NODE_PATH_DIR
+            node_dir.mkdir(mode=0o700)
+            os.symlink(op['node'], node_dir/'node')
+            command['env']['PATH'] = f'{node_dir}:{SAFE_PATH}'
         release_receipts.write_once(receipt_dir/'started.json', {**base, 'host': op['host'], 'command': command, 'at': stamp(now)})
+        if stage == 'source':
+            ok, outcome = construct(recipe, op, Path(report['facts']['productionSourceRoot']), probes.get('root', ROOT),
+                                    statvfs=statvfs, clock=clock)
+            release_receipts.write_once(receipt_dir/'completed.json', {**base, 'ok': ok, **outcome, 'at': stamp(now)})
+            return 0 if ok else 1
         if stage == 'download':
             ok, outcome = download(recipe, command, fetcher, clock)
             release_receipts.write_once(receipt_dir/'completed.json', {**base, 'ok': ok, **outcome, 'at': stamp(now)})
             return 0 if ok else 1
-        env = {**{k: v for k, v in os.environ.items() if k not in ('PATH',)}, **command['env']}
+        # Inherited GIT_* (e.g. a GIT_DIR or GIT_WORK_TREE elsewhere) never reaches a child: git answers only from
+        # the tree itself, bounded by GIT_CEILING_DIRECTORIES at the source root.
+        env = {**{k: v for k, v in os.environ.items() if k != 'PATH' and not k.startswith('GIT_')}, **command['env']}
         prep, capacity = recipe['preparation'], recipe['capacity']
         limits = {**prep['limits'], 'boundBytes': prep[stage]['boundBytes'], 'reserveBytes': capacity['reserveBytes']}
         if stage == 'vendor':
@@ -815,6 +1636,18 @@ def run(recipe, stage, op, receipt_dir, now=time.time, fetcher=fetch, clock=time
                 release_receipts.write_once(receipt_dir/'completed.json', {**base, 'ok': False, 'node': report['facts']['node'],
                     'nodeVersion': (node.get('stdout') or '').strip(), 'error': f'node must be >= {floor}', 'at': stamp(now)})
                 return 1
+            # ADEVTOOL_SKIP_DEP_BUILD=1 skips adevtool's own marker-vs-HEAD comparison; it is made here instead, before
+            # any generation: the marker is the exact pin (preflight), and HEAD must print exactly the pin too.
+            head = supervise(command['adevtoolHead'], command['cwd'], env, command['adevtoolHeadTimeoutSeconds'], limits,
+                             capture=True, statvfs=statvfs, measure=measure, clock=clock, sleep=sleep)
+            want = recipe['pins']['vendor/adevtool'] + '\n'
+            if head['returncode'] or head['stopped'] or head.get('stdout') != want:
+                release_receipts.write_once(receipt_dir/'completed.json', {**base, 'ok': False,
+                    'adevtoolHead': {'returncode': head['returncode'], 'stopped': head['stopped'],
+                                     'stdout': (head.get('stdout') or '')[:128]},
+                    'error': 'git -C vendor/adevtool rev-parse HEAD did not print exactly the pinned revision; no genuine '
+                             'adevtool version data, so nothing is generated', 'at': stamp(now)})
+                return 1
         paths = prep['vendor']['collisionPaths'] if stage == 'vendor' else [prep['lunch']['outDir']]
         watch = [str(op['sourceRoot']/rel) for rel in paths]
         outcome = supervise(command['argv'], command['cwd'], env, command['timeoutSeconds'], limits, watch=watch,
@@ -829,6 +1662,8 @@ def run(recipe, stage, op, receipt_dir, now=time.time, fetcher=fetch, clock=time
                                            'bound between samples (outputs are kept, not deleted)')
         if stage == 'vendor':
             outcome['node'] = report['facts']['node']
+            outcome['adevtoolHead'] = want.strip()
+            outcome['skipDepBuild'] = dict(prep['vendor']['adevtoolGit']['skipDepBuildEnv'])
         if stage == 'lunch' and outcome['returncode'] == 0 and not outcome['stopped']:
             seen = dict(line.split('=', 1) for line in stdout.splitlines() if '=' in line)
             outcome['targets'] = {k: seen.get(k) for k in LUNCH_VARS}
@@ -837,7 +1672,46 @@ def run(recipe, stage, op, receipt_dir, now=time.time, fetcher=fetch, clock=time
         release_receipts.write_once(receipt_dir/'completed.json', {**base, 'ok': ok, **outcome, 'at': stamp(now)})
     return 0 if ok else 1
 
+def main_git(argv, target_set=False):
+    """`inspect-git --host H`: the two fixed targets, no other argument (unchanged). `inspect-git-set --host H
+    --target-set NAME`: exactly one explicit recipe target set, a separate subcommand so inspect-git never widens."""
+    name = 'inspect-git-set' if target_set else 'inspect-git'
+    parser = argparse.ArgumentParser(prog=f'blazer-build-only.py {name}',
+                                     description='git-only metadata inspection of fixed recipe targets')
+    parser.add_argument('--host', required=True)
+    if target_set:
+        parser.add_argument('--target-set', required=True)
+    a = parser.parse_args(argv)
+    try:
+        recipe = load(RECIPE, probe=not target_set)
+        report = inspect_git_set(recipe, a.host, a.target_set) if target_set else inspect_git(recipe, a.host)
+        print(json.dumps(report, indent=2))
+        return 0
+    except InvalidInput as error:
+        print(f'invalid input: {error}', file=sys.stderr)
+        return 2
+
+def main_git_objects(argv):
+    """`inspect-git-objects --host immortal-os-builder`: no other argument; one compact JSON document on stdout."""
+    parser = argparse.ArgumentParser(prog='blazer-build-only.py inspect-git-objects',
+                                     description='bounded metadata of the fixed adevtool objects directory')
+    parser.add_argument('--host', required=True)
+    a = parser.parse_args(argv)
+    try:
+        print(inspect_git_objects(load(RECIPE, probe=False), a.host))  # lexical load: no unrelated probe
+        return 0
+    except InvalidInput as error:
+        print(f'invalid input: {error}', file=sys.stderr)
+        return 2
+
 def main(argv=None):
+    argv = sys.argv[1:] if argv is None else list(argv)
+    if argv[:1] == ['inspect-git-objects']:
+        return main_git_objects(argv[1:])
+    if argv[:1] == ['inspect-git']:
+        return main_git(argv[1:])
+    if argv[:1] == ['inspect-git-set']:
+        return main_git(argv[1:], target_set=True)
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('action', choices=('plan', 'preflight', 'run', 'inspect'))
     parser.add_argument('--stage', choices=STAGES)

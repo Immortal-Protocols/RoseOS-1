@@ -35,7 +35,7 @@ def write_apk(path, native, extra=None):
             z.writestr(info, data)
 
 
-def badging(package='dev.pixel.models', version=('2', '0.2.0'), abi='arm64-v8a'):
+def badging(package='dev.pixel.models', version=('4', '0.4.0'), abi='arm64-v8a'):
     return (f"package: name='{package}' versionCode='{version[0]}' versionName='{version[1]}' "
             "platformBuildVersionName='15'\nsdkVersion:'29'\ntargetSdkVersion:'35'\n"
             "uses-permission: name='android.permission.INTERNET'\napplication-label:'Rose Models'\n"
@@ -190,23 +190,39 @@ class Fixture(unittest.TestCase):
         self.assertEqual(self.password.read_text(), 'NOT A PASSWORD\n')
 
 
-# MODELS-V2-SIGN-BIND-001: the selected v2 input, exactly as the producer's own verify-artifact job (run 41106159024
-# attempt 1, job 124237197482) printed SHA256SUMS and artifact-receipt.txt for artifact 13000324772. The tree and
+# MODELS-DEMO-SIGN-BIND-001: the selected 0.4.0 input, exactly as the producer's own verify-artifact job (run 41497558818
+# attempt 1, job 125457241910) printed SHA256SUMS and artifact-receipt.txt for artifact 13167466300. The tree and
 # Cargo.lock values also equal git at the source commit.
+V4_INPUT = {
+    'githubEvent': 'push',
+    'githubRef': 'refs/heads/main',
+    'sourceSha': 'c0362876f7473de1874b37a985356216be331fd1',
+    'runId': '41497558818',
+    'runAttempt': '1',
+    'apkSha256': '5d3fac36d3dbf569c247c5e960cfd30df8d090ff54f02ec666a4e5558faec68c',
+    'nativeSha256': 'a0a448e17d40349e25cc6a38d7dc4fbc1e09ebf8983ad36221d4d5ad6c632c6b',
+    'artifactReceiptSha256': '3b41e174d669a0df598e627d2f10cbabc4dc10bb603ddc49653444dabc028508',
+    'apkMetadataSha256': 'acd83a83ced043352507fadec9bf43261aea50d22dfb8cdda22d969de7aa3090',
+    'buildReceiptSha256': '08c5a0f510e70a5429787529b0ebb3d1a72fcd715fbf1f3f47d48aa62013f187',
+    'treeAndroid': 'c5ed69978ef993e55bd68e8facde0a3496f91bfb',
+    'treeRoseChatAndroid': '09859c9a84892d1336f1ae5b69bb68f877030bb8',
+    'treeRoseChatCore': 'c64964b6d773a2a6160f54b71c531aef24e473a5',
+    'treeContracts': 'b682015250b4fed7105fec86e1ebde47a6fc779a',
+    'cargoLockRoseChatAndroid': '8b843cce02f19bf86a31554018bd56e94c4d0b0acf847c364545cdf4b1349139',
+    'cargoLockRoseChatCore': '95378f5c99aa716c2ea6b505570e5869c9db24b6159cd03fcef2def8bd388861',
+}
+# The superseded v2 binding (run 41106159024, 0.2.0, no Qwen selection); none of it may be accepted again.
 V2_INPUT = {
-    'githubEvent': 'push', 'githubRef': 'refs/heads/main',
-    'sourceSha': '5bc2d03fbc77a3f3569b0536a6ca87949a166837', 'runId': '41106159024', 'runAttempt': '1',
+    'sourceSha': '5bc2d03fbc77a3f3569b0536a6ca87949a166837',
+    'runId': '41106159024',
     'apkSha256': '5a48d30dc50c3247a65141a7aa123bbe845da63015d6faffde6c52c3d206faf4',
     'nativeSha256': 'f3aad0226f99a8b0853663d08bd0e623559741338dd54915443f1daac811d060',
     'artifactReceiptSha256': '1b389e38a6407776ccfb0cd82f9d31aabdb6dadf9d80c5bd6610ef61ff0fbb8b',
     'apkMetadataSha256': '4660b8a6d0b9e4dada6b6c8dba0e1ccf401d5fd0626ad74e61f3ccde7309ad27',
     'buildReceiptSha256': 'e10f5e78092cc7cbcf7d39d6c929d55b59f540a77c8fd918b61826c4a095b65d',
     'treeAndroid': 'a473151ad8c30e28c79bc8c245e25ca36ce33e89',
-    'treeRoseChatAndroid': '09859c9a84892d1336f1ae5b69bb68f877030bb8',
     'treeRoseChatCore': '665ffe46a629877a12cb87ca567ce74f40616a5f',
     'treeContracts': 'f6aa5f32fb1b2f04e1ebe25a736eae3e5337c83f',
-    'cargoLockRoseChatAndroid': '8b843cce02f19bf86a31554018bd56e94c4d0b0acf847c364545cdf4b1349139',
-    'cargoLockRoseChatCore': '95378f5c99aa716c2ea6b505570e5869c9db24b6159cd03fcef2def8bd388861',
 }
 # The superseded v1 binding (run 40960062067); none of it may be accepted again.
 V1_INPUT = {
@@ -224,12 +240,13 @@ class ProfileTests(Fixture):
     def test_committed_profile_is_valid_and_unbound(self):
         p = ms.load_profile(Path(ms.__file__).with_name('profile.json'))
         self.assertEqual(p['package'], 'dev.pixel.models')
-        self.assertEqual((p['versionCode'], p['versionName'], p['abi']), ('2', '0.2.0', 'arm64-v8a'))
+        self.assertEqual((p['versionCode'], p['versionName'], p['abi']), ('4', '0.4.0', 'arm64-v8a'))
         self.assertEqual(p['requiredSchemes'], ['v2', 'v3'])
         self.assertEqual(ms.readiness(p), ['signer_unbound', 'tool_unbound'])
-        self.assertEqual(p['expectedInput'], V2_INPUT)
-        for key, old in V1_INPUT.items():
-            self.assertNotEqual(p['expectedInput'][key], old, key)
+        self.assertEqual(p['expectedInput'], V4_INPUT)
+        for old_input in (V1_INPUT, V2_INPUT):
+            for key, old in old_input.items():
+                self.assertNotEqual(p['expectedInput'][key], old, key)
 
     def test_old_or_wrong_input_binding_refuses_before_signing(self):
         # The artifact's own hashes and receipt fields are checked against the profile, independent of SHA256SUMS
@@ -238,8 +255,9 @@ class ProfileTests(Fixture):
         bound = profile_for(self.artifact, self.sdk)
         ms.verify_input(bound, self.artifact, run_tool=verifier)
         hashes = {'apkSha256', 'artifactReceiptSha256', 'apkMetadataSha256', 'buildReceiptSha256'}
-        cases = dict(V1_INPUT, nativeSha256='0' * 64, cargoLockRoseChatAndroid='f' * 64, treeRoseChatCore='9' * 40)
-        for key, value in cases.items():
+        cases = [(k, val) for k, val in dict(V1_INPUT, nativeSha256='0' * 64, cargoLockRoseChatAndroid='f' * 64,
+                                             treeRoseChatCore='9' * 40).items()] + list(V2_INPUT.items())
+        for key, value in cases:
             with self.subTest(key):
                 p = copy.deepcopy(bound)
                 p['expectedInput'][key] = value
@@ -337,7 +355,8 @@ class SignTests(Fixture):
         # adapter's own identity check is what catches a version change, and every output change.
         for name, kw, category in [('voice', {'package': 'dev.pixel.voice'}, 'input_verifier_failed'),
                                    ('old v1', {'version': ('1', '0.1.0-dev-unsigned')}, 'wrong_version'),
-                                   ('versionName only', {'version': ('2', '0.2.1')}, 'wrong_version'),
+                                   ('old v2', {'version': ('2', '0.2.0')}, 'wrong_version'),
+                                   ('versionName only', {'version': ('4', '0.4.1')}, 'wrong_version'),
                                    ('abi', {'abi': 'x86_64'}, 'input_verifier_failed')]:
             with self.subTest(name):
                 art = make_artifact(self.tmp / f'art-{name}', **kw)

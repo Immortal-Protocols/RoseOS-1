@@ -230,24 +230,24 @@ class Ingress(unittest.TestCase):
     def test_committed_identity_is_the_pinned_original(self):
         want = ingress.original()
         exp = json.loads((ROOT/'workspace/models/signing/profile.json').read_text())['expectedInput']
-        # MODELS-V2-SIGN-BIND-001: artifact 13000324772 of run 41106159024 attempt 1, as the Actions API reports it.
+        # MODELS-DEMO-SIGN-BIND-001: artifact 13167466300 of run 41497558818 attempt 1, as the Actions API reports it.
         self.assertEqual((want['sourceSha'], want['runId'], want['runAttempt'], want['event'], want['ref']),
-            ('5bc2d03fbc77a3f3569b0536a6ca87949a166837', '41106159024', '1', 'push', 'refs/heads/main'))
+            ('c0362876f7473de1874b37a985356216be331fd1', '41497558818', '1', 'push', 'refs/heads/main'))
         self.assertEqual(want['sourceSha'], exp['sourceSha'])
         self.assertEqual((want['archiveBytes'], want['archiveSha256']),
-            (752772, '595238a550fce263fce87fcf1b435c7d106566f3148419887d094cd10e99ac5b'))
-        self.assertEqual(want['artifactName'], 'rose-models-unsigned-5bc2d03fbc77-run41106159024-1')
+            (753580, 'a7aaced1cb6a7c2a1b20d2300c38d8591451e7e80ab45c57f6e37207aae20672'))
+        self.assertEqual(want['artifactName'], 'rose-models-unsigned-c0362876f747-run41497558818-1')
         self.assertEqual(want['workflowPath'], '.github/workflows/models-android.yml')
 
     def committed(self):
-        """The committed config and profile with the Actions API answering exactly the v2 run and artifact metadata."""
+        """The committed config and profile with the Actions API answering exactly the 0.4.0 run and artifact metadata."""
         o = Original(self)
         o.cfg, o.profile = copy.deepcopy(hms.config()), json.loads((ROOT/'workspace/models/signing/profile.json').read_text())
         o.want = ingress.original(o.cfg, o.profile)
-        o.run.update(id=41106159024, head_sha='5bc2d03fbc77a3f3569b0536a6ca87949a166837')
-        o.artifact.update(name='rose-models-unsigned-5bc2d03fbc77-run41106159024-1', size_in_bytes=752772,
-            digest='sha256:595238a550fce263fce87fcf1b435c7d106566f3148419887d094cd10e99ac5b',
-            workflow_run={'id': 41106159024, 'head_sha': '5bc2d03fbc77a3f3569b0536a6ca87949a166837', 'repository_id': 7,
+        o.run.update(id=41497558818, head_sha='c0362876f7473de1874b37a985356216be331fd1')
+        o.artifact.update(name='rose-models-unsigned-c0362876f747-run41497558818-1', size_in_bytes=753580,
+            digest='sha256:a7aaced1cb6a7c2a1b20d2300c38d8591451e7e80ab45c57f6e37207aae20672',
+            workflow_run={'id': 41497558818, 'head_sha': 'c0362876f7473de1874b37a985356216be331fd1', 'repository_id': 7,
                           'head_repository_id': 7})
         return o
 
@@ -257,13 +257,18 @@ class Ingress(unittest.TestCase):
             o.fetch()
         self.assertEqual(o.downloads, [BLOB])
         old_run = {'id': 40960062067, 'head_sha': '8ff67d6bcfabad015dae7d370325cf8bf21690d2'}
-        for change, category in ((dict(old_run), 'original_run_mismatch'), ({'run_attempt': 2}, 'original_run_mismatch')):
+        v2_run = {'id': 41106159024, 'head_sha': '5bc2d03fbc77a3f3569b0536a6ca87949a166837'}
+        for change, category in ((dict(old_run), 'original_run_mismatch'), (dict(v2_run), 'original_run_mismatch'),
+                                 ({'run_attempt': 2}, 'original_run_mismatch')):
             o = self.committed()
             o.run.update(change)
             with self.assertRaisesRegex(ingress.Refused, category, msg=change):
                 o.fetch()
             self.assertEqual(o.downloads, [], change)
         for change, category in (({'size_in_bytes': 742487}, 'original_artifact_mismatch'),
+                                 ({'size_in_bytes': 752772}, 'original_artifact_mismatch'),
+                                 ({'digest': 'sha256:595238a550fce263fce87fcf1b435c7d106566f3148419887d094cd10e99ac5b'},
+                                  'original_artifact_mismatch'),
                                  ({'digest': 'sha256:237923ba305e9b17d2276be95ed0d947926a7638cb028400935ce36b151fe1ef'},
                                   'original_artifact_mismatch'),
                                  ({'workflow_run': dict(old_run, repository_id=7, head_repository_id=7)}, 'original_artifact_mismatch'),
@@ -526,7 +531,7 @@ class Run(unittest.TestCase):
         checked = {'adapterProfile': json.loads((ROOT/'workspace/models/signing/profile.json').read_text()), 'binding': binding,
             'input': str(t.root/'admitted'), 'journalSha256': 'e' * 64,
             'ingress': {'directory': str(t.root/'admitted'), 'files': {'SHA256SUMS': 'f' * 64}, 'receiptSha256': '9' * 64,
-                        'original': {'runId': '41106159024'}},
+                        'original': {'runId': '41497558818'}},
             'tools': {'apksignerSha256': '1' * 64, 'aaptSha256': '2' * 64, 'archiveSha256': hms.config()['sdk']['archiveSha256']},
             'jdk': {'root': '/jdk/linux-x86', 'treeId': TRUST['treeId'], 'revision': TRUST['revision']}}
         self.fetched, self.private_dirs = [], []

@@ -33,6 +33,7 @@ node --test \
  workspace/rose-agent/server/owner-stop.test.mjs \
  workspace/rose-agent/server/server-stop-gate.test.mjs \
  workspace/rose-agent/tests/home-launcher.test.mjs \
+ workspace/rose-agent/tests/exported-components.test.mjs \
  workspace/experiments/phone-command-push/push.test.mjs \
  workspace/experiments/phone-command-push/delivery.test.cjs \
  workspace/experiments/phone-control-metrics/metrics.test.mjs \
@@ -58,6 +59,7 @@ python3 os/tests/test_updater_releases.py
 python3 os/tests/test_rose_home_role.py
 python3 os/tests/test_rose_agent_self_update.py
 python3 os/tests/test_rose_switcher.py
+python3 os/tests/test_launcher3_compile_contract.py
 python3 os/tests/test_automated_devices_contract.py
 python3 os/tests/test_background_control_prototype.py
 python3 scripts/tests/test_systemui_component_update.py
@@ -102,6 +104,12 @@ python3 scripts/tests/test_rango_factory_observe.py
 python3 scripts/tests/test_rango_factory_observe_workflow.py
 # Blazer (Pixel 10 Pro) preparation workflow wiring (stand-ins and the fake builder adapter; no host, download or vendor run).
 python3 scripts/tests/test_blazer_prep_workflow.py
+# Fold factory package workflow wiring (stand-ins and mocks; no host, lock, generation or inspection run).
+python3 scripts/tests/test_rango_factory_package_workflow.py
+python3 scripts/tests/test_rango_factory_inspect_workflow.py
+# Launcher3 compile-only adapter (synthetic trees, stand-in processes; no host, copy, lunch or build).
+python3 scripts/tests/test_launcher3_compile.py
+python3 scripts/tests/test_launcher3_compile_workflow.py
 python3 scripts/tests/test_signing_bootstrap.py
 python3 scripts/tests/test_fold_bootstrap_proof.py
 python3 scripts/tests/test_fold_tool_proof.py
@@ -161,7 +169,8 @@ done
 # MultiSession (two-app routing) uses CurrentApps' validated per-session answer.
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/MultiSession" \
  os/background-control/agent-pip/src/dev/pixel/backgroundcontrol/MultiSession.java \
- os/background-control/agent-pip/src/dev/pixel/backgroundcontrol/CurrentApps.java os/background-control/tests/MultiSessionTest.java
+ os/background-control/agent-pip/src/dev/pixel/backgroundcontrol/CurrentApps.java \
+ os/background-control/agent-pip/src/dev/pixel/backgroundcontrol/ViewerStop.java os/background-control/tests/MultiSessionTest.java
 java -cp "$JAVA_TESTS/MultiSession" dev.pixel.backgroundcontrol.MultiSessionTest
 # SystemUI tray tap mapping; compiled alone like the controller tests above.
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/AgentStatusControls" \
@@ -216,6 +225,15 @@ java -cp "$JAVA_TESTS/HomeOverview" dev.pixel.voice.HomeOverviewTest
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/HomeAppLayout" \
  workspace/rose-agent/app/src/dev/pixel/voice/HomeAppLayout.java workspace/rose-agent/app/tests/HomeAppLayoutTest.java
 java -cp "$JAVA_TESTS/HomeAppLayout" dev.pixel.voice.HomeAppLayoutTest
+java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/HomeAppGroups" \
+ workspace/rose-agent/app/src/dev/pixel/voice/HomeAppGroups.java workspace/rose-agent/app/tests/HomeAppGroupsTest.java
+java -cp "$JAVA_TESTS/HomeAppGroups" dev.pixel.voice.HomeAppGroupsTest
+java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/HomeRoseLaunch" \
+ workspace/rose-agent/app/src/dev/pixel/voice/HomeRoseLaunch.java workspace/rose-agent/app/tests/HomeRoseLaunchTest.java
+java -cp "$JAVA_TESTS/HomeRoseLaunch" dev.pixel.voice.HomeRoseLaunchTest
+java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/GestureContract" \
+ workspace/rose-agent/app/src/dev/pixel/voice/GestureContract.java workspace/rose-agent/app/tests/GestureContractTest.java
+java -cp "$JAVA_TESTS/GestureContract" dev.pixel.voice.GestureContractTest
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/DockLabel" \
  workspace/rose-agent/app/src/dev/pixel/voice/DockLabel.java workspace/rose-agent/app/tests/DockLabelTest.java
 java -Djava.awt.headless=true -cp "$JAVA_TESTS/DockLabel" dev.pixel.voice.DockLabelTest workspace/rose-agent/app/assets/fonts/nunito.ttf

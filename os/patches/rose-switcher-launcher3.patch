@@ -1,3 +1,93 @@
+diff --git a/quickstep/res/color/rose_oxblood_chip_state_fg.xml b/quickstep/res/color/rose_oxblood_chip_state_fg.xml
+new file mode 100644
+index 0000000..3710dbc
+--- /dev/null
++++ b/quickstep/res/color/rose_oxblood_chip_state_fg.xml
+@@ -0,0 +1,23 @@
++<?xml version="1.0" encoding="utf-8"?><!--
++  ~ Copyright (C) 2025 The Android Open Source Project
++  ~
++  ~ Licensed under the Apache License, Version 2.0 (the "License");
++  ~ you may not use this file except in compliance with the License.
++  ~ You may obtain a copy of the License at
++  ~
++  ~      http://www.apache.org/licenses/LICENSE-2.0
++  ~
++  ~ Unless required by applicable law or agreed to in writing, software
++  ~ distributed under the License is distributed on an "AS IS" BASIS,
++  ~ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++  ~ See the License for the specific language governing permissions and
++  ~ limitations under the License.
++  -->
++<!-- RoseOS (#410): app_chip_state_color_fg with the pressed and hovered overlay in Rose's ivory ink, visible on the
++     Oxblood chip (the stock OnSurface overlay vanishes on a dark plate). Same states and alphas. -->
++<selector xmlns:android="http://schemas.android.com/apk/res/android">
++    <item android:alpha="0.15" android:color="@color/rose_oxblood_ink" android:state_enabled="true" android:state_pressed="true" />
++    <item android:alpha="0.11" android:color="@color/rose_oxblood_ink" android:state_enabled="true" android:state_hovered="true" />
++    <item android:color="@android:color/transparent" android:state_enabled="true" android:state_focused="true" />
++    <item android:color="@android:color/transparent" />
++</selector>
+diff --git a/quickstep/res/drawable/rose_oxblood_arrow_background.xml b/quickstep/res/drawable/rose_oxblood_arrow_background.xml
+new file mode 100644
+index 0000000..a7fef80
+--- /dev/null
++++ b/quickstep/res/drawable/rose_oxblood_arrow_background.xml
+@@ -0,0 +1,30 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!--
++     Copyright (C) 2023 The Android Open Source Project
++
++     Licensed under the Apache License, Version 2.0 (the "License");
++     you may not use this file except in compliance with the License.
++     You may obtain a copy of the License at
++
++          http://www.apache.org/licenses/LICENSE-2.0
++
++     Unless required by applicable law or agreed to in writing, software
++     distributed under the License is distributed on an "AS IS" BASIS,
++     WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++     See the License for the specific language governing permissions and
++     limitations under the License.
++-->
++<!-- RoseOS (#410): icon_menu_arrow_background fading into the Oxblood chip (rose_oxblood_chip) instead of
++     SurfaceBright, so it still masks the chip's title under the arrow while the chip expands or collapses, without a
++     light patch. Same shape, angle, centre and corners. -->
++<shape xmlns:android="http://schemas.android.com/apk/res/android"
++    android:autoMirrored="true">
++    <gradient
++        android:type="linear"
++        android:angle="0"
++        android:startColor="#00000000"
++        android:centerX="0.25"
++        android:centerColor="@color/rose_oxblood_chip"
++        android:endColor="@color/rose_oxblood_chip" />
++    <corners android:radius="@dimen/dialogCornerRadius" />
++</shape>
+diff --git a/quickstep/res/drawable/rose_oxblood_chip_fg.xml b/quickstep/res/drawable/rose_oxblood_chip_fg.xml
+new file mode 100644
+index 0000000..0779a24
+--- /dev/null
++++ b/quickstep/res/drawable/rose_oxblood_chip_fg.xml
+@@ -0,0 +1,19 @@
++<?xml version="1.0" encoding="utf-8"?><!--
++  ~ Copyright (C) 2025 The Android Open Source Project
++  ~
++  ~ Licensed under the Apache License, Version 2.0 (the "License");
++  ~ you may not use this file except in compliance with the License.
++  ~ You may obtain a copy of the License at
++  ~
++  ~      http://www.apache.org/licenses/LICENSE-2.0
++  ~
++  ~ Unless required by applicable law or agreed to in writing, software
++  ~ distributed under the License is distributed on an "AS IS" BASIS,
++  ~ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++  ~ See the License for the specific language governing permissions and
++  ~ limitations under the License.
++  -->
++<!-- RoseOS (#410): app_chip_fg with the Rose overlay colours (rose_oxblood_chip_state_fg). -->
++<shape xmlns:android="http://schemas.android.com/apk/res/android">
++    <solid android:color="@color/rose_oxblood_chip_state_fg" />
++</shape>
 diff --git a/quickstep/res/layout/fallback_recents_activity.xml b/quickstep/res/layout/fallback_recents_activity.xml
 index 65f606a..e068d38 100644
 --- a/quickstep/res/layout/fallback_recents_activity.xml
@@ -18,17 +108,77 @@ index 65f606a..e068d38 100644
 +
      </com.android.quickstep.fallback.RecentsDragLayer>
  </com.android.launcher3.LauncherRootView>
+diff --git a/quickstep/res/layout/icon_app_chip_view.xml b/quickstep/res/layout/icon_app_chip_view.xml
+index 76f4cc9..317a281 100644
+--- a/quickstep/res/layout/icon_app_chip_view.xml
++++ b/quickstep/res/layout/icon_app_chip_view.xml
+@@ -28,9 +28,9 @@
+     android:importantForAccessibility="no"
+     android:autoMirrored="true"
+     android:elevation="@dimen/task_thumbnail_icon_menu_elevation"
+-    android:foreground="@drawable/app_chip_fg"
+-    android:background="@color/materialColorSurfaceBright"
+-    launcher:focusBorderColor="@color/materialColorSecondary">
++    android:foreground="@drawable/rose_oxblood_chip_fg"
++    android:background="@color/rose_oxblood_chip"
++    launcher:focusBorderColor="@color/rose_oxblood_focus_ring">
+ 
+     <!-- ignoring warning because the user of the anchor is a Rect where RTL is not needed -->
+     <!-- This anchor's bounds is in the expected location after rotations and translations are
+@@ -66,13 +66,15 @@
+         android:fadingEdgeLength="@dimen/task_thumbnail_icon_menu_text_fading_size"
+         android:marqueeRepeatLimit="1"
+         android:scrollHorizontally="true"
++        android:textColor="@color/rose_oxblood_ink"
+         style="@style/IconAppChipMenuTextStyle" />
+ 
+     <ImageView
+         android:id="@+id/icon_arrow"
+         android:layout_width="@dimen/task_thumbnail_icon_menu_arrow_size"
+         android:layout_height="@dimen/task_thumbnail_icon_menu_arrow_size"
+-        android:background="@drawable/icon_menu_arrow_background"
++        android:background="@drawable/rose_oxblood_arrow_background"
++        android:tint="@color/rose_oxblood_ink"
+         android:src="@drawable/ic_chevron_down"
+         android:importantForAccessibility="no" />
+ 
+diff --git a/quickstep/res/layout/task.xml b/quickstep/res/layout/task.xml
+index fa1d9f0..d09e585 100644
+--- a/quickstep/res/layout/task.xml
++++ b/quickstep/res/layout/task.xml
+@@ -25,7 +25,7 @@
+     android:clipChildren="false"
+     android:defaultFocusHighlightEnabled="false"
+     android:focusable="true"
+-    launcher:focusBorderColor="@color/materialColorOutline"
++    launcher:focusBorderColor="@color/rose_oxblood_focus_ring"
+     launcher:hoverBorderColor="@color/materialColorPrimary">
+ 
+     <ViewStub
 diff --git a/quickstep/res/values/rose_agent_strip.xml b/quickstep/res/values/rose_agent_strip.xml
 new file mode 100644
-index 0000000..bbd6949
+index 0000000..ace444b
 --- /dev/null
 +++ b/quickstep/res/values/rose_agent_strip.xml
-@@ -0,0 +1,6 @@
+@@ -0,0 +1,19 @@
 +<?xml version="1.0" encoding="utf-8"?>
 +<!-- RoseOS (#156): the agent row's fixed height in the fallback overview. FallbackActivityInterface claims it below
 +     the task cards and OverviewActionsView keeps it free above the action buttons; the layout uses the same value. -->
 +<resources>
-+    <dimen name="rose_agent_strip_height">160dp</dimen>
++    <dimen name="rose_agent_strip_height">200dp</dimen>
++    <!-- RoseOS (#410): the fallback overview's scrim, the Oxblood switcher base (qa/oxblood/oxblood-contract.json
++         fields.screenBase), applied by RecentsActivity after OverviewBlurFallbackStyle. -->
++    <!-- RoseOS (#410): the human task cards' Oxblood identity chip and borders, from Home's contract
++         (qa/oxblood/oxblood-contract.json): the chip is manager.card.fill at 95% (kept nearly opaque so its ivory
++         ink.primary name and chevron stay readable over light app screens; its pressed/hovered overlay is that ink,
++         rose_oxblood_chip_state_fg), and keyboard focus is ink.focusRing.color; hover keeps the stock colour, so focus
++         and hover stay distinct. Used only by the overview's task card layouts (task.xml, icon_app_chip_view.xml). -->
++    <color name="rose_oxblood_chip">#F21A0A0D</color>
++    <color name="rose_oxblood_ink">#FFF2E6D9</color>
++    <color name="rose_oxblood_focus_ring">#FFF2C9B6</color>
++    <style name="RoseOverviewOxblood">
++        <item name="overviewScrimColor">#FF170609</item>
++    </style>
 +</resources>
 diff --git a/quickstep/src/com/android/quickstep/BaseContainerInterface.java b/quickstep/src/com/android/quickstep/BaseContainerInterface.java
 index 37eac47..fbcab76 100644
@@ -59,30 +209,37 @@ index 37eac47..fbcab76 100644
          Resources res = context.getResources();
          float maxScale = res.getFloat(R.dimen.overview_max_scale);
 diff --git a/quickstep/src/com/android/quickstep/FallbackActivityInterface.java b/quickstep/src/com/android/quickstep/FallbackActivityInterface.java
-index d9f14ac..2b8ce81 100644
+index d9f14ac..3a8cda8 100644
 --- a/quickstep/src/com/android/quickstep/FallbackActivityInterface.java
 +++ b/quickstep/src/com/android/quickstep/FallbackActivityInterface.java
-@@ -33,6 +33,7 @@ import androidx.annotation.Nullable;
- 
- import com.android.app.displaylib.PerDisplayRepository;
- import com.android.launcher3.DeviceProfile;
-+import com.android.launcher3.R;
- import com.android.launcher3.dagger.LauncherAppSingleton;
- import com.android.launcher3.display.DisplayController;
- import com.android.launcher3.statemanager.StateManager;
-@@ -72,6 +73,12 @@ public final class FallbackActivityInterface extends
+@@ -72,6 +72,13 @@ public final class FallbackActivityInterface extends
          super(false, DEFAULT, BACKGROUND_APP, taskAnimationManagerRepo.get(DEFAULT_DISPLAY));
      }
  
 +    /** RoseOS (#156): the fallback overview's agent row (RoseAgentStrip) sits below the task cards. */
 +    @Override
 +    protected int getOverviewClaimedSpaceBelow(Context context) {
-+        return context.getResources().getDimensionPixelSize(R.dimen.rose_agent_strip_height);
++        // The agent row's measured height: its default, or more at a large font scale (RoseAgentStrip.rowHeight).
++        return com.android.quickstep.fallback.RoseAgentStrip.rowHeight(context.getResources());
 +    }
 +
      /** 2 */
      @Override
      public int getSwipeUpDestinationAndLength(DeviceProfile dp, Context context, Rect outRect,
+diff --git a/quickstep/src/com/android/quickstep/RecentsActivity.java b/quickstep/src/com/android/quickstep/RecentsActivity.java
+index 34a3adb..7f3a26b 100644
+--- a/quickstep/src/com/android/quickstep/RecentsActivity.java
++++ b/quickstep/src/com/android/quickstep/RecentsActivity.java
+@@ -150,6 +150,9 @@ public final class RecentsActivity extends StatefulActivity<RecentsState> implem
+      */
+     private void setupViews() {
+         getTheme().applyStyle(R.style.OverviewBlurFallbackStyle, true);
++        // RoseOS (#410): the Oxblood switcher backdrop behind both carousels (Home's contract, fields.screenBase): the
++        // fallback overview's own scrim colour, applied after the stock fallback style. Nothing else changes.
++        getTheme().applyStyle(R.style.RoseOverviewOxblood, true);
+         SystemUiProxy systemUiProxy = SystemUiProxy.INSTANCE.get(this);
+         // SplitSelectStateController needs to be created before setContentView()
+         mSplitSelectStateController =
 diff --git a/quickstep/src/com/android/quickstep/views/OverviewActionsView.java b/quickstep/src/com/android/quickstep/views/OverviewActionsView.java
 index 13c6ffe..997f8c8 100644
 --- a/quickstep/src/com/android/quickstep/views/OverviewActionsView.java

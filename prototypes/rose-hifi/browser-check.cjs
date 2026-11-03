@@ -10,7 +10,16 @@ const fs = require('fs');
 const { chromium } = require('playwright');
 
 const OUT = path.resolve(process.argv[2] || path.join(__dirname, 'out'));
-const FILE = 'file://' + path.join(__dirname, 'Rose-HiFi.html');
+// ROSE_TRAY=1…10 runs the same walkthrough with a bottom-tray option applied (default: none).
+// ROSE_THEME=classic runs the previous look; the default is the Oxblood prototype direction.
+const OX = !process.env.ROSE_TRAY && process.env.ROSE_THEME !== 'classic';
+const FILE = 'file://' + path.join(__dirname, 'Rose-HiFi.html') + (process.env.ROSE_TRAY ? '?tray=' + process.env.ROSE_TRAY : OX ? '' : '?theme=classic');
+const WORK = OX ? '#rose-work' : '#rose-agents';
+// Oxblood (study 11): Rose has one connection control; universal mic mute lives on Home's edge,
+// the swipe-up edge and the harness, so in-Rose mic steps use the harness control.
+const MIC = OX ? '#h-mic' : '#rose-mic';
+const END = OX ? '#rose-conn' : '#rose-end';
+const endCallToHome = async (page) => { await page.locator(END).click(); if (OX) { await page.waitForTimeout(250); await page.locator('#home-bar').click(); } };
 fs.mkdirSync(OUT, { recursive: true });
 
 const results = [];
@@ -48,7 +57,7 @@ const check = (name, ok, detail) => { results.push({ name, ok: !!ok, detail: det
   check('swipe advances to the full app page', (await st()).homePage === 1);
   check('tray fixed during swipe', JSON.stringify(trayBefore) === JSON.stringify(trayDuring));
   await shot('03-home-app-page');
-  await page.locator('#page-dots button').first().click();
+  if (OX) { await page.locator('.home-page[aria-hidden=false] .app').first().focus(); await page.keyboard.press('ArrowLeft'); } else await page.locator('#page-dots button').first().click();
   await settle();
   check('page dot returns to first page', (await st()).homePage === 0);
 
@@ -70,7 +79,7 @@ const check = (name, ok, detail) => { results.push({ name, ok: !!ok, detail: det
   await shot('06-rose-speaking-result');
 
   // Mute while Rose speaks: speech continues, mic silver.
-  await page.locator('#rose-mic').click();
+  await page.locator(MIC).click();
   await page.waitForTimeout(300);
   s = await st();
   check('mute while speaking keeps speech', s.muted && s.speaking);
@@ -83,7 +92,7 @@ const check = (name, ok, detail) => { results.push({ name, ok: !!ok, detail: det
   check('speech ends independently while muted', !s.speaking && s.muted);
   await shot('08-rose-muted-quiet');
   await page.keyboard.press('Tab');
-  await page.locator('#rose-mic').focus();
+  await page.locator(MIC).focus();
   await page.keyboard.press('Enter');
   await page.waitForTimeout(400);
   s = await st();
@@ -92,7 +101,7 @@ const check = (name, ok, detail) => { results.push({ name, ok: !!ok, detail: det
 
   // Start tasks, then end call: tasks must survive.
   await page.locator('#h-tasks').click();
-  await page.locator('#rose-end').click();
+  await endCallToHome(page);
   await page.waitForTimeout(250);
   await shot('10-end-call-transition');
   await page.waitForTimeout(700);
@@ -118,7 +127,9 @@ const check = (name, ok, detail) => { results.push({ name, ok: !!ok, detail: det
   await page.locator('#h-static').check();
   await page.waitForTimeout(400);
   r = await rs();
-  check('static fallback visible', r.mode === 'static-forced' && await page.locator('#rose-fallback').isVisible());
+  // Oxblood draws Rose as a CSS pearl (WebGL canvas not displayed); the renderer's visual checks run in Classic.
+  if (!OX) check('static fallback visible', r.mode === 'static-forced' && await page.locator('#rose-fallback').isVisible());
+  else check('Oxblood: renderer reports forced fallback mode', r.mode === 'static-forced');
   await shot('13-rose-static-fallback');
   await page.locator('#h-static').uncheck();
   await page.locator('#h-lose').click();
@@ -137,7 +148,8 @@ const check = (name, ok, detail) => { results.push({ name, ok: !!ok, detail: det
   check('hidden page suspends drawing', d1 === d2, d1 + ' → ' + d2);
   await page.evaluate(() => { Object.defineProperty(document, 'hidden', { configurable: true, get: () => false }); document.dispatchEvent(new Event('visibilitychange')); });
   await page.waitForTimeout(600);
-  check('visible page resumes drawing', (await rs()).draws > d2);
+  if (!OX) check('visible page resumes drawing', (await rs()).draws > d2);
+  else check('Oxblood: pearl visible after page returns', await page.evaluate(() => getComputedStyle(document.querySelector('#v-rose .rose-head h2'), '::before').width === '16px'));
 
   // Resize + unfold preserve call state.
   await page.locator('#h-unfolded').click();
@@ -168,7 +180,7 @@ const check = (name, ok, detail) => { results.push({ name, ok: !!ok, detail: det
   await page.locator('#tray-rose').click();
   await page.waitForTimeout(1600);
   await page.locator('#h-tasks').click();
-  await page.locator('#rose-agents').click();
+  await page.locator(WORK).click();
   await settle(500);
   s = await st();
   check('agents screen from Rose keeps call', s.view === 'agents' && s.connection === 'connected');
@@ -178,7 +190,7 @@ const check = (name, ok, detail) => { results.push({ name, ok: !!ok, detail: det
   await settle(900);
   const cardsVisible = await page.evaluate(() => { const s = document.getElementById('screen').getBoundingClientRect(); return [...document.querySelectorAll('#agrid .wcard')].filter((c) => { const r = c.getBoundingClientRect(); return r.top >= s.top && r.bottom <= s.bottom && r.left >= s.left && r.right <= s.right; }).length; });
   check('eight windows fully visible unfolded', cardsVisible === 8, cardsVisible);
-  const trayTop = await page.evaluate(() => document.querySelector('#v-agents .tray').getBoundingClientRect().top);
+  const trayTop = await page.evaluate(() => { const t = document.querySelector('#v-agents .tray').getBoundingClientRect(); return t.height ? t.top : document.getElementById('screen').getBoundingClientRect().bottom; });
   const maxCardBottom = await page.evaluate(() => Math.max(...[...document.querySelectorAll('#agrid .wcard')].map((c) => c.getBoundingClientRect().bottom)));
   check('stop controls not obscured by tray', maxCardBottom <= trayTop, maxCardBottom + ' <= ' + trayTop);
   await shot('22-agents-unfolded-8');
@@ -235,6 +247,8 @@ const check = (name, ok, detail) => { results.push({ name, ok: !!ok, detail: det
   await page.keyboard.press('ArrowRight');
   await page.keyboard.press('ArrowRight');
   await settle(800);
+  // Wait for smooth scroll + snap to come to rest before comparing positions.
+  for (let i = 0, prev = -1; i < 20; i++) { const v = await page.evaluate(() => document.getElementById('sw-agent').scrollLeft + ',' + document.getElementById('sw-human').scrollLeft); if (v === prev) break; prev = v; await page.waitForTimeout(250); }
   const hAfter = await page.evaluate(() => document.getElementById('sw-human').scrollLeft);
   const aAfter = await page.evaluate(() => document.getElementById('sw-agent').scrollLeft);
   check('agent carousel moves independently', aAfter > aBefore && hAfter === hBefore, aBefore + '→' + aAfter + ' / human ' + hBefore + '→' + hAfter);
@@ -285,7 +299,7 @@ const check = (name, ok, detail) => { results.push({ name, ok: !!ok, detail: det
   check('reset mid-transition leaves only Home active and tappable', active.join() === 'v-home' && hit, active.join());
   await page.locator('#h-tasks').click();
   await page.locator('#tray-rose').click(); await page.waitForTimeout(1500);
-  await page.locator('#rose-agents').click(); await settle(500);
+  await page.locator(WORK).click(); await settle(500);
   await page.locator('#agrid [data-window=w-research] [data-stop]').click(); await settle(300);
   await page.locator('#h-lock').click(); await settle(300);
   const unlockHit = await page.evaluate(() => { const r = document.getElementById('unlock').getBoundingClientRect(); return document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2).id === 'unlock'; });
@@ -307,6 +321,143 @@ const check = (name, ok, detail) => { results.push({ name, ok: !!ok, detail: det
   const scrolled = await page.evaluate(() => document.getElementById('screen').scrollTop + document.getElementById('screen').scrollLeft);
   check('phone surface never scrolls under focus', scrolled === 0);
 
+  // ---------- Rose's voice (output) mute on Home's tray ----------
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.locator('#h-folded').click();
+  await page.locator('#h-reset').click(); await settle(500);
+  if (process.env.ROSE_TRAY) {
+    const vbox = await page.evaluate(() => { const b = document.getElementById('tray-voice'); const k = document.getElementById('screen').getBoundingClientRect().width / document.getElementById('screen').offsetWidth; const r = b.getBoundingClientRect(); return { w: r.width / k, h: r.height / k, pressed: b.getAttribute('aria-pressed'), name: b.getAttribute('aria-label') }; });
+    check('voice control on Home tray, ≥44 px, unpressed, named', vbox.w >= 43.5 && vbox.h >= 43.5 && vbox.pressed === 'false' && /Rose's voice/.test(vbox.name), JSON.stringify(vbox));
+    await page.locator('#h-tasks').click();
+    await page.locator('#tray-rose').click();
+    await page.waitForFunction(() => window.__rose.getState().connection === 'connected');
+    await page.locator('#home-bar').click(); await settle(500);
+    const pre = await st();
+    const noticesBefore = pre.notices.map((n) => n.id).join();
+    await page.locator('#tray-voice').click(); await settle(300);
+    let v = await st();
+    check('tap mutes Rose’s voice only (mic, call, speech, tasks untouched)', v.voiceMuted && !v.muted && v.connection === 'connected' && v.speaking === pre.speaking && v.view === 'home' && JSON.stringify(Object.values(v.tasks).map((t) => t.state)) === JSON.stringify(Object.values(pre.tasks).map((t) => t.state)) && !v.pendingStop, JSON.stringify({ voiceMuted: v.voiceMuted, muted: v.muted, connection: v.connection }));
+    check('voice mute adds no conversation notice', v.notices.filter((n) => !noticesBefore.split(',').includes(String(n.id))).every((n) => n.kind === 'task'));
+    const shown = await page.evaluate(() => ({ pressed: document.getElementById('tray-voice').getAttribute('aria-pressed'), flag: document.getElementById('tray-voice').dataset.voiceMuted, announce: document.getElementById('announcer').textContent }));
+    check('muted state is exposed (aria-pressed, visual flag, announcement)', shown.pressed === 'true' && shown.flag === 'true' && /muted/i.test(shown.announce), JSON.stringify(shown));
+    await shot('40-home-voice-muted');
+    await page.locator('#tray-rose').click(); await settle(700);
+    await page.evaluate(() => window.__rose.dispatch({ type: 'speak', ms: 4000 })); await settle(300);
+    check('Rose caption reflects muted voice while speaking', /voice muted/.test(await page.locator('#rose-caption').textContent()));
+    await page.locator(MIC).click(); await settle(300);
+    v = await st();
+    check('microphone mute is separate from voice mute', v.muted && v.voiceMuted);
+    await page.locator('#home-bar').click(); await settle(500);
+    await page.locator('#tray-voice').focus();
+    await page.keyboard.press('Enter'); await settle(300);
+    v = await st();
+    check('keyboard unmutes Rose’s voice; mic stays muted; call continues', !v.voiceMuted && v.muted && v.connection === 'connected' && await page.locator('#tray-voice').getAttribute('aria-pressed') === 'false');
+    await page.locator('#h-lock').click(); await settle(200);
+    await page.evaluate(() => window.__rose.dispatch({ type: 'voiceMute' }));
+    check('locked phone ignores the voice control', !(await st()).voiceMuted);
+    await page.locator('#unlock').click(); await settle(200);
+  } else if (OX) {
+    const ids = await page.evaluate(() => [...document.querySelectorAll('#home-tray .well')].filter((w) => w.getBoundingClientRect().width).map((w) => w.id));
+    check('Oxblood Home edge: Rose · universal mic · switcher (study 09)', JSON.stringify(ids) === JSON.stringify(['tray-rose', 'tray-mic', 'tray-overview']), JSON.stringify(ids));
+  } else {
+    const hidden = await page.evaluate(() => getComputedStyle(document.getElementById('tray-voice')).display === 'none' && [...document.querySelectorAll('#home-tray .well')].filter((w) => w.getBoundingClientRect().width).length === 2);
+    check('default tray unchanged: two controls, voice control hidden', hidden);
+  }
+
+  // ---------- Oxblood: navigation separated from conversation state ----------
+  if (OX) {
+    await page.locator('#h-reset').click(); await settle(500);
+    check('Oxblood is the prototype default', await page.evaluate(() => document.getElementById('device').dataset.theme) === 'oxblood' && !(await page.evaluate(() => document.getElementById('screen').dataset.tray)));
+    await page.locator('#tray-rose').click();
+    await page.waitForFunction(() => window.__rose.getState().connection === 'connected');
+    await settle(400);
+    const ctl = await page.evaluate(() => {
+      const k = document.getElementById('screen').getBoundingClientRect().width / document.getElementById('screen').offsetWidth;
+      const vis = [...document.querySelectorAll('#v-rose .tray .well')].filter((w) => w.getBoundingClientRect().width).map((w) => w.id);
+      const b = document.getElementById('rose-work'); const r = b.getBoundingClientRect();
+      const head = document.querySelector('#v-rose .rose-head').getBoundingClientRect(), sr = document.getElementById('screen').getBoundingClientRect();
+      return { vis, w: r.width / k, h: r.height / k, name: b.getAttribute('aria-label'), upperRight: r.right > sr.left + sr.width * 0.75 && r.top < sr.top + sr.height * 0.15, working: b.dataset.working };
+    });
+    const conn = await page.evaluate(() => { const b = document.getElementById('rose-conn'); const k = document.getElementById('screen').getBoundingClientRect().width / document.getElementById('screen').offsetWidth; const r = b.getBoundingClientRect(); return { label: b.textContent.trim(), name: b.getAttribute('aria-label'), w: r.width / k, h: r.height / k }; });
+    check('Rose: tray retracted, one Disconnect control (study 11)', ctl.vis.length === 0 && conn.label === 'Disconnect' && /disconnect/i.test(conn.name) && conn.w >= 44 && conn.h >= 44, JSON.stringify({ vis: ctl.vis, conn }));
+    check('Background-work entry is upper right, named, ≥44 px', ctl.upperRight && ctl.w >= 44 && ctl.h >= 44 && /background work/i.test(ctl.name), JSON.stringify(ctl));
+    check('work entry is not highlighted without running work', ctl.working === 'false');
+    await page.locator('#h-tasks').click(); await settle(300);
+    check('work entry highlights while work runs', await page.locator('#rose-work').getAttribute('data-working') === 'true');
+    await page.locator(MIC).click(); await settle(200);
+    let ox = await st();
+    check('mic mute keeps call and work', ox.muted && ox.connection === 'connected' && Object.values(ox.tasks).every((t) => t.state === 'running'));
+    const workHit = await page.evaluate(() => { const w = document.getElementById('rose-work').getBoundingClientRect(); return document.elementFromPoint(w.left + w.width / 2, w.top + w.height / 2).closest('#rose-work') !== null; });
+    check('Muted notice never covers the Background Work entry', workHit);
+    await page.locator('#rose-work').click(); await settle(500);
+    ox = await st();
+    check('work entry opens Rose’s apps without ending the call', ox.view === 'agents' && ox.connection === 'connected');
+    await shot('50-oxblood-agents');
+    await page.keyboard.press('Escape'); await settle(400);
+    check('back returns to Rose', (await st()).view === 'rose');
+    await page.locator('#rose-conn').click(); await settle(500);
+    ox = await st();
+    check('Disconnect stays on Rose and offers Connect; work continues', ox.view === 'rose' && ox.connection === 'disconnected' && (await page.locator('#rose-conn').textContent()).trim() === 'Connect' && Object.values(ox.tasks).every((t) => t.state === 'running'));
+    await page.locator('#rose-conn').click(); await page.waitForFunction(() => window.__rose.getState().connection === 'connected');
+    check('Connect reconnects in place', (await st()).view === 'rose');
+    await page.locator('#rose-conn').click(); await settle(300);
+    await page.locator('#home-bar').click(); await settle(700);
+    ox = await st();
+    check('end call returns Home; work continues; universal mic mute persists', ox.view === 'home' && ox.connection === 'disconnected' && ox.muted && Object.values(ox.tasks).every((t) => t.state === 'running'));
+    const micBox = await page.evaluate(() => { const k = document.getElementById('screen').getBoundingClientRect().width / document.getElementById('screen').offsetWidth; const b = document.getElementById('tray-mic'); const r = b.getBoundingClientRect(); return { w: r.width / k, h: r.height / k, pressed: b.getAttribute('aria-pressed'), name: b.getAttribute('aria-label') }; });
+    check('Home mic: ≥44 px, named, shows muted', micBox.w >= 44 && micBox.h >= 44 && micBox.pressed === 'true' && /microphone/i.test(micBox.name), JSON.stringify(micBox));
+    await page.locator('#tray-mic').click(); await settle(200);
+    ox = await st();
+    check('Home mic unmutes without a call; work untouched', !ox.muted && ox.connection === 'disconnected' && Object.values(ox.tasks).every((t) => t.state === 'running'));
+    await page.locator('#tray-mic').click(); await settle(200);
+    await page.locator('#tray-rose').click(); await page.waitForFunction(() => window.__rose.getState().connection === 'connected'); await settle(300);
+    ox = await st();
+    check('a call starts in the universal mute state', ox.muted && ox.connection === 'connected');
+    await page.locator(MIC).click(); await settle(200);
+    await endCallToHome(page); await settle(700);
+    // Swipe up inside an ordinary app: scrunch + Home's control edge; tap the app to return.
+    await page.locator('#tray-overview').click(); await settle(500);
+    await page.locator('#home-bar').click(); await settle(400);
+    await page.locator('.app[data-app=camera]').click(); await settle(500);
+    const sb = await page.locator('#screen').boundingBox();
+    await page.mouse.move(sb.x + sb.width / 2, sb.y + sb.height - 12); await page.mouse.down();
+    for (let i = 1; i <= 8; i++) await page.mouse.move(sb.x + sb.width / 2, sb.y + sb.height - 12 - i * 12);
+    await page.mouse.up(); await settle(500);
+    const pk = await page.evaluate(() => ({ peek: document.getElementById('screen').classList.contains('peek'), tray: !document.getElementById('peek-tray').hidden, view: window.__rose.getState().view }));
+    check('swipe up in an app scrunches it and shows the system edge', pk.peek && pk.tray && pk.view === 'app', JSON.stringify(pk));
+    await shot('52-oxblood-app-swipe-up');
+    // The scrunched app keeps working: a tap acts in the app and the edge stays up.
+    await page.locator('#v-app .back-btn').click(); await settle(500);
+    check('scrunched app stays interactive (its Back works)', (await st()).view === 'home');
+    await page.locator('.home-page[aria-hidden=false] .app').first().click(); await settle(500);
+    await page.locator('#h-peek').click(); await settle(300);
+    const sb2 = await page.locator('#screen').boundingBox();
+    // A drag in the app content while the edge is up belongs to the app, not the edge.
+    await page.mouse.move(sb2.x + sb2.width / 2, sb2.y + sb2.height * 0.5); await page.mouse.down();
+    for (let i = 1; i <= 12; i++) await page.mouse.move(sb2.x + sb2.width / 2, sb2.y + sb2.height * 0.5 - i * 25);
+    await page.mouse.up(); await settle(400);
+    check('drag inside the app leaves the edge up and the app open', (await page.evaluate(() => document.getElementById('screen').classList.contains('peek'))) && (await st()).view === 'app');
+    await page.mouse.move(sb2.x + sb2.width / 2, sb2.y + sb2.height - 50); await page.mouse.down();
+    for (let i = 1; i <= 8; i++) await page.mouse.move(sb2.x + sb2.width / 2, sb2.y + sb2.height - 50 + i * 6);
+    await page.mouse.up(); await settle(400);
+    check('swipe down on the edge lowers it; app still open', !(await page.evaluate(() => document.getElementById('screen').classList.contains('peek'))) && (await st()).view === 'app');
+    await page.locator('#h-peek').click(); await settle(300);
+    await page.mouse.move(sb2.x + sb2.width / 2, sb2.y + sb2.height - 30); await page.mouse.down();
+    for (let i = 1; i <= 12; i++) await page.mouse.move(sb2.x + sb2.width / 2, sb2.y + sb2.height - 30 - i * 25);
+    await page.mouse.up(); await settle(500);
+    check('long swipe up goes Home', (await st()).view === 'home');
+    await page.locator('.home-page[aria-hidden=false] .app').first().click(); await settle(500);
+    await page.locator('#h-peek').click(); await settle(300);
+    await page.locator('#peek-overview').click(); await settle(600);
+    check('switcher from the raised edge', (await st()).view === 'switcher' && !(await page.evaluate(() => document.getElementById('screen').classList.contains('peek'))));
+    await page.locator('#home-bar').click(); await settle(400);
+    check('home bar works right after a swipe gesture', (await st()).view === 'home');
+    await page.locator('#tray-overview').click(); await settle(700);
+    check('switcher has no persistent tray', await page.evaluate(() => !document.querySelector('#v-switcher .tray')));
+    await shot('51-oxblood-switcher');
+    await page.locator('#home-bar').click(); await settle(400);
+  }
+
   r = await rs();
   const f = r.frames.slice().sort((a, b) => a - b);
   const env = await page.evaluate(() => ({ ua: navigator.userAgent, dpr: devicePixelRatio, vw: innerWidth, vh: innerHeight }));
@@ -322,4 +473,4 @@ const check = (name, ok, detail) => { results.push({ name, ok: !!ok, detail: det
   console.log('browser', browser.version(), '| renderer', r.renderer, '| frames', JSON.stringify(summary.frames));
   await browser.close();
   process.exit(results.every((x) => x.ok) ? 0 : 1);
-})().catch((e) => { console.error(e); process.exit(2); });
+})().catch((e) => { for (const x of results) console.log((x.ok ? 'PASS ' : 'FAIL ') + x.name); console.error(e); process.exit(2); });

@@ -111,6 +111,26 @@ final class MultiSession {
   if(sessionId==null)return 0;
   return bySession(slots,sessionId);
  }
+ /** The viewer's Stop (#410, Nathan-approved): the owner's confirmed Stop of exactly the viewer's own bound pair, rechecked
+  * under the controller lock when the owner confirms. Never for an unbound viewer (it may show slot 0 without a pair), and
+  * not while the phone is locked. A pair no slot holds (replaced by a newer start, or a restarted controller) and a slot
+  * that is no longer occupied (ended, closed) stop nothing; so do a re-tagged slot and a session object other than the one
+  * the viewer attached. A slot still holding a session it could not close (cleanup_failed) is occupied: Stop retries it,
+  * as the owner's other Stops do. slotTask is the found slot's current task id. */
+ static final String VIEWER_UNBOUND="unbound", VIEWER_LOCKED="locked", VIEWER_REPLACED="replaced", VIEWER_ENDED="ended",
+  VIEWER_RETAGGED="retagged";
+ static Route viewerStop(Slot[] slots,boolean bound,String session,String task,String slotTask,boolean attachedIsCurrent,
+                         boolean locked){
+  int own=live(slots);
+  if(!bound||session==null||session.isEmpty()||task==null)return Route.refuse(VIEWER_UNBOUND,own);
+  if(locked)return Route.refuse(VIEWER_LOCKED,own);
+  int i=bySession(slots,session);
+  if(i<0)return Route.refuse(VIEWER_REPLACED,own);
+  if(!slots[i].occupied)return Route.refuse(VIEWER_ENDED,own);
+  if(!task.equals(slotTask))return Route.refuse(VIEWER_RETAGGED,own);
+  if(!attachedIsCurrent)return Route.refuse(VIEWER_REPLACED,own);
+  return Route.to(i);
+ }
  /** The viewer: a bound viewer shows only its own session; an unbound one (legacy entry) shows slot 0 only while no other
   * slot is occupied, never a guess between two. -1: nothing to show (unavailable). */
  static int viewer(Slot[] slots,boolean bound,String boundSession){

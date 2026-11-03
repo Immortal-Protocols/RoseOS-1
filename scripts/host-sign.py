@@ -216,6 +216,51 @@ def derive_release_script(original, common_sh, key_dir, passfile, release_keys, 
                 f'"$EPOCHREALTIME" $$ >> {shlex.quote(str(trace))} 2>/dev/null || true; }}\n')
     return ''.join(lines)
 
+FACTORY_VARIABLES = r'^source device/common/clear-factory-images-variables\.sh$'
+FACTORY_SIGN_START = r'^sign_target_files_apks '
+FACTORY_AVB_PKMD = r'^AVB_PKMD="\$KEY_DIR/avb_pkmd\.bin"$'
+FACTORY_IMG = r'^img_from_target_files \$TARGET_FILES \$DEVICE-img-\$BUILD_NUMBER\.zip$'
+
+def derive_factory_only_script(original, device, build, avb_pkmd, fastboot_sha256):
+    """Packaging only, for an already signed target-files (FOLD-FACTORY-PACKAGE): from the pinned generate-release.sh,
+    exactly two segments, each anchored once: the factory variables (clear-factory-images-variables.sh through the line
+    before sign_target_files_apks: radio/bootloader versions from OTA/android-info.txt, device switches, AVB_PKMD) with
+    AVB_PKMD rebound to the pinned public avb_pkmd.bin, and the factory tail (img_from_target_files through
+    optimize-factory-image) with the otatools bin/fastboot checked against its pin immediately before use. No key,
+    decrypt, signing, OTA or archive-signing line is kept; any KEY_DIR, ssh-keygen or signing tool left refuses."""
+    def once(pattern, text):
+        found = list(re.finditer(pattern, text, re.M))
+        if len(found) != 1:
+            raise AdapterFailed(f'release script anchor {pattern!r} found {len(found)} times, expected once')
+        return found[0]
+    if not re.fullmatch(r'[a-z][a-z0-9]{1,31}', device) or not re.fullmatch(r'[0-9]{10}', build):
+        raise AdapterFailed('device must be a plain codename and build ten digits')
+    if not re.fullmatch(r'/[\w./-]+', str(avb_pkmd)) or not re.fullmatch(r'[0-9a-f]{64}', str(fastboot_sha256)):
+        raise AdapterFailed('avb_pkmd must be a plain absolute path and the fastboot pin a sha256')
+    start, end = once(FACTORY_VARIABLES, original), once(FACTORY_SIGN_START, original)
+    if end.start() <= start.start():
+        raise AdapterFailed('factory variables do not precede sign_target_files_apks')
+    variables = original[start.start():end.start()]
+    avb = once(FACTORY_AVB_PKMD, variables)
+    variables = variables[:avb.start()] + 'AVB_PKMD=' + shlex.quote(str(avb_pkmd)) + variables[avb.end():]
+    image, fastboot = once(FACTORY_IMG, original), once(FACTORY_FASTBOOT, original)
+    once(FACTORY_SOURCE, original)
+    if not image.start() < original.index('source device/common/generate-factory-images-common.sh') < fastboot.start():
+        raise AdapterFailed('the factory tail is not img_from_target_files, then the generator, then optimize-factory-image')
+    tail = original[image.start():fastboot.end()] + '\n'
+    tail = tail.replace(fastboot.group(0), (f"printf '%s  bin/fastboot\\n' {fastboot_sha256} | sha256sum --check --status"
+        " || { echo 'bin/fastboot differs from the fastboot pin' >&2; exit 1; }\n") + 'bin/' + fastboot.group(0), 1)
+    body = variables + tail
+    for forbidden in ('KEY_DIR', 'ssh-keygen', 'id_ed25519', 'sign_target_files_apks', 'ota_from_target_files', 'decrypt-keys'):
+        if forbidden in body:
+            raise AdapterFailed(f'the factory-only script would still contain {forbidden}')
+    header = ('#!/bin/bash\nset -o errexit -o pipefail\n'
+              "user_error() { printf '%s\\n' \"$*\" >&2; exit 1; }\n"
+              f'DEVICE={device}\nBUILD_NUMBER={build}\nset -- "$DEVICE" "$BUILD_NUMBER"\n'
+              'TARGET_FILES=$DEVICE-target_files.zip\nTARGET_FILES_INPUT=$PWD/$TARGET_FILES\n'
+              'export PATH="$PWD/bin:/usr/bin:/bin"\n')
+    return header + body
+
 def candidate_file(sha, path, repo=ROOT):
     result = subprocess.run(['git', '-C', str(repo), 'show', f'{sha}:{path}'], capture_output=True)
     if result.returncode:

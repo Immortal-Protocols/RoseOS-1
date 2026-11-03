@@ -86,7 +86,7 @@ class Guard(unittest.TestCase):
             capture_output=True, cwd=ROOT).returncode
 
     def test_whole_guard_admits_exactly_the_bare_mode_with_one_preparation_stage(self):
-        for stage in ('download', 'vendor', 'lunch', 'inspect'):
+        for stage in ('source', 'download', 'vendor', 'lunch', 'inspect', 'git-inspect', 'git-inspect-set'):
             with self.subTest(stage=stage):
                 self.assertEqual(self.run_guard(BLAZER_PREP_STAGE=stage), 0)
         for change in ({'BLAZER_PREP_STAGE': 'none'}, {'BLAZER_PREP_STAGE': None}, {'BLAZER_PREP_STAGE': 'compile'},
@@ -105,7 +105,7 @@ class Guard(unittest.TestCase):
         observe = dict(MODE='rango-factory-observe')
         self.assertEqual(self.run_guard(**observe, BLAZER_PREP_STAGE='none'), 0)
         self.assertEqual(self.run_guard(**observe, BLAZER_PREP_STAGE=None), 0)  # older callers never set it
-        for stage in ('download', 'vendor', 'lunch', 'inspect'):
+        for stage in ('source', 'download', 'vendor', 'lunch', 'inspect', 'git-inspect', 'git-inspect-set'):
             self.assertNotEqual(self.run_guard(**observe, BLAZER_PREP_STAGE=stage), 0)
         line = '[[ "$MODE" == blazer-prep || "${BLAZER_PREP_STAGE:-none}" == none ]]'
         self.assertIn('          ' + line + '\n', jobs()['guard'])
@@ -116,8 +116,8 @@ class Guard(unittest.TestCase):
     def test_mode_input_and_hosted_check_before_the_controller(self):
         self.assertIn('models-sign, rango-retained, blazer-prep, emulator-alpha-successor,', WORKFLOW)
         self.assertIn('      blazer_prep_stage:\n        description: blazer-prep only - the one preparation stage this run '
-                      'executes (none for every other mode)\n        type: choice\n        options: [none, download, vendor, '
-                      'lunch, inspect]\n        default: none\n', WORKFLOW)
+                      'executes (none for every other mode)\n        type: choice\n        options: [none, source, download, vendor, '
+                      'lunch, inspect, git-inspect, git-inspect-set]\n        default: none\n', WORKFLOW)
         self.assertIn("  BLAZER_PREP_STAGE: ${{ inputs.blazer_prep_stage || 'none' }}\n", WORKFLOW)
         inputs = re.findall(r'(?m)^      (\w+):$', WORKFLOW.split('    inputs:\n', 1)[1].split('\npermissions:', 1)[0])
         self.assertIn('blazer_prep_stage', inputs)
@@ -137,19 +137,39 @@ class Wiring(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
 
-    def test_committed_binding_is_unbound_so_every_stage_refuses_before_the_controller(self):
+    def test_committed_binding_is_receipt_41473133543_and_every_stage_resolves_exactly(self):
         self.assertEqual(BINDING['host'], 'immortal-os-builder')
-        self.assertEqual([BINDING[k] for k in ('sourceRoot', 'downloadDir', 'node')], [None, None, None])
-        for stage, missing in (('download', 'downloadDir'), ('vendor', 'downloadDir, sourceRoot, node'), ('lunch', 'sourceRoot')):
-            result = wire('check', '--stage', stage)
-            self.assertEqual(result.returncode, 4, stage)
-            self.assertEqual(result.stdout, '')
-            self.assertIn(f'SETUP_MISSING', result.stderr)
+        root = '/home/pixelbuild/rose-actions/blazer-prep-41473133543-1'
+        self.assertEqual([BINDING[k] for k in ('sourceRoot', 'downloadDir', 'node')],
+                         [f'{root}/source', f'{root}/downloads', '/usr/local/bin/node'])
+        for phrase in ('run 41473133543 attempt 1', 'not current host proof', 'version was never run',
+                       'project revisions and the pinned manifest unverified', 'source stage needs only sourceRoot'):
+            self.assertIn(phrase, BINDING['basis'])
+        expected = {'source': ['--source-root', f'{root}/source'], 'download': ['--download-dir', f'{root}/downloads'],
+                    'vendor': ['--download-dir', f'{root}/downloads', '--source-root', f'{root}/source',
+                               '--node', '/usr/local/bin/node'],
+                    'lunch': ['--source-root', f'{root}/source']}
+        for stage, inputs in expected.items():
+            tail, _, _ = wiring.resolve(stage)
+            self.assertEqual(tail, ['--stage', stage, '--host', 'immortal-os-builder', '--lock', LOCK, *inputs], stage)
+        # the source stage depends on sourceRoot alone: it still resolves with the other two unbound
+        alone = Path(self.tmp)/'source-only.json'
+        alone.write_text(json.dumps({**BINDING, 'downloadDir': None, 'node': None}))
+        self.assertEqual(wire('check', '--stage', 'source', '--binding', str(alone)).returncode, 0)
+        for stage in ('download', 'vendor'):
+            self.assertEqual(wire('check', '--stage', stage, '--binding', str(alone)).returncode, 4, stage)
+        unbound = Path(self.tmp)/'unbound.json'
+        unbound.write_text(json.dumps({**BINDING, 'sourceRoot': None, 'downloadDir': None, 'node': None}))
+        for stage, missing in (('source', 'sourceRoot'), ('download', 'downloadDir'), ('vendor', 'downloadDir, sourceRoot, node'),
+                               ('lunch', 'sourceRoot')):
+            result = wire('check', '--stage', stage, '--binding', str(unbound))
+            self.assertEqual((result.returncode, result.stdout), (4, ''), stage)
+            self.assertIn('SETUP_MISSING', result.stderr)
             self.assertIn(missing, result.stderr)
 
     def test_bounds_are_derived_from_the_recipe_seconds(self):
         binding = bound(self.tmp)
-        expected = {'download': (3600, 3900, 76), 'vendor': (10800, 11100, 196), 'lunch': (1800, 2100, 46)}
+        expected = {'source': (7200, 7500, 136), 'download': (3600, 3900, 76), 'vendor': (10800, 11100, 196), 'lunch': (1800, 2100, 46)}
         for stage, (helper_seconds, outer, minutes) in expected.items():
             self.assertEqual(RECIPE['preparation'][stage]['timeoutSeconds'], helper_seconds)
             result = wire('check', '--stage', stage, '--binding', str(binding))
@@ -161,7 +181,7 @@ class Wiring(unittest.TestCase):
         original = os.execv
         os.execv = lambda exe, argv: seen.append(argv) or (_ for _ in ()).throw(SystemExit(0))
         try:
-            for stage in ('download', 'vendor', 'lunch'):
+            for stage in ('source', 'download', 'vendor', 'lunch'):
                 with self.assertRaises(SystemExit), open(os.devnull, 'w') as null:
                     stdout, sys.stdout = sys.stdout, null
                     try:
@@ -173,6 +193,7 @@ class Wiring(unittest.TestCase):
         head = [sys.executable, str(ROOT/'scripts/blazer-build-only.py'), 'run']
         common = ['--host', 'immortal-os-builder', '--lock', LOCK]
         self.assertEqual(seen, [
+            head + ['--stage', 'source', *common, '--source-root', '/srv/rose-blazer/src', '--receipt-dir', '/tmp/r'],
             head + ['--stage', 'download', *common, '--download-dir', '/srv/rose-blazer-dl', '--receipt-dir', '/tmp/r'],
             head + ['--stage', 'vendor', *common, '--download-dir', '/srv/rose-blazer-dl', '--source-root', '/srv/rose-blazer/src',
                     '--node', '/usr/bin/node', '--receipt-dir', '/tmp/r'],
@@ -210,23 +231,26 @@ class Inspect(unittest.TestCase):
         path.write_text(json.dumps({**BINDING, 'inspectCandidates': record}))
         return path
 
-    def test_committed_candidates_are_a_proposal_only_and_prep_stays_unbound(self):
+    def test_committed_candidates_are_a_proposal_only_and_never_satisfy_a_stage(self):
         record = BINDING['inspectCandidates']
         self.assertEqual((record['rootTemplate'], record['verified'], record['binding']), (self.ROOT_TEMPLATE, False, False))
-        self.assertEqual([BINDING[k] for k in ('sourceRoot', 'downloadDir', 'node')], [None, None, None])
-        for stage in ('download', 'vendor', 'lunch'):  # candidates never satisfy a preparation stage
-            self.assertEqual(wire('check', '--stage', stage).returncode, 4, stage)
+        unbound = self.tmp/'unbound.json'
+        unbound.write_text(json.dumps({**BINDING, 'sourceRoot': None, 'downloadDir': None, 'node': None}))
+        for stage in ('source', 'download', 'vendor', 'lunch'):  # candidates never satisfy a preparation stage
+            self.assertEqual(wire('check', '--stage', stage, '--binding', str(unbound)).returncode, 4, stage)
 
     def test_inspect_passes_host_lock_and_this_runs_candidate_root_with_its_own_bounds(self):
         result = wire('check', '--stage', 'inspect')
         self.assertEqual((result.returncode, result.stdout), (0, 'outer_seconds=960\njob_minutes=20\n'))
         tail, outer, minutes = wiring.resolve('inspect', run_id='41400000000', attempt='2')
-        self.assertEqual(tail, ['--host', 'immortal-os-builder', '--lock', LOCK, '--candidate-root',
+        root = '/home/pixelbuild/rose-actions/blazer-prep-41473133543-1'  # the bound facts are inspected too
+        self.assertEqual(tail, ['--host', 'immortal-os-builder', '--lock', LOCK, '--source-root', f'{root}/source',
+            '--download-dir', f'{root}/downloads', '--node', '/usr/local/bin/node', '--candidate-root',
             '/home/pixelbuild/rose-actions/blazer-prep-41400000000-2', '--max-entries', '200000', '--max-seconds', '900'])
         self.assertLessEqual(900, wiring.helper().INSPECT_MAX_SECONDS)
         self.assertLessEqual(outer + 30, minutes * 60 - 180)  # kill grace and checkout fit inside the 20-minute job
-        self.assertFalse({'--stage', '--receipt-dir', '--source-root', '--download-dir', '--node', '--candidate-node',
-                          '--candidate-node-from-path', '--reference-source-root'} & set(tail))
+        self.assertFalse({'--stage', '--receipt-dir', '--candidate-node', '--candidate-node-from-path',
+                          '--reference-source-root'} & set(tail))
 
     def test_no_lock_only_inspection_and_malformed_candidates_refuse(self):
         result = wire('check', '--stage', 'inspect', '--binding', str(self.binding(absent=True)))
@@ -266,7 +290,10 @@ class Inspect(unittest.TestCase):
         self.assertEqual((report['schema'], report['metadataOnly'], report['processesStarted'], report['network'],
                           report['writes'], report['enablesPreparation']),
                          ('roseos.blazer-preparation-inspection.v2', True, 0, False, False, False))
-        self.assertEqual(report['bound'], {'sourceRoot': None, 'downloadDir': None, 'node': None})
+        root = '/home/pixelbuild/rose-actions/blazer-prep-41473133543-1'
+        self.assertEqual(report['bound'], {'sourceRoot': f'{root}/source', 'downloadDir': f'{root}/downloads',
+                                           'node': '/usr/local/bin/node'})
+        self.assertFalse(report['enablesPreparation'])
         candidates = report['candidates']
         self.assertEqual((candidates['proposed'], candidates['verified'], candidates['binding']), (True, False, False))
         root = '/home/pixelbuild/rose-actions/blazer-prep-41400000000-1'
@@ -279,6 +306,156 @@ class Inspect(unittest.TestCase):
         self.assertEqual(report['limits'], {'maxEntries': 200000, 'maxSeconds': 900})
         self.assertEqual(wire(*argv).returncode, 2)
         self.assertEqual(sorted(p.name for p in receipts.iterdir()), ['inspection.json'])
+
+
+class GitInspect(unittest.TestCase):
+    """The narrow git-only route: `inspect-git --host H` and nothing else; no broad scan; one write-once receipt."""
+    BROAD = {'--stage', '--lock', '--receipt-dir', '--source-root', '--download-dir', '--node', '--candidate-root',
+             '--candidate-source-root', '--candidate-download-dir', '--candidate-receipts-dir', '--candidate-node',
+             '--candidate-node-from-path', '--reference-source-root', '--max-entries', '--max-seconds', '--jobs'}
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+
+    def test_exact_narrow_call_and_bounds(self):
+        tail, outer, minutes = wiring.resolve('git-inspect')
+        self.assertEqual(tail, ['--host', 'immortal-os-builder'])
+        self.assertFalse(self.BROAD & set(tail))
+        self.assertEqual((outer, minutes), (120, 13))
+        self.assertLess(wiring.helper().GIT_INSPECT_MAX_SECONDS, outer)
+        self.assertLessEqual(outer + 30, minutes * 60 - 180)
+        self.assertEqual(wire('check', '--stage', 'git-inspect').stdout, 'outer_seconds=120\njob_minutes=13\n')
+
+    def test_recipe_targets_agree_with_the_bound_source_root_and_production(self):
+        recipe = json.loads((ROOT/'os/build-only/blazer.json').read_text())['preparation']['gitInspection']['targets']
+        self.assertEqual(recipe, {'production': f'{PRODUCTION}/vendor/adevtool/.git',
+                                  'candidate': BINDING['sourceRoot'] + '/vendor/adevtool/.git'})
+        moved = self.tmp/'moved.json'
+        moved.write_text(json.dumps({**BINDING, 'sourceRoot': '/home/pixelbuild/rose-actions/blazer-prep-9-1/source'}))
+        self.assertEqual(wire('check', '--stage', 'git-inspect', '--binding', str(moved)).returncode, 2)
+
+    def test_real_helper_writes_exactly_one_git_receipt_and_refuses_reuse(self):
+        receipts = self.tmp/'run'
+        argv = ('run', '--stage', 'git-inspect', '--receipt-dir', str(receipts), '--run-id', '41600000000', '--attempt', '1')
+        result = wire(*argv)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout.splitlines()[0]),
+                         {'helper': [str(ROOT/'scripts/blazer-build-only.py'), 'inspect-git', '--host', 'immortal-os-builder']})
+        self.assertEqual(sorted(p.name for p in receipts.iterdir()), ['git-inspection.json'])
+        report = json.loads((receipts/'git-inspection.json').read_text())
+        self.assertEqual((report['schema'], report['metadataOnly'], report['processesStarted'], report['network'],
+                          report['writes'], report['gitProcess'], report['enablesPreparation']),
+                         ('roseos.blazer-git-inspection.v1', True, 0, False, False, False, False))
+        self.assertEqual(set(report['targets']), {'production', 'candidate'})
+        self.assertEqual(report['bounds']['maxSeconds'], 60)
+        for absent in ('reference', 'candidates', 'node', 'bound', 'download', 'collisions', 'projects'):
+            self.assertNotIn(absent, report)  # no broad scan section
+        self.assertEqual(wire(*argv).returncode, 2)
+        self.assertEqual(sorted(p.name for p in receipts.iterdir()), ['git-inspection.json'])
+
+    def test_the_helper_declares_only_host_for_inspect_git(self):
+        import argparse
+        declared, original = {}, argparse.ArgumentParser.add_argument
+
+        def record(parser, *flags, **kwargs):
+            declared[flags[0]] = kwargs.get('required', False)
+            return original(parser, *flags, **kwargs)
+        argparse.ArgumentParser.add_argument = record
+        try:
+            with open(os.devnull, 'w') as null:
+                stderr, sys.stderr = sys.stderr, null
+                try:
+                    with self.assertRaises(SystemExit):
+                        wiring.helper().main_git([])
+                finally:
+                    sys.stderr = stderr
+        finally:
+            argparse.ArgumentParser.add_argument = original
+        self.assertEqual({k: v for k, v in declared.items() if k != '-h'}, {'--host': True})
+
+    def test_target_set_route_is_exactly_the_one_fixed_set(self):
+        tail, outer, minutes = wiring.resolve('git-inspect-set')
+        self.assertEqual(tail, ['--host', 'immortal-os-builder', '--target-set', 'adevtool-projects-gitdir'])
+        self.assertFalse(self.BROAD & set(tail))
+        self.assertEqual((outer, minutes), (120, 13))
+        sets = json.loads((ROOT/'os/build-only/blazer.json').read_text())['preparation']['gitInspection']['targetSets']
+        self.assertEqual(sets, {'adevtool-projects-gitdir': {'projectsGitdir': {'root': PRODUCTION,
+                                                                                 'path': '.repo/projects/vendor/adevtool.git'}}})
+        self.assertEqual(wiring.resolve('git-inspect')[0], ['--host', 'immortal-os-builder'])  # inspect-git never widens
+
+    def test_the_helper_declares_only_host_and_target_set_for_inspect_git_set(self):
+        import argparse
+        declared, original = {}, argparse.ArgumentParser.add_argument
+
+        def record(parser, *flags, **kwargs):
+            declared[flags[0]] = kwargs.get('required', False)
+            return original(parser, *flags, **kwargs)
+        argparse.ArgumentParser.add_argument = record
+        try:
+            with open(os.devnull, 'w') as null:
+                stderr, sys.stderr = sys.stderr, null
+                try:
+                    with self.assertRaises(SystemExit):
+                        wiring.helper().main_git([], target_set=True)
+                finally:
+                    sys.stderr = stderr
+        finally:
+            argparse.ArgumentParser.add_argument = original
+        self.assertEqual({k: v for k, v in declared.items() if k != '-h'}, {'--host': True, '--target-set': True})
+
+    def test_real_helper_writes_exactly_one_target_set_receipt(self):
+        receipts = self.tmp/'set'
+        argv = ('run', '--stage', 'git-inspect-set', '--receipt-dir', str(receipts), '--run-id', '41600000000', '--attempt', '1')
+        result = wire(*argv)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout.splitlines()[0])['helper'][1:],
+                         ['inspect-git-set', '--host', 'immortal-os-builder', '--target-set', 'adevtool-projects-gitdir'])
+        self.assertEqual(sorted(p.name for p in receipts.iterdir()), ['git-target-set-inspection.json'])
+        report = json.loads((receipts/'git-target-set-inspection.json').read_text())
+        self.assertEqual((report['schema'], report['targetSet'], report['gitProcess'], report['writes'],
+                          report['enablesPreparation'], set(report['targets'])),
+                         ('roseos.blazer-git-target-set-inspection.v1', 'adevtool-projects-gitdir', False, False, False,
+                          {'projectsGitdir'}))
+        self.assertEqual(wire(*argv).returncode, 2)
+
+    def touched(self, stage):
+        """Host paths (/home/pixelbuild/...) the wiring's resolve touches, recorded at the os layer."""
+        import builtins
+        seen, saved = [], {}
+
+        def recording(name, original):
+            def call(path, *args, **kwargs):
+                text = os.fsdecode(path) if isinstance(path, (str, bytes, os.PathLike)) else ''
+                if text.startswith('/home/pixelbuild'):
+                    seen.append((name, text))
+                return original(path, *args, **kwargs)
+            return call
+        for name in ('stat', 'lstat', 'scandir', 'listdir', 'access', 'readlink', 'open'):
+            saved[name] = getattr(os, name)
+            setattr(os, name, recording(name, saved[name]))
+        saved_open = builtins.open
+        builtins.open = recording('builtins.open', saved_open)
+        try:
+            wiring.resolve(stage)
+        finally:
+            for name, original in saved.items():
+                setattr(os, name, original)
+            builtins.open = saved_open
+        return seen
+
+    def test_git_inspect_set_resolution_touches_no_host_path(self):
+        self.assertEqual(self.touched('git-inspect-set'), [])
+        # the recorder does see host probes: the other routes keep the probing recipe load
+        self.assertTrue(self.touched('git-inspect'))
+
+    def test_existing_routes_are_unchanged(self):
+        self.assertEqual(wiring.resolve('inspect', run_id='5', attempt='1')[1:], (960, 20))
+        for stage, bounds in (('source', (7500, 136)), ('download', (3900, 76)), ('vendor', (11100, 196)), ('lunch', (2100, 46))):
+            tail, outer, minutes = wiring.resolve(stage)
+            self.assertEqual((outer, minutes), bounds, stage)
+            self.assertEqual(tail[:2], ['--stage', stage])
+        self.assertIn('git-inspection.json', step(jobs()['blazer-prep'], 'Allowlisted JSON receipts only'))
+        self.assertIn('git-target-set-inspection.json', step(jobs()['blazer-prep'], 'Allowlisted JSON receipts only'))
 
 
 class Job(unittest.TestCase):
@@ -355,19 +532,19 @@ class Ownership(unittest.TestCase):
     """The controller and cleanup commands as written in the workflow, run against the fake builder adapter."""
     def commands(self):
         controller, cleanup = jobs()['controller'], jobs()['cleanup']
-        start = re.search(r"(?m)^      - if: inputs.mode == 'blazer-prep'\n        run: (.+)$", controller)[1]
-        record = re.search(r"(?m)^        if: always\(\) && inputs.mode == 'blazer-prep'\n        run: (.+)$", controller)[1]
-        stop = re.search(r"(?m)^      - if: inputs.mode == 'blazer-prep'\n        env:\n          STARTED: \$\{\{ needs.controller"
+        start = re.search(r"(?m)^      - if: inputs.mode == 'blazer-prep' \|\| inputs.mode == 'rango-factory-package' \|\| inputs.mode == 'rango-factory-inspect' \|\| inputs.mode == 'launcher3-compile'\n        run: (.+)$", controller)[1]
+        record = re.search(r"(?m)^        if: always\(\) && \(inputs.mode == 'blazer-prep' \|\| inputs.mode == 'rango-factory-package' \|\| inputs.mode == 'rango-factory-inspect' \|\| inputs.mode == 'launcher3-compile'\)\n        run: (.+)$", controller)[1]
+        stop = re.search(r"(?m)^      - if: inputs.mode == 'blazer-prep' \|\| inputs.mode == 'rango-factory-package' \|\| inputs.mode == 'rango-factory-inspect' \|\| inputs.mode == 'launcher3-compile'\n        env:\n          STARTED: \$\{\{ needs.controller"
                          r".outputs.started \}\}\n        run: (.+)$", cleanup)[1]
         return start, record, stop
 
     def test_workflow_routes_only_blazer_prep_through_ownership(self):
         controller, cleanup = jobs()['controller'], jobs()['cleanup']
         self.assertIn("    outputs:\n      started: ${{ steps.ownership.outputs.started }}\n", controller)
-        self.assertIn("      - if: inputs.mode != 'blazer-prep'\n        run: python3 scripts/release-pipeline.py start-builder\n", controller)
-        self.assertIn("      - if: inputs.mode != 'blazer-prep'\n        run: python3 scripts/release-pipeline.py stop-builder\n", cleanup)
+        self.assertIn("      - if: inputs.mode != 'blazer-prep' && inputs.mode != 'rango-factory-package' && inputs.mode != 'rango-factory-inspect' && inputs.mode != 'launcher3-compile'\n        run: python3 scripts/release-pipeline.py start-builder\n", controller)
+        self.assertIn("      - if: inputs.mode != 'blazer-prep' && inputs.mode != 'rango-factory-package' && inputs.mode != 'rango-factory-inspect' && inputs.mode != 'launcher3-compile'\n        run: python3 scripts/release-pipeline.py stop-builder\n", cleanup)
         self.assertEqual(len(re.findall(r'release-pipeline.py (?:start|stop)-builder', controller + cleanup)), 4)
-        self.assertIn('rango-factory-observe, blazer-prep, app-builder', re.search(r'(?m)^    needs: (.+)$', cleanup)[1])
+        self.assertIn('rango-factory-observe, blazer-prep, rango-factory-package, rango-factory-inspect, launcher3-compile, app-builder', re.search(r'(?m)^    needs: (.+)$', cleanup)[1])
         self.assertIn("    if: always() && needs.controller.result != 'skipped'\n", cleanup)
         start, record, stop = self.commands()
         self.assertEqual(start, 'python3 scripts/release-pipeline.py start-builder --ownership-record "$RUNNER_TEMP/builder-ownership.json"')

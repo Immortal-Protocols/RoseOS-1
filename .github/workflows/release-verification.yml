@@ -15,6 +15,19 @@ on:
       - 'scripts/blazer-build-only.py'
       - 'os/build-only/**'
       - 'scripts/tests/test_blazer_prep_workflow.py'
+      - 'scripts/rango-factory-package-wiring.py'
+      - 'scripts/host-factory-package.py'
+      - 'scripts/factory-package.py'
+      - 'scripts/tests/test_rango_factory_package_workflow.py'
+      - 'scripts/rango-factory-inspect-wiring.py'
+      - 'scripts/rango-firmware-observe.py'
+      - 'scripts/tests/test_rango_factory_inspect_workflow.py'
+      - 'scripts/launcher3-compile.py'
+      - 'scripts/launcher3-compile-contract.py'
+      - 'os/compile-contracts/**'
+      - 'os/build-only/launcher3-compile-host.json'
+      - 'scripts/tests/test_launcher3_compile.py'
+      - 'scripts/tests/test_launcher3_compile_workflow.py'
       - 'scripts/agent-beta-auto.py'
       - 'scripts/tests/test_agent_beta_auto.py'
       - '.github/workflows/agent-beta-auto.yml'
@@ -130,6 +143,19 @@ on:
       - 'scripts/blazer-build-only.py'
       - 'os/build-only/**'
       - 'scripts/tests/test_blazer_prep_workflow.py'
+      - 'scripts/rango-factory-package-wiring.py'
+      - 'scripts/host-factory-package.py'
+      - 'scripts/factory-package.py'
+      - 'scripts/tests/test_rango_factory_package_workflow.py'
+      - 'scripts/rango-factory-inspect-wiring.py'
+      - 'scripts/rango-firmware-observe.py'
+      - 'scripts/tests/test_rango_factory_inspect_workflow.py'
+      - 'scripts/launcher3-compile.py'
+      - 'scripts/launcher3-compile-contract.py'
+      - 'os/compile-contracts/**'
+      - 'os/build-only/launcher3-compile-host.json'
+      - 'scripts/tests/test_launcher3_compile.py'
+      - 'scripts/tests/test_launcher3_compile_workflow.py'
       - 'scripts/agent-beta-auto.py'
       - 'scripts/tests/test_agent_beta_auto.py'
       - '.github/workflows/agent-beta-auto.yml'
@@ -266,6 +292,9 @@ jobs:
           python3 scripts/tests/test_release_chain.py
           python3 scripts/tests/test_rango_factory_observe_workflow.py
           python3 scripts/tests/test_blazer_prep_workflow.py
+          python3 scripts/tests/test_rango_factory_package_workflow.py
+          python3 scripts/tests/test_rango_factory_inspect_workflow.py
+          python3 scripts/tests/test_launcher3_compile.py
           python3 scripts/tests/test_agent_beta_auto.py
           python3 scripts/tests/test_release_transport.py
           python3 scripts/tests/test_release_acceptance.py

@@ -50,20 +50,26 @@
   }
 
   // ---------- Home pages ----------
+  let homeBuilt = false;
   function buildHome() {
+    homeBuilt = true;
     const track = $('home-track'), dots = $('page-dots');
     track.replaceChildren(); dots.replaceChildren();
-    M.HOME_PAGES.forEach((apps, i) => {
+    const ox = device.dataset.theme === 'oxblood';
+    const pages = ox ? M.HOME_PAGES_OXBLOOD : M.HOME_PAGES;
+    pages.forEach((apps, i) => {
       const page = document.createElement('div');
       page.className = 'home-page ' + (i === 0 ? 'sparse' : i === 1 ? 'full' : 'few');
       page.setAttribute('role', 'group'); page.setAttribute('aria-roledescription', 'page');
-      page.setAttribute('aria-label', 'Page ' + (i + 1) + ' of ' + M.HOME_PAGES.length);
-      if (i === 0) page.innerHTML = '<div class="home-date">Thursday, October 29</div>';
+      page.setAttribute('aria-label', 'Page ' + (i + 1) + ' of ' + pages.length);
+      if (i === 0) page.innerHTML = '<div class="home-date">' + (ox ? 'Thu, Oct 29' : 'Thursday, October 29') + '</div>';
       const grid = document.createElement('div'); grid.className = 'app-grid';
       for (const id of apps) {
         const b = document.createElement('button');
         b.className = 'app'; b.dataset.app = id; b.setAttribute('aria-label', 'Open ' + M.APPS[id].name);
-        b.innerHTML = '<span class="tile">' + I.appArt(id) + '</span><span class="label" aria-hidden="true">' + M.APPS[id].name + '</span>';
+        const mono = ox && M.MONO_APPS.includes(id);
+        if (mono) b.classList.add('mono-app');
+        b.innerHTML = '<span class="tile">' + I.appArt(id, mono ? 'mono' : '') + '</span><span class="label" aria-hidden="true">' + M.APPS[id].name + '</span>';
         grid.appendChild(b);
       }
       page.appendChild(grid); track.appendChild(page);
@@ -85,7 +91,7 @@
       const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
       if (!drag.moved && Math.abs(dx) > 8 && Math.abs(dx) > Math.abs(dy)) { drag.moved = true; pages.setPointerCapture(drag.id); track.classList.add('dragging'); }
       if (drag.moved) {
-        const max = M.HOME_PAGES.length - 1, p = state.homePage;
+        const max = $('home-track').children.length - 1, p = state.homePage;
         const resist = (p === 0 && dx > 0) || (p === max && dx < 0) ? 0.3 : 1;
         track.style.transform = 'translateX(' + (-p * drag.w + dx * resist) + 'px)';
       }
@@ -97,7 +103,7 @@
       if (moved) {
         suppressClick = true;
         const next = Math.abs(dx) > w * 0.18 ? state.homePage + (dx < 0 ? 1 : -1) : state.homePage;
-        dispatch({ type: 'homePage', value: next });
+        dispatch({ type: 'homePage', value: next, max: $('home-track').children.length });
         render();
       }
     };
@@ -107,7 +113,7 @@
     pages.addEventListener('dragstart', (e) => e.preventDefault());
     pages.addEventListener('keydown', (e) => {
       if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;
-      e.preventDefault(); dispatch({ type: 'homePage', value: state.homePage + (e.key === 'ArrowRight' ? 1 : -1) });
+      e.preventDefault(); dispatch({ type: 'homePage', value: state.homePage + (e.key === 'ArrowRight' ? 1 : -1), max: $('home-track').children.length });
       const first = $('home-track').children[state.homePage].querySelector('.app'); if (first) first.focus({ preventScroll: true });
     });
   }
@@ -220,7 +226,7 @@
   }
   function defaultFocus(view) {
     if (view === 'home') return $('tray-rose');
-    if (view === 'rose') return !$('rose-mic').disabled ? $('rose-mic') : $('rose-end').disabled ? $('rose-agents') : $('rose-end');
+    if (view === 'rose') return device.dataset.theme === 'oxblood' ? $('rose-conn') : !$('rose-mic').disabled ? $('rose-mic') : $('rose-end').disabled ? $('rose-agents') : $('rose-end');
     if (view === 'switcher') return $('sw-human');
     if (view === 'agents') return viewEl('agents').querySelector('[data-open-window]') || $('ag-back');
     return viewEl(view).querySelector('.back-btn');
@@ -285,6 +291,7 @@
 
   // ---------- Render ----------
   let wasLocked = false;
+  let peek = false, peekDrag = null, suppressHomeTap = false;
   function render() {
     if (shownView !== state.view) rememberFocus(shownView);
     device.classList.toggle('unfolded', state.layout === 'unfolded');
@@ -295,9 +302,30 @@
     // Home
     $('home-track').style.transform = 'translateX(' + (-state.homePage * 100) + '%)';
     [...$('home-track').children].forEach((p, i) => { p.inert = i !== state.homePage; p.setAttribute('aria-hidden', String(i !== state.homePage)); });
-    [...$('page-dots').children].forEach((d, i) => d.setAttribute('aria-current', String(i === state.homePage)));
+    const oxDots = device.dataset.theme === 'oxblood';
+    [...$('page-dots').children].forEach((d, i) => { d.setAttribute('aria-current', String(i === state.homePage)); d.disabled = oxDots; d.tabIndex = oxDots ? -1 : 0; });
+    $('page-dots').setAttribute('aria-hidden', String(oxDots));
     const callLive = state.connection !== 'disconnected';
     $('tray-rose').setAttribute('aria-label', callLive ? 'Return to Rose call' : 'Open Rose');
+    // Universal microphone mute (Oxblood Home tray, study 09): stable name + aria-pressed.
+    const mb = $('tray-mic');
+    mb.innerHTML = state.muted ? I.UI.micOff : I.UI.mic;
+    mb.setAttribute('aria-pressed', String(state.muted));
+    mb.dataset.muted = String(state.muted);
+    mb.title = state.muted ? 'Microphone muted everywhere — tap to unmute' : 'Mute microphone everywhere';
+    // The raised edge mirrors Home's mic exactly.
+    const pm = $('peek-mic');
+    pm.innerHTML = mb.innerHTML; pm.setAttribute('aria-pressed', String(state.muted)); pm.dataset.muted = String(state.muted); pm.title = mb.title;
+    // Ruby pearl state (Oxblood): mic, connection and voice drive restrained CSS cues.
+    screen.dataset.mic = state.muted ? 'muted' : 'on';
+    screen.dataset.conn = state.connection;
+    screen.dataset.voice = M.voiceSurround(state);
+    // Rose's voice (output) mute: stable name + aria-pressed, icon and a visible "muted" mark.
+    const vb = $('tray-voice');
+    vb.innerHTML = (state.voiceMuted ? I.UI.voiceOff : I.UI.voice) + '<span class="voice-state" aria-hidden="true">' + (state.voiceMuted ? 'Muted' : '') + '</span>';
+    vb.setAttribute('aria-pressed', String(state.voiceMuted));
+    vb.dataset.voiceMuted = String(state.voiceMuted);
+    vb.title = state.voiceMuted ? "Rose's voice is muted — tap to unmute" : "Mute Rose's voice";
 
     // Rose
     const mic = $('rose-mic');
@@ -308,8 +336,18 @@
     mic.disabled = state.connection !== 'connected';
     $('rose-end').innerHTML = '<span class="end">' + I.UI.end + '</span>';
     $('rose-end').disabled = !callLive;
+    // Study 11: one connection control. Disconnect while connected/connecting, Connect otherwise.
+    const cb = $('rose-conn');
+    cb.dataset.live = String(callLive);
+    cb.querySelector('.conn-label').textContent = callLive ? 'Disconnect' : 'Connect';
+    cb.setAttribute('aria-label', callLive ? 'Disconnect from Rose' : 'Connect to Rose');
+    cb.querySelector('.conn-ico').innerHTML = callLive ? I.UI.end : '';
+    $('h-mic').setAttribute('aria-pressed', String(state.muted));
+    $('h-mic').textContent = state.muted ? 'Mic muted (universal)' : 'Mic (universal)';
     $('rose-agents').innerHTML = I.UI.grid;
-    const caption = state.connection === 'connecting' ? 'Connecting…' : state.connection === 'connected' ? (state.speaking ? 'Rose speaking' : state.muted ? 'Microphone muted' : 'Listening') : '';
+    // Background-work entry (Oxblood: upper right). Highlight only while a task is actually running.
+    $('rose-work').dataset.working = String(M.taskActivity(state).length > 0);
+    const caption = state.connection === 'connecting' ? 'Connecting…' : state.connection === 'connected' ? (state.speaking ? (state.voiceMuted ? 'Rose speaking · voice muted' : 'Rose speaking') : state.muted ? 'Microphone muted' : 'Listening') : device.dataset.theme === 'oxblood' ? 'Disconnected' : '';
     $('rose-caption').textContent = caption;
     renderResult();
     renderNotices();
@@ -336,6 +374,7 @@
     $('h-tasklist').innerHTML = Object.entries(state.tasks).map(([id, t]) => '<div><span>' + M.TASKS[id].title + '</span><span>' + t.state + (t.state === 'running' ? ' · ' + t.step + '/' + M.MAX_STEP : '') + '</span></div>').join('');
     if (window.RoseViews) window.RoseViews.render(state, ctx);
     fit();
+    if (peek && !peekable()) setPeek(false);
     if (pendingFocus) requestAnimationFrame(applyFocus);
     // Unlocking with a confirmation open returns focus to it.
     if (wasLocked && !state.locked && state.pendingStop) requestAnimationFrame(() => { const c = $('sheet-cancel'); if (c) c.focus({ preventScroll: true }); });
@@ -390,17 +429,104 @@
     const app = e.target.closest('.app[data-app]');
     if (app) { dispatch({ type: 'openApp', value: app.dataset.app }); return; }
     const dot = e.target.closest('#page-dots button');
-    if (dot) { dispatch({ type: 'homePage', value: +dot.dataset.page }); return; }
+    if (dot) { dispatch({ type: 'homePage', value: +dot.dataset.page, max: $('home-track').children.length }); return; }
   });
   $('tray-rose').addEventListener('click', () => dispatch({ type: 'openRose' }));
   $('tray-overview').addEventListener('click', () => dispatch({ type: 'switcher' }));
+  $('tray-mic').addEventListener('click', () => dispatch({ type: 'micMute' }));
+  $('tray-voice').addEventListener('click', () => {
+    dispatch({ type: 'voiceMute' });
+    // Screen-reader confirmation only; not a visual conversation cue.
+    $('announcer').textContent = state.voiceMuted ? "Rose's voice muted." : "Rose's voice on.";
+  });
   $('rose-mic').addEventListener('click', () => dispatch({ type: 'mute' }));
+  $('rose-conn').addEventListener('click', () => dispatch(state.connection === 'disconnected' ? { type: 'openRose' } : { type: 'endCall', stay: true }));
+  $('h-mic').addEventListener('click', () => dispatch({ type: 'micMute' }));
   $('rose-end').addEventListener('click', () => { dispatch({ type: 'endCall' }); if (state.view === 'home') $('tray-rose').focus({ preventScroll: true }); });
   $('rose-agents').addEventListener('click', () => dispatch({ type: 'agents' }));
-  $('home-bar').addEventListener('click', () => dispatch({ type: 'home' }));
+  $('rose-work').addEventListener('click', () => dispatch({ type: 'agents' }));
+  // ---------- Bottom-edge gestures (Oxblood) ----------
+  // Swipe up from the bottom edge in an app, a Rose app window, Rose or Rose's apps: the surface
+  // follows the finger, scrunches, and Home's own control edge rises. A short swipe leaves the edge
+  // up while the surface keeps working normally; a long swipe or a fling goes Home. Swipe down or
+  // press Escape to lower it; leaving for Home or the switcher lowers it too. In the switcher a bottom-edge swipe goes Home. Presentation only.
+  const PEEK_VIEWS = ['app', 'window', 'rose', 'agents'];
+  const peekable = () => device.dataset.theme === 'oxblood' && PEEK_VIEWS.includes(state.view) && !state.locked && !state.pendingStop;
+  let peekReturn = null, swallowClick = false;
+  // The click that ends a gesture must not also act on whatever is under the finger.
+  window.addEventListener('click', (e) => { if (swallowClick) { e.stopPropagation(); e.preventDefault(); swallowClick = false; } }, true);
+  const swallowNextClick = () => { swallowClick = true; setTimeout(() => { swallowClick = false; }, 0); };
+  function clearDragStyle() { screen.classList.remove('peek-drag'); screen.style.removeProperty('--pk'); }
+  function setPeek(on, opts) {
+    on = !!on && peekable();
+    if (on === peek) return;
+    peek = on;
+    clearDragStyle();
+    screen.classList.toggle('peek', peek);
+    $('peek-tray').hidden = !peek;
+    $('home-bar').setAttribute('aria-expanded', String(peek));
+    if (peek) {
+      peekReturn = document.activeElement && screen.contains(document.activeElement) ? document.activeElement : null;
+      $('peek-overview').innerHTML = $('tray-overview').querySelector('.stacks-glyph').outerHTML.replace('id="ruby-edge"', 'id="ruby-edge-peek"').replace('url(#ruby-edge)', 'url(#ruby-edge-peek)');
+      if (!(opts && opts.quiet)) $('peek-rose').focus({ preventScroll: true });
+    } else if (peekReturn && peekReturn.isConnected && !state.pendingStop && !(opts && opts.leaving)) {
+      peekReturn.focus({ preventScroll: true });
+    }
+    $('announcer').textContent = peek ? 'System controls shown. Swipe down to hide them.' : '';
+  }
+  function goHomeFromGesture() { setPeek(false, { leaving: true }); dispatch({ type: 'home' }); }
+  screen.addEventListener('pointerdown', (e) => {
+    if (device.dataset.theme !== 'oxblood' || (e.button && e.button !== 0)) return;
+    const r = screen.getBoundingClientRect(), k = r.height / screen.offsetHeight;
+    const fromEdge = (r.bottom - e.clientY) / k <= 56;
+    // With the edge up, only a drag that starts on the edge itself moves it; the app above scrolls and taps normally.
+    const onRaisedEdge = peek && (r.bottom - e.clientY) / k <= 104;
+    if (onRaisedEdge || (!peek && fromEdge && (peekable() || state.view === 'switcher'))) peekDrag = { y: e.clientY, t: performance.now(), k, wasPeek: peek, moved: false };
+  });
+  window.addEventListener('pointermove', (e) => {
+    if (!peekDrag) return;
+    const dy = (e.clientY - peekDrag.y) / peekDrag.k;
+    if (Math.abs(dy) > 8) peekDrag.moved = true;
+    if (peekDrag.wasPeek || state.view === 'switcher' || reduced()) return;
+    // Follow the finger: 0 → 1 over the first 120px, then keep shrinking toward "release = Home".
+    const p = Math.max(0, -dy) / 120;
+    screen.classList.add('peek-drag');
+    screen.style.setProperty('--pk', Math.min(1, p).toFixed(3));
+    screen.style.setProperty('--pk2', Math.max(0, Math.min(1, (p - 1) / 1.2)).toFixed(3));
+  });
+  const endDrag = (e) => {
+    if (!peekDrag) return;
+    const d = peekDrag; peekDrag = null;
+    const dy = (e.clientY - d.y) / d.k, dt = Math.max(1, performance.now() - d.t), v = dy / dt;
+    const homeSwipe = dy < -240 || (dy < -120 && v < -0.9);
+    if (d.moved) swallowNextClick();
+    clearDragStyle();
+    if (state.view === 'switcher') { if (dy < -36) goHomeFromGesture(); return; }
+    if (!d.wasPeek) {
+      if (homeSwipe) goHomeFromGesture();
+      else if (dy < -36) setPeek(true);
+    } else {
+      if (dy > 36) setPeek(false);
+      else if (dy < -120) goHomeFromGesture();
+    }
+  };
+  window.addEventListener('pointerup', endDrag);
+  window.addEventListener('pointercancel', () => { peekDrag = null; clearDragStyle(); });
+  $('h-peek').onclick = () => setPeek(!peek);
+  $('peek-rose').addEventListener('click', () => { setPeek(false, { leaving: true }); dispatch({ type: 'openRose' }); });
+  $('peek-mic').addEventListener('click', () => dispatch({ type: 'micMute' }));
+  $('peek-overview').addEventListener('click', () => { setPeek(false, { leaving: true }); dispatch({ type: 'switcher' }); });
+  // The scrunched surface stays fully interactive while the edge is up (taps act normally).
+  $('home-bar').setAttribute('aria-keyshortcuts', 'ArrowUp');
+  $('home-bar').addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowUp' && peekable() && !peek) { e.preventDefault(); setPeek(true); }
+    else if (e.key === 'ArrowDown' && peek) { e.preventDefault(); setPeek(false); }
+  });
+  $('home-bar').addEventListener('click', () => { if (suppressHomeTap) { suppressHomeTap = false; return; } goHomeFromGesture(); });
   $('unlock').addEventListener('click', () => dispatch({ type: 'unlock' }));
   document.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape' || state.locked) return;
+    if (peek) { setPeek(false); return; }
     if (state.pendingStop) dispatch({ type: 'cancelStop' });
     else if (state.view !== 'home') dispatch({ type: 'back' });
   });
@@ -415,6 +541,30 @@
   $('h-tasks').onclick = () => { for (const id of Object.keys(M.TASKS)) dispatch({ type: 'startTask', id }); };
   $('h-attn').onclick = () => dispatch({ type: 'taskEvent', id: 'reply', value: 'attention' });
   $('h-done').onclick = () => { const id = Object.keys(state.tasks).find((k) => M.STOPPABLE.includes(state.tasks[k].state)); if (id) dispatch({ type: 'taskEvent', id, value: 'done' }); };
+  // Bottom-tray exploration: opt-in via ?tray=1…10 or the harness selector; default unchanged.
+  // Visual direction: Oxblood (Nathan, 2026-11-02) is the prototype default; ?theme=classic keeps the
+  // previous HiFi look, where the ten tray options (?tray=N) remain available unchanged.
+  const params = new URLSearchParams(location.search);
+  function setTheme(v) {
+    const t = v === 'classic' ? 'classic' : 'oxblood';
+    device.dataset.theme = t;
+    $('h-theme').value = t;
+    $('h-tray').disabled = t === 'oxblood';
+    if (t === 'oxblood') setTray('');
+    if (homeBuilt) { buildHome(); render(); }
+    renderer.refresh();
+  }
+  function setTray(v) {
+    let n = /^(10|[1-9])$/.test(String(v)) ? String(v) : '';
+    if (device.dataset.theme === 'oxblood') n = '';
+    if (n) screen.dataset.tray = n; else delete screen.dataset.tray;
+    $('h-tray').value = n;
+    renderer.refresh();
+  }
+  $('h-tray').onchange = (e) => setTray(e.target.value);
+  $('h-theme').onchange = (e) => setTheme(e.target.value);
+  setTheme(params.get('theme') || (params.get('tray') ? 'classic' : 'oxblood'));
+  setTray(params.get('tray'));
   $('h-reduced').checked = media.matches;
   $('h-reduced').onchange = (e) => { reducedOverride = e.target.checked; render(); };
   media.addEventListener('change', () => { $('h-reduced').checked = media.matches || reducedOverride; render(); });

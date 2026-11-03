@@ -152,8 +152,9 @@ test('Rose\'s apps shows exactly the apps currently under Rose\'s control, never
  const activity=source('RoseConversationActivity.java');
  const block=activity.slice(activity.indexOf('// ---------- Managed workspace overview'),activity.indexOf('/** Confirms Stop for the task shown now.'));
  assert.ok(block.length>500,'the overview section is found');
- assert.match(activity,/agents\.setOnClickListener\(v->openOverview\(\)\)/,'the well opens the overview');
- assert.match(activity,/overview=new WorkspaceOverviewPanel\(this,ivory\?new ConversationDrawing\.IvoryBackground\(this\):null,statusInset\(\)\)/);
+ // #410: the upper-right Background Work entry opens it (it was the third tray well).
+ assert.match(activity,/work\.setOnClickListener\(v->openOverview\(\)\)/,'the work entry opens the overview');
+ assert.match(activity,/overview=new WorkspaceOverviewPanel\(this,new OxbloodField\(OxbloodField\.ROSE\),statusInset\(\)\)/);
  assert.match(activity,/public void onBackPressed\(\)\{if\(overview!=null&&overview\.isOpen\(\)\)\{overview\.close\(\);return;\}super\.onBackPressed\(\);\}/,'Back closes the overview first');
  // Membership: App Core's phone-local current_apps (PR355), one complete reply per read, shown only when attested.
  const read=block.slice(block.indexOf('CurrentApps.Snapshot readCurrentApps()'));
@@ -161,7 +162,13 @@ test('Rose\'s apps shows exactly the apps currently under Rose\'s control, never
  assert.match(read,/extras\.putString\("params","\{\}"\)/,'no parameters: no caller display or package override');
  assert.match(read,/return CurrentApps\.fromReply\(reg,/,'every reply goes through the attestation rules');
  assert.match(block,/String reg="current_apps-"\+\(\+\+appsReads\);/,'each read is its own registration (serial reads)');
- assert.match(block,/if\(epoch==appsEpoch\)appsSnapshot=s;/,'a read from before re-entry never lands');
+ assert.match(block,/if\(epoch==appsEpoch\)appsSnapshot=new AppsRead\(s,startedAt\);/,'a read from before re-entry never lands');
+ assert.match(block,/return r!=null&&CurrentApps\.current\(r\.at,resumedAt,SystemClock\.uptimeMillis\(\)\)\?r\.snapshot:CurrentApps\.EXPIRED;/,'only a current report is shown; otherwise the checking state, never a retired registration');
+ assert.doesNotMatch(activity,/unavailable\("pending"/,'no synthetic registration that would retire the controller\'s');
+ const reader=activity.slice(activity.indexOf('CurrentApps.Snapshot readCurrentApps()'),activity.indexOf(' static String jsonString('));
+ assert.doesNotMatch(reader,/Snapshot\.unavailable\(reg/,'the reader\'s own failures never become a registration');
+ assert.equal((reader.match(/CurrentApps\.readerFailure\(/g)||[]).length,3,'no provider, unreadable and failed reads are reader-local');
+ assert.match(reader,/o\.isNull\("instance"\)\?jsonString\(o,"controllerEpoch"\):o\.optString\("instance",null\)/,'a fallback reply keeps the controller\'s registration');
  assert.match(block,/void openOverview\(\)\{appsEpoch\+\+;appsSnapshot=null;appsPolledAt=0;/,'re-entry starts from a fresh read');
  assert.match(activity,/if\(overview!=null&&overview\.isOpen\(\)\)\{pollApps\(\);overview\.refresh\(\);\}/,'read only while the overview is open');
  assert.ok(!/WorkspaceOverviewFeed\.tasks\(\)/.test(block.slice(0,block.indexOf('WorkspaceOverviewPanel.Actions overviewActions()'))),'membership never reads task history');

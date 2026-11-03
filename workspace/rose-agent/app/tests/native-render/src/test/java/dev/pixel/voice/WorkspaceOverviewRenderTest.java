@@ -53,8 +53,9 @@ public class WorkspaceOverviewRenderTest {
         public void checkStops() { checks++; }
         void report(String reg, long gen, App... apps) { snapshot = new Snapshot(reg, gen, true, "", Arrays.asList(apps)); }
     }
-    static App app(String id, String pkg) { return new App(id, pkg, CurrentApps.STATE_RUNNING, null); }
-    static App viewable(String id, String pkg, String session, String task) { return new App(id, pkg, CurrentApps.STATE_RUNNING, new Preview(session, task)); }
+    // Synthetic members whose session is reported ready (authoritatively running), as the HiFi's running cards are.
+    static App app(String id, String pkg) { return new App(id, pkg, CurrentApps.STATE_RUNNING, null, "", null, "ready"); }
+    static App viewable(String id, String pkg, String session, String task) { return new App(id, pkg, CurrentApps.STATE_RUNNING, new Preview(session, task), "", null, "ready"); }
     static WorkspaceOverviewPanel panel(Host h) {
         WorkspaceOverviewPanel p = new WorkspaceOverviewPanel(RuntimeEnvironment.getApplication());
         p.bind(h, h); p.setIcons(pkg -> new ColorDrawable(0xffd97757)); p.setLabels(pkg -> CALC.equals(pkg) ? "Calculator" : MAPS.equals(pkg) ? "Maps" : "");
@@ -85,22 +86,23 @@ public class WorkspaceOverviewRenderTest {
     }
     static ImageView preview(View root) { View v = tagged(root, "preview"); return v instanceof ImageView ? (ImageView) v : null; }
 
-    /** Selected HiFi structure, current apps only: no heading, no push buttons, the three-well tray, 250dp cards in two columns. */
+    /** #410 Oxblood structure, current apps only: no heading, no push buttons, the pearl and Back to Rose at the top,
+     * 276dp cards in two columns 18dp apart, starting 100dp down, 24dp in. */
     @Test public void currentAppsInTheSelectedHiFi() throws Exception {
         Host h = new Host(); h.report("r1", 2, app("s1/calc", CALC), app("s2/maps", MAPS));
         WorkspaceOverviewPanel p = panel(h);
         assertFalse(texts(p).contains(WorkspaceOverview.TITLE));
         for (View v : all(p)) assertFalse("no Android push buttons", v instanceof Button);
-        View back = described(p, "Back"), mid = described(p, "End call"), self = described(p, "Rose’s apps, current screen");
-        assertNotNull(back); assertNotNull(mid); assertNotNull(self);
-        int[] b = at(back), m = at(mid), s = at(self);
-        assertTrue("three wells in one tray", b[1] == m[1] && m[1] == s[1] && b[0] < m[0] && m[0] < s[0]);
+        View back = described(p, "Back to Rose");
+        assertNotNull(back);
+        int[] b = at(back);
+        assertEquals("Back to Rose: 44dp, in the header row", dp(44), back.getHeight()); assertEquals(dp(40), b[1], 1);
         View calc = tagged(p, "app:s1/calc"), maps = tagged(p, "app:s2/maps");
         assertNotNull(calc); assertNotNull(maps);
-        assertEquals(dp(250), calc.getHeight()); assertEquals(calc.getWidth(), maps.getWidth(), 1);
+        assertEquals(dp(276), calc.getHeight()); assertEquals(calc.getWidth(), maps.getWidth(), 1);
         int[] a = at(calc), c = at(maps);
-        assertEquals("same row", a[1], c[1]); assertEquals("12dp gap", dp(12), c[0] - (a[0] + calc.getWidth()), 1);
-        assertEquals("24dp margin", dp(24), a[0], 1); assertEquals("64dp top", dp(64), a[1], 1);
+        assertEquals("same row", a[1], c[1]); assertEquals("18dp gap", dp(18), c[0] - (a[0] + calc.getWidth()), 1);
+        assertEquals("24dp margin", dp(24), a[0], 1); assertEquals("100dp top", dp(100), a[1], 1);
         List<String> t = texts(p);
         assertTrue("real app names", t.contains("Calculator") && t.contains("Maps"));
         assertEquals("no live view: said plainly on each card", 2, Collections.frequency(t, WorkspaceOverviewView.LIVE_UNAVAILABLE));
@@ -131,7 +133,7 @@ public class WorkspaceOverviewRenderTest {
         assertTrue("reconnect: unavailable until the new source reports", texts(p).contains(CurrentApps.text(CurrentApps.NOT_REPORTED)));
         h.report("r1", 7, app("s2/maps", MAPS)); p.refresh(); layout(p);
         assertTrue("a late report from the replaced source is ignored", taggedPrefix(p, "app:").isEmpty());
-        described(p, "Back").performClick(); p.open(); layout(p);
+        described(p, "Back to Rose").performClick(); p.open(); layout(p);
         assertTrue("re-entry shows the current report only", taggedPrefix(p, "app:").isEmpty());
         Host fresh = new Host(); fresh.report("r9", 1);
         WorkspaceOverviewPanel recreated = panel(fresh);
@@ -170,7 +172,7 @@ public class WorkspaceOverviewRenderTest {
         assertNull("stale frame", preview(ps));
         Host b = new Host(); b.report("r1", 2, viewable("s1/calc", CALC, "s-1", "rose-ws-1"));
         WorkspaceOverviewPanel pb = panel(b);
-        described(pb, "Back").performClick();
+        described(pb, "Back to Rose").performClick();
         pb.previewAnswer(b.previews.get(0), ok("s-1", "rose-ws-1", CALC, synthetic(320, 693)));
         for (int i = 0; i < 4; i++) pb.refresh();
         assertEquals("closed: no further requests", 1, b.previews.size());
@@ -196,10 +198,13 @@ public class WorkspaceOverviewRenderTest {
         assertEquals(Arrays.asList("watch:s1/calc:s-1"), h.calls);
         tagged(tagged(p, "app:s2/maps"), "stop-unavailable").performClick(); layout(p);
         assertTrue(texts(p).contains(WorkspaceOverviewView.STOP_APP_UNAVAILABLE));
-        described(p, "End call").performClick();
-        assertEquals("end", h.calls.get(h.calls.size() - 1));
-        h.live = false; p.refresh(); layout(p);
-        assertNotNull("not connected: the middle well opens Rose", described(p, "Open Rose"));
+        // Back to Rose only closes the panel; nothing is sent and the work is unchanged.
+        int before = h.calls.size();
+        View back = described(p, "Back to Rose"); assertNotNull(back); back.performClick();
+        assertFalse(p.isOpen()); assertEquals("Back sends nothing", before, h.calls.size());
+        Bitmap shot = draw(panel(h));
+        java.io.File out = new java.io.File(System.getProperty("render.out", "target/render")); out.mkdirs();
+        try (java.io.FileOutputStream o = new java.io.FileOutputStream(new java.io.File(out, "oxblood-background-work.png"))) { shot.compress(Bitmap.CompressFormat.PNG, 100, o); }
     }
 
     // ---------- Agreed two-app contract: snapshot membership, per-session bindings, Stop and live view ----------
@@ -240,6 +245,177 @@ public class WorkspaceOverviewRenderTest {
         tagged(p, "app:s-1/" + MAPS).performClick(); layout(p);
         assertTrue("no second-session view: said plainly", texts(p).contains(WorkspaceOverviewPanel.WATCH_APP_UNAVAILABLE));
         for (String call : h.calls) assertFalse("never a watch for a bound app", call.startsWith("watch:"));
+    }
+
+    /** #410 AppCore finding: the lit running edge is for authoritatively running sessions only (reported exactly ready).
+     * Starting, scheduled, consent-pending, cleanup-failed, unknown and unbound apps keep their card, a truthful visible
+     * state chip and their per-session Stop, with no edge. */
+    @Test public void runningEdgeOnlyForAuthoritativelyRunningSessions() throws Exception {
+        WorkspaceOverviewPanel.STOPS.clear();
+        String[][] cases = {{"ready", "Running"}, {"launching", "Starting"}, {"starting", "Starting"}, {"scheduled", "Starting"}, {"blocked", "Waiting"},
+            {"consent_required", "Waiting"}, {"cleanup_failed", "Still open"}, {"mystery", "Open"}};
+        for (String[] c : cases) {
+            Host h = new Host(); h.snapshot = twoApps(1, c[0]);
+            WorkspaceOverviewPanel p = panel(h);
+            View maps = tagged(p, "app:s-1/" + MAPS), calc = tagged(p, "app:s-0/" + CALC);
+            assertNotNull(c[0] + ": card kept", maps);
+            boolean lit = maps.getForeground() instanceof WorkspaceOverviewView.RunningEdge;
+            assertEquals(c[0] + ": edge only when ready", "ready".equals(c[0]), lit);
+            assertTrue(c[0] + ": the ready neighbour stays lit", calc.getForeground() instanceof WorkspaceOverviewView.RunningEdge);
+            if (!"ready".equals(c[0])) assertTrue(c[0] + ": chip says " + c[1] + " " + texts(maps), texts(maps).contains(c[1]));
+            else assertFalse("ready: the chip is hidden while it runs", texts(maps).contains("Running"));
+            assertTrue(c[0] + ": card announces its state", maps.getContentDescription().toString().contains(c[1]));
+            assertNotNull(c[0] + ": its own Stop is unchanged", tagged(maps, "stop"));
+        }
+        Host u = new Host();
+        u.snapshot = CurrentApps.fromBindings("r", "live", 3L, Arrays.asList(new CurrentApps.ReplyApp(CALC, false, false, null)), null, "e-1", true);
+        View unbound = tagged(panel(u), "app:owned/" + CALC);
+        assertFalse("unbound/lingering: no edge", unbound.getForeground() instanceof WorkspaceOverviewView.RunningEdge);
+        assertTrue("unbound/lingering: chip Open", texts(unbound).contains("Open"));
+        Host f = new Host(); f.snapshot = twoApps(1, "ready"); WorkspaceOverviewPanel pf = panel(f);
+        assertTrue(tagged(pf, "app:s-1/" + MAPS).getForeground() instanceof WorkspaceOverviewView.RunningEdge);
+        f.snapshot = twoApps(2, "cleanup_failed"); pf.refresh(); layout(pf);
+        assertFalse("ready -> cleanup_failed: the edge goes out on refresh", tagged(pf, "app:s-1/" + MAPS).getForeground() instanceof WorkspaceOverviewView.RunningEdge);
+        assertTrue(texts(tagged(pf, "app:s-1/" + MAPS)).contains("Still open"));
+    }
+
+    /** #410 Background Work retention: a report that is no longer current (CurrentApps.EXPIRED: nothing read since the
+     * screen resumed or the overview reopened, or the newest read too old) never keeps a lit card; the panel says Rose is
+     * checking, and the same controller's next current report brings its card back (its registration was not retired). */
+    @Test public void expiredReportShowsCheckingThenTheSameControllerReturns() throws Exception {
+        WorkspaceOverviewPanel.STOPS.clear();
+        Host h = new Host(); h.snapshot = twoApps(1, "ready");
+        WorkspaceOverviewPanel p = panel(h);
+        assertTrue("current: lit", tagged(p, "app:s-0/" + CALC).getForeground() instanceof WorkspaceOverviewView.RunningEdge);
+        h.snapshot = CurrentApps.EXPIRED; p.refresh(); layout(p);
+        assertNull("expired: no stale card", tagged(p, "app:s-0/" + CALC));
+        assertTrue("expired: the checking state", texts(p).contains(CurrentApps.text(CurrentApps.NOT_REPORTED)));
+        for (View v : all(p)) assertFalse("expired: no running edge anywhere", v.getForeground() instanceof WorkspaceOverviewView.RunningEdge);
+        h.snapshot = twoApps(1, "ready"); p.refresh(); layout(p);
+        assertNotNull("the same controller's next current report (same generation) is shown again", tagged(p, "app:s-0/" + CALC));
+        assertTrue(tagged(p, "app:s-0/" + CALC).getForeground() instanceof WorkspaceOverviewView.RunningEdge);
+        // Reopen: the overview starts from EXPIRED (no read yet), then the same registration's report shows.
+        p.close(); h.snapshot = CurrentApps.EXPIRED; p.open(); layout(p);
+        assertNull("reopened before a read: nothing stale", tagged(p, "app:s-0/" + CALC));
+        h.snapshot = twoApps(2, "ready"); p.refresh(); layout(p);
+        assertNotNull("reopened: the controller's report is shown, not refused as retired", tagged(p, "app:s-0/" + CALC));
+        // A session Stop in flight survives the expiry (Stops are kept by session, not by the shown report).
+        assertNotNull(tagged(p, "stop"));
+    }
+
+    // ---------- #410 gap closure: backdrop blur under the frosted overlays (identity chip, state chip, Stop plate) ----------
+    /** High-contrast vertical stripes, so a blur is measurable. */
+    static Bitmap stripes(int w, int h) {
+        Bitmap b = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888); Canvas c = new Canvas(b);
+        android.graphics.Paint p = new android.graphics.Paint();
+        for (int x = 0; x < w; x += 8) { p.setColor((x / 8) % 2 == 0 ? 0xff101010 : 0xfff0f0f0); c.drawRect(x, 0, x + 8, h, p); }
+        return b;
+    }
+    @org.junit.After public void restoreMotionAndBlur() throws Exception { HomeOxbloodRenderTest.durationScale(1f); WorkspaceOverviewView.overlayBlur = true; }
+    static WorkspaceOverviewView.BlurUnder under(View overlay) {
+        return (WorkspaceOverviewView.BlurUnder) ((android.graphics.drawable.LayerDrawable) overlay.getBackground()).getDrawable(0);
+    }
+    static WorkspaceOverviewPanel livePanel(Bitmap frame) {
+        Host h = new Host(); h.report("r1", 2, viewable("s1/calc", CALC, "s-1", "rose-ws-1"), app("s2/maps", MAPS));
+        WorkspaceOverviewPanel p = panel(h);
+        p.previewAnswer(h.previews.get(0), ok("s-1", "rose-ws-1", CALC, frame)); layout(p);
+        return p;
+    }
+    /** Luminance variance over a rect (screen px) of a bitmap, skipping a centred hole (the overlay's own mark). */
+    static double variance(Bitmap b, int l, int t, int r, int bt, int hole) {
+        double sum = 0, sq = 0; int n = 0; int cx = (l + r) / 2, cy = (t + bt) / 2;
+        for (int y = t; y < bt; y++) for (int x = l; x < r; x++) {
+            if (Math.abs(x - cx) < hole && Math.abs(y - cy) < hole) continue;
+            int c = b.getPixel(x, y); double v = .3 * ((c >> 16) & 255) + .59 * ((c >> 8) & 255) + .11 * (c & 255);
+            sum += v; sq += v * v; n++;
+        }
+        return n == 0 ? 0 : sq / n - (sum / n) * (sum / n);
+    }
+
+    @Test public void backdropBlurUnderTheOverlaysOnly() throws Exception {
+        WorkspaceOverviewPanel.STOPS.clear();
+        HomeOxbloodRenderTest.durationScale(0f); // the running edge and sheen rest at their static frame, so draws compare
+        WorkspaceOverviewPanel p = livePanel(stripes(320, 693));
+        View card = tagged(p, "app:s1/calc"), chip = tagged(card, "identity-chip"), stop = tagged(card, "stop-unavailable");
+        assertNotNull(chip); assertNotNull(stop);
+        assertNotNull("the chip's backdrop samples the card's own frame", under(chip).blur);
+        assertTrue(under(chip).blur.live() && under(stop).blur == under(chip).blur);
+        WorkspaceOverviewView.overlayBlur = false;
+        Bitmap before = draw(p);
+        WorkspaceOverviewView.overlayBlur = true;
+        Bitmap after = draw(p);
+        RosePresenceRenderTest.save(before, "background-work-overlays-before-blur");
+        RosePresenceRenderTest.save(after, "background-work-overlays-blur");
+        int[] c0 = at(chip), s0 = at(stop);
+        int d = Math.round(p.getResources().getDisplayMetrics().density);
+        android.graphics.Rect chipRect = new android.graphics.Rect(c0[0], c0[1], c0[0] + chip.getWidth(), c0[1] + chip.getHeight());
+        int in = 5 * d;
+        android.graphics.Rect plate = new android.graphics.Rect(s0[0] + in, s0[1] + in, s0[0] + stop.getWidth() - in, s0[1] + stop.getHeight() - in);
+        double chipBefore = variance(before, chipRect.left + 2, chipRect.top + 2, chipRect.right - 2, chipRect.bottom - 2, 13 * d);
+        double chipAfter = variance(after, chipRect.left + 2, chipRect.top + 2, chipRect.right - 2, chipRect.bottom - 2, 13 * d);
+        int ring = 3 * d; // inside the plate's 1.25dp ring and its rounded corners
+        double plateBefore = variance(before, plate.left + ring, plate.top + ring, plate.right - ring, plate.bottom - ring, 8 * d);
+        double plateAfter = variance(after, plate.left + ring, plate.top + ring, plate.right - ring, plate.bottom - ring, 8 * d);
+        assertTrue("the stripes are blurred under the identity chip: " + chipBefore + " -> " + chipAfter, chipAfter < chipBefore / 3);
+        assertTrue("and under the Stop plate: " + plateBefore + " -> " + plateAfter, plateAfter < plateBefore / 3);
+        int changedOutside = 0;
+        for (int y = 0; y < after.getHeight(); y++) for (int x = 0; x < after.getWidth(); x++) {
+            if (chipRect.contains(x, y) || plate.contains(x, y)) continue;
+            if (before.getPixel(x, y) != after.getPixel(x, y)) changedOutside++;
+        }
+        assertEquals("nothing outside the overlays' plates changes", 0, changedOutside);
+        // The Stop's red square and ring still draw on top of the blur.
+        int cx = s0[0] + stop.getWidth() / 2, cy = s0[1] + stop.getHeight() / 2;
+        assertEquals("the Stop's square draws over the blur, unchanged", before.getPixel(cx, cy), after.getPixel(cx, cy));
+    }
+
+    @Test public void noPreviewCardIsUnchangedByTheBlur() throws Exception {
+        WorkspaceOverviewPanel.STOPS.clear();
+        HomeOxbloodRenderTest.durationScale(0f); // the running edge and sheen rest at their static frame, so draws compare
+        Host h = new Host(); h.report("r1", 2, app("s2/maps", MAPS));
+        WorkspaceOverviewPanel p = panel(h);
+        View chip = tagged(tagged(p, "app:s2/maps"), "identity-chip");
+        assertNull("no preview: no blur source", under(chip).blur);
+        WorkspaceOverviewView.overlayBlur = false; Bitmap off = draw(p);
+        WorkspaceOverviewView.overlayBlur = true; Bitmap on = draw(p);
+        int minX = 99999, minY = 99999, maxX = -1, maxY = -1, n = 0;
+        for (int y = 0; y < on.getHeight(); y++) for (int x = 0; x < on.getWidth(); x++) if (off.getPixel(x, y) != on.getPixel(x, y)) { n++; minX = Math.min(minX, x); maxX = Math.max(maxX, x); minY = Math.min(minY, y); maxY = Math.max(maxY, y); }
+        int[] c0 = at(chip);
+        assertTrue("a card without a live frame is byte-identical (its flat body needs no blur): " + n + " px differ in [" + minX + "," + minY + "-" + maxX + "," + maxY + "], chip at " + c0[0] + "," + c0[1], off.sameAs(on));
+    }
+
+    @Test public void aNewFrameRebuildsTheBlurAndAMismatchFallsBack() throws Exception {
+        WorkspaceOverviewPanel.STOPS.clear();
+        HomeOxbloodRenderTest.durationScale(0f); // the running edge and sheen rest at their static frame, so draws compare
+        Host h = new Host(); h.report("r1", 2, viewable("s1/calc", CALC, "s-1", "rose-ws-1"));
+        WorkspaceOverviewPanel p = panel(h);
+        Bitmap first = stripes(320, 693);
+        p.previewAnswer(h.previews.get(0), ok("s-1", "rose-ws-1", CALC, first)); layout(p);
+        View chip = tagged(tagged(p, "app:s1/calc"), "identity-chip");
+        WorkspaceOverviewView.FrameBlur fb = under(chip).blur;
+        draw(p);
+        assertTrue("blurred copies built for the first frame", !fb.blurred.isEmpty());
+        // A newer verified frame for the same card: same FrameBlur, new source, old copies dropped, nothing recycled.
+        Bitmap second = synthetic(320, 693);
+        p.previewAnswer(nextRequest(p, h), ok("s-1", "rose-ws-1", CALC, second)); layout(p);
+        assertTrue("the blur follows the shown frame", under(tagged(tagged(p, "app:s1/calc"), "identity-chip")).blur.frame == second);
+        assertTrue("the frames themselves are never recycled", !first.isRecycled() && !second.isRecycled());
+        // A mismatch (the ImageView showing anything but the blur's source): no blur, the plain frosted fill.
+        WorkspaceOverviewView.FrameBlur now = under(tagged(tagged(p, "app:s1/calc"), "identity-chip")).blur;
+        now.img.setImageBitmap(stripes(320, 693));
+        assertTrue("not live", !now.live());
+        WorkspaceOverviewView.overlayBlur = true; Bitmap mismatch = draw(p);
+        WorkspaceOverviewView.overlayBlur = false; Bitmap plain = draw(p);
+        WorkspaceOverviewView.overlayBlur = true;
+        assertTrue("a mismatched frame draws exactly the fallback", mismatch.sameAs(plain));
+    }
+    /** The next preview request the panel makes for its live card (the gate asks again after its interval). */
+    static WorkspaceOverviewPreview.Request nextRequest(WorkspaceOverviewPanel p, Host h) {
+        int before = h.previews.size();
+        // The gate paces by the wall clock (WorkspaceOverviewPreview.INTERVAL_MS), so wait it out for real.
+        for (int i = 0; i < 30 && h.previews.size() == before; i++) { try { Thread.sleep(100); } catch (InterruptedException e) { throw new AssertionError(e); } p.refresh(); }
+        assertTrue("the gate asked again", h.previews.size() > before);
+        return h.previews.get(h.previews.size() - 1);
     }
 
     @Test public void lingeringAppsStayWithoutControls() throws Exception {
@@ -289,7 +465,7 @@ public class WorkspaceOverviewRenderTest {
         WorkspaceOverviewPanel p = panel(h);
         tagged(tagged(p, "app:s-0/" + CALC), "stop").performClick();
         tagged(tagged(p, "stop-sheet"), "sheet-stop").performClick(); layout(p);
-        described(p, "Back").performClick(); p.open(); layout(p);
+        described(p, "Back to Rose").performClick(); p.open(); layout(p);
         assertTrue("a pending Stop survives Back and re-entry", texts(tagged(p, "app:s-0/" + CALC)).contains(WorkspaceOverview.STOP_STOPPING));
         synchronized (WorkspaceOverviewPanel.STOPS) { for (CurrentApps.SessionStop st : WorkspaceOverviewPanel.STOPS.values()) st.tick(System.currentTimeMillis() + CurrentApps.SessionStop.TIMEOUT_MS); }
         p.refresh(); layout(p);

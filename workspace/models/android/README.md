@@ -24,7 +24,7 @@ The conversation, history, action validation, limits, fencing, Stop and backgrou
 | `DeviceAuth`, `KeystoreDeviceKey`, `ModelsService` | service-auth-v1 (`workspace/models/contracts/service-auth-v1.md`) against the fixed `https://models.a-list.com`: a hardware-attested Keystore P-256 key enrolls once with an admin invite, then each bearer (at most 1 h) is renewed by signing a fresh challenge. Bearer and invite stay in memory; prefs keep only the key id and state |
 | `InviteLink` | The admin QR: exactly `dev.pixel.models://enroll?invite=rgi1.<43 base64url>` (VIEW, cold start or `onNewIntent`), read once and cleared from the intent. No camera or storage permission: any scanner opens the link |
 | `Json` | A small JSON codec with no Android dependency |
-| `ModelsService.Model` | The only selectable models: `muse-glimmer` (default) and `rose-qwen` (Core's `serving/qwen-fp8.json` profile). The stored choice is an exact id; anything else means Muse. A reply from another model still fails with `model_identity_mismatch` |
+| `ModelsService.Model` | The only selectable models: `rose-qwen` (default since 0.4, Core's `serving/qwen-fp8.json` profile, so the demo needs no setting) and `muse-glimmer`. The stored choice is an exact id; anything else means Qwen. A reply from another model still fails with `model_identity_mismatch` |
 | `MainActivity` | Programmatic UI. No endpoint or free-form model setting: Settings shows the fixed service, switches between the two models (a new conversation; sign-in kept) and offers **Reset sign-in**; the Apps picker stays. Old endpoint/model prefs are removed on start; chat and app data are kept |
 
 ## Host duties (from the contract)
@@ -63,7 +63,7 @@ stops with the exact missing piece (exit 3). It links with 16 KiB page alignment
 `tests/check-native-lib.sh` verifies the result (AArch64, LOAD alignment, the three JNI exports).
 
 The APK is **unsigned**: not installable, not published. Infra owns the version and signing
-identity; `versionCode 3 / 0.3.0` upgrades signed v1/v2 in place. CI:
+identity; `versionCode 4 / 0.4.0` upgrades signed v1/v2 in place. CI:
 `.github/workflows/models-android.yml`.
 
 The native library is stored uncompressed and the APK is zip-aligned for 16 KiB pages. Without

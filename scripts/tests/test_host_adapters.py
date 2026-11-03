@@ -10,6 +10,7 @@ import os
 import re
 from pathlib import Path
 import shutil
+import struct
 import subprocess
 import sys
 import tarfile
@@ -18,6 +19,7 @@ import textwrap
 import threading
 import time
 import unittest
+from unittest import mock
 import zipfile
 
 SCRIPTS = Path(__file__).resolve().parents[1]
@@ -615,6 +617,471 @@ class SignFactoryTest(SignAdapterTest):
 # The OTA-only tests run once, in SignAdapterTest; SignFactoryTest reuses only its fixture.
 for _name in [n for n in vars(SignAdapterTest) if n.startswith('test_')]:
     setattr(SignFactoryTest, _name, None)
+
+# ---- FOLD-FACTORY-PACKAGE: packaging-only install archive from a retained signed target-files (mocked runner only)
+_spec = importlib.util.spec_from_file_location('host_factory_package', SCRIPTS/'host-factory-package.py')
+hfp = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(hfp)
+RELEASE_FIXTURE = SCRIPTS/'tests/fixtures/permission-apex/script/generate-release.sh'
+GENERATOR_FIXTURE = SCRIPTS/'tests/fixtures/factory-package/device_common-1f5ba267'
+
+
+def sha(data):
+    return hashlib.sha256(data).hexdigest()
+
+
+def synthetic_vbmeta(public, auth=64, aux=128, pk_offset=0, magic=b'AVB0', pk_size=None):
+    """An AVB vbmeta layout around PUBLIC (random bytes standing in for a public key; no key pair exists)."""
+    header = bytearray(256)
+    header[:4] = magic
+    header[12:28] = auth.to_bytes(8, 'big') + aux.to_bytes(8, 'big')
+    header[64:80] = pk_offset.to_bytes(8, 'big') + (len(public) if pk_size is None else pk_size).to_bytes(8, 'big')
+    aux_block = bytearray(aux)
+    aux_block[pk_offset:pk_offset + len(public)] = public[:max(0, aux - pk_offset)]
+    return bytes(header) + bytes(auth) + bytes(aux_block)
+
+
+def target_files_zip(members):
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, 'w') as z:
+        for name, data in members:
+            if isinstance(data, zipfile.ZipInfo):
+                z.writestr(data, b'x')
+            else:
+                z.writestr(name, data)
+    return buffer.getvalue()
+
+
+@contextlib.contextmanager
+def warnings_ignored():
+    import warnings
+    with warnings.catch_warnings():
+        warnings.simplefilter('ignore')
+        yield
+
+
+class FactoryPackageTest(unittest.TestCase):
+    """No bash, img_from_target_files, generator or fastboot runs: the runner is a mock that checks the derived script
+    and the work directory, then writes a stand-in install archive."""
+
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.root = Path(temp.name)
+        self.retained = self.root/'releases/2026103001'
+        (self.retained/'release-rango-2026103001').mkdir(parents=True)
+        self.tf = self.retained/'release-rango-2026103001/rango-target_files.zip'
+        self.public = os.urandom(64)
+        self.vbmeta = synthetic_vbmeta(self.public)
+        self.tf.write_bytes(target_files_zip([('META/misc_info.txt', b'ab_update=true\n'), ('IMAGES/vbmeta.img', self.vbmeta)]))
+        self.generator = {n: (GENERATOR_FIXTURE/n).read_bytes() for n in
+                          ('clear-factory-images-variables.sh', 'generate-factory-images-common.sh')}
+        self.otatools = self.retained/'rango-otatools.zip'
+        self.write_otatools()
+        self.out = self.root/'package-run-1'
+        self.before = {p: p.read_bytes() for p in (self.tf, self.otatools)}
+        self.listing = sorted(str(p) for p in self.retained.rglob('*'))
+        original = hfp.flavor_pins
+        hfp.flavor_pins = lambda device, root=hfp.ROOT: {'install': '{device}-install-{build}.zip',
+            'avb': sha(self.public), 'generator': {n: sha(b) for n, b in self.generator.items()}}
+        self.addCleanup(setattr, hfp, 'flavor_pins', original)
+        self.calls = []
+
+    def write_otatools(self, generator=None, extra=(), link=None):
+        with zipfile.ZipFile(self.otatools, 'w') as z:
+            for name, data in (generator or self.generator).items():
+                z.writestr(f'device/common/{name}', data)
+            z.writestr('bin/fastboot', b'synthetic fastboot stand-in, never executed')
+            for name, data in extra:
+                z.writestr(name, data)
+            if link:
+                info = zipfile.ZipInfo(link)
+                info.external_attr = (0o120777 << 16)
+                z.writestr(info, 'target')
+
+    def args(self, **change):
+        values = {'device': 'rango', 'build': '2026103001', 'target_files': str(self.tf),
+                  'target_files_sha256': sha(self.tf.read_bytes()), 'otatools': str(self.otatools),
+                  'otatools_sha256': sha(self.otatools.read_bytes()), 'release_script': str(RELEASE_FIXTURE),
+                  'release_script_sha256': sha(RELEASE_FIXTURE.read_bytes()),
+                  'fastboot_sha256': 'f18fdc8bf467c4bb361ffc62db5f50ca981aa5f37ffb6cb9fd4ac9ff3c4e47a9', 'out': str(self.out),
+                  'lock': str(self.root/'builder.lock')}
+        values.update(change)
+        return type('Args', (), values)
+
+    def runner(self, category='ok', produce=True, sig=False, mutate=False):
+        def run(script, cwd, log):
+            self.calls.append({'script': Path(script).read_text(), 'cwd': Path(cwd),
+                               'files': sorted(str(p.relative_to(cwd)) for p in Path(cwd).rglob('*') if p.is_file())})
+            if mutate:
+                self.tf.write_bytes(b'changed')
+            if produce:
+                (Path(cwd)/'rango-install-2026103001.zip').write_bytes(b'synthetic install archive')
+            if sig:
+                (Path(cwd)/'rango-install-2026103001.zip.sig').write_text('x')
+            return category, (0 if category == 'ok' else 1)
+        return run
+
+    def package(self, args=None, **kw):
+        return hfp.package(args or self.args(), runner=kw.pop('runner', self.runner()), free=kw.pop('free', lambda p: 200 << 30))
+
+    def assertRetained(self):
+        self.assertEqual({p: p.read_bytes() for p in (self.tf, self.otatools)}, self.before)
+        self.assertEqual(sorted(str(p) for p in self.retained.rglob('*')), self.listing)
+
+    def test_packages_into_a_fresh_root_and_never_touches_the_retained_release(self):
+        receipt = self.package()
+        self.assertRetained()
+        self.assertEqual(sorted(os.listdir(self.out)), ['avb_pkmd.bin', 'factory-package-receipt.json',
+                                                        'rango-install-2026103001.zip'])
+        self.assertEqual((self.out/'avb_pkmd.bin').read_bytes(), self.public)  # only the derived public bytes
+        call = self.calls[0]
+        self.assertEqual(call['script'], hfp._module('hs', SCRIPTS/'host-sign.py').derive_factory_only_script(
+            RELEASE_FIXTURE.read_text(), 'rango', '2026103001', self.out/'avb_pkmd.bin', self.args().fastboot_sha256))
+        self.assertEqual(receipt['inputs']['avbPkmd'], {'path': str(self.out/'avb_pkmd.bin'), 'sha256': sha(self.public),
+            'derivedFrom': {'member': 'IMAGES/vbmeta.img', 'memberSha256': sha(self.vbmeta), 'memberSize': len(self.vbmeta),
+                            'targetFiles': sha(self.tf.read_bytes())}})
+        self.assertIn('rango-target_files.zip', call['files'])  # a copy inside work/, not the retained path
+        self.assertIn('device/common/generate-factory-images-common.sh', call['files'])
+        self.assertEqual(call['cwd'], self.out/'work')
+        self.assertEqual((receipt['status'], receipt['output']['sha256'], receipt['signature'], receipt['workRemoved']),
+                         ('packaged', sha(b'synthetic install archive'), None, True))
+        self.assertEqual(json.loads((self.out/'factory-package-receipt.json').read_text())['status'], 'packaged')
+
+    def test_wrong_inputs_or_hashes_refuse_before_any_output(self):
+        for change, pattern in (({'target_files_sha256': '0' * 64}, 'hash_mismatch: target-files'),
+                                ({'otatools_sha256': '0' * 64}, 'hash_mismatch: otatools'),
+                                ({'release_script_sha256': '0' * 64}, 'hash_mismatch: release script'),
+                                ({'fastboot_sha256': 'x'}, 'usage_refused'),
+                                ({'target_files': 'relative.zip'}, 'input_refused'),
+                                ({'target_files': str(self.root/'missing.zip')}, 'input_missing')):
+            with self.subTest(change), self.assertRaisesRegex(hfp.Refused, pattern):
+                self.package(self.args(**change))
+            self.assertFalse(self.out.exists())
+        link = self.root/'tf-link.zip'
+        link.symlink_to(self.tf)
+        with self.assertRaisesRegex(hfp.Refused, 'input_missing'):
+            self.package(self.args(target_files=str(link)))
+        self.assertEqual(self.calls, [])
+        self.assertRetained()
+
+    def test_held_shared_lock_refuses_before_anything_is_written(self):
+        import fcntl
+        holder = os.open(self.root/'builder.lock', os.O_RDWR | os.O_CREAT, 0o644)
+        self.addCleanup(os.close, holder)
+        fcntl.flock(holder, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        with self.assertRaisesRegex(hfp.Refused, 'lock_held'):
+            self.package()
+        self.assertFalse(self.out.exists())
+        self.assertEqual(self.calls, [])
+        with self.assertRaisesRegex(hfp.Refused, 'usage_refused: --lock'):
+            self.package(self.args(lock='relative.lock'))
+        self.assertRetained()
+
+    def test_receipt_records_measured_phase_timings(self):
+        timings = self.package()['timings']
+        self.assertEqual(sorted(timings), ['generateSeconds', 'recheckSeconds', 'stageSeconds', 'verifySeconds'])
+        self.assertTrue(all(isinstance(v, float) and v >= 0 for v in timings.values()))
+
+    def tf_with(self, members):
+        self.tf.write_bytes(target_files_zip(members))
+        return self.args(target_files_sha256=sha(self.tf.read_bytes()))
+
+    def test_public_avb_key_comes_only_from_the_pinned_target_files_vbmeta(self):
+        link = zipfile.ZipInfo('IMAGES/vbmeta.img')
+        link.external_attr = 0o120777 << 16
+        cases = (
+            ('wrong public key', [('IMAGES/vbmeta.img', synthetic_vbmeta(os.urandom(64)))], 'avb_mismatch'),
+            ('missing member', [('META/misc_info.txt', b'x')], 'vbmeta_missing'),
+            ('duplicate member', [('IMAGES/vbmeta.img', self.vbmeta), ('IMAGES/vbmeta.img', self.vbmeta)], 'vbmeta_missing'),
+            ('link member', [('IMAGES/vbmeta.img', link)], 'is not a regular member'),
+            ('oversized member', [('IMAGES/vbmeta.img', self.vbmeta + bytes(1 << 20))], 'exceeds'),
+            ('not AVB', [('IMAGES/vbmeta.img', synthetic_vbmeta(self.public, magic=b'XXXX'))], 'not an AVB vbmeta'),
+            ('short image', [('IMAGES/vbmeta.img', self.vbmeta[:200])], 'not an AVB vbmeta'),
+            ('blocks beyond image', [('IMAGES/vbmeta.img', synthetic_vbmeta(self.public)[:300])], 'block sizes exceed'),
+            ('key outside aux', [('IMAGES/vbmeta.img', synthetic_vbmeta(self.public, pk_offset=96))], 'outside the auxiliary'),
+            ('zero-size key', [('IMAGES/vbmeta.img', synthetic_vbmeta(self.public, pk_size=0))], 'outside the auxiliary'),
+            ('unsafe name', [('IMAGES/vbmeta.img', self.vbmeta), ('../escape', b'x')], 'target_files_unsafe'),
+            ('absolute name', [('IMAGES/vbmeta.img', self.vbmeta), ('/abs', b'x')], 'target_files_unsafe'),
+        )
+        for name, members, pattern in cases:
+            with self.subTest(name), warnings_ignored():
+                args = self.tf_with(members)
+                with self.assertRaisesRegex(hfp.Refused, pattern):
+                    self.package(args)
+                self.assertFalse(self.out.exists(), 'refused before NEW_ROOT exists')
+        self.tf.write_bytes(b'not a zip')
+        with self.assertRaisesRegex(hfp.Refused, 'target_files_invalid'):
+            self.package(self.args(target_files_sha256=sha(b'not a zip')))
+        with self.assertRaisesRegex(hfp.Refused, 'hash_mismatch: target-files'):
+            self.package(self.args(target_files_sha256='0' * 64))  # the vbmeta is never read from an unpinned file
+        self.assertEqual(self.calls, [])
+
+    def test_extraction_matches_the_existing_signing_layout(self):
+        spec = importlib.util.spec_from_file_location('signing_job_for_layout', SCRIPTS/'signing-job.py')
+        job = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(job)
+        for vbmeta in (self.vbmeta, synthetic_vbmeta(os.urandom(520), auth=576, aux=1088, pk_offset=64)):
+            self.assertEqual(hfp.avb_public_key(vbmeta), job.avb_public_key(vbmeta))
+
+    def test_output_collisions_and_capacity_refuse(self):
+        self.out.mkdir()
+        (self.out/'keep').write_text('mine')
+        with self.assertRaisesRegex(hfp.Refused, 'output_exists'):
+            self.package()
+        self.assertEqual((self.out/'keep').read_text(), 'mine')
+        inside = self.retained/'release-rango-2026103001/new-run'
+        with self.assertRaisesRegex(hfp.Refused, 'inside the directory of rango-target_files.zip'):
+            self.package(self.args(out=str(inside)))
+        with self.assertRaisesRegex(hfp.Refused, 'capacity_unavailable'):
+            self.package(self.args(out=str(self.root/'run-2')), free=lambda p: (128 << 30) - 1)
+        self.assertFalse((self.root/'run-2').exists())
+        self.assertRetained()
+
+    def test_generator_and_otatools_must_be_the_pinned_plain_files(self):
+        changed = dict(self.generator, **{'generate-factory-images-common.sh': self.generator['generate-factory-images-common.sh'] + b'\n# drift\n'})
+        for n, (kw, pattern) in enumerate((({'generator': changed}, 'generator_mismatch'),
+                                           ({'extra': [('../escape', b'x')]}, 'otatools_unsafe'),
+                                           ({'link': 'lib64/liblink.so'}, 'otatools_unsafe'))):
+            with self.subTest(n):
+                self.write_otatools(**kw)
+                out = self.root/f'run-unsafe-{n}'
+                with self.assertRaisesRegex(hfp.Refused, pattern):
+                    self.package(self.args(otatools_sha256=sha(self.otatools.read_bytes()), out=str(out)))
+                receipt = json.loads((out/'factory-package-receipt.json').read_text())
+                self.assertEqual((receipt['status'], receipt['workRemoved']), ('failed', True))
+                self.assertEqual(sorted(os.listdir(out)), ['avb_pkmd.bin', 'factory-package-receipt.json'])
+        self.assertEqual(self.calls, [])
+
+    def test_failed_generation_maps_nothing_and_cleans_up(self):
+        for n, (runner, pattern) in enumerate(((self.runner('timeout'), 'ended timeout'),
+                                               (self.runner('nonzero_exit'), 'ended nonzero_exit'),
+                                               (self.runner('log_overflow'), 'ended log_overflow'),
+                                               (self.runner(produce=False), 'output_missing'),
+                                               (self.runner(sig=True), 'output_unexpected'),
+                                               (self.runner(mutate=True), 'input_changed'))):
+            with self.subTest(pattern):
+                out = self.root/f'fail-{n}'
+                with self.assertRaisesRegex(hfp.Refused, pattern):
+                    self.package(self.args(out=str(out)), runner=runner)
+                self.assertEqual(sorted(os.listdir(out)), ['avb_pkmd.bin', 'factory-package-receipt.json'])
+                self.assertEqual(json.loads((out/'factory-package-receipt.json').read_text())['status'], 'failed')
+                if pattern != 'input_changed':
+                    self.assertRetained()
+
+    def test_factory_only_script_keeps_exactly_the_variables_and_the_tail(self):
+        derive = hfp._module('hs', SCRIPTS/'host-sign.py').derive_factory_only_script
+        original = RELEASE_FIXTURE.read_text()
+        script = derive(original, 'rango', '2026103001', '/srv/public/avb_pkmd.bin', '1' * 64)
+        for kept in ('source device/common/clear-factory-images-variables.sh', 'BOOTLOADER=$(get_radio_image bootloader)',
+                     'AVB_PKMD=/srv/public/avb_pkmd.bin', 'img_from_target_files $TARGET_FILES $DEVICE-img-$BUILD_NUMBER.zip',
+                     'source device/common/generate-factory-images-common.sh', 'MAX_DOWNLOAD_SIZE=0x10000000',
+                     "printf '%s  bin/fastboot\\n' " + '1' * 64 + ' | sha256sum --check --status',
+                     'bin/fastboot -S $MAX_DOWNLOAD_SIZE optimize-factory-image'):
+            self.assertIn(kept, script)
+        for dropped in ('KEY_DIR', 'decrypt-keys', 'sign_target_files_apks', 'ota_from_target_files', 'ssh-keygen',
+                        'generate-metadata', 'rm -rf $RELEASE_OUT'):
+            self.assertNotIn(dropped, script)
+        self.assertTrue(script.endswith('optimize-factory-image $DEVICE-factory-$BUILD_NUMBER.zip $DEVICE-install-$BUILD_NUMBER\n'))
+        for name, text in (('no AVB_PKMD', original.replace('AVB_PKMD="$KEY_DIR/avb_pkmd.bin"\n', '')),
+                           ('two img', original.replace('img_from_target_files $TARGET_FILES', 'img_from_target_files $TARGET_FILES $DEVICE-img-$BUILD_NUMBER.zip\nimg_from_target_files $TARGET_FILES', 1)),
+                           ('no signing anchor', original.replace('sign_target_files_apks ', 'signed_elsewhere ')),
+                           ('key in variables', original.replace('AVB_ALGORITHM=SHA256_RSA4096', 'AVB_ALGORITHM=SHA256_RSA4096 # $KEY_DIR'))):
+            with self.subTest(name), self.assertRaises(host_sign.AdapterFailed):
+                derive(text, 'rango', '2026103001', '/srv/public/avb_pkmd.bin', '1' * 64)
+        with self.assertRaises(host_sign.AdapterFailed):
+            derive(original, 'rango', '2026103001', 'relative/avb_pkmd.bin', '1' * 64)
+
+    def test_run_script_bounds_and_group_cleanup(self):
+        class Proc:
+            def __init__(self, data, exits):
+                r, w = os.pipe()
+                self.stdout, self.pid, self.returncode, self.exits = os.fdopen(r, 'rb'), 4242, None, exits
+                os.write(w, data)
+                if exits:
+                    os.close(w)
+                else:
+                    self.w = w
+
+            def poll(self):
+                return 0 if self.exits else None
+
+            def wait(self, timeout=None):
+                if hasattr(self, 'w'):
+                    os.close(self.w)
+                    del self.w
+                self.returncode = 0 if self.exits else -9
+                return self.returncode
+        log = self.root/'run.log'
+        for proc, clock, expected in ((Proc(b'ok\n', True), None, 'ok'), (Proc(b'', False), iter([0, 0] + [10 ** 6] * 9), 'timeout')):
+            kills = []
+            with mock.patch.object(hfp.os, 'killpg', lambda pid, sig: kills.append(sig)):
+                kw = {'clock': (lambda c=clock: next(c))} if clock else {}
+                category, _ = hfp.run_script(self.root/'s.sh', self.root, log, popen=lambda argv, **k: proc, **kw)
+            self.assertEqual(category, expected)
+            self.assertEqual(kills, [hfp.signal.SIGTERM, hfp.signal.SIGKILL])
+        with mock.patch.dict(hfp.LIMITS, {'logBytes': 10}), mock.patch.object(hfp.os, 'killpg', lambda pid, sig: None):
+            category, _ = hfp.run_script(self.root/'s.sh', self.root, log, popen=lambda argv, **k: Proc(b'x' * 100, False))
+        self.assertEqual(category, 'log_overflow')
+
+
+# ---- FOLD-FIRMWARE-OBSERVE: FBPK firmware-carried partition observation (synthetic containers, no real firmware)
+_spec = importlib.util.spec_from_file_location('rango_firmware_observe', SCRIPTS/'rango-firmware-observe.py')
+rfo = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(rfo)
+FBPK_FIXTURE = SCRIPTS/'tests/fixtures/fbpack-adevtool-17df3b79'
+
+
+def fbpk_v2(entries, platform=b'synthetic', pack=b'synthetic-1', header=112, entry_size=104, total=None, version=2):
+    """entries: (type, name, payload, product, slotted) or with an explicit (offset, size) as the 6th item."""
+    table_end = 112 + len(entries) * 104
+    body, rows, cursor = b'', [], table_end
+    for entry in entries:
+        kind, name, payload, product, slotted = entry[:5]
+        offset, size = entry[5] if len(entry) > 5 else (cursor, len(payload))
+        if len(entry) <= 5:
+            body += payload
+            cursor += len(payload)
+        rows.append(struct.pack('<I36s40sQQII', kind, name.encode(), product.encode(), offset, size, slotted, 0))
+    data_len = table_end + len(body)
+    head = b'FBPK' + struct.pack('<III16s64sIIII', version, header, entry_size, platform, pack, 0, 0, len(entries),
+                                 data_len if total is None else total)
+    return head + b''.join(rows) + body
+
+
+def fbpk_v1(entries, unknown=0, cut_chain=False):
+    blob, at = b'', 84
+    parts = []
+    for i, (kind, name, payload) in enumerate(entries):
+        start = at + 56
+        following = start + len(payload) if not (cut_chain and i == 0) else 10 ** 9
+        parts.append(struct.pack('<I32sIIIII', kind, name.encode(), unknown, len(payload), 0, following, 0) + payload)
+        at = start + len(payload)
+    body = b''.join(parts)
+    return b'FBPK' + struct.pack('<I64sIII', 1, b'synthetic', 0, len(entries), 84 + len(body)) + body
+
+
+class FirmwareObserveTest(unittest.TestCase):
+    AB = ['abl', 'bl31', 'boot', 'modem', 'system', 'tzsw']
+
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.root = Path(temp.name)
+        self.parts = {p: os.urandom(64 + i) for i, p in enumerate(('abl', 'bl31', 'tzsw', 'modem'))}
+        self.bootloader = fbpk_v2([(0, 'partition-table', b'gpt', '', 0)] +
+                                  [(1, p, self.parts[p], 'rango', 1) for p in ('abl', 'bl31', 'tzsw')])
+        self.radio = fbpk_v1([(1, 'modem', self.parts['modem'])])
+
+    def tf(self, bootloader=None, radio=None, extra=(), drop=(), ab=None):
+        members = [('META/ab_partitions.txt', '\n'.join(ab or self.AB).encode() + b'\n'),
+                   ('IMAGES/boot.img', b'b'), ('IMAGES/system.img', b's'),
+                   ('RADIO/bootloader.img', self.bootloader if bootloader is None else bootloader),
+                   ('RADIO/radio.img', self.radio if radio is None else radio)]
+        members += [(f'RADIO/{p}.img', b) for p, b in self.parts.items()]
+        members = [m for m in members if m[0] not in drop] + list(extra)
+        path = self.root/'tf.zip'
+        with warnings_ignored():
+            path.write_bytes(target_files_zip(members))
+        return path
+
+    def observe(self, path=None, **kw):
+        path = path or self.tf(**kw)
+        return rfo.observe(path, sha(path.read_bytes()), 'rango', '2026103001', 'synthetic run 1 attempt 1')
+
+    def test_maps_each_container_and_satisfies_the_classifier_contract(self):
+        fw = self.observe()
+        self.assertEqual((fw['schema'], fw['device'], fw['build'], fw['synthetic']),
+                         ('roseos.factory-firmware-observation.v1', 'rango', '2026103001', False))
+        self.assertEqual(fw['bootloader']['partitions'], ['abl', 'bl31', 'tzsw'])
+        self.assertEqual(fw['radio']['partitions'], ['modem'])
+        self.assertEqual((fw['bootloader']['sha256'], fw['radio']['sha256']), (sha(self.bootloader), sha(self.radio)))
+        self.assertEqual((fw['withoutImage'], fw['uncarried']), (['abl', 'bl31', 'modem', 'tzsw'], []))
+        self.assertEqual((fw['bootloader']['otherEntries'], fw['bootloader']['fbpk']['version'], fw['radio']['fbpk']['version']),
+                         (1, 2, 1))
+        self.assertEqual(fw['bootloader']['entries'][0]['sha256'], sha(self.parts['abl']))
+        # The classifier's own coverage check accepts it when bound to the same container digests.
+        fp = hfp._module('factory_package_for_fw', SCRIPTS/'factory-package.py')
+        result = {'missing': [], 'problems': [], 'inventory': {}, 'evidence': {}}
+        fp.check_firmware_carried(fw, fw['withoutImage'], {'bootloader': sha(self.bootloader), 'radio': sha(self.radio)},
+                                  fp.load_flavor('rango'), '2026103001', result, False)
+        self.assertEqual((result['missing'], result['problems']), ([], []))
+        self.assertEqual(result['inventory']['firmwareCarried'], {'abl': 'bootloader', 'bl31': 'bootloader',
+                                                                  'modem': 'radio', 'tzsw': 'bootloader'})
+
+    def test_uncarried_partitions_are_reported_not_padded(self):
+        bootloader = fbpk_v2([(1, p, self.parts[p], 'rango', 1) for p in ('abl', 'bl31')])
+        fw = self.observe(bootloader=bootloader)
+        self.assertEqual(fw['uncarried'], ['tzsw'])
+        fp = hfp._module('factory_package_for_fw2', SCRIPTS/'factory-package.py')
+        result = {'missing': [], 'problems': [], 'inventory': {}, 'evidence': {}}
+        fp.check_firmware_carried(fw, fw['withoutImage'], {'bootloader': sha(bootloader), 'radio': sha(self.radio)},
+                                  fp.load_flavor('rango'), '2026103001', result, False)
+        self.assertEqual(result['missing'], ['firmware-carried evidence for tzsw'])
+
+    def test_malformed_unsupported_or_ambiguous_inputs_refuse(self):
+        p = self.parts
+        cases = {
+            'raw radio': ({'radio': p['modem']}, 'format_unsupported'),
+            'version 3': ({'radio': fbpk_v2([(1, 'modem', p['modem'], '', 0)], version=3)}, 'version 3 is not 1 or 2'),
+            'short v2': ({'bootloader': b'FBPK' + struct.pack('<I', 2) + bytes(20)}, 'shorter than the FBPK v2 header'),
+            'total size': ({'bootloader': fbpk_v2([(1, 'abl', p['abl'], '', 0)], total=5)}, 'totalSize'),
+            'header size': ({'bootloader': fbpk_v2([(1, 'abl', p['abl'], '', 0)], header=100)}, 'header/entry sizes'),
+            'entry size': ({'bootloader': fbpk_v2([(1, 'abl', p['abl'], '', 0)], entry_size=96)}, 'header/entry sizes'),
+            'out of range': ({'bootloader': fbpk_v2([(1, 'abl', b'', '', 0, (220, 10 ** 6))])}, 'outside the container'),
+            'into table': ({'bootloader': fbpk_v2([(1, 'abl', p['abl'], '', 0), (1, 'bl31', b'', '', 0, (0, 8))])}, 'outside the container'),
+            'overlap': ({'bootloader': fbpk_v2([(1, 'abl', p['abl'], '', 0), (1, 'bl31', b'', '', 0, (320, 32))])}, 'overlaps another'),
+            'product variants': ({'bootloader': fbpk_v2([(1, 'abl', p['abl'], 'rango', 1), (1, 'abl', p['abl'], 'other', 1)])},
+                                 'more than one abl entry'),
+            'not partition data': ({'bootloader': fbpk_v2([(2, 'abl', p['abl'], '', 0)])}, 'not PartitionData'),
+            'in both': ({'radio': fbpk_v1([(1, 'modem', p['modem']), (1, 'abl', p['abl'])])}, 'in both'),
+            'bytes differ': ({'bootloader': fbpk_v2([(1, 'abl', os.urandom(64), '', 0)])}, 'entry_mismatch'),
+            'no standalone': ({'drop': ('RADIO/tzsw.img',)}, 'has no RADIO/tzsw.img'),
+            'v1 reserved': ({'radio': fbpk_v1([(1, 'modem', p['modem'])], unknown=1)}, 'nonzero reserved'),
+            'v1 chain': ({'radio': fbpk_v1([(1, 'modem', p['modem']), (0, 'x', b'y')], cut_chain=True)}, 'ends the chain'),
+            'missing container': ({'drop': ('RADIO/radio.img',)}, 'member_missing'),
+            'duplicate container': ({'extra': [('RADIO/radio.img', b'FBPK')]}, 'member_missing'),
+            'unsafe name': ({'extra': [('../escape', b'x')]}, 'target_files_unsafe'),
+            'repeated ab': ({'ab': self.AB + ['abl']}, 'repeats a partition'),
+        }
+        for name, (kw, pattern) in cases.items():
+            with self.subTest(name), self.assertRaisesRegex(rfo.Refused, pattern):
+                self.observe(**kw)
+        with mock.patch.dict(rfo.LIMITS, {'containerBytes': 100}), self.assertRaisesRegex(rfo.Refused, 'exceeds 100 bytes'):
+            self.observe()
+        path = self.tf()
+        with self.assertRaisesRegex(rfo.Refused, 'hash_mismatch'):
+            rfo.observe(path, '0' * 64, 'rango', '2026103001', 'x')
+
+    def test_cli_writes_once_or_refuses_with_one_line_and_no_file(self):
+        path, out = self.tf(), self.root/'fw.json'
+        argv = ['--target-files', str(path), '--target-files-sha256', sha(path.read_bytes()), '--device', 'rango',
+                '--build', '2026103001', '--source', 'synthetic', '--out', str(out)]
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            self.assertEqual(rfo.main(argv), 0)
+        self.assertEqual(json.loads(out.read_text())['radio']['partitions'], ['modem'])
+        for change in (['--out', str(out)], ['--target-files-sha256', '0' * 64, '--out', str(self.root/'fw2.json')]):
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                self.assertEqual(rfo.main(argv[:-2] + change if change[0] == '--out' else argv[:2] + change[:2] + argv[4:-2] + change[2:]), 3)
+            self.assertEqual(list(json.loads(stdout.getvalue())), ['refused'])
+        self.assertFalse((self.root/'fw2.json').exists())
+
+    def test_format_fixture_is_the_pinned_upstream_source(self):
+        provenance = json.loads((FBPK_FIXTURE/'PROVENANCE.json').read_text())
+        self.assertEqual(provenance['revision'], '17df3b79a73e67ad68387b35c7d41c85e1d8103c')
+        for entry in provenance['files']:
+            data = (FBPK_FIXTURE/entry['fixture']).read_bytes()
+            self.assertEqual(hashlib.sha1(b'blob %d\0' % len(data) + data).hexdigest(), entry['gitBlob'])
+            self.assertEqual(sha(data), entry['sha256'])
+        source = (FBPK_FIXTURE/'fastboot-pack.ts').read_text()
+        for anchor in ("magic !== 'FBPK'", 'case 1:', 'case 2:', 'name: str(b, 36)', 'product: str(b, 40)',
+                       'offset: u64(b)', 'PartitionData = 1', 'name: str(b, 32)'):
+            self.assertIn(anchor, source)
+        self.assertIn('assert(entry.type === EntryType.PartitionData', (FBPK_FIXTURE/'firmware.ts').read_text())
+        self.assertEqual(rfo.FORMAT['gitBlob'], provenance['files'][0]['gitBlob'])
+
 
 class IntegrateAdapterTest(Base):
     def setUp(self):

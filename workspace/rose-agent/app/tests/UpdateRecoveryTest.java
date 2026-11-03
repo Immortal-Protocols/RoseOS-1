@@ -61,6 +61,9 @@ public final class UpdateRecoveryTest {
         String recovery = UpdateRecovery.recovery(311);
         expect(recovery.contains("newer version") && recovery.contains("Older versions aren’t reinstalled") && !recovery.toLowerCase().contains("rollback"),
             "Recovery is forward, same signer and channel; never a downgrade");
+        // #407: the platform parses <apk>.idsig beside an APK as its v4 signature and then needs fs-verity on the APK, so the
+        // downloaded signature must never be the download's .idsig sibling (Delivery.installSelf parses the download).
+        expect(!UpdateRecovery.DOWNLOAD_SIGNATURE.equals(UpdateRecovery.DOWNLOAD + ".idsig"), "the signature temp file is not the APK's .idsig sibling");
         System.out.println("UpdateRecoveryTest: " + checks + " checks passed");
     }
 }

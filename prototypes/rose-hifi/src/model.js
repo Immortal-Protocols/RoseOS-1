@@ -22,7 +22,19 @@ const APPS = {
   contacts: { name: 'Contacts', kind: 'contacts' },
   editor: { name: 'Editor', kind: 'editor' },
   phone: { name: 'Phone', kind: 'phone' },
+  mail: { name: 'Mail', kind: 'mail' },
+  system: { name: 'System apps', kind: 'settings' },
 };
+
+// Oxblood (study design 07): page 1 holds the default system apps as subdued monoline icons;
+// page 2 keeps regular store apps with their own icons, which the OS does not restyle.
+const HOME_PAGES_OXBLOOD = [
+  ['phone', 'messages', 'maps', 'camera', 'mail', 'calendar', 'notes', 'system'],
+  ['firefox', 'thunderbird', 'vlc', 'photos', 'weather', 'music', 'files', 'editor'],
+  ['clock', 'calculator', 'contacts', 'settings'],
+];
+// System apps drawn in the shared monoline style under Oxblood.
+const MONO_APPS = ['phone', 'messages', 'maps', 'camera', 'mail', 'calendar', 'notes', 'system', 'clock', 'calculator', 'contacts', 'settings'];
 
 const HOME_PAGES = [
   ['vlc', 'camera', 'settings', 'firefox', 'thunderbird'],
@@ -66,7 +78,8 @@ function initialState() {
     app: null,
     window: null,
     connection: 'disconnected', // disconnected | connecting | connected
-    muted: false,
+    muted: false,            // microphone (input) mute — only the call's mic control changes it
+    voiceMuted: false,       // Rose's voice (output/speaker) mute — independent of mic, call, speech and tasks
     speaking: false,
     result: null,            // id of formatted result shown in Rose
     tasks,
@@ -134,14 +147,25 @@ function transition(previous, event) {
     case 'layout': if (['folded', 'unfolded'].includes(event.value)) s.layout = event.value; break;
     case 'lock': s.locked = true; break;
     case 'unlock': s.locked = false; break;
-    case 'homePage': s.homePage = Math.max(0, Math.min(HOME_PAGES.length - 1, event.value | 0)); break;
+    case 'homePage': s.homePage = Math.max(0, Math.min((event.max || HOME_PAGES.length) - 1, event.value | 0)); break;
 
     case 'openRose':
       go('rose', { app: null, window: null });
-      if (s.connection === 'disconnected') { s.connection = 'connecting'; s.muted = false; effects.push({ type: 'connect' }); }
+      // Mic mute is universal: a call starts in whatever state the microphone is already in.
+      if (s.connection === 'disconnected') { s.connection = 'connecting'; effects.push({ type: 'connect' }); }
       break;
     case 'connected':
       if (s.connection === 'connecting') { s.connection = 'connected'; notice('cue', 'Connected'); }
+      break;
+    case 'micMute':
+      // Universal microphone mute (study 09, Home tray): works with or without a call and persists
+      // across calls. Never touches Rose's speech, voice output, the call itself, results or tasks.
+      s.muted = typeof event.value === 'boolean' ? event.value : !s.muted;
+      notice('cue', s.muted ? 'Muted' : 'Unmuted');
+      break;
+    case 'voiceMute':
+      // Output only: never touches mic mute, connection, speaking, results or tasks; no conversation cue.
+      s.voiceMuted = typeof event.value === 'boolean' ? event.value : !s.voiceMuted;
       break;
     case 'mute':
       if (s.connection === 'connected') { s.muted = !s.muted; notice('cue', s.muted ? 'Muted' : 'Unmuted'); }
@@ -154,9 +178,10 @@ function transition(previous, event) {
     case 'result': if (s.connection === 'connected' || event.force) s.result = event.value; break;
     case 'endCall':
       if (s.connection !== 'disconnected') {
-        s.connection = 'disconnected'; s.speaking = false; s.muted = false;
+        s.connection = 'disconnected'; s.speaking = false;
         notice('cue', 'Call ended'); effects.push({ type: 'endVoice' });
-        if (s.view === 'rose') { go('home', { app: null, window: null }); s.back = []; }
+        // Classic returns Home; Oxblood (study 11) stays on Rose with Connect in the same place.
+        if (s.view === 'rose' && !event.stay) { go('home', { app: null, window: null }); s.back = []; }
       }
       break;
 
@@ -211,6 +236,6 @@ function transition(previous, event) {
   return { state: s, effects };
 }
 
-const RoseModel = { APPS, HOME_PAGES, TASKS, WINDOWS, WINDOW_ORDER, STOPPABLE, CONVERSATION_CUES, MAX_STEP, initialState, transition, rendererSignals, voiceSurround, taskActivity };
+const RoseModel = { APPS, HOME_PAGES, HOME_PAGES_OXBLOOD, MONO_APPS, TASKS, WINDOWS, WINDOW_ORDER, STOPPABLE, CONVERSATION_CUES, MAX_STEP, initialState, transition, rendererSignals, voiceSurround, taskActivity };
 if (typeof module !== 'undefined') module.exports = RoseModel;
 else window.RoseModel = RoseModel;

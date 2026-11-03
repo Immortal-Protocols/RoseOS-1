@@ -73,6 +73,18 @@
             <testInclude>dev/pixel/voice/ConversationState.java</testInclude>
             <testInclude>dev/pixel/voice/TrayMaterial.java</testInclude>
             <testInclude>dev/pixel/voice/HomeGlassTile.java</testInclude>
+            <testInclude>dev/pixel/voice/OxbloodField.java</testInclude>
+            <testInclude>dev/pixel/voice/OxbloodEdge.java</testInclude>
+            <testInclude>dev/pixel/voice/RosePearl.java</testInclude>
+            <testInclude>dev/pixel/voice/OxbloodRose.java</testInclude>
+            <testInclude>dev/pixel/voice/GlassSheen.java</testInclude>
+            <testInclude>dev/pixel/voice/HomeGlyph.java</testInclude>
+            <testInclude>dev/pixel/voice/HomeAppTile.java</testInclude>
+            <testInclude>dev/pixel/voice/HomeAppPage.java</testInclude>
+            <testInclude>dev/pixel/voice/HomeAppLayout.java</testInclude>
+            <testInclude>dev/pixel/voice/GestureContract.java</testInclude>
+            <testInclude>dev/pixel/voice/HomeGestureTarget.java</testInclude>
+            <testInclude>dev/pixel/voice/HomeFolder.java</testInclude>
             <testInclude>dev/pixel/voice/WorkspaceOverview.java</testInclude>
             <testInclude>dev/pixel/voice/WorkspaceOverviewView.java</testInclude>
             <testInclude>dev/pixel/voice/WorkspaceOverviewPanel.java</testInclude>

@@ -128,7 +128,8 @@
       '<button class="wopen" data-open-window="' + wid + '" aria-label="Inspect ' + esc(app.name + ' — ' + w.label + ', ' + ctx.M.TASKS[w.task].title + ', ' + LABEL[t.state]) + '"></button>' +
       '<header><span class="mini-ico">' + ctx.I.appArt(w.app) + '</span><span class="wl">' + esc(w.label) + '</span></header>' +
       '<div class="wbody" aria-hidden="true">' + windowContent(wid, s, true) + '</div>' +
-      '<footer>' + dot(t.state) + '<span class="wstate">' + esc(SHORT[t.state]) + '</span>' + stopButton(w.task, s) + '</footer></article>';
+      '<footer>' + dot(t.state) + '<span class="wstate">' + esc(SHORT[t.state]) + '</span>' + stopButton(w.task, s) + '</footer>' +
+      '<span class="active-edge" aria-hidden="true"></span></article>';
   }
   function visibleWindows(s) { return ctx.M.WINDOW_ORDER.filter((wid) => s.tasks[ctx.M.WINDOWS[wid].task].state !== 'idle'); }
 
@@ -143,14 +144,27 @@
       '<span class="sw-link-label" id="sw-link-label"></span></div>' +
       '<div class="sw-agent" id="sw-agent" role="list" aria-label="Rose’s background apps" tabindex="0"></div>';
     $('v-agents').innerHTML =
-      '<div class="ivory-bg" aria-hidden="true"></div><div class="surface agents-surface"><h2 class="sr">Rose’s apps</h2><div class="agrid" id="agrid"></div><p class="a-empty" id="a-empty">Rose isn’t using any apps right now.</p></div>' +
+      '<div class="ivory-bg" aria-hidden="true"></div><header class="ag-head"><span class="ag-pearl" aria-hidden="true"></span><button class="back-btn" id="ag-head-back" aria-label="Back to Rose">' + ctx.I.UI.back + '</button></header><div class="surface agents-surface"><h2 class="sr">Rose’s apps</h2><div class="agrid" id="agrid"></div><p class="a-empty" id="a-empty">Rose isn’t using any apps right now.</p></div>' +
       '<div class="tray" role="toolbar" aria-label="Rose’s apps controls"><button class="well" id="ag-back" aria-label="Back">' + ctx.I.UI.back + '</button><button class="well" id="ag-mid"></button><span class="well selected" id="ag-self" role="img" aria-label="Rose’s apps, current screen">' + ctx.I.UI.grid + '</span></div>';
     $('v-window').innerHTML = '<div class="ivory-bg" aria-hidden="true"></div><div class="surface detail" id="wdetail"></div>';
     $('v-app').innerHTML = '<div class="ivory-bg" aria-hidden="true"></div><div class="surface detail" id="appdetail"></div>';
 
     $('ag-back').addEventListener('click', () => ctx.dispatch({ type: 'back' }));
+    $('ag-head-back').addEventListener('click', () => ctx.dispatch({ type: 'back' }));
     $('ag-mid').addEventListener('click', () => { const s = ctx.getState(); ctx.dispatch({ type: s.connection === 'disconnected' ? 'openRose' : 'endCall' }); });
     document.addEventListener('click', onClick);
+    // The app's own bar works like an app's: tabs switch, the composer sends.
+    $('appdetail').addEventListener('click', (e) => {
+      const tab = e.target.closest('.ab-tab'); if (!tab) return;
+      tab.parentElement.querySelectorAll('.ab-tab').forEach((t) => t.setAttribute('aria-selected', String(t === tab)));
+    });
+    $('appdetail').addEventListener('submit', (e) => {
+      e.preventDefault();
+      const f = e.target.closest('[data-composer]'), input = f && f.querySelector('.ab-input'), msg = f && f.parentElement.querySelector('.c-msg');
+      if (!input || !msg || !input.value.trim()) return;
+      const p = document.createElement('p'); p.className = 'out'; p.textContent = input.value.trim(); msg.appendChild(p);
+      input.value = ''; msg.scrollTop = msg.scrollHeight;
+    });
     for (const id of ['sw-human', 'sw-agent']) bindCarousel($(id), id === 'sw-human' ? 'human' : 'agent');
     $('sw-agent').addEventListener('scroll', () => requestAnimationFrame(routeWire), { passive: true });
     $('v-switcher').addEventListener('click', (e) => { if (e.target.classList.contains('sw-veil') || e.target.classList.contains('wall')) ctx.dispatch({ type: 'back' }); });
@@ -195,7 +209,9 @@
   }
   const cards = (el) => [...el.children].filter((c) => !c.hidden);
   // Human cards snap to the centre; agent cards snap to the leading edge.
-  const startAligned = (el) => el.classList.contains('sw-agent');
+  // Classic: agent cards start-aligned. Oxblood (study 13): both carousels are centred fans.
+  const oxTheme = () => document.getElementById('device').dataset.theme === 'oxblood';
+  const startAligned = (el) => el.classList.contains('sw-agent') && !oxTheme();
   function anchor(el, card) {
     if (startAligned(el)) return card.offsetLeft - parseFloat(getComputedStyle(el).paddingLeft);
     return card.offsetLeft + card.offsetWidth / 2 - el.clientWidth / 2;
@@ -207,18 +223,28 @@
   }
   function scrollToIndex(el, i, instant) {
     const card = cards(el)[i]; if (!card) return;
-    el.scrollTo({ left: anchor(el, card), behavior: instant || ctx.reduced() ? 'instant' : 'smooth' });
+    const left = anchor(el, card), smooth = !(instant || ctx.reduced());
+    el.scrollTo({ left, behavior: smooth ? 'smooth' : 'instant' });
+    // A re-render during a smooth scroll can cancel it part-way; land exactly on the card.
+    if (smooth) setTimeout(() => { if (Math.abs(el.scrollLeft - left) > 2 && Math.abs(el.scrollLeft - left) < el.scrollWidth) el.scrollTo({ left, behavior: 'instant' }); }, 650);
   }
   function step(el, dir) { scrollToIndex(el, Math.max(0, Math.min(cards(el).length - 1, centerIndex(el) + dir))); }
   function snap(el) { scrollToIndex(el, centerIndex(el)); }
   // Side cards turn away slightly, like the reference; transform-only for performance.
   function depth(el) {
-    if (!el.classList.contains('sw-human')) return;
+    const ox = oxTheme();
+    if (!el.classList.contains('sw-human') && !ox) return;
     const c = el.scrollLeft + el.clientWidth / 2;
+    const agent = el.classList.contains('sw-agent');
     for (const card of cards(el)) {
       const off = (card.offsetLeft + card.offsetWidth / 2 - c) / card.offsetWidth;
       const k = Math.max(-1.4, Math.min(1.4, off));
-      card.style.transform = ctx.reduced() ? '' : 'perspective(900px) rotateY(' + (-k * 22).toFixed(1) + 'deg) scale(' + (1 - Math.min(1, Math.abs(k)) * 0.12).toFixed(3) + ')';
+      if (ox) {
+        // Study 13 fan: neighbours tuck behind the centre card and turn strongly away. Static
+        // geometry, so it stays under reduced motion.
+        const t = agent ? [40, 40, 0.2] : [62, 44, 0.16];
+        card.style.transform = 'perspective(760px) translateX(' + (-k * t[0]).toFixed(1) + 'px) rotateY(' + (-k * t[1]).toFixed(1) + 'deg) scale(' + (1 - Math.min(1, Math.abs(k)) * t[2]).toFixed(3) + ')';
+      } else card.style.transform = ctx.reduced() ? '' : 'perspective(900px) rotateY(' + (-k * 22).toFixed(1) + 'deg) scale(' + (1 - Math.min(1, Math.abs(k)) * 0.12).toFixed(3) + ')';
       card.style.zIndex = String(10 - Math.round(Math.abs(k) * 4));
     }
   }
@@ -278,9 +304,14 @@
     if (ak !== lastAgentKey) {
       const keepFocus = agent.contains(document.activeElement) ? document.activeElement.getAttribute('data-stop') || document.activeElement.getAttribute('data-open-window') : null;
       lastAgentKey = ak;
-      agent.innerHTML = vis.length ? vis.map((w) => '<div role="listitem" class="aitem">' + windowCard(w, s, 'small') + '</div>').join('') : '<p class="sw-empty">No background work</p>';
+      // Same windows in the same order: refresh each card in place so an in-flight scroll/snap is
+      // not interrupted by replacing the carousel's children.
+      const items = [...agent.querySelectorAll(':scope > .aitem')];
+      if (vis.length && items.length === vis.length && items.every((it, i) => it.firstElementChild && it.firstElementChild.dataset.window === vis[i])) {
+        items.forEach((it, i) => { it.innerHTML = windowCard(vis[i], s, 'small'); });
+      } else agent.innerHTML = vis.length ? vis.map((w) => '<div role="listitem" class="aitem">' + windowCard(w, s, 'small') + '</div>').join('') : '<p class="sw-empty">No background work</p>';
       if (keepFocus) { const el = agent.querySelector('[data-stop="' + keepFocus + '"],[data-open-window="' + keepFocus + '"]'); if (el) el.focus({ preventScroll: true }); }
-      requestAnimationFrame(() => { if (s.view === 'switcher' && !agent.dataset.placed) { scrollToIndex(agent, Math.min(s.agentCarousel, vis.length - 1), true); agent.dataset.placed = '1'; } });
+      requestAnimationFrame(() => { if (s.view === 'switcher' && !agent.dataset.placed) { scrollToIndex(agent, Math.min(oxTheme() && s.agentCarousel === 0 && vis.length >= 3 ? 1 : s.agentCarousel, vis.length - 1), true); agent.dataset.placed = '1'; } depth(agent); });
     }
     requestAnimationFrame(routeWire);
     const running = ctx.M.taskActivity(s).length;
@@ -338,7 +369,26 @@
     $('appdetail').innerHTML =
       '<button class="back-btn" data-back aria-label="Back">' + ctx.I.UI.back + '</button>' +
       '<div class="app-head"><span class="tile">' + ctx.I.appArt(s.app) + '</span><h2>' + esc(app.name) + '</h2></div>' +
-      '<div class="detail-frame human">' + content(app.kind, 8) + '</div>';
+      '<div class="detail-frame human"><div class="app-body">' + content(app.kind, 8) + '</div>' + appBar(app.kind) + '</div>';
+  }
+
+  // Each app's own bottom bar (tab bar, composer or search field). When the system edge rises, the
+  // app window gets shorter and this bar rides up with its bottom; the app keeps working normally.
+  const TABS = {
+    browser: ['Home', 'Tabs', 'Saved', 'Menu'], mail: ['Inbox', 'Drafts', 'Sent', 'Search'],
+    photos: ['Library', 'Albums', 'Search'], music: ['Listen', 'Library', 'Search'], media: ['Videos', 'Library', 'Search'],
+    clock: ['Alarm', 'Clock', 'Timer', 'Stopwatch'], phone: ['Favourites', 'Recents', 'Contacts', 'Keypad'],
+    contacts: ['Contacts', 'Groups', 'Search'], calendar: ['Today', 'Calendars', 'Inbox'], files: ['Recent', 'Browse', 'Shared'],
+    notes: ['All notes', 'Folders', 'New'], weather: ['Today', 'Week', 'Map'],
+  };
+  const TAB_ON = { clock: 1, phone: 1 };
+  function appBar(kind) {
+    if (kind === 'messages') return '<form class="app-bar composer" data-composer><button type="button" class="ab-plus" aria-label="Add attachment">+</button><input type="text" class="ab-input" placeholder="Message" aria-label="Message" autocomplete="off"><button type="submit" class="ab-send" aria-label="Send">↑</button></form>';
+    if (kind === 'maps') return '<div class="app-bar composer"><input type="search" class="ab-input" placeholder="Search Maps" aria-label="Search Maps" autocomplete="off"></div>';
+    const tabs = TABS[kind];
+    if (!tabs) return '';
+    const on = TAB_ON[kind] || 0;
+    return '<nav class="app-bar tabs" role="tablist" aria-label="App sections">' + tabs.map((t, i) => '<button type="button" role="tab" class="ab-tab" aria-selected="' + (i === on) + '"><i aria-hidden="true"></i><span>' + esc(t) + '</span></button>').join('') + '</nav>';
   }
 
   function renderSheet(s) {

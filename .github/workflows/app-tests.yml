@@ -60,7 +60,9 @@ concurrency:
 jobs:
   offline:
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    # The offline suite alone now takes about 9.3-9.5 min on the hosted runner (run 41498203106 attempts 1 and 2),
+    # plus the PR288 no-skip step after it; 10 min cut that step off. Every step and skip check is unchanged.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
