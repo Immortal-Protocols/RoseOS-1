@@ -1508,6 +1508,50 @@ class FactoryProfileValidation(unittest.TestCase):
         checked = PROFILES['profiles']['fold-rango-factory-v1']['access']  # a committed record, if any, is never partial
         self.assertTrue(checked['basis'] or (checked['addVersionExpires'] is None and checked['accessorExpires'] is None))
 
+    def test_after_the_first_live_check_a_denied_add_or_recheck_uses_up_the_run_and_is_never_retried(self):
+        profiles = factory_ready_profiles()
+        profiles['profiles']['fold-rango-factory-v1']['access'].update(addVersionExpires=None, accessorExpires=None, basis=None)
+        runner = KeygenMock()
+
+        class Executor(MockExecutor):
+            def tool_sha256(self, path):
+                self.calls.append(('tool', path))
+                return hashlib.sha256(b'ssh-keygen').hexdigest()
+
+            def generate(self, workspace, profile):
+                self.calls.append(('generate',))
+                return sb.generate_openssh(workspace, profile, runner=runner, token='SYNTHETIC-token')
+
+        class RecheckDenied(Executor):
+            def secret_state(self, project, secret):
+                denied = [c for c in self.calls if c[0] == 'generate']
+                self.calls.append(('metadata', secret))
+                if denied:
+                    raise sb.Unavailable('the access lapsed after the first check')
+                return {'exists': True, 'versions': []}
+        for name, executor, adds, expected in (
+                ('add denied', Executor(adds=[sb.Uncertain('versions.add denied')]), 1, 'recovery-needed'),
+                ('recheck denied', RecheckDenied(), 0, 'metadata-unavailable')):
+            with self.subTest(name):
+                fixture = Fixture(self)
+                receipt = sb.run('fold-rango-factory-v1', profiles, executor, fixture.state, fixture.lock, SHA, NOW,
+                                 workspace=lambda: fixture.workspace(), frankel=FRANKEL)[0]
+                self.assertIn(expected, codes(receipt))
+                self.assertIn('generate', executor.kinds())  # the key existed: this run is used up
+                self.assertEqual(executor.kinds().count('add'), adds)
+                self.assertTrue(receipt['cleanup']['workspaceRemoved'])
+                journal = json.loads((fixture.state/'fold-rango-factory-v1.json').read_text())
+                self.assertIn(journal['status'], ('recovery-needed', 'failed-before-commit'))
+                retry = sb.run('fold-rango-factory-v1', profiles, Executor(), fixture.state, fixture.lock, SHA, NOW,
+                               workspace=lambda: fixture.workspace(), frankel=FRANKEL)[0]
+                self.assertEqual(codes(retry), ['previous-attempt'])  # never retried or regenerated
+
+    def test_plan_tells_the_admin_to_grant_one_binding_per_secret(self):
+        grant = sb.plan('fold-rango-factory-v1', PROFILES)['grant']
+        self.assertIn('one binding per secret', grant)
+        self.assertIn('versions.add', grant)
+        self.assertIsNone(sb.plan('fold-rango-v1', PROFILES)['grant'])
+
     def test_a_failed_live_access_call_stops_before_any_key_or_journal_and_can_be_retried(self):
         profiles = factory_ready_profiles()
         profiles['profiles']['fold-rango-factory-v1']['access'].update(addVersionExpires=None, accessorExpires=None, basis=None)

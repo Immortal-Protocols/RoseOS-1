@@ -160,7 +160,7 @@ def readiness(name, profiles, now):
     live = (profile.get('archive') or {}).get('format') == 'openssh-ed25519'
     for key in ('addVersionExpires', 'accessorExpires'):
         if live and access.get(key) is None:
-            continue  # proven live: the run's credentialed metadata calls fail closed before anything irreversible
+            continue  # checked live: the run's credentialed metadata calls stop it before any key (see openssh_problems)
         try:
             if parse_time(access[key]) - margin <= now:
                 reasons.append(('access-expired', f'{key} {access[key]} is within {margin} of {now:%Y-%m-%dT%H:%M:%SZ}'))
@@ -771,11 +771,13 @@ def openssh_problems(profile, now):
         problems.append(('profile-invalid', 'recheckEmptyBeforeImport must be true'))
     if profile.get('localProof') or (profile.get('generation') or {}).get('recipe') is not None:
         problems.append(('profile-invalid', 'no local proof or recipe: generation is the fixed generate_openssh'))
-    # Access is proven live, not from a recorded timestamp (owner decision, 2026-11-03): after the signer login and under
+    # Access is checked live, not from a recorded timestamp (owner decision, 2026-11-03): after the signer login and under
     # the lock, the run's metadata calls on both secrets use the same credentials and stop it (metadata-unavailable)
-    # before any key is generated or journaled, whatever ended the access (expiry, revocation, a wrong grant); they are
-    # repeated just before the import. Expiries are optional here; any that are recorded are still held to the
-    # approved ceilings, need a basis, and must leave the 30-minute margin (readiness).
+    # before any key is generated or journaled, whatever ended the access (expiry, revocation, a missing grant). They are
+    # repeated before the import, where a failure, like a denied versions.add (which cannot be tested beforehand), uses up
+    # the run (failed-before-commit or recovery-needed). Without recorded expiries the 4 h / 30 d ceilings are the IAM
+    # conditions' alone. Expiries are optional here; any that are recorded are still held to the approved ceilings, need
+    # a basis, and must leave the 30-minute margin (readiness).
     access = profile.get('access') or {}
     recorded = {}
     for key in ('addVersionExpires', 'accessorExpires'):
@@ -1253,6 +1255,9 @@ def plan(name, profiles):
         'command': f'workflow os-release.yml mode={MODE} bootstrap_profile={name} candidate_sha=<that workflow commit on main>',
         'metadata': [dict(op, operation=op['operation'].format(secret=s, project=profile.get('project')))
             for s in secrets.values() for op in METADATA_OPERATIONS],
+        'grant': ('one binding per secret, holding secretmanager.secrets.get, versions.list and versions.add with a single '
+                  'expiry (a custom role); versions.add cannot be checked before the add, so split or partial grants can use up '
+                  'the run' if (profile.get('archive') or {}).get('format') == 'openssh-ed25519' else None),
         'add': [dict(ADD_OPERATION, operation=ADD_OPERATION['operation'].format(secret=s, project=profile.get('project'),
             file='<workspace file>')) for s in secrets.values()],
         'readiness': [{'code': c, 'detail': d} for c, d in readiness(name, profiles, datetime.now(timezone.utc))],
