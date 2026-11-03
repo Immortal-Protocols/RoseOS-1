@@ -29,7 +29,17 @@ final class TaskControl {
  static final class ControllerRead {
   static final ControllerRead PENDING_READ=new ControllerRead("","","",ReadFailure.PENDING);
   final String status,sessionId,taskId;final ReadFailure failure;
-  private ControllerRead(String status,String sessionId,String taskId,ReadFailure failure){this.status=status;this.sessionId=sessionId;this.taskId=taskId;this.failure=failure;}
+  /** At least one of the controller's sessions is authoritatively running in this read: the slot this read names, or
+   * any slot of the same reply's routed sessions summary (each slot's sessionId and status, read together under the
+   * controller's lock), whose status is exactly "ready" with a session id (CurrentApps.SESSION_READY, #410/#428).
+   * False for a failed or pending read. */
+  final boolean anyReady;
+  /** SystemClock.uptimeMillis() when this read was started (-1 when not stamped), so a read begun before the screen
+   * last resumed never lights anything after it. */
+  final long readAt;
+  private ControllerRead(String status,String sessionId,String taskId,ReadFailure failure){this(status,sessionId,taskId,failure,false,-1);}
+  private ControllerRead(String status,String sessionId,String taskId,ReadFailure failure,boolean anyReady,long readAt){
+   this.status=status;this.sessionId=sessionId;this.taskId=taskId;this.failure=failure;this.anyReady=failure==ReadFailure.NONE&&anyReady;this.readAt=readAt;}
   static ControllerRead failed(ReadFailure failure){return new ControllerRead("","","",failure);}
   /** Validates the three fields as read (null when absent or JSON null). A missing status, an active status without a
    * session or an idle status with one is a malformed answer, never relabelled idle; the provider's own error answer
@@ -40,10 +50,39 @@ final class TaskControl {
    if("error".equals(status))return failed(ReadFailure.READ_FAILED);
    boolean active=ACTIVE.contains(status);
    if(active&&session.isEmpty()||"idle".equals(status)&&!session.isEmpty())return failed(ReadFailure.INVALID_RESPONSE);
-   return new ControllerRead(status,session,task,ReadFailure.NONE);
+   return new ControllerRead(status,session,task,ReadFailure.NONE,READY.equals(status),-1);
   }
+  /** This read with its reply's routed sessions summary (each entry {sessionId, status} as read, null when absent or
+   * not a string; null list when the reply had none: an older single-session controller) and the time it was started.
+   * Only the session id and status of each slot are kept: never a package or task. An entry counts only when its
+   * status is exactly "ready" and it names a session; anything else (starting, scheduled, consent_required, launching,
+   * blocked, cleanup_failed, ended, unknown or malformed) never lights. Order does not matter. A failed read stays
+   * failed, lights nothing and is stamped, so it clears the button at once. */
+  ControllerRead withSessions(java.util.List<String[]> slots,long startedAt){
+   // A failed read is still a fresh answer (stamped): it clears the button at once and lights nothing.
+   if(failure!=ReadFailure.NONE)return new ControllerRead(status,sessionId,taskId,failure,false,startedAt);
+   boolean any=READY.equals(status);
+   if(slots!=null)for(String[] e:slots)if(e!=null&&e.length>=2&&e[0]!=null&&!e[0].isEmpty()&&!"null".equals(e[0])&&READY.equals(e[1]))any=true;
+   return new ControllerRead(status,sessionId,taskId,failure,any,startedAt);
+  }
+  /** Rose's work button (#410 rose.workButton.working): lit only from a successful read started at or after the
+   * screen last resumed in which at least one session is authoritatively running. */
+  boolean working(long resumedAt){return failure==ReadFailure.NONE&&anyReady&&readAt>=0&&readAt>=resumedAt;}
+  /** Whether this read was started since the screen last resumed (stamped and fresh). */
+  boolean freshSince(long resumedAt){return readAt>=0&&readAt>=resumedAt;}
   String key(){return failure+"|"+status+"|"+sessionId+"|"+taskId;}
  }
+ /** How long, after the screen resumes, the work button keeps what it last showed while the first fresh read is in
+  * flight (no lit-dark-lit blink on every return). Past it, without a fresh read, it is dark: never a stale claim. */
+ static final long WORK_HOLD_MS=2000;
+ /** The work button's state now: a fresh read decides; before one arrives, what was shown is held for at most
+  * WORK_HOLD_MS after the resume, then dark. */
+ static boolean workShown(ControllerRead read,long resumedAt,long now,boolean shown){
+  if(read.freshSince(resumedAt))return read.working(resumedAt);
+  return shown&&now>=resumedAt&&now-resumedAt<WORK_HOLD_MS;
+ }
+ /** The one controller status that means running (same word as CurrentApps.SESSION_READY). */
+ static final String READY="ready";
  private static final java.util.List<String> ACTIVE=java.util.Arrays.asList("ready","blocked","launching");
  /** The provider replied, but not with a readable get_state answer. */
  static final class InvalidReply extends Exception { InvalidReply(){super(null,null,false,false);} }
