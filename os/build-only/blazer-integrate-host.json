@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "kind": "rose-blazer-integrate-host",
+  "basis": "BLAZER-INTEGRATE workflow binding (Release-owned): the operator inputs that os-release.yml mode blazer-integrate chains through, in order, scripts/blazer-reconcile-seed.py seed, scripts/blazer-candidate-bundle.py assemble, scripts/blazer_integration.py admit and render (Flavors) and the rendered host-reconcile.py apply, on the blazer-prep isolated work tree (sourceRootFrom) after git-meta. The Frankel receipt directory, lock and source root come by pointer from their committed sources. sourceRun 41554911849 and sourceInventory.sha256 3c0f9af1... are the historical source copy's EXPECTED identities (Chief, 2026-11-03), never observed current state: seed re-hashes the inventory file at execution time and refuses on any mismatch; sourceInventory.path, the inventory file's location, is not yet known and stays null. Every other host fact is null until it is verified and committed: appsDir and policy (the already-signed Rose APKs with their sign-apk receipts and the background policy, from an existing signing run), aapt and apksigner (pinned tool paths), build (the allocated blazer build number), integrationDir (the new blazer reconcile receipt directory, compile's integrationDir) and workDir (a new directory for the bundle, admitted inputs, rendered config, candidate checkout and reconcile release directory). While any is null the hosted check exits 4 before the controller. Nothing here was read from or run on any host.",
+  "host": "immortal-os-builder",
+  "lockFrom": "os/release-pipeline/frankel.json host.lockPath",
+  "sourceRootFrom": "os/build-only/blazer-prep-host.json sourceRoot",
+  "frankelReceiptsFrom": "os/release-pipeline/frankel.json host.integrate.reconcile.receiptDir",
+  "updaterRoute": "os/build-only/blazer-updater-route.json",
+  "sourceRun": "41554911849",
+  "sourceInventory": {
+    "path": null,
+    "sha256": "3c0f9af1cf2f931a6a6c238dc9297223730ca1477d8473b0853f72e2ad388c7d"
+  },
+  "appsDir": null,
+  "policy": null,
+  "aapt": null,
+  "apksigner": null,
+  "build": null,
+  "integrationDir": null,
+  "workDir": null
+}

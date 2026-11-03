@@ -367,10 +367,10 @@ class Workflow(unittest.TestCase):
         for name in ('Cleanup report and allowlisted reports', 'Reports artifact'):
             self.assertIn('        if: always()\n', step(job, name))
         self.assertEqual(job.count('actions/upload-artifact@'), 1)  # reports only: nothing is exported again
-        own = "inputs.mode == 'blazer-prep' || inputs.mode == 'rango-factory-package' || inputs.mode == 'rango-factory-inspect' || inputs.mode == 'launcher3-compile' || inputs.mode == 'blazer-compile'"
+        own = "inputs.mode == 'blazer-prep' || inputs.mode == 'rango-factory-package' || inputs.mode == 'rango-factory-inspect' || inputs.mode == 'launcher3-compile' || inputs.mode == 'blazer-compile' || inputs.mode == 'blazer-integrate'"
         self.assertEqual(jobs()['controller'].count(own), 2)
         self.assertEqual(jobs()['cleanup'].count(own), 1)
-        self.assertIn('rango-factory-inspect, launcher3-compile, blazer-compile, app-builder', re.search(r'(?m)^    needs: (.+)$', jobs()['cleanup'])[1])
+        self.assertIn('rango-factory-inspect, launcher3-compile, blazer-compile, blazer-integrate, app-builder', re.search(r'(?m)^    needs: (.+)$', jobs()['cleanup'])[1])
         self.assertNotIn('rango-factory-inspect-wiring.py', jobs()['rango-factory-package'])
 
 
