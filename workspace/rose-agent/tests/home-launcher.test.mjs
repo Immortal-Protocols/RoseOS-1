@@ -507,4 +507,12 @@ test('#410 gesture_nav_contract_v1: a RectF-only reply to the verified recents c
  assert.doesNotMatch(g,/Log\.|showPage\(|startActivity|startService|command\(/,'no logging, navigation, voice or task action');
  assert.match(main,/tile\.setTag\(GestureContract\.tag\(app\.activityInfo\.packageName,app\.activityInfo\.name\)\);/,'tiles carry their exact component');
  assert.match(main,/tile\.setTag\(GestureContract\.FOLDER_TAG\);/);
+ // Review of beb371c: the listener lives on the window's observer (never a detachable pager's), and the send waits
+ // for that frame's measure callbacks and is skipped while they re-plan Home.
+ assert.doesNotMatch(g,/pager\.getViewTreeObserver\(\)/,'never the pager\'s observer');
+ assert.equal((g.match(/decor\.getViewTreeObserver\(\)\.removeOnPreDrawListener\(once\[0\]\)/g)||[]).length,2,'both removals on the window observer');
+ assert.match(g,/handler\.post\(\(\)->sendGestureReply\(pager,tag,folder,reply,to\)\)/,'one message after the pre-draw');
+ assert.match(main,/if\(pager!=launcherPager\|\|replanPending\|\|isFinishing\(\)\)return;/,'no target while Home is about to be rebuilt');
+ assert.equal((main.match(/Height=cell;replanPending=true;\n  handler\.post\(\(\)->\{if\(launcherPager!=null&&!isFinishing\(\)\)attachLauncherPages\(true\);\}\);/g)||[]).length,2,'both re-plans mark it');
+ assert.match(main,/void attachLauncherPages\(boolean preservePage\)\{\n  replanPending=false;/,'a rebuild clears it');
 });

@@ -346,7 +346,10 @@ public class MainActivity extends Activity {
    return "com.android.vending".equals(installer);
   }catch(PackageManager.NameNotFoundException|IllegalArgumentException|SecurityException unavailable){return false;}
  }
+ /** A measured page asked for Home to be re-planned and the rebuild has not run yet: its cells are about to move. */
+ boolean replanPending;
  void attachLauncherPages(boolean preservePage){
+  replanPending=false;
   // A rebuild that keeps the page keeps it while it still exists (HomePages.restore); a fresh build opens on Home.
   int selected=preservePage&&launcherPager!=null?launcherPager.currentPage():-1;
   Intent query=new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER);
@@ -443,7 +446,7 @@ public class MainActivity extends Activity {
   float density=getResources().getDisplayMetrics().density;
   if(homeColumns==HomeAppLayout.homeColumns(width/density)&&homeCapacity==HomeAppLayout.homeCapacity(width,height,cell,density))return;
   if(width==homeAreaWidth&&height==homeAreaHeight&&cell==homeCellHeight)return;
-  homeAreaWidth=width;homeAreaHeight=height;homeCellHeight=cell;
+  homeAreaWidth=width;homeAreaHeight=height;homeCellHeight=cell;replanPending=true;
   handler.post(()->{if(launcherPager!=null&&!isFinishing())attachLauncherPages(true);});
  }
  /** The identity of a launchable entry (package and activity), for placing each app exactly once. */
@@ -452,7 +455,7 @@ public class MainActivity extends Activity {
  void appPageMeasured(int width,int height,float cell){
   if(!HomeAppLayout.replan(appColumns,appPerPage,width,height,cell,getResources().getDisplayMetrics().density))return;
   if(width==appAreaWidth&&height==appAreaHeight&&cell==appCellHeight)return;
-  appAreaWidth=width;appAreaHeight=height;appCellHeight=cell;
+  appAreaWidth=width;appAreaHeight=height;appCellHeight=cell;replanPending=true;
   handler.post(()->{if(launcherPager!=null&&!isFinishing())attachLauncherPages(true);});
  }
  /** One app page: the measured grid of real apps over the shared wallpaper, or a truthful note when none are installed. */
@@ -585,15 +588,18 @@ public class MainActivity extends Activity {
    final Message reply=Message.obtain();reply.copyFrom(callback);final Messenger to=callback.replyTo;
    final LauncherPager pager=launcherPager;if(pager==null)return;
    // Once, after the landing page is laid out: at the next pre-draw, or never (no reply) if none comes within 500ms.
+   // The window's own observer (the decor stays attached), so the listener is always removed even if Home is rebuilt
+   // first; the send runs one message later, after that frame's measure callbacks, and not while they re-plan Home.
+   final View decor=getWindow().getDecorView();
    final android.view.ViewTreeObserver.OnPreDrawListener[] once=new android.view.ViewTreeObserver.OnPreDrawListener[1];
-   once[0]=()->{pager.getViewTreeObserver().removeOnPreDrawListener(once[0]);sendGestureReply(pager,tag,folder,reply,to);return true;};
-   pager.getViewTreeObserver().addOnPreDrawListener(once[0]);
-   handler.postDelayed(()->pager.getViewTreeObserver().removeOnPreDrawListener(once[0]),500);
+   once[0]=()->{decor.getViewTreeObserver().removeOnPreDrawListener(once[0]);handler.post(()->sendGestureReply(pager,tag,folder,reply,to));return true;};
+   decor.getViewTreeObserver().addOnPreDrawListener(once[0]);
+   handler.postDelayed(()->decor.getViewTreeObserver().removeOnPreDrawListener(once[0]),500);
   }catch(RuntimeException unreadable){} // a malformed or unreadable contract is no contract
  }
  void sendGestureReply(LauncherPager pager,String tag,boolean inFolder,Message reply,Messenger to){
   try{
-   if(pager!=launcherPager||isFinishing())return;
+   if(pager!=launcherPager||replanPending||isFinishing())return; // a rebuilt or about-to-be-rebuilt Home: no target
    View decor=getWindow().getDecorView();
    android.graphics.RectF target=HomeGestureTarget.find(pager.getChildAt(pager.currentPage()),tag,inFolder,decor.getWidth(),decor.getHeight());
    if(target==null)return;
