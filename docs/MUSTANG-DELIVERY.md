@@ -28,10 +28,17 @@ no secret payload was downloaded to this worker. The common tool-proof format
 retains its historical `fold-rango-v1` label; this proof was generated in the
 Mustang run, not consumed from a Rango artifact.
 
-As of 2026-11-03T21:19:11Z, fresh unsigned run
+The full `os/flavors/mustang.json` contract now references this public receipt
+for its AVB and OTA identity metadata and records the committed container
+versions. Its build/factory/phone readiness flags remain false. This source
+binding is not the sprint-omitted intended-public-identity comparison and does
+not establish a signing result or installer acceptance.
+
+As of 2026-11-03T22:23:38Z, fresh unsigned run
 [41720536968](https://github.com/Immortal-Protocols/RoseOS-1/actions/runs/41720536968)
 uses corrected source `2b521e732fa1537e54ff0a77880810ab1f34cf99`. Its hosted
-configuration guard and controller succeeded; the builder job is queued.
+configuration guard and controller succeeded; the combined preparation/build
+step is active since 21:19:17Z, with no completed compile receipt.
 Compilation, delivery signing, packaging and export are unproven. Earlier
 replacement `41719106957` was cancelled before compilation after source review
 found a deterministic rendering error. Its cleanup observed `TERMINATED` at
