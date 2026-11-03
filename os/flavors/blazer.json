@@ -152,12 +152,12 @@
       "next": "on an admitted builder, in an isolated work tree (never the production source root): download and verify the pinned factory image, generate vendor/google_devices/blazer (product registration, firmware metadata), then the lunch target check; the historical Pro run 41255851279 observed only configuration and pins"
     },
     {
-      "input": "operator review of the recipe's proposal preparation bounds (preparation.download/vendor/lunch boundBytes and timeoutSeconds) and the host Node version; compile's measured compileAllowanceBytes is still null",
+      "input": "operator review of the recipe's proposal preparation bounds (preparation.download/vendor/lunch boundBytes and timeoutSeconds) and the host Node version; and of compile's finite first-build allowance (capacity.compileAllowanceBytes, 250 GiB, a sampled stop, not a quota) and its 8 h timeout",
       "owner": "Infra (operator)",
       "next": "Infra/operator accepts or replaces the proposal bounds before any runtime approval; the stages measure and record what they consume. No new gate here"
     },
     {
-      "input": "vendor factory image blazer-cp3a.261005.005-factory-cd7d12c2.zip (sha256 cd7d12c2…18e3)",
+      "input": "vendor factory image blazer-cp3a.261005.005-factory-cd7d12c2.zip (sha256 cd7d12c2\u202618e3)",
       "owner": "Infra (builder inputs)",
       "next": "download and verify against the pinned sha256 on the builder (absent in historical Pro run 41255851279); never in this repository"
     },
