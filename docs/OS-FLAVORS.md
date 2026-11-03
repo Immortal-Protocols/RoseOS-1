@@ -392,6 +392,29 @@ and writes `preflight.json`, `started.json` and `completed.json` there, write-on
     reflink support (never assumed), the isolated-copy cost, the Pro archive size, and truncated walks.
   - It starts no process, opens no connection, reads no secret and writes nothing. The kernel may
     still update directory access times (relatime); contents, mtime and ctime are unchanged.
+- **`inspect-git-set`** (git-only, one explicit target set; observation O1):
+  `python3 scripts/blazer-build-only.py inspect-git-set --host H --target-set adevtool-projects-gitdir`
+  - A separate subcommand, so `inspect-git` and its approval never widen: `inspect-git` keeps exactly
+    its two targets and rejects `--target-set`. `inspect-git-set` takes only `--host` and one
+    `--target-set`; anything else, or an unknown set, exits 2 with nothing on stdout.
+  - **Target sets are fixed** in `preparation.gitInspection.targetSets` and validated on load and at
+    call time; the only set is `adevtool-projects-gitdir` with one target, `projectsGitdir`:
+    `/home/pixelbuild/grapheneos-2026100600/.repo/projects/vendor/adevtool.git` (the production
+    root plus `.repo/projects/<project>.git`). Observation 41566744429 found
+    `vendor/adevtool/.git` to be a link with that relative text; the helper never follows it and
+    names the gitdir directly.
+  - **Same bounds** as `inspect-git`, through the same `git_facts`: 60 s, scan 256 / report 64
+    entries, link text escaped and capped at 1024 bytes with absolute/leaves-tree flags, HEAD
+    `O_NOFOLLOW|O_NONBLOCK`, 65 bytes read and 64 accepted. A link at the target or above it is
+    reported (its text, or the first linked component) and never traversed. The `objects` link is
+    reported, not followed; objects, refs contents, `packed-refs`, `shallow` and config are never
+    opened.
+  - **Output** `roseos.blazer-git-target-set-inspection.v1`: the `inspect-git` constants and
+    `bounds`, plus `targetSet` and `targets.projectsGitdir` (`git_facts` plus `absolutePath`).
+  - **Touches only** the target, one level inside it, its HEAD and the `lstat` of its ancestors.
+    Validation checks the candidate target lexically, so no other path is touched. It is source
+    only: Release wiring and its execution are separate, and O2 (sizing the object store) and any
+    copy remain proposals.
 - **Not yet verified**: the only known source is historical production ext4. Paths such as
   `/home/pixelbuild/rose-actions/blazer-prep-<run-id>-<attempt>/{source,downloads,receipts}` are a
   proposal, not verified paths. No `source` copy has run, and none is authorized.
