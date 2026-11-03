@@ -30,7 +30,7 @@
     "downloadEnv": "ADEVTOOL_IMG_DOWNLOAD_DIR"
   },
   "compile": {
-    "outDir": "out-blazer-build",
+    "outDirTemplate": "out-blazer-build-{build}",
     "makeGoals": [
       "vendorbootimage",
       "vendorkernelbootimage",
@@ -40,7 +40,7 @@
     "maxJobs": 256,
     "timeoutSeconds": 28800,
     "measure": "filesystem-available-drop",
-    "basis": "First-build proposal, not a measurement: 8 h is a cap on one compile of the four make goals on the operator's builder, with SIGTERM then SIGKILL of the process group at the cap; actual duration is unmeasured. Outputs are kept on any stop. The tree must be isolated from the production source root and carry the admitted Rose integration; compile neither signs nor packages."
+    "basis": "First-build proposal, not a measurement: 8 h is a cap on one compile of the four make goals on the operator's builder, with SIGTERM then SIGKILL of the process group at the cap; actual duration is unmeasured. Outputs are kept on any stop. The tree must be isolated from the production source root and carry the admitted Rose integration; compile neither signs nor packages. F1/F2: BUILD_NUMBER and BUILD_DATETIME are exported from --build-number/--build-datetime, which must equal the admitted inputs' build (and so the reservation-derived integration) and the reservedAt (epoch seconds) of that build's write-once blazer-allocate reservation beside the integration directory; the runner's own values are dropped. Each build writes its own fresh OUT_DIR out-blazer-build-<build>; an existing one refuses and earlier outputs are never touched."
   },
   "gitMeta": {
     "projects": [
