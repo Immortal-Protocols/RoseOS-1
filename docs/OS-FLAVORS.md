@@ -560,6 +560,21 @@ Exit status: 0 ready/packaged/observed, 3 refused (JSON on stdout), 2 usage or c
 Optional flags: `--ssh-keygen PATH`, `--max-work-bytes N`, `--avb-public-key-sha256`,
 `--first-use-binding`.
 
+**Blazer.** `--flavor blazer` uses the same pinned generator (`device_common 1f5ba267`) and
+optimizer (`system/core 322ff512`) layout as Frankel and Rango. `load_flavor` re-derives it for
+`blazer` from the pinned `generate-release.sh` on every load: bootloader and radio from
+`OTA/android-info.txt`, `MAX_DOWNLOAD_SIZE 0x10000000`, and the generator's default GSC source
+`dauntless` (blazer isn't in the epic list).
+- A Blazer install archive is classified completely: members, firmware, GSC, images, super
+  segments, scripts and content.
+- It can't be factory-ready from this repository. `identity.avbPublicKeySha256` and
+  `factorySigning` stay null, so `avb_pkmd.bin` reports `identity:blazer avbPublicKeySha256`
+  missing and the signature reports the missing factory-signing identity.
+- An operator `--avb-public-key-sha256` never substitutes for that signing identity, and no
+  Frankel or Rango identity is inherited.
+- The remaining inputs are Signing's: a Blazer AVB key pin and a factory-signing principal and
+  public key, once approved.
+
 ## Missing for a real factory package (sole owner → next action)
 
 - **Factory-signing identity. Owner: signing; Chief decision.** No approved key exists:

@@ -25,7 +25,12 @@ FLAVOR = 'os/flavors/blazer.json'
 SKELS = 'os/tests/fixtures/adevtool-17df3b79/adevtool/vendor-skels/google_devices'
 SOURCES = (FLAVOR, 'os/flavors/frankel.json', 'os/devices/pixel10.json', 'os/release-pipeline/frankel.json',
     'scripts/tests/fixtures/permission-apex/script/generate-release.sh',
-    f'{SKELS}/blazer/firmware/android-info.txt', f'{SKELS}/frankel/firmware/android-info.txt')
+    f'{SKELS}/blazer/firmware/android-info.txt', f'{SKELS}/frankel/firmware/android-info.txt',
+    # The pinned generator and optimizer layout blazer shares with frankel and rango (re-derived on every load).
+    *(f'scripts/tests/fixtures/factory-package/device_common-1f5ba267/{f}'
+      for f in ('generate-factory-images-common.sh', 'clear-factory-images-variables.sh')),
+    *(f'scripts/tests/fixtures/factory-package/platform_system_core-322ff512/{f}'
+      for f in ('fastboot-excerpt.json', 'PROVENANCE.json')))
 
 def zip_bytes(members):
     from io import BytesIO
