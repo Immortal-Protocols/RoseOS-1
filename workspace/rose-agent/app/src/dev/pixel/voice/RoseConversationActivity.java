@@ -148,7 +148,7 @@ public final class RoseConversationActivity extends Activity {
 
  /** True between onResume and onPause: the presence animates only while this screen is visible. */
  boolean resumed;
- @Override protected void onResume(){super.onResume();resumed=true;resumedAt=SystemClock.uptimeMillis();ctlPolledAt=0;notices.reset();handler.removeCallbacks(tick);handler.post(tick);if(overview!=null)overview.resume();}
+ @Override protected void onResume(){super.onResume();resumed=true;resumedAt=SystemClock.uptimeMillis();ctlPolledAt=0;appsPolledAt=0;notices.reset();handler.removeCallbacks(tick);handler.post(tick);if(overview!=null)overview.resume();}
  @Override protected void onPause(){resumed=false;handler.removeCallbacks(tick);stopBreath();if(overview!=null){if(isFinishing())overview.teardown();else overview.pause();}clearNotice();super.onPause();}
 
  void refresh(){
@@ -339,17 +339,21 @@ public final class RoseConversationActivity extends Activity {
   * (App Core PR355), read with the controller state about once a second while the overview is open. Each read is one
   * complete report and its own registration (reads are serial), so a controller restart or a late reply never brings
   * old apps back. Only an attested complete reply is shown as membership (CurrentApps.fromReply); anything else is the
-  * explicit unavailable state. Task history is never consulted. */
- volatile CurrentApps.Snapshot appsSnapshot;long appsReads;volatile boolean appsPolling;long appsPolledAt;volatile int appsEpoch;
+  * explicit unavailable state. Task history is never consulted. A report counts only while current
+  * (CurrentApps.current: read since this screen last resumed and under MAX_AGE_MS old); otherwise the overview gets
+  * CurrentApps.EXPIRED, its checking state, which never retires the controller's still-valid registration. */
+ static final class AppsRead { final CurrentApps.Snapshot snapshot;final long at; AppsRead(CurrentApps.Snapshot s,long at){snapshot=s;this.at=at;} }
+ volatile AppsRead appsSnapshot;long appsReads;volatile boolean appsPolling;long appsPolledAt;volatile int appsEpoch;
  /** One read in flight, about once a second, only while the overview is open (never otherwise). */
  void pollApps(){
   if(appsPolling||SystemClock.uptimeMillis()-appsPolledAt<1000)return;appsPolling=true;appsPolledAt=SystemClock.uptimeMillis();
   final int epoch=appsEpoch;
-  new Thread(()->{CurrentApps.Snapshot s=readCurrentApps();if(epoch==appsEpoch)appsSnapshot=s;appsPolling=false;},"rose-current-apps").start();
+  final long startedAt=SystemClock.uptimeMillis();
+  new Thread(()->{CurrentApps.Snapshot s=readCurrentApps();if(epoch==appsEpoch)appsSnapshot=new AppsRead(s,startedAt);appsPolling=false;},"rose-current-apps").start();
  }
  CurrentApps.Snapshot currentApps(){
-  CurrentApps.Snapshot s=appsSnapshot;
-  return s!=null?s:CurrentApps.Snapshot.unavailable("pending",0,CurrentApps.NOT_REPORTED);
+  AppsRead r=appsSnapshot;
+  return r!=null&&CurrentApps.current(r.at,resumedAt,SystemClock.uptimeMillis())?r.snapshot:CurrentApps.EXPIRED;
  }
  /** One current_apps read (off the UI thread). Failures are fixed words; nothing is logged. */
  CurrentApps.Snapshot readCurrentApps(){

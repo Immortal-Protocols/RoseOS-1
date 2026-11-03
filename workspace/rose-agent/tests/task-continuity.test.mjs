@@ -162,7 +162,9 @@ test('Rose\'s apps shows exactly the apps currently under Rose\'s control, never
  assert.match(read,/extras\.putString\("params","\{\}"\)/,'no parameters: no caller display or package override');
  assert.match(read,/return CurrentApps\.fromReply\(reg,/,'every reply goes through the attestation rules');
  assert.match(block,/String reg="current_apps-"\+\(\+\+appsReads\);/,'each read is its own registration (serial reads)');
- assert.match(block,/if\(epoch==appsEpoch\)appsSnapshot=s;/,'a read from before re-entry never lands');
+ assert.match(block,/if\(epoch==appsEpoch\)appsSnapshot=new AppsRead\(s,startedAt\);/,'a read from before re-entry never lands');
+ assert.match(block,/return r!=null&&CurrentApps\.current\(r\.at,resumedAt,SystemClock\.uptimeMillis\(\)\)\?r\.snapshot:CurrentApps\.EXPIRED;/,'only a current report is shown; otherwise the checking state, never a retired registration');
+ assert.doesNotMatch(activity,/unavailable\("pending"/,'no synthetic registration that would retire the controller\'s');
  assert.match(block,/void openOverview\(\)\{appsEpoch\+\+;appsSnapshot=null;appsPolledAt=0;/,'re-entry starts from a fresh read');
  assert.match(activity,/if\(overview!=null&&overview\.isOpen\(\)\)\{pollApps\(\);overview\.refresh\(\);\}/,'read only while the overview is open');
  assert.ok(!/WorkspaceOverviewFeed\.tasks\(\)/.test(block.slice(0,block.indexOf('WorkspaceOverviewPanel.Actions overviewActions()'))),'membership never reads task history');

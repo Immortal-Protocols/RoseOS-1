@@ -279,6 +279,30 @@ public class WorkspaceOverviewRenderTest {
         assertTrue(texts(tagged(pf, "app:s-1/" + MAPS)).contains("Still open"));
     }
 
+    /** #410 Background Work retention: a report that is no longer current (CurrentApps.EXPIRED: nothing read since the
+     * screen resumed or the overview reopened, or the newest read too old) never keeps a lit card; the panel says Rose is
+     * checking, and the same controller's next current report brings its card back (its registration was not retired). */
+    @Test public void expiredReportShowsCheckingThenTheSameControllerReturns() throws Exception {
+        WorkspaceOverviewPanel.STOPS.clear();
+        Host h = new Host(); h.snapshot = twoApps(1, "ready");
+        WorkspaceOverviewPanel p = panel(h);
+        assertTrue("current: lit", tagged(p, "app:s-0/" + CALC).getForeground() instanceof WorkspaceOverviewView.RunningEdge);
+        h.snapshot = CurrentApps.EXPIRED; p.refresh(); layout(p);
+        assertNull("expired: no stale card", tagged(p, "app:s-0/" + CALC));
+        assertTrue("expired: the checking state", texts(p).contains(CurrentApps.text(CurrentApps.NOT_REPORTED)));
+        for (View v : all(p)) assertFalse("expired: no running edge anywhere", v.getForeground() instanceof WorkspaceOverviewView.RunningEdge);
+        h.snapshot = twoApps(1, "ready"); p.refresh(); layout(p);
+        assertNotNull("the same controller's next current report (same generation) is shown again", tagged(p, "app:s-0/" + CALC));
+        assertTrue(tagged(p, "app:s-0/" + CALC).getForeground() instanceof WorkspaceOverviewView.RunningEdge);
+        // Reopen: the overview starts from EXPIRED (no read yet), then the same registration's report shows.
+        p.close(); h.snapshot = CurrentApps.EXPIRED; p.open(); layout(p);
+        assertNull("reopened before a read: nothing stale", tagged(p, "app:s-0/" + CALC));
+        h.snapshot = twoApps(2, "ready"); p.refresh(); layout(p);
+        assertNotNull("reopened: the controller's report is shown, not refused as retired", tagged(p, "app:s-0/" + CALC));
+        // A session Stop in flight survives the expiry (Stops are kept by session, not by the shown report).
+        assertNotNull(tagged(p, "stop"));
+    }
+
     @Test public void lingeringAppsStayWithoutControls() throws Exception {
         WorkspaceOverviewPanel.STOPS.clear();
         Host h = new Host();

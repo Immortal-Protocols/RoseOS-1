@@ -103,6 +103,41 @@ public final class CurrentAppsTest {
         expect(life.state() == State.UNAVAILABLE && life.reason().equals(CurrentApps.INCOMPLETE), "launch through the controller: can't confirm, not a partial list");
         life.apply(CurrentApps.fromController("ctl", 2, null, "stopped", null, null, null, null));
         expect(life.apps().isEmpty() && life.state() == State.EMPTY, "released through the controller: none");
+        // #410 expiry (Background Work snapshot retention) and the reopen regression: EXPIRED hides what is no longer
+        // current without retiring the controller's registration; its next current report is shown again.
+        {
+            java.util.List<CurrentApps.ReplyApp> ra = java.util.Arrays.asList(new CurrentApps.ReplyApp("com.android.calculator2", true, true, "s-0"));
+            java.util.List<CurrentApps.Binding> rb = java.util.Arrays.asList(new CurrentApps.Binding(0, "s-0", "t-0", "com.android.calculator2", "ready", true, true));
+            Tracker e = new Tracker();
+            expect(e.apply(CurrentApps.fromBindings("r", "live", 5L, ra, rb, "E1", true)) && e.state() == CurrentApps.State.AVAILABLE, "a current report shows its card");
+            expect(e.apps().get(0).authoritativelyRunning(), "its session is ready: the edge may light");
+            expect(e.apply(CurrentApps.EXPIRED) && e.state() == CurrentApps.State.UNAVAILABLE && e.apps().isEmpty(), "expired: no cards (no running edge), the checking state");
+            expect(e.reason().equals(CurrentApps.NOT_REPORTED) && CurrentApps.text(e.reason()).contains("checking"), "it says Rose is checking");
+            expect(!e.apply(CurrentApps.EXPIRED), "expiring again changes nothing");
+            expect(e.registration().equals("controller:E1"), "the controller's registration is kept, never retired");
+            expect(e.apply(CurrentApps.fromBindings("r", "live", 5L, ra, rb, "E1", true)) && e.state() == CurrentApps.State.AVAILABLE, "its next current report (same generation) is shown again");
+            e.apply(CurrentApps.EXPIRED);
+            expect(!e.apply(CurrentApps.fromBindings("r", "live", 4L, ra, rb, "E1", true)) && e.apps().isEmpty(), "an older report never comes back after expiry");
+            expect(e.apply(CurrentApps.fromBindings("r", "live", 6L, ra, rb, "E1", true)) && e.apps().size() == 1, "a newer one does");
+            expect(!e.apply(CurrentApps.fromBindings("r", "live", 6L, ra, rb, "E1", true)), "and then the normal generation order holds again");
+            e.apply(CurrentApps.EXPIRED);
+            expect(e.apply(CurrentApps.fromBindings("r", "live", 1L, ra, rb, "E2", true)) && e.registration().equals("controller:E2"), "a restarted controller (new epoch) is a new registration");
+            expect(!e.apply(CurrentApps.fromBindings("r", "live", 9L, ra, rb, "E1", true)), "and the replaced one stays retired");
+            // The old reopen path (a synthetic "pending" registration) retired the controller for good; EXPIRED does not.
+            Tracker old = new Tracker();
+            old.apply(CurrentApps.fromBindings("r", "live", 5L, ra, rb, "E1", true));
+            old.apply(CurrentApps.Snapshot.unavailable("pending", 0, CurrentApps.NOT_REPORTED));
+            expect(!old.apply(CurrentApps.fromBindings("r", "live", 6L, ra, rb, "E1", true)), "(documents the defect: a synthetic registration retires the real one)");
+            Tracker fresh = new Tracker();
+            expect(!fresh.apply(CurrentApps.EXPIRED) || fresh.state() == CurrentApps.State.UNAVAILABLE, "expired before anything: still the checking state");
+            expect(fresh.apply(CurrentApps.fromBindings("r", "live", 1L, ra, rb, "E1", true)) && fresh.apps().size() == 1, "then the first report shows");
+            // current(): read since the last resume and within MAX_AGE_MS.
+            long resumed = 1000, max = CurrentApps.MAX_AGE_MS;
+            expect(CurrentApps.current(1000, resumed, 1000) && CurrentApps.current(1200, resumed, 1200 + max), "a read since resume, up to the max age");
+            expect(!CurrentApps.current(999, resumed, 1000), "a read from before the pause/lock/user switch is not current");
+            expect(!CurrentApps.current(1200, resumed, 1201 + max), "an old read (a stalled call) is not current");
+            expect(!CurrentApps.current(-1, 0, 0), "an unstamped read is not current");
+        }
         System.out.println("CurrentAppsTest: " + checks + " checks passed");
     }
 }
