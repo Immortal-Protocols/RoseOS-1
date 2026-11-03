@@ -18,6 +18,8 @@ failure.
                       reservation's derived H/rose-actions/blazer-integrate-<build> and blazer-reconcile-<build>
         1. seed       blazer-reconcile-seed.py seed --frankel-receipts F --source-root S --source-run RUN
                       --source-inventory INV --source-inventory-sha256 H --receipt-dir INTEGRATION_DIR
+                      --prior-integrations H/rose-actions (a re-integration of an already integrated copy seeds from
+                      its newest completed blazer integration; the first one from Frankel's receipt)
         2. assemble   blazer-candidate-bundle.py assemble --apps-dir A --policy P --build B --product HEAD --aapt T
                       --apksigner U --out WORK/bundle
                       then the bundle's copied policy and six app files re-hashed against inputDigests
@@ -205,7 +207,7 @@ def commands(plan, recipe, root=ROOT):
         ('seed', [py, str(root/'scripts/blazer-reconcile-seed.py'), 'seed', '--frankel-receipts', str(plan['frankel']),
                   '--source-root', str(plan['source']), '--source-run', plan['run'], '--source-inventory',
                   str(plan['inventory']), '--source-inventory-sha256', plan['inventorySha256'], '--receipt-dir',
-                  str(plan['integrationDir'])]),
+                  str(plan['integrationDir']), '--prior-integrations', str(plan['home']/'rose-actions')]),
         ('assemble', [py, str(root/'scripts/blazer-candidate-bundle.py'), 'assemble', '--apps-dir', str(plan['appsDir']),
                       '--policy', str(plan['policy']), '--build', plan['build'], '--product', recipe,
                       '--aapt', str(plan['aapt']), '--apksigner', str(plan['apksigner']), '--out', str(work/'bundle')]),
