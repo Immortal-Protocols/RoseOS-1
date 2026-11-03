@@ -37,6 +37,22 @@ ANDROID_SDK_ROOT=/opt/roseos/android-sdk mvn -q -B test   # android.jar is compi
   - At an end a key is not taken, so focus can leave.
   - A tap on the centre card reaches it.
 
+`RoseEdgeSwipeNativeTest` (#410 E2a) runs the production `RoseEdgeSwipe`, `RoseEdgeState` and `RoseEdgeGesture` on
+the same runtime:
+- **Default-off switch.** With `persist.wm.debug.rose_edge` unset, Launcher3 decides everything and nothing is
+  previewed. The test reads the runtime's real `SystemProperties` back; the compile-only stub under
+  `src/test/java/android/os` exists because `android.jar` omits that hidden class.
+- **Gates.** The edge applies only to an unlocked app under gesture navigation in its natural rotation, never over
+  Home or for a trackpad.
+- **Raise and lower.** A short swipe raises the edge and tells listeners once. With the edge up, a short swipe keeps
+  it and more than 120dp goes Home; leaving the app lowers it. Speed is averaged over the gesture.
+- **Preview.** The crop is at full width, unscaled, while the app follows. Past the edge it shrinks about the
+  shortened window's centre and lifts 40dp. Attached to recents, Launcher3's own transform applies. With the edge
+  up, or reduced motion, the app does not track the finger. State is main-thread only.
+
+The patched Launcher3 swipe handlers that call these (`os/patches/rose-edge-launcher3.patch`) are not compiled or
+run here.
+
 Touches are real `MotionEvent`s dispatched from the root, so a card consumes `ACTION_DOWN` and the fan intercepts
 the drag exactly as Android does. Scrolling is stepped frame by frame through `computeScroll`.
 

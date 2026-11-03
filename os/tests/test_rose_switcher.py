@@ -1339,15 +1339,169 @@ class RoseEdgeGestureTest(unittest.TestCase):
         self.assertIn(f'EDGE_HEIGHT_DP = {edge["height"]}, EDGE_FLAT_TOP_DP = {edge["flatTop"]}', self.EDGE)
         self.assertIn(f'CORNER_DP = {edge["concaveFilletRadius"]}', self.EDGE)
 
-    def test_nothing_calls_it_yet_and_it_has_no_android_or_platform_reach(self):
+    def test_only_the_edge_swipe_calls_it_and_it_has_no_android_or_platform_reach(self):
         quickstep = ROOT/'os/overlays/packages/apps/Launcher3'
-        callers = [p for p in quickstep.rglob('*.java') if p.name != 'RoseEdgeGesture.java'
-            and 'RoseEdgeGesture' in p.read_text()]
-        self.assertEqual(callers, [], 'wired only with OS Core\'s half, behind a builder compile')
+        callers = sorted(p.name for p in quickstep.rglob('*.java') if p.name != 'RoseEdgeGesture.java'
+            and 'RoseEdgeGesture' in p.read_text())
+        self.assertEqual(callers, ['RoseEdgeSwipe.java'], 'its only callers are E2a\'s, behind the unregistered edge patch')
         self.assertNotIn('RoseEdgeGesture', PATCH.read_text())
         self.assertNotIn('import ', self.EDGE, 'pure: no Android, IPC, permission or sensor types')
         for reach in ('SensorPrivacy', 'AudioManager', 'Binder', 'Intent', 'Settings', 'System.', 'Thread'):
             self.assertNotIn(reach, self.EDGE)
+
+EDGE_PATCH = ROOT/'os/patches/rose-edge-launcher3.patch'
+# Launcher3 47accce, byte for byte: the swipe handlers the edge patch changes, and the classes whose members it uses.
+EDGE_PINNED = {'AbsSwipeUpHandler.java': '7bd5815f17eed4c5e59cfe323f8f61ad6d3c5bfbdedc2d95a83183984350e0df',
+    'FallbackSwipeHandler.java': '194138f4ee572d6edef485087a08ae3377ad941b06bf8b5342d63b23e9805161',
+    'SwipeUpAnimationLogic.java': '9874ec5f07f78c0c255c50713046e9c74722dbc4ed53e1a168ee3c1d4c72afb3',
+    'GestureState.java': '3ceb83b87e02cd0505cd7a1aa727aa0d672e3c1fc2d586119346373a485c94cb',
+    'TransformParams.java': '22b960e05c9e6c694cbe725329b6ac6234fdccfd396523283055197a6a5d7eb2',
+    'SurfaceTransaction.java': 'f5ba9a7c03444b39a6702c944b267ad4c5abd5d88be65897fb9327fb41c7083c',
+    'TaskViewSimulator.java': '61642176403139f131ddfab56a61472cd6e7ff008729a43637210940d4dbb6e6'}
+EDGE_TARGETS = {'AbsSwipeUpHandler.java': f'{QUICKSTEP}/AbsSwipeUpHandler.java',
+    'FallbackSwipeHandler.java': f'{QUICKSTEP}/FallbackSwipeHandler.java'}
+
+class RoseEdgeSwipePatchTest(unittest.TestCase):
+    """#410 E2a: rose-edge-launcher3.patch wires RoseEdgeGesture into Launcher3's fallback swipe handler, off unless
+    persist.wm.debug.rose_edge. Source checks only: the patch applies byte for byte to the pinned handlers, keeps
+    stock behaviour in the base class, and uses only members the pinned sources declare. The patched handlers are NOT
+    compiled here (that needs a real Launcher3 module build on the builder), and nothing is run on a device."""
+    EDGE_SWIPE = (OVERLAY/'RoseEdgeSwipe.java').read_text()
+    EDGE_STATE = (OVERLAY/'RoseEdgeState.java').read_text()
+
+    def patched(self):
+        tree = Path(tempfile.mkdtemp(prefix='launcher3-edge-'))
+        self.addCleanup(shutil.rmtree, tree, True)
+        for name, relative in EDGE_TARGETS.items():
+            (tree/relative).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(FIXTURES/name, tree/relative)
+        subprocess.run(['git', 'init', '-q', str(tree)], check=True)
+        check = subprocess.run(['git', '-C', str(tree), 'apply', '--check', str(EDGE_PATCH)], capture_output=True, text=True)
+        self.assertEqual(check.returncode, 0, check.stderr)
+        subprocess.run(['git', '-C', str(tree), 'apply', str(EDGE_PATCH)], check=True)
+        return {name: (tree/relative).read_text() for name, relative in EDGE_TARGETS.items()}
+
+    def test_fixtures_are_the_pinned_files(self):
+        for name, digest in EDGE_PINNED.items():
+            self.assertEqual(hashlib.sha256((FIXTURES/name).read_bytes()).hexdigest(), digest, name)
+
+    def test_the_patch_applies_and_changes_only_two_stock_lines(self):
+        text = EDGE_PATCH.read_text()
+        self.assertEqual(re.findall(r'^\+\+\+ b/(\S+)', text, re.M), list(EDGE_TARGETS.values()))
+        removed = [l for l in text.splitlines() if l.startswith('-') and not l.startswith('---')]
+        self.assertEqual(removed, ['-        final GestureEndTarget endTarget = calculateEndTarget(',
+            '-                velocityPxPerMs, endVelocityPxPerMs, isFling, isCancel, horizontalTouchSlopPassed);',
+            '-                taskViewSimulator.apply(transformParams);'])
+        self.assertNotIn('\t', ''.join(l for l in text.splitlines() if l.startswith('+')), 'Launcher3 indents with spaces')
+        files = set(re.findall(r'^\+\+\+ b/(\S+)', PATCH.read_text(), re.M))
+        self.assertFalse(files & set(EDGE_TARGETS.values()), 'disjoint from rose-switcher-launcher3.patch')
+        self.patched()
+
+    def test_the_base_class_keeps_stock_behaviour(self):
+        abs_ = self.patched()['AbsSwipeUpHandler.java']
+        self.assertIn('final GestureEndTarget endTarget = refineEndTarget(calculateEndTarget(\n'
+            '                velocityPxPerMs, endVelocityPxPerMs, isFling, isCancel, horizontalTouchSlopPassed),\n'
+            '                isCancel, mIsMotionPaused);', abs_)
+        self.assertIn('GestureEndTarget endTarget, boolean isCancel, boolean isMotionPaused) {\n        return endTarget;\n    }', abs_)
+        self.assertIn('TaskViewSimulator taskViewSimulator, TransformParams transformParams) {\n'
+            '        taskViewSimulator.apply(transformParams);\n    }', abs_)
+        self.assertIn('return mHasMotionEverBeenPaused || mIsLikelyToStartNewTask;', abs_)
+        self.assertEqual(abs_.count('applyTargetTransform(taskViewSimulator, transformParams);'), 1)
+        self.assertNotIn('Rose', abs_.replace('RoseOS (#410)', ''), 'no Rose logic in the shared base class')
+
+    def test_the_fallback_handler_maps_only_its_own_outcomes(self):
+        fallback = self.patched()['FallbackSwipeHandler.java']
+        refine = fallback[fallback.index('protected GestureEndTarget refineEndTarget('):fallback.index('protected void applyTargetTransform(')]
+        self.assertIn('if (!mRoseEdge.enabled() || mGestureState.isHandlingAtomicEvent()) {\n            return endTarget;',
+            refine, 'switch off (the default): stock end target, nothing else evaluated')
+        self.assertIn('endTarget == GestureEndTarget.HOME, mCurrentDisplacement)', refine)
+        self.assertIn('case RoseEdgeGesture.RAISE:\n            case RoseEdgeGesture.STAY:\n'
+            '                refined = GestureEndTarget.LAST_TASK;', refine)
+        self.assertIn('case RoseEdgeGesture.HOME:\n                refined = GestureEndTarget.HOME;', refine)
+        self.assertIn('default:\n                break;', refine, "STOCK keeps Launcher3's own target")
+        self.assertIn('mRoseEdge.settled(refined == GestureEndTarget.LAST_TASK);', refine)
+        transform = fallback[fallback.index('protected void applyTargetTransform('):fallback.index('private boolean isRoseGestureNavigation()')]
+        self.assertTrue(transform.split('\n')[2:6] == ['        if (!mRoseEdge.enabled()) {',
+            '            super.applyTargetTransform(taskViewSimulator, transformParams);', '            return;', '        }'],
+            'switch off (the default): stock transform first, nothing else evaluated')
+        self.assertEqual(transform.count('super.applyTargetTransform(taskViewSimulator, transformParams);'), 2)
+        self.assertIn('hasAttachedToRecents() || endTarget == GestureEndTarget.RECENTS\n'
+            '                || endTarget == GestureEndTarget.NEW_TASK', transform, 'the switcher and quick switch stay stock')
+        self.assertIn('mRunningOverHome || mGestureState.isTrackpadGesture()', fallback, 'never over Home or for a trackpad')
+        self.assertIn('mRemoteTargetHandles.length == 1', fallback, 'one app only: never split screen')
+
+    def test_every_launcher3_member_it_uses_is_declared_at_the_pinned_revision(self):
+        src = {name: (FIXTURES/name).read_text() for name in EDGE_PINNED}
+        declared = [('SwipeUpAnimationLogic.java', r'protected float mCurrentDisplacement;'),
+            ('SwipeUpAnimationLogic.java', r'protected int mTransitionDragLength;'),
+            ('SwipeUpAnimationLogic.java', r'protected DeviceProfile mDp;'),
+            ('SwipeUpAnimationLogic.java', r'protected RemoteTargetHandle\[\] mRemoteTargetHandles;'),
+            ('SwipeUpAnimationLogic.java', r'protected final GestureState mGestureState;'),
+            ('AbsSwipeUpHandler.java', r'protected float getCurrentShiftValue\(\)'),
+            ('AbsSwipeUpHandler.java', r'private boolean mIsMotionPaused;'),
+            ('AbsSwipeUpHandler.java', r'private boolean mHasMotionEverBeenPaused;'),
+            ('AbsSwipeUpHandler.java', r'private boolean mIsLikelyToStartNewTask;'),
+            ('AbsSwipeUpHandler.java', r'mDp\.getDeviceProperties\(\)\.getDeviceConfiguration\(\)\.isGestureMode\(\)'),
+            ('GestureState.java', r'public boolean isHandlingAtomicEvent\(\)'),
+            ('GestureState.java', r'public boolean isTrackpadGesture\(\)'),
+            ('GestureState.java', r'public GestureEndTarget getEndTarget\(\)'),
+            ('GestureState.java', r'\bHOME\(true,'), ('GestureState.java', r'\bRECENTS\(true,'),
+            ('GestureState.java', r'\bNEW_TASK\(false,'), ('GestureState.java', r'\bLAST_TASK\(false,'),
+            ('TaskViewSimulator.java', r'public RecentsOrientedState getOrientationState\(\)'),
+            ('TaskViewSimulator.java', r'mOrientationState\.getDisplayRotation\(\)'),
+            ('TaskViewSimulator.java', r'mDp\.getDeviceProperties\(\)\.getWidthPx\(\), mDp\.getDeviceProperties\(\)\.getHeightPx\(\)'),
+            ('TransformParams.java', r'public SurfaceTransaction createSurfaceParams\(BuilderProxy proxy\)'),
+            ('TransformParams.java', r'public void applySurfaceParams\(SurfaceTransaction builder\)'),
+            ('TransformParams.java', r'void onBuildTargetParams\(SurfaceProperties builder,\s+RemoteAnimationTarget app, TransformParams params\);'),
+            ('SurfaceTransaction.java', r'public SurfaceProperties setMatrix\(Matrix matrix\)'),
+            ('SurfaceTransaction.java', r'public SurfaceProperties setWindowCrop\(Rect windowCrop\)'),
+            ('SurfaceTransaction.java', r'public SurfaceProperties setCornerRadius\(float radius\)'),
+            ('FallbackSwipeHandler.java', r'private final boolean mRunningOverHome;'),
+            ('FallbackSwipeHandler.java', r'import android\.graphics\.Rect;'),
+            ('FallbackSwipeHandler.java', r'import android\.view\.Surface;'),
+            ('FallbackSwipeHandler.java', r'import com\.android\.quickstep\.util\.TransformParams\.BuilderProxy;'),
+            ('FallbackSwipeHandler.java', r'int displayId\) \{')]
+        for name, pattern in declared:
+            self.assertRegex(src[name], pattern, f'{name}: {pattern}')
+        self.assertEqual(src['GestureState.java'].count('class GestureState'), 1)
+        self.assertIn('package com.android.quickstep;', src['AbsSwipeUpHandler.java'])
+
+    def test_the_overlay_classes_compile_against_the_sdk(self):
+        import os
+        sdk = os.environ.get('ANDROID_HOME') or '/opt/roseos/android-sdk'
+        jars = sorted(Path(sdk).glob('platforms/android-*/android.jar'))
+        if not jars:
+            self.skipTest('no Android SDK platform')
+        tmp = Path(tempfile.mkdtemp(prefix='rose-edge-compile-'))
+        self.addCleanup(shutil.rmtree, tmp, True)
+        stub = tmp/'src/android/os/SystemProperties.java'
+        stub.parent.mkdir(parents=True)
+        # frameworks/base 84183aff core/java/android/os/SystemProperties.java (hidden; Launcher3 builds with platform APIs).
+        stub.write_text('package android.os; public class SystemProperties { '
+            'public static boolean getBoolean(String key, boolean def) { return def; } }')
+        result = subprocess.run(['javac', '-source', '11', '-target', '11', '-Xlint:all', '-Xlint:-options',
+            '-implicit:none', '-sourcepath', str(tmp/'src'), '-cp', str(jars[-1]), '-d', str(tmp/'out'),
+            str(OVERLAY/'RoseEdgeSwipe.java'), str(OVERLAY/'RoseEdgeState.java'), str(OVERLAY/'RoseEdgeGesture.java')],
+            capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        warnings = [l for l in result.stderr.splitlines() if l.strip() and not l.startswith('Picked up JAVA_TOOL_OPTIONS')]
+        self.assertEqual(warnings, [], 'no warnings')
+
+    def test_it_is_off_by_default_and_reaches_nothing_new(self):
+        self.assertIn('public static final String PROPERTY = "persist.wm.debug.rose_edge";', self.EDGE_SWIPE)
+        self.assertIn('SystemProperties.getBoolean(PROPERTY, false)', self.EDGE_SWIPE)
+        self.assertIn('return enabled && !excluded && gestureNavigation && naturalRotation\n'
+            '                && (keyguard == null || !keyguard.isKeyguardLocked());', self.EDGE_SWIPE)
+        for source in (self.EDGE_SWIPE, self.EDGE_STATE):
+            code = re.sub(r'//[^\n]*', '', re.sub(r'/\*.*?\*/', '', source, flags=re.S))
+            for reach in ('SensorPrivacy', 'AudioManager', 'setMicrophoneMute', 'Binder', 'Intent', 'startActivity',
+                    'ContentResolver', 'Settings', 'SystemProperties.set', 'WindowManager', 'permission'):
+                self.assertNotIn(reach, code, reach)
+        self.assertIn('Looper.myLooper() != Looper.getMainLooper()', self.EDGE_STATE)
+
+    def test_no_build_applies_it_until_release_and_infra_agree(self):
+        patcher = (ROOT/'scripts/apply-os-changes.py').read_text()
+        self.assertNotIn('rose-edge-launcher3.patch', patcher, 'registered only with an agreed compile route')
 
 if __name__ == '__main__':
     unittest.main()
