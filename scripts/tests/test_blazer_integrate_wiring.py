@@ -6,6 +6,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import tempfile
@@ -148,6 +149,40 @@ class Wiring(unittest.TestCase):
         self.assertEqual(sorted(copied), ['integrate.json', 'local-inputs.json', 'newest-reconcile-receipt.json',
                                           'reconcile-config.json', 'seed-provenance.json'])
         self.assertEqual(json.loads((self.tmp/'up/newest-reconcile-receipt.json').read_text())['label'], 'blazer-2026110350')
+
+
+WORKFLOW = (ROOT/'.github/workflows/os-release.yml').read_text()
+
+
+def jobs():
+    body = WORKFLOW.split('\njobs:\n', 1)[1]
+    return dict(re.findall(r'(?ms)^  ([\w-]+):\n(.*?)(?=^  [\w-]+:\n|\Z)', body))
+
+
+class Workflow(unittest.TestCase):
+    def test_mode_check_job_and_ownership(self):
+        self.assertIn('blazer-compile, blazer-integrate]\n', WORKFLOW)
+        self.assertIn("      - name: Blazer integrate check\n        id: blazer-integrate\n        if: inputs.mode == "
+                      "'blazer-integrate'\n        run: python3 scripts/blazer-integrate-wiring.py check >> \"$GITHUB_OUTPUT\"\n",
+                      jobs()['guard'])
+        job = jobs()['blazer-integrate']
+        code = '\n'.join(l for l in job.splitlines() if not l.strip().startswith('#'))
+        self.assertEqual(code.split('    steps:\n', 1)[0], "    needs: [guard, controller]\n    if: inputs.mode == "
+            "'blazer-integrate'\n    runs-on: [self-hosted, roseos-frankel-builder]\n"
+            "    timeout-minutes: ${{ fromJSON(needs.guard.outputs.blazer_integrate_job_minutes || '1') }}\n"
+            "    permissions:\n      contents: read\n    env:\n"
+            "      OUTER_SECONDS: ${{ needs.guard.outputs.blazer_integrate_outer_seconds }}\n")
+        for absent in ('id-token', 'secrets.', 'actions-gcp-login', 'GCP_', 'publish', 'host-sign', 'rm -rf', 'download-artifact'):
+            self.assertNotIn(absent, code)
+        self.assertEqual(sorted(set(re.findall(r'python3 (\S+)', code))), ['scripts/blazer-integrate-wiring.py'])
+        self.assertIn('timeout --kill-after=30s "${OUTER_SECONDS}s" python3 scripts/blazer-integrate-wiring.py run --run-dir "$run_dir"', job)
+        self.assertEqual(job.count('actions/upload-artifact@'), 1)
+        for name in ('Allowlisted reports', 'Reports artifact'):
+            self.assertIn(f'      - name: {name}\n        if: always()\n', job)
+        own = "inputs.mode == 'blazer-compile' || inputs.mode == 'blazer-integrate'"
+        self.assertEqual(jobs()['controller'].count(own), 2)
+        self.assertEqual(jobs()['cleanup'].count(own), 1)
+        self.assertIn('blazer-compile, blazer-integrate, app-builder', re.search(r'(?m)^    needs: (.+)$', jobs()['cleanup'])[1])
 
 
 if __name__ == '__main__':

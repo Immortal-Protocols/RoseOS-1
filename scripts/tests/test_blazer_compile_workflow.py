@@ -82,7 +82,7 @@ class Wiring(unittest.TestCase):
 
 class Workflow(unittest.TestCase):
     def test_mode_check_job_receipts_and_ownership(self):
-        self.assertIn('launcher3-compile, blazer-compile]\n', WORKFLOW)
+        self.assertIn('launcher3-compile, blazer-compile, blazer-integrate]\n', WORKFLOW)
         self.assertIn("      - name: Blazer compile check\n        id: blazer-compile\n        if: inputs.mode == "
                       "'blazer-compile'\n        run: python3 scripts/blazer-compile-wiring.py check >> \"$GITHUB_OUTPUT\"\n",
                       jobs()['guard'])
@@ -102,10 +102,10 @@ class Workflow(unittest.TestCase):
         for name in ('Allowlisted JSON receipts only', 'Receipts artifact', "Remove this attempt's task directory"):
             self.assertIn('        if: always()\n', step(job, name))
         self.assertEqual(job.count('actions/upload-artifact@'), 1)
-        own = "inputs.mode == 'launcher3-compile' || inputs.mode == 'blazer-compile'"
+        own = "inputs.mode == 'launcher3-compile' || inputs.mode == 'blazer-compile' || inputs.mode == 'blazer-integrate'"
         self.assertEqual(jobs()['controller'].count(own), 2)
         self.assertEqual(jobs()['cleanup'].count(own), 1)
-        self.assertIn('launcher3-compile, blazer-compile, app-builder', re.search(r'(?m)^    needs: (.+)$', jobs()['cleanup'])[1])
+        self.assertIn('launcher3-compile, blazer-compile, blazer-integrate, app-builder', re.search(r'(?m)^    needs: (.+)$', jobs()['cleanup'])[1])
         self.assertNotIn('--stage compile', code(jobs()['blazer-prep']))  # blazer-prep never compiles
 
 
