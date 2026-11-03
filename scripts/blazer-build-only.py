@@ -58,6 +58,9 @@ and full containment need host-side cgroup/quota configuration that this tool do
   blazer-build-only.py inspect-git --host H
             git-only: one level of each fixed preparation.gitInspection target (production and candidate
             vendor/adevtool/.git) and at most 65 bytes of its HEAD (64 accepted), nothing else; no other argument
+  blazer-build-only.py inspect-git-set --host H --target-set NAME
+            the same git-only inspection of exactly one explicit preparation.gitInspection.targetSets entry
+            (adevtool-projects-gitdir: the production .repo/projects/vendor/adevtool.git), same bounds; no other argument
   blazer-build-only.py inspect --host --lock [--source-root] [--download-dir] [--node] [--max-entries] [--max-seconds]
             metadata only, for a later approved observation (at most 20 minutes): lstat identities, isolation, statvfs,
             pinned project presence, adevtool_revision (128 bytes), bounded collision/download sizes, one level of
@@ -132,8 +135,9 @@ def pointer(root, source):
         value = value[key]
     return value
 
-def load(path=RECIPE, root=ROOT):
-    """The recipe, checked against its checked-in sources; InvalidInput on any drift."""
+def load(path=RECIPE, root=ROOT, probe=True):
+    """The recipe, checked against its checked-in sources; InvalidInput on any drift. probe=False (inspect-git-set)
+    keeps the git-inspection candidate check lexical, so loading touches no host path."""
     recipe = json.loads(Path(path).read_text())
     problems = []
     if recipe.get('kind') != 'rose-build-only-recipe' or recipe.get('device') != DEVICE:
@@ -173,7 +177,7 @@ def load(path=RECIPE, root=ROOT):
         problems.append('capacity.allowanceRequired must be true: there is no isolated-host allowance exception')
     if not isinstance(capacity.get('reserveBytes'), int) or capacity['reserveBytes'] < 322122547200:
         problems.append('capacity.reserveBytes must be at least the 300 GiB reserve')
-    problems += preparation_problems(recipe, root, contract)
+    problems += preparation_problems(recipe, root, contract, probe)
     if problems:
         raise InvalidInput('; '.join(problems))
     return recipe
@@ -181,7 +185,7 @@ def load(path=RECIPE, root=ROOT):
 def positive(value):
     return isinstance(value, int) and not isinstance(value, bool) and value > 0
 
-def preparation_problems(recipe, root, contract):
+def preparation_problems(recipe, root, contract, probe=True):
     prep, problems = recipe.get('preparation') or {}, []
     if prep.get('stages') != list(PREPARATION):
         return [f'preparation.stages must be exactly {list(PREPARATION)}']
@@ -225,7 +229,7 @@ def preparation_problems(recipe, root, contract):
             or git.get('skipDepBuildEnv') != {'ADEVTOOL_SKIP_DEP_BUILD': '1'} or not positive(git.get('timeoutSeconds'))):
         problems.append('preparation.vendor.adevtoolGit must be vendor/adevtool/.git, `git -C vendor/adevtool rev-parse HEAD`, '
                         'ADEVTOOL_SKIP_DEP_BUILD=1 and a positive timeoutSeconds')
-    problems += git_inspection_problems(recipe, root)
+    problems += git_inspection_problems(recipe, root, probe)
     node = vendor.get('node') or {}
     if not (positive(node.get('minMajor')) and positive(node.get('versionTimeoutSeconds'))):
         problems.append('preparation.vendor.node needs a positive minMajor and versionTimeoutSeconds')
@@ -358,12 +362,15 @@ def integration(recipe, src, directory, inputs_receipt=None):
     problems += blazer_integration.compile_problems(record, src, inputs_receipt)
     return problems, facts
 
-def isolation_problem(path, production):
+def isolation_problem(path, production, probe=True):
     """Why PATH is not isolated from the production source root, or None. Equal, inside, containing or the same inode
-    as the production tree all refuse; the production tree is never a preparation workspace."""
+    as the production tree all refuse; the production tree is never a preparation workspace. probe=False: the lexical
+    checks only, touching no path."""
     production = Path(production)
     if path == production or production in path.parents or path in production.parents:
         return f'{path} is, contains or sits inside the production source root {production}'
+    if not probe:
+        return None
     try:
         if path.exists() and production.exists() and os.path.samefile(path, production):
             return f'{path} is the production source root {production}'
@@ -925,7 +932,8 @@ def meta(path):
         return {'path': str(path), 'exists': False}
     except OSError as error:
         return {'path': str(path), 'exists': None, 'error': type(error).__name__}
-    kind = 'link' if os.path.islink(path) else 'dir' if os.path.isdir(path) else 'file' if os.path.isfile(path) else 'other'
+    kind = ('link' if stat.S_ISLNK(st.st_mode) else 'dir' if stat.S_ISDIR(st.st_mode) else 'file' if stat.S_ISREG(st.st_mode)
+            else 'other')  # from the one lstat: no second, following stat
     return {'path': str(path), 'exists': True, 'type': kind, 'mode': oct(st.st_mode), 'uid': st.st_uid, 'device': st.st_dev,
             'inode': st.st_ino, 'size': st.st_size}
 
@@ -1050,9 +1058,10 @@ def git_facts(src, rel, budget, clock):
 GIT_INSPECTION = 'roseos.blazer-git-inspection.v1'
 GIT_INSPECT_MAX_SECONDS = 60
 
-def git_inspection_problems(recipe, root=ROOT):
+def git_inspection_problems(recipe, root=ROOT, probe=True):
     """preparation.gitInspection: exactly the fixed production and candidate targets, each a source root plus
-    vendor.adevtoolGit.metadataPath, the candidate under the ancestor boundary and isolated from production."""
+    vendor.adevtoolGit.metadataPath, the candidate under the ancestor boundary and isolated from production, and
+    exactly the fixed targetSets. probe=False (inspect-git-set) checks the candidate lexically, touching no path."""
     prep = recipe.get('preparation') or {}
     spec, rel = prep.get('gitInspection') or {}, ((prep.get('vendor') or {}).get('adevtoolGit') or {}).get('metadataPath')
     targets = spec.get('targets') or {}
@@ -1070,9 +1079,13 @@ def git_inspection_problems(recipe, root=ROOT):
     candidate = str(targets['candidate'])
     cand_root = candidate[:-len('/' + rel)] if candidate.endswith('/' + rel) else None
     if (cand_root is None or not candidate.startswith('/') or os.path.normpath(candidate) != candidate
-            or boundary not in Path(candidate).parents or isolation_problem(Path(cand_root), Path(production))):
+            or boundary not in Path(candidate).parents or isolation_problem(Path(cand_root), Path(production), probe)):
         problems.append(f'preparation.gitInspection candidate target must be a normalized source root under {boundary}, '
                         f'isolated from the production root, plus {rel}')
+    project = rel[:-len('/.git')] if rel.endswith('/.git') else None
+    want = {'adevtool-projects-gitdir': {'projectsGitdir': {'root': production, 'path': f'.repo/projects/{project}.git'}}}
+    if spec.get('targetSets') != want:
+        problems.append(f'preparation.gitInspection.targetSets must be exactly {want}')
     return problems
 
 def inspect_git(recipe, host, root=ROOT, clock=time.monotonic):
@@ -1093,6 +1106,32 @@ def inspect_git(recipe, host, root=ROOT, clock=time.monotonic):
         targets[name] = dict(facts, absolutePath=path)
     return {'schema': GIT_INSPECTION, 'device': DEVICE, 'host': host, 'metadataOnly': True, 'processesStarted': 0,
             'network': False, 'writes': False, 'gitProcess': False, 'enablesPreparation': False,
+            'bounds': {**GIT_INSPECT, 'maxSeconds': spec['maxSeconds']}, 'targets': targets,
+            'truncated': any(t.get('truncated') for t in targets.values()) or clock() > budget['deadline'],
+            'elapsedSeconds': round(clock() - started, 3)}
+
+GIT_TARGET_SET_INSPECTION = 'roseos.blazer-git-target-set-inspection.v1'
+
+def inspect_git_set(recipe, host, name, root=ROOT, clock=time.monotonic):
+    """An explicit, named target set of preparation.gitInspection.targetSets, with exactly git_facts' bounds; the
+    two-target inspect_git stays as it is, so a selector never widens it."""
+    if not HOST_LABEL.fullmatch(str(host or '')):
+        raise InvalidInput('--host must be the operator\'s builder label (lowercase letters, digits, . and -)')
+    problems = git_inspection_problems(recipe, root, probe=False)  # touches only the chosen set's paths
+    if problems:
+        raise InvalidInput('; '.join(problems))
+    spec = recipe['preparation']['gitInspection']
+    if name not in spec['targetSets']:
+        raise InvalidInput(f'--target-set must be one of {sorted(spec["targetSets"])}')
+    chosen = spec['targetSets'][name]
+    started = clock()
+    budget = {'entries': len(chosen) * GIT_INSPECT['scanEntries'], 'deadline': started + spec['maxSeconds']}
+    targets = {}
+    for key, target in chosen.items():
+        facts = git_facts(Path(target['root']), target['path'], budget, clock)
+        targets[key] = dict(facts, absolutePath=f'{target["root"]}/{target["path"]}')
+    return {'schema': GIT_TARGET_SET_INSPECTION, 'device': DEVICE, 'host': host, 'targetSet': name, 'metadataOnly': True,
+            'processesStarted': 0, 'network': False, 'writes': False, 'gitProcess': False, 'enablesPreparation': False,
             'bounds': {**GIT_INSPECT, 'maxSeconds': spec['maxSeconds']}, 'targets': targets,
             'truncated': any(t.get('truncated') for t in targets.values()) or clock() > budget['deadline'],
             'elapsedSeconds': round(clock() - started, 3)}
@@ -1362,14 +1401,20 @@ def run(recipe, stage, op, receipt_dir, now=time.time, fetcher=fetch, clock=time
         release_receipts.write_once(receipt_dir/'completed.json', {**base, 'ok': ok, **outcome, 'at': stamp(now)})
     return 0 if ok else 1
 
-def main_git(argv):
-    """`inspect-git --host H`: no lock, receipt directory, path or other argument."""
-    parser = argparse.ArgumentParser(prog='blazer-build-only.py inspect-git',
-                                     description='git-only metadata inspection of the two fixed targets')
+def main_git(argv, target_set=False):
+    """`inspect-git --host H`: the two fixed targets, no other argument (unchanged). `inspect-git-set --host H
+    --target-set NAME`: exactly one explicit recipe target set, a separate subcommand so inspect-git never widens."""
+    name = 'inspect-git-set' if target_set else 'inspect-git'
+    parser = argparse.ArgumentParser(prog=f'blazer-build-only.py {name}',
+                                     description='git-only metadata inspection of fixed recipe targets')
     parser.add_argument('--host', required=True)
+    if target_set:
+        parser.add_argument('--target-set', required=True)
     a = parser.parse_args(argv)
     try:
-        print(json.dumps(inspect_git(load(RECIPE), a.host), indent=2))
+        recipe = load(RECIPE, probe=not target_set)
+        report = inspect_git_set(recipe, a.host, a.target_set) if target_set else inspect_git(recipe, a.host)
+        print(json.dumps(report, indent=2))
         return 0
     except InvalidInput as error:
         print(f'invalid input: {error}', file=sys.stderr)
@@ -1379,6 +1424,8 @@ def main(argv=None):
     argv = sys.argv[1:] if argv is None else list(argv)
     if argv[:1] == ['inspect-git']:
         return main_git(argv[1:])
+    if argv[:1] == ['inspect-git-set']:
+        return main_git(argv[1:], target_set=True)
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('action', choices=('plan', 'preflight', 'run', 'inspect'))
     parser.add_argument('--stage', choices=STAGES)

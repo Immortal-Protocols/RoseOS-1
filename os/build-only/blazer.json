@@ -167,7 +167,16 @@
         "candidate": "/home/pixelbuild/rose-actions/blazer-prep-41473133543-1/source/vendor/adevtool/.git"
       },
       "maxSeconds": 60,
-      "basis": "inspect-git: one level of each fixed target's metadata and at most 65 bytes of its HEAD (64 accepted; the 65th only detects oversize and is never reported), through git_facts; no tree, size, collision, Node, download or candidate-path scan, no writes, no git process and no gitfile content. The production target is the production source root plus vendor.adevtoolGit.metadataPath; the candidate is Infra's historical receipt 41473133543 sourceRoot plus that path, a fixed path, not a binding and not known to exist. For a separately approved observation only."
+      "basis": "inspect-git: one level of each fixed target's metadata and at most 65 bytes of its HEAD (64 accepted; the 65th only detects oversize and is never reported), through git_facts; no tree, size, collision, Node, download or candidate-path scan, no writes, no git process and no gitfile content. The production target is the production source root plus vendor.adevtoolGit.metadataPath; the candidate is Infra's historical receipt 41473133543 sourceRoot plus that path, a fixed path, not a binding and not known to exist. For a separately approved observation only.",
+      "targetSets": {
+        "adevtool-projects-gitdir": {
+          "projectsGitdir": {
+            "root": "/home/pixelbuild/grapheneos-2026100600",
+            "path": ".repo/projects/vendor/adevtool.git"
+          }
+        }
+      },
+      "targetSetsBasis": "Explicit, additive target sets for the separate `inspect-git-set --target-set NAME`; `inspect-git` keeps inspecting exactly the two targets above. adevtool-projects-gitdir is the gitdir that the production vendor/adevtool/.git link names (observation 41566744429: ../../.repo/projects/vendor/adevtool.git), inspected with the same git_facts bounds; the link itself is never followed by the helper. For a separately approved observation (O1) only."
     }
   }
 }
