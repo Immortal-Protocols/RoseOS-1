@@ -88,7 +88,7 @@ class Wiring(unittest.TestCase):
 
 class Workflow(unittest.TestCase):
     def test_mode_check_job_login_and_ownership(self):
-        self.assertIn('rango-factory-observe, launcher3-compile, rango-factory-sign]\n', WORKFLOW)
+        self.assertIn('rango-factory-observe, launcher3-compile, blazer-compile, blazer-integrate, rango-factory-sign]\n', WORKFLOW)
         self.assertIn("      - name: Rango factory sign check\n        id: rango-factory-sign\n        if: inputs.mode == "
                       "'rango-factory-sign'\n        run: python3 scripts/rango-factory-sign-wiring.py check >> "
                       "\"$GITHUB_OUTPUT\"\n", jobs()['guard'])
@@ -118,10 +118,10 @@ class Workflow(unittest.TestCase):
         self.assertEqual(job.count('actions/upload-artifact@'), 1)
         for other in ('rango-factory-package', 'rango-factory-inspect', 'rango-factory-observe', 'blazer-prep', 'launcher3-compile'):
             self.assertNotIn('id-token', jobs()[other], other)
-        own = "inputs.mode == 'launcher3-compile' || inputs.mode == 'rango-factory-sign'"
+        own = "inputs.mode == 'blazer-integrate' || inputs.mode == 'rango-factory-sign'"
         self.assertEqual(jobs()['controller'].count(own), 2)
         self.assertEqual(jobs()['cleanup'].count(own), 1)
-        self.assertIn('launcher3-compile, rango-factory-sign, app-builder', re.search(r'(?m)^    needs: (.+)$', jobs()['cleanup'])[1])
+        self.assertIn('blazer-integrate, rango-factory-sign, app-builder', re.search(r'(?m)^    needs: (.+)$', jobs()['cleanup'])[1])
 
 
 if __name__ == '__main__':

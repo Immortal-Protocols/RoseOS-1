@@ -68,12 +68,12 @@ class Guard(unittest.TestCase):
                 self.assertNotEqual(self.run_branch(**change), 0)
 
     def test_mode_is_manual_selectable_and_checked_before_the_controller(self):
-        self.assertIn(f', emulator-alpha-export, {MODE}, launcher3-compile, rango-factory-sign]\n', WORKFLOW)
+        self.assertIn(f', emulator-alpha-export, {MODE}, launcher3-compile, blazer-compile, blazer-integrate, rango-factory-sign]\n', WORKFLOW)
         self.assertEqual(re.findall(r'(?m)^  (\w+):\n', WORKFLOW.split('\npermissions:', 1)[0].split('\non:\n', 1)[1]), ['workflow_dispatch'])
         guard = jobs()['guard']
         check = step(guard, 'Rango factory observation check')
         self.assertIn(f"        if: inputs.mode == '{MODE}'\n        run: python3 scripts/rango-factory-observe.py check\n", check)
-        self.assertIn(f'"$MODE" == rango-factory-observe || "$MODE" == launcher3-compile || "$MODE" == rango-factory-sign ]] || git merge-base --is-ancestor', guard)
+        self.assertIn(f'"$MODE" == rango-factory-observe || "$MODE" == launcher3-compile || "$MODE" == blazer-compile || "$MODE" == blazer-integrate || "$MODE" == rango-factory-sign ]] || git merge-base --is-ancestor', guard)
         self.assertEqual(re.search(r'(?m)^    needs: (.+)$', jobs()['controller'])[1], 'guard')
 
 

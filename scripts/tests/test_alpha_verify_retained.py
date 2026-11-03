@@ -178,7 +178,7 @@ class SourceTest(unittest.TestCase):
 class WorkflowTest(unittest.TestCase):
     def test_the_mode_is_explicit_read_only_and_cleaned_up(self):
         job = WORKFLOW[WORKFLOW.index('  alpha-verify-retained:'):WORKFLOW.index('  publisher:')]
-        self.assertIn('emulator-alpha-verify-retained, app-reuse, emulator-alpha-export, rango-factory-observe, launcher3-compile, rango-factory-sign]', WORKFLOW)
+        self.assertIn('emulator-alpha-verify-retained, app-reuse, emulator-alpha-export, rango-factory-observe, launcher3-compile, blazer-compile, blazer-integrate, rango-factory-sign]', WORKFLOW)
         self.assertIn("if: inputs.mode == 'emulator-alpha-verify-retained'", job)
         self.assertIn('    permissions:\n      contents: read\n    steps:', job)
         for forbidden in ('id-token', 'secrets.', 'actions-gcp-login', 'GCP_SIGNER', 'os-release-stage', 'release-pipeline.py publish',

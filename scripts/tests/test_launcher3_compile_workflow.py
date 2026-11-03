@@ -62,7 +62,7 @@ class Guard(unittest.TestCase):
                 self.assertNotEqual(self.guard(**change), 0)
 
     def test_the_hosted_check_is_the_adapter_and_the_committed_binding_stops_before_any_host(self):
-        self.assertIn('emulator-alpha-export, rango-factory-observe, launcher3-compile, rango-factory-sign]\n', WORKFLOW)
+        self.assertIn('emulator-alpha-export, rango-factory-observe, launcher3-compile, blazer-compile, blazer-integrate, rango-factory-sign]\n', WORKFLOW)
         self.assertIn("      - name: Launcher3 compile check\n        id: launcher3-compile\n        if: inputs.mode == "
                       "'launcher3-compile'\n        run: python3 scripts/launcher3-compile.py check >> \"$GITHUB_OUTPUT\"\n",
                       jobs()['guard'])
@@ -124,13 +124,13 @@ class Job(unittest.TestCase):
 class Ownership(unittest.TestCase):
     def test_owned_start_cleanup_covers_this_mode_and_joins_cleanup(self):
         own = ("inputs.mode == 'blazer-prep' || inputs.mode == 'rango-factory-package' || inputs.mode == "
-               "'rango-factory-inspect' || inputs.mode == 'launcher3-compile' || inputs.mode == 'rango-factory-sign'")
+               "'rango-factory-inspect' || inputs.mode == 'launcher3-compile' || inputs.mode == 'blazer-compile' || inputs.mode == 'blazer-integrate' || inputs.mode == 'rango-factory-sign'")
         self.assertEqual(jobs()['controller'].count(own), 2)
         self.assertEqual(jobs()['cleanup'].count(own), 1)
-        plain = "inputs.mode != 'rango-factory-inspect' && inputs.mode != 'launcher3-compile' && inputs.mode != 'rango-factory-sign'\n"
+        plain = "inputs.mode != 'rango-factory-inspect' && inputs.mode != 'launcher3-compile' && inputs.mode != 'blazer-compile' && inputs.mode != 'blazer-integrate' && inputs.mode != 'rango-factory-sign'\n"
         self.assertIn(plain + '        run: python3 scripts/release-pipeline.py start-builder\n', jobs()['controller'])
         self.assertIn(plain + '        run: python3 scripts/release-pipeline.py stop-builder\n', jobs()['cleanup'])
-        self.assertIn('rango-factory-inspect, launcher3-compile, rango-factory-sign, app-builder', re.search(r'(?m)^    needs: (.+)$', jobs()['cleanup'])[1])
+        self.assertIn('rango-factory-inspect, launcher3-compile, blazer-compile, blazer-integrate, rango-factory-sign, app-builder', re.search(r'(?m)^    needs: (.+)$', jobs()['cleanup'])[1])
         for name, job in jobs().items():
             if name != MODE:
                 self.assertNotIn('launcher3-compile.py', job.replace("python3 scripts/launcher3-compile.py check", '') if name == 'guard' else job)

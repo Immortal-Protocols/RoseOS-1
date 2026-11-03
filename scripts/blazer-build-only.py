@@ -39,7 +39,20 @@ Preparation stages (never compile, sign, publish or flash; never in the producti
   lunch     --host --lock --source-root ISOLATED
             `lunch blazer-cur-user` and the TARGET_PRODUCT/RELEASE/BUILD_VARIANT/DEVICE checks with OUT_DIR=out-blazer-lunch;
             no make goal
-Build stage (outside preparation, unchanged): compile --host --jobs --lock --source-root --integration-dir --inputs-receipt.
+Git metadata (outside preparation): git-meta --host --lock --source-root ISOLATED
+            for each gitMeta project (host-reconcile's six and vendor/adevtool): a new ISOLATED/<path>/.git with no
+            templates, exactly the pinned-manifest revision fetched at depth 1 with no tags from the recipe's fixed
+            objects source, and a detached HEAD by update-ref; verified (HEAD is the pin, its tree exists, fsck
+            --connectivity-only, shallow at the pin, no alternates, no remote) before the next project. GIT_* and
+            system/global config are ignored, only the source's protocol is allowed, and no command touches the
+            working tree; on any failure every .git this run created is removed. Needs runtime approval for its source.
+Build stage (outside preparation): compile --host --jobs --lock --source-root ISOLATED --integration-dir --inputs-receipt
+            `lunch blazer-cur-user && m -jN <makeGoals>` with OUT_DIR=out-blazer-build, PATH=/usr/bin:/bin and GIT_*
+            stripped, in ISOLATED (never the production source root), after the Rose integration admission. Its byte
+            bound is capacity.compileAllowanceBytes, a finite first-build proposal (not a measurement and not a quota):
+            preflight needs available - allowance >= reserve, and while it runs the filesystem's drop in available bytes
+            since start (which counts any other writer on that filesystem too) is sampled against the allowance and
+            available bytes against the reserve; an overrun or compile.timeoutSeconds stops the process group.
 
 Every stage refuses on a symlink in an operator path, a held lock (probed non-blocking, held with LOCK_NB while
 running), an existing output (nothing is deleted, reused or overwritten except the stage's own .part) or available
@@ -78,6 +91,7 @@ import argparse
 import errno
 import fcntl
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -101,7 +115,16 @@ ROOT = Path(__file__).resolve().parents[1]
 RECIPE = ROOT/'os/build-only/blazer.json'
 DEVICE = 'blazer'
 PREPARATION = ('source', 'download', 'vendor', 'lunch')
-STAGES = PREPARATION + ('compile',)
+GIT_META_STAGE = 'git-meta'
+STAGES = PREPARATION + (GIT_META_STAGE, 'compile')
+# git-meta: the projects whose genuine Git metadata later stages need in an isolated copy (which excludes every .git):
+# host-reconcile's six reconciled projects (rev-parse HEAD, show HEAD:path, clone --shared, sparse checkout) and
+# vendor/adevtool (the vendor stage's rev-parse HEAD).
+GIT_META_PATHS = ('build/make', 'build/release', 'frameworks/base', 'packages/apps/Launcher3', 'packages/apps/Updater',
+                  'packages/modules/Permission', 'vendor/adevtool')
+GIT_META_SOURCES = ('public-fetch',)
+GIT_META_MAX_SECONDS = 7200
+GIT_META_CLEANUP_SECONDS = 240
 BUILD_INDEX = 'os/tests/fixtures/adevtool-17df3b79/adevtool/config/build-index/build-index-main.yml.excerpt.json'
 FACTORY_URL = 'https://dl.google.com/dl/android/aosp/'
 TREE_NEEDS = ('vendor/adevtool/bin/run', 'build/envsetup.sh', 'prebuilts/build-tools/path/linux-x86',
@@ -110,6 +133,10 @@ HOST_LABEL = re.compile(r'[a-z0-9][a-z0-9.-]{0,62}')
 CHUNK = 1 << 20
 LUNCH_VARS = ('TARGET_PRODUCT', 'TARGET_RELEASE', 'TARGET_BUILD_VARIANT', 'TARGET_DEVICE')
 SAFE_PATH = '/usr/bin:/bin'
+# Compile's byte bound: a finite first-build proposal; the measure is the drop in the filesystem's available bytes.
+COMPILE_ALLOWANCE_KIND = 'first-build-proposal'
+COMPILE_MEASURE = 'filesystem-available-drop'
+COMPILE_MAX_SECONDS = 43200
 NODE_PATH_DIR = 'node-path'  # inside the vendor stage's own receipt directory
 
 class InvalidInput(Exception):
@@ -158,6 +185,10 @@ def load(path=RECIPE, root=ROOT, probe=True):
         problems.append('factory image name or sha256 differs from the device contract')
     if f'factory: {factory["sha256"]} {factory["file"]}' not in index_block(root, contract['shared']['vendorBuildId']):
         problems.append('factory image is not the pinned adevtool build index entry')
+    if not positive(factory.get('sizeBytes')) or not isinstance(factory.get('sizeBasis'), str):
+        problems.append('factory.sizeBytes must be the pinned archive\'s recorded byte size, with its basis')
+    elif (recipe.get('preparation') or {}).get('download', {}).get('boundBytes') != factory['sizeBytes']:
+        problems.append('preparation.download.boundBytes must equal factory.sizeBytes (the exact archive size)')
     if factory['url'] != FACTORY_URL + factory['file']:
         problems.append('factory URL is not the adevtool index URL for that file')
     manifest = {p.get('path'): p.get('revision') for p in ElementTree.parse(root/recipe['manifest']).getroot().iter('project')}
@@ -183,10 +214,42 @@ def load(path=RECIPE, root=ROOT, probe=True):
         problems.append('capacity.allowanceRequired must be true: there is no isolated-host allowance exception')
     if not isinstance(capacity.get('reserveBytes'), int) or capacity['reserveBytes'] < 322122547200:
         problems.append('capacity.reserveBytes must be at least the 300 GiB reserve')
+    if not positive(capacity.get('compileAllowanceBytes')) or capacity.get('compileAllowanceKind') != COMPILE_ALLOWANCE_KIND:
+        problems.append(f'capacity.compileAllowanceBytes must be a positive finite allowance labelled {COMPILE_ALLOWANCE_KIND} '
+                        '(a first build has no prior measurement to wait for)')
+    build = recipe['compile']
+    if not (positive(build.get('timeoutSeconds')) and build['timeoutSeconds'] <= COMPILE_MAX_SECONDS) \
+            or build.get('measure') != COMPILE_MEASURE:
+        problems.append(f'compile needs a positive timeoutSeconds of at most {COMPILE_MAX_SECONDS} and measure {COMPILE_MEASURE}')
     problems += preparation_problems(recipe, root, contract, probe)
+    problems += git_meta_problems(recipe, root)
     if problems:
         raise InvalidInput('; '.join(problems))
     return recipe
+
+def git_meta_problems(recipe, root=ROOT):
+    """gitMeta: exactly GIT_META_PATHS at their pinned-manifest names and revisions, fetched from the manifest's own
+    remote, with positive bounds; the objects source is a fixed recipe value, never an operator argument."""
+    spec = recipe.get('gitMeta') or {}
+    manifest = ElementTree.parse(root/recipe['manifest']).getroot()
+    remotes = {r.get('name'): r.get('fetch') for r in manifest.iter('remote')}
+    want = []
+    for project in manifest.iter('project'):
+        if project.get('path') in GIT_META_PATHS:
+            want.append({'path': project.get('path'), 'name': project.get('name'), 'revision': project.get('revision')})
+            if remotes.get(project.get('remote')) != spec.get('fetchUrlPrefix'):
+                return [f'gitMeta.fetchUrlPrefix must be the pinned manifest remote of {project.get("path")}']
+    problems = []
+    if spec.get('projects') != sorted(want, key=lambda row: row['path']) or len(want) != len(GIT_META_PATHS):
+        problems.append(f'gitMeta.projects must be exactly {list(GIT_META_PATHS)} at their pinned-manifest names and revisions')
+    if spec.get('objectsSource') not in GIT_META_SOURCES:
+        problems.append(f'gitMeta.objectsSource must be one of {list(GIT_META_SOURCES)}')
+    if not (positive(spec.get('boundBytes')) and positive(spec.get('projectTimeoutSeconds'))
+            and positive(spec.get('timeoutSeconds')) and spec['projectTimeoutSeconds'] <= spec['timeoutSeconds'] <= GIT_META_MAX_SECONDS):
+        problems.append(f'gitMeta needs a positive boundBytes and projectTimeoutSeconds <= timeoutSeconds <= {GIT_META_MAX_SECONDS}')
+    if spec.get('boundKind') != 'proposal':
+        problems.append('gitMeta.boundKind must be proposal')
+    return problems
 
 def positive(value):
     return isinstance(value, int) and not isinstance(value, bool) and value > 0
@@ -290,7 +353,8 @@ def commands(recipe, op, root=ROOT):
         factory = recipe['factory']
         rendered['download'] = {'url': factory['url'], 'part': str(op['downloadDir']/(factory['file'] + prep['download']['partSuffix'])),
             'final': str(op['downloadDir']/factory['file']), 'sha256': factory['sha256'],
-            'maxBytes': prep['download']['boundBytes'], 'timeoutSeconds': prep['download']['timeoutSeconds']}
+            'maxBytes': prep['download']['boundBytes'], 'expectedBytes': factory['sizeBytes'],
+            'timeoutSeconds': prep['download']['timeoutSeconds']}
     if op['sourceRoot'] is not None:
         src = str(op['sourceRoot'])
         spec = prep['source']
@@ -311,10 +375,19 @@ def commands(recipe, op, root=ROOT):
                                                  'GIT_CEILING_DIRECTORIES': src},
             'argv': ['bash', '-c', f'source build/envsetup.sh && lunch {recipe["lunch"]} && {checks}'],
             'timeoutSeconds': prep['lunch']['timeoutSeconds']}
+        if 'gitMeta' in recipe:
+            spec = recipe['gitMeta']
+            rendered[GIT_META_STAGE] = {'cwd': src, 'objectsSource': spec['objectsSource'],
+                'projects': [{'path': row['path'], 'gitDir': f'{src}/{row["path"]}/.git', 'revision': row['revision'],
+                              'argv': git_meta_argv(Path(src)/row['path'], spec['fetchUrlPrefix'] + row['name'], row['revision'])}
+                             for row in spec['projects']],
+                'projectTimeoutSeconds': spec['projectTimeoutSeconds'], 'timeoutSeconds': spec['timeoutSeconds']}
         if op['jobs'] is not None:
             make = 'm -j{} {}'.format(op['jobs'], ' '.join(recipe['compile']['makeGoals']))
-            rendered['compile'] = {'cwd': src, 'env': {'OUT_DIR': recipe['compile']['outDir']},
-                'argv': ['bash', '-c', f'source build/envsetup.sh && lunch {recipe["lunch"]} && {make}']}
+            rendered['compile'] = {'cwd': src, 'env': {'OUT_DIR': recipe['compile']['outDir'], 'PATH': SAFE_PATH,
+                                                       'GIT_CEILING_DIRECTORIES': src},
+                'argv': ['bash', '-c', f'source build/envsetup.sh && lunch {recipe["lunch"]} && {make}'],
+                'timeoutSeconds': recipe['compile']['timeoutSeconds']}
     return rendered
 
 def lock_free(path):
@@ -387,16 +460,148 @@ def isolation_problem(path, production, probe=True):
 
 def space(stage, recipe, where, statvfs, facts, problems):
     """available - bound >= reserve on the filesystem the stage writes."""
-    bound = recipe['preparation'][stage]['boundBytes'] if stage in PREPARATION else recipe['capacity']['compileAllowanceBytes']
+    bound = (recipe['preparation'][stage]['boundBytes'] if stage in PREPARATION else recipe['gitMeta']['boundBytes']
+             if stage == GIT_META_STAGE else recipe['capacity']['compileAllowanceBytes'])
     fs = statvfs(where)
     available = fs.f_bavail * fs.f_frsize
     reserve = recipe['capacity']['reserveBytes']
     facts['capacity'] = {'availableBytes': available, 'reserveBytes': reserve, 'boundBytes': bound,
-        'boundKind': recipe['preparation']['boundsKind'] if stage in PREPARATION else 'measured-allowance'}
+        'boundKind': (recipe['preparation']['boundsKind'] if stage in PREPARATION else recipe['gitMeta']['boundKind']
+                      if stage == GIT_META_STAGE else recipe['capacity']['compileAllowanceKind'])}
     if bound is None:
-        problems.append(f'capacity.{stage}AllowanceBytes is unmeasured; compile needs a measured allowance')
+        problems.append(f'capacity.{stage}AllowanceBytes is not set; compile needs a finite allowance')
     elif available - bound < reserve:
         problems.append(f'available {available} minus bound {bound} is below the reserve {reserve}')
+
+def git_meta_argv(work, url, revision):
+    """One project's metadata, in order: a new .git with no templates (no hooks), exactly REVISION at depth 1 with no
+    tags, and a detached HEAD written by update-ref. No command checks out, resets or reads the working tree."""
+    return [['git', 'init', '-q', '--template=', str(work)],
+            ['git', '-C', str(work), 'fetch', '--quiet', '--depth=1', '--no-tags', url, revision],
+            ['git', '-C', str(work), 'update-ref', '--no-deref', 'HEAD', revision]]
+
+def git_meta_env(src, home, url_prefix):
+    """No inherited GIT_*, no system or global config (so no insteadOf, credential helper or hook path), no prompt,
+    only the fixed source's protocol, PATH /usr/bin:/bin and discovery bounded at the source root."""
+    env = {k: v for k, v in os.environ.items() if not k.startswith('GIT_') and k not in ('PATH', 'HOME', 'XDG_CONFIG_HOME')}
+    env.update(PATH=SAFE_PATH, HOME=str(home), XDG_CONFIG_HOME=str(home), GIT_CONFIG_NOSYSTEM='1',
+               GIT_CONFIG_GLOBAL=os.devnull, GIT_TERMINAL_PROMPT='0', GIT_ASKPASS='/bin/false', SSH_ASKPASS='/bin/false',
+               GIT_ALLOW_PROTOCOL=url_prefix.split(':', 1)[0], GIT_CEILING_DIRECTORIES=str(src))
+    return env
+
+def git_meta(recipe, src, receipt_dir, statvfs, clock, sleep):
+    """(ok, outcome): genuine depth-1 metadata for each gitMeta project, in a new SRC/<path>/.git, verified before
+    the next: HEAD is exactly the pinned commit, its tree exists, fsck --connectivity-only passes, the repository is
+    shallow at that commit and has no alternates and no remote. On any failure every .git this run created is removed
+    (bounded); the working tree is never touched."""
+    spec, prep = recipe['gitMeta'], recipe['preparation']
+    limits = {**prep['limits'], 'boundBytes': spec['boundBytes'], 'reserveBytes': recipe['capacity']['reserveBytes']}
+    home = Path(receipt_dir)/'git-home'
+    home.mkdir(mode=0o700)
+    env = git_meta_env(src, home, spec['fetchUrlPrefix'])
+    deadline, created, rows = clock() + spec['timeoutSeconds'], [], {}
+    outcome = {'objectsSource': spec['objectsSource'], 'fetchUrlPrefix': spec['fetchUrlPrefix'], 'boundBytes': spec['boundBytes'],
+               'boundKind': spec['boundKind'], 'workingTreeCommands': [], 'projects': rows}
+
+    def step(argv, capture=False):
+        left = min(spec['projectTimeoutSeconds'], deadline - clock())
+        if left <= 0:
+            return {'returncode': None, 'stopped': f'the {spec["timeoutSeconds"]} s stage deadline passed'}
+        result = supervise(argv, str(src), env, left, limits, watch=[str(d) for d in created], capture=capture,
+                           statvfs=statvfs, measure=tree_bytes, clock=clock, sleep=sleep)
+        if not result['stopped'] and result['consumedBytes'] > spec['boundBytes']:  # overshoot between samples
+            result['stopped'] = f'consumed {result["consumedBytes"]} bytes, above the {spec["boundBytes"]}-byte bound'
+        return result
+
+    def failed(path, why):
+        removed, until = [], clock() + GIT_META_CLEANUP_SECONDS  # one shared cleanup budget, not one per project
+        for dotgit in created:
+            if os.path.lexists(dotgit):
+                done, _ = remove_own(dotgit, max(0, until - clock()), clock)
+                removed.append({'gitDir': str(dotgit), 'removed': done})
+        outcome.update(failedProject=path, error=why, createdRemoved=removed)
+        return False, outcome
+
+    for row in spec['projects']:
+        work, path = Path(src)/row['path'], row['path']
+        dotgit = work/'.git'
+        if os.path.lexists(dotgit) or symlink_in(work) or not work.is_dir():
+            return failed(path, 'the project changed after preflight (a .git appeared or the directory is not plain)')
+        argv = git_meta_argv(work, spec['fetchUrlPrefix'] + row['name'], row['revision'])
+        for index, command in enumerate(argv):
+            result = step(command)
+            if index == 0 and os.path.lexists(dotgit):
+                created.append(dotgit)
+            if result['returncode'] or result['stopped']:
+                return failed(path, f'{command[3] if command[1] == "-C" else command[1]} failed: '
+                                    f'{result["stopped"] or "exit " + str(result["returncode"])}')
+        head = step(['git', '-C', str(work), 'rev-parse', '--verify', 'HEAD^{commit}'], capture=True)
+        tree = step(['git', '-C', str(work), 'rev-parse', '--verify', 'HEAD^{tree}'], capture=True)
+        fsck = step(['git', '-C', str(work), 'fsck', '--connectivity-only', '--no-progress'])
+        remote = step(['git', '-C', str(work), 'config', '--local', '--get-regexp', r'^remote\.'], capture=True)
+        shallow = (dotgit/'shallow').read_text() if (dotgit/'shallow').is_file() else None
+        problems = []
+        if (head.get('stdout') or '').strip() != row['revision'] or head['returncode']:
+            problems.append('HEAD is not exactly the pinned revision')
+        if tree['returncode'] or not re.fullmatch(r'[0-9a-f]{40}', (tree.get('stdout') or '').strip()):
+            problems.append('the pinned commit has no tree')
+        if fsck['returncode'] or fsck['stopped']:
+            problems.append('fsck --connectivity-only failed')
+        if remote['returncode'] != 1 or remote.get('stdout'):
+            problems.append('a remote is configured')
+        if shallow != row['revision'] + '\n':
+            problems.append('the repository is not shallow at exactly the pinned commit')
+        if os.path.lexists(dotgit/'objects/info/alternates'):
+            problems.append('objects/info/alternates exists')
+        if problems:
+            return failed(path, '; '.join(problems))
+        rows[path] = {'gitDir': str(dotgit), 'revision': row['revision'], 'treeId': tree['stdout'].strip(),
+                      'gitDirBytes': tree_bytes(dotgit), 'shallow': True, 'alternates': False}
+    outcome['consumedBytes'] = sum(r['gitDirBytes'] for r in rows.values())
+    return True, outcome
+
+def collector():
+    """scripts/rango-collect.py's reviewed collector (no-follow components, one streaming hash per descriptor, ZIP
+    central directory and CRCs, nothing extracted or written), bound to this device's product paths. A private copy of
+    the module is loaded, so rango-collect.py itself and its Rango constants are unchanged."""
+    spec = importlib.util.spec_from_file_location('blazer_collect', ROOT/'scripts/rango-collect.py')
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    product = f'target/product/{DEVICE}'
+    module.DEVICE, module.PRODUCT = DEVICE, product
+    module.FILES = {'vendorBootImage': (f'{product}/vendor_boot.img', 'vendor-boot'),
+                    'vendorKernelBootImage': (f'{product}/vendor_kernel_boot.img', 'vendor-boot'),
+                    'otatools': (module.FILES['otatools'][0], 'otatools')}
+    module.TARGET_FILES_DIR = f'{product}/obj/PACKAGING/target_files_intermediates'
+    module.TARGET_FILES_NAME = re.compile(re.escape(DEVICE) + r'-target_files[A-Za-z0-9._-]*\.zip')
+    return module
+
+def collect_compile_outputs(src, out_dir):
+    """The four make goals' outputs at their fixed paths under SRC/OUT_DIR, each collected (path, size, sha256, format)
+    or named missing/invalid/ambiguous/unreadable; nothing else under OUT_DIR is listed or read."""
+    rc = collector()
+    out = Path(src)/out_dir
+    try:
+        rc.ordinary_dirs(Path(src), [out_dir])
+    except rc.Refused as refused:
+        return {'outDir': str(out), 'verdict': 'incomplete', 'outDirState': refused.state, 'why': str(refused), 'artifacts': {}}
+    artifacts = {}
+    for name, (relative, kind) in rc.FILES.items():
+        try:
+            artifacts[name] = rc.collect_file(out, relative, kind)
+        except rc.Refused as refused:
+            artifacts[name] = {'state': refused.state, 'path': str(out/relative), 'why': str(refused)}
+    try:
+        artifacts['targetFiles'] = rc.collect_target_files(out)
+    except rc.Refused as refused:
+        artifacts['targetFiles'] = {'state': refused.state, 'path': str(out/rc.TARGET_FILES_DIR), 'why': str(refused)}
+    complete = all(a['state'] == 'collected' for a in artifacts.values())
+    return {'outDir': str(out), 'verdict': 'complete' if complete else 'incomplete', 'artifacts': artifacts,
+            'collector': 'scripts/rango-collect.py (bound to blazer paths)', 'signed': False}
+
+def available_bytes(statvfs, where):
+    fs = statvfs(where)
+    return fs.f_bavail * fs.f_frsize
 
 def tree_problems(recipe, src):
     problems = []
@@ -456,7 +661,7 @@ def preflight(recipe, stage, op, statvfs=os.statvfs, lock_probe=lock_free, root=
         if op[name] is not None and symlink_in(op[name]):
             problems.append(f'{name} passes through a symlink ({symlink_in(op[name])})')
     needs = {'source': ('sourceRoot',), 'download': ('downloadDir',), 'vendor': ('downloadDir', 'sourceRoot', 'node'),
-             'lunch': ('sourceRoot',), 'compile': ('sourceRoot',)}[stage]
+             'lunch': ('sourceRoot',), GIT_META_STAGE: ('sourceRoot',), 'compile': ('sourceRoot',)}[stage]
     absent = [n for n in needs if op[n] is None]
     if stage == 'compile' and op['jobs'] is None:
         absent.append('jobs')
@@ -464,7 +669,7 @@ def preflight(recipe, stage, op, statvfs=os.statvfs, lock_probe=lock_free, root=
         problems.append(f'{stage} needs {", ".join("--" + re.sub(r"([A-Z])", lambda m: "-" + m[1].lower(), n) for n in absent)}')
         return {'ready': False, 'problems': problems, 'facts': facts}
     for name in ('sourceRoot', 'downloadDir'):
-        if stage in PREPARATION and op[name] is not None:
+        if (stage in PREPARATION or name == 'sourceRoot') and op[name] is not None:  # compile never runs in production
             reason = isolation_problem(op[name], production)
             if reason:
                 problems.append(f'{name}: {reason}')
@@ -520,6 +725,18 @@ def preflight(recipe, stage, op, statvfs=os.statvfs, lock_probe=lock_free, root=
         problems += vendor_tree_problems(recipe, src)
         if os.path.lexists(src/prep['lunch']['outDir']):
             problems.append(f'{prep["lunch"]["outDir"]} already exists; refusing to reuse or overwrite an OUT_DIR')
+    elif stage == GIT_META_STAGE:
+        for row in recipe['gitMeta']['projects']:
+            work = src/row['path']
+            if symlink_in(work) or not work.is_dir():
+                problems.append(f'{row["path"]} is not an existing, link-free directory in the source tree')
+            elif os.path.lexists(work/'.git'):
+                problems.append(f'{row["path"]}/.git already exists; Git metadata is never replaced or merged')
+        git = Path('/usr/bin/git')
+        if git.is_symlink() or not git.is_file() or not os.access(git, os.X_OK):
+            problems.append('/usr/bin/git is not an executable regular file')
+        else:
+            facts['git'] = file_identity(git)
     elif stage == 'compile':
         problems += tree_problems(recipe, src) + vendor_tree_problems(recipe, src)
         integration_problems, facts['roseIntegration'] = integration(recipe, src, op['integrationDir'], op['inputsReceipt'])
@@ -1538,7 +1755,7 @@ def inspect(recipe, op, root=ROOT, statvfs=os.statvfs, max_entries=200000, max_s
         unknowns.append('no node on the runner PATH')
     unknowns += ['Node version (metadata only: never executed)', 'reflink support (never assumed)',
                  'isolated source copy bytes (the source stage measures its full selection before writing; never this walk)',
-                 'Pro factory archive size (8 GiB cap unverified)']
+                 'Pro factory archive content (its size is the recorded HEAD Content-Length; only the sha256 pin identifies it)']
     report['elapsedSeconds'] = round(clock() - started, 3)
     report['truncated'] = budget['entries'] <= 0 or clock() > budget['deadline']
     if report['truncated']:
@@ -1549,16 +1766,22 @@ def fetch(url, timeout):
     return urllib.request.urlopen(url, timeout=timeout)  # noqa: S310 - the pinned https URL only
 
 def download(recipe, command, fetcher, clock):
-    """Stream the pinned URL to the .part file within the byte and time bounds; rename only on a sha256 match. A failed
-    attempt removes only the .part this call created; an existing archive or .part is never touched."""
+    """Stream the pinned URL to the .part file within the byte and time bounds; rename only when exactly the recorded
+    size arrived and its sha256 matches the pin. A response announcing another Content-Length is refused before any byte
+    is written. A failed attempt removes only the .part this call created; an existing archive or .part is never touched."""
     part, final = Path(command['part']), Path(command['final'])
     digest, size, started, created = hashlib.sha256(), 0, clock(), False
-    outcome = {'url': command['url'], 'expectedSha256': command['sha256'], 'maxBytes': command['maxBytes']}
+    outcome = {'url': command['url'], 'expectedSha256': command['sha256'], 'expectedBytes': command['expectedBytes'],
+               'maxBytes': command['maxBytes']}
     try:
         part.parent.mkdir(exist_ok=True)  # only the leaf download dir; preflight required its parent
         with open(part, 'xb') as out:
             created = True
             with fetcher(command['url'], command['timeoutSeconds']) as response:
+                announced = (getattr(response, 'headers', None) or {}).get('Content-Length')
+                outcome['announcedBytes'] = int(announced) if announced and str(announced).isdigit() else announced
+                if announced is not None and outcome['announcedBytes'] != command['expectedBytes']:
+                    raise ValueError(f'the server announces {announced} bytes, not the recorded {command["expectedBytes"]}')
                 for block in iter(lambda: response.read(CHUNK), b''):
                     size += len(block)
                     if size > command['maxBytes']:
@@ -1568,6 +1791,8 @@ def download(recipe, command, fetcher, clock):
                     digest.update(block)
                     out.write(block)
         outcome.update(bytes=size, sha256=digest.hexdigest())
+        if size != command['expectedBytes']:
+            raise ValueError(f'{size} bytes arrived, not the recorded {command["expectedBytes"]}')
         if outcome['sha256'] != command['sha256']:
             raise ValueError(f'sha256 {outcome["sha256"]} is not the pinned {command["sha256"]}')
         if os.path.lexists(final):
@@ -1614,6 +1839,10 @@ def run(recipe, stage, op, receipt_dir, now=time.time, fetcher=fetch, clock=time
                                     statvfs=statvfs, clock=clock)
             release_receipts.write_once(receipt_dir/'completed.json', {**base, 'ok': ok, **outcome, 'at': stamp(now)})
             return 0 if ok else 1
+        if stage == GIT_META_STAGE:
+            ok, outcome = git_meta(recipe, op['sourceRoot'], receipt_dir, statvfs, clock, sleep)
+            release_receipts.write_once(receipt_dir/'completed.json', {**base, 'ok': ok, **outcome, 'at': stamp(now)})
+            return 0 if ok else 1
         if stage == 'download':
             ok, outcome = download(recipe, command, fetcher, clock)
             release_receipts.write_once(receipt_dir/'completed.json', {**base, 'ok': ok, **outcome, 'at': stamp(now)})
@@ -1622,7 +1851,9 @@ def run(recipe, stage, op, receipt_dir, now=time.time, fetcher=fetch, clock=time
         # the tree itself, bounded by GIT_CEILING_DIRECTORIES at the source root.
         env = {**{k: v for k, v in os.environ.items() if k != 'PATH' and not k.startswith('GIT_')}, **command['env']}
         prep, capacity = recipe['preparation'], recipe['capacity']
-        limits = {**prep['limits'], 'boundBytes': prep[stage]['boundBytes'], 'reserveBytes': capacity['reserveBytes']}
+        bound = capacity['compileAllowanceBytes'] if stage == 'compile' else prep[stage]['boundBytes']
+        kind = capacity['compileAllowanceKind'] if stage == 'compile' else prep['boundsKind']
+        limits = {**prep['limits'], 'boundBytes': bound, 'reserveBytes': capacity['reserveBytes']}
         if stage == 'vendor':
             if file_identity(op['node']) != report['facts'].get('node') or node_binding_problem(op['node'], env['PATH']):
                 release_receipts.write_once(receipt_dir/'completed.json', {**base, 'ok': False,
@@ -1648,18 +1879,30 @@ def run(recipe, stage, op, receipt_dir, now=time.time, fetcher=fetch, clock=time
                     'error': 'git -C vendor/adevtool rev-parse HEAD did not print exactly the pinned revision; no genuine '
                              'adevtool version data, so nothing is generated', 'at': stamp(now)})
                 return 1
-        paths = prep['vendor']['collisionPaths'] if stage == 'vendor' else [prep['lunch']['outDir']]
-        watch = [str(op['sourceRoot']/rel) for rel in paths]
+        if stage == 'compile':
+            # Walking a build OUT_DIR every sample would cost more than the build; the drop in the filesystem's available
+            # bytes since start is cheap and conservative (it also counts any other writer on that filesystem).
+            start = available_bytes(statvfs, command['cwd'])
+            watch, measure = [command['cwd']], lambda _path: max(0, start - available_bytes(statvfs, command['cwd']))
+        else:
+            paths = prep['vendor']['collisionPaths'] if stage == 'vendor' else [prep['lunch']['outDir']]
+            watch = [str(op['sourceRoot']/rel) for rel in paths]
         outcome = supervise(command['argv'], command['cwd'], env, command['timeoutSeconds'], limits, watch=watch,
                             capture=stage == 'lunch', statvfs=statvfs, measure=measure, clock=clock, sleep=sleep)
         stdout = outcome.pop('stdout', '')
-        outcome.update(boundBytes=limits['boundBytes'], boundKind=prep['boundsKind'])
+        outcome.update(boundBytes=limits['boundBytes'], boundKind=kind)
         ok = outcome['returncode'] == 0 and not outcome['stopped']
         if outcome['stopped']:
             outcome['error'] = f'stopped: {outcome["stopped"]} (outputs are kept, not deleted)'
         elif outcome['consumedBytes'] > limits['boundBytes']:
             ok, outcome['error'] = False, (f'consumed {outcome["consumedBytes"]} bytes, above the {limits["boundBytes"]}-byte '
                                            'bound between samples (outputs are kept, not deleted)')
+        if stage == 'compile':
+            outcome.update(measure=COMPILE_MEASURE, startAvailableBytes=start, outDir=recipe['compile']['outDir'])
+            if ok:  # Signing's inputs: the unsigned target-files and otatools (and the vendor boot images), hashed
+                outcome['outputs'] = collect_compile_outputs(op['sourceRoot'], recipe['compile']['outDir'])
+                if outcome['outputs']['verdict'] != 'complete':
+                    ok, outcome['error'] = False, 'make exited 0 but the expected outputs are not all collected'
         if stage == 'vendor':
             outcome['node'] = report['facts']['node']
             outcome['adevtoolHead'] = want.strip()

@@ -17,6 +17,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import signal
 import subprocess
 import tarfile
 import tempfile
@@ -521,7 +522,7 @@ class Workflow(unittest.TestCase):
         self.assertIn("    if: always() && needs.controller.result != 'skipped'\n", JOBS['cleanup'])
         self.assertIn('  group: os-release-frankel\n', WORKFLOW)
         self.assertIn("      - name: Signing-bootstrap guard\n        if: inputs.mode == 'signing-bootstrap'\n", JOBS['guard'])
-        self.assertIn('options: [none, fold-rango-v1, models-v0]', WORKFLOW)
+        self.assertIn('options: [none, fold-rango-v1, models-v0, pro-blazer-v1, fold-rango-factory-v1]', WORKFLOW)
         self.assertIn('        options: [frankel]\n', WORKFLOW)  # no device is admitted
 
     def guard_script(self):
@@ -951,6 +952,12 @@ class KeygenMock:
         return {'exit': 0 if self.category == 'ok' else None, 'category': self.category, 'outputBytes': 0, 'outputSha256': None}
 
 
+def bootstrap_options():
+    """The os-release.yml bootstrap_profile choice list itself (not the first `options: [none` line in the file)."""
+    block = re.search(r'\n      bootstrap_profile:\n(?:        (?!options:)[^\n]*\n)*        options: \[([^\]]*)\]\n', WORKFLOW)
+    return block[1].split(', ')
+
+
 def owner_dir(test):
     path = Path(tempfile.mkdtemp(prefix='fs-'))
     os.chmod(path, 0o700)
@@ -1152,7 +1159,129 @@ def factory_ready_profiles():
     return profiles
 
 
+OBSERVE_SPEC = importlib.util.spec_from_file_location('ssh_keygen_observe_for_bootstrap', SCRIPTS/'ssh-keygen-observe.py')
+OBSERVE = importlib.util.module_from_spec(OBSERVE_SPEC)
+OBSERVE_SPEC.loader.exec_module(OBSERVE)
+
+
+class SshKeygenEvidence(unittest.TestCase):
+    """Every committed copy of the builder's ssh-keygen identity agrees with os/signing-bootstrap/ssh-keygen-evidence.json
+    (scripts/ssh-keygen-observe.py committed_problems). Synthetic reports only; nothing reads a host."""
+    RUN = {'workflow': 'os-release.yml', 'mode': 'blazer-prep', 'stage': 'ssh-keygen-observe', 'runId': '41700000001',
+           'attempt': '1', 'workflowSha': 'c' * 40, 'artifact': 'blazer-prep-ssh-keygen-observe-41700000001-1'}
+
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp(prefix='sshkg-evidence-'))
+        self.addCleanup(shutil.rmtree, self.root, True)
+        for rel in (OBSERVE.EVIDENCE, OBSERVE.PROFILES, OBSERVE.BINDING):
+            (self.root/rel).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(ROOT/rel, self.root/rel)
+        self.committed = copy.deepcopy(json.loads((ROOT/OBSERVE.EVIDENCE).read_text()))
+        if self.committed.get('status') == 'measured':  # the committed report travels with its evidence
+            shutil.copyfile(ROOT/self.committed['observation']['file'], self.root/self.committed['observation']['file'])
+        self.unmeasure()  # every case below starts from the unmeasured state, whatever is committed
+        self.report = {'schema': OBSERVE.SCHEMA, 'host': OBSERVE.HOST, 'complete': True, 'bindable': True, 'problems': [],
+                       'lock': {'held': True, 'path': '/home/pixelbuild/frankel-build.lock'},
+                       'files': {'tool': {'path': '/usr/bin/ssh-keygen', 'state': 'present', 'sha256': 'b' * 64}},
+                       'package': {'manager': 'dpkg', 'source': 'database', 'name': 'openssh-client', 'version': '1:9.2p1-2+deb12u3',
+                                   'architecture': 'amd64', 'status': 'install ok installed', 'listsTool': True,
+                                   'md5sumMatches': True, 'diverted': False},
+                       'version': {'source': 'package-database', 'upstream': '9.2p1', 'meetsMinimum': True}}
+
+    def unmeasure(self):
+        self.edit(OBSERVE.EVIDENCE, lambda e: e.update(status='unmeasured', observation=None, run=None))
+
+        def null_profiles(p):
+            for name in ('fold-rango-factory-v1', 'pro-blazer-factory-v1'):
+                p['profiles'][name]['tools']['ssh-keygen']['installed'] = dict(OBSERVE.NULL_IDENTITY)
+                if OBSERVE.MEASURED_ENTRY not in p['profiles'][name]['missing']:
+                    p['profiles'][name]['missing'].append(OBSERVE.MEASURED_ENTRY)
+        self.edit(OBSERVE.PROFILES, null_profiles)
+        self.edit(OBSERVE.BINDING, lambda b: b.update(sshKeygen=dict(OBSERVE.NULL_IDENTITY)))
+
+    def edit(self, rel, change):
+        path = self.root/rel
+        value = json.loads(path.read_text())
+        change(value)
+        path.write_text(json.dumps(value, indent=2))
+
+    def measure(self, report=None, blazer=False, keep_missing=False, run=None, digest=None):
+        data = json.dumps(report or self.report, sort_keys=True).encode()
+        (self.root/OBSERVE.EVIDENCE_DIR/'ssh-keygen-observation.json').write_bytes(data)
+        identity = {'path': '/usr/bin/ssh-keygen', 'sha256': (report or self.report)['files']['tool']['sha256']}
+        self.edit(OBSERVE.EVIDENCE, lambda e: e.update(status='measured', run=dict(run or self.RUN), observation={
+            'file': f'{OBSERVE.EVIDENCE_DIR}/ssh-keygen-observation.json', 'sha256': digest or hashlib.sha256(data).hexdigest()}))
+
+        def bind_profiles(p):
+            for name in ('fold-rango-factory-v1', *(('pro-blazer-factory-v1',) if blazer else ())):
+                p['profiles'][name]['tools']['ssh-keygen']['installed'] = dict(identity)
+                if not keep_missing:
+                    p['profiles'][name]['missing'] = [m for m in p['profiles'][name]['missing'] if m != OBSERVE.MEASURED_ENTRY]
+        self.edit(OBSERVE.PROFILES, bind_profiles)
+        self.edit(OBSERVE.BINDING, lambda b: b.update(sshKeygen=dict(identity)))
+        return identity
+
+    def test_committed_copies_agree_with_the_committed_evidence(self):
+        self.assertEqual(OBSERVE.committed_problems(ROOT), [])
+        self.assertEqual(OBSERVE.committed_problems(self.root), [])  # the unmeasured state is consistent too
+
+    def test_a_copy_bound_without_measured_evidence_fails(self):
+        self.edit(OBSERVE.BINDING, lambda b: b.update(sshKeygen={'path': '/usr/bin/ssh-keygen', 'sha256': 'b' * 64}))
+        self.assertEqual(OBSERVE.committed_problems(self.root), [f'{OBSERVE.BINDING}: bound without measured evidence'])
+
+    def test_measured_evidence_binds_rango_and_optionally_blazer(self):
+        identity = self.measure()
+        self.assertEqual(OBSERVE.committed_problems(self.root), [])
+        self.measure(blazer=True)
+        self.assertEqual(OBSERVE.committed_problems(self.root), [])
+        self.assertEqual(json.loads((self.root/OBSERVE.BINDING).read_text())['sshKeygen'], identity)
+
+    def test_measured_evidence_must_match_every_copy_and_its_run(self):
+        cases = {
+            'blazer differs': (lambda: self.edit(OBSERVE.PROFILES, lambda p: p['profiles']['pro-blazer-factory-v1']['tools']
+                               ['ssh-keygen'].update(installed={'path': '/usr/bin/ssh-keygen', 'sha256': 'd' * 64})),
+                               'pro-blazer-factory-v1: neither null nor the measured identity'),
+            'binding differs': (lambda: self.edit(OBSERVE.BINDING, lambda b: b.update(sshKeygen={'path': '/usr/bin/ssh-keygen',
+                                'sha256': 'd' * 64})), f'{OBSERVE.BINDING}: not the measured identity'),
+            'rango left null': (lambda: self.edit(OBSERVE.PROFILES, lambda p: p['profiles']['fold-rango-factory-v1']['tools']
+                                ['ssh-keygen'].update(installed={'path': None, 'sha256': None})), 'fold-rango-factory-v1: not the measured identity'),
+        }
+        for name, (change, expected) in cases.items():
+            with self.subTest(name):
+                self.setUp()
+                self.measure()
+                change()
+                self.assertIn(expected, OBSERVE.committed_problems(self.root))
+        for name, kwargs, expected in (
+                ('wrong digest', dict(digest='0' * 64), 'evidence.observation: sha256 is not the committed report bytes'),
+                ('incomplete report', dict(report=dict(self.report, complete=False)), 'evidence.observation: bind refuses'),
+                ('wrong artifact', dict(run=dict(self.RUN, artifact='blazer-prep-ssh-keygen-observe-1-1')), 'evidence.run:'),
+                ('other stage', dict(run=dict(self.RUN, stage='binding-observe')), 'evidence.run:'),
+                ('missing kept', dict(keep_missing=True), 'fold-rango-factory-v1: the missing list must name the measurement')):
+            with self.subTest(name):
+                self.setUp()
+                self.measure(**kwargs)
+                problems = OBSERVE.committed_problems(self.root)
+                self.assertTrue(any(p.startswith(expected) for p in problems), problems)
+
+    def test_observation_file_must_live_beside_the_evidence(self):
+        self.measure()
+        self.edit(OBSERVE.EVIDENCE, lambda e: e['observation'].update(file='os/elsewhere/ssh-keygen-observation.json'))
+        self.assertEqual(OBSERVE.committed_problems(self.root),
+                         [f'evidence.observation: not a file under {OBSERVE.EVIDENCE_DIR} with its sha256'])
+
+
 class FactoryBootstrapProfile(unittest.TestCase):
+    def test_factory_profile_is_a_dispatch_choice_that_the_guard_refuses_until_ready(self):
+        self.assertIn('fold-rango-factory-v1', bootstrap_options())  # owner-authorized dispatch choice
+        env = dict(GUARD_ENV, BOOTSTRAP_PROFILE='fold-rango-factory-v1', ROSE_DEVICE='frankel')
+        # The hosted guard refuses exactly while readiness has reasons, whatever is committed.
+        self.assertEqual(bool(sb.guard(env, PROFILES, NOW)), bool(sb.readiness('fold-rango-factory-v1', PROFILES, NOW)))
+        unbound = copy.deepcopy(PROFILES)
+        unbound['profiles']['fold-rango-factory-v1']['status'] = 'unbound'
+        self.assertTrue(any(f.startswith('profile-unbound') for f in sb.guard(env, unbound, NOW)))
+        self.assertTrue(sb.guard(dict(env, ROSE_DEVICE='rango'), unbound, NOW))  # the dispatch shape is unchanged
+
     def test_checked_in_profile_is_unbound_and_refuses_before_anything(self):
         reasons = sb.readiness('fold-rango-factory-v1', PROFILES, NOW)
         self.assertEqual(reasons[0][0], 'profile-unbound')
@@ -1160,9 +1289,16 @@ class FactoryBootstrapProfile(unittest.TestCase):
         self.assertEqual((profile['principal'], profile['archive']['format']), ('roseos-factory-images-rango-v1', 'openssh-ed25519'))
         self.assertEqual(profile['secrets'], {'keys': 'PIXEL_OS_FACTORY_SIGNING_KEY_RANGO_V1',
                                               'passphrase': 'PIXEL_OS_FACTORY_SIGNING_PASSPHRASE_RANGO_V1'})
-        self.assertIsNone(profile['tools']['ssh-keygen']['installed']['path'])
+        # Never on the committed profile: once the measured ssh-keygen is bound, generate_openssh would reach the real
+        # tool (it uses factory_signing.run_bounded, not this runner). A copy with the tool unbound must refuse, and any
+        # process start fails the test.
+        unbound = copy.deepcopy(profile)
+        unbound['tools']['ssh-keygen']['installed'] = {'path': None, 'sha256': None}
+        saved = sb.factory_signing.run_bounded
+        sb.factory_signing.run_bounded = lambda *a, **k: self.fail('a process was started')
+        self.addCleanup(setattr, sb.factory_signing, 'run_bounded', saved)
         with self.assertRaises(sb.Blocked) as ctx:
-            sb.generate_keys(owner_dir(self), profile, runner=None)
+            sb.generate_keys(owner_dir(self), unbound, runner=None)
         self.assertEqual(ctx.exception.code, 'tool-unapproved')
 
     def test_ready_copy_generates_projects_and_imports_only_the_key_and_passphrase(self):
@@ -1189,6 +1325,122 @@ class FactoryBootstrapProfile(unittest.TestCase):
         self.assertRegex(identity['fingerprint'], r'^SHA256:[A-Za-z0-9+/]{43}$')
         self.assertNotIn('SYNTHETIC-token', json.dumps(receipt))
         self.assertEqual(runner.calls[0]['argv'][0], TOOL)  # the measured path, not a PATH lookup
+
+
+class FactoryWorkspaceExec(unittest.TestCase):
+    """The askpass helper runs from the RAM workspace: a noexec mount refuses before the journal, never after it."""
+
+    def test_workspace_problem_detects_noexec_and_unusable(self):
+        flags = lambda value: (lambda path: type('StatVfs', (), {'f_flag': value})())
+        self.assertIsNone(fs.workspace_problem('/x', statvfs=flags(0)))
+        self.assertTrue(fs.workspace_problem('/x', statvfs=flags(os.ST_NOEXEC | os.ST_NOSUID)).startswith('workspace_noexec'))
+
+        def denied(path):
+            raise PermissionError
+        self.assertEqual(fs.workspace_problem('/x', statvfs=denied), 'workspace_unusable: PermissionError')
+
+    def test_noexec_workspace_refuses_before_the_journal_and_the_run_can_be_retried(self):
+        profiles, runner, fixture = factory_ready_profiles(), KeygenMock(), Fixture(self)
+
+        class Executor(MockExecutor):
+            def tool_sha256(self, path):
+                self.calls.append(('tool', path))
+                return hashlib.sha256(b'ssh-keygen').hexdigest()
+
+            def generate(self, workspace, profile):
+                self.calls.append(('generate',))
+                return sb.generate_openssh(workspace, profile, runner=runner, token='SYNTHETIC-token')
+
+        def bootstrap(executor):
+            return sb.run('fold-rango-factory-v1', profiles, executor, fixture.state, fixture.lock, SHA, NOW,
+                          workspace=lambda: fixture.workspace(), frankel=FRANKEL)[0]
+        saved = sb.factory_signing.workspace_problem
+        sb.factory_signing.workspace_problem = lambda path: 'workspace_noexec: synthetic'
+        try:
+            executor = Executor()
+            receipt = bootstrap(executor)
+        finally:
+            sb.factory_signing.workspace_problem = saved
+        self.assertEqual((receipt['status'], codes(receipt)), ('blocked', ['workspace-noexec']))
+        self.assertNotIn('generate', executor.kinds())
+        self.assertNotIn('add', executor.kinds())
+        self.assertEqual(runner.calls, [])
+        self.assertFalse((fixture.state/'fold-rango-factory-v1.json').exists())  # no journal: not used up
+        retry = Executor()
+        self.assertEqual(bootstrap(retry)['status'], 'complete')
+        self.assertEqual([c[0] for c in retry.calls].count('add'), 2)
+
+
+class FactoryBootstrapStop(unittest.TestCase):
+    """A SIGTERM or SIGHUP (outer timeout, cancelled job) still removes the RAM workspace holding the fresh key, and an
+    interrupted import is journaled as recovery-needed, never retried. Signals are sent to this test process only."""
+
+    def setUp(self):
+        saved = {each: signal.getsignal(each) for each in fs.STOP_SIGNALS}
+        self.addCleanup(lambda: [signal.signal(each, handler) for each, handler in saved.items()])
+        sb.factory_signing.stop_on_signals(sb.interrupted)
+        self.profiles, self.runner, self.fixture = factory_ready_profiles(), KeygenMock(), Fixture(self)
+
+    def executor(self, stop_at):
+        runner, test = self.runner, self
+
+        class Executor(MockExecutor):
+            def tool_sha256(self, path):
+                self.calls.append(('tool', path))
+                return hashlib.sha256(b'ssh-keygen').hexdigest()
+
+            def generate(self, workspace, profile):
+                self.calls.append(('generate',))
+                test.workspace = Path(workspace)
+                identity = sb.generate_openssh(workspace, profile, runner=runner, token='SYNTHETIC-token')
+                if stop_at == 'generate':
+                    os.kill(os.getpid(), signal.SIGTERM)
+                    time.sleep(1)
+                return identity
+
+            def add_version(self, project, secret, file):
+                version = super().add_version(project, secret, file)
+                if stop_at == 'between-adds' and secret.endswith('KEY_RANGO_V1'):
+                    os.kill(os.getpid(), signal.SIGTERM)
+                    time.sleep(1)
+                return version
+        return Executor()
+
+    def run_bootstrap(self, executor):
+        return sb.run('fold-rango-factory-v1', self.profiles, executor, self.fixture.state, self.fixture.lock, SHA, NOW,
+                      workspace=lambda: self.fixture.workspace(), frankel=FRANKEL)[0]
+
+    def test_the_cli_installs_the_stop_handlers(self):
+        for each in fs.STOP_SIGNALS:
+            signal.signal(each, signal.SIG_DFL)
+        with contextlib.redirect_stdout(io.StringIO()):
+            sb.main(['plan', '--profile', 'fold-rango-factory-v1'], env={})
+        self.assertTrue(all(callable(signal.getsignal(each)) for each in fs.STOP_SIGNALS))
+
+    def test_a_stop_during_generation_removes_the_workspace_and_adds_nothing(self):
+        executor = self.executor('generate')
+        receipt = self.run_bootstrap(executor)
+        self.assertEqual(codes(receipt), ['interrupted'])
+        self.assertTrue(receipt['cleanup']['workspaceRemoved'])
+        self.assertFalse(self.workspace.exists())  # the fresh private key and passphrase are gone
+        self.assertNotIn('add', executor.kinds())
+        journal = json.loads((self.fixture.state/'fold-rango-factory-v1.json').read_text())
+        self.assertEqual(journal['status'], 'generating')  # a later run refuses previous-attempt: no silent regeneration
+        retry = self.executor(None)
+        self.assertEqual(codes(self.run_bootstrap(retry)), ['previous-attempt'])
+
+    def test_a_stop_inside_an_add_is_uncertain_and_recorded_for_recovery(self):
+        executor = self.executor('between-adds')  # lands inside the key add, before its outcome is returned
+        receipt = self.run_bootstrap(executor)
+        self.assertTrue(receipt['recoveryNeeded'])
+        self.assertIn('recovery-needed', codes(receipt))
+        self.assertEqual((receipt['secrets']['keys']['state'], receipt['secrets']['passphrase']['state']),
+                         ('uncertain', 'untouched'))  # never assumed committed; the passphrase is never added
+        self.assertEqual([c[0] for c in executor.calls].count('add'), 1)
+        self.assertTrue(receipt['cleanup']['workspaceRemoved'])
+        self.assertFalse(self.workspace.exists())
+        journal = json.loads((self.fixture.state/'fold-rango-factory-v1.json').read_text())
+        self.assertEqual(journal['status'], 'recovery-needed')
 
 
 class FactorySelfCheck(unittest.TestCase):
@@ -1266,7 +1518,8 @@ class FactoryProfileValidation(unittest.TestCase):
                 mutate(profiles['profiles']['fold-rango-factory-v1'])
                 self.assertIn('profile-invalid', [c for c, _ in sb.readiness('fold-rango-factory-v1', profiles, NOW)])
         tool = PROFILES['profiles']['fold-rango-factory-v1']['tools']['ssh-keygen']['installed']
-        self.assertEqual(tool, {'path': None, 'sha256': None})  # never invented
+        self.assertEqual(set(tool), {'path', 'sha256'})
+        self.assertEqual(OBSERVE.committed_problems(), [])  # never invented: null, or exactly the committed measurement
 
 
 class FactoryImportRecovery(unittest.TestCase):
@@ -1357,7 +1610,9 @@ class BlazerProfiles(unittest.TestCase):
                 profile = PROFILES['profiles'][name]
                 self.assertEqual((profile['status'], profile['device']), ('unbound', 'blazer'))
                 self.assertTrue(profile['missing'])
-                self.assertNotIn(name, re.search(r'options: \[none[^\]]*\]', WORKFLOW)[0])  # not a workflow option
+                # pro-blazer-v1 is a dispatch choice (Release's handoff; the guard still refuses it while unbound);
+                # pro-blazer-factory-v1 is not yet one.
+                self.assertEqual(name in bootstrap_options(), name == 'pro-blazer-v1')
 
     def test_blazer_secrets_are_new_and_distinct(self):
         profiles = PROFILES['profiles']
@@ -1376,8 +1631,11 @@ class BlazerProfiles(unittest.TestCase):
     def test_factory_profile_shape_matches_rango_with_its_own_principal(self):
         rango, pro = PROFILES['profiles']['fold-rango-factory-v1'], PROFILES['profiles']['pro-blazer-factory-v1']
         self.assertEqual(pro['principal'], 'roseos-factory-images-blazer-v1')
-        self.assertEqual({k: v for k, v in pro.items() if k not in ('device', 'principal', 'purpose', 'secrets', 'missing')},
-                         {k: v for k, v in rango.items() if k not in ('device', 'principal', 'purpose', 'secrets', 'missing')})
+        def shape(profile):  # the measured identity may be bound for Rango first (SshKeygenEvidence checks both copies)
+            value = copy.deepcopy({k: v for k, v in profile.items() if k not in ('device', 'principal', 'purpose', 'secrets', 'missing')})
+            value['tools']['ssh-keygen'].pop('installed')
+            return value
+        self.assertEqual(shape(pro), shape(rango))
         ready = copy.deepcopy(PROFILES)
         profile = ready['profiles']['pro-blazer-factory-v1']
         profile['status'] = 'resource-bound'

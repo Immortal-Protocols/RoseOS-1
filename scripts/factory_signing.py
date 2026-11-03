@@ -58,6 +58,33 @@ def _plain(path, label):
     return path
 
 
+STOP_SIGNALS = (signal.SIGTERM, signal.SIGHUP)
+
+
+def stop_on_signals(raise_stop, signals=STOP_SIGNALS):
+    """Turn the first SIGTERM or SIGHUP (an outer timeout, a cancelled job) into raise_stop(signum) at the current point,
+    so every finally block still runs: the owner-only RAM directories holding a fetched or freshly generated key are
+    overwritten and removed instead of being left behind by the default action. Later signals are ignored so cleanup
+    is never interrupted. Returns the previous handlers."""
+    def handler(signum, frame):
+        for each in signals:
+            signal.signal(each, signal.SIG_IGN)
+        raise_stop(signum)
+    return {each: signal.signal(each, handler) for each in signals}
+
+
+def workspace_problem(path, statvfs=os.statvfs):
+    """None when an askpass helper written into PATH can be executed; else a fixed reason. A RAM directory on a noexec
+    mount would make ssh-keygen read an empty passphrase, so callers refuse before anything irreversible."""
+    try:
+        flags = statvfs(path).f_flag
+    except OSError as error:
+        return f'workspace_unusable: {type(error).__name__}'
+    if flags & os.ST_NOEXEC:
+        return 'workspace_noexec: the private directory is on a noexec mount, so the askpass helper could not run'
+    return None
+
+
 def write_askpass(workspace, passfile):
     """The pinned helper: fixed template bytes naming only the owner-only passphrase file, mode 0700."""
     if ASKPASS_TEMPLATE_SHA256 != hashlib.sha256(ASKPASS_TEMPLATE.encode()).hexdigest():

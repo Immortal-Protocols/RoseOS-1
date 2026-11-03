@@ -10,6 +10,7 @@ import os
 import re
 from pathlib import Path
 import shutil
+import signal
 import struct
 import subprocess
 import sys
@@ -1153,7 +1154,7 @@ class FactoryArchiveSignTest(unittest.TestCase):
     def sign(self, args=None, pin='bound', **kw):
         signing = self.pin if pin == 'bound' else pin
         return fas.sign(args or self.args(), contract=lambda device: ('{device}-install-{build}.zip', signing),
-                        fetch=kw.pop('fetch', self.fetch()), runner=kw.pop('runner', self.runner()))
+                        fetch=kw.pop('fetch', self.fetch()), runner=kw.pop('runner', self.runner()), **kw)
 
     def test_signs_the_retained_archive_without_touching_it(self):
         receipt = self.sign()
@@ -1238,8 +1239,9 @@ class FactoryArchiveSignTest(unittest.TestCase):
 
     def test_committed_binding_is_unbound_and_check_exits_4(self):
         committed = json.loads((SCRIPTS.parent/'os/retained-rango/factory-signing.json').read_text())
-        self.assertEqual((committed['keyVersion'], committed['passphraseVersion'], committed['sshKeygen']),
-                         (None, None, {'path': None, 'sha256': None}))
+        # The bootstrap receipt values stay unbound until the key setup; the measured ssh-keygen identity is checked
+        # against its committed evidence by test_signing_bootstrap.SshKeygenEvidence.
+        self.assertEqual((committed['keyVersion'], committed['passphraseVersion']), (None, None))
         stdout = io.StringIO()
         with contextlib.redirect_stdout(stdout):
             self.assertEqual(fas.main(['check']), 4)
@@ -1254,6 +1256,90 @@ class FactoryArchiveSignTest(unittest.TestCase):
                                 ({'project': 'X'}, 'binding.project'), ({'schema': 'other'}, 'binding: not')):
             with self.subTest(change):
                 self.assertTrue(any(m.startswith(missing) for m in fas.binding_problems(self.binding(**change), bound)))
+
+    def restore_signals(self):
+        saved = {each: signal.getsignal(each) for each in fas.factory_signing.STOP_SIGNALS}
+        self.addCleanup(lambda: [signal.signal(each, handler) for each, handler in saved.items()])
+
+    def test_stop_on_signals_raises_once_then_ignores(self):
+        self.restore_signals()
+
+        class Stop(Exception):
+            pass
+
+        def raise_stop(signum):
+            raise Stop(signum)
+        fas.factory_signing.stop_on_signals(raise_stop)
+        with self.assertRaises(Stop):
+            os.kill(os.getpid(), signal.SIGTERM)
+            time.sleep(1)
+        self.assertEqual(signal.getsignal(signal.SIGTERM), signal.SIG_IGN)  # cleanup is never interrupted again
+        self.assertEqual(signal.getsignal(signal.SIGHUP), signal.SIG_IGN)
+        os.kill(os.getpid(), signal.SIGTERM)  # ignored
+
+    def test_the_cli_installs_the_stop_handlers(self):
+        self.restore_signals()
+        for each in fas.factory_signing.STOP_SIGNALS:
+            signal.signal(each, signal.SIG_DFL)
+        with contextlib.redirect_stdout(io.StringIO()):
+            fas.main(['check'])
+        self.assertTrue(all(callable(signal.getsignal(each)) for each in fas.factory_signing.STOP_SIGNALS))
+
+    def test_a_stop_during_signing_removes_the_secrets_and_the_partial_signature(self):
+        self.restore_signals()
+        fas.factory_signing.stop_on_signals(fas.stop)
+        used = []
+
+        @contextlib.contextmanager
+        def private(prefix):
+            with fas.host_secrets.private_directory(prefix) as path:
+                used.append(path)
+                yield path
+
+        def runner(argv, env, cwd, seconds, stdin_path=None):
+            if argv[1:3] == ['-Y', 'sign']:
+                Path(argv[-1] + '.sig').write_text('partial')
+                os.kill(os.getpid(), signal.SIGTERM)  # the outer timeout fires mid-signature
+                time.sleep(1)
+            return {'exit': 0, 'category': 'ok', 'outputBytes': 0, 'outputSha256': None}
+        with self.assertRaisesRegex(fas.Refused, '^interrupted: signal 15'):
+            self.sign(private=private, runner=runner)
+        out = self.root/'sign-run-1'
+        self.assertEqual(len(used), 1)
+        self.assertFalse(used[0].exists())  # the RAM directory with the key and passphrase is gone
+        self.assertFalse((out/f'{self.archive.name}.sig').exists())
+        self.assertFalse((out/'work').exists())
+        receipt = json.loads((out/'factory-archive-sign-receipt.json').read_text())
+        self.assertEqual((receipt['status'], receipt['refused'], receipt['workRemoved']), ('failed', 'interrupted: signal 15', True))
+
+    def test_secret_fetches_and_archive_hashes_are_bounded(self):
+        calls = []
+        with mock.patch.object(fas.host_secrets, 'fetch_secret', side_effect=lambda *a, **k: calls.append(k) or Path(a[3])):
+            fas.bounded_fetch('protocols-465723', 'PIXEL_OS_FACTORY_SIGNING_KEY_RANGO_V1', '1', self.root/'k')
+        self.assertEqual(calls, [{'timeout': fas.BOUNDS['fetchSeconds']}])
+        with mock.patch.object(fas.host_secrets.subprocess, 'run', side_effect=subprocess.TimeoutExpired('gcloud', 120)):
+            with self.assertRaisesRegex(fas.host_secrets.AdapterFailed, 'timed out reading secret'):
+                fas.host_secrets.fetch_secret('protocols-465723', 'PIXEL_OS_FACTORY_SIGNING_KEY_RANGO_V1', '1', self.root/'k',
+                                              timeout=120)
+        ticks = iter([0, 0, 10 ** 6, 10 ** 6])
+        big = self.root/'big.bin'
+        big.write_bytes(b'x' * (20 << 20))  # three 8 MiB blocks
+        with self.assertRaisesRegex(fas.Refused, '^hash_timeout'):
+            fas.sha256_file(big, seconds=60, clock=lambda: next(ticks))
+        self.assertEqual(fas.sha256_file(big), sha(big.read_bytes()))  # unbounded callers are unchanged
+        self.assertEqual(set(fas.BOUNDS), {'hashSeconds', 'fetchSeconds', 'signSeconds', 'verifySeconds', 'killGraceSeconds'})
+        self.assertEqual(fas.BOUNDS['signSeconds'], fas.factory_signing.LIMITS['signSeconds'])
+
+    def test_a_noexec_workspace_refuses_before_any_secret(self):
+        bound = lambda device: ('{device}-install-{build}.zip', self.pin)
+        fetched = []
+        with self.assertRaisesRegex(fas.Refused, '^workspace_noexec'):
+            fas.sign_from_binding(self.binding(), str(self.archive), sha(self.archive.read_bytes()),
+                                  str(self.root/'builder.lock'), str(self.root/'nx-run'), contract=bound,
+                                  fetch=lambda *a: fetched.append(a), runner=self.runner(),
+                                  workspace_check=lambda path: 'workspace_noexec: synthetic')
+        self.assertEqual(fetched, [])
+        self.assertFalse((self.root/'nx-run'/f'{self.archive.name}.sig').exists())
 
     def test_sign_from_binding_and_cli_refusal_is_one_line(self):
         bound = lambda device: ('{device}-install-{build}.zip', self.pin)

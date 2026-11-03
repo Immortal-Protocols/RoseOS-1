@@ -86,7 +86,7 @@ class Guard(unittest.TestCase):
             capture_output=True, cwd=ROOT).returncode
 
     def test_whole_guard_admits_exactly_the_bare_mode_with_one_preparation_stage(self):
-        for stage in ('source', 'download', 'vendor', 'lunch', 'inspect', 'git-inspect', 'git-inspect-set', 'git-inspect-objects'):
+        for stage in ('source', 'download', 'vendor', 'lunch', 'inspect', 'git-inspect', 'git-inspect-set', 'git-inspect-objects', 'git-meta', 'binding-observe', 'ssh-keygen-observe'):
             with self.subTest(stage=stage):
                 self.assertEqual(self.run_guard(BLAZER_PREP_STAGE=stage), 0)
         for change in ({'BLAZER_PREP_STAGE': 'none'}, {'BLAZER_PREP_STAGE': None}, {'BLAZER_PREP_STAGE': 'compile'},
@@ -105,7 +105,7 @@ class Guard(unittest.TestCase):
         observe = dict(MODE='rango-factory-observe')
         self.assertEqual(self.run_guard(**observe, BLAZER_PREP_STAGE='none'), 0)
         self.assertEqual(self.run_guard(**observe, BLAZER_PREP_STAGE=None), 0)  # older callers never set it
-        for stage in ('source', 'download', 'vendor', 'lunch', 'inspect', 'git-inspect', 'git-inspect-set', 'git-inspect-objects'):
+        for stage in ('source', 'download', 'vendor', 'lunch', 'inspect', 'git-inspect', 'git-inspect-set', 'git-inspect-objects', 'git-meta', 'binding-observe', 'ssh-keygen-observe'):
             self.assertNotEqual(self.run_guard(**observe, BLAZER_PREP_STAGE=stage), 0)
         line = '[[ "$MODE" == blazer-prep || "${BLAZER_PREP_STAGE:-none}" == none ]]'
         self.assertIn('          ' + line + '\n', jobs()['guard'])
@@ -117,7 +117,7 @@ class Guard(unittest.TestCase):
         self.assertIn('models-sign, rango-retained, blazer-prep, emulator-alpha-successor,', WORKFLOW)
         self.assertIn('      blazer_prep_stage:\n        description: blazer-prep only - the one preparation stage this run '
                       'executes (none for every other mode)\n        type: choice\n        options: [none, source, download, vendor, '
-                      'lunch, inspect, git-inspect, git-inspect-set, git-inspect-objects]\n        default: none\n', WORKFLOW)
+                      'lunch, inspect, git-inspect, git-inspect-set, git-inspect-objects, git-meta, binding-observe, ssh-keygen-observe]\n        default: none\n', WORKFLOW)
         self.assertIn("  BLAZER_PREP_STAGE: ${{ inputs.blazer_prep_stage || 'none' }}\n", WORKFLOW)
         inputs = re.findall(r'(?m)^      (\w+):$', WORKFLOW.split('    inputs:\n', 1)[1].split('\npermissions:', 1)[0])
         self.assertIn('blazer_prep_stage', inputs)
@@ -514,6 +514,89 @@ class GitInspect(unittest.TestCase):
         self.assertEqual(report['schema'], 'roseos.blazer-git-objects-inspection.v1')
         self.assertEqual(wire(*argv).returncode, 2)
 
+    def test_git_meta_is_exactly_flavors_stage_with_its_recipe_bounds(self):
+        tail, outer, minutes = wiring.resolve('git-meta')
+        binding = json.loads((ROOT/'os/build-only/blazer-prep-host.json').read_text())
+        self.assertEqual(tail, ['--stage', 'git-meta', '--host', 'immortal-os-builder', '--lock', '/home/pixelbuild/frankel-build.lock',
+                                '--source-root', binding['sourceRoot']])
+        h = wiring.helper()
+        spec = json.loads((ROOT/'os/build-only/blazer.json').read_text())['gitMeta']
+        self.assertEqual(outer, spec['timeoutSeconds'] + h.GIT_META_CLEANUP_SECONDS + wiring.GIT_META_MARGIN_SECONDS)
+        self.assertEqual((outer, minutes), (6000, 111))
+        self.assertEqual(spec['objectsSource'], 'public-fetch')
+        self.assertEqual([p['path'] for p in spec['projects']], sorted(h.GIT_META_PATHS))
+        self.assertIn(h.GIT_META_STAGE, h.STAGES)
+
+    def test_git_meta_runs_once_with_a_fresh_receipt_dir(self):
+        result = wire('run', '--stage', 'git-meta')
+        self.assertEqual(result.returncode, 2)  # run needs an absolute --receipt-dir
+
+    def test_binding_observe_runs_exactly_the_release_observer(self):
+        self.assertEqual(wiring.resolve('binding-observe'), (['--host', 'immortal-os-builder'], 420, 19))
+        receipts = self.tmp/'observe'
+        result = wire('run', '--stage', 'binding-observe', '--receipt-dir', str(receipts))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout.splitlines()[0])['helper'][1:], ['observe', '--host', 'immortal-os-builder'])
+        self.assertTrue(json.loads(result.stdout.splitlines()[0])['helper'][0].endswith('scripts/blazer-binding-observe.py'))
+        self.assertEqual(sorted(p.name for p in receipts.iterdir()), ['binding-observation.json'])
+        report = json.loads((receipts/'binding-observation.json').read_text())
+        self.assertEqual(report['schema'], 'roseos.blazer-binding-observation.v1')
+        self.assertEqual(wire('run', '--stage', 'binding-observe', '--receipt-dir', str(receipts)).returncode, 2)
+        self.assertIn('binding-observation.json', step(jobs()['blazer-prep'], 'Allowlisted JSON receipts only'))
+
+    def test_ssh_keygen_observe_runs_exactly_signings_observer_with_its_bounds(self):
+        # Signing's own 120 s (it starts no process), a 120 s margin; job adds the outer kill, the verdict and 10 min.
+        self.assertEqual(wiring.resolve('ssh-keygen-observe'), (['--host', 'immortal-os-builder'], 240, 16))
+        receipts = self.tmp/'ssh'
+        result = wire('run', '--stage', 'ssh-keygen-observe', '--receipt-dir', str(receipts))
+        self.assertEqual(result.returncode, 3, result.stderr)  # incomplete (no lock here): the report is still printed
+        helper = json.loads(result.stdout.splitlines()[0])['helper']
+        self.assertEqual((Path(helper[0]).relative_to(ROOT).as_posix(), helper[1:]),
+                         ('scripts/ssh-keygen-observe.py', ['observe', '--host', 'immortal-os-builder']))
+        report = json.loads((receipts/'ssh-keygen-observation.json').read_text())
+        self.assertEqual((report['schema'], report['complete']), ('roseos.ssh-keygen-observation.v1', False))  # no lock here
+        result = wire('verdict', '--stage', 'ssh-keygen-observe', '--receipt-dir', str(receipts))
+        self.assertEqual(result.returncode, 4, result.stderr)  # Signing's bind: not bindable
+        self.assertEqual(json.loads(result.stdout)['verdict'], 'NOT_BINDABLE')
+        self.assertIs(json.loads((receipts/'ssh-keygen-bind.json').read_text())['bindable'], False)
+        self.assertEqual(wire('verdict', '--stage', 'ssh-keygen-observe', '--receipt-dir', str(receipts)).returncode, 2)  # write-once
+        allowlist = step(jobs()['blazer-prep'], 'Allowlisted JSON receipts only')
+        self.assertIn('ssh-keygen-observation.json ssh-keygen-bind.json;', allowlist)
+
+    def test_the_verdict_not_the_observer_exit_decides_an_observation_stage(self):
+        def receipt(stage, data, name=None):
+            directory = Path(tempfile.mkdtemp())
+            (directory/(name or wiring.RECEIPTS[stage][0])).write_bytes(data)
+            return directory
+        good = {'schema': 'roseos.blazer-binding-observation.v1', 'complete': True, 'problems': []}
+        self.assertEqual(wiring.verdict('binding-observe', receipt('binding-observe', json.dumps(good).encode())), 0)
+        for bad in ({**good, 'complete': False}, {**good, 'problems': ['lock held by another job']}, {**good, 'schema': 'x'}, [1]):
+            with self.subTest(bad=bad):
+                self.assertEqual(wiring.verdict('binding-observe', receipt('binding-observe', json.dumps(bad).encode())), 1)
+        for data in (b'not json', b' ' * (wiring.OBSERVATION_BYTES + 1)):
+            with self.assertRaises(wiring.Invalid):
+                wiring.verdict('binding-observe', receipt('binding-observe', data))
+        linked = receipt('binding-observe', json.dumps(good).encode(), 'real.json')
+        (linked/'binding-observation.json').symlink_to(linked/'real.json')
+        with self.assertRaises(wiring.Invalid):
+            wiring.verdict('binding-observe', linked)
+        with self.assertRaises(wiring.Invalid):
+            wiring.verdict('binding-observe', Path(tempfile.mkdtemp()))  # no receipt is never a pass
+        calls = []
+        for code, expected in ((0, 0), (4, 4), (2, 2), (1, 2), (-9, 2)):
+            directory = receipt('ssh-keygen-observe', b'{}')
+
+            def run(argv, **kwargs):
+                calls.append(argv)
+                return subprocess.CompletedProcess(argv, code)
+            self.assertEqual(wiring.verdict('ssh-keygen-observe', directory, run=run), expected, code)
+            self.assertTrue((directory/'ssh-keygen-bind.json').is_file())
+        self.assertEqual(Path(calls[0][1]).relative_to(ROOT).as_posix(), 'scripts/ssh-keygen-observe.py')
+        self.assertEqual(calls[0][2:4], ['bind', '--observation'])
+        for stage in ('source', 'vendor', 'git-meta', 'inspect'):
+            self.assertEqual(wiring.verdict(stage, '/nonexistent'), 0)
+        self.assertEqual(wire('verdict', '--stage', 'binding-observe', '--receipt-dir', 'relative').returncode, 2)
+
     def test_existing_routes_are_unchanged(self):
         self.assertEqual(wiring.resolve('inspect', run_id='5', attempt='1')[1:], (960, 20))
         for stage, bounds in (('source', (7500, 136)), ('download', (3900, 76)), ('vendor', (11100, 196)), ('lunch', (2100, 46))):
@@ -568,7 +651,9 @@ class Job(unittest.TestCase):
         self.assertEqual(code_, 0)
         self.assertEqual(calls, ['python3 scripts/blazer-prep-wiring.py check --stage vendor',
             'timeout --kill-after=30s 11100s python3 scripts/blazer-prep-wiring.py run --stage vendor --receipt-dir '
-            '/runner/tmp/blazer-prep-1-1/run --run-id 41400000000 --attempt 1'])
+            '/runner/tmp/blazer-prep-1-1/run --run-id 41400000000 --attempt 1',
+            'timeout --kill-after=5s 60s python3 scripts/blazer-prep-wiring.py verdict --stage vendor --receipt-dir '
+            '/runner/tmp/blazer-prep-1-1/run'])
         for outer, check in (('1080', 'outer_seconds=11100\njob_minutes=196'), ('', 'outer_seconds=11100'),
                              ('11100s', 'outer_seconds=11100'), ('0', 'outer_seconds=0')):
             code_, calls = self.stage(outer, check)
@@ -599,19 +684,19 @@ class Ownership(unittest.TestCase):
     """The controller and cleanup commands as written in the workflow, run against the fake builder adapter."""
     def commands(self):
         controller, cleanup = jobs()['controller'], jobs()['cleanup']
-        start = re.search(r"(?m)^      - if: inputs.mode == 'blazer-prep' \|\| inputs.mode == 'rango-factory-package' \|\| inputs.mode == 'rango-factory-inspect' \|\| inputs.mode == 'launcher3-compile' \|\| inputs.mode == 'rango-factory-sign'\n        run: (.+)$", controller)[1]
-        record = re.search(r"(?m)^        if: always\(\) && \(inputs.mode == 'blazer-prep' \|\| inputs.mode == 'rango-factory-package' \|\| inputs.mode == 'rango-factory-inspect' \|\| inputs.mode == 'launcher3-compile' \|\| inputs.mode == 'rango-factory-sign'\)\n        run: (.+)$", controller)[1]
-        stop = re.search(r"(?m)^      - if: inputs.mode == 'blazer-prep' \|\| inputs.mode == 'rango-factory-package' \|\| inputs.mode == 'rango-factory-inspect' \|\| inputs.mode == 'launcher3-compile' \|\| inputs.mode == 'rango-factory-sign'\n        env:\n          STARTED: \$\{\{ needs.controller"
+        start = re.search(r"(?m)^      - if: inputs.mode == 'blazer-prep' \|\| inputs.mode == 'rango-factory-package' \|\| inputs.mode == 'rango-factory-inspect' \|\| inputs.mode == 'launcher3-compile' \|\| inputs.mode == 'blazer-compile' \|\| inputs.mode == 'blazer-integrate' \|\| inputs.mode == 'rango-factory-sign'\n        run: (.+)$", controller)[1]
+        record = re.search(r"(?m)^        if: always\(\) && \(inputs.mode == 'blazer-prep' \|\| inputs.mode == 'rango-factory-package' \|\| inputs.mode == 'rango-factory-inspect' \|\| inputs.mode == 'launcher3-compile' \|\| inputs.mode == 'blazer-compile' \|\| inputs.mode == 'blazer-integrate' \|\| inputs.mode == 'rango-factory-sign'\)\n        run: (.+)$", controller)[1]
+        stop = re.search(r"(?m)^      - if: inputs.mode == 'blazer-prep' \|\| inputs.mode == 'rango-factory-package' \|\| inputs.mode == 'rango-factory-inspect' \|\| inputs.mode == 'launcher3-compile' \|\| inputs.mode == 'blazer-compile' \|\| inputs.mode == 'blazer-integrate' \|\| inputs.mode == 'rango-factory-sign'\n        env:\n          STARTED: \$\{\{ needs.controller"
                          r".outputs.started \}\}\n        run: (.+)$", cleanup)[1]
         return start, record, stop
 
     def test_workflow_routes_only_blazer_prep_through_ownership(self):
         controller, cleanup = jobs()['controller'], jobs()['cleanup']
         self.assertIn("    outputs:\n      started: ${{ steps.ownership.outputs.started }}\n", controller)
-        self.assertIn("      - if: inputs.mode != 'blazer-prep' && inputs.mode != 'rango-factory-package' && inputs.mode != 'rango-factory-inspect' && inputs.mode != 'launcher3-compile' && inputs.mode != 'rango-factory-sign'\n        run: python3 scripts/release-pipeline.py start-builder\n", controller)
-        self.assertIn("      - if: inputs.mode != 'blazer-prep' && inputs.mode != 'rango-factory-package' && inputs.mode != 'rango-factory-inspect' && inputs.mode != 'launcher3-compile' && inputs.mode != 'rango-factory-sign'\n        run: python3 scripts/release-pipeline.py stop-builder\n", cleanup)
+        self.assertIn("      - if: inputs.mode != 'blazer-prep' && inputs.mode != 'rango-factory-package' && inputs.mode != 'rango-factory-inspect' && inputs.mode != 'launcher3-compile' && inputs.mode != 'blazer-compile' && inputs.mode != 'blazer-integrate' && inputs.mode != 'rango-factory-sign'\n        run: python3 scripts/release-pipeline.py start-builder\n", controller)
+        self.assertIn("      - if: inputs.mode != 'blazer-prep' && inputs.mode != 'rango-factory-package' && inputs.mode != 'rango-factory-inspect' && inputs.mode != 'launcher3-compile' && inputs.mode != 'blazer-compile' && inputs.mode != 'blazer-integrate' && inputs.mode != 'rango-factory-sign'\n        run: python3 scripts/release-pipeline.py stop-builder\n", cleanup)
         self.assertEqual(len(re.findall(r'release-pipeline.py (?:start|stop)-builder', controller + cleanup)), 4)
-        self.assertIn('rango-factory-observe, blazer-prep, rango-factory-package, rango-factory-inspect, launcher3-compile, rango-factory-sign, app-builder', re.search(r'(?m)^    needs: (.+)$', cleanup)[1])
+        self.assertIn('rango-factory-observe, blazer-prep, rango-factory-package, rango-factory-inspect, launcher3-compile, blazer-compile, blazer-integrate, rango-factory-sign, app-builder', re.search(r'(?m)^    needs: (.+)$', cleanup)[1])
         self.assertIn("    if: always() && needs.controller.result != 'skipped'\n", cleanup)
         start, record, stop = self.commands()
         self.assertEqual(start, 'python3 scripts/release-pipeline.py start-builder --ownership-record "$RUNNER_TEMP/builder-ownership.json"')

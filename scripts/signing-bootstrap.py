@@ -220,13 +220,33 @@ def proof_spec_problems(profile):
     return [('proof-spec-invalid', str(c) if CODE.fullmatch(str(c)) else 'unrecognised-code') for c in codes or []]
 
 
-def proof_problems(name, profile, proof):
-    """The closed proof fields this integration consumes: every fixed tool with an absolute path and sha256, this
-    profile, and exactly the runner's fixed minimal environment."""
+def proof_subject(name, profile, profiles):
+    """(subject, problem). The admitted helper proves the tool identities of the profile its spec pins
+    (localProof.spec.profile; the helper's validate_spec accepts only its own subject), and every proof names that
+    subject. A profile other than the subject may consume such a proof only when its localProof and its whole tool
+    set are exactly the subject's checked-in ones, so the proof covers precisely the tools this profile runs. Anything
+    else, including no reviewed profiles to compare with, is 'proof-subject'."""
+    subject = ((profile.get('localProof') or {}).get('spec') or {}).get('profile')
+    if subject == name:
+        return subject, None
+    reviewed = ((profiles or {}).get('profiles') or {}).get(subject) if isinstance(subject, str) else None
+    if not isinstance(reviewed, dict) or reviewed.get('localProof') != profile.get('localProof') \
+            or reviewed.get('tools') != profile.get('tools'):
+        return subject, 'proof-subject'
+    return subject, None
+
+
+def proof_problems(name, profile, proof, profiles=None):
+    """The closed proof fields this integration consumes: every fixed tool with an absolute path and sha256, the subject
+    this profile's admitted spec pins (proof_subject), and exactly the runner's fixed minimal environment. The run,
+    attempt, recipe and helper binding are checked separately (bind_proof) and always name this profile."""
     if not isinstance(proof, dict) or not proof.get('schema') or not isinstance(proof.get('tools'), dict):
         return ['proof-malformed']
     problems = []
-    if proof.get('profile') != name:
+    subject, problem = proof_subject(name, profile, profiles)
+    if problem:
+        problems.append(problem)
+    if not isinstance(subject, str) or proof.get('profile') != subject:
         problems.append('proof-foreign')
     if sorted(proof['tools']) != sorted(PROOF_TOOLS):
         problems.append('proof-tools')
@@ -272,7 +292,7 @@ def prove(name, profiles, env, recipe_sha, proof_dir, lock_path, root='/', now=N
         return 'refused', ['proof-helper-fault']
     finally:
         lock.__exit__(None, None, None)
-    problems = proof_problems(name, profile, proof)
+    problems = proof_problems(name, profile, proof, profiles)
     if problems:
         return 'refused', problems
     binding = {'schema': PROOF_BINDING_SCHEMA, 'profile': name, 'recipeSha': recipe_sha, 'runId': env.get('GITHUB_RUN_ID'),
@@ -286,9 +306,10 @@ def prove(name, profiles, env, recipe_sha, proof_dir, lock_path, root='/', now=N
     return 'proven', []
 
 
-def bind_proof(name, profile, binding, recipe_sha, run_identity, root='/'):
+def bind_proof(name, profile, binding, recipe_sha, run_identity, root='/', profiles=None):
     """Inside the lock, before any secret metadata: only this run's own proof, rechecked by the helper now. Returns a
-    run-scoped profile whose tools use the proven paths (the checked-in profile is never rewritten) and receipt rows."""
+    run-scoped profile whose tools use the proven paths (the checked-in profile is never rewritten) and receipt rows.
+    `profiles` (the reviewed set) lets a profile that reuses another profile's admitted spec prove its identity."""
     if not isinstance(binding, dict):
         raise Blocked('proof-missing', 'no same-run local tool proof')
     helper, blob = load_proof_helper(profile)
@@ -298,9 +319,9 @@ def bind_proof(name, profile, binding, recipe_sha, run_identity, root='/'):
     if any(binding.get(k) != v for k, v in expected.items()) or \
             binding.get('proofSha256') != hashlib.sha256(json.dumps(proof, sort_keys=True).encode()).hexdigest():
         raise Blocked('proof-binding', 'the proof is not this run\'s, this recipe\'s and this helper\'s')
-    problems = proof_problems(name, profile, proof)
+    problems = proof_problems(name, profile, proof, profiles)
     if problems:
-        raise Blocked(problems[0], 'the bound proof does not name the fixed tools and environment')
+        raise Blocked(problems[0], 'the bound proof does not name the fixed tools, subject and environment')
     try:
         helper.recheck(proof, root=root)
     except helper.Refused as error:
@@ -964,7 +985,7 @@ def run(name, profiles, executor, state_dir, lock_path, recipe_sha, now, workspa
         with shared_lock(lock_path):
             if profile.get('localProof'):
                 profile, receipt['tools'], receipt['localProof'] = bind_proof(name, profile, proof, recipe_sha, run_identity,
-                    proof_root)
+                    proof_root, profiles)
             return _locked(name, profile, executor, journal, receipt, private, stop, workspace,
                 frankel or frankel_identities())
     except Blocked as error:
@@ -1041,6 +1062,10 @@ def _inside(name, profile, executor, journal, receipt, private, stop, created, f
     info = os.lstat(created)
     if not stat.S_ISDIR(info.st_mode) or stat.S_IMODE(info.st_mode) != 0o700 or info.st_uid != os.getuid():
         return stop('workspace-unprotected', 'workspace must be an owner-only directory')
+    if profile_outputs(profile) == OPENSSH_OUTPUTS:
+        problem = factory_signing.workspace_problem(created)
+        if problem:  # before the journal: nothing is generated or recorded, so the approved run is not used up
+            return stop('workspace-noexec', problem)
     # Runtime revalidation: pinned tool trees are recomputed again immediately before anything runs.
     for tool in sorted({step['tool'] for step in profile['generation'].get('recipe') or []}):
         identity = profile['tools'][tool]
@@ -1225,8 +1250,13 @@ def plan(name, profiles):
             + ((profile.get('generation') or {}).get('missing') or [])}
 
 
+def interrupted(signum):
+    raise Blocked('interrupted', f'signal {signum}: stopped; the workspace is removed and any add is journaled for recovery')
+
+
 def main(argv=None, env=None):
     env = os.environ if env is None else env
+    factory_signing.stop_on_signals(interrupted)  # a stop still removes the RAM workspace and records recovery
     parser = argparse.ArgumentParser(description=__doc__.split('\n', 1)[0])
     sub = parser.add_subparsers(dest='command', required=True)
     sub.add_parser('guard')

@@ -254,6 +254,63 @@ class RenderTest(Fixture):
         with self.assertRaisesRegex(bi.Failed, 'must be a new'):
             bi.render(inputs, out=self.tmp/'c.json', **base)
 
+class SharedLockTest(Fixture):
+    """--lock may be exactly Frankel's shared host.lockPath (blazer.json lockFrom), and nothing else may touch it."""
+    SHARED = '/home/pixelbuild/frankel-build.lock'
+
+    def paths(self):
+        _, out = self.admit()
+        src = self.tmp/'src'
+        src.mkdir()
+        return out/'local-inputs.json', dict(source_root=str(src), lock=str(self.tmp/'l'), receipt_dir=str(self.tmp/'r'),
+                                             work_dir=str(self.tmp/'w'))
+
+    def test_the_shared_frankel_lock_is_accepted_as_the_lock_only(self):
+        inputs, base = self.paths()
+        self.assertEqual(str(bi.shared_lock()), self.SHARED)
+        self.assertEqual(bi.shared_lock(), Path(json.loads((ROOT/'os/release-pipeline/frankel.json').read_text())['host']['lockPath']))
+        self.assertEqual(json.loads((ROOT/'os/build-only/blazer.json').read_text())['preparation']['lockFrom'],
+                         'os/release-pipeline/frankel.json host.lockPath', 'blazer serializes on the Frankel lock by design')
+        config, command = bi.render(inputs, out=self.tmp/'c.json', **dict(base, lock=self.SHARED))
+        self.assertEqual(config['host']['lockPath'], self.SHARED)
+        self.assertEqual(command[:5], ['flock', '--nonblock', '--conflict-exit-code', '75', self.SHARED])
+
+    def test_everything_else_near_the_shared_lock_or_other_builders_still_collides(self):
+        inputs, base = self.paths()
+        for change in (dict(lock=self.SHARED + '/inner'), dict(lock='/home/pixelbuild'),
+                       dict(lock='/home/pixelbuild/grapheneos-2026100600/x.lock'), dict(lock='/srv/rose-rango/rango-build.lock'),
+                       dict(lock='/home/pixelbuild/rose-actions/reconcile/blazer.lock'),
+                       dict(receipt_dir=self.SHARED), dict(work_dir=self.SHARED), dict(source_root=self.SHARED),
+                       dict(work_dir='/home/pixelbuild'), dict(receipt_dir=self.SHARED + '/r'),
+                       dict(lock=self.SHARED, receipt_dir='/home/pixelbuild/rose-actions/reconcile')):
+            with self.subTest(change):
+                with self.assertRaisesRegex(bi.Failed, 'collides'):
+                    bi.render(inputs, out=self.tmp/'c.json', **dict(base, **change))
+        self.assertFalse((self.tmp/'c.json').exists(), 'nothing is written on a refusal')
+
+    def test_the_exception_follows_the_checked_in_frankel_lock_only(self):
+        inputs, base = self.paths()
+        root = self.tmp/'root'
+        for rel in bi.OTHER_BUILDERS:
+            (root/rel).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(ROOT/rel, root/rel)
+        frankel = json.loads((root/bi.OTHER_BUILDERS[0]).read_text())
+        frankel['host']['lockPath'] = '/home/pixelbuild/moved.lock'
+        (root/bi.OTHER_BUILDERS[0]).write_text(json.dumps(frankel))
+        self.assertEqual(bi.shared_lock(root), Path('/home/pixelbuild/moved.lock'))
+        # The old path is no longer Frankel's lock (Rango's shared-builder route still names it): it now collides, and
+        # only the moved, checked-in Frankel lock is accepted.
+        self.assertIn(Path(self.SHARED), bi.other_builder_paths(root))
+        with self.assertRaisesRegex(bi.Failed, 'collides'):
+            bi.render(inputs, out=self.tmp/'c.json', root=root, **dict(base, lock=self.SHARED))
+        config, _ = bi.render(inputs, out=self.tmp/'c.json', root=root, **dict(base, lock='/home/pixelbuild/moved.lock'))
+        self.assertEqual(config['host']['lockPath'], '/home/pixelbuild/moved.lock')
+        # Even the exact shared lock is still checked against every other builder path: one inside Rango's tree refuses.
+        frankel['host']['lockPath'] = '/srv/rose-rango/src/frankel.lock'
+        (root/bi.OTHER_BUILDERS[0]).write_text(json.dumps(frankel))
+        with self.assertRaisesRegex(bi.Failed, 'collides'):
+            bi.render(inputs, out=self.tmp/'c2.json', root=root, **dict(base, lock='/srv/rose-rango/src/frankel.lock'))
+
 class CompileBindingTest(Fixture):
     def test_matching_receipt_and_tree_bind(self):
         _, out = self.admit()

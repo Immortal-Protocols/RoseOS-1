@@ -36,6 +36,10 @@ def fs(available):
     return lambda path: types.SimpleNamespace(f_bavail=available, f_frsize=1, f_blocks=available * 2)
 
 class Response(io.BytesIO):
+    def __init__(self, data, headers=None):
+        super().__init__(data)
+        self.headers = headers if headers is not None else {'Content-Length': str(len(data))}
+
     def __enter__(self):
         return self
     def __exit__(self, *exc):
@@ -49,6 +53,8 @@ class Fixture(unittest.TestCase):
         # A synthetic archive stands in for the real one: the recipe copy pins its digest (synthetic, never the real pin).
         self.synthetic = json.loads(json.dumps(self.recipe))
         self.synthetic['factory']['sha256'] = hashlib.sha256(PAYLOAD).hexdigest()
+        self.synthetic['factory']['sizeBytes'] = len(PAYLOAD)
+        self.synthetic['preparation']['download']['boundBytes'] = len(PAYLOAD)
         self.synthetic['capacity']['compileAllowanceBytes'] = 10
         # Test-speed sampling (the checked-in recipe samples every 5 s with a 30 s grace).
         self.synthetic['preparation']['limits'].update(sampleSeconds=0.05, killGraceSeconds=1)
@@ -169,7 +175,9 @@ class RecipeTest(Fixture):
         prep = recipe['preparation']
         self.assertEqual((prep['stages'], prep['boundsKind']), (['source', 'download', 'vendor', 'lunch'], 'proposal'))
         self.assertEqual({s: (prep[s]['boundBytes'], prep[s]['timeoutSeconds']) for s in prep['stages']},
-            {'source': (150 << 30, 7200), 'download': (8 << 30, 3600), 'vendor': (128 << 30, 10800), 'lunch': (8 << 30, 1800)})
+            {'source': (150 << 30, 7200), 'download': (11362467847, 3600), 'vendor': (128 << 30, 10800), 'lunch': (8 << 30, 1800)})
+        self.assertEqual(recipe['factory']['sizeBytes'], 11362467847, 'the pinned URL\'s HEAD Content-Length')
+        self.assertIn('no body transferred', recipe['factory']['sizeBasis'])
         self.assertEqual(prep['totalTimeoutSeconds'], 23400)
         self.assertEqual(prep['source']['cleanupSeconds'], 240)
         objects = dict(prep['gitObjectsInspection'])
@@ -194,7 +202,9 @@ class RecipeTest(Fixture):
         preflight.loader.exec_module(module)
         self.assertEqual(prep['vendor']['node']['minMajor'], module.NODE_MIN_MAJOR)
         self.assertNotIn('generateAllowanceBytes', recipe['capacity'], 'the circular measured-allowance gate is removed')
-        self.assertEqual(recipe['capacity']['compileAllowanceBytes'], None)
+        self.assertEqual((recipe['capacity']['compileAllowanceBytes'], recipe['capacity']['compileAllowanceKind']),
+                         (250 << 30, 'first-build-proposal'), 'a finite first-build allowance, no prior measurement gate')
+        self.assertEqual((recipe['compile']['timeoutSeconds'], recipe['compile']['measure']), (28800, 'filesystem-available-drop'))
         self.assertNotIn('host', recipe, 'the recipe binds no host; the operator supplies it')
         for absent in ('S007', 'S008', 'peak'):
             self.assertNotIn(absent, json.dumps(recipe))
@@ -203,7 +213,7 @@ class RecipeTest(Fixture):
         rendered = bb.commands(self.recipe, self.op())
         self.assertEqual(rendered['download'], {'url': 'https://dl.google.com/dl/android/aosp/' + FACTORY,
             'part': str(self.download/(FACTORY + '.part')), 'final': str(self.download/FACTORY), 'sha256': PIN,
-            'maxBytes': 8 << 30, 'timeoutSeconds': 3600})
+            'maxBytes': 11362467847, 'expectedBytes': 11362467847, 'timeoutSeconds': 3600})
         self.assertEqual(rendered['vendor']['env'], {'ADEVTOOL_IMG_DOWNLOAD_DIR': str(self.download),
             'PATH': '<receipt-dir>/node-path:/usr/bin:/bin', 'GIT_CEILING_DIRECTORIES': str(self.src),
             'ADEVTOOL_SKIP_DEP_BUILD': '1'})
@@ -223,7 +233,9 @@ class RecipeTest(Fixture):
             ' && echo TARGET_RELEASE=$TARGET_RELEASE && echo TARGET_BUILD_VARIANT=$TARGET_BUILD_VARIANT'
             ' && echo TARGET_DEVICE=$(get_build_var TARGET_DEVICE)')
         self.assertNotIn(' m ', rendered['lunch']['argv'][2] + ' ')
-        self.assertEqual(rendered['compile']['env'], {'OUT_DIR': 'out-blazer-build'})
+        self.assertEqual(rendered['compile'], {'cwd': str(self.src), 'env': {'OUT_DIR': 'out-blazer-build', 'PATH': '/usr/bin:/bin',
+            'GIT_CEILING_DIRECTORIES': str(self.src)}, 'argv': ['bash', '-c', 'source build/envsetup.sh && lunch blazer-cur-user'
+            ' && m -j16 vendorbootimage vendorkernelbootimage target-files-package otatools-package'], 'timeoutSeconds': 28800})
 
     def test_drifted_recipes_are_refused(self):
         for change, pattern in (
@@ -235,8 +247,29 @@ class RecipeTest(Fixture):
             (lambda r: r['capacity'].update(reserveBytes=1), '300 GiB'),
             (lambda r: r['preparation'].update(boundsKind='measured'), 'labelled proposal'),
             (lambda r: r['preparation'].update(stages=['download', 'vendor', 'lunch', 'compile']), 'preparation.stages'),
+            (lambda r: r['capacity'].update(compileAllowanceBytes=None), 'positive finite allowance'),
+            (lambda r: r['gitMeta']['projects'][0].update(revision='0' * 40), 'gitMeta.projects must be exactly'),
+            (lambda r: r['gitMeta']['projects'].pop(), 'gitMeta.projects must be exactly'),
+            (lambda r: r['gitMeta']['projects'].append({'path': 'frameworks/av', 'name': 'x', 'revision': '0' * 40}),
+             'gitMeta.projects must be exactly'),
+            (lambda r: r['gitMeta'].update(fetchUrlPrefix='https://example.com/'), 'fetchUrlPrefix must be the pinned'),
+            (lambda r: r['gitMeta'].update(objectsSource='production-pack'), 'gitMeta.objectsSource must be one of'),
+            (lambda r: r['gitMeta'].update(timeoutSeconds=7201), 'gitMeta needs a positive boundBytes'),
+            (lambda r: r['gitMeta'].update(projectTimeoutSeconds=9000), 'gitMeta needs a positive boundBytes'),
+            (lambda r: r['gitMeta'].update(boundBytes=0), 'gitMeta needs a positive boundBytes'),
+            (lambda r: r['gitMeta'].update(boundKind='measured'), 'gitMeta.boundKind must be proposal'),
+            (lambda r: r['capacity'].update(compileAllowanceBytes=0), 'positive finite allowance'),
+            (lambda r: r['capacity'].update(compileAllowanceKind='measured'), 'positive finite allowance'),
+            (lambda r: r['capacity'].pop('compileAllowanceKind'), 'positive finite allowance'),
+            (lambda r: r['compile'].update(timeoutSeconds=0), 'compile needs a positive timeoutSeconds'),
+            (lambda r: r['compile'].update(timeoutSeconds=43201), 'compile needs a positive timeoutSeconds'),
+            (lambda r: r['compile'].update(measure='out-dir-walk'), 'compile needs a positive timeoutSeconds'),
             (lambda r: r['preparation']['vendor'].update(boundBytes=0), 'preparation.vendor needs a positive boundBytes'),
             (lambda r: r['preparation']['download'].update(timeoutSeconds=None), 'preparation.download needs'),
+            (lambda r: r['preparation']['download'].update(boundBytes=8 << 30), 'must equal factory.sizeBytes'),
+            (lambda r: r['preparation']['download'].update(boundBytes=11362467848), 'must equal factory.sizeBytes'),
+            (lambda r: r['factory'].pop('sizeBytes'), 'factory.sizeBytes must be'),
+            (lambda r: r['factory'].pop('sizeBasis'), 'factory.sizeBytes must be'),
             (lambda r: r['preparation']['vendor'].update(collisionPaths=['vendor/google_devices/blazer']), 'collisionPaths'),
             (lambda r: r['preparation']['vendor']['node'].update(minMajor=0), 'node needs'),
             (lambda r: r['preparation']['vendor']['adevtoolGit'].update(skipDepBuildEnv={}), 'ADEVTOOL_SKIP_DEP_BUILD=1'),
@@ -357,9 +390,12 @@ class DownloadTest(Fixture):
         report = self.preflight('download')
         self.assertEqual(report['problems'], [])
         self.assertEqual(report['facts']['capacity'], {'availableBytes': 10 ** 15, 'reserveBytes': RESERVE,
-            'boundBytes': 8 << 30, 'boundKind': 'proposal'})
-        self.assertIn('below the reserve', self.problems('download', available=RESERVE + (8 << 30) - 1))
-        self.assertEqual(self.preflight('download', available=RESERVE + (8 << 30))['problems'], [])
+            'boundBytes': len(PAYLOAD), 'boundKind': 'proposal'})
+        self.assertIn('below the reserve', self.problems('download', available=RESERVE + len(PAYLOAD) - 1))
+        self.assertEqual(self.preflight('download', available=RESERVE + len(PAYLOAD))['problems'], [])
+        real = bb.preflight(self.recipe, 'download', self.op(), statvfs=fs(RESERVE + 11362467847 - 1),
+                            lock_probe=lambda path: True, root=self.root)
+        self.assertIn('below the reserve', ' '.join(real['problems']), 'the checked-in exact size is the admission bound')
         self.archive()
         self.assertIn('never replaced', self.problems('download'))
         (self.download/FACTORY).unlink()
@@ -368,12 +404,12 @@ class DownloadTest(Fixture):
         self.assertIn('held by another job', self.problems('download', download_dir=str(self.tmp/'dl2'), lock_free=False))
         self.assertIn('download dir parent', self.problems('download', download_dir=str(self.tmp/'no/such/dl')))
 
-    def run_download(self, payload, recipe=None, clock=None, out='r'):
+    def run_download(self, payload, recipe=None, clock=None, out='r', headers=None):
         recipe = recipe or self.synthetic
         fetched = []
         def fetcher(url, timeout):
             fetched.append((url, timeout))
-            return Response(payload)
+            return Response(payload, headers)
         code = bb.run(recipe, 'download', self.op(), self.tmp/out, fetcher=fetcher, clock=clock or (lambda: 0), now=lambda: 0,
             statvfs=fs(10 ** 15), lock_probe=lambda path: True, root=self.root)
         return code, fetched, json.loads((self.tmp/out/'completed.json').read_text())
@@ -385,15 +421,16 @@ class DownloadTest(Fixture):
         self.assertEqual((self.download/FACTORY).read_bytes(), PAYLOAD)
         self.assertFalse((self.download/(FACTORY + '.part')).exists())
         (self.download/FACTORY).unlink()
-        code, _, done = self.run_download(b'other bytes', out='r2')
-        self.assertEqual((code, done['ok']), (1, False))
+        other = bytes(b ^ 1 for b in PAYLOAD)  # exactly the recorded size, other bytes: only the sha256 refuses it
+        code, _, done = self.run_download(other, out='r2')
+        self.assertEqual((code, done['ok'], done['bytes']), (1, False, len(PAYLOAD)))
         self.assertIn('is not the pinned', done['error'])
         self.assertEqual(list(self.download.iterdir()), [], 'a failed download leaves no partial or final file')
 
     def test_byte_and_time_bounds_stop_the_download(self):
         small = json.loads(json.dumps(self.synthetic))
         small['preparation']['download']['boundBytes'] = 4
-        code, _, done = self.run_download(PAYLOAD, recipe=small)
+        code, _, done = self.run_download(PAYLOAD, recipe=small, headers={})
         self.assertEqual(code, 1)
         self.assertIn('exceeded the 4-byte bound', done['error'])
         ticks = iter(range(0, 10 ** 6, 4000))
@@ -401,10 +438,36 @@ class DownloadTest(Fixture):
         self.assertIn('download exceeded 3600 s', done['error'])
         self.assertEqual(list(self.download.iterdir()), [])
 
+    def test_only_exactly_the_recorded_size_is_accepted(self):
+        # A server announcing another size is refused before any byte is written.
+        written = []
+        class Watched(Response):
+            def read(self, n=-1):
+                written.append(n)
+                return super().read(n)
+        def fetcher(url, timeout):
+            return Watched(PAYLOAD, {'Content-Length': str(len(PAYLOAD) + 1)})
+        code = bb.run(self.synthetic, 'download', self.op(), self.tmp/'r', fetcher=fetcher, clock=lambda: 0, now=lambda: 0,
+                      statvfs=fs(10 ** 15), lock_probe=lambda path: True, root=self.root)
+        done = json.loads((self.tmp/'r/completed.json').read_text())
+        self.assertEqual((code, done['ok'], written), (1, False, []))
+        self.assertIn(f'announces {len(PAYLOAD) + 1} bytes, not the recorded {len(PAYLOAD)}', done['error'])
+        self.assertEqual(list(self.download.iterdir()), [])
+        # A short body (no Content-Length announced) is refused on size, before the sha256 is even considered.
+        code, _, done = self.run_download(PAYLOAD[:-1], out='r2', headers={})
+        self.assertEqual((code, done['bytes']), (1, len(PAYLOAD) - 1))
+        self.assertIn(f'{len(PAYLOAD) - 1} bytes arrived, not the recorded {len(PAYLOAD)}', done['error'])
+        self.assertEqual(list(self.download.iterdir()), [], 'no partial or final file is kept')
+        # Exactly the recorded size with the pinned sha256 is kept; the receipt records what was announced.
+        code, _, done = self.run_download(PAYLOAD, out='r3')
+        self.assertEqual((code, done['ok'], done['bytes'], done['announcedBytes'], done['expectedBytes']),
+                         (0, True, len(PAYLOAD), len(PAYLOAD), len(PAYLOAD)))
+
     def test_the_real_pin_refuses_synthetic_bytes(self):
         code, _, done = self.run_download(PAYLOAD, recipe=self.recipe)
         self.assertEqual(code, 1)
-        self.assertIn(f'is not the pinned {PIN}', done['error'])
+        self.assertIn('not the recorded 11362467847', done['error'])
+        self.assertEqual(done['expectedSha256'], PIN)
 
 class VendorTest(Fixture):
     def test_admission_needs_the_verified_archive_tools_and_absent_collisions(self):
@@ -1709,7 +1772,7 @@ class InspectTest(Fixture):
         self.assertEqual(n['version'], 'not executed (metadata only)')
         for unknown in ('reflink support (never assumed)',
                         'isolated source copy bytes (the source stage measures its full selection before writing; never this walk)',
-                        'Pro factory archive size (8 GiB cap unverified)'):
+                        'Pro factory archive content (its size is the recorded HEAD Content-Length; only the sha256 pin identifies it)'):
             self.assertIn(unknown, report['unknowns'])
 
     def test_node_from_path_reports_the_runner_resolution_as_the_candidate(self):
@@ -2290,11 +2353,272 @@ class RunTest(Fixture):
         with self.assertRaisesRegex(bb.InvalidInput, 'already exists'):
             bb.run(self.synthetic, 'vendor', self.op(), self.tmp/'r1', root=self.root)
 
-    def test_compile_still_needs_a_measured_allowance(self):
+    def test_the_checked_in_first_build_allowance_admits_exactly_reserve_plus_allowance(self):
         self.generated()
-        report = bb.preflight(self.recipe, 'compile', self.op(integration_dir=str(self.integrated())), statvfs=fs(10 ** 15),
-            lock_probe=lambda path: True)
-        self.assertIn('compileAllowanceBytes is unmeasured', ' '.join(report['problems']))
+        receipts = self.integrated()
+        need = self.recipe['capacity']['reserveBytes'] + self.recipe['capacity']['compileAllowanceBytes']
+        for available, admitted in ((need, True), (need - 1, False)):
+            report = bb.preflight(self.recipe, 'compile', self.op(integration_dir=str(receipts)), statvfs=fs(available),
+                                  lock_probe=lambda path: True)
+            space = [p for p in report['problems'] if 'reserve' in p]
+            self.assertEqual(not space, admitted, report['problems'])
+            self.assertEqual((report['facts']['capacity']['boundBytes'], report['facts']['capacity']['boundKind']),
+                             (250 << 30, 'first-build-proposal'))
+
+class GitMetaTest(Fixture):
+    """git-meta against local upstream repositories standing in for the pinned remotes (never a real fetch)."""
+    ENV = {'PATH': '/usr/bin:/bin', 'GIT_CONFIG_NOSYSTEM': '1', 'GIT_AUTHOR_NAME': 't', 'GIT_AUTHOR_EMAIL': 't@t',
+           'GIT_COMMITTER_NAME': 't', 'GIT_COMMITTER_EMAIL': 't@t'}
+
+    def git(self, *args, cwd=None):
+        return subprocess.run(['git', *args], cwd=cwd, env={**self.ENV, 'HOME': str(self.tmp)}, check=True,
+                              capture_output=True, text=True).stdout.strip()
+
+    def projects(self):
+        """Upstream repos with two commits each (the pin is the second); the isolated tree holds the pinned bytes,
+        one integrated (Rose-changed) file, and no .git."""
+        up, rows = self.tmp/'up', []
+        if os.path.lexists(self.src/'vendor/adevtool/.git'):  # the shared fixture's vendor-stage stand-in
+            shutil.rmtree(self.src/'vendor/adevtool/.git')
+        for path in bb.GIT_META_PATHS:
+            name = 'platform_' + path.replace('/', '_')
+            repo = up/name
+            (repo/'res').mkdir(parents=True)
+            (repo/'res/config.xml').write_text('old\n')
+            self.git('init', '-q', str(repo))
+            self.git('-C', str(repo), 'add', '-A')
+            self.git('-C', str(repo), 'commit', '-qm', 'old')
+            (repo/'res/config.xml').write_text('pinned\n')
+            (repo/'keep.txt').write_text(path + '\n')
+            self.git('-C', str(repo), 'add', '-A')
+            self.git('-C', str(repo), 'commit', '-qm', 'pin')
+            revision = self.git('-C', str(repo), 'rev-parse', 'HEAD')
+            work = self.src/path
+            (work/'res').mkdir(parents=True, exist_ok=True)
+            (work/'res/config.xml').write_text('integrated by Rose\n' if path == 'frameworks/base' else 'pinned\n')
+            (work/'keep.txt').write_text(path + '\n')
+            rows.append({'path': path, 'name': name, 'revision': revision})
+        spec = self.synthetic['gitMeta']
+        spec.update(projects=rows, fetchUrlPrefix=f'file://{up}/')
+        return rows
+
+    def run_meta(self, out='r', recipe=None):
+        code = bb.run(recipe or self.synthetic, 'git-meta', self.op(), self.tmp/out, now=lambda: 0, statvfs=fs(10 ** 15),
+                      lock_probe=lambda path: True, root=self.root)
+        done = self.tmp/out/'completed.json'
+        return code, (json.loads(done.read_text()) if done.exists() else None), json.loads((self.tmp/out/'preflight.json').read_text())
+
+    def worktree(self):
+        return {str(p): p.read_bytes() for p in sorted(self.src.rglob('*')) if p.is_file() and '/.git/' not in str(p)}
+
+    def test_each_project_gets_genuine_shallow_metadata_and_the_working_tree_is_untouched(self):
+        rows = self.projects()
+        before = self.worktree()
+        # Neither inherited GIT_* nor a global insteadOf redirect reaches the helper's git.
+        os.environ['GIT_DIR'] = str(self.tmp/'elsewhere/.git')
+        self.addCleanup(os.environ.pop, 'GIT_DIR', None)
+        (self.tmp/'.gitconfig').write_text(f'[url "file://{self.tmp}/nowhere/"]\n\tinsteadOf = file://{self.tmp}/up/\n')
+        code, done, report = self.run_meta()
+        self.assertEqual((report['problems'], code, done['ok']), ([], 0, True), done)
+        self.assertEqual(self.worktree(), before, 'no command touches the working tree, Rose-integrated bytes included')
+        self.assertEqual(done['workingTreeCommands'], [])
+        for row in rows:
+            work = self.src/row['path']
+            self.assertEqual(self.git('-C', str(work), 'rev-parse', 'HEAD'), row['revision'])
+            self.assertEqual((work/'.git/shallow').read_text(), row['revision'] + '\n')
+            self.assertFalse((work/'.git/objects/info/alternates').exists())
+            self.assertFalse((work/'.git/hooks').exists(), 'no template hooks')
+            self.assertEqual(self.git('-C', str(work), 'show', 'HEAD:res/config.xml'), 'pinned')
+            self.assertEqual(done['projects'][row['path']]['revision'], row['revision'])
+        # host-reconcile's own sequence on the result: a shared clone, a sparse checkout of HEAD.
+        base = self.src/'frameworks/base'
+        shadow = self.tmp/'shadow/frameworks/base'
+        self.git('clone', '--quiet', '--shared', '--no-checkout', str(base), str(shadow))
+        self.git('-C', str(shadow), 'sparse-checkout', 'set', '--no-cone', 'res/config.xml')
+        self.git('-C', str(shadow), 'checkout', '--quiet', '--detach', rows[2]['revision'])
+        self.assertEqual((shadow/'res/config.xml').read_text(), 'pinned\n')
+        self.assertEqual((base/'res/config.xml').read_text(), 'integrated by Rose\n')
+
+    def test_an_existing_git_dir_or_the_production_tree_refuses_before_any_process(self):
+        self.projects()
+        (self.src/'build/make/.git').mkdir()
+        code, done, report = self.run_meta()
+        self.assertEqual((code, done), (1, None))
+        self.assertIn('build/make/.git already exists', ' '.join(report['problems']))
+        self.assertFalse((self.src/'frameworks/base/.git').exists())
+        os.rmdir(self.src/'build/make/.git')
+        code = bb.run(self.synthetic, 'git-meta', self.op(source_root=str(self.production)), self.tmp/'r2', now=lambda: 0,
+                      statvfs=fs(10 ** 15), lock_probe=lambda path: True, root=self.root)
+        self.assertEqual(code, 1)
+        self.assertIn('production source root', ' '.join(json.loads((self.tmp/'r2/preflight.json').read_text())['problems']))
+
+    def test_a_wrong_revision_removes_every_git_dir_this_run_created(self):
+        rows = self.projects()
+        before = self.worktree()
+        self.synthetic['gitMeta']['projects'][3]['revision'] = rows[0]['revision']  # not in that repository
+        code, done, _ = self.run_meta()
+        self.assertEqual((code, done['ok'], done['failedProject']), (1, False, rows[3]['path']))
+        self.assertIn('fetch failed', done['error'])
+        self.assertEqual([r['removed'] for r in done['createdRemoved']], [True] * 4)
+        for row in rows:
+            self.assertFalse(os.path.lexists(self.src/row['path']/'.git'))
+        self.assertEqual(self.worktree(), before)
+
+    def test_the_byte_bound_and_a_non_shallow_or_foreign_head_refuse(self):
+        rows = self.projects()
+        tight = json.loads(json.dumps(self.synthetic))
+        tight['gitMeta']['boundBytes'] = 1
+        code, done, _ = self.run_meta(recipe=tight)
+        self.assertEqual((code, done['ok'], done['failedProject']), (1, False, rows[0]['path']))
+        self.assertIn('above the 1-byte bound', done['error'])
+        self.assertFalse(os.path.lexists(self.src/rows[0]['path']/'.git'), 'its own .git is removed')
+        real = bb.supervise
+        def unshallow(argv, *a, **k):
+            result = real(argv, *a, **k)
+            if 'update-ref' in argv:
+                (Path(argv[2])/'.git/shallow').unlink()
+            return result
+        bb.supervise = unshallow
+        try:
+            code, done, _ = self.run_meta(out='r2')
+        finally:
+            bb.supervise = real
+        self.assertEqual(code, 1)
+        self.assertIn('not shallow at exactly the pinned commit', done['error'])
+        self.assertFalse(os.path.lexists(self.src/rows[0]['path']/'.git'))
+        def foreign_head(argv, *a, **k):
+            result = real(argv, *a, **k)
+            if 'update-ref' in argv:  # HEAD moved off the pin after it was written; shallow still names the pin
+                (Path(argv[2])/'.git/HEAD').write_text('ref: refs/heads/elsewhere\n')
+            return result
+        bb.supervise = foreign_head
+        try:
+            code, done, _ = self.run_meta(out='r3')
+        finally:
+            bb.supervise = real
+        self.assertEqual(code, 1)
+        self.assertIn('HEAD is not exactly the pinned revision', done['error'])
+
+    def test_the_checked_in_recipe_pins_the_seven_manifest_projects(self):
+        spec = self.recipe['gitMeta']
+        self.assertEqual([r['path'] for r in spec['projects']], list(bb.GIT_META_PATHS))
+        self.assertEqual({r['path']: r['revision'] for r in spec['projects']}['vendor/adevtool'], ADEVTOOL)
+        self.assertEqual((spec['objectsSource'], spec['fetchUrlPrefix'], spec['boundBytes'], spec['projectTimeoutSeconds'],
+                          spec['timeoutSeconds']), ('public-fetch', 'https://github.com/GrapheneOS/', 8 << 30, 1800, 5400))
+        argv = bb.commands(self.recipe, self.op())['git-meta']['projects'][0]['argv']
+        self.assertEqual(argv[1][3:], ['fetch', '--quiet', '--depth=1', '--no-tags',
+                                       'https://github.com/GrapheneOS/platform_build', spec['projects'][0]['revision']])
+        env = bb.git_meta_env(self.src, self.tmp/'h', spec['fetchUrlPrefix'])
+        self.assertEqual((env['GIT_ALLOW_PROTOCOL'], env['GIT_CONFIG_GLOBAL'], env['GIT_TERMINAL_PROMPT'], env['PATH']),
+                         ('https', os.devnull, '0', '/usr/bin:/bin'))
+        self.assertFalse(any(k.startswith('GIT_DIR') for k in env))
+
+class CompileRunTest(Fixture):
+    def envsetup(self, make='mkdir -p "$OUT_DIR"; echo "$@" > "$OUT_DIR/goals"'):
+        (self.src/'build').mkdir(exist_ok=True)
+        (self.src/'build/envsetup.sh').write_text(f"""lunch() {{ export TARGET_PRODUCT=blazer; }}
+m() {{ env | grep '^GIT_' | sort > {str(self.tmp/'compile-git-env')!r}; echo "$PATH" > {str(self.tmp/'compile-path')!r}; {make}; }}
+""")
+
+    def compile(self, recipe=None, statvfs=None, out='r', **change):
+        if not (self.src/'vendor/google_devices/blazer').exists():
+            self.generated()
+        if not hasattr(self, 'receipts'):
+            self.receipts = self.integrated()
+        receipts = self.receipts
+        code = bb.run(recipe or self.synthetic, 'compile', self.op(integration_dir=str(receipts), **change), self.tmp/out,
+                      now=lambda: 0, statvfs=statvfs or fs(10 ** 15), lock_probe=lambda path: True, root=self.root)
+        done = self.tmp/out/'completed.json'
+        return code, (json.loads(done.read_text()) if done.exists() else None), json.loads((self.tmp/out/'preflight.json').read_text())
+
+    OUTPUTS = ('p=$OUT_DIR/target/product/blazer; h=$OUT_DIR/host/linux-x86/obj/ETC/otatools-packagelinux_glibc_x86_64_intermediates; '
+               'mkdir -p $p/obj/PACKAGING/target_files_intermediates $h; printf VNDRBOOT > $p/vendor_boot.img; '
+               'printf VNDRBOOT > $p/vendor_kernel_boot.img; '
+               'python3 -c "import zipfile,sys; z=zipfile.ZipFile(sys.argv[1],\'w\'); [z.writestr(n,\'x\') for n in sys.argv[2:]]" '
+               '$h/otatools-packagelinux_glibc_x86_64 bin/x releasetools/y; '
+               'python3 -c "import zipfile,sys; z=zipfile.ZipFile(sys.argv[1],\'w\'); [z.writestr(n,\'x\') for n in sys.argv[2:]]" '
+               '$p/obj/PACKAGING/target_files_intermediates/blazer-target_files.zip META/misc_info.txt SYSTEM/build.prop')
+
+    def test_compile_collects_signing_inputs_and_refuses_missing_outputs(self):
+        self.envsetup(self.OUTPUTS)
+        code, done, _ = self.compile()
+        self.assertEqual((code, done['ok'], done['outputs']['verdict'], done['outputs']['signed']), (0, True, 'complete', False), done)
+        arts = done['outputs']['artifacts']
+        tf = self.src/'out-blazer-build/target/product/blazer/obj/PACKAGING/target_files_intermediates/blazer-target_files.zip'
+        self.assertEqual((arts['targetFiles']['path'], arts['targetFiles']['sha256']),
+                         (str(tf), hashlib.sha256(tf.read_bytes()).hexdigest()))
+        self.assertEqual({k: a['state'] for k, a in arts.items()}, dict.fromkeys(
+            ('vendorBootImage', 'vendorKernelBootImage', 'otatools', 'targetFiles'), 'collected'))
+        self.assertEqual(arts['otatools']['format'], 'zip')
+        tf.unlink()
+        shutil.rmtree(self.src/'out-blazer-build/target/product/blazer/obj')
+        (self.src/'out-blazer-build').rename(self.tmp/'kept-out')
+        self.envsetup(self.OUTPUTS + '; rm $p/obj/PACKAGING/target_files_intermediates/blazer-target_files.zip')
+        code, done, _ = self.compile(out='r2')
+        self.assertEqual((code, done['ok'], done['outputs']['artifacts']['targetFiles']['state']), (1, False, 'missing'))
+        self.assertIn('expected outputs are not all collected', done['error'])
+
+    def test_compile_runs_isolated_with_its_goals_and_records_the_honest_measure(self):
+        self.envsetup(self.OUTPUTS + '; echo "$@" > "$OUT_DIR/goals"')
+        self.generated()
+        self.receipts = self.integrated()
+        # An inherited GIT_* (an inherited GIT_DIR would also redirect the integration check's own lookup of this
+        # checkout, which then refuses) never reaches the build.
+        os.environ['GIT_INHERITED_BY_THE_HELPER'] = '1'
+        self.addCleanup(os.environ.pop, 'GIT_INHERITED_BY_THE_HELPER', None)
+        code, done, report = self.compile()
+        self.assertEqual(report['problems'], [])
+        self.assertEqual((code, done['ok'], done['stopped'], done['signed'], done['releaseReady']), (0, True, None, False, False), done)
+        self.assertEqual((self.src/'out-blazer-build/goals').read_text(),
+                         '-j16 vendorbootimage vendorkernelbootimage target-files-package otatools-package\n')
+        self.assertEqual((self.tmp/'compile-git-env').read_text(), f'GIT_CEILING_DIRECTORIES={self.src}\n')
+        self.assertEqual((self.tmp/'compile-path').read_text(), '/usr/bin:/bin\n')
+        self.assertEqual((done['boundBytes'], done['boundKind'], done['measure'], done['enforcement'], done['outDir']),
+                         (10, 'first-build-proposal', 'filesystem-available-drop', 'sampled-stop', 'out-blazer-build'))
+        self.assertEqual((done['startAvailableBytes'], done['consumedBytes']), (10 ** 15, 0))
+
+    def test_the_allowance_reserve_and_timeout_stop_the_build_and_keep_outputs(self):
+        self.envsetup('mkdir -p "$OUT_DIR"; touch "$OUT_DIR/partial"; sleep 30')
+        calls = []
+        def shrinking(path):
+            calls.append(path)
+            return types.SimpleNamespace(f_bavail=10 ** 15 - 100 * (len(calls) - 1), f_frsize=1, f_blocks=2 * 10 ** 15)
+        started = time.monotonic()
+        code, done, _ = self.compile(statvfs=shrinking)
+        self.assertLess(time.monotonic() - started, 20, 'the sampled stop ends the group long before the child would')
+        self.assertEqual((code, done['ok']), (1, False))
+        self.assertIn('above the 10-byte bound', done['stopped'])
+        self.assertIn('outputs are kept, not deleted', done['error'])
+        self.assertTrue((self.src/'out-blazer-build/partial').exists())
+        # Admission needs reserve + allowance free, so a drop below the reserve normally trips the allowance first; the
+        # reserve stop matters when another writer took space between preflight and start.
+        roomy = json.loads(json.dumps(self.synthetic))
+        roomy['capacity']['compileAllowanceBytes'] = 10 ** 6
+        reserve = roomy['capacity']['reserveBytes']
+        falling = iter([reserve + 10 ** 7, reserve + 5] + [reserve - 1] * 10 ** 6)
+        shutil.rmtree(self.src/'out-blazer-build')
+        code, done, _ = self.compile(recipe=roomy, out='r2', statvfs=lambda path: types.SimpleNamespace(
+            f_bavail=next(falling), f_frsize=1, f_blocks=2 * 10 ** 15))
+        self.assertEqual(code, 1)
+        self.assertIn('fell below the reserve', done['stopped'])
+        self.assertEqual(done['startAvailableBytes'], reserve + 5)
+        brief = json.loads(json.dumps(self.synthetic))
+        brief['compile']['timeoutSeconds'] = 1
+        shutil.rmtree(self.src/'out-blazer-build')
+        code, done, _ = self.compile(recipe=brief, out='r3')
+        self.assertEqual((code, done['stopped']), (1, 'exceeded 1 s'))
+
+    def test_compile_never_runs_in_the_production_tree_or_on_a_full_filesystem(self):
+        self.envsetup()
+        code, done, report = self.compile(source_root=str(self.production))
+        self.assertEqual((code, done), (1, None), 'refused before any process starts')
+        self.assertIn('production source root', ' '.join(report['problems']))
+        self.assertFalse((self.production/'out-blazer-build').exists())
+        tight = self.synthetic['capacity']['reserveBytes'] + self.synthetic['capacity']['compileAllowanceBytes'] - 1
+        code, done, report = self.compile(statvfs=fs(tight), out='r2')
+        self.assertEqual((code, done), (1, None))
+        self.assertIn('below the reserve', ' '.join(report['problems']))
+        self.assertFalse((self.src/'out-blazer-build').exists())
 
 if __name__ == '__main__':
     unittest.main()

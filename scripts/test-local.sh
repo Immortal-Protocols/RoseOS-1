@@ -97,6 +97,11 @@ python3 scripts/tests/test_blazer_preparation_preflight.py
 python3 os/tests/test_blazer_flavor.py
 python3 scripts/tests/test_blazer_build_only.py
 python3 scripts/tests/test_blazer_integration.py
+python3 scripts/tests/test_blazer_candidate_bundle.py
+python3 scripts/tests/test_blazer_reconcile_seed.py
+python3 scripts/tests/test_blazer_integrate_wiring.py
+python3 scripts/tests/test_blazer_allocate.py
+python3 scripts/tests/test_blazer_binding_observe.py
 # Factory package verifier (pinned fixtures; the signature cases need OpenSSH ssh-keygen and skip without it).
 python3 scripts/tests/test_factory_package.py
 # Retained Rango (Fold) factory observer (synthetic packages and fake fastboot; no device, download or host).
@@ -104,6 +109,7 @@ python3 scripts/tests/test_rango_factory_observe.py
 python3 scripts/tests/test_rango_factory_observe_workflow.py
 # Blazer (Pixel 10 Pro) preparation workflow wiring (stand-ins and the fake builder adapter; no host, download or vendor run).
 python3 scripts/tests/test_blazer_prep_workflow.py
+python3 scripts/tests/test_blazer_compile_workflow.py
 # Fold factory package workflow wiring (stand-ins and mocks; no host, lock, generation or inspection run).
 python3 scripts/tests/test_rango_factory_package_workflow.py
 python3 scripts/tests/test_rango_factory_inspect_workflow.py
@@ -114,6 +120,7 @@ python3 scripts/tests/test_launcher3_compile_workflow.py
 python3 scripts/tests/test_signing_bootstrap.py
 python3 scripts/tests/test_fold_bootstrap_proof.py
 python3 scripts/tests/test_fold_tool_proof.py
+python3 scripts/tests/test_ssh_keygen_observe.py
 python3 scripts/tests/test_models_signing_bootstrap.py
 python3 scripts/tests/test_models_apk_signing.py
 python3 scripts/tests/test_models_publication.py

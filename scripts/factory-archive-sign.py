@@ -25,8 +25,12 @@ rehashed afterwards.
 
 Outputs: NEW_ROOT/{archive}.sig and NEW_ROOT/factory-archive-sign-receipt.json (archive and signature sha256, principal,
 namespace, public key and fingerprint, ssh-keygen sha256, secret names and versions, timings); NEW_ROOT/work is
-removed. Bounds: ssh-keygen sign and verify are each limited by factory_signing (600 s, 16 KiB output, process group
-ended); hashing the archive twice is not timed here.
+removed. Bounds (BOUNDS, for the caller's outer timeout): each archive hash at most hashSeconds (refused hash_timeout),
+each secret fetch at most fetchSeconds (gcloud killed, refused secret_unavailable), ssh-keygen sign and verify each at
+most signSeconds by factory_signing (16 KiB output, process group ended, killGraceSeconds). A SIGTERM or SIGHUP is
+turned into a refusal (interrupted: signal N) at the point it arrives, so the RAM secrets directory and NEW_ROOT/work
+are still removed, a partial signature is deleted and the receipt is written; a caller's stop should allow that
+cleanup a grace period before any kill.
 
 Exit status: check 0 ready / 4 unbound (JSON {"ready": false, "missing": [...]}); sign 0 signed and verified,
 3 refused (one JSON line {"refused": "<category>: <detail>"}); 2 usage.
@@ -54,6 +58,8 @@ BINDING_SCHEMA = 'roseos.factory-archive-signing-binding.v1'
 DEFAULT_BINDING = ROOT/'os/retained-rango/factory-signing.json'
 HEX64 = re.compile(r'[0-9a-f]{64}')
 SECRET = re.compile(r'[A-Za-z0-9_-]{1,255}')
+BOUNDS = {'hashSeconds': 300, 'fetchSeconds': 120, 'signSeconds': factory_signing.LIMITS['signSeconds'],
+          'verifySeconds': factory_signing.LIMITS['signSeconds'], 'killGraceSeconds': factory_signing.LIMITS['killGraceSeconds']}
 
 
 class Refused(Exception):
@@ -72,12 +78,23 @@ def flavor_contract(device, root=ROOT):
         raise Refused(f'contract_missing: no factory contract for {device} ({error})') from None
 
 
-def sha256_file(path):
-    digest = hashlib.sha256()
+def sha256_file(path, seconds=None, clock=time.monotonic):
+    digest, end = hashlib.sha256(), None if seconds is None else clock() + seconds
     with open(path, 'rb') as f:
         for block in iter(lambda: f.read(8 << 20), b''):
+            if end is not None and clock() > end:
+                raise Refused(f'hash_timeout: {Path(path).name} was not hashed within {seconds} s')
             digest.update(block)
     return digest.hexdigest()
+
+
+def bounded_fetch(project, name, version, destination):
+    """host_secrets.fetch_secret limited to BOUNDS['fetchSeconds']."""
+    return host_secrets.fetch_secret(project, name, version, destination, timeout=BOUNDS['fetchSeconds'])
+
+
+def stop(signum):
+    raise Refused(f'interrupted: signal {signum}')
 
 
 def pinned_file(path, digest, label):
@@ -86,7 +103,7 @@ def pinned_file(path, digest, label):
         raise Refused(f'input_refused: {label} must be an absolute path without .. or symlinked ancestors')
     if path.is_symlink() or not path.is_file():
         raise Refused(f'input_missing: {label} is not a regular file')
-    if not HEX64.fullmatch(str(digest)) or sha256_file(path) != digest:
+    if not HEX64.fullmatch(str(digest)) or sha256_file(path, BOUNDS['hashSeconds']) != digest:
         raise Refused(f'hash_mismatch: {label} differs from its pin')
     return path
 
@@ -157,8 +174,8 @@ def sign_from_binding(binding, archive, archive_sha256, lock_path, out, **kw):
     return sign(args, **kw)
 
 
-def sign(args, contract=flavor_contract, fetch=host_secrets.fetch_secret, runner=factory_signing.run_bounded,
-         lock=shared_lock, private=host_secrets.private_directory):
+def sign(args, contract=flavor_contract, fetch=bounded_fetch, runner=factory_signing.run_bounded,
+         lock=shared_lock, private=host_secrets.private_directory, workspace_check=factory_signing.workspace_problem):
     begun = time.monotonic()
     if not re.fullmatch(r'[a-z][a-z0-9]{1,31}', args.device) or not re.fullmatch(r'[0-9]{10}', args.build):
         raise Refused('usage_refused: device must be a plain codename and build ten digits')
@@ -202,6 +219,9 @@ def sign(args, contract=flavor_contract, fetch=host_secrets.fetch_secret, runner
             link.symlink_to(archive)  # ssh-keygen writes link.sig here, never beside the retained archive
             mark = time.monotonic()
             with private('rose-factory-archive-sign-') as secrets:
+                problem = workspace_check(secrets)
+                if problem:  # before any secret is fetched
+                    raise Refused(problem)
                 try:
                     key = fetch(args.project, args.key_secret, args.key_version, secrets/factory_signing.KEY_FILE)
                     passfile = fetch(args.project, args.passphrase_secret, args.passphrase_version, secrets/'passphrase')
@@ -221,7 +241,7 @@ def sign(args, contract=flavor_contract, fetch=host_secrets.fetch_secret, runner
                     raise Refused(f'signature_failed: {error}') from None
             receipt['timings']['signVerifySeconds'] = round(time.monotonic() - mark, 3)
             os.replace(work/f'{archive.name}.sig', signature)
-            if sha256_file(archive) != args.archive_sha256:
+            if sha256_file(archive, BOUNDS['hashSeconds']) != args.archive_sha256:
                 raise Refused('input_changed: the retained archive changed while it was signed')
             receipt.update(status='signed', signature={'file': signature.name, 'sha256': signed['sha256'],
                                                        'size': signature.stat().st_size})
@@ -240,6 +260,7 @@ def sign(args, contract=flavor_contract, fetch=host_secrets.fetch_secret, runner
 
 
 def main(argv=None):
+    factory_signing.stop_on_signals(stop)  # a stop still runs every cleanup (RAM secrets, work, partial signature)
     p = argparse.ArgumentParser(description=__doc__.split('\n', 1)[0])
     sub = p.add_subparsers(dest='command', required=True)
     for name in ('check', 'sign'):
