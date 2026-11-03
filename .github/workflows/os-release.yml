@@ -1786,6 +1786,9 @@ jobs:
     permissions:
       contents: read
       id-token: write
+    env:
+      GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+      GCP_SIGNER_SERVICE_ACCOUNT: ${{ vars.GCP_SIGNER_SERVICE_ACCOUNT }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -1814,6 +1817,8 @@ jobs:
       actions: read
       id-token: write
     env:
+      GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+      GCP_SIGNER_SERVICE_ACCOUNT: ${{ vars.GCP_SIGNER_SERVICE_ACCOUNT }}
       EXPECTED_COMPILE_RUN: ${{ inputs.mustang_compile_run }}
       EXPECTED_COMPILE_SOURCE: ${{ needs.guard.outputs.mustang_compile_source }}
       EXPECTED_BOOTSTRAP_SOURCE: ${{ needs.guard.outputs.mustang_bootstrap_source }}
