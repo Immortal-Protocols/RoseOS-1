@@ -4,12 +4,13 @@ import android.content.Context;
 import android.view.View;
 import android.view.ViewGroup;
 
-/** One Home page grid over the shared field (OS-PAGING-158-M001; #410 Oxblood geometry, HomeAppLayout): a fixed
+/** One Home page grid over the shared field (OS-PAGING-158-M001; #410 Oxblood materials, HomeAppLayout): a fixed
  * number of columns of fixed-width cells (72dp app cells 6dp apart, or Home's 60dp cells 17.5dp apart), centred, and
- * as many rows as the plan gave it, 14dp apart, placed in the band just above the dots: its top is max(170dp, its
- * height) above the page's inset bottom. Cells take their real measured height, so the owner's font size is honoured,
- * and each measurement is reported once per size so MainActivity can re-plan the pages from the real inset viewport.
- * No heading is drawn; the page's name is its content description. Insets arrive as padding. */
+ * the rows the plan gave it from the top of its inset area down, at one pitch (HomeAppLayout.rowPitch) that lets a
+ * full page reach the reserve above the dots; a partial last page keeps the same rows from the top. Cells take their
+ * real measured height, so the owner's font size is honoured, and each measurement is reported once per size so
+ * MainActivity can re-plan the pages from the real inset viewport. No heading is drawn; the page's name is its content
+ * description. Insets (and Home's date) arrive as padding. */
 final class HomeAppPage extends ViewGroup {
  interface Fit { void measured(int width, int height, float cellHeight); }
 
@@ -67,12 +68,13 @@ final class HomeAppPage extends ViewGroup {
   int innerWidth = Math.max(0, getWidth() - getPaddingLeft() - getPaddingRight());
   int innerHeight = Math.max(0, getHeight() - getPaddingTop() - getPaddingBottom());
   int cellWidth = cellWidth(innerWidth), gap = Math.round(gapDp * density);
-  int used = HomeAppLayout.usedRows(count, columns);
-  float rowGap = HomeAppLayout.rowGap(density);
-  float top = getPaddingTop() + HomeAppLayout.gridTop(innerHeight, HomeAppLayout.gridHeight(used, cellHeight, density), density);
+  int used = HomeAppLayout.usedRows(count, columns), fit = HomeAppLayout.rows(innerHeight, cellHeight, density);
+  // The pitch of a page of fit rows; content beyond them (before a re-plan lands) keeps the plain gap.
+  float pitch = used > fit ? cellHeight + HomeAppLayout.rowGap(density) : HomeAppLayout.rowPitch(innerHeight, fit, cellHeight, density);
+  float top = getPaddingTop();
   int left = getPaddingLeft() + Math.round(HomeAppLayout.gridLeft(innerWidth, columns, cellWidth, gap));
   for (int i = 0; i < count; i++) {
-   int x = left + (i % columns) * (cellWidth + gap), y = Math.round(top + (i / columns) * (cellHeight + rowGap));
+   int x = left + (i % columns) * (cellWidth + gap), y = Math.round(top + (i / columns) * pitch);
    getChildAt(i).layout(x, y, x + cellWidth, y + cellHeight);
   }
  }

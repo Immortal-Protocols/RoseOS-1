@@ -20,6 +20,9 @@ dispatch:
       known to exist, never a preparation binding. The runner's own PATH node is always reported by the helper. Without
       committed candidates inspect is unbound (exit 4): there is no lock-only inspection.
 
+  git-inspect: `blazer-build-only.py inspect-git --host H` and nothing else (the helper's two targets are fixed in the
+      recipe and checked against the bound sourceRoot here); its stdout is kept write-once as NEW/git-inspection.json.
+
 Never compile: compile is not a preparation stage and is refused here. Exit status: 0 ok, 2 invalid, 4 unbound (a host
 fact is still null).
 """
@@ -41,6 +44,10 @@ STAGE_INPUTS = {'source': ('sourceRoot',), 'download': ('downloadDir',), 'vendor
 INSPECT_INPUTS = ('sourceRoot', 'downloadDir', 'node')  # each passed only when bound
 # inspect: the helper's own bound (its cap is INSPECT_MAX_SECONDS), then an outer timeout and a 20-minute job.
 INSPECT = {'maxEntries': 200000, 'maxSeconds': 900, 'outerSeconds': 960, 'jobMinutes': 20}
+# git-inspect: the helper's own 60 s deadline (preparation.gitInspection.maxSeconds), then a 120 s outer timeout (Python
+# start and recipe load included) and a 13-minute job. The helper takes only --host: its two targets are fixed in the
+# recipe, it takes no lock, writes nothing and runs no git process.
+GIT_INSPECT = {'outerSeconds': 120, 'jobMinutes': 13}
 FLAGS = {'downloadDir': '--download-dir', 'sourceRoot': '--source-root', 'node': '--node'}
 KEYS = {'schemaVersion', 'kind', 'basis', 'host', 'lockFrom', 'sourceRoot', 'downloadDir', 'node', 'inspectCandidates'}
 CANDIDATE_KEYS = {'rootTemplate', 'verified', 'binding', 'basis'}
@@ -91,8 +98,8 @@ def resolve(stage, binding_path=BINDING, root=ROOT, run_id=None, attempt=None):
     """(argv tail without --receipt-dir, outer_seconds, job_minutes) for one preparation stage or inspect. The hosted
     check of inspect validates the candidate template with a sample run (1, 1); run passes the real run id and attempt."""
     h = helper()
-    if stage not in (*h.PREPARATION, 'inspect'):
-        raise Invalid(f'{stage!r} is not a preparation stage {h.PREPARATION} or inspect')
+    if stage not in (*h.PREPARATION, 'inspect', 'git-inspect'):
+        raise Invalid(f'{stage!r} is not a preparation stage {h.PREPARATION}, inspect or git-inspect')
     try:
         recipe = h.load(root/'os/build-only/blazer.json', root)
     except h.InvalidInput as error:
@@ -106,6 +113,14 @@ def resolve(stage, binding_path=BINDING, root=ROOT, run_id=None, attempt=None):
         raise Invalid('binding host must be the existing original builder immortal-os-builder')
     lock = h.pointer(root, binding['lockFrom'])
     production = Path(h.pointer(root, recipe['preparation']['productionSourceRootFrom']))
+    if stage == 'git-inspect':
+        spec = recipe['preparation']['gitInspection']
+        rel = recipe['preparation']['vendor']['adevtoolGit']['metadataPath']
+        if binding['sourceRoot'] is not None and spec['targets']['candidate'] != f'{binding["sourceRoot"]}/{rel}':
+            raise Invalid('the recipe git-inspection candidate is not the bound sourceRoot plus ' + rel)
+        if not 0 < spec['maxSeconds'] < GIT_INSPECT['outerSeconds'] or spec['maxSeconds'] != h.GIT_INSPECT_MAX_SECONDS:
+            raise Invalid('git-inspect bounds disagree with the helper')
+        return ['--host', binding['host']], GIT_INSPECT['outerSeconds'], GIT_INSPECT['jobMinutes']
     names = [n for n in INSPECT_INPUTS if binding[n] is not None] if stage == 'inspect' else STAGE_INPUTS[stage]
     unbound = [name for name in names if binding[name] is None]
     if unbound:
@@ -160,12 +175,13 @@ def main(argv=None):
             return 0
         if not a.receipt_dir or not a.receipt_dir.startswith('/'):
             raise Invalid('run needs an absolute --receipt-dir')
-        if a.stage == 'inspect':
-            command = [sys.executable, str(HELPER), 'inspect', *tail]
+        if a.stage in ('inspect', 'git-inspect'):
+            name = 'inspection.json' if a.stage == 'inspect' else 'git-inspection.json'
+            command = [sys.executable, str(HELPER), 'inspect' if a.stage == 'inspect' else 'inspect-git', *tail]
             print(json.dumps({'helper': command[1:]}), flush=True)
             receipts = Path(a.receipt_dir)
             receipts.mkdir(mode=0o700)  # fresh: an existing directory refuses
-            out = os.open(receipts/'inspection.json', os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+            out = os.open(receipts/name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
             os.dup2(out, 1)
             os.close(out)
         else:

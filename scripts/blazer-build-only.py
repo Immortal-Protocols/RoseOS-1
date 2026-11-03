@@ -29,8 +29,10 @@ Preparation stages (never compile, sign, publish or flash; never in the producti
             stream the pinned official URL to DIR/<file>.part (byte and time bound), rename to DIR/<file> only when its
             sha256 equals the pin; an existing archive is never replaced; a failed attempt removes only its own .part
   vendor    --host --lock --download-dir --source-root ISOLATED --node PATH
-            `node --version` must meet the floor, then `vendor/adevtool/bin/run generate-all -d blazer` with
-            ADEVTOOL_IMG_DOWNLOAD_DIR=DIR in ISOLATED, which must not be, contain or sit inside the production source root
+            `node --version` must meet the floor and `git -C vendor/adevtool rev-parse HEAD` must print exactly the
+            pin (ISOLATED needs vendor/adevtool/.git; GIT_* stripped, GIT_CEILING_DIRECTORIES=ISOLATED), then
+            `vendor/adevtool/bin/run generate-all -d blazer` with ADEVTOOL_SKIP_DEP_BUILD=1 (adevtool never rebuilds its
+            deps) and ADEVTOOL_IMG_DOWNLOAD_DIR=DIR in ISOLATED, which must not be, contain or sit inside the production source root
             (os/release-pipeline/frankel.json host.sourceRoot); the archive's sha256, the adevtool deps revision marker, the
             host tools and the kernel directory must be present (project revisions are not checked) and every collision
             path absent; consumed bytes are measured afterwards against the bound
@@ -53,10 +55,14 @@ group (SIGTERM, then SIGKILL after killGraceSeconds); live members left after a 
 Writes between samples can overshoot, and descendants that start their own session are not reached: an enforced quota
 and full containment need host-side cgroup/quota configuration that this tool does not have.
 
+  blazer-build-only.py inspect-git --host H
+            git-only: one level of each fixed preparation.gitInspection target (production and candidate
+            vendor/adevtool/.git) and at most 65 bytes of its HEAD (64 accepted), nothing else; no other argument
   blazer-build-only.py inspect --host --lock [--source-root] [--download-dir] [--node] [--max-entries] [--max-seconds]
             metadata only, for a later approved observation (at most 20 minutes): lstat identities, isolation, statvfs,
-            pinned project presence, adevtool_revision (128 bytes), bounded collision/download sizes and the node file
-            identity and PATH resolution; starts no process, opens no connection and writes nothing
+            pinned project presence, adevtool_revision (128 bytes), bounded collision/download sizes, one level of
+            vendor/adevtool/.git with at most 65 bytes of its HEAD read, 64 accepted (git_facts), and the node file identity and PATH
+            resolution; starts no process, opens no connection and writes nothing
 Exit status: 0 ready/success, 1 not ready or the stage failed, 2 invalid input. Source tests use synthetic trees, a fake
 fetcher and a fake runner only.
 """
@@ -214,6 +220,12 @@ def preparation_problems(recipe, root, contract):
             problems.append('preparation.source.exclusionsFrom must exclude repo metadata, keys, releases, outputs and .git')
     except (KeyError, OSError, ValueError, TypeError, AttributeError):
         problems.append('preparation.source.exclusionsFrom must resolve to the checked-in alpha exclusion policy')
+    git = vendor.get('adevtoolGit') or {}
+    if (git.get('metadataPath') != 'vendor/adevtool/.git' or git.get('argv') != ['git', '-C', 'vendor/adevtool', 'rev-parse', 'HEAD']
+            or git.get('skipDepBuildEnv') != {'ADEVTOOL_SKIP_DEP_BUILD': '1'} or not positive(git.get('timeoutSeconds'))):
+        problems.append('preparation.vendor.adevtoolGit must be vendor/adevtool/.git, `git -C vendor/adevtool rev-parse HEAD`, '
+                        'ADEVTOOL_SKIP_DEP_BUILD=1 and a positive timeoutSeconds')
+    problems += git_inspection_problems(recipe, root)
     node = vendor.get('node') or {}
     if not (positive(node.get('minMajor')) and positive(node.get('versionTimeoutSeconds'))):
         problems.append('preparation.vendor.node needs a positive minMajor and versionTimeoutSeconds')
@@ -276,12 +288,16 @@ def commands(recipe, op, root=ROOT):
             'exclusionsFrom': spec['exclusionsFrom'], 'includePaths': list(spec['includePaths']),
             'maxBytes': spec['boundBytes'], 'timeoutSeconds': spec['timeoutSeconds'], 'processes': 0, 'method': spec['method']}
         if op['downloadDir'] is not None:
+            git = prep['vendor']['adevtoolGit']
             rendered['vendor'] = {'cwd': src, 'env': {recipe['generate']['downloadEnv']: str(op['downloadDir']),
-                    'PATH': f'<receipt-dir>/{NODE_PATH_DIR}:{SAFE_PATH}' if op['node'] else SAFE_PATH},
+                    'PATH': f'<receipt-dir>/{NODE_PATH_DIR}:{SAFE_PATH}' if op['node'] else SAFE_PATH,
+                    'GIT_CEILING_DIRECTORIES': src, **git['skipDepBuildEnv']},
                 'argv': list(recipe['generate']['argv']), 'timeoutSeconds': prep['vendor']['timeoutSeconds'],
-                'nodeVersion': [str(op['node']) if op['node'] else 'node', '--version']}
+                'nodeVersion': [str(op['node']) if op['node'] else 'node', '--version'],
+                'adevtoolHead': list(git['argv']), 'adevtoolHeadTimeoutSeconds': git['timeoutSeconds']}
         checks = ' && '.join(f'echo {v}=${v}' for v in LUNCH_VARS[:3]) + ' && echo TARGET_DEVICE=$(get_build_var TARGET_DEVICE)'
-        rendered['lunch'] = {'cwd': src, 'env': {'OUT_DIR': prep['lunch']['outDir'], 'PATH': SAFE_PATH},
+        rendered['lunch'] = {'cwd': src, 'env': {'OUT_DIR': prep['lunch']['outDir'], 'PATH': SAFE_PATH,
+                                                 'GIT_CEILING_DIRECTORIES': src},
             'argv': ['bash', '-c', f'source build/envsetup.sh && lunch {recipe["lunch"]} && {checks}'],
             'timeoutSeconds': prep['lunch']['timeoutSeconds']}
         if op['jobs'] is not None:
@@ -373,15 +389,7 @@ def tree_problems(recipe, src):
     for needed in TREE_NEEDS:
         if not (src/needed).exists():
             problems.append(f'{needed} is missing from the source tree')
-    deps = src/recipe['adevtool']['depsDir']
-    revision = (deps/'adevtool_revision').read_text().strip() if (deps/'adevtool_revision').is_file() else None
-    if revision != recipe['pins']['vendor/adevtool']:
-        problems.append(f'{recipe["adevtool"]["depsDir"]}/adevtool_revision is {revision!r}, not the pinned revision')
-    tools = deps/'host/linux-x86/bin'
-    missing = [t for t in recipe['adevtool']['depsTools']
-        if not (tools/t).is_file() or (tools/t).is_symlink() or not os.access(tools/t, os.X_OK)]
-    if missing:
-        problems.append(f'adevtool host tools missing or not executable: {missing}')
+    problems += deps_problems(recipe, src)  # the same exact, no-follow marker and tool checks as the source stage
     if not (src/recipe['kernelDir']).is_dir():
         problems.append(f'{recipe["kernelDir"]} (pinned laguna kernel) is missing from the source tree')
     return problems
@@ -478,6 +486,12 @@ def preflight(recipe, stage, op, statvfs=os.statvfs, lock_probe=lock_free, root=
         for rel in prep['vendor']['collisionPaths']:
             if os.path.lexists(src/rel):
                 problems.append(f'{rel} already exists; generate-all would replace it (nothing is deleted or reused)')
+        git = src/prep['vendor']['adevtoolGit']['metadataPath']
+        facts['adevtoolGit'] = meta(git)
+        if not os.path.lexists(git):
+            problems.append(f'{prep["vendor"]["adevtoolGit"]["metadataPath"]} is missing: no git version data for adevtool '
+                            '(its version check needs `git -C vendor/adevtool rev-parse HEAD`; a source-stage snapshot '
+                            'has no .git, so vendor cannot run on it)')
         node = op['node']
         if node.is_symlink() or not node.is_file() or not os.access(node, os.X_OK):
             problems.append(f'node {node} is not an executable regular file')
@@ -947,6 +961,142 @@ def filesystem(path, statvfs):
     return {'queried': str(probe), 'usable': True, 'availableBytes': fs.f_bavail * fs.f_frsize,
             'totalBytes': fs.f_blocks * fs.f_frsize, 'device': os.lstat(probe).st_dev}
 
+# HEAD: at most headReadBytes are read so that more than headAcceptedBytes is detected; the extra byte is never reported.
+GIT_INSPECT = {'scanEntries': 256, 'listedEntries': 64, 'linkTextBytes': 1024, 'headAcceptedBytes': 64, 'headReadBytes': 65}
+HEAD_DETACHED = re.compile(rb'([0-9a-f]{40})\n')
+HEAD_REF = re.compile(rb'ref: (refs/[A-Za-z0-9._/-]{1,200})\n')
+
+def sanitized(text, limit):
+    """Raw filesystem bytes of a name or link text, escaped (backslash, tab, CR, LF and every other non-printable byte
+    as \\xNN), at most LIMIT bytes before escaping; (text, truncated)."""
+    raw = os.fsencode(text)
+    out = ''.join(chr(b) if 0x20 <= b < 0x7f and b != 0x5c else f'\\x{b:02x}' for b in raw[:limit])
+    return out, len(raw) > limit
+
+def git_facts(src, rel, budget, clock):
+    """Metadata of one project's git metadata path, one level only (inspect; gates nothing). The path itself: lstat,
+    never followed (a link reports its text only). A regular file (a gitfile): lstat only, its content is not read. A
+    real directory: at most GIT_INSPECT['scanEntries'] entries scanned and the first listedEntries (sorted) reported
+    with type, mode and size, links with their escaped text and whether it lexically leaves the tree; HEAD alone is
+    read, only as a regular unlinked file, O_NOFOLLOW|O_NONBLOCK, at most headReadBytes (65) so that more than
+    headAcceptedBytes (64) is detected, and reported only as a detached 40-hex revision or a refs/ name. Objects, refs contents, config, the index and hooks are never opened; no git process runs."""
+    path = src/rel
+    facts = {'path': rel, 'meta': meta(path), 'symlinkComponent': str(symlink_in(path.parent) or '') or None,
+             'contentRead': 'HEAD only (at most 65 bytes read, 64 accepted)', 'gitProcess': False}
+    if facts['symlinkComponent'] or not facts['meta'].get('exists'):
+        return facts
+    kind = facts['meta']['type']
+    if kind == 'link':
+        facts['linkText'], facts['linkTextTruncated'] = sanitized(os.readlink(path), GIT_INSPECT['linkTextBytes'])
+        return facts
+    if kind == 'file':
+        facts['gitfile'] = 'present; its gitdir text is not read (inspection reads HEAD only)'
+        return facts
+    if kind != 'dir':
+        return facts
+    seen = []
+    with os.scandir(path) as it:
+        for entry in it:
+            if len(seen) >= GIT_INSPECT['scanEntries'] or budget['entries'] <= 0 or clock() > budget['deadline']:
+                facts['truncated'] = True
+                break
+            budget['entries'] -= 1
+            seen.append(entry.name)
+    facts.setdefault('truncated', False)
+    facts['entriesScanned'] = len(seen)
+    root = os.path.normpath(str(src))
+    listed = []
+    for name in sorted(seen)[:GIT_INSPECT['listedEntries']]:
+        info = meta(path/name)
+        row = {'name': sanitized(name, 255)[0], 'type': info.get('type'), 'mode': info.get('mode'), 'size': info.get('size')}
+        if info.get('type') == 'link':
+            text = os.readlink(path/name)
+            row['linkText'], row['linkTextTruncated'] = sanitized(text, GIT_INSPECT['linkTextBytes'])
+            row['linkAbsolute'] = os.path.isabs(text)
+            target = os.path.normpath(os.path.join(str(path), text))
+            row['linkLeavesTree'] = not (target == root or target.startswith(root + os.sep))
+        listed.append(row)
+    facts['entries'] = listed
+    facts['entriesListedOf'] = len(seen)
+    head = path/'HEAD'
+    head_meta = meta(head)
+    facts['head'] = {'meta': head_meta}
+    if head_meta.get('type') == 'file':
+        try:
+            fd = os.open(head, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)  # never blocks on a swapped-in FIFO
+            try:
+                if not stat.S_ISREG(os.fstat(fd).st_mode):
+                    facts['head']['error'] = 'not a regular file when opened'
+                    return facts
+                data = os.read(fd, GIT_INSPECT['headReadBytes'])
+            finally:
+                os.close(fd)
+        except OSError as error:
+            facts['head']['error'] = type(error).__name__
+            return facts
+        detached, ref = HEAD_DETACHED.fullmatch(data), HEAD_REF.fullmatch(data)
+        if len(data) > GIT_INSPECT['headAcceptedBytes']:
+            facts['head'].update(form='unrecognised', bytes=f'more than {GIT_INSPECT["headAcceptedBytes"]}')
+        elif detached:
+            facts['head'].update(form='detached', revision=detached.group(1).decode())
+        elif ref:
+            facts['head'].update(form='ref', ref=ref.group(1).decode())
+        else:
+            facts['head'].update(form='unrecognised', bytes=len(data))
+    elif head_meta.get('type') == 'link':
+        facts['head']['linkText'], facts['head']['linkTextTruncated'] = sanitized(os.readlink(head), GIT_INSPECT['linkTextBytes'])
+    return facts
+
+GIT_INSPECTION = 'roseos.blazer-git-inspection.v1'
+GIT_INSPECT_MAX_SECONDS = 60
+
+def git_inspection_problems(recipe, root=ROOT):
+    """preparation.gitInspection: exactly the fixed production and candidate targets, each a source root plus
+    vendor.adevtoolGit.metadataPath, the candidate under the ancestor boundary and isolated from production."""
+    prep = recipe.get('preparation') or {}
+    spec, rel = prep.get('gitInspection') or {}, ((prep.get('vendor') or {}).get('adevtoolGit') or {}).get('metadataPath')
+    targets = spec.get('targets') or {}
+    try:
+        production = pointer(root, prep['productionSourceRootFrom'])
+        boundary = Path(prep['candidateLayout']['ancestorBoundary'])
+    except (KeyError, OSError, ValueError, TypeError):
+        return ['preparation.gitInspection needs the production source root and the ancestor boundary']
+    if set(targets) != {'production', 'candidate'} or spec.get('maxSeconds') != GIT_INSPECT_MAX_SECONDS or not rel:
+        return [f'preparation.gitInspection must name exactly production and candidate targets and maxSeconds '
+                f'{GIT_INSPECT_MAX_SECONDS}']
+    problems = []
+    if targets['production'] != f'{production}/{rel}':
+        problems.append(f'preparation.gitInspection production target must be {production}/{rel}')
+    candidate = str(targets['candidate'])
+    cand_root = candidate[:-len('/' + rel)] if candidate.endswith('/' + rel) else None
+    if (cand_root is None or not candidate.startswith('/') or os.path.normpath(candidate) != candidate
+            or boundary not in Path(candidate).parents or isolation_problem(Path(cand_root), Path(production))):
+        problems.append(f'preparation.gitInspection candidate target must be a normalized source root under {boundary}, '
+                        f'isolated from the production root, plus {rel}')
+    return problems
+
+def inspect_git(recipe, host, root=ROOT, clock=time.monotonic):
+    """The git-only inspection: git_facts of exactly the two fixed targets and nothing else (no tree, size, collision,
+    Node, download or candidate-path scan). Starts no process, opens no connection, writes nothing."""
+    if not HOST_LABEL.fullmatch(str(host or '')):
+        raise InvalidInput('--host must be the operator\'s builder label (lowercase letters, digits, . and -)')
+    problems = git_inspection_problems(recipe, root)
+    if problems:
+        raise InvalidInput('; '.join(problems))
+    spec, rel = recipe['preparation']['gitInspection'], recipe['preparation']['vendor']['adevtoolGit']['metadataPath']
+    started = clock()
+    budget = {'entries': 2 * GIT_INSPECT['scanEntries'], 'deadline': started + spec['maxSeconds']}
+    targets = {}
+    for name in ('production', 'candidate'):
+        path = spec['targets'][name]
+        facts = git_facts(Path(path[:-len('/' + rel)]), rel, budget, clock)
+        targets[name] = dict(facts, absolutePath=path)
+    return {'schema': GIT_INSPECTION, 'device': DEVICE, 'host': host, 'metadataOnly': True, 'processesStarted': 0,
+            'network': False, 'writes': False, 'gitProcess': False, 'enablesPreparation': False,
+            'bounds': {**GIT_INSPECT, 'maxSeconds': spec['maxSeconds']}, 'targets': targets,
+            'truncated': any(t.get('truncated') for t in targets.values()) or clock() > budget['deadline'],
+            'elapsedSeconds': round(clock() - started, 3)}
+
 def tree_facts(recipe, src, budget, clock):
     """Project presence, the adevtool revision marker (128 bytes) and bounded collision sizes of one tree."""
     prep = recipe['preparation']
@@ -960,6 +1110,7 @@ def tree_facts(recipe, src, budget, clock):
     facts['adevtoolRevisionPinned'] = recipe['pins']['vendor/adevtool']
     paths = [*prep['vendor']['collisionPaths'], prep['lunch']['outDir']]
     facts['collisions'] = {rel: bounded_bytes(src/rel, budget, clock) for rel in paths}
+    facts['adevtoolGit'] = git_facts(src, prep['vendor']['adevtoolGit']['metadataPath'], budget, clock)
     return facts
 
 def candidate_paths(candidate_root=None, layout=None, **explicit):
@@ -1157,7 +1308,9 @@ def run(recipe, stage, op, receipt_dir, now=time.time, fetcher=fetch, clock=time
             ok, outcome = download(recipe, command, fetcher, clock)
             release_receipts.write_once(receipt_dir/'completed.json', {**base, 'ok': ok, **outcome, 'at': stamp(now)})
             return 0 if ok else 1
-        env = {**{k: v for k, v in os.environ.items() if k not in ('PATH',)}, **command['env']}
+        # Inherited GIT_* (e.g. a GIT_DIR or GIT_WORK_TREE elsewhere) never reaches a child: git answers only from
+        # the tree itself, bounded by GIT_CEILING_DIRECTORIES at the source root.
+        env = {**{k: v for k, v in os.environ.items() if k != 'PATH' and not k.startswith('GIT_')}, **command['env']}
         prep, capacity = recipe['preparation'], recipe['capacity']
         limits = {**prep['limits'], 'boundBytes': prep[stage]['boundBytes'], 'reserveBytes': capacity['reserveBytes']}
         if stage == 'vendor':
@@ -1173,6 +1326,18 @@ def run(recipe, stage, op, receipt_dir, now=time.time, fetcher=fetch, clock=time
                 release_receipts.write_once(receipt_dir/'completed.json', {**base, 'ok': False, 'node': report['facts']['node'],
                     'nodeVersion': (node.get('stdout') or '').strip(), 'error': f'node must be >= {floor}', 'at': stamp(now)})
                 return 1
+            # ADEVTOOL_SKIP_DEP_BUILD=1 skips adevtool's own marker-vs-HEAD comparison; it is made here instead, before
+            # any generation: the marker is the exact pin (preflight), and HEAD must print exactly the pin too.
+            head = supervise(command['adevtoolHead'], command['cwd'], env, command['adevtoolHeadTimeoutSeconds'], limits,
+                             capture=True, statvfs=statvfs, measure=measure, clock=clock, sleep=sleep)
+            want = recipe['pins']['vendor/adevtool'] + '\n'
+            if head['returncode'] or head['stopped'] or head.get('stdout') != want:
+                release_receipts.write_once(receipt_dir/'completed.json', {**base, 'ok': False,
+                    'adevtoolHead': {'returncode': head['returncode'], 'stopped': head['stopped'],
+                                     'stdout': (head.get('stdout') or '')[:128]},
+                    'error': 'git -C vendor/adevtool rev-parse HEAD did not print exactly the pinned revision; no genuine '
+                             'adevtool version data, so nothing is generated', 'at': stamp(now)})
+                return 1
         paths = prep['vendor']['collisionPaths'] if stage == 'vendor' else [prep['lunch']['outDir']]
         watch = [str(op['sourceRoot']/rel) for rel in paths]
         outcome = supervise(command['argv'], command['cwd'], env, command['timeoutSeconds'], limits, watch=watch,
@@ -1187,6 +1352,8 @@ def run(recipe, stage, op, receipt_dir, now=time.time, fetcher=fetch, clock=time
                                            'bound between samples (outputs are kept, not deleted)')
         if stage == 'vendor':
             outcome['node'] = report['facts']['node']
+            outcome['adevtoolHead'] = want.strip()
+            outcome['skipDepBuild'] = dict(prep['vendor']['adevtoolGit']['skipDepBuildEnv'])
         if stage == 'lunch' and outcome['returncode'] == 0 and not outcome['stopped']:
             seen = dict(line.split('=', 1) for line in stdout.splitlines() if '=' in line)
             outcome['targets'] = {k: seen.get(k) for k in LUNCH_VARS}
@@ -1195,7 +1362,23 @@ def run(recipe, stage, op, receipt_dir, now=time.time, fetcher=fetch, clock=time
         release_receipts.write_once(receipt_dir/'completed.json', {**base, 'ok': ok, **outcome, 'at': stamp(now)})
     return 0 if ok else 1
 
+def main_git(argv):
+    """`inspect-git --host H`: no lock, receipt directory, path or other argument."""
+    parser = argparse.ArgumentParser(prog='blazer-build-only.py inspect-git',
+                                     description='git-only metadata inspection of the two fixed targets')
+    parser.add_argument('--host', required=True)
+    a = parser.parse_args(argv)
+    try:
+        print(json.dumps(inspect_git(load(RECIPE), a.host), indent=2))
+        return 0
+    except InvalidInput as error:
+        print(f'invalid input: {error}', file=sys.stderr)
+        return 2
+
 def main(argv=None):
+    argv = sys.argv[1:] if argv is None else list(argv)
+    if argv[:1] == ['inspect-git']:
+        return main_git(argv[1:])
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('action', choices=('plan', 'preflight', 'run', 'inspect'))
     parser.add_argument('--stage', choices=STAGES)

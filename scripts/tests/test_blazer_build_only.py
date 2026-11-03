@@ -54,6 +54,10 @@ class Fixture(unittest.TestCase):
         self.synthetic['preparation']['limits'].update(sampleSeconds=0.05, killGraceSeconds=1)
         # The ancestor boundary is the parent of the (temporary) production root, as the recipe derives it.
         self.synthetic['preparation']['candidateLayout']['ancestorBoundary'] = str(self.tmp)
+        # inspect-git's fixed targets, under the temporary production root and boundary.
+        self.synthetic['preparation']['gitInspection']['targets'] = {
+            'production': f'{self.tmp}/production/vendor/adevtool/.git',
+            'candidate': f'{self.tmp}/rose-actions/blazer-prep-41473133543-1/source/vendor/adevtool/.git'}
         # A checked-in-source copy whose production source root is a temporary tree, so isolation is exercised for real.
         self.root = self.tmp/'repo'
         (self.root/'os/release-pipeline').mkdir(parents=True)
@@ -78,6 +82,8 @@ class Fixture(unittest.TestCase):
             (deps/'host/linux-x86/bin'/tool).write_text('#!/bin/sh\n')
             os.chmod(deps/'host/linux-x86/bin'/tool, 0o755)
         (self.src/self.recipe['kernelDir']).mkdir(parents=True)
+        # Preflight only checks that adevtool's git metadata exists; vendor run() asks git itself (VendorRunTest).
+        (self.src/'vendor/adevtool/.git').mkdir()
         self.lock = self.tmp/'frankel-build.lock'
         self.download = self.tmp/'dl'
         (self.tmp/'nodebin').mkdir()
@@ -188,15 +194,20 @@ class RecipeTest(Fixture):
             'part': str(self.download/(FACTORY + '.part')), 'final': str(self.download/FACTORY), 'sha256': PIN,
             'maxBytes': 8 << 30, 'timeoutSeconds': 3600})
         self.assertEqual(rendered['vendor']['env'], {'ADEVTOOL_IMG_DOWNLOAD_DIR': str(self.download),
-            'PATH': '<receipt-dir>/node-path:/usr/bin:/bin'})
+            'PATH': '<receipt-dir>/node-path:/usr/bin:/bin', 'GIT_CEILING_DIRECTORIES': str(self.src),
+            'ADEVTOOL_SKIP_DEP_BUILD': '1'})
+        self.assertEqual((rendered['vendor']['adevtoolHead'], rendered['vendor']['adevtoolHeadTimeoutSeconds']),
+                         (['git', '-C', 'vendor/adevtool', 'rev-parse', 'HEAD'], 60))
         self.assertEqual(rendered['source'], {'base': '/home/pixelbuild/grapheneos-2026100600', 'target': str(self.src),
             'staging': str(self.tmp/'.source-staging-<nonce>'), 'includePaths': ['out_adevtool_deps/adevtool_revision', 'out_adevtool_deps/host/linux-x86'],
             'exclusionsFrom': 'os/release-pipeline/cuttlefish-alpha.json preparation.exclusions', 'maxBytes': 150 << 30,
             'timeoutSeconds': 7200, 'processes': 0, 'method': self.recipe['preparation']['source']['method']})
         self.assertEqual(rendered['vendor'], {'cwd': str(self.src), 'env': {'ADEVTOOL_IMG_DOWNLOAD_DIR': str(self.download)},
             'argv': ['vendor/adevtool/bin/run', 'generate-all', '-d', 'blazer'], 'timeoutSeconds': 10800,
-            'nodeVersion': [str(self.node), '--version']} | {'env': rendered['vendor']['env']})
-        self.assertEqual(rendered['lunch']['env'], {'OUT_DIR': 'out-blazer-lunch', 'PATH': '/usr/bin:/bin'})
+            'nodeVersion': [str(self.node), '--version'], 'adevtoolHead': rendered['vendor']['adevtoolHead'],
+            'adevtoolHeadTimeoutSeconds': 60} | {'env': rendered['vendor']['env']})
+        self.assertEqual(rendered['lunch']['env'], {'OUT_DIR': 'out-blazer-lunch', 'PATH': '/usr/bin:/bin',
+                                                    'GIT_CEILING_DIRECTORIES': str(self.src)})
         self.assertEqual(rendered['lunch']['argv'][2], 'source build/envsetup.sh && lunch blazer-cur-user && echo TARGET_PRODUCT=$TARGET_PRODUCT'
             ' && echo TARGET_RELEASE=$TARGET_RELEASE && echo TARGET_BUILD_VARIANT=$TARGET_BUILD_VARIANT'
             ' && echo TARGET_DEVICE=$(get_build_var TARGET_DEVICE)')
@@ -217,6 +228,25 @@ class RecipeTest(Fixture):
             (lambda r: r['preparation']['download'].update(timeoutSeconds=None), 'preparation.download needs'),
             (lambda r: r['preparation']['vendor'].update(collisionPaths=['vendor/google_devices/blazer']), 'collisionPaths'),
             (lambda r: r['preparation']['vendor']['node'].update(minMajor=0), 'node needs'),
+            (lambda r: r['preparation']['vendor']['adevtoolGit'].update(skipDepBuildEnv={}), 'ADEVTOOL_SKIP_DEP_BUILD=1'),
+            (lambda r: r['preparation']['vendor']['adevtoolGit'].update(skipDepBuildEnv={'ADEVTOOL_SKIP_DEP_BUILD': '0'}),
+             'ADEVTOOL_SKIP_DEP_BUILD=1'),
+            (lambda r: r['preparation']['vendor']['adevtoolGit'].update(argv=['git', 'rev-parse', 'HEAD']), 'rev-parse HEAD'),
+            (lambda r: r['preparation']['vendor']['adevtoolGit'].update(metadataPath='.git'), 'vendor/adevtool/.git'),
+            (lambda r: r['preparation']['vendor']['adevtoolGit'].update(timeoutSeconds=0), 'positive timeoutSeconds'),
+            (lambda r: r['preparation']['gitInspection']['targets'].update(production='/home/pixelbuild/other/vendor/adevtool/.git'),
+             'production target must be'),
+            (lambda r: r['preparation']['gitInspection']['targets'].update(
+                candidate='/home/pixelbuild/grapheneos-2026100600/nested/vendor/adevtool/.git'), 'candidate target must be'),
+            (lambda r: r['preparation']['gitInspection']['targets'].update(candidate='/srv/x/source/vendor/adevtool/.git'),
+             'candidate target must be'),
+            (lambda r: r['preparation']['gitInspection']['targets'].update(
+                candidate='/home/pixelbuild/rose-actions/x/../source/vendor/adevtool/.git'), 'candidate target must be'),
+            (lambda r: r['preparation']['gitInspection']['targets'].update(candidate='/home/pixelbuild/rose-actions/x/source'),
+             'candidate target must be'),
+            (lambda r: r['preparation']['gitInspection']['targets'].update(other='/home/pixelbuild/x/vendor/adevtool/.git'),
+             'exactly production and candidate'),
+            (lambda r: r['preparation']['gitInspection'].update(maxSeconds=600), 'maxSeconds 60'),
             (lambda r: r['preparation']['lunch']['expect'].update(TARGET_BUILD_VARIANT='userdebug'), 'lunch.expect'),
             (lambda r: r['preparation']['lunch'].update(outDir='out-blazer-build'), 'its own top-level OUT_DIR'),
             (lambda r: r['preparation'].update(totalTimeoutSeconds=2700), 'sum of the stage timeouts'),
@@ -356,7 +386,12 @@ class VendorTest(Fixture):
         self.assertIn('not an executable regular file', self.problems('vendor'))
         os.chmod(self.node, 0o755)
         (self.src/'out_adevtool_deps/adevtool_revision').write_text('0' * 40)
-        self.assertIn('not the pinned revision', self.problems('vendor'))
+        self.assertIn('not exactly the pinned hash and one newline', self.problems('vendor'))
+        (self.src/'out_adevtool_deps/adevtool_revision').write_text(ADEVTOOL)  # no newline: adevtool compares exactly
+        self.assertIn('not exactly the pinned hash and one newline', self.problems('vendor'))
+        (self.src/'out_adevtool_deps/adevtool_revision').write_text(ADEVTOOL + '\n')
+        os.rmdir(self.src/'vendor/adevtool/.git')
+        self.assertIn('vendor/adevtool/.git is missing: no git version data', self.problems('vendor'))
         self.assertIn('outside the source tree', self.problems('vendor', download_dir=str(self.src/'dl')))
 
 class LunchTest(Fixture):
@@ -444,13 +479,31 @@ class SuperviseTest(Fixture):
         self.assertEqual(result['stopped'], 'available 50 fell below the reserve 100')
 
 class VendorRunTest(Fixture):
+    def git(self, where, *args):
+        env = {'PATH': '/usr/bin:/bin', 'HOME': str(self.tmp), 'GIT_CONFIG_NOSYSTEM': '1'}
+        return subprocess.run(['git', '-C', str(where), *args], env=env, check=True, capture_output=True, text=True).stdout
+
+    def repository(self, where):
+        """A real git repository with one commit (synthetic content); returns its HEAD."""
+        self.git(where, 'init', '-q')
+        self.git(where, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '--allow-empty', '-m', 'synthetic')
+        return self.git(where, 'rev-parse', 'HEAD').strip()
+
     def setUp(self):
         super().setUp()
         self.archive()
+        os.rmdir(self.src/'vendor/adevtool/.git')
+        self.head = self.repository(self.src/'vendor/adevtool')
+        # A synthetic pin: this repository's HEAD (the real pin 17df3b79 cannot be committed here).
+        self.synthetic['pins']['vendor/adevtool'] = self.head
+        (self.src/'out_adevtool_deps/adevtool_revision').write_text(self.head + '\n')
         self.seen = self.tmp/'node-seen'
+        self.env_seen = self.tmp/'env-seen.json'
         self.script(self.src/'vendor/adevtool/bin/run', f"""mode = os.environ.get('FAKE_MODE', 'ok')
 open({str(self.seen)!r}, 'w').write(shutil.which('node') or '')
 open({str(self.seen) + '.neighbour'!r}, 'w').write(shutil.which('neighbour') or '')
+import json
+json.dump({{k: v for k, v in os.environ.items() if k.startswith(('GIT_', 'ADEVTOOL_'))}}, open({str(self.env_seen)!r}, 'w'))
 vendor = os.path.join('vendor', 'google_devices', 'blazer')
 os.makedirs(vendor)
 open(os.path.join(vendor, 'blazer.mk'), 'w').write('# synthetic')
@@ -507,6 +560,54 @@ sys.exit(3 if mode == 'fail' else 0)""")
         self.assertIn('above the 1048576-byte bound (outputs are kept, not deleted)', done['error'])
         self.assertTrue((self.src/'vendor/google_devices/blazer/blazer.mk').exists())
 
+    def git_environment(self, **values):
+        for key, value in values.items():
+            os.environ[key] = value
+            self.addCleanup(os.environ.pop, key, None)
+
+    def test_generation_never_rebuilds_deps_and_never_sees_an_inherited_git(self):
+        outer = self.tmp/'elsewhere'
+        outer.mkdir()
+        self.git_environment(GIT_DIR=str(outer/'.git'), GIT_WORK_TREE=str(outer))
+        code, done = self.run_vendor()
+        self.assertEqual((code, done['ok']), (0, True), done)
+        seen = json.loads(self.env_seen.read_text())
+        self.assertEqual(seen, {'ADEVTOOL_SKIP_DEP_BUILD': '1', 'GIT_CEILING_DIRECTORIES': str(self.src),
+                                'ADEVTOOL_IMG_DOWNLOAD_DIR': str(self.download)},
+                         'the pinned skip switch is set and no inherited GIT_* reaches generation')
+        self.assertEqual((done['adevtoolHead'], done['skipDepBuild']), (self.head, {'ADEVTOOL_SKIP_DEP_BUILD': '1'}))
+
+    def test_missing_or_ungenuine_adevtool_version_data_refuses_before_generation(self):
+        other = json.loads(json.dumps(self.synthetic))
+        other['pins']['vendor/adevtool'] = 'f' * 40
+        (self.src/'out_adevtool_deps/adevtool_revision').write_text('f' * 40 + '\n')
+        code, done = self.run_vendor(recipe=other, out='wrong-head')
+        self.assertEqual(code, 1)
+        self.assertIn('did not print exactly the pinned revision', done['error'])
+        self.assertEqual(done['adevtoolHead']['stdout'], self.head + '\n')
+        self.assertFalse(self.seen.exists(), 'nothing is generated')
+        # An invalid .git with a genuine repository above the tree, or a GIT_DIR pointing at it: git never answers from it.
+        outer = self.repository(self.tmp)
+        (self.src/'out_adevtool_deps/adevtool_revision').write_text(outer + '\n')
+        above = json.loads(json.dumps(self.synthetic))
+        above['pins']['vendor/adevtool'] = outer
+        shutil.rmtree(self.src/'vendor/adevtool/.git')
+        (self.src/'vendor/adevtool/.git').mkdir()
+        code, done = self.run_vendor(recipe=above, out='ceiling')
+        self.assertEqual(code, 1, done)
+        self.assertNotEqual(done['adevtoolHead']['returncode'], 0)
+        self.git_environment(GIT_DIR=str(self.tmp/'.git'))
+        code, done = self.run_vendor(recipe=above, out='redirect')
+        self.assertEqual(code, 1, done)
+        self.assertFalse(self.seen.exists(), 'nothing is generated')
+        # No metadata at all: refused in preflight, before the lock, any process or a started receipt.
+        shutil.rmtree(self.src/'vendor/adevtool/.git')
+        code = bb.run(above, 'vendor', self.op(), self.tmp/'absent', now=lambda: 0, statvfs=fs(10 ** 15),
+                      lock_probe=lambda path: True, root=self.root)
+        self.assertEqual(code, 1)
+        self.assertEqual(sorted(p.name for p in (self.tmp/'absent').iterdir()), ['preflight.json'])
+        self.assertIn('vendor/adevtool/.git is missing', (self.tmp/'absent/preflight.json').read_text())
+
     def test_overshoot_between_samples_is_still_refused_after_exit(self):
         slow = json.loads(json.dumps(self.synthetic))
         slow['preparation']['limits']['sampleSeconds'] = 30
@@ -542,7 +643,7 @@ open(os.path.join(vendor, 'blob'), 'wb').write(b'x' * (4 << 20))""")
 
 class LunchRunTest(Fixture):
     def envsetup(self, variant='user'):
-        (self.src/'build/envsetup.sh').write_text(f"""lunch() {{ export TARGET_PRODUCT=blazer TARGET_RELEASE=cur TARGET_BUILD_VARIANT={variant}; mkdir -p "$OUT_DIR"; }}
+        (self.src/'build/envsetup.sh').write_text(f"""lunch() {{ export TARGET_PRODUCT=blazer TARGET_RELEASE=cur TARGET_BUILD_VARIANT={variant}; mkdir -p "$OUT_DIR"; env | grep '^GIT_' | sort > {str(self.tmp/'lunch-git-env')!r}; }}
 get_build_var() {{ echo blazer; }}
 """)
 
@@ -550,6 +651,16 @@ get_build_var() {{ echo blazer; }}
         code = bb.run(self.synthetic, 'lunch', self.op(), self.tmp/out, now=lambda: 0,
             statvfs=fs(10 ** 15), lock_probe=lambda path: True, root=self.root)
         return code, json.loads((self.tmp/out/'completed.json').read_text())
+
+    def test_lunch_sees_no_inherited_git_and_is_bounded_at_the_source_root(self):
+        """The generated version check runs git at lunch; it must answer from the tree only."""
+        self.generated()
+        self.envsetup()
+        os.environ['GIT_DIR'] = str(self.tmp/'elsewhere/.git')
+        self.addCleanup(os.environ.pop, 'GIT_DIR', None)
+        code, done = self.run_lunch()
+        self.assertEqual((code, done['ok']), (0, True), done)
+        self.assertEqual((self.tmp/'lunch-git-env').read_text(), f'GIT_CEILING_DIRECTORIES={self.src}\n')
 
     def test_lunch_targets_must_match(self):
         self.generated()
@@ -673,10 +784,13 @@ class SourceRunTest(Fixture):
         self.assertRegex(done['selectionSha256'], '^[0-9a-f]{64}$')
         self.assertLessEqual(done['selection']['projectedBytes'], done['boundBytes'])
         self.assertTrue(done['availableBytesBefore'] - done['selection']['projectedBytes'] >= RESERVE)
-        # The constructed tree satisfies the vendor stage's tree checks (archive and node supplied as usual).
+        # The snapshot has no .git anywhere, so the vendor stage refuses it up front (fail-closed), naming the gap;
+        # every other vendor tree check passes on it.
         self.archive()
         report = self.preflight('vendor', source_root=str(t))
-        self.assertEqual((report['ready'], report['problems']), (True, []))
+        self.assertFalse(report['ready'])
+        self.assertEqual(len(report['problems']), 1, report['problems'])
+        self.assertIn('vendor/adevtool/.git is missing: no git version data for adevtool', report['problems'][0])
         # It is never replaced: a second run refuses before writing.
         self.assertIn('already exists', self.problems('source', source_root=str(t)))
 
@@ -1217,6 +1331,287 @@ class InspectTest(Fixture):
             bb.candidate_paths(None, node=str(self.node), nodeFromPath=True)
         with self.assertRaisesRegex(bb.InvalidInput, '--candidate-root must be an absolute path'):
             bb.candidate_paths('/a/../b')
+
+    def git_cmd(self, where, *args):
+        env = {'PATH': '/usr/bin:/bin', 'HOME': str(self.tmp), 'GIT_CONFIG_NOSYSTEM': '1'}
+        return subprocess.run(['git', '-C', str(where), *args], env=env, check=True, capture_output=True, text=True).stdout
+
+    def git_report(self, tree):
+        budget = {'entries': 10 ** 6, 'deadline': time.monotonic() + 60}
+        return bb.git_facts(tree, 'vendor/adevtool/.git', budget, time.monotonic)
+
+    def opened_during(self, call):
+        """Every path os.open / builtins.open sees while CALL runs (the inspection must open HEAD only)."""
+        import builtins
+        seen, real_open, real_builtin = [], os.open, builtins.open
+        def spy_os(path, *a, **k):
+            seen.append(os.fspath(path))
+            return real_open(path, *a, **k)
+        def spy_builtin(path, *a, **k):
+            seen.append(os.fspath(path))
+            return real_builtin(path, *a, **k)
+        os.open, builtins.open = spy_os, spy_builtin
+        try:
+            return call(), seen
+        finally:
+            os.open, builtins.open = real_open, real_builtin
+
+    def test_git_inspection_reads_only_head_from_a_genuine_repository(self):
+        trees = {}
+        for name in ('ref', 'detached'):
+            adevtool = self.tmp/name/'vendor/adevtool'
+            adevtool.mkdir(parents=True)
+            self.git_cmd(adevtool, 'init', '-q')
+            self.git_cmd(adevtool, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '--allow-empty', '-m', 'synthetic')
+            trees[name] = (self.tmp/name, self.git_cmd(adevtool, 'rev-parse', 'HEAD').strip())
+        self.git_cmd(self.tmp/'detached/vendor/adevtool', 'checkout', '-q', '--detach')
+        tree, adevtool = self.tmp/'ref', self.tmp/'ref/vendor/adevtool'
+        before = self.snapshot(adevtool/'.git')
+        self.guard()  # from here on no process may start: the inspection itself never runs git
+        facts, opened = self.opened_during(lambda: self.git_report(tree))
+        self.assertEqual(self.snapshot(adevtool/'.git'), before, 'nothing under .git changes')
+        self.assertEqual(opened, [str(adevtool/'.git/HEAD')], 'HEAD is the only file opened')
+        self.assertEqual((facts['meta']['type'], facts['gitProcess'], facts['truncated']), ('dir', False, False))
+        names = {row['name'] for row in facts['entries']}
+        self.assertTrue({'HEAD', 'config', 'objects', 'refs'} <= names, names)
+        self.assertEqual(facts['head']['form'], 'ref')
+        self.assertTrue(facts['head']['ref'].startswith('refs/heads/'))
+        facts = self.git_report(trees['detached'][0])
+        self.assertEqual((facts['head']['form'], facts['head']['revision']), ('detached', trees['detached'][1]))
+
+    def test_repo_style_links_are_reported_never_followed(self):
+        tree = self.tmp/'tree'
+        git = tree/'vendor/adevtool/.git'
+        git.mkdir(parents=True)
+        (git/'HEAD').write_text('a' * 40 + '\n')
+        os.symlink('../../../.repo/project-objects/adevtool.git/objects', git/'objects')
+        os.symlink(str(self.tmp/'outside/config'), git/'config')
+        os.mkfifo(self.tmp/'fifo')
+        os.symlink(str(self.tmp/'fifo'), git/'packed-refs')  # following this would block
+        (git/'refs').mkdir()
+        facts, opened = self.opened_during(lambda: self.git_report(tree))
+        self.assertEqual(opened, [str(git/'HEAD')])
+        rows = {row['name']: row for row in facts['entries']}
+        self.assertEqual((rows['objects']['type'], rows['objects']['linkText'], rows['objects']['linkAbsolute'],
+                          rows['objects']['linkLeavesTree']),
+                         ('link', '../../../.repo/project-objects/adevtool.git/objects', False, False))
+        self.assertEqual((rows['config']['linkAbsolute'], rows['config']['linkLeavesTree']), (True, True))
+        self.assertEqual(rows['refs']['type'], 'dir')
+        self.assertNotIn('entries', rows['refs'], 'one level only')
+        self.assertEqual((facts['head']['form'], facts['head']['revision']), ('detached', 'a' * 40))
+        os.symlink('../../../../escape', git/'zz-escape')
+        self.assertTrue({r['name']: r for r in self.git_report(tree)['entries']}['zz-escape']['linkLeavesTree'])
+
+    def test_git_paths_that_are_links_files_or_unsafe_are_never_read(self):
+        tree = self.tmp/'tree'
+        (tree/'vendor/adevtool').mkdir(parents=True)
+        git = tree/'vendor/adevtool/.git'
+        (git).write_text('gitdir: /home/pixelbuild/grapheneos-2026100600/.repo/projects/vendor/adevtool.git\n')
+        facts, opened = self.opened_during(lambda: self.git_report(tree))
+        self.assertEqual((facts['meta']['type'], opened), ('file', []), 'a gitfile is lstat only')
+        self.assertIn('not read', facts['gitfile'])
+        self.assertNotIn('pixelbuild', json.dumps(facts))
+        git.unlink()
+        real = self.tmp/'real-git'
+        real.mkdir()
+        (real/'HEAD').write_text('b' * 40 + '\n')
+        os.symlink(real, git)
+        facts, opened = self.opened_during(lambda: self.git_report(tree))
+        self.assertEqual((facts['meta']['type'], facts['linkText'], opened), ('link', str(real), []))
+        self.assertNotIn('head', facts)
+        git.unlink()
+        git.mkdir()
+        os.symlink(str(real/'HEAD'), git/'HEAD')
+        facts, opened = self.opened_during(lambda: self.git_report(tree))
+        self.assertEqual((facts['head']['meta']['type'], facts['head']['linkText'], opened), ('link', str(real/'HEAD'), []))
+        (git/'HEAD').unlink()
+        os.mkfifo(git/'HEAD')
+        facts, opened = self.opened_during(lambda: self.git_report(tree))
+        self.assertEqual((facts['head']['meta']['type'], opened), ('other', []), 'a FIFO HEAD is never opened')
+        (git/'HEAD').unlink()
+        for content, form in ((b'c' * 40 + b'\n' + b'x' * 30, 'unrecognised'), (b'secret-looking text\n', 'unrecognised'),
+                              (b'ref: refs/heads/main\n', 'ref'), (b'C' * 40 + b'\n', 'unrecognised')):
+            (git/'HEAD').write_bytes(content)
+            facts = self.git_report(tree)
+            self.assertEqual(facts['head']['form'], form, content)
+            if form == 'unrecognised':
+                self.assertNotIn('secret', json.dumps(facts))
+                self.assertEqual(set(facts['head']) - {'meta'}, {'form', 'bytes'}, 'only its length, never its content')
+        (git/'HEAD').write_bytes(b'd' * 40 + b'\n' + b'e' * 40)
+        self.assertEqual(self.git_report(tree)['head']['bytes'], 'more than 64')
+        shutil.rmtree(git)
+        moved = self.tmp/'moved-adevtool'
+        (tree/'vendor/adevtool').rename(moved)
+        os.symlink(moved, tree/'vendor/adevtool')
+        (moved/'.git').mkdir()
+        facts, opened = self.opened_during(lambda: self.git_report(tree))
+        self.assertEqual((facts['symlinkComponent'], opened), (str(tree/'vendor/adevtool'), []))
+        self.assertNotIn('entries', facts)
+        (tree/'vendor/adevtool').unlink()
+        (tree/'vendor/adevtool').mkdir()
+        self.assertEqual(self.git_report(tree)['meta']['exists'], False)
+
+    def test_git_inspection_is_bounded_and_escapes_names(self):
+        tree = self.tmp/'tree'
+        git = tree/'vendor/adevtool/.git'
+        git.mkdir(parents=True)
+        for i in range(300):
+            (git/f'f{i:03d}').write_text('')
+        (git/'tab\tname\n').write_text('')
+        os.symlink('x' * 2000, git/'long-link')
+        facts = self.git_report(tree)
+        self.assertEqual((facts['entriesScanned'], len(facts['entries']), facts['truncated']), (256, 64, True))
+        shutil.rmtree(git)
+        git.mkdir()
+        (git/'tab\tname\n').write_text('')
+        os.symlink('x' * 2000, git/'long-link')
+        rows = {row['name']: row for row in self.git_report(tree)['entries']}
+        self.assertIn('tab\\x09name\\x0a', rows)
+        self.assertEqual((len(rows['long-link']['linkText']), rows['long-link']['linkTextTruncated']), (1024, True))
+        budget = {'entries': 1, 'deadline': time.monotonic() + 60}
+        small = bb.git_facts(tree, 'vendor/adevtool/.git', budget, time.monotonic)
+        self.assertEqual((small['entriesScanned'], small['truncated']), (1, True), 'the shared inspect budget bounds it')
+
+    def test_inspect_reports_git_facts_for_reference_and_candidate_and_gates_nothing(self):
+        ref = self.reference()
+        (ref/'vendor/adevtool/.git').mkdir(parents=True)
+        (ref/'vendor/adevtool/.git/HEAD').write_text(ADEVTOOL + '\n')
+        cand = self.tmp/'rose-actions/blazer-prep-41000000001-1'
+        (cand/'source/vendor/adevtool').mkdir(parents=True)
+        report = bb.inspect(self.synthetic, self.op(source_root=None, download_dir=None, node=None), root=self.root,
+                            statvfs=fs(10 ** 15), candidates=bb.candidate_paths(str(cand)), environ={'PATH': ''})
+        self.assertEqual(report['schema'], 'roseos.blazer-preparation-inspection.v2')
+        self.assertEqual((report['reference']['adevtoolGit']['head']['form'], report['reference']['adevtoolGit']['head']['revision']),
+                         ('detached', ADEVTOOL))
+        self.assertEqual(report['candidates']['sourceRoot']['adevtoolGit']['meta']['exists'], False)
+        self.assertEqual((report['enablesPreparation'], report['processesStarted'], report['writes']), (False, 0, False))
+
+    def touched_during(self, call):
+        """Every path the filesystem primitives see while CALL runs."""
+        import builtins
+        names = ('lstat', 'stat', 'open', 'scandir', 'readlink', 'listdir', 'walk', 'statvfs', 'access')
+        seen, originals = [], {name: getattr(os, name) for name in names}
+        reads, real_read, real_builtin = [], os.read, builtins.open
+        def spy(name):
+            def call_(path, *a, **k):
+                if not isinstance(path, int):
+                    seen.append((name, os.fsdecode(os.fspath(path))))
+                return originals[name](path, *a, **k)
+            return call_
+        def spy_open(path, *a, **k):
+            seen.append(('builtins.open', os.fsdecode(os.fspath(path))))
+            return real_builtin(path, *a, **k)
+        def spy_read(fd, n):
+            reads.append(n)
+            return real_read(fd, n)
+        for name in names:
+            setattr(os, name, spy(name))
+        builtins.open, os.read = spy_open, spy_read
+        try:
+            return call(), seen, reads
+        finally:
+            for name, original in originals.items():
+                setattr(os, name, original)
+            builtins.open, os.read = real_builtin, real_read
+
+    def git_targets(self):
+        """A genuine repository at the production target and a repo-style .git at the candidate, beside other content."""
+        production = self.reference()
+        adevtool = production/'vendor/adevtool'
+        env = {'PATH': '/usr/bin:/bin', 'HOME': str(self.tmp), 'GIT_CONFIG_NOSYSTEM': '1'}
+        for args in (('init', '-q'), ('-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '--allow-empty', '-m', 's')):
+            subprocess.run(['git', '-C', str(adevtool), *args], env=env, check=True, capture_output=True)
+        head = subprocess.run(['git', '-C', str(adevtool), 'rev-parse', 'HEAD'], env=env, check=True, capture_output=True,
+                              text=True).stdout.strip()
+        for rel in ('out/soong/huge.bin', 'out_adevtool_deps/host/linux-x86/bin/aapt2', 'vendor/adevtool/src/config/paths.ts'):
+            (production/rel).parent.mkdir(parents=True, exist_ok=True)
+            (production/rel).write_text('never touched')
+        candidate = self.tmp/'rose-actions/blazer-prep-41473133543-1/source/vendor/adevtool'
+        (candidate/'.git').mkdir(parents=True)
+        (candidate/'.git/HEAD').write_text('a' * 40 + '\n')
+        os.symlink('../../../.repo/project-objects/adevtool.git/objects', candidate/'.git/objects')
+        (candidate/'.git/config').write_text('[core]\n\tsecret = never read\n')
+        (candidate/'src').mkdir()
+        (candidate/'src/never.ts').write_text('never touched')
+        (self.tmp/'rose-actions/blazer-prep-41473133543-1/downloads').mkdir()
+        return production, candidate, head
+
+    def test_inspect_git_touches_only_the_two_targets(self):
+        production, candidate, head = self.git_targets()
+        trees = (production, self.tmp/'rose-actions')
+        before = self.snapshot(*trees)
+        self.guard()
+        report, touched, reads = self.touched_during(lambda: bb.inspect_git(self.synthetic, 'immortal-os-builder', self.root))
+        self.assertEqual(self.snapshot(*trees), before, 'nothing in either tree changes')
+        targets = [Path(self.synthetic['preparation']['gitInspection']['targets'][n]) for n in ('production', 'candidate')]
+        allowed = set()
+        for target in targets:
+            allowed |= {str(target), str(target/'HEAD')} | {str(target/n) for n in os.listdir(target)}
+            allowed |= {str(p) for p in target.parent.parents} | {str(target.parent)}
+        stray = sorted({path for _, path in touched} - allowed)
+        self.assertEqual(stray, [], 'only the targets, one level inside them, HEAD and the ancestors\' lstat')
+        opened = sorted(path for name, path in touched if name in ('open', 'builtins.open'))
+        self.assertEqual(opened, sorted(str(t/'HEAD') for t in targets), 'HEAD is the only content opened')
+        self.assertTrue(reads and set(reads) == {65}, 'HEAD reads ask for at most 65 bytes')
+        self.assertFalse(any(name in ('walk', 'statvfs', 'access') for name, _ in touched), 'no tree walk, size or Node probe')
+        self.assertEqual((report['schema'], report['processesStarted'], report['writes'], report['gitProcess'],
+                          report['enablesPreparation'], report['truncated']),
+                         ('roseos.blazer-git-inspection.v1', 0, False, False, False, False))
+        self.assertEqual(report['bounds'], {'scanEntries': 256, 'listedEntries': 64, 'linkTextBytes': 1024,
+                                            'headAcceptedBytes': 64, 'headReadBytes': 65, 'maxSeconds': 60})
+        self.assertEqual(set(report), {'schema', 'device', 'host', 'metadataOnly', 'processesStarted', 'network', 'writes',
+                                       'gitProcess', 'enablesPreparation', 'bounds', 'targets', 'truncated', 'elapsedSeconds'})
+        prod, cand = report['targets']['production'], report['targets']['candidate']
+        self.assertEqual((prod['absolutePath'], prod['head']['form']), (str(targets[0]), 'ref'))
+        self.assertEqual((cand['head']['form'], cand['head']['revision']), ('detached', 'a' * 40))
+        self.assertEqual({r['name']: r['linkLeavesTree'] for r in cand['entries'] if r['type'] == 'link'}, {'objects': False})
+        self.assertNotIn('secret', json.dumps(report))
+        self.assertEqual(prod['contentRead'], 'HEAD only (at most 65 bytes read, 64 accepted)')
+        self.assertTrue(head)
+
+    def test_inspect_git_reports_absent_targets_and_refuses_bad_input(self):
+        report = bb.inspect_git(self.synthetic, 'immortal-os-builder', self.root)
+        self.assertEqual({n: t['meta']['exists'] for n, t in report['targets'].items()}, {'production': False, 'candidate': False})
+        with self.assertRaisesRegex(bb.InvalidInput, '--host'):
+            bb.inspect_git(self.synthetic, 'Bad Host', self.root)
+        moved = json.loads(json.dumps(self.synthetic))
+        moved['preparation']['gitInspection']['targets']['candidate'] = f'{self.tmp}/production/x/vendor/adevtool/.git'
+        with self.assertRaisesRegex(bb.InvalidInput, 'candidate target must be'):
+            bb.inspect_git(moved, 'immortal-os-builder', self.root)
+
+    def test_head_reads_at_most_65_bytes_and_accepts_at_most_64(self):
+        tree = self.tmp/'tree'
+        git = tree/'vendor/adevtool/.git'
+        git.mkdir(parents=True)
+        exact = b'ref: refs/heads/' + b'b' * 47 + b'\n'
+        self.assertEqual(len(exact), 64)
+        (git/'HEAD').write_bytes(exact)
+        facts, _, reads = self.touched_during(lambda: self.git_report(tree))
+        self.assertEqual((facts['head']['form'], facts['head']['ref'], reads), ('ref', 'refs/heads/' + 'b' * 47, [65]))
+        (git/'HEAD').write_bytes(b'ref: refs/heads/' + b'b' * 48 + b'\n')  # 65 bytes: one over
+        facts = self.git_report(tree)
+        self.assertEqual((facts['head']['form'], facts['head']['bytes']), ('unrecognised', 'more than 64'))
+        self.assertNotIn('bbbb', json.dumps(facts['head']), 'the over-limit content is never reported')
+
+    def test_inspect_git_cli_takes_only_the_host(self):
+        script = str(ROOT/'scripts/blazer-build-only.py')
+        ok = subprocess.run([sys.executable, script, 'inspect-git', '--host', 'immortal-os-builder'], capture_output=True, text=True)
+        self.assertEqual(ok.returncode, 0, ok.stderr)
+        report = json.loads(ok.stdout)
+        self.assertEqual((report['schema'], set(report['targets'])), ('roseos.blazer-git-inspection.v1', {'production', 'candidate'}))
+        self.assertEqual(report['targets']['candidate']['absolutePath'],
+                         '/home/pixelbuild/rose-actions/blazer-prep-41473133543-1/source/vendor/adevtool/.git')
+        for extra in (['--lock', '/tmp/x'], ['--source-root', '/tmp/x'], ['/tmp/x'], ['--max-entries', '5'], []):
+            with self.subTest(extra):
+                argv = [sys.executable, script, 'inspect-git', *(extra if extra else [])]
+                if extra:
+                    argv[3:3] = ['--host', 'immortal-os-builder']
+                bad = subprocess.run(argv, capture_output=True, text=True)
+                self.assertEqual(bad.returncode, 2, (extra, bad.stdout))
+        old = subprocess.run([sys.executable, script, 'inspect', '--host', 'immortal-os-builder', '--lock', str(self.lock)],
+                             capture_output=True, text=True)
+        self.assertEqual((old.returncode, json.loads(old.stdout)['schema']), (0, 'roseos.blazer-preparation-inspection.v2'),
+                         'the existing inspect mode is unchanged')
 
     def test_production_candidates_are_flagged_and_walks_are_bounded(self):
         self.reference()

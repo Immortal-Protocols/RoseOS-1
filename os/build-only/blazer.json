@@ -116,6 +116,21 @@
         "minMajor": 24,
         "versionTimeoutSeconds": 60,
         "minMajorFrom": "scripts/blazer-preparation-preflight.py NODE_MIN_MAJOR"
+      },
+      "adevtoolGit": {
+        "metadataPath": "vendor/adevtool/.git",
+        "argv": [
+          "git",
+          "-C",
+          "vendor/adevtool",
+          "rev-parse",
+          "HEAD"
+        ],
+        "timeoutSeconds": 60,
+        "skipDepBuildEnv": {
+          "ADEVTOOL_SKIP_DEP_BUILD": "1"
+        },
+        "basis": "GrapheneOS adevtool 17df3b79 src/config/paths.ts (sha256 418823cc...) getHostBinPath rebuilds its deps (scripts/run-build.sh: lunch and m) whenever out_adevtool_deps/adevtool_revision differs from `git -C vendor/adevtool rev-parse HEAD` stdout or that git call fails, unless ADEVTOOL_SKIP_DEP_BUILD=1. The vendor stage always sets that switch, so preparation never compiles, and makes the skipped comparison itself before generation: the marker must be exactly the pin and one newline, and this git call (GIT_* stripped, GIT_CEILING_DIRECTORIES at the source root) must print exactly the pin and one newline. A tree without vendor/adevtool/.git (the source-stage snapshot excludes all .git) is refused in preflight: generate-all's writeVersionCheckFile (src/blobs/build.ts) needs the same git call. This makes no snapshot usable and relaxes no version check."
       }
     },
     "lunch": {
@@ -145,6 +160,14 @@
       },
       "ancestorBoundary": "/home/pixelbuild",
       "basis": "inspect derives R/source, R/downloads and R/receipts from one proposed --candidate-root R and reports the lstat chain of R's ancestors up to ancestorBoundary (the parent of the production source root); statvfs is read only on the nearest existing ancestor of each path. Candidates are proposals, never bindings."
+    },
+    "gitInspection": {
+      "targets": {
+        "production": "/home/pixelbuild/grapheneos-2026100600/vendor/adevtool/.git",
+        "candidate": "/home/pixelbuild/rose-actions/blazer-prep-41473133543-1/source/vendor/adevtool/.git"
+      },
+      "maxSeconds": 60,
+      "basis": "inspect-git: one level of each fixed target's metadata and at most 65 bytes of its HEAD (64 accepted; the 65th only detects oversize and is never reported), through git_facts; no tree, size, collision, Node, download or candidate-path scan, no writes, no git process and no gitfile content. The production target is the production source root plus vendor.adevtoolGit.metadataPath; the candidate is Infra's historical receipt 41473133543 sourceRoot plus that path, a fixed path, not a binding and not known to exist. For a separately approved observation only."
     }
   }
 }
