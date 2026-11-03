@@ -51,10 +51,18 @@ index afa87a5..b337029 100644
          }
      }
 diff --git a/quickstep/src/com/android/quickstep/FallbackSwipeHandler.java b/quickstep/src/com/android/quickstep/FallbackSwipeHandler.java
-index 8c46fbd..8afa39a 100644
+index 8c46fbd..1fa6c73 100644
 --- a/quickstep/src/com/android/quickstep/FallbackSwipeHandler.java
 +++ b/quickstep/src/com/android/quickstep/FallbackSwipeHandler.java
-@@ -69,11 +69,15 @@ import com.android.launcher3.states.StateAnimationConfig;
+@@ -16,6 +16,7 @@
+ package com.android.quickstep;
+ 
+ import static android.app.WindowConfiguration.ACTIVITY_TYPE_HOME;
++import static android.app.WindowConfiguration.WINDOWING_MODE_FULLSCREEN;
+ import static android.content.Intent.EXTRA_COMPONENT_NAME;
+ import static android.content.Intent.EXTRA_USER;
+ 
+@@ -69,11 +70,15 @@ import com.android.launcher3.states.StateAnimationConfig;
  import com.android.launcher3.util.MSDLPlayerWrapper;
  import com.android.launcher3.util.ObjectWrapper;
  import com.android.launcher3.util.StableViewInfo;
@@ -70,7 +78,7 @@ index 8c46fbd..8afa39a 100644
  import com.android.quickstep.util.TransformParams;
  import com.android.quickstep.util.TransformParams.BuilderProxy;
  import com.android.quickstep.views.TaskView;
-@@ -112,6 +116,14 @@ public class FallbackSwipeHandler extends
+@@ -112,6 +117,15 @@ public class FallbackSwipeHandler extends
  
      private boolean mAppCanEnterPip;
  
@@ -79,22 +87,25 @@ index 8c46fbd..8afa39a 100644
 +    private final Matrix mRoseMatrix = new Matrix();
 +    private final Rect mRoseCrop = new Rect();
 +    private final float[] mRoseRadius = new float[1];
++    private boolean mRoseAttached;
 +    private final BuilderProxy mRosePreview = (builder, app, params) -> builder.setMatrix(mRoseMatrix)
 +            .setWindowCrop(mRoseCrop).setCornerRadius(mRoseRadius[0]);
 +
      public FallbackSwipeHandler(Context context,
              TaskAnimationManager taskAnimationManager,
              RecentsAnimationDeviceState deviceState,
-@@ -133,6 +145,8 @@ public class FallbackSwipeHandler extends
+@@ -133,6 +147,10 @@ public class FallbackSwipeHandler extends
  
          mRunningOverHome = mGestureState.getRunningTask() != null
                  && mGestureState.getRunningTask().isHomeTask();
-+        mRoseEdge = new RoseEdgeSwipe(context, displayId,
-+                mRunningOverHome || mGestureState.isTrackpadGesture());
++        mRoseEdge = new RoseEdgeSwipe(context, displayId, mGestureState.getTopRunningTaskId(),
++                mGestureState.getSwipeUpStartTimeMs(), mDeviceState.getTouchSlop(),
++                mRunningOverHome || mGestureState.isTrackpadGesture() || continuingLastGesture
++                        || !isRoseFullscreenTask());
          if (mRunningOverHome) {
              runActionOnRemoteHandles(remoteTargetHandle ->
                      remoteTargetHandle.getTransformParams().setHomeBuilderProxy(
-@@ -140,6 +154,63 @@ public class FallbackSwipeHandler extends
+@@ -140,6 +158,74 @@ public class FallbackSwipeHandler extends
          }
      }
  
@@ -102,7 +113,11 @@ index 8c46fbd..8afa39a 100644
 +    @Override
 +    protected GestureEndTarget refineEndTarget(
 +            GestureEndTarget endTarget, boolean isCancel, boolean isMotionPaused) {
-+        if (!mRoseEdge.enabled() || mGestureState.isHandlingAtomicEvent()) {
++        if (!mRoseEdge.enabled()) {
++            return endTarget;
++        }
++        if (mGestureState.isHandlingAtomicEvent()) {
++            mRoseEdge.settled(endTarget == GestureEndTarget.LAST_TASK);
 +            return endTarget;
 +        }
 +        GestureEndTarget refined = endTarget;
@@ -134,10 +149,11 @@ index 8c46fbd..8afa39a 100644
 +            return;
 +        }
 +        GestureEndTarget endTarget = mGestureState.getEndTarget();
-+        boolean attached = hasAttachedToRecents() || endTarget == GestureEndTarget.RECENTS
++        // Once the app attaches to recents it stays on Launcher3's transform for the rest of the gesture.
++        mRoseAttached |= hasAttachedToRecents() || endTarget == GestureEndTarget.RECENTS
 +                || endTarget == GestureEndTarget.NEW_TASK;
-+        if (mDp == null || !mRoseEdge.preview(isRoseGestureNavigation(), isRoseNaturalRotation(), attached,
-+                getCurrentShiftValue() * mTransitionDragLength, mDp.getDeviceProperties().getWidthPx(),
++        if (mDp == null || !mRoseEdge.preview(isRoseGestureNavigation(), isRoseNaturalRotation(), mRoseAttached,
++                mCurrentShift.value * mTransitionDragLength, mDp.getDeviceProperties().getWidthPx(),
 +                mDp.getDeviceProperties().getHeightPx(), mRoseMatrix, mRoseCrop, mRoseRadius)) {
 +            super.applyTargetTransform(taskViewSimulator, transformParams);
 +            return;
@@ -147,6 +163,12 @@ index 8c46fbd..8afa39a 100644
 +
 +    private boolean isRoseGestureNavigation() {
 +        return mDp != null && mDp.getDeviceProperties().getDeviceConfiguration().isGestureMode();
++    }
++
++    private boolean isRoseFullscreenTask() {
++        TaskInfo task = mGestureState.getRunningTask() != null
++                ? mGestureState.getRunningTask().getLegacyBaseTask() : null;
++        return task != null && task.getWindowingMode() == WINDOWING_MODE_FULLSCREEN;
 +    }
 +
 +    private boolean isRoseNaturalRotation() {

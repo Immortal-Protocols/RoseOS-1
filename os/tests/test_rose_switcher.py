@@ -1357,7 +1357,11 @@ EDGE_PINNED = {'AbsSwipeUpHandler.java': '7bd5815f17eed4c5e59cfe323f8f61ad6d3c5b
     'GestureState.java': '3ceb83b87e02cd0505cd7a1aa727aa0d672e3c1fc2d586119346373a485c94cb',
     'TransformParams.java': '22b960e05c9e6c694cbe725329b6ac6234fdccfd396523283055197a6a5d7eb2',
     'SurfaceTransaction.java': 'f5ba9a7c03444b39a6702c944b267ad4c5abd5d88be65897fb9327fb41c7083c',
-    'TaskViewSimulator.java': '61642176403139f131ddfab56a61472cd6e7ff008729a43637210940d4dbb6e6'}
+    'TaskViewSimulator.java': '61642176403139f131ddfab56a61472cd6e7ff008729a43637210940d4dbb6e6',
+    'TopTaskTracker.java': '153de2f4898e8f90ef837b98682152c01124f3028760f49a0319d4a68de1aecc',
+    'RecentsAnimationDeviceState.java': '083299e6b7bec5bbb908566566dcacf2b102d6c19d97bf1932e2e039fdd58388',
+    'RemoteTargetGluer.java': '3ed7539dce2b071f0451ac294088e0a4d09f4d30f008c36ed93d4eb9b6aeab62',
+    'RecentsOrientedState.java': '6c008c0dff701471fa140a59f79eef76ae815950ac709e4acefe039723e3dd83'}
 EDGE_TARGETS = {'AbsSwipeUpHandler.java': f'{QUICKSTEP}/AbsSwipeUpHandler.java',
     'FallbackSwipeHandler.java': f'{QUICKSTEP}/FallbackSwipeHandler.java'}
 
@@ -1409,11 +1413,29 @@ class RoseEdgeSwipePatchTest(unittest.TestCase):
         self.assertEqual(abs_.count('applyTargetTransform(taskViewSimulator, transformParams);'), 1)
         self.assertNotIn('Rose', abs_.replace('RoseOS (#410)', ''), 'no Rose logic in the shared base class')
 
+    def added_blocks(self, name):
+        """The patch's added lines for one file, as text (the '+' stripped)."""
+        text = EDGE_PATCH.read_text()
+        part = text[text.index(f'+++ b/{EDGE_TARGETS[name]}'):]
+        nxt = part.find('\ndiff --git ', 1)
+        part = part if nxt < 0 else part[:nxt]
+        return '\n'.join(l[1:] for l in part.splitlines()[1:] if l.startswith('+'))
+
+    def test_the_fallback_handler_adds_exactly_this(self):
+        """Every line the patch adds to FallbackSwipeHandler, pinned: nothing here is compiled, so the text is the
+        check (a mistake in it would otherwise pass)."""
+        self.patched()
+        added = self.added_blocks('FallbackSwipeHandler.java')
+        expected = (ROOT/'os/tests/fixtures/rose-switcher/rose-edge-fallback-added.txt').read_text()
+        self.assertEqual(added + '\n', expected)
+
     def test_the_fallback_handler_maps_only_its_own_outcomes(self):
         fallback = self.patched()['FallbackSwipeHandler.java']
         refine = fallback[fallback.index('protected GestureEndTarget refineEndTarget('):fallback.index('protected void applyTargetTransform(')]
-        self.assertIn('if (!mRoseEdge.enabled() || mGestureState.isHandlingAtomicEvent()) {\n            return endTarget;',
-            refine, 'switch off (the default): stock end target, nothing else evaluated')
+        self.assertTrue(refine.split('\n')[2:5] == ['        if (!mRoseEdge.enabled()) {',
+            '            return endTarget;', '        }'], 'switch off (the default): stock end target first')
+        self.assertIn('if (mGestureState.isHandlingAtomicEvent()) {\n            mRoseEdge.settled(endTarget == '
+            'GestureEndTarget.LAST_TASK);\n            return endTarget;', refine, 'atomic gestures keep their target but settle')
         self.assertIn('endTarget == GestureEndTarget.HOME, mCurrentDisplacement)', refine)
         self.assertIn('case RoseEdgeGesture.RAISE:\n            case RoseEdgeGesture.STAY:\n'
             '                refined = GestureEndTarget.LAST_TASK;', refine)
@@ -1425,46 +1447,53 @@ class RoseEdgeSwipePatchTest(unittest.TestCase):
             '            super.applyTargetTransform(taskViewSimulator, transformParams);', '            return;', '        }'],
             'switch off (the default): stock transform first, nothing else evaluated')
         self.assertEqual(transform.count('super.applyTargetTransform(taskViewSimulator, transformParams);'), 2)
-        self.assertIn('hasAttachedToRecents() || endTarget == GestureEndTarget.RECENTS\n'
-            '                || endTarget == GestureEndTarget.NEW_TASK', transform, 'the switcher and quick switch stay stock')
-        self.assertIn('mRunningOverHome || mGestureState.isTrackpadGesture()', fallback, 'never over Home or for a trackpad')
+        self.assertIn('mRoseAttached |= hasAttachedToRecents() || endTarget == GestureEndTarget.RECENTS\n'
+            '                || endTarget == GestureEndTarget.NEW_TASK;', transform, 'attachment is latched for the gesture')
+        self.assertIn('mCurrentShift.value * mTransitionDragLength', transform, 'the raw shift, never the magnetic one')
+        self.assertIn('mRunningOverHome || mGestureState.isTrackpadGesture() || continuingLastGesture\n'
+            '                        || !isRoseFullscreenTask()', fallback, 'never over Home, a trackpad, a continued gesture '
+            'or a task that is not full screen')
+        self.assertIn('mGestureState.getSwipeUpStartTimeMs(), mDeviceState.getTouchSlop(),', fallback,
+            'distances and speed count from touch-down')
         self.assertIn('mRemoteTargetHandles.length == 1', fallback, 'one app only: never split screen')
 
     def test_every_launcher3_member_it_uses_is_declared_at_the_pinned_revision(self):
-        src = {name: (FIXTURES/name).read_text() for name in EDGE_PINNED}
-        declared = [('SwipeUpAnimationLogic.java', r'protected float mCurrentDisplacement;'),
-            ('SwipeUpAnimationLogic.java', r'protected int mTransitionDragLength;'),
-            ('SwipeUpAnimationLogic.java', r'protected DeviceProfile mDp;'),
-            ('SwipeUpAnimationLogic.java', r'protected RemoteTargetHandle\[\] mRemoteTargetHandles;'),
-            ('SwipeUpAnimationLogic.java', r'protected final GestureState mGestureState;'),
-            ('AbsSwipeUpHandler.java', r'protected float getCurrentShiftValue\(\)'),
-            ('AbsSwipeUpHandler.java', r'private boolean mIsMotionPaused;'),
-            ('AbsSwipeUpHandler.java', r'private boolean mHasMotionEverBeenPaused;'),
-            ('AbsSwipeUpHandler.java', r'private boolean mIsLikelyToStartNewTask;'),
-            ('AbsSwipeUpHandler.java', r'mDp\.getDeviceProperties\(\)\.getDeviceConfiguration\(\)\.isGestureMode\(\)'),
-            ('GestureState.java', r'public boolean isHandlingAtomicEvent\(\)'),
-            ('GestureState.java', r'public boolean isTrackpadGesture\(\)'),
-            ('GestureState.java', r'public GestureEndTarget getEndTarget\(\)'),
-            ('GestureState.java', r'\bHOME\(true,'), ('GestureState.java', r'\bRECENTS\(true,'),
-            ('GestureState.java', r'\bNEW_TASK\(false,'), ('GestureState.java', r'\bLAST_TASK\(false,'),
-            ('TaskViewSimulator.java', r'public RecentsOrientedState getOrientationState\(\)'),
-            ('TaskViewSimulator.java', r'mOrientationState\.getDisplayRotation\(\)'),
-            ('TaskViewSimulator.java', r'mDp\.getDeviceProperties\(\)\.getWidthPx\(\), mDp\.getDeviceProperties\(\)\.getHeightPx\(\)'),
-            ('TransformParams.java', r'public SurfaceTransaction createSurfaceParams\(BuilderProxy proxy\)'),
-            ('TransformParams.java', r'public void applySurfaceParams\(SurfaceTransaction builder\)'),
-            ('TransformParams.java', r'void onBuildTargetParams\(SurfaceProperties builder,\s+RemoteAnimationTarget app, TransformParams params\);'),
-            ('SurfaceTransaction.java', r'public SurfaceProperties setMatrix\(Matrix matrix\)'),
-            ('SurfaceTransaction.java', r'public SurfaceProperties setWindowCrop\(Rect windowCrop\)'),
-            ('SurfaceTransaction.java', r'public SurfaceProperties setCornerRadius\(float radius\)'),
-            ('FallbackSwipeHandler.java', r'private final boolean mRunningOverHome;'),
-            ('FallbackSwipeHandler.java', r'import android\.graphics\.Rect;'),
-            ('FallbackSwipeHandler.java', r'import android\.view\.Surface;'),
-            ('FallbackSwipeHandler.java', r'import com\.android\.quickstep\.util\.TransformParams\.BuilderProxy;'),
-            ('FallbackSwipeHandler.java', r'int displayId\) \{')]
-        for name, pattern in declared:
-            self.assertRegex(src[name], pattern, f'{name}: {pattern}')
-        self.assertEqual(src['GestureState.java'].count('class GestureState'), 1)
-        self.assertIn('package com.android.quickstep;', src['AbsSwipeUpHandler.java'])
+        """Derived from the patch: every method called and every m-field read on an added line is declared in the
+        pinned sources (or used there the same way), unless the patch or Rose's overlay classes define it."""
+        pinned = '\n'.join((FIXTURES/name).read_text() for name in EDGE_PINNED)
+        overlay = '\n'.join((OVERLAY/f).read_text() for f in ('RoseEdgeSwipe.java', 'RoseEdgeGesture.java', 'RoseEdgeState.java'))
+        added = self.added_blocks('AbsSwipeUpHandler.java') + '\n' + self.added_blocks('FallbackSwipeHandler.java')
+        code = re.sub(r'//[^\n]*', '', re.sub(r'/\*.*?\*/', '', added, flags=re.S))
+        defined = set(re.findall(r'(?:protected|private|public)[^;=(]*?\b(\w+)\s*\(', code))
+        defined |= set(re.findall(r'private (?:final )?[\w\[\]<>]+ (m\w+)', code))
+        rose = set(re.findall(r'public (?:static )?[\w\[\]<>]+ (\w+)\s*\(', overlay))
+        methods = set(re.findall(r'\.(\w+)\(', code)) | set(re.findall(r'(?<![\w.])(\w+)\(', code))
+        keywords = {'if', 'switch', 'return', 'super', 'new', 'RoseEdgeSwipe', 'Matrix', 'Rect'}
+        checked = 0
+        own = {f: (FIXTURES/f).read_text() for f in EDGE_TARGETS}
+        for name in sorted(methods - defined - rose - keywords):
+            declared = re.search(r'(?:public|protected)[^;=(\n]*\b%s\s*\(' % name, pinned) or any(
+                re.search(r'private[^;=(\n]*\b%s\s*\(' % name, own[f]) and f'{name}(' in self.added_blocks(f)
+                for f in own) or any(  # package-private, in the handlers' own package
+                re.search(r'^    (?!private)[\w<>\[\]]+ %s\s*\(' % name, (FIXTURES/f).read_text(), re.M)
+                for f in EDGE_PINNED if 'package com.android.quickstep;' in (FIXTURES/f).read_text())
+            used = re.search(r'\.%s\(' % name, pinned)
+            self.assertTrue(declared or used, f'{name}() is neither declared nor used at the pinned revision')
+            checked += 1
+        for field in sorted(set(re.findall(r'\b(m[A-Z]\w*)', code)) - defined):
+            self.assertRegex(pinned, r'(?:protected|public)?\s*(?:final\s+)?[\w.<>\[\]]+\s+%s\s*[;=]' % field,
+                f'{field} is declared at the pinned revision')
+            checked += 1
+        self.assertGreater(checked, 30)
+        # The two members read from FallbackSwipeHandler's own pinned fields and constructor.
+        fallback = (FIXTURES/'FallbackSwipeHandler.java').read_text()
+        self.assertIn('private final boolean mRunningOverHome;', fallback)
+        self.assertIn('boolean continuingLastGesture,', fallback)
+        for imported in ('import android.app.TaskInfo;', 'import android.view.Surface;', 'import android.graphics.Rect;',
+                'import com.android.quickstep.util.TransformParams.BuilderProxy;'):
+            self.assertIn(imported, fallback, 'already imported by the pinned file')
+        self.assertIn('long getSwipeUpStartTimeMs()', (FIXTURES/'GestureState.java').read_text(),
+            'package-private, and FallbackSwipeHandler is in the same package')
 
     def test_the_overlay_classes_compile_against_the_sdk(self):
         import os
@@ -1490,8 +1519,11 @@ class RoseEdgeSwipePatchTest(unittest.TestCase):
     def test_it_is_off_by_default_and_reaches_nothing_new(self):
         self.assertIn('public static final String PROPERTY = "persist.wm.debug.rose_edge";', self.EDGE_SWIPE)
         self.assertIn('SystemProperties.getBoolean(PROPERTY, false)', self.EDGE_SWIPE)
-        self.assertIn('return enabled && !excluded && gestureNavigation && naturalRotation\n'
-            '                && (keyguard == null || !keyguard.isKeyguardLocked());', self.EDGE_SWIPE)
+        self.assertIn('return enabled && !excluded && gestureNavigation && naturalRotation && RoseEdgeState.hasListener()\n'
+            '                && (keyguard == null || !keyguard.isKeyguardLocked());', self.EDGE_SWIPE,
+            'never without an edge window to draw it')
+        self.assertIn('if (LISTENERS.isEmpty()) return false;', self.EDGE_STATE, 'no raise without a listener')
+        self.assertIn('this.keyguard = enabled ? context.getSystemService(KeyguardManager.class) : null;', self.EDGE_SWIPE)
         for source in (self.EDGE_SWIPE, self.EDGE_STATE):
             code = re.sub(r'//[^\n]*', '', re.sub(r'/\*.*?\*/', '', source, flags=re.S))
             for reach in ('SensorPrivacy', 'AudioManager', 'setMicrophoneMute', 'Binder', 'Intent', 'startActivity',

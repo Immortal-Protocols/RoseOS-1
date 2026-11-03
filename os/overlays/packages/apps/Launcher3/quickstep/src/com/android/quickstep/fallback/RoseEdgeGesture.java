@@ -4,9 +4,10 @@ package com.android.quickstep.fallback;
 /**
  * RoseOS (#410): the bottom-edge swipe-up over an app, as the selected Oxblood HiFi draws it (prototypes/rose-hifi at
  * f6503a0d: app.js "Bottom-edge gestures", oxblood.css "Edge gesture: live tracking" and "Home edge"). Pure logic with
- * no Android types and, for now, no caller: it fixes the release rules and the live preview geometry for Launcher3's
- * swipe handler and its raised-edge window. It is wired in only behind a builder compile of Launcher3 (#410 handoff),
- * so today it changes nothing at runtime.
+ * no Android types: the release rules and the live preview geometry for Launcher3's swipe handler and its raised-edge
+ * window. Its caller is RoseEdgeSwipe, from FallbackSwipeHandler via rose-edge-launcher3.patch; that patch is not
+ * registered in apply-os-changes.py and its switch (persist.wm.debug.rose_edge) defaults off, so today it changes
+ * nothing at runtime.
  *
  * Release over an app (app.js endDrag), distances in dp upward from touch-down, speed averaged over the gesture:
  * - Home: more than HOME_DP, or more than HOME_FAST_DP at more than HOME_FAST_DP_PER_MS.
@@ -52,8 +53,10 @@ public final class RoseEdgeGesture {
     /**
      * The end of a swipe-up released over an app.
      *
-     * @param eligible the edge applies: a task other than Home is in front (Home draws its own edge), the device is
-     *     unlocked, gesture navigation, and the edge is enabled on this display
+     * @param eligible the edge applies: a full-screen task other than Home is in front (Home draws its own edge; a
+     *     Rose surface that runs as an ordinary task counts as an app), the device is unlocked, gesture navigation,
+     *     and the edge is enabled on this display. The reference's pendingStop has no Launcher3 equivalent: a Stop
+     *     confirmation is Home's own UI, so it is dropped here.
      * @param raised the edge is already up on this display
      * @param cancelled the gesture ended in ACTION_CANCEL (another window or the system took it)
      * @param paused Launcher3 detected a motion pause (its switcher rule)
