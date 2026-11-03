@@ -1347,5 +1347,45 @@ class FactoryImportRecovery(unittest.TestCase):
         self.assertNotIn('SYNTHETIC-token', json.dumps(sb.public_receipt(receipt, [b'SYNTHETIC-token'])))
 
 
+class BlazerProfiles(unittest.TestCase):
+    """BLAZER-SIGN: the two Blazer bootstrap profiles exist but are unbound; nothing can run until approvals land."""
+
+    def test_both_profiles_are_unbound_and_refuse_before_anything(self):
+        for name in ('pro-blazer-v1', 'pro-blazer-factory-v1'):
+            with self.subTest(name):
+                self.assertEqual(sb.readiness(name, PROFILES, NOW)[0][0], 'profile-unbound')
+                profile = PROFILES['profiles'][name]
+                self.assertEqual((profile['status'], profile['device']), ('unbound', 'blazer'))
+                self.assertTrue(profile['missing'])
+                self.assertNotIn(name, re.search(r'options: \[none[^\]]*\]', WORKFLOW)[0])  # not a workflow option
+
+    def test_blazer_secrets_are_new_and_distinct(self):
+        profiles = PROFILES['profiles']
+        blazer = {v for n in ('pro-blazer-v1', 'pro-blazer-factory-v1') for v in profiles[n]['secrets'].values()}
+        others = {v for n, p in profiles.items() if not n.startswith('pro-blazer') for v in p['secrets'].values()}
+        self.assertEqual(len(blazer), 4)
+        self.assertFalse(blazer & others)
+        self.assertTrue(all('BLAZER_V1' in v for v in blazer))
+
+    def test_os_profile_reuses_the_reviewed_fold_recipe_and_tools(self):
+        fold, pro = PROFILES['profiles']['fold-rango-v1'], PROFILES['profiles']['pro-blazer-v1']
+        for key in ('generation', 'tools', 'keyInventory', 'archive', 'localProof', 'signer', 'project', 'avbAlgorithm'):
+            self.assertEqual(pro.get(key), fold.get(key), key)
+        self.assertEqual((pro['access']['addVersionExpires'], pro['access']['accessorExpires']), (None, None))
+
+    def test_factory_profile_shape_matches_rango_with_its_own_principal(self):
+        rango, pro = PROFILES['profiles']['fold-rango-factory-v1'], PROFILES['profiles']['pro-blazer-factory-v1']
+        self.assertEqual(pro['principal'], 'roseos-factory-images-blazer-v1')
+        self.assertEqual({k: v for k, v in pro.items() if k not in ('device', 'principal', 'purpose', 'secrets', 'missing')},
+                         {k: v for k, v in rango.items() if k not in ('device', 'principal', 'purpose', 'secrets', 'missing')})
+        ready = copy.deepcopy(PROFILES)
+        profile = ready['profiles']['pro-blazer-factory-v1']
+        profile['status'] = 'resource-bound'
+        profile['tools']['ssh-keygen']['installed'] = {'path': '/opt/synthetic/ssh-keygen', 'sha256': 'a' * 64}
+        profile['access'].update(addVersionExpires='2026-10-30T00:30:00Z', accessorExpires='2026-11-27T21:30:00Z',
+                                 basis='synthetic test readback')
+        self.assertEqual(sb.readiness('pro-blazer-factory-v1', ready, NOW), [])
+
+
 if __name__ == '__main__':
     unittest.main()
