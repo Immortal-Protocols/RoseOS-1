@@ -39,7 +39,13 @@ Preparation stages (never compile, sign, publish or flash; never in the producti
   lunch     --host --lock --source-root ISOLATED
             `lunch blazer-cur-user` and the TARGET_PRODUCT/RELEASE/BUILD_VARIANT/DEVICE checks with OUT_DIR=out-blazer-lunch;
             no make goal
-Build stage (outside preparation, unchanged): compile --host --jobs --lock --source-root --integration-dir --inputs-receipt.
+Build stage (outside preparation): compile --host --jobs --lock --source-root ISOLATED --integration-dir --inputs-receipt
+            `lunch blazer-cur-user && m -jN <makeGoals>` with OUT_DIR=out-blazer-build, PATH=/usr/bin:/bin and GIT_*
+            stripped, in ISOLATED (never the production source root), after the Rose integration admission. Its byte
+            bound is capacity.compileAllowanceBytes, a finite first-build proposal (not a measurement and not a quota):
+            preflight needs available - allowance >= reserve, and while it runs the filesystem's drop in available bytes
+            since start (which counts any other writer on that filesystem too) is sampled against the allowance and
+            available bytes against the reserve; an overrun or compile.timeoutSeconds stops the process group.
 
 Every stage refuses on a symlink in an operator path, a held lock (probed non-blocking, held with LOCK_NB while
 running), an existing output (nothing is deleted, reused or overwritten except the stage's own .part) or available
@@ -78,6 +84,7 @@ import argparse
 import errno
 import fcntl
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -110,6 +117,10 @@ HOST_LABEL = re.compile(r'[a-z0-9][a-z0-9.-]{0,62}')
 CHUNK = 1 << 20
 LUNCH_VARS = ('TARGET_PRODUCT', 'TARGET_RELEASE', 'TARGET_BUILD_VARIANT', 'TARGET_DEVICE')
 SAFE_PATH = '/usr/bin:/bin'
+# Compile's byte bound: a finite first-build proposal; the measure is the drop in the filesystem's available bytes.
+COMPILE_ALLOWANCE_KIND = 'first-build-proposal'
+COMPILE_MEASURE = 'filesystem-available-drop'
+COMPILE_MAX_SECONDS = 43200
 NODE_PATH_DIR = 'node-path'  # inside the vendor stage's own receipt directory
 
 class InvalidInput(Exception):
@@ -183,6 +194,13 @@ def load(path=RECIPE, root=ROOT, probe=True):
         problems.append('capacity.allowanceRequired must be true: there is no isolated-host allowance exception')
     if not isinstance(capacity.get('reserveBytes'), int) or capacity['reserveBytes'] < 322122547200:
         problems.append('capacity.reserveBytes must be at least the 300 GiB reserve')
+    if not positive(capacity.get('compileAllowanceBytes')) or capacity.get('compileAllowanceKind') != COMPILE_ALLOWANCE_KIND:
+        problems.append(f'capacity.compileAllowanceBytes must be a positive finite allowance labelled {COMPILE_ALLOWANCE_KIND} '
+                        '(a first build has no prior measurement to wait for)')
+    build = recipe['compile']
+    if not (positive(build.get('timeoutSeconds')) and build['timeoutSeconds'] <= COMPILE_MAX_SECONDS) \
+            or build.get('measure') != COMPILE_MEASURE:
+        problems.append(f'compile needs a positive timeoutSeconds of at most {COMPILE_MAX_SECONDS} and measure {COMPILE_MEASURE}')
     problems += preparation_problems(recipe, root, contract, probe)
     if problems:
         raise InvalidInput('; '.join(problems))
@@ -313,8 +331,10 @@ def commands(recipe, op, root=ROOT):
             'timeoutSeconds': prep['lunch']['timeoutSeconds']}
         if op['jobs'] is not None:
             make = 'm -j{} {}'.format(op['jobs'], ' '.join(recipe['compile']['makeGoals']))
-            rendered['compile'] = {'cwd': src, 'env': {'OUT_DIR': recipe['compile']['outDir']},
-                'argv': ['bash', '-c', f'source build/envsetup.sh && lunch {recipe["lunch"]} && {make}']}
+            rendered['compile'] = {'cwd': src, 'env': {'OUT_DIR': recipe['compile']['outDir'], 'PATH': SAFE_PATH,
+                                                       'GIT_CEILING_DIRECTORIES': src},
+                'argv': ['bash', '-c', f'source build/envsetup.sh && lunch {recipe["lunch"]} && {make}'],
+                'timeoutSeconds': recipe['compile']['timeoutSeconds']}
     return rendered
 
 def lock_free(path):
@@ -392,11 +412,54 @@ def space(stage, recipe, where, statvfs, facts, problems):
     available = fs.f_bavail * fs.f_frsize
     reserve = recipe['capacity']['reserveBytes']
     facts['capacity'] = {'availableBytes': available, 'reserveBytes': reserve, 'boundBytes': bound,
-        'boundKind': recipe['preparation']['boundsKind'] if stage in PREPARATION else 'measured-allowance'}
+        'boundKind': recipe['preparation']['boundsKind'] if stage in PREPARATION else recipe['capacity']['compileAllowanceKind']}
     if bound is None:
-        problems.append(f'capacity.{stage}AllowanceBytes is unmeasured; compile needs a measured allowance')
+        problems.append(f'capacity.{stage}AllowanceBytes is not set; compile needs a finite allowance')
     elif available - bound < reserve:
         problems.append(f'available {available} minus bound {bound} is below the reserve {reserve}')
+
+def collector():
+    """scripts/rango-collect.py's reviewed collector (no-follow components, one streaming hash per descriptor, ZIP
+    central directory and CRCs, nothing extracted or written), bound to this device's product paths. A private copy of
+    the module is loaded, so rango-collect.py itself and its Rango constants are unchanged."""
+    spec = importlib.util.spec_from_file_location('blazer_collect', ROOT/'scripts/rango-collect.py')
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    product = f'target/product/{DEVICE}'
+    module.DEVICE, module.PRODUCT = DEVICE, product
+    module.FILES = {'vendorBootImage': (f'{product}/vendor_boot.img', 'vendor-boot'),
+                    'vendorKernelBootImage': (f'{product}/vendor_kernel_boot.img', 'vendor-boot'),
+                    'otatools': (module.FILES['otatools'][0], 'otatools')}
+    module.TARGET_FILES_DIR = f'{product}/obj/PACKAGING/target_files_intermediates'
+    module.TARGET_FILES_NAME = re.compile(re.escape(DEVICE) + r'-target_files[A-Za-z0-9._-]*\.zip')
+    return module
+
+def collect_compile_outputs(src, out_dir):
+    """The four make goals' outputs at their fixed paths under SRC/OUT_DIR, each collected (path, size, sha256, format)
+    or named missing/invalid/ambiguous/unreadable; nothing else under OUT_DIR is listed or read."""
+    rc = collector()
+    out = Path(src)/out_dir
+    try:
+        rc.ordinary_dirs(Path(src), [out_dir])
+    except rc.Refused as refused:
+        return {'outDir': str(out), 'verdict': 'incomplete', 'outDirState': refused.state, 'why': str(refused), 'artifacts': {}}
+    artifacts = {}
+    for name, (relative, kind) in rc.FILES.items():
+        try:
+            artifacts[name] = rc.collect_file(out, relative, kind)
+        except rc.Refused as refused:
+            artifacts[name] = {'state': refused.state, 'path': str(out/relative), 'why': str(refused)}
+    try:
+        artifacts['targetFiles'] = rc.collect_target_files(out)
+    except rc.Refused as refused:
+        artifacts['targetFiles'] = {'state': refused.state, 'path': str(out/rc.TARGET_FILES_DIR), 'why': str(refused)}
+    complete = all(a['state'] == 'collected' for a in artifacts.values())
+    return {'outDir': str(out), 'verdict': 'complete' if complete else 'incomplete', 'artifacts': artifacts,
+            'collector': 'scripts/rango-collect.py (bound to blazer paths)', 'signed': False}
+
+def available_bytes(statvfs, where):
+    fs = statvfs(where)
+    return fs.f_bavail * fs.f_frsize
 
 def tree_problems(recipe, src):
     problems = []
@@ -464,7 +527,7 @@ def preflight(recipe, stage, op, statvfs=os.statvfs, lock_probe=lock_free, root=
         problems.append(f'{stage} needs {", ".join("--" + re.sub(r"([A-Z])", lambda m: "-" + m[1].lower(), n) for n in absent)}')
         return {'ready': False, 'problems': problems, 'facts': facts}
     for name in ('sourceRoot', 'downloadDir'):
-        if stage in PREPARATION and op[name] is not None:
+        if (stage in PREPARATION or name == 'sourceRoot') and op[name] is not None:  # compile never runs in production
             reason = isolation_problem(op[name], production)
             if reason:
                 problems.append(f'{name}: {reason}')
@@ -1622,7 +1685,9 @@ def run(recipe, stage, op, receipt_dir, now=time.time, fetcher=fetch, clock=time
         # the tree itself, bounded by GIT_CEILING_DIRECTORIES at the source root.
         env = {**{k: v for k, v in os.environ.items() if k != 'PATH' and not k.startswith('GIT_')}, **command['env']}
         prep, capacity = recipe['preparation'], recipe['capacity']
-        limits = {**prep['limits'], 'boundBytes': prep[stage]['boundBytes'], 'reserveBytes': capacity['reserveBytes']}
+        bound = capacity['compileAllowanceBytes'] if stage == 'compile' else prep[stage]['boundBytes']
+        kind = capacity['compileAllowanceKind'] if stage == 'compile' else prep['boundsKind']
+        limits = {**prep['limits'], 'boundBytes': bound, 'reserveBytes': capacity['reserveBytes']}
         if stage == 'vendor':
             if file_identity(op['node']) != report['facts'].get('node') or node_binding_problem(op['node'], env['PATH']):
                 release_receipts.write_once(receipt_dir/'completed.json', {**base, 'ok': False,
@@ -1648,18 +1713,30 @@ def run(recipe, stage, op, receipt_dir, now=time.time, fetcher=fetch, clock=time
                     'error': 'git -C vendor/adevtool rev-parse HEAD did not print exactly the pinned revision; no genuine '
                              'adevtool version data, so nothing is generated', 'at': stamp(now)})
                 return 1
-        paths = prep['vendor']['collisionPaths'] if stage == 'vendor' else [prep['lunch']['outDir']]
-        watch = [str(op['sourceRoot']/rel) for rel in paths]
+        if stage == 'compile':
+            # Walking a build OUT_DIR every sample would cost more than the build; the drop in the filesystem's available
+            # bytes since start is cheap and conservative (it also counts any other writer on that filesystem).
+            start = available_bytes(statvfs, command['cwd'])
+            watch, measure = [command['cwd']], lambda _path: max(0, start - available_bytes(statvfs, command['cwd']))
+        else:
+            paths = prep['vendor']['collisionPaths'] if stage == 'vendor' else [prep['lunch']['outDir']]
+            watch = [str(op['sourceRoot']/rel) for rel in paths]
         outcome = supervise(command['argv'], command['cwd'], env, command['timeoutSeconds'], limits, watch=watch,
                             capture=stage == 'lunch', statvfs=statvfs, measure=measure, clock=clock, sleep=sleep)
         stdout = outcome.pop('stdout', '')
-        outcome.update(boundBytes=limits['boundBytes'], boundKind=prep['boundsKind'])
+        outcome.update(boundBytes=limits['boundBytes'], boundKind=kind)
         ok = outcome['returncode'] == 0 and not outcome['stopped']
         if outcome['stopped']:
             outcome['error'] = f'stopped: {outcome["stopped"]} (outputs are kept, not deleted)'
         elif outcome['consumedBytes'] > limits['boundBytes']:
             ok, outcome['error'] = False, (f'consumed {outcome["consumedBytes"]} bytes, above the {limits["boundBytes"]}-byte '
                                            'bound between samples (outputs are kept, not deleted)')
+        if stage == 'compile':
+            outcome.update(measure=COMPILE_MEASURE, startAvailableBytes=start, outDir=recipe['compile']['outDir'])
+            if ok:  # Signing's inputs: the unsigned target-files and otatools (and the vendor boot images), hashed
+                outcome['outputs'] = collect_compile_outputs(op['sourceRoot'], recipe['compile']['outDir'])
+                if outcome['outputs']['verdict'] != 'complete':
+                    ok, outcome['error'] = False, 'make exited 0 but the expected outputs are not all collected'
         if stage == 'vendor':
             outcome['node'] = report['facts']['node']
             outcome['adevtoolHead'] = want.strip()

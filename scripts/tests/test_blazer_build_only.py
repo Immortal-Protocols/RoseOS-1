@@ -194,7 +194,9 @@ class RecipeTest(Fixture):
         preflight.loader.exec_module(module)
         self.assertEqual(prep['vendor']['node']['minMajor'], module.NODE_MIN_MAJOR)
         self.assertNotIn('generateAllowanceBytes', recipe['capacity'], 'the circular measured-allowance gate is removed')
-        self.assertEqual(recipe['capacity']['compileAllowanceBytes'], None)
+        self.assertEqual((recipe['capacity']['compileAllowanceBytes'], recipe['capacity']['compileAllowanceKind']),
+                         (250 << 30, 'first-build-proposal'), 'a finite first-build allowance, no prior measurement gate')
+        self.assertEqual((recipe['compile']['timeoutSeconds'], recipe['compile']['measure']), (28800, 'filesystem-available-drop'))
         self.assertNotIn('host', recipe, 'the recipe binds no host; the operator supplies it')
         for absent in ('S007', 'S008', 'peak'):
             self.assertNotIn(absent, json.dumps(recipe))
@@ -223,7 +225,9 @@ class RecipeTest(Fixture):
             ' && echo TARGET_RELEASE=$TARGET_RELEASE && echo TARGET_BUILD_VARIANT=$TARGET_BUILD_VARIANT'
             ' && echo TARGET_DEVICE=$(get_build_var TARGET_DEVICE)')
         self.assertNotIn(' m ', rendered['lunch']['argv'][2] + ' ')
-        self.assertEqual(rendered['compile']['env'], {'OUT_DIR': 'out-blazer-build'})
+        self.assertEqual(rendered['compile'], {'cwd': str(self.src), 'env': {'OUT_DIR': 'out-blazer-build', 'PATH': '/usr/bin:/bin',
+            'GIT_CEILING_DIRECTORIES': str(self.src)}, 'argv': ['bash', '-c', 'source build/envsetup.sh && lunch blazer-cur-user'
+            ' && m -j16 vendorbootimage vendorkernelbootimage target-files-package otatools-package'], 'timeoutSeconds': 28800})
 
     def test_drifted_recipes_are_refused(self):
         for change, pattern in (
@@ -235,6 +239,13 @@ class RecipeTest(Fixture):
             (lambda r: r['capacity'].update(reserveBytes=1), '300 GiB'),
             (lambda r: r['preparation'].update(boundsKind='measured'), 'labelled proposal'),
             (lambda r: r['preparation'].update(stages=['download', 'vendor', 'lunch', 'compile']), 'preparation.stages'),
+            (lambda r: r['capacity'].update(compileAllowanceBytes=None), 'positive finite allowance'),
+            (lambda r: r['capacity'].update(compileAllowanceBytes=0), 'positive finite allowance'),
+            (lambda r: r['capacity'].update(compileAllowanceKind='measured'), 'positive finite allowance'),
+            (lambda r: r['capacity'].pop('compileAllowanceKind'), 'positive finite allowance'),
+            (lambda r: r['compile'].update(timeoutSeconds=0), 'compile needs a positive timeoutSeconds'),
+            (lambda r: r['compile'].update(timeoutSeconds=43201), 'compile needs a positive timeoutSeconds'),
+            (lambda r: r['compile'].update(measure='out-dir-walk'), 'compile needs a positive timeoutSeconds'),
             (lambda r: r['preparation']['vendor'].update(boundBytes=0), 'preparation.vendor needs a positive boundBytes'),
             (lambda r: r['preparation']['download'].update(timeoutSeconds=None), 'preparation.download needs'),
             (lambda r: r['preparation']['vendor'].update(collisionPaths=['vendor/google_devices/blazer']), 'collisionPaths'),
@@ -2290,11 +2301,124 @@ class RunTest(Fixture):
         with self.assertRaisesRegex(bb.InvalidInput, 'already exists'):
             bb.run(self.synthetic, 'vendor', self.op(), self.tmp/'r1', root=self.root)
 
-    def test_compile_still_needs_a_measured_allowance(self):
+    def test_the_checked_in_first_build_allowance_admits_exactly_reserve_plus_allowance(self):
         self.generated()
-        report = bb.preflight(self.recipe, 'compile', self.op(integration_dir=str(self.integrated())), statvfs=fs(10 ** 15),
-            lock_probe=lambda path: True)
-        self.assertIn('compileAllowanceBytes is unmeasured', ' '.join(report['problems']))
+        receipts = self.integrated()
+        need = self.recipe['capacity']['reserveBytes'] + self.recipe['capacity']['compileAllowanceBytes']
+        for available, admitted in ((need, True), (need - 1, False)):
+            report = bb.preflight(self.recipe, 'compile', self.op(integration_dir=str(receipts)), statvfs=fs(available),
+                                  lock_probe=lambda path: True)
+            space = [p for p in report['problems'] if 'reserve' in p]
+            self.assertEqual(not space, admitted, report['problems'])
+            self.assertEqual((report['facts']['capacity']['boundBytes'], report['facts']['capacity']['boundKind']),
+                             (250 << 30, 'first-build-proposal'))
+
+class CompileRunTest(Fixture):
+    def envsetup(self, make='mkdir -p "$OUT_DIR"; echo "$@" > "$OUT_DIR/goals"'):
+        (self.src/'build').mkdir(exist_ok=True)
+        (self.src/'build/envsetup.sh').write_text(f"""lunch() {{ export TARGET_PRODUCT=blazer; }}
+m() {{ env | grep '^GIT_' | sort > {str(self.tmp/'compile-git-env')!r}; echo "$PATH" > {str(self.tmp/'compile-path')!r}; {make}; }}
+""")
+
+    def compile(self, recipe=None, statvfs=None, out='r', **change):
+        if not (self.src/'vendor/google_devices/blazer').exists():
+            self.generated()
+        if not hasattr(self, 'receipts'):
+            self.receipts = self.integrated()
+        receipts = self.receipts
+        code = bb.run(recipe or self.synthetic, 'compile', self.op(integration_dir=str(receipts), **change), self.tmp/out,
+                      now=lambda: 0, statvfs=statvfs or fs(10 ** 15), lock_probe=lambda path: True, root=self.root)
+        done = self.tmp/out/'completed.json'
+        return code, (json.loads(done.read_text()) if done.exists() else None), json.loads((self.tmp/out/'preflight.json').read_text())
+
+    OUTPUTS = ('p=$OUT_DIR/target/product/blazer; h=$OUT_DIR/host/linux-x86/obj/ETC/otatools-packagelinux_glibc_x86_64_intermediates; '
+               'mkdir -p $p/obj/PACKAGING/target_files_intermediates $h; printf VNDRBOOT > $p/vendor_boot.img; '
+               'printf VNDRBOOT > $p/vendor_kernel_boot.img; '
+               'python3 -c "import zipfile,sys; z=zipfile.ZipFile(sys.argv[1],\'w\'); [z.writestr(n,\'x\') for n in sys.argv[2:]]" '
+               '$h/otatools-packagelinux_glibc_x86_64 bin/x releasetools/y; '
+               'python3 -c "import zipfile,sys; z=zipfile.ZipFile(sys.argv[1],\'w\'); [z.writestr(n,\'x\') for n in sys.argv[2:]]" '
+               '$p/obj/PACKAGING/target_files_intermediates/blazer-target_files.zip META/misc_info.txt SYSTEM/build.prop')
+
+    def test_compile_collects_signing_inputs_and_refuses_missing_outputs(self):
+        self.envsetup(self.OUTPUTS)
+        code, done, _ = self.compile()
+        self.assertEqual((code, done['ok'], done['outputs']['verdict'], done['outputs']['signed']), (0, True, 'complete', False), done)
+        arts = done['outputs']['artifacts']
+        tf = self.src/'out-blazer-build/target/product/blazer/obj/PACKAGING/target_files_intermediates/blazer-target_files.zip'
+        self.assertEqual((arts['targetFiles']['path'], arts['targetFiles']['sha256']),
+                         (str(tf), hashlib.sha256(tf.read_bytes()).hexdigest()))
+        self.assertEqual({k: a['state'] for k, a in arts.items()}, dict.fromkeys(
+            ('vendorBootImage', 'vendorKernelBootImage', 'otatools', 'targetFiles'), 'collected'))
+        self.assertEqual(arts['otatools']['format'], 'zip')
+        tf.unlink()
+        shutil.rmtree(self.src/'out-blazer-build/target/product/blazer/obj')
+        (self.src/'out-blazer-build').rename(self.tmp/'kept-out')
+        self.envsetup(self.OUTPUTS + '; rm $p/obj/PACKAGING/target_files_intermediates/blazer-target_files.zip')
+        code, done, _ = self.compile(out='r2')
+        self.assertEqual((code, done['ok'], done['outputs']['artifacts']['targetFiles']['state']), (1, False, 'missing'))
+        self.assertIn('expected outputs are not all collected', done['error'])
+
+    def test_compile_runs_isolated_with_its_goals_and_records_the_honest_measure(self):
+        self.envsetup(self.OUTPUTS + '; echo "$@" > "$OUT_DIR/goals"')
+        self.generated()
+        self.receipts = self.integrated()
+        # An inherited GIT_* (an inherited GIT_DIR would also redirect the integration check's own lookup of this
+        # checkout, which then refuses) never reaches the build.
+        os.environ['GIT_INHERITED_BY_THE_HELPER'] = '1'
+        self.addCleanup(os.environ.pop, 'GIT_INHERITED_BY_THE_HELPER', None)
+        code, done, report = self.compile()
+        self.assertEqual(report['problems'], [])
+        self.assertEqual((code, done['ok'], done['stopped'], done['signed'], done['releaseReady']), (0, True, None, False, False), done)
+        self.assertEqual((self.src/'out-blazer-build/goals').read_text(),
+                         '-j16 vendorbootimage vendorkernelbootimage target-files-package otatools-package\n')
+        self.assertEqual((self.tmp/'compile-git-env').read_text(), f'GIT_CEILING_DIRECTORIES={self.src}\n')
+        self.assertEqual((self.tmp/'compile-path').read_text(), '/usr/bin:/bin\n')
+        self.assertEqual((done['boundBytes'], done['boundKind'], done['measure'], done['enforcement'], done['outDir']),
+                         (10, 'first-build-proposal', 'filesystem-available-drop', 'sampled-stop', 'out-blazer-build'))
+        self.assertEqual((done['startAvailableBytes'], done['consumedBytes']), (10 ** 15, 0))
+
+    def test_the_allowance_reserve_and_timeout_stop_the_build_and_keep_outputs(self):
+        self.envsetup('mkdir -p "$OUT_DIR"; touch "$OUT_DIR/partial"; sleep 30')
+        calls = []
+        def shrinking(path):
+            calls.append(path)
+            return types.SimpleNamespace(f_bavail=10 ** 15 - 100 * (len(calls) - 1), f_frsize=1, f_blocks=2 * 10 ** 15)
+        started = time.monotonic()
+        code, done, _ = self.compile(statvfs=shrinking)
+        self.assertLess(time.monotonic() - started, 20, 'the sampled stop ends the group long before the child would')
+        self.assertEqual((code, done['ok']), (1, False))
+        self.assertIn('above the 10-byte bound', done['stopped'])
+        self.assertIn('outputs are kept, not deleted', done['error'])
+        self.assertTrue((self.src/'out-blazer-build/partial').exists())
+        # Admission needs reserve + allowance free, so a drop below the reserve normally trips the allowance first; the
+        # reserve stop matters when another writer took space between preflight and start.
+        roomy = json.loads(json.dumps(self.synthetic))
+        roomy['capacity']['compileAllowanceBytes'] = 10 ** 6
+        reserve = roomy['capacity']['reserveBytes']
+        falling = iter([reserve + 10 ** 7, reserve + 5] + [reserve - 1] * 10 ** 6)
+        shutil.rmtree(self.src/'out-blazer-build')
+        code, done, _ = self.compile(recipe=roomy, out='r2', statvfs=lambda path: types.SimpleNamespace(
+            f_bavail=next(falling), f_frsize=1, f_blocks=2 * 10 ** 15))
+        self.assertEqual(code, 1)
+        self.assertIn('fell below the reserve', done['stopped'])
+        self.assertEqual(done['startAvailableBytes'], reserve + 5)
+        brief = json.loads(json.dumps(self.synthetic))
+        brief['compile']['timeoutSeconds'] = 1
+        shutil.rmtree(self.src/'out-blazer-build')
+        code, done, _ = self.compile(recipe=brief, out='r3')
+        self.assertEqual((code, done['stopped']), (1, 'exceeded 1 s'))
+
+    def test_compile_never_runs_in_the_production_tree_or_on_a_full_filesystem(self):
+        self.envsetup()
+        code, done, report = self.compile(source_root=str(self.production))
+        self.assertEqual((code, done), (1, None), 'refused before any process starts')
+        self.assertIn('production source root', ' '.join(report['problems']))
+        self.assertFalse((self.production/'out-blazer-build').exists())
+        tight = self.synthetic['capacity']['reserveBytes'] + self.synthetic['capacity']['compileAllowanceBytes'] - 1
+        code, done, report = self.compile(statvfs=fs(tight), out='r2')
+        self.assertEqual((code, done), (1, None))
+        self.assertIn('below the reserve', ' '.join(report['problems']))
+        self.assertFalse((self.src/'out-blazer-build').exists())
 
 if __name__ == '__main__':
     unittest.main()

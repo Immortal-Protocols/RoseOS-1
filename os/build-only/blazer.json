@@ -35,7 +35,10 @@
       "target-files-package",
       "otatools-package"
     ],
-    "maxJobs": 256
+    "maxJobs": 256,
+    "timeoutSeconds": 28800,
+    "measure": "filesystem-available-drop",
+    "basis": "First-build proposal, not a measurement: 8 h is a cap on one compile of the four make goals on the operator's builder, with SIGTERM then SIGKILL of the process group at the cap; actual duration is unmeasured. Outputs are kept on any stop. The tree must be isolated from the production source root and carry the admitted Rose integration; compile neither signs nor packages."
   },
   "adevtool": {
     "depsDir": "out_adevtool_deps",
@@ -69,8 +72,9 @@
   "capacity": {
     "reserveBytes": 322122547200,
     "allowanceRequired": true,
-    "compileAllowanceBytes": null,
-    "basis": "available - bound >= reserve on the filesystem each stage writes. Preparation stages use the explicit proposal bounds in preparation.*.boundBytes. compile (outside preparation) still needs a measured compileAllowanceBytes, which is null."
+    "compileAllowanceBytes": 268435456000,
+    "compileAllowanceKind": "first-build-proposal",
+    "basis": "available - bound >= reserve on the filesystem each stage writes. Preparation stages use the explicit proposal bounds in preparation.*.boundBytes. compile uses compileAllowanceBytes, a finite first-build proposal of 250 GiB (268435456000 bytes): no measurement of this tree's OUT_DIR exists, and a first build cannot wait for one, so the allowance is reviewed rather than measured. It is admission headroom and a sampled stop, never a quota: preflight needs available - 250 GiB >= the 300 GiB reserve (550 GiB free on the source tree's filesystem), and while compile runs the drop in available bytes since start (which also counts any other writer on that filesystem) is sampled against 250 GiB and available bytes against the reserve. Writes between samples can overshoot. An allowance that proves too small stops the build, keeps its outputs and is revised from that run's receipt."
   },
   "preparation": {
     "stages": [
