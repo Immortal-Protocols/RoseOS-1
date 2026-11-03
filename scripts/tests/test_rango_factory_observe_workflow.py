@@ -68,7 +68,7 @@ class Guard(unittest.TestCase):
                 self.assertNotEqual(self.run_branch(**change), 0)
 
     def test_mode_is_manual_selectable_and_checked_before_the_controller(self):
-        self.assertIn(f', emulator-alpha-export, {MODE}]\n', WORKFLOW)
+        self.assertIn(f', emulator-alpha-export, {MODE}, launcher3-compile]\n', WORKFLOW)
         self.assertEqual(re.findall(r'(?m)^  (\w+):\n', WORKFLOW.split('\npermissions:', 1)[0].split('\non:\n', 1)[1]), ['workflow_dispatch'])
         guard = jobs()['guard']
         check = step(guard, 'Rango factory observation check')
