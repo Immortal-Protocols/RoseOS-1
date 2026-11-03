@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "kind": "rose-blazer-integrate-host",
-  "basis": "BLAZER-INTEGRATE workflow binding (Release-owned): the operator inputs that os-release.yml mode blazer-integrate chains through, in order: a re-hash of the two tools, scripts/blazer-allocate.py reserve (a fresh collision-checked blazer build under the shared lock, whose reservation derives the new work and reconcile directories), scripts/blazer-reconcile-seed.py seed, scripts/blazer-candidate-bundle.py assemble, scripts/blazer_integration.py admit and render (Flavors) and the rendered host-reconcile.py apply, on the blazer-prep isolated work tree (sourceRootFrom) after git-meta. The Frankel receipt directory, lock and source root come by pointer from their committed sources; no build number or work directory is committed. EXPECTED identities (Chief and Infra, 2026-11-03), never observed current state, each re-verified at execution and refused on any mismatch: sourceRun 41554911849 and sourceInventory (source.selection.tsv beside the copy, 308692830 bytes, sha256 3c0f9af1...), re-hashed by seed; aapt.path, the configured SDK tool, which may sit inside the production source root only below prebuilts/sdk/ because it is executed and hashed, never written. Null until verified and committed: aapt.sha256, apksigner path and sha256, appsDir and policy (the already-signed Rose APKs with their sign-apk receipts and the background policy). While any is null the hosted check exits 4 before the controller. Nothing here was read from or run on any host.",
+  "basis": "BLAZER-INTEGRATE workflow binding (Release-owned): the operator inputs that os-release.yml mode blazer-integrate chains through, in order: a re-hash of the tools and their dependencies, a re-hash of the signed app inputs, scripts/blazer-allocate.py reserve (a fresh collision-checked blazer build under the shared lock, whose reservation derives the new work and reconcile directories), scripts/blazer-reconcile-seed.py seed, scripts/blazer-candidate-bundle.py assemble, scripts/blazer_integration.py admit and render (Flavors) and the rendered host-reconcile.py apply, on the blazer-prep isolated work tree (sourceRootFrom) after git-meta. The Frankel receipt directory, lock and source root come by pointer from their committed sources; no build number or work directory is committed. EXPECTED identities, never observed current state, each re-verified at execution and refused on any mismatch: sourceRun 41554911849 and sourceInventory (Chief and Infra, re-hashed by seed); and every path and sha256 of appsDir, policy, inputDigests, aapt, apksigner and toolDependencies, taken byte for byte from the report of the original Infra binding-observe run named in observation (complete, shared lock held, no problems; the report file's own sha256 and the artifact ZIP sha256 recorded there). toolDependencies are what the apksigner wrapper executes (host-sdk-layout.py): its lib/apksigner.jar and the source root's prebuilts/jdk/jdk21 java, both read-only and only hashed. The read-only SDK tools may sit inside the production source root only below prebuilts/sdk/ (aapt) or at the exact JDK java path. A measurement is the state at observation time only; the run re-hashes every one before anything is allocated. Nothing here was read from or run on any host by Release.",
   "host": "immortal-os-builder",
   "lockFrom": "os/release-pipeline/frankel.json host.lockPath",
   "sourceRootFrom": "os/build-only/blazer-prep-host.json sourceRoot",
@@ -12,14 +12,44 @@
     "path": "/home/pixelbuild/rose-actions/blazer-prep-41473133543-1/source.selection.tsv",
     "sha256": "3c0f9af1cf2f931a6a6c238dc9297223730ca1477d8473b0853f72e2ad388c7d"
   },
-  "appsDir": null,
-  "policy": null,
+  "appsDir": "/home/pixelbuild/rose-actions/frankel-2026110301/release/signed-apps",
+  "policy": "/home/pixelbuild/rose-actions/frankel-2026110301/release/background-policy.json",
   "aapt": {
     "path": "/home/pixelbuild/grapheneos-2026100600/prebuilts/sdk/tools/linux/bin/aapt",
-    "sha256": null
+    "sha256": "6e43aa75c63424213fb9131874cacc5eefd5f0a2f4e9e23453e43fca512352f8"
   },
   "apksigner": {
-    "path": null,
-    "sha256": null
+    "path": "/home/pixelbuild/rose-actions/tools/android-sdk/build-tools/android-15/apksigner",
+    "sha256": "e709257e0d955c26a41356985ae1624615116b77cebe0344aa0d9e3263475e5c"
+  },
+  "inputDigests": {
+    "policy": "4680a93fe2f3ac51201babf6c8e8077d6ba604ca576baebd23260fc43f897036",
+    "apps": {
+      "dev.pixel.backgroundcontrol.apk": "118f84654fba7a1ed91a503b4afde9be4dc1c0da41263d01fcc44b093ebdc7d0",
+      "dev.pixel.calculator.agent.apk": "5b4d85576ec8d93551e9bbb6917db519cfcdd3416fb5e6df37b709d3d1ece1eb",
+      "dev.pixel.voice.apk": "53e98e7c861011b7c1d99389823cfca67ebd604082726f2f10fb08dd22a4c78b",
+      "dev.pixel.backgroundcontrol.receipt.json": "2b250c694d113805a16144b2ea5903f485d8aab9a2398a730d78ef33a3d8087e",
+      "dev.pixel.calculator.agent.receipt.json": "eebc70a2102ec284313f1408c5fc4871743a39bb44cd2ed25cafe2a1a7854fe0",
+      "dev.pixel.voice.receipt.json": "7b0f59a4c19869eadd66bd861a35720745f30702fd0599b01763180e2dd8c958"
+    }
+  },
+  "toolDependencies": {
+    "apksigner.jar": {
+      "path": "/home/pixelbuild/rose-actions/tools/android-sdk/build-tools/android-15/lib/apksigner.jar",
+      "sha256": "00ef9948f843fe395d2440ae3ef41405b8040a6d5d46493bd1902ac0ee6deae7"
+    },
+    "java": {
+      "path": "/home/pixelbuild/grapheneos-2026100600/prebuilts/jdk/jdk21/linux-x86/bin/java",
+      "sha256": "cfa21aeadd00925925c9e1287f5c08f3e04ee7f26a9e23d9dbfb16149153d842"
+    }
+  },
+  "observation": {
+    "run": "41656426913",
+    "runAttempt": "1",
+    "source": "cf3b60e5ab83e2d9b9f5419239b35a9c8bbf3b73",
+    "artifact": "13239462248",
+    "artifactZipSha256": "cf3dc9838ac756c57d8f6ca44aaef99fe410a95cd4ea0740f645d6b0483b223d",
+    "report": "binding-observation.json",
+    "reportSha256": "27cd95ff76f94913c8d5b227312c0218ba937ff65134ca07b4881207e543e577"
   }
 }
