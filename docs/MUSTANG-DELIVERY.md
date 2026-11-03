@@ -52,7 +52,7 @@ AVB metadata, dynamic-content comparison or separate archive-signature check is
 performed. On failure, partial nonsecret packaging work remains named in its
 receipt. On success, temporary packaging work is removed.
 
-`mustang-delivery.yml` separates bootstrap, signer, credential-free packager,
+The proposed `os-release.yml` Mustang modes separate bootstrap, signer, credential-free packager,
 private upload, hosted download/checksum verification and ownership-aware STOP.
 It uses the same non-cancelling shared FIFO and original builder. The hosted
 provenance guard refuses while the Mustang profile is unbound. The installer,
@@ -60,11 +60,24 @@ notes, receipt and checksums are private Actions artifacts retained seven days.
 The final receipt records the actual private URL, API-reported expiry, sizes and
 verified delivered-download checksums. No public release or phone action exists.
 
-`mustang-candidate.yml operation=diagnose-access` checks only the **same
-controller token exchange** and prints fixed diagnostic categories. It makes
-zero compute requests and changes no IAM. It exists to distinguish the failed
-controller’s authentication from an unobserved VM permission issue, without
-retrying `instances describe` or choosing another controller identity.
+The authentication-only diagnostic
+[41713153197](https://github.com/Immortal-Protocols/RoseOS-1/actions/runs/41713153197)
+confirmed **attributeConditionDenied** for the new workflow context, with zero
+compute requests or IAM changes. The configured admin could not describe that
+provider condition, so its exact allowlist is unknown and unchanged. The two
+new workflow entry files are removed by the proposed established-route patch;
+Git history and run evidence remain intact.
+
+The reviewable correction wires `mustang-build`, `mustang-bootstrap` and
+`mustang-delivery` into the existing `os-release.yml` controller, shared FIFO and
+cleanup route. Producer provenance then requires that same workflow and a
+Mustang-specific run title. It changes no WIF/provider/service-account binding.
+The normal default Frankel/public-release modes remain unchanged; the three
+Mustang modes pin their own device and never enter the Frankel publisher.
+The normal `device` selector remains Frankel for shared infrastructure admission;
+actual Mustang inputs, compilation and signing are explicitly Mustang-bound.
+No runtime retry through the corrected route is made until Nathan resolves the
+route decision required by the plan’s no-alternate-route-after-denial bound.
 
 ## Concrete remaining authorization and bindings
 
@@ -78,9 +91,9 @@ most four hours after action time: that existing bootstrap role and
 `roles/secretmanager.secretAccessor` on **each of the two Mustang containers
 only**, for `roseos-build-signer@protocols-465723.iam.gserviceaccount.com`.
 `mustang-signing-setup.py binding-plan --expires-at <UTC>` renders the exact
-commands but performs no IAM mutation. New signer grants and generation/import
-of a persistent Mustang OS key set require explicit action-time authorization;
-the operator transfer does not authorize them. No creator payload/list access
+commands but performs no IAM mutation. Nathan has explicitly approved those four-hour grants and one journaled
+Mustang key bootstrap. The grants are held until controller access is resolved
+so the window is not wasted. The operator transfer alone did not authorize them. No creator payload/list access
 or project-wide grant is proposed.
 
 Once controller access is resolved and the setup is approved, the profile can
