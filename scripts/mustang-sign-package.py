@@ -25,6 +25,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT/'scripts'))
 import host_secrets
 import release_receipts
+import mustang_collection
 
 PROFILE = 'pro-mustang-v1'
 PROJECT = 'protocols-465723'
@@ -62,38 +63,73 @@ def source_sha():
     return subprocess.check_output(['git','-C',str(ROOT),'rev-parse','HEAD'],text=True).strip()
 
 
+def collect(compile_receipt,run_id,attempt):
+    """Read-only collection before signer login; never retry make or edit its original receipts."""
+    if (run_id,attempt)!=(os.environ.get('GITHUB_RUN_ID'),os.environ.get('GITHUB_RUN_ATTEMPT')):
+        raise ValueError('collection must name this workflow run/attempt')
+    value,source,build,epoch,recovery=mustang_collection.admit(compile_receipt,os.environ)
+    out=run_root('collect',run_id,attempt)
+    if out.exists() or out.is_symlink():raise ValueError('collection attempt exists; no automatic retry')
+    out.mkdir(mode=0o700)
+    report={'schema':'roseos.mustang-compile-collection.v1','status':'failed','device':'mustang',
+        'runId':run_id,'runAttempt':attempt,'collectorSource':source_sha(),'compileSource':value['source'],
+        'compileRunId':value['runId'],'build':build,'candidateReceiptSha256':digest(compile_receipt),
+        'candidate':value,'collectionRecovery':recovery,'originalWorkflowConclusion':'failure' if recovery else 'success',
+        'makeReturncode':value['stages']['compile']['result']['returncode'],'label':LABEL,
+        'omittedChecks':value['omittedChecks'],'originalReceiptsModified':False,'makeRerun':False}
+    try:
+        hp=module('mustang_factory_host','host-factory-package.py')
+        adapter=module('mustang_output_collection','mustang-build-only.py')
+        with hp.shared_lock(LOCK):
+            if read(source.parent/'allocation.json')!=value['allocation']:
+                raise ValueError('retained allocation differs from its producer receipt')
+            if (source/'releases'/build).exists():
+                raise ValueError('release workspace already exists; no automatic signing resume')
+            outputs=adapter.collect_outputs(source,f'out-mustang-build-{build}')
+            report['outputs']=outputs
+            if outputs['verdict']!='complete' or outputs['actualBuildIdentity']!={'device':'mustang','build':build,'timestamp':epoch}:
+                raise ValueError('actual Mustang output set or build identity incomplete')
+            for role,old in value['stages']['compile']['result']['outputs']['artifacts'].items():
+                if old.get('state')=='collected' and outputs['artifacts'].get(role)!=old:
+                    raise ValueError('preserved compile output changed during collection')
+        report['status']='complete'
+        path=out/'compile-collection.json'
+        if os.environ.get('GITHUB_OUTPUT'):
+            with open(os.environ['GITHUB_OUTPUT'],'a') as f:f.write(f'collection_receipt={path}\n')
+        return report
+    except BaseException as error:
+        report['error']=f'{type(error).__name__}: {error}'
+        raise
+    finally:
+        release_receipts.write_once(out/'compile-collection.json',report)
+        print(json.dumps({'collectionReceipt':str(out/'compile-collection.json'),'status':report['status'],
+                          'collectionRecovery':recovery}))
+
+
 def compile_binding(path):
-    value=read(path)
-    if value.get('schema')!='roseos.mustang-candidate-run.v1' or value.get('device')!='mustang' \
-            or value.get('unsignedCompileComplete') is not True or value.get('failedStage'):
-        raise ValueError('completed Mustang compile receipt required')
-    if not re.fullmatch(r'[0-9a-f]{40}',str(value.get('source'))):raise ValueError('compile source SHA absent')
-    if value['source']!=os.environ.get('EXPECTED_COMPILE_SOURCE') \
-            or str(value.get('runId'))!=os.environ.get('EXPECTED_COMPILE_RUN') or str(value.get('runAttempt'))!='1':
-        raise ValueError('compile receipt differs from the hosted producer-run binding')
-    allocation=value['allocation'];build=allocation['build']
-    if not re.fullmatch(r'[1-9][0-9]{9}',str(build)) or allocation.get('device')!='mustang' \
-            or allocation.get('source')!=value['source']:
-        raise ValueError('allocation/source/device binding differs')
-    source=run_root('prep',value['runId'],value['runAttempt'])/'source'
-    if value['root']!=str(source.parent):raise ValueError('foreign source root')
-    result=value['stages']['compile']['result']
-    if result.get('ok') is not True or result.get('device')!='mustang' or result['outputs']['verdict']!='complete':
-        raise ValueError('actual compile output receipt incomplete')
-    identity=result['outputs']['actualBuildIdentity']
-    epoch=str(int(datetime.datetime.strptime(allocation['reservedAt'],'%Y-%m-%dT%H:%M:%SZ')
-                  .replace(tzinfo=datetime.timezone.utc).timestamp()))
-    if identity!={'device':'mustang','build':build,'timestamp':epoch}:raise ValueError('compiled build identity differs')
-    for role,relative in [('targetFiles',None),('otatools','host/linux-x86/otatools.zip')]:
-        row=result['outputs']['artifacts'][role]
-        path=Path(row['path'])
-        out=source/f'out-mustang-build-{build}'
-        if out not in path.parents or path.is_symlink() or not path.is_file():raise ValueError('compiled output unavailable')
-        if relative and path!=out/relative:raise ValueError('foreign otatools path')
-        # These are produced outputs, whose hashes remain required in the reduced plan.
-        if path.stat().st_size!=row['sizeBytes'] or digest(path)!=row['sha256']:
+    value,source,build,epoch,recovery=mustang_collection.admit(path,os.environ)
+    collection=read(run_root('collect',os.environ['GITHUB_RUN_ID'],os.environ['GITHUB_RUN_ATTEMPT'])/'compile-collection.json')
+    if collection.get('schema')!='roseos.mustang-compile-collection.v1' or collection.get('status')!='complete' \
+            or collection.get('collectorSource')!=source_sha() or collection.get('runId')!=os.environ['GITHUB_RUN_ID'] \
+            or str(collection.get('runAttempt'))!=os.environ['GITHUB_RUN_ATTEMPT'] \
+            or collection.get('candidateReceiptSha256')!=digest(path) or collection.get('candidate')!=value \
+            or collection.get('collectionRecovery') is not recovery:
+        raise ValueError('fresh same-run output collection required before signing')
+    outputs=collection['outputs']
+    if set(outputs['artifacts'])!={'targetFiles','otatools','vendorBootImage','vendorKernelBootImage'} \
+            or outputs.get('verdict')!='complete' or outputs['actualBuildIdentity']!={'device':'mustang','build':build,'timestamp':epoch}:
+        raise ValueError('actual compiled output identity differs')
+    out=source/f'out-mustang-build-{build}'
+    adapter=module('mustang_output_collection','mustang-build-only.py')
+    tools=adapter.otatools_outputs(source,f'out-mustang-build-{build}')
+    for role,row in outputs['artifacts'].items():
+        artifact=Path(row['path'])
+        if row.get('state')!='collected' or out not in artifact.parents or artifact.is_symlink() or not artifact.is_file():
+            raise ValueError('compiled output unavailable')
+        if role=='otatools' and tools!=[artifact]:raise ValueError('foreign or ambiguous otatools module output')
+        if artifact.stat().st_size!=row['sizeBytes'] or digest(artifact)!=row['sha256']:
             raise ValueError('compiled output identity changed')
-    return value,source,build,epoch,result['outputs']['artifacts']
+    return value,source,build,epoch,outputs['artifacts']
 
 
 def bootstrap_binding(path):
@@ -148,6 +184,9 @@ def sign(compile_receipt,bootstrap_receipt,run_id,attempt):
     record={'schema':'roseos.mustang-sign-run.v1','device':'mustang','build':build,'candidateSource':compiled['source'],
         'recipeSource':source_sha(),'runId':run_id,'runAttempt':attempt,'label':LABEL,'status':'failed',
         'compileReceiptSha256':digest(compile_receipt),'bootstrapReceiptSha256':digest(bootstrap_receipt),
+        'compileCollectionReceiptSha256':digest(run_root('collect',run_id,attempt)/'compile-collection.json'),
+        'compileCollectionRecovery':os.environ.get('EXPECTED_COMPILE_RECOVERY')=='true',
+        'compileProducerConclusion':'failure' if os.environ.get('EXPECTED_COMPILE_RECOVERY')=='true' else 'success',
         'secrets':{k:{'name':SECRETS[k],'version':v} for k,v in versions.items()},
         'omittedChecks':compiled['omittedChecks'],'signingResultVerified':False,'intendedPublicIdentityVerified':False}
     try:
@@ -159,7 +198,8 @@ def sign(compile_receipt,bootstrap_receipt,run_id,attempt):
         config={'target':{'device':'mustang'},'host':{'sign':{
             'project':PROJECT,'keysSecret':SECRETS['keys'],'passphraseSecret':SECRETS['passphrase'],
             'secretVersion':versions['keys'],'passphraseSecretVersion':versions['passphrase'],
-            'otatools':'host/linux-x86/otatools.zip','javaHome':str(source/'prebuilts/jdk/jdk21/linux-x86'),
+            'otatools':str(Path(outputs['otatools']['path']).relative_to(source/f'out-mustang-build-{build}')),
+            'javaHome':str(source/'prebuilts/jdk/jdk21/linux-x86'),
             'updateNotes':{'file':str(notes),'sha256':digest(notes),'device':'mustang','build':build}}},
             'identities':bootstrap['publicIdentity'],'publication':{'channels':{'beta':{'feedChannel':'stable'}}}}
         config_path=out/'sign-config.json';release_receipts.write_once(config_path,config)
@@ -197,6 +237,9 @@ def package(sign_run,sign_attempt,run_id,attempt):
     hp=module('mustang_factory_host','host-factory-package.py');hs=module('mustang_host_sign','host-sign.py')
     receipt={'schema':'roseos.mustang-package-run.v1','device':'mustang','build':build,'label':LABEL,
         'candidateSource':signed['candidateSource'],'recipeSource':source_sha(),'status':'failed',
+        'compileCollectionRecovery':signed.get('compileCollectionRecovery',False),
+        'compileProducerConclusion':signed.get('compileProducerConclusion'),
+        'compileCollectionReceiptSha256':signed.get('compileCollectionReceiptSha256'),
         'omittedChecks':signed['omittedChecks'],'phoneValidated':False}
     try:
         with hp.shared_lock(LOCK):
@@ -243,11 +286,12 @@ def package(sign_run,sign_attempt,run_id,attempt):
 
 def main():
     p=argparse.ArgumentParser(description=__doc__)
-    p.add_argument('action',choices=('sign','package','_execute'))
+    p.add_argument('action',choices=('collect','sign','package','_execute'))
     for flag in ('--compile-receipt','--bootstrap-receipt','--run-id','--run-attempt','--sign-run','--sign-attempt','--config'):
         p.add_argument(flag)
     a=p.parse_args()
     if a.action=='_execute':return execute_sign(a.config,dict(os.environ))
+    if a.action=='collect':collect(a.compile_receipt,number(a.run_id),number(a.run_attempt));return 0
     if a.action=='sign':sign(a.compile_receipt,a.bootstrap_receipt,number(a.run_id),number(a.run_attempt))
     else:package(number(a.sign_run),number(a.sign_attempt),number(a.run_id),number(a.run_attempt))
     return 0

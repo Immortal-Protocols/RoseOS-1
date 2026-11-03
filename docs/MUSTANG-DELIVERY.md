@@ -34,12 +34,17 @@ versions. Its build/factory/phone readiness flags remain false. This source
 binding is not the sprint-omitted intended-public-identity comparison and does
 not establish a signing result or installer acceptance.
 
-As of 2026-11-03T22:23:38Z, fresh unsigned run
+The completed unsigned run
 [41720536968](https://github.com/Immortal-Protocols/RoseOS-1/actions/runs/41720536968)
 uses corrected source `2b521e732fa1537e54ff0a77880810ab1f34cf99`. Its hosted
-configuration guard and controller succeeded; the combined preparation/build
-step is active since 21:19:17Z, with no completed compile receipt.
-Compilation, delivery signing, packaging and export are unproven. Earlier
+configuration guard and controller succeeded. Make ran from 21:47:35Z to
+23:00:48Z and returned 0, but output collection failed at the old otatools path.
+The original workflow remains failed, and actual build identity was uncollected.
+Cleanup succeeded; an independent read returned `TERMINATED`, last stop
+23:01:22Z. The [collection correction](MUSTANG-OTATOOLS-COLLECTION.md) pins this
+exact Make=0 case and requires fresh complete output collection before signer
+login in the existing delivery route. No Make restart or new bootstrap is included.
+Signing, packaging and export have not started. Earlier
 replacement `41719106957` was cancelled before compilation after source review
 found a deterministic rendering error. Its cleanup observed `TERMINATED` at
 21:17:18Z before the fresh run was dispatched. See
@@ -87,8 +92,13 @@ Mustang modes hardcode Mustang and never enter the Frankel public publisher:
   `mustang_compile_run` and `mustang_bootstrap_run`, then sign, package, export
   privately and verify the delivered download's checksums.
 
-`mustang-sign-package.py sign` consumes completed compile and real bootstrap
-receipts bound by hosted GitHub metadata. It retains integration/compile source,
+`mustang-sign-package.py collect` runs before signer login and writes a new
+same-run public collection receipt. It admits normal successful producers and
+only the exact recorded Make=0 lookup fault, with pinned original receipt bytes.
+It preserves the failed source receipts, checks all remaining output identity and
+hash requirements, and never reruns Make. `... sign` consumes that complete
+collection and the real bootstrap receipt bound by hosted GitHub metadata.
+It retains integration/compile source,
 actual device/build/time, produced hashes, numeric Mustang versions and lock.
 The host-sign engine uses scoped structural key discovery in place of the omitted
 intended-public-identity comparison. Existing callers retain their defaults.

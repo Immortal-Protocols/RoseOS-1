@@ -1,55 +1,66 @@
 # Mustang runtime handoff
 
-Snapshot: **2026-11-03T22:23:38Z**. Original sprint clock/deadline are not reset.
-The current builder run is **41720536968**; the successful one-time bootstrap
-is **41719073037**. Do not duplicate either operation.
+Snapshot: **2026-11-03T23:15Z**. Original sprint clock/deadline are not reset.
+Producer is **41720536968**, source `2b521e732fa1537e54ff0a77880810ab1f34cf99`,
+allocation **2026110302**. Bootstrap **41719073037** completed once. Do not
+restart the original build or repeat bootstrap.
 
 | Stage | Observed state | Evidence |
 | --- | --- | --- |
-| Source adapters | Merged through PR #498, source `2b521e732fa1537e54ff0a77880810ab1f34cf99` | [current source](https://github.com/Immortal-Protocols/RoseOS-1/tree/2b521e732fa1537e54ff0a77880810ab1f34cf99) |
-| Mustang containers/access | Both exist; four exact per-secret bindings confirmed, expiry `2026-11-04T00:50:06Z`; human applied IAM, worker read it back | `os/signing-bootstrap/mustang-access-binding.json` |
-| One-time key bootstrap | Complete; version 1 in both containers, no recovery needed, workspace removed | [run 41719073037](https://github.com/Immortal-Protocols/RoseOS-1/actions/runs/41719073037), committed public receipt |
-| Fresh unsigned attempt | Hosted configuration guard/controller passed; combined preparation/build step active since 21:19:17Z | [run 41720536968](https://github.com/Immortal-Protocols/RoseOS-1/actions/runs/41720536968) |
-| Integration/compile | No completed result from current attempt | Its final/failure allowlisted receipts will identify actual stages |
-| Delivery signing | Not started | Must consume successful compile producer plus bootstrap `41719073037` |
-| Factory package/private download | Not started | No installer, checksum or expiry claim yet |
-| Current run cleanup | Pending | Existing ownership-aware cleanup; do not stop unrelated work |
+| Source adapters | Merged through PR #500; output-lookup correction prepared separately | [collection correction](MUSTANG-OTATOOLS-COLLECTION.md) |
+| Containers/access | Both exist; all four exact signer bindings confirmed; expiry `2026-11-04T00:50:06Z` | `os/signing-bootstrap/mustang-access-binding.json` |
+| One-time bootstrap | Complete; both committed version 1; no recovery needed; workspace removed | [41719073037](https://github.com/Immortal-Protocols/RoseOS-1/actions/runs/41719073037), committed public receipt |
+| Preparation | Source completed 21:43:50Z; vendor 21:47:03Z; lunch 21:47:14Z | Producer receipt artifact below |
+| Integration | Command returned 0, bound to the same source as compile | Producer candidate receipt |
+| Compile command | Started 21:47:35Z; Make returned 0 at 23:00:48Z | `compile-started.json`, `compile-completed.json` |
+| Original output collection | Failed: expected `host/linux-x86/otatools.zip` absent; target-files and vendor boot images hashed; actual build identity uncollected | Original receipt remains failed |
+| Corrected output collection | Not executed; must locate the one Soong module output and pass device/build/time/hash checks before login | Exact case pinned in `os/build-only/mustang-collection-recovery.json` |
+| Signing/package/private export | Not started | No installer or delivered checksum claim |
+| Original run cleanup | Successful; independent VM read `TERMINATED`, last stop 23:01:22Z | Existing instance `685707771105568194` |
 
-The earlier established-route build `41714573501` failed at `admit`, before
-integration or compile, due to an extra route field. Bootstrap workflow
-`41717550485` stopped in preflight before any key generation because signer
-environment variables were missing. PR #495 corrected those inputs. The next
-unsigned attempt `41719106957` was cancelled after source review proved a
-rendering error from flat versus nested host configs; PR #498 corrected it.
-Its cleanup observed `TERMINATED` at 21:17:18Z before the fresh dispatch. No
-failed/cancelled source tree or allocation is adopted.
+The new [receipt artifact 13277289458](https://github.com/Immortal-Protocols/RoseOS-1/actions/runs/41720536968/artifacts/13277289458)
+is 18,357 bytes, SHA-256
+`47c70d286cd9d35e3ac2e0808ff93122bf19b4f78e73bf5d4fa29ee3347c9de8`,
+expiry 2026-11-10T23:00:48Z. It was retrieved through the GitHub connector.
+Target-files is 4,340,146,868 bytes, SHA-256
+`87892fdabf63374d8afc66f3c986d92c9f2a7f0395e6df2d2eb8db4e9a833c03`.
+Both vendor boot images are 67,108,864 bytes; their hashes and the five original
+receipt hashes are pinned in the collection case record. The original native
+outputs and receipts remain unchanged.
 
-At the latest snapshot, the combined step is active but its current substage and
-whether compilation has begun are unconfirmed. Substage receipts upload only
-when it ends. The active job-log request returned `404 BlobNotFound` at 21:37:59Z;
-it is not retried before job completion. A single CPU-telemetry read, scoped to
-the same builder instance and configured actor, returned HTTP 403 at 21:43:56Z;
-that read stopped without retry or an alternative endpoint/identity. Neither
-response establishes a build failure or a stall. Fifteen-minute status alarms
-have reported the absence of new confirmed stage evidence, not invented progress.
+The earlier run `41714573501` failed before compile at updater-route admission;
+`41717550485` stopped before any bootstrap generation due to missing job variables.
+PR #495 corrected those configuration errors. `41719106957` was cancelled after
+source review established a fatal host-config shape error; PR #498 corrected it.
+Cleanup observed STOP before the fresh producer was dispatched. None of those
+attempts supplies native outputs to the current delivery.
 
-All completed bootstrap facts come from the allowlisted public receipt and
-run metadata. No private payload was downloaded here. No Blazer/Rango artifact,
-key or identity is selected. Creator listing, audit/provider inspection, and IAM
-write denials were respected. The first failed build's local artifact download
-was Forbidden and not retried. No access restriction was bypassed.
+During the combined step, metadata exposed no internal substage. Its step began
+21:19:21Z; phase receipts published only at the end. Compilation was unconfirmed
+until those actual receipts became available. Elapsed time did not prove a stall.
+The active job-log request returned 404 BlobNotFound; CPU telemetry returned 403.
+Those reads stopped. The first failed build's local receipt archive download was
+Forbidden and was not retried. No denied route or secret was used for diagnosis.
 
-Once the current build actually completes successfully, use the established
-`os-release.yml mode=mustang-delivery` with its successful compile run ID and
-`mustang_bootstrap_run=41719073037`. Inspect existing runs first. Do not dispatch
-delivery on a failure, cancellation, uncertain output or expired grant. Do not
-repeat bootstrap or extend access automatically. A denial or uncertain key-add
-outcome requires stopping that scope and reporting it.
+The existing `os-release.yml mode=mustang-delivery` consumes compile producer
+`41720536968` and bootstrap `41719073037`. The collector correction admits only
+this exact failed workflow with a successful native Make command, using pinned
+producer/artifact/receipt identities. It checks preserved output bytes and actual
+Mustang identity in a new same-delivery-run collection receipt before signer
+login. It does not turn the old workflow green, rerun compilation, create keys,
+change IAM or alter the original attempt. Any missing/ambiguous archive, changed
+hash or wrong actual build identity stops before secret access.
 
-The sprint's focused/regression/required CI/full-suite tests and the other listed
-verification checks remain omitted. Source review/configuration parsing and the
-fresh bootstrap tool proof are the actual checks performed. Physical-device
-acceptance is unproven, and no phone operation is authorized. Any delivered
-installer must retain:
+No new delivery run has been dispatched at this snapshot. Before proceeding,
+inspect current runs and the final corrected source. Preserve the existing
+workflow/controller/FIFO/lock and ownership cleanup. Do not extend access or
+repeat bootstrap automatically. Native failure, cancellation, unregistered
+producer failure, access denial or an uncertain key action cannot be adopted by
+this collection exception.
+
+The sprint's omitted tests and verification remain undone. Source review and
+Python/JSON/YAML parsing, fresh bootstrap tool proof, the actual Make outcome and
+reported output hashes are the evidence available. No installer, verified signing
+result or physical acceptance is claimed. Any delivery retains:
 **build-and-package candidate; omitted verification remains undone;
 physical-device acceptance unproven**.

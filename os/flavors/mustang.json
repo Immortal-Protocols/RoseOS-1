@@ -238,9 +238,10 @@
     "factoryReady": false,
     "phoneValidated": false,
     "receipts": [
-      "os/signing-bootstrap/mustang-bootstrap-receipt.json (bootstrap only; no compile or factory acceptance)"
+      "os/signing-bootstrap/mustang-bootstrap-receipt.json (bootstrap only; no compile or factory acceptance)",
+      "https://github.com/Immortal-Protocols/RoseOS-1/actions/runs/41720536968/artifacts/13277289458 (Make returned 0; original output collection failed)"
     ],
-    "basis": "The one approved Mustang bootstrap completed with committed versions, no recovery needed and workspace removed. Current unsigned run 41720536968 has no completed compile receipt; factory and physical acceptance remain unproven."
+    "basis": "Mustang bootstrap completed once. Producer 41720536968 Make returned 0, but output collection failed at the old otatools path; fresh complete output collection is required before signing. Factory and physical acceptance remain unproven."
   },
   "missingForFactory": [
     {
