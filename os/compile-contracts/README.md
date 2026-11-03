@@ -21,11 +21,25 @@ packages/apps/Launcher3 and build/release, it lists:
 
 **`overlays`** lists every overlay the candidate copies into those projects, as required or not an input.
 
-**`base`** is what the patcher at this bundle produces. For Launcher3 that is the switcher patch only; frameworks/base and
-build/release are identical to the candidate. It also gives the committed overlays.
+**`treePin`**, one per project, pins every path the contract does not list:
+- the pinned commit's root tree, recomputed offline from a committed `git ls-tree -r` listing;
+- a sha256 digest over each unlisted path's mode and git blob id.
 
-**`candidateDelta`** binds the candidate commit, its patch digest, the before and after image of each file it changes, and
-the before and after image of each overlay it changes. The delta's files are disjoint from the switcher patch's, so base
+Any extra file is refused. Per-path sha256 would need every file's contents, which the bounded fixtures do not hold.
+The pin uses the git blob ids from the pinned commit's own tree objects instead.
+
+**`base`** has the same per-project shape as `projects`. It is bound by **content**: `bundleContent` lists the patches
+(by project, name and sha256) and the overlays (by target and sha256). A tree matches `base` only if Infra reports that
+the bundle which integrated it had exactly those contents. For Launcher3 the base is the switcher patch only;
+frameworks/base and build/release are identical to the candidate.
+
+**`candidateDelta`** binds:
+- the candidate commit;
+- each patch, by name, sha256, `bundlePath`, project and `strip`;
+- an exact application rule: `git apply --check`, then `git apply`, in the isolated copy only, with no three-way merge,
+  rejects, reduced context or whitespace fixing;
+- the before and after images of each file it changes;
+- each overlay it changes, by target, `bundlePath`, before and after. The delta's files are disjoint from the switcher patch's, so base
 plus delta equals an integration with the edge patch registered after the switcher patch. The checker proves this
 offline.
 
@@ -38,7 +52,10 @@ The adapter takes exactly one branch:
   - no patch is applied again.
 
   `config.xml` is the one file the patcher rewrites after patching, in five elements, from the background policy
-  receipt and two flags. It is accepted only by `verify_integrated_config`, which checks all of these:
+  receipt and two flags. The rule is complete as data in `integrationRewrite` (markers, templates, input rules,
+  comparison), so an adapter needs nothing from the checker. `verify_integrated_config` is its reference
+  implementation, and a test shows the data alone reaches the same verdicts. The file is accepted only if all of these
+  hold:
   - the receipt's sha256 equals the one bound for that tree outside this contract;
   - each element is exactly the text the patcher writes from those inputs;
   - putting exactly those texts back to their markers gives the post-image.
@@ -46,10 +63,8 @@ The adapter takes exactly one branch:
   Nothing else is normalised. A missing input or binding, a mismatched value, or any other difference refuses.
 - **verifyBaseApplyCandidate** (a proposal, stated as data only; Release implements it, and any run needs separate
   authority):
-  - every affected file and overlay of the source tree equals `base` exactly, with the same `config.xml` rule;
-  - every delta file and overlay is at its before image;
-  - then, in an isolated copy only, the sha256-checked candidate patch is applied and the bundle overlays are copied;
-  - the result must equal `projects` and `overlays` exactly.
+  - it has four conditions with stable ids: `base-exact`, `delta-preimages`, `isolated-apply` and `final-exact`;
+  - it refuses at the first failed condition, naming that condition's id.
 
   Partial, already applied or unknown state refuses. A tree integrated by any bundle other than this one does not match
   `base`.

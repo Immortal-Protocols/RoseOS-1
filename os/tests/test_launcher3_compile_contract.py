@@ -28,7 +28,7 @@ class Launcher3CompileContractTest(unittest.TestCase):
     SCRIPT = ROOT/'scripts/launcher3-compile-contract.py'
     MANIFEST = ROOT/'os/compile-contracts/launcher3-quickstep-lib.json'
     # The agreed version (#410). Changing the manifest changes this, and the change needs re-agreement with Release.
-    AGREED_SHA256 = 'b6c0a2da759a7acab168e3d5c230fd755730b5945b4c69f267a8acc3b71140c0'
+    AGREED_SHA256 = '84282f95989151bc290f13ef225440bfc6cb2332d991e8c05b91cf8f6c889c65'
 
     def contract(self):
         import importlib.util
@@ -80,8 +80,8 @@ class Launcher3CompileContractTest(unittest.TestCase):
         for row in delta['bundle']:
             self.assertTrue(row['path'].startswith('os/tests/fixtures/'), 'outside os/patches and os/overlays: inert')
             self.assertEqual(hashlib.sha256((ROOT/row['path']).read_bytes()).hexdigest(), row['sha256'])
-        self.assertEqual(delta['patches'], [{'name': 'rose-edge-launcher3.patch',
-            'sha256': hashlib.sha256(EDGE_PATCH.read_bytes()).hexdigest()}])
+        self.assertEqual([(p['name'], p['sha256']) for p in delta['patches']], [('rose-edge-launcher3.patch',
+            hashlib.sha256(EDGE_PATCH.read_bytes()).hexdigest())])
         # The committed os/ holds either the base or the candidate bytes for each candidate overlay, never anything else.
         for o in delta['overlays']:
             committed = ROOT/'os/overlays'/o['target']
@@ -93,9 +93,11 @@ class Launcher3CompileContractTest(unittest.TestCase):
         so base plus delta equals an integration with the edge patch registered after the switcher patch."""
         manifest = self.manifest()
         base, delta = manifest['base'], manifest['candidateDelta']
-        self.assertEqual(base['patches']['packages/apps/Launcher3'], ['rose-switcher-launcher3.patch'])
+        self.assertEqual([p['name'] for p in base['projects'][1]['patches']], ['rose-switcher-launcher3.patch'])
+        self.assertEqual(base['projects'][0], manifest['projects'][0], 'frameworks/base: the candidate does not change it')
+        self.assertEqual(base['projects'][2], manifest['projects'][2], 'build/release: the candidate does not change it')
         launcher = {f'packages/apps/Launcher3/{r["path"]}': r for r in manifest['projects'][1]['files']}
-        base_files = {f['path']: f['image'] for f in base['files']}
+        base_files = {f'packages/apps/Launcher3/{r["path"]}': r['post'] for r in base['projects'][1]['files']}
         delta_files = {f['path']: f for f in delta['files']}
         self.assertEqual(sorted(delta_files), sorted(f'packages/apps/Launcher3/{p}' for p in EDGE_TARGETS.values()))
         for path, row in launcher.items():
@@ -116,8 +118,8 @@ class Launcher3CompileContractTest(unittest.TestCase):
             if target not in {o['target'] for o in delta['overlays']}:
                 self.assertEqual(base_overlays[target], digest, f'{target}: unchanged by the candidate')
         self.assertIn('verifyBaseApplyCandidate', manifest['branches'])
-        self.assertIn('proposal, stated as data only', manifest['branches']['verifyBaseApplyCandidate'])
-        self.assertIn('Partial, already applied or unknown state refuses', manifest['branches']['verifyBaseApplyCandidate'])
+        self.assertIn('proposal, stated as data only', manifest['branches']['verifyBaseApplyCandidate']['status'])
+        self.assertIn('partial, already applied or unknown state refuses', manifest['branches']['verifyBaseApplyCandidate']['otherwise'])
         result = subprocess.run(['python3', str(self.SCRIPT)], capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
@@ -128,12 +130,131 @@ class Launcher3CompileContractTest(unittest.TestCase):
         for edit in (lambda m: m['candidateDelta'].__setitem__('commit', '0' * 40),
                 lambda m: m['candidateDelta']['overlays'][0].__setitem__('before', '1' * 64),
                 lambda m: m['candidateDelta']['files'][0]['after'].__setitem__('sha256', '2' * 64),
-                lambda m: m['base']['files'][0]['image'].__setitem__('sha256', '3' * 64),
-                lambda m: m['base']['patches'].__setitem__('packages/apps/Launcher3', [])):
+                lambda m: m['base']['projects'][1]['files'][0]['post'].__setitem__('sha256', '3' * 64),
+                lambda m: m['base']['projects'][1].__setitem__('patches', []),
+                lambda m: m['base']['bundleContent']['patches'].pop(),
+                lambda m: m['candidateDelta']['patches'][0].__setitem__('strip', 0),
+                lambda m: m['base']['projects'][0]['treePin']['unlisted'].__setitem__('digest', '4' * 64)):
             changed = copy.deepcopy(manifest)
             edit(changed)
             self.assertTrue(contract.check_candidate(changed), 'a tampered candidate binding must be refused')
         self.assertEqual(contract.check_candidate(manifest), [])
+
+    def test_every_project_is_pinned_by_its_own_tree_and_base_is_bound_by_content(self):
+        import gzip
+        contract = self.contract()
+        manifest = self.manifest()
+        for project in manifest['projects'] + manifest['base']['projects']:
+            pin = project['treePin']
+            listing = contract.read_listing(project['path'])
+            self.assertEqual(contract.git_tree_hash(listing), pin['rootTree'], f'{project["path"]}: the listing is the '
+                'pinned commit\'s own tree')
+            raw = gzip.decompress((ROOT/pin['listing']['path']).read_bytes())
+            self.assertEqual(hashlib.sha256(raw).hexdigest(), pin['listing']['sha256'])
+            entries = {path: (mode, blob) for mode, _, blob, path in listing}
+            listed = {r['path'] for r in project['files']} | {o['target'][len(project['path']) + 1:]
+                for o in manifest['overlays'] if o['target'].startswith(project['path'] + '/')}
+            lines = sorted((path.encode(), f'{mode} {blob}\t{path}\n'.encode()) for path, (mode, blob) in entries.items()
+                if path not in listed)
+            self.assertEqual(hashlib.sha256(b''.join(l for _, l in lines)).hexdigest(), pin['unlisted']['digest'])
+            self.assertEqual(len(lines), pin['unlisted']['count'])
+            for row in project['files']:
+                self.assertEqual(entries.get(row['path'], (None, None))[1], row['pre'] and row['pre']['gitBlob'],
+                    f'{row["path"]}: the pre-image is the pinned tree\'s own blob, a new file is absent')
+            self.assertIn('per-path sha256 would need every file\'s contents', pin['limitation'])
+        content = manifest['base']['bundleContent']
+        self.assertEqual([(p['project'], p['name']) for p in content['patches']],
+            [(p['path'], x['name']) for p in manifest['base']['projects'] for x in p['patches']])
+        self.assertNotIn('rose-edge-launcher3.patch', [p['name'] for p in content['patches']])
+        self.assertEqual({o['target'] for o in content['overlays']}, {o['target'] for o in manifest['base']['overlays']})
+        self.assertNotIn('commit', ' '.join(manifest['base']['match'].split()[:3]), 'bound by content, not a commit')
+
+    def test_the_delta_application_and_branch_conditions_are_exact(self):
+        manifest = self.manifest()
+        delta = manifest['candidateDelta']
+        for patch in delta['patches']:
+            self.assertEqual((patch['project'], patch['strip']), ('packages/apps/Launcher3', 1))
+            self.assertEqual(hashlib.sha256((ROOT/patch['bundlePath']).read_bytes()).hexdigest(), patch['sha256'])
+        for o in delta['overlays']:
+            self.assertEqual(hashlib.sha256((ROOT/o['bundlePath']).read_bytes()).hexdigest(), o['after'])
+        app = delta['application']
+        self.assertEqual(app['steps'], ['git -C <copy>/<project> apply --check -p<strip> <bundlePath>',
+            'git -C <copy>/<project> apply -p<strip> <bundlePath>'])
+        for flag in ('--3way', '--reject', '--whitespace=fix', '--recount', '--unidiff-zero'):
+            self.assertIn(flag, ' '.join(app['forbidden']))
+        branch = manifest['branches']['verifyBaseApplyCandidate']
+        self.assertEqual([c['id'] for c in branch['conditions']], ['base-exact', 'delta-preimages', 'isolated-apply',
+            'final-exact'])
+        self.assertIn('proposal', branch['status'])
+        # The edge patch applies with exactly those steps to the base images and gives the candidate's images.
+        contract = self.contract()
+        tree = Path(tempfile.mkdtemp(prefix='launcher3-delta-'))
+        self.addCleanup(shutil.rmtree, tree, True)
+        for f in delta['files']:
+            relative = f['path'][len('packages/apps/Launcher3/'):]
+            (tree/relative).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(CONTRACT_FIXTURES/f['path'], tree/relative)
+            self.assertEqual(contract.image((tree/relative).read_bytes()), f['before'])
+        subprocess.run(['git', 'init', '-q', str(tree)], check=True)
+        for step in ('--check', None):
+            args = ['git', '-C', str(tree), 'apply'] + ([step] if step else []) + ['-p1', str(ROOT/delta['patches'][0]['bundlePath'])]
+            subprocess.run(args, check=True)
+        for f in delta['files']:
+            self.assertEqual(contract.image((tree/f['path'][len('packages/apps/Launcher3/'):]).read_bytes()), f['after'])
+
+    def test_the_config_xml_rule_is_complete_as_data(self):
+        """An adapter that reads only the manifest (as Release's does) reaches the same verdict as the reference."""
+        contract = self.contract()
+        rule = [r for p in self.manifest()['projects'] for r in p['files'] if 'integrationRewrite' in r][0]['integrationRewrite']
+
+        def from_data(data, post, policy, bound_ok, address, locked):
+            if not bound_ok or policy is None:
+                return False
+            t = rule['templates']
+            rows = [policy['agent']] + policy['targets']
+            if not all(re.fullmatch(rule['inputRules']['packageName'], r['packageName']) and r['certificates'] and all(
+                    re.fullmatch(rule['inputRules']['certificate'], c) for c in r['certificates']) for r in rows):
+                return False
+            if address is not None and not (str(address).isdecimal() and 0 < int(address) < 2**63):
+                return False
+            def array(name, items):
+                return t['array'].replace('{name}', name).replace('{entries}', ''.join(t['entry'].replace(
+                    '{packageName}', r['packageName']).replace('{certificate}', c) for r in items for c in r['certificates']))
+            want = dict(rule['markers'])
+            want['config_pixelComputerControlAgents'] = array('Agents', [policy['agent']])
+            want['config_pixelComputerControlTargets'] = array('Targets', policy['targets'])
+            if policy.get('prototypeControl'):
+                want['config_pixelComputerControlPrototypeAgents'] = array('PrototypeAgents', [policy['agent']])
+            if address is not None:
+                want['config_pixelComputerControlReferenceDisplayAddress'] = t[
+                    'config_pixelComputerControlReferenceDisplayAddress'].split(' when given')[0].replace('{address}', address)
+            if locked:
+                want['config_pixelComputerControlLockedSessions'] = t['config_pixelComputerControlLockedSessions'].split(
+                    ' when lockedControl')[0]
+            text = data.decode()
+            for name, expected in want.items():
+                if len(re.findall(r'<(?:string-array|string|bool) name="%s"' % name, text)) != 1 or text.count(expected) != 1:
+                    return False
+                text = text.replace(expected, rule['markers'][name])
+            return hashlib.sha256(text.encode()).hexdigest() == post
+
+        cert, other = 'AB' * 32, 'CD' * 32
+        policy = {'agent': {'packageName': 'dev.pixel.backgroundcontrol', 'certificates': [cert]},
+            'targets': [{'packageName': 'dev.pixel.calculator.agent', 'certificates': [other]}], 'prototypeControl': True}
+        integrated, post = self.integrated(policy, address='4619827259835644672', locked=True)
+        plain, _ = self.integrated(dict(policy, prototypeControl=False))
+        cases = [(integrated, policy, True, '4619827259835644672', True), (integrated, policy, False, '4619827259835644672', True),
+            (integrated, dict(policy, prototypeControl=False), True, '4619827259835644672', True),
+            (integrated, policy, True, None, True), (integrated, policy, True, '4619827259835644672', False),
+            (plain, dict(policy, prototypeControl=False), True, None, False), (plain, policy, True, None, False),
+            (integrated.replace(b'<resources', b'<resources ', 1), policy, True, '4619827259835644672', True)]
+        verdicts = []
+        for data, pol, bound_ok, address, locked in cases:
+            sha = hashlib.sha256(b'r').hexdigest()
+            reference = not contract.verify_integrated_config(data, post, pol, sha, sha if bound_ok else None, address, locked)
+            self.assertEqual(from_data(data, post, pol, bound_ok, address, locked), reference)
+            verdicts.append(reference)
+        self.assertEqual(verdicts, [True, False, False, False, False, True, False, False])
 
     def test_the_branches_refuse_anything_else(self):
         manifest = self.manifest()

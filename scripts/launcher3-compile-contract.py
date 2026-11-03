@@ -30,6 +30,7 @@ Usage:
                                                  credentials) into the fixtures, applies the patches in scratch
 """
 import argparse
+import gzip
 import hashlib
 import json
 import re
@@ -358,22 +359,160 @@ def image(data):
     return None if data is None else {'sha256': sha256(data), 'gitBlob': git_blob(data)}
 
 
+def integration_rewrite():
+    """The config.xml rule as complete data, for an adapter that does not import this file."""
+    return {
+        'by': 'scripts/apply-os-changes.py, the `if policy:` block, after patching',
+        'elements': list(CONFIG_MARKERS),
+        'markers': dict(CONFIG_MARKERS),
+        'generatingInputs': {
+            'policyReceipt': 'agent, targets, prototypeControl; its sha256 must equal the one bound for that tree outside '
+                'this contract',
+            'referenceDisplayAddress': '--reference-display-address, absent unless given; decimal, 0 < value < 2^63',
+            'lockedControl': '--locked-control, false unless given',
+        },
+        'inputRules': {'packageName': PACKAGE.pattern, 'certificate': CERT.pattern,
+            'rows': 'every agent and target row has a packageName and at least one certificate'},
+        'templates': {
+            'array': '    <string-array name="config_pixelComputerControl{name}" translatable="false">\n{entries}'
+                '    </string-array>',
+            'entry': '        <item>{packageName}:{certificate}</item>\n',
+            'arrays': {'config_pixelComputerControlAgents': 'Agents: the agent row',
+                'config_pixelComputerControlTargets': 'Targets: every target row, in receipt order',
+                'config_pixelComputerControlPrototypeAgents': 'PrototypeAgents: the agent row, only when prototypeControl '
+                    'is true; otherwise the marker'},
+            'config_pixelComputerControlReferenceDisplayAddress': '    <string name="config_pixelComputerControl'
+                'ReferenceDisplayAddress" translatable="false">{address}</string> when given; otherwise the marker',
+            'config_pixelComputerControlLockedSessions': '    <bool name="config_pixelComputerControlLockedSessions">true'
+                '</bool> when lockedControl; otherwise the marker',
+        },
+        'compare': [
+            'each element name opens exactly once in the file',
+            'each element is exactly its expected text (template from the bound inputs, or its marker)',
+            'replacing exactly those texts with their markers gives post (sha256); nothing else is normalised',
+            'a missing input or binding, a value outside inputRules, or any other difference refuses',
+        ],
+        'reference': 'scripts/launcher3-compile-contract.py verify_integrated_config implements exactly this',
+    }
+
+
+TREES = FIXTURES/'trees'
+
+
+def tree_fixture(project):
+    return TREES/(project.replace('/', '__') + '.ls-tree.txt.gz')
+
+
+def read_listing(project):
+    """[(mode, type, blob, path)] of the pinned revision, from `git ls-tree -r --full-tree` (gzipped fixture)."""
+    text = gzip.decompress(tree_fixture(project).read_bytes()).decode()
+    out = []
+    for line in text.splitlines():
+        meta, path = line.split('\t', 1)
+        mode, kind, blob = meta.split(' ')
+        out.append((mode, kind, blob, path))
+    return out
+
+
+def git_tree_hash(listing):
+    """The git root tree id that a full recursive listing of blobs describes (recomputed, so the listing is exactly
+    the pinned commit's tree)."""
+    root = {}
+    for mode, kind, blob, path in listing:
+        if kind != 'blob':
+            raise ValueError(f'{path}: {kind} entries are not expected')
+        node = root
+        parts = path.split('/')
+        for part in parts[:-1]:
+            node = node.setdefault(part, {})
+        node[parts[-1]] = (mode, blob)
+
+    def write(node):
+        entries = []
+        for name, value in node.items():
+            if isinstance(value, dict):
+                entries.append((name + '/', b'40000 ' + name.encode() + b'\0' + bytes.fromhex(write(value))))
+            else:
+                entries.append((name, value[0].encode() + b' ' + name.encode() + b'\0' + bytes.fromhex(value[1])))
+        body = b''.join(e for _, e in sorted(entries, key=lambda e: e[0].encode()))
+        return hashlib.sha1(b'tree %d\0' % len(body) + body).hexdigest()
+    return write(root)
+
+
+def tree_pin(project, revision, root_tree, excluded):
+    """The machine-readable pin of every path in the pinned tree that the contract does not list itself."""
+    listing = read_listing(project)
+    raw = gzip.decompress(tree_fixture(project).read_bytes())
+    lines = sorted((path.encode(), f'{mode} {blob}\t{path}\n'.encode()) for mode, _, blob, path in listing
+        if path not in excluded)
+    return {
+        'rootTree': root_tree,
+        'listing': {'path': str(tree_fixture(project).relative_to(ROOT)), 'sha256': sha256(raw), 'paths': len(listing)},
+        'unlisted': {
+            'excludes': 'this project\'s listed affected files and overlay targets',
+            'count': len(lines),
+            'lineFormat': '{mode} {gitBlob}\\t{path}\\n, sorted by the bytes of path',
+            'digest': sha256(b''.join(line for _, line in lines)),
+        },
+        'gitBlob': 'git hash-object: SHA-1 of "blob <size>\\0" + content; a symlink (mode 120000) hashes its target; '
+            'these trees hold no submodules',
+        'extraPaths': 'any file present in the source project that is neither in this tree, a listed affected file nor '
+            'an overlay target is refused',
+        'limitation': 'per-path sha256 would need every file\'s contents, which the bounded pinned fixtures do not hold; '
+            'the pin is mode and git blob id per path from the pinned commit\'s own tree objects, with this sha256 '
+            'digest over them',
+    }
+
+
+def excluded(project):
+    prefix = project['path'] + '/'
+    return {r['path'] for r in project['files']} | {o['target'][len(prefix):] for o in overlays()
+        if o['target'].startswith(prefix)}
+
+
+def project_rows(path, patches, pre):
+    post, chain = apply_in_scratch(pre, patches)
+    rows = []
+    for f in pre:
+        row = {'path': f, 'pre': image(pre[f]), 'post': image(post[f]) if post[f] is not None or pre[f] is not None
+            else None, 'chain': chain[f]}
+        if path == 'frameworks/base' and f == CONFIG:
+            row['integrationRewrite'] = integration_rewrite()
+        rows.append(row)
+    return rows
+
+
 def base_and_delta(projects, recorded_overlay_before=None):
-    """(base, candidateDelta). The base is what the patcher at this bundle produces: Launcher3 with its patches less the
-    candidate's (frameworks/base and build/release are the same as the candidate's), and the committed overlays. The
-    delta is the candidate's patch and overlay changes from that base, with before and after images; applying it to the
-    base must give exactly the candidate's final images (checked here, offline, from the fixtures)."""
-    path, repo, patches = PROJECTS[1]
-    rows = next(p for p in projects if p['path'] == path)['files']
-    pre = {r['path']: None if r['pre'] is None else fixture_path(path, r['path']).read_bytes() for r in rows}
-    base_patches = [p for p in patches if p not in CANDIDATE_PATCHES]
-    base_tree, _ = apply_in_scratch(pre, base_patches)
-    created = touched(base_patches)
-    base_images = {f: base_tree[f] if pre[f] is not None or f in created else None for f in pre}
-    final, _ = apply_in_scratch({f: base_images[f] for f in pre}, CANDIDATE_PATCHES)
-    delta_paths = list(touched(CANDIDATE_PATCHES))
-    for row in rows:
-        if image(final[row['path']]) != {k: row['post'][k] for k in ('sha256', 'gitBlob')}:
+    """(base, candidateDelta). The base is what the patcher at a bundle whose source contents are bundleContent
+    produces: every project as the candidate, except Launcher3 without the candidate's patches. The delta is the
+    candidate's patch and overlay changes from that base; applying it to the base must give exactly the candidate's
+    final images (checked here, offline, from the fixtures)."""
+    base_projects = []
+    for project, (path, repo, patches) in zip(projects, PROJECTS):
+        base_patches = [p for p in patches if p not in CANDIDATE_PATCHES]
+        pre = {r['path']: None if r['pre'] is None else fixture_path(path, r['path']).read_bytes() for r in project['files']}
+        if base_patches == patches:
+            rows = project['files']
+        else:
+            created = touched(base_patches)
+            post, chain = apply_in_scratch({f: pre[f] for f in pre}, base_patches)
+            rows = []
+            for f in pre:
+                exists = pre[f] is not None or f in created
+                row = {'path': f, 'pre': image(pre[f]), 'post': image(post[f]) if exists else None, 'chain': chain[f]}
+                rows.append(row)
+        base_projects.append(dict(project, patches=[{'name': p, 'sha256': sha256(bundle_or_os('patches/' + p).read_bytes())}
+            for p in base_patches], files=rows))
+    path = PROJECTS[1][0]
+    launcher_base = {r['path']: r for r in base_projects[1]['files']}
+    # Base bytes after the base patches, then the candidate's patches on top.
+    after_base, _ = apply_in_scratch({f: fixture_path(path, f).read_bytes() if launcher_base[f]['pre'] else None
+        for f in launcher_base}, [p for p in PROJECTS[1][2] if p not in CANDIDATE_PATCHES])
+    created = touched([p for p in PROJECTS[1][2] if p not in CANDIDATE_PATCHES])
+    base_images = {f: after_base[f] if launcher_base[f]['pre'] or f in created else None for f in launcher_base}
+    final, _ = apply_in_scratch(base_images, CANDIDATE_PATCHES)
+    for row in projects[1]['files']:
+        if image(final[row['path']]) != row['post']:
             raise ValueError(f'{row["path"]}: base plus the candidate delta is not the candidate post-image')
     bundle_overlays = {f[len('overlays/'):]: (BUNDLE/f).read_bytes() for f in bundle_files() if f.startswith('overlays/')}
     delta_overlays = []
@@ -383,7 +522,8 @@ def base_and_delta(projects, recorded_overlay_before=None):
             before = sha256(committed.read_bytes()) if committed.exists() else None
         else:
             before = recorded_overlay_before[target]
-        delta_overlays.append({'target': target, 'before': before, 'after': sha256(data)})
+        delta_overlays.append({'target': target, 'bundlePath': str((BUNDLE/'overlays'/target).relative_to(ROOT)),
+            'before': before, 'after': sha256(data)})
     before = {o['target']: o['before'] for o in delta_overlays}
     base_overlays = []
     for row in overlays():
@@ -393,26 +533,57 @@ def base_and_delta(projects, recorded_overlay_before=None):
         else:
             base_overlays.append(row)
     base = {
-        'bundle': 'the os/ bundle at this contract\'s own commit; a tree integrated by any other bundle does not match',
-        'patches': {path: base_patches, 'frameworks/base': 'as projects', 'build/release': 'as projects'},
-        'files': [{'path': f'{path}/{f}', 'image': image(base_images[f])} for f in pre],
+        'bundleContent': {
+            'patches': [{'project': p['path'], 'name': x['name'], 'sha256': x['sha256']} for p in base_projects
+                for x in p['patches']],
+            'overlays': [{'target': o['target'], 'sha256': o['sha256']} for o in base_overlays],
+        },
+        'match': 'the integrating bundle\'s source contents (the patches it applied to these projects and the overlays '
+            'it copied into them, as Infra reports them) must equal bundleContent exactly; any other bundle does not '
+            'match and refuses',
+        'projects': base_projects,
         'overlays': base_overlays,
-        'otherProjects': 'frameworks/base and build/release: exactly as projects (the candidate does not change them)',
     }
     delta = {
         'pr': CANDIDATE['pr'], 'commit': CANDIDATE['commit'],
-        'patches': [{'name': p, 'sha256': sha256((BUNDLE/'patches'/p).read_bytes())} for p in CANDIDATE_PATCHES],
-        'files': [{'path': f'{path}/{f}', 'before': image(base_images[f]), 'after': image(final[f])} for f in delta_paths],
+        'patches': [{'name': p, 'sha256': sha256((BUNDLE/'patches'/p).read_bytes()), 'project': path, 'strip': 1,
+            'bundlePath': str((BUNDLE/'patches'/p).relative_to(ROOT))} for p in CANDIDATE_PATCHES],
+        'application': {
+            'where': 'only in the isolated copy, never in the source tree',
+            'steps': ['git -C <copy>/<project> apply --check -p<strip> <bundlePath>',
+                'git -C <copy>/<project> apply -p<strip> <bundlePath>'],
+            'forbidden': ['--3way', '--reject', '--recount', '--unidiff-zero', '-C<n> (reduced context)',
+                '--ignore-whitespace', '--ignore-space-change', '--whitespace=fix'],
+            'note': 'whitespace is left unchanged; any failure of --check refuses before anything is applied',
+        },
+        'files': [{'path': f'{path}/{f}', 'before': image(base_images[f]), 'after': image(final[f])}
+            for f in touched(CANDIDATE_PATCHES)],
         'overlays': delta_overlays,
-        'bundle': [{'path': f'os/tests/fixtures/launcher3-compile-contract/candidate-pr440/{f}',
-            'sha256': sha256((BUNDLE/f).read_bytes())} for f in bundle_files()],
+        'bundle': [{'path': str((BUNDLE/f).relative_to(ROOT)), 'sha256': sha256((BUNDLE/f).read_bytes())}
+            for f in bundle_files()],
     }
     return base, delta
+
+
+def fetch_tree(repo, revision):
+    """(root tree id, gzipped `git ls-tree -r --full-tree` listing) of a pinned commit, from a blobless, depth-1 fetch
+    of GrapheneOS's public repository (tree objects only, no file contents)."""
+    work = Path(tempfile.mkdtemp(prefix='l3-tree-'))
+    try:
+        subprocess.run(['git', 'init', '-q', str(work)], check=True)
+        subprocess.run(['git', '-C', str(work), 'fetch', '-q', '--depth', '1', '--filter=blob:none',
+            f'https://github.com/GrapheneOS/{repo}', revision], check=True)
+        root = subprocess.check_output(['git', '-C', str(work), 'rev-parse', revision + '^{tree}'], text=True).strip()
+        listing = subprocess.check_output(['git', '-C', str(work), 'ls-tree', '-r', '--full-tree', revision])
+        return root, gzip.compress(listing, 9, mtime=0)
+    finally:
+        shutil.rmtree(work, True)
 
 
 def build():
     revisions = pins()
     projects = []
+    roots = {}
     for path, repo, patches in PROJECTS:
         files = touched(patches)
         pre = {}
@@ -422,33 +593,16 @@ def build():
                 continue
             pre[f] = fetch(repo, revisions[path], f)
             target = fixture_path(path, f)
-            if path == 'packages/apps/Launcher3':
-                if not target.exists() or target.read_bytes() != pre[f]:
-                    raise SystemExit(f'{target}: the Launcher3 fixture is not the pinned file')
-            else:
-                target.parent.mkdir(parents=True, exist_ok=True)
-                target.write_bytes(pre[f])
-        post, chain = apply_in_scratch(pre, patches)
-        rows = []
-        for f in files:
-            row = {'path': f, 'pre': None if pre[f] is None else {'sha256': sha256(pre[f]), 'gitBlob': git_blob(pre[f])},
-                'post': {'sha256': sha256(post[f]), 'gitBlob': git_blob(post[f])}, 'chain': chain[f]}
-            if path == 'frameworks/base' and f == CONFIG:
-                row['integrationRewrite'] = {
-                    'by': 'scripts/apply-os-changes.py, the `if policy:` block, after patching',
-                    'elements': list(CONFIG_MARKERS),
-                    'generatingInputs': ['the background policy receipt (agent, targets, prototypeControl), whose '
-                        'sha256 must equal the one bound for that tree outside this contract',
-                        '--reference-display-address (absent unless given)', '--locked-control (false unless given)'],
-                    'compare': 'scripts/launcher3-compile-contract.py verify_integrated_config: each element must be '
-                        'exactly the text the patcher writes from those inputs, and only those texts are put back to '
-                        'their markers before comparing with post; a missing input or binding, or any other '
-                        'difference, refuses',
-                }
-            rows.append(row)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(pre[f])
+        roots[path], listing = fetch_tree(repo, revisions[path])
+        tree_fixture(path).parent.mkdir(parents=True, exist_ok=True)
+        tree_fixture(path).write_bytes(listing)
         projects.append({'path': path, 'repo': f'GrapheneOS/{repo}', 'revision': revisions[path],
             'patches': [{'name': p, 'sha256': sha256(bundle_or_os('patches/' + p).read_bytes())} for p in patches],
-            'files': rows})
+            'files': project_rows(path, patches, pre)})
+    for project in projects:
+        project['treePin'] = tree_pin(project['path'], project['revision'], roots[project['path']], excluded(project))
     base, delta = base_and_delta(projects)
     evidence, rules = evidence_rows(revisions, flag_evidence(revisions, True))
     return {
@@ -469,21 +623,32 @@ def build():
             'reconstruct': 'every affected file equals pre (sha256 and gitBlob at revision), new files and every '
                 'overlay target are absent beforehand, patches are applied in order and must give exactly post; '
                 'required overlays are then copied',
-            'verifyBaseApplyCandidate': 'proposal, stated as data only (Release implements; any run needs separate '
-                'authority): every affected file and overlay of the source tree equals base exactly (config.xml only '
-                'through integrationRewrite with its bound inputs; unlisted paths equal the pinned trees), every '
-                'candidateDelta file and overlay is at its before image (absent where before is null), and then, in an '
-                'isolated copy only, the candidate patch (sha256-checked) is applied and the candidate overlays copied '
-                'from the sha256-checked bundle; the result must equal projects and overlays exactly. Partial, already '
-                'applied or unknown state refuses',
+            'verifyBaseApplyCandidate': {
+                'status': 'proposal, stated as data only: Release implements it, and any run needs separate authority',
+                'conditions': [
+                    {'id': 'base-exact', 'text': 'the integrating bundle matches base.bundleContent; every affected file '
+                        'of every project equals base.projects post (config.xml only through integrationRewrite with its '
+                        'bound inputs); every base overlay is present with its sha256; every unlisted path matches the '
+                        'project treePin; no extra path'},
+                    {'id': 'delta-preimages', 'text': 'every candidateDelta file and overlay is at its before image, or '
+                        'absent where before is null; anything at after, or neither, refuses'},
+                    {'id': 'isolated-apply', 'text': 'in an isolated copy only, each candidateDelta patch (sha256-checked '
+                        'bytes at bundlePath) passes candidateDelta.application, and each candidateDelta overlay is copied '
+                        'from its sha256-checked bundlePath'},
+                    {'id': 'final-exact', 'text': 'the copy then equals projects and overlays exactly, with the same '
+                        'treePin and config.xml rules; only then does the compile proceed'},
+                ],
+                'otherwise': 'refuse at the first failed condition, naming its id; partial, already applied or unknown '
+                    'state refuses',
+            },
             'otherwise': 'refuse: mixed pre/post, unknown hash, missing file, overlay, input or binding. A tree '
                 'integrated by the current patcher (Launcher3 switcher only) is such a state and must not be completed '
                 'by applying rose-edge-launcher3.patch alone. Never reset or trust a snapshot.',
         },
         'projects': projects,
         'overlays': overlays(),
-        'unaffected': 'inside the three projects, every path not listed in files or overlays must equal the pinned '
-            'revision\'s tree, and any extra file is refused; every other project the library or lunch needs must be '
+        'unaffected': 'inside the three projects, every path not listed in files or overlays must match that '
+            'project\'s treePin, and any extra file is refused; every other project the library or lunch needs must be '
             'byte-identical to its pinned revision (Infra provenance, not this contract)',
         'notInputs': ['packages/apps/PixelBackgroundControl and Agent.apk', 'the policy receipt in reconstruct (only '
             'verifyIntegrated needs it, bound, to check config.xml)', 'build/make patches', 'packages/apps/Updater',
@@ -556,14 +721,40 @@ def check(manifest):
                 bound[0 if c['base'] == 'exact' else 1] += c['base'] in ('exact', 'different')
             if ('integrationRewrite' in row) != (path == 'frameworks/base' and row['path'] == CONFIG):
                 errors.append(f'{path}/{row["path"]}: only frameworks/base config.xml has an integration rewrite')
-            elif 'integrationRewrite' in row and row['integrationRewrite']['elements'] != list(CONFIG_MARKERS):
-                errors.append('config.xml: the rewritten elements are not exactly the five')
+            elif 'integrationRewrite' in row and row['integrationRewrite'] != integration_rewrite():
+                errors.append('config.xml: the integration rewrite rule differs from the patcher\'s five elements')
+        errors += check_tree_pin(project)
     if manifest['overlays'] != overlays():
         errors.append('overlays changed; regenerate with --write')
     errors += check_evidence(manifest, revisions)
     if not errors:
         errors += check_candidate(manifest)
     check.bound = tuple(bound)
+    return errors
+
+
+def check_tree_pin(project):
+    path = project['path']
+    pin = project.get('treePin') or {}
+    if not tree_fixture(path).exists():
+        return [f'{path}: no pinned tree listing fixture']
+    listing = read_listing(path)
+    errors = []
+    if git_tree_hash(listing) != pin.get('rootTree'):
+        errors.append(f'{path}: the listing is not the pinned root tree {pin.get("rootTree")}')
+    if pin != tree_pin(path, project['revision'], pin.get('rootTree'), excluded(project)):
+        errors.append(f'{path}: treePin differs from the pinned listing; regenerate with --write')
+    entries = {p: blob for _, _, blob, p in listing}
+    for row in project['files']:
+        if row['pre'] is None:
+            if row['path'] in entries:
+                errors.append(f'{path}/{row["path"]}: a new file that the pinned tree already has')
+        elif entries.get(row['path']) != row['pre']['gitBlob']:
+            errors.append(f'{path}/{row["path"]}: pre-image is not the pinned tree\'s blob')
+    prefix = path + '/'
+    for o in overlays():
+        if o['target'].startswith(prefix) and o['target'][len(prefix):] in entries:
+            errors.append(f'{o["target"]}: an overlay target the pinned tree already has')
     return errors
 
 
