@@ -1,7 +1,8 @@
 """BLAZER-COMPILE workflow wiring (scripts/blazer-compile-wiring.py, os-release.yml mode blazer-compile): the hosted
-check exits 4 while the compile binding is null, a bound binding resolves exactly Flavors' accepted compile argv with
-the recipe's own bounds, and the job is read-only, bounded and uploads only the three receipts. Text and synthetic
-bindings only: no host, lock, integration or build."""
+check exits 4 while jobs is null, a bound binding resolves exactly Flavors' accepted compile argv with the recipe's own
+bounds, run selects the one completed integration reserved for this checkout's HEAD (none or several refuse), and the
+job is read-only, bounded and uploads only the three receipts. Text, synthetic bindings and a temporary home only: no
+host, lock, integration or build."""
 import importlib.util
 import json
 import os
@@ -20,8 +21,8 @@ wiring = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(wiring)
 BINDING = json.loads((ROOT/'os/build-only/blazer-compile-host.json').read_text())
 SOURCE = json.loads((ROOT/'os/build-only/blazer-prep-host.json').read_text())['sourceRoot']
-BOUND = {'jobs': 64, 'integrationDir': '/home/pixelbuild/rose-actions/blazer-reconcile',
-         'inputsReceipt': '/home/pixelbuild/rose-actions/blazer-inputs/local-inputs.json'}
+BOUND = {'jobs': 64}
+RECIPE = 'c' * 40
 
 
 def jobs():
@@ -46,18 +47,63 @@ def binding(**change):
 
 
 class Wiring(unittest.TestCase):
-    def test_the_committed_binding_is_unbound_and_exits_4(self):
-        self.assertEqual([BINDING[k] for k in ('jobs', 'integrationDir', 'inputsReceipt')], [None, None, None])
+    def test_the_committed_binding_binds_jobs_and_derives_the_integration_at_run_time(self):
+        self.assertEqual((BINDING['jobs'], BINDING['integrationFrom']), (48, wiring.INTEGRATION_FROM))
+        self.assertNotIn('integrationDir', BINDING)
+        self.assertIn('unknown, not unlimited', BINDING['basis'])
         result = subprocess.run([sys.executable, str(ROOT/'scripts/blazer-compile-wiring.py'), 'check'],
                                 capture_output=True, text=True)
-        self.assertEqual((result.returncode, result.stdout), (4, ''))
-        self.assertIn('jobs, integrationDir, inputsReceipt', result.stderr)
+        self.assertEqual((result.returncode, result.stdout), (0, 'outer_seconds=29100\njob_minutes=496\n'))
+        result = subprocess.run([sys.executable, str(ROOT/'scripts/blazer-compile-wiring.py'), 'check', '--binding',
+                                 str(binding(jobs=None))], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 4)
+
+    def reserve(self, home, build, source=RECIPE, inputs=True, applied=True):
+        base = home/'rose-actions'
+        (base/'blazer-allocations').mkdir(parents=True, exist_ok=True)
+        work, reconcile = base/f'blazer-integrate-{build}', base/f'blazer-reconcile-{build}'
+        record = {'schema': 'roseos.blazer-allocation.v1', 'device': 'blazer', 'build': build, 'source': source, 'runId': '1',
+                  'runAttempt': '1', 'reservedAt': '2026-11-03T15:00:00Z', 'workDir': str(work),
+                  'integrationDir': str(reconcile), 'observed': {}}
+        (base/'blazer-allocations'/f'{build}.json').write_text(json.dumps(record))
+        if inputs:
+            (work/'inputs').mkdir(parents=True)
+            (work/'inputs/local-inputs.json').write_text('{}')
+        if applied:
+            reconcile.mkdir()
+            (reconcile/'0001-2026103101.json').write_text('{}')
+            (reconcile/f'0002-blazer-{build}.json').write_text('{}')
+        return str(reconcile), str(work/'inputs/local-inputs.json')
+
+    def test_run_selects_exactly_one_completed_integration_of_this_commit(self):
+        home = Path(tempfile.mkdtemp())
+        source = Path(SOURCE)
+        with self.assertRaises(wiring.Refused):
+            wiring.integration(RECIPE, source, home)  # no reservation directory
+        expected = self.reserve(home, '2026110301')
+        self.reserve(home, '2026110302', source='d' * 40)  # another commit's integration
+        self.reserve(home, '2026110303', applied=False)  # stopped before reconcile
+        self.reserve(home, '2026110304', inputs=False, applied=False)  # stopped before admit
+        self.assertEqual(wiring.integration(RECIPE, source, home), expected)
+        self.reserve(home, '2026110305')
+        with self.assertRaises(wiring.Refused):
+            wiring.integration(RECIPE, source, home)  # two completed: ambiguous
+        home = Path(tempfile.mkdtemp())
+        reconcile, _ = self.reserve(home, '2026110301')
+        os.rename(reconcile, reconcile + '-real')
+        os.symlink(reconcile + '-real', reconcile)
+        with self.assertRaises(wiring.Refused):
+            wiring.integration(RECIPE, source, home)  # a linked integration directory never counts
+        home = Path(tempfile.mkdtemp())
+        self.reserve(home, '2026110301')
+        (home/'rose-actions/blazer-allocations/2026110301.json').write_text('{"build": "2026110301"}')
+        with self.assertRaises(wiring.Refused):
+            wiring.integration(RECIPE, source, home)  # an unrecognised reservation refuses
 
     def test_a_bound_binding_resolves_the_accepted_argv_and_recipe_bounds(self):
         tail, outer, minutes = wiring.resolve(binding())
         self.assertEqual(tail, ['--stage', 'compile', '--host', 'immortal-os-builder', '--lock', '/home/pixelbuild/frankel-build.lock',
-                                '--source-root', SOURCE, '--jobs', '64', '--integration-dir', BOUND['integrationDir'],
-                                '--inputs-receipt', BOUND['inputsReceipt']])
+                                '--source-root', SOURCE, '--jobs', '64'])
         recipe = json.loads((ROOT/'os/build-only/blazer.json').read_text())
         self.assertEqual((outer, minutes), (recipe['compile']['timeoutSeconds'] + 300, -(-(recipe['compile']['timeoutSeconds'] + 330) // 60) + 10))
         self.assertEqual((outer, minutes), (29100, 496))
@@ -66,9 +112,8 @@ class Wiring(unittest.TestCase):
             self.assertIn(f"parser.add_argument('{flag}'", helper)
 
     def test_invalid_bindings_refuse(self):
-        for change in ({'jobs': 0}, {'jobs': 257}, {'jobs': '64'}, {'jobs': True}, {'integrationDir': 'relative'},
-                       {'inputsReceipt': '/home/pixelbuild/rose-actions/blazer-inputs/other.json'},
-                       {'integrationDir': SOURCE + '/reconcile'}, {'integrationDir': '/home/pixelbuild/grapheneos-2026100600/x'},
+        for change in ({'jobs': 0}, {'jobs': 257}, {'jobs': '64'}, {'jobs': True}, {'integrationFrom': 'any'},
+                       {'integrationDir': '/home/pixelbuild/rose-actions/blazer-reconcile'},
                        {'sourceRootFrom': 'os/release-pipeline/frankel.json host.sourceRoot'}, {'host': 'other'}, {'extra': 1}):
             with self.subTest(change=change), self.assertRaises(wiring.Invalid):
                 wiring.resolve(binding(**change))

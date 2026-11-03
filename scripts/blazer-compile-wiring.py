@@ -5,16 +5,21 @@ blazer target-files on the original builder, in the isolated blazer-prep work tr
   blazer-compile-wiring.py check
       hosted and on the builder: the recipe loads without drift (the helper's lexical load), compile carries its
       reviewed timeout and first-build allowance, and os/build-only/blazer-compile-host.json is complete and lexically
-      isolated from the production source root. Exit 4 while jobs, integrationDir or inputsReceipt is null. Prints
-      outer_seconds (compile.timeoutSeconds + 300 s for preflight and output collection) and job_minutes. Reads no host
-      path.
+      isolated from the production source root. Exit 4 while jobs is null. Prints outer_seconds
+      (compile.timeoutSeconds + 300 s for preflight and output collection) and job_minutes. Reads no host path.
   blazer-compile-wiring.py run --receipt-dir NEW
-      the same check, then exec of exactly `blazer-build-only.py run --stage compile --host H --lock L --source-root S
-      --jobs J --integration-dir I --inputs-receipt R --receipt-dir NEW`. The helper does every host check (isolation,
+      the same check, then selects the integration of THIS checkout (integrationFrom): among the blazer-allocate
+      reservations H/rose-actions/blazer-allocations/<build>.json (read no-follow and validated by blazer-allocate),
+      exactly one whose source is this checkout's HEAD and whose integration completed - the admitted
+      blazer-integrate-<build>/inputs/local-inputs.json and a NNNN-blazer-<build>.json receipt in blazer-reconcile-<build>,
+      both regular files with no link in the path. None or more than one refuses (exit 1) before the helper. Then exec
+      of exactly `blazer-build-only.py run --stage compile --host H --lock L --source-root S --jobs J
+      --integration-dir blazer-reconcile-<build> --inputs-receipt R --receipt-dir NEW`. Integrate and compile are
+      therefore dispatched on the same commit: the helper's compile_problems also requires HEAD to be the admitted recipe. The helper does every host check (isolation,
       the integration binding, lock, space, its own timeout) and writes preflight.json, started.json and completed.json
       (the collected target-files, otatools and boot image paths and hashes) write-once.
 
-Compile neither signs nor packages. Exit status: 0 ok, 2 invalid, 4 unbound.
+Compile neither signs nor packages. Exit status: 0 ok, 1 refused, 2 invalid, 4 unbound.
 """
 import argparse
 import importlib.util
@@ -22,12 +27,16 @@ import json
 import math
 import os
 from pathlib import Path
+import re
+import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 BINDING = ROOT/'os/build-only/blazer-compile-host.json'
 HELPER = ROOT/'scripts/blazer-build-only.py'
-KEYS = {'schemaVersion', 'kind', 'basis', 'host', 'lockFrom', 'sourceRootFrom', 'jobs', 'integrationDir', 'inputsReceipt'}
+KEYS = {'schemaVersion', 'kind', 'basis', 'host', 'lockFrom', 'sourceRootFrom', 'jobs', 'integrationFrom'}
+INTEGRATION_FROM = 'scripts/blazer-allocate.py reservation whose source is this checkout HEAD, integration completed'
+HOME = Path('/home/pixelbuild')
 OUTER_MARGIN_SECONDS, KILL_AFTER_SECONDS, JOB_MARGIN_MINUTES = 300, 30, 10
 RECEIPTS = ('preflight.json', 'started.json', 'completed.json')
 
@@ -37,6 +46,10 @@ class Invalid(Exception):
 
 
 class Unbound(Exception):
+    pass
+
+
+class Refused(Exception):
     pass
 
 
@@ -68,32 +81,78 @@ def resolve(binding_path=BINDING, root=ROOT):
     allowance = recipe['capacity'].get('compileAllowanceBytes')
     if not isinstance(allowance, int) or isinstance(allowance, bool) or allowance <= 0:
         raise Invalid('recipe capacity.compileAllowanceBytes must be a reviewed finite allowance')
-    unbound = [n for n in ('jobs', 'integrationDir', 'inputsReceipt') if binding[n] is None]
-    if unbound:
-        raise Unbound(f'compile needs inputs not yet bound in {Path(binding_path).name}: {", ".join(unbound)}')
+    if binding['integrationFrom'] != INTEGRATION_FROM:
+        raise Invalid(f'integrationFrom must be {INTEGRATION_FROM!r}')
+    if binding['jobs'] is None:
+        raise Unbound(f'compile needs inputs not yet bound in {Path(binding_path).name}: jobs')
     jobs = binding['jobs']
     if not isinstance(jobs, int) or isinstance(jobs, bool) or not 1 <= jobs <= compile_['maxJobs']:
         raise Invalid(f'jobs must be an integer from 1 to {compile_["maxJobs"]}')
     source = h.pointer(root, binding['sourceRootFrom'])
     production = Path(h.pointer(root, recipe['preparation']['productionSourceRootFrom']))
-    values = {'sourceRoot': source, 'integrationDir': binding['integrationDir'], 'inputsReceipt': binding['inputsReceipt']}
-    for name, value in values.items():
-        if not isinstance(value, str) or not value.startswith('/') or os.path.normpath(value) != value or '..' in Path(value).parts:
-            raise Invalid(f'{name} must be a normalized absolute path')
-        problem = h.isolation_problem(Path(value), production, probe=False)
-        if problem:
-            raise Invalid(f'{name}: {problem}')
-    if Path(binding['inputsReceipt']).name != 'local-inputs.json':
-        raise Invalid('inputsReceipt must be blazer_integration.py admit\'s local-inputs.json')
-    for name in ('integrationDir', 'inputsReceipt'):
-        path = Path(values[name])
-        if Path(source) in (path, *path.parents):
-            raise Invalid(f'{name} must be outside the source tree')
+    if not isinstance(source, str) or not source.startswith('/') or os.path.normpath(source) != source or '..' in Path(source).parts:
+        raise Invalid('sourceRoot must be a normalized absolute path')
+    problem = h.isolation_problem(Path(source), production, probe=False)
+    if problem:
+        raise Invalid(f'sourceRoot: {problem}')
     argv = ['--stage', 'compile', '--host', binding['host'], '--lock', h.pointer(root, binding['lockFrom']),
-            '--source-root', source, '--jobs', str(jobs), '--integration-dir', values['integrationDir'],
-            '--inputs-receipt', values['inputsReceipt']]
+            '--source-root', source, '--jobs', str(jobs)]
     outer = timeout + OUTER_MARGIN_SECONDS
     return argv, outer, math.ceil((outer + KILL_AFTER_SECONDS) / 60) + JOB_MARGIN_MINUTES
+
+
+def allocator(root=ROOT):
+    spec = importlib.util.spec_from_file_location('blazer_allocate', root/'scripts/blazer-allocate.py')
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def plain(path):
+    """A regular file (or directory) with no link anywhere in its path."""
+    path = Path(path)
+    return not any(p.is_symlink() for p in (path, *path.parents)) and (path.is_file() or path.is_dir())
+
+
+def integration(recipe, source, home=HOME, root=ROOT):
+    """(--integration-dir, --inputs-receipt) of the one completed integration reserved for this recipe, or Refused."""
+    allocate = allocator(root)
+    base = Path(home)/'rose-actions'
+    directory = base/allocate.RESERVATIONS
+    if not plain(directory) or not directory.is_dir():
+        raise Refused('no blazer reservation directory: integrate this commit first')
+    found = []
+    for path in sorted(directory.iterdir()):
+        try:
+            build = allocate.read_reservation(path)
+            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+            with os.fdopen(fd) as f:
+                record = json.load(f)
+        except (OSError, ValueError, KeyError, TypeError):
+            raise Refused(f'unreadable blazer reservation {path.name[:40]}') from None
+        if record['source'] != recipe:
+            continue
+        work, reconcile = base/f'blazer-integrate-{build}', base/f'blazer-reconcile-{build}'
+        if (record['workDir'], record['integrationDir']) != (str(work), str(reconcile)):
+            raise Refused(f'reservation {build} names other directories than its build derives')
+        inputs = work/'inputs/local-inputs.json'
+        if source in (work, reconcile, *work.parents, *reconcile.parents):
+            raise Refused(f'reservation {build} directories contain the source tree')
+        applied = plain(reconcile) and reconcile.is_dir() and any(
+            plain(r) and r.is_file() for r in reconcile.glob(f'[0-9][0-9][0-9][0-9]-blazer-{build}.json'))
+        if plain(inputs) and inputs.is_file() and applied:
+            found.append((build, str(reconcile), str(inputs)))
+    if len(found) != 1:
+        raise Refused(f'{len(found)} completed blazer integrations of this commit {recipe[:12]}; exactly one is required')
+    return found[0][1], found[0][2]
+
+
+def head(root=ROOT):
+    result = subprocess.run(['git', '-C', str(root), 'rev-parse', 'HEAD'], capture_output=True, text=True)
+    value = result.stdout.strip()
+    if result.returncode or not re.fullmatch(r'[0-9a-f]{40}', value):
+        raise Invalid('this checkout has no readable HEAD')
+    return value
 
 
 def main(argv=None):
@@ -111,9 +170,14 @@ def main(argv=None):
             return 0
         if not a.receipt_dir or not a.receipt_dir.startswith('/'):
             raise Invalid('run needs an absolute --receipt-dir')
-        command = [sys.executable, str(HELPER), 'run', *tail, '--receipt-dir', a.receipt_dir]
+        integration_dir, inputs = integration(head(), Path(tail[tail.index('--source-root') + 1]))
+        command = [sys.executable, str(HELPER), 'run', *tail, '--integration-dir', integration_dir,
+                   '--inputs-receipt', inputs, '--receipt-dir', a.receipt_dir]
         print(json.dumps({'helper': command[1:]}), flush=True)
         os.execv(sys.executable, command)
+    except Refused as error:
+        print(json.dumps({'verdict': 'REFUSED', 'error': str(error)}), file=sys.stderr)
+        return 1
     except Unbound as error:
         print(json.dumps({'verdict': 'SETUP_MISSING', 'error': str(error)}), file=sys.stderr)
         return 4
