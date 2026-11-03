@@ -1563,5 +1563,101 @@ class RoseEdgeSwipePatchTest(unittest.TestCase):
         patcher = (ROOT/'scripts/apply-os-changes.py').read_text()
         self.assertNotIn('rose-edge-launcher3.patch', patcher, 'registered only with an agreed compile route')
 
+class Launcher3CompileContractTest(unittest.TestCase):
+    """#410: os/compile-contracts/launcher3-quickstep-lib.json, the inputs for Release's compile-only adapter
+    (verify-integrated or reconstruct; anything else refused). Offline checks against the committed os/ bundle; the
+    frameworks/base and build/release images were computed from pinned public sources by
+    scripts/launcher3-compile-contract.py --write and are bound here by each patch's own index lines."""
+    SCRIPT = ROOT/'scripts/launcher3-compile-contract.py'
+    MANIFEST = ROOT/'os/compile-contracts/launcher3-quickstep-lib.json'
+
+    def contract(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location('launcher3_compile_contract', self.SCRIPT)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    def test_the_manifest_matches_the_committed_bundle(self):
+        result = subprocess.run(['python3', str(self.SCRIPT)], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('33 patch steps match the blobs their own index lines record', result.stdout)
+
+    def test_the_branches_refuse_anything_else(self):
+        import json
+        manifest = json.loads(self.MANIFEST.read_text())
+        self.assertEqual(manifest['target'], 'Launcher3QuickStepLib')
+        self.assertEqual(set(manifest['branches']), {'verifyIntegrated', 'reconstruct', 'otherwise'})
+        self.assertIn('no patch is applied again', manifest['branches']['verifyIntegrated'])
+        self.assertIn('refuse', manifest['branches']['otherwise'])
+        self.assertIn('Never reset or trust a snapshot', manifest['branches']['otherwise'])
+        for project in manifest['projects']:
+            for row in project['files']:
+                self.assertRegex(row['post']['sha256'], r'^[0-9a-f]{64}$')
+                if row['pre'] is not None:
+                    self.assertRegex(row['pre']['gitBlob'], r'^[0-9a-f]{40}$')
+        required = [o['target'] for o in manifest['overlays'] if o['role'] == 'required']
+        self.assertEqual(len([t for t in required if t.startswith('packages/apps/Launcher3/')]), 8)
+        self.assertNotIn('Agent.apk', ' '.join(o['target'] for o in manifest['overlays']))
+
+    def test_config_xml_is_compared_after_reversing_exactly_the_policy_rewrites(self):
+        contract = self.contract()
+        patcher = (ROOT/'scripts/apply-os-changes.py').read_text()
+        self.assertIn("for name, rows in [('Agents', [policy['agent']]), ('Targets', policy['targets'])]:", patcher,
+            'Agents and Targets are rewritten through one template')
+        policy_block = patcher[patcher.index("    config = source/'frameworks/base/core/res/res/values/config.xml'"):]
+        self.assertEqual(policy_block.count('marker = '), 4,
+            'five elements through four markers (Agents/Targets share a template), no more')
+        for marker in ('    <string-array name="config_pixelComputerControl{name}" translatable="false" />',
+                '    <string-array name="config_pixelComputerControlPrototypeAgents" translatable="false" />',
+                '    <string name="config_pixelComputerControlReferenceDisplayAddress" translatable="false"></string>',
+                '    <bool name="config_pixelComputerControlLockedSessions">false</bool>'):
+            self.assertIn(marker, patcher, 'the markers are the patcher\'s own')
+        base = 'x\n' + '\n'.join(m for _, _, m in contract.CONFIG_MARKERS) + '\ny\n'
+        rewritten = base
+        for name in ('Agents', 'Targets', 'PrototypeAgents'):
+            marker = f'    <string-array name="config_pixelComputerControl{name}" translatable="false" />'
+            rewritten = rewritten.replace(marker, f'    <string-array name="config_pixelComputerControl{name}" '
+                'translatable="false">\n        <item>dev.pixel.backgroundcontrol:' + 'AB' * 32 + '</item>\n'
+                '        <item>com.example:' + 'CD' * 32 + '</item>\n    </string-array>')
+        rewritten = rewritten.replace('translatable="false"></string>', 'translatable="false">4619827259835644672</string>')
+        rewritten = rewritten.replace('LockedSessions">false</bool>', 'LockedSessions">true</bool>')
+        self.assertNotEqual(rewritten, base)
+        self.assertEqual(contract.normalize_config(rewritten), base)
+        self.assertEqual(contract.normalize_config(base), base, 'an unrewritten file is already normal')
+        with self.assertRaises(ValueError):
+            contract.normalize_config(base.replace('LockedSessions', 'Other'))
+        with self.assertRaises(ValueError):
+            contract.normalize_config(base + contract.CONFIG_MARKERS[0][2] + '\n')
+        import json
+        rows = {r['path']: r for r in json.loads(self.MANIFEST.read_text())['projects'][0]['files']}
+        self.assertEqual(rows['core/res/res/values/config.xml']['integrationRewrite']['elements'],
+            [name for _, name, _ in contract.CONFIG_MARKERS])
+        self.assertEqual([p for p, r in rows.items() if 'integrationRewrite' in r], ['core/res/res/values/config.xml'])
+
+    def test_identity_sharing_is_explicit_and_independent_of_the_edge_switch(self):
+        import json
+        sharing = json.loads(self.MANIFEST.read_text())['identitySharing']
+        self.assertTrue(sharing['appliesWithEdgeOff'])
+        self.assertIn('setShareIdentityEnabled(true)', sharing['change'])
+        self.assertIn('no dedicated exported entry', sharing['consumer'])
+        fallback = (ROOT/'os/patches/rose-edge-launcher3.patch').read_text()
+        tree = Path(tempfile.mkdtemp(prefix='launcher3-identity-'))
+        self.addCleanup(shutil.rmtree, tree, True)
+        for name, relative in EDGE_TARGETS.items():
+            (tree/relative).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(FIXTURES/name, tree/relative)
+        subprocess.run(['git', 'init', '-q', str(tree)], check=True)
+        subprocess.run(['git', '-C', str(tree), 'apply', str(EDGE_PATCH)], check=True)
+        for name, relative in EDGE_TARGETS.items():
+            code = (tree/relative).read_text()
+            if 'startHomeIntent(' not in code or name == 'AbsSwipeUpHandler.java':
+                continue
+            start = code[code.index('private void startHomeIntent('):]
+            start = start[:start.index('\n    }\n')]
+            self.assertIn('.setShareIdentityEnabled(true);', start, name)
+            self.assertNotIn('mRoseEdge', start, f'{name}: not gated by the edge switch')
+        self.assertIn('setShareIdentityEnabled', fallback)
+
 if __name__ == '__main__':
     unittest.main()
