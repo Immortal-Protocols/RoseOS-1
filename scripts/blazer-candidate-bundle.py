@@ -5,8 +5,12 @@ scripts/blazer_integration.py admit consumes, from actual signed bytes only.
   assemble --apps-dir DIR --policy FILE --build B --product C --aapt PATH --apksigner PATH --out NEW_DIR
 
 DIR holds, for each of the three Rose apps pinned in os/build-only/blazer-reconcile.json candidateInputs.apps, exactly
-<package>.apk and the sign-apk.py <package>.receipt.json that an existing signing run produced with the existing app
-signer. Every value written comes from those bytes, this checkout or git objects, never from expected values:
+what scripts/sign-apk.py writes for it with the existing app signer: <package>.apk, its <package>.receipt.json and the
+APK Signature Scheme v4 sidecar <package>.apk.idsig (sign-apk.py always signs with --v4-signing-enabled true, so
+apksigner writes <output>.idsig, which sign-apk.py reserves as output.with_suffix('.apk.idsig')). Those nine names,
+each a regular file and never a link, are the whole inventory: a missing one, any other name or a link refuses. The
+sidecars are left where they are, unread and uncopied: the bundle and everything after it consume only the APKs,
+receipts and policy. Every value written comes from those bytes, this checkout or git objects, never from expected values:
   - each receipt must match its APK bytes, name the pinned app signer and record a verified signature;
   - package, versionCode and signer are read from the APK itself with the given aapt and apksigner
     (background_apks.identity, the pinned SDK); the versionCode in candidate.json is the one read here;
@@ -35,6 +39,8 @@ import blazer_integration  # noqa: E402
 
 BUILD = re.compile(r'[1-9][0-9]{9}')
 COMMIT = re.compile(r'[0-9a-f]{40}')
+# What the existing app signing writes per app (see the docstring): signed APK, receipt and v4 signature sidecar.
+SIGNED_SUFFIXES = ('.apk', '.receipt.json', '.apk.idsig')
 
 
 class Refused(Exception):
@@ -52,7 +58,7 @@ def app_inputs(apps_dir, packages):
     apps_dir = Path(apps_dir)
     if not apps_dir.is_absolute() or '..' in apps_dir.parts or apps_dir.is_symlink() or not apps_dir.is_dir():
         raise Refused('--apps-dir must be an existing absolute directory, not a link')
-    expected = {f'{p}.apk' for p in packages} | {f'{p}.receipt.json' for p in packages}
+    expected = {f'{p}{suffix}' for p in packages for suffix in SIGNED_SUFFIXES}
     found = {entry.name for entry in apps_dir.iterdir()}
     if found != expected:
         raise Refused(f'--apps-dir inventory: missing {sorted(expected - found)}, unexpected {sorted(found - expected)}')

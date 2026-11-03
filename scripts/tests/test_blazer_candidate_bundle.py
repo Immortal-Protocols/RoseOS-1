@@ -27,6 +27,8 @@ class Assemble(fixture.Fixture):
         self.apps.mkdir()
         for name in os.listdir(self.bundle/'signed-apps'):
             shutil.copyfile(self.bundle/'signed-apps'/name, self.apps/name)
+        for package in fixture.VERSIONS:  # sign-apk.py's v4 sidecar beside each APK
+            (self.apps/f'{package}.apk.idsig').write_bytes(b'v4 ' + package.encode())
         self.policy = self.tmp/'policy.json'
         shutil.copyfile(self.bundle/'background-policy.json', self.policy)
         self.out = self.tmp/'assembled'
@@ -49,6 +51,15 @@ class Assemble(fixture.Fixture):
             ['background-policy.json', 'candidate.json', 'signed-apps'] +
             [f'{p}{s}' for p in fixture.VERSIONS for s in ('.apk', '.receipt.json')]))
 
+    def test_the_v4_sidecars_are_the_exact_sign_apk_names_and_stay_in_place_uncopied(self):
+        self.assertIn("'--v4-signing-enabled', 'true'", (ROOT/'scripts/sign-apk.py').read_text())
+        self.assertIn("output.with_suffix('.apk.idsig')", (ROOT/'scripts/sign-apk.py').read_text())
+        before = {p.name: p.read_bytes() for p in self.apps.iterdir()}
+        self.assertEqual(sorted(before), sorted(f'{p}{s}' for p in fixture.VERSIONS for s in ('.apk', '.receipt.json', '.apk.idsig')))
+        self.assemble()
+        self.assertEqual({p.name: p.read_bytes() for p in self.apps.iterdir()}, before)  # preserved, unchanged
+        self.assertFalse([p for p in self.out.rglob('*.idsig')])  # never copied into the bundle
+
     def test_the_version_is_read_from_the_apk_never_supplied(self):
         package = 'dev.pixel.voice'
         (self.apps/f'{package}.apk').write_bytes(self.apk(package, version=313))
@@ -62,6 +73,14 @@ class Assemble(fixture.Fixture):
             'unverified': lambda: self.edit_receipt('dev.pixel.voice', signatureVerified=False),
             'extra file': lambda: (self.apps/'notes.txt').write_text('x'),
             'missing receipt': lambda: (self.apps/'dev.pixel.voice.receipt.json').unlink(),
+            'missing sidecar': lambda: (self.apps/'dev.pixel.voice.apk.idsig').unlink(),
+            'unpinned sidecar': lambda: (self.apps/'dev.pixel.other.apk.idsig').write_bytes(b'v4'),
+            'sidecar of a receipt': lambda: (self.apps/'dev.pixel.voice.receipt.json.idsig').write_bytes(b'v4'),
+            'bare idsig name': lambda: (self.apps/'dev.pixel.voice.idsig').write_bytes(b'v4'),
+            'directory sidecar': lambda: ((self.apps/'dev.pixel.voice.apk.idsig').unlink(),
+                                          (self.apps/'dev.pixel.voice.apk.idsig').mkdir()),
+            'linked sidecar': lambda: ((self.apps/'dev.pixel.voice.apk.idsig').unlink(),
+                                       (self.apps/'dev.pixel.voice.apk.idsig').symlink_to(self.apps/'dev.pixel.voice.apk')),
             'policy version': lambda: self.edit_policy('voice', versionCode=999),
             'policy bytes': lambda: self.edit_policy('targets', apkSha256='0' * 64),
         }
