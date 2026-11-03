@@ -86,7 +86,7 @@ class Guard(unittest.TestCase):
             capture_output=True, cwd=ROOT).returncode
 
     def test_whole_guard_admits_exactly_the_bare_mode_with_one_preparation_stage(self):
-        for stage in ('source', 'download', 'vendor', 'lunch', 'inspect', 'git-inspect', 'git-inspect-set', 'git-inspect-objects', 'git-meta'):
+        for stage in ('source', 'download', 'vendor', 'lunch', 'inspect', 'git-inspect', 'git-inspect-set', 'git-inspect-objects', 'git-meta', 'binding-observe'):
             with self.subTest(stage=stage):
                 self.assertEqual(self.run_guard(BLAZER_PREP_STAGE=stage), 0)
         for change in ({'BLAZER_PREP_STAGE': 'none'}, {'BLAZER_PREP_STAGE': None}, {'BLAZER_PREP_STAGE': 'compile'},
@@ -105,7 +105,7 @@ class Guard(unittest.TestCase):
         observe = dict(MODE='rango-factory-observe')
         self.assertEqual(self.run_guard(**observe, BLAZER_PREP_STAGE='none'), 0)
         self.assertEqual(self.run_guard(**observe, BLAZER_PREP_STAGE=None), 0)  # older callers never set it
-        for stage in ('source', 'download', 'vendor', 'lunch', 'inspect', 'git-inspect', 'git-inspect-set', 'git-inspect-objects', 'git-meta'):
+        for stage in ('source', 'download', 'vendor', 'lunch', 'inspect', 'git-inspect', 'git-inspect-set', 'git-inspect-objects', 'git-meta', 'binding-observe'):
             self.assertNotEqual(self.run_guard(**observe, BLAZER_PREP_STAGE=stage), 0)
         line = '[[ "$MODE" == blazer-prep || "${BLAZER_PREP_STAGE:-none}" == none ]]'
         self.assertIn('          ' + line + '\n', jobs()['guard'])
@@ -117,7 +117,7 @@ class Guard(unittest.TestCase):
         self.assertIn('models-sign, rango-retained, blazer-prep, emulator-alpha-successor,', WORKFLOW)
         self.assertIn('      blazer_prep_stage:\n        description: blazer-prep only - the one preparation stage this run '
                       'executes (none for every other mode)\n        type: choice\n        options: [none, source, download, vendor, '
-                      'lunch, inspect, git-inspect, git-inspect-set, git-inspect-objects, git-meta]\n        default: none\n', WORKFLOW)
+                      'lunch, inspect, git-inspect, git-inspect-set, git-inspect-objects, git-meta, binding-observe]\n        default: none\n', WORKFLOW)
         self.assertIn("  BLAZER_PREP_STAGE: ${{ inputs.blazer_prep_stage || 'none' }}\n", WORKFLOW)
         inputs = re.findall(r'(?m)^      (\w+):$', WORKFLOW.split('    inputs:\n', 1)[1].split('\npermissions:', 1)[0])
         self.assertIn('blazer_prep_stage', inputs)
@@ -530,6 +530,19 @@ class GitInspect(unittest.TestCase):
     def test_git_meta_runs_once_with_a_fresh_receipt_dir(self):
         result = wire('run', '--stage', 'git-meta')
         self.assertEqual(result.returncode, 2)  # run needs an absolute --receipt-dir
+
+    def test_binding_observe_runs_exactly_the_release_observer(self):
+        self.assertEqual(wiring.resolve('binding-observe'), (['--host', 'immortal-os-builder'], 420, 17))
+        receipts = self.tmp/'observe'
+        result = wire('run', '--stage', 'binding-observe', '--receipt-dir', str(receipts))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout.splitlines()[0])['helper'][1:], ['observe', '--host', 'immortal-os-builder'])
+        self.assertTrue(json.loads(result.stdout.splitlines()[0])['helper'][0].endswith('scripts/blazer-binding-observe.py'))
+        self.assertEqual(sorted(p.name for p in receipts.iterdir()), ['binding-observation.json'])
+        report = json.loads((receipts/'binding-observation.json').read_text())
+        self.assertEqual(report['schema'], 'roseos.blazer-binding-observation.v1')
+        self.assertEqual(wire('run', '--stage', 'binding-observe', '--receipt-dir', str(receipts)).returncode, 2)
+        self.assertIn('binding-observation.json', step(jobs()['blazer-prep'], 'Allowlisted JSON receipts only'))
 
     def test_existing_routes_are_unchanged(self):
         self.assertEqual(wiring.resolve('inspect', run_id='5', attempt='1')[1:], (960, 20))

@@ -34,6 +34,11 @@ dispatch:
       pinned-manifest remote within gitMeta.boundBytes and timeoutSeconds, one shared cleanup budget on failure); the
       outer bound is gitMeta.timeoutSeconds + the helper's cleanup budget + 360 s.
 
+  binding-observe: `blazer-binding-observe.py observe --host immortal-os-builder` (Release) and nothing else: one bounded,
+      read-only observation of exactly the files, names and resources the blazer integration and compile bindings still
+      need (no link followed, allowlisted identity fields only, at most 64 KiB); its stdout is kept write-once as
+      NEW/binding-observation.json. The helper takes no lock and writes nothing.
+
 Never compile: compile is not a preparation stage and is refused here. Exit status: 0 ok, 2 invalid, 4 unbound (a host
 fact is still null).
 """
@@ -69,7 +74,10 @@ GIT_TARGET_SET = 'adevtool-projects-gitdir'
 GIT_OBJECTS_STAGE = {'outerSeconds': 180, 'jobMinutes': 14}
 # Stages that resolve from the recipe's text alone (the helper's lexical load): resolving them touches no host path.
 LEXICAL_STAGES = ('git-inspect-set', 'git-inspect-objects')
-RECEIPTS = {'inspect': ('inspection.json', 'inspect'), 'git-inspect': ('git-inspection.json', 'inspect-git'),
+OBSERVER = ROOT/'scripts/blazer-binding-observe.py'
+# binding-observe: its own 300 s deadline, then a 420 s outer timeout and a 17-minute job.
+BINDING_OBSERVE = {'outerSeconds': 420, 'jobMinutes': 17}
+RECEIPTS = {'binding-observe': ('binding-observation.json', 'observe'), 'inspect': ('inspection.json', 'inspect'), 'git-inspect': ('git-inspection.json', 'inspect-git'),
             'git-inspect-set': ('git-target-set-inspection.json', 'inspect-git-set'),
             'git-inspect-objects': ('git-objects-inspection.json', 'inspect-git-objects')}
 FLAGS = {'downloadDir': '--download-dir', 'sourceRoot': '--source-root', 'node': '--node'}
@@ -122,6 +130,11 @@ def resolve(stage, binding_path=BINDING, root=ROOT, run_id=None, attempt=None):
     """(argv tail without --receipt-dir, outer_seconds, job_minutes) for one preparation stage or inspect. The hosted
     check of inspect validates the candidate template with a sample run (1, 1); run passes the real run id and attempt."""
     h = helper()
+    if stage == 'binding-observe':
+        binding = json.loads(Path(binding_path).read_text())
+        if binding.get('host') != 'immortal-os-builder':
+            raise Invalid('binding host must be the existing original builder immortal-os-builder')
+        return ['--host', binding['host']], BINDING_OBSERVE['outerSeconds'], BINDING_OBSERVE['jobMinutes']
     if stage not in (*h.PREPARATION, h.GIT_META_STAGE, *RECEIPTS):
         raise Invalid(f'{stage!r} is not a preparation stage {h.PREPARATION}, {h.GIT_META_STAGE} or one of {", ".join(RECEIPTS)}')
     try:
@@ -224,7 +237,7 @@ def main(argv=None):
             raise Invalid('run needs an absolute --receipt-dir')
         if a.stage in RECEIPTS:
             name, action = RECEIPTS[a.stage]
-            command = [sys.executable, str(HELPER), action, *tail]
+            command = [sys.executable, str(OBSERVER if a.stage == 'binding-observe' else HELPER), action, *tail]
             print(json.dumps({'helper': command[1:]}), flush=True)
             receipts = Path(a.receipt_dir)
             receipts.mkdir(mode=0o700)  # fresh: an existing directory refuses
