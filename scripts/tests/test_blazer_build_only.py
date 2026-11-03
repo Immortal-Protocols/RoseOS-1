@@ -1315,6 +1315,160 @@ class InspectTest(Fixture):
         with self.assertRaisesRegex(bb.InvalidInput, '--candidate-root must be an absolute path'):
             bb.candidate_paths('/a/../b')
 
+    def git_cmd(self, where, *args):
+        env = {'PATH': '/usr/bin:/bin', 'HOME': str(self.tmp), 'GIT_CONFIG_NOSYSTEM': '1'}
+        return subprocess.run(['git', '-C', str(where), *args], env=env, check=True, capture_output=True, text=True).stdout
+
+    def git_report(self, tree):
+        budget = {'entries': 10 ** 6, 'deadline': time.monotonic() + 60}
+        return bb.git_facts(tree, 'vendor/adevtool/.git', budget, time.monotonic)
+
+    def opened_during(self, call):
+        """Every path os.open / builtins.open sees while CALL runs (the inspection must open HEAD only)."""
+        import builtins
+        seen, real_open, real_builtin = [], os.open, builtins.open
+        def spy_os(path, *a, **k):
+            seen.append(os.fspath(path))
+            return real_open(path, *a, **k)
+        def spy_builtin(path, *a, **k):
+            seen.append(os.fspath(path))
+            return real_builtin(path, *a, **k)
+        os.open, builtins.open = spy_os, spy_builtin
+        try:
+            return call(), seen
+        finally:
+            os.open, builtins.open = real_open, real_builtin
+
+    def test_git_inspection_reads_only_head_from_a_genuine_repository(self):
+        trees = {}
+        for name in ('ref', 'detached'):
+            adevtool = self.tmp/name/'vendor/adevtool'
+            adevtool.mkdir(parents=True)
+            self.git_cmd(adevtool, 'init', '-q')
+            self.git_cmd(adevtool, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '--allow-empty', '-m', 'synthetic')
+            trees[name] = (self.tmp/name, self.git_cmd(adevtool, 'rev-parse', 'HEAD').strip())
+        self.git_cmd(self.tmp/'detached/vendor/adevtool', 'checkout', '-q', '--detach')
+        tree, adevtool = self.tmp/'ref', self.tmp/'ref/vendor/adevtool'
+        before = self.snapshot(adevtool/'.git')
+        self.guard()  # from here on no process may start: the inspection itself never runs git
+        facts, opened = self.opened_during(lambda: self.git_report(tree))
+        self.assertEqual(self.snapshot(adevtool/'.git'), before, 'nothing under .git changes')
+        self.assertEqual(opened, [str(adevtool/'.git/HEAD')], 'HEAD is the only file opened')
+        self.assertEqual((facts['meta']['type'], facts['gitProcess'], facts['truncated']), ('dir', False, False))
+        names = {row['name'] for row in facts['entries']}
+        self.assertTrue({'HEAD', 'config', 'objects', 'refs'} <= names, names)
+        self.assertEqual(facts['head']['form'], 'ref')
+        self.assertTrue(facts['head']['ref'].startswith('refs/heads/'))
+        facts = self.git_report(trees['detached'][0])
+        self.assertEqual((facts['head']['form'], facts['head']['revision']), ('detached', trees['detached'][1]))
+
+    def test_repo_style_links_are_reported_never_followed(self):
+        tree = self.tmp/'tree'
+        git = tree/'vendor/adevtool/.git'
+        git.mkdir(parents=True)
+        (git/'HEAD').write_text('a' * 40 + '\n')
+        os.symlink('../../../.repo/project-objects/adevtool.git/objects', git/'objects')
+        os.symlink(str(self.tmp/'outside/config'), git/'config')
+        os.mkfifo(self.tmp/'fifo')
+        os.symlink(str(self.tmp/'fifo'), git/'packed-refs')  # following this would block
+        (git/'refs').mkdir()
+        facts, opened = self.opened_during(lambda: self.git_report(tree))
+        self.assertEqual(opened, [str(git/'HEAD')])
+        rows = {row['name']: row for row in facts['entries']}
+        self.assertEqual((rows['objects']['type'], rows['objects']['linkText'], rows['objects']['linkAbsolute'],
+                          rows['objects']['linkLeavesTree']),
+                         ('link', '../../../.repo/project-objects/adevtool.git/objects', False, False))
+        self.assertEqual((rows['config']['linkAbsolute'], rows['config']['linkLeavesTree']), (True, True))
+        self.assertEqual(rows['refs']['type'], 'dir')
+        self.assertNotIn('entries', rows['refs'], 'one level only')
+        self.assertEqual((facts['head']['form'], facts['head']['revision']), ('detached', 'a' * 40))
+        os.symlink('../../../../escape', git/'zz-escape')
+        self.assertTrue({r['name']: r for r in self.git_report(tree)['entries']}['zz-escape']['linkLeavesTree'])
+
+    def test_git_paths_that_are_links_files_or_unsafe_are_never_read(self):
+        tree = self.tmp/'tree'
+        (tree/'vendor/adevtool').mkdir(parents=True)
+        git = tree/'vendor/adevtool/.git'
+        (git).write_text('gitdir: /home/pixelbuild/grapheneos-2026100600/.repo/projects/vendor/adevtool.git\n')
+        facts, opened = self.opened_during(lambda: self.git_report(tree))
+        self.assertEqual((facts['meta']['type'], opened), ('file', []), 'a gitfile is lstat only')
+        self.assertIn('not read', facts['gitfile'])
+        self.assertNotIn('pixelbuild', json.dumps(facts))
+        git.unlink()
+        real = self.tmp/'real-git'
+        real.mkdir()
+        (real/'HEAD').write_text('b' * 40 + '\n')
+        os.symlink(real, git)
+        facts, opened = self.opened_during(lambda: self.git_report(tree))
+        self.assertEqual((facts['meta']['type'], facts['linkText'], opened), ('link', str(real), []))
+        self.assertNotIn('head', facts)
+        git.unlink()
+        git.mkdir()
+        os.symlink(str(real/'HEAD'), git/'HEAD')
+        facts, opened = self.opened_during(lambda: self.git_report(tree))
+        self.assertEqual((facts['head']['meta']['type'], facts['head']['linkText'], opened), ('link', str(real/'HEAD'), []))
+        (git/'HEAD').unlink()
+        os.mkfifo(git/'HEAD')
+        facts, opened = self.opened_during(lambda: self.git_report(tree))
+        self.assertEqual((facts['head']['meta']['type'], opened), ('other', []), 'a FIFO HEAD is never opened')
+        (git/'HEAD').unlink()
+        for content, form in ((b'c' * 40 + b'\n' + b'x' * 30, 'unrecognised'), (b'secret-looking text\n', 'unrecognised'),
+                              (b'ref: refs/heads/main\n', 'ref'), (b'C' * 40 + b'\n', 'unrecognised')):
+            (git/'HEAD').write_bytes(content)
+            facts = self.git_report(tree)
+            self.assertEqual(facts['head']['form'], form, content)
+            if form == 'unrecognised':
+                self.assertNotIn('secret', json.dumps(facts))
+                self.assertEqual(set(facts['head']) - {'meta'}, {'form', 'bytes'}, 'only its length, never its content')
+        (git/'HEAD').write_bytes(b'd' * 40 + b'\n' + b'e' * 40)
+        self.assertEqual(self.git_report(tree)['head']['bytes'], 'more than 64')
+        shutil.rmtree(git)
+        moved = self.tmp/'moved-adevtool'
+        (tree/'vendor/adevtool').rename(moved)
+        os.symlink(moved, tree/'vendor/adevtool')
+        (moved/'.git').mkdir()
+        facts, opened = self.opened_during(lambda: self.git_report(tree))
+        self.assertEqual((facts['symlinkComponent'], opened), (str(tree/'vendor/adevtool'), []))
+        self.assertNotIn('entries', facts)
+        (tree/'vendor/adevtool').unlink()
+        (tree/'vendor/adevtool').mkdir()
+        self.assertEqual(self.git_report(tree)['meta']['exists'], False)
+
+    def test_git_inspection_is_bounded_and_escapes_names(self):
+        tree = self.tmp/'tree'
+        git = tree/'vendor/adevtool/.git'
+        git.mkdir(parents=True)
+        for i in range(300):
+            (git/f'f{i:03d}').write_text('')
+        (git/'tab\tname\n').write_text('')
+        os.symlink('x' * 2000, git/'long-link')
+        facts = self.git_report(tree)
+        self.assertEqual((facts['entriesScanned'], len(facts['entries']), facts['truncated']), (256, 64, True))
+        shutil.rmtree(git)
+        git.mkdir()
+        (git/'tab\tname\n').write_text('')
+        os.symlink('x' * 2000, git/'long-link')
+        rows = {row['name']: row for row in self.git_report(tree)['entries']}
+        self.assertIn('tab\\x09name\\x0a', rows)
+        self.assertEqual((len(rows['long-link']['linkText']), rows['long-link']['linkTextTruncated']), (1024, True))
+        budget = {'entries': 1, 'deadline': time.monotonic() + 60}
+        small = bb.git_facts(tree, 'vendor/adevtool/.git', budget, time.monotonic)
+        self.assertEqual((small['entriesScanned'], small['truncated']), (1, True), 'the shared inspect budget bounds it')
+
+    def test_inspect_reports_git_facts_for_reference_and_candidate_and_gates_nothing(self):
+        ref = self.reference()
+        (ref/'vendor/adevtool/.git').mkdir(parents=True)
+        (ref/'vendor/adevtool/.git/HEAD').write_text(ADEVTOOL + '\n')
+        cand = self.tmp/'rose-actions/blazer-prep-41000000001-1'
+        (cand/'source/vendor/adevtool').mkdir(parents=True)
+        report = bb.inspect(self.synthetic, self.op(source_root=None, download_dir=None, node=None), root=self.root,
+                            statvfs=fs(10 ** 15), candidates=bb.candidate_paths(str(cand)), environ={'PATH': ''})
+        self.assertEqual(report['schema'], 'roseos.blazer-preparation-inspection.v2')
+        self.assertEqual((report['reference']['adevtoolGit']['head']['form'], report['reference']['adevtoolGit']['head']['revision']),
+                         ('detached', ADEVTOOL))
+        self.assertEqual(report['candidates']['sourceRoot']['adevtoolGit']['meta']['exists'], False)
+        self.assertEqual((report['enablesPreparation'], report['processesStarted'], report['writes']), (False, 0, False))
+
     def test_production_candidates_are_flagged_and_walks_are_bounded(self):
         self.reference()
         report = bb.inspect(self.synthetic, self.op(), root=self.root, statvfs=fs(10 ** 15),

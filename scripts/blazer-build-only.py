@@ -57,8 +57,9 @@ and full containment need host-side cgroup/quota configuration that this tool do
 
   blazer-build-only.py inspect --host --lock [--source-root] [--download-dir] [--node] [--max-entries] [--max-seconds]
             metadata only, for a later approved observation (at most 20 minutes): lstat identities, isolation, statvfs,
-            pinned project presence, adevtool_revision (128 bytes), bounded collision/download sizes and the node file
-            identity and PATH resolution; starts no process, opens no connection and writes nothing
+            pinned project presence, adevtool_revision (128 bytes), bounded collision/download sizes, one level of
+            vendor/adevtool/.git with at most 64 bytes of its HEAD (git_facts), and the node file identity and PATH
+            resolution; starts no process, opens no connection and writes nothing
 Exit status: 0 ready/success, 1 not ready or the stage failed, 2 invalid input. Source tests use synthetic trees, a fake
 fetcher and a fake runner only.
 """
@@ -956,6 +957,91 @@ def filesystem(path, statvfs):
     return {'queried': str(probe), 'usable': True, 'availableBytes': fs.f_bavail * fs.f_frsize,
             'totalBytes': fs.f_blocks * fs.f_frsize, 'device': os.lstat(probe).st_dev}
 
+GIT_INSPECT = {'scanEntries': 256, 'listedEntries': 64, 'linkTextBytes': 1024, 'headBytes': 64}
+HEAD_DETACHED = re.compile(rb'([0-9a-f]{40})\n')
+HEAD_REF = re.compile(rb'ref: (refs/[A-Za-z0-9._/-]{1,200})\n')
+
+def sanitized(text, limit):
+    """Raw filesystem bytes of a name or link text, escaped (backslash, tab, CR, LF and every other non-printable byte
+    as \\xNN), at most LIMIT bytes before escaping; (text, truncated)."""
+    raw = os.fsencode(text)
+    out = ''.join(chr(b) if 0x20 <= b < 0x7f and b != 0x5c else f'\\x{b:02x}' for b in raw[:limit])
+    return out, len(raw) > limit
+
+def git_facts(src, rel, budget, clock):
+    """Metadata of one project's git metadata path, one level only (inspect; gates nothing). The path itself: lstat,
+    never followed (a link reports its text only). A regular file (a gitfile): lstat only, its content is not read. A
+    real directory: at most GIT_INSPECT['scanEntries'] entries scanned and the first listedEntries (sorted) reported
+    with type, mode and size, links with their escaped text and whether it lexically leaves the tree; HEAD alone is
+    read, only as a regular unlinked file, O_NOFOLLOW, at most headBytes, and reported only as a detached 40-hex
+    revision or a refs/ name. Objects, refs contents, config, the index and hooks are never opened; no git process runs."""
+    path = src/rel
+    facts = {'path': rel, 'meta': meta(path), 'symlinkComponent': str(symlink_in(path.parent) or '') or None,
+             'contentRead': 'HEAD only (at most 64 bytes)', 'gitProcess': False}
+    if facts['symlinkComponent'] or not facts['meta'].get('exists'):
+        return facts
+    kind = facts['meta']['type']
+    if kind == 'link':
+        facts['linkText'], facts['linkTextTruncated'] = sanitized(os.readlink(path), GIT_INSPECT['linkTextBytes'])
+        return facts
+    if kind == 'file':
+        facts['gitfile'] = 'present; its gitdir text is not read (inspection reads HEAD only)'
+        return facts
+    if kind != 'dir':
+        return facts
+    seen = []
+    with os.scandir(path) as it:
+        for entry in it:
+            if len(seen) >= GIT_INSPECT['scanEntries'] or budget['entries'] <= 0 or clock() > budget['deadline']:
+                facts['truncated'] = True
+                break
+            budget['entries'] -= 1
+            seen.append(entry.name)
+    facts.setdefault('truncated', False)
+    facts['entriesScanned'] = len(seen)
+    root = os.path.normpath(str(src))
+    listed = []
+    for name in sorted(seen)[:GIT_INSPECT['listedEntries']]:
+        info = meta(path/name)
+        row = {'name': sanitized(name, 255)[0], 'type': info.get('type'), 'mode': info.get('mode'), 'size': info.get('size')}
+        if info.get('type') == 'link':
+            text = os.readlink(path/name)
+            row['linkText'], row['linkTextTruncated'] = sanitized(text, GIT_INSPECT['linkTextBytes'])
+            row['linkAbsolute'] = os.path.isabs(text)
+            target = os.path.normpath(os.path.join(str(path), text))
+            row['linkLeavesTree'] = not (target == root or target.startswith(root + os.sep))
+        listed.append(row)
+    facts['entries'] = listed
+    facts['entriesListedOf'] = len(seen)
+    head = path/'HEAD'
+    head_meta = meta(head)
+    facts['head'] = {'meta': head_meta}
+    if head_meta.get('type') == 'file':
+        try:
+            fd = os.open(head, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)  # never blocks on a swapped-in FIFO
+            try:
+                if not stat.S_ISREG(os.fstat(fd).st_mode):
+                    facts['head']['error'] = 'not a regular file when opened'
+                    return facts
+                data = os.read(fd, GIT_INSPECT['headBytes'] + 1)
+            finally:
+                os.close(fd)
+        except OSError as error:
+            facts['head']['error'] = type(error).__name__
+            return facts
+        detached, ref = HEAD_DETACHED.fullmatch(data), HEAD_REF.fullmatch(data)
+        if len(data) > GIT_INSPECT['headBytes']:
+            facts['head'].update(form='unrecognised', bytes=f'more than {GIT_INSPECT["headBytes"]}')
+        elif detached:
+            facts['head'].update(form='detached', revision=detached.group(1).decode())
+        elif ref:
+            facts['head'].update(form='ref', ref=ref.group(1).decode())
+        else:
+            facts['head'].update(form='unrecognised', bytes=len(data))
+    elif head_meta.get('type') == 'link':
+        facts['head']['linkText'], facts['head']['linkTextTruncated'] = sanitized(os.readlink(head), GIT_INSPECT['linkTextBytes'])
+    return facts
+
 def tree_facts(recipe, src, budget, clock):
     """Project presence, the adevtool revision marker (128 bytes) and bounded collision sizes of one tree."""
     prep = recipe['preparation']
@@ -969,6 +1055,7 @@ def tree_facts(recipe, src, budget, clock):
     facts['adevtoolRevisionPinned'] = recipe['pins']['vendor/adevtool']
     paths = [*prep['vendor']['collisionPaths'], prep['lunch']['outDir']]
     facts['collisions'] = {rel: bounded_bytes(src/rel, budget, clock) for rel in paths}
+    facts['adevtoolGit'] = git_facts(src, prep['vendor']['adevtoolGit']['metadataPath'], budget, clock)
     return facts
 
 def candidate_paths(candidate_root=None, layout=None, **explicit):
