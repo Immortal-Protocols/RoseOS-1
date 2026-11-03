@@ -25,8 +25,11 @@ loads OS Product's checker (scripts/launcher3-compile-contract.py), which B's te
                                  reconstruct - needs an approved genuine-Git-object source, none is bound: refused;
                                  anything else (mixed, pre-images, unknown hashes, missing or extra files) - refused,
                                  nothing is reset;
-                              3. lunch and `m -j8 Launcher3QuickStepLib <flag caches>` with OUT_DIR, HOME, TMPDIR and
-                                 XDG_* inside the run root, no ccache and no GIT_*; sampled stops (every SAMPLE_SECONDS)
+                              3. lunch on its own (LUNCH_SECONDS; a failed lunch is reported and m is not run), then
+                                 `m -j8 Launcher3QuickStepLib <flag caches>`, with OUT_DIR, HOME, TMPDIR and XDG_* inside
+                                 the run root, no ccache, GIT_CEILING_DIRECTORIES at the copy root and no system or user
+                                 git configuration (a lunch product in VERSION_CHECKED_PRODUCTS is refused before the
+                                 copy: adevtool_git_missing); sampled stops (every SAMPLE_SECONDS)
                                  on the output filesystem's growth (OUTPUT_STOP_BYTES) and the process group's resident
                                  memory (MEMORY_STOP_BYTES), and a wall-clock COMPILE_SECONDS; TERM, then KILL;
                               4. a sanitized report.json: the branch, the classification, the bound inputs, the compile
@@ -74,6 +77,13 @@ APPLY_STEPS = ['git -C <copy>/<project> apply --check -p<strip> <bundlePath>', '
 BLOB_ARGV = ['git', 'hash-object', '-t', 'blob', '--no-filters', '--stdin']
 LISTING_BYTES = 64 << 20
 PIN_SECONDS = 30 * 60
+LUNCH_SECONDS = 20 * 60
+# Products whose generated vendor makefile includes adevtool-version-check.mk, which runs
+# `git -C vendor/adevtool rev-parse HEAD` in lunch and m and $(error)s on a mismatch (OS Product's pinned trace, #410:
+# adevtool 17df3b79 src/blobs/build.ts writeVersionCheckFile, src/build/make.ts). The copy excludes every .git and no
+# genuine adevtool gitdir copy exists here, so such a lunch is refused before anything is copied: never a fabricated,
+# redirected or relaxed check.
+VERSION_CHECKED_PRODUCTS = ('frankel',)
 FINISH_SECONDS = 30 * 60
 UPLOAD = ('report.json', 'classification.json')
 WORK_DIRS = ('tree', 'out', 'home', 'tmp')
@@ -570,6 +580,9 @@ def check(binding_path=BINDING, root=ROOT, manifest_path=MANIFEST):
     unbound = [n for n in needed if values[n] is None]
     if unbound:
         raise Unbound(f'{binding["branch"]} needs inputs not yet bound in {Path(binding_path).name}: {", ".join(unbound)}')
+    if version_checked(binding['lunch']):
+        raise Unbound(f'adevtool_git_missing: {binding["lunch"]} runs adevtool-version-check.mk (git -C vendor/adevtool '
+                      'rev-parse HEAD) in lunch and m; the copy has no .git and no genuine adevtool gitdir copy is bound')
     if binding['branch'] == 'reconstruct':
         raise Unbound('reconstruct needs an approved genuine-Git-object source; this adapter has none wired')
     return manifest, binding
@@ -817,8 +830,20 @@ def contained_env(run_root, path=os.environ.get('PATH', '/usr/bin:/bin')):
     env = {'PATH': path, 'HOME': str(run_root/'home'), 'TMPDIR': str(run_root/'tmp'), 'OUT_DIR': str(run_root/'out'),
            'XDG_CACHE_HOME': str(run_root/'home/.cache'), 'XDG_CONFIG_HOME': str(run_root/'home/.config'),
            'XDG_DATA_HOME': str(run_root/'home/.local/share'), 'GRADLE_USER_HOME': str(run_root/'home/.gradle'),
-           'USE_CCACHE': '0', 'LANG': 'C.UTF-8'}
+           'USE_CCACHE': '0', 'LANG': 'C.UTF-8',
+           # Git discovery stops at the copy root (no parent repository can answer), and no system or user git
+           # configuration is read.
+           'GIT_CEILING_DIRECTORIES': str(run_root/'tree'), 'GIT_CONFIG_NOSYSTEM': '1', 'GIT_CONFIG_GLOBAL': '/dev/null'}
     return env
+
+
+def lunch_argv(lunch):
+    return ['bash', '-c', 'set -eo pipefail; source build/envsetup.sh >/dev/null; lunch "$1" >/dev/null',
+            'launcher3-lunch', lunch]
+
+
+def version_checked(lunch):
+    return lunch is not None and lunch.split('-', 1)[0] in VERSION_CHECKED_PRODUCTS
 
 
 def compile_argv(lunch, targets):
@@ -939,6 +964,9 @@ def run(binding, manifest, run_id, attempt, root=ROOT, lock=None, copier=copy_tr
               'identitySharing': manifest['identitySharing']}
     status = 3
     try:
+        if version_checked(binding['lunch']):
+            raise Refused('adevtool_git_missing: the lunch product runs adevtool-version-check.mk and no genuine adevtool '
+                          'gitdir copy is bound; nothing copied')
         with (lock or shared_lock)(lock_path(root)):
             for name in ('home', 'tmp', 'out'):
                 (run_root/name).mkdir(mode=0o700)
@@ -974,8 +1002,15 @@ def run(binding, manifest, run_id, attempt, root=ROOT, lock=None, copier=copy_tr
             write_once(receipts/'classification.json', result)
             out = run_root/'out'
             targets = compile_targets(manifest, out)
-            code, stopped = compiler(compile_argv(binding['lunch'], targets), contained_env(run_root),
-                                     str(run_root/'tree'), COMPILE_SECONDS, str(out))
+            env = contained_env(run_root)
+            code, stopped = compiler(lunch_argv(binding['lunch']), env, str(tree), LUNCH_SECONDS, str(out))
+            report['lunch'] = {'exit': code, 'stoppedBy': stopped}
+            if code != 0 or stopped:
+                report['result'] = 'incomplete'
+                report['incomplete'] = 'lunch did not succeed; m was not run'
+                status = 0
+                return status
+            code, stopped = compiler(compile_argv(binding['lunch'], targets), env, str(tree), COMPILE_SECONDS, str(out))
             report['compile'] = {'exit': code, 'stoppedBy': stopped, 'targets': [TARGET, *[
                 str(Path(t).relative_to(out.parent)) for t in targets[1:]]]}
             report['sourceProof'] = source_proof(out, manifest)
@@ -1051,7 +1086,7 @@ def main(argv=None):
             if a.run_id or a.attempt or a.upload_dir:
                 raise Invalid('check takes no other option')
             prepare = PREPARE_SECONDS + KILL_GRACE_SECONDS + (2 if binding['branch'] == 'verifyBaseApplyCandidate' else 1) * PIN_SECONDS
-            outer = prepare + COMPILE_SECONDS + KILL_GRACE_SECONDS + 600
+            outer = prepare + LUNCH_SECONDS + KILL_GRACE_SECONDS + COMPILE_SECONDS + KILL_GRACE_SECONDS + 600
             finish_outer = FINISH_SECONDS + KILL_GRACE_SECONDS
             print(f'outer_seconds={outer}\nfinish_seconds={FINISH_SECONDS}\njob_minutes={-(-(outer + finish_outer) // 60) + 10}')
             return 0
