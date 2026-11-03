@@ -60,6 +60,7 @@ class Fixture(unittest.TestCase):
             'candidate': f'{self.tmp}/rose-actions/blazer-prep-41473133543-1/source/vendor/adevtool/.git'}
         self.synthetic['preparation']['gitInspection']['targetSets'] = {'adevtool-projects-gitdir': {'projectsGitdir': {
             'root': f'{self.tmp}/production', 'path': '.repo/projects/vendor/adevtool.git'}}}
+        self.synthetic['preparation']['gitObjectsInspection']['root'] = f'{self.tmp}/production'
         # A checked-in-source copy whose production source root is a temporary tree, so isolation is exercised for real.
         self.root = self.tmp/'repo'
         (self.root/'os/release-pipeline').mkdir(parents=True)
@@ -171,6 +172,12 @@ class RecipeTest(Fixture):
             {'source': (150 << 30, 7200), 'download': (8 << 30, 3600), 'vendor': (128 << 30, 10800), 'lunch': (8 << 30, 1800)})
         self.assertEqual(prep['totalTimeoutSeconds'], 23400)
         self.assertEqual(prep['source']['cleanupSeconds'], 240)
+        objects = dict(prep['gitObjectsInspection'])
+        self.assertIsInstance(objects.pop('basis'), str)
+        self.assertEqual(objects, {'host': 'immortal-os-builder', 'root': '/home/pixelbuild/grapheneos-2026100600',
+            'path': '.repo/project-objects/adevtool.git/objects', 'maxEntries': 100000, 'maxDepth': 3, 'maxSeconds': 120,
+            'maxOutputBytes': 65536, 'excludeNames': ['hooks', 'rr-cache'],
+            'existenceOnly': ['info/alternates', 'info/http-alternates']})
         self.assertEqual(prep['gitInspection']['targetSets'], {'adevtool-projects-gitdir': {'projectsGitdir': {
             'root': '/home/pixelbuild/grapheneos-2026100600', 'path': '.repo/projects/vendor/adevtool.git'}}})
         self.assertEqual((prep['source']['includePaths'], prep['source']['exclusionsFrom']),
@@ -252,6 +259,20 @@ class RecipeTest(Fixture):
              'exactly production and candidate'),
             (lambda r: r['preparation']['gitInspection'].update(maxSeconds=600), 'maxSeconds 60'),
             (lambda r: r['preparation']['gitInspection'].pop('targetSets'), 'targetSets must be exactly'),
+            (lambda r: r['preparation'].pop('gitObjectsInspection'), 'gitObjectsInspection must be exactly'),
+            (lambda r: r['preparation']['gitObjectsInspection'].pop('basis'), 'gitObjectsInspection must be exactly'),
+            (lambda r: r['preparation']['gitObjectsInspection'].update(maxEntries=100001), 'gitObjectsInspection must be exactly'),
+            (lambda r: r['preparation']['gitObjectsInspection'].update(maxDepth=4), 'gitObjectsInspection must be exactly'),
+            (lambda r: r['preparation']['gitObjectsInspection'].update(maxSeconds=180), 'gitObjectsInspection must be exactly'),
+            (lambda r: r['preparation']['gitObjectsInspection'].update(maxOutputBytes=1 << 20), 'gitObjectsInspection must be exactly'),
+            (lambda r: r['preparation']['gitObjectsInspection'].update(path='.repo/project-objects/adevtool.git'),
+             'gitObjectsInspection must be exactly'),
+            (lambda r: r['preparation']['gitObjectsInspection'].update(root='/home/pixelbuild/rose-actions/x/source'),
+             'gitObjectsInspection must be exactly'),
+            (lambda r: r['preparation']['gitObjectsInspection'].update(host='other-builder'), 'gitObjectsInspection must be exactly'),
+            (lambda r: r['preparation']['gitObjectsInspection'].update(excludeNames=['hooks']), 'gitObjectsInspection must be exactly'),
+            (lambda r: r['preparation']['gitObjectsInspection'].update(existenceOnly=[]), 'gitObjectsInspection must be exactly'),
+            (lambda r: r['preparation']['gitObjectsInspection'].update(followLinks=True), 'gitObjectsInspection must be exactly'),
             (lambda r: r['preparation']['gitInspection']['targetSets']['adevtool-projects-gitdir']['projectsGitdir'].update(
                 root='/home/pixelbuild/rose-actions/x/source'), 'targetSets must be exactly'),
             (lambda r: r['preparation']['gitInspection']['targetSets']['adevtool-projects-gitdir']['projectsGitdir'].update(
@@ -1263,6 +1284,369 @@ class SourceRunTest(Fixture):
             self.construct(copier=broken)
         self.assertFalse(os.path.lexists(parent))
         self.assertEqual(signal.getitimer(signal.ITIMER_REAL), (0.0, 0.0))
+
+class ObjectsInspectTest(Fixture):
+    """O2: inspect-git-objects over a synthetic production tree laid out as O1 found it (never the real one)."""
+
+    def objects_tree(self):
+        production = self.production
+        gitdir = production/'.repo/project-objects/adevtool.git'
+        objects = gitdir/'objects'
+        for rel, data in (('pack/pack-1.pack', b'P' * 5000), ('pack/pack-1.idx', b'never read'), ('info/packs', b'never read'),
+                          ('info/alternates', b'/elsewhere/objects\n'), ('info/commit-graphs/graph-1.graph', b'G' * 300),
+                          ('ab/' + 'c' * 38, b'loose'), ('12/' + '3' * 38, b'loose2'),
+                          ('hooks/pre-commit', b'never read'), ('rr-cache/x/preimage', b'never read')):
+            (objects/rel).parent.mkdir(parents=True, exist_ok=True)
+            (objects/rel).write_bytes(data)
+        os.link(objects/'pack/pack-1.pack', objects/'pack/pack-1.keep')
+        os.symlink('pack', objects/'pack-link')  # in-tree, relative: reported, never followed
+        (gitdir/'config').write_text('[core]\n\tsecret = never read\n')
+        (gitdir/'HEAD').write_text('d' * 40 + '\n')
+        (production/'.repo/projects/vendor/adevtool.git').mkdir(parents=True)
+        os.symlink('../../../project-objects/adevtool.git/objects', production/'.repo/projects/vendor/adevtool.git/objects')
+        (production/'out').mkdir()
+        (production/'out/huge.bin').write_text('never touched')
+        return objects
+
+    def run_objects(self, bounds=None, clock=None, **kw):
+        text = bb.inspect_git_objects(self.synthetic, 'immortal-os-builder', self.root, clock=clock or time.monotonic,
+                                      bounds=bounds, **kw)
+        return text, json.loads(text)
+
+    def fd_touches(self, call):
+        """Every filesystem primitive CALL uses, descriptor-relative names resolved to absolute paths."""
+        import builtins
+        names = ('open', 'stat', 'lstat', 'scandir', 'readlink', 'listdir', 'fstat', 'close', 'read', 'walk', 'statvfs', 'access')
+        real, real_builtin = {n: getattr(os, n) for n in names}, builtins.open
+        fds, seen, reads = {}, [], []
+        def where(path, dir_fd=None):
+            if isinstance(path, int):
+                return fds.get(path, f'<fd {path}>')
+            path = os.fsdecode(os.fspath(path))
+            return os.path.normpath(os.path.join(fds[dir_fd], path)) if dir_fd is not None else path
+        def s_open(path, flags, mode=0o777, *, dir_fd=None):
+            full = where(path, dir_fd)
+            seen.append(('open', full, flags))
+            fd = real['open'](path, flags, mode, dir_fd=dir_fd)
+            fds[fd] = full
+            return fd
+        def s_stat(path, *a, dir_fd=None, follow_symlinks=True):
+            seen.append(('stat' if follow_symlinks else 'lstat', where(path, dir_fd)))
+            return real['stat'](path, *a, dir_fd=dir_fd, follow_symlinks=follow_symlinks)
+        def s_lstat(path, *a, dir_fd=None):
+            seen.append(('lstat', where(path, dir_fd)))
+            return real['lstat'](path, *a, dir_fd=dir_fd)
+        def s_scandir(path='.'):
+            seen.append(('scandir', where(path)))
+            return real['scandir'](path)
+        def s_readlink(path, *a, dir_fd=None):
+            seen.append(('readlink', where(path, dir_fd)))
+            return real['readlink'](path, *a, dir_fd=dir_fd)
+        def s_fstat(fd):
+            seen.append(('fstat', fds.get(fd, f'<fd {fd}>')))
+            return real['fstat'](fd)
+        def s_close(fd):
+            fds.pop(fd, None)
+            return real['close'](fd)
+        def s_read(fd, n):
+            reads.append((fds.get(fd), n))
+            return real['read'](fd, n)
+        def other(name):
+            def call_(path='.', *a, **k):
+                seen.append((name, where(path)))
+                return real[name](path, *a, **k)
+            return call_
+        def s_builtin(path, *a, **k):
+            seen.append(('builtins.open', os.fsdecode(os.fspath(path))))
+            return real_builtin(path, *a, **k)
+        spies = {'open': s_open, 'stat': s_stat, 'lstat': s_lstat, 'scandir': s_scandir, 'readlink': s_readlink,
+                 'fstat': s_fstat, 'close': s_close, 'read': s_read}
+        for name in names:
+            setattr(os, name, spies.get(name) or other(name))
+        builtins.open = s_builtin
+        try:
+            return call(), seen, reads
+        finally:
+            for name, original in real.items():
+                setattr(os, name, original)
+            builtins.open = real_builtin
+
+    def chain(self, path):
+        return ['/', *[str(p) for p in reversed(Path(path).parents) if str(p) != '/'], str(path)]
+
+    def test_touches_only_the_fixed_objects_tree_and_opens_no_content(self):
+        objects = self.objects_tree()
+        before = self.snapshot(self.production)
+        self.guard()
+        (text, report), touched, reads = self.fd_touches(lambda: self.run_objects())
+        self.assertEqual(self.snapshot(self.production), before, 'nothing changes')
+        opened = [(p, f) for op, p, *f in touched if op == 'open']
+        dirs = [str(objects/d) for d in ('12', 'ab', 'info', 'info/commit-graphs', 'pack')]
+        self.assertEqual(sorted(p for p, _ in opened), sorted(self.chain(objects) + dirs), 'only directories are opened')
+        self.assertEqual({f[0] for _, f in opened}, {bb.DIR_OPEN})
+        self.assertTrue(bb.DIR_OPEN & os.O_NOFOLLOW and bb.DIR_OPEN & os.O_DIRECTORY and bb.DIR_OPEN & os.O_NONBLOCK)
+        self.assertEqual((reads, [p for op, p, *_ in touched if op == 'builtins.open']), ([], []), 'no content is read')
+        self.assertEqual(sorted({op for op, *_ in touched}), ['fstat', 'lstat', 'open', 'readlink', 'scandir'])
+        self.assertEqual([p for op, p, *_ in touched if op == 'readlink'], [str(objects/'pack-link')], 'link text only')
+        listed = {str(objects)} | {str(objects/d) for d in ('12', 'ab', 'info', 'info/commit-graphs', 'pack')}
+        self.assertEqual({p for op, p, *_ in touched if op == 'scandir'}, listed)
+        lstats = {p for op, p, *_ in touched if op == 'lstat'}
+        self.assertFalse({p for p in lstats if '/hooks' in p or '/rr-cache' in p}, 'hooks and rr-cache are never admitted')
+        self.assertTrue(all(p.startswith(str(objects) + '/') for p in lstats))
+        self.assertFalse(any('/pack-link/' in p or 'out/huge' in p or p.endswith('/config') for _, p, *_ in touched))
+        self.assertLessEqual(len(text.encode()), 65536)
+        self.assertEqual((report['schema'], report['complete'], report['incomplete'], report['metadataOnly'],
+                          report['contentsOpened'], report['linksFollowed'], report['filesystemsCrossed'], report['gitProcess'],
+                          report['processesStarted'], report['network'], report['writes'], report['enablesPreparation']),
+                         ('roseos.blazer-git-objects-inspection.v1', True, [], True, False, False, False, False, 0, False,
+                          False, False))
+        self.assertEqual(report['bounds'], {'maxEntries': 100000, 'maxDepth': 3, 'maxSeconds': 120, 'maxOutputBytes': 65536})
+        self.assertEqual((report['target']['absolutePath'], report['target']['exists']), (str(objects), True))
+        by = report['totals']['byType']
+        self.assertEqual({k: v['count'] for k, v in by.items()}, {'file': 7, 'dir': 5, 'link': 1, 'special': 0})
+        files = [objects/r for r in ('pack/pack-1.pack', 'pack/pack-1.idx', 'pack/pack-1.keep', 'info/packs',
+                 'info/commit-graphs/graph-1.graph', 'ab/' + 'c' * 38, '12/' + '3' * 38)]
+        self.assertEqual(by['file']['apparentBytes'], sum(os.lstat(f).st_size for f in files))
+        self.assertEqual(report['totals']['hardlinkedRepeats'], 1, 'a hardlink is allocated once')
+        self.assertEqual(set(report['groups']), {'.', 'pack', 'info', 'info/commit-graphs', '[0-9a-f]{2}'})
+        self.assertEqual(report['groups']['[0-9a-f]{2}']['file']['count'], 2)
+        self.assertEqual(report['existenceOnly'], {'info/alternates': {'observed': True, 'exists': True, 'type': 'file'},
+                                                   'info/http-alternates': {'observed': True, 'exists': False}})
+        self.assertEqual((report['excluded'], report['excludedTotal']), (['hooks', 'rr-cache'], 2))
+        self.assertEqual(report['exceptions'], [{'path': 'pack-link', 'kind': 'link', 'linkText': 'pack',
+                                                 'linkTextTruncated': False, 'unsafe': False}])
+        self.assertEqual(report['totals']['deepestEntry'], 3)
+        for secret in ('never read', 'elsewhere', 'secret', 'G' * 10):
+            self.assertNotIn(secret, text)
+
+    def test_every_limit_yields_complete_false_with_partial_totals(self):
+        objects = self.objects_tree()
+        base = dict(bb.GIT_OBJECTS)
+        _, few = self.run_objects(bounds={**base, 'maxEntries': 4})
+        self.assertEqual(([r['reason'] for r in few['incomplete']], few['complete'], few['totals']['listedEntries']),
+                         (['entries'], False, 4))
+        self.assertEqual(few['incomplete'][0]['detail'], '4 entries listed')
+        self.assertLessEqual(sum(v['count'] for v in few['totals']['byType'].values()), 4)
+        (objects/'info/commit-graphs/deeper').mkdir()
+        (objects/'info/commit-graphs/deeper/never').write_text('x')
+        _, deep = self.run_objects()
+        self.assertEqual([r['reason'] for r in deep['incomplete']], ['depth'])
+        self.assertIn('info/commit-graphs/deeper', deep['incomplete'][0]['detail'])
+        self.assertEqual(deep['totals']['deepestEntry'], 3)
+        (_, deep2), touched, _ = self.fd_touches(lambda: self.run_objects())
+        self.assertFalse(any('deeper/' in p or (op in ('open', 'scandir') and p.endswith('deeper')) for op, p, *_ in touched))
+        shutil.rmtree(objects/'info/commit-graphs/deeper')
+        ticks = iter([0, 0, 0, 0, 0, 121])
+        _, late = self.run_objects(clock=lambda: next(ticks, 121))
+        self.assertEqual(([r['reason'] for r in late['incomplete']], late['complete']), (['deadline'], False))
+        self.assertGreater(late['totals']['listedEntries'], 0)
+        self.assertLess(late['totals']['listedEntries'], 17)
+        text, small = self.run_objects(bounds={**base, 'maxOutputBytes': 1200})
+        self.assertLessEqual(len(text.encode()), 1200)
+        self.assertEqual((small['complete'], [r['reason'] for r in small['incomplete']]), (False, ['output']))
+        self.assertTrue(set(small['trimmed']) <= {'exceptions', 'excluded', 'groups'})
+        self.assertEqual(small['totals']['byType']['file']['count'], 7, 'partial totals survive trimming')
+        text, tiny = self.run_objects(bounds={**base, 'maxOutputBytes': 10})
+        self.assertEqual((tiny['complete'], set(tiny)), (False, {'schema', 'complete', 'incomplete', 'totals', 'trimmed'}))
+
+    def test_links_specials_and_other_filesystems_are_reported_never_entered(self):
+        objects = self.objects_tree()
+        outside = self.tmp/'outside'
+        (outside/'objects').mkdir(parents=True)
+        (outside/'objects/never').write_text('never touched')
+        for name, text in (('abs', str(outside)), ('up', '../../../../../outside')):
+            os.symlink(text, objects/name)
+            (_, report), touched, _ = self.fd_touches(lambda: self.run_objects())
+            self.assertEqual([r['reason'] for r in report['incomplete']], ['unsafe-link'])
+            row = [e for e in report['exceptions'] if e['path'] == name][0]
+            self.assertEqual((row['kind'], row['unsafe'], row['linkText']), ('link', True, text))
+            self.assertFalse(any(str(outside) in p for _, p, *_ in touched), 'the link is never followed')
+            os.unlink(objects/name)
+        os.mkfifo(objects/'pack/fifo')
+        (_, report), touched, _ = self.fd_touches(lambda: self.run_objects())
+        self.assertEqual([r['reason'] for r in report['incomplete']], ['special'])
+        self.assertFalse(any(op == 'open' and p.endswith('/fifo') for op, p, *_ in touched), 'a special file is never opened')
+        os.unlink(objects/'pack/fifo')
+        real_stat = os.stat
+        def other_device(path, *a, dir_fd=None, follow_symlinks=True):
+            st = real_stat(path, *a, dir_fd=dir_fd, follow_symlinks=follow_symlinks)
+            if path == 'pack':
+                return types.SimpleNamespace(st_mode=st.st_mode, st_dev=st.st_dev + 1, st_ino=st.st_ino, st_size=st.st_size,
+                                             st_blocks=st.st_blocks, st_nlink=st.st_nlink)
+            return st
+        os.stat = other_device
+        try:
+            (_, report), touched, _ = self.fd_touches(lambda: self.run_objects())
+        finally:
+            os.stat = real_stat
+        self.assertEqual([r['reason'] for r in report['incomplete']], ['cross-filesystem'])
+        self.assertFalse(any(op in ('open', 'scandir') and p == str(objects/'pack') for op, p, *_ in touched))
+
+    def test_inaccessible_and_replaced_entries_refuse_without_traversal(self):
+        objects = self.objects_tree()
+        real_open = os.open
+        def denied(path, flags, mode=0o777, *, dir_fd=None):
+            if path == 'pack':
+                raise PermissionError(13, 'Permission denied')
+            return real_open(path, flags, mode, dir_fd=dir_fd)
+        os.open = denied
+        try:
+            _, report = self.run_objects()
+        finally:
+            os.open = real_open
+        self.assertEqual(([r['reason'] for r in report['incomplete']], report['totals']['byType']['file']['count']),
+                         (['inaccessible'], 4), 'partial totals from everything still readable')
+        # A directory swapped for a link between its lstat and its open: O_NOFOLLOW refuses; the link is not entered.
+        outside = self.tmp/'outside'
+        outside.mkdir()
+        (outside/'never').write_text('never touched')
+        def swap(path, flags, mode=0o777, *, dir_fd=None):
+            if path == 'pack' and dir_fd is not None and not os.path.islink(objects/'pack'):
+                os.rename(objects/'pack', self.tmp/'moved-pack')
+                os.symlink(outside, objects/'pack')
+            return real_open(path, flags, mode, dir_fd=dir_fd)
+        os.open = swap
+        try:
+            (_, report), touched, _ = self.fd_touches(lambda: self.run_objects())
+        finally:
+            os.open = real_open
+        self.assertEqual([r['reason'] for r in report['incomplete']], ['replaced'])
+        self.assertEqual(report['incomplete'][0]['detail'], 'pack: NotADirectoryError opening the admitted directory')
+        self.assertFalse(any(str(outside) in p for _, p, *_ in touched))
+        os.unlink(objects/'pack')
+        os.rename(self.tmp/'moved-pack', objects/'pack')
+        # A directory replaced by another directory: the fstat identity differs from the admitting lstat.
+        def another(path, flags, mode=0o777, *, dir_fd=None):
+            if path == 'pack' and dir_fd is not None and not (self.tmp/'moved-pack').exists():
+                os.rename(objects/'pack', self.tmp/'moved-pack')
+                (objects/'pack').mkdir()
+                (objects/'pack/planted').write_text('never listed')
+            return real_open(path, flags, mode, dir_fd=dir_fd)
+        os.open = another
+        try:
+            (_, report), touched, _ = self.fd_touches(lambda: self.run_objects())
+        finally:
+            os.open = real_open
+        self.assertEqual([r['reason'] for r in report['incomplete']], ['replaced'])
+        self.assertFalse(any(op == 'scandir' and p == str(objects/'pack') for op, p, *_ in touched))
+        shutil.rmtree(objects/'pack')
+        os.rename(self.tmp/'moved-pack', objects/'pack')
+        # An entry that vanishes between listing and lstat.
+        real_stat = os.stat
+        def vanish(path, *a, dir_fd=None, follow_symlinks=True):
+            if path == 'packs':
+                raise FileNotFoundError(2, 'No such file or directory')
+            return real_stat(path, *a, dir_fd=dir_fd, follow_symlinks=follow_symlinks)
+        os.stat = vanish
+        try:
+            _, report = self.run_objects()
+        finally:
+            os.stat = real_stat
+        self.assertIn('replaced', [r['reason'] for r in report['incomplete']])
+        # A link replaced after its lstat: readlink fails and the entry is reported, the walk goes on.
+        real_readlink = os.readlink
+        def gone(path, *a, dir_fd=None):
+            raise OSError(22, 'Invalid argument')
+        os.readlink = gone
+        try:
+            _, report = self.run_objects()
+        finally:
+            os.readlink = real_readlink
+        self.assertEqual(report['incomplete'], [{'reason': 'replaced', 'detail': 'pack-link: OSError reading the admitted link'}])
+        self.assertEqual(report['totals']['byType']['file']['count'], 7)
+
+    def test_a_linked_absent_or_non_directory_root_refuses_before_listing(self):
+        objects = self.objects_tree()
+        project_objects = self.production/'.repo/project-objects'
+        os.rename(project_objects, self.tmp/'elsewhere')
+        os.symlink(self.tmp/'elsewhere', project_objects)
+        (_, report), touched, _ = self.fd_touches(lambda: self.run_objects())
+        self.assertEqual((report['incomplete'], report['target']['exists']),
+                         ([{'reason': 'linked-component', 'detail': f'{project_objects}: NotADirectoryError'}], None))
+        self.assertFalse(any(op in ('scandir', 'readlink') for op, *_ in touched))
+        self.assertEqual([p for op, p, *_ in touched if op == 'lstat'], [str(project_objects)], 'the refused component only')
+        self.assertFalse(any('elsewhere' in p for _, p, *_ in touched))
+        os.unlink(project_objects)
+        os.rename(self.tmp/'elsewhere', project_objects)
+        os.rename(objects, self.tmp/'objects-real')
+        os.symlink(self.tmp/'objects-real', objects)
+        _, report = self.run_objects()
+        self.assertEqual(report['incomplete'][0]['reason'], 'linked-component')
+        os.unlink(objects)
+        objects.write_text('a file')
+        _, report = self.run_objects()
+        self.assertEqual(report['incomplete'][0]['reason'], 'not-a-directory')
+        os.unlink(objects)
+        _, report = self.run_objects()
+        self.assertEqual((report['incomplete'][0]['reason'], report['target']['exists'], report['complete']),
+                         ('absent', False, False))
+
+    def test_the_largest_capped_report_fits_and_names_its_folding(self):
+        objects = self.objects_tree()
+        long = b'\x01' * 200
+        for i in range(40):
+            d = objects/f'd{i:02}'
+            d.mkdir()
+            os.symlink(os.fsdecode(long + b'/x'), os.path.join(os.fsencode(d), long + b'%02d' % i))
+        text, report = self.run_objects()
+        self.assertLessEqual(len(text.encode()), 65536)
+        self.assertNotIn('trimmed', report, 'the caps keep the worst case inside the 64 KiB output limit')
+        self.assertEqual((len(report['groups']), report['groupsFolded'] > 0, len(report['exceptions']),
+                          report['exceptionsTotal']), (33, True, 32, 41))
+        self.assertIn('(other)', report['groups'])
+        self.assertTrue(all(len(e['path']) <= 4 * 128 + 4 for e in report['exceptions']))
+
+    def test_cli_takes_only_the_fixed_host_and_runs_no_other_probe(self):
+        import contextlib
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            code, touched, reads = self.fd_touches(lambda: bb.main(['inspect-git-objects', '--host', 'immortal-os-builder']))
+        self.assertEqual(code, 0)
+        report = json.loads(out.getvalue())
+        target = '/home/pixelbuild/grapheneos-2026100600/.repo/project-objects/adevtool.git/objects'
+        self.assertEqual(report['target']['absolutePath'], target)
+        host = sorted({(op, p) for op, p, *_ in touched if not p.startswith(str(ROOT) + '/') and op != 'close'
+                       and not ('/LC_MESSAGES/' in p and p.endswith('.mo'))})
+        allowed = set(self.chain(target))
+        self.assertTrue(all(op in ('open', 'fstat', 'scandir', 'lstat', 'readlink') for op, _ in host), host)
+        self.assertTrue(all(p in allowed or p.startswith(target + '/') for _, p in host), host)
+        if not os.path.lexists('/home/pixelbuild'):
+            self.assertEqual([p for op, p in host if op == 'open'], ['/', '/home', '/home/pixelbuild'])
+            self.assertEqual((report['incomplete'][0]['reason'], report['complete']), ('absent', False))
+        self.assertFalse(any('rose-actions' in p or 'vendor/adevtool/.git' in p for _, p in host), 'no unrelated probe')
+        script = str(ROOT/'scripts/blazer-build-only.py')
+        for argv in ([], ['--host', 'other-builder'], ['--host', 'immortal-os-builder', '--max-entries', '5'],
+                     ['--host', 'immortal-os-builder', '/tmp/x'], ['--host', 'immortal-os-builder', '--target-set', 'x']):
+            with self.subTest(argv):
+                bad = subprocess.run([sys.executable, script, 'inspect-git-objects', *argv], capture_output=True, text=True)
+                self.assertEqual((bad.returncode, bad.stdout), (2, ''))
+        ok = subprocess.run([sys.executable, script, 'inspect-git-objects', '--host', 'immortal-os-builder'],
+                            capture_output=True, text=True)
+        self.assertEqual(ok.returncode, 0, ok.stderr)
+        self.assertEqual(len(ok.stdout.splitlines()), 1)
+        for old in (['inspect-git', '--host', 'immortal-os-builder'],
+                    ['inspect-git-set', '--host', 'immortal-os-builder', '--target-set', 'adevtool-projects-gitdir']):
+            prior = subprocess.run([sys.executable, script, *old], capture_output=True, text=True)
+            self.assertEqual(prior.returncode, 0, prior.stderr)
+            self.assertNotIn('objects', json.loads(prior.stdout)['schema'], 'O1 modes are unchanged')
+
+    def test_alternates_absence_is_observed_only_from_a_complete_listing(self):
+        objects = self.objects_tree()
+        shutil.rmtree(objects/'info')
+        (objects/'alternates').write_text('a root entry of the same name, not info/alternates')
+        _, report = self.run_objects()
+        self.assertEqual(report['existenceOnly'], {'info/alternates': {'observed': True, 'exists': False},
+                                                   'info/http-alternates': {'observed': True, 'exists': False}})
+        _, cut = self.run_objects(bounds={**bb.GIT_OBJECTS, 'maxEntries': 2})
+        self.assertEqual(cut['existenceOnly'], {'info/alternates': {'observed': False},
+                                                'info/http-alternates': {'observed': False}}, 'a cut listing observes nothing')
+
+    def test_a_drifted_recipe_or_another_host_refuses(self):
+        with self.assertRaisesRegex(bb.InvalidInput, '--host must be immortal-os-builder'):
+            bb.inspect_git_objects(self.synthetic, 'other-builder', self.root)
+        drifted = json.loads(json.dumps(self.synthetic))
+        drifted['preparation']['gitObjectsInspection']['path'] = '.repo/project-objects'
+        with self.assertRaisesRegex(bb.InvalidInput, 'gitObjectsInspection must be exactly'):
+            bb.inspect_git_objects(drifted, 'immortal-os-builder', self.root)
 
 class InspectTest(Fixture):
     """inspect is metadata-only: candidates are proposals that never enable preparation, and nothing it scans changes."""
