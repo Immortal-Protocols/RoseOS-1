@@ -25,6 +25,9 @@ dispatch:
   git-inspect-set: `blazer-build-only.py inspect-git-set --host H --target-set adevtool-projects-gitdir` and nothing else
       (#443: the production .repo/projects/vendor/adevtool.git only, the same bounds); its stdout is kept write-once as
       NEW/git-target-set-inspection.json. inspect-git is unchanged.
+  git-inspect-objects: `blazer-build-only.py inspect-git-objects --host immortal-os-builder` and nothing else (#448, O2:
+      bounded metadata of the fixed preparation.gitObjectsInspection objects directory, checked here to equal the
+      helper's own spec); its stdout is kept write-once as NEW/git-objects-inspection.json.
 
 Never compile: compile is not a preparation stage and is refused here. Exit status: 0 ok, 2 invalid, 4 unbound (a host
 fact is still null).
@@ -53,6 +56,15 @@ INSPECT = {'maxEntries': 200000, 'maxSeconds': 900, 'outerSeconds': 960, 'jobMin
 GIT_INSPECT = {'outerSeconds': 120, 'jobMinutes': 13}
 # git-inspect-set: Flavors' additive `inspect-git-set` (#443) for exactly one recipe target set, fixed here; same bounds.
 GIT_TARGET_SET = 'adevtool-projects-gitdir'
+# git-inspect-objects: Flavors' `inspect-git-objects` (#448, O2) for the one fixed objects directory: the helper's own
+# cooperative 120 s (preparation.gitObjectsInspection.maxSeconds), then a 180 s outer timeout (Python start and the
+# lexical recipe load included) and a 14-minute job.
+GIT_OBJECTS_STAGE = {'outerSeconds': 180, 'jobMinutes': 14}
+# Stages that resolve from the recipe's text alone (the helper's lexical load): resolving them touches no host path.
+LEXICAL_STAGES = ('git-inspect-set', 'git-inspect-objects')
+RECEIPTS = {'inspect': ('inspection.json', 'inspect'), 'git-inspect': ('git-inspection.json', 'inspect-git'),
+            'git-inspect-set': ('git-target-set-inspection.json', 'inspect-git-set'),
+            'git-inspect-objects': ('git-objects-inspection.json', 'inspect-git-objects')}
 FLAGS = {'downloadDir': '--download-dir', 'sourceRoot': '--source-root', 'node': '--node'}
 KEYS = {'schemaVersion', 'kind', 'basis', 'host', 'lockFrom', 'sourceRoot', 'downloadDir', 'node', 'inspectCandidates'}
 CANDIDATE_KEYS = {'rootTemplate', 'verified', 'binding', 'basis'}
@@ -103,12 +115,12 @@ def resolve(stage, binding_path=BINDING, root=ROOT, run_id=None, attempt=None):
     """(argv tail without --receipt-dir, outer_seconds, job_minutes) for one preparation stage or inspect. The hosted
     check of inspect validates the candidate template with a sample run (1, 1); run passes the real run id and attempt."""
     h = helper()
-    if stage not in (*h.PREPARATION, 'inspect', 'git-inspect', 'git-inspect-set'):
-        raise Invalid(f'{stage!r} is not a preparation stage {h.PREPARATION}, inspect, git-inspect or git-inspect-set')
+    if stage not in (*h.PREPARATION, *RECEIPTS):
+        raise Invalid(f'{stage!r} is not a preparation stage {h.PREPARATION} or one of {", ".join(RECEIPTS)}')
     try:
-        # git-inspect-set loads the recipe without probing (as the helper's own inspect-git-set does), so resolving it
-        # touches no host path; every other route keeps the probing load.
-        recipe = h.load(root/'os/build-only/blazer.json', root, probe=stage != 'git-inspect-set')
+        # git-inspect-set and git-inspect-objects load the recipe without probing (as the helper's own commands do), so
+        # resolving them touches no host path; every other route keeps the probing load.
+        recipe = h.load(root/'os/build-only/blazer.json', root, probe=stage not in LEXICAL_STAGES)
     except h.InvalidInput as error:
         raise Invalid(f'recipe: {error}')
     binding = json.loads(Path(binding_path).read_text())
@@ -120,6 +132,13 @@ def resolve(stage, binding_path=BINDING, root=ROOT, run_id=None, attempt=None):
         raise Invalid('binding host must be the existing original builder immortal-os-builder')
     lock = h.pointer(root, binding['lockFrom'])
     production = Path(h.pointer(root, recipe['preparation']['productionSourceRootFrom']))
+    if stage == 'git-inspect-objects':
+        spec = {k: v for k, v in recipe['preparation']['gitObjectsInspection'].items() if k != 'basis'}
+        if spec != h.git_objects_spec(str(production)) or binding['host'] != spec['host']:
+            raise Invalid('the recipe gitObjectsInspection is not the helper\'s fixed spec for the production root')
+        if not 0 < spec['maxSeconds'] < GIT_OBJECTS_STAGE['outerSeconds'] or spec['maxSeconds'] != h.GIT_OBJECTS['maxSeconds']:
+            raise Invalid('git-inspect-objects bounds disagree with the helper')
+        return ['--host', binding['host']], GIT_OBJECTS_STAGE['outerSeconds'], GIT_OBJECTS_STAGE['jobMinutes']
     if stage == 'git-inspect-set':
         spec = recipe['preparation']['gitInspection']
         if set(spec.get('targetSets') or {}) != {GIT_TARGET_SET}:
@@ -190,9 +209,8 @@ def main(argv=None):
             return 0
         if not a.receipt_dir or not a.receipt_dir.startswith('/'):
             raise Invalid('run needs an absolute --receipt-dir')
-        if a.stage in ('inspect', 'git-inspect', 'git-inspect-set'):
-            name, action = {'inspect': ('inspection.json', 'inspect'), 'git-inspect': ('git-inspection.json', 'inspect-git'),
-                            'git-inspect-set': ('git-target-set-inspection.json', 'inspect-git-set')}[a.stage]
+        if a.stage in RECEIPTS:
+            name, action = RECEIPTS[a.stage]
             command = [sys.executable, str(HELPER), action, *tail]
             print(json.dumps({'helper': command[1:]}), flush=True)
             receipts = Path(a.receipt_dir)
