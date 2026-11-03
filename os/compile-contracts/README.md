@@ -43,6 +43,11 @@ frameworks/base and build/release are identical to the candidate.
 plus delta equals an integration with the edge patch registered after the switcher patch. The checker proves this
 offline.
 
+Paths in `candidateDelta.files` and in overlay targets are relative to the source tree root, project path first. Paths in
+`projects[].files` and `base.projects[].files` are relative to their project. Bundle paths are relative to this
+repository (`candidateDelta.pathConvention`). The committed os/ must be wholly at the base (this bundle) or wholly at the
+candidate (#440's branch); a mix is refused.
+
 Every hash is an expected value derived from pinned public sources and the committed patches. An adapter compares
 current bytes with them; it never records the current bytes' hashes as provenance.
 

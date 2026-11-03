@@ -45,6 +45,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = ROOT/'os/compile-contracts/launcher3-quickstep-lib.json'
+# The committed os/ bundle (its patches and overlays) the contract is read against.
+OS = ROOT/'os'
 PINNED = ROOT/'os/pinned-manifest.xml'
 # Pinned pre-images, byte for byte, under their project paths.
 FIXTURES = ROOT/'os/tests/fixtures/launcher3-compile-contract'
@@ -222,7 +224,7 @@ def overlay_targets():
     """{target: bytes} the candidate copies into the three projects: the committed os/overlays, with the candidate's
     bundle copies taking precedence and added where the base has none."""
     out = {}
-    for base in (ROOT/'os/overlays', BUNDLE/'overlays'):
+    for base in (OS/'overlays', BUNDLE/'overlays'):
         for file in sorted(base.rglob('*')) if base.exists() else []:
             if file.is_file():
                 target = str(file.relative_to(base))
@@ -275,7 +277,7 @@ def fixture_path(project, path):
 def bundle_or_os(relative):
     """An os/ input (patches/... or overlays/...) as this contract sees it: the candidate's inert copy when the bundle has
     one, else the committed os/ file."""
-    return BUNDLE/relative if (BUNDLE/relative).exists() else ROOT/'os'/relative
+    return BUNDLE/relative if (BUNDLE/relative).exists() else OS/relative
 
 
 def bundle_files():
@@ -523,7 +525,7 @@ def base_and_delta(projects, recorded_overlay_before=None):
     delta_overlays = []
     for target, data in sorted(bundle_overlays.items()):
         if recorded_overlay_before is None:
-            committed = ROOT/'os/overlays'/target
+            committed = OS/'overlays'/target
             before = sha256(committed.read_bytes()) if committed.exists() else None
         else:
             before = recorded_overlay_before[target]
@@ -567,6 +569,9 @@ def base_and_delta(projects, recorded_overlay_before=None):
         'overlays': delta_overlays,
         'bundle': [{'path': str((BUNDLE/f).relative_to(ROOT)), 'sha256': sha256((BUNDLE/f).read_bytes())}
             for f in bundle_files()],
+        'pathConvention': 'files[].path and overlays[].target are relative to the source tree root (project path '
+            'first); projects[].files[].path and base.projects[].files[].path are relative to their project; '
+            'bundlePath and bundle[].path are relative to the repository root',
     }
     return base, delta
 
@@ -615,7 +620,7 @@ def build():
             .get('overlays', [])} or None
     if recorded is None:
         for f in bundle_files():
-            committed = ROOT/'os'/f
+            committed = OS/f
             if f.startswith('overlays/') and committed.exists() and committed.read_bytes() == (BUNDLE/f).read_bytes():
                 raise SystemExit(f'os/{f} already holds the candidate bytes: its base is unknown; record it first')
     base, delta = base_and_delta(projects, recorded)
@@ -786,15 +791,27 @@ def check_candidate(manifest):
         return [f'candidate: {error}']
     if manifest.get('base') != base or delta != expected:
         errors.append('base or candidateDelta differs from what the fixtures and bundle give; regenerate with --write')
+    # The committed os/ is wholly at the base (this bundle) or wholly at the candidate (#440's branch), never a mix.
+    states = set()
     for o in expected['overlays']:
-        committed = ROOT/'os/overlays'/o['target']
+        committed = OS/'overlays'/o['target']
         now = sha256(committed.read_bytes()) if committed.exists() else None
-        if now not in (o['before'], o['after']):
+        if now == o['before']:
+            states.add('base')
+        elif now == o['after']:
+            states.add('candidate')
+        else:
             errors.append(f'os/overlays/{o["target"]}: neither the base nor the candidate bytes')
     for p in CANDIDATE_PATCHES:
-        committed = ROOT/'os/patches'/p
-        if committed.exists() and committed.read_bytes() != (BUNDLE/'patches'/p).read_bytes():
-            errors.append(f'os/patches/{p}: differs from the candidate bundle')
+        committed = OS/'patches'/p
+        if committed.exists():
+            states.add('candidate')
+            if committed.read_bytes() != (BUNDLE/'patches'/p).read_bytes():
+                errors.append(f'os/patches/{p}: differs from the candidate bundle')
+        else:
+            states.add('base')
+    if len(states) > 1:
+        errors.append('os/ mixes base and candidate inputs: it must be wholly one or the other')
     return errors
 
 

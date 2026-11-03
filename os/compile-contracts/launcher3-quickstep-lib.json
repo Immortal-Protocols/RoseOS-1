@@ -2693,7 +2693,8 @@
     "path": "os/tests/fixtures/launcher3-compile-contract/candidate-pr440/patches/rose-edge-launcher3.patch",
     "sha256": "a1c76e1e03845573501790509a7e620e48476a2bae47889f839d81144dd35460"
    }
-  ]
+  ],
+  "pathConvention": "files[].path and overlays[].target are relative to the source tree root (project path first); projects[].files[].path and base.projects[].files[].path are relative to their project; bundlePath and bundle[].path are relative to the repository root"
  },
  "flagEvidence": {
   "flags": [

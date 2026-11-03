@@ -28,7 +28,7 @@ class Launcher3CompileContractTest(unittest.TestCase):
     SCRIPT = ROOT/'scripts/launcher3-compile-contract.py'
     MANIFEST = ROOT/'os/compile-contracts/launcher3-quickstep-lib.json'
     # The agreed version (#410). Changing the manifest changes this, and the change needs re-agreement with Release.
-    AGREED_SHA256 = 'cdf4c3d5038dd92cc7d0137fab76b50bbce086c4809171a012fc08da814a727e'
+    AGREED_SHA256 = '5ec780af2fcdf8e00786401a76a55d1a21a64a9276072c615c0581d551c1bc79'
 
     def contract(self):
         import importlib.util
@@ -140,7 +140,36 @@ class Launcher3CompileContractTest(unittest.TestCase):
             changed = copy.deepcopy(manifest)
             edit(changed)
             self.assertTrue(contract.check_candidate(changed), 'a tampered candidate binding must be refused')
+            self.assertTrue(contract.check(changed), 'and the whole check refuses it too')
         self.assertEqual(contract.check_candidate(manifest), [])
+        self.assertEqual(contract.check(manifest), [])
+
+    def test_the_committed_os_must_be_wholly_base_or_wholly_candidate(self):
+        """Run the checker against a copy of os/ in which the candidate's inputs are at the base, at the candidate, mixed,
+        or at neither."""
+        manifest = self.manifest()
+        work = Path(tempfile.mkdtemp(prefix='contract-os-'))
+        self.addCleanup(shutil.rmtree, work, True)
+        shutil.copytree(ROOT/'os/overlays', work/'os/overlays')
+        shutil.copytree(ROOT/'os/patches', work/'os/patches')
+
+        def run():
+            contract = self.contract()
+            contract.OS = work/'os'
+            return contract.check_candidate(manifest)
+        self.assertEqual(run(), [], 'this bundle: wholly at the base')
+        gesture = 'packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeGesture.java'
+        for o in manifest['candidateDelta']['overlays']:
+            shutil.copyfile(ROOT/o['bundlePath'], work/'os/overlays'/o['target'])
+        self.assertEqual(run(), ['os/ mixes base and candidate inputs: it must be wholly one or the other'],
+            'candidate overlays without the candidate patch')
+        shutil.copyfile(EDGE_PATCH, work/'os/patches/rose-edge-launcher3.patch')
+        self.assertEqual(run(), [], "#440's branch: wholly at the candidate")
+        (work/'os/patches/rose-edge-launcher3.patch').write_bytes(EDGE_PATCH.read_bytes() + b'\n')
+        self.assertIn('os/patches/rose-edge-launcher3.patch: differs from the candidate bundle', run())
+        shutil.copyfile(EDGE_PATCH, work/'os/patches/rose-edge-launcher3.patch')
+        (work/'os/overlays'/gesture).write_bytes(b'// a third version\n')
+        self.assertIn(f'os/overlays/{gesture}: neither the base nor the candidate bytes', run())
 
     def test_every_project_is_pinned_by_its_own_tree_and_base_is_bound_by_content(self):
         import gzip
