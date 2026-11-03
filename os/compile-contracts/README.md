@@ -53,6 +53,15 @@ different base and apply by context; that is recorded per file.
 credentials. `os/tests/test_rose_switcher.py` pins the agreed manifest sha256, so any change needs re-agreement with
 Release.
 
-Not shown by the contract: R8, manifest merge, APK resources, packaging, signing or runtime behaviour. Home's caller
-gate for `gesture_nav_contract_v1` is a stated requirement here (`identitySharing.consumerImplemented` is false), not
-code in this repository yet.
+`flagEvidence` names, for each flag the adapter reports, the `aconfig_declarations` module that owns it:
+- `android.security.content_uri_permission_apis`: `android.security.flags-aconfig` (frameworks/base `AconfigFlags.bp`,
+  container `system`), not Launcher3's flag cache;
+- `com.android.launcher3.enable_fallback_overview_in_window`: `com_android_launcher3_flags` (Launcher3
+  `aconfig/Android.bp`).
+
+The evidence is the expected line in that module's own decoded `aconfig-flags.txt`, produced by build/soong's
+`aconfigTextRule`. The definition files and rules are pinned fixtures; no RoseOS patch touches them.
+
+Not shown by the contract: R8, manifest merge, APK resources, packaging, signing or runtime behaviour. The identity
+opt-in's consumer is Home's caller gate for `gesture_nav_contract_v1` (#442). The contract test reads that gate as
+merged and never edits it.

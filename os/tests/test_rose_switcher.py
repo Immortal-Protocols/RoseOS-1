@@ -1570,7 +1570,7 @@ class Launcher3CompileContractTest(unittest.TestCase):
     SCRIPT = ROOT/'scripts/launcher3-compile-contract.py'
     MANIFEST = ROOT/'os/compile-contracts/launcher3-quickstep-lib.json'
     # The agreed version (#410). Changing the manifest changes this, and the change needs re-agreement with Release.
-    AGREED_SHA256 = '256bad1f6c51b5fdfe70b5d844505e0ea6360df2d6b102fb40d11e917d06f6e3'
+    AGREED_SHA256 = '2c556473e0d1848a46660c98b710d2fe2161c814fb2784d557fb895f3ec68d13'
 
     def contract(self):
         import importlib.util
@@ -1624,6 +1624,33 @@ class Launcher3CompileContractTest(unittest.TestCase):
         self.assertEqual(len([t for t in required if t.startswith('packages/apps/Launcher3/')]), 8)
         self.assertEqual(len([t for t in required if t.startswith('build/release/')]), 4)
         self.assertNotIn('Agent.apk', ' '.join(o['target'] for o in manifest['overlays']))
+
+    def test_both_flags_bind_to_their_own_aconfig_declarations_modules(self):
+        """The identity flag is in frameworks/base's android.security.flags-aconfig, not Launcher3's flag cache; each
+        flag's evidence is the expected line in its own module's decoded aconfig-flags.txt (build/soong aconfigTextRule)."""
+        evidence = self.manifest()['flagEvidence']
+        flags = {row['flag']: row for row in evidence['flags']}
+        security = flags['android.security.content_uri_permission_apis']
+        self.assertEqual((security['module'], security['package'], security['container']),
+            ('android.security.flags-aconfig', 'android.security', 'system'))
+        self.assertEqual(security['expectedLine'], 'android.security.content_uri_permission_apis:READ_ONLY=true')
+        self.assertEqual(security['definedIn']['path'], 'AconfigFlags.bp')
+        self.assertEqual(security['declaredIn']['path'], 'core/java/android/security/responsible_apis_flags.aconfig')
+        self.assertEqual(security['expectedOutputDir'], 'out/soong/.intermediates/frameworks/base/android.security.flags-aconfig')
+        launcher = flags['com.android.launcher3.enable_fallback_overview_in_window']
+        self.assertEqual((launcher['module'], launcher['container']), ('com_android_launcher3_flags', 'system_ext'))
+        self.assertEqual(launcher['expectedLine'], 'com.android.launcher3.enable_fallback_overview_in_window:READ_ONLY=false')
+        for row in flags.values():
+            self.assertEqual(row['outputs'], ['aconfig-cache.pb', 'aconfig-flags.txt'])
+            self.assertIn('refuse (identity flag unresolved, result incomplete)', row['accept'])
+            for key in ('definedIn', 'declaredIn'):
+                fixture = ROOT/'os/tests/fixtures/launcher3-compile-contract/flag-evidence'/row[key]['project']/row[key]['path']
+                self.assertEqual(hashlib.sha256(fixture.read_bytes()).hexdigest(), row[key]['sha256'])
+        self.assertEqual([r['path'] for r in evidence['producingRules']], ['aconfig/init.go', 'aconfig/aconfig_declarations.go'])
+        for patch in (ROOT/'os/patches').glob('*.patch'):
+            text = patch.read_text()
+            for path in ('AconfigFlags.bp', 'responsible_apis_flags.aconfig', 'aconfig/launcher.aconfig', 'aconfig/Android.bp'):
+                self.assertNotIn(path, text, f'{patch.name} touches {path}: the evidence definitions are pinned upstream')
 
     def integrated(self, policy, address=None, locked=False):
         """The real post-image config.xml, rewritten by apply-os-changes.py's own policy block (executed as written)."""

@@ -1197,10 +1197,81 @@
   "Soong source and resource lists of Launcher3QuickStepLib contain every Launcher3 post-image and required overlay at these hashes",
   "its javac/kotlinc classpath contains the patched framework (AutomatedPackageListener declares onAutomatedDevicesChanged)",
   "m Launcher3QuickStepLib succeeds",
-  "aconfig cache: com.android.launcher3.enable_fallback_overview_in_window DISABLED/READ_ONLY",
-  "aconfig cache: android.security.content_uri_permission_apis ENABLED/READ_ONLY",
+  "flagEvidence: each flag's expectedLine from its own aconfig_declarations module output",
   "lunch product, variant, BUILD_ID and release-config maps in effect"
  ],
+ "flagEvidence": {
+  "flags": [
+   {
+    "flag": "android.security.content_uri_permission_apis",
+    "expectedLine": "android.security.content_uri_permission_apis:READ_ONLY=true",
+    "module": "android.security.flags-aconfig",
+    "package": "android.security",
+    "container": "system",
+    "expectedOutputDir": "out/soong/.intermediates/frameworks/base/android.security.flags-aconfig",
+    "readBy": "android.security.flags-aconfig-java (framework), which ActivityThread and ActivityRecord read",
+    "definedIn": {
+     "project": "frameworks/base",
+     "revision": "84183aff99be5e156dc0446a6fa2d4a7150f4bc3",
+     "path": "AconfigFlags.bp",
+     "sha256": "02f02f7de0500680d9e90ac662c652b71f096df22dc785e914798897eea5c7b6"
+    },
+    "declaredIn": {
+     "project": "frameworks/base",
+     "revision": "84183aff99be5e156dc0446a6fa2d4a7150f4bc3",
+     "path": "core/java/android/security/responsible_apis_flags.aconfig",
+     "sha256": "bf4905edb8fa385f085dca6e9fe0afe9edeff4b4104087bd7767da7b4d1afc69"
+    },
+    "outputs": [
+     "aconfig-cache.pb",
+     "aconfig-flags.txt"
+    ],
+    "produce": "build out/soong/.intermediates/frameworks/base/android.security.flags-aconfig/aconfig-flags.txt as an explicit goal with Launcher3QuickStepLib, or decode aconfig-cache.pb with that tree's host aconfig using the identical dump-cache --dedup --format='{fully_qualified_name}:{permission}={state:bool}'",
+    "accept": "exactly one line for the flag, equal to expectedLine, in the module's own output; absent, duplicated, another module or another value: refuse (identity flag unresolved, result incomplete)"
+   },
+   {
+    "flag": "com.android.launcher3.enable_fallback_overview_in_window",
+    "expectedLine": "com.android.launcher3.enable_fallback_overview_in_window:READ_ONLY=false",
+    "module": "com_android_launcher3_flags",
+    "package": "com.android.launcher3",
+    "container": "system_ext",
+    "expectedOutputDir": "out/soong/.intermediates/packages/apps/Launcher3/aconfig/com_android_launcher3_flags",
+    "readBy": "com_android_launcher3_flags_lib (Launcher3QuickStepLib), which OverviewComponentObserver reads",
+    "definedIn": {
+     "project": "packages/apps/Launcher3",
+     "revision": "47accce386f2abdc84e87c05b5587be6e0b0854f",
+     "path": "aconfig/Android.bp",
+     "sha256": "e7957cd25698f57a8408bf607551cbbae528e0793817bc1327b1a1f8473fb8f6"
+    },
+    "declaredIn": {
+     "project": "packages/apps/Launcher3",
+     "revision": "47accce386f2abdc84e87c05b5587be6e0b0854f",
+     "path": "aconfig/launcher.aconfig",
+     "sha256": "fe8589b40503942bd02a53ffd8b185d66ffee22f40e6ac05a866464f9ef00be2"
+    },
+    "outputs": [
+     "aconfig-cache.pb",
+     "aconfig-flags.txt"
+    ],
+    "produce": "build out/soong/.intermediates/packages/apps/Launcher3/aconfig/com_android_launcher3_flags/aconfig-flags.txt as an explicit goal with Launcher3QuickStepLib, or decode aconfig-cache.pb with that tree's host aconfig using the identical dump-cache --dedup --format='{fully_qualified_name}:{permission}={state:bool}'",
+    "accept": "exactly one line for the flag, equal to expectedLine, in the module's own output; absent, duplicated, another module or another value: refuse (identity flag unresolved, result incomplete)"
+   }
+  ],
+  "producingRules": [
+   {
+    "project": "build/soong",
+    "revision": "250710f7f87acfbb8e3c517d90abde8b4a08fe1e",
+    "path": "aconfig/init.go",
+    "sha256": "5965bbaa5180555035c05542e181910a2012bbda33e153406232bb9412887c34"
+   },
+   {
+    "project": "build/soong",
+    "revision": "250710f7f87acfbb8e3c517d90abde8b4a08fe1e",
+    "path": "aconfig/aconfig_declarations.go",
+    "sha256": "aecefd9fe939cc7819320b32de0ddfaf8864f8a1b617cb3dbeef25c20464086b"
+   }
+  ]
+ },
  "identitySharing": {
   "sites": [
    "quickstep/src/com/android/quickstep/FallbackSwipeHandler.java startHomeIntent",
