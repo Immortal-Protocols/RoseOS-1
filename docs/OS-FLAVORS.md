@@ -344,6 +344,24 @@ and writes `preflight.json`, `started.json` and `completed.json` there, write-on
     archive and `.part` metadata (not hashed).
   - `reference` (default: the production source root, read-only) gives the same tree facts plus a
     bounded total size.
+  - `adevtoolGit` (in each tree's facts, reference and candidate source; additive in schema v2;
+    gates nothing) is one level of `vendor/adevtool/.git`, metadata only:
+    - **The path itself:** `lstat`, never followed. A link reports its escaped text only. A regular
+      file (a gitfile) reports `lstat` only; its `gitdir:` text is not read. A link in a parent
+      component stops the inspection.
+    - **A real directory:** at most 256 entries are scanned, against the shared `--max-entries` and
+      `--max-seconds` budget. The first 64, sorted, are reported with name, type, mode and size; links
+      add their escaped text (at most 1024 bytes), whether it is absolute, and whether it lexically
+      leaves the tree. Nothing below that level is listed.
+    - **HEAD:** the only content read, and only as a regular unlinked file: `O_NOFOLLOW|O_NONBLOCK`,
+      re-checked as regular after opening, at most 64 bytes. It is reported only as `detached` with a
+      40-hex revision or as a `refs/` name; anything else, or more than 64 bytes, is `unrecognised`
+      with its length and no content.
+    - **Never touched:** objects, refs contents, config, the index or hooks. No git process runs, and
+      nothing is written. Names and link texts are raw bytes with every non-printable byte and `\`
+      escaped.
+    - It is for a separately approved observation of the production layout. Original Infra owns that
+      execution; nothing here copies or selects git metadata.
   - `node.runner` is `node` as the runner's own `PATH` resolves it, and `node.candidate` is
     `--candidate-node`: path and realpath `lstat` identity, name and executable bit. Neither is ever
     executed.
