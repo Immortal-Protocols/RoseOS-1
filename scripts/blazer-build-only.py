@@ -185,6 +185,10 @@ def load(path=RECIPE, root=ROOT, probe=True):
         problems.append('factory image name or sha256 differs from the device contract')
     if f'factory: {factory["sha256"]} {factory["file"]}' not in index_block(root, contract['shared']['vendorBuildId']):
         problems.append('factory image is not the pinned adevtool build index entry')
+    if not positive(factory.get('sizeBytes')) or not isinstance(factory.get('sizeBasis'), str):
+        problems.append('factory.sizeBytes must be the pinned archive\'s recorded byte size, with its basis')
+    elif (recipe.get('preparation') or {}).get('download', {}).get('boundBytes') != factory['sizeBytes']:
+        problems.append('preparation.download.boundBytes must equal factory.sizeBytes (the exact archive size)')
     if factory['url'] != FACTORY_URL + factory['file']:
         problems.append('factory URL is not the adevtool index URL for that file')
     manifest = {p.get('path'): p.get('revision') for p in ElementTree.parse(root/recipe['manifest']).getroot().iter('project')}
@@ -349,7 +353,8 @@ def commands(recipe, op, root=ROOT):
         factory = recipe['factory']
         rendered['download'] = {'url': factory['url'], 'part': str(op['downloadDir']/(factory['file'] + prep['download']['partSuffix'])),
             'final': str(op['downloadDir']/factory['file']), 'sha256': factory['sha256'],
-            'maxBytes': prep['download']['boundBytes'], 'timeoutSeconds': prep['download']['timeoutSeconds']}
+            'maxBytes': prep['download']['boundBytes'], 'expectedBytes': factory['sizeBytes'],
+            'timeoutSeconds': prep['download']['timeoutSeconds']}
     if op['sourceRoot'] is not None:
         src = str(op['sourceRoot'])
         spec = prep['source']
@@ -1750,7 +1755,7 @@ def inspect(recipe, op, root=ROOT, statvfs=os.statvfs, max_entries=200000, max_s
         unknowns.append('no node on the runner PATH')
     unknowns += ['Node version (metadata only: never executed)', 'reflink support (never assumed)',
                  'isolated source copy bytes (the source stage measures its full selection before writing; never this walk)',
-                 'Pro factory archive size (8 GiB cap unverified)']
+                 'Pro factory archive content (its size is the recorded HEAD Content-Length; only the sha256 pin identifies it)']
     report['elapsedSeconds'] = round(clock() - started, 3)
     report['truncated'] = budget['entries'] <= 0 or clock() > budget['deadline']
     if report['truncated']:
@@ -1761,16 +1766,22 @@ def fetch(url, timeout):
     return urllib.request.urlopen(url, timeout=timeout)  # noqa: S310 - the pinned https URL only
 
 def download(recipe, command, fetcher, clock):
-    """Stream the pinned URL to the .part file within the byte and time bounds; rename only on a sha256 match. A failed
-    attempt removes only the .part this call created; an existing archive or .part is never touched."""
+    """Stream the pinned URL to the .part file within the byte and time bounds; rename only when exactly the recorded
+    size arrived and its sha256 matches the pin. A response announcing another Content-Length is refused before any byte
+    is written. A failed attempt removes only the .part this call created; an existing archive or .part is never touched."""
     part, final = Path(command['part']), Path(command['final'])
     digest, size, started, created = hashlib.sha256(), 0, clock(), False
-    outcome = {'url': command['url'], 'expectedSha256': command['sha256'], 'maxBytes': command['maxBytes']}
+    outcome = {'url': command['url'], 'expectedSha256': command['sha256'], 'expectedBytes': command['expectedBytes'],
+               'maxBytes': command['maxBytes']}
     try:
         part.parent.mkdir(exist_ok=True)  # only the leaf download dir; preflight required its parent
         with open(part, 'xb') as out:
             created = True
             with fetcher(command['url'], command['timeoutSeconds']) as response:
+                announced = (getattr(response, 'headers', None) or {}).get('Content-Length')
+                outcome['announcedBytes'] = int(announced) if announced and str(announced).isdigit() else announced
+                if announced is not None and outcome['announcedBytes'] != command['expectedBytes']:
+                    raise ValueError(f'the server announces {announced} bytes, not the recorded {command["expectedBytes"]}')
                 for block in iter(lambda: response.read(CHUNK), b''):
                     size += len(block)
                     if size > command['maxBytes']:
@@ -1780,6 +1791,8 @@ def download(recipe, command, fetcher, clock):
                     digest.update(block)
                     out.write(block)
         outcome.update(bytes=size, sha256=digest.hexdigest())
+        if size != command['expectedBytes']:
+            raise ValueError(f'{size} bytes arrived, not the recorded {command["expectedBytes"]}')
         if outcome['sha256'] != command['sha256']:
             raise ValueError(f'sha256 {outcome["sha256"]} is not the pinned {command["sha256"]}')
         if os.path.lexists(final):

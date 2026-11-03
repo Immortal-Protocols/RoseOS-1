@@ -258,7 +258,7 @@ class Negative(unittest.TestCase):
         self.blocked(obs, 'space-available-unknown')
 
     def test_reserve_and_api_disk_size(self):
-        self.assertEqual(PEAK, 144 * GiB)
+        self.assertEqual(PEAK, 136 * GiB + 11362467847)  # vendor 128 + lunch 8 GiB + the exact factory archive size
         obs = synthetic(); obs['space']['filesystem']['availableBytes'] = pre.RESERVE_FLOOR_BYTES + PEAK - 1
         report = self.blocked(obs, 'space-reserve')
         self.assertEqual((report['space']['peakBytes'], report['space']['peakKind']), (PEAK, 'proposal'))

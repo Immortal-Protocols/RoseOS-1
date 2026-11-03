@@ -36,6 +36,10 @@ def fs(available):
     return lambda path: types.SimpleNamespace(f_bavail=available, f_frsize=1, f_blocks=available * 2)
 
 class Response(io.BytesIO):
+    def __init__(self, data, headers=None):
+        super().__init__(data)
+        self.headers = headers if headers is not None else {'Content-Length': str(len(data))}
+
     def __enter__(self):
         return self
     def __exit__(self, *exc):
@@ -49,6 +53,8 @@ class Fixture(unittest.TestCase):
         # A synthetic archive stands in for the real one: the recipe copy pins its digest (synthetic, never the real pin).
         self.synthetic = json.loads(json.dumps(self.recipe))
         self.synthetic['factory']['sha256'] = hashlib.sha256(PAYLOAD).hexdigest()
+        self.synthetic['factory']['sizeBytes'] = len(PAYLOAD)
+        self.synthetic['preparation']['download']['boundBytes'] = len(PAYLOAD)
         self.synthetic['capacity']['compileAllowanceBytes'] = 10
         # Test-speed sampling (the checked-in recipe samples every 5 s with a 30 s grace).
         self.synthetic['preparation']['limits'].update(sampleSeconds=0.05, killGraceSeconds=1)
@@ -169,7 +175,9 @@ class RecipeTest(Fixture):
         prep = recipe['preparation']
         self.assertEqual((prep['stages'], prep['boundsKind']), (['source', 'download', 'vendor', 'lunch'], 'proposal'))
         self.assertEqual({s: (prep[s]['boundBytes'], prep[s]['timeoutSeconds']) for s in prep['stages']},
-            {'source': (150 << 30, 7200), 'download': (8 << 30, 3600), 'vendor': (128 << 30, 10800), 'lunch': (8 << 30, 1800)})
+            {'source': (150 << 30, 7200), 'download': (11362467847, 3600), 'vendor': (128 << 30, 10800), 'lunch': (8 << 30, 1800)})
+        self.assertEqual(recipe['factory']['sizeBytes'], 11362467847, 'the pinned URL\'s HEAD Content-Length')
+        self.assertIn('no body transferred', recipe['factory']['sizeBasis'])
         self.assertEqual(prep['totalTimeoutSeconds'], 23400)
         self.assertEqual(prep['source']['cleanupSeconds'], 240)
         objects = dict(prep['gitObjectsInspection'])
@@ -205,7 +213,7 @@ class RecipeTest(Fixture):
         rendered = bb.commands(self.recipe, self.op())
         self.assertEqual(rendered['download'], {'url': 'https://dl.google.com/dl/android/aosp/' + FACTORY,
             'part': str(self.download/(FACTORY + '.part')), 'final': str(self.download/FACTORY), 'sha256': PIN,
-            'maxBytes': 8 << 30, 'timeoutSeconds': 3600})
+            'maxBytes': 11362467847, 'expectedBytes': 11362467847, 'timeoutSeconds': 3600})
         self.assertEqual(rendered['vendor']['env'], {'ADEVTOOL_IMG_DOWNLOAD_DIR': str(self.download),
             'PATH': '<receipt-dir>/node-path:/usr/bin:/bin', 'GIT_CEILING_DIRECTORIES': str(self.src),
             'ADEVTOOL_SKIP_DEP_BUILD': '1'})
@@ -258,6 +266,10 @@ class RecipeTest(Fixture):
             (lambda r: r['compile'].update(measure='out-dir-walk'), 'compile needs a positive timeoutSeconds'),
             (lambda r: r['preparation']['vendor'].update(boundBytes=0), 'preparation.vendor needs a positive boundBytes'),
             (lambda r: r['preparation']['download'].update(timeoutSeconds=None), 'preparation.download needs'),
+            (lambda r: r['preparation']['download'].update(boundBytes=8 << 30), 'must equal factory.sizeBytes'),
+            (lambda r: r['preparation']['download'].update(boundBytes=11362467848), 'must equal factory.sizeBytes'),
+            (lambda r: r['factory'].pop('sizeBytes'), 'factory.sizeBytes must be'),
+            (lambda r: r['factory'].pop('sizeBasis'), 'factory.sizeBytes must be'),
             (lambda r: r['preparation']['vendor'].update(collisionPaths=['vendor/google_devices/blazer']), 'collisionPaths'),
             (lambda r: r['preparation']['vendor']['node'].update(minMajor=0), 'node needs'),
             (lambda r: r['preparation']['vendor']['adevtoolGit'].update(skipDepBuildEnv={}), 'ADEVTOOL_SKIP_DEP_BUILD=1'),
@@ -378,9 +390,12 @@ class DownloadTest(Fixture):
         report = self.preflight('download')
         self.assertEqual(report['problems'], [])
         self.assertEqual(report['facts']['capacity'], {'availableBytes': 10 ** 15, 'reserveBytes': RESERVE,
-            'boundBytes': 8 << 30, 'boundKind': 'proposal'})
-        self.assertIn('below the reserve', self.problems('download', available=RESERVE + (8 << 30) - 1))
-        self.assertEqual(self.preflight('download', available=RESERVE + (8 << 30))['problems'], [])
+            'boundBytes': len(PAYLOAD), 'boundKind': 'proposal'})
+        self.assertIn('below the reserve', self.problems('download', available=RESERVE + len(PAYLOAD) - 1))
+        self.assertEqual(self.preflight('download', available=RESERVE + len(PAYLOAD))['problems'], [])
+        real = bb.preflight(self.recipe, 'download', self.op(), statvfs=fs(RESERVE + 11362467847 - 1),
+                            lock_probe=lambda path: True, root=self.root)
+        self.assertIn('below the reserve', ' '.join(real['problems']), 'the checked-in exact size is the admission bound')
         self.archive()
         self.assertIn('never replaced', self.problems('download'))
         (self.download/FACTORY).unlink()
@@ -389,12 +404,12 @@ class DownloadTest(Fixture):
         self.assertIn('held by another job', self.problems('download', download_dir=str(self.tmp/'dl2'), lock_free=False))
         self.assertIn('download dir parent', self.problems('download', download_dir=str(self.tmp/'no/such/dl')))
 
-    def run_download(self, payload, recipe=None, clock=None, out='r'):
+    def run_download(self, payload, recipe=None, clock=None, out='r', headers=None):
         recipe = recipe or self.synthetic
         fetched = []
         def fetcher(url, timeout):
             fetched.append((url, timeout))
-            return Response(payload)
+            return Response(payload, headers)
         code = bb.run(recipe, 'download', self.op(), self.tmp/out, fetcher=fetcher, clock=clock or (lambda: 0), now=lambda: 0,
             statvfs=fs(10 ** 15), lock_probe=lambda path: True, root=self.root)
         return code, fetched, json.loads((self.tmp/out/'completed.json').read_text())
@@ -406,15 +421,16 @@ class DownloadTest(Fixture):
         self.assertEqual((self.download/FACTORY).read_bytes(), PAYLOAD)
         self.assertFalse((self.download/(FACTORY + '.part')).exists())
         (self.download/FACTORY).unlink()
-        code, _, done = self.run_download(b'other bytes', out='r2')
-        self.assertEqual((code, done['ok']), (1, False))
+        other = bytes(b ^ 1 for b in PAYLOAD)  # exactly the recorded size, other bytes: only the sha256 refuses it
+        code, _, done = self.run_download(other, out='r2')
+        self.assertEqual((code, done['ok'], done['bytes']), (1, False, len(PAYLOAD)))
         self.assertIn('is not the pinned', done['error'])
         self.assertEqual(list(self.download.iterdir()), [], 'a failed download leaves no partial or final file')
 
     def test_byte_and_time_bounds_stop_the_download(self):
         small = json.loads(json.dumps(self.synthetic))
         small['preparation']['download']['boundBytes'] = 4
-        code, _, done = self.run_download(PAYLOAD, recipe=small)
+        code, _, done = self.run_download(PAYLOAD, recipe=small, headers={})
         self.assertEqual(code, 1)
         self.assertIn('exceeded the 4-byte bound', done['error'])
         ticks = iter(range(0, 10 ** 6, 4000))
@@ -422,10 +438,36 @@ class DownloadTest(Fixture):
         self.assertIn('download exceeded 3600 s', done['error'])
         self.assertEqual(list(self.download.iterdir()), [])
 
+    def test_only_exactly_the_recorded_size_is_accepted(self):
+        # A server announcing another size is refused before any byte is written.
+        written = []
+        class Watched(Response):
+            def read(self, n=-1):
+                written.append(n)
+                return super().read(n)
+        def fetcher(url, timeout):
+            return Watched(PAYLOAD, {'Content-Length': str(len(PAYLOAD) + 1)})
+        code = bb.run(self.synthetic, 'download', self.op(), self.tmp/'r', fetcher=fetcher, clock=lambda: 0, now=lambda: 0,
+                      statvfs=fs(10 ** 15), lock_probe=lambda path: True, root=self.root)
+        done = json.loads((self.tmp/'r/completed.json').read_text())
+        self.assertEqual((code, done['ok'], written), (1, False, []))
+        self.assertIn(f'announces {len(PAYLOAD) + 1} bytes, not the recorded {len(PAYLOAD)}', done['error'])
+        self.assertEqual(list(self.download.iterdir()), [])
+        # A short body (no Content-Length announced) is refused on size, before the sha256 is even considered.
+        code, _, done = self.run_download(PAYLOAD[:-1], out='r2', headers={})
+        self.assertEqual((code, done['bytes']), (1, len(PAYLOAD) - 1))
+        self.assertIn(f'{len(PAYLOAD) - 1} bytes arrived, not the recorded {len(PAYLOAD)}', done['error'])
+        self.assertEqual(list(self.download.iterdir()), [], 'no partial or final file is kept')
+        # Exactly the recorded size with the pinned sha256 is kept; the receipt records what was announced.
+        code, _, done = self.run_download(PAYLOAD, out='r3')
+        self.assertEqual((code, done['ok'], done['bytes'], done['announcedBytes'], done['expectedBytes']),
+                         (0, True, len(PAYLOAD), len(PAYLOAD), len(PAYLOAD)))
+
     def test_the_real_pin_refuses_synthetic_bytes(self):
         code, _, done = self.run_download(PAYLOAD, recipe=self.recipe)
         self.assertEqual(code, 1)
-        self.assertIn(f'is not the pinned {PIN}', done['error'])
+        self.assertIn('not the recorded 11362467847', done['error'])
+        self.assertEqual(done['expectedSha256'], PIN)
 
 class VendorTest(Fixture):
     def test_admission_needs_the_verified_archive_tools_and_absent_collisions(self):
@@ -1730,7 +1772,7 @@ class InspectTest(Fixture):
         self.assertEqual(n['version'], 'not executed (metadata only)')
         for unknown in ('reflink support (never assumed)',
                         'isolated source copy bytes (the source stage measures its full selection before writing; never this walk)',
-                        'Pro factory archive size (8 GiB cap unverified)'):
+                        'Pro factory archive content (its size is the recorded HEAD Content-Length; only the sha256 pin identifies it)'):
             self.assertIn(unknown, report['unknowns'])
 
     def test_node_from_path_reports_the_runner_resolution_as_the_candidate(self):
