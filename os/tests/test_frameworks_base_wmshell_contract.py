@@ -1,0 +1,137 @@
+#!/usr/bin/env python3
+"""#410: the fail-closed compile contract for OS Core's Shell patch, os/compile-contracts/frameworks-base-wmshell.json.
+
+These checks cover:
+- the manifest recomputes from the committed fixtures and patches;
+- its candidate is the patch on main;
+- the contract refuses when changed;
+- it stays pending until OS Core confirms;
+- it never registers the patch, because registration waits for a real compile (#410).
+"""
+import copy
+import gzip
+import importlib.util
+import json
+import re
+import subprocess
+import sys
+import unittest
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+SCRIPT = ROOT/'scripts/frameworks-base-wmshell-contract.py'
+MANIFEST = ROOT/'os/compile-contracts/frameworks-base-wmshell.json'
+LISTING = ROOT/'os/tests/fixtures/launcher3-compile-contract/trees/frameworks__base.ls-tree.txt.gz'
+SHELL = 'libs/WindowManager/Shell/src/com/android/wm/shell/'
+
+
+def load():
+    spec = importlib.util.spec_from_file_location('frameworks_base_wmshell_contract', SCRIPT)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+W = load()
+
+
+class FrameworksBaseWmshellContractTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.manifest = json.loads(MANIFEST.read_text())
+
+    def test_the_manifest_recomputes_from_the_committed_fixtures(self):
+        result = subprocess.run([sys.executable, str(SCRIPT)], capture_output=True, text=True, cwd=ROOT)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('confirmation pending', result.stdout)
+
+    def test_the_candidate_is_os_cores_patch_on_main(self):
+        delta = self.manifest['candidateDelta']
+        self.assertEqual((delta['pr'], delta['commit']), (523, '01cf401444392d64e18a520347180f7608c1137b'))
+        patch = (ROOT/'os/patches/rose-edge-wmshell.patch').read_bytes()
+        self.assertEqual([p['name'] for p in delta['patches']], ['rose-edge-wmshell.patch'])
+        self.assertEqual(delta['patches'][0]['sha256'], W.C.sha256(patch))
+        self.assertEqual(delta['patches'][0]['project'], 'frameworks/base')
+        bundle = ROOT/delta['patches'][0]['bundlePath']
+        self.assertEqual(bundle.read_bytes(), patch, 'the inert bundle copy is the committed patch')
+
+    def test_preimages_are_the_pinned_tree_and_after_images_are_the_patchs_own_index(self):
+        listing = {}
+        for line in gzip.decompress(LISTING.read_bytes()).decode().splitlines():
+            meta, path = line.split('\t', 1)
+            listing[path] = meta.split(' ')[2]
+        index = {path: lines for path, _, lines in W.C.file_blocks('rose-edge-wmshell.patch')}
+        files = {f['path'][len('frameworks/base/'):]: f for f in self.manifest['candidateDelta']['files']}
+        self.assertEqual(set(files), set(index))
+        for path, row in files.items():
+            if row['before'] is None:
+                self.assertNotIn(path, listing, f'{path}: new, so absent from the pinned tree')
+            else:
+                self.assertEqual(row['before']['gitBlob'], listing[path], f'{path}: pre is the pinned blob')
+                self.assertTrue(row['before']['gitBlob'].startswith(index[path][0]))
+            self.assertTrue(row['after']['gitBlob'].startswith(index[path][1]), f'{path}: after is the patch index')
+        self.assertEqual(files[SHELL + 'dagger/WMShellModule.java']['before']['gitBlob'],
+            '237f47124837e3f939172f25f18a2d3444423641')
+        others = [p for p in sorted((ROOT/'os/patches').glob('*.patch')) if p.name != 'rose-edge-wmshell.patch']
+        for other in others:
+            self.assertNotIn('WMShellModule.java', other.read_text(errors='replace'),
+                f'{other.name}: only the candidate touches WMShellModule, so its pre is the pinned blob')
+
+    def test_the_base_excludes_the_candidate_and_the_goals_are_wmshell_and_systemui(self):
+        base = [p['name'] for p in self.manifest['base']['bundleContent']['patches']]
+        self.assertNotIn('rose-edge-wmshell.patch', base)
+        self.assertEqual(self.manifest['projects'][0]['patches'][-1]['name'], 'rose-edge-wmshell.patch')
+        self.assertEqual(self.manifest['overlayRoles']['compileGoals'], ['WindowManager-Shell', 'SystemUI-core'])
+        self.assertEqual(self.manifest['targets'], ['WindowManager-Shell', 'SystemUI-core'])
+
+    def test_every_frameworks_base_overlay_is_a_required_input(self):
+        committed = sorted(str(f.relative_to(ROOT/'os/overlays')) for f in (ROOT/'os/overlays/frameworks/base').rglob('*')
+            if f.is_file())
+        required = self.manifest['overlayRoles']['required']['targets']
+        self.assertTrue(committed)
+        for target in committed:
+            self.assertIn(target, required)
+        self.assertIn('frameworks/base/' + SHELL + 'AgentTrayLink.java', required)
+        self.assertEqual(self.manifest['overlayRoles']['notAnInput']['targets'], [])
+        for row in self.manifest['overlays']:
+            self.assertEqual(W.C.sha256((ROOT/'os/overlays'/row['target']).read_bytes()), row['sha256'])
+
+    def test_it_stays_pending_until_os_core_confirms_and_never_registers(self):
+        self.assertEqual(self.manifest['confirmation']['state'], 'pending')
+        self.assertIn('refuses this contract unless state is "confirmed"', self.manifest['confirmation']['rule'])
+        self.assertEqual(self.manifest['registration']['state'], 'unregistered')
+        patcher = (ROOT/'scripts/apply-os-changes.py').read_text()
+        self.assertNotIn('rose-edge-wmshell', patcher, 'registration waits for a real compile of this contract')
+
+    def test_any_change_refuses(self):
+        def mutated(change):
+            manifest = copy.deepcopy(self.manifest)
+            change(manifest)
+            return W.check(manifest)
+        self.assertEqual(W.check(copy.deepcopy(self.manifest)), [])
+        cases = {
+            'patch bytes': lambda m: m['candidateDelta']['patches'][0].update(sha256='0' * 64),
+            'after image': lambda m: m['candidateDelta']['files'][0]['after'].update(sha256='0' * 64),
+            'goal': lambda m: m['overlayRoles']['compileGoals'].pop(),
+            'tray overlay': lambda m: m['overlays'][-1].update(sha256='0' * 64),
+            'candidate commit': lambda m: m['candidateDelta'].update(commit='0' * 40),
+            'confirmation': lambda m: m['confirmation'].update(state='assumed'),
+            'registration': lambda m: m['registration'].update(state='registered'),
+            'pre-image': lambda m: next(f for f in m['projects'][0]['files']
+                if f['path'] == SHELL + 'dagger/WMShellModule.java')['pre'].update(gitBlob='0' * 40),
+        }
+        for name, change in cases.items():
+            with self.subTest(name):
+                self.assertTrue(mutated(change), f'{name}: a changed contract must refuse')
+
+    def test_the_launcher3_contract_is_untouched_by_the_sibling(self):
+        result = subprocess.run([sys.executable, str(ROOT/'scripts/launcher3-compile-contract.py')], capture_output=True,
+            text=True, cwd=ROOT)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('69d7ccd59174c9a85aad1e0c9dc6da77a287f9276d5dc3f3cdc68ae0f6801a71', result.stdout)
+        self.assertTrue(re.search(r'"target": "Launcher3QuickStepLib"',
+            (ROOT/'os/compile-contracts/launcher3-quickstep-lib.json').read_text()))
+
+
+if __name__ == '__main__':
+    unittest.main()

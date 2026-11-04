@@ -5,6 +5,23 @@ compile-only `Launcher3QuickStepLib` proof of RoseOS's Launcher3 changes (#410).
 it; this directory only states inputs. The contract is inert: it registers, applies and copies nothing into any build,
 and grants no host, runtime or permission access.
 
+**Sibling: `frameworks-base-wmshell.json`** (`kind` `rose-frameworks-base-wmshell-compile-inputs`, from
+`scripts/frameworks-base-wmshell-contract.py`). It states the inputs of a compile-only proof of OS Core's raised-edge
+Shell patch, `os/patches/rose-edge-wmshell.patch` (#516/#523, merged at `01cf401`, unregistered), for the goals
+`WindowManager-Shell` and `SystemUI-core`.
+- **Shape and rules:** it uses the same generator code, branches, tree pins and provenance rules as the Launcher3
+  contract. Its projects are frameworks/base (the background-policy patches, then the candidate) and build/release.
+- **Overlays:** every frameworks/base overlay is a *required* input here, because the patch's `RoseEdgeMicSlot` calls
+  the tray's `AgentTrayLink`. There is no flag evidence: the edge's switch is a runtime property.
+- **Fail-closed:** `confirmation.state` stays `pending` until OS Core confirms the inputs and goals, and an adapter
+  refuses the contract until then. `registration.state` is `unregistered`. The patch enters `apply-os-changes.py` only
+  after a real compile, and the contract never registers it.
+- **Kept separate on purpose:** Launcher3QuickStepLib has no compile coupling to this patch, because its client is
+  hand-written against the descriptor. So a Shell failure neither masks nor blocks the Launcher3 result.
+- **Shared fixtures:** both contracts read the pinned fixtures in `os/tests/fixtures/launcher3-compile-contract/`. This
+  one adds `WMShellModule.java`'s pinned pre-image and the inert copy of the candidate patch in `candidate-pr523/`.
+- **Tests:** `os/tests/test_frameworks_base_wmshell_contract.py`.
+
 **The candidate** is #440, a draft that stays unregistered and default-off. Its inputs that are not in this bundle sit in
 `os/tests/fixtures/launcher3-compile-contract/candidate-pr440/`:
 - the edge patch;
