@@ -61,10 +61,34 @@ class RoseEdgeResizeStagedTest(unittest.TestCase):
         self.assertIn('IBinder.FLAG_ONEWAY', slot_body)
         state = (FALLBACK/'RoseEdgeState.java').read_text()
         self.assertIn('MIC_SLOT_MIN_DP = 32, MIC_SLOT_MAX_DP = 64, MIC_SLOT_BAND_MAX_DP = 160', state)
-        self.assertNotRegex(state + java, r'(?i)AgentTray|setMicrophoneMute|SensorPrivacy|MUTE\b',
-            'Launcher3 never touches microphone state')
+        every = ''.join(p.read_text() for p in FALLBACK.glob('*.java'))
+        self.assertNotRegex(every, r'(?i)AgentTray|setMicrophoneMute|SensorPrivacy|AudioManager|\bMUTE\b',
+            'Launcher3 never touches microphone state (option (a))')
         listener = java[java.index('static final class Listener'):]
         self.assertEqual(re.findall(r'data\.read(\w+)\(', listener), ['Int', 'Int', 'TypedObject', 'Int', 'Int', 'Int'])
+
+    def test_the_edge_window_follows_homes_contract_key_for_key(self):
+        import json
+        contract = json.loads((ROOT/'qa/oxblood/oxblood-contract.json').read_text())['homeEdge']
+        layout = (FALLBACK/'RoseEdgeLayout.java').read_text()
+        def const(name):
+            return float(re.search(rf'\b{name} = ([0-9.]+)', layout).group(1))
+        self.assertEqual((const('EDGE_HEIGHT_DP'), const('FLAT_TOP_DP'), const('FILLET_DP')),
+            (contract['height'], contract['flatTop'], contract['concaveFilletRadius']))
+        controls = contract['controls']
+        self.assertEqual((const('ROSE_DP'), const('CONTROL_HEIGHT_DP')), tuple(controls['rose']['hit']))
+        self.assertEqual(const('SWITCHER_DP'), controls['switcher']['hit'][0])
+        self.assertEqual((const('MIC_DP'), const('CONTROL_HEIGHT_DP')), tuple(controls['microphone']['hit']))
+        self.assertIn('gap 14', controls['layout'])
+        self.assertIn('centre 29dp above the edge bottom', controls['layout'])
+        self.assertEqual((const('GAP_DP'), const('CONTROL_CENTRE_DP')), (14, 29))
+        self.assertEqual((const('WELL_HEIGHT_DP'), const('WELL_RADIUS_DP')),
+            (contract['well']['plateHeight'], contract['well']['radius']))
+        window = (FALLBACK/'RoseEdgeWindow.java').read_text()
+        for color in ('0xFF4A141A', '0xFF3C0E13', '0xFF330C10', '0xA6D65468', '0x66ECCDBE', '0xFFEADBCD', '0xFF331019'):
+            self.assertIn(color, window)
+        # The edge's lift for the resize is the contract's height less its flat top (58dp).
+        self.assertEqual(contract['height'] - contract['flatTop'], 58)
 
     def test_reasons_match_the_record(self):
         record = (AIDL/'com/android/wm/shell/roseedge/IRoseEdgeListener.aidl').read_text()

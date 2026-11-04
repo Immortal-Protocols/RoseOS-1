@@ -41,11 +41,21 @@ These files move into `os/` only in a coordinated re-bind, once all four of thes
   It shows wire compatibility both ways, the refusal and lower rules, the default-off switch, the 58dp lift, and that a
   resized app is not cropped again. It does not show WMShell's resize, a compiled Launcher3 or any device behaviour.
 
+- **The edge window** (`RoseEdgeWindow`, `RoseEdgeLayout`) is shown while the edge is up, in a
+  `TYPE_NAVIGATION_BAR_PANEL` window. It draws Home's design contract (`qa/oxblood/oxblood-contract.json` `homeEdge`,
+  checked key for key in CI): the plate, hairline, Rose and switcher wells, pearl and switcher glyph.
+  - The 44dp microphone-input slot is left transparent and outside the window's touchable region. Its screen bounds go
+    to Shell through `setMicSlot = 3` (Chief's option (a), agreed with OS Core), only after each `onRaised` and only
+    inside the agreed bottom band and 32–64dp size. SystemUI's existing tray control draws and handles the mic there.
+    Launcher3 never touches microphone state.
+  - Rose and the switcher lower the edge, then call the host's `Actions`. A swipe down lowers it.
+  - The harness's `RoseEdgeWindowNativeTest` covers these with native graphics, and writes
+    `target/render/rose-edge.png`. It compiles against Robolectric's uninstrumented SDK 35 framework, because the
+    window uses the hidden internal-insets touchable region, as Launcher3's Taskbar does.
+
 ## Not yet here
 - `SystemUiProxy` handing `RoseEdgeShell` the shell's binder.
-- The edge window: Launcher3 draws the edge from Home's design contract. It leaves the 44dp microphone-input slot
-  transparent and outside its touchable region, and lays the slot out through `RoseEdgeState.setMicSlot`. The client
-  part is here: `setMicSlot = 3` (Chief's option (a), agreed with OS Core) is sent only after each `onRaised`, never
-  outside the bottom band or the 32–64dp size, and SystemUI's existing tray control draws the mic there. Launcher3
-  never touches microphone state.
+- `TouchInteractionService` starting `RoseEdgeWindow` with its `Actions`.
+- Both are patch hunks for `rose-edge-launcher3.patch`.
+- Accessibility nodes for the two wells.
 - Both of those join `rose-edge-launcher3.patch` once the interfaces are agreed.

@@ -40,12 +40,14 @@
       <version>4.13.2</version>
       <scope>test</scope>
     </dependency>
+    <!-- Compile against Robolectric's full, uninstrumented SDK 35 framework rather than android.jar: Launcher3 builds with
+         platform_apis, and the edge window uses the hidden ViewTreeObserver.InternalInsetsInfo touchable region as
+         Launcher3's Taskbar does. -->
     <dependency>
-      <groupId>com.google.android</groupId>
-      <artifactId>android-sdk-platform</artifactId>
-      <version>35</version>
-      <scope>system</scope>
-      <systemPath>${android.jar}</systemPath>
+      <groupId>org.robolectric</groupId>
+      <artifactId>android-all</artifactId>
+      <version>15-robolectric-13954326</version>
+      <scope>provided</scope>
     </dependency>
   </dependencies>
   <build>
@@ -106,8 +108,6 @@
                 </copy>
                 <copy todir="${project.build.directory}/e2c-src/com/android/quickstep/fallback"
                       file="${project.basedir}/../../../overlays/packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeGesture.java"/>
-                <copy todir="${project.build.directory}/e2c-src/android/os"
-                      file="${project.basedir}/../../../tests/native-render-switcher/src/test/java/android/os/SystemProperties.java"/>
                 <mkdir dir="${project.build.directory}/e2c-aidl"/>
                 <!-- aidl wants the canonical import root that each file lives under. -->
                 <property name="e2c.aidl.root" location="${project.basedir}/../aidl"/>
