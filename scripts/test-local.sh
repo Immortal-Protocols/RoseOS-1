@@ -12,6 +12,8 @@ node --test workspace/rose-agent/tests/native-bridge-contract.test.mjs
 node --test workspace/rose-agent/tests/local-rose-auth.test.mjs
 # Local Rose task events from the real PR318 producer, through the local() provider bridge.
 node --test workspace/rose-agent/voice-providers/local-tasks.test.cjs
+# #410 item 6: microphone-input mute on the capture side, and the provider contract it relies on.
+node --test workspace/rose-agent/tests/mic-input-capture.test.mjs workspace/rose-agent/voice-providers/providers.test.cjs
 # Local Rose task list from the producer through the page and bridge into the native overview feed (LOCAL-TASK-FEED-002).
 node --test workspace/rose-agent/tests/local-task-feed.test.mjs
 # App-tree files that build.sh replaces must match the module source it ships.
@@ -64,6 +66,7 @@ python3 os/tests/test_rose_switcher.py
 python3 os/tests/test_launcher3_compile_contract.py
 python3 os/tests/test_frankel_lunch_inputs.py
 python3 os/tests/test_automated_devices_contract.py
+python3 os/tests/test_rose_edge_shell.py
 python3 os/tests/test_background_control_prototype.py
 python3 scripts/tests/test_systemui_component_update.py
 python3 os/tests/persistent-app-experiment/test_systemui_stages.py
@@ -124,6 +127,7 @@ python3 scripts/tests/test_fold_bootstrap_proof.py
 python3 scripts/tests/test_fold_tool_proof.py
 python3 scripts/tests/test_ssh_keygen_observe.py
 python3 scripts/tests/test_factory_delivery.py
+python3 scripts/tests/test_factory_targets.py
 python3 scripts/tests/test_models_signing_bootstrap.py
 python3 scripts/tests/test_models_apk_signing.py
 python3 scripts/tests/test_models_publication.py
@@ -204,6 +208,9 @@ java -cp "$JAVA_TESTS/RoseReleases" app.seamlessupdate.client.RoseReleasesTest
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/ConversationState" \
  workspace/rose-agent/app/src/dev/pixel/voice/ConversationState.java workspace/rose-agent/app/tests/ConversationStateTest.java
 java -cp "$JAVA_TESTS/ConversationState" dev.pixel.voice.ConversationStateTest
+java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/MicInputCapture" \
+ workspace/rose-agent/app/src/dev/pixel/voice/MicInputCapture.java workspace/rose-agent/app/tests/MicInputCaptureTest.java
+java -cp "$JAVA_TESTS/MicInputCapture" dev.pixel.voice.MicInputCaptureTest
 # Independent Rose visual axes (connection, microphone, voice) derived from ConversationState.
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/RoseVisualState" \
  workspace/rose-agent/app/src/dev/pixel/voice/ConversationState.java workspace/rose-agent/app/src/dev/pixel/voice/RoseVisualState.java \

@@ -1,0 +1,1 @@
+package android.content; public abstract class Context { public final <T> T getSystemService(Class<T> c) { return null; } public abstract int checkCallingPermission(String p); public void enforceCallingPermission(String p, String m) {} }
