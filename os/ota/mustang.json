@@ -21,5 +21,5 @@
     "installationEvidence": "Nathan confirmed build 2026110302 installed with Beta selected on 2026-11-04 in the Mustang worker thread. Phone behavior has not been independently observed."
   },
   "plan": "https://app.notion.com/p/40d7c646c81b81ce9485e0ca3eff8614",
-  "activationRef": "Nathan's direct 'okay can you keep going?' instruction in the Mustang worker thread on 2026-11-03 Pacific, following the verified read grants and first-public-OTA scope. One newer Mustang build/sign/public OTA and mustang-stable metadata; automatic publication stays off; phone installation remains separate."
+  "activationRef": "Later additional-release authority reconciled by Chief on 2026-11-04: os/ota/mustang-ui-followup-authority.json. One fresh manual mustang-ota build/sign/public release and mustang-stable metadata after the UI work, using the Frankel 2026110403 app/policy inputs. Earlier OTA 2026110401 is already delivered. Automatic publication remains disabled; physical phone verification is optional and is not a release-completion gap. No new IAM, keys, credentials or access extension."
 }

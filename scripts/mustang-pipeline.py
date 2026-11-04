@@ -46,7 +46,55 @@ def config():
     # builder. Keep this in the runtime path too, before creating a fresh attempt.
     integration.check_route(ROOT/'os/build-only/mustang-updater-route.json')
     integration.other_builder_paths()
-    return json.loads((ROOT/'os/build-only/mustang-host.json').read_text())
+    cfg = json.loads((ROOT/'os/build-only/mustang-host.json').read_text())
+    app_input_allocation(cfg)
+    return cfg
+
+
+def app_input_allocation(cfg):
+    """Check the committed producer binding on the hosted guard; this reads no host input."""
+    ref = cfg.get('appInputAllocation')
+    if ref is None:
+        return None
+    path = Path(ref)
+    if path.is_absolute() or '..' in path.parts:
+        raise ValueError('app input allocation must be a repository-relative record')
+    allocation = json.loads((ROOT/path).read_text())
+    build = allocation.get('build', '')
+    if (allocation.get('schema') != 'roseos.latest-allocation.v1' or allocation.get('device') != 'frankel'
+            or not re.fullmatch(r'[1-9][0-9]{9}', str(build))
+            or allocation.get('tag') != f'frankel-{build}'
+            or not re.fullmatch(r'[0-9a-f]{40}', str(allocation.get('sourceSha', '')))):
+        raise ValueError('Frankel app-input producer identity differs')
+    base = f'/home/pixelbuild/rose-actions/frankel-{build}/release'
+    if cfg['appsDir'] != base+'/signed-apps' or cfg['policy'] != base+'/background-policy.json':
+        raise ValueError('signed apps and policy must bind the same recorded Frankel producer')
+    return allocation
+
+
+def app_input_admission(cfg, candidate, directory):
+    """Record actual copies only after the existing APK/receipt/signer/policy admission passed."""
+    allocation = app_input_allocation(cfg)
+    if allocation is None:
+        return None
+    if sorted(candidate['apps']) != sorted(allocation['apps']):
+        raise ValueError('admitted app versions differ from the bound Frankel allocation')
+    directory = Path(directory)
+    apps = []
+    for package, version in candidate['apps']:
+        apk = directory/'signed-apps'/f'{package}.apk'
+        receipt = directory/'signed-apps'/f'{package}.receipt.json'
+        apps.append({'package':package, 'versionCode':version, 'sha256':integration.sha256_file(apk),
+            'receiptSha256':integration.sha256_file(receipt)})
+    return {'schema':'roseos.mustang-app-input-admission.v1', 'status':'verified-by-signed-input-admission',
+        'observedAt':datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        'producerRun':allocation['run'], 'producerBuild':allocation['build'],
+        'producerSource':allocation['sourceSha'], 'producerCandidate':allocation['candidateSha'],
+        'allocationRecordSha256':integration.sha256_file(ROOT/cfg['appInputAllocation']),
+        'appsDir':cfg['appsDir'], 'policy':cfg['policy'], 'apps':apps,
+        'policySha256':integration.sha256_file(directory/'background-policy.json'),
+        'apkSignaturesAndReceiptsVerified':True, 'policyMatchesActualApps':True,
+        'compiledAppAndPolicyVerification':'omitted per original sprint; this records input admission only'}
 
 
 def omissions():
@@ -137,7 +185,11 @@ def run(run_id, attempt):
         current = 'assemble'
         tools = {k:cfg[k] for k in ('aapt','apksigner')}
         bundle = module('mustang_bundle', 'mustang-candidate-bundle.py')
-        bundle.assemble(cfg['appsDir'], cfg['policy'], allocation['build'], source, tools, work/'bundle')
+        candidate = bundle.assemble(cfg['appsDir'], cfg['policy'], allocation['build'], source, tools, work/'bundle')
+        admitted = app_input_admission(cfg, candidate, work/'bundle')
+        if admitted is not None:
+            release_receipts.write_once(run_root/'app-input-admission.json', admitted)
+            report['stages']['assemble'] = admitted
         current = 'admit'
         integration.admit(work/'bundle', ROOT/'os/build-only/mustang-updater-route.json', work/'inputs', tools)
         inputs = work/'inputs/local-inputs.json'
@@ -170,7 +222,7 @@ def collect_reports(run_id, attempt, out):
     out = Path(out)
     out.mkdir(mode=0o700)
     # Fixed receipt names only: no source, keys, APK payloads or factory inputs are uploaded.
-    for name in ('candidate-receipt.json','allocation.json'):
+    for name in ('candidate-receipt.json','allocation.json','app-input-admission.json'):
         path = base/name
         if path.is_file() and not path.is_symlink():
             shutil.copyfile(path, out/name)
