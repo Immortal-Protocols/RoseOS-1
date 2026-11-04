@@ -2,8 +2,51 @@
 
 Implements the source work for [Nathan's OTA plan](https://app.notion.com/p/40d7c646c81b81ce9485e0ca3eff8614)
 and [issue #503](https://github.com/Immortal-Protocols/RoseOS-1/issues/503).
-**First manual public OTA 2026110401 is published and download verified.
-Automatic publication remains off; physical-device acceptance is unproven.**
+**UI follow-up OTA authorized; Frankel 2026110403 inputs are bound for runtime
+admission. First OTA 2026110401 remains delivered. Automatic publication is off;
+optional physical-phone verification is not a release-completion gap.**
+
+## Authorized UI follow-up
+
+Chief located the later PM request for both Mustang and Frankel OTA builds/
+releases after the UI work. The source message references and exact scope are
+recorded in `os/ota/mustang-ui-followup-authority.json`. This is additional
+publication authority after 2026110401, not another use of the first one-OTA
+approval. The same Mustang worker remains the single owner. The user separately
+specified that push-button delivery is the completion criterion and physical
+phone verification is optional; no phone action is authorized by this record.
+
+The existing [one-button route](OS-RELEASE.md#mustang-one-button-ota-mustang-ota-manual)
+from PR #529 is used once: `os-release.yml@main`, mode `mustang-ota`,
+`mustang_publish_ota=true`, other inputs default. Automatic publication stays off.
+The recorded read window still expires `2026-11-05T06:20:18Z` and is not extended.
+
+Both host paths now name Frankel **2026110403**, producer **41873084560**, source
+`4e85677ee273630a79eae195e0a044d75226e122`. Its downloaded allocation artifact
+13345237098 matched API archive SHA256
+`4223673ae505a31732ea96fc725757907fb44b2b83190fa69eae1020530f499b`.
+The exact JSON is retained in `os/ota/mustang-frankel-2026110403-allocation.json`:
+Rose Agent **364**, Background Control **38**, Calculator **5**. The version-only
+local candidate `38b5da1...` is distinct from the dispatched source, as recorded
+by that allocation and the public release notes.
+
+The original builder was independently observed **TERMINATED** at 17:59:08Z,
+after the intervening Agent Beta controller failed to reach RUNNING and its
+cleanup completed. That failure was a 420-second state timeout, not an observed
+IAM denial. No failed operation was replayed. The current retained file bytes
+cannot be proved from a stopped-builder path confirmation. The normal owned
+Mustang run must execute the existing APK/receipt/signer/policy admission, match
+all three versions to the bound Frankel allocation, and write
+`app-input-admission.json` before integration/compile. Missing/mismatched input
+stops the attempt. Source configuration is not a claim that this check passed.
+
+No workflow/helper ownership was transferred. This host/pipeline binding does
+not edit Release's workflow changes in #529/#536 or the optional reconciliation
+lineage work in #543. Preserve the existing FIFO, lock, original identity and
+ownership cleanup, STOP fallback and openssh-client hold. Record runtime input
+proof, fresh source/allocation, signing, public download checks and cleanup when
+they actually occur; physical testing can be recorded separately without
+blocking this release.
 
 On November 3 Pacific, after completing the new read grants, Nathan instructed
 this worker to continue. `publicationEnabled=true` enables one newer Mustang
