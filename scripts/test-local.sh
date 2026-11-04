@@ -16,6 +16,7 @@ node --test workspace/rose-agent/voice-providers/local-tasks.test.cjs
 node --test workspace/rose-agent/tests/mic-input-capture.test.mjs workspace/rose-agent/voice-providers/providers.test.cjs
 # Local Rose task list from the producer through the page and bridge into the native overview feed (LOCAL-TASK-FEED-002).
 node --test workspace/rose-agent/tests/local-task-feed.test.mjs
+node --test workspace/rose-agent/tests/local-task-card.test.mjs
 # App-tree files that build.sh replaces must match the module source it ships.
 node --test workspace/rose-agent/tests/staged-copies.test.mjs
 # Current-page replacements for the retired WebRTC-page tests, and the EventDelivery server check.
@@ -128,6 +129,7 @@ python3 scripts/tests/test_rango_factory_inspect_workflow.py
 # Launcher3 compile-only adapter (synthetic trees, stand-in processes; no host, copy, lunch or build).
 python3 scripts/tests/test_launcher3_compile.py
 python3 scripts/tests/test_launcher3_compile_workflow.py
+python3 scripts/tests/test_launcher3_bundle_report.py
 python3 scripts/tests/test_signing_bootstrap.py
 python3 scripts/tests/test_fold_bootstrap_proof.py
 python3 scripts/tests/test_fold_tool_proof.py

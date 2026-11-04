@@ -109,6 +109,43 @@ class FakeCodex:
         pass
 
 
+class FakeUtterance:
+    def __init__(self, rid, auto_finish=True):
+        self.id, self.auto_finish = rid, auto_finish
+        self.text, self.interrupted = '', False
+        self.done = threading.Event()
+
+    def add(self, text):
+        self.text += text
+
+    def finish(self):
+        if self.auto_finish:
+            self.done.set()
+
+    def cancel(self):
+        self.interrupted = True
+        self.done.set()
+
+    def heard(self):
+        return self.text
+
+
+class FakeSpeaker:
+    audible = False
+
+    def __init__(self, auto_finish=True):
+        self.auto_finish, self.utterances = auto_finish, []
+
+    def utterance(self, rid, started):
+        utterance = FakeUtterance(rid, self.auto_finish)
+        self.utterances.append(utterance)
+        return utterance
+
+    def stop(self):
+        for utterance in self.utterances:
+            utterance.cancel()
+
+
 class Integration(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -181,6 +218,122 @@ class Integration(unittest.TestCase):
         self.assertFalse(a.cancelled.is_set())
         self.assertTrue(a.busy)
         self.assertIn(('interrupt', 'conversation', {}), self.engine.client.calls)
+
+    def test_slow_phone_action_publishes_progress_then_bound_snapshot(self):
+        from rose.app import Server
+        a = self.task('Calculator')
+        entered, release = threading.Event(), threading.Event()
+        send = a.view.workspace.send
+        def slow(op, params):
+            if op == 'start':
+                entered.set()
+                release.wait(3)
+            return send(op, params)
+        a.view.workspace.send = slow
+        worker = threading.Thread(target=self.call, args=(a, 'open_app'), kwargs={'app': a.app})
+        worker.start()
+        try:
+            self.assertTrue(entered.wait(3))
+            latest = [e['task'] for e in self.bus.history if e['kind'] == 'task'][-1]
+            self.assertEqual(latest['status'], 'running')
+            self.assertEqual(latest['detail'], 'Opening Calculator.')
+        finally:
+            release.set()
+            worker.join(3)
+        self.assertFalse(worker.is_alive())
+        state = SimpleNamespace(mode='live', tasks=self.engine, _floors=(0, 0))
+        snapshot = Server.task_list(state)[0]
+        latest = [e['task'] for e in self.bus.history if e['kind'] == 'task'][-1]
+        for key in ('id', 'server', 'contract', 'workspace', 'detail'):
+            self.assertEqual(snapshot[key], latest[key])
+        self.assertEqual(snapshot['workspace']['sessionId'], a.view.workspace.bound_id)
+
+    def complete(self, s):
+        self.assertTrue(self.call(s, 'open_app', app=s.app)['ok'])
+        s.text = s.app + ' is open.'
+        self.engine._event({'event': 'done', 'session': s.name,
+                            'turn': {'id': s.turn, 'status': 'completed'}})
+        self.assertEqual(s.task.status, 'done')
+
+    def test_third_app_releases_oldest_completed_session_and_preserves_results(self):
+        a, b = self.task('Calculator'), self.task('Clock')
+        self.complete(a)
+        self.complete(b)
+        old = a.task.to_dict()
+        aid, bid = a.view.workspace.bound_id, b.view.workspace.bound_id
+        c = self.task('Keep Notes')
+        self.assertTrue(self.call(c, 'open_app', app=c.app)['ok'])
+        self.assertTrue(a.closed)
+        self.assertFalse(b.closed)
+        self.assertEqual(a.task.to_dict(), old)
+        stopped = [p['sessionId'] for op,p in self.controller.calls if op == 'stop']
+        self.assertIn(aid, stopped)
+        self.assertNotIn(bid, stopped)
+        self.assertTrue(any(e['kind'] == 'session_released'
+                            for e in self.store.export(self.engine.conversation)))
+        retained_thread = b.thread
+        followup = self.engine.start_phone('Clock', 'Observe Clock again')
+        self.assertTrue(wait(lambda: b.busy))
+        self.assertIs(followup, b.task)
+        self.assertEqual(b.thread, retained_thread)
+
+    def test_new_app_reclaims_only_completed_task_while_other_app_runs(self):
+        a, b = self.task('Calculator'), self.task('Clock')
+        self.assertTrue(self.call(a, 'open_app', app=a.app)['ok'])
+        self.complete(b)
+        aid = a.view.workspace.bound_id
+        c = self.task('Keep Notes')
+        self.assertTrue(self.call(c, 'open_app', app=c.app)['ok'])
+        self.assertFalse(a.cancelled.is_set())
+        self.assertTrue(a.busy)
+        self.assertTrue(self.call(a, 'observe')['ok'])
+        self.assertNotIn(aid, [p['sessionId'] for op,p in self.controller.calls if op == 'stop'])
+
+    def test_two_running_apps_report_capacity_without_generic_tool_failure(self):
+        a, b = self.task('Calculator'), self.task('Clock')
+        result = self.call(self.engine.sessions['conversation'], 'phone_task',
+                           app='Keep Notes', goal='Open Keep Notes')
+        self.assertFalse(result['ok'])
+        self.assertEqual(result['reason'], 'app_sessions_busy')
+        self.assertIn('running', result['message'])
+        self.assertTrue(a.busy and b.busy)
+        self.assertFalse(any(op == 'stop' for op,_ in self.controller.calls))
+
+    def test_foreground_app_refusal_keeps_actionable_reason_in_failed_result(self):
+        a = self.task('Calculator')
+        send = a.view.workspace.send
+        def refuse_foreground(op, params):
+            if op == 'start':
+                return {'status': 'failed', 'sessionId': 'refused', 'targetPackage': CALC,
+                        'reason': 'target_in_foreground', 'error': 'target_in_foreground: '+CALC}
+            return send(op, params)
+        a.view.workspace.send = refuse_foreground
+        result = self.call(a, 'open_app', app=a.app)
+        self.assertFalse(result['ok'])
+        self.assertIn('open on your phone screen', result['result'])
+        self.assertIn('Switch away', result['result'])
+        a.text = 'The app could not open.'
+        self.engine._event({'event': 'done', 'session': a.name,
+                            'turn': {'id': a.turn, 'status': 'completed'}})
+        self.assertEqual(a.task.status, 'failed')
+        self.assertEqual(a.task.result, result['result'])
+        self.assertFalse(any(op == 'start' for op,_ in self.controller.calls))
+
+    def test_unconfirmed_slot_release_blocks_replacement_and_preserves_task_result(self):
+        a, b = self.task('Calculator'), self.task('Clock')
+        self.complete(a)
+        self.complete(b)
+        old = a.task.to_dict()
+        a.view.workspace.close = lambda reason: {'status': 'timeout'}
+        for _ in range(2):
+            result = self.call(self.engine.sessions['conversation'], 'phone_task',
+                               app='Keep Notes', goal='Open Keep Notes')
+            self.assertFalse(result['ok'])
+            self.assertEqual(result['reason'], 'session_cleanup_unconfirmed')
+        self.assertEqual(a.task.to_dict(), old)
+        self.assertEqual(len(self.engine.tasks), 2)
+        self.assertTrue(any(e['kind'] == 'session_release_uncertain'
+                            for e in self.store.export(self.engine.conversation)))
 
     def test_standalone_okay_is_a_turn_and_in_reply_okay_is_a_backchannel(self):
         turns = []
@@ -282,15 +435,81 @@ class Integration(unittest.TestCase):
         self.call(a, 'open_app', app='Calculator')
         a.text = 'Calculator is open.'
         self.engine._event({'event':'done','session':a.name,'turn':{'id':a.turn,'status':'completed'}})
+        completed_thread, completed_turn = a.thread, a.turn
         self.engine.update(a.task.id, 'Continue in Calculator')
         self.assertTrue(wait(lambda: a.busy))
-        spoken = []
-        utterance = SimpleNamespace(add=spoken.append, finish=lambda: None)
-        with patch.object(self.engine, '_heard'), patch.object(self.engine, 'speaker',
-                SimpleNamespace(audible=False, utterance=lambda *args: utterance)):
+        speaker = FakeSpeaker()
+        with patch.object(self.engine, 'speaker', speaker):
             self.engine.sessions['conversation'].busy = False
-            self.assertTrue(wait(lambda: spoken))
-        self.assertEqual(spoken, ['Calculator is open.'])
+            self.assertTrue(wait(lambda: any(e['kind'] == 'assistant_heard'
+                                           for e in self.store.export(self.engine.conversation))))
+        self.assertEqual([u.text for u in speaker.utterances], ['Calculator is open.'])
+        heard = next(e for e in self.store.export(self.engine.conversation) if e['kind'] == 'assistant_heard')
+        self.assertEqual((heard['thread_id'], heard['turn_id']), (completed_thread, completed_turn))
+        self.assertTrue(self.engine._worker.is_alive())
+
+    def test_two_task_results_do_not_stall_conversation_or_overlap_pending_speech(self):
+        self.engine.sessions['conversation'].busy = True
+        a, b = self.task('Calculator'), self.task('Clock')
+        for s in (a, b):
+            self.call(s, 'open_app', app=s.app)
+            s.text = s.app + ' is open.'
+            self.engine._event({'event': 'done', 'session': s.name,
+                                'turn': {'id': s.turn, 'status': 'completed'}})
+        speaker = FakeSpeaker(auto_finish=False)
+        with patch.object(self.engine, 'speaker', speaker):
+            self.engine.sessions['conversation'].busy = False
+            self.assertTrue(wait(lambda: len(speaker.utterances) == 1))
+            # No audio has reached the transport yet, so audible remains false.
+            self.assertFalse(wait(lambda: len(speaker.utterances) > 1, seconds=.2))
+            speaker.utterances[0].done.set()
+            self.assertTrue(wait(lambda: len(speaker.utterances) == 2))
+            speaker.utterances[1].done.set()
+            self.engine._user_turn('Are you still there?')
+            s = self.engine.sessions['conversation']
+            self.assertTrue(wait(lambda: any(e['kind'] == 'turn_started' and e['turn_id'] == s.turn
+                                           for e in self.store.export(self.engine.conversation))))
+            self.assertTrue(self.engine._worker.is_alive())
+        self.assertEqual([u.text for u in speaker.utterances[:2]], ['Calculator is open.', 'Clock is open.'])
+
+    def test_result_returned_to_conversation_is_not_announced_again(self):
+        self.engine.sessions['conversation'].busy = True
+        a, b = self.task('Calculator'), self.task('Clock')
+        self.call(a, 'open_app', app=a.app)
+        a.text = 'Calculator is open.'
+        self.engine._event({'event': 'done', 'session': a.name,
+                            'turn': {'id': a.turn, 'status': 'completed'}})
+        result, _ = self.engine._conversation_tool('list_tasks', {})
+        self.assertEqual(result['tasks'][0]['result'], a.text)
+        speaker = FakeSpeaker()
+        with patch.object(self.engine, 'speaker', speaker):
+            self.engine.sessions['conversation'].busy = False
+            self.assertTrue(wait(self.engine._announcements.empty))
+            self.assertEqual(speaker.utterances, [])
+            # A result that was still running during list_tasks still needs its announcement.
+            self.call(b, 'open_app', app=b.app)
+            b.text = 'Clock is open.'
+            self.engine._event({'event': 'done', 'session': b.name,
+                                'turn': {'id': b.turn, 'status': 'completed'}})
+            self.assertTrue(wait(lambda: any(e['kind'] == 'assistant_heard'
+                                           for e in self.store.export(self.engine.conversation))))
+        self.assertEqual([u.text for u in speaker.utterances], ['Clock is open.'])
+        self.assertTrue(self.engine._worker.is_alive())
+
+    def test_announcement_error_does_not_kill_event_worker(self):
+        announce = self.engine._announce
+        attempts = []
+        def fail_once():
+            attempts.append(True)
+            if len(attempts) == 1:
+                raise RuntimeError('simulated speech failure')
+            announce()
+        with patch.object(self.engine, '_announce', side_effect=fail_once):
+            self.assertTrue(wait(lambda: attempts))
+            self.engine._user_turn('Hello after the speech failure')
+            self.assertTrue(wait(lambda: any(e['kind'] == 'turn_started'
+                                           for e in self.store.export(self.engine.conversation))))
+            self.assertTrue(self.engine._worker.is_alive())
 
     def test_model_image_resize_does_not_mutate_cached_phone_observation(self):
         from PIL import Image
@@ -386,6 +605,76 @@ class Integration(unittest.TestCase):
 
 
 class StorageAndContract(unittest.TestCase):
+    def test_events_connection_restores_current_tasks_without_replaying_actions(self):
+        from fastapi import FastAPI, WebSocket
+        from fastapi.testclient import TestClient
+        from rose.app import Server
+        task = {'id': 1, 'kind': 'phone', 'status': 'running', 'goal': 'Synthetic task',
+                'started': 1, 'detail': 'Checking app.', 'server': 'synthetic', 'contract': 1}
+        bus = Bus()
+        bus.emit('user_turn', id=1, text='Historical request')
+        server = SimpleNamespace(bus=bus, snapshot=lambda: {'tasks': [task]}, _stale=lambda msg: False)
+        app = FastAPI()
+        closed = threading.Event()
+        @app.websocket('/events')
+        async def events(ws: WebSocket):
+            try:
+                await Server.serve_events(server, ws)
+            finally:
+                closed.set()
+        with TestClient(app).websocket_connect('/events') as ws:
+            self.assertEqual(ws.receive_json()['kind'], 'hello')
+            replay = ws.receive_json()
+            self.assertEqual(replay['kind'], 'user_turn')
+            self.assertTrue(replay['replay'])
+            self.assertEqual(ws.receive_json()['kind'], 'replay_done')
+            restored = ws.receive_json()
+            self.assertEqual(restored['kind'], 'task')
+            self.assertNotIn('replay', restored)
+            self.assertEqual(restored['task'], task)
+            ws.close()
+            self.assertTrue(closed.wait(2))
+
+    def test_definitive_slot_refusals_keep_their_codes(self):
+        for status in ('session_limit', 'app_in_other_session', 'locked', 'target_not_allowed'):
+            with self.subTest(status=status):
+                ws = ScopedWorkspace(lambda op,p: {'status': status}, timers=False)
+                self.assertEqual(ws.call('start', {'packageName': CALC})['status'], status)
+                self.assertFalse(ws.uncertain)
+                self.assertIsNone(ws.bound_id)
+
+    def test_shutdown_keeps_phone_transport_and_event_loop_alive_for_cleanup(self):
+        import asyncio
+        from rose.app import serve_all, STOP_SIGNALS
+        async def run():
+            loop = asyncio.get_running_loop()
+            handlers, checks = {}, []
+            class Transport:
+                should_exit = force_exit = False
+                def __init__(self):
+                    self.started = asyncio.Event()
+                    self.closed = False
+                async def serve(self, sockets=None):
+                    self.started.set()
+                    while not self.should_exit:
+                        await asyncio.sleep(.001)
+                    self.closed = True
+            transports = [Transport(), Transport()]
+            async def phone_ack():
+                checks.append(all(not s.should_exit and not s.closed for s in transports))
+            def cleanup():
+                asyncio.run_coroutine_threadsafe(phone_ack(), loop).result(timeout=2)
+            with patch.object(loop, 'add_signal_handler', side_effect=lambda sig,fn: handlers.update({sig:fn})), \
+                    patch.object(loop, 'remove_signal_handler'):
+                task = asyncio.create_task(serve_all([(s,None) for s in transports], shutdown=cleanup))
+                for s in transports:
+                    await s.started.wait()
+                handlers[STOP_SIGNALS[0]]()
+                await asyncio.wait_for(task, timeout=3)
+            self.assertEqual(checks, [True])
+            self.assertTrue(all(s.closed for s in transports))
+        asyncio.run(run())
+
     def test_transcript_api_is_loopback_only_and_stop_checks_conversation(self):
         from fastapi.testclient import TestClient
         from rose.app import build_app
