@@ -35,6 +35,12 @@ public class VoiceService extends Service {
 
  volatile String status="Connecting…",task="",guardianName="",pendingCommand;
  volatile boolean connected=false,live=false,muted=false;
+ // Rose's microphone-input mute (#410 item 6, MicInputCapture): requests sent to the page and the last one it applied.
+ volatile int muteRequestSeq,muteAckSeq;
+ /** False while a mute request is on its way to the page: a report taken before it is stale. */
+ boolean inputMuteSettled(){return MicInputCapture.settled(muteAckSeq,muteRequestSeq);}
+ boolean storedInputMuted(){return getSharedPreferences(MicInputCapture.PREFS,0).getBoolean(MicInputCapture.KEY,false);}
+ void storeInputMuted(boolean value){android.content.SharedPreferences p=getSharedPreferences(MicInputCapture.PREFS,0);if(p.getBoolean(MicInputCapture.KEY,false)!=value)p.edit().putBoolean(MicInputCapture.KEY,value).apply();}
  // Typed voice facts from the web client (Bridge.voiceLifecycle/backendReachable), read by the conversation surface.
  volatile String lastEndReason="",lastStartError="";volatile Boolean backendReachable;
  volatile float level=0, trayInputLevel=0, trayOutputLevel=0;
@@ -54,7 +60,7 @@ public class VoiceService extends Service {
  public int onStartCommand(Intent i,int flags,int id){if(i!=null&&"podcast_open".equals(i.getAction()))receivePodcast(i.getStringExtra("context"));if(i!=null&&Intent.ACTION_MEDIA_BUTTON.equals(i.getAction()))handleMediaButton(i);else if(i!=null&&i.getAction()!=null)command(i.getAction(),"intent");return START_STICKY;}
  void command(String c){command(c,"internal");}
  void command(String c,String origin){traceVoice("command",origin+":"+c);runOnUiThread(()->{
- if(glassesReconnect!=null){if("end".equals(c)&&!"capture_check".equals(origin))glassesReconnect.userEnded();else if("talk".equals(c)||"glasses".equals(c))glassesReconnect.userStarted();else if("auto_talk".equals(c)&&glassesReconnect.suppressed()){traceVoice("autostart_policy","late_start_suppressed");return;}}if("end".equals(c)){ignoreButtonsUntil=SystemClock.elapsedRealtime()+400;if(glassesReconnect!=null)glassesReconnect.cancelVoiceStart();}if(!loaded){pendingCommand=c;if(voicePageHeld&&("talk".equals(c)||"glasses".equals(c))){voicePageHeld=false;voiceRenderer.reset();web.loadUrl(VOICE_PAGE);}return;}String script="toggle_conversation_mode".equals(c)?"window.toggleConversationMode()":"toggle_task_widgets".equals(c)?"window.toggleTaskWidgets()":"toggle_decisions_routing".equals(c)?"window.toggleDecisionsRouting()":"guardian_back".equals(c)?"document.getElementById('guardianBack').click()":"podcast_open".equals(c)?"window.openPodcastCompanion()":"book_open".equals(c)?"window.openBookCompanion()":"sky_open".equals(c)?"window.openSkyGuide()":"auto_talk".equals(c)?"window.autoStartFromGlasses()":"glasses".equals(c)?"window.glassesTap()":"talk".equals(c)?"window.startFromGlasses()":"mute".equals(c)?"document.getElementById('mute').click()":"tray_mute".equals(c)?"window.setTrayMuted(true)":"tray_unmute".equals(c)?"window.setTrayMuted(false)":"end".equals(c)?"endConversation()":"disconnect".equals(c)?"cleanup()":"";if(!script.isEmpty())web.evaluateJavascript(script,null);});}
+ if(glassesReconnect!=null){if("end".equals(c)&&!"capture_check".equals(origin))glassesReconnect.userEnded();else if("talk".equals(c)||"glasses".equals(c))glassesReconnect.userStarted();else if("auto_talk".equals(c)&&glassesReconnect.suppressed()){traceVoice("autostart_policy","late_start_suppressed");return;}}if("end".equals(c)){ignoreButtonsUntil=SystemClock.elapsedRealtime()+400;if(glassesReconnect!=null)glassesReconnect.cancelVoiceStart();}Boolean mic=MicInputCapture.requested(c);if(mic!=null){storeInputMuted(mic);int seq=++muteRequestSeq;if(!loaded){muteAckSeq=seq;return;}web.evaluateJavascript("window.setTrayMuted("+mic+","+seq+")",null);return;}if(!loaded){pendingCommand=c;if(voicePageHeld&&("talk".equals(c)||"glasses".equals(c))){voicePageHeld=false;voiceRenderer.reset();web.loadUrl(VOICE_PAGE);}return;}String script="toggle_conversation_mode".equals(c)?"window.toggleConversationMode()":"toggle_task_widgets".equals(c)?"window.toggleTaskWidgets()":"toggle_decisions_routing".equals(c)?"window.toggleDecisionsRouting()":"guardian_back".equals(c)?"document.getElementById('guardianBack').click()":"podcast_open".equals(c)?"window.openPodcastCompanion()":"book_open".equals(c)?"window.openBookCompanion()":"sky_open".equals(c)?"window.openSkyGuide()":"auto_talk".equals(c)?"window.autoStartFromGlasses()":"glasses".equals(c)?"window.glassesTap()":"talk".equals(c)?"window.startFromGlasses()":"mute".equals(c)?"document.getElementById('mute').click()":"end".equals(c)?"endConversation()":"disconnect".equals(c)?"cleanup()":"";if(!script.isEmpty())web.evaluateJavascript(script,null);});}
  void setResultCardMode(String mode){if(!java.util.Arrays.asList("html","native","text").contains(mode))return;runOnUiThread(()->{if(loaded)web.evaluateJavascript("window.setResultCardMode("+JSONObject.quote(mode)+")",null);});}
  void connectGuardian(String name){runOnUiThread(()->{if(loaded)web.evaluateJavascript("window.connectGuardian("+JSONObject.quote(name)+")",null);});}
  PendingIntent action(String a){return PendingIntent.getService(this,a.hashCode(),new Intent(this,VoiceService.class).setAction(a),PendingIntent.FLAG_UPDATE_CURRENT|PendingIntent.FLAG_IMMUTABLE);}
@@ -278,6 +284,7 @@ public class VoiceService extends Service {
   if(dead!=web){dead.destroy();return;}
   loaded=false;pendingCommand=null;
   live=false;connected=false;muted=false;lastEndReason="renderer_gone";
+  LocalRoseLink.stop();muteAckSeq=muteRequestSeq; // its capture and its requests end with it (#410 item 6)
   taskStateAvailable=false;taskStateStreamConnected=false;
   localTaskFeed.pageGone(callbacks.current()); // that page's local task list ends with it
   new Bridge().audio(false);
@@ -352,8 +359,11 @@ public class VoiceService extends Service {
  @JavascriptInterface public boolean localRoseReachable(){try{return "connected".equals(new JSONObject(LocalRoseConnection.status(VoiceService.this)).optString("state"));}catch(Exception e){return false;}}
  /** {"paired","state":connected|connecting|offline|unpaired,"route":Tailscale|Wi-Fi|USB,"serverName"} for the connection label. */
  @JavascriptInterface public String localRoseStatus(){return LocalRoseConnection.status(VoiceService.this);}
- @JavascriptInterface public void localRoseStart(boolean muted){if(checkSelfPermission("android.permission.RECORD_AUDIO")!=PackageManager.PERMISSION_GRANTED){try{localRoseEvent(generation,new JSONObject().put("type","error").put("message","Rose Agent needs microphone permission."));}catch(Exception ignored){}return;}LocalRoseLink.start(VoiceService.this,m->localRoseEvent(generation,m),muted);}
- @JavascriptInterface public void localRoseStop(){LocalRoseLink.stop();}
+ @JavascriptInterface public int localRoseStart(boolean muted){if(checkSelfPermission("android.permission.RECORD_AUDIO")!=PackageManager.PERMISSION_GRANTED){try{localRoseEvent(generation,new JSONObject().put("type","error").put("message","Rose Agent needs microphone permission."));}catch(Exception ignored){}return 0;}return LocalRoseLink.start(VoiceService.this,m->localRoseEvent(generation,m),muted);}
+ /** Stops only the link that start returned token for; a stale close never stops a newer start's link. */
+ @JavascriptInterface public void localRoseStop(int token){LocalRoseLink.stop(token);}
+ /** The microphone-input mute a new call or reconnect starts with (#410 item 6): Home's stored state. */
+ @JavascriptInterface public boolean micInputMuted(){return storedInputMuted();}
  @JavascriptInterface public void localRoseMute(boolean muted){LocalRoseLink.setMuted(muted);}
  @JavascriptInterface public String phoneCommand(String raw){
   try{
@@ -465,7 +475,7 @@ public class VoiceService extends Service {
 
  @JavascriptInterface public void timing(String stage,double elapsed){android.util.Log.i("PixelTiming",stage+" elapsed_ms="+Math.round(elapsed)+" uptime="+SystemClock.elapsedRealtime());}
 
- @JavascriptInterface public void state(String json){try{JSONObject o=new JSONObject(json);status=o.optString("status");guardianName=o.optString("guardianName");task=o.optString("task");connected=o.optBoolean("connected");live=o.optBoolean("ready");muted=o.optBoolean("muted");level=(float)o.optDouble("level");if(!live||!connected){trayInputLevel=0;trayOutputLevel=0;}else if(muted)trayInputLevel=0;runOnUiThread(()->agentNotification());}catch(Exception ignored){}}
+ @JavascriptInterface public void state(String json){try{JSONObject o=new JSONObject(json);status=o.optString("status");guardianName=o.optString("guardianName");task=o.optString("task");connected=o.optBoolean("connected");live=o.optBoolean("ready");muted=o.optBoolean("muted");if(o.has("muteSeq"))muteAckSeq=Math.min(muteRequestSeq,Math.max(muteAckSeq,o.optInt("muteSeq")));if(MicInputCapture.storeReported(live,connected,inputMuteSettled(),muted,storedInputMuted()))storeInputMuted(muted);level=(float)o.optDouble("level");if(!live||!connected){trayInputLevel=0;trayOutputLevel=0;}else if(muted)trayInputLevel=0;runOnUiThread(()->agentNotification());}catch(Exception ignored){}}
 
  @JavascriptInterface public void glassesMediaAction(String action){if(!"play".equals(action)&&!"pause".equals(action)&&!"next".equals(action))return;runOnUiThread(()->{recordButton("Web player "+action);if("next".equals(action)){if(buttonGate.accept(KeyEvent.KEYCODE_MEDIA_NEXT,0,0,0,SystemClock.elapsedRealtime()))nextButton();}else startFromGlasses();});}
  @JavascriptInterface public String lastButton(){return lastButton;}

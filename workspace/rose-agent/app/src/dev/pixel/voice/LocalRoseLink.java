@@ -73,13 +73,36 @@ final class LocalRoseLink {
         }
     }
 
-    static synchronized void start(Context context, Sink sink, boolean muted) {
-        if (current != null) return;
-        current = new LocalRoseLink(context, sink);
-        current.muted = muted;
-        current.begin();
+    private static int lastToken;
+    /** This link's start token: its own start's stop(token) ends it, and no other start's does. */
+    private int token;
+
+    /**
+     * Starts a link with exactly this mute (#410 item 6) and returns its token (always positive). A link already
+     * running belongs to an earlier start, for example a voice page whose renderer is gone, so it is ended first: it
+     * is never reused, and the new start's muted value and sink always apply. Muted, the first frame is silence.
+     */
+    static synchronized int start(Context context, Sink sink, boolean muted) {
+        if (current != null) {
+            current.end();
+            current = null;
+        }
+        LocalRoseLink link = new LocalRoseLink(context, sink);
+        link.muted = muted;
+        link.token = lastToken = lastToken == Integer.MAX_VALUE ? 1 : lastToken + 1;
+        current = link;
+        link.begin();
+        return link.token;
     }
 
+    /** Ends the link its own start returned token for; an older start's stop (or token 0, no link) ends nothing. */
+    static synchronized void stop(int token) {
+        if (current == null || token <= 0 || current.token != token) return;
+        current.end();
+        current = null;
+    }
+
+    /** Ends whatever link runs: the voice page that owned it is gone (renderer loss, service end). */
     static synchronized void stop() {
         if (current == null) return;
         current.end();
