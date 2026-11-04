@@ -10,8 +10,10 @@ import android.os.SystemClock;
 import android.os.SystemProperties;
 
 /**
- * RoseOS (#410, E2a): one bottom swipe-up over an app, for FallbackSwipeHandler (rose-edge-launcher3.patch). It asks
+ * RoseOS (#410, E2c): one bottom swipe-up over an app, for FallbackSwipeHandler (rose-edge-launcher3.patch). It asks
  * RoseEdgeGesture how the release ends and what the live preview looks like, and keeps RoseEdgeState up to date.
+ * E2c over E2a: a raise asks WMShell to really shorten the app (RoseEdgeShell, liftPx = RoseEdgeGesture.raisedInsetPx),
+ * and the edge applies only while the shell can do that.
  *
  * Off unless the system property persist.wm.debug.rose_edge is true. It is a build's switch: set at build time
  * (a product property, as the agent tray's is) or with setprop on userdebug/eng builds; a user build offers the owner
@@ -22,12 +24,15 @@ import android.os.SystemProperties;
  *
  * On, it still does nothing (Launcher3 decides as before) over Home, for a trackpad, for a gesture that continues the
  * previous one, for a task that is not full screen, in split screen, without gesture navigation, on a locked device,
- * when the display is not in its natural rotation, or while no edge window (E2b) is registered to draw the edge.
+ * when the display is not in its natural rotation, while no edge window is registered to draw the edge, or while
+ * WMShell's IRoseEdge is unavailable (RoseEdgeState.canRaise).
  *
  * Scope honestly stated: the preview crops the app's own window leash during the gesture (full width, unscaled), and
- * Launcher3 resets that leash when its recents animation finishes. Once raised, the app's relayout comes from the edge
- * window's inset (E2b), which moves content only in apps that pad for system bars; it is not a window resize. No
- * permission, IPC or microphone access here.
+ * Launcher3 resets that leash when its recents animation finishes. On release the shell resizes the app's real window
+ * area (its height less liftPx, width unchanged): a configuration change and a full relayout, never a scaled picture.
+ * The app's window comes back to full height first (back-to-app), then the shell's resize transition shortens it;
+ * continuous relayout during the drag is out of scope. Once the shell has resized it, a gesture over the raised edge
+ * does not crop it again. No new permission and no microphone access here; the only IPC is RoseEdgeShell.
  */
 public final class RoseEdgeSwipe {
     /** The build's switch, default off (the same debug namespace the SystemUI tray uses). */
@@ -41,6 +46,7 @@ public final class RoseEdgeSwipe {
     private final boolean excluded;
     private final boolean enabled;
     private final boolean raisedAtStart;
+    private final boolean resizedAtStart;
     private final KeyguardManager keyguard;
 
     /**
@@ -59,7 +65,13 @@ public final class RoseEdgeSwipe {
         this.excluded = excluded;
         this.enabled = SystemProperties.getBoolean(PROPERTY, false);
         this.raisedAtStart = enabled && RoseEdgeState.isRaised(displayId, taskId);
+        this.resizedAtStart = raisedAtStart && RoseEdgeState.isResized(displayId, taskId);
         this.keyguard = enabled ? context.getSystemService(KeyguardManager.class) : null;
+    }
+
+    /** The build's switch, read once by the host before it starts the edge window. */
+    public static boolean switchOn() {
+        return SystemProperties.getBoolean(PROPERTY, false);
     }
 
     /** The build's switch: false means stock end targets and transforms (see the class comment for the one exception). */
@@ -69,7 +81,7 @@ public final class RoseEdgeSwipe {
 
     /** The edge applies to this gesture at all. */
     public boolean active(boolean gestureNavigation, boolean naturalRotation) {
-        return enabled && !excluded && gestureNavigation && naturalRotation && RoseEdgeState.hasListener()
+        return enabled && !excluded && gestureNavigation && naturalRotation && RoseEdgeState.canRaise()
                 && (keyguard == null || !keyguard.isKeyguardLocked());
     }
 
@@ -88,7 +100,10 @@ public final class RoseEdgeSwipe {
         long ms = Math.max(1, SystemClock.uptimeMillis() - downTimeMs);
         int result = RoseEdgeGesture.release(active(gestureNavigation, naturalRotation), raisedAtStart, cancelled,
                 paused, stockHome ? RoseEdgeGesture.STOCK_HOME : RoseEdgeGesture.STOCK_LAST_TASK, upDp, upDp / ms);
-        if (result == RoseEdgeGesture.RAISE && !RoseEdgeState.raise(displayId, taskId)) return RoseEdgeGesture.STOCK;
+        if (result == RoseEdgeGesture.RAISE
+                && !RoseEdgeState.raise(displayId, taskId, RoseEdgeGesture.raisedInsetPx(density))) {
+            return RoseEdgeGesture.STOCK;
+        }
         return result;
     }
 
@@ -116,7 +131,9 @@ public final class RoseEdgeSwipe {
         float upDp = upPx / density;
         float follow = raisedAtStart ? 1 : RoseEdgeGesture.follow(upDp, false, reduced);
         float beyond = RoseEdgeGesture.beyond(upDp, raisedAtStart, reduced);
-        float bottom = heightPx - RoseEdgeGesture.bottomLiftDp(follow) * density;
+        // Raised and already shortened by the shell: the window is at its raised size, so its bottom is not cropped
+        // again (it keeps the raised corners).
+        float bottom = heightPx - RoseEdgeGesture.bottomLiftDp(resizedAtStart ? 0 : follow) * density;
         outCrop.set(0, 0, widthPx, Math.round(bottom));
         float s = RoseEdgeGesture.scale(beyond);
         outMatrix.setScale(s, s, widthPx / 2f, bottom / 2f);

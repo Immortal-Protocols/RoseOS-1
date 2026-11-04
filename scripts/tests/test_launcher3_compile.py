@@ -105,6 +105,7 @@ EDGE_AFTER = b'class Handler {\n    void a() {}\n    void edge() {}\n}\n'
 L3 = 'packages/apps/Launcher3'
 EDGE_FILE = 'quickstep/src/com/android/quickstep/H.java'
 FALLBACK = 'quickstep/src/com/android/quickstep/fallback/'
+COPY = ('copy', True, False)  # the run's copy, which omits vendor/adevtool/node_modules but keeps dl/.find-ignore
 
 
 def image(data):
@@ -122,8 +123,30 @@ def edge_patch():
     return git('diff', cwd=work)
 
 
+def bundle_report(content, registration, edit=None):
+    """A rose-integration-bundle-report v1 in base.bundleReport's own form, observing exactly content with its patches
+    in the registration order (observed.patches: base.registration.order), with edit applied to a copy."""
+    rows = {(p['project'], p['name']): p for p in content['patches']}
+    report = {'kind': 'rose-integration-bundle-report', 'schemaVersion': 1,
+              'producer': {'path': 'scripts/integration-bundle-report.py', 'sha256': 'a' * 64, 'roseRevision': 'b' * 40},
+              'run': {'runId': '41700000000', 'runAttempt': 1, 'headSha': 'c' * 40, 'label': 'r1',
+                      'createdAt': '2026-11-04T00:00:00Z', 'updatedAt': '2026-11-04T01:00:00Z', 'bindingSha256': 'e' * 64},
+              'receipt': {'path': '/home/pixelbuild/receipts/0001-r1.json', 'receiptSha256': 'f' * 64,
+                          'receiptType': 'reconcile', 'label': 'r1', 'at': '2026-11-04T00:30:00Z',
+                          'patcher': json.loads(json.dumps(registration['patcher']))},
+              'candidate': {'commit': 'c' * 40, 'onMain': True, 'frankelConfigSha256': '1' * 64,
+                            'applyArgs': list(registration['applyArgs']), 'patcherKind': 'trusted'},
+              'registration': {'source': 'executed', 'patcherMatchesPin': True, 'applyArgsMatchPin': True},
+              'observed': {'patches': [dict(rows[(o['project'], o['name'])]) for o in registration['order']],
+                           'overlays': [dict(o) for o in content['overlays']],
+                           'notAnInputOverlays': list(content['notAnInputOverlays']), 'unclassified': []}}
+    if edit:
+        edit(report)
+    return report
+
+
 class Synthetic:
-    """A three-project v2 contract with real bytes: frameworks/base config.xml (policy rewrite) and one Java file;
+    """A three-project v3 contract with real bytes: frameworks/base config.xml (policy rewrite) and one Java file;
     Launcher3 one switcher-changed file, one new file and the edge-patched H.java; build/release one file; required
     overlays. The base section is the same with H.java at its base image, main's Gesture overlay and no State overlay;
     the candidate delta is a real edge patch plus the two candidate overlays, under a repository root of its own."""
@@ -176,10 +199,16 @@ class Synthetic:
         self.bundle_content = {'patches': [{'project': L3, 'name': 'rose-switcher-launcher3.patch', 'sha256': 'c' * 64}],
                                'overlays': [{'target': self.overlay[0], 'sha256': sha(self.overlay[1])}],
                                'notAnInputOverlays': [ignored['target']]}
+        self.registration = {'applyArgs': json.loads((ROOT/'os/release-pipeline/frankel.json').read_text())
+                             ['host']['integrate']['reconcile']['applyArgs'],
+                             'patcher': {'patcher': 'trusted', 'sha256': {n: 'd' * 64 for n in adapter.PATCHER_FILES}},
+                             'order': [{'project': L3, 'name': 'rose-switcher-launcher3.patch'}]}
+        self.bundle_report = bundle_report(self.bundle_content, self.registration)
         final, base = section(False), section(True)
-        self.manifest = {'schemaVersion': 2, 'kind': 'rose-launcher3-compile-inputs', 'target': 'Launcher3QuickStepLib',
+        self.manifest = {'schemaVersion': 3, 'kind': 'rose-launcher3-compile-inputs', 'target': 'Launcher3QuickStepLib',
                          'proves': 'compile only', 'identitySharing': {'appliesWithEdgeOff': True}, **final,
-                         'base': {**base, 'bundleContent': self.bundle_content},
+                         'base': {**base, 'bundleContent': self.bundle_content, 'registration': self.registration,
+                                  'bundleReport': MANIFEST['base']['bundleReport']},
                          'candidateDelta': {'commit': 'e' * 40,
                              'patches': [{'name': 'rose-edge-launcher3.patch', 'sha256': sha(patch), 'project': L3,
                                           'strip': 1, 'bundlePath': 'bundle/edge.patch'}],
@@ -221,10 +250,16 @@ class Contract(unittest.TestCase):
         self.assertEqual(sha(data), adapter.MANIFEST_SHA256)
         manifest = adapter.load_manifest()
         self.assertEqual({p['path']: len(p['files']) for p in manifest['projects']},
-                         {'frameworks/base': 27, 'packages/apps/Launcher3': 14, 'build/release': 1})
-        self.assertEqual(sum(o['role'] == 'required' for o in manifest['overlays']), 12)
+                         {'frameworks/base': 27, 'packages/apps/Launcher3': 16, 'build/release': 1})
+        self.assertEqual(sum(o['role'] == 'required' for o in manifest['overlays']), 15)
+        self.assertEqual(manifest['schemaVersion'], 3)
+        self.assertEqual([p['name'] for p in manifest['candidateDelta']['patches']],
+                         ['rose-edge-launcher3.patch', 'rose-edge-resize-launcher3.patch'])
+        self.assertEqual(manifest['lunchInputs'], {'path': adapter.LUNCH_INPUTS, 'sha256': adapter.LUNCH_INPUTS_SHA256})
+        self.assertEqual((manifest['branches']['requires'], manifest['branches']['forbids']),
+                         (adapter.BRANCH_REQUIRES, adapter.BRANCH_FORBIDS))
         self.assertEqual([c['id'] for c in manifest['branches']['verifyBaseApplyCandidate']['conditions']], adapter.CONDITIONS)
-        self.assertEqual(manifest['candidateDelta']['commit'], 'e361d1cb15abdb80795569f1558fb7e0bcf5635d')
+        self.assertEqual(manifest['candidateDelta']['commit'], '2f57a5f28e3c3cc97177bf3f9294ea807d514469')
         self.assertTrue(manifest['identitySharing']['appliesWithEdgeOff'])
         self.assertIn('quickstep/src/com/android/quickstep/FallbackSwipeHandler.java',
                       [f['path'] for f in manifest['projects'][1]['files']])
@@ -246,14 +281,56 @@ class Contract(unittest.TestCase):
                        'config_pixelComputerControlPrototypeAgents', 'PrototypeAgents: the agent row'),
                    lambda m: CONFIG(m)['integrationRewrite']['templates'].__setitem__(
                        'config_pixelComputerControlLockedSessions', '    <bool name="x">true</bool> when lockedControl; otherwise the marker'),
-                   lambda m: CONFIG(m)['integrationRewrite']['elements'].pop()]
+                   lambda m: CONFIG(m)['integrationRewrite']['elements'].pop(),
+                   lambda m: m.update(lunchInputs={'path': adapter.LUNCH_INPUTS, 'sha256': '0' * 64}),
+                   lambda m: m['branches']['requires']['verifyIntegrated'].pop(),
+                   lambda m: m['branches']['forbids']['verifyIntegrated'].remove('bundleReport'),
+                   lambda m: m['base']['bundleReport'].update(schemaVersion=2),
+                   lambda m: m['base']['bundleReport']['fields']['observed'].pop(),
+                   lambda m: m['base']['registration']['patcher'].update(patcher='any'),
+                   lambda m: m['base']['registration']['patcher']['sha256'].pop('integration_copy.py'),
+                   lambda m: m['base']['registration']['order'].reverse(),
+                   lambda m: m['base']['registration']['order'].pop(),
+                   lambda m: m['base']['registration']['patcher']['sha256'].update({'background_apks.py': 'G' * 64}),
+                   lambda m: m['base']['registration']['applyArgsSource'].update(path='os/release-pipeline/other.json')]
         for index, change in enumerate(changes):
             with self.subTest(index=index):
                 manifest = json.loads(json.dumps(MANIFEST))
                 change(manifest)
                 with self.assertRaises(adapter.Invalid):
                     adapter.contract_shape(manifest)
+        # every text the adapter implements: a re-pin that changes it is never only a hash bump
+        report = lambda m: m['base']['bundleReport']  # noqa: E731
+        texts = [lambda m: report(m)['rules'].pop(),
+                 lambda m: report(m)['association'].__setitem__(1, 'any receipt of the run'),
+                 lambda m: report(m)['observed'].update(unclassified='anything else; may be non-empty'),
+                 lambda m: report(m).update(producer='any script'),
+                 lambda m: m['branches']['definitions'].update(lunch='any lunch'),
+                 lambda m: m['branches']['definitions'].update(policyReceipt='any receipt'),
+                 lambda m: m['branches'].update(otherwise='complete any state'),
+                 lambda m: m['branches']['verifyBaseApplyCandidate']['conditions'][2].update(text='apply anywhere'),
+                 lambda m: m['flagEvidence'].update(role='a precondition of every branch'),
+                 lambda m: m['flagEvidence']['flags'][0].update(accept='any line'),
+                 lambda m: m['candidateDelta']['application'].update(note='--check failures are ignored'),
+                 lambda m: m['candidateDelta'].update(pathConvention='anything'),
+                 lambda m: m['base']['registration'].update(derivation='read from the tree'),
+                 lambda m: m['overlayRoles']['notAnInput'].update(rule='required'),
+                 lambda m: m['unaffected'].pop(),
+                 lambda m: m.update(provenance='current bytes are provenance')]
+        for index, change in enumerate(texts):
+            with self.subTest(text=index):
+                manifest = json.loads(json.dumps(MANIFEST))
+                change(manifest)
+                with self.assertRaisesRegex(adapter.Invalid, 'CONTRACT_TEXT_SHA256'):
+                    adapter.contract_shape(manifest)
+        self.assertEqual(adapter.contract_text_digest(MANIFEST), adapter.CONTRACT_TEXT_SHA256)
         adapter.contract_shape(json.loads(json.dumps(MANIFEST)))
+        # the applyArgs source is bound on its own too, even under a text pin re-reviewed for it
+        manifest = json.loads(json.dumps(MANIFEST))
+        manifest['base']['registration']['applyArgsSource'].update(key='host.integrate.applyArgs')
+        with unittest.mock.patch.object(adapter, 'CONTRACT_TEXT_SHA256', adapter.contract_text_digest(manifest)):
+            with self.assertRaisesRegex(adapter.Invalid, 'applyArgsSource'):
+                adapter.contract_shape(manifest)
 
     def test_the_mapped_config_rules_equal_os_products_checker_templates(self):
         self.assertEqual(RULES, adapter.check_rules(config_rules_from_checker()))
@@ -289,38 +366,79 @@ class Contract(unittest.TestCase):
             adapter.load_listing(pin, root)
 
     def test_committed_binding_is_unbound_and_the_hosted_check_exits_4(self):
-        self.assertEqual([BINDING[k] for k in ('sourceTree', 'lunch', 'reconstructSource')], [None, None, None])
+        self.assertEqual([BINDING[k] for k in ('sourceTree', 'lunch', 'reconstructSource', 'adevtoolGit')], [None] * 4)
         self.assertEqual(BINDING['policyReceipt'], {'path': None, 'sha256': None})
         self.assertEqual(BINDING['bundleReport'], {'path': None, 'sha256': None})
+        # the selected branch: no patcher registers the candidate delta, so only base-plus-delta can reach the final images
+        self.assertEqual(BINDING['branch'], 'verifyBaseApplyCandidate')
+        self.assertIn('apply-os-changes.py does not register', MANIFEST['candidatePatches'])
         result = run_cli('check')
         self.assertEqual((result.returncode, result.stdout), (4, ''))
-        self.assertIn('sourceTree, lunch, policyReceipt.path, policyReceipt.sha256', result.stderr)
+        self.assertIn('sourceTree, lunch, policyReceipt.path, policyReceipt.sha256, bundleReport.path, bundleReport.sha256',
+                      result.stderr)
 
     def binding(self, **change):
         path = Path(tempfile.mkdtemp())/'binding.json'
-        record = {**BINDING, 'sourceTree': '/home/pixelbuild/grapheneos-2026100600', 'lunch': 'example-cur-user',
+        record = {**BINDING, 'branch': 'verifyIntegrated', 'sourceTree': '/home/pixelbuild/grapheneos-2026100600',
+                  'lunch': 'frankel-cur-user', 'adevtoolGit': 'public-fetch',
                   'policyReceipt': {'path': '/home/pixelbuild/receipts/policy.json', 'sha256': 'a' * 64}, **change}
         path.write_text(json.dumps(record))
         return path
 
     def test_a_bound_binding_passes_and_prints_its_bounds(self):
+        # every lunch is the contract's, so the bounds always hold the lunch inputs (1800 s), the fetch (1800 s) and its
+        # kill grace (30 s) besides the copy, the tree pins (one check, or two for the candidate branch), lunch and m
         result = run_cli('check', '--binding', str(self.binding()))
-        self.assertEqual((result.returncode, result.stdout), (0, 'outer_seconds=18090\nfinish_seconds=1800\njob_minutes=342\n'))
+        self.assertEqual((result.returncode, result.stdout), (0, 'outer_seconds=21720\nfinish_seconds=1800\njob_minutes=403\n'))
         result = run_cli('check', '--binding', str(self.binding(branch='verifyBaseApplyCandidate')))
         self.assertEqual(result.returncode, 4)
         self.assertIn('bundleReport.path, bundleReport.sha256', result.stderr)
         result = run_cli('check', '--binding', str(self.binding(branch='verifyBaseApplyCandidate',
                                                                 bundleReport={'path': '/home/pixelbuild/receipts/bundle.json', 'sha256': 'b' * 64})))
-        self.assertEqual((result.returncode, result.stdout), (0, 'outer_seconds=19890\nfinish_seconds=1800\njob_minutes=372\n'))
+        self.assertEqual((result.returncode, result.stdout), (0, 'outer_seconds=23520\nfinish_seconds=1800\njob_minutes=433\n'))
+
+    def test_only_the_lunch_input_contracts_target_is_a_lunch(self):
+        """definitions.lunch: the lunch inputs in lunchInputs, satisfied on the copy; their only target is frankel-cur-user."""
+        self.assertEqual(adapter.load_lunch_inputs()['lunch']['target'], 'frankel-cur-user')
+        for lunch in ('akita-cur-user', 'caiman-bp2a-userdebug', 'example-cur-user', 'frankel-trunk-user', 'frankel-cur-eng'):
+            for fetch in ('public-fetch', None):
+                with self.subTest(lunch=lunch, fetch=fetch):
+                    result = run_cli('check', '--binding', str(self.binding(lunch=lunch, adevtoolGit=fetch)))
+                    self.assertEqual(result.returncode, 2, result.stderr)
+                    self.assertIn('definitions.lunch', result.stderr)
+
+    def test_no_receipt_or_report_is_a_file_of_a_checked_tree(self):
+        tree = '/home/pixelbuild/grapheneos-2026100600'
+        roots = '/home/pixelbuild/rose-actions'
+        bundle = lambda path: {'branch': 'verifyBaseApplyCandidate', 'bundleReport': {'path': path, 'sha256': 'b' * 64}}  # noqa: E731
+        for name, change, word in (
+                ('policy in the tree', {'policyReceipt': {'path': f'{tree}/frameworks/base/policy.json', 'sha256': 'a' * 64}},
+                 'policyReceipt.path is inside the source tree'),
+                ('policy is the tree', {'policyReceipt': {'path': tree, 'sha256': 'a' * 64}}, 'inside the source tree'),
+                ('policy in a run root', {'policyReceipt': {'path': f'{roots}/launcher3-compile-1-1/tree/p.json',
+                                                            'sha256': 'a' * 64}}, 'inside a launcher3-compile run root'),
+                ('report in the tree', bundle(f'{tree}/bundle.json'), 'bundleReport.path is inside the source tree'),
+                ('report in a run root', bundle(f'{roots}/launcher3-compile-41700000000-2/receipts/report.json'),
+                 'inside a launcher3-compile run root')):
+            with self.subTest(name=name):
+                result = run_cli('check', '--binding', str(self.binding(**change)))
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertIn(word, result.stderr)
+        # another task's own directory under the run root parent, or a sibling of the tree, is not a checked tree
+        for path in (f'{roots}/frankel-integrate-41700000000-1/policy.json', f'{tree}-receipts/policy.json'):
+            with self.subTest(path=path):
+                result = run_cli('check', '--binding', str(self.binding(policyReceipt={'path': path, 'sha256': 'a' * 64})))
+                self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_a_version_checked_lunch_is_unbound_until_adevtool_git_is_bound(self):
-        for branch in ('verifyIntegrated', 'verifyBaseApplyCandidate'):
+        for branch, bundle in (('verifyIntegrated', {'path': None, 'sha256': None}),
+                               ('verifyBaseApplyCandidate', {'path': '/home/pixelbuild/receipts/bundle.json', 'sha256': 'b' * 64})):
             result = run_cli('check', '--binding', str(self.binding(lunch='frankel-cur-user', branch=branch,
-                             bundleReport={'path': '/home/pixelbuild/receipts/bundle.json', 'sha256': 'b' * 64})))
+                             bundleReport=bundle, adevtoolGit=None)))
             self.assertEqual((result.returncode, result.stdout), (4, ''))
             self.assertIn('adevtool_git_missing', result.stderr)
-        # bound to the public fetch, which the pinned contract admits: the check passes, and its bounds add the lunch
-        # inputs (1800 s), the fetch (1800 s) and its kill grace (30 s) to 18090 s (19890 s for the candidate branch)
+        # bound to the public fetch, which the pinned contract admits: the check passes with the lunch inputs (1800 s),
+        # the fetch (1800 s) and its kill grace (30 s) in its bounds
         result = run_cli('check', '--binding', str(self.binding(lunch='frankel-cur-user', adevtoolGit='public-fetch')))
         self.assertEqual((result.returncode, result.stdout), (0, 'outer_seconds=21720\nfinish_seconds=1800\njob_minutes=403\n'))
         result = run_cli('check', '--binding', str(self.binding(lunch='frankel-cur-user', adevtoolGit='public-fetch',
@@ -437,13 +555,48 @@ class Contract(unittest.TestCase):
         self.assertEqual(dropped, [])
         self.assertIn(b'dl/.find-ignore', listed)
 
+    def test_each_branch_refuses_what_the_contract_forbids(self):
+        bundle = {'path': '/home/pixelbuild/receipts/bundle.json', 'sha256': 'b' * 64}
+        for branch, change, word in (('verifyIntegrated', {'bundleReport': bundle}, 'verifyIntegrated forbids bundleReport'),
+                                     ('verifyIntegrated', {'bundleReport': {'path': None, 'sha256': 'b' * 64}},
+                                      'verifyIntegrated forbids bundleReport'),
+                                     ('verifyIntegrated', {'reconstructSource': '/home/pixelbuild/objects'},
+                                      'verifyIntegrated forbids reconstructSource'),
+                                     ('verifyBaseApplyCandidate', {'bundleReport': bundle, 'reconstructSource': '/o'},
+                                      'verifyBaseApplyCandidate forbids reconstructSource'),
+                                     ('reconstruct', {'reconstructSource': '/o', 'bundleReport': bundle},
+                                      'reconstruct forbids bundleReport')):
+            with self.subTest(branch=branch, change=change):
+                result = run_cli('check', '--binding', str(self.binding(branch=branch, **change)))
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertIn(word, result.stderr)
+
+    def test_the_registration_applyargs_and_the_copys_git_exclusion_are_checked_against_the_repository(self):
+        binding = self.binding()
+        for name, edit, word in (('applyArgs', lambda c: c['host']['integrate']['reconcile']['applyArgs'].append('--extra'),
+                                  'registration.applyArgs'), ('exclusion', '.git', 'exclude every .git and .repo'),
+                                 ('repo exclusion', '.repo', 'exclude every .git and .repo')):
+            with self.subTest(name=name):
+                root = Path(tempfile.mkdtemp())
+                (root/'os/release-pipeline').mkdir(parents=True)
+                config = json.loads((ROOT/'os/release-pipeline/frankel.json').read_text())
+                alpha = json.loads((ROOT/'os/release-pipeline/cuttlefish-alpha.json').read_text())
+                if callable(edit):
+                    edit(config)
+                else:
+                    alpha['preparation']['exclusions']['anywhereNames'].remove(edit)
+                (root/'os/release-pipeline/frankel.json').write_text(json.dumps(config))
+                (root/'os/release-pipeline/cuttlefish-alpha.json').write_text(json.dumps(alpha))
+                with self.assertRaisesRegex(adapter.Invalid, word):
+                    adapter.check(binding, root)
+
     def test_invalid_bindings_refuse(self):
         for change in ({'host': 'other'}, {'taskParent': '/tmp'}, {'branch': 'mixed'}, {'sourceTree': 'relative'},
                        {'sourceTree': '/home/pixelbuild/rose-actions/blazer-prep-41473133543-1/source'},
                        {'sourceTree': '/home'}, {'lunch': 'frankel'}, {'policyReceipt': {'path': '/p'}},
                        {'policyReceipt': {'path': '/p', 'sha256': 'A' * 64}}, {'extra': 1}, {'schemaVersion': 1},
-                       {'schemaVersion': 2}, {'adevtoolGit': 'genuine-copy'}, {'adevtoolGit': 'public-fetch'},
-                       {'lunch': 'frankel-trunk-user', 'adevtoolGit': 'public-fetch'},
+                       {'schemaVersion': 2}, {'adevtoolGit': 'genuine-copy'}, {'lunch': 'example-cur-user'},
+                       {'lunch': 'frankel-trunk-user', 'adevtoolGit': 'public-fetch'}, {'lunch': 'akita-cur-user', 'adevtoolGit': None},
                        {'bundleReport': {'path': 'rel', 'sha256': None}}, {'bundleReport': None}):
             with self.subTest(change=change):
                 self.assertEqual(run_cli('check', '--binding', str(self.binding(**change))).returncode, 2)
@@ -461,6 +614,148 @@ class Contract(unittest.TestCase):
         config['host']['integrate']['reconcile']['applyArgs'] += ['--locked-control', '--reference-display-address', '7']
         (root/'os/release-pipeline/frankel.json').write_text(json.dumps(config))
         self.assertEqual(adapter.frankel_policy_args(root), ('7', True))
+
+
+class BundleReport(unittest.TestCase):
+    def setUp(self):
+        self.s = Synthetic(tempfile.mkdtemp())
+        self.base = self.s.manifest['base']
+
+    def problems(self, edit=None, report=None):
+        return adapter.bundle_report_problems(report if report is not None else
+                                              bundle_report(self.s.bundle_content, self.s.registration, edit), self.base)
+
+    def test_a_report_observing_exactly_the_bundle_passes(self):
+        self.assertEqual(self.problems(), [])
+
+    def test_every_rule_names_its_own_problem(self):
+        first = lambda r, key: r['observed'][key][0]  # noqa: E731
+        cases = [('bare bundleContent', None, self.s.bundle_content, 'sections are not exactly'),
+                 ('kind', lambda r: r.update(kind='other'), None, 'not a rose-integration-bundle-report v1'),
+                 ('missing section', lambda r: r.pop('producer'), None, 'sections are not exactly'),
+                 ('extra field', lambda r: r['run'].update(extra=1), None, 'run keys are not exactly'),
+                 ('missing field', lambda r: r['candidate'].pop('onMain'), None, 'candidate keys are not exactly'),
+                 ('nested field', lambda r: r['receipt']['patcher']['sha256'].pop('background_apks.py'), None,
+                  'receipt.patcher.sha256 keys'),
+                 ('patch row', lambda r: first(r, 'patches').pop('sha256'), None, 'observed.patches[0] keys'),
+                 ('untrusted patcher', lambda r: r['receipt']['patcher'].update(patcher='other'), None, 'receipt.patcher'),
+                 ('patcher pin', lambda r: r['receipt']['patcher']['sha256'].update({'apply-os-changes.py': '0' * 64}), None,
+                  'receipt.patcher'),
+                 ('applyArgs', lambda r: r['candidate']['applyArgs'].append('--extra'), None, 'candidate.applyArgs'),
+                 ('pin flags', lambda r: r['registration'].update(applyArgsMatchPin=False), None, 'match the pins'),
+                 ('unclassified', lambda r: r['observed'].update(unclassified=['frameworks/base/x']), None, 'unclassified'),
+                 ('order', lambda r: r['observed']['patches'].append({'project': L3, 'name': 'extra.patch', 'sha256': '9' * 64}),
+                  None, 'registration order'),
+                 ('patch bytes', lambda r: first(r, 'patches').update(sha256='9' * 64), None, 'observed patches differ'),
+                 ('overlay', lambda r: first(r, 'overlays').update(sha256='9' * 64), None, 'observed overlays differ'),
+                 ('notAnInput', lambda r: r['observed'].update(notAnInputOverlays=[]), None, 'observed overlays differ')]
+        for name, edit, report, word in cases:
+            with self.subTest(name=name):
+                problems = self.problems(edit, report)
+                self.assertTrue(any(word in p for p in problems), problems)
+
+    def test_the_committed_contract_spec_is_what_the_adapter_reads(self):
+        self.assertEqual(MANIFEST['base']['bundleReport']['fields'], adapter.BUNDLE_REPORT_FIELDS)
+        self.assertEqual(sorted(MANIFEST['base']['registration']['patcher']['sha256']), sorted(adapter.PATCHER_FILES))
+
+        def names(spec):
+            return {item if isinstance(item, str) else next(iter(item)): None if isinstance(item, str) else next(iter(item.values()))
+                    for item in spec}
+        # every field of the spec has exactly one type, and the row specs are the spec's own
+        for section, spec in adapter.BUNDLE_REPORT_FIELDS.items():
+            self.assertEqual(set(names(spec)), set(adapter.REPORT_TYPES[section]), section)
+        observed = names(adapter.BUNDLE_REPORT_FIELDS['observed'])
+        self.assertEqual({k: list(v) for k, v in adapter.ROW_TYPES.items()}, {k: observed[k] for k in ('patches', 'overlays')})
+        self.assertEqual(sorted(adapter.REPORT_ROWS), ['observed.overlays', 'observed.patches'])
+        self.assertTrue(set(adapter.KIND_NAMES) >= {k for kinds in adapter.REPORT_TYPES.values() for k in kinds.values()})
+
+    def test_the_association_the_report_itself_shows_is_checked(self):
+        cases = [('candidate is not the run commit', lambda r: r['candidate'].update(commit='d' * 40), 'is not run.headSha'),
+                 ('not on main', lambda r: r['candidate'].update(onMain=False), 'onMain is not true'),
+                 ('an adopt receipt', lambda r: r['receipt'].update(receiptType='reconcile-adopt'), 'receiptType'),
+                 ('another label', lambda r: r['receipt'].update(label='r2'), "run's label"),
+                 ('a name of another label', lambda r: r['receipt'].update(path='/home/pixelbuild/receipts/0001-r2.json'),
+                  "run's label"),
+                 ('a bare label name', lambda r: r['receipt'].update(path='/home/pixelbuild/receipts/-r1.json'), "run's label"),
+                 ('not json', lambda r: r['receipt'].update(path='/home/pixelbuild/receipts/0001-r1.txt'), "run's label"),
+                 ('before the run', lambda r: r['receipt'].update(at='2026-11-03T23:59:59Z'), 'within'),
+                 ('after the run', lambda r: r['receipt'].update(at='2026-11-04T01:00:01Z'), 'within'),
+                 ('a run that ends before it starts', lambda r: r['run'].update(updatedAt='2026-11-03T00:00:00Z'), 'within'),
+                 ('an untrusted kind', lambda r: r['candidate'].update(patcherKind='untrusted'), 'patcherKind'),
+                 ('the adapter as producer', lambda r: r['producer'].update(path='scripts/launcher3-compile.py'),
+                  'never the stated producer'),
+                 ('the checker as producer', lambda r: r['producer'].update(path='scripts/launcher3-compile-contract.py'),
+                  'never the stated producer')]
+        for name, edit, word in cases:
+            with self.subTest(name=name):
+                problems = self.problems(edit)
+                self.assertTrue(any(word in p for p in problems), problems)
+        # the receipt may be at either end of the run
+        for at in ('2026-11-04T00:00:00Z', '2026-11-04T01:00:00Z'):
+            self.assertEqual(self.problems(lambda r: r['receipt'].update(at=at)), [])
+
+    def test_malformed_values_are_named_problems_never_a_crash_or_a_pass(self):
+        first = lambda r, key: r['observed'][key][0]  # noqa: E731
+        cases = [('patches as one object', lambda r: r['observed'].update(patches=first(r, 'patches')), 'observed.patches is not a list'),
+                 ('overlays as one object', lambda r: r['observed'].update(overlays=first(r, 'overlays')), 'observed.overlays is not a list'),
+                 ('a list project', lambda r: first(r, 'patches').update(project=[L3]), 'observed.patches[0].project is not'),
+                 ('a null overlay target', lambda r: first(r, 'overlays').update(target=None), 'observed.overlays[0].target is not'),
+                 ('mixed notAnInput', lambda r: r['observed'].update(notAnInputOverlays=[1, 'x']), 'notAnInputOverlays is not'),
+                 ('notAnInput keyed by target', lambda r: r['observed'].update(
+                     notAnInputOverlays={t: 1 for t in r['observed']['notAnInputOverlays']}), 'notAnInputOverlays is not'),
+                 ('a pin flag 1', lambda r: r['registration'].update(patcherMatchesPin=1), 'patcherMatchesPin is not a boolean'),
+                 ('a pin flag 1.0', lambda r: r['registration'].update(applyArgsMatchPin=1.0), 'applyArgsMatchPin is not a boolean'),
+                 ('schemaVersion true', lambda r: r.update(schemaVersion=True), 'not a rose-integration-bundle-report v1'),
+                 ('a numeric head', lambda r: r['run'].update(headSha=12), 'run.headSha is not'),
+                 ('an attempt true', lambda r: r['run'].update(runAttempt=True), 'run.runAttempt is not'),
+                 ('a zero run id', lambda r: r['run'].update(runId='0'), 'run.runId is not'),
+                 ('a local time', lambda r: r['run'].update(createdAt='2026-11-04T00:00:00+00:00'), 'run.createdAt is not a UTC time'),
+                 ('an unpadded time', lambda r: r['receipt'].update(at='2026-11-4T00:30:00Z'), 'receipt.at is not a UTC time'),
+                 ('a relative receipt', lambda r: r['receipt'].update(path='receipts/0001-r1.json'), 'receipt.path is not'),
+                 ('an escaping producer', lambda r: r['producer'].update(path='../scripts/x.py'), 'producer.path is not'),
+                 ('an uppercase sha256', lambda r: r['producer'].update(sha256='A' * 64), 'producer.sha256 is not'),
+                 ('a label with a slash', lambda r: (r['run'].update(label='a/b'), r['receipt'].update(label='a/b')), 'label is not'),
+                 ('a null source', lambda r: r['registration'].update(source=None), 'registration.source is not'),
+                 ('a patch sha of another type', lambda r: first(r, 'patches').update(sha256=7), 'observed.patches[0].sha256 is not')]
+        for name, edit, word in cases:
+            with self.subTest(name=name):
+                problems = self.problems(edit)
+                self.assertTrue(any(word in p for p in problems), problems)
+        # no value of any field raises: each wrong type is a named problem
+        for section, kinds in adapter.REPORT_TYPES.items():
+            for field, kind in kinds.items():
+                for value in (None, 1.5, {}, [None], 1 if kind == 'bool' else True):
+                    with self.subTest(field=f'{section}.{field}', value=value):
+                        self.assertTrue(self.problems(lambda r: r[section].__setitem__(field, value)))
+        for key, fields in adapter.ROW_TYPES.items():
+            for field in fields:
+                for value in (None, 1.5, {}, []):
+                    with self.subTest(row=f'{key}.{field}', value=value):
+                        self.assertTrue(self.problems(lambda r: r['observed'][key][0].__setitem__(field, value)))
+        for report in ([], 'report', None, {'kind': 'rose-integration-bundle-report'}):
+            self.assertTrue(adapter.bundle_report_problems(report, self.base))
+
+    def test_an_unreadable_report_is_a_named_base_exact_refusal(self):
+        with unittest.mock.patch.object(adapter, 'bundle_report_problems', side_effect=TypeError('defect')):
+            with self.assertRaisesRegex(adapter.Refused, r'base-exact: the bundle report cannot be read as base.bundleReport \(TypeError\)'):
+                adapter.bundle_matches({}, 'a' * 64, 'a' * 64, self.base)
+
+    def test_the_committed_base_needs_the_registration_order_across_projects(self):
+        base = MANIFEST['base']
+        content, registration = base['bundleContent'], base['registration']
+        problems = lambda edit=None: adapter.bundle_report_problems(bundle_report(content, registration, edit), base)  # noqa: E731
+        self.assertEqual(problems(), [])
+        self.assertNotEqual([p['project'] for p in content['patches']], [o['project'] for o in registration['order']])
+        bundle_order = lambda r: r['observed'].update(patches=[dict(p) for p in content['patches']])  # noqa: E731
+        self.assertIn('observed.patches are not the registration order', problems(bundle_order))
+
+        def swap(r):
+            patches = r['observed']['patches']
+            patches[0], patches[1] = patches[1], patches[0]
+        self.assertEqual(problems(swap)[:2], ['observed.patches are not the registration order',
+                                              'observed patches differ from base.bundleContent'])
+        self.assertEqual(problems(lambda r: r['observed']['patches'][3].update(sha256='9' * 64)),
+                         ['observed patches differ from base.bundleContent'])
 
 
 class Classify(unittest.TestCase):
@@ -628,7 +923,9 @@ class ConfigParity(unittest.TestCase):
     def test_the_adapter_never_loads_os_products_checker(self):
         source = (ROOT/'scripts/launcher3-compile.py').read_text()
         code = source.split('\n"""\n', 1)[1]
-        self.assertNotIn('launcher3-compile-contract', code)
+        # named only as a producer base-exact refuses (NEVER_PRODUCERS), never loaded
+        self.assertEqual([line for line in code.splitlines() if 'launcher3-compile-contract' in line],
+                         ["NEVER_PRODUCERS = ('scripts/launcher3-compile.py', 'scripts/launcher3-compile-contract.py')"])
         self.assertNotIn('importlib', code)
         self.assertFalse([v for v in vars(adapter).values() if getattr(v, '__name__', '') == 'launcher3_compile_contract'])
 
@@ -1030,9 +1327,83 @@ class Candidate(unittest.TestCase):
         with self.assertRaisesRegex(adapter.Refused, 'git apply --check'):
             adapter.apply_candidate(self.tree, self.patches, [], self.bundle, self.files)
 
+    def second_patch(self, before=b'class Proxy {}\n', after=b'class Proxy { void edge() {} }\n'):
+        """A second patch on a disjoint file of the same project (as E2c's SystemUiProxy beside E2a's handlers), or with
+        before None one that creates its file; (patch, file entry)."""
+        work = Path(tempfile.mkdtemp())
+        (work/'quickstep').mkdir()
+        if before is not None:
+            (work/'quickstep/Proxy.java').write_bytes(before)
+        (work/'quickstep/Keep.java').write_bytes(b'keep\n')
+        git('init', '-q', cwd=work)
+        git('add', '-A', cwd=work)
+        git('commit', '-qm', 'b', cwd=work)
+        (work/'quickstep/Proxy.java').write_bytes(after)
+        git('add', '-A', cwd=work)
+        patch = git('diff', '--cached', cwd=work)
+        (self.bundle/'candidate-pr440/rose-edge-resize-launcher3.patch').write_bytes(patch)
+        if before is not None:
+            (self.project/'quickstep/Proxy.java').write_bytes(before)
+        return ({'name': 'rose-edge-resize-launcher3.patch', 'sha256': sha(patch), 'project': 'packages/apps/Launcher3',
+                 'bundlePath': 'candidate-pr440/rose-edge-resize-launcher3.patch', 'strip': 1},
+                {'path': 'packages/apps/Launcher3/quickstep/Proxy.java', 'before': image(before), 'after': image(after)})
+
+    def test_every_check_passes_before_the_first_patch_is_applied(self):
+        patch, entry = self.second_patch()
+        (self.project/'quickstep/Proxy.java').write_bytes(b'class Proxy { /* drifted */ }\n')  # the second --check fails
+        applied, calls = [], []
+        real = subprocess.run
+        with self.assertRaisesRegex(adapter.Refused, 'apply --check of .*rose-edge-resize-launcher3.patch .*nothing was applied'):
+            adapter.apply_candidate(self.tree, [*self.patches, patch], self.overlays, self.bundle, [*self.files, entry],
+                                    run=lambda argv, **kw: calls.append(argv[4]) or real(argv, **kw), applied=applied)
+        self.assertEqual((calls, applied), (['--check', '--check'], []))  # both checks ran on the unchanged copy
+        self.assertEqual((self.project/'quickstep/Handler.java').read_bytes(), EDGE_BASE)
+        self.assertEqual((self.project/'quickstep/Gesture.java').read_bytes(), b'main gesture\n')
+        self.assertFalse((self.project/'quickstep/State.java').exists())
+        # a bad source refuses before any check or write
+        for bad in ([dict(patch, sha256='0' * 64)], [dict(self.overlays[0], after='0' * 64)]):
+            calls.clear()
+            patches, overlays = ([*self.patches, *bad], self.overlays) if 'strip' in bad[0] else (self.patches, bad)
+            with self.assertRaisesRegex(adapter.Refused, 'nothing was applied'):
+                adapter.apply_candidate(self.tree, patches, overlays, self.bundle, self.files, applied=applied,
+                                        run=lambda argv, **kw: calls.append(argv[4]) or real(argv, **kw))
+            self.assertEqual((calls, applied), ([], []))
+
+    def test_two_disjoint_patches_reach_their_images_and_a_failure_after_the_checks_says_what_started(self):
+        patch, entry = self.second_patch()
+        applied = []
+        adapter.delta_preconditions(self.tree, [*self.files, entry], self.overlays)
+        adapter.apply_candidate(self.tree, [*self.patches, patch], self.overlays, self.bundle, [*self.files, entry],
+                                applied=applied)
+        self.assertTrue(adapter.image_is(self.project/'quickstep/Proxy.java', entry['after']))
+        self.assertEqual((self.project/'quickstep/Handler.java').read_bytes(), EDGE_AFTER)
+        self.assertEqual(applied, ['rose-edge-launcher3.patch', 'rose-edge-resize-launcher3.patch',
+                                   *[o['target'] for o in self.overlays]])
+        self.setUp()
+        patch, entry = self.second_patch()
+        real = subprocess.run
+
+        def failing(argv, **kw):  # the second patch's own apply fails after both checks passed
+            if argv[4] != '--check' and argv[-1].endswith('rose-edge-resize-launcher3.patch'):
+                return subprocess.CompletedProcess(argv, 1)
+            return real(argv, **kw)
+        applied = []
+        with self.assertRaisesRegex(adapter.Refused, 'after every --check passed; started in the copy: '
+                                    'rose-edge-launcher3.patch, rose-edge-resize-launcher3.patch'):
+            adapter.apply_candidate(self.tree, [*self.patches, patch], self.overlays, self.bundle, [*self.files, entry],
+                                    run=failing, applied=applied)
+        self.assertEqual(applied, ['rose-edge-launcher3.patch', 'rose-edge-resize-launcher3.patch'])
+
+    def test_a_delta_file_with_no_before_image_is_created_by_its_patch(self):
+        patch, entry = self.second_patch(before=None, after=b'class Proxy {}\n')
+        self.assertIsNone(entry['before'])
+        adapter.delta_preconditions(self.tree, [*self.files, entry], self.overlays)
+        adapter.apply_candidate(self.tree, [*self.patches, patch], self.overlays, self.bundle, [*self.files, entry])
+        self.assertTrue(adapter.image_is(self.project/'quickstep/Proxy.java', entry['after']))
+
 
 class RealDelta(unittest.TestCase):
-    """The committed candidate delta (#440 e361d1c, inert under os/tests/fixtures) applied by this adapter's own code to
+    """The committed candidate delta (#440 2f57a5f: E2a and E2c, inert under os/tests/fixtures) applied by this adapter's own code to
     OS Product's pinned base fixtures and the base overlay images the delta names: every final image equals the
     contract's. A base overlay comes from the first source whose sha256 is the delta's `before`: main's own os/overlays
     copy while main is still at the base, else OS Product's pinned base copy in the fixtures' layout. When neither holds
@@ -1099,9 +1470,10 @@ class Run(unittest.TestCase):
     def setUp(self):
         self.parent = Path(tempfile.mkdtemp())
         self.s = Synthetic(tempfile.mkdtemp())
-        self.binding = {**BINDING, 'taskParent': str(self.parent), 'sourceTree': '/src', 'lunch': 'example-cur-user',
+        self.binding = {**BINDING, 'branch': 'verifyIntegrated', 'taskParent': str(self.parent), 'sourceTree': '/src',
+                        'lunch': 'frankel-cur-user', 'adevtoolGit': 'public-fetch',
                         'policyReceipt': {'path': '/p.json', 'sha256': self.s.policy_sha}}
-        self.bundle_sha = sha(json.dumps(self.s.bundle_content).encode())
+        self.bundle_sha = sha(json.dumps(self.s.bundle_report).encode())
         self.calls = []
         self.lunch_result = (0, None)
 
@@ -1134,12 +1506,28 @@ class Run(unittest.TestCase):
             return {p['path']: {'sha256': 'd' * 64, 'count': 1} for p in projects}
         return pin
 
-    def run_adapter(self, state='post', lock=None, code=0, stopped=None, pins=None, bundle=None):
+    def plan(self, unset=('BUILD_ID_frankel', 'TARGET_KERNEL_DIR', 'USE_STOCK_KERNEL')):
+        return {'inputs': {'lunch': {'target': 'frankel-cur-user'}, 'environment': {'unset': ['GIT_*', *unset]},
+                           'gitRequirement': {'project': 'vendor/adevtool'}},
+                'url': 'https://github.com/GrapheneOS/adevtool', 'exact': ['vendor/adevtool']}
+
+    def checks(self, tree, inputs, root, deadline, exact=None):
+        self.calls.append(('lunch-inputs', tuple(exact)))
+        return {'contractSha256': 'checked'}
+
+    def fetch(self, tree, plan, run_root, record, root):
+        self.calls.append('fetch')
+        record.update(ok=True)
+
+    def run_adapter(self, state='post', lock=None, code=0, stopped=None, pins=None, bundle=None, plan=None,
+                    inputs_check=None, fetcher=None, applier=None):
         lock = lock or (lambda path: contextlib.nullcontext())
         return adapter.run(self.binding, self.s.manifest, '41700000000', '1', root=self.s.repo, lock=lock,
                            copier=self.copier(state), compiler=self.compiler(code, stopped), pins=pins or self.pins(),
                            policy_loader=lambda path: (POLICY, self.s.policy_sha),
-                           bundle_loader=lambda path: (bundle or self.s.bundle_content, self.bundle_sha))
+                           bundle_loader=lambda path: (bundle or self.s.bundle_report, self.bundle_sha),
+                           plan=plan or self.plan(), inputs_check=inputs_check or self.checks, fetcher=fetcher or self.fetch,
+                           applier=applier)
 
     def report(self):
         return json.loads((self.parent/'launcher3-compile-41700000000-1/receipts/report.json').read_text())
@@ -1147,12 +1535,12 @@ class Run(unittest.TestCase):
     def test_verified_state_compiles_and_reports_without_claiming_a_proof_it_lacks(self):
         self.assertEqual(self.run_adapter(), 0)
         report = self.report()
-        self.assertEqual(self.calls[:2], ['copy', ('pins', 'final')])
+        self.assertEqual(self.calls[:4], [COPY, ('pins', 'final'), ('lunch-inputs', ('vendor/adevtool',)), 'fetch'])
         out = self.parent/'launcher3-compile-41700000000-1/out'
         tree = self.parent/'launcher3-compile-41700000000-1/tree'
-        self.assertEqual(self.calls[2], ('lunch', 'example-cur-user', str(tree), adapter.LUNCH_SECONDS))
+        self.assertEqual(self.calls[4], ('lunch', 'frankel-cur-user', str(tree), adapter.LUNCH_SECONDS))
         self.assertEqual(report['lunch'], {'exit': 0, 'stoppedBy': None})
-        self.assertEqual(self.calls[3][1:], ([f'{out}/soong/.intermediates/frameworks/base/android.security.flags-aconfig/'
+        self.assertEqual(self.calls[5][1:], ([f'{out}/soong/.intermediates/frameworks/base/android.security.flags-aconfig/'
             'aconfig-flags.txt', f'{out}/soong/.intermediates/packages/apps/Launcher3/aconfig/com_android_launcher3_flags/'
             'aconfig-flags.txt'], str(out), adapter.COMPILE_SECONDS))
         self.assertEqual(report['classification']['branch'], 'verifyIntegrated')
@@ -1172,19 +1560,19 @@ class Run(unittest.TestCase):
 
     def test_mixed_state_refuses_before_any_compile(self):
         self.assertEqual(self.run_adapter('pre'), 3)
-        self.assertEqual(self.calls, ['copy'])
+        self.assertEqual(self.calls, [COPY])
         report = self.report()
         self.assertEqual(report['result'], 'refused')
         self.assertTrue(report['refused'].startswith('state_refused'))
 
     def test_a_tree_pin_difference_refuses_before_any_compile(self):
         self.assertEqual(self.run_adapter(pins=self.pins(fail='final')), 3)
-        self.assertEqual(self.calls, ['copy', ('pins', 'final')])
+        self.assertEqual(self.calls, [COPY, ('pins', 'final')])
         self.assertIn('extra against the tree pin', self.report()['refused'])
 
     def test_a_base_tree_is_refused_by_verify_integrated(self):
         self.assertEqual(self.run_adapter('base'), 3)
-        self.assertEqual(self.calls, ['copy'])
+        self.assertEqual(self.calls, [COPY])
         self.assertTrue(self.report()['refused'].startswith('state_refused'))
 
     def vbac(self):
@@ -1200,8 +1588,15 @@ class Run(unittest.TestCase):
         self.assertEqual({p: p.read_bytes() for p in source.rglob('*') if p.is_file()}, before)
         report = self.report()
         self.assertEqual([c['id'] for c in report['conditions']], adapter.CONDITIONS)
-        self.assertEqual(self.calls[:3], ['copy', ('pins', 'base'), ('pins', 'final')])
-        self.assertEqual([c[0] for c in self.calls[3:5]], ['lunch', 'compile'])
+        self.assertEqual(self.calls[:5], [COPY, ('pins', 'base'), ('pins', 'final'), ('lunch-inputs', ('vendor/adevtool',)),
+                                          'fetch'])
+        self.assertEqual([c[0] for c in self.calls[5:7]], ['lunch', 'compile'])
+        # the bundle report base-exact used, and what of its association was taken on trust
+        self.assertEqual(report['bundleReport'], {'sha256': self.bundle_sha,
+            'run': {'runId': '41700000000', 'runAttempt': 1, 'headSha': 'c' * 40, 'label': 'r1'},
+            'receipt': {'path': '/home/pixelbuild/receipts/0001-r1.json', 'receiptSha256': 'f' * 64, 'at': '2026-11-04T00:30:00Z'},
+            'producer': self.s.bundle_report['producer'], 'takenOnTrust': list(adapter.BUNDLE_TRUSTED)})
+        self.assertIn('headSha reachable from main (only candidate.onMain is read)', report['bundleReport']['takenOnTrust'])
         tree = self.parent/'launcher3-compile-41700000000-1/tree'
         self.assertEqual((tree/L3/EDGE_FILE).read_bytes(), EDGE_AFTER)
         self.assertEqual((tree/L3/FALLBACK/'RoseEdgeState.java').read_bytes(), b'candidate state\n')
@@ -1209,7 +1604,10 @@ class Run(unittest.TestCase):
 
     def test_base_apply_candidate_refuses_at_the_first_failed_condition_by_name(self):
         cases = [('post', {}, 'delta-preimages', False), ('pre', {}, 'base-exact', True),
-                 ('base', {'bundle': dict(self.s.bundle_content, patches=[])}, 'base-exact: the integrating bundle', True),
+                 ('base', {'bundle': bundle_report(self.s.bundle_content, self.s.registration,
+                                                   lambda r: r['observed'].update(patches=[]))},
+                  'base-exact: the integrating bundle report does not match', True),
+                 ('base', {'bundle': self.s.bundle_content}, 'the bundle report sections are not exactly', True),
                  ('base', {'pins': self.pins(fail='base')}, 'extra against the tree pin', True),
                  ('base', {'pins': self.pins(fail='final')}, 'extra against the tree pin', False)]
         for state, change, word, untouched in cases:
@@ -1217,7 +1615,8 @@ class Run(unittest.TestCase):
                 self.setUp()
                 self.vbac()
                 if state == 'post':  # already at the candidate: the base pins pass on a fake, the preimages do not
-                    self.s.manifest['base'] = {**self.s.manifest, 'bundleContent': self.s.bundle_content}
+                    self.s.manifest['base'] = {**self.s.manifest, 'bundleContent': self.s.bundle_content,
+                                               'registration': self.s.registration}
                 self.assertEqual(self.run_adapter(state, **change), 3)
                 report = self.report()
                 self.assertIn(word, report['refused'])
@@ -1292,38 +1691,61 @@ class Run(unittest.TestCase):
                 self.assertNotIn('compile', report)
                 self.assertFalse([c for c in self.calls if c[0] == 'compile'])
 
-    def test_a_version_checked_lunch_is_refused_before_anything_is_copied(self):
-        self.binding['lunch'] = 'frankel-cur-user'
-        self.assertEqual(self.run_adapter(), 3)
-        self.assertEqual(self.calls, [])
-        self.assertTrue(self.report()['refused'].startswith('adevtool_git_missing'))
+    def test_without_the_bound_fetch_or_the_contracts_lunch_nothing_is_copied(self):
+        lock = lambda path: contextlib.nullcontext()  # noqa: E731
+        for name, change, plan, word in (('no fetch', {'adevtoolGit': None}, self.plan(), 'adevtool_git_missing'),
+                                         ('no plan', {}, None, 'lunch-inputs: no admitted lunch-input plan'),
+                                         ('another lunch', {'lunch': 'example-cur-user'}, self.plan(),
+                                          'lunch-inputs: no admitted lunch-input plan for this lunch (definitions.lunch')):
+            with self.subTest(name=name):
+                self.setUp()
+                self.binding.update(change)
+                self.assertEqual(adapter.run(self.binding, self.s.manifest, '41700000000', '1', root=self.s.repo, lock=lock,
+                                             copier=self.copier(), compiler=self.compiler(), pins=self.pins(), plan=plan,
+                                             inputs_check=self.checks, fetcher=self.fetch), 3)
+                self.assertEqual(self.calls, [])
+                self.assertTrue(self.report()['refused'].startswith(word), self.report()['refused'])
+                self.assertTrue(self.report()['nothingApplied'])
+
+    def test_a_receipt_that_resolves_into_the_source_tree_refuses_before_the_copy(self):
+        source = Path(tempfile.mkdtemp())
+        (source/'frameworks').mkdir()
+        outside = Path(tempfile.mkdtemp())
+        os.symlink(source/'frameworks', outside/'receipts')  # a linked directory: the path itself is outside the tree
+        for name, change in (('policyReceipt', {'policyReceipt': {'path': str(outside/'receipts/policy.json'),
+                                                                  'sha256': self.s.policy_sha}}),
+                             ('bundleReport', {'branch': 'verifyBaseApplyCandidate',
+                                               'bundleReport': {'path': str(outside/'receipts/bundle.json'),
+                                                                'sha256': self.bundle_sha}})):
+            with self.subTest(name=name):
+                self.setUp()
+                self.binding.update(sourceTree=str(source), **change)
+                self.assertIsNone(adapter.tree_file_problem(self.binding[name]['path'], str(source), str(self.parent)))
+                self.assertEqual(self.run_adapter(), 3)
+                self.assertEqual(self.calls, [])
+                self.assertEqual(self.report()['refused'],
+                                 f'{name}: the bound path is inside the source tree once resolved; nothing copied')
+
+    def test_a_refusal_part_way_through_the_apply_says_what_the_copy_may_hold(self):
+        self.vbac()
+
+        def applier(tree, patches, overlays, bundle, files, applied):
+            applied.append(patches[0]['name'])
+            raise adapter.Refused('isolated-apply: git apply of x failed after every --check passed')
+        self.assertEqual(self.run_adapter('base', applier=applier), 3)
+        report = self.report()
+        self.assertEqual((report['nothingApplied'], report['applied']), (False, ['rose-edge-launcher3.patch']))
+        self.assertEqual([c['id'] for c in report['conditions']], ['base-exact', 'delta-preimages'])
+        self.assertFalse([c for c in self.calls if c[0] in ('lunch', 'compile')])
 
     def admitted(self, inputs_check=None, fetcher=None, unset=('BUILD_ID_frankel', 'TARGET_KERNEL_DIR', 'USE_STOCK_KERNEL'),
                  state='post'):
-        self.binding.update(lunch='frankel-cur-user', adevtoolGit='public-fetch')
-        plan = {'inputs': {'environment': {'unset': ['GIT_*', *unset]}, 'gitRequirement': {'project': 'vendor/adevtool'}},
-                'url': 'https://github.com/GrapheneOS/adevtool', 'exact': ['vendor/adevtool']}
-
-        def checks(tree, inputs, root, deadline, exact=None):
-            self.calls.append(('lunch-inputs', tuple(exact)))
-            return {'contractSha256': 'checked'}
-
-        def fetch(tree, plan, run_root, record, root):
-            self.calls.append('fetch')
-            record.update(ok=True)
-
-        lock = lambda path: contextlib.nullcontext()  # noqa: E731
-        return adapter.run(self.binding, self.s.manifest, '41700000000', '1', root=self.s.repo, lock=lock,
-                           copier=self.copier(state), compiler=self.compiler(), pins=self.pins(),
-                           policy_loader=lambda path: (POLICY, self.s.policy_sha),
-                           bundle_loader=lambda path: (self.s.bundle_content, self.bundle_sha), plan=plan,
-                           inputs_check=inputs_check or checks, fetcher=fetcher or fetch)
+        return self.run_adapter(state, plan=self.plan(unset), inputs_check=inputs_check, fetcher=fetcher)
 
     def test_an_admitted_lunch_checks_its_inputs_and_fetches_after_the_branch_and_before_lunch(self):
         self.assertEqual(self.admitted(), 0)
         # the copy omits node_modules but keeps the tracked dl/.find-ignore; the checks get the plan's exact sources
-        self.assertEqual(self.calls[:4], [('copy', True, False), ('pins', 'final'), ('lunch-inputs', ('vendor/adevtool',)),
-                                          'fetch'])
+        self.assertEqual(self.calls[:4], [COPY, ('pins', 'final'), ('lunch-inputs', ('vendor/adevtool',)), 'fetch'])
         self.assertEqual([c[0] for c in self.calls[4:6]], ['lunch', 'compile'])
         report = self.report()
         self.assertEqual((report['lunchInputs'], report['adevtoolGit']),
@@ -1331,7 +1753,7 @@ class Run(unittest.TestCase):
 
     def test_an_environment_the_contract_unsets_refuses_before_any_lunch_input_or_fetch(self):
         self.assertEqual(self.admitted(unset=('TMPDIR',)), 3)  # the contained environment does set TMPDIR
-        self.assertEqual(self.calls, [('copy', True, False), ('pins', 'final')])
+        self.assertEqual(self.calls, [COPY, ('pins', 'final')])
         self.assertEqual(self.report()['refused'], 'lunch-inputs: the lunch environment passes TMPDIR')
 
     def test_an_os_error_reading_the_copy_is_a_named_refusal_before_lunch(self):
@@ -1344,8 +1766,8 @@ class Run(unittest.TestCase):
     def test_the_candidate_branch_also_checks_its_inputs_and_fetches_after_its_conditions(self):
         self.vbac()
         self.assertEqual(self.admitted(state='base'), 0)
-        self.assertEqual(self.calls[:5], [('copy', True, False), ('pins', 'base'), ('pins', 'final'),
-                                          ('lunch-inputs', ('vendor/adevtool',)), 'fetch'])
+        self.assertEqual(self.calls[:5], [COPY, ('pins', 'base'), ('pins', 'final'), ('lunch-inputs', ('vendor/adevtool',)),
+                                          'fetch'])
         self.assertEqual([c[0] for c in self.calls[5:7]], ['lunch', 'compile'])
 
     def test_a_refused_lunch_input_or_fetch_stops_before_lunch(self):
@@ -1367,7 +1789,7 @@ class Run(unittest.TestCase):
         lock = lambda path: contextlib.nullcontext()  # noqa: E731
         self.assertEqual(adapter.run(self.binding, self.s.manifest, '41700000000', '1', root=self.s.repo, lock=lock,
                                      copier=self.copier(), compiler=self.compiler(), pins=self.pins(),
-                                     plan={'inputs': {}, 'url': 'https://x'}), 3)
+                                     plan=self.plan()), 3)
         self.assertEqual(self.calls, [])  # a plan without the bound fetch: refused before anything is copied
 
     def test_a_stopped_compile_is_recorded_and_never_a_pass(self):

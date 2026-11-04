@@ -44,7 +44,10 @@ def load_base():
 
 
 C = load_base()
-L3 = {name: getattr(C, name) for name in ('PROJECTS', 'describe')}
+L3 = {name: getattr(C, name) for name in ('PROJECTS', 'describe_base')}
+L3['describe'] = L3['describe_base']
+# This contract stays at schema 2 (its stated fields and base) until its own re-pin with Release.
+C.SCHEMA = 2
 
 C.MANIFEST = ROOT/'os/compile-contracts/frameworks-base-wmshell.json'
 # The reviewed candidate: the merge on main holding the patch's current bytes (#516, #523, then #528).
