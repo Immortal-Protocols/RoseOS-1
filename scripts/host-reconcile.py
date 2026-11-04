@@ -67,6 +67,8 @@ def head_bytes(source, project, relative):
 # background policy, the agent tray, an updater channel without a release index, and the Rose Home preinstall).
 # frameworks/base is its initial list, then background_apks.BACKGROUND_FRAMEWORK_PATCHES, then the Shell patch.
 # scripts/tests/test_host_build_reconcile.py keeps every sequence in step with the patcher and the recipe.
+# They are frankel's: the mustang, blazer and rango recipes pass other flags, so a file they patch differently gets
+# no lineage and conflicts as before (missed recognition, never false acceptance).
 FRAMEWORKS_BASE_SEQUENCE = ('frameworks-base.patch', 'rose-agent-self-update-frameworks-base.patch',
     'background-control-frameworks-base.patch', 'background-control-modern-frameworks-base.patch',
     'background-control-resource-import-fix.patch', 'locked-control-frameworks-base.patch', 'rose-edge-wmshell.patch')
