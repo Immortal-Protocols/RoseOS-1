@@ -195,6 +195,14 @@ public class RoseEdgeResizeNativeTest {
         assertFalse(RoseEdgeState.micSlotFits(tiny, w, h, density));
         assertFalse(RoseEdgeState.micSlotFits(huge, w, h, density));
         assertTrue(RoseEdgeState.micSlotFits(slot(), w, h, density));
+        // The shell's RoseEdgePolicy.validMicSlot (#523) rounds 32dp and 64dp to whole px: at 2.6, 83 to 166 px.
+        assertTrue(RoseEdgeState.micSlotFits(new Rect(0, 2000 - 83, 83, 2000), 1000, 2000, 2.6f));
+        assertFalse(RoseEdgeState.micSlotFits(new Rect(0, 2000 - 82, 82, 2000), 1000, 2000, 2.6f));
+        assertTrue(RoseEdgeState.micSlotFits(new Rect(0, 2000 - 166, 166, 2000), 1000, 2000, 2.6f));
+        assertFalse(RoseEdgeState.micSlotFits(new Rect(0, 2000 - 167, 167, 2000), 1000, 2000, 2.6f));
+        // Band top is H - min(H / 4, round(160dp)) in whole px: 1001 tall at 2.6 gives 1001 - 250 = 751.
+        assertTrue(RoseEdgeState.micSlotFits(new Rect(0, 751, 100, 851), 1000, 1001, 2.6f));
+        assertFalse(RoseEdgeState.micSlotFits(new Rect(0, 750, 100, 850), 1000, 1001, 2.6f));
         slot(top);
         RoseEdgeState.raise(DISPLAY, TASK, 174);
         shell.listener.onRaised(DISPLAY, TASK, new Rect(0, 0, 1152, 2322));

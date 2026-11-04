@@ -115,11 +115,14 @@ public final class RoseEdgeState {
         if (RESIZED.get(displayId) != null) sendMicSlot(displayId);
     }
 
-    /** Whether a slot satisfies the agreed geometry for a display of widthPx x heightPx at density. */
+    /**
+     * Whether a slot satisfies the agreed geometry for a display of widthPx x heightPx at density, rounded exactly as
+     * the shell's RoseEdgePolicy.validMicSlot rounds it (#523), so a slot sent here is never one the shell drops.
+     */
     public static boolean micSlotFits(Rect slot, int widthPx, int heightPx, float density) {
         if (slot == null || slot.isEmpty() || !(density > 0)) return false;
-        float min = MIC_SLOT_MIN_DP * density, max = MIC_SLOT_MAX_DP * density;
-        float bandTop = heightPx - Math.min(heightPx / 4f, MIC_SLOT_BAND_MAX_DP * density);
+        int min = Math.round(MIC_SLOT_MIN_DP * density), max = Math.round(MIC_SLOT_MAX_DP * density);
+        int bandTop = heightPx - Math.min(heightPx / 4, Math.round(MIC_SLOT_BAND_MAX_DP * density));
         return slot.width() >= min && slot.width() <= max && slot.height() >= min && slot.height() <= max
                 && slot.left >= 0 && slot.right <= widthPx && slot.top >= bandTop && slot.bottom <= heightPx;
     }
