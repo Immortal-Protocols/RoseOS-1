@@ -43,7 +43,9 @@ final class LocalRoseLink {
     private static final int FRAME = 512;  // 32 ms
     private static final int REPLACED = 4001, AUDIO_OFF = 4003;
 
-    private static LocalRoseLink current;
+    private static volatile LocalRoseLink current;
+    /** The last mute value asked for, kept even while no link is published (a start ending an older link). */
+    private static volatile boolean requestedMute;
 
     private final Context context;
     private final Sink sink;
@@ -73,21 +75,65 @@ final class LocalRoseLink {
         }
     }
 
-    static synchronized void start(Context context, Sink sink, boolean muted) {
-        if (current != null) return;
-        current = new LocalRoseLink(context, sink);
-        current.muted = muted;
-        current.begin();
-    }
+    private static int lastToken;
+    /** This link's start token: its own start's stop(token) ends it, and no other start's does. */
+    private int token;
 
-    static synchronized void stop() {
-        if (current == null) return;
-        current.end();
+    /**
+     * Starts a link with exactly this mute (#410 item 6) and returns its token (always positive). A link already
+     * running belongs to an earlier start, for example a voice page whose renderer is gone, so it is ended first: it
+     * is never reused, and the new start's muted value and sink always apply. Muted, the first frame is silence.
+     */
+    static synchronized int start(Context context, Sink sink, boolean muted) {
+        LocalRoseLink old = current;
         current = null;
+        if (old != null) old.end(); // an earlier start's link is never reused; nothing else waits on the lock for it
+        LocalRoseLink link = new LocalRoseLink(context, sink);
+        link.muted = muted;
+        link.token = lastToken = lastToken == Integer.MAX_VALUE ? 1 : lastToken + 1;
+        current = link;
+        // A mute asked for while no link was published (setMuted saw none) is applied before the first frame: setMuted
+        // writes requestedMute then reads current, this writes current then reads requestedMute, so one sees the other.
+        if (requestedMute) link.muted = true;
+        link.begin();
+        return link.token;
     }
 
-    static synchronized void setMuted(boolean muted) {
-        if (current != null) current.muted = muted;
+    /** Ends the link its own start returned token for; an older start's stop (or token 0, no link) ends nothing. */
+    static void stop(int token) {
+        LocalRoseLink ended;
+        synchronized (LocalRoseLink.class) {
+            if (current == null || token <= 0 || current.token != token) return;
+            ended = current;
+            current = null;
+        }
+        ended.end(); // joins its threads without holding the lock that mute and silence would wait for
+    }
+
+    /** Ends whatever link runs: the voice page that owned it is gone (renderer loss, service end). */
+    static void stop() {
+        LocalRoseLink ended;
+        synchronized (LocalRoseLink.class) {
+            ended = current;
+            current = null;
+        }
+        if (ended != null) ended.end();
+    }
+
+    /** Silences whatever link runs, from its next frame, and returns its token (0 if none) so it can be ended later.
+     * Lock-free: never waits for a link that is starting or ending. */
+    static int silence() {
+        LocalRoseLink link = current;
+        if (link == null) return 0;
+        link.muted = true;
+        return link.token;
+    }
+
+    /** Lock-free, so a mute from the main thread never waits for a link that is starting or ending. */
+    static void setMuted(boolean muted) {
+        requestedMute = muted;
+        LocalRoseLink link = current;
+        if (link != null) link.muted = muted;
     }
 
     private LocalRoseLink(Context context, Sink sink) {
