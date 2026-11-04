@@ -116,6 +116,14 @@ GIT_CONFIG_KEYS = ('core.repositoryformatversion', 'core.filemode', 'core.bare',
 GIT_REDIRECTS = ('objects/info/alternates', 'objects/info/http-alternates', 'commondir', 'gitdir', 'hooks', 'info/grafts')
 # The git variables the contained lunch and m environment sets itself; nothing else named GIT_* reaches them.
 CONTAINED_GIT = ('GIT_CEILING_DIRECTORIES', 'GIT_CONFIG_NOSYSTEM', 'GIT_CONFIG_GLOBAL')
+# The pinned adevtool .gitignore rules the copy omits (gitRequirement.workingTree.omittedFromCopy), implemented exactly by
+# adevtool_ignored; a contract naming any other list is refused until this adapter implements it.
+ADEVTOOL_IGNORED = ('/.idea/', '/dist/', '!/dl/', '/dl/*', '!/dl/.find-ignore', '/lib/', '/node_modules/')
+# gitRequirement.publicFetch.environment as this adapter sets it (fetch_env); the contract must state exactly this.
+FETCH_ENV_SPEC = {'unset': 'GIT_*', 'GIT_CONFIG_NOSYSTEM': '1', 'GIT_CONFIG_GLOBAL': '/dev/null',
+                  'HOME': 'an attempt-owned empty directory (also XDG_CONFIG_HOME)', 'GIT_TERMINAL_PROMPT': '0',
+                  'GIT_ASKPASS': '/bin/false', 'SSH_ASKPASS': '/bin/false', 'GIT_ALLOW_PROTOCOL': 'https',
+                  'GIT_CEILING_DIRECTORIES': 'the copy root', 'PATH': '/usr/bin:/bin'}
 FINISH_SECONDS = 30 * 60
 UPLOAD = ('report.json', 'classification.json')
 WORK_DIRS = ('tree', 'out', 'home', 'tmp')
@@ -255,11 +263,8 @@ def verify_tree_pin(project, expected, sha256, count, skipped, hasher=git_blob_i
     raise Refused(f'{Path(project).name}: tree pin digest differs')
 
 
-def load_listing(pin, root=ROOT):
-    """{path bytes: (mode, oid)} of the pinned commit's tree minus exactly unlisted.excludedPaths, from the committed
-    gzip listing after both of its sha256 bindings; raw `<mode> blob <oid> TAB <path> LF` lines only (no quoting, no
-    other type or mode). This is the pin's expected data, never a statement about host bytes."""
-    listing, unlisted = pin['listing'], pin['unlisted']
+def listing_raw(listing, root=ROOT):
+    """The decompressed bytes of a committed gzip listing, after both of its sha256 bindings."""
     path = (Path(root)/listing['path']).resolve()
     if Path(root).resolve() not in path.parents or path.is_symlink():
         raise Invalid(f'{listing["path"]}: the listing must be a file in this repository')
@@ -270,6 +275,15 @@ def load_listing(pin, root=ROOT):
         raw = stream.read(LISTING_BYTES + 1)
     if len(raw) > LISTING_BYTES or sha256_bytes(raw) != listing['sha256']:
         raise Invalid(f'{listing["path"]} is not the pinned listing')
+    return raw
+
+
+def load_listing(pin, root=ROOT):
+    """{path bytes: (mode, oid)} of the pinned commit's tree minus exactly unlisted.excludedPaths, from the committed
+    gzip listing after both of its sha256 bindings; raw `<mode> blob <oid> TAB <path> LF` lines only (no quoting, no
+    other type or mode). This is the pin's expected data, never a statement about host bytes."""
+    listing, unlisted = pin['listing'], pin['unlisted']
+    raw = listing_raw(listing, root)
     records = {}
     for line in raw.split(b'\n')[:-1] if raw.endswith(b'\n') else [None]:
         match = line is not None and re.fullmatch(rb'(100644|100755|120000) blob ([0-9a-f]{40})\t([^"\n][^\n]*)', line)
@@ -620,8 +634,9 @@ def public_fetch_option(inputs, url):
 
 
 def lunch_plan(binding, root=ROOT, inputs_path=None, inputs_pin=LUNCH_INPUTS_SHA256):
-    """None for a lunch without the adevtool version check; else {'inputs', 'url'} once the contract is pinned, the
-    binding names the public fetch and the contract admits it. Unbound (exit 4) until then."""
+    """None for a lunch without the adevtool version check; else {'inputs', 'url', 'exact'} once the contract is pinned,
+    the binding names the public fetch, the contract admits it and its publicFetch and workingTree are exactly this
+    adapter's mechanism. Unbound (exit 4) until then; invalid when the contract and this adapter disagree."""
     if not version_checked(binding['lunch']):
         if binding['adevtoolGit'] is not None:
             raise Invalid('adevtoolGit applies only to a lunch that runs adevtool-version-check.mk')
@@ -637,15 +652,89 @@ def lunch_plan(binding, root=ROOT, inputs_path=None, inputs_pin=LUNCH_INPUTS_SHA
         raise Unbound(f'adevtool_git_unadmitted: the pinned frankel-lunch-inputs.json ({inputs_pin[:12]}) admits no '
                       f'public-fetch class for {url}; OS Product\'s gitRequirement amendment and this adapter\'s re-pin '
                       'land together')
-    return {'inputs': inputs, 'url': url}
+    problems = admission_problems(inputs, url, root)
+    if problems:
+        raise Invalid('the admitted public fetch is not the mechanism this adapter implements: ' + '; '.join(problems[:5]))
+    return {'inputs': inputs, 'url': url, 'exact': exact_sources(inputs)}
 
 
-def lunch_listing(inputs, project, root=ROOT):
-    """{path bytes: (mode, oid)} of one lunch-input source's pinned tree listing, after both of its sha256 bindings."""
+def lunch_listing(inputs, project, root=ROOT, raw=False):
+    """{path bytes: (mode, oid)} of one lunch-input source's pinned tree listing, after both of its sha256 bindings
+    (raw: its decompressed bytes instead)."""
     rows = [s for s in inputs['sources'] if s.get('path') == project]
     if len(rows) != 1:
         raise Invalid(f'the lunch-input contract has no single {project} source')
+    if raw:
+        return listing_raw(rows[0]['listing'], root)
     return load_listing({'listing': rows[0]['listing'], 'unlisted': {'excludedPaths': []}, 'modes': list(TREE_MODES)}, root)
+
+
+def fetch_steps(work, url, revision):
+    """gitRequirement.publicFetch.steps, which are Blazer's git_meta_argv: a new .git with no templates (no hooks),
+    exactly revision at depth 1 with no tags, and a detached HEAD by update-ref; none reads or writes the working tree."""
+    return [['git', 'init', '-q', '--template=', str(work)],
+            ['git', '-C', str(work), 'fetch', '--quiet', '--depth=1', '--no-tags', url, revision],
+            ['git', '-C', str(work), 'update-ref', '--no-deref', 'HEAD', revision]]
+
+
+def adevtool_ignored(relative, is_dir):
+    """git check-ignore of exactly ADEVTOOL_IGNORED, for a path relative to vendor/adevtool: the top-level directories
+    .idea, dist, lib and node_modules and everything below them, and every entry directly in dl except dl/.find-ignore
+    and everything below those entries."""
+    parts = relative.split('/')
+    if parts[0] in ('.idea', 'dist', 'lib', 'node_modules') and (len(parts) > 1 or is_dir):
+        return True
+    return parts[0] == 'dl' and len(parts) > 1 and parts[1:] != ['.find-ignore']
+
+
+def exact_sources(inputs):
+    """The lunch-input sources whose working tree this adapter checks exactly: workingTreeCheck 'exact...' (vendor/adevtool
+    through gitRequirement.workingTree); 'derivation only...' are not checked; anything else is invalid."""
+    exact = []
+    for row in inputs['sources']:
+        check = str(row.get('workingTreeCheck', ''))
+        if check.startswith('exact'):
+            exact.append(row['path'])
+        elif not check.startswith('derivation only'):
+            raise Invalid(f'{row.get("path")}: workingTreeCheck must say exact or derivation only')
+    if inputs['gitRequirement']['project'] not in exact:
+        raise Invalid('vendor/adevtool must be checked exactly')
+    return exact
+
+
+def admission_problems(inputs, url, root=ROOT):
+    """Every way the admitted contract's publicFetch and workingTree differ from the mechanism this adapter implements;
+    an admission is refused (invalid) on any. The contract cannot widen the adapter, and the adapter cannot drift."""
+    git, problems = inputs['gitRequirement'], []
+    fetch, tree = git.get('publicFetch') or {}, git.get('workingTree') or {}
+    revision = git['revision']
+    rendered = [' '.join(step) for step in fetch_steps('<copy>/vendor/adevtool', '<url>', revision)]
+    if (fetch.get('url'), fetch.get('protocol')) != (url, 'https only'):
+        problems.append('publicFetch.url and protocol are not the pinned manifest source over https only')
+    if fetch.get('steps') != rendered:
+        problems.append('publicFetch.steps are not exactly this adapter\'s three commands')
+    if fetch.get('environment') != FETCH_ENV_SPEC:
+        problems.append('publicFetch.environment is not exactly this adapter\'s fetch environment')
+    ceiling = fetch.get('ceiling') or {}
+    if (ceiling.get('seconds'), ceiling.get('bytes')) != (ADEVTOOL_FETCH_SECONDS, ADEVTOOL_GIT_BYTES):
+        problems.append('publicFetch.ceiling is not this adapter\'s 1800 s and 1073741824 bytes')
+    omitted = (tree.get('omittedFromCopy') or {}).get('gitignore')
+    if (tree.get('project'), omitted, tree.get('untrackedAllowed')) != (git['project'], list(ADEVTOOL_IGNORED), []):
+        problems.append('workingTree is not vendor/adevtool with exactly the omitted rules this adapter implements and '
+                        'no untracked allowance')
+    try:
+        exact = exact_sources(inputs)
+        listed = lunch_listing(inputs, git['project'], root)
+        for name in listed:
+            parts = os.fsdecode(name).split('/')
+            if any(adevtool_ignored('/'.join(parts[:i]), i < len(parts)) for i in range(1, len(parts) + 1)):
+                problems.append(f'the omitted rules would drop the tracked {os.fsdecode(name)}')
+                break
+        for project in exact:
+            lunch_listing(inputs, project, root)
+    except Invalid as error:
+        problems.append(str(error))
+    return problems
 
 
 def contained_bytes(tree, relative):
@@ -678,22 +767,39 @@ def manifest_file_problem(tree, row):
     return None
 
 
-def lunch_input_checks(tree, inputs, root=ROOT, deadline=None, hasher=git_blob_id):
-    """Before lunch, in the copy, no network: vendor/adevtool is exactly its pinned tree (every listed path at its mode
-    and blob, no other path, no .git yet), and the contract's version check, generated vendor files, finder markers,
-    kernel module lists and manifest files are as stated. Refuses at the first difference, by name. Never copies an
-    expected value into the report."""
+def exact_tree(project, expected, skipped=(), hasher=git_blob_id, deadline=None):
+    """An exact working tree: every listed path at its mode and blob and nothing else (minus exactly skipped). Refuses
+    naming every missing, different and unlisted path, each list bounded at REPORT_ERRORS."""
+    actual = tree_records(project, skipped, hasher, deadline)
+    found = {'missing': sorted(p for p in expected if p not in actual),
+             'different': sorted(p for p in expected if p in actual and actual[p] != expected[p]),
+             'unlisted': sorted(p for p in actual if p not in expected)}
+    if any(found.values()):
+        named = '; '.join(f'{kind} {len(paths)}: ' + ', '.join(os.fsdecode(p) for p in paths[:REPORT_ERRORS])
+                          for kind, paths in found.items() if paths)
+        raise Refused(f'{Path(project).name} is not exactly its pinned tree ({named})')
+    return {'paths': len(expected), 'equalsListing': True}
+
+
+def lunch_input_checks(tree, inputs, root=ROOT, deadline=None, hasher=git_blob_id, exact=None):
+    """Before lunch, in the copy, no network: each exact source (vendor/adevtool and device/google/laguna-kernels/6.6
+    in the amended contract) is exactly its pinned tree, naming every difference, with no .git yet; the contract's
+    version check, generated vendor files, finder markers, kernel module lists and manifest files are as stated.
+    Refuses by name. Never copies an expected value into the report."""
     tree = Path(tree)
     git = inputs['gitRequirement']
     work = tree/git['project']
     if work.is_symlink() or not work.is_dir() or os.path.lexists(work/'.git'):
         raise Refused('lunch-inputs: vendor/adevtool must be a plain directory with no .git before the fetch')
-    expected = lunch_listing(inputs, git['project'], root)
-    digest, count = tree_digest(expected)
-    try:
-        verify_tree_pin(work, expected, digest, count, [], hasher, deadline)
-    except Refused as error:
-        raise Refused(f'lunch-inputs: {error}') from None
+    trees = {}
+    for project in (exact if exact is not None else exact_sources(inputs)):
+        directory = tree/project
+        if directory.is_symlink() or not directory.is_dir():
+            raise Refused(f'lunch-inputs: {project} is not a plain directory in the copy')
+        try:
+            trees[project] = exact_tree(directory, lunch_listing(inputs, project, root), (), hasher, deadline)
+        except Refused as error:
+            raise Refused(f'lunch-inputs: {project}: {error}') from None
     version = inputs['versionCheck']
     data, form = contained_bytes(tree, version['path']), version['expected']['error']
     if data is None or (sha256_bytes(data), len(data)) != (form['sha256'], form['bytes']):
@@ -715,10 +821,9 @@ def lunch_input_checks(tree, inputs, root=ROOT, deadline=None, hasher=git_blob_i
         problem = manifest_file_problem(tree, row)
         if problem:
             raise Refused(f'lunch-inputs: {problem}')
-    return {'contractSha256': LUNCH_INPUTS_SHA256, 'adevtoolTree': {'paths': count, 'equalsListing': True},
-            'versionCheck': 'error form', 'observable': len(inputs['generatedVendor']['observable']),
-            'finderMarkers': len(inputs['finderPrune']['markers']), 'kernelModuleLists': len(inputs['kernelModuleLists']['files']),
-            'manifestFiles': len(inputs['manifestFiles'])}
+    return {'contractSha256': LUNCH_INPUTS_SHA256, 'exactTrees': trees, 'versionCheck': 'error form',
+            'observable': len(inputs['generatedVendor']['observable']), 'finderMarkers': len(inputs['finderPrune']['markers']),
+            'kernelModuleLists': len(inputs['kernelModuleLists']['files']), 'manifestFiles': len(inputs['manifestFiles'])}
 
 
 def environment_problems(env, inputs):
@@ -729,11 +834,12 @@ def environment_problems(env, inputs):
 
 
 def fetch_env(tree, home, protocol='https'):
-    """git for the public fetch, as Blazer's git-meta: no inherited GIT_*, no system or global configuration (so no
-    insteadOf, credential helper or hook path), no prompt, only the source's protocol, PATH /usr/bin:/bin and discovery
-    bounded at the copy root. The rest of the job's environment (a proxy, for example) is kept."""
+    """gitRequirement.publicFetch.environment (FETCH_ENV_SPEC), as Blazer's git-meta: no inherited GIT_*, no system or
+    global configuration (so no insteadOf, credential helper or hook path), an attempt-owned empty HOME and
+    XDG_CONFIG_HOME, no prompt, only the source's protocol, PATH /usr/bin:/bin and discovery bounded at the copy root.
+    The rest of the job's environment (a proxy, for example) is kept."""
     env = {k: v for k, v in os.environ.items() if not k.startswith('GIT_') and k not in ('PATH', 'HOME', 'XDG_CONFIG_HOME')}
-    env.update(PATH=GIT_PATH, HOME=str(home), XDG_CONFIG_HOME=str(home), LC_ALL='C', GIT_CONFIG_NOSYSTEM='1',
+    env.update(PATH=GIT_PATH, HOME=str(home), XDG_CONFIG_HOME=str(home), GIT_CONFIG_NOSYSTEM='1',
                GIT_CONFIG_GLOBAL=os.devnull, GIT_TERMINAL_PROMPT='0', GIT_ASKPASS='/bin/false', SSH_ASKPASS='/bin/false',
                GIT_ALLOW_PROTOCOL=protocol, GIT_CEILING_DIRECTORIES=str(tree))
     return env
@@ -803,19 +909,21 @@ def git_output(argv, env, cwd, deadline, clock=time.monotonic, run=subprocess.ru
     return result.returncode, result.stdout
 
 
-def gitdir_problems(tree, work, inputs, expected, env, deadline, limit, clock=time.monotonic):
-    """Every acceptance item of the admitted public fetch, on the new repository: HEAD and shallow are exactly the
-    revision, the commit and its root tree are the pinned ones, a full fsck passes, the commit's tree is exactly the
-    pinned listing, there is no remote or other configuration, and nothing redirects outside the copy (a real .git
-    directory resolving inside it; no alternates, commondir, gitdir file, hooks or grafts; no link, mount point, other
-    filesystem or second hard link)."""
+def gitdir_problems(tree, work, inputs, raw_listing, env, lunch_env, deadline, limit, clock=time.monotonic):
+    """Every publicFetch.acceptance item on the new repository but the working tree (adevtool_public_fetch re-checks
+    it): HEAD and shallow are exactly the revision; under the lunch environment (GIT_* unset but the ceiling at the copy
+    root) rev-parse HEAD is the revision, it is a commit and its tree is exactly rootTree; a full fsck passes; ls-tree
+    -r -z --full-tree with each NUL as LF is byte for byte the pinned listing; the local configuration is exactly a new
+    repository's (no remote.*), there is no ref but HEAD, and nothing redirects outside the copy (a real .git directory
+    resolving inside it; no alternates, commondir, gitdir file, hooks or grafts; no link, mount point, other filesystem
+    or second hard link)."""
     git, problems = inputs['gitRequirement'], []
     revision, root_tree = git['revision'], git['rootTree']
     dotgit, tree = work/'.git', Path(tree)
     real_tree = os.path.realpath(tree)
 
-    def out(*args):
-        code, data = git_output(['git', '-C', str(work), *args], env, str(work), deadline, clock)
+    def out(*args, environment=env):
+        code, data = git_output(['git', '-C', str(work), *args], environment, str(work), deadline, clock)
         return code, data.decode(errors='replace')
 
     if dotgit.is_symlink() or not dotgit.is_dir():
@@ -824,13 +932,13 @@ def gitdir_problems(tree, work, inputs, expected, env, deadline, limit, clock=ti
         data = contained_bytes(tree, f'{git["project"]}/.git/{name}')
         if data != (revision + '\n').encode():
             problems.append(f'{name} is not exactly the pinned revision')
-    code, head = out('rev-parse', '--verify', 'HEAD')
+    code, head = out('rev-parse', 'HEAD', environment=lunch_env)
     if (code, head.strip()) != (0, revision):
-        problems.append('rev-parse HEAD is not the pinned revision')
-    code, kind = out('cat-file', '-t', revision)
+        problems.append('under the lunch environment rev-parse HEAD is not the pinned revision')
+    code, kind = out('cat-file', '-t', revision, environment=lunch_env)
     if (code, kind.strip()) != (0, 'commit'):
         problems.append('the pinned revision is not a commit')
-    code, tree_id = out('rev-parse', '--verify', revision + '^{tree}')
+    code, tree_id = out('rev-parse', '--verify', revision + '^{tree}', environment=lunch_env)
     if (code, tree_id.strip()) != (0, root_tree):
         problems.append('the commit tree is not the pinned rootTree')
     code, _ = out('fsck', '--no-dangling', '--no-progress')
@@ -838,17 +946,15 @@ def gitdir_problems(tree, work, inputs, expected, env, deadline, limit, clock=ti
         problems.append('a full fsck failed')
     code, listed = git_output(['git', '-C', str(work), 'ls-tree', '-r', '-z', '--full-tree', revision], env, str(work),
                               deadline, clock)
-    records = {}
-    for entry in listed.split(b'\0')[:-1] if code == 0 else []:
-        head_part, _, name = entry.partition(b'\t')
-        mode, kind, oid = (head_part.split(b' ') + [b'', b''])[:3]
-        records[name] = (mode.decode(), oid.decode()) if kind == b'blob' else ('not a blob', '')
-    if code != 0 or records != expected:
-        problems.append('the commit tree is not exactly the pinned listing')
+    if code != 0 or listed.replace(b'\0', b'\n') != raw_listing:
+        problems.append('the commit tree is not byte for byte the pinned listing')
     code, config = out('config', '--local', '--list')
     keys = [line.split('=', 1)[0] for line in config.splitlines()]
     if code != 0 or sorted(keys) != sorted(GIT_CONFIG_KEYS):
         problems.append('the repository configuration is not exactly a new repository\'s')
+    code, refs = out('for-each-ref', '--format=%(refname)')
+    if code != 0 or refs.strip() or os.path.lexists(dotgit/'packed-refs'):
+        problems.append('a ref other than HEAD exists')
     for args in (('rev-parse', '--absolute-git-dir'), ('rev-parse', '--git-common-dir')):
         code, where = out(*args)
         resolved = os.path.realpath(work/where.strip()) if code == 0 and where.strip() else ''
@@ -882,24 +988,34 @@ def gitdir_problems(tree, work, inputs, expected, env, deadline, limit, clock=ti
 
 
 def adevtool_public_fetch(tree, plan, run_root, record, root=ROOT, protocol='https', seconds=ADEVTOOL_FETCH_SECONDS,
-                          limit=ADEVTOOL_GIT_BYTES, popen=subprocess.Popen, clock=time.monotonic, sleep=time.sleep):
-    """The admitted public fetch into the copy, as Blazer's git-meta: a new vendor/adevtool/.git with no templates
-    (no hooks), exactly the pinned commit fetched at depth 1 with no tags from the pinned manifest's source, and a
-    detached HEAD by update-ref. No command checks out, resets or writes the working tree. Then every acceptance item
-    (gitdir_problems). On any failure the .git this attempt created is removed and the run refuses; record (the
-    report's adevtoolGit section) says what happened."""
+                          limit=ADEVTOOL_GIT_BYTES, popen=subprocess.Popen, clock=time.monotonic, sleep=time.sleep,
+                          hasher=git_blob_id):
+    """The admitted public fetch (gitRequirement.publicFetch) into the copy: fetch_steps under fetch_env, then every
+    acceptance item (gitdir_problems) and the working tree again, all within the attempt's ceiling. On any failure the
+    .git this attempt created is removed, nothing else, and the run refuses; record (the report's adevtoolGit section)
+    says what happened."""
     inputs, url = plan['inputs'], plan['url']
     git = inputs['gitRequirement']
-    tree = Path(tree)
+    tree, run_root = Path(tree), Path(run_root)
     work = tree/git['project']
     dotgit = work/'.git'
-    if not url.startswith(protocol + '://'):
-        raise Refused(f'adevtool-git: the source is not {protocol}')
-    expected = lunch_listing(inputs, git['project'], root)
-    env = fetch_env(tree, Path(run_root)/'home', protocol)
-    deadline = clock() + seconds
     record.update(objectsSource='public-fetch', url=url, bounds={'seconds': seconds, 'gitBytes': limit,
                   'kind': 'first ceilings proposed by Infra, not measurements'})
+    if not url.startswith(protocol + '://'):
+        record.update(ok=False, error=f'the source is not {protocol}')
+        raise Refused(f'adevtool-git: the source is not {protocol}')
+    if work.is_symlink() or not work.is_dir() or os.path.lexists(dotgit):
+        record.update(ok=False, error='vendor/adevtool changed before the fetch')
+        raise Refused('adevtool-git: vendor/adevtool must be a plain directory with no .git before the fetch')
+    raw_listing = lunch_listing(inputs, git['project'], root, raw=True)
+    expected = lunch_listing(inputs, git['project'], root)
+    home = run_root/'tmp/adevtool-git-home'
+    if os.path.lexists(home):
+        record.update(ok=False, error='the fetch home already exists')
+        raise Refused('adevtool-git: the attempt-owned fetch home already exists')
+    home.mkdir(mode=0o700, parents=True)
+    env, lunch_env = fetch_env(tree, home, protocol), contained_env(run_root)
+    deadline = clock() + seconds
 
     def refuse(why):
         removed = None
@@ -915,22 +1031,20 @@ def adevtool_public_fetch(tree, plan, run_root, record, root=ROOT, protocol='htt
         record.update(ok=False, error=why, createdRemoved=removed)
         raise Refused(f'adevtool-git: {why}')
 
-    if work.is_symlink() or not work.is_dir() or os.path.lexists(dotgit):
-        record.update(ok=False, error='vendor/adevtool changed before the fetch')
-        raise Refused('adevtool-git: vendor/adevtool must be a plain directory with no .git before the fetch')
-    steps = [['git', 'init', '-q', '--template=', str(work)],
-             ['git', '-C', str(work), 'fetch', '--quiet', '--depth=1', '--no-tags', url, git['revision']],
-             ['git', '-C', str(work), 'update-ref', '--no-deref', 'HEAD', git['revision']]]
-    for argv in steps:
+    for argv in fetch_steps(work, url, git['revision']):
         code, stopped = bounded_git(argv, env, str(work), deadline, dotgit, limit, popen, clock, sleep)
         if code or stopped:
             refuse(f'{argv[3] if argv[1] == "-C" else argv[1]} failed: {stopped or "exit " + str(code)}')
-    problems = gitdir_problems(tree, work, inputs, expected, env, deadline, limit, clock)
+    problems = gitdir_problems(tree, work, inputs, raw_listing, env, lunch_env, deadline, limit, clock)
     if problems:
         refuse('; '.join(problems[:8]))
-    code, head = git_output(['git', '-C', str(work), 'rev-parse', 'HEAD'], env, str(work), deadline, clock)
+    try:
+        exact_tree(work, expected, ('.git',), hasher, deadline)
+    except Refused as error:
+        refuse(f'the working tree no longer holds: {error}')
+    code, head = git_output(['git', '-C', str(work), 'rev-parse', 'HEAD'], lunch_env, str(work), deadline, clock)
     record.update(ok=True, observedHead=head.decode().strip(), gitDirBytes=dir_bytes(dotgit), shallow=True,
-                  alternates=False, remote=False)
+                  alternates=False, remote=False, workingTreeHolds=True)
     return record
 
 
@@ -1279,12 +1393,23 @@ def task_root(binding, run_id, attempt):
 
 
 def copy_tree(source, destination, root=ROOT, statvfs=os.statvfs, planner=alpha_source.plan_copy,
-              copier=alpha_source.copy_tree, seconds=PREPARE_SECONDS):
-    """The reviewed alpha copy (plan, then alpha_source.copy_tree, which also rebases links) of the selection.
-    Refused before writing on plan problems, the source bound or the reserve; a wall-clock timer stops the copy at
-    `seconds` (the partial tree stays inside the run root and is reported, never used)."""
+              copier=alpha_source.copy_tree, seconds=PREPARE_SECONDS, omit=None):
+    """The reviewed alpha copy (plan, then alpha_source.copy_tree, which also rebases links) of the selection, minus
+    exactly what omit(path, is_dir) names (a frankel lunch: what vendor/adevtool's pinned .gitignore ignores).
+    Refused before writing on plan problems, a kept link into an omitted path, the source bound or the reserve; a
+    wall-clock timer stops the copy at `seconds` (the partial tree stays inside the run root and is reported, never
+    used)."""
     policy = json.loads((root/'os/release-pipeline/cuttlefish-alpha.json').read_text())['preparation']['exclusions']
     plan = planner(source, policy)
+    omitted = []
+    if omit is not None and not plan['problems']:
+        omitted = [e['path'] for e in plan['entries'] if omit(e['path'], e['type'] == 'dir')]
+        dropped = set(omitted)
+        kept = [e for e in plan['entries'] if e['path'] not in dropped]
+        types = {e['path']: e['type'] for e in plan['entries']}
+        plan = dict(plan, entries=kept, excluded=plan['excluded'] + [{'path': p, 'reason': 'omittedFromCopy'} for p in omitted],
+                    problems=[f'{e["path"]} links into the omitted {e["target"]}' for e in kept
+                              if e['type'] == 'link' and e.get('exists') and omit(e['target'], types.get(e['target']) == 'dir')])
     if plan['problems']:
         raise Refused(f'copy_refused: {len(plan["problems"])} problems, first: {plan["problems"][0]}')
     fs = statvfs(destination.parent)
@@ -1306,8 +1431,8 @@ def copy_tree(source, destination, root=ROOT, statvfs=os.statvfs, planner=alpha_
     finally:
         signal.setitimer(signal.ITIMER_REAL, 0)
         signal.signal(signal.SIGALRM, previous)
-    return {'entries': len(plan['entries']), 'excluded': len(plan['excluded']), 'projectedBytes': projected,
-            'availableBytesBefore': available}
+    return {'entries': len(plan['entries']), 'excluded': len(plan['excluded']), 'omitted': len(omitted),
+            'projectedBytes': projected, 'availableBytesBefore': available}
 
 
 def bound_json(path):
@@ -1364,7 +1489,12 @@ def run(binding, manifest, run_id, attempt, root=ROOT, lock=None, copier=copy_tr
             for name in ('home', 'tmp', 'out'):
                 (run_root/name).mkdir(mode=0o700)
             tree = run_root/'tree'
-            report['copy'] = copier(Path(binding['sourceTree']), tree)
+            if plan is not None:
+                project = plan['inputs']['gitRequirement']['project'] + '/'
+                report['copy'] = copier(Path(binding['sourceTree']), tree, omit=lambda rel, is_dir: rel.startswith(project)
+                                        and adevtool_ignored(rel[len(project):], is_dir))
+            else:
+                report['copy'] = copier(Path(binding['sourceTree']), tree)
             try:
                 policy, policy_sha = (policy_loader or bound_json)(binding['policyReceipt']['path'])
             except (OSError, ValueError):
@@ -1401,7 +1531,8 @@ def run(binding, manifest, run_id, attempt, root=ROOT, lock=None, copier=copy_tr
                 if leaked:
                     raise Refused('lunch-inputs: the lunch environment passes ' + ', '.join(leaked))
                 report['lunchInputs'] = (inputs_check or lunch_input_checks)(tree, plan['inputs'], root,
-                                                                              clock() + LUNCH_INPUT_SECONDS)
+                                                                              clock() + LUNCH_INPUT_SECONDS,
+                                                                              exact=plan.get('exact'))
                 report['adevtoolGit'] = {}
                 (fetcher or adevtool_public_fetch)(tree, plan, run_root, report['adevtoolGit'], root)
             code, stopped = compiler(lunch_argv(binding['lunch']), env, str(tree), LUNCH_SECONDS, str(out))

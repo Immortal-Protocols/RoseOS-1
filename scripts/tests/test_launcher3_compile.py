@@ -46,6 +46,107 @@ contract = contract_module()
 BINDING = json.loads((ROOT/'os/build-only/launcher3-compile-host.json').read_text())
 LUNCH_INPUTS = ROOT/'os/compile-contracts/frankel-lunch-inputs.json'
 EMPTY_BLOB = 'e69de29bb2d1d6434b8b29ae775ad8c2e48c5391'
+# OS Product's proposed amendment of frankel-lunch-inputs.json as written on its branch at bc70e30 (the public-fetch
+# option row, publicFetch, workingTree and each source's workingTreeCheck). The pinned contract does not hold it yet;
+# the re-pin that lands with the merged amendment replaces this with the pinned file itself.
+AMENDMENT = {'options': [{'class': 'public-fetch',
+                          'status': 'allowed only under a separate runtime approval for its source and bounds; the interface is '
+                                    'publicFetch; Release owns the mechanism',
+                          'url': 'https://github.com/GrapheneOS/adevtool'}],
+             'publicFetch': {'acceptance': ['gitRequirement.acceptance items 1-3, unchanged',
+                                            'rev-parse --verify revision^{tree} is exactly rootTree (Blazer checks only that it '
+                                            'exists)',
+                                            "git fsck --no-dangling --no-progress succeeds: a full check, so every object's hash "
+                                            'and every link from the commit are verified (not --connectivity-only)',
+                                            'git ls-tree -r -z --full-tree revision, each NUL replaced by LF, is byte for byte '
+                                            'the decompressed sources[vendor/adevtool].listing (its sha256)',
+                                            'shallow is exactly revision plus one newline',
+                                            'no objects/info/alternates and no remote.* key in git config --local --list',
+                                            'workingTree holds'],
+                             'basis': "Infra's assessment of adevtool_git_missing (2026-11-04): the isolated copy excludes every "
+                                      ".git, so lunch needs genuine metadata for this one project. This follows Blazer's "
+                                      'git-meta steps (scripts/blazer-build-only.py git_meta_argv and git_meta) with a stricter '
+                                      'tree check',
+                             'ceiling': {'bytes': 1073741824,
+                                         'kind': "Infra's proposed execution ceiling for the attempt; neither a measured "
+                                                 'requirement nor a runtime approval',
+                                         'seconds': 1800},
+                             'cleanup': 'on any failure, remove only the .git this attempt created; nothing else in the copy, '
+                                        'and never anything in the source tree',
+                             'environment': {'GIT_ALLOW_PROTOCOL': 'https',
+                                             'GIT_ASKPASS': '/bin/false',
+                                             'GIT_CEILING_DIRECTORIES': 'the copy root',
+                                             'GIT_CONFIG_GLOBAL': '/dev/null',
+                                             'GIT_CONFIG_NOSYSTEM': '1',
+                                             'GIT_TERMINAL_PROMPT': '0',
+                                             'HOME': 'an attempt-owned empty directory (also XDG_CONFIG_HOME)',
+                                             'PATH': '/usr/bin:/bin',
+                                             'SSH_ASKPASS': '/bin/false',
+                                             'unset': 'GIT_*'},
+                             'establishes': 'the genuine objects of public commit revision, by content addressing (commit, tree, '
+                                            'blobs, each hash-checked); not provenance from the production gitdir, which only '
+                                            'genuine-copy shows. Tree equality, a full fsck and working-tree equality are '
+                                            'stronger than the functional minimum',
+                             'never': ['--reference, --shared, --dissociate or --separate-git-dir',
+                                       'objects/info/alternates',
+                                       'a configured remote',
+                                       'inherited system or global config',
+                                       'hooks or templates',
+                                       'any command that reads or writes the working tree (checkout, reset, status, add)',
+                                       'tags or any ref other than HEAD'],
+                             'protocol': 'https only',
+                             'steps': ['git init -q --template= <copy>/vendor/adevtool',
+                                       'git -C <copy>/vendor/adevtool fetch --quiet --depth=1 --no-tags <url> '
+                                       '17df3b79a73e67ad68387b35c7d41c85e1d8103c',
+                                       'git -C <copy>/vendor/adevtool update-ref --no-deref HEAD '
+                                       '17df3b79a73e67ad68387b35c7d41c85e1d8103c'],
+                             'target': '<copy>/vendor/adevtool/.git: a new directory, created by the attempt inside the isolated '
+                                       "copy only, after the copy's own checks; never the source tree",
+                             'unbound': 'sourceTree, lunch, policy and integration-report bindings stay unbound; without an '
+                                        'approved attempt that passes, the adapter still refuses with adevtool_git_missing',
+                             'url': 'https://github.com/GrapheneOS/adevtool'},
+             'workingTree': {'omittedFromCopy': {'gitBlob': '969b2c305b39480d6f7f68dac493744e204de8d3',
+                                                 'gitignore': ['/.idea/',
+                                                               '/dist/',
+                                                               '!/dl/',
+                                                               '/dl/*',
+                                                               '!/dl/.find-ignore',
+                                                               '/lib/',
+                                                               '/node_modules/'],
+                                                 'means': 'the copy leaves out exactly what these pinned .gitignore rules ignore '
+                                                          '(git check-ignore semantics, from the project root); a tracked path '
+                                                          'is never omitted'},
+                             'onUnlisted': 'refuse, naming every unlisted path found (bounded), so a first run reports what a '
+                                           'real tree holds instead of admitting it',
+                             'project': 'vendor/adevtool',
+                             'rule': 'every path of sources[vendor/adevtool].listing is present with exactly its mode and blob, '
+                                     'and nothing else is, except .git (gitRequirement)',
+                             'untrackedAllowed': [],
+                             'why': 'the product finder prunes only dl/ and vendor-skels/ (finderPrune), so untracked content '
+                                    'anywhere else, such as node_modules/, would be scanned at lunch as an unpinned input'},
+             'workingTreeCheck': {'build/make': 'derivation only: apply-os-changes.py patches build/make (agent tray, updater, '
+                                                'background control), so the integrated working tree is not this listing; those '
+                                                'post-images belong to an integration report',
+                                  'device/google/laguna-kernels/6.6': 'exact: no RoseOS patch or overlay touches it, so every '
+                                                                      'listed path is present with exactly its mode and blob and '
+                                                                      'nothing else is',
+                                  'vendor/adevtool': 'exact: gitRequirement.workingTree'}}
+
+
+def amended(edit=None):
+    """(path, sha256) of the pinned contract plus OS Product's amendment, optionally edited, in a temporary file."""
+    record = json.loads(LUNCH_INPUTS.read_text())
+    git = record['gitRequirement']
+    git['options'] = [o for o in git['options'] if o['class'] != 'public-fetch'] + AMENDMENT['options']
+    git.update(publicFetch=json.loads(json.dumps(AMENDMENT['publicFetch'])),
+               workingTree=json.loads(json.dumps(AMENDMENT['workingTree'])))
+    for row in record['sources']:
+        row['workingTreeCheck'] = AMENDMENT['workingTreeCheck'][row['path']]
+    if edit:
+        edit(record)
+    target = Path(tempfile.mkdtemp())/'frankel-lunch-inputs.json'
+    target.write_bytes(json.dumps(record).encode())
+    return target, sha(target.read_bytes())
 GIB = 1 << 30
 
 
@@ -318,14 +419,11 @@ class Contract(unittest.TestCase):
         self.assertIn('https://github.com/GrapheneOS/adevtool', result.stderr)
 
     def test_an_admitted_fetch_adds_the_lunch_inputs_and_the_fetch_to_the_bounds(self):
-        admitted = json.loads(LUNCH_INPUTS.read_text())
-        admitted['gitRequirement']['options'].append({'class': 'public-fetch', 'status': 'allowed (test)',
-                                                       'url': 'https://github.com/GrapheneOS/adevtool'})
-        contract_path = Path(tempfile.mkdtemp())/'frankel-lunch-inputs.json'
-        contract_path.write_bytes(json.dumps(admitted).encode())
+        contract_path, pin = amended()
         binding = self.binding(lunch='frankel-cur-user', adevtoolGit='public-fetch')
-        manifest, record, plan = adapter.check(binding, inputs_path=contract_path, inputs_pin=sha(contract_path.read_bytes()))
+        manifest, record, plan = adapter.check(binding, inputs_path=contract_path, inputs_pin=pin)
         self.assertEqual(plan['url'], 'https://github.com/GrapheneOS/adevtool')
+        self.assertEqual(plan['exact'], ['vendor/adevtool', 'device/google/laguna-kernels/6.6'])  # not build/make
         self.assertEqual(record['adevtoolGit'], 'public-fetch')
         stdout, original = io.StringIO(), adapter.lunch_plan
         adapter.lunch_plan = lambda *args: plan
@@ -344,6 +442,40 @@ class Contract(unittest.TestCase):
                     plan['url']))
         twice = [{'class': 'public-fetch', 'status': 'allowed', 'url': plan['url']}] * 2
         self.assertIsNone(adapter.public_fetch_option({'gitRequirement': {'options': twice}}, plan['url']))
+
+    def test_os_products_amendment_is_admitted_only_as_exactly_this_adapters_mechanism(self):
+        binding = json.loads(self.binding(lunch='frankel-cur-user', adevtoolGit='public-fetch').read_text())
+        contract_path, pin = amended()
+        self.assertEqual(adapter.lunch_plan(binding, ROOT, contract_path, pin)['url'], 'https://github.com/GrapheneOS/adevtool')
+        fetch = lambda d: d['gitRequirement']['publicFetch']  # noqa: E731
+        tree = lambda d: d['gitRequirement']['workingTree']  # noqa: E731
+        cases = [('steps', lambda d: fetch(d)['steps'].__setitem__(1, fetch(d)['steps'][1].replace('--depth=1', '--depth=2')),
+                  'steps'),
+                 ('environment', lambda d: fetch(d)['environment'].update(GIT_ALLOW_PROTOCOL='https,file'), 'environment'),
+                 ('extra variable', lambda d: fetch(d)['environment'].update(LD_PRELOAD='/x.so'), 'environment'),
+                 ('ceiling', lambda d: fetch(d)['ceiling'].update(seconds=3600), 'ceiling'),
+                 ('url', lambda d: fetch(d).update(url='https://github.com/example/adevtool'), 'url'),
+                 ('omitted', lambda d: tree(d)['omittedFromCopy']['gitignore'].append('/vendor-skels/'), 'workingTree'),
+                 ('untracked', lambda d: tree(d).update(untrackedAllowed=['/node_modules/']), 'workingTree'),
+                 ('unknown check', lambda d: d['sources'][1].update(workingTreeCheck='sometimes'), 'workingTreeCheck'),
+                 ('adevtool not exact', lambda d: d['sources'][0].update(workingTreeCheck='derivation only'), 'exactly')]
+        for name, edit, word in cases:
+            with self.subTest(name=name):
+                contract_path, pin = amended(edit)
+                with self.assertRaisesRegex(adapter.Invalid, word):
+                    adapter.lunch_plan(binding, ROOT, contract_path, pin)
+        # the url on the option row decides the admission itself
+        contract_path, pin = amended(lambda d: d['gitRequirement']['options'][-1].update(url='https://example.invalid/x'))
+        with self.assertRaisesRegex(adapter.Unbound, 'adevtool_git_unadmitted'):
+            adapter.lunch_plan(binding, ROOT, contract_path, pin)
+
+    def test_the_omitted_rules_drop_no_tracked_path_of_the_pinned_listing(self):
+        listed = adapter.lunch_listing(adapter.load_lunch_inputs(), 'vendor/adevtool')
+        dropped = [p for p in listed if any(adapter.adevtool_ignored('/'.join(os.fsdecode(p).split('/')[:i]),
+                                                                    i < len(os.fsdecode(p).split('/')))
+                                            for i in range(1, len(os.fsdecode(p).split('/')) + 1))]
+        self.assertEqual(dropped, [])
+        self.assertIn(b'dl/.find-ignore', listed)
 
     def test_invalid_bindings_refuse(self):
         for change in ({'host': 'other'}, {'taskParent': '/tmp'}, {'branch': 'mixed'}, {'sourceTree': 'relative'},
@@ -1014,8 +1146,9 @@ class Run(unittest.TestCase):
         self.lunch_result = (0, None)
 
     def copier(self, state='post'):
-        def copy(source, destination):
-            self.calls.append('copy')
+        def copy(source, destination, omit=None):
+            self.calls.append('copy' if omit is None else ('copy', omit('vendor/adevtool/node_modules', True),
+                                                           omit('vendor/adevtool/dl/.find-ignore', False)))
             Synthetic(destination, self.s.repo).write(state)
             return {'entries': 1}
         return copy
@@ -1207,10 +1340,11 @@ class Run(unittest.TestCase):
 
     def admitted(self, inputs_check=None, fetcher=None, unset=('BUILD_ID_frankel', 'TARGET_KERNEL_DIR', 'USE_STOCK_KERNEL')):
         self.binding.update(lunch='frankel-cur-user', adevtoolGit='public-fetch')
-        plan = {'inputs': {'environment': {'unset': ['GIT_*', *unset]}}, 'url': 'https://github.com/GrapheneOS/adevtool'}
+        plan = {'inputs': {'environment': {'unset': ['GIT_*', *unset]}, 'gitRequirement': {'project': 'vendor/adevtool'}},
+                'url': 'https://github.com/GrapheneOS/adevtool', 'exact': ['vendor/adevtool']}
 
-        def checks(tree, inputs, root, deadline):
-            self.calls.append('lunch-inputs')
+        def checks(tree, inputs, root, deadline, exact=None):
+            self.calls.append(('lunch-inputs', tuple(exact)))
             return {'contractSha256': 'checked'}
 
         def fetch(tree, plan, run_root, record, root):
@@ -1225,19 +1359,21 @@ class Run(unittest.TestCase):
 
     def test_an_admitted_lunch_checks_its_inputs_and_fetches_after_the_branch_and_before_lunch(self):
         self.assertEqual(self.admitted(), 0)
-        self.assertEqual(self.calls[:4], ['copy', ('pins', 'final'), 'lunch-inputs', 'fetch'])
+        # the copy omits node_modules but keeps the tracked dl/.find-ignore; the checks get the plan's exact sources
+        self.assertEqual(self.calls[:4], [('copy', True, False), ('pins', 'final'), ('lunch-inputs', ('vendor/adevtool',)),
+                                          'fetch'])
         self.assertEqual([c[0] for c in self.calls[4:6]], ['lunch', 'compile'])
         report = self.report()
         self.assertEqual((report['lunchInputs'], report['adevtoolGit']), ({'contractSha256': 'checked'}, {'ok': True}))
 
     def test_an_environment_the_contract_unsets_refuses_before_any_lunch_input_or_fetch(self):
         self.assertEqual(self.admitted(unset=('TMPDIR',)), 3)  # the contained environment does set TMPDIR
-        self.assertEqual(self.calls, ['copy', ('pins', 'final')])
+        self.assertEqual(self.calls, [('copy', True, False), ('pins', 'final')])
         self.assertEqual(self.report()['refused'], 'lunch-inputs: the lunch environment passes TMPDIR')
 
     def test_a_refused_lunch_input_or_fetch_stops_before_lunch(self):
         def refuse(word):
-            def fail(*args):
+            def fail(*args, **kwargs):
                 self.calls.append(word)
                 raise adapter.Refused(f'{word}: refused here')
             return fail
@@ -1300,17 +1436,27 @@ class LunchFixture:
             target.write_bytes(data)
             os.chmod(target, mode)
 
-    def contract(self, raw):
+    def listing(self, raw, name):
         (self.repo/'fixtures').mkdir(parents=True, exist_ok=True)
         packed = gzip.compress(raw, mtime=0)
-        (self.repo/self.listing_path).write_bytes(packed)
-        listing = {'path': self.listing_path, 'sha256': sha(raw), 'compressedSha256': sha(packed),
-                   'paths': raw.count(b'\n')}
+        relative = f'fixtures/{name}.ls-tree.txt.gz'
+        (self.repo/relative).write_bytes(packed)
+        return {'path': relative, 'sha256': sha(raw), 'compressedSha256': sha(packed), 'paths': raw.count(b'\n')}
+
+    def contract(self, raw):
+        listing = self.listing(raw, 'adevtool')
+        self.raw = raw
         kernel = b'module_a.ko\n'
         return {'schemaVersion': 1, 'kind': 'rose-frankel-lunch-inputs',
                 'lunch': {'target': 'frankel-cur-user', 'product': 'frankel', 'release': 'cur', 'variant': 'user'},
                 'sources': [{'path': 'vendor/adevtool', 'revision': self.revision, 'rootTree': self.root_tree,
-                             'listing': listing}],
+                             'listing': listing, 'workingTreeCheck': 'exact: gitRequirement.workingTree'},
+                            {'path': 'device/kernels', 'revision': '2' * 40, 'rootTree': '3' * 40,
+                             'listing': self.listing(b'100755 blob %s\tmuzel/vendor_dlkm.modules.load\n' % blob(kernel).encode(),
+                                                     'kernels'), 'workingTreeCheck': 'exact: untouched'},
+                            {'path': 'build/make', 'revision': '4' * 40, 'rootTree': '5' * 40,
+                             'listing': self.listing(b'100644 blob %s\tcore/main.mk\n' % (b'0' * 40), 'make'),
+                             'workingTreeCheck': 'derivation only: patched by integration'}],
                 'gitRequirement': {'project': 'vendor/adevtool', 'revision': self.revision, 'rootTree': self.root_tree,
                                    'path': 'vendor/adevtool/.git', 'options': []},
                 'environment': {'unset': ['GIT_*', 'BUILD_ID_frankel', 'TARGET_KERNEL_DIR', 'USE_STOCK_KERNEL']},
@@ -1391,13 +1537,24 @@ class LunchChecks(unittest.TestCase):
     def setUp(self):
         self.f = LunchFixture()
 
-    def check(self):
-        return adapter.lunch_input_checks(self.f.tree, self.f.inputs, root=self.f.repo)
+    def check(self, exact=None):
+        return adapter.lunch_input_checks(self.f.tree, self.f.inputs, root=self.f.repo, exact=exact)
+
+    def test_the_kernel_module_lists_are_checked_even_where_their_tree_is_not_exact(self):
+        for name, change in (('mode', lambda: os.chmod(self.f.tree/'device/kernels/muzel/vendor_dlkm.modules.load', 0o644)),
+                             ('empty', lambda: (self.f.tree/'device/kernels/muzel/vendor_dlkm.modules.load').write_bytes(b''))):
+            with self.subTest(name=name):
+                self.f.make_copy()
+                change()
+                with self.assertRaisesRegex(adapter.Refused, 'the kernel module list device/kernels/muzel/vendor_dlkm'):
+                    self.check(exact=['vendor/adevtool'])
 
     def test_an_exact_copy_passes_every_check_and_nothing_is_written(self):
         before = self.f.work_state()
         result = self.check()
-        self.assertEqual(result['adevtoolTree'], {'paths': len(self.f.files), 'equalsListing': True})
+        self.assertEqual(result['exactTrees'], {'vendor/adevtool': {'paths': len(self.f.files), 'equalsListing': True},
+                                                'device/kernels': {'paths': 1, 'equalsListing': True}})
+        # build/make is derivation only: its listing (a wrong blob here) is never compared
         self.assertEqual((result['observable'], result['finderMarkers'], result['kernelModuleLists'], result['manifestFiles']),
                          (1, 2, 1, 2))
         self.assertEqual(self.f.work_state(), before)
@@ -1407,18 +1564,23 @@ class LunchChecks(unittest.TestCase):
         t = self.f.tree
         cases = [
             ('untracked', lambda: (t/'vendor/adevtool/node_modules').mkdir() or (t/'vendor/adevtool/node_modules/x').write_bytes(b'x'),
-             'extra against the tree pin'),
+             r'unlisted 1: node_modules/x'),
             ('edited spec', lambda: (t/'vendor/adevtool/vendor-specs/google_devices/frankel.yml').write_bytes(b'edited\n'),
-             'different against the tree pin'),
-            ('removed', lambda: (t/'vendor/adevtool/README.md').unlink(), 'missing against the tree pin'),
-            ('mode', lambda: os.chmod(t/'vendor/adevtool/bin/run', 0o644), 'different against the tree pin'),
+             r'different 1: vendor-specs/google_devices/frankel.yml'),
+            ('removed', lambda: (t/'vendor/adevtool/README.md').unlink(), r'missing 1: README.md'),
+            ('mode', lambda: os.chmod(t/'vendor/adevtool/bin/run', 0o644), r'different 1: bin/run'),
+            ('kernel tree extra', lambda: (t/'device/kernels/muzel/extra.ko').write_bytes(b'x'),
+             r'device/kernels: kernels is not exactly its pinned tree \(unlisted 1: muzel/extra.ko\)'),
             ('git present', lambda: (t/'vendor/adevtool/.git').mkdir(), 'no .git before the fetch'),
             ('warning form', lambda: (t/'vendor/google_devices/frankel/adevtool-version-check.mk').write_bytes(
                 VERSION_ERROR.replace(b'error', b'warning')), 'not the error form'),
             ('observable', lambda: (t/'vendor/google_devices/frankel/frankel.mk').write_bytes(b'other\n'),
              'generated vendor file'),
-            ('kernel mode', lambda: os.chmod(t/'device/kernels/muzel/vendor_dlkm.modules.load', 0o644), 'kernel module list'),
-            ('kernel empty', lambda: (t/'device/kernels/muzel/vendor_dlkm.modules.load').write_bytes(b''), 'kernel module list'),
+            # the kernel directory is an exact source, so its own tree check names a changed list first
+            ('kernel mode', lambda: os.chmod(t/'device/kernels/muzel/vendor_dlkm.modules.load', 0o644),
+             'different 1: muzel/vendor_dlkm.modules.load'),
+            ('kernel empty', lambda: (t/'device/kernels/muzel/vendor_dlkm.modules.load').write_bytes(b''),
+             'different 1: muzel/vendor_dlkm.modules.load'),
             ('link elsewhere', lambda: (t/'build/core').unlink() or os.symlink('/elsewhere/core', t/'build/core'),
              'does not link'),
             ('link a directory', lambda: (t/'build/core').unlink() or (t/'build/core').mkdir(), 'not the manifest link'),
@@ -1431,11 +1593,74 @@ class LunchChecks(unittest.TestCase):
                 change()
                 with self.assertRaisesRegex(adapter.Refused, word):
                     self.check()
+        self.f.make_copy()  # every difference is named, each list bounded
+        for i in range(adapter.REPORT_ERRORS + 5):
+            (t/f'vendor/adevtool/extra-{i:02}').write_bytes(b'x')
+        (t/'vendor/adevtool/README.md').write_bytes(b'changed\n')
+        with self.assertRaises(adapter.Refused) as caught:
+            self.check()
+        message = str(caught.exception)
+        self.assertIn(f'different 1: README.md; unlisted {adapter.REPORT_ERRORS + 5}: extra-00', message)
+        self.assertIn(f'extra-{adapter.REPORT_ERRORS - 1:02}', message)
+        self.assertNotIn(f'extra-{adapter.REPORT_ERRORS:02}', message)
         self.f.make_copy()
         marker = dict(self.f.inputs['finderPrune']['markers'][0], path='vendor/adevtool/missing/.find-ignore')
         self.f.inputs['finderPrune']['markers'].append(marker)
         with self.assertRaisesRegex(adapter.Refused, 'finder marker'):
             self.check()
+
+
+class Omitted(unittest.TestCase):
+    def test_the_rules_are_git_check_ignore_of_the_pinned_gitignore(self):
+        repo = Path(tempfile.mkdtemp())
+        git('init', '-q', str(repo), cwd=repo)
+        (repo/'.gitignore').write_text('\n'.join(adapter.ADEVTOOL_IGNORED) + '\n')
+        cases = {'.idea': True, '.idea/workspace.xml': False, 'dist': True, 'dist/a.js': False, 'lib': True,
+                 'lib/x/y.js': False, 'node_modules': True, 'node_modules/p/index.js': False, 'dl': True,
+                 'dl/.find-ignore': False, 'dl/frankel-factory.zip': False, 'dl/unpacked': True, 'dl/unpacked/a/b': False,
+                 'src/lib': True, 'src/lib/x.ts': False, 'a/node_modules': True, 'dl2': True, 'dist.txt': False,
+                 'distfile': False, 'vendor-skels/.find-ignore': False, 'README.md': False}
+        for relative, is_dir in cases.items():
+            target = repo/relative
+            if is_dir:
+                target.mkdir(parents=True, exist_ok=True)
+            else:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(b'')
+        for relative, is_dir in cases.items():
+            with self.subTest(path=relative):
+                ignored = subprocess.run(['git', '-C', str(repo), 'check-ignore', '-q', '--no-index', relative],
+                                         capture_output=True, env=dict(os.environ, GIT_CONFIG_NOSYSTEM='1',
+                                                                       GIT_CONFIG_GLOBAL='/dev/null')).returncode == 0
+                parts = relative.split('/')
+                ours = any(adapter.adevtool_ignored('/'.join(parts[:i]), i < len(parts) or is_dir)
+                           for i in range(1, len(parts) + 1))
+                self.assertEqual(ours, ignored)
+
+    def test_the_copy_leaves_out_exactly_the_omitted_paths_before_its_bounds(self):
+        entries = [{'path': p, 'type': t, 'size': s} for p, t, s in (
+            ('vendor', 'dir', 0), ('vendor/adevtool', 'dir', 0), ('vendor/adevtool/README.md', 'file', 3),
+            ('vendor/adevtool/node_modules', 'dir', 0), ('vendor/adevtool/node_modules/big.js', 'file', 10 * GIB),
+            ('vendor/adevtool/dl', 'dir', 0), ('vendor/adevtool/dl/.find-ignore', 'file', 0),
+            ('vendor/adevtool/dl/image.zip', 'file', 5 * GIB), ('src/lib', 'dir', 0), ('src/lib/x.ts', 'file', 1))]
+        planned = {'entries': entries, 'excluded': [], 'problems': []}
+        copied = {}
+
+        def copier(source, tree, final, plan):
+            copied['paths'] = [e['path'] for e in plan['entries']]
+        fs = type('fs', (), {'f_bavail': 1 << 40, 'f_frsize': 1})
+        project = 'vendor/adevtool/'
+        omit = lambda rel, is_dir: rel.startswith(project) and adapter.adevtool_ignored(rel[len(project):], is_dir)  # noqa: E731
+        result = adapter.copy_tree(Path('/src'), Path(tempfile.mkdtemp())/'tree', planner=lambda s, p: planned,
+                                   copier=copier, statvfs=lambda p: fs, omit=omit)
+        self.assertEqual(copied['paths'], ['vendor', 'vendor/adevtool', 'vendor/adevtool/README.md', 'vendor/adevtool/dl',
+                                           'vendor/adevtool/dl/.find-ignore', 'src/lib', 'src/lib/x.ts'])
+        self.assertEqual((result['omitted'], result['projectedBytes']), (3, 4))  # the omitted 15 GiB never counts
+        linked = dict(planned, entries=entries + [{'path': 'tools/js', 'type': 'link', 'text': '../vendor/adevtool/node_modules',
+                                                   'kind': 'relative', 'target': 'vendor/adevtool/node_modules', 'exists': True}])
+        with self.assertRaisesRegex(adapter.Refused, 'copy_refused: 1 problems, first: tools/js links into the omitted'):
+            adapter.copy_tree(Path('/src'), Path(tempfile.mkdtemp())/'tree', planner=lambda s, p: linked, copier=copier,
+                              statvfs=lambda p: fs, omit=omit)
 
 
 class Fetch(unittest.TestCase):
@@ -1462,10 +1687,14 @@ class Fetch(unittest.TestCase):
         head = subprocess.run(['git', '-C', str(self.f.tree/'vendor/adevtool'), 'rev-parse', 'HEAD'], env=env,
                               capture_output=True, text=True)
         self.assertEqual(head.stdout.strip(), self.f.revision)
-        self.assertEqual(adapter.gitdir_problems(self.f.tree, self.f.tree/'vendor/adevtool', self.f.inputs,
-                                                 adapter.lunch_listing(self.f.inputs, 'vendor/adevtool', self.f.repo),
-                                                 adapter.fetch_env(self.f.tree, self.f.tree.parent/'home', 'file'),
-                                                 time.monotonic() + 60, adapter.ADEVTOOL_GIT_BYTES), [])
+        self.assertTrue(self.record['workingTreeHolds'])
+        self.assertEqual(self.problems(), [])
+
+    def problems(self):
+        return adapter.gitdir_problems(self.f.tree, self.f.tree/'vendor/adevtool', self.f.inputs, self.f.raw,
+                                       adapter.fetch_env(self.f.tree, self.f.tree.parent/'home', 'file'),
+                                       adapter.contained_env(self.f.tree.parent), time.monotonic() + 60,
+                                       adapter.ADEVTOOL_GIT_BYTES)
 
     def test_a_failed_fetch_or_check_removes_only_the_git_it_created(self):
         other = json.loads(json.dumps(self.f.inputs))
@@ -1488,7 +1717,7 @@ class Fetch(unittest.TestCase):
     def test_a_listing_that_is_not_the_commit_tree_refuses(self):
         raw = git('ls-tree', '-r', self.f.revision, cwd=self.f.upstream)
         self.f.inputs = self.f.contract(raw.replace(b'README.md', b'README.txt'))
-        with self.assertRaisesRegex(adapter.Refused, 'not exactly the pinned listing'):
+        with self.assertRaisesRegex(adapter.Refused, 'not byte for byte the pinned listing'):
             self.fetch()
         self.assertFalse(os.path.lexists(self.f.tree/'vendor/adevtool/.git'))
 
@@ -1520,26 +1749,48 @@ class Fetch(unittest.TestCase):
                  ('remote', lambda: git('remote', 'add', 'origin', 'https://example.invalid/x', cwd=work),
                   'configuration is not exactly'),
                  ('symbolic head', lambda: (dotgit/'HEAD').write_text('ref: refs/heads/main\n'), 'HEAD is not exactly'),
+                 ('branch', lambda: git('update-ref', 'refs/heads/main', self.f.revision, cwd=work), 'a ref other than HEAD'),
+                 ('tag', lambda: git('update-ref', 'refs/tags/v1', self.f.revision, cwd=work), 'a ref other than HEAD'),
+                 ('packed refs', lambda: (dotgit/'packed-refs').write_text(f'{self.f.revision} refs/heads/x\n'),
+                  'a ref other than HEAD'),
                  ('not shallow', lambda: (dotgit/'shallow').unlink(), 'shallow is not exactly')]
         for name, change, word in cases:
             with self.subTest(name=name):
                 shutil.rmtree(dotgit)
                 shutil.copytree(pristine, dotgit, symlinks=True)
                 change()
-                problems = adapter.gitdir_problems(self.f.tree, work, self.f.inputs,
-                                                   adapter.lunch_listing(self.f.inputs, 'vendor/adevtool', self.f.repo),
-                                                   adapter.fetch_env(self.f.tree, self.f.tree.parent/'home', 'file'),
-                                                   time.monotonic() + 60, adapter.ADEVTOOL_GIT_BYTES)
+                problems = self.problems()
                 self.assertTrue(any(word in p for p in problems), problems)
         shutil.rmtree(dotgit)
         dotgit.write_text(f'gitdir: {pristine}\n')  # a gitfile pointing outside
-        self.assertEqual(adapter.gitdir_problems(self.f.tree, work, self.f.inputs, {}, {}, time.monotonic() + 60, 1),
+        self.assertEqual(adapter.gitdir_problems(self.f.tree, work, self.f.inputs, b'', {}, {}, time.monotonic() + 60, 1),
                          ['vendor/adevtool/.git is not a directory'])
+
+    def test_a_working_tree_that_no_longer_holds_after_the_fetch_refuses_and_removes_the_git(self):
+        def hasher(data):
+            return adapter.git_blob_id(data) if data != b'adevtool pinned\n' else '0' * 40
+        with self.assertRaisesRegex(adapter.Refused, r'working tree no longer holds: .*different 1: README.md'):
+            self.fetch(hasher=hasher)
+        self.assertFalse(os.path.lexists(self.f.tree/'vendor/adevtool/.git'))
+        self.assertEqual(self.record['createdRemoved'], True)
+
+    def test_the_steps_are_os_products_and_blazers(self):
+        revision = '17df3b79a73e67ad68387b35c7d41c85e1d8103c'
+        self.assertEqual([' '.join(s) for s in adapter.fetch_steps('<copy>/vendor/adevtool', '<url>', revision)],
+                         AMENDMENT['publicFetch']['steps'])
+        spec = importlib.util.spec_from_file_location('blazer_build_only', ROOT/'scripts/blazer-build-only.py')
+        blazer = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(blazer)
+        self.assertEqual(adapter.fetch_steps('/w', 'https://u', revision), blazer.git_meta_argv('/w', 'https://u', revision))
+        self.assertEqual(adapter.FETCH_ENV_SPEC, AMENDMENT['publicFetch']['environment'])
 
     def test_the_fetch_environment_inherits_no_git_and_only_the_source_protocol(self):
         with unittest.mock.patch.dict(os.environ, {'GIT_DIR': '/elsewhere', 'GIT_CONFIG_PARAMETERS': "'core.x=1'",
                                                    'HTTPS_PROXY': 'http://proxy.invalid:3128'}):
             env = adapter.fetch_env(Path('/run/tree'), Path('/run/home'))
+        self.assertEqual(sorted(k for k in env if k.startswith('GIT_')),
+                         sorted(k for k in adapter.FETCH_ENV_SPEC if k.startswith('GIT_')))
+        self.assertEqual((env['HOME'], env['XDG_CONFIG_HOME']), ('/run/home', '/run/home'))
         self.assertNotIn('GIT_DIR', env)
         self.assertNotIn('GIT_CONFIG_PARAMETERS', env)
         self.assertEqual(env['HTTPS_PROXY'], 'http://proxy.invalid:3128')  # the job's network setup is kept
