@@ -20,6 +20,7 @@ final class RoseChannels {
     static final String PROD = "prod";
     static final String LEGACY_BETA = "stable";
     static final String ALPHA = "alpha";
+    static final String SECURITY_PREVIEW_SUFFIX = "-security-preview";
     /** Set on the first boot of a build carrying these rules, so migration runs at most once. */
     static final String KEY_MIGRATED = "rose_channel_migrated";
 
@@ -35,6 +36,20 @@ final class RoseChannels {
     static String migration(boolean hasStoredChannel, boolean migratedBefore, boolean firstBootAfterOta) {
         if (hasStoredChannel || migratedBefore || !firstBootAfterOta) return null;
         return LEGACY_BETA;
+    }
+
+    /** Preserve an explicit choice; setup may opt in by default only to a published preview feed. */
+    static boolean securityPreviewAtSetup(int stored, String baseChannel, Set<String> published) {
+        if (stored == 0) return false;
+        if (stored == 1) return true;
+        return published.contains(baseChannel + SECURITY_PREVIEW_SUFFIX);
+    }
+
+    /** A normal feed the user can explicitly return to from an unavailable preview variant. */
+    static String publishedBaseOfPreview(String channel, Set<String> published) {
+        if (channel == null || !channel.endsWith(SECURITY_PREVIEW_SUFFIX)) return null;
+        String base = channel.substring(0, channel.length() - SECURITY_PREVIEW_SUFFIX.length());
+        return published.contains(base) ? base : null;
     }
 
     /**
