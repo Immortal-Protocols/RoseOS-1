@@ -1,6 +1,6 @@
 """FRANKEL-FACTORY: the manual frankel-factory-observe and frankel-factory-package modes of
 .github/workflows/os-release.yml, scripts/frankel-factory-package-wiring.py and its committed binding
-os/release-pipeline/frankel-factory.json.
+os/factory-package/frankel.json.
 
 Stand-ins only: no host, real lock, packaging, token or network. The observation runs on a synthetic builder in a
 temporary directory: a real release-stage.py receipt chain, the sign and verification receipts, a small signed
@@ -104,8 +104,8 @@ def checkout(parent, production=None, lock=None, raw=None, **binding):
     (or RAW text), os/release-pipeline/frankel.json with host.sourceRoot/lockPath moved when given, and
     os/flavors/frankel.json unchanged."""
     root = Path(parent)/'checkout'
-    (root/'os/release-pipeline').mkdir(parents=True, exist_ok=True)
-    (root/'os/flavors').mkdir(parents=True, exist_ok=True)
+    for directory in ('os/release-pipeline', 'os/flavors', Path(wiring.BINDING).parent):
+        (root/directory).mkdir(parents=True, exist_ok=True)
     data = json.loads((ROOT/wiring.BINDING).read_text())
     data.update(binding)
     (root/wiring.BINDING).write_text(raw if raw is not None else json.dumps(data, indent=2))
@@ -140,7 +140,7 @@ class Binding(unittest.TestCase):
             result = wire('check', '--stage', stage)
             self.assertEqual((result.returncode, result.stdout), (4, ''), stage)
             self.assertEqual(json.loads(result.stderr), {'verdict': 'SETUP_MISSING',
-                'error': f'os/release-pipeline/frankel-factory.json is unbound for {stage}: {missing}'})
+                'error': f'os/factory-package/frankel.json is unbound for {stage}: {missing}'})
         record = str(self.tmp/'frankel-factory-package-attempt-1-1.json')
         for argv in (('observe-inputs', '--run-id', '1', '--attempt', '1', '--out', str(self.tmp/'out')),
                      ('package', '--run-id', '1', '--attempt', '1', '--attempt-record', record),

@@ -10,7 +10,7 @@ no Rango or Blazer pin, image or receipt is used here. The helpers are unchanged
 - scripts/rango-firmware-observe.py --device frankel (Signing; device-generic).
 
 Every path and pin comes from committed sources; no argument chooses one:
-- binding: os/release-pipeline/frankel-factory.json {build, buildTimestamp, candidate, sourceRun,
+- binding: os/factory-package/frankel.json {build, buildTimestamp, candidate, sourceRun,
   signedTargetFilesSha256, otatoolsSha256, fastbootSha256}, all null until their records are supplied;
 - signed target-files: /home/pixelbuild/rose-actions/frankel-<build>/release/signed-target_files.zip, the original
   attempt's own signed output;
@@ -75,7 +75,7 @@ import factory_package_route as route_lib  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 DEVICE = 'frankel'
-BINDING = 'os/release-pipeline/frankel-factory.json'
+BINDING = 'os/factory-package/frankel.json'
 BINDING_KIND = 'roseos.frankel-factory-package'
 KEYS = {'schemaVersion', 'kind', 'basis', 'build', 'buildTimestamp', 'candidate', 'sourceRun', 'signedTargetFilesSha256',
         'otatoolsSha256', 'fastbootSha256'}

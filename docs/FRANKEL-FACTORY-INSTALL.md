@@ -28,7 +28,7 @@ The route packages one published Frankel build's own signed outputs, never a Ran
 
 ## Inputs to bind
 
-All inputs are bound in `os/release-pipeline/frankel-factory.json`:
+All inputs are bound in `os/factory-package/frankel.json`:
 
 | Key | Source record | Needed by |
 | --- | --- | --- |
