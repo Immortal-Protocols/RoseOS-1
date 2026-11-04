@@ -37,22 +37,25 @@ ANDROID_SDK_ROOT=/opt/roseos/android-sdk mvn -q -B test   # android.jar is compi
   - At an end a key is not taken, so focus can leave.
   - A tap on the centre card reaches it.
 
-`RoseEdgeSwipeNativeTest` (#410 E2a) runs the production `RoseEdgeSwipe`, `RoseEdgeState` and `RoseEdgeGesture` on
-the same runtime, at xxhdpi and once at 420dpi:
-- **Default-off switch.** With `persist.wm.debug.rose_edge` unset, Launcher3 decides everything, nothing is previewed,
-  and settling never reaches the state, from any thread. The test reads the runtime's real `SystemProperties` back; the
-  compile-only stub under `src/test/java/android/os` exists because `android.jar` omits that hidden class.
-- **No edge window, no change.** With no listener registered (E2b's window), nothing rises and nothing is previewed.
-- **Gates.** The edge applies only to an unlocked app under gesture navigation in its natural rotation, never when the
-  handler excludes the gesture (Home, a trackpad, a continued gesture, a task that is not full screen).
-- **Launcher3's own results stand:** anything not Home, a cancel, a pause.
-- **Raise and lower, per display and task.** A short swipe raises the edge over its task and tells listeners once.
-  Over that task, a short swipe keeps it and more than 120dp goes Home; over another task it is not up. Leaving
-  lowers it. Distances count from touch-down (the touch slop is added back) and speed is averaged since touch-down.
-- **Preview.** The crop is at full width, unscaled, while the app follows. Past the edge it shrinks about the shortened
-  window's centre and lifts 40dp. A raise at release does not snap the window. Attached to recents, or with no size,
-  Launcher3's own transform applies. With the edge already up, or reduced motion, the app does not track the finger.
-  State is main-thread only.
+`RoseEdgeSwipeNativeTest` (#410, the staged bottom gesture) runs the production `RoseEdgeSwipe`, `RoseEdgeState` and
+`RoseEdgeGesture` on the same runtime, at xxhdpi and once at 420dpi:
+- **Default-off switch.** With `persist.wm.debug.rose_edge` unset, nothing is staged, Launcher3 decides everything,
+  nothing is previewed, and settling never reaches the state, from any thread. The test reads the runtime's real
+  `SystemProperties` back; the compile-only stub under `src/test/java/android/os` exists because `android.jar` omits
+  that hidden class.
+- **When a gesture is staged.** Only for an unlocked, full-screen app under gesture navigation, in the display's
+  natural rotation, with the keyboard hidden, an edge window registered and the shell available; never for a display
+  that does not exist or when the handler excludes the gesture (Home, a trackpad, a continued gesture).
+- **The tray is revealed with the finger** (peek) and the stages count from touch-down (the slop is added back), with
+  no shell call: no raise, resize or microphone slot until a release raises the edge.
+- **Release.** At the tray it raises once and the tray stays; below the tray, or moving clearly down, it cancels; a
+  quick flick before the switcher goes Home; the switcher stage wins over any release speed; dragging back below the
+  switcher's exit returns to the tray. Launcher3's cancel stands, and after the release (or an abandon) a move reveals
+  nothing.
+- **Tray already up.** The stage starts at the tray: release keeps it, a flick goes Home and leaving lowers it.
+- **Preview.** The crop follows the tray at full width, unscaled; toward the switcher it shrinks 10% about the
+  shortened window's centre and lifts 24dp. In the switcher stage, or with no size, Launcher3's own transform applies.
+  With the edge already up, or reduced motion, the app does not track the finger. State is main-thread only.
 
 The patched Launcher3 swipe handlers that call these (`os/patches/rose-edge-launcher3.patch`) are not compiled or
 run here.

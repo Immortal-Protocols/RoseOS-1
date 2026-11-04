@@ -1343,8 +1343,8 @@ class RoseEdgeGestureTest(unittest.TestCase):
         quickstep = ROOT/'os/overlays/packages/apps/Launcher3'
         callers = sorted(p.name for p in quickstep.rglob('*.java') if p.name != 'RoseEdgeGesture.java'
             and 'RoseEdgeGesture' in p.read_text())
-        self.assertEqual(callers, ['RoseEdgeSwipe.java', 'RoseEdgeWindow.java'],
-            'its only callers are the edge\'s own (E2a\'s swipe, E2c\'s window), behind the unregistered edge patches')
+        self.assertEqual(callers, ['RoseEdgeState.java', 'RoseEdgeSwipe.java', 'RoseEdgeWindow.java'],
+            'its only callers are the edge\'s own: the swipe, the state\'s peek and the window')
         self.assertNotIn('RoseEdgeGesture', PATCH.read_text())
         self.assertNotIn('import ', self.EDGE, 'pure: no Android, IPC, permission or sensor types')
         for reach in ('SensorPrivacy', 'AudioManager', 'Binder', 'Intent', 'Settings', 'System.', 'Thread'):
@@ -1396,7 +1396,8 @@ class RoseEdgeSwipePatchTest(unittest.TestCase):
         text = EDGE_PATCH.read_text()
         self.assertEqual(re.findall(r'^\+\+\+ b/(\S+)', text, re.M), list(EDGE_TARGETS.values()))
         removed = [l for l in text.splitlines() if l.startswith('-') and not l.startswith('---')]
-        self.assertEqual(removed, ['-        final GestureEndTarget endTarget = calculateEndTarget(',
+        self.assertEqual(removed, ['-            recentsAttachedToAppWindow = mHasMotionEverBeenPaused || mIsLikelyToStartNewTask;',
+            '-        final GestureEndTarget endTarget = calculateEndTarget(',
             '-                velocityPxPerMs, endVelocityPxPerMs, isFling, isCancel, horizontalTouchSlopPassed);',
             '-                taskViewSimulator.apply(transformParams);',
             '-        ActivityOptions options = ActivityOptions.makeCustomAnimation(mContext, 0, 0);',
@@ -1424,11 +1425,15 @@ class RoseEdgeSwipePatchTest(unittest.TestCase):
         abs_ = self.patched()['AbsSwipeUpHandler.java']
         self.assertIn('final GestureEndTarget endTarget = refineEndTarget(calculateEndTarget(\n'
             '                velocityPxPerMs, endVelocityPxPerMs, isFling, isCancel, horizontalTouchSlopPassed),\n'
-            '                isCancel, mIsMotionPaused);', abs_)
-        self.assertIn('GestureEndTarget endTarget, boolean isCancel, boolean isMotionPaused) {\n        return endTarget;\n    }', abs_)
+            '                isCancel, mIsMotionPaused, endVelocityPxPerMs);', abs_)
+        self.assertIn('boolean isMotionPaused, float endVelocityPxPerMs) {\n        return endTarget;\n    }', abs_)
         self.assertIn('TaskViewSimulator taskViewSimulator, TransformParams transformParams) {\n'
             '        taskViewSimulator.apply(transformParams);\n    }', abs_)
-        self.assertIn('return mHasMotionEverBeenPaused || mIsLikelyToStartNewTask;', abs_)
+        self.assertIn('boolean hasMotionEverBeenPaused, boolean isLikelyToStartNewTask) {\n'
+            '        return hasMotionEverBeenPaused || isLikelyToStartNewTask;\n    }', abs_, 'stock attach rule by default')
+        self.assertIn('recentsAttachedToAppWindow = isRecentsAttachRequested(\n'
+            '                    mHasMotionEverBeenPaused, mIsLikelyToStartNewTask);', abs_)
+        self.assertIn('return mIsLikelyToStartNewTask;', abs_)
         self.assertEqual(abs_.count('applyTargetTransform(taskViewSimulator, transformParams);'), 1)
         self.assertNotIn('Rose', abs_.replace('RoseOS (#410)', ''), 'no Rose logic in the shared base class')
 
@@ -1450,31 +1455,51 @@ class RoseEdgeSwipePatchTest(unittest.TestCase):
 
     def test_the_fallback_handler_maps_only_its_own_outcomes(self):
         fallback = self.patched()['FallbackSwipeHandler.java']
-        refine = fallback[fallback.index('protected GestureEndTarget refineEndTarget('):fallback.index('protected void applyTargetTransform(')]
-        self.assertTrue(refine.split('\n')[2:5] == ['        if (!mRoseEdge.enabled()) {',
+        refine = fallback[fallback.index('protected GestureEndTarget refineEndTarget('):fallback.index('public void onRecentsAnimationCanceled(')]
+        self.assertTrue(refine.split('\n')[2:5] == ['        if (mRoseEdge == null || !mRoseEdge.enabled()) {',
             '            return endTarget;', '        }'], 'switch off (the default): stock end target first')
         self.assertIn('if (mGestureState.isHandlingAtomicEvent()) {\n            mRoseEdge.settled(endTarget == '
             'GestureEndTarget.LAST_TASK);\n            return endTarget;', refine, 'atomic gestures keep their target but settle')
-        self.assertIn('endTarget == GestureEndTarget.HOME, mCurrentDisplacement)', refine)
-        self.assertIn('case RoseEdgeGesture.RAISE:\n            case RoseEdgeGesture.STAY:\n'
-            '                refined = GestureEndTarget.LAST_TASK;', refine)
-        self.assertIn('case RoseEdgeGesture.HOME:\n                refined = GestureEndTarget.HOME;', refine)
-        self.assertIn('default:\n                break;', refine, "STOCK keeps Launcher3's own target")
+        self.assertIn('if (endTarget == GestureEndTarget.NEW_TASK) {\n            mRoseEdge.abandon();', refine,
+            "Launcher3's horizontal quick switch stands")
+        self.assertIn('mRoseEdge.release(isCancel, endVelocityPxPerMs)', refine)
+        self.assertIn('case RoseEdgeGesture.RAISE:\n                case RoseEdgeGesture.STAY:\n'
+            '                case RoseEdgeGesture.CANCEL:\n                    refined = GestureEndTarget.LAST_TASK;', refine)
+        self.assertIn('case RoseEdgeGesture.HOME:\n                    refined = GestureEndTarget.HOME;', refine)
+        self.assertIn('case RoseEdgeGesture.SWITCHER_OPEN:\n                    refined = mDeviceState.isOverviewDisabled()\n'
+            '                            ? GestureEndTarget.LAST_TASK : GestureEndTarget.RECENTS;', refine)
+        self.assertIn('default:\n                    break;', refine, "STOCK keeps Launcher3's own target")
         self.assertIn('mRoseEdge.settled(refined == GestureEndTarget.LAST_TASK);', refine)
-        transform = fallback[fallback.index('protected void applyTargetTransform('):fallback.index('private boolean isRoseGestureNavigation()')]
-        self.assertTrue(transform.split('\n')[2:6] == ['        if (!mRoseEdge.enabled()) {',
+        pause = fallback[fallback.index('public MotionPauseDetector.OnMotionPauseListener getMotionPauseListener()'):
+            fallback.index('public void updateDisplacement(')]
+        self.assertIn('if (!isRoseStaged()) {\n            return stock;', pause, 'unstaged: Launcher3\'s pause rule')
+        self.assertIn('return () -> { };', pause, 'staged: the detector\'s pauses are dropped')
+        move = fallback[fallback.index('public void updateDisplacement('):fallback.index('protected boolean isRecentsAttachRequested(')]
+        self.assertIn('super.updateDisplacement(displacement);\n        if (!isRoseStaged()) {\n            return;', move)
+        self.assertIn('mRoseStockPause.onMotionPauseDetected();', move, 'the switcher stage attaches recents as a pause did')
+        self.assertIn('mRoseStockPause.onMotionPauseChanged(switcher);', move)
+        self.assertIn('maybeUpdateRecentsAttachedState(/* animate= */ true);', move, 'and detaches on the way back')
+        self.assertEqual(move.count('performHapticFeedback();'), 2, 'a haptic for the tray stage and the switcher stage')
+        attach = fallback[fallback.index('protected boolean isRecentsAttachRequested('):fallback.index('protected GestureEndTarget refineEndTarget(')]
+        self.assertIn('return mRoseEdge.stage() == RoseEdgeGesture.SWITCHER || isLikelyToStartNewTask;', attach)
+        for hook in ('public void onRecentsAnimationCanceled(', 'public void onConsumerAboutToBeSwitched()'):
+            body = fallback[fallback.index(hook):]
+            body = body[:body.index('    }\n\n')]
+            self.assertIn('mRoseEdge.abandon();', body, f'{hook}: the revealed tray is taken down')
+        transform = fallback[fallback.index('protected void applyTargetTransform('):fallback.index('private boolean isRoseFullscreenTask()')]
+        self.assertTrue(transform.split('\n')[2:6] == ['        if (!isRoseStaged()) {',
             '            super.applyTargetTransform(taskViewSimulator, transformParams);', '            return;', '        }'],
-            'switch off (the default): stock transform first, nothing else evaluated')
+            'not staged (the switch off by default): stock transform first, nothing else evaluated')
         self.assertEqual(transform.count('super.applyTargetTransform(taskViewSimulator, transformParams);'), 2)
-        self.assertIn('mRoseAttached |= hasAttachedToRecents() || endTarget == GestureEndTarget.RECENTS\n'
-            '                || endTarget == GestureEndTarget.NEW_TASK;', transform, 'attachment is latched for the gesture')
+        self.assertIn('boolean attached = mRoseEdge.stage() == RoseEdgeGesture.SWITCHER || isLikelyToStartNewTask()\n'
+            '                || endTarget == GestureEndTarget.RECENTS || endTarget == GestureEndTarget.NEW_TASK\n'
+            '                || endTarget == GestureEndTarget.HOME;', transform)
         self.assertIn('mCurrentShift.value * mTransitionDragLength', transform, 'the raw shift, never the magnetic one')
         self.assertIn('mRunningOverHome || mGestureState.isTrackpadGesture() || continuingLastGesture\n'
-            '                        || !isRoseFullscreenTask()', fallback, 'never over Home, a trackpad, a continued gesture '
-            'or a task that is not full screen')
-        self.assertIn('mGestureState.getSwipeUpStartTimeMs(), mDeviceState.getTouchSlop(),', fallback,
-            'distances and speed count from touch-down')
-        self.assertIn('mRemoteTargetHandles.length == 1', fallback, 'one app only: never split screen')
+            '                        || !isRoseFullscreenTask(),\n'
+            '                mDeviceState.isFullyGesturalNavMode(), mDeviceState.isImeRenderingNavButtons());', fallback,
+            'never over Home, a trackpad, a continued gesture, a task that is not full screen, three-button navigation '
+            'or with the keyboard showing')
 
     def test_every_launcher3_member_it_uses_is_declared_at_the_pinned_revision(self):
         """Derived from the patch: every method called and every m-field read on an added line is declared in the
@@ -1484,7 +1509,7 @@ class RoseEdgeSwipePatchTest(unittest.TestCase):
         added = self.added_blocks('AbsSwipeUpHandler.java') + '\n' + self.added_blocks('FallbackSwipeHandler.java')
         code = re.sub(r'//[^\n]*', '', re.sub(r'/\*.*?\*/', '', added, flags=re.S))
         defined = set(re.findall(r'(?:protected|private|public)[^;=(]*?\b(\w+)\s*\(', code))
-        defined |= set(re.findall(r'private (?:final )?[\w\[\]<>]+ (m\w+)', code))
+        defined |= set(re.findall(r'private (?:final )?[\w.\[\]<>]+ (m\w+)', code))
         rose = set(re.findall(r'public (?:static )?[\w\[\]<>]+ (\w+)\s*\(', overlay))
         methods = set(re.findall(r'\.(\w+)\(', code)) | set(re.findall(r'(?<![\w.])(\w+)\(', code))
         keywords = {'if', 'switch', 'return', 'super', 'new', 'RoseEdgeSwipe', 'Matrix', 'Rect'}
@@ -1521,8 +1546,17 @@ class RoseEdgeSwipePatchTest(unittest.TestCase):
         for imported in ('import android.app.TaskInfo;', 'import android.view.Surface;', 'import android.graphics.Rect;',
                 'import com.android.quickstep.util.TransformParams.BuilderProxy;'):
             self.assertIn(imported, fallback, 'already imported by the pinned file')
-        self.assertIn('long getSwipeUpStartTimeMs()', (FIXTURES/'GestureState.java').read_text(),
-            'package-private, and FallbackSwipeHandler is in the same package')
+        for member in ('public boolean isImeRenderingNavButtons()', 'public boolean isFullyGesturalNavMode()',
+                'public boolean isOverviewDisabled()'):
+            self.assertIn(member, (FIXTURES/'RecentsAnimationDeviceState.java').read_text())
+        abs_ = (FIXTURES/'AbsSwipeUpHandler.java').read_text()
+        for member in ('public MotionPauseDetector.OnMotionPauseListener getMotionPauseListener()',
+                'protected void performHapticFeedback()', 'protected void maybeUpdateRecentsAttachedState(boolean animate)',
+                'public void onRecentsAnimationCanceled(HashMap<Integer, ThumbnailData> thumbnailDatas)',
+                'public void onConsumerAboutToBeSwitched()'):
+            self.assertIn(member, abs_, 'overridable as the patch overrides or calls it')
+        self.assertIn('public void updateDisplacement(float displacement)', (FIXTURES/'SwipeUpAnimationLogic.java').read_text())
+        self.assertIn('protected float mCurrentDisplacement;', (FIXTURES/'SwipeUpAnimationLogic.java').read_text())
 
     def test_the_overlay_classes_compile_against_the_sdk(self):
         import os
@@ -1551,12 +1585,17 @@ class RoseEdgeSwipePatchTest(unittest.TestCase):
     def test_it_is_off_by_default_and_reaches_nothing_new(self):
         self.assertIn('public static final String PROPERTY = "persist.wm.debug.rose_edge";', self.EDGE_SWIPE)
         self.assertIn('SystemProperties.getBoolean(PROPERTY, false)', self.EDGE_SWIPE)
-        self.assertIn('return enabled && !excluded && gestureNavigation && naturalRotation && RoseEdgeState.canRaise()\n'
-            '                && (keyguard == null || !keyguard.isKeyguardLocked());', self.EDGE_SWIPE,
-            'never without an edge window to draw it and the shell to resize the app')
+        self.assertIn('String why = !enabled ? "switch off" : excluded ? "excluded" : !gestureNavigation ? "not gesture navigation"\n'
+            '                : imeVisible ? "keyboard showing" : !naturalRotation(context, displayId) ? "rotated"\n'
+            '                : locked(context) ? "locked" : !RoseEdgeState.hasListener() ? "no edge window"\n'
+            '                : !RoseEdgeShell.available() ? "shell unavailable" : null;\n'
+            '        this.staged = why == null;', self.EDGE_SWIPE,
+            'staged only with an edge window to draw it and the shell to resize the app, and never otherwise')
+        self.assertIn('public static final String DIAG_PROPERTY = "persist.wm.debug.rose_edge_diag";', self.EDGE_SWIPE)
+        self.assertIn('this.diag = enabled && SystemProperties.getBoolean(DIAG_PROPERTY, false);', self.EDGE_SWIPE,
+            'developer-only diagnostics, off by default')
         self.assertIn('return !LISTENERS.isEmpty() && RoseEdgeShell.available();', self.EDGE_STATE)
         self.assertIn('if (!canRaise()) return false;', self.EDGE_STATE, 'no raise without a listener and the shell')
-        self.assertIn('this.keyguard = enabled ? context.getSystemService(KeyguardManager.class) : null;', self.EDGE_SWIPE)
         for source in (self.EDGE_SWIPE, self.EDGE_STATE):
             code = re.sub(r'//[^\n]*', '', re.sub(r'/\*.*?\*/', '', source, flags=re.S))
             for reach in ('SensorPrivacy', 'AudioManager', 'setMicrophoneMute', 'Binder', 'Intent', 'startActivity',

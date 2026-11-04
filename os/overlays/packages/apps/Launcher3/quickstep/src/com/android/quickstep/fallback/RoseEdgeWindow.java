@@ -20,6 +20,7 @@ import android.hardware.display.DisplayManager;
 import android.util.SparseArray;
 import android.view.Display;
 import android.view.Gravity;
+import android.view.HapticFeedbackConstants;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewConfiguration;
@@ -29,8 +30,10 @@ import android.view.accessibility.AccessibilityNodeInfo;
 import android.view.accessibility.AccessibilityNodeProvider;
 
 /**
- * RoseOS (#410 E2c): the raised edge's window, Launcher3's half of the system edge. It is shown while RoseEdgeState
- * says a display's edge is up and removed when it lowers. It draws Home's design contract (homeEdge: plate, hairline,
+ * RoseOS (#410 E2c): the raised edge's window, Launcher3's half of the system edge. It is shown while a bottom swipe
+ * over an app reveals it (RoseEdgeState peek: it rises from the bottom with the finger and dims once the switcher stage
+ * takes over), stays while RoseEdgeState says the display's edge is up, and is removed when it lowers or a drag that
+ * revealed it ends without raising it. It draws Home's design contract (homeEdge: plate, hairline,
  * the Rose and switcher wells, the pearl and the switcher glyph; RoseEdgeLayout) in a TYPE_NAVIGATION_BAR_PANEL window
  * along the bottom of the display, above the shortened app (Launcher3 holds INTERNAL_SYSTEM_WINDOW; no new permission).
  *
@@ -39,8 +42,10 @@ import android.view.accessibility.AccessibilityNodeProvider;
  * SystemUI's existing trusted tray control draws and handles it. This window never reads or changes microphone state.
  *
  * Taps: Rose lowers the edge and asks the host to open Rose; the switcher lowers it and asks for the switcher. A swipe
- * down of more than RoseEdgeGesture.RAISE_DP lowers it. A swipe up belongs to the system gesture (Launcher3's input
- * consumer), not to this window. Main thread only.
+ * down of more than RoseEdgeGesture.RAISE_DP lowers it. A drag up on the open tray goes on toward the switcher: past
+ * RoseEdgeGesture.TRAY_TO_SWITCHER_DP the switcher well lights with a haptic and a release opens the switcher (back
+ * below TRAY_TO_SWITCHER_EXIT_DP, it does not). A swipe that starts in the bottom
+ * system area still belongs to the system gesture (Launcher3's input consumer, RoseEdgeSwipe). Main thread only.
  */
 public final class RoseEdgeWindow implements RoseEdgeState.Listener {
     /** What the host (TouchInteractionService, via rose-edge-launcher3.patch) does for the edge's two own controls. */
@@ -94,8 +99,25 @@ public final class RoseEdgeWindow implements RoseEdgeState.Listener {
 
     @Override
     public void onRaisedChanged(int displayId, boolean raised) {
-        if (raised) show(displayId);
-        else remove(displayId);
+        if (raised) {
+            EdgeView view = show(displayId);
+            if (view != null) view.setPeek(1, 0, RoseEdgeGesture.TRAY);
+        } else {
+            remove(displayId);
+        }
+    }
+
+    @Override
+    public void onPeek(int displayId, float reveal, float approach, int stage) {
+        if (reveal < 0) {
+            // The drag ended: the tray stays only if the edge rose (then it is shown fully).
+            EdgeView view = mShown.get(displayId);
+            if (!RoseEdgeState.isRaised(displayId)) remove(displayId);
+            else if (view != null) view.setPeek(1, 0, RoseEdgeGesture.TRAY);
+            return;
+        }
+        EdgeView view = show(displayId);
+        if (view != null) view.setPeek(reveal, approach, stage);
     }
 
     /** The view shown on a display, or null (tests and the host read it). */
@@ -103,10 +125,11 @@ public final class RoseEdgeWindow implements RoseEdgeState.Listener {
         return mShown.get(displayId);
     }
 
-    private void show(int displayId) {
-        if (mShown.get(displayId) != null) return;
+    private EdgeView show(int displayId) {
+        EdgeView shown = mShown.get(displayId);
+        if (shown != null) return shown;
         Display display = mContext.getSystemService(DisplayManager.class).getDisplay(displayId);
-        if (display == null) return;
+        if (display == null) return null;
         Context window = mContext.createWindowContext(display, WindowManager.LayoutParams.TYPE_NAVIGATION_BAR_PANEL,
                 null);
         EdgeView view = new EdgeView(window, displayId);
@@ -120,6 +143,7 @@ public final class RoseEdgeWindow implements RoseEdgeState.Listener {
         lp.setFitInsetsTypes(0);
         window.getSystemService(WindowManager.class).addView(view, lp);
         mShown.put(displayId, view);
+        return view;
     }
 
     private void remove(int displayId) {
@@ -139,10 +163,24 @@ public final class RoseEdgeWindow implements RoseEdgeState.Listener {
         private final Paint mHairline = new Paint(Paint.ANTI_ALIAS_FLAG), mWell = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final Paint mRing = new Paint(Paint.ANTI_ALIAS_FLAG), mPearl = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final Paint mGlyph = new Paint(Paint.ANTI_ALIAS_FLAG), mFront = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Paint mArmed = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final Path mOutline = new Path();
         private final int mSlop;
         private float mDownY = Float.NaN;
         private int mDownTarget = -1;
+        /** A drag up on the open tray has passed TRAY_TO_SWITCHER_DP (and not come back below its exit). */
+        private boolean mSwitcherArmed;
+
+        /**
+         * The tray as a drag reveals it: it rises from below with reveal, and fades as the drag approaches the
+         * switcher, then dims once the switcher stage has visibly taken over.
+         */
+        void setPeek(float reveal, float approach, int stage) {
+            float shown = Math.max(0f, Math.min(1f, reveal));
+            float height = getHeight() > 0 ? getHeight() : RoseEdgeLayout.windowHeightPx(mDensity, 0);
+            setTranslationY((1 - shown) * height);
+            setAlpha(stage == RoseEdgeGesture.SWITCHER ? 0.35f : 1f - 0.4f * Math.max(0f, Math.min(1f, approach)));
+        }
 
         EdgeView(Context context, int displayId) {
             super(context);
@@ -161,6 +199,7 @@ public final class RoseEdgeWindow implements RoseEdgeState.Listener {
             mGlyph.setStrokeJoin(Paint.Join.ROUND);
             mGlyph.setColor(0xFFEADBCD);
             mFront.setColor(0xFF331019);
+            mArmed.setColor(0x66FF4A5E);
             setContentDescription("System tray");
         }
 
@@ -291,6 +330,10 @@ public final class RoseEdgeWindow implements RoseEdgeState.Listener {
                 canvas.translate(0, well.top);
                 well.offset(0, -well.top);
                 canvas.drawRoundRect(well, radius, radius, mWell);
+                if (which == RoseEdgeLayout.SWITCHER && mSwitcherArmed) {
+                    // Armed: a drag up on the tray will open the switcher on release.
+                    canvas.drawRoundRect(well, radius, radius, mArmed);
+                }
                 canvas.drawRoundRect(well, radius, radius, mRing);
                 canvas.restore();
             }
@@ -360,20 +403,40 @@ public final class RoseEdgeWindow implements RoseEdgeState.Listener {
                 case MotionEvent.ACTION_DOWN:
                     mDownY = e.getY();
                     mDownTarget = hit(e.getX(), e.getY());
+                    mSwitcherArmed = false;
                     return true;
+                case MotionEvent.ACTION_MOVE: {
+                    // A drag up on the open tray goes on toward the switcher, visibly: the switcher well lights, with
+                    // a haptic, once armed. (The window is only the tray's height, so the tray itself stays put.)
+                    float up = (mDownY - e.getY()) / mDensity;
+                    boolean armed = up >= RoseEdgeGesture.TRAY_TO_SWITCHER_DP
+                            || (mSwitcherArmed && up >= RoseEdgeGesture.TRAY_TO_SWITCHER_EXIT_DP);
+                    if (armed != mSwitcherArmed) {
+                        mSwitcherArmed = armed;
+                        if (armed) performHapticFeedback(HapticFeedbackConstants.GESTURE_THRESHOLD_ACTIVATE);
+                        invalidate();
+                    }
+                    return true;
+                }
                 case MotionEvent.ACTION_UP: {
                     float dy = e.getY() - mDownY;
                     int target = Math.abs(dy) <= mSlop ? hit(e.getX(), e.getY()) : -1;
-                    if (dy > RoseEdgeGesture.RAISE_DP * mDensity) {
+                    if (mSwitcherArmed) {
+                        activate(RoseEdgeLayout.SWITCHER);
+                    } else if (dy > RoseEdgeGesture.RAISE_DP * mDensity) {
                         RoseEdgeState.lower(mDisplayId);
                     } else if (target >= 0 && target == mDownTarget) {
                         activate(target);
                     }
+                    mSwitcherArmed = false;
                     mDownTarget = -1;
+                    invalidate();
                     return true;
                 }
                 case MotionEvent.ACTION_CANCEL:
                     mDownTarget = -1;
+                    mSwitcherArmed = false;
+                    invalidate();
                     return true;
                 default:
                     return true;

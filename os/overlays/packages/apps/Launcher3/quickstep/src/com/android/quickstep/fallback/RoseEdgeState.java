@@ -11,9 +11,9 @@ import java.util.List;
 
 /**
  * RoseOS (#410 E2c): whether the raised edge is up on each display, over which task, and whether WMShell has really
- * shortened that app (RoseEdgeShell), inside Launcher3's process. The swipe handler (RoseEdgeSwipe) raises and lowers
- * it; the edge window registers a listener, shows Home's controls, and lowers it itself on a swipe down or when the
- * panel asks.
+ * shortened that app (RoseEdgeShell), inside Launcher3's process. The swipe handler (RoseEdgeSwipe) reveals it while
+ * the finger is down (peek), raises and lowers it; the edge window registers a listener, draws the tray, shows Home's
+ * controls, and lowers it itself on a swipe down or when the panel asks.
  *
  * The edge can only rise while a listener is registered (something draws it) and the shell's IRoseEdge is available
  * (something really resizes the app): otherwise the release ends as stock Launcher3. On a raise the edge shows at once
@@ -25,9 +25,16 @@ import java.util.List;
 public final class RoseEdgeState {
     private RoseEdgeState() {}
 
-    /** Told on the main thread whenever a display's edge goes up or down. */
+    /** Told on the main thread whenever a display's edge goes up or down, and while a drag reveals it. */
     public interface Listener {
         void onRaisedChanged(int displayId, boolean raised);
+
+        /**
+         * A drag in progress reveals the tray: reveal 0..1 (1 is fully shown), approach 0..1 toward the switcher, and
+         * the stage (RoseEdgeGesture.NONE, TRAY or SWITCHER). reveal < 0 means the drag ended; the tray stays only if
+         * the edge rose.
+         */
+        default void onPeek(int displayId, float reveal, float approach, int stage) {}
     }
 
     /** Display id to the task id the edge rose over; absent when lowered. */
@@ -90,6 +97,23 @@ public final class RoseEdgeState {
         }
         if (!wasRaised) notifyChanged(displayId, true);
         return true;
+    }
+
+    /**
+     * A drag over an app reveals the tray (RoseEdgeSwipe.onMove). Drawing only: nothing is raised, resized or sent to
+     * the shell, and the microphone slot is never sent before the shell's onRaised.
+     */
+    public static void peek(int displayId, float reveal, float approach, int stage) {
+        mainThread();
+        for (Listener listener : new ArrayList<>(LISTENERS)) {
+            listener.onPeek(displayId, Math.max(0f, reveal), approach, stage);
+        }
+    }
+
+    /** The drag that revealed the tray ended; it stays drawn only if the edge rose. */
+    public static void endPeek(int displayId) {
+        mainThread();
+        for (Listener listener : new ArrayList<>(LISTENERS)) listener.onPeek(displayId, -1f, 0f, 0);
     }
 
     /** Lowers the edge and asks the shell to restore the full height. */
