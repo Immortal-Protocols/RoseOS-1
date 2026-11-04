@@ -58,15 +58,35 @@ def guard(mode,compile_run,bootstrap_run,out):
         raise ValueError('manual main workflow required')
     spec=importlib.util.spec_from_file_location('mustang_bootstrap',ROOT/'scripts/signing-bootstrap.py')
     sb=importlib.util.module_from_spec(spec);spec.loader.exec_module(sb)
-    problems=sb.preflight('pro-mustang-v1',sb.load_profiles(),os.environ,os.environ['GITHUB_SHA'],
-                         sb.datetime.now(sb.timezone.utc))
-    if problems:raise ValueError('; '.join(problems))
+    ota = os.environ.get('MUSTANG_PUBLISH_OTA') == 'true'
+    if ota and mode != 'sign-package':
+        raise ValueError('OTA reuses the original bootstrap; it cannot select bootstrap generation')
+    if ota:
+        import mustang_ota
+        mustang_ota.guard(mustang_ota.config(), access=True)
+    else:
+        problems=sb.preflight('pro-mustang-v1',sb.load_profiles(),os.environ,os.environ['GITHUB_SHA'],
+                             sb.datetime.now(sb.timezone.utc))
+        if problems:raise ValueError('; '.join(problems))
     binding={'mode':mode,'recipeSource':os.environ['GITHUB_SHA']}
     if mode=='bootstrap':
         if compile_run or bootstrap_run:raise ValueError('bootstrap accepts no prior-run pins')
     else:
         binding['compile']=pin_run(compile_run,'.github/workflows/os-release.yml',f'mustang-receipts-{number(compile_run)}-1','mustang-build ',allow_collection_recovery=True)
-        binding['bootstrap']=pin_run(bootstrap_run,'.github/workflows/os-release.yml',f'mustang-bootstrap-{number(bootstrap_run)}-1','mustang-bootstrap ')
+        if ota:
+            cfg = mustang_ota.config()
+            if number(bootstrap_run) != cfg['bootstrapRun']:
+                raise ValueError('OTA preserves the original Mustang bootstrap only')
+            receipt = json.loads((ROOT/'os/signing-bootstrap/mustang-bootstrap-receipt.json').read_text())
+            run = request('/actions/runs/'+number(bootstrap_run))
+            if run.get('head_sha') != receipt['recipeSha'] or run.get('conclusion') != 'success' \
+                    or run.get('status') != 'completed' or run.get('run_attempt') != 1 \
+                    or run.get('path') != '.github/workflows/os-release.yml' or run.get('head_branch') != 'main':
+                raise ValueError('original completed bootstrap metadata differs from its committed public receipt')
+            binding['bootstrap'] = {'runId': number(bootstrap_run), 'source': receipt['recipeSha'],
+                                    'receipt': 'os/signing-bootstrap/mustang-bootstrap-receipt.json'}
+        else:
+            binding['bootstrap']=pin_run(bootstrap_run,'.github/workflows/os-release.yml',f'mustang-bootstrap-{number(bootstrap_run)}-1','mustang-bootstrap ')
     with Path(out).open('x') as f:json.dump(binding,f,indent=2)
     if mode=='sign-package' and os.environ.get('GITHUB_OUTPUT'):
         with open(os.environ['GITHUB_OUTPUT'],'a') as f:

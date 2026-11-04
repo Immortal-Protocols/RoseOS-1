@@ -1,0 +1,24 @@
+name: Mustang OTA checks
+on:
+  pull_request:
+    paths: ['os/**', 'scripts/mustang*', 'scripts/host-*.py', 'scripts/host_secrets.py', 'scripts/agent-beta-auto.py', 'scripts/release-pipeline.py', 'scripts/github_release_publisher.py', 'scripts/apply-os-changes.py', 'scripts/host-reconcile.py', 'scripts/tests/test_mustang_ota.py', 'workspace/rose-agent/**', '.github/workflows/os-release.yml', '.github/workflows/mustang-ota-*.yml']
+  push:
+    branches: [main]
+    paths: ['os/**', 'scripts/mustang*', 'scripts/host-*.py', 'scripts/host_secrets.py', 'scripts/agent-beta-auto.py', 'scripts/release-pipeline.py', 'scripts/github_release_publisher.py', 'scripts/apply-os-changes.py', 'scripts/host-reconcile.py', 'scripts/tests/test_mustang_ota.py', 'workspace/rose-agent/**', '.github/workflows/os-release.yml', '.github/workflows/mustang-ota-*.yml']
+permissions:
+  contents: read
+jobs:
+  offline:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - run: python3 scripts/tests/test_mustang_ota.py
+      - run: python3 os/tests/test_updater_channels.py && python3 os/tests/test_updater_releases.py
+      - run: |
+          mkdir -p "$RUNNER_TEMP/updater-tests"
+          java -m jdk.compiler/com.sun.tools.javac.Main -d "$RUNNER_TEMP/updater-tests" os/overlays/packages/apps/Updater/src/app/seamlessupdate/client/RoseReleases.java os/tests/RoseReleasesTest.java os/tests/MustangReleasesTest.java
+          java -cp "$RUNNER_TEMP/updater-tests" app.seamlessupdate.client.RoseReleasesTest
+          java -cp "$RUNNER_TEMP/updater-tests" app.seamlessupdate.client.MustangReleasesTest

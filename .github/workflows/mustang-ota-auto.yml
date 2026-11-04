@@ -1,0 +1,32 @@
+name: Mustang OTA dispatcher
+
+# Source only until BOTH committed flags and MUSTANG_OTA_AUTO=on are authorized.
+# No GCP/OIDC/publisher secret here; dispatches only the existing os-release route.
+on:
+  workflow_run:
+    workflows: ['Mustang OTA checks', 'Build & publish latest Pixel 10']
+    types: [completed]
+    branches: [main]
+permissions: {}
+concurrency:
+  group: mustang-ota-dispatcher
+  cancel-in-progress: false
+jobs:
+  dispatch:
+    if: vars.MUSTANG_OTA_AUTO == 'on' && github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          CI_RUN_ID: ${{ github.event.workflow_run.id }}
+          MUSTANG_OTA_AUTO: ${{ vars.MUSTANG_OTA_AUTO }}
+        run: python3 scripts/mustang-ota-auto.py

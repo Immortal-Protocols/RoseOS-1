@@ -1,0 +1,24 @@
+{
+  "schema": "roseos.mustang-ota-config.v1",
+  "device": "mustang",
+  "repository": "Immortal-Protocols/pixel-ota",
+  "publicationEnabled": false,
+  "automationEnabled": false,
+  "bootstrapRun": "41719073037",
+  "signingAccess": {
+    "status": "pending",
+    "expiresAt": null,
+    "approvalRef": null,
+    "purpose": "Read only the two existing Mustang secret versions 1 as the existing signer. No bootstrap writes or key generation. The prior four-hour bindings are not extended by this definition."
+  },
+  "baseline": {
+    "build": "2026110302",
+    "timestamp": "1793742435",
+    "source": "2b521e732fa1537e54ff0a77880810ab1f34cf99",
+    "signReceipt": "os/mustang-delivery/41738359336/sign.json",
+    "installedBuild": "2026110302",
+    "installedChannel": "stable",
+    "installationEvidence": "Nathan confirmed build 2026110302 installed with Beta selected on 2026-11-04 in the Mustang worker thread. Phone behavior has not been independently observed."
+  },
+  "plan": "https://app.notion.com/p/40d7c646c81b81ce9485e0ca3eff8614"
+}
