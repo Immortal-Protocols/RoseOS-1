@@ -56,12 +56,20 @@ SOURCES = [
         'config/mk/google_devices/common/BoardConfig-common.mk',
         'config/mk/google_devices/common/BoardConfig-common-gs201-plus.mk',
         'config/mk/google_devices/platform/laguna/BoardConfig-common.mk',
-        'dl/.find-ignore', 'vendor-skels/.find-ignore',
+        'dl/.find-ignore', 'vendor-skels/.find-ignore', '.gitignore',
     ]),
     ('build/make', 'platform_build', ['envsetup.sh', 'core/version_util.mk', 'core/build_id.mk',
         'core/product_config.mk']),
     (KERNEL, 'device_google_laguna-kernels_6.6', []),
 ]
+# How an adapter checks each project's working tree in the copy against its listing.
+WORKING_TREE_CHECK = {
+    ADEVTOOL: 'exact: gitRequirement.workingTree',
+    'build/make': 'derivation only: apply-os-changes.py patches build/make (agent tray, updater, background control), '
+        'so the integrated working tree is not this listing; those post-images belong to an integration report',
+    KERNEL: 'exact: no RoseOS patch or overlay touches it, so every listed path is present with exactly its mode and '
+        'blob and nothing else is',
+}
 GZIPPED = {(ADEVTOOL, f'{SKEL}/{DEVICE}.mk'), (ADEVTOOL, SPEC)}
 # The kernel module lists BoardConfig-common-gs201-plus.mk reads with $(shell cat ...) at lunch.
 MODULE_LISTS = ['vendor_kernel_boot.modules.load', 'vendor_dlkm.modules.load', 'system_dlkm.modules.load']
@@ -88,6 +96,35 @@ def pins():
             raise SystemExit(f'{path}: no pinned revision in {PINNED}')
         out[path] = m.group(1)
     return out
+
+
+def remote_url(path):
+    """The pinned manifest's own fetch URL for a project: its remote's fetch prefix plus its name."""
+    xml = PINNED.read_text()
+    project = re.search(r'<project name="([^"]+)" path="%s" remote="([^"]+)"' % re.escape(path), xml)
+    remote = project and re.search(r'<remote name="%s" fetch="(https://[^"]+/)"' % re.escape(project.group(2)), xml)
+    if not remote:
+        raise SystemExit(f'{path}: no pinned https remote in {PINNED}')
+    return remote.group(1) + project.group(1)
+
+
+def working_tree():
+    """The adevtool working tree in the copy: exactly its pinned listing. The paths its pinned .gitignore ignores are
+    never lunch inputs (lunch runs no adevtool code), so the copy omits them instead of admitting unpinned content."""
+    rules = [l for l in fixture_bytes(ADEVTOOL, '.gitignore').decode().splitlines() if l and not l.startswith('#')]
+    return {
+        'project': ADEVTOOL,
+        'rule': f'every path of sources[{ADEVTOOL}].listing is present with exactly its mode and blob, and nothing '
+            'else is, except .git (gitRequirement)',
+        'omittedFromCopy': {'gitignore': rules, 'gitBlob': listing(ADEVTOOL)['.gitignore'][1],
+            'means': 'the copy leaves out exactly what these pinned .gitignore rules ignore (git check-ignore '
+                'semantics, from the project root); a tracked path is never omitted'},
+        'untrackedAllowed': [],
+        'why': 'the product finder prunes only dl/ and vendor-skels/ (finderPrune), so untracked content anywhere '
+            'else, such as node_modules/, would be scanned at lunch as an unpinned input',
+        'onUnlisted': 'refuse, naming every unlisted path found (bounded), so a first run reports what a real tree '
+            'holds instead of admitting it',
+    }
 
 
 def tree_fixture(project):
@@ -192,7 +229,7 @@ def build():
         sources.append({'path': path, 'repo': f'GrapheneOS/{repo}', 'revision': revisions[path],
             'rootTree': root_tree(path), 'listing': {'path': str(tree_fixture(path).relative_to(ROOT)),
             'sha256': sha256(raw), 'compressedSha256': sha256(tree_fixture(path).read_bytes()),
-            'paths': len(listing(path))}})
+            'paths': len(listing(path))}, 'workingTreeCheck': WORKING_TREE_CHECK[path]})
     trees = {p: listing(p) for p, _, _ in SOURCES}
     provenance = json.loads(PROVENANCE.read_text())
     adev = revisions[ADEVTOOL]
@@ -321,21 +358,70 @@ def build():
                     'inside the copy root; no objects/info/alternates, commondir or gitdir file exists; every link in '
                     'the gitdir resolves inside the copy root; every path in the gitdir is on the copy root\'s '
                     'filesystem and none is a mount point; no regular file in it has more than one hard link',
-                'none of these checks can tell a fabricated store that holds the commit and its tree from a genuine '
-                    'one: only an approved byte-for-byte copy from the genuine source, under exact paths and bounds, '
-                    'establishes it',
+                'items 1-3 alone cannot tell a hand-written gitdir from a genuine one: a HEAD file and an object store '
+                    'holding only the commit pass them. The objects are genuine only when they come from the genuine '
+                    'source, either as an approved byte-for-byte copy (genuine-copy) or fetched from the pinned public '
+                    'remote with every publicFetch.acceptance check passing. Object ids are content hashes, git hashes '
+                    'each fetched object as it indexes it, and connectivity at rootTree then shows the store holds the '
+                    'genuine commit and its whole tree',
             ],
             'options': [
                 {'class': 'genuine-copy', 'status': 'allowed only under a separate approval with exact paths and '
                     'bounds; Release owns the mechanism'},
                 {'class': 'redirect', 'status': 'refused', 'means': 'GIT_DIR, a gitfile, a link, alternates or any '
                     'other way of pointing the copy at the production gitdir or object store'},
+                {'class': 'public-fetch', 'status': 'allowed only under a separate runtime approval for its '
+                    'source and bounds; the interface is publicFetch; Release owns the mechanism',
+                    'url': remote_url(ADEVTOOL)},
                 {'class': 'fabrication', 'status': 'refused', 'means': 'any HEAD, ref, object or gitdir written '
-                    'rather than copied'},
+                    'other than by a genuine copy or by exactly the publicFetch steps'},
                 {'class': 'relaxation', 'status': 'refused', 'means': 'regenerating the vendor module with --noVerify '
                     'or --updateSpec, a working-tree change under vendor/adevtool (including vendor-specs/ and '
                     'vendor-skels/), or editing, replacing or removing adevtool-version-check.mk or frankel.mk'},
             ],
+            'publicFetch': {
+                'basis': 'Infra\'s assessment of adevtool_git_missing (2026-11-04): the isolated copy excludes every '
+                    '.git, so lunch needs genuine metadata for this one project. This follows Blazer\'s git-meta steps '
+                    '(scripts/blazer-build-only.py git_meta_argv and git_meta) with a stricter tree check',
+                'url': remote_url(ADEVTOOL), 'protocol': 'https only',
+                'target': f'<copy>/{ADEVTOOL}/.git: a new directory, created by the attempt inside the isolated copy '
+                    'only, after the copy\'s own checks; never the source tree',
+                'steps': [
+                    f'git init -q --template= <copy>/{ADEVTOOL}',
+                    f'git -C <copy>/{ADEVTOOL} fetch --quiet --depth=1 --no-tags <url> {adev}',
+                    f'git -C <copy>/{ADEVTOOL} update-ref --no-deref HEAD {adev}',
+                ],
+                'environment': {'unset': 'GIT_*', 'GIT_CONFIG_NOSYSTEM': '1', 'GIT_CONFIG_GLOBAL': '/dev/null',
+                    'HOME': 'an attempt-owned empty directory (also XDG_CONFIG_HOME)', 'GIT_TERMINAL_PROMPT': '0',
+                    'GIT_ASKPASS': '/bin/false', 'SSH_ASKPASS': '/bin/false', 'GIT_ALLOW_PROTOCOL': 'https',
+                    'GIT_CEILING_DIRECTORIES': 'the copy root', 'PATH': '/usr/bin:/bin'},
+                'never': ['--reference, --shared, --dissociate or --separate-git-dir', 'objects/info/alternates',
+                    'a configured remote', 'inherited system or global config', 'hooks or templates',
+                    'any command that reads or writes the working tree (checkout, reset, status, add)',
+                    'tags or any ref other than HEAD'],
+                'acceptance': [
+                    'gitRequirement.acceptance items 1-3, unchanged',
+                    'rev-parse --verify revision^{tree} is exactly rootTree (Blazer checks only that it exists)',
+                    'git fsck --no-dangling --no-progress succeeds: a full check, so every object\'s hash and every link '
+                        'from the commit are verified (not --connectivity-only)',
+                    'git ls-tree -r -z --full-tree revision, each NUL replaced by LF, is byte for byte the decompressed '
+                        f'sources[{ADEVTOOL}].listing (its sha256)',
+                    'shallow is exactly revision plus one newline',
+                    'no objects/info/alternates and no remote.* key in git config --local --list',
+                    'workingTree holds',
+                ],
+                'establishes': 'the genuine objects of public commit revision, by content addressing (commit, tree, '
+                    'blobs, each hash-checked); not provenance from the production gitdir, which only genuine-copy '
+                    'shows. Tree equality, a full fsck and working-tree equality are stronger than the functional '
+                    'minimum',
+                'cleanup': 'on any failure, remove only the .git this attempt created; nothing else in the copy, and '
+                    'never anything in the source tree',
+                'ceiling': {'seconds': 1800, 'bytes': 1073741824, 'kind': 'Infra\'s proposed execution ceiling for '
+                    'the attempt; neither a measured requirement nor a runtime approval'},
+                'unbound': 'sourceTree, lunch, policy and integration-report bindings stay unbound; without an approved '
+                    'attempt that passes, the adapter still refuses with adevtool_git_missing',
+            },
+            'workingTree': working_tree(),
             'environment': {'GIT_CEILING_DIRECTORIES': 'the copy root', 'unset': 'GIT_*',
                 'why': 'without a ceiling git searches above the copy, and a parent repository would answer with a '
                     'foreign HEAD'},

@@ -20,7 +20,8 @@
     "sha256": "9524aba018afb18c1d29dd6f7b770d53da747ac2c3881ca31fdbf1ef110b160a",
     "compressedSha256": "d9832e9c46b3670ea5a66c56771d50760b6ba8e2364364c83006adda57f0dac0",
     "paths": 55890
-   }
+   },
+   "workingTreeCheck": "exact: gitRequirement.workingTree"
   },
   {
    "path": "build/make",
@@ -32,7 +33,8 @@
     "sha256": "958bfe6712d2675118b86d6d9a9978cc3626cad0c00c94af43a312f266e8b2bd",
     "compressedSha256": "78d8474b95c5c348e92de95aad4f5f3c574a30d6aa5f4dd6d7f4d4f564eccb4d",
     "paths": 1680
-   }
+   },
+   "workingTreeCheck": "derivation only: apply-os-changes.py patches build/make (agent tray, updater, background control), so the integrated working tree is not this listing; those post-images belong to an integration report"
   },
   {
    "path": "device/google/laguna-kernels/6.6",
@@ -44,7 +46,8 @@
     "sha256": "7c3c447450331fa2ee55782f1942c6d749261512fffc0eae0869802bc68c48e6",
     "compressedSha256": "d3f705e5eb2314d01f27f2d0a78a4c3e6983e4cb4920dc77b588dd12cd8a7335",
     "paths": 828
-   }
+   },
+   "workingTreeCheck": "exact: no RoseOS patch or overlay touches it, so every listed path is present with exactly its mode and blob and nothing else is"
   }
  ],
  "fixtures": [
@@ -200,6 +203,14 @@
    "path": "vendor-skels/.find-ignore",
    "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c",
    "gitBlob": "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391",
+   "kind": "full"
+  },
+  {
+   "fixture": "vendor/adevtool/.gitignore",
+   "project": "vendor/adevtool",
+   "path": ".gitignore",
+   "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c",
+   "gitBlob": "969b2c305b39480d6f7f68dac493744e204de8d3",
    "kind": "full"
   },
   {
@@ -389,7 +400,7 @@
    "HEAD is exactly revision plus one newline",
    "in the copy, with GIT_* unset and GIT_CEILING_DIRECTORIES at the copy root, git -C vendor/adevtool rev-parse HEAD prints exactly revision, cat-file -t revision is commit and revision^{tree} is rootTree",
    "nothing redirects outside the copy: vendor/adevtool/.git resolves to a directory inside the copy (a gitfile, or a link to one, is refused); rev-parse --absolute-git-dir and --git-common-dir resolve inside the copy root; no objects/info/alternates, commondir or gitdir file exists; every link in the gitdir resolves inside the copy root; every path in the gitdir is on the copy root's filesystem and none is a mount point; no regular file in it has more than one hard link",
-   "none of these checks can tell a fabricated store that holds the commit and its tree from a genuine one: only an approved byte-for-byte copy from the genuine source, under exact paths and bounds, establishes it"
+   "items 1-3 alone cannot tell a hand-written gitdir from a genuine one: a HEAD file and an object store holding only the commit pass them. The objects are genuine only when they come from the genuine source, either as an approved byte-for-byte copy (genuine-copy) or fetched from the pinned public remote with every publicFetch.acceptance check passing. Object ids are content hashes, git hashes each fetched object as it indexes it, and connectivity at rootTree then shows the store holds the genuine commit and its whole tree"
   ],
   "options": [
    {
@@ -402,9 +413,14 @@
     "means": "GIT_DIR, a gitfile, a link, alternates or any other way of pointing the copy at the production gitdir or object store"
    },
    {
+    "class": "public-fetch",
+    "status": "allowed only under a separate runtime approval for its source and bounds; the interface is publicFetch; Release owns the mechanism",
+    "url": "https://github.com/GrapheneOS/adevtool"
+   },
+   {
     "class": "fabrication",
     "status": "refused",
-    "means": "any HEAD, ref, object or gitdir written rather than copied"
+    "means": "any HEAD, ref, object or gitdir written other than by a genuine copy or by exactly the publicFetch steps"
    },
    {
     "class": "relaxation",
@@ -412,6 +428,75 @@
     "means": "regenerating the vendor module with --noVerify or --updateSpec, a working-tree change under vendor/adevtool (including vendor-specs/ and vendor-skels/), or editing, replacing or removing adevtool-version-check.mk or frankel.mk"
    }
   ],
+  "publicFetch": {
+   "basis": "Infra's assessment of adevtool_git_missing (2026-11-04): the isolated copy excludes every .git, so lunch needs genuine metadata for this one project. This follows Blazer's git-meta steps (scripts/blazer-build-only.py git_meta_argv and git_meta) with a stricter tree check",
+   "url": "https://github.com/GrapheneOS/adevtool",
+   "protocol": "https only",
+   "target": "<copy>/vendor/adevtool/.git: a new directory, created by the attempt inside the isolated copy only, after the copy's own checks; never the source tree",
+   "steps": [
+    "git init -q --template= <copy>/vendor/adevtool",
+    "git -C <copy>/vendor/adevtool fetch --quiet --depth=1 --no-tags <url> 17df3b79a73e67ad68387b35c7d41c85e1d8103c",
+    "git -C <copy>/vendor/adevtool update-ref --no-deref HEAD 17df3b79a73e67ad68387b35c7d41c85e1d8103c"
+   ],
+   "environment": {
+    "unset": "GIT_*",
+    "GIT_CONFIG_NOSYSTEM": "1",
+    "GIT_CONFIG_GLOBAL": "/dev/null",
+    "HOME": "an attempt-owned empty directory (also XDG_CONFIG_HOME)",
+    "GIT_TERMINAL_PROMPT": "0",
+    "GIT_ASKPASS": "/bin/false",
+    "SSH_ASKPASS": "/bin/false",
+    "GIT_ALLOW_PROTOCOL": "https",
+    "GIT_CEILING_DIRECTORIES": "the copy root",
+    "PATH": "/usr/bin:/bin"
+   },
+   "never": [
+    "--reference, --shared, --dissociate or --separate-git-dir",
+    "objects/info/alternates",
+    "a configured remote",
+    "inherited system or global config",
+    "hooks or templates",
+    "any command that reads or writes the working tree (checkout, reset, status, add)",
+    "tags or any ref other than HEAD"
+   ],
+   "acceptance": [
+    "gitRequirement.acceptance items 1-3, unchanged",
+    "rev-parse --verify revision^{tree} is exactly rootTree (Blazer checks only that it exists)",
+    "git fsck --no-dangling --no-progress succeeds: a full check, so every object's hash and every link from the commit are verified (not --connectivity-only)",
+    "git ls-tree -r -z --full-tree revision, each NUL replaced by LF, is byte for byte the decompressed sources[vendor/adevtool].listing (its sha256)",
+    "shallow is exactly revision plus one newline",
+    "no objects/info/alternates and no remote.* key in git config --local --list",
+    "workingTree holds"
+   ],
+   "establishes": "the genuine objects of public commit revision, by content addressing (commit, tree, blobs, each hash-checked); not provenance from the production gitdir, which only genuine-copy shows. Tree equality, a full fsck and working-tree equality are stronger than the functional minimum",
+   "cleanup": "on any failure, remove only the .git this attempt created; nothing else in the copy, and never anything in the source tree",
+   "ceiling": {
+    "seconds": 1800,
+    "bytes": 1073741824,
+    "kind": "Infra's proposed execution ceiling for the attempt; neither a measured requirement nor a runtime approval"
+   },
+   "unbound": "sourceTree, lunch, policy and integration-report bindings stay unbound; without an approved attempt that passes, the adapter still refuses with adevtool_git_missing"
+  },
+  "workingTree": {
+   "project": "vendor/adevtool",
+   "rule": "every path of sources[vendor/adevtool].listing is present with exactly its mode and blob, and nothing else is, except .git (gitRequirement)",
+   "omittedFromCopy": {
+    "gitignore": [
+     "/.idea/",
+     "/dist/",
+     "!/dl/",
+     "/dl/*",
+     "!/dl/.find-ignore",
+     "/lib/",
+     "/node_modules/"
+    ],
+    "gitBlob": "969b2c305b39480d6f7f68dac493744e204de8d3",
+    "means": "the copy leaves out exactly what these pinned .gitignore rules ignore (git check-ignore semantics, from the project root); a tracked path is never omitted"
+   },
+   "untrackedAllowed": [],
+   "why": "the product finder prunes only dl/ and vendor-skels/ (finderPrune), so untracked content anywhere else, such as node_modules/, would be scanned at lunch as an unpinned input",
+   "onUnlisted": "refuse, naming every unlisted path found (bounded), so a first run reports what a real tree holds instead of admitting it"
+  },
   "environment": {
    "GIT_CEILING_DIRECTORIES": "the copy root",
    "unset": "GIT_*",
