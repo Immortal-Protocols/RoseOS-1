@@ -65,12 +65,14 @@ final class HomeTray extends LinearLayout {
 
   FrameLayout micControl = control(activity);
   micGlyph = new OxbloodEdge.MicGlyph(density);
-  micControl.setBackground(new android.graphics.drawable.LayerDrawable(new android.graphics.drawable.Drawable[]{new OxbloodEdge.Well(density), micGlyph}));
+  micControl.setBackground(new android.graphics.drawable.LayerDrawable(new android.graphics.drawable.Drawable[]{OxbloodEdge.Well.mic(density), micGlyph}));
   micControl.setOnClickListener(v -> toggleMic.run());
   mic = micControl;
   applyMic(false);
-  LayoutParams micParams = new LayoutParams(activity.dp(OxbloodEdge.MIC_W_DP), activity.dp(OxbloodEdge.TARGET_H_DP));
-  micParams.leftMargin = activity.dp(GAP_DP);
+  // The reference's 44dp slot 14dp from each neighbour, as a 48dp touch target about the same centre.
+  int grow = (OxbloodEdge.MIC_TARGET_W_DP - OxbloodEdge.MIC_W_DP) / 2;
+  LayoutParams micParams = new LayoutParams(activity.dp(OxbloodEdge.MIC_TARGET_W_DP), activity.dp(OxbloodEdge.TARGET_H_DP));
+  micParams.leftMargin = activity.dp(GAP_DP - grow);
   addView(micControl, micParams);
 
   FrameLayout switcher = control(activity);
@@ -83,7 +85,7 @@ final class HomeTray extends LinearLayout {
   this.overviewAvailable = overviewAvailable;
   applyOverview(overviewAvailable.getAsBoolean());
   LayoutParams switcherParams = new LayoutParams(activity.dp(SWITCHER_W_DP), activity.dp(OxbloodEdge.TARGET_H_DP));
-  switcherParams.leftMargin = activity.dp(GAP_DP);
+  switcherParams.leftMargin = activity.dp(GAP_DP - grow);
   addView(switcher, switcherParams);
  }
 

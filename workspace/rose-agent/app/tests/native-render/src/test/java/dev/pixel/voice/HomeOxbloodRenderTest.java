@@ -85,10 +85,11 @@ public class HomeOxbloodRenderTest {
         RosePearl pearl = new RosePearl(1f, OxbloodEdge.PEARL_DP);
         rose.addView(box(pearl), new FrameLayout.LayoutParams(OxbloodEdge.PEARL_DP + 12, OxbloodEdge.PEARL_DP + 12, Gravity.CENTER));
         edge.addView(rose, new android.widget.LinearLayout.LayoutParams(OxbloodEdge.ROSE_W_DP, OxbloodEdge.CONTROL_H_DP));
-        // Rose's microphone-input mute well (HomeTray: Well under MicGlyph), between Rose and the switcher.
+        // Rose's microphone-input mute well (HomeTray: Well.mic under MicGlyph), the reference's 44dp slot 14dp from each
+        // neighbour (HomeTray grows its touch target to 48 about the same centre), between Rose and the switcher.
         FrameLayout mic = new FrameLayout(c);
         OxbloodEdge.MicGlyph micGlyph = new OxbloodEdge.MicGlyph(1f);
-        mic.setBackground(new android.graphics.drawable.LayerDrawable(new Drawable[]{new OxbloodEdge.Well(1f), micGlyph}));
+        mic.setBackground(new android.graphics.drawable.LayerDrawable(new Drawable[]{OxbloodEdge.Well.mic(1f), micGlyph}));
         mic.setTag(micGlyph);
         android.widget.LinearLayout.LayoutParams mp = new android.widget.LinearLayout.LayoutParams(OxbloodEdge.MIC_W_DP, OxbloodEdge.CONTROL_H_DP);
         mp.leftMargin = OxbloodEdge.GAP_DP;
@@ -175,7 +176,7 @@ public class HomeOxbloodRenderTest {
         Bitmap off = draw(root);
         int ruby = off.getPixel(cx, cy - 4);
         assertTrue("muted: the body turns dim ruby: " + Integer.toHexString(ruby), ((ruby >> 16) & 255) > ((ruby >> 8) & 255) + 40);
-        int ringX = x0 + 1, ringY = cy;
+        int ringX = cx - OxbloodEdge.MIC_PLATE_DP / 2 + 1, ringY = cy; // the 32dp plate's left edge
         int ringOn = on.getPixel(ringX, ringY), ringOff = off.getPixel(ringX, ringY);
         assertTrue("muted: a ruby ring on the well's edge", ((ringOff >> 16) & 255) > ((ringOn >> 16) & 255) + 20);
         save(Bitmap.createBitmap(off, cropX, cropY, cropW, cropH), "oxblood-edge-mic-muted");

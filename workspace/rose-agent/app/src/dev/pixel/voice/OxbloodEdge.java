@@ -27,8 +27,9 @@ final class OxbloodEdge {
  static final int HEIGHT_DP = 92, FLAT_TOP_DP = 34, FILLET_DP = 34;
  /** HomeTray's controls (oxblood.css:379-380,487-496): Rose 103 and switcher 106 wide, 44dp hit height, 14dp apart; the pearl. */
  static final int ROSE_W_DP = 103, SWITCHER_W_DP = 106, CONTROL_H_DP = 44, GAP_DP = 14, PEARL_DP = 16;
- /** Rose's microphone-input mute well: 48dp wide (the 48dp touch target; the reference's well is 44). */
- static final int MIC_W_DP = 48;
+ /** Rose's microphone-input mute well (oxblood.css:491-492): a 44x44 slot in the row, its plate 32x32 (inset 6),
+  * radius 9. Home's touch target is 48x48 about the same centre (MIC_TARGET_W_DP, taking 2dp from each gap). */
+ static final int MIC_W_DP = 44, MIC_PLATE_DP = 32, MIC_RADIUS_DP = 9, MIC_TARGET_W_DP = 48;
  /** The controls' touch height: the reference's 44, raised to Android's 48dp minimum (the 36dp plate is unchanged). */
  static final int TARGET_H_DP = 48;
  static final int PLATE_TOP = 0xff4a141a, PLATE_MID = 0xff3c0e13, PLATE_BOTTOM = 0xff330c10;
@@ -107,19 +108,26 @@ final class OxbloodEdge {
  static final class Well extends Drawable {
   static final int PLATE_H_DP = 36, RADIUS_DP = 8;
   static final int FILL_TOP = 0x47140407, FILL_BOTTOM = 0x1f46121c, RING = 0x66eccdbe, TOP_SHADOW = 0x66000000;
-  final float d;
+  final float d, plateW, plateH, radius;
   final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
   final RectF plate = new RectF();
-  Well(float density) { d = density; }
+  /** The full-width 36dp plate (Rose, switcher). */
+  Well(float density) { this(density, -1, PLATE_H_DP, RADIUS_DP); }
+  /** A plate of plateWdp x plateHdp centred in the bounds (plateWdp < 0: the full width); the mic's is 32x32 r9. */
+  Well(float density, float plateWdp, float plateHdp, float radiusDp) { d = density; plateW = plateWdp; plateH = plateHdp; radius = radiusDp; }
+  static Well mic(float density) { return new Well(density, MIC_PLATE_DP, MIC_PLATE_DP, MIC_RADIUS_DP); }
 
-  @Override protected void onBoundsChange(Rect b) {
-   float h = PLATE_H_DP * d;
-   plate.set(b.left, b.exactCenterY() - h / 2, b.right, b.exactCenterY() + h / 2);
+  @Override protected void onBoundsChange(Rect b) { centre(b, plate); }
+
+  /** The plate's rectangle for bounds b (MicGlyph rings the same rectangle). */
+  void centre(Rect b, RectF out) {
+   float h = plateH * d, w = plateW < 0 ? b.width() : plateW * d;
+   out.set(b.exactCenterX() - w / 2, b.exactCenterY() - h / 2, b.exactCenterX() + w / 2, b.exactCenterY() + h / 2);
   }
 
   @Override public void draw(Canvas c) {
    if (plate.isEmpty()) return;
-   float r = RADIUS_DP * d;
+   float r = radius * d;
    paint.reset(); paint.setAntiAlias(true);
    paint.setShader(new LinearGradient(0, plate.top, 0, plate.bottom, FILL_TOP, FILL_BOTTOM, Shader.TileMode.CLAMP));
    c.drawRoundRect(plate, r, r, paint);
@@ -153,7 +161,7 @@ final class OxbloodEdge {
   * Rose's microphone-input mute on the edge (#410; HiFi icons.js mic/micOff on a 24-unit grid at 20dp, oxblood.css
   * :383-384,491): a filled capsule, its cradle and stand in warm ink #e6d4c3; muted, the mic dims to .55 in ruby
   * #ff8c9a with a slash knocked out of the well, and the well gains a 1.4dp ruby inner ring and a soft ruby glow.
-  * Drawn over an OxbloodEdge.Well of the same bounds (its 36dp plate).
+  * Drawn over Well.mic of the same bounds (its centred 32x32 r9 plate).
   */
  static final class MicGlyph extends Drawable {
   static final int GLYPH_DP = 20, INK = 0xffe6d4c3, MUTED_INK = 0xffff8c9a, RING = 0xbfff5a6e, GLOW = 0x4dff465f;
@@ -169,8 +177,8 @@ final class OxbloodEdge {
    if (b.isEmpty()) return;
    float cx = b.exactCenterX(), cy = b.exactCenterY();
    if (muted) {
-    float h = Well.PLATE_H_DP * d, r = Well.RADIUS_DP * d, w = 1.4f * d;
-    RectF plate = new RectF(b.left + w / 2, cy - h / 2 + w / 2, b.right - w / 2, cy + h / 2 - w / 2);
+    float h = MIC_PLATE_DP * d, r = MIC_RADIUS_DP * d, w = 1.4f * d;
+    RectF plate = new RectF(cx - h / 2 + w / 2, cy - h / 2 + w / 2, cx + h / 2 - w / 2, cy + h / 2 - w / 2);
     paint.reset(); paint.setAntiAlias(true); paint.setStyle(Paint.Style.STROKE);
     paint.setStrokeWidth(4 * d); paint.setColor(GLOW);
     paint.setMaskFilter(new BlurMaskFilter(5 * d, BlurMaskFilter.Blur.NORMAL));
