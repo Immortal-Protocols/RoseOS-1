@@ -1,9 +1,9 @@
 diff --git a/libs/WindowManager/Shell/src/com/android/wm/shell/RoseEdgeMicSlot.java b/libs/WindowManager/Shell/src/com/android/wm/shell/RoseEdgeMicSlot.java
 new file mode 100644
-index 0000000..1bb1aa5
+index 0000000..a9c4a5d
 --- /dev/null
 +++ b/libs/WindowManager/Shell/src/com/android/wm/shell/RoseEdgeMicSlot.java
-@@ -0,0 +1,305 @@
+@@ -0,0 +1,393 @@
 +/*
 + * Copyright 2026
 + * SPDX-License-Identifier: Apache-2.0
@@ -18,10 +18,11 @@ index 0000000..1bb1aa5
 +import android.content.Intent;
 +import android.content.ServiceConnection;
 +import android.content.pm.PackageManager;
++import android.graphics.BlurMaskFilter;
 +import android.graphics.Canvas;
-+import android.graphics.Color;
 +import android.graphics.LinearGradient;
 +import android.graphics.Paint;
++import android.graphics.Path;
 +import android.graphics.PixelFormat;
 +import android.graphics.Rect;
 +import android.graphics.RectF;
@@ -225,59 +226,146 @@ index 0000000..1bb1aa5
 +        return Math.round(value * mContext.getResources().getDisplayMetrics().density);
 +    }
 +
-+    /** The slot's control: Home's edge well with a microphone glyph; a slash when Rose's input is muted. */
++    /**
++     * The slot's control, drawn exactly as Home's edge draws its microphone well (Rose Agent OxbloodEdge.Well.mic and
++     * OxbloodEdge.MicGlyph; oxblood-contract homeEdge.controls.microphone): over the opaque edge plate, a 32x32dp
++     * plate radius 9 centred in the 44dp slot, and the HiFi microphone on a 24-unit grid at 20dp. Muted: ruby ink,
++     * body at .55, the slash knocked out then drawn, and a 1.4dp ruby ring with a soft glow on the plate. Until the
++     * first STATE the well and glyph are dimmed (a remote state is never guessed); the edge plate stays opaque.
++     */
 +    private final class Control extends View {
++        // OxbloodEdge.Well.
++        static final int MIC_PLATE_DP = 32;
++        static final int MIC_RADIUS_DP = 9;
++        static final int FILL_TOP = 0x47140407;
++        static final int FILL_BOTTOM = 0x1f46121c;
++        static final int RING = 0x66eccdbe;
++        static final int TOP_SHADOW = 0x66000000;
++        // OxbloodEdge.MicGlyph.
++        static final int GLYPH_DP = 20;
++        static final int INK = 0xffe6d4c3;
++        static final int MUTED_INK = 0xffff8c9a;
++        static final int MUTED_RING = 0xbfff5a6e;
++        static final int MUTED_GLOW = 0x4dff465f;
++        static final int KNOCKOUT = 0xff1c0609;
++        static final int UNKNOWN_ALPHA = 110;
++
 +        private final Paint mPlate = new Paint();
-+        private final Paint mWell = new Paint(Paint.ANTI_ALIAS_FLAG);
-+        private final Paint mRing = new Paint(Paint.ANTI_ALIAS_FLAG);
-+        private final Paint mInk = new Paint(Paint.ANTI_ALIAS_FLAG);
-+        private final RectF mBox = new RectF();
++        private final Paint mPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
++        private final RectF mWell = new RectF();
 +
 +        Control() {
 +            super(mContext);
 +            setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_YES);
 +            setClickable(true);
-+            mRing.setStyle(Paint.Style.STROKE);
-+            mRing.setStrokeWidth(dp(1));
-+            mRing.setColor(0x66ECCDBE);
-+            mInk.setStyle(Paint.Style.STROKE);
-+            mInk.setStrokeWidth(dp(2));
-+            mInk.setStrokeCap(Paint.Cap.ROUND);
 +            refresh();
 +        }
 +
++        /** Home's spoken names (HomeTray, RoseConversationActivity): the action a tap takes. */
 +        void refresh() {
-+            setContentDescription(!mKnown ? "Rose microphone input, state unknown"
-+                    : mMuted ? "Rose microphone input muted" : "Rose microphone input on");
++            setContentDescription(!mKnown ? "Rose’s microphone, status unavailable"
++                    : mMuted ? "Rose’s microphone is muted. Unmute" : "Mute Rose’s microphone");
 +            invalidate();
 +        }
 +
 +        @Override
 +        protected void onDraw(Canvas canvas) {
++            final float d = mContext.getResources().getDisplayMetrics().density;
 +            // Opaque edge plate over the whole slot, continuous with Launcher3's edge around it.
 +            final float[] positions = new float[PLATE_STOPS_DP.length];
 +            for (int i = 0; i < positions.length; i++) positions[i] = PLATE_STOPS_DP[i] / EDGE_HEIGHT_DP;
 +            mPlate.setShader(new LinearGradient(0, mPlateTop, 0, mPlateTop + dp(EDGE_HEIGHT_DP), PLATE_COLORS,
 +                    positions, Shader.TileMode.CLAMP));
 +            canvas.drawRect(0, 0, getWidth(), getHeight(), mPlate);
-+            // Home's edge well (oxblood-contract homeEdge.well), 36dp plate, radius 8.
-+            final float plate = Math.min(getHeight(), dp(36));
-+            final float top = (getHeight() - plate) / 2f;
-+            mBox.set(0, top, getWidth(), top + plate);
-+            mWell.setShader(new LinearGradient(0, mBox.top, 0, mBox.bottom, 0x47140407, 0x1F46121C,
-+                    Shader.TileMode.CLAMP));
-+            canvas.drawRoundRect(mBox, dp(8), dp(8), mWell);
-+            canvas.drawRoundRect(mBox, dp(8), dp(8), mRing);
-+            // Ink: primary when on, secondary when muted, dimmed until the first STATE.
-+            mInk.setColor(mMuted ? 0xFFD2B9AB : 0xFFF2E6D9);
-+            mInk.setAlpha(mKnown ? 255 : 110);
++            final int layer = mKnown ? -1 : canvas.saveLayerAlpha(0, 0, getWidth(), getHeight(), UNKNOWN_ALPHA);
++            drawWell(canvas, d);
++            drawGlyph(canvas, d, mKnown && mMuted);
++            if (layer >= 0) canvas.restoreToCount(layer);
++        }
++
++        /** OxbloodEdge.Well.draw for Well.mic. */
++        private void drawWell(Canvas c, float d) {
 +            final float cx = getWidth() / 2f;
 +            final float cy = getHeight() / 2f;
-+            final float w = dp(6);
-+            canvas.drawRoundRect(cx - w / 2, cy - dp(9), cx + w / 2, cy + dp(2), w / 2, w / 2, mInk);
-+            canvas.drawArc(cx - dp(7), cy - dp(5), cx + dp(7), cy + dp(5), 0, 180, false, mInk);
-+            canvas.drawLine(cx, cy + dp(5), cx, cy + dp(9), mInk);
-+            if (mMuted) canvas.drawLine(cx - dp(9), cy - dp(9), cx + dp(9), cy + dp(9), mInk);
++            final float h = MIC_PLATE_DP * d;
++            final float r = MIC_RADIUS_DP * d;
++            mWell.set(cx - h / 2, cy - h / 2, cx + h / 2, cy + h / 2);
++            mPaint.reset();
++            mPaint.setAntiAlias(true);
++            mPaint.setShader(new LinearGradient(0, mWell.top, 0, mWell.bottom, FILL_TOP, FILL_BOTTOM,
++                    Shader.TileMode.CLAMP));
++            c.drawRoundRect(mWell, r, r, mPaint);
++            mPaint.setShader(null);
++            // inset 0 1px 2px rgba(0,0,0,.4): a soft dark band just inside the top edge.
++            final int save = c.save();
++            final Path clip = new Path();
++            clip.addRoundRect(mWell, r, r, Path.Direction.CW);
++            c.clipPath(clip);
++            mPaint.setStyle(Paint.Style.STROKE);
++            mPaint.setStrokeWidth(2 * d);
++            mPaint.setColor(TOP_SHADOW);
++            mPaint.setMaskFilter(new BlurMaskFilter(Math.max(.1f, (1 * d - .5f) / .57735f),
++                    BlurMaskFilter.Blur.NORMAL));
++            c.drawRoundRect(mWell.left - d, mWell.top - d + d, mWell.right + d, mWell.bottom + 3 * d, r, r, mPaint);
++            mPaint.setMaskFilter(null);
++            c.restoreToCount(save);
++            // inset 0 0 0 1px: the warm ring just inside the edge.
++            final float s = Math.max(1f, d);
++            final float half = s / 2;
++            mPaint.setStrokeWidth(s);
++            mPaint.setColor(RING);
++            c.drawRoundRect(mWell.left + half, mWell.top + half, mWell.right - half, mWell.bottom - half, r - half,
++                    r - half, mPaint);
++        }
++
++        /** OxbloodEdge.MicGlyph.draw. */
++        private void drawGlyph(Canvas c, float d, boolean muted) {
++            final float cx = getWidth() / 2f;
++            final float cy = getHeight() / 2f;
++            if (muted) {
++                final float h = MIC_PLATE_DP * d;
++                final float r = MIC_RADIUS_DP * d;
++                final float w = 1.4f * d;
++                final RectF plate = new RectF(cx - h / 2 + w / 2, cy - h / 2 + w / 2, cx + h / 2 - w / 2,
++                        cy + h / 2 - w / 2);
++                mPaint.reset();
++                mPaint.setAntiAlias(true);
++                mPaint.setStyle(Paint.Style.STROKE);
++                mPaint.setStrokeWidth(4 * d);
++                mPaint.setColor(MUTED_GLOW);
++                mPaint.setMaskFilter(new BlurMaskFilter(5 * d, BlurMaskFilter.Blur.NORMAL));
++                c.drawRoundRect(plate, r, r, mPaint);
++                mPaint.setMaskFilter(null);
++                mPaint.setStrokeWidth(w);
++                mPaint.setColor(MUTED_RING);
++                c.drawRoundRect(plate, r - w / 2, r - w / 2, mPaint);
++            }
++            final int save = c.save();
++            final float s = GLYPH_DP * d / 24f;
++            c.translate(cx - 12 * s, cy - 12 * s);
++            c.scale(s, s);
++            final int ink = muted ? MUTED_INK : INK;
++            final int body = muted ? (ink & 0x00ffffff) | (Math.round(.55f * 255) << 24) : ink;
++            mPaint.reset();
++            mPaint.setAntiAlias(true);
++            mPaint.setColor(body);
++            c.drawRoundRect(new RectF(8.6f, 2.5f, 15.4f, 15f), 3.4f, 3.4f, mPaint);
++            mPaint.setStyle(Paint.Style.STROKE);
++            mPaint.setStrokeWidth(1.9f);
++            mPaint.setStrokeCap(Paint.Cap.ROUND);
++            c.drawArc(new RectF(5.6f, 4.4f, 18.4f, 17.2f), 0, 180, false, mPaint);
++            c.drawLine(12, 17.4f, 12, 20.6f, mPaint);
++            c.drawLine(8.8f, 20.8f, 15.2f, 20.8f, mPaint);
++            if (muted) {
++                // The slash, knocked out of the well (the well's own dark) and then drawn.
++                mPaint.setStrokeWidth(3.4f);
++                mPaint.setColor(KNOCKOUT);
++                c.drawLine(4.5f, 3.5f, 19.5f, 20.5f, mPaint);
++                mPaint.setStrokeWidth(1.9f);
++                mPaint.setColor(ink);
++                c.drawLine(4.5f, 3.5f, 19.5f, 20.5f, mPaint);
++            }
++            c.restoreToCount(save);
 +        }
 +
 +        @Override

@@ -9,7 +9,7 @@ projects WindowManager-Shell and SystemUI-core compile from (frameworks/base and
 - the overlays copied into those projects. Every frameworks/base overlay is a required input here: the patch's
   RoseEdgeMicSlot calls the tray's AgentTrayLink.
 
-The candidate is OS Core's os/patches/rose-edge-wmshell.patch: #516 and #523, merged at 01cf401 and unregistered.
+The candidate is OS Core's os/patches/rose-edge-wmshell.patch: #516, #523 and #528, merged at bf6a9ed and unregistered.
 
 Ownership:
 - OS Core owns the patch and confirms the inputs and goals (the `confirmation` block). Until it confirms, the contract
@@ -47,9 +47,9 @@ C = load_base()
 L3 = {name: getattr(C, name) for name in ('PROJECTS', 'describe')}
 
 C.MANIFEST = ROOT/'os/compile-contracts/frameworks-base-wmshell.json'
-# The reviewed candidate: the merge on main holding the patch's final bytes (#516 then #523).
-C.CANDIDATE = {'pr': 523, 'commit': '01cf401444392d64e18a520347180f7608c1137b'}
-C.BUNDLE = C.FIXTURES/'candidate-pr523'
+# The reviewed candidate: the merge on main holding the patch's current bytes (#516, #523, then #528).
+C.CANDIDATE = {'pr': 528, 'commit': 'bf6a9ed9a8ec03eaa296ee98b292f9002f2486e7'}
+C.BUNDLE = C.FIXTURES/'candidate-pr528'
 C.CANDIDATE_PATCHES = ['rose-edge-wmshell.patch']
 # frameworks/base: apply-os-changes.py's --background-policy order (as in the Launcher3 contract), then the candidate.
 # build/release: unchanged, because framework's classpath needs its aconfig declarations.
@@ -67,7 +67,7 @@ C.COMPILED_PROJECTS = ('frameworks/base', 'build/release')
 C.FLAG_EVIDENCE = []
 
 CONFIRMATION = {
-    'by': 'OS Core (owner of rose-edge-wmshell.patch, #516/#523)',
+    'by': 'OS Core (owner of rose-edge-wmshell.patch, #516/#523/#528)',
     'state': 'confirmed',
     'record': 'OS Core to OS Product, 2026-11-04 06:28 UTC, computed from source against main 1df12a7 (the patch bytes '
         'bound here). It confirmed every field below and listed all six after-images, which equal candidateDelta. It '
@@ -84,6 +84,10 @@ CONFIRMATION = {
     ],
     'rule': 'an adapter refuses this contract unless state is "confirmed"; any change to the bound patch or inputs '
         'regenerates the manifest and needs OS Core\'s confirmation again',
+    'reconfirmed': 'OS Core to OS Product, 2026-11-04 06:51 UTC, from merge bf6a9ed (#528, tested head e304a35): patch '
+        'sha256 ba64ea3114f46925446c204261097aebf963a923eb355860a6f2e54bb7262be2. Only RoseEdgeMicSlot.java\'s after-image '
+        'changes (blob a9c4a5dd62f652dcf1044b6b9774ed851083f989); the other after-images, the WMShellModule pre-image, '
+        'the inputs and the goals are unchanged',
 }
 
 # Where each goal's sources come from, read from the pinned Android.bp files (committed byte for byte under

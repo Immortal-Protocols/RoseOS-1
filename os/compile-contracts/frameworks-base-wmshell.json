@@ -7,7 +7,7 @@
   "SystemUI-core"
  ],
  "confirmation": {
-  "by": "OS Core (owner of rose-edge-wmshell.patch, #516/#523)",
+  "by": "OS Core (owner of rose-edge-wmshell.patch, #516/#523/#528)",
   "state": "confirmed",
   "record": "OS Core to OS Product, 2026-11-04 06:28 UTC, computed from source against main 1df12a7 (the patch bytes bound here). It confirmed every field below and listed all six after-images, which equal candidateDelta. It corrected one point: the required inputs are wider than the tray link, namely all four Shell overlays (Shell compiles src/**), frameworks-base.patch, and the SystemUI overlays for SystemUI-core. These are all required here. The self-update and background-control patches do not decide these goals; they stay bound because the base bundle applies them",
   "fields": [
@@ -17,7 +17,8 @@
    "overlayRoles.compileGoals: WindowManager-Shell and SystemUI-core",
    "flagEvidence: none"
   ],
-  "rule": "an adapter refuses this contract unless state is \"confirmed\"; any change to the bound patch or inputs regenerates the manifest and needs OS Core's confirmation again"
+  "rule": "an adapter refuses this contract unless state is \"confirmed\"; any change to the bound patch or inputs regenerates the manifest and needs OS Core's confirmation again",
+  "reconfirmed": "OS Core to OS Product, 2026-11-04 06:51 UTC, from merge bf6a9ed (#528, tested head e304a35): patch sha256 ba64ea3114f46925446c204261097aebf963a923eb355860a6f2e54bb7262be2. Only RoseEdgeMicSlot.java's after-image changes (blob a9c4a5dd62f652dcf1044b6b9774ed851083f989); the other after-images, the WMShellModule pre-image, the inputs and the goals are unchanged"
  },
  "registration": {
   "state": "unregistered",
@@ -85,7 +86,7 @@
     },
     {
      "name": "rose-edge-wmshell.patch",
-     "sha256": "757dd6cbde301dd24e03debeb7008adb963b614615684f054ad8977b7671c4e6"
+     "sha256": "ba64ea3114f46925446c204261097aebf963a923eb355860a6f2e54bb7262be2"
     }
    ],
    "files": [
@@ -802,17 +803,17 @@
      "path": "libs/WindowManager/Shell/src/com/android/wm/shell/RoseEdgeMicSlot.java",
      "pre": null,
      "post": {
-      "sha256": "41c4723f3e291d3d99db2db7470da907580c23cc933d1c225b3d1e2be3725d79",
-      "gitBlob": "1bb1aa51bef33585e1d0cf445916b3e3c47e6471"
+      "sha256": "a47b0efc5fca537977248ee27b027a5e4125f69542dad1601b29ecad7bd0512b",
+      "gitBlob": "a9c4a5dd62f652dcf1044b6b9774ed851083f989"
      },
      "chain": [
       {
        "patch": "rose-edge-wmshell.patch",
        "before": null,
-       "after": "1bb1aa51bef33585e1d0cf445916b3e3c47e6471",
+       "after": "a9c4a5dd62f652dcf1044b6b9774ed851083f989",
        "index": [
         "0000000",
-        "1bb1aa5"
+        "a9c4a5d"
        ],
        "base": "exact"
       }
@@ -2238,15 +2239,15 @@
   ]
  },
  "candidateDelta": {
-  "pr": 523,
-  "commit": "01cf401444392d64e18a520347180f7608c1137b",
+  "pr": 528,
+  "commit": "bf6a9ed9a8ec03eaa296ee98b292f9002f2486e7",
   "patches": [
    {
     "name": "rose-edge-wmshell.patch",
-    "sha256": "757dd6cbde301dd24e03debeb7008adb963b614615684f054ad8977b7671c4e6",
+    "sha256": "ba64ea3114f46925446c204261097aebf963a923eb355860a6f2e54bb7262be2",
     "project": "frameworks/base",
     "strip": 1,
-    "bundlePath": "os/tests/fixtures/launcher3-compile-contract/candidate-pr523/patches/rose-edge-wmshell.patch"
+    "bundlePath": "os/tests/fixtures/launcher3-compile-contract/candidate-pr528/patches/rose-edge-wmshell.patch"
    }
   ],
   "application": {
@@ -2272,8 +2273,8 @@
     "path": "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/RoseEdgeMicSlot.java",
     "before": null,
     "after": {
-     "sha256": "41c4723f3e291d3d99db2db7470da907580c23cc933d1c225b3d1e2be3725d79",
-     "gitBlob": "1bb1aa51bef33585e1d0cf445916b3e3c47e6471"
+     "sha256": "a47b0efc5fca537977248ee27b027a5e4125f69542dad1601b29ecad7bd0512b",
+     "gitBlob": "a9c4a5dd62f652dcf1044b6b9774ed851083f989"
     }
    },
    {
@@ -2323,8 +2324,8 @@
   "overlays": [],
   "bundle": [
    {
-    "path": "os/tests/fixtures/launcher3-compile-contract/candidate-pr523/patches/rose-edge-wmshell.patch",
-    "sha256": "757dd6cbde301dd24e03debeb7008adb963b614615684f054ad8977b7671c4e6"
+    "path": "os/tests/fixtures/launcher3-compile-contract/candidate-pr528/patches/rose-edge-wmshell.patch",
+    "sha256": "ba64ea3114f46925446c204261097aebf963a923eb355860a6f2e54bb7262be2"
    }
   ],
   "pathConvention": "files[].path and overlays[].target are relative to the source tree root (project path first); projects[].files[].path and base.projects[].files[].path are relative to their project; bundlePath and bundle[].path are relative to the repository root"
