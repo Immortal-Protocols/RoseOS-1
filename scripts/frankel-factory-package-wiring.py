@@ -290,7 +290,7 @@ def file_sha256(path, deadline):
 
 def small_json(path):
     regular(path)
-    with open(path, 'rb') as f:
+    with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW), 'rb') as f:
         data = f.read(LIMITS['receiptBytes'] + 1)
     if len(data) > LIMITS['receiptBytes']:
         raise ValueError(f'{Path(path).name} is larger than {LIMITS["receiptBytes"]} bytes')
@@ -300,11 +300,34 @@ def small_json(path):
     return value
 
 
-def otatools_members(path, generator_pins, deadline):
+def otatools_observation(path, generator_pins, deadline):
+    """The otatools ZIP's sha256 and size and its members (otatools_members), all read through one descriptor of one
+    regular file that kept its size, mtime and ctime throughout, so the member hashes are of the hashed bytes."""
+    before = regular(path)
+    with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW), 'rb') as f:
+        opened = os.fstat(f.fileno())
+        if (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino):
+            raise ValueError(f'{path} changed while it was opened')
+        digest = hashlib.sha256()
+        while True:
+            deadline.check()
+            block = f.read(8 << 20)
+            if not block:
+                break
+            digest.update(block)
+        f.seek(0)
+        members, problems = otatools_members(f, generator_pins, deadline)
+        after = os.fstat(f.fileno())
+    if (after.st_size, after.st_mtime_ns, after.st_ctime_ns) != (before.st_size, before.st_mtime_ns, before.st_ctime_ns):
+        raise ValueError(f'{path} changed while it was read')
+    return digest.hexdigest(), before.st_size, members, problems
+
+
+def otatools_members(source, generator_pins, deadline):
     """sha256 and size of bin/fastboot and of each pinned device/common generator member, read from the ZIP's own
     central directory: stored or deflated, unencrypted, unique names, each within its cap. ValueError otherwise."""
     found, problems = {}, []
-    with zipfile.ZipFile(path) as archive:
+    with zipfile.ZipFile(source) as archive:
         infos = archive.infolist()
         if len(infos) > LIMITS['otatoolsEntries']:
             raise ValueError(f'otatools has more than {LIMITS["otatoolsEntries"]} entries')
@@ -456,8 +479,7 @@ def observe_tools(report, src, binding, deadline):
     problems = report['problems']
     path = str(otatools_path(src['production'], binding['build']))
     try:
-        digest, size = file_sha256(path, deadline)
-        members, member_problems = otatools_members(path, src['generator'], deadline)
+        digest, size, members, member_problems = otatools_observation(path, src['generator'], deadline)
         fastboot = members.get(FASTBOOT_MEMBER)
         report['otatools'] = {'path': path, 'sha256': digest, 'bytes': size, 'members': members,
                               'fastbootSha256': fastboot['sha256'] if fastboot else None,

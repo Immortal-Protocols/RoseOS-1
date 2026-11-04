@@ -50,6 +50,7 @@ BUILD, STAMP, CANDIDATE, SOURCE_RUN = '2026110499', '1793900000', 'c0ffee00' * 5
 BOUND = {'build': BUILD, 'buildTimestamp': STAMP, 'candidate': CANDIDATE, 'sourceRun': SOURCE_RUN,
          'signedTargetFilesSha256': 'a' * 64, 'otatoolsSha256': 'b' * 64, 'fastbootSha256': 'c' * 64}
 UNBOUND = dict.fromkeys(BOUND)
+ZIP_TIME = (2026, 11, 4, 0, 0, 0)  # fixture ZIP entry times are fixed, so a rebuilt fixture has the same sha256
 FORBIDDEN = ('id-token', 'secrets.', 'actions-gcp-login', 'GCP_', 'PIXEL_', 'publish', 'host-sign', 'signing-bootstrap',
              'ssh-keygen', 'download-artifact', 'release-pipeline.py', 'factory-package.log', 'target_files')
 
@@ -407,8 +408,8 @@ class Observe(unittest.TestCase):
         self.stage('init', '--state', base/'stages', '--source-revision', candidate, '--device', 'frankel', '--build-number', BUILD)
         for name in stages:
             self.stage('run', '--state', base/'stages', '--source-revision', candidate, name, '--', 'true')
-        with zipfile.ZipFile(base/'release/signed-target_files.zip', 'w') as z:
-            z.writestr('SYSTEM/build.prop', f'ro.build.version.incremental={BUILD}\n')
+        with zipfile.ZipFile(base/'release/signed-target_files.zip', 'w') as z:  # fixed times: the same bytes every time
+            z.writestr(zipfile.ZipInfo('SYSTEM/build.prop', ZIP_TIME), f'ro.build.version.incremental={BUILD}\n')
         signed = sha((base/'release/signed-target_files.zip').read_bytes())
         self.write_json(base/'release/sign-receipt.json', {'receiptType': 'os-signing', 'candidate': CANDIDATE, 'build': BUILD,
             'releaseScriptSha256': SCRIPT_PIN, 'outputs': {}, 'signedTargetFilesSha256': signed})
@@ -431,7 +432,8 @@ class Observe(unittest.TestCase):
                        *((f'device/common/{name}', (GENERATOR_FIXTURE/name).read_bytes()) for name in GENERATOR)]
         with zipfile.ZipFile(release/'frankel-otatools.zip', 'w', zipfile.ZIP_DEFLATED) as z:
             for name, data in members:
-                z.writestr(name, data) if isinstance(name, str) else z.writestr(*name, data)
+                info = zipfile.ZipInfo(name, ZIP_TIME) if isinstance(name, str) else name[0]
+                z.writestr(info, data, compress_type=zipfile.ZIP_DEFLATED)
         return release/'frankel-otatools.zip'
 
     @staticmethod
@@ -599,6 +601,23 @@ class Observe(unittest.TestCase):
             status, report = self.observe(f'irregular-{kind}')
             self.assertEqual((status, report['lock']['reason'][:14], unread(report)), (3, 'lock_unusable:', True), kind)
             self.lock.rmdir() if kind == 'directory' else self.lock.unlink()
+
+    def test_an_otatools_change_while_it_is_read_is_a_problem_not_a_measurement(self):
+        original = wiring.otatools_members
+
+        def members(source, pins, deadline):  # the members are read, then the file changes before the final check
+            result = original(source, pins, deadline)
+            with open(self.otatools, 'ab') as f:
+                f.write(b'appended')
+            return result
+        wiring.otatools_members = members
+        try:
+            status, report = self.observe('changed')
+        finally:
+            wiring.otatools_members = original
+        self.assertEqual((status, report['otatools']), (3, {'path': str(self.otatools), 'sha256': None}))
+        self.assertEqual([p for p in report['problems'] if p.startswith('otatools: ')],
+                         [f'otatools: {self.otatools} changed while it was read'])
 
     def test_the_deadline_stops_the_observation(self):
         ticks = iter([0.0] + [10.0 ** 6] * 100)
