@@ -5,7 +5,8 @@ integrating commit (headSha) and the producer's own HEAD always differ, in patch
 nothing read at the wrong revision can pass. A report the producer writes is checked by the adapter's own
 bundle_report_problems (loaded by these tests only; the producer never loads it), and every association and
 observation rule refuses or reports by name. One test reads this checkout's own os/patches and os/overlays at HEAD
-against the pinned base.bundleContent and candidateDelta: wholly the base, or wholly the base with the candidate."""
+against the pinned base.bundleContent and candidateDelta: wholly the base, or the base with the whole candidate, whose
+own files later work may move past their #440 bytes."""
 import contextlib
 import copy
 import hashlib
@@ -548,14 +549,15 @@ class Committed(unittest.TestCase):
         with self.assertRaisesRegex(producer.Invalid, 'not the contract version this producer reads'):
             producer.load_contract(pinned='0' * 64)
 
-    def test_this_checkouts_os_is_wholly_the_pinned_base_or_wholly_the_candidate(self):
+    def test_this_checkouts_os_is_wholly_the_pinned_base_or_at_or_past_the_whole_candidate(self):
         """main's os/ is the contract's base, or the base with #440's whole candidateDelta (#440 has landed in normal
-        integration), never a mix. Observed at HEAD, with the checker's prefixes: nothing is unclassified; the
-        registered patches are base.bundleContent's; the notAnInput overlays are base.bundleContent's; each
-        candidateDelta overlay's before-image is its base hash (the contract checks itself); the overlays are exactly
-        base.bundleContent's, or exactly those with every candidateDelta overlay at its after-image; and the
-        candidate's patches are at HEAD with their pinned sha256 exactly when its overlays are, and otherwise nothing,
-        no file and no directory, is at their paths."""
+        integration), whose own files later Launcher3 work may move past their #440 bytes (#410's staged gesture,
+        #548); never a mix. Observed at HEAD, with the checker's prefixes: nothing is unclassified; the registered
+        patches are base.bundleContent's; the notAnInput overlays are base.bundleContent's; each candidateDelta
+        overlay's before-image is its base hash (the contract checks itself). Then either the overlays are exactly
+        base.bundleContent's and nothing, no file and no directory, is at a candidate patch's path; or the overlays
+        outside candidateDelta's are exactly base.bundleContent's, every candidateDelta overlay is at HEAD and none
+        is back at its before-image, and every candidateDelta patch is a file at HEAD."""
         contract = copy.deepcopy(CONTRACT)
         contract['overlayRoles']['required']['prefixes'] = list(PREFIXES)
         seen = producer.observed(contract, ROOT, 'HEAD')
@@ -567,22 +569,26 @@ class Committed(unittest.TestCase):
                          sorted((p['project'], p['name'], p['sha256']) for p in content['patches']))
         self.assertEqual(sorted(seen['notAnInputOverlays']), sorted(content['notAnInputOverlays']))
         base = {o['target']: o['sha256'] for o in content['overlays']}
-        candidate = dict(base)
         for o in delta['overlays']:
             self.assertEqual(base.get(o['target']), o['before'], o['target'])
-            candidate[o['target']] = o['after']
-        self.assertNotEqual(base, candidate)
         overlays = {o['target']: o['sha256'] for o in seen['overlays']}
-        self.assertIn(overlays, (base, candidate), "os/overlays is neither the base nor the whole candidate")
         patches = producer.tree(ROOT, 'HEAD', 'os/patches')
-        for p in delta['patches']:
-            path = f'os/patches/{p["name"]}'
-            if overlays == candidate:
-                self.assertEqual(producer.sha256(producer.blob(ROOT, 'HEAD', path)), p['sha256'], path)
-            else:
+        if overlays == base:
+            for p in delta['patches']:
+                path = f'os/patches/{p["name"]}'
                 self.assertNotIn(path, patches)
                 self.assertFalse([k for k in patches if k.startswith(path + '/')], path)
-
+            return
+        targets = {o['target'] for o in delta['overlays']}
+        self.assertTrue(targets)
+        self.assertEqual({t: d for t, d in overlays.items() if t not in targets},
+                         {t: d for t, d in base.items() if t not in targets}, 'outside the candidate, os/overlays is the base')
+        for o in delta['overlays']:
+            self.assertIn(o['target'], overlays, f'{o["target"]}: the candidate without one of its files')
+            self.assertNotEqual(overlays[o['target']], o['before'], f'{o["target"]}: back at its base, a mix')
+        for p in delta['patches']:
+            path = f'os/patches/{p["name"]}'
+            self.assertEqual(patches.get(path), ('100644', 'blob'), f'{path}: the candidate without one of its patches')
 
 if __name__ == '__main__':
     unittest.main()
