@@ -1,0 +1,144 @@
+/* Copyright 2026. SPDX-License-Identifier: Apache-2.0 */
+package com.android.quickstep.fallback;
+
+import android.graphics.Rect;
+import android.os.Looper;
+import android.util.SparseArray;
+import android.util.SparseIntArray;
+
+import java.util.ArrayList;
+import java.util.List;
+
+/**
+ * RoseOS (#410 E2c): whether the raised edge is up on each display, over which task, and whether WMShell has really
+ * shortened that app (RoseEdgeShell), inside Launcher3's process. The swipe handler (RoseEdgeSwipe) raises and lowers
+ * it; the edge window registers a listener, shows Home's controls, and lowers it itself on a swipe down or when the
+ * panel asks.
+ *
+ * The edge can only rise while a listener is registered (something draws it) and the shell's IRoseEdge is available
+ * (something really resizes the app): otherwise the release ends as stock Launcher3. On a raise the edge shows at once
+ * and the shell is asked to shorten the app by liftPx. A refusal (the app is not resizeable, the device is locked, and
+ * so on) lowers it again, with nothing resized; the shell lowering by itself (the task changed, the keyguard, the IME,
+ * the display) lowers it here too. It counts as raised only over the task it rose over, so it can never leak into a
+ * gesture over another app. Main thread only: the swipe handler, the window and the shell's replies run there.
+ */
+public final class RoseEdgeState {
+    private RoseEdgeState() {}
+
+    /** Told on the main thread whenever a display's edge goes up or down. */
+    public interface Listener {
+        void onRaisedChanged(int displayId, boolean raised);
+    }
+
+    /** Display id to the task id the edge rose over; absent when lowered. */
+    private static final SparseIntArray RAISED_OVER = new SparseIntArray();
+    /** Display id to the app bounds the shell reported once it really shortened that task. */
+    private static final SparseArray<Rect> RESIZED = new SparseArray<>();
+    private static final List<Listener> LISTENERS = new ArrayList<>();
+
+    /** Up on this display over exactly this task. */
+    public static boolean isRaised(int displayId, int taskId) {
+        int index = RAISED_OVER.indexOfKey(displayId);
+        return index >= 0 && RAISED_OVER.valueAt(index) == taskId;
+    }
+
+    /** Up on this display over any task. */
+    public static boolean isRaised(int displayId) {
+        return RAISED_OVER.indexOfKey(displayId) >= 0;
+    }
+
+    /** The shell has shortened this task's app area on this display (onRaised arrived for it). */
+    public static boolean isResized(int displayId, int taskId) {
+        return isRaised(displayId, taskId) && RESIZED.get(displayId) != null;
+    }
+
+    /** The app bounds the shell reported for the raised task, or null before it replied. */
+    public static Rect resizedBounds(int displayId) {
+        Rect bounds = RESIZED.get(displayId);
+        return bounds == null ? null : new Rect(bounds);
+    }
+
+    /** Whether something (the edge window) is there to draw a raised edge. */
+    public static boolean hasListener() {
+        return !LISTENERS.isEmpty();
+    }
+
+    /** Whether a raise could happen at all: something draws the edge and the shell can really resize the app. */
+    public static boolean canRaise() {
+        return !LISTENERS.isEmpty() && RoseEdgeShell.available();
+    }
+
+    /**
+     * Raises the edge over taskId and asks the shell to shorten the app by liftPx. Refused (false) when no listener
+     * could draw it or the shell could not be asked; then nothing changes.
+     */
+    public static boolean raise(int displayId, int taskId, int liftPx) {
+        mainThread();
+        if (!canRaise()) return false;
+        if (isRaised(displayId, taskId)) return true;
+        boolean wasRaised = isRaised(displayId);
+        RAISED_OVER.put(displayId, taskId);
+        RESIZED.remove(displayId);
+        if (!RoseEdgeShell.raise(displayId, taskId, liftPx, SHELL_REPLIES)) {
+            RAISED_OVER.delete(displayId);
+            if (wasRaised) notifyChanged(displayId, false);
+            return false;
+        }
+        if (!wasRaised) notifyChanged(displayId, true);
+        return true;
+    }
+
+    /** Lowers the edge and asks the shell to restore the full height. */
+    public static void lower(int displayId) {
+        mainThread();
+        if (lowerHere(displayId)) RoseEdgeShell.lower(displayId);
+    }
+
+    public static void addListener(Listener listener) {
+        mainThread();
+        if (!LISTENERS.contains(listener)) LISTENERS.add(listener);
+    }
+
+    public static void removeListener(Listener listener) {
+        mainThread();
+        LISTENERS.remove(listener);
+    }
+
+    /** The shell's replies (RoseEdgeShell delivers them on the main thread). */
+    static final RoseEdgeShell.Callback SHELL_REPLIES = new RoseEdgeShell.Callback() {
+        @Override
+        public void onRaised(int displayId, int taskId, Rect appBounds) {
+            if (isRaised(displayId, taskId) && appBounds != null) RESIZED.put(displayId, new Rect(appBounds));
+        }
+
+        @Override
+        public void onRefused(int displayId, int taskId, int reason) {
+            // Nothing was resized: take the edge down again, but only if it is still up over that same task.
+            if (isRaised(displayId, taskId)) lowerHere(displayId);
+        }
+
+        @Override
+        public void onLowered(int displayId, int reason) {
+            // The shell already restored the full height (it lowered by itself, or confirms a lower).
+            lowerHere(displayId);
+        }
+    };
+
+    /** Takes the edge down here only; true when it was up. */
+    private static boolean lowerHere(int displayId) {
+        int index = RAISED_OVER.indexOfKey(displayId);
+        if (index < 0) return false;
+        RAISED_OVER.removeAt(index);
+        RESIZED.remove(displayId);
+        notifyChanged(displayId, false);
+        return true;
+    }
+
+    private static void notifyChanged(int displayId, boolean raised) {
+        for (Listener listener : new ArrayList<>(LISTENERS)) listener.onRaisedChanged(displayId, raised);
+    }
+
+    private static void mainThread() {
+        if (Looper.myLooper() != Looper.getMainLooper()) throw new IllegalStateException("RoseEdgeState: main thread only");
+    }
+}
