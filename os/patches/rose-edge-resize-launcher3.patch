@@ -14,7 +14,7 @@ index 8f75b94..a881058 100644
          setHasBubbleBar(hasBubbleBar)
  
 diff --git a/quickstep/src/com/android/quickstep/TouchInteractionService.kt b/quickstep/src/com/android/quickstep/TouchInteractionService.kt
-index 256c991..dab5483 100644
+index 256c991..e75c030 100644
 --- a/quickstep/src/com/android/quickstep/TouchInteractionService.kt
 +++ b/quickstep/src/com/android/quickstep/TouchInteractionService.kt
 @@ -31,6 +31,8 @@ class TouchInteractionService : Service() {

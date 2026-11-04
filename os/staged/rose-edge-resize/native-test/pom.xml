@@ -1,8 +1,9 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- #410 OS Product, E2c (staged, inert): the staged Launcher3 raised-edge resize client (RoseEdgeShell, RoseEdgeState,
-     RoseEdgeSwipe) with E2a's unchanged RoseEdgeGesture, run on Robolectric's SDK 35 runtime against Java the SDK's
-     own aidl tool generates from ../aidl (the interface record). Not part of any build, CI or release: run explicitly
-     with `ANDROID_SDK_ROOT=... mvn -q -B test` from this directory. It compiles the staged sources unchanged. -->
+<!-- #410 OS Product, E2c: the Launcher3 raised-edge resize client in os/overlays (RoseEdgeShell, RoseEdgeState,
+     RoseEdgeSwipe, RoseEdgeLayout, RoseEdgeWindow and E2a's unchanged RoseEdgeGesture), run on Robolectric's SDK 35
+     runtime against Java the SDK's own aidl tool generates from ../aidl (the interface record). Not part of any build,
+     CI or release: run explicitly with `ANDROID_SDK_ROOT=... mvn -q -B test` from this directory. It compiles the
+     committed overlay sources unchanged. -->
 <project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
   <modelVersion>4.0.0</modelVersion>
@@ -89,8 +90,8 @@
         </executions>
       </plugin>
       <plugin>
-        <!-- The sources under test: the staged overlays, E2a's unchanged RoseEdgeGesture and the compile-only
-             SystemProperties stub, copied byte for byte; and the interface record compiled by the SDK's aidl tool. -->
+        <!-- The sources under test: os/overlays' RoseEdge* classes and the compile-only SystemProperties stub, copied
+             byte for byte; and the interface record compiled by the SDK's aidl tool. -->
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-antrun-plugin</artifactId>
         <version>3.1.0</version>
@@ -104,10 +105,9 @@
                 <delete dir="${project.build.directory}/e2c-src"/>
                 <delete dir="${project.build.directory}/e2c-aidl"/>
                 <copy todir="${project.build.directory}/e2c-src">
-                  <fileset dir="${project.basedir}/../overlays/packages/apps/Launcher3/quickstep/src" includes="**/*.java"/>
+                  <fileset dir="${project.basedir}/../../../overlays/packages/apps/Launcher3/quickstep/src"
+                           includes="com/android/quickstep/fallback/RoseEdge*.java"/>
                 </copy>
-                <copy todir="${project.build.directory}/e2c-src/com/android/quickstep/fallback"
-                      file="${project.basedir}/../../../overlays/packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeGesture.java"/>
                 <mkdir dir="${project.build.directory}/e2c-aidl"/>
                 <!-- aidl wants the canonical import root that each file lives under. -->
                 <property name="e2c.aidl.root" location="${project.basedir}/../aidl"/>

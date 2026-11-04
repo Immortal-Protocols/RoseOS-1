@@ -1,16 +1,18 @@
-# Raised edge with real app resize on release: staged E2c (#410), inert
+# Raised edge with real app resize on release: E2c (#410)
 
-The staged Launcher3 client for Nathan's raised edge with resize on release. It is staged here, under
-`os/staged/rose-edge-resize/`, so that nothing applies, copies or builds it:
-- `scripts/apply-os-changes.py` reads only `os/patches` and `os/overlays`;
-- the compile contract (`os/compile-contracts/launcher3-quickstep-lib.json`) binds #440's E2a candidate at `e361d1c`,
-  which stays byte for byte in `os/`.
+The Launcher3 client for Nathan's raised edge with resize on release is now in `os/`, on #440 (a draft that stays
+draft until a real Launcher3 compile):
+- `os/overlays/.../fallback/RoseEdge{Shell,State,Swipe,Layout,Window}.java`, with E2a's `RoseEdgeGesture` unchanged;
+- `os/patches/rose-edge-resize-launcher3.patch`, after E2a's unchanged `rose-edge-launcher3.patch`.
 
-These files move into `os/` only in a coordinated re-bind, once all four of these hold:
-- the framework side (OS Core) exists;
-- Home's panel exists;
-- the interface is agreed on #410;
-- the real Launcher3 compile path is open.
+`scripts/apply-os-changes.py` registers neither patch. The overlays only reach a build once #440 merges, and that waits
+for the real compile. The compile contract (`os/compile-contracts/launcher3-quickstep-lib.json`) re-binds its candidate
+to this E2c commit in the coordinated schema-3 change with Release. Until then it still binds E2a's `e361d1c`, and its
+check refuses this branch's `os/`.
+
+This directory keeps what is not built: the interface record, the pinned Launcher3 fixtures the wiring patch is
+checked against, and the opt-in native harness. The framework side (OS Core, #516/#523/#528), Home's answers and the
+interface are all settled on #410.
 
 ## Behaviour (prototypes/rose-hifi `e15274a`, lines 1278–1286 and 2915–2986)
 - A short bottom swipe of more than 36dp raises the 92dp edge.
@@ -26,12 +28,12 @@ These files move into `os/` only in a coordinated re-bind, once all four of thes
   these exact transaction ids. The earlier Home-panel proposal (`IRoseEdgeControls`/`IRoseEdgeHost`) is withdrawn:
   for the mic slot, Home's option (a) uses SystemUI's existing trusted tray client and adds no new trust (#410
   comment 6622900952).
-- `overlays/.../fallback/`: the staged Launcher3 client, which keeps E2a's `RoseEdgeGesture` unchanged.
+- `os/overlays/.../fallback/`: the Launcher3 client, which keeps E2a's `RoseEdgeGesture` unchanged.
   - `RoseEdgeShell`: hand-written binder code, because Launcher3QuickStepLib compiles no AIDL.
   - `RoseEdgeState`: the edge rises only when an edge window draws it and the shell can really resize the app. A
     refusal or a shell-side lower takes it down.
   - `RoseEdgeSwipe`: asks for the 58dp lift, and does not crop an app the shell has already shortened.
-- `native-test/`: compiles the staged sources unchanged against Java that the SDK's own `aidl` tool generates from
+- `native-test/`: compiles the `os/overlays` RoseEdge sources unchanged against Java that the SDK's own `aidl` tool generates from
   `aidl/`. The fake shell is the generated `IRoseEdge.Stub`, and it replies through the generated
   `IRoseEdgeListener.Proxy`. It runs on Robolectric's SDK 35 runtime:
   ```sh
@@ -53,7 +55,7 @@ These files move into `os/` only in a coordinated re-bind, once all four of thes
     `target/render/rose-edge.png`. It compiles against Robolectric's uninstrumented SDK 35 framework, because the
     window uses the hidden internal-insets touchable region, as Launcher3's Taskbar does.
 
-- **The Launcher3 wiring** (`patches/rose-edge-resize-launcher3.patch`) applies after `rose-edge-launcher3.patch`. It is
+- **The Launcher3 wiring** (`os/patches/rose-edge-resize-launcher3.patch`) applies after `rose-edge-launcher3.patch`. It is
   checked in CI with `git apply` against pinned Launcher3's own blobs, `fixtures/…/SystemUiProxy.kt` and
   `TouchInteractionService.kt`, which no other Rose patch touches.
   - `SystemUiProxy.setInitializationParams` hands `RoseEdgeShell` the shell's `IRoseEdge` binder. `clearProxy` clears
@@ -70,5 +72,6 @@ These files move into `os/` only in a coordinated re-bind, once all four of thes
     `AccessibilityNodeProvider`. The mic slot gets no node from this window: it is SystemUI's control.
 
 ## Not yet here
-- A real Kotlin/Java compile of the wiring and the window, which waits on the Launcher3 compile path (Infra).
-- Moving all of this into `os/` with the compile-candidate re-bind, coordinated with Release.
+- A real Kotlin/Java compile of the wiring and the window, which waits on the Launcher3 compile path (lunch, Infra).
+- The compile contract's re-bind to this commit (schema 3, with Release's re-pin).
+- Any device proof.

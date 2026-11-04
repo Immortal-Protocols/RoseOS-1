@@ -25,7 +25,9 @@ import org.robolectric.RuntimeEnvironment;
 import org.robolectric.annotation.Config;
 
 /**
- * #410 E2a: the production RoseEdgeSwipe and RoseEdgeState (compiled unchanged from the Launcher3 overlay) on
+ * #410 E2a, kept for E2c: the production RoseEdgeSwipe and RoseEdgeState (compiled unchanged from the Launcher3
+ * overlay, with E2c's RoseEdgeShell behind a fake shell binder that accepts every one-way call, so a raise can happen
+ * without a real WMShell; E2c's shell protocol itself is tested in os/staged/rose-edge-resize/native-test) on
  * Robolectric's SDK 35 runtime, at the frozen reference's 384x832dp screen, xxhdpi (and once at 420dpi): the default-off
  * switch, the gates (including "no edge window, no raise"), raising and lowering per display and task with listeners,
  * distances and speed from touch-down, and the preview's matrix and crop. Framework behaviour on a host: the patched
@@ -42,6 +44,14 @@ public class RoseEdgeSwipeNativeTest {
     int width, height;
     final List<String> events = new ArrayList<>();
     final RoseEdgeState.Listener listener = (display, raised) -> events.add(display + (raised ? " up" : " down"));
+    /** The shell's IRoseEdge as Launcher3 receives it: it accepts each one-way transaction and replies nothing. */
+    final android.os.Binder shell = new android.os.Binder() {
+        @Override
+        protected boolean onTransact(int code, android.os.Parcel data, android.os.Parcel reply, int flags) {
+            return true;
+        }
+    };
+    int lift;
 
     @Before
     public void setUp() {
@@ -49,6 +59,8 @@ public class RoseEdgeSwipeNativeTest {
         density = context.getResources().getDisplayMetrics().density;
         width = Math.round(384 * density);
         height = Math.round(832 * density);
+        lift = RoseEdgeGesture.raisedInsetPx(density);
+        RoseEdgeShell.setShell(shell);
         RoseEdgeState.lower(DISPLAY);
         RoseEdgeState.lower(OTHER_DISPLAY);
         RoseEdgeState.addListener(listener);
@@ -66,6 +78,7 @@ public class RoseEdgeSwipeNativeTest {
         RoseEdgeState.lower(DISPLAY);
         RoseEdgeState.lower(OTHER_DISPLAY);
         SystemProperties.set(RoseEdgeSwipe.PROPERTY, "");
+        RoseEdgeShell.setShell(null);
         durationScale(1f);
     }
 
@@ -114,7 +127,7 @@ public class RoseEdgeSwipeNativeTest {
         assertFalse(RoseEdgeState.isRaised(DISPLAY));
         assertFalse("no preview either", s.preview(true, true, false, 60 * density, width, height, new Matrix(),
                 new Rect(), new float[1]));
-        assertFalse("and the state refuses a raise", RoseEdgeState.raise(DISPLAY, TASK));
+        assertFalse("and the state refuses a raise", RoseEdgeState.raise(DISPLAY, TASK, lift));
         RoseEdgeState.addListener(listener);
     }
 
@@ -189,8 +202,8 @@ public class RoseEdgeSwipeNativeTest {
         RoseEdgeState.lower(DISPLAY);
         assertTrue("lowering what is down tells nobody", events.isEmpty());
         RoseEdgeState.addListener(listener);
-        assertTrue(RoseEdgeState.raise(DISPLAY, TASK));
-        assertTrue(RoseEdgeState.raise(DISPLAY, TASK));
+        assertTrue(RoseEdgeState.raise(DISPLAY, TASK, lift));
+        assertTrue(RoseEdgeState.raise(DISPLAY, TASK, lift));
         assertEquals("one listener, one change", List.of("0 up"), events);
     }
 
@@ -235,7 +248,7 @@ public class RoseEdgeSwipeNativeTest {
         }
         durationScale(1f);
 
-        RoseEdgeState.raise(DISPLAY, TASK);
+        RoseEdgeState.raise(DISPLAY, TASK, lift);
         RoseEdgeSwipe raised = swipe(true, false, 0);
         for (float dp : new float[] {0, 90, 400}) {
             assertTrue(raised.preview(true, true, false, dp * density, width, height, m, crop, radius));

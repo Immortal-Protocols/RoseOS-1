@@ -1,7 +1,8 @@
-"""#410 E2c (staged, inert): the interface record in os/staged/rose-edge-resize/aidl and Launcher3's hand-written binder
-code agree exactly, and nothing applies the staged files. The opt-in Robolectric harness in
-os/staged/rose-edge-resize/native-test runs the same code against the aidl tool's generated Stub and Proxy; this check
-needs no SDK so that CI keeps the two from drifting. Source only: no build, device or host."""
+"""#410 E2c: the interface record in os/staged/rose-edge-resize/aidl and Launcher3's hand-written binder code in
+os/overlays agree exactly, and apply-os-changes.py registers neither Rose edge patch (draft, default-off, until a real
+compile). The opt-in Robolectric harness in os/staged/rose-edge-resize/native-test runs the same code against the aidl
+tool's generated Stub and Proxy; this check needs no SDK so that CI keeps the two from drifting. Source only: no build,
+device or host."""
 from pathlib import Path
 import hashlib
 import re
@@ -10,7 +11,8 @@ import unittest
 ROOT = Path(__file__).resolve().parents[2]
 STAGED = ROOT/'os/staged/rose-edge-resize'
 AIDL = STAGED/'aidl'
-FALLBACK = STAGED/'overlays/packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback'
+FALLBACK = ROOT/'os/overlays/packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback'
+WIRING = ROOT/'os/patches/rose-edge-resize-launcher3.patch'
 
 
 def methods(path):
@@ -66,7 +68,7 @@ class RoseEdgeResizeStagedTest(unittest.TestCase):
         self.assertNotRegex(every, r'(?i)AgentTray|setMicrophoneMute|SensorPrivacy|AudioManager|\bMUTE\b',
             'Launcher3 never touches microphone state (option (a))')
         # Home's destination (#410 6623685186): Rose Agent's existing launch intent, no new extra or entry.
-        self.assertNotIn('ROSE_EDGE_DESTINATION', every + (STAGED/'patches/rose-edge-resize-launcher3.patch').read_text())
+        self.assertNotIn('ROSE_EDGE_DESTINATION', every + WIRING.read_text())
         self.assertNotIn('Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY', every)
         window = (FALLBACK/'RoseEdgeWindow.java').read_text()
         self.assertIn('pm.getLaunchIntentForPackage(ROSE_PACKAGE)', window)
@@ -125,7 +127,7 @@ class RoseEdgeResizeStagedTest(unittest.TestCase):
             relative = str(path.relative_to(fixtures))
             data = path.read_bytes()
             self.assertEqual(hashlib.sha1(b'blob %d\0' % len(data) + data).hexdigest(), pinned[relative], relative)
-        patch = STAGED/'patches/rose-edge-resize-launcher3.patch'
+        patch = WIRING
         touched = sorted(re.findall(r'^\+\+\+ b/(\S+)', patch.read_text(), re.M))
         self.assertEqual(touched, ['quickstep/src/com/android/quickstep/SystemUiProxy.kt',
             'quickstep/src/com/android/quickstep/TouchInteractionService.kt'])
@@ -139,6 +141,13 @@ class RoseEdgeResizeStagedTest(unittest.TestCase):
         subprocess.run(['git', 'init', '-q', str(work)], check=True)
         for step in (['apply', '--check'], ['apply']):
             subprocess.run(['git', '-C', str(work), *step, str(patch)], check=True)
+        # Each file's index line names the blobs the patch really goes from and to (the contract checks this too).
+        for before, after, path in re.findall(r'^index ([0-9a-f]+)\.\.([0-9a-f]+) \d+\n--- a/\S+\n\+\+\+ b/(\S+)',
+                patch.read_text(), re.M):
+            self.assertTrue(pinned[path].startswith(before), path)
+            data = (work/path).read_bytes()
+            self.assertTrue(hashlib.sha1(b'blob %d\0' % len(data) + data).hexdigest().startswith(after),
+                f'{path}: the index line is stale; regenerate the patch with git diff')
         system_ui = (work/'quickstep/src/com/android/quickstep/SystemUiProxy.kt').read_text()
         self.assertIn('RoseEdgeShell.setShell(\n            params.getBinder(com.android.quickstep.fallback.RoseEdgeShell.DESCRIPTOR)',
             system_ui)
@@ -167,21 +176,21 @@ class RoseEdgeResizeStagedTest(unittest.TestCase):
             package = re.search(r'^package ([\w.]+);', aidl, re.M).group(1)
             self.assertIn(f'{constant} = "{package}.{name}";', shell)
         self.assertIn('addExternalInterface(IRoseEdge.DESCRIPTOR,', patch)
-        wiring = (STAGED/'patches/rose-edge-resize-launcher3.patch').read_text()
+        wiring = WIRING.read_text()
         self.assertIn('params.getBinder(com.android.quickstep.fallback.RoseEdgeShell.DESCRIPTOR)', wiring)
 
-    def test_nothing_applies_the_staged_files(self):
-        for path in ('scripts/apply-os-changes.py', 'scripts/background_apks.py', 'scripts/integration_copy.py',
-                'scripts/launcher3-compile-contract.py'):
-            self.assertNotIn('os/staged', (ROOT/path).read_text(), path)
-        self.assertNotIn('staged', (ROOT/'scripts/apply-os-changes.py').read_text())
-        # E2a stays the bound candidate; the staged client only extends it.
-        e2a = ROOT/'os/overlays/packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback'
-        self.assertFalse((e2a/'RoseEdgeShell.java').exists())
-        self.assertIn('RoseEdgeState.hasListener()', (e2a/'RoseEdgeSwipe.java').read_text())
+    def test_the_patcher_registers_neither_edge_patch_and_e2a_stays_byte_identical(self):
+        for path in ('scripts/apply-os-changes.py', 'scripts/background_apks.py', 'scripts/integration_copy.py'):
+            text = (ROOT/path).read_text()
+            for name in ('rose-edge-launcher3.patch', 'rose-edge-resize-launcher3.patch', 'os/staged'):
+                self.assertNotIn(name, text, f'{path} must not register {name} before a real compile')
+        # E2a's patch and gesture are unchanged from the reviewed candidate e361d1c; E2c replaces State and Swipe.
+        self.assertEqual(hashlib.sha256((ROOT/'os/patches/rose-edge-launcher3.patch').read_bytes()).hexdigest(),
+            'a1c76e1e03845573501790509a7e620e48476a2bae47889f839d81144dd35460')
+        self.assertEqual(hashlib.sha256((FALLBACK/'RoseEdgeGesture.java').read_bytes()).hexdigest(),
+            '2c0be858885695b77dffaa637f328ce0033d099cc60b10df270e51c67061a570')
         self.assertIn('RoseEdgeState.canRaise()', (FALLBACK/'RoseEdgeSwipe.java').read_text())
-        self.assertFalse((FALLBACK/'RoseEdgeGesture.java').exists(), 'the staged client reuses E2a RoseEdgeGesture')
-
+        self.assertFalse((STAGED/'overlays').exists() or (STAGED/'patches').exists(), 'nothing is left staged')
 
 if __name__ == '__main__':
     unittest.main()

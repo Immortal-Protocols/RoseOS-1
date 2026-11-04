@@ -1343,7 +1343,8 @@ class RoseEdgeGestureTest(unittest.TestCase):
         quickstep = ROOT/'os/overlays/packages/apps/Launcher3'
         callers = sorted(p.name for p in quickstep.rglob('*.java') if p.name != 'RoseEdgeGesture.java'
             and 'RoseEdgeGesture' in p.read_text())
-        self.assertEqual(callers, ['RoseEdgeSwipe.java'], 'its only callers are E2a\'s, behind the unregistered edge patch')
+        self.assertEqual(callers, ['RoseEdgeSwipe.java', 'RoseEdgeWindow.java'],
+            'its only callers are the edge\'s own (E2a\'s swipe, E2c\'s window), behind the unregistered edge patches')
         self.assertNotIn('RoseEdgeGesture', PATCH.read_text())
         self.assertNotIn('import ', self.EDGE, 'pure: no Android, IPC, permission or sensor types')
         for reach in ('SensorPrivacy', 'AudioManager', 'Binder', 'Intent', 'Settings', 'System.', 'Thread'):
@@ -1538,7 +1539,10 @@ class RoseEdgeSwipePatchTest(unittest.TestCase):
             'public static boolean getBoolean(String key, boolean def) { return def; } }')
         result = subprocess.run(['javac', '-source', '11', '-target', '11', '-Xlint:all', '-Xlint:-options',
             '-implicit:none', '-sourcepath', str(tmp/'src'), '-cp', str(jars[-1]), '-d', str(tmp/'out'),
-            str(OVERLAY/'RoseEdgeSwipe.java'), str(OVERLAY/'RoseEdgeState.java'), str(OVERLAY/'RoseEdgeGesture.java')],
+            # RoseEdgeWindow uses the hidden ViewTreeObserver internal insets (Launcher3 builds with platform APIs), so
+            # only the android-all harness (os/staged/rose-edge-resize/native-test) compiles it.
+            str(OVERLAY/'RoseEdgeSwipe.java'), str(OVERLAY/'RoseEdgeState.java'), str(OVERLAY/'RoseEdgeGesture.java'),
+            str(OVERLAY/'RoseEdgeShell.java'), str(OVERLAY/'RoseEdgeLayout.java')],
             capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         warnings = [l for l in result.stderr.splitlines() if l.strip() and not l.startswith('Picked up JAVA_TOOL_OPTIONS')]
@@ -1547,10 +1551,11 @@ class RoseEdgeSwipePatchTest(unittest.TestCase):
     def test_it_is_off_by_default_and_reaches_nothing_new(self):
         self.assertIn('public static final String PROPERTY = "persist.wm.debug.rose_edge";', self.EDGE_SWIPE)
         self.assertIn('SystemProperties.getBoolean(PROPERTY, false)', self.EDGE_SWIPE)
-        self.assertIn('return enabled && !excluded && gestureNavigation && naturalRotation && RoseEdgeState.hasListener()\n'
+        self.assertIn('return enabled && !excluded && gestureNavigation && naturalRotation && RoseEdgeState.canRaise()\n'
             '                && (keyguard == null || !keyguard.isKeyguardLocked());', self.EDGE_SWIPE,
-            'never without an edge window to draw it')
-        self.assertIn('if (LISTENERS.isEmpty()) return false;', self.EDGE_STATE, 'no raise without a listener')
+            'never without an edge window to draw it and the shell to resize the app')
+        self.assertIn('return !LISTENERS.isEmpty() && RoseEdgeShell.available();', self.EDGE_STATE)
+        self.assertIn('if (!canRaise()) return false;', self.EDGE_STATE, 'no raise without a listener and the shell')
         self.assertIn('this.keyguard = enabled ? context.getSystemService(KeyguardManager.class) : null;', self.EDGE_SWIPE)
         for source in (self.EDGE_SWIPE, self.EDGE_STATE):
             code = re.sub(r'//[^\n]*', '', re.sub(r'/\*.*?\*/', '', source, flags=re.S))
@@ -1562,6 +1567,7 @@ class RoseEdgeSwipePatchTest(unittest.TestCase):
     def test_no_build_applies_it_until_release_and_infra_agree(self):
         patcher = (ROOT/'scripts/apply-os-changes.py').read_text()
         self.assertNotIn('rose-edge-launcher3.patch', patcher, 'registered only with an agreed compile route')
+        self.assertNotIn('rose-edge-resize-launcher3.patch', patcher, 'registered only with an agreed compile route')
 
 
 if __name__ == '__main__':

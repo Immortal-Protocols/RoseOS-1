@@ -74,6 +74,7 @@
             <testInclude>com/android/quickstep/fallback/RoseEdgeGesture.java</testInclude>
             <testInclude>com/android/quickstep/fallback/RoseEdgeState.java</testInclude>
             <testInclude>com/android/quickstep/fallback/RoseEdgeSwipe.java</testInclude>
+            <testInclude>com/android/quickstep/fallback/RoseEdgeShell.java</testInclude>
             <testInclude>android/os/SystemProperties.java</testInclude>
             <testInclude>com/android/quickstep/fallback/*NativeTest.java</testInclude>
           </testIncludes>
