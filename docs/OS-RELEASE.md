@@ -198,10 +198,18 @@ The guard refuses any candidate, build, app, resume, run or bootstrap pin, and a
 - `os/build-only/mustang-host.json` must point at the signed apps and background policy intended for this release.
   Today that is the Frankel attempt it names.
 
-**If a stage fails.** Nothing is retried, and a re-run attempt is never a producer.
-- After a successful producer, deliver it by hand with the existing `mustang-delivery` mode and this run's id, within
-  the receipts' 7 days, once its preconditions hold.
+**If a stage fails**, the run is finished. Nothing is retried.
+- Re-running the run, or any of its jobs, is refused. The guard, `mustang-build`, `mustang-ota-bind` and
+  `mustang-signer` each refuse an attempt other than 1.
+- Start a new `mustang-ota` dispatch instead. It makes a fresh allocation and compiles again.
+- The manual `mustang-delivery` mode cannot deliver a `mustang-ota` run: it pins only `mustang-build` producer runs.
+  So a chain run's compile is never reused by another run.
 - The recorded historical collection-fault recovery stays with the manual `mustang-delivery` path only.
+
+**Builder lifetime.** One controller start covers the compile, the binding and the signer. The builder's 12-hour
+automatic STOP is Infra's fallback, and it is configured outside this repository. The two-dispatch path started the
+builder again for delivery. Here, a compile that runs close to its 11-hour cap leaves the signer (190-minute cap)
+without time. If the STOP interrupts signing, nothing is published and the run fails. Start a new dispatch.
 
 ## Retained Rango signing and separate release (source only, runtime unbound)
 

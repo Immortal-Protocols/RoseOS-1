@@ -21,7 +21,8 @@ It refuses (exit 2), in this order, unless:
    committed public receipt, exactly as scripts/mustang-delivery.py guard checks it for an OTA delivery.
 
 There is no make=0 collection-fault recovery here, so compile_recovery is always false. That recorded exception stays
-with the manual mustang-delivery mode. Nothing is retried.
+with the manual mustang-delivery mode, which pins only mustang-build producer runs and so never delivers a mustang-ota
+run. Nothing is retried: the guard, mustang-build and mustang-signer refuse a re-run attempt too.
 
 Output:
 - the binding, written once to NEW.json;
@@ -91,7 +92,7 @@ def bind(env=None, request=None, number=None, ancestor=on_main, cfg=None, now=No
         raise Refused('the chain binds only a manual workflow_dispatch run on main')
     run_id = run_id_of(env.get('GITHUB_RUN_ID'), number)
     if env.get('GITHUB_RUN_ATTEMPT') != '1':
-        raise Refused('the chain binds attempt 1 only: a re-run is never a producer (deliver it by hand with mustang-delivery)')
+        raise Refused('the chain binds attempt 1 only: a re-run is never a producer (dispatch mustang-ota again)')
     sha = env.get('GITHUB_SHA', '')
     if not SHA.fullmatch(sha):
         raise Refused('GITHUB_SHA is not a full commit id')
@@ -154,7 +155,7 @@ def main(argv=None):
     try:
         binding = bind()
         write(binding, a.out)
-    except (Refused, FileExistsError, KeyError, TypeError) as error:
+    except (Refused, OSError, ValueError, KeyError, TypeError) as error:  # OSError covers the write-once refusal
         print(json.dumps({'refused': f'{type(error).__name__}: {str(error)[:480]}'}))
         return 2
     print(json.dumps(binding, sort_keys=True))

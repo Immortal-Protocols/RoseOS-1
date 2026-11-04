@@ -37,6 +37,12 @@ EXPIRY = datetime.datetime.fromisoformat(CFG['signingAccess']['expiresAt'].repla
 INSIDE = EXPIRY - datetime.timedelta(hours=1)  # an hour left: the 30-minute rule passes
 ENV = {'GITHUB_REF': 'refs/heads/main', 'GITHUB_EVENT_NAME': 'workflow_dispatch', 'GITHUB_RUN_ID': RUN,
        'GITHUB_RUN_ATTEMPT': '1', 'GITHUB_SHA': SHA}
+# The first step of mustang-build and of mustang-signer in mode mustang-ota.
+ONCE = ("    steps:\n      - name: mustang-ota runs once (a re-run attempt never {verb})\n"
+        "        if: inputs.mode == 'mustang-ota'\n        run: |\n"
+        '          if [[ "$GITHUB_RUN_ATTEMPT" != 1 ]]; then\n'
+        '            echo "::error::mustang-ota runs once: re-run attempts are refused; dispatch mustang-ota again"\n'
+        '            exit 1\n          fi\n')
 
 
 def responses():
@@ -107,7 +113,8 @@ class Binding(unittest.TestCase):
     def test_only_attempt_1_of_a_manual_main_dispatch_is_bound(self):
         for env, message in (({'GITHUB_REF': 'refs/heads/feature'}, 'manual workflow_dispatch run on main'),
                              ({'GITHUB_EVENT_NAME': 'workflow_run'}, 'manual workflow_dispatch run on main'),
-                             ({'GITHUB_RUN_ATTEMPT': '2'}, 'attempt 1 only'),
+                             ({'GITHUB_RUN_ATTEMPT': '2'},
+                              r'attempt 1 only: a re-run is never a producer \(dispatch mustang-ota again\)'),
                              ({'GITHUB_RUN_ID': '0'}, 'positive numeric run id'),
                              ({'GITHUB_RUN_ID': 'x1'}, 'positive numeric run id'),
                              ({'GITHUB_SHA': 'ab' * 19}, 'full commit id')):
@@ -184,6 +191,38 @@ class Binding(unittest.TestCase):
             self.assertFalse(out.exists())
             self.assertEqual(subprocess.run([sys.executable, str(HELPER), 'bind'], capture_output=True).returncode, 2)
 
+    def test_the_manual_delivery_mode_never_delivers_a_chain_run(self):
+        # The documented failure handling relies on this: mustang-delivery pins only mustang-build producer runs, so a
+        # chain run (titled mustang-ota <run>) is never delivered by hand and its compile is never reused.
+        source = (ROOT/'scripts/mustang-delivery.py').read_text()
+        self.assertIn("f'mustang-receipts-{number(compile_run)}-1','mustang-build ',allow_collection_recovery=True)", source)
+        module = chain.delivery()
+        run = dict(self.api[f'/actions/runs/{RUN}'], status='completed', conclusion='success')
+        module.request = lambda path: copy.deepcopy(run)
+        with self.assertRaisesRegex(ValueError, 'not the completed single-attempt main workflow'):
+            module.pin_run(RUN, '.github/workflows/os-release.yml', f'mustang-receipts-{RUN}-1', 'mustang-build ',
+                           allow_collection_recovery=True)
+        docs = (ROOT/'docs/OS-RELEASE.md').read_text()
+        self.assertIn('The manual `mustang-delivery` mode cannot deliver a `mustang-ota` run', docs)
+        self.assertNotIn('deliver it by hand', docs + HELPER.read_text())
+
+    def test_a_configuration_failure_is_a_refusal_with_exit_2(self):
+        original = chain.mustang_ota.config
+        for error in (ValueError('unsupported Mustang OTA configuration'), FileNotFoundError('os/ota/mustang.json')):
+            with self.subTest(error=type(error).__name__), tempfile.TemporaryDirectory() as tmp:
+                def broken(error=error):
+                    raise error
+                chain.mustang_ota.config = broken
+                try:
+                    stdout = io.StringIO()
+                    with contextlib.redirect_stdout(stdout):
+                        code = chain.main(['bind', '--out', str(Path(tmp)/'binding.json')])
+                finally:
+                    chain.mustang_ota.config = original
+                self.assertEqual(code, 2)
+                self.assertEqual(list(json.loads(stdout.getvalue())), ['refused'])
+                self.assertFalse((Path(tmp)/'binding.json').exists())
+
     def test_the_helper_imports_the_mustang_helpers_unchanged_and_writes_nothing_else(self):
         source = HELPER.read_text()
         self.assertIn("ROOT/'scripts/mustang-delivery.py'", source)
@@ -194,7 +233,7 @@ class Binding(unittest.TestCase):
 
 class Guard(unittest.TestCase):
     BASE = shape.dispatch_env(WORKFLOW, MODE='mustang-ota', MUSTANG_PUBLISH_OTA='true', PROMOTE='false', APP_PUBLISH='false',
-                              ALPHA_RECOVER='false', GITHUB_SHA=SHA)
+                              ALPHA_RECOVER='false', GITHUB_SHA=SHA, GITHUB_RUN_ATTEMPT='1')
 
     def run_guard(self, **change):
         body = re.search(r'- name: Candidate is an exact commit on main\n(?:.*\n)*?        run: \|\n((?: {10}.*\n)+)',
@@ -215,6 +254,15 @@ class Guard(unittest.TestCase):
                        {'BLAZER_PREP_STAGE': 'source'}):
             with self.subTest(change=change):
                 self.assertNotEqual(self.run_guard(**change).returncode, 0)
+
+    def test_a_re_run_attempt_is_refused_before_anything_starts(self):
+        for attempt in ('2', '3', ''):
+            with self.subTest(attempt=attempt):
+                self.assertNotEqual(self.run_guard(GITHUB_RUN_ATTEMPT=attempt).returncode, 0)
+        # the existing modes keep their own re-run behaviour
+        self.assertEqual(self.run_guard(MODE='mustang-build', GITHUB_RUN_ATTEMPT='2').returncode, 0)
+        self.assertEqual(self.run_guard(MODE='mustang-delivery', MUSTANG_COMPILE_RUN='41750459835',
+                                        MUSTANG_BOOTSTRAP_RUN=BOOTSTRAP, GITHUB_RUN_ATTEMPT='2').returncode, 0)
 
     def test_the_existing_mustang_modes_are_admitted_as_before(self):
         self.assertEqual(self.run_guard(MODE='mustang-build', CANDIDATE_SHA=SHA).returncode, 0)  # the automatic producer
@@ -299,11 +347,31 @@ class Jobs(unittest.TestCase):
         self.assertLess(job.index('Observe actual installed-baseline package and OTA trust before login'), job.index(check))
         self.assertIn('    permissions:\n      contents: read\n      actions: read\n      id-token: write\n', job)  # unchanged
 
-    def test_publication_and_packaging_routes_are_the_existing_jobs(self):
-        self.assertIn("    needs: mustang-signer\n    if: (inputs.mode == 'mustang-delivery' || inputs.mode == 'mustang-ota') && "
-                      'inputs.mustang_publish_ota\n', self.jobs['mustang-ota-publisher'])
-        self.assertIn('    needs: mustang-signer\n    if: inputs.mustang_publish_ota != true\n', self.jobs['mustang-packager'])
-        self.assertIn('    needs: mustang-packager\n', self.jobs['mustang-delivered'])
+    def test_every_chain_job_refuses_a_re_run_attempt(self):
+        # "Re-run all jobs" stops in the guard; "re-run failed jobs" stops in the first chain job it would repeat.
+        self.assertIn('            [[ "$MODE" != mustang-ota || "${GITHUB_RUN_ATTEMPT:-}" == 1 ]]\n', self.jobs['guard'])
+        self.assertIn("    if env.get('GITHUB_RUN_ATTEMPT') != '1':\n", HELPER.read_text())  # mustang-ota-bind
+        for name, verb in (('mustang-build', 'compiles'), ('mustang-signer', 'signs')):
+            step = ONCE.format(verb=verb)
+            self.assertIn(step, self.jobs[name])  # its first step: before checkout, collection or login
+            script = '\n'.join(line[10:] for line in step.splitlines()[4:])
+            for attempt, code in (('1', 0), ('2', 1), ('', 1)):
+                with self.subTest(job=name, attempt=attempt):
+                    result = subprocess.run(['bash', '-e', '-c', script], capture_output=True, text=True,
+                                            env={'PATH': os.environ['PATH'], 'GITHUB_RUN_ATTEMPT': attempt})
+                    self.assertEqual(result.returncode, code, result.stdout + result.stderr)
+        # the publisher needs this attempt's own staged OTA, which only a signer of this attempt uploads
+        self.assertIn('          name: mustang-ota-${{ github.run_id }}-${{ github.run_attempt }}\n',
+                      self.jobs['mustang-ota-publisher'])
+
+    def test_publication_and_packaging_routes_are_the_existing_jobs_with_explicit_results(self):
+        self.assertIn("    needs: mustang-signer\n    if: >-\n      !cancelled() && needs.mustang-signer.result == 'success' &&\n"
+                      "      (inputs.mode == 'mustang-delivery' || inputs.mode == 'mustang-ota') && inputs.mustang_publish_ota\n",
+                      self.jobs['mustang-ota-publisher'])
+        self.assertIn("    needs: mustang-signer\n    if: >-\n      !cancelled() && needs.mustang-signer.result == 'success' && "
+                      "inputs.mode == 'mustang-delivery' && inputs.mustang_publish_ota != true\n", self.jobs['mustang-packager'])
+        self.assertIn("    needs: mustang-packager\n    if: >-\n      !cancelled() && needs.mustang-packager.result == 'success' && "
+                      "inputs.mode == 'mustang-delivery'\n", self.jobs['mustang-delivered'])
 
     def test_no_permission_is_added_anywhere(self):
         # actions: write stays only where it already was (request-signing and next-release); no Mustang job has it
@@ -325,6 +393,175 @@ class Jobs(unittest.TestCase):
         source = (ROOT/'scripts/mustang-ota-auto.py').read_text()
         self.assertNotIn('mustang-ota ', source)  # it chains only its own automatic titles, never a manual chain run
         self.assertIn("title == 'mustang-build auto-'", source)
+
+
+TOKEN = re.compile(r"\s*(?:(\|\||&&|==|!=|!|\(|\))|'((?:[^']|'')*)'|([A-Za-z_][\w.-]*(?:\(\))?))")
+STATUS = ('success()', 'always()', 'cancelled()', 'failure()')
+
+
+def evaluate(expression, context, status):
+    """A GitHub expression of the operators these job conditions use (|| && == != ! parentheses, 'strings',
+    true/false, dotted context paths and the status functions), with GitHub's value-returning && and ||."""
+    tokens, position = [], 0
+    while position < len(expression):
+        match = TOKEN.match(expression, position)
+        if not match or match.end() == position:
+            if expression[position:].strip():
+                raise ValueError(f'cannot parse {expression[position:]!r}')
+            break
+        tokens.append(match.groups())
+        position = match.end()
+    tokens = [(op, None if text is None else text.replace("''", "'"), name) for op, text, name in tokens]
+    index = 0
+
+    def peek():
+        return tokens[index][0] if index < len(tokens) else None
+
+    def take():
+        nonlocal index
+        index += 1
+        return tokens[index - 1]
+
+    def truthy(value):
+        return value not in (None, False, '', 0)
+
+    def either():
+        left = both()
+        while peek() == '||':
+            take()
+            right = both()
+            left = left if truthy(left) else right
+        return left
+
+    def both():
+        left = compare()
+        while peek() == '&&':
+            take()
+            right = compare()
+            left = right if truthy(left) else left
+        return left
+
+    def compare():
+        left = unary()
+        while peek() in ('==', '!='):
+            op = take()[0]
+            right = unary()
+            same = left.lower() == right.lower() if isinstance(left, str) and isinstance(right, str) else left == right
+            left = same if op == '==' else not same
+        return left
+
+    def unary():
+        if peek() == '!':
+            take()
+            return not truthy(unary())
+        if peek() == '(':
+            take()
+            value = either()
+            assert take()[0] == ')'
+            return value
+        op, text, name = take()
+        assert op is None, op
+        if text is not None:
+            return text
+        if name in ('true', 'false'):
+            return name == 'true'
+        if name.endswith('()'):
+            return status[name]
+        value = context
+        for part in name.split('.'):
+            value = value.get(part) if isinstance(value, dict) else None
+        return value
+
+    value = either()
+    assert index == len(tokens), tokens[index:]
+    return truthy(value)
+
+
+class Graph(unittest.TestCase):
+    """Which Mustang jobs run in each mode, read from the workflow's own needs: and if: lines. GitHub's documented rule
+    for jobs.<job_id>.needs: a job whose if: uses no status function is gated by success(), and a failure or skip
+    applies to every job in the dependency chain from that point on. Every job that runs is taken to succeed."""
+    ORDER = ('guard', 'controller', 'mustang-build', 'mustang-ota-bind', 'mustang-bootstrap', 'mustang-signer',
+             'mustang-ota-publisher', 'mustang-packager', 'mustang-delivered')
+
+    @staticmethod
+    def needs_and_condition(body):
+        needs = re.search(r'(?m)^    needs: (.+)$', body)
+        needs = [] if not needs else [n.strip() for n in needs[1].strip('[]').split(',')]
+        lines = body.splitlines()
+        for i, line in enumerate(lines):
+            if line.startswith('    if: '):
+                value = line[len('    if: '):]
+                if value == '>-':
+                    block = []
+                    for following in lines[i + 1:]:
+                        if not following.startswith('      '):
+                            break
+                        block.append(following.strip())
+                    value = ' '.join(block)
+                return needs, value
+        return needs, ''
+
+    def plan(self, mode, publish, workflow=WORKFLOW):
+        jobs, results = shape.jobs(workflow), {}
+
+        def ancestors(name):
+            seen, stack = set(), list(graph[name][0])
+            while stack:
+                job = stack.pop()
+                if job not in seen:
+                    seen.add(job)
+                    stack.extend(graph[job][0])
+            return seen
+
+        graph = {name: self.needs_and_condition(jobs[name]) for name in self.ORDER}
+        for name in self.ORDER:
+            needs, condition = graph[name]
+            status = {'success()': all(results[job] == 'success' for job in ancestors(name)), 'always()': True,
+                      'cancelled()': False, 'failure()': False}
+            if not any(function in condition for function in STATUS):
+                condition = f'success() && ({condition or "true"})'
+            context = {'inputs': {'mode': mode, 'mustang_publish_ota': publish},
+                       'github': {'event_name': 'workflow_dispatch', 'ref': 'refs/heads/main'},
+                       'needs': {job: {'result': results[job], 'outputs': {'mustang_skip': ''}} for job in needs}}
+            results[name] = 'success' if evaluate(condition, context, status) else 'skipped'
+        return {name for name, result in results.items() if result == 'success'}
+
+    def test_each_mode_runs_exactly_its_own_jobs(self):
+        base = {'guard', 'controller'}
+        expected = {
+            ('mustang-ota', True): base | {'mustang-build', 'mustang-ota-bind', 'mustang-signer', 'mustang-ota-publisher'},
+            ('mustang-delivery', True): base | {'mustang-signer', 'mustang-ota-publisher'},
+            ('mustang-delivery', False): base | {'mustang-signer', 'mustang-packager', 'mustang-delivered'},
+            ('mustang-build', True): base | {'mustang-build'},
+            ('mustang-build', False): base | {'mustang-build'},
+            ('mustang-bootstrap', False): base | {'mustang-bootstrap'},
+            ('latest-beta', False): base}
+        for (mode, publish), jobs in expected.items():
+            with self.subTest(mode=mode, publish=publish):
+                self.assertEqual(self.plan(mode, publish), jobs)
+
+    def test_the_model_sees_a_skip_carried_down_the_chain(self):
+        # the defect the explicit results fix: with implicit success() below the signer, a manual mustang-delivery
+        # would sign and then skip publication, packaging and the delivered receipt
+        implicit = WORKFLOW.replace("      !cancelled() && needs.mustang-signer.result == 'success' &&\n      (inputs.mode", '      (inputs.mode')
+        implicit = implicit.replace("      !cancelled() && needs.mustang-signer.result == 'success' && inputs.mode == 'mustang-delivery' && "
+                                    'inputs.mustang_publish_ota != true', '      inputs.mustang_publish_ota != true')
+        implicit = implicit.replace("      !cancelled() && needs.mustang-packager.result == 'success' && inputs.mode == 'mustang-delivery'",
+                                    '      true')
+        self.assertNotEqual(implicit, WORKFLOW)
+        self.assertEqual(self.plan('mustang-delivery', True, implicit), {'guard', 'controller', 'mustang-signer'})
+        self.assertEqual(self.plan('mustang-delivery', False, implicit), {'guard', 'controller', 'mustang-signer'})
+
+    def test_the_evaluator_follows_github_operators(self):
+        status = {'success()': True, 'always()': True, 'cancelled()': False, 'failure()': False}
+        context = {'inputs': {'mode': 'mustang-ota', 'mustang_publish_ota': True}, 'needs': {'a': {'result': 'skipped'}}}
+        for expression, value in (("inputs.mode == 'MUSTANG-OTA'", True), ("!cancelled() && needs.a.result == 'success'", False),
+                                  ("(inputs.mode == 'x' || inputs.mustang_publish_ota) && true", True),
+                                  ('inputs.mustang_publish_ota != true', False), ("needs.b.result != 'skipped'", True),
+                                  ("'it''s' == 'it''s'", True)):
+            with self.subTest(expression=expression):
+                self.assertEqual(evaluate(expression, context, status), value)
 
 
 if __name__ == '__main__':
