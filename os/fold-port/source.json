@@ -24,7 +24,8 @@
   "build": {
     "lunch": "yogi-cur-user",
     "environment": {
-      "USE_STOCK_KERNEL": "true"
+      "USE_STOCK_KERNEL": "true",
+      "SOONG_NINJA": "ninja"
     },
     "goals": [
       "target-files-package",

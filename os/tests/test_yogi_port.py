@@ -89,7 +89,7 @@ class YogiPortTest(unittest.TestCase):
         result = self.prepare()
         self.assertFalse(result['applied'])
         self.assertEqual(self.bytes(), before)
-        self.assertEqual(result['build']['environment'], {'USE_STOCK_KERNEL': 'true'})
+        self.assertEqual(result['build']['environment'], {'USE_STOCK_KERNEL': 'true', 'SOONG_NINJA': 'ninja'})
         self.assertEqual(result['build']['lunch'], 'yogi-cur-user')
         self.assertTrue(all(x['beforeSha256'] != x['afterSha256'] for x in result['files'].values()))
 
