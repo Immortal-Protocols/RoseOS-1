@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "kind": "rose-launcher3-bundle-run",
+  "basis": "LAUNCHER3-BUNDLE-REPORT run association (Release-owned file, Infra's values): the integrating run whose bundle scripts/launcher3-bundle-report.py reports for the Launcher3 compile contract's verifyBaseApplyCandidate branch (base.bundleReport.association: run is entered by review from GitHub run metadata, no live API and no actions:read). runId, runAttempt, headSha, label, createdAt and updatedAt are null until Infra supplies them from that run's metadata and they are reviewed; the report's run.bindingSha256 is the sha256 of this file's bytes. Nothing here was read from or run on any host.",
+  "runId": null,
+  "runAttempt": null,
+  "headSha": null,
+  "label": null,
+  "createdAt": null,
+  "updatedAt": null
+}
