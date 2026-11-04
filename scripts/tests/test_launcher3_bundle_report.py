@@ -142,7 +142,7 @@ class Produce(unittest.TestCase):
     def test_a_report_from_headshas_history_and_the_receipt_is_what_the_adapter_accepts(self):
         report, main = producer.produce(root=self.s.root, contract=self.s.contract)
         self.assertEqual(adapter.bundle_report_problems(report, self.s.contract['base']), [])
-        self.assertEqual(main, self.s.revision)  # onMain is read against this origin/main commit
+        self.assertEqual(main, self.s.revision)  # the origin/main commit HEAD was found on
         self.assertNotEqual(self.s.head, self.s.revision)
         self.assertEqual(report['producer'], {'path': 'scripts/launcher3-bundle-report.py',
                                               'sha256': sha((ROOT/'scripts/launcher3-bundle-report.py').read_bytes()),

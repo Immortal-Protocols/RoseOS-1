@@ -34,7 +34,7 @@ receipt directory headSha's own recipe names, never from expected values:
   - producer: this script's path, the sha256 of its bytes, which must be its blob at HEAD, and HEAD.
 NEW_FILE must not exist; it is written whole or not at all. Reading the receipt directory is a host read, so Infra
 runs this, never CI. Nothing but NEW_FILE is written, nothing is fetched and no key or secret is read. Exit status:
-0 written (the WRITTEN line names the file, its sha256 and the origin/main commit onMain was read against), 2 invalid,
+0 written (the WRITTEN line names the file, its sha256 and the origin/main commit HEAD was found on), 2 invalid,
 3 refused, 4 unbound (the run document is still null).
 """
 import argparse
@@ -354,7 +354,7 @@ def observed(contract, root, rev):
 
 
 def produce(root=ROOT, contract=None):
-    """(the report, the origin/main commit onMain was read against), every value read as described above."""
+    """(the report, the origin/main commit HEAD was found on), every value read as described above."""
     contract = contract or load_contract(root)
     check_contract(contract)
     registration = contract['base']['registration']
