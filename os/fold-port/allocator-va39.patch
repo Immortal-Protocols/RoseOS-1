@@ -38,10 +38,10 @@
  }
 --- a/vendor/google_devices/yogi/BoardConfig.mk
 +++ b/vendor/google_devices/yogi/BoardConfig.mk
-@@ -121,3 +121,7 @@
+@@ -118,3 +118,7 @@
  
- # needed for partially backporting multi-partition libraries
- BUILD_BROKEN_ELF_PREBUILT_PRODUCT_COPY_FILES := true
+ # needed for overriding AOSP-available files with extracted prebuilts
+ BUILD_BROKEN_DUP_RULES := true
 +
 +# Yogi stock kernel has 39-bit VA / 3-level page tables. Use the historical
 +# arm64 hardened_malloc class-region size; leave all allocator guards enabled.

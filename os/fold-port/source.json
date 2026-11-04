@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "device": "yogi",
+  "model": "Pixel 11 Pro Fold",
+  "status": "experimental source preparation; not a built release",
+  "manifest": "os/pinned-manifest.xml",
+  "projects": ["external/hardened_malloc", "external/selinux", "vendor/adevtool"],
+  "preimages": {
+    "external/hardened_malloc/Android.bp": "851eeffb98fe04a1c29e2464d53bf0b253beac720af0ab4618f9d8dc83b126b8",
+    "external/selinux/libselinux/src/android/android_device.c": "d9ffb0bfb96c63ab34bdefe450531c7a6ed742fe0b3e2079001c176cc50c9d7a",
+    "vendor/google_devices/yogi/BoardConfig.mk": "ca5b3ad146f37af5d5e029b98ead27a26f93ac0ba135b815dc0c9431793fff62",
+    "vendor/google_devices/yogi/yogi.mk": "e73c2257bdd213297445bbf316d664b9f3ae8edefef8ca9226c245410db17554"
+  },
+  "patches": ["allocator-va39.patch", "stock-kernel-flags.patch", "product-tray.patch"],
+  "build": {
+    "lunch": "yogi-cur-user",
+    "environment": {"USE_STOCK_KERNEL": "true"},
+    "goals": ["target-files-package", "otatools-package"],
+    "basis": "Upstream yogi.mk selects vendor/google_devices/yogi/stock-kernel only with USE_STOCK_KERNEL=true. This is a recipe, not evidence that lunch or make succeeded."
+  },
+  "vendor": {
+    "buildId": "CD1A.260714.001.A9",
+    "factoryFile": "yogi-cd1a.260714.001.a9-factory-0c09a12c.zip",
+    "factorySha256": "0c09a12ce9e64aac17b4389cc926beade475ca3b8b77008be8e0742444fefcf6",
+    "factoryUrl": "https://dl.google.com/dl/android/aosp/yogi-cd1a.260714.001.a9-factory-0c09a12c.zip",
+    "basis": "GrapheneOS/adevtool@17df3b79a73e67ad68387b35c7d41c85e1d8103c: config/device/yogi.yml, config/device/common/gen11pixel.yml and the yogi CD1A.260714.001.A9 entry in config/build-index/build-index-main.yml. Only metadata was read; the factory archive was not downloaded or verified."
+  },
+  "preimageBasis": "Public upstream bytes at os/pinned-manifest.xml revisions: hardened_malloc/Android.bp; platform_external_selinux/libselinux/src/android/android_device.c; adevtool/vendor-skels/google_devices/yogi/{BoardConfig.mk,yogi.mk}. Generated vendor files must match these preimages before the port patches apply. No proprietary vendor files are stored here."
+}

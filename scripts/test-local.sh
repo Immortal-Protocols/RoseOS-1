@@ -54,6 +54,7 @@ python3 os/background-control/tests/test_replacement_wiring.py
 python3 os/background-control/tests/test_multi_session_wiring.py
 python3 os/background-control/tests/test_preinstall.py
 python3 os/tests/test_apply_os_changes.py
+python3 os/tests/test_yogi_port.py
 python3 os/tests/test_integration_copy.py
 python3 os/tests/test_tray_contract.py
 python3 os/tests/test_installed_precedence.py

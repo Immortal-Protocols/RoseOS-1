@@ -26,6 +26,10 @@ on:
       - 'scripts/background_apks.py'
       - 'scripts/apply-os-changes.py'
       - 'os/devices/pixel10.json'
+      - 'os/fold-port/**'
+      - 'os/tests/fixtures/yogi-port/**'
+      - 'os/tests/test_yogi_port.py'
+      - 'scripts/prepare-yogi-port.py'
       - 'scripts/test-local.sh'
       - '.github/workflows/app-tests.yml'
   push:
@@ -52,6 +56,10 @@ on:
       - 'scripts/background_apks.py'
       - 'scripts/apply-os-changes.py'
       - 'os/devices/pixel10.json'
+      - 'os/fold-port/**'
+      - 'os/tests/fixtures/yogi-port/**'
+      - 'os/tests/test_yogi_port.py'
+      - 'scripts/prepare-yogi-port.py'
       - 'scripts/test-local.sh'
       - '.github/workflows/app-tests.yml'
   workflow_dispatch:
