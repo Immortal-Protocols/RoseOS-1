@@ -30,6 +30,32 @@ The worker checks occupancy and the actual baseline before compilation.
 - Public repository observation: no Mustang tag; Frankel Latest was
   `frankel-2026110301`. These are snapshots, not claims of future occupancy.
 
+## First runtime observation and correction
+
+[Run 41749757884](https://github.com/Immortal-Protocols/RoseOS-1/actions/runs/41749757884)
+(source `2a10c8e3a12707051cff411b45e4727d50e2fcbf`) passed the hosted guard and
+controller, then stopped in the baseline observer at `2026-11-04T00:51:11Z`:
+`ValueError: duplicate metadata properties`. The preparation/allocation/compile
+step was skipped; no new native build, key use or publication occurred.
+Cleanup succeeded at 00:51:50Z. Independent observation at 00:53:33Z confirmed
+the original instance `TERMINATED`, last stop 00:51:41Z. The
+[public failure record](../os/ota/mustang-prebuild-failure-41749757884.json)
+retains exact stage/source/cleanup evidence. This was an observer parsing error,
+not evidence that the installed updater is broken.
+
+The observer had applied the strict OTA-manifest duplicate rule to all vendor
+properties. The correction reads only the required literal device/build/time
+properties, following the in-file last-definition behavior in the
+[pinned init loader](https://github.com/GrapheneOS/platform_system_core/blob/322ff5129d865a5e8d958667e6c63ac943449493/init/property_service.cpp#L809).
+It still refuses missing or incorrect resulting identity values. This is an
+archive metadata observation, not a live phone-property read. OTA metadata
+keeps its separate strict duplicate rejection. A targeted archive/observer
+regression reproduces unrelated repeats, effective values and wrong-device
+refusal while preserving strict OTA metadata parsing.
+Actual baseline updater/trust compatibility remains unproven until the corrected
+observer runs. Do not restart native compilation or adopt an incomplete result;
+no compile was invoked by this failed prebuild attempt.
+
 ## Implemented source
 
 `os/ota/mustang.json` pins the installed baseline and original bootstrap.
@@ -180,7 +206,7 @@ phone window must be resolved before an end-to-end ETA can be committed.
 
 ## Source validation
 
-Python 3.12: **28 Mustang OTA tests**, **7 existing GitHub publisher transport
+Python 3.12: **29 Mustang OTA tests**, **7 existing GitHub publisher transport
 tests**, **10 updater-channel tests**, **6 updater-release tests** passed.
 Java 21.0.12.1 compiled the actual release selector: **20 existing checks** and
 **6 new Mustang mixed-device checks** passed. Python/JSON/YAML parsing, workflow

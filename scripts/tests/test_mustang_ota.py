@@ -247,6 +247,26 @@ class ObserverTest(unittest.TestCase):
     def test_resources_signer_and_actual_system_trust(self):
         r=self.observe();self.assertTrue(r['packagedUpdaterVerified'])
         self.assertEqual(r['trustedOtaCertificateSha256'],[self.pin])
+    def test_vendor_identity_scopes_duplicates_without_weakening_ota_metadata(self):
+        with zipfile.ZipFile(self.path) as archive:
+            entries={row.filename:archive.read(row) for row in archive.infolist()}
+        entries['VENDOR/build.prop'] += b'other.property=first\nother.property=second\nro.product.vendor.device=mustang\n'
+        with zipfile.ZipFile(self.path,'w') as archive:
+            for name,data in entries.items():archive.writestr(name,data)
+        self.assertTrue(self.observe()['packagedUpdaterVerified'])
+        entries['VENDOR/build.prop'] += b'ro.product.vendor.device=frankel\n'
+        with zipfile.ZipFile(self.path,'w') as archive:
+            for name,data in entries.items():archive.writestr(name,data)
+        with self.assertRaisesRegex(ValueError,'actual target-files device/build/time differs'):
+            self.observe()
+        # init's in-file last definition is the effective value, including after
+        # an earlier differing definition. The final wrong device above refused.
+        entries['VENDOR/build.prop'] += b'ro.product.vendor.device=mustang\n'
+        with zipfile.ZipFile(self.path,'w') as archive:
+            for name,data in entries.items():archive.writestr(name,data)
+        self.assertTrue(self.observe()['packagedUpdaterVerified'])
+        with self.assertRaisesRegex(ValueError,'duplicate metadata'):
+            ota.properties(b'pre-device=mustang\npre-device=frankel\n')
     def test_wrong_repository_or_channel_stops(self):
         for key,value in [('url','https://example.invalid/'),('release_index','https://api.github.com/repos/Other/repo/releases'),
                           ('channel_published',['prod']),('channel_values',['stable'])]:
