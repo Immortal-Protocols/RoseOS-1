@@ -2,8 +2,14 @@
 
 Implements the source work for [Nathan's OTA plan](https://app.notion.com/p/40d7c646c81b81ce9485e0ca3eff8614)
 and [issue #503](https://github.com/Immortal-Protocols/RoseOS-1/issues/503).
-**Source implementation is separate from operational activation. No new build,
-public OTA, automatic dispatch or phone action has been performed by this work.**
+**First manual public OTA activation is authorized; automatic publication remains
+off. No new OTA or phone acceptance is claimed until actual runtime receipts.**
+
+On November 3 Pacific, after completing the new read grants, Nathan instructed
+this worker to continue. `publicationEnabled=true` enables one newer Mustang
+build/sign/public OTA and its `mustang-stable` metadata through the existing
+route. `automationEnabled=false`; no automatic trigger or phone action is enabled.
+The worker checks occupancy and the actual baseline before compilation.
 
 ## Baseline and current evidence
 
@@ -26,8 +32,9 @@ public OTA, automatic dispatch or phone action has been performed by this work.*
 
 ## Implemented source
 
-`os/ota/mustang.json` pins the installed baseline and original bootstrap. Both
-activation flags are **false**. The user applied the two new read-only bindings;
+`os/ota/mustang.json` pins the installed baseline and original bootstrap.
+Publication activation is **true** for the first manual attempt; automation is
+**false**. The user applied the two new read-only bindings;
 independent policy readback at **2026-11-04T00:44:51Z** confirmed their exact
 signer, role, secrets, condition and expiry **2026-11-04T04:44:11Z** (20:44:11
 Pacific on November 3). `signingAccess.status` is now **approved** and links to
@@ -110,13 +117,14 @@ event reconsiders work deferred behind another active OS run.
 The implementation request authorized source work and these local tests. The
 plan's Scope and activation section calls for explicit execution coverage of
 one newer public OTA/channel update, subsequent automatic publication and a
-separately coordinated phone test. No activation switch or repository variable
-has been changed in this implementation.
+separately coordinated phone test. The current user instruction activates the
+first manual publication flag only. Automatic activation and repository
+variables remain unchanged.
 
-1. Confirm the public/automatic activation scope against Nathan's current
-   authority. For a first manual OTA only, enable publication while keeping
-   automation false and `MUSTANG_OTA_AUTO` off. Enabling later automation is a
-   separate concrete persistent-effect decision, not a routine stage sign-off.
+1. **First manual activation authorized:** Nathan instructed this worker to
+   continue after the read grants were confirmed. Publication is enabled;
+   automation remains false and `MUSTANG_OTA_AUTO` stays off. Later automatic
+   activation and phone installation remain separately coordinated.
 2. **Access prerequisite completed for this window:** the user applied and the
    worker read back two new `mustang-ota-read-four-hour` **read-only** bindings for
    the existing signer `roseos-build-signer@protocols-465723.iam.gserviceaccount.com`

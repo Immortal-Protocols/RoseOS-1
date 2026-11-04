@@ -11,5 +11,5 @@
   "aapt": "/home/pixelbuild/grapheneos-2026100600/prebuilts/sdk/tools/linux/bin/aapt",
   "apksigner": "/home/pixelbuild/rose-actions/tools/android-sdk/build-tools/android-15/apksigner",
   "basis": "Existing original-builder and Frankel app/tool paths from current committed contracts, proposed for Mustang and re-admitted at runtime. No Blazer or Rango artifacts. Not proof of current availability. No package installation or openssh-client change.",
-  "signingBlocker": "Mustang bootstrap 41719073037 is complete with version 1 in both containers. Signing awaits a successful unsigned compile and a separate mustang-delivery dispatch consuming that bootstrap receipt; no further key generation. Access expires 2026-11-04T00:50:06Z."
+  "signingBlocker": "Mustang bootstrap 41719073037 is complete with version 1 in both containers. This unsigned route performs no signing. A separate mustang-delivery consumes the completed producer and original bootstrap. OTA read-access admission and expiry are recorded in os/ota/mustang.json; no further key generation or automatic access extension."
 }

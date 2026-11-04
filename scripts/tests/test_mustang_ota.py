@@ -158,8 +158,9 @@ class PublicationTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'checksum differs'):
             ota.verify_staged(self.assets, self.cfg)
     def test_defaults_inactive_before_any_api_or_secret(self):
+        inactive=copy.deepcopy(ota.config());inactive['publicationEnabled']=False
         with self.assertRaisesRegex(ValueError, 'activation remains pending'):
-            ota.verify_staged(self.assets, ota.config())
+            ota.verify_staged(self.assets, inactive)
         self.assertFalse(auto.dispatch({})['dispatched'])
     def test_recorded_read_access_must_be_explicit_and_current(self):
         now = datetime.datetime(2026,11,4,tzinfo=datetime.timezone.utc)
