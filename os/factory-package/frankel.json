@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "kind": "roseos.frankel-factory-package",
+  "basis": "FRANKEL-FACTORY (Release-owned): the one published Frankel (Pixel 10) build whose exact signed target-files the os-release modes frankel-factory-observe and frankel-factory-package package into the initial factory installer frankel-install-<build>.zip, read only from its original attempt /home/pixelbuild/rose-actions/frankel-<build> (release/signed-target_files.zip, bound by that attempt's receipt chain through transfer, its sign receipt and its passing verification receipt). build, buildTimestamp, candidate and sourceRun are that build's own published release and original os-release run; signedTargetFilesSha256 is the signedTargetFilesSha256 of that run's own transferred verification receipt. otatoolsSha256 and fastbootSha256 are measured by a frankel-factory-observe run of this build, on the otatools copy scripts/host-sign.py kept when it signed that build (<host.sourceRoot>/releases/<build>/frankel-otatools.zip, whose owner and signed markers name this candidate, build and signed target-files; never the shared OUT_DIR copy), and copied here from its receipt. Every value is null until those records are supplied: both modes refuse before any host step while a value they need is null, and nothing is guessed or carried from another device. Not a signing identity: this route adds no archive signature, so its installer is an unsigned intermediate (signatureVerified missing), not factory-ready and not the delivered installer. Nothing here was run on any host.",
+  "build": null,
+  "buildTimestamp": null,
+  "candidate": null,
+  "sourceRun": null,
+  "signedTargetFilesSha256": null,
+  "otatoolsSha256": null,
+  "fastbootSha256": null
+}

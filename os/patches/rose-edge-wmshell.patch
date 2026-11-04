@@ -1,3 +1,314 @@
+diff --git a/libs/WindowManager/Shell/src/com/android/wm/shell/RoseEdgeMicSlot.java b/libs/WindowManager/Shell/src/com/android/wm/shell/RoseEdgeMicSlot.java
+new file mode 100644
+index 0000000..1bb1aa5
+--- /dev/null
++++ b/libs/WindowManager/Shell/src/com/android/wm/shell/RoseEdgeMicSlot.java
+@@ -0,0 +1,305 @@
++/*
++ * Copyright 2026
++ * SPDX-License-Identifier: Apache-2.0
++ */
++
++package com.android.wm.shell;
++
++import android.app.ActivityManager;
++import android.app.KeyguardManager;
++import android.content.ComponentName;
++import android.content.Context;
++import android.content.Intent;
++import android.content.ServiceConnection;
++import android.content.pm.PackageManager;
++import android.graphics.Canvas;
++import android.graphics.Color;
++import android.graphics.LinearGradient;
++import android.graphics.Paint;
++import android.graphics.PixelFormat;
++import android.graphics.Rect;
++import android.graphics.RectF;
++import android.graphics.Shader;
++import android.os.Bundle;
++import android.os.Handler;
++import android.os.IBinder;
++import android.os.Looper;
++import android.os.Message;
++import android.os.Messenger;
++import android.os.PowerManager;
++import android.os.RemoteException;
++import android.os.SystemClock;
++import android.os.SystemProperties;
++import android.os.UserHandle;
++import android.util.Log;
++import android.view.Gravity;
++import android.view.MotionEvent;
++import android.view.View;
++import android.view.ViewConfiguration;
++import android.view.WindowManager;
++
++import com.android.wm.shell.roseedge.RoseEdgePolicy;
++
++/**
++ * RoseOS (#410, option a): Rose's microphone-input control in the raised edge's slot, drawn by SystemUI.
++ *
++ * <p>Launcher3 leaves a transparent, untouchable hole in its edge window and reports it with
++ * IRoseEdge#setMicSlot. This window covers exactly that hole while the edge is raised. It speaks Rose Agent's existing
++ * tray protocol from SystemUI's existing trusted identity: REGISTER for STATE, then MUTE or UNMUTE on a tap. It never
++ * sends START or END, never starts voice and never touches output, the call or background work. Launcher3 never
++ * reaches the microphone state, and AgentTrayService and its caller check are unchanged: this is one more short-lived
++ * client of the same protocol from the same SystemUI process, through the same AgentTrayLink lifecycle as the tray.
++ * Shown only with the Rose tray enabled, for user 0, unlocked and with the screen on; hidden on every lower.
++ */
++public final class RoseEdgeMicSlot {
++    private static final String TAG = "RoseEdgeMic";
++    private static final String TRAY_PROPERTY = "persist.wm.debug.pixel_agent_tray";
++    private static final String VOICE_PACKAGE = "dev.pixel.voice";
++    private static final int STATE = 100;
++    /** Home's edge (oxblood-contract homeEdge): 92dp tall, its plate a vertical gradient in dp from the edge top. */
++    private static final float EDGE_HEIGHT_DP = 92;
++    private static final float[] PLATE_STOPS_DP = {0, 34, 46, 92};
++    private static final int[] PLATE_COLORS = {0xFF4A141A, 0xFF4A141A, 0xFF3C0E13, 0xFF330C10};
++
++    private final Context mContext;
++    private final WindowManager mWindows;
++    /** Everything runs on the thread that created this (the shell's main thread), including binder callbacks. */
++    private final Handler mHandler = new Handler(Looper.myLooper() != null ? Looper.myLooper() : Looper.getMainLooper());
++    private final RoseEdgePolicy.MicTap mTap = new RoseEdgePolicy.MicTap();
++    private final Runnable mRetryBind;
++    private final AgentTrayLink mLink;
++    private final Messenger mReply;
++    private final ServiceConnection mConnection;
++    private Messenger mVoice;
++    private Control mView;
++    private boolean mKnown;
++    private boolean mMuted;
++    private long mLastCommandAt;
++    /** Where the edge plate starts, in the control's own coordinates (the edge top minus the slot top). */
++    private float mPlateTop;
++
++    public RoseEdgeMicSlot(Context context) {
++        mContext = context.createWindowContext(WindowManager.LayoutParams.TYPE_NAVIGATION_BAR_PANEL, null);
++        mWindows = mContext.getSystemService(WindowManager.class);
++        mConnection = new ServiceConnection() {
++            // Delivered on the process's main thread: moved to this control's thread.
++            @Override public void onServiceConnected(ComponentName name, IBinder binder) {
++                mHandler.post(() -> {
++                    mVoice = new Messenger(binder);
++                    mLink.connected();
++                });
++            }
++            @Override public void onServiceDisconnected(ComponentName name) { mHandler.post(mLink::disconnected); }
++            @Override public void onBindingDied(ComponentName name) { mHandler.post(mLink::bindingDied); }
++            @Override public void onNullBinding(ComponentName name) { mHandler.post(mLink::bindingDied); }
++        };
++        mLink = new AgentTrayLink(new AgentTrayLink.Port() {
++            @Override public boolean bind(int user) {
++                try {
++                    return mContext.bindServiceAsUser(new Intent().setComponent(new ComponentName(
++                            VOICE_PACKAGE, "dev.pixel.voice.AgentTrayService")), mConnection,
++                            Context.BIND_AUTO_CREATE, UserHandle.of(user));
++                } catch (RuntimeException e) {
++                    Log.w(TAG, "Voice binding unavailable", e);
++                    return false;
++                }
++            }
++            @Override public void unbind() {
++                try {
++                    mContext.unbindService(mConnection);
++                } catch (IllegalArgumentException e) {
++                    Log.w(TAG, "Voice binding already released", e);
++                }
++            }
++            @Override public boolean send(int what) { return RoseEdgeMicSlot.this.send(what); }
++            @Override public void scheduleRetry() {
++                mHandler.removeCallbacks(mRetryBind);
++                mHandler.postDelayed(mRetryBind, 3000);
++            }
++            @Override public void cancelRetry() { mHandler.removeCallbacks(mRetryBind); }
++            @Override public void resetState() {
++                mKnown = false;
++                mMuted = false;
++                if (mView != null) mView.refresh();
++            }
++            @Override public void forgetService() { mVoice = null; }
++        });
++        mRetryBind = () -> mLink.retry(ActivityManager.getCurrentUser());
++        mReply = new Messenger(new Handler(mHandler.getLooper(), message -> {
++            // Only a fresh v1 STATE from Rose Agent itself, while subscribed, is shown.
++            if (message.what != STATE || !mLink.subscribed() || !trusted(message.sendingUid)) return true;
++            final Bundle data = message.getData();
++            if (data.getInt("protocolVersion") != 1) return true;
++            mKnown = true;
++            mMuted = data.getBoolean("muted");
++            if (mView != null) mView.refresh();
++            return true;
++        }));
++    }
++
++    /**
++     * Covers the slot (screen coordinates) on a display displayHeight tall; hides instead when the tray's gates do
++     * not hold. Launcher3 leaves the slot transparent, so the whole rect is painted with the edge plate behind it.
++     */
++    public void show(Rect slot, int displayHeight) {
++        mPlateTop = displayHeight - dp(EDGE_HEIGHT_DP) - slot.top;
++        if (!allowed()) {
++            hide();
++            return;
++        }
++        final WindowManager.LayoutParams params = new WindowManager.LayoutParams(slot.width(), slot.height(),
++                WindowManager.LayoutParams.TYPE_NAVIGATION_BAR_PANEL,
++                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
++                        | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
++                        | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
++                PixelFormat.TRANSLUCENT);
++        params.gravity = Gravity.TOP | Gravity.LEFT;
++        params.x = slot.left;
++        params.y = slot.top;
++        params.setFitInsetsTypes(0);
++        params.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS;
++        params.setTitle("Rose edge microphone input");
++        if (mView != null) mView.invalidate();
++        if (mView == null) {
++            mView = new Control();
++            mWindows.addView(mView, params);
++        } else {
++            mWindows.updateViewLayout(mView, params);
++        }
++        mLink.screenOn(ActivityManager.getCurrentUser());
++    }
++
++    /** Removes the control and stops its updates; the binding is kept for a quick resume, as the tray does. */
++    public void hide() {
++        mTap.cancel();
++        if (mView != null) {
++            mWindows.removeViewImmediate(mView);
++            mView = null;
++        }
++        mLink.screenOff();
++    }
++
++    private boolean allowed() {
++        final KeyguardManager keyguard = mContext.getSystemService(KeyguardManager.class);
++        final PowerManager power = mContext.getSystemService(PowerManager.class);
++        return SystemProperties.getBoolean(TRAY_PROPERTY, false) && ActivityManager.getCurrentUser() == 0
++                && keyguard != null && !keyguard.isKeyguardLocked() && power != null && power.isInteractive();
++    }
++
++    private boolean trusted(int uid) {
++        try {
++            return mVoice != null && uid == mContext.getPackageManager().getPackageUidAsUser(VOICE_PACKAGE,
++                    mLink.user());
++        } catch (PackageManager.NameNotFoundException e) {
++            return false;
++        }
++    }
++
++    private boolean send(int what) {
++        if (mVoice == null) return false;
++        final Message message = Message.obtain(null, what);
++        message.replyTo = mReply;
++        try {
++            mVoice.send(message);
++            return true;
++        } catch (RemoteException e) {
++            return false;
++        }
++    }
++
++    /** A tap mutes or unmutes; nothing happens before the first STATE says which. */
++    private void toggle() {
++        final long now = SystemClock.elapsedRealtime();
++        if (!mKnown || !allowed() || !RoseEdgePolicy.micCommandAllowed(now, mLastCommandAt)) return;
++        mLastCommandAt = now;
++        if (!send(RoseEdgePolicy.micCommand(mMuted))) mLink.disconnected();
++    }
++
++    private int dp(float value) {
++        return Math.round(value * mContext.getResources().getDisplayMetrics().density);
++    }
++
++    /** The slot's control: Home's edge well with a microphone glyph; a slash when Rose's input is muted. */
++    private final class Control extends View {
++        private final Paint mPlate = new Paint();
++        private final Paint mWell = new Paint(Paint.ANTI_ALIAS_FLAG);
++        private final Paint mRing = new Paint(Paint.ANTI_ALIAS_FLAG);
++        private final Paint mInk = new Paint(Paint.ANTI_ALIAS_FLAG);
++        private final RectF mBox = new RectF();
++
++        Control() {
++            super(mContext);
++            setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_YES);
++            setClickable(true);
++            mRing.setStyle(Paint.Style.STROKE);
++            mRing.setStrokeWidth(dp(1));
++            mRing.setColor(0x66ECCDBE);
++            mInk.setStyle(Paint.Style.STROKE);
++            mInk.setStrokeWidth(dp(2));
++            mInk.setStrokeCap(Paint.Cap.ROUND);
++            refresh();
++        }
++
++        void refresh() {
++            setContentDescription(!mKnown ? "Rose microphone input, state unknown"
++                    : mMuted ? "Rose microphone input muted" : "Rose microphone input on");
++            invalidate();
++        }
++
++        @Override
++        protected void onDraw(Canvas canvas) {
++            // Opaque edge plate over the whole slot, continuous with Launcher3's edge around it.
++            final float[] positions = new float[PLATE_STOPS_DP.length];
++            for (int i = 0; i < positions.length; i++) positions[i] = PLATE_STOPS_DP[i] / EDGE_HEIGHT_DP;
++            mPlate.setShader(new LinearGradient(0, mPlateTop, 0, mPlateTop + dp(EDGE_HEIGHT_DP), PLATE_COLORS,
++                    positions, Shader.TileMode.CLAMP));
++            canvas.drawRect(0, 0, getWidth(), getHeight(), mPlate);
++            // Home's edge well (oxblood-contract homeEdge.well), 36dp plate, radius 8.
++            final float plate = Math.min(getHeight(), dp(36));
++            final float top = (getHeight() - plate) / 2f;
++            mBox.set(0, top, getWidth(), top + plate);
++            mWell.setShader(new LinearGradient(0, mBox.top, 0, mBox.bottom, 0x47140407, 0x1F46121C,
++                    Shader.TileMode.CLAMP));
++            canvas.drawRoundRect(mBox, dp(8), dp(8), mWell);
++            canvas.drawRoundRect(mBox, dp(8), dp(8), mRing);
++            // Ink: primary when on, secondary when muted, dimmed until the first STATE.
++            mInk.setColor(mMuted ? 0xFFD2B9AB : 0xFFF2E6D9);
++            mInk.setAlpha(mKnown ? 255 : 110);
++            final float cx = getWidth() / 2f;
++            final float cy = getHeight() / 2f;
++            final float w = dp(6);
++            canvas.drawRoundRect(cx - w / 2, cy - dp(9), cx + w / 2, cy + dp(2), w / 2, w / 2, mInk);
++            canvas.drawArc(cx - dp(7), cy - dp(5), cx + dp(7), cy + dp(5), 0, 180, false, mInk);
++            canvas.drawLine(cx, cy + dp(5), cx, cy + dp(9), mInk);
++            if (mMuted) canvas.drawLine(cx - dp(9), cy - dp(9), cx + dp(9), cy + dp(9), mInk);
++        }
++
++        @Override
++        public boolean onTouchEvent(MotionEvent event) {
++            final float slop = ViewConfiguration.get(mContext).getScaledTouchSlop();
++            switch (event.getActionMasked()) {
++                case MotionEvent.ACTION_DOWN:
++                    mTap.down(event.getX(), event.getY(), event.getEventTime());
++                    return true;
++                case MotionEvent.ACTION_MOVE:
++                    mTap.move(event.getX(), event.getY(), slop);
++                    return true;
++                case MotionEvent.ACTION_UP:
++                    final boolean inside = event.getX() >= 0 && event.getY() >= 0 && event.getX() <= getWidth()
++                            && event.getY() <= getHeight();
++                    if (mTap.up(event.getX(), event.getY(), event.getEventTime(), slop, inside)) performClick();
++                    return true;
++                default:
++                    mTap.cancel();
++                    return true;
++            }
++        }
++
++        @Override
++        public boolean performClick() {
++            super.performClick();
++            toggle();
++            return true;
++        }
++    }
++}
 diff --git a/libs/WindowManager/Shell/src/com/android/wm/shell/dagger/WMShellModule.java b/libs/WindowManager/Shell/src/com/android/wm/shell/dagger/WMShellModule.java
 index 237f471..236bd81 100644
 --- a/libs/WindowManager/Shell/src/com/android/wm/shell/dagger/WMShellModule.java
@@ -42,10 +353,10 @@ index 237f471..236bd81 100644
  
 diff --git a/libs/WindowManager/Shell/src/com/android/wm/shell/roseedge/IRoseEdge.aidl b/libs/WindowManager/Shell/src/com/android/wm/shell/roseedge/IRoseEdge.aidl
 new file mode 100644
-index 0000000..9c6407e
+index 0000000..5b3e5cd
 --- /dev/null
 +++ b/libs/WindowManager/Shell/src/com/android/wm/shell/roseedge/IRoseEdge.aidl
-@@ -0,0 +1,24 @@
+@@ -0,0 +1,33 @@
 +/*
 + * Copyright 2026
 + * SPDX-License-Identifier: Apache-2.0
@@ -53,6 +364,7 @@ index 0000000..9c6407e
 +
 +package com.android.wm.shell.roseedge;
 +
++import android.graphics.Rect;
 +import com.android.wm.shell.roseedge.IRoseEdgeListener;
 +
 +/**
@@ -69,6 +381,14 @@ index 0000000..9c6407e
 +
 +    /** Restores full height. Answers onLowered(displayId, 0) on the raising listener when something was raised. */
 +    oneway void lower(int displayId) = 2;
++
++    /**
++     * The microphone-input slot in Launcher3's raised edge, in screen coordinates; an empty Rect clears it.
++     * SystemUI then covers it with Rose's existing tray control (mute or unmute only). Ignored unless displayId is
++     * raised and the slot lies in the bottom band (0, H - min(H/4, 160dp), W, H), 32-64dp on each side. A slot
++     * belongs to the current raise and is dropped on any lower, so Launcher3 sends it again after each onRaised.
++     */
++    oneway void setMicSlot(int displayId, in Rect slotBounds) = 3;
 +}
 diff --git a/libs/WindowManager/Shell/src/com/android/wm/shell/roseedge/IRoseEdgeListener.aidl b/libs/WindowManager/Shell/src/com/android/wm/shell/roseedge/IRoseEdgeListener.aidl
 new file mode 100644
@@ -102,10 +422,10 @@ index 0000000..08838b1
 +}
 diff --git a/libs/WindowManager/Shell/src/com/android/wm/shell/roseedge/RoseEdgeController.java b/libs/WindowManager/Shell/src/com/android/wm/shell/roseedge/RoseEdgeController.java
 new file mode 100644
-index 0000000..7b09c2d
+index 0000000..6d064bb
 --- /dev/null
 +++ b/libs/WindowManager/Shell/src/com/android/wm/shell/roseedge/RoseEdgeController.java
-@@ -0,0 +1,482 @@
+@@ -0,0 +1,520 @@
 +/*
 + * Copyright 2026
 + * SPDX-License-Identifier: Apache-2.0
@@ -124,6 +444,9 @@ index 0000000..7b09c2d
 +import android.annotation.Nullable;
 +import android.app.ActivityManager.RunningTaskInfo;
 +import android.app.KeyguardManager;
++import android.content.BroadcastReceiver;
++import android.content.Intent;
++import android.content.IntentFilter;
 +import android.content.Context;
 +import android.content.res.Configuration;
 +import android.graphics.Rect;
@@ -140,6 +463,7 @@ index 0000000..7b09c2d
 +import android.window.WindowContainerTransaction;
 +
 +import com.android.wm.shell.RootTaskDisplayAreaOrganizer;
++import com.android.wm.shell.RoseEdgeMicSlot;
 +import com.android.wm.shell.ShellTaskOrganizer;
 +import com.android.wm.shell.common.DisplayController;
 +import com.android.wm.shell.common.DisplayImeController;
@@ -191,6 +515,8 @@ index 0000000..7b09c2d
 +    @Nullable private IRoseEdgeListener mListener;
 +    @Nullable private IBinder.DeathRecipient mListenerDeath;
 +    @Nullable private RunningTaskInfo mFocused;
++    /** SystemUI's mute control over Launcher3's slot (#410 option a), created on first use. */
++    @Nullable private RoseEdgeMicSlot mMicSlot;
 +    private boolean mKeyguardVisible;
 +    private boolean mImeVisible;
 +
@@ -243,6 +569,15 @@ index 0000000..7b09c2d
 +        mImeController.addPositionProcessor(this);
 +        mTransitions.addHandler(this);
 +        mRootTdaOrganizer.registerListener(Display.DEFAULT_DISPLAY, this);
++        // Lowered reason 3 is "keyguard or screen off": without a secure lock the keyguard may never show.
++        mContext.registerReceiver(new BroadcastReceiver() {
++            @Override
++            public void onReceive(Context context, Intent intent) {
++                if (Intent.ACTION_SCREEN_OFF.equals(intent.getAction())) {
++                    mMainExecutor.execute(() -> lowerIfNeeded(mState.onKeyguard(true)));
++                }
++            }
++        }, new IntentFilter(Intent.ACTION_SCREEN_OFF), Context.RECEIVER_EXPORTED);
 +    }
 +
 +    private static boolean enabled() {
@@ -272,6 +607,22 @@ index 0000000..7b09c2d
 +        start(wct, new Applied(true, displayId, taskId, 0, listener, bounds, null));
 +    }
 +
++    private void setMicSlot(int displayId, @Nullable Rect slot) {
++        if (!mState.acceptsMicSlot(displayId)) return;  // a slot belongs to the current raise only
++        final DisplayLayout layout = mDisplayController.getDisplayLayout(displayId);
++        if (slot == null || slot.isEmpty() || layout == null
++                || !RoseEdgePolicy.validMicSlot(slot.left, slot.top, slot.right, slot.bottom, layout.width(),
++                        layout.height(), layout.density())) {
++            if (slot != null && !slot.isEmpty()) Slog.w(TAG, "Microphone slot outside the edge band: ignored");
++            mState.setMicSlot(null);
++            if (mMicSlot != null) mMicSlot.hide();
++            return;
++        }
++        mState.setMicSlot(new int[] {slot.left, slot.top, slot.right, slot.bottom});
++        if (mMicSlot == null) mMicSlot = new RoseEdgeMicSlot(mContext);
++        mMicSlot.show(new Rect(slot), layout.height());
++    }
++
 +    private void requestLower(int displayId) {
 +        lowerIfNeeded(mState.onLowerRequested(displayId));
 +    }
@@ -291,7 +642,8 @@ index 0000000..7b09c2d
 +        if (!mState.raised()) return;
 +        final int displayId = mState.displayId();
 +        final IRoseEdgeListener listener = mListener;
-+        mState.clear();
++        mState.clear();  // drops the microphone slot with the raise
++        if (mMicSlot != null) mMicSlot.hide();
 +        unlinkOwner();
 +        final DisplayAreaInfo tda = mRootTdaOrganizer.getDisplayAreaInfo(displayId);
 +        if (tda == null) {
@@ -586,14 +938,20 @@ index 0000000..7b09c2d
 +            executeRemoteCallWithTaskPermission(mController, "lower",
 +                    (controller) -> controller.requestLower(displayId));
 +        }
++
++        @Override
++        public void setMicSlot(int displayId, Rect slotBounds) {
++            executeRemoteCallWithTaskPermission(mController, "setMicSlot",
++                    (controller) -> controller.setMicSlot(displayId, slotBounds));
++        }
 +    }
 +}
 diff --git a/libs/WindowManager/Shell/src/com/android/wm/shell/roseedge/RoseEdgePolicy.java b/libs/WindowManager/Shell/src/com/android/wm/shell/roseedge/RoseEdgePolicy.java
 new file mode 100644
-index 0000000..6211b92
+index 0000000..6ac0dda
 --- /dev/null
 +++ b/libs/WindowManager/Shell/src/com/android/wm/shell/roseedge/RoseEdgePolicy.java
-@@ -0,0 +1,232 @@
+@@ -0,0 +1,314 @@
 +/*
 + * Copyright 2026
 + * SPDX-License-Identifier: Apache-2.0
@@ -715,6 +1073,72 @@ index 0000000..6211b92
 +        return 0;
 +    }
 +
++    // The edge's microphone-input slot (#410 option a): SystemUI's existing trusted tray protocol, mute only.
++    /** AgentTrayService's MUTE and UNMUTE; the slot never sends START (3) or END (6). */
++    public static final int MIC_MUTE = 4;
++    public static final int MIC_UNMUTE = 5;
++    public static final int MIC_SLOT_MIN_DP = 32;
++    public static final int MIC_SLOT_MAX_DP = 64;
++    public static final long MIC_TAP_MAX_MS = 400;
++    /** The tray's own spacing between commands. */
++    public static final long MIC_COMMAND_SPACING_MS = 600;
++
++    /**
++     * Whether Launcher3's slot may carry the trusted mute control: inside the raised display's bottom band
++     * (0, H - maxLiftPx, W, H), and 32-64dp on each side. Anything else is ignored, so the control can never be
++     * placed elsewhere on screen.
++     */
++    public static boolean validMicSlot(int left, int top, int right, int bottom, int displayWidth, int displayHeight,
++            float density) {
++        final int width = right - left;
++        final int height = bottom - top;
++        final int min = Math.round(MIC_SLOT_MIN_DP * density);
++        final int max = Math.round(MIC_SLOT_MAX_DP * density);
++        return left >= 0 && right <= displayWidth && bottom <= displayHeight
++                && top >= displayHeight - maxLiftPx(displayHeight, density)
++                && width >= min && width <= max && height >= min && height <= max;
++    }
++
++    /** The only command a tap sends: it mutes or unmutes Rose's microphone input, never starts or ends anything. */
++    public static int micCommand(boolean muted) {
++        return muted ? MIC_UNMUTE : MIC_MUTE;
++    }
++
++    /** Commands are spaced like the tray's; lastCommandAt 0 means none yet. */
++    public static boolean micCommandAllowed(long now, long lastCommandAt) {
++        return lastCommandAt == 0 || now - lastCommandAt >= MIC_COMMAND_SPACING_MS;
++    }
++
++    /** A single short tap that stays within slop and ends inside the control. */
++    public static final class MicTap {
++        private boolean mDown;
++        private float mX;
++        private float mY;
++        private long mAt;
++
++        public void down(float x, float y, long at) {
++            mDown = true;
++            mX = x;
++            mY = y;
++            mAt = at;
++        }
++
++        public void move(float x, float y, float slop) {
++            if (Math.abs(x - mX) > slop || Math.abs(y - mY) > slop) mDown = false;
++        }
++
++        public void cancel() {
++            mDown = false;
++        }
++
++        public boolean up(float x, float y, long at, float slop, boolean inside) {
++            final boolean tap = mDown && inside && Math.abs(x - mX) <= slop && Math.abs(y - mY) <= slop
++                    && at - mAt <= MIC_TAP_MAX_MS;
++            mDown = false;
++            return tap;
++        }
++    }
++
 +    /** The task display area's bounds while raised: full width, the bottom moved up by liftPx. */
 +    public static int[] raisedBounds(int displayWidth, int displayHeight, int liftPx) {
 +        return new int[] {0, 0, displayWidth, displayHeight - liftPx};
@@ -727,6 +1151,7 @@ index 0000000..6211b92
 +        private int mTaskId = -1;
 +        private int mLiftPx;
 +        private boolean mInFlight;
++        private int[] mMicSlot;
 +
 +        public boolean raised() {
 +            return mOwner != null;
@@ -746,6 +1171,20 @@ index 0000000..6211b92
 +
 +        public int liftPx() {
 +            return mLiftPx;
++        }
++
++        /** A slot belongs to the current raise on its display; it is dropped by every lower (clear). */
++        public boolean acceptsMicSlot(int displayId) {
++            return raised() && displayId == mDisplayId;
++        }
++
++        /** The slot's {left, top, right, bottom}, or null to clear it. */
++        public void setMicSlot(int[] slot) {
++            mMicSlot = slot;
++        }
++
++        public int[] micSlot() {
++            return mMicSlot;
 +        }
 +
 +        /** A raise or lower has been sent and its transition has not finished. */
@@ -776,6 +1215,7 @@ index 0000000..6211b92
 +            mDisplayId = -1;
 +            mTaskId = -1;
 +            mLiftPx = 0;
++            mMicSlot = null;
 +            return owner;
 +        }
 +

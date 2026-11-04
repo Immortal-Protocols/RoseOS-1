@@ -6,8 +6,9 @@ import java.util.Arrays;
 
 /**
  * RoseOS (#410): runs the patched production RoseEdgePolicy (os/patches/rose-edge-wmshell.patch) through the raise
- * refusals, the lift bound, single ownership and every lowering rule agreed with OS Product. Pure Java: no Android,
- * no device.
+ * refusals, the lift bound, single ownership, every lowering rule and the microphone slot (option a: bottom band,
+ * 32-64dp, mute or unmute only, tap and spacing, owned by the current raise) agreed with OS Product. Pure Java: no
+ * Android, no device.
  */
 public final class RoseEdgePolicyTest {
     static int checks;
@@ -121,11 +122,56 @@ public final class RoseEdgePolicyTest {
         expect(s.onLowerRequested(2) == KEEP && s.onLowerRequested(0) == LOWERED_REQUESTED, "explicit lower");
     }
 
+    static void micSlot() {
+        int px = Math.round(44 * DENSITY), band = maxLiftPx(H, DENSITY);
+        int cx = W / 2, top = H - Math.round(29 * DENSITY) - px / 2;
+        expect(validMicSlot(cx - px / 2, top, cx + px / 2, top + px, W, H, DENSITY), "44dp slot in the edge band");
+        expect(!validMicSlot(cx - px / 2, H - band - 1, cx + px / 2, H - band - 1 + px, W, H, DENSITY),
+                "never above the bottom band");
+        expect(validMicSlot(cx - px / 2, H - band, cx + px / 2, H - band + px, W, H, DENSITY), "the band's top edge");
+        int min = Math.round(32 * DENSITY), max = Math.round(64 * DENSITY);
+        expect(validMicSlot(0, H - min, min, H, W, H, DENSITY) && !validMicSlot(0, H - min + 1, min, H, W, H, DENSITY),
+                "32dp is the smallest side");
+        expect(validMicSlot(0, H - max, max, H, W, H, DENSITY) && !validMicSlot(0, H - max - 1, max + 1, H, W, H, DENSITY),
+                "64dp is the largest side");
+        expect(!validMicSlot(-1, H - px, px - 1, H, W, H, DENSITY) && !validMicSlot(W - px + 1, H - px, W + 1, H, W, H, DENSITY)
+                && !validMicSlot(0, H - px + 1, px, H + 1, W, H, DENSITY), "never off the display");
+        expect(!validMicSlot(0, H - px, px * 3, H, W, H, DENSITY), "never a wide strip");
+        // Mute only: never START (3) or END (6).
+        expect(micCommand(false) == MIC_MUTE && micCommand(true) == MIC_UNMUTE && MIC_MUTE == 4 && MIC_UNMUTE == 5,
+                "a tap mutes or unmutes Rose's input, and nothing else");
+        expect(micCommandAllowed(1000, 0) && !micCommandAllowed(1500, 1000) && micCommandAllowed(1600, 1000),
+                "commands spaced like the tray's");
+        MicTap tap = new MicTap();
+        tap.down(10, 10, 0);
+        expect(tap.up(12, 11, 300, 8, true), "a short tap");
+        tap.down(10, 10, 0);
+        expect(!tap.up(10, 10, 401, 8, true), "a long press is not a tap");
+        tap.down(10, 10, 0);
+        tap.move(30, 10, 8);
+        expect(!tap.up(10, 10, 100, 8, true), "a drag is not a tap");
+        tap.down(10, 10, 0);
+        expect(!tap.up(10, 10, 100, 8, false), "released outside the control");
+        tap.down(10, 10, 0);
+        tap.cancel();
+        expect(!tap.up(10, 10, 100, 8, true), "cancelled");
+        expect(!tap.up(10, 10, 100, 8, true), "no down, no tap");
+        // A slot belongs to the current raise and goes with it.
+        State s = new State();
+        expect(!s.acceptsMicSlot(0), "no raise, no slot");
+        s.raise(new Object(), DEFAULT_DISPLAY, 7, LIFT);
+        expect(s.acceptsMicSlot(0) && !s.acceptsMicSlot(2), "only the raised display");
+        s.setMicSlot(new int[] {1, 2, 3, 4});
+        s.clear();
+        expect(s.micSlot() == null && !s.acceptsMicSlot(0), "every lower drops it; Launcher3 re-sends after onRaised");
+    }
+
     public static void main(String[] args) {
         refusals();
         geometry();
         ownership();
         lowering();
+        micSlot();
         System.out.println("RoseEdgePolicyTest: " + checks + " checks passed");
     }
 }
