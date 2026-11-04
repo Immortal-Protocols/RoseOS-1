@@ -2,9 +2,10 @@
 
 Target channel: **Pixel 10 / frankel**, public repository
 [Immortal-Protocols/pixel-ota](https://github.com/Immortal-Protocols/pixel-ota).
-For the separate Pixel 10 Pro XL (Mustang) unsigned sprint route and its unbound
-signing requirements, see [Mustang source route](MUSTANG-SPRINT.md) and
-[Mustang signing/private delivery](MUSTANG-DELIVERY.md).
+For the separate Pixel 10 Pro XL (Mustang) route, see
+[Mustang source route](MUSTANG-SPRINT.md),
+[Mustang signing/private delivery](MUSTANG-DELIVERY.md), and the later
+[OTA implementation and inactive activation path](MUSTANG-OTA.md).
 
 Its README specifies `frankel-stable` metadata and the matching
 `frankel-ota_update-BUILD.zip`. Factory images and checksums may accompany it.

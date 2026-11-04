@@ -1,6 +1,6 @@
 name: Build & publish latest Pixel 10
 # RELEASE020: a campaign run carries its campaign in the run name; scripts/release-chain.py finds successors by it.
-run-name: ${{ startsWith(inputs.mode, 'mustang-') && format('{0} {1}', inputs.mode, github.run_id) || inputs.campaign && format('Build & publish latest Pixel 10 - campaign {0}', inputs.campaign) || inputs.mode == 'app-only' && inputs.apps == 'auto' && format('Agent Beta auto {0}', inputs.candidate_sha) || 'Build & publish latest Pixel 10' }}
+run-name: ${{ inputs.mode == 'mustang-build' && inputs.candidate_sha != '' && format('mustang-build auto-{0}', inputs.candidate_sha) || inputs.mode == 'mustang-delivery' && inputs.mustang_publish_ota && format('mustang-delivery ota-{0}', inputs.mustang_compile_run) || startsWith(inputs.mode, 'mustang-') && format('{0} {1}', inputs.mode, github.run_id) || inputs.campaign && format('Build & publish latest Pixel 10 - campaign {0}', inputs.campaign) || inputs.mode == 'app-only' && inputs.apps == 'auto' && format('Agent Beta auto {0}', inputs.candidate_sha) || 'Build & publish latest Pixel 10' }}
 
 # Build, sign, verify and publish one Frankel candidate on the existing builder. The default mode, latest-beta, is the
 # normal button (OCT30-INFRA-S014): it needs no input. Every other mode and input is advanced. Proposed setup is
@@ -105,6 +105,10 @@ on:
       mustang_bootstrap_run:
         description: mustang-delivery only - completed pro-mustang-v1 bootstrap run
         default: ''
+      mustang_publish_ota:
+        description: 'mustang-build: check baseline before compile; mustang-delivery: publish newer OTA after checks. Inactive until os/ota/mustang.json is enabled; never Latest.'
+        type: boolean
+        default: false
       campaign:
         description: latest-beta only - empty (default) is one run; 'start' begins a 24h back-to-back campaign in which each healthy run (publish and cleanup succeeded) dispatches the next fresh latest-beta run from main; '<id>.<deadline>.<generation>' is set by the chain itself. Stop with repository variable RELEASE_CAMPAIGN_STOP (campaign id or 'all') or by cancelling
         type: string
@@ -123,6 +127,7 @@ concurrency:
 
 env:
   MODE: ${{ inputs.mode }}
+  MUSTANG_PUBLISH_OTA: ${{ inputs.mustang_publish_ota }}
   MUSTANG_COMPILE_RUN: ${{ inputs.mustang_compile_run }}
   MUSTANG_BOOTSTRAP_RUN: ${{ inputs.mustang_bootstrap_run }}
   # Read by release-pipeline.py, which admits only its SUPPORTED_DEVICES; the guard checks it before the controller.
@@ -154,6 +159,7 @@ jobs:
       contents: read
       actions: read  # emulator-alpha-export and models-sign only: fixed original artifacts are read from their own runs
     outputs:
+      mustang_skip: ${{ steps.mustang-auto-admit.outputs.skip }}
       mustang_compile_source: ${{ steps.mustang-binding.outputs.compile_source }}
       mustang_compile_recovery: ${{ steps.mustang-binding.outputs.compile_recovery }}
       mustang_bootstrap_source: ${{ steps.mustang-binding.outputs.bootstrap_source }}
@@ -186,6 +192,7 @@ jobs:
           ALPHA_RECOVER: ${{ inputs.alpha_recover }}
         run: |
           set -euo pipefail
+          [[ "$MUSTANG_PUBLISH_OTA" != true || "$MODE" == mustang-build || "$MODE" == mustang-delivery ]]
           if [[ "$MODE" == latest-beta ]]; then
             # The normal button: no pins at all. The dispatch commit (GITHUB_SHA, on main) is the captured source; the
             # builder allocates the build number, BUILD_DATETIME and app versions from it under the shared lock.
@@ -225,8 +232,13 @@ jobs:
             [[ -z "${CAMPAIGN:-}" && "$APP_PUBLISH" == false && "${ROSE_RANGO_PUBLISH:-false}" == false && "${ROSE_FIRST_USE_ENROLL:-false}" == false && -z "${ROSE_RECOVER_RUN:-}" ]]
             [[ "${BOOTSTRAP_PROFILE:-none}" == none && -z "${MODELS_BOOTSTRAP_RUN:-}" && -z "$REUSE_BINDING" && "$ALPHA_RECOVER" == false && "$ROSE_DEVICE" == frankel ]]
           elif [[ "$MODE" == mustang-build || "$MODE" == mustang-bootstrap || "$MODE" == mustang-delivery ]]; then
-            # Mustang is pinned by its own recipe; every general release/signing selector stays at default.
-            [[ -z "$CANDIDATE_SHA" && -z "$BUILD_NUMBER" && -z "$BUILD_TIMESTAMP" && -z "$APPS" ]]
+            # Optional candidate_sha pins the tested main source for automatic unsigned builds.
+            [[ -z "$BUILD_NUMBER" && -z "$BUILD_TIMESTAMP" && -z "$APPS" ]]
+            if [[ "$MODE" == mustang-build ]]; then
+              [[ -z "$CANDIDATE_SHA" || "$CANDIDATE_SHA" == "$GITHUB_SHA" ]]
+            else
+              [[ -z "$CANDIDATE_SHA" ]]
+            fi
             [[ "$PROMOTE" == false && "$RESUME_STAGE" == none && -z "$RESUME_SOURCE_RUN" && -z "$RESUME_UNSIGNED_SHA256" && -z "$RESUME_SIGNED_SHA256" ]]
             [[ -z "${CAMPAIGN:-}" && "$APP_PUBLISH" == false && "${ROSE_RANGO_PUBLISH:-false}" == false && "${ROSE_FIRST_USE_ENROLL:-false}" == false && -z "${ROSE_RECOVER_RUN:-}" ]]
             [[ "${BOOTSTRAP_PROFILE:-none}" == none && -z "${MODELS_BOOTSTRAP_RUN:-}" && -z "$REUSE_BINDING" && "$ALPHA_RECOVER" == false && "$ROSE_DEVICE" == frankel ]]
@@ -309,6 +321,16 @@ jobs:
           path: ${{ runner.temp }}/rango-provenance
           retention-days: 1
           if-no-files-found: error
+      - name: Mustang OTA activation and installed baseline preflight
+        if: inputs.mustang_publish_ota
+        run: python3 scripts/mustang_ota.py guard
+      - name: Recheck unchanged content after FIFO admission before starting the builder
+        id: mustang-auto-admit
+        if: inputs.mode == 'mustang-build' && inputs.candidate_sha != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MUSTANG_OTA_AUTO: ${{ vars.MUSTANG_OTA_AUTO }}
+        run: python3 scripts/mustang-ota-auto.py admit-build
       - name: Bootstrap preflight
         if: ${{ !startsWith(inputs.mode, 'mustang-') }}
         env:
@@ -463,6 +485,7 @@ jobs:
 
   controller:
     needs: guard
+    if: needs.guard.outputs.mustang_skip != 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     outputs:
@@ -1753,7 +1776,7 @@ jobs:
 
   mustang-build:
     needs: [guard, controller]
-    if: inputs.mode == 'mustang-build'
+    if: inputs.mode == 'mustang-build' && needs.guard.outputs.mustang_skip != 'true'
     runs-on: [self-hosted, roseos-frankel-builder]
     # Original lifecycle fallback remains 12 h. This is an 11 h job cap,
     # independent of the four-hour delivery target, not a restarted deadline.
@@ -1765,6 +1788,9 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+      - name: Check installed-baseline updater before starting a newer compile
+        if: inputs.mustang_publish_ota
+        run: python3 scripts/mustang_ota.py observe --out "$RUNNER_TEMP/mustang-ota-baseline-prebuild.json"
       - name: Prepare, allocate, integrate and compile Mustang once
         run: python3 scripts/mustang-pipeline.py run --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT"
       - name: Collect allowlisted receipts
@@ -1776,6 +1802,14 @@ jobs:
         with:
           name: mustang-receipts-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/mustang-reports-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 7
+          if-no-files-found: warn
+
+      - if: always() && inputs.mustang_publish_ota
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: mustang-ota-baseline-prebuild-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/mustang-ota-baseline-prebuild.json
           retention-days: 7
           if-no-files-found: warn
 
@@ -1827,6 +1861,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          fetch-depth: 0
           persist-credentials: false
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
@@ -1834,14 +1869,23 @@ jobs:
           run-id: ${{ inputs.mustang_compile_run }}
           github-token: ${{ github.token }}
           path: ${{ runner.temp }}/mustang-compile
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      - if: inputs.mustang_publish_ota != true
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: mustang-bootstrap-${{ inputs.mustang_bootstrap_run }}-1
           run-id: ${{ inputs.mustang_bootstrap_run }}
           github-token: ${{ github.token }}
           path: ${{ runner.temp }}/mustang-bootstrap
+      - name: Use the committed original public bootstrap receipt for OTA (no expiring artifact dependency)
+        if: inputs.mustang_publish_ota
+        run: |
+          mkdir -p "$RUNNER_TEMP/mustang-bootstrap"
+          cp os/signing-bootstrap/mustang-bootstrap-receipt.json "$RUNNER_TEMP/mustang-bootstrap/signing-bootstrap-receipt.json"
       - name: Collect actual Mustang outputs before signer login
         run: python3 scripts/mustang-sign-package.py collect --compile-receipt "$RUNNER_TEMP/mustang-compile/candidate-receipt.json" --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT"
+      - name: Observe actual installed-baseline package and OTA trust before login
+        if: inputs.mustang_publish_ota
+        run: python3 scripts/mustang_ota.py observe --out "$RUNNER_TEMP/mustang-ota-baseline.json"
       - run: python3 scripts/actions-gcp-login.py login "$GCP_SIGNER_SERVICE_ACCOUNT"
       - run: python3 scripts/mustang-sign-package.py sign --compile-receipt "$RUNNER_TEMP/mustang-compile/candidate-receipt.json" --bootstrap-receipt "$RUNNER_TEMP/mustang-bootstrap/signing-bootstrap-receipt.json" --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT"
       - if: always()
@@ -1862,8 +1906,69 @@ jobs:
           retention-days: 7
           if-no-files-found: warn
 
+      - name: Check newer Mustang OTA and stage public assets without signer credentials
+        if: inputs.mustang_publish_ota
+        run: python3 scripts/mustang_ota.py stage --sign-run "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT" --baseline "$RUNNER_TEMP/mustang-ota-baseline.json" --out "/home/pixelbuild/rose-actions/mustang-ota-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+      - if: inputs.mustang_publish_ota
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: mustang-ota-${{ github.run_id }}-${{ github.run_attempt }}
+          path: /home/pixelbuild/rose-actions/mustang-ota-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 7
+          compression-level: 0
+          if-no-files-found: error
+      - if: always() && inputs.mustang_publish_ota
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: mustang-ota-baseline-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/mustang-ota-baseline.json
+          retention-days: 7
+          if-no-files-found: warn
+
+  mustang-ota-publisher:
+    needs: mustang-signer
+    if: inputs.mode == 'mustang-delivery' && inputs.mustang_publish_ota
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: mustang-ota-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/mustang-ota
+      - name: Verify same-run OTA stage before minting the existing publisher token
+        run: python3 scripts/mustang_ota.py verify-staged --dir "$RUNNER_TEMP/mustang-ota"
+      - name: Mint existing pixel-ota publisher token
+        id: app
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ vars.PIXEL_OTA_APP_ID }}
+          private-key: ${{ secrets.PIXEL_OTA_APP_PRIVATE_KEY }}
+          owner: Immortal-Protocols
+          repositories: pixel-ota
+          permission-contents: write
+      - name: Publish fresh Mustang OTA, metadata last, never Latest
+        env:
+          PIXEL_OTA_TOKEN: ${{ steps.app.outputs.token }}
+        run: python3 scripts/mustang_ota.py publish --dir "$RUNNER_TEMP/mustang-ota" --out "$RUNNER_TEMP/mustang-publication"
+      - if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: mustang-ota-publication-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/mustang-publication/publication.json
+            ${{ runner.temp }}/mustang-publication/journal.jsonl
+          retention-days: 7
+          if-no-files-found: warn
+
   mustang-packager:
     needs: mustang-signer
+    if: inputs.mustang_publish_ota != true
     runs-on: [self-hosted, roseos-frankel-builder]
     timeout-minutes: 90
     permissions:

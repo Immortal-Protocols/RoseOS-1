@@ -1,5 +1,9 @@
 # Mustang signing and private candidate delivery
 
+For the later OTA implementation, installed baseline and inactive publication/
+automation path, see [Mustang OTA](MUSTANG-OTA.md). The private sprint delivery
+below does not establish public OTA or phone-update acceptance.
+
 This implements [Nathan’s reduced-check plan](https://app.notion.com/p/40d7c646c81b81198e60cb76ca2ea603)
 for **Pixel 10 Pro XL / mustang** on the existing original builder. Source,
 bootstrap, signing, packaging, downloaded checksums and physical acceptance are
