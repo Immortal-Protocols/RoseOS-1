@@ -897,7 +897,43 @@ class Candidate(unittest.TestCase):
 
 class RealDelta(unittest.TestCase):
     """The committed candidate delta (#440 e361d1c, inert under os/tests/fixtures) applied by this adapter's own code to
-    OS Product's pinned base fixtures and main's own RoseEdgeGesture: every final image equals the contract's."""
+    OS Product's pinned base fixtures and the base overlay images the delta names: every final image equals the
+    contract's. A base overlay comes from the first source whose sha256 is the delta's `before`: main's own os/overlays
+    copy while main is still at the base, else OS Product's pinned base copy in the fixtures' layout. When neither holds
+    it, the test fails; it is never skipped."""
+    def base_overlay(self, target, before, root=ROOT):
+        seen = {}
+        for source in (root/'os/overlays'/target, root/'os/tests/fixtures/launcher3-compile-contract'/target):
+            data = source.read_bytes() if source.is_file() and not source.is_symlink() else None
+            if data is not None and sha(data) == before:
+                return data
+            seen[str(source.relative_to(root))] = None if data is None else sha(data)
+        self.fail(f'no source holds the base image {before} of {target}: {seen}')
+
+    def test_the_base_overlay_comes_from_whichever_source_holds_the_before_image(self):
+        """Synthetic images in a temporary root, so this holds on any branch."""
+        target = next(o for o in MANIFEST['candidateDelta']['overlays'] if o['before'] is not None)['target']
+        base, candidate = b'base image\n', b'candidate image\n'
+        root = Path(tempfile.mkdtemp())
+        live, pinned = root/'os/overlays'/target, root/'os/tests/fixtures/launcher3-compile-contract'/target
+        live.parent.mkdir(parents=True)
+        live.write_bytes(base)
+        self.assertEqual(self.base_overlay(target, sha(base), root), base)  # main while it is still at the base
+        live.write_bytes(candidate)  # os/ at the candidate, as on #440's branch
+        with self.assertRaisesRegex(AssertionError, 'no source holds the base image'):
+            self.base_overlay(target, sha(base), root)
+        pinned.parent.mkdir(parents=True)
+        (root/'elsewhere').write_bytes(base)
+        pinned.symlink_to(root/'elsewhere')  # a link is never a pinned copy
+        with self.assertRaisesRegex(AssertionError, 'no source holds the base image'):
+            self.base_overlay(target, sha(base), root)
+        pinned.unlink()
+        pinned.write_bytes(base)  # OS Product's pinned base copy
+        self.assertEqual(self.base_overlay(target, sha(base), root), base)
+        pinned.write_bytes(candidate)  # a copy of another image is not the base either
+        with self.assertRaisesRegex(AssertionError, 'no source holds the base image'):
+            self.base_overlay(target, sha(base), root)
+
     def test_the_real_delta_reaches_the_contract_final_images_from_the_real_base(self):
         delta = MANIFEST['candidateDelta']
         fixtures = ROOT/'os/tests/fixtures/launcher3-compile-contract'
@@ -908,7 +944,7 @@ class RealDelta(unittest.TestCase):
         for item in delta['overlays']:
             if item['before'] is not None:
                 (tree/item['target']).parent.mkdir(parents=True, exist_ok=True)
-                (tree/item['target']).write_bytes((ROOT/'os/overlays'/item['target']).read_bytes())
+                (tree/item['target']).write_bytes(self.base_overlay(item['target'], item['before']))
         adapter.delta_preconditions(tree, delta['files'], delta['overlays'])
         adapter.apply_candidate(tree, delta['patches'], delta['overlays'], ROOT, delta['files'])
         final = {f'{p["path"]}/{f["path"]}': f['post'] for p in MANIFEST['projects'] for f in p['files']}
