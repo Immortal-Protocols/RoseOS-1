@@ -548,26 +548,37 @@ class Committed(unittest.TestCase):
         with self.assertRaisesRegex(producer.Invalid, 'not the contract version this producer reads'):
             producer.load_contract(pinned='0' * 64)
 
-    def test_this_checkouts_overlays_and_patches_are_the_pinned_base_bundle(self):
-        """Observed at HEAD, with the checker's prefixes, leaves nothing unclassified, its patches are the registration's,
-        and its overlays are wholly base.bundleContent's (main before #440) or wholly the candidate's (#440 and after)."""
+    def test_this_checkouts_os_is_wholly_the_pinned_base_or_wholly_the_candidate(self):
+        """main's os/ is the contract's base, or the base with #440's whole candidateDelta (once #440 lands in normal
+        integration), never a mix, as OS Product's own contract test requires. Observed at HEAD, with the checker's
+        prefixes: nothing is unclassified; the registered patches are base.bundleContent's; the overlays are exactly
+        base.bundleContent's, or exactly those with every candidateDelta overlay at its after-image; and the
+        candidate's patches are at HEAD with their pinned sha256 exactly when its overlays are, and absent otherwise."""
         contract = copy.deepcopy(CONTRACT)
         contract['overlayRoles']['required']['prefixes'] = list(PREFIXES)
         seen = producer.observed(contract, ROOT, 'HEAD')
-        content = contract['base']['bundleContent']
+        content, delta = contract['base']['bundleContent'], contract['candidateDelta']
         self.assertEqual(seen['unclassified'], [])
         self.assertEqual([(p['project'], p['name']) for p in seen['patches']],
                          [(o['project'], o['name']) for o in contract['base']['registration']['order']])
         self.assertEqual(sorted((p['project'], p['name'], p['sha256']) for p in seen['patches']),
                          sorted((p['project'], p['name'], p['sha256']) for p in content['patches']))
-        base_overlays = {o['target']: o['sha256'] for o in content['overlays']}
-        candidate = dict(base_overlays)
-        for o in contract['candidateDelta']['overlays']:
-            candidate[o['target']] = o['after']
-        seen_overlays = {o['target']: o['sha256'] for o in seen['overlays']}
-        self.assertIn(seen_overlays, (base_overlays, candidate),
-            'HEAD is wholly at the base (main before #440) or wholly at the candidate (#440 and after)')
         self.assertEqual(sorted(seen['notAnInputOverlays']), sorted(content['notAnInputOverlays']))
+        base = {o['target']: o['sha256'] for o in content['overlays']}
+        candidate = dict(base)
+        for o in delta['overlays']:
+            self.assertEqual(base.get(o['target']), o['before'], o['target'])
+            candidate[o['target']] = o['after']
+        self.assertNotEqual(base, candidate)
+        overlays = {o['target']: o['sha256'] for o in seen['overlays']}
+        self.assertIn(overlays, (base, candidate), "os/overlays is neither the base nor the whole candidate")
+        patches = producer.tree(ROOT, 'HEAD', 'os/patches')
+        for p in delta['patches']:
+            path = f'os/patches/{p["name"]}'
+            if overlays == candidate:
+                self.assertEqual(producer.sha256(producer.blob(ROOT, 'HEAD', path)), p['sha256'], path)
+            else:
+                self.assertNotIn(path, patches)
 
 
 if __name__ == '__main__':
