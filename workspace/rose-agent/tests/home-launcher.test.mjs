@@ -75,7 +75,7 @@ test('Home comes first, the app pages follow it, and nothing else is a page (OS-
  assert.match(pages,/setContentView\(homeFrame\);homeBars\(\);drawer=true;if\(voiceControls\)attachVoiceControls\(\);/);
  assert.match(main,/void showVoiceControls\(\)\{voiceControls=true;attachVoiceControls\(\);\}/);
  assert.match(main,/void closeVoiceControls\(\)\{voiceControls=false;drawer=true;/);
- assert.match(main,/if\(!voiceControls\)menu\.getMenu\(\)\.add\("Voice controls"\)\.setOnMenuItemClickListener\(i->\{showVoiceControls\(\);return true;\}\);/);
+ assert.match(main,/if\(!voiceControls\)settingsOption\(menu,"Voice controls"\)\.setOnMenuItemClickListener\(i->\{showVoiceControls\(\);return true;\}\);/);
  assert.match(main,/else if\(voiceControls\)closeVoiceControls\(\);/);
  assert.match(read('../app/src/dev/pixel/voice/RoseConversationActivity.java'),/add\("Settings"\)\.setOnMenuItemClickListener\(i->\{startActivity\(new Intent\(MainActivity\.ACTION_SETTINGS\)\.setClass\(this,MainActivity\.class\)\);return true;\}\);/);
  // The pager sits in a HomeFrame with the fixed tray; the frame, not the pager, is the content view.
@@ -515,4 +515,12 @@ test('#410 gesture_nav_contract_v1: a RectF-only reply to the verified recents c
  assert.match(main,/if\(pager!=launcherPager\|\|replanPending\|\|isFinishing\(\)\)return;/,'no target while Home is about to be rebuilt');
  assert.equal((main.match(/Height=cell;replanPending=true;\n  handler\.post\(\(\)->\{if\(launcherPager!=null&&!isFinishing\(\)\)attachLauncherPages\(true\);\}\);/g)||[]).length,2,'both re-plans mark it');
  assert.match(main,/void attachLauncherPages\(boolean preservePage\)\{\n  replanPending=false;/,'a rebuild clears it');
+});
+
+// The Settings intent must not silently disappear when the Home anchor is absent/replaced.
+test('Settings opens a window-owned dialog without depending on the launcher frame',()=>{
+ const route=main.slice(main.indexOf('void showSettingsFor(Intent intent)'),main.indexOf('/** HOME returning'));
+ assert.ok(!route.includes('homeFrame'));
+ assert.match(route,/getWindow\(\)\.getDecorView\(\)\.post/);
+ assert.match(main,/SettingsDialog\.show\(this,menu\.getMenu\(\)\);/);
 });

@@ -114,14 +114,14 @@ final class LocalRoseAuth {
         }
 
         if (!"1".equals(params.get("v"))) {
-            throw new InvalidInvite("This pairing code is for a different version of Rose. Update Rose Agent and Rose on the Mac.");
+            throw new InvalidInvite("This pairing code is for a different version of Rose. Update Rose Agent and Rose on the backend.");
         }
         String name = params.get("name");
         if (name == null || name.trim().isEmpty() || name.length() > 128 || hasControl(name)) {
-            throw new InvalidInvite("The pairing code has no valid Mac name.");
+            throw new InvalidInvite("The pairing code has no valid backend name.");
         }
         String pin = lower(params.get("pin"));
-        if (pin == null || !pin.matches("[0-9a-f]{64}")) throw new InvalidInvite("The pairing code has no valid Mac identity.");
+        if (pin == null || !pin.matches("[0-9a-f]{64}")) throw new InvalidInvite("The pairing code has no valid backend identity.");
         String code = params.get("code");
         code = code == null ? null : code.toUpperCase(Locale.ROOT);
         if (code == null || !code.matches("[A-Z2-7]{26}")) throw new InvalidInvite("The pairing code has no valid one-time code.");
@@ -135,7 +135,7 @@ final class LocalRoseAuth {
         }
         if (port < 1 || port > 65535) throw new InvalidInvite("The pairing code has no valid port.");
         String hostList = params.get("hosts");
-        if (hostList == null || hostList.isEmpty()) throw new InvalidInvite("The pairing code lists no address for the Mac.");
+        if (hostList == null || hostList.isEmpty()) throw new InvalidInvite("The pairing code lists no address for the backend.");
         List<String> hosts = new ArrayList<>();
         for (String h : hostList.split(",", -1)) {
             String host = lower(h.trim());
@@ -170,7 +170,7 @@ final class LocalRoseAuth {
         return out;
     }
 
-    /** How the phone reaches the Mac, for the UI: "Tailscale", "Wi-Fi" or "USB". */
+    /** How the phone reaches the backend, for the UI: "Tailscale", "Wi-Fi" or "USB". */
     static String route(String host) {
         String h = lower(host);
         if (h == null) return "Wi-Fi";

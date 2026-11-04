@@ -1,0 +1,10 @@
+{
+  "observedAt": "2026-11-04T02:34:38.067308+00:00",
+  "instance": {
+    "id": "685707771105568194",
+    "lastStartTimestamp": "2026-11-03T16:56:30.450-08:00",
+    "lastStopTimestamp": "2026-11-03T18:34:11.436-08:00",
+    "name": "immortal-os-builder",
+    "status": "TERMINATED"
+  }
+}

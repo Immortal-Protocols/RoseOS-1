@@ -1,0 +1,69 @@
+{
+  "at": "2026-11-04T02:33:27Z",
+  "boundBytes": 268435456000,
+  "boundKind": "first-build-proposal",
+  "buildIdentity": {
+    "buildDatetime": "1793755347",
+    "buildNumber": "2026110401"
+  },
+  "consumedBytes": 119999254528,
+  "device": "mustang",
+  "enforcement": "sampled-stop",
+  "leftoverGroupEnded": null,
+  "lowestSampledAvailableBytes": 200266018816,
+  "measure": "filesystem-available-drop",
+  "ok": true,
+  "outDir": "out-mustang-build-2026110401",
+  "outputs": {
+    "actualBuildIdentity": {
+      "build": "2026110401",
+      "device": "mustang",
+      "timestamp": "1793755347"
+    },
+    "artifacts": {
+      "otatools": {
+        "path": "/home/pixelbuild/rose-actions/mustang-prep-41750459835-1/source/out-mustang-build-2026110401/soong/.intermediates/build/make/tools/otatools_package/otatools-package/linux_glibc_x86_64/gen/otatools.zip",
+        "sha256": "216ee9b46072de5183e1cd6db934e5478a955c83f793369757e233d052a0a74b",
+        "sizeBytes": 536808141,
+        "state": "collected"
+      },
+      "targetFiles": {
+        "path": "/home/pixelbuild/rose-actions/mustang-prep-41750459835-1/source/out-mustang-build-2026110401/target/product/mustang/obj/PACKAGING/target_files_intermediates/mustang-target_files.zip",
+        "sha256": "01b6925e2b14914bd37b35589d3c30d6728bcd85fa5ac2a5d1096aae4fc6a487",
+        "sizeBytes": 4340117750,
+        "state": "collected"
+      },
+      "vendorBootImage": {
+        "path": "/home/pixelbuild/rose-actions/mustang-prep-41750459835-1/source/out-mustang-build-2026110401/target/product/mustang/vendor_boot.img",
+        "sha256": "267741cb8b747782d50e4a8c2a0ed5daa14b28cdf7f505ca35c48881ece06f14",
+        "sizeBytes": 67108864,
+        "state": "collected"
+      },
+      "vendorKernelBootImage": {
+        "path": "/home/pixelbuild/rose-actions/mustang-prep-41750459835-1/source/out-mustang-build-2026110401/target/product/mustang/vendor_kernel_boot.img",
+        "sha256": "f2cf77bcac17e358ce89f35f17a53d242bbb2e8dff943b29872226ffabf86690",
+        "sizeBytes": 67108864,
+        "state": "collected"
+      }
+    },
+    "omitted": "CRC sweep, partition/firmware coverage, packaged app/policy and signing checks",
+    "outDir": "/home/pixelbuild/rose-actions/mustang-prep-41750459835-1/source/out-mustang-build-2026110401",
+    "signed": false,
+    "verdict": "complete"
+  },
+  "peakSampledBytes": 121686892544,
+  "releaseReady": false,
+  "returncode": 0,
+  "sampleSeconds": 5,
+  "signed": false,
+  "sprint": {
+    "candidateLabel": "build-and-package candidate; omitted verification remains undone; physical-device acceptance unproven",
+    "downloadedInputHashVerification": false,
+    "packagedAppAndPolicyVerification": false,
+    "plan": "https://app.notion.com/p/40d7c646c81b81198e60cb76ca2ea603",
+    "reserveChecks": false
+  },
+  "stage": "compile",
+  "startAvailableBytes": 321952911360,
+  "stopped": null
+}

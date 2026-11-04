@@ -13,8 +13,12 @@ plus the helper path; stdin is closed, the child gets its own session (no contro
 a finite timeout ends the whole process group (TERM, then KILL) and reaps it, and combined output is capped and never
 returned or logged (only its size and sha256).
 
-Nothing here proves compatibility with a real OpenSSH build or builder: that needs an approved run (tool identity
-with version >= 8.4, then the generation self-check). Source tests use mocked process and secret boundaries only.
+self_check() runs before any import: the generated key must decrypt with its passphrase through the helper (ssh-keygen
+-y yields the header's public key), sign a synthetic challenge, verify against that public key, and fail to verify
+under another namespace. Header structure alone never counts as a working key.
+
+Nothing here proves compatibility with a real OpenSSH build or builder: that needs an approved run with the measured
+tool identity. Source tests use mocked process and secret boundaries only.
 """
 import base64
 import hashlib
@@ -54,6 +58,33 @@ def _plain(path, label):
     return path
 
 
+STOP_SIGNALS = (signal.SIGTERM, signal.SIGHUP)
+
+
+def stop_on_signals(raise_stop, signals=STOP_SIGNALS):
+    """Turn the first SIGTERM or SIGHUP (an outer timeout, a cancelled job) into raise_stop(signum) at the current point,
+    so every finally block still runs: the owner-only RAM directories holding a fetched or freshly generated key are
+    overwritten and removed instead of being left behind by the default action. Later signals are ignored so cleanup
+    is never interrupted. Returns the previous handlers."""
+    def handler(signum, frame):
+        for each in signals:
+            signal.signal(each, signal.SIG_IGN)
+        raise_stop(signum)
+    return {each: signal.signal(each, handler) for each in signals}
+
+
+def workspace_problem(path, statvfs=os.statvfs):
+    """None when an askpass helper written into PATH can be executed; else a fixed reason. A RAM directory on a noexec
+    mount would make ssh-keygen read an empty passphrase, so callers refuse before anything irreversible."""
+    try:
+        flags = statvfs(path).f_flag
+    except OSError as error:
+        return f'workspace_unusable: {type(error).__name__}'
+    if flags & os.ST_NOEXEC:
+        return 'workspace_noexec: the private directory is on a noexec mount, so the askpass helper could not run'
+    return None
+
+
 def write_askpass(workspace, passfile):
     """The pinned helper: fixed template bytes naming only the owner-only passphrase file, mode 0700."""
     if ASKPASS_TEMPLATE_SHA256 != hashlib.sha256(ASKPASS_TEMPLATE.encode()).hexdigest():
@@ -87,9 +118,10 @@ def _no_core():
     resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
 
 
-def run_bounded(argv, env, cwd, seconds, stdin_path=None, popen=subprocess.Popen, clock=time.monotonic):
-    """The only process boundary. Returns {'exit', 'category', 'outputBytes', 'outputSha256'}; output is never returned.
-    stdin is /dev/null unless stdin_path names an owner-only file (the archive for -Y verify)."""
+def run_bounded(argv, env, cwd, seconds, stdin_path=None, popen=subprocess.Popen, clock=time.monotonic, keep_output=False):
+    """The only process boundary. Returns {'exit', 'category', 'outputBytes', 'outputSha256'}; output is returned (as
+    'output', capped) only with keep_output, used solely for ssh-keygen -y, whose output is the public key. stdin is
+    /dev/null unless stdin_path names an owner-only file (the archive for -Y verify)."""
     cap, grace = LIMITS['outputBytes'], LIMITS['killGraceSeconds']
     with open(stdin_path or os.devnull, 'rb') as stdin:
         try:
@@ -131,8 +163,11 @@ def run_bounded(argv, env, cwd, seconds, stdin_path=None, popen=subprocess.Popen
             proc.stdout.close()
     if category is None:
         category = 'ok' if proc.returncode == 0 else 'nonzero_exit'
-    return {'exit': proc.returncode if category in ('ok', 'nonzero_exit') else None, 'category': category,
-            'outputBytes': min(len(output), cap + 1), 'outputSha256': hashlib.sha256(bytes(output[:cap + 1])).hexdigest()}
+    result = {'exit': proc.returncode if category in ('ok', 'nonzero_exit') else None, 'category': category,
+              'outputBytes': min(len(output), cap + 1), 'outputSha256': hashlib.sha256(bytes(output[:cap + 1])).hexdigest()}
+    if keep_output and category == 'ok':
+        result['output'] = bytes(output[:cap])
+    return result
 
 
 def _strings(blob, offset, count):
@@ -214,6 +249,50 @@ def generate_key(workspace, tool, runner=run_bounded, token=None):
     if names != sorted([KEY_FILE, 'passphrase']):
         raise Refused(f'unexpected_output: generation left {names[:8]}')
     return identity
+
+
+SELF_CHECK_NEGATIVE_NAMESPACE = 'roseos-self-check-negative'
+
+
+def self_check(workspace, tool, identity, principal, runner=run_bounded):
+    """Before import, in the owner-only workspace: decrypt (ssh-keygen -y through the helper must print exactly the
+    header's public key), sign a synthetic challenge, verify it against that key, and require a verify under another
+    namespace to fail. Leaves the workspace exactly as found (id_ed25519 and passphrase); returns public booleans."""
+    workspace = Path(workspace)
+    key, passfile = workspace/KEY_FILE, workspace/'passphrase'
+    check = workspace/'self-check'
+    check.mkdir(mode=0o700)
+    try:
+        helper = write_askpass(check, passfile)
+        try:
+            derived = runner([_plain(tool, 'ssh-keygen'), '-y', '-f', _plain(key, 'key')], child_env(helper), check,
+                             LIMITS['seconds'], keep_output=True)
+        finally:
+            helper.write_bytes(b'\0' * helper.stat().st_size)
+            helper.unlink()
+        public = (derived.get('output') or b'').decode('ascii', 'replace').split()[:2]
+        if derived['category'] != 'ok' or public != identity['publicKey'].split():
+            raise Refused(f'selfcheck_failed: the key does not decrypt to its public key ({derived["category"]})')
+        challenge = check/'challenge'
+        challenge.write_bytes(b'roseos factory-images self-check ' + os.urandom(16).hex().encode() + b'\n')
+        pin = {'principal': principal, 'publicKey': identity['publicKey']}
+        try:
+            sign_and_verify(challenge, key, passfile, pin, check, tool, runner)
+        except Refused as error:
+            raise Refused(f'selfcheck_failed: {error}') from None
+        signers = check/'allowed_signers'
+        signers.write_text(f'{principal} namespaces="{NAMESPACE}" {identity["publicKey"]}\n')
+        negative = runner([_plain(tool, 'ssh-keygen'), '-Y', 'verify', '-f', str(signers), '-I', principal, '-n',
+                           SELF_CHECK_NEGATIVE_NAMESPACE, '-s', f'{challenge}.sig'], dict(CHILD_ENV), check,
+                          LIMITS['seconds'], stdin_path=str(challenge))
+        if negative['category'] != 'nonzero_exit':
+            raise Refused(f'selfcheck_failed: a verify under another namespace did not fail ({negative["category"]})')
+    finally:
+        for path in sorted(check.iterdir(), reverse=True) if check.exists() else []:
+            path.unlink()
+        if check.exists():
+            check.rmdir()
+    return {'decrypt': True, 'signVerify': True, 'negativeRefused': True}
 
 
 def bound_pin(signing):

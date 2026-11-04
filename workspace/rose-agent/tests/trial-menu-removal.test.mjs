@@ -9,15 +9,15 @@ import fs from 'node:fs';
 const dir=new URL('../app/src/dev/pixel/voice/',import.meta.url);
 const source=name=>fs.readFileSync(new URL(name,dir),'utf8');
 const main=source('MainActivity.java');
-const options=main.slice(main.indexOf('void homeOptions(View anchor){'),main.indexOf('menu.show();}',main.indexOf('void homeOptions(View anchor){')));
-const labels=[...options.matchAll(/menu\.getMenu\(\)\.add\("([^"]+)"\)/g)].map(m=>m[1]);
+const options=main.slice(main.indexOf('void homeOptions(View anchor){'),main.indexOf('SettingsDialog.show(this,menu.getMenu());}',main.indexOf('void homeOptions(View anchor){')));
+const labels=[...options.matchAll(/settingsOption\(menu,"([^"]+)"\)/g)].map(m=>m[1]);
 
 test('the three trial entries are gone from the Home menu, not renamed or moved',()=>{
  assert.ok(options.length>0,'found homeOptions');
  for(const gone of ['DeepSeek Fast (trial)','Luna-first voice (trial)','ARTEMIS phone control (trial)'])assert.ok(!labels.includes(gone),gone);
  assert.ok(!labels.some(l=>/deepseek|luna|artemis|advanced/i.test(l)),'no renamed entry or Advanced replacement: '+labels.join(', '));
  // #223: 'Voice controls' (first) is how the legacy voice page opens now that it is not a Home page.
- assert.deepEqual(labels,['Voice controls','Server connection','Conversation mode','Conversation notes','Pair with Mac','Location access','General Decisions routing',
+ assert.deepEqual(labels,['Voice controls','Server connection','Conversation mode','Conversation notes','Pair with Rose','Location access','General Decisions routing',
   'Live Mac screen','Keep screen on','App control while locked','Classic home','Try conversation home','Visual cards','Reject changed screens',
   'Stable-field typing','Voice boost (+6 dB)','Double tap toggles mute','Set up connected glasses','Talk to a Guardian','Your apps','Result card style'],
   'every other entry is kept, in order');

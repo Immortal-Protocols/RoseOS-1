@@ -1,0 +1,42 @@
+{
+  "artifacts": [
+    {
+      "id": 13290836076,
+      "name": "mustang-ota-baseline-prebuild-41750459835-1",
+      "size_in_bytes": 873,
+      "url": "https://api.github.com/repos/Immortal-Protocols/RoseOS-1/actions/artifacts/13290836076",
+      "archive_download_url": "https://api.github.com/repos/Immortal-Protocols/RoseOS-1/actions/artifacts/13290836076/zip",
+      "expired": false,
+      "created_at": "2026-11-04T02:33:30Z",
+      "expires_at": "2026-11-11T02:33:29Z",
+      "updated_at": "2026-11-04T02:33:30Z",
+      "digest": "sha256:b98856e4643d9042d67809da800554bec2b30bf2338e4ce40ee414bb197e0004",
+      "workflow_run": {
+        "id": 41750459835,
+        "repository_id": 1428996648,
+        "head_repository_id": 1428996648,
+        "head_branch": "main",
+        "head_sha": "434df146289981c93f1ff84db7ab01ce37136f38"
+      }
+    },
+    {
+      "id": 13289954866,
+      "name": "mustang-receipts-41750459835-1",
+      "size_in_bytes": 18501,
+      "url": "https://api.github.com/repos/Immortal-Protocols/RoseOS-1/actions/artifacts/13289954866",
+      "archive_download_url": "https://api.github.com/repos/Immortal-Protocols/RoseOS-1/actions/artifacts/13289954866/zip",
+      "expired": false,
+      "created_at": "2026-11-04T02:33:29Z",
+      "expires_at": "2026-11-11T02:33:27Z",
+      "updated_at": "2026-11-04T02:33:29Z",
+      "digest": "sha256:e5bf2615fe9160d770ff5a2dfcef52fe87b32d9439a18a27008781160a746bf0",
+      "workflow_run": {
+        "id": 41750459835,
+        "repository_id": 1428996648,
+        "head_repository_id": 1428996648,
+        "head_branch": "main",
+        "head_sha": "434df146289981c93f1ff84db7ab01ce37136f38"
+      }
+    }
+  ]
+}

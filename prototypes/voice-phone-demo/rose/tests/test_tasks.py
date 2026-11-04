@@ -496,7 +496,7 @@ class WorkspacePhone:
         from rose.phone import APPS
         return [{"label": a, "packageName": f"com.example.{a.lower()}"} for a in APPS + ["Amazon"]]
 
-    def workspace_app(self):
+    def workspace_app(self, view=None):
         return self.ws_app
 
     def session(self, name, on_screen=False):
@@ -591,7 +591,23 @@ def unit_checks() -> list[str]:
             (calc, "The sum from 1 to 50 is 1,275.", 'Screen: Calculator\n  text "50×51÷2"\n  text "1275"', True),
             ("What's 12 times 3 on the calculator?", "12 times 3 is 36.", 'text "36"', True),
             ("Set an alarm for 6:30", "Your alarm is set for 6:30.", "", True),
-            ("Add milk to my shopping list", "I added milk to your list.", "", True)]:
+            ("Add milk to my shopping list", "I added milk to your list.", "", True),
+            # Live, 2026-11-01: "add" in an Amazon goal made a calculation of it.
+            ("Search Amazon for a USB-C cable and get the first two prices. Do not add anything to the cart.",
+             "The first is $9.99 with 4.5 stars.", 'text "USB-C Cable"', True),
+            # A rounded answer of what the screen shows (33.984).
+            ("Open Calculator app and calculate 18% tip on 86.40, split by 3", "Each pays $33.98.",
+             'Screen: Calculator\n  text "86.40×1.18÷3"\n  text "33.984"', True),
+            ("Open Calculator app and calculate 18% tip on 86.40, split by 3", "Each pays $5.18.",
+             'Screen: Calculator\n  text "33.984"', False),
+            # Live: the summary repeats the inputs the way they were said, not as the screen shows them.
+            ("Open the calculator app and work out an eighteen percent tip on eighty-six dollars and forty cents",
+             "An 18% tip on $86.40, split three ways, is $5.18 each.",
+             'Screen: Calculator\n  text "86.4×0.18÷3"\n  text "5.184"', True),
+            # Live: a wrong answer next to an input the screen happens to show.
+            ("In Calculator, calculate an eighteen percent tip on eighty-six dollars and forty cents",
+             "The 18% tip on $86.40 is $15.55, and the total split by three is $34.15.",
+             'Screen: Calculator\n  text "86×0.18+86÷3"\n  text "44.1466"\n  text "18"', False)]:
         why, _ = _unseen_number(goal, summary, _Shown(tree), _Run())
         expect(f"unseen number {summary!r}", (why == "") == ok, why)
     run = _Run()
@@ -875,7 +891,7 @@ def review_checks(expect, tm, fake, run, results, rt, brain, bus, done) -> None:
                 return Screen("phone", "Messages", [Element("1", "field", "Text message", (0, 0, 1, 1),
                                                             self.field, mark=1)])
 
-            def workspace_session_id(self):
+            def workspace_session_id(self, view=None):
                 return self.session_id
         dp = DraftPhone()
         tm_d = TaskManager(rt, brain, dp, bus, lambda t: done(t).set())

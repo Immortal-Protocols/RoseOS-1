@@ -178,7 +178,7 @@ readiness or safety keys, and every `sha256From` pointer must resolve to the sam
   - The build route is the existing `os/build-only/blazer.json` recipe (`scripts/blazer-build-only.py`),
     `blazer-reconcile.json` integration (`scripts/blazer_integration.py`) and
     `blazer-updater-route.json`. `buildRoute` references them without duplicating them.
-  - The recipe's operator capacity allowances are still null and unresolved; this adds no new gate.
+  - Compile's byte allowance is a finite first-build proposal (see **Compile** below); it is reviewed, not measured.
 
 **Test evidence is synthetic.** Tests use fresh throwaway OpenSSH keys, the real AOSP `simg2img`
 where the runner has it (otherwise a double that decodes the real sparse format), and an
@@ -196,7 +196,7 @@ and writes `preflight.json`, `started.json` and `completed.json` there, write-on
 | Stage | Required inputs | Does | Bound (proposal) |
 |---|---|---|---|
 | `source` | `--source-root ISO` | Copies the production source root (only read) into a new `ISO` in-process, byte by byte into new inodes, with the reviewed emulator-alpha code and exclusions, plus adevtool's deps (`adevtool_revision` and `host/linux-x86`). Details below. | 150 GiB, 7200 s |
-| `download` | `--download-dir D` | Streams the pinned `https://dl.google.com/dl/android/aosp/blazer-cp3a.261005.005-factory-cd7d12c2.zip` to `D/<file>.part`, then renames it to `D/<file>` only if sha256 = `cd7d12c2…18e3`. The byte count is checked as it streams. | 8 GiB (unverified for Pro), 3600 s |
+| `download` | `--download-dir D` | Streams the pinned `https://dl.google.com/dl/android/aosp/blazer-cp3a.261005.005-factory-cd7d12c2.zip` to `D/<file>.part`, then renames it to `D/<file>` only if sha256 = `cd7d12c2…18e3`. The byte count is checked as it streams. | exactly 11,362,467,847 bytes (the pinned URL's HEAD `Content-Length`; any other announced or received size refuses), 3600 s |
 | `vendor` | `--download-dir D --source-root ISO --node N` | `N` must be named `node`, keep its preflight file identity, and be what the child `PATH` (`<receipt-dir>/node-path:/usr/bin:/bin`, a private directory holding only a `node` link to `N`) resolves; nothing else beside `N` (e.g. the rest of `/usr/local/bin`) is visible. Needs `vendor/adevtool/.git`. Runs `N --version` (≥ 24) and `git -C vendor/adevtool rev-parse HEAD` (must print exactly the pin), then `vendor/adevtool/bin/run generate-all -d blazer` in `ISO` with `ADEVTOOL_IMG_DOWNLOAD_DIR=D` and `ADEVTOOL_SKIP_DEP_BUILD=1` (no dependency rebuild); inherited `GIT_*` is stripped. | 128 GiB, 10800 s |
 | `lunch` | `--source-root ISO` | Runs `lunch blazer-cur-user` (`PATH=/usr/bin:/bin`), then checks `TARGET_PRODUCT=blazer`, `TARGET_RELEASE=cur`, `TARGET_BUILD_VARIANT=user`, `TARGET_DEVICE=blazer`, with `OUT_DIR=out-blazer-lunch`. No make. | 8 GiB, 1800 s |
 
@@ -392,12 +392,162 @@ and writes `preflight.json`, `started.json` and `completed.json` there, write-on
     reflink support (never assumed), the isolated-copy cost, the Pro archive size, and truncated walks.
   - It starts no process, opens no connection, reads no secret and writes nothing. The kernel may
     still update directory access times (relatime); contents, mtime and ctime are unchanged.
+- **`inspect-git-set`** (git-only, one explicit target set; observation O1):
+  `python3 scripts/blazer-build-only.py inspect-git-set --host H --target-set adevtool-projects-gitdir`
+  - A separate subcommand, so `inspect-git` and its approval never widen: `inspect-git` keeps exactly
+    its two targets and rejects `--target-set`. `inspect-git-set` takes only `--host` and one
+    `--target-set`; anything else, or an unknown set, exits 2 with nothing on stdout.
+  - **Target sets are fixed** in `preparation.gitInspection.targetSets` and validated on load and at
+    call time; the only set is `adevtool-projects-gitdir` with one target, `projectsGitdir`:
+    `/home/pixelbuild/grapheneos-2026100600/.repo/projects/vendor/adevtool.git` (the production
+    root plus `.repo/projects/<project>.git`). Observation 41566744429 found
+    `vendor/adevtool/.git` to be a link with that relative text; the helper never follows it and
+    names the gitdir directly.
+  - **Same bounds** as `inspect-git`, through the same `git_facts`: 60 s, scan 256 / report 64
+    entries, link text escaped and capped at 1024 bytes with absolute/leaves-tree flags, HEAD
+    `O_NOFOLLOW|O_NONBLOCK`, 65 bytes read and 64 accepted. A link at the target or above it is
+    reported (its text, or the first linked component) and never traversed. The `objects` link is
+    reported, not followed; objects, refs contents, `packed-refs`, `shallow` and config are never
+    opened.
+  - **Output** `roseos.blazer-git-target-set-inspection.v1`: the `inspect-git` constants and
+    `bounds`, plus `targetSet` and `targets.projectsGitdir` (`git_facts` plus `absolutePath`).
+  - **Touches only** the target, one level inside it, its HEAD and the `lstat` of its ancestors.
+    Validation checks the candidate target lexically, so no other path is touched. It is source
+    only: Release wiring and its execution are separate, and O2 (sizing the object store) and any
+    copy remain proposals.
+- **`inspect-git-objects`** (O2, metadata only; for a separately approved observation):
+  `python3 scripts/blazer-build-only.py inspect-git-objects --host immortal-os-builder`
+  - Takes only `--host`, which must be `immortal-os-builder`. Exit 0 means a report was written,
+    whether `complete` is true or false; 2 means invalid input, with nothing on stdout. Output is one
+    compact JSON document on one line, at most 64 KiB.
+  - **Fixed target** in `preparation.gitObjectsInspection`:
+    `/home/pixelbuild/grapheneos-2026100600/.repo/project-objects/adevtool.git/objects`. Original
+    Infra derived this lexically from O1's `objects` link (runtime 41586224611); its existence, layout
+    and size are unobserved. The block must equal the fixed host, path and bounds, or loading refuses.
+    Loading for this mode is lexical, so no other preparation probe runs.
+  - **Traversal:** the path is opened component by component from `/`, each with
+    `O_DIRECTORY|O_NOFOLLOW|O_NONBLOCK` relative to its parent's descriptor. Inside the tree:
+    - each listed name is `lstat`ed relative to its directory's descriptor;
+    - a directory is opened the same way and re-identified with `fstat`;
+    - link text is read (escaped, at most 128 bytes) but never followed;
+    - special files are never opened, and no other filesystem is entered;
+    - no file content is opened and no Git process runs.
+    `hooks` and `rr-cache` are excluded by name (never `lstat`ed). `info/alternates` and
+    `info/http-alternates` get existence and type only.
+  - **Bounds:** 100,000 listed entries, entries to depth 3 below the root (a directory at depth 3 is
+    not listed), a cooperative 120 s deadline checked before each entry (one blocking system call is
+    not interrupted), and 64 KiB of JSON. Groups, exceptions and the excluded list are capped at 32
+    each; excess groups fold into `(other)`.
+  - **Receipt** `roseos.blazer-git-objects-inspection.v1`:
+    - `target`: absolute path, `exists`, and the root's device, inode, mode and uid;
+    - `complete` and `incomplete`: an ordered list of `{reason, detail}`;
+    - `totals`: listed entries; count, apparent bytes and allocated bytes by type (a hardlinked
+      inode is allocated once); `hardlinkedRepeats`; `deepestEntry`;
+    - `groups`: the same figures by relative directory, with `[0-9a-f]{2}` for the loose-object
+      fan-out;
+    - `existenceOnly`, `excluded`, `exceptions` (path, kind, and for links the escaped text and
+      `unsafe`), and the constants for metadata only, no contents, links, filesystems, processes,
+      network or writes.
+  - **`complete:false` reasons**, each with partial totals: `absent`, `linked-component`,
+    `not-a-directory`, `inaccessible`, `replaced` (vanished, swapped for a link, or a different
+    identity at open), `cross-filesystem`, `unsafe-link` (absolute, or leaving the objects root),
+    `special`, `depth`, `entries`, `deadline` and `output` (trimmed to fit; `trimmed` names what).
+    A relative in-tree link is reported but leaves the report complete.
+  - **Feasibility (virtual, not a guarantee):** in a Linux container with a warm cache, a synthetic
+    tree of exactly 100,000 entries took about 0.8 s and 1.8 KB of JSON; one more entry gave
+    `complete:false` with reason `entries`. The production disk, its cold cache and its real layout
+    are unmeasured.
+  - Metadata totals prove no object integrity, reachability or provenance. A later metadata copy
+    needs its own approved HEAD/refs/shallow/safe-config scope.
+  - Workflow wiring is Release's. Its proposed stage `git-objects-inspect` is a 180 s outer timeout
+    plus a 30 s kill grace, a 15-minute job and 7-day private JSON retention, with the existing
+    start-ownership cleanup and STOP. These are proposals, not runtime approval.
 - **Not yet verified**: the only known source is historical production ext4. Paths such as
   `/home/pixelbuild/rose-actions/blazer-prep-<run-id>-<attempt>/{source,downloads,receipts}` are a
   proposal, not verified paths. No `source` copy has run, and none is authorized.
-- **Out of scope**: `compile` is outside preparation and still needs a measured
-  `compileAllowanceBytes`. Nothing here compiles, signs, publishes or flashes, and no runtime scope
-  is approved.
+- **Compile** (outside preparation; for Release's separate wiring):
+  `python3 scripts/blazer-build-only.py run --stage compile --host H --lock L --source-root S --jobs J
+  --integration-dir I --inputs-receipt R --build-number B --build-datetime T --receipt-dir NEW`
+  - Runs `source build/envsetup.sh && lunch blazer-cur-user && m -jJ vendorbootimage
+    vendorkernelbootimage target-files-package otatools-package` in `S` with
+    `OUT_DIR=out-blazer-build-B` (`compile.outDirTemplate`), `BUILD_NUMBER=B`, `BUILD_DATETIME=T`,
+    `PATH=/usr/bin:/bin`, inherited `GIT_*` stripped and `GIT_CEILING_DIRECTORIES=S`. Its own
+    session and process group end on a stop: SIGTERM, then SIGKILL after `killGraceSeconds`.
+  - **Admission:**
+    - `S` is isolated from the production source root (now checked for compile too);
+    - the generated vendor tree is from the pinned adevtool;
+    - the Rose integration binds (`I` is host-reconcile's receipt directory, `R` is the admitted
+      `local-inputs.json`);
+    - no existing `out-blazer-build-B` (an earlier build's output, such as a legacy `out-blazer-build`,
+      is never read, moved or written), a free lock, and available − allowance ≥ the 300 GiB reserve;
+    - **build identity:** `--build-number B` (`[1-9][0-9]{9}`) must equal `R`'s `candidate.build`,
+      whose reconcile receipt in `I` is labelled `blazer-B`. `--build-datetime T`
+      (`[1-9][0-9]{0,11}`, epoch seconds UTC) must equal the `reservedAt` of B's write-once
+      `roseos.blazer-allocation.v1` reservation at `I/../blazer-allocations/B.json`. That
+      reservation is read no-follow, must have exactly that schema, and must name this `I` as its
+      `integrationDir`. T must not be before B's UTC day or in the future. Both flags are required
+      for compile and refused for every other stage. Inherited `BUILD_NUMBER`, `BUILD_DATETIME` and
+      `BUILD_DATETIME_FILE` are dropped before the explicit values are set;
+    - `preflight.json`, `started.json` and `completed.json` carry
+      `buildIdentity: {buildNumber, buildDatetime}`. `completed.outDir` and the collected outputs use
+      `out-blazer-build-B`.
+  - **First-build allowance** `capacity.compileAllowanceBytes` = 250 GiB (`compileAllowanceKind`
+    `first-build-proposal`). It is reviewed, not measured; there is no prior-run gate. Admission
+    therefore needs 550 GiB free on `S`'s filesystem.
+    - While compile runs, the drop in that filesystem's available bytes since start is sampled
+      against 250 GiB and available bytes against the reserve. The drop is cheap to sample (an
+      OUT_DIR walk is not) and conservative, because it counts any other writer too.
+    - This is a sampled stop, not a quota: writes between samples can overshoot.
+    - `compile.timeoutSeconds` is 8 h, a cap rather than an estimate; the duration is unmeasured.
+    - Outputs are kept on any stop. An allowance that proves too small is revised from that run's
+      receipt.
+  - **Receipts** (write-once): `preflight.json`, `started.json`, `completed.json`. On exit 0,
+    `completed.json.outputs` binds Signing's inputs:
+    - `targetFiles`: the one `blazer-target_files*.zip` in
+      `target/product/blazer/obj/PACKAGING/target_files_intermediates/`;
+    - `otatools`: `host/linux-x86/obj/ETC/otatools-packagelinux_glibc_x86_64_intermediates/otatools-packagelinux_glibc_x86_64`;
+    - `vendorBootImage` and `vendorKernelBootImage` under `target/product/blazer/`.
+    Each has a path, size and sha256, from `scripts/rango-collect.py`'s no-follow, CRC-checked
+    collector bound to blazer paths. A clean make whose outputs aren't all collected is exit 1.
+    Exit 0 ok, 1 refused or failed, 2 invalid input. Compile neither signs nor packages
+    (`signed: false`).
+  - **Integration producers** (existing, unchanged):
+    - `blazer_integration.py admit --bundle DIR --updater-route ROUTE.json --out NEW_DIR --aapt P
+      --apksigner P` writes `NEW_DIR/local-inputs.json` (`blazer-local-inputs`);
+    - `render --inputs … --source-root S --lock L --receipt-dir I --work-dir W --out NEW.json` prints the
+      `host-reconcile.py apply … --label blazer-<build>` command, which writes `I/NNNN-blazer-<build>.json`.
+    - **Gap:** host-reconcile needs each reconciled project's own Git repository in `S` (`rev-parse
+      HEAD`, `clone --shared`). The isolated copy excludes all `.git`, so reconcile can't run on a
+      copied tree until genuine metadata for those projects is supplied (see the Git metadata proposal).
+- **Git metadata** (`git-meta`, outside preparation; for Release's separate wiring):
+  `python3 scripts/blazer-build-only.py run --stage git-meta --host H --lock L --source-root S --receipt-dir NEW`
+  - **Why:** the isolated copy excludes every `.git`, but host-reconcile runs `rev-parse HEAD`,
+    `show HEAD:path`, `clone --shared` and a sparse `checkout --detach` on its six projects, and the
+    vendor stage runs `git -C vendor/adevtool rev-parse HEAD`. Each needs only the pinned commit,
+    its tree and its blobs.
+  - **Projects** (`gitMeta.projects`, validated against `os/pinned-manifest.xml`): `build/make`,
+    `build/release`, `frameworks/base`, `packages/apps/Launcher3`, `packages/apps/Updater`,
+    `packages/modules/Permission` and `vendor/adevtool`, at their `refs/tags/2026100600` commits. A
+    commit id is a content address, so equality proves the tree.
+  - **Per project:** a new `S/<path>/.git` (`git init --template=`, so no hooks); exactly the pin
+    fetched at depth 1 with no tags from the fixed `objectsSource` (`public-fetch`: the manifest's
+    GrapheneOS remote over https); then a detached `HEAD` via `update-ref --no-deref`. No command
+    checks out, resets or reads the working tree, so Rose-integrated bytes stay as copied.
+  - **Verified before the next project:** `HEAD` is the pin, its tree exists, `fsck
+    --connectivity-only` passes, `shallow` is exactly the pin, and there are no alternates and no
+    remote.
+  - **Environment:** inherited `GIT_*` is stripped; system and global config are ignored (no
+    `insteadOf`, credential helper or hooks path); no prompt; only the source's protocol is allowed;
+    `PATH=/usr/bin:/bin`; `GIT_CEILING_DIRECTORIES=S`.
+  - **Admission:** S is isolated, every project is an existing link-free directory, no `.git`
+    exists (nothing is replaced or merged), `/usr/bin/git` is executable, the lock is free, and
+    available − 8 GiB ≥ the reserve.
+  - **Bounds** (unmeasured proposals): 8 GiB sampled (and re-checked after each command), 1800 s per
+    project and 5400 s in all. On any failure every `.git` this run created is removed (bounded),
+    and the receipt names the failing project.
+  - The fetch needs Original Infra's runtime approval. A production read-only pack is an
+    alternative source, not implemented.
+- **Out of scope**: nothing here signs, publishes or flashes, and no runtime scope is approved.
 
 ## Callable contract
 
@@ -422,6 +572,21 @@ python3 scripts/tests/test_factory_package.py
 Exit status: 0 ready/packaged/observed, 3 refused (JSON on stdout), 2 usage or contract error.
 Optional flags: `--ssh-keygen PATH`, `--max-work-bytes N`, `--avb-public-key-sha256`,
 `--first-use-binding`.
+
+**Blazer.** `--flavor blazer` uses the same pinned generator (`device_common 1f5ba267`) and
+optimizer (`system/core 322ff512`) layout as Frankel and Rango. `load_flavor` re-derives it for
+`blazer` from the pinned `generate-release.sh` on every load: bootloader and radio from
+`OTA/android-info.txt`, `MAX_DOWNLOAD_SIZE 0x10000000`, and the generator's default GSC source
+`dauntless` (blazer isn't in the epic list).
+- A Blazer install archive is classified completely: members, firmware, GSC, images, super
+  segments, scripts and content.
+- It can't be factory-ready from this repository. `identity.avbPublicKeySha256` and
+  `factorySigning` stay null, so `avb_pkmd.bin` reports `identity:blazer avbPublicKeySha256`
+  missing and the signature reports the missing factory-signing identity.
+- An operator `--avb-public-key-sha256` never substitutes for that signing identity, and no
+  Frankel or Rango identity is inherited.
+- The remaining inputs are Signing's: a Blazer AVB key pin and a factory-signing principal and
+  public key, once approved.
 
 ## Missing for a real factory package (sole owner → next action)
 

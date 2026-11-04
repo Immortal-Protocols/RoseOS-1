@@ -1,0 +1,30 @@
+{
+  "build": "2026110401",
+  "channel": "stable",
+  "contentFingerprint": "b7888b4020565e1920613bd800e2cebc53a17b726bf8b613245d2ef996521df2",
+  "device": "mustang",
+  "lastAsset": "mustang-stable",
+  "latestAfter": "frankel-2026110301",
+  "latestBefore": "frankel-2026110301",
+  "metadata": "2026110401 1793755347 mustang stable",
+  "metadataVersion": "2026110401",
+  "ota": {
+    "file": "mustang-ota_update-2026110401.zip",
+    "sha256": "bd31790a1f295d8fda021c940730a3906eef0e6797c3a0f180d9dc1cd9032f4b",
+    "sizeBytes": 1673390903
+  },
+  "otaUrl": "https://github.com/Immortal-Protocols/pixel-ota/releases/download/mustang-2026110401/mustang-ota_update-2026110401.zip",
+  "phoneUpdatePassed": false,
+  "producerRun": "41761758623",
+  "public": true,
+  "publicDownloadVerified": true,
+  "publicationRun": "41761758623",
+  "recipeSource": "a86b29287335c1648b731d320b13980b65f8c137",
+  "releaseId": 433457360,
+  "releaseUrl": "https://github.com/Immortal-Protocols/pixel-ota/releases/tag/mustang-2026110401",
+  "schema": "roseos.mustang-ota-publication.v1",
+  "source": "434df146289981c93f1ff84db7ab01ce37136f38",
+  "stageReceiptSha256": "25f377952c10efdfca764d9a50f3e3a8783a196b030bb75eb516d6a684c23741",
+  "status": "ota-published",
+  "tag": "mustang-2026110401"
+}

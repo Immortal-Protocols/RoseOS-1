@@ -4,10 +4,15 @@
 One reviewed profile from os/signing-bootstrap/profiles.json selects what may be bootstrapped: fold-rango-v1 (a tar of
 the Fold key files) or models-v0 (OCT30-INFRA-S012: one PKCS12 store, alias rose-models, made with the measured
 keytool through its password-file options, its reloaded public listing and certificate checked before import, and the
-two secrets rechecked empty immediately before the first add). Both are resource-bound and both refuse until their
-installed tool identities are measured. FOLD-FACTORY-IDENTITY adds archive.format "openssh-ed25519" (one
-passphrase-encrypted factory-archive SSH key made through scripts/factory_signing.py's pinned askpass route; its
-profile fold-rango-factory-v1 is unbound and refuses until its containers, access, tool identity and approval exist). A profile is not a release admission: it admits no device build, and os-release keeps admitting Frankel only.
+two secrets rechecked empty immediately before the first add). Both are resource-bound: fold-rango-v1's tools are
+proven by the same-run local tool proof and models-v0's keytool by its pinned git tree, recomputed before use; both
+refuse while their recorded access is missing or expired. FOLD-FACTORY-IDENTITY adds archive.format "openssh-ed25519"
+(one passphrase-encrypted factory-archive SSH key made through scripts/factory_signing.py's pinned askpass route): its
+profile fold-rango-factory-v1 is resource-bound, and pro-blazer-factory-v1 stays unbound until its approvals,
+containers and secretAccessor exist and its one bootstrap run is approved (the 4 h bootstrap grant is made at action
+time). A profile that opts in with access.liveCheck needs no recorded expiries, but must recheck before the import: the
+run's credentialed describe and versions-list calls check its access (readiness; the profile's access.policy states
+what a later failure costs). A resource-bound profile lists nothing missing. A profile is not a release admission: it admits no device build, and os-release keeps admitting Frankel only.
 
 guard      on the hosted guard job, before the controller starts: the mode, profile and options must be exactly a
            bootstrap of a ready profile, bound to this workflow commit on main from a manual dispatch.
@@ -19,7 +24,9 @@ run        on the builder, under the shared host lock, with the job's short-live
 plan       prints the exact later command, metadata operations and the permissions they need. Nothing is executed.
 
 Fail-closed rules. A profile that is unbound, has an incomplete key inventory, an unapproved tool identity or
-expiring access stops before any side effect. An existing version, unavailable or uncertain metadata, an unsafe archive,
+expiring recorded access stops before any side effect, and so does a failed first metadata check (secret missing,
+occupied or unavailable). Access that fails after that check, at the pre-import recheck or as a denied add (which
+cannot be tested beforehand), uses up the run. An existing version, unavailable or uncertain metadata, an unsafe archive,
 an unexpected output, a public identity equal to Frankel's, or any previous attempt journal stops without adding.
 The two-secret import is not atomic: each committed version id is journaled, and an uncertain add or a failure after
 the first add leaves recovery-needed, never complete, never retried, rolled back or deleted. The receipt holds only
@@ -31,8 +38,8 @@ this is best effort, not guaranteed erasure.
 Generation (OCT29-INFRA-S006) runs a reviewed closed-vocabulary recipe (profile generation.recipe) through one mockable
 process boundary with fixed argv and a minimal environment, then packs exactly the inventory files as <device>/<file>
 into a deterministic keys.tar.gz. Private keys must be encrypted (PKCS#8 DER EncryptedPrivateKeyInfo, encrypted PEM
-avb.pem) as scripts/host-decrypt-keys.py expects. The checked-in fold recipe is null and its installed tool identities
-are unmeasured, so readiness blocks before any process starts. Tests use mock executors and runners only.
+avb.pem) as scripts/host-decrypt-keys.py expects. The checked-in fold recipe is reviewed, and its tools are proven by
+the same-run local tool proof before any login (prove). Tests use mock executors and runners only.
 """
 import argparse
 import base64
@@ -108,7 +115,17 @@ class AddFailed(Exception):
 
 
 def load_profiles(root=ROOT):
-    return json.loads((root/PROFILES_PATH).read_text())
+    profiles = json.loads((root/PROFILES_PATH).read_text())
+    # Separate source definition keeps the active Rango/Blazer records intact.
+    # An unbound definition grants no access and readiness still refuses it.
+    mustang = root/'os/signing-bootstrap/mustang.json'
+    if mustang.is_file():
+        extra = json.loads(mustang.read_text())
+        if extra.get('schemaVersion') != 1 or set(extra.get('profiles', {})) != {'pro-mustang-v1'} \
+                or 'pro-mustang-v1' in profiles['profiles']:
+            raise ValueError('invalid or duplicate Mustang signing profile definition')
+        profiles['profiles'].update(extra['profiles'])
+    return profiles
 
 
 def parse_time(value):
@@ -122,6 +139,9 @@ def readiness(name, profiles, now):
         return [('profile-unknown', f'{name!r} is not a reviewed profile')]
     if profile.get('status') != 'resource-bound':
         return [('profile-unbound', f'{name} is {profile.get("status")}; missing: ' + '; '.join(profile.get('missing', [])))]
+    if profile.get('missing'):  # status alone never admits a profile that still lists unmet prerequisites
+        return [('profile-unbound', f'{name} is resource-bound but still lists missing: '
+                 + '; '.join(str(m) for m in profile['missing']))]
     reasons = []
     secrets = profile.get('secrets', {})
     if sorted(secrets) != ['keys', 'passphrase'] or not all(SECRET_NAME.fullmatch(str(v)) for v in secrets.values()):
@@ -153,11 +173,18 @@ def readiness(name, profiles, now):
     if (profile.get('archive') or {}).get('format') != 'openssh-ed25519':  # fixed generate_openssh, no recipe vocabulary
         reasons += [('recipe-missing' if code == 'missing' else 'recipe-invalid', detail)
             for code, detail in recipe_problems(profile)]
-    elif not factory_signing.PRINCIPAL.fullmatch(str(profile.get('principal'))):
-        reasons.append(('profile-principal', 'an openssh-ed25519 profile needs a plain principal'))
+    else:
+        reasons += openssh_problems(profile, now)
     access = profile.get('access', {})
     margin = timedelta(seconds=access.get('minimumRemainingSeconds', 1800))
+    live = access.get('liveCheck') is True  # opted in: access is checked live by the run (owner decision 2026-11-03)
+    if live and profile.get('recheckEmptyBeforeImport') is not True:
+        # Without recorded expiries there is no margin: the pre-import recheck is the last access and emptiness check
+        # before any add, so a live-check profile must make it.
+        reasons.append(('profile-invalid', 'access.liveCheck needs recheckEmptyBeforeImport true'))
     for key in ('addVersionExpires', 'accessorExpires'):
+        if live and access.get(key) is None:
+            continue  # checked live by the run's first credentialed metadata calls, before any key (access.policy)
         try:
             if parse_time(access[key]) - margin <= now:
                 reasons.append(('access-expired', f'{key} {access[key]} is within {margin} of {now:%Y-%m-%dT%H:%M:%SZ}'))
@@ -220,13 +247,33 @@ def proof_spec_problems(profile):
     return [('proof-spec-invalid', str(c) if CODE.fullmatch(str(c)) else 'unrecognised-code') for c in codes or []]
 
 
-def proof_problems(name, profile, proof):
-    """The closed proof fields this integration consumes: every fixed tool with an absolute path and sha256, this
-    profile, and exactly the runner's fixed minimal environment."""
+def proof_subject(name, profile, profiles):
+    """(subject, problem). The admitted helper proves the tool identities of the profile its spec pins
+    (localProof.spec.profile; the helper's validate_spec accepts only its own subject), and every proof names that
+    subject. A profile other than the subject may consume such a proof only when its localProof and its whole tool
+    set are exactly the subject's checked-in ones, so the proof covers precisely the tools this profile runs. Anything
+    else, including no reviewed profiles to compare with, is 'proof-subject'."""
+    subject = ((profile.get('localProof') or {}).get('spec') or {}).get('profile')
+    if subject == name:
+        return subject, None
+    reviewed = ((profiles or {}).get('profiles') or {}).get(subject) if isinstance(subject, str) else None
+    if not isinstance(reviewed, dict) or reviewed.get('localProof') != profile.get('localProof') \
+            or reviewed.get('tools') != profile.get('tools'):
+        return subject, 'proof-subject'
+    return subject, None
+
+
+def proof_problems(name, profile, proof, profiles=None):
+    """The closed proof fields this integration consumes: every fixed tool with an absolute path and sha256, the subject
+    this profile's admitted spec pins (proof_subject), and exactly the runner's fixed minimal environment. The run,
+    attempt, recipe and helper binding are checked separately (bind_proof) and always name this profile."""
     if not isinstance(proof, dict) or not proof.get('schema') or not isinstance(proof.get('tools'), dict):
         return ['proof-malformed']
     problems = []
-    if proof.get('profile') != name:
+    subject, problem = proof_subject(name, profile, profiles)
+    if problem:
+        problems.append(problem)
+    if not isinstance(subject, str) or proof.get('profile') != subject:
         problems.append('proof-foreign')
     if sorted(proof['tools']) != sorted(PROOF_TOOLS):
         problems.append('proof-tools')
@@ -272,7 +319,7 @@ def prove(name, profiles, env, recipe_sha, proof_dir, lock_path, root='/', now=N
         return 'refused', ['proof-helper-fault']
     finally:
         lock.__exit__(None, None, None)
-    problems = proof_problems(name, profile, proof)
+    problems = proof_problems(name, profile, proof, profiles)
     if problems:
         return 'refused', problems
     binding = {'schema': PROOF_BINDING_SCHEMA, 'profile': name, 'recipeSha': recipe_sha, 'runId': env.get('GITHUB_RUN_ID'),
@@ -286,9 +333,10 @@ def prove(name, profiles, env, recipe_sha, proof_dir, lock_path, root='/', now=N
     return 'proven', []
 
 
-def bind_proof(name, profile, binding, recipe_sha, run_identity, root='/'):
+def bind_proof(name, profile, binding, recipe_sha, run_identity, root='/', profiles=None):
     """Inside the lock, before any secret metadata: only this run's own proof, rechecked by the helper now. Returns a
-    run-scoped profile whose tools use the proven paths (the checked-in profile is never rewritten) and receipt rows."""
+    run-scoped profile whose tools use the proven paths (the checked-in profile is never rewritten) and receipt rows.
+    `profiles` (the reviewed set) lets a profile that reuses another profile's admitted spec prove its identity."""
     if not isinstance(binding, dict):
         raise Blocked('proof-missing', 'no same-run local tool proof')
     helper, blob = load_proof_helper(profile)
@@ -298,9 +346,9 @@ def bind_proof(name, profile, binding, recipe_sha, run_identity, root='/'):
     if any(binding.get(k) != v for k, v in expected.items()) or \
             binding.get('proofSha256') != hashlib.sha256(json.dumps(proof, sort_keys=True).encode()).hexdigest():
         raise Blocked('proof-binding', 'the proof is not this run\'s, this recipe\'s and this helper\'s')
-    problems = proof_problems(name, profile, proof)
+    problems = proof_problems(name, profile, proof, profiles)
     if problems:
-        raise Blocked(problems[0], 'the bound proof does not name the fixed tools and environment')
+        raise Blocked(problems[0], 'the bound proof does not name the fixed tools, subject and environment')
     try:
         helper.recheck(proof, root=root)
     except helper.Refused as error:
@@ -726,17 +774,72 @@ def pkcs12_identity(cert_pem, listing, generation):
         ('keyAlgorithm', 'keySize', 'signatureAlgorithm', 'subject', 'validityDays', 'notBefore')}}
 
 
+# Approved-proposal ceilings for the factory-archive identity's recorded IAM expiries. They are checked only against
+# expiries the profile records from an IAM readback; a null expiry is never treated as either duration. It is
+# access-unknown unless the profile opts in with access.liveCheck, where the run's credentialed calls check access.
+OPENSSH_BOOTSTRAP_MAX = timedelta(hours=4)
+OPENSSH_ACCESSOR_MAX = timedelta(days=30)
+
+
+def openssh_problems(profile, now):
+    """Closed shape of an openssh-ed25519 profile, plus the ceilings on any recorded expiry. Nothing is invented: a
+    missing tool identity or public identity stays a refusal, and so does a missing expiry unless the profile opts in
+    with access.liveCheck (readiness)."""
+    problems = []
+    if not factory_signing.PRINCIPAL.fullmatch(str(profile.get('principal'))):
+        problems.append(('profile-invalid', 'an openssh-ed25519 profile needs a plain principal'))
+    inventory = profile.get('keyInventory') or {}
+    if inventory.get('requiredByConsumer') != [factory_signing.KEY_FILE] or inventory.get('optionalByConsumer'):
+        problems.append(('profile-invalid', 'keyInventory must be exactly id_ed25519'))
+    if sorted(profile.get('tools') or {}) != ['ssh-keygen'] or (profile['tools']['ssh-keygen'].get('kind') != 'installed'):
+        problems.append(('profile-invalid', 'tools must be exactly a measured installed ssh-keygen'))
+    if profile.get('recheckEmptyBeforeImport') is not True:
+        problems.append(('profile-invalid', 'recheckEmptyBeforeImport must be true'))
+    if profile.get('localProof') or (profile.get('generation') or {}).get('recipe') is not None:
+        problems.append(('profile-invalid', 'no local proof or recipe: generation is the fixed generate_openssh'))
+    # With access.liveCheck (owner decision, 2026-11-03), access is checked live, not from a recorded timestamp: after the
+    # signer login and under the lock, the run's metadata calls on both secrets use the same credentials and stop it
+    # (metadata-unavailable, which with the gcloud executor also covers a missing secret, or secret-occupied) before any
+    # key is generated or journaled, whatever ended
+    # the access (expiry, revocation, a missing get or list grant). They are repeated before the import, where a failure,
+    # like a denied versions.add (which cannot be tested beforehand), uses up the run (failed-before-commit or
+    # recovery-needed). Without recorded expiries the 4 h / 30 d ceilings are the IAM conditions' alone. Expiries are then
+    # optional; any that are recorded are still held to the approved ceilings here, need a basis, and must leave the
+    # 30-minute margin (readiness).
+    access = profile.get('access') or {}
+    recorded = {}
+    for key in ('addVersionExpires', 'accessorExpires'):
+        if access.get(key) is not None:
+            try:
+                recorded[key] = parse_time(access[key])
+            except (TypeError, ValueError):
+                return problems  # readiness reports the malformed value as access-unknown
+    if recorded and not access.get('basis'):
+        problems.append(('access-unknown', 'recorded expiries need the IAM readback basis'))
+    add, accessor = recorded.get('addVersionExpires'), recorded.get('accessorExpires')
+    if (add and add - now > OPENSSH_BOOTSTRAP_MAX) or (accessor and accessor - now > OPENSSH_ACCESSOR_MAX) \
+            or (add and accessor and add > accessor):
+        problems.append(('access-window', f'recorded expiries exceed the approved {OPENSSH_BOOTSTRAP_MAX} bootstrap / '
+                         f'{OPENSSH_ACCESSOR_MAX.days} d accessor ceilings or are out of order'))
+    return problems
+
+
 def generate_openssh(workspace, profile, runner=None, token=None):
     """Factory-archive signing key: no recipe vocabulary; exactly factory_signing.generate_key, after the measured
     ssh-keygen identity is approved. The passphrase reaches ssh-keygen only through the pinned askpass helper."""
     identity = (profile.get('tools') or {}).get('ssh-keygen') or {}
     if not tool_approved(identity):
         raise Blocked('tool-unapproved', 'ssh-keygen: no measured installed path and sha256; nothing is run')
+    runner = runner or factory_signing.run_bounded
     try:
-        public = factory_signing.generate_key(workspace, tool_path(identity), runner or factory_signing.run_bounded, token=token)
+        public = factory_signing.generate_key(workspace, tool_path(identity), runner, token=token)
     except factory_signing.Refused as error:
         raise Blocked('generator-failed', str(error)) from None
-    return dict(public, principal=profile['principal'], namespace=factory_signing.NAMESPACE)
+    try:
+        checked = factory_signing.self_check(workspace, tool_path(identity), public, profile['principal'], runner)
+    except factory_signing.Refused as error:
+        raise Blocked('selfcheck-failed', str(error)) from None
+    return dict(public, principal=profile['principal'], namespace=factory_signing.NAMESPACE, selfCheck=checked)
 
 
 def subprocess_runner(tool, argv, cwd, stdin_path, timeout=900, stdout_path=None):
@@ -925,7 +1028,7 @@ def run(name, profiles, executor, state_dir, lock_path, recipe_sha, now, workspa
         with shared_lock(lock_path):
             if profile.get('localProof'):
                 profile, receipt['tools'], receipt['localProof'] = bind_proof(name, profile, proof, recipe_sha, run_identity,
-                    proof_root)
+                    proof_root, profiles)
             return _locked(name, profile, executor, journal, receipt, private, stop, workspace,
                 frankel or frankel_identities())
     except Blocked as error:
@@ -1002,6 +1105,10 @@ def _inside(name, profile, executor, journal, receipt, private, stop, created, f
     info = os.lstat(created)
     if not stat.S_ISDIR(info.st_mode) or stat.S_IMODE(info.st_mode) != 0o700 or info.st_uid != os.getuid():
         return stop('workspace-unprotected', 'workspace must be an owner-only directory')
+    if profile_outputs(profile) == OPENSSH_OUTPUTS:
+        problem = factory_signing.workspace_problem(created)
+        if problem:  # before the journal: nothing is generated or recorded, so the approved run is not used up
+            return stop('workspace-noexec', problem)
     # Runtime revalidation: pinned tool trees are recomputed again immediately before anything runs.
     for tool in sorted({step['tool'] for step in profile['generation'].get('recipe') or []}):
         identity = profile['tools'][tool]
@@ -1031,7 +1138,10 @@ def _inside(name, profile, executor, journal, receipt, private, stop, created, f
         if not isinstance(generated, dict) or generated.get('publicKey') != header['publicKey'] \
                 or generated.get('principal') != profile.get('principal'):
             return stop('unexpected-output', 'the reported public identity is not the generated key', 'failed')
-        identity = dict(header, principal=profile['principal'], namespace=factory_signing.NAMESPACE)
+        if generated.get('selfCheck') != {'decrypt': True, 'signVerify': True, 'negativeRefused': True}:
+            return stop('selfcheck-failed', 'no complete decrypt/sign/verify self-check before import; nothing added', 'failed')
+        identity = dict(header, principal=profile['principal'], namespace=factory_signing.NAMESPACE,
+                        selfCheck=generated['selfCheck'])
     elif outputs == PKCS12_OUTPUTS:
         try:
             identity = verified_pkcs12(generated, created/'keystore.p12', profile)
@@ -1169,12 +1279,19 @@ class GcloudExecutor:
 def plan(name, profiles):
     profile = profiles['profiles'].get(name, {})
     secrets = profile.get('secrets', {})
+    live = (profile.get('access') or {}).get('liveCheck') is True
+    # A live-check profile is granted one binding per secret (grant), never the split predefined roles of the rows.
+    one = {'grantedBy': 'the one bootstrap binding on this secret (grant)'} if live else {}
     return {'profile': name, 'status': profile.get('status'), 'missing': profile.get('missing'),
         'command': f'workflow os-release.yml mode={MODE} bootstrap_profile={name} candidate_sha=<that workflow commit on main>',
-        'metadata': [dict(op, operation=op['operation'].format(secret=s, project=profile.get('project')))
+        'metadata': [dict(op, operation=op['operation'].format(secret=s, project=profile.get('project')), **one)
             for s in secrets.values() for op in METADATA_OPERATIONS],
+        'grant': ('one binding per secret, holding secretmanager.secrets.get, versions.list and versions.add with a single '
+                  'expiry of at most 4 h (a custom role), made at action time; the secretAccessor is a separate expiring '
+                  'binding on the same two secrets; versions.add cannot be checked before the add, so split or partial grants '
+                  'can use up the run' if live else None),
         'add': [dict(ADD_OPERATION, operation=ADD_OPERATION['operation'].format(secret=s, project=profile.get('project'),
-            file='<workspace file>')) for s in secrets.values()],
+            file='<workspace file>'), **one) for s in secrets.values()],
         'readiness': [{'code': c, 'detail': d} for c, d in readiness(name, profiles, datetime.now(timezone.utc))],
         # Installed identities are host facts: source identity is not an installed executable hash.
         'laterHostPreflight': [{'tool': t, 'kind': i.get('kind'), 'source': i.get('source'), 'observe': i.get('requiredObservation')}
@@ -1183,8 +1300,13 @@ def plan(name, profiles):
             + ((profile.get('generation') or {}).get('missing') or [])}
 
 
+def interrupted(signum):
+    raise Blocked('interrupted', f'signal {signum}: stopped; the workspace is removed and any add is journaled for recovery')
+
+
 def main(argv=None, env=None):
     env = os.environ if env is None else env
+    factory_signing.stop_on_signals(interrupted)  # a stop still removes the RAM workspace and records recovery
     parser = argparse.ArgumentParser(description=__doc__.split('\n', 1)[0])
     sub = parser.add_subparsers(dest='command', required=True)
     sub.add_parser('guard')

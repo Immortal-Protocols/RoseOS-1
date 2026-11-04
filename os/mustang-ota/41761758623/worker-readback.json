@@ -1,0 +1,20 @@
+{
+  "observedAt": "2026-11-04T02:56:27.166621+00:00",
+  "schema": "roseos.mustang-ota-worker-readback.v1",
+  "publicationRun": "41761758623",
+  "nativeProducerRun": "41750459835",
+  "device": "mustang",
+  "build": "2026110401",
+  "checks": {
+    "receiptArchiveDigests": true,
+    "producerSigningPublicationBinding": true,
+    "anonymousStageReceiptDigest": true,
+    "anonymousChannelMetadata": true,
+    "anonymousSmallAssetChecksums": true,
+    "fullOtaDownloadVerifiedByHostedPublisher": true,
+    "fullOtaDownloadedAgainByWorker": false,
+    "independentOriginalVmStopped": true
+  },
+  "phoneUpdatePassed": false,
+  "automationDemonstrated": false
+}

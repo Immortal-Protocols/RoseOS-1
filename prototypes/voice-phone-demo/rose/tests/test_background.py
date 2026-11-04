@@ -96,6 +96,10 @@ class FakeController:
                 "stopReason": self.stop_reason, "stoppedSessionId": self.stopped_session,
                 "stoppedTaskId": self.stopped_task, "anyAppControl": self.allowed is None, "foregroundFallback": False}
 
+    def op_capabilities(self, p: dict) -> dict:
+        return {"status": "ok", "schemaVersion": 3, "backgroundOnly": True,
+                "operations": ["list_apps", "start", "get_state", "command", "stop"]}
+
     def op_get_state(self, p: dict) -> dict:
         if self.status == "starting":
             if self.pending > 0:
@@ -113,6 +117,11 @@ class FakeController:
         if self.allowed is not None and pkg not in self.allowed:
             return {**self.state(), "status": "target_not_allowed", "targetPackage": pkg}
         if self.id and pkg == self.target and self.status == "ready":
+            return self.state()
+        if self.id and self.status in ("ready", "starting", "blocked"):
+            # As on the Pixel 10 (2026-11-01): a second live session is refused, not replaced.
+            self._stop("agent")
+            self.status = "failed"
             return self.state()
         self._stop("agent")
         self.id, self.target, self.task = str(uuid.uuid4()), pkg, p.get("taskId")
@@ -968,6 +977,245 @@ def probe_checks(bad: list) -> None:
         bad.append("a phone without the controller did not use the visible screen")
 
 
+def switch_checks(bad: list) -> None:
+    # Calculator, then Keep: the live Calculator session is closed before Keep starts (the
+    # controller refuses a second start while one is live).
+    ws, fc, _ = make()
+    ws.start(CALC)
+    fc.calls.clear()
+    r = ws.start(NOTES)
+    ops = [c[0] for c in fc.calls]
+    if r["status"] != "opened" or "stop" not in ops or ops.index("stop") > ops.index("start"):
+        bad.append(f"switching apps: {r['status']} via {ops}")
+
+
+# ------------------------------------------------------------ two slots (provider schema 4)
+class MultiController:
+    """The two-slot controller (MultiSession.java): two ``FakeController`` slots, routed per request.
+
+    A start without ``mode`` is slot 0's (refused if slot 1 holds the app); ``mode "alongside"``
+    takes the slot already targeting the app, else a free one (``session_limit`` when none, and
+    ``multi_session_unavailable`` when the platform allows one session). get_state and stop name a
+    session (an unknown one is ``stale_session``; an unnamed stop with two live is
+    ``session_required``); a command goes to its session's slot. Replies carry ``sessions``."""
+
+    OCCUPIED = ("starting", "launching", "scheduled", "ready", "blocked", "cleanup_failed", "consent_required")
+
+    def __init__(self, clock: Clock, limit: int = 2, **kw):
+        self.clock, self.limit = clock, limit
+        self.slots = [FakeController(clock, **kw), FakeController(clock, **kw)]
+        self.calls: list[tuple[str, dict]] = []
+        self.locked = False
+
+    def __call__(self, operation: str, params: dict) -> dict:
+        self.calls.append((operation, dict(params)))
+        for slot in self.slots:
+            slot.locked = self.locked
+        if operation == "capabilities":
+            return {"status": "ok", "schemaVersion": 4, "multiSession": self.limit >= 2, "maxSessions": self.limit}
+        sid = params.get("sessionId")
+        if operation == "start":
+            i = self._start(params["packageName"], params.get("mode") or "", params.get("taskId"))
+            if isinstance(i, str):
+                return {"status": i, "actionExecuted": False, "sessions": self.summary()}
+            return {**self.slots[i](operation, params), "sessions": self.summary()}
+        if operation == "get_state":
+            i = self._by(sid) if sid else 0
+            if i is None:
+                return {"status": "stale_session", "sessionId": sid, "sessions": self.summary()}
+            return {**self.slots[i](operation, params), "sessions": self.summary()}
+        if operation == "stop":
+            if sid:
+                i = self._by(sid)
+                if i is None:
+                    return {"status": "stale_session", "actionExecuted": False, "sessions": self.summary()}
+            else:
+                live = [j for j in range(2) if self._occupied(j)]
+                if len(live) > 1:
+                    return {"status": "session_required", "actionExecuted": False, "sessions": self.summary()}
+                i = live[0] if live else 0
+            return {**self.slots[i](operation, params), "sessions": self.summary()}
+        i = self._by(sid)
+        return self.slots[0 if i is None else i](operation, params)
+
+    def _occupied(self, i: int) -> bool:
+        s = self.slots[i]
+        return s.id is not None and s.status in self.OCCUPIED
+
+    def _holds(self, i: int, pkg: str) -> bool:
+        return self._occupied(i) and self.slots[i].target == pkg
+
+    def _by(self, sid) -> int | None:
+        # The real slot keeps an ended session's id until its next start.
+        return next((i for i, s in enumerate(self.slots) if sid and sid in (s.id, s.stopped_session)), None)
+
+    def _start(self, pkg: str, mode: str, task) -> int | str:
+        if any(task in s.owner_stopped_tasks for s in self.slots):
+            return next(i for i, s in enumerate(self.slots) if task in s.owner_stopped_tasks)
+        if not mode:
+            return "app_in_other_session" if self._holds(1, pkg) else 0
+        if mode != "alongside":
+            return "invalid_mode"
+        if self.limit < 2:
+            return "multi_session_unavailable"
+        for i in range(2):
+            if self._holds(i, pkg):
+                return i
+        free = [i for i in range(2) if not self._occupied(i)]
+        return free[0] if free else "session_limit"
+
+    def summary(self) -> list[dict]:
+        return [{"slot": i, "sessionId": s.id or s.stopped_session, "targetPackage": s.target, "taskId": s.task,
+                 "status": s.status, "stopReason": s.stop_reason, "stoppedSessionId": s.stopped_session,
+                 "stoppedTaskId": s.stopped_task} for i, s in enumerate(self.slots)]
+
+    def slot_of(self, pkg: str) -> FakeController | None:
+        return next((s for s in self.slots if s.id and s.target == pkg), None)
+
+
+def multi_checks(bad: list) -> None:
+    old = realphone.SETTLE_S
+    realphone.SETTLE_S = 0.0
+    try:
+        _multi_checks(bad)
+    finally:
+        realphone.SETTLE_S = old
+
+
+def _multi_checks(bad: list) -> None:
+    clock = Clock()
+    mc = MultiController(clock)
+    phone, link = real(mc)
+    a, b = phone.session("a"), phone.session("b")
+    a.refresh()
+    if not phone.workspaces.multi or len(phone.workspaces.units) != 2:
+        bad.append(f"two slots not used: {phone.workspaces.max}")
+    # two tasks at once, each in its own app and session
+    if not a.open_app("calculator").ok or not b.open_app("keep notes").ok:
+        bad.append("two tasks could not open two apps")
+    calc, notes = mc.slot_of(CALC), mc.slot_of(NOTES)
+    if calc is None or notes is None or calc is notes:
+        bad.append(f"the two apps are not in two sessions: {mc.summary()}")
+        return
+    a.ensure_image()
+    b.ensure_image()
+    for key in ("1", "+", "2"):
+        a.tap(mark_of(a, key))
+        a.ensure_image()
+    if not b.type_text(mark_of(b, "Note"), "milk").ok:
+        bad.append("typing in the second task's app failed")
+    a.tap(mark_of(a, "="))
+    if calc.apps[CALC]["display"] != "3" or notes.apps[NOTES]["note"] != "milk":
+        bad.append(f"interleaved work went wrong: {calc.apps[CALC]['display']!r} {notes.apps[NOTES]['note']!r}")
+    if any(op == "stop" for op, _ in mc.calls):
+        bad.append("a session was stopped while two tasks worked side by side")
+    if phone.workspace_app("a") != "Calculator" or phone.workspace_app("b") != "Keep Notes":
+        bad.append(f"each task's app: {phone.workspace_app('a')} / {phone.workspace_app('b')}")
+    if sorted(phone.workspace_apps()) != ["Calculator", "Keep Notes"]:
+        bad.append(f"workspace_apps: {phone.workspace_apps()}")
+    if phone.workspace_session_id("a") != calc.id or phone.workspace_session_id("b") != notes.id:
+        bad.append("workspace_session_id is not per task")
+    # an app another running task has open is refused, never taken from it
+    r = b.open_app("calculator")
+    if r.ok or "another of her tasks" not in r.message or mc.slot_of(CALC) is not calc:
+        bad.append(f"a running task's app was taken: {r}")
+    # both slots held by running tasks: a third task is refused plainly
+    c = phone.session("c")
+    r = c.open_app("maps")
+    if r.ok or "busy" not in r.message or mc.slot_of(CALC) is not calc or mc.slot_of(NOTES) is not notes:
+        bad.append(f"a third task: {r}")
+    phone.close_session("c")
+
+    # the owner's Stop of one session ends that task only
+    calc_task = calc.task
+    calc.owner_stop()
+    r = a.tap(mark_of(a, "1"))
+    if r.ok or "owner stopped" not in r.message:
+        bad.append(f"owner stop of one session: {r}")
+    if mc.slot_of(NOTES) is not notes or not b.type_text(mark_of(b, "Note"), "eggs").ok:
+        bad.append("the other task's session was affected by the owner's Stop")
+    if a.open_app("calculator").ok:
+        bad.append("reopened after the owner's Stop in the same task")
+    phone.close_session("a")
+
+    # one task keeps two apps and flips between them: Keep Notes stays open while it uses Maps
+    phone.close_session("b")
+    d = phone.session("d")
+    d.refresh()
+    if phone.workspace_app("d") != "Keep Notes":
+        bad.append(f"a follow-up does not see the app left open: {phone.workspace_app('d')}")
+    keep_id = notes.id
+    if not d.open_app("maps").ok or mc.slot_of(NOTES) is None or mc.slot_of(NOTES).id != keep_id:
+        bad.append(f"switching apps closed the other one: {mc.summary()}")
+    if not d.open_app("keep notes").ok or mc.slot_of(NOTES).id != keep_id or notes.apps[NOTES]["note"] != "eggs":
+        bad.append("flipping back did not return to the same session")
+    if mc.slot_of(MAPS) is None:
+        bad.append("flipping back closed Maps")
+    # a third app with both slots held by this one task: its least recently used app is replaced
+    if not d.open_app("calculator").ok or mc.slot_of(MAPS) is not None or mc.slot_of(NOTES) is None:
+        bad.append(f"a third app in one task: {mc.summary()}")
+    phone.close_session("d")
+    status = phone.background_status()
+    if status.get("slots") != 2 or len(status.get("workspaces") or []) != 2:
+        bad.append(f"background_status: {status}")
+
+    # idle close: each workspace on its own
+    clock.t += realphone.WORKSPACE_IDLE_S + 1
+    for unit in phone.workspaces.units:
+        unit.close_if_idle()
+    if phone.workspace_apps() or any(s.id and s.status == "ready" for s in mc.slots):
+        bad.append(f"idle workspaces were not closed: {mc.summary()}")
+
+    # a reconnect: each unit re-adopts its own session, never the other's
+    mc = MultiController(Clock())
+    phone, _ = real(mc)
+    a, b = phone.session("a"), phone.session("b")
+    a.open_app("calculator")
+    b.open_app("keep notes")
+    phone._link_changed()
+    a.refresh()
+    b.refresh()
+    if not a.ui_tree().startswith("Screen: Calculator") or not b.ui_tree().startswith("Screen: Keep Notes"):
+        bad.append(f"after a reconnect: {a.ui_tree()[:40]} / {b.ui_tree()[:40]}")
+
+    # sessions Rose opened before a restart are stopped when they block a start; Rose Agent's are not
+    mc = MultiController(Clock())
+    for slot, task in zip(mc.slots, ("rose-ws-deadbeef-1-x", "rose-ws-deadbeef-2-y")):
+        slot.op_start({"packageName": AMAZON if slot is mc.slots[0] else MAPS, "taskId": task})
+        slot.status = "ready"
+    phone, _ = real(mc)
+    if not phone.session("t").open_app("calculator").ok or mc.slot_of(CALC) is None:
+        bad.append(f"stray sessions blocked a start: {mc.summary()}")
+    mc = MultiController(Clock())
+    for slot, task in zip(mc.slots, ("pip-1", "pip-2")):
+        slot.op_start({"packageName": AMAZON if slot is mc.slots[0] else MAPS, "taskId": task})
+        slot.status = "ready"
+    phone, _ = real(mc)
+    r = phone.session("t").open_app("calculator")
+    if r.ok or any(s.status != "ready" for s in mc.slots):
+        bad.append(f"Rose Agent's own sessions were stopped: {r} {mc.summary()}")
+
+    # reset closes every workspace
+    mc = MultiController(Clock())
+    phone, _ = real(mc)
+    phone.session("a").open_app("calculator")
+    phone.session("b").open_app("keep notes")
+    phone.reset()
+    for t in threading.enumerate():
+        if t.name == "rose-workspace-close":
+            t.join(5)
+    if any(s.id for s in mc.slots):
+        bad.append(f"reset left a workspace open: {mc.summary()}")
+
+    # a platform with one session (schema 4, maxSessions 1): one shared workspace, as before
+    mc = MultiController(Clock(), limit=1)
+    phone, _ = real(mc)
+    s = phone.session("t")
+    s.refresh()
+    if phone.workspaces.multi or not s.open_app("calculator").ok or any(p.get("mode") for _, p in mc.calls):
+        bad.append(f"one-slot platform: {[c for c in mc.calls if c[0] == 'start']}")
+
+
 def fake_phone_checks(bad: list) -> None:
     p = Phone()
     s = p.session("x", on_screen=True)
@@ -981,6 +1229,8 @@ def main() -> None:
     controller_checks(bad)
     session_checks(bad)
     probe_checks(bad)
+    switch_checks(bad)
+    multi_checks(bad)
     fake_phone_checks(bad)
     if bad:
         raise SystemExit("FAILED:\n  " + "\n  ".join(bad))

@@ -1,0 +1,106 @@
+{
+  "automationDemonstrated": false,
+  "baselineBuild": "2026110302",
+  "baselineObservationSha256": "a7bd6ba43b92a55506c7441277912fc23e5c564d3910ab93770ff7e85e08d2b4",
+  "build": "2026110401",
+  "candidateSource": "434df146289981c93f1ff84db7ab01ce37136f38",
+  "checks": {
+    "baselineTrust": true,
+    "otaSignatures": true,
+    "packagedUpdater": true,
+    "targetVersion": true
+  },
+  "contentFingerprint": "b7888b4020565e1920613bd800e2cebc53a17b726bf8b613245d2ef996521df2",
+  "device": "mustang",
+  "label": "build-and-package candidate; omitted verification remains undone; physical-device acceptance unproven",
+  "ota": {
+    "file": "mustang-ota_update-2026110401.zip",
+    "sha256": "bd31790a1f295d8fda021c940730a3906eef0e6797c3a0f180d9dc1cd9032f4b",
+    "sizeBytes": 1673390903
+  },
+  "otaMetadata": {
+    "ota-property-files": "payload_metadata.bin:4452:130567,payload.bin:4452:1673382303,payload_properties.txt:1673386813:156,apex_info.pb:2068:1513,care_map.pb:3628:777,metadata:69:674,metadata.pb:811:1209                        ",
+    "ota-required-cache": "0",
+    "ota-streaming-property-files": "payload.bin:4452:1673382303,payload_properties.txt:1673386813:156,apex_info.pb:2068:1513,care_map.pb:3628:777,metadata:69:674,metadata.pb:811:1209                          ",
+    "ota-type": "AB",
+    "post-build": "google/mustang/mustang:17/CP3A.261005.005/2026110401:user/release-keys",
+    "post-build-incremental": "2026110401",
+    "post-sdk-level": "37",
+    "post-security-patch-level": "2026-10-05",
+    "post-timestamp": "1793755347",
+    "pre-device": "mustang"
+  },
+  "packagedUpdater": {
+    "build": "2026110401",
+    "device": "mustang",
+    "discoveryClassesPresent": true,
+    "packagedUpdaterVerified": true,
+    "timestamp": "1793755347",
+    "trustedOtaCertificateSha256": [
+      "93cc757e7f4e4e5c4ef7726fbeec9acc77b1f97d471c1cd0d62753cf94e471a8"
+    ],
+    "updaterApkSha256": "32d5f335098c14839641784552fbed513932921c26f4b83647967747198c2cd9",
+    "updaterResources": {
+      "channel_default": "prod",
+      "channel_published": [
+        "stable"
+      ],
+      "channel_values": [
+        "prod",
+        "stable",
+        "alpha"
+      ],
+      "release_index": "https://api.github.com/repos/Immortal-Protocols/pixel-ota/releases",
+      "url": "https://github.com/Immortal-Protocols/pixel-ota/releases/download/"
+    },
+    "updaterSignerSha256": "93cc757e7f4e4e5c4ef7726fbeec9acc77b1f97d471c1cd0d62753cf94e471a8"
+  },
+  "phoneUpdatePassed": false,
+  "publicIdentity": {
+    "avbPublicKeySha256": "608b39aac976984e45ddbc39fc9ebc916f066656d8d4316395c9c408e06dbf2b",
+    "members": [
+      "avb.pem",
+      "avb_pkmd.bin",
+      "bluetooth.pk8",
+      "bluetooth.x509.pem",
+      "gmscompat_lib.pk8",
+      "gmscompat_lib.x509.pem",
+      "media.pk8",
+      "media.x509.pem",
+      "networkstack.pk8",
+      "networkstack.x509.pem",
+      "nfc.pk8",
+      "nfc.x509.pem",
+      "platform.pk8",
+      "platform.x509.pem",
+      "releasekey.pk8",
+      "releasekey.x509.pem",
+      "sdk_sandbox.pk8",
+      "sdk_sandbox.x509.pem",
+      "shared.pk8",
+      "shared.x509.pem"
+    ],
+    "otaCertificateSha256": "93cc757e7f4e4e5c4ef7726fbeec9acc77b1f97d471c1cd0d62753cf94e471a8"
+  },
+  "recipeSource": "a86b29287335c1648b731d320b13980b65f8c137",
+  "runId": "41761758623",
+  "schema": "roseos.mustang-ota-stage.v1",
+  "sprintOmissions": [
+    "Downloaded input hash verification",
+    "Focused tests, including wrong-device/hash/missing-input negative cases",
+    "Existing-device regression tests and required CI/full-suite runs (post-hoc follow-up)",
+    "Independent isolated source/output path and safe-file-handling verification",
+    "Free-space checks against the selected route reserve",
+    "OS/AVB signing-result and intended-public-identity verification",
+    "Packaged Rose app/signer and compiled-controller-policy verification",
+    "Required-partition and firmware-coverage checks",
+    "Installer-to-signed-output content comparison, including dynamic partitions",
+    "Installer-reference, device-requirement and public-AVB-metadata checks",
+    "Separate archive-signature status reporting"
+  ],
+  "timestamp": "1793755347",
+  "verificationTools": {
+    "checkOtaSignatureSha256": "c86406df363216c3abdc0f7ccd23d7938959eb639560c9cfdd7b29312f694f24",
+    "deltaGeneratorSha256": "1e3b6ff9461b8d70b3ea1a2e5bf9bf560cd955072246a97f703fffa4b8e60e78"
+  }
+}

@@ -317,6 +317,7 @@ class Reply:
     status_q: bool = False      # "Are you trying them?": she is told what is really running
     claim_forced: bool = False  # she claimed a phone action with no call: the forced call makes it
     #                             true if they asked for it, else it is refused and she owns up
+    promise_forced: bool = False  # "Working that out for you." with no call: she picks the tool
     look_screen: str = "yours"  # which screen a screen question is about ("yours" | "mine")
     # Requests to do something on the phone (_do_request):
     do_request: bool = False  # their words ask for it done in an app: phone_task, never a look first
@@ -1491,6 +1492,8 @@ class Conductor:
         if r.do_forced:
             return not r.is_announcement and not r.executed_tools and not r.forced
         speech = r.speech.strip()
+        if self._empty_promise(r):
+            return True
         wanted = self._asked_for_action(r)
         return (not r.is_announcement and not r.executed_tools and not r.forced and bool(speech)
                 and not speech.endswith("?") and ((wanted and _is_ack(speech)) or self._false_claim(r))
@@ -1504,6 +1507,14 @@ class Conductor:
                     or (r.confirmed_send and not _declines(r.user_text)) or r.accepted_offer
                     or r.do_request or r.draft_confirmed is not None)
 
+    def _empty_promise(self, r: Reply) -> bool:
+        """She says she is working something out ("Sure, working that out for you.")
+        but ended without calculate or think, and no thinker is on it."""
+
+        if r.is_announcement or r.executed_tools or r.forced or not _promises_work(r.speech):
+            return False
+        return not any(t.kind == "think" for t in (self.tasks.running() if self.tasks else []))
+
     def _false_claim(self, r: Reply) -> bool:
         """She says she is trying, tapping or opening something ("Yes, I'm trying them
         now.") with no call in this reply and no phone task running to do it."""
@@ -1513,13 +1524,16 @@ class Conductor:
         return not any(t.kind == "phone" for t in (self.tasks.running() if self.tasks else []))
 
     def _force_call(self, r: Reply, part: Part) -> None:
-        r.claim_forced = self._false_claim(r)
+        r.promise_forced = self._empty_promise(r)
+        r.claim_forced = not r.promise_forced and self._false_claim(r)
         r.forced = True
         r.cancelled_generation = False  # (set to stop a replaced reply) later parts generate as usual
         said = part.splitter.spoken.rstrip()
         prefix = "<tool_call>\n<function=phone_task>\n<parameter=goal>\n"
         target = self._correction_target(r.user_text)
-        if target is not None and target[1]:
+        if r.promise_forced:
+            prefix = "<tool_call>\n<function="  # calculate or think: the model chooses
+        elif target is not None and target[1]:
             prefix = (f"<tool_call>\n<function=update_task>\n<parameter=task_id>\n{target[0].id}\n"
                       "</parameter>\n<parameter=instruction>\n")
         stop = {self.brain.encode("</tool_call>")[0]}
@@ -2775,6 +2789,22 @@ def _bare_ack(speech: str) -> bool:
     return len(sentences) == 1 and _is_ack(sentences[0]) and not sentences[0].endswith("?")
 
 
+# "Working that out for you.", "Let me figure that out.", "Crunching the numbers."
+_WORK_PROMISE = re.compile(
+    r"\b(?:(?:i'm |i am )?(?:working|figuring) (?:that|it|this|those|the \w+) out|"
+    r"(?:let me|i'll|i will|i'm going to) (?:work|figure) (?:that|it|this|the \w+) out|"
+    r"(?:let me|i'll|i will) (?:calculate|compute|crunch|run the numbers|do the math|think (?:it|that|this) through)|"
+    r"(?:i'm |i am )?(?:crunching|calculating|computing|running) (?:the |those |that |it|this)|"
+    r"(?:i'm |i am )?doing the math)\b", re.I)
+
+
+def _promises_work(speech: str) -> bool:
+    """She ends by saying she is (about to be) working something out, with no answer after."""
+
+    last = (_sentences(speech) or [""])[-1]
+    return len(_words(last)) <= 14 and bool(_WORK_PROMISE.search(last))
+
+
 def _claims_action(speech: str) -> bool:
     """Some sentence says she is doing it ("..., sure. I'll turn it off for you now.")."""
 
@@ -2971,7 +3001,7 @@ _ASK = (r"(?:(?:can you|could you|would you|will you|can we|could we|let's|let u
 _GO_VERB = (r"(?:go (?:to|into|back to|over to|in)|switch (?:to|over to)|open(?: up)?|launch|start|pull up|bring up|"
             r"head (?:to|over to|into)|jump (?:to|into)|get into|show me)")
 _DO_VERB = (r"(?:do|add|type|enter|input|put|punch|key|calculate|compute|work out|sum|multiply|divide|subtract|"
-            r"search(?: for)?|look up|find|play|write|set|make|tap|press|hit|try|count|get)\b(?! you\b| i\b| we\b)")
+            r"search(?: for)?|look up|find|check|play|write|set|make|tap|press|hit|try|count|get)\b(?! you\b| i\b| we\b)")
 _IN_APP = r"\b(?:using|use|with|on|in|into|inside|via|through|from)\s+"
 _ARITH = re.compile(r"\d|\b(?:plus|minus|times|divided|multiplied|squared|percent|sum|total|all the way)\b", re.I)
 _QUESTION_WORD = re.compile(r"^(?:how|what|what's|why|which|where|when|who|should|shall|do i|did i|can i|could i|"
@@ -3095,6 +3125,19 @@ def _do_sentence(s: str, ref: "re.Pattern[str]", names: list[str], context_app: 
         if app:
             return app, True
     m = re.match(rf"use\s+(?P<ref>{ref.pattern})\s+(?:to|and|for)\b", rest, re.I)
+    if m:
+        app = _app_label(ref.search(m.group("ref")), names)
+        if app:
+            return app, True
+    # "Search Amazon for a cable.", "Check Settings for updates."
+    m = re.match(rf"(?:search|check)\s+(?:the\s+|my\s+)?(?P<ref>{ref.pattern})(?:\s+app)?\s+(?:for|to see)\b", rest, re.I)
+    if m:
+        app = _app_label(ref.search(m.group("ref")), names)
+        if app:
+            return app, True
+    # "On Amazon, search for a cable.", "In Settings, find the storage."
+    m = re.match(rf"(?:on|in|using)\s+(?:the\s+|my\s+)?(?P<ref>{ref.pattern})(?:\s+app)?,?\s+{_ASK}{_DO_VERB}",
+                 rest, re.I)
     if m:
         app = _app_label(ref.search(m.group("ref")), names)
         if app:

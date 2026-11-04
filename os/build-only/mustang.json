@@ -1,0 +1,224 @@
+{
+  "schemaVersion": 1,
+  "kind": "rose-build-only-recipe",
+  "basis": "Mustang Pixel 10 Pro XL candidate recipe under https://app.notion.com/p/40d7c646c81b81198e60cb76ca2ea603. Source configuration only; no runtime or device acceptance claimed. Shared proposal limits remain ceilings, not measured Mustang costs.",
+  "device": "mustang",
+  "lunch": "mustang-cur-user",
+  "deviceContract": "os/devices/pixel10.json",
+  "manifest": "os/pinned-manifest.xml",
+  "flavor": "os/flavors/mustang.json",
+  "factory": {
+    "file": "mustang-cp3a.261005.005-factory-099acc44.zip",
+    "sha256": "099acc44e2f87fe2735d92952081d64550ff08b4a6390bb6b001c8451695657e",
+    "sizeBytes": 11366092596,
+    "sizeBasis": "HTTP HEAD of this official URL on 2026-11-03: Content-Length and x-identity-content-length 11366092596; no body downloaded or input hash verified.",
+    "url": "https://dl.google.com/dl/android/aosp/mustang-cp3a.261005.005-factory-099acc44.zip"
+  },
+  "pins": {
+    "vendor/adevtool": "17df3b79a73e67ad68387b35c7d41c85e1d8103c",
+    "vendor/state": "1469180711293a5852bfda9a5f67b8f53d9828ad",
+    "device/google/laguna-kernels/6.6": "275dad3c1f144f6bdd6d2c1ec22eccbfbd467da9"
+  },
+  "kernelDir": "device/google/laguna-kernels/6.6/grapheneos/muzel",
+  "generate": {
+    "argv": [
+      "vendor/adevtool/bin/run",
+      "generate-all",
+      "-d",
+      "mustang"
+    ],
+    "downloadEnv": "ADEVTOOL_IMG_DOWNLOAD_DIR"
+  },
+  "compile": {
+    "outDirTemplate": "out-mustang-build-{build}",
+    "makeGoals": [
+      "vendorbootimage",
+      "vendorkernelbootimage",
+      "target-files-package",
+      "otatools-package"
+    ],
+    "maxJobs": 256,
+    "timeoutSeconds": 28800,
+    "measure": "filesystem-available-drop",
+    "basis": "Same four goals, fresh out-mustang-build-{build}, reserved BUILD_NUMBER and BUILD_DATETIME and same source SHA as integration; timeout remains 8 h and is independent of the four-hour delivery target. No Mustang compile measured."
+  },
+  "gitMeta": {
+    "projects": [
+      {
+        "path": "build/make",
+        "name": "platform_build",
+        "revision": "b0f697df8cc9519408ca0a404e918cd51bde0735"
+      },
+      {
+        "path": "build/release",
+        "name": "platform_build_release",
+        "revision": "0d3e510c9a11b9376b9c155f3425a64182798c22"
+      },
+      {
+        "path": "frameworks/base",
+        "name": "platform_frameworks_base",
+        "revision": "84183aff99be5e156dc0446a6fa2d4a7150f4bc3"
+      },
+      {
+        "path": "packages/apps/Launcher3",
+        "name": "platform_packages_apps_Launcher3",
+        "revision": "47accce386f2abdc84e87c05b5587be6e0b0854f"
+      },
+      {
+        "path": "packages/apps/Updater",
+        "name": "platform_packages_apps_Updater",
+        "revision": "52c34a55bd26f7856f9141d7e4237397084d6936"
+      },
+      {
+        "path": "packages/modules/Permission",
+        "name": "platform_packages_modules_Permission",
+        "revision": "4d6005dbabf3f2bf96e5215c5c2801809b051bf3"
+      },
+      {
+        "path": "vendor/adevtool",
+        "name": "adevtool",
+        "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c"
+      }
+    ],
+    "objectsSource": "public-fetch",
+    "fetchUrlPrefix": "https://github.com/GrapheneOS/",
+    "boundBytes": 8589934592,
+    "boundKind": "proposal",
+    "projectTimeoutSeconds": 1800,
+    "timeoutSeconds": 5400,
+    "basis": "Same seven pinned projects required by host-reconcile and adevtool; fetch genuine depth-1 metadata from public GrapheneOS repositories into the distinct Mustang copy, never from another device output."
+  },
+  "adevtool": {
+    "depsDir": "out_adevtool_deps",
+    "depsTools": [
+      "aapt2",
+      "apksigner",
+      "aprotoc",
+      "arsclib",
+      "debugfs",
+      "dispol",
+      "fsck.erofs",
+      "lpdump",
+      "lpunpack",
+      "lz4",
+      "ota_extractor",
+      "simg2img",
+      "sqlite3",
+      "toybox"
+    ]
+  },
+  "integration": {
+    "receiptType": "reconcile",
+    "labelPrefix": "mustang-",
+    "patcher": [
+      "apply-os-changes.py",
+      "background_apks.py",
+      "integration_copy.py"
+    ],
+    "basis": "Mustang-labelled reconcile receipt bound to this checkout SHA and fresh allocation. Packaged app/signer and compiled policy verification are omitted."
+  },
+  "capacity": {
+    "reserveBytes": 322122547200,
+    "allowanceRequired": true,
+    "compileAllowanceBytes": 268435456000,
+    "compileAllowanceKind": "first-build-proposal",
+    "basis": "Recorded existing proposals only. Reserve checks omitted for the Mustang sprint; byte/time process bounds remain. No capacity measurement is claimed."
+  },
+  "preparation": {
+    "stages": [
+      "source",
+      "download",
+      "vendor",
+      "lunch"
+    ],
+    "productionSourceRootFrom": "os/release-pipeline/frankel.json host.sourceRoot",
+    "lockFrom": "os/release-pipeline/frankel.json host.lockPath",
+    "boundsKind": "proposal",
+    "boundsBasis": "Existing proposal byte/time ceilings reused; reserve admission and reserve sampling are omitted for this sprint.",
+    "source": {
+      "boundBytes": 161061273600,
+      "timeoutSeconds": 7200,
+      "cleanupSeconds": 240,
+      "cleanupBasis": "After a stop, removal of this run's own staging is bounded to 240 s, inside the 300 s between timeoutSeconds and Release's outer timeout, so completed.json is written before that timeout. Removal of ~1.7 million files is unmeasured: whatever is not removed in time stays, is named in completed.json (stagingLeft) and blocks the next source run until it is removed deliberately.",
+      "exclusionsFrom": "os/release-pipeline/cuttlefish-alpha.json preparation.exclusions",
+      "includePaths": [
+        "out_adevtool_deps/adevtool_revision",
+        "out_adevtool_deps/host/linux-x86"
+      ],
+      "includeBasis": "Existing pinned adevtool host dependencies; copy only the revision marker and complete host/linux-x86 distribution. No prior Mustang copy evidence.",
+      "stagingPrefix": ".source-staging-",
+      "boundBasis": "Existing 150 GiB / 7200 s source-copy proposal reused for Mustang; unmeasured.",
+      "method": "In-process ordinary byte copy into new inodes with alpha_source.plan_copy/copy_file (modes and mtimes kept; no reflink, hardlink, symlink forest, mount or subprocess). Exclusions are the alpha policy (repo metadata, keys, releases, outputs, .git, the adevtool unpack cache); includePaths are adevtool's deps the vendor stage needs (the adevtool_revision file and the complete host/linux-x86 distribution, copied as its own selection whose links may not leave it); the selected deps must hold the pinned revision and the tools (never the vendor stage's other needs). The tree is staged beside the source root and renamed into place only when complete; a stop removes only this run's staging directory."
+    },
+    "download": {
+      "boundBytes": 11366092596,
+      "timeoutSeconds": 3600,
+      "partSuffix": ".part",
+      "boundBasis": "Official HEAD length, not content verification; downloaded hash verification is omitted in this sprint."
+    },
+    "vendor": {
+      "boundBytes": 137438953472,
+      "timeoutSeconds": 10800,
+      "collisionPaths": [
+        "vendor/google_devices/mustang",
+        "vendor/adevtool/dl/unpacked/mustang-CP3A.261005.005"
+      ],
+      "collisionBasis": "vendor/google_devices/{device} is generate-all's output; vendor/adevtool/dl/unpacked/{device}-{BUILD_ID} is adevtool's unpack cache as recorded in os/release-pipeline/cuttlefish-alpha.json (src/config/paths.ts UNPACKED_IMAGES_DIR, INFRA-ALPHA-090 frankel-CP3A.261005.005); historical evidence, both must be absent and are never deleted",
+      "node": {
+        "minMajor": 24,
+        "versionTimeoutSeconds": 60,
+        "minMajorFrom": "scripts/mustang-preparation-preflight.py NODE_MIN_MAJOR"
+      },
+      "adevtoolGit": {
+        "metadataPath": "vendor/adevtool/.git",
+        "argv": [
+          "git",
+          "-C",
+          "vendor/adevtool",
+          "rev-parse",
+          "HEAD"
+        ],
+        "timeoutSeconds": 60,
+        "skipDepBuildEnv": {
+          "ADEVTOOL_SKIP_DEP_BUILD": "1"
+        },
+        "basis": "GrapheneOS adevtool 17df3b79 src/config/paths.ts (sha256 418823cc...) getHostBinPath rebuilds its deps (scripts/run-build.sh: lunch and m) whenever out_adevtool_deps/adevtool_revision differs from `git -C vendor/adevtool rev-parse HEAD` stdout or that git call fails, unless ADEVTOOL_SKIP_DEP_BUILD=1. The vendor stage always sets that switch, so preparation never compiles, and makes the skipped comparison itself before generation: the marker must be exactly the pin and one newline, and this git call (GIT_* stripped, GIT_CEILING_DIRECTORIES at the source root) must print exactly the pin and one newline. A tree without vendor/adevtool/.git (the source-stage snapshot excludes all .git) is refused in preflight: generate-all's writeVersionCheckFile (src/blobs/build.ts) needs the same git call. This makes no snapshot usable and relaxes no version check."
+      }
+    },
+    "lunch": {
+      "boundBytes": 8589934592,
+      "timeoutSeconds": 1800,
+      "outDir": "out-mustang-lunch",
+      "expect": {
+        "TARGET_PRODUCT": "mustang",
+        "TARGET_RELEASE": "cur",
+        "TARGET_BUILD_VARIANT": "user",
+        "TARGET_DEVICE": "mustang"
+      }
+    },
+    "limits": {
+      "enforcement": "sampled-stop",
+      "sampleSeconds": 5,
+      "killGraceSeconds": 30,
+      "basis": "Not a filesystem quota: every sampleSeconds the stage's watched paths are measured against its boundBytes and the filesystem's available bytes against capacity.reserveBytes, and an overrun or timeout stops the stage's process group (SIGTERM, then SIGKILL after killGraceSeconds). Writes between samples can overshoot. An enforced quota (project quota, loop device, cgroup io) and containment of descendants that start their own session need host-side authority and are not provided here."
+    },
+    "totalTimeoutSeconds": 23400,
+    "totalBasis": "6.5 hours: source 7200 + download 3600 + vendor 10800 + lunch 1800 seconds. The about 296.6 GiB of bounds (source 150, download 10.58 exact, vendor 128, lunch 8) are checked one stage at a time against the 300 GiB reserve at each stage's start.",
+    "candidateLayout": {
+      "children": {
+        "sourceRoot": "source",
+        "downloadDir": "downloads",
+        "receiptsDir": "receipts"
+      },
+      "ancestorBoundary": "/home/pixelbuild",
+      "basis": "inspect derives R/source, R/downloads and R/receipts from one proposed --candidate-root R and reports the lstat chain of R's ancestors up to ancestorBoundary (the parent of the production source root); statvfs is read only on the nearest existing ancestor of each path. Candidates are proposals, never bindings."
+    }
+  },
+  "sprint": {
+    "plan": "https://app.notion.com/p/40d7c646c81b81198e60cb76ca2ea603",
+    "downloadedInputHashVerification": false,
+    "reserveChecks": false,
+    "packagedAppAndPolicyVerification": false,
+    "candidateLabel": "build-and-package candidate; omitted verification remains undone; physical-device acceptance unproven"
+  }
+}

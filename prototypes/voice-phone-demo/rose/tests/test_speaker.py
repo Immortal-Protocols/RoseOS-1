@@ -118,6 +118,14 @@ def test_chunker() -> None:
     RESULTS["chunker"] = {"cases": len(cases) + 3}
 
 
+def test_money() -> None:
+    # The space after an amount was dropped ("two hundred fifty dollarsa month").
+    for text, want in [("Save $250 a month.", "Save two hundred fifty dollars a month."),
+                       ("$38,800 after ten years", "thirty-eight thousand eight hundred dollars after ten years"),
+                       ("A $5k bonus", "A five thousand dollars bonus"), ("$2.50 each", "two dollars and fifty cents each")]:
+        assert speakable(text) == want, (text, speakable(text))
+
+
 def test_fake_transport() -> None:
     tr = FakeTransport(speed=4.0)
     reports = []
@@ -447,6 +455,7 @@ def test_time(rig: Rig) -> None:
 
 def main() -> None:
     test_chunker()
+    test_money()
     test_fake_transport()
     test_browser_transport()
     rig = Rig()

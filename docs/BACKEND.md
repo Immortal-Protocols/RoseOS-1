@@ -1,5 +1,9 @@
 # Rose Agent backend
 
+For the shared Python Mac/cloud voice backend using GPT 6.1 Terra Fast and
+Sign in with ChatGPT, see [Codex voice setup](CODEX-VOICE.md). The older Node
+backend instructions below describe its separate API-key configuration.
+
 The app and backend are separately built and deployed. Renaming the app does not
 supply provider accounts, a server endpoint, Codex authentication or enrollment.
 The imported server uses the existing `PIXEL_*` variable names for compatibility.

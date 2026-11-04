@@ -1,0 +1,133 @@
+{
+  "schema": "roseos.mustang-setup-evidence.v1",
+  "project": "protocols-465723",
+  "actor": "dev-infra@protocols-465723.iam.gserviceaccount.com",
+  "containers": {
+    "PIXEL_OS_SIGNING_KEYS_MUSTANG_V1": {
+      "name": "projects/1072799993443/secrets/PIXEL_OS_SIGNING_KEYS_MUSTANG_V1",
+      "createdAt": "2026-11-03T20:21:41.279761Z",
+      "creation": "confirmed by successful create response and describe readback",
+      "versionOccupancy": "unknown: versions.list PERMISSION_DENIED for dev-infra"
+    },
+    "PIXEL_OS_SIGNING_PASSPHRASE_MUSTANG_V1": {
+      "name": "projects/1072799993443/secrets/PIXEL_OS_SIGNING_PASSPHRASE_MUSTANG_V1",
+      "createdAt": "2026-11-03T20:21:42.449147Z",
+      "creation": "confirmed by successful create response and describe readback",
+      "versionOccupancy": "unknown: versions.list PERMISSION_DENIED for dev-infra"
+    }
+  },
+  "keysGenerated": false,
+  "secretVersionsAdded": false,
+  "iamChanges": "Four approved bindings applied externally by Nathan/IAM admin; worker readback only",
+  "bootstrapRoleObservation": {
+    "name": "projects/protocols-465723/roles/roseosModelsBootstrapV1",
+    "includedPermissions": [
+      "secretmanager.secrets.get",
+      "secretmanager.versions.add",
+      "secretmanager.versions.list"
+    ],
+    "basis": "Successful existing-role describe by configured dev-infra identity on 2026-11-03; no role created or modified"
+  },
+  "builderRun": {
+    "id": "41711304208",
+    "source": "2d9934a9c9c01e0197f8e4623fdb6d72c6900ef3",
+    "status": "failed in controller before any VM start request or candidate job",
+    "failure": "builder describe failed (exit 1); underlying cause suppressed by existing adapter",
+    "controller": "roseos-build-controller@protocols-465723.iam.gserviceaccount.com",
+    "cleanup": "success; no start ownership recorded, so no STOP request sent",
+    "independentVmState": "unobserved",
+    "url": "https://github.com/Immortal-Protocols/RoseOS-1/actions/runs/41711304208"
+  },
+  "diagnosticAccess": "Configured dev-infra identity was denied logging.read for failed-controller audit inspection; no retry or alternate audit identity used.",
+  "remaining": "Queue and run the single journaled bootstrap through established os-release.yml after the active build releases shared FIFO; fresh signer metadata/emptiness checks and tool proof remain runtime admission.",
+  "controllerDiagnostic": {
+    "run": "41713153197",
+    "source": "30aa07226bf653ed74b49dbd8b7d0ec87438a767",
+    "workflowRef": "Immortal-Protocols/RoseOS-1/.github/workflows/mustang-candidate.yml@refs/heads/main",
+    "tokenExchange": "failed",
+    "categories": [
+      "attributeConditionDenied"
+    ],
+    "computeRequests": 0,
+    "iamChanges": 0,
+    "url": "https://github.com/Immortal-Protocols/RoseOS-1/actions/runs/41713153197"
+  },
+  "providerInspection": "dev-infra workload-identity provider describe PERMISSION_DENIED; no retry or provider change",
+  "signerApproval": {
+    "status": "approved and all four conditional bindings confirmed",
+    "scope": "Existing bootstrap role and secretAccessor on only the two Mustang containers, expiring four hours from action time; one new Mustang key bootstrap after controller access is resolved",
+    "reasonDeferred": "resolved by Nathan applying the approved bindings via existing IAM admin"
+  },
+  "establishedRoute": {
+    "approval": "Nathan explicitly approved merge of PR492 and retry through os-release.yml",
+    "source": "216184cba518c3d2f5e86aedfdddfa3b1fa27834",
+    "run": "41714573501",
+    "controller": "success",
+    "builderStepStartedAt": "2026-11-03T20:40:43Z",
+    "status": "preparation/build step in progress; compile not yet confirmed",
+    "url": "https://github.com/Immortal-Protocols/RoseOS-1/actions/runs/41714573501"
+  },
+  "grantAttempt": {
+    "actor": "dev-infra@protocols-465723.iam.gserviceaccount.com",
+    "firstTarget": "PIXEL_OS_SIGNING_KEYS_MUSTANG_V1",
+    "firstRole": "projects/protocols-465723/roles/roseosModelsBootstrapV1",
+    "attemptedExpiry": "2026-11-04T00:41:38Z",
+    "commandExitCode": 1,
+    "firstGrant": "not applied, confirmed by successful IAM policy readback with no matching binding",
+    "otherThreeGrants": "not attempted",
+    "capabilityObservation": {
+      "permissions": [
+        "secretmanager.secrets.getIamPolicy"
+      ],
+      "missing": "secretmanager.secrets.setIamPolicy",
+      "method": "Secret Manager testIamPermissions on that exact secret; no mutation"
+    },
+    "result": "No IAM grant applied; no bootstrap or key material generated; existing IAM admin must perform the four approved bindings"
+  },
+  "confirmedAccess": {
+    "project": "protocols-465723",
+    "signer": "serviceAccount:roseos-build-signer@protocols-465723.iam.gserviceaccount.com",
+    "expiresAt": "2026-11-04T00:50:06Z",
+    "bindings": [
+      {
+        "secret": "PIXEL_OS_SIGNING_KEYS_MUSTANG_V1",
+        "role": "projects/protocols-465723/roles/roseosModelsBootstrapV1",
+        "condition": {
+          "expression": "request.time < timestamp(\"2026-11-04T00:50:06Z\")",
+          "title": "mustang-four-hour"
+        },
+        "confirmed": true
+      },
+      {
+        "secret": "PIXEL_OS_SIGNING_KEYS_MUSTANG_V1",
+        "role": "roles/secretmanager.secretAccessor",
+        "condition": {
+          "expression": "request.time < timestamp(\"2026-11-04T00:50:06Z\")",
+          "title": "mustang-four-hour"
+        },
+        "confirmed": true
+      },
+      {
+        "secret": "PIXEL_OS_SIGNING_PASSPHRASE_MUSTANG_V1",
+        "role": "projects/protocols-465723/roles/roseosModelsBootstrapV1",
+        "condition": {
+          "expression": "request.time < timestamp(\"2026-11-04T00:50:06Z\")",
+          "title": "mustang-four-hour"
+        },
+        "confirmed": true
+      },
+      {
+        "secret": "PIXEL_OS_SIGNING_PASSPHRASE_MUSTANG_V1",
+        "role": "roles/secretmanager.secretAccessor",
+        "condition": {
+          "expression": "request.time < timestamp(\"2026-11-04T00:50:06Z\")",
+          "title": "mustang-four-hour"
+        },
+        "confirmed": true
+      }
+    ],
+    "status": "all-four-confirmed",
+    "metadataActor": "dev-infra@protocols-465723.iam.gserviceaccount.com",
+    "mutationByWorker": false
+  }
+}

@@ -84,6 +84,15 @@ ask to see it happen, or on phones without the controller. Alarms, timers,
 music and directions stay direct intents. `ROSE_WORKSPACE=off` turns the
 workspace off. Details: `rose/background.py` and [DESIGN.md](rose/DESIGN.md).
 
+**Two apps at once.** Where the phone's controller and OS allow two sessions
+(controller provider schema 4, `multiSession`; RoseOS Pixel 10 builds from
+2026-11-02), Rose has two workspaces. Two tasks work in two apps side by side
+("work out 47 times 23" while "check my alarms" runs), and one task keeps its
+last two apps open, so going back to the first one returns to the same screen.
+An app that another running task has open is not taken from it. Each session
+has its own notification and Stop, and stopping one does not affect the other.
+Phones with one session behave as described above.
+
 ## Models (all local, MLX, one process)
 
 | Part | Model | Cost on this Mac |
@@ -95,11 +104,31 @@ workspace off. Details: `rose/background.py` and [DESIGN.md](rose/DESIGN.md).
 | Brain and voice of Rose | `mlx-community/Qwen3.6-35B-A3B-4bit` (3B active) | ~85 tok/s; a turn's prompt in 45–65 ms with the cache |
 | Speech | `gradium/phonon-31m-en` (Phonon 31M, 9 voices) | first audio ~6 ms, 25× real time |
 
+### A bigger brain for tasks
+
+`--task-brain mlx-community/Qwen3.8-27B-4bit` (or `$ROSE_TASK_BRAIN`) loads
+Qwen3.8-27B (dense, 15 GB more) for the phone agent and the thinker while
+the 35B-A3B keeps the conversation. `--brain` (or `$ROSE_BRAIN`) picks the
+conversation model. Measured on an M4 Max, 2026-11-01:
+
+| Setup | Eval (22) | Voice to voice | Decode |
+|---|---|---|---|
+| 35B-A3B for everything (default) | 21–22 | 0.3–0.6 s | 92–94 tok/s |
+| 35B-A3B talks, 27B tasks and thinks | 22 | 0.3–0.6 s | 26 tok/s for tasks (steps ~3× slower) |
+| 27B for everything | 20 (hard math thinks ~40 s) | 0.9–1.4 s, up to 2.7 s | 25–27 tok/s |
+
+```bash
+.venv/bin/hf download mlx-community/Qwen3.8-27B-4bit
+.venv/bin/python -m rose.app --phone real --task-brain mlx-community/Qwen3.8-27B-4bit
+```
+
 One MLX thread runs every model through a cooperative priority scheduler
 (`rose/runtime.py`): listening first, then speech, then Rose's reply, then
 background tasks. Each unit of GPU work is small (one token, one 128–256
 token prompt chunk, one 80 ms audio frame), so a phone task can never delay
-Rose's next word by more than about 60 ms. A tiny GPU op after every 250 ms
+Rose's next word by more than about 60 ms. Background prompt chunks are sized
+per model at load (`brain.bg_chunk`): 128 tokens on the 35B-A3B, 32 (~165 ms)
+on the dense 27B. A tiny GPU op after every 250 ms
 without work keeps macOS from idling the GPU: without it, a turn's prompt
 after a 3 s pause takes ~250 ms instead of ~60 ms.
 

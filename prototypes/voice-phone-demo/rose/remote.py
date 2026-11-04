@@ -482,6 +482,27 @@ def interface_ipv4s() -> list[str]:
     return addrs
 
 
+def configured_hosts(hosts: list[str]) -> list[str]:
+    """Explicit Mac/cloud QR addresses, with the same v1 DNS/IPv4 grammar as Rose Agent."""
+    out = []
+    for value in hosts:
+        host = value.strip().lower()
+        if not host or len(host) > 253:
+            raise ValueError('Pair host must be a DNS name or IPv4 address')
+        if re.fullmatch(r'[0-9.]+', host):
+            try:
+                ipaddress.IPv4Address(host)
+            except ValueError:
+                raise ValueError('Invalid pairing IPv4 address') from None
+        elif not all(re.fullmatch(r'[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?', label) for label in host.split('.')):
+            raise ValueError('Pair host must not include a scheme, path, credentials or port')
+        if host not in out:
+            out.append(host)
+    if len(out) > MAX_HOSTS:
+        raise ValueError('Too many pairing hosts')
+    return out
+
+
 def discover_hosts() -> list[str]:
     """Addresses for the QR: MagicDNS name, Tailscale IPv4s, then private LAN IPv4s (max 8)."""
 

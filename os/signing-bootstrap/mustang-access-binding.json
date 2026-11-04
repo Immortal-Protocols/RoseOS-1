@@ -1,0 +1,46 @@
+{
+  "project": "protocols-465723",
+  "signer": "serviceAccount:roseos-build-signer@protocols-465723.iam.gserviceaccount.com",
+  "expiresAt": "2026-11-04T00:50:06Z",
+  "bindings": [
+    {
+      "secret": "PIXEL_OS_SIGNING_KEYS_MUSTANG_V1",
+      "role": "projects/protocols-465723/roles/roseosModelsBootstrapV1",
+      "condition": {
+        "expression": "request.time < timestamp(\"2026-11-04T00:50:06Z\")",
+        "title": "mustang-four-hour"
+      },
+      "confirmed": true
+    },
+    {
+      "secret": "PIXEL_OS_SIGNING_KEYS_MUSTANG_V1",
+      "role": "roles/secretmanager.secretAccessor",
+      "condition": {
+        "expression": "request.time < timestamp(\"2026-11-04T00:50:06Z\")",
+        "title": "mustang-four-hour"
+      },
+      "confirmed": true
+    },
+    {
+      "secret": "PIXEL_OS_SIGNING_PASSPHRASE_MUSTANG_V1",
+      "role": "projects/protocols-465723/roles/roseosModelsBootstrapV1",
+      "condition": {
+        "expression": "request.time < timestamp(\"2026-11-04T00:50:06Z\")",
+        "title": "mustang-four-hour"
+      },
+      "confirmed": true
+    },
+    {
+      "secret": "PIXEL_OS_SIGNING_PASSPHRASE_MUSTANG_V1",
+      "role": "roles/secretmanager.secretAccessor",
+      "condition": {
+        "expression": "request.time < timestamp(\"2026-11-04T00:50:06Z\")",
+        "title": "mustang-four-hour"
+      },
+      "confirmed": true
+    }
+  ],
+  "status": "all-four-confirmed",
+  "metadataActor": "dev-infra@protocols-465723.iam.gserviceaccount.com",
+  "mutationByWorker": false
+}

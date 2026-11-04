@@ -22,6 +22,40 @@ dispatch:
 
   git-inspect: `blazer-build-only.py inspect-git --host H` and nothing else (the helper's two targets are fixed in the
       recipe and checked against the bound sourceRoot here); its stdout is kept write-once as NEW/git-inspection.json.
+  git-inspect-set: `blazer-build-only.py inspect-git-set --host H --target-set adevtool-projects-gitdir` and nothing else
+      (#443: the production .repo/projects/vendor/adevtool.git only, the same bounds); its stdout is kept write-once as
+      NEW/git-target-set-inspection.json. inspect-git is unchanged.
+  git-inspect-objects: `blazer-build-only.py inspect-git-objects --host immortal-os-builder` and nothing else (#448, O2:
+      bounded metadata of the fixed preparation.gitObjectsInspection objects directory, checked here to equal the
+      helper's own spec); its stdout is kept write-once as NEW/git-objects-inspection.json.
+
+  git-meta: `blazer-build-only.py run --stage git-meta --host H --lock L --source-root S --receipt-dir NEW` (Flavors'
+      genuine Git metadata of the recipe's seven pinned projects in the isolated tree, fetched depth 1 from the public
+      pinned-manifest remote within gitMeta.boundBytes and timeoutSeconds, one shared cleanup budget on failure); the
+      outer bound is gitMeta.timeoutSeconds + the helper's cleanup budget + 360 s.
+
+  binding-observe: `blazer-binding-observe.py observe --host immortal-os-builder` (Release) and nothing else: one bounded,
+      read-only observation of exactly the files, names and resources the blazer integration and compile bindings still
+      need (no link followed, allowlisted identity fields only, at most 64 KiB); its stdout is kept write-once as
+      NEW/binding-observation.json. The observer holds the shared builder lock (exclusive, non-blocking; refused
+      immediately when held) for the whole observation and writes nothing.
+
+  ssh-keygen-observe: `ssh-keygen-observe.py observe --host immortal-os-builder` (Signing) and nothing else: one bounded,
+      read-only observation of the builder's fixed /usr/bin/ssh-keygen identity and package-reported version, under the
+      same shared lock, for factory signing on this builder; its stdout is kept write-once as
+      NEW/ssh-keygen-observation.json. It runs no program: through the no-follow walk it reads only /usr/bin/ssh-keygen
+      and /var/lib/dpkg/status, info/openssh-client.list, info/openssh-client.md5sums and diversions, each rechecked,
+      within its own 120 s, 64 MiB for the tool, 32 MiB for status, 1 MiB for each other file, 200 MiB in all
+      (rechecks included) and a 16 KiB report. It exits 0 complete, 3 incomplete (report printed), 2 invalid usage; a
+      non-zero exit fails the stage before the verdict, and the receipt is still uploaded. The version is what the
+      package database reports, the tool matched by the package list and md5sum with no diversion; not a behavioural
+      proof of the binary.
+
+  verdict --stage S --receipt-dir NEW: the success decision for the observation stages, run after the observer exits 0
+      (blazer-binding-observe exits 0 whenever it printed a report, including complete:false). binding-observe passes only when its receipt (no link, at most
+      64 KiB) is complete with no problems. ssh-keygen-observe is decided by Signing's own `ssh-keygen-observe.py bind
+      --observation NEW/ssh-keygen-observation.json`, whose stdout is kept write-once as NEW/ssh-keygen-bind.json and
+      whose exit is the verdict (0 bindable, 4 not bindable, 2 unreadable). Any other stage: nothing to decide, exit 0.
 
 Never compile: compile is not a preparation stage and is refused here. Exit status: 0 ok, 2 invalid, 4 unbound (a host
 fact is still null).
@@ -32,6 +66,8 @@ import json
 import math
 import os
 from pathlib import Path
+import stat
+import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -40,7 +76,9 @@ HELPER = ROOT/'scripts/blazer-build-only.py'
 OUTER_MARGIN_SECONDS = 300
 KILL_AFTER_SECONDS = 30
 JOB_MARGIN_MINUTES = 10
-STAGE_INPUTS = {'source': ('sourceRoot',), 'download': ('downloadDir',), 'vendor': ('downloadDir', 'sourceRoot', 'node'), 'lunch': ('sourceRoot',)}
+STAGE_INPUTS = {'source': ('sourceRoot',), 'download': ('downloadDir',), 'vendor': ('downloadDir', 'sourceRoot', 'node'), 'lunch': ('sourceRoot',),
+                'git-meta': ('sourceRoot',)}
+GIT_META_MARGIN_SECONDS = 360
 INSPECT_INPUTS = ('sourceRoot', 'downloadDir', 'node')  # each passed only when bound
 # inspect: the helper's own bound (its cap is INSPECT_MAX_SECONDS), then an outer timeout and a 20-minute job.
 INSPECT = {'maxEntries': 200000, 'maxSeconds': 900, 'outerSeconds': 960, 'jobMinutes': 20}
@@ -48,6 +86,29 @@ INSPECT = {'maxEntries': 200000, 'maxSeconds': 900, 'outerSeconds': 960, 'jobMin
 # start and recipe load included) and a 13-minute job. The helper takes only --host: its two targets are fixed in the
 # recipe, it takes no lock, writes nothing and runs no git process.
 GIT_INSPECT = {'outerSeconds': 120, 'jobMinutes': 13}
+# git-inspect-set: Flavors' additive `inspect-git-set` (#443) for exactly one recipe target set, fixed here; same bounds.
+GIT_TARGET_SET = 'adevtool-projects-gitdir'
+# git-inspect-objects: Flavors' `inspect-git-objects` (#448, O2) for the one fixed objects directory: the helper's own
+# cooperative 120 s (preparation.gitObjectsInspection.maxSeconds), then a 180 s outer timeout (Python start and the
+# lexical recipe load included) and a 14-minute job.
+GIT_OBJECTS_STAGE = {'outerSeconds': 180, 'jobMinutes': 14}
+# Stages that resolve from the recipe's text alone (the helper's lexical load): resolving them touches no host path.
+LEXICAL_STAGES = ('git-inspect-set', 'git-inspect-objects')
+OBSERVERS = {'binding-observe': ROOT/'scripts/blazer-binding-observe.py', 'ssh-keygen-observe': ROOT/'scripts/ssh-keygen-observe.py'}
+# Observation stages: the observer's own whole-run deadline (binding-observe 300 s, ssh-keygen-observe 120 s; neither
+# starts a process, so no child kill grace), a 120 s margin for Python start, the lock and output; then the outer kill
+# (30 s), the verdict step (60 s + 5 s kill) and the 10-minute job margin. Ceilings, not measurements.
+VERDICT_SECONDS, VERDICT_KILL_SECONDS = 60, 5
+OBSERVE_BOUNDS = {stage: {'outerSeconds': seconds + 120,
+                          'jobMinutes': math.ceil((seconds + 120 + KILL_AFTER_SECONDS + VERDICT_SECONDS
+                                                   + VERDICT_KILL_SECONDS) / 60) + JOB_MARGIN_MINUTES}
+                  for stage, seconds in (('binding-observe', 300), ('ssh-keygen-observe', 120))}
+OBSERVATION_BYTES = 64 << 10
+BIND_RECEIPT = 'ssh-keygen-bind.json'
+RECEIPTS = {'binding-observe': ('binding-observation.json', 'observe'),
+            'ssh-keygen-observe': ('ssh-keygen-observation.json', 'observe'), 'inspect': ('inspection.json', 'inspect'), 'git-inspect': ('git-inspection.json', 'inspect-git'),
+            'git-inspect-set': ('git-target-set-inspection.json', 'inspect-git-set'),
+            'git-inspect-objects': ('git-objects-inspection.json', 'inspect-git-objects')}
 FLAGS = {'downloadDir': '--download-dir', 'sourceRoot': '--source-root', 'node': '--node'}
 KEYS = {'schemaVersion', 'kind', 'basis', 'host', 'lockFrom', 'sourceRoot', 'downloadDir', 'node', 'inspectCandidates'}
 CANDIDATE_KEYS = {'rootTemplate', 'verified', 'binding', 'basis'}
@@ -98,10 +159,17 @@ def resolve(stage, binding_path=BINDING, root=ROOT, run_id=None, attempt=None):
     """(argv tail without --receipt-dir, outer_seconds, job_minutes) for one preparation stage or inspect. The hosted
     check of inspect validates the candidate template with a sample run (1, 1); run passes the real run id and attempt."""
     h = helper()
-    if stage not in (*h.PREPARATION, 'inspect', 'git-inspect'):
-        raise Invalid(f'{stage!r} is not a preparation stage {h.PREPARATION}, inspect or git-inspect')
+    if stage in OBSERVERS:
+        binding = json.loads(Path(binding_path).read_text())
+        if binding.get('host') != 'immortal-os-builder':
+            raise Invalid('binding host must be the existing original builder immortal-os-builder')
+        return ['--host', binding['host']], OBSERVE_BOUNDS[stage]['outerSeconds'], OBSERVE_BOUNDS[stage]['jobMinutes']
+    if stage not in (*h.PREPARATION, h.GIT_META_STAGE, *RECEIPTS):
+        raise Invalid(f'{stage!r} is not a preparation stage {h.PREPARATION}, {h.GIT_META_STAGE} or one of {", ".join(RECEIPTS)}')
     try:
-        recipe = h.load(root/'os/build-only/blazer.json', root)
+        # git-inspect-set and git-inspect-objects load the recipe without probing (as the helper's own commands do), so
+        # resolving them touches no host path; every other route keeps the probing load.
+        recipe = h.load(root/'os/build-only/blazer.json', root, probe=stage not in LEXICAL_STAGES)
     except h.InvalidInput as error:
         raise Invalid(f'recipe: {error}')
     binding = json.loads(Path(binding_path).read_text())
@@ -113,6 +181,21 @@ def resolve(stage, binding_path=BINDING, root=ROOT, run_id=None, attempt=None):
         raise Invalid('binding host must be the existing original builder immortal-os-builder')
     lock = h.pointer(root, binding['lockFrom'])
     production = Path(h.pointer(root, recipe['preparation']['productionSourceRootFrom']))
+    if stage == 'git-inspect-objects':
+        spec = {k: v for k, v in recipe['preparation']['gitObjectsInspection'].items() if k != 'basis'}
+        if spec != h.git_objects_spec(str(production)) or binding['host'] != spec['host']:
+            raise Invalid('the recipe gitObjectsInspection is not the helper\'s fixed spec for the production root')
+        if not 0 < spec['maxSeconds'] < GIT_OBJECTS_STAGE['outerSeconds'] or spec['maxSeconds'] != h.GIT_OBJECTS['maxSeconds']:
+            raise Invalid('git-inspect-objects bounds disagree with the helper')
+        return ['--host', binding['host']], GIT_OBJECTS_STAGE['outerSeconds'], GIT_OBJECTS_STAGE['jobMinutes']
+    if stage == 'git-inspect-set':
+        spec = recipe['preparation']['gitInspection']
+        if set(spec.get('targetSets') or {}) != {GIT_TARGET_SET}:
+            raise Invalid(f'the recipe target sets are not exactly {GIT_TARGET_SET}')
+        if not 0 < spec['maxSeconds'] < GIT_INSPECT['outerSeconds'] or spec['maxSeconds'] != h.GIT_INSPECT_MAX_SECONDS:
+            raise Invalid('git-inspect-set bounds disagree with the helper')
+        return (['--host', binding['host'], '--target-set', GIT_TARGET_SET], GIT_INSPECT['outerSeconds'],
+                GIT_INSPECT['jobMinutes'])
     if stage == 'git-inspect':
         spec = recipe['preparation']['gitInspection']
         rel = recipe['preparation']['vendor']['adevtoolGit']['metadataPath']
@@ -146,6 +229,12 @@ def resolve(stage, binding_path=BINDING, root=ROOT, run_id=None, attempt=None):
         return argv, INSPECT['outerSeconds'], INSPECT['jobMinutes']
     if stage == 'vendor' and Path(binding['downloadDir']) in (Path(binding['sourceRoot']), *Path(binding['sourceRoot']).parents):
         raise Invalid('downloadDir must not be or contain the isolated source root')
+    if stage == h.GIT_META_STAGE:
+        timeout = recipe['gitMeta']['timeoutSeconds']
+        if not isinstance(timeout, int) or isinstance(timeout, bool) or not 0 < timeout <= h.GIT_META_MAX_SECONDS:
+            raise Invalid('recipe gitMeta.timeoutSeconds must be a positive integer within the helper cap')
+        outer = timeout + h.GIT_META_CLEANUP_SECONDS + GIT_META_MARGIN_SECONDS
+        return argv, outer, math.ceil((outer + KILL_AFTER_SECONDS) / 60) + JOB_MARGIN_MINUTES
     timeout = recipe['preparation'][stage]['timeoutSeconds']
     if not isinstance(timeout, int) or isinstance(timeout, bool) or timeout <= 0:
         raise Invalid(f'recipe preparation.{stage}.timeoutSeconds must be a positive integer')
@@ -153,9 +242,54 @@ def resolve(stage, binding_path=BINDING, root=ROOT, run_id=None, attempt=None):
     return argv, outer, math.ceil((outer + KILL_AFTER_SECONDS) / 60) + JOB_MARGIN_MINUTES
 
 
+def read_receipt(path):
+    """The receipt's bytes: a regular file reached with no link, at most OBSERVATION_BYTES; Invalid otherwise."""
+    path = Path(path)
+    if any(p.is_symlink() for p in (path, *path.parents)):
+        raise Invalid(f'{path.name} is reached through a link')
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    except OSError:
+        raise Invalid(f'{path.name} is absent or unreadable') from None
+    with os.fdopen(fd, 'rb') as f:
+        if not stat.S_ISREG(os.fstat(f.fileno()).st_mode):
+            raise Invalid(f'{path.name} is not a regular file')
+        data = f.read(OBSERVATION_BYTES + 1)
+    if len(data) > OBSERVATION_BYTES:
+        raise Invalid(f'{path.name} exceeds {OBSERVATION_BYTES} bytes')
+    return data
+
+
+def verdict(stage, receipt_dir, run=None):
+    """Exit status for an observation stage: 0 only when the observation is usable; see the module docstring."""
+    if stage not in OBSERVERS:
+        return 0
+    receipts = Path(receipt_dir)
+    name = RECEIPTS[stage][0]
+    data = read_receipt(receipts/name)
+    if stage == 'binding-observe':
+        try:
+            report = json.loads(data)
+        except ValueError:
+            raise Invalid(f'{name} is not JSON') from None
+        ok = isinstance(report, dict) and report.get('schema') == 'roseos.blazer-binding-observation.v1' \
+            and report.get('complete') is True and report.get('problems') == []
+        problems = report.get('problems') if isinstance(report, dict) else None
+        print(json.dumps({'verdict': 'COMPLETE' if ok else 'INCOMPLETE', 'receipt': name,
+                          'problems': len(problems) if isinstance(problems, list) else None}))
+        return 0 if ok else 1
+    out = os.open(receipts/BIND_RECEIPT, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(out, 'w') as f:
+        result = (run or subprocess.run)([sys.executable, str(OBSERVERS[stage]), 'bind', '--observation', str(receipts/name)],
+                                         stdout=f, stderr=subprocess.PIPE, text=True, timeout=VERDICT_SECONDS)
+    print(json.dumps({'verdict': {0: 'BINDABLE', 4: 'NOT_BINDABLE'}.get(result.returncode, 'INVALID'),
+                      'receipt': BIND_RECEIPT, 'exit': result.returncode}))
+    return result.returncode if result.returncode in (0, 4) else 2
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument('command', choices=('check', 'run'))
+    p.add_argument('command', choices=('check', 'run', 'verdict'))
     p.add_argument('--stage', required=True)
     p.add_argument('--receipt-dir')
     p.add_argument('--run-id', help='inspect only: this run id, for the proposed candidate root')
@@ -167,6 +301,10 @@ def main(argv=None):
             raise Invalid('check takes no --run-id/--attempt')
         if a.command == 'run' and a.stage == 'inspect' and not (a.run_id and a.attempt):
             raise Invalid('run --stage inspect needs --run-id and --attempt')
+        if a.command == 'verdict':
+            if a.run_id or a.attempt or not a.receipt_dir or not a.receipt_dir.startswith('/'):
+                raise Invalid('verdict takes only --stage and an absolute --receipt-dir')
+            return verdict(a.stage, a.receipt_dir)
         tail, outer, minutes = resolve(a.stage, a.binding, run_id=a.run_id, attempt=a.attempt)
         if a.command == 'check':
             if a.receipt_dir:
@@ -175,9 +313,9 @@ def main(argv=None):
             return 0
         if not a.receipt_dir or not a.receipt_dir.startswith('/'):
             raise Invalid('run needs an absolute --receipt-dir')
-        if a.stage in ('inspect', 'git-inspect'):
-            name = 'inspection.json' if a.stage == 'inspect' else 'git-inspection.json'
-            command = [sys.executable, str(HELPER), 'inspect' if a.stage == 'inspect' else 'inspect-git', *tail]
+        if a.stage in RECEIPTS:
+            name, action = RECEIPTS[a.stage]
+            command = [sys.executable, str(OBSERVERS.get(a.stage, HELPER)), action, *tail]
             print(json.dumps({'helper': command[1:]}), flush=True)
             receipts = Path(a.receipt_dir)
             receipts.mkdir(mode=0o700)  # fresh: an existing directory refuses

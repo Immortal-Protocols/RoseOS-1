@@ -4,6 +4,7 @@ Exercises the real load, operator, commands, preflight and run functions against
 fetcher and a fake runner. Nothing downloads, generates, runs lunch, compiles or signs, and no host or phone is reached;
 a passing run proves admission, bounds and rendering logic only, never a real preparation or build."""
 from pathlib import Path
+import datetime
 import hashlib
 import importlib.util
 import io
@@ -36,6 +37,10 @@ def fs(available):
     return lambda path: types.SimpleNamespace(f_bavail=available, f_frsize=1, f_blocks=available * 2)
 
 class Response(io.BytesIO):
+    def __init__(self, data, headers=None):
+        super().__init__(data)
+        self.headers = headers if headers is not None else {'Content-Length': str(len(data))}
+
     def __enter__(self):
         return self
     def __exit__(self, *exc):
@@ -49,6 +54,8 @@ class Fixture(unittest.TestCase):
         # A synthetic archive stands in for the real one: the recipe copy pins its digest (synthetic, never the real pin).
         self.synthetic = json.loads(json.dumps(self.recipe))
         self.synthetic['factory']['sha256'] = hashlib.sha256(PAYLOAD).hexdigest()
+        self.synthetic['factory']['sizeBytes'] = len(PAYLOAD)
+        self.synthetic['preparation']['download']['boundBytes'] = len(PAYLOAD)
         self.synthetic['capacity']['compileAllowanceBytes'] = 10
         # Test-speed sampling (the checked-in recipe samples every 5 s with a 30 s grace).
         self.synthetic['preparation']['limits'].update(sampleSeconds=0.05, killGraceSeconds=1)
@@ -58,6 +65,9 @@ class Fixture(unittest.TestCase):
         self.synthetic['preparation']['gitInspection']['targets'] = {
             'production': f'{self.tmp}/production/vendor/adevtool/.git',
             'candidate': f'{self.tmp}/rose-actions/blazer-prep-41473133543-1/source/vendor/adevtool/.git'}
+        self.synthetic['preparation']['gitInspection']['targetSets'] = {'adevtool-projects-gitdir': {'projectsGitdir': {
+            'root': f'{self.tmp}/production', 'path': '.repo/projects/vendor/adevtool.git'}}}
+        self.synthetic['preparation']['gitObjectsInspection']['root'] = f'{self.tmp}/production'
         # A checked-in-source copy whose production source root is a temporary tree, so isolation is exercised for real.
         self.root = self.tmp/'repo'
         (self.root/'os/release-pipeline').mkdir(parents=True)
@@ -108,15 +118,23 @@ class Fixture(unittest.TestCase):
             setattr(owner, name, boom)
             self.addCleanup(setattr, owner, name, original)
 
-    def op(self, **change):
+    def op(self, identity=False, **change):
         values = dict(host='operator-builder-1', source_root=str(self.src), jobs=16, lock=str(self.lock),
             download_dir=str(self.download), integration_dir=None, inputs_receipt=getattr(self, 'inputs', None),
             node=str(self.node))
+        if identity:
+            values.update(self.identity())
         values.update(change)
         return bb.operator(**values)
 
+    def identity(self):
+        """The bound compile identity: the admitted inputs' build and a timestamp at noon UTC of that build's day."""
+        build = json.loads(Path(self.inputs).read_text())['candidate']['build'] if getattr(self, 'inputs', None) else '2026103150'
+        noon = datetime.datetime.strptime(build[:8], '%Y%m%d').replace(hour=12, tzinfo=datetime.timezone.utc)
+        return dict(build_number=build, build_datetime=str(int(noon.timestamp())))
+
     def preflight(self, stage, recipe=None, available=10 ** 15, lock_free=True, **change):
-        return bb.preflight(recipe or self.synthetic, stage, self.op(**change), statvfs=fs(available),
+        return bb.preflight(recipe or self.synthetic, stage, self.op(identity=stage == 'compile', **change), statvfs=fs(available),
             lock_probe=lambda path: lock_free, root=self.root)
 
     def archive(self):
@@ -152,7 +170,22 @@ class Fixture(unittest.TestCase):
         receipts.mkdir()
         body.update(record)
         (receipts/'0001-blazer.json').write_text(json.dumps(body))
+        self.reserve(receipts)
         return receipts
+
+    def reserve(self, integration, **change):
+        """The build's write-once blazer-allocate reservation beside the integration dir, reserved at noon UTC of its day."""
+        ident = self.identity()
+        noon = datetime.datetime.fromtimestamp(int(ident['build_datetime']), datetime.timezone.utc)
+        record = {'schema': 'roseos.blazer-allocation.v1', 'device': 'blazer', 'build': ident['build_number'], 'source': 'a' * 40,
+                  'runId': '1', 'runAttempt': '1', 'reservedAt': noon.strftime('%Y-%m-%dT%H:%M:%SZ'),
+                  'workDir': str(integration.parent/f'blazer-integrate-{ident["build_number"]}'), 'integrationDir': str(integration),
+                  'observed': {}}
+        record.update(change)
+        path = integration.parent/'blazer-allocations'/f'{ident["build_number"]}.json'
+        path.parent.mkdir(exist_ok=True)
+        path.write_text(json.dumps(record))
+        return path
 
 class RecipeTest(Fixture):
     def test_checked_in_recipe_binds_the_pinned_sources_and_proposal_bounds(self):
@@ -166,9 +199,19 @@ class RecipeTest(Fixture):
         prep = recipe['preparation']
         self.assertEqual((prep['stages'], prep['boundsKind']), (['source', 'download', 'vendor', 'lunch'], 'proposal'))
         self.assertEqual({s: (prep[s]['boundBytes'], prep[s]['timeoutSeconds']) for s in prep['stages']},
-            {'source': (150 << 30, 7200), 'download': (8 << 30, 3600), 'vendor': (128 << 30, 10800), 'lunch': (8 << 30, 1800)})
+            {'source': (150 << 30, 7200), 'download': (11362467847, 3600), 'vendor': (128 << 30, 10800), 'lunch': (8 << 30, 1800)})
+        self.assertEqual(recipe['factory']['sizeBytes'], 11362467847, 'the pinned URL\'s HEAD Content-Length')
+        self.assertIn('no body transferred', recipe['factory']['sizeBasis'])
         self.assertEqual(prep['totalTimeoutSeconds'], 23400)
         self.assertEqual(prep['source']['cleanupSeconds'], 240)
+        objects = dict(prep['gitObjectsInspection'])
+        self.assertIsInstance(objects.pop('basis'), str)
+        self.assertEqual(objects, {'host': 'immortal-os-builder', 'root': '/home/pixelbuild/grapheneos-2026100600',
+            'path': '.repo/project-objects/adevtool.git/objects', 'maxEntries': 100000, 'maxDepth': 3, 'maxSeconds': 120,
+            'maxOutputBytes': 65536, 'excludeNames': ['hooks', 'rr-cache'],
+            'existenceOnly': ['info/alternates', 'info/http-alternates']})
+        self.assertEqual(prep['gitInspection']['targetSets'], {'adevtool-projects-gitdir': {'projectsGitdir': {
+            'root': '/home/pixelbuild/grapheneos-2026100600', 'path': '.repo/projects/vendor/adevtool.git'}}})
         self.assertEqual((prep['source']['includePaths'], prep['source']['exclusionsFrom']),
             (['out_adevtool_deps/adevtool_revision', 'out_adevtool_deps/host/linux-x86'],
              'os/release-pipeline/cuttlefish-alpha.json preparation.exclusions'))
@@ -183,16 +226,18 @@ class RecipeTest(Fixture):
         preflight.loader.exec_module(module)
         self.assertEqual(prep['vendor']['node']['minMajor'], module.NODE_MIN_MAJOR)
         self.assertNotIn('generateAllowanceBytes', recipe['capacity'], 'the circular measured-allowance gate is removed')
-        self.assertEqual(recipe['capacity']['compileAllowanceBytes'], None)
+        self.assertEqual((recipe['capacity']['compileAllowanceBytes'], recipe['capacity']['compileAllowanceKind']),
+                         (250 << 30, 'first-build-proposal'), 'a finite first-build allowance, no prior measurement gate')
+        self.assertEqual((recipe['compile']['timeoutSeconds'], recipe['compile']['measure']), (28800, 'filesystem-available-drop'))
         self.assertNotIn('host', recipe, 'the recipe binds no host; the operator supplies it')
         for absent in ('S007', 'S008', 'peak'):
             self.assertNotIn(absent, json.dumps(recipe))
 
     def test_rendered_commands(self):
-        rendered = bb.commands(self.recipe, self.op())
+        rendered = bb.commands(self.recipe, self.op(build_number='2026103150', build_datetime='1793448000'))
         self.assertEqual(rendered['download'], {'url': 'https://dl.google.com/dl/android/aosp/' + FACTORY,
             'part': str(self.download/(FACTORY + '.part')), 'final': str(self.download/FACTORY), 'sha256': PIN,
-            'maxBytes': 8 << 30, 'timeoutSeconds': 3600})
+            'maxBytes': 11362467847, 'expectedBytes': 11362467847, 'timeoutSeconds': 3600})
         self.assertEqual(rendered['vendor']['env'], {'ADEVTOOL_IMG_DOWNLOAD_DIR': str(self.download),
             'PATH': '<receipt-dir>/node-path:/usr/bin:/bin', 'GIT_CEILING_DIRECTORIES': str(self.src),
             'ADEVTOOL_SKIP_DEP_BUILD': '1'})
@@ -212,7 +257,9 @@ class RecipeTest(Fixture):
             ' && echo TARGET_RELEASE=$TARGET_RELEASE && echo TARGET_BUILD_VARIANT=$TARGET_BUILD_VARIANT'
             ' && echo TARGET_DEVICE=$(get_build_var TARGET_DEVICE)')
         self.assertNotIn(' m ', rendered['lunch']['argv'][2] + ' ')
-        self.assertEqual(rendered['compile']['env'], {'OUT_DIR': 'out-blazer-build'})
+        self.assertEqual(rendered['compile'], {'cwd': str(self.src), 'env': {'OUT_DIR': 'out-blazer-build-2026103150', 'PATH': '/usr/bin:/bin',
+            'GIT_CEILING_DIRECTORIES': str(self.src), 'BUILD_NUMBER': '2026103150', 'BUILD_DATETIME': '1793448000'}, 'argv': ['bash', '-c', 'source build/envsetup.sh && lunch blazer-cur-user'
+            ' && m -j16 vendorbootimage vendorkernelbootimage target-files-package otatools-package'], 'timeoutSeconds': 28800})
 
     def test_drifted_recipes_are_refused(self):
         for change, pattern in (
@@ -224,8 +271,29 @@ class RecipeTest(Fixture):
             (lambda r: r['capacity'].update(reserveBytes=1), '300 GiB'),
             (lambda r: r['preparation'].update(boundsKind='measured'), 'labelled proposal'),
             (lambda r: r['preparation'].update(stages=['download', 'vendor', 'lunch', 'compile']), 'preparation.stages'),
+            (lambda r: r['capacity'].update(compileAllowanceBytes=None), 'positive finite allowance'),
+            (lambda r: r['gitMeta']['projects'][0].update(revision='0' * 40), 'gitMeta.projects must be exactly'),
+            (lambda r: r['gitMeta']['projects'].pop(), 'gitMeta.projects must be exactly'),
+            (lambda r: r['gitMeta']['projects'].append({'path': 'frameworks/av', 'name': 'x', 'revision': '0' * 40}),
+             'gitMeta.projects must be exactly'),
+            (lambda r: r['gitMeta'].update(fetchUrlPrefix='https://example.com/'), 'fetchUrlPrefix must be the pinned'),
+            (lambda r: r['gitMeta'].update(objectsSource='production-pack'), 'gitMeta.objectsSource must be one of'),
+            (lambda r: r['gitMeta'].update(timeoutSeconds=7201), 'gitMeta needs a positive boundBytes'),
+            (lambda r: r['gitMeta'].update(projectTimeoutSeconds=9000), 'gitMeta needs a positive boundBytes'),
+            (lambda r: r['gitMeta'].update(boundBytes=0), 'gitMeta needs a positive boundBytes'),
+            (lambda r: r['gitMeta'].update(boundKind='measured'), 'gitMeta.boundKind must be proposal'),
+            (lambda r: r['capacity'].update(compileAllowanceBytes=0), 'positive finite allowance'),
+            (lambda r: r['capacity'].update(compileAllowanceKind='measured'), 'positive finite allowance'),
+            (lambda r: r['capacity'].pop('compileAllowanceKind'), 'positive finite allowance'),
+            (lambda r: r['compile'].update(timeoutSeconds=0), 'compile needs a positive timeoutSeconds'),
+            (lambda r: r['compile'].update(timeoutSeconds=43201), 'compile needs a positive timeoutSeconds'),
+            (lambda r: r['compile'].update(measure='out-dir-walk'), 'compile needs a positive timeoutSeconds'),
             (lambda r: r['preparation']['vendor'].update(boundBytes=0), 'preparation.vendor needs a positive boundBytes'),
             (lambda r: r['preparation']['download'].update(timeoutSeconds=None), 'preparation.download needs'),
+            (lambda r: r['preparation']['download'].update(boundBytes=8 << 30), 'must equal factory.sizeBytes'),
+            (lambda r: r['preparation']['download'].update(boundBytes=11362467848), 'must equal factory.sizeBytes'),
+            (lambda r: r['factory'].pop('sizeBytes'), 'factory.sizeBytes must be'),
+            (lambda r: r['factory'].pop('sizeBasis'), 'factory.sizeBytes must be'),
             (lambda r: r['preparation']['vendor'].update(collisionPaths=['vendor/google_devices/blazer']), 'collisionPaths'),
             (lambda r: r['preparation']['vendor']['node'].update(minMajor=0), 'node needs'),
             (lambda r: r['preparation']['vendor']['adevtoolGit'].update(skipDepBuildEnv={}), 'ADEVTOOL_SKIP_DEP_BUILD=1'),
@@ -247,8 +315,39 @@ class RecipeTest(Fixture):
             (lambda r: r['preparation']['gitInspection']['targets'].update(other='/home/pixelbuild/x/vendor/adevtool/.git'),
              'exactly production and candidate'),
             (lambda r: r['preparation']['gitInspection'].update(maxSeconds=600), 'maxSeconds 60'),
+            (lambda r: r['preparation']['gitInspection'].pop('targetSets'), 'targetSets must be exactly'),
+            (lambda r: r['preparation'].pop('gitObjectsInspection'), 'gitObjectsInspection must be exactly'),
+            (lambda r: r['preparation']['gitObjectsInspection'].pop('basis'), 'gitObjectsInspection must be exactly'),
+            (lambda r: r['preparation']['gitObjectsInspection'].update(maxEntries=100001), 'gitObjectsInspection must be exactly'),
+            (lambda r: r['preparation']['gitObjectsInspection'].update(maxDepth=4), 'gitObjectsInspection must be exactly'),
+            (lambda r: r['preparation']['gitObjectsInspection'].update(maxSeconds=180), 'gitObjectsInspection must be exactly'),
+            (lambda r: r['preparation']['gitObjectsInspection'].update(maxOutputBytes=1 << 20), 'gitObjectsInspection must be exactly'),
+            (lambda r: r['preparation']['gitObjectsInspection'].update(path='.repo/project-objects/adevtool.git'),
+             'gitObjectsInspection must be exactly'),
+            (lambda r: r['preparation']['gitObjectsInspection'].update(root='/home/pixelbuild/rose-actions/x/source'),
+             'gitObjectsInspection must be exactly'),
+            (lambda r: r['preparation']['gitObjectsInspection'].update(host='other-builder'), 'gitObjectsInspection must be exactly'),
+            (lambda r: r['preparation']['gitObjectsInspection'].update(excludeNames=['hooks']), 'gitObjectsInspection must be exactly'),
+            (lambda r: r['preparation']['gitObjectsInspection'].update(existenceOnly=[]), 'gitObjectsInspection must be exactly'),
+            (lambda r: r['preparation']['gitObjectsInspection'].update(followLinks=True), 'gitObjectsInspection must be exactly'),
+            (lambda r: r['preparation']['gitInspection']['targetSets']['adevtool-projects-gitdir']['projectsGitdir'].update(
+                root='/home/pixelbuild/rose-actions/x/source'), 'targetSets must be exactly'),
+            (lambda r: r['preparation']['gitInspection']['targetSets']['adevtool-projects-gitdir']['projectsGitdir'].update(
+                path='.repo/projects/vendor/adevtool.git/objects'), 'targetSets must be exactly'),
+            (lambda r: r['preparation']['gitInspection']['targetSets']['adevtool-projects-gitdir']['projectsGitdir'].update(
+                path='.repo/project-objects/adevtool.git'), 'targetSets must be exactly'),
+            (lambda r: r['preparation']['gitInspection']['targetSets']['adevtool-projects-gitdir'].update(
+                objects={'root': '/home/pixelbuild/grapheneos-2026100600', 'path': '.repo/project-objects/adevtool.git'}),
+             'targetSets must be exactly'),
+            (lambda r: r['preparation']['gitInspection']['targetSets'].update(
+                other={'x': {'root': '/home/pixelbuild/grapheneos-2026100600', 'path': '.repo/projects/vendor/adevtool.git'}}),
+             'targetSets must be exactly'),
             (lambda r: r['preparation']['lunch']['expect'].update(TARGET_BUILD_VARIANT='userdebug'), 'lunch.expect'),
             (lambda r: r['preparation']['lunch'].update(outDir='out-blazer-build'), 'its own top-level OUT_DIR'),
+            (lambda r: r['preparation']['lunch'].update(outDir='out-blazer-build-2026103150'), 'its own top-level OUT_DIR'),
+            (lambda r: r['compile'].update(outDirTemplate='out-blazer-build'), 'compile.outDirTemplate must be out-blazer-build-{build}'),
+            (lambda r: r['compile'].update(outDirTemplate='out-{build}'), 'compile.outDirTemplate must be out-blazer-build-{build}'),
+            (lambda r: r['compile'].update(outDir='out-blazer-build'), 'compile.outDirTemplate must be out-blazer-build-{build}'),
             (lambda r: r['preparation'].update(totalTimeoutSeconds=2700), 'sum of the stage timeouts'),
             (lambda r: r['preparation']['limits'].update(enforcement='quota'), 'sampled-stop enforcement'),
             (lambda r: r['preparation']['limits'].update(sampleSeconds=0), 'sampled-stop enforcement'),
@@ -319,9 +418,12 @@ class DownloadTest(Fixture):
         report = self.preflight('download')
         self.assertEqual(report['problems'], [])
         self.assertEqual(report['facts']['capacity'], {'availableBytes': 10 ** 15, 'reserveBytes': RESERVE,
-            'boundBytes': 8 << 30, 'boundKind': 'proposal'})
-        self.assertIn('below the reserve', self.problems('download', available=RESERVE + (8 << 30) - 1))
-        self.assertEqual(self.preflight('download', available=RESERVE + (8 << 30))['problems'], [])
+            'boundBytes': len(PAYLOAD), 'boundKind': 'proposal'})
+        self.assertIn('below the reserve', self.problems('download', available=RESERVE + len(PAYLOAD) - 1))
+        self.assertEqual(self.preflight('download', available=RESERVE + len(PAYLOAD))['problems'], [])
+        real = bb.preflight(self.recipe, 'download', self.op(), statvfs=fs(RESERVE + 11362467847 - 1),
+                            lock_probe=lambda path: True, root=self.root)
+        self.assertIn('below the reserve', ' '.join(real['problems']), 'the checked-in exact size is the admission bound')
         self.archive()
         self.assertIn('never replaced', self.problems('download'))
         (self.download/FACTORY).unlink()
@@ -330,12 +432,12 @@ class DownloadTest(Fixture):
         self.assertIn('held by another job', self.problems('download', download_dir=str(self.tmp/'dl2'), lock_free=False))
         self.assertIn('download dir parent', self.problems('download', download_dir=str(self.tmp/'no/such/dl')))
 
-    def run_download(self, payload, recipe=None, clock=None, out='r'):
+    def run_download(self, payload, recipe=None, clock=None, out='r', headers=None):
         recipe = recipe or self.synthetic
         fetched = []
         def fetcher(url, timeout):
             fetched.append((url, timeout))
-            return Response(payload)
+            return Response(payload, headers)
         code = bb.run(recipe, 'download', self.op(), self.tmp/out, fetcher=fetcher, clock=clock or (lambda: 0), now=lambda: 0,
             statvfs=fs(10 ** 15), lock_probe=lambda path: True, root=self.root)
         return code, fetched, json.loads((self.tmp/out/'completed.json').read_text())
@@ -347,15 +449,16 @@ class DownloadTest(Fixture):
         self.assertEqual((self.download/FACTORY).read_bytes(), PAYLOAD)
         self.assertFalse((self.download/(FACTORY + '.part')).exists())
         (self.download/FACTORY).unlink()
-        code, _, done = self.run_download(b'other bytes', out='r2')
-        self.assertEqual((code, done['ok']), (1, False))
+        other = bytes(b ^ 1 for b in PAYLOAD)  # exactly the recorded size, other bytes: only the sha256 refuses it
+        code, _, done = self.run_download(other, out='r2')
+        self.assertEqual((code, done['ok'], done['bytes']), (1, False, len(PAYLOAD)))
         self.assertIn('is not the pinned', done['error'])
         self.assertEqual(list(self.download.iterdir()), [], 'a failed download leaves no partial or final file')
 
     def test_byte_and_time_bounds_stop_the_download(self):
         small = json.loads(json.dumps(self.synthetic))
         small['preparation']['download']['boundBytes'] = 4
-        code, _, done = self.run_download(PAYLOAD, recipe=small)
+        code, _, done = self.run_download(PAYLOAD, recipe=small, headers={})
         self.assertEqual(code, 1)
         self.assertIn('exceeded the 4-byte bound', done['error'])
         ticks = iter(range(0, 10 ** 6, 4000))
@@ -363,10 +466,36 @@ class DownloadTest(Fixture):
         self.assertIn('download exceeded 3600 s', done['error'])
         self.assertEqual(list(self.download.iterdir()), [])
 
+    def test_only_exactly_the_recorded_size_is_accepted(self):
+        # A server announcing another size is refused before any byte is written.
+        written = []
+        class Watched(Response):
+            def read(self, n=-1):
+                written.append(n)
+                return super().read(n)
+        def fetcher(url, timeout):
+            return Watched(PAYLOAD, {'Content-Length': str(len(PAYLOAD) + 1)})
+        code = bb.run(self.synthetic, 'download', self.op(), self.tmp/'r', fetcher=fetcher, clock=lambda: 0, now=lambda: 0,
+                      statvfs=fs(10 ** 15), lock_probe=lambda path: True, root=self.root)
+        done = json.loads((self.tmp/'r/completed.json').read_text())
+        self.assertEqual((code, done['ok'], written), (1, False, []))
+        self.assertIn(f'announces {len(PAYLOAD) + 1} bytes, not the recorded {len(PAYLOAD)}', done['error'])
+        self.assertEqual(list(self.download.iterdir()), [])
+        # A short body (no Content-Length announced) is refused on size, before the sha256 is even considered.
+        code, _, done = self.run_download(PAYLOAD[:-1], out='r2', headers={})
+        self.assertEqual((code, done['bytes']), (1, len(PAYLOAD) - 1))
+        self.assertIn(f'{len(PAYLOAD) - 1} bytes arrived, not the recorded {len(PAYLOAD)}', done['error'])
+        self.assertEqual(list(self.download.iterdir()), [], 'no partial or final file is kept')
+        # Exactly the recorded size with the pinned sha256 is kept; the receipt records what was announced.
+        code, _, done = self.run_download(PAYLOAD, out='r3')
+        self.assertEqual((code, done['ok'], done['bytes'], done['announcedBytes'], done['expectedBytes']),
+                         (0, True, len(PAYLOAD), len(PAYLOAD), len(PAYLOAD)))
+
     def test_the_real_pin_refuses_synthetic_bytes(self):
         code, _, done = self.run_download(PAYLOAD, recipe=self.recipe)
         self.assertEqual(code, 1)
-        self.assertIn(f'is not the pinned {PIN}', done['error'])
+        self.assertIn('not the recorded 11362467847', done['error'])
+        self.assertEqual(done['expectedSha256'], PIN)
 
 class VendorTest(Fixture):
     def test_admission_needs_the_verified_archive_tools_and_absent_collisions(self):
@@ -1247,6 +1376,369 @@ class SourceRunTest(Fixture):
         self.assertFalse(os.path.lexists(parent))
         self.assertEqual(signal.getitimer(signal.ITIMER_REAL), (0.0, 0.0))
 
+class ObjectsInspectTest(Fixture):
+    """O2: inspect-git-objects over a synthetic production tree laid out as O1 found it (never the real one)."""
+
+    def objects_tree(self):
+        production = self.production
+        gitdir = production/'.repo/project-objects/adevtool.git'
+        objects = gitdir/'objects'
+        for rel, data in (('pack/pack-1.pack', b'P' * 5000), ('pack/pack-1.idx', b'never read'), ('info/packs', b'never read'),
+                          ('info/alternates', b'/elsewhere/objects\n'), ('info/commit-graphs/graph-1.graph', b'G' * 300),
+                          ('ab/' + 'c' * 38, b'loose'), ('12/' + '3' * 38, b'loose2'),
+                          ('hooks/pre-commit', b'never read'), ('rr-cache/x/preimage', b'never read')):
+            (objects/rel).parent.mkdir(parents=True, exist_ok=True)
+            (objects/rel).write_bytes(data)
+        os.link(objects/'pack/pack-1.pack', objects/'pack/pack-1.keep')
+        os.symlink('pack', objects/'pack-link')  # in-tree, relative: reported, never followed
+        (gitdir/'config').write_text('[core]\n\tsecret = never read\n')
+        (gitdir/'HEAD').write_text('d' * 40 + '\n')
+        (production/'.repo/projects/vendor/adevtool.git').mkdir(parents=True)
+        os.symlink('../../../project-objects/adevtool.git/objects', production/'.repo/projects/vendor/adevtool.git/objects')
+        (production/'out').mkdir()
+        (production/'out/huge.bin').write_text('never touched')
+        return objects
+
+    def run_objects(self, bounds=None, clock=None, **kw):
+        text = bb.inspect_git_objects(self.synthetic, 'immortal-os-builder', self.root, clock=clock or time.monotonic,
+                                      bounds=bounds, **kw)
+        return text, json.loads(text)
+
+    def fd_touches(self, call):
+        """Every filesystem primitive CALL uses, descriptor-relative names resolved to absolute paths."""
+        import builtins
+        names = ('open', 'stat', 'lstat', 'scandir', 'readlink', 'listdir', 'fstat', 'close', 'read', 'walk', 'statvfs', 'access')
+        real, real_builtin = {n: getattr(os, n) for n in names}, builtins.open
+        fds, seen, reads = {}, [], []
+        def where(path, dir_fd=None):
+            if isinstance(path, int):
+                return fds.get(path, f'<fd {path}>')
+            path = os.fsdecode(os.fspath(path))
+            return os.path.normpath(os.path.join(fds[dir_fd], path)) if dir_fd is not None else path
+        def s_open(path, flags, mode=0o777, *, dir_fd=None):
+            full = where(path, dir_fd)
+            seen.append(('open', full, flags))
+            fd = real['open'](path, flags, mode, dir_fd=dir_fd)
+            fds[fd] = full
+            return fd
+        def s_stat(path, *a, dir_fd=None, follow_symlinks=True):
+            seen.append(('stat' if follow_symlinks else 'lstat', where(path, dir_fd)))
+            return real['stat'](path, *a, dir_fd=dir_fd, follow_symlinks=follow_symlinks)
+        def s_lstat(path, *a, dir_fd=None):
+            seen.append(('lstat', where(path, dir_fd)))
+            return real['lstat'](path, *a, dir_fd=dir_fd)
+        def s_scandir(path='.'):
+            seen.append(('scandir', where(path)))
+            return real['scandir'](path)
+        def s_readlink(path, *a, dir_fd=None):
+            seen.append(('readlink', where(path, dir_fd)))
+            return real['readlink'](path, *a, dir_fd=dir_fd)
+        def s_fstat(fd):
+            seen.append(('fstat', fds.get(fd, f'<fd {fd}>')))
+            return real['fstat'](fd)
+        def s_close(fd):
+            fds.pop(fd, None)
+            return real['close'](fd)
+        def s_read(fd, n):
+            reads.append((fds.get(fd), n))
+            return real['read'](fd, n)
+        def other(name):
+            def call_(path='.', *a, **k):
+                seen.append((name, where(path)))
+                return real[name](path, *a, **k)
+            return call_
+        def s_builtin(path, *a, **k):
+            seen.append(('builtins.open', os.fsdecode(os.fspath(path))))
+            return real_builtin(path, *a, **k)
+        spies = {'open': s_open, 'stat': s_stat, 'lstat': s_lstat, 'scandir': s_scandir, 'readlink': s_readlink,
+                 'fstat': s_fstat, 'close': s_close, 'read': s_read}
+        for name in names:
+            setattr(os, name, spies.get(name) or other(name))
+        builtins.open = s_builtin
+        try:
+            return call(), seen, reads
+        finally:
+            for name, original in real.items():
+                setattr(os, name, original)
+            builtins.open = real_builtin
+
+    def chain(self, path):
+        return ['/', *[str(p) for p in reversed(Path(path).parents) if str(p) != '/'], str(path)]
+
+    def test_touches_only_the_fixed_objects_tree_and_opens_no_content(self):
+        objects = self.objects_tree()
+        before = self.snapshot(self.production)
+        self.guard()
+        (text, report), touched, reads = self.fd_touches(lambda: self.run_objects())
+        self.assertEqual(self.snapshot(self.production), before, 'nothing changes')
+        opened = [(p, f) for op, p, *f in touched if op == 'open']
+        dirs = [str(objects/d) for d in ('12', 'ab', 'info', 'info/commit-graphs', 'pack')]
+        self.assertEqual(sorted(p for p, _ in opened), sorted(self.chain(objects) + dirs), 'only directories are opened')
+        self.assertEqual({f[0] for _, f in opened}, {bb.DIR_OPEN})
+        self.assertTrue(bb.DIR_OPEN & os.O_NOFOLLOW and bb.DIR_OPEN & os.O_DIRECTORY and bb.DIR_OPEN & os.O_NONBLOCK)
+        self.assertEqual((reads, [p for op, p, *_ in touched if op == 'builtins.open']), ([], []), 'no content is read')
+        self.assertEqual(sorted({op for op, *_ in touched}), ['fstat', 'lstat', 'open', 'readlink', 'scandir'])
+        self.assertEqual([p for op, p, *_ in touched if op == 'readlink'], [str(objects/'pack-link')], 'link text only')
+        listed = {str(objects)} | {str(objects/d) for d in ('12', 'ab', 'info', 'info/commit-graphs', 'pack')}
+        self.assertEqual({p for op, p, *_ in touched if op == 'scandir'}, listed)
+        lstats = {p for op, p, *_ in touched if op == 'lstat'}
+        self.assertFalse({p for p in lstats if '/hooks' in p or '/rr-cache' in p}, 'hooks and rr-cache are never admitted')
+        self.assertTrue(all(p.startswith(str(objects) + '/') for p in lstats))
+        self.assertFalse(any('/pack-link/' in p or 'out/huge' in p or p.endswith('/config') for _, p, *_ in touched))
+        self.assertLessEqual(len(text.encode()), 65536)
+        self.assertEqual((report['schema'], report['complete'], report['incomplete'], report['metadataOnly'],
+                          report['contentsOpened'], report['linksFollowed'], report['filesystemsCrossed'], report['gitProcess'],
+                          report['processesStarted'], report['network'], report['writes'], report['enablesPreparation']),
+                         ('roseos.blazer-git-objects-inspection.v1', True, [], True, False, False, False, False, 0, False,
+                          False, False))
+        self.assertEqual(report['bounds'], {'maxEntries': 100000, 'maxDepth': 3, 'maxSeconds': 120, 'maxOutputBytes': 65536})
+        self.assertEqual((report['target']['absolutePath'], report['target']['exists']), (str(objects), True))
+        by = report['totals']['byType']
+        self.assertEqual({k: v['count'] for k, v in by.items()}, {'file': 7, 'dir': 5, 'link': 1, 'special': 0})
+        files = [objects/r for r in ('pack/pack-1.pack', 'pack/pack-1.idx', 'pack/pack-1.keep', 'info/packs',
+                 'info/commit-graphs/graph-1.graph', 'ab/' + 'c' * 38, '12/' + '3' * 38)]
+        self.assertEqual(by['file']['apparentBytes'], sum(os.lstat(f).st_size for f in files))
+        self.assertEqual(report['totals']['hardlinkedRepeats'], 1, 'a hardlink is allocated once')
+        self.assertEqual(set(report['groups']), {'.', 'pack', 'info', 'info/commit-graphs', '[0-9a-f]{2}'})
+        self.assertEqual(report['groups']['[0-9a-f]{2}']['file']['count'], 2)
+        self.assertEqual(report['existenceOnly'], {'info/alternates': {'observed': True, 'exists': True, 'type': 'file'},
+                                                   'info/http-alternates': {'observed': True, 'exists': False}})
+        self.assertEqual((report['excluded'], report['excludedTotal']), (['hooks', 'rr-cache'], 2))
+        self.assertEqual(report['exceptions'], [{'path': 'pack-link', 'kind': 'link', 'linkText': 'pack',
+                                                 'linkTextTruncated': False, 'unsafe': False}])
+        self.assertEqual(report['totals']['deepestEntry'], 3)
+        for secret in ('never read', 'elsewhere', 'secret', 'G' * 10):
+            self.assertNotIn(secret, text)
+
+    def test_every_limit_yields_complete_false_with_partial_totals(self):
+        objects = self.objects_tree()
+        base = dict(bb.GIT_OBJECTS)
+        _, few = self.run_objects(bounds={**base, 'maxEntries': 4})
+        self.assertEqual(([r['reason'] for r in few['incomplete']], few['complete'], few['totals']['listedEntries']),
+                         (['entries'], False, 4))
+        self.assertEqual(few['incomplete'][0]['detail'], '4 entries listed')
+        self.assertLessEqual(sum(v['count'] for v in few['totals']['byType'].values()), 4)
+        (objects/'info/commit-graphs/deeper').mkdir()
+        (objects/'info/commit-graphs/deeper/never').write_text('x')
+        _, deep = self.run_objects()
+        self.assertEqual([r['reason'] for r in deep['incomplete']], ['depth'])
+        self.assertIn('info/commit-graphs/deeper', deep['incomplete'][0]['detail'])
+        self.assertEqual(deep['totals']['deepestEntry'], 3)
+        (_, deep2), touched, _ = self.fd_touches(lambda: self.run_objects())
+        self.assertFalse(any('deeper/' in p or (op in ('open', 'scandir') and p.endswith('deeper')) for op, p, *_ in touched))
+        shutil.rmtree(objects/'info/commit-graphs/deeper')
+        ticks = iter([0, 0, 0, 0, 0, 121])
+        _, late = self.run_objects(clock=lambda: next(ticks, 121))
+        self.assertEqual(([r['reason'] for r in late['incomplete']], late['complete']), (['deadline'], False))
+        self.assertGreater(late['totals']['listedEntries'], 0)
+        self.assertLess(late['totals']['listedEntries'], 17)
+        text, small = self.run_objects(bounds={**base, 'maxOutputBytes': 1200})
+        self.assertLessEqual(len(text.encode()), 1200)
+        self.assertEqual((small['complete'], [r['reason'] for r in small['incomplete']]), (False, ['output']))
+        self.assertTrue(set(small['trimmed']) <= {'exceptions', 'excluded', 'groups'})
+        self.assertEqual(small['totals']['byType']['file']['count'], 7, 'partial totals survive trimming')
+        text, tiny = self.run_objects(bounds={**base, 'maxOutputBytes': 10})
+        self.assertEqual((tiny['complete'], set(tiny)), (False, {'schema', 'complete', 'incomplete', 'totals', 'trimmed'}))
+
+    def test_links_specials_and_other_filesystems_are_reported_never_entered(self):
+        objects = self.objects_tree()
+        outside = self.tmp/'outside'
+        (outside/'objects').mkdir(parents=True)
+        (outside/'objects/never').write_text('never touched')
+        for name, text in (('abs', str(outside)), ('up', '../../../../../outside')):
+            os.symlink(text, objects/name)
+            (_, report), touched, _ = self.fd_touches(lambda: self.run_objects())
+            self.assertEqual([r['reason'] for r in report['incomplete']], ['unsafe-link'])
+            row = [e for e in report['exceptions'] if e['path'] == name][0]
+            self.assertEqual((row['kind'], row['unsafe'], row['linkText']), ('link', True, text))
+            self.assertFalse(any(str(outside) in p for _, p, *_ in touched), 'the link is never followed')
+            os.unlink(objects/name)
+        os.mkfifo(objects/'pack/fifo')
+        (_, report), touched, _ = self.fd_touches(lambda: self.run_objects())
+        self.assertEqual([r['reason'] for r in report['incomplete']], ['special'])
+        self.assertFalse(any(op == 'open' and p.endswith('/fifo') for op, p, *_ in touched), 'a special file is never opened')
+        os.unlink(objects/'pack/fifo')
+        real_stat = os.stat
+        def other_device(path, *a, dir_fd=None, follow_symlinks=True):
+            st = real_stat(path, *a, dir_fd=dir_fd, follow_symlinks=follow_symlinks)
+            if path == 'pack':
+                return types.SimpleNamespace(st_mode=st.st_mode, st_dev=st.st_dev + 1, st_ino=st.st_ino, st_size=st.st_size,
+                                             st_blocks=st.st_blocks, st_nlink=st.st_nlink)
+            return st
+        os.stat = other_device
+        try:
+            (_, report), touched, _ = self.fd_touches(lambda: self.run_objects())
+        finally:
+            os.stat = real_stat
+        self.assertEqual([r['reason'] for r in report['incomplete']], ['cross-filesystem'])
+        self.assertFalse(any(op in ('open', 'scandir') and p == str(objects/'pack') for op, p, *_ in touched))
+
+    def test_inaccessible_and_replaced_entries_refuse_without_traversal(self):
+        objects = self.objects_tree()
+        real_open = os.open
+        def denied(path, flags, mode=0o777, *, dir_fd=None):
+            if path == 'pack':
+                raise PermissionError(13, 'Permission denied')
+            return real_open(path, flags, mode, dir_fd=dir_fd)
+        os.open = denied
+        try:
+            _, report = self.run_objects()
+        finally:
+            os.open = real_open
+        self.assertEqual(([r['reason'] for r in report['incomplete']], report['totals']['byType']['file']['count']),
+                         (['inaccessible'], 4), 'partial totals from everything still readable')
+        # A directory swapped for a link between its lstat and its open: O_NOFOLLOW refuses; the link is not entered.
+        outside = self.tmp/'outside'
+        outside.mkdir()
+        (outside/'never').write_text('never touched')
+        def swap(path, flags, mode=0o777, *, dir_fd=None):
+            if path == 'pack' and dir_fd is not None and not os.path.islink(objects/'pack'):
+                os.rename(objects/'pack', self.tmp/'moved-pack')
+                os.symlink(outside, objects/'pack')
+            return real_open(path, flags, mode, dir_fd=dir_fd)
+        os.open = swap
+        try:
+            (_, report), touched, _ = self.fd_touches(lambda: self.run_objects())
+        finally:
+            os.open = real_open
+        self.assertEqual([r['reason'] for r in report['incomplete']], ['replaced'])
+        self.assertEqual(report['incomplete'][0]['detail'], 'pack: NotADirectoryError opening the admitted directory')
+        self.assertFalse(any(str(outside) in p for _, p, *_ in touched))
+        os.unlink(objects/'pack')
+        os.rename(self.tmp/'moved-pack', objects/'pack')
+        # A directory replaced by another directory: the fstat identity differs from the admitting lstat.
+        def another(path, flags, mode=0o777, *, dir_fd=None):
+            if path == 'pack' and dir_fd is not None and not (self.tmp/'moved-pack').exists():
+                os.rename(objects/'pack', self.tmp/'moved-pack')
+                (objects/'pack').mkdir()
+                (objects/'pack/planted').write_text('never listed')
+            return real_open(path, flags, mode, dir_fd=dir_fd)
+        os.open = another
+        try:
+            (_, report), touched, _ = self.fd_touches(lambda: self.run_objects())
+        finally:
+            os.open = real_open
+        self.assertEqual([r['reason'] for r in report['incomplete']], ['replaced'])
+        self.assertFalse(any(op == 'scandir' and p == str(objects/'pack') for op, p, *_ in touched))
+        shutil.rmtree(objects/'pack')
+        os.rename(self.tmp/'moved-pack', objects/'pack')
+        # An entry that vanishes between listing and lstat.
+        real_stat = os.stat
+        def vanish(path, *a, dir_fd=None, follow_symlinks=True):
+            if path == 'packs':
+                raise FileNotFoundError(2, 'No such file or directory')
+            return real_stat(path, *a, dir_fd=dir_fd, follow_symlinks=follow_symlinks)
+        os.stat = vanish
+        try:
+            _, report = self.run_objects()
+        finally:
+            os.stat = real_stat
+        self.assertIn('replaced', [r['reason'] for r in report['incomplete']])
+        # A link replaced after its lstat: readlink fails and the entry is reported, the walk goes on.
+        real_readlink = os.readlink
+        def gone(path, *a, dir_fd=None):
+            raise OSError(22, 'Invalid argument')
+        os.readlink = gone
+        try:
+            _, report = self.run_objects()
+        finally:
+            os.readlink = real_readlink
+        self.assertEqual(report['incomplete'], [{'reason': 'replaced', 'detail': 'pack-link: OSError reading the admitted link'}])
+        self.assertEqual(report['totals']['byType']['file']['count'], 7)
+
+    def test_a_linked_absent_or_non_directory_root_refuses_before_listing(self):
+        objects = self.objects_tree()
+        project_objects = self.production/'.repo/project-objects'
+        os.rename(project_objects, self.tmp/'elsewhere')
+        os.symlink(self.tmp/'elsewhere', project_objects)
+        (_, report), touched, _ = self.fd_touches(lambda: self.run_objects())
+        self.assertEqual((report['incomplete'], report['target']['exists']),
+                         ([{'reason': 'linked-component', 'detail': f'{project_objects}: NotADirectoryError'}], None))
+        self.assertFalse(any(op in ('scandir', 'readlink') for op, *_ in touched))
+        self.assertEqual([p for op, p, *_ in touched if op == 'lstat'], [str(project_objects)], 'the refused component only')
+        self.assertFalse(any('elsewhere' in p for _, p, *_ in touched))
+        os.unlink(project_objects)
+        os.rename(self.tmp/'elsewhere', project_objects)
+        os.rename(objects, self.tmp/'objects-real')
+        os.symlink(self.tmp/'objects-real', objects)
+        _, report = self.run_objects()
+        self.assertEqual(report['incomplete'][0]['reason'], 'linked-component')
+        os.unlink(objects)
+        objects.write_text('a file')
+        _, report = self.run_objects()
+        self.assertEqual(report['incomplete'][0]['reason'], 'not-a-directory')
+        os.unlink(objects)
+        _, report = self.run_objects()
+        self.assertEqual((report['incomplete'][0]['reason'], report['target']['exists'], report['complete']),
+                         ('absent', False, False))
+
+    def test_the_largest_capped_report_fits_and_names_its_folding(self):
+        objects = self.objects_tree()
+        long = b'\x01' * 200
+        for i in range(40):
+            d = objects/f'd{i:02}'
+            d.mkdir()
+            os.symlink(os.fsdecode(long + b'/x'), os.path.join(os.fsencode(d), long + b'%02d' % i))
+        text, report = self.run_objects()
+        self.assertLessEqual(len(text.encode()), 65536)
+        self.assertNotIn('trimmed', report, 'the caps keep the worst case inside the 64 KiB output limit')
+        self.assertEqual((len(report['groups']), report['groupsFolded'] > 0, len(report['exceptions']),
+                          report['exceptionsTotal']), (33, True, 32, 41))
+        self.assertIn('(other)', report['groups'])
+        self.assertTrue(all(len(e['path']) <= 4 * 128 + 4 for e in report['exceptions']))
+
+    def test_cli_takes_only_the_fixed_host_and_runs_no_other_probe(self):
+        import contextlib
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            code, touched, reads = self.fd_touches(lambda: bb.main(['inspect-git-objects', '--host', 'immortal-os-builder']))
+        self.assertEqual(code, 0)
+        report = json.loads(out.getvalue())
+        target = '/home/pixelbuild/grapheneos-2026100600/.repo/project-objects/adevtool.git/objects'
+        self.assertEqual(report['target']['absolutePath'], target)
+        host = sorted({(op, p) for op, p, *_ in touched if not p.startswith(str(ROOT) + '/') and op != 'close'
+                       and not ('/LC_MESSAGES/' in p and p.endswith('.mo'))})
+        allowed = set(self.chain(target))
+        self.assertTrue(all(op in ('open', 'fstat', 'scandir', 'lstat', 'readlink') for op, _ in host), host)
+        self.assertTrue(all(p in allowed or p.startswith(target + '/') for _, p in host), host)
+        if not os.path.lexists('/home/pixelbuild'):
+            self.assertEqual([p for op, p in host if op == 'open'], ['/', '/home', '/home/pixelbuild'])
+            self.assertEqual((report['incomplete'][0]['reason'], report['complete']), ('absent', False))
+        self.assertFalse(any('rose-actions' in p or 'vendor/adevtool/.git' in p for _, p in host), 'no unrelated probe')
+        script = str(ROOT/'scripts/blazer-build-only.py')
+        for argv in ([], ['--host', 'other-builder'], ['--host', 'immortal-os-builder', '--max-entries', '5'],
+                     ['--host', 'immortal-os-builder', '/tmp/x'], ['--host', 'immortal-os-builder', '--target-set', 'x']):
+            with self.subTest(argv):
+                bad = subprocess.run([sys.executable, script, 'inspect-git-objects', *argv], capture_output=True, text=True)
+                self.assertEqual((bad.returncode, bad.stdout), (2, ''))
+        ok = subprocess.run([sys.executable, script, 'inspect-git-objects', '--host', 'immortal-os-builder'],
+                            capture_output=True, text=True)
+        self.assertEqual(ok.returncode, 0, ok.stderr)
+        self.assertEqual(len(ok.stdout.splitlines()), 1)
+        for old in (['inspect-git', '--host', 'immortal-os-builder'],
+                    ['inspect-git-set', '--host', 'immortal-os-builder', '--target-set', 'adevtool-projects-gitdir']):
+            prior = subprocess.run([sys.executable, script, *old], capture_output=True, text=True)
+            self.assertEqual(prior.returncode, 0, prior.stderr)
+            self.assertNotIn('objects', json.loads(prior.stdout)['schema'], 'O1 modes are unchanged')
+
+    def test_alternates_absence_is_observed_only_from_a_complete_listing(self):
+        objects = self.objects_tree()
+        shutil.rmtree(objects/'info')
+        (objects/'alternates').write_text('a root entry of the same name, not info/alternates')
+        _, report = self.run_objects()
+        self.assertEqual(report['existenceOnly'], {'info/alternates': {'observed': True, 'exists': False},
+                                                   'info/http-alternates': {'observed': True, 'exists': False}})
+        _, cut = self.run_objects(bounds={**bb.GIT_OBJECTS, 'maxEntries': 2})
+        self.assertEqual(cut['existenceOnly'], {'info/alternates': {'observed': False},
+                                                'info/http-alternates': {'observed': False}}, 'a cut listing observes nothing')
+
+    def test_a_drifted_recipe_or_another_host_refuses(self):
+        with self.assertRaisesRegex(bb.InvalidInput, '--host must be immortal-os-builder'):
+            bb.inspect_git_objects(self.synthetic, 'other-builder', self.root)
+        drifted = json.loads(json.dumps(self.synthetic))
+        drifted['preparation']['gitObjectsInspection']['path'] = '.repo/project-objects'
+        with self.assertRaisesRegex(bb.InvalidInput, 'gitObjectsInspection must be exactly'):
+            bb.inspect_git_objects(drifted, 'immortal-os-builder', self.root)
+
 class InspectTest(Fixture):
     """inspect is metadata-only: candidates are proposals that never enable preparation, and nothing it scans changes."""
     def reference(self):
@@ -1308,7 +1800,7 @@ class InspectTest(Fixture):
         self.assertEqual(n['version'], 'not executed (metadata only)')
         for unknown in ('reflink support (never assumed)',
                         'isolated source copy bytes (the source stage measures its full selection before writing; never this walk)',
-                        'Pro factory archive size (8 GiB cap unverified)'):
+                        'Pro factory archive content (its size is the recorded HEAD Content-Length; only the sha256 pin identifies it)'):
             self.assertIn(unknown, report['unknowns'])
 
     def test_node_from_path_reports_the_runner_resolution_as_the_candidate(self):
@@ -1494,8 +1986,9 @@ class InspectTest(Fixture):
         reads, real_read, real_builtin = [], os.read, builtins.open
         def spy(name):
             def call_(path, *a, **k):
-                if not isinstance(path, int):
-                    seen.append((name, os.fsdecode(os.fspath(path))))
+                if not isinstance(path, int):  # a non-following stat (pathlib's lstat) is recorded as lstat
+                    seen.append(('lstat' if name == 'stat' and k.get('follow_symlinks') is False else name,
+                                 os.fsdecode(os.fspath(path))))
                 return originals[name](path, *a, **k)
             return call_
         def spy_open(path, *a, **k):
@@ -1613,6 +2106,178 @@ class InspectTest(Fixture):
         self.assertEqual((old.returncode, json.loads(old.stdout)['schema']), (0, 'roseos.blazer-preparation-inspection.v2'),
                          'the existing inspect mode is unchanged')
 
+    def projects_gitdir(self):
+        """A synthetic production tree laid out as observation 41566744429 found it: vendor/adevtool/.git a link to
+        ../../.repo/projects/vendor/adevtool.git, whose objects link to .repo/project-objects, beside other content."""
+        production = self.reference()
+        gitdir = production/'.repo/projects/vendor/adevtool.git'
+        (gitdir/'refs/heads').mkdir(parents=True)
+        (gitdir/'refs/heads/main').write_text('b' * 40 + '\n')
+        (gitdir/'HEAD').write_text(ADEVTOOL + '\n')
+        (gitdir/'packed-refs').write_text('# never read\n')
+        (gitdir/'shallow').write_text('c' * 40 + '\n')
+        (gitdir/'config').write_text('[core]\n\tsecret = never read\n')
+        objects = production/'.repo/project-objects/adevtool.git/objects'
+        (objects/'pack').mkdir(parents=True)
+        (objects/'pack/pack-1.pack').write_text('never touched')
+        os.symlink('../../../project-objects/adevtool.git/objects', gitdir/'objects')
+        os.symlink('/etc', gitdir/'outside')
+        (production/'vendor/adevtool').mkdir(parents=True, exist_ok=True)
+        os.symlink('../../.repo/projects/vendor/adevtool.git', production/'vendor/adevtool/.git')
+        (production/'.repo/projects/other.git').mkdir(parents=True)
+        (production/'.repo/projects/other.git/HEAD').write_text('d' * 40 + '\n')
+        return production, gitdir
+
+    def test_inspect_git_set_touches_only_the_projects_gitdir(self):
+        production, gitdir = self.projects_gitdir()
+        before = self.snapshot(production)
+        self.guard()
+        report, touched, reads = self.touched_during(
+            lambda: bb.inspect_git_set(self.synthetic, 'immortal-os-builder', 'adevtool-projects-gitdir', self.root))
+        self.assertEqual(self.snapshot(production), before, 'nothing in the tree changes')
+        allowed = {str(gitdir), str(gitdir/'HEAD')} | {str(gitdir/n) for n in os.listdir(gitdir)}
+        allowed |= {str(p) for p in gitdir.parents}
+        self.assertEqual(sorted({path for _, path in touched} - allowed), [],
+                         'only the target, one level inside it, HEAD and the ancestors\' lstat')
+        self.assertEqual(sorted({name for name, _ in touched}), ['lstat', 'open', 'readlink', 'scandir'])
+        self.assertEqual(sorted(path for name, path in touched if name == 'scandir'), [str(gitdir)], 'one level only')
+        self.assertEqual(sorted(path for name, path in touched if name in ('open', 'builtins.open')), [str(gitdir/'HEAD')],
+                         'HEAD is the only content opened')
+        self.assertEqual(sorted(path for name, path in touched if name == 'readlink'),
+                         [str(gitdir/'objects'), str(gitdir/'outside')], 'link text only, never followed')
+        self.assertEqual(reads, [65], 'one HEAD read of at most 65 bytes')
+        self.assertFalse(any(str(production/'vendor') in path or 'project-objects' in path for _, path in touched),
+                         'neither the vendor/adevtool/.git link nor the object store is touched')
+        self.assertEqual(set(report), {'schema', 'device', 'host', 'targetSet', 'metadataOnly', 'processesStarted', 'network',
+                                       'writes', 'gitProcess', 'enablesPreparation', 'bounds', 'targets', 'truncated',
+                                       'elapsedSeconds'})
+        self.assertEqual((report['schema'], report['targetSet'], report['processesStarted'], report['network'],
+                          report['writes'], report['gitProcess'], report['enablesPreparation'], report['truncated']),
+                         ('roseos.blazer-git-target-set-inspection.v1', 'adevtool-projects-gitdir', 0, False, False, False,
+                          False, False))
+        self.assertEqual(report['bounds'], {'scanEntries': 256, 'listedEntries': 64, 'linkTextBytes': 1024,
+                                            'headAcceptedBytes': 64, 'headReadBytes': 65, 'maxSeconds': 60})
+        facts = report['targets']['projectsGitdir']
+        self.assertEqual(set(report['targets']), {'projectsGitdir'})
+        self.assertEqual((facts['absolutePath'], facts['path'], facts['meta']['type'], facts['symlinkComponent']),
+                         (str(gitdir), '.repo/projects/vendor/adevtool.git', 'dir', None))
+        self.assertEqual((facts['head']['form'], facts['head']['revision']), ('detached', ADEVTOOL))
+        links = {r['name']: (r['linkText'], r['linkAbsolute'], r['linkLeavesTree']) for r in facts['entries'] if r['type'] == 'link'}
+        self.assertEqual(links, {'objects': ('../../../project-objects/adevtool.git/objects', False, False),
+                                 'outside': ('/etc', True, True)})
+        self.assertEqual(sorted(r['name'] for r in facts['entries']),
+                         ['HEAD', 'config', 'objects', 'outside', 'packed-refs', 'refs', 'shallow'])
+        self.assertEqual((facts['entriesScanned'], facts['entriesListedOf']), (7, 7))
+        self.assertNotIn('secret', json.dumps(report))
+        self.assertNotIn('b' * 40, json.dumps(report), 'refs contents are never read')
+
+    def test_inspect_git_set_is_bounded_and_refuses_a_linked_component(self):
+        production, gitdir = self.projects_gitdir()
+        for i in range(300):
+            (gitdir/f'n{i:03}').write_text('')
+        clock = iter(range(10 ** 6))
+        report, _, reads = self.touched_during(lambda: bb.inspect_git_set(
+            self.synthetic, 'immortal-os-builder', 'adevtool-projects-gitdir', self.root, clock=lambda: next(clock) * 1e-6))
+        facts = report['targets']['projectsGitdir']
+        self.assertEqual((facts['entriesScanned'], len(facts['entries']), facts['truncated'], report['truncated']),
+                         (256, 64, True, True), 'scan 256, report 64')
+        self.assertEqual(reads, [65])
+        late = iter([0])
+        timed = bb.inspect_git_set(self.synthetic, 'immortal-os-builder', 'adevtool-projects-gitdir', self.root,
+                                   clock=lambda: next(late, 61))
+        self.assertEqual((timed['targets']['projectsGitdir']['entriesScanned'], timed['truncated']), (0, True),
+                         'the 60 s deadline stops the scan')
+        # A link anywhere above the target is reported, never traversed into the gitdir.
+        shutil.rmtree(production/'.repo/projects')
+        (production/'elsewhere/vendor').mkdir(parents=True)
+        os.symlink('../elsewhere', production/'.repo/projects')
+        report, touched, reads = self.touched_during(
+            lambda: bb.inspect_git_set(self.synthetic, 'immortal-os-builder', 'adevtool-projects-gitdir', self.root))
+        facts = report['targets']['projectsGitdir']
+        self.assertEqual((facts['symlinkComponent'], reads), (str(production/'.repo/projects'), []))
+        self.assertFalse(any(name in ('scandir', 'open', 'readlink') for name, _ in touched))
+        # A link at the target itself: its text only.
+        shutil.rmtree(production/'elsewhere')
+        os.unlink(production/'.repo/projects')
+        (production/'.repo/projects/vendor').mkdir(parents=True)
+        os.symlink('/home/elsewhere/adevtool.git', production/'.repo/projects/vendor/adevtool.git')
+        report, touched, reads = self.touched_during(
+            lambda: bb.inspect_git_set(self.synthetic, 'immortal-os-builder', 'adevtool-projects-gitdir', self.root))
+        facts = report['targets']['projectsGitdir']
+        self.assertEqual((facts['meta']['type'], facts['linkText'], reads), ('link', '/home/elsewhere/adevtool.git', []))
+        self.assertFalse(any(name in ('scandir', 'open') for name, _ in touched))
+        absent = bb.inspect_git_set(self.synthetic, 'immortal-os-builder', 'adevtool-projects-gitdir', self.root)
+        self.assertEqual(absent['targets']['projectsGitdir']['meta']['type'], 'link')
+        os.unlink(production/'.repo/projects/vendor/adevtool.git')
+        absent = bb.inspect_git_set(self.synthetic, 'immortal-os-builder', 'adevtool-projects-gitdir', self.root)
+        self.assertEqual(absent['targets']['projectsGitdir']['meta']['exists'], False)
+
+    def test_inspect_git_set_refuses_bad_input_and_leaves_inspect_git_unchanged(self):
+        with self.assertRaisesRegex(bb.InvalidInput, '--target-set must be one of'):
+            bb.inspect_git_set(self.synthetic, 'immortal-os-builder', 'production', self.root)
+        with self.assertRaisesRegex(bb.InvalidInput, '--host'):
+            bb.inspect_git_set(self.synthetic, 'Bad Host', 'adevtool-projects-gitdir', self.root)
+        drifted = json.loads(json.dumps(self.synthetic))
+        drifted['preparation']['gitInspection']['targetSets']['adevtool-projects-gitdir']['projectsGitdir']['path'] = \
+            '.repo/project-objects/adevtool.git'
+        for call in (lambda r: bb.inspect_git_set(r, 'immortal-os-builder', 'adevtool-projects-gitdir', self.root),
+                     lambda r: bb.inspect_git(r, 'immortal-os-builder', self.root)):
+            with self.assertRaisesRegex(bb.InvalidInput, 'targetSets must be exactly'):
+                call(drifted)
+        # inspect-git still inspects exactly its two targets, never the target set.
+        production, gitdir = self.projects_gitdir()
+        report, touched, _ = self.touched_during(lambda: bb.inspect_git(self.synthetic, 'immortal-os-builder', self.root))
+        self.assertEqual((report['schema'], set(report['targets'])), ('roseos.blazer-git-inspection.v1', {'production', 'candidate'}))
+        self.assertNotIn('targetSet', report)
+        self.assertFalse(any(name == 'scandir' and path == str(gitdir) for name, path in touched))
+        self.assertEqual(report['targets']['production']['meta']['type'], 'link', 'the production .git link is not followed')
+
+    def test_inspect_git_set_cli_touches_no_other_host_path(self):
+        """In process, against the checked-in recipe: loading and inspecting touch nothing outside this checkout but
+        the one target (absent here) and its ancestors' lstat; the old inspect-git touches exactly what it did."""
+        import contextlib
+        def outside(argv):
+            with contextlib.redirect_stdout(io.StringIO()) as out:
+                code, touched, reads = self.touched_during(lambda: bb.main(argv))
+            self.assertEqual(code, 0)
+            # argparse's gettext probes the interpreter's message catalogues (*/LC_MESSAGES/*.mo) when a locale is set;
+            # those are the interpreter's own lookups, never a recipe or host path.
+            return json.loads(out.getvalue()), sorted({(n, p) for n, p in touched if not p.startswith(str(ROOT) + '/')
+                                                       and not ('/LC_MESSAGES/' in p and p.endswith('.mo'))}), reads
+        report, touched, reads = outside(['inspect-git-set', '--host', 'immortal-os-builder', '--target-set',
+                                          'adevtool-projects-gitdir'])
+        target = '/home/pixelbuild/grapheneos-2026100600/.repo/projects/vendor/adevtool.git'
+        if report['targets']['projectsGitdir']['meta'].get('exists') is False:
+            self.assertEqual(touched, [('lstat', '/home'), ('lstat', '/home/pixelbuild'), ('lstat', target)])
+        self.assertTrue(all(n == 'lstat' or p.startswith(target + '/') or p == target for n, p in touched), touched)
+        old, old_touched, _ = outside(['inspect-git', '--host', 'immortal-os-builder'])
+        self.assertEqual(set(old['targets']), {'production', 'candidate'})
+        if all(t['meta'].get('exists') is False for t in old['targets'].values()):
+            self.assertEqual(old_touched, [('lstat', '/home'), ('lstat', '/home/pixelbuild'),
+                ('lstat', '/home/pixelbuild/grapheneos-2026100600/vendor/adevtool/.git'),
+                ('lstat', '/home/pixelbuild/rose-actions/blazer-prep-41473133543-1/source/vendor/adevtool/.git'),
+                ('stat', '/home/pixelbuild/rose-actions/blazer-prep-41473133543-1/source')], 'inspect-git is unchanged')
+
+    def test_inspect_git_set_cli_takes_only_the_host_and_one_target_set(self):
+        script = str(ROOT/'scripts/blazer-build-only.py')
+        ok = subprocess.run([sys.executable, script, 'inspect-git-set', '--host', 'immortal-os-builder',
+                             '--target-set', 'adevtool-projects-gitdir'], capture_output=True, text=True)
+        self.assertEqual(ok.returncode, 0, ok.stderr)
+        report = json.loads(ok.stdout)
+        self.assertEqual((report['schema'], report['targetSet'], report['targets']['projectsGitdir']['absolutePath']),
+                         ('roseos.blazer-git-target-set-inspection.v1', 'adevtool-projects-gitdir',
+                          '/home/pixelbuild/grapheneos-2026100600/.repo/projects/vendor/adevtool.git'))
+        base = [sys.executable, script, 'inspect-git-set', '--host', 'immortal-os-builder']
+        for argv in ([*base], [*base, '--target-set', 'production'], [*base, '--target-set', 'adevtool-projects-gitdir', '/tmp/x'],
+                     [*base, '--target-set', 'adevtool-projects-gitdir', '--lock', '/tmp/x'],
+                     [*base, '--target-set', 'adevtool-projects-gitdir', '--max-entries', '5'],
+                     [sys.executable, script, 'inspect-git-set', '--target-set', 'adevtool-projects-gitdir'],
+                     [sys.executable, script, 'inspect-git', '--host', 'immortal-os-builder', '--target-set',
+                      'adevtool-projects-gitdir']):
+            with self.subTest(argv[2:]):
+                bad = subprocess.run(argv, capture_output=True, text=True)
+                self.assertEqual((bad.returncode, bad.stdout), (2, ''))
+
     def test_production_candidates_are_flagged_and_walks_are_bounded(self):
         self.reference()
         report = bb.inspect(self.synthetic, self.op(), root=self.root, statvfs=fs(10 ** 15),
@@ -1716,11 +2381,365 @@ class RunTest(Fixture):
         with self.assertRaisesRegex(bb.InvalidInput, 'already exists'):
             bb.run(self.synthetic, 'vendor', self.op(), self.tmp/'r1', root=self.root)
 
-    def test_compile_still_needs_a_measured_allowance(self):
+    def test_the_checked_in_first_build_allowance_admits_exactly_reserve_plus_allowance(self):
         self.generated()
-        report = bb.preflight(self.recipe, 'compile', self.op(integration_dir=str(self.integrated())), statvfs=fs(10 ** 15),
-            lock_probe=lambda path: True)
-        self.assertIn('compileAllowanceBytes is unmeasured', ' '.join(report['problems']))
+        receipts = self.integrated()
+        need = self.recipe['capacity']['reserveBytes'] + self.recipe['capacity']['compileAllowanceBytes']
+        for available, admitted in ((need, True), (need - 1, False)):
+            report = bb.preflight(self.recipe, 'compile', self.op(identity=True, integration_dir=str(receipts)), statvfs=fs(available),
+                                  lock_probe=lambda path: True)
+            space = [p for p in report['problems'] if 'reserve' in p]
+            self.assertEqual(not space, admitted, report['problems'])
+            self.assertEqual((report['facts']['capacity']['boundBytes'], report['facts']['capacity']['boundKind']),
+                             (250 << 30, 'first-build-proposal'))
+
+class GitMetaTest(Fixture):
+    """git-meta against local upstream repositories standing in for the pinned remotes (never a real fetch)."""
+    ENV = {'PATH': '/usr/bin:/bin', 'GIT_CONFIG_NOSYSTEM': '1', 'GIT_AUTHOR_NAME': 't', 'GIT_AUTHOR_EMAIL': 't@t',
+           'GIT_COMMITTER_NAME': 't', 'GIT_COMMITTER_EMAIL': 't@t'}
+
+    def git(self, *args, cwd=None):
+        return subprocess.run(['git', *args], cwd=cwd, env={**self.ENV, 'HOME': str(self.tmp)}, check=True,
+                              capture_output=True, text=True).stdout.strip()
+
+    def projects(self):
+        """Upstream repos with two commits each (the pin is the second); the isolated tree holds the pinned bytes,
+        one integrated (Rose-changed) file, and no .git."""
+        up, rows = self.tmp/'up', []
+        if os.path.lexists(self.src/'vendor/adevtool/.git'):  # the shared fixture's vendor-stage stand-in
+            shutil.rmtree(self.src/'vendor/adevtool/.git')
+        for path in bb.GIT_META_PATHS:
+            name = 'platform_' + path.replace('/', '_')
+            repo = up/name
+            (repo/'res').mkdir(parents=True)
+            (repo/'res/config.xml').write_text('old\n')
+            self.git('init', '-q', str(repo))
+            self.git('-C', str(repo), 'add', '-A')
+            self.git('-C', str(repo), 'commit', '-qm', 'old')
+            (repo/'res/config.xml').write_text('pinned\n')
+            (repo/'keep.txt').write_text(path + '\n')
+            self.git('-C', str(repo), 'add', '-A')
+            self.git('-C', str(repo), 'commit', '-qm', 'pin')
+            revision = self.git('-C', str(repo), 'rev-parse', 'HEAD')
+            work = self.src/path
+            (work/'res').mkdir(parents=True, exist_ok=True)
+            (work/'res/config.xml').write_text('integrated by Rose\n' if path == 'frameworks/base' else 'pinned\n')
+            (work/'keep.txt').write_text(path + '\n')
+            rows.append({'path': path, 'name': name, 'revision': revision})
+        spec = self.synthetic['gitMeta']
+        spec.update(projects=rows, fetchUrlPrefix=f'file://{up}/')
+        return rows
+
+    def run_meta(self, out='r', recipe=None):
+        code = bb.run(recipe or self.synthetic, 'git-meta', self.op(), self.tmp/out, now=lambda: 0, statvfs=fs(10 ** 15),
+                      lock_probe=lambda path: True, root=self.root)
+        done = self.tmp/out/'completed.json'
+        return code, (json.loads(done.read_text()) if done.exists() else None), json.loads((self.tmp/out/'preflight.json').read_text())
+
+    def worktree(self):
+        return {str(p): p.read_bytes() for p in sorted(self.src.rglob('*')) if p.is_file() and '/.git/' not in str(p)}
+
+    def test_each_project_gets_genuine_shallow_metadata_and_the_working_tree_is_untouched(self):
+        rows = self.projects()
+        before = self.worktree()
+        # Neither inherited GIT_* nor a global insteadOf redirect reaches the helper's git.
+        os.environ['GIT_DIR'] = str(self.tmp/'elsewhere/.git')
+        self.addCleanup(os.environ.pop, 'GIT_DIR', None)
+        (self.tmp/'.gitconfig').write_text(f'[url "file://{self.tmp}/nowhere/"]\n\tinsteadOf = file://{self.tmp}/up/\n')
+        code, done, report = self.run_meta()
+        self.assertEqual((report['problems'], code, done['ok']), ([], 0, True), done)
+        self.assertEqual(self.worktree(), before, 'no command touches the working tree, Rose-integrated bytes included')
+        self.assertEqual(done['workingTreeCommands'], [])
+        for row in rows:
+            work = self.src/row['path']
+            self.assertEqual(self.git('-C', str(work), 'rev-parse', 'HEAD'), row['revision'])
+            self.assertEqual((work/'.git/shallow').read_text(), row['revision'] + '\n')
+            self.assertFalse((work/'.git/objects/info/alternates').exists())
+            self.assertFalse((work/'.git/hooks').exists(), 'no template hooks')
+            self.assertEqual(self.git('-C', str(work), 'show', 'HEAD:res/config.xml'), 'pinned')
+            self.assertEqual(done['projects'][row['path']]['revision'], row['revision'])
+        # host-reconcile's own sequence on the result: a shared clone, a sparse checkout of HEAD.
+        base = self.src/'frameworks/base'
+        shadow = self.tmp/'shadow/frameworks/base'
+        self.git('clone', '--quiet', '--shared', '--no-checkout', str(base), str(shadow))
+        self.git('-C', str(shadow), 'sparse-checkout', 'set', '--no-cone', 'res/config.xml')
+        self.git('-C', str(shadow), 'checkout', '--quiet', '--detach', rows[2]['revision'])
+        self.assertEqual((shadow/'res/config.xml').read_text(), 'pinned\n')
+        self.assertEqual((base/'res/config.xml').read_text(), 'integrated by Rose\n')
+
+    def test_an_existing_git_dir_or_the_production_tree_refuses_before_any_process(self):
+        self.projects()
+        (self.src/'build/make/.git').mkdir()
+        code, done, report = self.run_meta()
+        self.assertEqual((code, done), (1, None))
+        self.assertIn('build/make/.git already exists', ' '.join(report['problems']))
+        self.assertFalse((self.src/'frameworks/base/.git').exists())
+        os.rmdir(self.src/'build/make/.git')
+        code = bb.run(self.synthetic, 'git-meta', self.op(source_root=str(self.production)), self.tmp/'r2', now=lambda: 0,
+                      statvfs=fs(10 ** 15), lock_probe=lambda path: True, root=self.root)
+        self.assertEqual(code, 1)
+        self.assertIn('production source root', ' '.join(json.loads((self.tmp/'r2/preflight.json').read_text())['problems']))
+
+    def test_a_wrong_revision_removes_every_git_dir_this_run_created(self):
+        rows = self.projects()
+        before = self.worktree()
+        self.synthetic['gitMeta']['projects'][3]['revision'] = rows[0]['revision']  # not in that repository
+        code, done, _ = self.run_meta()
+        self.assertEqual((code, done['ok'], done['failedProject']), (1, False, rows[3]['path']))
+        self.assertIn('fetch failed', done['error'])
+        self.assertEqual([r['removed'] for r in done['createdRemoved']], [True] * 4)
+        for row in rows:
+            self.assertFalse(os.path.lexists(self.src/row['path']/'.git'))
+        self.assertEqual(self.worktree(), before)
+
+    def test_the_byte_bound_and_a_non_shallow_or_foreign_head_refuse(self):
+        rows = self.projects()
+        tight = json.loads(json.dumps(self.synthetic))
+        tight['gitMeta']['boundBytes'] = 1
+        code, done, _ = self.run_meta(recipe=tight)
+        self.assertEqual((code, done['ok'], done['failedProject']), (1, False, rows[0]['path']))
+        self.assertIn('above the 1-byte bound', done['error'])
+        self.assertFalse(os.path.lexists(self.src/rows[0]['path']/'.git'), 'its own .git is removed')
+        real = bb.supervise
+        def unshallow(argv, *a, **k):
+            result = real(argv, *a, **k)
+            if 'update-ref' in argv:
+                (Path(argv[2])/'.git/shallow').unlink()
+            return result
+        bb.supervise = unshallow
+        try:
+            code, done, _ = self.run_meta(out='r2')
+        finally:
+            bb.supervise = real
+        self.assertEqual(code, 1)
+        self.assertIn('not shallow at exactly the pinned commit', done['error'])
+        self.assertFalse(os.path.lexists(self.src/rows[0]['path']/'.git'))
+        def foreign_head(argv, *a, **k):
+            result = real(argv, *a, **k)
+            if 'update-ref' in argv:  # HEAD moved off the pin after it was written; shallow still names the pin
+                (Path(argv[2])/'.git/HEAD').write_text('ref: refs/heads/elsewhere\n')
+            return result
+        bb.supervise = foreign_head
+        try:
+            code, done, _ = self.run_meta(out='r3')
+        finally:
+            bb.supervise = real
+        self.assertEqual(code, 1)
+        self.assertIn('HEAD is not exactly the pinned revision', done['error'])
+
+    def test_the_checked_in_recipe_pins_the_seven_manifest_projects(self):
+        spec = self.recipe['gitMeta']
+        self.assertEqual([r['path'] for r in spec['projects']], list(bb.GIT_META_PATHS))
+        self.assertEqual({r['path']: r['revision'] for r in spec['projects']}['vendor/adevtool'], ADEVTOOL)
+        self.assertEqual((spec['objectsSource'], spec['fetchUrlPrefix'], spec['boundBytes'], spec['projectTimeoutSeconds'],
+                          spec['timeoutSeconds']), ('public-fetch', 'https://github.com/GrapheneOS/', 8 << 30, 1800, 5400))
+        argv = bb.commands(self.recipe, self.op())['git-meta']['projects'][0]['argv']
+        self.assertEqual(argv[1][3:], ['fetch', '--quiet', '--depth=1', '--no-tags',
+                                       'https://github.com/GrapheneOS/platform_build', spec['projects'][0]['revision']])
+        env = bb.git_meta_env(self.src, self.tmp/'h', spec['fetchUrlPrefix'])
+        self.assertEqual((env['GIT_ALLOW_PROTOCOL'], env['GIT_CONFIG_GLOBAL'], env['GIT_TERMINAL_PROMPT'], env['PATH']),
+                         ('https', os.devnull, '0', '/usr/bin:/bin'))
+        self.assertFalse(any(k.startswith('GIT_DIR') for k in env))
+
+class CompileRunTest(Fixture):
+    @property
+    def out(self):
+        return self.src/f'out-blazer-build-{self.identity()["build_number"]}'
+
+    def envsetup(self, make='mkdir -p "$OUT_DIR"; echo "$@" > "$OUT_DIR/goals"'):
+        (self.src/'build').mkdir(exist_ok=True)
+        (self.src/'build/envsetup.sh').write_text(f"""lunch() {{ export TARGET_PRODUCT=blazer; }}
+m() {{ env | grep '^GIT_' | sort > {str(self.tmp/'compile-git-env')!r}; echo "$PATH" > {str(self.tmp/'compile-path')!r}; {make}; }}
+""")
+
+    def compile(self, recipe=None, statvfs=None, out='r', **change):
+        if not (self.src/'vendor/google_devices/blazer').exists():
+            self.generated()
+        if not hasattr(self, 'receipts'):
+            self.receipts = self.integrated()
+        receipts = self.receipts
+        code = bb.run(recipe or self.synthetic, 'compile', self.op(identity=True, integration_dir=str(receipts), **change), self.tmp/out,
+                      now=lambda: 0, statvfs=statvfs or fs(10 ** 15), lock_probe=lambda path: True, root=self.root)
+        done = self.tmp/out/'completed.json'
+        return code, (json.loads(done.read_text()) if done.exists() else None), json.loads((self.tmp/out/'preflight.json').read_text())
+
+    OUTPUTS = ('p=$OUT_DIR/target/product/blazer; h=$OUT_DIR/host/linux-x86/obj/ETC/otatools-packagelinux_glibc_x86_64_intermediates; '
+               'mkdir -p $p/obj/PACKAGING/target_files_intermediates $h; printf VNDRBOOT > $p/vendor_boot.img; '
+               'printf VNDRBOOT > $p/vendor_kernel_boot.img; '
+               'python3 -c "import zipfile,sys; z=zipfile.ZipFile(sys.argv[1],\'w\'); [z.writestr(n,\'x\') for n in sys.argv[2:]]" '
+               '$h/otatools-packagelinux_glibc_x86_64 bin/x releasetools/y; '
+               'python3 -c "import zipfile,sys; z=zipfile.ZipFile(sys.argv[1],\'w\'); [z.writestr(n,\'x\') for n in sys.argv[2:]]" '
+               '$p/obj/PACKAGING/target_files_intermediates/blazer-target_files.zip META/misc_info.txt SYSTEM/build.prop')
+
+    def test_compile_collects_signing_inputs_and_refuses_missing_outputs(self):
+        self.envsetup(self.OUTPUTS)
+        code, done, _ = self.compile()
+        self.assertEqual((code, done['ok'], done['outputs']['verdict'], done['outputs']['signed']), (0, True, 'complete', False), done)
+        arts = done['outputs']['artifacts']
+        tf = self.out/'target/product/blazer/obj/PACKAGING/target_files_intermediates/blazer-target_files.zip'
+        self.assertEqual((arts['targetFiles']['path'], arts['targetFiles']['sha256']),
+                         (str(tf), hashlib.sha256(tf.read_bytes()).hexdigest()))
+        self.assertEqual({k: a['state'] for k, a in arts.items()}, dict.fromkeys(
+            ('vendorBootImage', 'vendorKernelBootImage', 'otatools', 'targetFiles'), 'collected'))
+        self.assertEqual(arts['otatools']['format'], 'zip')
+        tf.unlink()
+        shutil.rmtree(self.out/'target/product/blazer/obj')
+        self.out.rename(self.tmp/'kept-out')
+        self.envsetup(self.OUTPUTS + '; rm $p/obj/PACKAGING/target_files_intermediates/blazer-target_files.zip')
+        code, done, _ = self.compile(out='r2')
+        self.assertEqual((code, done['ok'], done['outputs']['artifacts']['targetFiles']['state']), (1, False, 'missing'))
+        self.assertIn('expected outputs are not all collected', done['error'])
+
+    def test_compile_runs_isolated_with_its_goals_and_records_the_honest_measure(self):
+        self.envsetup(self.OUTPUTS + '; echo "$@" > "$OUT_DIR/goals"')
+        self.generated()
+        self.receipts = self.integrated()
+        # An inherited GIT_* (an inherited GIT_DIR would also redirect the integration check's own lookup of this
+        # checkout, which then refuses) never reaches the build.
+        os.environ['GIT_INHERITED_BY_THE_HELPER'] = '1'
+        self.addCleanup(os.environ.pop, 'GIT_INHERITED_BY_THE_HELPER', None)
+        code, done, report = self.compile()
+        self.assertEqual(report['problems'], [])
+        self.assertEqual((code, done['ok'], done['stopped'], done['signed'], done['releaseReady']), (0, True, None, False, False), done)
+        self.assertEqual((self.out/'goals').read_text(),
+                         '-j16 vendorbootimage vendorkernelbootimage target-files-package otatools-package\n')
+        self.assertEqual((self.tmp/'compile-git-env').read_text(), f'GIT_CEILING_DIRECTORIES={self.src}\n')
+        self.assertEqual((self.tmp/'compile-path').read_text(), '/usr/bin:/bin\n')
+        self.assertEqual((done['boundBytes'], done['boundKind'], done['measure'], done['enforcement'], done['outDir']),
+                         (10, 'first-build-proposal', 'filesystem-available-drop', 'sampled-stop', self.out.name))
+        self.assertEqual((done['startAvailableBytes'], done['consumedBytes']), (10 ** 15, 0))
+
+    def test_the_allowance_reserve_and_timeout_stop_the_build_and_keep_outputs(self):
+        self.envsetup('mkdir -p "$OUT_DIR"; touch "$OUT_DIR/partial"; sleep 30')
+        calls = []
+        def shrinking(path):
+            calls.append(path)
+            return types.SimpleNamespace(f_bavail=10 ** 15 - 100 * (len(calls) - 1), f_frsize=1, f_blocks=2 * 10 ** 15)
+        started = time.monotonic()
+        code, done, _ = self.compile(statvfs=shrinking)
+        self.assertLess(time.monotonic() - started, 20, 'the sampled stop ends the group long before the child would')
+        self.assertEqual((code, done['ok']), (1, False))
+        self.assertIn('above the 10-byte bound', done['stopped'])
+        self.assertIn('outputs are kept, not deleted', done['error'])
+        self.assertTrue((self.out/'partial').exists())
+        # Admission needs reserve + allowance free, so a drop below the reserve normally trips the allowance first; the
+        # reserve stop matters when another writer took space between preflight and start.
+        roomy = json.loads(json.dumps(self.synthetic))
+        roomy['capacity']['compileAllowanceBytes'] = 10 ** 6
+        reserve = roomy['capacity']['reserveBytes']
+        falling = iter([reserve + 10 ** 7, reserve + 5] + [reserve - 1] * 10 ** 6)
+        shutil.rmtree(self.out)
+        code, done, _ = self.compile(recipe=roomy, out='r2', statvfs=lambda path: types.SimpleNamespace(
+            f_bavail=next(falling), f_frsize=1, f_blocks=2 * 10 ** 15))
+        self.assertEqual(code, 1)
+        self.assertIn('fell below the reserve', done['stopped'])
+        self.assertEqual(done['startAvailableBytes'], reserve + 5)
+        brief = json.loads(json.dumps(self.synthetic))
+        brief['compile']['timeoutSeconds'] = 1
+        shutil.rmtree(self.out)
+        code, done, _ = self.compile(recipe=brief, out='r3')
+        self.assertEqual((code, done['stopped']), (1, 'exceeded 1 s'))
+
+    def test_compile_never_runs_in_the_production_tree_or_on_a_full_filesystem(self):
+        self.envsetup()
+        code, done, report = self.compile(source_root=str(self.production))
+        self.assertEqual((code, done), (1, None), 'refused before any process starts')
+        self.assertIn('production source root', ' '.join(report['problems']))
+        self.assertFalse((self.production/self.out.name).exists())
+        tight = self.synthetic['capacity']['reserveBytes'] + self.synthetic['capacity']['compileAllowanceBytes'] - 1
+        code, done, report = self.compile(statvfs=fs(tight), out='r2')
+        self.assertEqual((code, done), (1, None))
+        self.assertIn('below the reserve', ' '.join(report['problems']))
+        self.assertFalse(self.out.exists())
+
+    def test_the_build_identity_is_bound_to_the_admitted_inputs(self):
+        self.envsetup()
+        self.generated()
+        self.receipts = self.integrated()
+        bound = self.identity()
+        self.assertEqual(self.preflight('compile', integration_dir=str(self.receipts))['problems'], [])
+        report = self.preflight('compile', integration_dir=str(self.receipts))
+        reservation = self.tmp/'blazer-allocations'/f'{bound["build_number"]}.json'
+        self.assertEqual(report['facts']['buildIdentity'], {'buildNumber': bound['build_number'], 'buildDatetime': bound['build_datetime'],
+            'inputsReceiptBuild': bound['build_number'], 'reservation': str(reservation), 'reservedAtEpoch': int(bound['build_datetime']),
+            'buildDatetimeUtc': f'{bound["build_number"][:4]}-{bound["build_number"][4:6]}-{bound["build_number"][6:8]}T12:00:00Z'})
+        self.assertEqual(report['buildIdentity'], {'buildNumber': bound['build_number'], 'buildDatetime': bound['build_datetime']})
+        # T is bound to the build's own reservation, not merely accepted by range: a plausible other second refuses.
+        self.assertIn(f'is not the reservation reservedAt of build {bound["build_number"]}', ' '.join(self.preflight(
+            'compile', integration_dir=str(self.receipts), build_datetime=str(int(bound['build_datetime']) + 1))['problems']))
+        original = reservation.read_text()
+        for change, pattern in (
+                (dict(integrationDir='/elsewhere/blazer-reconcile-x'), 'names integration /elsewhere'),
+                (dict(build='2026103199'), 'is not exactly the roseos.blazer-allocation.v1 reservation'),
+                (dict(schema='other'), 'is not exactly the roseos.blazer-allocation.v1 reservation'),
+                (dict(extra=1), 'is not exactly the roseos.blazer-allocation.v1 reservation'),
+                (dict(reservedAt='2026-10-31 12:00'), 'has no UTC reservedAt')):
+            with self.subTest(pattern):
+                self.reserve(self.receipts, **change)
+                self.assertIn(pattern, ' '.join(self.preflight('compile', integration_dir=str(self.receipts))['problems']))
+        reservation.unlink()
+        self.assertIn('no readable reservation', ' '.join(self.preflight('compile', integration_dir=str(self.receipts))['problems']))
+        (self.tmp/'elsewhere.json').write_text(original)
+        os.symlink(self.tmp/'elsewhere.json', reservation)
+        self.assertIn('no readable reservation', ' '.join(self.preflight('compile', integration_dir=str(self.receipts))['problems']),
+                      'a linked reservation is never followed')
+        reservation.unlink()
+        reservation.write_text(original)
+        day = int(bound['build_datetime']) - 12 * 3600
+        other = str(int(bound['build_number']) + 1)
+        for change, pattern in (
+                (dict(build_number=other), f'--build-number {other} is not the admitted inputs build {bound["build_number"]}'),
+                (dict(build_datetime=str(day - 1)), 'is before build'),
+                (dict(build_datetime=str(day)), 'is not the reservation reservedAt'),
+                (dict(build_datetime=str(int(time.time()) + 3600)), 'is in the future'),
+                (dict(build_number=None), 'compile needs --build-number'),
+                (dict(build_datetime=None), 'compile needs --build-datetime')):
+            with self.subTest(pattern):
+                self.assertIn(pattern, ' '.join(self.preflight('compile', integration_dir=str(self.receipts), **change)['problems']))
+        for value in ('202611031', '0026110301', '2026110301x', ''):
+            with self.subTest(value), self.assertRaisesRegex(bb.InvalidInput, 'must be a ten-digit YYYYMMDDNN'):
+                self.op(build_number=value)
+        for value in ('0', '01793718000', '1793718000.5', '-1', '1234567890123'):
+            with self.subTest(value), self.assertRaisesRegex(bb.InvalidInput, r'must be epoch seconds \(1-12 digits\)'):
+                self.op(build_datetime=value)
+        self.assertEqual(self.op(build_datetime='1793718000')['buildDatetime'], '1793718000')
+        self.assertIn('only compile takes --build-number and --build-datetime',
+                      ' '.join(bb.preflight(self.synthetic, 'lunch', self.op(identity=True), statvfs=fs(10 ** 15),
+                                            lock_probe=lambda path: True, root=self.root)['problems']))
+        code, done, _ = self.compile(build_number=other)
+        self.assertEqual((code, done), (1, None), 'a mismatched identity starts nothing')
+
+    def test_the_runner_identity_never_reaches_the_build(self):
+        self.envsetup('env | grep -E "^BUILD_(NUMBER|DATETIME)" | sort > ' + str(self.tmp/'identity-env') + '; ' + self.OUTPUTS)
+        for name, value in (('BUILD_NUMBER', '1111111111'), ('BUILD_DATETIME', '1'), ('BUILD_DATETIME_FILE', '/tmp/runner-date')):
+            os.environ[name] = value
+            self.addCleanup(os.environ.pop, name, None)
+        code, done, _ = self.compile()
+        bound = self.identity()
+        self.assertEqual((code, done['ok']), (0, True), done)
+        self.assertEqual((self.tmp/'identity-env').read_text(),
+                         f'BUILD_DATETIME={bound["build_datetime"]}\nBUILD_NUMBER={bound["build_number"]}\n')
+        started = json.loads((self.tmp/'r/started.json').read_text())
+        self.assertEqual((started['command']['env']['BUILD_NUMBER'], started['command']['env']['BUILD_DATETIME'],
+                          started['command']['env']['OUT_DIR']), (bound['build_number'], bound['build_datetime'], self.out.name))
+        pair = {'buildNumber': bound['build_number'], 'buildDatetime': bound['build_datetime']}
+        self.assertEqual((done['buildIdentity'], started['buildIdentity'], done['outDir']), (pair, pair, self.out.name))
+        self.assertEqual(json.loads((self.tmp/'r/preflight.json').read_text())['buildIdentity'], pair)
+        self.assertTrue(done['outputs']['outDir'].endswith(self.out.name))
+
+    def test_each_build_writes_a_fresh_out_dir_and_earlier_outputs_are_preserved(self):
+        legacy = self.src/'out-blazer-build'
+        (legacy/'target').mkdir(parents=True)
+        (legacy/'target/kept.img').write_bytes(b'an earlier build')
+        before = self.snapshot(legacy)
+        self.envsetup(self.OUTPUTS)
+        code, done, _ = self.compile()
+        self.assertEqual((code, done['ok'], done['outDir']), (0, True, self.out.name), done)
+        self.assertEqual(self.snapshot(legacy), before, 'an earlier OUT_DIR is never read, moved or written')
+        code, done, report = self.compile(out='r2')
+        self.assertEqual((code, done), (1, None))
+        self.assertIn(f'{self.out.name} already exists; refusing to reuse or overwrite an OUT_DIR', ' '.join(report['problems']))
+        self.assertEqual(self.snapshot(legacy), before)
 
 if __name__ == '__main__':
     unittest.main()
