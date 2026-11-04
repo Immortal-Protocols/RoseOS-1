@@ -296,7 +296,8 @@ def overlay_roles(projects, evidence):
         if target in evidence_paths or target in goals:
             raise ValueError(f'{target}: used by a compile goal or flagEvidence')
     return {
-        'required': {'targets': required, 'rule': 'present with exactly its sha256 in overlays'},
+        'required': dict({'targets': required, 'rule': 'present with exactly its sha256 in overlays'},
+            **({'prefixes': list(REQUIRED_OVERLAYS)} if SCHEMA >= 3 else {})),
         'notAnInput': {'targets': not_input, 'rule': 'exact target only: present with any bytes, or absent; excluded '
             'from its project\'s treePin by exact path (treePin.unlisted.excludedPaths); never a source of '
             f'{" or ".join(COMPILE_TARGETS)}, a compileGoals entry or a flagEvidence input. Adding or removing one changes the '
@@ -857,6 +858,12 @@ BUNDLE_REPORT = {
         'observed': [{'patches': ['project', 'name', 'sha256']}, {'overlays': ['target', 'sha256']},
             'notAnInputOverlays', 'unclassified'],
     },
+    'values': {
+        'registration.source': {'equals': 'base.registration'},
+        'run.bindingSha256': {'is': 'the sha256 of the reviewed run-association document\'s bytes (runId, runAttempt, '
+            'headSha, label, createdAt, updatedAt), which the adapter\'s own host binding names by path and sha256'},
+        'observed.overlays': {'under': 'overlayRoles.required.prefixes'},
+    },
     'producer': 'Release\'s producer script at a reviewed commit; never the adapter, the observer or this checker',
     'association': [
         'run is entered by review from GitHub run metadata (no live API, no actions:read), with the recipe lines at '
@@ -868,7 +875,7 @@ BUNDLE_REPORT = {
     ],
     'observed': {
         'patches': 'base.registration.order, each with the sha256 of headSha:os/patches/<name>',
-        'overlays': 'every headSha:os/overlays file whose target is under a required prefix',
+        'overlays': 'every headSha:os/overlays file whose target is under one of overlayRoles.required.prefixes',
         'notAnInputOverlays': 'the present targets on the exact notAnInput allowlist',
         'unclassified': 'anything else under the three projects; must be empty',
     },

@@ -52,6 +52,11 @@ and `os/overlays`, so nothing applies or copies them.
 - **`base.bundleReport`:** the schema of the integration bundle report that `verifyBaseApplyCandidate` needs. It is
   distinct from `bundleContent`. Release's producer writes it from history; the contract only states its fields,
   association, observed sections and rules.
+  - Its `values` state what a producer cannot otherwise know as data: `registration.source` is exactly
+    `base.registration`, `run.bindingSha256` is the sha256 of the reviewed run-association document that the adapter's
+    host binding names, and observed overlays are those under `overlayRoles.required.prefixes`.
+  - Those prefixes are also data now (`packages/apps/Launcher3/`, `build/release/`), from the same constant the
+    checker uses.
 - **`branches.requires`, `forbids` and `definitions`.** For example, `verifyIntegrated` needs the source tree, the
   lunch inputs and the run's own policy receipt, and forbids a bundle report or reconstructed Git objects. No
   `reconstructSource` is approved.

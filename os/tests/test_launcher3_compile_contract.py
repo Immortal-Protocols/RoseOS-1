@@ -33,7 +33,7 @@ class Launcher3CompileContractTest(unittest.TestCase):
     SCRIPT = ROOT/'scripts/launcher3-compile-contract.py'
     MANIFEST = ROOT/'os/compile-contracts/launcher3-quickstep-lib.json'
     # The agreed version (#410). Changing the manifest changes this, and the change needs re-agreement with Release.
-    AGREED_SHA256 = '466f5ab88e4c110318e6e2533635db9bfcbf6ff73fc40dc54fbcc4c72f0593b4'
+    AGREED_SHA256 = 'd444df92f170de1b2e7199cec954101f720f9e98e0b3f534c7f3a4cac87e43d5'
 
     def contract(self):
         import importlib.util
@@ -121,6 +121,21 @@ class Launcher3CompileContractTest(unittest.TestCase):
                 'refused', 'association only, never observed', 'never stands in for base-exact'):
             self.assertIn(rule, rules)
         self.assertNotEqual(set(report), set(self.manifest()['base']['bundleContent']))
+        # The values a producer and the adapter need as data, never from this checker's code.
+        self.assertEqual(report['values']['registration.source'], {'equals': 'base.registration'})
+        self.assertIn('reviewed run-association document', report['values']['run.bindingSha256']['is'])
+        self.assertIn('host binding names by path and sha256', report['values']['run.bindingSha256']['is'])
+        self.assertEqual(report['values']['observed.overlays'], {'under': 'overlayRoles.required.prefixes'})
+        roles = self.manifest()['overlayRoles']
+        contract = self.contract()
+        self.assertEqual(roles['required']['prefixes'], list(contract.REQUIRED_OVERLAYS))
+        self.assertEqual(roles['required']['prefixes'], ['packages/apps/Launcher3/', 'build/release/'])
+        for target in roles['required']['targets']:
+            self.assertTrue(target.startswith(tuple(roles['required']['prefixes'])), target)
+        import copy
+        changed = copy.deepcopy(self.manifest())
+        changed['overlayRoles']['required']['prefixes'].append('frameworks/base/')
+        self.assertTrue(contract.check(changed), 'the prefixes are checked data')
 
     def test_each_branch_states_what_it_requires_and_forbids(self):
         branches = self.manifest()['branches']
