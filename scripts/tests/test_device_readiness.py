@@ -28,6 +28,8 @@ import unittest
 
 SCRIPTS = Path(__file__).resolve().parents[1]
 ROOT = SCRIPTS.parent
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import os_release_shape as shape  # noqa: E402
 WORKFLOW = (ROOT/'.github/workflows/os-release.yml').read_text()
 FIXTURES = ROOT/'os/tests/fixtures/adevtool-17df3b79'
 CONTRACT = json.loads((ROOT/'os/devices/pixel10.json').read_text())
@@ -121,13 +123,15 @@ class WorkflowTest(unittest.TestCase):
         return '\n'.join(line for line in script.splitlines() if 'git merge-base' not in line)
 
     def test_the_guard_binds_readiness_to_the_recipe_and_frankel_and_admits_no_extras(self):
-        base = dict(os.environ, MODE='device-readiness', ROSE_DEVICE='frankel', CANDIDATE_SHA='a' * 40, GITHUB_SHA='a' * 40,
-            BUILD_NUMBER='2026102901', BUILD_TIMESTAMP='1793300000', APPS='[["dev.pixel.voice", 309]]', RESUME_STAGE='none',
-            RESUME_UNSIGNED_SHA256='', RESUME_SOURCE_RUN='', RESUME_SIGNED_SHA256='', REUSE_BINDING='', PROMOTE='false',
-            APP_PUBLISH='false', ALPHA_RECOVER='false')
+        # The bare dispatch's workflow env (every input at its declared default), then this test's values.
+        base = {**os.environ, **shape.dispatch_env(), **dict(MODE='device-readiness', ROSE_DEVICE='frankel',
+            CANDIDATE_SHA='a' * 40, GITHUB_SHA='a' * 40, BUILD_NUMBER='2026102901', BUILD_TIMESTAMP='1793300000',
+            APPS='[["dev.pixel.voice", 309]]', RESUME_STAGE='none', RESUME_UNSIGNED_SHA256='', RESUME_SOURCE_RUN='',
+            RESUME_SIGNED_SHA256='', REUSE_BINDING='', PROMOTE='false', APP_PUBLISH='false', ALPHA_RECOVER='false')}
         cases = [({}, True), ({'GITHUB_SHA': 'b' * 40}, False), ({'ROSE_DEVICE': 'blazer'}, False), ({'ROSE_DEVICE': 'rango'}, False),
             ({'PROMOTE': 'true'}, False), ({'APP_PUBLISH': 'true'}, False), ({'ALPHA_RECOVER': 'true'}, False),
             ({'RESUME_STAGE': 'sign', 'RESUME_UNSIGNED_SHA256': 'c' * 64}, False), ({'REUSE_BINDING': '{}'}, False),
+            ({'MUSTANG_PUBLISH_OTA': 'true'}, False), ({'MUSTANG_COMPILE_RUN': '1'}, False), ({'MUSTANG_BOOTSTRAP_RUN': '1'}, False),
             ({'MODE': 'os-release', 'GITHUB_SHA': 'b' * 40}, True)]
         for change, ok in cases:
             result = subprocess.run(['bash', '-euo', 'pipefail', '-c', self.guard()], cwd=ROOT, env={**base, **change},
