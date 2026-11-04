@@ -92,12 +92,13 @@ CONFIRMATION = {
         'sha256 ba64ea3114f46925446c204261097aebf963a923eb355860a6f2e54bb7262be2. Only RoseEdgeMicSlot.java\'s after-image '
         'changes (blob a9c4a5dd62f652dcf1044b6b9774ed851083f989); the other after-images, the WMShellModule pre-image, '
         'the inputs and the goals are unchanged',
-    'rebound': 'OS Core to OS Product, 2026-11-04 16:40 UTC, from #540 head d8f19fe (the javac fix for Frankel run '
+    'rebound': 'OS Core to OS Product, 2026-11-04 16:41 UTC, from #540 head d8f19fe (the javac fix for Frankel run '
         '41861964515: RoseEdgeMicSlot.Control\'s super(mContext) named View\'s own field): patch sha256 '
         'a10a73b983430d26d432d90c8555ab052dd6917142dfad1d5d2c2d9f0efe7f75. Only RoseEdgeMicSlot.java\'s after-image '
         'changes (sha256 0768a732126c0cf14bdc0aee7d08ed5ea67d286cf0968e3828a87df58004a54a, blob '
-        '3a9ef4bf55ae44e3ea5a4fbd0112b9ead6e32833); the other after-images, the WMShellModule pre-image, the inputs and '
-        'the goals are unchanged, confirmed as the contract\'s OS Core inputs',
+        '3a9ef4bf55ae44e3ea5a4fbd0112b9ead6e32833); the other after-images and the WMShellModule pre-image are unchanged; '
+        'the inputs, the goals (WindowManager-Shell, SystemUI-core) and flagEvidence (none) are unchanged: a field '
+        'rename inside one file, with no new imports, files, classpath inputs or flags',
 }
 
 # Where each goal's sources come from, read from the pinned Android.bp files (committed byte for byte under
