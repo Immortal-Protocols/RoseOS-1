@@ -65,6 +65,7 @@ python3 os/tests/test_rose_agent_self_update.py
 python3 os/tests/test_rose_switcher.py
 python3 os/tests/test_rose_edge_resize_staged.py
 python3 os/tests/test_launcher3_compile_contract.py
+python3 os/tests/test_frameworks_base_wmshell_contract.py
 python3 os/tests/test_frankel_lunch_inputs.py
 python3 os/tests/test_automated_devices_contract.py
 python3 os/tests/test_rose_edge_shell.py
@@ -82,6 +83,8 @@ python3 scripts/tests/test_permission_apex.py
 python3 scripts/tests/test_release_candidate_contract.py
 python3 scripts/tests/test_release_allocate.py
 python3 scripts/tests/test_release_chain.py
+# Mustang one-button chain wiring (canned run metadata; no network, token, host or dispatch).
+python3 scripts/tests/test_mustang_ota_chain_workflow.py
 python3 scripts/tests/test_agent_beta_auto.py
 python3 scripts/tests/test_release_transport.py
 python3 scripts/tests/test_release_acceptance.py
@@ -252,6 +255,9 @@ java -cp "$JAVA_TESTS/HomeAppGroups" dev.pixel.voice.HomeAppGroupsTest
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/HomeRoseLaunch" \
  workspace/rose-agent/app/src/dev/pixel/voice/HomeRoseLaunch.java workspace/rose-agent/app/tests/HomeRoseLaunchTest.java
 java -cp "$JAVA_TESTS/HomeRoseLaunch" dev.pixel.voice.HomeRoseLaunchTest
+java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/RoseMicInput" \
+ workspace/rose-agent/app/src/dev/pixel/voice/RoseMicInput.java workspace/rose-agent/app/tests/RoseMicInputTest.java
+java -cp "$JAVA_TESTS/RoseMicInput" dev.pixel.voice.RoseMicInputTest
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/GestureContract" \
  workspace/rose-agent/app/src/dev/pixel/voice/GestureContract.java workspace/rose-agent/app/tests/GestureContractTest.java
 java -cp "$JAVA_TESTS/GestureContract" dev.pixel.voice.GestureContractTest

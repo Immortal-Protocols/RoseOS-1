@@ -3,38 +3,63 @@
 input contract os/compile-contracts/launcher3-quickstep-lib.json (#410/#440). It reads the contract as data only and never
 loads OS Product's checker (scripts/launcher3-compile-contract.py), which B's tests use for parity.
 
-  check                       hosted and on the builder: the contract is the pinned version (MANIFEST_SHA256), the
-                              binding os/build-only/launcher3-compile-host.json is exact, and every input the selected
-                              branch needs is bound. Exit 4 while any is null. Reads no host path.
+  check                       hosted and on the builder: the contract is the pinned version (MANIFEST_SHA256; the
+                              text it states and this adapter implements, CONTRACT_TEXT_SHA256), the binding
+                              os/build-only/launcher3-compile-host.json is exact, every input the selected branch
+                              requires is bound and every input it forbids is null (branches.requires, forbids), and
+                              no bound receipt or report is a file of the source tree or of a launcher3-compile run
+                              root. Exit 4 while any required input is null. Reads no host path. The lunch is the
+                              contract's lunch (definitions.lunch): the target of OS Product's lunch-input contract
+                              os/compile-contracts/frankel-lunch-inputs.json at its pin (LUNCH_INPUTS_SHA256), which also
+                              needs the binding's adevtoolGit (public-fetch) and that contract's own admission of the
+                              public-fetch class for the pinned manifest's source, with its publicFetch and workingTree
+                              exactly this adapter's mechanism; otherwise exit 4 (adevtool_git_missing or
+                              adevtool_git_unadmitted), or 2 when the contract and this adapter disagree or the lunch
+                              is not the contract's target.
   run --run-id --attempt      under the nonblocking shared builder lock, into a new per-run root
                               <taskParent>/launcher3-compile-<run>-<attempt>/{tree,out,home,tmp,receipts}:
                               1. byte-copy the bound source tree (read only; alpha exclusion policy: outputs, .repo,
-                                 .git, keys, releases), refused before writing when the selection projects above
-                                 SOURCE_BOUND_BYTES or available minus the projection is below RESERVE_BYTES;
+                                 .git, keys, releases; less exactly what vendor/adevtool's pinned .gitignore ignores),
+                                 refused before writing when the selection projects above SOURCE_BOUND_BYTES or
+                                 available minus the projection is below RESERVE_BYTES;
                               2. check the copy for the bound branch, refusing at the first failure by name:
                                  verifyIntegrated - every affected file equals its post-image (config.xml only through
                                  the contract's rewrite rules with the bound policy receipt and frankel's applyArgs),
                                  every required overlay is present at its sha256 and every other path of the three
                                  projects matches its tree pin (Git blob IDs recomputed from the copied bytes), with no
                                  extra path; nothing is applied;
-                                 verifyBaseApplyCandidate - base-exact (the bound Infra bundle report equals
-                                 base.bundleContent and the copy equals the base images and base tree pins),
-                                 delta-preimages (every delta file and overlay at its before image), isolated-apply (the
-                                 digest-checked edge patch with exactly the contract's git apply steps and the candidate
-                                 overlays, in the copy only, never the source tree), final-exact (as verifyIntegrated);
+                                 verifyBaseApplyCandidate - base-exact (the bound rose-integration-bundle-report v1
+                                 is exactly base.bundleReport's form, the association it shows holds and its observed
+                                 bundle equals base.bundleContent; then the copy equals the base images and base tree
+                                 pins), delta-preimages (every delta file and overlay at its before image),
+                                 isolated-apply (every digest-checked candidate patch passes `git apply --check` on the
+                                 unchanged copy before any is applied, then each is applied with exactly the
+                                 contract's steps and the candidate overlays installed, in the copy only, never the
+                                 source tree), final-exact (as verifyIntegrated);
                                  reconstruct - needs an approved genuine-Git-object source, none is bound: refused;
                                  anything else (mixed, pre-images, unknown hashes, missing or extra files) - refused,
                                  nothing is reset;
                               3. lunch on its own (LUNCH_SECONDS; a failed lunch is reported and m is not run), then
                                  `m -j8 Launcher3QuickStepLib <flag caches>`, with OUT_DIR, HOME, TMPDIR and XDG_* inside
                                  the run root, no ccache, GIT_CEILING_DIRECTORIES at the copy root and no system or user
-                                 git configuration (a lunch product in VERSION_CHECKED_PRODUCTS is refused before the
-                                 copy: adevtool_git_missing); sampled stops (every SAMPLE_SECONDS)
+                                 git configuration (without an admitted adevtool fetch, or for a lunch other than the
+                                 lunch-input contract's target, the run is refused before the copy); before that lunch,
+                                 in the copy and with no network, the lunch inputs: vendor/adevtool exactly its pinned
+                                 tree (every listed path at its mode and blob, nothing else, no .git), the version
+                                 check's error form, the generated vendor files, the finder markers, the kernel module
+                                 lists and the manifest links and copies; then the public fetch of exactly the pinned
+                                 adevtool commit into a new vendor/adevtool/.git (no hooks, remote, alternates or
+                                 inherited configuration; ADEVTOOL_FETCH_SECONDS, ADEVTOOL_GIT_BYTES), verified (HEAD,
+                                 shallow, commit, root tree, full fsck, its tree equals the pinned listing, nothing
+                                 redirects outside the copy) and removed again on any failure; sampled stops (every
+                                 SAMPLE_SECONDS)
                                  on the output filesystem's growth (OUTPUT_STOP_BYTES) and the process group's resident
                                  memory (MEMORY_STOP_BYTES), and a wall-clock COMPILE_SECONDS; TERM, then KILL;
-                              4. a sanitized report.json: the branch, the classification, the bound inputs, the compile
-                                 outcome, the source-list and classpath proof and both aconfig flag values. Never a raw
-                                 log, never current bytes as provenance.
+                              4. a sanitized report.json: the branch, the classification, the bound inputs (for the
+                                 candidate branch the bundle report used and what of its association was taken on
+                                 trust), the compile outcome, the source-list and classpath proof and both aconfig flag
+                                 values; a refusal says whether any candidate write started. Never a raw log, never
+                                 current bytes as provenance.
 
   finish --run-id --attempt --upload-dir
                               always after run: only report.json and classification.json are copied for upload, then
@@ -63,6 +88,7 @@ import stat
 import subprocess
 import sys
 import time
+from xml.etree import ElementTree
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -70,9 +96,81 @@ sys.path.insert(0, str(ROOT/'scripts'))
 import alpha_source  # noqa: E402  (the reviewed copy plan and per-file copy)
 
 MANIFEST = ROOT/'os/compile-contracts/launcher3-quickstep-lib.json'
-# OS Product's reviewed contract version (schema 2, #446 253fd98). A different manifest is refused until this pin is updated.
-MANIFEST_SHA256 = '69d7ccd59174c9a85aad1e0c9dc6da77a287f9276d5dc3f3cdc68ae0f6801a71'
+# OS Product's reviewed contract version (schema 3, e21ffeb on 9078ccf: #440 2f57a5f with E2c). A different manifest is
+# refused until this pin is updated.
+MANIFEST_SHA256 = '466f5ab88e4c110318e6e2533635db9bfcbf6ff73fc40dc54fbcc4c72f0593b4'
 CONDITIONS = ['base-exact', 'delta-preimages', 'isolated-apply', 'final-exact']
+# The binding inputs each branch requires and forbids, in the contract's own vocabulary (branches.requires, forbids):
+# check() binds and refuses exactly these, so the contract and this adapter cannot drift.
+# The contract projects' own Git data: the copy excludes every .git and .repo (cuttlefish-alpha anywhereNames); the
+# lunch inputs' admitted publicFetch of vendor/adevtool/.git is outside the three projects.
+CHECKED_TREE_GIT = ('Git metadata or objects of the three contract projects in the checked tree (the lunch inputs\' '
+                    'admitted gitRequirement.publicFetch of vendor/adevtool/.git, outside them, excepted)')
+BRANCH_REQUIRES = {'verifyIntegrated': ['sourceTree', 'lunch', 'policyReceipt'],
+                   'reconstruct': ['sourceTree', 'lunch', 'reconstructSource'],
+                   'verifyBaseApplyCandidate': ['sourceTree', 'lunch', 'policyReceipt', 'bundleReport']}
+BRANCH_FORBIDS = {'verifyIntegrated': ['bundleReport', 'reconstructSource', CHECKED_TREE_GIT],
+                  'reconstruct': ['bundleReport'], 'verifyBaseApplyCandidate': ['reconstructSource']}
+# The candidate branch's bundle half reads Infra's report in exactly this form (base.bundleReport, schema 3).
+BUNDLE_REPORT = ('rose-integration-bundle-report', 1)
+BUNDLE_REPORT_FIELDS = {'producer': ['path', 'sha256', 'roseRevision'],
+                        'run': ['runId', 'runAttempt', 'headSha', 'label', 'createdAt', 'updatedAt', 'bindingSha256'],
+                        'receipt': ['path',
+                                    'receiptSha256',
+                                    'receiptType',
+                                    'label',
+                                    'at',
+                                    {'patcher': ['patcher',
+                                                 {'sha256': ['apply-os-changes.py', 'background_apks.py', 'integration_copy.py']}]}],
+                        'candidate': ['commit', 'onMain', 'frankelConfigSha256', 'applyArgs', 'patcherKind'],
+                        'registration': ['source', 'patcherMatchesPin', 'applyArgsMatchPin'],
+                        'observed': [{'patches': ['project', 'name', 'sha256']},
+                                     {'overlays': ['target', 'sha256']},
+                                     'notAnInputOverlays',
+                                     'unclassified']}
+PATCHER_FILES = ('apply-os-changes.py', 'background_apks.py', 'integration_copy.py')
+# What this adapter reads each bundle-report field as: the contract names the fields, and their types are this adapter's
+# reading of the names and of the association text. REPORT_ROWS are the {name: subspec} keys that hold a list of
+# objects; every other such key holds one object. Times are UTC seconds as GitHub run metadata and host-reconcile.py
+# write them, so their text order is their time order.
+REPORT_ROWS = ('observed.patches', 'observed.overlays')
+REPORT_TYPES = {'producer': {'path': 'repoPath', 'sha256': 'sha256', 'roseRevision': 'commit'},
+                'run': {'runId': 'count', 'runAttempt': 'count', 'headSha': 'commit', 'label': 'label',
+                        'createdAt': 'time', 'updatedAt': 'time', 'bindingSha256': 'sha256'},
+                'receipt': {'path': 'hostPath', 'receiptSha256': 'sha256', 'receiptType': 'text', 'label': 'label',
+                            'at': 'time', 'patcher': 'object'},
+                'candidate': {'commit': 'commit', 'onMain': 'bool', 'frankelConfigSha256': 'sha256',
+                              'applyArgs': 'texts', 'patcherKind': 'text'},
+                'registration': {'source': 'text', 'patcherMatchesPin': 'bool', 'applyArgsMatchPin': 'bool'},
+                'observed': {'patches': 'rows', 'overlays': 'rows', 'notAnInputOverlays': 'texts', 'unclassified': 'list'}}
+ROW_TYPES = {'patches': {'project': 'text', 'name': 'text', 'sha256': 'sha256'},
+             'overlays': {'target': 'text', 'sha256': 'sha256'}}
+KIND_NAMES = {'bool': 'a boolean', 'text': 'a non-empty string', 'label': 'a label ([A-Za-z0-9][A-Za-z0-9._-]*)',
+              'repoPath': 'a normalized repository path', 'hostPath': 'a normalized absolute path',
+              'time': 'a UTC time YYYY-MM-DDTHH:MM:SSZ', 'sha256': 'a lowercase sha256', 'commit': 'a full lowercase commit id',
+              'count': 'a positive integer', 'texts': 'a list of non-empty strings', 'list': 'a list',
+              'object': 'an object', 'rows': 'a list of objects'}
+REPORT_TIME = '%Y-%m-%dT%H:%M:%SZ'
+# base.bundleReport.producer: "never the adapter, the observer or this checker". The adapter and this contract's checker
+# are named here; Release's lunch-input observer has no committed path yet.
+NEVER_PRODUCERS = ('scripts/launcher3-compile.py', 'scripts/launcher3-compile-contract.py')
+# The association base-exact cannot check from the report itself; report.json lists it as taken on trust.
+BUNDLE_TRUSTED = ('the run fields, entered by review from GitHub run metadata, and the recipe lines at headSha that make '
+                  'the run commit both the candidate and the trusted checkout',
+                  'headSha reachable from main (only candidate.onMain is read)',
+                  'exactly one *-<label>.json of that label, and receipt.receiptSha256 (the receipt itself is not read)',
+                  'the patcher bytes, applyArgs, os/patches and os/overlays at headSha, and candidate.frankelConfigSha256',
+                  'registration.source and run.bindingSha256, for which the contract states no value',
+                  'the producer at a reviewed commit (its path is only checked not to be the adapter or the checker)')
+# base.registration.applyArgsSource: where check() reads frankel's committed applyArgs.
+APPLY_ARGS_SOURCE = {'path': 'os/release-pipeline/frankel.json', 'key': 'host.integrate.reconcile.applyArgs'}
+# The canonical sha256 (contract_text_digest: json, sorted keys, compact separators) of the contract text this adapter
+# implements: every branch rule, requirement and definition, base.bundleReport whole, the registration's applyArgs
+# source, derivation and contract-derived note, the delta's application and path convention, the flag evidence's role
+# and acceptance, the overlay role rules and the unaffected, notInputs, provenance, proves, candidatePatches and
+# outputsToBind statements. A re-pinned contract that changes any of it is invalid until this adapter is reviewed
+# against the new text, so a re-pin is never only a hash bump.
+CONTRACT_TEXT_SHA256 = '788bb334023711e8545c6f0b2fd3a36e09e5618b4f983cbff8ab28d648c4a3f3'
 APPLY_STEPS = ['git -C <copy>/<project> apply --check -p<strip> <bundlePath>', 'git -C <copy>/<project> apply -p<strip> <bundlePath>']
 BLOB_ARGV = ['git', 'hash-object', '-t', 'blob', '--no-filters', '--stdin']
 LISTING_BYTES = 64 << 20
@@ -84,12 +182,50 @@ LUNCH_SECONDS = 20 * 60
 # genuine adevtool gitdir copy exists here, so such a lunch is refused before anything is copied: never a fabricated,
 # redirected or relaxed check.
 VERSION_CHECKED_PRODUCTS = ('frankel',)
+# Such a lunch needs OS Product's lunch-input contract (#410/#459; public-fetch, publicFetch and workingTree added in
+# #531, f16ba64), read as data only and never through its script. A different file is refused until this pin is updated.
+LUNCH_INPUTS = 'os/compile-contracts/frankel-lunch-inputs.json'
+LUNCH_INPUTS_SHA256 = 'd259aae6d1984dea2ead3f929aeb7ce9a2807681f28147ce53deb2ada36ec4e3'
+PINNED_MANIFEST = 'os/pinned-manifest.xml'
+# The only way this adapter gives vendor/adevtool its .git: the pinned commit fetched from the pinned manifest's public
+# source into the copy, admitted only when the pinned lunch-input contract lists the class. Infra's proposed first
+# ceilings (2026-11-04), not measured requirements and not runtime approval.
+ADEVTOOL_GIT_CLASSES = ('public-fetch',)
+ADEVTOOL_FETCH_SECONDS, ADEVTOOL_GIT_BYTES = 30 * 60, 1 << 30
+LUNCH_INPUT_SECONDS = 30 * 60  # hashing vendor/adevtool's listed paths and reading the markers, in the copy
+GIT_PATH = '/usr/bin:/bin'
+# A new repository from `git init --template=` has exactly these local keys; any other one refuses.
+GIT_CONFIG_KEYS = ('core.repositoryformatversion', 'core.filemode', 'core.bare', 'core.logallrefupdates')
+GIT_REDIRECTS = ('objects/info/alternates', 'objects/info/http-alternates', 'commondir', 'gitdir', 'hooks', 'info/grafts')
+# The git variables the contained lunch and m environment sets itself; nothing else named GIT_* reaches them.
+CONTAINED_GIT = ('GIT_CEILING_DIRECTORIES', 'GIT_CONFIG_NOSYSTEM', 'GIT_CONFIG_GLOBAL')
+# The pinned adevtool .gitignore rules the copy omits (gitRequirement.workingTree.omittedFromCopy), implemented exactly by
+# adevtool_ignored; a contract naming any other list is refused until this adapter implements it.
+ADEVTOOL_IGNORED = ('/.idea/', '/dist/', '!/dl/', '/dl/*', '!/dl/.find-ignore', '/lib/', '/node_modules/')
+# The option rows the admission requires exactly (#531): the public-fetch status, and fabrication carved out for exactly
+# the publicFetch steps, with redirect, fabrication and relaxation refused.
+PUBLIC_FETCH_STATUS = ('allowed only under a separate runtime approval for its source and bounds; the interface is '
+                       'publicFetch; Release owns the mechanism')
+FABRICATION_MEANS = 'any HEAD, ref, object or gitdir written other than by a genuine copy or by exactly the publicFetch steps'
+OPTION_CLASSES = ('genuine-copy', 'redirect', 'public-fetch', 'fabrication', 'relaxation')
+# The canonical sha256 of everything this adapter implements of the git route: the whole gitRequirement and every
+# source's workingTreeCheck text (json, sorted keys, compact separators). Any change to them is invalid until this
+# adapter is reviewed against the new text, so a re-pin is never only a hash bump.
+GIT_REQUIREMENT_SHA256 = 'ca8de46a9769e90c2559974da6dc17b7cbd32f49cce2ed41a8d6ef537be56166'
+# The job environment the fetch keeps (network setup only); everything else, LD_* included, is left out.
+FETCH_INHERITED = ('HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy', 'NO_PROXY', 'no_proxy', 'ALL_PROXY',
+                   'all_proxy', 'SSL_CERT_FILE', 'SSL_CERT_DIR', 'LANG')
+# gitRequirement.publicFetch.environment as this adapter sets it (fetch_env); the contract must state exactly this.
+FETCH_ENV_SPEC = {'unset': 'GIT_*', 'GIT_CONFIG_NOSYSTEM': '1', 'GIT_CONFIG_GLOBAL': '/dev/null',
+                  'HOME': 'an attempt-owned empty directory (also XDG_CONFIG_HOME)', 'GIT_TERMINAL_PROMPT': '0',
+                  'GIT_ASKPASS': '/bin/false', 'SSH_ASKPASS': '/bin/false', 'GIT_ALLOW_PROTOCOL': 'https',
+                  'GIT_CEILING_DIRECTORIES': 'the copy root', 'PATH': '/usr/bin:/bin'}
 FINISH_SECONDS = 30 * 60
 UPLOAD = ('report.json', 'classification.json')
 WORK_DIRS = ('tree', 'out', 'home', 'tmp')
 BINDING = ROOT/'os/build-only/launcher3-compile-host.json'
 BINDING_KEYS = {'schemaVersion', 'kind', 'basis', 'host', 'lockFrom', 'taskParent', 'branch', 'sourceTree', 'lunch',
-                'policyReceipt', 'bundleReport', 'reconstructSource'}
+                'policyReceipt', 'bundleReport', 'reconstructSource', 'adevtoolGit'}
 BRANCHES = ('verifyIntegrated', 'verifyBaseApplyCandidate', 'reconstruct')
 TASK_NAME = 'launcher3-compile-{run_id}-{attempt}'
 TARGET = 'Launcher3QuickStepLib'
@@ -223,11 +359,8 @@ def verify_tree_pin(project, expected, sha256, count, skipped, hasher=git_blob_i
     raise Refused(f'{Path(project).name}: tree pin digest differs')
 
 
-def load_listing(pin, root=ROOT):
-    """{path bytes: (mode, oid)} of the pinned commit's tree minus exactly unlisted.excludedPaths, from the committed
-    gzip listing after both of its sha256 bindings; raw `<mode> blob <oid> TAB <path> LF` lines only (no quoting, no
-    other type or mode). This is the pin's expected data, never a statement about host bytes."""
-    listing, unlisted = pin['listing'], pin['unlisted']
+def listing_raw(listing, root=ROOT):
+    """The decompressed bytes of a committed gzip listing, after both of its sha256 bindings."""
     path = (Path(root)/listing['path']).resolve()
     if Path(root).resolve() not in path.parents or path.is_symlink():
         raise Invalid(f'{listing["path"]}: the listing must be a file in this repository')
@@ -238,6 +371,15 @@ def load_listing(pin, root=ROOT):
         raw = stream.read(LISTING_BYTES + 1)
     if len(raw) > LISTING_BYTES or sha256_bytes(raw) != listing['sha256']:
         raise Invalid(f'{listing["path"]} is not the pinned listing')
+    return raw
+
+
+def load_listing(pin, root=ROOT):
+    """{path bytes: (mode, oid)} of the pinned commit's tree minus exactly unlisted.excludedPaths, from the committed
+    gzip listing after both of its sha256 bindings; raw `<mode> blob <oid> TAB <path> LF` lines only (no quoting, no
+    other type or mode). This is the pin's expected data, never a statement about host bytes."""
+    listing, unlisted = pin['listing'], pin['unlisted']
+    raw = listing_raw(listing, root)
     records = {}
     for line in raw.split(b'\n')[:-1] if raw.endswith(b'\n') else [None]:
         match = line is not None and re.fullmatch(rb'(100644|100755|120000) blob ([0-9a-f]{40})\t([^"\n][^\n]*)', line)
@@ -289,33 +431,49 @@ def delta_preconditions(tree, files, overlays):
             raise Refused(f'delta-preimages: {item["target"]} is not at its base overlay image: already applied or unknown')
 
 
-def apply_candidate(tree, patches, overlays, bundle, files, git='git', run=subprocess.run):
-    """Apply the digest-bound candidate delta to the isolated copy only: each patch checked against its sha256, then
-    exactly the contract's application steps, `git -C <copy>/<project> apply --check -p<strip> <bundlePath>` and the
-    same without --check (no other option: no --3way, --reject, --recount, reduced context or whitespace handling), the
-    patched files' copied modes restored (git apply rewrites them under the umask), and each overlay installed from the
-    bundle after its sha256 check. The caller checks the final images."""
+def apply_candidate(tree, patches, overlays, bundle, files, git='git', run=subprocess.run, applied=None):
+    """Apply the digest-bound candidate delta to the isolated copy only. Nothing is written until every patch and
+    overlay source has its bound sha256 and every patch passes `git -C <copy>/<project> apply --check -p<strip>
+    <bundlePath>` on the unchanged copy: the contract's application note, any failure of --check refuses before anything
+    is applied (so a patch that needed an earlier one would refuse; the delta's patches touch disjoint files). Then each
+    patch is applied with the same step without --check (no other option: no --3way, --reject, --recount, reduced
+    context or whitespace handling), the patched files' copied modes are restored (git apply rewrites them under the
+    umask; a delta file with no before image is new and has none), and each overlay is installed from its checked
+    bytes. applied receives, in order, each patch name and overlay target as its write starts, so a refusal part-way
+    says what the copy may hold. The caller checks the final images."""
+    applied = [] if applied is None else applied
     tree, bundle = Path(tree), Path(bundle)
-    modes = {item['path']: stat.S_IMODE(os.lstat(tree/item['path']).st_mode) for item in files}
+    modes = {item['path']: stat.S_IMODE(os.lstat(tree/item['path']).st_mode) for item in files if item['before'] is not None}
     env = {'PATH': os.environ.get('PATH', '/usr/bin:/bin'), 'GIT_CEILING_DIRECTORIES': str(tree), 'HOME': '/nonexistent',
            'GIT_CONFIG_NOSYSTEM': '1', 'GIT_CONFIG_GLOBAL': '/dev/null', 'LC_ALL': 'C'}
     for patch in patches:
-        source = bundle/patch['bundlePath']
-        if sha256_file(source) != patch['sha256']:
-            raise Refused(f'isolated-apply: {patch["bundlePath"]} is not the bound candidate patch')
-        for check in (['--check'], []):
-            result = run([git, '-C', str(tree/patch['project']), 'apply', *check, f'-p{patch["strip"]}', str(source)],
-                         capture_output=True, env=env)
-            if result.returncode:
-                raise Refused(f'isolated-apply: git apply {" ".join(check)} of {patch["bundlePath"]} failed in {patch["project"]}')
+        if sha256_file(bundle/patch['bundlePath']) != patch['sha256']:
+            raise Refused(f'isolated-apply: {patch["bundlePath"]} is not the bound candidate patch; nothing was applied')
+    contents = []
+    for item in overlays:
+        data = read_bytes(bundle/item['bundlePath'])
+        if data is None or sha256_bytes(data) != item['after']:
+            raise Refused(f'isolated-apply: {item["bundlePath"]} is not the bound candidate overlay; nothing was applied')
+        contents.append(data)
+
+    def step(patch, *check):
+        argv = [git, '-C', str(tree/patch['project']), 'apply', *check, f'-p{patch["strip"]}', str(bundle/patch['bundlePath'])]
+        return run(argv, capture_output=True, env=env).returncode == 0
+    for patch in patches:
+        if not step(patch, '--check'):
+            raise Refused(f'isolated-apply: git apply --check of {patch["bundlePath"]} failed in {patch["project"]}; '
+                          'nothing was applied')
+    for patch in patches:
+        applied.append(patch['name'])
+        if not step(patch):
+            raise Refused(f'isolated-apply: git apply of {patch["bundlePath"]} failed in {patch["project"]} after every '
+                          f'--check passed; started in the copy: {", ".join(applied)}')
     for path, mode in modes.items():
         if stat.S_IMODE(os.lstat(tree/path).st_mode) != mode:
             os.chmod(tree/path, mode)
-    for item in overlays:
+    for item, data in zip(overlays, contents):
         source, target = bundle/item['bundlePath'], tree/item['target']
-        data = read_bytes(source)
-        if data is None or sha256_bytes(data) != item['after']:
-            raise Refused(f'isolated-apply: {item["bundlePath"]} is not the bound candidate overlay')
+        applied.append(item['target'])
         target.parent.mkdir(parents=True, exist_ok=True)
         staging = target.with_name(f'.{target.name}.rose-candidate')
         fd = os.open(staging, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
@@ -475,10 +633,26 @@ def verify_config(integrated, post_sha256, rules, policy, policy_sha256, bound_p
     return errors
 
 
+def contract_text_digest(manifest):
+    """CONTRACT_TEXT_SHA256's canonical form, of this contract."""
+    base, delta, flags = manifest['base'], manifest['candidateDelta'], manifest['flagEvidence']
+    text = {'branches': manifest['branches'], 'bundleReport': base['bundleReport'],
+            'registration': {k: base['registration'][k] for k in ('applyArgsSource', 'derivation', 'contractDerived')},
+            'application': delta['application'], 'pathConvention': delta['pathConvention'],
+            'flagEvidence': {'role': flags['role'],
+                             'flags': [{k: f[k] for k in ('flag', 'expectedLine', 'produce', 'accept')} for f in flags['flags']]},
+            'overlayRoles': {role: manifest['overlayRoles'][role]['rule'] for role in ('required', 'notAnInput')},
+            **{k: manifest[k] for k in ('unaffected', 'notInputs', 'provenance', 'proves', 'candidatePatches', 'outputsToBind')}}
+    return sha256_bytes(json.dumps(text, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode())
+
+
 def contract_shape(manifest):
-    """The parts of the v2 contract this adapter implements, bound exactly: the four verifyBaseApplyCandidate
-    condition IDs, the application steps, the blob hash invocation, sha1 objects and the pinned modes (a subset of the three), the config.xml
-    rules, and a candidate bundle that lists exactly the delta's patch and overlay sources."""
+    """The parts of the v3 contract this adapter implements, bound exactly: the four verifyBaseApplyCandidate condition
+    IDs, the application steps, the blob hash invocation, sha1 objects and the pinned modes (a subset of the three), the
+    config.xml rules, a candidate bundle that lists exactly the delta's patch and overlay sources, lunchInputs at this
+    adapter's pin, branches.requires and forbids, base.bundleReport's kind, version and fields, the registration's
+    trusted patcher pins, patch order and applyArgs source; and every text this adapter implements, by its digest
+    (contract_text_digest, CONTRACT_TEXT_SHA256)."""
     vbac = manifest['branches']['verifyBaseApplyCandidate']
     if [c['id'] for c in vbac['conditions']] != CONDITIONS:
         raise Invalid('verifyBaseApplyCandidate conditions are not exactly ' + ', '.join(CONDITIONS))
@@ -496,6 +670,24 @@ def contract_shape(manifest):
                 raise Invalid('frameworks/base must rewrite exactly config.xml')
             for entry in config:
                 config_rules(entry)
+    if manifest.get('lunchInputs') != {'path': LUNCH_INPUTS, 'sha256': LUNCH_INPUTS_SHA256}:
+        raise Invalid('lunchInputs must name exactly the lunch-input contract this adapter pins')
+    branches = manifest['branches']
+    if (branches.get('requires'), branches.get('forbids')) != (BRANCH_REQUIRES, BRANCH_FORBIDS):
+        raise Invalid('branches.requires and forbids are not exactly the inputs this adapter binds and refuses')
+    base = manifest['base']
+    report, registration = base['bundleReport'], base['registration']
+    if (report.get('kind'), report.get('schemaVersion'), report.get('fields')) != (*BUNDLE_REPORT, BUNDLE_REPORT_FIELDS):
+        raise Invalid('base.bundleReport is not the rose-integration-bundle-report v1 this adapter reads')
+    patcher = registration['patcher']
+    if patcher.get('patcher') != 'trusted' or sorted(patcher.get('sha256') or {}) != sorted(PATCHER_FILES) \
+            or not all(re.fullmatch(r'[0-9a-f]{64}', str(v)) for v in patcher['sha256'].values()):
+        raise Invalid('base.registration.patcher must pin the trusted patcher\'s three files by sha256')
+    order = [(o['project'], o['name']) for o in registration['order']]
+    content = [(p['project'], p['name']) for p in base['bundleContent']['patches']]
+    if sorted(order) != sorted(content) or len(set(order)) != len(order) or \
+            any([n for p, n in order if p == project] != [n for p, n in content if p == project] for project, _ in order):
+        raise Invalid('base.registration.order must hold exactly the bundle patches, in each project\'s bundle order')
     sources = {p['bundlePath']: p['sha256'] for p in delta['patches']}
     sources.update({o['bundlePath']: o['after'] for o in delta['overlays']})
     if {b['path']: b['sha256'] for b in delta['bundle']} != sources or len(delta['bundle']) != len(sources):
@@ -505,6 +697,11 @@ def contract_shape(manifest):
             raise Invalid(f'{patch["name"]}: strip must be a small integer')
         if patch['project'] not in {p['path'] for p in manifest['projects']}:
             raise Invalid(f'{patch["name"]}: the delta patch project is not a contract project')
+    if registration.get('applyArgsSource') != APPLY_ARGS_SOURCE:
+        raise Invalid('base.registration.applyArgsSource is not the frankel applyArgs this adapter reads')
+    if contract_text_digest(manifest) != CONTRACT_TEXT_SHA256:
+        raise Invalid('the contract\'s rules, definitions and bundle-report statement are not the text this adapter was '
+                      'reviewed against (CONTRACT_TEXT_SHA256)')
 
 
 def load_manifest(path=MANIFEST, pinned=MANIFEST_SHA256):
@@ -512,8 +709,8 @@ def load_manifest(path=MANIFEST, pinned=MANIFEST_SHA256):
     if sha256_bytes(data) != pinned:
         raise Invalid(f'{Path(path).name} is not the reviewed contract version {pinned[:12]}')
     manifest = json.loads(data)
-    if (manifest.get('schemaVersion'), manifest.get('kind'), manifest.get('target')) != (2, 'rose-launcher3-compile-inputs', TARGET):
-        raise Invalid('the contract is not a rose-launcher3-compile-inputs v2 for Launcher3QuickStepLib')
+    if (manifest.get('schemaVersion'), manifest.get('kind'), manifest.get('target')) != (3, 'rose-launcher3-compile-inputs', TARGET):
+        raise Invalid('the contract is not a rose-launcher3-compile-inputs v3 for Launcher3QuickStepLib')
     contract_shape(manifest)
     flags = (manifest.get('flagEvidence') or {}).get('flags') or []
     if {f.get('flag') for f in flags} != {'android.security.content_uri_permission_apis',
@@ -536,12 +733,630 @@ def lock_path(root=ROOT):
     return json.loads((root/'os/release-pipeline/frankel.json').read_text())['host']['lockPath']
 
 
-def check(binding_path=BINDING, root=ROOT, manifest_path=MANIFEST):
-    """(manifest, binding). Invalid on a wrong shape, Unbound while the selected branch lacks an input."""
+def manifest_project(path, root=ROOT):
+    """{'revision', 'url'} of one project of the pinned manifest: its remote's fetch prefix, which must be https, plus
+    its name."""
+    manifest = ElementTree.parse(Path(root)/PINNED_MANIFEST).getroot()
+    remotes = {r.get('name'): r.get('fetch') for r in manifest.iter('remote')}
+    default = manifest.find('default')
+    rows = [p for p in manifest.iter('project') if p.get('path') == path]
+    if len(rows) != 1:
+        raise Invalid(f'{PINNED_MANIFEST} must name exactly one {path} project')
+    remote = rows[0].get('remote') or (default.get('remote') if default is not None else None)
+    prefix = remotes.get(remote) or ''
+    if not prefix.startswith('https://') or not re.fullmatch(r'[0-9a-f]{40}', rows[0].get('revision') or ''):
+        raise Invalid(f'{path} must be pinned to a full commit on an https remote')
+    return {'revision': rows[0].get('revision'), 'url': prefix.rstrip('/') + '/' + rows[0].get('name')}
+
+
+def load_lunch_inputs(path=None, pinned=LUNCH_INPUTS_SHA256, root=ROOT):
+    """OS Product's lunch-input contract as data after its sha256 pin, with the parts this adapter implements bound
+    exactly: the adevtool identity agrees with its own source row and with the pinned manifest."""
+    data = Path(path or Path(root)/LUNCH_INPUTS).read_bytes()
+    if sha256_bytes(data) != pinned:
+        raise Invalid(f'frankel-lunch-inputs.json is not the reviewed lunch-input contract {pinned[:12]}')
+    inputs = json.loads(data)
+    if (inputs.get('schemaVersion'), inputs.get('kind')) != (1, 'rose-frankel-lunch-inputs'):
+        raise Invalid('the lunch-input contract is not a rose-frankel-lunch-inputs v1')
+    git = inputs['gitRequirement']
+    rows = [s for s in inputs['sources'] if s.get('path') == git['project']]
+    if (git['project'], git['path']) != ('vendor/adevtool', 'vendor/adevtool/.git') or len(rows) != 1 \
+            or (rows[0]['revision'], rows[0]['rootTree']) != (git['revision'], git['rootTree']) \
+            or not all(re.fullmatch(r'[0-9a-f]{40}', str(git[k])) for k in ('revision', 'rootTree')):
+        raise Invalid('gitRequirement must name vendor/adevtool/.git at full ids agreeing with its own source row')
+    if manifest_project(git['project'], root)['revision'] != git['revision']:
+        raise Invalid('gitRequirement.revision is not the pinned manifest revision of vendor/adevtool')
+    unset = inputs['environment']['unset']
+    if 'GIT_*' not in unset or not all(n == 'GIT_*' or re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', str(n)) for n in unset):
+        raise Invalid('the lunch-input environment must unset GIT_* and otherwise name plain variables only')
+    for row in inputs['manifestFiles']:
+        if row.get('kind') not in ('linkfile', 'copyfile'):
+            raise Invalid(f'manifestFiles: {row.get("kind")!r} is neither linkfile nor copyfile')
+    return inputs
+
+
+def public_fetch_option(inputs, url):
+    """OS Product's admission of the public fetch: exactly one gitRequirement.options row of class public-fetch with an
+    allowed status and this url (the pinned manifest's source), or None. The pinned contract (#531) admits it; a run
+    still needs the binding's adevtoolGit, which Infra binds with the fetch's own runtime approval."""
+    rows = [o for o in inputs['gitRequirement']['options'] if o.get('class') == 'public-fetch']
+    if len(rows) == 1 and str(rows[0].get('status', '')).startswith('allowed') and rows[0].get('url') == url:
+        return rows[0]
+    return None
+
+
+def lunch_plan(binding, root=ROOT, inputs_path=None, inputs_pin=LUNCH_INPUTS_SHA256):
+    """{'inputs', 'url', 'exact'} for the contract's only lunch (definitions.lunch: the lunch inputs in lunchInputs,
+    satisfied on the copy), the lunch-input contract's target, once that contract is pinned, the binding names the
+    public fetch, the contract admits it and its publicFetch and workingTree are exactly this adapter's mechanism.
+    Invalid for any other lunch or when the contract and this adapter disagree; Unbound (exit 4) until then."""
+    inputs = load_lunch_inputs(inputs_path, inputs_pin, root)
+    target = inputs['lunch']['target']
+    if binding['lunch'] != target:
+        raise Invalid(f'the lunch must be the lunch-input contract target {target} (definitions.lunch: the lunch inputs '
+                      'in lunchInputs, satisfied on the copy)')
+    if not version_checked(target):
+        raise Invalid(f'{target} does not run adevtool-version-check.mk, the only lunch this adapter implements')
+    if binding['adevtoolGit'] is None:
+        raise Unbound(f'adevtool_git_missing: {binding["lunch"]} runs adevtool-version-check.mk (git -C vendor/adevtool '
+                      'rev-parse HEAD) in lunch and m; the copy has no .git and adevtoolGit (public-fetch) is not bound')
+    url = manifest_project(inputs['gitRequirement']['project'], root)['url']
+    if public_fetch_option(inputs, url) is None:
+        raise Unbound(f'adevtool_git_unadmitted: the pinned frankel-lunch-inputs.json ({inputs_pin[:12]}) admits no '
+                      f'public-fetch class for {url}')
+    problems = admission_problems(inputs, url, root)
+    if problems:
+        raise Invalid('the admitted public fetch is not the mechanism this adapter implements: ' + '; '.join(problems[:5]))
+    return {'inputs': inputs, 'url': url, 'exact': exact_sources(inputs)}
+
+
+def lunch_listing(inputs, project, root=ROOT, raw=False):
+    """{path bytes: (mode, oid)} of one lunch-input source's pinned tree listing, after both of its sha256 bindings
+    (raw: its decompressed bytes instead)."""
+    rows = [s for s in inputs['sources'] if s.get('path') == project]
+    if len(rows) != 1:
+        raise Invalid(f'the lunch-input contract has no single {project} source')
+    if raw:
+        return listing_raw(rows[0]['listing'], root)
+    return load_listing({'listing': rows[0]['listing'], 'unlisted': {'excludedPaths': []}, 'modes': list(TREE_MODES)}, root)
+
+
+def fetch_steps(work, url, revision):
+    """gitRequirement.publicFetch.steps, which are Blazer's git_meta_argv: a new .git with no templates (no hooks),
+    exactly revision at depth 1 with no tags, and a detached HEAD by update-ref; none reads or writes the working tree."""
+    return [['git', 'init', '-q', '--template=', str(work)],
+            ['git', '-C', str(work), 'fetch', '--quiet', '--depth=1', '--no-tags', url, revision],
+            ['git', '-C', str(work), 'update-ref', '--no-deref', 'HEAD', revision]]
+
+
+def adevtool_ignored(relative, is_dir):
+    """git check-ignore of exactly ADEVTOOL_IGNORED, for a path relative to vendor/adevtool: the top-level directories
+    .idea, dist, lib and node_modules and everything below them, and every entry directly in dl except dl/.find-ignore
+    and everything below those entries."""
+    parts = relative.split('/')
+    if parts[0] in ('.idea', 'dist', 'lib', 'node_modules') and (len(parts) > 1 or is_dir):
+        return True
+    return parts[0] == 'dl' and len(parts) > 1 and parts[1] != '.find-ignore'
+
+
+def exact_sources(inputs):
+    """The lunch-input sources whose working tree this adapter checks exactly: workingTreeCheck 'exact...' (vendor/adevtool
+    through gitRequirement.workingTree); 'derivation only...' are not checked; anything else is invalid."""
+    exact = []
+    for row in inputs['sources']:
+        check = str(row.get('workingTreeCheck', ''))
+        if check.startswith('exact'):
+            exact.append(row['path'])
+        elif not check.startswith('derivation only'):
+            raise Invalid(f'{row.get("path")}: workingTreeCheck must say exact or derivation only')
+    if inputs['gitRequirement']['project'] not in exact:
+        raise Invalid('vendor/adevtool must be checked exactly')
+    return exact
+
+
+def git_requirement_digest(inputs):
+    """GIT_REQUIREMENT_SHA256's canonical form, of this contract."""
+    semantics = {'gitRequirement': inputs['gitRequirement'],
+                 'workingTreeCheck': {s.get('path'): s.get('workingTreeCheck') for s in inputs['sources']}}
+    return sha256_bytes(json.dumps(semantics, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode())
+
+
+def admission_problems(inputs, url, root=ROOT):
+    """Every way the admitted contract's publicFetch and workingTree differ from the mechanism this adapter implements;
+    an admission is refused (invalid) on any. The contract cannot widen the adapter, and the adapter cannot drift."""
+    git, problems = inputs['gitRequirement'], []
+    fetch, tree = git.get('publicFetch') or {}, git.get('workingTree') or {}
+    revision = git['revision']
+    if git_requirement_digest(inputs) != GIT_REQUIREMENT_SHA256:
+        problems.append('gitRequirement or a workingTreeCheck is not the text this adapter was reviewed against')
+    options = {o.get('class'): o for o in git['options']}
+    if [o.get('class') for o in git['options']] != list(OPTION_CLASSES):
+        problems.append('gitRequirement.options are not exactly ' + ', '.join(OPTION_CLASSES))
+    elif (options['public-fetch'].get('status'), options['fabrication'].get('means')) != (PUBLIC_FETCH_STATUS,
+                                                                                            FABRICATION_MEANS) \
+            or any(options[c].get('status') != 'refused' for c in ('redirect', 'fabrication', 'relaxation')):
+        problems.append('the public-fetch status or the fabrication carve-out is not exactly the one this adapter '
+                        'implements, or redirect, fabrication or relaxation is not refused')
+    rendered = [' '.join(step) for step in fetch_steps('<copy>/vendor/adevtool', '<url>', revision)]
+    if (fetch.get('url'), fetch.get('protocol')) != (url, 'https only'):
+        problems.append('publicFetch.url and protocol are not the pinned manifest source over https only')
+    if fetch.get('steps') != rendered:
+        problems.append('publicFetch.steps are not exactly this adapter\'s three commands')
+    if fetch.get('environment') != FETCH_ENV_SPEC:
+        problems.append('publicFetch.environment is not exactly this adapter\'s fetch environment')
+    ceiling = fetch.get('ceiling') or {}
+    if (ceiling.get('seconds'), ceiling.get('bytes')) != (ADEVTOOL_FETCH_SECONDS, ADEVTOOL_GIT_BYTES):
+        problems.append('publicFetch.ceiling is not this adapter\'s 1800 s and 1073741824 bytes')
+    omitted = (tree.get('omittedFromCopy') or {}).get('gitignore')
+    if (tree.get('project'), omitted, tree.get('untrackedAllowed')) != (git['project'], list(ADEVTOOL_IGNORED), []):
+        problems.append('workingTree is not vendor/adevtool with exactly the omitted rules this adapter implements and '
+                        'no untracked allowance')
+    try:
+        exact = exact_sources(inputs)
+        listed = lunch_listing(inputs, git['project'], root)
+        for name in listed:
+            parts = os.fsdecode(name).split('/')
+            if any(adevtool_ignored('/'.join(parts[:i]), i < len(parts)) for i in range(1, len(parts) + 1)):
+                problems.append(f'the omitted rules would drop the tracked {os.fsdecode(name)}')
+                break
+        ignore = listed.get(b'.gitignore')
+        if ignore is None or ignore[1] != (tree.get('omittedFromCopy') or {}).get('gitBlob'):
+            problems.append('workingTree.omittedFromCopy.gitBlob is not the pinned tree\'s .gitignore')
+        for project in exact:
+            lunch_listing(inputs, project, root)
+            row = next(s for s in inputs['sources'] if s['path'] == project)
+            if manifest_project(project, root)['revision'] != row['revision']:
+                problems.append(f'{project} is not at its pinned manifest revision')
+    except Invalid as error:
+        problems.append(str(error))
+    return problems
+
+
+def contained_bytes(tree, relative):
+    """The bytes of a regular file at tree/relative reached through no link, or None."""
+    path = Path(tree)
+    for part in Path(relative).parts:
+        path = path/part
+        if path.is_symlink():
+            return None
+    if not path.is_file():
+        return None
+    data, opened = read_nofollow(path)
+    return data if opened.st_size == len(data) else None
+
+
+def manifest_file_problem(tree, row):
+    """A repo linkfile is a link that resolves, inside the copy, to its project's source; a copyfile has its bytes."""
+    tree = Path(tree)
+    dest, source = tree/row['dest'], os.path.normpath(tree/row['project']/row['src'])
+    if row['kind'] == 'linkfile':
+        if not dest.is_symlink():
+            return f'{row["dest"]} is not the manifest link to {row["project"]}/{row["src"]}'
+        target = os.path.normpath(dest.parent/os.readlink(dest))
+        if target != source or os.path.commonpath([str(tree), target]) != str(tree):
+            return f'{row["dest"]} does not link to {row["project"]}/{row["src"]} inside the copy'
+        if not os.path.exists(target):
+            return f'{row["dest"]} dangles: {row["project"]}/{row["src"]} is missing in the copy'
+        return None
+    data = contained_bytes(tree, row['dest'])
+    if data is None or data != contained_bytes(tree, f'{row["project"]}/{row["src"]}'):
+        return f'{row["dest"]} is not the manifest copy of {row["project"]}/{row["src"]}'
+    return None
+
+
+def read_walked(path, info, label):
+    """The bytes of the regular file the walk saw (info): opened without following a link and without blocking, and
+    read only when the descriptor is that same regular file (inode, mode and size); the same again after reading."""
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        opened = os.fstat(fd)
+        same = (opened.st_ino, opened.st_mode, opened.st_size) == (info.st_ino, info.st_mode, info.st_size)
+        if not stat.S_ISREG(opened.st_mode) or not same:
+            raise Refused(f'{label} changed while it was hashed')
+        chunks = []
+        while True:
+            block = os.read(fd, 1 << 20)
+            if not block:
+                break
+            chunks.append(block)
+        data = b''.join(chunks)
+        after = os.fstat(fd)
+        if len(data) != info.st_size or (after.st_ino, after.st_mode, after.st_size) != (info.st_ino, info.st_mode, info.st_size):
+            raise Refused(f'{label} changed while it was hashed')
+        return data
+    finally:
+        os.close(fd)
+
+
+def exact_tree(project, expected, skipped=(), hasher=git_blob_id, deadline=None, clock=time.monotonic):
+    """An exact working tree: every listed path at its mode and blob and nothing else (minus exactly skipped), and no
+    directory that holds no listed path. Paths, types and modes come from an lstat walk first, so an unlisted file is
+    named and never read; then only the listed entries are hashed (regular files read without following links, links
+    by their text). Refuses naming every missing, different and unlisted path, each list bounded at REPORT_ERRORS."""
+    base, name = os.fsencode(project), Path(project).name
+    skip = {os.fsencode(p) for p in skipped}
+    listed_dirs = {b'/'.join(p.split(b'/')[:i]) for p in expected for i in range(1, p.count(b'/') + 1)}
+
+    def check_time():
+        if deadline is not None and clock() > deadline:
+            raise Refused(f'pin_timeout: checking {name} passed its deadline')
+
+    present, unlisted, stack = {}, [], [b'']
+    while stack:
+        directory = stack.pop()
+        with os.scandir(base + (b'/' + directory if directory else b'')) as it:
+            names = sorted(e.name for e in it)
+        for entry in names:
+            check_time()
+            rel = directory + b'/' + entry if directory else entry
+            if rel in skip:
+                continue
+            info = os.lstat(base + b'/' + rel)
+            if stat.S_ISDIR(info.st_mode):
+                (stack.append(rel) if rel in listed_dirs else unlisted.append(rel + b'/'))
+            elif stat.S_ISLNK(info.st_mode):
+                present[rel] = ('120000', info)
+            elif stat.S_ISREG(info.st_mode):
+                present[rel] = ('100755' if info.st_mode & stat.S_IXUSR else '100644', info)
+            else:
+                unlisted.append(rel)  # no other type is ever a listed entry
+    unlisted += [p for p in present if p not in expected]
+    missing = [p for p in expected if p not in present]
+    different = [p for p in expected if p in present and present[p][0] != expected[p][0]]
+    for rel in sorted(p for p in expected if p in present and present[p][0] == expected[p][0]):
+        check_time()
+        mode, info = present[rel]
+        path = base + b'/' + rel
+        if mode == '120000':
+            oid = hasher(os.readlink(path))
+        else:
+            data = read_walked(path, info, f'{name}/{os.fsdecode(rel)}')
+            oid = hasher(data)
+        if oid != expected[rel][1]:
+            different.append(rel)
+    found = {'missing': sorted(missing), 'different': sorted(different), 'unlisted': sorted(unlisted)}
+    if any(found.values()):
+        named = '; '.join(f'{kind} {len(paths)}: ' + ', '.join(os.fsdecode(p) for p in paths[:REPORT_ERRORS])
+                          for kind, paths in found.items() if paths)
+        raise Refused(f'{name} is not exactly its pinned tree ({named})')
+    return {'paths': len(expected), 'equalsListing': True}
+
+
+def lunch_input_checks(tree, inputs, root=ROOT, deadline=None, hasher=git_blob_id, exact=None):
+    """Before lunch, in the copy, no network: each exact source (vendor/adevtool and device/google/laguna-kernels/6.6
+    in the amended contract) is exactly its pinned tree, naming every difference, with no .git yet; the contract's
+    version check, generated vendor files, finder markers, kernel module lists and manifest files are as stated.
+    Refuses by name. Never copies an expected value into the report."""
+    tree = Path(tree)
+    git = inputs['gitRequirement']
+    work = tree/git['project']
+    if work.is_symlink() or not work.is_dir() or os.path.lexists(work/'.git'):
+        raise Refused('lunch-inputs: vendor/adevtool must be a plain directory with no .git before the fetch')
+    trees = {}
+    for project in (exact if exact is not None else exact_sources(inputs)):
+        directory = tree/project
+        if directory.is_symlink() or not directory.is_dir():
+            raise Refused(f'lunch-inputs: {project} is not a plain directory in the copy')
+        try:
+            trees[project] = exact_tree(directory, lunch_listing(inputs, project, root), (), hasher, deadline)
+        except Refused as error:
+            raise Refused(f'lunch-inputs: {project}: {error}') from None
+    version = inputs['versionCheck']
+    data, form = contained_bytes(tree, version['path']), version['expected']['error']
+    if data is None or (sha256_bytes(data), len(data)) != (form['sha256'], form['bytes']):
+        raise Refused(f'lunch-inputs: {version["path"]} is not the error form of the adevtool version check')
+    for row in inputs['generatedVendor']['observable']:
+        data = contained_bytes(tree, row['path'])
+        if data is None or sha256_bytes(data) != row['sha256']:
+            raise Refused(f'lunch-inputs: {row["path"]} is not the generated vendor file the contract observes')
+    for row in inputs['finderPrune']['markers']:
+        data = contained_bytes(tree, row['path'])
+        if data is None or hasher(data) != row['gitBlob']:
+            raise Refused(f'lunch-inputs: the finder marker {row["path"]} is missing or different')
+    for row in inputs['kernelModuleLists']['files']:
+        data = contained_bytes(tree, row['path'])
+        mode = data is not None and ('100755' if os.lstat(tree/row['path']).st_mode & stat.S_IXUSR else '100644')
+        if data is None or (mode, hasher(data)) != (row['mode'], row['gitBlob']):
+            raise Refused(f'lunch-inputs: the kernel module list {row["path"]} is missing or different')
+    for row in inputs['manifestFiles']:
+        problem = manifest_file_problem(tree, row)
+        if problem:
+            raise Refused(f'lunch-inputs: {problem}')
+    return {'contractSha256': LUNCH_INPUTS_SHA256, 'exactTrees': trees, 'versionCheck': 'error form',
+            'observable': len(inputs['generatedVendor']['observable']), 'finderMarkers': len(inputs['finderPrune']['markers']),
+            'kernelModuleLists': len(inputs['kernelModuleLists']['files']), 'manifestFiles': len(inputs['manifestFiles'])}
+
+
+def environment_problems(env, inputs):
+    """The lunch and m environment against the contract's environment.unset: none of its names is present, and no
+    GIT_* variable but the contained ones this adapter sets itself (discovery ceiling, no system or global config)."""
+    names = [n for n in inputs['environment']['unset'] if n != 'GIT_*']
+    return [n for n in names if n in env] + [n for n in env if n.startswith('GIT_') and n not in CONTAINED_GIT]
+
+
+def fetch_env(tree, home, protocol='https'):
+    """gitRequirement.publicFetch.environment (FETCH_ENV_SPEC), as Blazer's git-meta: no inherited GIT_*, no system or
+    global configuration (so no insteadOf, credential helper or hook path), an attempt-owned empty HOME and
+    XDG_CONFIG_HOME, no prompt, only the source's protocol, PATH /usr/bin:/bin and discovery bounded at the copy root.
+    Of the job's environment only its network setup (FETCH_INHERITED: proxies, CA files, LANG) is kept."""
+    env = {k: os.environ[k] for k in FETCH_INHERITED if k in os.environ}
+    env.update(PATH=GIT_PATH, HOME=str(home), XDG_CONFIG_HOME=str(home), GIT_CONFIG_NOSYSTEM='1',
+               GIT_CONFIG_GLOBAL=os.devnull, GIT_TERMINAL_PROMPT='0', GIT_ASKPASS='/bin/false', SSH_ASKPASS='/bin/false',
+               GIT_ALLOW_PROTOCOL=protocol, GIT_CEILING_DIRECTORIES=str(tree))
+    return env
+
+
+def dir_bytes(path):
+    """Bytes of the regular files under path (lstat walk, no link followed); 0 when absent."""
+    total, stack = 0, [os.fsencode(path)]
+    while stack:
+        directory = stack.pop()
+        with contextlib.suppress(FileNotFoundError, NotADirectoryError):
+            with os.scandir(directory) as it:
+                for entry in it:
+                    with contextlib.suppress(FileNotFoundError):
+                        info = entry.stat(follow_symlinks=False)
+                        if stat.S_ISDIR(info.st_mode):
+                            stack.append(entry.path)
+                        elif stat.S_ISREG(info.st_mode):
+                            total += info.st_size
+    return total
+
+
+def end_group(proc, clock=time.monotonic, sleep=time.sleep):
+    """TERM, then KILL, the process group, each with KILL_GRACE_SECONDS to end."""
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(proc.pid, sig)
+        end = clock() + KILL_GRACE_SECONDS
+        while proc.poll() is None and clock() < end:
+            sleep(1)
+        if proc.poll() is not None:
+            break
+
+
+def bounded_git(argv, env, cwd, deadline, gitdir, limit, popen=subprocess.Popen, clock=time.monotonic,
+                sleep=time.sleep, measure=dir_bytes):
+    """(exit, stoppedBy or None) for one git command in its own session: every second the stage deadline and the bytes
+    under gitdir are compared with their limits, and a stop ends the group. Checked once more after exit (overshoot)."""
+    if clock() >= deadline:  # the stage deadline already passed: nothing is started
+        return None, 'timeout'
+    proc = popen(argv, env=env, cwd=cwd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+    stopped = None
+    while proc.poll() is None:
+        if clock() >= deadline:
+            stopped = 'timeout'
+        elif measure(gitdir) > limit:
+            stopped = 'gitBytes'
+        if stopped:
+            end_group(proc, clock, sleep)
+            break
+        sleep(1)
+    code = proc.wait()
+    if not stopped and measure(gitdir) > limit:
+        stopped = 'gitBytes'
+    return code, stopped
+
+
+def git_output(argv, env, cwd, deadline, clock=time.monotonic, run=subprocess.run):
+    """(exit, stdout bytes) of a short read-only git command, bounded by the stage deadline."""
+    left = deadline - clock()
+    if left <= 0:
+        return None, b''
+    try:
+        result = run(argv, env=env, cwd=cwd, capture_output=True, timeout=left)
+    except subprocess.TimeoutExpired:
+        return None, b''
+    return result.returncode, result.stdout
+
+
+def mount_points(text=None):
+    """Every mount point in /proc/self/mountinfo (field 5, octal escapes decoded), bind mounts on one filesystem
+    included; None when the table cannot be read."""
+    if text is None:
+        try:
+            text = Path('/proc/self/mountinfo').read_text()
+        except OSError:
+            return None
+    points = []
+    for line in text.splitlines():
+        fields = line.split(' ')
+        if len(fields) > 4:
+            points.append(re.sub(r'\\([0-7]{3})', lambda m: chr(int(m.group(1), 8)), fields[4]))
+    return points
+
+
+def gitdir_problems(tree, work, inputs, raw_listing, env, lunch_env, deadline, limit, clock=time.monotonic):
+    """Every publicFetch.acceptance item on the new repository but the working tree (adevtool_public_fetch re-checks
+    it): HEAD and shallow are exactly the revision; under the lunch environment (GIT_* unset but the ceiling at the copy
+    root) rev-parse HEAD is the revision, it is a commit and its tree is exactly rootTree; a full fsck passes; ls-tree
+    -r -z --full-tree with each NUL as LF is byte for byte the pinned listing; the local configuration is exactly a new
+    repository's (no remote.*), there is no ref but HEAD, and nothing redirects outside the copy (a real .git directory
+    resolving inside it; no alternates, commondir, gitdir file, hooks or grafts; no link, mount point, other filesystem
+    or second hard link)."""
+    git, problems = inputs['gitRequirement'], []
+    revision, root_tree = git['revision'], git['rootTree']
+    dotgit, tree = work/'.git', Path(tree)
+    real_tree = os.path.realpath(tree)
+
+    def out(*args, environment=env):
+        code, data = git_output(['git', '-C', str(work), *args], environment, str(work), deadline, clock)
+        return code, data.decode(errors='replace')
+
+    if dotgit.is_symlink() or not dotgit.is_dir():
+        return ['vendor/adevtool/.git is not a directory']
+    for name in ('HEAD', 'shallow'):
+        data = contained_bytes(tree, f'{git["project"]}/.git/{name}')
+        if data != (revision + '\n').encode():
+            problems.append(f'{name} is not exactly the pinned revision')
+    code, head = out('rev-parse', 'HEAD', environment=lunch_env)
+    if (code, head.strip()) != (0, revision):
+        problems.append('under the lunch environment rev-parse HEAD is not the pinned revision')
+    code, kind = out('cat-file', '-t', revision, environment=lunch_env)
+    if (code, kind.strip()) != (0, 'commit'):
+        problems.append('the pinned revision is not a commit')
+    code, tree_id = out('rev-parse', '--verify', revision + '^{tree}', environment=lunch_env)
+    if (code, tree_id.strip()) != (0, root_tree):
+        problems.append('the commit tree is not the pinned rootTree')
+    code, _ = out('fsck', '--no-dangling', '--no-progress')
+    if code != 0:
+        problems.append('a full fsck failed')
+    code, listed = git_output(['git', '-C', str(work), 'ls-tree', '-r', '-z', '--full-tree', revision], env, str(work),
+                              deadline, clock)
+    if code != 0 or listed.replace(b'\0', b'\n') != raw_listing:
+        problems.append('the commit tree is not byte for byte the pinned listing')
+    code, config = out('config', '--local', '--list')
+    keys = [line.split('=', 1)[0] for line in config.splitlines()]
+    if code != 0 or sorted(keys) != sorted(GIT_CONFIG_KEYS):
+        problems.append('the repository configuration is not exactly a new repository\'s')
+    code, refs = out('for-each-ref', '--format=%(refname)')
+    if code != 0 or refs.strip() or os.path.lexists(dotgit/'packed-refs'):
+        problems.append('a ref other than HEAD exists')
+    for args in (('rev-parse', '--absolute-git-dir'), ('rev-parse', '--git-common-dir')):
+        code, where = out(*args)
+        resolved = os.path.realpath(work/where.strip()) if code == 0 and where.strip() else ''
+        if resolved != os.path.realpath(dotgit):
+            problems.append(f'{args[1]} does not resolve to vendor/adevtool/.git')
+    for name in GIT_REDIRECTS:
+        if os.path.lexists(dotgit/name):
+            problems.append(f'.git/{name} exists')
+    device, stack = os.lstat(tree).st_dev, [dotgit]
+    while stack:
+        directory = stack.pop()
+        if os.path.ismount(directory):
+            problems.append('a mount point is inside the .git')
+        for entry in os.scandir(directory):
+            info = entry.stat(follow_symlinks=False)
+            if stat.S_ISLNK(info.st_mode):
+                problems.append('a link is inside the .git')
+            elif info.st_dev != device:
+                problems.append('a .git path is on another filesystem')
+            elif stat.S_ISDIR(info.st_mode):
+                stack.append(Path(entry.path))
+            elif stat.S_ISREG(info.st_mode) and info.st_nlink != 1:
+                problems.append('a .git file has a second hard link')
+            elif not stat.S_ISREG(info.st_mode):
+                problems.append('a .git entry is neither a file nor a directory')
+    if not os.path.realpath(dotgit).startswith(real_tree + os.sep):
+        problems.append('the .git does not resolve inside the copy')
+    points, inside = mount_points(), os.path.realpath(dotgit)
+    if points is None:
+        problems.append('the mount table cannot be read')
+    elif any(p == inside or p.startswith(inside + os.sep) for p in points):
+        problems.append('a mount point is inside the .git')
+    if dir_bytes(dotgit) > limit:
+        problems.append(f'the .git holds more than {limit} bytes')
+    return sorted(set(problems))
+
+
+def adevtool_public_fetch(tree, plan, run_root, record, root=ROOT, protocol='https', seconds=ADEVTOOL_FETCH_SECONDS,
+                          limit=ADEVTOOL_GIT_BYTES, popen=subprocess.Popen, clock=time.monotonic, sleep=time.sleep,
+                          hasher=git_blob_id):
+    """The admitted public fetch (gitRequirement.publicFetch) into the copy: fetch_steps under fetch_env, then every
+    acceptance item (gitdir_problems) and the working tree again, all within the attempt's ceiling. On any failure the
+    .git this attempt created is removed, nothing else, and the run refuses; record (the report's adevtoolGit section)
+    says what happened."""
+    inputs, url = plan['inputs'], plan['url']
+    git = inputs['gitRequirement']
+    tree, run_root = Path(tree), Path(run_root)
+    work = tree/git['project']
+    dotgit = work/'.git'
+    record.update(objectsSource='public-fetch', url=url, bounds={'seconds': seconds, 'gitBytes': limit,
+                  'kind': 'first ceilings proposed by Infra, not measurements'})
+    if not url.startswith(protocol + '://'):
+        record.update(ok=False, error=f'the source is not {protocol}')
+        raise Refused(f'adevtool-git: the source is not {protocol}')
+    component = tree
+    for part in Path(git['project']).parts:
+        component = component/part
+        if component.is_symlink():
+            record.update(ok=False, error=f'{component.relative_to(tree)} is a link')
+            raise Refused(f'adevtool-git: {component.relative_to(tree)} is a link; nothing is written through it')
+    if tree.is_symlink() or not work.is_dir() or os.path.lexists(dotgit):
+        record.update(ok=False, error='vendor/adevtool changed before the fetch')
+        raise Refused('adevtool-git: vendor/adevtool must be a plain directory with no .git before the fetch')
+    fetch_git = shutil.which('git', path=GIT_PATH)
+    if fetch_git is None:
+        record.update(ok=False, error='no git on /usr/bin:/bin')
+        raise Refused('adevtool-git: no git on /usr/bin:/bin')
+    raw_listing = lunch_listing(inputs, git['project'], root, raw=True)
+    expected = lunch_listing(inputs, git['project'], root)
+    home = run_root/'tmp/adevtool-git-home'
+    if os.path.lexists(home):
+        record.update(ok=False, error='the fetch home already exists')
+        raise Refused('adevtool-git: the attempt-owned fetch home already exists')
+    home.mkdir(mode=0o700, parents=True)
+    env, lunch_env = fetch_env(tree, home, protocol), contained_env(run_root)
+    deadline = clock() + seconds
+
+    def refuse(why):
+        removed = None
+        if os.path.lexists(dotgit):
+            try:
+                if dotgit.is_symlink():
+                    dotgit.unlink()
+                else:
+                    shutil.rmtree(dotgit)
+                removed = True
+            except OSError:
+                removed = False
+        record.update(ok=False, error=why, createdRemoved=removed)
+        raise Refused(f'adevtool-git: {why}')
+
+    try:
+        for argv in fetch_steps(work, url, git['revision']):
+            code, stopped = bounded_git(argv, env, str(work), deadline, dotgit, limit, popen, clock, sleep)
+            if code or stopped:
+                refuse(f'{argv[3] if argv[1] == "-C" else argv[1]} failed: {stopped or "exit " + str(code)}')
+        problems = gitdir_problems(tree, work, inputs, raw_listing, env, lunch_env, deadline, limit, clock)
+        if problems:
+            refuse('; '.join(problems[:8]))
+        try:
+            exact_tree(work, expected, ('.git',), hasher, deadline, clock)
+        except Refused as error:
+            refuse(f'the working tree no longer holds: {error}')
+        code, head = git_output(['git', '-C', str(work), 'rev-parse', 'HEAD'], lunch_env, str(work), deadline, clock)
+        if (code, head.decode(errors='replace').strip()) != (0, git['revision']):
+            refuse('the final rev-parse HEAD under the lunch environment did not give the revision')
+        tools = {}
+        for role, path in (('fetch', fetch_git), ('lunch', shutil.which('git', path=lunch_env['PATH']))):
+            code, version = git_output([path, '--version'], lunch_env, str(work), deadline, clock) if path else (None, b'')
+            version = version.decode(errors='replace').strip()
+            if code != 0 or not version.startswith('git version '):
+                refuse(f'the {role} git did not report its version')
+            tools[role] = {'path': path, 'version': version}
+        record.update(ok=True, observedHead=head.decode().strip(), gitDirBytes=dir_bytes(dotgit), shallow=True,
+                      alternates=False, remote=False, workingTreeHolds=True, git=tools)
+        return record
+    except Refused:
+        raise
+    except Exception as error:  # noqa: BLE001  (any other failure still removes the created .git and refuses)
+        refuse(f'{type(error).__name__} during the fetch or its checks')
+
+
+def tree_file_problem(path, source, parent):
+    """Why a bound receipt or report path names a file of a checked tree, or None: inside the source tree, or inside a
+    launcher3-compile run root under the run root parent (each holds a copy of a checked tree). By path only: check()
+    reads no host path, and run() passes the resolved paths."""
+    path = Path(path)
+    if source is not None and Path(source) in [path, *path.parents]:
+        return 'is inside the source tree'
+    parent = Path(parent)
+    if parent in path.parents and path.relative_to(parent).parts[0].startswith('launcher3-compile-'):
+        return 'is inside a launcher3-compile run root'
+    return None
+
+
+def check(binding_path=BINDING, root=ROOT, manifest_path=MANIFEST, inputs_path=None, inputs_pin=LUNCH_INPUTS_SHA256):
+    """(manifest, binding, lunch plan). Invalid on a wrong shape, a forbidden input, a receipt or report inside a checked
+    tree or a lunch other than the contract's; Unbound while the selected branch lacks an input or the lunch lacks its
+    admitted adevtool fetch."""
     manifest = load_manifest(manifest_path)
     binding = json.loads(Path(binding_path).read_text())
-    if set(binding) != BINDING_KEYS or binding['schemaVersion'] != 2 or binding['kind'] != 'rose-launcher3-compile-host':
-        raise Invalid('the binding is not an exact rose-launcher3-compile-host v2 record')
+    if set(binding) != BINDING_KEYS or binding['schemaVersion'] != 3 or binding['kind'] != 'rose-launcher3-compile-host':
+        raise Invalid('the binding is not an exact rose-launcher3-compile-host v3 record')
+    if binding['adevtoolGit'] is not None and binding['adevtoolGit'] not in ADEVTOOL_GIT_CLASSES:
+        raise Invalid('adevtoolGit must be null or ' + ', '.join(ADEVTOOL_GIT_CLASSES))
     if binding['host'] != 'immortal-os-builder' or binding['lockFrom'] != 'os/release-pipeline/frankel.json host.lockPath':
         raise Invalid('the binding must name the existing builder and its shared lock')
     if binding['taskParent'] != '/home/pixelbuild/rose-actions':
@@ -564,28 +1379,39 @@ def check(binding_path=BINDING, root=ROOT, manifest_path=MANIFEST):
             raise Invalid('the source tree must not be under the run root parent (no Pro snapshot or earlier run root)')
         if source in parent.parents:
             raise Invalid('the run root parent must not be inside the source tree')
+    for name, value in (('policyReceipt.path', receipt['path']), ('bundleReport.path', bundle['path'])):
+        problem = None if value is None else tree_file_problem(value, binding['sourceTree'], binding['taskParent'])
+        if problem:
+            raise Invalid(f'{name} {problem}: no bound receipt or report is a file of a checked tree '
+                          '(definitions.policyReceipt)')
     if binding['lunch'] is not None and not re.fullmatch(r'[a-z0-9_]+-[a-z0-9]+-(user|userdebug|eng)', str(binding['lunch'])):
         raise Invalid('lunch must be <product>-<release>-<variant>')
     frankel_policy_args(root)
-    needed = ['sourceTree', 'lunch']
-    if binding['branch'] == 'reconstruct':
-        needed += ['reconstructSource']
-    else:
-        needed += ['policyReceipt.path', 'policyReceipt.sha256']
-    if binding['branch'] == 'verifyBaseApplyCandidate':
-        needed += ['bundleReport.path', 'bundleReport.sha256']
+    apply_args = json.loads((Path(root)/APPLY_ARGS_SOURCE['path']).read_text())
+    for key in APPLY_ARGS_SOURCE['key'].split('.'):
+        apply_args = apply_args[key]
+    if manifest['base']['registration']['applyArgs'] != apply_args:
+        raise Invalid('base.registration.applyArgs are not frankel\'s committed applyArgs')
+    exclusions = json.loads((Path(root)/'os/release-pipeline/cuttlefish-alpha.json').read_text())['preparation']['exclusions']
+    if not {'.git', '.repo'} <= set(exclusions['anywhereNames']):
+        raise Invalid('the copy must exclude every .git and .repo, so the checked tree holds no Git data of the three '
+                      f'contract projects ({CHECKED_TREE_GIT})')
     values = {'sourceTree': binding['sourceTree'], 'lunch': binding['lunch'], 'policyReceipt.path': receipt['path'],
               'policyReceipt.sha256': receipt['sha256'], 'bundleReport.path': bundle['path'],
               'bundleReport.sha256': bundle['sha256'], 'reconstructSource': binding['reconstructSource']}
+    fields = {'policyReceipt': ['policyReceipt.path', 'policyReceipt.sha256'],
+              'bundleReport': ['bundleReport.path', 'bundleReport.sha256']}
+    for name in BRANCH_FORBIDS[binding['branch']]:
+        if name != CHECKED_TREE_GIT and any(values[f] is not None for f in fields.get(name, [name])):
+            raise Invalid(f'{binding["branch"]} forbids {name}; it must be null')
+    needed = [f for name in BRANCH_REQUIRES[binding['branch']] for f in fields.get(name, [name])]
     unbound = [n for n in needed if values[n] is None]
     if unbound:
         raise Unbound(f'{binding["branch"]} needs inputs not yet bound in {Path(binding_path).name}: {", ".join(unbound)}')
-    if version_checked(binding['lunch']):
-        raise Unbound(f'adevtool_git_missing: {binding["lunch"]} runs adevtool-version-check.mk (git -C vendor/adevtool '
-                      'rev-parse HEAD) in lunch and m; the copy has no .git and no genuine adevtool gitdir copy is bound')
+    plan = lunch_plan(binding, root, inputs_path, inputs_pin)
     if binding['branch'] == 'reconstruct':
         raise Unbound('reconstruct needs an approved genuine-Git-object source; this adapter has none wired')
-    return manifest, binding
+    return manifest, binding, plan
 
 
 def read_bytes(path):
@@ -813,14 +1639,7 @@ def supervised(argv, env, cwd, seconds, out_dir, popen=subprocess.Popen, clock=t
         elif rss(proc.pid) > MEMORY_STOP_BYTES:
             stopped = 'memory'
         if stopped:
-            for sig in (signal.SIGTERM, signal.SIGKILL):
-                with contextlib.suppress(ProcessLookupError):
-                    os.killpg(proc.pid, sig)
-                end = clock() + KILL_GRACE_SECONDS
-                while proc.poll() is None and clock() < end:
-                    sleep(1)
-                if proc.poll() is not None:
-                    break
+            end_group(proc, clock, sleep)
             break
         sleep(SAMPLE_SECONDS)
     return proc.wait(), stopped
@@ -887,12 +1706,23 @@ def task_root(binding, run_id, attempt):
 
 
 def copy_tree(source, destination, root=ROOT, statvfs=os.statvfs, planner=alpha_source.plan_copy,
-              copier=alpha_source.copy_tree, seconds=PREPARE_SECONDS):
-    """The reviewed alpha copy (plan, then alpha_source.copy_tree, which also rebases links) of the selection.
-    Refused before writing on plan problems, the source bound or the reserve; a wall-clock timer stops the copy at
-    `seconds` (the partial tree stays inside the run root and is reported, never used)."""
+              copier=alpha_source.copy_tree, seconds=PREPARE_SECONDS, omit=None):
+    """The reviewed alpha copy (plan, then alpha_source.copy_tree, which also rebases links) of the selection, minus
+    exactly what omit(path, is_dir) names (a frankel lunch: what vendor/adevtool's pinned .gitignore ignores).
+    Refused before writing on plan problems, a kept link into an omitted path, the source bound or the reserve; a
+    wall-clock timer stops the copy at `seconds` (the partial tree stays inside the run root and is reported, never
+    used)."""
     policy = json.loads((root/'os/release-pipeline/cuttlefish-alpha.json').read_text())['preparation']['exclusions']
     plan = planner(source, policy)
+    omitted = []
+    if omit is not None and not plan['problems']:
+        omitted = [e['path'] for e in plan['entries'] if omit(e['path'], e['type'] == 'dir')]
+        dropped = set(omitted)
+        kept = [e for e in plan['entries'] if e['path'] not in dropped]
+        types = {e['path']: e['type'] for e in plan['entries']}
+        plan = dict(plan, entries=kept, excluded=plan['excluded'] + [{'path': p, 'reason': 'omittedFromCopy'} for p in omitted],
+                    problems=[f'{e["path"]} links into the omitted {e["target"]}' for e in kept
+                              if e['type'] == 'link' and e.get('exists') and omit(e['target'], types.get(e['target']) == 'dir')])
     if plan['problems']:
         raise Refused(f'copy_refused: {len(plan["problems"])} problems, first: {plan["problems"][0]}')
     fs = statvfs(destination.parent)
@@ -914,8 +1744,13 @@ def copy_tree(source, destination, root=ROOT, statvfs=os.statvfs, planner=alpha_
     finally:
         signal.setitimer(signal.ITIMER_REAL, 0)
         signal.signal(signal.SIGALRM, previous)
-    return {'entries': len(plan['entries']), 'excluded': len(plan['excluded']), 'projectedBytes': projected,
-            'availableBytesBefore': available}
+    if omit is not None:  # a relative link whose text passes through an omitted path resolves in the source only
+        dangling = [e['path'] for e in plan['entries']
+                    if e['type'] == 'link' and e.get('exists') and not os.path.exists(Path(destination)/e['path'])]
+        if dangling:
+            raise Refused(f'copy_refused: {len(dangling)} kept links dangle in the copy, first: {dangling[0]}')
+    return {'entries': len(plan['entries']), 'excluded': len(plan['excluded']), 'omitted': len(omitted),
+            'projectedBytes': projected, 'availableBytesBefore': available}
 
 
 def bound_json(path):
@@ -924,14 +1759,165 @@ def bound_json(path):
     return json.loads(data), sha256_bytes(data)
 
 
-def bundle_matches(report, report_sha256, bound_sha256, content):
-    """base-exact's bundle half: the Infra-reported integrating bundle (its bound sha256) states exactly the contract's
-    base.bundleContent: the same patches per project in order, the same overlays with their sha256 and the same
-    notAnInput overlay targets. Which bundle integrated the tree is Infra provenance; a hash of current bytes is not."""
+def report_shape_problems(value, spec, where):
+    """A report section against its base.bundleReport.fields spec: exactly these keys; a {name: subspec} entry holds
+    one object matching subspec, or for REPORT_ROWS a list of them."""
+    if not isinstance(value, dict):
+        return [f'{where} is not an object']
+    names = {}
+    for item in spec:
+        if isinstance(item, str):
+            names[item] = None
+        else:
+            (key, sub), = item.items()
+            names[key] = sub
+    problems = [] if set(value) == set(names) else [f'{where} keys are not exactly {sorted(names)}']
+    for key, sub in names.items():
+        if sub is None or key not in value:
+            continue
+        label = f'{where}.{key}'
+        if label not in REPORT_ROWS:
+            problems += report_shape_problems(value[key], sub, label)
+        elif not isinstance(value[key], list):
+            problems.append(f'{label} is not a list of objects')
+        else:
+            for index, item in enumerate(value[key]):
+                problems += report_shape_problems(item, sub, f'{label}[{index}]')
+    return problems
+
+
+def report_value_is(value, kind):
+    """Whether a report field's value is of its REPORT_TYPES kind (KIND_NAMES); a boolean is never a count."""
+    if kind == 'bool':
+        return isinstance(value, bool)
+    if kind == 'count':
+        return (type(value) is int and value > 0) or (isinstance(value, str) and re.fullmatch(r'[1-9][0-9]*', value) is not None)
+    if kind in ('texts', 'list', 'rows'):
+        return isinstance(value, list) and (kind == 'list' or all(
+            isinstance(v, str) and v != '' if kind == 'texts' else isinstance(v, dict) for v in value))
+    if kind == 'object':
+        return isinstance(value, dict)
+    if not isinstance(value, str) or value == '':
+        return False
+    if kind == 'time':
+        try:
+            return time.strftime(REPORT_TIME, time.strptime(value, REPORT_TIME)) == value
+        except ValueError:
+            return False
+    pattern = {'label': r'[A-Za-z0-9][A-Za-z0-9._-]*', 'sha256': r'[0-9a-f]{64}', 'commit': r'[0-9a-f]{40}'}.get(kind)
+    if pattern:
+        return re.fullmatch(pattern, value) is not None
+    if kind == 'repoPath':
+        return not value.startswith('/') and os.path.normpath(value) == value and value.split('/')[0] != '..'
+    if kind == 'hostPath':
+        return value.startswith('/') and os.path.normpath(value) == value
+    return kind == 'text'
+
+
+def report_type_problems(report):
+    """Each field of a report of the right shape against REPORT_TYPES, and each observed row against ROW_TYPES."""
+    problems = []
+    for section, kinds in REPORT_TYPES.items():
+        for name, kind in kinds.items():
+            value = report[section][name]
+            if not report_value_is(value, kind):
+                problems.append(f'{section}.{name} is not {KIND_NAMES[kind]}')
+            elif kind == 'rows':
+                for index, row in enumerate(value):
+                    problems += [f'{section}.{name}[{index}].{field} is not {KIND_NAMES[sub]}'
+                                 for field, sub in ROW_TYPES[name].items() if not report_value_is(row[field], sub)]
+    return problems
+
+
+def bundle_report_problems(report, base):
+    """Every way an Infra bundle report fails base.bundleReport against base.registration and base.bundleContent, each
+    as a named problem, never an exception: its kind and every section and field exactly, each field of its type
+    (REPORT_TYPES); the association the report itself shows (the run commit is the candidate and on main; a reconcile
+    receipt of the run's label, named *-<label>.json, its at within [createdAt, updatedAt]; the trusted patcher at the
+    registration's pins and the run's applyArgs equal to the registration's, with both pin flags true; a producer that
+    is neither the adapter nor this contract's checker); nothing unclassified; observed patches in the registration
+    order, and observed minus unclassified equal to bundleContent (patches per project in order, overlays and
+    notAnInput targets). The rest of the association (BUNDLE_TRUSTED) is the producer's reviewed statement, which
+    report.json names as taken on trust."""
+    registration, content = base['registration'], base['bundleContent']
+    if not isinstance(report, dict):
+        return ['the bundle report is not an object']
+    version = report.get('schemaVersion')
+    problems = [] if (report.get('kind'), version) == BUNDLE_REPORT and type(version) is int else \
+        ['the bundle report is not a rose-integration-bundle-report v1']
+    sections = set(BUNDLE_REPORT_FIELDS)
+    if set(report) != sections | {'kind', 'schemaVersion'}:
+        return problems + ['the bundle report sections are not exactly ' + ', '.join(sorted(sections))]
+    for section, spec in BUNDLE_REPORT_FIELDS.items():
+        problems += report_shape_problems(report[section], spec, section)
+    if problems:
+        return problems
+    problems = report_type_problems(report)
+    if problems:
+        return problems
+    run, receipt, candidate, observed = report['run'], report['receipt'], report['candidate'], report['observed']
+    if candidate['commit'] != run['headSha']:
+        problems.append('candidate.commit is not run.headSha: the run commit is the candidate (association)')
+    if candidate['onMain'] is not True:
+        problems.append('candidate.onMain is not true: headSha is reachable from main (association)')
+    if receipt['receiptType'] != 'reconcile':
+        problems.append('receipt.receiptType is not reconcile (association)')
+    name = receipt['path'].rsplit('/', 1)[-1]
+    if receipt['label'] != run['label'] or not name.endswith(f'-{run["label"]}.json') or name == f'-{run["label"]}.json':
+        problems.append('the receipt is not a *-<label>.json of the run\'s label (association)')
+    if not run['createdAt'] <= receipt['at'] <= run['updatedAt']:
+        problems.append('receipt.at is not within [run.createdAt, run.updatedAt] (association)')
+    if report['producer']['path'] in NEVER_PRODUCERS:
+        problems.append(f'the producer {report["producer"]["path"]} is the adapter or this contract\'s checker, never the '
+                        'stated producer')
+    if candidate['patcherKind'] != registration['patcher']['patcher']:
+        problems.append('candidate.patcherKind is not the trusted patcher')
+    if receipt['patcher'] != {'patcher': registration['patcher']['patcher'], 'sha256': registration['patcher']['sha256']}:
+        problems.append('receipt.patcher is not the trusted patcher at the registration pins')
+    if candidate['applyArgs'] != registration['applyArgs']:
+        problems.append('candidate.applyArgs are not the registration applyArgs')
+    if report['registration']['patcherMatchesPin'] is not True or report['registration']['applyArgsMatchPin'] is not True:
+        problems.append('the report does not state that its patcher and applyArgs match the pins')
+    if observed['unclassified'] != []:
+        problems.append('observed.unclassified is not empty')
+    if [(p['project'], p['name']) for p in observed['patches']] != [(o['project'], o['name']) for o in registration['order']]:
+        problems.append('observed.patches are not the registration order')
+
+    def by_project(patches):
+        grouped = {}
+        for p in patches:
+            grouped.setdefault(p['project'], []).append((p['name'], p['sha256']))
+        return grouped
+    if by_project(observed['patches']) != by_project(content['patches']):
+        problems.append('observed patches differ from base.bundleContent')
+    pairs = lambda rows: sorted((r['target'], r['sha256']) for r in rows)  # noqa: E731
+    if pairs(observed['overlays']) != pairs(content['overlays']) or \
+            sorted(observed['notAnInputOverlays']) != sorted(content['notAnInputOverlays']):
+        problems.append('observed overlays differ from base.bundleContent')
+    return problems
+
+
+def bundle_matches(report, report_sha256, bound_sha256, base):
+    """base-exact's bundle half: the Infra bundle report (its bound sha256) is a matching rose-integration-bundle-report
+    v1 (bundle_report_problems): a bare bundleContent or a report missing any section is refused, and so, by name, is
+    one this adapter cannot read. Which bundle integrated the tree is Infra provenance; a hash of current bytes is
+    not."""
     if not bound_sha256 or report_sha256 != bound_sha256:
         raise Refused('base-exact: the bundle report is missing or not the one bound for this tree')
-    if report != content:
-        raise Refused('base-exact: the integrating bundle does not match base.bundleContent')
+    try:
+        problems = bundle_report_problems(report, base)
+    except (AttributeError, KeyError, TypeError, ValueError) as error:  # a defect: never a traceback in place of a refusal
+        raise Refused(f'base-exact: the bundle report cannot be read as base.bundleReport ({type(error).__name__})') from None
+    if problems:
+        raise Refused('base-exact: the integrating bundle report does not match: ' + '; '.join(problems[:5]))
+
+
+def bundle_record(report, sha256):
+    """What report.json says of the bundle report base-exact used: its sha256, run, receipt and producer, and what of its
+    association was taken on trust (BUNDLE_TRUSTED)."""
+    return {'sha256': sha256, 'run': {k: report['run'][k] for k in ('runId', 'runAttempt', 'headSha', 'label')},
+            'receipt': {k: report['receipt'][k] for k in ('path', 'receiptSha256', 'at')},
+            'producer': dict(report['producer']), 'takenOnTrust': list(BUNDLE_TRUSTED)}
 
 
 def checked(section, tree, args, label, pins, root, deadline):
@@ -942,7 +1928,8 @@ def checked(section, tree, args, label, pins, root, deadline):
 
 
 def run(binding, manifest, run_id, attempt, root=ROOT, lock=None, copier=copy_tree, compiler=supervised,
-        policy_loader=None, bundle_loader=None, pins=tree_pins, clock=time.monotonic):
+        policy_loader=None, bundle_loader=None, pins=tree_pins, clock=time.monotonic, plan=None, inputs_check=None,
+        fetcher=None, applier=None):
     """The adapter run; returns its exit status and leaves receipts/report.json naming each step's outcome."""
     run_root = task_root(binding, run_id, attempt)
     if Path(binding['taskParent']).is_symlink() or not Path(binding['taskParent']).is_dir():
@@ -962,16 +1949,28 @@ def run(binding, manifest, run_id, attempt, root=ROOT, lock=None, copier=copy_tr
                          'kind': 'first-measurement ceilings; sampled stops can overshoot; no hard cap'},
               'proves': manifest['proves'], 'unaffectedProjects': 'the three contract projects are checked against their tree pins (Git blob IDs of the copied bytes); every other project is not verified by this adapter (Infra provenance)',
               'identitySharing': manifest['identitySharing']}
-    status = 3
+    status, applied = 3, []
     try:
-        if version_checked(binding['lunch']):
-            raise Refused('adevtool_git_missing: the lunch product runs adevtool-version-check.mk and no genuine adevtool '
-                          'gitdir copy is bound; nothing copied')
+        if binding['adevtoolGit'] not in ADEVTOOL_GIT_CLASSES:
+            raise Refused('adevtool_git_missing: the lunch runs adevtool-version-check.mk and no admitted adevtool public '
+                          'fetch is bound; nothing copied')
+        if plan is None or binding['lunch'] != plan['inputs']['lunch']['target']:
+            raise Refused('lunch-inputs: no admitted lunch-input plan for this lunch (definitions.lunch: the lunch inputs '
+                          'in lunchInputs, satisfied on the copy); nothing copied')
+        real = os.path.realpath
+        for name in ('policyReceipt', 'bundleReport'):
+            path = binding[name]['path']
+            problem = None if path is None else tree_file_problem(real(path), real(binding['sourceTree']),
+                                                                    real(binding['taskParent']))
+            if problem:
+                raise Refused(f'{name}: the bound path {problem} once resolved; nothing copied')
         with (lock or shared_lock)(lock_path(root)):
             for name in ('home', 'tmp', 'out'):
                 (run_root/name).mkdir(mode=0o700)
             tree = run_root/'tree'
-            report['copy'] = copier(Path(binding['sourceTree']), tree)
+            project = plan['inputs']['gitRequirement']['project'] + '/'
+            report['copy'] = copier(Path(binding['sourceTree']), tree, omit=lambda rel, is_dir: rel.startswith(project)
+                                    and adevtool_ignored(rel[len(project):], is_dir))
             try:
                 policy, policy_sha = (policy_loader or bound_json)(binding['policyReceipt']['path'])
             except (OSError, ValueError):
@@ -984,13 +1983,14 @@ def run(binding, manifest, run_id, attempt, root=ROOT, lock=None, copier=copy_tr
                     bundle, bundle_sha = (bundle_loader or bound_json)(binding['bundleReport']['path'])
                 except (OSError, ValueError):
                     raise Refused('base-exact: the bound bundle report cannot be read') from None
-                bundle_matches(bundle, bundle_sha, binding['bundleReport']['sha256'], manifest['base']['bundleContent'])
+                bundle_matches(bundle, bundle_sha, binding['bundleReport']['sha256'], manifest['base'])
+                report['bundleReport'] = bundle_record(bundle, bundle_sha)
                 _, base_pins = checked(manifest['base'], tree, args, 'base-exact', pins, root, deadline)
                 steps.append({'id': 'base-exact', 'treePins': base_pins})
                 delta = manifest['candidateDelta']
                 delta_preconditions(tree, delta['files'], delta['overlays'])
                 steps.append({'id': 'delta-preimages'})
-                apply_candidate(tree, delta['patches'], delta['overlays'], root, delta['files'])
+                (applier or apply_candidate)(tree, delta['patches'], delta['overlays'], root, delta['files'], applied=applied)
                 steps.append({'id': 'isolated-apply', 'commit': delta['commit'],
                               'patches': [{'name': p['name'], 'sha256': p['sha256']} for p in delta['patches']]})
                 deadline = clock() + PIN_SECONDS
@@ -1003,6 +2003,18 @@ def run(binding, manifest, run_id, attempt, root=ROOT, lock=None, copier=copy_tr
             out = run_root/'out'
             targets = compile_targets(manifest, out)
             env = contained_env(run_root)
+            leaked = environment_problems(env, plan['inputs'])
+            if leaked:
+                raise Refused('lunch-inputs: the lunch environment passes ' + ', '.join(leaked))
+            try:
+                report['lunchInputs'] = (inputs_check or lunch_input_checks)(tree, plan['inputs'], root,
+                                                                              clock() + LUNCH_INPUT_SECONDS,
+                                                                              exact=plan.get('exact'))
+            except (OSError, ValueError) as error:
+                raise Refused(f'lunch-inputs: {type(error).__name__} while reading the copy') from None
+            report['lunchInputs']['bounds'] = {'seconds': LUNCH_INPUT_SECONDS}
+            report['adevtoolGit'] = {}
+            (fetcher or adevtool_public_fetch)(tree, plan, run_root, report['adevtoolGit'], root)
             code, stopped = compiler(lunch_argv(binding['lunch']), env, str(tree), LUNCH_SECONDS, str(out))
             report['lunch'] = {'exit': code, 'stoppedBy': stopped}
             if code != 0 or stopped:
@@ -1022,7 +2034,9 @@ def run(binding, manifest, run_id, attempt, root=ROOT, lock=None, copier=copy_tr
             status = 0
     except Refused as error:
         report['refused'] = str(error)
-        report['nothingApplied'] = not any(c['id'] == 'isolated-apply' for c in report.get('conditions', []))
+        report['nothingApplied'] = not applied  # no candidate patch or overlay write started in the copy
+        if applied:
+            report['applied'] = list(applied)  # in order, each write that started (the last may have failed)
         report['result'] = 'refused'
     finally:
         write_once(receipts/'report.json', report)
@@ -1081,12 +2095,14 @@ def main(argv=None):
     p.add_argument('--binding', default=str(BINDING), help=argparse.SUPPRESS)
     a = p.parse_args(argv)
     try:
-        manifest, binding = check(a.binding)
+        manifest, binding, plan = check(a.binding)
         if a.command == 'check':
             if a.run_id or a.attempt or a.upload_dir:
                 raise Invalid('check takes no other option')
             prepare = PREPARE_SECONDS + KILL_GRACE_SECONDS + (2 if binding['branch'] == 'verifyBaseApplyCandidate' else 1) * PIN_SECONDS
-            outer = prepare + LUNCH_SECONDS + KILL_GRACE_SECONDS + COMPILE_SECONDS + KILL_GRACE_SECONDS + 600
+            # every lunch is the contract's (definitions.lunch): its inputs and the admitted fetch always come first
+            outer = (prepare + LUNCH_INPUT_SECONDS + ADEVTOOL_FETCH_SECONDS + KILL_GRACE_SECONDS + LUNCH_SECONDS
+                     + KILL_GRACE_SECONDS + COMPILE_SECONDS + KILL_GRACE_SECONDS + 600)
             finish_outer = FINISH_SECONDS + KILL_GRACE_SECONDS
             print(f'outer_seconds={outer}\nfinish_seconds={FINISH_SECONDS}\njob_minutes={-(-(outer + finish_outer) // 60) + 10}')
             return 0
@@ -1096,7 +2112,7 @@ def main(argv=None):
             return finish(binding, a.run_id, a.attempt, a.upload_dir)
         if a.upload_dir:
             raise Invalid('run takes no --upload-dir')
-        return run(binding, manifest, a.run_id, a.attempt)
+        return run(binding, manifest, a.run_id, a.attempt, plan=plan)
     except Unbound as error:
         print(json.dumps({'verdict': 'SETUP_MISSING', 'error': str(error)}), file=sys.stderr)
         return 4

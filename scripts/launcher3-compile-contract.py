@@ -52,21 +52,39 @@ PINNED = ROOT/'os/pinned-manifest.xml'
 FIXTURES = ROOT/'os/tests/fixtures/launcher3-compile-contract'
 # The candidate (#440, draft): its only inputs not in the base bundle, as inert copies (never applied or copied by any
 # build: they are outside os/patches and os/overlays), bound to the reviewed commit by their digests.
-CANDIDATE = {'pr': 440, 'commit': 'e361d1cb15abdb80795569f1558fb7e0bcf5635d'}
+CANDIDATE = {'pr': 440, 'commit': '2f57a5f28e3c3cc97177bf3f9294ea807d514469'}
 BUNDLE = FIXTURES/'candidate-pr440'
-CANDIDATE_PATCHES = ['rose-edge-launcher3.patch']
+CANDIDATE_PATCHES = ['rose-edge-launcher3.patch', 'rose-edge-resize-launcher3.patch']
+# The manifest's schema. 3 adds base.registration, base.bundleReport, branches.requires/forbids, lunchInputs and the
+# wording fixes agreed with Release on #410; the sibling frameworks-base contract stays at 2 until its own re-pin.
+SCHEMA = 3
+# The trusted patcher whose registration block base.registration executes (agreed on #410): its three files' sha256.
+PATCHER = ('scripts/apply-os-changes.py', 'scripts/background_apks.py', 'scripts/integration_copy.py')
+PATCHER_SHA256 = {
+    'apply-os-changes.py': '86ec1b2a41dec367490409a435423dbdbc0f5537a0437eac9094f4ea4c7bef35',
+    'background_apks.py': 'af981b5b4309924664c758f1d479cf752fa6032911af447148302178c24c40fb',
+    'integration_copy.py': '440574cbd3144571f647fc13f17c6c1188b1c61d12ef92a7028fba7eb2a24a05',
+}
+FRANKEL_RECIPE = ROOT/'os/release-pipeline/frankel.json'
+LUNCH_INPUTS = ROOT/'os/compile-contracts/frankel-lunch-inputs.json'
 # frameworks/base and build/release: apply-os-changes.py's --background-policy order (scripts/background_apks.py).
-# Launcher3: this candidate's two patches (apply-os-changes.py:106 lists only the first so far).
+# Launcher3: the switcher patch the patcher registers, then this candidate's two edge patches, which it does not.
 PROJECTS = [
     ('frameworks/base', 'platform_frameworks_base', ['frameworks-base.patch',
         'rose-agent-self-update-frameworks-base.patch', 'background-control-frameworks-base.patch',
         'background-control-modern-frameworks-base.patch', 'background-control-resource-import-fix.patch',
         'locked-control-frameworks-base.patch']),
     ('packages/apps/Launcher3', 'platform_packages_apps_Launcher3', ['rose-switcher-launcher3.patch',
-        'rose-edge-launcher3.patch']),
+        'rose-edge-launcher3.patch', 'rose-edge-resize-launcher3.patch']),
     ('build/release', 'platform_build_release', ['background-control-build-release.patch']),
 ]
 REQUIRED_OVERLAYS = ('packages/apps/Launcher3/', 'build/release/')
+# The Soong goals this contract compiles, the projects whose sources they compile (no notAnInput overlay may sit in
+# one), and which PROJECTS entry the candidate's patches belong to. A sibling contract
+# (scripts/frameworks-base-wmshell-contract.py) sets its own values for these and for the constants above.
+COMPILE_TARGETS = ['Launcher3QuickStepLib']
+COMPILED_PROJECTS = ('packages/apps/Launcher3', 'build/release')
+CANDIDATE_PROJECT = 1
 # The reviewed overlays that are not inputs of Launcher3QuickStepLib, by exact target (M4): WindowManager-Shell and
 # SystemUI sources and assets, off the library's classpath. Any other overlay outside REQUIRED_OVERLAYS is refused, so a
 # new one can never become an unpinned input by its location alone.
@@ -266,12 +284,12 @@ def overlay_roles(projects, evidence):
     rows = overlays()
     required = [o['target'] for o in rows if o['role'] == 'required']
     not_input = [o['target'] for o in rows if o['role'] == 'notAnInput']
-    goals = ['Launcher3QuickStepLib'] + [row['expectedOutputDir'] + '/aconfig-flags.txt' for row in evidence]
+    goals = list(COMPILE_TARGETS) + [row['expectedOutputDir'] + '/aconfig-flags.txt' for row in evidence]
     evidence_paths = {f'{row[k]["project"]}/{row[k]["path"]}' for row in evidence for k in ('definedIn', 'declaredIn')}
     pinned = {p['path']: set(p['treePin']['unlisted']['excludedPaths']) for p in projects}
     for target in not_input:
         project = next((p for p in pinned if target.startswith(p + '/')), None)
-        if project in ('packages/apps/Launcher3', 'build/release') or project is None:
+        if project in COMPILED_PROJECTS or project is None:
             raise ValueError(f'{target}: a notAnInput overlay inside a compiled or unpinned project')
         if target[len(project) + 1:] not in pinned[project]:
             raise ValueError(f'{target}: not excluded from {project} treePin by exact path')
@@ -281,14 +299,15 @@ def overlay_roles(projects, evidence):
         'required': {'targets': required, 'rule': 'present with exactly its sha256 in overlays'},
         'notAnInput': {'targets': not_input, 'rule': 'exact target only: present with any bytes, or absent; excluded '
             'from its project\'s treePin by exact path (treePin.unlisted.excludedPaths); never a source of '
-            'Launcher3QuickStepLib, a compileGoals entry or a flagEvidence input. Adding or removing one changes the '
+            f'{" or ".join(COMPILE_TARGETS)}, a compileGoals entry or a flagEvidence input. Adding or removing one changes the '
             'contract'},
         'compileGoals': goals,
     }
 
 
 def apply_in_scratch(pre, patches):
-    """({path: bytes}, {path: chain}) after applying the patches in order with git apply to {path: bytes or None}."""
+    """({path: bytes or None}, {path: chain}) after applying the patches in order with git apply to
+    {path: bytes or None}."""
     tree = Path(tempfile.mkdtemp(prefix='l3-contract-'))
     try:
         for path, data in pre.items():
@@ -312,9 +331,89 @@ def apply_in_scratch(pre, patches):
                 else:
                     base = 'different'
                 chain[f].append({'patch': patch, 'before': before[f], 'after': after, 'index': lines, 'base': base})
-        return {path: (tree/path).read_bytes() for path in pre}, chain
+        # None for a path no patch so far creates (a candidate's new file, before the candidate is applied).
+        return {path: (tree/path).read_bytes() if (tree/path).exists() else None for path in pre}, chain
     finally:
         shutil.rmtree(tree, True)
+
+
+def frankel_apply_args():
+    """frankel's exact applyArgs, placeholders included (os/release-pipeline/frankel.json host.integrate.reconcile)."""
+    return json.loads(FRANKEL_RECIPE.read_text())['host']['integrate']['reconcile']['applyArgs']
+
+
+def patcher_sha256():
+    return {Path(path).name: sha256((ROOT/path).read_bytes()) for path in PATCHER}
+
+
+def registered_order(apply_args):
+    """[(project, name)] that the in-repo patcher registers for apply_args, by executing its own statements: its
+    argument parser, then everything from `projects = {...}` through `projects.update(rose_home_projects(...))`.
+    validate_policy and preinstall_plan check data and never decide registration, so they are replaced; the file
+    placeholders become empty files in a scratch directory. Nothing else of the patcher runs."""
+    import argparse
+    import ast
+    import sys
+    import xml.etree.ElementTree as ET
+    path = ROOT/PATCHER[0]
+    tree = ast.parse(path.read_text())
+    body = tree.body
+    def index(test):
+        found = [i for i, node in enumerate(body) if test(ast.unparse(node))]
+        if len(found) != 1:
+            raise ValueError(f'{PATCHER[0]}: the registration block is not where the contract expects it')
+        return found[0]
+    parser_start = index(lambda t: t.startswith('p = argparse.ArgumentParser('))
+    parse = index(lambda t: t == 'a = p.parse_args()')
+    start = index(lambda t: t.startswith("projects = {'frameworks/base':"))
+    end = index(lambda t: t == 'projects.update(rose_home_projects(preinstalls))')
+    sys.path.insert(0, str(ROOT/'scripts'))
+    try:
+        import background_apks
+    finally:
+        sys.path.pop(0)
+    scratch = Path(tempfile.mkdtemp(prefix='l3-registration-'))
+    try:
+        argv = []
+        for arg in apply_args:
+            if re.fullmatch(r'\{[a-z_]+\}(/.*)?', arg):
+                dummy = scratch/re.sub(r'[{}/]', '_', arg)
+                dummy.write_text('{}')
+                arg = str(dummy)
+            argv.append(arg)
+        env = {'__file__': str(path), '__doc__': '', 'argparse': argparse, 'json': json, 'Path': Path, 're': re,
+            'ET': ET, 'BACKGROUND_FRAMEWORK_PATCHES': list(background_apks.BACKGROUND_FRAMEWORK_PATCHES),
+            'rose_home_projects': background_apks.rose_home_projects,
+            'validate_policy': lambda policy, agent: {'prototypeControl': False},
+            'preinstall_plan': lambda policy, apks: []}
+        exec(compile(ast.Module(body=body[parser_start:parse], type_ignores=[]), str(path), 'exec'), env)
+        env['a'] = env['p'].parse_args([str(scratch)] + argv)
+        exec(compile(ast.Module(body=body[start:end + 1], type_ignores=[]), str(path), 'exec'), env)
+    finally:
+        shutil.rmtree(scratch, True)
+    return [(project, name) for project, names in env['projects'].items() for name in names]
+
+
+def registration():
+    """base.registration (#410): the patches the trusted patcher registers in the contract's projects, derived by
+    executing it with frankel's flags, with the identity of the bytes that did so."""
+    if patcher_sha256() != PATCHER_SHA256:
+        raise ValueError('the in-repo patcher is not the pinned one; re-derive base.registration and re-agree the pins')
+    args = frankel_apply_args()
+    contract = [p for p, _, _ in PROJECTS]
+    order = [{'project': p, 'name': n} for p, n in registered_order(args) if p in contract]
+    return {
+        'applyArgs': args,
+        'applyArgsSource': {'path': str(FRANKEL_RECIPE.relative_to(ROOT)), 'key': 'host.integrate.reconcile.applyArgs'},
+        'patcher': {'patcher': 'trusted', 'sha256': dict(PATCHER_SHA256)},
+        'order': order,
+        'derivation': f'executed: {PATCHER[0]}\'s own argument parser with applyArgs (each placeholder an empty file), '
+            'then its statements from `projects = {...}` through `projects.update(rose_home_projects(preinstalls))`, '
+            'with validate_policy and preinstall_plan replaced because they check data and never registration; the '
+            'result is filtered to this contract\'s projects. rose_home_projects adds only packages/modules/Permission',
+        'contractDerived': 'the bundle report\'s only contract-derived input: names and order, used only once the '
+            'receipt\'s patcher sha256 and the run\'s applyArgs equal these',
+    }
 
 
 def fixture_path(project, path):
@@ -369,10 +468,13 @@ def evidence_rows(revisions, data):
                 'sha256': sha256(data[(project, path)])}
         row['outputs'] = ['aconfig-cache.pb', 'aconfig-flags.txt']
         row['produce'] = ('build ' + entry['expectedOutputDir'] + '/aconfig-flags.txt as an explicit goal with '
-            'Launcher3QuickStepLib, or decode aconfig-cache.pb with that tree\'s host aconfig using the identical '
+            f'{" and ".join(COMPILE_TARGETS)}, or decode aconfig-cache.pb with that tree\'s host aconfig using the identical '
             "dump-cache --dedup --format='{fully_qualified_name}:{permission}={state:bool}'")
         row['accept'] = ('exactly one line for the flag, equal to expectedLine, in the module\'s own output; '
-            'absent, duplicated, another module or another value: refuse (identity flag unresolved, result incomplete)')
+            'absent, duplicated, another module or another value: refuse (identity flag unresolved, result incomplete)'
+            if SCHEMA < 3 else 'exactly one line for the flag, equal to expectedLine, in the module\'s own output; '
+            'absent, duplicated, another module or another value: result incomplete (identity flag unresolved); not a '
+            'refusal of the inputs')
         rows.append(row)
     rules = [{'project': p, 'revision': revisions[p], 'path': path, 'sha256': sha256(data[(p, path)])}
         for p, _, path in SOONG_RULES]
@@ -385,7 +487,7 @@ def check_evidence(manifest, revisions):
     if any(v is None for v in data.values()):
         return ['flag evidence: a pinned definition fixture is missing; regenerate with --write']
     rows, rules = evidence_rows(revisions, data)
-    if manifest.get('flagEvidence') != {'flags': rows, 'producingRules': rules}:
+    if manifest.get('flagEvidence') != flag_evidence_block(rows, rules):
         errors.append('flagEvidence differs from the pinned definitions; regenerate with --write')
     for entry in FLAG_EVIDENCE:
         bp = data[(entry['definedIn'][0], entry['definedIn'][2])].decode()
@@ -421,7 +523,8 @@ def integration_rewrite():
         'markers': dict(CONFIG_MARKERS),
         'generatingInputs': {
             'policyReceipt': 'agent, targets, prototypeControl; its sha256 must equal the one bound for that tree outside '
-                'this contract',
+                'this contract' + ('' if SCHEMA < 3 else '; it is the integrating run\'s own --background-policy file '
+                '(branches.definitions.policyReceipt), never one reconstructed from config.xml or any other tree file'),
             'referenceDisplayAddress': '--reference-display-address, absent unless given; decimal, 0 < value < 2^63',
             'lockedControl': '--locked-control, false unless given',
         },
@@ -581,15 +684,15 @@ def base_and_delta(projects, recorded_overlay_before=None):
                 rows.append(row)
         base_projects.append(dict(project, patches=[{'name': p, 'sha256': sha256(bundle_or_os('patches/' + p).read_bytes())}
             for p in base_patches], files=rows))
-    path = PROJECTS[1][0]
-    launcher_base = {r['path']: r for r in base_projects[1]['files']}
+    path = PROJECTS[CANDIDATE_PROJECT][0]
+    launcher_base = {r['path']: r for r in base_projects[CANDIDATE_PROJECT]['files']}
     # Base bytes after the base patches, then the candidate's patches on top.
     after_base, _ = apply_in_scratch({f: fixture_path(path, f).read_bytes() if launcher_base[f]['pre'] else None
-        for f in launcher_base}, [p for p in PROJECTS[1][2] if p not in CANDIDATE_PATCHES])
-    created = touched([p for p in PROJECTS[1][2] if p not in CANDIDATE_PATCHES])
+        for f in launcher_base}, [p for p in PROJECTS[CANDIDATE_PROJECT][2] if p not in CANDIDATE_PATCHES])
+    created = touched([p for p in PROJECTS[CANDIDATE_PROJECT][2] if p not in CANDIDATE_PATCHES])
     base_images = {f: after_base[f] if launcher_base[f]['pre'] or f in created else None for f in launcher_base}
     final, _ = apply_in_scratch(base_images, CANDIDATE_PATCHES)
-    for row in projects[1]['files']:
+    for row in projects[CANDIDATE_PROJECT]['files']:
         if image(final[row['path']]) != row['post']:
             raise ValueError(f'{row["path"]}: base plus the candidate delta is not the candidate post-image')
     bundle_overlays = {f[len('overlays/'):]: (BUNDLE/f).read_bytes() for f in bundle_files() if f.startswith('overlays/')}
@@ -623,6 +726,7 @@ def base_and_delta(projects, recorded_overlay_before=None):
         'projects': base_projects,
         'overlays': base_overlays,
     }
+    base.update(base_extension())
     delta = {
         'pr': CANDIDATE['pr'], 'commit': CANDIDATE['commit'],
         'patches': [{'name': p, 'sha256': sha256((BUNDLE/'patches'/p).read_bytes()), 'project': path, 'strip': 1,
@@ -707,14 +811,137 @@ def build():
     if MANIFEST.exists():
         recorded = {o['target']: o['before'] for o in json.loads(MANIFEST.read_text()).get('candidateDelta', {})
             .get('overlays', [])} or None
-    if recorded is None:
-        for f in bundle_files():
-            committed = OS/f
-            if f.startswith('overlays/') and committed.exists() and committed.read_bytes() == (BUNDLE/f).read_bytes():
-                raise SystemExit(f'os/{f} already holds the candidate bytes: its base is unknown; record it first')
+    for f in bundle_files():
+        target = f[len('overlays/'):]
+        if not f.startswith('overlays/') or (recorded is not None and target in recorded):
+            continue
+        committed = OS/f
+        if committed.exists() and committed.read_bytes() == (BUNDLE/f).read_bytes():
+            raise SystemExit(f'os/{f} already holds the candidate bytes: its base is unknown; record it first')
+        if recorded is not None:
+            recorded[target] = sha256(committed.read_bytes()) if committed.exists() else None
     base, delta = base_and_delta(projects, recorded)
     write_base_overlay_copies(delta)
     evidence, rules = evidence_rows(revisions, flag_evidence(revisions, True))
+    manifest = describe()
+    manifest.update({'projects': projects, 'overlays': overlays(), 'base': base, 'candidateDelta': delta,
+        'flagEvidence': flag_evidence_block(evidence, rules), 'overlayRoles': overlay_roles(projects, evidence)})
+    if SCHEMA >= 3:
+        manifest['lunchInputs'] = lunch_inputs()
+    return manifest
+
+
+def flag_evidence_block(rows, rules):
+    block = {'flags': rows, 'producingRules': rules}
+    if SCHEMA >= 3:
+        block['role'] = 'output: never a precondition of any branch'
+    return block
+
+
+def lunch_inputs():
+    """The frankel lunch's inputs, by reference (OS Product's data contract; Release's adapter pins it too)."""
+    return {'path': str(LUNCH_INPUTS.relative_to(ROOT)), 'sha256': sha256(LUNCH_INPUTS.read_bytes())}
+
+
+# base.bundleReport (#410): the schema of the integration bundle report that verifyBaseApplyCandidate needs, as agreed
+# with Release. Release's producer writes it from history; this contract only states it.
+BUNDLE_REPORT = {
+    'kind': 'rose-integration-bundle-report', 'schemaVersion': 1,
+    'fields': {
+        'producer': ['path', 'sha256', 'roseRevision'],
+        'run': ['runId', 'runAttempt', 'headSha', 'label', 'createdAt', 'updatedAt', 'bindingSha256'],
+        'receipt': ['path', 'receiptSha256', 'receiptType', 'label', 'at',
+            {'patcher': ['patcher', {'sha256': ['apply-os-changes.py', 'background_apks.py', 'integration_copy.py']}]}],
+        'candidate': ['commit', 'onMain', 'frankelConfigSha256', 'applyArgs', 'patcherKind'],
+        'registration': ['source', 'patcherMatchesPin', 'applyArgsMatchPin'],
+        'observed': [{'patches': ['project', 'name', 'sha256']}, {'overlays': ['target', 'sha256']},
+            'notAnInputOverlays', 'unclassified'],
+    },
+    'producer': 'Release\'s producer script at a reviewed commit; never the adapter, the observer or this checker',
+    'association': [
+        'run is entered by review from GitHub run metadata (no live API, no actions:read), with the recipe lines at '
+            'headSha that make the run commit both the candidate and the trusted checkout; headSha is reachable from main',
+        'exactly one *-<label>.json with receiptType reconcile and the same label, its at within [createdAt, updatedAt]',
+        'receipt.patcher.patcher is trusted and its three sha256 equal both the files at headSha and '
+            'base.registration.patcher: a consistency check, not association (many commits share those bytes)',
+        'the run\'s applyArgs (headSha:os/release-pipeline/frankel.json) equal base.registration.applyArgs',
+    ],
+    'observed': {
+        'patches': 'base.registration.order, each with the sha256 of headSha:os/patches/<name>',
+        'overlays': 'every headSha:os/overlays file whose target is under a required prefix',
+        'notAnInputOverlays': 'the present targets on the exact notAnInput allowlist',
+        'unclassified': 'anything else under the three projects; must be empty',
+    },
+    'rules': [
+        'only observed minus unclassified is compared with base.bundleContent, and unclassified must be empty',
+        'observed is computed from history before bundleContent is read; tampering bundleContent leaves it unchanged',
+        'a report missing any section, or a bare bundleContent, is refused',
+        'receipt changed/entries are association only, never observed',
+        'the report never stands in for base-exact on the copy',
+    ],
+}
+
+
+def base_extension():
+    """Schema-3 additions to base: the derived registration and the bundle report's schema."""
+    return {'registration': registration(), 'bundleReport': BUNDLE_REPORT} if SCHEMA >= 3 else {}
+
+
+def describe():
+    """The stated fields at SCHEMA: schema 2's, with the schema-3 additions and wording fixes agreed on #410."""
+    d = describe_base()
+    if SCHEMA < 3:
+        return d
+    d['schemaVersion'] = 3
+    d['candidatePatches'] = ('frameworks/base and build/release in apply-os-changes.py --background-policy order; '
+        'Launcher3 adds rose-edge-launcher3.patch then rose-edge-resize-launcher3.patch (candidateDelta), which '
+        'apply-os-changes.py does not register, so a tree integrated by any patcher today is not at these final images')
+    branches = d['branches']
+    branches['reconstruct'] += '; every unlisted path matches its treePin, no extra path'
+    branches['otherwise'] = ('refuse: mixed pre/post, unknown hash, missing file, overlay, input or binding. A tree '
+        'integrated by the current patcher (Launcher3 switcher only) is such a state and must not be completed by '
+        'applying the candidate\'s patches except through all four verifyBaseApplyCandidate conditions. Never reset or '
+        'trust a snapshot.')
+    branches['requires'] = {
+        'verifyIntegrated': ['sourceTree', 'lunch', 'policyReceipt'],
+        'reconstruct': ['sourceTree', 'lunch', 'reconstructSource'],
+        'verifyBaseApplyCandidate': ['sourceTree', 'lunch', 'policyReceipt', 'bundleReport'],
+    }
+    branches['forbids'] = {
+        'verifyIntegrated': ['bundleReport', 'reconstructSource', 'Git metadata or objects of the three contract '
+            'projects in the checked tree (the lunch inputs\' admitted gitRequirement.publicFetch of vendor/adevtool/.git, '
+            'outside them, excepted)'],
+        'reconstruct': ['bundleReport'],
+        'verifyBaseApplyCandidate': ['reconstructSource'],
+    }
+    branches['definitions'] = {
+        'sourceTree': 'the checked tree, bound by Infra provenance (path and run), never by this contract',
+        'lunch': 'the lunch inputs in lunchInputs, satisfied on the copy',
+        'policyReceipt': 'the integrating run\'s own --background-policy file, associated with this tree by Infra '
+            'provenance (run, source path, receipt hash recorded by that run); a receipt reconstructed from config.xml '
+            'or any other tree file is refused',
+        'reconstructSource': 'an approved source of genuine Git objects for each project at revision (read from a '
+            'repository, never bytes hashed from the checked tree); none is approved',
+        'bundleReport': 'a document in base.bundleReport\'s form from its stated producer',
+    }
+    d['unaffected'] = [
+        'inside the three projects, every path not listed in files or overlays must match that project\'s treePin, and '
+            'any extra file is refused',
+        'other pinned projects lunch needs are at the integrating run\'s state (Infra provenance); projects the '
+            'integration also patches (build/make, packages/modules/Permission, packages/apps/Updater) and paths it '
+            'generates (packages/apps/RosePreinstall/*, PixelBackgroundControl/Agent.apk) are not at their pinned '
+            'revision and are not inputs of this proof',
+        'the generated vendor module and the lunch markers: lunchInputs',
+    ]
+    d['notInputs'] = [n if not n.startswith('the policy receipt') else 'the policy receipt in reconstruct '
+        '(verifyIntegrated, and verifyBaseApplyCandidate\'s base-exact and final-exact, need it, bound, to check '
+        'config.xml)' for n in d['notInputs']]
+    return d
+
+
+def describe_base():
+    """The contract's stated (not derived) fields at schema 2, in manifest order; None marks a field build() derives.
+    The sibling frameworks-base contract builds on these."""
     return {
         'schemaVersion': 2,
         'kind': 'rose-launcher3-compile-inputs',
@@ -756,8 +983,8 @@ def build():
                 'integrated by the current patcher (Launcher3 switcher only) is such a state and must not be completed '
                 'by applying rose-edge-launcher3.patch alone. Never reset or trust a snapshot.',
         },
-        'projects': projects,
-        'overlays': overlays(),
+        'projects': None,
+        'overlays': None,
         'unaffected': 'inside the three projects, every path not listed in files or overlays must match that '
             'project\'s treePin, and any extra file is refused; every other project the library or lunch needs must be '
             'byte-identical to its pinned revision (Infra provenance, not this contract)',
@@ -774,10 +1001,10 @@ def build():
             'flagEvidence: each flag\'s expectedLine from its own aconfig_declarations module output',
             'lunch product, variant, BUILD_ID and release-config maps in effect',
         ],
-        'base': base,
-        'candidateDelta': delta,
-        'flagEvidence': {'flags': evidence, 'producingRules': rules},
-        'overlayRoles': overlay_roles(projects, evidence),
+        'base': None,
+        'candidateDelta': None,
+        'flagEvidence': None,
+        'overlayRoles': None,
         'identitySharing': {
             'sites': ['quickstep/src/com/android/quickstep/FallbackSwipeHandler.java startHomeIntent',
                 'quickstep/src/com/android/quickstep/window/RecentsWindowSwipeHandler.java (inactive here)'],
@@ -855,6 +1082,11 @@ def check_all(manifest):
     errors += check_evidence(manifest, revisions)
     if not errors:
         errors += check_candidate(manifest)
+    for key, value in describe().items():
+        if value is not None and manifest.get(key) != value:
+            errors.append(f'{key}: differs from the stated contract; regenerate with --write')
+    if SCHEMA >= 3 and manifest.get('lunchInputs') != lunch_inputs():
+        errors.append('lunchInputs: not the committed frankel-lunch-inputs.json by path and sha256')
     check.bound = tuple(bound)
     return errors
 

@@ -13,6 +13,7 @@ import shutil
 import subprocess
 import tempfile
 import unittest
+import zlib
 import xml.etree.ElementTree as ET
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -40,7 +41,7 @@ def blob(data):
 
 class FrankelLunchInputsTest(unittest.TestCase):
     # OS Product's proposed version (#410), not yet agreed with Release; once agreed, any change needs re-agreement.
-    PROPOSED_SHA256 = 'fabb9292186800a8d41974491d2d320d790c7a22e9200941464b235b3c4218df'
+    PROPOSED_SHA256 = 'd259aae6d1984dea2ead3f929aeb7ce9a2807681f28147ce53deb2ada36ec4e3'
 
     def manifest(self):
         return json.loads(MANIFEST.read_text())
@@ -173,8 +174,14 @@ class FrankelLunchInputsTest(unittest.TestCase):
         git = self.manifest()['gitRequirement']
         self.assertEqual((git['project'], git['revision'], git['path']), ('vendor/adevtool', PIN, 'vendor/adevtool/.git'))
         self.assertEqual({o['class']: o['status'].split(' ')[0] for o in git['options']},
-            {'genuine-copy': 'allowed', 'redirect': 'refused', 'fabrication': 'refused', 'relaxation': 'refused'})
+            {'genuine-copy': 'allowed', 'redirect': 'refused', 'public-fetch': 'allowed', 'fabrication': 'refused',
+             'relaxation': 'refused'})
         self.assertIn('separate approval with exact paths and bounds', git['options'][0]['status'])
+        self.assertIn('separate runtime approval', git['options'][2]['status'])
+        self.assertEqual([o for o in git['options'] if o['class'] == 'public-fetch'], [git['options'][2]],
+            'exactly one public-fetch row, as the adapter admits it')
+        self.assertEqual(git['options'][2]['url'], git['publicFetch']['url'])
+        self.assertIn('by exactly the publicFetch steps', git['options'][3]['means'])
         self.assertEqual(git['genuineSource']['linkText'], '../../.repo/projects/vendor/adevtool.git')
         self.assertIn('Historical context, not an expected value and not current state', git['genuineSource']['basis'])
         self.assertEqual(git['environment']['GIT_CEILING_DIRECTORIES'], 'the copy root')
@@ -182,10 +189,141 @@ class FrankelLunchInputsTest(unittest.TestCase):
         self.assertIn('rootTree', git['acceptance'][1])
         self.assertIn('nothing redirects outside the copy', git['acceptance'][2])
         self.assertIn('none is a mount point; no regular file in it has more than one hard link', git['acceptance'][2])
-        self.assertIn('none of these checks can tell a fabricated store', git['acceptance'][3])
+        self.assertIn('items 1-3 alone cannot tell a hand-written gitdir from a genuine one', git['acceptance'][3])
         self.assertEqual(git['genuineSource']['kind'], 'historical')
         self.assertIn('except gitRequirement.genuineSource', self.manifest()['provenance'])
-        self.assertIn('--updateSpec', git['options'][3]['means'])
+        self.assertIn('--updateSpec', git['options'][4]['means'])
+
+    def test_public_fetch_is_blazers_git_meta_for_the_pinned_remote_with_a_stricter_tree_check(self):
+        fetch = self.manifest()['gitRequirement']['publicFetch']
+        self.assertEqual(fetch['url'], 'https://github.com/GrapheneOS/adevtool')
+        pinned = ET.parse(ROOT/'os/pinned-manifest.xml').getroot()
+        project = next(p for p in pinned.iter('project') if p.get('path') == 'vendor/adevtool')
+        remote = next(r for r in pinned.iter('remote') if r.get('name') == project.get('remote'))
+        self.assertEqual(fetch['url'], remote.get('fetch') + project.get('name'))
+        self.assertEqual(project.get('revision'), PIN)
+        blazer = importlib.util.spec_from_file_location('blazer_build_only', ROOT/'scripts/blazer-build-only.py')
+        module = importlib.util.module_from_spec(blazer)
+        blazer.loader.exec_module(module)
+        work = '<copy>/vendor/adevtool'
+        self.assertEqual([' '.join(argv) for argv in module.git_meta_argv(work, '<url>', PIN)], fetch['steps'],
+            'the same three commands as Blazer\'s git-meta')
+        self.assertEqual(fetch['environment']['GIT_ALLOW_PROTOCOL'], 'https')
+        self.assertIn('rootTree', fetch['acceptance'][1])
+        self.assertEqual(fetch['ceiling'], {'seconds': 1800, 'bytes': 1 << 30, 'kind': fetch['ceiling']['kind']})
+        self.assertIn('neither a measured requirement nor a runtime approval', fetch['ceiling']['kind'])
+        self.assertIn('adevtool_git_missing', fetch['unbound'])
+
+    def public_fetch_problems(self, copy, head, tree, listing):
+        """publicFetch.acceptance beyond items 1-3: exact tree, a full fsck, the exact listing, shallow at the pin, no
+        alternates or remote."""
+        work, dot = copy/'vendor/adevtool', copy/'vendor/adevtool/.git'
+        problems = []
+        if self.git(copy, '-C', str(work), 'rev-parse', '--verify', '-q', head + '^{tree}', check=False).stdout.strip() != tree:
+            problems.append('tree')
+        if self.git(copy, '-C', str(work), 'fsck', '--no-dangling', '--no-progress', check=False).returncode:
+            problems.append('fsck')
+        listed = subprocess.run(['git', '-C', str(work), 'ls-tree', '-r', '-z', '--full-tree', head], env=self.env(copy),
+            capture_output=True)
+        if listed.returncode or listed.stdout.replace(b'\0', b'\n') != listing:
+            problems.append('listing')
+        if not (dot/'shallow').is_file() or (dot/'shallow').read_text() != head + '\n':
+            problems.append('shallow')
+        if os.path.lexists(dot/'objects/info/alternates'):
+            problems.append('alternates')
+        config = self.git(copy, '-C', str(work), 'config', '--local', '--list', check=False).stdout
+        if any(line.startswith('remote.') for line in config.splitlines()):
+            problems.append('remote')
+        return problems
+
+    def test_the_public_fetch_steps_give_metadata_that_passes_and_a_hand_written_store_fails(self):
+        fetch = self.manifest()['gitRequirement']['publicFetch']
+        with tempfile.TemporaryDirectory() as scratch:
+            scratch = Path(scratch)
+            origin = scratch/'origin'
+            head = self.commit(scratch, origin)
+            (origin/'second').write_text('y\n')
+            self.git(scratch, '-C', str(origin), 'add', 'second')
+            self.git(scratch, '-C', str(origin), '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', 'y')
+            head = self.git(scratch, '-C', str(origin), 'rev-parse', 'HEAD').stdout.strip()
+            tree = self.git(scratch, '-C', str(origin), 'rev-parse', 'HEAD^{tree}').stdout.strip()
+            listing = subprocess.run(['git', '-C', str(origin), 'ls-tree', '-r', '-z', '--full-tree', head],
+                env=self.env(scratch), capture_output=True, check=True).stdout.replace(b'\0', b'\n')
+            # The contract's own steps, run offline: a file:// remote stands in for https (only the protocol differs).
+            copy = scratch/'copy'
+            (copy/'vendor/adevtool').mkdir(parents=True)
+            for step in fetch['steps']:
+                argv = step.replace('<copy>', str(copy)).replace('<url>', 'file://' + str(origin)).replace(PIN, head)
+                subprocess.run(argv.split(' '), cwd=copy, env=self.env(copy, GIT_ALLOW_PROTOCOL='file'), check=True,
+                    capture_output=True)
+            self.head = head
+            self.assertIsNone(self.accepted(copy))
+            self.assertEqual(self.public_fetch_problems(copy, head, tree, listing), [])
+            self.assertFalse(os.path.lexists(copy/'vendor/adevtool/.git/hooks'), 'no templates, so no hooks')
+            self.assertEqual(os.listdir(copy/'vendor/adevtool'), ['.git'], 'the working tree is untouched')
+            # Hand-written stores pass items 1-3: one holding only the commit object fails the tree check; one holding the
+            # commit and its tree but no blobs passes that and the listing, and the full fsck refuses it; one holding
+            # every object with a blob's bytes replaced passes even --connectivity-only, and only the full fsck (which
+            # rehashes each object) refuses it.
+            blobs = [line.split(b'\t')[0].split(b' ')[2].decode() for line in listing.splitlines()]
+            for name, objects, expected in (('commit-only', [head], ['tree', 'fsck', 'listing', 'shallow']),
+                    ('no-blobs', [head, tree], ['fsck', 'shallow']),
+                    ('corrupt-blob', [head, tree] + blobs, ['fsck'])):
+                fake = scratch/name
+                gitdir = fake/'vendor/adevtool/.git'
+                (gitdir/'refs').mkdir(parents=True)
+                for oid in objects:
+                    loose = Path('objects')/oid[:2]/oid[2:]
+                    (gitdir/loose).parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copyfile(origin/'.git'/loose, gitdir/loose)
+                (gitdir/'HEAD').write_text(head + '\n')
+                if name == 'corrupt-blob':
+                    # Shallow at the pin like a real fetch, so only the replaced bytes differ from a genuine store.
+                    (gitdir/'shallow').write_text(head + '\n')
+                    target = gitdir/'objects'/blobs[0][:2]/blobs[0][2:]
+                    target.chmod(0o644)
+                    target.write_bytes(zlib.compress(b'blob 2\0z\n'))
+                    self.assertEqual(self.git(fake, '-C', str(fake/'vendor/adevtool'), 'fsck', '--connectivity-only',
+                        '--no-progress', check=False).returncode, 0, 'connectivity alone does not see the bytes')
+                self.assertIsNone(self.accepted(fake), name)
+                self.assertEqual(self.public_fetch_problems(fake, head, tree, listing), expected, name)
+
+    def test_the_adevtool_working_tree_is_exactly_its_listing_and_gitignored_paths_are_omitted(self):
+        manifest = self.manifest()
+        tree = manifest['gitRequirement']['workingTree']
+        self.assertEqual(tree['untrackedAllowed'], [])
+        self.assertIn('nothing else is, except .git', tree['rule'])
+        pinned = (FIXTURES/'vendor/adevtool/.gitignore').read_bytes()
+        self.assertEqual(tree['omittedFromCopy']['gitignore'], pinned.decode().splitlines())
+        self.assertEqual(tree['omittedFromCopy']['gitBlob'], '969b2c305b39480d6f7f68dac493744e204de8d3')
+        listed = [line.split('\t', 1)[1] for line in gzip.decompress(
+            (FIXTURES/'trees/vendor__adevtool.ls-tree.txt.gz').read_bytes()).decode().splitlines()]
+        with tempfile.TemporaryDirectory() as scratch:
+            scratch = Path(scratch)
+            self.git(scratch, 'init', '-q', str(scratch/'r'))
+            (scratch/'r/.gitignore').write_bytes(pinned)
+            def ignored(paths):
+                out = subprocess.run(['git', '-C', str(scratch/'r'), 'check-ignore', '--no-index', '-z', '--stdin'],
+                    input='\0'.join(paths).encode(), env=self.env(scratch), capture_output=True)
+                return sorted(p for p in out.stdout.decode().split('\0') if p)
+            self.assertEqual(ignored(listed), [], 'the omission never drops a tracked path')
+            self.assertEqual(ignored(['node_modules/x/Android.mk', 'dist/a', 'lib/b', '.idea/c', 'dl/factory.zip',
+                'dl/.find-ignore', 'src/x.ts']), ['.idea/c', 'dist/a', 'dl/factory.zip', 'lib/b',
+                'node_modules/x/Android.mk'])
+        prune = {m['path'] for m in manifest['finderPrune']['markers']}
+        self.assertEqual(prune, {'vendor/adevtool/dl/.find-ignore', 'vendor/adevtool/vendor-skels/.find-ignore'},
+            'only dl/ and vendor-skels/ are pruned, so other untracked content would reach the finder')
+
+    def test_each_listing_states_how_its_working_tree_is_checked(self):
+        checks = {s['path']: s['workingTreeCheck'] for s in self.manifest()['sources']}
+        self.assertTrue(checks['vendor/adevtool'].startswith('exact'))
+        self.assertTrue(checks['device/google/laguna-kernels/6.6'].startswith('exact'))
+        self.assertTrue(checks['build/make'].startswith('derivation only'))
+        patcher = (ROOT/'scripts/apply-os-changes.py').read_text()
+        self.assertIn("projects['build/make']", patcher, 'RoseOS patches build/make, so its tree is not the listing')
+        for patch in (ROOT/'os/patches').glob('*.patch'):
+            self.assertNotIn('laguna-kernels', patch.read_text(errors='replace'))
+        self.assertFalse((ROOT/'os/overlays/device').exists())
 
     def test_the_generated_vendor_observables_are_the_reference_spec(self):
         vendor = self.manifest()['generatedVendor']

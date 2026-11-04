@@ -115,10 +115,14 @@ class Job(unittest.TestCase):
                 self.assertNotEqual(run(**change), 0)
 
     def test_guard_outputs_match_the_adapter_bounds(self):
-        outer = adapter.PREPARE_SECONDS + adapter.KILL_GRACE_SECONDS + adapter.PIN_SECONDS + adapter.LUNCH_SECONDS + adapter.KILL_GRACE_SECONDS + adapter.COMPILE_SECONDS \
-            + adapter.KILL_GRACE_SECONDS + 600
-        minutes = -(-(outer + adapter.FINISH_SECONDS + adapter.KILL_GRACE_SECONDS) // 60) + 10
-        self.assertEqual((outer, adapter.FINISH_SECONDS, minutes), (18090, 1800, 342))
+        # every lunch is the contract's (definitions.lunch): its inputs and the admitted fetch come before lunch and m;
+        # the candidate branch checks its tree pins twice (base-exact, final-exact)
+        for pins, expected in ((1, (21720, 1800, 403)), (2, (23520, 1800, 433))):
+            outer = (adapter.PREPARE_SECONDS + adapter.KILL_GRACE_SECONDS + pins * adapter.PIN_SECONDS
+                     + adapter.LUNCH_INPUT_SECONDS + adapter.ADEVTOOL_FETCH_SECONDS + adapter.KILL_GRACE_SECONDS
+                     + adapter.LUNCH_SECONDS + adapter.KILL_GRACE_SECONDS + adapter.COMPILE_SECONDS + adapter.KILL_GRACE_SECONDS + 600)
+            minutes = -(-(outer + adapter.FINISH_SECONDS + adapter.KILL_GRACE_SECONDS) // 60) + 10
+            self.assertEqual((outer, adapter.FINISH_SECONDS, minutes), expected)
 
 
 class Ownership(unittest.TestCase):
