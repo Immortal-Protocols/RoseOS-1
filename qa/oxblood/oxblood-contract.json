@@ -52,6 +52,7 @@
   },
   "roseMicInput": {
     "meaning": "whether microphone input into Rose Agent is withheld; unmute restores it. Never Rose's output, other apps' audio, Sensor Privacy or AudioManager microphone mute; never starts, ends or stops a call, task or session",
+    "capture": "App Core (#520): while muted the microphone stays open but silent, so the system privacy indicator stays on (input mute, not Sensor Privacy); unmute gives each held mic track back exactly what the provider last asked for, never more",
     "shown": "the live call's own input mute while a call is live and connected (VoiceService.muted), otherwise the shared state (RoseMicInput.shown)",
     "store": "Rose's private preferences rose-mic-input/muted, default false; a new call, reconnect or replaced renderer starts from it",
     "backend": "App Core (VoiceService, voice page, voice-providers, LocalRoseLink): reads the store at every call start and reconnect; writes it only for tray_mute/tray_unmute (any origin) and for a page-originated change acknowledged while live and connected; never for a reset (call end, cleanup, renderer loss, connecting); a muted start disables the mic from its first frame; input mute never gates Rose's output",
