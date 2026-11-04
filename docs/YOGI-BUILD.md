@@ -122,3 +122,43 @@ exact app/policy identities, tool versions, exit status, output sizes and hashes
 Compilation is followed by artifact inspection and signing review. Follow
 [verification](VERIFY.md) for the evidence boundaries. No flashing, bootloader
 locking, reboot or phone data change is part of this build scope.
+
+## Candidate 2026110401: measured build evidence
+
+On 2026-11-04 UTC, Rose source
+`c47898373a72fc856517a91c0cf13e75c8b80662` compiled `yogi-cur-user` with
+`USE_STOCK_KERNEL=true`, `SOONG_NINJA=ninja`, 48 jobs and a relative output
+directory. Both requested goals completed in 01:04:58 with no failed Ninja steps.
+Earlier absolute-output attempts and a later receipt-path error are retained in
+the private build record; the latter occurred after successful compilation and
+was recovered by locating the actual Soong tools package, without a rebuild.
+
+- Target-files: 4,472,190,371 bytes, SHA-256
+  `bcf6b5b9a7a1b84977543f764489e7d1bbc7301d7829bccaf32be750c2e04431`.
+- OS tools: 536,791,285 bytes, SHA-256
+  `34bf8e37e2c9b4238c79777ab591839fdd5ee974709da72ecd036df57c40304e`.
+- Both archives passed full ZIP CRC checks. Image properties identify Yogi,
+  Android 17 / API 37, build `2026110401`, SPL `2026-10-05`, `user`,
+  `test-keys`, and `ro.debuggable=0`. The tray and data-loader workaround are
+  present. Soong selected the 2 GiB allocator class region.
+- All 211 packaged APK identities decoded. Rose Agent 311, Calculator 4 and
+  controller 28 exactly match the verified input APKs and passed SDK 37 signature
+  inspection. Rose Agent declares HOME and contains the Oxblood Home classes;
+  that is not a rendered or runtime HOME-role result. No Updater is included.
+- AVB signatures and partition hashes/hashtrees passed verification against the
+  pinned **public AOSP development key**, public-key SHA-256
+  `7728e30f50bfa5cea165f473175a08803f6a8346642b5aa10913e9d9e6defef6`.
+- The selected offline suite and required CI no-unexpected-skip cases passed.
+  The updated artifact verifier passed 53 Linux tests; the Yogi preparer passed
+  13. Verification tool revision:
+  `432d2b2154ac314afdc2bd38f9ee91fce166e3f4`.
+
+The pinned optimizer warned that API 37 exceeds its supported API 36 table;
+compilation continued successfully. The factory kernel release string matches
+the observed phone kernel, but installed kernel bytes and module loading were
+not verified. These are experimental development artifacts, not a signed
+production release or an installation/OTA package. Their app signer differs from
+the phone's installed signer, and controller 28 is below the installed 43, so this
+is not an in-place update. No boot, visual acceptance, physical acceptance,
+flashing or publication was performed. Private receipts and artifacts belong in
+the ignored `out/yogi-2026110401/` directory and on the dedicated builder.
