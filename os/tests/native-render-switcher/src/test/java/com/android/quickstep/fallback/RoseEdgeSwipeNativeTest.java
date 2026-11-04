@@ -12,8 +12,9 @@ import android.content.Context;
 import android.graphics.Matrix;
 import android.graphics.Rect;
 import android.graphics.RectF;
-import android.os.SystemClock;
+import android.hardware.display.DisplayManager;
 import android.os.SystemProperties;
+import android.view.Surface;
 import java.util.ArrayList;
 import java.util.List;
 import org.junit.After;
@@ -25,13 +26,14 @@ import org.robolectric.RuntimeEnvironment;
 import org.robolectric.annotation.Config;
 
 /**
- * #410 E2a, kept for E2c: the production RoseEdgeSwipe and RoseEdgeState (compiled unchanged from the Launcher3
- * overlay, with E2c's RoseEdgeShell behind a fake shell binder that accepts every one-way call, so a raise can happen
- * without a real WMShell; E2c's shell protocol itself is tested in os/staged/rose-edge-resize/native-test) on
- * Robolectric's SDK 35 runtime, at the frozen reference's 384x832dp screen, xxhdpi (and once at 420dpi): the default-off
- * switch, the gates (including "no edge window, no raise"), raising and lowering per display and task with listeners,
- * distances and speed from touch-down, and the preview's matrix and crop. Framework behaviour on a host: the patched
- * Launcher3 swipe handler that calls these is not compiled or run here.
+ * #410: the production RoseEdgeSwipe and RoseEdgeState (compiled unchanged from the Launcher3 overlay, with
+ * RoseEdgeShell behind a fake shell binder that records every one-way call, so a raise can happen without a real
+ * WMShell; the shell protocol itself is tested in os/staged/rose-edge-resize/native-test) on Robolectric's SDK 35
+ * runtime, at the frozen reference's 384x832dp screen, xxhdpi (and once at 420dpi). It covers the staged bottom
+ * gesture as the handler drives it: the default-off switch, when a gesture is staged (and why not), the tray revealed
+ * with the finger (peek) without any shell call, the stages with the slop added back, the release (raise once, Home on
+ * a flick, the switcher winning, cancel), the tray already up, abandon, and the preview's matrix and crop. Framework
+ * behaviour on a host: the patched Launcher3 swipe handler that calls these is not compiled or run here.
  */
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk = 35, qualifiers = "w384dp-h832dp-xxhdpi")
@@ -43,11 +45,25 @@ public class RoseEdgeSwipeNativeTest {
     float density;
     int width, height;
     final List<String> events = new ArrayList<>();
-    final RoseEdgeState.Listener listener = (display, raised) -> events.add(display + (raised ? " up" : " down"));
-    /** The shell's IRoseEdge as Launcher3 receives it: it accepts each one-way transaction and replies nothing. */
+    final List<String> peeks = new ArrayList<>();
+    final List<Integer> shellCalls = new ArrayList<>();
+    final RoseEdgeState.Listener listener = new RoseEdgeState.Listener() {
+        @Override
+        public void onRaisedChanged(int display, boolean raised) {
+            events.add(display + (raised ? " up" : " down"));
+        }
+
+        @Override
+        public void onPeek(int display, float reveal, float approach, int stage) {
+            peeks.add(reveal < 0 ? display + " end" : display + " " + RoseEdgeGesture.stageName(stage) + " "
+                    + Math.round(reveal * 100) + "%");
+        }
+    };
+    /** The shell's IRoseEdge as Launcher3 receives it: it records each one-way transaction and replies nothing. */
     final android.os.Binder shell = new android.os.Binder() {
         @Override
         protected boolean onTransact(int code, android.os.Parcel data, android.os.Parcel reply, int flags) {
+            shellCalls.add(code);
             return true;
         }
     };
@@ -65,6 +81,8 @@ public class RoseEdgeSwipeNativeTest {
         RoseEdgeState.lower(OTHER_DISPLAY);
         RoseEdgeState.addListener(listener);
         events.clear();
+        peeks.clear();
+        shellCalls.clear();
     }
 
     /** The system's "Remove animations" (animator duration scale 0); ValueAnimator.areAnimatorsEnabled reads it. */
@@ -82,35 +100,42 @@ public class RoseEdgeSwipeNativeTest {
         durationScale(1f);
     }
 
-    /** A gesture over TASK on DISPLAY that touched down msAgo milliseconds ago. */
-    RoseEdgeSwipe swipe(boolean on, boolean excluded, long msAgo) {
-        return swipe(on, excluded, msAgo, DISPLAY, TASK);
+    RoseEdgeSwipe swipe(boolean on) {
+        return swipe(on, false, true, false, DISPLAY, TASK);
     }
 
-    RoseEdgeSwipe swipe(boolean on, boolean excluded, long msAgo, int display, int task) {
+    RoseEdgeSwipe swipe(boolean on, boolean excluded, boolean gestureNav, boolean ime, int display, int task) {
         SystemProperties.set(RoseEdgeSwipe.PROPERTY, on ? "true" : "");
-        return new RoseEdgeSwipe(context, display, task, SystemClock.uptimeMillis() - msAgo, SLOP_DP * density, excluded);
+        return new RoseEdgeSwipe(context, display, task, SLOP_DP * density, excluded, gestureNav, ime);
     }
 
-    /** A release dp from touch-down that Launcher3 would send Home (the handler's displacement excludes the slop). */
-    int release(RoseEdgeSwipe s, float dp) {
-        return s.release(true, true, false, false, true, (dp - SLOP_DP) * density);
+    /** Moves to each dp from touch-down (the handler's displacement excludes the slop); returns the last stage. */
+    int drag(RoseEdgeSwipe s, float... dps) {
+        int stage = s.stage();
+        for (float dp : dps) stage = s.onMove((dp - SLOP_DP) * density);
+        return stage;
+    }
+
+    /** Releases at liftOffDpPerMs upward (Launcher3's end velocity is px/ms, negative upward). */
+    int release(RoseEdgeSwipe s, float liftOffDpPerMs) {
+        return s.release(false, -liftOffDpPerMs * density);
     }
 
     @Test
     public void theRealPropertyIsReadAndItIsOffByDefault() {
         SystemProperties.set(RoseEdgeSwipe.PROPERTY, "true");
         assertEquals("the runtime's SystemProperties, not the compile stub", "true", SystemProperties.get(RoseEdgeSwipe.PROPERTY));
-        RoseEdgeSwipe off = swipe(false, false, 400);
+        RoseEdgeSwipe off = swipe(false);
         assertFalse(off.enabled());
-        assertFalse(off.active(true, true));
-        assertEquals("off: Launcher3 decides everything", RoseEdgeGesture.STOCK, release(off, 80));
-        assertFalse("off: Launcher3's own transform", off.preview(true, true, false, 80 * density, width, height,
+        assertFalse(off.staged());
+        assertEquals("off: moves change nothing", RoseEdgeGesture.NONE, drag(off, 60, 120));
+        assertEquals("off: Launcher3 decides everything", RoseEdgeGesture.STOCK, release(off, 0));
+        assertFalse("off: Launcher3's own transform", off.preview(false, 80 * density, width, height,
                 new Matrix(), new Rect(), new float[1]));
-        assertTrue("and nothing was raised", events.isEmpty());
+        assertTrue("and nothing was raised or revealed", events.isEmpty() && peeks.isEmpty() && shellCalls.isEmpty());
         Throwable[] thrown = new Throwable[1];
         Thread t = new Thread(() -> {
-            try { off.settled(false); } catch (Throwable e) { thrown[0] = e; }
+            try { off.settled(false); off.abandon(); } catch (Throwable e) { thrown[0] = e; }
         });
         t.start();
         try { t.join(); } catch (InterruptedException e) { throw new AssertionError(e); }
@@ -118,119 +143,177 @@ public class RoseEdgeSwipeNativeTest {
     }
 
     @Test
-    public void withoutAnEdgeWindowNothingRisesAndNothingChanges() {
-        RoseEdgeState.removeListener(listener);
-        assertFalse(RoseEdgeState.hasListener());
-        RoseEdgeSwipe s = swipe(true, false, 400);
-        assertFalse("no window to draw it: inactive", s.active(true, true));
-        assertEquals("a short swipe keeps Launcher3's own result", RoseEdgeGesture.STOCK, release(s, 80));
-        assertFalse(RoseEdgeState.isRaised(DISPLAY));
-        assertFalse("no preview either", s.preview(true, true, false, 60 * density, width, height, new Matrix(),
-                new Rect(), new float[1]));
-        assertFalse("and the state refuses a raise", RoseEdgeState.raise(DISPLAY, TASK, lift));
-        RoseEdgeState.addListener(listener);
-    }
-
-    @Test
-    public void onlyAnUnlockedAppUnderGestureNavigationInItsNaturalRotation() {
-        assertTrue(swipe(true, false, 0).active(true, true));
-        assertFalse("over Home, a trackpad, a continued gesture or not full screen", swipe(true, true, 0).active(true, true));
-        assertFalse("three-button navigation", swipe(true, false, 0).active(false, true));
-        assertFalse("rotated", swipe(true, false, 0).active(true, false));
+    public void stagedOnlyForAnUnlockedFullScreenAppUnderGestureNavigationWithAnEdgeWindowAndTheShell() {
+        assertTrue(swipe(true).staged());
+        assertFalse("over Home, a trackpad, a continued gesture or not full screen",
+                swipe(true, true, true, false, DISPLAY, TASK).staged());
+        assertFalse("three-button navigation", swipe(true, false, false, false, DISPLAY, TASK).staged());
+        assertFalse("the keyboard is showing", swipe(true, false, true, true, DISPLAY, TASK).staged());
         shadowOf(context.getSystemService(KeyguardManager.class)).setKeyguardLocked(true);
-        assertFalse("locked", swipe(true, false, 0).active(true, true));
+        assertFalse("locked", swipe(true).staged());
         shadowOf(context.getSystemService(KeyguardManager.class)).setKeyguardLocked(false);
+        shadowOf(context.getSystemService(DisplayManager.class).getDisplay(DISPLAY)).setRotation(Surface.ROTATION_90);
+        assertFalse("rotated", swipe(true).staged());
+        shadowOf(context.getSystemService(DisplayManager.class).getDisplay(DISPLAY)).setRotation(Surface.ROTATION_0);
+        RoseEdgeShell.setShell(null);
+        assertFalse("the shell is unavailable", swipe(true).staged());
+        RoseEdgeShell.setShell(shell);
+        RoseEdgeState.removeListener(listener);
+        assertFalse("no edge window to draw it", swipe(true).staged());
+        RoseEdgeState.addListener(listener);
+        RoseEdgeSwipe unstaged = swipe(true, true, true, false, DISPLAY, TASK);
+        assertEquals("unstaged: moves change nothing", RoseEdgeGesture.NONE, drag(unstaged, 80, 300));
+        assertEquals("unstaged: Launcher3 decides", RoseEdgeGesture.STOCK, release(unstaged, 0));
+        assertTrue(peeks.isEmpty() && events.isEmpty());
     }
 
     @Test
-    public void launcher3sOwnTargetCancelAndPauseStand() {
-        RoseEdgeSwipe s = swipe(true, false, 400);
-        float up = (80 - SLOP_DP) * density;
-        assertEquals("back to the app (or anything not Home) stays", RoseEdgeGesture.STOCK, s.release(true, true, false, false, false, up));
-        assertEquals("a cancel stays", RoseEdgeGesture.STOCK, s.release(true, true, true, false, true, up));
-        assertEquals("a pause stays", RoseEdgeGesture.STOCK, s.release(true, true, false, true, true, up));
+    public void theFirstMovementRevealsTheTrayWithoutTouchingTheShell() {
+        RoseEdgeSwipe s = swipe(true);
+        assertEquals(RoseEdgeGesture.NONE, drag(s, 24));
+        assertEquals(RoseEdgeGesture.TRAY, drag(s, 50));
+        assertEquals(List.of("0 NONE 50%", "0 TRAY 100%"), peeks);
+        assertTrue("revealing is drawing only: no raise, resize or microphone slot", shellCalls.isEmpty());
         assertFalse(RoseEdgeState.isRaised(DISPLAY));
-        assertTrue(events.isEmpty());
     }
 
     @Test
-    public void distancesCountFromTouchDownIncludingTheSlop() {
-        assertEquals("40dp from touch-down raises (the slop is added back)", RoseEdgeGesture.RAISE, release(swipe(true, false, 400), 40));
-        RoseEdgeState.lower(DISPLAY);
-        assertEquals("36dp or less does not", RoseEdgeGesture.STOCK, release(swipe(true, false, 400), 35));
-    }
-
-    @Test
-    public void aShortSwipeRaisesTheEdgeOverItsTaskAndLeavingLowersIt() {
-        RoseEdgeSwipe s = swipe(true, false, 60);
-        assertEquals(RoseEdgeGesture.RAISE, release(s, 80));
+    public void releaseAtTheTrayRaisesOnceAndTheTrayStays() {
+        RoseEdgeSwipe s = swipe(true);
+        drag(s, 10, 30, 55, 70);
+        assertEquals(RoseEdgeGesture.RAISE, release(s, 0.05f));
         assertTrue(RoseEdgeState.isRaised(DISPLAY, TASK));
-        assertFalse("only over the task it rose over", RoseEdgeState.isRaised(DISPLAY, OTHER_TASK));
-        assertEquals(List.of("0 up"), events);
+        assertEquals("one raise", List.of("0 up"), events);
+        assertEquals("one shell raise", List.of(RoseEdgeShell.TRANSACTION_RAISE), shellCalls);
+        assertEquals("the reveal ended after the raise", "0 end", peeks.get(peeks.size() - 1));
         s.settled(true);
         assertTrue("back to the app keeps it up", RoseEdgeState.isRaised(DISPLAY, TASK));
+    }
 
-        assertEquals("raised: a short swipe keeps it", RoseEdgeGesture.STAY, release(swipe(true, false, 60), 80));
-        assertEquals("over another task it is not up: the gesture can raise it there",
-                RoseEdgeGesture.RAISE, release(swipe(true, false, 60, DISPLAY, OTHER_TASK), 80));
-        assertEquals("re-targeting tells nobody twice", List.of("0 up"), events);
-        assertTrue(RoseEdgeState.isRaised(DISPLAY, OTHER_TASK));
-
-        RoseEdgeSwipe home = swipe(true, false, 900, DISPLAY, OTHER_TASK);
-        assertEquals("raised: more than 120dp goes Home", RoseEdgeGesture.HOME, release(home, 130));
-        home.settled(false);
+    @Test
+    public void belowTheTrayOrMovingDownTheReleaseCancels() {
+        RoseEdgeSwipe s = swipe(true);
+        drag(s, 20, 40);
+        assertEquals(RoseEdgeGesture.CANCEL, release(s, 0));
         assertFalse(RoseEdgeState.isRaised(DISPLAY));
-        assertEquals(List.of("0 up", "0 down"), events);
+        assertEquals("0 end", peeks.get(peeks.size() - 1));
+        RoseEdgeSwipe down = swipe(true);
+        drag(down, 30, 80, 70);
+        assertEquals("released moving clearly down", RoseEdgeGesture.CANCEL, release(down, -0.8f));
+        RoseEdgeSwipe back = swipe(true);
+        drag(back, 30, 90, 60, 25);
+        assertEquals("dragged back below the tray", RoseEdgeGesture.CANCEL, release(back, 0));
+        assertTrue(events.isEmpty() && shellCalls.isEmpty());
+    }
+
+    @Test
+    public void aQuickFlickBeforeTheSwitcherGoesHome() {
+        RoseEdgeSwipe s = swipe(true);
+        drag(s, 30, 90);
+        assertEquals(RoseEdgeGesture.HOME, release(s, 2f));
+        assertFalse("Home raises nothing", RoseEdgeState.isRaised(DISPLAY));
+        s.settled(false);
+        assertTrue(events.isEmpty() && shellCalls.isEmpty());
+    }
+
+    @Test
+    public void theSwitcherStageWinsOverReleaseSpeedAndReversalWalksBack() {
+        RoseEdgeSwipe s = swipe(true);
+        assertEquals(RoseEdgeGesture.SWITCHER, drag(s, 60, 150, 230));
+        assertEquals("a flick in the switcher stage still opens the switcher", RoseEdgeGesture.SWITCHER_OPEN, release(s, 3f));
+        s.settled(false);
+        assertFalse(RoseEdgeState.isRaised(DISPLAY));
+
+        RoseEdgeSwipe back = swipe(true);
+        assertEquals(RoseEdgeGesture.SWITCHER, drag(back, 120, 240));
+        assertEquals("hysteresis: still the switcher at 180dp", RoseEdgeGesture.SWITCHER, drag(back, 180));
+        assertEquals("back below 170dp: the tray again", RoseEdgeGesture.TRAY, drag(back, 160));
+        assertEquals(RoseEdgeGesture.RAISE, release(back, 0));
+        assertTrue(RoseEdgeState.isRaised(DISPLAY, TASK));
+    }
+
+    @Test
+    public void withTheTrayAlreadyUpTheStageStartsAtTheTray() {
+        assertTrue(RoseEdgeState.raise(DISPLAY, TASK, lift));
+        events.clear();
+        shellCalls.clear();
+        RoseEdgeSwipe s = swipe(true);
+        assertEquals(RoseEdgeGesture.TRAY, s.stage());
+        assertEquals(RoseEdgeGesture.TRAY, drag(s, 20));
+        assertTrue("already shown: no reveal", peeks.isEmpty());
+        assertEquals(RoseEdgeGesture.STAY, release(s, 0));
+        assertTrue(RoseEdgeState.isRaised(DISPLAY, TASK));
+        assertTrue("no second raise", events.isEmpty() && shellCalls.isEmpty());
+
+        RoseEdgeSwipe home = swipe(true);
+        drag(home, 40, 100);
+        assertEquals(RoseEdgeGesture.HOME, release(home, 2f));
+        home.settled(false);
+        assertFalse("leaving lowers it", RoseEdgeState.isRaised(DISPLAY));
+        assertEquals(List.of("0 down"), events);
+
+        assertEquals("over another task it is not up", RoseEdgeGesture.NONE,
+                swipe(true, false, true, false, DISPLAY, OTHER_TASK).stage());
+    }
+
+    @Test
+    public void aCancelIsLauncher3sAndAbandonTakesTheTrayDown() {
+        RoseEdgeSwipe s = swipe(true);
+        drag(s, 30, 80);
+        assertEquals(RoseEdgeGesture.STOCK, s.release(true, 0));
+        assertEquals("0 end", peeks.get(peeks.size() - 1));
+        assertFalse(RoseEdgeState.isRaised(DISPLAY));
+        RoseEdgeSwipe gone = swipe(true);
+        drag(gone, 30, 80);
+        peeks.clear();
+        gone.abandon();
+        assertEquals("the recents animation was cancelled: the reveal ends", List.of("0 end"), peeks);
+        gone.abandon();
+        assertEquals("once", List.of("0 end"), peeks);
+        assertEquals("after it ended, a move reveals nothing", RoseEdgeGesture.TRAY, drag(gone, 120));
+        assertEquals(List.of("0 end"), peeks);
+        assertEquals("and there is no second release", RoseEdgeGesture.STOCK, release(gone, 0));
+        assertFalse(RoseEdgeState.isRaised(DISPLAY));
     }
 
     @Test
     public void eachDisplayHasItsOwnEdge() {
-        assertEquals(RoseEdgeGesture.RAISE, release(swipe(true, false, 60, OTHER_DISPLAY, TASK), 80));
-        assertTrue(RoseEdgeState.isRaised(OTHER_DISPLAY, TASK));
+        assertFalse("a display that does not exist is never staged",
+                swipe(true, false, true, false, OTHER_DISPLAY, TASK).staged());
+        int other = org.robolectric.shadows.ShadowDisplayManager.addDisplay("w384dp-h832dp-xxhdpi");
+        RoseEdgeSwipe s = swipe(true, false, true, false, other, TASK);
+        drag(s, 70);
+        assertEquals(RoseEdgeGesture.RAISE, release(s, 0));
+        assertTrue(RoseEdgeState.isRaised(other, TASK));
         assertFalse(RoseEdgeState.isRaised(DISPLAY));
-        assertEquals(List.of("2 up"), events);
+        assertEquals(List.of(other + " up"), events);
+        RoseEdgeState.lower(other);
     }
 
     @Test
-    public void speedIsAveragedSinceTouchDown() {
-        assertEquals("200dp in 150ms (1.33dp/ms): Home", RoseEdgeGesture.HOME, release(swipe(true, false, 150), 200));
-        assertEquals("200dp in 400ms (0.5dp/ms): the edge", RoseEdgeGesture.RAISE, release(swipe(true, false, 400), 200));
-    }
-
-    @Test
-    public void theStateDeduplicatesAndListenersAreSet() {
-        RoseEdgeState.lower(DISPLAY);
-        assertTrue("lowering what is down tells nobody", events.isEmpty());
-        RoseEdgeState.addListener(listener);
-        assertTrue(RoseEdgeState.raise(DISPLAY, TASK, lift));
-        assertTrue(RoseEdgeState.raise(DISPLAY, TASK, lift));
-        assertEquals("one listener, one change", List.of("0 up"), events);
-    }
-
-    @Test
-    public void thePreviewCropsAtFullWidthThenShrinksTowardHome() {
-        RoseEdgeSwipe s = swipe(true, false, 0);
+    public void thePreviewFollowsTheTrayAtFullWidthThenShrinksTowardTheSwitcher() {
+        RoseEdgeSwipe s = swipe(true);
         Matrix m = new Matrix();
         Rect crop = new Rect();
         float[] radius = new float[1];
-        assertTrue(s.preview(true, true, false, 60 * density, width, height, m, crop, radius));
+        assertTrue(s.preview(false, 24 * density, width, height, m, crop, radius));
         assertEquals(new Rect(0, 0, width, Math.round(height - 29 * density)), crop);
         assertTrue("unscaled while following", m.isIdentity());
         assertEquals(17 * density, radius[0], 0.01f);
 
-        assertTrue(s.preview(true, true, false, 264 * density, width, height, m, crop, radius));
+        assertTrue(s.preview(false, 220 * density, width, height, m, crop, radius));
         RectF shown = new RectF(crop);
         m.mapRect(shown);
         float bottom = height - 58 * density;
-        assertEquals(width * 0.74f, shown.width(), 0.5f);
-        assertEquals(bottom * 0.74f, shown.height(), 0.5f);
+        assertEquals(width * 0.9f, shown.width(), 0.5f);
+        assertEquals(bottom * 0.9f, shown.height(), 0.5f);
         assertEquals("centred horizontally", width / 2f, shown.centerX(), 0.5f);
-        assertEquals("lifted 40dp about the shortened window's centre", bottom / 2 - 40 * density, shown.centerY(), 0.5f);
+        assertEquals("lifted 24dp about the shortened window's centre", bottom / 2 - 24 * density, shown.centerY(), 0.5f);
 
-        assertFalse("attached to recents (pause or quick switch): Launcher3's own transform",
-                s.preview(true, true, true, 90 * density, width, height, m, crop, radius));
-        assertFalse("no size: Launcher3's own", s.preview(true, true, false, 60 * density, 0, height, m, crop, radius));
-        assertFalse("no size: Launcher3's own", s.preview(true, true, false, 60 * density, width, 0, m, crop, radius));
+        assertFalse("switcher stage or quick switch: Launcher3's own transform",
+                s.preview(true, 90 * density, width, height, m, crop, radius));
+        assertFalse("no size: Launcher3's own", s.preview(false, 60 * density, 0, height, m, crop, radius));
+        assertFalse("no size: Launcher3's own", s.preview(false, 60 * density, width, 0, m, crop, radius));
     }
 
     @Test
@@ -240,46 +323,30 @@ public class RoseEdgeSwipeNativeTest {
         float[] radius = new float[1];
         durationScale(0f);
         assertFalse(ValueAnimator.areAnimatorsEnabled());
-        RoseEdgeSwipe reduced = swipe(true, false, 0);
-        for (float dp : new float[] {90, 264}) {
-            assertTrue(reduced.preview(true, true, false, dp * density, width, height, m, crop, radius));
+        RoseEdgeSwipe reduced = swipe(true);
+        for (float dp : new float[] {30, 200}) {
+            assertTrue(reduced.preview(false, dp * density, width, height, m, crop, radius));
             assertEquals("reduced motion: untouched (" + dp + "dp)", new Rect(0, 0, width, height), crop);
             assertTrue(m.isIdentity());
         }
         durationScale(1f);
 
         RoseEdgeState.raise(DISPLAY, TASK, lift);
-        RoseEdgeSwipe raised = swipe(true, false, 0);
-        for (float dp : new float[] {0, 90, 400}) {
-            assertTrue(raised.preview(true, true, false, dp * density, width, height, m, crop, radius));
-            assertEquals("raised: its raised rect", new Rect(0, 0, width, Math.round(height - 58 * density)), crop);
-            assertTrue(m.isIdentity());
-            assertEquals(34 * density, radius[0], 0.01f);
-        }
-    }
-
-    @Test
-    public void aRaiseAtReleaseDoesNotSnapTheWindow() {
-        RoseEdgeSwipe s = swipe(true, false, 60);
-        Matrix m = new Matrix();
-        Rect crop = new Rect();
-        float[] radius = new float[1];
-        assertEquals(RoseEdgeGesture.RAISE, release(s, 80));
-        assertTrue(s.preview(true, true, false, 40 * density, width, height, m, crop, radius));
-        assertEquals("the return animation follows the shift, not the new raised state",
-                new Rect(0, 0, width, Math.round(height - 58 * density / 3)), crop);
+        RoseEdgeSwipe raised = swipe(true);
+        assertTrue(raised.preview(false, 0, width, height, m, crop, radius));
+        assertEquals("raised: its raised rect", new Rect(0, 0, width, Math.round(height - 58 * density)), crop);
+        assertTrue(m.isIdentity());
+        assertEquals(34 * density, radius[0], 0.01f);
     }
 
     @Test
     @Config(qualifiers = "w384dp-h832dp-420dpi")
     public void anotherDensity() {
         assertEquals(2.625f, density, 0.001f);
-        assertEquals(RoseEdgeGesture.RAISE, release(swipe(true, false, 400), 80));
-        RoseEdgeState.lower(DISPLAY);
-        Rect crop = new Rect();
-        assertTrue(swipe(true, false, 0).preview(true, true, false, 60 * density, width, height, new Matrix(), crop,
-                new float[1]));
-        assertEquals(new Rect(0, 0, width, Math.round(height - 29 * density)), crop);
+        RoseEdgeSwipe s = swipe(true);
+        assertEquals("stages count dp, from touch-down", RoseEdgeGesture.TRAY, drag(s, 49));
+        assertEquals(RoseEdgeGesture.RAISE, release(s, 0));
+        assertEquals("speed converts px/ms to dp/ms", RoseEdgeGesture.HOME, release(swipe(true), 1.3f));
     }
 
     @Test(expected = IllegalStateException.class)

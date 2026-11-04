@@ -1157,25 +1157,16 @@ def check_candidate(manifest):
         if o['before'] is not None and (not copy.is_file() or sha256(copy.read_bytes()) != o['before']):
             errors.append(f'os/tests/fixtures/launcher3-compile-contract/{o["target"]}: no pinned copy of the base '
                 f'overlay image {o["before"]}')
-    # The committed os/ is wholly at the base (this bundle) or wholly at the candidate (#440's branch), never a mix.
+    # The committed os/ is wholly at the base (this bundle), or at or past the candidate: #440 is registered in the
+    # normal build, and later Launcher3 work (#410's staged bottom gesture) moves its files on. This inert contract stays
+    # bound to its own bundle and digests, never to the live os/; a mix of base and candidate inputs still refuses.
     states = set()
     for o in expected['overlays']:
         committed = OS/'overlays'/o['target']
         now = sha256(committed.read_bytes()) if committed.exists() else None
-        if now == o['before']:
-            states.add('base')
-        elif now == o['after']:
-            states.add('candidate')
-        else:
-            errors.append(f'os/overlays/{o["target"]}: neither the base nor the candidate bytes')
+        states.add('base' if now == o['before'] else 'candidate')
     for p in CANDIDATE_PATCHES:
-        committed = OS/'patches'/p
-        if committed.exists():
-            states.add('candidate')
-            if committed.read_bytes() != (BUNDLE/'patches'/p).read_bytes():
-                errors.append(f'os/patches/{p}: differs from the candidate bundle')
-        else:
-            states.add('base')
+        states.add('candidate' if (OS/'patches'/p).exists() else 'base')
     if len(states) > 1:
         errors.append('os/ mixes base and candidate inputs: it must be wholly one or the other')
     return errors

@@ -179,7 +179,7 @@ class RoseEdgeResizeStagedTest(unittest.TestCase):
         wiring = WIRING.read_text()
         self.assertIn('params.getBinder(com.android.quickstep.fallback.RoseEdgeShell.DESCRIPTOR)', wiring)
 
-    def test_the_patcher_registers_both_edge_patches_with_the_switch_and_e2a_stays_byte_identical(self):
+    def test_the_patcher_registers_both_edge_patches_with_the_switch(self):
         # #410 (Chief): the normal OS build compiles them; the switch is the existing persist.wm.debug property, which
         # every app domain may read (pinned sepolicy private/app.te: get_prop(appdomain, persist_wm_debug_prop)).
         patcher = (ROOT/'scripts/apply-os-changes.py').read_text()
@@ -203,12 +203,12 @@ class RoseEdgeResizeStagedTest(unittest.TestCase):
                 self.assertNotIn('b/target/product/handheld_system.mk', other.read_text(errors='replace'), other.name)
         for path in ('scripts/apply-os-changes.py', 'scripts/background_apks.py', 'scripts/integration_copy.py'):
             self.assertNotIn('os/staged', (ROOT/path).read_text(), f'{path} never reads os/staged')
-        # E2a's patch and gesture are unchanged from the reviewed candidate e361d1c; E2c replaces State and Swipe.
-        self.assertEqual(hashlib.sha256((ROOT/'os/patches/rose-edge-launcher3.patch').read_bytes()).hexdigest(),
-            'a1c76e1e03845573501790509a7e620e48476a2bae47889f839d81144dd35460')
-        self.assertEqual(hashlib.sha256((FALLBACK/'RoseEdgeGesture.java').read_bytes()).hexdigest(),
-            '2c0be858885695b77dffaa637f328ce0033d099cc60b10df270e51c67061a570')
-        self.assertIn('RoseEdgeState.canRaise()', (FALLBACK/'RoseEdgeSwipe.java').read_text())
+        # #410 PM-NATIVE-EDGE-GESTURE-002 replaces E2a's release-only rules with the staged gesture (RoseEdgeGesture's
+        # stages, os/tests/RoseEdgeGestureTest.java), still gated on an edge window and the shell.
+        self.assertIn('public static int stage(int previous, float upDp, boolean raisedAtStart)',
+            (FALLBACK/'RoseEdgeGesture.java').read_text())
+        self.assertIn('!RoseEdgeState.hasListener() ? "no edge window"', (FALLBACK/'RoseEdgeSwipe.java').read_text())
+        self.assertIn('!RoseEdgeShell.available() ? "shell unavailable"', (FALLBACK/'RoseEdgeSwipe.java').read_text())
         self.assertFalse((STAGED/'overlays').exists() or (STAGED/'patches').exists(), 'nothing is left staged')
 
 if __name__ == '__main__':
