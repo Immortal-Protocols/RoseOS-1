@@ -14,7 +14,9 @@ Every path and pin comes from committed sources; no argument chooses one:
   signedTargetFilesSha256, otatoolsSha256, fastbootSha256}, all null until their records are supplied;
 - signed target-files: /home/pixelbuild/rose-actions/frankel-<build>/release/signed-target_files.zip, the original
   attempt's own signed output;
-- otatools: os/release-pipeline/frankel.json host.sourceRoot/host.outDir/host.sign.otatools;
+- otatools: <host.sourceRoot>/releases/<build>/frankel-otatools.zip, the copy scripts/host-sign.py made of the build's
+  own otatools when it signed that build (never the shared OUT_DIR copy, which a later compile replaces); the owner and
+  signed markers host-sign.py wrote in the same directory must name the bound candidate, build and signed target-files;
 - release script: host.sourceRoot/script/generate-release.sh, pinned by os/flavors/frankel.json
   provenance.releaseScript;
 - AVB public key: derived from the signed target-files' own vbmeta by the helper and pinned through the flavor's
@@ -32,9 +34,10 @@ Commands:
                                        sign receipt and its passing, non-simulated verification receipt, each naming
                                        the bound candidate, build, timestamp and signed target-files sha256;
                                      - that file's own sha256;
+                                     - the build's release directory markers (owner and signed) against the binding;
                                      - the otatools ZIP's sha256 and size, its bin/fastboot member's sha256, and its
                                        device/common generator members against the flavor's generatorFixture pins;
-                                     - the release script against its pin;
+                                     - the release script, and the one the sign receipt records, against its pin;
                                      - the free bytes the helper's 128 GiB precondition needs.
                                      Only NEW_DIR/frankel-factory-inputs.json is written. Exit 0 when every check holds,
                                      3 when the report lists a problem.
@@ -89,6 +92,11 @@ LABEL = ('unsigned intermediate: this route adds no archive signature (signature
 OBSERVE_SCHEMA = 'roseos.frankel-factory-inputs.v1'
 OBSERVE_FILE = 'frankel-factory-inputs.json'
 GENERATOR_MEMBERS = 'device/common/'
+# scripts/host-sign.py prepare_release_dir/main: <sourceRoot>/releases/<build> is made when that build is signed; it holds
+# the otatools copy the signing used, an owner marker {build, candidate, device} and, after success, the signed marker.
+OTATOOLS_COPY = '{device}-otatools.zip'
+OWNER_MARKER = '.rose-actions-owner.json'
+SIGNED_MARKER = '.rose-actions-signed.json'
 FASTBOOT_MEMBER = 'bin/fastboot'
 LIMITS = {'seconds': 900, 'otatoolsEntries': 200000, 'fastbootBytes': 128 << 20, 'generatorBytes': 1 << 20,
           'receiptBytes': 1 << 20}
@@ -145,9 +153,6 @@ def sources(root=ROOT):
     production = host['sourceRoot']
     if not (isinstance(production, str) and production.startswith('/') and os.path.normpath(production) == production):
         raise Invalid('os/release-pipeline/frankel.json host.sourceRoot must be a normalized absolute path')
-    for name, value in (('host.outDir', host['outDir']), ('host.sign.otatools', host['sign']['otatools'])):
-        if not isinstance(value, str) or value.startswith('/') or '..' in Path(value).parts or not value:
-            raise Invalid(f'os/release-pipeline/frankel.json {name} must be a relative path inside the tree')
     script = flavor['provenance']['releaseScript']['generate-release.sh']
     generator = dict(flavor['inventory']['generatorFixture']['files'])
     for name, value in (('releaseScript', script), *((f'generator {n}', v) for n, v in generator.items())):
@@ -155,13 +160,21 @@ def sources(root=ROOT):
             raise Invalid(f'os/flavors/frankel.json {name} pin must be a sha256')
     if Path(route_lib.TASK_PARENT) in Path(production).parents or Path(production) in Path(route_lib.TASK_PARENT).parents:
         raise Invalid('the task parent must not overlap the production tree')
-    return {'production': production, 'otatools': f'{production}/{host["outDir"]}/{host["sign"]["otatools"]}',
-            'releaseScript': {'path': f'{production}/script/generate-release.sh', 'sha256': script},
+    return {'production': production, 'releaseScript': {'path': f'{production}/script/generate-release.sh', 'sha256': script},
             'generator': generator, 'lock': host['lockPath'], 'avbPublicKeySha256': pipeline['identities']['avbPublicKeySha256']}
 
 
 def attempt_dir(build):
     return Path(ATTEMPT_PARENT)/f'{DEVICE}-{build}'
+
+
+def release_dir(production, build):
+    """The build's own signing release directory (scripts/host-sign.py prepare_release_dir)."""
+    return Path(production)/'releases'/build
+
+
+def otatools_path(production, build):
+    return release_dir(production, build)/OTATOOLS_COPY.format(device=DEVICE)
 
 
 def unbound(binding, stage):
@@ -177,7 +190,7 @@ def route(root=ROOT, binding=None):
     src = sources(root)
     pins = {'targetFiles': {'path': str(attempt_dir(binding['build'])/'release/signed-target_files.zip'),
                             'sha256': binding['signedTargetFilesSha256']},
-            'otatools': {'path': src['otatools'], 'sha256': binding['otatoolsSha256']},
+            'otatools': {'path': str(otatools_path(src['production'], binding['build'])), 'sha256': binding['otatoolsSha256']},
             'releaseScript': dict(src['releaseScript']), 'fastbootSha256': binding['fastbootSha256']}
     return route_lib.Route(DEVICE, binding['build'], pins, installer=INSTALLER, label=LABEL)
 
@@ -228,13 +241,18 @@ def held_lock(path):
         os.close(fd)
 
 
+class Expired(Exception):
+    """The observation's own time bound passed. Not an OSError (TimeoutError is one), so no section handler can take it
+    for a read failure and carry on reading."""
+
+
 class Deadline:
     def __init__(self, seconds, clock=time.monotonic):
         self.clock, self.end = clock, clock() + seconds
 
     def check(self):
         if self.clock() > self.end:
-            raise TimeoutError('the observation exceeded its time bound')
+            raise Expired('the observation exceeded its time bound')
 
 
 def regular(path):
@@ -324,8 +342,10 @@ def otatools_members(path, generator_pins, deadline):
     return found, problems
 
 
-def observe_inputs(out_dir, root=ROOT, attempt_parent=ATTEMPT_PARENT, lock=None, clock=time.monotonic, free=None):
+def observe_inputs(out_dir, run_id, attempt, root=ROOT, attempt_parent=ATTEMPT_PARENT, lock=None, clock=time.monotonic,
+                   free=None):
     """Write NEW/frankel-factory-inputs.json (write-once) and return its exit status (0 every check holds, 3 not)."""
+    numeric(run_id, attempt)
     binding = load_binding(root)
     missing = unbound(binding, 'observe')
     if missing:
@@ -337,13 +357,15 @@ def observe_inputs(out_dir, root=ROOT, attempt_parent=ATTEMPT_PARENT, lock=None,
     base = Path(attempt_parent)/f'{DEVICE}-{build}'
     report = {'schema': OBSERVE_SCHEMA, 'device': DEVICE, 'build': build, 'candidate': sha, 'sourceRun': binding['sourceRun'],
               'buildTimestamp': binding['buildTimestamp'], 'label': LABEL, 'limits': dict(LIMITS), 'problems': [],
+              'source': f'os-release frankel-factory-observe run {run_id} attempt {attempt}',
               'claims': 'read-only measurements of the inputs a frankel-factory-package run would use; nothing packaged',
               'binding': {'path': BINDING, 'sha256': hashlib.sha256((Path(root)/BINDING).read_bytes()).hexdigest()}}
     deadline = Deadline(LIMITS['seconds'], clock)
     try:
         with held_lock(lock or src['lock']):
             report['lock'] = {'held': True}
-            observe_attempt(report, base, binding, root, deadline)
+            observe_attempt(report, base, binding, src, deadline)
+            observe_release(report, src, binding)
             observe_tools(report, src, binding, deadline)
             stats = (free or os.statvfs)(route_lib.TASK_PARENT)
             available = stats.f_bavail * stats.f_frsize
@@ -353,7 +375,7 @@ def observe_inputs(out_dir, root=ROOT, attempt_parent=ATTEMPT_PARENT, lock=None,
     except Invalid as error:  # the lock was absent, unusable or held: nothing was read
         report['lock'] = {'held': False, 'reason': str(error)}
         report['problems'].append(str(error))
-    except TimeoutError as error:
+    except Expired as error:  # the observation stops here; what it measured so far stays in the report
         report['problems'].append(f'deadline: {error}')
     report['complete'] = not report['problems']
     fd = os.open(out_dir/OBSERVE_FILE, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
@@ -362,11 +384,11 @@ def observe_inputs(out_dir, root=ROOT, attempt_parent=ATTEMPT_PARENT, lock=None,
     return 0 if report['complete'] else 3
 
 
-def observe_attempt(report, base, binding, root, deadline):
+def observe_attempt(report, base, binding, src, deadline):
     """The original attempt's chain, receipts and signed target-files, each against the binding."""
     build, sha, stamp, pin = binding['build'], binding['candidate'], binding['buildTimestamp'], binding['signedTargetFilesSha256']
     problems = report['problems']
-    reuse = _module('host_app_reuse', Path(root)/'scripts/host-app-reuse.py')
+    reuse = _module('host_app_reuse', ROOT/'scripts/host-app-reuse.py')  # code from this checkout; root is data only
     try:
         reuse.attempt_chain(base, sha, build, DEVICE)
         report['attempt'] = {'path': str(base), 'chain': 'original attempt, complete through transfer'}
@@ -377,9 +399,13 @@ def observe_attempt(report, base, binding, root, deadline):
     try:
         signing = small_json(release/'sign-receipt.json')
         named = (signing.get('receiptType'), signing.get('candidate'), signing.get('build'), signing.get('signedTargetFilesSha256'))
-        report['signReceipt'] = {'matches': named == ('os-signing', sha, build, pin)}
+        script = signing.get('releaseScriptSha256')
+        report['signReceipt'] = {'matches': named == ('os-signing', sha, build, pin),
+                                 'releaseScriptMatchesPin': script == src['releaseScript']['sha256']}
         if not report['signReceipt']['matches']:
             problems.append('signReceipt: sign-receipt.json does not name this candidate, build and signed target-files')
+        if not report['signReceipt']['releaseScriptMatchesPin']:
+            problems.append('signReceipt: the build was not signed with the os/flavors/frankel.json provenance release script')
     except (OSError, ValueError) as error:
         report['signReceipt'] = {'matches': False}
         problems.append(f'signReceipt: {str(error)[:300]}')
@@ -406,14 +432,34 @@ def observe_attempt(report, base, binding, root, deadline):
         problems.append(f'signedTargetFiles: {str(error)[:300]}')
 
 
+def observe_release(report, src, binding):
+    """The build's signing release directory: host-sign.py's owner marker and its signed marker, against the binding."""
+    build, sha, pin = binding['build'], binding['candidate'], binding['signedTargetFilesSha256']
+    directory = release_dir(src['production'], build)
+    report['releaseDir'] = {'path': str(directory)}
+    for key, name, check in (
+            ('owner', OWNER_MARKER, lambda m: m == {'build': build, 'candidate': sha, 'device': DEVICE}),
+            ('signed', SIGNED_MARKER, lambda m: (m.get('candidate'), m.get('build'), m.get('signedTargetFilesSha256'))
+             == (sha, build, pin))):
+        try:
+            report['releaseDir'][key] = {'matches': check(small_json(directory/name))}
+            if not report['releaseDir'][key]['matches']:
+                report['problems'].append(f'releaseDir: {name} does not name this candidate, build and signed target-files')
+        except (OSError, ValueError) as error:
+            report['releaseDir'][key] = {'matches': False}
+            report['problems'].append(f'releaseDir: {str(error)[:300]}')
+
+
 def observe_tools(report, src, binding, deadline):
-    """The otatools ZIP (sha256, size, fastboot and generator members) and the release script, against their pins."""
+    """The build's otatools copy (sha256, size, fastboot and generator members) and the release script, against their
+    pins."""
     problems = report['problems']
+    path = str(otatools_path(src['production'], binding['build']))
     try:
-        digest, size = file_sha256(src['otatools'], deadline)
-        members, member_problems = otatools_members(src['otatools'], src['generator'], deadline)
+        digest, size = file_sha256(path, deadline)
+        members, member_problems = otatools_members(path, src['generator'], deadline)
         fastboot = members.get(FASTBOOT_MEMBER)
-        report['otatools'] = {'path': src['otatools'], 'sha256': digest, 'bytes': size, 'members': members,
+        report['otatools'] = {'path': path, 'sha256': digest, 'bytes': size, 'members': members,
                               'fastbootSha256': fastboot['sha256'] if fastboot else None,
                               'matchesBinding': {'otatoolsSha256': binding['otatoolsSha256'] in (None, digest),
                                                  'fastbootSha256': binding['fastbootSha256'] in (None, fastboot and fastboot['sha256'])}}
@@ -422,7 +468,7 @@ def observe_tools(report, src, binding, deadline):
             if not ok:
                 problems.append(f'otatools: the measured value differs from the bound {key}')
     except (OSError, ValueError, zipfile.BadZipFile) as error:
-        report['otatools'] = {'path': src['otatools'], 'sha256': None}
+        report['otatools'] = {'path': path, 'sha256': None}
         problems.append(f'otatools: {str(error)[:300]}')
     try:
         digest, size = file_sha256(src['releaseScript']['path'], deadline)
@@ -481,8 +527,7 @@ def main(argv=None):
         if a.command == 'observe-inputs':
             if not a.out or a.upload_dir or a.attempt_record or a.installer_upload:
                 raise Invalid('observe-inputs takes --run-id, --attempt and --out only')
-            numeric(a.run_id, a.attempt)
-            return observe_inputs(a.out)
+            return observe_inputs(a.out, a.run_id, a.attempt)
         bound = route()
         root_dir = route_lib.task_root(bound, a.run_id, a.attempt)
         if a.out:
@@ -505,7 +550,7 @@ def main(argv=None):
         if a.command == 'stage-installer':
             staged = route_lib.stage_installer(bound, root_dir)
             print(json.dumps(staged, sort_keys=True), file=sys.stderr)
-            print(f'root={root_dir}')
+            print(f'root={root_dir}\nfile={staged["file"]}')  # the ZIP's name carries the bound build
             return 0
         print(json.dumps(route_lib.report(bound, root_dir, a.upload_dir, a.installer_upload, record), sort_keys=True))
         return 0
