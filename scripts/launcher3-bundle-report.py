@@ -11,16 +11,18 @@ It runs in isolated mode (-I), so nothing beside it on the path is imported, fro
 refs/remotes/origin/main (a reviewed commit) and whose run-association document, os/build-only/launcher3-bundle-run.json
 (runId, runAttempt, headSha, label, createdAt, updatedAt: Release's file, Infra's values, entered by review from GitHub
 run metadata), is exactly its committed blob at HEAD. Every value written comes from that document, the pinned
-contract, this checkout's Git history at headSha (no replace objects or grafts), or the reconcile receipt directory
-headSha's own recipe names, never from expected values:
+contract, this checkout's Git history at headSha (no replace objects or grafts, and every object of its store,
+alternates included, first verified against its id by git fsck: git does not re-hash what it reads), or the reconcile
+receipt directory headSha's own recipe names, never from expected values:
   - run: the document's fields, and bindingSha256, the sha256 of its committed bytes;
   - receipt: exactly one regular *-<label>.json in headSha:os/release-pipeline/frankel.json
     host.integrate.reconcile.receiptDir (absolute) with receiptType reconcile and the run's label, its at within
     [createdAt, updatedAt]; its path, sha256, type, label, at and trusted-patcher record as read, read through the
     opened directory (no link, FIFO or oversized file, no duplicate key). Its entries are association only: where they
     name an observed overlay, the bytes they record as installed must be the overlay's;
-  - candidate: commit (headSha, exactly a commit of this checkout), onMain (headSha is an ancestor of
-    refs/remotes/origin/main, from whole history: a shallow checkout or an unreadable object refuses),
+  - candidate: commit (headSha, exactly a commit of this checkout), onMain (headSha is an ancestor of this checkout's
+    HEAD, producer.roseRevision: the reviewed commit that names it, itself on refs/remotes/origin/main, so the report
+    records what onMain was read against; from whole history: a shallow checkout or an unreadable object refuses),
     frankelConfigSha256, applyArgs and patcherKind (the recipe's);
   - registration: source as base.bundleReport.values states it; patcherMatchesPin and applyArgsMatchPin, both of which
     must hold (the contract's names and order are used only then: contractDerived);
@@ -93,14 +95,18 @@ def sha256(data):
 
 
 def strict_json(data):
-    """JSON with no duplicate key (the last of two would win silently) and no nesting deep enough to raise."""
+    """JSON as RFC 8259 has it: no duplicate key (the last of two would win silently), no NaN or Infinity, and no
+    nesting deep enough to raise."""
     def pairs(items):
         keys = [k for k, _ in items]
         if len(keys) != len(set(keys)):
             raise ValueError('a duplicate key')
         return dict(items)
+
+    def constant(name):
+        raise ValueError(f'{name}, which is not JSON')
     try:
-        return json.loads(data, object_pairs_hook=pairs)
+        return json.loads(data, object_pairs_hook=pairs, parse_constant=constant)
     except RecursionError:
         raise ValueError('nested too deeply') from None
 
@@ -358,6 +364,10 @@ def produce(root=ROOT, contract=None):
         raise Refused(f'{root} is not the top of its own checkout')
     if git(root, 'rev-parse', '--is-shallow-repository').strip() != b'false':
         raise Refused(f'{root} is a shallow checkout: whether a commit is on {MAIN_REF} needs its whole history')
+    verified = run_git(root, 'fsck', '--no-dangling', '--no-progress')
+    if verified.returncode:  # git serves an object's bytes without re-hashing them: a damaged store could misstate any
+        raise Refused(f'git fsck found this checkout\'s object store damaged: '
+                      f'{git_message(verified.stderr + verified.stdout)}')
     revision = commit_of(root, 'HEAD')
     main = commit_of(root, MAIN_REF)
     if revision is None or main is None:
@@ -372,7 +382,7 @@ def produce(root=ROOT, contract=None):
     if commit_of(root, head) != head:
         raise Refused(f'headSha {head} is not exactly a commit of this checkout (a checkout with that history is '
                       'needed)')
-    on_main = is_ancestor(root, head, main)
+    on_main = is_ancestor(root, head, revision)  # against HEAD, which the report records and which is on main
     checked_out_as_committed(root, head)
     recipe_bytes = blob(root, head, RECIPE)
     try:
@@ -407,7 +417,7 @@ def produce(root=ROOT, contract=None):
 def write_once(path, document):
     """Writes document to the new path whole or not at all (a temporary file beside it, fsync, then a hard link that
     fails if the path exists); returns the sha256 of the bytes written."""
-    data = (json.dumps(document, indent=2, sort_keys=True) + '\n').encode()
+    data = (json.dumps(document, indent=2, sort_keys=True, allow_nan=False) + '\n').encode()
     path = Path(path)
     staging = path.with_name(f'.{path.name}.{os.getpid()}.new')
     fd = os.open(staging, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)

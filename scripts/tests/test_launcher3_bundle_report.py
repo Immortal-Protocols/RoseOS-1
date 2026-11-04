@@ -19,6 +19,7 @@ import subprocess
 import sys
 import tempfile
 import types
+import zlib
 import unittest
 from unittest import mock
 
@@ -206,6 +207,40 @@ class Produce(unittest.TestCase):
         (self.s.root/'.git/info/grafts').write_text(f'{self.s.revision} {side}\n')
         self.assertFalse(self.s.produce()['candidate']['onMain'])
 
+    def test_onmain_is_read_against_the_reviewed_head_never_a_local_main_alone(self):
+        s = self.s
+        git('checkout', '-q', '-b', 'side', s.head, cwd=s.root)
+        git('commit', '-q', '--allow-empty', '-m', 'a side commit, such as a pull request tip', cwd=s.root)
+        side = git('rev-parse', 'HEAD', cwd=s.root)
+        git('checkout', '-q', 'main', cwd=s.root)
+        s.write_run(headSha=side)  # the reviewed document names it honestly; the reviewed HEAD does not contain it
+        git('checkout', '-q', '-b', 'local', cwd=s.root)
+        git('merge', '-q', '--no-edit', side, cwd=s.root)  # a local merge (or a fork, or a stale mirror) as origin/main
+        git('update-ref', 'refs/remotes/origin/main', 'HEAD', cwd=s.root)
+        git('checkout', '-q', 'main', cwd=s.root)
+        report, main = producer.produce(root=s.root, contract=s.contract)
+        self.assertNotEqual(main, s.revision)  # origin/main is that merge, and it holds headSha
+        self.assertEqual((report['candidate']['onMain'], report['producer']['roseRevision']), (False, s.revision))
+        self.assertIn('candidate.onMain is not true: headSha is reachable from main (association)',
+                      adapter.bundle_report_problems(report, s.contract['base']))
+
+    def test_a_damaged_object_store_refuses_before_anything_is_reported(self):
+        """git serves a loose object's bytes without re-hashing them, so a damaged store could misstate headSha. The
+        whole store is verified first, an alternate's too (git clone --shared, as host-reconcile.py makes)."""
+        s = self.s
+        clone = Path(tempfile.mkdtemp())/'checkout'
+        git('clone', '-q', '--shared', str(s.root), str(clone), cwd='/')  # its objects live in the alternate
+        self.assertTrue(producer.produce(root=clone, contract=s.contract)[0]['candidate']['onMain'])  # an honest store
+        oid = git('rev-parse', f'{s.head}:os/overlays/{L3}/quickstep/A.java', cwd=s.root)
+        damaged = s.root/'.git/objects'/oid[:2]/oid[2:]
+        damaged.chmod(0o644)
+        damaged.write_bytes(zlib.compress(b'blob 9\0tampered\n'))  # other bytes under the id headSha's tree names
+        self.assertEqual(git('cat-file', 'blob', oid, cwd=s.root), 'tampered')  # served as they are, with no error
+        for root in (s.root, clone):
+            with self.subTest(root=root.parent.name):
+                with self.assertRaisesRegex(producer.Refused, 'git fsck found'):
+                    producer.produce(root=root, contract=s.contract)
+
     def test_the_association_refuses_by_name(self):
         receipts = lambda s: s.receipts  # noqa: E731
         cases = [('no receipt', lambda s: (receipts(s)/f'0001-{LABEL}.json').unlink(), '0 reconcile receipts'),
@@ -223,6 +258,8 @@ class Produce(unittest.TestCase):
                  ('a duplicate key', lambda s: s.receipt(f'0003-{LABEL}.json', raw=b'{"receiptType": "reconcile-adopt", '
                                                          b'"receiptType": "reconcile"}'), 'duplicate key'),
                  ('nested too deeply', lambda s: s.receipt(f'0003-{LABEL}.json', raw=b'[' * 100000), 'nested too deeply'),
+                 ('a NaN', lambda s: s.receipt(f'0003-{LABEL}.json', raw=b'{"receiptType": "reconcile", "at": NaN}'),
+                  'NaN, which is not JSON'),
                  ('a link', lambda s: os.symlink(receipts(s)/f'0001-{LABEL}.json', receipts(s)/f'0009-{LABEL}.json'),
                   'not a regular file'),
                  ('a fifo', lambda s: os.mkfifo(receipts(s)/f'0009-{LABEL}.json'), 'not a regular file'),
@@ -260,7 +297,9 @@ class Produce(unittest.TestCase):
         # headSha's recipe is read as strictly as the receipt
         for name, raw in (('a duplicate key', b'{"host": {"integrate": {"reconcile": {"applyArgs": [], "patcher": '
                                                b'"trusted", "receiptDir": "/x"}}}, "host": {}}'),
-                          ('nested too deeply', b'[' * 100000), ('another shape', b'{"host": []}')):
+                          ('nested too deeply', b'[' * 100000), ('another shape', b'{"host": []}'),
+                          ('an Infinity', b'{"host": {"integrate": {"reconcile": {"applyArgs": [], "patcher": Infinity, '
+                                          b'"receiptDir": "/x"}}}}')):
             with self.subTest(recipe=name):
                 with self.assertRaisesRegex(producer.Refused, 'expected shape'):
                     Integration(extra={producer.RECIPE: raw}).produce()
@@ -280,6 +319,7 @@ class Produce(unittest.TestCase):
                  ('a zero run id', lambda s: s.write_run(runId='0'), producer.Invalid, 'wrong form'),
                  ('a label that is a path', lambda s: s.write_run(label=f'../{LABEL}'), producer.Invalid, 'wrong form'),
                  ('a boolean version', lambda s: s.write_run(schemaVersion=True), producer.Invalid, 'exact'),
+                 ('a NaN attempt', lambda s: s.write_run(runAttempt=float('nan')), producer.Invalid, 'not JSON'),
                  ('an extra key', lambda s: s.write_run(x=1), producer.Invalid, 'exact')]
         for name, change, error, word in cases:
             with self.subTest(name=name):
@@ -327,13 +367,21 @@ class Produce(unittest.TestCase):
             producer.produce(root=s.root/'nested', contract=s.contract)
 
     def test_history_that_cannot_be_read_whole_refuses(self):
-        # an object missing between headSha and main: git would answer no, or yes with an error
+        # an object missing between headSha and main: git fsck refuses before any history is read
         s = self.s
         middle = s.revision
         s.write_run(basis='a later review')
         (s.root/'.git/objects'/middle[:2]/middle[2:]).unlink()
-        with self.assertRaisesRegex(producer.Refused, 'could not tell'):
+        with self.assertRaisesRegex(producer.Refused, 'git fsck found'):
             s.produce()
+        # and merge-base must answer only yes or no, with no message: git can answer no, or even yes, past an object it
+        # could not read
+        for code, message in ((0, b'error: Could not read ' + b'1' * 40), (1, b'error: Could not read ' + b'1' * 40),
+                              (128, b'fatal: Not a valid commit name')):
+            with self.subTest(code=code), \
+                    mock.patch.object(producer, 'run_git', return_value=subprocess.CompletedProcess([], code, b'', message)):
+                with self.assertRaisesRegex(producer.Refused, 'could not tell'):
+                    producer.is_ancestor(s.root, 'a' * 40, 'b' * 40)
         # a shallow clone, where git could answer no for a commit beyond its boundary
         s = Integration()
         clone = Path(tempfile.mkdtemp())/'checkout'
@@ -438,6 +486,9 @@ class Produce(unittest.TestCase):
         os.symlink(Path(tempfile.mkdtemp())/'elsewhere.json', link)
         with self.assertRaises(FileExistsError):
             producer.write_once(link, report)
+        self.assertEqual(sorted(p.name for p in out.parent.iterdir()), ['bundle-report.json', 'link.json'])
+        with self.assertRaises(ValueError):  # never a NaN or an Infinity, which no strict JSON reader takes
+            producer.write_once(out.with_name('nan.json'), {'x': float('nan')})
         self.assertEqual(sorted(p.name for p in out.parent.iterdir()), ['bundle-report.json', 'link.json'])
 
     def test_the_cli_is_isolated_and_exits_by_outcome(self):
