@@ -5,7 +5,7 @@ integrating commit (headSha) and the producer's own HEAD always differ, in patch
 nothing read at the wrong revision can pass. A report the producer writes is checked by the adapter's own
 bundle_report_problems (loaded by these tests only; the producer never loads it), and every association and
 observation rule refuses or reports by name. One test reads this checkout's own os/patches and os/overlays at HEAD
-against the pinned base.bundleContent."""
+against the pinned base.bundleContent and candidateDelta: wholly the base, or wholly the base with the candidate."""
 import contextlib
 import copy
 import hashlib
@@ -549,11 +549,13 @@ class Committed(unittest.TestCase):
             producer.load_contract(pinned='0' * 64)
 
     def test_this_checkouts_os_is_wholly_the_pinned_base_or_wholly_the_candidate(self):
-        """main's os/ is the contract's base, or the base with #440's whole candidateDelta (once #440 lands in normal
-        integration), never a mix, as OS Product's own contract test requires. Observed at HEAD, with the checker's
-        prefixes: nothing is unclassified; the registered patches are base.bundleContent's; the overlays are exactly
+        """main's os/ is the contract's base, or the base with #440's whole candidateDelta (#440 has landed in normal
+        integration), never a mix. Observed at HEAD, with the checker's prefixes: nothing is unclassified; the
+        registered patches are base.bundleContent's; the notAnInput overlays are base.bundleContent's; each
+        candidateDelta overlay's before-image is its base hash (the contract checks itself); the overlays are exactly
         base.bundleContent's, or exactly those with every candidateDelta overlay at its after-image; and the
-        candidate's patches are at HEAD with their pinned sha256 exactly when its overlays are, and absent otherwise."""
+        candidate's patches are at HEAD with their pinned sha256 exactly when its overlays are, and otherwise nothing,
+        no file and no directory, is at their paths."""
         contract = copy.deepcopy(CONTRACT)
         contract['overlayRoles']['required']['prefixes'] = list(PREFIXES)
         seen = producer.observed(contract, ROOT, 'HEAD')
@@ -579,6 +581,7 @@ class Committed(unittest.TestCase):
                 self.assertEqual(producer.sha256(producer.blob(ROOT, 'HEAD', path)), p['sha256'], path)
             else:
                 self.assertNotIn(path, patches)
+                self.assertFalse([k for k in patches if k.startswith(path + '/')], path)
 
 
 if __name__ == '__main__':
