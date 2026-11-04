@@ -162,7 +162,8 @@
       "display": {
         "source": {
           "width": 1344,
-          "height": 2992
+          "height": 2992,
+          "densityDpi": 480
         },
         "referenceDisplayAddress": null,
         "referenceDisplayStatus": "notApplicable"
