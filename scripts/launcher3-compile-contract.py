@@ -67,6 +67,12 @@ PROJECTS = [
     ('build/release', 'platform_build_release', ['background-control-build-release.patch']),
 ]
 REQUIRED_OVERLAYS = ('packages/apps/Launcher3/', 'build/release/')
+# The Soong goals this contract compiles, the projects whose sources they compile (no notAnInput overlay may sit in
+# one), and which PROJECTS entry the candidate's patches belong to. A sibling contract
+# (scripts/frameworks-base-wmshell-contract.py) sets its own values for these and for the constants above.
+COMPILE_TARGETS = ['Launcher3QuickStepLib']
+COMPILED_PROJECTS = ('packages/apps/Launcher3', 'build/release')
+CANDIDATE_PROJECT = 1
 # The reviewed overlays that are not inputs of Launcher3QuickStepLib, by exact target (M4): WindowManager-Shell and
 # SystemUI sources and assets, off the library's classpath. Any other overlay outside REQUIRED_OVERLAYS is refused, so a
 # new one can never become an unpinned input by its location alone.
@@ -266,12 +272,12 @@ def overlay_roles(projects, evidence):
     rows = overlays()
     required = [o['target'] for o in rows if o['role'] == 'required']
     not_input = [o['target'] for o in rows if o['role'] == 'notAnInput']
-    goals = ['Launcher3QuickStepLib'] + [row['expectedOutputDir'] + '/aconfig-flags.txt' for row in evidence]
+    goals = list(COMPILE_TARGETS) + [row['expectedOutputDir'] + '/aconfig-flags.txt' for row in evidence]
     evidence_paths = {f'{row[k]["project"]}/{row[k]["path"]}' for row in evidence for k in ('definedIn', 'declaredIn')}
     pinned = {p['path']: set(p['treePin']['unlisted']['excludedPaths']) for p in projects}
     for target in not_input:
         project = next((p for p in pinned if target.startswith(p + '/')), None)
-        if project in ('packages/apps/Launcher3', 'build/release') or project is None:
+        if project in COMPILED_PROJECTS or project is None:
             raise ValueError(f'{target}: a notAnInput overlay inside a compiled or unpinned project')
         if target[len(project) + 1:] not in pinned[project]:
             raise ValueError(f'{target}: not excluded from {project} treePin by exact path')
@@ -281,14 +287,15 @@ def overlay_roles(projects, evidence):
         'required': {'targets': required, 'rule': 'present with exactly its sha256 in overlays'},
         'notAnInput': {'targets': not_input, 'rule': 'exact target only: present with any bytes, or absent; excluded '
             'from its project\'s treePin by exact path (treePin.unlisted.excludedPaths); never a source of '
-            'Launcher3QuickStepLib, a compileGoals entry or a flagEvidence input. Adding or removing one changes the '
+            f'{" or ".join(COMPILE_TARGETS)}, a compileGoals entry or a flagEvidence input. Adding or removing one changes the '
             'contract'},
         'compileGoals': goals,
     }
 
 
 def apply_in_scratch(pre, patches):
-    """({path: bytes}, {path: chain}) after applying the patches in order with git apply to {path: bytes or None}."""
+    """({path: bytes or None}, {path: chain}) after applying the patches in order with git apply to
+    {path: bytes or None}."""
     tree = Path(tempfile.mkdtemp(prefix='l3-contract-'))
     try:
         for path, data in pre.items():
@@ -312,7 +319,8 @@ def apply_in_scratch(pre, patches):
                 else:
                     base = 'different'
                 chain[f].append({'patch': patch, 'before': before[f], 'after': after, 'index': lines, 'base': base})
-        return {path: (tree/path).read_bytes() for path in pre}, chain
+        # None for a path no patch so far creates (a candidate's new file, before the candidate is applied).
+        return {path: (tree/path).read_bytes() if (tree/path).exists() else None for path in pre}, chain
     finally:
         shutil.rmtree(tree, True)
 
@@ -369,7 +377,7 @@ def evidence_rows(revisions, data):
                 'sha256': sha256(data[(project, path)])}
         row['outputs'] = ['aconfig-cache.pb', 'aconfig-flags.txt']
         row['produce'] = ('build ' + entry['expectedOutputDir'] + '/aconfig-flags.txt as an explicit goal with '
-            'Launcher3QuickStepLib, or decode aconfig-cache.pb with that tree\'s host aconfig using the identical '
+            f'{" and ".join(COMPILE_TARGETS)}, or decode aconfig-cache.pb with that tree\'s host aconfig using the identical '
             "dump-cache --dedup --format='{fully_qualified_name}:{permission}={state:bool}'")
         row['accept'] = ('exactly one line for the flag, equal to expectedLine, in the module\'s own output; '
             'absent, duplicated, another module or another value: refuse (identity flag unresolved, result incomplete)')
@@ -581,15 +589,15 @@ def base_and_delta(projects, recorded_overlay_before=None):
                 rows.append(row)
         base_projects.append(dict(project, patches=[{'name': p, 'sha256': sha256(bundle_or_os('patches/' + p).read_bytes())}
             for p in base_patches], files=rows))
-    path = PROJECTS[1][0]
-    launcher_base = {r['path']: r for r in base_projects[1]['files']}
+    path = PROJECTS[CANDIDATE_PROJECT][0]
+    launcher_base = {r['path']: r for r in base_projects[CANDIDATE_PROJECT]['files']}
     # Base bytes after the base patches, then the candidate's patches on top.
     after_base, _ = apply_in_scratch({f: fixture_path(path, f).read_bytes() if launcher_base[f]['pre'] else None
-        for f in launcher_base}, [p for p in PROJECTS[1][2] if p not in CANDIDATE_PATCHES])
-    created = touched([p for p in PROJECTS[1][2] if p not in CANDIDATE_PATCHES])
+        for f in launcher_base}, [p for p in PROJECTS[CANDIDATE_PROJECT][2] if p not in CANDIDATE_PATCHES])
+    created = touched([p for p in PROJECTS[CANDIDATE_PROJECT][2] if p not in CANDIDATE_PATCHES])
     base_images = {f: after_base[f] if launcher_base[f]['pre'] or f in created else None for f in launcher_base}
     final, _ = apply_in_scratch(base_images, CANDIDATE_PATCHES)
-    for row in projects[1]['files']:
+    for row in projects[CANDIDATE_PROJECT]['files']:
         if image(final[row['path']]) != row['post']:
             raise ValueError(f'{row["path"]}: base plus the candidate delta is not the candidate post-image')
     bundle_overlays = {f[len('overlays/'):]: (BUNDLE/f).read_bytes() for f in bundle_files() if f.startswith('overlays/')}
@@ -715,6 +723,15 @@ def build():
     base, delta = base_and_delta(projects, recorded)
     write_base_overlay_copies(delta)
     evidence, rules = evidence_rows(revisions, flag_evidence(revisions, True))
+    manifest = describe()
+    manifest.update({'projects': projects, 'overlays': overlays(), 'base': base, 'candidateDelta': delta,
+        'flagEvidence': {'flags': evidence, 'producingRules': rules}, 'overlayRoles': overlay_roles(projects, evidence)})
+    return manifest
+
+
+def describe():
+    """The contract's stated (not derived) fields, in manifest order; None marks a field build() derives. A sibling
+    contract replaces this function."""
     return {
         'schemaVersion': 2,
         'kind': 'rose-launcher3-compile-inputs',
@@ -756,8 +773,8 @@ def build():
                 'integrated by the current patcher (Launcher3 switcher only) is such a state and must not be completed '
                 'by applying rose-edge-launcher3.patch alone. Never reset or trust a snapshot.',
         },
-        'projects': projects,
-        'overlays': overlays(),
+        'projects': None,
+        'overlays': None,
         'unaffected': 'inside the three projects, every path not listed in files or overlays must match that '
             'project\'s treePin, and any extra file is refused; every other project the library or lunch needs must be '
             'byte-identical to its pinned revision (Infra provenance, not this contract)',
@@ -774,10 +791,10 @@ def build():
             'flagEvidence: each flag\'s expectedLine from its own aconfig_declarations module output',
             'lunch product, variant, BUILD_ID and release-config maps in effect',
         ],
-        'base': base,
-        'candidateDelta': delta,
-        'flagEvidence': {'flags': evidence, 'producingRules': rules},
-        'overlayRoles': overlay_roles(projects, evidence),
+        'base': None,
+        'candidateDelta': None,
+        'flagEvidence': None,
+        'overlayRoles': None,
         'identitySharing': {
             'sites': ['quickstep/src/com/android/quickstep/FallbackSwipeHandler.java startHomeIntent',
                 'quickstep/src/com/android/quickstep/window/RecentsWindowSwipeHandler.java (inactive here)'],
