@@ -14,6 +14,9 @@ import sys
 import tempfile
 import unittest
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import os_release_shape as shape  # noqa: E402
+
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = (ROOT/'.github/workflows/os-release.yml').read_text()
 MODE = 'blazer-prep'
@@ -70,12 +73,10 @@ def wire(*argv):
 
 
 class Guard(unittest.TestCase):
-    BASE = {'MODE': MODE, 'CANDIDATE_SHA': '', 'BUILD_NUMBER': '', 'BUILD_TIMESTAMP': '', 'APPS': '', 'PROMOTE': 'false',
-            'CHANNEL': 'beta', 'RESUME_STAGE': 'none', 'RESUME_SOURCE_RUN': '', 'RESUME_UNSIGNED_SHA256': '',
-            'RESUME_SIGNED_SHA256': '', 'CAMPAIGN': '', 'APP_PUBLISH': 'false', 'ROSE_RANGO_PUBLISH': 'false',
-            'ROSE_FIRST_USE_ENROLL': 'false', 'ROSE_RECOVER_RUN': '', 'BOOTSTRAP_PROFILE': 'none', 'MODELS_BOOTSTRAP_RUN': '',
-            'REUSE_BINDING': '', 'ALPHA_RECOVER': 'false', 'ROSE_DEVICE': 'frankel', 'BLAZER_PREP_STAGE': 'download',
-            'GITHUB_SHA': 'f' * 40}
+    # The bare dispatch's workflow env (every input at its declared default) with one preparation stage, plus the
+    # guard step's own env.
+    BASE = shape.dispatch_env(MODE=MODE, PROMOTE='false', APP_PUBLISH='false', ALPHA_RECOVER='false',
+                              GITHUB_SHA='f' * 40, BLAZER_PREP_STAGE='download')
 
     def guard_script(self):
         return 'set -euo pipefail\n' + script(step(jobs()['guard'], 'Candidate is an exact commit on main'))
@@ -128,8 +129,9 @@ class Guard(unittest.TestCase):
             "\"$GITHUB_OUTPUT\"\n      # Fails closed before the controller starts unless the profile is resource-bound "
             "with an approved inventory, tool\n      # identities and unexpired access, and every other option is at its "
             "non-publishing default.\n")
-        self.assertIn('    outputs:\n      blazer_prep_outer_seconds: ${{ steps.blazer-prep.outputs.outer_seconds }}\n'
-                      '      blazer_prep_job_minutes: ${{ steps.blazer-prep.outputs.job_minutes }}\n', guard)
+        outputs = re.search(r'(?m)^    outputs:\n((?:      .*\n)+)', guard)[1]  # other modes' outputs may precede these
+        self.assertIn('      blazer_prep_outer_seconds: ${{ steps.blazer-prep.outputs.outer_seconds }}\n'
+                      '      blazer_prep_job_minutes: ${{ steps.blazer-prep.outputs.job_minutes }}\n', outputs)
         self.assertEqual(re.search(r'(?m)^    needs: (.+)$', jobs()['controller'])[1], 'guard')
 
 
@@ -683,20 +685,19 @@ class Job(unittest.TestCase):
 class Ownership(unittest.TestCase):
     """The controller and cleanup commands as written in the workflow, run against the fake builder adapter."""
     def commands(self):
-        controller, cleanup = jobs()['controller'], jobs()['cleanup']
-        start = re.search(r"(?m)^      - if: inputs.mode == 'blazer-prep' \|\| inputs.mode == 'rango-factory-package' \|\| inputs.mode == 'rango-factory-inspect' \|\| inputs.mode == 'launcher3-compile' \|\| inputs.mode == 'blazer-compile' \|\| inputs.mode == 'blazer-integrate'\n        run: (.+)$", controller)[1]
-        record = re.search(r"(?m)^        if: always\(\) && \(inputs.mode == 'blazer-prep' \|\| inputs.mode == 'rango-factory-package' \|\| inputs.mode == 'rango-factory-inspect' \|\| inputs.mode == 'launcher3-compile' \|\| inputs.mode == 'blazer-compile' \|\| inputs.mode == 'blazer-integrate'\)\n        run: (.+)$", controller)[1]
-        stop = re.search(r"(?m)^      - if: inputs.mode == 'blazer-prep' \|\| inputs.mode == 'rango-factory-package' \|\| inputs.mode == 'rango-factory-inspect' \|\| inputs.mode == 'launcher3-compile' \|\| inputs.mode == 'blazer-compile' \|\| inputs.mode == 'blazer-integrate'\n        env:\n          STARTED: \$\{\{ needs.controller"
-                         r".outputs.started \}\}\n        run: (.+)$", cleanup)[1]
-        return start, record, stop
+        # The owned steps' commands exactly as written; owned_modes() checks their conditions name this mode and agree.
+        self.assertIn(MODE, shape.owned_modes())
+        runs = shape.owned_runs()
+        return runs['start'], runs['record'], runs['stop']
 
     def test_workflow_routes_only_blazer_prep_through_ownership(self):
         controller, cleanup = jobs()['controller'], jobs()['cleanup']
         self.assertIn("    outputs:\n      started: ${{ steps.ownership.outputs.started }}\n", controller)
-        self.assertIn("      - if: inputs.mode != 'blazer-prep' && inputs.mode != 'rango-factory-package' && inputs.mode != 'rango-factory-inspect' && inputs.mode != 'launcher3-compile' && inputs.mode != 'blazer-compile' && inputs.mode != 'blazer-integrate'\n        run: python3 scripts/release-pipeline.py start-builder\n", controller)
-        self.assertIn("      - if: inputs.mode != 'blazer-prep' && inputs.mode != 'rango-factory-package' && inputs.mode != 'rango-factory-inspect' && inputs.mode != 'launcher3-compile' && inputs.mode != 'blazer-compile' && inputs.mode != 'blazer-integrate'\n        run: python3 scripts/release-pipeline.py stop-builder\n", cleanup)
+        # This mode is excluded from the plain start and stop and covered by every owned step (owned_modes() requires the
+        # five conditions to agree).
+        self.assertIn(MODE, shape.owned_modes())
         self.assertEqual(len(re.findall(r'release-pipeline.py (?:start|stop)-builder', controller + cleanup)), 4)
-        self.assertIn('rango-factory-observe, blazer-prep, rango-factory-package, rango-factory-inspect, launcher3-compile, blazer-compile, blazer-integrate, app-builder', re.search(r'(?m)^    needs: (.+)$', cleanup)[1])
+        self.assertIn(MODE, shape.cleanup_needs())
         self.assertIn("    if: always() && needs.controller.result != 'skipped'\n", cleanup)
         start, record, stop = self.commands()
         self.assertEqual(start, 'python3 scripts/release-pipeline.py start-builder --ownership-record "$RUNNER_TEMP/builder-ownership.json"')

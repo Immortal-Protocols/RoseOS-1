@@ -19,10 +19,14 @@ import re
 import shutil
 import signal
 import subprocess
+import sys
 import tarfile
 import tempfile
 import unittest
 from datetime import datetime, timezone
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import os_release_shape as shape  # noqa: E402
 
 SCRIPTS = Path(__file__).resolve().parents[1]
 ROOT = SCRIPTS.parent
@@ -495,6 +499,19 @@ class Workflow(unittest.TestCase):
         job = JOBS['signing-bootstrap']
         self.assertIn("    needs: controller\n    if: inputs.mode == 'signing-bootstrap'\n", job)
         self.assertIn('runs-on: [self-hosted, roseos-frankel-builder]', job)
+        def mode_gated(name, seen=()):
+            """The job runs only in named modes: its own condition names one, or it has no always() and every job it
+            needs is itself mode-gated (GitHub skips a job whose need was skipped unless it asks for always())."""
+            body = JOBS[name]
+            condition = re.search(r'    if: ([^\n]*(?:\n      [^\n]*)*)\n', body)
+            if condition and "inputs.mode == '" in condition[1]:
+                return True
+            if condition and 'always()' in condition[1]:
+                return False
+            needs = re.search(r'(?m)^    needs: \[?([^\]\n]+)\]?$', body)
+            names = [n.strip() for n in needs[1].split(',')] if needs else []
+            return bool(names) and all(n in JOBS and n not in seen and mode_gated(n, seen + (name,)) for n in names)
+
         for name, body in JOBS.items():
             if name in ('guard', 'controller', 'cleanup', 'signing-bootstrap'):
                 continue
@@ -503,8 +520,8 @@ class Workflow(unittest.TestCase):
                 self.assertIn('    needs: [builder, signed-builder]\n', body)
                 self.assertIn("needs.builder.result == 'success'", condition[1])  # skipped whenever builder is skipped
                 continue
-            self.assertTrue(condition and "inputs.mode == '" in condition[1], name)
-            self.assertNotIn('signing-bootstrap', condition[1], name)
+            self.assertTrue(mode_gated(name), name)
+            self.assertNotIn('signing-bootstrap', condition[1] if condition else '', name)
         self.assertIn('inputs.app_publish', JOBS['app-publisher'])
         for word in ('secrets.', 'PIXEL_OTA', 'create-github-app-token', 'os-release-stage', 'host-sign', 'host-app',
                      'release-pipeline.py publish', 'emulator-alpha'):
@@ -530,8 +547,9 @@ class Workflow(unittest.TestCase):
         return '\n'.join(line for line in script.splitlines() if 'git merge-base' not in line)
 
     def test_shell_guard_binds_bootstrap_and_keeps_other_modes(self):
-        base = dict(os.environ, **GUARD_ENV, BUILD_NUMBER='2026102901', BUILD_TIMESTAMP='1793300000',
-            APPS='[["dev.pixel.voice", 309]]')
+        # The bare dispatch's workflow env (every input at its declared default), then this test's values.
+        base = {**os.environ, **shape.dispatch_env(), **GUARD_ENV, 'BUILD_NUMBER': '2026102901', 'BUILD_TIMESTAMP': '1793300000',
+                'APPS': '[["dev.pixel.voice", 309]]'}
         cases = [({}, True), ({'GITHUB_SHA': 'b' * 40}, False), ({'BOOTSTRAP_PROFILE': 'none'}, False),
                  ({'MODE': 'os-release', 'GITHUB_SHA': 'b' * 40}, False), ({'MODE': 'os-release', 'BOOTSTRAP_PROFILE': 'none'}, True),
                  ({'PROMOTE': 'true'}, False), ({'APP_PUBLISH': 'true'}, False), ({'ROSE_DEVICE': 'rango'}, False),
@@ -1511,8 +1529,9 @@ class FactoryProfileValidation(unittest.TestCase):
         unopted = copy.deepcopy(profiles)
         unopted['profiles']['fold-rango-factory-v1']['access'].pop('liveCheck')
         self.assertIn('access-unknown', [c for c, _ in sb.readiness('fold-rango-factory-v1', unopted, NOW)])
+        # pro-mustang-v1 is the Mustang OS profile that load_profiles merges from os/signing-bootstrap/mustang.json.
         self.assertEqual({n for n, p in PROFILES['profiles'].items() if (p.get('access') or {}).get('liveCheck') is True},
-                         {'fold-rango-factory-v1', 'pro-blazer-factory-v1', 'pro-blazer-v1'})
+                         {'fold-rango-factory-v1', 'pro-blazer-factory-v1', 'pro-blazer-v1', 'pro-mustang-v1'})
         checked = PROFILES['profiles']['fold-rango-factory-v1']['access']  # a committed record, if any, is never partial
         self.assertTrue(checked['basis'] or (checked['addVersionExpires'] is None and checked['accessorExpires'] is None))
         # Each opted-in policy text claims the recorded-expiry ceilings only where they are enforced (openssh_problems),

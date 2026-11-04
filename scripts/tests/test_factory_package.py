@@ -548,6 +548,81 @@ class ExplicitSignature(Fixture):
             self.assertNotIn('factory:rango-install-2026103101.zip.sig', out.getvalue())
             self.assertEqual(fp.main(['classify', str(archive), '--flavor', 'rango', '--signature', 'rel.sig']), 2)
 
+class FrankelFirstInstall(Fixture):
+    """Frankel's first-install requirements: re-derived from the pinned sources on every load, carried into every
+    factory-install classification, and never a readiness claim."""
+
+    def test_the_checked_in_requirements_come_from_the_pinned_sources(self):
+        flavor = fp.load_flavor('frankel')
+        first = flavor['firstInstall']
+        self.assertEqual((first['product'], first['fastbootMinVersion'], first['requiresUnlockedBootloader'],
+                          first['erasesUserData'], first['relockClaimedSafe']), ('frankel', '35.0.1', True, True, False))
+        self.assertEqual(first['flashes'], {'bootloader': flavor['firmware']['bootloader'], 'bootloaderSlots': 'both',
+                                            'radio': flavor['firmware']['baseband']})
+        self.assertEqual(first['checkRequirements']['board'], ['frankel'])
+        pins = json.loads((ROOT/'os/release-pipeline/frankel.json').read_text())['identities']
+        self.assertEqual(fp.resolve_sha256_pointer(first['otaContinuity']['otaCertificateSha256From'], ROOT, 't'),
+                         pins['otaCertificateSha256'], 'later Frankel OTAs need the same OTA certificate')
+        self.assertEqual(first['avbCustomKey']['sha256From'], flavor['identity']['avbPublicKeySha256From'])
+        self.assertIn('MIN_FASTBOOT_VERSION_STR="35.0.1"', (ROOT/'scripts/tests/fixtures/factory-package/device_common-1f5ba267/'
+                                                             'generate-factory-images-common.sh').read_text())
+        self.assertFalse(flavor['readiness']['factoryReady'] if 'readiness' in flavor else False)
+        self.assertTrue(any(m['input'].startswith('packaging-only factory stage for a signed frankel target-files')
+                            for m in flavor['missingForFactory']))
+
+    def test_requirement_drift_refuses_the_contract(self):
+        for change, pattern in (
+                (lambda f: f.update(fastbootMinVersion='34.0.0'), 'fastbootMinVersion'),
+                (lambda f: f.update(product='rango'), 'product'),
+                (lambda f: f.update(erasesUserData=False), 'erasesUserData'),
+                (lambda f: f.update(requiresUnlockedBootloader=False), 'requiresUnlockedBootloader'),
+                (lambda f: f['flashes'].update(bootloader='deepspace-guessed'), 'flashes'),
+                (lambda f: f['flashes'].update(bootloaderSlots='one'), 'flashes'),
+                (lambda f: f['checkRequirements'].update(board=['rango']), 'checkRequirements'),
+                (lambda f: f['avbCustomKey'].update(sha256From='os/flavors/rango.json identity.avbPublicKeySha256'), 'avbCustomKey'),
+                (lambda f: f['otaContinuity'].update(otaCertificateSha256From='os/flavors/rango.json identity.x'), 'otaContinuity'),
+                (lambda f: f['otaContinuity'].update(otaCertificateSha256From='os/release-pipeline/frankel.json identities.appSignerSha256'),
+                 'firstInstall disagrees with its sources: otaContinuity.otaCertificateSha256From'),  # resolvable, wrong pin
+                (lambda f: f.update(relockClaimedSafe=True), 'relockClaimedSafe'),
+                (lambda f: f.update(ownerSteps=[]), 'ownerSteps'),
+                (lambda f: f.pop('basis'), 'firstInstall must have exactly'),
+                (lambda f: f.update(extra=1), 'firstInstall must have exactly')):
+            with self.subTest(pattern):
+                original = (self.root/'os/flavors/frankel.json').read_text()
+                self.edit_json('os/flavors/frankel.json', lambda d: change(d['firstInstall']))
+                try:
+                    with self.assertRaisesRegex(fp.ContractError, pattern):
+                        fp.load_flavor('frankel', self.root)
+                finally:
+                    (self.root/'os/flavors/frankel.json').write_text(original)
+        # The generator fixture is the source: a different pinned minimum would be drift too (and changes its pin).
+        script = self.root/'scripts/tests/fixtures/factory-package/device_common-1f5ba267/generate-factory-images-common.sh'
+        script.write_text(script.read_text().replace('MIN_FASTBOOT_VERSION_STR="35.0.1"', 'MIN_FASTBOOT_VERSION_STR="36.0.0"'))
+        with self.assertRaisesRegex(fp.ContractError, 'generatorFixture generate-factory-images-common.sh sha256'):
+            fp.load_flavor('frankel', self.root)  # the fixture's own pin catches it first
+        digest = hashlib.sha256(script.read_bytes()).hexdigest()
+        self.edit_json('os/flavors/frankel.json', lambda d: d['inventory']['generatorFixture']['files'].update(
+            {'generate-factory-images-common.sh': digest}))
+        with self.assertRaisesRegex(fp.ContractError, 'firstInstall disagrees with its sources: fastbootMinVersion'):
+            fp.load_flavor('frankel', self.root)  # re-pinned: the requirement itself is re-derived, not copied
+
+    @unittest.skipUnless(SSH, 'needs OpenSSH ssh-keygen')
+    def test_classification_carries_the_requirements_and_the_checked_in_contract_is_never_ready(self):
+        archive, tf = self.complete('frankel')
+        result = self.classify(archive, 'frankel', tf)
+        self.assertTrue(result['factoryReady'], result)  # temp-root synthetic identity only
+        first = result['firstInstall']
+        pins = json.loads((self.root/'os/release-pipeline/frankel.json').read_text())['identities']
+        self.assertEqual((first['product'], first['erasesUserData'], first['avbPublicKeySha256'], first['otaCertificateSha256']),
+                         ('frankel', True, pins['avbPublicKeySha256'], pins['otaCertificateSha256']))
+        self.assertFalse(result['limits']['phoneValidated'])
+        rango = self.write(f'rango-install-{BUILD}.zip', install('rango'))
+        self.refused(self.classify(rango, 'frankel', tf), 'wrong-device:archive directory rango-install-2026103101')
+        self.sign(archive)
+        checked_in = fp.classify(archive, 'frankel', tf, BUILD, None, ROOT, **self.evidence('frankel', tf))
+        self.assertFalse(checked_in['factoryReady'] or checked_in['signatureVerified'])
+        self.refused(checked_in, 'factory-signing identity: pinned principal and ssh-ed25519 public key for frankel')
+
 @unittest.skipUnless(SSH, 'needs OpenSSH ssh-keygen')
 class RangoSigningState(Fixture):
     """Rango's factory-signing identity as explicit fixtures: unbound refuses, a test key verifies, and the checked-in

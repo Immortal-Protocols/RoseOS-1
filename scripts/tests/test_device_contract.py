@@ -15,6 +15,9 @@ import types
 import unittest
 import zipfile
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import os_release_shape as shape  # noqa: E402
+
 SCRIPTS = Path(__file__).resolve().parents[1]
 ROOT = SCRIPTS.parent
 PY = sys.executable
@@ -71,8 +74,10 @@ class WorkflowTest(unittest.TestCase):
         return '\n'.join(['set -euo pipefail', *lines[start:start + 5]])
 
     def test_the_guard_admits_only_frankel_before_the_controller(self):
-        self.assertIn('      device:\n        description: Device to build and publish; only admitted devices are offered (FAM-02-INFRA-S001; frankel only)\n'
-            '        type: choice\n        options: [frankel]\n        default: frankel\n', WORKFLOW)
+        # The admitted-device property is the choice itself: exactly frankel, defaulting to frankel (its wording may change).
+        device = shape.inputs()['device']
+        self.assertEqual((device['type'], device['options'], device['default']), ('choice', ['frankel'], 'frankel'))
+        self.assertIn('frankel only', re.search(r'(?m)^      device:\n        description: (.*)$', WORKFLOW)[1])
         self.assertIn("  ROSE_DEVICE: ${{ inputs.device || 'frankel' }}\n", WORKFLOW)
         self.assertIn('    needs: guard\n', JOBS['controller'])
         script = self.guard_device_lines()
