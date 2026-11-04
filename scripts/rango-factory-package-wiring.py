@@ -162,8 +162,7 @@ def classify_argv(root_dir, pins=PINS, firmware=False):
 
 def firmware_observe(root_dir, run_id, attempt, runner=subprocess.run, require_package=True):
     """See factory_package_route.firmware_observe (Rango route)."""
-    return route_lib.firmware_observe(ROUTE, root_dir, run_id, attempt, runner, require_package,
-                                      argv=firmware_argv(root_dir, run_id, attempt))
+    return route_lib.firmware_observe(ROUTE, root_dir, run_id, attempt, runner, require_package)
 
 
 def firmware_observed(root_dir):
@@ -179,7 +178,7 @@ def packaged(root_dir):
 
 
 def classify(root_dir, runner=subprocess.run):
-    return route_lib.classify(ROUTE, root_dir, runner, argv=lambda firmware: classify_argv(root_dir, firmware=firmware))
+    return route_lib.classify(ROUTE, root_dir, runner)
 
 
 sha256_file = route_lib.sha256_file
@@ -200,7 +199,7 @@ def sanitized_result(stdout):
 
 def package(root_dir, record_path, runner=subprocess.run):
     """See factory_package_route.package (Rango route)."""
-    return route_lib.package(ROUTE, root_dir, record_path, runner, argv=package_argv(root_dir))
+    return route_lib.package(ROUTE, root_dir, record_path, runner)  # argv built after the record and R, as before
 
 
 def report(root_dir, upload_dir, installer_upload=None, record_path=None):

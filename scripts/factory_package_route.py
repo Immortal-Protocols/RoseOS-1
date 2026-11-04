@@ -178,6 +178,8 @@ def firmware_observe(route, root_dir, run_id, attempt, runner=subprocess.run, re
     if os.path.lexists(output):
         raise Invalid('a firmware observation already exists here; it is never reused')
     record = {'schema': route.firmware_attempt_schema, 'step': 'firmware-observe'}
+    if route.label:
+        record['label'] = route.label
     fd = os.open(inspection/'firmware-attempt.json', os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
     with os.fdopen(fd, 'w') as f:
         try:
@@ -324,7 +326,9 @@ def report(route, root_dir, upload_dir, installer_upload=None, record_path=None)
         state['classifyWorkRemoved'] = not os.path.lexists(scratch)
         state['retained'] = {name: (root_dir/'package'/name).is_file()
                              for name in (route.install, 'factory-package-receipt.json', 'factory-package.log')}
-        state['uploaded'] = sorted(UPLOAD.values())
+        present = {relative: name for relative, name in UPLOAD.items() if relative == 'cleanup.json'
+                   or ((root_dir/relative).is_file() and not (root_dir/relative).is_symlink())}
+        state['uploaded'] = sorted(present.values())  # what is copied below, not the whole allowlist
         sums = root_dir/'SHA256SUMS'
         state['installer'] = {'staged': sums.is_file() and not sums.is_symlink(),
                               'sha256sums': sums.read_text().strip() if sums.is_file() and not sums.is_symlink() else None,
@@ -333,7 +337,7 @@ def report(route, root_dir, upload_dir, installer_upload=None, record_path=None)
         fd = os.open(root_dir/'cleanup.json', os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
         with os.fdopen(fd, 'w') as f:
             f.write(json.dumps(state, indent=2, sort_keys=True) + '\n')
-        for relative, name in UPLOAD.items():
+        for relative, name in present.items():
             source = root_dir/relative
             if source.is_file() and not source.is_symlink():
                 (upload_dir/name).write_bytes(source.read_bytes())

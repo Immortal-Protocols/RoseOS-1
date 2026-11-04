@@ -40,6 +40,10 @@ All inputs are bound in `os/factory-package/frankel.json`:
 Every value stays null until a reviewed commit supplies it from those records. While a value it needs is null, either
 mode refuses (exit 4) in the hosted guard, before any host starts.
 
+The observation checks the build values against the attempt's own receipts. It does not check `sourceRun` or that the
+build was published; its receipt lists both under `notVerified`. The reviewer of the binding commit checks them
+against the public release (pixel-ota tag `frankel-<build>`, whose body names the run that verified and published it).
+
 ## Run order
 
 Each run is a separate os-release dispatch by Infra. None is approved here.
@@ -49,6 +53,9 @@ Each run is a separate os-release dispatch by Infra. None is approved here.
    - It is read-only and runs under the shared builder lock. Its ceilings are 1020 s for the step and 28 minutes for
      the job.
    - It uploads only `frankel-factory-inputs.json`, which must report `complete: true`.
+   - It also runs the package helper's own preconditions early: the AVB key derived from the signed target-files
+     against the pin, the otatools member limit, and its refusal of unsafe or linked members.
+   - Until they are bound, `otatoolsSha256` and `fastbootSha256` show `matchesBinding: null` (nothing compared).
 3. **Bind `otatoolsSha256` and `fastbootSha256`** from that receipt by a reviewed commit.
 4. **Run `frankel-factory-package`.** Its ceilings are the Rango route's: the job's is 297 minutes.
    - It uploads the receipts (kept 7 days).
@@ -56,8 +63,10 @@ Each run is a separate os-release dispatch by Infra. None is approved here.
      `frankel-install-unsigned-intermediate-<run>-<attempt>`. That artifact holds exactly `SHA256SUMS` and
      `package/frankel-install-<build>.zip`, and is kept 3 days.
 5. **Bind the retained installer** by a reviewed commit, from that run's receipts. These are the `RETAINED` values in
-   `scripts/frankel-factory-package-wiring.py`: run id, attempt, bytes and sha256. Signing's delivery verification
-   reads them.
+   `scripts/frankel-factory-package-wiring.py`: run id, attempt, bytes and sha256.
+   - Nothing on main reads them yet. Signing's open #515 adds `scripts/factory_targets.py` with Frankel's
+     `installerPins` null, and a Signing follow-up points them at this module.
+   - Until then, Frankel delivery verification refuses (`installer_unpinned`).
 
 ## Checking an output before any use
 
@@ -67,6 +76,9 @@ Each run is a separate os-release dispatch by Infra. None is approved here.
   reported. `signatureVerified` is missing for this route.
 - **Not the delivered installer.** Delivery requires a pinned archive signature from a separately approved Frankel
   factory-signing identity. `os/flavors/frankel.json factorySigning` is unbound.
+  - Only the artifact name says "unsigned intermediate". The ZIP inside keeps the flavor's install-archive name, so
+    never rename, re-share or present that ZIP as the delivered installer.
+  - The receipts (package and firmware attempt records, staged record, cleanup report) carry the label.
 
 ## First install
 

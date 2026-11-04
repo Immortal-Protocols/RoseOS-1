@@ -4,7 +4,7 @@ os/factory-package/frankel.json.
 
 Stand-ins only: no host, real lock, packaging, token or network. The observation runs on a synthetic builder in a
 temporary directory: a real release-stage.py receipt chain, the sign and verification receipts, a small signed
-target-files ZIP, the signing release directory host-sign.py leaves (its owner and signed markers and a small otatools
+target-files ZIP with a stand-in vbmeta, the signing release directory host-sign.py leaves (its owner and signed markers and a small otatools
 ZIP built from the pinned generator fixture), and the pinned release-script fixture. The committed sources the wiring
 reads are copies in which only host.sourceRoot and lockPath point there. The binding values used below are shape-valid
 test values for that synthetic build, never a claim about a real Frankel build. The helpers
@@ -51,6 +51,7 @@ BOUND = {'build': BUILD, 'buildTimestamp': STAMP, 'candidate': CANDIDATE, 'sourc
          'signedTargetFilesSha256': 'a' * 64, 'otatoolsSha256': 'b' * 64, 'fastbootSha256': 'c' * 64}
 UNBOUND = dict.fromkeys(BOUND)
 ZIP_TIME = (2026, 11, 4, 0, 0, 0)  # fixture ZIP entry times are fixed, so a rebuilt fixture has the same sha256
+KEY = bytes(range(64))  # stand-in AVB public key bytes for the synthetic build (no key pair exists)
 FORBIDDEN = ('id-token', 'secrets.', 'actions-gcp-login', 'GCP_', 'PIXEL_', 'publish', 'host-sign', 'signing-bootstrap',
              'ssh-keygen', 'download-artifact', 'release-pipeline.py', 'factory-package.log', 'target_files')
 
@@ -99,10 +100,21 @@ def wire(*argv):
     return subprocess.run([sys.executable, str(WIRING), *argv], capture_output=True, text=True, cwd=ROOT)
 
 
-def checkout(parent, production=None, lock=None, raw=None, **binding):
+def vbmeta(public, auth=64, aux=128):
+    """An AVB vbmeta layout around PUBLIC, as scripts/host-factory-package.py avb_public_key reads it."""
+    header = bytearray(256)
+    header[:4] = b'AVB0'
+    header[12:28] = auth.to_bytes(8, 'big') + aux.to_bytes(8, 'big')
+    header[64:80] = (0).to_bytes(8, 'big') + len(public).to_bytes(8, 'big')
+    block = bytearray(aux)
+    block[:len(public)] = public
+    return bytes(header) + bytes(auth) + bytes(block)
+
+
+def checkout(parent, production=None, lock=None, raw=None, avb=None, **binding):
     """A temporary root holding copies of the committed sources the wiring reads: the binding with BINDING values set
-    (or RAW text), os/release-pipeline/frankel.json with host.sourceRoot/lockPath moved when given, and
-    os/flavors/frankel.json unchanged."""
+    (or RAW text), os/release-pipeline/frankel.json with host.sourceRoot/lockPath (and, for the synthetic build's
+    stand-in key, identities.avbPublicKeySha256) moved when given, and os/flavors/frankel.json unchanged."""
     root = Path(parent)/'checkout'
     for directory in ('os/release-pipeline', 'os/flavors', Path(wiring.BINDING).parent):
         (root/directory).mkdir(parents=True, exist_ok=True)
@@ -114,6 +126,8 @@ def checkout(parent, production=None, lock=None, raw=None, **binding):
         pipeline['host']['sourceRoot'] = str(production)
     if lock is not None:
         pipeline['host']['lockPath'] = str(lock)
+    if avb is not None:
+        pipeline['identities']['avbPublicKeySha256'] = avb
     (root/'os/release-pipeline/frankel.json').write_text(json.dumps(pipeline, indent=2))
     shutil.copyfile(ROOT/'os/flavors/frankel.json', root/'os/flavors/frankel.json')
     return root
@@ -224,7 +238,8 @@ class Sources(unittest.TestCase):
         self.assertNotEqual(PIPELINE['identities']['avbPublicKeySha256'], rango.PINS['avbPkmd']['sha256'])
 
     def test_malformed_committed_sources_refuse(self):
-        for production in ('relative/root', '/home/pixelbuild/x/../y', '/home/pixelbuild/rose-actions/tree', '/home/pixelbuild'):
+        for production in ('relative/root', '/home/pixelbuild/x/../y', '/home/pixelbuild/rose-actions/tree', '/home/pixelbuild',
+                           '/home/pixelbuild/rose-actions'):
             with self.subTest(production=production), self.assertRaises(wiring.Invalid):
                 wiring.sources(checkout(self.tmp/str(len(production)), production=production))
         for path, value in ((('provenance', 'releaseScript', 'generate-release.sh'), 'x' * 64),
@@ -327,6 +342,11 @@ class Route(unittest.TestCase):
         archive.write_bytes(b'PK-frankel')
         (self.root/'package/factory-package-receipt.json').write_text(json.dumps({'status': 'packaged', 'output': {
             'file': archive.name, 'size': 10, 'sha256': sha(b'PK-frankel')}}))
+        def observer(argv, stdout=None, **kwargs):
+            (self.root/'inspection/firmware-observation.json').write_text('{}')
+            return subprocess.CompletedProcess(argv, 0, stdout='{}')
+        self.assertEqual(route_lib.firmware_observe(self.route, self.root, '41500000000', '1', observer), 0)
+        self.assertEqual(json.loads((self.root/'inspection/firmware-attempt.json').read_text())['label'], wiring.LABEL)
         (self.root/'inspection/classify.json').write_text(json.dumps({'signatureVerified': False}))
         staged = route_lib.stage_installer(self.route, self.root)
         self.assertEqual(staged, {'file': f'package/frankel-install-{BUILD}.zip', 'bytes': 10, 'sha256': sha(b'PK-frankel'),
@@ -335,7 +355,11 @@ class Route(unittest.TestCase):
         self.assertEqual(state['label'], wiring.LABEL)
         self.assertEqual(json.loads((self.tmp/'upload/cleanup.json').read_text())['label'], wiring.LABEL)
         self.assertEqual(sorted(p.name for p in (self.tmp/'upload').iterdir()),
-                         ['classify.json', 'cleanup.json', 'factory-package-receipt.json', 'package-attempt.json'])
+                         ['classify.json', 'cleanup.json', 'factory-package-receipt.json', 'firmware-attempt.json',
+                          'firmware-observation.json', 'package-attempt.json'])
+        # only what was copied (no target-files observation exists here), not the whole allowlist
+        self.assertEqual(state['uploaded'], ['classify.json', 'cleanup.json', 'factory-package-receipt.json',
+                                             'firmware-attempt.json', 'firmware-observation.json'])
         rango = load('rango_factory_package_wiring_label', ROOT/'scripts/rango-factory-package-wiring.py')
         self.assertIsNone(rango.ROUTE.label)  # the Rango route's records are unchanged
 
@@ -359,6 +383,41 @@ class Route(unittest.TestCase):
         self.assertEqual(out.getvalue(), f'root={root}\nfile=package/frankel-install-{BUILD}.zip\n')
         self.assertEqual(json.loads(err.getvalue())['label'], wiring.LABEL)
         self.assertEqual((root/'SHA256SUMS').read_text(), f'{sha(b"PK")}  package/frankel-install-{BUILD}.zip\n')
+
+    def test_main_hands_each_package_step_to_the_shared_route(self):
+        bound = dataclasses.replace(self.route, task_parent=str(self.parent))
+        root = route_lib.task_root(bound, '41500000000', '1')
+        record = self.tmp/'frankel-factory-package-attempt-41500000000-1.json'
+        calls, names = [], ('package', 'firmware_observe', 'classify', 'report', 'packaged', 'new_dir')
+        saved = {name: getattr(route_lib, name) for name in names}
+        saved_route, saved_subprocess = wiring.route, wiring.subprocess
+
+        def recorder(name):
+            def call(*args, **kwargs):
+                calls.append((name, args, kwargs))
+                return {} if name == 'report' else 0
+            return call
+        try:
+            wiring.route = lambda root=None, binding=None: bound
+            for name in names:
+                setattr(route_lib, name, recorder(name))
+            wiring.subprocess = types.SimpleNamespace(run=lambda argv: calls.append(('run', argv)) or
+                                                      subprocess.CompletedProcess(argv, 0))
+            run = ('--run-id', '41500000000', '--attempt', '1')
+            with contextlib.redirect_stdout(io.StringIO()):
+                for argv in (('package', *run, '--attempt-record', str(record)), ('observe', *run), ('firmware-observe', *run),
+                             ('classify', *run), ('report', *run, '--upload-dir', str(self.tmp/'upload'),
+                                                  '--installer-upload', 'success', '--attempt-record', str(record))):
+                    self.assertEqual(wiring.main(list(argv)), 0, argv)
+        finally:
+            wiring.route, wiring.subprocess = saved_route, saved_subprocess
+            for name, value in saved.items():
+                setattr(route_lib, name, value)
+        self.assertEqual(calls, [('package', (bound, root, record), {}), ('packaged', (bound, root), {}),
+                                 ('new_dir', (root/'inspection',), {}),
+                                 ('run', route_lib.observe_argv(bound, root, '41500000000', '1')),
+                                 ('firmware_observe', (bound, root, '41500000000', '1'), {}), ('classify', (bound, root), {}),
+                                 ('report', (bound, root, str(self.tmp/'upload'), 'success', record), {})])
 
     def test_cli_refuses_misplaced_options(self):
         for argv in (('check',), ('check', '--stage', 'observe', '--run-id', '1'), ('check', '--stage', 'publish'),
@@ -392,15 +451,20 @@ class Observe(unittest.TestCase):
         self.free_calls = []
         self.signed = self.make_attempt()
         self.otatools = self.make_release()
-        self.root = checkout(self.tmp, production=self.production, lock=self.lock, **dict(UNBOUND, build=BUILD,
-            buildTimestamp=STAMP, candidate=CANDIDATE, sourceRun=SOURCE_RUN, signedTargetFilesSha256=self.signed))
+        self.root = self.rebind()
+
+    def rebind(self, parent='checkout-root', avb=None, **change):
+        """A checkout bound to this synthetic build (its signed target-files sha256 and stand-in AVB key), plus CHANGE."""
+        return checkout(self.tmp/parent, production=self.production, lock=self.lock, avb=avb or sha(KEY),
+                        **dict(UNBOUND, build=BUILD, buildTimestamp=STAMP, candidate=CANDIDATE, sourceRun=SOURCE_RUN,
+                               signedTargetFilesSha256=self.signed, **change))
 
     def stage(self, *args):
         result = subprocess.run([sys.executable, str(ROOT/'scripts/release-stage.py'), *map(str, args)], capture_output=True,
                                 text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
 
-    def make_attempt(self, stages=('build', 'bytes-verify', 'sign', 'ota-verify', 'transfer'), candidate=CANDIDATE):
+    def make_attempt(self, stages=('build', 'bytes-verify', 'sign', 'ota-verify', 'transfer'), candidate=CANDIDATE, key=KEY):
         base = self.attempts/f'frankel-{BUILD}'
         if base.exists():
             shutil.rmtree(base)
@@ -410,6 +474,8 @@ class Observe(unittest.TestCase):
             self.stage('run', '--state', base/'stages', '--source-revision', candidate, name, '--', 'true')
         with zipfile.ZipFile(base/'release/signed-target_files.zip', 'w') as z:  # fixed times: the same bytes every time
             z.writestr(zipfile.ZipInfo('SYSTEM/build.prop', ZIP_TIME), f'ro.build.version.incremental={BUILD}\n')
+            if key is not None:
+                z.writestr(zipfile.ZipInfo('IMAGES/vbmeta.img', ZIP_TIME), vbmeta(key))
         signed = sha((base/'release/signed-target_files.zip').read_bytes())
         self.write_json(base/'release/sign-receipt.json', {'receiptType': 'os-signing', 'candidate': CANDIDATE, 'build': BUILD,
             'releaseScriptSha256': SCRIPT_PIN, 'outputs': {}, 'signedTargetFilesSha256': signed})
@@ -472,6 +538,7 @@ class Observe(unittest.TestCase):
             'sourceRun': SOURCE_RUN, 'buildTimestamp': STAMP, 'label': wiring.LABEL, 'limits': wiring.LIMITS,
             'source': f'os-release frankel-factory-observe run {self.RUN} attempt {self.ATTEMPT}',
             'claims': 'read-only measurements of the inputs a frankel-factory-package run would use; nothing packaged',
+            'notVerified': list(wiring.NOT_VERIFIED),
             'binding': {'path': wiring.BINDING, 'sha256': sha((self.root/wiring.BINDING).read_bytes())},
             'lock': {'held': True},
             'attempt': {'path': str(self.attempts/f'frankel-{BUILD}'), 'chain': 'original attempt, complete through transfer'},
@@ -479,10 +546,13 @@ class Observe(unittest.TestCase):
             'signedTargetFiles': {'path': str(self.attempts/f'frankel-{BUILD}/release/signed-target_files.zip'),
                                   'sha256': self.signed, 'bytes': len((self.attempts/f'frankel-{BUILD}/release/signed-target_files.zip').read_bytes()),
                                   'matchesBinding': True},
+            'avbKey': {'member': 'IMAGES/vbmeta.img', 'memberSha256': sha(vbmeta(KEY)), 'memberSize': len(vbmeta(KEY)),
+                       'publicKeySha256': sha(KEY), 'matchesPin': True, 'pin': sha(KEY)},
             'releaseDir': {'path': str(self.production/'releases'/BUILD), 'owner': {'matches': True}, 'signed': {'matches': True}},
             'otatools': {'path': str(self.otatools), 'sha256': sha(ota), 'bytes': len(ota), 'members': members,
                          'fastbootSha256': sha(b'\x7fELF synthetic fastboot'),
-                         'matchesBinding': {'otatoolsSha256': True, 'fastbootSha256': True}},
+                         'bound': {'otatoolsSha256': None, 'fastbootSha256': None},
+                         'matchesBinding': {'otatoolsSha256': None, 'fastbootSha256': None}},  # nothing bound: not compared
             'releaseScript': {'path': str(self.production/'script/generate-release.sh'), 'sha256': SCRIPT_PIN,
                               'bytes': len(SCRIPT_FIXTURE.read_bytes()), 'matchesPin': True},
             'freeBytes': {'path': '/home/pixelbuild/rose-actions', 'available': 200 << 30, 'required': 128 << 30},
@@ -490,13 +560,12 @@ class Observe(unittest.TestCase):
         self.assertEqual(self.free_calls, ['/home/pixelbuild/rose-actions'])
 
     def test_bound_tool_values_are_compared_with_the_measurement(self):
-        measured = sha(self.otatools.read_bytes())
-        root = checkout(self.tmp/'same', production=self.production, lock=self.lock, **dict(wiring.load_binding(self.root),
-                        otatoolsSha256=measured, fastbootSha256=sha(b'\x7fELF synthetic fastboot')))
-        self.assertEqual(self.observe('same-out', root)[0], 0)
-        root = checkout(self.tmp/'other', production=self.production, lock=self.lock, **dict(wiring.load_binding(self.root),
-                        otatoolsSha256='d' * 64, fastbootSha256='e' * 64))
-        status, report = self.observe('other-out', root)
+        measured = {'otatoolsSha256': sha(self.otatools.read_bytes()), 'fastbootSha256': sha(b'\x7fELF synthetic fastboot')}
+        status, report = self.observe('same-out', self.rebind('same', **measured))
+        self.assertEqual((status, report['otatools']['bound'], report['otatools']['matchesBinding']),
+                         (0, measured, {'otatoolsSha256': True, 'fastbootSha256': True}))
+        status, report = self.observe('other-out', self.rebind('other', otatoolsSha256='d' * 64, fastbootSha256='e' * 64))
+        self.assertEqual(report['otatools']['matchesBinding'], {'otatoolsSha256': False, 'fastbootSha256': False})
         self.assertEqual((status, report['problems']), (3, ['otatools: the measured value differs from the bound otatoolsSha256',
                                                             'otatools: the measured value differs from the bound fastbootSha256']))
 
@@ -539,6 +608,15 @@ class Observe(unittest.TestCase):
             link.external_attr = (stat.S_IFLNK | 0o777) << 16
             self.make_release(members=[((link,), b'/usr/bin/fastboot'),
                                        *((f'device/common/{n}', (GENERATOR_FIXTURE/n).read_bytes()) for n in GENERATOR)])
+        elif change == 'AVB pin differs':
+            self.root = self.rebind('avb', avb='f' * 64)
+        elif change == 'no vbmeta':
+            self.signed = self.make_attempt(key=None)
+            self.otatools = self.make_release()
+            self.root = self.rebind('no-vbmeta')
+        elif change == 'unsafe otatools member':
+            self.make_release(members=[('bin/fastboot', b'\x7fELF synthetic fastboot'), ('../escape', b'x'),
+                                       *((f'device/common/{n}', (GENERATOR_FIXTURE/n).read_bytes()) for n in GENERATOR)])
         elif change == 'release script changed':
             (self.production/'script/generate-release.sh').write_text('#!/bin/bash\n')
         elif change == 'linked attempt release':
@@ -560,8 +638,12 @@ class Observe(unittest.TestCase):
                  ('no otatools copy', ['otatools: ']),
                  ('generator changed', ['otatools device/common/']),
                  ('no fastboot', ['otatools bin/fastboot: 0 entries (exactly one is required)']),
-                 ('linked fastboot', ['otatools bin/fastboot: not a plain stored or deflated member']),
+                 ('linked fastboot', ["otatools has 1 member(s) the package helper refuses to extract, first 'bin/fastboot'",
+                                      'otatools bin/fastboot: not a plain stored or deflated member']),
                  ('release script changed', ['releaseScript: generate-release.sh is not the os/flavors/frankel.json provenance pin']),
+                 ('AVB pin differs', ['avbKey: avb_mismatch: the public key in IMAGES/vbmeta.img is not the flavor']),
+                 ('no vbmeta', ['avbKey: vbmeta_missing: the target-files has 0 IMAGES/vbmeta.img entries']),
+                 ('unsafe otatools member', ["otatools has 1 member(s) the package helper refuses to extract, first '../escape'"]),
                  ('linked attempt release', ['signReceipt: ', 'verification: ', 'signedTargetFiles: ']))
         for i, (change, expected) in enumerate(cases):
             with self.subTest(change=change):
@@ -618,6 +700,43 @@ class Observe(unittest.TestCase):
         self.assertEqual((status, report['otatools']), (3, {'path': str(self.otatools), 'sha256': None}))
         self.assertEqual([p for p in report['problems'] if p.startswith('otatools: ')],
                          [f'otatools: {self.otatools} changed while it was read'])
+
+    def test_the_member_limit_is_the_package_helpers_and_more_members_is_a_problem(self):
+        helper = load('host_factory_package_limits', ROOT/'scripts/host-factory-package.py')
+        self.assertEqual(wiring.LIMITS['otatoolsEntries'], helper.LIMITS['otatoolsMembers'])
+        saved = wiring.LIMITS['otatoolsEntries']
+        wiring.LIMITS['otatoolsEntries'] = 3  # the synthetic otatools has 4 members
+        try:
+            status, report = self.observe('many')
+        finally:
+            wiring.LIMITS['otatoolsEntries'] = saved
+        self.assertEqual((status, report['otatools']), (3, {'path': str(self.otatools), 'sha256': None}))
+        self.assertIn('otatools: otatools has more than 3 entries', report['problems'])
+
+    def test_members_come_from_the_hashed_descriptor_and_a_replaced_file_is_a_problem(self):
+        original, seen = wiring.otatools_members, []
+
+        def same(source, pins, deadline):
+            self.assertNotIsInstance(source, (str, os.PathLike))  # the open, hashed file; never the path again
+            seen.append(os.fstat(source.fileno()).st_ino)
+            return original(source, pins, deadline)
+
+        def replacing(source, pins, deadline):
+            result = original(source, pins, deadline)
+            shutil.copyfile(self.otatools, self.otatools.with_name('replacement.zip'))
+            os.replace(self.otatools.with_name('replacement.zip'), self.otatools)  # the same bytes, another file
+            return result
+        for name, stand_in in (('same', same), ('replaced', replacing)):
+            wiring.otatools_members = stand_in
+            try:
+                status, report = self.observe(name)
+            finally:
+                wiring.otatools_members = original
+            if name == 'same':
+                self.assertEqual((status, seen), (0, [os.lstat(self.otatools).st_ino]))
+        self.assertEqual((status, report['otatools']), (3, {'path': str(self.otatools), 'sha256': None}))
+        self.assertEqual([p for p in report['problems'] if p.startswith('otatools: ')],
+                         [f'otatools: {self.otatools} was replaced while it was read'])
 
     def test_the_deadline_stops_the_observation(self):
         ticks = iter([0.0] + [10.0 ** 6] * 100)

@@ -33,10 +33,12 @@ Commands:
                                      - the original attempt: its receipt chain through transfer (not a resume), its
                                        sign receipt and its passing, non-simulated verification receipt, each naming
                                        the bound candidate, build, timestamp and signed target-files sha256;
-                                     - that file's own sha256;
+                                     - that file's own sha256, and the AVB key the package helper derives from
+                                       it (its own derive_avb_pkmd) against the pin;
                                      - the build's release directory markers (owner and signed) against the binding;
-                                     - the otatools ZIP's sha256 and size, its bin/fastboot member's sha256, and its
-                                       device/common generator members against the flavor's generatorFixture pins;
+                                     - the otatools ZIP's sha256 and size, its bin/fastboot member's sha256, its
+                                       device/common generator members against the flavor's generatorFixture pins,
+                                       and the helper's extraction refusals (member count, unsafe names, links);
                                      - the release script, and the one the sign receipt records, against its pin;
                                      - the free bytes the helper's 128 GiB precondition needs.
                                      Only NEW_DIR/frankel-factory-inputs.json is written. Exit 0 when every check holds,
@@ -45,12 +47,18 @@ Commands:
                                      mode frankel-factory-package: the Rango route's steps on this route (see
                                      scripts/factory_package_route.py and scripts/rango-factory-package-wiring.py).
 
-Unsigned intermediate: no step adds an archive signature. Every attempt record, staged record and cleanup report
-carries LABEL, and os/flavors/frankel.json factorySigning stays unbound. classify reports signatureVerified missing:
-the archive is not factory-ready and is not the delivered installer. RETAINED and SIGNATURE are the installer pins
-Signing's scripts/factory-delivery.py reads through scripts/factory_targets.py. They stay null until a package run's
-receipts, and a signature from a separately approved Frankel archive identity, are bound by reviewed commits. An
-unsigned or unpinned archive is never verified as delivered.
+Unsigned intermediate: no step adds an archive signature. The package and firmware attempt records, the staged
+record, the cleanup report and the observation receipt carry LABEL; the private installer artifact's name says it too
+(the ZIP inside keeps the flavor's install-archive name). os/flavors/frankel.json factorySigning stays unbound, and
+classify reports signatureVerified missing: the archive is not factory-ready and is not the delivered installer.
+
+RETAINED and SIGNATURE are the Frankel installer pins for Signing's delivery verification. On main nothing reads them
+yet: Signing's open #515 adds scripts/factory_targets.py with frankel installerPins null, and its follow-up points
+those at this module once this is merged. They stay null until a package run's receipts, and a signature from a
+separately approved Frankel archive identity, are bound by reviewed commits. An unsigned or unpinned archive is never
+verified as delivered.
+
+observe-inputs also does not verify NOT_VERIFIED (sourceRun and publication), and says so in its receipt.
 
 Bounds are wrapper ceilings, not measurements. Exit status: 0 ok, 2 invalid, 3 refused or incomplete, 4 unbound.
 """
@@ -90,6 +98,10 @@ ATTEMPT_PARENT = '/home/pixelbuild/rose-actions'  # the os-release builder's $HO
 LABEL = ('unsigned intermediate: this route adds no archive signature (signatureVerified missing); not factory-ready and '
          'not the delivered installer')
 OBSERVE_SCHEMA = 'roseos.frankel-factory-inputs.v1'
+# What observe-inputs does not establish; the reviewer of the binding commit checks these against the published release
+# (pixel-ota tag frankel-<build>, whose body names the run that verified and published it).
+NOT_VERIFIED = ('sourceRun: recorded provenance; no run is read here',
+                'publication: the public release is not read here; the attempt proves signing, verification and transfer')
 OBSERVE_FILE = 'frankel-factory-inputs.json'
 GENERATOR_MEMBERS = 'device/common/'
 # scripts/host-sign.py prepare_release_dir/main: <sourceRoot>/releases/<build> is made when that build is signed; it holds
@@ -98,7 +110,8 @@ OTATOOLS_COPY = '{device}-otatools.zip'
 OWNER_MARKER = '.rose-actions-owner.json'
 SIGNED_MARKER = '.rose-actions-signed.json'
 FASTBOOT_MEMBER = 'bin/fastboot'
-LIMITS = {'seconds': 900, 'otatoolsEntries': 200000, 'fastbootBytes': 128 << 20, 'generatorBytes': 1 << 20,
+# otatoolsEntries is scripts/host-factory-package.py LIMITS['otatoolsMembers'] (a test keeps them equal).
+LIMITS = {'seconds': 900, 'otatoolsEntries': 50000, 'fastbootBytes': 128 << 20, 'generatorBytes': 1 << 20,
           'receiptBytes': 1 << 20}
 FREE_BYTES = 128 << 30  # scripts/host-factory-package.py LIMITS['freeBytes'], recorded here before any package run
 # Wrapper ceilings (seconds), not measurements: the Rango route's approved per-step ceilings for the same helpers, and
@@ -109,9 +122,10 @@ OBSERVE_BOUNDS = {'observeInputsSeconds': LIMITS['seconds'] + 120}
 INSTALLER = {'capBytes': 8 << 30, 'retentionDays': 3, 'uploadMinutes': 45}
 KILL_AFTER_SECONDS = 30
 JOB_MARGIN_MINUTES = 10
-# The installer pins Signing's scripts/factory-delivery.py reads (scripts/factory_targets.py 'frankel' installerPins):
-# the exact key sets of scripts/rango-factory-inspect-wiring.py, all null until a package run's receipts (and, for the
-# signature, a separately approved Frankel archive identity) are bound here by a reviewed commit. Never guessed.
+# The Frankel installer pins for Signing's delivery verification (#515's scripts/factory_targets.py 'frankel'
+# installerPins will point here): the exact key sets of scripts/rango-factory-inspect-wiring.py, all null until a
+# package run's receipts (and, for the signature, a separately approved Frankel archive identity) are bound here by a
+# reviewed commit. Never guessed.
 RETAINED = {'runId': None, 'attempt': None, 'bytes': None, 'sha256': None}
 SIGNATURE = {'runId': None, 'attempt': None, 'sha256': None}
 
@@ -158,7 +172,8 @@ def sources(root=ROOT):
     for name, value in (('releaseScript', script), *((f'generator {n}', v) for n, v in generator.items())):
         if not (isinstance(value, str) and SHAPES['otatoolsSha256'].fullmatch(value)):
             raise Invalid(f'os/flavors/frankel.json {name} pin must be a sha256')
-    if Path(route_lib.TASK_PARENT) in Path(production).parents or Path(production) in Path(route_lib.TASK_PARENT).parents:
+    if Path(route_lib.TASK_PARENT) in Path(production).parents or Path(production) in Path(route_lib.TASK_PARENT).parents \
+            or Path(production) == Path(route_lib.TASK_PARENT):
         raise Invalid('the task parent must not overlap the production tree')
     return {'production': production, 'releaseScript': {'path': f'{production}/script/generate-release.sh', 'sha256': script},
             'generator': generator, 'lock': host['lockPath'], 'avbPublicKeySha256': pipeline['identities']['avbPublicKeySha256']}
@@ -267,31 +282,55 @@ def regular(path):
     return info
 
 
-def file_sha256(path, deadline):
+def opened(path):
+    """(binary file object, lstat) of the regular file PATH names, reached with no link and opened without following
+    one; ValueError when the opened file is not the one lstat saw."""
     before = regular(path)
-    digest = hashlib.sha256()
-    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    f = os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW), 'rb')
+    now = os.fstat(f.fileno())
+    if (now.st_dev, now.st_ino) != (before.st_dev, before.st_ino):
+        f.close()
+        raise ValueError(f'{path} changed while it was opened')
+    return f, before
+
+
+def unchanged(f, before, path):
+    """ValueError unless PATH still names the open file and that file kept its size, mtime and ctime. The name is
+    checked first: replacing a file also changes the old file's ctime, and is reported as the replacement it is."""
+    after = os.fstat(f.fileno())
     try:
-        if (os.fstat(fd).st_dev, os.fstat(fd).st_ino) != (before.st_dev, before.st_ino):
-            raise ValueError(f'{path} changed while it was opened')
-        while True:
-            deadline.check()
-            block = os.read(fd, 8 << 20)
-            if not block:
-                break
-            digest.update(block)
-        after = os.fstat(fd)
-    finally:
-        os.close(fd)
+        now = os.lstat(path)
+    except FileNotFoundError:
+        raise ValueError(f'{path} was removed while it was read') from None
+    if (now.st_dev, now.st_ino) != (after.st_dev, after.st_ino):
+        raise ValueError(f'{path} was replaced while it was read')
     if (after.st_size, after.st_mtime_ns, after.st_ctime_ns) != (before.st_size, before.st_mtime_ns, before.st_ctime_ns):
-        raise ValueError(f'{path} changed while it was hashed')
-    return digest.hexdigest(), before.st_size
+        raise ValueError(f'{path} changed while it was read')
+
+
+def hashed(f, deadline):
+    digest = hashlib.sha256()
+    while True:
+        deadline.check()
+        block = f.read(8 << 20)
+        if not block:
+            return digest.hexdigest()
+        digest.update(block)
+
+
+def file_sha256(path, deadline):
+    f, before = opened(path)
+    with f:
+        digest = hashed(f, deadline)
+        unchanged(f, before, path)
+    return digest, before.st_size
 
 
 def small_json(path):
-    regular(path)
-    with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW), 'rb') as f:
+    f, before = opened(path)
+    with f:
         data = f.read(LIMITS['receiptBytes'] + 1)
+        unchanged(f, before, path)
     if len(data) > LIMITS['receiptBytes']:
         raise ValueError(f'{Path(path).name} is larger than {LIMITS["receiptBytes"]} bytes')
     value = json.loads(data)
@@ -302,25 +341,30 @@ def small_json(path):
 
 def otatools_observation(path, generator_pins, deadline):
     """The otatools ZIP's sha256 and size and its members (otatools_members), all read through one descriptor of one
-    regular file that kept its size, mtime and ctime throughout, so the member hashes are of the hashed bytes."""
-    before = regular(path)
-    with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW), 'rb') as f:
-        opened = os.fstat(f.fileno())
-        if (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino):
-            raise ValueError(f'{path} changed while it was opened')
-        digest = hashlib.sha256()
-        while True:
-            deadline.check()
-            block = f.read(8 << 20)
-            if not block:
-                break
-            digest.update(block)
+    regular file that kept its size, mtime and ctime and was not replaced, so the member hashes are of the hashed bytes."""
+    f, before = opened(path)
+    with f:
+        digest = hashed(f, deadline)
         f.seek(0)
         members, problems = otatools_members(f, generator_pins, deadline)
-        after = os.fstat(f.fileno())
-    if (after.st_size, after.st_mtime_ns, after.st_ctime_ns) != (before.st_size, before.st_mtime_ns, before.st_ctime_ns):
-        raise ValueError(f'{path} changed while it was read')
-    return digest.hexdigest(), before.st_size, members, problems
+        unchanged(f, before, path)
+    return digest, before.st_size, members, problems
+
+
+def target_files_observation(path, helper, avb_pin, deadline):
+    """The signed target-files' sha256 and size, and the helper's own AVB derivation (scripts/host-factory-package.py
+    derive_avb_pkmd: exactly IMAGES/vbmeta.img, bounded) against the pin, read through one descriptor as above."""
+    f, before = opened(path)
+    with f:
+        digest = hashed(f, deadline)
+        f.seek(0)
+        try:
+            public, provenance = helper.derive_avb_pkmd(f, avb_pin)
+            avb = dict(provenance, publicKeySha256=hashlib.sha256(public).hexdigest(), matchesPin=True)
+        except helper.Refused as error:
+            avb = {'matchesPin': False, 'refused': str(error)[:300]}
+        unchanged(f, before, path)
+    return digest, before.st_size, avb
 
 
 def otatools_members(source, generator_pins, deadline):
@@ -332,6 +376,11 @@ def otatools_members(source, generator_pins, deadline):
         if len(infos) > LIMITS['otatoolsEntries']:
             raise ValueError(f'otatools has more than {LIMITS["otatoolsEntries"]} entries')
         names = [info.filename for info in infos]
+        unsafe = [info.filename for info in infos if info.filename.startswith('/') or '\\' in info.filename
+                  or '..' in info.filename.split('/') or stat.S_ISLNK(info.external_attr >> 16)]
+        if unsafe:  # scripts/host-factory-package.py unzip_otatools refuses these (otatools_unsafe)
+            problems.append(f'otatools has {len(unsafe)} member(s) the package helper refuses to extract, first '
+                            f'{unsafe[0][:120]!r}')
         wanted = {FASTBOOT_MEMBER: LIMITS['fastbootBytes'],
                   **{GENERATOR_MEMBERS + name: LIMITS['generatorBytes'] for name in generator_pins}}
         for name, cap in wanted.items():
@@ -382,12 +431,14 @@ def observe_inputs(out_dir, run_id, attempt, root=ROOT, attempt_parent=ATTEMPT_P
               'buildTimestamp': binding['buildTimestamp'], 'label': LABEL, 'limits': dict(LIMITS), 'problems': [],
               'source': f'os-release frankel-factory-observe run {run_id} attempt {attempt}',
               'claims': 'read-only measurements of the inputs a frankel-factory-package run would use; nothing packaged',
+              'notVerified': list(NOT_VERIFIED),
               'binding': {'path': BINDING, 'sha256': hashlib.sha256((Path(root)/BINDING).read_bytes()).hexdigest()}}
     deadline = Deadline(LIMITS['seconds'], clock)
+    helper = _module('host_factory_package', ROOT/'scripts/host-factory-package.py')  # its own AVB derivation
     try:
         with held_lock(lock or src['lock']):
             report['lock'] = {'held': True}
-            observe_attempt(report, base, binding, src, deadline)
+            observe_attempt(report, base, binding, src, deadline, helper)
             observe_release(report, src, binding)
             observe_tools(report, src, binding, deadline)
             stats = (free or os.statvfs)(route_lib.TASK_PARENT)
@@ -407,8 +458,8 @@ def observe_inputs(out_dir, run_id, attempt, root=ROOT, attempt_parent=ATTEMPT_P
     return 0 if report['complete'] else 3
 
 
-def observe_attempt(report, base, binding, src, deadline):
-    """The original attempt's chain, receipts and signed target-files, each against the binding."""
+def observe_attempt(report, base, binding, src, deadline, helper):
+    """The original attempt's chain, receipts and signed target-files (with its AVB key), each against the binding."""
     build, sha, stamp, pin = binding['build'], binding['candidate'], binding['buildTimestamp'], binding['signedTargetFilesSha256']
     problems = report['problems']
     reuse = _module('host_app_reuse', ROOT/'scripts/host-app-reuse.py')  # code from this checkout; root is data only
@@ -446,10 +497,13 @@ def observe_attempt(report, base, binding, src, deadline):
         problems.append(f'verification: {str(error)[:300]}')
     target = release/'signed-target_files.zip'
     try:
-        digest, size = file_sha256(target, deadline)
+        digest, size, avb = target_files_observation(target, helper, src['avbPublicKeySha256'], deadline)
         report['signedTargetFiles'] = {'path': str(target), 'sha256': digest, 'bytes': size, 'matchesBinding': digest == pin}
+        report['avbKey'] = dict(avb, pin=src['avbPublicKeySha256'])
         if digest != pin:
             problems.append('signedTargetFiles: signed-target_files.zip is not the bound signedTargetFilesSha256')
+        if not avb['matchesPin']:
+            problems.append(f'avbKey: {avb["refused"]}')
     except (OSError, ValueError) as error:
         report['signedTargetFiles'] = {'path': str(target), 'sha256': None}
         problems.append(f'signedTargetFiles: {str(error)[:300]}')
@@ -481,13 +535,16 @@ def observe_tools(report, src, binding, deadline):
     try:
         digest, size, members, member_problems = otatools_observation(path, src['generator'], deadline)
         fastboot = members.get(FASTBOOT_MEMBER)
+        measured = {'otatoolsSha256': digest, 'fastbootSha256': fastboot['sha256'] if fastboot else None}
+        bound = {key: binding[key] for key in measured}
         report['otatools'] = {'path': path, 'sha256': digest, 'bytes': size, 'members': members,
-                              'fastbootSha256': fastboot['sha256'] if fastboot else None,
-                              'matchesBinding': {'otatoolsSha256': binding['otatoolsSha256'] in (None, digest),
-                                                 'fastbootSha256': binding['fastbootSha256'] in (None, fastboot and fastboot['sha256'])}}
+                              'fastbootSha256': measured['fastbootSha256'], 'bound': bound,
+                              # null: nothing bound yet, so nothing was compared (never reported as a match)
+                              'matchesBinding': {key: None if bound[key] is None else bound[key] == measured[key]
+                                                 for key in measured}}
         problems.extend(member_problems)
         for key, ok in report['otatools']['matchesBinding'].items():
-            if not ok:
+            if ok is False:
                 problems.append(f'otatools: the measured value differs from the bound {key}')
     except (OSError, ValueError, zipfile.BadZipFile) as error:
         report['otatools'] = {'path': path, 'sha256': None}

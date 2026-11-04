@@ -1324,12 +1324,13 @@ jobs:
     # otherwise and no host starts). One bounded command (scripts/frankel-factory-package-wiring.py observe-inputs) takes
     # the existing shared builder lock (an existing regular file: never created, never waited on) and records, against
     # the binding: the original attempt /home/pixelbuild/rose-actions/frankel-<build> (its receipt chain complete through
-    # transfer, not a resume), its sign receipt, its passing non-simulated verification receipt and the signed
-    # target-files' own sha256; the build's signing release directory <sourceRoot>/releases/<build> (its owner and signed
-    # markers) and the otatools copy signing kept there (never the shared OUT_DIR copy): its sha256 and size, its
-    # bin/fastboot member's sha256 and its device/common generator members against the flavor's generatorFixture pins;
-    # the release script, and the one the sign receipt records, against the provenance pin; and the free bytes the
-    # package helper's 128 GiB precondition needs. It writes only frankel-factory-inputs.json in a new
+    # transfer, not a resume), its sign receipt, its passing non-simulated verification receipt, the signed
+    # target-files' own sha256 and the AVB key the package helper derives from it; the build's signing release directory
+    # <sourceRoot>/releases/<build> (its owner and signed markers) and the otatools copy signing kept there (never the
+    # shared OUT_DIR copy): its sha256 and size, its bin/fastboot member's sha256, its device/common generator members
+    # against the flavor's generatorFixture pins and the helper's member refusals; the release script, and the one the
+    # sign receipt records, against the provenance pin; and the free bytes the package helper's 128 GiB precondition
+    # needs. sourceRun and publication are not verified (the receipt says so). It writes only frankel-factory-inputs.json in a new
     # task directory; nothing is packaged, copied, signed or changed. That receipt (7 days) is the only upload, and
     # otatoolsSha256 and fastbootSha256 are bound from it by a reviewed commit, never by this run. contents: read only:
     # no OIDC token, signer login, secret, signing, download, install, phone action or publication. Time: the
