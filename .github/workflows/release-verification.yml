@@ -36,6 +36,10 @@ on:
       - 'os/build-only/blazer-compile-host.json'
       - 'scripts/rango-factory-package-wiring.py'
       - 'scripts/host-factory-package.py'
+      - 'scripts/factory_targets.py'
+      - 'scripts/tests/test_factory_targets.py'
+      - 'scripts/factory-delivery.py'
+      - 'scripts/tests/test_factory_delivery.py'
       - 'scripts/factory-package.py'
       - 'scripts/tests/test_rango_factory_package_workflow.py'
       - 'scripts/factory_package_route.py'
@@ -192,6 +196,10 @@ on:
       - 'os/build-only/blazer-compile-host.json'
       - 'scripts/rango-factory-package-wiring.py'
       - 'scripts/host-factory-package.py'
+      - 'scripts/factory_targets.py'
+      - 'scripts/tests/test_factory_targets.py'
+      - 'scripts/factory-delivery.py'
+      - 'scripts/tests/test_factory_delivery.py'
       - 'scripts/factory-package.py'
       - 'scripts/tests/test_rango_factory_package_workflow.py'
       - 'scripts/factory_package_route.py'
@@ -362,6 +370,8 @@ jobs:
           python3 scripts/tests/test_rango_retained.py
           python3 scripts/tests/test_github_publisher.py
           python3 scripts/tests/test_host_adapters.py
+          python3 scripts/tests/test_factory_targets.py
+          python3 scripts/tests/test_factory_delivery.py
           python3 os/tests/test_apply_os_changes.py
           python3 scripts/tests/test_host_build_reconcile.py
           python3 scripts/tests/test_actions_gcp_login.py
