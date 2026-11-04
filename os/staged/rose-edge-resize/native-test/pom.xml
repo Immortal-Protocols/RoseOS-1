@@ -1,0 +1,175 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- #410 OS Product, E2c: the Launcher3 raised-edge resize client in os/overlays (RoseEdgeShell, RoseEdgeState,
+     RoseEdgeSwipe, RoseEdgeLayout, RoseEdgeWindow and E2a's unchanged RoseEdgeGesture), run on Robolectric's SDK 35
+     runtime against Java the SDK's own aidl tool generates from ../aidl (the interface record). Not part of any build,
+     CI or release: run explicitly with `ANDROID_SDK_ROOT=... mvn -q -B test` from this directory. It compiles the
+     committed overlay sources unchanged. -->
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>com.android.quickstep.fallback</groupId>
+  <artifactId>rose-edge-resize-native</artifactId>
+  <version>0</version>
+  <properties>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    <maven.compiler.release>17</maven.compiler.release>
+    <!-- The existing compile SDK (scripts/setup-android-sdk.sh); android.jar is compile-only, Robolectric supplies
+         the runtime framework for SDK 35. -->
+    <android.jar>${env.ANDROID_SDK_ROOT}/platforms/android-35/android.jar</android.jar>
+    <aidl.tool>${env.ANDROID_SDK_ROOT}/build-tools/android-15/aidl</aidl.tool>
+    <framework.aidl>${env.ANDROID_SDK_ROOT}/platforms/android-35/framework.aidl</framework.aidl>
+  </properties>
+  <repositories>
+    <!-- Google's official Maven, for the AAR-only androidx test runtime Robolectric loads (monitor, idling). -->
+    <repository><id>google</id><url>https://maven.google.com</url></repository>
+  </repositories>
+  <dependencies>
+    <dependency>
+      <groupId>org.robolectric</groupId>
+      <artifactId>robolectric</artifactId>
+      <version>4.17</version>
+      <scope>test</scope>
+      <exclusions>
+        <!-- AAR-only androidx test runtime: unpacked below and put on the test classpath as plain jars. -->
+        <exclusion><groupId>androidx.test</groupId><artifactId>monitor</artifactId></exclusion>
+        <exclusion><groupId>androidx.test.espresso</groupId><artifactId>espresso-idling-resource</artifactId></exclusion>
+      </exclusions>
+    </dependency>
+    <dependency>
+      <groupId>junit</groupId>
+      <artifactId>junit</artifactId>
+      <version>4.13.2</version>
+      <scope>test</scope>
+    </dependency>
+    <!-- Compile against Robolectric's full, uninstrumented SDK 35 framework rather than android.jar: Launcher3 builds with
+         platform_apis, and the edge window uses the hidden ViewTreeObserver.InternalInsetsInfo touchable region as
+         Launcher3's Taskbar does. -->
+    <dependency>
+      <groupId>org.robolectric</groupId>
+      <artifactId>android-all</artifactId>
+      <version>15-robolectric-13954326</version>
+      <scope>provided</scope>
+    </dependency>
+  </dependencies>
+  <build>
+    <plugins>
+      <plugin>
+        <!-- Robolectric's SDK 35 runtime jar, fetched by Maven from Maven Central like every other dependency and
+             handed to Robolectric's documented offline mode (robolectric.offline / robolectric.dependency.dir). -->
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-dependency-plugin</artifactId>
+        <version>3.8.1</version>
+        <executions>
+          <execution>
+            <id>androidx-test-aars</id>
+            <phase>process-test-classes</phase>
+            <goals><goal>copy</goal></goals>
+            <configuration>
+              <artifactItems>
+                <artifactItem><groupId>androidx.test</groupId><artifactId>monitor</artifactId><version>1.8.0</version><type>aar</type></artifactItem>
+                <artifactItem><groupId>androidx.test.espresso</groupId><artifactId>espresso-idling-resource</artifactId><version>3.7.0</version><type>aar</type></artifactItem>
+              </artifactItems>
+              <outputDirectory>${project.build.directory}/aar</outputDirectory>
+            </configuration>
+          </execution>
+          <execution>
+            <id>android-all</id>
+            <phase>process-test-classes</phase>
+            <goals><goal>copy</goal></goals>
+            <configuration>
+              <artifactItems>
+                <artifactItem>
+                  <groupId>org.robolectric</groupId>
+                  <artifactId>android-all-instrumented</artifactId>
+                  <version>15-robolectric-13954326-i7</version>
+                </artifactItem>
+              </artifactItems>
+              <outputDirectory>${project.build.directory}/robolectric-deps</outputDirectory>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+      <plugin>
+        <!-- The sources under test: os/overlays' RoseEdge* classes and the compile-only SystemProperties stub, copied
+             byte for byte; and the interface record compiled by the SDK's aidl tool. -->
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-antrun-plugin</artifactId>
+        <version>3.1.0</version>
+        <executions>
+          <execution>
+            <id>staged-sources-and-aidl</id>
+            <phase>generate-test-sources</phase>
+            <goals><goal>run</goal></goals>
+            <configuration>
+              <target>
+                <delete dir="${project.build.directory}/e2c-src"/>
+                <delete dir="${project.build.directory}/e2c-aidl"/>
+                <copy todir="${project.build.directory}/e2c-src">
+                  <fileset dir="${project.basedir}/../../../overlays/packages/apps/Launcher3/quickstep/src"
+                           includes="com/android/quickstep/fallback/RoseEdge*.java"/>
+                </copy>
+                <mkdir dir="${project.build.directory}/e2c-aidl"/>
+                <!-- aidl wants the canonical import root that each file lives under. -->
+                <property name="e2c.aidl.root" location="${project.basedir}/../aidl"/>
+                <apply executable="${aidl.tool}" failonerror="true" parallel="false">
+                  <arg value="-p${framework.aidl}"/>
+                  <arg value="-I${e2c.aidl.root}"/>
+                  <arg value="-o${project.build.directory}/e2c-aidl"/>
+                  <fileset dir="${e2c.aidl.root}" includes="**/*.aidl"/>
+                </apply>
+              </target>
+            </configuration>
+          </execution>
+          <execution>
+            <id>aar-classes</id>
+            <phase>process-test-classes</phase>
+            <goals><goal>run</goal></goals>
+            <configuration>
+              <target>
+                <unzip src="${project.build.directory}/aar/monitor-1.8.0.aar" dest="${project.build.directory}/aar/monitor"><patternset><include name="classes.jar"/></patternset></unzip>
+                <unzip src="${project.build.directory}/aar/espresso-idling-resource-3.7.0.aar" dest="${project.build.directory}/aar/idling"><patternset><include name="classes.jar"/></patternset></unzip>
+              </target>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+      <plugin>
+        <groupId>org.codehaus.mojo</groupId>
+        <artifactId>build-helper-maven-plugin</artifactId>
+        <version>3.6.0</version>
+        <executions>
+          <execution>
+            <id>staged-sources</id>
+            <phase>generate-test-sources</phase>
+            <goals><goal>add-test-source</goal></goals>
+            <configuration><sources>
+              <source>${project.build.directory}/e2c-src</source>
+              <source>${project.build.directory}/e2c-aidl</source>
+            </sources></configuration>
+          </execution>
+        </executions>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-compiler-plugin</artifactId>
+        <version>3.13.0</version>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-surefire-plugin</artifactId>
+        <version>3.5.2</version>
+        <configuration>
+          <additionalClasspathElements>
+            <additionalClasspathElement>${project.build.directory}/aar/monitor/classes.jar</additionalClasspathElement>
+            <additionalClasspathElement>${project.build.directory}/aar/idling/classes.jar</additionalClasspathElement>
+          </additionalClasspathElements>
+          <systemPropertyVariables>
+            <render.out>${project.build.directory}/render</render.out>
+            <robolectric.offline>true</robolectric.offline>
+            <robolectric.dependency.dir>${project.build.directory}/robolectric-deps</robolectric.dependency.dir>
+          </systemPropertyVariables>
+        </configuration>
+      </plugin>
+    </plugins>
+  </build>
+</project>

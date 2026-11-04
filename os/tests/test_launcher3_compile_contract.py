@@ -56,8 +56,10 @@ class Launcher3CompileContractTest(unittest.TestCase):
 
     def test_the_patch_order_is_the_patchers_plus_the_unregistered_edge_patch(self):
         contract = self.contract()
-        patcher = (ROOT/'scripts/apply-os-changes.py').read_text()
-        background = (ROOT/'scripts/background_apks.py').read_text()
+        # This inert contract describes the reviewed pre-registration patcher (committed copy); the live patcher now
+        # registers the edge patches for the normal OS build (#410), which this test also checks.
+        patcher = (ROOT/'os/tests/fixtures/launcher3-compile-contract/patcher'/'apply-os-changes.py').read_text()
+        background = (ROOT/'os/tests/fixtures/launcher3-compile-contract/patcher'/'background_apks.py').read_text()
         base = re.search(r"projects = \{'frameworks/base': (\[[^\]]*\])\}", patcher).group(1)
         extra = re.search(r'BACKGROUND_FRAMEWORK_PATCHES = (\[[^\]]*\])', background).group(1)
         import ast
@@ -71,7 +73,8 @@ class Launcher3CompileContractTest(unittest.TestCase):
         self.assertIn('which apply-os-changes.py does not register', manifest['candidatePatches'])
         self.assertEqual(contract.CANDIDATE_PATCHES, order['packages/apps/Launcher3'][1:])
         for name in contract.CANDIDATE_PATCHES:
-            self.assertNotIn(name, patcher, 'the candidate patches are never registered by this contract')
+            self.assertNotIn(name, patcher, 'the reviewed pre-registration patcher does not register them')
+            self.assertIn(name, (ROOT/'scripts/apply-os-changes.py').read_text(), 'the live patcher does (#410)')
         self.assertIn('except through all four verifyBaseApplyCandidate conditions', manifest['branches']['otherwise'])
 
     def test_the_registration_is_the_patchers_own_execution_for_frankels_flags(self):
@@ -82,7 +85,7 @@ class Launcher3CompileContractTest(unittest.TestCase):
         recipe = json.loads((ROOT/'os/release-pipeline/frankel.json').read_text())
         self.assertEqual(registration['applyArgs'], recipe['host']['integrate']['reconcile']['applyArgs'])
         self.assertEqual(registration['patcher'], {'patcher': 'trusted', 'sha256': {name: hashlib.sha256(
-            (ROOT/'scripts'/name).read_bytes()).hexdigest() for name in ('apply-os-changes.py', 'background_apks.py',
+            (ROOT/'os/tests/fixtures/launcher3-compile-contract/patcher'/name).read_bytes()).hexdigest() for name in ('apply-os-changes.py', 'background_apks.py',
             'integration_copy.py')}})
         def per_project(rows):
             out = {}
@@ -251,20 +254,32 @@ class Launcher3CompileContractTest(unittest.TestCase):
             contract = self.contract()
             contract.OS = work/'os'
             return contract.check_candidate(manifest)
-        self.assertEqual(run(), [], 'this bundle: wholly at the base')
         gesture = 'packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeGesture.java'
+        edge = work/'os/patches/rose-edge-launcher3.patch'
+        resize = work/'os/patches/rose-edge-resize-launcher3.patch'
+        mixed = ['os/ mixes base and candidate inputs: it must be wholly one or the other']
+        # The committed os/ is wholly at the base on main, or wholly at the candidate on #440's branch.
+        self.assertEqual(run(), [], 'the committed os/ is wholly one or the other')
+        # Bring the copy to the base: no candidate patch, each candidate overlay at its pinned base image or absent.
+        for path in (edge, resize):
+            path.unlink(missing_ok=True)
+        for o in manifest['candidateDelta']['overlays']:
+            target = work/'os/overlays'/o['target']
+            if o['before'] is None:
+                target.unlink(missing_ok=True)
+            else:
+                shutil.copyfile(CONTRACT_FIXTURES/o['target'], target)
+        self.assertEqual(run(), [], 'wholly at the base')
         for o in manifest['candidateDelta']['overlays']:
             shutil.copyfile(ROOT/o['bundlePath'], work/'os/overlays'/o['target'])
-        self.assertEqual(run(), ['os/ mixes base and candidate inputs: it must be wholly one or the other'],
-            'candidate overlays without the candidate patch')
-        shutil.copyfile(EDGE_PATCH, work/'os/patches/rose-edge-launcher3.patch')
-        self.assertEqual(run(), ['os/ mixes base and candidate inputs: it must be wholly one or the other'],
-            'one of the two candidate patches is not a candidate')
-        shutil.copyfile(RESIZE_PATCH, work/'os/patches/rose-edge-resize-launcher3.patch')
+        self.assertEqual(run(), mixed, 'candidate overlays without the candidate patches')
+        shutil.copyfile(EDGE_PATCH, edge)
+        self.assertEqual(run(), mixed, 'one of the two candidate patches is not a candidate')
+        shutil.copyfile(RESIZE_PATCH, resize)
         self.assertEqual(run(), [], "#440's branch: wholly at the candidate")
-        (work/'os/patches/rose-edge-launcher3.patch').write_bytes(EDGE_PATCH.read_bytes() + b'\n')
+        edge.write_bytes(EDGE_PATCH.read_bytes() + b'\n')
         self.assertIn('os/patches/rose-edge-launcher3.patch: differs from the candidate bundle', run())
-        shutil.copyfile(EDGE_PATCH, work/'os/patches/rose-edge-launcher3.patch')
+        shutil.copyfile(EDGE_PATCH, edge)
         (work/'os/overlays'/gesture).write_bytes(b'// a third version\n')
         self.assertIn(f'os/overlays/{gesture}: neither the base nor the candidate bytes', run())
 

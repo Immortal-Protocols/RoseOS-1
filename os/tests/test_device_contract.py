@@ -250,7 +250,8 @@ class ContractTest(unittest.TestCase):
 
     def test_rose_reaches_every_device_through_shared_products(self):
         patches, products = rose_products(ROOT)
-        self.assertEqual(patches, ['agent-tray-build-make.patch', 'background-control-build-make.patch', 'updater-product-build-make.patch'])
+        self.assertEqual(patches, ['agent-tray-build-make.patch', 'background-control-build-make.patch',
+            'rose-edge-build-make.patch', 'updater-product-build-make.patch'])
         self.assertEqual(products, {'target/product/generic_system.mk', 'target/product/handheld_system_ext.mk',
             'target/product/media_system.mk', 'target/product/handheld_product.mk'})
         for name in DEVICES:

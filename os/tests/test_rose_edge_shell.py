@@ -112,9 +112,10 @@ class RoseEdgeShellTest(unittest.TestCase):
                 self.assertFalse(theirs & set(touched), other.name)
 
     def test_inert_until_a_real_compile_registers_it(self):
-        # Every registered patch and every overlay goes into each OS build. WMShell has not been compiled for real,
-        # so the patch stays out of the apply sequence and nothing is added under os/overlays.
-        self.assertNotIn('rose-edge-wmshell', (ROOT/'scripts/apply-os-changes.py').read_text())
+        # Every registered patch and every overlay goes into each OS build. #410 (Chief): the normal OS build is the
+        # compile proof, so apply-os-changes.py registers the patch; host-reconcile adds nothing and no overlay is added.
+        self.assertIn("projects['frameworks/base'].append('rose-edge-wmshell.patch')",
+            (ROOT/'scripts/apply-os-changes.py').read_text())
         self.assertNotIn('rose-edge-wmshell', (ROOT/'scripts/host-reconcile.py').read_text())
         self.assertFalse(list((ROOT/'os/overlays').rglob('roseedge')))
         # Default off even once registered.

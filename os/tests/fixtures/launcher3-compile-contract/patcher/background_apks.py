@@ -1,0 +1,189 @@
+"""Shared APK identity verification for the background-control preparation tools."""
+import hashlib
+from pathlib import Path
+import re
+import struct
+import subprocess
+import zipfile
+
+AGENT = 'dev.pixel.backgroundcontrol'
+VOICE = 'dev.pixel.voice'
+EXCLUDED = {AGENT, VOICE, 'android', 'com.android.permissioncontroller', 'com.google.android.permissioncontroller'}
+PACKAGE = re.compile(r'[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z0-9_]+)+')
+DIGEST = re.compile(r'[A-F0-9]{64}')
+
+SIGNER_LINE = re.compile(r'Signer (?:#\d+|\(minSdkVersion=(\d+), maxSdkVersion=(\d+)\)) certificate SHA-256 digest: ([0-9a-fA-F]{64})')
+# apksigner's SDK 37 output for a verification restricted to one SDK (OS-RANGO-SIGNER-004, observed 2026-10-30):
+# "V3.0 Signer: certificate SHA-256 digest: <64 hex>". Matched as the whole line only.
+V3_0_SIGNER_LINE = re.compile(r'V3\.0 Signer: certificate SHA-256 digest: ([0-9a-fA-F]{64})')
+
+def verified_signers(output, sdk):
+    """Uppercase signer digests from `apksigner verify --print-certs --min-sdk-version S --max-sdk-version S` output
+    that apply to sdk: numbered signers, signers whose explicit SDK range contains sdk, and the V3.0 signer line."""
+    certs = set()
+    for line in output.splitlines():
+        found = SIGNER_LINE.match(line)
+        if found and (found[1] is None or int(found[1]) <= sdk <= int(found[2])):
+            certs.add(found[3].upper())
+            continue
+        found = V3_0_SIGNER_LINE.fullmatch(line.strip())
+        if found:
+            certs.add(found[1].upper())
+    return certs
+
+def identity(apk, aapt, apksigner, sdk):
+    apk = Path(apk).resolve(strict=True)
+    badging = subprocess.check_output([str(aapt), 'dump', 'badging', str(apk)], text=True)
+    match = re.search(r"^package: name='([^']+)'", badging, re.M)
+    if not match or not PACKAGE.fullmatch(match[1]):
+        raise ValueError(f'No valid package identity in {apk.name}')
+    # check_output: a nonzero verifier exit raises, so no printed digest is trusted without a successful verification.
+    output = subprocess.check_output([str(apksigner), 'verify', '--print-certs',
+        '--min-sdk-version', str(sdk), '--max-sdk-version', str(sdk), str(apk)], text=True)
+    certs = verified_signers(output, sdk)
+    if not certs:
+        raise ValueError(f'No verified signer for target SDK {sdk}: {apk.name}')
+    version = re.search(r"^package: .*\bversionCode='(\d+)'", badging, re.M)
+    if not version:
+        raise ValueError(f'No versionCode in {apk.name}')
+    return {'packageName': match[1], 'certificates': sorted(certs), 'versionCode': int(version[1]),
+        'apkSha256': hashlib.sha256(apk.read_bytes()).hexdigest()}
+
+def validate_policy(policy, apk):
+    if policy.get('schemaVersion') != 1 or not isinstance(policy.get('sdk'), int) or policy['sdk'] < 1:
+        raise ValueError('Unsupported background policy schema or SDK')
+    agent, voice, targets = policy['agent'], policy['voice'], policy['targets']
+    if agent['packageName'] != AGENT or voice['packageName'] != VOICE:
+        raise ValueError('Policy must identify Background Control and Rose Agent')
+    if not isinstance(policy.get('prototypeControl', False), bool):
+        raise ValueError('prototypeControl must be a boolean')
+    if not targets and not policy.get('prototypeControl', False):
+        raise ValueError('At least one exact target is required')
+    names = set()
+    for row in [agent, voice, *targets]:
+        name = row['packageName']
+        if not PACKAGE.fullmatch(name) or name in names:
+            raise ValueError('Invalid or duplicate package identity')
+        names.add(name)
+        certs = row['certificates']
+        if not certs or len(certs) != len(set(certs)) or any(not DIGEST.fullmatch(c) for c in certs):
+            raise ValueError('Only exact uppercase SHA-256 certificate pins are accepted')
+    if agent['certificates'] != voice['certificates']:
+        raise ValueError('Agent and Rose Agent must have the same signing identity')
+    if any(t['packageName'] in EXCLUDED for t in targets):
+        raise ValueError('Agent, Rose Agent and permission controllers cannot be targets')
+    if hashlib.sha256(Path(apk).read_bytes()).hexdigest() != agent['apkSha256']:
+        raise ValueError('Agent APK differs from the APK verified in the policy receipt')
+    return policy
+
+def preprocessed_issues(apk):
+    """Problems the pinned Soong validator rejects for a preprocessed, non-privileged import: native
+    libraries must be stored, and the APK must pass zipalign -c -p 4 (stored entries 4-byte aligned,
+    stored .so files page aligned). Compressed dex is accepted for non-privileged apps."""
+    issues = []
+    with open(apk, 'rb') as raw, zipfile.ZipFile(raw) as archive:
+        for info in archive.infolist():
+            name = info.filename
+            native = name.startswith('lib/') and name.endswith('.so')
+            if info.compress_type != zipfile.ZIP_STORED:
+                if native:issues.append(f'{name} is compressed; store native libraries uncompressed')
+                continue
+            raw.seek(info.header_offset + 26)
+            name_length, extra_length = struct.unpack('<HH', raw.read(4))
+            offset = info.header_offset + 30 + name_length + extra_length
+            if offset % (4096 if native else 4):issues.append(f'{name} is not aligned; run zipalign -f -p 4')
+    return issues
+
+# frameworks/base patches for every build with a background policy, in order. The locked-session patch adds
+# config_pixelComputerControlLockedSessions=false, its auth max-age, their symbols and the owner-gated guards
+# (installer, permission, settings and system screens block a session while the device is locked). With the
+# resource false, locked creation stays off; the release verifier requires the resource present and false.
+# Only --locked-control turns it on.
+BACKGROUND_FRAMEWORK_PATCHES = ['background-control-frameworks-base.patch', 'background-control-modern-frameworks-base.patch',
+    'background-control-resource-import-fix.patch', 'locked-control-frameworks-base.patch']
+
+def preinstall_plan(policy, apks):
+    """Map APKs to product preinstalls; each must be byte-identical to Rose Agent or a policy target."""
+    pinned = {row['apkSha256']: row for row in [policy['voice'], *policy['targets']] if row.get('apkSha256')}
+    plan, names, modules = [], set(), set()
+    for apk in apks:
+        row = pinned.get(hashlib.sha256(Path(apk).read_bytes()).hexdigest())
+        if row is None:
+            raise ValueError(f'{Path(apk).name} is not Rose Agent or a target APK verified in the policy receipt')
+        if row['packageName'] in names:
+            raise ValueError(f'{row["packageName"]} is supplied more than once')
+        names.add(row['packageName'])
+        module = 'RosePreinstall_' + row['packageName'].replace('.', '_')
+        # dev.foo_bar and dev_foo.bar are distinct packages but would share one module and directory.
+        if module in modules:
+            raise ValueError(f'{row["packageName"]} maps to module {module}, already used by another package')
+        modules.add(module)
+        issues = preprocessed_issues(apk)
+        if issues:
+            raise ValueError(f'{Path(apk).name} cannot be imported unchanged: ' + '; '.join(issues))
+        plan.append({'module': module, 'packageName': row['packageName'], 'apk': Path(apk)})
+    return sorted(plan, key=lambda p: p['module'])
+
+# Rose Agent's Home is selected once per user by the patched RoleService (OS-HOME-2804-FIX-001); the patch names
+# this package, so it applies only to a build that preinstalls exactly this app.
+ROSE_HOME_PACKAGE = 'dev.pixel.voice'
+ROSE_HOME_PATCHES = {'packages/modules/Permission': ['rose-home-role-permission.patch']}
+
+def rose_home_projects(preinstalls):
+    """Projects and patches that make the preinstalled Rose Agent the Home app; none without that preinstall."""
+    return dict(ROSE_HOME_PATCHES) if any(row['packageName'] == ROSE_HOME_PACKAGE for row in preinstalls) else {}
+
+def installed_precedence(rows, installed):
+    """(issues, notes) for bundled apps against the phone's installed copies. Android keeps an
+    installed app unless the image's copy has the same signer and a higher versionCode, so a lower
+    version or another signer is an issue. An equal version is normal for an unchanged app; it is an
+    issue only when the installed record pins different apkSha256 bytes, otherwise a note.
+    installed uses the expected-identities.json shape: {"apps": [{packageName, versionCode,
+    signerSha256, optional apkSha256}]}."""
+    if not isinstance(installed, dict) or not isinstance(installed.get('apps'), list):
+        raise ValueError('installed identities need an "apps" list')
+    phone = {}
+    for app in installed['apps']:
+        if (not isinstance(app, dict) or not PACKAGE.fullmatch(str(app.get('packageName', '')))
+                or type(app.get('versionCode')) is not int or app['versionCode'] < 1
+                or not DIGEST.fullmatch(str(app.get('signerSha256', '')).upper())
+                or ('apkSha256' in app and not DIGEST.fullmatch(str(app['apkSha256']).upper()))):
+            raise ValueError('each installed app needs packageName, positive versionCode and signerSha256')
+        phone[app['packageName']] = app
+    issues, notes = [], []
+    for row in rows:
+        app, name = phone.get(row['packageName']), row['packageName']
+        if app is None:continue
+        if type(row.get('versionCode')) is not int:
+            issues.append(f'{name}: policy receipt has no versionCode; regenerate it')
+            continue
+        if app['signerSha256'].upper() not in row['certificates']:
+            issues.append(f'{name}: bundled signer differs from the installed copy')
+        if row['versionCode'] < app['versionCode']:
+            issues.append(f'{name}: bundled versionCode {row["versionCode"]} is below installed '
+                f'{app["versionCode"]}; the phone would keep its installed copy')
+        elif row['versionCode'] == app['versionCode']:
+            if 'apkSha256' in app and app['apkSha256'].lower() != row.get('apkSha256', '').lower():
+                issues.append(f'{name}: bundled APK differs from the installed one at the same versionCode '
+                    f'{row["versionCode"]}; the phone would keep its installed copy')
+            elif 'apkSha256' not in app:
+                notes.append(f'{name}: versionCode {row["versionCode"]} equals the installed copy, which the '
+                    'phone keeps; fine only if this app is unchanged')
+    return issues, notes
+
+def preinstall_blueprint(module):
+    # Presigned keeps the existing app signer; preprocessed makes Soong copy the APK unchanged
+    # (otherwise it uncompresses native libraries and re-zipaligns). Not privileged, so no allowlist.
+    return ('package { default_applicable_licenses: ["Android-Apache-2.0"] }\n'
+        'android_app_import {\n'
+        f'    name: "{module}",\n'
+        '    apk: "app.apk",\n'
+        '    presigned: true,\n'
+        '    preprocessed: true,\n'
+        '    product_specific: true,\n'
+        '    dex_preopt: { enabled: false },\n'
+        '}\n')
+
+def preinstall_make_block(modules):
+    return ('\n# Rose Agent and allowed targets preinstalled from the exact APKs pinned by the background policy.\n'
+        'PRODUCT_PACKAGES += ' + ' '.join(modules) + '\n')
