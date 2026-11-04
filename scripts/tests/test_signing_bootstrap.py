@@ -501,12 +501,13 @@ class Workflow(unittest.TestCase):
         self.assertIn('runs-on: [self-hosted, roseos-frankel-builder]', job)
         def mode_gated(name, seen=()):
             """The job runs only in named modes: its own condition names one, or it has no always() and every job it
-            needs is itself mode-gated (GitHub skips a job whose need was skipped unless it asks for always())."""
+            needs is itself mode-gated (GitHub skips a job whose need was skipped unless its condition uses a status
+            function that runs anyway: always(), cancelled(), !cancelled() or failure())."""
             body = JOBS[name]
             condition = re.search(r'    if: ([^\n]*(?:\n      [^\n]*)*)\n', body)
             if condition and "inputs.mode == '" in condition[1]:
                 return True
-            if condition and 'always()' in condition[1]:
+            if condition and re.search(r'\b(always|cancelled|failure)\(\)', condition[1]):  # run after a skipped need
                 return False
             needs = re.search(r'(?m)^    needs: \[?([^\]\n]+)\]?$', body)
             names = [n.strip() for n in needs[1].split(',')] if needs else []
