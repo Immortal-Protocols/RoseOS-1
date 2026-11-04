@@ -9,8 +9,8 @@ import fs from 'node:fs';
 const dir=new URL('../app/src/dev/pixel/voice/',import.meta.url);
 const source=name=>fs.readFileSync(new URL(name,dir),'utf8');
 const main=source('MainActivity.java');
-const options=main.slice(main.indexOf('void homeOptions(View anchor){'),main.indexOf('menu.show();}',main.indexOf('void homeOptions(View anchor){')));
-const labels=[...options.matchAll(/menu\.getMenu\(\)\.add\("([^"]+)"\)/g)].map(m=>m[1]);
+const options=main.slice(main.indexOf('void homeOptions(View anchor){'),main.indexOf('SettingsDialog.show(this,menu.getMenu());}',main.indexOf('void homeOptions(View anchor){')));
+const labels=[...options.matchAll(/settingsOption\(menu,"([^"]+)"\)/g)].map(m=>m[1]);
 
 test('the three trial entries are gone from the Home menu, not renamed or moved',()=>{
  assert.ok(options.length>0,'found homeOptions');
