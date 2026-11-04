@@ -576,6 +576,46 @@ class Integration(unittest.TestCase):
 
 
 class StorageAndContract(unittest.TestCase):
+    def test_definitive_slot_refusals_keep_their_codes(self):
+        for status in ('session_limit', 'app_in_other_session', 'locked', 'target_not_allowed'):
+            with self.subTest(status=status):
+                ws = ScopedWorkspace(lambda op,p: {'status': status}, timers=False)
+                self.assertEqual(ws.call('start', {'packageName': CALC})['status'], status)
+                self.assertFalse(ws.uncertain)
+                self.assertIsNone(ws.bound_id)
+
+    def test_shutdown_keeps_phone_transport_and_event_loop_alive_for_cleanup(self):
+        import asyncio
+        from rose.app import serve_all, STOP_SIGNALS
+        async def run():
+            loop = asyncio.get_running_loop()
+            handlers, checks = {}, []
+            class Transport:
+                should_exit = force_exit = False
+                def __init__(self):
+                    self.started = asyncio.Event()
+                    self.closed = False
+                async def serve(self, sockets=None):
+                    self.started.set()
+                    while not self.should_exit:
+                        await asyncio.sleep(.001)
+                    self.closed = True
+            transports = [Transport(), Transport()]
+            async def phone_ack():
+                checks.append(all(not s.should_exit and not s.closed for s in transports))
+            def cleanup():
+                asyncio.run_coroutine_threadsafe(phone_ack(), loop).result(timeout=2)
+            with patch.object(loop, 'add_signal_handler', side_effect=lambda sig,fn: handlers.update({sig:fn})), \
+                    patch.object(loop, 'remove_signal_handler'):
+                task = asyncio.create_task(serve_all([(s,None) for s in transports], shutdown=cleanup))
+                for s in transports:
+                    await s.started.wait()
+                handlers[STOP_SIGNALS[0]]()
+                await asyncio.wait_for(task, timeout=3)
+            self.assertEqual(checks, [True])
+            self.assertTrue(all(s.closed for s in transports))
+        asyncio.run(run())
+
     def test_transcript_api_is_loopback_only_and_stop_checks_conversation(self):
         from fastapi.testclient import TestClient
         from rose.app import build_app
