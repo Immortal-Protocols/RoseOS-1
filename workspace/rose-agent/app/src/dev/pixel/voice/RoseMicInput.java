@@ -26,13 +26,7 @@ final class RoseMicInput {
   return callActive ? callMuted : shared;
  }
 
- /** The existing voice command that applies a requested state to a live call. */
+ /** The existing voice command that applies a state to a running call (App Core's MicInputCapture reads it back). */
  static String command(boolean muted) { return muted ? MUTE : UNMUTE; }
-
- /** The requested state a voice command carries, or null for any other command. */
- static Boolean requested(String command) {
-  return MUTE.equals(command) ? Boolean.TRUE : UNMUTE.equals(command) ? Boolean.FALSE : null;
- }
-
 
 }

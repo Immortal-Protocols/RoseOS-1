@@ -12,10 +12,6 @@ public final class RoseMicInputTest {
         expect(RoseMicInput.shown(true, true, false) && !RoseMicInput.shown(true, false, true), "live: the call's own input mute (truth), never the stored wish");
         // Only the two existing input-mute commands: no output, call, task or session command.
         expect(RoseMicInput.command(true).equals("tray_mute") && RoseMicInput.command(false).equals("tray_unmute"), "the existing input-mute commands");
-        expect(RoseMicInput.requested("tray_mute") == Boolean.TRUE && RoseMicInput.requested("tray_unmute") == Boolean.FALSE, "commands carry the request");
-        for (String other : new String[]{"talk", "end", "disconnect", "mute", "glasses", "auto_talk", null, ""})
-            expect(RoseMicInput.requested(other) == null, "not a mic-input request: " + other);
-
         System.out.println("RoseMicInputTest: " + checks + " checks passed");
     }
 }
