@@ -64,7 +64,7 @@ Each run is a separate os-release dispatch by Infra. None is approved here.
      `package/frankel-install-<build>.zip`, and is kept 3 days.
 5. **Bind the retained installer** by a reviewed commit, from that run's receipts. These are the `RETAINED` values in
    `scripts/frankel-factory-package-wiring.py`: run id, attempt, bytes and sha256.
-   - Nothing on main reads them yet. Signing's open #515 adds `scripts/factory_targets.py` with Frankel's
+   - Nothing on main reads them yet. `scripts/factory_targets.py` (Signing, #515) has Frankel's
      `installerPins` null, and a Signing follow-up points them at this module.
    - Until then, Frankel delivery verification refuses (`installer_unpinned`).
 

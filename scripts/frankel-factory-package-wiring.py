@@ -53,7 +53,7 @@ record, the cleanup report and the observation receipt carry LABEL; the private 
 classify reports signatureVerified missing: the archive is not factory-ready and is not the delivered installer.
 
 RETAINED and SIGNATURE are the Frankel installer pins for Signing's delivery verification. On main nothing reads them
-yet: Signing's open #515 adds scripts/factory_targets.py with frankel installerPins null, and its follow-up points
+yet: scripts/factory_targets.py (Signing, #515) has frankel installerPins null, and Signing's follow-up points
 those at this module once this is merged. They stay null until a package run's receipts, and a signature from a
 separately approved Frankel archive identity, are bound by reviewed commits. An unsigned or unpinned archive is never
 verified as delivered.
@@ -122,7 +122,7 @@ OBSERVE_BOUNDS = {'observeInputsSeconds': LIMITS['seconds'] + 120}
 INSTALLER = {'capBytes': 8 << 30, 'retentionDays': 3, 'uploadMinutes': 45}
 KILL_AFTER_SECONDS = 30
 JOB_MARGIN_MINUTES = 10
-# The Frankel installer pins for Signing's delivery verification (#515's scripts/factory_targets.py 'frankel'
+# The Frankel installer pins for Signing's delivery verification (scripts/factory_targets.py 'frankel'
 # installerPins will point here): the exact key sets of scripts/rango-factory-inspect-wiring.py, all null until a
 # package run's receipts (and, for the signature, a separately approved Frankel archive identity) are bound here by a
 # reviewed commit. Never guessed.
