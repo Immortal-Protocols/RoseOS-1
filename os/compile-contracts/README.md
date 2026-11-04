@@ -13,9 +13,20 @@ Shell patch, `os/patches/rose-edge-wmshell.patch` (#516/#523, merged at `01cf401
   contract. Its projects are frameworks/base (the background-policy patches, then the candidate) and build/release.
 - **Overlays:** every frameworks/base overlay is a *required* input here, because the patch's `RoseEdgeMicSlot` calls
   the tray's `AgentTrayLink`. There is no flag evidence: the edge's switch is a runtime property.
-- **Fail-closed:** `confirmation.state` stays `pending` until OS Core confirms the inputs and goals, and an adapter
-  refuses the contract until then. `registration.state` is `unregistered`. The patch enters `apply-os-changes.py` only
-  after a real compile, and the contract never registers it.
+- **Fail-closed:** `confirmation` records OS Core's confirmation of the inputs and goals (2026-11-04). An adapter
+  refuses the contract unless its state is `confirmed`, and any change to the bound patch or inputs needs a new
+  confirmation. `registration.state` is `unregistered`. The patch enters `apply-os-changes.py` only after a real
+  compile, and the contract never registers it.
+- **Source proof:** `overlayRoles.goalDirs` maps each goal to the directory of the pinned `Android.bp` that defines
+  it. `overlayRoles.sourceProof` names, for every post-image and required overlay under those directories, the module
+  whose own Soong input list must hold it, because that module is not always the goal:
+  - Shell `.java` files reach `WindowManager-Shell` only through the protolog genrule `wm_shell_protolog_src`;
+  - Shell `.aidl` files reach it through `WindowManager-Shell-aidls`;
+  - SystemUI's manifest and assets reach `SystemUI-core` through Soong's `android_library` defaults.
+
+  Those facts rest on the two pinned `Android.bp` files, committed under `build-graph/` and checked against the pinned
+  tree listing. A file under a goal directory that no rule places refuses. Files under no goal directory are listed as
+  `notSourceProved`.
 - **Kept separate on purpose:** Launcher3QuickStepLib has no compile coupling to this patch, because its client is
   hand-written against the descriptor. So a Shell failure neither masks nor blocks the Launcher3 result.
 - **Shared fixtures:** both contracts read the pinned fixtures in `os/tests/fixtures/launcher3-compile-contract/`. This

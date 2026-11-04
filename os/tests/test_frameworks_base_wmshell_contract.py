@@ -5,7 +5,8 @@ These checks cover:
 - the manifest recomputes from the committed fixtures and patches;
 - its candidate is the patch on main;
 - the contract refuses when changed;
-- it stays pending until OS Core confirms;
+- it carries OS Core's recorded confirmation;
+- each Shell and SystemUI file is placed in the module that compiles it;
 - it never registers the patch, because registration waits for a real compile (#410).
 """
 import copy
@@ -43,7 +44,7 @@ class FrameworksBaseWmshellContractTest(unittest.TestCase):
     def test_the_manifest_recomputes_from_the_committed_fixtures(self):
         result = subprocess.run([sys.executable, str(SCRIPT)], capture_output=True, text=True, cwd=ROOT)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn('confirmation pending', result.stdout)
+        self.assertIn('confirmation confirmed', result.stdout)
 
     def test_the_candidate_is_os_cores_patch_on_main(self):
         delta = self.manifest['candidateDelta']
@@ -96,12 +97,38 @@ class FrameworksBaseWmshellContractTest(unittest.TestCase):
         for row in self.manifest['overlays']:
             self.assertEqual(W.C.sha256((ROOT/'os/overlays'/row['target']).read_bytes()), row['sha256'])
 
-    def test_it_stays_pending_until_os_core_confirms_and_never_registers(self):
-        self.assertEqual(self.manifest['confirmation']['state'], 'pending')
+    def test_it_carries_os_cores_confirmation_and_never_registers(self):
+        self.assertEqual(self.manifest['confirmation']['state'], 'confirmed')
+        self.assertEqual(self.manifest['confirmation'], W.CONFIRMATION)
         self.assertIn('refuses this contract unless state is "confirmed"', self.manifest['confirmation']['rule'])
         self.assertEqual(self.manifest['registration']['state'], 'unregistered')
         patcher = (ROOT/'scripts/apply-os-changes.py').read_text()
         self.assertNotIn('rose-edge-wmshell', patcher, 'registration waits for a real compile of this contract')
+
+    def test_each_shell_and_systemui_file_is_proved_in_the_module_that_compiles_it(self):
+        roles = self.manifest['overlayRoles']
+        self.assertEqual(roles['goalDirs'], {'WindowManager-Shell': 'frameworks/base/libs/WindowManager/Shell',
+            'SystemUI-core': 'frameworks/base/packages/SystemUI'})
+        listing = {}
+        for line in gzip.decompress(LISTING.read_bytes()).decode().splitlines():
+            meta, path = line.split('\t', 1)
+            listing['frameworks/base/' + path] = meta.split(' ')[2]
+        for bp in roles['buildGraph']:
+            self.assertEqual(bp['gitBlob'], listing[bp['path']], f'{bp["path"]}: the pinned Android.bp')
+        modules = {r['file'].rsplit('/', 1)[1]: r['module'] for r in roles['sourceProof']['files']}
+        self.assertEqual(modules['RoseEdgeController.java'], 'wm_shell_protolog_src')
+        self.assertEqual(modules['RoseEdgeMicSlot.java'], 'wm_shell_protolog_src')
+        self.assertEqual(modules['AgentTrayLink.java'], 'wm_shell_protolog_src')
+        self.assertEqual(modules['IRoseEdge.aidl'], 'WindowManager-Shell-aidls')
+        self.assertEqual(modules['PixelStatusBarFilter.java'], 'SystemUI-core')
+        proved = {r['file'] for r in roles['sourceProof']['files']}
+        for f in self.manifest['candidateDelta']['files']:
+            self.assertIn(f['path'], proved, 'every candidate file is source-proved')
+        for path in roles['sourceProof']['notSourceProved']:
+            self.assertFalse(any(path.startswith(d + '/') for d in roles['goalDirs'].values()))
+        with self.assertRaises(ValueError):
+            W.source_proof([{'path': 'frameworks/base', 'files': [{'path': 'libs/WindowManager/Shell/res/x.xml',
+                'post': {}}]}], [])
 
     def test_any_change_refuses(self):
         def mutated(change):
@@ -117,6 +144,9 @@ class FrameworksBaseWmshellContractTest(unittest.TestCase):
             'candidate commit': lambda m: m['candidateDelta'].update(commit='0' * 40),
             'confirmation': lambda m: m['confirmation'].update(state='assumed'),
             'registration': lambda m: m['registration'].update(state='registered'),
+            'unconfirmed': lambda m: m['confirmation'].update(state='pending'),
+            'goal dir': lambda m: m['overlayRoles']['goalDirs'].update({'SystemUI-core': 'frameworks/base'}),
+            'source module': lambda m: m['overlayRoles']['sourceProof']['files'][0].update(module='WindowManager-Shell'),
             'pre-image': lambda m: next(f for f in m['projects'][0]['files']
                 if f['path'] == SHELL + 'dagger/WMShellModule.java')['pre'].update(gitBlob='0' * 40),
         }

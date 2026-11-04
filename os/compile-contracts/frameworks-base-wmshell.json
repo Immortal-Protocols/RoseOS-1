@@ -8,7 +8,8 @@
  ],
  "confirmation": {
   "by": "OS Core (owner of rose-edge-wmshell.patch, #516/#523)",
-  "state": "pending",
+  "state": "confirmed",
+  "record": "OS Core to OS Product, 2026-11-04 06:28 UTC, computed from source against main 1df12a7 (the patch bytes bound here). It confirmed every field below and listed all six after-images, which equal candidateDelta. It corrected one point: the required inputs are wider than the tray link, namely all four Shell overlays (Shell compiles src/**), frameworks-base.patch, and the SystemUI overlays for SystemUI-core. These are all required here. The self-update and background-control patches do not decide these goals; they stay bound because the base bundle applies them",
   "fields": [
    "candidateDelta: the patch bytes and its after images",
    "projects frameworks/base: WMShellModule.java pre is the pinned blob (no other patch touches it)",
@@ -16,7 +17,7 @@
    "overlayRoles.compileGoals: WindowManager-Shell and SystemUI-core",
    "flagEvidence: none"
   ],
-  "rule": "an adapter refuses this contract unless state is \"confirmed\"; a confirmation that changes any field regenerates the manifest"
+  "rule": "an adapter refuses this contract unless state is \"confirmed\"; any change to the bound patch or inputs regenerates the manifest and needs OS Core's confirmation again"
  },
  "registration": {
   "state": "unregistered",
@@ -2369,6 +2370,190 @@
   "compileGoals": [
    "WindowManager-Shell",
    "SystemUI-core"
-  ]
+  ],
+  "goalDirs": {
+   "WindowManager-Shell": "frameworks/base/libs/WindowManager/Shell",
+   "SystemUI-core": "frameworks/base/packages/SystemUI"
+  },
+  "buildGraph": [
+   {
+    "path": "frameworks/base/libs/WindowManager/Shell/Android.bp",
+    "gitBlob": "b0c0c8c3d5aeae46a095d345617be60a440c8a83",
+    "sha256": "fc3a3c4de8e8ffbfc4832125b6a7b448a50fea1e0b5c6bad8ceb767b55679738",
+    "fixture": "os/tests/fixtures/launcher3-compile-contract/build-graph/frameworks/base/libs/WindowManager/Shell/Android.bp"
+   },
+   {
+    "path": "frameworks/base/packages/SystemUI/Android.bp",
+    "gitBlob": "60943cd278f07ffa8bdbd2e1964afeb3f7b4217c",
+    "sha256": "758d66bbe5624eb28e05bb1411c57d25b69a3ed8a473a76b9fb3fa6fd69d5412",
+    "fixture": "os/tests/fixtures/launcher3-compile-contract/build-graph/frameworks/base/packages/SystemUI/Android.bp"
+   }
+  ],
+  "sourceProof": {
+   "files": [
+    {
+     "file": "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/AgentStatusControls.java",
+     "goal": "WindowManager-Shell",
+     "module": "wm_shell_protolog_src",
+     "list": "genrule inputs",
+     "via": "filegroup wm_shell-sources; protologtool transforms it and WindowManager-Shell compiles the resulting srcjar"
+    },
+    {
+     "file": "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/AgentTrayLink.java",
+     "goal": "WindowManager-Shell",
+     "module": "wm_shell_protolog_src",
+     "list": "genrule inputs",
+     "via": "filegroup wm_shell-sources; protologtool transforms it and WindowManager-Shell compiles the resulting srcjar"
+    },
+    {
+     "file": "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/AgentTrayPrototype.java",
+     "goal": "WindowManager-Shell",
+     "module": "wm_shell_protolog_src",
+     "list": "genrule inputs",
+     "via": "filegroup wm_shell-sources; protologtool transforms it and WindowManager-Shell compiles the resulting srcjar"
+    },
+    {
+     "file": "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/RootTaskDisplayAreaOrganizer.java",
+     "goal": "WindowManager-Shell",
+     "module": "wm_shell_protolog_src",
+     "list": "genrule inputs",
+     "via": "filegroup wm_shell-sources; protologtool transforms it and WindowManager-Shell compiles the resulting srcjar"
+    },
+    {
+     "file": "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/RoseEdgeMicSlot.java",
+     "goal": "WindowManager-Shell",
+     "module": "wm_shell_protolog_src",
+     "list": "genrule inputs",
+     "via": "filegroup wm_shell-sources; protologtool transforms it and WindowManager-Shell compiles the resulting srcjar"
+    },
+    {
+     "file": "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/StatusVoiceGlow.java",
+     "goal": "WindowManager-Shell",
+     "module": "wm_shell_protolog_src",
+     "list": "genrule inputs",
+     "via": "filegroup wm_shell-sources; protologtool transforms it and WindowManager-Shell compiles the resulting srcjar"
+    },
+    {
+     "file": "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/dagger/WMShellBaseModule.java",
+     "goal": "WindowManager-Shell",
+     "module": "wm_shell_protolog_src",
+     "list": "genrule inputs",
+     "via": "filegroup wm_shell-sources; protologtool transforms it and WindowManager-Shell compiles the resulting srcjar"
+    },
+    {
+     "file": "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/dagger/WMShellModule.java",
+     "goal": "WindowManager-Shell",
+     "module": "wm_shell_protolog_src",
+     "list": "genrule inputs",
+     "via": "filegroup wm_shell-sources; protologtool transforms it and WindowManager-Shell compiles the resulting srcjar"
+    },
+    {
+     "file": "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/roseedge/IRoseEdge.aidl",
+     "goal": "WindowManager-Shell",
+     "module": "WindowManager-Shell-aidls",
+     "list": "aidl sources",
+     "via": "a static_libs entry of WindowManager-Shell-defaults"
+    },
+    {
+     "file": "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/roseedge/IRoseEdgeListener.aidl",
+     "goal": "WindowManager-Shell",
+     "module": "WindowManager-Shell-aidls",
+     "list": "aidl sources",
+     "via": "a static_libs entry of WindowManager-Shell-defaults"
+    },
+    {
+     "file": "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/roseedge/RoseEdgeController.java",
+     "goal": "WindowManager-Shell",
+     "module": "wm_shell_protolog_src",
+     "list": "genrule inputs",
+     "via": "filegroup wm_shell-sources; protologtool transforms it and WindowManager-Shell compiles the resulting srcjar"
+    },
+    {
+     "file": "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/roseedge/RoseEdgePolicy.java",
+     "goal": "WindowManager-Shell",
+     "module": "wm_shell_protolog_src",
+     "list": "genrule inputs",
+     "via": "filegroup wm_shell-sources; protologtool transforms it and WindowManager-Shell compiles the resulting srcjar"
+    },
+    {
+     "file": "frameworks/base/packages/SystemUI/AndroidManifest.xml",
+     "goal": "SystemUI-core",
+     "module": "SystemUI-core",
+     "list": "manifest",
+     "via": "Soong's android_library default manifest (SystemUI-core sets no manifest)"
+    },
+    {
+     "file": "frameworks/base/packages/SystemUI/assets/fonts/Nunito.ttf",
+     "goal": "SystemUI-core",
+     "module": "SystemUI-core",
+     "list": "assets",
+     "via": "Soong's android_library default asset directory (SystemUI-core sets no asset_dirs)"
+    },
+    {
+     "file": "frameworks/base/packages/SystemUI/assets/licenses/Nunito-OFL.txt",
+     "goal": "SystemUI-core",
+     "module": "SystemUI-core",
+     "list": "assets",
+     "via": "Soong's android_library default asset directory (SystemUI-core sets no asset_dirs)"
+    },
+    {
+     "file": "frameworks/base/packages/SystemUI/src/com/android/systemui/statusbar/phone/PhoneStatusBarView.java",
+     "goal": "SystemUI-core",
+     "module": "SystemUI-core",
+     "list": "javac sources",
+     "via": "srcs"
+    },
+    {
+     "file": "frameworks/base/packages/SystemUI/src/com/android/systemui/statusbar/phone/PixelStatusBarFilter.java",
+     "goal": "SystemUI-core",
+     "module": "SystemUI-core",
+     "list": "javac sources",
+     "via": "srcs"
+    },
+    {
+     "file": "frameworks/base/packages/SystemUI/src/com/android/systemui/statusbar/pipeline/shared/ui/composable/StatusBarRoot.kt",
+     "goal": "SystemUI-core",
+     "module": "SystemUI-core",
+     "list": "kotlinc sources",
+     "via": "srcs"
+    },
+    {
+     "file": "frameworks/base/packages/SystemUI/src/com/android/systemui/statusbar/systemstatusicons/ui/compose/SystemStatusIcons.kt",
+     "goal": "SystemUI-core",
+     "module": "SystemUI-core",
+     "list": "kotlinc sources",
+     "via": "srcs"
+    }
+   ],
+   "notSourceProved": [
+    "build/release/aconfig/pixel_background_control/Android.bp",
+    "build/release/aconfig/pixel_background_control/android.companion.virtualdevice.flags/Android.bp",
+    "build/release/aconfig/pixel_background_control/android.companion.virtualdevice.flags/computer_control_access_flag_values.textproto",
+    "build/release/release_configs/cur.textproto",
+    "build/release/release_configs/pixel_background_control.textproto",
+    "frameworks/base/core/java/android/companion/virtual/IVirtualDeviceManager.aidl",
+    "frameworks/base/core/java/android/companion/virtual/VirtualDeviceManager.java",
+    "frameworks/base/core/java/android/companion/virtual/computercontrol/AutomatedApps.aidl",
+    "frameworks/base/core/java/android/companion/virtual/computercontrol/AutomatedApps.java",
+    "frameworks/base/core/java/android/companion/virtual/computercontrol/AutomatedPackageListener.java",
+    "frameworks/base/core/java/android/companion/virtual/computercontrol/ComputerControlSession.java",
+    "frameworks/base/core/java/android/companion/virtual/computercontrol/IAutomatedPackageListener.aidl",
+    "frameworks/base/core/java/android/companion/virtual/computercontrol/IComputerControlSession.aidl",
+    "frameworks/base/core/res/res/values/config.xml",
+    "frameworks/base/core/res/res/values/symbols.xml",
+    "frameworks/base/libs/computercontrol/src/com/android/extensions/computercontrol/ComputerControlExtensions.java",
+    "frameworks/base/libs/computercontrol/src/com/android/extensions/computercontrol/ComputerControlSession.java",
+    "frameworks/base/services/accessibility/java/com/android/server/accessibility/ProxyManager.java",
+    "frameworks/base/services/companion/java/com/android/server/companion/virtual/VirtualDeviceImpl.java",
+    "frameworks/base/services/companion/java/com/android/server/companion/virtual/VirtualDeviceManagerService.java",
+    "frameworks/base/services/companion/java/com/android/server/companion/virtual/computercontrol/AutomatedPackagesRepository.java",
+    "frameworks/base/services/companion/java/com/android/server/companion/virtual/computercontrol/ComputerControlAllowlistController.java",
+    "frameworks/base/services/companion/java/com/android/server/companion/virtual/computercontrol/ComputerControlSessionAdmission.java",
+    "frameworks/base/services/companion/java/com/android/server/companion/virtual/computercontrol/ComputerControlSessionImpl.java",
+    "frameworks/base/services/companion/java/com/android/server/companion/virtual/computercontrol/ComputerControlSessionProcessor.java",
+    "frameworks/base/services/core/java/com/android/server/pm/PackageInstallerSession.java"
+   ],
+   "rule": "each file must appear in its module's own Soong input list for that kind; absent, or present only in another module's, refuses. notSourceProved files sit under no goal directory and are proved by their tree images only"
+  }
  }
 }
