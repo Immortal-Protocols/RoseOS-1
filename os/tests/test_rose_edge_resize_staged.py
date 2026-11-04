@@ -35,9 +35,10 @@ class RoseEdgeResizeStagedTest(unittest.TestCase):
         self.assertEqual(listener, [('onRaised', [('int', 'displayId'), ('int', 'taskId'), ('Rect', 'appBounds')], 1),
             ('onRefused', [('int', 'displayId'), ('int', 'taskId'), ('int', 'reason')], 2),
             ('onLowered', [('int', 'displayId'), ('int', 'reason')], 3)])
-        self.assertEqual([m[0] for m in methods(AIDL/'dev/pixel/voice/edge/IRoseEdgeControls.aidl')], ['attach', 'detach'])
-        self.assertEqual([m[0] for m in methods(AIDL/'dev/pixel/voice/edge/IRoseEdgeHost.aidl')],
-            ['onPanel', 'lower', 'goHome', 'showSwitcher'])
+        # The Home-panel interface (IRoseEdgeControls/IRoseEdgeHost) was withdrawn for Home's no-new-trust option (a):
+        # the edge's mic slot is SystemUI's existing trusted tray client (#410 comment 6622900952).
+        self.assertEqual(sorted(str(p.relative_to(AIDL)) for p in AIDL.rglob('*.aidl')),
+            ['com/android/wm/shell/roseedge/IRoseEdge.aidl', 'com/android/wm/shell/roseedge/IRoseEdgeListener.aidl'])
         for path in AIDL.rglob('*.aidl'):
             self.assertRegex(path.read_text(), r'oneway (interface|void)', f'{path.name}: every call is one-way')
 

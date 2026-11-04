@@ -21,11 +21,11 @@ These files move into `os/` only in a coordinated re-bind, once all four of thes
 - The release never reaches the app, because Launcher3 pilfers the pointers when the gesture starts.
 
 ## Files
-- `aidl/`: **the interface record.**
-  - `com/android/wm/shell/roseedge/IRoseEdge{,Listener}.aidl`: WMShell's resize, owned by OS Core.
-  - `dev/pixel/voice/edge/IRoseEdge{Controls,Host}.aidl`: Home's controls on the edge, proposed for Home.
-
-  Each side implements its half from these exact transaction ids.
+- `aidl/`: **the interface record.** `com/android/wm/shell/roseedge/IRoseEdge{,Listener}.aidl` is WMShell's resize,
+  owned by OS Core and agreed on #410. OS Core implements the shell side in #516; Launcher3 implements its half from
+  these exact transaction ids. The earlier Home-panel proposal (`IRoseEdgeControls`/`IRoseEdgeHost`) is withdrawn:
+  for the mic slot, Home's option (a) uses SystemUI's existing trusted tray client and adds no new trust (#410
+  comment 6622900952).
 - `overlays/.../fallback/`: the staged Launcher3 client, which keeps E2a's `RoseEdgeGesture` unchanged.
   - `RoseEdgeShell`: hand-written binder code, because Launcher3QuickStepLib compiles no AIDL.
   - `RoseEdgeState`: the edge rises only when an edge window draws it and the shell can really resize the app. A
@@ -43,5 +43,6 @@ These files move into `os/` only in a coordinated re-bind, once all four of thes
 
 ## Not yet here
 - `SystemUiProxy` handing `RoseEdgeShell` the shell's binder.
-- The edge window that hosts Home's panel.
+- The edge window: Launcher3 draws the edge from Home's design contract, and reports the mic slot for SystemUI's
+  tray control, pending OS Core's agreement on `setMicSlot = 3`.
 - Both of those join `rose-edge-launcher3.patch` once the interfaces are agreed.
