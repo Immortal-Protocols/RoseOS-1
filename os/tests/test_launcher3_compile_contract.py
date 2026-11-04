@@ -33,7 +33,7 @@ class Launcher3CompileContractTest(unittest.TestCase):
     SCRIPT = ROOT/'scripts/launcher3-compile-contract.py'
     MANIFEST = ROOT/'os/compile-contracts/launcher3-quickstep-lib.json'
     # The agreed version (#410). Changing the manifest changes this, and the change needs re-agreement with Release.
-    AGREED_SHA256 = '6f949194c8e0e6d3570f86eb6b343340106755860c566558bb0d71c6b46c757c'
+    AGREED_SHA256 = '466f5ab88e4c110318e6e2533635db9bfcbf6ff73fc40dc54fbcc4c72f0593b4'
 
     def contract(self):
         import importlib.util
@@ -128,7 +128,9 @@ class Launcher3CompileContractTest(unittest.TestCase):
             'reconstruct': ['sourceTree', 'lunch', 'reconstructSource'],
             'verifyBaseApplyCandidate': ['sourceTree', 'lunch', 'policyReceipt', 'bundleReport']})
         self.assertIn('bundleReport', branches['forbids']['verifyIntegrated'])
-        self.assertIn('Git metadata or objects of the checked tree', branches['forbids']['verifyIntegrated'])
+        self.assertIn('Git metadata or objects of the three contract projects in the checked tree (the lunch inputs\' '
+            'admitted gitRequirement.publicFetch of vendor/adevtool/.git, outside them, excepted)',
+            branches['forbids']['verifyIntegrated'])
         definitions = branches['definitions']
         self.assertEqual(set(definitions), {'sourceTree', 'lunch', 'policyReceipt', 'reconstructSource', 'bundleReport'})
         self.assertIn('reconstructed from config.xml', definitions['policyReceipt'])
