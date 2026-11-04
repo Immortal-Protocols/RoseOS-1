@@ -302,7 +302,7 @@ class SourceTest(unittest.TestCase):
 
 class WorkflowTest(unittest.TestCase):
     def job(self):
-        return WORKFLOW[WORKFLOW.index('  alpha-apk-diagnostic:'):WORKFLOW.index('  publisher:')]
+        return shape.jobs(WORKFLOW)['alpha-apk-diagnostic']  # exactly this job, not every job up to the publisher
 
     def test_the_mode_is_explicit_read_only_and_cleaned_up(self):
         self.assertIn('emulator-alpha-apk-diagnostic', shape.modes())
