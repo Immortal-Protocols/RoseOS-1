@@ -27,8 +27,13 @@ public OTA, automatic dispatch or phone action has been performed by this work.*
 ## Implemented source
 
 `os/ota/mustang.json` pins the installed baseline and original bootstrap. Both
-activation flags are **false**. `signingAccess.status` is **pending**, with no
-approval or expiry invented. This record is not a deployed grant.
+activation flags are **false**. The user applied the two new read-only bindings;
+independent policy readback at **2026-11-04T00:44:51Z** confirmed their exact
+signer, role, secrets, condition and expiry **2026-11-04T04:44:11Z** (20:44:11
+Pacific on November 3). `signingAccess.status` is now **approved** and links to
+`os/ota/mustang-access-readback.json`. This records actual policy metadata; the
+worker made no IAM write or secret-payload read. No signing/build/publication
+was started by recording it.
 
 The existing `os-release.yml` accepts `mustang_publish_ota=true` only for:
 
@@ -112,17 +117,19 @@ has been changed in this implementation.
    authority. For a first manual OTA only, enable publication while keeping
    automation false and `MUSTANG_OTA_AUTO` off. Enabling later automation is a
    separate concrete persistent-effect decision, not a routine stage sign-off.
-2. Obtain/read back an approved current **read-only** signing access window for
+2. **Access prerequisite completed for this window:** the user applied and the
+   worker read back two new `mustang-ota-read-four-hour` **read-only** bindings for
    the existing signer `roseos-build-signer@protocols-465723.iam.gserviceaccount.com`
    on only `PIXEL_OS_SIGNING_KEYS_MUSTANG_V1/versions/1` and
    `PIXEL_OS_SIGNING_PASSPHRASE_MUSTANG_V1/versions/1`. The standard
    `secretAccessor` binding is at each secret's resource scope. No get/list/add
    bootstrap role, new key, new version, new account or credential is needed.
-   The old four-hour bindings expire `2026-11-04T00:50:06Z` and have insufficient
-   remaining time for the 30-minute signing admission check at this checkpoint.
-   Record actual approval/readback/expiry in `signingAccess`; do not extend it
-   automatically. Later unattended signing requires explicitly approved ongoing
-   access; this implementation always stops outside its approved window.
+   The old bootstrap bindings still expire `2026-11-04T00:50:06Z`; they were not
+   extended. The two new read bindings expire **2026-11-04T04:44:11Z**. Their
+   actual readback/expiry is recorded in `signingAccess`; do not extend it
+   automatically. No new key, secret version or bootstrap permission was added.
+   Later unattended signing requires an explicitly approved access period;
+   this implementation always stops outside its recorded window.
 3. With authorization and no competing work, dispatch the established
    `os-release.yml@main` with `mode=mustang-build`, `mustang_publish_ota=true`,
    leaving `candidate_sha` empty for the first manual build. It first performs
@@ -155,6 +162,7 @@ phone window must be resolved before an end-to-end ETA can be committed.
 | Expected | Observed | Evidence | State |
 | --- | --- | --- | --- |
 | Baseline installed, Beta selected | 2026110302, Beta | Nathan's direct reply; config baseline record | Reported |
+| Current signing read-access window | Two exact secretAccessor bindings confirmed; expiry 2026-11-04T04:44:11Z | `os/ota/mustang-access-readback.json` | Policy readback passed; key use not attempted |
 | Actual baseline updater/feed/trust compatible | Inspector implemented; actual builder inspection not run | `observe` before compile and login | Not tested |
 | Mustang-only publication, OTA before metadata | Synthetic upload/readback and failure cases pass | `scripts/tests/test_mustang_ota.py` | Source tested; no public OTA |
 | Newer compatible signed OTA | Source gates implemented; no new native build/sign | stage checks and original version-1 identity | Not executed |
