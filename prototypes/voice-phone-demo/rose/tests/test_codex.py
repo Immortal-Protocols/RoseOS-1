@@ -219,6 +219,73 @@ class Integration(unittest.TestCase):
         self.assertTrue(a.busy)
         self.assertIn(('interrupt', 'conversation', {}), self.engine.client.calls)
 
+    def complete(self, s):
+        self.assertTrue(self.call(s, 'open_app', app=s.app)['ok'])
+        s.text = s.app + ' is open.'
+        self.engine._event({'event': 'done', 'session': s.name,
+                            'turn': {'id': s.turn, 'status': 'completed'}})
+        self.assertEqual(s.task.status, 'done')
+
+    def test_third_app_releases_oldest_completed_session_and_preserves_results(self):
+        a, b = self.task('Calculator'), self.task('Clock')
+        self.complete(a)
+        self.complete(b)
+        old = a.task.to_dict()
+        aid, bid = a.view.workspace.bound_id, b.view.workspace.bound_id
+        c = self.task('Keep Notes')
+        self.assertTrue(self.call(c, 'open_app', app=c.app)['ok'])
+        self.assertTrue(a.closed)
+        self.assertFalse(b.closed)
+        self.assertEqual(a.task.to_dict(), old)
+        stopped = [p['sessionId'] for op,p in self.controller.calls if op == 'stop']
+        self.assertIn(aid, stopped)
+        self.assertNotIn(bid, stopped)
+        self.assertTrue(any(e['kind'] == 'session_released'
+                            for e in self.store.export(self.engine.conversation)))
+        retained_thread = b.thread
+        followup = self.engine.start_phone('Clock', 'Observe Clock again')
+        self.assertTrue(wait(lambda: b.busy))
+        self.assertIs(followup, b.task)
+        self.assertEqual(b.thread, retained_thread)
+
+    def test_new_app_reclaims_only_completed_task_while_other_app_runs(self):
+        a, b = self.task('Calculator'), self.task('Clock')
+        self.assertTrue(self.call(a, 'open_app', app=a.app)['ok'])
+        self.complete(b)
+        aid = a.view.workspace.bound_id
+        c = self.task('Keep Notes')
+        self.assertTrue(self.call(c, 'open_app', app=c.app)['ok'])
+        self.assertFalse(a.cancelled.is_set())
+        self.assertTrue(a.busy)
+        self.assertTrue(self.call(a, 'observe')['ok'])
+        self.assertNotIn(aid, [p['sessionId'] for op,p in self.controller.calls if op == 'stop'])
+
+    def test_two_running_apps_report_capacity_without_generic_tool_failure(self):
+        a, b = self.task('Calculator'), self.task('Clock')
+        result = self.call(self.engine.sessions['conversation'], 'phone_task',
+                           app='Keep Notes', goal='Open Keep Notes')
+        self.assertFalse(result['ok'])
+        self.assertEqual(result['reason'], 'app_sessions_busy')
+        self.assertIn('running', result['message'])
+        self.assertTrue(a.busy and b.busy)
+        self.assertFalse(any(op == 'stop' for op,_ in self.controller.calls))
+
+    def test_unconfirmed_slot_release_blocks_replacement_and_preserves_task_result(self):
+        a, b = self.task('Calculator'), self.task('Clock')
+        self.complete(a)
+        self.complete(b)
+        old = a.task.to_dict()
+        a.view.workspace.close = lambda reason: {'status': 'timeout'}
+        for _ in range(2):
+            result = self.call(self.engine.sessions['conversation'], 'phone_task',
+                               app='Keep Notes', goal='Open Keep Notes')
+            self.assertFalse(result['ok'])
+            self.assertEqual(result['reason'], 'session_cleanup_unconfirmed')
+        self.assertEqual(a.task.to_dict(), old)
+        self.assertEqual(len(self.engine.tasks), 2)
+        self.assertTrue(any(e['kind'] == 'session_release_uncertain'
+                            for e in self.store.export(self.engine.conversation)))
+
     def test_standalone_okay_is_a_turn_and_in_reply_okay_is_a_backchannel(self):
         turns = []
         self.engine.inject_text_turn = turns.append
