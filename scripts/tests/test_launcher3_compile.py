@@ -5,7 +5,12 @@ Synthetic trees, a synthetic contract where bytes are needed, stand-in processes
 a real tree, lunch, build or network; git runs only as hash-object (no -w) and apply on synthetic temporary trees. Exercised: the pinned contract and the binding (unbound exits 4), the
 branch classification (verifyIntegrated only on the exact post-state; mixed, pre, unknown and missing refuse; config.xml
 only through OS Product's bound-policy check, never normalised on a mismatch), the copy bounds, the contained
-environment, the sampled stops, the aconfig reader, the source and classpath proof and the write-once report."""
+environment, the sampled stops, the aconfig reader, the source and classpath proof and the write-once report.
+
+The lunch inputs (OS Product's frankel-lunch-inputs.json, read as data at its pin) are checked on synthetic copies, and
+the adevtool public fetch runs real git against a local stand-in repository over the file protocol, which only these
+tests allow: the adapter's own default is https from the pinned manifest's source, and the reviewed contract admits no
+public fetch yet, so the route is refused (exit 4) until OS Product's amendment and the re-pin land together."""
 import contextlib
 import gzip
 import hashlib
@@ -14,11 +19,13 @@ import io
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
 import time
 import unittest
+import unittest.mock
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -37,6 +44,16 @@ def contract_module():
 
 contract = contract_module()
 BINDING = json.loads((ROOT/'os/build-only/launcher3-compile-host.json').read_text())
+LUNCH_INPUTS = ROOT/'os/compile-contracts/frankel-lunch-inputs.json'
+EMPTY_BLOB = 'e69de29bb2d1d6434b8b29ae775ad8c2e48c5391'
+def amended(edit=None):
+    """(path, sha256) of the pinned contract (OS Product's #531 amendment), optionally edited, in a temporary file."""
+    record = json.loads(LUNCH_INPUTS.read_text())
+    if edit:
+        edit(record)
+    target = Path(tempfile.mkdtemp())/'frankel-lunch-inputs.json'
+    target.write_bytes(json.dumps(record).encode())
+    return target, sha(target.read_bytes())
 GIB = 1 << 30
 
 
@@ -296,18 +313,137 @@ class Contract(unittest.TestCase):
                                                                 bundleReport={'path': '/home/pixelbuild/receipts/bundle.json', 'sha256': 'b' * 64})))
         self.assertEqual((result.returncode, result.stdout), (0, 'outer_seconds=19890\nfinish_seconds=1800\njob_minutes=372\n'))
 
-    def test_a_version_checked_lunch_is_unbound_before_the_controller(self):
+    def test_a_version_checked_lunch_is_unbound_until_adevtool_git_is_bound(self):
         for branch in ('verifyIntegrated', 'verifyBaseApplyCandidate'):
             result = run_cli('check', '--binding', str(self.binding(lunch='frankel-cur-user', branch=branch,
                              bundleReport={'path': '/home/pixelbuild/receipts/bundle.json', 'sha256': 'b' * 64})))
             self.assertEqual((result.returncode, result.stdout), (4, ''))
             self.assertIn('adevtool_git_missing', result.stderr)
+        # bound to the public fetch, which the pinned contract admits: the check passes, and its bounds add the lunch
+        # inputs (1800 s), the fetch (1800 s) and its kill grace (30 s) to 18090 s (19890 s for the candidate branch)
+        result = run_cli('check', '--binding', str(self.binding(lunch='frankel-cur-user', adevtoolGit='public-fetch')))
+        self.assertEqual((result.returncode, result.stdout), (0, 'outer_seconds=21720\nfinish_seconds=1800\njob_minutes=403\n'))
+        result = run_cli('check', '--binding', str(self.binding(lunch='frankel-cur-user', adevtoolGit='public-fetch',
+                         branch='verifyBaseApplyCandidate', bundleReport={'path': '/home/pixelbuild/receipts/bundle.json',
+                                                                          'sha256': 'b' * 64})))
+        self.assertEqual((result.returncode, result.stdout), (0, 'outer_seconds=23520\nfinish_seconds=1800\njob_minutes=433\n'))
+        # a contract without the admission row stays unbound
+        contract_path, pin = amended(lambda d: d['gitRequirement'].update(
+            options=[o for o in d['gitRequirement']['options'] if o['class'] != 'public-fetch']))
+        binding = json.loads(self.binding(lunch='frankel-cur-user', adevtoolGit='public-fetch').read_text())
+        with self.assertRaisesRegex(adapter.Unbound, 'adevtool_git_unadmitted: .*https://github.com/GrapheneOS/adevtool'):
+            adapter.lunch_plan(binding, ROOT, contract_path, pin)
+
+    def test_the_admitted_plan_names_the_exact_sources_and_only_one_allowed_row_admits(self):
+        binding = self.binding(lunch='frankel-cur-user', adevtoolGit='public-fetch')
+        manifest, record, plan = adapter.check(binding)
+        self.assertEqual(plan['url'], 'https://github.com/GrapheneOS/adevtool')
+        self.assertEqual(plan['exact'], ['vendor/adevtool', 'device/google/laguna-kernels/6.6'])  # not build/make
+        self.assertEqual(record['adevtoolGit'], 'public-fetch')
+        # a wrong url, a status that is not allowed, or two rows: not admitted
+        for change in ({'url': 'https://github.com/example/adevtool'}, {'status': 'refused'}):
+            with self.subTest(change=change):
+                self.assertIsNone(adapter.public_fetch_option(
+                    {'gitRequirement': {'options': [{'class': 'public-fetch', 'status': 'allowed', 'url': plan['url'], **change}]}},
+                    plan['url']))
+        twice = [{'class': 'public-fetch', 'status': 'allowed', 'url': plan['url']}] * 2
+        self.assertIsNone(adapter.public_fetch_option({'gitRequirement': {'options': twice}}, plan['url']))
+
+    def test_os_products_amendment_is_admitted_only_as_exactly_this_adapters_mechanism(self):
+        binding = json.loads(self.binding(lunch='frankel-cur-user', adevtoolGit='public-fetch').read_text())
+        contract_path, pin = amended()
+        self.assertEqual(adapter.lunch_plan(binding, ROOT, contract_path, pin)['url'], 'https://github.com/GrapheneOS/adevtool')
+        fetch = lambda d: d['gitRequirement']['publicFetch']  # noqa: E731
+        tree = lambda d: d['gitRequirement']['workingTree']  # noqa: E731
+        cases = [('steps', lambda d: fetch(d)['steps'].__setitem__(1, fetch(d)['steps'][1].replace('--depth=1', '--depth=2')),
+                  'steps'),
+                 ('environment', lambda d: fetch(d)['environment'].update(GIT_ALLOW_PROTOCOL='https,file'), 'environment'),
+                 ('extra variable', lambda d: fetch(d)['environment'].update(LD_PRELOAD='/x.so'), 'environment'),
+                 ('ceiling', lambda d: fetch(d)['ceiling'].update(seconds=3600), 'ceiling'),
+                 ('url', lambda d: fetch(d).update(url='https://github.com/example/adevtool'), 'url'),
+                 ('omitted', lambda d: tree(d)['omittedFromCopy']['gitignore'].append('/vendor-skels/'), 'workingTree'),
+                 ('untracked', lambda d: tree(d).update(untrackedAllowed=['/node_modules/']), 'workingTree'),
+                 ('unknown check', lambda d: d['sources'][1].update(workingTreeCheck='sometimes'), 'workingTreeCheck'),
+                 ('adevtool not exact', lambda d: d['sources'][0].update(workingTreeCheck='derivation only'), 'exactly'),
+                 ('status with its own bounds', lambda d: next(o for o in d['gitRequirement']['options']
+                                                              if o['class'] == 'public-fetch').update(
+                     status='allowed only with a 300 s, 256 MiB bound'), 'public-fetch status'),
+                 ('fabrication not carved out', lambda d: next(o for o in d['gitRequirement']['options']
+                                                              if o['class'] == 'fabrication').update(
+                     means='any HEAD, ref, object or gitdir written rather than copied'), 'fabrication carve-out'),
+                 ('redirect allowed', lambda d: d['gitRequirement']['options'][1].update(status='allowed'), 'not refused'),
+                 ('an extra option', lambda d: d['gitRequirement']['options'].append({'class': 'mirror', 'status': 'allowed'}),
+                  'options are not exactly'),
+                 # every other meaning-bearing text: the git route's digest
+                 ('acceptance item dropped', lambda d: fetch(d)['acceptance'].pop(2), 'reviewed against'),
+                 ('never emptied', lambda d: fetch(d).update(never=[]), 'reviewed against'),
+                 ('target', lambda d: fetch(d).update(target='the source tree'), 'reviewed against'),
+                 ('cleanup', lambda d: fetch(d).update(cleanup='keep the .git'), 'reviewed against'),
+                 ('gitRequirement acceptance', lambda d: d['gitRequirement'].update(acceptance=[]), 'reviewed against'),
+                 ('rule', lambda d: tree(d).update(rule='node_modules is allowed'), 'reviewed against'),
+                 ('onUnlisted', lambda d: tree(d).update(onUnlisted='admit'), 'reviewed against'),
+                 ('omitted means', lambda d: tree(d)['omittedFromCopy'].update(means='tracked paths may be omitted'),
+                  'reviewed against'),
+                 ('gitignore blob', lambda d: tree(d)['omittedFromCopy'].update(gitBlob='0' * 40), 'gitBlob'),
+                 ('redirect means', lambda d: d['gitRequirement']['options'][1].update(means=''), 'reviewed against'),
+                 ('genuine-copy', lambda d: d['gitRequirement']['options'][0].update(status='allowed'), 'reviewed against'),
+                 ('relaxed check text', lambda d: d['sources'][2].update(workingTreeCheck='exactly, extra paths allowed'),
+                  'reviewed against'),
+                 ('git environment', lambda d: d['gitRequirement']['environment'].update(unset='nothing'), 'reviewed against'),
+                 ('protocol', lambda d: fetch(d).update(protocol='https or http'), 'protocol'),
+                 ('ceiling bytes', lambda d: fetch(d)['ceiling'].update(bytes=2 << 30), 'ceiling'),
+                 ('environment key removed', lambda d: fetch(d)['environment'].pop('GIT_ASKPASS'), 'environment'),
+                 ('workingTree project', lambda d: tree(d).update(project='vendor/other'), 'workingTree'),
+                 ('option order', lambda d: d['gitRequirement']['options'].reverse(), 'options are not exactly'),
+                 ('fabrication allowed', lambda d: d['gitRequirement']['options'][3].update(status='allowed'), 'not refused'),
+                 ('relaxation allowed', lambda d: d['gitRequirement']['options'][4].update(status='allowed'), 'not refused'),
+                 ('publicFetch absent', lambda d: d['gitRequirement'].pop('publicFetch'), 'publicFetch'),
+                 ('kernel revision', lambda d: d['sources'][2].update(revision='0' * 40), 'pinned manifest revision')]
+        for name, edit, word in cases:
+            with self.subTest(name=name):
+                contract_path, pin = amended(edit)
+                with self.assertRaisesRegex(adapter.Invalid, word):
+                    adapter.lunch_plan(binding, ROOT, contract_path, pin)
+        # the url on the option row decides the admission itself
+        row = lambda d: next(o for o in d['gitRequirement']['options'] if o['class'] == 'public-fetch')  # noqa: E731
+        contract_path, pin = amended(lambda d: row(d).update(url='https://example.invalid/x'))
+        with self.assertRaisesRegex(adapter.Unbound, 'adevtool_git_unadmitted'):
+            adapter.lunch_plan(binding, ROOT, contract_path, pin)
+
+    def test_a_contract_whose_omitted_rules_would_drop_a_tracked_path_is_not_admitted(self):
+        root = Path(tempfile.mkdtemp())
+        record = json.loads(LUNCH_INPUTS.read_text())
+        for source in record['sources']:
+            original = ROOT/source['listing']['path']
+            target = root/source['listing']['path']
+            target.parent.mkdir(parents=True, exist_ok=True)
+            raw = gzip.decompress(original.read_bytes())
+            if source['path'] == 'vendor/adevtool':
+                raw += b'100644 blob ' + b'1' * 40 + b'\tnode_modules/tracked.js\n'
+                source['listing'].update(paths=source['listing']['paths'] + 1, sha256=sha(raw))
+            packed = gzip.compress(raw, mtime=0)
+            target.write_bytes(packed)
+            source['listing']['compressedSha256'] = sha(packed)
+        (root/'os').mkdir(exist_ok=True)
+        (root/'os/pinned-manifest.xml').write_bytes((ROOT/'os/pinned-manifest.xml').read_bytes())
+        problems = adapter.admission_problems(record, 'https://github.com/GrapheneOS/adevtool', root)
+        self.assertIn('the omitted rules would drop the tracked node_modules/tracked.js', problems)
+
+    def test_the_omitted_rules_drop_no_tracked_path_of_the_pinned_listing(self):
+        listed = adapter.lunch_listing(adapter.load_lunch_inputs(), 'vendor/adevtool')
+        dropped = [p for p in listed if any(adapter.adevtool_ignored('/'.join(os.fsdecode(p).split('/')[:i]),
+                                                                    i < len(os.fsdecode(p).split('/')))
+                                            for i in range(1, len(os.fsdecode(p).split('/')) + 1))]
+        self.assertEqual(dropped, [])
+        self.assertIn(b'dl/.find-ignore', listed)
 
     def test_invalid_bindings_refuse(self):
         for change in ({'host': 'other'}, {'taskParent': '/tmp'}, {'branch': 'mixed'}, {'sourceTree': 'relative'},
                        {'sourceTree': '/home/pixelbuild/rose-actions/blazer-prep-41473133543-1/source'},
                        {'sourceTree': '/home'}, {'lunch': 'frankel'}, {'policyReceipt': {'path': '/p'}},
                        {'policyReceipt': {'path': '/p', 'sha256': 'A' * 64}}, {'extra': 1}, {'schemaVersion': 1},
+                       {'schemaVersion': 2}, {'adevtoolGit': 'genuine-copy'}, {'adevtoolGit': 'public-fetch'},
+                       {'lunch': 'frankel-trunk-user', 'adevtoolGit': 'public-fetch'},
                        {'bundleReport': {'path': 'rel', 'sha256': None}}, {'bundleReport': None}):
             with self.subTest(change=change):
                 self.assertEqual(run_cli('check', '--binding', str(self.binding(**change))).returncode, 2)
@@ -970,8 +1106,9 @@ class Run(unittest.TestCase):
         self.lunch_result = (0, None)
 
     def copier(self, state='post'):
-        def copy(source, destination):
-            self.calls.append('copy')
+        def copy(source, destination, omit=None):
+            self.calls.append('copy' if omit is None else ('copy', omit('vendor/adevtool/node_modules', True),
+                                                           omit('vendor/adevtool/dl/.find-ignore', False)))
             Synthetic(destination, self.s.repo).write(state)
             return {'entries': 1}
         return copy
@@ -1161,10 +1298,651 @@ class Run(unittest.TestCase):
         self.assertEqual(self.calls, [])
         self.assertTrue(self.report()['refused'].startswith('adevtool_git_missing'))
 
+    def admitted(self, inputs_check=None, fetcher=None, unset=('BUILD_ID_frankel', 'TARGET_KERNEL_DIR', 'USE_STOCK_KERNEL'),
+                 state='post'):
+        self.binding.update(lunch='frankel-cur-user', adevtoolGit='public-fetch')
+        plan = {'inputs': {'environment': {'unset': ['GIT_*', *unset]}, 'gitRequirement': {'project': 'vendor/adevtool'}},
+                'url': 'https://github.com/GrapheneOS/adevtool', 'exact': ['vendor/adevtool']}
+
+        def checks(tree, inputs, root, deadline, exact=None):
+            self.calls.append(('lunch-inputs', tuple(exact)))
+            return {'contractSha256': 'checked'}
+
+        def fetch(tree, plan, run_root, record, root):
+            self.calls.append('fetch')
+            record.update(ok=True)
+
+        lock = lambda path: contextlib.nullcontext()  # noqa: E731
+        return adapter.run(self.binding, self.s.manifest, '41700000000', '1', root=self.s.repo, lock=lock,
+                           copier=self.copier(state), compiler=self.compiler(), pins=self.pins(),
+                           policy_loader=lambda path: (POLICY, self.s.policy_sha),
+                           bundle_loader=lambda path: (self.s.bundle_content, self.bundle_sha), plan=plan,
+                           inputs_check=inputs_check or checks, fetcher=fetcher or fetch)
+
+    def test_an_admitted_lunch_checks_its_inputs_and_fetches_after_the_branch_and_before_lunch(self):
+        self.assertEqual(self.admitted(), 0)
+        # the copy omits node_modules but keeps the tracked dl/.find-ignore; the checks get the plan's exact sources
+        self.assertEqual(self.calls[:4], [('copy', True, False), ('pins', 'final'), ('lunch-inputs', ('vendor/adevtool',)),
+                                          'fetch'])
+        self.assertEqual([c[0] for c in self.calls[4:6]], ['lunch', 'compile'])
+        report = self.report()
+        self.assertEqual((report['lunchInputs'], report['adevtoolGit']),
+                         ({'contractSha256': 'checked', 'bounds': {'seconds': adapter.LUNCH_INPUT_SECONDS}}, {'ok': True}))
+
+    def test_an_environment_the_contract_unsets_refuses_before_any_lunch_input_or_fetch(self):
+        self.assertEqual(self.admitted(unset=('TMPDIR',)), 3)  # the contained environment does set TMPDIR
+        self.assertEqual(self.calls, [('copy', True, False), ('pins', 'final')])
+        self.assertEqual(self.report()['refused'], 'lunch-inputs: the lunch environment passes TMPDIR')
+
+    def test_an_os_error_reading_the_copy_is_a_named_refusal_before_lunch(self):
+        def unreadable(*args, **kwargs):
+            raise PermissionError('denied')
+        self.assertEqual(self.admitted(inputs_check=unreadable), 3)
+        self.assertEqual(self.report()['refused'], 'lunch-inputs: PermissionError while reading the copy')
+        self.assertFalse([c for c in self.calls if c[0] in ('lunch', 'compile')])
+
+    def test_the_candidate_branch_also_checks_its_inputs_and_fetches_after_its_conditions(self):
+        self.vbac()
+        self.assertEqual(self.admitted(state='base'), 0)
+        self.assertEqual(self.calls[:5], [('copy', True, False), ('pins', 'base'), ('pins', 'final'),
+                                          ('lunch-inputs', ('vendor/adevtool',)), 'fetch'])
+        self.assertEqual([c[0] for c in self.calls[5:7]], ['lunch', 'compile'])
+
+    def test_a_refused_lunch_input_or_fetch_stops_before_lunch(self):
+        def refuse(word):
+            def fail(*args, **kwargs):
+                self.calls.append(word)
+                raise adapter.Refused(f'{word}: refused here')
+            return fail
+        for name, change in (('lunch-inputs', {'inputs_check': refuse('lunch-inputs')}),
+                             ('adevtool-git', {'fetcher': refuse('adevtool-git')})):
+            with self.subTest(name=name):
+                self.setUp()
+                self.assertEqual(self.admitted(**change), 3)
+                self.assertEqual(self.calls[-1], name)
+                self.assertFalse([c for c in self.calls if c[0] in ('lunch', 'compile')])
+                self.assertTrue(self.report()['refused'].startswith(name))
+        self.setUp()
+        self.binding.update(lunch='frankel-cur-user', adevtoolGit=None)
+        lock = lambda path: contextlib.nullcontext()  # noqa: E731
+        self.assertEqual(adapter.run(self.binding, self.s.manifest, '41700000000', '1', root=self.s.repo, lock=lock,
+                                     copier=self.copier(), compiler=self.compiler(), pins=self.pins(),
+                                     plan={'inputs': {}, 'url': 'https://x'}), 3)
+        self.assertEqual(self.calls, [])  # a plan without the bound fetch: refused before anything is copied
+
     def test_a_stopped_compile_is_recorded_and_never_a_pass(self):
         self.assertEqual(self.run_adapter(code=-15, stopped='memory'), 0)
         report = self.report()
         self.assertEqual((report['compile']['stoppedBy'], report['result']), ('memory', 'incomplete'))
+
+
+ADEVTOOL_FILES = {'README.md': (b'adevtool\n', 0o644), 'dl/.find-ignore': (b'', 0o644),
+                  'vendor-skels/.find-ignore': (b'', 0o644), 'bin/run': (b'#!/bin/sh\n', 0o755),
+                  'vendor-specs/google_devices/frankel.yml': (b'spec\n', 0o644)}
+VERSION_ERROR = b'ifneq ($(shell git -C vendor/adevtool rev-parse HEAD),REV)\n  $(error outdated)\nendif\n'
+
+
+class LunchFixture:
+    """A synthetic copy holding every lunch input, a repository root with the pinned listing, a synthetic contract in
+    the reviewed contract's shape, and a local upstream repository standing in for the public adevtool source."""
+
+    def __init__(self):
+        self.base = Path(tempfile.mkdtemp())
+        self.upstream, self.repo, self.tree = self.base/'upstream', self.base/'repo', self.base/'run/tree'
+        self.upstream.mkdir()
+        git('init', '-q', str(self.upstream), cwd=self.base)
+        self.write_files(self.upstream, ADEVTOOL_FILES)
+        git('add', '-A', cwd=self.upstream)
+        git('commit', '-qm', 'first', cwd=self.upstream)
+        (self.upstream/'README.md').write_bytes(b'adevtool pinned\n')
+        git('add', '-A', cwd=self.upstream)
+        git('commit', '-qm', 'pinned', cwd=self.upstream)
+        self.revision = git('rev-parse', 'HEAD', cwd=self.upstream).decode().strip()
+        self.root_tree = git('rev-parse', 'HEAD^{tree}', cwd=self.upstream).decode().strip()
+        self.files = dict(ADEVTOOL_FILES, **{'README.md': (b'adevtool pinned\n', 0o644)})
+        raw = git('ls-tree', '-r', self.revision, cwd=self.upstream)
+        self.listing_path = 'fixtures/adevtool.ls-tree.txt.gz'
+        self.inputs = self.contract(raw)
+        self.make_copy()
+
+    @staticmethod
+    def write_files(base, files):
+        for relative, (data, mode) in files.items():
+            target = Path(base)/relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(data)
+            os.chmod(target, mode)
+
+    def listing(self, raw, name):
+        (self.repo/'fixtures').mkdir(parents=True, exist_ok=True)
+        packed = gzip.compress(raw, mtime=0)
+        relative = f'fixtures/{name}.ls-tree.txt.gz'
+        (self.repo/relative).write_bytes(packed)
+        return {'path': relative, 'sha256': sha(raw), 'compressedSha256': sha(packed), 'paths': raw.count(b'\n')}
+
+    def contract(self, raw):
+        listing = self.listing(raw, 'adevtool')
+        self.raw = raw
+        kernel = b'module_a.ko\n'
+        return {'schemaVersion': 1, 'kind': 'rose-frankel-lunch-inputs',
+                'lunch': {'target': 'frankel-cur-user', 'product': 'frankel', 'release': 'cur', 'variant': 'user'},
+                'sources': [{'path': 'vendor/adevtool', 'revision': self.revision, 'rootTree': self.root_tree,
+                             'listing': listing, 'workingTreeCheck': 'exact: gitRequirement.workingTree'},
+                            {'path': 'device/kernels', 'revision': '2' * 40, 'rootTree': '3' * 40,
+                             'listing': self.listing(b'100755 blob %s\tmuzel/vendor_dlkm.modules.load\n' % blob(kernel).encode(),
+                                                     'kernels'), 'workingTreeCheck': 'exact: untouched'},
+                            {'path': 'build/make', 'revision': '4' * 40, 'rootTree': '5' * 40,
+                             'listing': self.listing(b'100644 blob %s\tcore/main.mk\n' % (b'0' * 40), 'make'),
+                             'workingTreeCheck': 'derivation only: patched by integration'}],
+                'gitRequirement': {'project': 'vendor/adevtool', 'revision': self.revision, 'rootTree': self.root_tree,
+                                   'path': 'vendor/adevtool/.git', 'options': []},
+                'environment': {'unset': ['GIT_*', 'BUILD_ID_frankel', 'TARGET_KERNEL_DIR', 'USE_STOCK_KERNEL']},
+                'versionCheck': {'path': 'vendor/google_devices/frankel/adevtool-version-check.mk',
+                                 'expected': {'error': {'sha256': sha(VERSION_ERROR), 'bytes': len(VERSION_ERROR),
+                                                        'gitBlob': blob(VERSION_ERROR)}}},
+                'generatedVendor': {'observable': [{'path': 'vendor/google_devices/frankel/frankel.mk',
+                                                    'sha256': sha(b'frankel product\n')}]},
+                'finderPrune': {'markers': [{'path': 'vendor/adevtool/dl/.find-ignore', 'gitBlob': EMPTY_BLOB},
+                                            {'path': 'vendor/adevtool/vendor-skels/.find-ignore', 'gitBlob': EMPTY_BLOB}]},
+                'kernelModuleLists': {'files': [{'path': 'device/kernels/muzel/vendor_dlkm.modules.load', 'mode': '100755',
+                                                 'gitBlob': blob(kernel)}]},
+                'manifestFiles': [{'kind': 'linkfile', 'project': 'build/make', 'src': 'core', 'dest': 'build/core'},
+                                  {'kind': 'copyfile', 'project': 'trusty/vendor/google/aosp', 'src': 'lk_inc.mk',
+                                   'dest': 'lk_inc.mk'}]}
+
+    def make_copy(self):
+        if self.tree.exists():
+            shutil.rmtree(self.tree.parent)
+        (self.tree.parent/'home').mkdir(parents=True)
+        self.write_files(self.tree/'vendor/adevtool', self.files)
+        self.write_files(self.tree, {'vendor/google_devices/frankel/adevtool-version-check.mk': (VERSION_ERROR, 0o644),
+                                     'vendor/google_devices/frankel/frankel.mk': (b'frankel product\n', 0o644),
+                                     'device/kernels/muzel/vendor_dlkm.modules.load': (b'module_a.ko\n', 0o755),
+                                     'build/make/core/main.mk': (b'main\n', 0o644),
+                                     'trusty/vendor/google/aosp/lk_inc.mk': (b'lk\n', 0o644), 'lk_inc.mk': (b'lk\n', 0o644)})
+        os.symlink('make/core', self.tree/'build/core')
+
+    def plan(self):
+        return {'inputs': self.inputs, 'url': 'file://' + str(self.upstream)}
+
+    def work_state(self):
+        work = self.tree/'vendor/adevtool'
+        return {str(p.relative_to(work)): (p.read_bytes(), p.stat().st_mode) for p in work.rglob('*')
+                if p.is_file() and '.git' not in p.relative_to(work).parts}
+
+
+
+class ManifestProject(unittest.TestCase):
+    def test_only_a_single_full_commit_on_an_https_remote_is_a_source(self):
+        good = ('<manifest><remote name="r" fetch="https://example.invalid/"/><default remote="r"/>'
+                '<project name="tool" path="vendor/tool" revision="{rev}"/>{extra}</manifest>')
+        root = Path(tempfile.mkdtemp())
+        (root/'os').mkdir()
+        for name, text, ok in (('ok', good.format(rev='a' * 40, extra=''), True),
+                               ('http', good.format(rev='a' * 40, extra='').replace('https://', 'http://'), False),
+                               ('short', good.format(rev='a' * 12, extra=''), False),
+                               ('twice', good.format(rev='a' * 40, extra='<project name="t2" path="vendor/tool" revision="'
+                                                     + 'b' * 40 + '"/>'), False)):
+            with self.subTest(name=name):
+                (root/'os/pinned-manifest.xml').write_text(text)
+                if ok:
+                    self.assertEqual(adapter.manifest_project('vendor/tool', root),
+                                     {'revision': 'a' * 40, 'url': 'https://example.invalid/tool'})
+                else:
+                    with self.assertRaises(adapter.Invalid):
+                        adapter.manifest_project('vendor/tool', root)
+
+
+class LunchInputs(unittest.TestCase):
+    def test_the_pinned_lunch_inputs_are_os_products_reviewed_contract(self):
+        self.assertEqual(sha(LUNCH_INPUTS.read_bytes()), adapter.LUNCH_INPUTS_SHA256)
+        inputs = adapter.load_lunch_inputs()
+        url = adapter.manifest_project('vendor/adevtool')
+        self.assertEqual(url, {'revision': inputs['gitRequirement']['revision'], 'url': 'https://github.com/GrapheneOS/adevtool'})
+        self.assertEqual(adapter.public_fetch_option(inputs, url['url'])['class'], 'public-fetch')  # #531 admits it
+        self.assertEqual(adapter.admission_problems(inputs, url['url']), [])  # exactly this adapter's mechanism
+        self.assertEqual(inputs['gitRequirement']['workingTree']['omittedFromCopy']['gitignore'], list(adapter.ADEVTOOL_IGNORED))
+        self.assertEqual(len(adapter.lunch_listing(inputs, 'vendor/adevtool')), 55890)
+        changed = Path(tempfile.mkdtemp())/'frankel-lunch-inputs.json'
+        changed.write_bytes(LUNCH_INPUTS.read_bytes().replace(b'frankel-cur-user', b'frankel-cur-eng', 1))
+        with self.assertRaisesRegex(adapter.Invalid, 'reviewed lunch-input contract'):
+            adapter.load_lunch_inputs(changed)
+
+    def test_the_contract_identity_must_agree_with_itself_and_the_manifest(self):
+        base = json.loads(LUNCH_INPUTS.read_text())
+        for name, edit in (('revision', lambda d: d['gitRequirement'].update(revision='0' * 40)),
+                           ('tree', lambda d: d['sources'][0].update(rootTree='0' * 40)),
+                           ('path', lambda d: d['gitRequirement'].update(path='vendor/adevtool/.gitfile')),
+                           ('env', lambda d: d['environment']['unset'].remove('GIT_*')),
+                           ('kind', lambda d: d['manifestFiles'][0].update(kind='hardlink'))):
+            with self.subTest(name=name):
+                record = json.loads(json.dumps(base))
+                edit(record)
+                target = Path(tempfile.mkdtemp())/'inputs.json'
+                target.write_bytes(json.dumps(record).encode())
+                with self.assertRaises(adapter.Invalid):
+                    adapter.load_lunch_inputs(target, sha(target.read_bytes()))
+
+    def test_the_environment_unsets_only_plain_names_besides_git(self):
+        record = json.loads(LUNCH_INPUTS.read_text())
+        record['environment']['unset'].append('LD_*')
+        target = Path(tempfile.mkdtemp())/'inputs.json'
+        target.write_bytes(json.dumps(record).encode())
+        with self.assertRaisesRegex(adapter.Invalid, 'plain variables only'):
+            adapter.load_lunch_inputs(target, sha(target.read_bytes()))
+
+    def test_the_lunch_environment_passes_nothing_the_contract_unsets(self):
+        inputs = adapter.load_lunch_inputs()
+        env = adapter.contained_env(Path('/run'))
+        self.assertEqual(adapter.environment_problems(env, inputs), [])
+        self.assertEqual(sorted(n for n in env if n.startswith('GIT_')), sorted(adapter.CONTAINED_GIT))
+        for name in ('BUILD_ID_frankel', 'TARGET_KERNEL_DIR', 'USE_STOCK_KERNEL', 'GIT_DIR', 'GIT_ALTERNATE_OBJECT_DIRECTORIES'):
+            with self.subTest(name=name):
+                self.assertEqual(adapter.environment_problems({**env, name: 'x'}, inputs), [name])
+
+
+class LunchChecks(unittest.TestCase):
+    def setUp(self):
+        self.f = LunchFixture()
+
+    def check(self, exact=None):
+        return adapter.lunch_input_checks(self.f.tree, self.f.inputs, root=self.f.repo, exact=exact)
+
+    def test_an_unlisted_file_is_named_without_reading_its_bytes(self):
+        big = self.f.tree/'vendor/adevtool/huge.bin'
+        big.write_bytes(b'never read')
+        seen = []
+
+        def hasher(data):
+            seen.append(data)
+            return adapter.git_blob_id(data)
+        with self.assertRaisesRegex(adapter.Refused, 'unlisted 1: huge.bin'):
+            adapter.exact_tree(self.f.tree/'vendor/adevtool', adapter.lunch_listing(self.f.inputs, 'vendor/adevtool',
+                                                                                     self.f.repo), (), hasher)
+        self.assertNotIn(b'never read', seen)
+        self.assertEqual(len(seen), len(self.f.files))  # only the listed entries were hashed
+
+    def test_an_exact_source_that_is_not_a_plain_directory_refuses(self):
+        shutil.move(str(self.f.tree/'device/kernels'), str(self.f.base/'kernels-elsewhere'))
+        os.symlink(self.f.base/'kernels-elsewhere', self.f.tree/'device/kernels')
+        with self.assertRaisesRegex(adapter.Refused, 'device/kernels is not a plain directory in the copy'):
+            self.check()
+
+    def test_a_file_changed_between_the_walk_and_its_read_refuses_before_hashing(self):
+        target = self.f.tree/'vendor/adevtool/bin/run'
+        walked = os.lstat(target)
+        os.chmod(target, 0o644)
+        with self.assertRaisesRegex(adapter.Refused, 'changed while it was hashed'):
+            adapter.read_walked(target, walked, 'adevtool/bin/run')
+        expected = adapter.lunch_listing(self.f.inputs, 'vendor/adevtool', self.f.repo)
+        with self.assertRaisesRegex(adapter.Refused, 'pin_timeout'):
+            adapter.exact_tree(self.f.tree/'vendor/adevtool', expected, deadline=time.monotonic() - 1)
+
+    def test_the_kernel_module_lists_are_checked_even_where_their_tree_is_not_exact(self):
+        for name, change in (('mode', lambda: os.chmod(self.f.tree/'device/kernels/muzel/vendor_dlkm.modules.load', 0o644)),
+                             ('empty', lambda: (self.f.tree/'device/kernels/muzel/vendor_dlkm.modules.load').write_bytes(b''))):
+            with self.subTest(name=name):
+                self.f.make_copy()
+                change()
+                with self.assertRaisesRegex(adapter.Refused, 'the kernel module list device/kernels/muzel/vendor_dlkm'):
+                    self.check(exact=['vendor/adevtool'])
+
+    def test_an_exact_copy_passes_every_check_and_nothing_is_written(self):
+        before = self.f.work_state()
+        result = self.check()
+        self.assertEqual(result['exactTrees'], {'vendor/adevtool': {'paths': len(self.f.files), 'equalsListing': True},
+                                                'device/kernels': {'paths': 1, 'equalsListing': True}})
+        # build/make is derivation only: its listing (a wrong blob here) is never compared
+        self.assertEqual((result['observable'], result['finderMarkers'], result['kernelModuleLists'], result['manifestFiles']),
+                         (1, 2, 1, 2))
+        self.assertEqual(self.f.work_state(), before)
+        self.assertNotIn(self.f.revision, json.dumps(result))  # no expected value is copied into the report
+
+    def test_each_difference_refuses_by_name(self):
+        t = self.f.tree
+        cases = [
+            ('untracked', lambda: (t/'vendor/adevtool/node_modules').mkdir() or (t/'vendor/adevtool/node_modules/x').write_bytes(b'x'),
+             r'unlisted 1: node_modules/$|unlisted 1: node_modules/\)'),
+            ('empty directory', lambda: (t/'vendor/adevtool/vendor-specs/google_devices/frankel2').mkdir(parents=True),
+             r'unlisted 1: vendor-specs/google_devices/frankel2/'),
+            ('dangling link', lambda: shutil.rmtree(t/'build/make/core'), 'build/core dangles'),
+            ('absolute link inside', lambda: None, None),
+            ('edited spec', lambda: (t/'vendor/adevtool/vendor-specs/google_devices/frankel.yml').write_bytes(b'edited\n'),
+             r'different 1: vendor-specs/google_devices/frankel.yml'),
+            ('removed', lambda: (t/'vendor/adevtool/README.md').unlink(), r'missing 1: README.md'),
+            ('mode', lambda: os.chmod(t/'vendor/adevtool/bin/run', 0o644), r'different 1: bin/run'),
+            ('kernel tree extra', lambda: (t/'device/kernels/muzel/extra.ko').write_bytes(b'x'),
+             r'device/kernels: kernels is not exactly its pinned tree \(unlisted 1: muzel/extra.ko\)'),
+            ('git present', lambda: (t/'vendor/adevtool/.git').mkdir(), 'no .git before the fetch'),
+            ('warning form', lambda: (t/'vendor/google_devices/frankel/adevtool-version-check.mk').write_bytes(
+                VERSION_ERROR.replace(b'error', b'warning')), 'not the error form'),
+            ('observable', lambda: (t/'vendor/google_devices/frankel/frankel.mk').write_bytes(b'other\n'),
+             'generated vendor file'),
+            # the kernel directory is an exact source, so its own tree check names a changed list first
+            ('kernel mode', lambda: os.chmod(t/'device/kernels/muzel/vendor_dlkm.modules.load', 0o644),
+             'different 1: muzel/vendor_dlkm.modules.load'),
+            ('kernel empty', lambda: (t/'device/kernels/muzel/vendor_dlkm.modules.load').write_bytes(b''),
+             'different 1: muzel/vendor_dlkm.modules.load'),
+            ('link elsewhere', lambda: (t/'build/core').unlink() or os.symlink('/elsewhere/core', t/'build/core'),
+             'does not link'),
+            ('link a directory', lambda: (t/'build/core').unlink() or (t/'build/core').mkdir(), 'not the manifest link'),
+            ('copy changed', lambda: (t/'lk_inc.mk').write_bytes(b'other\n'), 'not the manifest copy'),
+            ('linked parent', lambda: (shutil.move(str(t/'vendor/google_devices'), str(t/'elsewhere')),
+                                       os.symlink(t/'elsewhere', t/'vendor/google_devices')), 'not the error form')]
+        for name, change, word in cases:
+            with self.subTest(name=name):
+                self.f.make_copy()
+                change()
+                if word is None:  # the copier's rebased form: an absolute link to the same source inside the copy
+                    (t/'build/core').unlink()
+                    os.symlink(t/'build/make/core', t/'build/core')
+                    self.check()
+                    continue
+                with self.assertRaisesRegex(adapter.Refused, word):
+                    self.check()
+        self.f.make_copy()  # every difference is named, each list bounded
+        for i in range(adapter.REPORT_ERRORS + 5):
+            (t/f'vendor/adevtool/extra-{i:02}').write_bytes(b'x')
+        (t/'vendor/adevtool/README.md').write_bytes(b'changed\n')
+        with self.assertRaises(adapter.Refused) as caught:
+            self.check()
+        message = str(caught.exception)
+        self.assertIn(f'different 1: README.md; unlisted {adapter.REPORT_ERRORS + 5}: extra-00', message)
+        self.assertIn(f'extra-{adapter.REPORT_ERRORS - 1:02}', message)
+        self.assertNotIn(f'extra-{adapter.REPORT_ERRORS:02}', message)
+        self.f.make_copy()
+        marker = dict(self.f.inputs['finderPrune']['markers'][0], path='vendor/adevtool/missing/.find-ignore')
+        self.f.inputs['finderPrune']['markers'].append(marker)
+        with self.assertRaisesRegex(adapter.Refused, 'finder marker'):
+            self.check()
+
+
+class Omitted(unittest.TestCase):
+    def test_the_rules_are_git_check_ignore_of_the_pinned_gitignore(self):
+        repo = Path(tempfile.mkdtemp())
+        git('init', '-q', str(repo), cwd=repo)
+        pinned = (ROOT/'os/tests/fixtures/frankel-lunch-inputs/vendor/adevtool/.gitignore').read_bytes()
+        rules = adapter.load_lunch_inputs()['gitRequirement']['workingTree']['omittedFromCopy']
+        self.assertEqual((pinned, blob(pinned)), (('\n'.join(adapter.ADEVTOOL_IGNORED) + '\n').encode(), rules['gitBlob']))
+        (repo/'.gitignore').write_bytes(pinned)
+        cases = {'.idea': True, '.idea/workspace.xml': False, 'dist': True, 'dist/a.js': False, 'lib': True,
+                 'lib/x/y.js': False, 'node_modules': True, 'node_modules/p/index.js': False, 'dl': True,
+                 'dl/.find-ignore': False, 'dl/frankel-factory.zip': False, 'dl/unpacked': True, 'dl/unpacked/a/b': False,
+                 'src/lib': True, 'src/lib/x.ts': False, 'a/node_modules': True, 'dl2': True, 'dist.txt': False,
+                 'distfile': False, 'vendor-skels/.find-ignore': False, 'README.md': False}
+        for relative, is_dir in cases.items():
+            target = repo/relative
+            if is_dir:
+                target.mkdir(parents=True, exist_ok=True)
+            else:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(b'')
+        for relative, is_dir in cases.items():
+            with self.subTest(path=relative):
+                ignored = subprocess.run(['git', '-C', str(repo), 'check-ignore', '-q', '--no-index', relative],
+                                         capture_output=True, env=dict(os.environ, GIT_CONFIG_NOSYSTEM='1',
+                                                                       GIT_CONFIG_GLOBAL='/dev/null')).returncode == 0
+                parts = relative.split('/')
+                ours = any(adapter.adevtool_ignored('/'.join(parts[:i]), i < len(parts) or is_dir)
+                           for i in range(1, len(parts) + 1))
+                self.assertEqual(ours, ignored)
+
+    def test_the_find_ignore_marker_keeps_everything_below_it_as_git_does(self):
+        repo = Path(tempfile.mkdtemp())
+        git('init', '-q', str(repo), cwd=repo)
+        (repo/'.gitignore').write_bytes((ROOT/'os/tests/fixtures/frankel-lunch-inputs/vendor/adevtool/.gitignore').read_bytes())
+        (repo/'dl/.find-ignore').mkdir(parents=True)
+        (repo/'dl/.find-ignore/x').write_bytes(b'')
+        ignored = subprocess.run(['git', '-C', str(repo), 'check-ignore', '-q', '--no-index', 'dl/.find-ignore/x'],
+                                 capture_output=True).returncode == 0
+        self.assertEqual((ignored, adapter.adevtool_ignored('dl/.find-ignore/x', False)), (False, False))
+
+    def test_the_real_copy_omits_the_ignored_paths_and_refuses_a_link_that_would_dangle(self):
+        source = Path(tempfile.mkdtemp())/'source'
+        for relative, data in (('vendor/adevtool/README.md', b'r'), ('vendor/adevtool/dl/.find-ignore', b''),
+                               ('vendor/adevtool/node_modules/p/index.js', b'js'), ('vendor/adevtool/dl/frankel.zip', b'zip'),
+                               ('vendor/adevtool/lib/x.js', b'lib'), ('other/kept.txt', b'k')):
+            (source/relative).parent.mkdir(parents=True, exist_ok=True)
+            (source/relative).write_bytes(data)
+        (source/'vendor/adevtool/dl/unpacked').mkdir()
+        fs = type('fs', (), {'f_bavail': 1 << 42, 'f_frsize': 1})
+        project = 'vendor/adevtool/'
+        omit = lambda rel, is_dir: rel.startswith(project) and adapter.adevtool_ignored(rel[len(project):], is_dir)  # noqa: E731
+        copy = Path(tempfile.mkdtemp())/'tree'
+        result = adapter.copy_tree(source, copy, statvfs=lambda p: fs, omit=omit)
+        kept = sorted(str(p.relative_to(copy)) for p in copy.rglob('*') if p.is_file())
+        self.assertEqual(kept, ['other/kept.txt', 'vendor/adevtool/README.md', 'vendor/adevtool/dl/.find-ignore'])
+        # node_modules, node_modules/p, node_modules/p/index.js, dl/frankel.zip, lib and lib/x.js
+        self.assertEqual(result['omitted'], 6)
+        os.symlink('../vendor/adevtool/node_modules/../README.md', source/'other/via-node-modules')
+        with self.assertRaisesRegex(adapter.Refused, 'kept links dangle in the copy, first: other/via-node-modules'):
+            adapter.copy_tree(source, Path(tempfile.mkdtemp())/'tree', statvfs=lambda p: fs, omit=omit)
+
+    def test_the_copy_leaves_out_exactly_the_omitted_paths_before_its_bounds(self):
+        entries = [{'path': p, 'type': t, 'size': s} for p, t, s in (
+            ('vendor', 'dir', 0), ('vendor/adevtool', 'dir', 0), ('vendor/adevtool/README.md', 'file', 3),
+            ('vendor/adevtool/node_modules', 'dir', 0), ('vendor/adevtool/node_modules/big.js', 'file', 10 * GIB),
+            ('vendor/adevtool/dl', 'dir', 0), ('vendor/adevtool/dl/.find-ignore', 'file', 0),
+            ('vendor/adevtool/dl/image.zip', 'file', 5 * GIB), ('src/lib', 'dir', 0), ('src/lib/x.ts', 'file', 1))]
+        planned = {'entries': entries, 'excluded': [], 'problems': []}
+        copied = {}
+
+        def copier(source, tree, final, plan):
+            copied['paths'] = [e['path'] for e in plan['entries']]
+        fs = type('fs', (), {'f_bavail': 1 << 40, 'f_frsize': 1})
+        project = 'vendor/adevtool/'
+        omit = lambda rel, is_dir: rel.startswith(project) and adapter.adevtool_ignored(rel[len(project):], is_dir)  # noqa: E731
+        result = adapter.copy_tree(Path('/src'), Path(tempfile.mkdtemp())/'tree', planner=lambda s, p: planned,
+                                   copier=copier, statvfs=lambda p: fs, omit=omit)
+        self.assertEqual(copied['paths'], ['vendor', 'vendor/adevtool', 'vendor/adevtool/README.md', 'vendor/adevtool/dl',
+                                           'vendor/adevtool/dl/.find-ignore', 'src/lib', 'src/lib/x.ts'])
+        self.assertEqual((result['omitted'], result['projectedBytes']), (3, 4))  # the omitted 15 GiB never counts
+        linked = dict(planned, entries=entries + [{'path': 'tools/js', 'type': 'link', 'text': '../vendor/adevtool/node_modules',
+                                                   'kind': 'relative', 'target': 'vendor/adevtool/node_modules', 'exists': True}])
+        with self.assertRaisesRegex(adapter.Refused, 'copy_refused: 1 problems, first: tools/js links into the omitted'):
+            adapter.copy_tree(Path('/src'), Path(tempfile.mkdtemp())/'tree', planner=lambda s, p: linked, copier=copier,
+                              statvfs=lambda p: fs, omit=omit)
+
+
+class Fetch(unittest.TestCase):
+    def setUp(self):
+        self.f = LunchFixture()
+        self.record = {}
+
+    def fetch(self, plan=None, **options):
+        return adapter.adevtool_public_fetch(self.f.tree, plan or self.f.plan(), self.f.tree.parent, self.record,
+                                             root=self.f.repo, protocol=options.pop('protocol', 'file'), **options)
+
+    def test_the_admitted_fetch_makes_exactly_the_pinned_commit_and_nothing_else(self):
+        before = self.f.work_state()
+        self.fetch()
+        dotgit = self.f.tree/'vendor/adevtool/.git'
+        self.assertEqual((self.record['ok'], self.record['observedHead']), (True, self.f.revision))
+        self.assertEqual((dotgit/'HEAD').read_bytes(), (self.f.revision + '\n').encode())
+        self.assertEqual((dotgit/'shallow').read_bytes(), (self.f.revision + '\n').encode())
+        self.assertFalse((dotgit/'hooks').exists() or (dotgit/'objects/info/alternates').exists())
+        self.assertEqual(self.f.work_state(), before)  # no command checks out or writes the working tree
+        self.assertLessEqual(self.record['gitDirBytes'], adapter.ADEVTOOL_GIT_BYTES)
+        # in the contained environment, git in the copy answers exactly what the version check reads
+        env = adapter.contained_env(self.f.tree.parent)
+        head = subprocess.run(['git', '-C', str(self.f.tree/'vendor/adevtool'), 'rev-parse', 'HEAD'], env=env,
+                              capture_output=True, text=True)
+        self.assertEqual(head.stdout.strip(), self.f.revision)
+        self.assertTrue(self.record['workingTreeHolds'])
+        self.assertTrue(self.record['git']['fetch']['path'].startswith(('/usr/bin/', '/bin/')))
+        self.assertTrue(self.record['git']['fetch']['version'].startswith('git version'))
+        self.assertEqual(self.problems(), [])
+
+    def problems(self):
+        return adapter.gitdir_problems(self.f.tree, self.f.tree/'vendor/adevtool', self.f.inputs, self.f.raw,
+                                       adapter.fetch_env(self.f.tree, self.f.tree.parent/'home', 'file'),
+                                       adapter.contained_env(self.f.tree.parent), time.monotonic() + 60,
+                                       adapter.ADEVTOOL_GIT_BYTES)
+
+    def test_a_failed_fetch_or_check_removes_only_the_git_it_created(self):
+        other = json.loads(json.dumps(self.f.inputs))
+        other['gitRequirement']['rootTree'] = other['sources'][0]['rootTree'] = '0' * 40
+        unknown = json.loads(json.dumps(self.f.inputs))
+        unknown['gitRequirement']['revision'] = unknown['sources'][0]['revision'] = '1' * 40
+        cases = [({'plan': {'inputs': other, 'url': self.f.plan()['url']}}, 'the commit tree is not the pinned rootTree', True),
+                 ({'plan': {'inputs': unknown, 'url': self.f.plan()['url']}}, 'fetch failed', True),
+                 ({'limit': 64}, 'init failed: gitBytes', True),
+                 ({'seconds': 0}, 'init failed: timeout', None)]  # the deadline passed before git started: nothing made
+        for options, word, removed in cases:
+            with self.subTest(word=word):
+                self.f.make_copy()
+                self.record = {}
+                with self.assertRaisesRegex(adapter.Refused, word):
+                    self.fetch(**options)
+                self.assertFalse(os.path.lexists(self.f.tree/'vendor/adevtool/.git'))
+                self.assertEqual((self.record['ok'], self.record['createdRemoved']), (False, removed))
+
+    def test_a_listing_that_is_not_the_commit_tree_refuses(self):
+        raw = git('ls-tree', '-r', self.f.revision, cwd=self.f.upstream)
+        self.f.inputs = self.f.contract(raw.replace(b'README.md', b'README.txt'))
+        with self.assertRaisesRegex(adapter.Refused, 'not byte for byte the pinned listing'):
+            self.fetch()
+        self.assertFalse(os.path.lexists(self.f.tree/'vendor/adevtool/.git'))
+
+    def test_nothing_is_written_through_a_linked_parent_and_any_other_failure_removes_the_git(self):
+        outside = self.f.base/'outside'
+        shutil.move(str(self.f.tree/'vendor'), str(outside))
+        os.symlink(outside, self.f.tree/'vendor')
+        with self.assertRaisesRegex(adapter.Refused, 'vendor is a link'):
+            self.fetch()
+        self.assertFalse(os.path.lexists(outside/'adevtool/.git'))
+        self.f.make_copy()
+        self.record = {}
+        real = subprocess.Popen
+
+        def popen(argv, **kwargs):
+            if 'fetch' in argv:
+                raise FileNotFoundError('git vanished')
+            return real(argv, **kwargs)
+        with self.assertRaisesRegex(adapter.Refused, 'FileNotFoundError during the fetch or its checks'):
+            self.fetch(popen=popen)
+        self.assertFalse(os.path.lexists(self.f.tree/'vendor/adevtool/.git'))
+        self.assertEqual((self.record['ok'], self.record['createdRemoved']), (False, True))
+
+    def test_the_fetch_refuses_before_writing_without_git_or_with_a_used_home(self):
+        with unittest.mock.patch.object(adapter, 'GIT_PATH', str(self.f.base/'no-git-here')):
+            with self.assertRaisesRegex(adapter.Refused, 'no git on'):
+                self.fetch()
+        self.assertFalse(os.path.lexists(self.f.tree/'vendor/adevtool/.git'))
+        (self.f.tree.parent/'tmp/adevtool-git-home').mkdir(parents=True)
+        with self.assertRaisesRegex(adapter.Refused, 'fetch home already exists'):
+            self.fetch()
+        self.assertFalse(os.path.lexists(self.f.tree/'vendor/adevtool/.git'))
+
+    def test_a_success_needs_its_final_evidence_or_the_git_is_removed(self):
+        real, calls = adapter.git_output, []
+
+        def flaky(argv, *args, **kwargs):
+            if argv[-2:] == ['rev-parse', 'HEAD']:
+                calls.append(argv)
+                if len(calls) == 2:  # the final one, after every acceptance item passed
+                    return None, b''
+            return real(argv, *args, **kwargs)
+        with unittest.mock.patch.object(adapter, 'git_output', flaky):
+            with self.assertRaisesRegex(adapter.Refused, 'final rev-parse HEAD'):
+                self.fetch()
+        self.assertFalse(os.path.lexists(self.f.tree/'vendor/adevtool/.git'))
+        self.assertEqual((self.record['ok'], self.record['createdRemoved']), (False, True))
+
+    def test_the_mount_table_names_bind_mounts_too(self):
+        text = ('36 35 98:0 /mnt1 /mnt/parent rw,noatime master:1 - ext3 /dev/root rw\n'
+                '37 36 98:0 /x /run/tree/vendor/adevtool/.git/objects rw - ext4 /dev/sda rw\n'
+                '38 36 98:0 /y /with\\040space rw - ext4 /dev/sda rw\n')
+        self.assertEqual(adapter.mount_points(text), ['/mnt/parent', '/run/tree/vendor/adevtool/.git/objects', '/with space'])
+
+    def test_nothing_runs_for_another_protocol_or_an_existing_git(self):
+        with self.assertRaisesRegex(adapter.Refused, 'is not https'):
+            self.fetch(protocol='https')
+        self.assertFalse(os.path.lexists(self.f.tree/'vendor/adevtool/.git'))
+        (self.f.tree/'vendor/adevtool/.git').mkdir()
+        (self.f.tree/'vendor/adevtool/.git/HEAD').write_text('not ours\n')
+        with self.assertRaisesRegex(adapter.Refused, 'no .git before the fetch'):
+            self.fetch()
+        self.assertEqual((self.f.tree/'vendor/adevtool/.git/HEAD').read_text(), 'not ours\n')  # never removed
+
+    def test_every_redirect_or_change_in_the_new_git_is_a_problem(self):
+        self.fetch()
+        work, dotgit = self.f.tree/'vendor/adevtool', self.f.tree/'vendor/adevtool/.git'
+        pristine = self.f.base/'pristine-git'
+        shutil.copytree(dotgit, pristine, symlinks=True)
+        outside = self.f.base/'outside'
+        outside.write_bytes(b'x')
+        cases = [('alternates', lambda: (dotgit/'objects/info').mkdir(exist_ok=True) or
+                  (dotgit/'objects/info/alternates').write_text('/elsewhere/objects\n'), 'objects/info/alternates exists'),
+                 ('commondir', lambda: (dotgit/'commondir').write_text('/elsewhere\n'), 'commondir exists'),
+                 ('hooks', lambda: (dotgit/'hooks').mkdir(), '.git/hooks exists'),
+                 ('link', lambda: os.symlink('/elsewhere', dotgit/'refs/elsewhere'), 'a link is inside the .git'),
+                 ('hard link', lambda: os.link(outside, dotgit/'refs/shared'), 'second hard link'),
+                 ('config', lambda: git('config', '--local', 'core.hooksPath', '/elsewhere', cwd=work),
+                  'configuration is not exactly'),
+                 ('remote', lambda: git('remote', 'add', 'origin', 'https://example.invalid/x', cwd=work),
+                  'configuration is not exactly'),
+                 ('symbolic head', lambda: (dotgit/'HEAD').write_text('ref: refs/heads/main\n'), 'HEAD is not exactly'),
+                 ('branch', lambda: git('update-ref', 'refs/heads/main', self.f.revision, cwd=work), 'a ref other than HEAD'),
+                 ('tag', lambda: git('update-ref', 'refs/tags/v1', self.f.revision, cwd=work), 'a ref other than HEAD'),
+                 ('packed refs', lambda: (dotgit/'packed-refs').write_text(f'{self.f.revision} refs/heads/x\n'),
+                  'a ref other than HEAD'),
+                 ('not shallow', lambda: (dotgit/'shallow').unlink(), 'shallow is not exactly')]
+        for name, change, word in cases:
+            with self.subTest(name=name):
+                shutil.rmtree(dotgit)
+                shutil.copytree(pristine, dotgit, symlinks=True)
+                change()
+                problems = self.problems()
+                self.assertTrue(any(word in p for p in problems), problems)
+        shutil.rmtree(dotgit)
+        dotgit.write_text(f'gitdir: {pristine}\n')  # a gitfile pointing outside
+        self.assertEqual(adapter.gitdir_problems(self.f.tree, work, self.f.inputs, b'', {}, {}, time.monotonic() + 60, 1),
+                         ['vendor/adevtool/.git is not a directory'])
+
+    def test_a_working_tree_that_no_longer_holds_after_the_fetch_refuses_and_removes_the_git(self):
+        def hasher(data):
+            return adapter.git_blob_id(data) if data != b'adevtool pinned\n' else '0' * 40
+        with self.assertRaisesRegex(adapter.Refused, r'working tree no longer holds: .*different 1: README.md'):
+            self.fetch(hasher=hasher)
+        self.assertFalse(os.path.lexists(self.f.tree/'vendor/adevtool/.git'))
+        self.assertEqual(self.record['createdRemoved'], True)
+
+    def test_the_steps_are_os_products_and_blazers(self):
+        revision = '17df3b79a73e67ad68387b35c7d41c85e1d8103c'
+        fetch = adapter.load_lunch_inputs()['gitRequirement']['publicFetch']
+        self.assertEqual([' '.join(s) for s in adapter.fetch_steps('<copy>/vendor/adevtool', '<url>', revision)], fetch['steps'])
+        spec = importlib.util.spec_from_file_location('blazer_build_only', ROOT/'scripts/blazer-build-only.py')
+        blazer = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(blazer)
+        self.assertEqual(adapter.fetch_steps('/w', 'https://u', revision), blazer.git_meta_argv('/w', 'https://u', revision))
+        self.assertEqual(adapter.FETCH_ENV_SPEC, fetch['environment'])
+
+    def test_the_fetch_environment_inherits_no_git_and_only_the_source_protocol(self):
+        with unittest.mock.patch.dict(os.environ, {'GIT_DIR': '/elsewhere', 'GIT_CONFIG_PARAMETERS': "'core.x=1'",
+                                                   'HTTPS_PROXY': 'http://proxy.invalid:3128', 'LD_PRELOAD': '/x.so',
+                                                   'OPENSSL_CONF': '/x.cnf'}):
+            env = adapter.fetch_env(Path('/run/tree'), Path('/run/home'))
+        self.assertEqual(sorted(k for k in env if k.startswith('GIT_')),
+                         sorted(k for k in adapter.FETCH_ENV_SPEC if k.startswith('GIT_')))
+        self.assertEqual((env['HOME'], env['XDG_CONFIG_HOME']), ('/run/home', '/run/home'))
+        self.assertNotIn('GIT_DIR', env)
+        self.assertFalse({'LD_PRELOAD', 'OPENSSL_CONF'} & set(env))  # only the job's network setup is kept
+        self.assertNotIn('GIT_CONFIG_PARAMETERS', env)
+        self.assertEqual(env['HTTPS_PROXY'], 'http://proxy.invalid:3128')  # the job's network setup is kept
+        self.assertEqual((env['GIT_ALLOW_PROTOCOL'], env['GIT_CEILING_DIRECTORIES'], env['PATH'], env['GIT_CONFIG_GLOBAL']),
+                         ('https', '/run/tree', '/usr/bin:/bin', os.devnull))
+        self.assertEqual((env['GIT_TERMINAL_PROMPT'], env['GIT_ASKPASS'], env['GIT_CONFIG_NOSYSTEM']), ('0', '/bin/false', '1'))
+
+    def test_bounded_git_stops_at_its_deadline_or_its_bytes(self):
+        clock = time.monotonic
+        code, stopped = adapter.bounded_git(['sleep', '30'], dict(os.environ), '/', clock() - 1, self.f.base, 1 << 30)
+        self.assertEqual(stopped, 'timeout')
+        code, stopped = adapter.bounded_git(['sleep', '30'], dict(os.environ), '/', clock() + 60, self.f.base, 10,
+                                            measure=lambda path: 11)
+        self.assertEqual(stopped, 'gitBytes')
+        self.assertEqual(adapter.bounded_git(['true'], dict(os.environ), '/', clock() + 60, self.f.base, 10,
+                                             measure=lambda path: 0), (0, None))
 
 
 if __name__ == '__main__':

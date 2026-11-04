@@ -5,7 +5,14 @@ loads OS Product's checker (scripts/launcher3-compile-contract.py), which B's te
 
   check                       hosted and on the builder: the contract is the pinned version (MANIFEST_SHA256), the
                               binding os/build-only/launcher3-compile-host.json is exact, and every input the selected
-                              branch needs is bound. Exit 4 while any is null. Reads no host path.
+                              branch needs is bound. Exit 4 while any is null. Reads no host path. A lunch product in
+                              VERSION_CHECKED_PRODUCTS also needs OS Product's lunch-input contract
+                              os/compile-contracts/frankel-lunch-inputs.json at its pin (LUNCH_INPUTS_SHA256), the
+                              binding's adevtoolGit (public-fetch) and that contract's own admission of the public-fetch
+                              class for the pinned manifest's source, with its publicFetch and workingTree exactly
+                              this adapter's mechanism; otherwise exit 4 (adevtool_git_missing or
+                              adevtool_git_unadmitted), or 2 when the contract and this adapter disagree or the lunch
+                              is not the contract's target.
   run --run-id --attempt      under the nonblocking shared builder lock, into a new per-run root
                               <taskParent>/launcher3-compile-<run>-<attempt>/{tree,out,home,tmp,receipts}:
                               1. byte-copy the bound source tree (read only; alpha exclusion policy: outputs, .repo,
@@ -28,8 +35,17 @@ loads OS Product's checker (scripts/launcher3-compile-contract.py), which B's te
                               3. lunch on its own (LUNCH_SECONDS; a failed lunch is reported and m is not run), then
                                  `m -j8 Launcher3QuickStepLib <flag caches>`, with OUT_DIR, HOME, TMPDIR and XDG_* inside
                                  the run root, no ccache, GIT_CEILING_DIRECTORIES at the copy root and no system or user
-                                 git configuration (a lunch product in VERSION_CHECKED_PRODUCTS is refused before the
-                                 copy: adevtool_git_missing); sampled stops (every SAMPLE_SECONDS)
+                                 git configuration (a lunch product in VERSION_CHECKED_PRODUCTS without an admitted
+                                 adevtool fetch is refused before the copy: adevtool_git_missing); before that lunch,
+                                 in the copy and with no network, the lunch inputs: vendor/adevtool exactly its pinned
+                                 tree (every listed path at its mode and blob, nothing else, no .git), the version
+                                 check's error form, the generated vendor files, the finder markers, the kernel module
+                                 lists and the manifest links and copies; then the public fetch of exactly the pinned
+                                 adevtool commit into a new vendor/adevtool/.git (no hooks, remote, alternates or
+                                 inherited configuration; ADEVTOOL_FETCH_SECONDS, ADEVTOOL_GIT_BYTES), verified (HEAD,
+                                 shallow, commit, root tree, full fsck, its tree equals the pinned listing, nothing
+                                 redirects outside the copy) and removed again on any failure; sampled stops (every
+                                 SAMPLE_SECONDS)
                                  on the output filesystem's growth (OUTPUT_STOP_BYTES) and the process group's resident
                                  memory (MEMORY_STOP_BYTES), and a wall-clock COMPILE_SECONDS; TERM, then KILL;
                               4. a sanitized report.json: the branch, the classification, the bound inputs, the compile
@@ -63,6 +79,7 @@ import stat
 import subprocess
 import sys
 import time
+from xml.etree import ElementTree
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -84,12 +101,50 @@ LUNCH_SECONDS = 20 * 60
 # genuine adevtool gitdir copy exists here, so such a lunch is refused before anything is copied: never a fabricated,
 # redirected or relaxed check.
 VERSION_CHECKED_PRODUCTS = ('frankel',)
+# Such a lunch needs OS Product's lunch-input contract (#410/#459; public-fetch, publicFetch and workingTree added in
+# #531, f16ba64), read as data only and never through its script. A different file is refused until this pin is updated.
+LUNCH_INPUTS = 'os/compile-contracts/frankel-lunch-inputs.json'
+LUNCH_INPUTS_SHA256 = 'd259aae6d1984dea2ead3f929aeb7ce9a2807681f28147ce53deb2ada36ec4e3'
+PINNED_MANIFEST = 'os/pinned-manifest.xml'
+# The only way this adapter gives vendor/adevtool its .git: the pinned commit fetched from the pinned manifest's public
+# source into the copy, admitted only when the pinned lunch-input contract lists the class. Infra's proposed first
+# ceilings (2026-11-04), not measured requirements and not runtime approval.
+ADEVTOOL_GIT_CLASSES = ('public-fetch',)
+ADEVTOOL_FETCH_SECONDS, ADEVTOOL_GIT_BYTES = 30 * 60, 1 << 30
+LUNCH_INPUT_SECONDS = 30 * 60  # hashing vendor/adevtool's listed paths and reading the markers, in the copy
+GIT_PATH = '/usr/bin:/bin'
+# A new repository from `git init --template=` has exactly these local keys; any other one refuses.
+GIT_CONFIG_KEYS = ('core.repositoryformatversion', 'core.filemode', 'core.bare', 'core.logallrefupdates')
+GIT_REDIRECTS = ('objects/info/alternates', 'objects/info/http-alternates', 'commondir', 'gitdir', 'hooks', 'info/grafts')
+# The git variables the contained lunch and m environment sets itself; nothing else named GIT_* reaches them.
+CONTAINED_GIT = ('GIT_CEILING_DIRECTORIES', 'GIT_CONFIG_NOSYSTEM', 'GIT_CONFIG_GLOBAL')
+# The pinned adevtool .gitignore rules the copy omits (gitRequirement.workingTree.omittedFromCopy), implemented exactly by
+# adevtool_ignored; a contract naming any other list is refused until this adapter implements it.
+ADEVTOOL_IGNORED = ('/.idea/', '/dist/', '!/dl/', '/dl/*', '!/dl/.find-ignore', '/lib/', '/node_modules/')
+# The option rows the admission requires exactly (#531): the public-fetch status, and fabrication carved out for exactly
+# the publicFetch steps, with redirect, fabrication and relaxation refused.
+PUBLIC_FETCH_STATUS = ('allowed only under a separate runtime approval for its source and bounds; the interface is '
+                       'publicFetch; Release owns the mechanism')
+FABRICATION_MEANS = 'any HEAD, ref, object or gitdir written other than by a genuine copy or by exactly the publicFetch steps'
+OPTION_CLASSES = ('genuine-copy', 'redirect', 'public-fetch', 'fabrication', 'relaxation')
+# The canonical sha256 of everything this adapter implements of the git route: the whole gitRequirement and every
+# source's workingTreeCheck text (json, sorted keys, compact separators). Any change to them is invalid until this
+# adapter is reviewed against the new text, so a re-pin is never only a hash bump.
+GIT_REQUIREMENT_SHA256 = 'ca8de46a9769e90c2559974da6dc17b7cbd32f49cce2ed41a8d6ef537be56166'
+# The job environment the fetch keeps (network setup only); everything else, LD_* included, is left out.
+FETCH_INHERITED = ('HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy', 'NO_PROXY', 'no_proxy', 'ALL_PROXY',
+                   'all_proxy', 'SSL_CERT_FILE', 'SSL_CERT_DIR', 'LANG')
+# gitRequirement.publicFetch.environment as this adapter sets it (fetch_env); the contract must state exactly this.
+FETCH_ENV_SPEC = {'unset': 'GIT_*', 'GIT_CONFIG_NOSYSTEM': '1', 'GIT_CONFIG_GLOBAL': '/dev/null',
+                  'HOME': 'an attempt-owned empty directory (also XDG_CONFIG_HOME)', 'GIT_TERMINAL_PROMPT': '0',
+                  'GIT_ASKPASS': '/bin/false', 'SSH_ASKPASS': '/bin/false', 'GIT_ALLOW_PROTOCOL': 'https',
+                  'GIT_CEILING_DIRECTORIES': 'the copy root', 'PATH': '/usr/bin:/bin'}
 FINISH_SECONDS = 30 * 60
 UPLOAD = ('report.json', 'classification.json')
 WORK_DIRS = ('tree', 'out', 'home', 'tmp')
 BINDING = ROOT/'os/build-only/launcher3-compile-host.json'
 BINDING_KEYS = {'schemaVersion', 'kind', 'basis', 'host', 'lockFrom', 'taskParent', 'branch', 'sourceTree', 'lunch',
-                'policyReceipt', 'bundleReport', 'reconstructSource'}
+                'policyReceipt', 'bundleReport', 'reconstructSource', 'adevtoolGit'}
 BRANCHES = ('verifyIntegrated', 'verifyBaseApplyCandidate', 'reconstruct')
 TASK_NAME = 'launcher3-compile-{run_id}-{attempt}'
 TARGET = 'Launcher3QuickStepLib'
@@ -223,11 +278,8 @@ def verify_tree_pin(project, expected, sha256, count, skipped, hasher=git_blob_i
     raise Refused(f'{Path(project).name}: tree pin digest differs')
 
 
-def load_listing(pin, root=ROOT):
-    """{path bytes: (mode, oid)} of the pinned commit's tree minus exactly unlisted.excludedPaths, from the committed
-    gzip listing after both of its sha256 bindings; raw `<mode> blob <oid> TAB <path> LF` lines only (no quoting, no
-    other type or mode). This is the pin's expected data, never a statement about host bytes."""
-    listing, unlisted = pin['listing'], pin['unlisted']
+def listing_raw(listing, root=ROOT):
+    """The decompressed bytes of a committed gzip listing, after both of its sha256 bindings."""
     path = (Path(root)/listing['path']).resolve()
     if Path(root).resolve() not in path.parents or path.is_symlink():
         raise Invalid(f'{listing["path"]}: the listing must be a file in this repository')
@@ -238,6 +290,15 @@ def load_listing(pin, root=ROOT):
         raw = stream.read(LISTING_BYTES + 1)
     if len(raw) > LISTING_BYTES or sha256_bytes(raw) != listing['sha256']:
         raise Invalid(f'{listing["path"]} is not the pinned listing')
+    return raw
+
+
+def load_listing(pin, root=ROOT):
+    """{path bytes: (mode, oid)} of the pinned commit's tree minus exactly unlisted.excludedPaths, from the committed
+    gzip listing after both of its sha256 bindings; raw `<mode> blob <oid> TAB <path> LF` lines only (no quoting, no
+    other type or mode). This is the pin's expected data, never a statement about host bytes."""
+    listing, unlisted = pin['listing'], pin['unlisted']
+    raw = listing_raw(listing, root)
     records = {}
     for line in raw.split(b'\n')[:-1] if raw.endswith(b'\n') else [None]:
         match = line is not None and re.fullmatch(rb'(100644|100755|120000) blob ([0-9a-f]{40})\t([^"\n][^\n]*)', line)
@@ -536,12 +597,615 @@ def lock_path(root=ROOT):
     return json.loads((root/'os/release-pipeline/frankel.json').read_text())['host']['lockPath']
 
 
-def check(binding_path=BINDING, root=ROOT, manifest_path=MANIFEST):
-    """(manifest, binding). Invalid on a wrong shape, Unbound while the selected branch lacks an input."""
+def manifest_project(path, root=ROOT):
+    """{'revision', 'url'} of one project of the pinned manifest: its remote's fetch prefix, which must be https, plus
+    its name."""
+    manifest = ElementTree.parse(Path(root)/PINNED_MANIFEST).getroot()
+    remotes = {r.get('name'): r.get('fetch') for r in manifest.iter('remote')}
+    default = manifest.find('default')
+    rows = [p for p in manifest.iter('project') if p.get('path') == path]
+    if len(rows) != 1:
+        raise Invalid(f'{PINNED_MANIFEST} must name exactly one {path} project')
+    remote = rows[0].get('remote') or (default.get('remote') if default is not None else None)
+    prefix = remotes.get(remote) or ''
+    if not prefix.startswith('https://') or not re.fullmatch(r'[0-9a-f]{40}', rows[0].get('revision') or ''):
+        raise Invalid(f'{path} must be pinned to a full commit on an https remote')
+    return {'revision': rows[0].get('revision'), 'url': prefix.rstrip('/') + '/' + rows[0].get('name')}
+
+
+def load_lunch_inputs(path=None, pinned=LUNCH_INPUTS_SHA256, root=ROOT):
+    """OS Product's lunch-input contract as data after its sha256 pin, with the parts this adapter implements bound
+    exactly: the adevtool identity agrees with its own source row and with the pinned manifest."""
+    data = Path(path or Path(root)/LUNCH_INPUTS).read_bytes()
+    if sha256_bytes(data) != pinned:
+        raise Invalid(f'frankel-lunch-inputs.json is not the reviewed lunch-input contract {pinned[:12]}')
+    inputs = json.loads(data)
+    if (inputs.get('schemaVersion'), inputs.get('kind')) != (1, 'rose-frankel-lunch-inputs'):
+        raise Invalid('the lunch-input contract is not a rose-frankel-lunch-inputs v1')
+    git = inputs['gitRequirement']
+    rows = [s for s in inputs['sources'] if s.get('path') == git['project']]
+    if (git['project'], git['path']) != ('vendor/adevtool', 'vendor/adevtool/.git') or len(rows) != 1 \
+            or (rows[0]['revision'], rows[0]['rootTree']) != (git['revision'], git['rootTree']) \
+            or not all(re.fullmatch(r'[0-9a-f]{40}', str(git[k])) for k in ('revision', 'rootTree')):
+        raise Invalid('gitRequirement must name vendor/adevtool/.git at full ids agreeing with its own source row')
+    if manifest_project(git['project'], root)['revision'] != git['revision']:
+        raise Invalid('gitRequirement.revision is not the pinned manifest revision of vendor/adevtool')
+    unset = inputs['environment']['unset']
+    if 'GIT_*' not in unset or not all(n == 'GIT_*' or re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', str(n)) for n in unset):
+        raise Invalid('the lunch-input environment must unset GIT_* and otherwise name plain variables only')
+    for row in inputs['manifestFiles']:
+        if row.get('kind') not in ('linkfile', 'copyfile'):
+            raise Invalid(f'manifestFiles: {row.get("kind")!r} is neither linkfile nor copyfile')
+    return inputs
+
+
+def public_fetch_option(inputs, url):
+    """OS Product's admission of the public fetch: exactly one gitRequirement.options row of class public-fetch with an
+    allowed status and this url (the pinned manifest's source), or None. The pinned contract (#531) admits it; a run
+    still needs the binding's adevtoolGit, which Infra binds with the fetch's own runtime approval."""
+    rows = [o for o in inputs['gitRequirement']['options'] if o.get('class') == 'public-fetch']
+    if len(rows) == 1 and str(rows[0].get('status', '')).startswith('allowed') and rows[0].get('url') == url:
+        return rows[0]
+    return None
+
+
+def lunch_plan(binding, root=ROOT, inputs_path=None, inputs_pin=LUNCH_INPUTS_SHA256):
+    """None for a lunch without the adevtool version check; else {'inputs', 'url', 'exact'} once the contract is pinned,
+    the binding names the public fetch, the contract admits it and its publicFetch and workingTree are exactly this
+    adapter's mechanism. Unbound (exit 4) until then; invalid when the contract and this adapter disagree."""
+    if not version_checked(binding['lunch']):
+        if binding['adevtoolGit'] is not None:
+            raise Invalid('adevtoolGit applies only to a lunch that runs adevtool-version-check.mk')
+        return None
+    inputs = load_lunch_inputs(inputs_path, inputs_pin, root)
+    if binding['lunch'] != inputs['lunch']['target']:
+        raise Invalid(f'the lunch must be the lunch-input contract target {inputs["lunch"]["target"]}')
+    if binding['adevtoolGit'] is None:
+        raise Unbound(f'adevtool_git_missing: {binding["lunch"]} runs adevtool-version-check.mk (git -C vendor/adevtool '
+                      'rev-parse HEAD) in lunch and m; the copy has no .git and adevtoolGit (public-fetch) is not bound')
+    url = manifest_project(inputs['gitRequirement']['project'], root)['url']
+    if public_fetch_option(inputs, url) is None:
+        raise Unbound(f'adevtool_git_unadmitted: the pinned frankel-lunch-inputs.json ({inputs_pin[:12]}) admits no '
+                      f'public-fetch class for {url}')
+    problems = admission_problems(inputs, url, root)
+    if problems:
+        raise Invalid('the admitted public fetch is not the mechanism this adapter implements: ' + '; '.join(problems[:5]))
+    return {'inputs': inputs, 'url': url, 'exact': exact_sources(inputs)}
+
+
+def lunch_listing(inputs, project, root=ROOT, raw=False):
+    """{path bytes: (mode, oid)} of one lunch-input source's pinned tree listing, after both of its sha256 bindings
+    (raw: its decompressed bytes instead)."""
+    rows = [s for s in inputs['sources'] if s.get('path') == project]
+    if len(rows) != 1:
+        raise Invalid(f'the lunch-input contract has no single {project} source')
+    if raw:
+        return listing_raw(rows[0]['listing'], root)
+    return load_listing({'listing': rows[0]['listing'], 'unlisted': {'excludedPaths': []}, 'modes': list(TREE_MODES)}, root)
+
+
+def fetch_steps(work, url, revision):
+    """gitRequirement.publicFetch.steps, which are Blazer's git_meta_argv: a new .git with no templates (no hooks),
+    exactly revision at depth 1 with no tags, and a detached HEAD by update-ref; none reads or writes the working tree."""
+    return [['git', 'init', '-q', '--template=', str(work)],
+            ['git', '-C', str(work), 'fetch', '--quiet', '--depth=1', '--no-tags', url, revision],
+            ['git', '-C', str(work), 'update-ref', '--no-deref', 'HEAD', revision]]
+
+
+def adevtool_ignored(relative, is_dir):
+    """git check-ignore of exactly ADEVTOOL_IGNORED, for a path relative to vendor/adevtool: the top-level directories
+    .idea, dist, lib and node_modules and everything below them, and every entry directly in dl except dl/.find-ignore
+    and everything below those entries."""
+    parts = relative.split('/')
+    if parts[0] in ('.idea', 'dist', 'lib', 'node_modules') and (len(parts) > 1 or is_dir):
+        return True
+    return parts[0] == 'dl' and len(parts) > 1 and parts[1] != '.find-ignore'
+
+
+def exact_sources(inputs):
+    """The lunch-input sources whose working tree this adapter checks exactly: workingTreeCheck 'exact...' (vendor/adevtool
+    through gitRequirement.workingTree); 'derivation only...' are not checked; anything else is invalid."""
+    exact = []
+    for row in inputs['sources']:
+        check = str(row.get('workingTreeCheck', ''))
+        if check.startswith('exact'):
+            exact.append(row['path'])
+        elif not check.startswith('derivation only'):
+            raise Invalid(f'{row.get("path")}: workingTreeCheck must say exact or derivation only')
+    if inputs['gitRequirement']['project'] not in exact:
+        raise Invalid('vendor/adevtool must be checked exactly')
+    return exact
+
+
+def git_requirement_digest(inputs):
+    """GIT_REQUIREMENT_SHA256's canonical form, of this contract."""
+    semantics = {'gitRequirement': inputs['gitRequirement'],
+                 'workingTreeCheck': {s.get('path'): s.get('workingTreeCheck') for s in inputs['sources']}}
+    return sha256_bytes(json.dumps(semantics, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode())
+
+
+def admission_problems(inputs, url, root=ROOT):
+    """Every way the admitted contract's publicFetch and workingTree differ from the mechanism this adapter implements;
+    an admission is refused (invalid) on any. The contract cannot widen the adapter, and the adapter cannot drift."""
+    git, problems = inputs['gitRequirement'], []
+    fetch, tree = git.get('publicFetch') or {}, git.get('workingTree') or {}
+    revision = git['revision']
+    if git_requirement_digest(inputs) != GIT_REQUIREMENT_SHA256:
+        problems.append('gitRequirement or a workingTreeCheck is not the text this adapter was reviewed against')
+    options = {o.get('class'): o for o in git['options']}
+    if [o.get('class') for o in git['options']] != list(OPTION_CLASSES):
+        problems.append('gitRequirement.options are not exactly ' + ', '.join(OPTION_CLASSES))
+    elif (options['public-fetch'].get('status'), options['fabrication'].get('means')) != (PUBLIC_FETCH_STATUS,
+                                                                                            FABRICATION_MEANS) \
+            or any(options[c].get('status') != 'refused' for c in ('redirect', 'fabrication', 'relaxation')):
+        problems.append('the public-fetch status or the fabrication carve-out is not exactly the one this adapter '
+                        'implements, or redirect, fabrication or relaxation is not refused')
+    rendered = [' '.join(step) for step in fetch_steps('<copy>/vendor/adevtool', '<url>', revision)]
+    if (fetch.get('url'), fetch.get('protocol')) != (url, 'https only'):
+        problems.append('publicFetch.url and protocol are not the pinned manifest source over https only')
+    if fetch.get('steps') != rendered:
+        problems.append('publicFetch.steps are not exactly this adapter\'s three commands')
+    if fetch.get('environment') != FETCH_ENV_SPEC:
+        problems.append('publicFetch.environment is not exactly this adapter\'s fetch environment')
+    ceiling = fetch.get('ceiling') or {}
+    if (ceiling.get('seconds'), ceiling.get('bytes')) != (ADEVTOOL_FETCH_SECONDS, ADEVTOOL_GIT_BYTES):
+        problems.append('publicFetch.ceiling is not this adapter\'s 1800 s and 1073741824 bytes')
+    omitted = (tree.get('omittedFromCopy') or {}).get('gitignore')
+    if (tree.get('project'), omitted, tree.get('untrackedAllowed')) != (git['project'], list(ADEVTOOL_IGNORED), []):
+        problems.append('workingTree is not vendor/adevtool with exactly the omitted rules this adapter implements and '
+                        'no untracked allowance')
+    try:
+        exact = exact_sources(inputs)
+        listed = lunch_listing(inputs, git['project'], root)
+        for name in listed:
+            parts = os.fsdecode(name).split('/')
+            if any(adevtool_ignored('/'.join(parts[:i]), i < len(parts)) for i in range(1, len(parts) + 1)):
+                problems.append(f'the omitted rules would drop the tracked {os.fsdecode(name)}')
+                break
+        ignore = listed.get(b'.gitignore')
+        if ignore is None or ignore[1] != (tree.get('omittedFromCopy') or {}).get('gitBlob'):
+            problems.append('workingTree.omittedFromCopy.gitBlob is not the pinned tree\'s .gitignore')
+        for project in exact:
+            lunch_listing(inputs, project, root)
+            row = next(s for s in inputs['sources'] if s['path'] == project)
+            if manifest_project(project, root)['revision'] != row['revision']:
+                problems.append(f'{project} is not at its pinned manifest revision')
+    except Invalid as error:
+        problems.append(str(error))
+    return problems
+
+
+def contained_bytes(tree, relative):
+    """The bytes of a regular file at tree/relative reached through no link, or None."""
+    path = Path(tree)
+    for part in Path(relative).parts:
+        path = path/part
+        if path.is_symlink():
+            return None
+    if not path.is_file():
+        return None
+    data, opened = read_nofollow(path)
+    return data if opened.st_size == len(data) else None
+
+
+def manifest_file_problem(tree, row):
+    """A repo linkfile is a link that resolves, inside the copy, to its project's source; a copyfile has its bytes."""
+    tree = Path(tree)
+    dest, source = tree/row['dest'], os.path.normpath(tree/row['project']/row['src'])
+    if row['kind'] == 'linkfile':
+        if not dest.is_symlink():
+            return f'{row["dest"]} is not the manifest link to {row["project"]}/{row["src"]}'
+        target = os.path.normpath(dest.parent/os.readlink(dest))
+        if target != source or os.path.commonpath([str(tree), target]) != str(tree):
+            return f'{row["dest"]} does not link to {row["project"]}/{row["src"]} inside the copy'
+        if not os.path.exists(target):
+            return f'{row["dest"]} dangles: {row["project"]}/{row["src"]} is missing in the copy'
+        return None
+    data = contained_bytes(tree, row['dest'])
+    if data is None or data != contained_bytes(tree, f'{row["project"]}/{row["src"]}'):
+        return f'{row["dest"]} is not the manifest copy of {row["project"]}/{row["src"]}'
+    return None
+
+
+def read_walked(path, info, label):
+    """The bytes of the regular file the walk saw (info): opened without following a link and without blocking, and
+    read only when the descriptor is that same regular file (inode, mode and size); the same again after reading."""
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        opened = os.fstat(fd)
+        same = (opened.st_ino, opened.st_mode, opened.st_size) == (info.st_ino, info.st_mode, info.st_size)
+        if not stat.S_ISREG(opened.st_mode) or not same:
+            raise Refused(f'{label} changed while it was hashed')
+        chunks = []
+        while True:
+            block = os.read(fd, 1 << 20)
+            if not block:
+                break
+            chunks.append(block)
+        data = b''.join(chunks)
+        after = os.fstat(fd)
+        if len(data) != info.st_size or (after.st_ino, after.st_mode, after.st_size) != (info.st_ino, info.st_mode, info.st_size):
+            raise Refused(f'{label} changed while it was hashed')
+        return data
+    finally:
+        os.close(fd)
+
+
+def exact_tree(project, expected, skipped=(), hasher=git_blob_id, deadline=None, clock=time.monotonic):
+    """An exact working tree: every listed path at its mode and blob and nothing else (minus exactly skipped), and no
+    directory that holds no listed path. Paths, types and modes come from an lstat walk first, so an unlisted file is
+    named and never read; then only the listed entries are hashed (regular files read without following links, links
+    by their text). Refuses naming every missing, different and unlisted path, each list bounded at REPORT_ERRORS."""
+    base, name = os.fsencode(project), Path(project).name
+    skip = {os.fsencode(p) for p in skipped}
+    listed_dirs = {b'/'.join(p.split(b'/')[:i]) for p in expected for i in range(1, p.count(b'/') + 1)}
+
+    def check_time():
+        if deadline is not None and clock() > deadline:
+            raise Refused(f'pin_timeout: checking {name} passed its deadline')
+
+    present, unlisted, stack = {}, [], [b'']
+    while stack:
+        directory = stack.pop()
+        with os.scandir(base + (b'/' + directory if directory else b'')) as it:
+            names = sorted(e.name for e in it)
+        for entry in names:
+            check_time()
+            rel = directory + b'/' + entry if directory else entry
+            if rel in skip:
+                continue
+            info = os.lstat(base + b'/' + rel)
+            if stat.S_ISDIR(info.st_mode):
+                (stack.append(rel) if rel in listed_dirs else unlisted.append(rel + b'/'))
+            elif stat.S_ISLNK(info.st_mode):
+                present[rel] = ('120000', info)
+            elif stat.S_ISREG(info.st_mode):
+                present[rel] = ('100755' if info.st_mode & stat.S_IXUSR else '100644', info)
+            else:
+                unlisted.append(rel)  # no other type is ever a listed entry
+    unlisted += [p for p in present if p not in expected]
+    missing = [p for p in expected if p not in present]
+    different = [p for p in expected if p in present and present[p][0] != expected[p][0]]
+    for rel in sorted(p for p in expected if p in present and present[p][0] == expected[p][0]):
+        check_time()
+        mode, info = present[rel]
+        path = base + b'/' + rel
+        if mode == '120000':
+            oid = hasher(os.readlink(path))
+        else:
+            data = read_walked(path, info, f'{name}/{os.fsdecode(rel)}')
+            oid = hasher(data)
+        if oid != expected[rel][1]:
+            different.append(rel)
+    found = {'missing': sorted(missing), 'different': sorted(different), 'unlisted': sorted(unlisted)}
+    if any(found.values()):
+        named = '; '.join(f'{kind} {len(paths)}: ' + ', '.join(os.fsdecode(p) for p in paths[:REPORT_ERRORS])
+                          for kind, paths in found.items() if paths)
+        raise Refused(f'{name} is not exactly its pinned tree ({named})')
+    return {'paths': len(expected), 'equalsListing': True}
+
+
+def lunch_input_checks(tree, inputs, root=ROOT, deadline=None, hasher=git_blob_id, exact=None):
+    """Before lunch, in the copy, no network: each exact source (vendor/adevtool and device/google/laguna-kernels/6.6
+    in the amended contract) is exactly its pinned tree, naming every difference, with no .git yet; the contract's
+    version check, generated vendor files, finder markers, kernel module lists and manifest files are as stated.
+    Refuses by name. Never copies an expected value into the report."""
+    tree = Path(tree)
+    git = inputs['gitRequirement']
+    work = tree/git['project']
+    if work.is_symlink() or not work.is_dir() or os.path.lexists(work/'.git'):
+        raise Refused('lunch-inputs: vendor/adevtool must be a plain directory with no .git before the fetch')
+    trees = {}
+    for project in (exact if exact is not None else exact_sources(inputs)):
+        directory = tree/project
+        if directory.is_symlink() or not directory.is_dir():
+            raise Refused(f'lunch-inputs: {project} is not a plain directory in the copy')
+        try:
+            trees[project] = exact_tree(directory, lunch_listing(inputs, project, root), (), hasher, deadline)
+        except Refused as error:
+            raise Refused(f'lunch-inputs: {project}: {error}') from None
+    version = inputs['versionCheck']
+    data, form = contained_bytes(tree, version['path']), version['expected']['error']
+    if data is None or (sha256_bytes(data), len(data)) != (form['sha256'], form['bytes']):
+        raise Refused(f'lunch-inputs: {version["path"]} is not the error form of the adevtool version check')
+    for row in inputs['generatedVendor']['observable']:
+        data = contained_bytes(tree, row['path'])
+        if data is None or sha256_bytes(data) != row['sha256']:
+            raise Refused(f'lunch-inputs: {row["path"]} is not the generated vendor file the contract observes')
+    for row in inputs['finderPrune']['markers']:
+        data = contained_bytes(tree, row['path'])
+        if data is None or hasher(data) != row['gitBlob']:
+            raise Refused(f'lunch-inputs: the finder marker {row["path"]} is missing or different')
+    for row in inputs['kernelModuleLists']['files']:
+        data = contained_bytes(tree, row['path'])
+        mode = data is not None and ('100755' if os.lstat(tree/row['path']).st_mode & stat.S_IXUSR else '100644')
+        if data is None or (mode, hasher(data)) != (row['mode'], row['gitBlob']):
+            raise Refused(f'lunch-inputs: the kernel module list {row["path"]} is missing or different')
+    for row in inputs['manifestFiles']:
+        problem = manifest_file_problem(tree, row)
+        if problem:
+            raise Refused(f'lunch-inputs: {problem}')
+    return {'contractSha256': LUNCH_INPUTS_SHA256, 'exactTrees': trees, 'versionCheck': 'error form',
+            'observable': len(inputs['generatedVendor']['observable']), 'finderMarkers': len(inputs['finderPrune']['markers']),
+            'kernelModuleLists': len(inputs['kernelModuleLists']['files']), 'manifestFiles': len(inputs['manifestFiles'])}
+
+
+def environment_problems(env, inputs):
+    """The lunch and m environment against the contract's environment.unset: none of its names is present, and no
+    GIT_* variable but the contained ones this adapter sets itself (discovery ceiling, no system or global config)."""
+    names = [n for n in inputs['environment']['unset'] if n != 'GIT_*']
+    return [n for n in names if n in env] + [n for n in env if n.startswith('GIT_') and n not in CONTAINED_GIT]
+
+
+def fetch_env(tree, home, protocol='https'):
+    """gitRequirement.publicFetch.environment (FETCH_ENV_SPEC), as Blazer's git-meta: no inherited GIT_*, no system or
+    global configuration (so no insteadOf, credential helper or hook path), an attempt-owned empty HOME and
+    XDG_CONFIG_HOME, no prompt, only the source's protocol, PATH /usr/bin:/bin and discovery bounded at the copy root.
+    Of the job's environment only its network setup (FETCH_INHERITED: proxies, CA files, LANG) is kept."""
+    env = {k: os.environ[k] for k in FETCH_INHERITED if k in os.environ}
+    env.update(PATH=GIT_PATH, HOME=str(home), XDG_CONFIG_HOME=str(home), GIT_CONFIG_NOSYSTEM='1',
+               GIT_CONFIG_GLOBAL=os.devnull, GIT_TERMINAL_PROMPT='0', GIT_ASKPASS='/bin/false', SSH_ASKPASS='/bin/false',
+               GIT_ALLOW_PROTOCOL=protocol, GIT_CEILING_DIRECTORIES=str(tree))
+    return env
+
+
+def dir_bytes(path):
+    """Bytes of the regular files under path (lstat walk, no link followed); 0 when absent."""
+    total, stack = 0, [os.fsencode(path)]
+    while stack:
+        directory = stack.pop()
+        with contextlib.suppress(FileNotFoundError, NotADirectoryError):
+            with os.scandir(directory) as it:
+                for entry in it:
+                    with contextlib.suppress(FileNotFoundError):
+                        info = entry.stat(follow_symlinks=False)
+                        if stat.S_ISDIR(info.st_mode):
+                            stack.append(entry.path)
+                        elif stat.S_ISREG(info.st_mode):
+                            total += info.st_size
+    return total
+
+
+def end_group(proc, clock=time.monotonic, sleep=time.sleep):
+    """TERM, then KILL, the process group, each with KILL_GRACE_SECONDS to end."""
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(proc.pid, sig)
+        end = clock() + KILL_GRACE_SECONDS
+        while proc.poll() is None and clock() < end:
+            sleep(1)
+        if proc.poll() is not None:
+            break
+
+
+def bounded_git(argv, env, cwd, deadline, gitdir, limit, popen=subprocess.Popen, clock=time.monotonic,
+                sleep=time.sleep, measure=dir_bytes):
+    """(exit, stoppedBy or None) for one git command in its own session: every second the stage deadline and the bytes
+    under gitdir are compared with their limits, and a stop ends the group. Checked once more after exit (overshoot)."""
+    if clock() >= deadline:  # the stage deadline already passed: nothing is started
+        return None, 'timeout'
+    proc = popen(argv, env=env, cwd=cwd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+    stopped = None
+    while proc.poll() is None:
+        if clock() >= deadline:
+            stopped = 'timeout'
+        elif measure(gitdir) > limit:
+            stopped = 'gitBytes'
+        if stopped:
+            end_group(proc, clock, sleep)
+            break
+        sleep(1)
+    code = proc.wait()
+    if not stopped and measure(gitdir) > limit:
+        stopped = 'gitBytes'
+    return code, stopped
+
+
+def git_output(argv, env, cwd, deadline, clock=time.monotonic, run=subprocess.run):
+    """(exit, stdout bytes) of a short read-only git command, bounded by the stage deadline."""
+    left = deadline - clock()
+    if left <= 0:
+        return None, b''
+    try:
+        result = run(argv, env=env, cwd=cwd, capture_output=True, timeout=left)
+    except subprocess.TimeoutExpired:
+        return None, b''
+    return result.returncode, result.stdout
+
+
+def mount_points(text=None):
+    """Every mount point in /proc/self/mountinfo (field 5, octal escapes decoded), bind mounts on one filesystem
+    included; None when the table cannot be read."""
+    if text is None:
+        try:
+            text = Path('/proc/self/mountinfo').read_text()
+        except OSError:
+            return None
+    points = []
+    for line in text.splitlines():
+        fields = line.split(' ')
+        if len(fields) > 4:
+            points.append(re.sub(r'\\([0-7]{3})', lambda m: chr(int(m.group(1), 8)), fields[4]))
+    return points
+
+
+def gitdir_problems(tree, work, inputs, raw_listing, env, lunch_env, deadline, limit, clock=time.monotonic):
+    """Every publicFetch.acceptance item on the new repository but the working tree (adevtool_public_fetch re-checks
+    it): HEAD and shallow are exactly the revision; under the lunch environment (GIT_* unset but the ceiling at the copy
+    root) rev-parse HEAD is the revision, it is a commit and its tree is exactly rootTree; a full fsck passes; ls-tree
+    -r -z --full-tree with each NUL as LF is byte for byte the pinned listing; the local configuration is exactly a new
+    repository's (no remote.*), there is no ref but HEAD, and nothing redirects outside the copy (a real .git directory
+    resolving inside it; no alternates, commondir, gitdir file, hooks or grafts; no link, mount point, other filesystem
+    or second hard link)."""
+    git, problems = inputs['gitRequirement'], []
+    revision, root_tree = git['revision'], git['rootTree']
+    dotgit, tree = work/'.git', Path(tree)
+    real_tree = os.path.realpath(tree)
+
+    def out(*args, environment=env):
+        code, data = git_output(['git', '-C', str(work), *args], environment, str(work), deadline, clock)
+        return code, data.decode(errors='replace')
+
+    if dotgit.is_symlink() or not dotgit.is_dir():
+        return ['vendor/adevtool/.git is not a directory']
+    for name in ('HEAD', 'shallow'):
+        data = contained_bytes(tree, f'{git["project"]}/.git/{name}')
+        if data != (revision + '\n').encode():
+            problems.append(f'{name} is not exactly the pinned revision')
+    code, head = out('rev-parse', 'HEAD', environment=lunch_env)
+    if (code, head.strip()) != (0, revision):
+        problems.append('under the lunch environment rev-parse HEAD is not the pinned revision')
+    code, kind = out('cat-file', '-t', revision, environment=lunch_env)
+    if (code, kind.strip()) != (0, 'commit'):
+        problems.append('the pinned revision is not a commit')
+    code, tree_id = out('rev-parse', '--verify', revision + '^{tree}', environment=lunch_env)
+    if (code, tree_id.strip()) != (0, root_tree):
+        problems.append('the commit tree is not the pinned rootTree')
+    code, _ = out('fsck', '--no-dangling', '--no-progress')
+    if code != 0:
+        problems.append('a full fsck failed')
+    code, listed = git_output(['git', '-C', str(work), 'ls-tree', '-r', '-z', '--full-tree', revision], env, str(work),
+                              deadline, clock)
+    if code != 0 or listed.replace(b'\0', b'\n') != raw_listing:
+        problems.append('the commit tree is not byte for byte the pinned listing')
+    code, config = out('config', '--local', '--list')
+    keys = [line.split('=', 1)[0] for line in config.splitlines()]
+    if code != 0 or sorted(keys) != sorted(GIT_CONFIG_KEYS):
+        problems.append('the repository configuration is not exactly a new repository\'s')
+    code, refs = out('for-each-ref', '--format=%(refname)')
+    if code != 0 or refs.strip() or os.path.lexists(dotgit/'packed-refs'):
+        problems.append('a ref other than HEAD exists')
+    for args in (('rev-parse', '--absolute-git-dir'), ('rev-parse', '--git-common-dir')):
+        code, where = out(*args)
+        resolved = os.path.realpath(work/where.strip()) if code == 0 and where.strip() else ''
+        if resolved != os.path.realpath(dotgit):
+            problems.append(f'{args[1]} does not resolve to vendor/adevtool/.git')
+    for name in GIT_REDIRECTS:
+        if os.path.lexists(dotgit/name):
+            problems.append(f'.git/{name} exists')
+    device, stack = os.lstat(tree).st_dev, [dotgit]
+    while stack:
+        directory = stack.pop()
+        if os.path.ismount(directory):
+            problems.append('a mount point is inside the .git')
+        for entry in os.scandir(directory):
+            info = entry.stat(follow_symlinks=False)
+            if stat.S_ISLNK(info.st_mode):
+                problems.append('a link is inside the .git')
+            elif info.st_dev != device:
+                problems.append('a .git path is on another filesystem')
+            elif stat.S_ISDIR(info.st_mode):
+                stack.append(Path(entry.path))
+            elif stat.S_ISREG(info.st_mode) and info.st_nlink != 1:
+                problems.append('a .git file has a second hard link')
+            elif not stat.S_ISREG(info.st_mode):
+                problems.append('a .git entry is neither a file nor a directory')
+    if not os.path.realpath(dotgit).startswith(real_tree + os.sep):
+        problems.append('the .git does not resolve inside the copy')
+    points, inside = mount_points(), os.path.realpath(dotgit)
+    if points is None:
+        problems.append('the mount table cannot be read')
+    elif any(p == inside or p.startswith(inside + os.sep) for p in points):
+        problems.append('a mount point is inside the .git')
+    if dir_bytes(dotgit) > limit:
+        problems.append(f'the .git holds more than {limit} bytes')
+    return sorted(set(problems))
+
+
+def adevtool_public_fetch(tree, plan, run_root, record, root=ROOT, protocol='https', seconds=ADEVTOOL_FETCH_SECONDS,
+                          limit=ADEVTOOL_GIT_BYTES, popen=subprocess.Popen, clock=time.monotonic, sleep=time.sleep,
+                          hasher=git_blob_id):
+    """The admitted public fetch (gitRequirement.publicFetch) into the copy: fetch_steps under fetch_env, then every
+    acceptance item (gitdir_problems) and the working tree again, all within the attempt's ceiling. On any failure the
+    .git this attempt created is removed, nothing else, and the run refuses; record (the report's adevtoolGit section)
+    says what happened."""
+    inputs, url = plan['inputs'], plan['url']
+    git = inputs['gitRequirement']
+    tree, run_root = Path(tree), Path(run_root)
+    work = tree/git['project']
+    dotgit = work/'.git'
+    record.update(objectsSource='public-fetch', url=url, bounds={'seconds': seconds, 'gitBytes': limit,
+                  'kind': 'first ceilings proposed by Infra, not measurements'})
+    if not url.startswith(protocol + '://'):
+        record.update(ok=False, error=f'the source is not {protocol}')
+        raise Refused(f'adevtool-git: the source is not {protocol}')
+    component = tree
+    for part in Path(git['project']).parts:
+        component = component/part
+        if component.is_symlink():
+            record.update(ok=False, error=f'{component.relative_to(tree)} is a link')
+            raise Refused(f'adevtool-git: {component.relative_to(tree)} is a link; nothing is written through it')
+    if tree.is_symlink() or not work.is_dir() or os.path.lexists(dotgit):
+        record.update(ok=False, error='vendor/adevtool changed before the fetch')
+        raise Refused('adevtool-git: vendor/adevtool must be a plain directory with no .git before the fetch')
+    fetch_git = shutil.which('git', path=GIT_PATH)
+    if fetch_git is None:
+        record.update(ok=False, error='no git on /usr/bin:/bin')
+        raise Refused('adevtool-git: no git on /usr/bin:/bin')
+    raw_listing = lunch_listing(inputs, git['project'], root, raw=True)
+    expected = lunch_listing(inputs, git['project'], root)
+    home = run_root/'tmp/adevtool-git-home'
+    if os.path.lexists(home):
+        record.update(ok=False, error='the fetch home already exists')
+        raise Refused('adevtool-git: the attempt-owned fetch home already exists')
+    home.mkdir(mode=0o700, parents=True)
+    env, lunch_env = fetch_env(tree, home, protocol), contained_env(run_root)
+    deadline = clock() + seconds
+
+    def refuse(why):
+        removed = None
+        if os.path.lexists(dotgit):
+            try:
+                if dotgit.is_symlink():
+                    dotgit.unlink()
+                else:
+                    shutil.rmtree(dotgit)
+                removed = True
+            except OSError:
+                removed = False
+        record.update(ok=False, error=why, createdRemoved=removed)
+        raise Refused(f'adevtool-git: {why}')
+
+    try:
+        for argv in fetch_steps(work, url, git['revision']):
+            code, stopped = bounded_git(argv, env, str(work), deadline, dotgit, limit, popen, clock, sleep)
+            if code or stopped:
+                refuse(f'{argv[3] if argv[1] == "-C" else argv[1]} failed: {stopped or "exit " + str(code)}')
+        problems = gitdir_problems(tree, work, inputs, raw_listing, env, lunch_env, deadline, limit, clock)
+        if problems:
+            refuse('; '.join(problems[:8]))
+        try:
+            exact_tree(work, expected, ('.git',), hasher, deadline, clock)
+        except Refused as error:
+            refuse(f'the working tree no longer holds: {error}')
+        code, head = git_output(['git', '-C', str(work), 'rev-parse', 'HEAD'], lunch_env, str(work), deadline, clock)
+        if (code, head.decode(errors='replace').strip()) != (0, git['revision']):
+            refuse('the final rev-parse HEAD under the lunch environment did not give the revision')
+        tools = {}
+        for role, path in (('fetch', fetch_git), ('lunch', shutil.which('git', path=lunch_env['PATH']))):
+            code, version = git_output([path, '--version'], lunch_env, str(work), deadline, clock) if path else (None, b'')
+            version = version.decode(errors='replace').strip()
+            if code != 0 or not version.startswith('git version '):
+                refuse(f'the {role} git did not report its version')
+            tools[role] = {'path': path, 'version': version}
+        record.update(ok=True, observedHead=head.decode().strip(), gitDirBytes=dir_bytes(dotgit), shallow=True,
+                      alternates=False, remote=False, workingTreeHolds=True, git=tools)
+        return record
+    except Refused:
+        raise
+    except Exception as error:  # noqa: BLE001  (any other failure still removes the created .git and refuses)
+        refuse(f'{type(error).__name__} during the fetch or its checks')
+
+
+def check(binding_path=BINDING, root=ROOT, manifest_path=MANIFEST, inputs_path=None, inputs_pin=LUNCH_INPUTS_SHA256):
+    """(manifest, binding, lunch plan). Invalid on a wrong shape, Unbound while the selected branch lacks an input or a
+    version-checked lunch lacks its admitted adevtool fetch."""
     manifest = load_manifest(manifest_path)
     binding = json.loads(Path(binding_path).read_text())
-    if set(binding) != BINDING_KEYS or binding['schemaVersion'] != 2 or binding['kind'] != 'rose-launcher3-compile-host':
-        raise Invalid('the binding is not an exact rose-launcher3-compile-host v2 record')
+    if set(binding) != BINDING_KEYS or binding['schemaVersion'] != 3 or binding['kind'] != 'rose-launcher3-compile-host':
+        raise Invalid('the binding is not an exact rose-launcher3-compile-host v3 record')
+    if binding['adevtoolGit'] is not None and binding['adevtoolGit'] not in ADEVTOOL_GIT_CLASSES:
+        raise Invalid('adevtoolGit must be null or ' + ', '.join(ADEVTOOL_GIT_CLASSES))
     if binding['host'] != 'immortal-os-builder' or binding['lockFrom'] != 'os/release-pipeline/frankel.json host.lockPath':
         raise Invalid('the binding must name the existing builder and its shared lock')
     if binding['taskParent'] != '/home/pixelbuild/rose-actions':
@@ -580,12 +1244,10 @@ def check(binding_path=BINDING, root=ROOT, manifest_path=MANIFEST):
     unbound = [n for n in needed if values[n] is None]
     if unbound:
         raise Unbound(f'{binding["branch"]} needs inputs not yet bound in {Path(binding_path).name}: {", ".join(unbound)}')
-    if version_checked(binding['lunch']):
-        raise Unbound(f'adevtool_git_missing: {binding["lunch"]} runs adevtool-version-check.mk (git -C vendor/adevtool '
-                      'rev-parse HEAD) in lunch and m; the copy has no .git and no genuine adevtool gitdir copy is bound')
+    plan = lunch_plan(binding, root, inputs_path, inputs_pin)
     if binding['branch'] == 'reconstruct':
         raise Unbound('reconstruct needs an approved genuine-Git-object source; this adapter has none wired')
-    return manifest, binding
+    return manifest, binding, plan
 
 
 def read_bytes(path):
@@ -813,14 +1475,7 @@ def supervised(argv, env, cwd, seconds, out_dir, popen=subprocess.Popen, clock=t
         elif rss(proc.pid) > MEMORY_STOP_BYTES:
             stopped = 'memory'
         if stopped:
-            for sig in (signal.SIGTERM, signal.SIGKILL):
-                with contextlib.suppress(ProcessLookupError):
-                    os.killpg(proc.pid, sig)
-                end = clock() + KILL_GRACE_SECONDS
-                while proc.poll() is None and clock() < end:
-                    sleep(1)
-                if proc.poll() is not None:
-                    break
+            end_group(proc, clock, sleep)
             break
         sleep(SAMPLE_SECONDS)
     return proc.wait(), stopped
@@ -887,12 +1542,23 @@ def task_root(binding, run_id, attempt):
 
 
 def copy_tree(source, destination, root=ROOT, statvfs=os.statvfs, planner=alpha_source.plan_copy,
-              copier=alpha_source.copy_tree, seconds=PREPARE_SECONDS):
-    """The reviewed alpha copy (plan, then alpha_source.copy_tree, which also rebases links) of the selection.
-    Refused before writing on plan problems, the source bound or the reserve; a wall-clock timer stops the copy at
-    `seconds` (the partial tree stays inside the run root and is reported, never used)."""
+              copier=alpha_source.copy_tree, seconds=PREPARE_SECONDS, omit=None):
+    """The reviewed alpha copy (plan, then alpha_source.copy_tree, which also rebases links) of the selection, minus
+    exactly what omit(path, is_dir) names (a frankel lunch: what vendor/adevtool's pinned .gitignore ignores).
+    Refused before writing on plan problems, a kept link into an omitted path, the source bound or the reserve; a
+    wall-clock timer stops the copy at `seconds` (the partial tree stays inside the run root and is reported, never
+    used)."""
     policy = json.loads((root/'os/release-pipeline/cuttlefish-alpha.json').read_text())['preparation']['exclusions']
     plan = planner(source, policy)
+    omitted = []
+    if omit is not None and not plan['problems']:
+        omitted = [e['path'] for e in plan['entries'] if omit(e['path'], e['type'] == 'dir')]
+        dropped = set(omitted)
+        kept = [e for e in plan['entries'] if e['path'] not in dropped]
+        types = {e['path']: e['type'] for e in plan['entries']}
+        plan = dict(plan, entries=kept, excluded=plan['excluded'] + [{'path': p, 'reason': 'omittedFromCopy'} for p in omitted],
+                    problems=[f'{e["path"]} links into the omitted {e["target"]}' for e in kept
+                              if e['type'] == 'link' and e.get('exists') and omit(e['target'], types.get(e['target']) == 'dir')])
     if plan['problems']:
         raise Refused(f'copy_refused: {len(plan["problems"])} problems, first: {plan["problems"][0]}')
     fs = statvfs(destination.parent)
@@ -914,8 +1580,13 @@ def copy_tree(source, destination, root=ROOT, statvfs=os.statvfs, planner=alpha_
     finally:
         signal.setitimer(signal.ITIMER_REAL, 0)
         signal.signal(signal.SIGALRM, previous)
-    return {'entries': len(plan['entries']), 'excluded': len(plan['excluded']), 'projectedBytes': projected,
-            'availableBytesBefore': available}
+    if omit is not None:  # a relative link whose text passes through an omitted path resolves in the source only
+        dangling = [e['path'] for e in plan['entries']
+                    if e['type'] == 'link' and e.get('exists') and not os.path.exists(Path(destination)/e['path'])]
+        if dangling:
+            raise Refused(f'copy_refused: {len(dangling)} kept links dangle in the copy, first: {dangling[0]}')
+    return {'entries': len(plan['entries']), 'excluded': len(plan['excluded']), 'omitted': len(omitted),
+            'projectedBytes': projected, 'availableBytesBefore': available}
 
 
 def bound_json(path):
@@ -942,7 +1613,8 @@ def checked(section, tree, args, label, pins, root, deadline):
 
 
 def run(binding, manifest, run_id, attempt, root=ROOT, lock=None, copier=copy_tree, compiler=supervised,
-        policy_loader=None, bundle_loader=None, pins=tree_pins, clock=time.monotonic):
+        policy_loader=None, bundle_loader=None, pins=tree_pins, clock=time.monotonic, plan=None, inputs_check=None,
+        fetcher=None):
     """The adapter run; returns its exit status and leaves receipts/report.json naming each step's outcome."""
     run_root = task_root(binding, run_id, attempt)
     if Path(binding['taskParent']).is_symlink() or not Path(binding['taskParent']).is_dir():
@@ -964,14 +1636,19 @@ def run(binding, manifest, run_id, attempt, root=ROOT, lock=None, copier=copy_tr
               'identitySharing': manifest['identitySharing']}
     status = 3
     try:
-        if version_checked(binding['lunch']):
-            raise Refused('adevtool_git_missing: the lunch product runs adevtool-version-check.mk and no genuine adevtool '
-                          'gitdir copy is bound; nothing copied')
+        if version_checked(binding['lunch']) and (plan is None or binding['adevtoolGit'] not in ADEVTOOL_GIT_CLASSES):
+            raise Refused('adevtool_git_missing: the lunch product runs adevtool-version-check.mk and no admitted adevtool '
+                          'public fetch is bound; nothing copied')
         with (lock or shared_lock)(lock_path(root)):
             for name in ('home', 'tmp', 'out'):
                 (run_root/name).mkdir(mode=0o700)
             tree = run_root/'tree'
-            report['copy'] = copier(Path(binding['sourceTree']), tree)
+            if plan is not None:
+                project = plan['inputs']['gitRequirement']['project'] + '/'
+                report['copy'] = copier(Path(binding['sourceTree']), tree, omit=lambda rel, is_dir: rel.startswith(project)
+                                        and adevtool_ignored(rel[len(project):], is_dir))
+            else:
+                report['copy'] = copier(Path(binding['sourceTree']), tree)
             try:
                 policy, policy_sha = (policy_loader or bound_json)(binding['policyReceipt']['path'])
             except (OSError, ValueError):
@@ -1003,6 +1680,19 @@ def run(binding, manifest, run_id, attempt, root=ROOT, lock=None, copier=copy_tr
             out = run_root/'out'
             targets = compile_targets(manifest, out)
             env = contained_env(run_root)
+            if plan is not None:
+                leaked = environment_problems(env, plan['inputs'])
+                if leaked:
+                    raise Refused('lunch-inputs: the lunch environment passes ' + ', '.join(leaked))
+                try:
+                    report['lunchInputs'] = (inputs_check or lunch_input_checks)(tree, plan['inputs'], root,
+                                                                                  clock() + LUNCH_INPUT_SECONDS,
+                                                                                  exact=plan.get('exact'))
+                except (OSError, ValueError) as error:
+                    raise Refused(f'lunch-inputs: {type(error).__name__} while reading the copy') from None
+                report['lunchInputs']['bounds'] = {'seconds': LUNCH_INPUT_SECONDS}
+                report['adevtoolGit'] = {}
+                (fetcher or adevtool_public_fetch)(tree, plan, run_root, report['adevtoolGit'], root)
             code, stopped = compiler(lunch_argv(binding['lunch']), env, str(tree), LUNCH_SECONDS, str(out))
             report['lunch'] = {'exit': code, 'stoppedBy': stopped}
             if code != 0 or stopped:
@@ -1081,12 +1771,14 @@ def main(argv=None):
     p.add_argument('--binding', default=str(BINDING), help=argparse.SUPPRESS)
     a = p.parse_args(argv)
     try:
-        manifest, binding = check(a.binding)
+        manifest, binding, plan = check(a.binding)
         if a.command == 'check':
             if a.run_id or a.attempt or a.upload_dir:
                 raise Invalid('check takes no other option')
             prepare = PREPARE_SECONDS + KILL_GRACE_SECONDS + (2 if binding['branch'] == 'verifyBaseApplyCandidate' else 1) * PIN_SECONDS
             outer = prepare + LUNCH_SECONDS + KILL_GRACE_SECONDS + COMPILE_SECONDS + KILL_GRACE_SECONDS + 600
+            if plan is not None:
+                outer += LUNCH_INPUT_SECONDS + ADEVTOOL_FETCH_SECONDS + KILL_GRACE_SECONDS
             finish_outer = FINISH_SECONDS + KILL_GRACE_SECONDS
             print(f'outer_seconds={outer}\nfinish_seconds={FINISH_SECONDS}\njob_minutes={-(-(outer + finish_outer) // 60) + 10}')
             return 0
@@ -1096,7 +1788,7 @@ def main(argv=None):
             return finish(binding, a.run_id, a.attempt, a.upload_dir)
         if a.upload_dir:
             raise Invalid('run takes no --upload-dir')
-        return run(binding, manifest, a.run_id, a.attempt)
+        return run(binding, manifest, a.run_id, a.attempt, plan=plan)
     except Unbound as error:
         print(json.dumps({'verdict': 'SETUP_MISSING', 'error': str(error)}), file=sys.stderr)
         return 4

@@ -1,7 +1,7 @@
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "kind": "rose-launcher3-compile-host",
-  "basis": "LAUNCHER3-COMPILE adapter binding (Release-owned): the host inputs scripts/launcher3-compile.py needs to compile Launcher3QuickStepLib against OS Product's input contract os/compile-contracts/launcher3-quickstep-lib.json (schema 2). branch selects verifyIntegrated (the copy is exactly the final images), verifyBaseApplyCandidate (the copy is exactly the base images of an Infra-reported integrating bundle that matches base.bundleContent; the candidate delta is then applied in the copy only) or reconstruct (refused: no approved genuine-Git-object source). Every host fact is null until it is verified and committed: sourceTree (the tree byte-copied into the per-run root), lunch (frankel-cur-user needs the retained vendor/google_devices/frankel and a real vendor/adevtool git; a non-vendor product needs a release-config comparison), policyReceipt (the background policy receipt whose sha256 the config.xml check binds), bundleReport (Infra's report of the integrating bundle's patches and overlays, in base.bundleContent's own form, with its sha256) and reconstructSource. While any input of the selected branch is null the hosted check exits 4 before the controller. The reference display address and locked-control inputs are derived from os/release-pipeline/frankel.json applyArgs, not stated here. Nothing here was read from or run on any host.",
+  "basis": "LAUNCHER3-COMPILE adapter binding (Release-owned): the host inputs scripts/launcher3-compile.py needs to compile Launcher3QuickStepLib against OS Product's input contract os/compile-contracts/launcher3-quickstep-lib.json (schema 2). branch selects verifyIntegrated (the copy is exactly the final images), verifyBaseApplyCandidate (the copy is exactly the base images of an Infra-reported integrating bundle that matches base.bundleContent; the candidate delta is then applied in the copy only) or reconstruct (refused: no approved genuine-Git-object source). Every host fact is null until it is verified and committed: sourceTree (the tree byte-copied into the per-run root), lunch (frankel-cur-user needs the retained vendor/google_devices/frankel and the lunch inputs of os/compile-contracts/frankel-lunch-inputs.json, including a genuine vendor/adevtool git; a non-vendor product needs a release-config comparison), policyReceipt (the background policy receipt whose sha256 the config.xml check binds), bundleReport (Infra's report of the integrating bundle's patches and overlays, in base.bundleContent's own form, with its sha256), reconstructSource and adevtoolGit (null, or public-fetch: the pinned adevtool commit fetched from the pinned manifest's public source into the copy, admitted only when the pinned lunch-input contract lists that class; binding it needs its own runtime approval). While any input of the selected branch is null the hosted check exits 4 before the controller. The reference display address and locked-control inputs are derived from os/release-pipeline/frankel.json applyArgs, not stated here. Nothing here was read from or run on any host.",
   "host": "immortal-os-builder",
   "lockFrom": "os/release-pipeline/frankel.json host.lockPath",
   "taskParent": "/home/pixelbuild/rose-actions",
@@ -10,5 +10,6 @@
   "lunch": null,
   "policyReceipt": {"path": null, "sha256": null},
   "bundleReport": {"path": null, "sha256": null},
-  "reconstructSource": null
+  "reconstructSource": null,
+  "adevtoolGit": null
 }
