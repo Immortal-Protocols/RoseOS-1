@@ -23,6 +23,9 @@ sys.path.insert(0, str(SCRIPTS/'tests'))
 from test_app_release_publisher import signing_block  # noqa: E402
 import app_release_publisher as publisher  # noqa: E402
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import os_release_shape as shape  # noqa: E402
+
 def load(name):
     spec = importlib.util.spec_from_file_location(name.replace('-', '_'), SCRIPTS/f'{name}.py')
     module = importlib.util.module_from_spec(spec)
@@ -349,8 +352,8 @@ class WorkflowAppReuseTest(unittest.TestCase):
             self.assertNotIn(absent, job)
         self.assertIn('          name: app-release-dev.pixel.voice-${{ github.run_id }}\n          path: ${{ env.ROSE_BASE }}/artifact\n', job)
         self.assertIn('      - name: Remove the reuse attempt from the builder (the original attempt is untouched)\n        if: always()\n', job)
-        self.assertIn('alpha-verify-retained, alpha-export, app-reuse, request-signing, signed-builder, publisher]\n', self.jobs['cleanup'])
-        self.assertIn('emulator-alpha-verify-retained, app-reuse, emulator-alpha-export, rango-factory-observe, launcher3-compile, blazer-compile, blazer-integrate]\n', WORKFLOW)
+        self.assertIn('app-reuse', shape.cleanup_needs())
+        self.assertIn('app-reuse', shape.modes())
         self.assertIn('  REUSE_BINDING: ${{ inputs.reuse_binding }}\n', WORKFLOW)
         self.assertIn("    if: inputs.mode == 'os-release' || inputs.mode == 'latest-beta'\n", self.jobs['builder'])
         self.assertIn("    if: inputs.mode == 'app-only'\n", self.jobs['app-builder'])

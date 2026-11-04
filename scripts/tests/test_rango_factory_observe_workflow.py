@@ -8,8 +8,12 @@ from pathlib import Path
 import re
 import stat
 import subprocess
+import sys
 import tempfile
 import unittest
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import os_release_shape as shape  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = (ROOT/'.github/workflows/os-release.yml').read_text()
@@ -68,12 +72,12 @@ class Guard(unittest.TestCase):
                 self.assertNotEqual(self.run_branch(**change), 0)
 
     def test_mode_is_manual_selectable_and_checked_before_the_controller(self):
-        self.assertIn(f', emulator-alpha-export, {MODE}, launcher3-compile, blazer-compile, blazer-integrate]\n', WORKFLOW)
+        self.assertIn(MODE, shape.modes())
         self.assertEqual(re.findall(r'(?m)^  (\w+):\n', WORKFLOW.split('\npermissions:', 1)[0].split('\non:\n', 1)[1]), ['workflow_dispatch'])
         guard = jobs()['guard']
         check = step(guard, 'Rango factory observation check')
         self.assertIn(f"        if: inputs.mode == '{MODE}'\n        run: python3 scripts/rango-factory-observe.py check\n", check)
-        self.assertIn(f'"$MODE" == rango-factory-observe || "$MODE" == launcher3-compile || "$MODE" == blazer-compile || "$MODE" == blazer-integrate ]] || git merge-base --is-ancestor', guard)
+        self.assertIn(MODE, shape.main_check_exempt_modes())  # a bare dispatch: no candidate to check against main
         self.assertEqual(re.search(r'(?m)^    needs: (.+)$', jobs()['controller'])[1], 'guard')
 
 
