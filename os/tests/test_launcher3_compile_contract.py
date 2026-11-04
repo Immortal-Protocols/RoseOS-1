@@ -171,6 +171,28 @@ class Launcher3CompileContractTest(unittest.TestCase):
         (work/'os/overlays'/gesture).write_bytes(b'// a third version\n')
         self.assertIn(f'os/overlays/{gesture}: neither the base nor the candidate bytes', run())
 
+    def test_each_base_overlay_image_has_a_pinned_copy(self):
+        """A consumer can reach every candidate overlay's base image even when the committed os/ is at the candidate
+        (#440's branch): a pinned copy sits beside the pre-image fixtures, at exactly candidateDelta's before."""
+        manifest = self.manifest()
+        contract = self.contract()
+        bases = [o for o in manifest['candidateDelta']['overlays'] if o['before'] is not None]
+        self.assertEqual([o['target'].rsplit('/', 1)[1] for o in bases], ['RoseEdgeGesture.java'])
+        for o in bases:
+            copy = CONTRACT_FIXTURES/o['target']
+            self.assertEqual(hashlib.sha256(copy.read_bytes()).hexdigest(), o['before'])
+            self.assertEqual(contract.base_overlay_copy(o['target']), copy)
+        work = Path(tempfile.mkdtemp(prefix='contract-base-copy-'))
+        self.addCleanup(shutil.rmtree, work, True)
+        shutil.copytree(CONTRACT_FIXTURES, work/'fixtures')
+        target = work/'fixtures'/bases[0]['target']
+        for change in (lambda: target.write_bytes(target.read_bytes() + b'\n'), target.unlink):
+            contract = self.contract()
+            contract.FIXTURES = work/'fixtures'
+            change()
+            self.assertTrue(any('no pinned copy of the base overlay image' in e for e in contract.check_candidate(manifest)))
+            shutil.copyfile(CONTRACT_FIXTURES/bases[0]['target'], target)
+
     def test_every_project_is_pinned_by_its_own_tree_and_base_is_bound_by_content(self):
         import gzip
         contract = self.contract()

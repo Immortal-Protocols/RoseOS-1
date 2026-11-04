@@ -72,6 +72,11 @@ frameworks/base and build/release are identical to the candidate.
 plus delta equals an integration with the edge patch registered after the switcher patch. The checker proves this
 offline.
 
+Each candidate overlay with a base image (`before`) also has a pinned copy of that base at
+`os/tests/fixtures/launcher3-compile-contract/<target>`. The checker verifies the copy's sha256 against `before`. It
+lets a consumer reach the base when the committed `os/` is at the candidate (#440's branch), where `os/overlays` holds
+the candidate bytes. `--write` refreshes the copy from `os/overlays` while they are at the base.
+
 Paths in `candidateDelta.files` and in overlay targets are relative to the source tree root, project path first. Paths in
 `projects[].files` and `base.projects[].files` are relative to their project. Bundle paths are relative to this
 repository (`candidateDelta.pathConvention`). The committed os/ must be wholly at the base (this bundle) or wholly at the
