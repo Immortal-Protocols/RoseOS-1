@@ -83,6 +83,7 @@ class CodexConductor:
         self._events = queue.Queue()
         self._stopped = threading.Event()
         self._user_speaking = False
+        self._backchannel_candidate = False
         self._speech_start = 0
         self._announcements = queue.Queue()
         self.client = client_factory(self._events.put)
@@ -383,7 +384,8 @@ class CodexConductor:
                 s.task.finished = time.time()
                 self.log(s, 'task_finished', status=s.task.status, result=s.task.result)
                 self._task_event(s)
-                self._announcements.put(s)
+                # A follow-up can replace this session's task before speech is free.
+                self._announcements.put((s.conversation, s.task.result))
             elif s.utterance:
                 s.utterance.finish()
                 self._background(self._heard, s.utterance, s.rid, s.conversation, s.thread, s.turn)
@@ -523,6 +525,8 @@ class CodexConductor:
         from .conductor import is_backchannel, is_hold
         if ev.kind == 'speech_start':
             self._user_speaking, self._speech_start = True, time.monotonic()
+            self._backchannel_candidate = bool(self.sessions['conversation'].busy or
+                                               (self.speaker and self.speaker.audible))
             if self.speaker:
                 self.speaker.duck()
                 def pause():
@@ -531,7 +535,7 @@ class CodexConductor:
                 threading.Timer(0.2, pause).start()
         elif ev.kind in ('noise', 'turn_end'):
             self._user_speaking = False
-            if ev.kind == 'noise' or is_backchannel(ev.text):
+            if ev.kind == 'noise' or (self._backchannel_candidate and is_backchannel(ev.text)):
                 if self.speaker:
                     self.speaker.resume()
                     self.speaker.unduck()
@@ -546,12 +550,11 @@ class CodexConductor:
         if s.busy or self._user_speaking or (self.speaker and self.speaker.audible):
             return
         try:
-            task_session = self._announcements.get_nowait()
+            conversation, text = self._announcements.get_nowait()
         except queue.Empty:
             return
-        if task_session.conversation != s.conversation:
+        if conversation != s.conversation:
             return
-        text = task_session.task.result
         if self.speaker and text:
             rid = next(self._reply_ids)
             utterance = self.speaker.utterance(rid, None)

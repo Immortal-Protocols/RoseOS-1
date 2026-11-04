@@ -182,6 +182,20 @@ class Integration(unittest.TestCase):
         self.assertTrue(a.busy)
         self.assertIn(('interrupt', 'conversation', {}), self.engine.client.calls)
 
+    def test_standalone_okay_is_a_turn_and_in_reply_okay_is_a_backchannel(self):
+        turns = []
+        self.engine.inject_text_turn = turns.append
+        self.engine.on_listen(SimpleNamespace(kind='speech_start',text=''))
+        self.engine.on_listen(SimpleNamespace(kind='turn_end',text='okay'))
+        self.assertEqual(turns,['okay'])
+        s = self.engine.sessions['conversation']
+        s.busy = True
+        self.engine.on_listen(SimpleNamespace(kind='speech_start',text=''))
+        self.engine.on_listen(SimpleNamespace(kind='turn_end',text='okay'))
+        self.assertEqual(turns,['okay'])
+        self.assertFalse(s.cancelled.is_set())
+        s.busy = False
+
     def test_expired_login_is_visible_and_persisted_without_fallback(self):
         request = self.engine.client.request
         def expired(op, session, **p):
@@ -261,6 +275,22 @@ class Integration(unittest.TestCase):
         self.assertTrue(any(e['kind']=='cancellation_uncertain' for e in events))
         self.assertFalse(any(e['kind']=='cancellation_acknowledged' for e in events))
         self.assertFalse(any(op=='stop' for op,_ in self.controller.calls))
+
+    def test_queued_task_announcement_keeps_its_result_after_followup(self):
+        self.engine.sessions['conversation'].busy = True
+        a = self.task('Calculator')
+        self.call(a, 'open_app', app='Calculator')
+        a.text = 'Calculator is open.'
+        self.engine._event({'event':'done','session':a.name,'turn':{'id':a.turn,'status':'completed'}})
+        self.engine.update(a.task.id, 'Continue in Calculator')
+        self.assertTrue(wait(lambda: a.busy))
+        spoken = []
+        utterance = SimpleNamespace(add=spoken.append, finish=lambda: None)
+        with patch.object(self.engine, '_heard'), patch.object(self.engine, 'speaker',
+                SimpleNamespace(audible=False, utterance=lambda *args: utterance)):
+            self.engine.sessions['conversation'].busy = False
+            self.assertTrue(wait(lambda: spoken))
+        self.assertEqual(spoken, ['Calculator is open.'])
 
     def test_model_image_resize_does_not_mutate_cached_phone_observation(self):
         from PIL import Image
