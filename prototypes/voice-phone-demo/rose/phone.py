@@ -251,7 +251,7 @@ class Phone:
 
         return list(APPS)
 
-    def workspace_app(self) -> str | None:
+    def workspace_app(self, view: str | None = None) -> str | None:
         return None
 
     def look_workspace(self) -> Image.Image | None:

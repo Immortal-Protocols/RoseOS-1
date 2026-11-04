@@ -56,6 +56,13 @@ UNIT_BUDGET_MS = 60.0
 # ~33 ms at 16, ~46 ms at 32, ~72 ms at 48, ~144 ms at 128 (a fixed ~20 ms
 # per forward), so 32 is the largest chunk inside the budget.
 IMAGE_CHUNK = 32
+# Background prefill (phone agent, thinker) runs in the largest of these
+# chunks whose forward fits CHUNK_BUDGET_MS on this model, timed once at load,
+# so a reply waiting behind one is not held up for long. Measured after 1,024
+# cached tokens on an M4 Max: 128 tokens take ~100 ms on the 35B-A3B; on
+# Qwen3.8-27B (dense) 32 take ~165 ms and 128 ~635 ms.
+CHUNKS = (128, 64, 32, 16)
+CHUNK_BUDGET_MS = 180.0
 
 
 def user_segment(text: str) -> str:
@@ -105,7 +112,28 @@ class Brain:
         self.vision_end = cfg.vision_end_token_id
         self.image_pad = cfg.image_token_id
         self.merge = cfg.vision_config.spatial_merge_size
+        self.repo = repo
+        self.bg_chunk = self._fit_chunk()
         self.load_s = time.perf_counter() - t
+
+    def _fit_chunk(self) -> int:
+        """Largest of CHUNKS whose prefill fits CHUNK_BUDGET_MS (else the smallest)."""
+
+        seq = self.sequence("calibrate")
+        ids = self.encode("Rose is a voice assistant on the phone. " * 160)
+        for _ in seq.prefill(ids[:1024]):
+            pass
+        mark = seq.mark()
+        seq._forward(ids[1024:1040], want_logits=True)  # warm up the kernels
+        mx.eval(seq.logits)
+        for n in CHUNKS:
+            seq.rewind(mark)
+            t = time.perf_counter()
+            seq._forward(ids[1024 : 1024 + n], want_logits=True)
+            mx.eval(seq.logits)
+            if (time.perf_counter() - t) * 1e3 <= CHUNK_BUDGET_MS:
+                return n
+        return CHUNKS[-1]
 
     def _single(self, text: str) -> int:
         ids = self.tok.encode(text, add_special_tokens=False)
