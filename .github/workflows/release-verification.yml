@@ -361,6 +361,14 @@ jobs:
           python3 scripts/tests/test_frankel_factory_package_workflow.py
           python3 scripts/tests/test_rango_factory_inspect_workflow.py
           python3 scripts/tests/test_launcher3_compile.py
+          python3 scripts/tests/test_blazer_allocate.py
+          python3 scripts/tests/test_blazer_binding_observe.py
+          python3 scripts/tests/test_blazer_candidate_bundle.py
+          python3 scripts/tests/test_blazer_compile_workflow.py
+          python3 scripts/tests/test_blazer_integrate_wiring.py
+          python3 scripts/tests/test_blazer_reconcile_seed.py
+          python3 scripts/tests/test_launcher3_compile_workflow.py
+          python3 scripts/tests/test_ssh_keygen_observe.py
           python3 scripts/tests/test_agent_beta_auto.py
           python3 scripts/tests/test_release_transport.py
           python3 scripts/tests/test_release_acceptance.py
