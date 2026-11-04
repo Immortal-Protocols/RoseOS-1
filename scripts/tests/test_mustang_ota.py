@@ -163,6 +163,7 @@ class PublicationTest(unittest.TestCase):
         self.assertFalse(auto.dispatch({})['dispatched'])
     def test_recorded_read_access_must_be_explicit_and_current(self):
         now = datetime.datetime(2026,11,4,tzinfo=datetime.timezone.utc)
+        self.cfg['signingAccess'] = dict(status='pending', approvalRef=None, expiresAt=None)
         with self.assertRaisesRegex(ValueError, 'approved current binding'):
             ota.guard(self.cfg, access=True, now=now)
         self.cfg['signingAccess'] = dict(status='approved', approvalRef='synthetic approval', expiresAt='2026-11-04T00:29:59Z')
