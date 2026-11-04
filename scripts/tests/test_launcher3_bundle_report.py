@@ -37,7 +37,7 @@ producer = load('launcher3_bundle_report', 'scripts/launcher3-bundle-report.py')
 adapter = load('launcher3_compile', 'scripts/launcher3-compile.py')
 checker = load('launcher3_compile_contract', 'scripts/launcher3-compile-contract.py')  # the tests may read it; the producer never
 CONTRACT = json.loads((ROOT/'os/compile-contracts/launcher3-quickstep-lib.json').read_text())
-PREFIXES = list(checker.REQUIRED_OVERLAYS)  # the contract carries them as data only from OS Product's re-pin on
+PREFIXES = CONTRACT['overlayRoles']['required']['prefixes']  # the contract states them as data (d444df92)
 
 
 def sha(data):
@@ -134,6 +134,15 @@ class Integration:
     def produce(self):
         return producer.produce(root=self.root, contract=self.contract)[0]
 
+    def run_document(self):
+        """The run document as the adapter's binding names it: {sha256 of its committed bytes, its run fields}."""
+        data = (self.root/producer.RUN).read_bytes()  # the committed blob, as produce() requires
+        document = json.loads(data)
+        return {'sha256': sha(data), 'fields': {k: document[k] for k in producer.RUN_KEYS}}
+
+    def problems(self, report):
+        return adapter.bundle_report_problems(report, self.contract['base'], self.run_document())
+
 
 class Produce(unittest.TestCase):
     def setUp(self):
@@ -141,7 +150,7 @@ class Produce(unittest.TestCase):
 
     def test_a_report_from_headshas_history_and_the_receipt_is_what_the_adapter_accepts(self):
         report, main = producer.produce(root=self.s.root, contract=self.s.contract)
-        self.assertEqual(adapter.bundle_report_problems(report, self.s.contract['base']), [])
+        self.assertEqual(self.s.problems(report), [])
         self.assertEqual(main, self.s.revision)  # the origin/main commit HEAD was found on
         self.assertNotEqual(self.s.head, self.s.revision)
         self.assertEqual(report['producer'], {'path': 'scripts/launcher3-bundle-report.py',
@@ -222,7 +231,7 @@ class Produce(unittest.TestCase):
         self.assertNotEqual(main, s.revision)  # origin/main is that merge, and it holds headSha
         self.assertEqual((report['candidate']['onMain'], report['producer']['roseRevision']), (False, s.revision))
         self.assertIn('candidate.onMain is not true: headSha is reachable from main (association)',
-                      adapter.bundle_report_problems(report, s.contract['base']))
+                      s.problems(report))
 
     def test_a_damaged_object_store_refuses_before_anything_is_reported(self):
         """git serves a loose object's bytes without re-hashing them, so a damaged store could misstate headSha. The
@@ -307,7 +316,7 @@ class Produce(unittest.TestCase):
         s = Integration()
         s.receipt(entries={f'{FB}/libs/N.java': {'after': sha(b'x'), 'action': 'installed'},
                            f'{L3}/quickstep/A.java': {'after': None, 'action': 'removed'}})
-        self.assertEqual(adapter.bundle_report_problems(s.produce(), s.contract['base']), [])
+        self.assertEqual(s.problems(s.produce()), [])
 
     def test_the_run_document_is_the_reviewed_one(self):
         cases = [('an uncommitted edit', lambda s: (s.root/producer.RUN).write_text(
@@ -357,7 +366,7 @@ class Produce(unittest.TestCase):
         report = s.produce()
         self.assertFalse(report['candidate']['onMain'])
         self.assertIn('candidate.onMain is not true: headSha is reachable from main (association)',
-                      adapter.bundle_report_problems(report, s.contract['base']))
+                      s.problems(report))
         # a directory inside the checkout that holds copies of the producer and the run document is not the checkout
         s = Integration()
         for path in (producer.PRODUCER, producer.RUN):
@@ -440,7 +449,7 @@ class Produce(unittest.TestCase):
         self.assertIn({'target': f'{L3}/res/new.xml', 'sha256': sha(b'new\n')}, report['observed']['overlays'])
         self.assertEqual(report['observed']['notAnInputOverlays'], [f'{FB}/libs/N.java'])
         self.assertNotIn('packages/apps/Updater/U.java', json.dumps(report['observed']))  # outside the three projects
-        self.assertIn('observed.unclassified is not empty', adapter.bundle_report_problems(report, s.contract['base']))
+        self.assertIn('observed.unclassified is not empty', s.problems(report))
         # a file at a project's own path is unclassified, never an overlay or skipped as outside
         s = Integration(overlays={f'{L3}/quickstep/A.java': b'a\n', f'{BR}/aconfig/B.bp': b'b\n', FB: b'a file\n'})
         self.assertEqual(s.produce()['observed']['unclassified'], [FB])
@@ -540,9 +549,12 @@ class Committed(unittest.TestCase):
         with self.assertRaisesRegex(producer.Unbound, 'runId, runAttempt, headSha, label, createdAt, updatedAt'):
             producer.load_run(ROOT, 'HEAD')
 
-    def test_the_committed_contract_needs_its_prefixes_as_data(self):
-        with self.assertRaisesRegex(producer.Invalid, 'overlayRoles.required.prefixes'):
-            producer.load_contract()
+    def test_the_committed_contract_states_its_prefixes_and_values_as_data(self):
+        contract = producer.load_contract()
+        self.assertEqual(contract['overlayRoles']['required']['prefixes'], ['packages/apps/Launcher3/', 'build/release/'])
+        self.assertEqual(contract['overlayRoles']['required']['prefixes'], list(checker.REQUIRED_OVERLAYS))  # parity
+        self.assertEqual(producer.registration_source(contract), 'base.registration')
+        self.assertEqual(contract['base']['bundleReport']['values'], adapter.BUNDLE_REPORT_VALUES)
 
     def test_only_the_pinned_contract_is_read(self):
         with self.assertRaisesRegex(producer.Invalid, 'not the contract version this producer reads'):
@@ -550,9 +562,8 @@ class Committed(unittest.TestCase):
 
     def test_this_checkouts_overlays_and_patches_are_the_pinned_base_bundle(self):
         """While main's os/ is at the base (until #440's candidate lands, when OS Product regenerates the contract):
-        observed at HEAD, with the checker's prefixes, equals base.bundleContent and leaves nothing unclassified."""
+        observed at HEAD, with the contract's own prefixes, equals base.bundleContent and leaves nothing unclassified."""
         contract = copy.deepcopy(CONTRACT)
-        contract['overlayRoles']['required']['prefixes'] = list(PREFIXES)
         seen = producer.observed(contract, ROOT, 'HEAD')
         content = contract['base']['bundleContent']
         self.assertEqual(seen['unclassified'], [])

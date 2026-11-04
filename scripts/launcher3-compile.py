@@ -5,10 +5,14 @@ loads OS Product's checker (scripts/launcher3-compile-contract.py), which B's te
 
   check                       hosted and on the builder: the contract is the pinned version (MANIFEST_SHA256; the
                               text it states and this adapter implements, CONTRACT_TEXT_SHA256), the binding
-                              os/build-only/launcher3-compile-host.json is exact, every input the selected branch
-                              requires is bound and every input it forbids is null (branches.requires, forbids), and
-                              no bound receipt or report is a file of the source tree or of a launcher3-compile run
-                              root. Exit 4 while any required input is null. Reads no host path. The lunch is the
+                              os/build-only/launcher3-compile-host.json is an exact v4 record, every input the
+                              selected branch requires is bound and every input it forbids is null (branches.requires,
+                              forbids), and no bound receipt or report is a file of the source tree or of a
+                              launcher3-compile run root. The bundle report's binding also names the reviewed
+                              run-association document (bundleReport.run: os/build-only/launcher3-bundle-run.json by
+                              path and the sha256 of its committed bytes), which must then be an exact
+                              rose-launcher3-bundle-run v1 with every run field entered. Exit 4 while any required
+                              input is null. Reads no host path. The lunch is the
                               contract's lunch (definitions.lunch): the target of OS Product's lunch-input contract
                               os/compile-contracts/frankel-lunch-inputs.json at its pin (LUNCH_INPUTS_SHA256), which also
                               needs the binding's adevtoolGit (public-fetch) and that contract's own admission of the
@@ -29,9 +33,11 @@ loads OS Product's checker (scripts/launcher3-compile-contract.py), which B's te
                                  projects matches its tree pin (Git blob IDs recomputed from the copied bytes), with no
                                  extra path; nothing is applied;
                                  verifyBaseApplyCandidate - base-exact (the bound rose-integration-bundle-report v1
-                                 is exactly base.bundleReport's form, the association it shows holds and its observed
-                                 bundle equals base.bundleContent; then the copy equals the base images and base tree
-                                 pins), delta-preimages (every delta file and overlay at its before image),
+                                 is exactly base.bundleReport's form, the association it shows holds, its values are
+                                 base.bundleReport.values' (registration.source; run.bindingSha256 and the run fields
+                                 the bound run document's; every observed overlay under overlayRoles.required.prefixes)
+                                 and its observed bundle equals base.bundleContent; then the copy equals the base images
+                                 and base tree pins), delta-preimages (every delta file and overlay at its before image),
                                  isolated-apply (every digest-checked candidate patch passes `git apply --check` on the
                                  unchanged copy before any is applied, then each is applied with exactly the
                                  contract's steps and the candidate overlays installed, in the copy only, never the
@@ -96,9 +102,10 @@ sys.path.insert(0, str(ROOT/'scripts'))
 import alpha_source  # noqa: E402  (the reviewed copy plan and per-file copy)
 
 MANIFEST = ROOT/'os/compile-contracts/launcher3-quickstep-lib.json'
-# OS Product's reviewed contract version (schema 3, e21ffeb on 9078ccf: #440 2f57a5f with E2c). A different manifest is
-# refused until this pin is updated.
-MANIFEST_SHA256 = '466f5ab88e4c110318e6e2533635db9bfcbf6ff73fc40dc54fbcc4c72f0593b4'
+# OS Product's reviewed contract version (schema 3, fd4e9ef: the #440 2f57a5f E2c contract of e21ffeb, with
+# base.bundleReport's values and the required-overlay prefixes stated as data). A different manifest is refused until
+# this pin is updated.
+MANIFEST_SHA256 = 'd444df92f170de1b2e7199cec954101f720f9e98e0b3f534c7f3a4cac87e43d5'
 CONDITIONS = ['base-exact', 'delta-preimages', 'isolated-apply', 'final-exact']
 # The binding inputs each branch requires and forbids, in the contract's own vocabulary (branches.requires, forbids):
 # check() binds and refuses exactly these, so the contract and this adapter cannot drift.
@@ -129,6 +136,19 @@ BUNDLE_REPORT_FIELDS = {'producer': ['path', 'sha256', 'roseRevision'],
                                      'notAnInputOverlays',
                                      'unclassified']}
 PATCHER_FILES = ('apply-os-changes.py', 'background_apks.py', 'integration_copy.py')
+# base.bundleReport.values: what a producer could not otherwise know, stated as data. bundle_report_problems checks each:
+# registration.source exactly; run.bindingSha256, and every run field, against the run document the binding names; and
+# every observed overlay under overlayRoles.required.prefixes, which contract_shape binds to exactly REQUIRED_PREFIXES.
+BUNDLE_REPORT_VALUES = {'registration.source': {'equals': 'base.registration'},
+                        'run.bindingSha256': {'is': 'the sha256 of the reviewed run-association document\'s bytes '
+                                              '(runId, runAttempt, headSha, label, createdAt, updatedAt), which the '
+                                              'adapter\'s own host binding names by path and sha256'},
+                        'observed.overlays': {'under': 'overlayRoles.required.prefixes'}}
+REQUIRED_PREFIXES = ['packages/apps/Launcher3/', 'build/release/']
+# The reviewed run-association document (Release's file, Infra's values, entered by review from GitHub run metadata)
+# that the binding's bundleReport.run names by this path and the sha256 of its committed bytes.
+RUN_DOCUMENT = 'os/build-only/launcher3-bundle-run.json'
+RUN_FIELDS = ('runId', 'runAttempt', 'headSha', 'label', 'createdAt', 'updatedAt')
 # What this adapter reads each bundle-report field as: the contract names the fields, and their types are this adapter's
 # reading of the names and of the association text. REPORT_ROWS are the {name: subspec} keys that hold a list of
 # objects; every other such key holds one object. Times are UTC seconds as GitHub run metadata and host-reconcile.py
@@ -155,12 +175,12 @@ REPORT_TIME = '%Y-%m-%dT%H:%M:%SZ'
 # are named here; Release's lunch-input observer has no committed path yet.
 NEVER_PRODUCERS = ('scripts/launcher3-compile.py', 'scripts/launcher3-compile-contract.py')
 # The association base-exact cannot check from the report itself; report.json lists it as taken on trust.
-BUNDLE_TRUSTED = ('the run fields, entered by review from GitHub run metadata, and the recipe lines at headSha that make '
-                  'the run commit both the candidate and the trusted checkout',
+BUNDLE_TRUSTED = ('the run document\'s fields, entered by review from GitHub run metadata (the report\'s run fields and '
+                  'bindingSha256 are checked against the document the binding names), and the recipe lines at headSha '
+                  'that make the run commit both the candidate and the trusted checkout',
                   'headSha reachable from main (only candidate.onMain is read)',
                   'exactly one *-<label>.json of that label, and receipt.receiptSha256 (the receipt itself is not read)',
                   'the patcher bytes, applyArgs, os/patches and os/overlays at headSha, and candidate.frankelConfigSha256',
-                  'registration.source and run.bindingSha256, for which the contract states no value',
                   'the producer at a reviewed commit (its path is only checked not to be the adapter or the checker)')
 # base.registration.applyArgsSource: where check() reads frankel's committed applyArgs.
 APPLY_ARGS_SOURCE = {'path': 'os/release-pipeline/frankel.json', 'key': 'host.integrate.reconcile.applyArgs'}
@@ -170,7 +190,7 @@ APPLY_ARGS_SOURCE = {'path': 'os/release-pipeline/frankel.json', 'key': 'host.in
 # and acceptance, the overlay role rules and the unaffected, notInputs, provenance, proves, candidatePatches and
 # outputsToBind statements. A re-pinned contract that changes any of it is invalid until this adapter is reviewed
 # against the new text, so a re-pin is never only a hash bump.
-CONTRACT_TEXT_SHA256 = '788bb334023711e8545c6f0b2fd3a36e09e5618b4f983cbff8ab28d648c4a3f3'
+CONTRACT_TEXT_SHA256 = '305223a6749aa27f8e85dc486a78bb0624a4cd8eec774605fcb43c576ca30748'
 APPLY_STEPS = ['git -C <copy>/<project> apply --check -p<strip> <bundlePath>', 'git -C <copy>/<project> apply -p<strip> <bundlePath>']
 BLOB_ARGV = ['git', 'hash-object', '-t', 'blob', '--no-filters', '--stdin']
 LISTING_BYTES = 64 << 20
@@ -651,8 +671,9 @@ def contract_shape(manifest):
     IDs, the application steps, the blob hash invocation, sha1 objects and the pinned modes (a subset of the three), the
     config.xml rules, a candidate bundle that lists exactly the delta's patch and overlay sources, lunchInputs at this
     adapter's pin, branches.requires and forbids, base.bundleReport's kind, version and fields, the registration's
-    trusted patcher pins, patch order and applyArgs source; and every text this adapter implements, by its digest
-    (contract_text_digest, CONTRACT_TEXT_SHA256)."""
+    trusted patcher pins, patch order and applyArgs source; base.bundleReport.values and overlayRoles.required.prefixes,
+    which bundle_report_problems checks; and every text this adapter implements, by its digest (contract_text_digest,
+    CONTRACT_TEXT_SHA256)."""
     vbac = manifest['branches']['verifyBaseApplyCandidate']
     if [c['id'] for c in vbac['conditions']] != CONDITIONS:
         raise Invalid('verifyBaseApplyCandidate conditions are not exactly ' + ', '.join(CONDITIONS))
@@ -679,6 +700,10 @@ def contract_shape(manifest):
     report, registration = base['bundleReport'], base['registration']
     if (report.get('kind'), report.get('schemaVersion'), report.get('fields')) != (*BUNDLE_REPORT, BUNDLE_REPORT_FIELDS):
         raise Invalid('base.bundleReport is not the rose-integration-bundle-report v1 this adapter reads')
+    if report.get('values') != BUNDLE_REPORT_VALUES:
+        raise Invalid('base.bundleReport.values are not the values this adapter checks')
+    if manifest['overlayRoles']['required'].get('prefixes') != REQUIRED_PREFIXES:
+        raise Invalid('overlayRoles.required.prefixes are not the prefixes this adapter checks observed overlays under')
     patcher = registration['patcher']
     if patcher.get('patcher') != 'trusted' or sorted(patcher.get('sha256') or {}) != sorted(PATCHER_FILES) \
             or not all(re.fullmatch(r'[0-9a-f]{64}', str(v)) for v in patcher['sha256'].values()):
@@ -1353,8 +1378,9 @@ def check(binding_path=BINDING, root=ROOT, manifest_path=MANIFEST, inputs_path=N
     admitted adevtool fetch."""
     manifest = load_manifest(manifest_path)
     binding = json.loads(Path(binding_path).read_text())
-    if set(binding) != BINDING_KEYS or binding['schemaVersion'] != 3 or binding['kind'] != 'rose-launcher3-compile-host':
-        raise Invalid('the binding is not an exact rose-launcher3-compile-host v3 record')
+    if set(binding) != BINDING_KEYS or type(binding['schemaVersion']) is not int or binding['schemaVersion'] != 4 \
+            or binding['kind'] != 'rose-launcher3-compile-host':
+        raise Invalid('the binding is not an exact rose-launcher3-compile-host v4 record')
     if binding['adevtoolGit'] is not None and binding['adevtoolGit'] not in ADEVTOOL_GIT_CLASSES:
         raise Invalid('adevtoolGit must be null or ' + ', '.join(ADEVTOOL_GIT_CLASSES))
     if binding['host'] != 'immortal-os-builder' or binding['lockFrom'] != 'os/release-pipeline/frankel.json host.lockPath':
@@ -1364,11 +1390,15 @@ def check(binding_path=BINDING, root=ROOT, manifest_path=MANIFEST, inputs_path=N
     if binding['branch'] not in BRANCHES:
         raise Invalid('branch must be ' + ', '.join(BRANCHES))
     receipt, bundle = binding['policyReceipt'], binding['bundleReport']
-    for name, value in (('policyReceipt', receipt), ('bundleReport', bundle)):
-        if not isinstance(value, dict) or set(value) != {'path', 'sha256'}:
-            raise Invalid(f'{name} must be exactly {{path, sha256}}')
+    for name, value, keys in (('policyReceipt', receipt, ['path', 'sha256']), ('bundleReport', bundle, ['path', 'sha256', 'run']),
+                              ('bundleReport.run', bundle.get('run') if isinstance(bundle, dict) else None, ['path', 'sha256'])):
+        if not isinstance(value, dict) or set(value) != set(keys):
+            raise Invalid(f'{name} must be exactly {{{", ".join(keys)}}}')
         if value['sha256'] is not None and not re.fullmatch(r'[0-9a-f]{64}', str(value['sha256'])):
             raise Invalid(f'{name}.sha256 must be a lowercase sha256')
+    run_doc = bundle['run']
+    if run_doc['path'] not in (None, RUN_DOCUMENT):
+        raise Invalid(f'bundleReport.run.path must be {RUN_DOCUMENT}, the reviewed run-association document')
     for name, value in (('sourceTree', binding['sourceTree']), ('policyReceipt.path', receipt['path']),
                         ('bundleReport.path', bundle['path'])):
         if value is not None and (not isinstance(value, str) or not value.startswith('/') or os.path.normpath(value) != value):
@@ -1398,9 +1428,11 @@ def check(binding_path=BINDING, root=ROOT, manifest_path=MANIFEST, inputs_path=N
                       f'contract projects ({CHECKED_TREE_GIT})')
     values = {'sourceTree': binding['sourceTree'], 'lunch': binding['lunch'], 'policyReceipt.path': receipt['path'],
               'policyReceipt.sha256': receipt['sha256'], 'bundleReport.path': bundle['path'],
-              'bundleReport.sha256': bundle['sha256'], 'reconstructSource': binding['reconstructSource']}
+              'bundleReport.sha256': bundle['sha256'], 'bundleReport.run.path': run_doc['path'],
+              'bundleReport.run.sha256': run_doc['sha256'], 'reconstructSource': binding['reconstructSource']}
     fields = {'policyReceipt': ['policyReceipt.path', 'policyReceipt.sha256'],
-              'bundleReport': ['bundleReport.path', 'bundleReport.sha256']}
+              'bundleReport': ['bundleReport.path', 'bundleReport.sha256', 'bundleReport.run.path',
+                               'bundleReport.run.sha256']}
     for name in BRANCH_FORBIDS[binding['branch']]:
         if name != CHECKED_TREE_GIT and any(values[f] is not None for f in fields.get(name, [name])):
             raise Invalid(f'{binding["branch"]} forbids {name}; it must be null')
@@ -1408,6 +1440,8 @@ def check(binding_path=BINDING, root=ROOT, manifest_path=MANIFEST, inputs_path=N
     unbound = [n for n in needed if values[n] is None]
     if unbound:
         raise Unbound(f'{binding["branch"]} needs inputs not yet bound in {Path(binding_path).name}: {", ".join(unbound)}')
+    if run_doc['sha256'] is not None:
+        run_document(root, run_doc)  # the committed document the binding names, every run field entered
     plan = lunch_plan(binding, root, inputs_path, inputs_pin)
     if binding['branch'] == 'reconstruct':
         raise Unbound('reconstruct needs an approved genuine-Git-object source; this adapter has none wired')
@@ -1419,6 +1453,44 @@ def read_bytes(path):
     if path.is_symlink() or not path.is_file():
         return None
     return path.read_bytes()
+
+
+def strict_json(data):
+    """JSON with no duplicate key (the last of two would win silently), no NaN or Infinity, and no nesting deep enough
+    to raise."""
+    def pairs(items):
+        keys = [k for k, _ in items]
+        if len(keys) != len(set(keys)):
+            raise ValueError('a duplicate key')
+        return dict(items)
+
+    def constant(name):
+        raise ValueError(f'{name}, which is not JSON')
+    try:
+        return json.loads(data, object_pairs_hook=pairs, parse_constant=constant)
+    except RecursionError:
+        raise ValueError('nested too deeply') from None
+
+
+def run_document(root, bound):
+    """{sha256, fields} of the reviewed run-association document the binding names (bundleReport.run): its committed
+    bytes, read without following a link, hash to the bound sha256, and it is an exact rose-launcher3-bundle-run v1 with
+    every run field entered. Invalid otherwise."""
+    data = read_bytes(Path(root)/RUN_DOCUMENT) if bound.get('path') == RUN_DOCUMENT else None
+    if data is None or sha256_bytes(data) != bound.get('sha256'):
+        raise Invalid('bundleReport.run: the run-association document is not the one the binding names (its sha256)')
+    try:
+        document = strict_json(data)
+    except ValueError as error:
+        raise Invalid(f'bundleReport.run: the run document is not JSON ({error})') from None
+    if not isinstance(document, dict) or set(document) != {'schemaVersion', 'kind', 'basis', *RUN_FIELDS} \
+            or type(document['schemaVersion']) is not int \
+            or (document['schemaVersion'], document['kind']) != (1, 'rose-launcher3-bundle-run'):
+        raise Invalid('bundleReport.run: the run document is not an exact rose-launcher3-bundle-run v1')
+    unentered = [k for k in RUN_FIELDS if document[k] is None]
+    if unentered:
+        raise Invalid(f'bundleReport.run: the bound run document has no {", ".join(unentered)} entered')
+    return {'sha256': bound['sha256'], 'fields': {k: document[k] for k in RUN_FIELDS}}
 
 
 def classify(tree, section, policy=None, policy_sha256=None, bound_policy_sha256=None, reference=None, locked=False):
@@ -1829,13 +1901,15 @@ def report_type_problems(report):
     return problems
 
 
-def bundle_report_problems(report, base):
+def bundle_report_problems(report, base, run_document):
     """Every way an Infra bundle report fails base.bundleReport against base.registration and base.bundleContent, each
     as a named problem, never an exception: its kind and every section and field exactly, each field of its type
     (REPORT_TYPES); the association the report itself shows (the run commit is the candidate and on main; a reconcile
     receipt of the run's label, named *-<label>.json, its at within [createdAt, updatedAt]; the trusted patcher at the
     registration's pins and the run's applyArgs equal to the registration's, with both pin flags true; a producer that
-    is neither the adapter nor this contract's checker); nothing unclassified; observed patches in the registration
+    is neither the adapter nor this contract's checker); base.bundleReport.values (registration.source exactly;
+    run.bindingSha256 and the six run fields those of run_document, the {sha256, fields} of the run document the binding
+    names; every observed overlay under REQUIRED_PREFIXES); nothing unclassified; observed patches in the registration
     order, and observed minus unclassified equal to bundleContent (patches per project in order, overlays and
     notAnInput targets). The rest of the association (BUNDLE_TRUSTED) is the producer's reviewed statement, which
     report.json names as taken on trust."""
@@ -1878,6 +1952,17 @@ def bundle_report_problems(report, base):
         problems.append('candidate.applyArgs are not the registration applyArgs')
     if report['registration']['patcherMatchesPin'] is not True or report['registration']['applyArgsMatchPin'] is not True:
         problems.append('the report does not state that its patcher and applyArgs match the pins')
+    if report['registration']['source'] != BUNDLE_REPORT_VALUES['registration.source']['equals']:
+        problems.append('registration.source is not base.registration (base.bundleReport.values)')
+    if run['bindingSha256'] != run_document['sha256']:
+        problems.append('run.bindingSha256 is not the sha256 of the run document the binding names '
+                        '(base.bundleReport.values)')
+    differing = [k for k in RUN_FIELDS if run[k] != run_document['fields'][k]]
+    if differing:
+        problems.append(f'run {", ".join(differing)} are not the bound run document\'s')
+    outside = [o['target'] for o in observed['overlays'] if not o['target'].startswith(tuple(REQUIRED_PREFIXES))]
+    if outside:
+        problems.append('observed.overlays outside overlayRoles.required.prefixes: ' + ', '.join(outside[:3]))
     if observed['unclassified'] != []:
         problems.append('observed.unclassified is not empty')
     if [(p['project'], p['name']) for p in observed['patches']] != [(o['project'], o['name']) for o in registration['order']]:
@@ -1897,7 +1982,7 @@ def bundle_report_problems(report, base):
     return problems
 
 
-def bundle_matches(report, report_sha256, bound_sha256, base):
+def bundle_matches(report, report_sha256, bound_sha256, base, run_document):
     """base-exact's bundle half: the Infra bundle report (its bound sha256) is a matching rose-integration-bundle-report
     v1 (bundle_report_problems): a bare bundleContent or a report missing any section is refused, and so, by name, is
     one this adapter cannot read. Which bundle integrated the tree is Infra provenance; a hash of current bytes is
@@ -1905,17 +1990,18 @@ def bundle_matches(report, report_sha256, bound_sha256, base):
     if not bound_sha256 or report_sha256 != bound_sha256:
         raise Refused('base-exact: the bundle report is missing or not the one bound for this tree')
     try:
-        problems = bundle_report_problems(report, base)
+        problems = bundle_report_problems(report, base, run_document)
     except (AttributeError, KeyError, TypeError, ValueError) as error:  # a defect: never a traceback in place of a refusal
         raise Refused(f'base-exact: the bundle report cannot be read as base.bundleReport ({type(error).__name__})') from None
     if problems:
         raise Refused('base-exact: the integrating bundle report does not match: ' + '; '.join(problems[:5]))
 
 
-def bundle_record(report, sha256):
-    """What report.json says of the bundle report base-exact used: its sha256, run, receipt and producer, and what of its
-    association was taken on trust (BUNDLE_TRUSTED)."""
+def bundle_record(report, sha256, run_document):
+    """What report.json says of the bundle report base-exact used: its sha256, run (and the run document it was checked
+    against), receipt and producer, and what of its association was taken on trust (BUNDLE_TRUSTED)."""
     return {'sha256': sha256, 'run': {k: report['run'][k] for k in ('runId', 'runAttempt', 'headSha', 'label')},
+            'runDocument': {'path': RUN_DOCUMENT, 'sha256': run_document['sha256']},
             'receipt': {k: report['receipt'][k] for k in ('path', 'receiptSha256', 'at')},
             'producer': dict(report['producer']), 'takenOnTrust': list(BUNDLE_TRUSTED)}
 
@@ -1983,8 +2069,12 @@ def run(binding, manifest, run_id, attempt, root=ROOT, lock=None, copier=copy_tr
                     bundle, bundle_sha = (bundle_loader or bound_json)(binding['bundleReport']['path'])
                 except (OSError, ValueError):
                     raise Refused('base-exact: the bound bundle report cannot be read') from None
-                bundle_matches(bundle, bundle_sha, binding['bundleReport']['sha256'], manifest['base'])
-                report['bundleReport'] = bundle_record(bundle, bundle_sha)
+                try:
+                    run_doc = run_document(root, binding['bundleReport']['run'])
+                except Invalid as error:
+                    raise Refused(f'base-exact: {error}') from None
+                bundle_matches(bundle, bundle_sha, binding['bundleReport']['sha256'], manifest['base'], run_doc)
+                report['bundleReport'] = bundle_record(bundle, bundle_sha, run_doc)
                 _, base_pins = checked(manifest['base'], tree, args, 'base-exact', pins, root, deadline)
                 steps.append({'id': 'base-exact', 'treePins': base_pins})
                 delta = manifest['candidateDelta']

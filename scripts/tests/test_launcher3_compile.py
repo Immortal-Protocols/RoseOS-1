@@ -65,6 +65,20 @@ def blob(data):
     return hashlib.sha1(b'blob %d\0' % len(data) + data).hexdigest()
 
 
+# The reviewed run-association document a bound bundle report is checked against (bundleReport.run), as its bytes and as
+# run_document returns it.
+RUN_FIELDS = {'runId': '41700000000', 'runAttempt': 1, 'headSha': 'c' * 40, 'label': 'r1',
+              'createdAt': '2026-11-04T00:00:00Z', 'updatedAt': '2026-11-04T01:00:00Z'}
+
+
+def run_bytes(**change):
+    return json.dumps({'schemaVersion': 1, 'kind': 'rose-launcher3-bundle-run', 'basis': 'test', **RUN_FIELDS,
+                       **change}).encode()
+
+
+RUN_DOC = {'sha256': sha(run_bytes()), 'fields': dict(RUN_FIELDS)}
+
+
 def run_cli(*argv):
     return subprocess.run([sys.executable, str(ROOT/'scripts/launcher3-compile.py'), *argv], capture_output=True, text=True,
                           cwd=ROOT)
@@ -129,14 +143,13 @@ def bundle_report(content, registration, edit=None):
     rows = {(p['project'], p['name']): p for p in content['patches']}
     report = {'kind': 'rose-integration-bundle-report', 'schemaVersion': 1,
               'producer': {'path': 'scripts/integration-bundle-report.py', 'sha256': 'a' * 64, 'roseRevision': 'b' * 40},
-              'run': {'runId': '41700000000', 'runAttempt': 1, 'headSha': 'c' * 40, 'label': 'r1',
-                      'createdAt': '2026-11-04T00:00:00Z', 'updatedAt': '2026-11-04T01:00:00Z', 'bindingSha256': 'e' * 64},
+              'run': {**RUN_FIELDS, 'bindingSha256': RUN_DOC['sha256']},
               'receipt': {'path': '/home/pixelbuild/receipts/0001-r1.json', 'receiptSha256': 'f' * 64,
                           'receiptType': 'reconcile', 'label': 'r1', 'at': '2026-11-04T00:30:00Z',
                           'patcher': json.loads(json.dumps(registration['patcher']))},
               'candidate': {'commit': 'c' * 40, 'onMain': True, 'frankelConfigSha256': '1' * 64,
                             'applyArgs': list(registration['applyArgs']), 'patcherKind': 'trusted'},
-              'registration': {'source': 'executed', 'patcherMatchesPin': True, 'applyArgsMatchPin': True},
+              'registration': {'source': 'base.registration', 'patcherMatchesPin': True, 'applyArgsMatchPin': True},
               'observed': {'patches': [dict(rows[(o['project'], o['name'])]) for o in registration['order']],
                            'overlays': [dict(o) for o in content['overlays']],
                            'notAnInputOverlays': list(content['notAnInputOverlays']), 'unclassified': []}}
@@ -325,6 +338,21 @@ class Contract(unittest.TestCase):
                     adapter.contract_shape(manifest)
         self.assertEqual(adapter.contract_text_digest(MANIFEST), adapter.CONTRACT_TEXT_SHA256)
         adapter.contract_shape(json.loads(json.dumps(MANIFEST)))
+        # the values this adapter checks and the prefixes it checks overlays under are bound on their own too, even under
+        # a text pin re-reviewed for them (the prefixes are not in the text digest at all)
+        for name, change, word in (
+                ('values', lambda m: report(m)['values']['registration.source'].update(equals='executed'),
+                 'base.bundleReport.values'),
+                ('no values', lambda m: report(m).pop('values'), 'base.bundleReport.values'),
+                ('prefixes', lambda m: m['overlayRoles']['required'].update(prefixes=['packages/apps/']),
+                 'overlayRoles.required.prefixes'),
+                ('no prefixes', lambda m: m['overlayRoles']['required'].pop('prefixes'), 'overlayRoles.required.prefixes')):
+            with self.subTest(bound=name):
+                manifest = json.loads(json.dumps(MANIFEST))
+                change(manifest)
+                with unittest.mock.patch.object(adapter, 'CONTRACT_TEXT_SHA256', adapter.contract_text_digest(manifest)):
+                    with self.assertRaisesRegex(adapter.Invalid, word):
+                        adapter.contract_shape(manifest)
         # the applyArgs source is bound on its own too, even under a text pin re-reviewed for it
         manifest = json.loads(json.dumps(MANIFEST))
         manifest['base']['registration']['applyArgsSource'].update(key='host.integrate.applyArgs')
@@ -368,14 +396,15 @@ class Contract(unittest.TestCase):
     def test_committed_binding_is_unbound_and_the_hosted_check_exits_4(self):
         self.assertEqual([BINDING[k] for k in ('sourceTree', 'lunch', 'reconstructSource', 'adevtoolGit')], [None] * 4)
         self.assertEqual(BINDING['policyReceipt'], {'path': None, 'sha256': None})
-        self.assertEqual(BINDING['bundleReport'], {'path': None, 'sha256': None})
+        self.assertEqual(BINDING['bundleReport'], {'path': None, 'sha256': None, 'run': {'path': None, 'sha256': None}})
+        self.assertEqual(BINDING['schemaVersion'], 4)
         # the selected branch: no patcher registers the candidate delta, so only base-plus-delta can reach the final images
         self.assertEqual(BINDING['branch'], 'verifyBaseApplyCandidate')
         self.assertIn('apply-os-changes.py does not register', MANIFEST['candidatePatches'])
         result = run_cli('check')
         self.assertEqual((result.returncode, result.stdout), (4, ''))
-        self.assertIn('sourceTree, lunch, policyReceipt.path, policyReceipt.sha256, bundleReport.path, bundleReport.sha256',
-                      result.stderr)
+        self.assertIn('sourceTree, lunch, policyReceipt.path, policyReceipt.sha256, bundleReport.path, bundleReport.sha256, '
+                      'bundleReport.run.path, bundleReport.run.sha256', result.stderr)
 
     def binding(self, **change):
         path = Path(tempfile.mkdtemp())/'binding.json'
@@ -385,6 +414,17 @@ class Contract(unittest.TestCase):
         path.write_text(json.dumps(record))
         return path
 
+    BUNDLE = {'path': '/home/pixelbuild/receipts/bundle.json', 'sha256': 'b' * 64,
+              'run': {'path': 'os/build-only/launcher3-bundle-run.json', 'sha256': RUN_DOC['sha256']}}
+
+    def check_in_process(self, binding, run=RUN_DOC):
+        """(exit, stdout, stderr) of the check, with the bound run document taken as run (the committed one is unbound)."""
+        out, err = io.StringIO(), io.StringIO()
+        with unittest.mock.patch.object(adapter, 'run_document', return_value=run), contextlib.redirect_stdout(out), \
+                contextlib.redirect_stderr(err):
+            code = adapter.main(['check', '--binding', str(binding)])
+        return code, out.getvalue(), err.getvalue()
+
     def test_a_bound_binding_passes_and_prints_its_bounds(self):
         # every lunch is the contract's, so the bounds always hold the lunch inputs (1800 s), the fetch (1800 s) and its
         # kill grace (30 s) besides the copy, the tree pins (one check, or two for the candidate branch), lunch and m
@@ -392,10 +432,57 @@ class Contract(unittest.TestCase):
         self.assertEqual((result.returncode, result.stdout), (0, 'outer_seconds=21720\nfinish_seconds=1800\njob_minutes=403\n'))
         result = run_cli('check', '--binding', str(self.binding(branch='verifyBaseApplyCandidate')))
         self.assertEqual(result.returncode, 4)
-        self.assertIn('bundleReport.path, bundleReport.sha256', result.stderr)
-        result = run_cli('check', '--binding', str(self.binding(branch='verifyBaseApplyCandidate',
-                                                                bundleReport={'path': '/home/pixelbuild/receipts/bundle.json', 'sha256': 'b' * 64})))
-        self.assertEqual((result.returncode, result.stdout), (0, 'outer_seconds=23520\nfinish_seconds=1800\njob_minutes=433\n'))
+        self.assertIn('bundleReport.path, bundleReport.sha256, bundleReport.run.path, bundleReport.run.sha256', result.stderr)
+        result = run_cli('check', '--binding', str(self.binding(branch='verifyBaseApplyCandidate', bundleReport={
+            **self.BUNDLE, 'run': {'path': None, 'sha256': None}})))
+        self.assertEqual(result.returncode, 4)  # the report without its run document
+        self.assertIn('needs inputs not yet bound in binding.json: bundleReport.run.path, bundleReport.run.sha256',
+                      result.stderr)
+        self.assertEqual(self.check_in_process(self.binding(branch='verifyBaseApplyCandidate', bundleReport=self.BUNDLE)),
+                         (0, 'outer_seconds=23520\nfinish_seconds=1800\njob_minutes=433\n', ''))
+
+    def test_the_bound_run_document_is_the_committed_reviewed_one(self):
+        committed = (ROOT/'os/build-only/launcher3-bundle-run.json').read_bytes()
+        for name, run, word in (
+                ('the committed document, still unbound', {'path': 'os/build-only/launcher3-bundle-run.json',
+                                                           'sha256': sha(committed)},
+                 'has no runId, runAttempt, headSha, label, createdAt, updatedAt entered'),
+                ('other bytes', {'path': 'os/build-only/launcher3-bundle-run.json', 'sha256': '9' * 64},
+                 'not the one the binding names'),
+                ('another path', {'path': 'os/build-only/other.json', 'sha256': '9' * 64},
+                 'bundleReport.run.path must be os/build-only/launcher3-bundle-run.json')):
+            with self.subTest(name=name):
+                result = run_cli('check', '--binding', str(self.binding(branch='verifyBaseApplyCandidate',
+                                                                        bundleReport={**self.BUNDLE, 'run': run})))
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertIn(word, result.stderr)
+
+    def test_the_run_document_must_be_an_exact_v1_with_every_field_entered(self):
+        def document(data, link=False):
+            root = Path(tempfile.mkdtemp())
+            (root/'os/build-only').mkdir(parents=True)
+            target = root/'os/build-only/launcher3-bundle-run.json'
+            if link:
+                (root/'elsewhere.json').write_bytes(data)
+                os.symlink(root/'elsewhere.json', target)
+            else:
+                target.write_bytes(data)
+            return root, {'path': 'os/build-only/launcher3-bundle-run.json', 'sha256': sha(data)}
+        self.assertEqual(adapter.run_document(*document(run_bytes())), RUN_DOC)
+        good = run_bytes().decode()
+        for name, data, word in (
+                ('a field not entered', run_bytes(label=None), 'has no label entered'),
+                ('a duplicate key', good.replace('"label"', '"label": "x", "label"', 1).encode(), 'duplicate key'),
+                ('a NaN', good.replace('"runAttempt": 1', '"runAttempt": NaN').encode(), 'NaN, which is not JSON'),
+                ('an extra key', run_bytes(extra=1), 'not an exact rose-launcher3-bundle-run v1'),
+                ('a boolean version', run_bytes(schemaVersion=True), 'not an exact rose-launcher3-bundle-run v1'),
+                ('another kind', run_bytes(kind='other'), 'not an exact rose-launcher3-bundle-run v1'),
+                ('not an object', b'[]', 'not an exact rose-launcher3-bundle-run v1')):
+            with self.subTest(name=name):
+                with self.assertRaisesRegex(adapter.Invalid, word):
+                    adapter.run_document(*document(data))
+        with self.assertRaisesRegex(adapter.Invalid, 'not the one the binding names'):
+            adapter.run_document(*document(run_bytes(), link=True))  # never read through a link
 
     def test_only_the_lunch_input_contracts_target_is_a_lunch(self):
         """definitions.lunch: the lunch inputs in lunchInputs, satisfied on the copy; their only target is frankel-cur-user."""
@@ -410,7 +497,8 @@ class Contract(unittest.TestCase):
     def test_no_receipt_or_report_is_a_file_of_a_checked_tree(self):
         tree = '/home/pixelbuild/grapheneos-2026100600'
         roots = '/home/pixelbuild/rose-actions'
-        bundle = lambda path: {'branch': 'verifyBaseApplyCandidate', 'bundleReport': {'path': path, 'sha256': 'b' * 64}}  # noqa: E731
+        bundle = lambda path: {'branch': 'verifyBaseApplyCandidate', 'bundleReport': {'path': path, 'sha256': 'b' * 64,  # noqa: E731
+                                                                                      'run': {'path': None, 'sha256': None}}}
         for name, change, word in (
                 ('policy in the tree', {'policyReceipt': {'path': f'{tree}/frameworks/base/policy.json', 'sha256': 'a' * 64}},
                  'policyReceipt.path is inside the source tree'),
@@ -431,20 +519,19 @@ class Contract(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_a_version_checked_lunch_is_unbound_until_adevtool_git_is_bound(self):
-        for branch, bundle in (('verifyIntegrated', {'path': None, 'sha256': None}),
-                               ('verifyBaseApplyCandidate', {'path': '/home/pixelbuild/receipts/bundle.json', 'sha256': 'b' * 64})):
-            result = run_cli('check', '--binding', str(self.binding(lunch='frankel-cur-user', branch=branch,
-                             bundleReport=bundle, adevtoolGit=None)))
-            self.assertEqual((result.returncode, result.stdout), (4, ''))
-            self.assertIn('adevtool_git_missing', result.stderr)
+        for branch, bundle in (('verifyIntegrated', {'path': None, 'sha256': None, 'run': {'path': None, 'sha256': None}}),
+                               ('verifyBaseApplyCandidate', self.BUNDLE)):
+            code, out, err = self.check_in_process(self.binding(lunch='frankel-cur-user', branch=branch,
+                                                                bundleReport=bundle, adevtoolGit=None))
+            self.assertEqual((code, out), (4, ''))
+            self.assertIn('adevtool_git_missing', err)
         # bound to the public fetch, which the pinned contract admits: the check passes with the lunch inputs (1800 s),
         # the fetch (1800 s) and its kill grace (30 s) in its bounds
         result = run_cli('check', '--binding', str(self.binding(lunch='frankel-cur-user', adevtoolGit='public-fetch')))
         self.assertEqual((result.returncode, result.stdout), (0, 'outer_seconds=21720\nfinish_seconds=1800\njob_minutes=403\n'))
-        result = run_cli('check', '--binding', str(self.binding(lunch='frankel-cur-user', adevtoolGit='public-fetch',
-                         branch='verifyBaseApplyCandidate', bundleReport={'path': '/home/pixelbuild/receipts/bundle.json',
-                                                                          'sha256': 'b' * 64})))
-        self.assertEqual((result.returncode, result.stdout), (0, 'outer_seconds=23520\nfinish_seconds=1800\njob_minutes=433\n'))
+        self.assertEqual(self.check_in_process(self.binding(lunch='frankel-cur-user', adevtoolGit='public-fetch',
+                                                            branch='verifyBaseApplyCandidate', bundleReport=self.BUNDLE)),
+                         (0, 'outer_seconds=23520\nfinish_seconds=1800\njob_minutes=433\n', ''))
         # a contract without the admission row stays unbound
         contract_path, pin = amended(lambda d: d['gitRequirement'].update(
             options=[o for o in d['gitRequirement']['options'] if o['class'] != 'public-fetch']))
@@ -556,9 +643,15 @@ class Contract(unittest.TestCase):
         self.assertIn(b'dl/.find-ignore', listed)
 
     def test_each_branch_refuses_what_the_contract_forbids(self):
-        bundle = {'path': '/home/pixelbuild/receipts/bundle.json', 'sha256': 'b' * 64}
+        bundle = {'path': '/home/pixelbuild/receipts/bundle.json', 'sha256': 'b' * 64, 'run': {'path': None, 'sha256': None}}
+        unbound = {'path': None, 'sha256': None}
         for branch, change, word in (('verifyIntegrated', {'bundleReport': bundle}, 'verifyIntegrated forbids bundleReport'),
-                                     ('verifyIntegrated', {'bundleReport': {'path': None, 'sha256': 'b' * 64}},
+                                     ('verifyIntegrated', {'bundleReport': {**bundle, 'path': None}},
+                                      'verifyIntegrated forbids bundleReport'),
+                                     ('verifyIntegrated', {'bundleReport': {**unbound, 'run': {
+                                         'path': 'os/build-only/launcher3-bundle-run.json', 'sha256': None}}},
+                                      'verifyIntegrated forbids bundleReport'),
+                                     ('verifyIntegrated', {'bundleReport': {**unbound, 'run': {'path': None, 'sha256': '9' * 64}}},
                                       'verifyIntegrated forbids bundleReport'),
                                      ('verifyIntegrated', {'reconstructSource': '/home/pixelbuild/objects'},
                                       'verifyIntegrated forbids reconstructSource'),
@@ -597,7 +690,12 @@ class Contract(unittest.TestCase):
                        {'policyReceipt': {'path': '/p', 'sha256': 'A' * 64}}, {'extra': 1}, {'schemaVersion': 1},
                        {'schemaVersion': 2}, {'adevtoolGit': 'genuine-copy'}, {'lunch': 'example-cur-user'},
                        {'lunch': 'frankel-trunk-user', 'adevtoolGit': 'public-fetch'}, {'lunch': 'akita-cur-user', 'adevtoolGit': None},
-                       {'bundleReport': {'path': 'rel', 'sha256': None}}, {'bundleReport': None}):
+                       {'bundleReport': {'path': 'rel', 'sha256': None, 'run': {'path': None, 'sha256': None}}},
+                       {'bundleReport': None}, {'bundleReport': {'path': None, 'sha256': None}}, {'bundleReport': []},
+                       {'bundleReport': {'path': None, 'sha256': None, 'run': None}},
+                       {'bundleReport': {'path': None, 'sha256': None, 'run': {'path': None}}},
+                       {'bundleReport': {'path': None, 'sha256': None, 'run': {'path': None, 'sha256': 'A' * 64}}},
+                       {'schemaVersion': 3}, {'schemaVersion': True}):
             with self.subTest(change=change):
                 self.assertEqual(run_cli('check', '--binding', str(self.binding(**change))).returncode, 2)
 
@@ -621,9 +719,32 @@ class BundleReport(unittest.TestCase):
         self.s = Synthetic(tempfile.mkdtemp())
         self.base = self.s.manifest['base']
 
-    def problems(self, edit=None, report=None):
+    def problems(self, edit=None, report=None, run=RUN_DOC):
         return adapter.bundle_report_problems(report if report is not None else
-                                              bundle_report(self.s.bundle_content, self.s.registration, edit), self.base)
+                                              bundle_report(self.s.bundle_content, self.s.registration, edit), self.base, run)
+
+    def test_the_values_the_contract_states_are_checked(self):
+        """base.bundleReport.values: registration.source exactly, run.bindingSha256 and the run fields the bound run
+        document's, every observed overlay under overlayRoles.required.prefixes."""
+        self.assertEqual(MANIFEST['base']['bundleReport']['values'], adapter.BUNDLE_REPORT_VALUES)
+        self.assertEqual(MANIFEST['overlayRoles']['required']['prefixes'], adapter.REQUIRED_PREFIXES)
+        trusted = ' '.join(adapter.BUNDLE_TRUSTED)  # what report.json says was taken on trust: never a checked value
+        self.assertNotIn('registration.source', trusted)
+        self.assertIn('run fields and bindingSha256 are checked against the document the binding names', trusted)
+        for name, edit, run, word in (
+                ('another source', lambda r: r['registration'].update(source='executed'), RUN_DOC,
+                 'registration.source is not base.registration'),
+                ('another document', None, {**RUN_DOC, 'sha256': '9' * 64},
+                 'run.bindingSha256 is not the sha256 of the run document the binding names'),
+                ('another attempt', None, {**RUN_DOC, 'fields': {**RUN_FIELDS, 'runAttempt': 2}},
+                 "run runAttempt are not the bound run document's"),
+                ('another window', lambda r: r['run'].update(createdAt='2026-11-03T00:00:00Z'), RUN_DOC,
+                 "run createdAt are not the bound run document's"),
+                ('an overlay outside the prefixes', lambda r: r['observed']['overlays'].append(
+                    {'target': 'frameworks/base/libs/X.java', 'sha256': '7' * 64}), RUN_DOC,
+                 'observed.overlays outside overlayRoles.required.prefixes: frameworks/base/libs/X.java')):
+            with self.subTest(name=name):
+                self.assertIn(word, '; '.join(self.problems(edit, run=run)))
 
     def test_a_report_observing_exactly_the_bundle_passes(self):
         self.assertEqual(self.problems(), [])
@@ -733,17 +854,18 @@ class BundleReport(unittest.TestCase):
                     with self.subTest(row=f'{key}.{field}', value=value):
                         self.assertTrue(self.problems(lambda r: r['observed'][key][0].__setitem__(field, value)))
         for report in ([], 'report', None, {'kind': 'rose-integration-bundle-report'}):
-            self.assertTrue(adapter.bundle_report_problems(report, self.base))
+            self.assertTrue(adapter.bundle_report_problems(report, self.base, RUN_DOC))
 
     def test_an_unreadable_report_is_a_named_base_exact_refusal(self):
         with unittest.mock.patch.object(adapter, 'bundle_report_problems', side_effect=TypeError('defect')):
             with self.assertRaisesRegex(adapter.Refused, r'base-exact: the bundle report cannot be read as base.bundleReport \(TypeError\)'):
-                adapter.bundle_matches({}, 'a' * 64, 'a' * 64, self.base)
+                adapter.bundle_matches({}, 'a' * 64, 'a' * 64, self.base, RUN_DOC)
 
     def test_the_committed_base_needs_the_registration_order_across_projects(self):
         base = MANIFEST['base']
         content, registration = base['bundleContent'], base['registration']
-        problems = lambda edit=None: adapter.bundle_report_problems(bundle_report(content, registration, edit), base)  # noqa: E731
+        problems = lambda edit=None: adapter.bundle_report_problems(bundle_report(content, registration, edit), base,  # noqa: E731
+                                                                    RUN_DOC)
         self.assertEqual(problems(), [])
         self.assertNotEqual([p['project'] for p in content['patches']], [o['project'] for o in registration['order']])
         bundle_order = lambda r: r['observed'].update(patches=[dict(p) for p in content['patches']])  # noqa: E731
@@ -1575,9 +1697,13 @@ class Run(unittest.TestCase):
         self.assertEqual(self.calls, [COPY])
         self.assertTrue(self.report()['refused'].startswith('state_refused'))
 
-    def vbac(self):
+    def vbac(self, run=None):
+        document = self.s.repo/'os/build-only/launcher3-bundle-run.json'
+        document.parent.mkdir(parents=True, exist_ok=True)
+        document.write_bytes(run_bytes())
         self.binding = {**self.binding, 'branch': 'verifyBaseApplyCandidate',
-                        'bundleReport': {'path': '/bundle.json', 'sha256': self.bundle_sha}}
+                        'bundleReport': {'path': '/bundle.json', 'sha256': self.bundle_sha, 'run': run or {
+                            'path': 'os/build-only/launcher3-bundle-run.json', 'sha256': RUN_DOC['sha256']}}}
 
     def test_base_apply_candidate_runs_the_four_conditions_in_the_copy_only(self):
         self.vbac()
@@ -1594,6 +1720,7 @@ class Run(unittest.TestCase):
         # the bundle report base-exact used, and what of its association was taken on trust
         self.assertEqual(report['bundleReport'], {'sha256': self.bundle_sha,
             'run': {'runId': '41700000000', 'runAttempt': 1, 'headSha': 'c' * 40, 'label': 'r1'},
+            'runDocument': {'path': 'os/build-only/launcher3-bundle-run.json', 'sha256': RUN_DOC['sha256']},
             'receipt': {'path': '/home/pixelbuild/receipts/0001-r1.json', 'receiptSha256': 'f' * 64, 'at': '2026-11-04T00:30:00Z'},
             'producer': self.s.bundle_report['producer'], 'takenOnTrust': list(adapter.BUNDLE_TRUSTED)})
         self.assertIn('headSha reachable from main (only candidate.onMain is read)', report['bundleReport']['takenOnTrust'])
@@ -1624,9 +1751,21 @@ class Run(unittest.TestCase):
                 self.assertFalse([c for c in self.calls if c[0] == 'compile'])
         self.setUp()
         self.vbac()
-        self.binding['bundleReport'] = {'path': '/bundle.json', 'sha256': 'b' * 64}
+        self.binding['bundleReport'] = {**self.binding['bundleReport'], 'sha256': 'b' * 64}
         self.assertEqual(self.run_adapter('base'), 3)
         self.assertIn('not the one bound', self.report()['refused'])
+        # the run document the binding names: its bytes, then a report whose run is not that document's
+        self.setUp()
+        self.vbac(run={'path': 'os/build-only/launcher3-bundle-run.json', 'sha256': '9' * 64})
+        self.assertEqual(self.run_adapter('base'), 3)
+        self.assertEqual(self.report()['refused'], 'base-exact: bundleReport.run: the run-association document is not the '
+                                                   'one the binding names (its sha256)')
+        self.setUp()
+        self.vbac()
+        self.assertEqual(self.run_adapter('base', bundle=bundle_report(self.s.bundle_content, self.s.registration,
+                                                                       lambda r: r['run'].update(label='r2'))), 3)
+        self.assertIn("run label are not the bound run document's", self.report()['refused'])
+        self.assertFalse([c for c in self.calls if c[0] == 'compile'])
 
     def test_a_held_lock_refuses_before_the_copy_and_reports_are_write_once(self):
         @contextlib.contextmanager
@@ -1716,7 +1855,9 @@ class Run(unittest.TestCase):
                                                                   'sha256': self.s.policy_sha}}),
                              ('bundleReport', {'branch': 'verifyBaseApplyCandidate',
                                                'bundleReport': {'path': str(outside/'receipts/bundle.json'),
-                                                                'sha256': self.bundle_sha}})):
+                                                                'sha256': self.bundle_sha,
+                                                                'run': {'path': 'os/build-only/launcher3-bundle-run.json',
+                                                                        'sha256': RUN_DOC['sha256']}}})):
             with self.subTest(name=name):
                 self.setUp()
                 self.binding.update(sourceTree=str(source), **change)
