@@ -62,6 +62,7 @@ python3 os/tests/test_rose_home_role.py
 python3 os/tests/test_rose_agent_self_update.py
 python3 os/tests/test_rose_switcher.py
 python3 os/tests/test_launcher3_compile_contract.py
+python3 os/tests/test_frankel_lunch_inputs.py
 python3 os/tests/test_automated_devices_contract.py
 python3 os/tests/test_rose_edge_shell.py
 python3 os/tests/test_background_control_prototype.py
