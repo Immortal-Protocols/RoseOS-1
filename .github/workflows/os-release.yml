@@ -1530,7 +1530,8 @@ jobs:
     # adevtool public fetch into the copy's vendor/adevtool/.git (1800 s, 1 GiB), only when the binding's adevtoolGit is
     # bound. Its own bounds: copy 7200 s, tree pins 1800 s per check, lunch 1200 s, compile 7200 s with sampled output and memory
     # stops (ceilings, not measurements; a stop is a recorded failure, never a pass), each +30 s kill; the outer and job
-    # times are derived from the helper by the hosted guard and re-checked here. finish always runs: it uploads only
+    # times are derived from the helper by the hosted guard and re-checked here. The outer timeout's TERM or a cancel
+    # makes the helper end its running stage's process group within the 30 s kill-after and report interrupted. finish always runs: it uploads only
     # report.json, classification.json and cleanup.json (7 days; never a log, the tree or outputs) and removes only this
     # run's tree, out, home and tmp (cleanup.json says what it removed or left). contents: read only: no OIDC token,
     # signer login, secret, signing, packaging, install, phone action or publication, and no download but that admitted

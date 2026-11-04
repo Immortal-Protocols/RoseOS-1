@@ -1080,6 +1080,96 @@ class Processes(unittest.TestCase):
         finally:
             adapter.SAMPLE_SECONDS = saved
 
+    def member_pid(self, path):
+        end = time.monotonic() + 20
+        while not (path.exists() and path.read_text().strip()):
+            self.assertLess(time.monotonic(), end, 'the stage never started')
+            time.sleep(0.05)
+        return int(path.read_text())
+
+    @staticmethod
+    def live(pid):
+        """Whether pid is a live process (a zombie is not: it waits only for its reaper)."""
+        try:
+            return Path(f'/proc/{pid}/stat').read_text().rsplit(')', 1)[1].split()[0] != 'Z'
+        except (FileNotFoundError, ProcessLookupError):
+            return False
+
+    def test_a_member_that_outlives_its_leader_is_killed_too(self):
+        work = Path(tempfile.mkdtemp())
+        # the member ignores TERM; the leader does not, so it exits first and the member is left running
+        proc = subprocess.Popen(['bash', '-c', 'trap "" TERM; sleep 600 & echo $! > member; trap - TERM; wait'],
+                                cwd=work, start_new_session=True)
+        member = self.member_pid(work/'member')
+        start = time.monotonic()
+        adapter.end_group(proc, grace=1)
+        self.assertIsNotNone(proc.poll())
+        self.assertFalse(self.live(member))
+        self.assertLess(time.monotonic() - start, 10)
+        self.assertFalse(adapter.group_alive(proc.pid))
+        adapter.end_group(proc, grace=1)  # a group already gone is not signalled again
+
+    def test_any_failure_during_a_stage_ends_its_group(self):
+        for name, stage in (('supervised', lambda argv, sleep: adapter.supervised(argv, dict(os.environ), '/', 600, '/',
+                                                                                  rss=lambda pid: 0, sleep=sleep)),
+                            ('bounded_git', lambda argv, sleep: adapter.bounded_git(argv, dict(os.environ), '/',
+                                                                                    time.monotonic() + 600, '/', 1 << 40,
+                                                                                    measure=lambda path: 0, sleep=sleep))):
+            with self.subTest(stage=name):
+                work = Path(tempfile.mkdtemp())
+                calls = []
+
+                def sleep(seconds):
+                    calls.append(seconds)
+                    if len(calls) == 1:  # the first sample: the outer timeout's TERM arrives here
+                        while not (work/'member').exists():
+                            time.sleep(0.05)
+                        raise adapter.Interrupted('SIGTERM')
+                    time.sleep(min(seconds, 0.2))
+                with unittest.mock.patch.object(adapter, 'INTERRUPT_GRACE_SECONDS', 1), \
+                        self.assertRaises(adapter.Interrupted):
+                    stage(['bash', '-c', f'trap "" TERM; sleep 600 & echo $! > {work}/member; wait'], sleep)
+                self.assertFalse(self.live(int((work/'member').read_text())))
+
+    def test_the_outer_timeout_ends_the_running_stage_and_writes_an_interrupted_report(self):
+        """The workflow's own `timeout --kill-after=30s` around a stage whose leader and member both ignore TERM."""
+        work = Path(tempfile.mkdtemp())
+        driver = work/'driver.py'
+        driver.write_text(f"""import importlib.util, json, os, sys, time
+spec = importlib.util.spec_from_file_location('a', {str(ROOT/'scripts/launcher3-compile.py')!r})
+a = importlib.util.module_from_spec(spec); spec.loader.exec_module(a)
+a.INTERRUPT_GRACE_SECONDS = 1
+try:
+    with a.interrupts():
+        a.supervised(['bash', '-c', 'trap "" TERM; sleep 600 & echo $! > {work}/member; wait'], dict(os.environ), '/', 600,
+                     '/', rss=lambda pid: 0)
+except a.Interrupted as error:
+    (os.path.join({str(work)!r}, 'interrupted')) and open(os.path.join({str(work)!r}, 'interrupted'), 'w').write(str(error))
+    sys.exit(3)
+""")
+        start = time.monotonic()
+        result = subprocess.run(['timeout', '--kill-after=30s', '3s', sys.executable, str(driver)], capture_output=True,
+                                text=True, timeout=60)
+        self.assertEqual(result.returncode, 124, result.stderr)  # timeout's own status: the command timed out
+        self.assertEqual((work/'interrupted').read_text(), 'SIGTERM')
+        self.assertFalse(self.live(int((work/'member').read_text())))
+        self.assertLess(time.monotonic() - start, 30)  # well inside the kill-after: python was never KILLed
+
+    def test_only_the_first_signal_interrupts_and_the_handlers_come_back(self):
+        script = (f"import importlib.util, os, signal, time\n"
+                  f"spec = importlib.util.spec_from_file_location('a', {str(ROOT/'scripts/launcher3-compile.py')!r})\n"
+                  "a = importlib.util.module_from_spec(spec); spec.loader.exec_module(a)\n"
+                  "with a.interrupts():\n"
+                  "    try:\n"
+                  "        os.kill(os.getpid(), signal.SIGTERM); time.sleep(5)\n"
+                  "    except a.Interrupted as error:  # the cleanup, still inside run\n"
+                  "        print('first', error)\n"
+                  "        os.kill(os.getpid(), signal.SIGTERM); os.kill(os.getpid(), signal.SIGINT); time.sleep(0.2)\n"
+                  "        print('later ignored')\n"
+                  "print(signal.getsignal(signal.SIGTERM) == signal.SIG_DFL, signal.getsignal(signal.SIGINT) is signal.default_int_handler)\n")
+        result = subprocess.run([sys.executable, '-c', script], capture_output=True, text=True, timeout=60)
+        self.assertEqual((result.returncode, result.stdout), (0, 'first SIGTERM\nlater ignored\nTrue True\n'), result.stderr)
+
     def test_copy_refuses_over_the_bound_or_the_reserve_before_writing(self):
         dest = Path(tempfile.mkdtemp())/'tree'
 
@@ -1791,6 +1881,29 @@ class Run(unittest.TestCase):
                                      copier=self.copier(), compiler=self.compiler(), pins=self.pins(),
                                      plan=self.plan()), 3)
         self.assertEqual(self.calls, [])  # a plan without the bound fetch: refused before anything is copied
+
+    def test_an_interrupted_run_is_reported_and_releases_the_lock_after_the_stage(self):
+        events = []
+
+        @contextlib.contextmanager
+        def lock(path):
+            events.append('locked')
+            try:
+                yield
+            finally:
+                events.append('released')
+
+        def compile_(argv, env, cwd, seconds, out_dir):
+            events.append('stage ended')  # supervised has ended the group before Interrupted leaves it
+            raise adapter.Interrupted('SIGTERM')
+        self.assertEqual(adapter.run(self.binding, self.s.manifest, '41700000000', '1', root=self.s.repo, lock=lock,
+                                     copier=self.copier(), compiler=compile_, pins=self.pins(),
+                                     policy_loader=lambda path: (POLICY, self.s.policy_sha), plan=self.plan(),
+                                     inputs_check=self.checks, fetcher=self.fetch), 3)
+        report = self.report()
+        self.assertEqual((report['result'], report['nothingApplied']), ('interrupted', True))
+        self.assertTrue(report['interrupted'].startswith('SIGTERM: the outer timeout or a cancel stopped the run'))
+        self.assertEqual(events, ['locked', 'stage ended', 'released'])
 
     def test_a_stopped_compile_is_recorded_and_never_a_pass(self):
         self.assertEqual(self.run_adapter(code=-15, stopped='memory'), 0)

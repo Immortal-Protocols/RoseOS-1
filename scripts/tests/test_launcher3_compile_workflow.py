@@ -114,6 +114,14 @@ class Job(unittest.TestCase):
             with self.subTest(change=change):
                 self.assertNotEqual(run(**change), 0)
 
+    def test_an_interrupted_stage_ends_inside_the_outer_kill_after(self):
+        """The outer timeout's TERM gives the helper the kill-after to end its stage: TERM, then KILL, each
+        INTERRUPT_GRACE_SECONDS, sampled every second, with margin."""
+        line = re.search(r'timeout --kill-after=(\d+)s "\$\{OUTER_SECONDS\}s" python3 scripts/launcher3-compile.py run ',
+                         jobs()[MODE])
+        self.assertIsNotNone(line)
+        self.assertLessEqual(2 * (adapter.INTERRUPT_GRACE_SECONDS + 1) + 5, int(line[1]))
+
     def test_guard_outputs_match_the_adapter_bounds(self):
         # every lunch is the contract's (definitions.lunch): its inputs and the admitted fetch come before lunch and m;
         # the candidate branch checks its tree pins twice (base-exact, final-exact)

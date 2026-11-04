@@ -54,7 +54,11 @@ loads OS Product's checker (scripts/launcher3-compile-contract.py), which B's te
                                  redirects outside the copy) and removed again on any failure; sampled stops (every
                                  SAMPLE_SECONDS)
                                  on the output filesystem's growth (OUTPUT_STOP_BYTES) and the process group's resident
-                                 memory (MEMORY_STOP_BYTES), and a wall-clock COMPILE_SECONDS; TERM, then KILL;
+                                 memory (MEMORY_STOP_BYTES), and a wall-clock COMPILE_SECONDS; TERM, then KILL, to the
+                                 whole process group (a member that outlives its leader too); the outer timeout's TERM
+                                 or a cancel (SIGTERM, SIGINT, SIGHUP) ends the running stage's group the same way within
+                                 INTERRUPT_GRACE_SECONDS each, inside the workflow's 30 s kill-after, and the report says
+                                 interrupted;
                               4. a sanitized report.json: the branch, the classification, the bound inputs (for the
                                  candidate branch the bundle report used and what of its association was taken on
                                  trust), the compile outcome, the source-list and classpath proof and both aconfig flag
@@ -70,7 +74,7 @@ What a passing report shows: the patched handlers and overlays type-check and co
 generated aconfig values. Not R8, manifest merge, APK resources, packaging, signing or runtime behaviour. The sampled
 stops can overshoot and are not hard caps; containment is by paths and environment only (no cgroup or quota exists).
 Bounds are first-measurement ceilings proposed by Infra, not measurements. Exit status: 0 report written, 2 invalid,
-3 refused, 4 unbound.
+3 refused or interrupted, 4 unbound.
 """
 import argparse
 import contextlib
@@ -236,6 +240,9 @@ SOURCE_BOUND_BYTES, RESERVE_BYTES = 150 * GIB, 300 * GIB
 PREPARE_SECONDS, COMPILE_SECONDS = 120 * 60, 120 * 60
 OUTPUT_STOP_BYTES, MEMORY_STOP_BYTES = 150 * GIB, 64 * GIB
 SAMPLE_SECONDS, KILL_GRACE_SECONDS = 5, 30
+# A stop after the outer timeout's TERM or a cancel: TERM, then KILL, each with this long, so the group is gone before
+# the workflow's `timeout --kill-after=30s` kills python itself.
+INTERRUPT_GRACE_SECONDS = 10
 # The aconfig flags the report binds come from the contract's flagEvidence: each flag's own aconfig_declarations module,
 # its expectedOutputDir (out/... relative to OUT_DIR's parent naming) and its exact expectedLine
 # ("<package>.<name>:<permission>=<state:bool>", the format of the module's aconfig-flags.txt).
@@ -258,6 +265,10 @@ class Unbound(Exception):
 
 class Refused(Exception):
     pass
+
+
+class Interrupted(BaseException):
+    """The outer timeout's TERM or a cancel reached run (interrupts); no except Exception swallows it."""
 
 
 def sha256_bytes(data):
@@ -1103,16 +1114,30 @@ def dir_bytes(path):
     return total
 
 
-def end_group(proc, clock=time.monotonic, sleep=time.sleep):
-    """TERM, then KILL, the process group, each with KILL_GRACE_SECONDS to end."""
+def group_alive(pgid, proc=Path('/proc')):
+    """Whether any live (not zombie) process is in process group pgid. While one is, pgid names no other group."""
+    for entry in proc.iterdir():
+        if not entry.name.isdigit():
+            continue
+        with contextlib.suppress(OSError, ValueError, IndexError):
+            fields = (entry/'stat').read_text().rsplit(')', 1)[1].split()
+            if fields[0] != 'Z' and int(fields[2]) == pgid:
+                return True
+    return False
+
+
+def end_group(proc, clock=time.monotonic, sleep=time.sleep, grace=KILL_GRACE_SECONDS, alive=group_alive):
+    """TERM, then KILL, the process group, each with grace seconds to end. The wait is for the whole group, not only
+    its leader, so a member that outlives the leader (one that ignores TERM) is sent KILL too. A group already gone is
+    not signalled, so a reused process ID is never one."""
     for sig in (signal.SIGTERM, signal.SIGKILL):
+        if proc.poll() is not None and not alive(proc.pid):
+            return
         with contextlib.suppress(ProcessLookupError):
             os.killpg(proc.pid, sig)
-        end = clock() + KILL_GRACE_SECONDS
-        while proc.poll() is None and clock() < end:
+        end = clock() + grace
+        while (proc.poll() is None or alive(proc.pid)) and clock() < end:
             sleep(1)
-        if proc.poll() is not None:
-            break
 
 
 def bounded_git(argv, env, cwd, deadline, gitdir, limit, popen=subprocess.Popen, clock=time.monotonic,
@@ -1123,15 +1148,19 @@ def bounded_git(argv, env, cwd, deadline, gitdir, limit, popen=subprocess.Popen,
         return None, 'timeout'
     proc = popen(argv, env=env, cwd=cwd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
     stopped = None
-    while proc.poll() is None:
-        if clock() >= deadline:
-            stopped = 'timeout'
-        elif measure(gitdir) > limit:
-            stopped = 'gitBytes'
-        if stopped:
-            end_group(proc, clock, sleep)
-            break
-        sleep(1)
+    try:
+        while proc.poll() is None:
+            if clock() >= deadline:
+                stopped = 'timeout'
+            elif measure(gitdir) > limit:
+                stopped = 'gitBytes'
+            if stopped:
+                end_group(proc, clock, sleep)
+                break
+            sleep(1)
+    except BaseException:  # Interrupted (the outer timeout, a cancel) or any failure: the group never outlives run
+        end_group(proc, clock, sleep, INTERRUPT_GRACE_SECONDS)
+        raise
     code = proc.wait()
     if not stopped and measure(gitdir) > limit:
         stopped = 'gitBytes'
@@ -1630,18 +1659,22 @@ def supervised(argv, env, cwd, seconds, out_dir, popen=subprocess.Popen, clock=t
     """(exit, stoppedBy or None). Own session; every SAMPLE_SECONDS the output filesystem's growth and the group's RSS
     are compared with their stop thresholds; a stop or the timeout ends the group with TERM, then KILL."""
     proc = popen(argv, env=env, cwd=cwd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
-    start_used, deadline, stopped = used(out_dir), clock() + seconds, None
-    while proc.poll() is None:
-        if clock() > deadline:
-            stopped = 'timeout'
-        elif used(out_dir) - start_used > OUTPUT_STOP_BYTES:
-            stopped = 'output'
-        elif rss(proc.pid) > MEMORY_STOP_BYTES:
-            stopped = 'memory'
-        if stopped:
-            end_group(proc, clock, sleep)
-            break
-        sleep(SAMPLE_SECONDS)
+    try:
+        start_used, deadline, stopped = used(out_dir), clock() + seconds, None
+        while proc.poll() is None:
+            if clock() > deadline:
+                stopped = 'timeout'
+            elif used(out_dir) - start_used > OUTPUT_STOP_BYTES:
+                stopped = 'output'
+            elif rss(proc.pid) > MEMORY_STOP_BYTES:
+                stopped = 'memory'
+            if stopped:
+                end_group(proc, clock, sleep)
+                break
+            sleep(SAMPLE_SECONDS)
+    except BaseException:  # Interrupted (the outer timeout, a cancel) or any failure: the group never outlives run
+        end_group(proc, clock, sleep, INTERRUPT_GRACE_SECONDS)
+        raise
     return proc.wait(), stopped
 
 
@@ -2038,9 +2071,34 @@ def run(binding, manifest, run_id, attempt, root=ROOT, lock=None, copier=copy_tr
         if applied:
             report['applied'] = list(applied)  # in order, each write that started (the last may have failed)
         report['result'] = 'refused'
+    except Interrupted as error:
+        report['interrupted'] = (f'{error}: the outer timeout or a cancel stopped the run; the running stage\'s process '
+                                 'group, if any, was ended before the lock was released')
+        report['nothingApplied'] = not applied
+        if applied:
+            report['applied'] = list(applied)
+        report['result'] = 'interrupted'
     finally:
         write_once(receipts/'report.json', report)
     return status
+
+
+@contextlib.contextmanager
+def interrupts(signals=(signal.SIGTERM, signal.SIGINT, signal.SIGHUP)):
+    """While run runs: the first of these signals (the outer timeout's TERM, a cancel) raises Interrupted where run is,
+    so the running stage's process group is ended and the report written; every later one is ignored, so that cleanup
+    is not cut short (the outer timeout's KILL stays the backstop). The previous handlers are restored afterwards."""
+    def stop(signum, frame):
+        for sig in signals:
+            signal.signal(sig, signal.SIG_IGN)
+        raise Interrupted(signal.Signals(signum).name)
+    previous = {sig: signal.signal(sig, stop) for sig in signals}
+    try:
+        yield
+    finally:
+        for sig, handler in previous.items():
+            if handler is not None:
+                signal.signal(sig, handler)
 
 
 def finish(binding, run_id, attempt, upload_dir, rmtree=shutil.rmtree):
@@ -2112,7 +2170,8 @@ def main(argv=None):
             return finish(binding, a.run_id, a.attempt, a.upload_dir)
         if a.upload_dir:
             raise Invalid('run takes no --upload-dir')
-        return run(binding, manifest, a.run_id, a.attempt, plan=plan)
+        with interrupts():
+            return run(binding, manifest, a.run_id, a.attempt, plan=plan)
     except Unbound as error:
         print(json.dumps({'verdict': 'SETUP_MISSING', 'error': str(error)}), file=sys.stderr)
         return 4
