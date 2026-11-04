@@ -13,19 +13,24 @@ import java.util.function.BooleanSupplier;
  * flat area: Rose (a 103x44dp control holding the ruby pearl) and the system switcher (106x44dp, two pairs of offset
  * task cards). It stays put while the pages swipe beneath.
  *
- * Rose only navigates to the conversation (never starts, mutes or ends voice). Each Home refresh hands it the
- * conversation state read from the voice service (HomeRose); the pearl is silver only while Rose's own call is
- * connected with its microphone muted, and shows no connection or listening cue on Home, as in the reference. The
- * reference's centre microphone control is OS-wide in the prototype; no OS interface for that exists (#410 capability
- * gap), so it is not drawn here rather than relabelling Rose's call mute. The switcher control asks for the real
- * system task overview through HomeOverview's one permitted route (OS-OVERVIEW-156-M001); each refresh shows whether
- * that route is available, and a tap while it is not says so and opens nothing else.
+ * Rose only navigates to the conversation (never starts or ends voice). Between Rose and the switcher sits Rose's
+ * microphone-input mute (RoseMicInput; #410 wave item 6, the HiFi's tray-mic): one state shared with the raised edge,
+ * the conversation's mic and the call notification. It withholds only microphone input into Rose Agent; it is not an
+ * OS-wide mute, never silences Rose's output or other apps, and never starts, ends or stops a call, task or session.
+ * Each Home refresh hands the tray the conversation state and the mute as every surface shows it (the live call's own
+ * mute during a call, otherwise the shared state); the pearl is silver while that mute is on, with no connection or
+ * listening cue on Home, as in the reference. The switcher control asks for the real system task overview through
+ * HomeOverview's one permitted route (OS-OVERVIEW-156-M001); each refresh shows whether that route is available, and a
+ * tap while it is not says so and opens nothing else.
  */
 final class HomeTray extends LinearLayout {
  static final int HEIGHT_DP = OxbloodEdge.HEIGHT_DP, ROSE_W_DP = OxbloodEdge.ROSE_W_DP, SWITCHER_W_DP = OxbloodEdge.SWITCHER_W_DP,
    CONTROL_H_DP = OxbloodEdge.CONTROL_H_DP, GAP_DP = OxbloodEdge.GAP_DP, PEARL_DP = OxbloodEdge.PEARL_DP;
- final View presence, overview;
+ final View presence, overview, mic;
  final RosePearl pearl;
+ final OxbloodEdge.MicGlyph micGlyph;
+ /** The mute last shown (RoseMicInput.shown). */
+ boolean shownMicMuted;
  /** The last visual state applied, and the conversation it came from; null before the first refresh. */
  RoseVisualState shownVisual;
  ConversationState shownConversation;
@@ -35,7 +40,7 @@ final class HomeTray extends LinearLayout {
  int navigationExtra;
  final float density;
 
- HomeTray(MainActivity activity, Runnable openRose, Runnable openOverview, BooleanSupplier overviewAvailable) {
+ HomeTray(MainActivity activity, Runnable openRose, Runnable toggleMic, Runnable openOverview, BooleanSupplier overviewAvailable) {
   super(activity);
   density = activity.getResources().getDisplayMetrics().density;
   setOrientation(HORIZONTAL);
@@ -57,6 +62,16 @@ final class HomeTray extends LinearLayout {
   rose.setOnClickListener(v -> openRose.run());
   presence = rose;
   addView(rose, new LayoutParams(activity.dp(ROSE_W_DP), activity.dp(OxbloodEdge.TARGET_H_DP)));
+
+  FrameLayout micControl = control(activity);
+  micGlyph = new OxbloodEdge.MicGlyph(density);
+  micControl.setBackground(new android.graphics.drawable.LayerDrawable(new android.graphics.drawable.Drawable[]{new OxbloodEdge.Well(density), micGlyph}));
+  micControl.setOnClickListener(v -> toggleMic.run());
+  mic = micControl;
+  applyMic(false);
+  LayoutParams micParams = new LayoutParams(activity.dp(OxbloodEdge.MIC_W_DP), activity.dp(OxbloodEdge.TARGET_H_DP));
+  micParams.leftMargin = activity.dp(GAP_DP);
+  addView(micControl, micParams);
 
   FrameLayout switcher = control(activity);
   View glyph = new View(activity);
@@ -87,10 +102,12 @@ final class HomeTray extends LinearLayout {
  /** The edge is 92dp plus whatever the tappable navigation inset needs below it. */
  int heightPx() { return Math.round(HEIGHT_DP * density) + navigationExtra; }
 
- /** One refresh: the session mark and spoken name from the conversation, the pearl from the truthful mute. */
- void show(ConversationState conversation, RoseVisualState visual) {
+ /** One refresh: the session mark and spoken name from the conversation; the mic well and the pearl from the mute as
+  * every surface shows it (RoseMicInput.shown). */
+ void show(ConversationState conversation, RoseVisualState visual, boolean micMuted) {
   if (released) return;
   shownConversation = conversation;
+  applyMic(micMuted);
   applyVisual(visual);
   boolean available = overviewAvailable.getAsBoolean();
   if (available != shownOverviewAvailable) applyOverview(available);
@@ -108,11 +125,18 @@ final class HomeTray extends LinearLayout {
   released = true;
  }
 
- /** The pearl: silver only while Rose's call is connected with its microphone muted; no other cue on Home. */
+ /** The mic well: Rose's microphone-input mute, named for what a tap does. */
+ void applyMic(boolean muted) {
+  shownMicMuted = muted;
+  micGlyph.set(muted);
+  String spoken = muted ? "Rose’s microphone is muted. Unmute" : "Mute Rose’s microphone";
+  if (!spoken.contentEquals(mic.getContentDescription() == null ? "" : mic.getContentDescription())) mic.setContentDescription(spoken);
+ }
+
+ /** The pearl: silver while Rose's microphone input is muted (the shown mute); no other cue on Home. */
  void applyVisual(RoseVisualState visual) {
   shownVisual = visual;
-  boolean muted = shownConversation != null && shownConversation.phase == ConversationState.Phase.ACTIVE && shownConversation.muted;
-  pearl.set(muted, false, -1);
+  pearl.set(shownMicMuted, false, -1);
   String spoken = (shownConversation != null && shownConversation.phase == ConversationState.Phase.ACTIVE ? "Return to Rose call. " : "Open Rose. ")
     + RosePresenceModel.describe(visual);
   if (!spoken.contentEquals(presence.getContentDescription())) presence.setContentDescription(spoken);
