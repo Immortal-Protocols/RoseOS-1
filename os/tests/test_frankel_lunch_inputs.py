@@ -40,7 +40,7 @@ def blob(data):
 
 class FrankelLunchInputsTest(unittest.TestCase):
     # OS Product's proposed version (#410), not yet agreed with Release; once agreed, any change needs re-agreement.
-    PROPOSED_SHA256 = 'fabb9292186800a8d41974491d2d320d790c7a22e9200941464b235b3c4218df'
+    PROPOSED_SHA256 = 'c69a7bc589607699a533ad10bf67744a93d70f8a42f77f681f57496b0e13a225'
 
     def manifest(self):
         return json.loads(MANIFEST.read_text())
@@ -173,8 +173,11 @@ class FrankelLunchInputsTest(unittest.TestCase):
         git = self.manifest()['gitRequirement']
         self.assertEqual((git['project'], git['revision'], git['path']), ('vendor/adevtool', PIN, 'vendor/adevtool/.git'))
         self.assertEqual({o['class']: o['status'].split(' ')[0] for o in git['options']},
-            {'genuine-copy': 'allowed', 'redirect': 'refused', 'fabrication': 'refused', 'relaxation': 'refused'})
+            {'genuine-copy': 'allowed', 'redirect': 'refused', 'public-fetch': 'allowed', 'fabrication': 'refused',
+             'relaxation': 'refused'})
         self.assertIn('separate approval with exact paths and bounds', git['options'][0]['status'])
+        self.assertIn('separate runtime approval', git['options'][2]['status'])
+        self.assertIn('by exactly the publicFetch steps', git['options'][3]['means'])
         self.assertEqual(git['genuineSource']['linkText'], '../../.repo/projects/vendor/adevtool.git')
         self.assertIn('Historical context, not an expected value and not current state', git['genuineSource']['basis'])
         self.assertEqual(git['environment']['GIT_CEILING_DIRECTORIES'], 'the copy root')
@@ -182,10 +185,86 @@ class FrankelLunchInputsTest(unittest.TestCase):
         self.assertIn('rootTree', git['acceptance'][1])
         self.assertIn('nothing redirects outside the copy', git['acceptance'][2])
         self.assertIn('none is a mount point; no regular file in it has more than one hard link', git['acceptance'][2])
-        self.assertIn('none of these checks can tell a fabricated store', git['acceptance'][3])
+        self.assertIn('items 1-3 alone cannot tell a hand-written gitdir from a genuine one', git['acceptance'][3])
         self.assertEqual(git['genuineSource']['kind'], 'historical')
         self.assertIn('except gitRequirement.genuineSource', self.manifest()['provenance'])
-        self.assertIn('--updateSpec', git['options'][3]['means'])
+        self.assertIn('--updateSpec', git['options'][4]['means'])
+
+    def test_public_fetch_is_blazers_git_meta_for_the_pinned_remote_with_a_stricter_tree_check(self):
+        fetch = self.manifest()['gitRequirement']['publicFetch']
+        self.assertEqual(fetch['url'], 'https://github.com/GrapheneOS/adevtool')
+        pinned = ET.parse(ROOT/'os/pinned-manifest.xml').getroot()
+        project = next(p for p in pinned.iter('project') if p.get('path') == 'vendor/adevtool')
+        remote = next(r for r in pinned.iter('remote') if r.get('name') == project.get('remote'))
+        self.assertEqual(fetch['url'], remote.get('fetch') + project.get('name'))
+        self.assertEqual(project.get('revision'), PIN)
+        blazer = importlib.util.spec_from_file_location('blazer_build_only', ROOT/'scripts/blazer-build-only.py')
+        module = importlib.util.module_from_spec(blazer)
+        blazer.loader.exec_module(module)
+        work = '<copy>/vendor/adevtool'
+        self.assertEqual([' '.join(argv) for argv in module.git_meta_argv(work, '<url>', PIN)], fetch['steps'],
+            'the same three commands as Blazer\'s git-meta')
+        self.assertEqual(fetch['environment']['GIT_ALLOW_PROTOCOL'], 'https')
+        self.assertIn('rootTree', fetch['acceptance'][1])
+        self.assertEqual(fetch['ceiling'], {'seconds': 1800, 'bytes': 1 << 30, 'kind': fetch['ceiling']['kind']})
+        self.assertIn('neither a measured requirement nor a runtime approval', fetch['ceiling']['kind'])
+        self.assertIn('adevtool_git_missing', fetch['unbound'])
+
+    def public_fetch_problems(self, copy, head, tree):
+        """publicFetch.acceptance beyond items 1-3: exact tree, connectivity, shallow at the pin, no alternates or
+        remote."""
+        work, dot = copy/'vendor/adevtool', copy/'vendor/adevtool/.git'
+        problems = []
+        if self.git(copy, '-C', str(work), 'rev-parse', '--verify', '-q', head + '^{tree}', check=False).stdout.strip() != tree:
+            problems.append('tree')
+        if self.git(copy, '-C', str(work), 'fsck', '--connectivity-only', '--no-progress', check=False).returncode:
+            problems.append('fsck')
+        if not (dot/'shallow').is_file() or (dot/'shallow').read_text() != head + '\n':
+            problems.append('shallow')
+        if os.path.lexists(dot/'objects/info/alternates'):
+            problems.append('alternates')
+        config = self.git(copy, '-C', str(work), 'config', '--local', '--list', check=False).stdout
+        if any(line.startswith('remote.') for line in config.splitlines()):
+            problems.append('remote')
+        return problems
+
+    def test_the_public_fetch_steps_give_metadata_that_passes_and_a_hand_written_store_fails(self):
+        fetch = self.manifest()['gitRequirement']['publicFetch']
+        with tempfile.TemporaryDirectory() as scratch:
+            scratch = Path(scratch)
+            origin = scratch/'origin'
+            head = self.commit(scratch, origin)
+            (origin/'second').write_text('y\n')
+            self.git(scratch, '-C', str(origin), 'add', 'second')
+            self.git(scratch, '-C', str(origin), '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', 'y')
+            head = self.git(scratch, '-C', str(origin), 'rev-parse', 'HEAD').stdout.strip()
+            tree = self.git(scratch, '-C', str(origin), 'rev-parse', 'HEAD^{tree}').stdout.strip()
+            # The contract's own steps, run offline: a file:// remote stands in for https (only the protocol differs).
+            copy = scratch/'copy'
+            (copy/'vendor/adevtool').mkdir(parents=True)
+            for step in fetch['steps']:
+                argv = step.replace('<copy>', str(copy)).replace('<url>', 'file://' + str(origin)).replace(PIN, head)
+                subprocess.run(argv.split(' '), cwd=copy, env=self.env(copy, GIT_ALLOW_PROTOCOL='file'), check=True,
+                    capture_output=True)
+            self.head = head
+            self.assertIsNone(self.accepted(copy))
+            self.assertEqual(self.public_fetch_problems(copy, head, tree), [])
+            self.assertFalse(os.path.lexists(copy/'vendor/adevtool/.git/hooks'), 'no templates, so no hooks')
+            self.assertEqual(os.listdir(copy/'vendor/adevtool'), ['.git'], 'the working tree is untouched')
+            # Hand-written stores pass items 1-3: one holding only the commit object fails the tree check, and one
+            # holding the commit and its tree but no blobs passes even that, so connectivity is what refuses it.
+            for name, objects, expected in (('commit-only', [head], ['tree', 'fsck', 'shallow']),
+                    ('no-blobs', [head, tree], ['fsck', 'shallow'])):
+                fake = scratch/name
+                gitdir = fake/'vendor/adevtool/.git'
+                (gitdir/'refs').mkdir(parents=True)
+                for oid in objects:
+                    loose = Path('objects')/oid[:2]/oid[2:]
+                    (gitdir/loose).parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copyfile(origin/'.git'/loose, gitdir/loose)
+                (gitdir/'HEAD').write_text(head + '\n')
+                self.assertIsNone(self.accepted(fake), name)
+                self.assertEqual(self.public_fetch_problems(fake, head, tree), expected, name)
 
     def test_the_generated_vendor_observables_are_the_reference_spec(self):
         vendor = self.manifest()['generatedVendor']
