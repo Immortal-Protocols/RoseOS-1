@@ -1,0 +1,1 @@
+package android.content.pm; public abstract class PackageManager { public static class NameNotFoundException extends Exception {} public abstract int getPackageUidAsUser(String p, int user) throws NameNotFoundException; }

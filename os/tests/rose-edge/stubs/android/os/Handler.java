@@ -1,0 +1,1 @@
+package android.os; public class Handler { public interface Callback { boolean handleMessage(Message m); } public Handler(Looper l) {} public Handler(Looper l, Callback c) {} public final boolean postDelayed(Runnable r, long d) { return true; } public final void removeCallbacks(Runnable r) {} }
