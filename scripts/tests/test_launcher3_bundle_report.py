@@ -54,7 +54,8 @@ PATCHER = {'apply-os-changes.py': b'apply\n', 'background_apks.py': b'background
 PATCHES = {'frameworks-base.patch': (FB, b'fb\n'), 'background-control-build-release.patch': (BR, b'br\n'),
            'rose-switcher-launcher3.patch': (L3, b'l3\n')}
 OVERLAYS = {f'{L3}/quickstep/A.java': b'a\n', f'{BR}/aconfig/B.bp': b'b\n', f'{FB}/libs/N.java': b'not an input\n',
-            'packages/apps/Updater/U.java': b'outside the three projects\n'}
+            'packages/apps/Updater/U.java': b'outside the three projects\n',
+            f'{L3}Go/G.java': b'outside too, though its path begins with a project\'s\n'}
 APPLY_ARGS = ['--background-policy', '{policy}', '--agent-tray']
 LABEL = '2026110401'
 
@@ -157,7 +158,8 @@ class Produce(unittest.TestCase):
         self.assertIn({'target': f'{L3}/quickstep/A.java', 'sha256': sha(b'a\n')}, report['observed']['overlays'])
         self.assertEqual(report['observed']['patches'][0]['sha256'], sha(b'fb\n'))  # headSha's bytes, not HEAD's
         self.assertEqual(report['observed']['unclassified'], [])
-        self.assertNotIn('packages/apps/Updater/U.java', json.dumps(report['observed']))  # outside the three projects
+        for outside in ('packages/apps/Updater/U.java', f'{L3}Go/G.java'):  # neither observed nor unclassified
+            self.assertNotIn(outside, json.dumps(report['observed']))
         # an adopt receipt of the same label, a backup, a bare name and another suffix are not the reconcile receipt
         self.s.receipt(f'0002-{LABEL}.json', receiptType='reconcile-adopt')
         self.s.receipt(f'-{LABEL}.json')
@@ -415,6 +417,7 @@ class Produce(unittest.TestCase):
                              ('another source', lambda c: c['base']['bundleReport'].update(
                                  values={'registration.source': {'equals': 'elsewhere'}})),
                              ('another report version', lambda c: c['base']['bundleReport'].update(schemaVersion=2)),
+                             ('a boolean report version', lambda c: c['base']['bundleReport'].update(schemaVersion=True)),
                              ('no trusted patcher pin', lambda c: c['base']['registration']['patcher'].update(
                                  patcher='candidate'))):
             with self.subTest(name=name):
@@ -489,6 +492,10 @@ class Committed(unittest.TestCase):
     def test_the_committed_contract_needs_its_prefixes_as_data(self):
         with self.assertRaisesRegex(producer.Invalid, 'overlayRoles.required.prefixes'):
             producer.load_contract()
+
+    def test_only_the_pinned_contract_is_read(self):
+        with self.assertRaisesRegex(producer.Invalid, 'not the contract version this producer reads'):
+            producer.load_contract(pinned='0' * 64)
 
     def test_this_checkouts_overlays_and_patches_are_the_pinned_base_bundle(self):
         """While main's os/ is at the base (until #440's candidate lands, when OS Product regenerates the contract):
