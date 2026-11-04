@@ -1,0 +1,19 @@
+{
+  "observedAt": "2026-11-04T18:41:21.456035+00:00",
+  "instance": {
+    "id": "685707771105568194",
+    "name": "immortal-os-builder",
+    "status": "TERMINATED"
+  },
+  "disks": [
+    {
+      "boot": true,
+      "deviceName": "persistent-disk-0",
+      "diskSizeGb": "4656",
+      "source": "https://www.googleapis.com/compute/v1/projects/protocols-465723/zones/us-west2-a/disks/immortal-os-builder",
+      "type": "PERSISTENT",
+      "mode": "READ_WRITE",
+      "autoDelete": false
+    }
+  ]
+}

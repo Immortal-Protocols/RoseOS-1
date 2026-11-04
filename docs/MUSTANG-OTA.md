@@ -8,6 +8,14 @@ optional physical-phone verification is not a release-completion gap.**
 
 ## Authorized UI follow-up
 
+**Latest attempt is storage blocked.** [Run 41884368820](https://github.com/Immortal-Protocols/RoseOS-1/actions/runs/41884368820)
+failed at 18:36:39Z with a runner **No space left on device** annotation.
+Binding/signing/publication were skipped; cleanup succeeded and the original
+builder was independently confirmed stopped. [Failure and storage handoff](../os/mustang-ota/41884368820/README.md).
+No receipt artifacts were available, so actual 0403 app admission, allocation
+and native compilation remain unconfirmed. The publication ETA is pending
+storage recovery. No later attempt has been dispatched or failed data removed.
+
 Chief located the later PM request for both Mustang and Frankel OTA builds/
 releases after the UI work. The source message references and exact scope are
 recorded in `os/ota/mustang-ui-followup-authority.json`. This is additional
