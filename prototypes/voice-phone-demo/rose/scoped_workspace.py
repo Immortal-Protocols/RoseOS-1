@@ -37,6 +37,8 @@ class ScopedWorkspace(Workspace):
             params['mode'] = 'alongside'
         elif operation in ('get_state', 'command', 'stop'):
             if not self.bound_id:
+                if operation == 'stop' and self.uncertain:
+                    return {'status': 'cleanup_failed', 'reason': 'Start reply was lost; workspace identity is unknown.'}
                 return {'status': 'idle' if operation == 'get_state' else 'no_background_app'}
             params['sessionId'] = self.bound_id
         result = super().call(operation, params)

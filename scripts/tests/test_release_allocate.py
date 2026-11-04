@@ -499,11 +499,12 @@ class Workflow(unittest.TestCase):
         base = dict(os.environ, MODE='latest-beta', ROSE_DEVICE='frankel', CHANNEL='beta', CANDIDATE_SHA='', BUILD_NUMBER='',
             BUILD_TIMESTAMP='', APPS='', RESUME_STAGE='none', RESUME_UNSIGNED_SHA256='', RESUME_SOURCE_RUN='',
             RESUME_SIGNED_SHA256='', REUSE_BINDING='', PROMOTE='false', APP_PUBLISH='false', ALPHA_RECOVER='false',
-            GITHUB_SHA='a' * 40, BOOTSTRAP_PROFILE='none', MODELS_BOOTSTRAP_RUN='')
+            GITHUB_SHA='a' * 40, BOOTSTRAP_PROFILE='none', MODELS_BOOTSTRAP_RUN='', MUSTANG_PUBLISH_OTA='false',
+            MUSTANG_COMPILE_RUN='', MUSTANG_BOOTSTRAP_RUN='')
         cases = [({}, True), ({'CANDIDATE_SHA': 'b' * 40}, False), ({'BUILD_NUMBER': '2026103001'}, False),
             ({'APPS': '[["dev.pixel.voice", 311]]'}, False), ({'CHANNEL': 'prod'}, False), ({'PROMOTE': 'true'}, False),
             ({'RESUME_STAGE': 'sign', 'RESUME_UNSIGNED_SHA256': 'c' * 64}, False), ({'APP_PUBLISH': 'true'}, False),
-            ({'MODE': 'os-release'}, False),
+            ({'MODE': 'os-release'}, False), ({'MUSTANG_PUBLISH_OTA': 'true'}, False),
             ({'MODE': 'os-release', 'CANDIDATE_SHA': 'b' * 40, 'BUILD_NUMBER': '2026103001', 'BUILD_TIMESTAMP': str(NOW),
               'APPS': '[["dev.pixel.voice", 311]]'}, True),
             # RELEASE020: a campaign chains latest-beta only and has a fixed shape.

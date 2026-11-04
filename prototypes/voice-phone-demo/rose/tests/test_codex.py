@@ -2,6 +2,7 @@
 No model inference, real voice, device, credentials or deployed service.
 """
 import json
+import importlib.util
 import os
 from unittest.mock import patch
 from pathlib import Path
@@ -12,7 +13,8 @@ import unittest
 from types import SimpleNamespace
 
 from rose.cloud_audio import prepare
-prepare()
+if importlib.util.find_spec('mlx') is None:
+    prepare()
 from rose.bus import Bus
 from rose.codex_conductor import CodexConductor
 from rose.transcripts import Transcripts, redact
@@ -86,11 +88,13 @@ class FakeCodex:
     def __init__(self, on_event):
         self.event, self.cwd, self.calls, self.results = on_event, Path('/tmp'), [], []
         self.n = 0
+        self.opens = 0
 
     def request(self, op, session, **p):
         self.calls.append((op, session, p))
         if op == 'open':
-            return {'threadId': 'thread-'+session, 'model': 'gpt-6.1-terra', 'serviceTier': 'fast', 'authMode': 'chatgpt'}
+            self.opens += 1
+            return {'threadId': f'thread-{session}-{self.opens}', 'model': 'gpt-6.1-terra', 'serviceTier': 'fast', 'authMode': 'chatgpt'}
         if op == 'submit':
             self.n += 1
             tid = str(self.n)
@@ -212,6 +216,60 @@ class Integration(unittest.TestCase):
         self.assertEqual(len([e for e in self.store.export(cid) if e['kind']=='user_message']),2)
         other.stop()
 
+    def test_reset_discards_already_queued_events_from_old_thread(self):
+        self.engine._user_turn('Hello')
+        old = self.engine.sessions['conversation'].thread
+        self.engine.reset()
+        current = self.engine.sessions['conversation']
+        self.assertNotEqual(old, current.thread)
+        before = self.store.export(self.engine.conversation)
+        for event in ({'event':'started','turnId':'old-turn'},
+                      {'event':'message','turnId':'old-turn','text':'stale reply'},
+                      {'event':'done','turn':{'id':'old-turn','status':'completed'}}):
+            self.engine._event(dict(event, session='conversation', threadId=old))
+        self.assertIsNone(current.turn)
+        self.assertEqual(self.store.export(self.engine.conversation), before)
+
+    def test_completed_task_followup_returns_new_controllable_id(self):
+        a = self.task('Calculator')
+        self.call(a, 'open_app', app='Calculator')
+        self.engine._event({'event':'done','session':a.name,'turn':{'id':a.turn,'status':'completed'}})
+        old = a.task
+        self.assertEqual(old.status,'done')
+        result, _ = self.engine._conversation_tool('update_task', {'task_id':old.id,'instruction':'Continue in Calculator'})
+        self.assertTrue(result['ok'])
+        self.assertNotEqual(result['task_id'],old.id)
+        self.assertTrue(wait(lambda: a.turn is not None and a.busy))
+        self.assertTrue(self.engine.cancel(result['task_id']))
+        self.assertTrue(wait(lambda: a.closed))
+        self.assertEqual(a.task.status,'cancelled')
+        self.assertEqual(old.status,'done')
+
+    def test_lost_workspace_start_reply_never_claims_confirmed_stop(self):
+        a = self.task('Calculator')
+        send = a.view.workspace.send
+        def lost(op,p):
+            result = send(op,p)
+            return {'status':'timeout'} if op=='start' else result
+        a.view.workspace.send = lost
+        self.assertFalse(self.call(a,'open_app',app='Calculator')['ok'])
+        self.assertTrue(a.view.workspace.uncertain)
+        self.engine.cancel(a.task.id)
+        self.assertTrue(wait(lambda: a.closed))
+        self.assertEqual(a.task.status,'failed')
+        events = self.store.export(self.engine.conversation)
+        self.assertTrue(any(e['kind']=='cancellation_uncertain' for e in events))
+        self.assertFalse(any(e['kind']=='cancellation_acknowledged' for e in events))
+        self.assertFalse(any(op=='stop' for op,_ in self.controller.calls))
+
+    def test_model_image_resize_does_not_mutate_cached_phone_observation(self):
+        from PIL import Image
+        original = Image.new('RGB',(1080,1920))
+        self.phone.look = lambda: original
+        self.call(self.engine.sessions['conversation'],'look_at_screen')
+        self.assertEqual(original.size,(1080,1920))
+        self.assertEqual(self.engine.client.results[-1]['result']['contentItems'][1]['type'],'inputImage')
+
     def test_native_owner_stop_interrupts_only_matching_codex_thread(self):
         a, b = self.task('Calculator'), self.task('Clock')
         self.call(a,'open_app',app='Calculator')
@@ -247,6 +305,14 @@ class Integration(unittest.TestCase):
         self.assertFalse(self.call(a,'set_timer',minutes=1,label='test')['ok'])
         self.assertFalse(self.call(a,'search_places',query='test')['ok'])
         self.assertFalse(any(op=='start' for op,_ in self.controller.calls))
+
+    def test_unreadable_observation_cannot_complete_task_successfully(self):
+        a = self.task('Calculator')
+        self.assertFalse(self.call(a,'observe')['ok'])
+        self.engine._event({'event':'done','session':a.name,'turn':{'id':a.turn,'status':'completed'}})
+        self.assertEqual(a.task.status,'failed')
+        self.assertTrue(any(e['kind']=='task_finished' and e['data']['status']=='failed'
+                            for e in self.store.export(self.engine.conversation)))
 
     def test_backend_interrupt_failure_still_stops_phone_and_records_uncertainty(self):
         a = self.task('Calculator')
@@ -373,6 +439,7 @@ class StdioBridge(unittest.TestCase):
                 while not tool_event:
                     e=events.get(timeout=5)
                     if e['event']=='tool':tool_event=e
+                self.assertEqual(tool_event['threadId'], tool_event['params']['threadId'])
                 client.send({'op':'tool_result','callId':tool_event['callId'],
                              'result':{'success':True,'contentItems':[{'type':'inputText','text':'ok'}]}})
                 received=[]

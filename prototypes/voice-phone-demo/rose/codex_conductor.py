@@ -237,6 +237,8 @@ class CodexConductor:
                 with s.submit_lock:
                     if s.cancelled.is_set():
                         return
+                    if not s.busy:
+                        s.turn = None
                     self.log(s, 'user_message', text=instruction)
                     if s.busy:
                         self.client.request('submit', s.name, text=instruction)  # adapter uses turn/steer
@@ -245,7 +247,7 @@ class CodexConductor:
             except Exception as exc:
                 self._failed(s, exc)
         self._background(run)
-        return True
+        return s.task
 
     def cancel(self, task_id):
         s = next((s for s in list(self.sessions.values()) if s.task and s.task.id == task_id), None)
@@ -331,6 +333,8 @@ class CodexConductor:
         s = self.sessions.get(e.get('session'))
         if not s:
             return
+        if e.get('threadId') and e['threadId'] != s.thread:
+            return  # queued events from a closed thread must not enter its replacement
         kind = e['event']
         if e.get('turnId', e.get('turn', {}).get('id')) in s.ignored_turns:
             return
@@ -367,15 +371,17 @@ class CodexConductor:
             self.log(s, 'turn_finished', status=status, elapsed_ms=round((time.monotonic()-s.started)*1000),
                      first_text_ms=None if not s.first_text else round((s.first_text-s.started)*1000))
             if s.task:
+                validation_error = None
                 if status == 'completed':
                     from .tasks import _unseen_number
                     why, _ = _unseen_number(s.task.goal, s.text, s.view, s.run)
-                    if not s.task.steps or why:
+                    if not any(a.get('ok') for step in s.task.steps for a in step['actions']) or why:
                         status = 'failed'
-                        s.text = why or 'No phone action or observation was recorded.'
+                        validation_error = why or 'No successful phone action or observation was recorded.'
                 s.task.status = {'completed': 'done', 'interrupted': 'cancelled'}.get(status, 'failed')
-                s.task.result = s.text if status == 'completed' else f'Codex turn {status}.'
+                s.task.result = s.text if status == 'completed' else validation_error or f'Codex turn {status}.'
                 s.task.finished = time.time()
+                self.log(s, 'task_finished', status=s.task.status, result=s.task.result)
                 self._task_event(s)
                 self._announcements.put(s)
             elif s.utterance:
@@ -420,6 +426,7 @@ class CodexConductor:
                  cancellation_requested=s.cancelled.is_set())
         content = [{'type': 'inputText', 'text': json.dumps(redact(result))}]
         if image is not None and not s.cancelled.is_set():
+            image = image.copy()  # preserve the phone's cached observation dimensions
             image.thumbnail((768, 768))
             out = io.BytesIO()
             image.save(out, format='PNG')
@@ -435,7 +442,8 @@ class CodexConductor:
             task = self.start_phone(str(a['app']), str(a['goal']))
             return {'ok': True, 'task_id': task.id, 'status': task.status}, None
         if name == 'update_task':
-            return {'ok': self.update(int(a['task_id']), str(a['instruction']))}, None
+            task = self.update(int(a['task_id']), str(a['instruction']))
+            return {'ok': bool(task), 'task_id': task.id if task else None}, None
         if name == 'cancel_task':
             return {'ok': self.cancel(int(a['task_id']))}, None
         if name == 'list_tasks':
@@ -458,9 +466,10 @@ class CodexConductor:
         if len(s.task.steps) >= 50:
             return {'ok': False, 'reason': 'Action limit reached; ask the owner to continue'}, None
         if name == 'observe':
+            observed = None
             if hasattr(view, 'refresh'):
-                view.refresh()
-            result = {'ok': True}
+                observed = view.refresh()
+            result = {'ok': observed is None or observed.get('status') == 'ok'}
         else:
             call = ToolCall(name, a)
             el = view.element(_arg_id(a)) if name in ('tap', 'type_text') else None
@@ -539,6 +548,8 @@ class CodexConductor:
         try:
             task_session = self._announcements.get_nowait()
         except queue.Empty:
+            return
+        if task_session.conversation != s.conversation:
             return
         text = task_session.task.result
         if self.speaker and text:

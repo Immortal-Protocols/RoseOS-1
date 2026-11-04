@@ -14,7 +14,7 @@ async function handle(m) {
  }
  if(m.op==='open') {
   if(sessions.has(m.session))throw Error('Session already exists');
-  const publish=event=>{if(sessions.get(m.session)===c)send({session:m.session,...event});};
+  const publish=event=>{if(sessions.get(m.session)===c)send({session:m.session,threadId:c.thread,...event});};
   const c=new Codex(m.cwd, '', null, {externalPhone:true,model:m.model,
    developerInstructions:m.instructions,dynamicTools:m.tools.map(tool=>({type:'function',...tool})),
    handleToolCall:params=>new Promise(resolve=>{

@@ -85,6 +85,14 @@ jobs:
           "$RUNNER_TEMP/pr288-venv/bin/pip" list --disable-pip-version-check | grep -iE '^(numpy|pillow|fastapi|cryptography) '
           echo "ROSE_PR288_DIR=$pr288/prototypes/voice-phone-demo" >> "$GITHUB_ENV"
           echo "$RUNNER_TEMP/pr288-venv/bin" >> "$GITHUB_PATH"
+      - name: Codex voice integration (simulated app-server and phone, no model or device)
+        run: |
+          set -euo pipefail
+          python3 -m venv "$RUNNER_TEMP/codex-voice-venv"
+          "$RUNNER_TEMP/codex-voice-venv/bin/pip" install --disable-pip-version-check --only-binary=:all: \
+            $(grep -E '^(numpy|pillow|fastapi|uvicorn|websockets|soundfile|httpx)==' prototypes/voice-phone-demo/requirements.txt) cryptography
+          PYTHONPATH="$GITHUB_WORKSPACE/prototypes/voice-phone-demo" \
+            "$RUNNER_TEMP/codex-voice-venv/bin/python" -m rose.tests.test_codex
       - name: Offline suite
         run: bash scripts/test-local.sh
       - name: Models PR288 cases executed, not skipped (only the unpinned jinja2 render case may skip)
