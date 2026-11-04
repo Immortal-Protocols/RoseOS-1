@@ -123,17 +123,22 @@ def properties(raw):
 
 
 def vendor_identity(raw):
-    """Read only the three required identity values; unrelated repeated properties
-    are not an identity failure. Repeated identity values must agree exactly.
-    OTA metadata still uses the separate strict duplicate-rejecting parser.
+    """Read the three literal identity values with init's in-file last-definition
+    behavior (pinned system/core 322ff512 property_service.cpp LoadProperties).
+    Compare the resulting values below; do not impose OTA-manifest uniqueness
+    on a build.prop file. OTA metadata keeps its strict duplicate parser.
     """
-    rows = [line.split('=', 1) for line in raw.decode().splitlines() if '=' in line and not line.startswith('#')]
+    required = {'ro.product.vendor.device', 'ro.vendor.build.version.incremental', 'ro.vendor.build.date.utc'}
     identity = {}
-    for key in ('ro.product.vendor.device', 'ro.vendor.build.version.incremental', 'ro.vendor.build.date.utc'):
-        values = {value for name, value in rows if name == key}
-        if len(values) != 1:
-            raise ValueError('required vendor build identity missing or conflicting: '+key)
-        identity[key] = values.pop()
+    for line in raw.decode().splitlines():
+        line = line.strip()
+        if not line or line.startswith('#') or '=' not in line:
+            continue
+        key, value = (part.strip() for part in line.split('=', 1))
+        if key in required:
+            identity[key] = value
+    if set(identity) != required:
+        raise ValueError('required vendor build identity missing')
     return identity
 
 

@@ -44,11 +44,14 @@ retains exact stage/source/cleanup evidence. This was an observer parsing error,
 not evidence that the installed updater is broken.
 
 The observer had applied the strict OTA-manifest duplicate rule to all vendor
-properties. The correction reads only the required device/build/time properties:
-each must have exactly one consistent value. Unrelated repeats and identical
-repeated identity values do not create ambiguity; missing or conflicting
-identity values still stop. OTA metadata keeps its separate strict duplicate
-rejection. A targeted archive/observer regression reproduces these cases.
+properties. The correction reads only the required literal device/build/time
+properties, following the in-file last-definition behavior in the
+[pinned init loader](https://github.com/GrapheneOS/platform_system_core/blob/322ff5129d865a5e8d958667e6c63ac943449493/init/property_service.cpp#L809).
+It still refuses missing or incorrect resulting identity values. This is an
+archive metadata observation, not a live phone-property read. OTA metadata
+keeps its separate strict duplicate rejection. A targeted archive/observer
+regression reproduces unrelated repeats, effective values and wrong-device
+refusal while preserving strict OTA metadata parsing.
 Actual baseline updater/trust compatibility remains unproven until the corrected
 observer runs. Do not restart native compilation or adopt an incomplete result;
 no compile was invoked by this failed prebuild attempt.

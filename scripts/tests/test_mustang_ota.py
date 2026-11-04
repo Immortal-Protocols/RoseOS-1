@@ -257,8 +257,14 @@ class ObserverTest(unittest.TestCase):
         entries['VENDOR/build.prop'] += b'ro.product.vendor.device=frankel\n'
         with zipfile.ZipFile(self.path,'w') as archive:
             for name,data in entries.items():archive.writestr(name,data)
-        with self.assertRaisesRegex(ValueError,'identity missing or conflicting'):
+        with self.assertRaisesRegex(ValueError,'actual target-files device/build/time differs'):
             self.observe()
+        # init's in-file last definition is the effective value, including after
+        # an earlier differing definition. The final wrong device above refused.
+        entries['VENDOR/build.prop'] += b'ro.product.vendor.device=mustang\n'
+        with zipfile.ZipFile(self.path,'w') as archive:
+            for name,data in entries.items():archive.writestr(name,data)
+        self.assertTrue(self.observe()['packagedUpdaterVerified'])
         with self.assertRaisesRegex(ValueError,'duplicate metadata'):
             ota.properties(b'pre-device=mustang\npre-device=frankel\n')
     def test_wrong_repository_or_channel_stops(self):

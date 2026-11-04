@@ -25,7 +25,8 @@
       }
     }
   },
-  "diagnosis": "The baseline observer used the strict OTA-metadata duplicate parser on the entire VENDOR/build.prop. Required identity checks need only unique consistent values for the three selected identity properties, not uniqueness of every unrelated vendor property.",
-  "correction": "Scope build.prop parsing to the required device/build/time values; reject missing/conflicting identity values, permit unrelated repeats and identical repeated identity values. Keep OTA metadata duplicate rejection unchanged.",
-  "baselineUpdaterCompatible": "unproven until corrected observer executes"
+  "diagnosis": "The baseline observer applied strict OTA-manifest duplicate rejection to all of VENDOR/build.prop; the pinned init loader accepts later definitions within a property file.",
+  "correction": "Read the three required literal vendor device/build/time values with pinned init in-file last-definition behavior and compare the resulting identity to the expected Mustang build. Refuse missing/wrong final values. Keep OTA metadata duplicate rejection unchanged.",
+  "baselineUpdaterCompatible": "unproven until corrected observer executes",
+  "propertySemanticsSource": "https://github.com/GrapheneOS/platform_system_core/blob/322ff5129d865a5e8d958667e6c63ac943449493/init/property_service.cpp#L809"
 }
