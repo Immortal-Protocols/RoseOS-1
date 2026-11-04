@@ -1,0 +1,91 @@
+{
+  "bootstrapReceiptSha256": "fa7c93ba16e26e97fccf6852fa660215130cf19d72fe2e5dcec6af7e220c5161",
+  "build": "2026110401",
+  "candidateSource": "434df146289981c93f1ff84db7ab01ce37136f38",
+  "commandOutcome": {
+    "consumedBytes": 0,
+    "enforcement": "sampled-stop",
+    "leftoverGroupEnded": null,
+    "lowestSampledAvailableBytes": 168711827456,
+    "peakSampledBytes": 0,
+    "returncode": 0,
+    "sampleSeconds": 5,
+    "stopped": null
+  },
+  "compileArtifacts": {
+    "otatools": {
+      "path": "/home/pixelbuild/rose-actions/mustang-prep-41750459835-1/source/out-mustang-build-2026110401/soong/.intermediates/build/make/tools/otatools_package/otatools-package/linux_glibc_x86_64/gen/otatools.zip",
+      "sha256": "216ee9b46072de5183e1cd6db934e5478a955c83f793369757e233d052a0a74b",
+      "sizeBytes": 536808141,
+      "state": "collected"
+    },
+    "targetFiles": {
+      "path": "/home/pixelbuild/rose-actions/mustang-prep-41750459835-1/source/out-mustang-build-2026110401/target/product/mustang/obj/PACKAGING/target_files_intermediates/mustang-target_files.zip",
+      "sha256": "01b6925e2b14914bd37b35589d3c30d6728bcd85fa5ac2a5d1096aae4fc6a487",
+      "sizeBytes": 4340117750,
+      "state": "collected"
+    },
+    "vendorBootImage": {
+      "path": "/home/pixelbuild/rose-actions/mustang-prep-41750459835-1/source/out-mustang-build-2026110401/target/product/mustang/vendor_boot.img",
+      "sha256": "267741cb8b747782d50e4a8c2a0ed5daa14b28cdf7f505ca35c48881ece06f14",
+      "sizeBytes": 67108864,
+      "state": "collected"
+    },
+    "vendorKernelBootImage": {
+      "path": "/home/pixelbuild/rose-actions/mustang-prep-41750459835-1/source/out-mustang-build-2026110401/target/product/mustang/vendor_kernel_boot.img",
+      "sha256": "f2cf77bcac17e358ce89f35f17a53d242bbb2e8dff943b29872226ffabf86690",
+      "sizeBytes": 67108864,
+      "state": "collected"
+    }
+  },
+  "compileCollectionReceiptSha256": "086dc904f3c0c8cf694d29d9683944f43d91b3c981199fea690c1d7061c7ccd2",
+  "compileCollectionRecovery": false,
+  "compileProducerConclusion": "success",
+  "compileReceiptSha256": "aeee63b7127270e61d765e9ceeb7728762ab8791a20c0c5ba3b2a809d525c526",
+  "device": "mustang",
+  "intendedPublicIdentityVerified": false,
+  "label": "build-and-package candidate; omitted verification remains undone; physical-device acceptance unproven",
+  "omittedChecks": [
+    "Downloaded input hash verification",
+    "Focused tests, including wrong-device/hash/missing-input negative cases",
+    "Existing-device regression tests and required CI/full-suite runs (post-hoc follow-up)",
+    "Independent isolated source/output path and safe-file-handling verification",
+    "Free-space checks against the selected route reserve",
+    "OS/AVB signing-result and intended-public-identity verification",
+    "Packaged Rose app/signer and compiled-controller-policy verification",
+    "Required-partition and firmware-coverage checks",
+    "Installer-to-signed-output content comparison, including dynamic partitions",
+    "Installer-reference, device-requirement and public-AVB-metadata checks",
+    "Separate archive-signature status reporting"
+  ],
+  "outputs": {
+    "ota": {
+      "path": "/home/pixelbuild/rose-actions/mustang-sign-41761758623-1/release/public/mustang-ota_update-2026110401.zip",
+      "sha256": "bd31790a1f295d8fda021c940730a3906eef0e6797c3a0f180d9dc1cd9032f4b",
+      "sizeBytes": 1673390903
+    },
+    "targetFiles": {
+      "path": "/home/pixelbuild/rose-actions/mustang-sign-41761758623-1/release/signed-target_files.zip",
+      "sha256": "2b7898ffeb09a291c6259c47eee6ff448d57e0fdbb9d883f7f053e57f7bb6961",
+      "sizeBytes": 4884068300
+    }
+  },
+  "publicAvbPath": "/home/pixelbuild/rose-actions/mustang-sign-41761758623-1/release/public/avb_pkmd.bin",
+  "recipeSource": "a86b29287335c1648b731d320b13980b65f8c137",
+  "runAttempt": "1",
+  "runId": "41761758623",
+  "schema": "roseos.mustang-sign-run.v1",
+  "secrets": {
+    "keys": {
+      "name": "PIXEL_OS_SIGNING_KEYS_MUSTANG_V1",
+      "version": "1"
+    },
+    "passphrase": {
+      "name": "PIXEL_OS_SIGNING_PASSPHRASE_MUSTANG_V1",
+      "version": "1"
+    }
+  },
+  "signingResultVerified": false,
+  "sourceRoot": "/home/pixelbuild/rose-actions/mustang-prep-41750459835-1/source",
+  "status": "signed-command-complete"
+}

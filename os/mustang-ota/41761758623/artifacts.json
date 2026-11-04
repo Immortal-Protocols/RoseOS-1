@@ -1,0 +1,99 @@
+{
+  "artifacts": [
+    {
+      "id": 13292085167,
+      "name": "mustang-ota-publication-41761758623-1",
+      "size_in_bytes": 1636,
+      "url": "https://api.github.com/repos/Immortal-Protocols/RoseOS-1/actions/artifacts/13292085167",
+      "archive_download_url": "https://api.github.com/repos/Immortal-Protocols/RoseOS-1/actions/artifacts/13292085167/zip",
+      "expired": false,
+      "created_at": "2026-11-04T02:54:42Z",
+      "expires_at": "2026-11-11T02:54:41Z",
+      "updated_at": "2026-11-04T02:54:42Z",
+      "digest": "sha256:b9e538442c8f81f1fdf6e513b8de08d9c5a1b5aa13702d872f1d1d27ffc2197e",
+      "workflow_run": {
+        "id": 41761758623,
+        "repository_id": 1428996648,
+        "head_repository_id": 1428996648,
+        "head_branch": "main",
+        "head_sha": "a86b29287335c1648b731d320b13980b65f8c137"
+      }
+    },
+    {
+      "id": 13291457683,
+      "name": "mustang-collection-receipt-41761758623-1",
+      "size_in_bytes": 4919,
+      "url": "https://api.github.com/repos/Immortal-Protocols/RoseOS-1/actions/artifacts/13291457683",
+      "archive_download_url": "https://api.github.com/repos/Immortal-Protocols/RoseOS-1/actions/artifacts/13291457683/zip",
+      "expired": false,
+      "created_at": "2026-11-04T02:50:10Z",
+      "expires_at": "2026-11-11T02:50:09Z",
+      "updated_at": "2026-11-04T02:50:10Z",
+      "digest": "sha256:3e11aae93f366d55243ceec3a38afa45d11be178ed5e18f23eada5e7f26f12be",
+      "workflow_run": {
+        "id": 41761758623,
+        "repository_id": 1428996648,
+        "head_repository_id": 1428996648,
+        "head_branch": "main",
+        "head_sha": "a86b29287335c1648b731d320b13980b65f8c137"
+      }
+    },
+    {
+      "id": 13291337989,
+      "name": "mustang-sign-receipt-41761758623-1",
+      "size_in_bytes": 1897,
+      "url": "https://api.github.com/repos/Immortal-Protocols/RoseOS-1/actions/artifacts/13291337989",
+      "archive_download_url": "https://api.github.com/repos/Immortal-Protocols/RoseOS-1/actions/artifacts/13291337989/zip",
+      "expired": false,
+      "created_at": "2026-11-04T02:50:11Z",
+      "expires_at": "2026-11-11T02:50:10Z",
+      "updated_at": "2026-11-04T02:50:11Z",
+      "digest": "sha256:98880b16bedbf30afed5aa2acb5b75146fb9d56dc44c12f8d9721b55e66d3e8f",
+      "workflow_run": {
+        "id": 41761758623,
+        "repository_id": 1428996648,
+        "head_repository_id": 1428996648,
+        "head_branch": "main",
+        "head_sha": "a86b29287335c1648b731d320b13980b65f8c137"
+      }
+    },
+    {
+      "id": 13291277393,
+      "name": "mustang-ota-41761758623-1",
+      "size_in_bytes": 1673396165,
+      "url": "https://api.github.com/repos/Immortal-Protocols/RoseOS-1/actions/artifacts/13291277393",
+      "archive_download_url": "https://api.github.com/repos/Immortal-Protocols/RoseOS-1/actions/artifacts/13291277393/zip",
+      "expired": false,
+      "created_at": "2026-11-04T02:51:15Z",
+      "expires_at": "2026-11-11T02:50:56Z",
+      "updated_at": "2026-11-04T02:51:15Z",
+      "digest": "sha256:179738cfd7a683dc558027c4b34f1af0ca65fcbc42811fb7fe8b1160ae6aa4b6",
+      "workflow_run": {
+        "id": 41761758623,
+        "repository_id": 1428996648,
+        "head_repository_id": 1428996648,
+        "head_branch": "main",
+        "head_sha": "a86b29287335c1648b731d320b13980b65f8c137"
+      }
+    },
+    {
+      "id": 13290603396,
+      "name": "mustang-ota-baseline-41761758623-1",
+      "size_in_bytes": 855,
+      "url": "https://api.github.com/repos/Immortal-Protocols/RoseOS-1/actions/artifacts/13290603396",
+      "archive_download_url": "https://api.github.com/repos/Immortal-Protocols/RoseOS-1/actions/artifacts/13290603396/zip",
+      "expired": false,
+      "created_at": "2026-11-04T02:51:16Z",
+      "expires_at": "2026-11-11T02:51:15Z",
+      "updated_at": "2026-11-04T02:51:16Z",
+      "digest": "sha256:77fbbd0cf773827e3d961c165c10ca303c57decd447520ded870e4f096c4c720",
+      "workflow_run": {
+        "id": 41761758623,
+        "repository_id": 1428996648,
+        "head_repository_id": 1428996648,
+        "head_branch": "main",
+        "head_sha": "a86b29287335c1648b731d320b13980b65f8c137"
+      }
+    }
+  ]
+}

@@ -1,0 +1,33 @@
+{
+  "build": "2026110302",
+  "device": "mustang",
+  "discoveryClassesPresent": true,
+  "installedEvidence": "Nathan confirmed build 2026110302 installed with Beta selected on 2026-11-04 in the Mustang worker thread. Phone behavior has not been independently observed.",
+  "packagedUpdaterVerified": true,
+  "phoneObserved": false,
+  "schema": "roseos.mustang-ota-baseline.v1",
+  "targetFiles": {
+    "path": "/home/pixelbuild/rose-actions/mustang-sign-41738359336-1/release/signed-target_files.zip",
+    "sha256": "baf24f4b433d66e7115e5fc5a15af1394482a59af10c08e222913a65e6bf7814",
+    "sizeBytes": 4884085713
+  },
+  "timestamp": "1793742435",
+  "trustedOtaCertificateSha256": [
+    "93cc757e7f4e4e5c4ef7726fbeec9acc77b1f97d471c1cd0d62753cf94e471a8"
+  ],
+  "updaterApkSha256": "32d5f335098c14839641784552fbed513932921c26f4b83647967747198c2cd9",
+  "updaterResources": {
+    "channel_default": "prod",
+    "channel_published": [
+      "stable"
+    ],
+    "channel_values": [
+      "prod",
+      "stable",
+      "alpha"
+    ],
+    "release_index": "https://api.github.com/repos/Immortal-Protocols/pixel-ota/releases",
+    "url": "https://github.com/Immortal-Protocols/pixel-ota/releases/download/"
+  },
+  "updaterSignerSha256": "93cc757e7f4e4e5c4ef7726fbeec9acc77b1f97d471c1cd0d62753cf94e471a8"
+}
