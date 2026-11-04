@@ -2,9 +2,10 @@
 
 Target: **Pixel 11 Pro Fold / yogi**, Android 17, stock-kernel experimental port.
 This is separate from the supported Pixel 10 family and its `rango` Fold route.
-The current scope is to produce a reviewable candidate while leaving the phone
-unchanged. No Yogi release, verified installation package or physical acceptance
-is established by this guide.
+Candidate `2026110401` was compiled, inspected and installed on the owner's test
+phone with an explicitly authorized data wipe. The owner reported that it
+worked. This is an experimental lab result; OTA delivery, production signing
+and a complete physical acceptance pass remain unestablished.
 
 ## Inputs and evidence
 
@@ -120,8 +121,9 @@ reuse the phone's build identity. Confirm lunch and tools on the real builder,
 and record the complete resolved manifest, Rose revision/worktree, local patches,
 exact app/policy identities, tool versions, exit status, output sizes and hashes.
 Compilation is followed by artifact inspection and signing review. Follow
-[verification](VERIFY.md) for the evidence boundaries. No flashing, bootloader
-locking, reboot or phone data change is part of this build scope.
+[verification](VERIFY.md) for the evidence boundaries. The preparation and
+compilation commands above perform no phone operations. The separately
+authorized lab installation below is not a general installation procedure.
 
 ## Candidate 2026110401: measured build evidence
 
@@ -156,9 +158,51 @@ was recovered by locating the actual Soong tools package, without a rebuild.
 The pinned optimizer warned that API 37 exceeds its supported API 36 table;
 compilation continued successfully. The factory kernel release string matches
 the observed phone kernel, but installed kernel bytes and module loading were
-not verified. These are experimental development artifacts, not a signed
-production release or an installation/OTA package. Their app signer differs from
-the phone's installed signer, and controller 28 is below the installed 43, so this
-is not an in-place update. No boot, visual acceptance, physical acceptance,
-flashing or publication was performed. Private receipts and artifacts belong in
-the ignored `out/yogi-2026110401/` directory and on the dedicated builder.
+not verified. These are experimental development artifacts, not a production
+release or an OTA package. Before the wipe, the phone had a different app signer
+and controller 43; controller 28 was therefore not an in-place update. The lab
+installation replaced that baseline. Re-read the actual installed versions and
+certificates before allocating any subsequent update; the packaged lab inputs
+are Rose Agent 311, controller 28 and Calculator 4.
+
+Private build receipts and artifacts belong in the ignored
+`out/yogi-2026110401/` directory and on the dedicated builder. Preserve the tested
+source tree. The later merge with main includes newer UI changes that have not
+been compiled or accepted on Yogi by this build's evidence.
+
+## First lab installation: owner-reported success
+
+On 2026-11-04 UTC, the owner identified this as a test phone with expendable data
+and authorized the install. Preflight selected only the connected Yogi, checked
+its unlocked bootloader, matching stock bootloader/radio, battery, partition
+sizes and absence of an active snapshot. The inactive slot was reported
+unbootable; it is not an established recovery baseline.
+
+A local fastboot installation ZIP was assembled from the verified target-files,
+retaining the original image bytes and package instructions. It is
+2,173,200,684 bytes, SHA-256
+`93f5b24d789193abf1d97923b9c6ca168adbb403e4e9e9e1ad1336770d872a73`.
+It contains Android partition images, including `pvmfw`, but no replacement
+bootloader or radio image. The scoped fastboot update targeted slot B, skipped
+the secondary slot and automatic reboot, and wiped userdata/metadata. It
+completed with exit status 0 in 82.337 seconds. Post-flash fastboot inspection
+confirmed the original bootloader/radio versions and unlocked state before the
+explicit reboot. No bootloader relock or verification-disabling flags were used.
+
+After first boot, the owner replied **"That worked!"** This records a successful
+installation/boot as reported by the person holding the phone. Automated ADB
+shell and sync requests returned `error: closed` after reboot, so there is no
+post-boot property inventory, rendered HOME capture, hardware smoke pass or
+verified installed-build readback. Those checks remain for the OTA handoff.
+
+The lab uses public AOSP development signing keys and includes no OS Updater.
+It cannot discover a future Yogi OTA as installed. Establish an owned updater
+route and a durable private signing/bootstrap plan before treating Yogi as an
+OTA-supported device; do not assume a data-preserving migration from the lab
+keys. APK re-signing must also update the framework's bound signer policy.
+
+Installation receipts and the lab ZIP remain outside Git in the ignored
+`out/yogi-flash-20261104-1/` directory. A verified matching Google factory archive
+is staged privately for recovery; it restores stock Google Android, not the
+previous custom GrapheneOS build or its erased data. Nothing was published and
+no OTA workflow or automatic trigger was enabled by this lab test.
