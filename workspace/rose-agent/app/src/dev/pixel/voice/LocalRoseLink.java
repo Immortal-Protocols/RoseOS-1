@@ -44,6 +44,8 @@ final class LocalRoseLink {
     private static final int REPLACED = 4001, AUDIO_OFF = 4003;
 
     private static volatile LocalRoseLink current;
+    /** The last mute value asked for, kept even while no link is published (a start ending an older link). */
+    private static volatile boolean requestedMute;
 
     private final Context context;
     private final Sink sink;
@@ -90,6 +92,9 @@ final class LocalRoseLink {
         link.muted = muted;
         link.token = lastToken = lastToken == Integer.MAX_VALUE ? 1 : lastToken + 1;
         current = link;
+        // A mute asked for while no link was published (setMuted saw none) is applied before the first frame: setMuted
+        // writes requestedMute then reads current, this writes current then reads requestedMute, so one sees the other.
+        if (requestedMute) link.muted = true;
         link.begin();
         return link.token;
     }
@@ -126,6 +131,7 @@ final class LocalRoseLink {
 
     /** Lock-free, so a mute from the main thread never waits for a link that is starting or ending. */
     static void setMuted(boolean muted) {
+        requestedMute = muted;
         LocalRoseLink link = current;
         if (link != null) link.muted = muted;
     }

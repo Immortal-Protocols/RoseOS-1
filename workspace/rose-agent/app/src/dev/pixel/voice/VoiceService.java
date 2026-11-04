@@ -37,6 +37,8 @@ public class VoiceService extends Service {
  volatile boolean connected=false,live=false,muted=false;
  // Rose's microphone-input mute (#410 item 6, MicInputCapture): requests sent to the page and the last one it applied.
  volatile int muteRequestSeq,muteAckSeq;boolean reportedLiveConnected;
+ /** The newest voice page generation whose renderer is gone (#410 item 6): its Local Rose start is ended if it races that. */
+ volatile int goneGeneration;
  /** Every request's sequence, from the UI thread (command) and the JavaBridge thread (state) alike. */
  synchronized int nextMuteSeq(){return ++muteRequestSeq;}
  /** False while a mute request is on its way to the page: a report taken before it is stale. */
@@ -288,6 +290,7 @@ public class VoiceService extends Service {
   live=false;connected=false;muted=false;lastEndReason="renderer_gone";
   // Its capture and its requests end with it (#410 item 6): silent from the next frame, then ended off the main thread
   // by its own token, so the joins never block here and a newer page's link is never the one stopped.
+  goneGeneration=Math.max(goneGeneration,callbacks.current());
   final int deadLink=LocalRoseLink.silence();if(deadLink>0)new Thread(()->LocalRoseLink.stop(deadLink),"local-rose-renderer-gone").start();
   muteAckSeq=muteRequestSeq;reportedLiveConnected=false;
   taskStateAvailable=false;taskStateStreamConnected=false;
@@ -364,7 +367,9 @@ public class VoiceService extends Service {
  @JavascriptInterface public boolean localRoseReachable(){try{return "connected".equals(new JSONObject(LocalRoseConnection.status(VoiceService.this)).optString("state"));}catch(Exception e){return false;}}
  /** {"paired","state":connected|connecting|offline|unpaired,"route":Tailscale|Wi-Fi|USB,"serverName"} for the connection label. */
  @JavascriptInterface public String localRoseStatus(){return LocalRoseConnection.status(VoiceService.this);}
- @JavascriptInterface public int localRoseStart(boolean muted){if(checkSelfPermission("android.permission.RECORD_AUDIO")!=PackageManager.PERMISSION_GRANTED){try{localRoseEvent(generation,new JSONObject().put("type","error").put("message","Rose Agent needs microphone permission."));}catch(Exception ignored){}return 0;}return LocalRoseLink.start(VoiceService.this,m->localRoseEvent(generation,m),muted||storedInputMuted());}
+ @JavascriptInterface public int localRoseStart(boolean muted){if(checkSelfPermission("android.permission.RECORD_AUDIO")!=PackageManager.PERMISSION_GRANTED){try{localRoseEvent(generation,new JSONObject().put("type","error").put("message","Rose Agent needs microphone permission."));}catch(Exception ignored){}return 0;}final int token=LocalRoseLink.start(VoiceService.this,m->localRoseEvent(generation,m),muted||storedInputMuted());
+  // This page's renderer went away while the link was starting (silence() saw none): the link is never left capturing.
+  if(generation<=goneGeneration){new Thread(()->LocalRoseLink.stop(token),"local-rose-renderer-gone").start();return 0;}return token;}
  /** Stops only the link that start returned token for; a stale close never stops a newer start's link. */
  @JavascriptInterface public void localRoseStop(int token){LocalRoseLink.stop(token);}
  /** The microphone-input mute a new call or reconnect starts with (#410 item 6): Home's stored state. */

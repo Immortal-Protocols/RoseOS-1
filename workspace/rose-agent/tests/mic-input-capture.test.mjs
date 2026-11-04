@@ -153,7 +153,7 @@ test('renderer loss ends the dead page Local Rose link and settles its requests;
  assert.ok(gone.includes('muteAckSeq=muteRequestSeq;reportedLiveConnected=false;'));
  assert.ok(!/LocalRoseLink\.stop\(\);/.test(gone),'no blocking stop of whatever link runs');
  assert.match(link,/static int silence\(\) \{\s*LocalRoseLink link = current;\s*if \(link == null\) return 0;\s*link\.muted = true;\s*return link\.token;/);
- assert.match(voice,/@JavascriptInterface public int localRoseStart\(boolean muted\)\{.*return 0;\}return LocalRoseLink\.start\(/);
+ assert.match(voice,/@JavascriptInterface public int localRoseStart\(boolean muted\)\{.*return 0;\}final int token=LocalRoseLink\.start\(/);
  assert.match(voice,/@JavascriptInterface public void localRoseStop\(int token\)\{LocalRoseLink\.stop\(token\);\}/);
  const start=link.slice(link.indexOf('static synchronized int start('),link.indexOf('static void stop(int token)'));
  assert.ok(start.indexOf('if (old != null) old.end();')<start.indexOf('link.muted = muted;'),'a stale link is ended, never reused');
@@ -224,7 +224,7 @@ test('review D5: a microphone published before the conversation exists is disabl
 });
 
 test('verify F1/F3-F6: Local Rose starts fail closed, mute is lock-free, sequence first, reports at once',()=>{
- assert.match(voice,/return LocalRoseLink\.start\(VoiceService\.this,m->localRoseEvent\(generation,m\),muted\|\|storedInputMuted\(\)\);/,
+ assert.match(voice,/final int token=LocalRoseLink\.start\(VoiceService\.this,m->localRoseEvent\(generation,m\),muted\|\|storedInputMuted\(\)\);/,
   'a request stored just before this start still reaches the new link');
  const command=voice.slice(voice.indexOf('void command(String c,String origin)'),voice.indexOf('void setResultCardMode('));
  assert.match(command,/if\(mic!=null\)\{int seq=nextMuteSeq\(\);storeInputMuted\(mic\);if\(mic\)LocalRoseLink\.setMuted\(true\);/,
@@ -240,4 +240,18 @@ test('verify F1/F3-F6: Local Rose starts fail closed, mute is lock-free, sequenc
  assert.match(page,/function reportState\(\)\{Native\.state\(JSON\.stringify\(/);
  assert.match(page,/\$\('orb'\)\.classList\.add\('live'\);reportState\(\);/);
  assert.match(page,/'Listening · speak naturally';reportState\(\);diagnostic\(\);\}/);
+});
+
+test('verify G1/G2: a mute during a start, and a renderer lost during a start, never leave a link capturing',()=>{
+ // G1: setMuted records the request even with no published link; start re-reads it after publishing, before begin().
+ assert.match(link,/static void setMuted\(boolean muted\) \{\s*requestedMute = muted;\s*LocalRoseLink link = current;/);
+ const start=link.slice(link.indexOf('static synchronized int start('),link.indexOf('static void stop(int token)'));
+ assert.ok(start.indexOf('current = link;')<start.indexOf('if (requestedMute) link.muted = true;'));
+ assert.ok(start.indexOf('if (requestedMute) link.muted = true;')<start.indexOf('link.begin();'),'before the first frame');
+ assert.match(link,/private static volatile boolean requestedMute;/);
+ // G2: the dead page is recorded before silence(); a start that returns into a dead page ends its own link.
+ const gone=voice.slice(voice.indexOf('void voiceRendererGone('),voice.indexOf('\n }',voice.indexOf('void voiceRendererGone(')));
+ assert.ok(gone.indexOf('goneGeneration=Math.max(goneGeneration,callbacks.current());')<gone.indexOf('LocalRoseLink.silence()'));
+ assert.match(voice,/if\(generation<=goneGeneration\)\{new Thread\(\(\)->LocalRoseLink\.stop\(token\),"local-rose-renderer-gone"\)\.start\(\);return 0;\}return token;\}/);
+ assert.match(voice,/volatile int goneGeneration;/);
 });
