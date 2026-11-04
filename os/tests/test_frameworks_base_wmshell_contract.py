@@ -158,7 +158,12 @@ class FrameworksBaseWmshellContractTest(unittest.TestCase):
         result = subprocess.run([sys.executable, str(ROOT/'scripts/launcher3-compile-contract.py')], capture_output=True,
             text=True, cwd=ROOT)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn('69d7ccd59174c9a85aad1e0c9dc6da77a287f9276d5dc3f3cdc68ae0f6801a71', result.stdout)
+        # The shared generator moves the Launcher3 contract to schema 3; this one stays at schema 2, byte for byte as
+        # Release pinned it, until its own coordinated re-pin.
+        self.assertEqual(self.manifest['schemaVersion'], 2)
+        import hashlib
+        self.assertEqual(hashlib.sha256(MANIFEST.read_bytes()).hexdigest(),
+            '2373307d76ffca2f39a25c747205a3d0968332335daa03eb281bed85227901d1')
         self.assertTrue(re.search(r'"target": "Launcher3QuickStepLib"',
             (ROOT/'os/compile-contracts/launcher3-quickstep-lib.json').read_text()))
 

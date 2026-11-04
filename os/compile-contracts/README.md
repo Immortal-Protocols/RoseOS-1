@@ -1,6 +1,6 @@
 # Compile-only input contracts (OS Product)
 
-`launcher3-quickstep-lib.json` (`kind` `rose-launcher3-compile-inputs`, `schemaVersion` 2) states the inputs of a
+`launcher3-quickstep-lib.json` (`kind` `rose-launcher3-compile-inputs`, `schemaVersion` 3) states the inputs of a
 compile-only `Launcher3QuickStepLib` proof of RoseOS's Launcher3 changes (#410). Release owns the adapter that consumes
 it; this directory only states inputs. The contract is inert: it registers, applies and copies nothing into any build,
 and grants no host, runtime or permission access.
@@ -35,11 +35,35 @@ Shell patch, `os/patches/rose-edge-wmshell.patch` (#516/#523/#528, merged at `bf
 
 **The candidate** is #440, a draft that stays unregistered and default-off. Its inputs that are not in this bundle sit in
 `os/tests/fixtures/launcher3-compile-contract/candidate-pr440/`:
-- the edge patch;
-- the three `RoseEdge*` overlay classes.
+- E2a's edge patch (`rose-edge-launcher3.patch`, byte-identical) and E2c's wiring patch
+  (`rose-edge-resize-launcher3.patch`: the SystemUiProxy hand-off and the TouchInteractionService edge window);
+- the six `RoseEdge*` overlay classes: E2a's `RoseEdgeGesture`, and E2c's `RoseEdgeShell`, `RoseEdgeState`,
+  `RoseEdgeSwipe`, `RoseEdgeLayout` and `RoseEdgeWindow`.
 
-They are byte-identical copies of the reviewed commit `e361d1c`, bound by their digests. They live outside `os/patches`
+They are byte-identical copies of the reviewed commit `2f57a5f`, bound by their digests. They live outside `os/patches`
 and `os/overlays`, so nothing applies or copies them.
+
+**Schema 3** adds, as agreed with Release on #410:
+- **`base.registration`.** The patches the trusted patcher registers in the three projects, derived by *executing*
+  `scripts/apply-os-changes.py`'s own argument parser and registration statements with frankel's exact `applyArgs`
+  (`os/release-pipeline/frankel.json` `host.integrate.reconcile.applyArgs`). It records the three patcher files'
+  sha256 pins, and the check refuses a patcher that differs from them. It is the bundle report's only contract-derived
+  input.
+- **`base.bundleReport`:** the schema of the integration bundle report that `verifyBaseApplyCandidate` needs. It is
+  distinct from `bundleContent`. Release's producer writes it from history; the contract only states its fields,
+  association, observed sections and rules.
+- **`branches.requires`, `forbids` and `definitions`.** For example, `verifyIntegrated` needs the source tree, the
+  lunch inputs and the run's own policy receipt, and forbids a bundle report or reconstructed Git objects. No
+  `reconstructSource` is approved.
+- **`lunchInputs`:** `frankel-lunch-inputs.json` by path and sha256.
+- **The wording fixes:**
+  - the policy receipt's role;
+  - `otherwise` (the candidate is completed only through `verifyBaseApplyCandidate`);
+  - `reconstruct`'s tree pin;
+  - a three-part `unaffected`;
+  - flag values as outputs, never preconditions.
+
+The checker now also compares every stated field, so any change to them refuses until regenerated.
 
 **`projects`** gives the candidate's final images. For every file that the ordered patches change in frameworks/base,
 packages/apps/Launcher3 and build/release, it lists:

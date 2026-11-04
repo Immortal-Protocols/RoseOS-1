@@ -1,14 +1,14 @@
 {
- "schemaVersion": 2,
+ "schemaVersion": 3,
  "kind": "rose-launcher3-compile-inputs",
  "owner": "OS Product (#410). Release owns the adapter; this states inputs only.",
  "target": "Launcher3QuickStepLib",
  "proves": "the patched handlers and overlays type-check and compile on the real classpath, plus the generated aconfig values. Not R8, manifest merge, APK resources, packaging, signing or runtime.",
  "provenance": "every hash here is an expected value derived from pinned public sources and the committed patches; an adapter compares current bytes with them and never records current bytes as provenance",
- "candidatePatches": "frameworks/base and build/release in apply-os-changes.py --background-policy order; Launcher3 adds rose-edge-launcher3.patch (candidateDelta), which apply-os-changes.py does not register, so a tree integrated by any patcher today is not at these final images",
+ "candidatePatches": "frameworks/base and build/release in apply-os-changes.py --background-policy order; Launcher3 adds rose-edge-launcher3.patch then rose-edge-resize-launcher3.patch (candidateDelta), which apply-os-changes.py does not register, so a tree integrated by any patcher today is not at these final images",
  "branches": {
   "verifyIntegrated": "every affected file equals post (config.xml only through integrationRewrite with its bound inputs), every required overlay is present with its sha256 (notAnInput overlays may be present with any bytes), every unlisted path matches its treePin, no extra path, no patch is applied again",
-  "reconstruct": "every affected file equals pre (sha256 and gitBlob at revision), new files and every overlay target are absent beforehand, patches are applied in order and must give exactly post; required overlays are then copied",
+  "reconstruct": "every affected file equals pre (sha256 and gitBlob at revision), new files and every overlay target are absent beforehand, patches are applied in order and must give exactly post; required overlays are then copied; every unlisted path matches its treePin, no extra path",
   "verifyBaseApplyCandidate": {
    "status": "proposal, stated as data only: Release implements it, and any run needs separate authority",
    "conditions": [
@@ -31,7 +31,45 @@
    ],
    "otherwise": "refuse at the first failed condition, naming its id; partial, already applied or unknown state refuses"
   },
-  "otherwise": "refuse: mixed pre/post, unknown hash, missing file, overlay, input or binding. A tree integrated by the current patcher (Launcher3 switcher only) is such a state and must not be completed by applying rose-edge-launcher3.patch alone. Never reset or trust a snapshot."
+  "otherwise": "refuse: mixed pre/post, unknown hash, missing file, overlay, input or binding. A tree integrated by the current patcher (Launcher3 switcher only) is such a state and must not be completed by applying the candidate's patches except through all four verifyBaseApplyCandidate conditions. Never reset or trust a snapshot.",
+  "requires": {
+   "verifyIntegrated": [
+    "sourceTree",
+    "lunch",
+    "policyReceipt"
+   ],
+   "reconstruct": [
+    "sourceTree",
+    "lunch",
+    "reconstructSource"
+   ],
+   "verifyBaseApplyCandidate": [
+    "sourceTree",
+    "lunch",
+    "policyReceipt",
+    "bundleReport"
+   ]
+  },
+  "forbids": {
+   "verifyIntegrated": [
+    "bundleReport",
+    "reconstructSource",
+    "Git metadata or objects of the checked tree"
+   ],
+   "reconstruct": [
+    "bundleReport"
+   ],
+   "verifyBaseApplyCandidate": [
+    "reconstructSource"
+   ]
+  },
+  "definitions": {
+   "sourceTree": "the checked tree, bound by Infra provenance (path and run), never by this contract",
+   "lunch": "the lunch inputs in lunchInputs, satisfied on the copy",
+   "policyReceipt": "the integrating run's own --background-policy file, associated with this tree by Infra provenance (run, source path, receipt hash recorded by that run); a receipt reconstructed from config.xml or any other tree file is refused",
+   "reconstructSource": "an approved source of genuine Git objects for each project at revision (read from a repository, never bytes hashed from the checked tree); none is approved",
+   "bundleReport": "a document in base.bundleReport's form from its stated producer"
+  }
  },
  "projects": [
   {
@@ -279,7 +317,7 @@
        "config_pixelComputerControlLockedSessions": "    <bool name=\"config_pixelComputerControlLockedSessions\">false</bool>"
       },
       "generatingInputs": {
-       "policyReceipt": "agent, targets, prototypeControl; its sha256 must equal the one bound for that tree outside this contract",
+       "policyReceipt": "agent, targets, prototypeControl; its sha256 must equal the one bound for that tree outside this contract; it is the integrating run's own --background-policy file (branches.definitions.policyReceipt), never one reconstructed from config.xml or any other tree file",
        "referenceDisplayAddress": "--reference-display-address, absent unless given; decimal, 0 < value < 2^63",
        "lockedControl": "--locked-control, false unless given"
       },
@@ -872,6 +910,10 @@
     {
      "name": "rose-edge-launcher3.patch",
      "sha256": "a1c76e1e03845573501790509a7e620e48476a2bae47889f839d81144dd35460"
+    },
+    {
+     "name": "rose-edge-resize-launcher3.patch",
+     "sha256": "94f6842a9f4a41d1311482a18e1a59d5d29d2ff8de5f0e612a8f0ca350404c47"
     }
    ],
    "files": [
@@ -1184,6 +1226,52 @@
        "base": "exact"
       }
      ]
+    },
+    {
+     "path": "quickstep/src/com/android/quickstep/SystemUiProxy.kt",
+     "pre": {
+      "sha256": "3a8943768b31f86d84a62a0f9078fa6e6e84d138b74c114510f76ee6ae99d276",
+      "gitBlob": "8f75b946e622440cc32566fce0f7f8c8a5a0caa9"
+     },
+     "post": {
+      "sha256": "f3a894b1271d4afd2410c6337da3712b639bad564f19de1b2a702f68f40eaea3",
+      "gitBlob": "a881058aee94c322041b7ec2307baf022a48afab"
+     },
+     "chain": [
+      {
+       "patch": "rose-edge-resize-launcher3.patch",
+       "before": "8f75b946e622440cc32566fce0f7f8c8a5a0caa9",
+       "after": "a881058aee94c322041b7ec2307baf022a48afab",
+       "index": [
+        "8f75b94",
+        "a881058"
+       ],
+       "base": "exact"
+      }
+     ]
+    },
+    {
+     "path": "quickstep/src/com/android/quickstep/TouchInteractionService.kt",
+     "pre": {
+      "sha256": "c7b96d539c7c3d9271df2d887eadc7ad259b53c4af65d5ee1780a13704e1ed49",
+      "gitBlob": "256c991afb42d068a1d5f4520ea003f845a5c6f3"
+     },
+     "post": {
+      "sha256": "4730ac469f5a87f02ed43f300dcfa035b2466f55c321a38b6ccd6ebe79c569bb",
+      "gitBlob": "e75c0302ed42eb5d12c3cf356097dfff88477106"
+     },
+     "chain": [
+      {
+       "patch": "rose-edge-resize-launcher3.patch",
+       "before": "256c991afb42d068a1d5f4520ea003f845a5c6f3",
+       "after": "e75c0302ed42eb5d12c3cf356097dfff88477106",
+       "index": [
+        "256c991",
+        "e75c030"
+       ],
+       "base": "exact"
+      }
+     ]
     }
    ],
    "treePin": {
@@ -1212,22 +1300,27 @@
       "quickstep/src/com/android/quickstep/FallbackActivityInterface.java",
       "quickstep/src/com/android/quickstep/FallbackSwipeHandler.java",
       "quickstep/src/com/android/quickstep/RecentsActivity.java",
+      "quickstep/src/com/android/quickstep/SystemUiProxy.kt",
+      "quickstep/src/com/android/quickstep/TouchInteractionService.kt",
       "quickstep/src/com/android/quickstep/fallback/RoseAgentFan.java",
       "quickstep/src/com/android/quickstep/fallback/RoseAgentStrip.java",
       "quickstep/src/com/android/quickstep/fallback/RoseAgentWork.java",
       "quickstep/src/com/android/quickstep/fallback/RoseEdgeGesture.java",
+      "quickstep/src/com/android/quickstep/fallback/RoseEdgeLayout.java",
+      "quickstep/src/com/android/quickstep/fallback/RoseEdgeShell.java",
       "quickstep/src/com/android/quickstep/fallback/RoseEdgeState.java",
       "quickstep/src/com/android/quickstep/fallback/RoseEdgeSwipe.java",
+      "quickstep/src/com/android/quickstep/fallback/RoseEdgeWindow.java",
       "quickstep/src/com/android/quickstep/fallback/RoseFan.java",
       "quickstep/src/com/android/quickstep/fallback/RoseOxbloodField.java",
       "quickstep/src/com/android/quickstep/views/OverviewActionsView.java",
       "quickstep/src/com/android/quickstep/window/RecentsWindowSwipeHandler.java"
      ],
      "excludedAre": "exactly this project's files paths and overlay targets, relative to it; no globs. A path the pinned tree lacks (a new file or an overlay target) must be absent from it and excludes nothing",
-     "count": 3440,
+     "count": 3438,
      "recordFormat": "<mode> SP <oid> TAB <path> LF, with path relative to the project",
      "order": "the raw bytes of path",
-     "digest": "e580c13c7b98dc23a888be1dba472421fd6467226b3578fc4beb8f4d31552b52",
+     "digest": "08f7beeabd9fa919be2a4f616913e1d82f5c1848f87d0984c9063cfe7e87ae16",
      "digestOf": "the concatenated records, sha256"
     },
     "modes": [
@@ -1416,13 +1509,28 @@
    "role": "required"
   },
   {
+   "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeLayout.java",
+   "sha256": "da66349f5c3290766883aa0aad43c5458b5206db2e812d54fa857b624288710c",
+   "role": "required"
+  },
+  {
+   "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeShell.java",
+   "sha256": "7e588aba36ad31e2b155dcf214dda8bc3b45109aa504a7ec0f6bf0b92522f1b7",
+   "role": "required"
+  },
+  {
    "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeState.java",
-   "sha256": "60c5163efb70425676621357ad8c96e9b5ecf9ba21c16a5307d01cf61645416a",
+   "sha256": "94fa3db8d5fde02496620983f039797716d8b6d7d59797fe9a8b2426ddc5e360",
    "role": "required"
   },
   {
    "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeSwipe.java",
-   "sha256": "9315ed495458f2d578ec27fef2a0e9063d5a3a40967f249239b9cb7cb78ecaab",
+   "sha256": "6fc31005ef63869e003539ee56d5878a452ba520095d5f15062f027f42dc4fd2",
+   "role": "required"
+  },
+  {
+   "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeWindow.java",
+   "sha256": "a14dfd66ad6d07fdba5b5e08f72dc6160a5e0886051b40cc2416cd2fc05fc70a",
    "role": "required"
   },
   {
@@ -1436,10 +1544,14 @@
    "role": "required"
   }
  ],
- "unaffected": "inside the three projects, every path not listed in files or overlays must match that project's treePin, and any extra file is refused; every other project the library or lunch needs must be byte-identical to its pinned revision (Infra provenance, not this contract)",
+ "unaffected": [
+  "inside the three projects, every path not listed in files or overlays must match that project's treePin, and any extra file is refused",
+  "other pinned projects lunch needs are at the integrating run's state (Infra provenance); projects the integration also patches (build/make, packages/modules/Permission, packages/apps/Updater) and paths it generates (packages/apps/RosePreinstall/*, PixelBackgroundControl/Agent.apk) are not at their pinned revision and are not inputs of this proof",
+  "the generated vendor module and the lunch markers: lunchInputs"
+ ],
  "notInputs": [
   "packages/apps/PixelBackgroundControl and Agent.apk",
-  "the policy receipt in reconstruct (only verifyIntegrated needs it, bound, to check config.xml)",
+  "the policy receipt in reconstruct (verifyIntegrated, and verifyBaseApplyCandidate's base-exact and final-exact, need it, bound, to check config.xml)",
   "build/make patches",
   "packages/apps/Updater",
   "packages/modules/Permission",
@@ -1796,7 +1908,7 @@
         "config_pixelComputerControlLockedSessions": "    <bool name=\"config_pixelComputerControlLockedSessions\">false</bool>"
        },
        "generatingInputs": {
-        "policyReceipt": "agent, targets, prototypeControl; its sha256 must equal the one bound for that tree outside this contract",
+        "policyReceipt": "agent, targets, prototypeControl; its sha256 must equal the one bound for that tree outside this contract; it is the integrating run's own --background-policy file (branches.definitions.policyReceipt), never one reconstructed from config.xml or any other tree file",
         "referenceDisplayAddress": "--reference-display-address, absent unless given; decimal, 0 < value < 2^63",
         "lockedControl": "--locked-control, false unless given"
        },
@@ -2664,6 +2776,30 @@
        "gitBlob": "8148e084538ee9ef14a0795fb89be14521bdd180"
       },
       "chain": []
+     },
+     {
+      "path": "quickstep/src/com/android/quickstep/SystemUiProxy.kt",
+      "pre": {
+       "sha256": "3a8943768b31f86d84a62a0f9078fa6e6e84d138b74c114510f76ee6ae99d276",
+       "gitBlob": "8f75b946e622440cc32566fce0f7f8c8a5a0caa9"
+      },
+      "post": {
+       "sha256": "3a8943768b31f86d84a62a0f9078fa6e6e84d138b74c114510f76ee6ae99d276",
+       "gitBlob": "8f75b946e622440cc32566fce0f7f8c8a5a0caa9"
+      },
+      "chain": []
+     },
+     {
+      "path": "quickstep/src/com/android/quickstep/TouchInteractionService.kt",
+      "pre": {
+       "sha256": "c7b96d539c7c3d9271df2d887eadc7ad259b53c4af65d5ee1780a13704e1ed49",
+       "gitBlob": "256c991afb42d068a1d5f4520ea003f845a5c6f3"
+      },
+      "post": {
+       "sha256": "c7b96d539c7c3d9271df2d887eadc7ad259b53c4af65d5ee1780a13704e1ed49",
+       "gitBlob": "256c991afb42d068a1d5f4520ea003f845a5c6f3"
+      },
+      "chain": []
      }
     ],
     "treePin": {
@@ -2692,22 +2828,27 @@
        "quickstep/src/com/android/quickstep/FallbackActivityInterface.java",
        "quickstep/src/com/android/quickstep/FallbackSwipeHandler.java",
        "quickstep/src/com/android/quickstep/RecentsActivity.java",
+       "quickstep/src/com/android/quickstep/SystemUiProxy.kt",
+       "quickstep/src/com/android/quickstep/TouchInteractionService.kt",
        "quickstep/src/com/android/quickstep/fallback/RoseAgentFan.java",
        "quickstep/src/com/android/quickstep/fallback/RoseAgentStrip.java",
        "quickstep/src/com/android/quickstep/fallback/RoseAgentWork.java",
        "quickstep/src/com/android/quickstep/fallback/RoseEdgeGesture.java",
+       "quickstep/src/com/android/quickstep/fallback/RoseEdgeLayout.java",
+       "quickstep/src/com/android/quickstep/fallback/RoseEdgeShell.java",
        "quickstep/src/com/android/quickstep/fallback/RoseEdgeState.java",
        "quickstep/src/com/android/quickstep/fallback/RoseEdgeSwipe.java",
+       "quickstep/src/com/android/quickstep/fallback/RoseEdgeWindow.java",
        "quickstep/src/com/android/quickstep/fallback/RoseFan.java",
        "quickstep/src/com/android/quickstep/fallback/RoseOxbloodField.java",
        "quickstep/src/com/android/quickstep/views/OverviewActionsView.java",
        "quickstep/src/com/android/quickstep/window/RecentsWindowSwipeHandler.java"
       ],
       "excludedAre": "exactly this project's files paths and overlay targets, relative to it; no globs. A path the pinned tree lacks (a new file or an overlay target) must be absent from it and excludes nothing",
-      "count": 3440,
+      "count": 3438,
       "recordFormat": "<mode> SP <oid> TAB <path> LF, with path relative to the project",
       "order": "the raw bytes of path",
-      "digest": "e580c13c7b98dc23a888be1dba472421fd6467226b3578fc4beb8f4d31552b52",
+      "digest": "08f7beeabd9fa919be2a4f616913e1d82f5c1848f87d0984c9063cfe7e87ae16",
       "digestOf": "the concatenated records, sha256"
      },
      "modes": [
@@ -2905,11 +3046,164 @@
     "sha256": "7d822296cb2c71c201052ea4e7658db81d851fca5e3e66e09484a5834b5104ee",
     "role": "required"
    }
-  ]
+  ],
+  "registration": {
+   "applyArgs": [
+    "--background-policy",
+    "{policy}",
+    "--background-agent",
+    "{signed_apps}/dev.pixel.backgroundcontrol.apk",
+    "--agent-tray",
+    "--updater-url",
+    "https://github.com/Immortal-Protocols/pixel-ota/releases/latest/download/",
+    "--preinstall-apk",
+    "{signed_apps}/dev.pixel.voice.apk",
+    "--preinstall-apk",
+    "{signed_apps}/dev.pixel.calculator.agent.apk",
+    "--installed-identities",
+    "{installed_identities}"
+   ],
+   "applyArgsSource": {
+    "path": "os/release-pipeline/frankel.json",
+    "key": "host.integrate.reconcile.applyArgs"
+   },
+   "patcher": {
+    "patcher": "trusted",
+    "sha256": {
+     "apply-os-changes.py": "86ec1b2a41dec367490409a435423dbdbc0f5537a0437eac9094f4ea4c7bef35",
+     "background_apks.py": "af981b5b4309924664c758f1d479cf752fa6032911af447148302178c24c40fb",
+     "integration_copy.py": "440574cbd3144571f647fc13f17c6c1188b1c61d12ef92a7028fba7eb2a24a05"
+    }
+   },
+   "order": [
+    {
+     "project": "frameworks/base",
+     "name": "frameworks-base.patch"
+    },
+    {
+     "project": "frameworks/base",
+     "name": "rose-agent-self-update-frameworks-base.patch"
+    },
+    {
+     "project": "frameworks/base",
+     "name": "background-control-frameworks-base.patch"
+    },
+    {
+     "project": "frameworks/base",
+     "name": "background-control-modern-frameworks-base.patch"
+    },
+    {
+     "project": "frameworks/base",
+     "name": "background-control-resource-import-fix.patch"
+    },
+    {
+     "project": "frameworks/base",
+     "name": "locked-control-frameworks-base.patch"
+    },
+    {
+     "project": "build/release",
+     "name": "background-control-build-release.patch"
+    },
+    {
+     "project": "packages/apps/Launcher3",
+     "name": "rose-switcher-launcher3.patch"
+    }
+   ],
+   "derivation": "executed: scripts/apply-os-changes.py's own argument parser with applyArgs (each placeholder an empty file), then its statements from `projects = {...}` through `projects.update(rose_home_projects(preinstalls))`, with validate_policy and preinstall_plan replaced because they check data and never registration; the result is filtered to this contract's projects. rose_home_projects adds only packages/modules/Permission",
+   "contractDerived": "the bundle report's only contract-derived input: names and order, used only once the receipt's patcher sha256 and the run's applyArgs equal these"
+  },
+  "bundleReport": {
+   "kind": "rose-integration-bundle-report",
+   "schemaVersion": 1,
+   "fields": {
+    "producer": [
+     "path",
+     "sha256",
+     "roseRevision"
+    ],
+    "run": [
+     "runId",
+     "runAttempt",
+     "headSha",
+     "label",
+     "createdAt",
+     "updatedAt",
+     "bindingSha256"
+    ],
+    "receipt": [
+     "path",
+     "receiptSha256",
+     "receiptType",
+     "label",
+     "at",
+     {
+      "patcher": [
+       "patcher",
+       {
+        "sha256": [
+         "apply-os-changes.py",
+         "background_apks.py",
+         "integration_copy.py"
+        ]
+       }
+      ]
+     }
+    ],
+    "candidate": [
+     "commit",
+     "onMain",
+     "frankelConfigSha256",
+     "applyArgs",
+     "patcherKind"
+    ],
+    "registration": [
+     "source",
+     "patcherMatchesPin",
+     "applyArgsMatchPin"
+    ],
+    "observed": [
+     {
+      "patches": [
+       "project",
+       "name",
+       "sha256"
+      ]
+     },
+     {
+      "overlays": [
+       "target",
+       "sha256"
+      ]
+     },
+     "notAnInputOverlays",
+     "unclassified"
+    ]
+   },
+   "producer": "Release's producer script at a reviewed commit; never the adapter, the observer or this checker",
+   "association": [
+    "run is entered by review from GitHub run metadata (no live API, no actions:read), with the recipe lines at headSha that make the run commit both the candidate and the trusted checkout; headSha is reachable from main",
+    "exactly one *-<label>.json with receiptType reconcile and the same label, its at within [createdAt, updatedAt]",
+    "receipt.patcher.patcher is trusted and its three sha256 equal both the files at headSha and base.registration.patcher: a consistency check, not association (many commits share those bytes)",
+    "the run's applyArgs (headSha:os/release-pipeline/frankel.json) equal base.registration.applyArgs"
+   ],
+   "observed": {
+    "patches": "base.registration.order, each with the sha256 of headSha:os/patches/<name>",
+    "overlays": "every headSha:os/overlays file whose target is under a required prefix",
+    "notAnInputOverlays": "the present targets on the exact notAnInput allowlist",
+    "unclassified": "anything else under the three projects; must be empty"
+   },
+   "rules": [
+    "only observed minus unclassified is compared with base.bundleContent, and unclassified must be empty",
+    "observed is computed from history before bundleContent is read; tampering bundleContent leaves it unchanged",
+    "a report missing any section, or a bare bundleContent, is refused",
+    "receipt changed/entries are association only, never observed",
+    "the report never stands in for base-exact on the copy"
+   ]
+  }
  },
  "candidateDelta": {
   "pr": 440,
-  "commit": "e361d1cb15abdb80795569f1558fb7e0bcf5635d",
+  "commit": "2f57a5f28e3c3cc97177bf3f9294ea807d514469",
   "patches": [
    {
     "name": "rose-edge-launcher3.patch",
@@ -2917,6 +3211,13 @@
     "project": "packages/apps/Launcher3",
     "strip": 1,
     "bundlePath": "os/tests/fixtures/launcher3-compile-contract/candidate-pr440/patches/rose-edge-launcher3.patch"
+   },
+   {
+    "name": "rose-edge-resize-launcher3.patch",
+    "sha256": "94f6842a9f4a41d1311482a18e1a59d5d29d2ff8de5f0e612a8f0ca350404c47",
+    "project": "packages/apps/Launcher3",
+    "strip": 1,
+    "bundlePath": "os/tests/fixtures/launcher3-compile-contract/candidate-pr440/patches/rose-edge-resize-launcher3.patch"
    }
   ],
   "application": {
@@ -2970,6 +3271,28 @@
      "sha256": "6c65b9d6a96f53661383eb5dfcb9ec0bd682e05032b3b9b49b5b9e76858a09cf",
      "gitBlob": "7dbbada48dc4b13c741a3dcee013bfec4d5ca82d"
     }
+   },
+   {
+    "path": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/SystemUiProxy.kt",
+    "before": {
+     "sha256": "3a8943768b31f86d84a62a0f9078fa6e6e84d138b74c114510f76ee6ae99d276",
+     "gitBlob": "8f75b946e622440cc32566fce0f7f8c8a5a0caa9"
+    },
+    "after": {
+     "sha256": "f3a894b1271d4afd2410c6337da3712b639bad564f19de1b2a702f68f40eaea3",
+     "gitBlob": "a881058aee94c322041b7ec2307baf022a48afab"
+    }
+   },
+   {
+    "path": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/TouchInteractionService.kt",
+    "before": {
+     "sha256": "c7b96d539c7c3d9271df2d887eadc7ad259b53c4af65d5ee1780a13704e1ed49",
+     "gitBlob": "256c991afb42d068a1d5f4520ea003f845a5c6f3"
+    },
+    "after": {
+     "sha256": "4730ac469f5a87f02ed43f300dcfa035b2466f55c321a38b6ccd6ebe79c569bb",
+     "gitBlob": "e75c0302ed42eb5d12c3cf356097dfff88477106"
+    }
    }
   ],
   "overlays": [
@@ -2980,16 +3303,34 @@
     "after": "2c0be858885695b77dffaa637f328ce0033d099cc60b10df270e51c67061a570"
    },
    {
+    "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeLayout.java",
+    "bundlePath": "os/tests/fixtures/launcher3-compile-contract/candidate-pr440/overlays/packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeLayout.java",
+    "before": null,
+    "after": "da66349f5c3290766883aa0aad43c5458b5206db2e812d54fa857b624288710c"
+   },
+   {
+    "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeShell.java",
+    "bundlePath": "os/tests/fixtures/launcher3-compile-contract/candidate-pr440/overlays/packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeShell.java",
+    "before": null,
+    "after": "7e588aba36ad31e2b155dcf214dda8bc3b45109aa504a7ec0f6bf0b92522f1b7"
+   },
+   {
     "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeState.java",
     "bundlePath": "os/tests/fixtures/launcher3-compile-contract/candidate-pr440/overlays/packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeState.java",
     "before": null,
-    "after": "60c5163efb70425676621357ad8c96e9b5ecf9ba21c16a5307d01cf61645416a"
+    "after": "94fa3db8d5fde02496620983f039797716d8b6d7d59797fe9a8b2426ddc5e360"
    },
    {
     "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeSwipe.java",
     "bundlePath": "os/tests/fixtures/launcher3-compile-contract/candidate-pr440/overlays/packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeSwipe.java",
     "before": null,
-    "after": "9315ed495458f2d578ec27fef2a0e9063d5a3a40967f249239b9cb7cb78ecaab"
+    "after": "6fc31005ef63869e003539ee56d5878a452ba520095d5f15062f027f42dc4fd2"
+   },
+   {
+    "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeWindow.java",
+    "bundlePath": "os/tests/fixtures/launcher3-compile-contract/candidate-pr440/overlays/packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeWindow.java",
+    "before": null,
+    "after": "a14dfd66ad6d07fdba5b5e08f72dc6160a5e0886051b40cc2416cd2fc05fc70a"
    }
   ],
   "bundle": [
@@ -2998,16 +3339,32 @@
     "sha256": "2c0be858885695b77dffaa637f328ce0033d099cc60b10df270e51c67061a570"
    },
    {
+    "path": "os/tests/fixtures/launcher3-compile-contract/candidate-pr440/overlays/packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeLayout.java",
+    "sha256": "da66349f5c3290766883aa0aad43c5458b5206db2e812d54fa857b624288710c"
+   },
+   {
+    "path": "os/tests/fixtures/launcher3-compile-contract/candidate-pr440/overlays/packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeShell.java",
+    "sha256": "7e588aba36ad31e2b155dcf214dda8bc3b45109aa504a7ec0f6bf0b92522f1b7"
+   },
+   {
     "path": "os/tests/fixtures/launcher3-compile-contract/candidate-pr440/overlays/packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeState.java",
-    "sha256": "60c5163efb70425676621357ad8c96e9b5ecf9ba21c16a5307d01cf61645416a"
+    "sha256": "94fa3db8d5fde02496620983f039797716d8b6d7d59797fe9a8b2426ddc5e360"
    },
    {
     "path": "os/tests/fixtures/launcher3-compile-contract/candidate-pr440/overlays/packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeSwipe.java",
-    "sha256": "9315ed495458f2d578ec27fef2a0e9063d5a3a40967f249239b9cb7cb78ecaab"
+    "sha256": "6fc31005ef63869e003539ee56d5878a452ba520095d5f15062f027f42dc4fd2"
+   },
+   {
+    "path": "os/tests/fixtures/launcher3-compile-contract/candidate-pr440/overlays/packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeWindow.java",
+    "sha256": "a14dfd66ad6d07fdba5b5e08f72dc6160a5e0886051b40cc2416cd2fc05fc70a"
    },
    {
     "path": "os/tests/fixtures/launcher3-compile-contract/candidate-pr440/patches/rose-edge-launcher3.patch",
     "sha256": "a1c76e1e03845573501790509a7e620e48476a2bae47889f839d81144dd35460"
+   },
+   {
+    "path": "os/tests/fixtures/launcher3-compile-contract/candidate-pr440/patches/rose-edge-resize-launcher3.patch",
+    "sha256": "94f6842a9f4a41d1311482a18e1a59d5d29d2ff8de5f0e612a8f0ca350404c47"
    }
   ],
   "pathConvention": "files[].path and overlays[].target are relative to the source tree root (project path first); projects[].files[].path and base.projects[].files[].path are relative to their project; bundlePath and bundle[].path are relative to the repository root"
@@ -3039,7 +3396,7 @@
      "aconfig-flags.txt"
     ],
     "produce": "build out/soong/.intermediates/frameworks/base/android.security.flags-aconfig/aconfig-flags.txt as an explicit goal with Launcher3QuickStepLib, or decode aconfig-cache.pb with that tree's host aconfig using the identical dump-cache --dedup --format='{fully_qualified_name}:{permission}={state:bool}'",
-    "accept": "exactly one line for the flag, equal to expectedLine, in the module's own output; absent, duplicated, another module or another value: refuse (identity flag unresolved, result incomplete)"
+    "accept": "exactly one line for the flag, equal to expectedLine, in the module's own output; absent, duplicated, another module or another value: result incomplete (identity flag unresolved); not a refusal of the inputs"
    },
    {
     "flag": "com.android.launcher3.enable_fallback_overview_in_window",
@@ -3066,7 +3423,7 @@
      "aconfig-flags.txt"
     ],
     "produce": "build out/soong/.intermediates/packages/apps/Launcher3/aconfig/com_android_launcher3_flags/aconfig-flags.txt as an explicit goal with Launcher3QuickStepLib, or decode aconfig-cache.pb with that tree's host aconfig using the identical dump-cache --dedup --format='{fully_qualified_name}:{permission}={state:bool}'",
-    "accept": "exactly one line for the flag, equal to expectedLine, in the module's own output; absent, duplicated, another module or another value: refuse (identity flag unresolved, result incomplete)"
+    "accept": "exactly one line for the flag, equal to expectedLine, in the module's own output; absent, duplicated, another module or another value: result incomplete (identity flag unresolved); not a refusal of the inputs"
    }
   ],
   "producingRules": [
@@ -3082,7 +3439,8 @@
     "path": "aconfig/aconfig_declarations.go",
     "sha256": "aecefd9fe939cc7819320b32de0ddfaf8864f8a1b617cb3dbeef25c20464086b"
    }
-  ]
+  ],
+  "role": "output: never a precondition of any branch"
  },
  "overlayRoles": {
   "required": {
@@ -3095,8 +3453,11 @@
     "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseAgentStrip.java",
     "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseAgentWork.java",
     "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeGesture.java",
+    "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeLayout.java",
+    "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeShell.java",
     "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeState.java",
     "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeSwipe.java",
+    "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeWindow.java",
     "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseFan.java",
     "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseOxbloodField.java"
    ],
@@ -3129,5 +3490,9 @@
   "appliesWithEdgeOff": true,
   "consumer": "Home (workspace/rose-agent, #442): MainActivity.gestureContract replies to gesture_nav_contract_v1 only after GestureContract.caller accepts getCurrentCaller() as the config_recentsComponentName package with a shared uid, on SDK 35+, RectF only; no dedicated exported entry",
   "consumerImplemented": true
+ },
+ "lunchInputs": {
+  "path": "os/compile-contracts/frankel-lunch-inputs.json",
+  "sha256": "d259aae6d1984dea2ead3f929aeb7ce9a2807681f28147ce53deb2ada36ec4e3"
  }
 }
