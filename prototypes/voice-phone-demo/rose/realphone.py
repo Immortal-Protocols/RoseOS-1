@@ -1043,6 +1043,9 @@ def _ws_why(r: dict, label: str | None = None) -> str:
     status = r.get("status") or "error"
     app = label or "that app"
     details = r.get("details") if isinstance(r.get("details"), dict) else {}
+    if r.get("reason") == "target_in_foreground" or details.get("reason") == "target_in_foreground":
+        return (f"{app} is open on your phone screen, so Android won't open it in Rose's workspace. "
+                "Switch away from the app on your phone, then retry; nothing was opened.")
     if status == "locked":
         return LOCKED_SAY
     if status == "background_target_not_allowed":
