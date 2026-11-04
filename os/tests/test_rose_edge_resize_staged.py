@@ -30,7 +30,8 @@ class RoseEdgeResizeStagedTest(unittest.TestCase):
     def test_the_interface_record_is_exactly_the_agreed_shape(self):
         edge = methods(AIDL/'com/android/wm/shell/roseedge/IRoseEdge.aidl')
         self.assertEqual(edge, [('raise', [('int', 'displayId'), ('int', 'taskId'), ('int', 'liftPx'),
-            ('IRoseEdgeListener', 'listener')], 1), ('lower', [('int', 'displayId')], 2)])
+            ('IRoseEdgeListener', 'listener')], 1), ('lower', [('int', 'displayId')], 2),
+            ('setMicSlot', [('int', 'displayId'), ('Rect', 'slotBounds')], 3)])
         listener = methods(AIDL/'com/android/wm/shell/roseedge/IRoseEdgeListener.aidl')
         self.assertEqual(listener, [('onRaised', [('int', 'displayId'), ('int', 'taskId'), ('Rect', 'appBounds')], 1),
             ('onRefused', [('int', 'displayId'), ('int', 'taskId'), ('int', 'reason')], 2),
@@ -47,12 +48,21 @@ class RoseEdgeResizeStagedTest(unittest.TestCase):
         self.assertIn('DESCRIPTOR = "com.android.wm.shell.roseedge.IRoseEdge"', java)
         self.assertIn('LISTENER_DESCRIPTOR = "com.android.wm.shell.roseedge.IRoseEdgeListener"', java)
         ids = {name: int(n) for name, n in re.findall(r'(TRANSACTION_\w+) = IBinder\.FIRST_CALL_TRANSACTION \+ (\d+)', java)}
-        self.assertEqual(ids, {'TRANSACTION_RAISE': 1, 'TRANSACTION_LOWER': 2, 'TRANSACTION_ON_RAISED': 1,
+        self.assertEqual(ids, {'TRANSACTION_RAISE': 1, 'TRANSACTION_LOWER': 2, 'TRANSACTION_SET_MIC_SLOT': 3,
+            'TRANSACTION_ON_RAISED': 1,
             'TRANSACTION_ON_REFUSED': 2, 'TRANSACTION_ON_LOWERED': 3})
         raise_body = java[java.index('public static boolean raise('):java.index('public static boolean lower(')]
         self.assertEqual(re.findall(r'data\.write(\w+)\((\w+)', raise_body), [('InterfaceToken', 'DESCRIPTOR'),
             ('Int', 'displayId'), ('Int', 'taskId'), ('Int', 'liftPx'), ('StrongBinder', 'listenerFor')])
         self.assertIn('IBinder.FLAG_ONEWAY', raise_body)
+        slot_body = java[java.index('public static boolean setMicSlot('):java.index('static final class Listener')]
+        self.assertEqual(re.findall(r'data\.write(\w+)\((\w+)', slot_body), [('InterfaceToken', 'DESCRIPTOR'),
+            ('Int', 'displayId'), ('TypedObject', 'slotBounds')])
+        self.assertIn('IBinder.FLAG_ONEWAY', slot_body)
+        state = (FALLBACK/'RoseEdgeState.java').read_text()
+        self.assertIn('MIC_SLOT_MIN_DP = 32, MIC_SLOT_MAX_DP = 64, MIC_SLOT_BAND_MAX_DP = 160', state)
+        self.assertNotRegex(state + java, r'(?i)AgentTray|setMicrophoneMute|SensorPrivacy|MUTE\b',
+            'Launcher3 never touches microphone state')
         listener = java[java.index('static final class Listener'):]
         self.assertEqual(re.findall(r'data\.read(\w+)\(', listener), ['Int', 'Int', 'TypedObject', 'Int', 'Int', 'Int'])
 

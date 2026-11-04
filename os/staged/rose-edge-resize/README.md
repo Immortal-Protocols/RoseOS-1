@@ -43,6 +43,9 @@ These files move into `os/` only in a coordinated re-bind, once all four of thes
 
 ## Not yet here
 - `SystemUiProxy` handing `RoseEdgeShell` the shell's binder.
-- The edge window: Launcher3 draws the edge from Home's design contract, and reports the mic slot for SystemUI's
-  tray control, pending OS Core's agreement on `setMicSlot = 3`.
+- The edge window: Launcher3 draws the edge from Home's design contract. It leaves the 44dp microphone-input slot
+  transparent and outside its touchable region, and lays the slot out through `RoseEdgeState.setMicSlot`. The client
+  part is here: `setMicSlot = 3` (Chief's option (a), agreed with OS Core) is sent only after each `onRaised`, never
+  outside the bottom band or the 32–64dp size, and SystemUI's existing tray control draws the mic there. Launcher3
+  never touches microphone state.
 - Both of those join `rose-edge-launcher3.patch` once the interfaces are agreed.

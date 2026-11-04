@@ -26,6 +26,7 @@ public final class RoseEdgeShell {
     public static final String LISTENER_DESCRIPTOR = "com.android.wm.shell.roseedge.IRoseEdgeListener";
     static final int TRANSACTION_RAISE = IBinder.FIRST_CALL_TRANSACTION + 1;
     static final int TRANSACTION_LOWER = IBinder.FIRST_CALL_TRANSACTION + 2;
+    static final int TRANSACTION_SET_MIC_SLOT = IBinder.FIRST_CALL_TRANSACTION + 3;
     static final int TRANSACTION_ON_RAISED = IBinder.FIRST_CALL_TRANSACTION + 1;
     static final int TRANSACTION_ON_REFUSED = IBinder.FIRST_CALL_TRANSACTION + 2;
     static final int TRANSACTION_ON_LOWERED = IBinder.FIRST_CALL_TRANSACTION + 3;
@@ -96,6 +97,26 @@ public final class RoseEdgeShell {
             data.writeInterfaceToken(DESCRIPTOR);
             data.writeInt(displayId);
             return shell.transact(TRANSACTION_LOWER, data, null, IBinder.FLAG_ONEWAY);
+        } catch (RemoteException | RuntimeException e) {
+            return false;
+        } finally {
+            data.recycle();
+        }
+    }
+
+    /**
+     * Tells the shell where the raised edge's microphone-input slot is (screen px), or clears it (empty Rect), so that
+     * Shell can show SystemUI's existing trusted tray control there. False when it could not be asked.
+     */
+    public static boolean setMicSlot(int displayId, Rect slotBounds) {
+        IBinder shell = sShell;
+        if (shell == null || slotBounds == null) return false;
+        Parcel data = Parcel.obtain();
+        try {
+            data.writeInterfaceToken(DESCRIPTOR);
+            data.writeInt(displayId);
+            data.writeTypedObject(slotBounds, 0);
+            return shell.transact(TRANSACTION_SET_MIC_SLOT, data, null, IBinder.FLAG_ONEWAY);
         } catch (RemoteException | RuntimeException e) {
             return false;
         } finally {

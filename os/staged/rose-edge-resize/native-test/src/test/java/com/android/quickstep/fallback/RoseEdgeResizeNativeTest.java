@@ -55,6 +55,11 @@ public class RoseEdgeResizeNativeTest {
         public void lower(int displayId) {
             calls.add("lower " + displayId);
         }
+
+        @Override
+        public void setMicSlot(int displayId, Rect slotBounds) {
+            calls.add("slot " + displayId + " " + slotBounds);
+        }
     }
 
     Context context;
@@ -99,6 +104,7 @@ public class RoseEdgeResizeNativeTest {
         assertEquals(IRoseEdgeListener.DESCRIPTOR, RoseEdgeShell.LISTENER_DESCRIPTOR);
         assertEquals(transactionId(IRoseEdge.Stub.class, "TRANSACTION_raise"), RoseEdgeShell.TRANSACTION_RAISE);
         assertEquals(transactionId(IRoseEdge.Stub.class, "TRANSACTION_lower"), RoseEdgeShell.TRANSACTION_LOWER);
+        assertEquals(transactionId(IRoseEdge.Stub.class, "TRANSACTION_setMicSlot"), RoseEdgeShell.TRANSACTION_SET_MIC_SLOT);
         assertEquals(transactionId(IRoseEdgeListener.Stub.class, "TRANSACTION_onRaised"), RoseEdgeShell.TRANSACTION_ON_RAISED);
         assertEquals(transactionId(IRoseEdgeListener.Stub.class, "TRANSACTION_onRefused"),
                 RoseEdgeShell.TRANSACTION_ON_REFUSED);
@@ -136,6 +142,64 @@ public class RoseEdgeResizeNativeTest {
         RoseEdgeState.raise(DISPLAY, OTHER_TASK, 174);
         assertTrue("the shell ties a display's raise to one listener binder (BUSY otherwise)",
                 first == shell.listener.asBinder());
+    }
+
+    /** The 44dp slot centred 46dp from the bottom of a 384 x 832dp display, as homeEdge.controls.microphone draws it. */
+    Rect slot() {
+        int w = Math.round(384 * density), h = Math.round(832 * density), side = Math.round(44 * density);
+        int cx = w / 2, cy = h - Math.round(46 * density);
+        return new Rect(cx - side / 2, cy - side / 2, cx + side / 2, cy + side / 2);
+    }
+
+    void slot(Rect r) {
+        RoseEdgeState.setMicSlot(DISPLAY, r, Math.round(384 * density), Math.round(832 * density), density);
+    }
+
+    @Test
+    public void theMicSlotCrossesTheWireAndIsSentOnlyAfterOnRaised() throws Exception {
+        assertTrue(RoseEdgeShell.setMicSlot(4, new Rect(1, 2, 3, 4)));
+        assertEquals(List.of("slot 4 Rect(1, 2 - 3, 4)"), shell.calls);
+        shell.calls.clear();
+        slot(slot());
+        assertTrue("never while lowered", shell.calls.isEmpty());
+        RoseEdgeState.raise(DISPLAY, TASK, 174);
+        assertEquals("not before onRaised", List.of("raise 0 41 174"), shell.calls);
+        shell.listener.onRaised(DISPLAY, TASK, new Rect(0, 0, 1152, 2322));
+        idle();
+        assertEquals(List.of("raise 0 41 174", "slot 0 " + slot()), shell.calls);
+    }
+
+    @Test
+    public void theSlotIsResentAfterEveryRaiseAndClearedWhileRaised() throws Exception {
+        slot(slot());
+        RoseEdgeState.raise(DISPLAY, TASK, 174);
+        shell.listener.onRaised(DISPLAY, TASK, new Rect(0, 0, 1152, 2322));
+        idle();
+        RoseEdgeState.lower(DISPLAY);
+        RoseEdgeState.raise(DISPLAY, TASK, 174);
+        shell.listener.onRaised(DISPLAY, TASK, new Rect(0, 0, 1152, 2322));
+        idle();
+        slot(null);
+        assertEquals(List.of("raise 0 41 174", "slot 0 " + slot(), "lower 0", "raise 0 41 174", "slot 0 " + slot(),
+                "slot 0 Rect(0, 0 - 0, 0)"), shell.calls);
+    }
+
+    @Test
+    public void aSlotOutsideTheAgreedBandOrSizeIsNeverSent() throws Exception {
+        int w = Math.round(384 * density), h = Math.round(832 * density);
+        Rect top = new Rect(slot());
+        top.offsetTo(top.left, 0);
+        Rect tiny = new Rect(0, h - 20, Math.round(20 * density), h);
+        Rect huge = new Rect(0, h - Math.round(80 * density), Math.round(80 * density), h);
+        assertFalse(RoseEdgeState.micSlotFits(top, w, h, density));
+        assertFalse(RoseEdgeState.micSlotFits(tiny, w, h, density));
+        assertFalse(RoseEdgeState.micSlotFits(huge, w, h, density));
+        assertTrue(RoseEdgeState.micSlotFits(slot(), w, h, density));
+        slot(top);
+        RoseEdgeState.raise(DISPLAY, TASK, 174);
+        shell.listener.onRaised(DISPLAY, TASK, new Rect(0, 0, 1152, 2322));
+        idle();
+        assertEquals(List.of("raise 0 41 174"), shell.calls);
     }
 
     @Test

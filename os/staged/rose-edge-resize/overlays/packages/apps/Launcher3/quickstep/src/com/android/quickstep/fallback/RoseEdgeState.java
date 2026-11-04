@@ -34,6 +34,10 @@ public final class RoseEdgeState {
     private static final SparseIntArray RAISED_OVER = new SparseIntArray();
     /** Display id to the app bounds the shell reported once it really shortened that task. */
     private static final SparseArray<Rect> RESIZED = new SparseArray<>();
+    /** Display id to the edge window's microphone-input slot, as last laid out. */
+    private static final SparseArray<MicSlot> MIC_SLOT = new SparseArray<>();
+    /** Agreed with OS Core (#410): each side 32-64dp, inside the bottom band of height min(H / 4, 160dp). */
+    static final float MIC_SLOT_MIN_DP = 32, MIC_SLOT_MAX_DP = 64, MIC_SLOT_BAND_MAX_DP = 160;
     private static final List<Listener> LISTENERS = new ArrayList<>();
 
     /** Up on this display over exactly this task. */
@@ -94,6 +98,52 @@ public final class RoseEdgeState {
         if (lowerHere(displayId)) RoseEdgeShell.lower(displayId);
     }
 
+    /**
+     * The edge window's microphone-input slot on this display, in screen px, for a display of widthPx x heightPx at
+     * density (null or empty: none). Shell shows SystemUI's existing trusted tray control there; Launcher3 never touches
+     * microphone state. A slot belongs to the current raise: it is sent only after the shell's onRaised, again after
+     * every later onRaised, never while lowered, and never outside the agreed bottom band and size.
+     */
+    public static void setMicSlot(int displayId, Rect slot, int widthPx, int heightPx, float density) {
+        mainThread();
+        if (slot == null || slot.isEmpty()) {
+            MIC_SLOT.remove(displayId);
+            if (RESIZED.get(displayId) != null) RoseEdgeShell.setMicSlot(displayId, new Rect());
+            return;
+        }
+        MIC_SLOT.put(displayId, new MicSlot(slot, widthPx, heightPx, density));
+        if (RESIZED.get(displayId) != null) sendMicSlot(displayId);
+    }
+
+    /** Whether a slot satisfies the agreed geometry for a display of widthPx x heightPx at density. */
+    public static boolean micSlotFits(Rect slot, int widthPx, int heightPx, float density) {
+        if (slot == null || slot.isEmpty() || !(density > 0)) return false;
+        float min = MIC_SLOT_MIN_DP * density, max = MIC_SLOT_MAX_DP * density;
+        float bandTop = heightPx - Math.min(heightPx / 4f, MIC_SLOT_BAND_MAX_DP * density);
+        return slot.width() >= min && slot.width() <= max && slot.height() >= min && slot.height() <= max
+                && slot.left >= 0 && slot.right <= widthPx && slot.top >= bandTop && slot.bottom <= heightPx;
+    }
+
+    private static void sendMicSlot(int displayId) {
+        MicSlot slot = MIC_SLOT.get(displayId);
+        if (slot == null || !micSlotFits(slot.bounds, slot.widthPx, slot.heightPx, slot.density)) return;
+        RoseEdgeShell.setMicSlot(displayId, new Rect(slot.bounds));
+    }
+
+    /** A laid-out slot and the display size it was laid out for. */
+    private static final class MicSlot {
+        final Rect bounds;
+        final int widthPx, heightPx;
+        final float density;
+
+        MicSlot(Rect bounds, int widthPx, int heightPx, float density) {
+            this.bounds = new Rect(bounds);
+            this.widthPx = widthPx;
+            this.heightPx = heightPx;
+            this.density = density;
+        }
+    }
+
     public static void addListener(Listener listener) {
         mainThread();
         if (!LISTENERS.contains(listener)) LISTENERS.add(listener);
@@ -108,7 +158,10 @@ public final class RoseEdgeState {
     static final RoseEdgeShell.Callback SHELL_REPLIES = new RoseEdgeShell.Callback() {
         @Override
         public void onRaised(int displayId, int taskId, Rect appBounds) {
-            if (isRaised(displayId, taskId) && appBounds != null) RESIZED.put(displayId, new Rect(appBounds));
+            if (!isRaised(displayId, taskId) || appBounds == null) return;
+            RESIZED.put(displayId, new Rect(appBounds));
+            // The slot belongs to this raise (the shell dropped any earlier one on its last lower).
+            sendMicSlot(displayId);
         }
 
         @Override
