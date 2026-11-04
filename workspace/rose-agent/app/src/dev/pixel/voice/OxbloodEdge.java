@@ -27,6 +27,9 @@ final class OxbloodEdge {
  static final int HEIGHT_DP = 92, FLAT_TOP_DP = 34, FILLET_DP = 34;
  /** HomeTray's controls (oxblood.css:379-380,487-496): Rose 103 and switcher 106 wide, 44dp hit height, 14dp apart; the pearl. */
  static final int ROSE_W_DP = 103, SWITCHER_W_DP = 106, CONTROL_H_DP = 44, GAP_DP = 14, PEARL_DP = 16;
+ /** Rose's microphone-input mute well (oxblood.css:491-492): a 44x44 slot in the row, its plate 32x32 (inset 6),
+  * radius 9. Home's touch target is 48x48 about the same centre (MIC_TARGET_W_DP, taking 2dp from each gap). */
+ static final int MIC_W_DP = 44, MIC_PLATE_DP = 32, MIC_RADIUS_DP = 9, MIC_TARGET_W_DP = 48;
  /** The controls' touch height: the reference's 44, raised to Android's 48dp minimum (the 36dp plate is unchanged). */
  static final int TARGET_H_DP = 48;
  static final int PLATE_TOP = 0xff4a141a, PLATE_MID = 0xff3c0e13, PLATE_BOTTOM = 0xff330c10;
@@ -105,19 +108,26 @@ final class OxbloodEdge {
  static final class Well extends Drawable {
   static final int PLATE_H_DP = 36, RADIUS_DP = 8;
   static final int FILL_TOP = 0x47140407, FILL_BOTTOM = 0x1f46121c, RING = 0x66eccdbe, TOP_SHADOW = 0x66000000;
-  final float d;
+  final float d, plateW, plateH, radius;
   final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
   final RectF plate = new RectF();
-  Well(float density) { d = density; }
+  /** The full-width 36dp plate (Rose, switcher). */
+  Well(float density) { this(density, -1, PLATE_H_DP, RADIUS_DP); }
+  /** A plate of plateWdp x plateHdp centred in the bounds (plateWdp < 0: the full width); the mic's is 32x32 r9. */
+  Well(float density, float plateWdp, float plateHdp, float radiusDp) { d = density; plateW = plateWdp; plateH = plateHdp; radius = radiusDp; }
+  static Well mic(float density) { return new Well(density, MIC_PLATE_DP, MIC_PLATE_DP, MIC_RADIUS_DP); }
 
-  @Override protected void onBoundsChange(Rect b) {
-   float h = PLATE_H_DP * d;
-   plate.set(b.left, b.exactCenterY() - h / 2, b.right, b.exactCenterY() + h / 2);
+  @Override protected void onBoundsChange(Rect b) { centre(b, plate); }
+
+  /** The plate's rectangle for bounds b (MicGlyph rings the same rectangle). */
+  void centre(Rect b, RectF out) {
+   float h = plateH * d, w = plateW < 0 ? b.width() : plateW * d;
+   out.set(b.exactCenterX() - w / 2, b.exactCenterY() - h / 2, b.exactCenterX() + w / 2, b.exactCenterY() + h / 2);
   }
 
   @Override public void draw(Canvas c) {
    if (plate.isEmpty()) return;
-   float r = RADIUS_DP * d;
+   float r = radius * d;
    paint.reset(); paint.setAntiAlias(true);
    paint.setShader(new LinearGradient(0, plate.top, 0, plate.bottom, FILL_TOP, FILL_BOTTOM, Shader.TileMode.CLAMP));
    c.drawRoundRect(plate, r, r, paint);
@@ -147,6 +157,63 @@ final class OxbloodEdge {
  /** The system switcher symbol: two pairs of offset task cards (index.html:27), viewBox "2 3 60 20" fitted to a
   * 64x28dp box (meet), stroke 2 with round joins; the front cards filled #331019; the right back card's stroke turns
   * ruby along x (#eadbcd at x48 to #ff4a5e at x56.4); a 1dp dark drop shadow. */
+ /**
+  * Rose's microphone-input mute on the edge (#410; HiFi icons.js mic/micOff on a 24-unit grid at 20dp, oxblood.css
+  * :383-384,491): a filled capsule, its cradle and stand in warm ink #e6d4c3; muted, the mic dims to .55 in ruby
+  * #ff8c9a with a slash knocked out of the well, and the well gains a 1.4dp ruby inner ring and a soft ruby glow.
+  * Drawn over Well.mic of the same bounds (its centred 32x32 r9 plate).
+  */
+ static final class MicGlyph extends Drawable {
+  static final int GLYPH_DP = 20, INK = 0xffe6d4c3, MUTED_INK = 0xffff8c9a, RING = 0xbfff5a6e, GLOW = 0x4dff465f;
+  final float d;
+  final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+  boolean muted;
+  MicGlyph(float density) { d = density; }
+
+  void set(boolean muted) { if (this.muted != muted) { this.muted = muted; invalidateSelf(); } }
+
+  @Override public void draw(Canvas c) {
+   Rect b = getBounds();
+   if (b.isEmpty()) return;
+   float cx = b.exactCenterX(), cy = b.exactCenterY();
+   if (muted) {
+    float h = MIC_PLATE_DP * d, r = MIC_RADIUS_DP * d, w = 1.4f * d;
+    RectF plate = new RectF(cx - h / 2 + w / 2, cy - h / 2 + w / 2, cx + h / 2 - w / 2, cy + h / 2 - w / 2);
+    paint.reset(); paint.setAntiAlias(true); paint.setStyle(Paint.Style.STROKE);
+    paint.setStrokeWidth(4 * d); paint.setColor(GLOW);
+    paint.setMaskFilter(new BlurMaskFilter(5 * d, BlurMaskFilter.Blur.NORMAL));
+    c.drawRoundRect(plate, r, r, paint);
+    paint.setMaskFilter(null);
+    paint.setStrokeWidth(w); paint.setColor(RING);
+    c.drawRoundRect(plate, r - w / 2, r - w / 2, paint);
+   }
+   int save = c.save();
+   float s = GLYPH_DP * d / 24f;
+   c.translate(cx - 12 * s, cy - 12 * s);
+   c.scale(s, s);
+   int ink = muted ? MUTED_INK : INK;
+   int body = muted ? (ink & 0x00ffffff) | (Math.round(.55f * 255) << 24) : ink;
+   paint.reset(); paint.setAntiAlias(true);
+   paint.setColor(body);
+   c.drawRoundRect(new RectF(8.6f, 2.5f, 15.4f, 15f), 3.4f, 3.4f, paint);
+   paint.setStyle(Paint.Style.STROKE); paint.setStrokeWidth(1.9f); paint.setStrokeCap(Paint.Cap.ROUND);
+   c.drawArc(new RectF(5.6f, 4.4f, 18.4f, 17.2f), 0, 180, false, paint);
+   c.drawLine(12, 17.4f, 12, 20.6f, paint);
+   c.drawLine(8.8f, 20.8f, 15.2f, 20.8f, paint);
+   if (muted) {
+    // The slash, knocked out of the well (the reference's white under-stroke, here the well's own dark) then drawn.
+    paint.setStrokeWidth(3.4f); paint.setColor(0xff1c0609);
+    c.drawLine(4.5f, 3.5f, 19.5f, 20.5f, paint);
+    paint.setStrokeWidth(1.9f); paint.setColor(ink);
+    c.drawLine(4.5f, 3.5f, 19.5f, 20.5f, paint);
+   }
+   c.restoreToCount(save);
+  }
+  @Override public void setAlpha(int alpha) {}
+  @Override public void setColorFilter(ColorFilter cf) {}
+  @Override public int getOpacity() { return PixelFormat.TRANSLUCENT; }
+ }
+
  static final class SwitcherGlyph extends Drawable {
   static final int BOX_W_DP = 64, BOX_H_DP = 28, INK = 0xffeadbcd, CARD = 0xff331019, RUBY = 0xffff4a5e, SHADOW = 0x80000000;
   static final String[][] CARDS = {{"M10 11h18l-6 10H4z", "back"}, {"M10 5h18l-6 10H4z", "front"},

@@ -409,7 +409,7 @@ public class MainActivity extends Activity {
   launcherPager.addView(roseHome=new RoseHomeView(this,homeEntries,homeColumns,this::homeMeasured));
   roseHome.setOnLongClickListener(v->{homeOptions(v);return true;}); // the Home options, as a phone launcher's long press
   for(int number=HomePages.FIRST_APPS;number<count;number++)launcherPager.addView(appPage(pages.get(number),titles.get(number),appEntries.isEmpty()));
-  if(homeTray!=null)homeTray.release();homeTray=new HomeTray(this,this::openRoseFromHome,this::openOverview,MainActivity::overviewAvailable);homeFrame=new HomeFrame(this,launcherPager,homeTray,fixedDots);
+  if(homeTray!=null)homeTray.release();homeTray=new HomeTray(this,this::openRoseFromHome,this::toggleRoseMic,this::openOverview,MainActivity::overviewAvailable);homeFrame=new HomeFrame(this,launcherPager,homeTray,fixedDots);
   setContentView(homeFrame);homeBars();drawer=true;if(voiceControls)attachVoiceControls();launcherPager.showPage(selected,false);homeFrame.requestApplyInsets();
   builtHomeStamp=homeStamp();
  }
@@ -656,7 +656,11 @@ public class MainActivity extends Activity {
  void showHomeFor(Intent intent,boolean fresh,int previous,boolean homeShown){if(intent==null)return;HomeEntry entry=HomeEntry.of(Intent.ACTION_MAIN.equals(intent.getAction()),intent.hasCategory(Intent.CATEGORY_HOME),intent.hasCategory(Intent.CATEGORY_LAUNCHER),fresh,(intent.getFlags()&Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY)!=0,DeviceIdentity.paired(this));if(entry.showHome){closeVoiceControls();closeSystemFolder();}if(entry.showHome&&launcherPager!=null)launcherPager.showPage(HomePages.target(true,!intent.hasCategory(Intent.CATEGORY_HOME),homeShown,previous,launcherPager.currentPage(),launcherPager.getChildCount()),false);if(entry.openConversation)openRoseConversation();}
  void showHomeFor(Intent intent,boolean fresh){showHomeFor(intent,fresh,-1,true);}
  /** The tray's Rose from what VoiceService already publishes, once per refresh tick; hidden or paused stops its animation. */
- void refreshHomeRose(boolean shown){if(homeTray==null)return;VoiceService s=VoiceService.instance;ConversationState c=conversationState();homeTray.show(c,HomeRose.state(c,s==null?Float.NaN:s.trayInputLevel,s==null?Float.NaN:s.trayOutputLevel,s==null?0L:s.trayAudioObservedAt,SystemClock.elapsedRealtime(),HomeRose.reducedMotion(android.provider.Settings.Global.getFloat(getContentResolver(),android.provider.Settings.Global.ANIMATOR_DURATION_SCALE,1f)),shown));}
+ /** Rose's microphone-input mute as every surface shows it: the live call's own mute during a call, else the shared state. */
+ boolean roseMicShown(){ConversationState c=conversationState();return RoseMicInput.shown(c.active(),c.muted,RoseMicState.muted(this));}
+ /** Home's mic well: asks for the other state (recorded, and applied to a live call); never starts or ends voice. */
+ void toggleRoseMic(){RoseMicState.request(this,!roseMicShown());if(homeTray!=null)homeTray.applyMic(roseMicShown());}
+ void refreshHomeRose(boolean shown){if(homeTray==null)return;VoiceService s=VoiceService.instance;ConversationState c=conversationState();homeTray.show(c,HomeRose.state(c,s==null?Float.NaN:s.trayInputLevel,s==null?Float.NaN:s.trayOutputLevel,s==null?0L:s.trayAudioObservedAt,SystemClock.elapsedRealtime(),HomeRose.reducedMotion(android.provider.Settings.Global.getFloat(getContentResolver(),android.provider.Settings.Global.ANIMATOR_DURATION_SCALE,1f)),shown),RoseMicInput.shown(c.active(),c.muted,RoseMicState.muted(this)));}
  @Override public void onBackPressed(){if(screenDetail!=null)closeMacScreen();else if(visualDetail!=null)closeVisual();else if(drawer&&launcherPager!=null)launcherPager.showPage(homePage,true);else if(experimentalHome&&chatMode){chatMode=false;home();}else if(voiceControls)closeVoiceControls();else if(launcherPager!=null)launcherPager.showPage(homePage,true);}
 
  boolean macScreenEnabled(){return getPreferences(0).getBoolean("mac-screen-enabled",false);}
