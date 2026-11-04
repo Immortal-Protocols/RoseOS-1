@@ -109,6 +109,43 @@ class FakeCodex:
         pass
 
 
+class FakeUtterance:
+    def __init__(self, rid, auto_finish=True):
+        self.id, self.auto_finish = rid, auto_finish
+        self.text, self.interrupted = '', False
+        self.done = threading.Event()
+
+    def add(self, text):
+        self.text += text
+
+    def finish(self):
+        if self.auto_finish:
+            self.done.set()
+
+    def cancel(self):
+        self.interrupted = True
+        self.done.set()
+
+    def heard(self):
+        return self.text
+
+
+class FakeSpeaker:
+    audible = False
+
+    def __init__(self, auto_finish=True):
+        self.auto_finish, self.utterances = auto_finish, []
+
+    def utterance(self, rid, started):
+        utterance = FakeUtterance(rid, self.auto_finish)
+        self.utterances.append(utterance)
+        return utterance
+
+    def stop(self):
+        for utterance in self.utterances:
+            utterance.cancel()
+
+
 class Integration(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -282,15 +319,81 @@ class Integration(unittest.TestCase):
         self.call(a, 'open_app', app='Calculator')
         a.text = 'Calculator is open.'
         self.engine._event({'event':'done','session':a.name,'turn':{'id':a.turn,'status':'completed'}})
+        completed_thread, completed_turn = a.thread, a.turn
         self.engine.update(a.task.id, 'Continue in Calculator')
         self.assertTrue(wait(lambda: a.busy))
-        spoken = []
-        utterance = SimpleNamespace(add=spoken.append, finish=lambda: None)
-        with patch.object(self.engine, '_heard'), patch.object(self.engine, 'speaker',
-                SimpleNamespace(audible=False, utterance=lambda *args: utterance)):
+        speaker = FakeSpeaker()
+        with patch.object(self.engine, 'speaker', speaker):
             self.engine.sessions['conversation'].busy = False
-            self.assertTrue(wait(lambda: spoken))
-        self.assertEqual(spoken, ['Calculator is open.'])
+            self.assertTrue(wait(lambda: any(e['kind'] == 'assistant_heard'
+                                           for e in self.store.export(self.engine.conversation))))
+        self.assertEqual([u.text for u in speaker.utterances], ['Calculator is open.'])
+        heard = next(e for e in self.store.export(self.engine.conversation) if e['kind'] == 'assistant_heard')
+        self.assertEqual((heard['thread_id'], heard['turn_id']), (completed_thread, completed_turn))
+        self.assertTrue(self.engine._worker.is_alive())
+
+    def test_two_task_results_do_not_stall_conversation_or_overlap_pending_speech(self):
+        self.engine.sessions['conversation'].busy = True
+        a, b = self.task('Calculator'), self.task('Clock')
+        for s in (a, b):
+            self.call(s, 'open_app', app=s.app)
+            s.text = s.app + ' is open.'
+            self.engine._event({'event': 'done', 'session': s.name,
+                                'turn': {'id': s.turn, 'status': 'completed'}})
+        speaker = FakeSpeaker(auto_finish=False)
+        with patch.object(self.engine, 'speaker', speaker):
+            self.engine.sessions['conversation'].busy = False
+            self.assertTrue(wait(lambda: len(speaker.utterances) == 1))
+            # No audio has reached the transport yet, so audible remains false.
+            self.assertFalse(wait(lambda: len(speaker.utterances) > 1, seconds=.2))
+            speaker.utterances[0].done.set()
+            self.assertTrue(wait(lambda: len(speaker.utterances) == 2))
+            speaker.utterances[1].done.set()
+            self.engine._user_turn('Are you still there?')
+            s = self.engine.sessions['conversation']
+            self.assertTrue(wait(lambda: any(e['kind'] == 'turn_started' and e['turn_id'] == s.turn
+                                           for e in self.store.export(self.engine.conversation))))
+            self.assertTrue(self.engine._worker.is_alive())
+        self.assertEqual([u.text for u in speaker.utterances[:2]], ['Calculator is open.', 'Clock is open.'])
+
+    def test_result_returned_to_conversation_is_not_announced_again(self):
+        self.engine.sessions['conversation'].busy = True
+        a, b = self.task('Calculator'), self.task('Clock')
+        self.call(a, 'open_app', app=a.app)
+        a.text = 'Calculator is open.'
+        self.engine._event({'event': 'done', 'session': a.name,
+                            'turn': {'id': a.turn, 'status': 'completed'}})
+        result, _ = self.engine._conversation_tool('list_tasks', {})
+        self.assertEqual(result['tasks'][0]['result'], a.text)
+        speaker = FakeSpeaker()
+        with patch.object(self.engine, 'speaker', speaker):
+            self.engine.sessions['conversation'].busy = False
+            self.assertTrue(wait(self.engine._announcements.empty))
+            self.assertEqual(speaker.utterances, [])
+            # A result that was still running during list_tasks still needs its announcement.
+            self.call(b, 'open_app', app=b.app)
+            b.text = 'Clock is open.'
+            self.engine._event({'event': 'done', 'session': b.name,
+                                'turn': {'id': b.turn, 'status': 'completed'}})
+            self.assertTrue(wait(lambda: any(e['kind'] == 'assistant_heard'
+                                           for e in self.store.export(self.engine.conversation))))
+        self.assertEqual([u.text for u in speaker.utterances], ['Clock is open.'])
+        self.assertTrue(self.engine._worker.is_alive())
+
+    def test_announcement_error_does_not_kill_event_worker(self):
+        announce = self.engine._announce
+        attempts = []
+        def fail_once():
+            attempts.append(True)
+            if len(attempts) == 1:
+                raise RuntimeError('simulated speech failure')
+            announce()
+        with patch.object(self.engine, '_announce', side_effect=fail_once):
+            self.assertTrue(wait(lambda: attempts))
+            self.engine._user_turn('Hello after the speech failure')
+            self.assertTrue(wait(lambda: any(e['kind'] == 'turn_started'
+                                           for e in self.store.export(self.engine.conversation))))
+            self.assertTrue(self.engine._worker.is_alive())
 
     def test_model_image_resize_does_not_mutate_cached_phone_observation(self):
         from PIL import Image
