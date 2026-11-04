@@ -2,7 +2,7 @@
   "schema": "roseos.mustang-ota-config.v1",
   "device": "mustang",
   "repository": "Immortal-Protocols/pixel-ota",
-  "publicationEnabled": false,
+  "publicationEnabled": true,
   "automationEnabled": false,
   "bootstrapRun": "41719073037",
   "signingAccess": {
@@ -20,5 +20,6 @@
     "installedChannel": "stable",
     "installationEvidence": "Nathan confirmed build 2026110302 installed with Beta selected on 2026-11-04 in the Mustang worker thread. Phone behavior has not been independently observed."
   },
-  "plan": "https://app.notion.com/p/40d7c646c81b81ce9485e0ca3eff8614"
+  "plan": "https://app.notion.com/p/40d7c646c81b81ce9485e0ca3eff8614",
+  "activationRef": "Nathan's direct 'okay can you keep going?' instruction in the Mustang worker thread on 2026-11-03 Pacific, following the verified read grants and first-public-OTA scope. One newer Mustang build/sign/public OTA and mustang-stable metadata; automatic publication stays off; phone installation remains separate."
 }
