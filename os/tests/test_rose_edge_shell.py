@@ -298,6 +298,43 @@ class RoseEdgeShellTest(unittest.TestCase):
         self.assertFalse('AgentTrayService.java' in PATCH.read_text())
         self.assertFalse(re.search(r'^\+\+\+ b/\S*AgentTray', PATCH.read_text(), re.M))
 
+    def test_mic_slot_draws_exactly_homes_edge_microphone(self):
+        # Home's merged OxbloodEdge.Well.mic and OxbloodEdge.MicGlyph (#514) are the design; the slot is a port of
+        # them, so both edges look identical. Any drift in Home's values fails here.
+        home = (ROOT/'workspace/rose-agent/app/src/dev/pixel/voice/OxbloodEdge.java').read_text()
+        tray = (ROOT/'workspace/rose-agent/app/src/dev/pixel/voice/HomeTray.java').read_text()
+        mic = self.mic
+        def const(src, name):
+            return re.search(rf'\b{name} = (0x[0-9a-fA-F]+|\d+)', src).group(1).lower()
+        well = home[home.index('static final class Well'):home.index('static final class MicGlyph')]
+        glyph = home[home.index('static final class MicGlyph'):home.index('static final class SwitcherGlyph')]
+        for name in ('MIC_PLATE_DP', 'MIC_RADIUS_DP'):
+            self.assertEqual(const(mic, name), const(home, name), name)
+        for name in ('FILL_TOP', 'FILL_BOTTOM', 'RING', 'TOP_SHADOW'):
+            self.assertEqual(const(mic, name), const(well, name), name)
+        for mine, theirs in (('GLYPH_DP', 'GLYPH_DP'), ('INK', 'INK'), ('MUTED_INK', 'MUTED_INK'),
+                ('MUTED_RING', 'RING'), ('MUTED_GLOW', 'GLOW')):
+            self.assertEqual(const(mic, mine), const(glyph, theirs), mine)
+        self.assertEqual(const(mic, 'MIC_PLATE_DP'), '32')
+        self.assertEqual(const(mic, 'MIC_RADIUS_DP'), '9')
+        # The same drawing statements: plate shadow and ring, glyph geometry, muted ring, glow and slash.
+        for statement in ('new BlurMaskFilter(Math.max(.1f, (1 * d - .5f) / .57735f)',
+                'new RectF(8.6f, 2.5f, 15.4f, 15f), 3.4f, 3.4f,', 'new RectF(5.6f, 4.4f, 18.4f, 17.2f), 0, 180, false,',
+                'drawLine(12, 17.4f, 12, 20.6f,', 'drawLine(8.8f, 20.8f, 15.2f, 20.8f,', 'drawLine(4.5f, 3.5f, 19.5f, 20.5f,',
+                'Math.round(.55f * 255) << 24', 'setStrokeWidth(3.4f)', 'setStrokeWidth(1.9f)', '0xff1c0609',
+                'new BlurMaskFilter(5 * d, BlurMaskFilter.Blur.NORMAL)', 'float s = GLYPH_DP * d / 24f;'):
+            self.assertGreater(flat(home).count(statement), 0, statement)
+            self.assertEqual(flat(mic).count(statement), flat(home).count(statement), statement)
+        # Home's spoken names: the action a tap takes.
+        for label in ('"Rose’s microphone is muted. Unmute"', '"Mute Rose’s microphone"'):
+            self.assertIn(label, tray)
+            self.assertIn(label, mic)
+        # Remote state is never guessed: dimmed until the first STATE, and the edge plate under it stays opaque.
+        draw = flat(method(mic, 'protected void onDraw(Canvas canvas)'))
+        self.assertLess(draw.index('canvas.drawRect(0, 0, getWidth(), getHeight(), mPlate);'),
+            draw.index('canvas.saveLayerAlpha('), 'only the well and glyph are dimmed')
+        self.assertIn('drawGlyph(canvas, d, mKnown && mMuted);', draw)
+
     def test_wired_into_the_shell_once(self):
         module = flat(self.module)
         self.assertIn('import com.android.wm.shell.roseedge.RoseEdgeController;', self.module)
