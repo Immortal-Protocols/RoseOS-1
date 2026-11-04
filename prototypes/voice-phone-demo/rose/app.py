@@ -1011,7 +1011,8 @@ class Server:
         items = getattr(tasks, "tasks", None)
         items = list(items.values()) if isinstance(items, dict) else tasks.running()
         items = [t for t in items if t.id > self._floors[1]]  # TaskManager keeps pre-reset tasks
-        return [t.to_dict() for t in sorted(items, key=lambda t: t.id)[-20:]]
+        snapshot = getattr(tasks, 'task_snapshot', lambda task: task.to_dict())
+        return [snapshot(t) for t in sorted(items, key=lambda t: t.id)[-20:]]
 
     def audio_stats(self) -> dict:
         t = self.transport
@@ -1142,11 +1143,17 @@ class Server:
         try:
             history = [m for m in list(self.bus.history) if not self._stale(m)]
             seen = {id(m) for m in history}
+            state = self.snapshot()
             await ws.send_text(dumps({"kind": "hello", "t": time.time(), "history": len(history),
-                                      "state": self.snapshot()}))
+                                      "state": state}))
             for m in history:
                 await ws.send_text(dumps({**m, "replay": True}))
             await ws.send_text(dumps({"kind": "replay_done", "t": time.time()}))
+            # Phone clients intentionally skip historical replay. Restore the
+            # current task collection as live snapshots, using the same scoped
+            # identity/binding as subsequent updates; never replay user actions.
+            for task in state.get('tasks', []):
+                await ws.send_text(dumps({'kind': 'task', 't': time.time(), 'task': task}))
             incoming = asyncio.create_task(ws.receive())
             outgoing = asyncio.create_task(q.get())
             try:

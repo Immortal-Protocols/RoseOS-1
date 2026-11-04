@@ -219,6 +219,35 @@ class Integration(unittest.TestCase):
         self.assertTrue(a.busy)
         self.assertIn(('interrupt', 'conversation', {}), self.engine.client.calls)
 
+    def test_slow_phone_action_publishes_progress_then_bound_snapshot(self):
+        from rose.app import Server
+        a = self.task('Calculator')
+        entered, release = threading.Event(), threading.Event()
+        send = a.view.workspace.send
+        def slow(op, params):
+            if op == 'start':
+                entered.set()
+                release.wait(3)
+            return send(op, params)
+        a.view.workspace.send = slow
+        worker = threading.Thread(target=self.call, args=(a, 'open_app'), kwargs={'app': a.app})
+        worker.start()
+        try:
+            self.assertTrue(entered.wait(3))
+            latest = [e['task'] for e in self.bus.history if e['kind'] == 'task'][-1]
+            self.assertEqual(latest['status'], 'running')
+            self.assertEqual(latest['detail'], 'Opening Calculator.')
+        finally:
+            release.set()
+            worker.join(3)
+        self.assertFalse(worker.is_alive())
+        state = SimpleNamespace(mode='live', tasks=self.engine, _floors=(0, 0))
+        snapshot = Server.task_list(state)[0]
+        latest = [e['task'] for e in self.bus.history if e['kind'] == 'task'][-1]
+        for key in ('id', 'server', 'contract', 'workspace', 'detail'):
+            self.assertEqual(snapshot[key], latest[key])
+        self.assertEqual(snapshot['workspace']['sessionId'], a.view.workspace.bound_id)
+
     def complete(self, s):
         self.assertTrue(self.call(s, 'open_app', app=s.app)['ok'])
         s.text = s.app + ' is open.'
@@ -576,6 +605,36 @@ class Integration(unittest.TestCase):
 
 
 class StorageAndContract(unittest.TestCase):
+    def test_events_connection_restores_current_tasks_without_replaying_actions(self):
+        from fastapi import FastAPI, WebSocket
+        from fastapi.testclient import TestClient
+        from rose.app import Server
+        task = {'id': 1, 'kind': 'phone', 'status': 'running', 'goal': 'Synthetic task',
+                'started': 1, 'detail': 'Checking app.', 'server': 'synthetic', 'contract': 1}
+        bus = Bus()
+        bus.emit('user_turn', id=1, text='Historical request')
+        server = SimpleNamespace(bus=bus, snapshot=lambda: {'tasks': [task]}, _stale=lambda msg: False)
+        app = FastAPI()
+        closed = threading.Event()
+        @app.websocket('/events')
+        async def events(ws: WebSocket):
+            try:
+                await Server.serve_events(server, ws)
+            finally:
+                closed.set()
+        with TestClient(app).websocket_connect('/events') as ws:
+            self.assertEqual(ws.receive_json()['kind'], 'hello')
+            replay = ws.receive_json()
+            self.assertEqual(replay['kind'], 'user_turn')
+            self.assertTrue(replay['replay'])
+            self.assertEqual(ws.receive_json()['kind'], 'replay_done')
+            restored = ws.receive_json()
+            self.assertEqual(restored['kind'], 'task')
+            self.assertNotIn('replay', restored)
+            self.assertEqual(restored['task'], task)
+            ws.close()
+            self.assertTrue(closed.wait(2))
+
     def test_definitive_slot_refusals_keep_their_codes(self):
         for status in ('session_limit', 'app_in_other_session', 'locked', 'target_not_allowed'):
             with self.subTest(status=status):
