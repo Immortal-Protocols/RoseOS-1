@@ -1,0 +1,15 @@
+{
+  "schema": "roseos.factory-archive-signing-binding.v1",
+  "device": "frankel",
+  "build": null,
+  "profile": null,
+  "project": null,
+  "signer": null,
+  "keySecret": null,
+  "keyVersion": null,
+  "passphraseSecret": null,
+  "passphraseVersion": null,
+  "sshKeygen": {"path": null, "sha256": null},
+  "bootstrap": null,
+  "basis": "FACTORY-TARGETS: Frankel archive-signing binding for scripts/factory-archive-sign.py --device frankel. Source contract only: every value is null, so check exits 4 and sign refuses before any host or secret access. Archive trust (a detached signature over the Frankel install ZIP, verified against os/flavors/frankel.json factorySigning) is separate from the OS signing of the Frankel target-files the installer packages. No archive-signing identity, bootstrap profile, secret container, grant or key exists for Frankel; each needs its own owner/security approval, then a bootstrap whose public receipt is bound here as for Rango. build is the exact signed Frankel target-files build the installer packages (Release/Flavors). Nothing here is a key, secret or credential."
+}
