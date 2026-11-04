@@ -588,6 +588,25 @@ optimizer (`system/core 322ff512`) layout as Frankel and Rango. `load_flavor` re
 - The remaining inputs are Signing's: a Blazer AVB key pin and a factory-signing principal and
   public key, once approved.
 
+**Frankel first install.** `os/flavors/frankel.json firstInstall` holds the owner's first-install
+requirements. `load_flavor` re-derives every value from the pinned sources, and every
+`factory-install` classification carries them, with the AVB and OTA pins resolved.
+- Host `fastboot` ≥ 35.0.1, the generator's `MIN_FASTBOOT_VERSION_STR`.
+- Device product `frankel`, an unlocked bootloader, and **all data erased**.
+- Both bootloader slots `deepspace-17.4-16119390` and the radio `g5400i-260604-260807-B-16035863`,
+  under `check-requirements` on `android-info.txt`.
+- `avb_custom_key` from `avb_pkmd.bin`, which must equal the AVB pin.
+- Later Frankel OTAs need the same OTA certificate, so the installer must come from a Frankel
+  target-files signed on the existing route. Relock is never claimed safe.
+- The owner steps are the procedure. Nothing here was flashed, and synthetic evidence never makes
+  an archive ready.
+
+A verified Frankel installer still needs:
+- the packaging-only route to accept Frankel's pointer-pinned AVB key (Signing's
+  `host-factory-package.py`);
+- a Frankel package mode binding the chosen signed target-files (Release);
+- a Frankel factory-signing identity (Signing/Chief).
+
 ## Missing for a real factory package (sole owner → next action)
 
 - **Factory-signing identity. Owner: signing; Chief decision.** No approved key exists:
