@@ -1,0 +1,1 @@
+package android.app; public class TaskInfo { public int taskId; public int displayId; public boolean isVisible; public boolean isResizeable; public AppCompatTaskInfo appCompatTaskInfo; public boolean isVisible() { return isVisible; } public int getWindowingMode() { return 0; } public int getActivityType() { return 0; } }
