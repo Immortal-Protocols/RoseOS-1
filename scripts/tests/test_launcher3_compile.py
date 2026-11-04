@@ -122,6 +122,27 @@ def edge_patch():
     return git('diff', cwd=work)
 
 
+def bundle_report(content, registration, edit=None):
+    """A rose-integration-bundle-report v1 in base.bundleReport's own form, observing exactly content in the
+    registration order, with edit applied to a copy."""
+    report = {'kind': 'rose-integration-bundle-report', 'schemaVersion': 1,
+              'producer': {'path': 'scripts/integration-bundle-report.py', 'sha256': 'a' * 64, 'roseRevision': 'b' * 40},
+              'run': {'runId': '41700000000', 'runAttempt': 1, 'headSha': 'c' * 40, 'label': 'r1',
+                      'createdAt': '2026-11-04T00:00:00Z', 'updatedAt': '2026-11-04T01:00:00Z', 'bindingSha256': 'e' * 64},
+              'receipt': {'path': '/home/pixelbuild/receipts/reconcile-r1.json', 'receiptSha256': 'f' * 64,
+                          'receiptType': 'reconcile', 'label': 'r1', 'at': '2026-11-04T00:30:00Z',
+                          'patcher': json.loads(json.dumps(registration['patcher']))},
+              'candidate': {'commit': 'c' * 40, 'onMain': True, 'frankelConfigSha256': '1' * 64,
+                            'applyArgs': list(registration['applyArgs']), 'patcherKind': 'trusted'},
+              'registration': {'source': 'executed', 'patcherMatchesPin': True, 'applyArgsMatchPin': True},
+              'observed': {'patches': [dict(p) for p in content['patches']],
+                           'overlays': [dict(o) for o in content['overlays']],
+                           'notAnInputOverlays': list(content['notAnInputOverlays']), 'unclassified': []}}
+    if edit:
+        edit(report)
+    return report
+
+
 class Synthetic:
     """A three-project v2 contract with real bytes: frameworks/base config.xml (policy rewrite) and one Java file;
     Launcher3 one switcher-changed file, one new file and the edge-patched H.java; build/release one file; required
@@ -176,10 +197,16 @@ class Synthetic:
         self.bundle_content = {'patches': [{'project': L3, 'name': 'rose-switcher-launcher3.patch', 'sha256': 'c' * 64}],
                                'overlays': [{'target': self.overlay[0], 'sha256': sha(self.overlay[1])}],
                                'notAnInputOverlays': [ignored['target']]}
+        self.registration = {'applyArgs': json.loads((ROOT/'os/release-pipeline/frankel.json').read_text())
+                             ['host']['integrate']['reconcile']['applyArgs'],
+                             'patcher': {'patcher': 'trusted', 'sha256': {n: 'd' * 64 for n in adapter.PATCHER_FILES}},
+                             'order': [{'project': L3, 'name': 'rose-switcher-launcher3.patch'}]}
+        self.bundle_report = bundle_report(self.bundle_content, self.registration)
         final, base = section(False), section(True)
         self.manifest = {'schemaVersion': 2, 'kind': 'rose-launcher3-compile-inputs', 'target': 'Launcher3QuickStepLib',
                          'proves': 'compile only', 'identitySharing': {'appliesWithEdgeOff': True}, **final,
-                         'base': {**base, 'bundleContent': self.bundle_content},
+                         'base': {**base, 'bundleContent': self.bundle_content, 'registration': self.registration,
+                                  'bundleReport': MANIFEST['base']['bundleReport']},
                          'candidateDelta': {'commit': 'e' * 40,
                              'patches': [{'name': 'rose-edge-launcher3.patch', 'sha256': sha(patch), 'project': L3,
                                           'strip': 1, 'bundlePath': 'bundle/edge.patch'}],
@@ -221,10 +248,16 @@ class Contract(unittest.TestCase):
         self.assertEqual(sha(data), adapter.MANIFEST_SHA256)
         manifest = adapter.load_manifest()
         self.assertEqual({p['path']: len(p['files']) for p in manifest['projects']},
-                         {'frameworks/base': 27, 'packages/apps/Launcher3': 14, 'build/release': 1})
-        self.assertEqual(sum(o['role'] == 'required' for o in manifest['overlays']), 12)
+                         {'frameworks/base': 27, 'packages/apps/Launcher3': 16, 'build/release': 1})
+        self.assertEqual(sum(o['role'] == 'required' for o in manifest['overlays']), 15)
+        self.assertEqual(manifest['schemaVersion'], 3)
+        self.assertEqual([p['name'] for p in manifest['candidateDelta']['patches']],
+                         ['rose-edge-launcher3.patch', 'rose-edge-resize-launcher3.patch'])
+        self.assertEqual(manifest['lunchInputs'], {'path': adapter.LUNCH_INPUTS, 'sha256': adapter.LUNCH_INPUTS_SHA256})
+        self.assertEqual((manifest['branches']['requires'], manifest['branches']['forbids']),
+                         (adapter.BRANCH_REQUIRES, adapter.BRANCH_FORBIDS))
         self.assertEqual([c['id'] for c in manifest['branches']['verifyBaseApplyCandidate']['conditions']], adapter.CONDITIONS)
-        self.assertEqual(manifest['candidateDelta']['commit'], 'e361d1cb15abdb80795569f1558fb7e0bcf5635d')
+        self.assertEqual(manifest['candidateDelta']['commit'], '2f57a5f28e3c3cc97177bf3f9294ea807d514469')
         self.assertTrue(manifest['identitySharing']['appliesWithEdgeOff'])
         self.assertIn('quickstep/src/com/android/quickstep/FallbackSwipeHandler.java',
                       [f['path'] for f in manifest['projects'][1]['files']])
@@ -246,7 +279,16 @@ class Contract(unittest.TestCase):
                        'config_pixelComputerControlPrototypeAgents', 'PrototypeAgents: the agent row'),
                    lambda m: CONFIG(m)['integrationRewrite']['templates'].__setitem__(
                        'config_pixelComputerControlLockedSessions', '    <bool name="x">true</bool> when lockedControl; otherwise the marker'),
-                   lambda m: CONFIG(m)['integrationRewrite']['elements'].pop()]
+                   lambda m: CONFIG(m)['integrationRewrite']['elements'].pop(),
+                   lambda m: m.update(lunchInputs={'path': adapter.LUNCH_INPUTS, 'sha256': '0' * 64}),
+                   lambda m: m['branches']['requires']['verifyIntegrated'].pop(),
+                   lambda m: m['branches']['forbids']['verifyIntegrated'].remove('bundleReport'),
+                   lambda m: m['base']['bundleReport'].update(schemaVersion=2),
+                   lambda m: m['base']['bundleReport']['fields']['observed'].pop(),
+                   lambda m: m['base']['registration']['patcher'].update(patcher='any'),
+                   lambda m: m['base']['registration']['patcher']['sha256'].pop('integration_copy.py'),
+                   lambda m: m['base']['registration']['order'].reverse(),
+                   lambda m: m['base']['registration']['order'].pop()]
         for index, change in enumerate(changes):
             with self.subTest(index=index):
                 manifest = json.loads(json.dumps(MANIFEST))
@@ -314,9 +356,10 @@ class Contract(unittest.TestCase):
         self.assertEqual((result.returncode, result.stdout), (0, 'outer_seconds=19890\nfinish_seconds=1800\njob_minutes=372\n'))
 
     def test_a_version_checked_lunch_is_unbound_until_adevtool_git_is_bound(self):
-        for branch in ('verifyIntegrated', 'verifyBaseApplyCandidate'):
+        for branch, bundle in (('verifyIntegrated', {'path': None, 'sha256': None}),
+                               ('verifyBaseApplyCandidate', {'path': '/home/pixelbuild/receipts/bundle.json', 'sha256': 'b' * 64})):
             result = run_cli('check', '--binding', str(self.binding(lunch='frankel-cur-user', branch=branch,
-                             bundleReport={'path': '/home/pixelbuild/receipts/bundle.json', 'sha256': 'b' * 64})))
+                             bundleReport=bundle)))
             self.assertEqual((result.returncode, result.stdout), (4, ''))
             self.assertIn('adevtool_git_missing', result.stderr)
         # bound to the public fetch, which the pinned contract admits: the check passes, and its bounds add the lunch
@@ -393,6 +436,40 @@ class Contract(unittest.TestCase):
         self.assertEqual(dropped, [])
         self.assertIn(b'dl/.find-ignore', listed)
 
+    def test_each_branch_refuses_what_the_contract_forbids(self):
+        bundle = {'path': '/home/pixelbuild/receipts/bundle.json', 'sha256': 'b' * 64}
+        for branch, change, word in (('verifyIntegrated', {'bundleReport': bundle}, 'verifyIntegrated forbids bundleReport'),
+                                     ('verifyIntegrated', {'bundleReport': {'path': None, 'sha256': 'b' * 64}},
+                                      'verifyIntegrated forbids bundleReport'),
+                                     ('verifyIntegrated', {'reconstructSource': '/home/pixelbuild/objects'},
+                                      'verifyIntegrated forbids reconstructSource'),
+                                     ('verifyBaseApplyCandidate', {'bundleReport': bundle, 'reconstructSource': '/o'},
+                                      'verifyBaseApplyCandidate forbids reconstructSource'),
+                                     ('reconstruct', {'reconstructSource': '/o', 'bundleReport': bundle},
+                                      'reconstruct forbids bundleReport')):
+            with self.subTest(branch=branch, change=change):
+                result = run_cli('check', '--binding', str(self.binding(branch=branch, **change)))
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertIn(word, result.stderr)
+
+    def test_the_registration_applyargs_and_the_copys_git_exclusion_are_checked_against_the_repository(self):
+        binding = self.binding()
+        for name, edit, word in (('applyArgs', lambda c: c['host']['integrate']['reconcile']['applyArgs'].append('--extra'),
+                                  'registration.applyArgs'), ('exclusion', None, 'exclude every .git')):
+            with self.subTest(name=name):
+                root = Path(tempfile.mkdtemp())
+                (root/'os/release-pipeline').mkdir(parents=True)
+                config = json.loads((ROOT/'os/release-pipeline/frankel.json').read_text())
+                alpha = json.loads((ROOT/'os/release-pipeline/cuttlefish-alpha.json').read_text())
+                if edit:
+                    edit(config)
+                else:
+                    alpha['preparation']['exclusions']['anywhereNames'].remove('.git')
+                (root/'os/release-pipeline/frankel.json').write_text(json.dumps(config))
+                (root/'os/release-pipeline/cuttlefish-alpha.json').write_text(json.dumps(alpha))
+                with self.assertRaisesRegex(adapter.Invalid, word):
+                    adapter.check(binding, root)
+
     def test_invalid_bindings_refuse(self):
         for change in ({'host': 'other'}, {'taskParent': '/tmp'}, {'branch': 'mixed'}, {'sourceTree': 'relative'},
                        {'sourceTree': '/home/pixelbuild/rose-actions/blazer-prep-41473133543-1/source'},
@@ -417,6 +494,49 @@ class Contract(unittest.TestCase):
         config['host']['integrate']['reconcile']['applyArgs'] += ['--locked-control', '--reference-display-address', '7']
         (root/'os/release-pipeline/frankel.json').write_text(json.dumps(config))
         self.assertEqual(adapter.frankel_policy_args(root), ('7', True))
+
+
+class BundleReport(unittest.TestCase):
+    def setUp(self):
+        self.s = Synthetic(tempfile.mkdtemp())
+        self.base = self.s.manifest['base']
+
+    def problems(self, edit=None, report=None):
+        return adapter.bundle_report_problems(report if report is not None else
+                                              bundle_report(self.s.bundle_content, self.s.registration, edit), self.base)
+
+    def test_a_report_observing_exactly_the_bundle_passes(self):
+        self.assertEqual(self.problems(), [])
+
+    def test_every_rule_names_its_own_problem(self):
+        first = lambda r, key: r['observed'][key][0]  # noqa: E731
+        cases = [('bare bundleContent', None, self.s.bundle_content, 'sections are not exactly'),
+                 ('kind', lambda r: r.update(kind='other'), None, 'not a rose-integration-bundle-report v1'),
+                 ('missing section', lambda r: r.pop('producer'), None, 'sections are not exactly'),
+                 ('extra field', lambda r: r['run'].update(extra=1), None, 'run keys are not exactly'),
+                 ('missing field', lambda r: r['candidate'].pop('onMain'), None, 'candidate keys are not exactly'),
+                 ('nested field', lambda r: r['receipt']['patcher']['sha256'].pop('background_apks.py'), None,
+                  'receipt.patcher.sha256 keys'),
+                 ('patch row', lambda r: first(r, 'patches').pop('sha256'), None, 'observed.patches[0] keys'),
+                 ('untrusted patcher', lambda r: r['receipt']['patcher'].update(patcher='other'), None, 'receipt.patcher'),
+                 ('patcher pin', lambda r: r['receipt']['patcher']['sha256'].update({'apply-os-changes.py': '0' * 64}), None,
+                  'receipt.patcher'),
+                 ('applyArgs', lambda r: r['candidate']['applyArgs'].append('--extra'), None, 'candidate.applyArgs'),
+                 ('pin flags', lambda r: r['registration'].update(applyArgsMatchPin=False), None, 'match the pins'),
+                 ('unclassified', lambda r: r['observed'].update(unclassified=['frameworks/base/x']), None, 'unclassified'),
+                 ('order', lambda r: r['observed']['patches'].append({'project': L3, 'name': 'extra.patch', 'sha256': '9' * 64}),
+                  None, 'registration order'),
+                 ('patch bytes', lambda r: first(r, 'patches').update(sha256='9' * 64), None, 'observed patches differ'),
+                 ('overlay', lambda r: first(r, 'overlays').update(sha256='9' * 64), None, 'observed overlays differ'),
+                 ('notAnInput', lambda r: r['observed'].update(notAnInputOverlays=[]), None, 'observed overlays differ')]
+        for name, edit, report, word in cases:
+            with self.subTest(name=name):
+                problems = self.problems(edit, report)
+                self.assertTrue(any(word in p for p in problems), problems)
+
+    def test_the_committed_contract_spec_is_what_the_adapter_reads(self):
+        self.assertEqual(MANIFEST['base']['bundleReport']['fields'], adapter.BUNDLE_REPORT_FIELDS)
+        self.assertEqual(sorted(MANIFEST['base']['registration']['patcher']['sha256']), sorted(adapter.PATCHER_FILES))
 
 
 class Classify(unittest.TestCase):
@@ -1057,7 +1177,7 @@ class Run(unittest.TestCase):
         self.s = Synthetic(tempfile.mkdtemp())
         self.binding = {**BINDING, 'taskParent': str(self.parent), 'sourceTree': '/src', 'lunch': 'example-cur-user',
                         'policyReceipt': {'path': '/p.json', 'sha256': self.s.policy_sha}}
-        self.bundle_sha = sha(json.dumps(self.s.bundle_content).encode())
+        self.bundle_sha = sha(json.dumps(self.s.bundle_report).encode())
         self.calls = []
         self.lunch_result = (0, None)
 
@@ -1095,7 +1215,7 @@ class Run(unittest.TestCase):
         return adapter.run(self.binding, self.s.manifest, '41700000000', '1', root=self.s.repo, lock=lock,
                            copier=self.copier(state), compiler=self.compiler(code, stopped), pins=pins or self.pins(),
                            policy_loader=lambda path: (POLICY, self.s.policy_sha),
-                           bundle_loader=lambda path: (bundle or self.s.bundle_content, self.bundle_sha))
+                           bundle_loader=lambda path: (bundle or self.s.bundle_report, self.bundle_sha))
 
     def report(self):
         return json.loads((self.parent/'launcher3-compile-41700000000-1/receipts/report.json').read_text())
@@ -1165,7 +1285,10 @@ class Run(unittest.TestCase):
 
     def test_base_apply_candidate_refuses_at_the_first_failed_condition_by_name(self):
         cases = [('post', {}, 'delta-preimages', False), ('pre', {}, 'base-exact', True),
-                 ('base', {'bundle': dict(self.s.bundle_content, patches=[])}, 'base-exact: the integrating bundle', True),
+                 ('base', {'bundle': bundle_report(self.s.bundle_content, self.s.registration,
+                                                   lambda r: r['observed'].update(patches=[]))},
+                  'base-exact: the integrating bundle report does not match', True),
+                 ('base', {'bundle': self.s.bundle_content}, 'the bundle report sections are not exactly', True),
                  ('base', {'pins': self.pins(fail='base')}, 'extra against the tree pin', True),
                  ('base', {'pins': self.pins(fail='final')}, 'extra against the tree pin', False)]
         for state, change, word, untouched in cases:
@@ -1173,7 +1296,8 @@ class Run(unittest.TestCase):
                 self.setUp()
                 self.vbac()
                 if state == 'post':  # already at the candidate: the base pins pass on a fake, the preimages do not
-                    self.s.manifest['base'] = {**self.s.manifest, 'bundleContent': self.s.bundle_content}
+                    self.s.manifest['base'] = {**self.s.manifest, 'bundleContent': self.s.bundle_content,
+                                               'registration': self.s.registration}
                 self.assertEqual(self.run_adapter(state, **change), 3)
                 report = self.report()
                 self.assertIn(word, report['refused'])
@@ -1272,7 +1396,7 @@ class Run(unittest.TestCase):
         return adapter.run(self.binding, self.s.manifest, '41700000000', '1', root=self.s.repo, lock=lock,
                            copier=self.copier(state), compiler=self.compiler(), pins=self.pins(),
                            policy_loader=lambda path: (POLICY, self.s.policy_sha),
-                           bundle_loader=lambda path: (self.s.bundle_content, self.bundle_sha), plan=plan,
+                           bundle_loader=lambda path: (self.s.bundle_report, self.bundle_sha), plan=plan,
                            inputs_check=inputs_check or checks, fetcher=fetcher or fetch)
 
     def test_an_admitted_lunch_checks_its_inputs_and_fetches_after_the_branch_and_before_lunch(self):
