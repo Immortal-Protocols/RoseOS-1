@@ -113,10 +113,13 @@ class RoseEdgeShellTest(unittest.TestCase):
 
     def test_inert_until_a_real_compile_registers_it(self):
         # Every registered patch and every overlay goes into each OS build. #410 (Chief): the normal OS build is the
-        # compile proof, so apply-os-changes.py registers the patch; host-reconcile adds nothing and no overlay is added.
+        # compile proof, so apply-os-changes.py registers the patch, last in frameworks/base; no overlay is added.
         self.assertIn("projects['frameworks/base'].append('rose-edge-wmshell.patch')",
             (ROOT/'scripts/apply-os-changes.py').read_text())
-        self.assertNotIn('rose-edge-wmshell', (ROOT/'scripts/host-reconcile.py').read_text())
+        # host-reconcile (#543) mirrors that order: its frameworks/base sequence names the patch once, last.
+        reconcile = (ROOT/'scripts/host-reconcile.py').read_text()
+        self.assertEqual(reconcile.count('rose-edge-wmshell'), 1)
+        self.assertRegex(reconcile, r"FRAMEWORKS_BASE_SEQUENCE = \([^)]*'rose-edge-wmshell\.patch'\)")
         self.assertFalse(list((ROOT/'os/overlays').rglob('roseedge')))
         # Default off even once registered.
         self.assertIn('static final String ENABLED_PROPERTY = "persist.wm.debug.rose_edge";', self.controller)
