@@ -59,7 +59,11 @@ CANDIDATE_PATCHES = ['rose-edge-launcher3.patch', 'rose-edge-resize-launcher3.pa
 # wording fixes agreed with Release on #410; the sibling frameworks-base contract stays at 2 until its own re-pin.
 SCHEMA = 3
 # The trusted patcher whose registration block base.registration executes (agreed on #410): its three files' sha256.
+# The live scripts/ patcher now registers the edge patches itself (#410: the normal OS build is the compile proof), so
+# this inert standalone contract keeps describing the reviewed pre-registration patcher, committed byte for byte under
+# PATCHER_COPY and checked against these pins; the live patcher no longer decides it.
 PATCHER = ('scripts/apply-os-changes.py', 'scripts/background_apks.py', 'scripts/integration_copy.py')
+PATCHER_COPY = ROOT/'os/tests/fixtures/launcher3-compile-contract/patcher'
 PATCHER_SHA256 = {
     'apply-os-changes.py': '86ec1b2a41dec367490409a435423dbdbc0f5537a0437eac9094f4ea4c7bef35',
     'background_apks.py': 'af981b5b4309924664c758f1d479cf752fa6032911af447148302178c24c40fb',
@@ -343,7 +347,7 @@ def frankel_apply_args():
 
 
 def patcher_sha256():
-    return {Path(path).name: sha256((ROOT/path).read_bytes()) for path in PATCHER}
+    return {Path(path).name: sha256((PATCHER_COPY/Path(path).name).read_bytes()) for path in PATCHER}
 
 
 def registered_order(apply_args):
@@ -353,9 +357,9 @@ def registered_order(apply_args):
     placeholders become empty files in a scratch directory. Nothing else of the patcher runs."""
     import argparse
     import ast
-    import sys
+    import importlib.util
     import xml.etree.ElementTree as ET
-    path = ROOT/PATCHER[0]
+    path = PATCHER_COPY/Path(PATCHER[0]).name
     tree = ast.parse(path.read_text())
     body = tree.body
     def index(test):
@@ -367,11 +371,9 @@ def registered_order(apply_args):
     parse = index(lambda t: t == 'a = p.parse_args()')
     start = index(lambda t: t.startswith("projects = {'frameworks/base':"))
     end = index(lambda t: t == 'projects.update(rose_home_projects(preinstalls))')
-    sys.path.insert(0, str(ROOT/'scripts'))
-    try:
-        import background_apks
-    finally:
-        sys.path.pop(0)
+    spec = importlib.util.spec_from_file_location('contract_background_apks', PATCHER_COPY/'background_apks.py')
+    background_apks = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(background_apks)
     scratch = Path(tempfile.mkdtemp(prefix='l3-registration-'))
     try:
         argv = []

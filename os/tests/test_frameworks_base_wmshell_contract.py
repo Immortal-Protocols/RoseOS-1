@@ -102,8 +102,10 @@ class FrameworksBaseWmshellContractTest(unittest.TestCase):
         self.assertEqual(self.manifest['confirmation'], W.CONFIRMATION)
         self.assertIn('refuses this contract unless state is "confirmed"', self.manifest['confirmation']['rule'])
         self.assertEqual(self.manifest['registration']['state'], 'unregistered')
+        # The live patcher now registers it for the normal OS build, whose compile is the proof (#410, Chief); this
+        # inert contract keeps describing the pre-registration candidate.
         patcher = (ROOT/'scripts/apply-os-changes.py').read_text()
-        self.assertNotIn('rose-edge-wmshell', patcher, 'registration waits for a real compile of this contract')
+        self.assertIn("projects['frameworks/base'].append('rose-edge-wmshell.patch')", patcher)
 
     def test_each_shell_and_systemui_file_is_proved_in_the_module_that_compiles_it(self):
         roles = self.manifest['overlayRoles']

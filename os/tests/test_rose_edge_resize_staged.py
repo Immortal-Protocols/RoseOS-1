@@ -179,11 +179,21 @@ class RoseEdgeResizeStagedTest(unittest.TestCase):
         wiring = WIRING.read_text()
         self.assertIn('params.getBinder(com.android.quickstep.fallback.RoseEdgeShell.DESCRIPTOR)', wiring)
 
-    def test_the_patcher_registers_neither_edge_patch_and_e2a_stays_byte_identical(self):
+    def test_the_patcher_registers_both_edge_patches_with_the_switch_and_e2a_stays_byte_identical(self):
+        # #410 (Chief): the normal OS build compiles them; the switch is the existing persist.wm.debug property, which
+        # every app domain may read (pinned sepolicy private/app.te: get_prop(appdomain, persist_wm_debug_prop)).
+        patcher = (ROOT/'scripts/apply-os-changes.py').read_text()
+        block = patcher[patcher.index('if a.background_policy:'):patcher.index('preinstalls = preinstall_plan(')]
+        self.assertLess(block.index("'rose-switcher-launcher3.patch'"), block.index("'rose-edge-launcher3.patch'"))
+        self.assertLess(block.index("'rose-edge-launcher3.patch'"), block.index("'rose-edge-resize-launcher3.patch'"))
+        self.assertIn("projects['frameworks/base'].append('rose-edge-wmshell.patch')", block)
+        self.assertIn("if a.agent_tray:projects['build/make'].append('rose-edge-build-make.patch')", block)
+        switch = (ROOT/'os/patches/rose-edge-build-make.patch').read_text()
+        added = [l[1:] for l in switch.splitlines() if l.startswith('+') and not l.startswith('+++')]
+        self.assertEqual([l for l in added if not l.startswith('#')],
+            ['PRODUCT_SYSTEM_PROPERTIES += persist.wm.debug.rose_edge=true'], 'one property, nothing else')
         for path in ('scripts/apply-os-changes.py', 'scripts/background_apks.py', 'scripts/integration_copy.py'):
-            text = (ROOT/path).read_text()
-            for name in ('rose-edge-launcher3.patch', 'rose-edge-resize-launcher3.patch', 'os/staged'):
-                self.assertNotIn(name, text, f'{path} must not register {name} before a real compile')
+            self.assertNotIn('os/staged', (ROOT/path).read_text(), f'{path} never reads os/staged')
         # E2a's patch and gesture are unchanged from the reviewed candidate e361d1c; E2c replaces State and Swipe.
         self.assertEqual(hashlib.sha256((ROOT/'os/patches/rose-edge-launcher3.patch').read_bytes()).hexdigest(),
             'a1c76e1e03845573501790509a7e620e48476a2bae47889f839d81144dd35460')

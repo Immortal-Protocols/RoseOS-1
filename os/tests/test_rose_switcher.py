@@ -269,7 +269,7 @@ class RoseSwitcherTest(unittest.TestCase):
     def test_apply_os_changes_registers_it_with_the_agent_controller_and_the_contract_declares_it(self):
         patcher = (ROOT/'scripts/apply-os-changes.py').read_text()
         block = patcher[patcher.index('if a.background_policy:'):patcher.index('preinstalls = preinstall_plan(')]
-        self.assertIn("projects['packages/apps/Launcher3'] = ['rose-switcher-launcher3.patch']", block)
+        self.assertIn("projects['packages/apps/Launcher3'] = ['rose-switcher-launcher3.patch',", block)
         import json
         contract = json.loads((ROOT/'os/devices/pixel10.json').read_text())
         self.assertIn('packages/apps/Launcher3', contract['roseInclusion']['projects'])
@@ -1564,10 +1564,12 @@ class RoseEdgeSwipePatchTest(unittest.TestCase):
                 self.assertNotIn(reach, code, reach)
         self.assertIn('Looper.myLooper() != Looper.getMainLooper()', self.EDGE_STATE)
 
-    def test_no_build_applies_it_until_release_and_infra_agree(self):
+    def test_the_normal_build_applies_it_after_the_switcher_patch(self):
+        # #410 (Chief): the normal OS build is the compile proof, so the edge patches are registered after the switcher.
         patcher = (ROOT/'scripts/apply-os-changes.py').read_text()
-        self.assertNotIn('rose-edge-launcher3.patch', patcher, 'registered only with an agreed compile route')
-        self.assertNotIn('rose-edge-resize-launcher3.patch', patcher, 'registered only with an agreed compile route')
+        block = patcher[patcher.index('if a.background_policy:'):patcher.index('preinstalls = preinstall_plan(')]
+        self.assertIn("projects['packages/apps/Launcher3'] = ['rose-switcher-launcher3.patch', 'rose-edge-launcher3.patch',\n"
+            "        'rose-edge-resize-launcher3.patch']", block)
 
 
 if __name__ == '__main__':
