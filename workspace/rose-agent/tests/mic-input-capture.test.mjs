@@ -64,15 +64,48 @@ test('input mute never silences Rose: task progress, Sky narration and the guard
  assert.match(page,/const input=active&&!muted\?measuredVolume/);
 });
 
-test('getUserMedia gate: a microphone opened while input is muted starts disabled; the gate never enables',async()=>{
- const tracks=[];const devices={getUserMedia:async()=>{const t={enabled:true};tracks.push(t);return {getAudioTracks:()=>[t]};}};
- const context=providerContext();
- const gate=context.VoiceProviders.gateMicrophone(devices);
- gate.set(true);await devices.getUserMedia({audio:true});assert.equal(tracks[0].enabled,false);
- gate.set(false);await devices.getUserMedia({audio:true});assert.equal(tracks[1].enabled,true);assert.equal(tracks[0].enabled,false,'never re-enabled by the gate');
- const again=context.VoiceProviders.gateMicrophone(devices);again.set(true);
- assert.equal(devices.getUserMedia.roseMicGate,true,'installed once');
- assert.equal(context.VoiceProviders.gateMicrophone(undefined).muted(),false,'no media devices: nothing to gate');
+// A track shaped like Chromium's MediaStreamTrack: enabled is an accessor on the prototype, the sent audio follows it.
+class FakeTrack{constructor(){this._on=true;this.readyState='live';this.stopped=false;}get enabled(){return this._on;}set enabled(v){this._on=!!v;}
+ clone(){const c=new FakeTrack();c._on=this._on;return c;}stop(){this.stopped=true;this.readyState='ended';}}
+function gatedDevices(context,make=()=>new FakeTrack()){
+ const opened=[];const devices={getUserMedia:async()=>{const t=make();opened.push(t);return {getAudioTracks:()=>[t]};}};
+ return {devices,opened,gate:context.VoiceProviders.gateMicrophone(devices)};
+}
+
+test('held microphone tracks stay disabled while muted for their whole life, whatever the SDK does (LiveKit 2.22.4)',async()=>{
+ const {devices,opened,gate}=gatedDevices(providerContext());
+ gate.set(true);
+ const stream=await devices.getUserMedia({audio:true});const t=stream.getAudioTracks()[0];
+ assert.equal(t.enabled,false,'disabled before any SDK code sees it');
+ // LiveKit restart()/setTrackMuted(false) while its own isMuted is still false: enabled = true (livekit :22781, :22982).
+ t.enabled=true;assert.equal(t.enabled,false,'the SDK cannot re-enable it while input is muted');
+ // A reacquired track (restart() calls getUserMedia again) is held from creation, then the SDK enables it.
+ const again=(await devices.getUserMedia({audio:true})).getAudioTracks()[0];again.enabled=true;
+ assert.equal(again.enabled,false,'a reacquired track is held too');
+ const copy=t.clone();copy.enabled=true;assert.equal(copy.enabled,false,'a clone is held');
+ // Unmute: the gate enables nothing; the provider's own unmute does.
+ gate.set(false);assert.deepEqual(opened.map(x=>x.enabled),[false,false]);
+ t.enabled=true;assert.equal(t.enabled,true,'the provider\'s unmute re-enables');
+ // Mute: every held live track is disabled at once, before the provider's asynchronous mute.
+ gate.set(true);assert.equal(t.enabled,false);
+ assert.equal(gate.held(),3);
+});
+
+test('a track that cannot be held while muted is stopped, never left live; unmuted it is left to the provider',async()=>{
+ const stubborn=()=>{const t={readyState:'live',stopped:false,stop(){this.stopped=true;this.readyState='ended';}};
+  Object.defineProperty(t,'enabled',{value:true,writable:true,configurable:false});return t;};
+ const {devices,gate}=gatedDevices(providerContext(),stubborn);
+ gate.set(true);const muted=(await devices.getUserMedia({audio:true})).getAudioTracks()[0];
+ assert.equal(muted.stopped,true);
+ gate.set(false);const live=(await devices.getUserMedia({audio:true})).getAudioTracks()[0];
+ assert.equal(live.stopped,false);
+});
+
+test('one gate per devices; no media devices: nothing to gate',async()=>{
+ const context=providerContext();const {devices,gate}=gatedDevices(context);
+ assert.equal(context.VoiceProviders.gateMicrophone(devices),gate,'a second call returns the same gate');
+ assert.equal(devices.getUserMedia.roseMicGate,gate);
+ assert.equal(context.VoiceProviders.gateMicrophone(undefined).muted(),false);
 });
 
 test('ElevenLabs applies a muted start as soon as the conversation exists, before connect',async()=>{
@@ -116,4 +149,23 @@ test('renderer loss ends the dead page Local Rose link and settles its requests;
  assert.ok(start.indexOf('current.end();')<start.indexOf('link.muted = muted;'),'a stale link is ended, never reused');
  assert.ok(!start.includes('if (current != null) return;'),'the new start\'s mute always applies');
  assert.match(link,/if \(current == null \|\| token <= 0 \|\| current\.token != token\) return;/);
+});
+
+test('tray mute/unmute never start voice, never load or reload the page, never take the pending slot (Home PR514)',async()=>{
+ const command=voice.slice(voice.indexOf('void command(String c,String origin)'),voice.indexOf('void setResultCardMode('));
+ const branch=command.slice(command.indexOf('Boolean mic=MicInputCapture.requested(c);'),command.indexOf('if(!loaded){pendingCommand=c;'));
+ assert.ok(branch.length>0);
+ for(const forbidden of ['loadUrl','pendingCommand','startForegroundService','startService','createVoiceWeb','userStarted','"talk"'])
+  assert.ok(!branch.includes(forbidden),'the mic branch never: '+forbidden);
+ assert.equal((branch.match(/return;/g)||[]).length,2,'unloaded and loaded both return inside the branch');
+ // The glasses/voice-start block before it acts only on end/talk/glasses/auto_talk.
+ const before=command.slice(0,command.indexOf('Boolean mic=MicInputCapture.requested(c);'));
+ assert.ok(!/tray_mute|tray_unmute/.test(before));
+ // The page: a request while idle or connecting never starts or restarts a call.
+ const idle=loadPage();idle.run('var started=0;start=()=>{started++;};window.setTrayMuted(true,1);window.setTrayMuted(false,2)');
+ assert.equal(idle.run('started'),0);assert.equal(idle.run('ready||starting'),false);
+ const connecting=startablePage();connecting.run('start(false)');await settle();
+ connecting.run('var before=provider.options;window.setTrayMuted(true,4);window.setTrayMuted(false,5)');
+ assert.equal(connecting.run('provider.options===before'),true,'no second start while connecting');
+ assert.equal(connecting.run('starting'),true);
 });

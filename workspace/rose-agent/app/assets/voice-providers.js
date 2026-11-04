@@ -16,16 +16,35 @@
    onConversationCreated:c=>{if(o.initialMuted)c.setMicMuted(true);handle=facade(c,speech);o.onConversationCreated?.(handle);},onConnect:o.onConnect,onMessage:o.onMessage,onDisconnect:o.onDisconnect,onError:o.onError,onVadScore:o.onVadScore,onInterruption:o.onInterruption,onPing:o.onPing,onModeChange:m=>{speech.mode(m);o.onModeChange?.(m);}});
   return handle||facade(raw,speech);
  }
- // Rose's microphone-input mute from the first sample (#410 item 6): ElevenLabs/LiveKit publishes its microphone
- // inside its own session setup, before setMicMuted can run, so every audio track getUserMedia creates while the
- // page's input is muted starts disabled. The gate only ever disables; each provider's own mute re-enables on unmute.
+ // Rose's microphone-input mute from the first sample (#410 item 6). Every audio track getUserMedia creates is held:
+ // while the page's input is muted the track is disabled and stays disabled for its whole life, whatever the provider's
+ // SDK does to it. LiveKit (ElevenLabs) publishes its microphone inside session setup, before setMicMuted can run, and
+ // its restart() sets enabled=!isMuted on a reacquired track (livekit-client 2.22.4 :22781), so disabling at creation
+ // alone is not enough: the held track's own enabled setter refuses true while muted. A clone is held too. Muting
+ // disables every held track at once; unmuting enables nothing itself, so only the provider's own unmute re-enables.
+ // A track that cannot be held while muted is stopped, never left live. Returns the one gate for these devices.
  function gateMicrophone(devices){
-  let muted=false;
-  if(!devices||typeof devices.getUserMedia!=='function'||devices.getUserMedia.roseMicGate)return {set(v){muted=!!v;},muted:()=>muted};
+  let muted=false;const held=new Set();
+  const gate={set(v){muted=!!v;for(const t of held){if(t.readyState==='ended'){held.delete(t);continue;}if(muted)t.enabled=false;}},muted:()=>muted,held:()=>held.size};
+  if(!devices||typeof devices.getUserMedia!=='function')return gate;
+  if(devices.getUserMedia.roseMicGate)return devices.getUserMedia.roseMicGate;
+  function hold(t){
+   if(!t||t.roseMicHeld)return;
+   try{
+    let owner=t,desc;while(owner&&!(desc=Object.getOwnPropertyDescriptor(owner,'enabled')))owner=Object.getPrototypeOf(owner);
+    if(!desc)throw Error('no enabled property');
+    let value=desc.value;
+    const read=desc.get?()=>desc.get.call(t):()=>value,write=desc.set?v=>desc.set.call(t,v):v=>{value=v;};
+    Object.defineProperty(t,'enabled',{configurable:true,enumerable:true,get:read,set:v=>write(!!v&&!muted)});
+    const clone=t.clone;if(typeof clone==='function')t.clone=function(){const c=clone.apply(this,arguments);hold(c);return c;};
+    t.roseMicHeld=true;held.add(t);
+    if(muted)write(false);
+   }catch(e){if(muted)t.stop?.();}
+  }
   const open=devices.getUserMedia.bind(devices);
-  const gated=async constraints=>{const stream=await open(constraints);if(muted)(stream?.getAudioTracks?.()||[]).forEach(t=>t.enabled=false);return stream;};
-  gated.roseMicGate=true;devices.getUserMedia=gated;
-  return {set(v){muted=!!v;},muted:()=>muted};
+  const gated=async constraints=>{const stream=await open(constraints);(stream?.getAudioTracks?.()||[]).forEach(hold);return stream;};
+  gated.roseMicGate=gate;devices.getUserMedia=gated;
+  return gate;
  }
  // Muting changes user intent; suspension releases the physical microphone.
  // Serialize capture replacement so a late getUserMedia result cannot reacquire
