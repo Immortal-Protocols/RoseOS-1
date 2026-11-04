@@ -127,6 +127,10 @@ PUBLIC_FETCH_STATUS = ('allowed only under a separate runtime approval for its s
                        'publicFetch; Release owns the mechanism')
 FABRICATION_MEANS = 'any HEAD, ref, object or gitdir written other than by a genuine copy or by exactly the publicFetch steps'
 OPTION_CLASSES = ('genuine-copy', 'redirect', 'public-fetch', 'fabrication', 'relaxation')
+# The canonical sha256 of everything this adapter implements of the git route: the whole gitRequirement and every
+# source's workingTreeCheck text (json, sorted keys, compact separators). Any change to them is invalid until this
+# adapter is reviewed against the new text, so a re-pin is never only a hash bump.
+GIT_REQUIREMENT_SHA256 = 'ca8de46a9769e90c2559974da6dc17b7cbd32f49cce2ed41a8d6ef537be56166'
 # The job environment the fetch keeps (network setup only); everything else, LD_* included, is left out.
 FETCH_INHERITED = ('HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy', 'NO_PROXY', 'no_proxy', 'ALL_PROXY',
                    'all_proxy', 'SSL_CERT_FILE', 'SSL_CERT_DIR', 'LANG')
@@ -695,7 +699,7 @@ def adevtool_ignored(relative, is_dir):
     parts = relative.split('/')
     if parts[0] in ('.idea', 'dist', 'lib', 'node_modules') and (len(parts) > 1 or is_dir):
         return True
-    return parts[0] == 'dl' and len(parts) > 1 and parts[1:] != ['.find-ignore']
+    return parts[0] == 'dl' and len(parts) > 1 and parts[1] != '.find-ignore'
 
 
 def exact_sources(inputs):
@@ -713,12 +717,21 @@ def exact_sources(inputs):
     return exact
 
 
+def git_requirement_digest(inputs):
+    """GIT_REQUIREMENT_SHA256's canonical form, of this contract."""
+    semantics = {'gitRequirement': inputs['gitRequirement'],
+                 'workingTreeCheck': {s.get('path'): s.get('workingTreeCheck') for s in inputs['sources']}}
+    return sha256_bytes(json.dumps(semantics, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode())
+
+
 def admission_problems(inputs, url, root=ROOT):
     """Every way the admitted contract's publicFetch and workingTree differ from the mechanism this adapter implements;
     an admission is refused (invalid) on any. The contract cannot widen the adapter, and the adapter cannot drift."""
     git, problems = inputs['gitRequirement'], []
     fetch, tree = git.get('publicFetch') or {}, git.get('workingTree') or {}
     revision = git['revision']
+    if git_requirement_digest(inputs) != GIT_REQUIREMENT_SHA256:
+        problems.append('gitRequirement or a workingTreeCheck is not the text this adapter was reviewed against')
     options = {o.get('class'): o for o in git['options']}
     if [o.get('class') for o in git['options']] != list(OPTION_CLASSES):
         problems.append('gitRequirement.options are not exactly ' + ', '.join(OPTION_CLASSES))
@@ -749,8 +762,14 @@ def admission_problems(inputs, url, root=ROOT):
             if any(adevtool_ignored('/'.join(parts[:i]), i < len(parts)) for i in range(1, len(parts) + 1)):
                 problems.append(f'the omitted rules would drop the tracked {os.fsdecode(name)}')
                 break
+        ignore = listed.get(b'.gitignore')
+        if ignore is None or ignore[1] != (tree.get('omittedFromCopy') or {}).get('gitBlob'):
+            problems.append('workingTree.omittedFromCopy.gitBlob is not the pinned tree\'s .gitignore')
         for project in exact:
             lunch_listing(inputs, project, root)
+            row = next(s for s in inputs['sources'] if s['path'] == project)
+            if manifest_project(project, root)['revision'] != row['revision']:
+                problems.append(f'{project} is not at its pinned manifest revision')
     except Invalid as error:
         problems.append(str(error))
     return problems
@@ -786,6 +805,30 @@ def manifest_file_problem(tree, row):
     if data is None or data != contained_bytes(tree, f'{row["project"]}/{row["src"]}'):
         return f'{row["dest"]} is not the manifest copy of {row["project"]}/{row["src"]}'
     return None
+
+
+def read_walked(path, info, label):
+    """The bytes of the regular file the walk saw (info): opened without following a link and without blocking, and
+    read only when the descriptor is that same regular file (inode, mode and size); the same again after reading."""
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        opened = os.fstat(fd)
+        same = (opened.st_ino, opened.st_mode, opened.st_size) == (info.st_ino, info.st_mode, info.st_size)
+        if not stat.S_ISREG(opened.st_mode) or not same:
+            raise Refused(f'{label} changed while it was hashed')
+        chunks = []
+        while True:
+            block = os.read(fd, 1 << 20)
+            if not block:
+                break
+            chunks.append(block)
+        data = b''.join(chunks)
+        after = os.fstat(fd)
+        if len(data) != info.st_size or (after.st_ino, after.st_mode, after.st_size) != (info.st_ino, info.st_mode, info.st_size):
+            raise Refused(f'{label} changed while it was hashed')
+        return data
+    finally:
+        os.close(fd)
 
 
 def exact_tree(project, expected, skipped=(), hasher=git_blob_id, deadline=None, clock=time.monotonic):
@@ -830,9 +873,7 @@ def exact_tree(project, expected, skipped=(), hasher=git_blob_id, deadline=None,
         if mode == '120000':
             oid = hasher(os.readlink(path))
         else:
-            data, opened = read_nofollow(path)
-            if (opened.st_ino, opened.st_size) != (info.st_ino, len(data)):
-                raise Refused(f'{name}/{os.fsdecode(rel)} changed while it was hashed')
+            data = read_walked(path, info, f'{name}/{os.fsdecode(rel)}')
             oid = hasher(data)
         if oid != expected[rel][1]:
             different.append(rel)
@@ -972,6 +1013,22 @@ def git_output(argv, env, cwd, deadline, clock=time.monotonic, run=subprocess.ru
     return result.returncode, result.stdout
 
 
+def mount_points(text=None):
+    """Every mount point in /proc/self/mountinfo (field 5, octal escapes decoded), bind mounts on one filesystem
+    included; None when the table cannot be read."""
+    if text is None:
+        try:
+            text = Path('/proc/self/mountinfo').read_text()
+        except OSError:
+            return None
+    points = []
+    for line in text.splitlines():
+        fields = line.split(' ')
+        if len(fields) > 4:
+            points.append(re.sub(r'\\([0-7]{3})', lambda m: chr(int(m.group(1), 8)), fields[4]))
+    return points
+
+
 def gitdir_problems(tree, work, inputs, raw_listing, env, lunch_env, deadline, limit, clock=time.monotonic):
     """Every publicFetch.acceptance item on the new repository but the working tree (adevtool_public_fetch re-checks
     it): HEAD and shallow are exactly the revision; under the lunch environment (GIT_* unset but the ceiling at the copy
@@ -1045,6 +1102,11 @@ def gitdir_problems(tree, work, inputs, raw_listing, env, lunch_env, deadline, l
                 problems.append('a .git entry is neither a file nor a directory')
     if not os.path.realpath(dotgit).startswith(real_tree + os.sep):
         problems.append('the .git does not resolve inside the copy')
+    points, inside = mount_points(), os.path.realpath(dotgit)
+    if points is None:
+        problems.append('the mount table cannot be read')
+    elif any(p == inside or p.startswith(inside + os.sep) for p in points):
+        problems.append('a mount point is inside the .git')
     if dir_bytes(dotgit) > limit:
         problems.append(f'the .git holds more than {limit} bytes')
     return sorted(set(problems))
@@ -1117,10 +1179,15 @@ def adevtool_public_fetch(tree, plan, run_root, record, root=ROOT, protocol='htt
         except Refused as error:
             refuse(f'the working tree no longer holds: {error}')
         code, head = git_output(['git', '-C', str(work), 'rev-parse', 'HEAD'], lunch_env, str(work), deadline, clock)
+        if (code, head.decode(errors='replace').strip()) != (0, git['revision']):
+            refuse('the final rev-parse HEAD under the lunch environment did not give the revision')
         tools = {}
         for role, path in (('fetch', fetch_git), ('lunch', shutil.which('git', path=lunch_env['PATH']))):
-            version = git_output([path, '--version'], lunch_env, str(work), deadline, clock)[1] if path else b''
-            tools[role] = {'path': path, 'version': version.decode(errors='replace').strip()}
+            code, version = git_output([path, '--version'], lunch_env, str(work), deadline, clock) if path else (None, b'')
+            version = version.decode(errors='replace').strip()
+            if code != 0 or not version.startswith('git version '):
+                refuse(f'the {role} git did not report its version')
+            tools[role] = {'path': path, 'version': version}
         record.update(ok=True, observedHead=head.decode().strip(), gitDirBytes=dir_bytes(dotgit), shallow=True,
                       alternates=False, remote=False, workingTreeHolds=True, git=tools)
         return record
@@ -1513,6 +1580,11 @@ def copy_tree(source, destination, root=ROOT, statvfs=os.statvfs, planner=alpha_
     finally:
         signal.setitimer(signal.ITIMER_REAL, 0)
         signal.signal(signal.SIGALRM, previous)
+    if omit is not None:  # a relative link whose text passes through an omitted path resolves in the source only
+        dangling = [e['path'] for e in plan['entries']
+                    if e['type'] == 'link' and e.get('exists') and not os.path.exists(Path(destination)/e['path'])]
+        if dangling:
+            raise Refused(f'copy_refused: {len(dangling)} kept links dangle in the copy, first: {dangling[0]}')
     return {'entries': len(plan['entries']), 'excluded': len(plan['excluded']), 'omitted': len(omitted),
             'projectedBytes': projected, 'availableBytesBefore': available}
 
