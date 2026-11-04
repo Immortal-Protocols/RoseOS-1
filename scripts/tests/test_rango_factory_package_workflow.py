@@ -15,6 +15,9 @@ import sys
 import tempfile
 import unittest
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import os_release_shape as shape  # noqa: E402
+
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = (ROOT/'.github/workflows/os-release.yml').read_text()
 MODE = 'rango-factory-package'
@@ -259,12 +262,8 @@ class Invocations(unittest.TestCase):
 
 
 class Guard(unittest.TestCase):
-    BASE = {'MODE': MODE, 'CANDIDATE_SHA': '', 'BUILD_NUMBER': '', 'BUILD_TIMESTAMP': '', 'APPS': '', 'PROMOTE': 'false',
-            'CHANNEL': 'beta', 'RESUME_STAGE': 'none', 'RESUME_SOURCE_RUN': '', 'RESUME_UNSIGNED_SHA256': '',
-            'RESUME_SIGNED_SHA256': '', 'CAMPAIGN': '', 'APP_PUBLISH': 'false', 'ROSE_RANGO_PUBLISH': 'false',
-            'ROSE_FIRST_USE_ENROLL': 'false', 'ROSE_RECOVER_RUN': '', 'BOOTSTRAP_PROFILE': 'none', 'MODELS_BOOTSTRAP_RUN': '',
-            'REUSE_BINDING': '', 'ALPHA_RECOVER': 'false', 'ROSE_DEVICE': 'frankel', 'BLAZER_PREP_STAGE': 'none',
-            'GITHUB_SHA': 'f' * 40}
+    # The bare dispatch's workflow env (every input at its declared default), plus the guard step's own env.
+    BASE = shape.dispatch_env(MODE=MODE, PROMOTE='false', APP_PUBLISH='false', ALPHA_RECOVER='false', GITHUB_SHA='f' * 40)
 
     def run_guard(self, **change):
         guard = 'set -euo pipefail\n' + script(step(jobs()['guard'], 'Candidate is an exact commit on main'))
@@ -285,7 +284,7 @@ class Guard(unittest.TestCase):
                 self.assertNotEqual(self.run_guard(**change), 0)
 
     def test_mode_is_manual_selectable_and_checked_before_the_controller(self):
-        self.assertIn('signing-bootstrap, rango-factory-package, rango-factory-inspect, models-sign,', WORKFLOW)
+        self.assertIn(MODE, shape.modes())
         self.assertEqual(re.findall(r'(?m)^  (\w+):\n', WORKFLOW.split('\npermissions:', 1)[0].split('\non:\n', 1)[1]),
                          ['workflow_dispatch'])
         guard = jobs()['guard']
@@ -367,12 +366,14 @@ class Job(unittest.TestCase):
 class Ownership(unittest.TestCase):
     def test_owned_start_cleanup_covers_this_mode_and_joins_cleanup(self):
         controller, cleanup = jobs()['controller'], jobs()['cleanup']
-        own = "inputs.mode == 'blazer-prep' || inputs.mode == 'rango-factory-package' || inputs.mode == 'rango-factory-inspect' || inputs.mode == 'launcher3-compile' || inputs.mode == 'blazer-compile' || inputs.mode == 'blazer-integrate'"
-        self.assertIn(f'      - if: {own}\n        run: python3 scripts/release-pipeline.py start-builder --ownership-record', controller)
-        self.assertIn(f'        if: always() && ({own})\n        run: python3 scripts/release-pipeline.py builder-ownership', controller)
-        self.assertIn(f'      - if: {own}\n        env:\n          STARTED: ${{{{ needs.controller.outputs.started }}}}\n'
+        # owned_modes() reads every ownership condition (plain/owned start, ownership record, plain/owned stop) and
+        # requires them to agree; the exact owned commands stay pinned here.
+        self.assertIn(MODE, shape.owned_modes())
+        self.assertIn('\n        run: python3 scripts/release-pipeline.py start-builder --ownership-record', controller)
+        self.assertIn('\n        run: python3 scripts/release-pipeline.py builder-ownership', controller)
+        self.assertIn('\n        env:\n          STARTED: ${{ needs.controller.outputs.started }}\n'
                       '        run: python3 scripts/release-pipeline.py stop-builder --only-if-started "$STARTED"\n', cleanup)
-        self.assertIn('blazer-prep, rango-factory-package, rango-factory-inspect, launcher3-compile, blazer-compile, blazer-integrate, app-builder', re.search(r'(?m)^    needs: (.+)$', cleanup)[1])
+        self.assertIn(MODE, shape.cleanup_needs())
 
 
 

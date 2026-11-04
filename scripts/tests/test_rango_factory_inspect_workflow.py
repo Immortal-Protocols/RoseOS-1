@@ -15,6 +15,9 @@ import sys
 import tempfile
 import unittest
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import os_release_shape as shape  # noqa: E402
+
 ROOT = Path(__file__).resolve().parents[2]
 spec = importlib.util.spec_from_file_location('rango_factory_inspect_wiring', ROOT/'scripts/rango-factory-inspect-wiring.py')
 inspect_wiring = importlib.util.module_from_spec(spec)
@@ -340,12 +343,9 @@ class Workflow(unittest.TestCase):
             if line.strip() and not line.startswith(' ' * 10):
                 break
             lines.append(line[10:])
-        env = {'PATH': os.environ['PATH'], 'MODE': MODE, 'CANDIDATE_SHA': '', 'BUILD_NUMBER': '', 'BUILD_TIMESTAMP': '',
-               'APPS': '', 'PROMOTE': 'false', 'CHANNEL': 'beta', 'RESUME_STAGE': 'none', 'RESUME_SOURCE_RUN': '',
-               'RESUME_UNSIGNED_SHA256': '', 'RESUME_SIGNED_SHA256': '', 'CAMPAIGN': '', 'APP_PUBLISH': 'false',
-               'ROSE_RANGO_PUBLISH': 'false', 'ROSE_FIRST_USE_ENROLL': 'false', 'ROSE_RECOVER_RUN': '',
-               'BOOTSTRAP_PROFILE': 'none', 'MODELS_BOOTSTRAP_RUN': '', 'REUSE_BINDING': '', 'ALPHA_RECOVER': 'false',
-               'ROSE_DEVICE': 'frankel', 'BLAZER_PREP_STAGE': 'none', 'GITHUB_SHA': 'f' * 40, **change}
+        # The bare dispatch's workflow env (every input at its declared default), plus the guard step's own env.
+        env = shape.dispatch_env(**{'PATH': os.environ['PATH'], 'MODE': MODE, 'PROMOTE': 'false', 'APP_PUBLISH': 'false',
+                                    'ALPHA_RECOVER': 'false', 'GITHUB_SHA': 'f' * 40, **change})
         return subprocess.run(['bash', '-c', 'set -euo pipefail\n' + '\n'.join(lines) + '\n'], env=env, cwd=ROOT,
                               capture_output=True).returncode
 
@@ -377,10 +377,8 @@ class Workflow(unittest.TestCase):
         for name in ('Cleanup report and allowlisted reports', 'Reports artifact'):
             self.assertIn('        if: always()\n', step(job, name))
         self.assertEqual(job.count('actions/upload-artifact@'), 1)  # reports only: nothing is exported again
-        own = "inputs.mode == 'blazer-prep' || inputs.mode == 'rango-factory-package' || inputs.mode == 'rango-factory-inspect' || inputs.mode == 'launcher3-compile' || inputs.mode == 'blazer-compile' || inputs.mode == 'blazer-integrate'"
-        self.assertEqual(jobs()['controller'].count(own), 2)
-        self.assertEqual(jobs()['cleanup'].count(own), 1)
-        self.assertIn('rango-factory-inspect, launcher3-compile, blazer-compile, blazer-integrate, app-builder', re.search(r'(?m)^    needs: (.+)$', jobs()['cleanup'])[1])
+        self.assertIn(MODE, shape.owned_modes())  # every controller/cleanup ownership condition, checked to agree
+        self.assertIn(MODE, shape.cleanup_needs())
         self.assertNotIn('rango-factory-inspect-wiring.py', jobs()['rango-factory-package'])
 
 
