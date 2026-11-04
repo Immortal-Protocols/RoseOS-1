@@ -801,6 +801,10 @@ class Server:
         self.args = args
         self.mode = "ui-only" if args.ui_only else "live"
         self.bus = Bus()
+        self.transcripts = None
+        if getattr(args, 'brain', 'local') == 'codex':
+            from .transcripts import Transcripts
+            self.transcripts = Transcripts(getattr(args, 'transcript_dir', None))
         # --phone real: the user's Android phone through Rose Agent (rose/realphone.py), not the fake one.
         self.phone = RealPhone(bus=self.bus) if getattr(args, "phone", "fake") == "real" else Phone(bus=self.bus)
         self.mic = MicFeed(self.bus)
@@ -875,6 +879,11 @@ class Server:
     def _load(self) -> None:
         t0 = time.monotonic()
         try:
+            codex = getattr(self.args, 'brain', 'local') == 'codex'
+            cloud = getattr(self.args, 'cloud_audio', None)
+            if cloud:
+                from .cloud_audio import prepare
+                prepare()
             from .brain import Brain
             from .conductor import Conductor
             from .listener import Listener
@@ -884,24 +893,35 @@ class Server:
 
             self.transport = self._make_transport()
             self.runtime = rt = Runtime()
-            self.brain = self._step("brain", "Loading the brain (Qwen3.6-35B-A3B)",
-                                    lambda: rt.run(Brain, name="brain-load", timeout=900))
+            if not codex:
+                self.brain = self._step("brain", "Loading the brain (Qwen3.6-35B-A3B)",
+                                        lambda: rt.run(Brain, name="brain-load", timeout=900))
             self.listener = Listener(rt, self.bus, on_event=self._on_listen)
-            self._step("listener", "Loading ears (VAD, streaming ASR, Parakeet, smart-turn)",
-                       self.listener.load)
+            if not cloud:
+                self._step("listener", "Loading ears (VAD, streaming ASR, Parakeet, smart-turn)",
+                           self.listener.load)
             self.speaker = Speaker(rt, self.bus, self.transport)
             self.speaker.on_audible = self.listener.set_rose_audible  # echo guard
-            self._step("speaker", f"Loading the voice ({self.voice})", lambda: self.speaker.load(self.voice))
-            self.tasks = TaskManager(rt, self.brain, self.phone, self.bus, on_done=self._on_task_done)
-            self._step("tasks", "Preparing the phone agent and thinker", self.tasks.prepare)
-            self.conductor = Conductor(rt, self.brain, self.listener, self.speaker, self.tasks,
-                                       self.phone, self.bus)
+            if cloud:
+                from .cloud_audio import load
+                self._step("voice", "Loading Linux voice providers", lambda: load(cloud, rt, self.listener, self.speaker, self.voice))
+            else:
+                self._step("speaker", f"Loading the voice ({self.voice})", lambda: self.speaker.load(self.voice))
+            if codex:
+                from .codex_conductor import CodexConductor
+                self.conductor = CodexConductor(self.phone, self.bus, self.speaker, self.transcripts)
+                self.tasks = self.conductor
+            else:
+                self.tasks = TaskManager(rt, self.brain, self.phone, self.bus, on_done=self._on_task_done)
+                self._step("tasks", "Preparing the phone agent and thinker", self.tasks.prepare)
+                self.conductor = Conductor(rt, self.brain, self.listener, self.speaker, self.tasks,
+                                           self.phone, self.bus)
             self._step("conductor", "Preparing Rose's conversation", self.conductor.start)
             self.listener.start()
             self.mic.sink = self.listener.push
             if isinstance(self.transport, LocalTransport):
                 self.transport.start()
-            if self.args.keepalive:
+            if self.args.keepalive and not cloud:
                 self.keepalive = GpuKeepalive(rt)
                 self.keepalive.start()
             self.ready = True
@@ -909,8 +929,9 @@ class Server:
             print(f"[rose] ready in {seconds} s", flush=True)
             self.bus.emit("ready", seconds=seconds, load_s=dict(self.load_s))
         except Exception as exc:
-            traceback.print_exc()
-            self.bus.emit("error", message=f"startup failed: {type(exc).__name__}: {exc}")
+            if getattr(self.args, 'brain', 'local') != 'codex':
+                traceback.print_exc()
+            self.bus.emit("error", message=f"startup failed: {type(exc).__name__}; check Codex ChatGPT login and Terra Fast availability" if codex else f"startup failed: {type(exc).__name__}: {exc}")
             self.bus.emit("status", state="loading",
                           detail=f"Startup failed ({type(exc).__name__}); see the server log")
 
@@ -1015,7 +1036,9 @@ class Server:
                 "phone": self.phone.snapshot(), "ui_tree": self.phone.ui_tree(),
                 "tasks": self.task_list(), "load_s": self.load_s,
                 "metrics": list(getattr(self.conductor, "turn_metrics", []))[-50:],
-                "stats": self.stats()}
+                "stats": self.stats(),
+                "conversation_id": getattr(self.conductor, 'conversation', None),
+                "model": getattr(self.conductor, 'model', None)}
 
     # ------------------------------------------------------------- actions
     async def say(self, text: str, typed: bool = False) -> tuple[dict, int]:
@@ -1024,7 +1047,7 @@ class Server:
             return {"ok": True, "mode": "scripted"}, 200
         if not self.ready:
             return {"ok": False, "error": "Rose is still loading"}, 503
-        if typed:
+        if typed or getattr(self.args, 'cloud_audio', None):
             self.conductor.inject_text_turn(text)
             return {"ok": True, "mode": "typed"}, 200
         try:
@@ -1115,10 +1138,25 @@ class Server:
             for m in history:
                 await ws.send_text(dumps({**m, "replay": True}))
             await ws.send_text(dumps({"kind": "replay_done", "t": time.time()}))
-            while True:
-                m = await q.get()
-                if id(m) not in seen and not self._stale(m):
-                    await ws.send_text(dumps(m))
+            incoming = asyncio.create_task(ws.receive())
+            outgoing = asyncio.create_task(q.get())
+            try:
+                while True:
+                    ready, _ = await asyncio.wait((incoming, outgoing), return_when=asyncio.FIRST_COMPLETED)
+                    if incoming in ready:
+                        frame = incoming.result()
+                        if frame['type'] == 'websocket.disconnect':
+                            break
+                        incoming = asyncio.create_task(ws.receive())
+                    if outgoing in ready:
+                        m = outgoing.result()
+                        outgoing = asyncio.create_task(q.get())
+                        if id(m) not in seen and not self._stale(m):
+                            await ws.send_text(dumps(m))
+            finally:
+                incoming.cancel()
+                outgoing.cancel()
+                await asyncio.gather(incoming, outgoing, return_exceptions=True)
         except Exception:
             pass  # client went away
         finally:
@@ -1174,6 +1212,23 @@ def build_app(server: Server, remote: Remote | None = None) -> FastAPI:
     @app.get("/api/state")
     def state() -> Response:
         return _json(server.snapshot())
+
+    @app.get("/api/transcripts")
+    def transcripts() -> Response:
+        return _json(server.transcripts.conversations() if server.transcripts else [])
+
+    @app.get("/api/transcripts/{conversation}")
+    def transcript(conversation: str) -> Response:
+        if not server.transcripts:
+            return _json({"error": "transcripts unavailable"}, 404)
+        return _json(server.transcripts.export(conversation))
+
+    @app.post("/api/tasks/{task_id}/stop")
+    def stop_task(task_id: int, body: dict) -> Response:
+        # A stale browser from another server lifetime cannot stop a reused id.
+        if body.get('conversation_id') != getattr(server.conductor, 'conversation', None):
+            return _json({"ok": False, "error": "stale conversation"}, 409)
+        return _json({"ok": bool(server.tasks and server.tasks.cancel(task_id))})
 
     @app.post("/api/say")
     async def say(body: dict) -> Response:
@@ -1313,6 +1368,11 @@ async def serve_all(servers: list[tuple[uvicorn.Server, list | None]]) -> None:
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(prog="python -m rose.app", description="Rose v3 voice assistant server.")
+    p.add_argument("--brain", choices=("local", "codex"), default="local",
+                   help="codex: GPT 6.1 Terra Fast via Sign in with ChatGPT")
+    p.add_argument("--transcript-dir", help="durable private transcript directory (Codex mode)")
+    p.add_argument("--cloud-audio", help="Linux voice provider JSON with existing local model paths")
+    p.add_argument("--pair-host", action="append", default=[], help="advertised DNS/IPv4 host for the shared QR; repeatable")
     p.add_argument("--port", type=int, default=8091)
     p.add_argument("--voice", default="zoey", help="Phonon voice name (see /api/state voices)")
     p.add_argument("--no-browser-audio", dest="browser_audio", action="store_false",
@@ -1331,13 +1391,22 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--no-remote", dest="remote", action="store_false",
                    help="no remote listener: the phone can only use USB (adb reverse)")
     p.add_argument("--log-level", default="warning")
-    return p.parse_args(argv)
+    args = p.parse_args(argv)
+    if args.cloud_audio and args.brain != 'codex':
+        p.error('--cloud-audio requires --brain codex')
+    from .remote import configured_hosts
+    try:
+        args.pair_host = configured_hosts(args.pair_host)
+    except ValueError as exc:
+        p.error(str(exc))
+    return args
 
 
 def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
     server = Server(args)
-    remote = Remote(port=args.remote_port) if args.remote else None
+    remote = (Remote(port=args.remote_port, **({'hosts': lambda: args.pair_host} if args.pair_host else {}))
+              if args.remote else None)
     servers = build_servers(server, args, remote)
     print(f"[rose] dashboard: http://127.0.0.1:{args.port}  (mode: {server.mode})", flush=True)
     if remote is not None and remote.listening:

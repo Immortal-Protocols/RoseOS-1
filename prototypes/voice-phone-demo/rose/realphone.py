@@ -181,8 +181,9 @@ class RealSession:
 
     blocking = True  # actions wait on the phone: run them off the MLX thread
 
-    def __init__(self, phone: "RealPhone", name: str, on_screen: bool = False):
+    def __init__(self, phone: "RealPhone", name: str, on_screen: bool = False, workspace=None):
         self.phone, self.name = phone, name
+        self.workspace = workspace or phone.workspace
         self.on_screen = bool(on_screen)
         self._background: bool | None = None
         self.obs: dict = {}
@@ -282,7 +283,7 @@ class RealSession:
     # ----- actions (wait on the phone) ---------------------------------
     def refresh(self) -> dict:
         if self.background:
-            r = self.phone.workspace.inspect()
+            r = self.workspace.inspect()
         else:
             r = self.phone.link.call("inspect_ui")
         self._observe(r)
@@ -321,7 +322,7 @@ class RealSession:
             self.shot = {"status": self.obs.get("status") or "unreadable"}
             return None
         if self.background:
-            shot, tree = self.phone.workspace.observe()
+            shot, tree = self.workspace.observe()
             self._observe(tree)
             self.image, self.shot = self.phone._decode(shot)
             return self.image
@@ -332,7 +333,7 @@ class RealSession:
         """One screen command, in the workspace or on the visible screen."""
 
         if self.background:
-            return self.phone.workspace.command(action, **args)
+            return self.workspace.command(action, **args)
         return self.phone.link.call(action, **args)
 
     def open_app(self, app: str) -> ActionResult:
@@ -349,7 +350,7 @@ class RealSession:
     def _open_in_workspace(self, pkg: str, label: str) -> ActionResult:
         """Start (or reuse) Rose's workspace for ``pkg``; a refusal is said plainly, never worked around."""
 
-        r = self.phone.workspace.start(pkg)
+        r = self.workspace.start(pkg)
         ok = r.get("status") in ("opened", "launch_unverified")
         if ok:
             self._observed(r)
@@ -399,13 +400,13 @@ class RealSession:
 
     def back(self) -> ActionResult:
         if self.background:
-            return self._after(self.phone.workspace.command("back"), "Went back.")
+            return self._after(self.workspace.command("back"), "Went back.")
         return self._after(self.phone.link.call("back"), "Went back.")
 
     def home(self) -> ActionResult:
         if self.background:
             # The workspace has no home screen: going home ends it (BackgroundPhone: home == stop).
-            r = self.phone.workspace.command("home")
+            r = self.workspace.command("home")
             return self._after(r, "Closed Rose's workspace.", settle=False)
         return self._after(self.phone.link.call("home"), "Went to the home screen.")
 
@@ -434,7 +435,7 @@ class RealSession:
 
         label = self.phone.app_label(MAPS)
         label = "Maps" if label == MAPS else label
-        ws = self.phone.workspace
+        ws = self.workspace
         r = ws.start(MAPS)
         if r.get("status") not in ("opened", "launch_unverified"):
             self.refresh()
@@ -607,7 +608,7 @@ class RealPhone:
         self._last_shot: tuple[float, Image.Image | None, dict] = (float("-inf"), None, {})
 
     # ----- the fake Phone's surface ------------------------------------
-    def session(self, name: str, on_screen: bool = False) -> RealSession:
+    def session(self, name: str, on_screen: bool = False, independent: bool = False) -> RealSession:
         """A task's view (made on first use; ``on_screen`` is fixed then).
 
         ``on_screen`` False (the default): the task works in Rose's workspace when the phone has
@@ -617,16 +618,22 @@ class RealPhone:
         with self._lock:
             s = self._sessions.get(name)
             if s is None:
-                s = self._sessions[name] = RealSession(self, name, on_screen=on_screen)
+                workspace = None
+                if independent:
+                    from .scoped_workspace import ScopedWorkspace
+                    workspace = ScopedWorkspace(self._controller)
+                s = self._sessions[name] = RealSession(self, name, on_screen=on_screen, workspace=workspace)
+                if independent:
+                    s._background = True  # never fall back to the owner's screen
                 if not on_screen:
-                    self.workspace.begin_task()
+                    s.workspace.begin_task()
             return s
 
     def close_session(self, name: str) -> None:
         with self._lock:
             s = self._sessions.pop(name, None)
         if s is not None and s._background:
-            self.workspace.touch()  # the workspace stays open for a follow-up; idle time starts now
+            s.workspace.touch()  # the workspace stays open for a follow-up; idle time starts now
 
     def screen(self, view: str | None = None) -> Screen:
         s = self._session_for(view)
@@ -744,6 +751,9 @@ class RealPhone:
         pass  # real notifications come from the phone (not read yet)
 
     def reset(self) -> None:
+        for session in list(self._sessions.values()):
+            if session.workspace is not self.workspace:
+                threading.Thread(target=session.workspace.close, args=("reset",), daemon=True).start()
         with self._lock:
             self._sessions.clear()
             self._shown = None
@@ -753,8 +763,9 @@ class RealPhone:
     def close(self) -> None:
         """Rose is shutting down: close her workspace (blocking; call it off the server's loop)."""
 
-        if self.workspace.session is not None and self.link.connected:
-            self.workspace.close("shutdown")
+        for ws in {self.workspace, *(s.workspace for s in list(self._sessions.values()))}:
+            if ws.session is not None and self.link.connected:
+                ws.close("shutdown")
 
     def _close_workspace_soon(self, reason: str) -> None:
         """Close the workspace on a worker thread: reset runs on threads that must not wait on the phone."""
@@ -856,6 +867,9 @@ class RealPhone:
 
         self._bg = None
         self.workspace.forget()
+        for session in list(self._sessions.values()):
+            if session.workspace is not self.workspace:
+                session.workspace.forget()
         self._changed("link", {"connected": self.link.connected})
 
     # ----- apps --------------------------------------------------------

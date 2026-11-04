@@ -268,14 +268,14 @@
    let onEvent=null;
    const handle={close:async()=>{if(closed)return;closed=true;if(root.localRoseEvent===onEvent)root.localRoseEvent=null;root.Native?.localRoseStop();tasks.end();},setMuted:v=>root.Native.localRoseMute(!!v),sendContext:()=>{},sendMessage:()=>{},inputLevel:()=>input,outputLevel:()=>output};
    const fail=message=>{clearTimeout(timer);if(!live){void handle.close();reject(Error(message));}};
-   const unpaired='Not paired: open the menu and choose Pair with Mac';
-   const timer=setTimeout(()=>fail('Rose on the Mac is not reachable. Check that Rose is running on the Mac and this phone is on the same Wi-Fi or Tailscale (or USB).'),8000);
+   const unpaired='Not paired: open the menu and choose Pair with Rose';
+   const timer=setTimeout(()=>fail('Rose is not reachable. Check that the paired backend is running and reachable from this phone.'),8000);
    root.localRoseEvent=onEvent=m=>{
     if(closed)return;
     if(m.type==='level'){input=Math.min(1,m.input*3);output=Math.min(1,m.output*3);}
     else if(m.type==='status'&&m.status==='live'&&!live){live=true;clearTimeout(timer);o.onSession?.({provider:'local'});o.onConversationCreated?.(handle);o.onConnect?.();resolve(handle);tasks.live();}
-    else if(m.type==='status'&&m.status==='reconnecting'&&live)o.onError?.('Reconnecting to Rose on the Mac…');
-    else if(m.type==='status'&&m.status==='clock'){const clock='The Mac refused this phone\'s time. Turn on automatic date and time in Settings.';if(!live)fail(clock);else o.onError?.(clock);}
+    else if(m.type==='status'&&m.status==='reconnecting'&&live)o.onError?.('Reconnecting to Rose…');
+    else if(m.type==='status'&&m.status==='clock'){const clock='The backend refused this phone\'s time. Turn on automatic date and time in Settings.';if(!live)fail(clock);else o.onError?.(clock);}
     else if(m.type==='status'&&m.status==='unpaired'){if(!live)fail(unpaired);else{o.onError?.(unpaired);void handle.close();o.onDisconnect?.({reason:'unpaired'});}}
     else if(m.type==='mode')o.onModeChange?.({mode:m.mode});
     else if(m.type==='message'&&m.text){const key=m.role+':'+m.id+':'+m.text;if(!seen.has(key)){seen.add(key);o.onMessage?.({role:m.role==='user'?'user':'agent',message:m.text});}}

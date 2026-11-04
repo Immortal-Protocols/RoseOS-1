@@ -1,0 +1,53 @@
+// Private stdio IPC for rose.app. Codex remains the only app-server adapter.
+import {createInterface} from 'node:readline';
+import {Codex} from './codex.mjs';
+
+const sessions = new Map(), calls = new Map();
+let nextCall = 0;
+const send = value => process.stdout.write(JSON.stringify(value)+'\n');
+const fail = () => ({success:false,contentItems:[{type:'inputText',text:'Tool unavailable or cancelled.'}]});
+async function handle(m) {
+ if(m.op==='tool_result') {
+  const call=calls.get(m.callId);
+  if(call){calls.delete(m.callId);clearTimeout(call.timer);call.resolve(m.result);}
+  return;
+ }
+ if(m.op==='open') {
+  if(sessions.has(m.session))throw Error('Session already exists');
+  const publish=event=>{if(sessions.get(m.session)===c)send({session:m.session,threadId:c.thread,...event});};
+  const c=new Codex(m.cwd, '', null, {externalPhone:true,model:m.model,
+   developerInstructions:m.instructions,dynamicTools:m.tools.map(tool=>({type:'function',...tool})),
+   handleToolCall:params=>new Promise(resolve=>{
+    const callId=String(++nextCall);
+    const timer=setTimeout(()=>{calls.delete(callId);resolve(fail());},60000);
+    calls.set(callId,{resolve,timer,session:m.session});
+    publish({event:'tool',callId,params});
+   })});
+  sessions.set(m.session,c);
+  c.on('turnCreated',p=>publish({event:'started',turnId:p.turnId}));
+  c.on('textDelta',p=>publish({event:'delta',...p}));
+  c.on('message',(text,phase,turnId)=>publish({event:'message',text,phase,turnId}));
+  c.on('done',turn=>publish({event:'done',turn:{id:turn.id,status:turn.status,
+   error:turn.error?{message:'Codex turn failed'}:null}}));
+  c.on('failure',()=>publish({event:'failure',message:'Codex process stopped'}));
+  try {await c.init();return {threadId:c.thread,model:c.selectedModel,serviceTier:c.actualServiceTier,authMode:c.authMode};}
+  catch(error){c.close();sessions.delete(m.session);throw error;}
+ }
+ const c=sessions.get(m.session);
+ if(!c)throw Error('Unknown session');
+ if(m.op==='submit')return c.submit(m.text,{model:c.selectedModel,effort:'medium',serviceTier:c.serviceTier});
+ if(m.op==='interrupt') {
+  for(const [id,call] of calls)if(call.session===m.session){clearTimeout(call.timer);call.resolve(fail());calls.delete(id);}
+  return c.interruptForModelSwitch();
+ }
+ if(m.op==='close'){c.close();sessions.delete(m.session);return {};}
+ throw Error('Unknown operation');
+}
+createInterface({input:process.stdin}).on('line',line=>{
+ let m;try{m=JSON.parse(line);}catch{return;}
+ // Do not serialize input: tool responses and interrupts must pass a pending submit.
+ Promise.resolve().then(()=>handle(m)).then(result=>{
+  if(m.id!==undefined)send({id:m.id,result:result??{}});
+ }).catch(error=>{if(m.id!==undefined)send({id:m.id,error:['chatgpt_login_required','model_unavailable','fast_unavailable','model_mode_mismatch'].includes(error.code)?error.code:'codex_request_failed'});});
+});
+process.stdin.on('end',()=>{for(const c of sessions.values())c.close();process.exit(0);});

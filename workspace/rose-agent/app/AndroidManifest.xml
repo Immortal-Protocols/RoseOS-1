@@ -37,7 +37,7 @@
 <activity android:name=".ServerConnectionActivity" android:exported="false"/>
 <activity android:name=".RoseConversationActivity" android:exported="false" android:label="Rose Agent" android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize"/>
 <activity android:name=".PairingActivity" android:exported="false"/>
-<activity android:name=".LocalRosePairActivity" android:exported="true" android:launchMode="singleTop" android:screenOrientation="portrait" android:excludeFromRecents="true" android:label="Pair with Mac"><intent-filter><action android:name="android.intent.action.VIEW"/><category android:name="android.intent.category.DEFAULT"/><category android:name="android.intent.category.BROWSABLE"/><data android:scheme="roseagent" android:host="pair"/></intent-filter></activity>
+<activity android:name=".LocalRosePairActivity" android:exported="true" android:launchMode="singleTop" android:screenOrientation="portrait" android:excludeFromRecents="true" android:label="Pair with Rose"><intent-filter><action android:name="android.intent.action.VIEW"/><category android:name="android.intent.category.DEFAULT"/><category android:name="android.intent.category.BROWSABLE"/><data android:scheme="roseagent" android:host="pair"/></intent-filter></activity>
 <activity android:name=".SettingsAccessActivity" android:exported="false"/>
 <provider android:name=".GlassesPhotoProvider" android:authorities="dev.pixel.voice.glasses" android:exported="true"/>
 <activity android:name=".PodcastEntryActivity" android:exported="true" android:permission="dev.pixel.voice.permission.PODCAST_CONTEXT" android:theme="@android:style/Theme.Translucent.NoTitleBar" android:excludeFromRecents="true"/>
