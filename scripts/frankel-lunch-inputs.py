@@ -371,7 +371,8 @@ def build():
                 {'class': 'redirect', 'status': 'refused', 'means': 'GIT_DIR, a gitfile, a link, alternates or any '
                     'other way of pointing the copy at the production gitdir or object store'},
                 {'class': 'public-fetch', 'status': 'allowed only under a separate runtime approval for its '
-                    'source and bounds; the interface is publicFetch; Release owns the mechanism'},
+                    'source and bounds; the interface is publicFetch; Release owns the mechanism',
+                    'url': remote_url(ADEVTOOL)},
                 {'class': 'fabrication', 'status': 'refused', 'means': 'any HEAD, ref, object or gitdir written '
                     'other than by a genuine copy or by exactly the publicFetch steps'},
                 {'class': 'relaxation', 'status': 'refused', 'means': 'regenerating the vendor module with --noVerify '

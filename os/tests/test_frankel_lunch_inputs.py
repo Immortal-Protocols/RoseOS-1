@@ -41,7 +41,7 @@ def blob(data):
 
 class FrankelLunchInputsTest(unittest.TestCase):
     # OS Product's proposed version (#410), not yet agreed with Release; once agreed, any change needs re-agreement.
-    PROPOSED_SHA256 = 'aea12555f90ee20931e9a440c920b9aeaa18f67b1071f384ede973ef606790f2'
+    PROPOSED_SHA256 = 'd259aae6d1984dea2ead3f929aeb7ce9a2807681f28147ce53deb2ada36ec4e3'
 
     def manifest(self):
         return json.loads(MANIFEST.read_text())
@@ -178,6 +178,9 @@ class FrankelLunchInputsTest(unittest.TestCase):
              'relaxation': 'refused'})
         self.assertIn('separate approval with exact paths and bounds', git['options'][0]['status'])
         self.assertIn('separate runtime approval', git['options'][2]['status'])
+        self.assertEqual([o for o in git['options'] if o['class'] == 'public-fetch'], [git['options'][2]],
+            'exactly one public-fetch row, as the adapter admits it')
+        self.assertEqual(git['options'][2]['url'], git['publicFetch']['url'])
         self.assertIn('by exactly the publicFetch steps', git['options'][3]['means'])
         self.assertEqual(git['genuineSource']['linkText'], '../../.repo/projects/vendor/adevtool.git')
         self.assertIn('Historical context, not an expected value and not current state', git['genuineSource']['basis'])

@@ -414,7 +414,8 @@
    },
    {
     "class": "public-fetch",
-    "status": "allowed only under a separate runtime approval for its source and bounds; the interface is publicFetch; Release owns the mechanism"
+    "status": "allowed only under a separate runtime approval for its source and bounds; the interface is publicFetch; Release owns the mechanism",
+    "url": "https://github.com/GrapheneOS/adevtool"
    },
    {
     "class": "fabrication",
