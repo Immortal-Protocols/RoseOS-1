@@ -23,6 +23,8 @@ import android.view.View;
 import android.view.ViewConfiguration;
 import android.view.ViewTreeObserver;
 import android.view.WindowManager;
+import android.view.accessibility.AccessibilityNodeInfo;
+import android.view.accessibility.AccessibilityNodeProvider;
 
 /**
  * RoseOS (#410 E2c): the raised edge's window, Launcher3's half of the system edge. It is shown while RoseEdgeState
@@ -153,6 +155,60 @@ public final class RoseEdgeWindow implements RoseEdgeState.Listener {
 
         Rect control(int which) {
             return RoseEdgeLayout.control(which, getWidth(), mDensity, 0);
+        }
+
+        /** The two wells as virtual buttons for accessibility; the mic slot is SystemUI's control, with its own node. */
+        private final AccessibilityNodeProvider mNodes = new AccessibilityNodeProvider() {
+            @Override
+            public AccessibilityNodeInfo createAccessibilityNodeInfo(int virtualViewId) {
+                if (virtualViewId == View.NO_ID) {
+                    AccessibilityNodeInfo root = AccessibilityNodeInfo.obtain(EdgeView.this);
+                    onInitializeAccessibilityNodeInfo(root);
+                    root.addChild(EdgeView.this, RoseEdgeLayout.ROSE);
+                    root.addChild(EdgeView.this, RoseEdgeLayout.SWITCHER);
+                    return root;
+                }
+                if (virtualViewId != RoseEdgeLayout.ROSE && virtualViewId != RoseEdgeLayout.SWITCHER) return null;
+                AccessibilityNodeInfo node = AccessibilityNodeInfo.obtain(EdgeView.this, virtualViewId);
+                node.setParent(EdgeView.this);
+                node.setPackageName(getContext().getPackageName());
+                node.setClassName(android.widget.Button.class.getName());
+                node.setContentDescription(virtualViewId == RoseEdgeLayout.ROSE ? "Open Rose" : "Open system switcher");
+                Rect bounds = control(virtualViewId);
+                node.setBoundsInParent(bounds);
+                int[] onScreen = new int[2];
+                getLocationOnScreen(onScreen);
+                bounds.offset(onScreen[0], onScreen[1]);
+                node.setBoundsInScreen(bounds);
+                node.setEnabled(true);
+                node.setVisibleToUser(true);
+                node.setClickable(true);
+                node.addAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_CLICK);
+                return node;
+            }
+
+            @Override
+            public boolean performAction(int virtualViewId, int action, android.os.Bundle arguments) {
+                if (virtualViewId == View.NO_ID) return performAccessibilityAction(action, arguments);
+                if (action != AccessibilityNodeInfo.ACTION_CLICK
+                        || (virtualViewId != RoseEdgeLayout.ROSE && virtualViewId != RoseEdgeLayout.SWITCHER)) {
+                    return false;
+                }
+                activate(virtualViewId);
+                return true;
+            }
+        };
+
+        @Override
+        public AccessibilityNodeProvider getAccessibilityNodeProvider() {
+            return mNodes;
+        }
+
+        /** Lowers the edge, then runs the control's action (taps and accessibility clicks alike). */
+        void activate(int which) {
+            RoseEdgeState.lower(mDisplayId);
+            if (which == RoseEdgeLayout.ROSE) mActions.openRose(mDisplayId);
+            else mActions.showSwitcher(mDisplayId);
         }
 
         @Override
@@ -296,9 +352,7 @@ public final class RoseEdgeWindow implements RoseEdgeState.Listener {
                     if (dy > RoseEdgeGesture.RAISE_DP * mDensity) {
                         RoseEdgeState.lower(mDisplayId);
                     } else if (target >= 0 && target == mDownTarget) {
-                        RoseEdgeState.lower(mDisplayId);
-                        if (target == RoseEdgeLayout.ROSE) mActions.openRose(mDisplayId);
-                        else mActions.showSwitcher(mDisplayId);
+                        activate(target);
                     }
                     mDownTarget = -1;
                     return true;

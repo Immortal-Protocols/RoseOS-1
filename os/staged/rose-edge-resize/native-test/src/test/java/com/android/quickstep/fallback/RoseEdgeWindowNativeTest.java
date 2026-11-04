@@ -122,6 +122,28 @@ public class RoseEdgeWindowNativeTest {
     }
 
     @Test
+    public void theTwoWellsAreAccessibleButtonsAndTheSlotIsNotThisWindows() throws Exception {
+        RoseEdgeWindow.EdgeView view = raise();
+        android.view.accessibility.AccessibilityNodeProvider nodes = view.getAccessibilityNodeProvider();
+        android.view.accessibility.AccessibilityNodeInfo root = nodes.createAccessibilityNodeInfo(View.NO_ID);
+        assertEquals(2, root.getChildCount());
+        android.view.accessibility.AccessibilityNodeInfo rose = nodes.createAccessibilityNodeInfo(RoseEdgeLayout.ROSE);
+        assertEquals("Open Rose", rose.getContentDescription().toString());
+        assertTrue(rose.isClickable());
+        Rect bounds = new Rect();
+        rose.getBoundsInParent(bounds);
+        assertEquals(view.control(RoseEdgeLayout.ROSE), bounds);
+        assertEquals("Open system switcher",
+                nodes.createAccessibilityNodeInfo(RoseEdgeLayout.SWITCHER).getContentDescription().toString());
+        assertNull("the mic slot is SystemUI's control", nodes.createAccessibilityNodeInfo(RoseEdgeLayout.MIC));
+        assertTrue(nodes.performAction(RoseEdgeLayout.SWITCHER,
+                android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK, null));
+        idle();
+        assertEquals(List.of("switcher 0"), actions);
+        assertFalse(RoseEdgeState.isRaised(DISPLAY));
+    }
+
+    @Test
     public void roseOpensThroughAnOrdinaryHomeStartWithOneRoutingExtra() {
         android.content.Intent intent = RoseEdgeWindow.openRoseIntent();
         assertEquals(android.content.Intent.ACTION_MAIN, intent.getAction());
