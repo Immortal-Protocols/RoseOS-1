@@ -83,11 +83,14 @@ test('held microphone tracks stay disabled while muted for their whole life, wha
  const again=(await devices.getUserMedia({audio:true})).getAudioTracks()[0];again.enabled=true;
  assert.equal(again.enabled,false,'a reacquired track is held too');
  const copy=t.clone();copy.enabled=true;assert.equal(copy.enabled,false,'a clone is held');
- // Unmute: the gate enables nothing; the provider's own unmute does.
- gate.set(false);assert.deepEqual(opened.map(x=>x.enabled),[false,false]);
- t.enabled=true;assert.equal(t.enabled,true,'the provider\'s unmute re-enables');
+ // The SDK disables one of them itself (its own mute); input mute still holds both.
+ again.enabled=false;
+ // Unmute: each held track gets back exactly what the SDK last asked for, never more. LiveKit's unmute() returns early
+ // when its isMuted is already false, so nothing else would re-enable a track it asked to be enabled.
+ gate.set(false);assert.deepEqual(opened.map(x=>x.enabled),[true,false]);
+ assert.equal(copy.enabled,true,'a clone follows its source\'s request');
  // Mute: every held live track is disabled at once, before the provider's asynchronous mute.
- gate.set(true);assert.equal(t.enabled,false);
+ gate.set(true);assert.deepEqual([t.enabled,again.enabled,copy.enabled],[false,false,false]);
  assert.equal(gate.held(),3);
 });
 
@@ -130,13 +133,13 @@ test('VoiceService: mic requests are stored first, never take the pending slot, 
  const command=voice.slice(voice.indexOf('void command(String c,String origin)'),voice.indexOf('void setResultCardMode('));
  const mic=command.indexOf('Boolean mic=MicInputCapture.requested(c);');
  assert.ok(mic>0&&mic<command.indexOf('if(!loaded){pendingCommand=c;'),'before the single pending slot');
- assert.match(command,/storeInputMuted\(mic\);LocalRoseLink\.setMuted\(mic\);int seq=\+\+muteRequestSeq;if\(!loaded\)\{muteAckSeq=seq;return;\}web\.evaluateJavascript\("window\.setTrayMuted\("\+mic\+","\+seq\+"\)",null\);return;/,
-  'a running Local Rose link takes the request at once, before the page (it only gets its handle at live)');
+ assert.match(command,/int seq=nextMuteSeq\(\);storeInputMuted\(mic\);if\(mic\)LocalRoseLink\.setMuted\(true\);if\(!loaded\)\{muteAckSeq=seq;return;\}web\.evaluateJavascript\("window\.setTrayMuted\("\+mic\+","\+seq\+"\)",null\);return;/,
+  'a running Local Rose link takes a mute at once, before the page (it only gets its handle at live)');
  assert.ok(!/"window\.setTrayMuted\(true\)"/.test(command),'the old unsequenced call is gone');
  // Reports: acknowledged by sequence (never past the last request), and only a settled live change is stored.
  assert.match(voice,/if\(o\.has\("muteSeq"\)\)muteAckSeq=Math\.min\(muteRequestSeq,Math\.max\(muteAckSeq,o\.optInt\("muteSeq"\)\)\);/);
  // The first report of a newly live call stores nothing; a stored mute the call came up without is applied (towards muted).
- assert.match(voice,/reportedLiveConnected=now;if\(MicInputCapture\.muteOnConnect\(was,now,muted,stored\)\)\{int seq=\+\+muteRequestSeq;runOnUiThread\(\(\)->\{if\(loaded\)web\.evaluateJavascript\("window\.setTrayMuted\(true,"\+seq\+"\)",null\);else muteAckSeq=Math\.max\(muteAckSeq,seq\);\}\);\}else if\(MicInputCapture\.storable\(was,now\)&&MicInputCapture\.storeReported\(live,connected,inputMuteSettled\(\),muted,stored\)\)storeInputMuted\(muted\);/);
+ assert.match(voice,/reportedLiveConnected=now;if\(MicInputCapture\.muteOnConnect\(was,now,muted,stored\)\)\{int seq=nextMuteSeq\(\);runOnUiThread\(\(\)->\{if\(loaded\)web\.evaluateJavascript\("window\.setTrayMuted\(true,"\+seq\+"\)",null\);else muteAckSeq=Math\.max\(muteAckSeq,seq\);\}\);\}else if\(MicInputCapture\.storable\(was,now\)&&MicInputCapture\.storeReported\(live,connected,inputMuteSettled\(\),muted,stored\)\)storeInputMuted\(muted\);/);
  assert.match(voice,/@JavascriptInterface public boolean micInputMuted\(\)\{return storedInputMuted\(\);\}/);
  assert.match(voice,/getSharedPreferences\(MicInputCapture\.PREFS,0\)\.getBoolean\(MicInputCapture\.KEY,false\)/);
  // Never the platform's microphone mute or Sensor Privacy.
@@ -149,11 +152,11 @@ test('renderer loss ends the dead page Local Rose link and settles its requests;
  assert.ok(gone.includes('final int deadLink=LocalRoseLink.silence();if(deadLink>0)new Thread(()->LocalRoseLink.stop(deadLink),"local-rose-renderer-gone").start();'));
  assert.ok(gone.includes('muteAckSeq=muteRequestSeq;reportedLiveConnected=false;'));
  assert.ok(!/LocalRoseLink\.stop\(\);/.test(gone),'no blocking stop of whatever link runs');
- assert.match(link,/static synchronized int silence\(\) \{\s*if \(current == null\) return 0;\s*current\.muted = true;\s*return current\.token;/);
+ assert.match(link,/static int silence\(\) \{\s*LocalRoseLink link = current;\s*if \(link == null\) return 0;\s*link\.muted = true;\s*return link\.token;/);
  assert.match(voice,/@JavascriptInterface public int localRoseStart\(boolean muted\)\{.*return 0;\}return LocalRoseLink\.start\(/);
  assert.match(voice,/@JavascriptInterface public void localRoseStop\(int token\)\{LocalRoseLink\.stop\(token\);\}/);
- const start=link.slice(link.indexOf('static synchronized int start('),link.indexOf('static synchronized void stop(int token)'));
- assert.ok(start.indexOf('current.end();')<start.indexOf('link.muted = muted;'),'a stale link is ended, never reused');
+ const start=link.slice(link.indexOf('static synchronized int start('),link.indexOf('static void stop(int token)'));
+ assert.ok(start.indexOf('if (old != null) old.end();')<start.indexOf('link.muted = muted;'),'a stale link is ended, never reused');
  assert.ok(!start.includes('if (current != null) return;'),'the new start\'s mute always applies');
  assert.match(link,/if \(current == null \|\| token <= 0 \|\| current\.token != token\) return;/);
 });
@@ -204,6 +207,13 @@ test('review D4: a request after a routing or guardian handover wins over the ha
  }
 });
 
+test('verify F2: mute then unmute while connecting leaves the published microphone as the SDK left it, live',async()=>{
+ const {devices,gate}=gatedDevices(providerContext());
+ const t=(await devices.getUserMedia({audio:true})).getAudioTracks()[0];
+ gate.set(true);assert.equal(t.enabled,false);
+ gate.set(false);assert.equal(t.enabled,true,'listening UI, listening microphone (LiveKit would not re-enable it)');
+});
+
 test('review D5: a microphone published before the conversation exists is disabled at once by a mute',async()=>{
  const {devices,gate}=gatedDevices(providerContext());
  const t=(await devices.getUserMedia({audio:true})).getAudioTracks()[0];
@@ -211,4 +221,23 @@ test('review D5: a microphone published before the conversation exists is disabl
  gate.set(true);
  assert.equal(t.enabled,false,'muted before any provider handle or setMicMuted exists');
  t.enabled=true;assert.equal(t.enabled,false,'and the SDK cannot re-enable it');
+});
+
+test('verify F1/F3-F6: Local Rose starts fail closed, mute is lock-free, sequence first, reports at once',()=>{
+ assert.match(voice,/return LocalRoseLink\.start\(VoiceService\.this,m->localRoseEvent\(generation,m\),muted\|\|storedInputMuted\(\)\);/,
+  'a request stored just before this start still reaches the new link');
+ const command=voice.slice(voice.indexOf('void command(String c,String origin)'),voice.indexOf('void setResultCardMode('));
+ assert.match(command,/if\(mic!=null\)\{int seq=nextMuteSeq\(\);storeInputMuted\(mic\);if\(mic\)LocalRoseLink\.setMuted\(true\);/,
+  'the sequence is taken before the store; Java mutes a running link eagerly, and only ever towards muted');
+ assert.match(voice,/synchronized int nextMuteSeq\(\)\{return \+\+muteRequestSeq;\}/);
+ assert.ok(!/\+\+muteRequestSeq/.test(voice.replace('synchronized int nextMuteSeq(){return ++muteRequestSeq;}','')),'one increment site');
+ assert.match(link,/private static volatile LocalRoseLink current;/);
+ for(const sig of ['static int silence()','static void setMuted(boolean muted)','static void stop(int token)','static void stop()'])
+  assert.ok(link.includes(sig),'not synchronized: '+sig);
+ assert.match(link,/synchronized \(LocalRoseLink\.class\) \{\s*if \(current == null \|\| token <= 0 \|\| current\.token != token\) return;\s*ended = current;\s*current = null;\s*\}\s*ended\.end\(\);/,
+  'a link ends outside the lock');
+ // The page reports at once on connect and on every mute change, so the first live report is the call as connected.
+ assert.match(page,/function reportState\(\)\{Native\.state\(JSON\.stringify\(/);
+ assert.match(page,/\$\('orb'\)\.classList\.add\('live'\);reportState\(\);/);
+ assert.match(page,/'Listening · speak naturally';reportState\(\);diagnostic\(\);\}/);
 });

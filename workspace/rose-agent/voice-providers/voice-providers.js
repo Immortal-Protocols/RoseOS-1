@@ -21,11 +21,12 @@
  // SDK does to it. LiveKit (ElevenLabs) publishes its microphone inside session setup, before setMicMuted can run, and
  // its restart() sets enabled=!isMuted on a reacquired track (livekit-client 2.22.4 :22781), so disabling at creation
  // alone is not enough: the held track's own enabled setter refuses true while muted. A clone is held too. Muting
- // disables every held track at once; unmuting enables nothing itself, so only the provider's own unmute re-enables.
+ // disables every held track at once; unmuting gives each held track back the state the provider last asked for (LiveKit's
+ // unmute() returns early when its own isMuted is already false, so it would never re-enable it), never more.
  // A track that cannot be held while muted is stopped, never left live. Returns the one gate for these devices.
  function gateMicrophone(devices){
   let muted=false;const held=new Set();
-  const gate={set(v){muted=!!v;for(const t of held){if(t.readyState==='ended'){held.delete(t);continue;}if(muted)t.enabled=false;}},muted:()=>muted,held:()=>held.size};
+  const gate={set(v){muted=!!v;for(const t of held){if(t.readyState==='ended'){held.delete(t);continue;}t.roseMicApply();}},muted:()=>muted,held:()=>held.size};
   if(!devices||typeof devices.getUserMedia!=='function')return gate;
   if(devices.getUserMedia.roseMicGate)return devices.getUserMedia.roseMicGate;
   function hold(t){
@@ -35,8 +36,10 @@
     if(!desc)throw Error('no enabled property');
     let value=desc.value;
     const read=desc.get?()=>desc.get.call(t):()=>value,write=desc.set?v=>desc.set.call(t,v):v=>{value=v;};
-    Object.defineProperty(t,'enabled',{configurable:true,enumerable:true,get:read,set:v=>write(!!v&&!muted)});
-    const clone=t.clone;if(typeof clone==='function')t.clone=function(){const c=clone.apply(this,arguments);hold(c);return c;};
+    let wanted=!!read(); // what the provider last asked for; the track itself is that, and never enabled while muted
+    t.roseMicApply=()=>write(wanted&&!muted);
+    Object.defineProperty(t,'enabled',{configurable:true,enumerable:true,get:read,set:v=>{wanted=!!v;write(wanted&&!muted);}});
+    const clone=t.clone;if(typeof clone==='function')t.clone=function(){const c=clone.apply(this,arguments);hold(c);c.enabled=wanted;return c;};
     t.roseMicHeld=true;held.add(t);
     if(muted)write(false);
    }catch(e){if(muted)t.stop?.();}
