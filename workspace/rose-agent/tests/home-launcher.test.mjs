@@ -79,7 +79,7 @@ test('Home comes first, the app pages follow it, and nothing else is a page (OS-
  assert.match(main,/else if\(voiceControls\)closeVoiceControls\(\);/);
  assert.match(read('../app/src/dev/pixel/voice/RoseConversationActivity.java'),/add\("Settings"\)\.setOnMenuItemClickListener\(i->\{startActivity\(new Intent\(MainActivity\.ACTION_SETTINGS\)\.setClass\(this,MainActivity\.class\)\);return true;\}\);/);
  // The pager sits in a HomeFrame with the fixed tray; the frame, not the pager, is the content view.
- assert.match(pages,/homeTray=new HomeTray\(this,this::openRoseFromHome,this::openOverview,MainActivity::overviewAvailable\);homeFrame=new HomeFrame\(this,launcherPager,homeTray,fixedDots\);\n  setContentView\(homeFrame\);homeBars\(\);/);
+ assert.match(pages,/homeTray=new HomeTray\(this,this::openRoseFromHome,this::toggleRoseMic,this::openOverview,MainActivity::overviewAvailable\);homeFrame=new HomeFrame\(this,launcherPager,homeTray,fixedDots\);\n  setContentView\(homeFrame\);homeBars\(\);/);
 });
 
 test('app pages sit on the shared wallpaper with one fixed row of dots and no drawer headings (OS-PAGING-158-M001)',()=>{
@@ -234,8 +234,30 @@ test('Home\'s edge stays fixed over the swiping pages and reaches the screen bot
  assert.match(edge,/static final int HEIGHT_DP = 92, FLAT_TOP_DP = 34, FILLET_DP = 34;/);
  assert.match(edge,/static final int ROSE_W_DP = 103, SWITCHER_W_DP = 106, CONTROL_H_DP = 44, GAP_DP = 14, PEARL_DP = 16;/);
  assert.match(homeTray,/setBackground\(new OxbloodEdge\.Plate\(density\)\);/);
- // No OS-wide microphone control is drawn: no API exists (#410 capability gap); Rose's call mute is not relabelled.
- assert.ok(!/Microphone|micButton|"mute"|tray_mute/.test(homeTray),'no microphone control on Home');
+ // #410 wave item 6: Rose's microphone-input mute well between Rose and the switcher (the HiFi's tray-mic). It is
+ // Rose's own input only, never an OS-wide mute: no AudioManager microphone mute, Sensor Privacy, output or call action.
+ assert.match(homeTray,/micControl\.setOnClickListener\(v -> toggleMic\.run\(\)\);/);
+ assert.match(homeTray,/String spoken = muted \? "Rose’s microphone is muted\. Unmute" : "Mute Rose’s microphone";/);
+ assert.match(homeTray,/pearl\.set\(shownMicMuted, false, -1\);/,'the pearl follows the one mute');
+ assert.ok(!/tray_mute|"mute"|setMicrophoneMute|SensorPrivacy/.test(homeTray),'the well only asks MainActivity');
+ assert.match(main,/void toggleRoseMic\(\)\{RoseMicState\.request\(this,!roseMicShown\(\)\);/);
+ assert.match(main,/boolean roseMicShown\(\)\{ConversationState c=conversationState\(\);return RoseMicInput\.shown\(c\.active\(\),c\.muted,RoseMicState\.muted\(this\)\);\}/);
+ const micState=read('../app/src/dev/pixel/voice/RoseMicState.java'),micRules=read('../app/src/dev/pixel/voice/RoseMicInput.java');
+ const code=src=>src.replace(/\/\*[\s\S]*?\*\//g,'').replace(/\/\/.*$/gm,'');
+ for(const src of [micState,micRules])assert.ok(!/setMicrophoneMute|SensorPrivacy|AudioManager|startService|startForegroundService|"end"|"talk"|"disconnect"/.test(code(src)),'input-only: no OS mute, output, start or end');
+ assert.match(micState,/if \(voice != null\) voice\.command\(RoseMicInput\.command\(muted\), "mic_input"\);/,'a running voice service is told (live or connecting); none: nothing is started');
+ assert.ok(!/Sync/.test(code(micRules)),'one sync rule, the backend\'s (App Core)');
+ // Home's store and commands are the very ones App Core's capture reads and writes (MicInputCapture, #520).
+ const capture=read('../app/src/dev/pixel/voice/MicInputCapture.java');
+ assert.match(capture,/static final String PREFS = "rose-mic-input", KEY = "muted";/);
+ assert.match(micState,/static final String PREFS = "rose-mic-input", KEY = "muted";/,'one store, shared with the capture backend');
+ assert.match(capture,/static final String MUTE = "tray_mute", UNMUTE = "tray_unmute";/);
+ assert.match(micRules,/static final String MUTE = "tray_mute", UNMUTE = "tray_unmute";/,'the commands the capture backend stores');
+ const tray=read('../app/src/dev/pixel/voice/AgentTrayService.java');
+ assert.match(tray,/if\(m\.what==MUTE\|\|m\.what==UNMUTE\)\{RoseMicState\.request\(this,m\.what==MUTE\);publish\(true\);return;\}/,'the tray mute is the same state and never starts voice');
+ // The tray's caller check is unchanged: SystemUI only (any widening needs review, #410).
+ assert.match(tray,/return packages!=null&&Arrays\.asList\(packages\)\.contains\("com\.android\.systemui"\)&&\n    pm\.checkSignatures\("android","com\.android\.systemui"\)==PackageManager\.SIGNATURE_MATCH;/);
+ assert.ok(!/recents|launcher3|config_recentsComponentName/i.test(tray),'no new trusted caller');
  assert.ok(!home.includes('sessionMark')&&!home.includes('showSession')&&!home.includes('RoseMark'));
 });
 
@@ -251,7 +273,7 @@ test('the overview well asks for the real system overview through the one permit
  assert.match(homeTray,/overview\.setContentDescription\(HomeOverview\.describe\(available\)\);/);
  // MainActivity: one HomeOverview per activity (tray rebuilds keep it), cleared when Home leaves the foreground.
  assert.match(main,/final HomeOverview homeOverview=new HomeOverview\(\);/);
- assert.match(main,/homeTray=new HomeTray\(this,this::openRoseFromHome,this::openOverview,MainActivity::overviewAvailable\);/);
+ assert.match(main,/homeTray=new HomeTray\(this,this::openRoseFromHome,this::toggleRoseMic,this::openOverview,MainActivity::overviewAvailable\);/);
  assert.match(main,/protected void onPause\(\)\{refreshHomeRose\(false\);homeOverview\.homeLeft\(\);/);
  // The route: only the owner-enabled phone-controls service's GLOBAL_ACTION_RECENTS; null (unavailable) when it is off.
  const open=main.slice(main.indexOf(' void openOverview(){'),main.indexOf('\n',main.indexOf(' void openOverview(){')));
@@ -279,14 +301,14 @@ test('HomeOverview runs: one tap one request, repeats in flight, unavailable/ref
 
 test('the tray Rose reads real state once per tick and stops when Home is hidden, rebuilt or gone (M004)',()=>{
  // One read of VoiceService's published levels per existing refresh tick, through the merged RoseVisualState mapping.
- assert.match(main,/void refreshHomeRose\(boolean shown\)\{if\(homeTray==null\)return;VoiceService s=VoiceService\.instance;ConversationState c=conversationState\(\);homeTray\.show\(c,HomeRose\.state\(c,s==null\?Float\.NaN:s\.trayInputLevel,s==null\?Float\.NaN:s\.trayOutputLevel,s==null\?0L:s\.trayAudioObservedAt,SystemClock\.elapsedRealtime\(\),HomeRose\.reducedMotion\(android\.provider\.Settings\.Global\.getFloat\(getContentResolver\(\),android\.provider\.Settings\.Global\.ANIMATOR_DURATION_SCALE,1f\)\),shown\)\);\}/);
+ assert.match(main,/void refreshHomeRose\(boolean shown\)\{if\(homeTray==null\)return;VoiceService s=VoiceService\.instance;ConversationState c=conversationState\(\);homeTray\.show\(c,HomeRose\.state\(c,s==null\?Float\.NaN:s\.trayInputLevel,s==null\?Float\.NaN:s\.trayOutputLevel,s==null\?0L:s\.trayAudioObservedAt,SystemClock\.elapsedRealtime\(\),HomeRose\.reducedMotion\(android\.provider\.Settings\.Global\.getFloat\(getContentResolver\(\),android\.provider\.Settings\.Global\.ANIMATOR_DURATION_SCALE,1f\)\),shown\),RoseMicInput\.shown\(c\.active\(\),c\.muted,RoseMicState\.muted\(this\)\)\);\}/);
  assert.match(homeRose,/RoseVisualState\.from\(conversation, RoseVisualState\.fresh\(inputLevel, observedAtMs, nowMs\),\n    RoseVisualState\.fresh\(outputLevel, observedAtMs, nowMs\), reducedMotion, homeShown\);/);
  assert.equal((main.match(/refreshHomeRose\(/g)||[]).length,3,'defined, called by refresh and by onPause only');
  // Pause renders hidden first; a rebuilt tray and a destroyed activity release the old one, which then ignores frames.
  assert.match(main,/protected void onPause\(\)\{refreshHomeRose\(false\);/);
- assert.match(main,/if\(homeTray!=null\)homeTray\.release\(\);homeTray=new HomeTray\(this,this::openRoseFromHome,this::openOverview,MainActivity::overviewAvailable\);/);
+ assert.match(main,/if\(homeTray!=null\)homeTray\.release\(\);homeTray=new HomeTray\(this,this::openRoseFromHome,this::toggleRoseMic,this::openOverview,MainActivity::overviewAvailable\);/);
  assert.match(main,/protected void onDestroy\(\)\{closeSystemFolder\(\);if\(homeTray!=null\)homeTray\.release\(\);/);
- assert.match(homeTray,/void show\(ConversationState conversation, RoseVisualState visual\) \{\n  if \(released\) return;/);
+ assert.match(homeTray,/void show\(ConversationState conversation, RoseVisualState visual, boolean micMuted\) \{\n  if \(released\) return;/);
  assert.match(homeTray,/void release\(\) \{\n  released = true;\n \}/);
  // One mount point for the pearl; no second poller, timer or animation of Home's own (#410: Home's pearl is static).
  assert.equal((homeTray.match(/void applyVisual\(RoseVisualState visual\)/g)||[]).length,1);
@@ -483,7 +505,8 @@ test('the tray Rose renders and speaks the same authoritative state as the tray 
  // The pearl draws it (silver only for a connected, muted call); the control alone is focusable and speaks App's
  // description of the same state.
  assert.match(homeTray,/pearlView\.setImportantForAccessibility\(IMPORTANT_FOR_ACCESSIBILITY_NO\);/);
- assert.match(homeTray,/boolean muted = shownConversation != null && shownConversation\.phase == ConversationState\.Phase\.ACTIVE && shownConversation\.muted;/);
+ // The pearl is silver while Rose's microphone input is muted: the one mute every surface shows (RoseMicInput.shown).
+ assert.match(homeTray,/void applyMic\(boolean muted\) \{\n  shownMicMuted = muted;\n  micGlyph\.set\(muted\);/);
  assert.match(homeTray,/"Open Rose\. "\)\n    \+ RosePresenceModel\.describe\(visual\);/);
  for(const src of [home,homeTray,homeRose])for(const guess of ['inputLevel)','outputLevel)','.status','.live','.connected'])assert.ok(!src.includes(guess),guess);
 });

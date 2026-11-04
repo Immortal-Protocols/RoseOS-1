@@ -94,14 +94,20 @@ def pinned_input(path, digest, label):
 
 
 def flavor_pins(device, root=ROOT):
-    """The flavor's install-archive name, the AVB public-key pin and the pinned generator script digests."""
+    """The flavor's install-archive name, the AVB public-key pin and the pinned generator script digests. The AVB pin
+    is resolved exactly as factory-package.py pinned_avb_key does: a literal identity.avbPublicKeySha256, or an
+    avbPublicKeySha256From pointer into a checked-in source (Frankel's os/release-pipeline/frankel.json); none refuses."""
     fp = _module('factory_package', root/'scripts/factory-package.py')
     try:
         flavor = fp.load_flavor(device, root)
-        return {'install': flavor['artifacts']['factory']['file'], 'avb': flavor['identity']['avbPublicKeySha256'],
+        avb = fp.pinned_avb_key(flavor, root)
+        pins = {'install': flavor['artifacts']['factory']['file'], 'avb': avb,
                 'generator': dict(flavor['inventory']['generatorFixture']['files'])}
     except (fp.ContractError, KeyError, TypeError) as error:
         raise Refused(f'contract_missing: no factory contract for {device} ({error})') from None
+    if avb is None:
+        raise Refused(f'contract_missing: no factory contract for {device} (no AVB public-key pin resolves)')
+    return pins
 
 
 def avb_public_key(vbmeta):

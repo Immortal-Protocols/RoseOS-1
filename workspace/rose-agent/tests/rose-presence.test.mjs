@@ -69,7 +69,8 @@ test('Oxblood composition: header pearl and title, upper-right work entry, capti
  assert.match(activity,/connect\.setBackground\(new OxbloodRose\.Pill\(density\)\);/);
  assert.match(activity,/connect\.setContentDescription\(live\?\(state\.phase==ConversationState\.Phase\.CONNECTING\?"Cancel connecting to Rose":"Disconnect from Rose"\):"Connect to Rose"\);/);
  assert.match(activity,/if\(!t\.visible\)\{shownTaskId="";shownTaskActive=false;return;\}/);
- assert.match(activity,/TaskControl\.WatchState ws=TaskControl\.watchState\(t\.id,t\.active\(\),ctl\);boolean canWatch=ws\.canWatch;/,'the shown task\'s View workspace keeps the classified read');
+ assert.match(activity,/TaskControl\.WatchState ws=TaskControl\.watchState\(t\.id,t\.active\(\),ctl\);boolean canWatch=!localTask&&ws\.canWatch;/,'the Node task\'s View workspace keeps the classified read; local cards stay read-only');
+ assert.match(activity,/boolean canStop=!localTask&&running&&stopPendingFor==null&&!stopInFlight;/,'local task cards never call the unrelated Node task Stop route');
  assert.ok(!/Interrupt|EditText/.test(activity),'no composer or Interrupt');
 });
 test('#410: the Oxblood Rose field and the shared layout decisions',()=>{

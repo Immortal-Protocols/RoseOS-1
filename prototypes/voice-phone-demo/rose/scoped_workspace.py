@@ -50,6 +50,8 @@ class ScopedWorkspace(Workspace):
                 self.uncertain = result.get('status') not in {
                     'multi_session_unavailable', 'session_limit', 'app_in_other_session',
                     'target_not_allowed', 'locked', 'user_stopped', 'rejected', 'invalid_mode'}
+                if not self.uncertain:
+                    return result
                 return {'status': 'failed', 'error': result.get('status', 'unknown'),
                         'reason': 'Session was not bound; no other workspace was selected.'}
         return result

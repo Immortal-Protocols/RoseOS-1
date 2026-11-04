@@ -838,6 +838,8 @@ class Server:
             threading.Thread(target=self._load, name="loader", daemon=True).start()
 
     def shutdown(self) -> None:
+        if self._stopping.is_set():
+            return
         self._stopping.set()
         for obj, method in ((self.listener, "stop"), (self.conductor, "stop"),
                             (self.keepalive, "stop"), (self.transport, "stop"), (self.runtime, "stop")):
@@ -1009,7 +1011,8 @@ class Server:
         items = getattr(tasks, "tasks", None)
         items = list(items.values()) if isinstance(items, dict) else tasks.running()
         items = [t for t in items if t.id > self._floors[1]]  # TaskManager keeps pre-reset tasks
-        return [t.to_dict() for t in sorted(items, key=lambda t: t.id)[-20:]]
+        snapshot = getattr(tasks, 'task_snapshot', lambda task: task.to_dict())
+        return [snapshot(t) for t in sorted(items, key=lambda t: t.id)[-20:]]
 
     def audio_stats(self) -> dict:
         t = self.transport
@@ -1140,11 +1143,17 @@ class Server:
         try:
             history = [m for m in list(self.bus.history) if not self._stale(m)]
             seen = {id(m) for m in history}
+            state = self.snapshot()
             await ws.send_text(dumps({"kind": "hello", "t": time.time(), "history": len(history),
-                                      "state": self.snapshot()}))
+                                      "state": state}))
             for m in history:
                 await ws.send_text(dumps({**m, "replay": True}))
             await ws.send_text(dumps({"kind": "replay_done", "t": time.time()}))
+            # Phone clients intentionally skip historical replay. Restore the
+            # current task collection as live snapshots, using the same scoped
+            # identity/binding as subsequent updates; never replay user actions.
+            for task in state.get('tasks', []):
+                await ws.send_text(dumps({'kind': 'task', 't': time.time(), 'task': task}))
             incoming = asyncio.create_task(ws.receive())
             outgoing = asyncio.create_task(q.get())
             try:
@@ -1189,7 +1198,7 @@ def build_app(server: Server, remote: Remote | None = None) -> FastAPI:
         yield
         if seen is not None:
             seen.cancel()
-        server.shutdown()
+        await asyncio.to_thread(server.shutdown)
 
     app = FastAPI(title="Rose", lifespan=lifespan)
     # No login on the dashboard: loopback Host and Origin only, so a web page cannot use it.
@@ -1344,30 +1353,42 @@ def build_servers(server: Server, args: argparse.Namespace,
     return servers
 
 
-async def serve_all(servers: list[tuple[uvicorn.Server, list | None]]) -> None:
+async def serve_all(servers: list[tuple[uvicorn.Server, list | None]],
+                    shutdown: Callable[[], None] | None = None) -> None:
     """Run the servers on this loop until a signal (or one of them stops), then stop them all."""
 
     loop = asyncio.get_running_loop()
+    stopping = asyncio.Event()
 
     def on_signal() -> None:
-        for s, _ in servers:
-            if s.should_exit:
+        if stopping.is_set():
+            for s, _ in servers:
                 s.force_exit = True
-            s.should_exit = True
+                s.should_exit = True
+        stopping.set()
 
     for sig in STOP_SIGNALS:
         with contextlib.suppress(ValueError, RuntimeError, NotImplementedError):  # not the main thread
             loop.add_signal_handler(sig, on_signal)
     tasks = [asyncio.create_task(s.serve(sockets=socks)) for s, socks in servers]
+    signalled = asyncio.create_task(stopping.wait())
     try:
-        await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+        await asyncio.wait([*tasks, signalled], return_when=asyncio.FIRST_COMPLETED)
     finally:
-        for s, _ in servers:
-            s.should_exit = True
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-        for sig in STOP_SIGNALS:
-            with contextlib.suppress(ValueError, RuntimeError, NotImplementedError):
-                loop.remove_signal_handler(sig)
+        try:
+            # Targeted workspace stops need the phone websocket and its event
+            # loop alive. Uvicorn closes connections before lifespan teardown.
+            if shutdown:
+                await asyncio.to_thread(shutdown)
+        finally:
+            signalled.cancel()
+            await asyncio.gather(signalled, return_exceptions=True)
+            for s, _ in servers:
+                s.should_exit = True
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            for sig in STOP_SIGNALS:
+                with contextlib.suppress(ValueError, RuntimeError, NotImplementedError):
+                    loop.remove_signal_handler(sig)
     for r in results:
         if isinstance(r, BaseException) and not isinstance(r, asyncio.CancelledError):
             raise r
@@ -1424,7 +1445,7 @@ def main(argv: list[str] | None = None) -> None:
               f"(server id {remote.identity.server_id}; pair with the dashboard's Pair phone button "
               "or python -m rose.pair)", flush=True)
     try:
-        asyncio.run(serve_all(servers))
+        asyncio.run(serve_all(servers, shutdown=server.shutdown))
     except KeyboardInterrupt:
         pass
     finally:

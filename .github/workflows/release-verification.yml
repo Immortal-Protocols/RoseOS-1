@@ -36,8 +36,20 @@ on:
       - 'os/build-only/blazer-compile-host.json'
       - 'scripts/rango-factory-package-wiring.py'
       - 'scripts/host-factory-package.py'
+      - 'scripts/factory_targets.py'
+      - 'scripts/tests/test_factory_targets.py'
+      - 'scripts/factory-delivery.py'
+      - 'scripts/tests/test_factory_delivery.py'
       - 'scripts/factory-package.py'
       - 'scripts/tests/test_rango_factory_package_workflow.py'
+      - 'scripts/factory_package_route.py'
+      - 'scripts/frankel-factory-package-wiring.py'
+      - 'os/factory-package/**'
+      - 'scripts/tests/test_frankel_factory_package_workflow.py'
+      - 'scripts/mustang-ota-chain.py'
+      - 'scripts/mustang-delivery.py'
+      - 'scripts/mustang_ota.py'
+      - 'scripts/tests/test_mustang_ota_chain_workflow.py'
       - 'scripts/rango-factory-inspect-wiring.py'
       - 'scripts/rango-firmware-observe.py'
       - 'scripts/tests/test_rango_factory_inspect_workflow.py'
@@ -47,6 +59,11 @@ on:
       - 'os/build-only/launcher3-compile-host.json'
       - 'scripts/tests/test_launcher3_compile.py'
       - 'scripts/tests/test_launcher3_compile_workflow.py'
+      - 'scripts/launcher3-bundle-report.py'
+      - 'scripts/tests/test_launcher3_bundle_report.py'
+      - 'os/build-only/launcher3-bundle-run.json'
+      - 'os/overlays/**'
+      - 'os/patches/**'
       - 'scripts/agent-beta-auto.py'
       - 'scripts/tests/test_agent_beta_auto.py'
       - '.github/workflows/agent-beta-auto.yml'
@@ -66,6 +83,7 @@ on:
       - 'scripts/sign_trace.py'
       - 'scripts/host-app-build.py'
       - 'scripts/host-app-release.py'
+      - 'scripts/host-app-reuse.py'
       - 'scripts/app_release_publisher.py'
       - 'scripts/emulator-alpha.py'
       - 'scripts/alpha_source.py'
@@ -183,8 +201,20 @@ on:
       - 'os/build-only/blazer-compile-host.json'
       - 'scripts/rango-factory-package-wiring.py'
       - 'scripts/host-factory-package.py'
+      - 'scripts/factory_targets.py'
+      - 'scripts/tests/test_factory_targets.py'
+      - 'scripts/factory-delivery.py'
+      - 'scripts/tests/test_factory_delivery.py'
       - 'scripts/factory-package.py'
       - 'scripts/tests/test_rango_factory_package_workflow.py'
+      - 'scripts/factory_package_route.py'
+      - 'scripts/frankel-factory-package-wiring.py'
+      - 'os/factory-package/**'
+      - 'scripts/tests/test_frankel_factory_package_workflow.py'
+      - 'scripts/mustang-ota-chain.py'
+      - 'scripts/mustang-delivery.py'
+      - 'scripts/mustang_ota.py'
+      - 'scripts/tests/test_mustang_ota_chain_workflow.py'
       - 'scripts/rango-factory-inspect-wiring.py'
       - 'scripts/rango-firmware-observe.py'
       - 'scripts/tests/test_rango_factory_inspect_workflow.py'
@@ -194,6 +224,11 @@ on:
       - 'os/build-only/launcher3-compile-host.json'
       - 'scripts/tests/test_launcher3_compile.py'
       - 'scripts/tests/test_launcher3_compile_workflow.py'
+      - 'scripts/launcher3-bundle-report.py'
+      - 'scripts/tests/test_launcher3_bundle_report.py'
+      - 'os/build-only/launcher3-bundle-run.json'
+      - 'os/overlays/**'
+      - 'os/patches/**'
       - 'scripts/agent-beta-auto.py'
       - 'scripts/tests/test_agent_beta_auto.py'
       - '.github/workflows/agent-beta-auto.yml'
@@ -213,6 +248,7 @@ on:
       - 'scripts/sign_trace.py'
       - 'scripts/host-app-build.py'
       - 'scripts/host-app-release.py'
+      - 'scripts/host-app-reuse.py'
       - 'scripts/app_release_publisher.py'
       - 'scripts/emulator-alpha.py'
       - 'scripts/alpha_source.py'
@@ -328,11 +364,22 @@ jobs:
           python3 scripts/tests/test_release_candidate_contract.py
           python3 scripts/tests/test_release_allocate.py
           python3 scripts/tests/test_release_chain.py
+          python3 scripts/tests/test_mustang_ota_chain_workflow.py
           python3 scripts/tests/test_rango_factory_observe_workflow.py
           python3 scripts/tests/test_blazer_prep_workflow.py
           python3 scripts/tests/test_rango_factory_package_workflow.py
+          python3 scripts/tests/test_frankel_factory_package_workflow.py
           python3 scripts/tests/test_rango_factory_inspect_workflow.py
           python3 scripts/tests/test_launcher3_compile.py
+          python3 scripts/tests/test_launcher3_bundle_report.py
+          python3 scripts/tests/test_blazer_allocate.py
+          python3 scripts/tests/test_blazer_binding_observe.py
+          python3 scripts/tests/test_blazer_candidate_bundle.py
+          python3 scripts/tests/test_blazer_compile_workflow.py
+          python3 scripts/tests/test_blazer_integrate_wiring.py
+          python3 scripts/tests/test_blazer_reconcile_seed.py
+          python3 scripts/tests/test_launcher3_compile_workflow.py
+          python3 scripts/tests/test_ssh_keygen_observe.py
           python3 scripts/tests/test_agent_beta_auto.py
           python3 scripts/tests/test_release_transport.py
           python3 scripts/tests/test_release_acceptance.py
@@ -342,6 +389,8 @@ jobs:
           python3 scripts/tests/test_rango_retained.py
           python3 scripts/tests/test_github_publisher.py
           python3 scripts/tests/test_host_adapters.py
+          python3 scripts/tests/test_factory_targets.py
+          python3 scripts/tests/test_factory_delivery.py
           python3 os/tests/test_apply_os_changes.py
           python3 scripts/tests/test_host_build_reconcile.py
           python3 scripts/tests/test_actions_gcp_login.py

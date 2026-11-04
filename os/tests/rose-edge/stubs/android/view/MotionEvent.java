@@ -1,0 +1,1 @@
+package android.view; public final class MotionEvent { public static final int ACTION_DOWN = 0, ACTION_UP = 1, ACTION_MOVE = 2; public int getActionMasked() { return 0; } public float getX() { return 0; } public float getY() { return 0; } public long getEventTime() { return 0; } }

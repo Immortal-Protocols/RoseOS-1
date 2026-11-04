@@ -662,6 +662,28 @@ def warnings_ignored():
         yield
 
 
+class FactoryPackageFlavorPinsTest(unittest.TestCase):
+    """The real flavor_pins on the committed contracts: the AVB pin resolves as factory-package.py pinned_avb_key does."""
+
+    def test_each_committed_flavor_resolves_its_own_avb_pin(self):
+        rango = hfp.flavor_pins('rango')
+        self.assertEqual(rango['avb'], 'aee947942b80c74dab9956209b7f7836a1824d9aeb1e9dd782dc157c63fd8f27')  # literal, unchanged
+        frankel = hfp.flavor_pins('frankel')  # a pointer into os/release-pipeline/frankel.json, never a copied value
+        pipeline = json.loads((SCRIPTS.parent/'os/release-pipeline/frankel.json').read_text())
+        self.assertEqual(frankel['avb'], pipeline['identities']['avbPublicKeySha256'])
+        self.assertEqual(frankel['avb'], '7c19d7fa197a2febb9b472fd27059443be9bfd4f20c22909966ebd7206168822')
+        self.assertNotEqual(frankel['avb'], rango['avb'])
+        for pins in (rango, frankel):
+            self.assertEqual(pins['install'], '{device}-install-{build}.zip')
+            self.assertEqual(set(pins['generator']), {'generate-factory-images-common.sh', 'clear-factory-images-variables.sh'})
+
+    def test_a_flavor_without_a_resolvable_avb_pin_refuses(self):
+        for device in ('blazer', 'nosuchdevice'):  # blazer: no signing identity, so no AVB pin exists
+            with self.subTest(device=device), self.assertRaises(hfp.Refused) as caught:
+                hfp.flavor_pins(device)
+            self.assertTrue(str(caught.exception).startswith('contract_missing:'))
+
+
 class FactoryPackageTest(unittest.TestCase):
     """No bash, img_from_target_files, generator or fastboot runs: the runner is a mock that checks the derived script
     and the work directory, then writes a stand-in install archive."""

@@ -7,9 +7,9 @@
   "bootstrapRun": "41719073037",
   "signingAccess": {
     "status": "approved",
-    "expiresAt": "2026-11-04T04:44:11Z",
-    "approvalRef": "os/ota/mustang-access-readback.json",
-    "purpose": "Read only the two existing Mustang secret versions 1 as the existing signer. No bootstrap writes or key generation. The prior four-hour bindings are not extended by this definition."
+    "expiresAt": "2026-11-05T06:20:18Z",
+    "approvalRef": "os/ota/mustang-access-readback-2026-11-05.json",
+    "purpose": "Read only the two existing Mustang secret versions 1 as the existing signer. No bootstrap writes or key generation. Original Infra read back the restored bindings (metadata only) and Chief relayed their expiry; this definition records it and extends nothing."
   },
   "baseline": {
     "build": "2026110302",

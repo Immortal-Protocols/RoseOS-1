@@ -29,6 +29,9 @@ HARNESS = ROOT/'os/tests/rose-edge'
 SHELL = 'libs/WindowManager/Shell/src/com/android/wm/shell'
 MODULE = f'{SHELL}/dagger/WMShellModule.java'
 EDGE = f'{SHELL}/roseedge'
+# The edge's microphone-input slot (#410 option a); in the shell package to use the tray's own AgentTrayLink.
+MIC = f'{SHELL}/RoseEdgeMicSlot.java'
+TRAY = ROOT/'os/overlays/frameworks/base'/SHELL
 PINNED = {MODULE: (ROOT/'os/tests/fixtures/rose-edge/WMShellModule.java',
     '62d968a9484b7cc64dcf599996be38125b0aba0ceddd60bf75efec3afbd744d9')}
 CREATED = ('IRoseEdge.aidl', 'IRoseEdgeListener.aidl', 'RoseEdgeController.java', 'RoseEdgePolicy.java')
@@ -82,11 +85,12 @@ class RoseEdgeShellTest(unittest.TestCase):
         cls.applied = []
         for patch in (PATCH,):
             result = subprocess.run(['git', '-C', str(cls.tree), 'apply', f'--include={MODULE}', f'--include={EDGE}/*',
-                str(patch)], capture_output=True, text=True)
+                f'--include={MIC}', str(patch)], capture_output=True, text=True)
             cls.applied.append((patch.name, result.returncode, result.stderr))
         cls.module = (cls.tree/MODULE).read_text()
         cls.source = {name: (cls.tree/EDGE/name).read_text() for name in CREATED}
         cls.controller = cls.source['RoseEdgeController.java']
+        cls.mic = (cls.tree/MIC).read_text()
 
     @classmethod
     def tearDownClass(cls):
@@ -99,7 +103,7 @@ class RoseEdgeShellTest(unittest.TestCase):
             self.assertEqual(code, 0, f'{name}: {stderr}')
         # The patch touches only the shell's handheld module and its own new package.
         touched = re.findall(r'^\+\+\+ b/(\S+)', PATCH.read_text(), re.M)
-        self.assertEqual(sorted(touched), sorted([MODULE] + [f'{EDGE}/{n}' for n in CREATED]))
+        self.assertEqual(sorted(touched), sorted([MODULE, MIC] + [f'{EDGE}/{n}' for n in CREATED]))
         # No file it touches is touched by any other Rose patch, so host-reconcile's history of Rose's own
         # frameworks/base output (historical_outputs skips files touched outside its sequence) is unaffected.
         for other in (ROOT/'os/patches').glob('*.patch'):
@@ -108,9 +112,10 @@ class RoseEdgeShellTest(unittest.TestCase):
                 self.assertFalse(theirs & set(touched), other.name)
 
     def test_inert_until_a_real_compile_registers_it(self):
-        # Every registered patch and every overlay goes into each OS build. WMShell has not been compiled for real,
-        # so the patch stays out of the apply sequence and nothing is added under os/overlays.
-        self.assertNotIn('rose-edge-wmshell', (ROOT/'scripts/apply-os-changes.py').read_text())
+        # Every registered patch and every overlay goes into each OS build. #410 (Chief): the normal OS build is the
+        # compile proof, so apply-os-changes.py registers the patch; host-reconcile adds nothing and no overlay is added.
+        self.assertIn("projects['frameworks/base'].append('rose-edge-wmshell.patch')",
+            (ROOT/'scripts/apply-os-changes.py').read_text())
         self.assertNotIn('rose-edge-wmshell', (ROOT/'scripts/host-reconcile.py').read_text())
         self.assertFalse(list((ROOT/'os/overlays').rglob('roseedge')))
         # Default off even once registered.
@@ -127,8 +132,9 @@ class RoseEdgeShellTest(unittest.TestCase):
             (gen/f'{name}.java').write_text(aidl_to_java(self.source[f'{name}.aidl']))
         sources = [str(p) for p in sorted((HARNESS/'stubs').rglob('*.java'))]
         sources += [str(p) for p in sorted((self.tmp/'gen').rglob('*.java'))]
+        # The tray's real AgentTrayLink (an overlay, unchanged) is compiled with the slot that reuses it.
         sources += [str(self.tree/EDGE/'RoseEdgePolicy.java'), str(self.tree/EDGE/'RoseEdgeController.java'),
-            str(HARNESS/'RoseEdgePolicyTest.java')]
+            str(self.tree/MIC), str(TRAY/'AgentTrayLink.java'), str(HARNESS/'RoseEdgePolicyTest.java')]
         compiled = subprocess.run(['java', '-m', 'jdk.compiler/com.sun.tools.javac.Main', '-nowarn', '-d', str(out),
             *sources], capture_output=True, text=True)
         self.assertEqual(compiled.returncode, 0, compiled.stderr)
@@ -149,6 +155,8 @@ class RoseEdgeShellTest(unittest.TestCase):
         self.assertIn('package com.android.wm.shell.roseedge;', edge)
         self.assertIn('oneway void raise(int displayId, int taskId, int liftPx, IRoseEdgeListener listener) = 1;', edge)
         self.assertIn('oneway void lower(int displayId) = 2;', edge)
+        self.assertIn('import android.graphics.Rect;', self.source['IRoseEdge.aidl'])
+        self.assertIn('oneway void setMicSlot(int displayId, in Rect slotBounds) = 3;', edge)
         self.assertIn('oneway interface IRoseEdgeListener', listener)
         self.assertIn('void onRaised(int displayId, int taskId, in Rect appBounds) = 1;', listener)
         self.assertIn('void onRefused(int displayId, int taskId, int reason) = 2;', listener)
@@ -167,9 +175,9 @@ class RoseEdgeShellTest(unittest.TestCase):
         self.assertIn('mShellController.addExternalInterface(IRoseEdge.DESCRIPTOR, this::createExternalInterface, '
             'this);', c)
         impl = method(self.controller, 'private static class IRoseEdgeImpl')
-        self.assertEqual(impl.count('executeRemoteCallWithTaskPermission(mController,'), 2,
-            'raise and lower both check MANAGE_ACTIVITY_TASKS on the caller')
-        self.assertEqual(len(re.findall(r'public void (\w+)\(', impl)), 3, 'invalidate, raise and lower only')
+        self.assertEqual(impl.count('executeRemoteCallWithTaskPermission(mController,'), 3,
+            'raise, lower and setMicSlot all check MANAGE_ACTIVITY_TASKS on the caller')
+        self.assertEqual(len(re.findall(r'public void (\w+)\(', impl)), 4, 'invalidate, raise, lower and setMicSlot only')
         patch = PATCH.read_text()
         for token in ('clearCallingIdentity', 'withCleanCallingIdentity', 'uses-permission', 'grantPermission',
                 'enforceCallingOrSelfPermission', 'Binder.getCallingUid'):
@@ -236,6 +244,97 @@ class RoseEdgeShellTest(unittest.TestCase):
             appeared)
         # The keyguard is also read live at raise time.
         self.assertIn('mKeyguardVisible || keyguardLocked()', self.controller)
+        # Reason 3 is "keyguard or screen off": screen-off lowers too, on the shell's executor.
+        screen = flat(self.controller[self.controller.index('mContext.registerReceiver(new BroadcastReceiver()'):])
+        self.assertIn('if (Intent.ACTION_SCREEN_OFF.equals(intent.getAction())) { '
+            'mMainExecutor.execute(() -> lowerIfNeeded(mState.onKeyguard(true)));', screen)
+        self.assertIn('new IntentFilter(Intent.ACTION_SCREEN_OFF), Context.RECEIVER_EXPORTED);', screen)
+
+    def test_mic_slot_is_mute_only_on_the_existing_trusted_tray_route(self):
+        # Option (a): SystemUI's own tray protocol, from SystemUI's identity; Launcher3 only reports where the hole is.
+        mic, tray = self.mic, (TRAY/'AgentTrayPrototype.java').read_text()
+        component = 'new ComponentName( VOICE_PACKAGE, "dev.pixel.voice.AgentTrayService")'
+        self.assertIn(component, flat(mic))
+        self.assertIn('"dev.pixel.voice", "dev.pixel.voice.AgentTrayService"', flat(tray), 'the same service as the tray')
+        self.assertIn('private static final String VOICE_PACKAGE = "dev.pixel.voice";', mic)
+        self.assertIn('mLink = new AgentTrayLink(new AgentTrayLink.Port() {', mic, 'the tray\'s own lifecycle class')
+        # Commands: only the policy's MUTE (4) or UNMUTE (5); never START (3) or END (6), never a raw number.
+        code = re.sub(r'/\*.*?\*/', '', mic, flags=re.S)
+        sends = re.findall(r'(?<![.\w])send\(([^()]*(?:\([^()]*\))?)\)', code)
+        self.assertEqual(set(sends), {'RoseEdgePolicy.micCommand(mMuted)', 'int what'}, sends)
+        self.assertEqual(code.count('RoseEdgeMicSlot.this.send(what)'), 1, 'AgentTrayLink sends only REGISTER/UNREGISTER')
+        self.assertEqual(code.count('mVoice.send('), 1, 'one Messenger send, behind send(int)')
+        toggle = flat(method(mic, 'private void toggle()'))
+        self.assertIn('if (!mKnown || !allowed() || !RoseEdgePolicy.micCommandAllowed(now, mLastCommandAt)) return;',
+            toggle, 'nothing before the first STATE, outside the gates or faster than the tray')
+        self.assertIn('if (message.what != STATE || !mLink.subscribed() || !trusted(message.sendingUid)) return true;',
+            mic, 'state only from Rose Agent itself, while subscribed')
+        self.assertIn('if (data.getInt("protocolVersion") != 1) return true;', mic)
+        self.assertIn('uid == mContext.getPackageManager().getPackageUidAsUser(VOICE_PACKAGE, mLink.user())', flat(mic))
+        # One thread: the creator's (the shell's main thread); binder callbacks are moved onto it.
+        self.assertIn('new Handler(Looper.myLooper() != null ? Looper.myLooper() : Looper.getMainLooper());', mic)
+        self.assertIn('mReply = new Messenger(new Handler(mHandler.getLooper(), message -> {', mic)
+        connection = flat(mic[mic.index('mConnection = new ServiceConnection() {'):mic.index('mLink = new AgentTrayLink(')])
+        self.assertEqual(connection.count('mHandler.post('), 4, 'every ServiceConnection callback is posted')
+        # The tray's gates: tray on, user 0, unlocked, screen on.
+        allowed = flat(method(mic, 'private boolean allowed()'))
+        for gate in ('SystemProperties.getBoolean(TRAY_PROPERTY, false)', 'ActivityManager.getCurrentUser() == 0',
+                '!keyguard.isKeyguardLocked()', 'power.isInteractive()'):
+            self.assertIn(gate, allowed)
+        # A non-focusable panel window over the slot only, painted opaque with the edge plate behind the well.
+        show = flat(method(mic, 'public void show(Rect slot, int displayHeight)'))
+        self.assertIn('new WindowManager.LayoutParams(slot.width(), slot.height(), '
+            'WindowManager.LayoutParams.TYPE_NAVIGATION_BAR_PANEL, WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE', show)
+        self.assertIn('params.x = slot.left; params.y = slot.top;', show)
+        self.assertIn('private static final int[] PLATE_COLORS = {0xFF4A141A, 0xFF4A141A, 0xFF3C0E13, 0xFF330C10};', mic)
+        self.assertIn('private static final float[] PLATE_STOPS_DP = {0, 34, 46, 92};', mic)
+        self.assertIn('canvas.drawRect(0, 0, getWidth(), getHeight(), mPlate);', mic)
+        # The controller: permission-checked, the current raise only, validated, and gone with every lower.
+        slot = flat(method(self.controller, 'private void setMicSlot(int displayId'))
+        self.assertTrue(slot.index('if (!mState.acceptsMicSlot(displayId)) return;')
+            < slot.index('RoseEdgePolicy.validMicSlot(') < slot.index('mMicSlot.show(new Rect(slot), layout.height());'))
+        lower = method(self.controller, 'private void lowerNow(int reason)')
+        self.assertIn('if (mMicSlot != null) mMicSlot.hide();', lower)
+        # No overlay, AgentTrayService or permission change: the patch only adds the slot class.
+        self.assertFalse('AgentTrayService.java' in PATCH.read_text())
+        self.assertFalse(re.search(r'^\+\+\+ b/\S*AgentTray', PATCH.read_text(), re.M))
+
+    def test_mic_slot_draws_exactly_homes_edge_microphone(self):
+        # Home's merged OxbloodEdge.Well.mic and OxbloodEdge.MicGlyph (#514) are the design; the slot is a port of
+        # them, so both edges look identical. Any drift in Home's values fails here.
+        home = (ROOT/'workspace/rose-agent/app/src/dev/pixel/voice/OxbloodEdge.java').read_text()
+        tray = (ROOT/'workspace/rose-agent/app/src/dev/pixel/voice/HomeTray.java').read_text()
+        mic = self.mic
+        def const(src, name):
+            return re.search(rf'\b{name} = (0x[0-9a-fA-F]+|\d+)', src).group(1).lower()
+        well = home[home.index('static final class Well'):home.index('static final class MicGlyph')]
+        glyph = home[home.index('static final class MicGlyph'):home.index('static final class SwitcherGlyph')]
+        for name in ('MIC_PLATE_DP', 'MIC_RADIUS_DP'):
+            self.assertEqual(const(mic, name), const(home, name), name)
+        for name in ('FILL_TOP', 'FILL_BOTTOM', 'RING', 'TOP_SHADOW'):
+            self.assertEqual(const(mic, name), const(well, name), name)
+        for mine, theirs in (('GLYPH_DP', 'GLYPH_DP'), ('INK', 'INK'), ('MUTED_INK', 'MUTED_INK'),
+                ('MUTED_RING', 'RING'), ('MUTED_GLOW', 'GLOW')):
+            self.assertEqual(const(mic, mine), const(glyph, theirs), mine)
+        self.assertEqual(const(mic, 'MIC_PLATE_DP'), '32')
+        self.assertEqual(const(mic, 'MIC_RADIUS_DP'), '9')
+        # The same drawing statements: plate shadow and ring, glyph geometry, muted ring, glow and slash.
+        for statement in ('new BlurMaskFilter(Math.max(.1f, (1 * d - .5f) / .57735f)',
+                'new RectF(8.6f, 2.5f, 15.4f, 15f), 3.4f, 3.4f,', 'new RectF(5.6f, 4.4f, 18.4f, 17.2f), 0, 180, false,',
+                'drawLine(12, 17.4f, 12, 20.6f,', 'drawLine(8.8f, 20.8f, 15.2f, 20.8f,', 'drawLine(4.5f, 3.5f, 19.5f, 20.5f,',
+                'Math.round(.55f * 255) << 24', 'setStrokeWidth(3.4f)', 'setStrokeWidth(1.9f)', '0xff1c0609',
+                'new BlurMaskFilter(5 * d, BlurMaskFilter.Blur.NORMAL)', 'float s = GLYPH_DP * d / 24f;'):
+            self.assertGreater(flat(home).count(statement), 0, statement)
+            self.assertEqual(flat(mic).count(statement), flat(home).count(statement), statement)
+        # Home's spoken names: the action a tap takes.
+        for label in ('"Rose’s microphone is muted. Unmute"', '"Mute Rose’s microphone"'):
+            self.assertIn(label, tray)
+            self.assertIn(label, mic)
+        # Remote state is never guessed: dimmed until the first STATE, and the edge plate under it stays opaque.
+        draw = flat(method(mic, 'protected void onDraw(Canvas canvas)'))
+        self.assertLess(draw.index('canvas.drawRect(0, 0, getWidth(), getHeight(), mPlate);'),
+            draw.index('canvas.saveLayerAlpha('), 'only the well and glyph are dimmed')
+        self.assertIn('drawGlyph(canvas, d, mKnown && mMuted);', draw)
 
     def test_wired_into_the_shell_once(self):
         module = flat(self.module)

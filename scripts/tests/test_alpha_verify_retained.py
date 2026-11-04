@@ -180,7 +180,7 @@ class SourceTest(unittest.TestCase):
 
 class WorkflowTest(unittest.TestCase):
     def test_the_mode_is_explicit_read_only_and_cleaned_up(self):
-        job = WORKFLOW[WORKFLOW.index('  alpha-verify-retained:'):WORKFLOW.index('  publisher:')]
+        job = shape.jobs(WORKFLOW)['alpha-verify-retained']  # exactly this job, not every job up to the publisher
         self.assertIn('emulator-alpha-verify-retained', shape.modes())
         self.assertIn("if: inputs.mode == 'emulator-alpha-verify-retained'", job)
         self.assertIn('    permissions:\n      contents: read\n    steps:', job)

@@ -37,6 +37,26 @@ ANDROID_SDK_ROOT=/opt/roseos/android-sdk mvn -q -B test   # android.jar is compi
   - At an end a key is not taken, so focus can leave.
   - A tap on the centre card reaches it.
 
+`RoseEdgeSwipeNativeTest` (#410 E2a) runs the production `RoseEdgeSwipe`, `RoseEdgeState` and `RoseEdgeGesture` on
+the same runtime, at xxhdpi and once at 420dpi:
+- **Default-off switch.** With `persist.wm.debug.rose_edge` unset, Launcher3 decides everything, nothing is previewed,
+  and settling never reaches the state, from any thread. The test reads the runtime's real `SystemProperties` back; the
+  compile-only stub under `src/test/java/android/os` exists because `android.jar` omits that hidden class.
+- **No edge window, no change.** With no listener registered (E2b's window), nothing rises and nothing is previewed.
+- **Gates.** The edge applies only to an unlocked app under gesture navigation in its natural rotation, never when the
+  handler excludes the gesture (Home, a trackpad, a continued gesture, a task that is not full screen).
+- **Launcher3's own results stand:** anything not Home, a cancel, a pause.
+- **Raise and lower, per display and task.** A short swipe raises the edge over its task and tells listeners once.
+  Over that task, a short swipe keeps it and more than 120dp goes Home; over another task it is not up. Leaving
+  lowers it. Distances count from touch-down (the touch slop is added back) and speed is averaged since touch-down.
+- **Preview.** The crop is at full width, unscaled, while the app follows. Past the edge it shrinks about the shortened
+  window's centre and lifts 40dp. A raise at release does not snap the window. Attached to recents, or with no size,
+  Launcher3's own transform applies. With the edge already up, or reduced motion, the app does not track the finger.
+  State is main-thread only.
+
+The patched Launcher3 swipe handlers that call these (`os/patches/rose-edge-launcher3.patch`) are not compiled or
+run here.
+
 Touches are real `MotionEvent`s dispatched from the root, so a card consumes `ACTION_DOWN` and the fan intercepts
 the drag exactly as Android does. Scrolling is stepped frame by frame through `computeScroll`.
 

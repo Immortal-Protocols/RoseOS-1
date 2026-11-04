@@ -1,17 +1,69 @@
 # Compile-only input contracts (OS Product)
 
-`launcher3-quickstep-lib.json` (`kind` `rose-launcher3-compile-inputs`, `schemaVersion` 2) states the inputs of a
+`launcher3-quickstep-lib.json` (`kind` `rose-launcher3-compile-inputs`, `schemaVersion` 3) states the inputs of a
 compile-only `Launcher3QuickStepLib` proof of RoseOS's Launcher3 changes (#410). Release owns the adapter that consumes
 it; this directory only states inputs. The contract is inert: it registers, applies and copies nothing into any build,
 and grants no host, runtime or permission access.
 
+**Sibling: `frameworks-base-wmshell.json`** (`kind` `rose-frameworks-base-wmshell-compile-inputs`, from
+`scripts/frameworks-base-wmshell-contract.py`). It states the inputs of a compile-only proof of OS Core's raised-edge
+Shell patch, `os/patches/rose-edge-wmshell.patch` (#516/#523/#528, merged at `bf6a9ed`, unregistered), for the goals
+`WindowManager-Shell` and `SystemUI-core`.
+- **Shape and rules:** it uses the same generator code, branches, tree pins and provenance rules as the Launcher3
+  contract. Its projects are frameworks/base (the background-policy patches, then the candidate) and build/release.
+- **Overlays:** every frameworks/base overlay is a *required* input here, because the patch's `RoseEdgeMicSlot` calls
+  the tray's `AgentTrayLink`. There is no flag evidence: the edge's switch is a runtime property.
+- **Fail-closed:** `confirmation` records OS Core's confirmation of the inputs and goals (2026-11-04). An adapter
+  refuses the contract unless its state is `confirmed`, and any change to the bound patch or inputs needs a new
+  confirmation. `registration.state` is `unregistered`. The patch enters `apply-os-changes.py` only after a real
+  compile, and the contract never registers it.
+- **Source proof:** `overlayRoles.goalDirs` maps each goal to the directory of the pinned `Android.bp` that defines
+  it. `overlayRoles.sourceProof` names, for every post-image and required overlay under those directories, the module
+  whose own Soong input list must hold it, because that module is not always the goal:
+  - Shell `.java` files reach `WindowManager-Shell` only through the protolog genrule `wm_shell_protolog_src`;
+  - Shell `.aidl` files reach it through `WindowManager-Shell-aidls`;
+  - SystemUI's manifest and assets reach `SystemUI-core` through Soong's `android_library` defaults.
+
+  Those facts rest on the two pinned `Android.bp` files, committed under `build-graph/` and checked against the pinned
+  tree listing. A file under a goal directory that no rule places refuses. Files under no goal directory are listed as
+  `notSourceProved`.
+- **Kept separate on purpose:** Launcher3QuickStepLib has no compile coupling to this patch, because its client is
+  hand-written against the descriptor. So a Shell failure neither masks nor blocks the Launcher3 result.
+- **Shared fixtures:** both contracts read the pinned fixtures in `os/tests/fixtures/launcher3-compile-contract/`. This
+  one adds `WMShellModule.java`'s pinned pre-image and the inert copy of the candidate patch in `candidate-pr528/`.
+- **Tests:** `os/tests/test_frameworks_base_wmshell_contract.py`.
+
 **The candidate** is #440, a draft that stays unregistered and default-off. Its inputs that are not in this bundle sit in
 `os/tests/fixtures/launcher3-compile-contract/candidate-pr440/`:
-- the edge patch;
-- the three `RoseEdge*` overlay classes.
+- E2a's edge patch (`rose-edge-launcher3.patch`, byte-identical) and E2c's wiring patch
+  (`rose-edge-resize-launcher3.patch`: the SystemUiProxy hand-off and the TouchInteractionService edge window);
+- the six `RoseEdge*` overlay classes: E2a's `RoseEdgeGesture`, and E2c's `RoseEdgeShell`, `RoseEdgeState`,
+  `RoseEdgeSwipe`, `RoseEdgeLayout` and `RoseEdgeWindow`.
 
-They are byte-identical copies of the reviewed commit `e361d1c`, bound by their digests. They live outside `os/patches`
+They are byte-identical copies of the reviewed commit `2f57a5f`, bound by their digests. They live outside `os/patches`
 and `os/overlays`, so nothing applies or copies them.
+
+**Schema 3** adds, as agreed with Release on #410:
+- **`base.registration`.** The patches the trusted patcher registers in the three projects, derived by *executing*
+  `scripts/apply-os-changes.py`'s own argument parser and registration statements with frankel's exact `applyArgs`
+  (`os/release-pipeline/frankel.json` `host.integrate.reconcile.applyArgs`). It records the three patcher files'
+  sha256 pins, and the check refuses a patcher that differs from them. It is the bundle report's only contract-derived
+  input.
+- **`base.bundleReport`:** the schema of the integration bundle report that `verifyBaseApplyCandidate` needs. It is
+  distinct from `bundleContent`. Release's producer writes it from history; the contract only states its fields,
+  association, observed sections and rules.
+- **`branches.requires`, `forbids` and `definitions`.** For example, `verifyIntegrated` needs the source tree, the
+  lunch inputs and the run's own policy receipt, and forbids a bundle report or reconstructed Git objects. No
+  `reconstructSource` is approved.
+- **`lunchInputs`:** `frankel-lunch-inputs.json` by path and sha256.
+- **The wording fixes:**
+  - the policy receipt's role;
+  - `otherwise` (the candidate is completed only through `verifyBaseApplyCandidate`);
+  - `reconstruct`'s tree pin;
+  - a three-part `unaffected`;
+  - flag values as outputs, never preconditions.
+
+The checker now also compares every stated field, so any change to them refuses until regenerated.
 
 **`projects`** gives the candidate's final images. For every file that the ordered patches change in frameworks/base,
 packages/apps/Launcher3 and build/release, it lists:
@@ -178,9 +230,36 @@ laguna-kernels `275dad3c`. The one exception is `gitRequirement.genuineSource`, 
     - no other filesystem or mount point, and no hard-linked file;
     - the git directories resolve inside the copy root.
 
-  No check can tell a fabricated store from a genuine one; only an approved byte-for-byte copy establishes it. A genuine
-  copy is allowed only under a separate approval. Redirect, fabrication and relaxation (`--noVerify`, `--updateSpec`,
-  working-tree changes) are refused. In the pinned sources, nothing else needs `.git` for this lunch.
+  Those checks alone cannot tell a hand-written gitdir from a genuine one. The objects are genuine only when they come
+  from the genuine source, by one of two routes, each allowed only under a separate approval:
+  - **`genuine-copy`:** an approved byte-for-byte copy.
+  - **`public-fetch`** (`gitRequirement.publicFetch`, following Infra's assessment of `adevtool_git_missing`): Blazer's
+    git-meta steps for this one project.
+    - A new `.git` inside the copy with no templates; the pinned revision fetched at depth 1 with no tags from the
+      pinned manifest's own https remote; a detached HEAD by `update-ref`.
+    - An isolated git environment.
+    - On failure, cleanup of only the `.git` the attempt created.
+    - It passes only if, beyond the checks above, the tree is exactly `f0863541`, a full `git fsck --no-dangling`
+      succeeds (every object rehashed, not `--connectivity-only`), `ls-tree -r` equals the pinned listing byte for
+      byte, the repository is shallow at exactly the pin, there are no alternates and no remote, and `workingTree`
+      holds. That establishes the genuine objects of the public commit by content addressing. It does not establish
+      provenance from the production gitdir; only `genuine-copy` does.
+    - Its 30 min and 1 GiB ceiling is Infra's proposal, neither a measurement nor an approval.
+    - The test runs the exact steps offline against a local repository. It shows that a hand-written store passing
+      the basic checks is refused. One holding only the commit fails the tree check. One holding the commit and tree
+      but no blobs fails the full fsck. One holding every object with a blob's bytes replaced passes
+      `--connectivity-only`, and only the full fsck refuses it.
+- **`gitRequirement.workingTree`.** The adevtool working tree in the copy is exactly its pinned listing, plus `.git`.
+  - The copy omits exactly what the pinned `.gitignore` (blob `969b2c30`) ignores: `.idea/`, `dist/`, `dl/*` except
+    `dl/.find-ignore`, `lib/` and `node_modules/`. Lunch runs no adevtool code, and the test shows the rules drop no
+    tracked path.
+  - Nothing untracked is admitted. The finder prunes only `dl/` and `vendor-skels/`, so untracked content anywhere else
+    would reach it. An unlisted path refuses, and the refusal names what was found.
+  - Each `sources` row says how its working tree is checked. The laguna kernels are checked exactly, because no
+    RoseOS patch touches them. build/make is derivation only, because `apply-os-changes.py` patches it.
+
+  Redirect, fabrication and relaxation (`--noVerify`, `--updateSpec`, working-tree changes) are refused. In the pinned
+  sources, nothing else needs `.git` for this lunch.
 - **`buildId`, `kernelModuleLists`, `finderPrune`, `manifestFiles`.**
   - `cmds-for-envsetup.sh` exports `BUILD_ID_frankel`. With it unset beforehand, a missing script leaves the build/make
     default, and frankel.mk stops lunch.

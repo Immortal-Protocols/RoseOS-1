@@ -1,0 +1,1 @@
+package android.os; public final class Message { public int what; public int sendingUid; public Messenger replyTo; public static Message obtain(Handler h, int what) { return new Message(); } public Bundle getData() { return null; } }

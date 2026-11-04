@@ -16,6 +16,7 @@ node --test workspace/rose-agent/voice-providers/local-tasks.test.cjs
 node --test workspace/rose-agent/tests/mic-input-capture.test.mjs workspace/rose-agent/voice-providers/providers.test.cjs
 # Local Rose task list from the producer through the page and bridge into the native overview feed (LOCAL-TASK-FEED-002).
 node --test workspace/rose-agent/tests/local-task-feed.test.mjs
+node --test workspace/rose-agent/tests/local-task-card.test.mjs
 # App-tree files that build.sh replaces must match the module source it ships.
 node --test workspace/rose-agent/tests/staged-copies.test.mjs
 # Current-page replacements for the retired WebRTC-page tests, and the EventDelivery server check.
@@ -64,7 +65,9 @@ python3 os/tests/test_updater_releases.py
 python3 os/tests/test_rose_home_role.py
 python3 os/tests/test_rose_agent_self_update.py
 python3 os/tests/test_rose_switcher.py
+python3 os/tests/test_rose_edge_resize_staged.py
 python3 os/tests/test_launcher3_compile_contract.py
+python3 os/tests/test_frameworks_base_wmshell_contract.py
 python3 os/tests/test_frankel_lunch_inputs.py
 python3 os/tests/test_automated_devices_contract.py
 python3 os/tests/test_rose_edge_shell.py
@@ -82,6 +85,8 @@ python3 scripts/tests/test_permission_apex.py
 python3 scripts/tests/test_release_candidate_contract.py
 python3 scripts/tests/test_release_allocate.py
 python3 scripts/tests/test_release_chain.py
+# Mustang one-button chain wiring (canned run metadata; no network, token, host or dispatch).
+python3 scripts/tests/test_mustang_ota_chain_workflow.py
 python3 scripts/tests/test_agent_beta_auto.py
 python3 scripts/tests/test_release_transport.py
 python3 scripts/tests/test_release_acceptance.py
@@ -119,10 +124,13 @@ python3 scripts/tests/test_blazer_prep_workflow.py
 python3 scripts/tests/test_blazer_compile_workflow.py
 # Fold factory package workflow wiring (stand-ins and mocks; no host, lock, generation or inspection run).
 python3 scripts/tests/test_rango_factory_package_workflow.py
+# Frankel factory installer workflow wiring (synthetic builder, stand-ins; no host, lock, packaging or signing run).
+python3 scripts/tests/test_frankel_factory_package_workflow.py
 python3 scripts/tests/test_rango_factory_inspect_workflow.py
 # Launcher3 compile-only adapter (synthetic trees, stand-in processes; no host, copy, lunch or build).
 python3 scripts/tests/test_launcher3_compile.py
 python3 scripts/tests/test_launcher3_compile_workflow.py
+python3 scripts/tests/test_launcher3_bundle_report.py
 python3 scripts/tests/test_signing_bootstrap.py
 python3 scripts/tests/test_fold_bootstrap_proof.py
 python3 scripts/tests/test_fold_tool_proof.py
@@ -250,6 +258,9 @@ java -cp "$JAVA_TESTS/HomeAppGroups" dev.pixel.voice.HomeAppGroupsTest
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/HomeRoseLaunch" \
  workspace/rose-agent/app/src/dev/pixel/voice/HomeRoseLaunch.java workspace/rose-agent/app/tests/HomeRoseLaunchTest.java
 java -cp "$JAVA_TESTS/HomeRoseLaunch" dev.pixel.voice.HomeRoseLaunchTest
+java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/RoseMicInput" \
+ workspace/rose-agent/app/src/dev/pixel/voice/RoseMicInput.java workspace/rose-agent/app/tests/RoseMicInputTest.java
+java -cp "$JAVA_TESTS/RoseMicInput" dev.pixel.voice.RoseMicInputTest
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/GestureContract" \
  workspace/rose-agent/app/src/dev/pixel/voice/GestureContract.java workspace/rose-agent/app/tests/GestureContractTest.java
 java -cp "$JAVA_TESTS/GestureContract" dev.pixel.voice.GestureContractTest

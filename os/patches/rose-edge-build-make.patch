@@ -1,0 +1,13 @@
+diff --git a/target/product/generic_system.mk b/target/product/generic_system.mk
+index 825987d..be14db4 100644
+--- a/target/product/generic_system.mk
++++ b/target/product/generic_system.mk
+@@ -116,6 +116,8 @@ PRODUCT_USE_DYNAMIC_PARTITION_SIZE := true
+ 
+ # Rose Agent status tray from frameworks-base.patch; Mustang/Fold builds set this per device.
+ PRODUCT_SYSTEM_PROPERTIES += persist.wm.debug.pixel_agent_tray=1
++# Rose raised edge (#410): Launcher3's short-swipe edge and WMShell's real app resize; default off without this.
++PRODUCT_SYSTEM_PROPERTIES += persist.wm.debug.rose_edge=true
+ 
+ PRODUCT_ENFORCE_RRO_TARGETS := *
+ 
