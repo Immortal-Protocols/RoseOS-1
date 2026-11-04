@@ -53,9 +53,18 @@ These files move into `os/` only in a coordinated re-bind, once all four of thes
     `target/render/rose-edge.png`. It compiles against Robolectric's uninstrumented SDK 35 framework, because the
     window uses the hidden internal-insets touchable region, as Launcher3's Taskbar does.
 
+- **The Launcher3 wiring** (`patches/rose-edge-resize-launcher3.patch`) applies after `rose-edge-launcher3.patch`. It is
+  checked in CI with `git apply` against pinned Launcher3's own blobs, `fixtures/…/SystemUiProxy.kt` and
+  `TouchInteractionService.kt`, which no other Rose patch touches.
+  - `SystemUiProxy.setInitializationParams` hands `RoseEdgeShell` the shell's `IRoseEdge` binder. `clearProxy` clears
+    it.
+  - `TouchInteractionService` starts `RoseEdgeWindow` only when `persist.wm.debug.rose_edge` is on, and stops it in
+    `onDestroy`. The switcher action is Launcher3's own `OverviewCommandHelper` `TOGGLE`, the 3-button recents path.
+  - The Rose action starts an ordinary HOME intent with one routing extra,
+    `dev.pixel.voice.extra.ROSE_EDGE_DESTINATION = "rose"`, proposed to Home, which owns its meaning.
+
 ## Not yet here
-- `SystemUiProxy` handing `RoseEdgeShell` the shell's binder.
-- `TouchInteractionService` starting `RoseEdgeWindow` with its `Actions`.
-- Both are patch hunks for `rose-edge-launcher3.patch`.
 - Accessibility nodes for the two wells.
-- Both of those join `rose-edge-launcher3.patch` once the interfaces are agreed.
+- Home's handling of the Rose routing extra (Home's file).
+- A real Kotlin/Java compile of the wiring and the window, which waits on the Launcher3 compile path (Infra).
+- Moving all of this into `os/` with the compile-candidate re-bind, coordinated with Release.

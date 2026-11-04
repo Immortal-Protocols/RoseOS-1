@@ -2,6 +2,7 @@
 package com.android.quickstep.fallback;
 
 import android.content.Context;
+import android.content.Intent;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.LinearGradient;
@@ -43,6 +44,19 @@ public final class RoseEdgeWindow implements RoseEdgeState.Listener {
         void openRose(int displayId);
 
         void showSwitcher(int displayId);
+    }
+
+    /**
+     * The Rose control's Home start (proposed to Home on #410; Home owns the meaning): an ordinary HOME intent that Home
+     * reads as untrusted UI routing, opening its own Rose conversation. Nothing else crosses to Home.
+     */
+    public static final String EXTRA_DESTINATION = "dev.pixel.voice.extra.ROSE_EDGE_DESTINATION";
+    public static final String DESTINATION_ROSE = "rose";
+
+    /** The intent the host starts for the Rose control. */
+    public static Intent openRoseIntent() {
+        return new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK).putExtra(EXTRA_DESTINATION, DESTINATION_ROSE);
     }
 
     private final Context mContext;

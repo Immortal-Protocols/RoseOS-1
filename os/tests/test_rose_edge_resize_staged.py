@@ -3,6 +3,7 @@ code agree exactly, and nothing applies the staged files. The opt-in Robolectric
 os/staged/rose-edge-resize/native-test runs the same code against the aidl tool's generated Stub and Proxy; this check
 needs no SDK so that CI keeps the two from drifting. Source only: no build, device or host."""
 from pathlib import Path
+import hashlib
 import re
 import unittest
 
@@ -104,6 +105,41 @@ class RoseEdgeResizeStagedTest(unittest.TestCase):
             'MULTI_WINDOW': '5', 'BUSY': '6', 'LIFT_RANGE': '7', 'DISABLED': '8', 'NOT_DEFAULT_DISPLAY': '9'})
         self.assertEqual(lowered, {'REQUESTED': '0', 'TASK_CHANGED': '1', 'HOME_OR_RECENTS': '2', 'KEYGUARD': '3',
             'DISPLAY_CHANGED': '4', 'IME_SHOWN': '5', 'LISTENER_DIED': '6', 'USER_SWITCH': '7'})
+
+    def test_the_launcher3_wiring_patch_applies_to_the_pinned_files(self):
+        """rose-edge-resize-launcher3.patch (SystemUiProxy hands RoseEdgeShell the shell's binder; TouchInteractionService
+        starts RoseEdgeWindow behind the switch) applies with plain git apply to pinned Launcher3's own blobs, which the
+        switcher and E2a patches do not touch."""
+        import gzip, shutil, subprocess, tempfile
+        fixtures = STAGED/'fixtures/packages/apps/Launcher3'
+        listing = gzip.decompress((ROOT/'os/tests/fixtures/launcher3-compile-contract/trees/'
+            'packages__apps__Launcher3.ls-tree.txt.gz').read_bytes()).decode()
+        pinned = {line.split('\t')[1]: line.split()[2] for line in listing.splitlines()}
+        for path in sorted(fixtures.rglob('*.kt')):
+            relative = str(path.relative_to(fixtures))
+            data = path.read_bytes()
+            self.assertEqual(hashlib.sha1(b'blob %d\0' % len(data) + data).hexdigest(), pinned[relative], relative)
+        patch = STAGED/'patches/rose-edge-resize-launcher3.patch'
+        touched = sorted(re.findall(r'^\+\+\+ b/(\S+)', patch.read_text(), re.M))
+        self.assertEqual(touched, ['quickstep/src/com/android/quickstep/SystemUiProxy.kt',
+            'quickstep/src/com/android/quickstep/TouchInteractionService.kt'])
+        for other in ('rose-switcher-launcher3.patch', 'rose-edge-launcher3.patch'):
+            text = (ROOT/'os/patches'/other).read_text()
+            for path in touched:
+                self.assertNotIn('b/' + path, text, f'{other} touches {path}')
+        work = Path(tempfile.mkdtemp(prefix='rose-edge-wiring-'))
+        self.addCleanup(shutil.rmtree, work, True)
+        shutil.copytree(fixtures, work, dirs_exist_ok=True)
+        subprocess.run(['git', 'init', '-q', str(work)], check=True)
+        for step in (['apply', '--check'], ['apply']):
+            subprocess.run(['git', '-C', str(work), *step, str(patch)], check=True)
+        system_ui = (work/'quickstep/src/com/android/quickstep/SystemUiProxy.kt').read_text()
+        self.assertIn('RoseEdgeShell.setShell(\n            params.getBinder(com.android.quickstep.fallback.RoseEdgeShell.DESCRIPTOR)',
+            system_ui)
+        service = (work/'quickstep/src/com/android/quickstep/TouchInteractionService.kt').read_text()
+        self.assertIn('if (com.android.quickstep.fallback.RoseEdgeSwipe.switchOn())', service)
+        self.assertIn('OverviewCommandHelper.CommandType.TOGGLE', service)
+        self.assertIn('roseEdge?.stop()', service)
 
     def test_nothing_applies_the_staged_files(self):
         for path in ('scripts/apply-os-changes.py', 'scripts/background_apks.py', 'scripts/integration_copy.py',

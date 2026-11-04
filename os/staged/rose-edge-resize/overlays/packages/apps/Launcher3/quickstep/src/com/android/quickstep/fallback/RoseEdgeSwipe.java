@@ -69,6 +69,11 @@ public final class RoseEdgeSwipe {
         this.keyguard = enabled ? context.getSystemService(KeyguardManager.class) : null;
     }
 
+    /** The build's switch, read once by the host before it starts the edge window. */
+    public static boolean switchOn() {
+        return SystemProperties.getBoolean(PROPERTY, false);
+    }
+
     /** The build's switch: false means stock end targets and transforms (see the class comment for the one exception). */
     public boolean enabled() {
         return enabled;

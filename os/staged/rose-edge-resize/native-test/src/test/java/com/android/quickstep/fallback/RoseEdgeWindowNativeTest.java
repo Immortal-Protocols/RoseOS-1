@@ -122,6 +122,16 @@ public class RoseEdgeWindowNativeTest {
     }
 
     @Test
+    public void roseOpensThroughAnOrdinaryHomeStartWithOneRoutingExtra() {
+        android.content.Intent intent = RoseEdgeWindow.openRoseIntent();
+        assertEquals(android.content.Intent.ACTION_MAIN, intent.getAction());
+        assertTrue(intent.hasCategory(android.content.Intent.CATEGORY_HOME));
+        assertEquals("rose", intent.getStringExtra("dev.pixel.voice.extra.ROSE_EDGE_DESTINATION"));
+        assertEquals(1, intent.getExtras().size());
+        assertNull("no component: whichever app holds HOME decides", intent.getComponent());
+    }
+
+    @Test
     public void startingIsWhatLetsTheEdgeRise() {
         assertTrue(RoseEdgeState.canRaise());
         window.stop();
