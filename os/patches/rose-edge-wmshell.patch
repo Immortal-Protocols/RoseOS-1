@@ -1,9 +1,9 @@
 diff --git a/libs/WindowManager/Shell/src/com/android/wm/shell/RoseEdgeMicSlot.java b/libs/WindowManager/Shell/src/com/android/wm/shell/RoseEdgeMicSlot.java
 new file mode 100644
-index 0000000..0017239
+index 0000000..1bb1aa5
 --- /dev/null
 +++ b/libs/WindowManager/Shell/src/com/android/wm/shell/RoseEdgeMicSlot.java
-@@ -0,0 +1,301 @@
+@@ -0,0 +1,305 @@
 +/*
 + * Copyright 2026
 + * SPDX-License-Identifier: Apache-2.0
@@ -69,7 +69,8 @@ index 0000000..0017239
 +
 +    private final Context mContext;
 +    private final WindowManager mWindows;
-+    private final Handler mHandler = new Handler(Looper.getMainLooper());
++    /** Everything runs on the thread that created this (the shell's main thread), including binder callbacks. */
++    private final Handler mHandler = new Handler(Looper.myLooper() != null ? Looper.myLooper() : Looper.getMainLooper());
 +    private final RoseEdgePolicy.MicTap mTap = new RoseEdgePolicy.MicTap();
 +    private final Runnable mRetryBind;
 +    private final AgentTrayLink mLink;
@@ -87,13 +88,16 @@ index 0000000..0017239
 +        mContext = context.createWindowContext(WindowManager.LayoutParams.TYPE_NAVIGATION_BAR_PANEL, null);
 +        mWindows = mContext.getSystemService(WindowManager.class);
 +        mConnection = new ServiceConnection() {
++            // Delivered on the process's main thread: moved to this control's thread.
 +            @Override public void onServiceConnected(ComponentName name, IBinder binder) {
-+                mVoice = new Messenger(binder);
-+                mLink.connected();
++                mHandler.post(() -> {
++                    mVoice = new Messenger(binder);
++                    mLink.connected();
++                });
 +            }
-+            @Override public void onServiceDisconnected(ComponentName name) { mLink.disconnected(); }
-+            @Override public void onBindingDied(ComponentName name) { mLink.bindingDied(); }
-+            @Override public void onNullBinding(ComponentName name) { mLink.bindingDied(); }
++            @Override public void onServiceDisconnected(ComponentName name) { mHandler.post(mLink::disconnected); }
++            @Override public void onBindingDied(ComponentName name) { mHandler.post(mLink::bindingDied); }
++            @Override public void onNullBinding(ComponentName name) { mHandler.post(mLink::bindingDied); }
 +        };
 +        mLink = new AgentTrayLink(new AgentTrayLink.Port() {
 +            @Override public boolean bind(int user) {
@@ -127,7 +131,7 @@ index 0000000..0017239
 +            @Override public void forgetService() { mVoice = null; }
 +        });
 +        mRetryBind = () -> mLink.retry(ActivityManager.getCurrentUser());
-+        mReply = new Messenger(new Handler(Looper.getMainLooper(), message -> {
++        mReply = new Messenger(new Handler(mHandler.getLooper(), message -> {
 +            // Only a fresh v1 STATE from Rose Agent itself, while subscribed, is shown.
 +            if (message.what != STATE || !mLink.subscribed() || !trusted(message.sendingUid)) return true;
 +            final Bundle data = message.getData();
@@ -418,10 +422,10 @@ index 0000000..08838b1
 +}
 diff --git a/libs/WindowManager/Shell/src/com/android/wm/shell/roseedge/RoseEdgeController.java b/libs/WindowManager/Shell/src/com/android/wm/shell/roseedge/RoseEdgeController.java
 new file mode 100644
-index 0000000..31bca28
+index 0000000..6d064bb
 --- /dev/null
 +++ b/libs/WindowManager/Shell/src/com/android/wm/shell/roseedge/RoseEdgeController.java
-@@ -0,0 +1,508 @@
+@@ -0,0 +1,520 @@
 +/*
 + * Copyright 2026
 + * SPDX-License-Identifier: Apache-2.0
@@ -440,6 +444,9 @@ index 0000000..31bca28
 +import android.annotation.Nullable;
 +import android.app.ActivityManager.RunningTaskInfo;
 +import android.app.KeyguardManager;
++import android.content.BroadcastReceiver;
++import android.content.Intent;
++import android.content.IntentFilter;
 +import android.content.Context;
 +import android.content.res.Configuration;
 +import android.graphics.Rect;
@@ -562,6 +569,15 @@ index 0000000..31bca28
 +        mImeController.addPositionProcessor(this);
 +        mTransitions.addHandler(this);
 +        mRootTdaOrganizer.registerListener(Display.DEFAULT_DISPLAY, this);
++        // Lowered reason 3 is "keyguard or screen off": without a secure lock the keyguard may never show.
++        mContext.registerReceiver(new BroadcastReceiver() {
++            @Override
++            public void onReceive(Context context, Intent intent) {
++                if (Intent.ACTION_SCREEN_OFF.equals(intent.getAction())) {
++                    mMainExecutor.execute(() -> lowerIfNeeded(mState.onKeyguard(true)));
++                }
++            }
++        }, new IntentFilter(Intent.ACTION_SCREEN_OFF), Context.RECEIVER_EXPORTED);
 +    }
 +
 +    private static boolean enabled() {

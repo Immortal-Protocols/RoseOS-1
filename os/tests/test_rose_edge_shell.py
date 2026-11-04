@@ -243,6 +243,11 @@ class RoseEdgeShellTest(unittest.TestCase):
             appeared)
         # The keyguard is also read live at raise time.
         self.assertIn('mKeyguardVisible || keyguardLocked()', self.controller)
+        # Reason 3 is "keyguard or screen off": screen-off lowers too, on the shell's executor.
+        screen = flat(self.controller[self.controller.index('mContext.registerReceiver(new BroadcastReceiver()'):])
+        self.assertIn('if (Intent.ACTION_SCREEN_OFF.equals(intent.getAction())) { '
+            'mMainExecutor.execute(() -> lowerIfNeeded(mState.onKeyguard(true)));', screen)
+        self.assertIn('new IntentFilter(Intent.ACTION_SCREEN_OFF), Context.RECEIVER_EXPORTED);', screen)
 
     def test_mic_slot_is_mute_only_on_the_existing_trusted_tray_route(self):
         # Option (a): SystemUI's own tray protocol, from SystemUI's identity; Launcher3 only reports where the hole is.
@@ -265,6 +270,11 @@ class RoseEdgeShellTest(unittest.TestCase):
             mic, 'state only from Rose Agent itself, while subscribed')
         self.assertIn('if (data.getInt("protocolVersion") != 1) return true;', mic)
         self.assertIn('uid == mContext.getPackageManager().getPackageUidAsUser(VOICE_PACKAGE, mLink.user())', flat(mic))
+        # One thread: the creator's (the shell's main thread); binder callbacks are moved onto it.
+        self.assertIn('new Handler(Looper.myLooper() != null ? Looper.myLooper() : Looper.getMainLooper());', mic)
+        self.assertIn('mReply = new Messenger(new Handler(mHandler.getLooper(), message -> {', mic)
+        connection = flat(mic[mic.index('mConnection = new ServiceConnection() {'):mic.index('mLink = new AgentTrayLink(')])
+        self.assertEqual(connection.count('mHandler.post('), 4, 'every ServiceConnection callback is posted')
         # The tray's gates: tray on, user 0, unlocked, screen on.
         allowed = flat(method(mic, 'private boolean allowed()'))
         for gate in ('SystemProperties.getBoolean(TRAY_PROPERTY, false)', 'ActivityManager.getCurrentUser() == 0',
