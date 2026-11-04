@@ -3,6 +3,8 @@ package com.android.quickstep.fallback;
 
 import android.content.Context;
 import android.content.Intent;
+import android.content.pm.PackageManager;
+import android.content.pm.ResolveInfo;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.LinearGradient;
@@ -48,17 +50,26 @@ public final class RoseEdgeWindow implements RoseEdgeState.Listener {
         void showSwitcher(int displayId);
     }
 
-    /**
-     * The Rose control's Home start (proposed to Home on #410; Home owns the meaning): an ordinary HOME intent that Home
-     * reads as untrusted UI routing, opening its own Rose conversation. Nothing else crosses to Home.
-     */
-    public static final String EXTRA_DESTINATION = "dev.pixel.voice.extra.ROSE_EDGE_DESTINATION";
-    public static final String DESTINATION_ROSE = "rose";
+    /** Rose Agent's package: Home (#410, oxblood-contract.json homeEdge.controls.rose.destination.raisedEdge). */
+    public static final String ROSE_PACKAGE = "dev.pixel.voice";
 
-    /** The intent the host starts for the Rose control. */
-    public static Intent openRoseIntent() {
-        return new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
-                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK).putExtra(EXTRA_DESTINATION, DESTINATION_ROSE);
+    /**
+     * The intent the host starts for the Rose control, as Home's contract gives it: when Rose Agent holds HOME, its
+     * existing launch intent (the icon tap: ACTION_MAIN + CATEGORY_LAUNCHER, explicit, FLAG_ACTIVITY_NEW_TASK), which
+     * Home shows as Rose Home with the conversation over it; otherwise the plain HOME intent. No new extra, action or
+     * exported entry, and never FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY (Home reads that as a relaunch). Visibility of the
+     * two packages comes from Launcher3's existing QUERY_ALL_PACKAGES.
+     */
+    public static Intent openRoseIntent(PackageManager pm) {
+        Intent home = new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        ResolveInfo holder = pm.resolveActivity(home, PackageManager.MATCH_DEFAULT_ONLY);
+        if (holder == null || holder.activityInfo == null || !ROSE_PACKAGE.equals(holder.activityInfo.packageName)) {
+            return home;
+        }
+        Intent launch = pm.getLaunchIntentForPackage(ROSE_PACKAGE);
+        if (launch == null) return home;
+        return launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
     }
 
     private final Context mContext;
@@ -204,8 +215,12 @@ public final class RoseEdgeWindow implements RoseEdgeState.Listener {
             return mNodes;
         }
 
-        /** Lowers the edge, then runs the control's action (taps and accessibility clicks alike). */
+        /**
+         * Lowers the edge, then runs the control's action (taps and accessibility clicks alike). Only while raised, so
+         * a raise gives at most one launch: Home asks for one Rose start per tap (its conversation stacks).
+         */
         void activate(int which) {
+            if (!RoseEdgeState.isRaised(mDisplayId)) return;
             RoseEdgeState.lower(mDisplayId);
             if (which == RoseEdgeLayout.ROSE) mActions.openRose(mDisplayId);
             else mActions.showSwitcher(mDisplayId);

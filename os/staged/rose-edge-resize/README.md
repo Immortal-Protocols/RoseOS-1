@@ -60,11 +60,15 @@ These files move into `os/` only in a coordinated re-bind, once all four of thes
     it.
   - `TouchInteractionService` starts `RoseEdgeWindow` only when `persist.wm.debug.rose_edge` is on, and stops it in
     `onDestroy`. The switcher action is Launcher3's own `OverviewCommandHelper` `TOGGLE`, the 3-button recents path.
-  - The Rose action starts an ordinary HOME intent with one routing extra,
-    `dev.pixel.voice.extra.ROSE_EDGE_DESTINATION = "rose"`, proposed to Home, which owns its meaning.
+  - The Rose action follows Home's contract (`homeEdge.controls.rose.destination.raisedEdge`, #410 comment
+    6623685186). It lowers the edge, then, when `dev.pixel.voice` holds HOME, starts its existing launch intent
+    (`getLaunchIntentForPackage`, the icon tap), which Home shows as Rose Home with the conversation over it. Otherwise
+    it starts the plain HOME intent. There is no new extra, action or exported entry, and package visibility comes
+    from Launcher3's existing `QUERY_ALL_PACKAGES`. A control acts only while the edge is raised, so one raise gives at
+    most one launch.
+  - Rose and the switcher are accessibility buttons ("Open Rose", "Open system switcher"), using the framework's
+    `AccessibilityNodeProvider`. The mic slot gets no node from this window: it is SystemUI's control.
 
 ## Not yet here
-- Accessibility nodes for the two wells.
-- Home's handling of the Rose routing extra (Home's file).
 - A real Kotlin/Java compile of the wiring and the window, which waits on the Launcher3 compile path (Infra).
 - Moving all of this into `os/` with the compile-candidate re-bind, coordinated with Release.

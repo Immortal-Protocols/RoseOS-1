@@ -38,7 +38,7 @@ index 256c991..dab5483 100644
 +                        object : com.android.quickstep.fallback.RoseEdgeWindow.Actions {
 +                            override fun openRose(displayId: Int) =
 +                                startActivity(
-+                                    com.android.quickstep.fallback.RoseEdgeWindow.openRoseIntent()
++                                    com.android.quickstep.fallback.RoseEdgeWindow.openRoseIntent(packageManager)
 +                                )
 +
 +                            override fun showSwitcher(displayId: Int) {

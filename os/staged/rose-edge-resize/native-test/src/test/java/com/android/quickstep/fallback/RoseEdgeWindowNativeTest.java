@@ -143,14 +143,61 @@ public class RoseEdgeWindowNativeTest {
         assertFalse(RoseEdgeState.isRaised(DISPLAY));
     }
 
+    /** Installs pkg with one activity answering MAIN in each given category (plus DEFAULT, as a real HOME has). */
+    void install(String pkg, String activity, String... categories) {
+        android.content.pm.PackageInfo info = new android.content.pm.PackageInfo();
+        info.packageName = pkg;
+        info.applicationInfo = new android.content.pm.ApplicationInfo();
+        info.applicationInfo.packageName = pkg;
+        org.robolectric.shadows.ShadowPackageManager pm = shadowOf(context.getPackageManager());
+        pm.installPackage(info);
+        android.content.ComponentName name = new android.content.ComponentName(pkg, activity);
+        pm.addActivityIfNotPresent(name);
+        for (String category : categories) {
+            android.content.IntentFilter filter = new android.content.IntentFilter(android.content.Intent.ACTION_MAIN);
+            filter.addCategory(category);
+            filter.addCategory(android.content.Intent.CATEGORY_DEFAULT);
+            pm.addIntentFilterForActivity(name, filter);
+        }
+    }
+
     @Test
-    public void roseOpensThroughAnOrdinaryHomeStartWithOneRoutingExtra() {
-        android.content.Intent intent = RoseEdgeWindow.openRoseIntent();
+    public void roseOpensThroughRoseAgentsOwnLaunchIntentWhenItHoldsHome() {
+        install("dev.pixel.voice", "dev.pixel.voice.MainActivity", android.content.Intent.CATEGORY_HOME,
+                android.content.Intent.CATEGORY_LAUNCHER);
+        android.content.Intent intent = RoseEdgeWindow.openRoseIntent(context.getPackageManager());
+        assertEquals(android.content.Intent.ACTION_MAIN, intent.getAction());
+        assertTrue(intent.hasCategory(android.content.Intent.CATEGORY_LAUNCHER));
+        assertFalse(intent.hasCategory(android.content.Intent.CATEGORY_HOME));
+        assertEquals(new android.content.ComponentName("dev.pixel.voice", "dev.pixel.voice.MainActivity"),
+                intent.getComponent());
+        assertTrue((intent.getFlags() & android.content.Intent.FLAG_ACTIVITY_NEW_TASK) != 0);
+        assertEquals("Home reads history as a relaunch", 0,
+                intent.getFlags() & android.content.Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY);
+        assertTrue("no new extra", intent.getExtras() == null || intent.getExtras().isEmpty());
+    }
+
+    @Test
+    public void roseFallsBackToThePlainHomeIntentWhenAnotherAppHoldsHome() {
+        install("com.example.home", "com.example.home.Home", android.content.Intent.CATEGORY_HOME);
+        install("dev.pixel.voice", "dev.pixel.voice.MainActivity", android.content.Intent.CATEGORY_LAUNCHER);
+        android.content.Intent intent = RoseEdgeWindow.openRoseIntent(context.getPackageManager());
         assertEquals(android.content.Intent.ACTION_MAIN, intent.getAction());
         assertTrue(intent.hasCategory(android.content.Intent.CATEGORY_HOME));
-        assertEquals("rose", intent.getStringExtra("dev.pixel.voice.extra.ROSE_EDGE_DESTINATION"));
-        assertEquals(1, intent.getExtras().size());
-        assertNull("no component: whichever app holds HOME decides", intent.getComponent());
+        assertNull("whichever app holds HOME decides", intent.getComponent());
+        assertTrue((intent.getFlags() & android.content.Intent.FLAG_ACTIVITY_NEW_TASK) != 0);
+        assertTrue("no extra", intent.getExtras() == null || intent.getExtras().isEmpty());
+    }
+
+    @Test
+    public void aRaiseGivesAtMostOneLaunch() throws Exception {
+        RoseEdgeWindow.EdgeView view = raise();
+        android.view.accessibility.AccessibilityNodeProvider nodes = view.getAccessibilityNodeProvider();
+        nodes.performAction(RoseEdgeLayout.ROSE, android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK, null);
+        nodes.performAction(RoseEdgeLayout.ROSE, android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK, null);
+        view.activate(RoseEdgeLayout.ROSE);
+        idle();
+        assertEquals(List.of("rose 0"), actions);
     }
 
     @Test

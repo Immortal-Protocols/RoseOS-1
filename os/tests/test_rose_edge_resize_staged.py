@@ -65,6 +65,12 @@ class RoseEdgeResizeStagedTest(unittest.TestCase):
         every = ''.join(p.read_text() for p in FALLBACK.glob('*.java'))
         self.assertNotRegex(every, r'(?i)AgentTray|setMicrophoneMute|SensorPrivacy|AudioManager|\bMUTE\b',
             'Launcher3 never touches microphone state (option (a))')
+        # Home's destination (#410 6623685186): Rose Agent's existing launch intent, no new extra or entry.
+        self.assertNotIn('ROSE_EDGE_DESTINATION', every + (STAGED/'patches/rose-edge-resize-launcher3.patch').read_text())
+        self.assertNotIn('Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY', every)
+        window = (FALLBACK/'RoseEdgeWindow.java').read_text()
+        self.assertIn('pm.getLaunchIntentForPackage(ROSE_PACKAGE)', window)
+        self.assertIn('ROSE_PACKAGE = "dev.pixel.voice"', window)
         listener = java[java.index('static final class Listener'):]
         self.assertEqual(re.findall(r'data\.read(\w+)\(', listener), ['Int', 'Int', 'TypedObject', 'Int', 'Int', 'Int'])
 
