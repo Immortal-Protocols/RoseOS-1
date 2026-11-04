@@ -29,4 +29,19 @@ final class MicInputCapture {
  static boolean storeReported(boolean live, boolean connected, boolean settled, boolean reported, boolean stored) {
   return live && connected && settled && reported != stored;
  }
+
+ /**
+  * The first report of a call that has just become live and connected is never the page's own change (its mic control
+  * was disabled until then), so nothing is stored from it. If the stored state is muted and the call came up listening
+  * (a mute stored while it was connecting by a writer that sent no command), the call is muted to match: the request
+  * returned here is sent with a new sequence. Only ever towards muted: a call that came up muted stays muted.
+  */
+ static boolean muteOnConnect(boolean wasLiveConnected, boolean liveConnected, boolean reported, boolean stored) {
+  return !wasLiveConnected && liveConnected && stored && !reported;
+ }
+
+ /** Whether this report may store at all: never the first report of a newly live call. */
+ static boolean storable(boolean wasLiveConnected, boolean liveConnected) {
+  return wasLiveConnected && liveConnected;
+ }
 }

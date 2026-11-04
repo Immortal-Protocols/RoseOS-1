@@ -22,6 +22,14 @@ public final class MicInputCaptureTest {
         expect(!MicInputCapture.storeReported(true, false, true, false, true), "not connected keeps the mute");
         // A report from before a request was applied is stale.
         expect(!MicInputCapture.storeReported(true, true, false, false, true), "a stale report never undoes a request");
+        // A newly live call: nothing is stored from its first report; a stored mute it came up without is applied.
+        expect(!MicInputCapture.storable(false, true) && MicInputCapture.storable(true, true) && !MicInputCapture.storable(true, false),
+            "never the first report of a newly live call");
+        expect(MicInputCapture.muteOnConnect(false, true, false, true), "stored muted, came up listening: mute it");
+        expect(!MicInputCapture.muteOnConnect(false, true, true, false), "came up muted: never unmuted to match");
+        expect(!MicInputCapture.muteOnConnect(false, true, true, true) && !MicInputCapture.muteOnConnect(false, true, false, false), "already matching");
+        expect(!MicInputCapture.muteOnConnect(true, true, false, true), "only on the transition; later it is the page's own change");
+        expect(!MicInputCapture.muteOnConnect(false, false, false, true), "not live: nothing to apply");
         System.out.println("MicInputCaptureTest: " + checks + " checks passed");
     }
 }

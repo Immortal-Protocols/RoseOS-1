@@ -109,6 +109,13 @@ final class LocalRoseLink {
         current = null;
     }
 
+    /** Silences whatever link runs, from its next frame, and returns its token (0 if none) so it can be ended later. */
+    static synchronized int silence() {
+        if (current == null) return 0;
+        current.muted = true;
+        return current.token;
+    }
+
     static synchronized void setMuted(boolean muted) {
         if (current != null) current.muted = muted;
     }

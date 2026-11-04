@@ -130,10 +130,13 @@ test('VoiceService: mic requests are stored first, never take the pending slot, 
  const command=voice.slice(voice.indexOf('void command(String c,String origin)'),voice.indexOf('void setResultCardMode('));
  const mic=command.indexOf('Boolean mic=MicInputCapture.requested(c);');
  assert.ok(mic>0&&mic<command.indexOf('if(!loaded){pendingCommand=c;'),'before the single pending slot');
- assert.match(command,/storeInputMuted\(mic\);int seq=\+\+muteRequestSeq;if\(!loaded\)\{muteAckSeq=seq;return;\}web\.evaluateJavascript\("window\.setTrayMuted\("\+mic\+","\+seq\+"\)",null\);return;/);
+ assert.match(command,/storeInputMuted\(mic\);LocalRoseLink\.setMuted\(mic\);int seq=\+\+muteRequestSeq;if\(!loaded\)\{muteAckSeq=seq;return;\}web\.evaluateJavascript\("window\.setTrayMuted\("\+mic\+","\+seq\+"\)",null\);return;/,
+  'a running Local Rose link takes the request at once, before the page (it only gets its handle at live)');
  assert.ok(!/"window\.setTrayMuted\(true\)"/.test(command),'the old unsequenced call is gone');
  // Reports: acknowledged by sequence (never past the last request), and only a settled live change is stored.
- assert.match(voice,/if\(o\.has\("muteSeq"\)\)muteAckSeq=Math\.min\(muteRequestSeq,Math\.max\(muteAckSeq,o\.optInt\("muteSeq"\)\)\);if\(MicInputCapture\.storeReported\(live,connected,inputMuteSettled\(\),muted,storedInputMuted\(\)\)\)storeInputMuted\(muted\);/);
+ assert.match(voice,/if\(o\.has\("muteSeq"\)\)muteAckSeq=Math\.min\(muteRequestSeq,Math\.max\(muteAckSeq,o\.optInt\("muteSeq"\)\)\);/);
+ // The first report of a newly live call stores nothing; a stored mute the call came up without is applied (towards muted).
+ assert.match(voice,/reportedLiveConnected=now;if\(MicInputCapture\.muteOnConnect\(was,now,muted,stored\)\)\{int seq=\+\+muteRequestSeq;runOnUiThread\(\(\)->\{if\(loaded\)web\.evaluateJavascript\("window\.setTrayMuted\(true,"\+seq\+"\)",null\);else muteAckSeq=Math\.max\(muteAckSeq,seq\);\}\);\}else if\(MicInputCapture\.storable\(was,now\)&&MicInputCapture\.storeReported\(live,connected,inputMuteSettled\(\),muted,stored\)\)storeInputMuted\(muted\);/);
  assert.match(voice,/@JavascriptInterface public boolean micInputMuted\(\)\{return storedInputMuted\(\);\}/);
  assert.match(voice,/getSharedPreferences\(MicInputCapture\.PREFS,0\)\.getBoolean\(MicInputCapture\.KEY,false\)/);
  // Never the platform's microphone mute or Sensor Privacy.
@@ -142,7 +145,11 @@ test('VoiceService: mic requests are stored first, never take the pending slot, 
 
 test('renderer loss ends the dead page Local Rose link and settles its requests; links are token-bound',()=>{
  const gone=voice.slice(voice.indexOf('void voiceRendererGone('),voice.indexOf('\n }',voice.indexOf('void voiceRendererGone(')));
- assert.ok(gone.includes('LocalRoseLink.stop();muteAckSeq=muteRequestSeq;'));
+ // Silent from its next frame at once; ended by its own token off the main thread (never a newer page's link).
+ assert.ok(gone.includes('final int deadLink=LocalRoseLink.silence();if(deadLink>0)new Thread(()->LocalRoseLink.stop(deadLink),"local-rose-renderer-gone").start();'));
+ assert.ok(gone.includes('muteAckSeq=muteRequestSeq;reportedLiveConnected=false;'));
+ assert.ok(!/LocalRoseLink\.stop\(\);/.test(gone),'no blocking stop of whatever link runs');
+ assert.match(link,/static synchronized int silence\(\) \{\s*if \(current == null\) return 0;\s*current\.muted = true;\s*return current\.token;/);
  assert.match(voice,/@JavascriptInterface public int localRoseStart\(boolean muted\)\{.*return 0;\}return LocalRoseLink\.start\(/);
  assert.match(voice,/@JavascriptInterface public void localRoseStop\(int token\)\{LocalRoseLink\.stop\(token\);\}/);
  const start=link.slice(link.indexOf('static synchronized int start('),link.indexOf('static synchronized void stop(int token)'));
@@ -168,4 +175,40 @@ test('tray mute/unmute never start voice, never load or reload the page, never t
  connecting.run('var before=provider.options;window.setTrayMuted(true,4);window.setTrayMuted(false,5)');
  assert.equal(connecting.run('provider.options===before'),true,'no second start while connecting');
  assert.equal(connecting.run('starting'),true);
+});
+
+test('review D1: on connect the provider is brought to the intent, whatever it was started with',async()=>{
+ // Stored muted; unmute during the audio-route/config wait (provider starts listening); mute while connecting.
+ const a=startablePage({micInputMuted:()=>true});
+ a.run('start(false);window.setTrayMuted(false,1)');await settle();
+ assert.equal(a.run('provider.options.initialMuted'),false);
+ a.run(`window.setTrayMuted(true,2);var conv=${fakeConversation};provider.options.onSession({sessionId:'s'});provider.options.onConversationCreated(conv);conv.muted=false;provider.options.onConnect()`);
+ assert.equal(a.run('conv.muted'),true,'muted on connect: capture never live under a muted UI');
+ assert.equal(a.node('status').textContent,'Microphone muted');
+ // Mirror: stored listening; mute during the wait (provider starts muted); unmute while connecting.
+ const b=startablePage({micInputMuted:()=>false});
+ b.run('start(false);window.setTrayMuted(true,1)');await settle();
+ assert.equal(b.run('provider.options.initialMuted'),true);
+ b.run(`window.setTrayMuted(false,2);var conv=${fakeConversation};provider.options.onSession({sessionId:'s'});provider.options.onConversationCreated(conv);conv.muted=true;provider.options.onConnect()`);
+ assert.equal(b.run('conv.muted'),false,'listening on connect: never silent under a listening UI');
+});
+
+test('review D4: a request after a routing or guardian handover wins over the handed-over mute',async()=>{
+ for(const newer of [false,true]){
+  const p=startablePage({micInputMuted:()=>false});
+  p.run(`var closing;conversation={muted:true,setMuted(v){this.muted=!!v;},inputLevel:()=>0,outputLevel:()=>0,close(){return new Promise(r=>closing=r);},sendContext(){},sendMessage(){},announce(){}};ready=true;starting=false;ended=false;muted=true;muteAck=3;`);
+  p.run('window.changeVoiceRouting("live")');await settle();
+  if(newer)p.run('window.setTrayMuted(false,4)');
+  p.run('closing()');await settle();await settle();
+  assert.equal(p.run('provider.options.initialMuted'),!newer,newer?'the newer unmute wins':'with no newer request the handed-over mute is kept');
+ }
+});
+
+test('review D5: a microphone published before the conversation exists is disabled at once by a mute',async()=>{
+ const {devices,gate}=gatedDevices(providerContext());
+ const t=(await devices.getUserMedia({audio:true})).getAudioTracks()[0];
+ assert.equal(t.enabled,true,'published listening');
+ gate.set(true);
+ assert.equal(t.enabled,false,'muted before any provider handle or setMicMuted exists');
+ t.enabled=true;assert.equal(t.enabled,false,'and the SDK cannot re-enable it');
 });
