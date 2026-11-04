@@ -908,7 +908,9 @@ def describe():
         'verifyBaseApplyCandidate': ['sourceTree', 'lunch', 'policyReceipt', 'bundleReport'],
     }
     branches['forbids'] = {
-        'verifyIntegrated': ['bundleReport', 'reconstructSource', 'Git metadata or objects of the checked tree'],
+        'verifyIntegrated': ['bundleReport', 'reconstructSource', 'Git metadata or objects of the three contract '
+            'projects in the checked tree (the lunch inputs\' admitted gitRequirement.publicFetch of vendor/adevtool/.git, '
+            'outside them, excepted)'],
         'reconstruct': ['bundleReport'],
         'verifyBaseApplyCandidate': ['reconstructSource'],
     }
