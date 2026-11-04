@@ -5,30 +5,35 @@ base.bundleReport: "Release's producer script at a reviewed commit; never the ad
 It reads the contract as data at its pin and never loads the adapter (scripts/launcher3-compile.py) or OS Product's
 checker (scripts/launcher3-compile-contract.py).
 
-  produce --run FILE --out NEW_FILE [--main-ref REF]
+  python3 -I scripts/launcher3-bundle-report.py produce --out NEW_FILE
 
-FILE is the reviewed run-association document (os/build-only/launcher3-bundle-run.json: runId, runAttempt, headSha,
-label, createdAt, updatedAt), entered by review from GitHub run metadata with no live API and no actions:read. Every
-value written comes from that document, the pinned contract, this checkout's Git history at headSha, or the reconcile
-receipt directory headSha's own recipe names, never from expected values:
-  - run: the document's fields, and bindingSha256, the sha256 of its bytes;
-  - receipt: exactly one *-<label>.json in headSha:os/release-pipeline/frankel.json host.integrate.reconcile.receiptDir
-    with receiptType reconcile and the run's label, its at within [createdAt, updatedAt]; its path, sha256, type,
-    label, at and trusted-patcher record as read (its changed and entries are association only and never copied);
-  - candidate: commit (headSha, a commit of this checkout), onMain (headSha is an ancestor of REF, origin/main by
-    default), frankelConfigSha256 (headSha's frankel.json bytes), applyArgs and patcherKind (that file's
-    host.integrate.reconcile.applyArgs and patcher);
-  - registration: source "base.registration"; patcherMatchesPin when the receipt's patcher, headSha's three patcher
-    files and base.registration.patcher are the same trusted patcher; applyArgsMatchPin when the applyArgs equal
-    base.registration.applyArgs;
+It runs in isolated mode (-I), so nothing beside it on the path is imported, from a checkout whose HEAD is on
+refs/remotes/origin/main (a reviewed commit) and whose run-association document, os/build-only/launcher3-bundle-run.json
+(runId, runAttempt, headSha, label, createdAt, updatedAt: Release's file, Infra's values, entered by review from GitHub
+run metadata), is exactly its committed blob at HEAD. Every value written comes from that document, the pinned
+contract, this checkout's Git history at headSha (no replace objects or grafts), or the reconcile receipt directory
+headSha's own recipe names, never from expected values:
+  - run: the document's fields, and bindingSha256, the sha256 of its committed bytes;
+  - receipt: exactly one regular *-<label>.json in headSha:os/release-pipeline/frankel.json
+    host.integrate.reconcile.receiptDir (absolute) with receiptType reconcile and the run's label, its at within
+    [createdAt, updatedAt]; its path, sha256, type, label, at and trusted-patcher record as read, read through the
+    opened directory (no link, FIFO or oversized file, no duplicate key). Its entries are association only: where they
+    name an observed overlay, the bytes they record as installed must be the overlay's;
+  - candidate: commit (headSha, exactly a commit of this checkout), onMain (headSha is an ancestor of
+    refs/remotes/origin/main, from whole history: a shallow checkout or an unreadable object refuses),
+    frankelConfigSha256, applyArgs and patcherKind (the recipe's);
+  - registration: source as base.bundleReport.values states it; patcherMatchesPin and applyArgsMatchPin, both of which
+    must hold (the contract's names and order are used only then: contractDerived);
   - observed, from headSha's history only (base.bundleContent is never read): patches in base.registration.order, each
-    with the sha256 of headSha:os/patches/<name>; overlays, each headSha:os/overlays file whose target is under a
-    required prefix (overlayRoles.required.prefixes), with its sha256; notAnInputOverlays, the present targets on the
-    exact allowlist (overlayRoles.notAnInput.targets); unclassified, every other target under the three projects;
-  - producer: this script's path, the sha256 of its bytes, which must be its blob at this checkout's HEAD, and HEAD.
-NEW_FILE must not exist and is written once. Reading the receipt directory is a host read, so Infra runs this, never
-CI. Nothing but NEW_FILE is written, nothing is fetched and no key or secret is read. Exit status: 0 written,
-2 invalid, 3 refused, 4 unbound (the run document is still null).
+    with the sha256 of headSha:os/patches/<name>; overlays, each 100644 headSha:os/overlays file under a required
+    prefix (overlayRoles.required.prefixes); notAnInputOverlays, present targets on the exact allowlist; unclassified,
+    every other target under the three projects. Bytes a checkout would change (any .gitattributes at headSha's root,
+    os/, os/patches or os/overlays, or this repository's own attribute or line-ending configuration) refuse;
+  - producer: this script's path, the sha256 of its bytes, which must be its blob at HEAD, and HEAD.
+NEW_FILE must not exist; it is written whole or not at all. Reading the receipt directory is a host read, so Infra
+runs this, never CI. Nothing but NEW_FILE is written, nothing is fetched and no key or secret is read. Exit status:
+0 written (the WRITTEN line names the file, its sha256 and the origin/main commit onMain was read against), 2 invalid,
+3 refused, 4 unbound (the run document is still null).
 """
 import argparse
 import hashlib
@@ -36,6 +41,7 @@ import json
 import os
 from pathlib import Path
 import re
+import stat
 import subprocess
 import sys
 import time
@@ -48,16 +54,26 @@ CONTRACT_SHA256 = '466f5ab88e4c110318e6e2533635db9bfcbf6ff73fc40dc54fbcc4c72f059
 RUN = 'os/build-only/launcher3-bundle-run.json'
 PRODUCER = 'scripts/launcher3-bundle-report.py'
 RECIPE = 'os/release-pipeline/frankel.json'
+MAIN_REF = 'refs/remotes/origin/main'
 REPORT_KIND, REPORT_VERSION = 'rose-integration-bundle-report', 1
 RUN_KEYS = ('runId', 'runAttempt', 'headSha', 'label', 'createdAt', 'updatedAt')
 RUN_DOCUMENT_KEYS = {'schemaVersion', 'kind', 'basis', *RUN_KEYS}
+RECEIPT_BYTES = 16 << 20
 TIME = '%Y-%m-%dT%H:%M:%SZ'
 LABEL = re.compile(r'[A-Za-z0-9][A-Za-z0-9._-]*')
 COMMIT = re.compile(r'[0-9a-f]{40}')
 SHA256 = re.compile(r'[0-9a-f]{64}')
-OVERLAY_MODES = ('100644', '100755')
+FILE_MODES = ('100644', '100755')
+# Attribute files that could make a checkout's bytes differ from the blobs this producer hashes: these, and any under
+# ATTRIBUTE_TREES (every directory that holds or leads to a reported file).
+ATTRIBUTE_FILES = ('.gitattributes', 'os/.gitattributes')
+ATTRIBUTE_TREES = ('os/patches/', 'os/overlays/')
+# History is read as committed: no replace objects or grafts, no system or global configuration, no prompt. The graft
+# file is a path that cannot exist: git reads none, and prints no deprecation hint (it does for any graft file it reads,
+# even an empty one, and a message from git refuses where history must be read whole).
 GIT_ENV = {'PATH': '/usr/bin:/bin', 'HOME': '/nonexistent', 'LC_ALL': 'C', 'GIT_CONFIG_NOSYSTEM': '1',
-           'GIT_CONFIG_GLOBAL': os.devnull, 'GIT_TERMINAL_PROMPT': '0'}
+           'GIT_CONFIG_GLOBAL': os.devnull, 'GIT_TERMINAL_PROMPT': '0', 'GIT_NO_REPLACE_OBJECTS': '1',
+           'GIT_GRAFT_FILE': os.path.join(os.devnull, 'grafts')}
 
 
 class Invalid(Exception):
@@ -76,17 +92,17 @@ def sha256(data):
     return hashlib.sha256(data).hexdigest()
 
 
-def read_nofollow(path):
-    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+def strict_json(data):
+    """JSON with no duplicate key (the last of two would win silently) and no nesting deep enough to raise."""
+    def pairs(items):
+        keys = [k for k, _ in items]
+        if len(keys) != len(set(keys)):
+            raise ValueError('a duplicate key')
+        return dict(items)
     try:
-        chunks = []
-        while True:
-            block = os.read(fd, 1 << 20)
-            if not block:
-                return b''.join(chunks)
-            chunks.append(block)
-    finally:
-        os.close(fd)
+        return json.loads(data, object_pairs_hook=pairs)
+    except RecursionError:
+        raise ValueError('nested too deeply') from None
 
 
 def utc(value):
@@ -99,25 +115,53 @@ def utc(value):
         return False
 
 
+def run_git(root, *args):
+    return subprocess.run(['git', '-C', str(root), *args], capture_output=True, env=GIT_ENV)
+
+
+def git_message(stderr):
+    """git's own reason, for a refusal: its first fatal or error line, else its last line."""
+    lines = stderr.decode(errors='replace').strip().splitlines()
+    reasons = [line for line in lines if line.startswith(('fatal:', 'error:'))]
+    return (reasons or lines[-1:] or [''])[0][:160]
+
+
 def git(root, *args):
-    result = subprocess.run(['git', '-C', str(root), *args], capture_output=True, env=GIT_ENV)
+    result = run_git(root, *args)
     if result.returncode:
-        raise Refused(f'git {" ".join(args[:2])} failed in {root}')
+        raise Refused(f'git {" ".join(args[:2])} failed in {root}: {git_message(result.stderr)}')
     return result.stdout
 
 
-def blob(root, rev, path):
-    """The bytes of rev:path, a regular file in this checkout's history."""
-    mode = git(root, 'ls-tree', '--full-tree', rev, '--', path).split(b' ', 1)[0].decode()
-    if mode not in OVERLAY_MODES:
+def is_ancestor(root, commit, of):
+    """Whether commit is of or an ancestor of it, from history read whole: any answer but yes or no, or any message
+    on the way (git can answer no, or even yes, past an object it could not read), refuses."""
+    result = run_git(root, 'merge-base', '--is-ancestor', commit, of)
+    if result.returncode not in (0, 1) or result.stderr.strip():
+        raise Refused(f'git merge-base could not tell whether {commit[:12]} is on {of[:12]}: '
+                      f'{git_message(result.stderr)}')
+    return result.returncode == 0
+
+
+def commit_of(root, rev):
+    """The full commit rev names in this checkout, or None (a tree, a blob, a prefix of another length or nothing)."""
+    result = run_git(root, 'rev-parse', '--verify', '--quiet', '--end-of-options', f'{rev}^{{commit}}')
+    return result.stdout.decode().strip() if result.returncode == 0 else None
+
+
+def blob(root, rev, path, modes=FILE_MODES):
+    """The bytes of rev:path, a regular file (of modes) in this checkout's history."""
+    listed = git(root, 'ls-tree', '--full-tree', rev, '--', path)
+    mode = listed.split(b' ', 1)[0].decode()
+    if not listed or mode not in modes or listed.split(b'\t', 1)[1].rstrip(b'\n') != os.fsencode(path):
         raise Refused(f'{rev[:12]}:{path} is not a regular file in this checkout\'s history')
     return git(root, 'cat-file', 'blob', f'{rev}:{path}')
 
 
-def tree(root, rev, path):
-    """{path: (mode, type)} of every entry under path at rev."""
+def tree(root, rev, path=None):
+    """{path: (mode, type)} of every entry under path at rev (the whole tree without one)."""
     entries = {}
-    for record in git(root, 'ls-tree', '-r', '-z', '--full-tree', rev, '--', path).split(b'\0'):
+    for record in git(root, 'ls-tree', '-r', '-z', '--full-tree', rev, *(('--', path) if path else ())).split(b'\0'):
         if record:
             meta, name = record.split(b'\t', 1)
             mode, kind, _ = meta.decode().split(' ')
@@ -125,29 +169,80 @@ def tree(root, rev, path):
     return entries
 
 
+def checked_out_as_committed(root, head):
+    """Refuses when a checkout of head could hold other bytes than the blobs reported: a .gitattributes at head's root,
+    os/, os/patches or os/overlays (eol, ident, filter and working-tree-encoding all live there), or this repository's
+    own attribute file or line-ending configuration. The integrating checkout's own configuration is taken on trust."""
+    files = [p for p in tree(root, head) if p.rsplit('/', 1)[-1] == '.gitattributes'
+             and (p in ATTRIBUTE_FILES or p.startswith(ATTRIBUTE_TREES))]
+    if files:
+        raise Refused(f'{head[:12]} has attribute files that can change checked-out bytes: {", ".join(files[:5])}')
+    configured = run_git(root, 'config', '--local', '--get-regexp', r'^core\.(autocrlf|eol|attributesfile)$')
+    if configured.returncode == 0 and configured.stdout.strip():
+        raise Refused('this repository configures line endings or attributes (core.autocrlf, eol or attributesFile)')
+    info = Path(root)/git(root, 'rev-parse', '--git-path', 'info/attributes').decode().strip()  # relative to root
+    if info.exists() and info.stat().st_size:
+        raise Refused(f'this repository has its own {info.name} file')
+
+
 def load_contract(root=ROOT, pinned=CONTRACT_SHA256):
     data = (Path(root)/CONTRACT).read_bytes()
     if sha256(data) != pinned:
         raise Invalid(f'{CONTRACT} is not the contract version this producer reads ({pinned[:12]})')
     contract = json.loads(data)
-    report = contract['base']['bundleReport']
-    if (report['kind'], report['schemaVersion']) != (REPORT_KIND, REPORT_VERSION):
-        raise Invalid('the contract\'s base.bundleReport is not the rose-integration-bundle-report v1 this producer writes')
+    check_contract(contract)
     return contract
 
 
-def load_run(path):
-    """(the run fields, the sha256 of the document's bytes). Unbound while any field is null."""
-    data = read_nofollow(path)
-    document = json.loads(data)
-    if not isinstance(document, dict) or set(document) != RUN_DOCUMENT_KEYS or \
-            (document['schemaVersion'], document['kind']) != (1, 'rose-launcher3-bundle-run'):
-        raise Invalid(f'{path} is not an exact rose-launcher3-bundle-run v1 document')
+def check_contract(contract):
+    """The parts of the contract the producer reads, before anything else is read."""
+    report = contract['base']['bundleReport']
+    if (report['kind'], report['schemaVersion']) != (REPORT_KIND, REPORT_VERSION) \
+            or type(report['schemaVersion']) is not int:
+        raise Invalid('the contract\'s base.bundleReport is not the rose-integration-bundle-report v1 this producer '
+                      'writes')
+    prefixes = contract['overlayRoles']['required'].get('prefixes')
+    if not (isinstance(prefixes, list) and prefixes and all(isinstance(p, str) and p.endswith('/') and p.strip('/')
+                                                            for p in prefixes)):
+        raise Invalid('the contract states no required overlay prefixes (overlayRoles.required.prefixes), so '
+                      'observed.overlays cannot be computed from data')
+    pins = contract['base']['registration']['patcher']
+    if pins.get('patcher') != 'trusted' or not pins.get('sha256'):
+        raise Invalid('the contract does not pin the trusted patcher')
+
+
+def registration_source(contract):
+    values = contract['base']['bundleReport'].get('values', {})
+    source = values.get('registration.source', {}).get('equals', 'base.registration')
+    if source != 'base.registration':
+        raise Invalid('base.bundleReport.values states a registration.source this producer does not write')
+    return source
+
+
+def load_run(root, head):
+    """(the run fields, the sha256 of the document's bytes). The document is exactly its committed blob at head (the
+    reviewed one), an exact rose-launcher3-bundle-run v1; Unbound while any field is null."""
+    path = Path(root)/RUN
+    try:
+        data = read_nofollow(path)
+    except OSError as error:
+        raise Invalid(f'{RUN} cannot be read ({type(error).__name__})') from None
+    if data != blob(root, head, RUN, ('100644',)):
+        raise Refused(f'{RUN} is not its committed blob at HEAD: only the reviewed document is read')
+    try:
+        document = strict_json(data)
+    except ValueError as error:
+        raise Invalid(f'{RUN} is not a JSON document ({error})') from None
+    if not isinstance(document, dict) or set(document) != RUN_DOCUMENT_KEYS \
+            or type(document['schemaVersion']) is not int \
+            or (document['schemaVersion'], document['kind']) != (1, 'rose-launcher3-bundle-run'):
+        raise Invalid(f'{RUN} is not an exact rose-launcher3-bundle-run v1 document')
     unbound = [k for k in RUN_KEYS if document[k] is None]
     if unbound:
         raise Unbound(f'the run association is not entered yet: {", ".join(unbound)}')
     run = {k: document[k] for k in RUN_KEYS}
-    count = lambda v: (type(v) is int and v > 0) or (isinstance(v, str) and re.fullmatch(r'[1-9][0-9]*', v))  # noqa: E731
+    def count(v):
+        return (type(v) is int and v > 0) or (isinstance(v, str) and re.fullmatch(r'[1-9][0-9]*', v))
     if not (count(run['runId']) and count(run['runAttempt']) and isinstance(run['headSha'], str)
             and COMMIT.fullmatch(run['headSha']) and isinstance(run['label'], str) and LABEL.fullmatch(run['label'])
             and utc(run['createdAt']) and utc(run['updatedAt']) and run['createdAt'] <= run['updatedAt']):
@@ -156,58 +251,95 @@ def load_run(path):
     return run, sha256(data)
 
 
-def find_receipt(directory, label, created, updated):
-    """The one reconcile receipt of label, as read: {path, receiptSha256, receiptType, label, at, patcher}."""
-    directory = Path(directory)
-    if directory.is_symlink() or not directory.is_dir():
-        raise Refused(f'the receipt directory {directory} is not a plain directory')
-    matches = []
-    for entry in sorted(os.scandir(directory), key=lambda e: e.name):
-        if not entry.name.endswith(f'-{label}.json') or entry.name == f'-{label}.json':
-            continue
-        if entry.is_symlink() or not entry.is_file(follow_symlinks=False):
-            raise Refused(f'{entry.name} in the receipt directory is not a regular file')
-        data = read_nofollow(entry.path)
-        try:
-            record = json.loads(data)
-        except ValueError:
-            raise Refused(f'{entry.name} in the receipt directory is not JSON') from None
-        if isinstance(record, dict) and record.get('receiptType') == 'reconcile' and record.get('label') == label:
-            matches.append((entry.path, data, record))
+def read_nofollow(path, dir_fd=None, limit=RECEIPT_BYTES):
+    """A regular file's bytes, opened without following a link, without blocking (a FIFO) and through dir_fd when
+    given; refused above limit."""
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=dir_fd)
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode):
+            raise Refused(f'{path} is not a regular file')
+        if info.st_size > limit:
+            raise Refused(f'{path} is larger than {limit} bytes')
+        chunks, total = [], 0
+        while True:
+            block = os.read(fd, 1 << 20)
+            if not block:
+                return b''.join(chunks)
+            total += len(block)
+            if total > limit:
+                raise Refused(f'{path} grew past {limit} bytes while read')
+            chunks.append(block)
+    finally:
+        os.close(fd)
+
+
+def find_receipt(directory, label, created, updated, pinned_files):
+    """The one reconcile receipt of label, read through the opened receipt directory, as read: ({path,
+    receiptSha256, receiptType, label, at, patcher}, its entries)."""
+    if not (isinstance(directory, str) and directory.startswith('/') and os.path.normpath(directory) == directory):
+        raise Refused(f'the recipe\'s receiptDir {directory!r} is not a normalized absolute path')
+    try:
+        dir_fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    except FileNotFoundError:
+        raise Refused(f'the receipt directory {directory} does not exist') from None
+    except OSError:
+        raise Refused(f'the receipt directory {directory} is not a plain directory') from None
+    try:
+        matches = []
+        with os.scandir(dir_fd) as entries:
+            names = sorted(e.name for e in entries)
+        for name in names:
+            if not name.endswith(f'-{label}.json') or name == f'-{label}.json':
+                continue
+            try:
+                data = read_nofollow(name, dir_fd)
+            except OSError:
+                raise Refused(f'{name} in the receipt directory is not a regular file') from None
+            try:
+                record = strict_json(data)
+            except ValueError as error:
+                raise Refused(f'{name} in the receipt directory is not a JSON document ({error})') from None
+            if not isinstance(record, dict):
+                raise Refused(f'{name} in the receipt directory is not a JSON object')
+            if record.get('receiptType') == 'reconcile' and record.get('label') == label:
+                matches.append((name, data, record))
+    finally:
+        os.close(dir_fd)
     if len(matches) != 1:
         raise Refused(f'{len(matches)} reconcile receipts of label {label} in {directory}; exactly one is required')
-    path, data, record = matches[0]
+    name, data, record = matches[0]
     if not (utc(record.get('at')) and created <= record['at'] <= updated):
-        raise Refused(f'{Path(path).name}: its at is not within [createdAt, updatedAt] of the run')
+        raise Refused(f'{name}: its at is not within [createdAt, updatedAt] of the run')
     patcher = record.get('patcher')
     if not (isinstance(patcher, dict) and set(patcher) == {'patcher', 'sha256'} and patcher['patcher'] == 'trusted'
-            and isinstance(patcher['sha256'], dict)
+            and isinstance(patcher['sha256'], dict) and sorted(patcher['sha256']) == sorted(pinned_files)
             and all(isinstance(v, str) and SHA256.fullmatch(v) for v in patcher['sha256'].values())):
-        raise Refused(f'{Path(path).name} does not record the trusted patcher with its files\' sha256')
-    return {'path': os.path.normpath(os.path.abspath(path)), 'receiptSha256': sha256(data), 'receiptType': 'reconcile',
-            'label': label, 'at': record['at'], 'patcher': {'patcher': 'trusted', 'sha256': dict(patcher['sha256'])}}
+        raise Refused(f'{name} does not record the trusted patcher with its three files\' sha256')
+    entries = record.get('entries', {})
+    if not isinstance(entries, dict):
+        raise Refused(f'{name}: its entries are not an object')
+    return ({'path': f'{directory}/{name}', 'receiptSha256': sha256(data), 'receiptType': 'reconcile', 'label': label,
+             'at': record['at'], 'patcher': {'patcher': 'trusted', 'sha256': dict(patcher['sha256'])}}, entries)
 
 
 def observed(contract, root, rev):
     """base.bundleReport.observed from rev's history only; base.bundleContent is never read."""
     roles, registration = contract['overlayRoles'], contract['base']['registration']
-    prefixes = roles['required'].get('prefixes')
-    if not (isinstance(prefixes, list) and prefixes and all(isinstance(p, str) and p.endswith('/') for p in prefixes)):
-        raise Invalid('the contract states no required overlay prefixes (overlayRoles.required.prefixes), so '
-                      'observed.overlays cannot be computed from data')
-    patches = [{'project': o['project'], 'name': o['name'], 'sha256': sha256(blob(root, rev, f'os/patches/{o["name"]}'))}
-               for o in registration['order']]
-    projects = tuple(p['path'] + '/' for p in contract['projects'])
+    prefixes = tuple(roles['required']['prefixes'])
+    patches = [{'project': o['project'], 'name': o['name'],
+                'sha256': sha256(blob(root, rev, f'os/patches/{o["name"]}'))} for o in registration['order']]
+    projects = tuple(p['path'] for p in contract['projects'])
     allowed = set(roles['notAnInput']['targets'])
     overlays, not_input, unclassified = [], [], []
     for path, (mode, kind) in sorted(tree(root, rev, 'os/overlays').items()):
         target = path[len('os/overlays/'):]
-        if not target.startswith(projects):
+        if not any(target == p or target.startswith(p + '/') for p in projects):
             continue  # outside the three projects: neither observed nor unclassified
-        if kind != 'blob' or mode not in OVERLAY_MODES:
-            unclassified.append(target)  # a link or a submodule is never an overlay of these projects
-        elif target.startswith(tuple(prefixes)):
-            overlays.append({'target': target, 'sha256': sha256(blob(root, rev, path))})
+        if kind != 'blob' or mode != '100644' or target in projects:
+            unclassified.append(target)  # a link, submodule, executable or a file at a project's own path
+        elif target.startswith(prefixes):
+            overlays.append({'target': target, 'sha256': sha256(blob(root, rev, path, ('100644',)))})
         elif target in allowed:
             not_input.append(target)
         else:
@@ -215,61 +347,94 @@ def observed(contract, root, rev):
     return {'patches': patches, 'overlays': overlays, 'notAnInputOverlays': not_input, 'unclassified': unclassified}
 
 
-def produce(run_path, root=ROOT, main_ref='origin/main', contract=None, receipt_dir=None):
-    """The report, every value read as described above. receipt_dir is only for tests: it otherwise comes from
-    headSha's recipe."""
+def produce(root=ROOT, contract=None):
+    """(the report, the origin/main commit onMain was read against), every value read as described above."""
     contract = contract or load_contract(root)
+    check_contract(contract)
     registration = contract['base']['registration']
-    run, binding = load_run(run_path)
+    source = registration_source(contract)
+    top = git(root, 'rev-parse', '--show-toplevel').decode().strip()
+    if os.path.realpath(top) != os.path.realpath(root):
+        raise Refused(f'{root} is not the top of its own checkout')
+    if git(root, 'rev-parse', '--is-shallow-repository').strip() != b'false':
+        raise Refused(f'{root} is a shallow checkout: whether a commit is on {MAIN_REF} needs its whole history')
+    revision = commit_of(root, 'HEAD')
+    main = commit_of(root, MAIN_REF)
+    if revision is None or main is None:
+        raise Refused(f'this checkout has no HEAD commit or no {MAIN_REF}')
+    own = (Path(root)/PRODUCER).read_bytes()
+    if blob(root, revision, PRODUCER) != own:
+        raise Refused(f'{PRODUCER} is not the committed producer at this checkout\'s HEAD')
+    if not is_ancestor(root, revision, main):
+        raise Refused(f'the producer\'s HEAD {revision[:12]} is not on {MAIN_REF}: not a reviewed commit')
+    run, binding = load_run(root, revision)
     head = run['headSha']
-    kind = subprocess.run(['git', '-C', str(root), 'cat-file', '-t', head], env=GIT_ENV, capture_output=True)
-    if kind.returncode or kind.stdout.strip() != b'commit':
-        raise Refused(f'headSha {head} is not a commit of this checkout (a checkout with that history is needed)')
-    ancestor = subprocess.run(['git', '-C', str(root), 'merge-base', '--is-ancestor', head, main_ref], env=GIT_ENV,
-                              capture_output=True).returncode
-    if ancestor not in (0, 1):
-        raise Refused(f'{main_ref} is not a ref of this checkout')
+    if commit_of(root, head) != head:
+        raise Refused(f'headSha {head} is not exactly a commit of this checkout (a checkout with that history is '
+                      'needed)')
+    on_main = is_ancestor(root, head, main)
+    checked_out_as_committed(root, head)
     recipe_bytes = blob(root, head, RECIPE)
-    reconcile = json.loads(recipe_bytes)['host']['integrate']['reconcile']
-    receipt = find_receipt(receipt_dir or reconcile['receiptDir'], run['label'], run['createdAt'], run['updatedAt'])
+    try:
+        reconcile = strict_json(recipe_bytes)['host']['integrate']['reconcile']
+        apply_args, patcher_kind, receipt_dir = reconcile['applyArgs'], reconcile['patcher'], reconcile['receiptDir']
+    except (ValueError, KeyError, TypeError):
+        raise Refused(f'{head[:12]}:{RECIPE} has no host.integrate.reconcile of the expected shape') from None
     pins = registration['patcher']['sha256']
     files = {name: sha256(blob(root, head, f'scripts/{name}')) for name in sorted(pins)}
     seen = observed(contract, root, head)  # from history, before anything of base.bundleContent (never read)
-    own = (Path(root)/PRODUCER).read_bytes()
-    if blob(root, 'HEAD', PRODUCER) != own:
-        raise Refused(f'{PRODUCER} is not the committed producer at this checkout\'s HEAD')
-    return {'kind': REPORT_KIND, 'schemaVersion': REPORT_VERSION,
-            'producer': {'path': PRODUCER, 'sha256': sha256(own), 'roseRevision': git(root, 'rev-parse', 'HEAD').decode().strip()},
-            'run': {**run, 'bindingSha256': binding},
-            'receipt': receipt,
-            'candidate': {'commit': head, 'onMain': ancestor == 0, 'frankelConfigSha256': sha256(recipe_bytes),
-                          'applyArgs': reconcile['applyArgs'], 'patcherKind': reconcile['patcher']},
-            'registration': {'source': 'base.registration',
-                             'patcherMatchesPin': receipt['patcher'] == registration['patcher'] and files == pins,
-                             'applyArgsMatchPin': reconcile['applyArgs'] == registration['applyArgs']},
-            'observed': seen}
+    receipt, entries = find_receipt(receipt_dir, run['label'], run['createdAt'], run['updatedAt'], pins)
+    for overlay in seen['overlays']:  # entries are association only: where they name an overlay, they must agree
+        entry = entries.get(overlay['target'])
+        if isinstance(entry, dict) and entry.get('action') == 'installed' and entry.get('after') != overlay['sha256']:
+            raise Refused(f'the receipt installed other bytes at {overlay["target"]} than headSha\'s overlay')
+    patcher_matches = receipt['patcher'] == registration['patcher'] and files == pins
+    apply_matches = apply_args == registration['applyArgs']
+    if not (patcher_matches and apply_matches):  # contractDerived: the names and order are used only once both hold
+        raise Refused('the receipt\'s patcher or the run\'s applyArgs are not the registration\'s pins, so the '
+                      'contract\'s patch names and order cannot be used (contractDerived)')
+    report = {'kind': REPORT_KIND, 'schemaVersion': REPORT_VERSION,
+              'producer': {'path': PRODUCER, 'sha256': sha256(own), 'roseRevision': revision},
+              'run': {**run, 'bindingSha256': binding},
+              'receipt': receipt,
+              'candidate': {'commit': head, 'onMain': on_main, 'frankelConfigSha256': sha256(recipe_bytes),
+                            'applyArgs': apply_args, 'patcherKind': patcher_kind},
+              'registration': {'source': source, 'patcherMatchesPin': True, 'applyArgsMatchPin': True},
+              'observed': seen}
+    return report, main
 
 
 def write_once(path, document):
+    """Writes document to the new path whole or not at all (a temporary file beside it, fsync, then a hard link that
+    fails if the path exists); returns the sha256 of the bytes written."""
     data = (json.dumps(document, indent=2, sort_keys=True) + '\n').encode()
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
-    with os.fdopen(fd, 'wb') as f:
-        f.write(data)
+    path = Path(path)
+    staging = path.with_name(f'.{path.name}.{os.getpid()}.new')
+    fd = os.open(staging, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
+    try:
+        with os.fdopen(fd, 'wb') as f:
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+        os.link(staging, path, follow_symlinks=False)
+    finally:
+        os.unlink(staging)
     return sha256(data)
 
 
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument('command', choices=('produce',))
-    p.add_argument('--run', default=str(ROOT/RUN))
     p.add_argument('--out', required=True)
-    p.add_argument('--main-ref', default='origin/main')
     a = p.parse_args(argv)
     try:
-        if not os.path.isabs(a.out):
-            raise Invalid('--out must be an absolute path')
-        report = produce(a.run, main_ref=a.main_ref)
-        print(json.dumps({'verdict': 'WRITTEN', 'path': a.out, 'sha256': write_once(a.out, report)}))
+        if not sys.flags.isolated:
+            raise Invalid('run the producer as python3 -I, so nothing beside it on the path is imported')
+        if not os.path.isabs(a.out) or os.path.normpath(a.out) != a.out:
+            raise Invalid('--out must be a normalized absolute path')
+        report, main_commit = produce()
+        print(json.dumps({'verdict': 'WRITTEN', 'path': a.out, 'sha256': write_once(a.out, report),
+                          'originMain': main_commit}))
         return 0
     except Unbound as error:
         print(json.dumps({'verdict': 'SETUP_MISSING', 'error': str(error)}), file=sys.stderr)
@@ -277,7 +442,7 @@ def main(argv=None):
     except Refused as error:
         print(json.dumps({'verdict': 'REFUSED', 'error': str(error)}), file=sys.stderr)
         return 3
-    except (Invalid, FileExistsError, KeyError, ValueError) as error:
+    except (Invalid, OSError, KeyError, TypeError, ValueError, AttributeError) as error:
         print(json.dumps({'verdict': 'INVALID', 'error': f'{type(error).__name__}: {error}'}), file=sys.stderr)
         return 2
 
