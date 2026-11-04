@@ -32,7 +32,8 @@ class UpdaterChannelPatchTest(unittest.TestCase):
         self.assertEqual(sorted(re.findall(r'^diff --git a/(\S+) ', PATCH, re.M)), sorted([
             'res/values/arrays.xml', 'res/values/config.xml', 'res/values/strings.xml',
             'src/app/seamlessupdate/client/BootReceiver.java', 'src/app/seamlessupdate/client/NotificationHandler.java',
-            'src/app/seamlessupdate/client/Service.java', 'src/app/seamlessupdate/client/Settings.java']))
+            'src/app/seamlessupdate/client/Service.java', 'src/app/seamlessupdate/client/Settings.java',
+            'src/app/seamlessupdate/client/SecurityPreviewSettings.java']))
 
     def test_beta_keeps_the_existing_stable_wire_channel(self):
         text = '\n'.join(new_side('res/values/arrays.xml'))

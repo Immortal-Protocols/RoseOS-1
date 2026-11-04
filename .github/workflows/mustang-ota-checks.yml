@@ -19,6 +19,7 @@ jobs:
       - run: python3 os/tests/test_updater_channels.py && python3 os/tests/test_updater_releases.py
       - run: |
           mkdir -p "$RUNNER_TEMP/updater-tests"
-          java -m jdk.compiler/com.sun.tools.javac.Main -d "$RUNNER_TEMP/updater-tests" os/overlays/packages/apps/Updater/src/app/seamlessupdate/client/RoseReleases.java os/tests/RoseReleasesTest.java os/tests/MustangReleasesTest.java
+          java -m jdk.compiler/com.sun.tools.javac.Main -d "$RUNNER_TEMP/updater-tests" os/overlays/packages/apps/Updater/src/app/seamlessupdate/client/RoseChannels.java os/overlays/packages/apps/Updater/src/app/seamlessupdate/client/RoseReleases.java os/tests/RoseChannelsTest.java os/tests/RoseReleasesTest.java os/tests/MustangReleasesTest.java
+          java -cp "$RUNNER_TEMP/updater-tests" app.seamlessupdate.client.RoseChannelsTest
           java -cp "$RUNNER_TEMP/updater-tests" app.seamlessupdate.client.RoseReleasesTest
           java -cp "$RUNNER_TEMP/updater-tests" app.seamlessupdate.client.MustangReleasesTest

@@ -40,6 +40,55 @@ confirmed original instance `685707771105568194` **TERMINATED**, last stop
 demonstrated** remain pending. Earlier sprint omissions and the candidate
 label remain; no automatic flag or phone action was enabled.
 
+## Reported phone channel warning and source correction
+
+After publication Nathan reported "release channel not available now", then
+confirmed **security preview was the cause**. This confirms the reported
+channel-selection problem, not OTA discovery, download, installation or reboot.
+
+Beta is wire channel `stable`, the only entry in the actual packaged
+`channel_published` array. The
+[pinned setup screen](https://github.com/GrapheneOS/platform_packages_apps_Updater/blob/52c34a55bd26f7856f9141d7e4237397084d6936/src/app/seamlessupdate/client/SecurityPreviewSettings.java)
+defaults its unset security-preview checkbox to true, then writes `1` on
+Save/Next. Ordinary `Settings` uses false while the preference is still unset;
+these are different stages. Once enabled, `Settings.getChannel` appends
+`-security-preview`: Beta becomes `stable-security-preview`, which the local
+published-channel gate refuses before release discovery. A normal Beta feed
+does not authorize a preview feed. Prod and Alpha are also unpublished.
+
+Read-only anonymous observations found the complete public index on two pages
+(100 + 2 entries, each below the two-MiB cap), and the complete Mustang release.
+The actual Java channel/release helpers select `mustang-2026110401` for ordinary
+`stable` from the reported baseline. They correctly refuse the preview variant.
+These observations establish the worker's public route and selection rules,
+not the phone's network state. Nathan's reply establishes the phone cause.
+
+The source correction uses the declared published feeds for an unset setup
+default, preserves saved opt-ins/opt-outs, and explains an unavailable preview
+when its normal channel is available. It never silently falls back or changes
+the selected channel. The targeted OTA check workflow now includes the actual
+channel-policy tests as well as release selection. This is a **source fix for
+a future image**: the already published 2026110401 and baseline 2026110302 have
+the same recorded Updater APK hash and are not modified by this source change.
+No new build, release, phone setting or infrastructure operation was performed.
+The normal Beta diagnostic is coordinated by Chief with Nathan; record actual
+discovery and successful installation separately when reported.
+
+Correction validation: **45 targeted Python tests** and **49 Java checks**
+(23 channel-policy + 26 release-selection) passed. The channel and release
+patches apply in order to the exact pinned upstream files after their Git blob
+hashes were verified; patched XML parses and the underlying source whitespace
+check passes. Unified-diff blank context prefixes are preserved in the patch.
+The revised targeted workflow parses, but its new channel step has not run on
+GitHub yet. No Android compile or rendered setup/notification test was run.
+
+Remaining test plan: record Nathan's current normal-Beta discovery/download/
+install/reboot result against 2026110401, independently of this future source
+fix. When a separately authorized image contains the correction, validate its
+setup and saved-state restoration with unset and explicit preview preferences,
+and verify the unavailable-preview notification. Source policy checks do not
+replace those Android/phone observations.
+
 ## Baseline and current evidence
 
 - Native baseline: `mustang` / Pixel 10 Pro XL, build `2026110302`, timestamp
