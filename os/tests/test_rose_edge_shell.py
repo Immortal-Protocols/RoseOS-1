@@ -1,0 +1,255 @@
+"""#410 resize on release, the WMShell side (OS Core), as agreed with OS Product on #410.
+
+os/patches/rose-edge-wmshell.patch adds the Rose raised edge to WMShell: IRoseEdge/IRoseEdgeListener, exported only
+through ShellController's external interfaces (MANAGE_ACTIVITY_TASKS on every call), and RoseEdgeController, which
+shrinks the default task display area to (0, 0, W, H - liftPx) so the foreground app gets real, smaller bounds with its
+width unchanged. All rules are in the pure RoseEdgePolicy.
+
+These tests:
+- apply the patch on the pinned WMShellModule, a file no registered Rose patch touches;
+- run the production RoseEdgePolicy through RoseEdgePolicyTest;
+- compile RoseEdgeController against signature stubs copied from pinned 84183aff, with the listener and binder
+  interfaces generated from the patched AIDL;
+- check the wiring, caller gates, geometry and lowering hooks in the patched sources.
+
+The patch is deliberately not registered in any build yet: overlays and registered patches go into every OS build,
+and WMShell has not been compiled for real. Source and fixture logic only: no framework build, device or runtime."""
+from pathlib import Path
+import hashlib
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+import unittest
+
+ROOT = Path(__file__).resolve().parents[2]
+PATCH = ROOT/'os/patches/rose-edge-wmshell.patch'
+HARNESS = ROOT/'os/tests/rose-edge'
+SHELL = 'libs/WindowManager/Shell/src/com/android/wm/shell'
+MODULE = f'{SHELL}/dagger/WMShellModule.java'
+EDGE = f'{SHELL}/roseedge'
+PINNED = {MODULE: (ROOT/'os/tests/fixtures/rose-edge/WMShellModule.java',
+    '62d968a9484b7cc64dcf599996be38125b0aba0ceddd60bf75efec3afbd744d9')}
+CREATED = ('IRoseEdge.aidl', 'IRoseEdgeListener.aidl', 'RoseEdgeController.java', 'RoseEdgePolicy.java')
+
+
+def flat(text):
+    return re.sub(r'\s+', ' ', text)
+
+
+def method(source, signature):
+    """The body of the first method whose declaration contains signature, by brace matching."""
+    start = source.index(signature)
+    brace = source.index('{', start)
+    depth = 0
+    for i in range(brace, len(source)):
+        depth += {'{': 1, '}': -1}.get(source[i], 0)
+        if depth == 0:
+            return source[start:i + 1]
+    raise ValueError(signature)
+
+
+def aidl_to_java(text):
+    """The Java interface an AIDL interface file declares (methods only), for an offline compile of its users."""
+    text = re.sub(r'/\*.*?\*/', '', text, flags=re.S)
+    package = re.search(r'package ([\w.]+);', text).group(1)
+    name, body = re.search(r'interface (\w+) \{(.*)\}', text, re.S).groups()
+    methods = []
+    for m in body.split(';'):
+        m = re.sub(r'\s*=\s*\d+\s*$', '', m.strip())
+        if not m:
+            continue
+        m = re.sub(r'\boneway\s+', '', m)
+        m = re.sub(r'\b(in|out|inout)\s+', '', m)
+        methods.append(f'    {m} throws android.os.RemoteException;\n')
+    imports = ''.join(f'import {i};\n' for i in re.findall(r'import ([\w.]+);', text))
+    stub = (f'    String DESCRIPTOR = "{package}.{name}";\n    abstract class Stub extends android.os.Binder '
+        f'implements {name} {{ @Override public android.os.IBinder asBinder() {{ return this; }} }}\n')
+    return (f'package {package};\n{imports}public interface {name} extends android.os.IInterface {{\n'
+        + stub + ''.join(methods) + '}\n')
+
+
+class RoseEdgeShellTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = Path(tempfile.mkdtemp(prefix='rose-edge-'))
+        cls.tree = cls.tmp/'frameworks-base'
+        target = cls.tree/MODULE
+        target.parent.mkdir(parents=True)
+        shutil.copyfile(PINNED[MODULE][0], target)
+        subprocess.run(['git', 'init', '-q', str(cls.tree)], check=True)
+        cls.applied = []
+        for patch in (PATCH,):
+            result = subprocess.run(['git', '-C', str(cls.tree), 'apply', f'--include={MODULE}', f'--include={EDGE}/*',
+                str(patch)], capture_output=True, text=True)
+            cls.applied.append((patch.name, result.returncode, result.stderr))
+        cls.module = (cls.tree/MODULE).read_text()
+        cls.source = {name: (cls.tree/EDGE/name).read_text() for name in CREATED}
+        cls.controller = cls.source['RoseEdgeController.java']
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmp, True)
+
+    def test_fixture_is_pinned_and_the_patch_applies(self):
+        for path, (fixture, digest) in PINNED.items():
+            self.assertEqual(hashlib.sha256(fixture.read_bytes()).hexdigest(), digest, path)
+        for name, code, stderr in self.applied:
+            self.assertEqual(code, 0, f'{name}: {stderr}')
+        # The patch touches only the shell's handheld module and its own new package.
+        touched = re.findall(r'^\+\+\+ b/(\S+)', PATCH.read_text(), re.M)
+        self.assertEqual(sorted(touched), sorted([MODULE] + [f'{EDGE}/{n}' for n in CREATED]))
+        # No file it touches is touched by any other Rose patch, so host-reconcile's history of Rose's own
+        # frameworks/base output (historical_outputs skips files touched outside its sequence) is unaffected.
+        for other in (ROOT/'os/patches').glob('*.patch'):
+            if other != PATCH:
+                theirs = set(re.findall(r'^\+\+\+ b/(\S+)', other.read_text(errors='replace'), re.M))
+                self.assertFalse(theirs & set(touched), other.name)
+
+    def test_inert_until_a_real_compile_registers_it(self):
+        # Every registered patch and every overlay goes into each OS build. WMShell has not been compiled for real,
+        # so the patch stays out of the apply sequence and nothing is added under os/overlays.
+        self.assertNotIn('rose-edge-wmshell', (ROOT/'scripts/apply-os-changes.py').read_text())
+        self.assertNotIn('rose-edge-wmshell', (ROOT/'scripts/host-reconcile.py').read_text())
+        self.assertFalse(list((ROOT/'os/overlays').rglob('roseedge')))
+        # Default off even once registered.
+        self.assertIn('static final String ENABLED_PROPERTY = "persist.wm.debug.rose_edge";', self.controller)
+        self.assertIn('return SystemProperties.getBoolean(ENABLED_PROPERTY, false);', self.controller)
+
+    def build(self):
+        out = self.tmp/'classes'
+        if out.is_dir():
+            return out
+        gen = self.tmp/'gen'/EDGE.replace('libs/WindowManager/Shell/src/', '')
+        gen.mkdir(parents=True)
+        for name in ('IRoseEdge', 'IRoseEdgeListener'):
+            (gen/f'{name}.java').write_text(aidl_to_java(self.source[f'{name}.aidl']))
+        sources = [str(p) for p in sorted((HARNESS/'stubs').rglob('*.java'))]
+        sources += [str(p) for p in sorted((self.tmp/'gen').rglob('*.java'))]
+        sources += [str(self.tree/EDGE/'RoseEdgePolicy.java'), str(self.tree/EDGE/'RoseEdgeController.java'),
+            str(HARNESS/'RoseEdgePolicyTest.java')]
+        compiled = subprocess.run(['java', '-m', 'jdk.compiler/com.sun.tools.javac.Main', '-nowarn', '-d', str(out),
+            *sources], capture_output=True, text=True)
+        self.assertEqual(compiled.returncode, 0, compiled.stderr)
+        return out
+
+    def test_the_policy_meets_the_agreed_rules(self):
+        run = subprocess.run(['java', '-cp', str(self.build()), 'com.android.wm.shell.roseedge.RoseEdgePolicyTest'],
+            capture_output=True, text=True)
+        self.assertEqual(run.returncode, 0, run.stderr)
+        self.assertRegex(run.stdout, r'RoseEdgePolicyTest: \d+ checks passed')
+
+    def test_the_controller_compiles_against_the_pinned_shell_signatures_and_its_own_aidl(self):
+        # Stubs mirror pinned 84183aff signatures; the shell's own small interfaces are verbatim copies.
+        self.assertTrue((self.build()/'com/android/wm/shell/roseedge/RoseEdgeController.class').is_file())
+
+    def test_the_interface_is_the_one_agreed_on_410(self):
+        edge, listener = flat(self.source['IRoseEdge.aidl']), flat(self.source['IRoseEdgeListener.aidl'])
+        self.assertIn('package com.android.wm.shell.roseedge;', edge)
+        self.assertIn('oneway void raise(int displayId, int taskId, int liftPx, IRoseEdgeListener listener) = 1;', edge)
+        self.assertIn('oneway void lower(int displayId) = 2;', edge)
+        self.assertIn('oneway interface IRoseEdgeListener', listener)
+        self.assertIn('void onRaised(int displayId, int taskId, in Rect appBounds) = 1;', listener)
+        self.assertIn('void onRefused(int displayId, int taskId, int reason) = 2;', listener)
+        self.assertIn('void onLowered(int displayId, int reason) = 3;', listener)
+        policy = self.source['RoseEdgePolicy.java']
+        reasons = dict(re.findall(r'public static final int ((?:REFUSED|LOWERED)_\w+) = (\d+);', policy))
+        self.assertEqual({k: int(v) for k, v in reasons.items()}, {
+            'REFUSED_NOT_TOP_TASK': 1, 'REFUSED_NOT_RESIZEABLE': 2, 'REFUSED_LOCKED': 3, 'REFUSED_ROTATION': 4,
+            'REFUSED_MULTI_WINDOW': 5, 'REFUSED_BUSY': 6, 'REFUSED_LIFT': 7, 'REFUSED_DISABLED': 8,
+            'REFUSED_DISPLAY': 9, 'LOWERED_REQUESTED': 0, 'LOWERED_TASK': 1, 'LOWERED_HOME': 2,
+            'LOWERED_KEYGUARD': 3, 'LOWERED_DISPLAY': 4, 'LOWERED_IME': 5, 'LOWERED_CALLER_DIED': 6,
+            'LOWERED_USER': 7})
+
+    def test_exported_only_to_the_recents_component_with_the_existing_permission(self):
+        c = flat(self.controller)
+        self.assertIn('mShellController.addExternalInterface(IRoseEdge.DESCRIPTOR, this::createExternalInterface, '
+            'this);', c)
+        impl = method(self.controller, 'private static class IRoseEdgeImpl')
+        self.assertEqual(impl.count('executeRemoteCallWithTaskPermission(mController,'), 2,
+            'raise and lower both check MANAGE_ACTIVITY_TASKS on the caller')
+        self.assertEqual(len(re.findall(r'public void (\w+)\(', impl)), 3, 'invalidate, raise and lower only')
+        patch = PATCH.read_text()
+        for token in ('clearCallingIdentity', 'withCleanCallingIdentity', 'uses-permission', 'grantPermission',
+                'enforceCallingOrSelfPermission', 'Binder.getCallingUid'):
+            self.assertFalse(token in patch, token)
+
+    def test_real_bounds_full_width_and_never_scaled(self):
+        raise_ = method(self.controller, 'private void raise(int displayId')
+        self.assertIn('RoseEdgePolicy.refusal(displayId, taskId, liftPx, conditions(displayId, layout),', raise_)
+        self.assertLess(raise_.index('refused(listener, displayId, taskId, reason);'),
+            raise_.index('wct.setBounds(tda.token, bounds);'), 'a refusal changes nothing')
+        self.assertIn('RoseEdgePolicy.raisedBounds(layout.width(), layout.height(), liftPx)', raise_)
+        policy = flat(self.source['RoseEdgePolicy.java'])
+        self.assertIn('return new int[] {0, 0, displayWidth, displayHeight - liftPx};', policy)
+        lower = method(self.controller, 'private void lowerNow(int reason)')
+        self.assertIn('wct.setBounds(tda.token, new Rect());', lower)
+        # One TRANSIT_CHANGE per raise or lower, played by this handler alone, with no animation of any kind.
+        self.assertEqual(self.controller.count('mTransitions.startTransition(TRANSIT_CHANGE, wct, this)'), 1)
+        anim = method(self.controller, 'public boolean startAnimation(')
+        self.assertIn('if (applied == null) return false;', anim, 'other transitions are not ours')
+        self.assertIn('startTransaction.apply(); finishCallback.onTransitionFinished(null);', flat(anim))
+        code = re.sub(r'//[^\n]*', '', re.sub(r'/\*.*?\*/', '', self.controller, flags=re.S))
+        for token in ('setScale', 'setMatrix', 'setWindowCrop', 'setWindowingMode', 'setPosition', 'Animator',
+                'ScreenCapture', 'screenshot', 'captureLayers'):
+            self.assertFalse(token in code, token)
+        # Only the default task display area organized by the shell is ever changed.
+        self.assertEqual(len(re.findall(r'wct\.setBounds\(', self.controller)), 3, 'raise, lower and the restart reset')
+        self.assertEqual(self.controller.count('mRootTdaOrganizer.getDisplayAreaInfo(displayId)'), 2)
+
+    def test_every_lowering_event_is_wired_to_the_policy(self):
+        hooks = {
+            'public void onFocusTaskChanged(': 'mState.onFocusChanged(taskState(taskInfo),',
+            'public void onTaskInfoChanged(': 'mState.onTaskInfoChanged(taskState(taskInfo))',
+            'public void onTaskVanished(': 'mState.onTaskVanished(taskInfo.taskId)',
+            'public void onKeyguardVisibilityChanged(': 'mState.onKeyguard(visible)',
+            'public void onUserChanged(': 'mState.onUserChanged()',
+            'public void onDisplayConfigurationChanged(': 'mState.onDisplayChanged(displayId)',
+            'public void onDisplayRemoved(': 'mState.onDisplayChanged(displayId)',
+            'public void onImeVisibilityChanged(': 'mState.onImeVisibility(displayId, isShowing)',
+            'private void requestLower(': 'mState.onLowerRequested(displayId)',
+        }
+        for signature, call in hooks.items():
+            self.assertIn(call, flat(method(self.controller, signature)), signature)
+        for signature in ('public void onFocusTaskChanged(', 'public void onTaskInfoChanged(',
+                'public void onTaskVanished('):
+            self.assertIn('mMainExecutor.execute(() -> {', method(self.controller, signature),
+                'posted: never inside ShellTaskOrganizer\'s lock')
+        init = flat(method(self.controller, 'private void onInit()'))
+        for registration in ('addKeyguardChangeListener(this)', 'addUserChangeListener(this)', 'addFocusListener(this)',
+                'addTaskInfoChangedListener(this)', 'addTaskVanishedListener(this)', 'addDisplayWindowListener(this)',
+                'addPositionProcessor(this)', 'mTransitions.addHandler(this)',
+                'mRootTdaOrganizer.registerListener(Display.DEFAULT_DISPLAY, this)'):
+            self.assertIn(registration, init)
+        # The owner's death, and Launcher3 re-binding, lower; a lower is never lost even if its transition aborts.
+        self.assertIn('lowerIfNeeded(mState.onOwnerGone(binder))', flat(method(self.controller, 'private boolean linkOwner(')))
+        self.assertIn('lowerNow(RoseEdgePolicy.LOWERED_CALLER_DIED)',
+            method(self.controller, 'private void onInterfaceInvalidated()'))
+        self.assertIn('controller::onInterfaceInvalidated', method(self.controller, 'public void invalidate()'))
+        self.assertIn('mRootTdaOrganizer.applyTransaction(applied.mWct);',
+            method(self.controller, 'private void onAborted('))
+        # A shell that died raised leaves the server's requested bounds behind: cleared when the shell organizes again.
+        appeared = flat(method(self.controller, 'public void onDisplayAreaAppeared('))
+        self.assertIn('if (mState.raised() || !enabled()) return;', appeared)
+        self.assertIn('wct.setBounds(displayAreaInfo.token, new Rect()); mRootTdaOrganizer.applyTransaction(wct);',
+            appeared)
+        # The keyguard is also read live at raise time.
+        self.assertIn('mKeyguardVisible || keyguardLocked()', self.controller)
+
+    def test_wired_into_the_shell_once(self):
+        module = flat(self.module)
+        self.assertIn('import com.android.wm.shell.roseedge.RoseEdgeController;', self.module)
+        self.assertIn('static RoseEdgeController provideRoseEdgeController(Context context, ShellInit shellInit, '
+            'ShellController shellController, ShellTaskOrganizer shellTaskOrganizer, RootTaskDisplayAreaOrganizer '
+            'rootTaskDisplayAreaOrganizer, DisplayController displayController, DisplayImeController '
+            'displayImeController, Transitions transitions, @ShellMainThread ShellExecutor mainExecutor) {', module)
+        self.assertEqual(self.module.count('new RoseEdgeController('), 1)
+        create = method(self.module, 'static Object provideIndependentShellComponentsToCreate(')
+        self.assertIn('@ShellCreateTriggerOverride', self.module[self.module.rindex('@WMSingleton',
+            0, self.module.index('static Object provideIndependentShellComponentsToCreate(')):])
+        self.assertIn('RoseEdgeController roseEdgeController) {', create, 'created with the shell')
+
+
+if __name__ == '__main__':
+    unittest.main()

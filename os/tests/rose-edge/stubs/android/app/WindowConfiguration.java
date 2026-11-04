@@ -1,0 +1,1 @@
+package android.app; public class WindowConfiguration { public static final int WINDOWING_MODE_UNDEFINED=0, WINDOWING_MODE_FULLSCREEN=1, ACTIVITY_TYPE_STANDARD=1, ACTIVITY_TYPE_HOME=2, ACTIVITY_TYPE_RECENTS=3; }
