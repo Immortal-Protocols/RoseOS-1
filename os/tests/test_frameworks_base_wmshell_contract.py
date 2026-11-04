@@ -48,7 +48,7 @@ class FrameworksBaseWmshellContractTest(unittest.TestCase):
 
     def test_the_candidate_is_os_cores_patch_on_main(self):
         delta = self.manifest['candidateDelta']
-        self.assertEqual((delta['pr'], delta['commit']), (528, 'bf6a9ed9a8ec03eaa296ee98b292f9002f2486e7'))
+        self.assertEqual((delta['pr'], delta['commit']), (540, 'd8f19fe3c20ce0361a555647da7e32aeeba26b59'))
         patch = (ROOT/'os/patches/rose-edge-wmshell.patch').read_bytes()
         self.assertEqual([p['name'] for p in delta['patches']], ['rose-edge-wmshell.patch'])
         self.assertEqual(delta['patches'][0]['sha256'], W.C.sha256(patch))
@@ -160,12 +160,12 @@ class FrameworksBaseWmshellContractTest(unittest.TestCase):
         result = subprocess.run([sys.executable, str(ROOT/'scripts/launcher3-compile-contract.py')], capture_output=True,
             text=True, cwd=ROOT)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        # The shared generator moves the Launcher3 contract to schema 3; this one stays at schema 2, byte for byte as
-        # Release pinned it, until its own coordinated re-pin.
+        # The shared generator moves the Launcher3 contract to schema 3; this one stays at schema 2. Its bytes change
+        # only with a rebind OS Core reconfirms (#540: 2373307d... -> c3ba58ca...).
         self.assertEqual(self.manifest['schemaVersion'], 2)
         import hashlib
         self.assertEqual(hashlib.sha256(MANIFEST.read_bytes()).hexdigest(),
-            '2373307d76ffca2f39a25c747205a3d0968332335daa03eb281bed85227901d1')
+            'c3ba58ca6b4566b77173f6338eaf63bee3e344205785e96bc7e8f80d019b7e35')
         self.assertTrue(re.search(r'"target": "Launcher3QuickStepLib"',
             (ROOT/'os/compile-contracts/launcher3-quickstep-lib.json').read_text()))
 
