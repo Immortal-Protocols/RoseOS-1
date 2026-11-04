@@ -153,6 +153,56 @@ pixel-ota. Drafts made outside this workflow must stay recorded as retained
 baselines in `frankel.json`. The publisher's authenticated tag check is the
 final guard.
 
+## Mustang one-button OTA (`mustang-ota`, manual)
+
+**Status.** Source only: no run of this mode has happened. It builds, signs and publishes one newer Mustang (Pixel 10
+Pro XL) OTA in one dispatch, with the existing Mustang jobs. Previously that took two dispatches: `mustang-build`, then
+`mustang-delivery` with the producer's run id typed by hand.
+
+**Click sequence.** GitHub → Actions → **Build & publish latest Pixel 10** → **Run workflow**:
+1. branch `main`;
+2. mode `mustang-ota`;
+3. check **mustang_publish_ota**;
+4. leave every other field at its default;
+5. **Run workflow**.
+
+The guard refuses any candidate, build, app, resume, run or bootstrap pin, and any other publication input.
+
+**What one run does**, in order:
+1. **Guard.** It runs the existing activation and signing-window check (`scripts/mustang_ota.py guard`). This is window
+   check 1: the window must be approved and have at least 30 minutes left. The guard also runs the producer's hosted
+   source check.
+2. **Producer.** The existing `mustang-build` job: baseline observation, a fresh allocation, integration and compile,
+   and its receipts.
+3. **Binding** (`mustang-ota-bind`, hosted, read-only). It runs only after that producer job succeeded.
+   `scripts/mustang-ota-chain.py bind` makes window check 2, then requires all of the following:
+   - attempt 1 of this manual `mustang-ota` dispatch on main;
+   - exactly one successful `mustang-build` job;
+   - exactly one unexpired `mustang-receipts-<run>-1` artifact;
+   - the committed original bootstrap.
+   The signer's `EXPECTED_*` values then come from this run, not from a typed run id.
+4. **Signer.** The existing `mustang-signer` job collects the outputs and observes the baseline. It makes window check 3
+   right before signer login, then signs and stages the OTA.
+5. **Publisher.** The existing `mustang-ota-publisher` job. It is never Latest.
+6. **Cleanup.** It stops the builder only if this run's controller started it.
+
+**Properties:**
+- One run holds the `os-release-frankel` queue from start to finish.
+- No permission is added, and nothing is retried.
+- The automatic dispatcher (`MUSTANG_OTA_AUTO`, `automationEnabled`) is unchanged and does not react to `mustang-ota`
+  runs.
+
+**Before clicking:**
+- `os/ota/mustang.json` must be enabled for publication, with an approved signing read window. The window must have at
+  least 30 minutes left at each of the three checks, so it has to cover the compile and the delivery.
+- `os/build-only/mustang-host.json` must point at the signed apps and background policy intended for this release.
+  Today that is the Frankel attempt it names.
+
+**If a stage fails.** Nothing is retried, and a re-run attempt is never a producer.
+- After a successful producer, deliver it by hand with the existing `mustang-delivery` mode and this run's id, within
+  the receipts' 7 days, once its preconditions hold.
+- The recorded historical collection-fault recovery stays with the manual `mustang-delivery` path only.
+
 ## Retained Rango signing and separate release (source only, runtime unbound)
 
 This route was added in OCT30-INFRA-S015 as source and tests only. Nothing
