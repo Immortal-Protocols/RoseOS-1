@@ -253,7 +253,7 @@ class ContractTest(unittest.TestCase):
         self.assertEqual(patches, ['agent-tray-build-make.patch', 'background-control-build-make.patch',
             'rose-edge-build-make.patch', 'updater-product-build-make.patch'])
         self.assertEqual(products, {'target/product/generic_system.mk', 'target/product/handheld_system_ext.mk',
-            'target/product/media_system.mk', 'target/product/handheld_product.mk'})
+            'target/product/media_system.mk', 'target/product/handheld_product.mk', 'target/product/handheld_system.mk'})
         for name in DEVICES:
             reached = reachable(FIXTURES, f'vendor/adevtool/config/mk/google_devices/device/{name}/device.mk')
             self.assertTrue(products <= reached, name)

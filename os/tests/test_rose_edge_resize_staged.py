@@ -190,8 +190,17 @@ class RoseEdgeResizeStagedTest(unittest.TestCase):
         self.assertIn("if a.agent_tray:projects['build/make'].append('rose-edge-build-make.patch')", block)
         switch = (ROOT/'os/patches/rose-edge-build-make.patch').read_text()
         added = [l[1:] for l in switch.splitlines() if l.startswith('+') and not l.startswith('+++')]
-        self.assertEqual([l for l in added if not l.startswith('#')],
+        self.assertEqual([l for l in added if not l.startswith('#') and l.strip()],
             ['PRODUCT_SYSTEM_PROPERTIES += persist.wm.debug.rose_edge=true'], 'one property, nothing else')
+        # Host reconcile treats a file an earlier integration already changed, and no receipt entry owns, as an owner
+        # change and refuses (frankel run 41857685135 on generic_system.mk). So the switch lives in a product file no
+        # other os/patches patch touches, which is pristine at HEAD on every tree; handheld_system.mk is inherited by
+        # generic_system.mk on every Pixel 10 device (os/tests/test_device_contract.py).
+        target = re.findall(r'^\+\+\+ b/(\S+)', switch, re.M)
+        self.assertEqual(target, ['target/product/handheld_system.mk'])
+        for other in sorted((ROOT/'os/patches').glob('*.patch')):
+            if other.name != 'rose-edge-build-make.patch':
+                self.assertNotIn('b/target/product/handheld_system.mk', other.read_text(errors='replace'), other.name)
         for path in ('scripts/apply-os-changes.py', 'scripts/background_apks.py', 'scripts/integration_copy.py'):
             self.assertNotIn('os/staged', (ROOT/path).read_text(), f'{path} never reads os/staged')
         # E2a's patch and gesture are unchanged from the reviewed candidate e361d1c; E2c replaces State and Swipe.

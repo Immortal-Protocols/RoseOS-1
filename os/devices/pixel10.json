@@ -37,6 +37,7 @@
     "basis": "Every Rose product edit is made to shared build/make products that each device reaches through the inheritance above; no Rose patch or overlay names a Pixel device. Source path only: no compiled APK, APEX or image of blazer or rango exists.",
     "products": {
       "target/product/generic_system.mk": "agent tray property (agent-tray-build-make.patch) and VirtualDeviceManager (background-control-build-make.patch); inherited directly by common/product-common.mk",
+      "target/product/handheld_system.mk": "the raised edge's switch persist.wm.debug.rose_edge (rose-edge-build-make.patch), in a product file no other Rose patch touches so host reconcile installs it; reached generic_system -> handheld_system",
       "target/product/handheld_system_ext.mk": "PixelBackgroundControl controller and the computer-control extension (background-control-build-make.patch); inherited directly",
       "target/product/media_system.mk": "the existing Updater (updater-product-build-make.patch); reached generic_system -> handheld_system -> media_system",
       "target/product/handheld_product.mk": "Rose Agent, Calculator and the other preinstalls (apply-os-changes.py PRODUCT_MAKEFILE); reached aosp_product -> handheld_product"
