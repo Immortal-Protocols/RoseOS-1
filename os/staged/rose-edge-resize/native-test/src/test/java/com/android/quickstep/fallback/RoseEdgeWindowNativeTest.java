@@ -297,4 +297,70 @@ public class RoseEdgeWindowNativeTest {
         assertFalse(RoseEdgeState.isRaised(DISPLAY));
         assertTrue(actions.isEmpty());
     }
+    @Test
+    public void aDragRevealsTheTrayRisingWithTheFingerWithoutTheShell() throws Exception {
+        RoseEdgeState.peek(DISPLAY, 0.25f, 0, RoseEdgeGesture.NONE);
+        idle();
+        RoseEdgeWindow.EdgeView view = window.shownOn(DISPLAY);
+        assertNotNull("the first movement shows the tray", view);
+        view.measure(View.MeasureSpec.makeMeasureSpec(dp(384), View.MeasureSpec.EXACTLY),
+                View.MeasureSpec.makeMeasureSpec(dp(92), View.MeasureSpec.EXACTLY));
+        view.layout(0, 0, dp(384), dp(92));
+        RoseEdgeState.peek(DISPLAY, 0.25f, 0, RoseEdgeGesture.NONE);
+        assertEquals("a quarter revealed: three quarters still below the screen", 0.75f * dp(92),
+                view.getTranslationY(), 0.5f);
+        RoseEdgeState.peek(DISPLAY, 1, 0, RoseEdgeGesture.TRAY);
+        assertEquals("tray stage: fully shown", 0, view.getTranslationY(), 0.01f);
+        assertEquals(1f, view.getAlpha(), 0.001f);
+        RoseEdgeState.peek(DISPLAY, 1, 0.5f, RoseEdgeGesture.TRAY);
+        assertEquals("approaching the switcher: fading", 0.8f, view.getAlpha(), 0.001f);
+        RoseEdgeState.peek(DISPLAY, 1, 1, RoseEdgeGesture.SWITCHER);
+        assertEquals("switcher stage: dimmed, the switcher has taken over", 0.35f, view.getAlpha(), 0.001f);
+        assertTrue("revealing never reaches the shell (no raise, resize or microphone slot)", shell.calls.isEmpty());
+        assertFalse(RoseEdgeState.isRaised(DISPLAY));
+    }
+
+    @Test
+    public void aDragThatEndsWithoutRaisingTakesTheTrayDownAndARaiseKeepsIt() throws Exception {
+        RoseEdgeState.peek(DISPLAY, 0.5f, 0, RoseEdgeGesture.NONE);
+        idle();
+        assertNotNull(window.shownOn(DISPLAY));
+        RoseEdgeState.endPeek(DISPLAY);
+        idle();
+        assertNull("cancelled: gone", window.shownOn(DISPLAY));
+
+        RoseEdgeState.peek(DISPLAY, 1, 0, RoseEdgeGesture.TRAY);
+        idle();
+        RoseEdgeWindow.EdgeView peeked = window.shownOn(DISPLAY);
+        assertTrue(RoseEdgeState.raise(DISPLAY, TASK, dp(58)));
+        RoseEdgeState.endPeek(DISPLAY);
+        idle();
+        assertTrue("raised: the same tray stays, fully shown", window.shownOn(DISPLAY) == peeked);
+        assertEquals(0, peeked.getTranslationY(), 0.01f);
+        assertEquals(1f, peeked.getAlpha(), 0.001f);
+    }
+
+    @Test
+    public void aDragUpOnTheOpenTrayArmsTheSwitcherAndReleaseOpensIt() throws Exception {
+        RoseEdgeWindow.EdgeView view = raise();
+        float x = view.control(RoseEdgeLayout.ROSE).exactCenterX(), y = dp(40);
+        view.onTouchEvent(touch(MotionEvent.ACTION_DOWN, x, y));
+        view.onTouchEvent(touch(MotionEvent.ACTION_MOVE, x, y - dp(60)));
+        view.onTouchEvent(touch(MotionEvent.ACTION_MOVE, x, y - dp(100)));
+        view.onTouchEvent(touch(MotionEvent.ACTION_UP, x, y - dp(100)));
+        idle();
+        assertEquals("past 96dp: the switcher, and the tray lowered", List.of("switcher 0"), actions);
+        assertFalse(RoseEdgeState.isRaised(DISPLAY));
+
+        view = raise();
+        view.onTouchEvent(touch(MotionEvent.ACTION_DOWN, x, y));
+        view.onTouchEvent(touch(MotionEvent.ACTION_MOVE, x, y - dp(100)));
+        view.onTouchEvent(touch(MotionEvent.ACTION_MOVE, x, y - dp(80)));
+        assertEquals("hysteresis: still armed at 80dp", List.of("switcher 0"), actions);
+        view.onTouchEvent(touch(MotionEvent.ACTION_MOVE, x, y - dp(60)));
+        view.onTouchEvent(touch(MotionEvent.ACTION_UP, x, y - dp(60)));
+        idle();
+        assertEquals("dragged back below 72dp: nothing opens", List.of("switcher 0"), actions);
+        assertTrue("and the tray stays", RoseEdgeState.isRaised(DISPLAY));
+    }
 }

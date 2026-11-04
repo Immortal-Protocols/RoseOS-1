@@ -178,11 +178,10 @@ class Launcher3CompileContractTest(unittest.TestCase):
             hashlib.sha256(RESIZE_PATCH.read_bytes()).hexdigest())])
         self.assertEqual(delta['patches'][0]['sha256'], 'a1c76e1e03845573501790509a7e620e48476a2bae47889f839d81144dd35460',
             'E2a\'s patch is byte-identical')
-        # The committed os/ holds either the base or the candidate bytes for each candidate overlay, never anything else.
+        # The contract is bound to its own bundle, not the live os/: #440 is registered and later Launcher3 work (#410's
+        # staged bottom gesture) moves the committed files past the candidate. The bundle keeps #440's exact bytes.
         for o in delta['overlays']:
-            committed = ROOT/'os/overlays'/o['target']
-            now = hashlib.sha256(committed.read_bytes()).hexdigest() if committed.exists() else None
-            self.assertIn(now, (o['before'], o['after']), o['target'])
+            self.assertEqual(hashlib.sha256((ROOT/o['bundlePath']).read_bytes()).hexdigest(), o['after'], o['target'])
 
     def test_base_plus_the_delta_is_exactly_the_candidate(self):
         """The base is the patcher's own output at this bundle (Launcher3: switcher only); the delta is disjoint from it,
@@ -258,8 +257,8 @@ class Launcher3CompileContractTest(unittest.TestCase):
         edge = work/'os/patches/rose-edge-launcher3.patch'
         resize = work/'os/patches/rose-edge-resize-launcher3.patch'
         mixed = ['os/ mixes base and candidate inputs: it must be wholly one or the other']
-        # The committed os/ is wholly at the base on main, or wholly at the candidate on #440's branch.
-        self.assertEqual(run(), [], 'the committed os/ is wholly one or the other')
+        # The committed os/ is at the base, the candidate, or past it (main since #440 merged and later edge work).
+        self.assertEqual(run(), [], 'the committed os/ is never a mix')
         # Bring the copy to the base: no candidate patch, each candidate overlay at its pinned base image or absent.
         for path in (edge, resize):
             path.unlink(missing_ok=True)
@@ -277,11 +276,13 @@ class Launcher3CompileContractTest(unittest.TestCase):
         self.assertEqual(run(), mixed, 'one of the two candidate patches is not a candidate')
         shutil.copyfile(RESIZE_PATCH, resize)
         self.assertEqual(run(), [], "#440's branch: wholly at the candidate")
+        # Later work moves the candidate's files on: still not a mix, and the contract stays bound to its bundle.
         edge.write_bytes(EDGE_PATCH.read_bytes() + b'\n')
-        self.assertIn('os/patches/rose-edge-launcher3.patch: differs from the candidate bundle', run())
-        shutil.copyfile(EDGE_PATCH, edge)
-        (work/'os/overlays'/gesture).write_bytes(b'// a third version\n')
-        self.assertIn(f'os/overlays/{gesture}: neither the base nor the candidate bytes', run())
+        (work/'os/overlays'/gesture).write_bytes(b'// a later version\n')
+        self.assertEqual(run(), [], 'past the candidate')
+        # A base-state candidate overlay beside candidate patches is still a mix.
+        shutil.copyfile(CONTRACT_FIXTURES/gesture, work/'os/overlays'/gesture)
+        self.assertEqual(run(), mixed, 'the base gesture with the candidate patches')
 
     def test_each_base_overlay_image_has_a_pinned_copy(self):
         """A consumer can reach every candidate overlay's base image even when the committed os/ is at the candidate

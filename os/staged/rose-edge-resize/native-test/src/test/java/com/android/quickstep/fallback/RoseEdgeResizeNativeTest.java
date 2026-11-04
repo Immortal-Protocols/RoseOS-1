@@ -12,7 +12,6 @@ import android.graphics.Matrix;
 import android.graphics.Rect;
 import android.os.IBinder;
 import android.os.Looper;
-import android.os.SystemClock;
 import android.os.SystemProperties;
 import com.android.wm.shell.roseedge.IRoseEdge;
 import com.android.wm.shell.roseedge.IRoseEdgeListener;
@@ -293,18 +292,20 @@ public class RoseEdgeResizeNativeTest {
         assertFalse(RoseEdgeState.canRaise());
     }
 
-    RoseEdgeSwipe swipe(boolean on, long msAgo) {
+    RoseEdgeSwipe swipe(boolean on) {
         SystemProperties.set(RoseEdgeSwipe.PROPERTY, on ? "true" : "");
-        return new RoseEdgeSwipe(context, DISPLAY, TASK, SystemClock.uptimeMillis() - msAgo, SLOP_DP * density, false);
+        return new RoseEdgeSwipe(context, DISPLAY, TASK, SLOP_DP * density, false, true, false);
     }
 
-    int release(RoseEdgeSwipe s, float dp) {
-        return s.release(true, true, false, false, true, (dp - SLOP_DP) * density);
+    /** A drag to dp from touch-down, released at liftOffDpPerMs upward (Launcher3's px/ms are negative upward). */
+    int release(RoseEdgeSwipe s, float dp, float liftOffDpPerMs) {
+        s.onMove((dp - SLOP_DP) * density);
+        return s.release(false, -liftOffDpPerMs * density);
     }
 
     @Test
-    public void aShortSwipeAsksForTheReferenceLiftOf58dp() {
-        assertEquals(RoseEdgeGesture.RAISE, release(swipe(true, 400), 60));
+    public void aReleaseAtTheTrayAsksForTheReferenceLiftOf58dp() {
+        assertEquals(RoseEdgeGesture.RAISE, release(swipe(true), 60, 0));
         int lift = Math.round(58 * density);
         assertEquals(List.of("raise 0 41 " + lift), shell.calls);
         assertEquals(RoseEdgeGesture.raisedInsetPx(density), lift);
@@ -313,19 +314,20 @@ public class RoseEdgeResizeNativeTest {
     @Test
     public void withoutTheShellAShortSwipeStaysStockLauncher3() {
         RoseEdgeShell.setShell(null);
-        assertEquals(RoseEdgeGesture.STOCK, release(swipe(true, 400), 60));
+        assertEquals(RoseEdgeGesture.STOCK, release(swipe(true), 60, 0));
         assertFalse(RoseEdgeState.isRaised(DISPLAY));
     }
 
     @Test
     public void defaultOffNeverReachesTheShell() {
-        assertEquals(RoseEdgeGesture.STOCK, release(swipe(false, 400), 60));
+        assertEquals(RoseEdgeGesture.STOCK, release(swipe(false), 60, 0));
         assertTrue(shell.calls.isEmpty());
     }
 
     @Test
-    public void aLongSwipeStillGoesHome() {
-        assertEquals(RoseEdgeGesture.HOME, release(swipe(true, 400), 260));
+    public void aQuickFlickStillGoesHomeAndTheSwitcherStageNeverReachesTheShell() {
+        assertEquals(RoseEdgeGesture.HOME, release(swipe(true), 120, 2f));
+        assertEquals(RoseEdgeGesture.SWITCHER_OPEN, release(swipe(true), 260, 0));
         assertTrue(shell.calls.isEmpty());
     }
 
@@ -335,11 +337,11 @@ public class RoseEdgeResizeNativeTest {
         int width = Math.round(384 * density), shortened = Math.round((832 - 58) * density);
         shell.listener.onRaised(DISPLAY, TASK, new Rect(0, 0, width, shortened));
         idle();
-        RoseEdgeSwipe s = swipe(true, 100);
+        RoseEdgeSwipe s = swipe(true);
         Matrix m = new Matrix();
         Rect crop = new Rect();
         float[] radius = new float[1];
-        assertTrue(s.preview(true, true, false, 0, width, shortened, m, crop, radius));
+        assertTrue(s.preview(false, 0, width, shortened, m, crop, radius));
         assertEquals(new Rect(0, 0, width, shortened), crop);
         assertTrue(m.isIdentity());
         assertEquals(34 * density, radius[0], 0.01f);
