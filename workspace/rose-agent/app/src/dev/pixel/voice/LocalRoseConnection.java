@@ -91,14 +91,14 @@ final class LocalRoseConnection {
     /** The Mac no longer accepts this phone (or the saved pairing can't be read). */
     static final class Unpaired extends IOException {
         Unpaired() {
-            super("pairing not accepted by the Mac");
+            super("pairing not accepted by the backend");
         }
     }
 
     /** The Mac refused the signature because this phone's clock and the Mac's disagree. */
     static final class ClockOff extends IOException {
         ClockOff() {
-            super("the phone's and the Mac's clocks disagree");
+            super("the phone's and the backend's clocks disagree");
         }
     }
 
@@ -125,7 +125,7 @@ final class LocalRoseConnection {
         } catch (JSONException ignored) {
         }
         if (!pin.matches("[0-9a-f]{64}") || port < 1 || port > 65535 || hosts.isEmpty()) return null;
-        return new Paired(p.getString("serverName", "your Mac"), p.getString("serverId", pin.substring(0, 16)), hosts, port,
+        return new Paired(p.getString("serverName", "your backend"), p.getString("serverId", pin.substring(0, 16)), hosts, port,
                 pin, p.getString("deviceId", ""), p.getString("lastHost", null));
     }
 
@@ -150,7 +150,7 @@ final class LocalRoseConnection {
     private static final List<Live> live = new ArrayList<>();
     private static volatile boolean everFailed;
     private static volatile long lastOkAt;
-    /** Why the Mac last refused this phone: "" (it didn't), "revoked", "clock" or "damaged" (unreadable config). */
+    /** Why the backend last refused this phone: "" (it didn't), "revoked", "clock" or "damaged" (unreadable config). */
     private static volatile String refused = "";
     private static volatile String lastRoute = "";
 
@@ -209,13 +209,13 @@ final class LocalRoseConnection {
                 String kind = LocalRoseAuth.refusal(e.status, e.header("X-Rose-Error"), e.header("Date"),
                         System.currentTimeMillis());
                 if (kind.equals(LocalRoseAuth.REFUSED_REVOKED)) {
-                    Log.w(TAG, "Mac refused this phone (" + e.status + "); pair again");
+                    Log.w(TAG, "backend refused this phone (" + e.status + "); pair again");
                     refused = kind;
                     throw new Unpaired();
                 }
                 if (kind.equals(LocalRoseAuth.REFUSED_CLOCK)) {
                     // The phone's clock is the same for every address: no point trying the others.
-                    Log.w(TAG, "Mac refused this phone's time; check the date and time settings");
+                    Log.w(TAG, "backend refused this phone's time; check the date and time settings");
                     refused = kind;
                     everFailed = true;
                     throw new ClockOff();
@@ -226,7 +226,7 @@ final class LocalRoseConnection {
             }
         }
         everFailed = true;
-        throw last != null ? last : new IOException("no address for the Mac");
+        throw last != null ? last : new IOException("no address for the backend");
     }
 
     /** TCP on raw (2.5 s connect timeout) then TLS over it that accepts only the pinned certificate. */
@@ -261,7 +261,7 @@ final class LocalRoseConnection {
             @Override
             public void checkServerTrusted(X509Certificate[] chain, String auth) throws CertificateException {
                 if (chain == null || chain.length == 0 || !LocalRoseAuth.pinMatches(chain[0].getEncoded(), pin)) {
-                    throw new CertificateException("not the paired Mac");
+                    throw new CertificateException("not the paired backend");
                 }
             }
 
