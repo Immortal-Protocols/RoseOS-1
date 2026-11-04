@@ -7,7 +7,7 @@ Pinned public inputs for `os/tests/test_device_contract.py` (FAM-03a), which che
   `b0f697df8cc9519408ca0a404e918cd51bde0735`, the `build/make` revision in the same manifest (Apache-2.0, headers kept).
 
 `PROVENANCE.json` lists every file with its repository, revision, upstream path and git blob id. Full copies are
-byte-identical to upstream: their blob ids equal `git ls-tree` at the pinned revision. Three generated device product
+byte-identical to upstream: their blob ids equal `git ls-tree` at the pinned revision. Four generated device product
 makefiles (about 830 KB each) and the adevtool build index are kept as `*.excerpt.json`: the selected lines keyed by
 their upstream line number, plus the full upstream file's git blob id and sha256. The test recomputes every fixture's
 blob id, so any edit fails it.

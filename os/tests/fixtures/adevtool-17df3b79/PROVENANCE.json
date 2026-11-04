@@ -10,7 +10,7 @@
   },
   {
    "fixture": "adevtool/config/build-index/build-index-main.yml.excerpt.json",
-   "gitBlob": "520aa822b0c94ddf402e2861ef3d2c304531ad1f",
+   "gitBlob": "2df9fe064164c0110802ee2fda9bcbf5c272bb00",
    "kind": "excerpt",
    "path": "config/build-index/build-index-main.yml",
    "repository": "https://github.com/GrapheneOS/adevtool",
@@ -38,6 +38,14 @@
    "gitBlob": "f4ada95350428e7351f48059a16c65df928e105a",
    "kind": "full",
    "path": "config/device/frankel.yml",
+   "repository": "https://github.com/GrapheneOS/adevtool",
+   "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c"
+  },
+  {
+   "fixture": "adevtool/config/device/mustang.yml",
+   "gitBlob": "b0bd0a3c40570a5e6e3149ff190b5b60956ee019",
+   "kind": "full",
+   "path": "config/device/mustang.yml",
    "repository": "https://github.com/GrapheneOS/adevtool",
    "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c"
   },
@@ -78,6 +86,14 @@
    "gitBlob": "bbff4d6178fbefde503470472a221fb02a3e752d",
    "kind": "full",
    "path": "config/mk/google_devices/device/frankel/device.mk",
+   "repository": "https://github.com/GrapheneOS/adevtool",
+   "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c"
+  },
+  {
+   "fixture": "adevtool/config/mk/google_devices/device/mustang/device.mk",
+   "gitBlob": "bbff4d6178fbefde503470472a221fb02a3e752d",
+   "kind": "full",
+   "path": "config/mk/google_devices/device/mustang/device.mk",
    "repository": "https://github.com/GrapheneOS/adevtool",
    "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c"
   },
@@ -162,6 +178,39 @@
    "repository": "https://github.com/GrapheneOS/adevtool",
    "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c",
    "upstreamGitBlob": "24caa2897a2dd4bfdf2e844b185f996d210816af"
+  },
+  {
+   "fixture": "adevtool/vendor-skels/google_devices/mustang/AndroidProducts.mk",
+   "gitBlob": "6c8d486137749d89403ce396eec8e5cfe19c6144",
+   "kind": "full",
+   "path": "vendor-skels/google_devices/mustang/AndroidProducts.mk",
+   "repository": "https://github.com/GrapheneOS/adevtool",
+   "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c"
+  },
+  {
+   "fixture": "adevtool/vendor-skels/google_devices/mustang/cmds-for-envsetup.sh",
+   "gitBlob": "54f5658820879ed65f884c08054b358e11e8d9f8",
+   "kind": "full",
+   "path": "vendor-skels/google_devices/mustang/cmds-for-envsetup.sh",
+   "repository": "https://github.com/GrapheneOS/adevtool",
+   "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c"
+  },
+  {
+   "fixture": "adevtool/vendor-skels/google_devices/mustang/firmware/android-info.txt",
+   "gitBlob": "fab71762e2b2ff429cf9e5cd29100672c874e4eb",
+   "kind": "full",
+   "path": "vendor-skels/google_devices/mustang/firmware/android-info.txt",
+   "repository": "https://github.com/GrapheneOS/adevtool",
+   "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c"
+  },
+  {
+   "fixture": "adevtool/vendor-skels/google_devices/mustang/mustang.mk.excerpt.json",
+   "gitBlob": "408c20f3b030de6d2bd1fbbe38347899b1820b96",
+   "kind": "excerpt",
+   "path": "vendor-skels/google_devices/mustang/mustang.mk",
+   "repository": "https://github.com/GrapheneOS/adevtool",
+   "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c",
+   "upstreamGitBlob": "20f379b2fded3527ee94e1da9be8da06982cc444"
   },
   {
    "fixture": "adevtool/vendor-skels/google_devices/rango/AndroidProducts.mk",

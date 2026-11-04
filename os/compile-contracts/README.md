@@ -134,3 +134,68 @@ The evidence is the expected line in that module's own decoded `aconfig-flags.tx
 Not shown by the contract: R8, manifest merge, APK resources, packaging, signing or runtime behaviour. The identity
 opt-in's consumer is Home's caller gate for `gesture_nav_contract_v1` (#442). The contract test reads that gate as
 merged and never edits it.
+
+## `frankel-lunch-inputs.json`
+
+`frankel-lunch-inputs.json` (`kind` `rose-frankel-lunch-inputs`, `schemaVersion` 1) states what `lunch frankel-cur-user`
+needs beyond the three projects above, and the product configuration that `m` runs again. OS Product owns this data.
+Release's adapter and observer read it as data; they never run `scripts/frankel-lunch-inputs.py`.
+
+Every value is an expected value from pinned public sources: adevtool `17df3b79`, build/make `b0f697df` and
+laguna-kernels `275dad3c`. The one exception is `gitRequirement.genuineSource`, which is marked historical context.
+- Each fixture is the whole pinned file, kept with its upstream notices. The two large ones are gzipped.
+- Each fixture's git blob, and each tree listing's root, is checked against its pin.
+- No value is a host fact, and none may be copied into a receipt, a bundle report or a binding.
+
+- **`environment`.** These are unset before envsetup and lunch: `GIT_*`, `BUILD_ID_frankel`, `TARGET_KERNEL_DIR` and
+  `USE_STOCK_KERNEL`. `GIT_CEILING_DIRECTORIES` is set to the copy root. If inherited, these variables would change what
+  lunch reads, and lunch would still pass.
+  - Lunch then exports `BUILD_ID_frankel` itself for the shell that runs `m`, which needs it.
+  - `PLATFORM_SECURITY_PATCH_frankel` is not listed, because the sourced script unsets it.
+- **`versionCheck`.** The generated `vendor/google_devices/frankel/frankel.mk` includes
+  `adevtool-version-check.mk` at line 4. That file runs `$(shell git -C vendor/adevtool rev-parse HEAD)` in lunch and
+  again in `m`. Its exact expected bytes for revision `17df3b79` are given.
+  - The warning form (`--noVerify`) is refused.
+  - The error form is necessary, not sufficient. It is also written in three cases where the reference spec was not
+    checked:
+    - `--updateSpec`, where no comparison runs;
+    - `collect-state`'s temporary module, where no comparison runs;
+    - a working-tree change to `vendor-specs/`, where the comparison runs against the edited spec on disk.
+
+    So the observables must still be compared.
+  - No variable skips the check.
+- **`gitRequirement`.** git accepts a HEAD plus empty `objects/` and `refs/` as a repository, so a passing lunch proves
+  nothing. The acceptance checks are:
+  - the HEAD, the commit, and the root tree `f0863541`;
+  - nothing redirects outside the copy:
+    - `.git` resolves to a directory inside the copy;
+    - no gitfile, alternates, `commondir` or outside link;
+    - no other filesystem or mount point, and no hard-linked file;
+    - the git directories resolve inside the copy root.
+
+  No check can tell a fabricated store from a genuine one; only an approved byte-for-byte copy establishes it. A genuine
+  copy is allowed only under a separate approval. Redirect, fabrication and relaxation (`--noVerify`, `--updateSpec`,
+  working-tree changes) are refused. In the pinned sources, nothing else needs `.git` for this lunch.
+- **`buildId`, `kernelModuleLists`, `finderPrune`, `manifestFiles`.**
+  - `cmds-for-envsetup.sh` exports `BUILD_ID_frankel`. With it unset beforehand, a missing script leaves the build/make
+    default, and frankel.mk stops lunch.
+  - The three laguna `modules.load` lists each state their own rule. Two stop lunch when missing or empty;
+    `system_dlkm` has no guard, so an observer checks it.
+  - adevtool's `.find-ignore` markers.
+  - the pinned manifest's linkfiles and copyfiles.
+- **`generatedVendor`.** The five build definitions an observer compares are given with their sha256 from adevtool's
+  reference FileTreeSpec, `vendor-specs/google_devices/frankel.yml`. The host's bytes, its flags and its adevtool working
+  tree are not established.
+
+`os/tests/test_frankel_lunch_inputs.py` recomputes the manifest. It pins the proposed sha256, which needs agreement
+with Release. It also shows the stated behaviour with the installed git and GNU make, in an allowlisted environment and
+temporary directories only:
+- a copy without `.git` fails;
+- the warning form passes;
+- a parent repository answers when no ceiling is set;
+- a fabricated, objectless gitdir passes lunch but not the acceptance checks;
+- alternates, gitfile, link-to-gitfile, outside-link and hard-link redirects pass the basic checks but not the
+  structural ones;
+- an inherited `BUILD_ID_frankel` hides a missing script.
+
+`--write` refetches the fixtures from GrapheneOS's public sources, without credentials.
