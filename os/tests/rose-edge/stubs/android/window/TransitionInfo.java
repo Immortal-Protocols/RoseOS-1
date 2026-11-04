@@ -1,0 +1,1 @@
+package android.window; public final class TransitionInfo { public java.util.List<Change> getChanges() { return null; } public static final class Change { public android.app.ActivityManager.RunningTaskInfo getTaskInfo() { return null; } public android.graphics.Rect getEndAbsBounds() { return null; } } }
