@@ -245,7 +245,8 @@ test('Home\'s edge stays fixed over the swiping pages and reaches the screen bot
  const micState=read('../app/src/dev/pixel/voice/RoseMicState.java'),micRules=read('../app/src/dev/pixel/voice/RoseMicInput.java');
  const code=src=>src.replace(/\/\*[\s\S]*?\*\//g,'').replace(/\/\/.*$/gm,'');
  for(const src of [micState,micRules])assert.ok(!/setMicrophoneMute|SensorPrivacy|AudioManager|startService|startForegroundService|"end"|"talk"|"disconnect"/.test(code(src)),'input-only: no OS mute, output, start or end');
- assert.match(micState,/if \(voice != null && voice\.live\) voice\.command\(RoseMicInput\.command\(muted\), "mic_input"\);/,'a live call is told; idle starts nothing');
+ assert.match(micState,/if \(voice != null\) voice\.command\(RoseMicInput\.command\(muted\), "mic_input"\);/,'a running voice service is told (live or connecting); none: nothing is started');
+ assert.ok(!/Sync/.test(code(micRules)),'one sync rule, the backend\'s (App Core)');
  const tray=read('../app/src/dev/pixel/voice/AgentTrayService.java');
  assert.match(tray,/if\(m\.what==MUTE\|\|m\.what==UNMUTE\)\{RoseMicState\.request\(this,m\.what==MUTE\);publish\(true\);return;\}/,'the tray mute is the same state and never starts voice');
  // The tray's caller check is unchanged: SystemUI only (any widening needs review, #410).

@@ -18,13 +18,14 @@ final class RoseMicState {
  }
 
  /**
-  * A surface asked for a state: it is recorded, and a live call is told through the existing voice command. With no
-  * voice service nothing is started; the next call starts from the recorded state.
+  * A surface asked for a state: it is recorded, and a running voice service is told through the existing input-mute
+  * command, which reaches a live or connecting call and never starts voice or loads the page. With no voice service
+  * nothing is started; the next call starts from the recorded state.
   */
  static void request(Context c, boolean muted) {
   set(c, muted);
   VoiceService voice = VoiceService.instance;
-  if (voice != null && voice.live) voice.command(RoseMicInput.command(muted), "mic_input");
+  if (voice != null) voice.command(RoseMicInput.command(muted), "mic_input");
  }
 
  static SharedPreferences prefs(Context c) { return c.getApplicationContext().getSharedPreferences(PREFS, 0); }
