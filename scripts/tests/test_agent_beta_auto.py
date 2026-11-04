@@ -174,6 +174,70 @@ class Workflow(unittest.TestCase):
         self.assertEqual(aba.run_name(SHA), f'Agent Beta auto {SHA}')
 
 
+def job_starts(condition, context):
+    """GitHub's verdict on a job `if:` of `&&` terms: `false`, `true` or `<context path> == '<literal>'`."""
+    for term in condition.split(' && '):
+        match = re.fullmatch(r"([\w.]+) == '([^']*)'", term)
+        if term not in ('true', 'false') and not match:
+            raise AssertionError(f'a term this reader does not evaluate: {term!r}')
+        if term == 'false' or match and context.get(match.group(1)) != match.group(2):
+            return False
+    return True
+
+
+class TemporaryHold(unittest.TestCase):
+    """TEMPORARY HOLD (owner-approved, 2026-11-04): automatic Agent Beta dispatch is paused in source while the shared
+    builder's storage is recovered; the AGENT_BETA_AUTO variable is left as it is. Resuming is a reviewed change that
+    deletes `false && ` from the dispatch job's `if:` and this class."""
+    ORIGINAL = "github.event.workflow_run.event == 'push' && github.event.workflow_run.conclusion == 'success'"
+
+    def condition(self):
+        return re.search(r'(?m)^    if: (.*)$', WORKFLOW).group(1)
+
+    def test_the_checked_in_hold_starts_no_dispatch_even_when_the_switch_is_on(self):
+        # The dispatch job is the workflow's only job and holds its only request-sending command.
+        self.assertEqual(re.findall(r'(?m)^  ([\w-]+):$', WORKFLOW.split('\njobs:\n', 1)[1]), ['dispatch'])
+        self.assertEqual(re.findall(r'(?m)^    if: ', WORKFLOW), ['    if: '])
+        self.assertEqual(self.condition(), 'false && ' + self.ORIGINAL)
+        for event in ('push', 'pull_request'):
+            for conclusion in ('success', 'failure'):
+                for switch in ('on', 'off', ''):
+                    context = {'github.event.workflow_run.event': event, 'github.event.workflow_run.conclusion': conclusion,
+                               'vars.AGENT_BETA_AUTO': switch}
+                    self.assertFalse(job_starts(self.condition(), context), context)
+
+    def test_the_hold_is_a_literal_that_only_a_reviewed_change_removes(self):
+        held, _, rest = self.condition().partition(' && ')
+        self.assertEqual(held, 'false')  # no variable, input, date or expression can lift it
+        self.assertNotIn('vars.', self.condition())
+        self.assertEqual(rest, self.ORIGINAL)
+        # Deleting `false && ` restores exactly the gate the Dispatch tests cover.
+        self.assertTrue(job_starts(rest, {'github.event.workflow_run.event': 'push',
+                                          'github.event.workflow_run.conclusion': 'success'}))
+        self.assertIn('AGENT_BETA_AUTO: ${{ vars.AGENT_BETA_AUTO }}', WORKFLOW)
+
+    def test_manual_releases_never_pass_through_the_hold(self):
+        # Manual app-only, Frankel and Mustang releases are os-release.yml dispatches; neither it nor the Mustang
+        # dispatcher runs this workflow or the dispatcher script, and neither carries a held job.
+        for path in ('.github/workflows/os-release.yml', '.github/workflows/mustang-ota-auto.yml'):
+            text = (ROOT/path).read_text()
+            self.assertNotIn('agent-beta-auto', text, path)
+            self.assertIsNone(re.search(r'(?m)^\s+if: false\b', text), path)
+        self.assertIn('\n  workflow_dispatch:\n', OS_RELEASE)
+        runners = [p.name for p in sorted((ROOT/'.github/workflows').glob('*.yml'))
+                   if 'python3 scripts/agent-beta-auto.py' in p.read_text()]
+        self.assertEqual(runners, ['agent-beta-auto.yml'])  # the only place the dispatcher runs
+
+    def test_the_reader_evaluates_conditions_as_github_does(self):
+        context = {'a.b': 'push'}
+        self.assertTrue(job_starts("a.b == 'push'", context))
+        self.assertFalse(job_starts("a.b == 'pull'", context))
+        self.assertFalse(job_starts("false && a.b == 'push'", context))
+        self.assertTrue(job_starts("true && a.b == 'push'", context))
+        with self.assertRaises(AssertionError):
+            job_starts("a.b != 'push'", context)
+
+
 class RealGuard(unittest.TestCase):
     """The whole os-release guard step 'Candidate is an exact commit on main', run with the dispatcher's own payload.
     git is a stub that answers only the exact-commit-on-main ancestry check (MAIN_SHAS); everything else is the real
