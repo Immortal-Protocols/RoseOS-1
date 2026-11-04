@@ -147,6 +147,29 @@ class RoseEdgeResizeStagedTest(unittest.TestCase):
         self.assertIn('OverviewCommandHelper.CommandType.TOGGLE', service)
         self.assertIn('roseEdge?.stop()', service)
 
+    def test_the_shells_merged_aidl_and_bundle_key_match_the_launcher3_side(self):
+        # The hand-off is a bundle key: Launcher3 reads params.getBinder(RoseEdgeShell.DESCRIPTOR) and the shell
+        # registers addExternalInterface(IRoseEdge.DESCRIPTOR, ...). Neither compile proves they agree; this does.
+        patch = (ROOT/'os/patches/rose-edge-wmshell.patch').read_text()
+        added = {}
+        for block in re.split(r'^diff --git ', patch, flags=re.M)[1:]:
+            path = re.match(r'a/(\S+) b/', block).group(1)
+            added[path] = ''.join(l[1:] + '\n' for l in block.split('\n') if l.startswith('+') and not l.startswith('+++'))
+        def code(text):
+            text = re.sub(r'/\*.*?\*/', '', text, flags=re.S)
+            text = re.sub(r'//[^\n]*', '', text)
+            return [l.strip() for l in text.splitlines() if l.strip()]
+        shell = (FALLBACK/'RoseEdgeShell.java').read_text()
+        for name, constant in (('IRoseEdge', 'DESCRIPTOR'), ('IRoseEdgeListener', 'LISTENER_DESCRIPTOR')):
+            aidl = added['libs/WindowManager/Shell/src/com/android/wm/shell/roseedge/' + name + '.aidl']
+            self.assertEqual(code(aidl), code((AIDL/f'com/android/wm/shell/roseedge/{name}.aidl').read_text()),
+                f'{name}: the merged shell AIDL is the interface record, line for line')
+            package = re.search(r'^package ([\w.]+);', aidl, re.M).group(1)
+            self.assertIn(f'{constant} = "{package}.{name}";', shell)
+        self.assertIn('addExternalInterface(IRoseEdge.DESCRIPTOR,', patch)
+        wiring = (STAGED/'patches/rose-edge-resize-launcher3.patch').read_text()
+        self.assertIn('params.getBinder(com.android.quickstep.fallback.RoseEdgeShell.DESCRIPTOR)', wiring)
+
     def test_nothing_applies_the_staged_files(self):
         for path in ('scripts/apply-os-changes.py', 'scripts/background_apks.py', 'scripts/integration_copy.py',
                 'scripts/launcher3-compile-contract.py'):
