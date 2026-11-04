@@ -270,7 +270,15 @@ class RoseEdgeShellTest(unittest.TestCase):
         self.assertIn('if (message.what != STATE || !mLink.subscribed() || !trusted(message.sendingUid)) return true;',
             mic, 'state only from Rose Agent itself, while subscribed')
         self.assertIn('if (data.getInt("protocolVersion") != 1) return true;', mic)
-        self.assertIn('uid == mContext.getPackageManager().getPackageUidAsUser(VOICE_PACKAGE, mLink.user())', flat(mic))
+        self.assertIn('uid == mWindowContext.getPackageManager().getPackageUidAsUser(VOICE_PACKAGE, mLink.user())',
+            flat(mic))
+        # Real javac (#410 build 41861964515): View's protected mContext shadows an outer mContext inside Control, and
+        # super(mContext) then reads View's own field before View's constructor. The outer field has its own name,
+        # and the View stub declares mContext as the platform does, so the compile above fails if it comes back.
+        control = mic[mic.index('private final class Control extends View {'):]
+        self.assertNotRegex(control, r'\bmContext\b', 'Control must not name View\'s inherited mContext')
+        self.assertIn('Control() { super(mWindowContext);', flat(control))
+        self.assertIn('protected android.content.Context mContext;', (HARNESS/'stubs/android/view/View.java').read_text())
         # One thread: the creator's (the shell's main thread); binder callbacks are moved onto it.
         self.assertIn('new Handler(Looper.myLooper() != null ? Looper.myLooper() : Looper.getMainLooper());', mic)
         self.assertIn('mReply = new Messenger(new Handler(mHandler.getLooper(), message -> {', mic)
