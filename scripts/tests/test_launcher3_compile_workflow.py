@@ -12,6 +12,9 @@ import sys
 import tempfile
 import unittest
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import os_release_shape as shape  # noqa: E402
+
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = (ROOT/'.github/workflows/os-release.yml').read_text()
 MODE = 'launcher3-compile'
@@ -43,12 +46,9 @@ class Guard(unittest.TestCase):
             if line.strip() and not line.startswith(' ' * 10):
                 break
             lines.append(line[10:])
-        env = {'PATH': os.environ['PATH'], 'MODE': MODE, 'CANDIDATE_SHA': '', 'BUILD_NUMBER': '', 'BUILD_TIMESTAMP': '',
-               'APPS': '', 'PROMOTE': 'false', 'CHANNEL': 'beta', 'RESUME_STAGE': 'none', 'RESUME_SOURCE_RUN': '',
-               'RESUME_UNSIGNED_SHA256': '', 'RESUME_SIGNED_SHA256': '', 'CAMPAIGN': '', 'APP_PUBLISH': 'false',
-               'ROSE_RANGO_PUBLISH': 'false', 'ROSE_FIRST_USE_ENROLL': 'false', 'ROSE_RECOVER_RUN': '',
-               'BOOTSTRAP_PROFILE': 'none', 'MODELS_BOOTSTRAP_RUN': '', 'REUSE_BINDING': '', 'ALPHA_RECOVER': 'false',
-               'ROSE_DEVICE': 'frankel', 'BLAZER_PREP_STAGE': 'none', 'GITHUB_SHA': 'f' * 40, **change}
+        # The bare dispatch's workflow env (every input at its declared default), plus the guard step's own env.
+        env = shape.dispatch_env(**{'PATH': os.environ['PATH'], 'MODE': MODE, 'PROMOTE': 'false', 'APP_PUBLISH': 'false',
+                                    'ALPHA_RECOVER': 'false', 'GITHUB_SHA': 'f' * 40, **change})
         return subprocess.run(['bash', '-c', 'set -euo pipefail\n' + '\n'.join(lines) + '\n'], env=env, cwd=ROOT,
                               capture_output=True).returncode
 
@@ -62,7 +62,7 @@ class Guard(unittest.TestCase):
                 self.assertNotEqual(self.guard(**change), 0)
 
     def test_the_hosted_check_is_the_adapter_and_the_committed_binding_stops_before_any_host(self):
-        self.assertIn('emulator-alpha-export, rango-factory-observe, launcher3-compile, blazer-compile, blazer-integrate]\n', WORKFLOW)
+        self.assertIn(MODE, shape.modes())
         self.assertIn("      - name: Launcher3 compile check\n        id: launcher3-compile\n        if: inputs.mode == "
                       "'launcher3-compile'\n        run: python3 scripts/launcher3-compile.py check >> \"$GITHUB_OUTPUT\"\n",
                       jobs()['guard'])
@@ -123,14 +123,10 @@ class Job(unittest.TestCase):
 
 class Ownership(unittest.TestCase):
     def test_owned_start_cleanup_covers_this_mode_and_joins_cleanup(self):
-        own = ("inputs.mode == 'blazer-prep' || inputs.mode == 'rango-factory-package' || inputs.mode == "
-               "'rango-factory-inspect' || inputs.mode == 'launcher3-compile' || inputs.mode == 'blazer-compile' || inputs.mode == 'blazer-integrate'")
-        self.assertEqual(jobs()['controller'].count(own), 2)
-        self.assertEqual(jobs()['cleanup'].count(own), 1)
-        plain = "inputs.mode != 'rango-factory-inspect' && inputs.mode != 'launcher3-compile' && inputs.mode != 'blazer-compile' && inputs.mode != 'blazer-integrate'\n"
-        self.assertIn(plain + '        run: python3 scripts/release-pipeline.py start-builder\n', jobs()['controller'])
-        self.assertIn(plain + '        run: python3 scripts/release-pipeline.py stop-builder\n', jobs()['cleanup'])
-        self.assertIn('rango-factory-inspect, launcher3-compile, blazer-compile, blazer-integrate, app-builder', re.search(r'(?m)^    needs: (.+)$', jobs()['cleanup'])[1])
+        # owned_modes() also requires the controller's plain/owned start and ownership record and cleanup's plain/owned
+        # stop to name the same modes, so this mode is excluded from both plain steps and covered by all owned ones.
+        self.assertIn(MODE, shape.owned_modes())
+        self.assertIn(MODE, shape.cleanup_needs())
         for name, job in jobs().items():
             if name != MODE:
                 self.assertNotIn('launcher3-compile.py', job.replace("python3 scripts/launcher3-compile.py check", '') if name == 'guard' else job)

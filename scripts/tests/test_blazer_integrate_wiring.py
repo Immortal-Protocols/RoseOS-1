@@ -14,6 +14,9 @@ import sys
 import tempfile
 import unittest
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import os_release_shape as shape  # noqa: E402
+
 ROOT = Path(__file__).resolve().parents[2]
 spec = importlib.util.spec_from_file_location('blazer_integrate_wiring', ROOT/'scripts/blazer-integrate-wiring.py')
 wiring = importlib.util.module_from_spec(spec)
@@ -374,7 +377,7 @@ def jobs():
 
 class Workflow(unittest.TestCase):
     def test_mode_check_job_and_ownership(self):
-        self.assertIn('blazer-compile, blazer-integrate]\n', WORKFLOW)
+        self.assertIn('blazer-integrate', shape.modes())
         self.assertIn("      - name: Blazer integrate check\n        id: blazer-integrate\n        if: inputs.mode == "
                       "'blazer-integrate'\n        run: python3 scripts/blazer-integrate-wiring.py check >> \"$GITHUB_OUTPUT\"\n",
                       jobs()['guard'])
