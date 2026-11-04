@@ -85,6 +85,15 @@ public class HomeOxbloodRenderTest {
         RosePearl pearl = new RosePearl(1f, OxbloodEdge.PEARL_DP);
         rose.addView(box(pearl), new FrameLayout.LayoutParams(OxbloodEdge.PEARL_DP + 12, OxbloodEdge.PEARL_DP + 12, Gravity.CENTER));
         edge.addView(rose, new android.widget.LinearLayout.LayoutParams(OxbloodEdge.ROSE_W_DP, OxbloodEdge.CONTROL_H_DP));
+        // Rose's microphone-input mute well (HomeTray: Well.mic under MicGlyph), the reference's 44dp slot 14dp from each
+        // neighbour (HomeTray grows its touch target to 48 about the same centre), between Rose and the switcher.
+        FrameLayout mic = new FrameLayout(c);
+        OxbloodEdge.MicGlyph micGlyph = new OxbloodEdge.MicGlyph(1f);
+        mic.setBackground(new android.graphics.drawable.LayerDrawable(new Drawable[]{OxbloodEdge.Well.mic(1f), micGlyph}));
+        mic.setTag(micGlyph);
+        android.widget.LinearLayout.LayoutParams mp = new android.widget.LinearLayout.LayoutParams(OxbloodEdge.MIC_W_DP, OxbloodEdge.CONTROL_H_DP);
+        mp.leftMargin = OxbloodEdge.GAP_DP;
+        edge.addView(mic, mp);
         FrameLayout switcher = new FrameLayout(c);
         switcher.setBackground(new OxbloodEdge.Well(1f));
         switcher.addView(box(new OxbloodEdge.SwitcherGlyph(1f)), new FrameLayout.LayoutParams(OxbloodEdge.SwitcherGlyph.BOX_W_DP, OxbloodEdge.SwitcherGlyph.BOX_H_DP, Gravity.CENTER));
@@ -145,6 +154,46 @@ public class HomeOxbloodRenderTest {
         int s = muted.getPixel(at[0], at[1]);
         assertTrue("silver pearl", Math.abs(((s >> 16) & 255) - (s & 255)) < 20 && ((s >> 16) & 255) > 120);
         save(muted, "oxblood-home-384x832-call-muted");
+    }
+
+    /** #410 wave item 6: Rose's microphone-input mute well on Home's edge, unmuted and muted (the HiFi's tray-mic):
+     * warm ink mic; muted, a dimmed ruby mic with a slash and a ruby ring on the well. The same pixels for the raised
+     * edge's peek-mic are OS Product's to draw; the state is the one RoseMicInput state. */
+    @Test public void edgeMicWellShowsRoseInputMute() throws Exception {
+        FrameLayout root = home(STUDY, 0);
+        android.widget.LinearLayout edge = (android.widget.LinearLayout) root.getChildAt(3);
+        assertEquals("Rose, mic, switcher", 3, edge.getChildCount());
+        View mic = edge.getChildAt(1);
+        OxbloodEdge.MicGlyph glyph = (OxbloodEdge.MicGlyph) mic.getTag();
+        Bitmap on = draw(root);
+        int x0 = mic.getLeft(), y0 = H - OxbloodEdge.HEIGHT_DP + mic.getTop(), cx = x0 + mic.getWidth() / 2, cy = y0 + mic.getHeight() / 2;
+        int ink = on.getPixel(cx, cy - 4);
+        assertTrue("the mic body in warm ink: " + Integer.toHexString(ink), ((ink >> 16) & 255) > 180 && ((ink >> 8) & 255) > 160);
+        int cropX = Math.max(0, x0 - 20), cropY = Math.max(0, y0 - 8), cropW = Math.min(W - cropX, mic.getWidth() + 40), cropH = Math.min(H - cropY, mic.getHeight() + 16);
+        save(Bitmap.createBitmap(on, cropX, cropY, cropW, cropH), "oxblood-edge-mic-unmuted");
+        glyph.set(true);
+        ((RosePearl) root.getTag()).set(true, false, -1); // HomeTray: the pearl follows the same mute
+        Bitmap off = draw(root);
+        int ruby = off.getPixel(cx, cy - 4);
+        assertTrue("muted: the body turns dim ruby: " + Integer.toHexString(ruby), ((ruby >> 16) & 255) > ((ruby >> 8) & 255) + 40);
+        int ringX = cx - OxbloodEdge.MIC_PLATE_DP / 2 + 1, ringY = cy; // the 32dp plate's left edge
+        int ringOn = on.getPixel(ringX, ringY), ringOff = off.getPixel(ringX, ringY);
+        assertTrue("muted: a ruby ring on the well's edge", ((ringOff >> 16) & 255) > ((ringOn >> 16) & 255) + 20);
+        save(Bitmap.createBitmap(off, cropX, cropY, cropW, cropH), "oxblood-edge-mic-muted");
+        save(off, "oxblood-home-384x832-mic-muted");
+        View rose = edge.getChildAt(0);
+        int rx0 = rose.getLeft(), ry0 = H - OxbloodEdge.HEIGHT_DP + rose.getTop();
+        int pearl = off.getPixel(rx0 + rose.getWidth() / 2, ry0 + rose.getHeight() / 2);
+        assertTrue("the pearl turns silver with the mute", Math.abs(((pearl >> 16) & 255) - (pearl & 255)) < 20);
+        // Nothing else changes: the mute is drawn only in the mic well and the pearl.
+        int changed = 0;
+        for (int y = 0; y < H; y++) for (int x = 0; x < W; x++) {
+            boolean inWell = x >= x0 - 12 && x < x0 + mic.getWidth() + 12 && y >= y0 - 12 && y < y0 + mic.getHeight() + 12;
+            boolean inRose = x >= rx0 && x < rx0 + rose.getWidth() && y >= ry0 && y < ry0 + rose.getHeight();
+            if (!inWell && !inRose && on.getPixel(x, y) != off.getPixel(x, y)) changed++;
+        }
+        assertEquals("only the well and the pearl change", 0, changed);
+        ((RosePearl) root.getTag()).set(false, false, -1);
     }
 
     @Test public void pearlStatesForTheRoseHeader() throws Exception {
