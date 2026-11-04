@@ -2336,6 +2336,34 @@ class Fetch(unittest.TestCase):
         self.assertTrue(self.record['git']['fetch']['version'].startswith('git version'))
         self.assertEqual(self.problems(), [])
 
+    def test_the_fetch_runs_no_auto_maintenance_and_its_marks_refuse(self):
+        """The fetch step carries --no-auto-maintenance, so git spawns no maintenance after it, which newer Git can detach
+        beyond the stage's session. GIT_TRACE shows it, and the same fetch without the flag shows maintenance (the
+        control). What maintenance or gc leaves in the gitdir is refused."""
+        def traced(argv, env=None, **kwargs):
+            trace = Path(tempfile.mkdtemp())/'trace'
+            traces.append((argv, trace))
+            return subprocess.Popen(argv, env={**env, 'GIT_TRACE': str(trace)}, **kwargs)
+        for flag in (True, False):
+            with self.subTest(flag=flag):
+                self.setUp()
+                traces = []
+                steps = adapter.fetch_steps
+                drop = (lambda *args: [[a for a in step if a != '--no-auto-maintenance'] for step in steps(*args)])
+                with unittest.mock.patch.object(adapter, 'fetch_steps', steps if flag else drop):
+                    self.fetch(popen=traced)
+                (fetch_trace,) = [t for argv, t in traces if 'fetch' in argv]
+                self.assertEqual('maintenance run --auto' in fetch_trace.read_text(), not flag)
+        self.setUp()
+        self.fetch()
+        self.assertEqual(self.problems(), [])
+        for name in ('gc.pid', 'gc.log', 'objects/maintenance.lock'):
+            with self.subTest(mark=name):
+                mark = self.f.tree/'vendor/adevtool/.git'/name
+                mark.write_text('x')
+                self.assertIn(f'.git/{name} exists: auto maintenance or gc ran after the fetch', self.problems())
+                mark.unlink()
+
     def problems(self):
         return adapter.gitdir_problems(self.f.tree, self.f.tree/'vendor/adevtool', self.f.inputs, self.f.raw,
                                        adapter.fetch_env(self.f.tree, self.f.tree.parent/'home', 'file'),

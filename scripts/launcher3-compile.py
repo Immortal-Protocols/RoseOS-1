@@ -102,10 +102,10 @@ sys.path.insert(0, str(ROOT/'scripts'))
 import alpha_source  # noqa: E402  (the reviewed copy plan and per-file copy)
 
 MANIFEST = ROOT/'os/compile-contracts/launcher3-quickstep-lib.json'
-# OS Product's reviewed contract version (schema 3, fd4e9ef: the #440 2f57a5f E2c contract of e21ffeb, with
-# base.bundleReport's values and the required-overlay prefixes stated as data). A different manifest is refused until
-# this pin is updated.
-MANIFEST_SHA256 = 'd444df92f170de1b2e7199cec954101f720f9e98e0b3f534c7f3a4cac87e43d5'
+# OS Product's reviewed contract version (schema 3, 4d9239d: the #440 2f57a5f E2c contract of e21ffeb, with
+# base.bundleReport's values and the required-overlay prefixes stated as data in fd4e9ef, and the lunch inputs whose
+# fetch runs without auto maintenance). A different manifest is refused until this pin is updated.
+MANIFEST_SHA256 = '8b4ce88f5cd6a20327b14378a0c5abab1a2edf06f7abda3802253d1c1c6d398f'
 CONDITIONS = ['base-exact', 'delta-preimages', 'isolated-apply', 'final-exact']
 # The binding inputs each branch requires and forbids, in the contract's own vocabulary (branches.requires, forbids):
 # check() binds and refuses exactly these, so the contract and this adapter cannot drift.
@@ -203,9 +203,10 @@ LUNCH_SECONDS = 20 * 60
 # redirected or relaxed check.
 VERSION_CHECKED_PRODUCTS = ('frankel',)
 # Such a lunch needs OS Product's lunch-input contract (#410/#459; public-fetch, publicFetch and workingTree added in
-# #531, f16ba64), read as data only and never through its script. A different file is refused until this pin is updated.
+# #531, f16ba64; the fetch without auto maintenance in 4d9239d), read as data only and never through its script. A
+# different file is refused until this pin is updated.
 LUNCH_INPUTS = 'os/compile-contracts/frankel-lunch-inputs.json'
-LUNCH_INPUTS_SHA256 = 'd259aae6d1984dea2ead3f929aeb7ce9a2807681f28147ce53deb2ada36ec4e3'
+LUNCH_INPUTS_SHA256 = '03b58acffac8b7c7d1e4b67daaf64d545307b804825f6360d86f3175c5a1dd2c'
 PINNED_MANIFEST = 'os/pinned-manifest.xml'
 # The only way this adapter gives vendor/adevtool its .git: the pinned commit fetched from the pinned manifest's public
 # source into the copy, admitted only when the pinned lunch-input contract lists the class. Infra's proposed first
@@ -217,6 +218,9 @@ GIT_PATH = '/usr/bin:/bin'
 # A new repository from `git init --template=` has exactly these local keys; any other one refuses.
 GIT_CONFIG_KEYS = ('core.repositoryformatversion', 'core.filemode', 'core.bare', 'core.logallrefupdates')
 GIT_REDIRECTS = ('objects/info/alternates', 'objects/info/http-alternates', 'commondir', 'gitdir', 'hooks', 'info/grafts')
+# What auto maintenance or gc leaves in a gitdir (publicFetch.acceptance): the fetch runs with --no-auto-maintenance, so
+# none may exist.
+MAINTENANCE_MARKS = ('gc.pid', 'gc.log', 'objects/maintenance.lock')
 # The git variables the contained lunch and m environment sets itself; nothing else named GIT_* reaches them.
 CONTAINED_GIT = ('GIT_CEILING_DIRECTORIES', 'GIT_CONFIG_NOSYSTEM', 'GIT_CONFIG_GLOBAL')
 # The pinned adevtool .gitignore rules the copy omits (gitRequirement.workingTree.omittedFromCopy), implemented exactly by
@@ -231,7 +235,7 @@ OPTION_CLASSES = ('genuine-copy', 'redirect', 'public-fetch', 'fabrication', 're
 # The canonical sha256 of everything this adapter implements of the git route: the whole gitRequirement and every
 # source's workingTreeCheck text (json, sorted keys, compact separators). Any change to them is invalid until this
 # adapter is reviewed against the new text, so a re-pin is never only a hash bump.
-GIT_REQUIREMENT_SHA256 = 'ca8de46a9769e90c2559974da6dc17b7cbd32f49cce2ed41a8d6ef537be56166'
+GIT_REQUIREMENT_SHA256 = 'd79dd327439c43359cf427d0d0ade4fec94d3dbec3000d9778c8425a43ea66cc'
 # The job environment the fetch keeps (network setup only); everything else, LD_* included, is left out.
 FETCH_INHERITED = ('HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy', 'NO_PROXY', 'no_proxy', 'ALL_PROXY',
                    'all_proxy', 'SSL_CERT_FILE', 'SSL_CERT_DIR', 'LANG')
@@ -848,9 +852,11 @@ def lunch_listing(inputs, project, root=ROOT, raw=False):
 
 def fetch_steps(work, url, revision):
     """gitRequirement.publicFetch.steps, which are Blazer's git_meta_argv: a new .git with no templates (no hooks),
-    exactly revision at depth 1 with no tags, and a detached HEAD by update-ref; none reads or writes the working tree."""
+    exactly revision at depth 1 with no tags and no auto maintenance after it (which newer Git can detach beyond the
+    stage's session; Git without the option refuses it, so the fetch fails closed), and a detached HEAD by update-ref;
+    none reads or writes the working tree."""
     return [['git', 'init', '-q', '--template=', str(work)],
-            ['git', '-C', str(work), 'fetch', '--quiet', '--depth=1', '--no-tags', url, revision],
+            ['git', '-C', str(work), 'fetch', '--quiet', '--depth=1', '--no-tags', '--no-auto-maintenance', url, revision],
             ['git', '-C', str(work), 'update-ref', '--no-deref', 'HEAD', revision]]
 
 
@@ -1198,7 +1204,8 @@ def gitdir_problems(tree, work, inputs, raw_listing, env, lunch_env, deadline, l
     -r -z --full-tree with each NUL as LF is byte for byte the pinned listing; the local configuration is exactly a new
     repository's (no remote.*), there is no ref but HEAD, and nothing redirects outside the copy (a real .git directory
     resolving inside it; no alternates, commondir, gitdir file, hooks or grafts; no link, mount point, other filesystem
-    or second hard link)."""
+    or second hard link); and no auto maintenance or gc ran after the fetch (no gc.pid, gc.log or
+    objects/maintenance.lock)."""
     git, problems = inputs['gitRequirement'], []
     revision, root_tree = git['revision'], git['rootTree']
     dotgit, tree = work/'.git', Path(tree)
@@ -1245,6 +1252,9 @@ def gitdir_problems(tree, work, inputs, raw_listing, env, lunch_env, deadline, l
     for name in GIT_REDIRECTS:
         if os.path.lexists(dotgit/name):
             problems.append(f'.git/{name} exists')
+    for name in MAINTENANCE_MARKS:
+        if os.path.lexists(dotgit/name):
+            problems.append(f'.git/{name} exists: auto maintenance or gc ran after the fetch')
     device, stack = os.lstat(tree).st_dev, [dotgit]
     while stack:
         directory = stack.pop()
