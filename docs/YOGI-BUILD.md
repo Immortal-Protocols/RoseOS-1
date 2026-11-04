@@ -17,10 +17,15 @@ device definition includes `common/gen11pixel.yml`, which selects Malibu and
 These are reconstruction inputs, not a current stable security baseline. Reading
 the index does not verify the archive or prove it matches the installed kernel.
 
-Only public source metadata and templates were retrieved during source work.
-The allocator, SELinux and product patches were checked against those upstream
-preimages; the offline tests additionally use isolated Git fixtures. Neither
-check establishes that vendor generation, lunch or compilation succeeds.
+The factory archive was downloaded and its full hash verified on the dedicated
+builder. The pinned generator does not reproduce the older checked-in Yogi
+reference: it emits library backport metadata, an ELF compatibility flag, updated
+policy metadata and storage intelligence file declarations. The explicit
+`os/fold-port/adevtool-yogi-reference.patch` records that Yogi-only delta, including
+its file-tree specification. `source.json` binds the patch and each postimage.
+This is a new experimental reference, not a pass against the older reference.
+No proprietary binaries are committed. Offline fixtures exercise guards and patch
+context; compilation and physical acceptance require separate evidence.
 
 Keep the actual phone inventory, extracted APKs, paired-device state and signing
 materials outside Git. Before choosing an update route, obtain:
@@ -42,8 +47,14 @@ outputs, keys and caches. The desktop Mac is an inspection client, not the
 supported x86_64 Linux OS build host.
 
 Reconstruct the pinned source and verify its upstream provenance. Verify the
-factory archive against the full hash above, then use **device-scoped** adevtool
-generation (`generate-all -d yogi`) in that isolated tree. Never use another
+factory archive against the full hash above. Under the existing builder lock,
+check and apply the byte-bound reference patch to the pinned clean
+`vendor/adevtool` project, using `git -C vendor/adevtool apply --check` and
+`git -C vendor/adevtool apply` with its absolute patch path. Then use
+**device-scoped** adevtool generation
+(`generate-all -d yogi --doNotDownloadCarrierSettings`) in that isolated tree.
+Keep normal reference verification enabled; do not use `--noVerify` or update the
+reference during the verification run. Never use another
 device's factory archive or the all-device generation default. Inventory the
 generated vendor and stock-kernel files before proceeding.
 
@@ -56,9 +67,12 @@ python3 scripts/prepare-yogi-port.py apply /absolute/path/to/yogi-source \
 ```
 
 The preparer requires the pinned clean `external/hardened_malloc`,
-`external/selinux` and `vendor/adevtool` projects, plus byte-exact preimages for
-the four patched files. It refuses drift, links, another device's vendor files
-and a held lock. An existing customized build tree must be inventoried and
+`external/selinux` and `vendor/state` projects. For `vendor/adevtool` it admits only
+the exact reviewed reference overlay on the pinned revision, checks its reverse
+applicability, and rejects all other local changes. The four patched files must
+match byte-exact preimages, including the generated BoardConfig and product file.
+It refuses drift, links, another device's vendor files and a held lock.
+An existing customized build tree must be inventoried and
 reconciled; do not reset it to make this check pass.
 
 The patches retain the smaller allocator class region, the device-scoped

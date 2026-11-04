@@ -36,6 +36,9 @@ class YogiPortTest(unittest.TestCase):
         (self.source / '.repo').mkdir(parents=True)
         (self.bundle / 'os/fold-port').mkdir(parents=True)
         self.config = copy.deepcopy(json.loads((ROOT / 'os/fold-port/source.json').read_text()))
+        # The large real overlay is byte-bound separately; exercise its guard with
+        # a small independently committed metadata delta, including a new file.
+        metadata = 'vendor-skels/google_devices/yogi/BoardConfig.mk'
         for relative, data in FIXTURE['files'].items():
             path = self.source / relative
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -45,8 +48,11 @@ class YogiPortTest(unittest.TestCase):
         for relative in self.config['projects']:
             directory = self.source / relative
             directory.mkdir(parents=True, exist_ok=True)
+            (directory / 'fixture.txt').write_text('Synthetic Git revision for offline tests only.\n')
             if relative == 'vendor/adevtool':
-                (directory / 'fixture.txt').write_text('Synthetic Git revision for offline tests only.\n')
+                path = directory / metadata
+                path.parent.mkdir(parents=True)
+                path.write_text('# synthetic original metadata\n')
             run_git(directory, 'init', '-q')
             run_git(directory, 'add', '.')
             run_git(directory, '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid',
@@ -56,6 +62,18 @@ class YogiPortTest(unittest.TestCase):
         ET.ElementTree(manifest).write(self.bundle / 'os/pinned-manifest.xml')
         for name in self.config['patches']:
             shutil.copyfile(ROOT / 'os/fold-port' / name, self.bundle / 'os/fold-port' / name)
+        adevtool = self.source / 'vendor/adevtool'
+        (adevtool / metadata).write_text('# synthetic updated metadata\n')
+        new = 'vendor-skels/google_devices/yogi/config.fs'
+        (adevtool / new).write_text('[SYNTHETIC_FIXTURE]\nvalue: 1\n')
+        run_git(adevtool, 'add', '-N', new)
+        patch = subprocess.check_output(['git', '-C', str(adevtool), 'diff'])
+        patch_path = 'os/fold-port/reference-fixture.patch'
+        (self.bundle / patch_path).write_bytes(patch)
+        self.config['vendorReference'] = {
+            'patch': patch_path, 'sha256': hashlib.sha256(patch).hexdigest(),
+            'postimages': {p: hashlib.sha256((adevtool / p).read_bytes()).hexdigest()
+                           for p in (metadata, new)}}
         (self.bundle / 'os/fold-port/source.json').write_text(json.dumps(self.config))
         self.lock = self.base / 'builder.lock'
         self.lock.touch()
@@ -116,6 +134,34 @@ class YogiPortTest(unittest.TestCase):
                 'commit', '--allow-empty', '-qm', 'another revision')
         with self.assertRaisesRegex(PORT.Refused, 'Wrong upstream revision'):
             self.prepare()
+
+    def test_unreviewed_adevtool_changes_are_refused(self):
+        (self.source / 'vendor/adevtool/owner.txt').write_text('preserve this\n')
+        before = self.bytes()
+        with self.assertRaisesRegex(PORT.Refused, 'Local adevtool changes differ'):
+            self.prepare(apply=True, lock_file=self.lock)
+        self.assertEqual(self.bytes(), before)
+
+    def test_vendor_reference_drift_is_refused(self):
+        relative = next(iter(self.config['vendorReference']['postimages']))
+        (self.source / 'vendor/adevtool' / relative).write_text('different metadata\n')
+        with self.assertRaisesRegex(PORT.Refused, 'reference bytes differ'):
+            self.prepare()
+
+    def test_vendor_reference_patch_identity_is_checked(self):
+        (self.bundle / self.config['vendorReference']['patch']).write_text('wrong patch\n')
+        with self.assertRaisesRegex(PORT.Refused, 'patch identity differs'):
+            self.prepare()
+
+    def test_real_vendor_reference_patch_is_byte_bound_and_yogi_scoped(self):
+        reference = json.loads((ROOT / 'os/fold-port/source.json').read_text())['vendorReference']
+        patch = (ROOT / reference['patch']).read_bytes()
+        self.assertEqual(hashlib.sha256(patch).hexdigest(), reference['sha256'])
+        paths = {line.split(' b/', 1)[1] for line in patch.decode().splitlines()
+                 if line.startswith('diff --git ')}
+        self.assertEqual(paths, set(reference['postimages']))
+        self.assertTrue(all(p.startswith('vendor-skels/google_devices/yogi/') or
+                            p == 'vendor-specs/google_devices/yogi.yml' for p in paths))
 
     def test_another_device_cannot_supply_vendor_files(self):
         (self.source / 'vendor/google_devices/yogi').rename(self.source / 'vendor/google_devices/rango')

@@ -43,7 +43,37 @@ def git(project, *args):
     result = subprocess.run(['git', '-C', str(project), *args], capture_output=True, text=True)
     if result.returncode:
         raise Refused('Cannot inspect Git project: ' + str(project))
-    return result.stdout.strip()
+    return result.stdout.rstrip('\n')
+
+
+def check_vendor_reference(directory, reference, root):
+    """Admit only the exact, reviewed Yogi metadata overlay on pinned adevtool."""
+    expected = reference['postimages']
+    if not expected:
+        raise Refused('Empty Yogi vendor reference')
+    for relative, expected_hash in expected.items():
+        if ('..' in Path(relative).parts or not
+                (relative.startswith('vendor-skels/google_devices/yogi/') or
+                 relative == 'vendor-specs/google_devices/yogi.yml')):
+            raise Refused('Reference update escapes Yogi metadata: ' + relative)
+        path = directory / relative
+        if expected_hash is None:
+            if path.exists() or path.is_symlink():
+                raise Refused('Deleted reference member is still present: ' + relative)
+        elif digest(regular_file(directory, relative).read_bytes()) != expected_hash:
+            raise Refused('Yogi reference bytes differ: ' + relative)
+    changes = git(directory, 'status', '--porcelain', '--untracked-files=all').splitlines()
+    if any(' -> ' in line or line[3:].startswith('"') for line in changes):
+        raise Refused('Unexpected rename or quoted path in adevtool')
+    if {line[3:] for line in changes} != set(expected):
+        raise Refused('Local adevtool changes differ from the reviewed Yogi reference')
+    patch = root / reference['patch']
+    if digest(patch.read_bytes()) != reference['sha256']:
+        raise Refused('Yogi reference patch identity differs')
+    result = subprocess.run(['git', '-C', str(directory), 'apply', '--reverse', '--check', str(patch)],
+                            capture_output=True, text=True)
+    if result.returncode:
+        raise Refused('Reviewed Yogi reference patch does not match the source tree')
 
 
 def recipe(root):
@@ -70,7 +100,10 @@ def prepared_files(source, root=ROOT):
         head = git(directory, 'rev-parse', 'HEAD')
         if head != pins[project]:
             raise Refused('Wrong upstream revision: ' + project)
-        if git(directory, 'status', '--porcelain', '--untracked-files=all'):
+        reference = config.get('vendorReference') if project == 'vendor/adevtool' else None
+        if reference:
+            check_vendor_reference(directory, reference, root)
+        elif git(directory, 'status', '--porcelain', '--untracked-files=all'):
             raise Refused('Local changes present: ' + project)
         revisions[project] = head
     before = {}
@@ -136,6 +169,9 @@ def prepare(source, apply=False, lock_file=None, root=ROOT):
                 'files': {p: {'beforeSha256': digest(before[p]), 'afterSha256': digest(after[p])}
                           for p in before},
                 'build': config['build'],
+                'vendorReference': ({'patch': config['vendorReference']['patch'],
+                                     'sha256': config['vendorReference']['sha256']}
+                                    if config.get('vendorReference') else None),
                 'limits': ['Vendor archive and stock-kernel bytes are not verified by this tool.',
                            'Rose app, policy, signing and update compatibility are separate checks.',
                            'No compilation, installation, phone acceptance or publication.']}
