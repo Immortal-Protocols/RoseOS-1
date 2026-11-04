@@ -47,11 +47,13 @@ public final class AgentTrayService extends Service {
     try{binder.linkToDeath(death,0);}catch(RemoteException e){return;}
     deaths.put(binder,death);clients.put(binder,m.replyTo);
    }
-   send(m.replyTo,state());
+   send(m.replyTo,state(this));
    main.removeCallbacks(poll);main.post(poll);return;
   }
   if(m.what==UNREGISTER&&m.replyTo!=null){removeClient(m.replyTo.getBinder());return;}
-  String action=m.what==START?"talk":m.what==MUTE?"tray_mute":m.what==UNMUTE?"tray_unmute":m.what==END?"end":null;
+  // Rose's microphone-input mute (RoseMicInput): recorded, and applied to a live call; idle it starts nothing.
+  if(m.what==MUTE||m.what==UNMUTE){RoseMicState.request(this,m.what==MUTE);publish(true);return;}
+  String action=m.what==START?"talk":m.what==END?"end":null;
   if(action==null)return;
   VoiceService voice=VoiceService.instance;
   if(voice!=null)voice.command(action);
@@ -61,13 +63,15 @@ public final class AgentTrayService extends Service {
  /** True while the platform SystemUI tray client is bound; the app-side glow then stays hidden. */
  static boolean systemTrayRegistered(){AgentTrayService service=instance;return service!=null&&!service.clients.isEmpty();}
  /** v1 state from the same ConversationState the conversation surface renders; no status-text inference. */
- static Bundle state(){
+ static Bundle state(){return state(instance);}
+ /** v1 state; "muted" is Rose's microphone-input mute as every surface shows it (RoseMicInput.shown). */
+ static Bundle state(android.content.Context context){
   VoiceService v=VoiceService.instance;
   ConversationState c=v==null?ConversationState.of(false,false,false,false,false,null,null,null)
    :ConversationState.of(true,v.live,v.connected,v.muted,v.communicating,v.lastEndReason,v.lastStartError,v.backendReachable);
   Bundle b=new Bundle();b.putInt("protocolVersion",1);b.putBoolean("available",true);
   b.putBoolean("connected",c.trayConnected());b.putBoolean("listening",c.trayListening());
-  b.putBoolean("muted",c.trayMuted());
+  b.putBoolean("muted",context==null?c.trayMuted():RoseMicInput.shown(c.active(),c.muted,RoseMicState.muted(context)));
   boolean fresh=v!=null&&SystemClock.elapsedRealtime()-v.trayAudioObservedAt<1200;
   b.putFloat("inputLevel",fresh&&c.trayListening()?v.trayInputLevel:0f);
   b.putFloat("outputLevel",fresh&&c.active()?v.trayOutputLevel:0f);
@@ -77,7 +81,7 @@ public final class AgentTrayService extends Service {
  }
  private String signature(Bundle b){return b.getBoolean("connected")+":"+b.getBoolean("listening")+":"+b.getBoolean("muted")+":"+b.getString("status")+":"+Math.round(b.getFloat("inputLevel")*50)+":"+Math.round(b.getFloat("outputLevel")*50)+":"+(b.getLong("audioObservedAt")/400);}
  private void publish(boolean force){
-  Bundle b=state();String next=signature(b);if(!force&&lastState.equals(next))return;lastState=next;
+  Bundle b=state(this);String next=signature(b);if(!force&&lastState.equals(next))return;lastState=next;
   for(Messenger client:new ArrayList<>(clients.values()))send(client,b);
  }
  private void send(Messenger client,Bundle data){

@@ -42,6 +42,10 @@ on:
       - 'scripts/frankel-factory-package-wiring.py'
       - 'os/factory-package/**'
       - 'scripts/tests/test_frankel_factory_package_workflow.py'
+      - 'scripts/mustang-ota-chain.py'
+      - 'scripts/mustang-delivery.py'
+      - 'scripts/mustang_ota.py'
+      - 'scripts/tests/test_mustang_ota_chain_workflow.py'
       - 'scripts/rango-factory-inspect-wiring.py'
       - 'scripts/rango-firmware-observe.py'
       - 'scripts/tests/test_rango_factory_inspect_workflow.py'
@@ -194,6 +198,10 @@ on:
       - 'scripts/frankel-factory-package-wiring.py'
       - 'os/factory-package/**'
       - 'scripts/tests/test_frankel_factory_package_workflow.py'
+      - 'scripts/mustang-ota-chain.py'
+      - 'scripts/mustang-delivery.py'
+      - 'scripts/mustang_ota.py'
+      - 'scripts/tests/test_mustang_ota_chain_workflow.py'
       - 'scripts/rango-factory-inspect-wiring.py'
       - 'scripts/rango-firmware-observe.py'
       - 'scripts/tests/test_rango_factory_inspect_workflow.py'
@@ -338,6 +346,7 @@ jobs:
           python3 scripts/tests/test_release_candidate_contract.py
           python3 scripts/tests/test_release_allocate.py
           python3 scripts/tests/test_release_chain.py
+          python3 scripts/tests/test_mustang_ota_chain_workflow.py
           python3 scripts/tests/test_rango_factory_observe_workflow.py
           python3 scripts/tests/test_blazer_prep_workflow.py
           python3 scripts/tests/test_rango_factory_package_workflow.py
