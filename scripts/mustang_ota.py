@@ -122,12 +122,27 @@ def properties(raw):
     return dict(rows)
 
 
+def vendor_identity(raw):
+    """Read only the three required identity values; unrelated repeated properties
+    are not an identity failure. Repeated identity values must agree exactly.
+    OTA metadata still uses the separate strict duplicate-rejecting parser.
+    """
+    rows = [line.split('=', 1) for line in raw.decode().splitlines() if '=' in line and not line.startswith('#')]
+    identity = {}
+    for key in ('ro.product.vendor.device', 'ro.vendor.build.version.incremental', 'ro.vendor.build.date.utc'):
+        values = {value for name, value in rows if name == key}
+        if len(values) != 1:
+            raise ValueError('required vendor build identity missing or conflicting: '+key)
+        identity[key] = values.pop()
+    return identity
+
+
 def observe_target(path, build, epoch, tools, pins, execute=subprocess.run):
     """Actual packaged Updater resources, signer and system OTA trust; no phone claim."""
     pipeline = module('mustang_ota_resources', 'release-pipeline.py')
     route = read(ROOT/'os/build-only/mustang-updater-route.json')
     with zipfile.ZipFile(path) as archive, tempfile.TemporaryDirectory(prefix='mustang-ota-observe-') as directory:
-        props = properties(member(archive, 'VENDOR/build.prop', 4 << 20))
+        props = vendor_identity(member(archive, 'VENDOR/build.prop', 4 << 20))
         if (props.get('ro.product.vendor.device'), props.get('ro.vendor.build.version.incremental'),
                 props.get('ro.vendor.build.date.utc')) != ('mustang', build, epoch):
             raise ValueError('actual target-files device/build/time differs')

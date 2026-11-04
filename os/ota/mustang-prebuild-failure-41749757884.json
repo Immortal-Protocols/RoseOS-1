@@ -1,0 +1,31 @@
+{
+  "schema": "roseos.mustang-ota-prebuild-failure.v1",
+  "runId": "41749757884",
+  "source": "2a10c8e3a12707051cff411b45e4727d50e2fcbf",
+  "jobId": "126311910640",
+  "step": "Check installed-baseline updater before starting a newer compile",
+  "stepStartedAt": "2026-11-04T00:50:56Z",
+  "stepCompletedAt": "2026-11-04T00:51:11Z",
+  "error": "ValueError: duplicate metadata properties",
+  "evidence": "Completed GitHub job metadata and newly permitted job-log fetch; no previously denied log/artifact route retried.",
+  "prepareAllocateIntegrateCompileStep": "skipped",
+  "signingOrPublication": "not reached",
+  "cleanup": {
+    "jobId": "126312113961",
+    "conclusion": "success",
+    "completedAt": "2026-11-04T00:51:50Z",
+    "independentInstanceObservation": {
+      "observedAt": "2026-11-04T00:53:33.985544+00:00",
+      "instance": {
+        "id": "685707771105568194",
+        "lastStartTimestamp": "2026-11-03T16:50:36.583-08:00",
+        "lastStopTimestamp": "2026-11-03T16:51:41.538-08:00",
+        "name": "immortal-os-builder",
+        "status": "TERMINATED"
+      }
+    }
+  },
+  "diagnosis": "The baseline observer used the strict OTA-metadata duplicate parser on the entire VENDOR/build.prop. Required identity checks need only unique consistent values for the three selected identity properties, not uniqueness of every unrelated vendor property.",
+  "correction": "Scope build.prop parsing to the required device/build/time values; reject missing/conflicting identity values, permit unrelated repeats and identical repeated identity values. Keep OTA metadata duplicate rejection unchanged.",
+  "baselineUpdaterCompatible": "unproven until corrected observer executes"
+}
