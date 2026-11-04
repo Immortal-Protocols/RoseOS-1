@@ -56,12 +56,20 @@ SOURCES = [
         'config/mk/google_devices/common/BoardConfig-common.mk',
         'config/mk/google_devices/common/BoardConfig-common-gs201-plus.mk',
         'config/mk/google_devices/platform/laguna/BoardConfig-common.mk',
-        'dl/.find-ignore', 'vendor-skels/.find-ignore',
+        'dl/.find-ignore', 'vendor-skels/.find-ignore', '.gitignore',
     ]),
     ('build/make', 'platform_build', ['envsetup.sh', 'core/version_util.mk', 'core/build_id.mk',
         'core/product_config.mk']),
     (KERNEL, 'device_google_laguna-kernels_6.6', []),
 ]
+# How an adapter checks each project's working tree in the copy against its listing.
+WORKING_TREE_CHECK = {
+    ADEVTOOL: 'exact: gitRequirement.workingTree',
+    'build/make': 'derivation only: apply-os-changes.py patches build/make (agent tray, updater, background control), '
+        'so the integrated working tree is not this listing; those post-images belong to an integration report',
+    KERNEL: 'exact: no RoseOS patch or overlay touches it, so every listed path is present with exactly its mode and '
+        'blob and nothing else is',
+}
 GZIPPED = {(ADEVTOOL, f'{SKEL}/{DEVICE}.mk'), (ADEVTOOL, SPEC)}
 # The kernel module lists BoardConfig-common-gs201-plus.mk reads with $(shell cat ...) at lunch.
 MODULE_LISTS = ['vendor_kernel_boot.modules.load', 'vendor_dlkm.modules.load', 'system_dlkm.modules.load']
@@ -98,6 +106,25 @@ def remote_url(path):
     if not remote:
         raise SystemExit(f'{path}: no pinned https remote in {PINNED}')
     return remote.group(1) + project.group(1)
+
+
+def working_tree():
+    """The adevtool working tree in the copy: exactly its pinned listing. The paths its pinned .gitignore ignores are
+    never lunch inputs (lunch runs no adevtool code), so the copy omits them instead of admitting unpinned content."""
+    rules = [l for l in fixture_bytes(ADEVTOOL, '.gitignore').decode().splitlines() if l and not l.startswith('#')]
+    return {
+        'project': ADEVTOOL,
+        'rule': f'every path of sources[{ADEVTOOL}].listing is present with exactly its mode and blob, and nothing '
+            'else is, except .git (gitRequirement)',
+        'omittedFromCopy': {'gitignore': rules, 'gitBlob': listing(ADEVTOOL)['.gitignore'][1],
+            'means': 'the copy leaves out exactly what these pinned .gitignore rules ignore (git check-ignore '
+                'semantics, from the project root); a tracked path is never omitted'},
+        'untrackedAllowed': [],
+        'why': 'the product finder prunes only dl/ and vendor-skels/ (finderPrune), so untracked content anywhere '
+            'else, such as node_modules/, would be scanned at lunch as an unpinned input',
+        'onUnlisted': 'refuse, naming every unlisted path found (bounded), so a first run reports what a real tree '
+            'holds instead of admitting it',
+    }
 
 
 def tree_fixture(project):
@@ -202,7 +229,7 @@ def build():
         sources.append({'path': path, 'repo': f'GrapheneOS/{repo}', 'revision': revisions[path],
             'rootTree': root_tree(path), 'listing': {'path': str(tree_fixture(path).relative_to(ROOT)),
             'sha256': sha256(raw), 'compressedSha256': sha256(tree_fixture(path).read_bytes()),
-            'paths': len(listing(path))}})
+            'paths': len(listing(path))}, 'workingTreeCheck': WORKING_TREE_CHECK[path]})
     trees = {p: listing(p) for p, _, _ in SOURCES}
     provenance = json.loads(PROVENANCE.read_text())
     adev = revisions[ADEVTOOL]
@@ -374,10 +401,18 @@ def build():
                 'acceptance': [
                     'gitRequirement.acceptance items 1-3, unchanged',
                     'rev-parse --verify revision^{tree} is exactly rootTree (Blazer checks only that it exists)',
-                    'git fsck --connectivity-only --no-progress succeeds',
+                    'git fsck --no-dangling --no-progress succeeds: a full check, so every object\'s hash and every link '
+                        'from the commit are verified (not --connectivity-only)',
+                    'git ls-tree -r -z --full-tree revision, each NUL replaced by LF, is byte for byte the decompressed '
+                        f'sources[{ADEVTOOL}].listing (its sha256)',
                     'shallow is exactly revision plus one newline',
                     'no objects/info/alternates and no remote.* key in git config --local --list',
+                    'workingTree holds',
                 ],
+                'establishes': 'the genuine objects of public commit revision, by content addressing (commit, tree, '
+                    'blobs, each hash-checked); not provenance from the production gitdir, which only genuine-copy '
+                    'shows. Tree equality, a full fsck and working-tree equality are stronger than the functional '
+                    'minimum',
                 'cleanup': 'on any failure, remove only the .git this attempt created; nothing else in the copy, and '
                     'never anything in the source tree',
                 'ceiling': {'seconds': 1800, 'bytes': 1073741824, 'kind': 'Infra\'s proposed execution ceiling for '
@@ -385,6 +420,7 @@ def build():
                 'unbound': 'sourceTree, lunch, policy and integration-report bindings stay unbound; without an approved '
                     'attempt that passes, the adapter still refuses with adevtool_git_missing',
             },
+            'workingTree': working_tree(),
             'environment': {'GIT_CEILING_DIRECTORIES': 'the copy root', 'unset': 'GIT_*',
                 'why': 'without a ceiling git searches above the copy, and a parent repository would answer with a '
                     'foreign HEAD'},

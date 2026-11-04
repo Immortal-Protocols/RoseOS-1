@@ -13,6 +13,7 @@ import shutil
 import subprocess
 import tempfile
 import unittest
+import zlib
 import xml.etree.ElementTree as ET
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -40,7 +41,7 @@ def blob(data):
 
 class FrankelLunchInputsTest(unittest.TestCase):
     # OS Product's proposed version (#410), not yet agreed with Release; once agreed, any change needs re-agreement.
-    PROPOSED_SHA256 = 'c69a7bc589607699a533ad10bf67744a93d70f8a42f77f681f57496b0e13a225'
+    PROPOSED_SHA256 = 'aea12555f90ee20931e9a440c920b9aeaa18f67b1071f384ede973ef606790f2'
 
     def manifest(self):
         return json.loads(MANIFEST.read_text())
@@ -210,15 +211,19 @@ class FrankelLunchInputsTest(unittest.TestCase):
         self.assertIn('neither a measured requirement nor a runtime approval', fetch['ceiling']['kind'])
         self.assertIn('adevtool_git_missing', fetch['unbound'])
 
-    def public_fetch_problems(self, copy, head, tree):
-        """publicFetch.acceptance beyond items 1-3: exact tree, connectivity, shallow at the pin, no alternates or
-        remote."""
+    def public_fetch_problems(self, copy, head, tree, listing):
+        """publicFetch.acceptance beyond items 1-3: exact tree, a full fsck, the exact listing, shallow at the pin, no
+        alternates or remote."""
         work, dot = copy/'vendor/adevtool', copy/'vendor/adevtool/.git'
         problems = []
         if self.git(copy, '-C', str(work), 'rev-parse', '--verify', '-q', head + '^{tree}', check=False).stdout.strip() != tree:
             problems.append('tree')
-        if self.git(copy, '-C', str(work), 'fsck', '--connectivity-only', '--no-progress', check=False).returncode:
+        if self.git(copy, '-C', str(work), 'fsck', '--no-dangling', '--no-progress', check=False).returncode:
             problems.append('fsck')
+        listed = subprocess.run(['git', '-C', str(work), 'ls-tree', '-r', '-z', '--full-tree', head], env=self.env(copy),
+            capture_output=True)
+        if listed.returncode or listed.stdout.replace(b'\0', b'\n') != listing:
+            problems.append('listing')
         if not (dot/'shallow').is_file() or (dot/'shallow').read_text() != head + '\n':
             problems.append('shallow')
         if os.path.lexists(dot/'objects/info/alternates'):
@@ -239,6 +244,8 @@ class FrankelLunchInputsTest(unittest.TestCase):
             self.git(scratch, '-C', str(origin), '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', 'y')
             head = self.git(scratch, '-C', str(origin), 'rev-parse', 'HEAD').stdout.strip()
             tree = self.git(scratch, '-C', str(origin), 'rev-parse', 'HEAD^{tree}').stdout.strip()
+            listing = subprocess.run(['git', '-C', str(origin), 'ls-tree', '-r', '-z', '--full-tree', head],
+                env=self.env(scratch), capture_output=True, check=True).stdout.replace(b'\0', b'\n')
             # The contract's own steps, run offline: a file:// remote stands in for https (only the protocol differs).
             copy = scratch/'copy'
             (copy/'vendor/adevtool').mkdir(parents=True)
@@ -248,13 +255,17 @@ class FrankelLunchInputsTest(unittest.TestCase):
                     capture_output=True)
             self.head = head
             self.assertIsNone(self.accepted(copy))
-            self.assertEqual(self.public_fetch_problems(copy, head, tree), [])
+            self.assertEqual(self.public_fetch_problems(copy, head, tree, listing), [])
             self.assertFalse(os.path.lexists(copy/'vendor/adevtool/.git/hooks'), 'no templates, so no hooks')
             self.assertEqual(os.listdir(copy/'vendor/adevtool'), ['.git'], 'the working tree is untouched')
-            # Hand-written stores pass items 1-3: one holding only the commit object fails the tree check, and one
-            # holding the commit and its tree but no blobs passes even that, so connectivity is what refuses it.
-            for name, objects, expected in (('commit-only', [head], ['tree', 'fsck', 'shallow']),
-                    ('no-blobs', [head, tree], ['fsck', 'shallow'])):
+            # Hand-written stores pass items 1-3: one holding only the commit object fails the tree check; one holding the
+            # commit and its tree but no blobs passes that and the listing, and the full fsck refuses it; one holding
+            # every object with a blob's bytes replaced passes even --connectivity-only, and only the full fsck (which
+            # rehashes each object) refuses it.
+            blobs = [line.split(b'\t')[0].split(b' ')[2].decode() for line in listing.splitlines()]
+            for name, objects, expected in (('commit-only', [head], ['tree', 'fsck', 'listing', 'shallow']),
+                    ('no-blobs', [head, tree], ['fsck', 'shallow']),
+                    ('corrupt-blob', [head, tree] + blobs, ['fsck'])):
                 fake = scratch/name
                 gitdir = fake/'vendor/adevtool/.git'
                 (gitdir/'refs').mkdir(parents=True)
@@ -263,8 +274,53 @@ class FrankelLunchInputsTest(unittest.TestCase):
                     (gitdir/loose).parent.mkdir(parents=True, exist_ok=True)
                     shutil.copyfile(origin/'.git'/loose, gitdir/loose)
                 (gitdir/'HEAD').write_text(head + '\n')
+                if name == 'corrupt-blob':
+                    # Shallow at the pin like a real fetch, so only the replaced bytes differ from a genuine store.
+                    (gitdir/'shallow').write_text(head + '\n')
+                    target = gitdir/'objects'/blobs[0][:2]/blobs[0][2:]
+                    target.chmod(0o644)
+                    target.write_bytes(zlib.compress(b'blob 2\0z\n'))
+                    self.assertEqual(self.git(fake, '-C', str(fake/'vendor/adevtool'), 'fsck', '--connectivity-only',
+                        '--no-progress', check=False).returncode, 0, 'connectivity alone does not see the bytes')
                 self.assertIsNone(self.accepted(fake), name)
-                self.assertEqual(self.public_fetch_problems(fake, head, tree), expected, name)
+                self.assertEqual(self.public_fetch_problems(fake, head, tree, listing), expected, name)
+
+    def test_the_adevtool_working_tree_is_exactly_its_listing_and_gitignored_paths_are_omitted(self):
+        manifest = self.manifest()
+        tree = manifest['gitRequirement']['workingTree']
+        self.assertEqual(tree['untrackedAllowed'], [])
+        self.assertIn('nothing else is, except .git', tree['rule'])
+        pinned = (FIXTURES/'vendor/adevtool/.gitignore').read_bytes()
+        self.assertEqual(tree['omittedFromCopy']['gitignore'], pinned.decode().splitlines())
+        self.assertEqual(tree['omittedFromCopy']['gitBlob'], '969b2c305b39480d6f7f68dac493744e204de8d3')
+        listed = [line.split('\t', 1)[1] for line in gzip.decompress(
+            (FIXTURES/'trees/vendor__adevtool.ls-tree.txt.gz').read_bytes()).decode().splitlines()]
+        with tempfile.TemporaryDirectory() as scratch:
+            scratch = Path(scratch)
+            self.git(scratch, 'init', '-q', str(scratch/'r'))
+            (scratch/'r/.gitignore').write_bytes(pinned)
+            def ignored(paths):
+                out = subprocess.run(['git', '-C', str(scratch/'r'), 'check-ignore', '--no-index', '-z', '--stdin'],
+                    input='\0'.join(paths).encode(), env=self.env(scratch), capture_output=True)
+                return sorted(p for p in out.stdout.decode().split('\0') if p)
+            self.assertEqual(ignored(listed), [], 'the omission never drops a tracked path')
+            self.assertEqual(ignored(['node_modules/x/Android.mk', 'dist/a', 'lib/b', '.idea/c', 'dl/factory.zip',
+                'dl/.find-ignore', 'src/x.ts']), ['.idea/c', 'dist/a', 'dl/factory.zip', 'lib/b',
+                'node_modules/x/Android.mk'])
+        prune = {m['path'] for m in manifest['finderPrune']['markers']}
+        self.assertEqual(prune, {'vendor/adevtool/dl/.find-ignore', 'vendor/adevtool/vendor-skels/.find-ignore'},
+            'only dl/ and vendor-skels/ are pruned, so other untracked content would reach the finder')
+
+    def test_each_listing_states_how_its_working_tree_is_checked(self):
+        checks = {s['path']: s['workingTreeCheck'] for s in self.manifest()['sources']}
+        self.assertTrue(checks['vendor/adevtool'].startswith('exact'))
+        self.assertTrue(checks['device/google/laguna-kernels/6.6'].startswith('exact'))
+        self.assertTrue(checks['build/make'].startswith('derivation only'))
+        patcher = (ROOT/'scripts/apply-os-changes.py').read_text()
+        self.assertIn("projects['build/make']", patcher, 'RoseOS patches build/make, so its tree is not the listing')
+        for patch in (ROOT/'os/patches').glob('*.patch'):
+            self.assertNotIn('laguna-kernels', patch.read_text(errors='replace'))
+        self.assertFalse((ROOT/'os/overlays/device').exists())
 
     def test_the_generated_vendor_observables_are_the_reference_spec(self):
         vendor = self.manifest()['generatedVendor']

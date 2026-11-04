@@ -155,6 +155,14 @@
    "kind": "full"
   },
   {
+   "fixture": "vendor/adevtool/.gitignore",
+   "project": "vendor/adevtool",
+   "path": ".gitignore",
+   "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c",
+   "gitBlob": "969b2c305b39480d6f7f68dac493744e204de8d3",
+   "kind": "full"
+  },
+  {
    "fixture": "build/make/envsetup.sh",
    "project": "build/make",
    "path": "envsetup.sh",

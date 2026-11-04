@@ -20,7 +20,8 @@
     "sha256": "9524aba018afb18c1d29dd6f7b770d53da747ac2c3881ca31fdbf1ef110b160a",
     "compressedSha256": "d9832e9c46b3670ea5a66c56771d50760b6ba8e2364364c83006adda57f0dac0",
     "paths": 55890
-   }
+   },
+   "workingTreeCheck": "exact: gitRequirement.workingTree"
   },
   {
    "path": "build/make",
@@ -32,7 +33,8 @@
     "sha256": "958bfe6712d2675118b86d6d9a9978cc3626cad0c00c94af43a312f266e8b2bd",
     "compressedSha256": "78d8474b95c5c348e92de95aad4f5f3c574a30d6aa5f4dd6d7f4d4f564eccb4d",
     "paths": 1680
-   }
+   },
+   "workingTreeCheck": "derivation only: apply-os-changes.py patches build/make (agent tray, updater, background control), so the integrated working tree is not this listing; those post-images belong to an integration report"
   },
   {
    "path": "device/google/laguna-kernels/6.6",
@@ -44,7 +46,8 @@
     "sha256": "7c3c447450331fa2ee55782f1942c6d749261512fffc0eae0869802bc68c48e6",
     "compressedSha256": "d3f705e5eb2314d01f27f2d0a78a4c3e6983e4cb4920dc77b588dd12cd8a7335",
     "paths": 828
-   }
+   },
+   "workingTreeCheck": "exact: no RoseOS patch or overlay touches it, so every listed path is present with exactly its mode and blob and nothing else is"
   }
  ],
  "fixtures": [
@@ -200,6 +203,14 @@
    "path": "vendor-skels/.find-ignore",
    "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c",
    "gitBlob": "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391",
+   "kind": "full"
+  },
+  {
+   "fixture": "vendor/adevtool/.gitignore",
+   "project": "vendor/adevtool",
+   "path": ".gitignore",
+   "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c",
+   "gitBlob": "969b2c305b39480d6f7f68dac493744e204de8d3",
    "kind": "full"
   },
   {
@@ -450,10 +461,13 @@
    "acceptance": [
     "gitRequirement.acceptance items 1-3, unchanged",
     "rev-parse --verify revision^{tree} is exactly rootTree (Blazer checks only that it exists)",
-    "git fsck --connectivity-only --no-progress succeeds",
+    "git fsck --no-dangling --no-progress succeeds: a full check, so every object's hash and every link from the commit are verified (not --connectivity-only)",
+    "git ls-tree -r -z --full-tree revision, each NUL replaced by LF, is byte for byte the decompressed sources[vendor/adevtool].listing (its sha256)",
     "shallow is exactly revision plus one newline",
-    "no objects/info/alternates and no remote.* key in git config --local --list"
+    "no objects/info/alternates and no remote.* key in git config --local --list",
+    "workingTree holds"
    ],
+   "establishes": "the genuine objects of public commit revision, by content addressing (commit, tree, blobs, each hash-checked); not provenance from the production gitdir, which only genuine-copy shows. Tree equality, a full fsck and working-tree equality are stronger than the functional minimum",
    "cleanup": "on any failure, remove only the .git this attempt created; nothing else in the copy, and never anything in the source tree",
    "ceiling": {
     "seconds": 1800,
@@ -461,6 +475,26 @@
     "kind": "Infra's proposed execution ceiling for the attempt; neither a measured requirement nor a runtime approval"
    },
    "unbound": "sourceTree, lunch, policy and integration-report bindings stay unbound; without an approved attempt that passes, the adapter still refuses with adevtool_git_missing"
+  },
+  "workingTree": {
+   "project": "vendor/adevtool",
+   "rule": "every path of sources[vendor/adevtool].listing is present with exactly its mode and blob, and nothing else is, except .git (gitRequirement)",
+   "omittedFromCopy": {
+    "gitignore": [
+     "/.idea/",
+     "/dist/",
+     "!/dl/",
+     "/dl/*",
+     "!/dl/.find-ignore",
+     "/lib/",
+     "/node_modules/"
+    ],
+    "gitBlob": "969b2c305b39480d6f7f68dac493744e204de8d3",
+    "means": "the copy leaves out exactly what these pinned .gitignore rules ignore (git check-ignore semantics, from the project root); a tracked path is never omitted"
+   },
+   "untrackedAllowed": [],
+   "why": "the product finder prunes only dl/ and vendor-skels/ (finderPrune), so untracked content anywhere else, such as node_modules/, would be scanned at lunch as an unpinned input",
+   "onUnlisted": "refuse, naming every unlisted path found (bounded), so a first run reports what a real tree holds instead of admitting it"
   },
   "environment": {
    "GIT_CEILING_DIRECTORIES": "the copy root",
