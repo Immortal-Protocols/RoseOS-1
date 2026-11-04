@@ -206,9 +206,36 @@ laguna-kernels `275dad3c`. The one exception is `gitRequirement.genuineSource`, 
     - no other filesystem or mount point, and no hard-linked file;
     - the git directories resolve inside the copy root.
 
-  No check can tell a fabricated store from a genuine one; only an approved byte-for-byte copy establishes it. A genuine
-  copy is allowed only under a separate approval. Redirect, fabrication and relaxation (`--noVerify`, `--updateSpec`,
-  working-tree changes) are refused. In the pinned sources, nothing else needs `.git` for this lunch.
+  Those checks alone cannot tell a hand-written gitdir from a genuine one. The objects are genuine only when they come
+  from the genuine source, by one of two routes, each allowed only under a separate approval:
+  - **`genuine-copy`:** an approved byte-for-byte copy.
+  - **`public-fetch`** (`gitRequirement.publicFetch`, following Infra's assessment of `adevtool_git_missing`): Blazer's
+    git-meta steps for this one project.
+    - A new `.git` inside the copy with no templates; the pinned revision fetched at depth 1 with no tags from the
+      pinned manifest's own https remote; a detached HEAD by `update-ref`.
+    - An isolated git environment.
+    - On failure, cleanup of only the `.git` the attempt created.
+    - It passes only if, beyond the checks above, the tree is exactly `f0863541`, a full `git fsck --no-dangling`
+      succeeds (every object rehashed, not `--connectivity-only`), `ls-tree -r` equals the pinned listing byte for
+      byte, the repository is shallow at exactly the pin, there are no alternates and no remote, and `workingTree`
+      holds. That establishes the genuine objects of the public commit by content addressing. It does not establish
+      provenance from the production gitdir; only `genuine-copy` does.
+    - Its 30 min and 1 GiB ceiling is Infra's proposal, neither a measurement nor an approval.
+    - The test runs the exact steps offline against a local repository. It shows that a hand-written store passing
+      the basic checks is refused. One holding only the commit fails the tree check. One holding the commit and tree
+      but no blobs fails the full fsck. One holding every object with a blob's bytes replaced passes
+      `--connectivity-only`, and only the full fsck refuses it.
+- **`gitRequirement.workingTree`.** The adevtool working tree in the copy is exactly its pinned listing, plus `.git`.
+  - The copy omits exactly what the pinned `.gitignore` (blob `969b2c30`) ignores: `.idea/`, `dist/`, `dl/*` except
+    `dl/.find-ignore`, `lib/` and `node_modules/`. Lunch runs no adevtool code, and the test shows the rules drop no
+    tracked path.
+  - Nothing untracked is admitted. The finder prunes only `dl/` and `vendor-skels/`, so untracked content anywhere else
+    would reach it. An unlisted path refuses, and the refusal names what was found.
+  - Each `sources` row says how its working tree is checked. The laguna kernels are checked exactly, because no
+    RoseOS patch touches them. build/make is derivation only, because `apply-os-changes.py` patches it.
+
+  Redirect, fabrication and relaxation (`--noVerify`, `--updateSpec`, working-tree changes) are refused. In the pinned
+  sources, nothing else needs `.git` for this lunch.
 - **`buildId`, `kernelModuleLists`, `finderPrune`, `manifestFiles`.**
   - `cmds-for-envsetup.sh` exports `BUILD_ID_frankel`. With it unset beforehand, a missing script leaves the build/make
     default, and frankel.mk stops lunch.
