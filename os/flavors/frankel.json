@@ -242,9 +242,9 @@
   ],
   "missingForFactory": [
     {
-      "input": "factory stage of generate-release.sh (img_from_target_files onward)",
-      "owner": "signing (host-sign.py derive_release_script)",
-      "next": "add an opt-in mode that keeps the script tail through optimize-factory-image and maps {device}-install-{build}.zip (+ .sig) into the release dir"
+      "input": "packaging-only factory stage for a signed frankel target-files (scripts/host-factory-package.py --device frankel)",
+      "owner": "signing (helper), release (workflow mode), original Infra (runtime)",
+      "next": "host-factory-package.py flavor_pins reads only a literal identity.avbPublicKeySha256 and refuses frankel (contract_missing), whose AVB pin is the avbPublicKeySha256From pointer; resolve it with factory-package.py pinned_avb_key. Then bind the chosen build (latest published frankel-2026110301 unless the owner selects another), its signed target-files path and signedTargetFilesSha256 from that build's host-sign marker, its otatools sha256 and bin/fastboot sha256, and generate-release.sh 01f7847e (provenance.releaseScript) in a Frankel package mode; the OTA route stays unchanged"
     },
     {
       "input": "factory-signing identity (principal + ssh-ed25519 public key, namespace \"factory images\")",
@@ -275,5 +275,50 @@
     "owner": "signing (Chief approval for any new identity)",
     "basis": "generate-release.sh signs {device}-install-{build}.zip with ssh-keygen -Y sign -n \"factory images\" -f $KEY_DIR/id_ed25519 only when that key exists; os/signing-bootstrap/profiles.json: id_ed25519 is optional and not produced by generate-keys. No RoseOS factory-signing public key exists in approved inventory, so signatureVerified cannot pass. Never generated here and never derived from OTA/AVB keys.",
     "verifier": "ssh-keygen -Y verify -f <allowed_signers from this pin only> -I principal -n \"factory images\" -s ARCHIVE.sig"
+  },
+  "firstInstall": {
+    "product": "frankel",
+    "fastbootMinVersion": "35.0.1",
+    "fastbootMinVersionFrom": "scripts/tests/fixtures/factory-package/device_common-1f5ba267/generate-factory-images-common.sh MIN_FASTBOOT_VERSION_STR",
+    "requiresUnlockedBootloader": true,
+    "erasesUserData": true,
+    "flashes": {
+      "bootloader": "deepspace-17.4-16119390",
+      "bootloaderSlots": "both",
+      "radio": "g5400i-260604-260807-B-16035863"
+    },
+    "checkRequirements": {
+      "board": [
+        "frankel"
+      ],
+      "partitionExists": [
+        "vendor_kernel_boot"
+      ],
+      "versionBootloader": [
+        "deepspace-17.4-16119390"
+      ],
+      "versionBaseband": [
+        "g5400i-260604-260807-B-16035863"
+      ]
+    },
+    "avbCustomKey": {
+      "file": "avb_pkmd.bin",
+      "sha256From": "os/release-pipeline/frankel.json identities.avbPublicKeySha256"
+    },
+    "otaContinuity": {
+      "otaCertificateSha256From": "os/release-pipeline/frankel.json identities.otaCertificateSha256",
+      "basis": "A factory install keeps receiving Frankel OTAs only if the installed build trusts the same OTA certificate as the published Frankel channel; the installer must come from a Frankel target-files signed by the same signing route (host-sign.py, PIXEL_OS_SIGNING_KEYS_FRANKEL_V5), whose OTA certificate is this pin. The existing Frankel OTA route is unchanged."
+    },
+    "relockClaimedSafe": false,
+    "ownerSteps": [
+      "On the phone: enable Developer options, then OEM unlocking (needs a network connection on stock Pixel firmware), and reboot to the bootloader.",
+      "On the host: fastboot at least 35.0.1 on PATH (the install script refuses an older one); `fastboot getvar product` must print frankel (the script refuses any other device).",
+      "Unlock the bootloader with `fastboot flashing unlock` and confirm on the phone; this and the install erase ALL data on the phone.",
+      "Verify the install archive first: its sha256 against the delivery receipt and, once a Frankel factory-signing identity is pinned, its detached signature (docs/VERIFY.md F); an archive without a verified signature is not a verified installer.",
+      "From the extracted install archive: run the archive's flash-all.sh (or flash script.txt with the pinned fastboot). It flashes the bootloader to both slots, the radio, avb_custom_key from avb_pkmd.bin, erases user data and installs every partition.",
+      "Boot, complete setup, and confirm the installed build and that Frankel updates are offered (same OTA certificate) before considering any relock.",
+      "Relock (`fastboot flashing lock`) is never claimed safe by this contract: only after avb_pkmd.bin equals the AVB pin AND a physical first-boot acceptance, by the owner, at the owner's risk."
+    ],
+    "basis": "First-install requirements for the Frankel (Pixel 10) factory install archive, every value re-derived on load from the pinned generator fixture (device_common 1f5ba267), the factory install-mode declarations, the firmware pins, the pinned adevtool android-info.txt and the OTA/AVB pins. Owner steps are the owner-executed procedure; nothing here was flashed, unlocked or run on a phone."
   }
 }

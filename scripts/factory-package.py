@@ -165,6 +165,7 @@ def load_flavor(name, root=ROOT):
         raise ContractError(f'{name}: install-mode declarations must be factory wipe+unlock, OTA no wipe')
     check_peer_identities(name, pinned_avb_key(flavor, root), root)
     check_readiness(name, flavor)
+    check_first_install(name, flavor, root)
     check_historical(name, flavor, root)
     return flavor
 
@@ -226,6 +227,50 @@ def check_historical(name, flavor, root):
         if type(limits) is not list or not limits or any(type(x) is not str or not x.strip() for x in limits):
             raise ContractError(f'{name}: {where}.doesNotEstablish must list what the observation does not establish')
         walk(entry, where)
+
+FIRST_INSTALL_KEYS = {'product', 'fastbootMinVersion', 'fastbootMinVersionFrom', 'requiresUnlockedBootloader', 'erasesUserData',
+                      'flashes', 'checkRequirements', 'avbCustomKey', 'otaContinuity', 'relockClaimedSafe', 'ownerSteps', 'basis'}
+
+def check_first_install(name, flavor, root):
+    """The optional first-install requirements: every value re-derived from the contract's own pinned sources (the
+    generator fixture's minimum fastboot, the factory install-mode declarations, the firmware pins, android-info and the
+    OTA certificate pointer), so a requirement can never drift from what the archive actually does. Relock is never
+    claimed safe."""
+    if 'firstInstall' not in flavor:
+        return
+    first, device, factory = flavor['firstInstall'], flavor['device']['codename'], flavor['artifacts']['factory']
+    if not isinstance(first, dict) or set(first) != FIRST_INSTALL_KEYS:
+        raise ContractError(f'{name}: firstInstall must have exactly {sorted(FIRST_INSTALL_KEYS)}')
+    generator = flavor['inventory']['generatorFixture']
+    text = (root/generator['fixture']/'generate-factory-images-common.sh').read_text()
+    minimum = re.search(r'^MIN_FASTBOOT_VERSION_STR="([0-9.]+)"$', text, re.M)
+    info = android_info((root/flavor['provenance']['androidInfoFixture']).read_text())
+    checks = {
+        'product': (first['product'], device),
+        'fastbootMinVersion': (first['fastbootMinVersion'], minimum.group(1) if minimum else None),
+        'fastbootMinVersionFrom': (first['fastbootMinVersionFrom'],
+                                   f'{generator["fixture"]}/generate-factory-images-common.sh MIN_FASTBOOT_VERSION_STR'),
+        'requiresUnlockedBootloader': (first['requiresUnlockedBootloader'], factory['requiresUnlockedBootloader']),
+        'erasesUserData': (first['erasesUserData'], factory['dataWipe']),
+        'flashes': (first['flashes'], {'bootloader': flavor['firmware']['bootloader'], 'bootloaderSlots': 'both',
+                                       'radio': flavor['firmware']['baseband']}),
+        'checkRequirements': (first['checkRequirements'], {'board': info.get('board'), 'partitionExists': info.get('partition-exists'),
+                                                           'versionBootloader': info.get('version-bootloader'),
+                                                           'versionBaseband': info.get('version-baseband')}),
+        'avbCustomKey': (first['avbCustomKey'], {'file': 'avb_pkmd.bin', 'sha256From': flavor['identity'].get('avbPublicKeySha256From')
+                                                 or 'identity.avbPublicKeySha256'}),
+        'otaContinuity.otaCertificateSha256From': ((first['otaContinuity'] or {}).get('otaCertificateSha256From'),
+                                                  flavor['identity'].get('otaCertificateSha256From')),
+        'relockClaimedSafe': (first['relockClaimedSafe'], False),
+        'ownerSteps': (isinstance(first['ownerSteps'], list) and bool(first['ownerSteps'])
+                       and all(isinstance(x, str) and x for x in first['ownerSteps']), True),
+    }
+    drift = [key for key, (have, want) in checks.items() if have != want]
+    if drift:
+        raise ContractError(f'{name}: firstInstall disagrees with its sources: {", ".join(drift)}')
+    if resolve_sha256_pointer(first['otaContinuity']['otaCertificateSha256From'], root,
+                              f'{name}: firstInstall.otaContinuity.otaCertificateSha256From') is None:
+        raise ContractError(f'{name}: firstInstall.otaContinuity needs a resolvable OTA certificate pin')
 
 def check_readiness(name, flavor):
     """The optional readiness declaration: strict booleans and a list of receipt references. Source cannot carry a
@@ -1029,6 +1074,10 @@ def classify(path, flavor_name, target_files=None, build=None, avb_key=None, roo
         fw = read_json(firmware_observation, 'firmware-observation', result) if firmware_observation else None
         inventory = target_inventory(Path(target_files), flavor, build, result, obs, allow_synthetic) if target_files else None
         result['installMode'] = flavor['artifacts']['factory']
+        if 'firstInstall' in flavor:  # the owner's first-install requirements, with the pins they name resolved
+            result['firstInstall'] = dict(flavor['firstInstall'], avbPublicKeySha256=avb_key,
+                otaCertificateSha256=resolve_sha256_pointer(flavor['firstInstall']['otaContinuity']['otaCertificateSha256From'],
+                                                            root, f'{flavor_name}: firstInstall'))
         check_factory(archive, names, flavor, build, inventory, avb_key, fw, result, allow_synthetic)
     result['structurallyComplete'] = not result['missing'] and not result['problems']
     if result['structurallyComplete']:

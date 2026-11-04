@@ -13,6 +13,9 @@ import sys
 import tempfile
 import unittest
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import os_release_shape as shape  # noqa: E402
+
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = (ROOT/'.github/workflows/os-release.yml').read_text()
 MODE = 'blazer-compile'
@@ -127,7 +130,7 @@ class Wiring(unittest.TestCase):
 
 class Workflow(unittest.TestCase):
     def test_mode_check_job_receipts_and_ownership(self):
-        self.assertIn('launcher3-compile, blazer-compile, blazer-integrate]\n', WORKFLOW)
+        self.assertIn(MODE, shape.modes())
         self.assertIn("      - name: Blazer compile check\n        id: blazer-compile\n        if: inputs.mode == "
                       "'blazer-compile'\n        run: python3 scripts/blazer-compile-wiring.py check >> \"$GITHUB_OUTPUT\"\n",
                       jobs()['guard'])
@@ -147,10 +150,9 @@ class Workflow(unittest.TestCase):
         for name in ('Allowlisted JSON receipts only', 'Receipts artifact', "Remove this attempt's task directory"):
             self.assertIn('        if: always()\n', step(job, name))
         self.assertEqual(job.count('actions/upload-artifact@'), 1)
-        own = "inputs.mode == 'launcher3-compile' || inputs.mode == 'blazer-compile' || inputs.mode == 'blazer-integrate'"
-        self.assertEqual(jobs()['controller'].count(own), 2)
-        self.assertEqual(jobs()['cleanup'].count(own), 1)
-        self.assertIn('launcher3-compile, blazer-compile, blazer-integrate, app-builder', re.search(r'(?m)^    needs: (.+)$', jobs()['cleanup'])[1])
+        # Owned start/stop everywhere the controller and cleanup name owned modes (owned_modes() checks they agree).
+        self.assertIn(MODE, shape.owned_modes())
+        self.assertIn(MODE, shape.cleanup_needs())
         self.assertNotIn('--stage compile', code(jobs()['blazer-prep']))  # blazer-prep never compiles
 
 

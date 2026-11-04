@@ -6,8 +6,12 @@ import io
 import json
 from pathlib import Path
 import re
+import sys
 import unittest
 import urllib.error
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import os_release_shape as shape  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 spec = importlib.util.spec_from_file_location('agent_beta_auto', ROOT/'scripts/agent-beta-auto.py')
@@ -175,11 +179,8 @@ class RealGuard(unittest.TestCase):
     git is a stub that answers only the exact-commit-on-main ancestry check (MAIN_SHAS); everything else is the real
     step and the real helpers it calls (release-pipeline resolve_device, release-chain check)."""
     # os-release.yml workflow_dispatch input defaults, as the workflow's top-level env sees them.
-    DEFAULTS = {'MODE': 'latest-beta', 'ROSE_DEVICE': 'frankel', 'CANDIDATE_SHA': '', 'BUILD_NUMBER': '', 'BUILD_TIMESTAMP': '',
-                'CHANNEL': 'beta', 'APPS': '', 'RESUME_STAGE': 'none', 'RESUME_UNSIGNED_SHA256': '', 'RESUME_SOURCE_RUN': '',
-                'RESUME_SIGNED_SHA256': '', 'REUSE_BINDING': '', 'BOOTSTRAP_PROFILE': 'none', 'MODELS_BOOTSTRAP_RUN': '',
-                'ROSE_RANGO_PUBLISH': 'false', 'ROSE_FIRST_USE_ENROLL': 'false', 'ROSE_RECOVER_RUN': '', 'CAMPAIGN': '',
-                'PROMOTE': 'false', 'APP_PUBLISH': 'false', 'ALPHA_RECOVER': 'false'}
+    # The dispatch's workflow env with every input at its declared default, plus the guard step's own env.
+    DEFAULTS = shape.dispatch_env(PROMOTE='false', APP_PUBLISH='false', ALPHA_RECOVER='false')
     INPUT_ENV = {'mode': 'MODE', 'candidate_sha': 'CANDIDATE_SHA', 'apps': 'APPS', 'app_publish': 'APP_PUBLISH',
                  'build_number': 'BUILD_NUMBER', 'build_timestamp': 'BUILD_TIMESTAMP', 'promote': 'PROMOTE',
                  'campaign': 'CAMPAIGN', 'resume_failed_stage': 'RESUME_STAGE'}

@@ -14,7 +14,7 @@ import xml.etree.ElementTree as ET
 ROOT = Path(__file__).resolve().parents[2]
 CONTRACT = ROOT/'os/devices/pixel10.json'
 FIXTURES = ROOT/'os/tests/fixtures/adevtool-17df3b79'
-DEVICES = ('frankel', 'blazer', 'rango')
+DEVICES = ('frankel', 'blazer', 'rango', 'mustang')
 FIXTURE_REPOS = {'https://github.com/GrapheneOS/adevtool': 'vendor/adevtool', 'https://github.com/GrapheneOS/platform_build': 'build/make'}
 PROBES = {'inUse', 'notExecuted'}
 GENERATED = {'priorRetainedBuilderEvidence', 'unknown'}
@@ -260,8 +260,9 @@ class ContractTest(unittest.TestCase):
 
     def test_a_pass_records_no_probe_download_generation_or_measurement(self):
         devices = self.contract['devices']
-        self.assertEqual([devices[d]['lunch']['probe'] for d in DEVICES], ['inUse', 'notExecuted', 'notExecuted'])
-        self.assertEqual([devices[d]['vendorInputs']['generated'] for d in DEVICES], ['priorRetainedBuilderEvidence', 'unknown', 'unknown'])
+        self.assertEqual([devices[d]['lunch']['probe'] for d in DEVICES], ['inUse', 'notExecuted', 'notExecuted', 'notExecuted'])
+        self.assertEqual([devices[d]['vendorInputs']['generated'] for d in DEVICES],
+            ['priorRetainedBuilderEvidence', 'unknown', 'unknown', 'unknown'])
         self.assertEqual({devices[d]['vendorInputs']['factoryImage']['status'] for d in DEVICES}, {'indexed'})
         self.assertEqual({devices[d]['display']['referenceDisplayAddress'] for d in DEVICES}, {None})
 
@@ -298,16 +299,25 @@ class NegativeControlTest(unittest.TestCase):
             (('source', 'release'), '2026100500', 'is not the manifest GrapheneOS tag'),
             (('devices', 'rango', 'display', 'source', 'densityDpi'), 420, "rango: rango.mk lacks 'TARGET_SCREEN_DENSITY := 420'"),
             (('devices', 'frankel', 'model'), 'Pixel 10 Pro', "frankel: frankel.mk lacks 'PRODUCT_MODEL := Pixel 10 Pro'"),
+            (('devices', 'mustang', 'model'), 'Pixel 10 Pro', "mustang: mustang.mk lacks 'PRODUCT_MODEL := Pixel 10 Pro'"),
+            (('devices', 'mustang', 'display', 'source', 'densityDpi'), 420, "mustang: mustang.mk lacks 'TARGET_SCREEN_DENSITY := 420'"),
+            (('devices', 'mustang', 'display', 'source', 'width'), 1280, 'mustang: stable display size differs'),
+            (('devices', 'mustang', 'kernelDir'), 'device/google/laguna-kernels/6.6/grapheneos/rango', 'mustang: kernel dir differs'),
+            (('devices', 'mustang', 'vendorInputs', 'factoryImage', 'sha256'), 'cd7d12c215f7cf1c45d6c77291690bfab1bf360cddd00d557390aed70a3418e3', 'mustang: factory image entry differs'),
+            (('devices', 'mustang', 'vendorInputs', 'factoryImage', 'file'), 'blazer-cp3a.261005.005-factory-cd7d12c2.zip', 'mustang: factory image'),
+            (('devices', 'mustang', 'adevtoolConfig'), 'config/device/blazer.yml', 'mustang: adevtool config does not name the device'),
         ]
         for path, value, expect in cases:
             with self.subTest(path=path):
                 self.failing(wrong(path, value), expect)
 
     def test_unknown_alias_case_and_excluded_devices_are_rejected(self):
-        for name in ('mustang', 'Frankel', 'pixel10', 'yogi', 'tegu'):
+        for name in ('Mustang', 'Frankel', 'pixel10', 'yogi', 'tegu'):
             with self.subTest(name=name):
                 self.failing(lambda c, n=name: c['devices'].__setitem__(n, copy.deepcopy(c['devices']['frankel'])), 'not exactly')
-        self.failing(lambda c: c['excluded'].pop('mustang'), 'adevtool lists mustang in the family')
+        # mustang is a target since 6aa5d2c: dropping it without excluding it, or also excluding it, is named.
+        self.failing(lambda c: c['devices'].pop('mustang'), 'adevtool lists mustang in the family; it is neither a target nor explicitly excluded')
+        self.failing(lambda c: c['excluded'].update(mustang='x'), 'mustang is both a target and excluded')
         self.failing(lambda c: c['devices'].pop('blazer'), 'not exactly')
         self.failing(lambda c: c.__setitem__('devices', dict(reversed(list(c['devices'].items())))), 'in that order')
 
@@ -319,6 +329,13 @@ class NegativeControlTest(unittest.TestCase):
         self.failing(lambda c: c['devices']['rango']['vendorInputs'].update(generated='priorRetainedBuilderEvidence', evidence='x'),
             'rango: claims a probe or generated')
         self.failing(lambda c: c['devices']['blazer']['vendorInputs']['factoryImage'].update(status='verified'), 'blazer: factory image status')
+        # Mustang fixtures are pinned public source only: they never support a probe, generated inputs or a verified image.
+        self.failing(lambda c: c['devices']['mustang']['lunch'].update(probe='inUse', evidence='mustang OTA 2026110401'), 'mustang: claims a probe')
+        self.failing(lambda c: c['devices']['mustang']['vendorInputs'].update(generated='priorRetainedBuilderEvidence', evidence='x'),
+            'mustang: claims a probe or generated')
+        self.failing(lambda c: c['devices']['mustang']['vendorInputs']['factoryImage'].update(status='verified'), 'mustang: factory image status')
+        self.failing(lambda c: c['devices']['mustang']['display'].update(referenceDisplayStatus='unmeasured'), 'mustang: reference display status must be notApplicable')
+        self.failing(lambda c: c['devices']['mustang']['lunch'].update(expected='mustang-trunk_staging-user'), 'mustang: expected lunch')
         self.failing(lambda c: c['devices']['rango']['display'].update(referenceDisplayAddress='4619827259835644672'),
             'rango: a reference display address is configured')
         self.failing(lambda c: c['devices']['rango']['display'].update(referenceDisplayStatus='measured'), 'must be unmeasured')
@@ -364,6 +381,17 @@ class NegativeControlTest(unittest.TestCase):
         self.assertIn('rango: does not inherit Rose product target/product/media_system.mk', found)
         found = self.mutated_fixtures('adevtool/config/mk/google_devices/device/blazer/device.mk', 'platform/laguna/product-common.mk', 'platform/other/product-common.mk')
         self.assertIn('blazer: device.mk no longer inherits the shared laguna product', found)
+
+    def test_mustang_facts_come_from_its_own_pinned_fixtures(self):
+        found = self.mutated_fixtures('adevtool/config/mk/google_devices/device/mustang/device.mk', 'grapheneos/muzel', 'grapheneos/rango')
+        self.assertIn('mustang: kernel dir differs from device.mk or the pinned laguna kernels', found)
+        self.assertNotIn('blazer: kernel dir differs from device.mk or the pinned laguna kernels', found)
+        found = self.mutated_fixtures('adevtool/vendor-skels/google_devices/mustang/firmware/android-info.txt', 'board=mustang', 'board=blazer')
+        self.assertIn('mustang: firmware requirements differ from android-info.txt', found)
+        found = self.mutated_fixtures('adevtool/config/device/mustang.yml', 'width: 1344', 'width: 1280')
+        self.assertIn('mustang: stable display size differs from the adevtool config', found)
+        found = self.mutated_fixtures('adevtool/vendor-skels/google_devices/mustang/cmds-for-envsetup.sh', 'CP3A.261005.005', 'CP2A.260605.016')
+        self.assertIn('mustang: envsetup BUILD_ID differs', found)
 
     def test_tampered_or_unlisted_fixtures_fail_provenance(self):
         tmp = Path(tempfile.mkdtemp(prefix='device-contract-'))
