@@ -713,6 +713,7 @@ def build():
             if f.startswith('overlays/') and committed.exists() and committed.read_bytes() == (BUNDLE/f).read_bytes():
                 raise SystemExit(f'os/{f} already holds the candidate bytes: its base is unknown; record it first')
     base, delta = base_and_delta(projects, recorded)
+    write_base_overlay_copies(delta)
     evidence, rules = evidence_rows(revisions, flag_evidence(revisions, True))
     return {
         'schemaVersion': 2,
@@ -888,6 +889,23 @@ def check_tree_pin(project):
     return errors
 
 
+def base_overlay_copy(target):
+    """The pinned copy of a candidate overlay's base image, in the same layout as the pre-image fixtures. It lets a
+    consumer reach the base when the committed os/ is at the candidate (#440's branch), where os/overlays holds the
+    candidate bytes instead."""
+    return FIXTURES/target
+
+
+def write_base_overlay_copies(delta):
+    """--write: refresh each base copy from os/overlays while those are at the base image."""
+    for o in delta['overlays']:
+        committed = OS/'overlays'/o['target']
+        if o['before'] is not None and committed.exists() and sha256(committed.read_bytes()) == o['before']:
+            copy = base_overlay_copy(o['target'])
+            copy.parent.mkdir(parents=True, exist_ok=True)
+            copy.write_bytes(committed.read_bytes())
+
+
 def check_candidate(manifest):
     errors = []
     delta = manifest.get('candidateDelta') or {}
@@ -900,6 +918,11 @@ def check_candidate(manifest):
         return [f'candidate: {error}']
     if manifest.get('base') != base or delta != expected:
         errors.append('base or candidateDelta differs from what the fixtures and bundle give; regenerate with --write')
+    for o in expected['overlays']:
+        copy = base_overlay_copy(o['target'])
+        if o['before'] is not None and (not copy.is_file() or sha256(copy.read_bytes()) != o['before']):
+            errors.append(f'os/tests/fixtures/launcher3-compile-contract/{o["target"]}: no pinned copy of the base '
+                f'overlay image {o["before"]}')
     # The committed os/ is wholly at the base (this bundle) or wholly at the candidate (#440's branch), never a mix.
     states = set()
     for o in expected['overlays']:
