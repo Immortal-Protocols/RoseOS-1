@@ -10,12 +10,13 @@ changes is then classified against the retained tree:
   under an integration-owned root        -> Rose-only directory, replace it
   equal to an earlier Rose patch output  -> integration-reproduced, replace it (see below)
   anything else                          -> owner change: CONFLICT, nothing is written
-A receipt records only files a run changed, so a frameworks/base file the retained tree already held in Rose's patched
-form before reconcile existed (and that every candidate since reproduced byte for byte) is in no receipt; the first
-candidate that changes it would otherwise read as an owner change. For such a file only, the bytes Rose's own
-frameworks/base patch sequence produced at each earlier version of the candidate repository's os/patches (its git
-history, at most HISTORY_LIMIT versions) are recomputed from the project HEAD copy; when the retained bytes equal one,
-the file is replaced like a task-owned one and the receipt names the baseline commit. Anything else still conflicts.
+A receipt records only files a run changed, so a file the retained tree already held in Rose's patched form before
+reconcile existed (and that every candidate since reproduced byte for byte) is in no receipt; the first candidate that
+changes it would otherwise read as an owner change (frameworks/base files in run 41174386535, build/make's
+generic_system.mk in run 41857685135). For such a file only, the bytes Rose's own patch sequence for its project
+(PATCH_SEQUENCES) produced at each earlier version of the candidate repository's os/patches (its git history, at most
+HISTORY_LIMIT versions) are recomputed from the project HEAD copy; when the retained bytes equal one, the file is
+replaced like a task-owned one and the receipt names the baseline commit. Anything else still conflicts.
 A file Rose copies verbatim from os/overlays has the same gap: the retained tree may hold an earlier overlay version
 that every candidate reproduced byte for byte (AgentStatusControls.java, unchanged from import until 2026110101). Bytes
 equal to an earlier version of the candidate repository's own os/overlays file at that same path (its git history, at
@@ -62,19 +63,34 @@ def head_bytes(source, project, relative):
     result = subprocess.run(['git', '-C', str(Path(source)/project), 'show', f'HEAD:{relative}'], capture_output=True)
     return result.stdout if result.returncode == 0 else None
 
-# apply-os-changes.py's frameworks/base order for a product build with a background policy (its initial list, then
-# background_apks.BACKGROUND_FRAMEWORK_PATCHES); scripts/tests/test_host_build_reconcile.py keeps the two in step.
+# apply-os-changes.py's order per reconciled project for this recipe's product build (frankel.json applyArgs: a
+# background policy, the agent tray, an updater channel without a release index, and the Rose Home preinstall).
+# frameworks/base is its initial list, then background_apks.BACKGROUND_FRAMEWORK_PATCHES, then the Shell patch.
+# scripts/tests/test_host_build_reconcile.py keeps every sequence in step with the patcher and the recipe.
+# They are frankel's: the mustang, blazer and rango recipes pass other flags, so a file they patch differently gets
+# no lineage and conflicts as before (missed recognition, never false acceptance).
 FRAMEWORKS_BASE_SEQUENCE = ('frameworks-base.patch', 'rose-agent-self-update-frameworks-base.patch',
     'background-control-frameworks-base.patch', 'background-control-modern-frameworks-base.patch',
-    'background-control-resource-import-fix.patch', 'locked-control-frameworks-base.patch')
+    'background-control-resource-import-fix.patch', 'locked-control-frameworks-base.patch', 'rose-edge-wmshell.patch')
+PATCH_SEQUENCES = {
+    'frameworks/base': FRAMEWORKS_BASE_SEQUENCE,
+    'build/make': ('agent-tray-build-make.patch', 'updater-product-build-make.patch',
+        'background-control-build-make.patch', 'rose-edge-build-make.patch'),
+    'build/release': ('background-control-build-release.patch',),
+    'packages/apps/Updater': ('updater-rose-channels.patch',),
+    'packages/modules/Permission': ('rose-home-role-permission.patch',),
+    'packages/apps/Launcher3': ('rose-switcher-launcher3.patch', 'rose-edge-launcher3.patch',
+        'rose-edge-resize-launcher3.patch'),
+}
 HISTORY_LIMIT = 64
 
 def historical_outputs(source, candidate, project, relative, limit=HISTORY_LIMIT):
-    """{sha256: commit} of the bytes `relative` had after Rose's frameworks/base patch sequence at each of the last
-    `limit` commits of the candidate repository that changed os/patches, recomputed from the project's HEAD copy with
-    only that file's hunks (git apply --include). Another project, a file HEAD lacks, a patch outside the sequence
-    that touches the file, or a version whose patches do not apply yields nothing for it."""
-    base = head_bytes(source, project, relative) if project == 'frameworks/base' else None
+    """{sha256: commit} of the bytes `relative` had after Rose's patch sequence for `project` (PATCH_SEQUENCES) at each
+    of the last `limit` commits of the candidate repository that changed os/patches, recomputed from the project's HEAD
+    copy with only that file's hunks (git apply --include). A project with no sequence, a file HEAD lacks, a patch
+    outside the sequence that touches the file, or a version whose patches do not apply yields nothing for it."""
+    sequence = PATCH_SEQUENCES.get(project)
+    base = head_bytes(source, project, relative) if sequence else None
     if base is None:
         return {}
     log = subprocess.run(['git', '-C', str(candidate), 'log', '--format=%H', f'-n{limit}', '--', 'os/patches'],
@@ -90,7 +106,7 @@ def historical_outputs(source, candidate, project, relative, limit=HISTORY_LIMIT
                 capture_output=True).stdout
             if f'+++ b/{relative}'.encode() in text:
                 patches[name] = text
-        if not patches or set(patches) - set(FRAMEWORKS_BASE_SEQUENCE):
+        if not patches or set(patches) - set(sequence):
             continue
         with tempfile.TemporaryDirectory(prefix='reconcile-history-') as directory:
             tree = Path(directory)
@@ -98,7 +114,7 @@ def historical_outputs(source, candidate, project, relative, limit=HISTORY_LIMIT
             (tree/relative).parent.mkdir(parents=True, exist_ok=True)
             (tree/relative).write_bytes(base)
             applied = True
-            for name in FRAMEWORKS_BASE_SEQUENCE:
+            for name in sequence:
                 if name in patches:
                     patch = tree.parent/f'{tree.name}.{name}'
                     patch.write_bytes(patches[name])
