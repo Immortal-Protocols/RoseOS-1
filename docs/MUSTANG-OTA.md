@@ -2,14 +2,43 @@
 
 Implements the source work for [Nathan's OTA plan](https://app.notion.com/p/40d7c646c81b81ce9485e0ca3eff8614)
 and [issue #503](https://github.com/Immortal-Protocols/RoseOS-1/issues/503).
-**First manual public OTA activation is authorized; automatic publication remains
-off. No new OTA or phone acceptance is claimed until actual runtime receipts.**
+**First manual public OTA 2026110401 is published and download verified.
+Automatic publication remains off; physical-device acceptance is unproven.**
 
 On November 3 Pacific, after completing the new read grants, Nathan instructed
 this worker to continue. `publicationEnabled=true` enables one newer Mustang
 build/sign/public OTA and its `mustang-stable` metadata through the existing
 route. `automationEnabled=false`; no automatic trigger or phone action is enabled.
 The worker checks occupancy and the actual baseline before compilation.
+
+## First public OTA completed
+
+[Mustang 2026110401](https://github.com/Immortal-Protocols/pixel-ota/releases/tag/mustang-2026110401)
+became public at **2026-11-04T02:54:17Z** (November 3, 6:54 PM Pacific).
+[Delivery 41761758623](https://github.com/Immortal-Protocols/RoseOS-1/actions/runs/41761758623)
+completed successfully at 02:54:46Z. The [durable receipt bundle](../os/mustang-ota/41761758623/README.md)
+binds native producer 41750459835, integration/compile source
+`434df146289981c93f1ff84db7ab01ce37136f38`, delivery recipe
+`a86b29287335c1648b731d320b13980b65f8c137` and actual timestamp `1793755347`.
+Native Make returned 0 in **70m40s**; a separate delivery reused the original
+version-1 identity. No native compilation or bootstrap was duplicated.
+
+Actual baseline/new packaged updater/trust, target/version and whole-package/
+payload OTA signature checks passed. The hosted publisher uploaded/read back
+the OTA before metadata, finalized a fresh release without Latest promotion,
+and verified anonymous public downloads. This worker independently checked
+the published small assets/receipt chain and GitHub asset digests. The OTA is
+**1,673,390,903 bytes**, SHA-256
+`bd31790a1f295d8fda021c940730a3906eef0e6797c3a0f180d9dc1cd9032f4b`;
+`mustang-stable` contains `2026110401 1793755347 mustang stable`.
+Frankel Latest stayed `frankel-2026110301`.
+
+Signer logout and ownership cleanup passed. Independent GET at 02:55:34Z
+confirmed original instance `685707771105568194` **TERMINATED**, last stop
+02:51:52Z. The access window was reused without IAM/key/bootstrap changes.
+**OTA published** is established; **phone update passed** and **automation
+demonstrated** remain pending. Earlier sprint omissions and the candidate
+label remain; no automatic flag or phone action was enabled.
 
 ## Baseline and current evidence
 
@@ -52,9 +81,10 @@ archive metadata observation, not a live phone-property read. OTA metadata
 keeps its separate strict duplicate rejection. A targeted archive/observer
 regression reproduces unrelated repeats, effective values and wrong-device
 refusal while preserving strict OTA metadata parsing.
-Actual baseline updater/trust compatibility remains unproven until the corrected
-observer runs. Do not restart native compilation or adopt an incomplete result;
-no compile was invoked by this failed prebuild attempt.
+The corrected baseline observer passed in producer 41750459835 before its new
+compile, then passed again before the delivery's signer login. These are actual
+retained-package inspections, not live phone-property or OTA-cycle evidence.
+No compile was invoked by the failed prebuild attempt; it remains failed.
 
 ## Implemented source
 
@@ -138,7 +168,7 @@ including when a docs-only commit changes the SHA but not relevant content.
 The OS FIFO serializes manual and automatic build/sign/publication. A completion
 event reconsiders work deferred behind another active OS run.
 
-## Exact next operations and authority
+## Operational record and remaining authority
 
 The implementation request authorized source work and these local tests. The
 plan's Scope and activation section calls for explicit execution coverage of
@@ -164,18 +194,19 @@ variables remain unchanged.
    automatically. No new key, secret version or bootstrap permission was added.
    Later unattended signing requires an explicitly approved access period;
    this implementation always stops outside its recorded window.
-3. With authorization and no competing work, dispatch the established
-   `os-release.yml@main` with `mode=mustang-build`, `mustang_publish_ota=true`,
-   leaving `candidate_sha` empty for the first manual build. It first performs
-   the actual baseline package inspection. If repair is required, report the
-   installation dependency; do not assume the baseline can update itself.
-4. After a successful producer, dispatch the same workflow with
-   `mode=mustang-delivery`, its exact `mustang_compile_run`,
-   `mustang_bootstrap_run=41719073037`, `mustang_publish_ota=true`. The OTA path
-   uses the committed original public bootstrap receipt plus original run
-   metadata, so expiration of its seven-day artifact never prompts rebootstrap.
-5. Capture actual publication and cleanup receipts and independently observe
-   builder state. Reconcile any partial/uncertain outcome before retrying.
+3. **Producer complete:** existing `os-release.yml@main` run 41750459835 used
+   `mode=mustang-build`, `mustang_publish_ota=true`, with `candidate_sha` empty.
+   The actual baseline inspection passed before preparation/compile. Native
+   Make returned 0 and all four output identities were collected.
+4. **Delivery complete:** the same workflow's run 41761758623 used
+   `mode=mustang-delivery`, `mustang_compile_run=41750459835`,
+   `mustang_bootstrap_run=41719073037`, `mustang_publish_ota=true`. It reused
+   the committed original public bootstrap receipt plus original run metadata;
+   artifact expiry did not require another bootstrap. The new public release
+   and channel metadata are complete, not pending another dispatch.
+5. **Evidence complete:** publication, cleanup and independent stopped-instance
+   readback are retained in `os/mustang-ota/41761758623/`. The workflow and
+   publication outcome are successful, with no unresolved partial publication.
 6. Coordinate Nathan's phone window. Record discovery → download → verification
    → installation → reboot → actual new build, data preservation, connectivity,
    display and Rose behavior separately. No wipe/relock or phone action is
@@ -185,24 +216,25 @@ variables remain unchanged.
    changed build publishing through the automatic path. Source tests do not
    demonstrate an unattended real release.
 
-Forecast: the plan's **3–5 hours** remains a planning estimate for execution,
-compilation and the phone window, not an ETA established by these offline tests.
-The previous Mustang compilation measured 73m13s; new compile duration and
-actual OTA install time are still unknown. Access/publication activation and the
-phone window must be resolved before an end-to-end ETA can be committed.
+The first public OTA is complete; its ETA is superseded by the actual publication
+time above. This native compile measured 70m40s (the earlier baseline measured
+73m13s); delivery ran 02:35:37–02:54:46Z. The phone window is still pending.
+The plan's **20–40 minutes** for phone acceptance is an unmeasured planning
+allowance. Automatic activation and a subsequent eligible real release remain
+separate work; no end-to-end phone/automatic completion time is established.
 
 ## Acceptance ledger
 
 | Expected | Observed | Evidence | State |
 | --- | --- | --- | --- |
 | Baseline installed, Beta selected | 2026110302, Beta | Nathan's direct reply; config baseline record | Reported |
-| Current signing read-access window | Two exact secretAccessor bindings confirmed; expiry 2026-11-04T04:44:11Z | `os/ota/mustang-access-readback.json` | Policy readback passed; key use not attempted |
-| Actual baseline updater/feed/trust compatible | Inspector implemented; actual builder inspection not run | `observe` before compile and login | Not tested |
-| Mustang-only publication, OTA before metadata | Synthetic upload/readback and failure cases pass | `scripts/tests/test_mustang_ota.py` | Source tested; no public OTA |
-| Newer compatible signed OTA | Source gates implemented; no new native build/sign | stage checks and original version-1 identity | Not executed |
+| Current signing read-access window | Two exact secretAccessor bindings confirmed; expiry 2026-11-04T04:44:11Z; original versions 1 used successfully | Access readback and delivery `sign.json` | Passed for this window |
+| Actual baseline updater/feed/trust compatible | Retained target-files packaged updater, discovery, signer and trust checks passed twice | Producer precheck and delivery `baseline.json` | Passed at archive scope |
+| Mustang-only publication, OTA before metadata | New public mustang-2026110401; download verified; Frankel Latest unchanged | Delivery `journal.jsonl`, `publication.json`, independent release readback | OTA published |
+| Newer compatible signed OTA | Actual mustang 2026110401/time1793755347; whole-package/payload signatures and original public pins passed | `mustang-ota-receipt.json` | OTA-specific checks passed |
 | Discovery/download/install/reboot/new build/data preserved | No worker phone action | Phone window pending | Not tested |
 | Automatic eligible release, serialized and unchanged-content skip | Offline decisions/FIFO cases pass; flags off | dispatcher tests and workflows | Source tested; not demonstrated |
-| Cleanup and original VM state | Existing VM stopped at initial inspection; no new runtime started | 00:23:05Z compute observation | Current snapshot only |
+| Cleanup and original VM state | Logout/ownership cleanup passed; independent 02:55:34Z GET confirms original instance stopped, last stop 02:51:52Z | Delivery `workflow.json`, `builder-state.json` | Passed |
 
 ## Source validation
 
@@ -211,8 +243,11 @@ tests**, **10 updater-channel tests**, **6 updater-release tests** passed.
 Java 21.0.12.1 compiled the actual release selector: **20 existing checks** and
 **6 new Mustang mixed-device checks** passed. Python/JSON/YAML parsing, workflow
 dependency references/input count and `git diff --check` also passed.
-No Android image, actual APK signature, OTA signature, cloud publication,
-automatic release or phone acceptance was tested here. No full/required-CI
-suite was reinstated; source commits retain `[skip ci]` and the new check
-workflow has not yet run on GitHub. Earlier sprint omissions remain recorded
-in the baseline and candidate receipts.
+These were source-only checks at implementation time. The subsequent actual
+package/OTA/publication checks are recorded separately above. Targeted hosted
+offline checks also passed on main recipe `a86b292...` in
+[run 41759771919](https://github.com/Immortal-Protocols/RoseOS-1/actions/runs/41759771919),
+triggered by subsequent main work; they do not establish Android runtime,
+automatic release or phone acceptance. No full/required-CI suite was reinstated;
+source/receipt commits retain `[skip ci]`. Earlier sprint omissions remain in
+the unchanged baseline and candidate receipts.

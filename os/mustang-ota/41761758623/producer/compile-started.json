@@ -1,0 +1,35 @@
+{
+  "at": "2026-11-04T01:22:47Z",
+  "buildIdentity": {
+    "buildDatetime": "1793755347",
+    "buildNumber": "2026110401"
+  },
+  "command": {
+    "argv": [
+      "bash",
+      "-c",
+      "source build/envsetup.sh && lunch mustang-cur-user && m -j48 vendorbootimage vendorkernelbootimage target-files-package otatools-package"
+    ],
+    "cwd": "/home/pixelbuild/rose-actions/mustang-prep-41750459835-1/source",
+    "env": {
+      "BUILD_DATETIME": "1793755347",
+      "BUILD_NUMBER": "2026110401",
+      "GIT_CEILING_DIRECTORIES": "/home/pixelbuild/rose-actions/mustang-prep-41750459835-1/source",
+      "OUT_DIR": "out-mustang-build-2026110401",
+      "PATH": "/usr/bin:/bin"
+    },
+    "timeoutSeconds": 28800
+  },
+  "device": "mustang",
+  "host": "immortal-os-builder",
+  "releaseReady": false,
+  "signed": false,
+  "sprint": {
+    "candidateLabel": "build-and-package candidate; omitted verification remains undone; physical-device acceptance unproven",
+    "downloadedInputHashVerification": false,
+    "packagedAppAndPolicyVerification": false,
+    "plan": "https://app.notion.com/p/40d7c646c81b81198e60cb76ca2ea603",
+    "reserveChecks": false
+  },
+  "stage": "compile"
+}
