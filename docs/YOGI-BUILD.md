@@ -100,7 +100,7 @@ environment must include:
 ```sh
 export USE_STOCK_KERNEL=true
 export SOONG_NINJA=ninja
-export OUT_DIR=/absolute/path/to/new-yogi-output
+export OUT_DIR=out/UNIQUE_YOGI_ATTEMPT
 export BUILD_NUMBER=NEW_MONOTONIC_BUILD_NUMBER
 export BUILD_DATETIME=NEW_MONOTONIC_UTC_TIMESTAMP
 source build/envsetup.sh
@@ -108,10 +108,12 @@ lunch yogi-cur-user
 m target-files-package otatools-package
 ```
 
-The pinned default Siso backend failed bootstrap with `@config//main.star` when
-using an external absolute output directory on the dedicated builder. The pinned
-build system supports `SOONG_NINJA=ninja`; use it for this recipe and record the
-backend in the build receipt. This changes execution tooling, not source inputs.
+Use a fresh relative output directory under the Android source root. The pinned
+default Siso backend failed bootstrap with `@config//main.star` when using an
+external absolute output directory; the Ninja retry also rejected that absolute
+path during graph generation. The pinned build system supports
+`SOONG_NINJA=ninja`; use it with the relative output path and record both in the
+build receipt. This changes execution tooling, not source inputs.
 
 Allocate the number and timestamp after observing existing Yogi outputs; do not
 reuse the phone's build identity. Confirm lunch and tools on the real builder,
