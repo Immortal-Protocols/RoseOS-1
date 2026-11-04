@@ -54,6 +54,10 @@ CONTRACT = ROOT/'os/devices/pixel10.json'
 PROVENANCE = ROOT/'os/tests/fixtures/adevtool-17df3b79/PROVENANCE.json'
 # Inspected targets only, from the OS contract; never the release allowlist.
 READINESS_DEVICES = ('frankel', 'blazer', 'rango')
+# Contract devices this inspection deliberately never reads (6aa5d2c added mustang with its own build-only route). They
+# are named so that any other contract device change still refuses; nothing of theirs is inspected, planned, reported or
+# admitted, and naming one here is not a readiness claim.
+UNINSPECTED_DEVICES = ('mustang',)
 EXPECTED_PINS = {'vendor/adevtool': '17df3b79a73e67ad68387b35c7d41c85e1d8103c',
     'vendor/state': '1469180711293a5852bfda9a5f67b8f53d9828ad'}
 # The lunch call chain as read at the pinned build/make b0f697df and build/soong 250710f7. Compared as metadata only:
@@ -155,8 +159,9 @@ def contract_targets(contract):
     """The fixed inspected targets, their lunch combos and required inputs; refuses a contract this script does not pin."""
     failures = []
     devices = contract.get('devices') or {}
-    if tuple(devices) != READINESS_DEVICES:
-        failures.append(f'contract devices {sorted(devices)} are not {list(READINESS_DEVICES)}')
+    if tuple(devices) != READINESS_DEVICES + UNINSPECTED_DEVICES:
+        failures.append(f'contract devices {list(devices)} are not {list(READINESS_DEVICES)} inspected then '
+            f'{list(UNINSPECTED_DEVICES)} uninspected, in that order')
     projects = (contract.get('source') or {}).get('projects') or {}
     failures += [f'contract pins {p} at {projects.get(p)}, not {rev}' for p, rev in EXPECTED_PINS.items() if projects.get(p) != rev]
     shared = contract.get('shared') or {}
