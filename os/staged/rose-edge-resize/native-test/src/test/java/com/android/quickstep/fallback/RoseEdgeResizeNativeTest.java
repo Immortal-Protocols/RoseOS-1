@@ -125,7 +125,17 @@ public class RoseEdgeResizeNativeTest {
         shell.listener.onLowered(3, RoseEdgeShell.LOWERED_IME_SHOWN);
         assertTrue("replies wait for the main thread", replies.isEmpty());
         idle();
-        assertEquals(List.of("raised 3 77 Rect(0, 0 - 1152, 2322)", "refused 3 77 2", "lowered 3 4"), replies);
+        assertEquals(List.of("raised 3 77 Rect(0, 0 - 1152, 2322)", "refused 3 77 2", "lowered 3 5"), replies);
+    }
+
+    @Test
+    public void everyRaiseFromThisProcessUsesTheSameListenerBinder() {
+        RoseEdgeState.raise(DISPLAY, TASK, 174);
+        IBinder first = shell.listener.asBinder();
+        RoseEdgeState.lower(DISPLAY);
+        RoseEdgeState.raise(DISPLAY, OTHER_TASK, 174);
+        assertTrue("the shell ties a display's raise to one listener binder (BUSY otherwise)",
+                first == shell.listener.asBinder());
     }
 
     @Test

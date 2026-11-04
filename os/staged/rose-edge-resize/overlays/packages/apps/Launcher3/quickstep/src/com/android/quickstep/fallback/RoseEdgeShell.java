@@ -30,12 +30,14 @@ public final class RoseEdgeShell {
     static final int TRANSACTION_ON_REFUSED = IBinder.FIRST_CALL_TRANSACTION + 2;
     static final int TRANSACTION_ON_LOWERED = IBinder.FIRST_CALL_TRANSACTION + 3;
 
-    /** IRoseEdgeListener refusal reasons. */
+    /** IRoseEdgeListener refusal reasons, as agreed with OS Core on #410. */
     public static final int REFUSED_NOT_TOP_TASK = 1, REFUSED_NOT_RESIZEABLE = 2, REFUSED_LOCKED = 3,
-            REFUSED_ROTATION = 4, REFUSED_MULTI_WINDOW = 5, REFUSED_BUSY = 6, REFUSED_DISABLED = 7;
+            REFUSED_ROTATION = 4, REFUSED_MULTI_WINDOW = 5, REFUSED_BUSY = 6, REFUSED_LIFT_RANGE = 7,
+            REFUSED_DISABLED = 8, REFUSED_NOT_DEFAULT_DISPLAY = 9;
     /** IRoseEdgeListener lowered reasons; the shell lowers by itself for every reason but REQUESTED. */
-    public static final int LOWERED_REQUESTED = 0, LOWERED_TASK_CHANGED = 1, LOWERED_KEYGUARD = 2,
-            LOWERED_DISPLAY_CHANGED = 3, LOWERED_IME_SHOWN = 4, LOWERED_LISTENER_DIED = 5, LOWERED_TRANSITION = 6;
+    public static final int LOWERED_REQUESTED = 0, LOWERED_TASK_CHANGED = 1, LOWERED_HOME_OR_RECENTS = 2,
+            LOWERED_KEYGUARD = 3, LOWERED_DISPLAY_CHANGED = 4, LOWERED_IME_SHOWN = 5, LOWERED_LISTENER_DIED = 6,
+            LOWERED_USER_SWITCH = 7;
 
     /** The shell's replies, on the main thread. */
     public interface Callback {
@@ -45,6 +47,11 @@ public final class RoseEdgeShell {
     }
 
     private static IBinder sShell;
+    /**
+     * The one listener binder per callback: the shell ties a display's raise to the binder that raised it and refuses
+     * a raise from another binder as BUSY, so every raise from this process uses the same one.
+     */
+    private static Listener sListener;
 
     /** From SystemUiProxy when the shell bundle arrives (null when it is gone or has no such interface). */
     public static void setShell(IBinder shell) {
@@ -66,13 +73,18 @@ public final class RoseEdgeShell {
             data.writeInt(displayId);
             data.writeInt(taskId);
             data.writeInt(liftPx);
-            data.writeStrongBinder(new Listener(callback));
+            data.writeStrongBinder(listenerFor(callback));
             return shell.transact(TRANSACTION_RAISE, data, null, IBinder.FLAG_ONEWAY);
         } catch (RemoteException | RuntimeException e) {
             return false;
         } finally {
             data.recycle();
         }
+    }
+
+    private static Listener listenerFor(Callback callback) {
+        if (sListener == null || sListener.mCallback != callback) sListener = new Listener(callback);
+        return sListener;
     }
 
     /** Asks the shell to restore the display's full height; false when it could not be asked. */

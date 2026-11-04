@@ -50,7 +50,7 @@ class RoseEdgeResizeStagedTest(unittest.TestCase):
             'TRANSACTION_ON_REFUSED': 2, 'TRANSACTION_ON_LOWERED': 3})
         raise_body = java[java.index('public static boolean raise('):java.index('public static boolean lower(')]
         self.assertEqual(re.findall(r'data\.write(\w+)\((\w+)', raise_body), [('InterfaceToken', 'DESCRIPTOR'),
-            ('Int', 'displayId'), ('Int', 'taskId'), ('Int', 'liftPx'), ('StrongBinder', 'new')])
+            ('Int', 'displayId'), ('Int', 'taskId'), ('Int', 'liftPx'), ('StrongBinder', 'listenerFor')])
         self.assertIn('IBinder.FLAG_ONEWAY', raise_body)
         listener = java[java.index('static final class Listener'):]
         self.assertEqual(re.findall(r'data\.read(\w+)\(', listener), ['Int', 'Int', 'TypedObject', 'Int', 'Int', 'Int'])
@@ -60,8 +60,15 @@ class RoseEdgeResizeStagedTest(unittest.TestCase):
         java = self.shell()
         for n, name in re.findall(r'(\d) ([A-Z_]{4,})', record):
             prefix = 'REFUSED_' if name in ('NOT_TOP_TASK', 'NOT_RESIZEABLE', 'LOCKED', 'ROTATION', 'MULTI_WINDOW',
-                'BUSY', 'DISABLED') else 'LOWERED_'
+                'BUSY', 'LIFT_RANGE', 'DISABLED', 'NOT_DEFAULT_DISPLAY') else 'LOWERED_'
             self.assertRegex(java, rf'{prefix}{name} = {n}\b', f'{prefix}{name}')
+        # OS Core's agreed values (#410 comment 6621890904).
+        refused = dict(re.findall(r'REFUSED_(\w+) = (\d+)', java))
+        lowered = dict(re.findall(r'LOWERED_(\w+) = (\d+)', java))
+        self.assertEqual(refused, {'NOT_TOP_TASK': '1', 'NOT_RESIZEABLE': '2', 'LOCKED': '3', 'ROTATION': '4',
+            'MULTI_WINDOW': '5', 'BUSY': '6', 'LIFT_RANGE': '7', 'DISABLED': '8', 'NOT_DEFAULT_DISPLAY': '9'})
+        self.assertEqual(lowered, {'REQUESTED': '0', 'TASK_CHANGED': '1', 'HOME_OR_RECENTS': '2', 'KEYGUARD': '3',
+            'DISPLAY_CHANGED': '4', 'IME_SHOWN': '5', 'LISTENER_DIED': '6', 'USER_SWITCH': '7'})
 
     def test_nothing_applies_the_staged_files(self):
         for path in ('scripts/apply-os-changes.py', 'scripts/background_apks.py', 'scripts/integration_copy.py',

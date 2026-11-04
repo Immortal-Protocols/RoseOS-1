@@ -13,6 +13,9 @@ import com.android.wm.shell.roseedge.IRoseEdgeListener;
  * in one TRANSIT_CHANGE shell transition, the default task display area's bounds become (0, 0, W, H - liftPx): the app
  * gets real reduced bounds and a configuration change, width unchanged, never scaled. Replies onRaised or onRefused.
  * lower: clears those bounds (fill the display) and replies onLowered(REQUESTED); a lower when not raised is a no-op.
+ * One raise per display, owned by the listener binder that raised it: a raise from another binder while raised is
+ * refused BUSY. The shell clears the bounds whenever it (re)organizes a display, so a SystemUI restart cannot leave the
+ * area shortened. Agreed with OS Core on #410 (comment 6621890904).
  */
 interface IRoseEdge {
     oneway void raise(int displayId, int taskId, int liftPx, IRoseEdgeListener listener) = 1;
