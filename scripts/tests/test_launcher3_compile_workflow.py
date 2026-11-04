@@ -117,7 +117,8 @@ class Job(unittest.TestCase):
     def test_an_interrupted_stage_ends_inside_the_outer_kill_after(self):
         """The outer timeout's TERM gives the helper the kill-after to end its stage: TERM, then KILL, each
         INTERRUPT_GRACE_SECONDS, sampled every second, with margin."""
-        line = re.search(r'timeout --kill-after=(\d+)s "\$\{OUTER_SECONDS\}s" python3 scripts/launcher3-compile.py run ',
+        # the step execs timeout, so a cancel's signal reaches it and it forwards the signal to the helper
+        line = re.search(r'run: exec timeout --kill-after=(\d+)s "\$\{OUTER_SECONDS\}s" python3 scripts/launcher3-compile.py run ',
                          jobs()[MODE])
         self.assertIsNotNone(line)
         self.assertLessEqual(2 * (adapter.INTERRUPT_GRACE_SECONDS + 1) + 5, int(line[1]))
