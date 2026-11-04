@@ -549,8 +549,8 @@ class Committed(unittest.TestCase):
             producer.load_contract(pinned='0' * 64)
 
     def test_this_checkouts_overlays_and_patches_are_the_pinned_base_bundle(self):
-        """While main's os/ is at the base (until #440's candidate lands, when OS Product regenerates the contract):
-        observed at HEAD, with the checker's prefixes, equals base.bundleContent and leaves nothing unclassified."""
+        """Observed at HEAD, with the checker's prefixes, leaves nothing unclassified, its patches are the registration's,
+        and its overlays are wholly base.bundleContent's (main before #440) or wholly the candidate's (#440 and after)."""
         contract = copy.deepcopy(CONTRACT)
         contract['overlayRoles']['required']['prefixes'] = list(PREFIXES)
         seen = producer.observed(contract, ROOT, 'HEAD')
@@ -560,8 +560,13 @@ class Committed(unittest.TestCase):
                          [(o['project'], o['name']) for o in contract['base']['registration']['order']])
         self.assertEqual(sorted((p['project'], p['name'], p['sha256']) for p in seen['patches']),
                          sorted((p['project'], p['name'], p['sha256']) for p in content['patches']))
-        self.assertEqual(sorted((o['target'], o['sha256']) for o in seen['overlays']),
-                         sorted((o['target'], o['sha256']) for o in content['overlays']))
+        base_overlays = {o['target']: o['sha256'] for o in content['overlays']}
+        candidate = dict(base_overlays)
+        for o in contract['candidateDelta']['overlays']:
+            candidate[o['target']] = o['after']
+        seen_overlays = {o['target']: o['sha256'] for o in seen['overlays']}
+        self.assertIn(seen_overlays, (base_overlays, candidate),
+            'HEAD is wholly at the base (main before #440) or wholly at the candidate (#440 and after)')
         self.assertEqual(sorted(seen['notAnInputOverlays']), sorted(content['notAnInputOverlays']))
 
 
