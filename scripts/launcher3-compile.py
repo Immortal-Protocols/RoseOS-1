@@ -87,13 +87,16 @@ sys.path.insert(0, str(ROOT/'scripts'))
 import alpha_source  # noqa: E402  (the reviewed copy plan and per-file copy)
 
 MANIFEST = ROOT/'os/compile-contracts/launcher3-quickstep-lib.json'
-# OS Product's reviewed contract version (schema 3, 9078ccf: #440 2f57a5f with E2c). A different manifest is refused until
-# this pin is updated.
-MANIFEST_SHA256 = '6f949194c8e0e6d3570f86eb6b343340106755860c566558bb0d71c6b46c757c'
+# OS Product's reviewed contract version (schema 3, e21ffeb on 9078ccf: #440 2f57a5f with E2c). A different manifest is
+# refused until this pin is updated.
+MANIFEST_SHA256 = '466f5ab88e4c110318e6e2533635db9bfcbf6ff73fc40dc54fbcc4c72f0593b4'
 CONDITIONS = ['base-exact', 'delta-preimages', 'isolated-apply', 'final-exact']
 # The binding inputs each branch requires and forbids, in the contract's own vocabulary (branches.requires, forbids):
 # check() binds and refuses exactly these, so the contract and this adapter cannot drift.
-CHECKED_TREE_GIT = 'Git metadata or objects of the checked tree'
+# The contract projects' own Git data: the copy excludes every .git (cuttlefish-alpha anywhereNames); the lunch inputs'
+# admitted publicFetch of vendor/adevtool/.git is outside the three projects.
+CHECKED_TREE_GIT = ('Git metadata or objects of the three contract projects in the checked tree (the lunch inputs\' '
+                    'admitted gitRequirement.publicFetch of vendor/adevtool/.git, outside them, excepted)')
 BRANCH_REQUIRES = {'verifyIntegrated': ['sourceTree', 'lunch', 'policyReceipt'],
                    'reconstruct': ['sourceTree', 'lunch', 'reconstructSource'],
                    'verifyBaseApplyCandidate': ['sourceTree', 'lunch', 'policyReceipt', 'bundleReport']}
