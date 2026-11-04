@@ -17,6 +17,9 @@ import textwrap
 import unittest
 import zipfile
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import os_release_shape as shape  # noqa: E402
+
 SCRIPTS = Path(__file__).resolve().parents[1]
 ROOT = SCRIPTS.parent
 PY = sys.executable
@@ -420,9 +423,17 @@ class WorkflowAppOnlyTest(unittest.TestCase):
             self.assertEqual(hashlib.sha256(block.encode()).hexdigest(), digest, name)
         self.assertIn('    needs: [builder, signed-builder]\n', self.jobs['publisher'])
         self.assertIn("    if: always() && needs.builder.result == 'success' && ", self.jobs['publisher'])  # skipped whenever builder is
-        self.assertIn('    needs: [controller, device-readiness, builder, signing-bootstrap, models-signer, rango-builder, rango-publisher, rango-factory-observe, blazer-prep, rango-factory-package, rango-factory-inspect, launcher3-compile, blazer-compile, blazer-integrate, app-builder, alpha-builder, alpha-successor, alpha-apk-diagnostic, alpha-verify-retained, alpha-export, app-reuse, request-signing, signed-builder, publisher]\n', self.jobs['cleanup'])
+        # cleanup still waits for every job that may hold the builder (other devices' jobs may follow these)
+        self.assertLessEqual({'controller', 'device-readiness', 'builder', 'signing-bootstrap', 'models-signer', 'rango-builder',
+                              'rango-publisher', 'rango-factory-observe', 'blazer-prep', 'rango-factory-package',
+                              'rango-factory-inspect', 'launcher3-compile', 'blazer-compile', 'blazer-integrate', 'app-builder',
+                              'alpha-builder', 'alpha-successor', 'alpha-apk-diagnostic', 'alpha-verify-retained', 'alpha-export',
+                              'app-reuse', 'request-signing', 'signed-builder', 'publisher'}, set(shape.cleanup_needs()))
         self.assertIn("    if: always() && needs.controller.result != 'skipped'\n", self.jobs['cleanup'])
-        self.assertRegex(WORKFLOW, r"      mode:\n.*\n        type: choice\n        options: \[latest-beta, os-release, device-readiness, app-only, emulator-alpha, signing-bootstrap, rango-factory-package, rango-factory-inspect, models-sign, rango-retained, blazer-prep, emulator-alpha-successor, emulator-alpha-apk-diagnostic, emulator-alpha-verify-retained, app-reuse, emulator-alpha-export, rango-factory-observe, launcher3-compile, blazer-compile, blazer-integrate\]\n        default: latest-beta\n")
+        mode = shape.inputs()['mode']
+        self.assertEqual((mode['type'], mode['default'], mode['options'][:4]), ('choice', 'latest-beta',
+                         ['latest-beta', 'os-release', 'device-readiness', 'app-only']))
+        self.assertLessEqual({'emulator-alpha', 'signing-bootstrap', 'models-sign', 'rango-retained', 'app-reuse'}, set(mode['options']))
 
     def test_app_builder_runs_only_the_app_release_and_uploads_only_its_artifact(self):
         app = self.jobs['app-builder']
@@ -449,7 +460,11 @@ class WorkflowAppOnlyTest(unittest.TestCase):
     def test_guard_limits_app_only_to_rose_agent_without_resume_or_promotion(self):
         guard = self.jobs['guard']
         # AGENT-BETA-AUTO: the literal apps=auto is admitted only for app-only (the builder allocates the version).
-        self.assertIn('[[ "$MODE" == latest-beta || "$MODE" == rango-retained || "$MODE" == rango-factory-package || "$MODE" == rango-factory-inspect || "$MODE" == blazer-prep || "$MODE" == rango-factory-observe || "$MODE" == launcher3-compile || "$MODE" == blazer-compile || "$MODE" == blazer-integrate || ( "$MODE" == app-only && "$APPS" == auto ) ]] || python3', guard)
+        # The bare modes it lists may grow; app-only is admitted there only with the literal apps=auto, never bare.
+        line = re.search(r'\[\[ ((?:"\$MODE" == [\w-]+ \|\| )+)\( "\$MODE" == app-only && "\$APPS" == auto \) \]\] \|\| python3', guard)
+        self.assertTrue(line)
+        self.assertNotIn('app-only', re.findall(r'"\$MODE" == ([\w-]+)', line[1]))
+        self.assertIn('latest-beta', re.findall(r'"\$MODE" == ([\w-]+)', line[1]))
         publisher = self.jobs['app-publisher']
         self.assertIn('      CANDIDATE_SHA: ${{ needs.app-builder.outputs.candidate_sha || inputs.candidate_sha }}\n', publisher)
         self.assertIn('      APPS: ${{ needs.app-builder.outputs.apps || inputs.apps }}\n', publisher)

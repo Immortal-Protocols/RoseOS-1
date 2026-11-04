@@ -8,6 +8,10 @@ import re
 import shutil
 import tempfile
 import unittest
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import os_release_shape as shape  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -388,7 +392,8 @@ class DedicatedWiring(unittest.TestCase):
         self.assertIn('    needs: [builder, signed-builder]\n', publisher)
         self.assertIn("(needs.signed-builder.result == 'success' || (needs.builder.outputs.dedicated != 'true' && "
                       "needs.signed-builder.result == 'skipped'))", publisher)
-        self.assertIn('request-signing, signed-builder, publisher]', self.jobs['cleanup'])
+        for job in ('request-signing', 'signed-builder', 'publisher'):
+            self.assertIn(job, shape.cleanup_needs())
 
 
 if __name__ == '__main__':
