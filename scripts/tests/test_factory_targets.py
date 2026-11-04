@@ -104,6 +104,15 @@ class FrankelSourceContract(unittest.TestCase):
             self.assertFalse((Path(tmp)/'out').exists())
             self.assertIn('binding_unbound', str(caught.exception))
 
+    def test_frankel_installer_pins_are_releases_wiring_and_stay_null(self):
+        t = factory_targets.target('frankel')
+        self.assertEqual(t['installerPins'], 'scripts/frankel-factory-package-wiring.py')
+        wiring = fd._load('frankel_wiring_for_targets_test', ROOT/t['installerPins'])
+        rango = fd._load('rango_wiring_for_targets_test', ROOT/factory_targets.target('rango')['installerPins'])
+        self.assertEqual((set(wiring.RETAINED), set(wiring.SIGNATURE)), (set(rango.RETAINED), set(rango.SIGNATURE)))
+        if t['build'] is None:  # nothing observed or bound yet: every pin stays null and delivery refuses
+            self.assertEqual(set(wiring.RETAINED.values()) | set(wiring.SIGNATURE.values()), {None})
+
     def test_delivery_refuses_frankel_without_an_installer_pin_and_never_verifies_it(self):
         with tempfile.TemporaryDirectory() as tmp:
             out = Path(tmp)/'receipt.json'
