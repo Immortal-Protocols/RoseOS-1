@@ -51,8 +51,15 @@ test('a repeated event is announced only once',async()=>{
  assert.deepEqual(spoken(page),['Working on it.']);
 });
 
-test('existing eligibility: muted, Guardian, ended call or a stopped task is not spoken to',async()=>{
- for(const setup of ['muted=true','guardianMode=true','ready=false','conversation=null','globalThis.taskStopSpeechPending=true']){
+test('muting the microphone input never silences task progress (#410 item 6)',async()=>{
+ const page=livePage();
+ reply(page,[]);await poll(page);
+ page.run('muted=true;');reply(page,[live(1,'Still running.')]);await poll(page);
+ assert.deepEqual(spoken(page),['Still running.']);
+});
+
+test('existing eligibility: Guardian, ended call or a stopped task is not spoken to',async()=>{
+ for(const setup of ['guardianMode=true','ready=false','conversation=null','globalThis.taskStopSpeechPending=true']){
   const page=livePage();
   reply(page,[]);await poll(page);
   page.run(setup+';');reply(page,[live(1,'Still running.')]);await poll(page);

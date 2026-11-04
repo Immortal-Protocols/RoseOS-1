@@ -51,9 +51,13 @@ test('tray mute is idempotent and cannot act on a session that is not live',()=>
  page.run('window.setTrayMuted(false);window.setTrayMuted(false)');
  assert.equal(page.run('fake.muted'),false);
  assert.deepEqual(calls(page,'sessionCue'),[['mute'],['unmute']]);
- // Current behavior: a tray mute while the session is still starting is dropped, not deferred.
- page.run('ready=false;starting=true;window.setTrayMuted(true)');
- assert.equal(page.run('muted'),false);
+ // #410 item 6: a tray mute while the session is still starting is kept as the intent and reaches the provider,
+ // instead of being dropped, so the call never connects listening after the owner muted it.
+ page.run('ready=false;starting=true;fake.muted=false;window.setTrayMuted(true,7)');
+ assert.equal(page.run('muted'),true);
+ assert.equal(page.run('fake.muted'),true,'a provider that already exists is muted at once');
+ assert.equal(page.run('muteAck'),7,'the request is acknowledged by its sequence');
+ assert.deepEqual(calls(page,'sessionCue'),[['mute'],['unmute']],'no live-call cue while connecting');
 });
 
 test('a glasses double tap within 400 ms toggles mute once',()=>{

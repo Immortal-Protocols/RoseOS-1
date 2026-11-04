@@ -38,6 +38,10 @@ on:
       - 'scripts/host-factory-package.py'
       - 'scripts/factory-package.py'
       - 'scripts/tests/test_rango_factory_package_workflow.py'
+      - 'scripts/factory_package_route.py'
+      - 'scripts/frankel-factory-package-wiring.py'
+      - 'os/factory-package/**'
+      - 'scripts/tests/test_frankel_factory_package_workflow.py'
       - 'scripts/rango-factory-inspect-wiring.py'
       - 'scripts/rango-firmware-observe.py'
       - 'scripts/tests/test_rango_factory_inspect_workflow.py'
@@ -66,6 +70,7 @@ on:
       - 'scripts/sign_trace.py'
       - 'scripts/host-app-build.py'
       - 'scripts/host-app-release.py'
+      - 'scripts/host-app-reuse.py'
       - 'scripts/app_release_publisher.py'
       - 'scripts/emulator-alpha.py'
       - 'scripts/alpha_source.py'
@@ -185,6 +190,10 @@ on:
       - 'scripts/host-factory-package.py'
       - 'scripts/factory-package.py'
       - 'scripts/tests/test_rango_factory_package_workflow.py'
+      - 'scripts/factory_package_route.py'
+      - 'scripts/frankel-factory-package-wiring.py'
+      - 'os/factory-package/**'
+      - 'scripts/tests/test_frankel_factory_package_workflow.py'
       - 'scripts/rango-factory-inspect-wiring.py'
       - 'scripts/rango-firmware-observe.py'
       - 'scripts/tests/test_rango_factory_inspect_workflow.py'
@@ -213,6 +222,7 @@ on:
       - 'scripts/sign_trace.py'
       - 'scripts/host-app-build.py'
       - 'scripts/host-app-release.py'
+      - 'scripts/host-app-reuse.py'
       - 'scripts/app_release_publisher.py'
       - 'scripts/emulator-alpha.py'
       - 'scripts/alpha_source.py'
@@ -331,6 +341,7 @@ jobs:
           python3 scripts/tests/test_rango_factory_observe_workflow.py
           python3 scripts/tests/test_blazer_prep_workflow.py
           python3 scripts/tests/test_rango_factory_package_workflow.py
+          python3 scripts/tests/test_frankel_factory_package_workflow.py
           python3 scripts/tests/test_rango_factory_inspect_workflow.py
           python3 scripts/tests/test_launcher3_compile.py
           python3 scripts/tests/test_agent_beta_auto.py

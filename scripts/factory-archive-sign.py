@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Detached factory-archive signature for an already generated, hash-pinned install ZIP (FOLD-ARCHIVE-SIGN).
 
-  python3 scripts/factory-archive-sign.py check [--binding os/retained-rango/factory-signing.json]
+  python3 scripts/factory-archive-sign.py check [--device rango|frankel] [--binding BINDING]
   python3 scripts/factory-archive-sign.py sign [--binding ...] --archive ZIP --archive-sha256 H \
       --lock SHARED_BUILDER_LOCK --out NEW_ROOT
 
@@ -64,15 +64,16 @@ import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import factory_signing  # noqa: E402
+import factory_targets  # noqa: E402
 import host_secrets  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 SCHEMA = 'roseos.factory-archive-signature.v1'
 BINDING_SCHEMA = 'roseos.factory-archive-signing-binding.v1'
-DEFAULT_BINDING = ROOT/'os/retained-rango/factory-signing.json'
+DEFAULT_BINDING = ROOT/factory_targets.TARGETS[factory_targets.DEFAULT]['binding']
 PROFILES = 'os/signing-bootstrap/profiles.json'
 RECEIPT_SCHEMA = 'roseos.signing-bootstrap-receipt.v1'
-RECEIPT_FILE = 'os/retained-rango/factory-signing-bootstrap-receipt.json'
+RECEIPT_FILE = factory_targets.TARGETS[factory_targets.DEFAULT]['receipt']  # rango; other devices: receipt_file()
 RECEIPT_BYTES = 64 << 10
 SELF_CHECK = {'decrypt': True, 'signVerify': True, 'negativeRefused': True}
 HEX64 = re.compile(r'[0-9a-f]{64}')
@@ -83,6 +84,14 @@ BOUNDS = {'hashSeconds': 300, 'fetchSeconds': 120, 'signSeconds': factory_signin
 
 class Refused(Exception):
     """A fixed category and nonsecret detail."""
+
+
+def receipt_file(binding):
+    """The committed bootstrap receipt path of the binding's device (factory_targets); None for an unknown device."""
+    try:
+        return factory_targets.target(binding.get('device') if isinstance(binding, dict) else None)['receipt']
+    except factory_targets.UnknownTarget:
+        return None
 
 
 def flavor_contract(device, root=ROOT):
@@ -164,10 +173,12 @@ def binding_problems(binding, contract=flavor_contract, profiles=None, root=ROOT
         return [str(error)]
     if not re.fullmatch(r'[a-z][a-z0-9]{1,31}', str(binding.get('device'))) or not re.fullmatch(r'[0-9]{10}', str(binding.get('build'))):
         problems.append('binding.device/build')
+    elif receipt_file(binding) is None:
+        problems.append(f'binding.device: no committed factory-signing target for {binding.get("device")} (factory_targets)')
     if not re.fullmatch(r'[a-z][a-z0-9-]{4,28}[a-z0-9]', str(binding.get('project'))):
         problems.append('binding.project')
     for name, version in (('keySecret', 'keyVersion'), ('passphraseSecret', 'passphraseVersion')):
-        if not SECRET.fullmatch(str(binding.get(name))):
+        if not isinstance(binding.get(name), str) or not SECRET.fullmatch(binding[name]):  # null is never a name
             problems.append(f'binding.{name}')
         if not re.fullmatch(r'[1-9][0-9]*', str(binding.get(version))):
             problems.append(f'binding.{version} (from the bootstrap receipt)')
@@ -222,14 +233,17 @@ def evidence_problems(binding, profiles, signing, root=ROOT):
         if pinned:
             problems.append(f'os/flavors/{binding.get("device")}.json factorySigning: bound without binding.bootstrap')
         return problems
+    receipt_path = receipt_file(binding)
+    if receipt_path is None:
+        return [f'binding.bootstrap: no committed factory-signing target for {binding.get("device")}']
     if not isinstance(bootstrap, dict) or set(bootstrap) != {'runId', 'attempt', 'recipeSha', 'receipt', 'receiptSha256'} \
-            or bootstrap.get('receipt') != RECEIPT_FILE or not HEX64.fullmatch(str(bootstrap.get('receiptSha256'))):
-        return [f'binding.bootstrap: not {{runId, attempt, recipeSha, receipt: {RECEIPT_FILE}, receiptSha256}}']
+            or bootstrap.get('receipt') != receipt_path or not HEX64.fullmatch(str(bootstrap.get('receiptSha256'))):
+        return [f'binding.bootstrap: not {{runId, attempt, recipeSha, receipt: {receipt_path}, receiptSha256}}']
     try:
-        with open(Path(root)/RECEIPT_FILE, 'rb') as f:
+        with open(Path(root)/receipt_path, 'rb') as f:
             data = f.read(RECEIPT_BYTES + 1)
     except OSError:
-        return [f'binding.bootstrap: {RECEIPT_FILE} is missing']
+        return [f'binding.bootstrap: {receipt_path} is missing']
     if hashlib.sha256(data).hexdigest() != bootstrap['receiptSha256']:
         return ['binding.bootstrap: receiptSha256 is not the committed receipt bytes']
     fields, refused = receipt_fields(data, binding, profiles, bootstrap.get('runId'), bootstrap.get('attempt'))
@@ -293,7 +307,7 @@ def receipt_fields(data, binding, profiles, run_id, attempt):
     if problems:
         return None, problems
     return {'binding': dict(versions, bootstrap={'runId': str(run_id), 'attempt': str(attempt), 'recipeSha': receipt['recipeSha'],
-                                                 'receipt': RECEIPT_FILE, 'receiptSha256': hashlib.sha256(data).hexdigest()}),
+                                                 'receipt': receipt_file(binding), 'receiptSha256': hashlib.sha256(data).hexdigest()}),
             'factorySigning': {'namespace': factory_signing.NAMESPACE, 'principal': identity['principal'],
                                'publicKey': identity['publicKey'], 'status': 'bound'}}, []
 
@@ -409,7 +423,8 @@ def main(argv=None):
     sub = p.add_subparsers(dest='command', required=True)
     for name in ('check', 'sign', 'bind'):
         c = sub.add_parser(name)
-        c.add_argument('--binding', default=str(DEFAULT_BINDING))
+        c.add_argument('--device', default=factory_targets.DEFAULT, choices=sorted(factory_targets.TARGETS))
+        c.add_argument('--binding', default=None)
         if name == 'sign':
             for flag in ('--archive', '--archive-sha256', '--lock', '--out'):
                 c.add_argument(flag, required=True)
@@ -417,9 +432,13 @@ def main(argv=None):
             for flag in ('--receipt', '--run-id', '--attempt'):
                 c.add_argument(flag, required=True)
     args = p.parse_args(argv)
+    # The device's committed binding unless one is named; a named binding must be that device's (never retargeted).
+    args.binding = args.binding or str(ROOT/factory_targets.TARGETS[args.device]['binding'])
     if args.command == 'bind':
         try:
             binding, profiles = load_binding(args.binding), load_profiles()
+            if binding.get('device') != args.device:
+                raise Refused(f'binding_device: {args.binding} is not the {args.device} binding')
             with open(args.receipt, 'rb') as f:
                 data = f.read(RECEIPT_BYTES + 1)
         except (Refused, OSError) as error:
@@ -430,6 +449,8 @@ def main(argv=None):
         return 0 if fields is not None else 4
     try:
         binding = load_binding(args.binding)
+        if not isinstance(binding, dict) or binding.get('device') != args.device:
+            raise Refused(f'binding_device: {args.binding} is not the {args.device} binding')
     except Refused as error:
         print(json.dumps({'refused': str(error)}))
         return 4 if args.command == 'check' else 3

@@ -13,8 +13,41 @@
   const session=await o.api('POST','/eleven/session');o.onSession?.({...session,provider:'elevenlabs'});
   let handle;const speech=speechGate();
   const raw=await root.ElevenConversation.startSession({conversationToken:session.token,connectionType:'webrtc',dynamicVariables:{recent_history:session.history},clientTools:o.tools,
-   onConversationCreated:c=>{handle=facade(c,speech);o.onConversationCreated?.(handle);},onConnect:o.onConnect,onMessage:o.onMessage,onDisconnect:o.onDisconnect,onError:o.onError,onVadScore:o.onVadScore,onInterruption:o.onInterruption,onPing:o.onPing,onModeChange:m=>{speech.mode(m);o.onModeChange?.(m);}});
+   onConversationCreated:c=>{if(o.initialMuted)c.setMicMuted(true);handle=facade(c,speech);o.onConversationCreated?.(handle);},onConnect:o.onConnect,onMessage:o.onMessage,onDisconnect:o.onDisconnect,onError:o.onError,onVadScore:o.onVadScore,onInterruption:o.onInterruption,onPing:o.onPing,onModeChange:m=>{speech.mode(m);o.onModeChange?.(m);}});
   return handle||facade(raw,speech);
+ }
+ // Rose's microphone-input mute from the first sample (#410 item 6). Every audio track getUserMedia creates is held:
+ // while the page's input is muted the track is disabled and stays disabled for its whole life, whatever the provider's
+ // SDK does to it. LiveKit (ElevenLabs) publishes its microphone inside session setup, before setMicMuted can run, and
+ // its restart() sets enabled=!isMuted on a reacquired track (livekit-client 2.22.4 :22781), so disabling at creation
+ // alone is not enough: the held track's own enabled setter refuses true while muted. A clone is held too. Muting
+ // disables every held track at once; unmuting gives each held track back the state the provider last asked for (LiveKit's
+ // unmute() returns early when its own isMuted is already false, so it would never re-enable it), never more.
+ // A track that cannot be held while muted is stopped, never left live. Returns the one gate for these devices.
+ function gateMicrophone(devices){
+  let muted=false;const held=new Set();
+  const gate={set(v){muted=!!v;for(const t of held){if(t.readyState==='ended'){held.delete(t);continue;}t.roseMicApply();}},muted:()=>muted,held:()=>held.size};
+  if(!devices||typeof devices.getUserMedia!=='function')return gate;
+  if(devices.getUserMedia.roseMicGate)return devices.getUserMedia.roseMicGate;
+  function hold(t){
+   if(!t||t.roseMicHeld)return;
+   try{
+    let owner=t,desc;while(owner&&!(desc=Object.getOwnPropertyDescriptor(owner,'enabled')))owner=Object.getPrototypeOf(owner);
+    if(!desc)throw Error('no enabled property');
+    let value=desc.value;
+    const read=desc.get?()=>desc.get.call(t):()=>value,write=desc.set?v=>desc.set.call(t,v):v=>{value=v;};
+    let wanted=!!read(); // what the provider last asked for; the track itself is that, and never enabled while muted
+    t.roseMicApply=()=>write(wanted&&!muted);
+    Object.defineProperty(t,'enabled',{configurable:true,enumerable:true,get:read,set:v=>{wanted=!!v;write(wanted&&!muted);}});
+    const clone=t.clone;if(typeof clone==='function')t.clone=function(){const c=clone.apply(this,arguments);hold(c);c.enabled=wanted;return c;};
+    t.roseMicHeld=true;held.add(t);
+    if(muted)write(false);
+   }catch(e){if(muted)t.stop?.();}
+  }
+  const open=devices.getUserMedia.bind(devices);
+  const gated=async constraints=>{const stream=await open(constraints);(stream?.getAudioTracks?.()||[]).forEach(hold);return stream;};
+  gated.roseMicGate=gate;devices.getUserMedia=gated;
+  return gate;
  }
  // Muting changes user intent; suspension releases the physical microphone.
  // Serialize capture replacement so a late getUserMedia result cannot reacquire
@@ -94,7 +127,7 @@
   function scheduleGuardian(){
    clearTimeout(guardianTimer);if(!o.guardianMode&&!root.GuardianVoice?.selection(lastUser)&&!root.GuardianVoice?.back(lastUser))return;
    const current=inputGeneration;
-   guardianTimer=setTimeout(()=>{if(closed||muted||current!==inputGeneration||delegatedGeneration===current)return;if(rms(input)>.015){scheduleGuardian();return;}void delegate({delegation:{id:'guardian-'+current}});},1400);
+   guardianTimer=setTimeout(()=>{if(closed||current!==inputGeneration||delegatedGeneration===current)return;if(rms(input)>.015){scheduleGuardian();return;}void delegate({delegation:{id:'guardian-'+current}});},1400);
   }
   async function delegate(e){
    if(luna&&!Number.isInteger(e.lunaRevision))return;
@@ -262,11 +295,11 @@
  let localConnections=0;
  function local(o){
   return new Promise((resolve,reject)=>{
-   let input=0,output=0,live=false,closed=false;const seen=new Set(),tasks=localTasks(o.onLocalTasks,20,'c'+(++localConnections)+'-'+Math.random().toString(36).slice(2,10));
+   let input=0,output=0,live=false,closed=false,link=null;const seen=new Set(),tasks=localTasks(o.onLocalTasks,20,'c'+(++localConnections)+'-'+Math.random().toString(36).slice(2,10));
    // close is idempotent and clears only its own handler: a repeated close of an older connection (a stale start
    // closing its result) must never stop or deafen a newer one.
    let onEvent=null;
-   const handle={close:async()=>{if(closed)return;closed=true;if(root.localRoseEvent===onEvent)root.localRoseEvent=null;root.Native?.localRoseStop();tasks.end();},setMuted:v=>root.Native.localRoseMute(!!v),sendContext:()=>{},sendMessage:()=>{},inputLevel:()=>input,outputLevel:()=>output};
+   const handle={close:async()=>{if(closed)return;closed=true;if(root.localRoseEvent===onEvent)root.localRoseEvent=null;root.Native?.localRoseStop(link);tasks.end();},setMuted:v=>root.Native.localRoseMute(!!v),sendContext:()=>{},sendMessage:()=>{},inputLevel:()=>input,outputLevel:()=>output};
    const fail=message=>{clearTimeout(timer);if(!live){void handle.close();reject(Error(message));}};
    const unpaired='Not paired: open the menu and choose Pair with Rose';
    const timer=setTimeout(()=>fail('Rose is not reachable. Check that the paired backend is running and reachable from this phone.'),8000);
@@ -283,10 +316,11 @@
     else if(m.type==='closed'){void handle.close();o.onDisconnect?.({reason:'replaced'});}
     else if(m.type==='error')fail(m.message);
    };
-   root.Native.localRoseStart(!!o.initialMuted);
+   // The link this start made; close stops only that one, never a newer start's (LocalRoseLink tokens).
+   link=root.Native.localRoseStart(!!o.initialMuted);
   });
  }
  const providers={elevenlabs:eleven,openai,local};
- root.VoiceProviders={createInputHandoff,localTask,localTasks,localTaskActions,localStop,start:o=>{if(!providers[o.provider])throw Error('Unknown voice provider');return providers[o.provider](o);}};
+ root.VoiceProviders={createInputHandoff,gateMicrophone,localTask,localTasks,localTaskActions,localStop,start:o=>{if(!providers[o.provider])throw Error('Unknown voice provider');return providers[o.provider](o);}};
  if(typeof module!=='undefined')module.exports=root.VoiceProviders;
 })(typeof window!=='undefined'?window:globalThis);

@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
-"""FACTORY-DELIVERY: offline, independent verification of the delivered Rango factory installer and its detached
-signature, and the final delivery receipt. Pure: no builder, lock, secret, key, network or login. It reads only the two
+"""FACTORY-DELIVERY: offline, independent verification of a delivered factory installer (default: the retained Rango
+installer; --device selects another committed scripts/factory_targets.py target) and its detached signature, and the final
+delivery receipt. A device without a committed installer pin refuses (installer_unpinned): an unsigned or unpinned archive
+is never verified or reported as a delivered factory installer. Pure: no builder, lock, secret, key, network or login. It reads only the two
 extracted artifacts and the committed pins, and runs the verifier's own ssh-keygen (recorded by path and sha256).
 
   python3 scripts/factory-delivery.py verify --installer DIR --signature DIR --out RECEIPT.json
@@ -41,10 +43,12 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import factory_signing  # noqa: E402
+import factory_targets  # noqa: E402
 
-SCHEMA = 'roseos.rango-factory-delivery.v1'
 SIGN_SCHEMA = 'roseos.factory-archive-signature.v1'
-DEVICE, BUILD = 'rango', '2026103001'
+DEVICE = factory_targets.DEFAULT  # rango: the defaults below are unchanged; other devices go through targets()
+BUILD = factory_targets.TARGETS[DEVICE]['build']
+SCHEMA = factory_targets.TARGETS[DEVICE]['deliverySchema']
 INSTALL = f'{DEVICE}-install-{BUILD}.zip'
 SIGN_RECEIPT = 'factory-archive-sign-receipt.json'
 RECEIPT_BYTES = 64 << 10
@@ -63,16 +67,30 @@ def _load(name, path):
     return module
 
 
-def committed_pins(root=ROOT):
+def delivery_target(device=DEVICE):
+    """The device's committed delivery target: build, install archive name and receipt schema (factory_targets)."""
+    try:
+        t = factory_targets.target(device)
+    except factory_targets.UnknownTarget as error:
+        raise Refused(f'target_unknown: {error}') from None
+    if t['installerPins'] is None or t['build'] is None:
+        # Signed delivery needs a committed retained-installer pin from the device's packaging/inspection (Release); an
+        # unsigned or unpinned archive is never verified or reported as the delivered factory installer.
+        raise Refused(f'installer_unpinned: no committed installer pin for {device}; nothing can be verified')
+    return dict(t, install=f'{device}-install-{t["build"]}.zip')
+
+
+def committed_pins(root=ROOT, device=DEVICE):
     """(retained, signature pin, flavor pin) from the committed sources, never from the delivered files."""
-    wiring = _load('rango_factory_inspect_wiring_for_delivery', Path(root)/'scripts/rango-factory-inspect-wiring.py')
-    flavor = json.loads((Path(root)/f'os/flavors/{DEVICE}.json').read_text())['factorySigning']
+    t = delivery_target(device)
+    wiring = _load(f'{device}_factory_inspect_wiring_for_delivery', Path(root)/t['installerPins'])
+    flavor = json.loads((Path(root)/f'os/flavors/{device}.json').read_text())['factorySigning']
     try:
         pin = factory_signing.bound_pin(flavor)
     except factory_signing.Refused as error:
         raise Refused(f'pin_invalid: {error}') from None
     if pin is None:
-        raise Refused(f'identity_unbound: os/flavors/{DEVICE}.json factorySigning is not bound; nothing can be verified')
+        raise Refused(f'identity_unbound: os/flavors/{device}.json factorySigning is not bound; nothing can be verified')
     return dict(wiring.RETAINED), dict(wiring.SIGNATURE), pin
 
 
@@ -106,9 +124,12 @@ def exact_entries(directory, expected):
         raise Refused(f'unexpected_contents: {Path(directory).name} holds {names[:8]}, not exactly {sorted(expected)}')
 
 
-def verify(installer, signature, out, ssh_keygen=None, sources=None, root=ROOT, runner=factory_signing.run_bounded, pins=None):
+def verify(installer, signature, out, ssh_keygen=None, sources=None, root=ROOT, runner=factory_signing.run_bounded, pins=None,
+           device=DEVICE):
     """Write the delivery receipt to `out` and return it; Refused (after writing a refused receipt) on any failure."""
-    receipt = {'schema': SCHEMA, 'device': DEVICE, 'build': BUILD, 'verified': False, 'sources': dict(sources or {}),
+    t = factory_targets.TARGETS.get(device) or {}
+    receipt = {'schema': t.get('deliverySchema', SCHEMA), 'device': device, 'build': t.get('build'), 'verified': False,
+               'sources': dict(sources or {}),
                'claims': 'the delivered archive is the retained installer and its detached signature verifies against the '
                          'committed factory-signing pin', 'nonClaims': list(NON_CLAIMS), 'problems': []}
     try:
@@ -117,7 +138,7 @@ def verify(installer, signature, out, ssh_keygen=None, sources=None, root=ROOT, 
     except (OSError, subprocess.SubprocessError):
         receipt['repo'] = {'commit': None}
     try:
-        _verify(Path(installer), Path(signature), ssh_keygen, root, runner, receipt, pins)
+        _verify(Path(installer), Path(signature), ssh_keygen, root, runner, receipt, pins, device)
         receipt['verified'] = True
         return receipt
     except Refused as error:
@@ -129,8 +150,10 @@ def verify(installer, signature, out, ssh_keygen=None, sources=None, root=ROOT, 
             f.write(json.dumps(receipt, indent=2, sort_keys=True) + '\n')
 
 
-def _verify(installer, signature, ssh_keygen, root, runner, receipt, pins=None):
-    retained, signature_pin, pin = pins or committed_pins(root)  # pins: tests only
+def _verify(installer, signature, ssh_keygen, root, runner, receipt, pins=None, device=DEVICE):
+    t = delivery_target(device)
+    INSTALL, BUILD = t['install'], t['build']  # noqa: N806 (the device's install archive and build)
+    retained, signature_pin, pin = pins or committed_pins(root, device)  # pins: tests only
     exact_entries(installer, ['SHA256SUMS', f'package/{INSTALL}'])
     exact_entries(signature, [f'{INSTALL}.sig', SIGN_RECEIPT])
     archive = installer/'package'/INSTALL
@@ -160,7 +183,7 @@ def _verify(installer, signature, ssh_keygen, root, runner, receipt, pins=None):
         raise Refused('sign_receipt_invalid: not JSON') from None
     identity = sign.get('identity') or {}
     if sign.get('schema') != SIGN_SCHEMA or sign.get('status') != 'signed' \
-            or (sign.get('device'), sign.get('build')) != (DEVICE, BUILD) \
+            or (sign.get('device'), sign.get('build')) != (device, BUILD) \
             or (sign.get('archive') or {}).get('sha256') != archive_sha or (sign.get('archive') or {}).get('size') != archive_size \
             or (sign.get('signature') or {}).get('sha256') != sig_sha or (sign.get('signature') or {}).get('file') != sig.name:
         raise Refused('sign_receipt_mismatch: the sign receipt is not a signed receipt of this archive and signature')
@@ -176,7 +199,7 @@ def _verify(installer, signature, ssh_keygen, root, runner, receipt, pins=None):
     tool = os.path.realpath(tool)
     regular(tool)
     receipt['verifier'] = {'sshKeygen': tool, 'sha256': sha256_nofollow(tool)[0]}
-    with tempfile.TemporaryDirectory(prefix='rango-delivery-') as work:
+    with tempfile.TemporaryDirectory(prefix=f'{device}-delivery-') as work:
         signers = Path(work)/'allowed_signers'
         signers.write_text(f'{pin["principal"]} namespaces="{factory_signing.NAMESPACE}" {pin["publicKey"]}\n')
         copy = Path(work)/sig.name
@@ -202,6 +225,7 @@ def main(argv=None):
     for flag in ('--installer', '--signature', '--out'):
         v.add_argument(flag, required=True)
     v.add_argument('--ssh-keygen')
+    v.add_argument('--device', default=DEVICE, choices=sorted(factory_targets.TARGETS))
     v.add_argument('--installer-artifact', default='')
     v.add_argument('--signature-artifact', default='')
     a = p.parse_args(argv)
@@ -210,7 +234,7 @@ def main(argv=None):
         return 2
     sources = {'installerArtifact': a.installer_artifact[:300], 'signatureArtifact': a.signature_artifact[:300]}
     try:
-        receipt = verify(a.installer, a.signature, a.out, a.ssh_keygen, sources)
+        receipt = verify(a.installer, a.signature, a.out, a.ssh_keygen, sources, device=a.device)
     except Refused as error:
         print(json.dumps({'verified': False, 'refused': str(error)}))
         return 3
