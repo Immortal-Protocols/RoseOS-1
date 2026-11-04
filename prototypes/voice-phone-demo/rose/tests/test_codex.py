@@ -270,6 +270,26 @@ class Integration(unittest.TestCase):
         self.assertTrue(a.busy and b.busy)
         self.assertFalse(any(op == 'stop' for op,_ in self.controller.calls))
 
+    def test_foreground_app_refusal_keeps_actionable_reason_in_failed_result(self):
+        a = self.task('Calculator')
+        send = a.view.workspace.send
+        def refuse_foreground(op, params):
+            if op == 'start':
+                return {'status': 'failed', 'sessionId': 'refused', 'targetPackage': CALC,
+                        'reason': 'target_in_foreground', 'error': 'target_in_foreground: '+CALC}
+            return send(op, params)
+        a.view.workspace.send = refuse_foreground
+        result = self.call(a, 'open_app', app=a.app)
+        self.assertFalse(result['ok'])
+        self.assertIn('open on your phone screen', result['result'])
+        self.assertIn('Switch away', result['result'])
+        a.text = 'The app could not open.'
+        self.engine._event({'event': 'done', 'session': a.name,
+                            'turn': {'id': a.turn, 'status': 'completed'}})
+        self.assertEqual(a.task.status, 'failed')
+        self.assertEqual(a.task.result, result['result'])
+        self.assertFalse(any(op == 'start' for op,_ in self.controller.calls))
+
     def test_unconfirmed_slot_release_blocks_replacement_and_preserves_task_result(self):
         a, b = self.task('Calculator'), self.task('Clock')
         self.complete(a)

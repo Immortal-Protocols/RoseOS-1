@@ -428,7 +428,9 @@ class CodexConductor:
                     why, _ = _unseen_number(s.task.goal, s.text, s.view, s.run)
                     if not any(a.get('ok') for step in s.task.steps for a in step['actions']) or why:
                         status = 'failed'
-                        validation_error = why or 'No successful phone action or observation was recorded.'
+                        failure = next((a.get('result') for step in reversed(s.task.steps)
+                                        for a in reversed(step['actions']) if not a.get('ok') and a.get('result')), None)
+                        validation_error = why or failure or 'No successful phone action or observation was recorded.'
                 s.task.status = {'completed': 'done', 'interrupted': 'cancelled'}.get(status, 'failed')
                 s.task.result = s.text if status == 'completed' else validation_error or f'Codex turn {status}.'
                 s.task.finished = time.time()
