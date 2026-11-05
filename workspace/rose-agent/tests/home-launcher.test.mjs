@@ -36,7 +36,7 @@ test('HOME and the app icon land on Rose Home; the icon opens the Rose conversat
  assert.ok(!/voicePage|widgetsPage|HomePages\.(voice|widgets)\(/.test(main),'no legacy page index remains');
  // Cold start routes only a fresh intent; recreation (saved state) keeps the saved page, never reopening the conversation.
  assert.match(main,/home\(\);showHomeFor\(getIntent\(\),b==null\);showSettingsFor\(getIntent\(\)\);if\(b!=null&&b\.containsKey\("home-page"\)&&launcherPager!=null\)launcherPager\.showPage\(HomePages\.restore\(b\.getInt\("home-page"\),launcherPager\.getChildCount\(\)\),false\);/);
- assert.match(main,/onNewIntent\(Intent i\)\{super\.onNewIntent\(i\);int previous=launcherPager==null\?-1:launcherPager\.currentPage\(\);boolean homeShown=!homeStopped;if\(!reuseHome\(i\)\)home\(\);showHomeFor\(i,true,previous,homeShown\);showSettingsFor\(i\);gestureContract\(i,homeShown\);\}/);
+ assert.match(main,/onNewIntent\(Intent i\)\{super\.onNewIntent\(i\);RoseConversationActivity\.closeTask\(\);int previous=launcherPager==null\?-1:launcherPager\.currentPage\(\);boolean homeShown=!homeStopped;if\(!reuseHome\(i\)\)home\(\);showHomeFor\(i,true,previous,homeShown\);showSettingsFor\(i\);gestureContract\(i,homeShown\);\}/);
  const route=main.slice(main.indexOf('void showHomeFor(Intent intent,boolean fresh,int previous,boolean homeShown)'));
  assert.match(route,/^void showHomeFor\(Intent intent,boolean fresh,int previous,boolean homeShown\)\{if\(intent==null\)return;HomeEntry entry=HomeEntry\.of\(Intent\.ACTION_MAIN\.equals\(intent\.getAction\(\)\),intent\.hasCategory\(Intent\.CATEGORY_HOME\),intent\.hasCategory\(Intent\.CATEGORY_LAUNCHER\),fresh,\(intent\.getFlags\(\)&Intent\.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY\)!=0,DeviceIdentity\.paired\(this\)\);if\(entry\.showHome\)\{closeVoiceControls\(\);closeSystemFolder\(\);\}if\(entry\.showHome&&launcherPager!=null\)launcherPager\.showPage\(HomePages\.target\(true,!intent\.hasCategory\(Intent\.CATEGORY_HOME\),homeShown,previous,launcherPager\.currentPage\(\),launcherPager\.getChildCount\(\)\),false\);if\(entry\.openConversation\)openRoseConversation\(\);\}/);
  assert.match(main,/void showHomeFor\(Intent intent,boolean fresh\)\{showHomeFor\(intent,fresh,-1,true\);\}/);
@@ -140,7 +140,9 @@ test('the Rose entry opens App\'s conversation activity and only navigates',()=>
  assert.equal(hook,'startActivity(new Intent(this,RoseConversationActivity.class));');
  const activity=manifest.match(/<activity android:name="\.RoseConversationActivity"[^>]*\/>/)[0];
  assert.match(activity,/android:exported="false"/);
- assert.ok(!/launchMode|taskAffinity/.test(activity),'stays in the launcher task so HOME and Back return Home');
+ // F08: its own excluded task (so the OS chin can rise over it); HOME and Back still return Home because every new
+ // intent to Home closes it first (pinned in the F08 test), and Recents still never lists it.
+ assert.match(activity,/android:taskAffinity="dev\.pixel\.voice\.conversation" android:launchMode="singleTask" android:excludeFromRecents="true"/);
  for(const forbidden of ['VoiceService','command(','toggleVoice','startForegroundService','"talk"','"end"','"mute"'])
   for(const [name,src] of [['RoseHomeView',home],['HomeTray',homeTray],['HomeFrame',homeFrame],['HomeRose',homeRose]])assert.ok(!src.includes(forbidden),name+': '+forbidden);
  // The conversation surface sends voice commands only from its own controls, never on open.
@@ -538,6 +540,23 @@ test('#410 gesture_nav_contract_v1: a RectF-only reply to the verified recents c
  assert.match(main,/if\(pager!=launcherPager\|\|replanPending\|\|isFinishing\(\)\)return;/,'no target while Home is about to be rebuilt');
  assert.equal((main.match(/Height=cell;replanPending=true;\n  handler\.post\(\(\)->\{if\(launcherPager!=null&&!isFinishing\(\)\)attachLauncherPages\(true\);\}\);/g)||[]).length,2,'both re-plans mark it');
  assert.match(main,/void attachLauncherPages\(boolean preservePage\)\{\n  replanPending=false;/,'a rebuild clears it');
+});
+
+// F08: the conversation in its own standard task (so the OS Rose chin can rise over it), closed by every new intent to
+// Home as when it shared Home's task; Rose's own mute gives way only to a declared-reachable chin, never a visible one.
+test('the conversation runs in its own task and keeps its mute until the Rose chin is reachable (F08)',()=>{
+ const manifest=read('../app/AndroidManifest.xml'),tray=read('../app/src/dev/pixel/voice/AgentTrayService.java'),
+  conv=read('../app/src/dev/pixel/voice/RoseConversationActivity.java'),chin=read('../app/src/dev/pixel/voice/RoseChin.java');
+ assert.match(manifest,/<activity android:name="\.RoseConversationActivity" android:exported="false" android:label="Rose Agent" android:taskAffinity="dev\.pixel\.voice\.conversation" android:launchMode="singleTask" android:excludeFromRecents="true"/,'own task, never exported, never in Recents');
+ assert.match(main,/public void onNewIntent\(Intent i\)\{super\.onNewIntent\(i\);RoseConversationActivity\.closeTask\(\);/,'every new intent to Home first clears the conversation, as singleTask did');
+ assert.match(conv,/static void closeTask\(\)\{RoseConversationActivity a=shown\.get\(\);if\(a!=null&&!a\.isFinishing\(\)\)a\.finishAndRemoveTask\(\);\}/);
+ assert.match(tray,/if\(RoseChin\.declaresReachable\(m\.what,m\.arg2\)\)chinReachable\.add\(binder\);else chinReachable\.remove\(binder\);/,'only inside the trusted REGISTER branch');
+ assert.ok(tray.indexOf('if(!trusted(m.sendingUid))return;')<tray.indexOf('RoseChin.declaresReachable'),'after the unchanged caller check');
+ assert.match(tray,/clients\.remove\(binder\);chinReachable\.remove\(binder\);/,'dropped on UNREGISTER and binder death');
+ assert.match(tray,/public static final int REGISTER=1,/);assert.match(chin,/static final int REGISTER = 1;/,'the same REGISTER');
+ assert.doesNotMatch(chin.replace(/\/\*[\s\S]*?\*\//g,''),/arg1/,'the visible-now marker (arg1) never counts');
+ assert.match(conv,/mic\.setVisibility\(state\.active\(\)&&RoseChin\.showInAppMute\(AgentTrayService\.chinReachable\(\)\)\?View\.VISIBLE:View\.GONE\);/);
+ assert.match(conv,/send\(state\.muted\?"tray_unmute":"tray_mute"\)/,'the mute itself is unchanged: input-only');
 });
 
 // The Settings intent must not silently disappear when the Home anchor is absent/replaced.

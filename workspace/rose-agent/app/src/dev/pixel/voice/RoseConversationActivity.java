@@ -38,8 +38,12 @@ public final class RoseConversationActivity extends Activity {
  int dp(float v){return Math.round(v*getResources().getDisplayMetrics().density);}
  boolean reducedMotion(){return Settings.Global.getFloat(getContentResolver(),Settings.Global.ANIMATOR_DURATION_SCALE,1f)==0f;}
 
+ /** F08: the conversation runs in its own standard task (manifest), so the OS Rose chin can be raised over it. Home
+  * closes it on every new intent to Home, as it did when the conversation shared Home's singleTask task. */
+ static java.lang.ref.WeakReference<RoseConversationActivity> shown=new java.lang.ref.WeakReference<>(null);
+ static void closeTask(){RoseConversationActivity a=shown.get();if(a!=null&&!a.isFinishing())a.finishAndRemoveTask();}
  @Override protected void onCreate(Bundle b){
-  PixelAppearance.attach(this);super.onCreate(b);
+  PixelAppearance.attach(this);super.onCreate(b);shown=new java.lang.ref.WeakReference<>(this);
   setVolumeControlStream(android.media.AudioManager.STREAM_VOICE_CALL);
   // #410: the Oxblood Rose field (OxbloodField.ROSE) in either system theme, with light bar icons over it.
   getWindow().setStatusBarColor(0xff120a0d);getWindow().setNavigationBarColor(0xff12060a);
@@ -161,7 +165,8 @@ public final class RoseConversationActivity extends Activity {
   connectGlyph.set(live);
   String label=live?"Disconnect":"Connect";if(!label.contentEquals(connectLabel.getText()))connectLabel.setText(label);
   connect.setContentDescription(live?(state.phase==ConversationState.Phase.CONNECTING?"Cancel connecting to Rose":"Disconnect from Rose"):"Connect to Rose");
-  mic.setVisibility(state.active()?View.VISIBLE:View.GONE);
+  // F08: Rose's own mute gives way only where the OS Rose chin is reachable (RoseChin); the mute itself is unchanged.
+  mic.setVisibility(state.active()&&RoseChin.showInAppMute(AgentTrayService.chinReachable())?View.VISIBLE:View.GONE);
   ((TextView)mic.findViewWithTag("mic-glyph")).setText(state.muted?"🔇":"🎙");
   mic.setContentDescription(state.muted?"Rose’s microphone is muted. Unmute":"Mute Rose’s microphone");
   failure.setText(state.failureText());
