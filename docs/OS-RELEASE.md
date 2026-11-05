@@ -2042,3 +2042,15 @@ assets and public Latest/channel; these reads belong in execution approval.
 After approval only: `gh workflow run frankel-draft-promotion.yml --repo
 Immortal-Protocols/RoseOS-1 --ref main`. Inspect existing runs and release before
 execution. Never rerun the earlier recovery or normal build to promote this draft.
+
+Promotion run 42115900771 published release 435513431 at 2026-11-05T21:48:54Z,
+then failed post-publication readback. Independent read-only checks confirmed
+Latest and the 37-byte channel SHA-256
+bf2b6bcea79e38b4f2187e6f1334ed6fbeb7eeabc71dfd10588fc78d043c1959.
+GitHub's Latest URL redirects first to the same repository's tagged download;
+the generic public downloader permits only a direct storage redirect. The
+promotion-specific reader now admits exactly that pinned tagged URL, anonymously,
+then uses the unchanged storage reader. Wrong tags, queries, schemes or hosts
+refuse. No retry or re-promotion is appropriate for the already public release.
+The original run logged only PublishError, so its exact HTTP response was not
+retained; the observed redirect reproduces the source failure independently.

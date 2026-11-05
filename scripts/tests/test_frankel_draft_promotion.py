@@ -26,6 +26,7 @@ class Promotion(unittest.TestCase):
         self.client.download.side_effect = lambda ident,path,size: path.write_bytes(self.bytes)
         self.client.public_download.side_effect = lambda url,path,size: path.write_bytes(self.bytes)
         self.client.latest_tag.return_value = p.r.TAG
+        self.client._request.return_value = (302, 'https://github.com/Immortal-Protocols/pixel-ota/releases/download/'+p.r.TAG+'/frankel-stable', None)
         self.adapter = p.ExistingDraft(self.client)
         self.cand = dict(sha=p.CANDIDATE,build=p.r.BUILD,device='frankel')
 
@@ -100,6 +101,36 @@ class Promotion(unittest.TestCase):
         p.admission(env)
         for key in env:
             with self.subTest(key=key),self.assertRaises(p.r.Refused):p.admission(dict(env,**{key:'wrong'}))
+
+    def test_latest_redirect_is_exact_anonymous_and_bounded(self):
+        output=self.home/'channel'
+        p.public_channel(self.client,output,len(self.bytes))
+        call=self.client._request.call_args
+        self.assertFalse(call.kwargs['authenticated'])
+        self.assertEqual(call.kwargs['limit'],len(self.bytes))
+        self.assertEqual(call.kwargs['expect'],(200,302))
+        self.client.public_download.assert_called_once_with(
+            'https://github.com/Immortal-Protocols/pixel-ota/releases/download/'+p.r.TAG+'/frankel-stable',output,len(self.bytes))
+
+    def test_wrong_latest_redirect_never_followed(self):
+        canonical='https://github.com/Immortal-Protocols/pixel-ota/releases/download/'+p.r.TAG+'/frankel-stable'
+        for target in ['https://evil.example/file',canonical+'?token=secret',canonical.replace(p.r.TAG,'frankel-other'),
+                       canonical.replace('https:','http:'),canonical.replace('github.com','github.com.evil.example')]:
+            with self.subTest(target=target):
+                self.client._request.return_value=(302,target,None)
+                with self.assertRaises(p.r.Refused):p.public_channel(self.client,self.home/'out',37)
+        self.client.public_download.assert_not_called()
+
+    def test_direct_channel_response_needs_no_redirect(self):
+        self.client._request.return_value=(200,None,37)
+        p.public_channel(self.client,self.home/'out',37)
+        self.client.public_download.assert_not_called()
+
+    def test_channel_denial_not_retried_or_alternate_downloaded(self):
+        self.client._request.side_effect=p.r.github.PublishError('synthetic denied response')
+        with self.assertRaises(p.r.github.PublishError):p.public_channel(self.client,self.home/'out',37)
+        self.client._request.assert_called_once()
+        self.client.public_download.assert_not_called()
 
     def test_workflow_hosted_no_inputs_no_oidc_no_builder(self):
         source=(ROOT/'.github/workflows/frankel-draft-promotion.yml').read_text()
