@@ -242,6 +242,8 @@ const sha = (b) => crypto.createHash('sha256').update(b).digest('hex');
   await drag(cx, B.y + B.height - 8 * k, cx, B.y + B.height - 100 * k, 10);
   g = await geo();
   check('chin with the keyboard hidden: app ends on the chin’s concave top', (await st()).chin && Math.abs(g.app.bottom - 58) < 1.5, g.app);
+  const gap13 = await page.evaluate(() => { const t = document.getElementById('thread'); return t.scrollHeight - t.clientHeight - t.scrollTop; });
+  check('after send, hide and chin raise, the newest message is still in view', gap13 <= 4, gap13);
   await shot('13-chin-raised-no-keyboard', 'Chin raised, keyboard hidden (matches HiFi behaviour)');
   await page.locator('#chin-mic').click(); await page.keyboard.press('Escape'); await wait();
   await page.locator('#f-msg').click(); await wait();
