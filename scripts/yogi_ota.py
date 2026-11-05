@@ -385,9 +385,7 @@ VERIFIER = ROOT/'scripts/app-inputs-verify.py'
 def app_record(cfg):
     """Release's committed app-input record (PR #565) for the bound fleet set; absent until its export ran."""
     pins = cfg['appInputs']
-    if pins.get('status') != 'bound':
-        raise Refused('appInputs.status is not bound')
-    path = ROOT/pins['record']
+    path = ROOT/pins['record']  # bound exactly when Release's record is on main; nothing else is committed by Yogi
     if not path.is_file() or path.is_symlink() or not VERIFIER.is_file():
         raise Refused(f'Release app-input record {pins["record"]} or its verifier is not committed')
     rec = read(path)

@@ -55,7 +55,7 @@ class Fixture(unittest.TestCase):
                        'artifact': {'name': 'app-inputs-frankel-2026110403-41960000001-1', 'id': 13400000001,
                                     'digest': 'sha256:' + 'd'*64}}}
         self.record.write_text(json.dumps(self.record_value))
-        self.cfg['appInputs'].update(status='bound', record=str(self.record))
+        self.cfg['appInputs'].update(record=str(self.record))
         verifier = self.root/'app-inputs-verify.py'
         verifier.write_text('# synthetic stand-in for Release\'s verifier\n')
         patcher = mock.patch.object(yogi, 'VERIFIER', verifier)
@@ -255,7 +255,7 @@ class RecordTest(Fixture):
 
     def test_committed_contract_points_at_the_release_record(self):
         self.assertEqual(yogi.config()['appInputs']['record'], 'os/app-inputs/frankel-2026110403.json')
-        self.assertEqual(yogi.config()['appInputs']['status'], 'unbound')
+        self.assertNotIn('status', yogi.config()['appInputs'])  # bound only by Release's committed record
 
 
 class AllocationTest(Fixture):
