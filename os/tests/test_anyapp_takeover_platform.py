@@ -19,9 +19,12 @@ close paths for the four states of the target app:
 
 The session's display is private (no VIRTUAL_DISPLAY_FLAG_PUBLIC), and Android destroys a private display's tasks when
 it is removed (stock DisplayWindowSettings.getRemoveContentModeLocked). So a task the owner had open, once taken over,
-would have been destroyed by any close without hand-over (owner Stop, deadline, caller death). The session now records
-each taken-over task and, before its display closes, moves it back to the main display, on top if it was in the
-foreground. Hand-over already moves every task back on top (stock moveAllTasks: reparentTasks(..., onTop=true)).
+would have been destroyed by any close without hand-over (owner Stop, deadline, caller death). The session records every
+task the app owned on the main display before the launch (Android chooses which one it reuses), and before its display
+closes moves each one that is on its display back to the main display. A task goes back on top only if it was in front
+(by task, not by package) and the owner is still on the task its move revealed; otherwise it goes in at the bottom, so
+it never covers what the owner opened since. The platform cannot tell the owner's Stop from an idle or deadline close.
+Hand-over already moves every task back on top (stock moveAllTasks: reparentTasks(..., onTop=true)).
 
 The Android behaviour cited above is source-traced at 84183aff, not executed. Source and fixture logic only: no
 framework build, emulator or device, and not phone proof."""
@@ -91,9 +94,11 @@ class AnyAppTakeoverPlatformTest(unittest.TestCase):
         for patch in BACKGROUND_FRAMEWORK_PATCHES:
             added = [l for l in (ROOT/'os/patches'/patch).read_text().splitlines() if l.startswith('+')]
             self.assertFalse([l for l in added if 'target_in_foreground' in l], patch)
-        # Being visible only marks the task as foreground for its return; it is never a reason to throw.
-        self.assertIn('final boolean visible = showsPackage(foreground, packageName);', self.launch)
-        self.assertNotIn('if (visible', self.launch)
+        # Being in front only shapes the task's return; it is never a reason to throw. In front is by task: the main
+        # display's top visible task is the app's own, whoever's activity (a payment screen, say) is on top of it.
+        self.assertIn('final int topTask = foreground.isEmpty() || foreground.get(0) == null ? INVALID_TASK_ID : '
+            'foreground.get(0).getTaskId();', flat(self.launch))
+        self.assertNotIn('if (topTask', self.launch)
         # An unknown foreground still refuses rather than guessing.
         self.assertIn('if (foreground == null) { throw new IllegalStateException("foreground_state_unavailable"); }',
             flat(self.launch))
@@ -121,24 +126,31 @@ class AnyAppTakeoverPlatformTest(unittest.TestCase):
         self.assertIn('packageName.equals(activity.getComponentName().getPackageName())', shows)
 
     def test_a_home_recents_assistant_or_dream_task_never_moves(self):
-        guard = flat(self.launch[self.launch.index('for (ActivityManager.RunningTaskInfo task : tasksOn(mMainDisplayId))'):])
-        self.assertIn('for (ActivityManager.RunningTaskInfo task : tasksOn(mMainDisplayId)) { if (ownsTask(task, '
+        guard = flat(self.launch[self.launch.index('final List<ActivityManager.RunningTaskInfo> before = '):])
+        self.assertIn('final List<ActivityManager.RunningTaskInfo> before = tasksOn(mMainDisplayId); '
+            'for (ActivityManager.RunningTaskInfo task : before) { if (ownsTask(task, '
             'packageName) && task.getActivityType() != ACTIVITY_TYPE_STANDARD && task.getActivityType() != '
             'ACTIVITY_TYPE_UNDEFINED) { throw new IllegalStateException("target_not_standard: " + packageName); } }',
             guard)
-        # Any such task of the package refuses, before its own task is looked up or anything starts.
-        self.assertLess(self.launch.index('target_not_standard'), self.launch.index('final int existing = taskOf('))
+        # Any such task of the package refuses, before its tasks are recorded or anything starts.
+        self.assertLess(self.launch.index('target_not_standard'), self.launch.index('owned.add(task.taskId);'))
         self.assertLess(self.launch.index('target_not_standard'), self.launch.index('startActivityAsUser('))
         owns = flat(method(self.session, 'private boolean ownsTask('))
         self.assertIn('return task.baseActivity != null && packageName.equals(task.baseActivity.getPackageName()) && '
             'task.userId == mRequest.ownerUserId();', owns)
 
-    def test_the_owners_open_task_is_recorded_with_its_foreground_state(self):
-        order = [self.launch.index(s) for s in ('final int existing = taskOf(packageName, mMainDisplayId);',
-            'startActivityAsUser(', 'mTakenOverTasks.put(existing, visible);')]
+    def test_every_open_task_of_the_app_is_recorded_with_its_place(self):
+        launch = flat(self.launch)
+        # All of the app's main-display tasks before the launch, and the first other task (what a move reveals).
+        self.assertIn('for (ActivityManager.RunningTaskInfo task : before) { if (ownsTask(task, packageName)) { '
+            'owned.add(task.taskId); } else if (below == INVALID_TASK_ID) { below = task.taskId; } }', launch)
+        order = [self.launch.index(s) for s in ('owned.add(task.taskId);', 'startActivityAsUser(',
+            'mTakenOverTasks.put(taskId, new Takeover(taskId == topTask, below));')]
         self.assertEqual(order, sorted(order))
-        self.assertIn('if (existing != INVALID_TASK_ID) { synchronized (mTakenOverTasks) { '
-            'mTakenOverTasks.put(existing, visible); } }', flat(self.launch))
+        self.assertIn('synchronized (mTakenOverTasks) { for (int taskId : owned) { '
+            'mTakenOverTasks.put(taskId, new Takeover(taskId == topTask, below)); } }', launch)
+        self.assertIn('final boolean sameSession = owned.isEmpty() && taskOf(packageName, mVirtualDisplayId) != '
+            'INVALID_TASK_ID;', launch)
         # Only the owner's own task of that app (by its root activity) on the main display.
         task = flat(method(self.session, 'private int taskOf('))
         self.assertIn('for (ActivityManager.RunningTaskInfo task : tasksOn(displayId))', task)
@@ -146,13 +158,15 @@ class AnyAppTakeoverPlatformTest(unittest.TestCase):
         tasks = flat(method(self.session, 'private static List<ActivityManager.RunningTaskInfo> tasksOn('))
         self.assertIn('ActivityTaskManager.getService().getTasks( Integer.MAX_VALUE, '
             '/* filterOnlyVisibleRecents= */ false, /* keepIntentExtra= */ false, displayId);', tasks)
-        self.assertIn('@GuardedBy("mTakenOverTasks") private final SparseBooleanArray mTakenOverTasks',
+        self.assertIn('@GuardedBy("mTakenOverTasks") private final SparseArray<Takeover> mTakenOverTasks',
+            flat(self.session))
+        self.assertIn('Takeover(boolean foreground, int below) { this.foreground = foreground; this.below = below; }',
             flat(self.session))
 
     def test_the_disposition_log_is_content_free(self):
         log = flat(self.launch[self.launch.index('Slog.i(TAG, "launch disposition="'):])
-        self.assertIn('Slog.i(TAG, "launch disposition=" + (existing != INVALID_TASK_ID ? (visible ? "foreground" : '
-            '"background") : sameSession ? "same_session" : "closed") + " task=" + existing + " from=" + '
+        self.assertIn('Slog.i(TAG, "launch disposition=" + (!owned.isEmpty() ? (owned.contains(topTask) ? '
+            '"foreground" : "background") : sameSession ? "same_session" : "closed") + " tasks=" + owned + " from=" + '
             'mMainDisplayId + " to=" + mVirtualDisplayId);', log)
         self.assertNotIn('packageName', log[:log.index(');') + 2])
 
@@ -166,11 +180,16 @@ class AnyAppTakeoverPlatformTest(unittest.TestCase):
         self.assertLess(release.index('returnTakenOverTasks();'), release.index('mVirtualDevice.close();'))
         back = flat(method(self.session, 'private void returnTakenOverTasks()'))
         self.assertIn('taken = mTakenOverTasks.clone(); mTakenOverTasks.clear();', back)
-        # Only a task still on this display moves, to the main display, on top exactly when it was in front.
+        # Only a task on this display moves, to the main display: on top only if it was in front and the owner is
+        # still on the task its move revealed; otherwise at the bottom, never over what the owner opened since.
         self.assertIn('final List<ActivityManager.RunningTaskInfo> here = tasksOn(mVirtualDisplayId);', back)
         self.assertIn('if (here.stream().noneMatch(task -> task.taskId == taskId)) { continue; }', back)
+        self.assertIn('final int topNow = front == null || front.isEmpty() || front.get(0) == null ? INVALID_TASK_ID : '
+            'front.get(0).getTaskId();', back)
+        self.assertIn('final boolean onTop = takeover.foreground && takeover.below != INVALID_TASK_ID && '
+            'topNow == takeover.below;', back)
         self.assertIn('ActivityTaskManager.getService().moveRootTaskToDisplayOnTopOrBottom(taskId, mMainDisplayId, '
-            '/* onTop= */ taken.valueAt(i));', back)
+            'onTop);', back)
         # A failure to return one task never blocks the rest of the close.
         self.assertIn('catch (RemoteException | RuntimeException e) { Slog.w(TAG, "Could not return task=" + '
             'taskId', back)
