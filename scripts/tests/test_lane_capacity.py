@@ -181,7 +181,8 @@ def independent_pairs(contract, live=True):
     service. Storage and lock paths may be the same strings on two machines: each VM has its own disk."""
     hosts = contract['hosts']
     known = {k: v['host'] for k, v in contract['lanes'].items()
-             if v['host'] and (not live or in_service(v['host'], hosts[v['host']]))}
+             if v.get('runtimeStatus') != 'retired-shared-host' and v['host']
+             and (not live or in_service(v['host'], hosts[v['host']]))}
     pairs = []
     for a in sorted(known):
         for b in sorted(known):
@@ -254,6 +255,18 @@ class MapTest(unittest.TestCase):
         self.assertIn("APP_PACKAGE = 'dev.pixel.voice'", allocator)
         self.assertIn("APP_RESERVATIONS = 'app-allocations'", allocator)
 
+    def test_retired_mustang_jobs_are_not_executable_capacity(self):
+        lane = CONTRACT['lanes']['mustang']
+        self.assertEqual(lane['runtimeStatus'], 'retired-shared-host')
+        binding = json.loads((ROOT/lane['activeBinding']).read_text())
+        self.assertEqual(binding['status'], 'unbound')
+        for live in (True, False):
+            self.assertFalse(any('mustang' in pair for pair in independent_pairs(CONTRACT, live)))
+        # A historical runner/VM label must not manufacture a parallel lane.
+        mislabeled = copy.deepcopy(CONTRACT)
+        mislabeled['lanes']['mustang'].pop('runtimeStatus')
+        self.assertIn(['mustang','yogi'], independent_pairs(mislabeled, live=False))
+
     def test_folded_job_conditions_are_read_whole(self):
         jobs = self_hosted_jobs(shape.text())
         self.assertEqual(jobs['mustang-signer'], ('roseos-frankel-builder', ['mustang-delivery', 'mustang-ota']))
@@ -301,6 +314,9 @@ class SplitTest(unittest.TestCase):
             'vm': {'project': 'p', 'zone': 'z', 'instance': 'own-builder'}, 'lockPath': '/srv/own/build.lock',
             'queue': 'os-release-own', 'controller': {'identityVariable': 'GCP_OWN_CONTROLLER'}, 'evidence': 'synthetic'}
         contract['lanes'][lane].update(host='own-host', target='own-host')
+        # A hypothetical completed migration replaces retirement; merely adding
+        # a label or deleting this status cannot reactivate the legacy CLI.
+        contract['lanes'][lane].pop('runtimeStatus', None)
         return contract
 
     def test_moving_a_lane_in_the_map_alone_is_refused(self):
