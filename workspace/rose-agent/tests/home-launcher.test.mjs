@@ -473,7 +473,7 @@ test('system and duplicate apps leave the app pages for one "…" System folder 
  assert.match(pages,/else \(group==HomeAppGroups\.SYSTEM\?systemApps:fromPlayStore\(packageName\)\?storeApps:otherApps\)\.add\(app\);/);
  const groups=read('../app/src/dev/pixel/voice/HomeAppGroups.java');
  assert.match(groups,/KEEP_OUT = \{"com\.anthropic\.claude", "com\.openai\.chatgpt", "com\.amazon\.mShop\.android\.shopping"\};/);
- assert.match(groups,/if \(has\(KEEP_OUT, packageName\)\) return MAIN;\n  if \(suite\) return SUITE;/);
+ assert.match(groups,/if \(has\(KEEP_OUT, packageName\)\) return MAIN;\n  if \(has\(RETIRED, packageName\)\) return SYSTEM;\n  if \(suite\) return SUITE;/);
  // Home's default apps come from every launchable app, the folder's included.
  assert.match(pages,/RoseHomeView\.homeApps\(getPackageManager\(\),getPackageName\(\),launchable,false\)/);
  assert.match(pages,/int\[\] share=HomeAppLayout\.homeShare\(curated\.size\(\),!folderApps\.isEmpty\(\),rest\.size\(\),homeCapacity\);/);
