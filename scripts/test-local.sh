@@ -88,6 +88,7 @@ python3 scripts/tests/test_permission_apex.py
 python3 scripts/tests/test_release_candidate_contract.py
 python3 scripts/tests/test_release_allocate.py
 python3 scripts/tests/test_frankel_draft_recovery.py
+python3 scripts/tests/test_frankel_draft_promotion.py
 python3 scripts/tests/test_frankel_allocation_recovery.py
 python3 scripts/tests/test_release_chain.py
 # Mustang one-button chain wiring (canned run metadata; no network, token, host or dispatch).
