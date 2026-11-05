@@ -10,7 +10,7 @@ public class MainActivity extends Activity {
  Typeface roundedFont;long startFeedbackUntil,endFeedbackUntil;String endingLabel="",lastFeedbackState="";
  boolean experimentalHome,chatMode=false,forceChatBottom=false,stickToBottom=true,userScrolling=false;long seenConversation=-2;ScrollView chatScroll,taskScroll;LinearLayout chatMessages;View breathingRoom;
  float swipeStartX,swipeStartY;boolean watchHomeSwipe,consumeHomeSwipe;
- LauncherPager launcherPager;LinearLayout homePageDots;int appColumns,appPerPage,homeColumns,homeCapacity,appAreaWidth=-1,appAreaHeight=-1,homeAreaWidth=-1,homeAreaHeight=-1;float appCellHeight=-1,homeCellHeight=-1;int packageGeneration;String builtHomeStamp;final ArrayList<TextView> pageDots=new ArrayList<>();
+ LauncherPager launcherPager;LinearLayout homePageDots;int appColumns,appPerPage,homeColumns,homeCapacity;final HomePlan.Viewport appViewport=new HomePlan.Viewport(),homeViewport=new HomePlan.Viewport();int packageGeneration;String builtHomeStamp;final ArrayList<TextView> pageDots=new ArrayList<>();
  ClockWidgetView clockWidget;WeatherWidgetView weatherWidget;GalleryWidgetView galleryWidget;int homePage=0,ourAppsPage=1;boolean voiceControls;
  boolean launcherReceiverRegistered;RoseHomeView roseHome;HomeFrame homeFrame;HomeTray homeTray;boolean homeStopped;final HomeOverview homeOverview=new HomeOverview();
  /** Package changes only rebuild the app pages; they must not restart voice or reset the chat. */
@@ -432,33 +432,42 @@ public class MainActivity extends Activity {
   * reported it, else an estimate from the screen configuration for the first build. */
  void planAppPages(){
   float density=getResources().getDisplayMetrics().density;android.content.res.Configuration c=getResources().getConfiguration();
-  float width=appAreaWidth>0?appAreaWidth:(c.screenWidthDp-2*HomeAppLayout.MARGIN_DP)*density;
-  float height=appAreaHeight>0?appAreaHeight:HomeAppLayout.estimatedHeightDp(c.screenHeightDp)*density;
-  float cell=appCellHeight>0?appCellHeight:HomeAppLayout.cellHeight(density,appLabel("").getLineHeight());
+  boolean appsKnown=appViewport.known(),homeKnown=homeViewport.known();
+  float width=appsKnown?appViewport.width:(c.screenWidthDp-2*HomeAppLayout.MARGIN_DP)*density;
+  float height=appsKnown?appViewport.height:HomeAppLayout.estimatedHeightDp(c.screenHeightDp)*density;
+  float cell=appsKnown?appViewport.cell:HomeAppLayout.cellHeight(density,appLabel("").getLineHeight());
   appColumns=HomeAppLayout.columns(width/density);appPerPage=HomeAppLayout.perPage(width,height,cell,density);
   // Home's grid has the same side margins but starts below the date and has unlabelled cells: its own measurement.
-  float homeWidth=homeAreaWidth>0?homeAreaWidth:width;
-  float homeHeight=homeAreaHeight>0?homeAreaHeight:HomeAppLayout.estimatedHomeHeightDp(c.screenHeightDp,HomeAppLayout.DATE_SP*c.fontScale*1.17f)*density;
-  float homeCell=homeCellHeight>0?homeCellHeight:HomeAppLayout.TILE_DP*density;
+  float homeWidth=homeKnown?homeViewport.width:width;
+  float homeHeight=homeKnown?homeViewport.height:HomeAppLayout.estimatedHomeHeightDp(c.screenHeightDp,HomeAppLayout.DATE_SP*c.fontScale*1.17f)*density;
+  float homeCell=homeKnown?homeViewport.cell:HomeAppLayout.TILE_DP*density;
   homeColumns=HomeAppLayout.homeColumns(homeWidth/density);homeCapacity=HomeAppLayout.homeCapacity(homeWidth,homeHeight,homeCell,density);
  }
- /** Home measured at a size whose capacity differs from the plan re-plans the pages once from that real size. */
- void homeMeasured(int width,int height,float cell){
-  float density=getResources().getDisplayMetrics().density;
-  if(homeColumns==HomeAppLayout.homeColumns(width/density)&&homeCapacity==HomeAppLayout.homeCapacity(width,height,cell,density))return;
-  if(width==homeAreaWidth&&height==homeAreaHeight&&cell==homeCellHeight)return;
-  homeAreaWidth=width;homeAreaHeight=height;homeCellHeight=cell;replanPending=true;
-  handler.post(()->{if(launcherPager!=null&&!isFinishing())attachLauncherPages(true);});
+ /** F01 (HomePlan): every measurement Home's grid reports is recorded, including one that fits the current plan (the
+  * old rule dropped those, and a build reporting two sizes then re-planned between them forever). */
+ void homeMeasured(int width,int height,float cell){homeViewport.record(width,height,cell);settleHomePlan();}
+ /** Re-plans Home's pages once the measurements have been quiet for HomePlan.SETTLE_MS, only if the latest real
+  * viewport no longer fits the plan, and never straight back to the plan Home just left (HomePlan.Breaker). */
+ final HomePlan.Breaker homePlanBreaker=new HomePlan.Breaker();
+ Runnable homePlanCheck;
+ boolean homePlanStale(){float density=getResources().getDisplayMetrics().density;
+  return HomePlan.homeStale(homeColumns,homeCapacity,homeViewport,density)||HomePlan.appsStale(appColumns,appPerPage,appViewport,density);}
+ void settleHomePlan(){
+  replanPending=homePlanStale();
+  if(homePlanCheck!=null)handler.removeCallbacks(homePlanCheck);
+  homePlanCheck=()->{homePlanCheck=null;if(launcherPager==null||isFinishing())return;
+   if(!homePlanStale()){replanPending=false;return;}
+   String current=HomePlan.key(homeColumns,homeCapacity,appColumns,appPerPage);
+   int[] kept={homeColumns,homeCapacity,appColumns,appPerPage};
+   planAppPages();
+   if(homePlanBreaker.allow(current,HomePlan.key(homeColumns,homeCapacity,appColumns,appPerPage),SystemClock.elapsedRealtime()))attachLauncherPages(true);
+   else{homeColumns=kept[0];homeCapacity=kept[1];appColumns=kept[2];appPerPage=kept[3];replanPending=false;}};
+  handler.postDelayed(homePlanCheck,HomePlan.SETTLE_MS);
  }
  /** The identity of a launchable entry (package and activity), for placing each app exactly once. */
  static String componentKey(ResolveInfo app){return app.activityInfo.packageName+"/"+app.activityInfo.name;}
- /** A page measured at a size whose capacity differs from the plan re-plans the pages once from that real size. */
- void appPageMeasured(int width,int height,float cell){
-  if(!HomeAppLayout.replan(appColumns,appPerPage,width,height,cell,getResources().getDisplayMetrics().density))return;
-  if(width==appAreaWidth&&height==appAreaHeight&&cell==appCellHeight)return;
-  appAreaWidth=width;appAreaHeight=height;appCellHeight=cell;replanPending=true;
-  handler.post(()->{if(launcherPager!=null&&!isFinishing())attachLauncherPages(true);});
- }
+ /** An app page's measurement, recorded and settled like Home's (HomePlan). */
+ void appPageMeasured(int width,int height,float cell){appViewport.record(width,height,cell);settleHomePlan();}
  /** One app page: the measured grid of real apps over the shared wallpaper, or a truthful note when none are installed. */
  View appPage(ArrayList<ResolveInfo> apps,String title,boolean noApps){
   View result;
@@ -686,7 +695,7 @@ public class MainActivity extends Activity {
   if(macPanel!=null){macPanel.destroy();macPanel=null;}
   if(screenDetail!=null&&screenDetail.getParent() instanceof ViewGroup)((ViewGroup)screenDetail.getParent()).removeView(screenDetail);screenDetail=null;
  }
- @Override protected void onDestroy(){closeSystemFolder();if(homeTray!=null)homeTray.release();homeOverview.cancel();if(overviewCheck!=null){handler.removeCallbacks(overviewCheck);overviewCheck=null;}if(taskCard!=null)taskCard.dispose();if(clockWidget!=null)clockWidget.setActive(false);if(weatherWidget!=null)weatherWidget.setActive(false);if(galleryWidget!=null)galleryWidget.setActive(false);if(launcherReceiverRegistered){unregisterReceiver(launcherPackages);launcherReceiverRegistered=false;}destroyMacScreen();super.onDestroy();}
+ @Override protected void onDestroy(){closeSystemFolder();if(homeTray!=null)homeTray.release();if(homePlanCheck!=null){handler.removeCallbacks(homePlanCheck);homePlanCheck=null;}homeOverview.cancel();if(overviewCheck!=null){handler.removeCallbacks(overviewCheck);overviewCheck=null;}if(taskCard!=null)taskCard.dispose();if(clockWidget!=null)clockWidget.setActive(false);if(weatherWidget!=null)weatherWidget.setActive(false);if(galleryWidget!=null)galleryWidget.setActive(false);if(launcherReceiverRegistered){unregisterReceiver(launcherPackages);launcherReceiverRegistered=false;}destroyMacScreen();super.onDestroy();}
  class MicControl extends View {
   final Paint paint=new Paint(Paint.ANTI_ALIAS_FLAG);String label="Start";boolean listening;float targetLevel,displayLevel;long lastFrame;
   MicControl(){super(MainActivity.this);setClickable(true);setFocusable(true);setContentDescription("Start session");}
