@@ -10,7 +10,9 @@ roseEdge section of the pipeline config (os/release-pipeline/frankel.json), foll
   that class (and, when the entry names one, a direct or virtual method of that name). R8 may rename a class its
   keep rules do not cover (SystemUI keeps com.android.wm.shell.* names, not subpackages), so an entry may also name a
   string literal only that code holds: when no dex defines the class, the entry passes on a dex whose string table
-  holds exactly that whole literal. An entry without a literal is checked by class only, so a rename fails closed.
+  holds exactly that whole literal. An entry without a literal is checked by class only, so a rename fails closed;
+- every literals entry is required as well, not as a fallback: a dex of a matching APK holds that whole literal. It
+  proves code a class check cannot (a change inside classes that existed before it, such as #548's diagnostics switch).
 
 Read-only and tool-free: the dex header, string, type and method ids, class_defs and class_data are read directly
 (versions 035 to 041, including 041 containers of several dex sections), so the builder needs no dexdump. A dex that
@@ -36,6 +38,7 @@ ROOT = Path(__file__).resolve().parents[1]
 CONFIG = ROOT/'os/release-pipeline/frankel.json'
 REQUIRED = ('props', 'propFiles', 'classes')
 CLASS_KEYS = {'apk', 'class', 'method', 'literal'}
+LITERAL_KEYS = {'apk', 'literal'}
 DEX_NAME = re.compile(r'classes\d*\.dex')
 MAGIC = re.compile(rb'dex\n0(3[5-9]|4[01])\x00')
 PROP = re.compile(r'[A-Za-z0-9_.-]+=\S+')
@@ -59,8 +62,22 @@ def missing(spec):
     return [f'roseEdge.{key}' for key in REQUIRED if not spec.get(key)]
 
 
+def apk_pattern(value, where):
+    if not isinstance(value, str) or not value.endswith(r'\.apk'):
+        raise SpecError(f'{where} apk must be a pattern of .apk paths')
+    try:
+        re.compile(value)
+    except re.error:
+        raise SpecError(f'{where} apk is not a valid pattern') from None
+
+
+def ascii_literal(value):
+    return isinstance(value, str) and bool(value) and value.isascii() and '\x00' not in value
+
+
 def validate(spec):
-    """The spec, or SpecError: ASCII prop lines, build.prop paths, and class entries with exactly apk/class/method/literal."""
+    """The spec, or SpecError: ASCII prop lines, build.prop paths, class entries with exactly apk/class/method/literal
+    and, when present, literals entries with exactly apk/literal."""
     absent = missing(spec)
     if absent:
         raise SpecError('setup missing: ' + ', '.join(absent))
@@ -71,19 +88,21 @@ def validate(spec):
     for entry in spec['classes']:
         if not isinstance(entry, dict) or set(entry) != CLASS_KEYS:
             raise SpecError(f'roseEdge.classes entries need exactly {sorted(CLASS_KEYS)}')
-        if not isinstance(entry['apk'], str) or not entry['apk'].endswith(r'\.apk'):
-            raise SpecError('roseEdge.classes apk must be a pattern of .apk paths')
-        try:
-            re.compile(entry['apk'])
-        except re.error:
-            raise SpecError('roseEdge.classes apk is not a valid pattern') from None
+        apk_pattern(entry['apk'], 'roseEdge.classes')
         if not isinstance(entry['class'], str) or not DESCRIPTOR.fullmatch(entry['class']):
             raise SpecError('roseEdge.classes class must be a dex class descriptor')
         if entry['method'] is not None and not (isinstance(entry['method'], str) and re.fullmatch(r'[A-Za-z_$][\w$]*', entry['method'])):
             raise SpecError('roseEdge.classes method must be a method name or null')
-        if entry['literal'] is not None and not (isinstance(entry['literal'], str) and entry['literal'] and entry['literal'].isascii()
-                and '\x00' not in entry['literal']):
+        if entry['literal'] is not None and not ascii_literal(entry['literal']):
             raise SpecError('roseEdge.classes literal must be a non-empty ASCII string or null')
+    if not isinstance(spec.get('literals', []), list):
+        raise SpecError('roseEdge.literals must be a list')
+    for entry in spec.get('literals', []):
+        if not isinstance(entry, dict) or set(entry) != LITERAL_KEYS:
+            raise SpecError(f'roseEdge.literals entries need exactly {sorted(LITERAL_KEYS)}')
+        apk_pattern(entry['apk'], 'roseEdge.literals')
+        if not ascii_literal(entry['literal']):
+            raise SpecError('roseEdge.literals literal must be a non-empty ASCII string')
     return spec
 
 
@@ -255,17 +274,22 @@ def scan(dexes, unreadable, probe):
     return None
 
 
-def check_classes(archive, spec):
-    names = archive.namelist()
-    cache, results = {}, []
+def matching(archive, pattern, cache):
+    """The APKs whose whole target-files path matches pattern, their readable dex, and those that could not be read."""
+    apks = sorted(n for n in archive.namelist() if re.fullmatch(pattern, n))
+    dexes, unreadable = [], {}
+    for apk in apks:
+        if apk not in cache:
+            cache[apk] = read_apk(archive, apk)
+        dexes += [(apk, dex, parsed) for dex, parsed in cache[apk]['dex']]
+        unreadable.update({f'{apk}!{dex}': why for dex, why in cache[apk]['unreadable']})
+    return apks, dexes, unreadable
+
+
+def check_classes(archive, spec, cache):
+    results = []
     for entry in spec['classes']:
-        apks = sorted(n for n in names if re.fullmatch(entry['apk'], n))
-        dexes, unreadable = [], {}
-        for apk in apks:
-            if apk not in cache:
-                cache[apk] = read_apk(archive, apk)
-            dexes += [(apk, dex, parsed) for dex, parsed in cache[apk]['dex']]
-            unreadable.update({f'{apk}!{dex}': why for dex, why in cache[apk]['unreadable']})
+        apks, dexes, unreadable = matching(archive, entry['apk'], cache)
 
         def defines(section, entry=entry):
             methods = section.defined_methods(entry['class'])
@@ -276,7 +300,18 @@ def check_classes(archive, spec):
         results.append({'class': entry['class'], 'method': entry['method'], 'literal': entry['literal'],
                         'pass': where is not None, 'by': by if where else None, 'where': where, 'apks': apks,
                         'unreadable': [f'{k}: {v}' for k, v in sorted(unreadable.items())]})
-    return results, {apk: cache[apk]['sha256'] for apk in sorted(cache)}
+    return results
+
+
+def check_literals(archive, spec, cache):
+    """Every required literal, as a whole string-table entry of a dex of a matching APK."""
+    results = []
+    for entry in spec.get('literals', []):
+        apks, dexes, unreadable = matching(archive, entry['apk'], cache)
+        where = scan(dexes, unreadable, lambda section, literal=entry['literal']: section.has_string(literal))
+        results.append({'literal': entry['literal'], 'pass': where is not None, 'where': where, 'apks': apks,
+                        'unreadable': [f'{k}: {v}' for k, v in sorted(unreadable.items())]})
+    return results
 
 
 def read_apk(archive, name):
@@ -309,9 +344,11 @@ def check(target_files, spec):
     """(failures, receipt) for one target-files zip. Failures name each failed check; the receipt records what was read
     (APK sha256s, where each class or literal was found) and is evidence of code inclusion only."""
     validate(spec)
+    cache = {}
     with zipfile.ZipFile(target_files) as archive:
         props = check_props(archive, spec)
-        classes, apks = check_classes(archive, spec)
+        classes = check_classes(archive, spec, cache)
+        literals = check_literals(archive, spec, cache)
     failures = []
     for p in props:
         if not p['pass']:
@@ -323,7 +360,12 @@ def check(target_files, spec):
             failures.append(f'raised-edge class {what} is not defined in the dex of the {len(c["apks"])} matching APK(s)'
                             + (f', nor is the literal "{c["literal"]}" there' if c['literal'] else '')
                             + (f'; unreadable: {c["unreadable"]}' if c['unreadable'] else ''))
-    return failures, {'props': props, 'classes': classes, 'apkSha256': apks}
+    for item in literals:
+        if not item['pass']:
+            failures.append(f'raised-edge literal "{item["literal"]}" is not a whole dex string in the {len(item["apks"])} '
+                            'matching APK(s)' + (f'; unreadable: {item["unreadable"]}' if item['unreadable'] else ''))
+    return failures, {'props': props, 'classes': classes, 'literals': literals,
+                      'apkSha256': {apk: cache[apk]['sha256'] for apk in sorted(cache)}}
 
 
 def labels(receipt):
@@ -332,6 +374,8 @@ def labels(receipt):
         what = c['class'].strip('L;').replace('/', '.') + (f'.{c["method"]}' if c['method'] else '')
         out.append(('PASS ' if c['pass'] else 'FAIL ') + f'class {what} in {len(c["apks"])} candidate apk(s)'
                    + (f' by {c["by"]}' if c['by'] else ''))
+    for item in receipt['literals']:
+        out.append(('PASS ' if item['pass'] else 'FAIL ') + f'literal "{item["literal"]}" in {len(item["apks"])} candidate apk(s)')
     return out
 
 

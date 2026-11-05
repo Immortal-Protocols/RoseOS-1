@@ -882,7 +882,7 @@ def check_rose_edge(path, config):
     return failures, {'configured': True, **receipt}
 
 def rose_edge_label(edge):
-    return ['Rose raised edge: switches, Launcher3 gesture and SystemUI resize/mic slot in dex'] if edge.get('configured') else []
+    return ['Rose raised edge: switches, Launcher3 gesture with the #548 marker and SystemUI resize/mic slot in dex'] if edge.get('configured') else []
 
 def systemui_identity_capture(data, apk_path, artifact, config, cand, used):
     """Supplemental identity of the signed SystemUI APK (OS-COMPONENT-ID-002/003): xmltree and apksigner run on one
