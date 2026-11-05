@@ -1992,3 +1992,27 @@ reviewed and committed under `os/latest-beta/`; `app-inputs-export` then recheck
 and copies the retained signed apps/policy for build `2026110501`. Export does not
 require public publication, and its existing 30-minute/owned-start lifecycle is
 separate from this hosted recovery. Never substitute older app bytes.
+
+## Allocation receipt recovery: source only, execution approval pending
+
+`frankel-allocation-recovery.yml` prepares a manual hosted read of artifact
+`13438221694` from successful recovery run `42075447865`, exact size 1,968 bytes
+and SHA-256 `2c9195275b87136880d47f9daeed9d294e8180a2942220917dbdb8e86847cede`.
+It does not retry the denied local download. Execution requires the exact hosted
+read and review-branch write approval; registering this source is not execution.
+
+The helper admits only the three expected nonsecret JSON files (at most four ZIP
+entries including the directory, at most 64 KiB expanded total), validates the
+successful recovery/source, original producer and deterministic allocation, and
+creates only `codex/frankel-2026110501-allocation` with one added file:
+`os/latest-beta/frankel-2026110501-allocation.json`. Existing branch/file refuses.
+The branch is based on the captured checkout; main is never moved. The created
+ref and file bytes are read back. A partial/uncertain outcome is not retried.
+
+The job needs temporary `actions: read` and `contents: write` on RoseOS-1 through
+its existing GITHUB_TOKEN, no stored credential or IAM change. The nonsecret
+allocation becomes public source. It has a 15-minute hosted limit, 14-day result
+receipt, and hosted scratch cleanup. No PR merge, build, signing, publication,
+builder start, app export or artifact payload beyond the pinned receipt occurs.
+After approval and verified source, the exact invocation is:
+`gh workflow run frankel-allocation-recovery.yml --repo Immortal-Protocols/RoseOS-1 --ref main`.

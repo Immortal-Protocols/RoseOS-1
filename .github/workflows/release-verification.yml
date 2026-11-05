@@ -119,6 +119,9 @@ on:
       - 'os/latest-beta/**'
       - '.github/workflows/os-release.yml'
       - '.github/workflows/frankel-draft-recovery.yml'
+      - '.github/workflows/frankel-allocation-recovery.yml'
+      - 'scripts/frankel-allocation-recovery.py'
+      - 'scripts/tests/test_frankel_allocation_recovery.py'
       - 'scripts/frankel-draft-recovery.py'
       - 'scripts/tests/test_frankel_draft_recovery.py'
       - 'scripts/tests/test_release_*.py'
@@ -305,6 +308,9 @@ on:
       - 'os/latest-beta/**'
       - '.github/workflows/os-release.yml'
       - '.github/workflows/frankel-draft-recovery.yml'
+      - '.github/workflows/frankel-allocation-recovery.yml'
+      - 'scripts/frankel-allocation-recovery.py'
+      - 'scripts/tests/test_frankel_allocation_recovery.py'
       - 'scripts/frankel-draft-recovery.py'
       - 'scripts/tests/test_frankel_draft_recovery.py'
       - 'scripts/tests/test_release_*.py'
@@ -407,6 +413,7 @@ jobs:
           python3 scripts/tests/test_release_candidate_contract.py
           python3 scripts/tests/test_release_allocate.py
           python3 scripts/tests/test_frankel_draft_recovery.py
+          python3 scripts/tests/test_frankel_allocation_recovery.py
           python3 scripts/tests/test_release_chain.py
           python3 scripts/tests/test_mustang_ota_chain_workflow.py
           python3 scripts/tests/test_rango_factory_observe_workflow.py
