@@ -15,6 +15,7 @@ import zipfile
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT/'scripts'))
 import mustang_integration
+import mustang_lane
 
 OTATOOLS_PATTERN = 'soong/.intermediates/build/make/tools/otatools_package/otatools-package/*/gen/otatools.zip'
 
@@ -97,6 +98,7 @@ def engine():
 
 
 if __name__ == '__main__':
+    mustang_lane.reject_legacy()
     if len(sys.argv) > 1 and sys.argv[1] not in ('plan', 'preflight', 'run'):
         sys.exit('Mustang supports plan/preflight/run only; historical inspection targets are not Mustang bindings')
     sys.exit(engine().main())

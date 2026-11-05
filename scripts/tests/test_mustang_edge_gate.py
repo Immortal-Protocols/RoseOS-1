@@ -16,6 +16,7 @@ sys.path[:0] = [str(ROOT/'scripts'), str(Path(__file__).resolve().parent)]
 import mustang_edge as gate
 import mustang_ota as ota
 import mustang_lane as lane
+import mustang_controller as controller
 import subprocess
 import dex_fixture
 import test_edge_artifact as fixtures
@@ -107,6 +108,7 @@ class DedicatedLaneTest(unittest.TestCase):
 
     def test_actual_legacy_cli_admissions_refuse_before_controller_or_credentials(self):
         commands=[
+            ['mustang-build-only.py','plan'], ['mustang-build-only.py','preflight'], ['mustang-build-only.py','run'],
             ['mustang-pipeline.py','describe'],
             ['mustang-pipeline.py','run','--run-id','1','--run-attempt','1'],
             ['mustang-pipeline.py','report','--run-id','1','--run-attempt','1','--out','/must-not-write'],
@@ -138,6 +140,126 @@ class DedicatedLaneTest(unittest.TestCase):
         self.assertEqual(jobs['controller']['needs'],'guard')
         self.assertNotIn('always()',jobs['controller'].get('if',''))
         self.assertIn("needs.controller.result != 'skipped'",jobs['cleanup']['if'])
+
+
+class DedicatedControllerTest(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.record = Path(self.temp.name)/'ownership.json'
+        self.lane = DedicatedLaneTest().proposal()
+        self.env = dict(GITHUB_EVENT_NAME='workflow_dispatch', GITHUB_REF='refs/heads/main',
+                        GITHUB_WORKFLOW_REF='Immortal-Protocols/RoseOS-1/'+self.lane['workflow']+'@refs/heads/main',
+                        GITHUB_SHA='a'*40, GITHUB_RUN_ID='1234', GITHUB_RUN_ATTEMPT='1')
+        self.run = controller.invocation(self.lane, self.env)
+
+    def fake(self, started=True, fail=False):
+        record = self.record
+        calls = []
+
+        class Fake:
+            def control_builder(self, action, *, builder, claim=None):
+                calls.append((action, builder))
+                if action == 'start':
+                    claim(started)
+                    # The durable record must exist before a request could be submitted.
+                    self.record_before_request = json.loads(record.read_text())
+                    if fail:
+                        raise RuntimeError('synthetic uncertain start')
+                return 'RUNNING' if action == 'start' else 'TERMINATED'
+
+        fake = Fake()
+        fake.calls = calls
+        return fake
+
+    def test_existing_implicit_frankel_api_is_rejected_without_calling_it(self):
+        class Implicit:
+            def control_builder(self, action, claim=None):
+                self.fail('implicit controller must never be called')
+        with self.assertRaisesRegex(ValueError, 'explicit builder API unavailable'):
+            controller.start(Implicit(), self.lane, self.run, self.record)
+        self.assertFalse(self.record.exists())
+
+    def test_start_and_stop_carry_exact_dedicated_vm_and_preserve_ownership(self):
+        fake = self.fake()
+        result = controller.start(fake, self.lane, self.run, self.record)
+        self.assertTrue(result['startedByThisOperation'])
+        self.assertEqual(fake.record_before_request['run'], self.run)
+        self.assertEqual(self.record.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(controller.stop(fake, self.lane, self.run, self.record)['observed'], 'TERMINATED')
+        self.assertEqual(fake.calls, [('start',self.lane['vm']), ('stop',self.lane['vm'])])
+        self.assertTrue(self.record.exists())
+
+    def test_already_running_vm_is_not_stopped_by_this_attempt(self):
+        fake = self.fake(started=False)
+        controller.start(fake, self.lane, self.run, self.record)
+        self.assertIn('skipped', controller.stop(fake, self.lane, self.run, self.record))
+        self.assertEqual(len(fake.calls), 1)
+
+    def test_failed_start_retains_claim_and_is_never_automatically_retried(self):
+        fake = self.fake(fail=True)
+        with self.assertRaisesRegex(RuntimeError, 'uncertain start'):
+            controller.start(fake, self.lane, self.run, self.record)
+        self.assertTrue(controller.read_ownership(self.record, self.lane, self.run))
+        with self.assertRaisesRegex(ValueError, 'reconcile'):
+            controller.start(fake, self.lane, self.run, self.record)
+        self.assertEqual(len(fake.calls), 1)
+
+    def test_absent_foreign_stale_or_malformed_record_never_stops(self):
+        fake = self.fake()
+        with self.assertRaisesRegex(ValueError, 'STOP refused'):
+            controller.stop(fake, self.lane, self.run, self.record)
+        valid = dict(schema=controller.SCHEMA, run=self.run,
+                     owner=dict(vm=self.lane['vm'], startedByThisOperation=True))
+        for value in ({}, None, [], dict(valid, run=dict(self.run, source='b'*40)),
+                      dict(valid, run=dict(self.run, runId='999')),
+                      dict(valid, owner=dict(vm=dict(self.lane['vm'], instanceId='999'),
+                                             startedByThisOperation=True)),
+                      dict(valid, owner=dict(vm=self.lane['vm'], startedByThisOperation='true'))):
+            with self.subTest(value=value):
+                self.record.write_text(json.dumps(value))
+                with self.assertRaisesRegex(ValueError, 'STOP refused'):
+                    controller.stop(fake, self.lane, self.run, self.record)
+        self.assertEqual(fake.calls, [])
+
+    def test_unbound_or_other_flavor_lanes_never_reach_control(self):
+        fake = self.fake()
+        for invalid in (lane.configuration(), dict(self.lane, vm=dict(self.lane['vm'],
+                                          instance='immortal-os-builder', project='protocols-465723',zone='us-west2-a'))):
+            with self.subTest(lane=invalid):
+                with self.assertRaises(ValueError): controller.start(fake, invalid, self.run, self.record)
+        self.assertEqual(fake.calls, [])
+
+    def test_record_link_or_interrupted_write_is_not_accepted_for_stop(self):
+        fake = self.fake()
+        self.record.write_text('{"schema":')
+        with self.assertRaisesRegex(ValueError, 'STOP refused'):
+            controller.stop(fake, self.lane, self.run, self.record)
+        self.record.unlink()
+        target = self.record.parent/'foreign.json'
+        target.write_text('{}')
+        self.record.symlink_to(target)
+        with self.assertRaisesRegex(ValueError, 'ownership absent'):
+            controller.stop(fake, self.lane, self.run, self.record)
+        with self.assertRaisesRegex(ValueError, 'reconcile'):
+            controller.start(fake, self.lane, self.run, self.record)
+        self.assertEqual(target.read_text(), '{}')
+        self.assertEqual(fake.calls, [])
+
+    def test_wrong_workflow_ref_source_event_or_attempt_is_refused(self):
+        for key, value in (('GITHUB_WORKFLOW_REF','Immortal-Protocols/RoseOS-1/.github/workflows/os-release.yml@refs/heads/main'),
+                           ('GITHUB_REF','refs/heads/other'), ('GITHUB_RUN_ATTEMPT','2'),
+                           ('GITHUB_EVENT_NAME','push'), ('GITHUB_SHA','not-a-commit'), ('GITHUB_RUN_ID','0')):
+            with self.subTest(key=key):
+                with self.assertRaises(ValueError): controller.invocation(self.lane, dict(self.env, **{key:value}))
+
+    def test_all_committed_controller_cli_actions_refuse_without_cloud_calls(self):
+        env = dict(PATH=os.environ['PATH'])
+        for action in ('check','plan','start','ownership','stop'):
+            result = subprocess.run([sys.executable,str(ROOT/'scripts/mustang_controller.py'), action],
+                                    env=env, capture_output=True, text=True, timeout=10)
+            self.assertEqual(result.returncode, 4)
+            self.assertIn('dedicated Mustang bindings missing', result.stderr)
 
 
 class ProofTest(unittest.TestCase):
