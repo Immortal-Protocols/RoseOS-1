@@ -64,10 +64,16 @@ class Fixture(unittest.TestCase):
         bound = {'profiles': {'yogi-v1': {'device': 'yogi', 'status': 'resource-bound', 'missing': [], 'project': 'protocols-465723',
                                           'secrets': dict(yogi.SECRETS)}}}
         self.profiles = bound
-        original = yogi.profile_problem
+        bound['profiles']['yogi-v1'].update(accessEvidence='os/signing-bootstrap/yogi-access-binding.json',
+                                            access={'addVersionExpires': '2026-11-06T06:00:00Z', 'minimumRemainingSeconds': 1800})
+        original, original_access = yogi.profile_problem, yogi.key_access_problem
         profiles = mock.patch.object(yogi, 'profile_problem', lambda profiles=None: original(self.profiles))
         profiles.start()
         self.addCleanup(profiles.stop)
+        access = mock.patch.object(yogi, 'key_access_problem',
+                                   lambda profiles=None, now=None: original_access(self.profiles, now or self.now))
+        access.start()
+        self.addCleanup(access.stop)
         patcher = mock.patch.object(yogi, 'VERIFIER', verifier)
         patcher.start()
         self.addCleanup(patcher.stop)
@@ -175,6 +181,16 @@ class KeyBootstrapTest(Fixture):
             with self.subTest(profile=sorted(profile)):
                 self.profiles = {'profiles': profile}
                 self.assertTrue(any('signing profile' in b for b in yogi.blockers(self.cfg, 'key-bootstrap')))
+
+    def test_unbound_or_expiring_bootstrap_access_refuses(self):
+        bound = self.profiles['profiles']['yogi-v1']
+        for change in ({'accessEvidence': None}, {'access': {'addVersionExpires': '2026-11-06T03:20:00Z',
+                                                             'minimumRemainingSeconds': 1800}}):
+            with self.subTest(change=sorted(change)):
+                self.profiles = {'profiles': {'yogi-v1': dict(bound, **change)}}
+                self.assertTrue(any('bootstrap access' in b for b in yogi.blockers(self.cfg, 'key-bootstrap')))
+        self.profiles = {'profiles': {'yogi-v1': dict(bound, access={'liveCheck': True})}}  # live check only: allowed
+        self.assertEqual(yogi.blockers(self.cfg, 'key-bootstrap'), [])
 
     def test_committed_tree_refuses_key_bootstrap(self):
         found = yogi.blockers(yogi.config(), 'key-bootstrap')

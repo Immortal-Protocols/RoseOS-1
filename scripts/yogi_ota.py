@@ -156,6 +156,27 @@ def profile_problem(profiles=None):
     return None
 
 
+def key_access_problem(profiles=None, now=None):
+    """Release's B2 boundary: the key bootstrap is refused while its bootstrap access is unbound. The profile must
+    record its access evidence (Signing's readback of the per-secret bindings), and a recorded addVersionExpires must
+    leave the profile's minimumRemainingSeconds. The live grant itself is re-checked by signing-bootstrap.py after login."""
+    try:
+        profiles = profiles if profiles is not None else module('yogi_signing_bootstrap', 'signing-bootstrap.py').load_profiles()
+        access = profiles['profiles'][PROFILE].get('access') or {}
+        evidence = profiles['profiles'][PROFILE].get('accessEvidence')
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return f'signing profile {PROFILE} bootstrap access is unbound'
+    if not evidence:
+        return f'signing profile {PROFILE} bootstrap access is unbound (no accessEvidence)'
+    expires = access.get('addVersionExpires')
+    if expires:
+        expiry = datetime.datetime.fromisoformat(str(expires).replace('Z', '+00:00'))
+        now = now or datetime.datetime.now(datetime.timezone.utc)
+        if expiry.tzinfo is None or (expiry-now).total_seconds() < int(access.get('minimumRemainingSeconds', 1800)):
+            return f'signing profile {PROFILE} bootstrap access window expired or too short'
+    return None
+
+
 def identities(cfg):
     """Public pins from the committed Yogi bootstrap receipt; absent until the separately authorized bootstrap ran."""
     path = ROOT/cfg['signing']['bootstrapReceipt']
@@ -220,6 +241,10 @@ def blockers(cfg, stage, access=False, now=None):
         problem = profile_problem()
         if problem:
             found.append(problem)
+        else:
+            problem = key_access_problem(now=now)
+            if problem:
+                found.append(problem)
         if (ROOT/cfg['signing']['bootstrapReceipt']).exists():
             found.append('a Yogi bootstrap receipt is already committed: the key bootstrap is one-time')
     if stage == 'ota' and (cfg['bootstrap'].get('status') not in ('signed', 'installed')

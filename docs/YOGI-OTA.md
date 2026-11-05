@@ -57,7 +57,8 @@ Package, provider and permission names are unchanged (`dev.pixel.voice`,
 1. **guard** (hosted): names every missing prerequisite; nothing starts otherwise.
 
    `stage=key-bootstrap` (manual, one-time) instead runs only: guard (runner ready,
-   `yogi-v1` defined, Yogi-bound and resource-bound, no Yogi bootstrap receipt yet) →
+   `yogi-v1` defined, Yogi-bound and resource-bound, its bootstrap access evidence recorded
+   with any recorded add-version window still open, no Yogi bootstrap receipt yet) →
    controller → on the Yogi runner the guard again, `signing-bootstrap.py preflight`,
    the same-run tool proof (`prove --lock /srv/rose-yogi/yogi-build.lock`), signer login,
    `run` under the same lock, logout → upload of the public
