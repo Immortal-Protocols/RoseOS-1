@@ -37,6 +37,23 @@ final class HomeGlyph extends Drawable {
  final Matrix matrix = new Matrix();
  float scale = 1;
 
+ /** An SVG path for a gear outline centred at (cx, cy): teeth flat-topped at radius outer, the ring between them at
+  * radius root; each tooth spans 40% of its pitch at the top and 56% at the root, so the sides slope like a real
+  * gear's. One closed path (no fill), drawn with the glyph stroke and round joins. */
+ static String gear(float cx, float cy, int teeth, float outer, float root) {
+  StringBuilder d = new StringBuilder();
+  double pitch = 2 * Math.PI / teeth, top = pitch * .20, base = pitch * .28;
+  for (int i = 0; i < teeth; i++) {
+   double a = -Math.PI / 2 + i * pitch;
+   double[][] pts = {{a - base, root}, {a - top, outer}, {a + top, outer}, {a + base, root}, {a + pitch / 2, root}};
+   for (int k = 0; k < pts.length; k++) {
+    d.append(i == 0 && k == 0 ? 'M' : 'L');
+    d.append(String.format(java.util.Locale.ROOT, "%.2f %.2f", cx + pts[k][1] * Math.cos(pts[k][0]), cy + pts[k][1] * Math.sin(pts[k][0])));
+   }
+  }
+  return d.append('Z').toString();
+ }
+
  HomeGlyph(String key) {
   this.key = key;
   paint.setColor(CREAM);
@@ -133,9 +150,9 @@ final class HomeGlyph extends Drawable {
     circle(24, 19, 6, STROKE);
     stroke("M13 37c1.5-6.2 5.5-9 11-9s9.5 2.8 11 9");
     break;
-   case "settings":
-    circle(24, 24, 5, STROKE);
-    stroke("M24 9v4.5M24 34.5V39M9 24h4.5M34.5 24H39M13.4 13.4l3.2 3.2M31.4 31.4l3.2 3.2M13.4 34.6l3.2-3.2M31.4 16.6l3.2-3.2");
+   case "settings": // F05: a gear (eight teeth on a ring, a centre hole), never the reference's sun-like rays
+    stroke(gear(24, 24, 8, 15.5f, 11.5f));
+    circle(24, 24, 4.6f, STROKE);
     break;
    case "system": // icons.js:53, the System apps folder
     circle(17, 17, 6, 0); circle(17, 17, 6, 2.4f);

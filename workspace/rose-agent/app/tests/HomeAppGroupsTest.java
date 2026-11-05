@@ -81,6 +81,14 @@ public final class HomeAppGroupsTest {
         expect(HomeAppGroups.glyph(null, ai) == null, "null package");
         expect(HomeAppGroups.glyph("", "") == null, "an empty package never matches an empty camera");
 
+        // F04: main Home never shows GrapheneOS Messaging (by package, com.android.messaging); its default-role place
+        // goes to Rose's Messages (BlueBubbles); every other package is placed as it is, and nothing is hidden elsewhere.
+        expect("com.bluebubbles.messaging".equals(HomeAppGroups.homeRole("com.android.messaging")), "GrapheneOS Messaging's place is Rose's Messages");
+        expect("com.bluebubbles.messaging".equals(HomeAppGroups.homeRole("com.bluebubbles.messaging")), "Rose's Messages stays");
+        for (String other : new String[]{"com.android.dialer", "app.grapheneos.camera", "app.vanadium.browser", "com.google.android.apps.messaging", "org.fossify.messages"})
+            expect(other.equals(HomeAppGroups.homeRole(other)), "only the exact OS package is replaced, not " + other);
+        expect(HomeAppGroups.homeRole(null) == null, "no role holder: nothing");
+        expect(HomeAppGroups.group("com.android.messaging", false, false, true, ai) == SYSTEM, "it stays launchable in the System folder");
         System.out.println("HomeAppGroupsTest: " + checks + " checks passed");
     }
 }

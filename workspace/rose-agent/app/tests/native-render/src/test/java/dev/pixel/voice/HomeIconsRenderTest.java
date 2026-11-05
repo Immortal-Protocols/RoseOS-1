@@ -176,6 +176,38 @@ public class HomeIconsRenderTest {
         assertEquals(1, clicks[0]);
     }
 
+    /** F05: Settings is a gear (teeth on a ring and a centre hole), recognisably not the reference's sun-like rays. */
+    @Test public void settingsGlyphIsAGear() throws Exception {
+        int side = 192;
+        float k = side / HomeGlyph.GRID;
+        Bitmap b = Bitmap.createBitmap(side, side, Bitmap.Config.ARGB_8888);
+        b.eraseColor(0xff1a0a0d);
+        HomeGlyph g = new HomeGlyph("settings");
+        g.setBounds(0, 0, side, side);
+        g.draw(new Canvas(b));
+        save(b, "home-glyph-settings");
+        for (int i = 0; i < 8; i++) {
+            double tooth = Math.toRadians(-90 + i * 45), gap = tooth + Math.toRadians(22.5);
+            // The ring between two teeth is inked (the sun's rays left these arcs empty).
+            assertTrue("ring between teeth " + i, inked(b, 24 + 11.5 * Math.cos(gap), 24 + 11.5 * Math.sin(gap), k));
+            // Each tooth's flat top is inked, and the space just beyond the ring between teeth is not.
+            assertTrue("tooth top " + i, inked(b, 24 + 15.5 * Math.cos(tooth), 24 + 15.5 * Math.sin(tooth), k));
+            assertFalse("open between teeth " + i, inked(b, 24 + 15.5 * Math.cos(gap), 24 + 15.5 * Math.sin(gap), k));
+        }
+        assertTrue("the centre hole's rim", inked(b, 24 + 4.6, 24, k));
+        assertFalse("the centre is open", inked(b, 24, 24, k));
+    }
+
+    /** Whether the glyph's ink (warm, far brighter than the backdrop) lies within one grid unit of (x, y). */
+    static boolean inked(Bitmap b, double x, double y, float k) {
+        int cx = (int) Math.round(x * k), cy = (int) Math.round(y * k), r = Math.round(k * .6f);
+        for (int dy = -r; dy <= r; dy++) for (int dx = -r; dx <= r; dx++) {
+            int px = b.getPixel(Math.max(0, Math.min(b.getWidth() - 1, cx + dx)), Math.max(0, Math.min(b.getHeight() - 1, cy + dy)));
+            if (((px >> 8) & 255) > 120) return true;
+        }
+        return false;
+    }
+
     static List<View> tiles(int n, int[] clicks) {
         ArrayList<View> tiles = new ArrayList<>();
         String[] keys = {"camera", "mail", "calendar", "weather", "clock", "calculator", "files", "settings", "browser"};
