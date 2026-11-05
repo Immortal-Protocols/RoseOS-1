@@ -1,0 +1,181 @@
+{
+  "schema": "roseos.lane-capacity.v1",
+  "basis": "1A (Rose daily work plan, 2026-11-05): every release lane builds on its own runner, VM, storage, queue and lifecycle controller, so one lane's failure or cleanup cannot stop another; only genuinely shared atomic steps, such as app version allocation, may be serialized across lanes. This is the committed map: the host each os-release mode runs on today, and what each lane still needs. A host is listed only with values the committed route already uses or Infra's verified readback supplies, with its evidence; nothing here is a placeholder. A host builds only when it is in service: the Frankel builder is the operating builder, and Yogi's counts once os/ota/yogi.json says builder.status ready. scripts/tests/test_lane_capacity.py derives the actual routing from os-release.yml, release-pipeline.py and the host configs and checks it against this map.",
+  "binding": "Infra adds a host with verified readback (runner label carried only by that machine, VM project/zone/instance, storage root, lock path, queue, controller identity variable) and evidence. Release then moves the lane to it: the lane's host, its jobs' runs-on, a per-host queue and a lane-aware controller, in one reviewed change that this test must pass. Until then a lane with target own stays on its current host.",
+  "unboundFields": [
+    "runnerLabel",
+    "vm",
+    "storageRoot",
+    "lockPath",
+    "queue",
+    "controller"
+  ],
+  "hosts": {
+    "frankel-builder": {
+      "runnerLabel": "roseos-frankel-builder",
+      "vm": {
+        "project": "protocols-465723",
+        "zone": "us-west2-a",
+        "instance": "immortal-os-builder"
+      },
+      "storageRoot": "/home/pixelbuild/rose-actions",
+      "lockPath": "/home/pixelbuild/frankel-build.lock",
+      "queue": "os-release-frankel",
+      "controller": {
+        "identityVariable": "GCP_CONTROLLER_SERVICE_ACCOUNT"
+      },
+      "evidence": "the committed route on main: os-release.yml (runs-on of every self-hosted job, the workflow concurrency group, the controller and cleanup identity), release-pipeline.py BUILDER, frankel.json host.lockPath and storage/builder-reclaim.json root",
+      "config": "os/release-pipeline/frankel.json"
+    },
+    "yogi-builder": {
+      "runnerLabel": "roseos-yogi-builder",
+      "vm": {
+        "project": "protocols-465723",
+        "zone": "us-west2-a",
+        "instance": "roseos-yogi-builder-20261103-a"
+      },
+      "storageRoot": "/srv/rose-yogi",
+      "lockPath": "/srv/rose-yogi/yogi-build.lock",
+      "queue": "yogi-ota",
+      "controller": {
+        "identityVariable": "YOGI_CONTROLLER_SERVICE_ACCOUNT"
+      },
+      "config": "os/ota/yogi.json",
+      "evidence": "the committed Yogi route on main (#558, f7ed9e2): yogi-ota.yml runs-on, concurrency and controller identity, and os/ota/yogi.json builder (from the handoff). Its builder.status is runner-unregistered, so the route is separate but not in service."
+    }
+  },
+  "lanes": {
+    "frankel": {
+      "workflow": ".github/workflows/os-release.yml",
+      "modes": [
+        "latest-beta",
+        "os-release",
+        "app-reuse",
+        "app-inputs-export",
+        "frankel-factory-observe",
+        "frankel-factory-package"
+      ],
+      "host": "frankel-builder",
+      "target": "frankel-builder",
+      "note": "Frankel keeps the existing builder once its storage is recovered. app-reuse and app-inputs-export read a Frankel attempt on this host, so they stay with Frankel."
+    },
+    "mustang": {
+      "workflow": ".github/workflows/os-release.yml",
+      "modes": [
+        "mustang-build",
+        "mustang-bootstrap",
+        "mustang-delivery",
+        "mustang-ota"
+      ],
+      "host": "frankel-builder",
+      "target": "own",
+      "unbound": [
+        "runnerLabel",
+        "vm",
+        "storageRoot",
+        "lockPath",
+        "queue",
+        "controller"
+      ],
+      "note": "Its own host also needs the retained Mustang source tree its pipeline reads."
+    },
+    "agent": {
+      "workflow": ".github/workflows/os-release.yml",
+      "modes": [
+        "app-only"
+      ],
+      "host": "frankel-builder",
+      "target": "own",
+      "unbound": [
+        "runnerLabel",
+        "vm",
+        "storageRoot",
+        "lockPath",
+        "queue",
+        "controller"
+      ],
+      "note": "The build itself needs only the public SDK, the pinned ZXing jar, the staged connection inputs and esbuild. Its host coupling is the app signer (PIXEL_APP_SIGNING_* through the signer identity), the 300 GiB free-space reserve and the shared app version ledger below. It cannot leave the ledger's host until the ledger moves."
+    },
+    "harness": {
+      "workflow": ".github/workflows/os-release.yml",
+      "modes": [
+        "launcher3-compile"
+      ],
+      "host": "frankel-builder",
+      "target": "own",
+      "unbound": [
+        "runnerLabel",
+        "vm",
+        "storageRoot",
+        "lockPath",
+        "queue",
+        "controller"
+      ],
+      "note": "1E: the standalone compile harness gets capacity separate from production releases."
+    },
+    "frankel-host-other": {
+      "workflow": ".github/workflows/os-release.yml",
+      "modes": [
+        "device-readiness",
+        "emulator-alpha",
+        "emulator-alpha-successor",
+        "emulator-alpha-apk-diagnostic",
+        "emulator-alpha-verify-retained",
+        "emulator-alpha-export",
+        "signing-bootstrap",
+        "models-sign",
+        "rango-retained",
+        "rango-factory-observe",
+        "rango-factory-package",
+        "rango-factory-inspect",
+        "blazer-prep",
+        "blazer-compile",
+        "blazer-integrate"
+      ],
+      "host": "frankel-builder",
+      "target": "frankel-builder",
+      "note": "Not release lanes of the plan: retained-tree, alpha, signing, Models, Rango and Blazer work that reads this host's trees. They stay on it."
+    },
+    "yogi": {
+      "workflow": ".github/workflows/yogi-ota.yml",
+      "modes": [],
+      "host": "yogi-builder",
+      "target": "yogi-builder",
+      "note": "Its own workflow on main since #558: every self-hosted job runs on its runner, in its own queue, with its own controller and its own VM, disk and lock (os/ota/yogi.json). It builds once yogi.json builder.status is ready; until then scripts/yogi_ota.py refuses every stage. Any further Yogi stage stays inside this workflow, on this runner and queue."
+    }
+  },
+  "shared": {
+    "appVersionLedger": {
+      "host": "frankel-builder",
+      "lanes": [
+        "frankel",
+        "agent"
+      ],
+      "store": "scripts/release-allocate.py: pixel-ota releases (drafts included), this host's attempt directories and its rose-actions reservations, read and written under the host lock",
+      "note": "latest-beta and app-only both allocate dev.pixel.voice versionCodes. Run on separate hosts with this store, they could choose the same version. So the ledger must first move to a store every lane can update atomically; that is the one cross-lane serialization the plan allows."
+    }
+  },
+  "parallelToday": [],
+  "parallelByRoute": [
+    [
+      "agent",
+      "yogi"
+    ],
+    [
+      "frankel",
+      "yogi"
+    ],
+    [
+      "frankel-host-other",
+      "yogi"
+    ],
+    [
+      "harness",
+      "yogi"
+    ],
+    [
+      "mustang",
+      "yogi"
+    ]
+  ]
+}
