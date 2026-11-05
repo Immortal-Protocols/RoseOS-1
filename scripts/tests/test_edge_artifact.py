@@ -253,6 +253,17 @@ class CheckTest(unittest.TestCase):
         self.assertEqual([c['pass'] for c in receipt['classes']], [True, True, True, False])
         self.assertEqual(receipt['classes'][3]['unreadable'], [f'{SYSUI_APK}!classes.dex: string index 999 out of range'])
         self.assertIn('RoseEdgeMicSlot; is not defined', failures[0])
+        # A damaged member (bad CRC) is unreadable too, not an error that stops the check.
+        damaged = bytearray(dex_fixture.apk([dex_fixture.dex(SYSTEMUI)]))
+        start = damaged.index(b'dex\n039\x00')
+        damaged[start + 0x40] ^= 0xff
+        failures, receipt = self.check(systemui=bytes(damaged))
+        self.assertEqual(receipt['classes'][2]['unreadable'], [f'{SYSUI_APK}!classes.dex: damaged APK member (BadZipFile)'])
+        self.assertEqual(len(failures), 2)
+        # A dex 041 header shorter than its 0x78 bytes.
+        short = dex_fixture.dex(SYSTEMUI, version=41)[:0x74]
+        with self.assertRaisesRegex(edge.DexError, 'truncated dex header'):
+            edge.sections(short)
         # A readable dex elsewhere in the APK still counts; the unreadable one is still named.
         failures, receipt = self.check(systemui=dex_fixture.apk([b'garbage', dex_fixture.dex(SYSTEMUI)]))
         self.assertEqual(failures, [])

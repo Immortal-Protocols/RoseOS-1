@@ -30,6 +30,7 @@ import re
 import struct
 import sys
 import zipfile
+import zlib
 
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG = ROOT/'os/release-pipeline/frankel.json'
@@ -40,6 +41,8 @@ MAGIC = re.compile(rb'dex\n0(3[5-9]|4[01])\x00')
 PROP = re.compile(r'[A-Za-z0-9_.-]+=\S+')
 DESCRIPTOR = re.compile(r'L[A-Za-z0-9_$]+(/[A-Za-z0-9_$]+)*;')
 ENDIAN = 0x12345678
+# What reading one zip member can raise when its bytes are damaged.
+MEMBER_ERRORS = (zipfile.BadZipFile, zlib.error, EOFError, NotImplementedError, RuntimeError, ValueError)
 
 
 class DexError(Exception):
@@ -205,7 +208,7 @@ def sections(data):
     while True:
         if not MAGIC.fullmatch(data[offset:offset + 8]):
             raise DexError('no dex magic' + (f' at offset {offset}' if offset else ''))
-        if len(data) < offset + 0x70:
+        if len(data) < offset + (0x78 if int(data[offset + 4:offset + 7]) >= 41 else 0x70):
             raise DexError('truncated dex header')
         section = Section(data, offset)
         found.append(section)
@@ -277,8 +280,13 @@ def check_classes(archive, spec):
 
 
 def read_apk(archive, name):
-    data = archive.read(name)
-    out = {'sha256': hashlib.sha256(data).hexdigest(), 'dex': [], 'unreadable': []}
+    out = {'sha256': None, 'dex': [], 'unreadable': []}
+    try:
+        data = archive.read(name)
+    except MEMBER_ERRORS as error:
+        out['unreadable'].append(('(apk)', f'its target-files member is damaged ({error.__class__.__name__})'))
+        return out
+    out['sha256'] = hashlib.sha256(data).hexdigest()
     try:
         apk = zipfile.ZipFile(io.BytesIO(data))
         dexes = sorted((n for n in apk.namelist() if DEX_NAME.fullmatch(n)), key=lambda n: (len(n), n))
@@ -292,6 +300,8 @@ def read_apk(archive, name):
             out['dex'].append((dex, sections(apk.read(dex))))
         except DexError as error:
             out['unreadable'].append((dex, str(error)))
+        except MEMBER_ERRORS as error:
+            out['unreadable'].append((dex, f'damaged APK member ({error.__class__.__name__})'))
     return out
 
 
