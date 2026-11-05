@@ -1,6 +1,6 @@
 /* Rose Keyboard (F10 study) — Oxblood. Tokens copied from the HiFi Oxblood layer, not imported. */
 :root{
-  --ink:#f2e6d9;--ink-2:#b9aaa0;--ink-3:#8f817a;--ruby:#b8283f;--ruby-hi:#e04a62;
+  --ink:#f2e6d9;--ink-2:#cdbfb5;--ink-3:#a89991;--ruby:#b8283f;--ruby-hi:#e04a62;
   --key:#2c1f22;--key-hi:#3a2a2e;--key-fn:#1e1417;--kb-bg:#150c0f;
   --ease:cubic-bezier(.2,.8,.2,1);--t:260ms;
   --screen-w:384px;--screen-h:832px;--bezel:12px;--radius:46px;
@@ -30,8 +30,9 @@ button:focus-visible,[tabindex]:focus-visible{outline:2px solid #ff9aa8;outline-
 .field-bg{position:absolute;inset:0;background:var(--field) center/cover;opacity:.9}
 .status{position:absolute;top:0;left:0;right:0;height:40px;display:flex;align-items:center;padding:0 26px;gap:8px;font-size:14px;font-weight:600;z-index:30;color:var(--ink)}
 .status .sys{margin-left:auto;display:flex;gap:4px}.status .sys i{width:5px;height:12px;border-radius:2px;background:currentColor;opacity:.75}
-.mic-ind{width:16px;height:16px;border-radius:50%;display:none;background:radial-gradient(circle,#ff5a6e 0 4px,transparent 4.5px),rgba(255,90,110,.2)}
-.screen[data-muted=true] .mic-ind{display:block}
+.mic-ind{display:none;align-items:center;gap:4px;height:20px;padding:0 7px 0 4px;border-radius:7px;color:#ff8c9a;font-size:11px;font-weight:600;letter-spacing:.01em;box-shadow:inset 0 0 0 1.2px rgba(255,90,110,.75);background:rgba(70,10,20,.35)}
+.mic-ind svg{width:14px;height:14px}
+.screen[data-muted=true] .mic-ind{display:inline-flex}
 
 /* ---------- App window: bottom tracks keyboard + chin ---------- */
 .app{position:absolute;left:0;right:0;top:0;bottom:var(--app-bottom,0px);z-index:5;transition:bottom var(--t) var(--ease),border-radius var(--t) var(--ease);overflow:clip;background:linear-gradient(180deg,rgba(14,8,10,.55),rgba(14,8,10,.85))}
@@ -50,6 +51,7 @@ button:focus-visible,[tabindex]:focus-visible{outline:2px solid #ff9aa8;outline-
 .thread::before{content:'';flex:1 0 0}
 .thread p{flex:none;margin:0;padding:9px 13px;border-radius:18px;max-width:76%;font-size:15.5px;line-height:1.35;overflow-wrap:anywhere}
 .thread .in{align-self:flex-start;background:rgba(255,240,230,.09)}
+.thread .day{align-self:center;background:none;padding:6px 0 0;font-size:11.5px;color:var(--ink-3);letter-spacing:.04em}
 .thread .out{align-self:flex-end;background:#8e1f33}
 .composer{flex:none;display:flex;align-items:flex-end;gap:8px;padding:8px 10px 10px}
 .c-plus{flex:none;width:38px;height:38px;border-radius:50%;background:rgba(255,240,230,.08);font-size:22px;line-height:1;color:var(--ink-2)}
@@ -86,8 +88,13 @@ button:focus-visible,[tabindex]:focus-visible{outline:2px solid #ff9aa8;outline-
 .strip .sg.best{color:var(--ink);font-weight:600}
 .strip .sg.correct span{border-bottom:1.5px solid var(--ruby-hi);padding-bottom:1px}
 .strip .sg.typed span::before{content:'“'}.strip .sg.typed span::after{content:'”'}
-.strip .tool{flex:1 1 0;display:grid;place-items:center;font-size:12.5px;color:var(--ink);min-width:44px}
-.strip .tool:disabled{color:var(--ink-3);opacity:.5}
+.strip.editing{gap:0;padding:0 2px 0 8px}
+.strip .tools{flex:1 1 auto;display:flex;align-items:center;gap:2px;min-width:0}
+.strip .tool{flex:none;height:32px;min-width:44px;padding:0 9px;border-radius:8px;display:grid;place-items:center;font-size:13px;font-weight:500;color:var(--ink);position:relative}
+.strip .tool::after{content:'';position:absolute;left:0;right:0;top:-6px;bottom:-6px}
+.strip .tool:not(:disabled):active{background:rgba(255,240,230,.08)}
+.strip .tool:disabled{color:var(--ink-3);opacity:.55}
+.strip .sep{flex:none;width:1px;height:18px;margin:0 4px;background:rgba(236,205,190,.18)}
 .strip .hide{flex:none;width:44px;display:grid;place-items:center;color:var(--ink-2)}
 .strip .hide::before{content:'';width:10px;height:10px;border-right:1.6px solid currentColor;border-bottom:1.6px solid currentColor;transform:translateY(-3px) rotate(45deg)}
 .strip .sg:active,.strip .tool:active{background:rgba(255,240,230,.06)}

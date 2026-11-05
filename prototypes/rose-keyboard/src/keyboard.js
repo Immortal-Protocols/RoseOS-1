@@ -23,11 +23,14 @@
 
   // Autocorrect only for unambiguous typos; anything else is left exactly as typed.
   const CORRECT = {
-    teh: 'the', adn: 'and', dont: "don't", cant: "can't", wont: "won't", im: "I'm", ive: "I've",
-    ill: "I'll", youre: "you're", thats: "that's", recieve: 'receive', adress: 'address',
+    teh: 'the', adn: 'and', dont: "don't", im: "I'm", ive: "I've",
+    youre: "you're", thats: "that's", recieve: 'receive', adress: 'address',
     tommorow: 'tomorrow', tomorow: 'tomorrow', seperate: 'separate', definately: 'definitely',
     i: 'I', jamie: 'Jamie', saturday: 'Saturday', sunday: 'Sunday', rose: 'Rose',
   };
+  // Valid words that are often meant as contractions: offered as the best suggestion, never applied
+  // automatically (ill, cant and wont are real words).
+  const SUGGEST = { ill: "I'll", cant: "can't", wont: "won't", well: "we'll", were: "we're", hell: "he'll", shell: "she'll" };
   // Next-word predictions after a completed word (empty current word).
   const NEXT = {
     '': ['I', 'The', 'Thanks'], see: ['you', 'the', 'it'], at: ['ten', 'the', 'noon'],
@@ -186,7 +189,8 @@
       .sort((x, y) => RANK.get(x.toLowerCase()) - RANK.get(y.toLowerCase()))
       .map((w) => matchCase(CANON.get(w.toLowerCase()), cw.word));
     const exact = CANON.has(low) ? matchCase(CANON.get(low), cw.word) : null;
-    const best = fix || exact || pre[0] || null;
+    const alt = !fix && SUGGEST[low] ? (low === 'ill' ? "I'll" : matchCase(SUGGEST[low], cw.word)) : null;
+    const best = fix || alt || exact || pre[0] || null;
     const out = [{ text: cw.word, kind: 'typed' }];
     if (best && best !== cw.word) out.push({ text: best, kind: fix ? 'correct' : 'suggest' });
     for (const w of pre) { if (out.length >= 3) break; if (!out.some((o) => o.text === w)) out.push({ text: w, kind: 'suggest' }); }
@@ -255,7 +259,7 @@
     ],
   };
 
-  const api = { initial, type, space, backspace, deleteWord, enter, shiftTap, setPage, suggestions, pick,
+  const api = { SUGGEST, initial, type, space, backspace, deleteWord, enter, shiftTap, setPage, suggestions, pick,
     setSel, move, selectWord, selectAll, copy, cut, paste, undo, redo, currentWord, LAYOUTS, CORRECT };
   if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.RoseKeys = api;
 })(typeof window !== 'undefined' ? window : globalThis);

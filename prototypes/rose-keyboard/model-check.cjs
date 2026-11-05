@@ -63,5 +63,12 @@ s = K.initial(); typeStr(s, 'i dont know'); K.type(s, '.');
 check('corrections also apply before punctuation', s.text === "I don't know.", s.text);
 s = K.initial({ multiline: true }); typeStr(s, 'call jamie'); K.enter(s);
 check('corrections also apply on Return', s.text === 'Call Jamie\n', s.text);
+for (const [w, alt] of [['ill', "I'll"], ['cant', "can't"], ['wont', "won't"]]) {
+  s = K.initial(); typeStr(s, 'so ' + w + ' ');
+  check('"' + w + '" is a valid word: never auto-corrected', s.text === 'So ' + w + ' ', s.text);
+  s = K.initial(); typeStr(s, 'so ' + w);
+  const sg2 = K.suggestions(s);
+  check('"' + w + '" offers "' + alt + '" as the best suggestion (not a correction)', sg2[1] && sg2[1].text === alt && sg2[1].kind === 'suggest', sg2);
+}
 console.log(pass + ' model checks passed' + (fail ? ', ' + fail + ' FAILED' : ''));
 if (fail) process.exitCode = 1;

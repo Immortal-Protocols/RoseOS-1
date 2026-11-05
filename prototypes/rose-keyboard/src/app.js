@@ -55,7 +55,9 @@
     if (editing) {
       const sel = s.a !== s.b;
       const t = (id, label, on) => '<button class="tool" data-tool="' + id + '"' + (on ? '' : ' disabled') + '>' + label + '</button>';
-      h = t('cut', 'Cut', sel) + t('copy', 'Copy', sel) + t('paste', 'Paste', !!s.clip) + t('all', 'Select all', s.text.length > 0) + t('undo', 'Undo', s.undo.length > 0) + t('redo', 'Redo', s.redo.length > 0);
+      // Grouped and content-width: clipboard | selection | history. 44pt hit targets, 32pt visuals.
+      h = '<div class="tools">' + t('cut', 'Cut', sel) + t('copy', 'Copy', sel) + t('paste', 'Paste', !!s.clip) + '<span class="sep" aria-hidden="true"></span>' +
+        t('all', 'Select all', s.text.length > 0) + '<span class="sep" aria-hidden="true"></span>' + t('undo', 'Undo', s.undo.length > 0) + t('redo', 'Redo', s.redo.length > 0) + '</div>';
       strip.setAttribute('aria-label', 'Editing tools');
     } else {
       const sg = K.suggestions(s);
@@ -64,6 +66,7 @@
       h = slots.map((x, i) => x ? '<button class="sg ' + x.kind + (i === 1 ? ' best' : '') + '" data-pick="' + esc(x.text) + '" aria-label="' + (x.kind === 'typed' ? 'Keep ' : x.kind === 'correct' ? 'Correct to ' : 'Insert ') + esc(x.text) + '"><span>' + esc(x.text) + '</span></button>' : '<span class="sg" aria-hidden="true"></span>').join('');
       strip.setAttribute('aria-label', 'Suggestions');
     }
+    strip.classList.toggle('editing', editing);
     strip.innerHTML = h + '<button class="hide" data-tool="hide" aria-label="Hide keyboard"></button>';
   }
 
@@ -112,6 +115,8 @@
     $('chin').hidden = !ui.chin;
     $('handle').setAttribute('aria-expanded', String(ui.chin));
     $('chin-mic').innerHTML = IC.mic(ui.muted);
+    // Status bar: the same muted-mic glyph and ruby outline as the chin's control, with a word.
+    if (ui.muted && !$('mic-ind').firstChild) $('mic-ind').innerHTML = IC.mic(true) + '<span aria-hidden="true">Mic off</span>';
     $('chin-mic').setAttribute('aria-pressed', String(ui.muted));
     $('chin-mic').setAttribute('aria-label', ui.muted ? 'Unmute microphone' : 'Mute microphone');
     kbEl.setAttribute('aria-hidden', String(!ui.kb));
@@ -145,7 +150,6 @@
       '<br>App window <b>' + h(app) + '</b> (' + Math.round(100 * h(app) / (sr.height / k)) + '%) · content ' + h(content) +
       '<br>Keyboard ' + (ui.kb ? h(kbEl) : 0) + ' · below it: ' + below +
       '<br>Chin ' + (ui.chin ? 'raised (92, mic reachable)' : 'lowered (swipe up)');
-    if (ui.app === 'messages') { const t = $('thread'); t.scrollTop = t.scrollHeight; }
   }
 
   // ---------- Actions ----------
@@ -157,7 +161,18 @@
   function send(text) {
     const p = document.createElement('p'); p.className = 'out'; p.textContent = text; $('thread').appendChild(p);
     note('sent “' + text.slice(0, 20) + '”');
+    followBottom = true; thread.scrollTop = thread.scrollHeight; // sending always returns to the newest message
   }
+  // Reading position. The conversation follows the newest message only while it is already at the
+  // bottom (or after a send). While reviewing history, the keyboard/chin shortening the window from
+  // below leaves scrollTop alone, so the messages being read stay exactly where they are.
+  const thread = $('thread');
+  let followBottom = true, programmatic = false;
+  const atBottom = () => thread.scrollHeight - thread.clientHeight - thread.scrollTop <= 4;
+  thread.addEventListener('scroll', () => { if (!programmatic) followBottom = atBottom(); }, { passive: true });
+  const keepBottom = () => { if (followBottom) { programmatic = true; thread.scrollTop = thread.scrollHeight; requestAnimationFrame(() => { programmatic = false; }); } };
+  if (window.ResizeObserver) new ResizeObserver(keepBottom).observe(thread);
+  requestAnimationFrame(() => { thread.scrollTop = thread.scrollHeight; });
   function doAction() {
     const s = cur();
     if (ui.app === 'messages') { const t = K.enter(s); if (t) send(t); }
@@ -253,6 +268,7 @@
     const dy = (e.clientY - stripDown.y) / scaleK(); stripDown = null;
     if (dy > 30) hideKb('swipe down');
   });
+  strip.addEventListener('mousedown', (e) => { if (e.target.closest('button')) e.preventDefault(); });
   strip.addEventListener('click', (e) => {
     if (stripSwallow) { stripSwallow = false; return; }
     const b = e.target.closest('button'); if (!b) return;
@@ -294,6 +310,7 @@
       const s = cur();
       K.setSel(s, p.at);
       ui.editHold = false;
+      el.focus({ preventScroll: true });
       if (!ui.kb) note('field tapped');
       showKb();
     });
@@ -304,9 +321,17 @@
   bindField($('f-msg'), 'messages');
   bindField($('f-note'), 'notes');
   $('c-send').addEventListener('click', () => { const s = fields.messages; const t = K.enter(s); if (t) send(t); render(); });
-  // Tapping the conversation (outside the composer) hides the keyboard; the draft stays.
-  $('thread').addEventListener('click', () => { if (ui.kb) hideKb('tap outside'); });
-  $('msgs').querySelector('.a-head').addEventListener('click', () => { if (ui.kb) hideKb('tap outside'); });
+  // A tap on blank conversation space hides the keyboard (draft kept). Taps on messages, the header,
+  // scrolls, drags and long-presses never do.
+  let blank = null;
+  thread.addEventListener('pointerdown', (e) => { blank = e.target === thread && !e.button ? { x: e.clientX, y: e.clientY, t: now(), top: thread.scrollTop } : null; });
+  thread.addEventListener('pointermove', (e) => { if (blank && Math.hypot(e.clientX - blank.x, e.clientY - blank.y) > 8) blank = null; });
+  thread.addEventListener('pointerup', (e) => {
+    const b = blank; blank = null;
+    if (!b || !ui.kb || e.target !== thread || now() - b.t > 450 || Math.abs(thread.scrollTop - b.top) > 2) return;
+    hideKb('tap on blank conversation space');
+  });
+  thread.addEventListener('pointercancel', () => { blank = null; });
 
   // ---------- Rose chin: swipe up from the bottom edge raises it, with or without the keyboard ----------
   let edge = null, swallowClick = false;
@@ -347,11 +372,14 @@
   });
 
   // ---------- Hardware keyboard (desktop reviewers) ----------
+  // Text input goes to the editor only when the editor itself has focus. Focused controls (⌄, a
+  // suggestion, an edit tool, the chin's buttons, the harness) keep their native Enter/Space activation.
   document.addEventListener('keydown', (e) => {
     if (e.target.closest && e.target.closest('.harness')) return;
     const s = cur(), mod = e.metaKey || e.ctrlKey;
     if (e.key === 'Escape') { if (ui.chin) setChin(false, 'Esc'); else hideKb('Esc'); return; }
-    if (!ui.kb) { if (document.activeElement === fieldEl() && e.key.length === 1 && !mod) showKb(); else return; }
+    if (document.activeElement !== fieldEl()) return;
+    if (!ui.kb) { if (e.key.length === 1 && !mod) showKb(); else return; }
     if (mod) {
       const m = { z: e.shiftKey ? K.redo : K.undo, y: K.redo, a: K.selectAll, c: K.copy, x: K.cut, v: K.paste }[e.key.toLowerCase()];
       if (m) { e.preventDefault(); m(s); render(); }
