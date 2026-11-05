@@ -555,7 +555,10 @@ test('the conversation runs in its own task and keeps its mute until the Rose ch
  assert.match(tray,/clients\.remove\(binder\);chinReachable\.remove\(binder\);/,'dropped on UNREGISTER and binder death');
  assert.match(tray,/public static final int REGISTER=1,/);assert.match(chin,/static final int REGISTER = 1;/,'the same REGISTER');
  assert.doesNotMatch(chin.replace(/\/\*[\s\S]*?\*\//g,''),/arg1/,'the visible-now marker (arg1) never counts');
- assert.match(conv,/mic\.setVisibility\(state\.active\(\)&&RoseChin\.showInAppMute\(AgentTrayService\.chinReachable\(\)\)\?View\.VISIBLE:View\.GONE\);/);
+ assert.match(conv,/mic\.setVisibility\(state\.active\(\)&&RoseChin\.showInAppMute\(AgentTrayService\.chinReachable\(\),navigationMode\(\)\)\?View\.VISIBLE:View\.GONE\);/,'checked live with the navigation mode');
+ assert.match(conv,/getIdentifier\("config_navBarInteractionMode","integer","android"\)/);
+ const convEntry=manifest.match(/<activity android:name="\.RoseConversationActivity"[^>]*\/>/)[0];
+ assert.doesNotMatch(convEntry,/resizeableActivity="false"/,'stays resizeable, so the Shell can raise the chin over it');
  assert.match(conv,/send\(state\.muted\?"tray_unmute":"tray_mute"\)/,'the mute itself is unchanged: input-only');
 });
 

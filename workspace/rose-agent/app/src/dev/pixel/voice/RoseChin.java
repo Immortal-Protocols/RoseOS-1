@@ -10,7 +10,8 @@ package dev.pixel.voice;
  * The in-app mute is hidden only while the chin is reachable: a trusted SystemUI tray client (AgentTrayService's
  * unchanged caller check) is registered and its REGISTER declared the chin available (arg2 == AVAILABLE). Whether the
  * chin happens to be on screen now (the mic slot's own REGISTER, arg1 == 1) never counts: that is visibility, not
- * reachability. No declaration, an older OS, an unregistered or dead client: the in-app mute stays. Pure logic.
+ * reachability. No declaration, an older OS, an unregistered or dead client, or any navigation other than gestures:
+ * the in-app mute stays. Pure logic.
  */
 final class RoseChin {
  private RoseChin() {}
@@ -25,8 +26,13 @@ final class RoseChin {
   return what == REGISTER && arg2 == AVAILABLE;
  }
 
- /** Whether the conversation shows its own mute: always, unless the chin is reachable. */
- static boolean showInAppMute(boolean chinReachable) {
-  return !chinReachable;
+ /** Android's config_navBarInteractionMode for gesture navigation; the swipe-up chin exists only there (three-button
+  * and two-button navigation never stage it, OS Product). */
+ static final int NAV_GESTURAL = 2;
+
+ /** Whether the conversation shows its own mute: always, unless the chin is declared reachable and the device is in
+  * gesture navigation right now (checked live, so switching to three-button shows the mute again at once). */
+ static boolean showInAppMute(boolean chinReachable, int navigationMode) {
+  return !(chinReachable && navigationMode == NAV_GESTURAL);
  }
 }

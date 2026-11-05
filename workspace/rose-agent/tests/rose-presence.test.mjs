@@ -48,7 +48,7 @@ test('voice, results, Watch/Stop, notices and Update Rose Agent are unchanged',(
  assert.match(activity,/mic\.setOnClickListener\(v->\{if\(state!=null&&state\.active\(\)\)send\(state\.muted\?"tray_unmute":"tray_mute"\);\}\);/);
  assert.match(activity,/mic\.setContentDescription\(state\.muted\?"Rose’s microphone is muted\. Unmute":"Mute Rose’s microphone"\);/);
  // F08: still only during a live call, and now only where the OS Rose chin is not reachable (RoseChin).
- assert.match(activity,/mic\.setVisibility\(state\.active\(\)&&RoseChin\.showInAppMute\(AgentTrayService\.chinReachable\(\)\)\?View\.VISIBLE:View\.GONE\);/);
+ assert.match(activity,/mic\.setVisibility\(state\.active\(\)&&RoseChin\.showInAppMute\(AgentTrayService\.chinReachable\(\),navigationMode\(\)\)\?View\.VISIBLE:View\.GONE\);/);
  assert.match(activity,/setOnClickListener\(v->openWorkspace\(\)\)/);assert.match(activity,/setPositiveButton\("Stop task",\(d,w\)->sendStop\(id\)\)/);
  assert.match(activity,/add\("Update Rose Agent"\)\.setOnMenuItemClickListener\(i->\{checkForUpdate\(\);return true;\}\)/);
  assert.match(activity,/presentedScroll\.setVisibility\(t\.visible\?View\.VISIBLE:View\.GONE\)/,'results stay empty when absent');
