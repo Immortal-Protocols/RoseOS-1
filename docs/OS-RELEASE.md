@@ -332,6 +332,69 @@ release. Manual dispatch of every entry is unchanged.
 shared builder). Independent capacity per flavor comes from Infra's verified per-flavor runner, VM, storage and
 controller mapping, not from this dispatcher.
 
+## Lane capacity map (1A, source only)
+
+`os/release-pipeline/lanes/capacity.json` is the committed map of where each release lane builds. It records the
+host each `os-release.yml` mode runs on today, and what each lane still needs to build on its own capacity.
+`scripts/tests/test_lane_capacity.py` derives the actual route and checks it against the map. It reads:
+
+- from `os-release.yml`: each self-hosted job's runner label and the modes its `if:` names, the workflow queue, and
+  the controller and cleanup identity;
+- from `release-pipeline.py`: `BUILDER`, the one VM the controller starts and stops;
+- the host lock in `frankel.json`, and the storage root of `storage/builder-reclaim.json`.
+
+**Today no two lanes can build at once** (`parallelToday` is empty). Frankel, Mustang, Agent (`app-only`), the
+standalone harness (`launcher3-compile`) and the other retained-tree work all run on one host,
+`roseos-frankel-builder`. They share:
+
+- one VM, `immortal-os-builder`;
+- one disk, `/home/pixelbuild/rose-actions`;
+- one lock;
+- one queue, `os-release-frankel`;
+- one controller.
+
+**Yogi** has its own host in its committed route (#558): `yogi-ota.yml` and `os/ota/yogi.json`. The test checks every
+part of it against the map:
+
+- every self-hosted job of every stage on `roseos-yogi-builder`;
+- its own queue (`yogi-ota`) and controller identity (`YOGI_CONTROLLER_SERVICE_ACCOUNT`);
+- its own VM (`roseos-yogi-builder-20261103-a`), disk (`/srv/rose-yogi`) and lock.
+
+None of these is shared with the Frankel host. A host builds only when it is in service. For Yogi that is when
+`yogi.json` says `builder.status` `ready`, the rule `scripts/yogi_ota.py` applies before any stage. It is
+`runner-unregistered` today, so `parallelToday` stays empty. `parallelByRoute` lists the pairs its separate route
+allows once its runner is ready. Any further Yogi stage stays inside `yogi-ota.yml`, on that runner and queue, so it
+needs no change here.
+
+**What Infra supplies to move a lane.** A host entry with verified readback, plus its evidence. The fields are listed
+as `unboundFields`:
+
+- a runner label only that machine carries;
+- the VM (project, zone, instance);
+- the storage root and lock path;
+- the queue;
+- the controller identity variable.
+
+No value is invented: the only host listed is the one the committed route already uses.
+
+**What Release changes in the same reviewed PR.** The test fails until all of these move with the lane:
+
+- the lane's `host` in the map;
+- every job of its modes, to the new `runs-on` label;
+- the workflow queue, keyed by host. One literal queue cannot serve lanes on several hosts.
+- the controller and cleanup, made lane-aware. Today they start and stop only `BUILDER`.
+- owned stops for every mode of a host whose lanes no longer share one queue. Today ordinary modes stop the
+  builder unconditionally, which is safe only because every mode shares the queue.
+
+Two lanes count as parallel only when their runner, VM and queue all differ. Storage and lock paths may be the same
+strings on two machines, because each VM has its own disk.
+
+**The shared app version ledger.** `latest-beta` and `app-only` both allocate `dev.pixel.voice` versionCodes
+(`scripts/release-allocate.py`). Each allocation reads pixel-ota releases (drafts included), this host's attempt
+directories and its `rose-actions` reservations, under the host lock. On two hosts that store would let both pick
+the same version. So Agent stays on the ledger's host until the ledger moves to a store every lane can update
+atomically. That is the one cross-lane serialization the plan allows, and the test refuses an Agent move before it.
+
 ## Retained Rango signing and separate release (source only, runtime unbound)
 
 This route was added in OCT30-INFRA-S015 as source and tests only. Nothing
