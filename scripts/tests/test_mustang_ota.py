@@ -5,7 +5,10 @@ import datetime
 import hashlib
 import io
 import json
+import os
 from pathlib import Path
+import shutil
+import struct
 import subprocess
 import sys
 import tempfile
@@ -452,6 +455,334 @@ class ContentTest(unittest.TestCase):
             sha=git('rev-parse','HEAD')
             self.assertEqual(product,ota.fingerprint(sha,root),'Publisher-only changes must not create a version-only OS release')
             self.assertNotEqual(product,ota.fingerprint(sha,root,patterns=ota.VALIDATED_SOURCES),'Operational code must still be validated')
+
+
+class FactoryBaselineTest(unittest.TestCase):
+    """Real archive/receipt logic; controlled extractor/SDK/AVB process responses.
+
+    Fixture images/public-key bytes are synthetic, not cryptographically signed
+    images. No installer retrieval, key generation or signing occurs.
+    """
+    def setUp(self):
+        self.temp=tempfile.TemporaryDirectory(); self.addCleanup(self.temp.cleanup)
+        self.root=Path(self.temp.name)/'repo'; self.root.mkdir()
+        self.sdk=ObserverTest(); self.sdk.setUp(); self.addCleanup(self.sdk.doCleanups)
+        self.image=ota.module('factory_baseline_tests','mustang-baseline-image.py')
+        from test_mustang_edge_gate import DedicatedPathsTest
+        self.home=Path(self.temp.name)/'mustang'
+        self.lane=DedicatedPathsTest().profile(self.home)
+        (self.home/'rose-actions').mkdir(parents=True)
+        self.archive=self.home/'inputs/baseline/13280698927.zip'; self.archive.parent.mkdir(parents=True)
+        config=ota.config(); self.build=config['baseline']['build']; self.epoch=config['baseline']['timestamp']
+        config['baseline']['source']=SHA
+        self.write('os/ota/mustang.json',config)
+        with zipfile.ZipFile(self.sdk.path) as archive:
+            self.components={('system.img','/system/priv-app/Updater/Updater.apk'):archive.read('SYSTEM/priv-app/Updater/Updater.apk'),
+                ('system.img','/system/etc/security/otacerts.zip'):archive.read('SYSTEM/etc/security/otacerts.zip'),
+                ('vendor.img','/build.prop'):f'ro.product.vendor.device=mustang\nro.vendor.build.version.incremental={self.build}\nro.vendor.build.date.utc={self.epoch}\n'.encode()}
+        self.public_bytes=b'synthetic AVB public-key fixture; not a credential'
+        self.public=dict(otaCertificateSha256=self.sdk.pin,avbPublicKeySha256=hashlib.sha256(self.public_bytes).hexdigest())
+        self.vbmeta=self.vbmeta_image([self.hash_descriptor('system'),self.hash_descriptor('vendor')])
+        sparse=struct.pack('<I4H4I',0xED26FF3A,1,0,28,12,4096,1,0,0)
+        self.members={'script.txt':b'never execute this fixture','flash-all.sh':b'exit 97',
+            'android-info.txt':b'require board=mustang\n','avb_pkmd.bin':self.public_bytes,
+            'vbmeta.img':self.vbmeta,'boot.img':bytes(4096),'super_1.img':sparse}
+        self.tool_rows={}
+        for name in sorted(self.image.CORE|{'debugfs','fsckErofs'}):
+            file=Path(self.temp.name)/'tools'/name; file.parent.mkdir(exist_ok=True)
+            file.write_text('synthetic non-executed tool '+name); file.chmod(0o700)
+            self.tool_rows[name]=dict(path=str(file),sha256=ota.digest(file))
+        self.runtime=dict(schema='roseos.mustang-dedicated-runtime.v1',status='bound',dataFilesystemUuid='fixture-data',baselineTargetFiles=None,
+            baselineFactoryEvidence='os/ota/factory-input.json',tools={k:self.tool_rows[k]['path'] for k in ('aapt','apksigner')})
+        self.calls=[]; self.fail_tool=None; self.stop_tool=None; self.fs_kind='ext4'; self.lp_extra=None
+        self.env=dict(GITHUB_RUN_ID='123',GITHUB_RUN_ATTEMPT='1',GITHUB_SHA='a'*40)
+        identity_patch=patch.object(ota,'identities',return_value=self.public); identity_patch.start(); self.addCleanup(identity_patch.stop)
+        run_patch=patch.dict(os.environ,self.env); run_patch.start(); self.addCleanup(run_patch.stop)
+        self.pack()
+
+    @staticmethod
+    def hash_descriptor(name):
+        encoded=name.encode(); row=bytearray(((132+len(encoded)+32+7)//8)*8)
+        struct.pack_into('>QQQ',row,0,2,len(row)-16,4096); row[24:30]=b'sha256'
+        struct.pack_into('>III',row,56,len(encoded),0,32); row[132:132+len(encoded)]=encoded
+        return bytes(row)
+
+    def chain_descriptor(self,name,key):
+        encoded=name.encode(); row=bytearray(((92+len(encoded)+len(key)+7)//8)*8)
+        struct.pack_into('>QQIIII',row,0,4,len(row)-16,1,len(encoded),len(key),0)
+        row[92:92+len(encoded)]=encoded; row[92+len(encoded):92+len(encoded)+len(key)]=key
+        return bytes(row)
+
+    def vbmeta_image(self,descriptors,public=None):
+        key=public or self.public_bytes; desc=b''.join(descriptors)
+        auxiliary=key.ljust(64,b'\0')+desc; auxiliary=auxiliary.ljust(((len(auxiliary)+63)//64)*64,b'\0')
+        header=bytearray(256); header[:4]=b'AVB0'
+        struct.pack_into('>QQ',header,12,64,len(auxiliary)); struct.pack_into('>I',header,28,1)
+        struct.pack_into('>QQ',header,64,0,len(key)); struct.pack_into('>QQ',header,96,64,len(desc))
+        return bytes(header)+bytes(64)+auxiliary
+
+    def write(self,name,value):
+        file=self.root/name; file.parent.mkdir(parents=True,exist_ok=True)
+        file.write_text(json.dumps(value)); return file
+
+    def pack(self,extra=None):
+        inner=io.BytesIO()
+        with zipfile.ZipFile(inner,'w') as archive:
+            for name,data in self.members.items(): archive.writestr('mustang-install-2026110302/'+name,data)
+            if extra:
+                name,data=extra; archive.writestr(name,data)
+        name='mustang-install-2026110302.zip'; data=inner.getvalue()
+        files={name:data,'CANDIDATE.md':b'synthetic candidate', 'candidate-receipt.json':b'{"fixture": true}'}
+        rows=[dict(file=n,sizeBytes=len(d),sha256=hashlib.sha256(d).hexdigest()) for n,d in files.items()]
+        with zipfile.ZipFile(self.archive,'w') as archive:
+            for n,d in files.items(): archive.writestr(n,d)
+            archive.writestr('SHA256SUMS',''.join(f'{r["sha256"]}  {r["file"]}\n' for r in rows))
+        base=self.image.BASE
+        self.write(base+'delivery.json',dict(artifactId=self.image.ARTIFACT_ID,build=self.build,candidateSource=SHA,
+            downloadChecksumsVerified=True,artifactSizeBytes=self.archive.stat().st_size,files=rows))
+        self.write(base+'package.json',dict(device='mustang',build=self.build,candidateSource=SHA,
+            status='packaged-candidate',output=next(r for r in rows if r['file']==name)))
+        self.write(base+'artifacts.json',dict(runId='41738359336',artifacts=[dict(id=self.image.ARTIFACT_ID,
+            digest='sha256:'+ota.digest(self.archive),sizeBytes=self.archive.stat().st_size)]))
+        historical=ota.read(ota.ROOT/'os/mustang-ota/41761758623/baseline.json')
+        historical.update(updaterApkSha256=hashlib.sha256(self.components[('system.img','/system/priv-app/Updater/Updater.apk')]).hexdigest(),
+            updaterSignerSha256=self.sdk.pin,trustedOtaCertificateSha256=[self.sdk.pin])
+        self.write(base+'sign.json',dict(device='mustang',build=self.build,candidateSource=SHA,
+            status='signed-command-complete',outputs=dict(targetFiles=historical['targetFiles'])))
+        file=self.write('os/mustang-ota/41761758623/baseline.json',historical)
+        stage=self.write('os/mustang-ota/41761758623/mustang-ota-receipt.json',dict(baselineObservationSha256=ota.digest(file)))
+        self.write('os/mustang-ota/41761758623/publication.json',dict(stageReceiptSha256=ota.digest(stage),
+            status='ota-published',publicDownloadVerified=True))
+        pins=self.image.source_pins(self.root)
+        archive=dict(pins['artifact'],path=str(self.archive))
+        transfer=self.write('os/ota/fixture-transfer.json',dict(schema='roseos.mustang-baseline-transfer.v1',
+            approved=True,completed=True,approvalRef='synthetic transfer',retrievalApprovalRef='synthetic retrieval',
+            evidenceRef='synthetic receiver',archive=archive,builder=self.lane['vm'],dataFilesystemUuid='fixture-data'))
+        self.value=dict(schema=self.image.SCHEMA,status='bound',archive=archive,installer=pins['installer'],sourceRecords=pins['sourceRecords'],
+            transferEvidence=dict(path='os/ota/fixture-transfer.json',sha256=ota.digest(transfer)),tools=self.tool_rows,
+            limits=dict(seconds=60,workBytes=16<<20,reserveBytes=1))
+        self.write('os/ota/factory-input.json',self.value)
+
+    def supervise(self,argv,cwd,env,seconds,limits,**kwargs):
+        name=Path(argv[0]).name; self.calls.append((name,argv,env,limits,kwargs))
+        result=dict(returncode=1 if self.fail_tool==name else 0,stopped='synthetic stop' if self.stop_tool==name else None,
+                    consumedBytes=0,enforcement='sampled-stop',stdout='')
+        if result['returncode'] or result['stopped']: return result
+        if name=='simg2img': Path(argv[-1]).write_bytes(bytes(4096))
+        elif name=='lpunpack':
+            directory=Path(argv[-1]); data=bytearray(4096)
+            if self.fs_kind=='ext4': data[1080:1082]=b'\x53\xef'
+            elif self.fs_kind=='erofs': data[1024:1028]=struct.pack('<I',0xE0F5E1E2)
+            for part in ('system_a.img','vendor_a.img'): (directory/part).write_bytes(data)
+            if self.lp_extra: (directory/self.lp_extra).write_bytes(b'nonempty')
+        elif name=='debugfs':
+            tokens=argv[2].split(); inside,destination=tokens[-2:]
+            Path(destination).write_bytes(self.components[(Path(argv[-1]).name,inside)])
+        elif name=='fsckErofs':
+            directory=Path(argv[1].split('=',1)[1]); image=Path(argv[-1]).name
+            for (part,inside),data in self.components.items():
+                if part!=image: continue
+                path=directory/inside.lstrip('/'); path.parent.mkdir(parents=True,exist_ok=True); path.write_bytes(data)
+        elif name in ('aapt','apksigner'):
+            result['stdout']=self.sdk.execute([name,*argv[1:]]).stdout
+        return result
+
+    def observe(self,out='observation.json'):
+        return self.image.observe(self.value,self.lane,self.runtime,Path(self.temp.name)/out,
+                                  root=self.root,supervise=self.supervise)
+
+    def test_factory_images_pass_with_exact_provenance_and_bounded_clean_processes(self):
+        before=self.archive.read_bytes(); record=self.observe()
+        self.assertEqual(record['status'],'passed'); self.assertEqual(record['evidenceKind'],'factory-images')
+        self.assertNotIn('targetFiles',record); self.assertFalse(record['phoneObserved']); self.assertFalse(record['workRetained'])
+        self.assertEqual(self.archive.read_bytes(),before)
+        self.image.require_receipt(record,self.value,self.lane,self.runtime,self.root)
+        avb=next(call for call in self.calls if call[0]=='avbtool')
+        self.assertIn('--follow_chain_partitions',avb[1]); self.assertNotIn('--accept_zeroed_hashtree',avb[1])
+        for name,argv,env,limits,kwargs in self.calls:
+            self.assertNotIn(name,('bash','fastboot','gcloud','gh'))
+            self.assertEqual(set(env),{'PATH','LANG','LC_ALL','HOME'})
+            self.assertTrue(limits['checkReserve']); self.assertTrue(kwargs['watch'])
+
+    def test_erofs_is_read_only_extraction_after_avb_and_missing_reader_refuses(self):
+        self.fs_kind='erofs'; self.observe()
+        names=[c[0] for c in self.calls]; self.assertLess(names.index('avbtool'),names.index('fsckErofs'))
+        self.value['tools']=dict(self.tool_rows); self.value['tools'].pop('fsckErofs')
+        with self.assertRaisesRegex(ValueError,'filesystem tool unavailable'): self.observe('missing-reader.json')
+
+    def test_unbound_conflicting_transfer_or_changed_source_refuses_before_work(self):
+        for key,value in [('status','unbound'),('archive',{}),('sourceRecords',{})]:
+            changed=dict(self.value,**{key:value})
+            with self.subTest(key=key),self.assertRaises(ValueError):
+                self.image.contract(changed,self.lane,self.runtime,self.root)
+        transfer=self.root/self.value['transferEvidence']['path']; record=json.loads(transfer.read_text())
+        for key,value in [('approved',False),('retrievalApprovalRef',''),('builder',dict(self.lane['vm'],instanceId='999'))]:
+            transfer.write_text(json.dumps(dict(record,**{key:value})))
+            self.value['transferEvidence']['sha256']=ota.digest(transfer)
+            with self.assertRaises(ValueError): self.image.contract(self.value,self.lane,self.runtime,self.root)
+        self.assertEqual(self.calls,[])
+
+    def test_bad_outer_hash_records_failure_and_never_uses_tools(self):
+        data=self.archive.read_bytes(); self.archive.write_bytes(b'x'+data[1:])
+        with self.assertRaisesRegex(ValueError,'outer digest'): self.observe()
+        record=json.loads((Path(self.temp.name)/'observation.json').read_text())
+        self.assertEqual(record['status'],'failed'); self.assertTrue(record['workRetained']); self.assertEqual(self.calls,[])
+
+    def test_unsafe_or_missing_or_noncontiguous_factory_entries_refuse(self):
+        cases=[('../escape',b'x'),('mustang-install-2026110302/../escape',b'x'),
+               ('mustang-install-2026110302/script.txt',b'duplicate')]
+        for i,extra in enumerate(cases):
+            self.pack(extra)
+            with self.assertRaises(ValueError): self.observe(str(i)+'.json')
+            # Only this fixture attempt is removed, never an original input.
+            shutil.rmtree(self.home/'rose-actions/mustang-baseline-123-1')
+        del self.members['super_1.img']; self.members['super_2.img']=b'not contiguous'; self.pack()
+        with self.assertRaisesRegex(ValueError,'noncontiguous'): self.observe('gap.json')
+
+    def test_missing_image_and_ambiguous_slot_refuse(self):
+        self.lp_extra='system_b.img'
+        with self.assertRaisesRegex(ValueError,'inactive logical partition'): self.observe()
+
+    def test_unsigned_disabled_and_wrong_avb_public_identity_refuse_before_avb_command(self):
+        original=self.members['vbmeta.img']
+        for i,(offset,value) in enumerate([(28,0),(120,1),(120,2)]):
+            changed=bytearray(original); struct.pack_into('>I',changed,offset,value)
+            self.members['vbmeta.img']=bytes(changed); self.pack()
+            with self.assertRaisesRegex(ValueError,'verification-disabled'): self.observe(str(i)+'.json')
+            shutil.rmtree(self.home/'rose-actions/mustang-baseline-123-1')
+        self.members['vbmeta.img']=original; self.members['avb_pkmd.bin']=b'wrong'; self.pack()
+        with self.assertRaisesRegex(ValueError,'public AVB identity'): self.observe('key.json')
+        self.assertNotIn('avbtool',[c[0] for c in self.calls])
+
+    def test_avb_failure_or_timeout_cannot_produce_baseline_pass(self):
+        self.fail_tool='avbtool'
+        with self.assertRaisesRegex(ValueError,'tool failed'): self.observe()
+        self.assertNotIn('debugfs',[c[0] for c in self.calls])
+        record=json.loads((Path(self.temp.name)/'observation.json').read_text())
+        with self.assertRaises(ValueError): self.image.require_receipt(record,self.value,self.lane,self.runtime,self.root)
+
+    def test_avb_must_cover_both_baseline_images_and_chained_key_must_match(self):
+        self.members['vbmeta.img']=self.vbmeta_image([self.hash_descriptor('system')]); self.pack()
+        with self.assertRaisesRegex(ValueError,'do not authenticate'): self.observe()
+        self.assertNotIn('avbtool',[c[0] for c in self.calls])
+        shutil.rmtree(self.home/'rose-actions/mustang-baseline-123-1')
+        self.members['vbmeta.img']=self.vbmeta_image([self.hash_descriptor('vendor'),
+            self.chain_descriptor('vbmeta_system',self.public_bytes)])
+        self.members['vbmeta_system.img']=self.vbmeta_image([self.hash_descriptor('system')])
+        self.pack(); self.observe('chain.json')
+        changed=self.vbmeta_image([self.hash_descriptor('system')],public=b'unrelated public key')
+        self.members['vbmeta_system.img']=changed; self.pack()
+        with self.assertRaisesRegex(ValueError,'embedded public key differs'): self.observe('bad-chain.json')
+
+    def test_avb_descriptor_bounds_and_persistent_digests_are_not_trusted(self):
+        original=self.members['vbmeta.img']
+        bad=bytearray(original); struct.pack_into('>Q',bad,104,len(bad)*10)
+        self.members['vbmeta.img']=bytes(bad); self.pack()
+        with self.assertRaisesRegex(ValueError,'descriptor area'): self.observe()
+        shutil.rmtree(self.home/'rose-actions/mustang-baseline-123-1')
+        descriptor=bytearray(self.hash_descriptor('system')); struct.pack_into('>I',descriptor,64,0)
+        self.members['vbmeta.img']=self.vbmeta_image([bytes(descriptor),self.hash_descriptor('vendor')]); self.pack()
+        with self.assertRaisesRegex(ValueError,'persistent AVB digest'): self.observe('persistent.json')
+
+    def test_changed_tool_and_low_space_refuse_without_a_process(self):
+        file=Path(self.tool_rows['simg2img']['path']); file.write_text('changed')
+        with self.assertRaisesRegex(ValueError,'tool bytes'): self.observe()
+        self.assertEqual(self.calls,[])
+
+    def test_wrong_build_bad_apk_signature_and_wrong_trust_refuse(self):
+        original=copy.deepcopy(self.components)
+        self.components[('vendor.img','/build.prop')]=b'ro.product.vendor.device=frankel\n'
+        with self.assertRaises(ValueError): self.observe()
+        self.assertEqual(json.loads((Path(self.temp.name)/'observation.json').read_text())['status'],'failed')
+        shutil.rmtree(self.home/'rose-actions/mustang-baseline-123-1'); self.components=copy.deepcopy(original)
+        self.sdk.pin='0'*64
+        with self.assertRaisesRegex(ValueError,'Updater signer'): self.observe('signature.json')
+        shutil.rmtree(self.home/'rose-actions/mustang-baseline-123-1'); self.sdk.pin=self.public['otaCertificateSha256']
+        store=io.BytesIO()
+        with zipfile.ZipFile(store,'w') as archive:
+            archive.writestr('unrelated.pem',b'-----BEGIN CERTIFICATE-----\n'+base64.b64encode(b'other DER')+b'\n-----END CERTIFICATE-----\n')
+        self.components[('system.img','/system/etc/security/otacerts.zip')]=store.getvalue()
+        with self.assertRaisesRegex(ValueError,'OTA trust'): self.observe('trust.json')
+
+    def test_changed_updater_bytes_refuse_before_sdk_observation(self):
+        self.components[('system.img','/system/priv-app/Updater/Updater.apk')]=b'changed'
+        with self.assertRaisesRegex(ValueError,'Updater bytes'): self.observe()
+        self.assertNotIn('aapt',[c[0] for c in self.calls])
+
+    def test_low_space_work_bound_and_stopped_tools_remain_fail_closed(self):
+        with patch.object(self.image.os,'statvfs',return_value=SimpleNamespace(f_bavail=0,f_frsize=4096,f_favail=1)):
+            with self.assertRaisesRegex(ValueError,'space bound'): self.observe()
+        shutil.rmtree(self.home/'rose-actions/mustang-baseline-123-1')
+        self.stop_tool='simg2img'
+        with self.assertRaisesRegex(ValueError,'tool failed'): self.observe('stopped.json')
+        shutil.rmtree(self.home/'rose-actions/mustang-baseline-123-1'); self.stop_tool=None
+        self.value['limits']['workBytes']=1
+        with self.assertRaisesRegex(ValueError,'work/space bound'): self.observe('bound.json')
+
+    def test_source_archive_symlink_and_sparse_geometry_refuse(self):
+        held=self.archive.with_name('saved.zip'); self.archive.rename(held); self.archive.symlink_to(held)
+        with self.assertRaisesRegex(ValueError,'no-link'): self.observe()
+        self.archive.unlink(); held.rename(self.archive)
+        shutil.rmtree(self.home/'rose-actions/mustang-baseline-123-1')
+        bad=bytearray(self.members['super_1.img']); struct.pack_into('<H',bad,4,2)
+        self.members['super_1.img']=bytes(bad); self.pack()
+        with self.assertRaisesRegex(ValueError,'sparse image header'): self.observe('sparse.json')
+
+    def test_installer_symlink_and_conflicting_board_refuse(self):
+        link=zipfile.ZipInfo('mustang-install-2026110302/linked'); link.create_system=3; link.external_attr=0o120777<<16
+        self.pack((link,b'/outside'))
+        with self.assertRaisesRegex(ValueError,'unsafe'): self.observe()
+        shutil.rmtree(self.home/'rose-actions/mustang-baseline-123-1')
+        self.members['android-info.txt']=b'require board=mustang\nrequire board=frankel\n'; self.pack()
+        with self.assertRaisesRegex(ValueError,'board differs'): self.observe('board.json')
+
+    def test_success_receipt_rejects_missing_stale_or_boolean_only_proofs(self):
+        record=self.observe()
+        changes=[dict(status='failed'),dict(runId='other'),dict(recipeSource='f'*40),dict(checks={}),
+                 dict(checks={k:1 for k in self.image.CHECKS}),dict(images={}),dict(tools={}),
+                 dict(checkerSha256='0'*64),dict(transferEvidence={}),dict(archive={})]
+        for change in changes:
+            with self.subTest(change=change),self.assertRaises(ValueError):
+                self.image.require_receipt(dict(record,**change),self.value,self.lane,self.runtime,self.root)
+
+    def test_factory_baseline_is_never_automatically_selected_or_allowed_on_legacy_host(self):
+        with self.assertRaisesRegex(ValueError,'exclusive dedicated'):
+            ota.observe_baseline(Path(self.temp.name)/'legacy.json',factory=self.value,runtime=self.runtime)
+        current=json.loads((ota.ROOT/'os/build-only/mustang-runtime.json').read_text())
+        self.assertIsNone(current['baselineFactoryEvidence']); self.assertEqual(current['status'],'unbound')
+        with self.assertRaisesRegex(ValueError,'explicitly selected'): ota.require_factory_baseline({})
+
+    def test_embedded_factory_proof_is_checked_before_staged_publication_can_pass(self):
+        record=self.observe()
+        self.write('os/build-only/mustang-runtime.json',self.runtime)
+        self.write('os/build-only/mustang-lane.json',self.lane)
+        proof_module=self.image
+        def modules(name,file):
+            if file=='mustang-dedicated.py':
+                return SimpleNamespace(reference=lambda ref,root:json.loads((root/ref).read_text()))
+            if file=='mustang-baseline-image.py': return proof_module
+            raise AssertionError(file)
+        directory=Path(self.temp.name)/'stage'
+        r=staged(directory)
+        from test_mustang_edge_gate import publication_proofs
+        with tempfile.TemporaryDirectory() as proofs:
+            r.update(publication_proofs(Path(proofs),candidate=r['candidateSource'],recipe=r['recipeSource'],
+                                       build=r['build'],epoch=r['timestamp'],run='123'))
+        r.update(runId='123',baselineFactoryEvidence=record,
+                 baselineObservationSha256=ota.digest(Path(self.temp.name)/'observation.json'))
+        def save():
+            (directory/'mustang-ota-receipt.json').write_text(json.dumps(r))
+            (directory/'SHA256SUMS').write_text(''.join(f'{ota.digest(p)}  {p.name}\n' for p in sorted(directory.iterdir()) if p.name!='SHA256SUMS'))
+        save()
+        cfg=enabled(); cfg['baseline']['source']=SHA
+        with patch.object(ota,'ROOT',self.root),patch.object(ota,'module',side_effect=modules):
+            self.assertEqual(ota.verify_staged(directory,cfg)['baselineFactoryEvidence']['status'],'passed')
+            r['baselineFactoryEvidence']=dict(record,checks={}); save()
+            with self.assertRaises(ValueError): ota.verify_staged(directory,cfg)
+            r['baselineFactoryEvidence']=record; r['baselineObservationSha256']='0'*64; save()
+            with self.assertRaisesRegex(ValueError,'receipt hash'): ota.verify_staged(directory,cfg)
+            r.pop('baselineFactoryEvidence'); save()
+            with self.assertRaisesRegex(ValueError,'proof missing'): ota.verify_staged(directory,cfg)
 
 
 if __name__=='__main__':unittest.main()

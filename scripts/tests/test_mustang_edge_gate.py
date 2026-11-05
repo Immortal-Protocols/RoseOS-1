@@ -472,6 +472,13 @@ class DedicatedRuntimeTest(unittest.TestCase):
         (self.root/self.cfg['allocationState']).write_text(json.dumps(state))
         with self.assertRaisesRegex(ValueError,'allocation state remains unresolved'): self.admitted()
 
+    def test_factory_baseline_requires_exclusive_explicit_bound_evidence_before_host_start(self):
+        ref=self.record('factory-baseline',dict(schema='roseos.mustang-factory-baseline-input.v1',status='unbound'))
+        with self.assertRaisesRegex(ValueError,'exactly one baseline'):
+            self.admitted(dict(self.cfg,baselineFactoryEvidence=ref))
+        with self.assertRaisesRegex(ValueError,'recovery is unbound'):
+            self.admitted(dict(self.cfg,baselineFactoryEvidence=ref,baselineTargetFiles=None))
+
     def test_guest_identity_mount_and_storage_checks_are_read_only_and_fail_closed(self):
         executed=[]
         def process(argv,**kwargs):
