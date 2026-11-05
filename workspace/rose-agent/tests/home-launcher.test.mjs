@@ -104,8 +104,16 @@ test('app pages sit on the shared wallpaper with one fixed row of dots and no dr
  assert.equal((main.match(/makePageDots\(titles\)/g)||[]).length,1);
  assert.match(homeFrame,/tray\.heightPx\(\) \+ Math\.round\(HomeAppLayout\.BAND_BOTTOM_DP \* tray\.density\)\)\);/);
  assert.match(homeFrame,/addView\(dots, dotsParams\);/);
- // A re-measure re-plans once, then only when the real capacity changes.
- assert.match(main,/if\(!HomeAppLayout\.replan\(appColumns,appPerPage,width,height,cell,getResources\(\)\.getDisplayMetrics\(\)\.density\)\)return;\n  if\(width==appAreaWidth&&height==appAreaHeight&&cell==appCellHeight\)return;/);
+ // F01 (HomePlan): every measurement is recorded, even one that fits the plan; a re-plan waits for the reports to
+ // settle, happens only when the latest viewport no longer fits, and never flips straight back (Breaker).
+ assert.match(main,/void homeMeasured\(int width,int height,float cell\)\{homeViewport\.record\(width,height,cell\);settleHomePlan\(\);\}/);
+ assert.match(main,/void appPageMeasured\(int width,int height,float cell\)\{appViewport\.record\(width,height,cell\);settleHomePlan\(\);\}/);
+ assert.match(main,/if\(homePlanCheck!=null\)handler\.removeCallbacks\(homePlanCheck\);/,'one pending check, re-armed by each report');
+ assert.match(main,/handler\.postDelayed\(homePlanCheck,HomePlan\.SETTLE_MS\);/);
+ assert.match(main,/homeTray\.release\(\);if\(homePlanCheck!=null\)\{handler\.removeCallbacks\(homePlanCheck\);homePlanCheck=null;\}/,'a destroyed Home re-plans nothing');
+ assert.match(main,/if\(!homePlanStale\(\)\)\{replanPending=false;return;\}/,'a settled viewport that fits the plan never rebuilds');
+ assert.match(main,/if\(homePlanBreaker\.allow\(current,HomePlan\.key\(homeColumns,homeCapacity,appColumns,appPerPage\),SystemClock\.elapsedRealtime\(\)\)\)attachLauncherPages\(true\);/);
+ assert.doesNotMatch(main,/appAreaWidth|homeAreaWidth|attachLauncherPages\(true\);\}\);\n \}/,'the old drop-if-it-fits rule is gone');
  // Launch and return are unchanged: every tile opens its own app through WorkspaceLauncher (closing the folder first).
  assert.match(main,/tile\.setOnClickListener\(v->\{closeSystemFolder\(\);WorkspaceLauncher\.open\(this,app,label\);\}\);/);
  // The pager's gesture decisions are HomePages' tested ones.
@@ -219,7 +227,8 @@ test('an unchanged HOME or app-icon return reuses the built Home; changes rebuil
  for(const field of ['screenWidthDp','screenHeightDp','densityDpi','orientation','fontScale','uiMode','getLocales().toLanguageTags()'])assert.ok(main.includes('c.'+field),field);
  assert.match(main,/RoseHomeView\.dockRolePackages\(getPackageManager\(\),getPackageName\(\)\)\);\}/);
  // Home is built from the same role list the stamp compares.
- assert.match(home,/ArrayList<String> wanted = new ArrayList<>\(dockRolePackages\(pm, self\)\);/);
+ // F04: each default-role holder is placed through HomeAppGroups.homeRole (never GrapheneOS Messaging on main Home).
+ assert.match(home,/for \(String pkg : dockRolePackages\(pm, self\)\) wanted\.add\(HomeAppGroups\.homeRole\(pkg\)\);/);
 });
 
 test('Home\'s edge stays fixed over the swiping pages and reaches the screen bottom (OS-HIFI-HOME-001, #410)',()=>{
@@ -538,7 +547,7 @@ test('#410 gesture_nav_contract_v1: a RectF-only reply to the verified recents c
  assert.equal((g.match(/decor\.getViewTreeObserver\(\)\.removeOnPreDrawListener\(once\[0\]\)/g)||[]).length,2,'both removals on the window observer');
  assert.match(g,/handler\.post\(\(\)->sendGestureReply\(pager,tag,folder,reply,to\)\)/,'one message after the pre-draw');
  assert.match(main,/if\(pager!=launcherPager\|\|replanPending\|\|isFinishing\(\)\)return;/,'no target while Home is about to be rebuilt');
- assert.equal((main.match(/Height=cell;replanPending=true;\n  handler\.post\(\(\)->\{if\(launcherPager!=null&&!isFinishing\(\)\)attachLauncherPages\(true\);\}\);/g)||[]).length,2,'both re-plans mark it');
+ assert.match(main,/void settleHomePlan\(\)\{\n  replanPending=homePlanStale\(\);/,'a measurement that no longer fits the plan marks it, for both grids');
  assert.match(main,/void attachLauncherPages\(boolean preservePage\)\{\n  replanPending=false;/,'a rebuild clears it');
 });
 
