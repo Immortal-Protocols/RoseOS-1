@@ -766,6 +766,11 @@ class RealPhone:
     def notify(self, app: str, title: str, text: str) -> None:
         pass  # real notifications come from the phone (not read yet)
 
+    def copy_to_clipboard(self, text: str) -> dict:
+        """Put exactly ``text`` on the phone's clipboard (rose.clipboard; blocking: call it off the server's loop)."""
+        from .clipboard import copy
+        return copy(self.link.call, text)
+
     def reset(self) -> None:
         for session in list(self._sessions.values()):
             if session.scoped is not None:
@@ -1044,8 +1049,14 @@ def _ws_why(r: dict, label: str | None = None) -> str:
     app = label or "that app"
     details = r.get("details") if isinstance(r.get("details"), dict) else {}
     if r.get("reason") == "target_in_foreground" or details.get("reason") == "target_in_foreground":
-        return (f"{app} is open on your phone screen, so Android won't open it in Rose's workspace. "
-                "Switch away from the app on your phone, then retry; nothing was opened.")
+        # A limit of this RoseOS build's platform patch (it refuses any app visible on the main display), not a rule
+        # Rose follows: F06's platform change replaces it with a takeover on the owner's request.
+        return (f"{app} is open on your phone screen, and this RoseOS build can't take over an app you can see yet; "
+                "nothing was opened. If you're done with it there, switch to another app and ask again.")
+    if "target_in_other_session" in " ".join(str(x.get(k) or "") for x in (r, details) for k in ("reason", "error")):
+        # The platform's backstop for an app already in Rose's other workspace session: the controller's own
+        # app_in_other_session refusal, reported the same way.
+        status = "app_in_other_session"
     if status == "locked":
         return LOCKED_SAY
     if status == "background_target_not_allowed":

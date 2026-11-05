@@ -311,13 +311,28 @@ class Integration(unittest.TestCase):
         result = self.call(a, 'open_app', app=a.app)
         self.assertFalse(result['ok'])
         self.assertIn('open on your phone screen', result['result'])
-        self.assertIn('Switch away', result['result'])
+        self.assertIn("this RoseOS build can't take over an app you can see yet", result['result'])
+        self.assertIn('nothing was opened', result['result'])
         a.text = 'The app could not open.'
         self.engine._event({'event': 'done', 'session': a.name,
                             'turn': {'id': a.turn, 'status': 'completed'}})
         self.assertEqual(a.task.status, 'failed')
         self.assertEqual(a.task.result, result['result'])
         self.assertFalse(any(op == 'start' for op,_ in self.controller.calls))
+
+    def test_platform_other_session_backstop_reads_as_the_controllers_refusal(self):
+        a = self.task('Calculator')
+        send = a.view.workspace.send
+        def refuse_other_session(op, params):
+            if op == 'start':
+                return {'status': 'failed', 'sessionId': 'refused', 'targetPackage': CALC, 'reason': '',
+                        'error': 'java.lang.IllegalStateException: target_in_other_session: '+CALC}
+            return send(op, params)
+        a.view.workspace.send = refuse_other_session
+        result = self.call(a, 'open_app', app=a.app)
+        self.assertFalse(result['ok'])
+        self.assertIn("open in Rose's workspace for another of her tasks", result['result'])
+        self.assertIn('nothing was opened', result['result'])
 
     def test_unconfirmed_slot_release_blocks_replacement_and_preserves_task_result(self):
         a, b = self.task('Calculator'), self.task('Clock')
@@ -602,6 +617,136 @@ class Integration(unittest.TestCase):
         self.assertTrue(wait(lambda: a.closed))
         self.assertEqual(len(taps),1)
         self.assertEqual(a.task.status,'cancelled')
+
+
+EMULATE = object()
+
+
+class ClipboardLink:
+    """The paired phone for F07: a scripted reply, or Rose Agent's ClipboardWrite rules by default."""
+    connected = True
+    def __init__(self, reply=EMULATE):
+        self.reply, self.sent = reply, []
+
+    def call(self, action, **args):
+        self.sent.append((action, dict(args)))
+        if self.reply is not EMULATE:
+            return self.reply
+        import hashlib
+        if hashlib.sha256(args['text'].encode('utf-8')).hexdigest() != args['sha256']:
+            return {'status': 'text_mismatch', 'action': action, 'written': False}
+        return {'status': 'copied', 'action': action, 'written': True, 'verified': 'readback',
+                'characters': len(args['text']), 'sensitive': True}
+
+
+class PhoneClipboard(Integration):
+    """F07: copy the owner's exact text to the paired phone clipboard; ok only after the phone's confirmed write."""
+    # The same vectors as workspace/rose-agent/app/tests/ClipboardWriteTest.java: UTF-8 SHA-256 on both ends.
+    VECTORS = {'hello': '2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824',
+               '  Leading and trailing  \n': '64d2885b881530b8d94ee79bd99c8f8c088059959b92f74478da940971d4531c',
+               'Caf\u00e9 \u2014 \u6771\u4eac \U0001f44b\U0001f3fd': 'c2aee1934bea3aadedcd7e062ea6bd7d3da53fe178c5b476b17cb4749adb08fe',
+               'line1\r\nline2\ttab': '9482e91e3d68743aa2719aaf71d6964cb7c22e25ae9b8ce61c6e86e298b5c3d9'}
+
+    def copy(self, text, reply=EMULATE):
+        self.phone.link = link = ClipboardLink(reply)
+        return self.call(self.engine.sessions['conversation'], 'copy_to_phone_clipboard', text=text), link
+
+    def test_exact_text_is_sent_with_its_digest_and_copied_only_on_the_phones_confirmation(self):
+        for text, digest in self.VECTORS.items():
+            with self.subTest(text=text):
+                result, link = self.copy(text)
+                self.assertEqual(link.sent, [('clipboard_write', {'text': text, 'sha256': digest})])
+                self.assertEqual(result, {'ok': True, 'status': 'copied', 'verified': 'readback',
+                                          'message': 'Copied to the phone clipboard.', 'characters': len(text)})
+                self.assertTrue(self.engine.client.results[-1]['result']['success'])
+        # Neither the model's tool result nor the transcript keeps a second copy of the text.
+        events = self.store.export(self.engine.conversation)
+        calls = [e['data'] for e in events if e['kind'] == 'tool_call' and e['data']['name'] == 'copy_to_phone_clipboard']
+        self.assertEqual([c['arguments'] for c in calls], [{'text_characters': len(t)} for t in self.VECTORS])
+        dumped = json.dumps([e['data'] for e in events if e['kind'] in ('tool_call', 'tool_result')])
+        for text, digest in self.VECTORS.items():
+            self.assertNotIn(json.dumps(text)[1:-1], dumped)
+            self.assertNotIn(digest, dumped)
+
+    def test_only_the_phones_own_written_copy_is_success(self):
+        cases = {
+            'clipboard_write_denied': ({'status': 'clipboard_write_denied', 'action': 'clipboard_write', 'written': False}, False),
+            'text_mismatch': ({'status': 'text_mismatch', 'action': 'clipboard_write', 'written': False}, False),
+            'clipboard_wrong_device': ({'status': 'clipboard_wrong_device', 'action': 'clipboard_write', 'written': False}, False),
+            'clipboard_unavailable': ({'status': 'clipboard_unavailable', 'action': 'clipboard_write', 'written': False}, False),
+            'routine_busy': ({'status': 'routine_busy'}, False),
+            'expired': ({'status': 'expired'}, False),
+            'offline': ({'status': 'offline', 'message': 'Rose Agent is not connected.'}, False),
+            'clipboard_unsupported': ({'status': 'error', 'message': 'IllegalArgumentException: Unsupported phone action'}, False),
+            'clipboard_replaced': ({'status': 'clipboard_replaced', 'action': 'clipboard_write'}, 'unconfirmed'),
+            'timeout': ({'status': 'timeout', 'message': 'The phone did not answer clipboard_write in time.'}, 'unconfirmed'),
+            'running': ({'status': 'running'}, 'unconfirmed'),
+        }
+        for status, (reply, copied) in cases.items():
+            with self.subTest(status=status):
+                result, _ = self.copy('hello', reply)
+                self.assertEqual((result['ok'], result['status'], result['copied']), (False, status, copied))
+                self.assertTrue(result['message'])
+                self.assertFalse(self.engine.client.results[-1]['result']['success'])
+        # Shapes that are not the phone's confirmed write are never success, whatever their status says.
+        for reply in ({'status': 'action_accepted'}, {'status': 'copied'}, {'status': 'copied', 'written': True},
+                      {'status': 'copied', 'written': 'yes', 'action': 'clipboard_write'},
+                      {'status': 'clipboard_write_failed', 'reason': 'DeadSystemException'}, {}, None, 'copied'):
+            with self.subTest(reply=reply):
+                result, _ = self.copy('hello', reply)
+                self.assertEqual((result['ok'], result['status'], result['copied']), (False, 'clipboard_write_failed', 'unconfirmed'))
+
+    def test_text_the_phone_cannot_take_exactly_is_refused_before_anything_is_sent(self):
+        from rose.clipboard import MAX_BYTES
+        for text, status in (('', 'empty_text'), ('a\ud83d', 'malformed_text'), ('\udc4b', 'malformed_text'),
+                             ('x' * (MAX_BYTES + 1), 'text_too_large'), ('\u00e9' * (MAX_BYTES // 2 + 1), 'text_too_large')):
+            with self.subTest(status=status, size=len(text)):
+                result, link = self.copy(text)
+                self.assertEqual((result['ok'], result['status'], result['copied']), (False, status, False))
+                self.assertEqual(link.sent, [])
+        result, link = self.copy('x' * MAX_BYTES)
+        self.assertTrue(result['ok'])
+        self.assertEqual(len(link.sent), 1)
+        # Not a string: refused, nothing sent.
+        self.phone.link = link = ClipboardLink()
+        result = self.call(self.engine.sessions['conversation'], 'copy_to_phone_clipboard', text=7)
+        self.assertEqual((result['ok'], result['status']), (False, 'empty_text'))
+        self.assertEqual(link.sent, [])
+
+    def test_a_stale_or_cancelled_turn_never_writes(self):
+        conversation = self.engine.sessions['conversation']
+        self.phone.link = link = ClipboardLink()
+        e = {'callId': 'ipc-stale', 'params': {'tool': 'copy_to_phone_clipboard', 'arguments': {'text': 'hello'},
+                                                'turnId': 'not-the-current-turn', 'callId': 'tool-stale'}}
+        conversation.turn = 'current-turn'
+        self.engine._tool(conversation, e)
+        self.assertEqual(link.sent, [])
+        self.assertFalse(self.engine.client.results[-1]['result']['success'])
+
+    def test_conversation_tool_and_policy_but_not_an_app_thread_tool(self):
+        from rose.codex_conductor import CONVERSATION_TOOLS, CONVERSATION_POLICY
+        tool = next(t for t in CONVERSATION_TOOLS if t['name'] == 'copy_to_phone_clipboard')
+        self.assertEqual(tool['inputSchema']['required'], ['text'])
+        self.assertIn('Only when the owner asks', tool['description'])
+        self.assertIn('Never copy on your own initiative', CONVERSATION_POLICY)
+        a = self.task('Calculator')
+        opened = [c for c in self.engine.client.calls if c[0] == 'open' and c[1] == a.name]
+        self.assertTrue(opened)
+        self.assertNotIn('copy_to_phone_clipboard', [t['name'] for t in opened[-1][2]['tools']])
+        self.phone.link = link = ClipboardLink()
+        result = self.call(a, 'copy_to_phone_clipboard', text='hello')
+        self.assertFalse(result['ok'])
+        self.assertEqual(link.sent, [])
+
+    def test_simulated_phone_has_the_same_contract(self):
+        from rose.phone import Phone
+        fake = Phone()
+        for text in self.VECTORS:
+            result = fake.copy_to_clipboard(text)
+            self.assertEqual((result['ok'], result['status']), (True, 'copied'))
+            self.assertEqual(fake.clipboard, text)
+        self.assertEqual(fake.copy_to_clipboard('a\ud83d')['status'], 'malformed_text')
+        self.assertEqual(fake.clipboard, list(self.VECTORS)[-1])
 
 
 class StorageAndContract(unittest.TestCase):

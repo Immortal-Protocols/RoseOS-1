@@ -221,6 +221,9 @@ java -cp "$JAVA_TESTS/ConversationState" dev.pixel.voice.ConversationStateTest
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/MicInputCapture" \
  workspace/rose-agent/app/src/dev/pixel/voice/MicInputCapture.java workspace/rose-agent/app/tests/MicInputCaptureTest.java
 java -cp "$JAVA_TESTS/MicInputCapture" dev.pixel.voice.MicInputCaptureTest
+java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/ClipboardWrite" \
+ workspace/rose-agent/app/src/dev/pixel/voice/ClipboardWrite.java workspace/rose-agent/app/tests/ClipboardWriteTest.java
+java -cp "$JAVA_TESTS/ClipboardWrite" dev.pixel.voice.ClipboardWriteTest
 # Independent Rose visual axes (connection, microphone, voice) derived from ConversationState.
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/RoseVisualState" \
  workspace/rose-agent/app/src/dev/pixel/voice/ConversationState.java workspace/rose-agent/app/src/dev/pixel/voice/RoseVisualState.java \
