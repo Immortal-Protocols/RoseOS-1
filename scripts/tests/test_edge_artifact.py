@@ -1,7 +1,9 @@
 """OS Product's raised-edge artifact check (scripts/edge_artifact.py), as release-pipeline's bytes-verify and ota-verify
 run it: the dex reader against real d8 output and synthetic dex, the check's pass and fail rules, its CLI, and the
 roseEdge section of os/release-pipeline/frankel.json against the OS sources it names."""
+import base64
 import contextlib
+import hashlib
 import importlib.util
 import io
 import json
@@ -22,6 +24,16 @@ edge = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(edge)
 
 FIXTURES = ROOT/'scripts/tests/fixtures/rose-edge-dex'
+# The real d8 output, stored as base64 text because the repository ignores *.dex (fixtures/rose-edge-dex/README.md).
+D8_SHA256 = {'d8-039.dex': '90eab09dea639d7846bcbc9d73c666e66a4c101b724a371c8378d90187101366',
+             'd8-041.dex': '11de081491f2f85ee3a4ffbc70b3ee20488017098d4b1c49670a109aea258deb'}
+
+
+def d8_dex(name):
+    data = base64.b64decode((FIXTURES/f'{name}.b64').read_text())
+    if hashlib.sha256(data).hexdigest() != D8_SHA256[name]:
+        raise AssertionError(f'{name}.b64 does not decode to the recorded d8 output')
+    return data
 CONFIG = json.loads((ROOT/'os/release-pipeline/frankel.json').read_text())
 SPEC = CONFIG['roseEdge']
 GESTURE, SWIPE = 'Lcom/android/quickstep/fallback/RoseEdgeGesture;', 'Lcom/android/quickstep/fallback/RoseEdgeSwipe;'
@@ -66,13 +78,13 @@ class RealDexTest(unittest.TestCase):
                     MIC: {'<init>', 'tag'}, CONTROLLER: {'<init>', 'descriptor', 'raise'}}
         for name in ('d8-039.dex', 'd8-041.dex'):
             with self.subTest(name=name):
-                data = (FIXTURES/name).read_bytes()
+                data = d8_dex(name)
                 self.assertEqual(data[:8], b'dex\n039\x00' if '039' in name else b'dex\n041\x00')
                 self.assertEqual(methods_by_class(data), expected)  # fields (TAG, DESCRIPTOR, mStage) are not methods
 
     def test_string_table_holds_whole_literals_only(self):
         for name in ('d8-039.dex', 'd8-041.dex'):
-            data = (FIXTURES/name).read_bytes()
+            data = d8_dex(name)
             sections = edge.sections(data)
             for literal, present in ((DIAG, True), (DESCRIPTOR, True), (MIC_TAG, True), ('RoseEdge', True),
                                      ('persist.wm.debug.rose_edge', False), ('com.android.wm.shell.roseedge', False),
@@ -83,7 +95,7 @@ class RealDexTest(unittest.TestCase):
                     self.assertEqual(edge.dex_string(literal) in data, present)
 
     def test_a_truncated_or_foreign_file_is_not_read(self):
-        data = (FIXTURES/'d8-039.dex').read_bytes()
+        data = d8_dex('d8-039.dex')
         for bad, message in ((data[:0x60], 'truncated dex header'), (b'PK\x03\x04' + data[4:], 'no dex magic'),
                              (data[:-8], 'dex file size differs from its header'),
                              (data[:0x28] + struct.pack('<I', 0x78563412) + data[0x2c:], 'not a little-endian dex'),
@@ -162,8 +174,8 @@ class CheckTest(unittest.TestCase):
         self.assertEqual(sorted(receipt['apkSha256']), [L3_APK, SYSUI_APK])
 
     def test_real_d8_dex_in_the_apks_passes(self):
-        apk = dex_fixture.apk([(FIXTURES/'d8-041.dex').read_bytes()])
-        failures, receipt = self.check(launcher3=apk, systemui=dex_fixture.apk([(FIXTURES/'d8-039.dex').read_bytes()]))
+        apk = dex_fixture.apk([d8_dex('d8-041.dex')])
+        failures, receipt = self.check(launcher3=apk, systemui=dex_fixture.apk([d8_dex('d8-039.dex')]))
         self.assertEqual(failures, [])
         self.assertEqual({c['by'] for c in receipt['classes']}, {'class'})
 

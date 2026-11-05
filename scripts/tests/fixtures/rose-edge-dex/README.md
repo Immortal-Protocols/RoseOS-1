@@ -13,7 +13,10 @@ not the RoseOS sources, which need the platform classpath. Both files come from 
 
 d8 is `D8 8.6.2-dev`, from SDK build-tools 35.0.0 (`android-15`).
 
-| File | Format | sha256 |
+The repository ignores `*.dex`, so each file is committed as base64 text: `d8-039.dex.b64` and `d8-041.dex.b64`.
+`base64 -d d8-039.dex.b64 > d8-039.dex` restores the bytes. The tests decode each file and check it against its sha256:
+
+| File | Format | sha256 of the decoded bytes |
 | --- | --- | --- |
 | `d8-039.dex` | dex 039 | `90eab09dea639d7846bcbc9d73c666e66a4c101b724a371c8378d90187101366` |
 | `d8-041.dex` | dex 041 container, one section | `11de081491f2f85ee3a4ffbc70b3ee20488017098d4b1c49670a109aea258deb` |
