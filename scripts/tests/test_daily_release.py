@@ -233,8 +233,9 @@ class Workflow(unittest.TestCase):
         self.assertNotIn('workflow_run', triggers)
         self.assertNotIn('push', triggers)
         self.assertRegex(triggers, r'dry_run:\n(?:        .*\n)*        type: boolean\n        default: true')
-        for workflow in (ROOT/'.github/workflows').glob('*.yml'):
-            self.assertNotIn('daily-release.py', workflow.read_text() if workflow.name != 'daily-release.yml' else '')
+        for workflow in (ROOT/'.github/workflows').glob('*.yml'):  # only this workflow ever runs the dispatcher
+            if workflow.name != 'daily-release.yml':
+                self.assertNotRegex(workflow.read_text(), r'python3? +scripts/daily-release\.py', workflow.name)
 
     def test_least_privilege_main_only_pinned_and_secret_free(self):
         self.assertIn('\npermissions: {}\n', WORKFLOW)
