@@ -123,9 +123,10 @@ def systemui_apk(markers=tuple(SYSTEMUI_SPEC['markers']), dex=True, edge=EDGE_SY
         apk.writestr(zipfile.ZipInfo('AndroidManifest.xml', (2009, 1, 1, 0, 0, 0)), b'binary manifest')
     return buffer.getvalue()
 
-def launcher3_apk(classes=EDGE_LAUNCHER3):
-    """A stand-in Launcher3QuickStep APK whose real-format classes.dex defines the raised edge's gesture classes."""
-    return dex_fixture.apk([dex_fixture.dex([('Lcom/android/launcher3/Launcher;', ['<init>']), *classes])],
+def launcher3_apk(classes=EDGE_LAUNCHER3, literals=tuple(i['literal'] for i in ROSE_EDGE_SPEC['literals'])):
+    """A stand-in Launcher3QuickStep APK whose real-format classes.dex defines the raised edge's gesture classes and holds
+    #548's diagnostics switch, the required literal."""
+    return dex_fixture.apk([dex_fixture.dex([('Lcom/android/launcher3/Launcher;', ['<init>']), *classes], strings=list(literals))],
         {'AndroidManifest.xml': b'binary manifest'})
 
 SYSTEMUI_APK_BYTES = systemui_apk()
@@ -487,9 +488,11 @@ class PipelineTest(unittest.TestCase):
         self.assertEqual([(c['class'], c['pass'], c['by'], c['where']) for c in edge['classes']],
             [(c['class'], True, 'class', (LAUNCHER3_APK + '!classes.dex') if 'quickstep' in c['class'] else (SYSTEMUI_APK + '!classes2.dex'))
              for c in ROSE_EDGE_SPEC['classes']])
+        self.assertEqual([(i['literal'], i['pass'], i['where']) for i in edge['literals']],
+            [('persist.wm.debug.rose_edge_diag', True, LAUNCHER3_APK + '!classes.dex')])
         self.assertEqual(edge['apkSha256'], {LAUNCHER3_APK: hashlib.sha256(LAUNCHER3_APK_BYTES).hexdigest(),
             SYSTEMUI_APK: hashlib.sha256(SYSTEMUI_APK_BYTES).hexdigest()})
-        self.assertIn('Rose raised edge: switches, Launcher3 gesture and SystemUI resize/mic slot in dex', verification['checks'])
+        self.assertIn('Rose raised edge: switches, Launcher3 gesture with the #548 marker and SystemUI resize/mic slot in dex', verification['checks'])
         self.assertEqual(tools['debugfs']['sha256'], hashlib.sha256((self.root/'tools/debugfs').read_bytes()).hexdigest())
         code, out = self.pipeline('publish', *self.common[:8], '--config', self.config, '--artifact-dir', artifact,
             '--adapter', 'fake', '--fake-state', self.root/'fake', '--promote')
@@ -791,6 +794,8 @@ class PipelineTest(unittest.TestCase):
         for kwargs, message in (
                 ({'launcher3': None}, 'raised-edge class Lcom/android/quickstep/fallback/RoseEdgeGesture; is not defined in the dex of the 0 matching APK(s)'),
                 ({'launcher3': renamed}, 'raised-edge class Lcom/android/quickstep/fallback/RoseEdgeGesture; is not defined in the dex of the 1 matching APK(s)'),
+                # A Launcher3 from before #548: both classes are there (E2a), its diagnostics switch is not.
+                ({'launcher3': launcher3_apk(literals=())}, 'rose_edge_diag\\" is not a whole dex string in the 1 matching APK(s)'),
                 ({'systemui': systemui_apk(edge=())}, 'raised-edge class Lcom/android/wm/shell/roseedge/RoseEdgeController; is not defined in the dex of the 1 matching APK(s), nor is the literal'),
                 ({'edge_props': 'persist.wm.debug.pixel_agent_tray=1\n'}, 'raised-edge prop persist.wm.debug.rose_edge=true is not set in'),
                 ({'edge_props': ROSE_EDGE_PROPS + 'persist.wm.debug.rose_edge=false\n'},
@@ -1114,7 +1119,7 @@ class RoseEdgeGateTest(unittest.TestCase):
         failures, receipt = release_pipeline.check_rose_edge(self.path, {'target': {'device': 'frankel'}, 'roseEdge': ROSE_EDGE_SPEC})
         self.assertEqual((failures, receipt['configured'], [c['pass'] for c in receipt['classes']]), ([], True, [True] * 4))
         self.assertEqual(release_pipeline.rose_edge_label(receipt),
-            ['Rose raised edge: switches, Launcher3 gesture and SystemUI resize/mic slot in dex'])
+            ['Rose raised edge: switches, Launcher3 gesture with the #548 marker and SystemUI resize/mic slot in dex'])
 
     def test_admitted_device_without_the_section_is_setup_missing(self):
         for config in ({'target': {'device': 'frankel'}}, {'target': {'device': 'frankel'}, 'roseEdge': {**ROSE_EDGE_SPEC, 'classes': []}}):

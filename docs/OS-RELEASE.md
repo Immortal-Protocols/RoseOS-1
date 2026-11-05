@@ -1546,9 +1546,18 @@ or published. The gate requires:
   with one call site, such as `stage` or `onMove`. A method requirement could
   therefore fail a good candidate (OS Product's review of #568).
 
-  Both classes predate #548: they arrived with E2a on 11-03. So these entries
-  show the edge gesture is compiled in, not that #548 is. That the candidate
-  commit contains #548 is a source fact, checked from the candidate's commit.
+  Both classes predate #548: they arrived with E2a on 11-03. So the class
+  entries show the edge gesture is compiled in, not that #548 is.
+- **#548 itself, by a required literal.** `persist.wm.debug.rose_edge_diag`
+  must be a whole string of the Launcher3QuickStep dex. This is the `literals`
+  list, required in addition to the classes, not as a fallback. #548
+  (`6d2ee72`) added the string as `RoseEdgeSwipe.DIAG_PROPERTY`, a compile-time
+  constant. javac inlines it into the `SystemProperties.getBoolean` call in
+  `RoseEdgeSwipe`'s constructor. `FallbackSwipeHandler`'s constructor reaches
+  that constructor (`rose-edge-launcher3.patch`), so R8 cannot drop the string
+  while the gesture is linked. A build from before #548, such as 2026110403
+  (built from `4e85677`), has both classes. By source it lacks this string, so
+  it fails.
 - **The Shell resize and the chin's microphone slot in SystemUI.**
   `com.android.wm.shell.roseedge.RoseEdgeController` and
   `com.android.wm.shell.RoseEdgeMicSlot`.
@@ -1580,10 +1589,13 @@ The retained Rango route builds its own pipeline config, which has no
 `{"configured": false}`; build 2026103001 predates the edge.
 
 The receipt is `roseEdge` in the bytes-verify output and in
-`verification.json`. It records each switch and the file that set it, and for
-each class whether it passed, how (by class or by literal), and which APK and
-dex it was found in. It also records any unreadable dex and each candidate
-APK's sha256.
+`verification.json`. It records:
+
+- each switch and the file that set it;
+- for each class, whether it passed, how (by class or by literal), and which
+  APK and dex it was found in;
+- for each required literal, whether it passed and where it was found;
+- any unreadable dex, and each candidate APK's sha256.
 
 The receipt shows the code is in the artifact. It does not show that the edge
 raises, resizes apps or mutes the microphone on a phone. It also does not show

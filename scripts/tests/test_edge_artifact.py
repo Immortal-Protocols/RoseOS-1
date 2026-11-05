@@ -61,8 +61,8 @@ def target_files(path, props=PROPS, launcher3=None, systemui=None, extra=None):
         if props is not None:
             z.writestr('SYSTEM/build.prop', props)
         for name, value in ((L3_APK, launcher3), (SYSUI_APK, systemui)):
-            if value is None:
-                value = dex_fixture.apk([dex_fixture.dex(LAUNCHER3 if name == L3_APK else SYSTEMUI)])
+            if value is None:  # the Launcher3 dex also holds #548's diagnostics switch, a required literal
+                value = dex_fixture.apk([dex_fixture.dex(LAUNCHER3, strings=[DIAG]) if name == L3_APK else dex_fixture.dex(SYSTEMUI)])
             if value is not False:
                 z.writestr(name, value)
         for name, value in (extra or {}).items():
@@ -207,10 +207,10 @@ class CheckTest(unittest.TestCase):
 
     def test_a_missing_or_renamed_gesture_fails_closed(self):
         for launcher3, message, count in (
-                (False, 'RoseEdgeGesture; is not defined in the dex of the 0 matching APK(s)', 2),
+                (False, 'RoseEdgeGesture; is not defined in the dex of the 0 matching APK(s)', 3),
                 # A rename: RoseEdgeGesture has no literal, so it fails closed even beside its old name's strings.
                 (dex_fixture.apk([dex_fixture.dex([('Lcom/android/quickstep/a;', ['stage']), LAUNCHER3[1]],
-                                                  strings=['RoseEdgeGesture', GESTURE])]),
+                                                  strings=['RoseEdgeGesture', GESTURE, DIAG])]),
                  'RoseEdgeGesture; is not defined in the dex of the 1 matching APK(s)', 1)):
             with self.subTest(message=message):
                 failures, receipt = self.check(launcher3=launcher3)
@@ -221,13 +221,41 @@ class CheckTest(unittest.TestCase):
     def test_launcher3_members_r8_inlined_away_still_pass(self):
         # Launcher3 keeps class names but may inline and remove single-call-site members (OS Product's review of
         # pinned 47accce): the classes are required, their methods are not.
-        failures, receipt = self.check(launcher3=dex_fixture.apk([dex_fixture.dex([(GESTURE, []), (SWIPE, ['<init>'])])]))
+        failures, receipt = self.check(launcher3=dex_fixture.apk([dex_fixture.dex([(GESTURE, []), (SWIPE, ['<init>'])], strings=[DIAG])]))
         self.assertEqual(failures, [])
         self.assertEqual([c['by'] for c in receipt['classes'][:2]], ['class', 'class'])
 
+    def test_required_literals_are_not_fallbacks(self):
+        # Both Launcher3 classes predate #548 (E2a); only its diagnostics switch proves #548 is compiled in.
+        pre548 = dex_fixture.apk([dex_fixture.dex(LAUNCHER3)])
+        failures, receipt = self.check(launcher3=pre548)
+        self.assertEqual(failures, [f'raised-edge literal "{DIAG}" is not a whole dex string in the 1 matching APK(s)'])
+        self.assertEqual([c['pass'] for c in receipt['classes']], [True] * 4)
+        self.assertEqual([(i['literal'], i['pass'], i['where']) for i in receipt['literals']], [(DIAG, False, None)])
+        for launcher3, extra, passes in (
+                (dex_fixture.apk([dex_fixture.dex(LAUNCHER3, strings=[DIAG])]), None, True),
+                (dex_fixture.apk([dex_fixture.dex(LAUNCHER3, strings=[DIAG + '_x', 'x' + DIAG, 'persist.wm.debug.rose_edge'])]), None, False),
+                (dex_fixture.apk([dex_fixture.dex(LAUNCHER3), dex_fixture.dex([], strings=[DIAG])]), None, True),
+                # In another APK (SystemUI) it is not the Launcher3 code.
+                (pre548, {SYSUI_APK: dex_fixture.apk([dex_fixture.dex(SYSTEMUI, strings=[DIAG])])}, False)):
+            with self.subTest(passes=passes):
+                kwargs = {'launcher3': launcher3}
+                if extra:
+                    kwargs['systemui'] = extra[SYSUI_APK]
+                failures, receipt = self.check(**kwargs)
+                self.assertEqual((failures == [], receipt['literals'][0]['pass']), (passes, passes))
+        # Unreadable dex count as holding nothing and are named.
+        failures, receipt = self.check(launcher3=dex_fixture.apk([b'garbage']))
+        self.assertIn(f'raised-edge literal "{DIAG}" is not a whole dex string in the 1 matching APK(s); unreadable:', failures[-1])
+        self.assertEqual(receipt['literals'][0]['unreadable'], [f'{L3_APK}!classes.dex: no dex magic'])
+        # A spec without literals checks none; one that lists none is the same.
+        for spec in ({k: v for k, v in SPEC.items() if k != 'literals'}, {**SPEC, 'literals': []}):
+            failures, receipt = edge.check(target_files(self.path, launcher3=pre548), spec)
+            self.assertEqual((failures, receipt['literals']), ([], []))
+
     def test_a_named_method_must_be_defined(self):
         # The checker supports an entry that names a method; no frankel entry does today.
-        spec = {**SPEC, 'classes': [{**SPEC['classes'][0], 'method': 'stage'}]}
+        spec = {**SPEC, 'classes': [{**SPEC['classes'][0], 'method': 'stage'}], 'literals': []}
         for classes, passes in (([(GESTURE, ['stage'])], True), ([(GESTURE, ['<init>', 'stages'])], False),
                                 ([(GESTURE, []), ('La/B;', ['stage'])], False)):
             with self.subTest(classes=classes):
@@ -262,7 +290,7 @@ class CheckTest(unittest.TestCase):
         self.assertEqual(len(failures), 2)
         # A differently named product package is still a candidate (OS Product's patterns).
         failures, receipt = self.check(launcher3=False, extra={'PRODUCT/priv-app/Launcher3QuickStepGo/Launcher3QuickStepGo.apk':
-                                                               dex_fixture.apk([dex_fixture.dex(LAUNCHER3)])})
+                                                               dex_fixture.apk([dex_fixture.dex(LAUNCHER3, strings=[DIAG])])})
         self.assertEqual(failures, [])
 
     def test_unreadable_dex_fails_closed_and_is_named(self):
@@ -342,7 +370,15 @@ class CheckTest(unittest.TestCase):
                              ({**SPEC, 'classes': [{**entry, 'method': 'a b'}]}, 'method name or null'),
                              ({**SPEC, 'classes': [{**entry, 'literal': ''}]}, 'non-empty ASCII'),
                              ({**SPEC, 'classes': [{**entry, 'literal': 'é'}]}, 'non-empty ASCII'),
-                             ({**SPEC, 'props': []}, 'setup missing: roseEdge.props')):
+                             ({**SPEC, 'props': []}, 'setup missing: roseEdge.props'),
+                             ({**SPEC, 'literals': {'apk': SPEC['literals'][0]['apk']}}, 'literals must be a list'),
+                             ({**SPEC, 'literals': [{**SPEC['literals'][0], 'class': GESTURE}]}, 'literals entries need exactly'),
+                             ({**SPEC, 'literals': [{'literal': DIAG}]}, 'literals entries need exactly'),
+                             ({**SPEC, 'literals': [{**SPEC['literals'][0], 'apk': 'x.apk'}]}, r'literals apk must be a pattern of \.apk'),
+                             ({**SPEC, 'literals': [{**SPEC['literals'][0], 'apk': r'(\.apk'}]}, 'literals apk is not a valid pattern'),
+                             ({**SPEC, 'literals': [{**SPEC['literals'][0], 'literal': ''}]}, 'literals literal must be a non-empty ASCII'),
+                             ({**SPEC, 'literals': [{**SPEC['literals'][0], 'literal': None}]}, 'literals literal must be a non-empty ASCII'),
+                             ({**SPEC, 'literals': [{**SPEC['literals'][0], 'literal': 'a\x00b'}]}, 'literals literal must be a non-empty ASCII')):
             with self.subTest(message=message):
                 with self.assertRaisesRegex(edge.SpecError, message):
                     edge.check(target_files(self.path), bad)
@@ -360,16 +396,18 @@ class CommandTest(unittest.TestCase):
             good = target_files(Path(tmp)/'good.zip')
             code, out, _ = self.run_main(good)
             self.assertEqual(code, 0)
-            self.assertEqual(out.splitlines()[:6], [
+            self.assertEqual(out.splitlines()[:7], [
                 'PASS prop persist.wm.debug.rose_edge=true', 'PASS prop persist.wm.debug.pixel_agent_tray=1',
                 'PASS class com.android.quickstep.fallback.RoseEdgeGesture in 1 candidate apk(s) by class',
                 'PASS class com.android.quickstep.fallback.RoseEdgeSwipe in 1 candidate apk(s) by class',
                 'PASS class com.android.wm.shell.roseedge.RoseEdgeController in 1 candidate apk(s) by class',
-                'PASS class com.android.wm.shell.RoseEdgeMicSlot in 1 candidate apk(s) by class'])
-            self.assertEqual(json.loads(out.split('\n', 6)[6])['verdict'], 'PASS')
+                'PASS class com.android.wm.shell.RoseEdgeMicSlot in 1 candidate apk(s) by class',
+                f'PASS literal "{DIAG}" in 1 candidate apk(s)'])
+            self.assertEqual(json.loads(out.split('\n', 7)[7])['verdict'], 'PASS')
             code, out, _ = self.run_main(target_files(Path(tmp)/'bad.zip', launcher3=False))
             self.assertEqual(code, 1)
             self.assertIn('FAIL class com.android.quickstep.fallback.RoseEdgeGesture in 0 candidate apk(s)', out)
+            self.assertIn(f'FAIL literal "{DIAG}" in 0 candidate apk(s)', out)
             config = Path(tmp)/'config.json'
             config.write_text(json.dumps({'roseEdge': {'props': SPEC['props']}}))
             code, _, err = self.run_main(good, '--config', config)
@@ -391,6 +429,7 @@ class ContractTest(unittest.TestCase):
         self.assertEqual([(c['apk'], c['class'], c['method'], c['literal']) for c in SPEC['classes']],
                          [(l3, GESTURE, None, None), (l3, SWIPE, None, DIAG),
                           (sysui, CONTROLLER, None, DESCRIPTOR), (sysui, MIC, None, MIC_TAG)])
+        self.assertEqual(SPEC['literals'], [{'apk': l3, 'literal': DIAG}])
         # The SystemUI path the tray gate already reads is one of the candidates.
         self.assertRegex(CONFIG['systemUiTray']['apkPath'], '^' + sysui + '$')
 
@@ -409,10 +448,10 @@ class ContractTest(unittest.TestCase):
         self.assertIn('package com.android.quickstep.fallback;', swipe)
         self.assertRegex(gesture, r'\n(public )?(final )?class RoseEdgeGesture\b')
         self.assertRegex(swipe, r'\n(public )?(final )?class RoseEdgeSwipe\b')
-        # The literal is a constant argument of a SystemProperties read in the code the handler constructs
-        # (rose-edge-launcher3.patch: new RoseEdgeSwipe), so shrinking cannot drop it while RoseEdgeSwipe is used.
+        # The literal is a constant argument of a SystemProperties read in RoseEdgeSwipe's constructor, which the handler
+        # constructs (rose-edge-launcher3.patch: new RoseEdgeSwipe), so shrinking cannot drop it while RoseEdgeSwipe is used.
         self.assertIn(f'public static final String DIAG_PROPERTY = "{DIAG}";', swipe)
-        self.assertIn('SystemProperties.getBoolean(DIAG_PROPERTY, false)', swipe)
+        self.assertIn('this.diag = enabled && SystemProperties.getBoolean(DIAG_PROPERTY, false);', swipe)
         self.assertIn('new RoseEdgeSwipe(', (ROOT/'os/patches/rose-edge-launcher3.patch').read_text())
         # The literal is RoseEdgeSwipe's alone among the Launcher3 sources RoseOS adds.
         sources = [p for p in (ROOT/'os/overlays/packages/apps/Launcher3').rglob('*.java')]
