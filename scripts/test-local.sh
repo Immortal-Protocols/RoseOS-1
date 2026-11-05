@@ -97,6 +97,8 @@ python3 scripts/tests/test_mustang_edge_gate.py
 python3 scripts/tests/test_agent_beta_auto.py
 # 1F daily release dispatcher (canned API answers; no network, token, dispatch or host).
 python3 scripts/tests/test_daily_release.py
+# 1A lane capacity map against the committed route (os-release.yml, BUILDER, host configs; no runner, VM or API).
+python3 scripts/tests/test_lane_capacity.py
 python3 scripts/tests/test_release_transport.py
 python3 scripts/tests/test_release_acceptance.py
 python3 scripts/tests/test_signing_job.py
