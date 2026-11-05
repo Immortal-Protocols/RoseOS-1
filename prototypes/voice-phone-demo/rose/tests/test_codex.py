@@ -334,6 +334,20 @@ class Integration(unittest.TestCase):
         self.assertIn("open in Rose's workspace for another of her tasks", result['result'])
         self.assertIn('nothing was opened', result['result'])
 
+    def test_home_or_recents_target_is_refused_with_its_own_reason(self):
+        for refusal in ({'status': 'target_not_allowed', 'reason': 'target_not_standard', 'actionExecuted': False},
+                        {'status': 'failed', 'sessionId': 'refused', 'targetPackage': CALC, 'reason': '',
+                         'error': 'java.lang.IllegalStateException: target_not_standard: '+CALC}):
+            with self.subTest(refusal=refusal['status']):
+                a = self.task('Calculator')
+                send = a.view.workspace.send
+                a.view.workspace.send = lambda op, params, send=send, refusal=refusal: dict(refusal) if op == 'start' else send(op, params)
+                result = self.call(a, 'open_app', app=a.app)
+                self.assertFalse(result['ok'])
+                self.assertIn("can't take over the Home screen or the recents app", result['result'])
+                self.assertIn('nothing was opened', result['result'])
+                self.engine.cancel(a.task.id)
+
     def test_unconfirmed_slot_release_blocks_replacement_and_preserves_task_result(self):
         a, b = self.task('Calculator'), self.task('Clock')
         self.complete(a)

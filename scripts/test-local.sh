@@ -197,6 +197,10 @@ java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-option
  os/background-control/agent-pip/src/dev/pixel/backgroundcontrol/CurrentApps.java \
  os/background-control/agent-pip/src/dev/pixel/backgroundcontrol/ViewerStop.java os/background-control/tests/MultiSessionTest.java
 java -cp "$JAVA_TESTS/MultiSession" dev.pixel.backgroundcontrol.MultiSessionTest
+# F06: the controller never takes the owner's Home or recents (HomeTarget).
+java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/HomeTarget" \
+ os/background-control/agent-pip/src/dev/pixel/backgroundcontrol/HomeTarget.java os/background-control/tests/HomeTargetTest.java
+java -cp "$JAVA_TESTS/HomeTarget" dev.pixel.backgroundcontrol.HomeTargetTest
 # SystemUI tray tap mapping; compiled alone like the controller tests above.
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/AgentStatusControls" \
  os/overlays/frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/AgentStatusControls.java \

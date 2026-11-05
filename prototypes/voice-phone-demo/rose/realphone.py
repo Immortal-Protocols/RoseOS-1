@@ -1053,6 +1053,9 @@ def _ws_why(r: dict, label: str | None = None) -> str:
         # Rose follows: F06's platform change replaces it with a takeover on the owner's request.
         return (f"{app} is open on your phone screen, and this RoseOS build can't take over an app you can see yet; "
                 "nothing was opened. If you're done with it there, switch to another app and ask again.")
+    if "target_not_standard" in " ".join(str(x.get(k) or "") for x in (r, details) for k in ("reason", "error")):
+        # The controller's refusal (reason) or the platform's backstop (error) for the owner's Home or recents task.
+        return f"Rose can't take over the Home screen or the recents app ({app}); nothing was opened."
     if "target_in_other_session" in " ".join(str(x.get(k) or "") for x in (r, details) for k in ("reason", "error")):
         # The platform's backstop for an app already in Rose's other workspace session: the controller's own
         # app_in_other_session refusal, reported the same way.
