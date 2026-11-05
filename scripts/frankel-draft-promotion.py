@@ -25,6 +25,22 @@ def admission(env):
         raise r.Refused('only first-attempt manual main promotion is admitted')
 
 
+def public_channel(client, output, size):
+    """Latest has one same-GitHub hop before the existing storage redirect.
+
+    Admit only this exact pinned tag, anonymously; never broaden shared downloads.
+    """
+    latest = 'https://github.com/Immortal-Protocols/pixel-ota/releases/latest/download/frankel-stable'
+    canonical = 'https://github.com/Immortal-Protocols/pixel-ota/releases/download/'+r.TAG+'/frankel-stable'
+    status, location, _ = client._request('GET', latest, 'public Frankel Latest channel',
+        headers={'Accept': 'application/octet-stream'}, authenticated=False,
+        expect=(200, 302), stream_to=output, limit=size)
+    if status == 302:
+        if location != canonical:
+            raise r.Refused('Latest channel redirect is not the exact promoted tag')
+        client.public_download(canonical, output, size)
+
+
 class ExistingDraft:
     simulated = False
 
@@ -85,8 +101,7 @@ class ExistingDraft:
             raise r.Refused('post-promotion asset identities changed')
         channel = next(a for a in self.manifest['assets'] if a['name'] == 'frankel-stable')
         output = Path(draft)/'public-channel-readback'
-        self.client.public_download('https://github.com/Immortal-Protocols/pixel-ota/releases/latest/download/frankel-stable',
-                                    output, channel['size'])
+        public_channel(self.client, output, channel['size'])
         if r.digest(output) != channel['sha256']:
             raise r.Refused('public Latest channel differs; promotion may have completed')
 
