@@ -161,16 +161,22 @@
   function send(text) {
     const p = document.createElement('p'); p.className = 'out'; p.textContent = text; $('thread').appendChild(p);
     note('sent “' + text.slice(0, 20) + '”');
-    followBottom = true; thread.scrollTop = thread.scrollHeight; // sending always returns to the newest message
+    followBottom = true; thread.scrollTop = thread.scrollHeight; lastTop = thread.scrollTop; // sending returns to the newest message
   }
   // Reading position. The conversation follows the newest message only while it is already at the
   // bottom (or after a send). While reviewing history, the keyboard/chin shortening the window from
   // below leaves scrollTop alone, so the messages being read stay exactly where they are.
   const thread = $('thread');
-  let followBottom = true, programmatic = false;
+  // Following stops only when the person scrolls up (scrollTop decreases) — never because the window
+  // shrank mid-animation — and resumes when they are back at the bottom.
+  let followBottom = true, lastTop = 0;
   const atBottom = () => thread.scrollHeight - thread.clientHeight - thread.scrollTop <= 4;
-  thread.addEventListener('scroll', () => { if (!programmatic) followBottom = atBottom(); }, { passive: true });
-  const keepBottom = () => { if (followBottom) { programmatic = true; thread.scrollTop = thread.scrollHeight; requestAnimationFrame(() => { programmatic = false; }); } };
+  thread.addEventListener('scroll', () => {
+    if (atBottom()) followBottom = true;
+    else if (thread.scrollTop < lastTop - 2) followBottom = false;
+    lastTop = thread.scrollTop;
+  }, { passive: true });
+  const keepBottom = () => { if (followBottom) { thread.scrollTop = thread.scrollHeight; lastTop = thread.scrollTop; } };
   if (window.ResizeObserver) new ResizeObserver(keepBottom).observe(thread);
   requestAnimationFrame(() => { thread.scrollTop = thread.scrollHeight; });
   function doAction() {

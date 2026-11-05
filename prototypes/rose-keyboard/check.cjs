@@ -178,6 +178,7 @@ const sha = (b) => crypto.createHash('sha256').update(b).digest('hex');
   // Reading position: reviewing history is never yanked to the bottom; following resumes at the bottom or on send.
   const thr = () => page.evaluate(() => { const t = document.getElementById('thread'); const p = t.querySelectorAll('p')[3].getBoundingClientRect(), r = t.getBoundingClientRect(); return { top: t.scrollTop, gap: t.scrollHeight - t.clientHeight - t.scrollTop, anchor: p.top - r.top }; });
   await page.evaluate(() => { const t = document.getElementById('thread'); t.scrollTop = 0; t.dispatchEvent(new Event('scroll')); }); await wait();
+  await page.evaluate(() => { const k = window.__kb; k.fields.messages = k.K.initial(); k.render(); });
   const r0 = await thr();
   await page.locator('#f-msg').click(); await wait(500);
   let r1 = await thr();
@@ -286,6 +287,8 @@ const sha = (b) => crypto.createHash('sha256').update(b).digest('hex');
     for (const ch of 'hi') await p.locator('#keys [data-k="' + ch + '"]').tap();
     await p.locator('#keys [data-k=space]').tap();
     q = await S(); check(name + ': touch opens the keyboard and types', q.kb && q.text === 'Hi ', q);
+    const gap = await p.evaluate(() => { const t = document.getElementById('thread'); return t.scrollHeight - t.clientHeight - t.scrollTop; });
+    check(name + ': the newest message stays visible when the keyboard opens', gap <= 4, gap);
     await p.screenshot({ path: path.join(OUT, 'phone-' + name + '-keyboard.png') });
     await touch(line(r.x + r.width / 2, r.y + r.height - 6, r.y + r.height - 96, 10));
     q = await S(); check(name + ': touch swipe up raises the chin over the open keyboard', q.chin && q.kb, q);
