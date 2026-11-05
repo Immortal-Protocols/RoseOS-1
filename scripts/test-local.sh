@@ -271,6 +271,9 @@ java -cp "$JAVA_TESTS/HomeRoseLaunch" dev.pixel.voice.HomeRoseLaunchTest
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/RoseMicInput" \
  workspace/rose-agent/app/src/dev/pixel/voice/RoseMicInput.java workspace/rose-agent/app/tests/RoseMicInputTest.java
 java -cp "$JAVA_TESTS/RoseMicInput" dev.pixel.voice.RoseMicInputTest
+java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/RoseChin" \
+ workspace/rose-agent/app/src/dev/pixel/voice/RoseChin.java workspace/rose-agent/app/tests/RoseChinTest.java
+java -cp "$JAVA_TESTS/RoseChin" dev.pixel.voice.RoseChinTest
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/GestureContract" \
  workspace/rose-agent/app/src/dev/pixel/voice/GestureContract.java workspace/rose-agent/app/tests/GestureContractTest.java
 java -cp "$JAVA_TESTS/GestureContract" dev.pixel.voice.GestureContractTest
