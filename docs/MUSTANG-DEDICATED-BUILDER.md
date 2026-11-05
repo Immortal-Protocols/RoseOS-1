@@ -151,13 +151,65 @@ start. Cleanup refuses absent, malformed, foreign or stale ownership, and skips
 STOP if this operation did not start the VM. It calls the same explicit-target
 API for STOP. It performs no login or provisioning.
 
-The exact future workflow file, `.github/workflows/mustang-ota-dedicated.yml`,
-currently contains **only a manual hosted source/binding guard**. It has no
-controller, cloud login or builder job. Its helper reports
-`nativePipelineReady=false` and `runtimeAuthorized=false`; the committed
-unbound lane refuses even that source check. This is source preparation, not a
-build workflow or a separate VM warm-up/observation process. Do not dispatch it
-as a build or count a future green source check as delivery readiness.
+The manual `.github/workflows/mustang-ota-dedicated.yml` source now wires hosted
+admission, the dedicated controller, one builder job, optional publication and
+ownership cleanup. **Both `mustang-lane.json` and `mustang-runtime.json` remain
+unbound. No resource or runtime is activated.** The old source-only inspector is
+superseded by `scripts/mustang-dedicated.py guard`. No workflow dispatch or real
+candidate has been performed to prove this implementation.
+
+The hosted guard checks the exact repository ID, main workflow, attempt 1,
+actual binding evidence and app-source freshness before any controller login.
+The controller validates the exact VM through Infra's API, records ownership
+before start and refuses to adopt an already-running/unowned builder. One
+builder job works with either a persistent runner or an approved protected
+registration route that prepares an ephemeral runner on **every** VM start;
+the lifetime remains an unselected binding, not a registration operation here.
+
+The builder checks its non-secret guest instance ID and mounted filesystem UUID,
+then available bytes/inodes and tool paths. It observes the committed baseline
+archive's updater/trust before starting a compile. It downloads the exact app
+artifact by ID, verifies its producer-run metadata and ZIP digest, and runs the
+existing per-file/APK/receipt/policy admission. The app producer's source must
+match the current three-app source paths in the existing allocation contract;
+later OS-only source changes do not require rebuilding unchanged apps.
+
+The native producer copies only its own admitted pristine pinned base, fetches
+the existing pinned metadata, prepares vendor inputs, allocates under its own
+lock, assembles the admitted app bundle and integrates the current source.
+Host-reconcile's existing pristine-HEAD path performs first integration; it
+never imports a Frankel reconcile seed. Carried-forward consumed build numbers
+are included in allocation. Job/OIDC/GitHub credential environment variables
+are removed from the producer process before Make/vendor tools run. The source
+copy retains its honest byte-snapshot verification limits.
+Structured phase-entry/completion/failure events go to stdout and an allowlisted
+`progress.jsonl`; stdout still reports the phase if the data disk cannot write.
+An entered compile phase includes its preflight and does not alone prove Make
+has begun. Native completion still requires its actual successful receipt.
+
+Actual unsigned outputs and raised-edge proof are collected **before signer
+login**. Signing rechecks that same-run proof, uses the established version-1
+identity and requires the signed proof. After logout, OTA staging verifies the
+baseline trust, updater, versions, whole-package/payload signatures and both
+proofs. The default result is an authenticated Actions artifact, not a public
+release or channel update. This source does not claim privacy beyond the
+repository's artifact-access controls.
+
+`publish=false` is the default. Public publication additionally requires the
+new runtime publication flag and a committed explicit authority record; the
+old activation record alone cannot activate this route. The hosted publisher
+rechecks same-run archive hashes and both proofs before minting its existing
+repository-scoped App token. It preserves Latest and publishes OTA before
+channel metadata. Automatic dispatch/publication remains off.
+
+Failure receipts use fixed allowlisted JSON names, never signing configs,
+key material or raw logs. Reporting verifies guest/disk identity even on failure.
+Cleanup validates the exact ownership before login and does not depend on
+signing, app or baseline readiness. It stops only this run's owned VM; absent
+or foreign ownership refuses, with the approved isolated 12-hour automatic STOP
+as fallback. No global policy reclaim/deletion is called. The builder job has a
+10-hour outer limit; individual historical stage ceilings remain unchanged and
+are not a promise they can all consume their maxima within that job.
 
 `scripts/mustang_paths.py` derives explicit dedicated attempt/storage/lock paths
 and adapts the validated canonical compiler recipe's three host-path fields.
@@ -169,13 +221,29 @@ receipts. Their tests use synthetic archives and signer/generator stand-ins;
 no real signing or build has run. Historical data APIs/receipts and installed
 baseline acceptance are preserved.
 
-After approved actual Infra binding and input evidence exist, complete the normal
-dedicated build lifecycle with its own runner and ownership-aware cleanup.
-The native producer, fresh source/admission and final OTA path wiring remain
-unfinished; do not reactivate old entry points. Baseline target-files/trust
-evidence, a fresh signed-app export with matching receipts/policy/allocation,
-and the uncertain failed-run allocation must be reconciled before native
-compilation. No old local path is a substitute.
+### Actual binding handoff still required
+
+The following are input contracts for Infra/Release to supply after applicable
+approval, not claims that these resources or records exist. Populate actual
+evidence under `os/`, then bind the lane/runtime together; never use a proposed
+name, a copied device label or a guessed value as readback.
+
+| Runtime field | Required actual content |
+| --- | --- |
+| `jobs`, `tools`, `dataFilesystemUuid`, `automaticStopHours` | Approved Make parallelism, executable aapt/apksigner/Node paths, the dedicated data UUID and verified 12-hour STOP setting. |
+| `networkEvidence` | JSON with matching `builder`, `githubEgressVerified: true` and the actual `approvedRoute`; no denied lookup retry or implicit NAT/proxy. |
+| `sourceEvidence` | Matching `builder`/`sourceRoot`, pinned manifest SHA-256, pinned `adevtoolRevision` and `pristine: true` bootstrap readback. This attestation is not a full copy-byte revision verification. |
+| `runner` | Actual group name/ID and chosen persistent/ephemeral lifetime; registration evidence matching VM, workflow and repository `1428996648`, with `publicRepositoryAdmitted: true` and `readyOnEveryStart: true`. The protected registration implementation remains Infra-owned. |
+| `signingRouteEvidence` | Actual approved admission of this workflow to the **existing** signer, matching `builder`/workflow, `identityVariable: GCP_SIGNER_SERVICE_ACCOUNT`, `providerVariable: MUSTANG_SIGNER_WORKLOAD_IDENTITY_PROVIDER`, `approved: true`, `establishedMustangIdentityPreserved: true`. No new IAM/key/credential operation is performed by source or inferred from these field names. |
+| `appInputsRecord` | The existing `roseos.app-inputs-record.v1` export record and exact committed allocation, with source/run/artifact IDs, archive digest and APK/receipt/policy identities. |
+| `baselineTargetFiles` | Actual own-disk path with the **same** SHA-256/size as the committed Mustang baseline signing receipt; the archive is rechecked on the guest. |
+| `allocationState` | Reconciliation of failed run `41884368820`, `unknown: false`, all `consumedBuilds`, and the destination `builder`/`dataFilesystemUuid`. Deleting old data is not evidence that uncertainty disappeared. Replacing the VM/disk requires a matching updated reconciliation record. |
+| `publication` | Default disabled; a later actual authority record must name device/workflow, an `approvalRef`, `approved: true` and `automatic: false`. |
+
+The new signer-provider **variable** does not create a provider or extend trust.
+Infra must resolve and verify the established signing route for this workflow
+under applicable authorization before binding it. No bootstrap or new key set
+is supported by this workflow. The legacy Mustang entry points remain retired.
 The common capacity map keeps the retired jobs' host reference for source
 auditing, explicitly marks them retired and excludes Mustang from parallel
 capacity. The active binding remains the unbound dedicated profile. Editing a
@@ -185,7 +253,7 @@ The fresh app artifact must carry its producer/export run and attempt, artifact
 identity/digest, the three APKs and per-APK receipts, and matching background
 policy. Verify it on Mustang's own builder before integration. Source classes
 alone do not establish F08 reachability; the app microphone removal and OS chin
-control must be included together. Preserve the unsigned/signed raised-edge
-proof gate, existing signing identity, automatic Beta hold and disabled Mustang
-automatic publication. The requested next build does not itself authorize
-public publication or Latest promotion. Physical-phone tests are separate.
+control must be included together. The unsigned/signed raised-edge proof gate,
+existing signing identity, automatic Beta hold and disabled Mustang automatic
+publication remain. The requested next build does not itself authorize public
+publication or Latest promotion. Physical-phone tests are separate.

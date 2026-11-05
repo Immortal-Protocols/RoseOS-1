@@ -377,45 +377,269 @@ class DedicatedPathsTest(unittest.TestCase):
                 locks.append(path)
                 return allocate.allocator.shared_lock(path)
             with patch.object(allocate,'observe',return_value=(set(),{})):
-                value=allocate.reserve(str(home),'123','1',SOURCE,clock=lambda:int(EPOCH),lock=take_lock,lane=profile)
+                value=allocate.reserve(str(home),'123','1',SOURCE,clock=lambda:int(EPOCH),lock=take_lock,lane=profile,consumed=[BUILD])
                 with self.assertRaisesRegex(allocate.Refused,'allocation home differs'):
                     allocate.reserve('/different-home','124','1',SOURCE,lock=take_lock,lane=profile)
             self.assertEqual(locks,[profile['lockPath']])
+            self.assertNotEqual(value['build'],BUILD)
+            self.assertEqual(value['observed']['carriedForwardBuilds'],[BUILD])
             self.assertTrue(Path(value['workDir']).is_relative_to(home/'rose-actions'))
             self.assertTrue((home/'rose-actions/mustang-allocations'/f'{value["build"]}.json').is_file())
 
-    def test_readiness_workflow_has_only_a_hosted_source_guard_and_no_runtime(self):
+    def test_dedicated_workflow_orders_proofs_and_ownership_before_credentials(self):
         workflow=(ROOT/'.github/workflows/mustang-ota-dedicated.yml').read_text()
         jobs=workflow_shape.jobs(workflow)
-        self.assertEqual(set(jobs),{'guard'})
+        self.assertEqual(set(jobs),{'guard','controller','builder','publisher','cleanup'})
         self.assertIn('    runs-on: ubuntu-24.04',jobs['guard'])
-        self.assertIn('python3 scripts/mustang-readiness.py',jobs['guard'])
+        self.assertIn('python3 scripts/mustang-dedicated.py guard',jobs['guard'])
         active='\n'.join(line for line in workflow.splitlines() if not line.lstrip().startswith('#'))
-        for forbidden in ('self-hosted','id-token: write','actions-gcp-login','schedule:', 'workflow_run:'):
+        for forbidden in ('immortal-os-builder','roseos-frankel-builder','builder-reclaim','schedule:', 'workflow_run:'):
             self.assertNotIn(forbidden,active)
         self.assertIn('  group: mustang-ota',workflow)
+        self.assertIn('needs: guard',jobs['controller'])
+        self.assertNotIn('always()',jobs['controller'].split('steps:',1)[0])
+        self.assertIn("needs.controller.result != 'skipped'",jobs['cleanup'])
+        self.assertLess(jobs['builder'].index('mustang-dedicated.py collect'),jobs['builder'].index('actions-gcp-login.py login'))
+        self.assertLess(jobs['builder'].index('mustang-dedicated.py baseline'),jobs['builder'].index('mustang-dedicated.py produce'))
+        self.assertLess(jobs['publisher'].index('verify-staged'),jobs['publisher'].index('actions/create-github-app-token'))
+        self.assertLess(jobs['cleanup'].index('cleanup-prepare'),jobs['cleanup'].index('actions-gcp-login.py login'))
         env=dict(PATH=os.environ['PATH'])
-        result=subprocess.run([sys.executable,str(ROOT/'scripts/mustang-readiness.py')],env=env,
-                              capture_output=True,text=True,timeout=10)
-        self.assertEqual(result.returncode,4)
-        self.assertIn('dedicated Mustang bindings missing',result.stderr)
+        for action in ('guard','host-check','fetch-inputs','baseline','produce','collect','sign','_execute','stage',
+                       'verify-staged','publish','report','ownership-output','cleanup-prepare','require-owned'):
+            result=subprocess.run([sys.executable,str(ROOT/'scripts/mustang-dedicated.py'),action],env=env,
+                                  capture_output=True,text=True,timeout=10)
+            self.assertEqual(result.returncode,4)
+            self.assertIn('dedicated Mustang bindings missing',result.stderr)
 
-    def test_source_readiness_cannot_report_native_or_runtime_readiness(self):
-        spec=importlib.util.spec_from_file_location('mustang_readiness_test',ROOT/'scripts/mustang-readiness.py')
-        readiness=importlib.util.module_from_spec(spec); spec.loader.exec_module(readiness)
-        profile=self.profile()
-        env=dict(GITHUB_EVENT_NAME='workflow_dispatch',GITHUB_REF='refs/heads/main',GITHUB_SHA=SOURCE,
-                 GITHUB_RUN_ID='123',GITHUB_RUN_ATTEMPT='1',
-                 GITHUB_WORKFLOW_REF='Immortal-Protocols/RoseOS-1/'+profile['workflow']+'@refs/heads/main')
-        class NoControl:
-            def control_builder(self,action,*,builder,claim=None):
-                raise AssertionError('source readiness must never call a controller')
-        with patch.object(controller,'common_controller',return_value=NoControl()):
-            result=readiness.check(profile,env)
-            self.assertFalse(result['nativePipelineReady'])
-            self.assertFalse(result['runtimeAuthorized'])
-            with self.assertRaisesRegex(ValueError,'workflow/queue differ'):
-                readiness.check(dict(profile,queue='different-queue'),env)
+class DedicatedRuntimeTest(unittest.TestCase):
+    def setUp(self):
+        self.temp=tempfile.TemporaryDirectory(); self.addCleanup(self.temp.cleanup)
+        self.root=Path(self.temp.name); self.host=self.root/'host'
+        self.lane=DedicatedPathsTest().profile(self.host)
+        (self.host/'source').mkdir(parents=True); (self.host/'rose-actions').mkdir()
+        spec=importlib.util.spec_from_file_location('mustang_dedicated_test',ROOT/'scripts/mustang-dedicated.py')
+        self.driver=importlib.util.module_from_spec(spec); spec.loader.exec_module(self.driver)
+        self.env=dict(GITHUB_EVENT_NAME='workflow_dispatch',GITHUB_REF='refs/heads/main',GITHUB_SHA=SOURCE,
+            GITHUB_REPOSITORY_ID='1428996648',
+            GITHUB_RUN_ID='123',GITHUB_RUN_ATTEMPT='1',
+            GITHUB_WORKFLOW_REF='Immortal-Protocols/RoseOS-1/'+self.lane['workflow']+'@refs/heads/main')
+        for name in ('os/pinned-manifest.xml','os/build-only/mustang.json','os/latest-beta/allocation.json','os/ota/mustang.json'):
+            target=self.root/name; target.parent.mkdir(parents=True,exist_ok=True); target.write_bytes((ROOT/name).read_bytes())
+        baseline=self.driver.load(self.root/'os/ota/mustang.json')['baseline']['signReceipt']
+        target=self.root/baseline; target.parent.mkdir(parents=True,exist_ok=True); target.write_bytes((ROOT/baseline).read_bytes())
+        archive=self.driver.load(target)['outputs']['targetFiles']
+        source=dict(builder=self.lane['vm'],sourceRoot=self.lane['sourceRoot'],pristine=True,
+            manifestSha256=gate.digest(self.root/'os/pinned-manifest.xml'),
+            adevtoolRevision=self.driver.load(ROOT/'os/build-only/mustang.json')['pins']['vendor/adevtool'])
+        source_ref=self.record('source',source)
+        registration=self.record('runner',dict(builder=self.lane['vm'],workflow=self.lane['workflow'],
+            repositoryId='1428996648',groupId='99',readyOnEveryStart=True,publicRepositoryAdmitted=True))
+        signing=self.record('route',dict(builder=self.lane['vm'],workflow=self.lane['workflow'],
+            identityVariable='GCP_SIGNER_SERVICE_ACCOUNT',providerVariable='MUSTANG_SIGNER_WORKLOAD_IDENTITY_PROVIDER',
+            establishedMustangIdentityPreserved=True,approved=True))
+        state=self.record('state',dict(failedRun='41884368820',unknown=False,consumedBuilds=['2026110402'],
+            builder=self.lane['vm'],dataFilesystemUuid='fixture-uuid'))
+        allocation=self.record('allocation',dict(sourceSha=SOURCE))
+        apps=self.record('apps',dict(schema='roseos.app-inputs-record.v1',producer=dict(device='frankel',sourceSha=SOURCE,
+                allocation=dict(path=allocation,sha256=gate.digest(self.root/allocation)))))
+        self.cfg=dict(schema='roseos.mustang-dedicated-runtime.v1',status='bound',jobs=24,
+            tools=dict(aapt=sys.executable,apksigner=sys.executable,node=sys.executable),dataFilesystemUuid='fixture-uuid',
+            automaticStopHours=12,networkEvidence=self.record('network',dict(builder=self.lane['vm'],
+                githubEgressVerified=True,approvedRoute='synthetic approved route')),
+            sourceEvidence=source_ref,allocationState=state,appInputsRecord=apps,
+            baselineTargetFiles=dict(archive,path=str(self.host/'baseline.zip')),
+            runner=dict(groupName='fixture-mustang',groupId='99',lifetime='persistent',registrationEvidence=registration),
+            signingRouteEvidence=signing,publication=dict(enabled=False,authorityRecord=None))
+
+    def record(self,name,value):
+        path=Path('os/fixtures')/(name+'.json'); (self.root/path).parent.mkdir(parents=True,exist_ok=True)
+        (self.root/path).write_text(json.dumps(value)); return str(path)
+
+    def admitted(self,cfg=None,publish=False,diff=None):
+        return self.driver.guard(self.lane,cfg or self.cfg,self.env,publish,root=self.root,diff=diff or (lambda *args:''))
+
+    def test_actual_evidence_guard_allows_private_and_refuses_stale_or_unbound(self):
+        self.assertEqual(self.admitted()['consumedBuilds'],['2026110402'])
+        for change in (dict(status='unbound'),dict(jobs=None),dict(sourceEvidence=None),dict(signingRouteEvidence=None),
+                       dict(runner=dict(self.cfg['runner'],lifetime=None)),dict(dataFilesystemUuid=None),
+                       dict(baselineTargetFiles=dict(self.cfg['baselineTargetFiles'],path='/retired/baseline.zip'))):
+            with self.subTest(change=change):
+                with self.assertRaises(ValueError): self.admitted(dict(self.cfg,**change))
+        with self.assertRaisesRegex(ValueError,'omits current app source'):
+            self.admitted(diff=lambda *args:'changed-app-source')
+        with self.assertRaises(ValueError): self.admitted(publish=True)
+        state=self.driver.load(self.root/self.cfg['allocationState']); state['unknown']=True
+        (self.root/self.cfg['allocationState']).write_text(json.dumps(state))
+        with self.assertRaisesRegex(ValueError,'allocation state remains unresolved'): self.admitted()
+
+    def test_guest_identity_mount_and_storage_checks_are_read_only_and_fail_closed(self):
+        executed=[]
+        def process(argv,**kwargs):
+            executed.append(argv); return SimpleNamespace(returncode=0,stdout='fixture-uuid\n')
+        with patch.object(self.driver.shutil,'which',return_value=sys.executable):
+            self.driver.host_check(self.lane,self.cfg,observe_id=lambda:self.lane['vm']['instanceId'],execute=process)
+        self.assertEqual(executed[0][:2],['findmnt','--noheadings'])
+        executed.clear()
+        with self.assertRaisesRegex(ValueError,'not the admitted dedicated VM'):
+            self.driver.host_check(self.lane,self.cfg,observe_id=lambda:'999',execute=process)
+        self.assertEqual(executed,[])
+        with patch.object(self.driver.os,'statvfs',return_value=SimpleNamespace(f_bavail=0,f_files=100,f_favail=10)):
+            with self.assertRaisesRegex(ValueError,'no available bytes/inodes'):
+                self.driver.host_check(self.lane,self.cfg,observe_id=lambda:self.lane['vm']['instanceId'],execute=process)
+
+    def test_changed_checkout_refuses_before_any_host_or_signing_action(self):
+        with patch.object(lane,'configuration',return_value=self.lane),patch.object(self.driver,'guard',return_value=self.cfg), \
+                patch.object(self.driver,'load',return_value=self.cfg),patch.dict(os.environ,self.env,clear=True), \
+                patch.object(self.driver.subprocess,'check_output',side_effect=[SOURCE+'\n','?? changed-source\n']):
+            with self.assertRaisesRegex(ValueError,'captured clean source'): self.driver.context()
+
+    def test_native_producer_does_not_inherit_job_or_signing_credentials(self):
+        capabilities=('GH_TOKEN','GITHUB_TOKEN','ACTIONS_ID_TOKEN_REQUEST_TOKEN','ACTIONS_ID_TOKEN_REQUEST_URL',
+                      'CLOUDSDK_CONFIG','GOOGLE_APPLICATION_CREDENTIALS','PIXEL_OTA_TOKEN','GITHUB_ENV','GITHUB_OUTPUT')
+        def produce(*args):
+            self.assertFalse(set(capabilities)&set(os.environ))
+            self.assertEqual(os.environ['GITHUB_SHA'],SOURCE)
+        pipeline=SimpleNamespace(run=produce,collect_reports=lambda *args,**kwargs:None)
+        with patch.object(self.driver,'context',return_value=(self.lane,self.cfg)), \
+                patch.object(self.driver,'host_check'),patch.object(ota,'module',return_value=pipeline), \
+                patch.dict(os.environ,dict(self.env,**{key:'synthetic-capability' for key in capabilities}),clear=True), \
+                patch.object(sys,'argv',['mustang-dedicated.py','produce','--dir',str(self.root/'inputs')]):
+            self.assertEqual(self.driver.main(),0)
+
+    def test_cleanup_uses_exact_owner_without_runtime_or_signing_input_guard(self):
+        run=controller.invocation(self.lane,self.env)
+        owner=dict(schema=controller.SCHEMA,run=run,owner=dict(vm=self.lane['vm'],startedByThisOperation=False))
+        encoded=__import__('base64').b64encode(json.dumps(owner).encode()).decode()
+        record=self.root/'cleanup.json'
+        with patch.object(lane,'configuration',return_value=self.lane), \
+                patch.object(self.driver,'context',side_effect=AssertionError('runtime guard called')), \
+                patch.object(self.driver,'host_check',side_effect=AssertionError('host accessed')), \
+                patch.dict(os.environ,dict(self.env,MUSTANG_OWNER_B64=encoded),clear=True), \
+                patch.object(sys,'argv',['mustang-dedicated.py','cleanup-prepare','--ownership-record',str(record)]):
+            self.assertEqual(self.driver.main(),0)
+        self.assertFalse(controller.read_ownership(record,self.lane,run))
+        self.assertFalse((self.host/'mustang.lock').exists())
+        with patch.object(lane,'configuration',return_value=self.lane), \
+                patch.object(self.driver,'context',side_effect=AssertionError('runtime guard called')), \
+                patch.dict(os.environ,self.env,clear=True), \
+                patch.object(sys,'argv',['mustang-dedicated.py','require-owned','--ownership-record',str(record)]):
+            with self.assertRaisesRegex(ValueError,'already running or owned elsewhere'): self.driver.main()
+
+    def test_immutable_artifact_download_binds_metadata_and_zip_digest_without_retry(self):
+        archive=self.root/'fixture.zip'
+        contents={'signed-apps/app.apk':b'fixture bytes','app-inputs-export.json':b'{}','SHA256SUMS':b'fixture sums'}
+        with zipfile.ZipFile(archive,'w') as zipped:
+            for name,value in contents.items(): zipped.writestr(name,value)
+        artifact=dict(id=9,name='fixture-artifact',digest='sha256:'+gate.digest(archive))
+        observed_artifact=copy.deepcopy(artifact)
+        rec=dict(export=dict(run='222',artifact=artifact),files=[dict(path='signed-apps/app.apk',sizeBytes=13)])
+        path=self.root/'record.json'; path.write_text(json.dumps(rec)); calls=[]
+        def process(argv,**kwargs):
+            calls.append(argv)
+            if argv[-1].endswith('/zip'):
+                kwargs['stdout'].write(archive.read_bytes()); return SimpleNamespace(returncode=0)
+            return SimpleNamespace(returncode=0,stdout=json.dumps(dict(observed_artifact,expired=False,workflow_run=dict(id=222))))
+        out=self.driver.fetch_inputs(path,self.root/'download',execute=process)
+        self.assertEqual((out/'signed-apps/app.apk').read_bytes(),b'fixture bytes')
+        self.assertEqual(len(calls),2)
+        rec['export']['artifact']['digest']='sha256:'+'0'*64; path.write_text(json.dumps(rec))
+        with self.assertRaisesRegex(ValueError,'metadata differs'):
+            self.driver.fetch_inputs(path,self.root/'foreign',execute=process)
+        self.assertFalse((self.root/'foreign').exists())
+        rec['export']['artifact']['digest']=observed_artifact['digest']; path.write_text(json.dumps(rec))
+        def corrupt(argv,**kwargs):
+            if argv[-1].endswith('/zip'):
+                kwargs['stdout'].write(b'changed download'); return SimpleNamespace(returncode=0)
+            return process(argv,**kwargs)
+        with self.assertRaisesRegex(ValueError,'download/digest failed'):
+            self.driver.fetch_inputs(path,self.root/'corrupt',execute=corrupt)
+        self.assertEqual((self.root/'corrupt/download.zip').read_bytes(),b'changed download')
+
+    def test_internal_signing_executor_rechecks_scope_and_proof_before_key_access(self):
+        directory=self.host/'rose-actions/mustang-sign-123-1'; (directory/'release').mkdir(parents=True)
+        config=directory/'sign-config.json'; unsigned=directory/'release/unsigned-target_files.zip'
+        unsigned.write_bytes(b'synthetic unsigned bytes')
+        source=self.host/'rose-actions/mustang-prep-123-1/source'
+        sign=dict(project=adapter.PROJECT,keysSecret=adapter.SECRETS['keys'],passphraseSecret=adapter.SECRETS['passphrase'],
+                  secretVersion='1',passphraseSecretVersion='1',otatools='tools.zip')
+        outputs=dict(otatools=dict(path=str(source/f'out-mustang-build-{BUILD}/tools.zip')),
+                     targetFiles=dict(sha256=gate.digest(unsigned)))
+        calls=[]
+        fake=SimpleNamespace(PROJECT=adapter.PROJECT,SECRETS=adapter.SECRETS,digest=adapter.digest,
+            compile_binding=lambda *args,**kwargs:(calls.append('proof') or ({},source,BUILD,EPOCH,outputs)),
+            execute_sign=lambda *args:calls.append('keys'))
+        env=dict(self.env,ROSE_RELEASE_DIR=str(directory/'release'),BUILD_NUMBER=BUILD,BUILD_DATETIME=EPOCH)
+        with patch.object(self.driver,'context',return_value=(self.lane,self.cfg)),patch.object(self.driver,'host_check'), \
+                patch.object(ota,'module',return_value=fake),patch.dict(os.environ,env,clear=True), \
+                patch.object(sys,'argv',['mustang-dedicated.py','_execute','--config',str(config)]), \
+                patch.object(Path,'cwd',return_value=source):
+            for change in (dict(keysSecret='FOREIGN_CONTAINER'),dict(secretVersion='2'),dict(project='foreign-project')):
+                config.write_text(json.dumps(dict(target=dict(device='mustang'),host=dict(sign=dict(sign,**change)))))
+                with self.assertRaisesRegex(ValueError,'version-1 scope'): self.driver.main()
+            self.assertEqual(calls,[])
+            config.write_text(json.dumps(dict(target=dict(device='mustang'),host=dict(sign=sign))))
+            self.assertEqual(self.driver.main(),0)
+            self.assertEqual(calls,['proof','keys'])
+            unsigned.write_bytes(b'changed copy')
+            with self.assertRaisesRegex(ValueError,'unsigned proof'): self.driver.main()
+            self.assertEqual(calls,['proof','keys','proof'])
+
+    def test_dedicated_producer_uses_pristine_own_base_and_never_seeds_from_frankel(self):
+        pipeline=ota.module('dedicated_producer_fixture','mustang-pipeline.py')
+        allocate=ota.module('dedicated_allocator_fixture','mustang-allocate.py')
+        stages=[]; commands=[]
+        recipe=self.driver.load(ROOT/'os/build-only/mustang.json')
+        class Engine:
+            SOURCE_PROVENANCE={'projectRevisionsVerified':False,'pinnedManifestVerified':False}
+            symlink_in=staticmethod(lambda path:False)
+            def operator(inner,host,source,jobs,lock,*args):
+                self.assertEqual(lock,self.lane['lockPath'])
+                self.assertEqual(host,self.lane['vm']['instance'])
+                return dict(source=source,jobs=jobs,lock=lock)
+            def run(inner,recipe,stage,op,receipts):
+                stages.append(stage); Path(receipts).mkdir(parents=True)
+                Path(op['source']).mkdir(parents=True,exist_ok=True)
+                value=dict(ok=True,returncode=0,stopped=None,
+                           selectionRecord=dict(path='synthetic-selection',sha256='f'*64))
+                (Path(receipts)/'completed.json').write_text(json.dumps(value))
+                return 0
+        engine=Engine()
+        def assemble(apps,policy,build,source,tools,out):
+            Path(out).mkdir(); (Path(out)/'background-policy.json').write_text('{}')
+            return dict(apps=[['dev.pixel.voice',1]])
+        def admit(bundle,route,out,tools):
+            Path(out).mkdir(); (Path(out)/'local-inputs.json').write_text('{}')
+        def dependency(name,file):
+            if file=='mustang-build-only.py': return SimpleNamespace(engine=lambda:engine)
+            if file=='app-inputs-verify.py': return SimpleNamespace(verify=lambda *args:dict(toolsRechecked=True))
+            if file=='mustang-allocate.py': return allocate
+            if file=='mustang-candidate-bundle.py': return SimpleNamespace(assemble=assemble)
+            raise AssertionError('unexpected dependency/other-device seed: '+file)
+        def call(engine,argv,*args):
+            commands.append(argv); return dict(returncode=0,stopped=None),''
+        cfg=dict(self.cfg,consumedBuilds=[BUILD])
+        apps=self.driver.load(self.root/cfg['appInputsRecord']); apps['apps']=[dict(package='dev.pixel.voice',versionCode=1)]
+        (self.root/cfg['appInputsRecord']).write_text(json.dumps(apps))
+        inputs=self.root/'app-inputs'; inputs.mkdir()
+        with patch.object(pipeline,'ROOT',self.root),patch.object(pipeline,'head',return_value=SOURCE), \
+                patch.object(pipeline,'module',side_effect=dependency),patch.object(pipeline,'call',side_effect=call), \
+                patch.object(pipeline,'omissions',return_value=['unrelated sprint omissions']), \
+                patch.object(pipeline,'print',create=True), \
+                patch.object(pipeline.mustang_paths,'compiler_recipe',return_value=recipe), \
+                patch.object(pipeline.integration,'admit',side_effect=admit), \
+                patch.object(pipeline.integration,'render',return_value=({},['synthetic-integrate'])), \
+                patch.object(allocate,'observe',return_value=(set(),{})):
+            self.assertEqual(pipeline.run('123','1',self.lane,cfg,inputs),0)
+        result=self.driver.load(self.host/'rose-actions/mustang-prep-123-1/candidate-receipt.json')
+        self.assertEqual(stages,['source','git-meta','download','vendor','lunch','compile'])
+        self.assertEqual(result['builder'],self.lane['vm'])
+        self.assertEqual(result['workflow'],self.lane['workflow'])
+        self.assertFalse(result['stages']['seed']['priorReconcileSeed'])
+        self.assertEqual(result['allocation']['observed']['carriedForwardBuilds'],[BUILD])
+        self.assertTrue(result['unsignedCompileComplete'])
+        self.assertFalse(result['signed'])
+        self.assertIn('no bootstrap',result['nextStage'])
+        self.assertNotIn('immortal-os-builder',str(commands))
 
 
 class ProofTest(unittest.TestCase):
@@ -720,8 +944,9 @@ class AdapterTest(unittest.TestCase):
         path.write_text(json.dumps(row))
         with self.assertRaisesRegex(ValueError,'collection proof differs'): self.stage()
 
-    def stage(self):
-        signed=adapter.read(adapter.run_root('sign','333','1')/'mustang-sign-receipt.json')
+    def stage(self,lane=None,publication=True):
+        context={'lane':lane} if lane is not None else {}
+        signed=adapter.read(adapter.run_root('sign','333','1',**context)/'mustang-sign-receipt.json')
         public=Path(signed['publicAvbPath']).parent
         (public/'releasekey.x509.pem').write_bytes(b'synthetic public certificate')
         checker=self.source/'build/make/tools/releasetools/check_ota_package_signature.py'
@@ -735,15 +960,33 @@ class AdapterTest(unittest.TestCase):
             if filename=='mustang-sign-package.py': return adapter
             if filename=='host-factory-package.py': return self.hp
             raise AssertionError(filename)
-        with patch.object(ota,'module',side_effect=module),patch.object(ota,'identities',return_value=pins), \
+        cfg=ota.config()
+        if not publication: cfg=dict(cfg,publicationEnabled=False)
+        with patch.object(ota,'config',return_value=cfg),patch.object(ota,'module',side_effect=module),patch.object(ota,'identities',return_value=pins), \
                 patch.object(ota.host_secrets,'certificate_sha256',return_value=pin), \
                 patch.object(ota,'observe_target',return_value={'packagedUpdaterVerified':True}), \
                 patch.object(ota,'ota_metadata',return_value={'pre-device':'mustang'}), \
                 patch.object(ota,'fingerprint',return_value='d'*64), \
                 patch.object(ota.subprocess,'run',return_value=SimpleNamespace(returncode=0)):
-            result=ota.stage('333','1',str(baseline),self.root/'public-stage')
-            ota.verify_staged(self.root/'public-stage',ota.config())
+            result=ota.stage('333','1',str(baseline),self.root/'public-stage',**context,
+                             **({'tools':{},'publication':False} if not publication else {}))
+            ota.verify_staged(self.root/'public-stage',cfg,publication=publication)
+            if not publication:
+                with self.assertRaisesRegex(ValueError,'public OTA activation remains pending'):
+                    ota.publish(SimpleNamespace(),self.root/'public-stage',cfg,self.root/'must-not-publish')
         return result
+
+    def test_dedicated_private_ota_staging_preserves_both_proofs_without_public_activation(self):
+        profile=DedicatedPathsTest().profile(self.root)
+        self.candidate.update(builder=dict(profile['vm']),workflow=profile['workflow'])
+        self.receipt.write_text(json.dumps(self.candidate))
+        adapter.collect(str(self.receipt),'333','1',lane=profile)
+        signed=adapter.sign(str(self.receipt),str(self.bootstrap),'333','1',lane=profile)
+        with patch.object(adapter,'BASE',self.root/'retired'),patch.object(adapter,'LOCK',str(self.root/'retired.lock')):
+            result=self.stage(lane=profile,publication=False)
+        self.assertEqual(result['builder'],profile['vm'])
+        self.assertEqual(result['roseEdge'],signed['roseEdge'])
+        self.assertFalse((self.root/'must-not-publish').exists())
 
     def test_public_stage_preserves_and_requires_exact_two_proofs(self):
         self.collect(); signed=self.sign()

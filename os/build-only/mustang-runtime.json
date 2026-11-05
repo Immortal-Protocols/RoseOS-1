@@ -1,0 +1,17 @@
+{
+  "schema": "roseos.mustang-dedicated-runtime.v1",
+  "status": "unbound",
+  "jobs": null,
+  "tools": {"aapt": null, "apksigner": null, "node": null},
+  "dataFilesystemUuid": null,
+  "automaticStopHours": null,
+  "networkEvidence": null,
+  "sourceEvidence": null,
+  "allocationState": null,
+  "appInputsRecord": null,
+  "baselineTargetFiles": null,
+  "runner": {"groupName": null, "groupId": null, "lifetime": null, "registrationEvidence": null},
+  "signingRouteEvidence": null,
+  "publication": {"enabled": false, "authorityRecord": null},
+  "basis": "Source contract only. Infra must supply actual approved dedicated source/tool/mount, runner registration-on-every-start and signing-route evidence. Existing Mustang signing identity is preserved. No resource, credential, access, runtime, reclaim or public release is enabled. No bindings or evidence may be guessed."
+}

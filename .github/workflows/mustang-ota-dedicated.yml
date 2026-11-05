@@ -1,26 +1,188 @@
-name: Mustang dedicated source readiness
-run-name: mustang-dedicated-readiness ${{ github.run_id }}
-
-# Preparation only. No self-hosted/controller/login job exists in this revision.
-# This is the exact future workflow admitted by the proposed dedicated runner
-# group; its source guard is not proof of native build or delivery readiness.
+# Manual only; committed lane/runtime stay unbound. No provisioning, runner registration, key bootstrap or policy reclaim.
+# One builder job supports a persistent runner or approved protected ephemeral registration on every start.
+name: Mustang dedicated OTA
+run-name: mustang-dedicated-ota ${{ github.run_id }}
 on:
   workflow_dispatch:
-
+    inputs:
+      publish:
+        description: Public publication needs separate recorded authority; default is private
+        type: boolean
+        default: false
 permissions:
   contents: read
-
 concurrency:
   group: mustang-ota
   cancel-in-progress: false
-
+env:
+  MUSTANG_PUBLISH: ${{ inputs.publish }}
 jobs:
   guard:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
+    outputs:
+      runner_group: ${{ steps.inputs.outputs.runner_group }}
+      runner_label: ${{ steps.inputs.outputs.runner_label }}
+    env:
+      MUSTANG_CONTROLLER_SERVICE_ACCOUNT: ${{ vars.MUSTANG_CONTROLLER_SERVICE_ACCOUNT }}
+      MUSTANG_CONTROLLER_WORKLOAD_IDENTITY_PROVIDER: ${{ vars.MUSTANG_CONTROLLER_WORKLOAD_IDENTITY_PROVIDER }}
+      MUSTANG_SIGNER_WORKLOAD_IDENTITY_PROVIDER: ${{ vars.MUSTANG_SIGNER_WORKLOAD_IDENTITY_PROVIDER }}
+      GCP_SIGNER_SERVICE_ACCOUNT: ${{ vars.GCP_SIGNER_SERVICE_ACCOUNT }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          persist-credentials: false
-      - name: Check explicit dedicated bindings and source API only
-        run: python3 scripts/mustang-readiness.py
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        fetch-depth: 0
+        persist-credentials: false
+    - id: inputs
+      name: Admit exact manual run, routes and actual dedicated inputs before host start
+      run: python3 scripts/mustang-dedicated.py guard
+  controller:
+    needs: guard
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      ownership: ${{ steps.ownership.outputs.ownership }}
+    env:
+      GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ vars.MUSTANG_CONTROLLER_WORKLOAD_IDENTITY_PROVIDER }}
+      MUSTANG_CONTROLLER_SERVICE_ACCOUNT: ${{ vars.MUSTANG_CONTROLLER_SERVICE_ACCOUNT }}
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        fetch-depth: 0
+        persist-credentials: false
+    - run: python3 scripts/actions-gcp-login.py login "$MUSTANG_CONTROLLER_SERVICE_ACCOUNT"
+    - run: python3 scripts/mustang_controller.py start --ownership-record "$RUNNER_TEMP/mustang-owner.json"
+    - name: Require this run's owned start, never adopt an active builder
+      run: python3 scripts/mustang-dedicated.py require-owned --ownership-record "$RUNNER_TEMP/mustang-owner.json"
+    - id: ownership
+      if: always()
+      run: python3 scripts/mustang-dedicated.py ownership-output --ownership-record "$RUNNER_TEMP/mustang-owner.json"
+    - if: always()
+      run: python3 scripts/actions-gcp-login.py logout
+  builder:
+    needs:
+    - guard
+    - controller
+    runs-on:
+      group: ${{ needs.guard.outputs.runner_group }}
+      labels: ${{ needs.guard.outputs.runner_label }}
+    timeout-minutes: 600
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ vars.MUSTANG_SIGNER_WORKLOAD_IDENTITY_PROVIDER }}
+      GCP_SIGNER_SERVICE_ACCOUNT: ${{ vars.GCP_SIGNER_SERVICE_ACCOUNT }}
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        fetch-depth: 0
+        persist-credentials: false
+    - name: Verify guest ID, mounted data disk, bytes/inodes and tools
+      run: python3 scripts/mustang-dedicated.py host-check
+    - name: Check actual baseline updater and trust before a new compile
+      run: python3 scripts/mustang-dedicated.py baseline --out "$RUNNER_TEMP/mustang-baseline.json"
+    - name: Download and admit exact fresh app artifact and archive digest
+      id: apps
+      run: python3 scripts/mustang-dedicated.py fetch-inputs --out "$RUNNER_TEMP/mustang-inputs"
+    - name: Prepare, allocate, integrate and compile once on Mustang disk
+      env:
+        APP_INPUTS: ${{ steps.apps.outputs.inputs_dir }}
+      run: python3 scripts/mustang-dedicated.py produce --dir "$APP_INPUTS"
+    - name: Require unsigned raised-edge proof before signer login
+      run: python3 scripts/mustang-dedicated.py collect
+    - run: python3 scripts/actions-gcp-login.py login "$GCP_SIGNER_SERVICE_ACCOUNT"
+    - name: Sign once using established identity and require signed proof
+      run: python3 scripts/mustang-dedicated.py sign
+    - if: always()
+      run: python3 scripts/actions-gcp-login.py logout
+    - name: Verify signatures, updater and trust; stage private OTA
+      id: stage
+      run: python3 scripts/mustang-dedicated.py stage --dir "$RUNNER_TEMP/mustang-baseline.json" --out "$RUNNER_TEMP/mustang-ota"
+    - if: always()
+      run: python3 scripts/mustang-dedicated.py report --out "$RUNNER_TEMP/mustang-receipts" --dir "$RUNNER_TEMP/mustang-baseline.json"
+    - if: always()
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: mustang-dedicated-receipts-${{ github.run_id }}-${{ github.run_attempt }}
+        path: ${{ runner.temp }}/mustang-receipts
+        retention-days: 14
+        if-no-files-found: warn
+    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: mustang-dedicated-ota-${{ github.run_id }}-${{ github.run_attempt }}
+        path: ${{ steps.stage.outputs.directory }}
+        retention-days: 14
+        if-no-files-found: error
+  publisher:
+    needs: builder
+    if: inputs.publish
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      actions: read
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        fetch-depth: 0
+        persist-credentials: false
+    - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      with:
+        name: mustang-dedicated-ota-${{ github.run_id }}-${{ github.run_attempt }}
+        path: ${{ runner.temp }}/mustang-ota
+    - name: Verify same-run hashes and both proofs before publisher credentials
+      run: python3 scripts/mustang-dedicated.py verify-staged --publish --dir "$RUNNER_TEMP/mustang-ota"
+    - id: app
+      uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510
+      with:
+        app-id: ${{ vars.PIXEL_OTA_APP_ID }}
+        private-key: ${{ secrets.PIXEL_OTA_APP_PRIVATE_KEY }}
+        owner: Immortal-Protocols
+        repositories: pixel-ota
+        permission-contents: write
+    - name: Fresh OTA, metadata last, preserve Latest
+      env:
+        PIXEL_OTA_TOKEN: ${{ steps.app.outputs.token }}
+      run: python3 scripts/mustang-dedicated.py publish --publish --dir "$RUNNER_TEMP/mustang-ota" --out "$RUNNER_TEMP/mustang-publication"
+    - if: always()
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: mustang-dedicated-publication-${{ github.run_id }}-${{ github.run_attempt }}
+        path: ${{ runner.temp }}/mustang-publication
+        retention-days: 14
+        if-no-files-found: warn
+  cleanup:
+    needs:
+    - guard
+    - controller
+    - builder
+    - publisher
+    if: always() && needs.controller.result != 'skipped'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ vars.MUSTANG_CONTROLLER_WORKLOAD_IDENTITY_PROVIDER }}
+      MUSTANG_CONTROLLER_SERVICE_ACCOUNT: ${{ vars.MUSTANG_CONTROLLER_SERVICE_ACCOUNT }}
+      MUSTANG_OWNER_B64: ${{ needs.controller.outputs.ownership }}
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        persist-credentials: false
+    - id: owned
+      name: Validate exact owner before login, independent of signing/input readiness
+      run: python3 scripts/mustang-dedicated.py cleanup-prepare --ownership-record "$RUNNER_TEMP/mustang-owner.json"
+    - if: steps.owned.outputs.started == 'true'
+      run: python3 scripts/actions-gcp-login.py login "$MUSTANG_CONTROLLER_SERVICE_ACCOUNT"
+    - if: steps.owned.outputs.started == 'true'
+      run: python3 scripts/mustang_controller.py stop --ownership-record "$RUNNER_TEMP/mustang-owner.json"
+    - if: always() && steps.owned.outputs.started == 'true'
+      run: python3 scripts/actions-gcp-login.py logout

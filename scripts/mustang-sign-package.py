@@ -238,7 +238,8 @@ def sign(compile_receipt,bootstrap_receipt,run_id,attempt,lane=None):
         bounded=module('mustang_build','mustang-build-only.py').engine()
         hp=module('mustang_factory_host','host-factory-package.py')
         with hp.shared_lock(lock):
-            result=bounded.supervise([sys.executable,str(Path(__file__).resolve()),'_execute','--config',str(config_path)],
+            executor=ROOT/'scripts/mustang-dedicated.py' if lane is not None else Path(__file__).resolve()
+            result=bounded.supervise([sys.executable,str(executor),'_execute','--config',str(config_path)],
                 str(source),env,10800,{'sampleSeconds':5,'killGraceSeconds':30,'boundBytes':1<<60,
                                      'reserveBytes':0,'checkReserve':False})
             record['commandOutcome']=result

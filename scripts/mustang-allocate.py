@@ -103,7 +103,7 @@ def observe(home, repository, api, fetch=None, root=ROOT):
                     'consumedBuilds': sorted(builds)}
 
 
-def reserve(home, run_id, run_attempt, source, fetch=None, clock=time.time, lock=None, root=ROOT, lane=None):
+def reserve(home, run_id, run_attempt, source, fetch=None, clock=time.time, lock=None, root=ROOT, lane=None, consumed=()):
     paths = mustang_paths.layout(lane) if lane is not None else None
     if paths is not None and Path(home) != paths['home']:
         raise Refused('invalid: allocation home differs from the dedicated Mustang layout')
@@ -116,6 +116,10 @@ def reserve(home, run_id, run_attempt, source, fetch=None, clock=time.time, lock
     base = Path(home)/'rose-actions'
     with (lock or allocator.shared_lock)(str(paths['lockPath']) if paths is not None else pipeline['host']['lockPath']):
         builds, observed = observe(home, pipeline['publication']['repository'], pipeline['publication']['api'], fetch, root)
+        if any(not BUILD.fullmatch(str(value)) for value in consumed):
+            raise Refused('invalid: carried-forward Mustang allocation identity differs')
+        builds.update(consumed)
+        if lane is not None or consumed: observed['carriedForwardBuilds'] = sorted(consumed)
         now = datetime.datetime.fromtimestamp(int(clock()), datetime.timezone.utc)
         build = allocator.next_build(builds, now, DAILY_LIMIT)
         work, integration = (base/name.format(build=build) for name in DERIVED)
