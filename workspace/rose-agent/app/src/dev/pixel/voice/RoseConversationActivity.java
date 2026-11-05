@@ -191,9 +191,9 @@ public final class RoseConversationActivity extends Activity {
   boolean available=s!=null&&s.taskStateAvailable&&(s.taskStateStreamConnected||SystemClock.elapsedRealtime()-s.taskStateReceivedAt<5000);
   pollController();
   String key=raw+"|"+available+"|"+ctl.key()+"|"+stopPendingFor+"|"+stopMessage+"|"+stopInFlight;if(key.equals(lastTaskKey))return;lastTaskKey=key;
-  TaskPresentation t=TaskPresentation.NONE;String state="";
+  TaskPresentation t=TaskPresentation.NONE;String state="";boolean localTask=false;
   if(raw!=null)try{org.json.JSONObject cur=new org.json.JSONObject(raw).optJSONObject("current");
-   if(cur!=null){state=cur.optString("state");t=TaskPresentation.of(true,cur.optString("id"),state,cur.optString("title"),cur.optString("activity"),cur.optString("progress"),cur.optString("result"),available);}
+   if(cur!=null){localTask="local".equals(cur.optString("source"));state=cur.optString("state");t=TaskPresentation.of(true,cur.optString("id"),state,cur.optString("title"),cur.optString("activity"),cur.optString("progress"),cur.optString("result"),available);}
   }catch(org.json.JSONException e){t=TaskPresentation.NONE;}
   // A pending Stop ends only on that task's own authoritative state, or when the task is gone/replaced.
   if(stopPendingFor!=null&&TaskControl.settled(stopPendingFor,t.visible?t.id:null,state)){stopPendingFor=null;stopMessage="";}
@@ -210,8 +210,10 @@ public final class RoseConversationActivity extends Activity {
   taskNote.setVisibility(t.note.isEmpty()?View.GONE:View.VISIBLE);taskNote.setText(t.note);
   boolean running=available&&(state.equals("running")||state.equals("checking"));
   shownTaskActive=t.active();
-  TaskControl.WatchState ws=TaskControl.watchState(t.id,t.active(),ctl);boolean canWatch=ws.canWatch;
-  boolean canStop=running&&stopPendingFor==null&&!stopInFlight;
+  TaskControl.WatchState ws=TaskControl.watchState(t.id,t.active(),ctl);boolean canWatch=!localTask&&ws.canWatch;
+  // The local card is a read-only presentation, not the Node backend's task
+  // control route. Native workspace controls retain their own scoped binding.
+  boolean canStop=!localTask&&running&&stopPendingFor==null&&!stopInFlight;
   watch.setVisibility(canWatch?View.VISIBLE:View.GONE);stopTask.setVisibility(canStop?View.VISIBLE:View.GONE);
   taskActions.setVisibility(canWatch||canStop?View.VISIBLE:View.GONE);
   stopNote.setText(stopInFlight?"Sending Stop…":stopMessage);stopNote.setVisibility(stopInFlight||!stopMessage.isEmpty()?View.VISIBLE:View.GONE);

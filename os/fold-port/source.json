@@ -1,0 +1,62 @@
+{
+  "schemaVersion": 1,
+  "device": "yogi",
+  "model": "Pixel 11 Pro Fold",
+  "status": "experimental source preparation; not a built release",
+  "manifest": "os/pinned-manifest.xml",
+  "projects": [
+    "external/hardened_malloc",
+    "external/selinux",
+    "vendor/adevtool",
+    "vendor/state"
+  ],
+  "preimages": {
+    "external/hardened_malloc/Android.bp": "851eeffb98fe04a1c29e2464d53bf0b253beac720af0ab4618f9d8dc83b126b8",
+    "external/selinux/libselinux/src/android/android_device.c": "d9ffb0bfb96c63ab34bdefe450531c7a6ed742fe0b3e2079001c176cc50c9d7a",
+    "vendor/google_devices/yogi/BoardConfig.mk": "83e063c4a929f800a4df3dad9eb197930480341b9d4082c1721e0250291f148c",
+    "vendor/google_devices/yogi/yogi.mk": "7de2c7d0d5a7098aad043fa2d1e863ad1ed0cb6dc42e6769a8ca744f86c33bdf"
+  },
+  "patches": [
+    "allocator-va39.patch",
+    "stock-kernel-flags.patch",
+    "product-tray.patch"
+  ],
+  "build": {
+    "lunch": "yogi-cur-user",
+    "environment": {
+      "USE_STOCK_KERNEL": "true",
+      "SOONG_NINJA": "ninja"
+    },
+    "goals": [
+      "target-files-package",
+      "otatools-package"
+    ],
+    "basis": "Upstream yogi.mk selects vendor/google_devices/yogi/stock-kernel only with USE_STOCK_KERNEL=true. This is a recipe, not evidence that lunch or make succeeded."
+  },
+  "vendor": {
+    "buildId": "CD1A.260714.001.A9",
+    "factoryFile": "yogi-cd1a.260714.001.a9-factory-0c09a12c.zip",
+    "factorySha256": "0c09a12ce9e64aac17b4389cc926beade475ca3b8b77008be8e0742444fefcf6",
+    "factoryUrl": "https://dl.google.com/dl/android/aosp/yogi-cd1a.260714.001.a9-factory-0c09a12c.zip",
+    "basis": "Pinned GrapheneOS/adevtool config and build index; factory archive SHA-256 verified on the dedicated Yogi builder. Installed firmware version names match the archive; installed firmware bytes are not verified."
+  },
+  "preimageBasis": "Pinned upstream hardened_malloc and libselinux files, plus generated Yogi BoardConfig.mk and yogi.mk from the explicit vendorReference overlay. No proprietary binaries are stored here.",
+  "vendorReference": {
+    "patch": "os/fold-port/adevtool-yogi-reference.patch",
+    "sha256": "f48a5abc41fbc5d4f7494314b43837ed0928e76369154c5355ef48bd7c7e51f2",
+    "postimages": {
+      "vendor-skels/google_devices/yogi/BoardConfig.mk": "83e063c4a929f800a4df3dad9eb197930480341b9d4082c1721e0250291f148c",
+      "vendor-skels/google_devices/yogi/config.fs": "d11a2a2e4681d91584bb46b4b9cad1d802f8aa14b185616aa892e87f88f0c8ea",
+      "vendor-skels/google_devices/yogi/proprietary/Android.bp": "bc5b7b5ae652ea143181549a2ed6c54749f35eeb4abf695f5e9e3771895a885c",
+      "vendor-skels/google_devices/yogi/sepolicy/product/private/sepolicy_ext.cil": "1e833f003e18f934efed4ba8a092bed9a5bbd150a2f8d1247b4d398aec07152f",
+      "vendor-skels/google_devices/yogi/sepolicy/system_ext/private/sepolicy_ext.cil": "903a7a71e57409ac62b55c44d0aae70e8984489df14f511da992c6655daf24a0",
+      "vendor-skels/google_devices/yogi/sepolicy/vendor/bug_map": "d48a3491eb060aae92b0955fe67d8ddff7db7c4f8244fbac10f0d31a2093b8c4",
+      "vendor-skels/google_devices/yogi/sepolicy/vendor/sepolicy_ext.cil": "08eda6cc4c4099d1d61cd5fdc5042df12e32bf9a1108c32888b48a9809a4d18e",
+      "vendor-skels/google_devices/yogi/sepolicy/vendor/sepolicy_ext_recovery.cil": "4e2c91484fe05807f8fbe4e9a14dea95caa015c1d0b2f5d3d436a8c3f5a2b237",
+      "vendor-skels/google_devices/yogi/sysprop/product.prop": "77eda3076c5b0798648d312631d33e34ba4aeb2177a20eee664f431fa685221a",
+      "vendor-skels/google_devices/yogi/yogi.mk": "7de2c7d0d5a7098aad043fa2d1e863ad1ed0cb6dc42e6769a8ca744f86c33bdf",
+      "vendor-specs/google_devices/yogi.yml": "3b31780dfb9710e017c6b3bcecf402e38a6d3d9594cf9c4784bb6503516342e6"
+    },
+    "basis": "Device-scoped regeneration from the pinned factory, adevtool and vendor/state; captured with --updateSpec --doNotDownloadCarrierSettings. The older upstream reference does not match these generator inputs. Regenerate normally against this explicit overlay before compilation."
+  }
+}

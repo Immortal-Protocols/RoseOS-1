@@ -2,8 +2,64 @@
 
 Implements the source work for [Nathan's OTA plan](https://app.notion.com/p/40d7c646c81b81ce9485e0ca3eff8614)
 and [issue #503](https://github.com/Immortal-Protocols/RoseOS-1/issues/503).
-**First manual public OTA 2026110401 is published and download verified.
-Automatic publication remains off; physical-device acceptance is unproven.**
+**UI follow-up OTA authorized; Frankel 2026110403 inputs are bound for runtime
+admission. First OTA 2026110401 remains delivered. Automatic publication is off;
+optional physical-phone verification is not a release-completion gap.**
+
+## Authorized UI follow-up
+
+**Latest attempt is storage blocked.** [Run 41884368820](https://github.com/Immortal-Protocols/RoseOS-1/actions/runs/41884368820)
+failed at 18:36:39Z with a runner **No space left on device** annotation.
+Binding/signing/publication were skipped; cleanup succeeded and the original
+builder was independently confirmed stopped. [Failure and storage handoff](../os/mustang-ota/41884368820/README.md).
+No receipt artifacts were available, so actual 0403 app admission, allocation
+and native compilation remain unconfirmed. The publication ETA is pending
+storage recovery. No later attempt has been dispatched or failed data removed.
+
+Chief located the later PM request for both Mustang and Frankel OTA builds/
+releases after the UI work. The source message references and exact scope are
+recorded in `os/ota/mustang-ui-followup-authority.json`. This is additional
+publication authority after 2026110401, not another use of the first one-OTA
+approval. The same Mustang worker remains the single owner. The user separately
+specified that push-button delivery is the completion criterion and physical
+phone verification is optional; no phone action is authorized by this record.
+
+The existing [one-button route](OS-RELEASE.md#mustang-one-button-ota-mustang-ota-manual)
+from PR #529 is used once: `os-release.yml@main`, mode `mustang-ota`,
+`mustang_publish_ota=true`, other inputs default. Automatic publication stays off.
+Signing read access no longer has a window. Nathan granted the existing signer an
+unconditional `secretAccessor` binding on both existing Mustang secrets. Existing Dev
+Infra read the two bindings back (IAM metadata only) at **2026-11-05T01:17:39Z**, and
+`signingAccess` now points to that readback (`os/ota/mustang-access-readback-unconditional.json`)
+with `expiresAt: null`. The earlier window, `2026-11-05T06:20:18Z`, no longer limits
+signing. Release read no IAM policy and changed none.
+
+Both host paths now name Frankel **2026110403**, producer **41873084560**, source
+`4e85677ee273630a79eae195e0a044d75226e122`. Its downloaded allocation artifact
+13345237098 matched API archive SHA256
+`4223673ae505a31732ea96fc725757907fb44b2b83190fa69eae1020530f499b`.
+The exact JSON is retained in `os/ota/mustang-frankel-2026110403-allocation.json`:
+Rose Agent **364**, Background Control **38**, Calculator **5**. The version-only
+local candidate `38b5da1...` is distinct from the dispatched source, as recorded
+by that allocation and the public release notes.
+
+The original builder was independently observed **TERMINATED** at 17:59:08Z,
+after the intervening Agent Beta controller failed to reach RUNNING and its
+cleanup completed. That failure was a 420-second state timeout, not an observed
+IAM denial. No failed operation was replayed. The current retained file bytes
+cannot be proved from a stopped-builder path confirmation. The normal owned
+Mustang run must execute the existing APK/receipt/signer/policy admission, match
+all three versions to the bound Frankel allocation, and write
+`app-input-admission.json` before integration/compile. Missing/mismatched input
+stops the attempt. Source configuration is not a claim that this check passed.
+
+No workflow/helper ownership was transferred. This host/pipeline binding does
+not edit Release's workflow changes in #529/#536 or the optional reconciliation
+lineage work in #543. Preserve the existing FIFO, lock, original identity and
+ownership cleanup, STOP fallback and openssh-client hold. Record runtime input
+proof, fresh source/allocation, signing, public download checks and cleanup when
+they actually occur; physical testing can be recorded separately without
+blocking this release.
 
 On November 3 Pacific, after completing the new read grants, Nathan instructed
 this worker to continue. `publicationEnabled=true` enables one newer Mustang
@@ -243,6 +299,16 @@ variables remain unchanged.
    automatically. No new key, secret version or bootstrap permission was added.
    Later unattended signing requires an explicitly approved access period;
    this implementation always stops outside its recorded window.
+   **Superseded on 2026-11-05:** both secrets now grant the existing signer an
+   unconditional `secretAccessor`. This was read back from IAM metadata at
+   2026-11-05T01:17:39Z; older conditional bindings remain and do not expire it.
+   `signingAccess.expiresAt` is therefore `null`. `mustang_ota.guard` accepts that
+   only when `approvalRef` is a committed `os/ota` readback recording exactly those
+   two secrets, the role, the signer from
+   `os/signing-bootstrap/mustang-access-binding.json`, and no condition or expiry.
+   A recorded window is still enforced with its 30-minute margin. Unattended
+   signing still also needs `automationEnabled` and `MUSTANG_OTA_AUTO`, which
+   stay off.
 3. **Producer complete:** existing `os-release.yml@main` run 41750459835 used
    `mode=mustang-build`, `mustang_publish_ota=true`, with `candidate_sha` empty.
    The actual baseline inspection passed before preparation/compile. Native

@@ -5,6 +5,13 @@
 const LOCAL_ROSE=Native.localRose?.()===true;
 let requestSeq=0,pending=new Map(),lastEvent=0,serverEpoch=null,conversation=null,ready=false,starting=false,muted=false,muteAck=0,ended=true,parked=true,generation=0,liveSessionId=null,meterTimer,startTimer,micLevel=0,timingStart=0;
 const taskStatusTransport=new window.TaskStatusTransport({state:s=>Native.taskState?.(JSON.stringify(s||{version:1,current:null})),stream:on=>Native.taskStateStream?.(on)});
+let localTaskCardOwner=0;
+function localTaskCard(list,g){
+ if(g!==generation&&!(list.length===0&&localTaskCardOwner===g))return;
+ localTaskCardOwner=list.length?g:0;
+ Native.taskState?.(JSON.stringify(VoiceProviders.localTaskState(list)));
+ Native.taskStateStream?.(list.length>0);
+}
 const voiceTiming=window.VoiceTiming?new window.VoiceTiming({emit:e=>console.log('VOICE_TIMING '+JSON.stringify(e))}):null;
 let speechStats={vadEvents:0,maxVad:0,lastVadAt:0,lastTranscriptAt:0},lastSpeechLog=0;
 let providerStartPromise=null;let voiceEndPromise=Promise.resolve();let apiChain=Promise.resolve();const waitingTasks=new Set(),completedTasks=new Set();
@@ -103,12 +110,12 @@ async function start(initialMuted=false){if(ready||starting)return;const g=++gen
  const opening=VoiceProviders.start({provider:voiceProvider,api,decisionOwner:config.voiceRouting?.mode,captureAppContext:()=>phoneAppContext.captureRequest(),sampleAppContext:()=>phoneAppContext.sample(),initialMuted:muted,initialInputSuspended:Native.cameraMicrophoneSuspended?.()===true,guardianMode,onVoiceRequest:guardianRequest,onGuardianSwitch:mode=>{void switchGuardian(mode);},outputBoostDb:Native.voiceBoostEnabled()?6:0,onOutputBoostState:s=>Native.voiceBoostState(JSON.stringify(s)),tools:{delegate_task:runTask,apple_music_play:runAppleMusic,media_control:runMedia,messages_read:runMessages,clock_control:runClock,book_control:bookControl,podcast_control:params=>window.podcastControl(params)},toolContext:()=>({appRoutinesEnabled:!generalRoutingEnabled,messages:messagesWorkerEnabled,clock:clockWorkerEnabled,media:mediaWorkerEnabled,book:!artemisTrialEnabled&&!!bookContext&&bookContext.visible!==false,podcast:!artemisTrialEnabled&&!!window.hasActivePodcast?.()}),onTaskResult:(result,id,options)=>bookTaskResult(result,id,options),onOutputTranscript:text=>{bookOutputText(text);},onSession:s=>{session=s;if(g===generation)liveSessionId=s.sessionId;},
  // Local Rose's task list for the native workspace overview (LOCAL-TASK-FEED-002): each delivery as given; an older
  // start's list is never forwarded, only its [] clear.
- onLocalTasks:list=>{if(g===generation||!list.length)Native.localTasks?.(JSON.stringify(list));},
+ onLocalTasks:list=>{if(g===generation||!list.length)Native.localTasks?.(JSON.stringify(list));localTaskCard(list,g);},
  onConversationCreated:c=>{if(g===generation)conversation=c;else c.close();},
  onConnect:()=>{if(g!==generation)return;if(conversation)conversation.setMuted(muted);clearTimeout(startTimer);mark('session_started');voiceTiming?.start();ready=true;starting=false;personalMemoryRevision=null;applyPersonalMemory(session.personalMemory,true);$('status').textContent=muted?'Microphone muted':'Listening · speak naturally';$('mute').textContent=muted?'Unmute':'Mute';$('mute').disabled=false;$('orb').classList.add('live');reportState();Native.readyChime();phoneAppContext.connect();notifyApps();publishAudioLevels();meterTimer=setInterval(()=>{if(!conversation||!ready)return;publishAudioLevels();if(Date.now()-lastSpeechLog>2000){lastSpeechLog=Date.now();console.log('SPEECH_PROBE '+JSON.stringify({...speechStats,inputLevel:micLevel,muted}));}},80);diagnostic();},
  onMessage:message=>{if(g!==generation)return;lastSkyActivity=Date.now();const role=message.role==='user'?'user':'assistant';voiceTiming?.message(role,message.message);if(!guardianMode)bookMessage(role,message.message);if(role==='user'){speechStats.lastTranscriptAt=Date.now();console.log('SPEECH_TRANSCRIPT '+speechStats.lastTranscriptAt);window.podcastUserSpeech?.();}skyRequestPending=false;say(role==='user'?'You':guardianMode?'Guardian':'Pixel',message.message);relay({type:'message',role,text:message.message,source:message.kind==='book_narration'?'book_narration':'voice'});},
  onDisconnect:details=>{if(g===generation&&!ended){const reason=details?.reason||'unknown';Native.voiceLifecycle?.('provider_disconnect',reason);voiceLost('Voice disconnected. Tap Talk to reconnect.','provider_disconnect');}},
- onError:(message)=>{console.log('ELEVEN_ERROR '+message);if(g===generation)$('notice').textContent=message;},
+ onError:(message)=>{console.log('ELEVEN_ERROR '+message);if(g===generation){$('notice').textContent=message;if(LOCAL_ROSE){Native.taskStateStream?.(false);Native.taskStateUnavailable?.();}}},
  onVadScore:({vadScore})=>{if(g===generation){speechStats.vadEvents++;speechStats.maxVad=Math.max(speechStats.maxVad,vadScore);speechStats.lastVadAt=Date.now();bookVad(vadScore);window.podcastVad?.(vadScore);}},
  onInterruption:()=>{if(g===generation){bookUserSpeech();window.podcastUserSpeech?.();}},
  onPing:({ping_ms})=>{if(g===generation)voiceTiming?.ping(ping_ms);},

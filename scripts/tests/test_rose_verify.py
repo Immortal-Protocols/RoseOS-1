@@ -780,6 +780,34 @@ class OxbloodReferenceTests(unittest.TestCase):
         self.assertEqual(with_main(main + '\n// ' + OXBLOOD_MAIN_LINE + '\n'), 'oxblood')
 
 
+class ApkSignerOutputTests(unittest.TestCase):
+    def verify(self, output, status=0):
+        with mock.patch.object(rv, 'run', return_value=mock.Mock(stdout=output, returncode=status)):
+            return rv.signer(Path('/fake/tools'), Path('/fake/app.apk'))
+
+    def test_legacy_and_sdk37_labels_preserve_the_full_signer_set(self):
+        a, b = 'a' * 64, 'b' * 64
+        for output in [f'Signer #1 certificate SHA-256 digest: {a}\n',
+                       f'V3.0 Signer: certificate SHA-256 digest: {a.upper()}\n']:
+            self.assertEqual(self.verify(output)['certSha256'], [a])
+        output = (f'Signer (minSdkVersion=24, maxSdkVersion=32) certificate SHA-256 digest: {a}\n'
+                  f'Signer (minSdkVersion=33, maxSdkVersion=2147483647) certificate SHA-256 digest: {b}\n')
+        result = self.verify(output)
+        self.assertTrue(result['verified'])
+        self.assertEqual(result['certSha256'], [a, b])
+
+    def test_failed_verification_never_supplies_a_trusted_digest(self):
+        result = self.verify('Signer #1 certificate SHA-256 digest: ' + 'a' * 64, status=1)
+        self.assertFalse(result['verified'])
+        self.assertEqual(result['certSha256'], [])
+        self.assertEqual(result['status'], 'unsigned-or-unverified')
+
+    def test_unrecognized_or_malformed_lines_remain_unverified(self):
+        for output in ['Signer #1 certificate SHA-256 digest: abc',
+                       'untrusted prefix Signer #1 certificate SHA-256 digest: ' + 'a' * 64]:
+            self.assertEqual(self.verify(output)['status'], 'unsigned-or-unverified')
+
+
 class OxbloodApkTests(unittest.TestCase):
     """The APK's own classes say whether its Home can be the Oxblood field; an expectation's home must agree."""
 

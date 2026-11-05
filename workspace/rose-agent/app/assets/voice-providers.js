@@ -243,6 +243,20 @@
    end(){if(!open)return;open=false;tasks.clear();if(live&&deliver&&sent!=='[]')deliver([]);}
   };
  }
+ // Presentation-only adapter for the main native card's existing version-1
+ // task snapshot. Input is the validated local task projection, never tools or screens.
+ function localTaskState(list){
+  const tasks=Array.isArray(list)?list:[],active=tasks.filter(t=>t.status==='running');
+  if(!tasks.length)return {version:1,current:null};
+  if(active.length)return {version:1,current:{id:'local:'+active.map(t=>t.key).join('|'),source:'local',state:'running',
+   title:active.length===1?active[0].goal:active.length+' tasks in progress',
+   activity:active.map(t=>t.detail||t.goal).join('\n'),progress:'',result:''}};
+  const t=[...tasks].sort((a,b)=>(b.finished||b.started)-(a.finished||a.started))[0];
+  const state={done:'completed',failed:'failed',cancelled:'interrupted'}[t.status];
+  return {version:1,current:{id:'local:'+t.key,source:'local',state,title:t.goal,activity:'',progress:'',result:t.result,
+   // A real bounded text widget: no HTML, synthesized visual, or pending visual state.
+   ...(state==='completed'?{widget:{type:'Text',value:t.result||'Task finished.'}}:{})}};
+ }
  const sameBinding=(a,b)=>!!a&&!!b&&a.controllerTaskId===b.controllerTaskId&&a.sessionId===b.sessionId&&a.targetPackage===b.targetPackage;
  // Watch/Stop for a task selected earlier: `selected` is {key, binding} captured at the tap, `list` the current list,
  // `controller` a fresh get_state {status, sessionId, taskId, targetPackage}. Both need the same logical task, still
@@ -321,6 +335,6 @@
   });
  }
  const providers={elevenlabs:eleven,openai,local};
- root.VoiceProviders={createInputHandoff,gateMicrophone,localTask,localTasks,localTaskActions,localStop,start:o=>{if(!providers[o.provider])throw Error('Unknown voice provider');return providers[o.provider](o);}};
+ root.VoiceProviders={createInputHandoff,gateMicrophone,localTask,localTasks,localTaskState,localTaskActions,localStop,start:o=>{if(!providers[o.provider])throw Error('Unknown voice provider');return providers[o.provider](o);}};
  if(typeof module!=='undefined')module.exports=root.VoiceProviders;
 })(typeof window!=='undefined'?window:globalThis);

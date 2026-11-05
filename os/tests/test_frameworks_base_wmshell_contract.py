@@ -48,7 +48,7 @@ class FrameworksBaseWmshellContractTest(unittest.TestCase):
 
     def test_the_candidate_is_os_cores_patch_on_main(self):
         delta = self.manifest['candidateDelta']
-        self.assertEqual((delta['pr'], delta['commit']), (528, 'bf6a9ed9a8ec03eaa296ee98b292f9002f2486e7'))
+        self.assertEqual((delta['pr'], delta['commit']), (540, 'd8f19fe3c20ce0361a555647da7e32aeeba26b59'))
         patch = (ROOT/'os/patches/rose-edge-wmshell.patch').read_bytes()
         self.assertEqual([p['name'] for p in delta['patches']], ['rose-edge-wmshell.patch'])
         self.assertEqual(delta['patches'][0]['sha256'], W.C.sha256(patch))
@@ -102,8 +102,10 @@ class FrameworksBaseWmshellContractTest(unittest.TestCase):
         self.assertEqual(self.manifest['confirmation'], W.CONFIRMATION)
         self.assertIn('refuses this contract unless state is "confirmed"', self.manifest['confirmation']['rule'])
         self.assertEqual(self.manifest['registration']['state'], 'unregistered')
+        # The live patcher now registers it for the normal OS build, whose compile is the proof (#410, Chief); this
+        # inert contract keeps describing the pre-registration candidate.
         patcher = (ROOT/'scripts/apply-os-changes.py').read_text()
-        self.assertNotIn('rose-edge-wmshell', patcher, 'registration waits for a real compile of this contract')
+        self.assertIn("projects['frameworks/base'].append('rose-edge-wmshell.patch')", patcher)
 
     def test_each_shell_and_systemui_file_is_proved_in_the_module_that_compiles_it(self):
         roles = self.manifest['overlayRoles']
@@ -158,12 +160,12 @@ class FrameworksBaseWmshellContractTest(unittest.TestCase):
         result = subprocess.run([sys.executable, str(ROOT/'scripts/launcher3-compile-contract.py')], capture_output=True,
             text=True, cwd=ROOT)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        # The shared generator moves the Launcher3 contract to schema 3; this one stays at schema 2, byte for byte as
-        # Release pinned it, until its own coordinated re-pin.
+        # The shared generator moves the Launcher3 contract to schema 3; this one stays at schema 2. Its bytes change
+        # only with a rebind OS Core reconfirms (#540: 2373307d... -> ae6e5f39...).
         self.assertEqual(self.manifest['schemaVersion'], 2)
         import hashlib
         self.assertEqual(hashlib.sha256(MANIFEST.read_bytes()).hexdigest(),
-            '2373307d76ffca2f39a25c747205a3d0968332335daa03eb281bed85227901d1')
+            'ae6e5f3914cd7a61892fa8f22acd2156c3e59ae74d68f0976282ab68cacaa489')
         self.assertTrue(re.search(r'"target": "Launcher3QuickStepLib"',
             (ROOT/'os/compile-contracts/launcher3-quickstep-lib.json').read_text()))
 

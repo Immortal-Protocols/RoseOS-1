@@ -9,7 +9,7 @@ projects WindowManager-Shell and SystemUI-core compile from (frameworks/base and
 - the overlays copied into those projects. Every frameworks/base overlay is a required input here: the patch's
   RoseEdgeMicSlot calls the tray's AgentTrayLink.
 
-The candidate is OS Core's os/patches/rose-edge-wmshell.patch: #516, #523 and #528, merged at bf6a9ed and unregistered.
+The candidate is OS Core's os/patches/rose-edge-wmshell.patch: #516, #523 and #528, with #540's javac fix (d8f19fe).
 
 Ownership:
 - OS Core owns the patch and confirms the inputs and goals (the `confirmation` block). Until it confirms, the contract
@@ -50,9 +50,10 @@ L3['describe'] = L3['describe_base']
 C.SCHEMA = 2
 
 C.MANIFEST = ROOT/'os/compile-contracts/frameworks-base-wmshell.json'
-# The reviewed candidate: the merge on main holding the patch's current bytes (#516, #523, then #528).
-C.CANDIDATE = {'pr': 528, 'commit': 'bf6a9ed9a8ec03eaa296ee98b292f9002f2486e7'}
-C.BUNDLE = C.FIXTURES/'candidate-pr528'
+# The reviewed candidate: the commit holding the patch's current bytes (#516, #523, #528, then #540's fix for the
+# first real compile's javac error, RoseEdgeMicSlot's View.mContext shadowing).
+C.CANDIDATE = {'pr': 540, 'commit': 'd8f19fe3c20ce0361a555647da7e32aeeba26b59'}
+C.BUNDLE = C.FIXTURES/'candidate-pr540'
 C.CANDIDATE_PATCHES = ['rose-edge-wmshell.patch']
 # frameworks/base: apply-os-changes.py's --background-policy order (as in the Launcher3 contract), then the candidate.
 # build/release: unchanged, because framework's classpath needs its aconfig declarations.
@@ -70,7 +71,7 @@ C.COMPILED_PROJECTS = ('frameworks/base', 'build/release')
 C.FLAG_EVIDENCE = []
 
 CONFIRMATION = {
-    'by': 'OS Core (owner of rose-edge-wmshell.patch, #516/#523/#528)',
+    'by': 'OS Core (owner of rose-edge-wmshell.patch, #516/#523/#528/#540)',
     'state': 'confirmed',
     'record': 'OS Core to OS Product, 2026-11-04 06:28 UTC, computed from source against main 1df12a7 (the patch bytes '
         'bound here). It confirmed every field below and listed all six after-images, which equal candidateDelta. It '
@@ -91,6 +92,13 @@ CONFIRMATION = {
         'sha256 ba64ea3114f46925446c204261097aebf963a923eb355860a6f2e54bb7262be2. Only RoseEdgeMicSlot.java\'s after-image '
         'changes (blob a9c4a5dd62f652dcf1044b6b9774ed851083f989); the other after-images, the WMShellModule pre-image, '
         'the inputs and the goals are unchanged',
+    'rebound': 'OS Core to OS Product, 2026-11-04 16:41 UTC, from #540 head d8f19fe (the javac fix for Frankel run '
+        '41861964515: RoseEdgeMicSlot.Control\'s super(mContext) named View\'s own field): patch sha256 '
+        'a10a73b983430d26d432d90c8555ab052dd6917142dfad1d5d2c2d9f0efe7f75. Only RoseEdgeMicSlot.java\'s after-image '
+        'changes (sha256 0768a732126c0cf14bdc0aee7d08ed5ea67d286cf0968e3828a87df58004a54a, blob '
+        '3a9ef4bf55ae44e3ea5a4fbd0112b9ead6e32833); the other after-images and the WMShellModule pre-image are unchanged; '
+        'the inputs, the goals (WindowManager-Shell, SystemUI-core) and flagEvidence (none) are unchanged: a field '
+        'rename inside one file, with no new imports, files, classpath inputs or flags',
 }
 
 # Where each goal's sources come from, read from the pinned Android.bp files (committed byte for byte under

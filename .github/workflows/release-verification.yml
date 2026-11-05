@@ -59,6 +59,11 @@ on:
       - 'os/build-only/launcher3-compile-host.json'
       - 'scripts/tests/test_launcher3_compile.py'
       - 'scripts/tests/test_launcher3_compile_workflow.py'
+      - 'scripts/launcher3-bundle-report.py'
+      - 'scripts/tests/test_launcher3_bundle_report.py'
+      - 'os/build-only/launcher3-bundle-run.json'
+      - 'os/overlays/**'
+      - 'os/patches/**'
       - 'scripts/agent-beta-auto.py'
       - 'scripts/tests/test_agent_beta_auto.py'
       - '.github/workflows/agent-beta-auto.yml'
@@ -90,6 +95,9 @@ on:
       - 'workspace/rose-agent/delivery/catalog.test.mjs'
       - 'workspace/rose-agent/server/delivery.mjs'
       - 'scripts/host-reconcile.py'
+      - 'scripts/builder-reclaim.py'
+      - 'scripts/mustang-allocate.py'
+      - 'scripts/tests/test_builder_reclaim.py'
       - 'scripts/host-sdk-layout.py'
       - 'scripts/host-decrypt-keys.py'
       - 'scripts/check-public-assets.mjs'
@@ -219,6 +227,11 @@ on:
       - 'os/build-only/launcher3-compile-host.json'
       - 'scripts/tests/test_launcher3_compile.py'
       - 'scripts/tests/test_launcher3_compile_workflow.py'
+      - 'scripts/launcher3-bundle-report.py'
+      - 'scripts/tests/test_launcher3_bundle_report.py'
+      - 'os/build-only/launcher3-bundle-run.json'
+      - 'os/overlays/**'
+      - 'os/patches/**'
       - 'scripts/agent-beta-auto.py'
       - 'scripts/tests/test_agent_beta_auto.py'
       - '.github/workflows/agent-beta-auto.yml'
@@ -250,6 +263,9 @@ on:
       - 'workspace/rose-agent/delivery/catalog.test.mjs'
       - 'workspace/rose-agent/server/delivery.mjs'
       - 'scripts/host-reconcile.py'
+      - 'scripts/builder-reclaim.py'
+      - 'scripts/mustang-allocate.py'
+      - 'scripts/tests/test_builder_reclaim.py'
       - 'scripts/host-sdk-layout.py'
       - 'scripts/host-decrypt-keys.py'
       - 'scripts/check-public-assets.mjs'
@@ -361,6 +377,15 @@ jobs:
           python3 scripts/tests/test_frankel_factory_package_workflow.py
           python3 scripts/tests/test_rango_factory_inspect_workflow.py
           python3 scripts/tests/test_launcher3_compile.py
+          python3 scripts/tests/test_launcher3_bundle_report.py
+          python3 scripts/tests/test_blazer_allocate.py
+          python3 scripts/tests/test_blazer_binding_observe.py
+          python3 scripts/tests/test_blazer_candidate_bundle.py
+          python3 scripts/tests/test_blazer_compile_workflow.py
+          python3 scripts/tests/test_blazer_integrate_wiring.py
+          python3 scripts/tests/test_blazer_reconcile_seed.py
+          python3 scripts/tests/test_launcher3_compile_workflow.py
+          python3 scripts/tests/test_ssh_keygen_observe.py
           python3 scripts/tests/test_agent_beta_auto.py
           python3 scripts/tests/test_release_transport.py
           python3 scripts/tests/test_release_acceptance.py
@@ -374,6 +399,7 @@ jobs:
           python3 scripts/tests/test_factory_delivery.py
           python3 os/tests/test_apply_os_changes.py
           python3 scripts/tests/test_host_build_reconcile.py
+          python3 scripts/tests/test_builder_reclaim.py
           python3 scripts/tests/test_actions_gcp_login.py
           python3 scripts/tests/test_app_release.py
           python3 scripts/tests/test_app_release_publisher.py

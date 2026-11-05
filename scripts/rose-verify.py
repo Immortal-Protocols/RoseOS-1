@@ -308,7 +308,13 @@ def with_category(components, category):
 
 def signer(tools, apk):
     p = run([str(tools/'apksigner'), 'verify', '--print-certs', str(apk)], check_rc=False)
-    certs = re.findall(r'Signer #\d+ certificate SHA-256 digest: ([0-9a-f]{64})', p.stdout)
+    # SDK 37 labels signers by SDK range (and its restricted verifier can use
+    # "V3.0 Signer:"). Keep every verified identity, including rotation ranges;
+    # an explicit expectation must still match the complete set exactly.
+    pattern = re.compile(r'(?:Signer #\d+|Signer \(minSdkVersion=\d+, maxSdkVersion=\d+\)|'
+                         r'V3\.0 Signer:) certificate SHA-256 digest: ([0-9a-fA-F]{64})')
+    certs = sorted({m[1].lower() for line in p.stdout.splitlines()
+                    if (m := pattern.fullmatch(line.strip()))}) if p.returncode == 0 else []
     return {'verified': p.returncode == 0, 'certSha256': certs,
             'status': 'signed' if p.returncode == 0 and certs else 'unsigned-or-unverified'}
 

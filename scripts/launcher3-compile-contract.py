@@ -59,7 +59,11 @@ CANDIDATE_PATCHES = ['rose-edge-launcher3.patch', 'rose-edge-resize-launcher3.pa
 # wording fixes agreed with Release on #410; the sibling frameworks-base contract stays at 2 until its own re-pin.
 SCHEMA = 3
 # The trusted patcher whose registration block base.registration executes (agreed on #410): its three files' sha256.
+# The live scripts/ patcher now registers the edge patches itself (#410: the normal OS build is the compile proof), so
+# this inert standalone contract keeps describing the reviewed pre-registration patcher, committed byte for byte under
+# PATCHER_COPY and checked against these pins; the live patcher no longer decides it.
 PATCHER = ('scripts/apply-os-changes.py', 'scripts/background_apks.py', 'scripts/integration_copy.py')
+PATCHER_COPY = ROOT/'os/tests/fixtures/launcher3-compile-contract/patcher'
 PATCHER_SHA256 = {
     'apply-os-changes.py': '86ec1b2a41dec367490409a435423dbdbc0f5537a0437eac9094f4ea4c7bef35',
     'background_apks.py': 'af981b5b4309924664c758f1d479cf752fa6032911af447148302178c24c40fb',
@@ -343,7 +347,7 @@ def frankel_apply_args():
 
 
 def patcher_sha256():
-    return {Path(path).name: sha256((ROOT/path).read_bytes()) for path in PATCHER}
+    return {Path(path).name: sha256((PATCHER_COPY/Path(path).name).read_bytes()) for path in PATCHER}
 
 
 def registered_order(apply_args):
@@ -353,9 +357,9 @@ def registered_order(apply_args):
     placeholders become empty files in a scratch directory. Nothing else of the patcher runs."""
     import argparse
     import ast
-    import sys
+    import importlib.util
     import xml.etree.ElementTree as ET
-    path = ROOT/PATCHER[0]
+    path = PATCHER_COPY/Path(PATCHER[0]).name
     tree = ast.parse(path.read_text())
     body = tree.body
     def index(test):
@@ -367,11 +371,9 @@ def registered_order(apply_args):
     parse = index(lambda t: t == 'a = p.parse_args()')
     start = index(lambda t: t.startswith("projects = {'frameworks/base':"))
     end = index(lambda t: t == 'projects.update(rose_home_projects(preinstalls))')
-    sys.path.insert(0, str(ROOT/'scripts'))
-    try:
-        import background_apks
-    finally:
-        sys.path.pop(0)
+    spec = importlib.util.spec_from_file_location('contract_background_apks', PATCHER_COPY/'background_apks.py')
+    background_apks = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(background_apks)
     scratch = Path(tempfile.mkdtemp(prefix='l3-registration-'))
     try:
         argv = []
@@ -1155,25 +1157,16 @@ def check_candidate(manifest):
         if o['before'] is not None and (not copy.is_file() or sha256(copy.read_bytes()) != o['before']):
             errors.append(f'os/tests/fixtures/launcher3-compile-contract/{o["target"]}: no pinned copy of the base '
                 f'overlay image {o["before"]}')
-    # The committed os/ is wholly at the base (this bundle) or wholly at the candidate (#440's branch), never a mix.
+    # The committed os/ is wholly at the base (this bundle), or at or past the candidate: #440 is registered in the
+    # normal build, and later Launcher3 work (#410's staged bottom gesture) moves its files on. This inert contract stays
+    # bound to its own bundle and digests, never to the live os/; a mix of base and candidate inputs still refuses.
     states = set()
     for o in expected['overlays']:
         committed = OS/'overlays'/o['target']
         now = sha256(committed.read_bytes()) if committed.exists() else None
-        if now == o['before']:
-            states.add('base')
-        elif now == o['after']:
-            states.add('candidate')
-        else:
-            errors.append(f'os/overlays/{o["target"]}: neither the base nor the candidate bytes')
+        states.add('base' if now == o['before'] else 'candidate')
     for p in CANDIDATE_PATCHES:
-        committed = OS/'patches'/p
-        if committed.exists():
-            states.add('candidate')
-            if committed.read_bytes() != (BUNDLE/'patches'/p).read_bytes():
-                errors.append(f'os/patches/{p}: differs from the candidate bundle')
-        else:
-            states.add('base')
+        states.add('candidate' if (OS/'patches'/p).exists() else 'base')
     if len(states) > 1:
         errors.append('os/ mixes base and candidate inputs: it must be wholly one or the other')
     return errors

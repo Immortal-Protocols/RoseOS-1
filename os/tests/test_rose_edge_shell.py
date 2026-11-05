@@ -112,10 +112,14 @@ class RoseEdgeShellTest(unittest.TestCase):
                 self.assertFalse(theirs & set(touched), other.name)
 
     def test_inert_until_a_real_compile_registers_it(self):
-        # Every registered patch and every overlay goes into each OS build. WMShell has not been compiled for real,
-        # so the patch stays out of the apply sequence and nothing is added under os/overlays.
-        self.assertNotIn('rose-edge-wmshell', (ROOT/'scripts/apply-os-changes.py').read_text())
-        self.assertNotIn('rose-edge-wmshell', (ROOT/'scripts/host-reconcile.py').read_text())
+        # Every registered patch and every overlay goes into each OS build. #410 (Chief): the normal OS build is the
+        # compile proof, so apply-os-changes.py registers the patch, last in frameworks/base; no overlay is added.
+        self.assertIn("projects['frameworks/base'].append('rose-edge-wmshell.patch')",
+            (ROOT/'scripts/apply-os-changes.py').read_text())
+        # host-reconcile (#543) mirrors that order: its frameworks/base sequence names the patch once, last.
+        reconcile = (ROOT/'scripts/host-reconcile.py').read_text()
+        self.assertEqual(reconcile.count('rose-edge-wmshell'), 1)
+        self.assertRegex(reconcile, r"FRAMEWORKS_BASE_SEQUENCE = \([^)]*'rose-edge-wmshell\.patch'\)")
         self.assertFalse(list((ROOT/'os/overlays').rglob('roseedge')))
         # Default off even once registered.
         self.assertIn('static final String ENABLED_PROPERTY = "persist.wm.debug.rose_edge";', self.controller)
@@ -269,7 +273,15 @@ class RoseEdgeShellTest(unittest.TestCase):
         self.assertIn('if (message.what != STATE || !mLink.subscribed() || !trusted(message.sendingUid)) return true;',
             mic, 'state only from Rose Agent itself, while subscribed')
         self.assertIn('if (data.getInt("protocolVersion") != 1) return true;', mic)
-        self.assertIn('uid == mContext.getPackageManager().getPackageUidAsUser(VOICE_PACKAGE, mLink.user())', flat(mic))
+        self.assertIn('uid == mWindowContext.getPackageManager().getPackageUidAsUser(VOICE_PACKAGE, mLink.user())',
+            flat(mic))
+        # Real javac (#410 build 41861964515): View's protected mContext shadows an outer mContext inside Control, and
+        # super(mContext) then reads View's own field before View's constructor. The outer field has its own name,
+        # and the View stub declares mContext as the platform does, so the compile above fails if it comes back.
+        control = mic[mic.index('private final class Control extends View {'):]
+        self.assertNotRegex(control, r'\bmContext\b', 'Control must not name View\'s inherited mContext')
+        self.assertIn('Control() { super(mWindowContext);', flat(control))
+        self.assertIn('protected android.content.Context mContext;', (HARNESS/'stubs/android/view/View.java').read_text())
         # One thread: the creator's (the shell's main thread); binder callbacks are moved onto it.
         self.assertIn('new Handler(Looper.myLooper() != null ? Looper.myLooper() : Looper.getMainLooper());', mic)
         self.assertIn('mReply = new Messenger(new Handler(mHandler.getLooper(), message -> {', mic)

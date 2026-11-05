@@ -1,0 +1,27 @@
+{
+  "schema": "roseos.mustang-ota-access-readback.v1",
+  "observedAt": "2026-11-05T01:17:39Z",
+  "observedBy": "existing Dev Infra task 01a17ac0-0f96-7165-8b57-562517b6e02e: metadata-only IAM policy readback, not a payload-access test",
+  "relayedBy": "Chief, to the Release session, on 2026-11-05 (UTC)",
+  "requestedBy": "Nathan, who reported granting the existing signer non-expiring read access on the two existing Mustang signing secrets",
+  "project": "protocols-465723",
+  "expiresAt": null,
+  "bindings": [
+    {
+      "secret": "PIXEL_OS_SIGNING_KEYS_MUSTANG_V1",
+      "role": "roles/secretmanager.secretAccessor",
+      "member": "serviceAccount:roseos-build-signer@protocols-465723.iam.gserviceaccount.com",
+      "condition": null,
+      "expiresAt": null
+    },
+    {
+      "secret": "PIXEL_OS_SIGNING_PASSPHRASE_MUSTANG_V1",
+      "role": "roles/secretmanager.secretAccessor",
+      "member": "serviceAccount:roseos-build-signer@protocols-465723.iam.gserviceaccount.com",
+      "condition": null,
+      "expiresAt": null
+    }
+  ],
+  "olderBindings": "Older conditional bindings remain on both secrets; they do not expire this unconditional grant.",
+  "verification": "Recorded only from the relayed readback: projects/protocols-465723/secrets/PIXEL_OS_SIGNING_KEYS_MUSTANG_V1 and projects/protocols-465723/secrets/PIXEL_OS_SIGNING_PASSPHRASE_MUSTANG_V1 each grant roles/secretmanager.secretAccessor to roseos-build-signer with no condition. Only IAM metadata was read: no secret payload, permission change, signing or dispatch. Release made no IAM read or write and accessed no secret payload."
+}

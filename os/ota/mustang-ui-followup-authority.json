@@ -1,0 +1,16 @@
+{
+  "schema": "roseos.mustang-release-authority.v1",
+  "reconciledBy": "Chief, 2026-11-04",
+  "sourceThread": "01a17b8e-4e01-770c-b2ed-dfea5a283001",
+  "requestMessage": "01a1a522-8321-7519-b2e0-ab8df584369a",
+  "requestTurn": "01a1a522-8109-7058-9972-f985312e3771",
+  "pushButtonCriterionMessage": "01a1a520-d2b4-7441-b746-3bbd7a627417",
+  "optionalPhoneVerificationMessage": "01a1a51e-624a-7637-b27b-55f9b1d6c367",
+  "scope": "The additional Mustang OTA after the UI work, following the completed Frankel 2026110403 release. One fresh manual mustang-ota run through os-release.yml, with mustang_publish_ota=true and other inputs default. The existing Mustang worker remains the single execution owner.",
+  "previousDeliveredMustangBuild": "2026110401",
+  "frankelInputBuild": "2026110403",
+  "automaticPublication": false,
+  "physicalPhoneVerificationRequiredForCompletion": false,
+  "access": "Use the existing recorded read-access window and original version-1 Mustang identity; no new IAM, keys, credentials or extension.",
+  "retainedInputProof": "Current on-host bytes remain unproved until the existing signed-input admission reads and verifies them. Source paths and the digest-verified producer allocation are not a current file-existence claim."
+}

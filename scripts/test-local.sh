@@ -16,6 +16,7 @@ node --test workspace/rose-agent/voice-providers/local-tasks.test.cjs
 node --test workspace/rose-agent/tests/mic-input-capture.test.mjs workspace/rose-agent/voice-providers/providers.test.cjs
 # Local Rose task list from the producer through the page and bridge into the native overview feed (LOCAL-TASK-FEED-002).
 node --test workspace/rose-agent/tests/local-task-feed.test.mjs
+node --test workspace/rose-agent/tests/local-task-card.test.mjs
 # App-tree files that build.sh replaces must match the module source it ships.
 node --test workspace/rose-agent/tests/staged-copies.test.mjs
 # Current-page replacements for the retired WebRTC-page tests, and the EventDelivery server check.
@@ -54,6 +55,7 @@ python3 os/background-control/tests/test_replacement_wiring.py
 python3 os/background-control/tests/test_multi_session_wiring.py
 python3 os/background-control/tests/test_preinstall.py
 python3 os/tests/test_apply_os_changes.py
+python3 os/tests/test_yogi_port.py
 python3 os/tests/test_integration_copy.py
 python3 os/tests/test_tray_contract.py
 python3 os/tests/test_installed_precedence.py
@@ -63,6 +65,7 @@ python3 os/tests/test_updater_releases.py
 python3 os/tests/test_rose_home_role.py
 python3 os/tests/test_rose_agent_self_update.py
 python3 os/tests/test_rose_switcher.py
+python3 os/tests/test_rose_edge_resize_staged.py
 python3 os/tests/test_launcher3_compile_contract.py
 python3 os/tests/test_frameworks_base_wmshell_contract.py
 python3 os/tests/test_frankel_lunch_inputs.py
@@ -78,6 +81,7 @@ python3 os/tests/persistent-app-experiment/test_sdk_revisions.py
 python3 scripts/tests/test_release_manifest.py
 python3 scripts/tests/test_release_stage.py
 python3 scripts/tests/test_release_pipeline.py
+python3 scripts/tests/test_app_tests_paths.py
 python3 scripts/tests/test_permission_apex.py
 python3 scripts/tests/test_release_candidate_contract.py
 python3 scripts/tests/test_release_allocate.py
@@ -94,6 +98,7 @@ python3 scripts/tests/test_rango_retained.py
 python3 scripts/tests/test_github_publisher.py
 python3 scripts/tests/test_host_adapters.py
 python3 scripts/tests/test_host_build_reconcile.py
+python3 scripts/tests/test_builder_reclaim.py
 python3 scripts/tests/test_actions_gcp_login.py
 python3 scripts/tests/test_app_release.py
 python3 scripts/tests/test_app_release_publisher.py
@@ -127,6 +132,7 @@ python3 scripts/tests/test_rango_factory_inspect_workflow.py
 # Launcher3 compile-only adapter (synthetic trees, stand-in processes; no host, copy, lunch or build).
 python3 scripts/tests/test_launcher3_compile.py
 python3 scripts/tests/test_launcher3_compile_workflow.py
+python3 scripts/tests/test_launcher3_bundle_report.py
 python3 scripts/tests/test_signing_bootstrap.py
 python3 scripts/tests/test_fold_bootstrap_proof.py
 python3 scripts/tests/test_fold_tool_proof.py
@@ -248,6 +254,10 @@ java -cp "$JAVA_TESTS/HomeOverview" dev.pixel.voice.HomeOverviewTest
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/HomeAppLayout" \
  workspace/rose-agent/app/src/dev/pixel/voice/HomeAppLayout.java workspace/rose-agent/app/tests/HomeAppLayoutTest.java
 java -cp "$JAVA_TESTS/HomeAppLayout" dev.pixel.voice.HomeAppLayoutTest
+java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/HomePlan" \
+ workspace/rose-agent/app/src/dev/pixel/voice/HomeAppLayout.java workspace/rose-agent/app/src/dev/pixel/voice/HomePlan.java \
+ workspace/rose-agent/app/tests/HomePlanTest.java
+java -cp "$JAVA_TESTS/HomePlan" dev.pixel.voice.HomePlanTest
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/HomeAppGroups" \
  workspace/rose-agent/app/src/dev/pixel/voice/HomeAppGroups.java workspace/rose-agent/app/tests/HomeAppGroupsTest.java
 java -cp "$JAVA_TESTS/HomeAppGroups" dev.pixel.voice.HomeAppGroupsTest
