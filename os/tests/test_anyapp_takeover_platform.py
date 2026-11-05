@@ -11,7 +11,11 @@ close paths for the four states of the target app:
 - the absolute foreground: formerly refused by our own patch ("target_in_foreground"); now taken over exactly like the
   background case, under the same allowlist, target, user and locked-owner gates (F06 forbids a blanket refusal);
 - already in a workspace: in this session it is brought to front; shown in another live workspace it is refused with
-  "target_in_other_session" (the race backstop behind the controller's own app_in_other_session check).
+  "target_in_other_session" (the race backstop behind the controller's own app_in_other_session check);
+- a home, recents, assistant or dream app: refused with "target_not_standard". The launch uses the launcher intent,
+  whose start has activity type UNDEFINED and so is compatible with any task type (stock
+  ConfigurationContainer.isCompatibleActivityType); Android's reuse could otherwise reparent the HOME holder's own
+  task (Rose Agent's singleTask MainActivity is both HOME and LAUNCHER) off the main display.
 
 The session's display is private (no VIRTUAL_DISPLAY_FLAG_PUBLIC), and Android destroys a private display's tasks when
 it is removed (stock DisplayWindowSettings.getRemoveContentModeLocked). So a task the owner had open, once taken over,
@@ -116,6 +120,19 @@ class AnyAppTakeoverPlatformTest(unittest.TestCase):
         self.assertIn('if (activities == null) { return false; }', shows)
         self.assertIn('packageName.equals(activity.getComponentName().getPackageName())', shows)
 
+    def test_a_home_recents_assistant_or_dream_task_never_moves(self):
+        guard = flat(self.launch[self.launch.index('for (ActivityManager.RunningTaskInfo task : tasksOn(mMainDisplayId))'):])
+        self.assertIn('for (ActivityManager.RunningTaskInfo task : tasksOn(mMainDisplayId)) { if (ownsTask(task, '
+            'packageName) && task.getActivityType() != ACTIVITY_TYPE_STANDARD && task.getActivityType() != '
+            'ACTIVITY_TYPE_UNDEFINED) { throw new IllegalStateException("target_not_standard: " + packageName); } }',
+            guard)
+        # Any such task of the package refuses, before its own task is looked up or anything starts.
+        self.assertLess(self.launch.index('target_not_standard'), self.launch.index('final int existing = taskOf('))
+        self.assertLess(self.launch.index('target_not_standard'), self.launch.index('startActivityAsUser('))
+        owns = flat(method(self.session, 'private boolean ownsTask('))
+        self.assertIn('return task.baseActivity != null && packageName.equals(task.baseActivity.getPackageName()) && '
+            'task.userId == mRequest.ownerUserId();', owns)
+
     def test_the_owners_open_task_is_recorded_with_its_foreground_state(self):
         order = [self.launch.index(s) for s in ('final int existing = taskOf(packageName, mMainDisplayId);',
             'startActivityAsUser(', 'mTakenOverTasks.put(existing, visible);')]
@@ -125,8 +142,7 @@ class AnyAppTakeoverPlatformTest(unittest.TestCase):
         # Only the owner's own task of that app (by its root activity) on the main display.
         task = flat(method(self.session, 'private int taskOf('))
         self.assertIn('for (ActivityManager.RunningTaskInfo task : tasksOn(displayId))', task)
-        self.assertIn('packageName.equals(task.baseActivity.getPackageName()) && '
-            'task.userId == mRequest.ownerUserId()', task)
+        self.assertIn('if (ownsTask(task, packageName)) { return task.taskId; }', task)
         tasks = flat(method(self.session, 'private static List<ActivityManager.RunningTaskInfo> tasksOn('))
         self.assertIn('ActivityTaskManager.getService().getTasks( Integer.MAX_VALUE, '
             '/* filterOnlyVisibleRecents= */ false, /* keepIntentExtra= */ false, displayId);', tasks)
