@@ -10,7 +10,7 @@ projects WindowManager-Shell and SystemUI-core compile from (frameworks/base and
   RoseEdgeMicSlot calls the tray's AgentTrayLink.
 
 The candidate is OS Core's os/patches/rose-edge-wmshell.patch: #516, #523 and #528, #540's javac fix (d8f19fe) and
-#551's chin marker (77c9117).
+#551's chin marker (77c9117, head b639c22).
 
 Ownership:
 - OS Core owns the patch and confirms the inputs and goals (the `confirmation` block). Until it confirms, the contract
@@ -53,7 +53,7 @@ C.SCHEMA = 2
 C.MANIFEST = ROOT/'os/compile-contracts/frameworks-base-wmshell.json'
 # The reviewed candidate: the commit holding the patch's current bytes (#516, #523, #528, #540's fix for the first
 # real compile's javac error, then #551's chin marker on REGISTER for Rose Agent, F08).
-C.CANDIDATE = {'pr': 551, 'commit': '77c9117ede0037f59d31c87906b355de64695c1b'}
+C.CANDIDATE = {'pr': 551, 'commit': 'b639c22f05bc1efe123cf67179f3beb6d31b8c36'}
 C.BUNDLE = C.FIXTURES/'candidate-pr551'
 C.CANDIDATE_PATCHES = ['rose-edge-wmshell.patch']
 # frameworks/base: apply-os-changes.py's --background-policy order (as in the Launcher3 contract), then the candidate.
@@ -101,14 +101,16 @@ CONFIRMATION = {
         'the inputs, the goals (WindowManager-Shell, SystemUI-core) and flagEvidence (none) are unchanged: a field '
         'rename inside one file, with no new imports, files, classpath inputs or flags',
     'rebased': 'OS Core to OS Product, 2026-11-05 01:31 UTC, from #551 head 77c9117 (F06 app takeover and the F08 chin '
-        'marker): background-control-frameworks-base.patch sha256 '
-        '8e8bf2b0d9111be12b8d927bccd8ea4d2ec650a634085ac5499be7a34fb416d7, only ComputerControlSessionImpl\'s after-image '
-        'changing; rose-edge-wmshell.patch sha256 335fcb61c6054806143a08c2d1a0202b01d71c45948a02a51eb0128b7700a95c, '
-        'only RoseEdgeMicSlot.java (a613e6ee..., blob 0aa0b49d) and roseedge/RoseEdgePolicy.java (5a565842..., blob '
-        '2c664048) changing; the other after-images, the WMShellModule pre-image, the inputs, the goals and flagEvidence '
-        '(none) unchanged; no new files, flags or classpath inputs (the only new imports, android.app.ActivityManager, '
-        'android.app.ActivityTaskManager and android.util.SparseBooleanArray, are framework classes in '
-        'ComputerControlSessionImpl)',
+        'marker), re-stated 01:52 UTC for head b639c22 (F06 target_not_standard guard): '
+        'background-control-frameworks-base.patch sha256 '
+        '42986c0bf5e26e97b41ca5d62145b9a0ce45dd94810afcb307be658446cd8979, only ComputerControlSessionImpl\'s after-image '
+        'changing (1a5392ce..., blob 7a0a3757); rose-edge-wmshell.patch sha256 '
+        '335fcb61c6054806143a08c2d1a0202b01d71c45948a02a51eb0128b7700a95c, only RoseEdgeMicSlot.java (a613e6ee..., blob '
+        '0aa0b49d) and roseedge/RoseEdgePolicy.java (5a565842..., blob 2c664048) changing; the other after-images, the '
+        'WMShellModule pre-image, the inputs, the goals and flagEvidence (none) unchanged; no new files, flags or '
+        'classpath inputs (the only new imports, android.app.ActivityManager, android.app.ActivityTaskManager, '
+        'android.util.SparseBooleanArray and the framework constants WindowConfiguration.ACTIVITY_TYPE_STANDARD and '
+        'ACTIVITY_TYPE_UNDEFINED, are in ComputerControlSessionImpl)',
 }
 
 # Where each goal's sources come from, read from the pinned Android.bp files (committed byte for byte under

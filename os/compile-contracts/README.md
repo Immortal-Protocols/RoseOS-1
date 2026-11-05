@@ -7,7 +7,7 @@ and grants no host, runtime or permission access.
 
 **Sibling: `frameworks-base-wmshell.json`** (`kind` `rose-frameworks-base-wmshell-compile-inputs`, from
 `scripts/frameworks-base-wmshell-contract.py`). It states the inputs of a compile-only proof of OS Core's raised-edge
-Shell patch, `os/patches/rose-edge-wmshell.patch` (#516/#523/#528, #540's javac fix and #551's chin marker at `77c9117`), for the goals
+Shell patch, `os/patches/rose-edge-wmshell.patch` (#516/#523/#528, #540's javac fix and #551's chin marker, head `b639c22`), for the goals
 `WindowManager-Shell` and `SystemUI-core`.
 - **Shape and rules:** it uses the same generator code, branches, tree pins and provenance rules as the Launcher3
   contract. Its projects are frameworks/base (the background-policy patches, then the candidate) and build/release.
