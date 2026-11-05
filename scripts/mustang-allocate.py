@@ -28,6 +28,7 @@ import sys
 import time
 import datetime
 import mustang_lane
+import mustang_paths
 
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location('release_allocate', ROOT/'scripts/release-allocate.py')
@@ -102,7 +103,10 @@ def observe(home, repository, api, fetch=None, root=ROOT):
                     'consumedBuilds': sorted(builds)}
 
 
-def reserve(home, run_id, run_attempt, source, fetch=None, clock=time.time, lock=None, root=ROOT):
+def reserve(home, run_id, run_attempt, source, fetch=None, clock=time.time, lock=None, root=ROOT, lane=None):
+    paths = mustang_paths.layout(lane) if lane is not None else None
+    if paths is not None and Path(home) != paths['home']:
+        raise Refused('invalid: allocation home differs from the dedicated Mustang layout')
     for label, value in (('run id', run_id), ('run attempt', run_attempt)):
         if not (isinstance(value, str) and value.isdigit() and value[0] != '0' and len(value) <= 20):
             raise Refused(f'invalid: a positive numeric {label} is required')
@@ -110,7 +114,7 @@ def reserve(home, run_id, run_attempt, source, fetch=None, clock=time.time, lock
         raise Refused('invalid: --source must be the dispatch commit')
     pipeline = json.loads((root/'os/release-pipeline/frankel.json').read_text())
     base = Path(home)/'rose-actions'
-    with (lock or allocator.shared_lock)(pipeline['host']['lockPath']):
+    with (lock or allocator.shared_lock)(str(paths['lockPath']) if paths is not None else pipeline['host']['lockPath']):
         builds, observed = observe(home, pipeline['publication']['repository'], pipeline['publication']['api'], fetch, root)
         now = datetime.datetime.fromtimestamp(int(clock()), datetime.timezone.utc)
         build = allocator.next_build(builds, now, DAILY_LIMIT)

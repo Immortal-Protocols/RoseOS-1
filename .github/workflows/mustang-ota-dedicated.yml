@@ -1,0 +1,26 @@
+name: Mustang dedicated source readiness
+run-name: mustang-dedicated-readiness ${{ github.run_id }}
+
+# Preparation only. No self-hosted/controller/login job exists in this revision.
+# This is the exact future workflow admitted by the proposed dedicated runner
+# group; its source guard is not proof of native build or delivery readiness.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mustang-ota
+  cancel-in-progress: false
+
+jobs:
+  guard:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Check explicit dedicated bindings and source API only
+        run: python3 scripts/mustang-readiness.py

@@ -47,6 +47,9 @@ Source preparation is not activation, provisioning or runtime authorization.
 The [dedicated resource proposal and source handoff](MUSTANG-DEDICATED-BUILDER.md)
 records sizing evidence, the unimplemented common-controller dependency and
 the exact approval package. It is not a deployed resource or a runnable build.
+The dedicated workflow file currently contains a hosted source guard only,
+with no controller, login or builder job. Explicit dedicated path/receipt APIs
+are under preparation; native production and final OTA wiring remain unfinished.
 Physical-phone testing, the harness and unrelated product feedback do not gate
 this work. F08 still requires compatible app microphone removal and reachable
 OS chin control in the same delivered candidate.

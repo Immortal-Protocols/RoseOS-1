@@ -1,5 +1,6 @@
 """Offline adapter boundaries only: synthetic archives, signer/generator stand-ins, no live actions."""
 import copy
+import functools
 import importlib.util
 import json
 import os
@@ -17,6 +18,7 @@ import mustang_edge as gate
 import mustang_ota as ota
 import mustang_lane as lane
 import mustang_controller as controller
+import mustang_paths
 import subprocess
 import dex_fixture
 import test_edge_artifact as fixtures
@@ -249,6 +251,67 @@ class DedicatedControllerTest(unittest.TestCase):
         self.assertEqual(target.read_text(), '{}')
         self.assertEqual(fake.calls, [])
 
+    def common_api(self):
+        actual=controller.common_controller()
+        # Exercise the real shared implementation; swap only its process edge
+        # and sleep in these tests. No gcloud process or cloud request can run.
+        actual.control_builder=functools.partial(actual.control_builder,sleep=lambda seconds:None,interval=0)
+        return actual
+
+    def test_real_common_api_start_stop_keeps_target_and_durable_ownership(self):
+        actual=self.common_api(); state='TERMINATED'; calls=[]
+        def process(argv,**kwargs):
+            nonlocal state
+            calls.append(argv)
+            self.assertEqual(argv[:3],['gcloud','compute','instances'])
+            self.assertEqual(argv[4],self.lane['vm']['instance'])
+            self.assertIn('--project='+self.lane['vm']['project'],argv)
+            self.assertIn('--zone='+self.lane['vm']['zone'],argv)
+            if argv[3]=='describe':
+                return SimpleNamespace(returncode=0,stdout=json.dumps(dict(id=self.lane['vm']['instanceId'],
+                                                    name=self.lane['vm']['instance'],status=state)))
+            self.assertEqual(argv[3],'start' if state=='TERMINATED' else 'stop')
+            self.assertTrue(controller.read_ownership(self.record,self.lane,self.run))
+            state='RUNNING' if argv[3]=='start' else 'TERMINATED'
+            return SimpleNamespace(returncode=0)
+        with patch('subprocess.run',side_effect=process):
+            self.assertEqual(controller.start(actual,self.lane,self.run,self.record)['observed'],'RUNNING')
+            self.assertEqual(controller.stop(actual,self.lane,self.run,self.record)['observed'],'TERMINATED')
+        self.assertEqual([argv[3] for argv in calls],['describe','start','describe','describe','stop','describe'])
+        self.assertTrue(self.record.exists())
+
+    def test_real_common_api_wrong_id_refuses_before_start_and_before_stop(self):
+        actual=self.common_api()
+        wrong=SimpleNamespace(returncode=0,stdout=json.dumps(dict(id='999',name=self.lane['vm']['instance'],
+                                                               status='TERMINATED')))
+        with patch('subprocess.run',return_value=wrong) as process:
+            with self.assertRaisesRegex(Exception,'identity mismatch'):
+                controller.start(actual,self.lane,self.run,self.record)
+            self.assertFalse(self.record.exists())
+            self.assertEqual([call.args[0][3] for call in process.call_args_list],['describe'])
+        controller.start(self.fake(),self.lane,self.run,self.record)
+        with patch('subprocess.run',return_value=wrong) as process:
+            with self.assertRaisesRegex(Exception,'identity mismatch'):
+                controller.stop(actual,self.lane,self.run,self.record)
+            self.assertEqual([call.args[0][3] for call in process.call_args_list],['describe'])
+
+    def test_real_common_api_failed_start_request_is_reconciled_without_resubmit(self):
+        actual=self.common_api(); calls=[]
+        states=iter(('TERMINATED','PROVISIONING','RUNNING'))
+        def process(argv,**kwargs):
+            calls.append(argv[3])
+            if argv[3]=='describe':
+                return SimpleNamespace(returncode=0,stdout=json.dumps(dict(id=self.lane['vm']['instanceId'],
+                                                    name=self.lane['vm']['instance'],status=next(states))))
+            self.assertEqual(argv[3],'start')
+            self.assertTrue(controller.read_ownership(self.record,self.lane,self.run))
+            return SimpleNamespace(returncode=1)
+        with patch('subprocess.run',side_effect=process):
+            result=controller.start(actual,self.lane,self.run,self.record)
+        self.assertEqual(result['observed'],'RUNNING')
+        self.assertEqual(calls,['describe','start','describe','describe'])
+        self.assertTrue(controller.read_ownership(self.record,self.lane,self.run))
+
     def test_wrong_workflow_ref_source_event_or_attempt_is_refused(self):
         for key, value in (('GITHUB_WORKFLOW_REF','Immortal-Protocols/RoseOS-1/.github/workflows/os-release.yml@refs/heads/main'),
                            ('GITHUB_REF','refs/heads/other'), ('GITHUB_RUN_ATTEMPT','2'),
@@ -263,6 +326,96 @@ class DedicatedControllerTest(unittest.TestCase):
                                     env=env, capture_output=True, text=True, timeout=10)
             self.assertEqual(result.returncode, 4)
             self.assertIn('dedicated Mustang bindings missing', result.stderr)
+
+
+class DedicatedPathsTest(unittest.TestCase):
+    def profile(self, home=Path('/synthetic')):
+        value=DedicatedLaneTest().proposal()
+        value.update(sourceRoot=str(home/'source'), storageRoot=str(home/'rose-actions'),
+                     lockPath=str(home/'mustang.lock'), workflow='.github/workflows/mustang-ota-dedicated.yml',queue='mustang-ota')
+        return value
+
+    def test_paths_are_explicit_and_other_or_unbound_hosts_refuse(self):
+        profile=self.profile()
+        self.assertEqual(mustang_paths.attempt(profile,'prep','123','1'),
+                         Path('/synthetic/rose-actions/mustang-prep-123-1'))
+        for invalid in (lane.configuration(), dict(profile,storageRoot='/elsewhere/actions'),
+                        dict(profile,lockPath=profile['sourceRoot'])):
+            with self.assertRaises(ValueError): mustang_paths.layout(invalid)
+        for kind,run,attempt in (('../prep','123','1'),('prep','../1','1'),('prep','1','0')):
+            with self.assertRaises(ValueError): mustang_paths.attempt(profile,kind,run,attempt)
+
+    def test_compiler_keeps_pins_and_omissions_and_changes_only_three_path_fields(self):
+        spec=importlib.util.spec_from_file_location('mustang_path_engine',ROOT/'scripts/mustang-build-only.py')
+        module=importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
+        canonical=module.engine().load(ROOT/'os/build-only/mustang.json',probe=False)
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary)
+            record=root/'os/build-only/mustang-lane.json'; record.parent.mkdir(parents=True)
+            profile=self.profile(root/'host'); record.write_text(json.dumps(profile))
+            fake=SimpleNamespace(load=lambda path,**kwargs:copy.deepcopy(canonical))
+            recipe=mustang_paths.compiler_recipe(fake,profile,root)
+            self.assertEqual(recipe['preparation']['productionSourceRootFrom'],
+                             'os/build-only/mustang-lane.json sourceRoot')
+            self.assertEqual(recipe['preparation']['lockFrom'],'os/build-only/mustang-lane.json lockPath')
+            self.assertEqual(recipe['preparation']['candidateLayout']['ancestorBoundary'],str(root/'host'))
+            for field in ('productionSourceRootFrom','lockFrom'):
+                recipe['preparation'][field]=canonical['preparation'][field]
+            recipe['preparation']['candidateLayout']=canonical['preparation']['candidateLayout']
+            self.assertEqual(recipe,canonical)
+            record.write_text(json.dumps(lane.configuration()))
+            with self.assertRaisesRegex(ValueError,'exact committed'):
+                mustang_paths.compiler_recipe(fake,profile,root)
+
+    def test_allocator_uses_only_the_dedicated_lock_and_storage(self):
+        spec=importlib.util.spec_from_file_location('mustang_path_allocator',ROOT/'scripts/mustang-allocate.py')
+        allocate=importlib.util.module_from_spec(spec); spec.loader.exec_module(allocate)
+        with tempfile.TemporaryDirectory() as temporary:
+            home=Path(temporary); profile=self.profile(home); (home/'rose-actions').mkdir()
+            locks=[]
+            def take_lock(path):
+                locks.append(path)
+                return allocate.allocator.shared_lock(path)
+            with patch.object(allocate,'observe',return_value=(set(),{})):
+                value=allocate.reserve(str(home),'123','1',SOURCE,clock=lambda:int(EPOCH),lock=take_lock,lane=profile)
+                with self.assertRaisesRegex(allocate.Refused,'allocation home differs'):
+                    allocate.reserve('/different-home','124','1',SOURCE,lock=take_lock,lane=profile)
+            self.assertEqual(locks,[profile['lockPath']])
+            self.assertTrue(Path(value['workDir']).is_relative_to(home/'rose-actions'))
+            self.assertTrue((home/'rose-actions/mustang-allocations'/f'{value["build"]}.json').is_file())
+
+    def test_readiness_workflow_has_only_a_hosted_source_guard_and_no_runtime(self):
+        workflow=(ROOT/'.github/workflows/mustang-ota-dedicated.yml').read_text()
+        jobs=workflow_shape.jobs(workflow)
+        self.assertEqual(set(jobs),{'guard'})
+        self.assertIn('    runs-on: ubuntu-24.04',jobs['guard'])
+        self.assertIn('python3 scripts/mustang-readiness.py',jobs['guard'])
+        active='\n'.join(line for line in workflow.splitlines() if not line.lstrip().startswith('#'))
+        for forbidden in ('self-hosted','id-token: write','actions-gcp-login','schedule:', 'workflow_run:'):
+            self.assertNotIn(forbidden,active)
+        self.assertIn('  group: mustang-ota',workflow)
+        env=dict(PATH=os.environ['PATH'])
+        result=subprocess.run([sys.executable,str(ROOT/'scripts/mustang-readiness.py')],env=env,
+                              capture_output=True,text=True,timeout=10)
+        self.assertEqual(result.returncode,4)
+        self.assertIn('dedicated Mustang bindings missing',result.stderr)
+
+    def test_source_readiness_cannot_report_native_or_runtime_readiness(self):
+        spec=importlib.util.spec_from_file_location('mustang_readiness_test',ROOT/'scripts/mustang-readiness.py')
+        readiness=importlib.util.module_from_spec(spec); spec.loader.exec_module(readiness)
+        profile=self.profile()
+        env=dict(GITHUB_EVENT_NAME='workflow_dispatch',GITHUB_REF='refs/heads/main',GITHUB_SHA=SOURCE,
+                 GITHUB_RUN_ID='123',GITHUB_RUN_ATTEMPT='1',
+                 GITHUB_WORKFLOW_REF='Immortal-Protocols/RoseOS-1/'+profile['workflow']+'@refs/heads/main')
+        class NoControl:
+            def control_builder(self,action,*,builder,claim=None):
+                raise AssertionError('source readiness must never call a controller')
+        with patch.object(controller,'common_controller',return_value=NoControl()):
+            result=readiness.check(profile,env)
+            self.assertFalse(result['nativePipelineReady'])
+            self.assertFalse(result['runtimeAuthorized'])
+            with self.assertRaisesRegex(ValueError,'workflow/queue differ'):
+                readiness.check(dict(profile,queue='different-queue'),env)
 
 
 class ProofTest(unittest.TestCase):
@@ -357,7 +510,7 @@ class AdapterTest(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
-        self.actions = self.root/'actions'; self.actions.mkdir()
+        self.actions = self.root/'rose-actions'; self.actions.mkdir()
         self.source = self.actions/'mustang-prep-222-1/source'; self.source.mkdir(parents=True)
         (self.source/'script').mkdir()
         (self.source/'script/generate-release.sh').write_text('synthetic source fixture, never executed')
@@ -497,6 +650,43 @@ class AdapterTest(unittest.TestCase):
         self.assertEqual(result['omittedChecks'],['other sprint omissions remain'])
         self.assertFalse(signed['signingResultVerified'])
         self.assertEqual(self.calls,['signer stand-in','factory'])
+
+    def test_explicit_dedicated_collection_sign_and_factory_never_use_legacy_paths_or_lock(self):
+        profile=DedicatedPathsTest().profile(self.root)
+        self.candidate.update(builder=dict(profile['vm']),workflow=profile['workflow'])
+        self.receipt.write_text(json.dumps(self.candidate))
+        locks=[]; previous=self.hp.shared_lock
+        def take_lock(path):
+            locks.append(str(path))
+            return previous(path)
+        self.hp.shared_lock=take_lock
+        with patch.object(adapter,'BASE',self.root/'retired'), \
+                patch.object(adapter.mustang_collection,'BASE',self.root/'retired'), \
+                patch.object(adapter,'LOCK',str(self.root/'retired.lock')):
+            adapter.collect(str(self.receipt),'333','1',lane=profile)
+            signed=adapter.sign(str(self.receipt),str(self.bootstrap),'333','1',lane=profile)
+            result=adapter.package('333','1','333','1',lane=profile)
+        self.assertEqual(locks,[profile['lockPath']]*3)
+        self.assertEqual(result['roseEdge'],signed['roseEdge'])
+        self.assertEqual(self.calls,['signer stand-in','factory'])
+        self.assertFalse((self.root/'retired').exists())
+        self.assertFalse((self.root/'retired.lock').exists())
+
+    def test_dedicated_collection_refuses_old_or_foreign_builder_receipts(self):
+        profile=DedicatedPathsTest().profile(self.root)
+        with self.assertRaisesRegex(ValueError,'exact dedicated Mustang VM/workflow'):
+            adapter.collect(str(self.receipt),'333','1',lane=profile)
+        self.candidate.update(builder=dict(profile['vm'],instanceId='999'),workflow=profile['workflow'])
+        self.receipt.write_text(json.dumps(self.candidate))
+        with self.assertRaisesRegex(ValueError,'exact dedicated Mustang VM/workflow'):
+            adapter.collect(str(self.receipt),'333','1',lane=profile)
+        self.assertEqual(self.calls,[])
+
+    def test_unbound_dedicated_collection_fails_before_admission_or_output(self):
+        with self.assertRaisesRegex(ValueError,'dedicated Mustang bindings missing'):
+            adapter.collect(str(self.receipt),'333','1',lane=lane.configuration())
+        self.assertEqual(self.calls,[])
+        self.assertFalse((self.actions/'mustang-collect-333-1').exists())
 
     def test_private_factory_cannot_reuse_pre_gate_success_receipt(self):
         self.collect(); self.sign()
