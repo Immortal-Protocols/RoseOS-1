@@ -5,7 +5,8 @@ Consumes the completed Mustang compile receipt and a genuine pro-mustang-v1
 bootstrap public receipt supplied by the workflow. Fixed target/container names,
 source/build bindings, shared locks and transient secret cleanup remain enforced.
 Signing-result/public-identity, APK/policy, firmware coverage and installer content
-verification are deliberately omitted under Nathan's sprint plan.
+verification remain omitted. The later narrow raised-edge inclusion exception
+checks both target-files, including every future private factory delivery.
 """
 import argparse
 import datetime
@@ -26,6 +27,7 @@ sys.path.insert(0,str(ROOT/'scripts'))
 import host_secrets
 import release_receipts
 import mustang_collection
+import mustang_edge
 
 PROFILE = 'pro-mustang-v1'
 PROJECT = 'protocols-465723'
@@ -92,6 +94,11 @@ def collect(compile_receipt,run_id,attempt):
             for role,old in value['stages']['compile']['result']['outputs']['artifacts'].items():
                 if old.get('state')=='collected' and outputs['artifacts'].get(role)!=old:
                     raise ValueError('preserved compile output changed during collection')
+            bound=mustang_edge.binding(value['source'],report['collectorSource'],build,epoch,run_id,attempt,
+                                      str(value['runId']),str(value['runAttempt']))
+            report['roseEdge']=mustang_edge.inspect(outputs['artifacts']['targetFiles']['path'],'unsigned',
+                                                   bound,outputs['artifacts']['targetFiles'])
+            mustang_edge.require(report['roseEdge'],'unsigned',bound,outputs['artifacts']['targetFiles'])
         report['status']='complete'
         path=out/'compile-collection.json'
         if os.environ.get('GITHUB_OUTPUT'):
@@ -129,6 +136,9 @@ def compile_binding(path):
         if role=='otatools' and tools!=[artifact]:raise ValueError('foreign or ambiguous otatools module output')
         if artifact.stat().st_size!=row['sizeBytes'] or digest(artifact)!=row['sha256']:
             raise ValueError('compiled output identity changed')
+    bound=mustang_edge.binding(value['source'],source_sha(),build,epoch,os.environ['GITHUB_RUN_ID'],
+                              os.environ['GITHUB_RUN_ATTEMPT'],str(value['runId']),str(value['runAttempt']))
+    mustang_edge.require(collection.get('roseEdge'),'unsigned',bound,outputs['artifacts']['targetFiles'])
     return value,source,build,epoch,outputs['artifacts']
 
 
@@ -178,24 +188,31 @@ def sign(compile_receipt,bootstrap_receipt,run_id,attempt):
             or os.environ.get('GCP_SIGNER_SERVICE_ACCOUNT')!=SIGNER:
         raise ValueError('signer/project/container binding differs')
     compiled,source,build,epoch,outputs=compile_binding(compile_receipt)
+    collection_path=run_root('collect',run_id,attempt)/'compile-collection.json'
+    collection=read(collection_path)
     bootstrap,versions=bootstrap_binding(bootstrap_receipt)
     out=run_root('sign',run_id,attempt)
     if out.exists() or out.is_symlink():raise ValueError('sign attempt exists; no automatic retry')
     out.mkdir(mode=0o700)
     record={'schema':'roseos.mustang-sign-run.v1','device':'mustang','build':build,'candidateSource':compiled['source'],
         'recipeSource':source_sha(),'runId':run_id,'runAttempt':attempt,'label':LABEL,'status':'failed',
+        'timestamp':epoch,'compileRunId':str(compiled['runId']),'compileRunAttempt':str(compiled['runAttempt']),
         'compileReceiptSha256':digest(compile_receipt),'bootstrapReceiptSha256':digest(bootstrap_receipt),
-        'compileCollectionReceiptSha256':digest(run_root('collect',run_id,attempt)/'compile-collection.json'),
+        'compileCollectionReceiptSha256':digest(collection_path),
         'compileCollectionRecovery':os.environ.get('EXPECTED_COMPILE_RECOVERY')=='true',
         'compileProducerConclusion':'failure' if os.environ.get('EXPECTED_COMPILE_RECOVERY')=='true' else 'success',
         'secrets':{k:{'name':SECRETS[k],'version':v} for k,v in versions.items()},
-        'omittedChecks':compiled['omittedChecks'],'signingResultVerified':False,'intendedPublicIdentityVerified':False}
+        'omittedChecks':compiled['omittedChecks'],'signingResultVerified':False,'intendedPublicIdentityVerified':False,
+        'roseEdge':{'unsigned':collection['roseEdge']},
+        'edgeTargetFiles':{'unsigned':mustang_edge.archive_identity(outputs['targetFiles'])}}
     try:
         notes=out/'CANDIDATE.md'
         notes.write_text(f'# Mustang {build}\n\n{LABEL}\n\nSource: {compiled["source"]}\n\n'
             +'Omitted checks:\n'+''.join(f'- {x}\n' for x in compiled['omittedChecks']))
         release=out/'release';release.mkdir(mode=0o700)
         shutil.copyfile(outputs['targetFiles']['path'],release/'unsigned-target_files.zip')
+        if mustang_edge.observed_archive(release/'unsigned-target_files.zip')!=record['edgeTargetFiles']['unsigned']:
+            raise ValueError('copied unsigned target-files differ from the raised-edge proof')
         config={'target':{'device':'mustang'},'host':{'sign':{
             'project':PROJECT,'keysSecret':SECRETS['keys'],'passphraseSecret':SECRETS['passphrase'],
             'secretVersion':versions['keys'],'passphraseSecretVersion':versions['passphrase'],
@@ -214,11 +231,16 @@ def sign(compile_receipt,bootstrap_receipt,run_id,attempt):
             result=bounded.supervise([sys.executable,str(Path(__file__).resolve()),'_execute','--config',str(config_path)],
                 str(source),env,10800,{'sampleSeconds':5,'killGraceSeconds':30,'boundBytes':1<<60,
                                      'reserveBytes':0,'checkReserve':False})
-        record['commandOutcome']=result
-        if result['returncode']!=0 or result['stopped']:raise RuntimeError('signing command failed; no retry')
-        tf=release/'signed-target_files.zip';ota=release/'public'/f'mustang-ota_update-{build}.zip'
-        record['outputs']={name:{'path':str(p),'sizeBytes':p.stat().st_size,'sha256':digest(p)}
-                           for name,p in [('targetFiles',tf),('ota',ota)]}
+            record['commandOutcome']=result
+            if result['returncode']!=0 or result['stopped']:raise RuntimeError('signing command failed; no retry')
+            tf=release/'signed-target_files.zip';ota=release/'public'/f'mustang-ota_update-{build}.zip'
+            record['outputs']={name:{'path':str(p),'sizeBytes':p.stat().st_size,'sha256':digest(p)}
+                               for name,p in [('targetFiles',tf),('ota',ota)]}
+            record['compileArtifacts']=outputs
+            record['edgeTargetFiles']['signed']=mustang_edge.archive_identity(record['outputs']['targetFiles'])
+            record['roseEdge']['signed']=mustang_edge.inspect(tf,'signed',mustang_edge.signing_binding(record),
+                                                           record['outputs']['targetFiles'])
+            mustang_edge.require_signing(record)
         record.update(status='signed-command-complete',sourceRoot=str(source),compileArtifacts=outputs,
                       publicAvbPath=str(release/'public/avb_pkmd.bin'))
         return record
@@ -231,6 +253,7 @@ def package(sign_run,sign_attempt,run_id,attempt):
     signed=read(run_root('sign',sign_run,sign_attempt)/'mustang-sign-receipt.json')
     if signed.get('schema')!='roseos.mustang-sign-run.v1' or signed.get('device')!='mustang' \
             or signed.get('status')!='signed-command-complete':raise ValueError('completed Mustang signing command required')
+    mustang_edge.require_signing(signed)
     build=signed['build'];source=Path(signed['sourceRoot'])
     out=run_root('package',run_id,attempt)
     if out.exists() or out.is_symlink():raise ValueError('package attempt exists; no automatic retry')
@@ -241,7 +264,8 @@ def package(sign_run,sign_attempt,run_id,attempt):
         'compileCollectionRecovery':signed.get('compileCollectionRecovery',False),
         'compileProducerConclusion':signed.get('compileProducerConclusion'),
         'compileCollectionReceiptSha256':signed.get('compileCollectionReceiptSha256'),
-        'omittedChecks':signed['omittedChecks'],'phoneValidated':False}
+        'omittedChecks':signed['omittedChecks'],'phoneValidated':False,
+        'roseEdge':signed['roseEdge'],'edgeTargetFiles':signed['edgeTargetFiles']}
     try:
         with hp.shared_lock(LOCK):
             tf=Path(signed['outputs']['targetFiles']['path']);ota=Path(signed['compileArtifacts']['otatools']['path'])

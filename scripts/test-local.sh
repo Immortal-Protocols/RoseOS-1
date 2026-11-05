@@ -82,6 +82,7 @@ python3 os/tests/persistent-app-experiment/test_sdk_revisions.py
 python3 scripts/tests/test_release_manifest.py
 python3 scripts/tests/test_release_stage.py
 python3 scripts/tests/test_release_pipeline.py
+python3 scripts/tests/test_edge_artifact.py
 python3 scripts/tests/test_app_tests_paths.py
 python3 scripts/tests/test_permission_apex.py
 python3 scripts/tests/test_release_candidate_contract.py
@@ -91,6 +92,8 @@ python3 scripts/tests/test_release_chain.py
 python3 scripts/tests/test_mustang_ota_chain_workflow.py
 # Yogi OTA route: contract, guards, allocation, packaged-Updater/trust and publication checks (synthetic; no host, key or network).
 python3 scripts/tests/test_yogi_ota.py
+# Mustang raised-edge gate (#570): the shared checker on synthetic archives; no signer, host or dispatch.
+python3 scripts/tests/test_mustang_edge_gate.py
 python3 scripts/tests/test_agent_beta_auto.py
 # 1F daily release dispatcher (canned API answers; no network, token, dispatch or host).
 python3 scripts/tests/test_daily_release.py

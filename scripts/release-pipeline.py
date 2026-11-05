@@ -28,6 +28,7 @@ import time
 import zipfile
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import release_receipts  # noqa: E402
+import edge_artifact  # noqa: E402
 import github_release_publisher  # noqa: E402
 import permission_apex  # noqa: E402
 import systemui_identity  # noqa: E402
@@ -153,6 +154,7 @@ def preflight(job, config, env, adapter):
         missing += updater_missing(config)
         missing += permission_apex.missing(config.get('permissionApex'))
         missing += [f'systemUiTray.{key}' for key in SYSTEMUI_TRAY_REQUIRED if not (config.get('systemUiTray') or {}).get(key)]
+        missing += edge_artifact.missing(config.get('roseEdge'))
     if job == 'builder':
         if not env.get('GCP_SIGNER_SERVICE_ACCOUNT'):
             missing.append('GCP_SIGNER_SERVICE_ACCOUNT')
@@ -862,6 +864,26 @@ def check_systemui_tray(path, config, identity=None):
         return [f'SystemUI dex lacks {absent}; the Agent tray lifecycle (AgentTrayLink, OS #85) is not compiled in'], receipt
     return [], receipt
 
+def check_rose_edge(path, config):
+    """(failures, receipt): OS Product's raised-edge artifact check (scripts/edge_artifact.py; #410 1C/2A item 4) on
+    these target-files: both build switches, #548's staged gesture in Launcher3QuickStep, and the Shell resize and the
+    chin's microphone slot in SystemUI. Every admitted device's config must carry roseEdge. Another route's config (the
+    retained Rango build, which predates the edge) carries none; there the receipt records that nothing was checked."""
+    spec = config.get('roseEdge')
+    if spec is None and config['target']['device'] not in SUPPORTED_DEVICES:
+        return [], {'configured': False}
+    absent = edge_artifact.missing(spec)
+    if absent:
+        raise SetupMissing(absent)
+    try:
+        failures, receipt = edge_artifact.check(path, spec)
+    except edge_artifact.SpecError as error:
+        raise InvalidInput(str(error))
+    return failures, {'configured': True, **receipt}
+
+def rose_edge_label(edge):
+    return ['Rose raised edge: switches, Launcher3 gesture with the #548 marker and SystemUI resize/mic slot in dex'] if edge.get('configured') else []
+
 def systemui_identity_capture(data, apk_path, artifact, config, cand, used):
     """Supplemental identity of the signed SystemUI APK (OS-COMPONENT-ID-002/003): xmltree and apksigner run on one
     extracted copy whose sha256 is taken after each tool, so an output for other bytes is rejected by
@@ -941,13 +963,15 @@ def verify_build(a, config, cand, adapter):
     failures += apex_failures
     tray_failures, tray = check_systemui_tray(target_files, config)
     failures += tray_failures
+    edge_failures, edge = check_rose_edge(target_files, config)
+    failures += edge_failures
     if failures:
         raise CheckFailed('; '.join(failures))
     return {'stage': 'bytes-verify', 'checks': ['build identity', 'misc_info fingerprints', 'app bytes/PRESIGNED/signers', 'framework policy',
         updater_check_label(config, signed=False),
         'Permission APEX from source: name/version/source payload key/payload signature/RoleService markers',
-        'SystemUI Agent tray lifecycle code in dex'],
-        'permissionApex': apex, 'apexTools': apex_tools, 'systemUiTray': tray, 'updater': updater_record(config)}
+        'SystemUI Agent tray lifecycle code in dex', *rose_edge_label(edge)],
+        'permissionApex': apex, 'apexTools': apex_tools, 'systemUiTray': tray, 'roseEdge': edge, 'updater': updater_record(config)}
 
 def updater_check_label(config, signed):
     if updater_mode(config) == 'rose':
@@ -1148,7 +1172,7 @@ def verify_signed(a, config, cand, adapter):
     expected = set(public_assets(device, build)) - {'verification.json', 'SHA256SUMS'}
     present = {p.name for p in public.iterdir()}
     failures = [f'public directory has {sorted(present ^ expected)} outside the allowlist'] if present != expected else []
-    image_tools, verifier_tools, identity_tools = {}, {}, {}
+    image_tools, verifier_tools, identity_tools, edge = {}, {}, {}, None
     signed_sha256 = sha256_file(signed) if signed.is_file() else None
     artifact = {'kind': 'target-files', 'name': signed.name, 'sha256': signed_sha256}
     if not failures:
@@ -1160,6 +1184,8 @@ def verify_signed(a, config, cand, adapter):
         tray_failures, tray = check_systemui_tray(signed, config, lambda data, apk_path:
             systemui_identity_capture(data, apk_path, artifact, config, cand, identity_tools))
         failures += tray_failures
+        edge_failures, edge = check_rose_edge(signed, config)
+        failures += edge_failures
         failures += check_image_bytes(config, signed, release_dir/'background-policy.json', image_tools)
         failures += check_ota(config, cand, public/f'{device}-ota_update-{build}.zip', public, verifier_tools)
         failures += check_payload(public/f'{device}-ota_update-{build}.zip')
@@ -1174,9 +1200,9 @@ def verify_signed(a, config, cand, adapter):
         'checks': ['allowlist', 'build identity (release-keys)', 'misc_info fingerprints', 'app bytes/PRESIGNED/signers',
             updater_check_label(config, signed=True),
             'Permission APEX name/version/payload key and signature/RoleService markers/container signer',
-            'SystemUI Agent tray lifecycle code in dex', 'image-embedded app/framework/Permission APEX/SystemUI bytes', 'OTA metadata', 'OTA package and payload signatures', 'payload properties',
+            'SystemUI Agent tray lifecycle code in dex', *rose_edge_label(edge), 'image-embedded app/framework/Permission APEX/SystemUI bytes', 'OTA metadata', 'OTA package and payload signatures', 'payload properties',
             'vbmeta signature and AVB key', 'public pins', 'feed line'],
-        'permissionApex': apex, 'systemUiTray': tray, 'imageTools': image_tools, 'verifierTools': verifier_tools,
+        'permissionApex': apex, 'systemUiTray': tray, 'roseEdge': edge, 'imageTools': image_tools, 'verifierTools': verifier_tools,
         'updater': updater_record(config)}
     release_receipts.write_once(public/'verification.json', receipt)
     write_checksums(public)

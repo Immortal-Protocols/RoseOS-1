@@ -109,9 +109,9 @@ sys.path.insert(0, str(ROOT/'scripts'))
 import alpha_source  # noqa: E402  (the reviewed copy plan and per-file copy)
 
 MANIFEST = ROOT/'os/compile-contracts/launcher3-quickstep-lib.json'
-# OS Product's reviewed contract version (schema 3, 4f2c426: rebound to #551's b639c22, F06 and F08 base patches). A
-# different manifest is refused until this pin is updated.
-MANIFEST_SHA256 = '46278aa4b90dfd32cab1a595fe92fe437b9a1913925163273f68170226ce53c6'
+# OS Product's reviewed contract version (schema 3, #563 base rebind plus 1193274's lunch inputs without auto
+# maintenance). A different manifest is refused until this pin is updated.
+MANIFEST_SHA256 = 'd7a6b1735754b1eca7caef5bc08fef3c9a11dd5f31f3521dada8a990f3878e9a'
 CONDITIONS = ['base-exact', 'delta-preimages', 'isolated-apply', 'final-exact']
 # The binding inputs each branch requires and forbids, in the contract's own vocabulary (branches.requires, forbids):
 # check() binds and refuses exactly these, so the contract and this adapter cannot drift.
@@ -196,9 +196,10 @@ LUNCH_SECONDS = 20 * 60
 # redirected or relaxed check.
 VERSION_CHECKED_PRODUCTS = ('frankel',)
 # Such a lunch needs OS Product's lunch-input contract (#410/#459; public-fetch, publicFetch and workingTree added in
-# #531, f16ba64), read as data only and never through its script. A different file is refused until this pin is updated.
+# #531, f16ba64; no-auto-maintenance in 1193274), read as data only and never through its script. A different file is
+# refused until this pin is updated.
 LUNCH_INPUTS = 'os/compile-contracts/frankel-lunch-inputs.json'
-LUNCH_INPUTS_SHA256 = 'd259aae6d1984dea2ead3f929aeb7ce9a2807681f28147ce53deb2ada36ec4e3'
+LUNCH_INPUTS_SHA256 = '03b58acffac8b7c7d1e4b67daaf64d545307b804825f6360d86f3175c5a1dd2c'
 PINNED_MANIFEST = 'os/pinned-manifest.xml'
 # The only way this adapter gives vendor/adevtool its .git: the pinned commit fetched from the pinned manifest's public
 # source into the copy, admitted only when the pinned lunch-input contract lists the class. Infra's proposed first
@@ -210,6 +211,8 @@ GIT_PATH = '/usr/bin:/bin'
 # A new repository from `git init --template=` has exactly these local keys; any other one refuses.
 GIT_CONFIG_KEYS = ('core.repositoryformatversion', 'core.filemode', 'core.bare', 'core.logallrefupdates')
 GIT_REDIRECTS = ('objects/info/alternates', 'objects/info/http-alternates', 'commondir', 'gitdir', 'hooks', 'info/grafts')
+# publicFetch.acceptance forbids these maintenance/gc markers even when the fetch itself succeeded.
+MAINTENANCE_MARKS = ('gc.pid', 'gc.log', 'objects/maintenance.lock')
 # The git variables the contained lunch and m environment sets itself; nothing else named GIT_* reaches them.
 CONTAINED_GIT = ('GIT_CEILING_DIRECTORIES', 'GIT_CONFIG_NOSYSTEM', 'GIT_CONFIG_GLOBAL')
 # The pinned adevtool .gitignore rules the copy omits (gitRequirement.workingTree.omittedFromCopy), implemented exactly by
@@ -224,7 +227,7 @@ OPTION_CLASSES = ('genuine-copy', 'redirect', 'public-fetch', 'fabrication', 're
 # The canonical sha256 of everything this adapter implements of the git route: the whole gitRequirement and every
 # source's workingTreeCheck text (json, sorted keys, compact separators). Any change to them is invalid until this
 # adapter is reviewed against the new text, so a re-pin is never only a hash bump.
-GIT_REQUIREMENT_SHA256 = 'ca8de46a9769e90c2559974da6dc17b7cbd32f49cce2ed41a8d6ef537be56166'
+GIT_REQUIREMENT_SHA256 = 'd79dd327439c43359cf427d0d0ade4fec94d3dbec3000d9778c8425a43ea66cc'
 # The job environment the fetch keeps (network setup only); everything else, LD_* included, is left out.
 FETCH_INHERITED = ('HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy', 'NO_PROXY', 'no_proxy', 'ALL_PROXY',
                    'all_proxy', 'SSL_CERT_FILE', 'SSL_CERT_DIR', 'LANG')
@@ -862,9 +865,10 @@ def lunch_listing(inputs, project, root=ROOT, raw=False):
 
 def fetch_steps(work, url, revision):
     """gitRequirement.publicFetch.steps, which are Blazer's git_meta_argv: a new .git with no templates (no hooks),
-    exactly revision at depth 1 with no tags, and a detached HEAD by update-ref; none reads or writes the working tree."""
+    exactly revision at depth 1 with no tags or auto maintenance (which can detach beyond the stage's session), and a
+    detached HEAD by update-ref. Git without the maintenance flag refuses; none reads or writes the working tree."""
     return [['git', 'init', '-q', '--template=', str(work)],
-            ['git', '-C', str(work), 'fetch', '--quiet', '--depth=1', '--no-tags', url, revision],
+            ['git', '-C', str(work), 'fetch', '--quiet', '--depth=1', '--no-tags', '--no-auto-maintenance', url, revision],
             ['git', '-C', str(work), 'update-ref', '--no-deref', 'HEAD', revision]]
 
 
@@ -1348,7 +1352,7 @@ def gitdir_problems(tree, work, inputs, raw_listing, env, lunch_env, deadline, l
     -r -z --full-tree with each NUL as LF is byte for byte the pinned listing; the local configuration is exactly a new
     repository's (no remote.*), there is no ref but HEAD, and nothing redirects outside the copy (a real .git directory
     resolving inside it; no alternates, commondir, gitdir file, hooks or grafts; no link, mount point, other filesystem
-    or second hard link)."""
+    or second hard link); no gc.pid, gc.log or objects/maintenance.lock is present."""
     git, problems = inputs['gitRequirement'], []
     revision, root_tree = git['revision'], git['rootTree']
     dotgit, tree = work/'.git', Path(tree)
@@ -1395,6 +1399,9 @@ def gitdir_problems(tree, work, inputs, raw_listing, env, lunch_env, deadline, l
     for name in GIT_REDIRECTS:
         if os.path.lexists(dotgit/name):
             problems.append(f'.git/{name} exists')
+    for name in MAINTENANCE_MARKS:
+        if os.path.lexists(dotgit/name):
+            problems.append(f'.git/{name} exists: maintenance/gc marker is forbidden')
     device, stack = os.lstat(tree).st_dev, [dotgit]
     while stack:
         directory = stack.pop()

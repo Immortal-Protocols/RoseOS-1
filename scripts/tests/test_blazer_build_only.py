@@ -10,6 +10,7 @@ import importlib.util
 import io
 import json
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -2467,6 +2468,26 @@ class GitMetaTest(Fixture):
         self.assertEqual((shadow/'res/config.xml').read_text(), 'pinned\n')
         self.assertEqual((base/'res/config.xml').read_text(), 'integrated by Rose\n')
 
+    def test_the_fetch_spawns_no_auto_maintenance(self):
+        # Git's own trace of the helper's fetch step, under the helper's env: without --no-auto-maintenance fetch runs
+        # `git maintenance run --auto` (which newer Git can detach past cleanup); with it, fetch spawns nothing.
+        row = self.projects()[0]
+        url = self.synthetic['gitMeta']['fetchUrlPrefix'] + row['name']
+        env = bb.git_meta_env(self.src, self.tmp, self.synthetic['gitMeta']['fetchUrlPrefix'])
+        spawned = {}
+        for flagged in (True, False):
+            work, trace = self.tmp/f'm-{flagged}', self.tmp/f'trace-{flagged}'
+            init, fetch, _ = bb.git_meta_argv(work, url, row['revision'])
+            self.assertIn('--no-auto-maintenance', fetch)
+            if not flagged:
+                fetch = [a for a in fetch if a != '--no-auto-maintenance']
+            subprocess.run(init, env=env, check=True)
+            subprocess.run(fetch, env={**env, 'GIT_TRACE': str(trace)}, check=True)
+            self.assertEqual((work/'.git/shallow').read_text(), row['revision'] + '\n')
+            spawned[flagged] = re.findall(r"run_command: (git (?:maintenance|gc)\b.*)", trace.read_text())
+        self.assertEqual(spawned[True], [])
+        self.assertTrue(any('maintenance run --auto' in c for c in spawned[False]), spawned)
+
     def test_an_existing_git_dir_or_the_production_tree_refuses_before_any_process(self):
         self.projects()
         (self.src/'build/make/.git').mkdir()
@@ -2534,7 +2555,7 @@ class GitMetaTest(Fixture):
         self.assertEqual((spec['objectsSource'], spec['fetchUrlPrefix'], spec['boundBytes'], spec['projectTimeoutSeconds'],
                           spec['timeoutSeconds']), ('public-fetch', 'https://github.com/GrapheneOS/', 8 << 30, 1800, 5400))
         argv = bb.commands(self.recipe, self.op())['git-meta']['projects'][0]['argv']
-        self.assertEqual(argv[1][3:], ['fetch', '--quiet', '--depth=1', '--no-tags',
+        self.assertEqual(argv[1][3:], ['fetch', '--quiet', '--depth=1', '--no-tags', '--no-auto-maintenance',
                                        'https://github.com/GrapheneOS/platform_build', spec['projects'][0]['revision']])
         env = bb.git_meta_env(self.src, self.tmp/'h', spec['fetchUrlPrefix'])
         self.assertEqual((env['GIT_ALLOW_PROTOCOL'], env['GIT_CONFIG_GLOBAL'], env['GIT_TERMINAL_PROMPT'], env['PATH']),

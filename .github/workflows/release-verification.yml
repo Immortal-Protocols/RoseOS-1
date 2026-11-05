@@ -125,6 +125,9 @@ on:
       - 'scripts/tests/test_alpha_source.py'
       - 'scripts/tests/test_permission_apex.py'
       - 'scripts/tests/apex_fixture.py'
+      - 'scripts/edge_artifact.py'
+      - 'scripts/tests/test_edge_artifact.py'
+      - 'scripts/tests/dex_fixture.py'
       - 'scripts/tests/java/**'
       - 'workspace/rose-agent/app/src/dev/pixel/voice/DirectUpdate.java'
       - 'workspace/rose-agent/app/src/dev/pixel/voice/MiniJson.java'
@@ -301,6 +304,9 @@ on:
       - 'scripts/tests/test_alpha_source.py'
       - 'scripts/tests/test_permission_apex.py'
       - 'scripts/tests/apex_fixture.py'
+      - 'scripts/edge_artifact.py'
+      - 'scripts/tests/test_edge_artifact.py'
+      - 'scripts/tests/dex_fixture.py'
       - 'scripts/tests/java/**'
       - 'workspace/rose-agent/app/src/dev/pixel/voice/DirectUpdate.java'
       - 'workspace/rose-agent/app/src/dev/pixel/voice/MiniJson.java'
@@ -382,6 +388,7 @@ jobs:
           python3 scripts/tests/test_release_manifest.py
           python3 scripts/tests/test_release_stage.py
           python3 scripts/tests/test_release_pipeline.py
+          python3 scripts/tests/test_edge_artifact.py
           python3 scripts/tests/test_permission_apex.py
           python3 scripts/tests/test_release_candidate_contract.py
           python3 scripts/tests/test_release_allocate.py

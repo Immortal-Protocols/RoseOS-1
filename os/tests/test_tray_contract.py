@@ -104,6 +104,28 @@ class TrayContractTest(unittest.TestCase):
         self.assertNotIn('bindServiceAsUser', self.tray.replace(
             self.tray[self.tray.index('new AgentTrayLink.Port()'):self.tray.index('AgentTrayPrototype(Context source')], ''))
 
+    def test_register_says_whether_the_rose_chin_can_be_raised(self):
+        # F08 (agreed with Home): REGISTER's arg2 is AgentStatusControls.chinArg (AgentStatusControlsTest), read fresh
+        # for each REGISTER; only the link re-registers (AgentTrayLink.refresh, AgentTrayLinkTest) when it changes.
+        send = self.tray[self.tray.index('private boolean send(int action) {'):]
+        send = send[:send.index('\n    }\n') + 6]
+        self.assertIn('if (action == AgentTrayLink.REGISTER) message.arg2 = sentChin = chinArg();', send)
+        self.assertNotIn('arg1', self.tray)
+        self.assertIn('return AgentStatusControls.chinArg(SystemProperties.getBoolean(EDGE_PROPERTY, false), '
+            'link.user(),', self.tray)
+        self.assertIn('Settings.Secure.getIntForUser(context.getContentResolver(), Settings.Secure.NAVIGATION_MODE, 0,',
+            self.tray)
+        self.assertIn('private static final String EDGE_PROPERTY = "persist.wm.debug.rose_edge";', self.tray)
+        # Not by class name: R8 may rename com.android.wm.shell.roseedge, which SystemUI's keep rule does not cover.
+        self.assertNotIn('Class.forName', self.tray)
+        self.assertIn('if (chinArg() != sentChin) link.refresh();', self.tray)
+        self.assertIn('Settings.Secure.getUriFor(Settings.Secure.NAVIGATION_MODE), false,', self.tray)
+        self.assertIn('SystemProperties.addChangeCallback(() -> handler.post(this::chinMaybeChanged));', self.tray)
+        # The edge's switch is the one the Shell controller reads and only the edge's build patch sets.
+        controller = (ROOT/'os/patches/rose-edge-wmshell.patch').read_text()
+        self.assertIn('static final String ENABLED_PROPERTY = "persist.wm.debug.rose_edge";', controller)
+        self.assertIn('persist.wm.debug.rose_edge=true', (ROOT/'os/patches/rose-edge-build-make.patch').read_text())
+
     def test_app_glow_shader_matches_the_os_copy(self):
         self.assertEqual(shader(APP/'StatusVoiceGlow.java'), shader(SHELL/'StatusVoiceGlow.java'))
 

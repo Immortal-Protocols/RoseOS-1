@@ -60,6 +60,12 @@ public final class AgentStatusControlsTest {
         c.cancel();  // keyguard, screen-off or lost binding while the finger is down
         expect("up after external cancel", 0, c.touch(UP, 1, 10, 5, 1020, AGENT, true, false, SLOP));
         expect("stray up without down", 0, c.touch(UP, 1, 10, 5, 1030, AGENT, true, false, SLOP));
+        // F08: the chin is available only with the edge switch, user 0 and gesture navigation.
+        expect("chin available", 1, AgentStatusControls.chinArg(true, 0, 2));
+        expect("switch off", 0, AgentStatusControls.chinArg(false, 0, 2));
+        expect("secondary user", 0, AgentStatusControls.chinArg(true, 10, 2));
+        expect("three-button navigation", 0, AgentStatusControls.chinArg(true, 0, 0));
+        expect("two-button navigation", 0, AgentStatusControls.chinArg(true, 0, 1));
         System.out.println("AgentStatusControlsTest: " + checks + " checks passed");
     }
 }

@@ -20,7 +20,8 @@
   "rule": "an adapter refuses this contract unless state is \"confirmed\"; any change to the bound patch or inputs regenerates the manifest and needs OS Core's confirmation again",
   "reconfirmed": "OS Core to OS Product, 2026-11-04 06:51 UTC, from merge bf6a9ed (#528, tested head e304a35): patch sha256 ba64ea3114f46925446c204261097aebf963a923eb355860a6f2e54bb7262be2. Only RoseEdgeMicSlot.java's after-image changes (blob a9c4a5dd62f652dcf1044b6b9774ed851083f989); the other after-images, the WMShellModule pre-image, the inputs and the goals are unchanged",
   "rebound": "OS Core to OS Product, 2026-11-04 16:41 UTC, from #540 head d8f19fe (the javac fix for Frankel run 41861964515: RoseEdgeMicSlot.Control's super(mContext) named View's own field): patch sha256 a10a73b983430d26d432d90c8555ab052dd6917142dfad1d5d2c2d9f0efe7f75. Only RoseEdgeMicSlot.java's after-image changes (sha256 0768a732126c0cf14bdc0aee7d08ed5ea67d286cf0968e3828a87df58004a54a, blob 3a9ef4bf55ae44e3ea5a4fbd0112b9ead6e32833); the other after-images and the WMShellModule pre-image are unchanged; the inputs, the goals (WindowManager-Shell, SystemUI-core) and flagEvidence (none) are unchanged: a field rename inside one file, with no new imports, files, classpath inputs or flags",
-  "rebased": "OS Core to OS Product, 2026-11-05 01:31 UTC, from #551 head 77c9117 (F06 app takeover and the F08 chin marker), re-stated 01:52 UTC for head b639c22 (F06 target_not_standard guard): background-control-frameworks-base.patch sha256 42986c0bf5e26e97b41ca5d62145b9a0ce45dd94810afcb307be658446cd8979, only ComputerControlSessionImpl's after-image changing (1a5392ce..., blob 7a0a3757); rose-edge-wmshell.patch sha256 335fcb61c6054806143a08c2d1a0202b01d71c45948a02a51eb0128b7700a95c, only RoseEdgeMicSlot.java (a613e6ee..., blob 0aa0b49d) and roseedge/RoseEdgePolicy.java (5a565842..., blob 2c664048) changing; the other after-images, the WMShellModule pre-image, the inputs, the goals and flagEvidence (none) unchanged; no new files, flags or classpath inputs (the only new imports, android.app.ActivityManager, android.app.ActivityTaskManager, android.util.SparseBooleanArray and the framework constants WindowConfiguration.ACTIVITY_TYPE_STANDARD and ACTIVITY_TYPE_UNDEFINED, are in ComputerControlSessionImpl)"
+  "rebased": "OS Core to OS Product, 2026-11-05 01:31 UTC, from #551 head 77c9117 (F06 app takeover and the F08 chin marker), re-stated 01:52 UTC for head b639c22 (F06 target_not_standard guard): background-control-frameworks-base.patch sha256 42986c0bf5e26e97b41ca5d62145b9a0ce45dd94810afcb307be658446cd8979, only ComputerControlSessionImpl's after-image changing (1a5392ce..., blob 7a0a3757); rose-edge-wmshell.patch sha256 335fcb61c6054806143a08c2d1a0202b01d71c45948a02a51eb0128b7700a95c, only RoseEdgeMicSlot.java (a613e6ee..., blob 0aa0b49d) and roseedge/RoseEdgePolicy.java (5a565842..., blob 2c664048) changing; the other after-images, the WMShellModule pre-image, the inputs, the goals and flagEvidence (none) unchanged; no new files, flags or classpath inputs (the only new imports, android.app.ActivityManager, android.app.ActivityTaskManager, android.util.SparseBooleanArray and the framework constants WindowConfiguration.ACTIVITY_TYPE_STANDARD and ACTIVITY_TYPE_UNDEFINED, are in ComputerControlSessionImpl)",
+  "retrayed": "OS Core to OS Product, 2026-11-05 02:23 UTC, from #563 head 6e2fb49 (F06 return refinements and the F08 tray reachability signal): background-control-frameworks-base.patch sha256 22fc3d7c92aa0ad6f3692dc31c2e33fc9816972be6f9899b14db9aaac447c6bd, only ComputerControlSessionImpl's after-image changing (eef0edf1..., blob 8b680261); the required Shell overlays AgentTrayPrototype.java (2982f3f1..., blob 39576fcd), AgentTrayLink.java (fdfc3560..., blob 3dca283c) and AgentStatusControls.java (86e9ceb0..., blob b5eb7993) change; rose-edge-wmshell.patch and its after-images, the WMShellModule pre-image, the goals and flagEvidence (none) unchanged; no new files, flags or classpath inputs (new imports android.util.SparseArray, android.database.ContentObserver, android.os.SystemProperties and android.provider.Settings are framework classes)"
  },
  "registration": {
   "state": "unregistered",
@@ -72,7 +73,7 @@
     },
     {
      "name": "background-control-frameworks-base.patch",
-     "sha256": "42986c0bf5e26e97b41ca5d62145b9a0ce45dd94810afcb307be658446cd8979"
+     "sha256": "22fc3d7c92aa0ad6f3692dc31c2e33fc9816972be6f9899b14db9aaac447c6bd"
     },
     {
      "name": "background-control-modern-frameworks-base.patch",
@@ -416,35 +417,35 @@
       "gitBlob": "e7313935847d1acb7b7e3889de26e54aad3e77ce"
      },
      "post": {
-      "sha256": "1a5392cef6e8de42102781ac33fb0fcf641b8ea684b1dfa668bb060546e07e2c",
-      "gitBlob": "7a0a3757f836e4a20bfa6ff3a0880faa0e75c0f5"
+      "sha256": "eef0edf1c1a943b6a88e34c4146684b4dfe6b59e50cdb4ac982e2ea04a88d525",
+      "gitBlob": "8b6802619b08ef1f38e104e12635094e613c8b17"
      },
      "chain": [
       {
        "patch": "background-control-frameworks-base.patch",
        "before": "e7313935847d1acb7b7e3889de26e54aad3e77ce",
-       "after": "9516c6806a3309d5802978717e5bdb510fcf65c5",
+       "after": "a35500ee45acc5622d8ce066285da4ccf213e166",
        "index": null,
        "base": "noIndex"
       },
       {
        "patch": "background-control-modern-frameworks-base.patch",
-       "before": "9516c6806a3309d5802978717e5bdb510fcf65c5",
-       "after": "c9abf67fb5457a98db8b191971d32ebd93f62915",
+       "before": "a35500ee45acc5622d8ce066285da4ccf213e166",
+       "after": "c250385b9263eb3c6d465137d82c02efa13800b9",
        "index": null,
        "base": "noIndex"
       },
       {
        "patch": "background-control-resource-import-fix.patch",
-       "before": "c9abf67fb5457a98db8b191971d32ebd93f62915",
-       "after": "47d588015c25b1f03fc6f9ba4e024607abebe587",
+       "before": "c250385b9263eb3c6d465137d82c02efa13800b9",
+       "after": "59f3818cf34f6b01c571683b7086a1090cec4b6a",
        "index": null,
        "base": "noIndex"
       },
       {
        "patch": "locked-control-frameworks-base.patch",
-       "before": "47d588015c25b1f03fc6f9ba4e024607abebe587",
-       "after": "7a0a3757f836e4a20bfa6ff3a0880faa0e75c0f5",
+       "before": "59f3818cf34f6b01c571683b7086a1090cec4b6a",
+       "after": "8b6802619b08ef1f38e104e12635094e613c8b17",
        "index": [
         "0a88d97",
         "5f4a32d"
@@ -1126,17 +1127,17 @@
   },
   {
    "target": "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/AgentStatusControls.java",
-   "sha256": "488c0041fa43df4f6fb1f1d4e4e007362edb7c7214885efafde1d2ed81422a9c",
+   "sha256": "86e9ceb06825f138e2b56d8521c743e08cd8ba55a2e3724ad1f06e0eb837438f",
    "role": "required"
   },
   {
    "target": "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/AgentTrayLink.java",
-   "sha256": "051555bfdecb0d10a21461ec823368b229e0dccbe0f770c84627816957f52391",
+   "sha256": "fdfc3560c506a3c019044beaf6f3ccab98adf40b0c5077e74b636c1d52442f6a",
    "role": "required"
   },
   {
    "target": "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/AgentTrayPrototype.java",
-   "sha256": "f24014f09bb88a4d33e9f7cc9cec63317fb20ae28d9e50a376f6b3b28e84c0ca",
+   "sha256": "2982f3f106bf602754918d606f4190470b8f9530c7590dd5de1496932621e756",
    "role": "required"
   },
   {
@@ -1193,7 +1194,7 @@
     {
      "project": "frameworks/base",
      "name": "background-control-frameworks-base.patch",
-     "sha256": "42986c0bf5e26e97b41ca5d62145b9a0ce45dd94810afcb307be658446cd8979"
+     "sha256": "22fc3d7c92aa0ad6f3692dc31c2e33fc9816972be6f9899b14db9aaac447c6bd"
     },
     {
      "project": "frameworks/base",
@@ -1235,15 +1236,15 @@
     },
     {
      "target": "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/AgentStatusControls.java",
-     "sha256": "488c0041fa43df4f6fb1f1d4e4e007362edb7c7214885efafde1d2ed81422a9c"
+     "sha256": "86e9ceb06825f138e2b56d8521c743e08cd8ba55a2e3724ad1f06e0eb837438f"
     },
     {
      "target": "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/AgentTrayLink.java",
-     "sha256": "051555bfdecb0d10a21461ec823368b229e0dccbe0f770c84627816957f52391"
+     "sha256": "fdfc3560c506a3c019044beaf6f3ccab98adf40b0c5077e74b636c1d52442f6a"
     },
     {
      "target": "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/AgentTrayPrototype.java",
-     "sha256": "f24014f09bb88a4d33e9f7cc9cec63317fb20ae28d9e50a376f6b3b28e84c0ca"
+     "sha256": "2982f3f106bf602754918d606f4190470b8f9530c7590dd5de1496932621e756"
     },
     {
      "target": "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/StatusVoiceGlow.java",
@@ -1281,7 +1282,7 @@
      },
      {
       "name": "background-control-frameworks-base.patch",
-      "sha256": "42986c0bf5e26e97b41ca5d62145b9a0ce45dd94810afcb307be658446cd8979"
+      "sha256": "22fc3d7c92aa0ad6f3692dc31c2e33fc9816972be6f9899b14db9aaac447c6bd"
      },
      {
       "name": "background-control-modern-frameworks-base.patch",
@@ -1576,35 +1577,35 @@
        "gitBlob": "e7313935847d1acb7b7e3889de26e54aad3e77ce"
       },
       "post": {
-       "sha256": "1a5392cef6e8de42102781ac33fb0fcf641b8ea684b1dfa668bb060546e07e2c",
-       "gitBlob": "7a0a3757f836e4a20bfa6ff3a0880faa0e75c0f5"
+       "sha256": "eef0edf1c1a943b6a88e34c4146684b4dfe6b59e50cdb4ac982e2ea04a88d525",
+       "gitBlob": "8b6802619b08ef1f38e104e12635094e613c8b17"
       },
       "chain": [
        {
         "patch": "background-control-frameworks-base.patch",
         "before": "e7313935847d1acb7b7e3889de26e54aad3e77ce",
-        "after": "9516c6806a3309d5802978717e5bdb510fcf65c5",
+        "after": "a35500ee45acc5622d8ce066285da4ccf213e166",
         "index": null,
         "base": "noIndex"
        },
        {
         "patch": "background-control-modern-frameworks-base.patch",
-        "before": "9516c6806a3309d5802978717e5bdb510fcf65c5",
-        "after": "c9abf67fb5457a98db8b191971d32ebd93f62915",
+        "before": "a35500ee45acc5622d8ce066285da4ccf213e166",
+        "after": "c250385b9263eb3c6d465137d82c02efa13800b9",
         "index": null,
         "base": "noIndex"
        },
        {
         "patch": "background-control-resource-import-fix.patch",
-        "before": "c9abf67fb5457a98db8b191971d32ebd93f62915",
-        "after": "47d588015c25b1f03fc6f9ba4e024607abebe587",
+        "before": "c250385b9263eb3c6d465137d82c02efa13800b9",
+        "after": "59f3818cf34f6b01c571683b7086a1090cec4b6a",
         "index": null,
         "base": "noIndex"
        },
        {
         "patch": "locked-control-frameworks-base.patch",
-        "before": "47d588015c25b1f03fc6f9ba4e024607abebe587",
-        "after": "7a0a3757f836e4a20bfa6ff3a0880faa0e75c0f5",
+        "before": "59f3818cf34f6b01c571683b7086a1090cec4b6a",
+        "after": "8b6802619b08ef1f38e104e12635094e613c8b17",
         "index": [
          "0a88d97",
          "5f4a32d"
@@ -2205,17 +2206,17 @@
    },
    {
     "target": "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/AgentStatusControls.java",
-    "sha256": "488c0041fa43df4f6fb1f1d4e4e007362edb7c7214885efafde1d2ed81422a9c",
+    "sha256": "86e9ceb06825f138e2b56d8521c743e08cd8ba55a2e3724ad1f06e0eb837438f",
     "role": "required"
    },
    {
     "target": "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/AgentTrayLink.java",
-    "sha256": "051555bfdecb0d10a21461ec823368b229e0dccbe0f770c84627816957f52391",
+    "sha256": "fdfc3560c506a3c019044beaf6f3ccab98adf40b0c5077e74b636c1d52442f6a",
     "role": "required"
    },
    {
     "target": "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/AgentTrayPrototype.java",
-    "sha256": "f24014f09bb88a4d33e9f7cc9cec63317fb20ae28d9e50a376f6b3b28e84c0ca",
+    "sha256": "2982f3f106bf602754918d606f4190470b8f9530c7590dd5de1496932621e756",
     "role": "required"
    },
    {

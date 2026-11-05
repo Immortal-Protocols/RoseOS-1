@@ -36,8 +36,11 @@ def staged(root):
     receipt = dict(schema='roseos.mustang-ota-stage.v1', device='mustang', build=BUILD, timestamp=EPOCH,
                    candidateSource=SHA, recipeSource=SHA, runId='333', contentFingerprint='b'*64, label=ota.LABEL,
                    baselineBuild='2026110302', publicIdentity=ota.identities(),
-                   checks=dict(targetVersion=True, baselineTrust=True, otaSignatures=True, packagedUpdater=True),
+                   checks=dict(targetVersion=True, baselineTrust=True, otaSignatures=True, packagedUpdater=True,roseEdge=True),
                    ota=dict(file=name, sizeBytes=(root/name).stat().st_size, sha256=ota.digest(root/name)))
+    from test_mustang_edge_gate import publication_proofs
+    with tempfile.TemporaryDirectory() as proofs:
+        receipt.update(publication_proofs(Path(proofs),candidate=SHA,recipe=SHA,build=BUILD,epoch=EPOCH))
     (root/'mustang-ota-receipt.json').write_text(json.dumps(receipt))
     (root/'SHA256SUMS').write_text(''.join(f'{ota.digest(p)}  {p.name}\n' for p in sorted(root.iterdir())))
     return receipt
@@ -157,6 +160,23 @@ class PublicationTest(unittest.TestCase):
         (self.assets/self.r['ota']['file']).write_bytes(b'changed')
         with self.assertRaisesRegex(ValueError, 'checksum differs'):
             ota.verify_staged(self.assets, self.cfg)
+    def test_missing_stale_or_false_edge_proof_stops_before_publisher_api(self):
+        original=copy.deepcopy(self.r)
+        for kind in ('missing','stale','false','archive','binding'):
+            receipt=copy.deepcopy(original)
+            if kind=='missing': receipt.pop('roseEdge')
+            elif kind=='stale': receipt['roseEdge']['signed']['checker']['specSha256']='0'*64
+            elif kind=='false': receipt['roseEdge']['signed']['evidence']['literals'][0]['pass']=False
+            elif kind=='archive': receipt['edgeTargetFiles']['unsigned']['sha256']='0'*64
+            else: receipt['roseEdge']['unsigned']['binding']['compileRunId']='999'
+            (self.assets/'mustang-ota-receipt.json').write_text(json.dumps(receipt))
+            # A rewritten checksum must never turn invalid feature proof into an accepted staged artifact.
+            (self.assets/'SHA256SUMS').write_text(''.join(
+                f'{ota.digest(p)}  {p.name}\n' for p in sorted(self.assets.iterdir()) if p.name!='SHA256SUMS'))
+            client=Client()
+            with self.subTest(kind=kind):
+                with self.assertRaises(ValueError): ota.publish(client,self.assets,self.cfg,self.out)
+                self.assertEqual(client.log,[])
     def test_defaults_inactive_before_any_api_or_secret(self):
         inactive=copy.deepcopy(ota.config());inactive['publicationEnabled']=False
         with self.assertRaisesRegex(ValueError, 'activation remains pending'):
@@ -306,6 +326,21 @@ class ObserverTest(unittest.TestCase):
     def test_resources_signer_and_actual_system_trust(self):
         r=self.observe();self.assertTrue(r['packagedUpdaterVerified'])
         self.assertEqual(r['trustedOtaCertificateSha256'],[self.pin])
+    def test_installed_pre548_baseline_is_not_subject_to_the_new_edge_gate(self):
+        baseline=ota.config()['baseline']
+        with zipfile.ZipFile(self.path) as archive:
+            entries={name:archive.read(name) for name in archive.namelist()}
+        entries['VENDOR/build.prop']=(
+            'ro.product.vendor.device=mustang\n'
+            f'ro.vendor.build.version.incremental={baseline["build"]}\n'
+            f'ro.vendor.build.date.utc={baseline["timestamp"]}\n').encode()
+        with zipfile.ZipFile(self.path,'w') as archive:
+            for name,data in entries.items():archive.writestr(name,data)
+        # This baseline has only Updater/trust, with no edge APKs, props or marker.
+        with patch.object(ota.mustang_edge,'configuration',side_effect=AssertionError('baseline must not gate')):
+            observed=ota.observe_target(self.path,baseline['build'],baseline['timestamp'],
+                dict(aapt='aapt',apksigner='apksigner'),dict(otaCertificateSha256=self.pin),execute=self.execute)
+        self.assertTrue(observed['packagedUpdaterVerified'])
     def test_vendor_identity_scopes_duplicates_without_weakening_ota_metadata(self):
         with zipfile.ZipFile(self.path) as archive:
             entries={row.filename:archive.read(row) for row in archive.infolist()}
