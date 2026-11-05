@@ -477,6 +477,11 @@ class Contract(unittest.TestCase):
         tree = lambda d: d['gitRequirement']['workingTree']  # noqa: E731
         cases = [('steps', lambda d: fetch(d)['steps'].__setitem__(1, fetch(d)['steps'][1].replace('--depth=1', '--depth=2')),
                   'steps'),
+                 ('auto maintenance allowed', lambda d: fetch(d)['steps'].__setitem__(
+                     1, fetch(d)['steps'][1].replace(' --no-auto-maintenance', '')), 'steps'),
+                 ('maintenance prohibition dropped', lambda d: fetch(d)['never'].pop(), 'reviewed against'),
+                 ('maintenance acceptance dropped', lambda d: fetch(d)['acceptance'].remove(
+                     'no gc.pid, gc.log or objects/maintenance.lock in the gitdir'), 'reviewed against'),
                  ('environment', lambda d: fetch(d)['environment'].update(GIT_ALLOW_PROTOCOL='https,file'), 'environment'),
                  ('extra variable', lambda d: fetch(d)['environment'].update(LD_PRELOAD='/x.so'), 'environment'),
                  ('ceiling', lambda d: fetch(d)['ceiling'].update(seconds=3600), 'ceiling'),
@@ -3178,6 +3183,80 @@ class Fetch(unittest.TestCase):
         self.assertTrue(self.record['git']['fetch']['path'].startswith(('/usr/bin/', '/bin/')))
         self.assertTrue(self.record['git']['fetch']['version'].startswith('git version'))
         self.assertEqual(self.problems(), [])
+
+    def test_the_fetch_disables_auto_maintenance_observed_with_a_positive_control(self):
+        """Trace real Git against the synthetic local source; the unprotected control must exercise maintenance."""
+        traces = []
+
+        def traced(argv, env=None, **kwargs):
+            trace = self.f.base/f'trace-{len(traces)}'
+            traces.append((argv, trace))
+            return subprocess.Popen(argv, env={**env, 'GIT_TRACE': str(trace)}, **kwargs)
+
+        steps = adapter.fetch_steps
+        for protected in (True, False):
+            with self.subTest(protected=protected):
+                self.f.make_copy()
+                self.record = {}
+                traces.clear()
+                for trace in self.f.base.glob('trace-*'):
+                    trace.unlink()
+                control = lambda *args: [[a for a in step if a != '--no-auto-maintenance'] for step in steps(*args)]
+                with unittest.mock.patch.object(adapter, 'fetch_steps', steps if protected else control):
+                    self.fetch(popen=traced)
+                (fetch_trace,) = [trace for argv, trace in traces if 'fetch' in argv]
+                self.assertEqual('maintenance run --auto' in fetch_trace.read_text(), not protected)
+
+    def test_maintenance_markers_refuse_acceptance_and_remove_only_the_created_git(self):
+        real = adapter.gitdir_problems
+        dotgit = self.f.tree/'vendor/adevtool/.git'
+        for name in ('gc.pid', 'gc.log', 'objects/maintenance.lock'):
+            for kind in ('file', 'directory', 'dangling-link'):
+                with self.subTest(mark=name, kind=kind):
+                    self.f.make_copy()
+                    self.record = {}
+                    before = self.f.work_state()
+
+                    def marked(*args, **kwargs):
+                        mark = dotgit/name
+                        if kind == 'file':
+                            mark.write_bytes(b'')  # presence alone refuses, including an empty marker
+                        elif kind == 'directory':
+                            mark.mkdir()
+                        else:
+                            mark.symlink_to(self.f.base/'absent')
+                        return real(*args, **kwargs)
+
+                    with unittest.mock.patch.object(adapter, 'gitdir_problems', side_effect=marked):
+                        with self.assertRaisesRegex(adapter.Refused, f'{name} exists: maintenance/gc marker is forbidden'):
+                            self.fetch()
+                    self.assertEqual((self.record['ok'], self.record['createdRemoved'], self.record['sessionEnded']),
+                                     (False, True, True))
+                    self.assertFalse(os.path.lexists(dotgit))
+                    self.assertEqual(self.f.work_state(), before)
+                    self.assertEqual(git('rev-parse', 'HEAD', cwd=self.f.upstream).decode().strip(), self.f.revision)
+
+    def test_git_without_the_maintenance_option_refuses_without_retry_or_acceptance(self):
+        calls = []
+        before = self.f.work_state()
+
+        def old_git(argv, **kwargs):
+            calls.append(argv)
+            if 'fetch' in argv:
+                # A synthetic Git that rejects the new option. Use a real child so containment still runs.
+                return subprocess.Popen([sys.executable, '-c',
+                                         'import sys; sys.exit(129 if "--no-auto-maintenance" in sys.argv else 0)',
+                                         *argv], **kwargs)
+            return subprocess.Popen(argv, **kwargs)
+
+        with unittest.mock.patch.object(adapter, 'gitdir_problems', side_effect=AssertionError('acceptance ran')):
+            with self.assertRaisesRegex(adapter.Refused, 'fetch failed: exit 129'):
+                self.fetch(popen=old_git)
+        self.assertEqual([argv[3] if argv[1] == '-C' else argv[1] for argv in calls], ['init', 'fetch'])
+        self.assertEqual((self.record['ok'], self.record['createdRemoved'], self.record['sessionEnded']),
+                         (False, True, True))
+        self.assertFalse(os.path.lexists(self.f.tree/'vendor/adevtool/.git'))
+        self.assertEqual(self.f.work_state(), before)
 
     def problems(self):
         return adapter.gitdir_problems(self.f.tree, self.f.tree/'vendor/adevtool', self.f.inputs, self.f.raw,
