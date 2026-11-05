@@ -326,6 +326,21 @@ class ObserverTest(unittest.TestCase):
     def test_resources_signer_and_actual_system_trust(self):
         r=self.observe();self.assertTrue(r['packagedUpdaterVerified'])
         self.assertEqual(r['trustedOtaCertificateSha256'],[self.pin])
+    def test_installed_pre548_baseline_is_not_subject_to_the_new_edge_gate(self):
+        baseline=ota.config()['baseline']
+        with zipfile.ZipFile(self.path) as archive:
+            entries={name:archive.read(name) for name in archive.namelist()}
+        entries['VENDOR/build.prop']=(
+            'ro.product.vendor.device=mustang\n'
+            f'ro.vendor.build.version.incremental={baseline["build"]}\n'
+            f'ro.vendor.build.date.utc={baseline["timestamp"]}\n').encode()
+        with zipfile.ZipFile(self.path,'w') as archive:
+            for name,data in entries.items():archive.writestr(name,data)
+        # This baseline has only Updater/trust, with no edge APKs, props or marker.
+        with patch.object(ota.mustang_edge,'configuration',side_effect=AssertionError('baseline must not gate')):
+            observed=ota.observe_target(self.path,baseline['build'],baseline['timestamp'],
+                dict(aapt='aapt',apksigner='apksigner'),dict(otaCertificateSha256=self.pin),execute=self.execute)
+        self.assertTrue(observed['packagedUpdaterVerified'])
     def test_vendor_identity_scopes_duplicates_without_weakening_ota_metadata(self):
         with zipfile.ZipFile(self.path) as archive:
             entries={row.filename:archive.read(row) for row in archive.infolist()}
