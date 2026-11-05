@@ -90,13 +90,16 @@ must not silently unhold or upgrade it to make an access path work.
 
 ## Source integration and owner boundary
 
-Mustang owns its dedicated adapter and workflow integration. Release owns
-`scripts/release-pipeline.py`, common workflow routing and the capacity map.
+Mustang owns its dedicated adapter, workflow, path/receipt integration and the
+capacity-map change as its single writer. Infra owns the explicit-builder API
+in `scripts/release-pipeline.py` and its focused common-controller tests,
+preserving Frankel defaults. Common workflow routing remains Release-owned;
+this split does not authorize overlapping edits there.
 The new `scripts/mustang_controller.py` deliberately refuses the current common
 controller, which has an implicit Frankel `BUILDER` global. It never changes
 that global or falls back to it.
 
-Required Release handoff: support
+Required Infra handoff: support
 `Production.control_builder(action, ..., builder={project, zone, instance, instanceId})`.
 For explicit targets, verify numeric ID on every describe before a start or
 STOP request, keep existing bounded polling/no-resubmit behavior, and invoke

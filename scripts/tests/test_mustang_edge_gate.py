@@ -20,6 +20,7 @@ import mustang_controller as controller
 import subprocess
 import dex_fixture
 import test_edge_artifact as fixtures
+import os_release_shape as workflow_shape
 
 spec = importlib.util.spec_from_file_location('mustang_sign_gate_tests', ROOT/'scripts/mustang-sign-package.py')
 adapter = importlib.util.module_from_spec(spec)
@@ -131,15 +132,17 @@ class DedicatedLaneTest(unittest.TestCase):
                 self.assertIn('Mustang legacy route retired',result.stderr)
 
     def test_workflow_guard_precedes_controller_and_skipped_controller_never_stops(self):
-        import yaml
-        jobs=yaml.safe_load((ROOT/'.github/workflows/os-release.yml').read_text())['jobs']
-        commands='\n'.join(step.get('run','') for step in jobs['guard']['steps'])
+        # Use the suite's stdlib shape reader, so this safety check also runs in
+        # the dependency-free App offline job. Check job-level dependencies and
+        # conditions rather than matching similarly named fields inside steps.
+        jobs=workflow_shape.jobs()
+        commands=jobs['guard']
         self.assertIn('scripts/mustang-pipeline.py describe',commands)
         self.assertIn('scripts/mustang-delivery.py guard',commands)
         self.assertIn('scripts/mustang_ota.py guard',commands)
-        self.assertEqual(jobs['controller']['needs'],'guard')
-        self.assertNotIn('always()',jobs['controller'].get('if',''))
-        self.assertIn("needs.controller.result != 'skipped'",jobs['cleanup']['if'])
+        self.assertRegex(jobs['controller'], r'(?m)^    needs: guard$')
+        self.assertNotRegex(jobs['controller'], r'(?m)^    if:.*always\(\)')
+        self.assertRegex(jobs['cleanup'], r"(?m)^    if: always\(\) && needs\.controller\.result != 'skipped'$")
 
 
 class DedicatedControllerTest(unittest.TestCase):

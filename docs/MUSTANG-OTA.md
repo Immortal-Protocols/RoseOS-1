@@ -28,8 +28,9 @@ Remaining exclusive owner handoffs before any new runtime:
   after applicable provisioning/access approval. No resource identity is guessed.
   The Mac operator owns old-host inventory and deletion; this source work does
   not inspect, copy or delete that host.
-- Mustang owns its dedicated adapter and workflow integration; Release owns
-  the common controller, shared routing and capacity map.
+- Mustang owns its dedicated adapter, workflow, path/receipt integration and
+  capacity-map change. Infra owns the explicit-builder common-controller API
+  and focused tests, preserving Frankel defaults; Release owns shared routing.
   The common controller must accept an explicit validated instance target and
   ownership binding without replacing Frankel's default global target. New
   Mustang jobs need their own queue and runner, and cleanup may target only
