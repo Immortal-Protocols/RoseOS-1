@@ -331,7 +331,7 @@ class Workflow(unittest.TestCase):
         wf = (ROOT/'.github/workflows/os-release.yml').read_text()
         builder = wf.split('\n  builder:\n', 1)[1].split('\n  app-builder:\n', 1)[0]
         step = builder.split('      - name: Package the signing job for the dedicated signer (opt-in)\n', 1)[1].split('\n      - name:', 1)[0]
-        self.assertIn("        if: inputs.mode == 'latest-beta' && (vars.ROSE_SIGNING_TRANSPORT == 'package' || vars.ROSE_SIGNING_TRANSPORT == 'dedicated')\n", step)
+        self.assertIn("        if: (inputs.mode == 'latest-beta' || inputs.mode == 'latest-draft') && (vars.ROSE_SIGNING_TRANSPORT == 'package' || vars.ROSE_SIGNING_TRANSPORT == 'dedicated')\n", step)
         self.assertIn('python3 scripts/release-transport.py package', step)
         for forbidden in ('secrets.', 'gcp-login', 'upload-artifact', 'scp ', 'ssh ', 'curl'):
             self.assertNotIn(forbidden, step)
@@ -349,11 +349,11 @@ class DedicatedWiring(unittest.TestCase):
         body = wf.split('\njobs:\n', 1)[1]
         self.jobs = dict(re.findall(r'(?m)^  ([a-z][\w-]*):\n((?:(?:    .*|)\n)*)', body + '\n'))
 
-    def test_dedicated_mode_is_default_off_and_latest_beta_only(self):
-        self.assertIn("      ROSE_DEDICATED_SIGNER: ${{ inputs.mode == 'latest-beta' && vars.ROSE_SIGNING_TRANSPORT == 'dedicated' }}\n",
+    def test_dedicated_mode_is_default_off_and_fresh_candidate_only(self):
+        self.assertIn("      ROSE_DEDICATED_SIGNER: ${{ (inputs.mode == 'latest-beta' || inputs.mode == 'latest-draft') && vars.ROSE_SIGNING_TRANSPORT == 'dedicated' }}\n",
                       self.jobs['builder'])
-        self.assertIn("    if: inputs.mode == 'latest-beta' && needs.builder.outputs.dedicated == 'true'\n", self.jobs['request-signing'])
-        self.assertIn("    if: inputs.mode == 'latest-beta' && needs.request-signing.result == 'success'\n", self.jobs['signed-builder'])
+        self.assertIn("    if: (inputs.mode == 'latest-beta' || inputs.mode == 'latest-draft') && needs.builder.outputs.dedicated == 'true'\n", self.jobs['request-signing'])
+        self.assertIn("    if: (inputs.mode == 'latest-beta' || inputs.mode == 'latest-draft') && needs.request-signing.result == 'success'\n", self.jobs['signed-builder'])
 
     def test_builder_never_signs_on_the_dedicated_route(self):
         builder = self.jobs['builder']
