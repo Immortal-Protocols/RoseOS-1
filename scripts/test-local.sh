@@ -98,6 +98,7 @@ python3 scripts/tests/test_rango_retained.py
 python3 scripts/tests/test_github_publisher.py
 python3 scripts/tests/test_host_adapters.py
 python3 scripts/tests/test_host_build_reconcile.py
+python3 scripts/tests/test_builder_reclaim.py
 python3 scripts/tests/test_actions_gcp_login.py
 python3 scripts/tests/test_app_release.py
 python3 scripts/tests/test_app_release_publisher.py
