@@ -577,6 +577,11 @@ jobs:
           fetch-depth: 0  # the integration adapter checks out the exact candidate commit
           persist-credentials: false
       - run: python3 scripts/release-pipeline.py preflight --job builder
+      # BUILDER-RECLAIM: before a space-hungry route writes, reclaim only the regenerable data that
+      # os/release-pipeline/storage/builder-reclaim.json names, under the shared builder lock (a busy lock reclaims nothing).
+      # Receipts: rose-actions/reclaim. The app-builder and mustang-build jobs run the same step.
+      - name: Reclaim regenerable build data
+        run: python3 scripts/builder-reclaim.py apply --current-run "$GITHUB_RUN_ID" --label "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-builder"
       # latest-beta: one fresh candidate from the dispatch commit (scripts/release-allocate.py), reserved under the shared
       # lock before any identity is used. Its version-only delta is a deterministic local commit over that source, never
       # pushed; later main changes never reach it. The explicit os-release mode passes its pins through unchanged.
@@ -832,6 +837,8 @@ jobs:
           fetch-depth: 0  # the app release checks out the exact candidate commit as a worktree
           persist-credentials: false
       - run: python3 scripts/release-pipeline.py preflight --job builder
+      - name: Reclaim regenerable build data
+        run: python3 scripts/builder-reclaim.py apply --current-run "$GITHUB_RUN_ID" --label "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-app-builder"
       - run: python3 scripts/host-app-release.py --check
       - name: Prepare the app attempt
         run: |
@@ -1985,6 +1992,8 @@ jobs:
       - name: Check installed-baseline updater before starting a newer compile
         if: inputs.mustang_publish_ota
         run: python3 scripts/mustang_ota.py observe --out "$RUNNER_TEMP/mustang-ota-baseline-prebuild.json"
+      - name: Reclaim regenerable build data
+        run: python3 scripts/builder-reclaim.py apply --current-run "$GITHUB_RUN_ID" --label "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-mustang-build"
       - name: Prepare, allocate, integrate and compile Mustang once
         run: python3 scripts/mustang-pipeline.py run --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT"
       - name: Collect allowlisted receipts
