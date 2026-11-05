@@ -33,7 +33,11 @@ spec.loader.exec_module(chain)
 RUN, SHA, BOOTSTRAP = '41800000000', 'ab' * 20, '41719073037'
 CFG = json.loads((ROOT/'os/ota/mustang.json').read_text())
 RECIPE = json.loads((ROOT/'os/signing-bootstrap/mustang-bootstrap-receipt.json').read_text())['recipeSha']
-EXPIRY = datetime.datetime.fromisoformat(CFG['signingAccess']['expiresAt'].replace('Z', '+00:00'))
+# The committed access is the verified unconditional grant (no window). A recorded window still bounds signing: the
+# earlier windowed approval, as a synthetic configuration.
+WINDOWED = copy.deepcopy(CFG)
+WINDOWED['signingAccess'].update(expiresAt='2026-11-05T06:20:18Z', approvalRef='synthetic windowed approval')
+EXPIRY = datetime.datetime.fromisoformat(WINDOWED['signingAccess']['expiresAt'].replace('Z', '+00:00'))
 INSIDE = EXPIRY - datetime.timedelta(hours=1)  # an hour left: the 30-minute rule passes
 ENV = {'GITHUB_REF': 'refs/heads/main', 'GITHUB_EVENT_NAME': 'workflow_dispatch', 'GITHUB_RUN_ID': RUN,
        'GITHUB_RUN_ATTEMPT': '1', 'GITHUB_SHA': SHA}
@@ -101,7 +105,14 @@ class Binding(unittest.TestCase):
     def test_the_signing_window_is_checked_before_any_metadata_is_read(self):
         for now in (EXPIRY - datetime.timedelta(minutes=29), EXPIRY, EXPIRY + datetime.timedelta(days=1)):
             with self.subTest(now=now):
-                self.refused('signing access: approved signing read-access window expired', now=now)
+                self.refused('signing access: approved signing read-access window expired', now=now, cfg=WINDOWED)
+        self.assertEqual(self.calls, [])
+        self.bind(now=INSIDE, cfg=WINDOWED)
+        self.calls.clear()
+        no_record = copy.deepcopy(CFG)
+        no_record['signingAccess']['approvalRef'] = WINDOWED['signingAccess']['approvalRef']
+        self.refused('signing access: non-expiring Mustang signing read access requires a recorded unconditional',
+                     cfg=no_record)
         self.assertEqual(self.calls, [])
         unapproved = copy.deepcopy(CFG)
         unapproved['signingAccess']['status'] = 'requested'
@@ -109,6 +120,11 @@ class Binding(unittest.TestCase):
         inactive = dict(CFG, publicationEnabled=False)
         self.refused('signing access: Mustang public OTA activation remains pending', cfg=inactive)
         self.assertEqual(self.calls, [])
+
+    def test_the_verified_unconditional_access_binds_after_the_old_window(self):
+        binding = self.bind(now=EXPIRY + datetime.timedelta(days=1))
+        self.assertIsNone(binding['signingAccessExpiresAt'])
+        self.assertIsNone(CFG['signingAccess']['expiresAt'])
 
     def test_only_attempt_1_of_a_manual_main_dispatch_is_bound(self):
         for env, message in (({'GITHUB_REF': 'refs/heads/feature'}, 'manual workflow_dispatch run on main'),
