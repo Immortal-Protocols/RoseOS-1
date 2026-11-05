@@ -95,7 +95,7 @@ locks and queues; nothing here edits `os-release.yml` or `release-pipeline.py`.
 | Prerequisite | Owner | Records |
 | --- | --- | --- |
 | Repository-scoped runner `roseos-yogi-builder` on the Yogi VM; outbound GitHub/googleapis; a controller identity with get/start/stop on only that instance (`vars.YOGI_CONTROLLER_SERVICE_ACCOUNT`) and WIF admission of `yogi-ota.yml` | Dev Infra | `builder.status: ready` |
-| `yogi-v1` profile with Yogi builder tool paths; the two containers; a time-boxed version-adder for one bootstrap; a time-boxed accessor on version 1; escrow decision | Signing, approved by Nathan | profile `resource-bound`, bootstrap receipt, `signing.access` |
+| `yogi-v1` profile (Signing-owned, separate authority; tools from a same-run `fold_tool_proof.py` localProof on the Yogi builder); a key-bootstrap job on the Yogi runner, never the Frankel builder (none exists yet; Release-owned workflow); the two containers; one time-boxed binding per secret (get, versions.list, versions.add; at most 4 h) for one bootstrap; a time-boxed accessor on version 1 per delivery; escrow decision | Signing and Release, approved by Nathan | profile `resource-bound` (checked by `sign()` and the guard before any login), bootstrap receipt (project, empty reasons, workspace removed), `signing.access` |
 | Release's `app-inputs-export` run for Frankel 2026110403 (PR #565) by the Frankel builder's runtime owner, then Release's committed record `os/app-inputs/frankel-2026110403.json` | Release | record present on main (guard binds it) |
 | Yogi publication in pixel-ota | Nathan | `publicationEnabled: true` |
 | One-time wipe install of A (proposed design), and ADB readback | Phone owner | `bootstrap.installEvidence` (not a publication gate) |

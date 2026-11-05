@@ -18,6 +18,8 @@ import zipfile
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import yogi_ota as yogi
 
+ORIGINAL_PROFILE_PROBLEM = yogi.profile_problem
+
 BUILD, EPOCH, SHA = '2026110601', '1793900000', 'a'*40
 BOOT_BUILD, BOOT_EPOCH = '2026110501', '1793850000'
 CERT = b'synthetic Yogi release certificate DER'
@@ -27,6 +29,7 @@ UTC = datetime.timezone.utc
 
 def receipt(**changes):
     value = {'schema': 'roseos.signing-bootstrap-receipt.v1', 'profile': 'yogi-v1', 'device': 'yogi',
+             'project': 'protocols-465723', 'reasons': [], 'cleanup': {'workspaceRemoved': True},
              'status': 'complete', 'recoveryNeeded': False, 'publicIdentity': dict(PINS),
              'secrets': {role: {'name': name, 'state': 'committed', 'committedVersion': '1'}
                          for role, name in yogi.SECRETS.items()}}
@@ -58,6 +61,13 @@ class Fixture(unittest.TestCase):
         self.cfg['appInputs'].update(record=str(self.record))
         verifier = self.root/'app-inputs-verify.py'
         verifier.write_text('# synthetic stand-in for Release\'s verifier\n')
+        bound = {'profiles': {'yogi-v1': {'status': 'resource-bound', 'missing': [], 'project': 'protocols-465723',
+                                          'secrets': dict(yogi.SECRETS)}}}
+        self.profiles = bound
+        original = yogi.profile_problem
+        profiles = mock.patch.object(yogi, 'profile_problem', lambda profiles=None: original(self.profiles))
+        profiles.start()
+        self.addCleanup(profiles.stop)
         patcher = mock.patch.object(yogi, 'VERIFIER', verifier)
         patcher.start()
         self.addCleanup(patcher.stop)
@@ -163,6 +173,32 @@ class IdentityTest(Fixture):
                 self.receipt.write_text(json.dumps(value))
                 with self.assertRaises(yogi.Refused):
                     yogi.identities(self.cfg)
+
+    def test_bootstrap_receipt_project_reasons_and_cleanup_are_required(self):
+        for change in (dict(project='other-project'), dict(reasons=['partial import']),
+                       dict(cleanup={'workspaceRemoved': False}), dict(cleanup=None)):
+            with self.subTest(change=sorted(change)):
+                self.receipt.write_text(json.dumps(receipt(**change)))
+                with self.assertRaises(yogi.Refused):
+                    yogi.identities(self.cfg)
+
+    def test_unbound_or_foreign_signing_profile_blocks_before_pins_or_login(self):
+        bound = self.profiles['profiles']['yogi-v1']
+        cases = [{}, {'yogi-v1': dict(bound, status='unbound')}, {'yogi-v1': dict(bound, missing=['containers'])},
+                 {'yogi-v1': dict(bound, project='other')},
+                 {'yogi-v1': dict(bound, secrets={'keys': 'PIXEL_OS_SIGNING_KEYS_MUSTANG_V1',
+                                                  'passphrase': 'PIXEL_OS_SIGNING_PASSPHRASE_MUSTANG_V1'})}]
+        for profiles in cases:
+            with self.subTest(profiles=sorted(profiles)):
+                self.profiles = {'profiles': profiles}
+                self.assertTrue(any('signing profile' in b for b in yogi.blockers(self.cfg, 'bootstrap', access=True, now=self.now)))
+                with self.assertRaisesRegex(yogi.Refused, 'signing profile'):
+                    yogi.sign(self.cfg, BUILD, 'bootstrap', env={'GCP_SIGNER_SERVICE_ACCOUNT': yogi.SIGNER})
+        self.profiles = {'profiles': {'yogi-v1': bound}}
+        self.assertEqual(yogi.blockers(self.cfg, 'bootstrap', access=True, now=self.now), [])
+
+    def test_committed_tree_has_no_yogi_profile_yet(self):
+        self.assertIn('yogi-v1 is not defined', ORIGINAL_PROFILE_PROBLEM())  # the real committed profiles
 
     def test_signing_window_must_be_approved_and_current(self):
         self.cfg['signing']['access']['expiresAt'] = '2026-11-06T03:29:59Z'

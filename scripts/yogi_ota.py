@@ -138,6 +138,23 @@ def check_route(path=ROUTE):
     return route
 
 
+def profile_problem(profiles=None):
+    """Signing's readiness for the Yogi key set (mirrors mustang-sign-package.sign): the yogi-v1 profile must exist,
+    be resource-bound with nothing missing, and name exactly the Yogi project and containers. Checked before any pin,
+    login or key access; a missing profile refuses."""
+    try:
+        profiles = profiles if profiles is not None else module('yogi_signing_bootstrap', 'signing-bootstrap.py').load_profiles()
+        profile = profiles['profiles'].get(PROFILE)
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        return f'signing profiles unreadable ({type(error).__name__})'
+    if not isinstance(profile, dict):
+        return f'signing profile {PROFILE} is not defined'
+    if profile.get('status') != 'resource-bound' or profile.get('missing') != [] \
+            or profile.get('project') != 'protocols-465723' or profile.get('secrets') != SECRETS:
+        return f'signing profile {PROFILE} is not resource-bound to the Yogi project and containers'
+    return None
+
+
 def identities(cfg):
     """Public pins from the committed Yogi bootstrap receipt; absent until the separately authorized bootstrap ran."""
     path = ROOT/cfg['signing']['bootstrapReceipt']
@@ -146,7 +163,8 @@ def identities(cfg):
     receipt = read(path)
     if receipt.get('schema') != 'roseos.signing-bootstrap-receipt.v1' or receipt.get('profile') != PROFILE \
             or receipt.get('device') != DEVICE or receipt.get('status') != 'complete' \
-            or receipt.get('recoveryNeeded') is not False:
+            or receipt.get('recoveryNeeded') is not False or receipt.get('project') != 'protocols-465723' \
+            or receipt.get('reasons') != [] or (receipt.get('cleanup') or {}).get('workspaceRemoved') is not True:
         raise Refused('complete Yogi bootstrap receipt required; no foreign identity')
     for role, name in SECRETS.items():
         row = receipt['secrets'][role]
@@ -182,6 +200,9 @@ def blockers(cfg, stage, access=False, now=None):
             app_record(cfg)
         except (Refused, OSError, ValueError, KeyError) as error:
             found.append(f'signed app inputs are not bound: {error}')
+        problem = profile_problem()
+        if problem:
+            found.append(problem)
         try:
             identities(cfg)
         except Refused as error:
@@ -590,6 +611,9 @@ def sign_config(cfg, build, compiled, notes, versions, pins):
 
 def sign(cfg, build, stage, run=subprocess.run, env=os.environ):
     """The pinned release script through host-sign.main with the Yogi key set; OTA output only."""
+    problem = profile_problem()
+    if problem:
+        raise Refused(problem)
     guard(cfg, stage, access=True)
     if env.get('GCP_SIGNER_SERVICE_ACCOUNT') != SIGNER:
         raise Refused('the signer identity differs')
