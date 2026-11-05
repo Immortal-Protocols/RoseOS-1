@@ -68,8 +68,14 @@
       "dev.pixel.calculator.agent"
     ],
     "allocation": "os/ota/mustang-frankel-2026110403-allocation.json",
-    "directory": null,
-    "basis": "Fleet Rose app identity, already signed by the existing app signer (never signed on the Yogi builder). Bound to the Frankel 2026110403 set Mustang also uses (dev.pixel.voice 364, dev.pixel.calculator.agent 5, dev.pixel.backgroundcontrol 38; allocationSha256 f004a4c6...), per Release 2026-11-05. Status stays unbound until Release's export delivers those signed-apps and background-policy.json to the Yogi builder (directory); the pipeline re-verifies signer, receipts, versions and policy before integration."
+    "export": {
+      "producer": "os-release.yml mode app-inputs-export (Release, PR #565), build_number 2026110403",
+      "run": null,
+      "artifactId": null,
+      "artifactDigest": null,
+      "receiptSha256": null
+    },
+    "basis": "One decision record with Release: the signed-app set is Frankel 2026110403's (dev.pixel.voice 364, dev.pixel.calculator.agent 5, dev.pixel.backgroundcontrol 38; app signer 650d47f9...0bfb), named by the committed allocation record above and exported by Release's app-inputs-export (schema roseos.app-inputs-export.v1). Never signed on the Yogi builder. Once a separately authorized export run exists, its run id, artifact id, artifact digest and receipt sha256 are committed here and status becomes bound; the Yogi job downloads exactly that artifact, checks SHA256SUMS and the receipt against this record, then re-admits signer, receipts, versions and policy with its own aapt/apksigner. Bootstrap A and OTA B use the same set, so B's app versions are never lower than A's."
   },
   "wire": {
     "tag": "yogi-{build}",

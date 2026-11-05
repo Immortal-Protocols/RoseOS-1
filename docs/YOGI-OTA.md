@@ -64,7 +64,9 @@ Package, provider and permission names are unchanged (`dev.pixel.voice`,
    pins, reviewed vendor reference and all three port patches verified as applied;
    the retained tree is only read) → `integrate` (fleet app admission, then the
    existing `host-reconcile.py` with the owned Updater; on the first copy of the lab
-   tree, only the lab-written paths listed in `yogi-reconcile.json` may be adopted) →
+   tree, only the lab-written paths listed in `yogi-reconcile.json` may be adopted;
+   the app inputs are exactly the committed Release export, verified by SHA256SUMS and
+   its receipt against the committed allocation record, then re-admitted) →
    `compile` (`USE_STOCK_KERNEL=true`, `SOONG_NINJA=ninja`, relative `OUT_DIR`,
    `lunch yogi-cur-user`, `m target-files-package otatools-package`; target-files
    identity checked).
@@ -94,7 +96,7 @@ locks and queues; nothing here edits `os-release.yml` or `release-pipeline.py`.
 | --- | --- | --- |
 | Repository-scoped runner `roseos-yogi-builder` on the Yogi VM; outbound GitHub/googleapis; a controller identity with get/start/stop on only that instance (`vars.YOGI_CONTROLLER_SERVICE_ACCOUNT`) and WIF admission of `yogi-ota.yml` | Dev Infra | `builder.status: ready` |
 | `yogi-v1` profile with Yogi builder tool paths; the two containers; a time-boxed version-adder for one bootstrap; a time-boxed accessor on version 1; escrow decision | Signing, approved by Nathan | profile `resource-bound`, bootstrap receipt, `signing.access` |
-| Signed fleet apps + background policy delivered to the Yogi VM, and a bound allocation | Release | `appInputs` |
+| Release's `app-inputs-export` (PR #565) run for Frankel 2026110403 by the Frankel builder's runtime owner; its run id, artifact id, artifact digest and receipt sha256 committed | Release (export), Yogi owner (record) | `appInputs.export`, status `bound` |
 | Yogi publication in pixel-ota | Nathan | `publicationEnabled: true` |
 | One-time wipe install of A (proposed design), and ADB readback | Phone owner | `bootstrap.installEvidence` (not a publication gate) |
 

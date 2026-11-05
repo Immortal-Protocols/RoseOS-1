@@ -178,9 +178,14 @@ def blockers(cfg, stage, access=False, now=None):
     if stage in ('bootstrap', 'ota'):
         if cfg['builder'].get('status') != 'ready':
             found.append(f'builder runner/controller not ready (builder.status={cfg["builder"].get("status")})')
-        if cfg['appInputs'].get('status') != 'bound' or not cfg['appInputs'].get('allocation') \
-                or not cfg['appInputs'].get('directory'):
-            found.append('signed app inputs are not bound (appInputs)')
+        inputs = cfg['appInputs']
+        export = inputs.get('export') or {}
+        if inputs.get('status') != 'bound' or not inputs.get('allocation') \
+                or not re.fullmatch(r'[1-9][0-9]*', str(export.get('run') or '')) \
+                or not re.fullmatch(r'[1-9][0-9]*', str(export.get('artifactId') or '')) \
+                or not re.fullmatch(r'sha256:[0-9a-f]{64}', str(export.get('artifactDigest') or '')) \
+                or not SHA.fullmatch(str(export.get('receiptSha256') or '')):
+            found.append('signed app inputs are not bound (appInputs export run/artifact/digest/receipt)')
         try:
             identities(cfg)
         except Refused as error:
@@ -377,6 +382,46 @@ def prepare(cfg, build, base_attempt=None, run=subprocess.run):
     return record
 
 
+EXPORT_SCHEMA = 'roseos.app-inputs-export.v1'
+SUFFIXES = ('.apk', '.receipt.json', '.apk.idsig')
+
+
+def verify_export(cfg, directory):
+    """Release's app-inputs-export artifact (PR #565 contract), byte-checked against this repository's one record:
+    the committed receipt digest, its producer allocation path and digest, signer and SDK, and SHA256SUMS over exactly
+    the nine signed files, the policy and the receipt. Admission of the APKs themselves follows in admit_apps."""
+    pins, directory = cfg['appInputs'], regular_dir(directory, 'app-inputs export')
+    receipt_path = directory/'app-inputs-export.json'
+    if digest(receipt_path) != pins['export']['receiptSha256']:
+        raise Refused('app-inputs export receipt differs from the committed record')
+    receipt = read(receipt_path)
+    allocation = ROOT/pins['allocation']
+    producer = receipt.get('producer') or {}
+    record = read(allocation)
+    if receipt.get('schema') != EXPORT_SCHEMA or producer.get('device') != 'frankel' \
+            or producer.get('build') != record.get('build') \
+            or (producer.get('allocation') or {}) != {'path': pins['allocation'], 'sha256': digest(allocation)} \
+            or receipt.get('signerSha256') != pins['appSignerSha256'] or receipt.get('sdk') != SDK:
+        raise Refused('app-inputs export producer, allocation, signer or SDK differs from the committed record')
+    names = sorted([f'signed-apps/{p}{x}' for p in pins['packages'] for x in SUFFIXES] + ['background-policy.json'])
+    if sorted(f['path'] for f in receipt.get('files', [])) != names:
+        raise Refused('app-inputs export file inventory differs from the nine signed files and the policy')
+    present = sorted(str(p.relative_to(directory)) for p in directory.rglob('*') if p.is_file() or p.is_symlink())
+    if present != sorted(names + ['app-inputs-export.json', 'SHA256SUMS']) or any(p.is_symlink() for p in directory.rglob('*')):
+        raise Refused('app-inputs export holds missing, extra or linked files')
+    expected = {f['path']: f['sha256'] for f in receipt['files']}
+    expected['app-inputs-export.json'] = pins['export']['receiptSha256']
+    seen = {}
+    for line in (directory/'SHA256SUMS').read_text().splitlines():
+        parts = line.split('  ')
+        if len(parts) != 2 or parts[1] in seen or not SHA.fullmatch(parts[0]):
+            raise Refused('app-inputs export SHA256SUMS is malformed or ambiguous')
+        seen[parts[1]] = parts[0]
+    if seen != expected or any(digest(directory/name) != value for name, value in expected.items()):
+        raise Refused('app-inputs export bytes differ from SHA256SUMS or the receipt')
+    return {'receiptSha256': pins['export']['receiptSha256'], 'producer': producer, 'apps': receipt.get('apps')}
+
+
 def admit_apps(cfg, apps_dir, policy_path, tools, identity=background_apks.identity):
     """The already-signed fleet apps: receipt bytes/signer, actual APK identity and a policy pinning exactly them."""
     pins = cfg['appInputs']
@@ -451,14 +496,20 @@ def conflicts_of(stderr):
     return None
 
 
-def integrate(cfg, build, run=subprocess.run):
+def integrate(cfg, build, app_inputs, run=subprocess.run):
     directory = attempt_dir(cfg, build)
     allocation, prepared = read(directory/'allocation.json'), read(directory/'prepare.json')
     source = directory/'src'
     tools = {k: str(source/v) for k, v in TOOLS.items() if k != 'java'}
-    apps_dir = Path(cfg['appInputs']['directory'])
+    # The downloaded export is copied into the attempt first, so every later check reads the same retained bytes.
+    apps_dir, downloaded = directory/'app-inputs', regular_dir(app_inputs, 'downloaded app inputs')
+    entries = list(downloaded.iterdir())
+    if len(entries) == 1 and entries[0].is_dir() and not entries[0].is_symlink():
+        downloaded = entries[0]  # an artifact downloaded by id may land in its own named directory
+    shutil.copytree(downloaded, apps_dir, symlinks=True)
+    exported = verify_export(cfg, apps_dir)
     admitted = admit_apps(cfg, apps_dir/'signed-apps', apps_dir/'background-policy.json', tools)
-    release_receipts.write_once(directory/'app-input-admission.json', admitted)
+    release_receipts.write_once(directory/'app-input-admission.json', dict(admitted, export=exported))
     product = directory/f'product-{allocation["source"][:12]}'
     result = run(['git', '-C', str(ROOT), 'worktree', 'add', '--detach', str(product), allocation['source']],
                  capture_output=True, text=True)
@@ -881,7 +932,7 @@ def main(argv=None):
         elif a.action == 'prepare':
             print(json.dumps(prepare(cfg, a.build, a.base_attempt)))
         elif a.action == 'integrate':
-            print(json.dumps(integrate(cfg, a.build)))
+            print(json.dumps(integrate(cfg, a.build, a.dir or p.error('integrate needs --dir (downloaded app inputs)'))))
         elif a.action == 'compile':
             print(json.dumps(compile_build(cfg, a.build)))
         elif a.action == 'sign':

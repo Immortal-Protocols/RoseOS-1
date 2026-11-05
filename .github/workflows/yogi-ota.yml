@@ -80,6 +80,9 @@ jobs:
     needs: controller
     runs-on: [self-hosted, roseos-yogi-builder]
     timeout-minutes: 660
+    permissions:
+      contents: read
+      actions: read
     outputs:
       build: ${{ steps.allocate.outputs.build }}
     steps:
@@ -98,7 +101,21 @@ jobs:
             python3 scripts/yogi_ota.py prepare --build "${{ steps.allocate.outputs.build }}" \
               --base-attempt "$(python3 -c 'import json;print(json.load(open("os/ota/yogi.json"))["bootstrap"]["build"])')"
           fi
-      - run: python3 scripts/yogi_ota.py integrate --build "${{ steps.allocate.outputs.build }}"
+      # Release's app-inputs-export artifact, exactly the run and artifact committed in os/ota/yogi.json (never latest).
+      - id: inputs
+        run: |
+          python3 - >> "$GITHUB_OUTPUT" <<'PY'
+          import json
+          e = json.load(open('os/ota/yogi.json'))['appInputs']['export']
+          print(f"run={e['run']}"); print(f"artifact={e['artifactId']}")
+          PY
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          run-id: ${{ steps.inputs.outputs.run }}
+          artifact-ids: ${{ steps.inputs.outputs.artifact }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/app-inputs
+      - run: python3 scripts/yogi_ota.py integrate --build "${{ steps.allocate.outputs.build }}" --dir "$RUNNER_TEMP/app-inputs"
       - run: python3 scripts/yogi_ota.py compile --build "${{ steps.allocate.outputs.build }}"
 
   sign:

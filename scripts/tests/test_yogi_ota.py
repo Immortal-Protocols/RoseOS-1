@@ -49,7 +49,9 @@ class Fixture(unittest.TestCase):
         allocation = self.root/'allocation.json'
         allocation.write_text(json.dumps({'apps': [['dev.pixel.voice', 364], ['dev.pixel.calculator.agent', 5],
                                                    ['dev.pixel.backgroundcontrol', 38]]}))
-        self.cfg['appInputs'].update(status='bound', allocation=str(allocation), directory='/srv/rose-yogi/inputs/apps')
+        self.cfg['appInputs'].update(status='bound', allocation=str(allocation),
+                                     export={'run': '41960000001', 'artifactId': '13400000001',
+                                             'artifactDigest': 'sha256:' + 'd'*64, 'receiptSha256': 'e'*64})
         self.cfg['signing'].update(status='approved', access={'approvalRef': 'synthetic', 'expiresAt': '2026-11-06T12:00:00Z'})
         self.cfg['bootstrap'].update(status='signed', build=BOOT_BUILD, timestamp=BOOT_EPOCH)
         self.cfg['publicationEnabled'] = True
@@ -213,6 +215,68 @@ class AppInputTest(Fixture):
         (self.apps/'dev.pixel.calculator.agent.apk').write_bytes(b'changed')
         with self.assertRaises(yogi.Refused):
             self.admit()
+
+
+class ExportTest(Fixture):
+    """Release's roseos.app-inputs-export.v1 artifact (PR #565 shape), checked against the committed record."""
+    def setUp(self):
+        super().setUp()
+        self.cfg['appInputs']['allocation'] = 'os/ota/mustang-frankel-2026110403-allocation.json'
+        allocation = yogi.ROOT/self.cfg['appInputs']['allocation']
+        self.dir = self.root/'export'
+        (self.dir/'signed-apps').mkdir(parents=True)
+        files = []
+        for package in self.cfg['appInputs']['packages']:
+            for suffix in yogi.SUFFIXES:
+                path = self.dir/'signed-apps'/f'{package}{suffix}'
+                path.write_bytes((package+suffix).encode())
+        (self.dir/'background-policy.json').write_text('{}')
+        for path in sorted(p for p in self.dir.rglob('*') if p.is_file()):
+            files.append({'path': str(path.relative_to(self.dir)), 'sizeBytes': path.stat().st_size, 'sha256': yogi.digest(path)})
+        receipt = {'schema': 'roseos.app-inputs-export.v1', 'signerSha256': self.cfg['appInputs']['appSignerSha256'], 'sdk': 37,
+                   'producer': {'device': 'frankel', 'build': '2026110403', 'tag': 'frankel-2026110403',
+                                'allocation': {'path': self.cfg['appInputs']['allocation'], 'sha256': yogi.digest(allocation)}},
+                   'files': files}
+        self.write(receipt)
+
+    def write(self, receipt):
+        path = self.dir/'app-inputs-export.json'
+        path.write_text(json.dumps(receipt, indent=2, sort_keys=True) + '\n')
+        self.cfg['appInputs']['export']['receiptSha256'] = yogi.digest(path)
+        rows = receipt['files'] + [{'path': 'app-inputs-export.json', 'sha256': yogi.digest(path)}]
+        (self.dir/'SHA256SUMS').write_text(''.join(f'{f["sha256"]}  {f["path"]}\n' for f in sorted(rows, key=lambda f: f['path'])))
+
+    def test_committed_export_verifies(self):
+        self.assertEqual(yogi.verify_export(self.cfg, self.dir)['producer']['build'], '2026110403')
+
+    def test_uncommitted_foreign_or_changed_exports_refuse(self):
+        receipt = json.loads((self.dir/'app-inputs-export.json').read_text())
+        good = self.cfg['appInputs']['export']['receiptSha256']
+        self.cfg['appInputs']['export']['receiptSha256'] = 'f'*64
+        with self.assertRaisesRegex(yogi.Refused, 'committed record'):
+            yogi.verify_export(self.cfg, self.dir)
+        self.cfg['appInputs']['export']['receiptSha256'] = good
+        for key, value in [('signerSha256', 'a40da80a59d170caa950cf15c18c454d47a39b26989d8b640ecd745ba71bf5dc'), ('sdk', 36),
+                           ('producer', dict(receipt['producer'], build='2026110402')),
+                           ('producer', dict(receipt['producer'], allocation={'path': 'other.json', 'sha256': 'a'*64})),
+                           ('files', receipt['files'][1:])]:
+            with self.subTest(key=key):
+                self.write(dict(receipt, **{key: value}))
+                with self.assertRaises(yogi.Refused):
+                    yogi.verify_export(self.cfg, self.dir)
+        self.write(receipt)
+        (self.dir/'signed-apps/dev.pixel.voice.apk').write_bytes(b'changed')
+        with self.assertRaisesRegex(yogi.Refused, 'bytes differ'):
+            yogi.verify_export(self.cfg, self.dir)
+        (self.dir/'signed-apps/dev.pixel.voice.apk').write_bytes(b'dev.pixel.voice.apk')
+        (self.dir/'extra.apk').write_bytes(b'x')
+        with self.assertRaisesRegex(yogi.Refused, 'extra'):
+            yogi.verify_export(self.cfg, self.dir)
+
+    def test_unbound_export_fields_block(self):
+        self.cfg['appInputs']['export']['artifactId'] = None
+        self.assertIn('signed app inputs are not bound (appInputs export run/artifact/digest/receipt)',
+                      yogi.blockers(self.cfg, 'bootstrap'))
 
 
 class AllocationTest(Fixture):
