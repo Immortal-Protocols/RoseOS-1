@@ -28,16 +28,50 @@
   "oidcRepositoryId": "1428996648",
   "oidcRepositoryVisibility": "public",
   "oidcRef": "refs/heads/main",
-  "costAllowance": {
-    "verifiedRegionalQuote": false,
-    "computeUsdPerRunningHour": 3,
-    "persistentDisksUsdPerMonth": 300,
-    "initialTwelveHourCapUsd": 50,
-    "excludes": ["network", "tax"],
-    "basis": "Planning allowances, not official us-west2 prices. At most 12 running hours plus half a day of persistent disks is about USD 41. Persistent disks remain billed while stopped. Infra must provide the actual regional quote before provisioning approval."
+  "regionalListRates": {
+    "currency": "USD",
+    "location": "Los Angeles (us-west2)",
+    "verification": "Original Mac operator read-only verification at 2026-11-05T17:27Z, relayed by Chief; Mustang did not query billing or cloud APIs. The worker's public text fetch did not render the SKU rows.",
+    "computeUsdPerRunningHour": 2.665883,
+    "persistentDisksUsdPerMonth": 257.76,
+    "prorationHoursPerMonth": 730,
+    "twelveHourComputeUsd": 31.990596,
+    "twelveHourDisksUsd": 4.2371506849,
+    "twelveHourSubtotalUsd": 36.2277466849,
+    "spendingCapEnforced": false,
+    "excludes": ["network", "tax", "discounts and credits"],
+    "sources": [
+      "https://cloud.google.com/skus?currency=USD&filter=49B7-2000-7A99",
+      "https://cloud.google.com/skus?currency=USD&filter=72AB-B51D-7D57",
+      "https://cloud.google.com/skus?currency=USD&filter=DF86-0465-7120"
+    ],
+    "basis": "On-demand list rates, not an enforced budget. The 12-hour subtotal is a proration example, not a disk deletion or retention decision. Both disks remain billed while the VM is stopped."
+  },
+  "diskRetention": {"choice": null, "approved": false, "basis": "Owner must explicitly decide retention/teardown and ongoing disk cost; no automatic deletion is selected."},
+  "network": {
+    "choice": null,
+    "approved": false,
+    "workingNoPublicIpGithubRouteEstablished": false,
+    "approvedProxyEndpoint": null,
+    "defaultSubnetReadback": {"privateGoogleAccess": true, "internetGatewayRoute": true, "regionalCloudRoutersFound": false, "regionalCloudNatFound": false},
+    "heldLookup": {"service": "networkservices gateway", "result": "SERVICE_DISABLED", "retryOrEnableAuthorized": false},
+    "optionalPublicNatListRates": {"selected": false, "oneVmAndOneIpUsdPerHour": 0.0064, "usdPerGiBProcessed": 0.045, "internetEgressIncluded": false, "source": "https://cloud.google.com/nat/pricing"},
+    "basis": "Private Google Access and a default route do not prove GitHub egress without a public IP, approved NAT or approved proxy. Select and approve the exact network resources/scope separately; no API enablement or denied-lookup bypass."
+  },
+  "runner": {
+    "groupId": null,
+    "groupName": null,
+    "groupCreationApproved": false,
+    "repositoryId": "1428996648",
+    "publicRepositoryAdmissionRequired": true,
+    "allowedWorkflow": "Immortal-Protocols/RoseOS-1/.github/workflows/mustang-ota-dedicated.yml@refs/heads/main",
+    "registrationRoute": null,
+    "lifetime": null,
+    "reuseOrWidenFrankelGroup": false,
+    "basis": "Separate organization group with exact repository/workflow admission; protected registration and persistent-versus-ephemeral lifetime still require a concrete owner decision and approval. No registration credential is issued by this record."
   },
   "reportedInfraChecks": {
-    "source": "Chief relay of existing Infra assessment, 2026-11-05; not independently queried by Mustang",
+    "source": "Chief relay of Infra assessment and original Mac read-only network/pricing verification through 2026-11-05T17:27Z; not independently queried by Mustang",
     "machineTypeInZone": true,
     "regionalC3CpuQuota": 300,
     "regionalC3CpuUsage": 0,

@@ -29,6 +29,7 @@ import release_receipts
 import mustang_collection
 import mustang_edge
 import mustang_lane
+import mustang_paths
 
 PROFILE = 'pro-mustang-v1'
 PROJECT = 'protocols-465723'
@@ -58,7 +59,9 @@ def number(value):
     return str(value)
 
 
-def run_root(kind,run_id,attempt):
+def run_root(kind,run_id,attempt,lane=None):
+    if lane is not None:
+        return mustang_paths.attempt(lane,kind,run_id,attempt)
     return BASE/f'mustang-{kind}-{number(run_id)}-{number(attempt)}'
 
 
@@ -66,12 +69,13 @@ def source_sha():
     return subprocess.check_output(['git','-C',str(ROOT),'rev-parse','HEAD'],text=True).strip()
 
 
-def collect(compile_receipt,run_id,attempt):
+def collect(compile_receipt,run_id,attempt,lane=None):
     """Read-only collection before signer login; never retry make or edit its original receipts."""
     if (run_id,attempt)!=(os.environ.get('GITHUB_RUN_ID'),os.environ.get('GITHUB_RUN_ATTEMPT')):
         raise ValueError('collection must name this workflow run/attempt')
-    value,source,build,epoch,recovery=mustang_collection.admit(compile_receipt,os.environ)
-    out=run_root('collect',run_id,attempt)
+    lock=mustang_paths.layout(lane)['lockPath'] if lane is not None else LOCK
+    value,source,build,epoch,recovery=mustang_collection.admit(compile_receipt,os.environ,lane=lane)
+    out=run_root('collect',run_id,attempt,lane=lane)
     if out.exists() or out.is_symlink():raise ValueError('collection attempt exists; no automatic retry')
     out.mkdir(mode=0o700)
     report={'schema':'roseos.mustang-compile-collection.v1','status':'failed','device':'mustang',
@@ -80,10 +84,11 @@ def collect(compile_receipt,run_id,attempt):
         'candidate':value,'collectionRecovery':recovery,'originalWorkflowConclusion':'failure' if recovery else 'success',
         'makeReturncode':value['stages']['compile']['result']['returncode'],'label':LABEL,
         'omittedChecks':value['omittedChecks'],'originalReceiptsModified':False,'makeRerun':False}
+    if lane is not None: report.update(builder=dict(lane['vm']),workflow=lane['workflow'])
     try:
         hp=module('mustang_factory_host','host-factory-package.py')
         adapter=module('mustang_output_collection','mustang-build-only.py')
-        with hp.shared_lock(LOCK):
+        with hp.shared_lock(lock):
             if read(source.parent/'allocation.json')!=value['allocation']:
                 raise ValueError('retained allocation differs from its producer receipt')
             if (source/'releases'/build).exists():
@@ -114,15 +119,17 @@ def collect(compile_receipt,run_id,attempt):
                           'collectionRecovery':recovery}))
 
 
-def compile_binding(path):
-    value,source,build,epoch,recovery=mustang_collection.admit(path,os.environ)
-    collection=read(run_root('collect',os.environ['GITHUB_RUN_ID'],os.environ['GITHUB_RUN_ATTEMPT'])/'compile-collection.json')
+def compile_binding(path,lane=None):
+    value,source,build,epoch,recovery=mustang_collection.admit(path,os.environ,lane=lane)
+    collection=read(run_root('collect',os.environ['GITHUB_RUN_ID'],os.environ['GITHUB_RUN_ATTEMPT'],lane=lane)/'compile-collection.json')
     if collection.get('schema')!='roseos.mustang-compile-collection.v1' or collection.get('status')!='complete' \
             or collection.get('collectorSource')!=source_sha() or collection.get('runId')!=os.environ['GITHUB_RUN_ID'] \
             or str(collection.get('runAttempt'))!=os.environ['GITHUB_RUN_ATTEMPT'] \
             or collection.get('candidateReceiptSha256')!=digest(path) or collection.get('candidate')!=value \
             or collection.get('collectionRecovery') is not recovery:
         raise ValueError('fresh same-run output collection required before signing')
+    if lane is not None and (collection.get('builder')!=lane['vm'] or collection.get('workflow')!=lane['workflow']):
+        raise ValueError('collection receipt differs from the dedicated Mustang VM/workflow')
     outputs=collection['outputs']
     if set(outputs['artifacts'])!={'targetFiles','otatools','vendorBootImage','vendorKernelBootImage'} \
             or outputs.get('verdict')!='complete' or outputs['actualBuildIdentity']!={'device':'mustang','build':build,'timestamp':epoch}:
@@ -180,7 +187,8 @@ def execute_sign(config,env):
     return hs.main(config_path=config,env=env,discover_keys=discovery,managed_decrypted_keys=True)
 
 
-def sign(compile_receipt,bootstrap_receipt,run_id,attempt):
+def sign(compile_receipt,bootstrap_receipt,run_id,attempt,lane=None):
+    lock=mustang_paths.layout(lane)['lockPath'] if lane is not None else LOCK
     sb=module('mustang_bootstrap','signing-bootstrap.py')
     profile=sb.load_profiles()['profiles'][PROFILE]
     if profile.get('status')!='resource-bound' or profile.get('missing'):
@@ -188,11 +196,11 @@ def sign(compile_receipt,bootstrap_receipt,run_id,attempt):
     if profile['project']!=PROJECT or profile['secrets']!=SECRETS \
             or os.environ.get('GCP_SIGNER_SERVICE_ACCOUNT')!=SIGNER:
         raise ValueError('signer/project/container binding differs')
-    compiled,source,build,epoch,outputs=compile_binding(compile_receipt)
-    collection_path=run_root('collect',run_id,attempt)/'compile-collection.json'
+    compiled,source,build,epoch,outputs=compile_binding(compile_receipt,lane=lane)
+    collection_path=run_root('collect',run_id,attempt,lane=lane)/'compile-collection.json'
     collection=read(collection_path)
     bootstrap,versions=bootstrap_binding(bootstrap_receipt)
-    out=run_root('sign',run_id,attempt)
+    out=run_root('sign',run_id,attempt,lane=lane)
     if out.exists() or out.is_symlink():raise ValueError('sign attempt exists; no automatic retry')
     out.mkdir(mode=0o700)
     record={'schema':'roseos.mustang-sign-run.v1','device':'mustang','build':build,'candidateSource':compiled['source'],
@@ -206,6 +214,7 @@ def sign(compile_receipt,bootstrap_receipt,run_id,attempt):
         'omittedChecks':compiled['omittedChecks'],'signingResultVerified':False,'intendedPublicIdentityVerified':False,
         'roseEdge':{'unsigned':collection['roseEdge']},
         'edgeTargetFiles':{'unsigned':mustang_edge.archive_identity(outputs['targetFiles'])}}
+    if lane is not None: record.update(builder=dict(lane['vm']),workflow=lane['workflow'])
     try:
         notes=out/'CANDIDATE.md'
         notes.write_text(f'# Mustang {build}\n\n{LABEL}\n\nSource: {compiled["source"]}\n\n'
@@ -228,7 +237,7 @@ def sign(compile_receipt,bootstrap_receipt,run_id,attempt):
             ROSE_RELEASE_DIR=str(release),ROSE_SIGN_OTATOOLS=outputs['otatools']['path'],OUT_DIR=f'out-mustang-build-{build}')
         bounded=module('mustang_build','mustang-build-only.py').engine()
         hp=module('mustang_factory_host','host-factory-package.py')
-        with hp.shared_lock(LOCK):
+        with hp.shared_lock(lock):
             result=bounded.supervise([sys.executable,str(Path(__file__).resolve()),'_execute','--config',str(config_path)],
                 str(source),env,10800,{'sampleSeconds':5,'killGraceSeconds':30,'boundBytes':1<<60,
                                      'reserveBytes':0,'checkReserve':False})
@@ -250,13 +259,17 @@ def sign(compile_receipt,bootstrap_receipt,run_id,attempt):
         print(json.dumps({'signReceipt':str(out/'mustang-sign-receipt.json'),'status':record['status']}))
 
 
-def package(sign_run,sign_attempt,run_id,attempt):
-    signed=read(run_root('sign',sign_run,sign_attempt)/'mustang-sign-receipt.json')
+def package(sign_run,sign_attempt,run_id,attempt,lane=None):
+    lock=mustang_paths.layout(lane)['lockPath'] if lane is not None else LOCK
+    signed=read(run_root('sign',sign_run,sign_attempt,lane=lane)/'mustang-sign-receipt.json')
     if signed.get('schema')!='roseos.mustang-sign-run.v1' or signed.get('device')!='mustang' \
             or signed.get('status')!='signed-command-complete':raise ValueError('completed Mustang signing command required')
     mustang_edge.require_signing(signed)
     build=signed['build'];source=Path(signed['sourceRoot'])
-    out=run_root('package',run_id,attempt)
+    if lane is not None and (signed.get('builder')!=lane['vm'] or signed.get('workflow')!=lane['workflow']
+            or source!=run_root('prep',signed['compileRunId'],signed['compileRunAttempt'],lane=lane)/'source'):
+        raise ValueError('signing receipt differs from the dedicated Mustang VM/workflow/source')
+    out=run_root('package',run_id,attempt,lane=lane)
     if out.exists() or out.is_symlink():raise ValueError('package attempt exists; no automatic retry')
     out.mkdir(mode=0o700);work=out/'work';assets=out/'assets';work.mkdir();assets.mkdir()
     hp=module('mustang_factory_host','host-factory-package.py');hs=module('mustang_host_sign','host-sign.py')
@@ -267,8 +280,9 @@ def package(sign_run,sign_attempt,run_id,attempt):
         'compileCollectionReceiptSha256':signed.get('compileCollectionReceiptSha256'),
         'omittedChecks':signed['omittedChecks'],'phoneValidated':False,
         'roseEdge':signed['roseEdge'],'edgeTargetFiles':signed['edgeTargetFiles']}
+    if lane is not None: receipt.update(builder=dict(lane['vm']),workflow=lane['workflow'])
     try:
-        with hp.shared_lock(LOCK):
+        with hp.shared_lock(lock):
             tf=Path(signed['outputs']['targetFiles']['path']);ota=Path(signed['compileArtifacts']['otatools']['path'])
             for p,expected in [(tf,signed['outputs']['targetFiles']['sha256']),
                                (ota,signed['compileArtifacts']['otatools']['sha256'])]:

@@ -20,8 +20,13 @@ Use the existing cleanup mechanisms only after their live behavior is approved.
 
 Infra reported through Chief that C3 is offered in this zone, regional C3 quota
 is 300 CPUs with zero used, SSD-family quota has headroom, and the default subnet
-has Private Google Access. **Stock, GitHub egress and actual regional prices are
-unverified.** Private Google Access alone does not establish GitHub connectivity.
+has Private Google Access. **Stock and a working GitHub egress route remain
+unverified.** The original Mac operator's 17:27 UTC readback also found a default
+internet-gateway route, no regional Cloud Routers/Cloud NAT and no established
+approved proxy endpoint. Private Google Access and the default route alone do
+not establish GitHub connectivity for a VM without an external IP. A targeted
+Network Services gateway lookup returned `SERVICE_DISABLED`; do not retry it,
+enable the API or use an alternate route to bypass that denial.
 Do not silently add public SSH, NAT, project-wide permissions or another VM if
 admission fails. Use the approved Infra access route and report the exact gap.
 
@@ -70,13 +75,45 @@ build speed. A move to `pd-ssd` needs a measured bottleneck and a priced change.
 
 ## Exact approval package for Infra
 
-Before creating anything, obtain approval for the named VM, two disks and their
-actual regional quote; the dedicated controller/provider and runner; and the
-isolated 12-hour automatic STOP fallback. The planning allowances are $3 per
-running hour and $300 per month for persistent disks, **not a verified regional
-tariff**. Twelve running hours plus half a day of disks is about $41 before
-network/tax, within the proposed $50 initial cap. Four hours daily is about
-$660 monthly. Disks remain billable while the VM is stopped.
+The original Mac operator verified Los Angeles on-demand list rates at
+**2026-11-05 17:27 UTC**, relayed by Chief: **$2.665883 per running hour** for
+44 C3 vCPUs/176 GiB RAM, and **$257.76 per month** for 2,148 GiB of zonal
+`pd-balanced`. Sources: [C3 CPU SKU](https://cloud.google.com/skus?currency=USD&filter=49B7-2000-7A99),
+[C3 memory SKU](https://cloud.google.com/skus?currency=USD&filter=72AB-B51D-7D57),
+[balanced disk SKU](https://cloud.google.com/skus?currency=USD&filter=DF86-0465-7120).
+Mustang did not query billing/cloud APIs; its public text fetch did not render
+the dynamic SKU rows. This record consumes the verified Mac handoff.
+
+Twelve running hours cost **$31.99 compute**. Using a 730-hour monthly proration,
+the disks add **$4.24** for those hours: **$36.23 before network/tax**, discounts
+or credits. This is a list-rate example, **not an enforced spending cap or an
+approved disk teardown time**. Disks remain billable while stopped. Disk
+retention/teardown is an explicit unresolved owner decision.
+
+The network choice also remains unresolved. If separately selected and approved,
+one-VM/one-IP [Public NAT](https://cloud.google.com/nat/pricing) adds about
+**$0.0064/hour plus $0.045/GiB processed**, with internet egress extra. Before
+approving NAT, specify its actual router/subnet/address scope; a NAT covering
+the shared default subnet must not silently expand other machines' access.
+No public IP, NAT, proxy or new network resource is selected by this proposal.
+
+The runner needs a **separate organization group**, restricted to repository
+`1428996648`, explicitly admitting that public repository and only
+`Immortal-Protocols/RoseOS-1/.github/workflows/mustang-ota-dedicated.yml@refs/heads/main`.
+Its label is `roseos-mustang-builder`. The group identity/creation approval,
+protected registration route and persistent-versus-ephemeral lifetime are not
+established. Do not reuse or widen Frankel's group or issue credentials here.
+
+Before creating anything, the exact approval package must resolve:
+
+- The named VM and two disks at these rates, including the retention/teardown
+  decision and ongoing disk charges.
+- The exact GitHub egress choice and its network resource/access scope and cost.
+- The separate runner group, protected registration route and runner lifetime.
+- The dedicated controller/provider with the restricted trust and instance-only
+  permissions below, plus the isolated 12-hour automatic STOP fallback.
+- Approved host setup and actual resource readback before binding the lane.
+  Build, signing, live reclaim and publication remain separately held.
 
 The controller proposal is an instance-scoped identity with only get/start/stop
 on the dedicated VM. Its OIDC admission must bind numeric repository ID
@@ -95,17 +132,17 @@ capacity-map change as its single writer. Infra owns the explicit-builder API
 in `scripts/release-pipeline.py` and its focused common-controller tests,
 preserving Frankel defaults. Common workflow routing remains Release-owned;
 this split does not authorize overlapping edits there.
-The new `scripts/mustang_controller.py` deliberately refuses the current common
-controller, which has an implicit Frankel `BUILDER` global. It never changes
-that global or falls back to it.
-
-Required Infra handoff: support
+`scripts/mustang_controller.py` requires an explicit target and never replaces
+the shared `BUILDER` global or falls back to Frankel. Infra's
+[PR #586](https://github.com/Immortal-Protocols/RoseOS-1/pull/586), merged as
+`b6b7ac3fb72379bab19daaa8d48f5fd221a45701`, supplies the agreed API:
 `Production.control_builder(action, ..., builder={project, zone, instance, instanceId})`.
-For explicit targets, verify numeric ID on every describe before a start or
-STOP request, keep existing bounded polling/no-resubmit behavior, and invoke
-the ownership claim before submitting start. Preserve Frankel's default API.
-Unknown/mismatched IDs must fail without a mutation. Final integration requires
-tests against the actual reviewed common-controller bytes, not only a stand-in.
+It verifies numeric ID/name on each describe, retains bounded polling and
+no-resubmit behavior, and calls the ownership claim before start. Frankel's
+default is preserved. Mustang integration tests exercise those actual merged
+bytes with mocked process responses for start/STOP, wrong IDs and uncertain
+request reconciliation. They perform no gcloud process or VM operation; actual
+dedicated resource readback and runtime admission remain unverified.
 
 The Mustang adapter records exact VM identity plus workflow, source, run and
 attempt in a write-once ownership file before the common controller can submit
@@ -114,14 +151,31 @@ start. Cleanup refuses absent, malformed, foreign or stale ownership, and skips
 STOP if this operation did not start the VM. It calls the same explicit-target
 API for STOP. It performs no login or provisioning.
 
-The dedicated build workflow is **not yet installed or runtime-ready**. Do not
-add a controller-only warm-up run. After the common API and actual Infra binding
-exist, integrate it directly into the normal guarded build lifecycle, with its
-own concurrency group and runner and ownership-aware cleanup. Port the legacy
-Mustang adapter paths to the dedicated profile; do not reactivate old entry
-points. Baseline target-files/trust evidence, a fresh signed-app export with
-matching receipts/policy/allocation, and the uncertain failed-run allocation
-must be reconciled before native compilation. No old local path is a substitute.
+The exact future workflow file, `.github/workflows/mustang-ota-dedicated.yml`,
+currently contains **only a manual hosted source/binding guard**. It has no
+controller, cloud login or builder job. Its helper reports
+`nativePipelineReady=false` and `runtimeAuthorized=false`; the committed
+unbound lane refuses even that source check. This is source preparation, not a
+build workflow or a separate VM warm-up/observation process. Do not dispatch it
+as a build or count a future green source check as delivery readiness.
+
+`scripts/mustang_paths.py` derives explicit dedicated attempt/storage/lock paths
+and adapts the validated canonical compiler recipe's three host-path fields.
+Pins, build goals, limits and sprint omissions remain unchanged. Allocation,
+collection and signing/factory data APIs now accept an explicit validated lane;
+legacy CLIs remain retired. Dedicated compile/collection/sign/package receipts
+bind the exact VM/workflow, and dedicated collection refuses old/foreign builder
+receipts. Their tests use synthetic archives and signer/generator stand-ins;
+no real signing or build has run. Historical data APIs/receipts and installed
+baseline acceptance are preserved.
+
+After approved actual Infra binding and input evidence exist, complete the normal
+dedicated build lifecycle with its own runner and ownership-aware cleanup.
+The native producer, fresh source/admission and final OTA path wiring remain
+unfinished; do not reactivate old entry points. Baseline target-files/trust
+evidence, a fresh signed-app export with matching receipts/policy/allocation,
+and the uncertain failed-run allocation must be reconciled before native
+compilation. No old local path is a substitute.
 The common capacity map keeps the retired jobs' host reference for source
 auditing, explicitly marks them retired and excludes Mustang from parallel
 capacity. The active binding remains the unbound dedicated profile. Editing a
