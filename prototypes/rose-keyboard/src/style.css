@@ -89,12 +89,12 @@ button:focus-visible,[tabindex]:focus-visible{outline:2px solid #ff9aa8;outline-
 .strip .sg.correct span{border-bottom:1.5px solid var(--ruby-hi);padding-bottom:1px}
 .strip .sg.typed span::before{content:'“'}.strip .sg.typed span::after{content:'”'}
 .strip.editing{gap:0;padding:0 2px 0 8px}
-.strip .tools{flex:1 1 auto;display:flex;align-items:center;gap:2px;min-width:0}
-.strip .tool{flex:none;height:32px;min-width:44px;padding:0 9px;border-radius:8px;display:grid;place-items:center;font-size:13px;font-weight:500;color:var(--ink);position:relative}
+.strip .tools{flex:1 1 auto;display:flex;align-items:center;gap:0;min-width:0;overflow:hidden}
+.strip .tool{flex:none;height:32px;min-width:44px;padding:0 6px;border-radius:8px;display:grid;place-items:center;font-size:13px;font-weight:500;color:var(--ink);position:relative}
 .strip .tool::after{content:'';position:absolute;left:0;right:0;top:-6px;bottom:-6px}
 .strip .tool:not(:disabled):active{background:rgba(255,240,230,.08)}
 .strip .tool:disabled{color:var(--ink-3);opacity:.55}
-.strip .sep{flex:none;width:1px;height:18px;margin:0 4px;background:rgba(236,205,190,.18)}
+.strip .sep{flex:none;width:1px;height:18px;margin:0 3px;background:rgba(236,205,190,.18)}
 .strip .hide{flex:none;width:44px;display:grid;place-items:center;color:var(--ink-2)}
 .strip .hide::before{content:'';width:10px;height:10px;border-right:1.6px solid currentColor;border-bottom:1.6px solid currentColor;transform:translateY(-3px) rotate(45deg)}
 .strip .sg:active,.strip .tool:active{background:rgba(255,240,230,.06)}

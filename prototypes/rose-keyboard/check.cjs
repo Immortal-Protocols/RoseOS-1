@@ -123,6 +123,8 @@ const sha = (b) => crypto.createHash('sha256').update(b).digest('hex');
   s = await st(); check('long-press selects the word under the finger', s.text.slice(Math.min(s.a, s.b), Math.max(s.a, s.b)) === 'Garden', s);
   const tools = await page.locator('#strip .tool').allTextContents();
   check('selection turns the strip into Cut / Copy / Paste / Select all / Undo / Redo', tools.join('|') === 'Cut|Copy|Paste|Select all|Undo|Redo', tools);
+  const fitStrip = await page.evaluate(() => { const t = document.querySelector('#strip .tools').getBoundingClientRect(), h = document.querySelector('#strip .hide').getBoundingClientRect(); return [...document.querySelectorAll('#strip .tool')].every((b) => { const r = b.getBoundingClientRect(); return r.right <= Math.min(t.right, h.left) + 0.5; }); });
+  check('edit strip fits: every tool clear of ⌄, none clipped', fitStrip);
   await shot('10-edit-strip', 'Selection: edit tools replace suggestions');
   await page.locator('#strip [data-tool=copy]').click(); await wait(150);
   await page.evaluate(() => { const k = window.__kb; k.K.setSel(k.fields.messages, k.fields.messages.text.length); k.render(); });

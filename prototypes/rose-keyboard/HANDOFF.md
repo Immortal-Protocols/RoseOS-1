@@ -138,7 +138,7 @@ signals and their timing relative to the IME animation.
 | `src/assets/field.svg` | Copy of the HiFi Oxblood Rose field (unchanged artwork). |
 | `build.py` | Assembles the HTML. |
 | `model-check.cjs` | 37 model checks (`node prototypes/rose-keyboard/model-check.cjs`). |
-| `check.cjs` | 82 functional checks with real input + review renders to `out/check/` (ignored by Git). `check.json` records the commit, whether the study tree was clean, and the Git blob of the HTML tested versus the one committed. |
+| `check.cjs` | 83 functional checks with real input + review renders to `out/check/` (ignored by Git). `check.json` records the commit, whether the study tree was clean, and the Git blob of the HTML tested versus the one committed. |
 
 Review-sheet binding: the sheet is captured from the committed HTML after the commit, and labelled with
 the commit, the HTML's SHA-256 and its Git blob id. (The first sheet's `89a9fc7957cc…` label was the
