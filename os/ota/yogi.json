@@ -1,0 +1,80 @@
+{
+  "schema": "roseos.yogi-ota-config.v1",
+  "device": "yogi",
+  "model": "Pixel 11 Pro Fold",
+  "repository": "Immortal-Protocols/pixel-ota",
+  "publicationEnabled": false,
+  "automationEnabled": false,
+  "activationBasis": "Nathan approved Yogi OTA source work only (relayed by Chief, 2026-11-05). No build, key, access, signing, publication, dispatch or phone action is authorized by this file. Publication and automation stay false until separately authorized.",
+  "plan": "https://app.notion.com/p/40e7c646c81b81629d22eb03edd73abd",
+  "builder": {
+    "status": "runner-unregistered",
+    "project": "protocols-465723",
+    "zone": "us-west2-a",
+    "instance": "roseos-yogi-builder-20261103-a",
+    "runnerLabel": "roseos-yogi-builder",
+    "root": "/srv/rose-yogi",
+    "retainedSource": "/srv/rose-yogi/src",
+    "attempts": "/srv/rose-yogi/attempts",
+    "lock": "/srv/rose-yogi/yogi-build.lock",
+    "coverDisplayInput": "/srv/rose-yogi/inputs/cover-display-reference.json",
+    "jobs": 48,
+    "minimumFreeBytes": 700000000000,
+    "basis": "Dedicated Yogi VM from the handoff: n2-standard-64, 2,000 GB SSD, last documented TERMINATED. It has no service account, GitHub runner or CI identity yet; status stays runner-unregistered until Infra registers the runner and the controller identity can get/start/stop only this instance. Never shared with Frankel, Mustang, Rango, Blazer or Agent builds."
+  },
+  "signing": {
+    "status": "unbound",
+    "profile": "yogi-v1",
+    "project": "protocols-465723",
+    "signer": "roseos-build-signer@protocols-465723.iam.gserviceaccount.com",
+    "secrets": {
+      "keys": "PIXEL_OS_SIGNING_KEYS_YOGI_V1",
+      "passphrase": "PIXEL_OS_SIGNING_PASSPHRASE_YOGI_V1"
+    },
+    "bootstrapReceipt": "os/signing-bootstrap/yogi-bootstrap-receipt.json",
+    "access": null,
+    "basis": "A Yogi-only OS key set; no other device's keys. The containers do not exist yet. Public pins (OTA certificate, AVB public key) exist only after the separately authorized bootstrap writes its receipt; nothing here claims them. Signing reads remain refused while status is not approved with an unexpired window."
+  },
+  "labBaseline": {
+    "build": "2026110401",
+    "timestamp": "1793778172",
+    "source": "c47898373a72fc856517a91c0cf13e75c8b80662",
+    "appSignerSha256": "a40da80a59d170caa950cf15c18c454d47a39b26989d8b640ecd745ba71bf5dc",
+    "avbPublicKeySha256": "7728e30f50bfa5cea165f473175a08803f6a8346642b5aa10913e9d9e6defef6",
+    "artifactPackagesUpdater": false,
+    "installedBuildVerified": false,
+    "installedOtaTrustInspected": false,
+    "reason": "Established from the recorded artifact inspection: no packaged Updater, test-keys build tags, public AOSP development AVB and app identities. Not established: that the phone runs exactly this artifact (no installed-build readback), its installed OTA trust contents, and whether any sideload or data-preserving transition is possible. Proposed supported design: a one-time, separately authorized wipe installation of the Yogi bootstrap build (userdata and metadata erased), then in-place OTAs."
+  },
+  "bootstrap": {
+    "status": "not-built",
+    "build": null,
+    "timestamp": null,
+    "source": null,
+    "installEvidence": null,
+    "basis": "Build A: the first Yogi-key image with the owned Updater, delivered as a private fastboot install image. Every published Yogi OTA must be newer than it and signed by the same Yogi identity."
+  },
+  "allocationFloor": {
+    "build": "2026110401",
+    "timestamp": "1793778172",
+    "basis": "Lab candidate identity; every allocated Yogi build number and BUILD_DATETIME is strictly greater."
+  },
+  "appInputs": {
+    "appSignerSha256": "650d47f91b7f5af3c530fef53fe92018aa4521efba065bcb1d6fc9b699060bfb",
+    "packages": [
+      "dev.pixel.backgroundcontrol",
+      "dev.pixel.voice",
+      "dev.pixel.calculator.agent"
+    ],
+    "record": "os/app-inputs/frankel-2026110403.json",
+    "basis": "One decision record, owned by Release: os/app-inputs/frankel-2026110403.json (schema roseos.app-inputs-record.v1, PR #565), committed by Release only after a separately authorized app-inputs-export run for Frankel 2026110403 (dev.pixel.voice 364, dev.pixel.calculator.agent 5, dev.pixel.backgroundcontrol 38; signer 650d47f9...0bfb). The Yogi job downloads exactly that record's run and artifact id, admits it with Release's scripts/app-inputs-verify.py verify (its own aapt/apksigner), then re-runs its own admission. Never signed on the Yogi builder. Bootstrap A and OTA B use the same set. Unbound (the guard refuses) until Release commits that record on main; Yogi commits no export fields. The 14-day artifact window starts at the export: bootstrap A and OTA B must both download within it, or Release re-exports and commits a new record."
+  },
+  "wire": {
+    "tag": "yogi-{build}",
+    "otaAsset": "yogi-ota_update-{build}.zip",
+    "metadataAsset": "yogi-stable",
+    "metadataLine": "{build} {buildDateUtc} yogi stable",
+    "channel": "stable",
+    "latest": false
+  }
+}

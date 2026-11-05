@@ -1,0 +1,61 @@
+{
+  "schemaVersion": 1,
+  "kind": "rose-yogi-reconcile-template",
+  "device": "yogi",
+  "basis": "Yogi-only Rose integration through the existing host-reconcile, in an isolated copy of the retained Yogi tree. Same projects and apply arguments as Mustang except: no --agent-tray (the Yogi product patch os/fold-port/product-tray.patch already sets the tray property), and the measured cover display address from the private builder input.",
+  "reconcile": {
+    "projects": [
+      "frameworks/base",
+      "build/make",
+      "build/release",
+      "packages/apps/Updater",
+      "packages/modules/Permission",
+      "packages/apps/Launcher3"
+    ],
+    "integrationOwnedRoots": [
+      "packages/apps/PixelBackgroundControl",
+      "packages/apps/RosePreinstall"
+    ],
+    "sparsePaths": {
+      "frameworks/base": [
+        "core/res/res/values/config.xml"
+      ],
+      "build/make": [
+        "target/product/handheld_product.mk"
+      ],
+      "packages/apps/Updater": [
+        "res/values/config.xml"
+      ],
+      "packages/modules/Permission": [
+        "service/java/com/android/role/RoleService.java"
+      ]
+    },
+    "patcher": "trusted",
+    "applyArgs": [
+      "--background-policy",
+      "{policy}",
+      "--background-agent",
+      "{signed_apps}/dev.pixel.backgroundcontrol.apk",
+      "--reference-display-address",
+      "{cover_display}",
+      "--updater-url",
+      "{updater_url}",
+      "--updater-release-index",
+      "{updater_release_index}",
+      "--updater-published-channel",
+      "{updater_channel}",
+      "--preinstall-apk",
+      "{signed_apps}/dev.pixel.voice.apk",
+      "--preinstall-apk",
+      "{signed_apps}/dev.pixel.calculator.agent.apk"
+    ]
+  },
+  "labAdoption": {
+    "paths": [
+      "frameworks/base/core/res/res/values/config.xml",
+      "build/make/target/product/handheld_product.mk"
+    ],
+    "reason": "Yogi lab integration 2026110401 (Rose c47898373a72) wrote these with its own test-key policy pins and measured cover display; no reconcile receipt exists for it. Adopted only in the isolated attempt copy, never in the retained tree.",
+    "basis": "Only when the first reconcile of a copy of the retained lab tree reports exactly a subset of these paths as conflicts. Any other conflict stops the attempt."
+  }
+}

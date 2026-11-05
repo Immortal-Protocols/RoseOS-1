@@ -89,7 +89,8 @@ background policy, framework, launcher and viewer/Stop controls. Measure the
 Fold's actual reference display address before selecting its cover display.
 Do not reuse another phone's display address or change package identities.
 
-Yogi has no established Rose updater feed or signing contract. Resolve those
+Yogi's updater feed, signing contract and OTA route are defined in
+[YOGI-OTA.md](YOGI-OTA.md); none has run yet. Resolve their prerequisites
 before preparing an installable update; do not direct a custom-signed image at
 GrapheneOS's update server or at the Frankel Latest assets. Source preparation
 does not supply signing keys or authorize a clean install/data wipe.

@@ -1,0 +1,217 @@
+name: Yogi OTA
+run-name: yogi-ota ${{ inputs.stage }} ${{ github.run_id }}
+
+# Pixel 11 Pro Fold (yogi) on its own dedicated builder (roseos-yogi-builder-20261103-a, runner label
+# roseos-yogi-builder). Separate from os-release.yml: its own queue, VM, disk, lock, keys and feed, so a Frankel,
+# Mustang or Agent run never waits for it and its failure or cleanup never stops them. Manual dispatch only; no
+# schedule or automatic trigger. Every job is refused by scripts/yogi_ota.py until os/ota/yogi.json records its
+# prerequisite (registered runner, Yogi app inputs, Yogi bootstrap receipt, approved signing window, publication).
+#   bootstrap: build A - compile, sign with the Yogi key set, private fastboot install image (proposed one-time WIPE install,
+#              separately authorized). Nothing is published.
+#   ota:       build B and later - compile, sign, check and stage a full OTA newer than A; publish yogi-{build}
+#              (OTA first, yogi-stable last, never Latest) only when publish is true and publication is enabled.
+on:
+  workflow_dispatch:
+    inputs:
+      stage:
+        description: bootstrap (first Yogi-key image, private install image, no publication) or ota (newer OTA)
+        type: choice
+        options: [ota, bootstrap]
+        default: ota
+      publish:
+        description: 'ota only: publish yogi-{build} to pixel-ota after every check (needs publicationEnabled in os/ota/yogi.json)'
+        type: boolean
+        default: false
+
+concurrency:
+  group: yogi-ota
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+# Inputs reach scripts through the environment only, never by expression inside run: lines.
+env:
+  STAGE: ${{ inputs.stage }}
+  PUBLISH: ${{ inputs.publish }}
+
+jobs:
+  guard:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Main only, attempt 1 only
+        run: |
+          [[ "$GITHUB_REF" == refs/heads/main && "$GITHUB_RUN_ATTEMPT" == 1 ]] || { echo "::error::yogi-ota runs once from main"; exit 1; }
+          [[ "$STAGE" == ota || "$PUBLISH" != true ]] || { echo "::error::bootstrap never publishes"; exit 1; }
+      - name: Yogi prerequisites (refuses with the missing items by name)
+        run: |
+          python3 scripts/yogi_ota.py guard --stage "$STAGE" --access
+          if [[ "$PUBLISH" == true ]]; then python3 scripts/yogi_ota.py guard --stage publish; fi
+
+  controller:
+    needs: guard
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      ownership: ${{ steps.start.outputs.ownership }}
+    env:
+      GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+      YOGI_CONTROLLER_SERVICE_ACCOUNT: ${{ vars.YOGI_CONTROLLER_SERVICE_ACCOUNT }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - run: python3 scripts/actions-gcp-login.py login "$YOGI_CONTROLLER_SERVICE_ACCOUNT"
+      - id: start
+        run: |
+          python3 scripts/yogi_ota.py builder start --ownership "$RUNNER_TEMP/yogi-ownership.json"
+          echo "ownership=$(base64 -w0 "$RUNNER_TEMP/yogi-ownership.json")" >> "$GITHUB_OUTPUT"
+      - if: always()
+        run: python3 scripts/actions-gcp-login.py logout
+
+  build:
+    needs: controller
+    runs-on: [self-hosted, roseos-yogi-builder]
+    timeout-minutes: 660
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      build: ${{ steps.allocate.outputs.build }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - run: python3 scripts/yogi_ota.py preflight
+      - id: allocate
+        run: python3 scripts/yogi_ota.py allocate
+      # The bootstrap integrates a copy of the retained lab tree; a later OTA copies the bootstrap's integrated tree.
+      - run: |
+          if [[ "$STAGE" == bootstrap ]]; then
+            python3 scripts/yogi_ota.py prepare --build "${{ steps.allocate.outputs.build }}"
+          else
+            python3 scripts/yogi_ota.py prepare --build "${{ steps.allocate.outputs.build }}" \
+              --base-attempt "$(python3 -c 'import json;print(json.load(open("os/ota/yogi.json"))["bootstrap"]["build"])')"
+          fi
+      # Release's app-inputs-export artifact: exactly the run and artifact of its committed record (never latest).
+      - id: inputs
+        run: |
+          python3 - >> "$GITHUB_OUTPUT" <<'PY'
+          import json
+          r = json.load(open(json.load(open('os/ota/yogi.json'))['appInputs']['record']))['export']
+          print(f"run={r['run']}"); print(f"artifact={r['artifact']['id']}")
+          PY
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          run-id: ${{ steps.inputs.outputs.run }}
+          artifact-ids: ${{ steps.inputs.outputs.artifact }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/app-inputs
+      - run: python3 scripts/yogi_ota.py integrate --build "${{ steps.allocate.outputs.build }}" --dir "$RUNNER_TEMP/app-inputs"
+      - run: python3 scripts/yogi_ota.py compile --build "${{ steps.allocate.outputs.build }}"
+
+  sign:
+    needs: build
+    runs-on: [self-hosted, roseos-yogi-builder]
+    timeout-minutes: 240
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+      GCP_SIGNER_SERVICE_ACCOUNT: ${{ vars.GCP_SIGNER_SERVICE_ACCOUNT }}
+      BUILD: ${{ needs.build.outputs.build }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - run: python3 scripts/yogi_ota.py guard --stage "$STAGE" --access
+      - run: python3 scripts/actions-gcp-login.py login "$GCP_SIGNER_SERVICE_ACCOUNT"
+      - run: python3 scripts/yogi_ota.py sign --build "$BUILD" --stage "$STAGE"
+      - if: always()
+        run: python3 scripts/actions-gcp-login.py logout
+      - if: inputs.stage == 'bootstrap'
+        run: python3 scripts/yogi_ota.py install-image --build "$BUILD"
+      - if: inputs.stage == 'ota'
+        run: python3 scripts/yogi_ota.py stage --build "$BUILD" --out "/srv/rose-yogi/attempts/yogi-$BUILD/public"
+      - if: inputs.stage == 'ota'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: yogi-ota-${{ github.run_id }}-${{ github.run_attempt }}
+          path: /srv/rose-yogi/attempts/yogi-${{ needs.build.outputs.build }}/public
+          retention-days: 7
+          if-no-files-found: error
+
+  publisher:
+    needs: sign
+    if: inputs.stage == 'ota' && inputs.publish
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: yogi-ota-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/yogi-ota
+      - name: Verify the same-run staged OTA before minting the existing publisher token
+        run: python3 scripts/yogi_ota.py verify-staged --dir "$RUNNER_TEMP/yogi-ota"
+      - name: Mint existing pixel-ota publisher token
+        id: app
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ vars.PIXEL_OTA_APP_ID }}
+          private-key: ${{ secrets.PIXEL_OTA_APP_PRIVATE_KEY }}
+          owner: Immortal-Protocols
+          repositories: pixel-ota
+          permission-contents: write
+      - name: Publish a fresh yogi-{build}, metadata last, never Latest
+        env:
+          PIXEL_OTA_TOKEN: ${{ steps.app.outputs.token }}
+        run: python3 scripts/yogi_ota.py publish --dir "$RUNNER_TEMP/yogi-ota" --out "$RUNNER_TEMP/yogi-publication"
+      - if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: yogi-ota-publication-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/yogi-publication/publication.json
+            ${{ runner.temp }}/yogi-publication/journal.jsonl
+          retention-days: 7
+          if-no-files-found: warn
+
+  cleanup:
+    needs: [controller, build, sign, publisher]
+    if: always() && needs.controller.result != 'skipped'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+      YOGI_CONTROLLER_SERVICE_ACCOUNT: ${{ vars.YOGI_CONTROLLER_SERVICE_ACCOUNT }}
+      OWNERSHIP: ${{ needs.controller.outputs.ownership }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - run: python3 scripts/actions-gcp-login.py login "$YOGI_CONTROLLER_SERVICE_ACCOUNT"
+      # Stops only the dedicated Yogi VM and only if this run started it; the VM's 12-hour STOP stays the fallback.
+      - run: |
+          if [[ -n "$OWNERSHIP" ]]; then echo "$OWNERSHIP" | base64 -d > "$RUNNER_TEMP/yogi-ownership.json"; fi
+          python3 scripts/yogi_ota.py builder stop --ownership "$RUNNER_TEMP/yogi-ownership.json"
+      - if: always()
+        run: python3 scripts/actions-gcp-login.py logout
