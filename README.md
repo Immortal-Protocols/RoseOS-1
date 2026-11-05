@@ -5,16 +5,24 @@ launcher and assistant. The agent works in a separate Android workspace while
 the owner keeps using the phone. The product includes visible progress, a viewer,
 stop controls, and owner approval for consequential actions.
 
-This is the private source and build repository. Public, signed Pixel 10
+This is the open-source RoseOS source and build repository. Original RoseOS
+material is available under the **MIT License**, except where a file or component
+states another license. You may use, modify and redistribute MIT-licensed code,
+including in commercial closed-source products, while retaining the required
+license and copyright notices. See [LICENSE](LICENSE) and
+[third-party notices](NOTICE.md).
+
+Public, signed Pixel 10
 (`frankel`) OS artifacts belong in
 [Immortal-Protocols/pixel-ota](https://github.com/Immortal-Protocols/pixel-ota).
-The public channel is separate from the private source and signing materials.
+That release channel is separate from source and experimental build records.
+Keep credentials and private signing materials outside this repository.
 
 ## APK builds and sharing
 
-Internal APK builds are stored in [this private repository's Releases](https://github.com/Immortal-Protocols/RoseOS-1/releases).
+Experimental APK builds are stored in [this repository's Releases](https://github.com/Immortal-Protocols/RoseOS-1/releases).
 **Upload from GitHub Actions using its repository-scoped token; download with
-an authorized GitHub account.** Direct asset uploads from the current agent
+the Releases page or `gh release download`.** Direct asset uploads from the current agent
 container return HTTP 401 even though repository API calls work. The tested CI
 route does not require a personal access token or sharing credentials between agents.
 Library copies are optional; approved public OS releases remain in `pixel-ota`.
@@ -45,7 +53,7 @@ gh release download TAG --repo Immortal-Protocols/RoseOS-1 --dir downloads/TAG
 ```
 
 Verified on 2026-10-26: [workflow run 40451235322](https://github.com/Immortal-Protocols/RoseOS-1/actions/runs/40451235322)
-passed. Its [private prerelease](https://github.com/Immortal-Protocols/RoseOS-1/releases/tag/apps-storage-test-40451235322-1)
+passed. Its [then-private prerelease](https://github.com/Immortal-Protocols/RoseOS-1/releases/tag/apps-storage-test-40451235322-1)
 was independently downloaded into the agent workspace; every checksum passed,
 and APK ZIP integrity and alignment passed. APK SHA-256:
 `ae07cfa8891ce4e0d626631c4a3f1f23fd2d2cf677a9f6f815984f29fd82157a`.
@@ -153,6 +161,9 @@ Rose Agent and OS changes were imported from
 The exact imported OS revisions are in the manifest. Preserve existing source
 notices and license files; this repository does not grant a new license to
 upstream code.
+
+New contributions must use the applicable license for the files or components
+they change. Preserve upstream copyright, attribution and license notices.
 
 Before editing, fetch the current branch and inspect local changes. Use isolated
 checkouts for concurrent work. Run the tests relevant to the change and record
