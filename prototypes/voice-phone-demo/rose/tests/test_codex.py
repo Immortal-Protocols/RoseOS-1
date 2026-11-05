@@ -679,6 +679,7 @@ class PhoneClipboard(Integration):
             'offline': ({'status': 'offline', 'message': 'Rose Agent is not connected.'}, False),
             'clipboard_unsupported': ({'status': 'error', 'message': 'IllegalArgumentException: Unsupported phone action'}, False),
             'clipboard_replaced': ({'status': 'clipboard_replaced', 'action': 'clipboard_write'}, 'unconfirmed'),
+            'clipboard_write_unconfirmed': ({'status': 'clipboard_write_unconfirmed', 'action': 'clipboard_write'}, 'unconfirmed'),
             'timeout': ({'status': 'timeout', 'message': 'The phone did not answer clipboard_write in time.'}, 'unconfirmed'),
             'running': ({'status': 'running'}, 'unconfirmed'),
         }

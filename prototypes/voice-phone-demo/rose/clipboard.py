@@ -32,6 +32,8 @@ REFUSED = {
 UNCONFIRMED = {
     'clipboard_replaced': 'Something else replaced it on the phone clipboard right away; copy it again if needed.',
     'clipboard_write_failed': 'The phone could not confirm the copy; it may not be on the clipboard.',
+    'clipboard_write_unconfirmed': ('The phone wrote it but could not confirm it reached the clipboard while Rose Agent is '
+                                    'open on another display; check before pasting.'),
     'timeout': 'The phone did not confirm the copy in time; it may or may not be on the clipboard.',
     'running': 'The phone did not confirm the copy in time; it may or may not be on the clipboard.',
 }

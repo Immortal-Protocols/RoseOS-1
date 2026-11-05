@@ -110,7 +110,8 @@ final class PhoneControl {
   * F07: put the owner's requested text on this phone's clipboard (ClipboardWrite has the rules). It writes through this
   * phone's own clipboard (the default device, not a virtual display's), refuses before writing when the text is not the
   * producer's exact text or Android would drop the write (its write app-op), and reports copied only after
-  * setPrimaryClip returned. The result never carries the text: it is saved as this command's receipt.
+  * setPrimaryClip returned and nothing could have dropped it silently (ClipboardWrite.outcome). The result never carries
+  * the text: it is saved as this command's receipt.
   */
  private static JSONObject clipboardWrite(Context context,JSONObject command)throws JSONException{
   JSONObject result=new JSONObject().put("action",ClipboardWrite.ACTION);
@@ -147,7 +148,7 @@ final class PhoneControl {
     if(ClipboardWrite.ours(marker,readMarker)){ClipData now=clipboard.getPrimaryClip();CharSequence t=now==null||now.getItemCount()==0?null:now.getItemAt(0).getText();readText=t==null?null:t.toString();}
    }
   }catch(RuntimeException ignored){readable=false;}
-  String status=ClipboardWrite.outcome(readable,marker,readMarker,text,readText);
+  String status=ClipboardWrite.outcome(readable,RoseActivities.allOnDefaultDisplay(),marker,readMarker,text,readText);
   result.put("status",status);
   if(ClipboardWrite.COPIED.equals(status))result.put("written",true).put("verified",ClipboardWrite.verification(readable)).put("characters",text.codePointCount(0,text.length())).put("sensitive",true);
   return result;

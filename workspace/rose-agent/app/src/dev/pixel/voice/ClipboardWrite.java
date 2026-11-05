@@ -24,7 +24,8 @@ final class ClipboardWrite {
   MISMATCH = "text_mismatch", WRONG_DEVICE = "clipboard_wrong_device", DENIED = "clipboard_write_denied",
   UNAVAILABLE = "clipboard_unavailable";
  // Outcomes after the write call.
- static final String COPIED = "copied", FAILED = "clipboard_write_failed", REPLACED = "clipboard_replaced";
+ static final String COPIED = "copied", FAILED = "clipboard_write_failed", REPLACED = "clipboard_replaced",
+  UNCONFIRMED = "clipboard_write_unconfirmed";
  /** How a "copied" was established: Rose read its own clip back, or (no read access without focus) the write was accepted. */
  static final String READBACK = "readback", ACCEPTED = "write_accepted";
 
@@ -67,12 +68,14 @@ final class ClipboardWrite {
 
  /**
   * The outcome once setPrimaryClip returned without an exception. readable: the clipboard let Rose read the primary
-  * clip's description (Android allows it only while Rose has focus or is the default IME; otherwise the write is
-  * accepted unseen). A readable clip that is not Rose's marker means a later write replaced it; Rose's marker with any
-  * other text is a failed write. Neither is ever "copied".
+  * clip's description (Android allows it only while Rose has focus or is the default IME). A readable clip that is not
+  * Rose's marker means a later write replaced it; Rose's marker with any other text is a failed write. Neither is ever
+  * "copied". Unreadable, the write is accepted unseen only when nothing could have dropped it silently: ClipboardService
+  * drops a default-device write from an app with an activity on a virtual device's display (ownDisplaysDefault false,
+  * or not known), so that write is unconfirmed.
   */
- static String outcome(boolean readable, String expectedMarker, String marker, String expectedText, String readText) {
-  if (!readable) return COPIED;
+ static String outcome(boolean readable, boolean ownDisplaysDefault, String expectedMarker, String marker, String expectedText, String readText) {
+  if (!readable) return ownDisplaysDefault ? COPIED : UNCONFIRMED;
   if (!ours(expectedMarker, marker)) return REPLACED;
   return expectedText.equals(readText) ? COPIED : FAILED;
  }
