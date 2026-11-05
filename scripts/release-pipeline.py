@@ -1249,6 +1249,8 @@ def stage_artifact(a, config, cand, adapter):
     return {'stage': 'transfer', 'assets': len(os.listdir(assets)), 'simulated': adapter.simulated}
 
 def publish(a, config, cand, adapter):
+    if getattr(a, 'draft_only', False) and (a.promote or not a.allocation or cand['device'] != 'frankel' or cand['channel'] != 'beta'):
+        raise CheckFailed('--draft-only requires an allocated Frankel Beta without --promote')
     artifact = Path(a.artifact_dir)
     receipt = json.loads((artifact/'pipeline-receipt.json').read_text())
     if receipt.get('simulated') and not adapter.simulated:
@@ -1290,7 +1292,7 @@ def publish(a, config, cand, adapter):
 
 def latest_notes(a, cand, artifact):
     """The normal button's allocation, independently re-derived here: the candidate must be exactly the dispatch source plus
-    the allocated version delta, the image must carry exactly the allocated apps, and only a promoted Beta is allowed."""
+    the allocated version delta and the image must carry exactly the allocated apps. Drafts require an explicit opt-in."""
     spec = importlib.util.spec_from_file_location('release_allocate', Path(__file__).resolve().parent/'release-allocate.py')
     allocate = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(allocate)
@@ -1304,7 +1306,9 @@ def latest_notes(a, cand, artifact):
         expected = json.loads((artifact/'expected-identities.json').read_text())
         if [[row['packageName'], row['versionCode']] for row in expected['apps']] != allocation['apps']:
             raise CheckFailed('the verified image apps are not the allocated apps')
-        if not a.promote:
+        if getattr(a, 'draft_only', False) and (a.promote or cand['device'] != 'frankel' or cand['channel'] != 'beta'):
+            raise CheckFailed('--draft-only requires an allocated Frankel Beta without --promote')
+        if not a.promote and not getattr(a, 'draft_only', False):
             raise CheckFailed('the normal button publishes the verified Beta as Latest; --promote is required')
         return allocate.notes(allocation, ROOT)
     except allocate.Refused as error:
@@ -1329,6 +1333,7 @@ def main(argv=None):
     p.add_argument('--artifact-dir')
     p.add_argument('--apps', default='[]', help='JSON list of [package, versionCode] expected in this candidate')
     p.add_argument('--promote', action='store_true')
+    p.add_argument('--draft-only', action='store_true', help='explicit allocated Frankel Beta draft; never promote')
     p.add_argument('--allocation', help='normal button only: the reserved allocation record of this candidate')
     p.add_argument('--ownership-record', help='start-builder/builder-ownership: this operation\'s builder ownership record')
     p.add_argument('--only-if-started', help='stop-builder: the controller\'s ownership output; stops only on "true"')
