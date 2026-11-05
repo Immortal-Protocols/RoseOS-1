@@ -2016,3 +2016,29 @@ receipt, and hosted scratch cleanup. No PR merge, build, signing, publication,
 builder start, app export or artifact payload beyond the pinned receipt occurs.
 After approval and verified source, the exact invocation is:
 `gh workflow run frankel-allocation-recovery.yml --repo Immortal-Protocols/RoseOS-1 --ref main`.
+
+### One-shot existing Frankel 2026110501 promotion
+
+`frankel-draft-promotion.yml` is a manual, main-only, first-attempt hosted route
+for existing release 435513431. It requires explicit promotion authority; source
+merge does not authorize execution. No inputs, VM, build, signing or allocation.
+It reuses recovery's fixed producer 42063694943 and exact retained OTA/allocation
+artifact IDs, byte limits and SHA-256 pins. It derives candidate
+cc238285b3aaf379e89dc6724ff1f68e478f8920 and validates the transferred manifest,
+public identity pins and all seven assets using the existing publisher checks.
+The manifest is bound transitively by the pinned producer artifact digest.
+
+The existing draft must match its ID/tag, source/recovery description, asset set,
+sizes and digests. Every asset is downloaded and hashed before one promotion
+PATCH. No asset creation, repair, replacement or deletion is available. A changed
+draft refuses. The route verifies public release identity, Latest and anonymous
+`releases/latest/download/frankel-stable` bytes after promotion. Transport or
+readback failure after PATCH is uncertain, never an automatic retry or rollback.
+
+Uses the existing repository-scoped pixel-ota App token, revoked on completion;
+90-minute hosted job, Frankel FIFO, private JSON receipts for 14 days and hosted
+scratch removal. Re-reads the original two retained Actions artifacts plus draft
+assets and public Latest/channel; these reads belong in execution approval.
+After approval only: `gh workflow run frankel-draft-promotion.yml --repo
+Immortal-Protocols/RoseOS-1 --ref main`. Inspect existing runs and release before
+execution. Never rerun the earlier recovery or normal build to promote this draft.

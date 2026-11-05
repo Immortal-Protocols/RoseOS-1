@@ -1,0 +1,53 @@
+name: Promote verified Frankel 2026110501 draft
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: os-release-frankel
+  cancel-in-progress: false
+jobs:
+  recover:
+    if: github.ref == 'refs/heads/main' && github.run_attempt == 1
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      PIXEL_OTA_PUBLISHER: ${{ vars.PIXEL_OTA_PUBLISHER }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify exact producer and retained artifact bytes
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 scripts/frankel-draft-promotion.py ingest --dir "$RUNNER_TEMP/frankel-draft-promotion"
+      - name: Mint existing pixel-ota publisher token
+        id: app
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510
+        with:
+          app-id: ${{ vars.PIXEL_OTA_APP_ID }}
+          private-key: ${{ secrets.PIXEL_OTA_APP_PRIVATE_KEY }}
+          owner: Immortal-Protocols
+          repositories: pixel-ota
+          permission-contents: write
+      - name: Verify existing draft, promote once and verify public Latest
+        env:
+          PIXEL_OTA_TOKEN: ${{ steps.app.outputs.token }}
+        run: python3 scripts/frankel-draft-promotion.py promote --dir "$RUNNER_TEMP/frankel-draft-promotion"
+      - name: Preserve nonsecret promotion and allocation receipts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: frankel-draft-promotion-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/frankel-draft-promotion/ingest-receipt.json
+            ${{ runner.temp }}/frankel-draft-promotion/promote-receipt.json
+            ${{ runner.temp }}/frankel-draft-promotion/failure-receipt.json
+            ${{ runner.temp }}/frankel-draft-promotion/allocation/allocation.json
+          retention-days: 14
+          if-no-files-found: warn
+      - name: Remove hosted task scratch
+        if: always()
+        run: rm -rf -- "$RUNNER_TEMP/frankel-draft-promotion"
