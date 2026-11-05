@@ -36,8 +36,9 @@ WORKFLOW = (ROOT/'.github/workflows/os-release.yml').read_text()
 # OCT30-INFRA-S014 moved both jobs once: the builder allocates the latest-beta candidate and exports its identity, and
 # the publisher takes that identity, re-derives the allocation and promotes only latest-beta or an explicit --promote.
 # + RELEASE020 M2/M2c: opt-in packaging and the default-off dedicated-signer route (publisher also needs signed-builder)
-OS_JOBS_AT_BASE = {'builder': 'f14da4107765ccf0b87f48cd8e7c636a58d9b573f9714dea3ae3f61f33918383',
-    'publisher': '2b8ce2b79cbb9ffe29e05762f46dc3d1f17b385479d06998f538b7926afc61fe'}
+# + latest-draft: same allocator/signing jobs, allocation-bound unpublished draft; behavioral tests in test_release_allocate.
+OS_JOBS_AT_BASE = {'builder': '15fc6e19644cba035be35bc9f112c6115e88e8a73b5f977dd5975dbfaa33ece4',
+    'publisher': '259c984eb7544af3fefca423e6f12314b1dff3e6ce4cf65b495445929afcbd8f'}
 
 def script(path, body):
     path.write_text('#!/usr/bin/env python3\n' + textwrap.dedent(body))
@@ -417,9 +418,9 @@ class WorkflowAppOnlyTest(unittest.TestCase):
         self.jobs = jobs(WORKFLOW)
 
     def test_os_jobs_are_unchanged_apart_from_their_mode_condition(self):
-        self.assertIn("    if: inputs.mode == 'os-release' || inputs.mode == 'latest-beta'\n", self.jobs['builder'])
+        self.assertIn("    if: inputs.mode == 'os-release' || (inputs.mode == 'latest-beta' || inputs.mode == 'latest-draft')\n", self.jobs['builder'])
         for name, digest in OS_JOBS_AT_BASE.items():
-            block = self.jobs[name].replace("    if: inputs.mode == 'os-release' || inputs.mode == 'latest-beta'\n", '')
+            block = self.jobs[name].replace("    if: inputs.mode == 'os-release' || (inputs.mode == 'latest-beta' || inputs.mode == 'latest-draft')\n", '')
             self.assertEqual(hashlib.sha256(block.encode()).hexdigest(), digest, name)
         self.assertIn('    needs: [builder, signed-builder]\n', self.jobs['publisher'])
         self.assertIn("    if: always() && needs.builder.result == 'success' && ", self.jobs['publisher'])  # skipped whenever builder is

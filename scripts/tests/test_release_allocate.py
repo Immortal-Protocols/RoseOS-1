@@ -523,6 +523,15 @@ class Workflow(unittest.TestCase):
             self.assertEqual(result.returncode == 0, ok, (change, result.stderr[-300:]))
         self.assertIn('            git merge-base --is-ancestor "$GITHUB_SHA" origin/main\n', WORKFLOW)
 
+    def test_private_mode_uses_existing_input_and_normalizes_allocator_environment(self):
+        import os_release_shape as shape
+        self.assertLessEqual(len(shape.inputs(WORKFLOW)), 25)
+        self.assertIn('latest-draft', shape.modes(WORKFLOW))
+        normal = shape.dispatch_env(WORKFLOW)
+        private = shape.dispatch_env(WORKFLOW.replace('        default: latest-beta\n', '        default: latest-draft\n', 1))
+        self.assertEqual((normal['MODE'], normal['DRAFT_ONLY']), ('latest-beta', 'false'))
+        self.assertEqual((private['MODE'], private['DRAFT_ONLY']), ('latest-beta', 'true'))
+
     def test_publisher_executes_draft_without_promotion_and_retains_allocation(self):
         import re
         import textwrap
@@ -552,8 +561,8 @@ class Workflow(unittest.TestCase):
                     args = capture.read_text().splitlines()
                     self.assertEqual('--promote' in args, promoted)
                     self.assertEqual('--allocation' in args, change.get('MODE', 'latest-beta') == 'latest-beta')
-        self.assertIn('DRAFT_ONLY: ${{ inputs.draft_only }}', WORKFLOW)
-        self.assertIn("!inputs.draft_only && inputs.campaign != ''", WORKFLOW)
+        self.assertIn("DRAFT_ONLY: ${{ inputs.mode == 'latest-draft' }}", WORKFLOW)
+        self.assertIn("if: always() && inputs.mode == 'latest-beta' && inputs.campaign != ''", WORKFLOW)
 
     def test_builder_allocates_before_any_identity_is_used_and_publisher_takes_it(self):
         import re
@@ -564,7 +573,7 @@ class Workflow(unittest.TestCase):
             'python3 scripts/release-allocate.py latest --out "$RUNNER_TEMP/allocation.json"', 'name: os-release-allocation-${{ github.run_id }}',
             'name: Prepare stage receipts', 'actions-gcp-login.py login', 'os-release-stage.sh build build')]
         self.assertEqual(order, sorted(order))
-        self.assertIn("    if: inputs.mode == 'os-release' || inputs.mode == 'latest-beta'\n", builder)
+        self.assertIn("    if: inputs.mode == 'os-release' || (inputs.mode == 'latest-beta' || inputs.mode == 'latest-draft')\n", builder)
         self.assertIn('      build_number: ${{ steps.candidate.outputs.build_number }}\n', builder)
         self.assertIn('      CANDIDATE_SHA: ${{ needs.builder.outputs.candidate_sha }}\n', publisher)
         self.assertIn('      BUILD_NUMBER: ${{ needs.builder.outputs.build_number }}\n', publisher)

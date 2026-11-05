@@ -49,6 +49,7 @@
       "workflow": ".github/workflows/os-release.yml",
       "modes": [
         "latest-beta",
+        "latest-draft",
         "os-release",
         "app-reuse",
         "app-inputs-export",
