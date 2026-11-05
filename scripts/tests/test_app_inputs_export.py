@@ -25,6 +25,9 @@ SIGNER = PIN['appSignerSha256']
 BUILD, CANDIDATE, SOURCE = '2026110499', 'c' * 40, 'd' * 40
 VERSIONS = {'dev.pixel.voice': 364, 'dev.pixel.calculator.agent': 5, 'dev.pixel.backgroundcontrol': 38}
 WORKFLOW = shape.text()
+vspec = importlib.util.spec_from_file_location('app_inputs_verify', ROOT/'scripts/app-inputs-verify.py')
+verify = importlib.util.module_from_spec(vspec)
+vspec.loader.exec_module(verify)
 MODE = 'app-inputs-export'
 
 
@@ -250,6 +253,99 @@ class Main(Fixture):
         with self.assertRaises(export.AdapterSetupMissing) as caught:
             export.main(self.tmp/'out', self.config_path, self.env)
         self.assertEqual(sorted(caught.exception.missing), ['host.lockPath', 'host.tools.aapt'])
+
+
+class Consumer(Fixture):
+    """The committed record and its admission on the consuming builder (scripts/app-inputs-verify.py)."""
+    RUN, ATTEMPT, ARTIFACT_ID, DIGEST = '41990000000', '1', '7123456789', 'sha256:' + 'f' * 64
+
+    def setUp(self):
+        super().setUp()
+        _, self.artifact = self.export()
+        self.record = verify.record(self.artifact/'app-inputs-export.json', self.RUN, self.ATTEMPT,
+                                    f'app-inputs-frankel-{BUILD}-{self.RUN}-{self.ATTEMPT}', self.ARTIFACT_ID, self.DIGEST)
+        self.record_path = self.repo/'os/app-inputs'/f'frankel-{BUILD}.json'
+        self.record_path.parent.mkdir(parents=True)
+        self.record_path.write_text(json.dumps(self.record))
+
+    def verify(self, directory=None, tools=None, identity=None):
+        return verify.verify(self.record_path, directory or self.artifact, tools, root=self.repo, identity=identity)
+
+    def rejected(self, message, **kwargs):
+        with self.assertRaisesRegex(verify.Refused, message):
+            self.verify(**kwargs)
+
+    def test_the_record_names_the_exact_export_and_the_set_is_admitted(self):
+        self.assertEqual(self.record['schema'], 'roseos.app-inputs-record.v1')
+        self.assertEqual(self.record['export'], {'run': self.RUN, 'attempt': self.ATTEMPT,
+            'receiptSha256': sha((self.artifact/'app-inputs-export.json').read_bytes()),
+            'artifact': {'name': f'app-inputs-frankel-{BUILD}-{self.RUN}-{self.ATTEMPT}', 'id': int(self.ARTIFACT_ID),
+                         'digest': self.DIGEST}})
+        admitted = self.verify()
+        self.assertEqual((admitted['verdict'], admitted['toolsRechecked']), ('ADMITTED', False))
+        admitted = self.verify(tools={'aapt': 'a', 'apksigner': 's'}, identity=self.identity)  # the consumer's own tools
+        self.assertTrue(admitted['toolsRechecked'])
+
+    def test_record_inputs_must_be_the_runs_actual_metadata(self):
+        receipt = self.artifact/'app-inputs-export.json'
+        for args, message in ((('0', '1', f'app-inputs-frankel-{BUILD}-0-1', '1', self.DIGEST), 'positive'),
+                              ((self.RUN, '1', 'app-inputs-frankel-2026110400-1-1', '1', self.DIGEST), 'not the export'),
+                              ((self.RUN, '1', f'app-inputs-frankel-{BUILD}-{self.RUN}-1', '1', 'f' * 64), 'digest')):
+            with self.assertRaisesRegex(verify.Refused, message):
+                verify.record(receipt, *args)
+
+    def test_any_changed_missing_or_extra_file_is_refused(self):
+        apk = self.artifact/'signed-apps'/'dev.pixel.voice.apk'
+        apk.write_bytes(b'tampered')
+        self.rejected('differs from the record')
+        same_size = bytearray(self.apps.joinpath('dev.pixel.voice.apk').read_bytes())
+        same_size[0] ^= 1  # one flipped bit, same length: only the digest can tell
+        apk.write_bytes(bytes(same_size))
+        self.rejected('differs from the record')
+        shutil.copyfile(self.apps/'dev.pixel.voice.apk', self.artifact/'signed-apps'/'dev.pixel.voice.apk')
+        self.verify()
+        (self.artifact/'extra').write_text('x')
+        self.rejected('inventory')
+        (self.artifact/'extra').unlink()
+        (self.artifact/'signed-apps'/'dev.pixel.voice.apk.idsig').unlink()
+        self.rejected('inventory')
+
+    def test_a_link_in_place_of_a_file_is_refused(self):
+        target = self.artifact/'signed-apps'/'dev.pixel.voice.apk'
+        keep = self.tmp/'kept.apk'
+        shutil.move(target, keep)
+        os.symlink(keep, target)
+        self.rejected('regular file')
+
+    def test_the_receipt_and_sums_must_match_the_record(self):
+        receipt = self.artifact/'app-inputs-export.json'
+        data = json.loads(receipt.read_text())
+        receipt.write_text(json.dumps(dict(data, sdk=36), indent=2, sort_keys=True) + '\n')
+        self.rejected('receiptSha256')
+        receipt.write_text(json.dumps(data, indent=2, sort_keys=True) + '\n')
+        self.verify()
+        sums = self.artifact/'SHA256SUMS'
+        lines = sums.read_text().splitlines()
+        sums.write_text('\n'.join(lines[1:]) + '\n')
+        self.rejected('SHA256SUMS')
+        sums.write_text('\n'.join(lines + [lines[0]]) + '\n')
+        self.rejected('malformed')
+
+    def test_the_record_must_agree_with_its_receipt_and_committed_producer(self):
+        record = json.loads(self.record_path.read_text())
+        self.record_path.write_text(json.dumps(dict(record, sdk=36)))
+        self.rejected('does not name the recorded')
+        self.record_path.write_text(json.dumps(dict(record, schema='other')))
+        self.rejected('not an app-inputs record')
+        self.record_path.write_text(json.dumps(record))
+        allocation = self.repo/f'os/ota/mustang-frankel-{BUILD}-allocation.json'
+        allocation.write_text(allocation.read_text() + ' ')
+        self.rejected('allocation record is not committed here')
+
+    def test_the_consumers_tools_must_agree(self):
+        def wrong(apk, *args):
+            return dict(self.identity(apk, *args), versionCode=1)
+        self.rejected('signed by the app signer', tools={'aapt': 'a', 'apksigner': 's'}, identity=wrong)
 
 
 class Workflow(unittest.TestCase):

@@ -279,12 +279,24 @@ must equal `frankel.json`'s app signer.
 (nine files), `background-policy.json`, the receipt `app-inputs-export.json` and `SHA256SUMS`. Any refusal uploads
 nothing. The job stops the builder afterwards only if its own controller started it.
 
-**Consumer contract:**
-1. Download by exact run id and artifact id.
-2. Check `SHA256SUMS`, and check that the receipt names the same committed allocation record (path and sha256).
-3. Admit the set with your own tools, as `scripts/mustang-candidate-bundle.py assemble` does.
+**One committed record:** after a run, Release commits the export as `os/app-inputs/frankel-<build>.json`
+(schema `roseos.app-inputs-record.v1`). The record is built only from the downloaded receipt and the run's actual
+metadata:
 
-The same nine-file inventory and policy rules apply on both sides.
+`python3 scripts/app-inputs-verify.py record --receipt <dir>/app-inputs-export.json --run <id> --attempt <n> --artifact-name <name> --artifact-id <id> --artifact-digest sha256:<hex>`
+
+A consuming builder points its configuration at that record. While no record exists, the consumer stays unbound.
+
+**Consumer contract:**
+1. Download the record's exact artifact by run id and artifact id.
+2. Run `python3 scripts/app-inputs-verify.py verify --record os/app-inputs/frankel-<build>.json --dir <dir> --aapt <aapt> --apksigner <apksigner>`.
+   It checks:
+   - the record and its committed producer allocation;
+   - exactly the recorded files, with their sizes and digests;
+   - the receipt's digest and contents;
+   - `SHA256SUMS`;
+   - with your own tools, the exporter's inventory, receipt, identity and policy checks on the downloaded bytes.
+3. Use the set only after exit 0. The same nine-file inventory and policy rules apply on both sides.
 ## Daily release dispatcher (1F, source only and off)
 
 `.github/workflows/daily-release.yml` runs `scripts/daily-release.py dispatch`. Once activated, it builds, signs,
