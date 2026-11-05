@@ -210,7 +210,7 @@ class KeyBootstrapTest(Fixture):
         self.assertEqual(job.count('--lock "$YOGI_LOCK"'), 2)
         self.assertIn('YOGI_LOCK: /srv/rose-yogi/yogi-build.lock', job)
         self.assertEqual(yogi.config()['builder']['lock'], '/srv/rose-yogi/yogi-build.lock')
-        self.assertIn('--state-dir /srv/rose-yogi/signing-bootstrap-state', job)
+        self.assertIn(f"--state-dir {yogi.config()['builder']['bootstrapState']} ", job)  # no drift from yogi.json
         self.assertEqual(job.count('path: '), 1)
         self.assertIn('path: ${{ runner.temp }}/yogi-bootstrap/signing-bootstrap-receipt.json', job)
         for forbidden in ('roseos-frankel-builder', 'pro-mustang-v1', 'MUSTANG', 'secrets.'):
