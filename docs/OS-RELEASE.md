@@ -1865,6 +1865,14 @@ admitted. The admitted helper is Fold #191, the Product's minimal managed-host h
 refuse with `proof-helper-mismatch`. `localProof.spec` (`roseos.fold-tool-proof-spec.v2`) names each script's root in
 the original builder tree; the helper checks the bytes there against the pinned blobs.
 
+Every proof names the helper's subject, `fold-rango-v1`. Another profile may use it only when its tools and its whole
+`localProof` equal the subject's, with one exception: a dedicated builder may move the subject's source tree. Its spec
+keeps `schema`, `profile` and the three scripts, and each root is one common absolute prefix followed by that script's
+project path in the subject (`development`, `script`, `external/avb`); `specBasis` may differ. Any other difference is
+`proof-subject`. The helper, its admission, the pinned blobs and the host checks are unchanged, so the bytes at a moved
+root are still verified (`source_mismatch` otherwise). `yogi-v1` relies on this once a reviewed measurement of the Yogi
+builder sets its roots; until then its spec stays null.
+
 The OpenSSL trust basis is the managed host's own package manager identity and integrity (`managed-host-package`). It
 is not an independent signed-package attestation; the proof says so and names the inputs such an attestation would
 need.
