@@ -571,6 +571,16 @@ test('the conversation runs in its own task and keeps its mute until the Rose ch
  assert.match(conv,/send\(state\.muted\?"tray_unmute":"tray_mute"\)/,'the mute itself is unchanged: input-only');
 });
 
+// F03: removal only through Android's own UI; the direct confirmation only while the permission is really held.
+test('a long press offers App info and Android\'s own uninstall route, never a silent removal (F03)',()=>{
+ const manifest=read('../app/AndroidManifest.xml');
+ assert.match(main,/tile\.setOnLongClickListener\(v->\{appOptions\(v,app,label\);return true;\}\);/);
+ assert.match(main,/checkSelfPermission\("android\.permission\.REQUEST_DELETE_PACKAGES"\)==PackageManager\.PERMISSION_GRANTED\);/);
+ assert.match(main,/route==AppRemoval\.Route\.CONFIRM\?new Intent\(Intent\.ACTION_DELETE,uri\):new Intent\(android\.provider\.Settings\.ACTION_APPLICATION_DETAILS_SETTINGS,uri\)/);
+ assert.doesNotMatch(main+read('../app/src/dev/pixel/voice/AppRemoval.java').replace(/\/\*[\s\S]*?\*\//g,''),/PackageInstaller|\.uninstall\(|deletePackage|pm uninstall|ACTION_UNINSTALL_PACKAGE/,'no silent or programmatic removal');
+ assert.doesNotMatch(manifest,/DELETE_PACKAGES/,'no delete permission declared (a bounded decision for Chief)');
+});
+
 // The Settings intent must not silently disappear when the Home anchor is absent/replaced.
 test('Settings opens a window-owned dialog without depending on the launcher frame',()=>{
  const route=main.slice(main.indexOf('void showSettingsFor(Intent intent)'),main.indexOf('/** HOME returning'));
