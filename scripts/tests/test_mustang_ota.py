@@ -36,8 +36,11 @@ def staged(root):
     receipt = dict(schema='roseos.mustang-ota-stage.v1', device='mustang', build=BUILD, timestamp=EPOCH,
                    candidateSource=SHA, recipeSource=SHA, runId='333', contentFingerprint='b'*64, label=ota.LABEL,
                    baselineBuild='2026110302', publicIdentity=ota.identities(),
-                   checks=dict(targetVersion=True, baselineTrust=True, otaSignatures=True, packagedUpdater=True),
+                   checks=dict(targetVersion=True, baselineTrust=True, otaSignatures=True, packagedUpdater=True,roseEdge=True),
                    ota=dict(file=name, sizeBytes=(root/name).stat().st_size, sha256=ota.digest(root/name)))
+    from test_mustang_edge_gate import publication_proofs
+    with tempfile.TemporaryDirectory() as proofs:
+        receipt.update(publication_proofs(Path(proofs),candidate=SHA,recipe=SHA,build=BUILD,epoch=EPOCH))
     (root/'mustang-ota-receipt.json').write_text(json.dumps(receipt))
     (root/'SHA256SUMS').write_text(''.join(f'{ota.digest(p)}  {p.name}\n' for p in sorted(root.iterdir())))
     return receipt
@@ -157,6 +160,23 @@ class PublicationTest(unittest.TestCase):
         (self.assets/self.r['ota']['file']).write_bytes(b'changed')
         with self.assertRaisesRegex(ValueError, 'checksum differs'):
             ota.verify_staged(self.assets, self.cfg)
+    def test_missing_stale_or_false_edge_proof_stops_before_publisher_api(self):
+        original=copy.deepcopy(self.r)
+        for kind in ('missing','stale','false','archive','binding'):
+            receipt=copy.deepcopy(original)
+            if kind=='missing': receipt.pop('roseEdge')
+            elif kind=='stale': receipt['roseEdge']['signed']['checker']['specSha256']='0'*64
+            elif kind=='false': receipt['roseEdge']['signed']['evidence']['literals'][0]['pass']=False
+            elif kind=='archive': receipt['edgeTargetFiles']['unsigned']['sha256']='0'*64
+            else: receipt['roseEdge']['unsigned']['binding']['compileRunId']='999'
+            (self.assets/'mustang-ota-receipt.json').write_text(json.dumps(receipt))
+            # A rewritten checksum must never turn invalid feature proof into an accepted staged artifact.
+            (self.assets/'SHA256SUMS').write_text(''.join(
+                f'{ota.digest(p)}  {p.name}\n' for p in sorted(self.assets.iterdir()) if p.name!='SHA256SUMS'))
+            client=Client()
+            with self.subTest(kind=kind):
+                with self.assertRaises(ValueError): ota.publish(client,self.assets,self.cfg,self.out)
+                self.assertEqual(client.log,[])
     def test_defaults_inactive_before_any_api_or_secret(self):
         inactive=copy.deepcopy(ota.config());inactive['publicationEnabled']=False
         with self.assertRaisesRegex(ValueError, 'activation remains pending'):

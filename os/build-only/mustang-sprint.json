@@ -26,6 +26,12 @@
     "Private export and delivered-download checksum when delivery becomes available",
     "Cleanup and independent STOP observation after authorized runtime"
   ],
-  "postHoc": "Restore and run the omitted checks in a separate follow-up; none is a pass in this sprint.",
+  "featureInclusionException": {
+    "scope": "All future Mustang outputs, including private factory deliveries. Historical receipts stay unchanged.",
+    "checks": "Release's configured shared raised-edge checker on admitted unsigned and actual signed target-files, with both switches, class checks and the independent whole Launcher3 dex string persist.wm.debug.rose_edge_diag.",
+    "evidence": "Two current source/build/run/archive/checker/spec-bound proofs are required before factory packaging or public OTA staging/publication. Feature inclusion only; not phone behaviour, full APK/policy verification or signing-result verification.",
+    "tests": "Narrow synthetic archive/adapter tests authorized for this exception. Unrelated original omissions remain omitted."
+  },
+  "postHoc": "Apart from the explicit featureInclusionException, restore and run the omitted checks in a separate follow-up; none is a pass in this sprint.",
   "deliveryLabel": "build-and-package candidate; omitted verification remains undone; physical-device acceptance unproven"
 }
