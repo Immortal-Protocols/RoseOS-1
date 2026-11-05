@@ -793,12 +793,18 @@ class PhoneClipboard(Integration):
     def test_a_result_the_bridge_accepted_is_never_a_late_note(self):
         # The reverse race: Python saw the interruption, but the bridge took the real result first.
         engine, conversation = self.engine, self.engine.sessions['conversation']
-        conversation.turn = 'turn-1'
-        conversation.cancelled.set()
-        self.phone.link = ClipboardLink()
-        engine._tool(conversation, self.copy_call('ipc-accepted'))
+        conversation.turn = 'turn-accepted'
+        class InterruptedLink(ClipboardLink):
+            def call(self, action, **args):
+                conversation.cancelled.set()  # the interruption lands while the phone writes, after the guard
+                return super().call(action, **args)
+        self.phone.link = link = InterruptedLink()
+        engine._tool(conversation, self.copy_call('ipc-accepted', 'turn-accepted'))
+        self.assertEqual(len(link.sent), 1)  # the copy ran
+        self.assertIn('ipc-accepted', engine._copy_outcomes)  # held until the bridge says it was lost
+        self.assertEqual(engine._late_notes, [])
         conversation.cancelled.clear()
-        engine._user_turn('next')
+        engine._user_turn('next')  # no tool_cancelled: the bridge accepted the real result
         self.assertEqual(self.submitted()[-1], 'next')
         self.assertEqual(engine._late_notes, [])
 
@@ -1049,6 +1055,7 @@ class StdioBridge(unittest.TestCase):
                              'result':{'success':True,'contentItems':[{'type':'inputText','text':'ok'}]}})
                 received=[]
                 while not any(e['event']=='done' for e in received):received.append(events.get(timeout=5))
+                self.assertNotIn('tool_cancelled',[e['event'] for e in received])  # an accepted result is never reported lost
                 self.assertNotIn('PRIVATE_REASONING_FIXTURE',json.dumps(received))
                 self.assertTrue(any(e['event']=='delta' for e in received))
                 # An interrupt answers a pending call fail() and reports which call, so rose.app can tell the model
