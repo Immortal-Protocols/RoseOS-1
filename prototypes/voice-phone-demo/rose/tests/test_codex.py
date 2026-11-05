@@ -755,33 +755,52 @@ class PhoneClipboard(Integration):
         self.assertEqual(link.sent, [])
         self.assertFalse(self.engine.client.results[-1]['result']['success'])
 
-    def test_a_copy_that_finishes_after_an_interruption_is_reported_next_turn(self):
-        conversation = self.engine.sessions['conversation']
-        conversation.turn = 'turn-1'
-        engine = self.engine
-        class InterruptedLink(ClipboardLink):
-            def call(self, action, **args):
-                conversation.cancelled.set()  # the owner barges in while the phone writes
-                return super().call(action, **args)
-        self.phone.link = link = InterruptedLink()
-        e = {'callId': 'ipc-late', 'params': {'tool': 'copy_to_phone_clipboard', 'arguments': {'text': 'hello'},
-                                               'turnId': 'turn-1', 'callId': 'tool-late'}}
-        engine._tool(conversation, e)
-        self.assertEqual(len(link.sent), 1)
-        self.assertEqual(len(engine._late_notes), 1)
-        self.assertEqual(engine._late_notes[0][0], engine.conversation)
-        self.assertIn('Copied to the phone clipboard.', engine._late_notes[0][1])
-        self.assertNotIn('hello', engine._late_notes[0][1])
-        engine._user_turn('Did it work?')
-        submitted = [c for c in engine.client.calls if c[0] == 'submit' and c[1] == 'conversation'][-1][2]['text']
-        self.assertTrue(submitted.startswith('[Before this message, your interrupted copy_to_phone_clipboard call finished'))
-        self.assertTrue(submitted.endswith('Did it work?'))
-        self.assertEqual(engine._late_notes, [])
-        user = [e['data']['text'] for e in self.store.export(engine.conversation) if e['kind'] == 'user_message']
-        self.assertEqual(user[-1], 'Did it work?')  # the transcript keeps the owner's words only
+    def copy_call(self, call_id, turn='turn-1'):
+        return {'callId': call_id, 'params': {'tool': 'copy_to_phone_clipboard', 'arguments': {'text': 'hello'},
+                                               'turnId': turn, 'callId': 'tool-' + call_id}}
 
     def submitted(self):
         return [c[2]['text'] for c in self.engine.client.calls if c[0] == 'submit' and c[1] == 'conversation']
+
+    def test_a_copy_the_bridge_answered_as_cancelled_is_reported_next_turn(self):
+        # Either order: the bridge's report before or after the phone's answer.
+        for report_first in (False, True):
+            with self.subTest(report_first=report_first):
+                engine, conversation = self.engine, self.engine.sessions['conversation']
+                turn = 'turn-late-%d' % report_first  # each subtest's own turn: an interrupted one is stale
+                conversation.turn, conversation.busy = turn, False
+                self.phone.link = link = ClipboardLink()
+                call = 'ipc-late-%d' % report_first
+                if report_first:
+                    engine._event({'event': 'tool_cancelled', 'callId': call})
+                engine._tool(conversation, self.copy_call(call, turn))
+                if not report_first:
+                    self.assertEqual(engine._late_notes, [])  # not yet known to be lost
+                    engine._event({'event': 'tool_cancelled', 'callId': call})
+                self.assertEqual(len(link.sent), 1)
+                self.assertEqual(len(engine._late_notes), 1)
+                self.assertEqual(engine._late_notes[0][0], engine.conversation)
+                self.assertIn('Copied to the phone clipboard.', engine._late_notes[0][1])
+                self.assertNotIn('hello', engine._late_notes[0][1])
+                engine._user_turn('Did it work?')
+                text = self.submitted()[-1]
+                self.assertTrue(text.startswith('[Before this message, your copy_to_phone_clipboard call that was answered as cancelled finished'))
+                self.assertTrue(text.endswith('Did it work?'))
+                self.assertEqual(engine._late_notes, [])
+                user = [e['data']['text'] for e in self.store.export(engine.conversation) if e['kind'] == 'user_message']
+                self.assertEqual(user[-1], 'Did it work?')  # the transcript keeps the owner's words only
+
+    def test_a_result_the_bridge_accepted_is_never_a_late_note(self):
+        # The reverse race: Python saw the interruption, but the bridge took the real result first.
+        engine, conversation = self.engine, self.engine.sessions['conversation']
+        conversation.turn = 'turn-1'
+        conversation.cancelled.set()
+        self.phone.link = ClipboardLink()
+        engine._tool(conversation, self.copy_call('ipc-accepted'))
+        conversation.cancelled.clear()
+        engine._user_turn('next')
+        self.assertEqual(self.submitted()[-1], 'next')
+        self.assertEqual(engine._late_notes, [])
 
     def test_a_barge_in_during_a_copy_learns_its_outcome_on_the_next_submit(self):
         engine, conversation = self.engine, self.engine.sessions['conversation']
@@ -793,23 +812,21 @@ class PhoneClipboard(Integration):
                 release.wait(5)  # the phone is still writing when the owner speaks
                 return super().call(action, **args)
         self.phone.link = SlowLink()
-        e = {'callId': 'ipc-slow', 'params': {'tool': 'copy_to_phone_clipboard', 'arguments': {'text': 'hello'},
-                                               'turnId': 'turn-1', 'callId': 'tool-slow'}}
-        copy = threading.Thread(target=engine._tool, args=(conversation, e))
+        copy = threading.Thread(target=engine._tool, args=(conversation, self.copy_call('ipc-slow')))
         copy.start()
         self.assertTrue(writing.wait(2))
         started = time.monotonic()
-        engine._user_turn('Did it work?')  # the barge-in is submitted at once, never held for the copy
+        engine._user_turn('Did it work?')  # submitted at once, never held for the copy
+        engine._event({'event': 'tool_cancelled', 'callId': 'ipc-slow'})  # the bridge failed the pending call
         self.assertLess(time.monotonic() - started, 1)
         self.assertEqual(self.submitted()[-1], 'Did it work?')
         release.set()
         copy.join(5)
         self.assertEqual(len(engine._late_notes), 1)
-        conversation = engine.sessions['conversation']
-        conversation.busy = False
+        engine.sessions['conversation'].busy = False
         engine._user_turn('And now?')
         text = self.submitted()[-1]
-        self.assertTrue(text.startswith('[Before this message, your interrupted copy_to_phone_clipboard call finished: Copied'))
+        self.assertTrue(text.startswith('[Before this message, your copy_to_phone_clipboard call that was answered as cancelled finished: Copied'))
         self.assertTrue(text.endswith('And now?'))
         self.assertEqual(engine._late_notes, [])
 
@@ -820,11 +837,10 @@ class PhoneClipboard(Integration):
         class ResettingLink(ClipboardLink):
             def call(self, action, **args):
                 engine.reset()  # the owner resets while the phone writes
+                engine._event({'event': 'tool_cancelled', 'callId': 'ipc-reset'})
                 return super().call(action, **args)
         self.phone.link = ResettingLink()
-        e = {'callId': 'ipc-reset', 'params': {'tool': 'copy_to_phone_clipboard', 'arguments': {'text': 'hello'},
-                                                'turnId': 'turn-1', 'callId': 'tool-reset'}}
-        engine._tool(old, e)
+        engine._tool(old, self.copy_call('ipc-reset'))
         self.assertEqual(engine._late_notes, [])
         engine._user_turn('Hi')
         self.assertEqual(self.submitted()[-1], 'Hi')
@@ -1035,6 +1051,19 @@ class StdioBridge(unittest.TestCase):
                 while not any(e['event']=='done' for e in received):received.append(events.get(timeout=5))
                 self.assertNotIn('PRIVATE_REASONING_FIXTURE',json.dumps(received))
                 self.assertTrue(any(e['event']=='delta' for e in received))
+                # An interrupt answers a pending call fail() and reports which call, so rose.app can tell the model
+                # later that a phone action still finished (F07 late outcome).
+                client.request('submit','a',text='tool')
+                pending=None
+                while not pending:
+                    e=events.get(timeout=5)
+                    if e['event']=='tool':pending=e
+                client.request('interrupt','a')
+                reported=None
+                while not reported:
+                    e=events.get(timeout=5)
+                    if e['event']=='tool_cancelled':reported=e
+                self.assertEqual((reported['session'],reported['callId']),('a',pending['callId']))
                 client.request('submit','a',text='hang')
                 client.request('submit','b',text='hang')
                 client.request('interrupt','a')

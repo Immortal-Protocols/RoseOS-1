@@ -116,10 +116,12 @@ class CodexConductor:
         self._speech_start = 0
         self._announcements = queue.Queue()
         self._reported_tasks = set()
-        # Phone outcomes the conversation was told were cancelled (copy_to_phone_clipboard after an interruption):
-        # (conversation id, note), sent with that conversation's first submit after the outcome is known. No turn
-        # waits for an outcome: a barge-in submitted while its copy is still writing learns it on the next submit.
+        # Phone outcomes the model was told were cancelled: the bridge answers a call fail() on interrupt or timeout
+        # and reports it (tool_cancelled), then drops the real result. A copy_to_phone_clipboard outcome becomes a note,
+        # (conversation id, note), once both its result and that report are in, and goes with that conversation's
+        # first submit after that. No turn waits for it. Bridge call id -> (conversation, note) / reported ids:
         self._late_notes = []
+        self._copy_outcomes, self._bridge_cancelled = {}, {}
         self.client = client_factory(self._events.put)
         self._worker = threading.Thread(target=self._loop, name='codex-conductor', daemon=True)
 
@@ -406,6 +408,9 @@ class CodexConductor:
                 self.bus.emit('error', message='Codex event handling failed')
 
     def _event(self, e):
+        if e['event'] == 'tool_cancelled':
+            self._cancelled_by_bridge(str(e.get('callId')))
+            return
         if e['event'] == 'bridge_failure':
             for s in list(self.sessions.values()):
                 if s.busy:
@@ -509,7 +514,7 @@ class CodexConductor:
                     self.log(s, 'tool_call', call_id=p['callId'], name=name, arguments=logged)
                     result, image = self._app_tool(s, name, args) if s.task else self._conversation_tool(name, args)
                     if name == 'copy_to_phone_clipboard' and not s.task:
-                        self._copy_finished(s, p, result)
+                        self._copy_finished(s, str(e['callId']), result)
         except PhoneTaskError as exc:
             result = {'ok': False, 'reason': exc.code, 'message': str(exc)}
         except Exception:
@@ -532,14 +537,36 @@ class CodexConductor:
         except Exception:
             self._failed(s)
 
-    def _copy_finished(self, s, p, result):
-        """A copy returned. If an interruption already answered it as cancelled, keep its real outcome for that
-        conversation's next submit (only the phone's status message, never the text)."""
+    def _copy_finished(self, s, call_id, result):
+        """A copy returned. Its outcome becomes a note only if the bridge answered this call as cancelled, so the model
+        never saw it (only the phone's status message, never the text)."""
+        if not isinstance(result, dict) or 'status' not in result:
+            return
+        note = (s.conversation, '[Before this message, your copy_to_phone_clipboard call that was answered as cancelled '
+                'finished: ' + str(result.get('message') or result['status']) + ']')
         with self._lock:
-            if isinstance(result, dict) and 'status' in result and s.conversation == self.conversation and (
-                    s.cancelled.is_set() or p['turnId'] in s.ignored_turns or (s.turn and p['turnId'] != s.turn)):
-                self._late_notes.append((s.conversation, '[Before this message, your interrupted copy_to_phone_clipboard '
-                                         'call finished: ' + str(result.get('message') or result['status']) + ']'))
+            if self._bridge_cancelled.pop(call_id, None):
+                self._late_note(note)
+            else:
+                self._keep(self._copy_outcomes, call_id, note)
+
+    def _cancelled_by_bridge(self, call_id):
+        with self._lock:
+            note = self._copy_outcomes.pop(call_id, None)
+            if note:
+                self._late_note(note)
+            else:
+                self._keep(self._bridge_cancelled, call_id, True)
+
+    def _late_note(self, note):
+        if note[0] == self.conversation:  # a reset conversation's calls never reach the new one
+            self._late_notes.append(note)
+
+    @staticmethod
+    def _keep(table, key, value, limit=64):
+        table[key] = value
+        while len(table) > limit:
+            table.pop(next(iter(table)))
 
     def _conversation_tool(self, name, a):
         if name == 'phone_task':
@@ -713,6 +740,7 @@ class CodexConductor:
             self.conversation = self.store.new(self.model)
             with self._lock:
                 self._late_notes = []  # the new conversation never made those calls
+                self._copy_outcomes.clear()
             s = self.sessions['conversation'] = Session('conversation', conversation=self.conversation)
             self._open(s, CONVERSATION_POLICY, CONVERSATION_TOOLS)
             self.bus.emit('reset')
