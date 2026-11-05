@@ -783,7 +783,7 @@ class PhoneClipboard(Integration):
     def submitted(self):
         return [c[2]['text'] for c in self.engine.client.calls if c[0] == 'submit' and c[1] == 'conversation']
 
-    def test_a_barge_in_during_a_copy_carries_its_outcome(self):
+    def test_a_barge_in_during_a_copy_learns_its_outcome_on_the_next_submit(self):
         engine, conversation = self.engine, self.engine.sessions['conversation']
         conversation.turn = 'turn-1'
         writing, release = threading.Event(), threading.Event()
@@ -798,15 +798,19 @@ class PhoneClipboard(Integration):
         copy = threading.Thread(target=engine._tool, args=(conversation, e))
         copy.start()
         self.assertTrue(writing.wait(2))
-        barge = threading.Thread(target=engine._user_turn, args=('Did it work?',))
-        barge.start()
-        time.sleep(0.2)
-        release.set()  # the write finishes after the barge-in interrupted the call
+        started = time.monotonic()
+        engine._user_turn('Did it work?')  # the barge-in is submitted at once, never held for the copy
+        self.assertLess(time.monotonic() - started, 1)
+        self.assertEqual(self.submitted()[-1], 'Did it work?')
+        release.set()
         copy.join(5)
-        barge.join(5)
+        self.assertEqual(len(engine._late_notes), 1)
+        conversation = engine.sessions['conversation']
+        conversation.busy = False
+        engine._user_turn('And now?')
         text = self.submitted()[-1]
         self.assertTrue(text.startswith('[Before this message, your interrupted copy_to_phone_clipboard call finished: Copied'))
-        self.assertTrue(text.endswith('Did it work?'))
+        self.assertTrue(text.endswith('And now?'))
         self.assertEqual(engine._late_notes, [])
 
     def test_a_reset_drops_notes_of_the_old_conversation(self):

@@ -117,11 +117,9 @@ class CodexConductor:
         self._announcements = queue.Queue()
         self._reported_tasks = set()
         # Phone outcomes the conversation was told were cancelled (copy_to_phone_clipboard after an interruption):
-        # (conversation id, note), sent with that conversation's next submit. Copies in flight, so a barge-in turn
-        # can wait briefly for their outcome before it is submitted.
+        # (conversation id, note), sent with that conversation's first submit after the outcome is known. No turn
+        # waits for an outcome: a barge-in submitted while its copy is still writing learns it on the next submit.
         self._late_notes = []
-        self._copies = 0
-        self._copies_done = threading.Condition(self._lock)
         self.client = client_factory(self._events.put)
         self._worker = threading.Thread(target=self._loop, name='codex-conductor', daemon=True)
 
@@ -171,8 +169,6 @@ class CodexConductor:
                 s.turn = None
                 self.log(s, 'user_message', text=text, reply_id=s.rid)
                 self.bus.emit('user_turn', id=s.rid, text=redact(text))
-                with self._lock:  # a copy this turn interrupted is usually about to answer: let this turn carry it
-                    self._copies_done.wait_for(lambda: self._copies == 0, timeout=3)
                 self._submit(s, text)
         except Exception as exc:
             self._failed(s, exc)
@@ -511,15 +507,9 @@ class CodexConductor:
                     logged = ({'text_characters': len(args['text'])} if name == 'copy_to_phone_clipboard'
                               and isinstance(args, dict) and isinstance(args.get('text'), str) else args)
                     self.log(s, 'tool_call', call_id=p['callId'], name=name, arguments=logged)
-                    copying = name == 'copy_to_phone_clipboard' and not s.task
-                    if copying:
-                        with self._lock:
-                            self._copies += 1
-                    try:
-                        result, image = self._app_tool(s, name, args) if s.task else self._conversation_tool(name, args)
-                    finally:
-                        if copying:
-                            self._copy_finished(s, p, result)
+                    result, image = self._app_tool(s, name, args) if s.task else self._conversation_tool(name, args)
+                    if name == 'copy_to_phone_clipboard' and not s.task:
+                        self._copy_finished(s, p, result)
         except PhoneTaskError as exc:
             result = {'ok': False, 'reason': exc.code, 'message': str(exc)}
         except Exception:
@@ -550,8 +540,6 @@ class CodexConductor:
                     s.cancelled.is_set() or p['turnId'] in s.ignored_turns or (s.turn and p['turnId'] != s.turn)):
                 self._late_notes.append((s.conversation, '[Before this message, your interrupted copy_to_phone_clipboard '
                                          'call finished: ' + str(result.get('message') or result['status']) + ']'))
-            self._copies -= 1
-            self._copies_done.notify_all()
 
     def _conversation_tool(self, name, a):
         if name == 'phone_task':
