@@ -252,18 +252,53 @@ def proof_spec_problems(profile):
     return [('proof-spec-invalid', str(c) if CODE.fullmatch(str(c)) else 'unrecognised-code') for c in codes or []]
 
 
+def relocated_spec(spec, reviewed):
+    """True when `spec` is the reviewed subject's spec with only its source tree moved: the same schema, profile and
+    scripts, and every script root is one common absolute prefix followed by exactly that script's project path in the
+    subject (e.g. development, script, external/avb). Any other difference is not a relocation."""
+    if not isinstance(spec, dict) or not isinstance(reviewed, dict) or set(spec) != set(reviewed) \
+            or any(spec[key] != reviewed[key] for key in reviewed if key != 'scripts'):
+        return False
+    mine, theirs = spec.get('scripts'), reviewed.get('scripts')
+    if not isinstance(mine, dict) or not isinstance(theirs, dict) or not theirs or set(mine) != set(theirs):
+        return False
+    pairs = []
+    for script, entry in theirs.items():
+        if not isinstance(entry, dict) or set(entry) != {'root'} or not isinstance(mine[script], dict) \
+                or set(mine[script]) != {'root'} or not approved_path(entry['root']) \
+                or not approved_path(mine[script]['root']):
+            return False
+        pairs.append((PurePosixPath(mine[script]['root']), PurePosixPath(entry['root'])))
+    base = PurePosixPath(os.path.commonpath([str(ref) for _, ref in pairs]))
+    prefixes = set()
+    for root, ref in pairs:
+        project = ref.relative_to(base).parts
+        if not project or len(root.parts) <= len(project) + 1 or root.parts[-len(project):] != project:
+            return False
+        prefixes.add(PurePosixPath(*root.parts[:-len(project)]))
+    return len(prefixes) == 1
+
+
 def proof_subject(name, profile, profiles):
     """(subject, problem). The admitted helper proves the tool identities of the profile its spec pins
     (localProof.spec.profile; the helper's validate_spec accepts only its own subject), and every proof names that
-    subject. A profile other than the subject may consume such a proof only when its localProof and its whole tool
-    set are exactly the subject's checked-in ones, so the proof covers precisely the tools this profile runs. Anything
-    else, including no reviewed profiles to compare with, is 'proof-subject'."""
+    subject. A profile other than the subject may consume such a proof only when its whole tool set is exactly the
+    subject's checked-in one and its localProof is the subject's, except that the spec may relocate the subject's source
+    tree (relocated_spec; a dedicated builder keeps its own tree) with its own specBasis. The helper still verifies the
+    bytes at those roots against the same pinned blobs and hashes, so a root is a location, never trust. Anything else,
+    including no reviewed profiles to compare with, is 'proof-subject'."""
     subject = ((profile.get('localProof') or {}).get('spec') or {}).get('profile')
     if subject == name:
         return subject, None
     reviewed = ((profiles or {}).get('profiles') or {}).get(subject) if isinstance(subject, str) else None
-    if not isinstance(reviewed, dict) or reviewed.get('localProof') != profile.get('localProof') \
-            or reviewed.get('tools') != profile.get('tools'):
+    if not isinstance(reviewed, dict) or reviewed.get('tools') != profile.get('tools'):
+        return subject, 'proof-subject'
+    local, theirs = profile.get('localProof'), reviewed.get('localProof')
+    if local == theirs:
+        return subject, None
+    if not isinstance(local, dict) or not isinstance(theirs, dict) or set(local) != set(theirs) \
+            or any(local[key] != theirs[key] for key in theirs if key not in ('spec', 'specBasis')) \
+            or not relocated_spec(local.get('spec'), theirs.get('spec')):
         return subject, 'proof-subject'
     return subject, None
 

@@ -403,6 +403,148 @@ def _held(path):
 WORKFLOW = (ROOT/'.github/workflows/os-release.yml').read_text()
 
 
+YOGI_ROOTS = {'generator': '/srv/rose-yogi/src/development', 'decrypt-keys': '/srv/rose-yogi/src/script',
+              'avbtool': '/srv/rose-yogi/src/external/avb'}
+
+
+def relocated(profile, roots):
+    """A copy of `profile` whose spec is the reviewed fold-rango-v1 spec with the given script roots."""
+    copied = copy.deepcopy(profile)
+    spec = copy.deepcopy(PROFILES['profiles']['fold-rango-v1']['localProof']['spec'])
+    for script, root in roots.items():
+        spec['scripts'][script] = {'root': root} if isinstance(root, str) else root
+    copied['localProof']['spec'] = spec
+    copied['localProof']['specBasis'] = 'the dedicated builder tree (synthetic test roots, not measured)'
+    return copied
+
+
+class RelocatedSubjectTree(unittest.TestCase):
+    """A dedicated builder keeps its own source tree: a consumer may move the subject's tree (one common prefix, each
+    script at the subject's project path) while everything else in localProof and every tool stays the subject's. The
+    helper, its admission, pinned blobs and host checks are unchanged, so the bytes at the new roots are still verified."""
+
+    PROOF = {'schema': 'roseos.fold-tool-proof.v2', 'profile': 'fold-rango-v1', 'environment': dict(sb.RUNNER_ENVIRONMENT),
+             'tools': {t: {'path': f'/usr/bin/{t}', 'sha256': 'a' * 64} for t in sb.PROOF_TOOLS}}
+
+    def yogi(self, roots=YOGI_ROOTS):
+        return relocated(PROFILES['profiles']['yogi-v1'], roots)
+
+    def test_yogi_tree_reuses_the_subject_and_the_frankel_tree_still_does(self):
+        yogi = self.yogi()
+        self.assertEqual(sb.proof_subject('yogi-v1', yogi, PROFILES), ('fold-rango-v1', None))
+        self.assertEqual(sb.proof_problems('yogi-v1', yogi, self.PROOF, PROFILES), [])
+        self.assertEqual(sb.proof_problems('yogi-v1', yogi, dict(self.PROOF, profile='yogi-v1'), PROFILES), ['proof-foreign'])
+        self.assertEqual(sb.proof_problems('yogi-v1', yogi, self.PROOF), ['proof-subject'])  # no reviewed set: refused
+        self.assertEqual(sb.proof_subject('pro-mustang-v1', PROFILES['profiles']['pro-mustang-v1'], PROFILES),
+                         ('fold-rango-v1', None))  # unchanged: identical localProof
+        ftp = importlib.util.spec_from_file_location('ftp_relocated', ROOT/'scripts/fold_tool_proof.py')
+        module = importlib.util.module_from_spec(ftp)
+        ftp.loader.exec_module(module)
+        self.assertEqual(module.validate_spec(yogi['localProof']['spec']), [])  # the admitted helper accepts the shape
+        with tempfile.TemporaryDirectory() as tmp:  # roots are verified, never trusted: wrong bytes there refuse
+            spec = copy.deepcopy(yogi['localProof']['spec'])
+            for script, project in (('generator', 'development/tools/make_key'), ('decrypt-keys', 'script/decrypt-keys'),
+                                    ('avbtool', 'external/avb/avbtool.py')):
+                spec['scripts'][script]['root'] = tmp + '/src/' + project.split('/')[0] + (
+                    '/avb' if script == 'avbtool' else '')
+                target = Path(tmp)/'src'/project
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text('#!/bin/bash\necho not the pinned script\n')
+            self.assertEqual(module.validate_spec(spec), [])
+            with self.assertRaises(module.Refused) as caught:
+                module.verify_local(spec)
+            self.assertEqual(str(caught.exception), 'source_mismatch')
+
+    def test_relocated_profile_is_ready_only_when_otherwise_bound(self):
+        profiles = copy.deepcopy(PROFILES)
+        yogi = self.yogi()
+        profiles['profiles']['yogi-v1'] = yogi
+        self.assertIn('profile-unbound', [code for code, _ in sb.readiness('yogi-v1', profiles, NOW)])  # status unchanged
+        yogi.update(status='resource-bound', missing=[])
+        self.assertEqual(sb.readiness('yogi-v1', profiles, NOW), [])
+
+    def test_anything_but_a_whole_tree_move_is_refused(self):
+        cases = {
+            'project path differs': dict(YOGI_ROOTS, avbtool='/srv/rose-yogi/src/avb'),
+            'same depth, other project': dict(YOGI_ROOTS, avbtool='/srv/rose-yogi/src/external/vbmeta'),
+            'scripts swapped': dict(YOGI_ROOTS, generator=YOGI_ROOTS['decrypt-keys'], **{'decrypt-keys': YOGI_ROOTS['generator']}),
+            'two trees': dict(YOGI_ROOTS, generator='/srv/other/src/development'),
+            'root is the project at /': {s: '/' + r.split('/src/', 1)[1] for s, r in YOGI_ROOTS.items()},
+            'relative root': dict(YOGI_ROOTS, generator='srv/rose-yogi/src/development'),
+            'dot-dot root': dict(YOGI_ROOTS, generator='/srv/rose-yogi/src/../src/development'),
+            'extra root field': dict(YOGI_ROOTS, generator={'root': YOGI_ROOTS['generator'], 'sha256': '0' * 64}),
+            'non-string root': dict(YOGI_ROOTS, generator={'root': None}),
+        }
+        for name, roots in cases.items():
+            with self.subTest(name):
+                self.assertEqual(sb.proof_subject('yogi-v1', self.yogi(roots), PROFILES), ('fold-rango-v1', 'proof-subject'))
+
+        def without_script(p):
+            del p['localProof']['spec']['scripts']['avbtool']
+
+        def extra_script(p):
+            p['localProof']['spec']['scripts']['openssl'] = {'root': '/srv/rose-yogi/src/openssl'}
+
+        def other_schema(p):
+            p['localProof']['spec']['schema'] = 'roseos.fold-tool-proof-spec.v3'
+
+        def extra_spec_field(p):
+            p['localProof']['spec']['roots'] = '/srv/rose-yogi/src'
+
+        def other_blob(p):
+            p['localProof']['admittedBlob'] = '0' * 40
+
+        def other_image(p):
+            p['localProof']['hostImage'] = dict(p['localProof']['hostImage'], image='debian-cloud/other')
+
+        def extra_local_field(p):
+            p['localProof']['note'] = 'x'
+
+        def other_tool(p):
+            p['tools']['avbtool'] = dict(p['tools']['avbtool'], sourceSha256='0' * 64)
+
+        def no_spec(p):
+            p['localProof']['spec'] = None
+
+        for change in (without_script, extra_script, other_schema, extra_spec_field, other_blob, other_image,
+                       extra_local_field, other_tool):
+            with self.subTest(change.__name__):
+                yogi = self.yogi()
+                change(yogi)
+                self.assertEqual(sb.proof_subject('yogi-v1', yogi, PROFILES), ('fold-rango-v1', 'proof-subject'))
+        yogi = self.yogi()
+        no_spec(yogi)
+        self.assertEqual(sb.proof_subject('yogi-v1', yogi, PROFILES), (None, 'proof-subject'))
+        yogi = self.yogi()
+        yogi['localProof']['spec']['profile'] = 'pro-mustang-v1'  # only the helper's own subject is reviewed by it
+        self.assertEqual(sb.proof_subject('yogi-v1', yogi, PROFILES)[1], 'proof-subject')
+        self.assertEqual(sb.relocated_spec(None, PROFILES['profiles']['fold-rango-v1']['localProof']['spec']), False)
+
+    def test_relocated_copy_proves_binds_and_imports(self):
+        h = Harness(self)
+        fold = h.profiles['profiles']['fold-rango-v1']
+        fold['localProof']['spec']['scripts'] = {s: {'root': '/home/pixelbuild/tree/' + r.split('/src/', 1)[1]}
+                                                 for s, r in YOGI_ROOTS.items()}
+        moved = copy.deepcopy(fold)
+        moved['localProof']['spec']['scripts'] = {s: {'root': r} for s, r in YOGI_ROOTS.items()}
+        moved['localProof']['specBasis'] = 'synthetic dedicated tree'
+        moved.update(device='yogi', secrets={'keys': 'PIXEL_OS_SIGNING_KEYS_YOGI_V1',
+                                             'passphrase': 'PIXEL_OS_SIGNING_PASSPHRASE_YOGI_V1'})
+        h.profiles['profiles']['yogi-v1'] = moved
+        self.assertEqual(sb.readiness('yogi-v1', h.profiles, NOW), [])
+        self.assertEqual(sb.prove('yogi-v1', h.profiles, h.env, SHA, h.proof_dir, h.fixture.lock, now=NOW), ('proven', []))
+        executor = base.MockExecutor(archive=base.archive_bytes(prefix='yogi/'))
+        receipt, _ = sb.run('yogi-v1', h.profiles, executor, h.fixture.state, h.fixture.lock, SHA, NOW,
+                            workspace=lambda: h.fixture.workspace(), frankel=base.FRANKEL, proof=h.binding(), run_identity=RUN)
+        self.assertEqual(receipt['status'], 'complete', receipt['reasons'])
+        self.assertEqual(h.log(), ['verify-under-lock', 'recheck'])
+        moved['localProof']['spec']['scripts']['avbtool'] = {'root': '/srv/rose-yogi/src/avb'}  # not a tree move
+        shutil.rmtree(h.proof_dir)
+        self.assertEqual(sb.prove('yogi-v1', h.profiles, h.env, SHA, h.proof_dir, h.fixture.lock, now=NOW),
+                         ('refused', ['proof-subject']))
+        self.assertFalse(h.proof_dir.exists())
+
+
 class Workflow(unittest.TestCase):
     def job(self):
         return WORKFLOW.split('\n  signing-bootstrap:\n', 1)[1].split('\n\n  ', 1)[0]
