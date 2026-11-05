@@ -496,7 +496,29 @@ public class MainActivity extends Activity {
   View tile=HomeAppTile.tile(this,mono?new HomeGlyph(glyph):appMark(app),label,mono,labelled);
   tile.setOnClickListener(v->{closeSystemFolder();WorkspaceLauncher.open(this,app,label);});
   tile.setTag(GestureContract.tag(app.activityInfo.packageName,app.activityInfo.name)); // the gesture's landing target (GestureContract)
+  tile.setOnLongClickListener(v->{appOptions(v,app,label);return true;}); // F03: App info and Android's own uninstall route
   return tile;
+ }
+ /** F03 (AppRemoval): an app's long press offers its removal through Android's own UI only: the system uninstall
+  * confirmation while Rose Agent holds REQUEST_DELETE_PACKAGES, otherwise the app's system App info page. A built-in
+  * app is named as such and offered App info. Nothing is removed without the owner confirming in Android. */
+ void appOptions(View anchor,ResolveInfo app,String label){
+  ApplicationInfo info=app.activityInfo.applicationInfo;String pkg=app.activityInfo.packageName;
+  AppRemoval.Offer offer=AppRemoval.offer(pkg.equals(getPackageName()),(info.flags&ApplicationInfo.FLAG_SYSTEM)!=0,(info.flags&ApplicationInfo.FLAG_UPDATED_SYSTEM_APP)!=0,
+    checkSelfPermission("android.permission.REQUEST_DELETE_PACKAGES")==PackageManager.PERMISSION_GRANTED);
+  if(offer==null)return;
+  PopupMenu menu=new PopupMenu(this,anchor);
+  if(offer.remove!=null)menu.getMenu().add(offer.remove).setOnMenuItemClickListener(i->{openRemoval(pkg,label,offer.route);return true;});
+  if(offer.note!=null)menu.getMenu().add(offer.note).setEnabled(false);
+  if(offer.remove==null||offer.route!=AppRemoval.Route.APP_INFO)menu.getMenu().add(AppRemoval.APP_INFO).setOnMenuItemClickListener(i->{openRemoval(pkg,label,AppRemoval.Route.APP_INFO);return true;});
+  menu.show();
+ }
+ /** Opens the route's Android screen for the package; a removal reaches Home through launcherPackages (rebuild). */
+ void openRemoval(String pkg,String label,AppRemoval.Route route){
+  closeSystemFolder();
+  android.net.Uri uri=android.net.Uri.fromParts("package",pkg,null);
+  Intent open=route==AppRemoval.Route.CONFIRM?new Intent(Intent.ACTION_DELETE,uri):new Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,uri);
+  try{startActivity(open);}catch(ActivityNotFoundException|SecurityException unavailable){Toast.makeText(this,"Android's app settings for "+label+" are not available",Toast.LENGTH_SHORT).show();}
  }
  /** Any other app's mark (#410): its own icon, unrestyled, so a regular installed app keeps its identity. Rose's suite
   * and its duplicates draw the simplified glyph instead (appTile, HomeAppGroups.glyph). */
