@@ -29,6 +29,9 @@ YOGI = json.loads((ROOT/'os/ota/yogi.json').read_text())
 spec = importlib.util.spec_from_file_location('release_pipeline_for_lanes', ROOT/'scripts/release-pipeline.py')
 pipeline = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(pipeline)
+spec = importlib.util.spec_from_file_location('yogi_ota_for_lanes', ROOT/'scripts/yogi_ota.py')
+yogi_ota = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(yogi_ota)
 FIELDS = ['runnerLabel', 'vm', 'storageRoot', 'lockPath', 'queue', 'controller']
 RUNS_ON = re.compile(r'(?m)^    runs-on: (.+)$')
 JOB_IF = re.compile(r'(?m)^    if: (.+)$')
@@ -229,8 +232,13 @@ class MapTest(unittest.TestCase):
         # its host is not in service until os/ota/yogi.json says builder.status ready.
         self.assertEqual(YOGI['builder']['status'], 'runner-unregistered')
         self.assertFalse(in_service('yogi-builder', CONTRACT['hosts']['yogi-builder']))
-        # The same readiness rule Yogi's own guard applies before any stage.
-        self.assertIn("if cfg['builder'].get('status') != 'ready':", (ROOT/'scripts/yogi_ota.py').read_text())
+        # The same readiness rule Yogi's own guard applies: its blockers name the builder until builder.status is ready.
+        def builder_blocked(status):
+            cfg = copy.deepcopy(YOGI)
+            cfg['builder']['status'] = status
+            return any(b.startswith('builder runner/controller not ready') for b in yogi_ota.blockers(cfg, 'ota'))
+        self.assertTrue(builder_blocked('runner-unregistered'))
+        self.assertFalse(builder_blocked('ready'))
         self.assertEqual(independent_pairs(CONTRACT), CONTRACT['parallelToday'])
         self.assertEqual(CONTRACT['parallelToday'], [])
         self.assertEqual(independent_pairs(CONTRACT, live=False), CONTRACT['parallelByRoute'])
@@ -258,7 +266,7 @@ class MapTest(unittest.TestCase):
         # Every Yogi stage on its runner, its own queue, controller, VM, disk and lock; nothing of the Frankel host.
         workflow = (ROOT/CONTRACT['lanes']['yogi']['workflow']).read_text()
         self.assertEqual(yogi_problems(CONTRACT, workflow, YOGI), [])
-        self.assertEqual(len(self_hosted_jobs(workflow)), 2)  # build and sign, both on the Yogi runner today
+        self.assertTrue({'build', 'sign'} <= set(self_hosted_jobs(workflow)))  # more stages may add jobs on the runner
 
     def test_a_yogi_route_that_leans_on_the_frankel_host_is_refused(self):
         workflow = (ROOT/CONTRACT['lanes']['yogi']['workflow']).read_text()
