@@ -122,7 +122,9 @@ class Job(unittest.TestCase):
         line = re.search(r'run: exec timeout --kill-after=(\d+)s "\$\{OUTER_SECONDS\}s" python3 scripts/launcher3-compile.py run ',
                          jobs()[MODE])
         self.assertIsNotNone(line)
-        worst = adapter.POLL_SECONDS + 2 * (adapter.INTERRUPT_GRACE_SECONDS + adapter.POLL_SECONDS)
+        # A stop already under way must not restart these phases in stage_failed (the adapter's fake-clock
+        # stop/leftover tests exercise that path). Allow the confirmation scan's extra poll as well.
+        worst = adapter.POLL_SECONDS + 2 * (adapter.INTERRUPT_GRACE_SECONDS + adapter.POLL_SECONDS) + adapter.POLL_SECONDS
         self.assertLessEqual(worst + 5, int(line[1]))
         self.assertEqual(adapter.CANCEL_SIGTERM_SECONDS, 7.5)  # GitHub's documented cancel: SIGINT, 7500 ms, SIGTERM
         self.assertLessEqual(worst + 1, adapter.CANCEL_SIGTERM_SECONDS)
