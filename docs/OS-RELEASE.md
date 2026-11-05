@@ -102,6 +102,23 @@ latest-beta reservation on the builder (`scripts/host-app-release.py`).
 verification, publication, Latest promotion and cleanup with no
 intervention. Phone update acceptance is still open.
 
+### Fresh unpublished Frankel candidate
+
+Dispatch `os-release.yml` on reviewed main with `mode=latest-beta`, `draft_only=true`,
+`device=frankel`, `channel=beta`; leave every other input at its default (empty pins and
+campaign, `promote=false`). The same locked allocator reserves fresh OS/app versions,
+binds the captured source and emits the allocation artifact. Build, signing, image
+verification, transfer and draft download verification are unchanged. The publisher
+leaves a **draft**: no public release, Latest/channel update, app publication or successor.
+The default `draft_only=false` preserves the normal public Beta button.
+
+This flag does not authorize runtime, fix federation, skip storage reclaim, or prove
+free space. The existing reclaim step still deletes policy-selected data and needs
+applicable authorization before dispatch. Builder and cleanup limits are unchanged.
+For Mustang's fresh app handoff, commit the actual allocation receipt after the run,
+then use `app-inputs-export` for that build and bind the immutable export receipt;
+never substitute the previous release's app bytes. No version is chosen in advance.
+
 ### Dedicated-signer route (RELEASE020 M2c, default-off)
 
 Set the repository variable `ROSE_SIGNING_TRANSPORT=dedicated` to sign latest-beta on the dedicated signer
