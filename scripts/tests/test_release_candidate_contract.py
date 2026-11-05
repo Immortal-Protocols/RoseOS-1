@@ -371,6 +371,99 @@ class BuilderControlTest(unittest.TestCase):
             pipeline.Production().control_builder('start', gcloud=str(self.gcloud), claim=claim)
         self.assertEqual([c[0] for c in claims], [True])  # a sent-but-denied request still counts as this operation's
 
+class ExplicitBuilderControlTest(unittest.TestCase):
+    setUp = BuilderControlTest.setUp
+    calls = BuilderControlTest.calls
+    target = dict(project='protocols-465723', zone='us-west2-a',
+                  instance='roseos-mustang-builder-20261105-a', instanceId='1234567890123456789')
+
+    def control(self, action, states, action_exit=0, claim=None, builder=None, timeout=50):
+        observed = [dict(id=self.target['instanceId'], name=self.target['instance'], status=s)
+                    if isinstance(s, str) else s for s in states]
+        (self.root/'states.json').write_text(json.dumps([json.dumps(s) for s in observed]))
+        (self.root/'action-exit').write_text(str(action_exit))
+        return pipeline.Production().control_builder(action, gcloud=str(self.gcloud),
+            builder=self.target if builder is None else builder, claim=claim,
+            timeout=timeout, interval=10, clock=lambda:self.now[0],
+            sleep=lambda seconds:self.now.__setitem__(0, self.now[0]+seconds))
+
+    def test_explicit_start_and_stop_target_only_the_requested_vm(self):
+        original = dict(pipeline.BUILDER)
+        self.assertEqual(self.control('start', ['TERMINATED','STAGING','RUNNING']), 'RUNNING')
+        self.assertEqual(self.control('stop', ['RUNNING','STOPPING','TERMINATED']), 'TERMINATED')
+        for call in self.calls():
+            self.assertEqual(call[3], self.target['instance'])
+            self.assertIn('--project='+self.target['project'], call)
+            self.assertIn('--zone='+self.target['zone'], call)
+            if call[2] == 'describe': self.assertIn('--format=json(id,name,status)', call)
+        self.assertEqual([c[2] for c in self.calls() if c[2]!='describe'], ['start','stop'])
+        self.assertEqual(pipeline.BUILDER, original)
+
+    def test_invalid_explicit_binding_never_falls_back_or_calls_gcloud(self):
+        from unittest.mock import patch
+        bad = [None, {}, [], dict(self.target, instanceId=None), dict(self.target, instanceId=123),
+               dict(self.target, instanceId='0'), dict(self.target, instance='../immortal-os-builder'),
+               dict(self.target, zone='--other'), dict(self.target, project='bad/project'),
+               dict(self.target, extra='ignored')]
+        for target in bad:
+            with self.subTest(target=target), patch.object(pipeline.subprocess, 'run') as run, \
+                    self.assertRaises(pipeline.InvalidInput):
+                pipeline.Production().control_builder('start', builder=target)
+            run.assert_not_called()
+
+    def test_initial_identity_mismatch_prevents_claim_and_mutation(self):
+        for change in ({'id':'999'}, {'name':'immortal-os-builder'}, {'id':123}, {'status':None}):
+            claims = []
+            state = dict(id=self.target['instanceId'], name=self.target['instance'], status='TERMINATED', **{})
+            state.update(change)
+            with self.subTest(change=change), self.assertRaisesRegex(pipeline.CheckFailed, 'identity mismatch'):
+                self.control('start', [state], claim=claims.append)
+            self.assertEqual(claims, [])
+        self.assertEqual([c for c in self.calls() if c[2]!='describe'], [])
+
+    def test_replaced_vm_during_poll_refuses_without_second_mutation(self):
+        changed = dict(id='999', name=self.target['instance'], status='RUNNING')
+        with self.assertRaisesRegex(pipeline.CheckFailed, 'identity mismatch'):
+            self.control('start', ['TERMINATED','STAGING',changed])
+        self.assertEqual([c[2] for c in self.calls() if c[2]!='describe'], ['start'])
+
+    def test_stop_refuses_replaced_instance_before_stop_request(self):
+        changed = dict(id='999', name=self.target['instance'], status='RUNNING')
+        with self.assertRaises(pipeline.CheckFailed): self.control('stop', [changed])
+        self.assertEqual([c for c in self.calls() if c[2]!='describe'], [])
+
+    def test_ownership_record_precedes_start_and_existing_runner_is_not_owned(self):
+        claims = []
+        def claim(value):
+            claims.append(value)
+            self.assertEqual([c for c in self.calls() if c[2]!='describe'], [])
+        self.control('start', ['TERMINATED','RUNNING'], claim=claim)
+        self.assertEqual(claims, [True])
+        (self.root/'argv.log').unlink(); claims.clear()
+        self.control('start', ['RUNNING'], claim=claim)
+        self.assertEqual(claims, [False])
+        self.assertEqual([c for c in self.calls() if c[2]!='describe'], [])
+
+    def test_failed_ownership_write_prevents_start(self):
+        def claim(value): raise OSError('synthetic write failure')
+        with self.assertRaises(OSError): self.control('start', ['TERMINATED'], claim=claim)
+        self.assertEqual([c for c in self.calls() if c[2]!='describe'], [])
+
+    def test_uncertain_start_reconciles_and_never_resubmits(self):
+        self.assertEqual(self.control('start', ['TERMINATED','STAGING','RUNNING'], action_exit=1), 'RUNNING')
+        self.assertEqual([c[2] for c in self.calls() if c[2]!='describe'], ['start'])
+
+    def test_denied_start_refuses_without_retry(self):
+        with self.assertRaisesRegex(pipeline.CheckFailed, 'request failed'):
+            self.control('start', ['TERMINATED'], action_exit=1)
+        self.assertEqual([c[2] for c in self.calls() if c[2]!='describe'], ['start'])
+
+    def test_explicit_poll_timeout_preserves_original_bound(self):
+        with self.assertRaisesRegex(pipeline.CheckFailed, 'within 50s'):
+            self.control('start', ['TERMINATED','STAGING'])
+        self.assertEqual(self.now[0], 50)
+        self.assertEqual([c[2] for c in self.calls() if c[2]!='describe'], ['start'])
+
 class BuilderOwnershipCliTest(unittest.TestCase):
     """The opt-in ownership options, through main() with the fake adapter (no gcloud)."""
     def setUp(self):

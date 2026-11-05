@@ -179,29 +179,57 @@ def publisher_inputs(env):
 
 # ---------------------------------------------------------------- adapters
 
+_DEFAULT_BUILDER = object()
+
+def explicit_builder(builder):
+    """Validate a caller-owned target; never fill missing fields from Frankel."""
+    patterns = {'project': r'[a-z][a-z0-9-]{4,28}[a-z0-9]',
+                'zone': r'[a-z][a-z0-9-]{0,62}',
+                'instance': r'[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?',
+                'instanceId': r'[1-9][0-9]{0,19}'}
+    if not isinstance(builder, dict) or set(builder) != set(patterns) or any(
+            not isinstance(builder[k], str) or not re.fullmatch(pattern, builder[k])
+            for k, pattern in patterns.items()):
+        raise InvalidInput('explicit builder requires exact project, zone, instance and numeric instanceId')
+    return dict(builder)
+
 class Production:
     simulated = False
 
     def control_builder(self, action, gcloud='gcloud', timeout=420, interval=10, sleep=time.sleep, clock=time.monotonic,
-            claim=None):
+            claim=None, *, builder=_DEFAULT_BUILDER):
         """Submit start/stop with --async and poll only `instances describe` (the controller holds get/start/stop on
         this one instance, no operations read), within the 10-minute job limit. Never resubmits: a failed or uncertain request is reconciled against
         the observed state. RUNNING is the VM state, not runner readiness. `claim`, when given, is told before any
-        request is sent whether this call is the one submitting it (see record_ownership)."""
+        request is sent whether this call is the one submitting it (see record_ownership).
+        An explicit builder is never defaulted and its numeric ID/name are checked on every describe.
+        Its caller owns admission, separate-flavor bindings and the durable ownership record."""
         target, source, passing = BUILDER_STATES[action]
-        where = [f'--project={BUILDER["project"]}', f'--zone={BUILDER["zone"]}']
+        default_target = builder is _DEFAULT_BUILDER
+        selected = dict(BUILDER) if default_target else explicit_builder(builder)
+        where = [f'--project={selected["project"]}', f'--zone={selected["zone"]}']
 
         def describe():
-            result = subprocess.run([gcloud, 'compute', 'instances', 'describe', BUILDER['instance'], *where,
-                '--format=value(status)'], capture_output=True, text=True)
+            result = subprocess.run([gcloud, 'compute', 'instances', 'describe', selected['instance'], *where,
+                '--format=value(status)' if default_target else '--format=json(id,name,status)'],
+                capture_output=True, text=True)
             if result.returncode:
                 raise CheckFailed(f'builder describe failed (exit {result.returncode})')
-            return result.stdout.strip()
+            if default_target:
+                return result.stdout.strip()
+            try:
+                observed = json.loads(result.stdout)
+                if (observed['id'], observed['name']) != (selected['instanceId'], selected['instance']) \
+                        or not isinstance(observed['status'], str):
+                    raise ValueError
+                return observed['status']
+            except (KeyError, TypeError, ValueError):
+                raise CheckFailed('explicit builder identity mismatch or malformed describe; no fallback') from None
         state = describe()
         if claim:
             claim(state == source)
         if state == source:
-            result = subprocess.run([gcloud, 'compute', 'instances', action, BUILDER['instance'], *where, '--async', '--quiet'],
+            result = subprocess.run([gcloud, 'compute', 'instances', action, selected['instance'], *where, '--async', '--quiet'],
                 capture_output=True, text=True)
             if result.returncode:
                 state = describe()

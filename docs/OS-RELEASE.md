@@ -1951,6 +1951,20 @@ it the lock is still `os/release-pipeline/frankel.json` `host.lockPath`, unchang
 `--lock /srv/rose-yogi/yogi-build.lock` on the dedicated Yogi runner and never runs on the Frankel builder. No such job
 exists yet, and this profile admits no key operation.
 
+## Common controller explicit target
+
+The common controller's Python API also accepts
+`Production.control_builder(action, builder={project, zone, instance, instanceId}, claim=callback)`.
+An explicit target must supply all four strings; its numeric instance ID and name
+are checked on every describe, including polling and uncertain-request reconciliation.
+Missing/malformed bindings never fall back to Frankel. The ownership callback runs
+before a start request; failure to persist ownership prevents the request. The
+calling lane remains responsible for separate-builder admission and validating its
+ownership record before STOP. Existing Frankel calls without `builder` retain their
+original target, command format and polling behavior. This is a source API, not
+provisioning or runtime authority. The existing polling deadline is preserved;
+it is not a new hard subprocess wall-time guarantee.
+
 ## One retained private-draft recovery (2026110501)
 
 `frankel-draft-recovery.yml` is a manual, hosted-only, main-only one-off for original
