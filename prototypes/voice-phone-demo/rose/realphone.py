@@ -1042,6 +1042,21 @@ def _why(r: dict) -> str:
             "offline": message or "The phone is not connected."}.get(status, f"Failed ({status}). {message}".strip())
 
 
+def _refused_with(r: dict, details: dict, code: str) -> bool:
+    """Whether this start was refused with ``code``: the controller's reason, or a failed launch's error for this
+    start's own package (a controller keeps its last error, so another app's earlier failure never counts)."""
+
+    if code in (r.get("reason"), details.get("reason")):
+        return True
+    if details.get("status") != "failed":
+        return False
+    package, target = r.get("packageName"), details.get("targetPackage")
+    if package and target and package != target:
+        return False
+    match = re.search(r"\b" + re.escape(code) + r"(?:: (\S+))?\s*$", str(details.get("error") or ""))
+    return bool(match) and (not match.group(1) or not package or match.group(1) == package)
+
+
 def _ws_why(r: dict, label: str | None = None) -> str:
     """A workspace result the agent reads (and Rose repeats): what happened, plainly."""
 
@@ -1050,16 +1065,20 @@ def _ws_why(r: dict, label: str | None = None) -> str:
     details = r.get("details") if isinstance(r.get("details"), dict) else {}
     if r.get("reason") == "target_in_foreground" or details.get("reason") == "target_in_foreground":
         # A limit of this RoseOS build's platform patch (it refuses any app visible on the main display), not a rule
-        # Rose follows: F06's platform change replaces it with a takeover on the owner's request.
+        # Rose follows: F06's platform change replaces it with a takeover on the owner's request. No "switch away and
+        # retry": on this build a later Stop may not return a taken-over app with its state.
         return (f"{app} is open on your phone screen, and this RoseOS build can't take over an app you can see yet; "
-                "nothing was opened. If you're done with it there, switch to another app and ask again.")
-    if "target_not_standard" in " ".join(str(x.get(k) or "") for x in (r, details) for k in ("reason", "error")):
-        # The controller's refusal (reason) or the platform's backstop (error) for the owner's Home or recents task.
-        return f"Rose can't take over the Home screen or the recents app ({app}); nothing was opened."
-    if "target_in_other_session" in " ".join(str(x.get(k) or "") for x in (r, details) for k in ("reason", "error")):
-        # The platform's backstop for an app already in Rose's other workspace session: the controller's own
-        # app_in_other_session refusal, reported the same way.
-        status = "app_in_other_session"
+                "nothing was opened.")
+    if _refused_with(r, details, "target_not_standard"):
+        # The controller's refusal (reason) or the platform's backstop (error) for a Home, recents, assistant or dream
+        # task, which Rose never takes over.
+        return (f"Rose can't take over {app} while the phone uses it as the Home screen, recents, assistant or "
+                "screensaver; nothing was opened.")
+    if _refused_with(r, details, "target_in_other_session"):
+        # The platform: the app shows on another display (Rose's other slot, or anyone else's virtual display).
+        return f"{app} is open on another screen or workspace right now, so Rose didn't move it; nothing was opened."
+    if status == "background_unavailable" and _refused_with(r, details, "app_in_other_session"):
+        status = "app_in_other_session"  # the controller's own launch-time check of its other slot
     if status == "locked":
         return LOCKED_SAY
     if status == "background_target_not_allowed":

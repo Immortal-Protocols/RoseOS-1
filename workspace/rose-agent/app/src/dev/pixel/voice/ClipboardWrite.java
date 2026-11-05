@@ -70,12 +70,14 @@ final class ClipboardWrite {
   * The outcome once setPrimaryClip returned without an exception. readable: the clipboard let Rose read the primary
   * clip's description (Android allows it only while Rose has focus or is the default IME). A readable clip that is not
   * Rose's marker means a later write replaced it; Rose's marker with any other text is a failed write. Neither is ever
-  * "copied". Unreadable, the write is accepted unseen only when nothing could have dropped it silently: ClipboardService
-  * drops a default-device write from an app with an activity on a virtual device's display (ownDisplaysDefault false,
-  * or not known), so that write is unconfirmed.
+  * "copied". Nothing readable while Rose has focus (focused: reads are then allowed) means the write did not land. Unreadable
+  * without focus, the write is accepted unseen only when nothing could have dropped it silently: ClipboardService drops a
+  * default-device write from an app with an activity on a virtual device's display (ownDisplaysDefault false, or not
+  * known), so that write is unconfirmed.
   */
- static String outcome(boolean readable, boolean ownDisplaysDefault, String expectedMarker, String marker, String expectedText, String readText) {
-  if (!readable) return ownDisplaysDefault ? COPIED : UNCONFIRMED;
+ static String outcome(boolean readable, boolean focused, boolean ownDisplaysDefault, String expectedMarker, String marker,
+   String expectedText, String readText) {
+  if (!readable) return focused ? FAILED : ownDisplaysDefault ? COPIED : UNCONFIRMED;
   if (!ours(expectedMarker, marker)) return REPLACED;
   return expectedText.equals(readText) ? COPIED : FAILED;
  }

@@ -313,6 +313,7 @@ class Integration(unittest.TestCase):
         self.assertIn('open on your phone screen', result['result'])
         self.assertIn("this RoseOS build can't take over an app you can see yet", result['result'])
         self.assertIn('nothing was opened', result['result'])
+        self.assertNotIn('switch', result['result'].lower())  # a retry from the background may lose the app's state here
         a.text = 'The app could not open.'
         self.engine._event({'event': 'done', 'session': a.name,
                             'turn': {'id': a.turn, 'status': 'completed'}})
@@ -331,8 +332,24 @@ class Integration(unittest.TestCase):
         a.view.workspace.send = refuse_other_session
         result = self.call(a, 'open_app', app=a.app)
         self.assertFalse(result['ok'])
-        self.assertIn("open in Rose's workspace for another of her tasks", result['result'])
+        self.assertIn('open on another screen or workspace', result['result'])
         self.assertIn('nothing was opened', result['result'])
+
+    def test_refusal_codes_count_only_for_this_starts_own_failure(self):
+        from rose.realphone import _ws_why
+        stale = {'status': 'background_unavailable', 'packageName': CLOCK, 'details': {
+            'status': 'failed', 'targetPackage': CALC, 'reason': '',
+            'error': 'java.lang.IllegalStateException: target_in_other_session: '+CALC}}
+        self.assertNotIn('another screen', _ws_why(stale, 'Clock'))  # Calculator's earlier failure, not Clock's
+        other_pkg = {'status': 'background_unavailable', 'packageName': CLOCK, 'details': {
+            'status': 'failed', 'targetPackage': CLOCK, 'error': 'java.lang.IllegalStateException: target_not_standard: '+CALC}}
+        self.assertNotIn("can't take over", _ws_why(other_pkg, 'Clock'))
+        launch_race = {'status': 'background_unavailable', 'packageName': CALC, 'details': {
+            'status': 'failed', 'targetPackage': CALC, 'reason': '', 'error': 'java.lang.IllegalStateException: app_in_other_session'}}
+        self.assertIn("open in Rose's workspace for another of her tasks", _ws_why(launch_race, 'Calculator'))
+        not_failed = {'status': 'background_unavailable', 'packageName': CALC, 'details': {
+            'status': 'starting', 'targetPackage': CALC, 'error': 'java.lang.IllegalStateException: target_in_other_session: '+CALC}}
+        self.assertNotIn('another screen', _ws_why(not_failed, 'Calculator'))
 
     def test_home_or_recents_target_is_refused_with_its_own_reason(self):
         for refusal in ({'status': 'target_not_allowed', 'reason': 'target_not_standard', 'actionExecuted': False},
@@ -344,7 +361,7 @@ class Integration(unittest.TestCase):
                 a.view.workspace.send = lambda op, params, send=send, refusal=refusal: dict(refusal) if op == 'start' else send(op, params)
                 result = self.call(a, 'open_app', app=a.app)
                 self.assertFalse(result['ok'])
-                self.assertIn("can't take over the Home screen or the recents app", result['result'])
+                self.assertIn("can't take over Calculator while the phone uses it as the Home screen, recents", result['result'])
                 self.assertIn('nothing was opened', result['result'])
                 self.engine.cancel(a.task.id)
 
@@ -737,6 +754,30 @@ class PhoneClipboard(Integration):
         self.engine._tool(conversation, e)
         self.assertEqual(link.sent, [])
         self.assertFalse(self.engine.client.results[-1]['result']['success'])
+
+    def test_a_copy_that_finishes_after_an_interruption_is_reported_next_turn(self):
+        conversation = self.engine.sessions['conversation']
+        conversation.turn = 'turn-1'
+        engine = self.engine
+        class InterruptedLink(ClipboardLink):
+            def call(self, action, **args):
+                conversation.cancelled.set()  # the owner barges in while the phone writes
+                return super().call(action, **args)
+        self.phone.link = link = InterruptedLink()
+        e = {'callId': 'ipc-late', 'params': {'tool': 'copy_to_phone_clipboard', 'arguments': {'text': 'hello'},
+                                               'turnId': 'turn-1', 'callId': 'tool-late'}}
+        engine._tool(conversation, e)
+        self.assertEqual(len(link.sent), 1)
+        self.assertEqual(len(engine._late_notes), 1)
+        self.assertIn('Copied to the phone clipboard.', engine._late_notes[0])
+        self.assertNotIn('hello', engine._late_notes[0])
+        engine._user_turn('Did it work?')
+        submitted = [c for c in engine.client.calls if c[0] == 'submit' and c[1] == 'conversation'][-1][2]['text']
+        self.assertTrue(submitted.startswith('[Before this message, your interrupted copy_to_phone_clipboard call finished'))
+        self.assertTrue(submitted.endswith('Did it work?'))
+        self.assertEqual(engine._late_notes, [])
+        user = [e['data']['text'] for e in self.store.export(engine.conversation) if e['kind'] == 'user_message']
+        self.assertEqual(user[-1], 'Did it work?')  # the transcript keeps the owner's words only
 
     def test_conversation_tool_and_policy_but_not_an_app_thread_tool(self):
         from rose.codex_conductor import CONVERSATION_TOOLS, CONVERSATION_POLICY

@@ -45,19 +45,25 @@ public final class ClipboardWriteTest {
         expect(ClipboardWrite.wellFormed("👋"), "a pair is well formed");
         // After setPrimaryClip returned.
         String id = "5b0f3c1e-8a7d-4f2b-9c6e-1d2a3b4c5d6e";
-        expect(ClipboardWrite.COPIED.equals(ClipboardWrite.outcome(true, true, id, id, "hello", "hello")), "Rose's own clip, read back exactly");
+        expect(ClipboardWrite.COPIED.equals(ClipboardWrite.outcome(true, false, true, id, id, "hello", "hello")), "Rose's own clip, read back exactly");
         expect(ClipboardWrite.READBACK.equals(ClipboardWrite.verification(true)), "read back");
-        expect(ClipboardWrite.COPIED.equals(ClipboardWrite.outcome(false, true, id, null, "hello", null)), "not readable without focus: the write was accepted");
+        expect(ClipboardWrite.COPIED.equals(ClipboardWrite.outcome(false, false, true, id, null, "hello", null)), "not readable without focus: the write was accepted");
         // ClipboardService silently drops a default-device write while one of Rose's activities is on a virtual display.
-        expect(ClipboardWrite.UNCONFIRMED.equals(ClipboardWrite.outcome(false, false, id, null, "hello", null)), "unreadable and possibly dropped: unconfirmed");
-        expect(ClipboardWrite.COPIED.equals(ClipboardWrite.outcome(true, false, id, id, "hello", "hello")), "a readback of Rose's own clip settles it anyway");
-        expect(ClipboardWrite.REPLACED.equals(ClipboardWrite.outcome(true, false, id, "other", "hello", null)), "replaced whatever the displays");
+        expect(ClipboardWrite.UNCONFIRMED.equals(ClipboardWrite.outcome(false, false, false, id, null, "hello", null)), "unreadable and possibly dropped: unconfirmed");
+        expect(ClipboardWrite.COPIED.equals(ClipboardWrite.outcome(true, false, false, id, id, "hello", "hello")), "a readback of Rose's own clip settles it anyway");
+        expect(ClipboardWrite.REPLACED.equals(ClipboardWrite.outcome(true, false, false, id, "other", "hello", null)), "replaced whatever the displays");
         expect(ClipboardWrite.ACCEPTED.equals(ClipboardWrite.verification(false)), "accepted unseen is reported as such");
-        expect(ClipboardWrite.REPLACED.equals(ClipboardWrite.outcome(true, true, id, "other", "hello", null)), "another write replaced it");
-        expect(ClipboardWrite.REPLACED.equals(ClipboardWrite.outcome(true, true, id, null, "hello", null)), "an unmarked clip is another app's");
+        expect(ClipboardWrite.REPLACED.equals(ClipboardWrite.outcome(true, false, true, id, "other", "hello", null)), "another write replaced it");
+        expect(ClipboardWrite.REPLACED.equals(ClipboardWrite.outcome(true, false, true, id, null, "hello", null)), "an unmarked clip is another app's");
         expect(!ClipboardWrite.ours(id, null) && !ClipboardWrite.ours(id, "other") && ClipboardWrite.ours(id, id), "content is read only for Rose's marker");
-        expect(ClipboardWrite.FAILED.equals(ClipboardWrite.outcome(true, true, id, id, "hello", "hell")), "Rose's marker with other text is a failure");
-        expect(ClipboardWrite.FAILED.equals(ClipboardWrite.outcome(true, true, id, id, "hello", null)), "Rose's marker without text is a failure");
+        expect(ClipboardWrite.FAILED.equals(ClipboardWrite.outcome(true, false, true, id, id, "hello", "hell")), "Rose's marker with other text is a failure");
+        expect(ClipboardWrite.FAILED.equals(ClipboardWrite.outcome(true, false, true, id, id, "hello", null)), "Rose's marker without text is a failure");
+        // Focused, Rose may read: an empty clipboard after the write means it did not land, never "accepted unseen".
+        expect(ClipboardWrite.FAILED.equals(ClipboardWrite.outcome(false, true, true, id, null, "hello", null)), "focused and empty: failed");
+        expect(ClipboardWrite.FAILED.equals(ClipboardWrite.outcome(false, true, false, id, null, "hello", null)), "focused and empty off-display: failed");
+        expect(ClipboardWrite.COPIED.equals(ClipboardWrite.outcome(true, true, true, id, id, "hello", "hello")), "focused readback");
+        // The fetched clip's own marker decides: another app's clip fetched after Rose's description is replaced, not failed.
+        expect(ClipboardWrite.REPLACED.equals(ClipboardWrite.outcome(true, true, true, id, "other-app", "hello", null)), "fetched a foreign clip");
         System.out.println("ClipboardWriteTest: " + checks + " checks passed");
     }
 }

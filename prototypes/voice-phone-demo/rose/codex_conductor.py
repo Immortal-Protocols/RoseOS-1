@@ -116,6 +116,7 @@ class CodexConductor:
         self._speech_start = 0
         self._announcements = queue.Queue()
         self._reported_tasks = set()
+        self._late_notes = []  # tool outcomes the conversation was told were cancelled (copy_to_phone_clipboard)
         self.client = client_factory(self._events.put)
         self._worker = threading.Thread(target=self._loop, name='codex-conductor', daemon=True)
 
@@ -165,7 +166,9 @@ class CodexConductor:
                 s.turn = None
                 self.log(s, 'user_message', text=text, reply_id=s.rid)
                 self.bus.emit('user_turn', id=s.rid, text=redact(text))
-                self._submit(s, text)
+                with self._lock:
+                    notes, self._late_notes = self._late_notes, []
+                self._submit(s, '\n'.join(notes + [text]) if notes else text)
         except Exception as exc:
             self._failed(s, exc)
 
@@ -498,8 +501,17 @@ class CodexConductor:
             result = {'ok': False, 'reason': exc.code, 'message': str(exc)}
         except Exception:
             result = {'ok': False, 'reason': 'Tool failed'}
-        self.log(s, 'tool_result', call_id=p['callId'], name=name, result=result,
-                 cancellation_requested=s.cancelled.is_set())
+        if name == 'copy_to_phone_clipboard' and 'status' in result and (
+                s.cancelled.is_set() or p['turnId'] in s.ignored_turns or (s.turn and p['turnId'] != s.turn)):
+            # An interruption already answered this call as cancelled, but the phone acted: say what really happened.
+            with self._lock:
+                self._late_notes.append('[Before this message, your interrupted copy_to_phone_clipboard call finished: '
+                                        + str(result.get('message') or result['status']) + ']')
+        try:
+            self.log(s, 'tool_result', call_id=p['callId'], name=name, result=result,
+                     cancellation_requested=s.cancelled.is_set())
+        except Exception:
+            pass  # a transcript failure must not withhold a phone outcome from Codex
         content = [{'type': 'inputText', 'text': json.dumps(redact(result))}]
         if image is not None and not s.cancelled.is_set():
             image = image.copy()  # preserve the phone's cached observation dimensions

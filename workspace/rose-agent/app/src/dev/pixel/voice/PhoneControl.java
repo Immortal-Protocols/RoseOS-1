@@ -145,10 +145,15 @@ final class PhoneControl {
    ClipDescription description=clipboard.hasPrimaryClip()?clipboard.getPrimaryClipDescription():null;
    if(description!=null){
     readable=true;android.os.PersistableBundle seen=description.getExtras();readMarker=seen==null?null:seen.getString(ClipboardWrite.MARKER);
-    if(ClipboardWrite.ours(marker,readMarker)){ClipData now=clipboard.getPrimaryClip();CharSequence t=now==null||now.getItemCount()==0?null:now.getItemAt(0).getText();readText=t==null?null:t.toString();}
+    if(ClipboardWrite.ours(marker,readMarker)){
+     // Another app may write between the two calls: judge the clip actually fetched by its own marker first.
+     ClipData now=clipboard.getPrimaryClip();ClipDescription fetched=now==null?null:now.getDescription();
+     android.os.PersistableBundle fe=fetched==null?null:fetched.getExtras();readMarker=fe==null?null:fe.getString(ClipboardWrite.MARKER);
+     if(ClipboardWrite.ours(marker,readMarker)){CharSequence t=now.getItemCount()==0?null:now.getItemAt(0).getText();readText=t==null?null:t.toString();}
+    }
    }
   }catch(RuntimeException ignored){readable=false;}
-  String status=ClipboardWrite.outcome(readable,RoseActivities.allOnDefaultDisplay(),marker,readMarker,text,readText);
+  String status=ClipboardWrite.outcome(readable,RoseActivities.anyFocused(),RoseActivities.allOnDefaultDisplay(),marker,readMarker,text,readText);
   result.put("status",status);
   if(ClipboardWrite.COPIED.equals(status))result.put("written",true).put("verified",ClipboardWrite.verification(readable)).put("characters",text.codePointCount(0,text.length())).put("sensitive",true);
   return result;

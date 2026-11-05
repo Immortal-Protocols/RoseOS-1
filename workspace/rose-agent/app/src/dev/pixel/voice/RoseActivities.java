@@ -34,6 +34,12 @@ final class RoseActivities {
   });
  }
 
+ /** Whether a Rose Agent window has input focus now, so the clipboard lets Rose read it. */
+ static boolean anyFocused() {
+  for (Activity a : live) if (!a.isDestroyed() && a.hasWindowFocus()) return true;
+  return false;
+ }
+
  /** Whether every live Rose Agent activity is on the default display now; false when that is not known. */
  static boolean allOnDefaultDisplay() {
   if (!installed) return false;
