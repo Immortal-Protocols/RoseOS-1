@@ -28,7 +28,8 @@ Remaining exclusive owner handoffs before any new runtime:
   after applicable provisioning/access approval. No resource identity is guessed.
   The Mac operator owns old-host inventory and deletion; this source work does
   not inspect, copy or delete that host.
-- Release owns the new dedicated workflow and common controller integration.
+- Mustang owns its dedicated adapter and workflow integration; Release owns
+  the common controller, shared routing and capacity map.
   The common controller must accept an explicit validated instance target and
   ownership binding without replacing Frankel's default global target. New
   Mustang jobs need their own queue and runner, and cleanup may target only
@@ -42,6 +43,9 @@ Remaining exclusive owner handoffs before any new runtime:
   builder. No Mustang export, build or signing job runs on the old host.
 
 Source preparation is not activation, provisioning or runtime authorization.
+The [dedicated resource proposal and source handoff](MUSTANG-DEDICATED-BUILDER.md)
+records sizing evidence, the unimplemented common-controller dependency and
+the exact approval package. It is not a deployed resource or a runnable build.
 Physical-phone testing, the harness and unrelated product feedback do not gate
 this work. F08 still requires compatible app microphone removal and reachable
 OS chin control in the same delivered candidate.
