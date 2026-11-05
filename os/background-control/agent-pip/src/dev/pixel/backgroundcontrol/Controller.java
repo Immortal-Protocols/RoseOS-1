@@ -357,6 +357,11 @@ public final class Controller {
   return a;
  }
  static JSONObject refused(MultiSession.Route r,Context c)throws Exception{return new JSONObject().put("status",r.refusal).put("actionExecuted",false).put("ownLive",r.ownLive).put("current",state(c)).put("sessions",summary());}
+ /** The package of the current default HOME activity, or null when it cannot be resolved (HomeTarget). */
+ static String defaultHome(Context c){
+  try{ResolveInfo r=c.getPackageManager().resolveActivity(new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME),PackageManager.MATCH_DEFAULT_ONLY);
+   return r==null||r.activityInfo==null?null:r.activityInfo.packageName;}catch(RuntimeException e){return null;}
+ }
  static synchronized JSONObject route(Context c,String op,JSONObject p)throws Exception{
   String sid=p.isNull("sessionId")?null:p.optString("sessionId",null);
   switch(op){
@@ -364,6 +369,10 @@ public final class Controller {
     String task=taskParam(p),mode=p.isNull("mode")?"":p.optString("mode","");
     // An owner Stop of a task in any slot refuses later starts of that task in every slot.
     save(active);for(Slot s:slots)if(s.stops.refuses(task))return refusal(s.stops.refusal(task),state(c)).put("sessions",summary());
+    // F06: never the owner's Home or recents (HomeTarget), refused before a slot is chosen or a session is stopped.
+    String pkg=p.getString("packageName");
+    if(HomeTarget.refuses(pkg,defaultHome(c)))return new JSONObject().put("status","target_not_allowed").put("reason",HomeTarget.REASON)
+     .put("actionExecuted",false).put("packageName",pkg).put("current",state(c)).put("sessions",summary());
     MultiSession.Route r=MultiSession.start(view(true),p.getString("packageName"),mode,mode.isEmpty()?1:sessionLimit(c));
     if(r.refused())return refused(r,c);
     return in(r.slot,()->start(c,p)).put("sessions",summary());

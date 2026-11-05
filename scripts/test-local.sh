@@ -202,6 +202,10 @@ java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-option
  os/background-control/agent-pip/src/dev/pixel/backgroundcontrol/CurrentApps.java \
  os/background-control/agent-pip/src/dev/pixel/backgroundcontrol/ViewerStop.java os/background-control/tests/MultiSessionTest.java
 java -cp "$JAVA_TESTS/MultiSession" dev.pixel.backgroundcontrol.MultiSessionTest
+# F06: the controller never takes the owner's Home or recents (HomeTarget).
+java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/HomeTarget" \
+ os/background-control/agent-pip/src/dev/pixel/backgroundcontrol/HomeTarget.java os/background-control/tests/HomeTargetTest.java
+java -cp "$JAVA_TESTS/HomeTarget" dev.pixel.backgroundcontrol.HomeTargetTest
 # SystemUI tray tap mapping; compiled alone like the controller tests above.
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/AgentStatusControls" \
  os/overlays/frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/AgentStatusControls.java \
@@ -226,6 +230,9 @@ java -cp "$JAVA_TESTS/ConversationState" dev.pixel.voice.ConversationStateTest
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/MicInputCapture" \
  workspace/rose-agent/app/src/dev/pixel/voice/MicInputCapture.java workspace/rose-agent/app/tests/MicInputCaptureTest.java
 java -cp "$JAVA_TESTS/MicInputCapture" dev.pixel.voice.MicInputCaptureTest
+java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/ClipboardWrite" \
+ workspace/rose-agent/app/src/dev/pixel/voice/ClipboardWrite.java workspace/rose-agent/app/tests/ClipboardWriteTest.java
+java -cp "$JAVA_TESTS/ClipboardWrite" dev.pixel.voice.ClipboardWriteTest
 # Independent Rose visual axes (connection, microphone, voice) derived from ConversationState.
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/RoseVisualState" \
  workspace/rose-agent/app/src/dev/pixel/voice/ConversationState.java workspace/rose-agent/app/src/dev/pixel/voice/RoseVisualState.java \
