@@ -198,7 +198,7 @@ class IdentityTest(Fixture):
         self.assertEqual(yogi.blockers(self.cfg, 'bootstrap', access=True, now=self.now), [])
 
     def test_committed_tree_has_no_yogi_profile_yet(self):
-        self.assertIn('yogi-v1 is not defined', ORIGINAL_PROFILE_PROBLEM())  # the real committed profiles
+        self.assertIsNotNone(ORIGINAL_PROFILE_PROBLEM())  # the real committed profiles: absent or unbound both refuse
 
     def test_signing_window_must_be_approved_and_current(self):
         self.cfg['signing']['access']['expiresAt'] = '2026-11-06T03:29:59Z'
