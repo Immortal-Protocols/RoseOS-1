@@ -89,6 +89,12 @@ public final class HomeAppGroupsTest {
             expect(other.equals(HomeAppGroups.homeRole(other)), "only the exact OS package is replaced, not " + other);
         expect(HomeAppGroups.homeRole(null) == null, "no role holder: nothing");
         expect(HomeAppGroups.group("com.android.messaging", false, false, true, ai) == SYSTEM, "it stays launchable in the System folder");
+        // F02: the retired Rose Models app goes to the System folder by exact package, however it was installed or signed;
+        // nothing else with a similar name moves.
+        for (boolean ours : new boolean[]{false, true}) for (boolean pre : new boolean[]{false, true})
+            expect(HomeAppGroups.group("dev.pixel.models", false, ours, pre, ai) == SYSTEM, "Rose Models is in the System folder (" + ours + "," + pre + ")");
+        expect(HomeAppGroups.group("dev.pixel.models.debug", false, false, false, ai) == MAIN, "only the exact package");
+        expect(HomeAppGroups.group("dev.pixel.voice.models", false, false, false, ai) == MAIN, "not a lookalike");
         System.out.println("HomeAppGroupsTest: " + checks + " checks passed");
     }
 }
