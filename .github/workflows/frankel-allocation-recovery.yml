@@ -1,0 +1,35 @@
+name: Recover Frankel 2026110501 allocation review branch
+# Execution requires the exact artifact-read/source-write approval; manual only.
+on:
+  workflow_dispatch:
+permissions:
+  contents: write
+  actions: read
+concurrency:
+  group: frankel-2026110501-allocation-recovery
+  cancel-in-progress: false
+jobs:
+  recover:
+    if: github.ref == 'refs/heads/main' && github.run_attempt == 1
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify fixed receipt and create only the allocation review branch
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 scripts/frankel-allocation-recovery.py --dir "$RUNNER_TEMP/frankel-allocation-recovery"
+      - name: Preserve nonsecret branch receipt
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: frankel-allocation-branch-${{ github.run_id }}
+          path: ${{ runner.temp }}/frankel-allocation-recovery/result.json
+          retention-days: 14
+          if-no-files-found: warn
+      - name: Remove hosted scratch
+        if: always()
+        run: rm -rf -- "$RUNNER_TEMP/frankel-allocation-recovery"
