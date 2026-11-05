@@ -76,14 +76,15 @@ final class RoseHomeView extends FrameLayout {
 
  /**
   * Home's apps, in order: the owner's default phone, messages, camera and browser apps (taken from the launchable
-  * apps), then the suite's Mail, Calendar and Notes (HomeAppGroups.HOME_SUITE) where installed and not already here,
+  * apps; GrapheneOS Messaging's place goes to Rose's Messages, HomeAppGroups.homeRole), then the suite's Mail, Calendar and Notes (HomeAppGroups.HOME_SUITE) where installed and not already here,
   * at most CURATED, followed by null for the System folder when folder is set (MainActivity asks without it and places
   * the folder after Home's share of the inventory).
   */
  static List<ResolveInfo> homeApps(PackageManager pm, String self, List<ResolveInfo> launchable, boolean folder) {
   ArrayList<ResolveInfo> home = new ArrayList<>();
   HashSet<String> used = new HashSet<>();
-  ArrayList<String> wanted = new ArrayList<>(dockRolePackages(pm, self));
+  ArrayList<String> wanted = new ArrayList<>();
+  for (String pkg : dockRolePackages(pm, self)) wanted.add(HomeAppGroups.homeRole(pkg)); // F04: never GrapheneOS Messaging
   for (String pkg : HomeAppGroups.HOME_SUITE) wanted.add(pkg);
   for (String pkg : wanted) {
    if (home.size() == CURATED) break;

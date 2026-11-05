@@ -68,6 +68,28 @@ def config():
     return cfg
 
 
+def unconditional_access(ref, root=ROOT):
+    """Whether the committed readback `ref` (under os/ota) records, from IAM metadata, roles/secretmanager.secretAccessor
+    with no condition and no expiry for the existing signer on exactly the two Mustang signing secrets that
+    os/signing-bootstrap/mustang-access-binding.json names."""
+    raw = Path(root)/str(ref)
+    try:
+        if raw.is_symlink() or raw.resolve().parent != (Path(root)/'os/ota').resolve():
+            return False
+        path = raw.resolve()
+        record, access = read(path), read(Path(root)/'os/signing-bootstrap/mustang-access-binding.json')
+        secrets, rows = {row['secret'] for row in access['bindings']}, record.get('bindings')
+        return (record.get('schema') == 'roseos.mustang-ota-access-readback.v1' and bool(record.get('observedAt'))
+                and record.get('project') == access['project'] and 'expiresAt' in record and record['expiresAt'] is None
+                and isinstance(rows, list) and len(rows) == len(secrets) == 2
+                and {row.get('secret') for row in rows} == secrets
+                and all(row.get('role') == 'roles/secretmanager.secretAccessor' and row.get('member') == access['signer']
+                        and 'condition' in row and row['condition'] is None
+                        and 'expiresAt' in row and row['expiresAt'] is None for row in rows))
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return False
+
+
 def guard(cfg, automatic=False, access=False, now=None):
     if cfg.get('publicationEnabled') is not True:
         raise ValueError('Mustang public OTA activation remains pending; no publication authorized by source alone')
@@ -75,8 +97,13 @@ def guard(cfg, automatic=False, access=False, now=None):
         raise ValueError('Mustang automatic publication activation remains pending')
     if access:
         binding = cfg['signingAccess']
-        if binding.get('status') != 'approved' or not binding.get('approvalRef') or not binding.get('expiresAt'):
+        if binding.get('status') != 'approved' or not binding.get('approvalRef') or 'expiresAt' not in binding:
             raise ValueError('existing Mustang version-1 signing read access requires an approved current binding; no extension performed')
+        if binding['expiresAt'] is None:
+            if not unconditional_access(binding['approvalRef']):
+                raise ValueError('non-expiring Mustang signing read access requires a recorded unconditional readback of '
+                                 'both signer bindings; no extension performed')
+            return
         expiry = datetime.datetime.fromisoformat(binding['expiresAt'].replace('Z', '+00:00'))
         now = now or datetime.datetime.now(datetime.timezone.utc)
         if expiry.tzinfo is None or (expiry-now).total_seconds() < 1800:

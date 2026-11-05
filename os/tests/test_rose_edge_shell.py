@@ -267,6 +267,11 @@ class RoseEdgeShellTest(unittest.TestCase):
         self.assertEqual(set(sends), {'RoseEdgePolicy.micCommand(mMuted)', 'int what'}, sends)
         self.assertEqual(code.count('RoseEdgeMicSlot.this.send(what)'), 1, 'AgentTrayLink sends only REGISTER/UNREGISTER')
         self.assertEqual(code.count('mVoice.send('), 1, 'one Messenger send, behind send(int)')
+        # F08: REGISTER alone carries the chin marker, so Rose Agent can tell this chin from the SystemUI tray.
+        self.assertIn('if (what == AgentTrayLink.REGISTER) message.arg1 = RoseEdgePolicy.MIC_CLIENT_CHIN;',
+            method(mic, 'private boolean send(int what)'))
+        self.assertEqual(code.count('.arg1'), 1)
+        self.assertIn('public static final int MIC_CLIENT_CHIN = 1;', self.source['RoseEdgePolicy.java'])
         toggle = flat(method(mic, 'private void toggle()'))
         self.assertIn('if (!mKnown || !allowed() || !RoseEdgePolicy.micCommandAllowed(now, mLastCommandAt)) return;',
             toggle, 'nothing before the first STATE, outside the gates or faster than the tray')

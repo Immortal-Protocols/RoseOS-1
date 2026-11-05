@@ -72,6 +72,7 @@ python3 os/tests/test_frankel_lunch_inputs.py
 python3 os/tests/test_automated_devices_contract.py
 python3 os/tests/test_rose_edge_shell.py
 python3 os/tests/test_background_control_prototype.py
+python3 os/tests/test_anyapp_takeover_platform.py
 python3 scripts/tests/test_systemui_component_update.py
 python3 os/tests/persistent-app-experiment/test_systemui_stages.py
 python3 os/tests/persistent-app-experiment/test_setup_emulator.py
@@ -98,6 +99,7 @@ python3 scripts/tests/test_rango_retained.py
 python3 scripts/tests/test_github_publisher.py
 python3 scripts/tests/test_host_adapters.py
 python3 scripts/tests/test_host_build_reconcile.py
+python3 scripts/tests/test_builder_reclaim.py
 python3 scripts/tests/test_actions_gcp_login.py
 python3 scripts/tests/test_app_release.py
 python3 scripts/tests/test_app_release_publisher.py
@@ -260,6 +262,13 @@ java -cp "$JAVA_TESTS/HomeOverview" dev.pixel.voice.HomeOverviewTest
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/HomeAppLayout" \
  workspace/rose-agent/app/src/dev/pixel/voice/HomeAppLayout.java workspace/rose-agent/app/tests/HomeAppLayoutTest.java
 java -cp "$JAVA_TESTS/HomeAppLayout" dev.pixel.voice.HomeAppLayoutTest
+java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/HomePlan" \
+ workspace/rose-agent/app/src/dev/pixel/voice/HomeAppLayout.java workspace/rose-agent/app/src/dev/pixel/voice/HomePlan.java \
+ workspace/rose-agent/app/tests/HomePlanTest.java
+java -cp "$JAVA_TESTS/HomePlan" dev.pixel.voice.HomePlanTest
+java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/AppRemoval" \
+ workspace/rose-agent/app/src/dev/pixel/voice/AppRemoval.java workspace/rose-agent/app/tests/AppRemovalTest.java
+java -cp "$JAVA_TESTS/AppRemoval" dev.pixel.voice.AppRemovalTest
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/HomeAppGroups" \
  workspace/rose-agent/app/src/dev/pixel/voice/HomeAppGroups.java workspace/rose-agent/app/tests/HomeAppGroupsTest.java
 java -cp "$JAVA_TESTS/HomeAppGroups" dev.pixel.voice.HomeAppGroupsTest

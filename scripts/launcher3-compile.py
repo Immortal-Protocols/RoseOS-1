@@ -96,9 +96,9 @@ sys.path.insert(0, str(ROOT/'scripts'))
 import alpha_source  # noqa: E402  (the reviewed copy plan and per-file copy)
 
 MANIFEST = ROOT/'os/compile-contracts/launcher3-quickstep-lib.json'
-# OS Product's reviewed contract version (schema 3, e21ffeb on 9078ccf: #440 2f57a5f with E2c). A different manifest is
-# refused until this pin is updated.
-MANIFEST_SHA256 = '466f5ab88e4c110318e6e2533635db9bfcbf6ff73fc40dc54fbcc4c72f0593b4'
+# OS Product's reviewed contract version (schema 3, 4f2c426: rebound to #551's b639c22, F06 and F08 base patches). A
+# different manifest is refused until this pin is updated.
+MANIFEST_SHA256 = '46278aa4b90dfd32cab1a595fe92fe437b9a1913925163273f68170226ce53c6'
 CONDITIONS = ['base-exact', 'delta-preimages', 'isolated-apply', 'final-exact']
 # The binding inputs each branch requires and forbids, in the contract's own vocabulary (branches.requires, forbids):
 # check() binds and refuses exactly these, so the contract and this adapter cannot drift.
