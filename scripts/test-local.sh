@@ -82,6 +82,7 @@ python3 os/tests/persistent-app-experiment/test_sdk_revisions.py
 python3 scripts/tests/test_release_manifest.py
 python3 scripts/tests/test_release_stage.py
 python3 scripts/tests/test_release_pipeline.py
+python3 scripts/tests/test_edge_artifact.py
 python3 scripts/tests/test_app_tests_paths.py
 python3 scripts/tests/test_permission_apex.py
 python3 scripts/tests/test_release_candidate_contract.py

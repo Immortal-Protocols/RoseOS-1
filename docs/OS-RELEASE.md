@@ -1523,6 +1523,73 @@ The receipt (path, sha256, dex count, markers) is in the bytes-verify output and
 `verification.json` (`systemUiTray`). Like the APEX gate, it shows the code is
 compiled in, not that the tray stops at screen off.
 
+**Raised-edge gate** (#410 1C/2A, item 4 of OS Product's artifact checklist).
+It is `check_rose_edge` in `scripts/release-pipeline.py` running
+`scripts/edge_artifact.py` with the `roseEdge` section of `frankel.json`. It is
+OS Product's R8-literal checker, run by the release pipeline. Both verify stages
+run it on their own target-files: bytes-verify on the unsigned build, before
+any signer access, and ota-verify on the signed target-files that the OTA and
+public files come from. So a candidate without the raised edge is never signed
+or published. The gate requires:
+
+- **Both build switches.** `persist.wm.debug.rose_edge=true`
+  (`rose-edge-build-make.patch`) and `persist.wm.debug.pixel_agent_tray=1`
+  (`agent-tray-build-make.patch`) must be set in a listed `build.prop`, and no
+  listed file may give either another value. Both are
+  `PRODUCT_SYSTEM_PROPERTIES`, registered by `--agent-tray`, so they land in
+  `SYSTEM/build.prop`.
+- **The edge gesture in Launcher3QuickStep.** The classes `RoseEdgeGesture` and
+  `RoseEdgeSwipe`, with no method required. At the pinned Launcher3 `47accce`,
+  its R8 rules (`-keep,allowshrinking,allowoptimization` and
+  `-keepclasseswithmembernames` on `com.android.quickstep.**`, without
+  `allowobfuscation`) keep class names, but may inline and then remove a member
+  with one call site, such as `stage` or `onMove`. A method requirement could
+  therefore fail a good candidate (OS Product's review of #568).
+
+  Both classes predate #548: they arrived with E2a on 11-03. So these entries
+  show the edge gesture is compiled in, not that #548 is. That the candidate
+  commit contains #548 is a source fact, checked from the candidate's commit.
+- **The Shell resize and the chin's microphone slot in SystemUI.**
+  `com.android.wm.shell.roseedge.RoseEdgeController` and
+  `com.android.wm.shell.RoseEdgeMicSlot`.
+
+A class counts only when a `classes*.dex` of an APK whose whole target-files
+path matches the entry's pattern defines it. An entry may also name a method,
+which the class must then define; no Frankel entry names one today. SystemUI's R8 keeps `com.android.wm.shell.*` class names
+but not their subpackages, so three entries may instead pass on a whole string
+literal that only that code holds:
+
+- `persist.wm.debug.rose_edge_diag` for `RoseEdgeSwipe`;
+- the `IRoseEdge` binder descriptor for `RoseEdgeController`;
+- the log tag `RoseEdgeMic` for `RoseEdgeMicSlot`.
+
+A literal inside a longer string does not count. `RoseEdgeGesture` has no
+literal, so a renamed gesture class fails closed.
+
+The checker reads the dex itself, so the builder needs no `dexdump`; the
+builder's SDK layout (`scripts/host-sdk-layout.py`) has none. It reads the
+header, the string, type and method ids, `class_defs` and `class_data` of dex
+035 to 041, including 041 containers of several sections that share one string
+table. The reader's tests compare it with dexdump on real d8 output
+(`scripts/tests/fixtures/rose-edge-dex/`). A dex it cannot read counts as
+holding nothing, and the failure names it. A missing `roseEdge` section exits
+4 (it is also a guard preflight item).
+
+The retained Rango route builds its own pipeline config, which has no
+`roseEdge` section. Rango is not an admitted device, so its receipt records
+`{"configured": false}`; build 2026103001 predates the edge.
+
+The receipt is `roseEdge` in the bytes-verify output and in
+`verification.json`. It records each switch and the file that set it, and for
+each class whether it passed, how (by class or by literal), and which APK and
+dex it was found in. It also records any unreadable dex and each candidate
+APK's sha256.
+
+The receipt shows the code is in the artifact. It does not show that the edge
+raises, resizes apps or mutes the microphone on a phone. It also does not show
+that the image-embedded Launcher3 copy equals the checked APK: the image-bytes
+gate covers SystemUI but not Launcher3.
+
 **What the gates do not count as image inclusion.** Candidate source
 directories are not image contents: `workspace/models/` (`rose-chat-core`,
 `serving`), `qa/` (`models/`, `first-update/`, `verification/`), `os/tests/`,

@@ -18,6 +18,7 @@ import unittest
 import zipfile
 
 import apex_fixture
+import dex_fixture
 
 SCRIPTS = Path(__file__).resolve().parents[1]
 PIPELINE, STAGE = SCRIPTS/'release-pipeline.py', SCRIPTS/'release-stage.py'
@@ -99,18 +100,36 @@ def updater_apk(rose_channels=True):
 
 UPDATER_APK_BYTES = updater_apk()
 
-def systemui_apk(markers=tuple(SYSTEMUI_SPEC['markers']), dex=True):
-    """A stand-in SystemUI APK: classes.dex holds only the dex strings the tray gate reads, plus an unrelated second dex.
-    dex=False is a dexpreopted APK whose code is not in the archive."""
+# The raised edge (#410 1C/2A) as OS Product's checker reads it: its two build switches and its classes, with the real
+# names, methods and literals of frankel.json's roseEdge section.
+ROSE_EDGE_SPEC = json.loads((SCRIPTS.parent/'os/release-pipeline/frankel.json').read_text())['roseEdge']
+ROSE_EDGE_PROPS = ''.join(p + '\n' for p in ROSE_EDGE_SPEC['props'])
+EDGE_SYSTEMUI = (('Lcom/android/wm/shell/roseedge/RoseEdgeController;', ('<init>', 'raise')),
+    ('Lcom/android/wm/shell/RoseEdgeMicSlot;', ('<init>', 'onMicSlot')))
+EDGE_LAUNCHER3 = (('Lcom/android/quickstep/fallback/RoseEdgeGesture;', ('stage',)),
+    ('Lcom/android/quickstep/fallback/RoseEdgeSwipe;', ('<init>', 'onMove')))
+LAUNCHER3_APK = 'SYSTEM_EXT/priv-app/Launcher3QuickStep/Launcher3QuickStep.apk'
+
+def systemui_apk(markers=tuple(SYSTEMUI_SPEC['markers']), dex=True, edge=EDGE_SYSTEMUI):
+    """A stand-in SystemUI APK of real-format dex files (dex_fixture): classes.dex the application class, classes2.dex the
+    dex strings the tray gate reads and the raised edge's Shell classes. dex=False is a dexpreopted APK whose code is not
+    in the archive."""
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, 'w') as apk:
         if dex:
-            apk.writestr(zipfile.ZipInfo('classes.dex', (2009, 1, 1, 0, 0, 0)), b'dex\n039\0Lcom/android/systemui/SystemUIApplication;')
-            apk.writestr(zipfile.ZipInfo('classes2.dex', (2009, 1, 1, 0, 0, 0)), b'dex\n039\0' + b''.join(m.encode() + b'\0' for m in markers))
+            apk.writestr(zipfile.ZipInfo('classes.dex', (2009, 1, 1, 0, 0, 0)),
+                dex_fixture.dex([('Lcom/android/systemui/SystemUIApplication;', ['<init>'])]))
+            apk.writestr(zipfile.ZipInfo('classes2.dex', (2009, 1, 1, 0, 0, 0)), dex_fixture.dex(list(edge), strings=markers))
         apk.writestr(zipfile.ZipInfo('AndroidManifest.xml', (2009, 1, 1, 0, 0, 0)), b'binary manifest')
     return buffer.getvalue()
 
+def launcher3_apk(classes=EDGE_LAUNCHER3):
+    """A stand-in Launcher3QuickStep APK whose real-format classes.dex defines the raised edge's gesture classes."""
+    return dex_fixture.apk([dex_fixture.dex([('Lcom/android/launcher3/Launcher;', ['<init>']), *classes])],
+        {'AndroidManifest.xml': b'binary manifest'})
+
 SYSTEMUI_APK_BYTES = systemui_apk()
+LAUNCHER3_APK_BYTES = launcher3_apk()
 # The 2026102805 SystemUI: the tray prototype and its service name, without the screen-off lifecycle (AgentTrayLink, OS #85).
 SYSTEMUI_2805_BYTES = systemui_apk(markers=tuple(SYSTEMUI_SPEC['markers'][:2]))
 
@@ -120,7 +139,8 @@ def write_updater(z, apk_paths=(UPDATER_APK,), xml=UPDATER_XML, package='app.sea
     for name in xml:
         z.writestr(name, f'<permissions><privapp-permissions package="{package}"/></permissions>\n')
 
-def target_files(path, keys, policy_apks, stale_misc=False, image_override=None, apex=None, systemui=SYSTEMUI_APK_BYTES):
+def target_files(path, keys, policy_apks, stale_misc=False, image_override=None, apex=None, systemui=SYSTEMUI_APK_BYTES,
+        launcher3=LAUNCHER3_APK_BYTES, edge_props=ROSE_EDGE_PROPS):
     """Minimal target-files: build props, misc_info AVB fingerprints, presigned APKs, framework-res, images."""
     # As the 2806 build recorded them (run 40778491188): the system partition is the shared generic system image, every
     # other partition names the device.
@@ -128,7 +148,7 @@ def target_files(path, keys, policy_apks, stale_misc=False, image_override=None,
     system_fp = f'Android/generic_system/generic:17/CP3A.261005.005/{BUILD}:user/{keys}'
     with zipfile.ZipFile(path, 'w') as z:
         z.writestr('SYSTEM/build.prop', f'ro.build.version.incremental={BUILD}\nro.build.date.utc={STAMP}\n'
-            f'ro.build.type=user\nro.product.system.device=generic\nro.system.build.fingerprint={system_fp}\n')
+            f'ro.build.type=user\nro.product.system.device=generic\nro.system.build.fingerprint={system_fp}\n' + edge_props)
         z.writestr('VENDOR/build.prop', f'ro.vendor.build.version.incremental={BUILD}\nro.product.vendor.device=frankel\n'
             f'ro.vendor.build.fingerprint={fp}\n')
         misc_fp = system_fp.replace(BUILD, '2026102701') if stale_misc else system_fp
@@ -150,6 +170,8 @@ def target_files(path, keys, policy_apks, stale_misc=False, image_override=None,
         if systemui is not None:
             z.writestr(SYSTEMUI_APK, systemui)
             embedded[SYSTEMUI_APK] = systemui
+        if launcher3 is not None:
+            z.writestr(LAUNCHER3_APK, launcher3)
         embedded.update(image_override or {})
         z.writestr('IMAGES/system_ext.img', image({'/' + k[len('SYSTEM_EXT/'):]: v for k, v in embedded.items() if k.startswith('SYSTEM_EXT/')}))
         z.writestr('IMAGES/product.img', image({'/' + k[len('PRODUCT/'):]: v for k, v in embedded.items() if k.startswith('PRODUCT/')}, sparse=True))
@@ -407,7 +429,7 @@ class PipelineTest(unittest.TestCase):
             'framework': {'computerControlTargets': ['dev.pixel.calculator.agent'], 'prototypeAgentsEmpty': True, 'lockedSessions': False},
             'updater': {'packageName': 'app.seamlessupdate.client', 'channelDefault': 'prod', 'channelValues': ['prod', 'stable', 'alpha'],
                 'apkPath': UPDATER_APK, 'signer': SIGNER.lower(), 'requiredFiles': list(UPDATER_XML)},
-            'permissionApex': PERMISSION_SPEC, 'systemUiTray': SYSTEMUI_SPEC,
+            'permissionApex': PERMISSION_SPEC, 'systemUiTray': SYSTEMUI_SPEC, 'roseEdge': ROSE_EDGE_SPEC,
             'publication': {'repository': 'example/none', 'tag': 'frankel-{build}',
                 'channels': {'beta': {'promoteLatest': True, 'feedChannel': 'stable'}, 'prod': None}}}))
         self.base = root/'actions'
@@ -457,6 +479,17 @@ class PipelineTest(unittest.TestCase):
         tray = json.loads((artifact/'assets/verification.json').read_text())['systemUiTray']
         self.assertEqual((tray['apkPath'], tray['sha256'], tray['dexFiles'], tray['markers']),
             (SYSTEMUI_APK, hashlib.sha256(SYSTEMUI_APK_BYTES).hexdigest(), 2, SYSTEMUI_SPEC['markers']))
+        verification = json.loads((artifact/'assets/verification.json').read_text())
+        edge = verification['roseEdge']
+        self.assertTrue(edge['configured'])
+        self.assertEqual([(p['prop'], p['pass'], p['files']) for p in edge['props']],
+            [(p, True, ['SYSTEM/build.prop']) for p in ROSE_EDGE_SPEC['props']])
+        self.assertEqual([(c['class'], c['pass'], c['by'], c['where']) for c in edge['classes']],
+            [(c['class'], True, 'class', (LAUNCHER3_APK + '!classes.dex') if 'quickstep' in c['class'] else (SYSTEMUI_APK + '!classes2.dex'))
+             for c in ROSE_EDGE_SPEC['classes']])
+        self.assertEqual(edge['apkSha256'], {LAUNCHER3_APK: hashlib.sha256(LAUNCHER3_APK_BYTES).hexdigest(),
+            SYSTEMUI_APK: hashlib.sha256(SYSTEMUI_APK_BYTES).hexdigest()})
+        self.assertIn('Rose raised edge: switches, Launcher3 gesture and SystemUI resize/mic slot in dex', verification['checks'])
         self.assertEqual(tools['debugfs']['sha256'], hashlib.sha256((self.root/'tools/debugfs').read_bytes()).hexdigest())
         code, out = self.pipeline('publish', *self.common[:8], '--config', self.config, '--artifact-dir', artifact,
             '--adapter', 'fake', '--fake-state', self.root/'fake', '--promote')
@@ -751,6 +784,58 @@ class PipelineTest(unittest.TestCase):
                 self.assertIn(message, result.stderr)
                 shutil.rmtree(self.base)
 
+    def test_candidate_without_the_raised_edge_stops_before_signing(self):
+        # bytes-verify: no Launcher3 edge gesture, a renamed gesture class (no literal fallback), a SystemUI without the
+        # Shell edge, a switch that is off or missing: each stops the candidate before any signer access.
+        renamed = launcher3_apk((('Lcom/android/quickstep/fallback/a;', ('stage',)), EDGE_LAUNCHER3[1]))
+        for kwargs, message in (
+                ({'launcher3': None}, 'raised-edge class Lcom/android/quickstep/fallback/RoseEdgeGesture; is not defined in the dex of the 0 matching APK(s)'),
+                ({'launcher3': renamed}, 'raised-edge class Lcom/android/quickstep/fallback/RoseEdgeGesture; is not defined in the dex of the 1 matching APK(s)'),
+                ({'systemui': systemui_apk(edge=())}, 'raised-edge class Lcom/android/wm/shell/roseedge/RoseEdgeController; is not defined in the dex of the 1 matching APK(s), nor is the literal'),
+                ({'edge_props': 'persist.wm.debug.pixel_agent_tray=1\n'}, 'raised-edge prop persist.wm.debug.rose_edge=true is not set in'),
+                ({'edge_props': ROSE_EDGE_PROPS + 'persist.wm.debug.rose_edge=false\n'},
+                 "raised-edge prop persist.wm.debug.rose_edge=true conflicts with ['SYSTEM/build.prop: false']")):
+            with self.subTest(message=message):
+                target_files(self.root/'fixtures/unsigned.zip', 'test-keys', self.placed, apex=apex_fixture.apex(), **kwargs)
+                failed, result = self.run_builder_job()
+                self.assertEqual(failed, 'bytes-verify')
+                self.assertIn(message, result.stderr)
+                self.assertFalse((self.base/'release/signed-target_files.zip').exists())
+                shutil.rmtree(self.base)
+
+    def test_signed_candidate_must_carry_the_raised_edge(self):
+        # ota-verify: the signed target-files themselves are checked, so a signed candidate without the edge is not published.
+        for kwargs, message in (({'launcher3': None}, 'RoseEdgeGesture; is not defined'),
+                ({'edge_props': ''}, 'raised-edge prop persist.wm.debug.pixel_agent_tray=1 is not set in')):
+            with self.subTest(message=message):
+                target_files(self.root/'fixtures/signed.zip', 'release-keys', self.placed, apex=self.signed_apex, **kwargs)
+                failed, result = self.run_builder_job()
+                self.assertEqual(failed, 'ota-verify')
+                self.assertIn(message, result.stderr)
+                self.assertFalse((self.base/'release/public/verification.json').exists())
+                shutil.rmtree(self.base)
+
+    def test_renamed_shell_classes_pass_on_their_whole_literals(self):
+        # SystemUI's R8 may rename RoseEdgeController (com.android.wm.shell.roseedge is not kept); its binder descriptor and
+        # the mic slot's log tag, as whole dex strings, still show the code is in. A literal inside a longer string does not.
+        renamed = systemui_apk(edge=(('Lcom/android/wm/shell/a/b;', ('raise',)), ('Lcom/android/wm/shell/RoseEdgeMicSlot;', ('<init>',))))
+        with_literal = dex_fixture.apk([dex_fixture.dex([('Lcom/android/systemui/SystemUIApplication;', ['<init>'])]),
+            dex_fixture.dex([('Lcom/android/wm/shell/a/b;', ['raise']), ('Lcom/android/wm/shell/c;', ['d'])],
+                strings=[*SYSTEMUI_SPEC['markers'], 'com.android.wm.shell.roseedge.IRoseEdge', 'RoseEdgeMic'])],
+            {'AndroidManifest.xml': b'binary manifest'})
+        target_files(self.root/'fixtures/unsigned.zip', 'test-keys', self.placed, apex=apex_fixture.apex(), systemui=renamed)
+        failed, result = self.run_builder_job()
+        self.assertEqual(failed, 'bytes-verify')
+        self.assertIn('RoseEdgeController; is not defined in the dex of the 1 matching APK(s), nor is the literal', result.stderr)
+        shutil.rmtree(self.base)
+        target_files(self.root/'fixtures/unsigned.zip', 'test-keys', self.placed, apex=apex_fixture.apex(), systemui=with_literal)
+        target_files(self.root/'fixtures/signed.zip', 'release-keys', self.placed, apex=self.signed_apex, systemui=with_literal,
+            image_override={SYSTEMUI_APK: with_literal})
+        failed, result = self.run_builder_job()
+        self.assertIsNone(failed, result.stdout + result.stderr)
+        edge = json.loads((self.base/'artifact/assets/verification.json').read_text())['roseEdge']
+        self.assertEqual([c['by'] for c in edge['classes']], ['class', 'class', 'literal', 'literal'])
+
     def test_payload_properties_must_describe_payload(self):
         ota(self.root/'fixtures/ota.zip', BUILD, STAMP, bad_properties=True)
         failed, result = self.run_builder_job()
@@ -1012,6 +1097,56 @@ class PipelineTest(unittest.TestCase):
         code, out = self.pipeline('preflight', '--job', 'builder', '--config', self.config)
         self.assertEqual(code, 2)
         self.assertIn('fixture config cannot be used for production', out)
+
+
+class RoseEdgeGateTest(unittest.TestCase):
+    """check_rose_edge: required for every admitted device, recorded as not configured for another route's config."""
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.path = Path(self.tmp.name)/'target_files.zip'
+        with zipfile.ZipFile(self.path, 'w') as z:
+            z.writestr('SYSTEM/build.prop', ROSE_EDGE_PROPS)
+            z.writestr(LAUNCHER3_APK, LAUNCHER3_APK_BYTES)
+            z.writestr(SYSTEMUI_APK, SYSTEMUI_APK_BYTES)
+
+    def test_admitted_device_runs_the_check(self):
+        failures, receipt = release_pipeline.check_rose_edge(self.path, {'target': {'device': 'frankel'}, 'roseEdge': ROSE_EDGE_SPEC})
+        self.assertEqual((failures, receipt['configured'], [c['pass'] for c in receipt['classes']]), ([], True, [True] * 4))
+        self.assertEqual(release_pipeline.rose_edge_label(receipt),
+            ['Rose raised edge: switches, Launcher3 gesture and SystemUI resize/mic slot in dex'])
+
+    def test_admitted_device_without_the_section_is_setup_missing(self):
+        for config in ({'target': {'device': 'frankel'}}, {'target': {'device': 'frankel'}, 'roseEdge': {**ROSE_EDGE_SPEC, 'classes': []}}):
+            with self.assertRaises(release_pipeline.SetupMissing) as caught:
+                release_pipeline.check_rose_edge(self.path, config)
+            self.assertIn('roseEdge.classes', caught.exception.missing)
+        with self.assertRaisesRegex(release_pipeline.InvalidInput, 'key=value'):
+            release_pipeline.check_rose_edge(self.path, {'target': {'device': 'frankel'},
+                'roseEdge': {**ROSE_EDGE_SPEC, 'props': ['persist.wm.debug.rose_edge']}})
+
+    def test_another_routes_config_without_the_section_records_nothing_checked(self):
+        # The retained Rango build predates the edge; its pipeline config (rango-retained.py) carries no roseEdge.
+        failures, receipt = release_pipeline.check_rose_edge(self.path/'absent.zip', {'target': {'device': 'rango'}})
+        self.assertEqual((failures, receipt, release_pipeline.rose_edge_label(receipt)), ([], {'configured': False}, []))
+        # A Rango config that does carry the section is checked like any other.
+        failures, receipt = release_pipeline.check_rose_edge(self.path, {'target': {'device': 'rango'}, 'roseEdge': ROSE_EDGE_SPEC})
+        self.assertEqual((failures, receipt['configured']), ([], True))
+
+    def test_guard_preflight_names_a_missing_section(self):
+        config = json.loads((SCRIPTS.parent/'os/release-pipeline/frankel.json').read_text())
+        self.assertNotIn('roseEdge.props', release_pipeline.preflight('guard', config, {}, 'production'))
+        missing = release_pipeline.preflight('guard', {k: v for k, v in config.items() if k != 'roseEdge'}, {}, 'production')
+        self.assertEqual(missing[-3:], ['roseEdge.props', 'roseEdge.propFiles', 'roseEdge.classes'])
+
+    def test_both_verifications_run_it_on_their_own_target_files(self):
+        source = PIPELINE.read_text()
+        build = source.split('def verify_build(', 1)[1].split('\ndef ', 1)[0]
+        signed = source.split('def verify_signed(', 1)[1].split('\ndef ', 1)[0]
+        self.assertIn('check_rose_edge(target_files, config)', build)
+        self.assertIn("'roseEdge': edge", build)
+        self.assertIn('check_rose_edge(signed, config)', signed)
+        self.assertIn("'roseEdge': edge", signed)
 
 
 class ReconcileProjects(unittest.TestCase):
