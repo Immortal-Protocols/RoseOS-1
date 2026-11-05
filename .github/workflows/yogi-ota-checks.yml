@@ -1,0 +1,20 @@
+name: Yogi OTA checks
+# Offline Yogi OTA route checks (synthetic inputs; no host, key, network or phone). Separate from the Mustang and
+# app suites so a Yogi change re-runs exactly its own unit; scripts/test-local.sh runs it too.
+on:
+  pull_request:
+    paths: ['os/**', 'scripts/yogi*', 'scripts/mustang_ota.py', 'scripts/host-*.py', 'scripts/host_secrets.py', 'scripts/release-pipeline.py', 'scripts/release_receipts.py', 'scripts/github_release_publisher.py', 'scripts/background_apks.py', 'scripts/prepare-yogi-port.py', 'scripts/tests/test_yogi_ota.py', '.github/workflows/yogi-ota*.yml']
+  push:
+    branches: [main]
+    paths: ['os/**', 'scripts/yogi*', 'scripts/mustang_ota.py', 'scripts/host-*.py', 'scripts/host_secrets.py', 'scripts/release-pipeline.py', 'scripts/release_receipts.py', 'scripts/github_release_publisher.py', 'scripts/background_apks.py', 'scripts/prepare-yogi-port.py', 'scripts/tests/test_yogi_ota.py', '.github/workflows/yogi-ota*.yml']
+permissions:
+  contents: read
+jobs:
+  offline:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - run: python3 scripts/tests/test_yogi_ota.py

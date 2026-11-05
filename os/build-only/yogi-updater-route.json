@@ -1,0 +1,16 @@
+{
+  "schema": "roseos.yogi-updater-route.v1",
+  "device": "yogi",
+  "updaterUrl": "https://github.com/Immortal-Protocols/pixel-ota/releases/download/",
+  "releaseIndex": "https://api.github.com/repos/Immortal-Protocols/pixel-ota/releases",
+  "publishedChannel": "stable",
+  "producerContract": {
+    "tag": "yogi-{build}",
+    "metadataAsset": "yogi-stable",
+    "otaAsset": "yogi-ota_update-{build}.zip",
+    "metadataLine": "{build} {buildDateUtc} yogi stable"
+  },
+  "owner": "Yogi OTA owner",
+  "approvalRef": "https://app.notion.com/p/40e7c646c81b81629d22eb03edd73abd",
+  "basis": "Device-qualified release discovery (RoseReleases.choose with DEVICE=yogi): each check resolves one complete yogi-N release, then fetches yogi-stable and yogi-ota_update-N.zip from it. Never releases/latest (Frankel), never GrapheneOS or another device's feed."
+}

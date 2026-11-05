@@ -88,6 +88,8 @@ python3 scripts/tests/test_release_allocate.py
 python3 scripts/tests/test_release_chain.py
 # Mustang one-button chain wiring (canned run metadata; no network, token, host or dispatch).
 python3 scripts/tests/test_mustang_ota_chain_workflow.py
+# Yogi OTA route: contract, guards, allocation, packaged-Updater/trust and publication checks (synthetic; no host, key or network).
+python3 scripts/tests/test_yogi_ota.py
 python3 scripts/tests/test_agent_beta_auto.py
 python3 scripts/tests/test_release_transport.py
 python3 scripts/tests/test_release_acceptance.py
