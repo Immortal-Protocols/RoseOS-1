@@ -7,9 +7,9 @@
   "bootstrapRun": "41719073037",
   "signingAccess": {
     "status": "approved",
-    "expiresAt": "2026-11-05T06:20:18Z",
-    "approvalRef": "os/ota/mustang-access-readback-2026-11-05.json",
-    "purpose": "Read only the two existing Mustang secret versions 1 as the existing signer. No bootstrap writes or key generation. Original Infra read back the restored bindings (metadata only) and Chief relayed their expiry; this definition records it and extends nothing."
+    "expiresAt": null,
+    "approvalRef": "os/ota/mustang-access-readback-unconditional.json",
+    "purpose": "Read only the two existing Mustang secret versions 1 as the existing signer. No bootstrap writes or key generation. Nathan granted the existing signer unconditional read access on both existing secrets; existing Dev Infra read the bindings back (metadata only) at 2026-11-05T01:17:39Z and Chief relayed it. expiresAt null is accepted only with that recorded unconditional readback; the earlier window (os/ota/mustang-access-readback-2026-11-05.json, 2026-11-05T06:20:18Z) no longer limits signing."
   },
   "baseline": {
     "build": "2026110302",
