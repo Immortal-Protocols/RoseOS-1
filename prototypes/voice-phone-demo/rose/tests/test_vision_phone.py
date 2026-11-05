@@ -53,6 +53,11 @@ class Vision(unittest.TestCase):
         self.assertIsNotNone(session.view.image)
         return session
 
+    def commands(self):
+        # The owner-Stop watcher independently polls get_state. Only UI commands
+        # would indicate an input or accessibility fallback from these refusals.
+        return [p for op, p in self.controller.calls if op == 'command']
+
     def test_open_tap_swipe_type_and_verify_without_a_single_node(self):
         s = self.opened()
         opening = next(p for op, name, p in self.engine.client.calls if op == 'open' and name == s.name)
@@ -77,12 +82,12 @@ class Vision(unittest.TestCase):
 
     def test_old_or_other_session_frame_never_dispatches_and_points_are_bounded(self):
         a, b = self.opened(), self.opened('Clock')
-        before = len(self.controller.calls)
+        before = len(self.commands())
         for frame in ('old', b.view.frame_id):
             self.assertFalse(self.call(a, 'tap_point', frame_id=frame, x=500, y=500, target='input', effect='interact')['ok'])
         for x in (-1, 1001, float('nan'), True):
             self.assertFalse(self.call(a, 'tap_point', frame_id=a.view.frame_id, x=x, y=500, target='input', effect='interact')['ok'])
-        self.assertEqual(len(self.controller.calls), before)
+        self.assertEqual(len(self.commands()), before)
         self.assertTrue(self.call(a, 'tap_point', frame_id=a.view.frame_id, x=1000, y=1000, target='corner', effect='interact')['ok'])
         raw = [p for op, p in self.controller.calls if op == 'command' and p['action'] == 'screen_gesture'][-1]
         self.assertEqual(raw['points'], [DISPLAY[0]-1, DISPLAY[1]-1])
@@ -90,11 +95,11 @@ class Vision(unittest.TestCase):
     def test_missing_phone_text_support_reports_update_without_accessibility_fallback(self):
         self.has_text = False
         s = self.opened()
-        before = len(self.controller.calls)
+        before = len(self.commands())
         result = self.call(s, 'type_text', frame_id=s.view.frame_id, text='feedback', replace=True)
         self.assertFalse(result['ok'])
         self.assertIn('controller needs', result['result'])
-        self.assertEqual(len(self.controller.calls), before)
+        self.assertEqual(len(self.commands()), before)
         self.call(s, 'complete_task', status='blocked', summary='The phone needs the vision input update.')
         self.engine._event({'event': 'done', 'session': s.name, 'turn': {'id': s.turn, 'status': 'completed'}})
         self.assertEqual(s.task.status, 'failed')
