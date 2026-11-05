@@ -87,7 +87,7 @@
     },
     {
      "name": "background-control-frameworks-base.patch",
-     "sha256": "42986c0bf5e26e97b41ca5d62145b9a0ce45dd94810afcb307be658446cd8979"
+     "sha256": "22fc3d7c92aa0ad6f3692dc31c2e33fc9816972be6f9899b14db9aaac447c6bd"
     },
     {
      "name": "background-control-modern-frameworks-base.patch",
@@ -427,35 +427,35 @@
       "gitBlob": "e7313935847d1acb7b7e3889de26e54aad3e77ce"
      },
      "post": {
-      "sha256": "1a5392cef6e8de42102781ac33fb0fcf641b8ea684b1dfa668bb060546e07e2c",
-      "gitBlob": "7a0a3757f836e4a20bfa6ff3a0880faa0e75c0f5"
+      "sha256": "eef0edf1c1a943b6a88e34c4146684b4dfe6b59e50cdb4ac982e2ea04a88d525",
+      "gitBlob": "8b6802619b08ef1f38e104e12635094e613c8b17"
      },
      "chain": [
       {
        "patch": "background-control-frameworks-base.patch",
        "before": "e7313935847d1acb7b7e3889de26e54aad3e77ce",
-       "after": "9516c6806a3309d5802978717e5bdb510fcf65c5",
+       "after": "a35500ee45acc5622d8ce066285da4ccf213e166",
        "index": null,
        "base": "noIndex"
       },
       {
        "patch": "background-control-modern-frameworks-base.patch",
-       "before": "9516c6806a3309d5802978717e5bdb510fcf65c5",
-       "after": "c9abf67fb5457a98db8b191971d32ebd93f62915",
+       "before": "a35500ee45acc5622d8ce066285da4ccf213e166",
+       "after": "c250385b9263eb3c6d465137d82c02efa13800b9",
        "index": null,
        "base": "noIndex"
       },
       {
        "patch": "background-control-resource-import-fix.patch",
-       "before": "c9abf67fb5457a98db8b191971d32ebd93f62915",
-       "after": "47d588015c25b1f03fc6f9ba4e024607abebe587",
+       "before": "c250385b9263eb3c6d465137d82c02efa13800b9",
+       "after": "59f3818cf34f6b01c571683b7086a1090cec4b6a",
        "index": null,
        "base": "noIndex"
       },
       {
        "patch": "locked-control-frameworks-base.patch",
-       "before": "47d588015c25b1f03fc6f9ba4e024607abebe587",
-       "after": "7a0a3757f836e4a20bfa6ff3a0880faa0e75c0f5",
+       "before": "59f3818cf34f6b01c571683b7086a1090cec4b6a",
+       "after": "8b6802619b08ef1f38e104e12635094e613c8b17",
        "index": [
         "0a88d97",
         "5f4a32d"
@@ -1581,7 +1581,7 @@
     {
      "project": "frameworks/base",
      "name": "background-control-frameworks-base.patch",
-     "sha256": "42986c0bf5e26e97b41ca5d62145b9a0ce45dd94810afcb307be658446cd8979"
+     "sha256": "22fc3d7c92aa0ad6f3692dc31c2e33fc9816972be6f9899b14db9aaac447c6bd"
     },
     {
      "project": "frameworks/base",
@@ -1678,7 +1678,7 @@
      },
      {
       "name": "background-control-frameworks-base.patch",
-      "sha256": "42986c0bf5e26e97b41ca5d62145b9a0ce45dd94810afcb307be658446cd8979"
+      "sha256": "22fc3d7c92aa0ad6f3692dc31c2e33fc9816972be6f9899b14db9aaac447c6bd"
      },
      {
       "name": "background-control-modern-frameworks-base.patch",
@@ -2018,35 +2018,35 @@
        "gitBlob": "e7313935847d1acb7b7e3889de26e54aad3e77ce"
       },
       "post": {
-       "sha256": "1a5392cef6e8de42102781ac33fb0fcf641b8ea684b1dfa668bb060546e07e2c",
-       "gitBlob": "7a0a3757f836e4a20bfa6ff3a0880faa0e75c0f5"
+       "sha256": "eef0edf1c1a943b6a88e34c4146684b4dfe6b59e50cdb4ac982e2ea04a88d525",
+       "gitBlob": "8b6802619b08ef1f38e104e12635094e613c8b17"
       },
       "chain": [
        {
         "patch": "background-control-frameworks-base.patch",
         "before": "e7313935847d1acb7b7e3889de26e54aad3e77ce",
-        "after": "9516c6806a3309d5802978717e5bdb510fcf65c5",
+        "after": "a35500ee45acc5622d8ce066285da4ccf213e166",
         "index": null,
         "base": "noIndex"
        },
        {
         "patch": "background-control-modern-frameworks-base.patch",
-        "before": "9516c6806a3309d5802978717e5bdb510fcf65c5",
-        "after": "c9abf67fb5457a98db8b191971d32ebd93f62915",
+        "before": "a35500ee45acc5622d8ce066285da4ccf213e166",
+        "after": "c250385b9263eb3c6d465137d82c02efa13800b9",
         "index": null,
         "base": "noIndex"
        },
        {
         "patch": "background-control-resource-import-fix.patch",
-        "before": "c9abf67fb5457a98db8b191971d32ebd93f62915",
-        "after": "47d588015c25b1f03fc6f9ba4e024607abebe587",
+        "before": "c250385b9263eb3c6d465137d82c02efa13800b9",
+        "after": "59f3818cf34f6b01c571683b7086a1090cec4b6a",
         "index": null,
         "base": "noIndex"
        },
        {
         "patch": "locked-control-frameworks-base.patch",
-        "before": "47d588015c25b1f03fc6f9ba4e024607abebe587",
-        "after": "7a0a3757f836e4a20bfa6ff3a0880faa0e75c0f5",
+        "before": "59f3818cf34f6b01c571683b7086a1090cec4b6a",
+        "after": "8b6802619b08ef1f38e104e12635094e613c8b17",
         "index": [
          "0a88d97",
          "5f4a32d"

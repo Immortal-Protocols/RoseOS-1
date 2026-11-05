@@ -111,6 +111,15 @@ CONFIRMATION = {
         'classpath inputs (the only new imports, android.app.ActivityManager, android.app.ActivityTaskManager, '
         'android.util.SparseBooleanArray and the framework constants WindowConfiguration.ACTIVITY_TYPE_STANDARD and '
         'ACTIVITY_TYPE_UNDEFINED, are in ComputerControlSessionImpl)',
+    'retrayed': 'OS Core to OS Product, 2026-11-05 02:23 UTC, from #563 head 6e2fb49 (F06 return refinements and the F08 '
+        'tray reachability signal): background-control-frameworks-base.patch sha256 '
+        '22fc3d7c92aa0ad6f3692dc31c2e33fc9816972be6f9899b14db9aaac447c6bd, only ComputerControlSessionImpl\'s after-image '
+        'changing (eef0edf1..., blob 8b680261); the required Shell overlays AgentTrayPrototype.java (2982f3f1..., blob '
+        '39576fcd), AgentTrayLink.java (fdfc3560..., blob 3dca283c) and AgentStatusControls.java (86e9ceb0..., blob '
+        'b5eb7993) change; rose-edge-wmshell.patch and its after-images, the WMShellModule pre-image, the goals and '
+        'flagEvidence (none) unchanged; no new files, flags or classpath inputs (new imports android.util.SparseArray, '
+        'android.database.ContentObserver, android.os.SystemProperties and android.provider.Settings are framework '
+        'classes)',
 }
 
 # Where each goal's sources come from, read from the pinned Android.bp files (committed byte for byte under
