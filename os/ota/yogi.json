@@ -65,9 +65,9 @@
       "dev.pixel.voice",
       "dev.pixel.calculator.agent"
     ],
-    "allocation": null,
+    "allocation": "os/ota/mustang-frankel-2026110403-allocation.json",
     "directory": null,
-    "basis": "Fleet Rose app identity, already-signed by the existing app signer (never signed on the Yogi builder). Release binds a producer allocation and delivers its signed-apps and background-policy.json to the Yogi builder; the pipeline re-verifies signer, receipts, versions and policy before integration."
+    "basis": "Fleet Rose app identity, already signed by the existing app signer (never signed on the Yogi builder). Bound to the Frankel 2026110403 set Mustang also uses (dev.pixel.voice 364, dev.pixel.calculator.agent 5, dev.pixel.backgroundcontrol 38; allocationSha256 f004a4c6...), per Release 2026-11-05. Status stays unbound until Release's export delivers those signed-apps and background-policy.json to the Yogi builder (directory); the pipeline re-verifies signer, receipts, versions and policy before integration."
   },
   "wire": {
     "tag": "yogi-{build}",

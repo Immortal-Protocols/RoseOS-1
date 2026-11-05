@@ -30,6 +30,11 @@ concurrency:
 permissions:
   contents: read
 
+# Inputs reach scripts through the environment only, never by expression inside run: lines.
+env:
+  STAGE: ${{ inputs.stage }}
+  PUBLISH: ${{ inputs.publish }}
+
 jobs:
   guard:
     runs-on: ubuntu-24.04
@@ -41,11 +46,11 @@ jobs:
       - name: Main only, attempt 1 only
         run: |
           [[ "$GITHUB_REF" == refs/heads/main && "$GITHUB_RUN_ATTEMPT" == 1 ]] || { echo "::error::yogi-ota runs once from main"; exit 1; }
-          [[ "${{ inputs.stage }}" == ota || "${{ inputs.publish }}" != true ]] || { echo "::error::bootstrap never publishes"; exit 1; }
+          [[ "$STAGE" == ota || "$PUBLISH" != true ]] || { echo "::error::bootstrap never publishes"; exit 1; }
       - name: Yogi prerequisites (refuses with the missing items by name)
         run: |
-          python3 scripts/yogi_ota.py guard --stage "${{ inputs.stage }}" --access
-          if [[ "${{ inputs.publish }}" == true ]]; then python3 scripts/yogi_ota.py guard --stage publish; fi
+          python3 scripts/yogi_ota.py guard --stage "$STAGE" --access
+          if [[ "$PUBLISH" == true ]]; then python3 scripts/yogi_ota.py guard --stage publish; fi
 
   controller:
     needs: guard
@@ -87,7 +92,7 @@ jobs:
         run: python3 scripts/yogi_ota.py allocate
       # The bootstrap integrates a copy of the retained lab tree; a later OTA copies the bootstrap's integrated tree.
       - run: |
-          if [[ "${{ inputs.stage }}" == bootstrap ]]; then
+          if [[ "$STAGE" == bootstrap ]]; then
             python3 scripts/yogi_ota.py prepare --build "${{ steps.allocate.outputs.build }}"
           else
             python3 scripts/yogi_ota.py prepare --build "${{ steps.allocate.outputs.build }}" \
@@ -112,9 +117,9 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - run: python3 scripts/yogi_ota.py guard --stage "${{ inputs.stage }}" --access
+      - run: python3 scripts/yogi_ota.py guard --stage "$STAGE" --access
       - run: python3 scripts/actions-gcp-login.py login "$GCP_SIGNER_SERVICE_ACCOUNT"
-      - run: python3 scripts/yogi_ota.py sign --build "$BUILD" --stage "${{ inputs.stage }}"
+      - run: python3 scripts/yogi_ota.py sign --build "$BUILD" --stage "$STAGE"
       - if: always()
         run: python3 scripts/actions-gcp-login.py logout
       - if: inputs.stage == 'bootstrap'
