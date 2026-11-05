@@ -12,6 +12,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.ServiceConnection;
+import android.database.ContentObserver;
 import android.graphics.Canvas;
 import android.graphics.Path;
 import android.graphics.Rect;
@@ -24,7 +25,9 @@ import android.os.Message;
 import android.os.Messenger;
 import android.os.RemoteException;
 import android.os.SystemClock;
+import android.os.SystemProperties;
 import android.os.UserHandle;
+import android.provider.Settings;
 import android.util.Log;
 import android.view.Display;
 import android.view.Gravity;
@@ -40,6 +43,13 @@ import com.android.wm.shell.common.DisplayInsetsController;
 public final class AgentTrayPrototype implements DisplayManager.DisplayListener {
     private static final String TAG = "AgentStatusWave";
     private static AgentTrayPrototype instance;
+    /**
+     * F08: the Rose raised edge's switch, read for REGISTER's arg2. Builds set it only with rose-edge-wmshell.patch
+     * (rose-edge-build-make.patch), and the edge's Shell controller reads the same switch. It is not checked by class
+     * name: SystemUI's R8 keep rule covers only this package, not com.android.wm.shell.roseedge.
+     */
+    private static final String EDGE_PROPERTY = "persist.wm.debug.rose_edge";
+    private int sentChin;
     private final AgentStatusControls controls = new AgentStatusControls();
     private boolean active;
     private long lastCommandAt;
@@ -164,6 +174,13 @@ public final class AgentTrayPrototype implements DisplayManager.DisplayListener 
                 reconcile();
             }
         }, filter, Context.RECEIVER_EXPORTED);
+        // F08: the chin's availability follows gesture navigation and the edge switch while subscribed.
+        context.getContentResolver().registerContentObserverAsUser(
+                Settings.Secure.getUriFor(Settings.Secure.NAVIGATION_MODE), false,
+                new ContentObserver(handler) {
+                    @Override public void onChange(boolean selfChange) { chinMaybeChanged(); }
+                }, UserHandle.SYSTEM);
+        SystemProperties.addChangeCallback(() -> handler.post(this::chinMaybeChanged));
         handler.post(() -> {
             if (!screenOff) link.screenOn(ActivityManager.getCurrentUser());
             reconcile();
@@ -188,8 +205,22 @@ public final class AgentTrayPrototype implements DisplayManager.DisplayListener 
     private boolean send(int action) {
         if (voice == null) return false;
         Message message = Message.obtain(null, action);
+        // F08: Rose Agent hides its own mute only where the chin can stand in for it.
+        if (action == AgentTrayLink.REGISTER) message.arg2 = sentChin = chinArg();
         message.replyTo = reply;
         try { voice.send(message); return true; } catch (RemoteException e) { return false; }
+    }
+
+    /** F08: REGISTER's arg2, read fresh for each REGISTER. */
+    private int chinArg() {
+        return AgentStatusControls.chinArg(SystemProperties.getBoolean(EDGE_PROPERTY, false), link.user(),
+                Settings.Secure.getIntForUser(context.getContentResolver(), Settings.Secure.NAVIGATION_MODE, 0,
+                        UserHandle.USER_SYSTEM));
+    }
+
+    /** Navigation mode or a property changed: REGISTER again only when the chin's availability did. */
+    private void chinMaybeChanged() {
+        if (chinArg() != sentChin) link.refresh();
     }
 
     private int dp(float value) {

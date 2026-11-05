@@ -59,6 +59,15 @@ final class AgentTrayLink {
         if (screenOn) ensure(currentUser);
     }
 
+    /**
+     * F08: what this client's REGISTER says changed (the Rose chin's availability, arg2). While subscribed, REGISTER
+     * again so the service updates it; the service answers every REGISTER with fresh state, so a repeat is harmless.
+     */
+    void refresh() {
+        if (!registered) return;
+        if (!port.send(REGISTER)) disconnected();
+    }
+
     /** onServiceConnected, possibly late (after screen-off or a repeated resume). */
     void connected() {
         if (!bound) return;

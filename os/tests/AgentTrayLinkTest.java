@@ -181,6 +181,25 @@ public final class AgentTrayLinkTest {
         link.retry(0);
         expect("a stale retry while off does not bind", 3L, port.log.stream().filter(e -> e.startsWith("bind")).count());
 
+        // F08: refresh re-sends REGISTER only while subscribed, so the service updates the chin mark.
+        port = subscribedAt(holder, 0);
+        link = holder[0];
+        port.clear();
+        link.refresh();
+        expect("refresh re-registers once while subscribed", List.of("REGISTER"), port.log);
+        expect("still one client in the service", 1, port.registeredClients);
+        expect("still subscribed", true, link.subscribed());
+        link.screenOff();
+        port.clear();
+        link.refresh();
+        expect("refresh while suspended sends nothing", List.of(), port.log);
+        link.screenOn(0);
+        port.clear();
+        port.sendOk = false;
+        link.refresh();
+        expect("a failed refresh drops the stale subscription", false, link.subscribed());
+        expect("and forgets the stale state", false, port.stateShown);
+
         System.out.println("AgentTrayLinkTest: " + checks + " checks passed");
     }
 }
