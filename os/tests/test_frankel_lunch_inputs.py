@@ -41,7 +41,7 @@ def blob(data):
 
 class FrankelLunchInputsTest(unittest.TestCase):
     # OS Product's proposed version (#410), not yet agreed with Release; once agreed, any change needs re-agreement.
-    PROPOSED_SHA256 = 'd259aae6d1984dea2ead3f929aeb7ce9a2807681f28147ce53deb2ada36ec4e3'
+    PROPOSED_SHA256 = '03b58acffac8b7c7d1e4b67daaf64d545307b804825f6360d86f3175c5a1dd2c'
 
     def manifest(self):
         return json.loads(MANIFEST.read_text())
@@ -231,6 +231,8 @@ class FrankelLunchInputsTest(unittest.TestCase):
             problems.append('shallow')
         if os.path.lexists(dot/'objects/info/alternates'):
             problems.append('alternates')
+        if any(os.path.lexists(dot/name) for name in ('gc.pid', 'gc.log', 'objects/maintenance.lock')):
+            problems.append('maintenance')
         config = self.git(copy, '-C', str(work), 'config', '--local', '--list', check=False).stdout
         if any(line.startswith('remote.') for line in config.splitlines()):
             problems.append('remote')
@@ -287,6 +289,37 @@ class FrankelLunchInputsTest(unittest.TestCase):
                         '--no-progress', check=False).returncode, 0, 'connectivity alone does not see the bytes')
                 self.assertIsNone(self.accepted(fake), name)
                 self.assertEqual(self.public_fetch_problems(fake, head, tree, listing), expected, name)
+
+    def test_the_public_fetch_spawns_no_maintenance_and_the_flag_is_what_stops_it(self):
+        """git fetch runs `git maintenance run --auto` afterwards, which newer Git can detach so that it outlives cleanup.
+        The contract's own steps spawn nothing; the same fetch without --no-auto-maintenance does (negative control)."""
+        fetch = self.manifest()['gitRequirement']['publicFetch']
+        self.assertIn('--no-tags --no-auto-maintenance <url>', fetch['steps'][1])
+        self.assertTrue(any('auto maintenance' in n for n in fetch['never']))
+        self.assertIn('no gc.pid, gc.log or objects/maintenance.lock in the gitdir', fetch['acceptance'])
+        with tempfile.TemporaryDirectory() as scratch:
+            scratch = Path(scratch)
+            head = self.commit(scratch, scratch/'origin')
+            def traced(drop_flag):
+                copy = scratch/('without' if drop_flag else 'with')
+                (copy/'vendor/adevtool').mkdir(parents=True)
+                spawned = []
+                for step in fetch['steps']:
+                    argv = step.replace('<copy>', str(copy)).replace('<url>', 'file://' + str(scratch/'origin')) \
+                        .replace(PIN, head).split(' ')
+                    if drop_flag:
+                        argv = [a for a in argv if a != '--no-auto-maintenance']
+                    run = subprocess.run(argv, cwd=copy, env=self.env(copy, GIT_ALLOW_PROTOCOL='file', GIT_TRACE='1'),
+                        capture_output=True, text=True, check=True)
+                    spawned += [line for line in run.stderr.splitlines() if 'run_command: git maintenance' in line
+                        or 'run_command: git gc' in line]
+                return spawned, copy
+            spawned, copy = traced(False)
+            self.assertEqual(spawned, [], 'the contract\'s steps spawn no maintenance')
+            self.head = head
+            self.assertIsNone(self.accepted(copy))
+            spawned, _ = traced(True)
+            self.assertTrue(spawned, 'negative control: without the flag, fetch spawns maintenance')
 
     def test_the_adevtool_working_tree_is_exactly_its_listing_and_gitignored_paths_are_omitted(self):
         manifest = self.manifest()
