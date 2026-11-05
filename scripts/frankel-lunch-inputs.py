@@ -388,7 +388,7 @@ def build():
                     'only, after the copy\'s own checks; never the source tree',
                 'steps': [
                     f'git init -q --template= <copy>/{ADEVTOOL}',
-                    f'git -C <copy>/{ADEVTOOL} fetch --quiet --depth=1 --no-tags <url> {adev}',
+                    f'git -C <copy>/{ADEVTOOL} fetch --quiet --depth=1 --no-tags --no-auto-maintenance <url> {adev}',
                     f'git -C <copy>/{ADEVTOOL} update-ref --no-deref HEAD {adev}',
                 ],
                 'environment': {'unset': 'GIT_*', 'GIT_CONFIG_NOSYSTEM': '1', 'GIT_CONFIG_GLOBAL': '/dev/null',
@@ -398,7 +398,10 @@ def build():
                 'never': ['--reference, --shared, --dissociate or --separate-git-dir', 'objects/info/alternates',
                     'a configured remote', 'inherited system or global config', 'hooks or templates',
                     'any command that reads or writes the working tree (checkout, reset, status, add)',
-                    'tags or any ref other than HEAD'],
+                    'tags or any ref other than HEAD',
+                    'auto maintenance or gc after the fetch (git maintenance run --auto, which newer Git can detach so '
+                        'that it outlives cleanup): --no-auto-maintenance stops it, and Git without that option refuses '
+                        'it, so the attempt fails closed'],
                 'acceptance': [
                     'gitRequirement.acceptance items 1-3, unchanged',
                     'rev-parse --verify revision^{tree} is exactly rootTree (Blazer checks only that it exists)',
@@ -408,6 +411,7 @@ def build():
                         f'sources[{ADEVTOOL}].listing (its sha256)',
                     'shallow is exactly revision plus one newline',
                     'no objects/info/alternates and no remote.* key in git config --local --list',
+                    'no gc.pid, gc.log or objects/maintenance.lock in the gitdir',
                     'workingTree holds',
                 ],
                 'establishes': 'the genuine objects of public commit revision, by content addressing (commit, tree, '

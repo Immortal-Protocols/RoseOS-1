@@ -508,9 +508,12 @@ def space(stage, recipe, where, statvfs, facts, problems):
 
 def git_meta_argv(work, url, revision):
     """One project's metadata, in order: a new .git with no templates (no hooks), exactly REVISION at depth 1 with no
-    tags, and a detached HEAD written by update-ref. No command checks out, resets or reads the working tree."""
+    tags and no auto maintenance, and a detached HEAD written by update-ref. No command checks out, resets or reads the
+    working tree. --no-auto-maintenance stops fetch spawning `git maintenance run --auto`, which newer Git can detach
+    (maintenance.autoDetach) beyond this stage's supervision and cleanup; Git without the option refuses it as unknown,
+    so the stage fails closed rather than silently running maintenance."""
     return [['git', 'init', '-q', '--template=', str(work)],
-            ['git', '-C', str(work), 'fetch', '--quiet', '--depth=1', '--no-tags', url, revision],
+            ['git', '-C', str(work), 'fetch', '--quiet', '--depth=1', '--no-tags', '--no-auto-maintenance', url, revision],
             ['git', '-C', str(work), 'update-ref', '--no-deref', 'HEAD', revision]]
 
 def git_meta_env(src, home, url_prefix):
