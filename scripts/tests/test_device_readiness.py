@@ -110,7 +110,7 @@ class WorkflowTest(unittest.TestCase):
             'readiness job with an id token': WORKFLOW.replace(READINESS_JOB, READINESS_JOB.replace('      contents: read\n',
                 '      contents: read\n      id-token: write\n')),
             'readiness job with more time': WORKFLOW.replace(READINESS_JOB, READINESS_JOB.replace('timeout-minutes: 20', 'timeout-minutes: 720')),
-            'builder in readiness mode': WORKFLOW.replace("    if: inputs.mode == 'os-release' || inputs.mode == 'latest-beta'\n", "    if: inputs.mode == 'os-release' || inputs.mode == 'device-readiness'\n"),
+            'builder in readiness mode': WORKFLOW.replace("    if: inputs.mode == 'os-release' || (inputs.mode == 'latest-beta' || inputs.mode == 'latest-draft')\n", "    if: inputs.mode == 'os-release' || inputs.mode == 'device-readiness'\n"),
             'unbound candidate': WORKFLOW.replace('[[ "$MODE" != device-readiness || "$CANDIDATE_SHA" == "$GITHUB_SHA" ]]', 'true'),
             'secret in the readiness job': WORKFLOW.replace("      - name: Inspect the retained tree", "      - env:\n          K: ${{ secrets.PIXEL_OTA_APP_PRIVATE_KEY }}\n        name: Inspect the retained tree"),
         }

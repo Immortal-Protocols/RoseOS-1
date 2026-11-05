@@ -1456,7 +1456,7 @@ class WorkflowAlphaTest(unittest.TestCase):
                               'rango-factory-inspect', 'launcher3-compile', 'blazer-compile', 'blazer-integrate', 'app-builder',
                               'alpha-builder', 'alpha-successor', 'alpha-apk-diagnostic', 'alpha-verify-retained', 'alpha-export',
                               'app-reuse', 'request-signing', 'signed-builder', 'publisher'}, set(shape.cleanup_needs()))
-        self.assertIn("    if: inputs.mode == 'os-release' || inputs.mode == 'latest-beta'\n", self.jobs['builder'])
+        self.assertIn("    if: inputs.mode == 'os-release' || (inputs.mode == 'latest-beta' || inputs.mode == 'latest-draft')\n", self.jobs['builder'])
         self.assertIn('    needs: [builder, signed-builder]\n', self.jobs['publisher'])
 
     def test_successor_mode_is_isolated_and_runs_exactly_the_bound_sequence(self):
@@ -1481,7 +1481,8 @@ class WorkflowAlphaTest(unittest.TestCase):
         self.assertIn('          name: emulator-alpha-successor-${{ github.run_id }}\n          path: ${{ env.ROSE_BASE }}/evidence\n', job)
         self.assertIn("      - name: Remove the attempt directory (the successor and probe receipts stay beside the predecessor)\n        if: always()\n", job)
         # No other job runs in this mode: each builder job is bound to its own mode, the publishers to theirs.
-        for name, mode in (('builder', "os-release' || inputs.mode == 'latest-beta"), ('app-builder', 'app-only'), ('alpha-builder', 'emulator-alpha')):
+        self.assertIn("    if: inputs.mode == 'os-release' || (inputs.mode == 'latest-beta' || inputs.mode == 'latest-draft')\n", self.jobs['builder'])
+        for name, mode in (('app-builder', 'app-only'), ('alpha-builder', 'emulator-alpha')):
             self.assertIn(f"    if: inputs.mode == '{mode}'\n", self.jobs[name])
         self.assertIn("      ((inputs.mode == 'app-only' && needs.app-builder.result == 'success' && needs.app-builder.outputs.app_skip != 'true') ||\n"
             "      (inputs.mode == 'app-reuse' && needs.app-reuse.result == 'success'))\n", self.jobs['app-publisher'])

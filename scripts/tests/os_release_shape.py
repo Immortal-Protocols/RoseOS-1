@@ -58,6 +58,13 @@ def dispatch_env(workflow=None, **change):
     block = workflow.split('\nenv:\n', 1)[1].split('\njobs:\n', 1)[0]
     env = {}
     for name, expression in re.findall(r'(?m)^  ([A-Z][A-Z0-9_]*): (.+)$', block):
+        # latest-draft is an input alias for the normal allocator, with promotion disabled.
+        if name == 'DRAFT_ONLY' and expression == "${{ inputs.mode == 'latest-draft' }}":
+            env[name] = 'true' if declared['mode']['default'] == 'latest-draft' else 'false'
+            continue
+        if name == 'MODE' and expression == "${{ inputs.mode == 'latest-draft' && 'latest-beta' || inputs.mode }}":
+            env[name] = 'latest-beta' if declared['mode']['default'] == 'latest-draft' else declared['mode']['default']
+            continue
         match = re.fullmatch(r"\$\{\{ inputs\.(\w+)(?: \|\| '([^']*)')? \}\}", expression.strip())
         assert match and match[1] in declared, f'unrecognised workflow env {name}: {expression}'
         value = declared[match[1]]['default']
