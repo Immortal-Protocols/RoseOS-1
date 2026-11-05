@@ -64,7 +64,11 @@ class ContractTest(unittest.TestCase):
         self.assertEqual(cfg['builder']['instance'], 'roseos-yogi-builder-20261103-a')
         self.assertEqual(cfg['signing']['secrets'], {'keys': 'PIXEL_OS_SIGNING_KEYS_YOGI_V1',
                                                      'passphrase': 'PIXEL_OS_SIGNING_PASSPHRASE_YOGI_V1'})
-        self.assertFalse(cfg['labBaseline']['otaCapable'])
+        lab = cfg['labBaseline']
+        self.assertFalse(lab['artifactPackagesUpdater'])
+        self.assertFalse(lab['installedBuildVerified'])  # unknowns stay recorded as unknown, not as impossibility
+        self.assertFalse(lab['installedOtaTrustInspected'])
+        self.assertIn('Proposed supported design', lab['reason'])
         self.assertIsNone(cfg['bootstrap']['build'])
         self.assertFalse((yogi.ROOT/cfg['signing']['bootstrapReceipt']).exists(),
                          'no Yogi pins may be claimed before the authorized bootstrap')

@@ -41,8 +41,10 @@
     "source": "c47898373a72fc856517a91c0cf13e75c8b80662",
     "appSignerSha256": "a40da80a59d170caa950cf15c18c454d47a39b26989d8b640ecd745ba71bf5dc",
     "avbPublicKeySha256": "7728e30f50bfa5cea165f473175a08803f6a8346642b5aa10913e9d9e6defef6",
-    "otaCapable": false,
-    "reason": "Public AOSP development keys and no packaged Updater: it cannot discover a Yogi OTA and its update_engine trusts only the public test key. A one-time, separately authorized wipe installation of the Yogi bootstrap build is required; userdata and metadata are erased."
+    "artifactPackagesUpdater": false,
+    "installedBuildVerified": false,
+    "installedOtaTrustInspected": false,
+    "reason": "Established from the recorded artifact inspection: no packaged Updater, test-keys build tags, public AOSP development AVB and app identities. Not established: that the phone runs exactly this artifact (no installed-build readback), its installed OTA trust contents, and whether any sideload or data-preserving transition is possible. Proposed supported design: a one-time, separately authorized wipe installation of the Yogi bootstrap build (userdata and metadata erased), then in-place OTAs."
   },
   "bootstrap": {
     "status": "not-built",

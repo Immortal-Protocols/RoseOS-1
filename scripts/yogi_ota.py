@@ -11,8 +11,9 @@ Hosted:   guard --stage bootstrap|ota|publish [--access] | builder state|start|s
 Builder:  preflight | allocate | prepare | integrate | compile | sign | install-image | stage
 
 bootstrap (build A) compiles and signs the first Yogi-key image with the owned Updater and writes a private fastboot
-install image. Installing it is a one-time WIPE (userdata and metadata), separately authorized by the phone owner; the
-lab image (public test keys, no Updater) can never take a Yogi OTA. ota (build B and later) compiles, signs, checks
+install image. The proposed supported design installs it once with a WIPE (userdata and metadata), separately
+authorized by the phone owner: the lab artifact packages no Updater and uses public development keys, while its
+installed OTA trust and any other transition path remain uninspected. ota (build B and later) compiles, signs, checks
 and stages a full A/B OTA newer than the bootstrap, signed by the same Yogi identity, for publication as yogi-{build}.
 No key generation, IAM, phone action or automatic trigger. Exit status: 0 ok, 1 refused or failed, 2 usage.
 """
@@ -617,8 +618,8 @@ def install_image(cfg, build, run=subprocess.run):
               'avbPublicKeySha256': pins['avbPublicKeySha256'],
               'instructions': ['fastboot erase avb_custom_key', 'fastboot flash avb_custom_key avb_pkmd.bin',
                                f'fastboot -w update {image.name}'],
-              'basis': 'One-time wipe installation of build A; erases userdata and metadata. Requires the owner\'s '
-                       'separate explicit authorization; the bootloader stays unlocked; no relock.'}
+              'basis': 'Proposed supported design: one-time wipe installation of build A; erases userdata and metadata. '
+                       'Requires the owner\'s separate explicit authorization; the bootloader stays unlocked; no relock.'}
     release_receipts.write_once(out/'install-receipt.json', record)
     return record
 

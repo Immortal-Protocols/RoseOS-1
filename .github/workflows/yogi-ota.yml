@@ -6,7 +6,7 @@ run-name: yogi-ota ${{ inputs.stage }} ${{ github.run_id }}
 # Mustang or Agent run never waits for it and its failure or cleanup never stops them. Manual dispatch only; no
 # schedule or automatic trigger. Every job is refused by scripts/yogi_ota.py until os/ota/yogi.json records its
 # prerequisite (registered runner, Yogi app inputs, Yogi bootstrap receipt, approved signing window, publication).
-#   bootstrap: build A - compile, sign with the Yogi key set, private fastboot install image (one-time WIPE install,
+#   bootstrap: build A - compile, sign with the Yogi key set, private fastboot install image (proposed one-time WIPE install,
 #              separately authorized). Nothing is published.
 #   ota:       build B and later - compile, sign, check and stage a full OTA newer than A; publish yogi-{build}
 #              (OTA first, yogi-stable last, never Latest) only when publish is true and publication is enabled.

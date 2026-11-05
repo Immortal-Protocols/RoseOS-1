@@ -8,22 +8,34 @@ it needs. See [YOGI-BUILD.md](YOGI-BUILD.md) for the port and the lab build, and
 
 ## Bootstrap and identity decision
 
-The installed lab image (`2026110401`, Rose `c478983`) **cannot take any Yogi OTA**:
+**Established (source evidence).** The lab artifact `2026110401` (Rose `c478983`),
+per the artifact inspection recorded in [YOGI-BUILD.md](YOGI-BUILD.md):
 
-- it packages no Updater (the lab recipe used `--keep-upstream-updater`, which by
-  design ships none), so it cannot discover a release;
-- its system OTA trust is the public AOSP test key, so update_engine would reject an
-  OTA signed by a Yogi release key;
-- its platform/app signers are public development identities (app
-  `a40da80a…f5dc`, AVB `7728e30f…fef6`). Moving system apps and shared UIDs to
-  other signers over existing userdata is not a supported continuity path.
+- packages no Updater ("No Updater is included"; the lab recipe kept the upstream
+  Updater with `OFFICIAL_BUILD` unset, and `apply-os-changes.py
+  --keep-upstream-updater` ships none by design), so that image has no owned
+  updater to discover a Yogi release;
+- carries `test-keys` build tags, AVB public key `7728e30f…fef6` and Rose app
+  signer `a40da80a…f5dc`, all public AOSP development identities.
 
-So the first Yogi release identity starts with a **one-time wipe installation** of
-bootstrap build A. It erases userdata and metadata (apps and their data, accounts,
-Rose pairing and endpoint state, settings, media, keystore keys). Bootloader and
-radio are kept; the bootloader stays unlocked; nothing is relocked. It needs the
-phone owner's separate explicit authorization. Publication does not wait for it.
-Every later Yogi OTA updates A in place without data loss.
+**Not established.** That the phone runs exactly this artifact (installation is
+owner-reported; ADB returned `error: closed`, so there is no installed-build
+readback); the actual contents of its system OTA trust (`otacerts.zip`) and
+recovery/update_engine acceptance, which were not inspected; and therefore whether
+some sideload or data-preserving transition from the lab image is possible. Missing
+an Updater rules out in-place discovery by that image, not every other path. No
+data-preserving transition across signing identities is claimed either way.
+
+**Proposed supported design (a decision, not a proven necessity).** Start the
+durable Yogi identity with bootstrap build A, installed once by a fastboot wipe:
+it erases userdata and metadata (apps and their data, accounts, Rose pairing and
+endpoint state, settings, media, keystore keys); bootloader and radio are kept,
+the bootloader stays unlocked, nothing is relocked. It needs the phone owner's
+separate explicit authorization. Publication of OTA B does not wait for it: B
+only has to be newer than A and signed by A's identity. Every later Yogi OTA then
+updates A in place. Any alternative (for example a test-key-signed transition
+package) would first need the unknowns above inspected under separate authority
+and would remain a lab experiment until verified.
 
 | Trust element | Yogi contract |
 | --- | --- |
@@ -84,7 +96,7 @@ locks and queues; nothing here edits `os-release.yml` or `release-pipeline.py`.
 | `yogi-v1` profile with Yogi builder tool paths; the two containers; a time-boxed version-adder for one bootstrap; a time-boxed accessor on version 1; escrow decision | Signing, approved by Nathan | profile `resource-bound`, bootstrap receipt, `signing.access` |
 | Signed fleet apps + background policy delivered to the Yogi VM, and a bound allocation | Release | `appInputs` |
 | Yogi publication in pixel-ota | Nathan | `publicationEnabled: true` |
-| One-time wipe install of A, and ADB readback | Phone owner | `bootstrap.installEvidence` (not a publication gate) |
+| One-time wipe install of A (proposed design), and ADB readback | Phone owner | `bootstrap.installEvidence` (not a publication gate) |
 
 First-run assumptions to confirm on the builder (each fails closed): the private
 cover-display input holds a decimal `referenceDisplayAddress`; `aapt`/`apksigner`
