@@ -1,9 +1,9 @@
 diff --git a/libs/WindowManager/Shell/src/com/android/wm/shell/RoseEdgeMicSlot.java b/libs/WindowManager/Shell/src/com/android/wm/shell/RoseEdgeMicSlot.java
 new file mode 100644
-index 0000000..3a9ef4b
+index 0000000..0aa0b49
 --- /dev/null
 +++ b/libs/WindowManager/Shell/src/com/android/wm/shell/RoseEdgeMicSlot.java
-@@ -0,0 +1,393 @@
+@@ -0,0 +1,395 @@
 +/*
 + * Copyright 2026
 + * SPDX-License-Identifier: Apache-2.0
@@ -205,6 +205,8 @@ index 0000000..3a9ef4b
 +    private boolean send(int what) {
 +        if (mVoice == null) return false;
 +        final Message message = Message.obtain(null, what);
++        // F08: Rose Agent tells this chin from the SystemUI tray (same component and uid) by REGISTER's arg1.
++        if (what == AgentTrayLink.REGISTER) message.arg1 = RoseEdgePolicy.MIC_CLIENT_CHIN;
 +        message.replyTo = mReply;
 +        try {
 +            mVoice.send(message);
@@ -1036,10 +1038,10 @@ index 0000000..6d064bb
 +}
 diff --git a/libs/WindowManager/Shell/src/com/android/wm/shell/roseedge/RoseEdgePolicy.java b/libs/WindowManager/Shell/src/com/android/wm/shell/roseedge/RoseEdgePolicy.java
 new file mode 100644
-index 0000000..6ac0dda
+index 0000000..2c66404
 --- /dev/null
 +++ b/libs/WindowManager/Shell/src/com/android/wm/shell/roseedge/RoseEdgePolicy.java
-@@ -0,0 +1,314 @@
+@@ -0,0 +1,319 @@
 +/*
 + * Copyright 2026
 + * SPDX-License-Identifier: Apache-2.0
@@ -1165,6 +1167,11 @@ index 0000000..6ac0dda
 +    /** AgentTrayService's MUTE and UNMUTE; the slot never sends START (3) or END (6). */
 +    public static final int MIC_MUTE = 4;
 +    public static final int MIC_UNMUTE = 5;
++    /**
++     * REGISTER's arg1 from the chin (F08, agreed with Home and OS Product): Rose Agent hides its own mute only while
++     * a trusted chin client is registered. The SystemUI tray sends 0, and an older Agent ignores arg1.
++     */
++    public static final int MIC_CLIENT_CHIN = 1;
 +    public static final int MIC_SLOT_MIN_DP = 32;
 +    public static final int MIC_SLOT_MAX_DP = 64;
 +    public static final long MIC_TAP_MAX_MS = 400;
