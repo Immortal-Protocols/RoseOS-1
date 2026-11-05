@@ -12,6 +12,7 @@ the adevtool public fetch runs real git against a local stand-in repository over
 tests allow: the adapter's own default is https from the pinned manifest's source, and the reviewed contract admits no
 public fetch yet, so the route is refused (exit 4) until OS Product's amendment and the re-pin land together."""
 import contextlib
+import fcntl
 import gzip
 import hashlib
 import importlib.util
@@ -23,6 +24,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import signal
 import time
 import unittest
 import unittest.mock
@@ -1076,9 +1078,508 @@ class Processes(unittest.TestCase):
                                                 used=lambda path: next(used))[1], 'output')
             self.assertLess(time.monotonic() - start, 20)
             self.assertEqual(adapter.supervised([sys.executable, '-c', 'pass'], dict(os.environ), '/', 60, '/',
-                                                rss=lambda pid: 0), (0, None))
+                                                rss=lambda pid: 0), (0, None, True))
         finally:
             adapter.SAMPLE_SECONDS = saved
+
+    # Cleanup pins the process identity before signalling, including after a passing test. A recycled PID is
+    # never killed: each child writes a birth stat next to its pid file, and pidfd binds the final check to the signal.
+    def reap_later(self, *pid_files, pids=()):
+        births = {pid: adapter.proc_stat(Path('/proc')/str(pid)) for pid in pids}
+
+        def reap():
+            expected = dict(births)
+            for path in pid_files:
+                try:
+                    pid = int(path.read_text())
+                    fields = Path(str(path) + '.stat').read_bytes().rsplit(b')', 1)[1].split()
+                    expected[pid] = (None, None, None, int(fields[19]))
+                except (OSError, ValueError, IndexError):
+                    continue
+            for pid, birth in expected.items():
+                if birth is None:
+                    continue
+                with contextlib.suppress(ProcessLookupError, PermissionError):
+                    fd = os.pidfd_open(pid)
+                    try:
+                        current = adapter.proc_stat(Path('/proc')/str(pid))
+                        if current is not None and current[3] == birth[3]:
+                            signal.pidfd_send_signal(fd, signal.SIGKILL)
+                    finally:
+                        os.close(fd)
+        self.addCleanup(reap)
+
+    def member_pid(self, path):
+        end = time.monotonic() + 20
+        while not (path.exists() and path.read_text().strip()):
+            self.assertLess(time.monotonic(), end, 'the stage never started')
+            time.sleep(0.05)
+        return int(path.read_text())
+
+    @staticmethod
+    def live(pid):
+        """Whether pid is a live process (a zombie is not: it waits only for its reaper)."""
+        try:
+            return Path(f'/proc/{pid}/stat').read_bytes().rsplit(b')', 1)[1].split()[0] != b'Z'
+        except (FileNotFoundError, ProcessLookupError):
+            return False
+
+    def start(self, script, work):
+        proc = subprocess.Popen(['bash', '-c', script], cwd=work, start_new_session=True, stdin=subprocess.DEVNULL,
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.reap_later(work/'member', pids=(proc.pid,))
+        return proc
+
+    def test_a_member_that_outlives_its_leader_is_killed_too(self):
+        work = Path(tempfile.mkdtemp())
+        # the member ignores TERM; the leader does not, so it exits first and the member is left running
+        proc = self.start('trap "" TERM; sleep 600 & echo $! > member; cat /proc/$!/stat > member.stat; trap - TERM; wait', work)
+        member = self.member_pid(work/'member')
+        start = time.monotonic()
+        self.assertTrue(adapter.end_session(proc, grace=1))
+        self.assertFalse(self.live(member))
+        self.assertLess(time.monotonic() - start, 10)
+        self.assertEqual(adapter.session_members(proc.pid), {})
+
+    def test_a_member_in_another_process_group_of_the_session_is_ended(self):
+        """ninja gives each job its own process group inside the stage's session; set -m does the same here."""
+        work = Path(tempfile.mkdtemp())
+        proc = self.start('set -m; (trap "" TERM; exec sleep 600) & echo $! > member; cat /proc/$!/stat > member.stat; wait', work)
+        member = self.member_pid(work/'member')
+        stat = adapter.proc_stat(Path(f'/proc/{member}'))
+        self.assertEqual(stat[2], proc.pid)  # the same session
+        self.assertNotEqual(stat[1], proc.pid)  # its own process group
+        self.assertTrue(adapter.end_session(proc, grace=1))
+        self.assertFalse(self.live(member))
+
+    def test_a_stopped_session_is_woken_to_its_term(self):
+        """TERM stays pending on a stopped process; the CONT after it lets it take TERM now, not at KILL after the grace."""
+        work = Path(tempfile.mkdtemp())
+        proc = self.start('sleep 600 & echo $! > member; cat /proc/$!/stat > member.stat; wait', work)
+        member = self.member_pid(work/'member')
+        for pid in (member, proc.pid):
+            os.kill(pid, signal.SIGSTOP)
+        start = time.monotonic()
+        self.assertTrue(adapter.end_session(proc, grace=6))
+        self.assertLess(time.monotonic() - start, 4)  # well before the 6 s grace would have run out
+        self.assertFalse(self.live(member))
+
+    def test_a_gone_session_is_never_signalled_and_an_unreadable_table_fails_closed(self):
+        proc = subprocess.Popen(['true'], start_new_session=True)
+        proc.wait()
+        with unittest.mock.patch.object(adapter.os, 'killpg') as killpg:
+            self.assertTrue(adapter.end_session(proc, grace=1))
+        killpg.assert_not_called()
+        work = Path(tempfile.mkdtemp())
+        proc = self.start('sleep 600', work)
+        clock = iter(range(0, 1000, 5))
+        self.assertFalse(adapter.end_session(proc, clock=lambda: next(clock), sleep=lambda s: None, grace=1,
+                                             members=lambda sid: None))  # never confirmed gone
+        proc.wait(timeout=10)  # the leader's own group was still sent TERM and KILL
+
+    def test_the_process_table_is_read_as_bytes_whatever_the_names(self):
+        proc_dir = Path(tempfile.mkdtemp())
+        for pid, comm, state, pgid, sid in ((101, b'n\xc3\xa9\xc3\xa9) (x', b'S', 101, 100), (102, b'\xff\xfe', b'R', 102, 100),
+                                            (103, b'zombie', b'Z', 100, 100), (104, b'other', b'S', 104, 104)):
+            (proc_dir/str(pid)).mkdir()
+            rest = b' '.join([state, b'1', str(pgid).encode(), str(sid).encode()] + [b'0'] * 15 + [b'777'])  # field 22
+            (proc_dir/str(pid)/'stat').write_bytes(str(pid).encode() + b' (' + comm + b') ' + rest)
+        self.assertEqual(adapter.session_members(100, proc_dir), {101: 101, 102: 102})
+        self.assertEqual(adapter.proc_stat(proc_dir/'101'), ('S', 101, 100, 777))
+        (proc_dir/'105').mkdir()
+        (proc_dir/'105'/'stat').write_bytes(b'105 (cut')  # neither gone nor readable: the table fails closed
+        self.assertIsNone(adapter.session_members(100, proc_dir))
+
+    def test_the_memory_stop_counts_every_process_group_of_the_session(self):
+        proc_dir, page = Path(tempfile.mkdtemp()), os.sysconf('SC_PAGE_SIZE')
+        for pid, pgid, sid, pages in ((101, 101, 101, 10), (102, 102, 101, 20), (103, 103, 101, 30), (104, 104, 104, 999)):
+            (proc_dir/str(pid)).mkdir()
+            rest = b' '.join([b'S', b'1', str(pgid).encode(), str(sid).encode()] + [b'0'] * 15 + [b'777'])
+            (proc_dir/str(pid)/'stat').write_bytes(str(pid).encode() + b' (job) ' + rest)
+            (proc_dir/str(pid)/'statm').write_bytes(f'{2 * pages} {pages} 0 0 0 0 0\n'.encode())
+        self.assertEqual(adapter.session_rss(101, proc_dir), 60 * page)  # the leader's group and ninja's job groups
+
+    def test_every_scan_signals_the_groups_it_finds_and_a_refusing_group_stops_none_of_the_rest(self):
+        class Leader:
+            pid, returncode = 4242, None
+
+            def poll(self):
+                return self.returncode
+        scans = iter([{4242: 4242}, {4242: 4242, 4300: 4300}, {4242: 4242, 4300: 4300, 4400: 4400}]
+                     + [{4300: 4300, 4400: 4400}] * 100)
+        sent, tick = [], iter(range(1000))
+
+        def killpg(pgid, sig):
+            sent.append((pgid, sig))
+            if pgid == 4300:  # a group none of whose members may be signalled
+                raise PermissionError(1, 'Operation not permitted')
+        with unittest.mock.patch.object(adapter.os, 'killpg', side_effect=killpg):
+            self.assertFalse(adapter.end_session(Leader(), clock=lambda: next(tick) * 0.25, sleep=lambda s: None,
+                                                 grace=1, members=lambda sid: next(scans)))
+        for sig in (signal.SIGTERM, signal.SIGKILL):  # 4400 appeared after the first scan, beside a group that refuses
+            self.assertTrue({(4242, sig), (4300, sig), (4400, sig)} <= set(sent), sig)
+        self.assertGreater(sent.count((4400, signal.SIGKILL)), 1)  # KILL again at every scan
+        self.assertEqual(sent.count((4400, signal.SIGTERM)), 1)  # TERM once to each group, as it is found
+
+    def test_any_failure_during_a_stage_ends_its_session_and_an_interrupt_records_it(self):
+        for name, stage in (('supervised', lambda argv, sleep: adapter.supervised(argv, dict(os.environ), '/', 600, '/',
+                                                                                  rss=lambda pid: 0, sleep=sleep)),
+                            ('bounded_git', lambda argv, sleep: adapter.bounded_git(argv, dict(os.environ), '/',
+                                                                                    time.monotonic() + 600, '/', 1 << 40,
+                                                                                    measure=lambda path: 0, sleep=sleep))):
+            for failure in (adapter.Interrupted('SIGTERM'), RuntimeError('a defect')):
+                with self.subTest(stage=name, failure=type(failure).__name__):
+                    work = Path(tempfile.mkdtemp())
+                    self.reap_later(work/'member')
+                    calls, end = [], time.monotonic() + 20
+
+                    def sleep(seconds):
+                        calls.append(seconds)
+                        if len(calls) == 1:  # the first sample: the failure arrives here, once the member exists
+                            while not (work/'member').exists():
+                                self.assertLess(time.monotonic(), end, 'the stage never started')
+                                time.sleep(0.05)
+                            raise failure
+                        time.sleep(min(seconds, 0.2))
+                    with unittest.mock.patch.object(adapter, 'INTERRUPT_GRACE_SECONDS', 1), \
+                            self.assertRaises(type(failure)) as raised:
+                        stage(['bash', '-c', f'set -m; (trap "" TERM; exec sleep 600) & echo $! > {work}/member; cat /proc/$!/stat > {work}/member.stat; wait'],
+                              sleep)
+                    self.assertFalse(self.live(int((work/'member').read_text())))
+                    if isinstance(failure, adapter.Interrupted):
+                        self.assertEqual(raised.exception.stages[-1]['sessionEnded'], True)
+
+    def stage_with(self, work, on_first_sleep, **patches):
+        """supervised on a stage whose leader and member ignore TERM, with on_first_sleep() run at its first poll once
+        the member exists, under a fresh interrupts() state."""
+        self.reap_later(work/'member')
+        calls, end = [], time.monotonic() + 20
+
+        def sleep(seconds):
+            calls.append(seconds)
+            if len(calls) == 1:
+                while not (work/'member').exists():
+                    self.assertLess(time.monotonic(), end, 'the stage never started')
+                    time.sleep(0.05)
+                on_first_sleep()
+            time.sleep(min(seconds, 0.05))
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(unittest.mock.patch.dict(adapter._INTERRUPT, {'deferring': 0, 'pending': None,
+                                                                                'raised': False}))
+            stack.enter_context(unittest.mock.patch.object(adapter, 'INTERRUPT_GRACE_SECONDS', 1))
+            for name, value in patches.items():
+                stack.enter_context(unittest.mock.patch.object(adapter, name, value))
+            try:
+                return adapter.supervised(['bash', '-c', f'trap "" TERM; sleep 600 & echo $! > {work}/member; cat /proc/$!/stat > {work}/member.stat; wait'],
+                                          dict(os.environ), '/', 600, '/', rss=lambda pid: 0, sleep=sleep)
+            finally:
+                self.assertEqual(adapter._INTERRUPT['deferring'], 0)
+
+    def hold(self, name='SIGINT'):
+        adapter._INTERRUPT['pending'] = name  # what interrupts() does with a signal while a stage runs
+
+    def test_a_signal_held_while_a_stage_runs_is_taken_at_its_next_poll_and_its_session_ended(self):
+        work = Path(tempfile.mkdtemp())
+        start = time.monotonic()
+        with self.assertRaises(adapter.Interrupted) as raised:
+            self.stage_with(work, self.hold)
+        self.assertEqual((str(raised.exception), raised.exception.stages),
+                         ('SIGINT', [{'stage': 'stage', 'started': True, 'sessionEnded': True}]))
+        self.assertFalse(self.live(int((work/'member').read_text())))
+        self.assertLess(time.monotonic() - start, 15)
+
+    def test_a_failure_while_an_interrupt_is_held_leaves_as_that_interrupt(self):
+        def fail():
+            self.hold('SIGTERM')
+            raise OSError(28, 'No space left on device')  # the stage fails just as the outer timeout's TERM is held
+        work = Path(tempfile.mkdtemp())
+        with self.assertRaises(adapter.Interrupted) as raised:
+            self.stage_with(work, fail)
+        self.assertIsInstance(raised.exception.__cause__, OSError)
+        self.assertEqual(raised.exception.stages, [{'stage': 'stage', 'started': True, 'sessionEnded': True}])
+        self.assertFalse(self.live(int((work/'member').read_text())))
+
+    def test_an_interrupt_pending_during_a_stop_cuts_its_graces_to_the_interrupt_budget(self):
+        class Leader:
+            pid, returncode = 4242, None
+
+            def poll(self):
+                return self.returncode
+        now = [0.0]
+
+        def sleep(seconds):
+            now[0] += seconds
+        with unittest.mock.patch.dict(adapter._INTERRUPT, {'deferring': 1, 'pending': 'SIGINT', 'raised': False}), \
+                unittest.mock.patch.object(adapter.os, 'killpg'):
+            self.assertFalse(adapter.end_session(Leader(), clock=lambda: now[0], sleep=sleep, grace=30,
+                                                 members=lambda sid: {4242: 4242}))  # a member that never goes
+        self.assertLessEqual(now[0], 2 * (adapter.INTERRUPT_GRACE_SECONDS + adapter.POLL_SECONDS))  # not 2 x 30 s
+
+    def test_a_signal_during_a_failed_stages_cleanup_cannot_cut_it_short(self):
+        """The stage fails (here ENOSPC at its first poll), and the outer timeout's TERM arrives while its session is
+        being ended: the cleanup still TERMs and KILLs the whole session, and the run leaves as that interrupt."""
+        work = Path(tempfile.mkdtemp())
+        script = self.driver(work, """
+calls = []
+def sleep(seconds):
+    calls.append(seconds)
+    if len(calls) == 1:
+        end = time.monotonic() + 20
+        while not os.path.exists(os.path.join(WORK, 'member')) and time.monotonic() < end:
+            time.sleep(0.02)
+        raise OSError(28, 'No space left on device')
+    if len(calls) == 2:  # the cleanup's first poll
+        os.kill(os.getpid(), signal.SIGTERM)
+    time.sleep(min(seconds, 0.05))
+try:
+    with a.interrupts():
+        a.supervised(STAGE, dict(os.environ), '/', 600, '/', rss=lambda pid: 0, sleep=sleep, stage=stage)
+except a.Interrupted as error:
+    print(json.dumps([str(error), type(error.__cause__).__name__, error.stages]))
+    sys.exit(3)
+""")
+        result = subprocess.run([sys.executable, str(script)], capture_output=True, text=True, timeout=60)
+        self.assertEqual(result.returncode, 3, result.stderr)
+        self.assertEqual(json.loads(result.stdout),
+                         ['SIGTERM', 'OSError', [{'stage': 'stage', 'started': True, 'sessionEnded': True}]])
+        self.assertFalse(self.live(int((work/'member').read_text())))
+
+    def test_a_stage_that_ends_normally_is_recorded_then_marked_ended(self):
+        calls = []
+        self.assertEqual(adapter.supervised([sys.executable, '-c', 'pass'], dict(os.environ), '/', 60, '/',
+                                            rss=lambda pid: 0, label='m',
+                                            stage=lambda pid, label, ended=False: calls.append((label, ended))),
+                         (0, None, True))
+        self.assertEqual(calls, [('m', False), ('m', True)])
+
+    def test_an_unreadable_process_table_never_confirms_a_stage_ended(self):
+        work = Path(tempfile.mkdtemp())
+        with self.assertRaises(adapter.Interrupted) as raised:  # an interrupted stage
+            self.stage_with(work, self.hold, session_members=lambda sid, proc=None: None)
+        self.assertEqual(raised.exception.stages[-1]['sessionEnded'], False)
+        self.assertFalse(self.live(int((work/'member').read_text())))  # its leader's group was still TERMed and KILLed
+        # a stage that exits normally: a table that cannot be read is a leftover, never confirmed ended
+        with unittest.mock.patch.object(adapter, 'session_members', lambda sid, proc=None: None), \
+                unittest.mock.patch.object(adapter, 'KILL_GRACE_SECONDS', 0.5):
+            self.assertEqual(adapter.supervised([sys.executable, '-c', 'pass'], dict(os.environ), '/', 60, '/',
+                                                rss=lambda pid: 0), (0, 'leftover', False))
+            self.assertEqual(adapter.bounded_git(['true'], dict(os.environ), '/', time.monotonic() + 60, '/', 1 << 40,
+                                                 measure=lambda path: 0), (0, 'leftover', False))
+
+    def test_a_session_that_outlives_a_normal_exit_is_ended_and_stops_the_stage(self):
+        work = Path(tempfile.mkdtemp())
+        self.reap_later(work/'member')
+        argv = ['bash', '-c', f'(trap "" TERM; exec sleep 600) & echo $! > {work}/member; cat /proc/$!/stat > {work}/member.stat; exit 0']
+        with unittest.mock.patch.object(adapter, 'KILL_GRACE_SECONDS', 1):  # it ignores TERM: KILL after the grace
+            self.assertEqual(adapter.supervised(argv, dict(os.environ), '/', 600, '/', rss=lambda pid: 0),
+                             (0, 'leftover', True))
+        self.assertFalse(self.live(int((work/'member').read_text())))
+        work = Path(tempfile.mkdtemp())
+        self.reap_later(work/'member')
+        argv = ['bash', '-c', f'sleep 600 & echo $! > {work}/member; cat /proc/$!/stat > {work}/member.stat; exit 0']
+        self.assertEqual(adapter.bounded_git(argv, dict(os.environ), '/', time.monotonic() + 600, '/', 1 << 40,
+                                             measure=lambda path: 0), (0, 'leftover', True))
+        self.assertFalse(self.live(int((work/'member').read_text())))
+
+    def driver(self, work, body, grace=1):
+        """A python script that loads the adapter (at INTERRUPT_GRACE_SECONDS grace, or its own with None) and runs body;
+        it names its own pid for the cleanup (never its parent's, which may be this test process)."""
+        script = work/'driver.py'
+        script.write_text(f"""import importlib.util, json, os, signal, sys, time
+spec = importlib.util.spec_from_file_location('a', {str(ROOT/'scripts/launcher3-compile.py')!r})
+a = importlib.util.module_from_spec(spec); spec.loader.exec_module(a)
+if {grace!r} is not None:
+    a.INTERRUPT_GRACE_SECONDS = {grace!r}
+WORK = {str(work)!r}
+open(os.path.join(WORK, 'python'), 'w').write(str(os.getpid()))
+open(os.path.join(WORK, 'python.stat'), 'wb').write(open('/proc/self/stat', 'rb').read())
+STAGE = ['bash', '-c', 'trap "" TERM; sleep 600 & echo $! > ' + WORK + '/member; cat /proc/$!/stat > ' + WORK + '/member.stat; wait']
+def stage(pid, label, ended=False):
+    open(os.path.join(WORK, 'ended' if ended else 'leader'), 'w').write(str(pid))
+    if not ended:
+        try:
+            open(os.path.join(WORK, 'leader.stat'), 'wb').write(open('/proc/' + str(pid) + '/stat', 'rb').read())
+        except FileNotFoundError:
+            pass
+""" + body)
+        self.reap_later(work/'member', work/'leader', work/'python')
+        return script
+
+    INTERRUPTED_STAGE = """
+try:
+    with a.interrupts():
+        a.supervised(STAGE, dict(os.environ), '/', 600, '/', rss=lambda pid: 0, stage=stage)
+except a.Interrupted as error:
+    open(os.path.join(WORK, 'interrupted'), 'w').write(str(error) + json.dumps(error.stages))
+    sys.exit(3)
+"""
+
+    def step(self, work, script, exec_timeout=True):
+        """The run step as the runner runs it: its text in a script file run by bash -e (shell: bash), started in its
+        own session here so the test can clean it up; the runner signals that one process."""
+        text = work/'step.sh'
+        text.write_text(f'{"exec " if exec_timeout else ""}timeout --kill-after=30s 600s {sys.executable} {script}\n')
+        step = subprocess.Popen(['bash', '--noprofile', '--norc', '-eo', 'pipefail', str(text)], start_new_session=True,
+                                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.reap_later(pids=(step.pid,))
+        self.addCleanup(lambda: step.poll() is None and (step.kill(), step.wait()))
+        return step
+
+    def test_a_signal_while_a_stage_starts_is_held_until_its_session_is_recorded(self):
+        work = Path(tempfile.mkdtemp())
+        script = self.driver(work, """
+real = a.subprocess.Popen
+def popen(*args, **kwargs):  # the signal lands between the fork and the record
+    proc = real(*args, **kwargs)
+    os.kill(os.getpid(), signal.SIGTERM)
+    end = time.monotonic() + 20
+    while not os.path.exists(os.path.join(WORK, 'member')) and time.monotonic() < end:
+        time.sleep(0.02)  # the stage is under way (its member exists) before the record
+    return proc
+try:
+    with a.interrupts():
+        a.supervised(STAGE, dict(os.environ), '/', 600, '/', popen=popen, rss=lambda pid: 0, stage=stage)
+except a.Interrupted as error:
+    print(json.dumps(error.stages))
+    sys.exit(3)
+""")
+        result = subprocess.run([sys.executable, str(script)], capture_output=True, text=True, timeout=60)
+        self.assertEqual(result.returncode, 3, result.stderr)
+        self.assertEqual(json.loads(result.stdout), [{'stage': 'stage', 'started': True, 'sessionEnded': True}])
+        self.assertTrue((work/'leader').exists())  # recorded before the interrupt was taken
+        self.assertTrue((work/'ended').exists())  # and marked ended once its session was confirmed gone
+        self.assertFalse(self.live(int((work/'member').read_text())))
+
+    def test_the_outer_timeout_ends_the_running_stage(self):
+        """The workflow's own `timeout --kill-after=30s` around a stage whose leader and member both ignore TERM."""
+        work = Path(tempfile.mkdtemp())
+        script = self.driver(work, self.INTERRUPTED_STAGE)
+        start = time.monotonic()
+        result = subprocess.run(['timeout', '--kill-after=30s', '8s', sys.executable, str(script)],
+                                stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=60)
+        self.assertEqual(result.returncode, 124, result.stderr)  # timeout's own status: the command timed out
+        self.assertTrue((work/'interrupted').read_text().startswith('SIGTERM'), result.stderr)
+        self.assertFalse(self.live(int((work/'member').read_text())))
+        self.assertLess(time.monotonic() - start, 30)  # inside the kill-after: python was never KILLed
+
+    def test_a_cancel_reaches_the_helper_only_because_the_step_execs_timeout(self):
+        """The runner's cancel signals the step's entry process, the bash running the step's script file. The step
+        execs timeout, so that process is timeout, which forwards the signal to python. Without exec, bash waits for
+        its child and python never hears of the cancel."""
+        work = Path(tempfile.mkdtemp())
+        step = self.step(work, self.driver(work, self.INTERRUPTED_STAGE), exec_timeout=False)
+        member = self.member_pid(work/'member')
+        step.send_signal(signal.SIGINT)
+        time.sleep(2)
+        self.assertFalse((work/'interrupted').exists())
+        self.assertTrue(self.live(member))
+        work = Path(tempfile.mkdtemp())
+        step = self.step(work, self.driver(work, self.INTERRUPTED_STAGE))
+        member = self.member_pid(work/'member')
+        step.send_signal(signal.SIGINT)
+        self.assertEqual(step.wait(timeout=30), 3)  # timeout passes on python's own status
+        self.assertTrue((work/'interrupted').read_text().startswith('SIGINT'))
+        self.assertFalse(self.live(member))
+
+    def test_a_cancel_ends_the_stage_before_the_runner_would_send_sigterm(self):
+        """GitHub's cancel: SIGINT to the step's entry process, SIGTERM 7.5 s later, then the process tree is killed
+        2.5 s after that. With the adapter's own graces, a stage whose leader and member ignore TERM is gone, and python
+        has recorded the interruption and exited, before that SIGTERM."""
+        work = Path(tempfile.mkdtemp())
+        step = self.step(work, self.driver(work, self.INTERRUPTED_STAGE, grace=None))
+        member = self.member_pid(work/'member')
+        start = time.monotonic()
+        step.send_signal(signal.SIGINT)
+        try:
+            code = step.wait(timeout=adapter.CANCEL_SIGTERM_SECONDS)
+        except subprocess.TimeoutExpired:
+            step.send_signal(signal.SIGTERM)  # what the runner sends next; python would have no more time to clean up
+            self.fail(f'the step outlived the {adapter.CANCEL_SIGTERM_SECONDS} s before the runner\'s SIGTERM')
+        self.assertEqual(code, 3)
+        self.assertLess(time.monotonic() - start, adapter.CANCEL_SIGTERM_SECONDS)
+        self.assertTrue((work/'interrupted').read_text().startswith('SIGINT'))
+        self.assertFalse(self.live(member))
+
+    def test_cancel_during_unconfirmed_stop_writes_run_report_before_sigterm(self):
+        """Real exec-timeout, signal and clock; only the stuck session and native inputs are synthetic."""
+        work = Path(tempfile.mkdtemp())
+        script = self.driver(work, f"""
+spec = importlib.util.spec_from_file_location('fixtures', {str(ROOT/'scripts/tests/test_launcher3_compile.py')!r})
+f = importlib.util.module_from_spec(spec); spec.loader.exec_module(f); f.adapter = a
+t = f.Run(); t.setUp()
+open(os.path.join(WORK, 'report-path'), 'w').write(str(t.parent/'launcher3-compile-41700000000-1/receipts/report.json'))
+class Stuck:
+    pid, returncode = 424242, None
+    def poll(self):
+        return None
+def sent(*args):
+    open(os.path.join(WORK, 'stopping'), 'w').write('ready')
+a.session_members = lambda sid: {{424242: 424242}}
+a.signal_session = sent
+def compiler(*args, **kwargs):
+    return a.supervised(['stand-in'], {{}}, '/', 100, '/', popen=lambda *a, **k: Stuck(),
+                        used=lambda path: 0, rss=lambda sid: a.MEMORY_STOP_BYTES + 1, **kwargs)
+t.compiler = lambda *args, **kwargs: compiler
+with a.interrupts():
+    sys.exit(t.run_adapter())
+""", grace=None)
+        step = self.step(work, script)
+        end = time.monotonic() + 20
+        while not (work/'stopping').exists():
+            self.assertIsNone(step.poll(), 'the driver exited before the stop')
+            self.assertLess(time.monotonic(), end, 'the memory stop never started')
+            time.sleep(0.02)
+        start = time.monotonic()
+        os.kill(step.pid, signal.SIGINT)
+        step.wait(timeout=adapter.CANCEL_SIGTERM_SECONDS)
+        self.assertLess(time.monotonic() - start, adapter.CANCEL_SIGTERM_SECONDS)
+        report = json.loads(Path((work/'report-path').read_text()).read_text())
+        self.assertEqual(report['result'], 'interrupted')
+        self.assertEqual(report['interrupted']['stages'], [{'stage': 'lunch', 'started': True, 'sessionEnded': False}])
+
+    def test_only_the_first_signal_interrupts_and_the_handlers_come_back(self):
+        for first in ('SIGTERM', 'SIGINT', 'SIGHUP', 'SIGQUIT'):
+            with self.subTest(first=first):
+                script = (f"import importlib.util, os, signal, time\n"
+                          f"spec = importlib.util.spec_from_file_location('a', {str(ROOT/'scripts/launcher3-compile.py')!r})\n"
+                          "a = importlib.util.module_from_spec(spec); spec.loader.exec_module(a)\n"
+                          "before = {s: signal.getsignal(s) for s in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP, signal.SIGQUIT)}\n"
+                          "with a.interrupts():\n"
+                          "    try:\n"
+                          f"        os.kill(os.getpid(), signal.{first}); time.sleep(5)\n"
+                          "    except a.Interrupted as error:  # the cleanup, still inside run\n"
+                          "        print('first', error)\n"
+                          "        print('dropped by a handler, not ignored:', all(signal.getsignal(s) not in (signal.SIG_IGN, signal.SIG_DFL) for s in before))\n"
+                          "        for s in before:\n"
+                          "            os.kill(os.getpid(), s)\n"
+                          "        time.sleep(0.2)\n"
+                          "        print('later dropped')\n"
+                          "print('restored', all(signal.getsignal(s) == h for s, h in before.items()))\n")
+                result = subprocess.run([sys.executable, '-c', script], capture_output=True, text=True, timeout=60)
+                self.assertEqual((result.returncode, result.stdout),
+                                 (0, f'first {first}\ndropped by a handler, not ignored: True\nlater dropped\nrestored True\n'),
+                                 result.stderr)
+
+    def test_main_runs_the_run_command_inside_interrupts_and_exits_3_when_interrupted(self):
+        before = signal.getsignal(signal.SIGTERM)
+        seen = []
+
+        def fake_run(*args, **kwargs):
+            seen.append(signal.getsignal(signal.SIGTERM))
+            raise adapter.Interrupted('SIGTERM')
+        binding = {**BINDING, 'branch': 'verifyIntegrated'}
+        with unittest.mock.patch.object(adapter, 'check', return_value=(MANIFEST, binding, None)), \
+                unittest.mock.patch.object(adapter, 'run', side_effect=fake_run):
+            self.assertEqual(adapter.main(['run', '--run-id', '1', '--attempt', '1']), 3)
+        self.assertNotIn(seen[0], (signal.SIG_DFL, signal.SIG_IGN))
+        self.assertEqual(signal.getsignal(signal.SIGTERM), before)
+
+    def test_the_stages_carry_the_runners_tracking_id_as_a_backstop(self):
+        with unittest.mock.patch.dict(os.environ, {'RUNNER_TRACKING_ID': 'github_x'}):
+            self.assertEqual(adapter.contained_env(Path('/r'))['RUNNER_TRACKING_ID'], 'github_x')
+        with unittest.mock.patch.dict(os.environ, clear=False) as env:
+            env.pop('RUNNER_TRACKING_ID', None)
+            self.assertNotIn('RUNNER_TRACKING_ID', adapter.contained_env(Path('/r')))
 
     def test_copy_refuses_over_the_bound_or_the_reserve_before_writing(self):
         dest = Path(tempfile.mkdtemp())/'tree'
@@ -1143,6 +1644,154 @@ def pinned(project):
             mode, kind, oid = meta.split()
             records[path] = (mode.decode(), oid.decode())
     return (records, *adapter.tree_digest(records))
+
+
+class SafetyRegressions(unittest.TestCase):
+    """Deterministic fault injection: no real compile, host paths or process signals."""
+    class Leader:
+        pid = 424242
+        returncode = None
+
+        def poll(self):
+            return self.returncode
+
+    def exercise(self, kind, proc, clock, sleep, **kwargs):
+        if kind == 'git':
+            return adapter.bounded_git(['git'], {}, '/', 100, '/', 1, popen=lambda *a, **k: proc,
+                                       clock=clock, sleep=sleep, measure=lambda p: 2, **kwargs)
+        return adapter.supervised(['m'], {}, '/', 100, '/', popen=lambda *a, **k: proc,
+                                  clock=clock, sleep=sleep, used=lambda p: 0,
+                                  rss=lambda pid: adapter.MEMORY_STOP_BYTES + 1, **kwargs)
+
+    def test_unconfirmed_stops_never_mark_or_return_ended(self):
+        for kind in ('git', 'compile'):
+            calls = []
+            with self.subTest(kind=kind), unittest.mock.patch.object(adapter, 'end_session', return_value=False):
+                result = self.exercise(kind, self.Leader(), lambda: 0, lambda s: None,
+                                       stage=lambda pid, label, ended=False: calls.append(ended))
+            self.assertEqual(result[2], False)
+            self.assertEqual(calls, [False])
+
+    def test_cancel_during_stop_or_leftover_has_only_one_shutdown_budget(self):
+        for kind in ('git', 'compile'):
+            for leftover in (False, True):
+                now, calls = [0.0], []
+                proc = self.Leader()
+                if leftover:
+                    proc.returncode = 0
+
+                def sleep(seconds):
+                    now[0] += seconds
+                    adapter._INTERRUPT['pending'] = 'SIGINT'
+                with self.subTest(kind=kind, leftover=leftover), \
+                        unittest.mock.patch.dict(adapter._INTERRUPT, deferring=0, pending=None, raised=False), \
+                        unittest.mock.patch.object(adapter, 'session_members', return_value={proc.pid: proc.pid}), \
+                        unittest.mock.patch.object(adapter, 'signal_session') as sent, \
+                        self.assertRaises(adapter.Interrupted) as raised:
+                    self.exercise(kind, proc, lambda: now[0], sleep,
+                                  stage=lambda pid, label, ended=False: calls.append(ended))
+                self.assertLessEqual(now[0], adapter.POLL_SECONDS + 2 * adapter.INTERRUPT_GRACE_SECONDS)
+                self.assertEqual(raised.exception.stages[0]['sessionEnded'], False)
+                self.assertEqual(calls, [False])
+                terms = [call for call in sent.call_args_list if call.args[1] == signal.SIGTERM and call.args[0]]
+                self.assertEqual(len(terms), 1)
+
+    def test_fetch_takes_the_interrupt_at_its_poll(self):
+        now = [0.0]
+
+        def sleep(seconds):
+            now[0] += seconds
+            adapter._INTERRUPT['pending'] = 'SIGINT'
+        with unittest.mock.patch.dict(adapter._INTERRUPT, deferring=0, pending=None, raised=False), \
+                unittest.mock.patch.object(adapter, 'end_session', return_value=True), \
+                self.assertRaises(adapter.Interrupted) as raised:
+            adapter.bounded_git(['git'], {}, '/', 100, '/', 1, popen=lambda *a, **k: self.Leader(),
+                                clock=lambda: now[0], sleep=sleep, measure=lambda p: 0)
+        self.assertLessEqual(now[0], adapter.POLL_SECONDS)
+        self.assertEqual(raised.exception.stages, [{'stage': 'adevtool-git', 'started': True, 'sessionEnded': True}])
+
+    def test_fetch_defers_the_signal_between_fork_and_record(self):
+        calls = []
+
+        def popen(*args, **kwargs):
+            os.kill(os.getpid(), signal.SIGTERM)
+            return self.Leader()
+        with adapter.interrupts(), unittest.mock.patch.object(adapter, 'end_session', return_value=True) as end, \
+                self.assertRaises(adapter.Interrupted) as raised:
+            adapter.bounded_git(['git'], {}, '/', 100, '/', 1, popen=popen, clock=lambda: 0,
+                                measure=lambda p: 0, stage=lambda *a, **k: calls.append((a, k)))
+        self.assertTrue(raised.exception.stages[0]['started'])
+        self.assertTrue(calls)
+        end.assert_called_once()
+
+    def test_signal_at_stage_deferral_exit_retains_the_stage_result(self):
+        original = adapter.deferred.__exit__
+
+        def late(scope, *args):
+            if scope.on_interrupt:
+                adapter._INTERRUPT['pending'] = 'SIGTERM'
+            return original(scope, *args)
+        for kind in ('git', 'compile'):
+            with self.subTest(kind=kind), \
+                    unittest.mock.patch.dict(adapter._INTERRUPT, deferring=0, pending=None, raised=False), \
+                    unittest.mock.patch.object(adapter.deferred, '__exit__', late), \
+                    unittest.mock.patch.object(adapter, 'end_session', return_value=False) as end, \
+                    self.assertRaises(adapter.Interrupted) as raised:
+                self.exercise(kind, self.Leader(), lambda: 0, lambda s: None)
+            end.assert_called_once()
+            self.assertEqual(raised.exception.stages[0]['sessionEnded'], False)
+
+    def test_cleanup_error_preserves_original_failure_and_unconfirmed_status(self):
+        error = OSError('original failure')
+        with unittest.mock.patch.object(adapter, 'end_session', side_effect=ValueError('cleanup failure')):
+            result = adapter.stage_failed(self.Leader(), error, 'm', None, lambda: 0, lambda s: None)
+        self.assertIs(result, error)
+        self.assertEqual(result.stage_status, {'stage': 'm', 'started': True, 'sessionEnded': False})
+
+    def test_ordinary_failure_cleanup_uses_the_short_graces(self):
+        now = [0.0]
+        error = OSError('stage failed')
+        with unittest.mock.patch.object(adapter, 'session_members', return_value={424242: 424242}), \
+                unittest.mock.patch.object(adapter, 'signal_session'):
+            result = adapter.stage_failed(self.Leader(), error, 'm', None, lambda: now[0],
+                                          lambda seconds: now.__setitem__(0, now[0] + seconds))
+        self.assertIs(result, error)
+        self.assertLessEqual(now[0], 2 * adapter.INTERRUPT_GRACE_SECONDS)
+        self.assertFalse(result.stage_status['sessionEnded'])
+
+    def test_confirmation_requires_empty_scans_a_poll_apart(self):
+        for second, expected in (({}, True), ({424243: 424242}, False), (None, False)):
+            scans = iter([{}, second])
+            sleeps = []
+            self.assertEqual(adapter.session_gone(424242, lambda sid: next(scans), sleeps.append), expected)
+            self.assertEqual(sleeps, [adapter.POLL_SECONDS])
+
+    def test_finish_rescans_new_groups_and_terms_each_only_once(self):
+        receipts = Path(tempfile.mkdtemp())
+        (receipts/'stage.json').write_text(json.dumps({'sid': 424242, 'stage': 'm', 'startTime': 7}))
+        scans, now, sent = [0], [0.0], []
+
+        def members(sid):
+            scans[0] += 1
+            return {424242: 424242, **({424243: 424243} if scans[0] > 1 else {})}
+        with unittest.mock.patch.object(adapter, 'proc_stat', return_value=None), \
+                unittest.mock.patch.object(adapter.os, 'killpg', side_effect=lambda pg, sig: sent.append((pg, sig))):
+            result = adapter.end_recorded(receipts, clock=lambda: now[0],
+                                          sleep=lambda s: now.__setitem__(0, now[0] + s), grace=1, members=members)
+        self.assertFalse(result['ended'])
+        self.assertGreater(scans[0], 2)
+        for pg in (424242, 424243):
+            self.assertEqual(sent.count((pg, signal.SIGTERM)), 1)
+            self.assertEqual(sent.count((pg, signal.SIGCONT)), 1)
+            self.assertGreater(sent.count((pg, signal.SIGKILL)), 1)
+
+    def test_interrupt_state_is_fresh_on_entry_and_restored_on_exit(self):
+        saved = {'deferring': 9, 'pending': 'SIGQUIT', 'raised': True}
+        with unittest.mock.patch.dict(adapter._INTERRUPT, saved):
+            with adapter.interrupts(), self.assertRaises(adapter.Interrupted) as raised:
+                os.kill(os.getpid(), signal.SIGTERM)
+            self.assertEqual(str(raised.exception), 'SIGTERM')
+            self.assertEqual(adapter._INTERRUPT, saved)
 
 
 class TreePin(unittest.TestCase):
@@ -1475,7 +2124,7 @@ class Run(unittest.TestCase):
                         'policyReceipt': {'path': '/p.json', 'sha256': self.s.policy_sha}}
         self.bundle_sha = sha(json.dumps(self.s.bundle_report).encode())
         self.calls = []
-        self.lunch_result = (0, None)
+        self.lunch_result = (0, None, True)
 
     def copier(self, state='post'):
         def copy(source, destination, omit=None):
@@ -1485,8 +2134,8 @@ class Run(unittest.TestCase):
             return {'entries': 1}
         return copy
 
-    def compiler(self, code=0, stopped=None):
-        def compile_(argv, env, cwd, seconds, out_dir):
+    def compiler(self, code=0, stopped=None, ended=True):
+        def compile_(argv, env, cwd, seconds, out_dir, **stage):
             if 'm -j' not in argv[2]:
                 self.calls.append(('lunch', argv[-1], env['GIT_CEILING_DIRECTORIES'], seconds))
                 return self.lunch_result
@@ -1494,7 +2143,7 @@ class Run(unittest.TestCase):
             out = Path(out_dir)
             module = out/'soong/.intermediates/packages/apps/Launcher3/Launcher3QuickStepLib'
             module.mkdir(parents=True)
-            return code, stopped
+            return code, stopped, ended
         return compile_
 
     def pins(self, fail=None):
@@ -1515,7 +2164,7 @@ class Run(unittest.TestCase):
         self.calls.append(('lunch-inputs', tuple(exact)))
         return {'contractSha256': 'checked'}
 
-    def fetch(self, tree, plan, run_root, record, root):
+    def fetch(self, tree, plan, run_root, record, root, stage=None):
         self.calls.append('fetch')
         record.update(ok=True)
 
@@ -1539,13 +2188,13 @@ class Run(unittest.TestCase):
         out = self.parent/'launcher3-compile-41700000000-1/out'
         tree = self.parent/'launcher3-compile-41700000000-1/tree'
         self.assertEqual(self.calls[4], ('lunch', 'frankel-cur-user', str(tree), adapter.LUNCH_SECONDS))
-        self.assertEqual(report['lunch'], {'exit': 0, 'stoppedBy': None})
+        self.assertEqual(report['lunch'], {'exit': 0, 'stoppedBy': None, 'sessionEnded': True})
         self.assertEqual(self.calls[5][1:], ([f'{out}/soong/.intermediates/frameworks/base/android.security.flags-aconfig/'
             'aconfig-flags.txt', f'{out}/soong/.intermediates/packages/apps/Launcher3/aconfig/com_android_launcher3_flags/'
             'aconfig-flags.txt'], str(out), adapter.COMPILE_SECONDS))
         self.assertEqual(report['classification']['branch'], 'verifyIntegrated')
         self.assertEqual([c['id'] for c in report['conditions']], ['verifyIntegrated'])
-        self.assertEqual(report['compile'], {'exit': 0, 'stoppedBy': None, 'targets': ['Launcher3QuickStepLib',
+        self.assertEqual(report['compile'], {'exit': 0, 'stoppedBy': None, 'sessionEnded': True, 'targets': ['Launcher3QuickStepLib',
             'out/soong/.intermediates/frameworks/base/android.security.flags-aconfig/aconfig-flags.txt',
             'out/soong/.intermediates/packages/apps/Launcher3/aconfig/com_android_launcher3_flags/aconfig-flags.txt']})
         self.assertEqual({f['flag']: f['ok'] for f in report['flags']},
@@ -1681,13 +2330,14 @@ class Run(unittest.TestCase):
                 self.assertEqual(result.returncode, 2, result.stderr)
 
     def test_a_failed_lunch_is_reported_and_m_is_not_run(self):
-        for result in ((2, None), (-15, 'deadline')):
+        for result in ((2, None, True), (-15, 'deadline', True)):
             with self.subTest(result=result):
                 self.setUp()
                 self.lunch_result = result
                 self.assertEqual(self.run_adapter(), 0)
                 report = self.report()
-                self.assertEqual((report['lunch'], report['result']), ({'exit': result[0], 'stoppedBy': result[1]}, 'incomplete'))
+                self.assertEqual((report['lunch'], report['result']),
+                                 ({'exit': result[0], 'stoppedBy': result[1], 'sessionEnded': True}, 'incomplete'))
                 self.assertNotIn('compile', report)
                 self.assertFalse([c for c in self.calls if c[0] == 'compile'])
 
@@ -1791,6 +2441,340 @@ class Run(unittest.TestCase):
                                      copier=self.copier(), compiler=self.compiler(), pins=self.pins(),
                                      plan=self.plan()), 3)
         self.assertEqual(self.calls, [])  # a plan without the bound fetch: refused before anything is copied
+
+    def test_an_interrupted_stage_is_reported_and_its_session_is_gone_before_the_lock_is_released(self):
+        work = Path(tempfile.mkdtemp())
+        events, started = [], []
+
+        @contextlib.contextmanager
+        def lock(path):
+            events.append('locked')
+            try:
+                yield
+            finally:  # the real stage's session must already be gone here
+                events.append(('released', [adapter.session_members(pid) for pid in started]))
+
+        real = subprocess.Popen
+
+        def popen(*args, **kwargs):
+            proc = real(*args, **kwargs)
+            started.append(proc.pid)
+            Processes.reap_later(self, pids=(proc.pid,))
+            return proc
+
+        calls = []
+
+        def interrupting(seconds):  # the first sample takes the outer timeout's TERM; later sleeps are real
+            calls.append(seconds)
+            if len(calls) > 1:
+                return time.sleep(min(seconds, 0.2))
+            end = time.monotonic() + 20
+            while not (work/'member').exists():
+                self.assertLess(time.monotonic(), end, 'the stage never started')
+                time.sleep(0.05)
+            raise adapter.Interrupted('SIGTERM')
+
+        def compile_(argv, env, cwd, seconds, out_dir, **stage):
+            return adapter.supervised(['bash', '-c', f'trap "" TERM; sleep 600 & echo $! > {work}/member; cat /proc/$!/stat > {work}/member.stat; wait'], env,
+                                      '/', 600, out_dir, popen=popen, sleep=interrupting, rss=lambda pid: 0, **stage)
+        Processes.reap_later(self, work/'member')
+        with unittest.mock.patch.object(adapter, 'INTERRUPT_GRACE_SECONDS', 1):
+            self.assertEqual(adapter.run(self.binding, self.s.manifest, '41700000000', '1', root=self.s.repo, lock=lock,
+                                         copier=self.copier(), compiler=compile_, pins=self.pins(),
+                                         policy_loader=lambda path: (POLICY, self.s.policy_sha), plan=self.plan(),
+                                         inputs_check=self.checks, fetcher=self.fetch), 3)
+        report = self.report()
+        self.assertEqual((report['result'], report['nothingApplied']), ('interrupted', True))
+        self.assertEqual(report['interrupted']['stages'], [{'stage': 'lunch', 'started': True, 'sessionEnded': True}])
+        self.assertEqual(events, ['locked', ('released', [{}])])
+        stage = json.loads((self.parent/'launcher3-compile-41700000000-1/receipts/stage.json').read_text())
+        self.assertEqual((stage['sid'], stage['stage'], stage['ended']), (started[0], 'lunch', True))
+        self.assertIsInstance(stage['startTime'], int)
+
+    def test_a_stage_whose_session_is_not_confirmed_ended_stops_the_run(self):
+        self.lunch_result = (0, None, False)
+        self.assertEqual(self.run_adapter(), 3)
+        report = self.report()
+        self.assertEqual((report['lunch'], report['result']), ({'exit': 0, 'stoppedBy': None, 'sessionEnded': False},
+                                                               'refused'))
+        self.assertTrue(report['refused'].startswith("containment: lunch's session could not be confirmed ended"))
+        self.assertFalse([c for c in self.calls if c[0] == 'compile'])
+        self.setUp()
+        self.compiler = lambda code, stopped: Run.compiler(self, ended=False)
+        self.assertEqual(self.run_adapter(), 3)
+        report = self.report()
+        self.assertEqual((report['compile']['sessionEnded'], report['result']), (False, 'refused'))
+        self.assertTrue(report['refused'].startswith("containment: m's session"))
+        self.assertNotIn('sourceProof', report)  # no output of a session that may still run is read
+
+    def test_run_holds_its_lock_through_every_stage_and_until_its_report_is_whole(self):
+        receipts = self.parent/'launcher3-compile-41700000000-1/receipts'
+
+        def held():
+            fd = os.open(receipts/'run.lock', os.O_RDWR)
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return False
+            except BlockingIOError:
+                return True
+            finally:
+                os.close(fd)
+        seen, stages, real = [], Run.compiler(self), adapter.write_once
+
+        def compiler(*args, **kwargs):
+            seen.append(('stage', held()))
+            return stages(*args, **kwargs)
+
+        def write_once(path, document):
+            if Path(path).name == 'report.json':
+                seen.append(('report', held()))
+            return real(path, document)
+        self.compiler = lambda code, stopped: compiler
+        with unittest.mock.patch.object(adapter, 'write_once', side_effect=write_once):
+            self.assertEqual(self.run_adapter(), 0)
+        self.assertEqual(seen, [('stage', True), ('stage', True), ('report', True)])
+        self.assertFalse(held())  # released once run returns
+
+    def test_an_interrupt_while_a_refusal_is_recorded_is_recorded_beside_it(self):
+        self.binding['adevtoolGit'] = None  # a refusal before anything is copied
+        real, calls = adapter.record_refusal, []
+
+        def record(report, error, applied):
+            calls.append(str(error))
+            if len(calls) == 1:
+                raise adapter.Interrupted('SIGTERM')  # the first signal lands as the refusal is recorded
+            return real(report, error, applied)
+        with unittest.mock.patch.object(adapter, 'record_refusal', side_effect=record), \
+                self.assertRaises(adapter.Interrupted):  # main exits 3
+            self.run_adapter()
+        report = self.report()
+        self.assertEqual((report['result'], report['interrupted']['signal']), ('refused', 'SIGTERM'))
+        self.assertTrue(report['refused'].startswith('adevtool_git_missing'))
+
+    def test_the_report_is_written_whole_when_the_first_signal_lands_just_as_it_is_due(self):
+        path, entered = Path(tempfile.mkdtemp())/'report.json', []
+        enter = adapter.deferred.__enter__
+
+        def interrupted_enter(deferral):
+            if not entered:
+                entered.append(True)
+                raise adapter.Interrupted('SIGTERM')  # before the deferral holds anything
+            return enter(deferral)
+        with unittest.mock.patch.object(adapter.deferred, '__enter__', interrupted_enter), \
+                self.assertRaises(adapter.Interrupted):
+            adapter.write_report(path, {'result': 'incomplete'}, [])
+        written = json.loads(path.read_text())
+        self.assertEqual((written['result'], written['interrupted']['signal'], written['nothingApplied']),
+                         ('incomplete', 'SIGTERM', True))
+
+    def test_a_signal_while_the_report_is_written_waits_until_it_is_whole(self):
+        work = Path(tempfile.mkdtemp())
+        script = work/'report.py'
+        script.write_text(f"""import importlib.util, json, os, signal, sys, time
+spec = importlib.util.spec_from_file_location('a', {str(ROOT/'scripts/launcher3-compile.py')!r})
+a = importlib.util.module_from_spec(spec); spec.loader.exec_module(a)
+real = a.write_once
+def write_once(path, document):
+    os.kill(os.getpid(), signal.SIGTERM)  # arrives while the report is written
+    time.sleep(0.2)
+    return real(path, document)
+a.write_once = write_once
+try:
+    with a.interrupts():
+        a.write_report({str(work/'report.json')!r}, {{'result': 'compiled-and-proven'}}, [])
+except a.Interrupted as error:
+    print('after', error)
+""")
+        result = subprocess.run([sys.executable, str(script)], capture_output=True, text=True, timeout=60)
+        self.assertEqual((result.returncode, result.stdout), (0, 'after SIGTERM\n'), result.stderr)
+        self.assertEqual(json.loads((work/'report.json').read_text()), {'result': 'compiled-and-proven'})
+
+    def test_an_interrupt_after_the_result_keeps_it_and_still_exits_3(self):
+        @contextlib.contextmanager
+        def lock(path):  # the outer timeout's TERM lands while the lock is released, after the compile
+            yield
+            raise adapter.Interrupted('SIGTERM')
+        self.assertEqual(adapter.run(self.binding, self.s.manifest, '41700000000', '1', root=self.s.repo, lock=lock,
+                                     copier=self.copier(), compiler=self.compiler(), pins=self.pins(),
+                                     policy_loader=lambda path: (POLICY, self.s.policy_sha), plan=self.plan(),
+                                     inputs_check=self.checks, fetcher=self.fetch), 3)
+        report = self.report()
+        self.assertEqual((report['result'], report['interrupted']['signal'], report['interrupted']['stages']),
+                         ('incomplete', 'SIGTERM', []))  # the compile's own result stays; the interruption is beside it
+
+    def test_finish_waits_for_the_run_and_ends_a_stage_session_that_outlived_it(self):
+        run_root = self.parent/'launcher3-compile-41700000000-1'
+        receipts = run_root/'receipts'
+        receipts.mkdir(parents=True)
+        (run_root/'tree').mkdir()
+        lock_fd = adapter.hold_run_lock(receipts)  # a run that still holds its lock: nothing is removed
+        upload = Path(tempfile.mkdtemp())/'upload'
+        self.assertEqual(adapter.finish(self.binding, '41700000000', '1', upload, wait=1), 3)
+        cleanup = json.loads((upload/'cleanup.json').read_text())
+        self.assertEqual((cleanup['run']['lock'], cleanup['removed']), ('held', []))
+        self.assertIn('run may still use the tree', cleanup['left'][0]['reason'])
+        self.assertTrue((run_root/'tree').is_dir())
+        os.close(lock_fd)
+        # run is gone, its recorded stage session is not: finish ends it, then removes
+        work = Path(tempfile.mkdtemp())
+        proc = subprocess.Popen(['bash', '-c', f'trap "" TERM; sleep 600 & echo $! > {work}/member; cat /proc/$!/stat > {work}/member.stat; wait'],
+                                start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+        self.addCleanup(lambda: proc.wait(timeout=30))
+        Processes.reap_later(self, work/'member', pids=(proc.pid,))
+        end = time.monotonic() + 20
+        while not ((work/'member').exists() and (work/'member').read_text().strip()):
+            self.assertLess(time.monotonic(), end, 'the stage never started')
+            time.sleep(0.05)
+        adapter.stage_recorder(receipts)(proc.pid, 'm')
+        upload = Path(tempfile.mkdtemp())/'upload'
+        with unittest.mock.patch.object(adapter, 'KILL_GRACE_SECONDS', 1):
+            self.assertEqual(adapter.finish(self.binding, '41700000000', '1', upload, wait=1), 0)
+        cleanup = json.loads((upload/'cleanup.json').read_text())
+        self.assertEqual((cleanup['run']['lock'], cleanup['stage']['stage'], cleanup['stage']['ended']),
+                         ('released', 'm', True))
+        self.assertIn('tree', cleanup['removed'])
+        self.assertFalse(Processes.live(int((work/'member').read_text())))
+
+    def finish_run_root(self):
+        run_root = self.parent/'launcher3-compile-41700000000-1'
+        (run_root/'receipts').mkdir(parents=True)
+        (run_root/'tree').mkdir()
+        (run_root/'receipts/report.json').write_text('{}')
+        return run_root, run_root/'receipts', Path(tempfile.mkdtemp())/'upload'
+
+    def test_finish_removes_nothing_while_a_recorded_session_is_not_confirmed_ended(self):
+        run_root, receipts, upload = self.finish_run_root()
+        unconfirmed = {'stage': 'm', 'sid': 4242, 'ended': False}
+        with unittest.mock.patch.object(adapter, 'end_recorded', return_value=unconfirmed):
+            self.assertEqual(adapter.finish(self.binding, '41700000000', '1', upload, wait=1), 3)
+        cleanup = json.loads((upload/'cleanup.json').read_text())
+        self.assertEqual((cleanup['run']['lock'], cleanup['stage'], cleanup['removed'], cleanup['uploaded']),
+                         ('absent', unconfirmed, [], ['report.json']))
+        self.assertIn('could not be confirmed ended', cleanup['left'][0]['reason'])
+        self.assertTrue((run_root/'tree').is_dir())
+
+    def test_finish_still_uploads_when_its_lock_or_stage_record_cannot_be_used(self):
+        run_root, receipts, upload = self.finish_run_root()
+        os.symlink(receipts/'elsewhere', receipts/'run.lock')  # opened without following: ELOOP
+        self.assertEqual(adapter.finish(self.binding, '41700000000', '1', upload, wait=1), 3)
+        cleanup = json.loads((upload/'cleanup.json').read_text())
+        self.assertEqual((cleanup['run']['lock'], cleanup['removed'], cleanup['uploaded']),
+                         ('unreadable (OSError)', [], ['report.json']))
+        self.assertTrue((run_root/'tree').is_dir())
+        (receipts/'run.lock').unlink()
+        upload = Path(tempfile.mkdtemp())/'upload'
+        with unittest.mock.patch.object(adapter, 'end_recorded', side_effect=PermissionError(1, 'not permitted')):
+            self.assertEqual(adapter.finish(self.binding, '41700000000', '1', upload, wait=1), 3)
+        cleanup = json.loads((upload/'cleanup.json').read_text())
+        self.assertEqual((cleanup['stage']['ended'], cleanup['stage']['why'], cleanup['uploaded'], cleanup['removed']),
+                         (False, 'PermissionError while ending it', ['report.json'], []))
+
+    def test_a_stage_record_run_marked_ended_or_that_names_no_session_is_never_signalled(self):
+        receipts = Path(tempfile.mkdtemp())
+        tick = iter(range(1000))
+        cases = (({'sid': os.getpid(), 'stage': 'm', 'startTime': None, 'ended': True}, False, 'the leader start time was not recorded'),
+                 ({'sid': 0, 'stage': 'm', 'startTime': None}, False, 'the stage record names no stage session'),
+                 ({'sid': 1, 'stage': 'm', 'startTime': None}, False, 'the stage record names no stage session'))
+        for record, ended, why in cases:
+            with self.subTest(record=record):
+                (receipts/'stage.json').write_text(json.dumps(record))
+                with unittest.mock.patch.object(adapter.os, 'killpg') as killpg:
+                    self.assertEqual(adapter.end_recorded(receipts, clock=lambda: next(tick), sleep=lambda s: None),
+                                     {'stage': 'm', 'sid': record['sid'], 'ended': ended, 'why': why})
+                killpg.assert_not_called()
+        # an unreadable process table never confirms a recorded session gone
+        gone = subprocess.Popen(['true'])
+        gone.wait()
+        (receipts/'stage.json').write_text(json.dumps({'sid': gone.pid, 'stage': 'm', 'startTime': None}))
+        self.assertEqual(adapter.end_recorded(receipts, clock=lambda: next(tick), sleep=lambda s: None, grace=1,
+                                              members=lambda sid: None), {'stage': 'm', 'sid': gone.pid, 'ended': False})
+
+    def test_finish_never_signals_a_recorded_id_that_now_names_another_process(self):
+        run_root = self.parent/'launcher3-compile-41700000000-1'
+        receipts = run_root/'receipts'
+        receipts.mkdir(parents=True)
+        (receipts/'stage.json').write_text(json.dumps({'sid': os.getpid(), 'stage': 'm', 'startTime': 1}))
+        upload = Path(tempfile.mkdtemp())/'upload'
+        with unittest.mock.patch.object(adapter.os, 'killpg') as killpg:
+            self.assertEqual(adapter.finish(self.binding, '41700000000', '1', upload, wait=1), 0)
+        killpg.assert_not_called()
+        self.assertEqual(json.loads((upload/'cleanup.json').read_text())['stage']['why'], 'its ID now names another process')
+
+    def test_signal_at_first_finalizer_instruction_still_reports_and_releases_lock(self):
+        import inspect
+        lines, first = inspect.getsourcelines(adapter.run)
+        target = first + next(i for i, line in enumerate(lines) if 'late = sys.exc_info()[1]' in line)
+        fired = []
+
+        def trace(frame, event, arg):
+            if event == 'line' and frame.f_code is adapter.run.__code__ and frame.f_lineno == target and not fired:
+                fired.append(True)
+                os.kill(os.getpid(), signal.SIGTERM)
+            return trace
+        try:
+            with adapter.interrupts(), self.assertRaises(adapter.Interrupted):
+                sys.settrace(trace)
+                self.run_adapter()
+        finally:
+            sys.settrace(None)
+        self.assertEqual(fired, [True])
+        self.assertEqual(self.report()['interrupted']['signal'], 'SIGTERM')
+        receipts = self.parent/'launcher3-compile-41700000000-1/receipts'
+        fd, _ = adapter.wait_for_run(receipts, 0)
+        self.assertNotIn(fd, (None, -1))
+        os.close(fd)
+
+    def test_ordinary_stage_failure_is_a_sanitized_refusal_with_containment(self):
+        def compiler(*args, **kwargs):
+            def fail(path):
+                raise OSError('do not publish this raw error')
+            with unittest.mock.patch.object(adapter, 'end_session', return_value=False):
+                return adapter.supervised(['stand-in'], {}, '/', 10, '/',
+                                          popen=lambda *a, **k: SafetyRegressions.Leader(), used=fail)
+        self.compiler = lambda *a, **k: compiler
+        self.assertEqual(self.run_adapter(), 3)
+        report = self.report()
+        self.assertEqual(report['result'], 'refused')
+        self.assertEqual(report['stageFailure'], {'stage': 'stage', 'started': True, 'sessionEnded': False})
+        self.assertIn('OSError', report['refused'])
+        self.assertNotIn('do not publish', json.dumps(report))
+        self.assertNotIn('sourceProof', report)
+
+    def test_failed_lunch_still_requires_confirmed_containment(self):
+        self.lunch_result = (1, 'timeout', False)
+        self.assertEqual(self.run_adapter(), 3)
+        self.assertEqual(self.report()['result'], 'refused')
+        self.assertIn('containment: lunch', self.report()['refused'])
+        self.assertFalse([c for c in self.calls if c[0] == 'compile'])
+
+    def test_finish_preserves_work_when_an_ended_mark_is_not_confirmed(self):
+        run_root, receipts, upload = self.finish_run_root()
+        (receipts/'stage.json').write_text(json.dumps({'sid': 424242, 'stage': 'm', 'startTime': 7, 'ended': True}))
+        with unittest.mock.patch.object(adapter, 'proc_stat', return_value=None), \
+                unittest.mock.patch.object(adapter, 'session_members', return_value={424243: 424242}), \
+                unittest.mock.patch.object(adapter.os, 'killpg') as kill:
+            self.assertEqual(adapter.finish(self.binding, '41700000000', '1', upload), 3)
+        kill.assert_not_called()
+        report = json.loads((upload/'cleanup.json').read_text())
+        self.assertEqual((report['removed'], report['uploaded'], report['stage']['ended']), ([], ['report.json'], False))
+        self.assertTrue((run_root/'tree').is_dir())
+
+    def test_finish_upload_error_keeps_cleanup_and_other_receipts(self):
+        run_root, receipts, upload = self.finish_run_root()
+        (receipts/'classification.json').write_text('{}')
+        original = adapter.write_bytes_once
+
+        def write(path, data):
+            if path.name == 'report.json':
+                raise OSError('injected upload failure')
+            return original(path, data)
+        with unittest.mock.patch.object(adapter, 'write_bytes_once', side_effect=write):
+            self.assertEqual(adapter.finish(self.binding, '41700000000', '1', upload), 3)
+        report = json.loads((upload/'cleanup.json').read_text())
+        self.assertEqual(report['uploaded'], ['classification.json'])
+        self.assertIn('tree', report['removed'])
+        self.assertEqual(report['left'][0]['path'], 'receipts/report.json')
 
     def test_a_stopped_compile_is_recorded_and_never_a_pass(self):
         self.assertEqual(self.run_adapter(code=-15, stopped='memory'), 0)
@@ -2356,15 +3340,60 @@ class Fetch(unittest.TestCase):
                          ('https', '/run/tree', '/usr/bin:/bin', os.devnull))
         self.assertEqual((env['GIT_TERMINAL_PROMPT'], env['GIT_ASKPASS'], env['GIT_CONFIG_NOSYSTEM']), ('0', '/bin/false', '1'))
 
+    def test_an_interrupt_during_the_fetch_removes_its_git_and_goes_on(self):
+        def interrupt(*args, **kwargs):
+            raise adapter.Interrupted('SIGTERM')
+        with unittest.mock.patch.object(adapter, 'gitdir_problems', side_effect=interrupt):
+            with self.assertRaises(adapter.Interrupted):
+                self.fetch()
+        self.assertFalse(os.path.lexists(self.f.tree/'vendor/adevtool/.git'))
+        self.assertEqual((self.record['ok'], self.record['createdRemoved']), (False, True))
+        self.assertIn('interrupted', self.record['error'])
+
     def test_bounded_git_stops_at_its_deadline_or_its_bytes(self):
         clock = time.monotonic
-        code, stopped = adapter.bounded_git(['sleep', '30'], dict(os.environ), '/', clock() - 1, self.f.base, 1 << 30)
-        self.assertEqual(stopped, 'timeout')
-        code, stopped = adapter.bounded_git(['sleep', '30'], dict(os.environ), '/', clock() + 60, self.f.base, 10,
-                                            measure=lambda path: 11)
-        self.assertEqual(stopped, 'gitBytes')
+        self.assertEqual(adapter.bounded_git(['sleep', '30'], dict(os.environ), '/', clock() - 1, self.f.base, 1 << 30),
+                         (None, 'timeout', True))  # nothing was started
+        code, stopped, ended = adapter.bounded_git(['sleep', '30'], dict(os.environ), '/', clock() + 60, self.f.base, 10,
+                                                   measure=lambda path: 11)
+        self.assertEqual((stopped, ended), ('gitBytes', True))
         self.assertEqual(adapter.bounded_git(['true'], dict(os.environ), '/', clock() + 60, self.f.base, 10,
-                                             measure=lambda path: 0), (0, None))
+                                             measure=lambda path: 0), (0, None, True))
+
+    def test_each_fetch_step_records_its_session_and_marks_it_ended(self):
+        calls = []
+        self.fetch(stage=lambda pid, label, ended=False: calls.append((label, ended)))
+        steps = adapter.fetch_steps(self.f.tree/'vendor/adevtool', self.f.plan()['url'],
+                                    self.f.inputs['gitRequirement']['revision'])
+        self.assertEqual(calls, [('adevtool-git', False), ('adevtool-git', True)] * len(steps))
+
+    def test_a_fetch_step_whose_session_is_not_confirmed_ended_preserves_its_git(self):
+        dotgit = self.f.tree/'vendor/adevtool/.git'
+
+        def step(*args, **kwargs):
+            dotgit.mkdir()
+            (dotgit/'still-owned').write_text('keep')
+            return 0, None, False
+        with unittest.mock.patch.object(adapter, 'bounded_git', side_effect=step):
+            with self.assertRaisesRegex(adapter.Refused, 'its session could not be confirmed ended'):
+                self.fetch()
+        self.assertFalse(self.record['ok'])
+        self.assertIsNone(self.record['createdRemoved'])
+        self.assertEqual((dotgit/'still-owned').read_text(), 'keep')
+
+    def test_an_interrupted_unconfirmed_fetch_preserves_its_git(self):
+        dotgit = self.f.tree/'vendor/adevtool/.git'
+
+        def step(*args, **kwargs):
+            dotgit.mkdir()
+            error = adapter.Interrupted('SIGTERM')
+            error.stages = [{'stage': 'adevtool-git', 'started': True, 'sessionEnded': False}]
+            raise error
+        with unittest.mock.patch.object(adapter, 'bounded_git', side_effect=step), self.assertRaises(adapter.Interrupted):
+            self.fetch()
+        self.assertTrue(dotgit.is_dir())
+        self.assertIsNone(self.record['createdRemoved'])
+        self.assertFalse(self.record['sessionEnded'])
 
 
 if __name__ == '__main__':
