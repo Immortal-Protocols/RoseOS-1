@@ -114,16 +114,21 @@ class AddFailed(Exception):
     """An add that definitively did not create a version."""
 
 
+# Separate per-device source definitions, each holding exactly its one fixed profile name. They keep the active
+# Rango/Blazer records intact; an unbound definition grants no access and readiness still refuses it.
+EXTRA_PROFILES = (('os/signing-bootstrap/mustang.json', 'pro-mustang-v1'), ('os/signing-bootstrap/yogi.json', 'yogi-v1'))
+
+
 def load_profiles(root=ROOT):
     profiles = json.loads((root/PROFILES_PATH).read_text())
-    # Separate source definition keeps the active Rango/Blazer records intact.
-    # An unbound definition grants no access and readiness still refuses it.
-    mustang = root/'os/signing-bootstrap/mustang.json'
-    if mustang.is_file():
-        extra = json.loads(mustang.read_text())
-        if extra.get('schemaVersion') != 1 or set(extra.get('profiles', {})) != {'pro-mustang-v1'} \
-                or 'pro-mustang-v1' in profiles['profiles']:
-            raise ValueError('invalid or duplicate Mustang signing profile definition')
+    for path, name in EXTRA_PROFILES:
+        file = root/path
+        if not file.is_file():
+            continue
+        extra = json.loads(file.read_text())
+        if extra.get('schemaVersion') != 1 or set(extra.get('profiles', {})) != {name} \
+                or name in profiles['profiles']:
+            raise ValueError(f'invalid or duplicate {name} signing profile definition ({path})')
         profiles['profiles'].update(extra['profiles'])
     return profiles
 
@@ -1315,6 +1320,10 @@ def main(argv=None, env=None):
         p.add_argument('--profile', required=True)
         if command != 'plan':
             p.add_argument('--recipe-sha', required=True)
+        if command in ('prove', 'run'):
+            # The builder's shared lock; default: the original builder's (os/release-pipeline/frankel.json host.lockPath),
+            # unchanged. A dedicated builder passes its own (e.g. /srv/rose-yogi/yogi-build.lock).
+            p.add_argument('--lock', type=Path)
         if command == 'prove':
             p.add_argument('--proof-dir', required=True, type=Path)
         if command == 'run':
@@ -1333,7 +1342,10 @@ def main(argv=None, env=None):
         for failure in failures:
             print(f'::error::signing-bootstrap {args.command}: {failure}')
         return 4 if failures else 0
-    lock = json.loads((ROOT/PIPELINE_PATH).read_text())['host']['lockPath']
+    lock = str(args.lock) if args.lock else json.loads((ROOT/PIPELINE_PATH).read_text())['host']['lockPath']
+    if not Path(lock).is_absolute() or '..' in Path(lock).parts:
+        print(f'::error::signing-bootstrap {args.command}: --lock must be an absolute path')
+        return 2
     if args.command == 'prove':
         # Fixed summary only: a status word and fixed codes; never helper output, paths or file content.
         status, codes = prove(args.profile, profiles, env, args.recipe_sha, args.proof_dir, lock, now=now)
