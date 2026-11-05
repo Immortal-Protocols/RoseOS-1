@@ -615,6 +615,8 @@ class Wiring(unittest.TestCase):
                             ('mustang-build', '      - name: Prepare, allocate, integrate and compile Mustang once')):
             text = self.job(job)
             step = self.STEP.format(job=job)
+            if job == 'builder':
+                step = step.replace('        run:', "        if: inputs.mode != 'latest-draft'\n        run:")
             self.assertEqual(text.count(step), 1, job)
             self.assertIn('roseos-frankel-builder', text, job)
             self.assertLess(text.index(step), text.index(before), job)
@@ -626,6 +628,9 @@ class Wiring(unittest.TestCase):
             text = self.job(job)
             step = text[text.index('      - name: Reclaim regenerable build data\n'):]
             step = step[:step.index('\n      - ', 1)]
+            if job == 'builder':
+                self.assertIn("        if: inputs.mode != 'latest-draft'\n", step)
+                step = step.replace("        if: inputs.mode != 'latest-draft'\n", '')
             for unsafe in ('continue-on-error', '|| true', 'if:'):
                 self.assertNotIn(unsafe, step, job)
 

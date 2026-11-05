@@ -112,9 +112,10 @@ verification, transfer and draft download verification are unchanged. The publis
 leaves a **draft**: no public release, Latest/channel update, app publication or successor.
 The default `mode=latest-beta` preserves the normal public Beta button.
 
-This mode does not authorize runtime, fix federation, skip storage reclaim, or prove
-free space. The existing reclaim step still deletes policy-selected data and needs
-applicable authorization before dispatch. Builder and cleanup limits are unchanged.
+The private mode explicitly skips policy reclaim: it never invokes builder-reclaim.py apply.
+Available space must support the build without deleting old attempts or emptying reclaim trash.
+Other modes retain their existing reclaim behavior. This mode does not fix federation or prove
+free space. Frankel uses 32 make jobs for its n2-highmem-32 host; job and STOP limits are unchanged.
 For Mustang's fresh app handoff, commit the actual allocation receipt after the run,
 then use `app-inputs-export` for that build and bind the immutable export receipt;
 never substitute the previous release's app bytes. No version is chosen in advance.
