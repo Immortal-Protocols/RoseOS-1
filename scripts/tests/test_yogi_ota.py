@@ -61,13 +61,19 @@ class Fixture(unittest.TestCase):
         self.cfg['appInputs'].update(record=str(self.record))
         verifier = self.root/'app-inputs-verify.py'
         verifier.write_text('# synthetic stand-in for Release\'s verifier\n')
-        bound = {'profiles': {'yogi-v1': {'status': 'resource-bound', 'missing': [], 'project': 'protocols-465723',
+        bound = {'profiles': {'yogi-v1': {'device': 'yogi', 'status': 'resource-bound', 'missing': [], 'project': 'protocols-465723',
                                           'secrets': dict(yogi.SECRETS)}}}
         self.profiles = bound
-        original = yogi.profile_problem
+        bound['profiles']['yogi-v1'].update(accessEvidence='os/signing-bootstrap/yogi-access-binding.json',
+                                            access={'addVersionExpires': '2026-11-06T06:00:00Z', 'minimumRemainingSeconds': 1800})
+        original, original_access = yogi.profile_problem, yogi.key_access_problem
         profiles = mock.patch.object(yogi, 'profile_problem', lambda profiles=None: original(self.profiles))
         profiles.start()
         self.addCleanup(profiles.stop)
+        access = mock.patch.object(yogi, 'key_access_problem',
+                                   lambda profiles=None, now=None: original_access(self.profiles, now or self.now))
+        access.start()
+        self.addCleanup(access.stop)
         patcher = mock.patch.object(yogi, 'VERIFIER', verifier)
         patcher.start()
         self.addCleanup(patcher.stop)
@@ -152,13 +158,90 @@ class ContractTest(unittest.TestCase):
                           'make_latest: true', 'MUSTANG_V1'):
             self.assertNotIn(forbidden, text)
         self.assertIn('group: yogi-ota', text)
-        self.assertEqual(text.count('runs-on: [self-hosted, roseos-yogi-builder]'), 2)
+        self.assertEqual(text.count('runs-on: [self-hosted, roseos-yogi-builder]'), 3)
+
+
+class KeyBootstrapTest(Fixture):
+    def setUp(self):
+        super().setUp()
+        self.receipt.unlink()  # before the one-time key bootstrap no Yogi identity exists
+
+    def test_ready_key_bootstrap_needs_runner_and_resource_bound_yogi_profile_only(self):
+        self.assertEqual(yogi.blockers(self.cfg, 'key-bootstrap'), [])
+        self.cfg['builder']['status'] = 'runner-unregistered'
+        self.assertTrue(any('builder runner' in b for b in yogi.blockers(self.cfg, 'key-bootstrap')))
+
+    def test_existing_identity_unbound_or_foreign_profile_refuses(self):
+        self.receipt.write_text(json.dumps(receipt()))
+        self.assertIn('a Yogi bootstrap receipt is already committed: the key bootstrap is one-time',
+                      yogi.blockers(self.cfg, 'key-bootstrap'))
+        self.receipt.unlink()
+        bound = self.profiles['profiles']['yogi-v1']
+        for profile in ({}, {'yogi-v1': dict(bound, status='unbound')}, {'yogi-v1': dict(bound, device='mustang')}):
+            with self.subTest(profile=sorted(profile)):
+                self.profiles = {'profiles': profile}
+                self.assertTrue(any('signing profile' in b for b in yogi.blockers(self.cfg, 'key-bootstrap')))
+
+    def test_unbound_or_expiring_bootstrap_access_refuses(self):
+        bound = self.profiles['profiles']['yogi-v1']
+        for change in ({'accessEvidence': None}, {'access': {'addVersionExpires': '2026-11-06T03:20:00Z',
+                                                             'minimumRemainingSeconds': 1800}}):
+            with self.subTest(change=sorted(change)):
+                self.profiles = {'profiles': {'yogi-v1': dict(bound, **change)}}
+                self.assertTrue(any('bootstrap access' in b for b in yogi.blockers(self.cfg, 'key-bootstrap')))
+        self.profiles = {'profiles': {'yogi-v1': dict(bound, access={'liveCheck': True})}}  # live check only: allowed
+        self.assertEqual(yogi.blockers(self.cfg, 'key-bootstrap'), [])
+
+    def test_signing_bootstrap_cli_takes_lock_on_prove_and_run_only(self):
+        """The workflow never calls a flag the committed script lacks: --lock parses for prove and run (an unsafe path
+        is refused before any work), and preflight has no --lock."""
+        bootstrap = yogi.module('yogi_test_signing_bootstrap', 'signing-bootstrap.py')
+        common = ['--profile', 'yogi-v1', '--recipe-sha', 'a'*40]
+        with mock.patch.object(bootstrap.factory_signing, 'stop_on_signals', lambda handler: None), \
+                mock.patch('sys.stdout', new_callable=io.StringIO) as out:
+            self.assertEqual(bootstrap.main(['prove', *common, '--proof-dir', str(self.root/'p'), '--lock', 'relative.lock'], env={}), 2)
+            self.assertEqual(bootstrap.main(['run', *common, '--state-dir', str(self.root/'s'), '--receipt-dir',
+                                             str(self.root/'r'), '--lock', '/srv/rose-yogi/../x.lock'], env={}), 2)
+            with mock.patch('sys.stderr', new_callable=io.StringIO), self.assertRaises(SystemExit):
+                bootstrap.main(['preflight', *common, '--lock', '/srv/rose-yogi/yogi-build.lock'], env={})
+        self.assertIn('--lock must be an absolute path', out.getvalue())
+        self.assertFalse((self.root/'p').exists() or (self.root/'s').exists() or (self.root/'r').exists())
+
+    def test_committed_tree_refuses_key_bootstrap(self):
+        found = yogi.blockers(yogi.config(), 'key-bootstrap')
+        self.assertTrue(found)
+        self.assertTrue(any('builder runner' in b for b in found))
+
+    def test_workflow_stage_order_lock_and_public_receipt_only(self):
+        text = (yogi.ROOT/'.github/workflows/yogi-ota.yml').read_text()
+        job = text[text.index('  key-bootstrap:\n'):text.index('  build:\n')]
+        self.assertIn("if: inputs.stage == 'key-bootstrap'", job)
+        self.assertIn('runs-on: [self-hosted, roseos-yogi-builder]', job)
+        order = ['yogi_ota.py guard --stage key-bootstrap', 'signing-bootstrap.py preflight --profile yogi-v1',
+                 'signing-bootstrap.py prove --profile yogi-v1', 'actions-gcp-login.py login',
+                 'signing-bootstrap.py run --profile yogi-v1', 'actions-gcp-login.py logout', 'upload-artifact']
+        positions = [job.index(step) for step in order]
+        self.assertEqual(positions, sorted(positions))
+        self.assertEqual(job.count('--lock "$YOGI_LOCK"'), 2)
+        self.assertIn('YOGI_LOCK: /srv/rose-yogi/yogi-build.lock', job)
+        self.assertEqual(yogi.config()['builder']['lock'], '/srv/rose-yogi/yogi-build.lock')
+        self.assertIn(f"--state-dir {yogi.config()['builder']['bootstrapState']} ", job)  # no drift from yogi.json
+        self.assertEqual(job.count('path: '), 1)
+        self.assertIn('path: ${{ runner.temp }}/yogi-bootstrap/signing-bootstrap-receipt.json', job)
+        for forbidden in ('roseos-frankel-builder', 'pro-mustang-v1', 'MUSTANG', 'secrets.'):
+            self.assertNotIn(forbidden, job)
+        build = text[text.index('  build:\n'):text.index('  sign:\n')]
+        self.assertIn("if: inputs.stage != 'key-bootstrap'", build)
+        self.assertIn('needs: [controller, key-bootstrap, build, sign, publisher]', text)
 
 
 class IdentityTest(Fixture):
     def test_ready_fixture_passes_every_guard(self):
-        for stage in yogi.STAGES:
+        for stage in ('bootstrap', 'ota', 'publish'):
             self.assertEqual(yogi.blockers(self.cfg, stage, access=True, now=self.now), [], stage)
+        # once the identity exists the one-time key bootstrap refuses
+        self.assertEqual(yogi.blockers(self.cfg, 'key-bootstrap'),
+                         ['a Yogi bootstrap receipt is already committed: the key bootstrap is one-time'])
         self.assertEqual(yogi.identities(self.cfg), (PINS, {'keys': '1', 'passphrase': '1'}))
 
     def test_lab_foreign_or_incomplete_bootstrap_receipts_refuse(self):
