@@ -207,6 +207,7 @@ class Phone:
         self.listeners: list[Callable[[str, dict], None]] = []
         self.bus = bus
         self.version = 0
+        self.clipboard: str | None = None  # the simulated phone clipboard (copy_to_clipboard); reset keeps it
         self.reset()
 
     # ----- state -------------------------------------------------------
@@ -366,6 +367,21 @@ class Phone:
             if (e.kind != "text" and str(e.mark) == key) or e.id == key:
                 return e
         return None
+
+    # ----- clipboard ---------------------------------------------------
+    def copy_to_clipboard(self, text: str) -> dict:
+        """The simulated phone's side of rose.clipboard: it checks the text against its digest, as Rose Agent does."""
+        import hashlib
+        from .clipboard import copy
+
+        def write(action, text, sha256):
+            if hashlib.sha256(text.encode('utf-8')).hexdigest() != sha256:
+                return {'status': 'text_mismatch', 'action': action, 'written': False}
+            with self._lock:
+                self.clipboard = text
+            return {'status': 'copied', 'action': action, 'written': True, 'verified': 'readback',
+                    'characters': len(text), 'sensitive': True}
+        return copy(write, text)
 
     # ----- incoming ----------------------------------------------------
     def notify(self, app: str, title: str, text: str) -> None:
