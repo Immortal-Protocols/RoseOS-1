@@ -355,7 +355,7 @@ class WorkflowAppReuseTest(unittest.TestCase):
         self.assertIn('app-reuse', shape.cleanup_needs())
         self.assertIn('app-reuse', shape.modes())
         self.assertIn('  REUSE_BINDING: ${{ inputs.reuse_binding }}\n', WORKFLOW)
-        self.assertIn("    if: inputs.mode == 'os-release' || inputs.mode == 'latest-beta'\n", self.jobs['builder'])
+        self.assertIn("    if: inputs.mode == 'os-release' || (inputs.mode == 'latest-beta' || inputs.mode == 'latest-draft')\n", self.jobs['builder'])
         self.assertIn("    if: inputs.mode == 'app-only'\n", self.jobs['app-builder'])
 
     def test_guard_admits_only_rose_agent_and_a_well_formed_binding_in_reuse_mode(self):
