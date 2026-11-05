@@ -9,7 +9,8 @@ package dev.pixel.voice;
  * <li>SUITE: Rose's own suite (AppLabels.SUITE_PACKAGES, with the preferred camera), first on the app pages.</li>
  * <li>SYSTEM: an OS app (FLAG_SYSTEM or an updated system app) that is not one of ours, plus the known duplicates of a
  * suite app that AppLabels already names: the test Mail and Calendar builds, the alternate Weather, and every camera
- * app other than the one the suite uses. These go in the folder, still launchable from it.</li>
+ * app other than the one the suite uses, and retired apps (RETIRED, F02). These go in the folder, still launchable
+ * from it.</li>
  * <li>MAIN: everything else (Play Store and other installs, and our other builds), on the app pages as before.</li>
  * </ul>
  * Regular installed Claude, ChatGPT and Amazon are always MAIN, even if a build ever preinstalled them. The grouping is
@@ -22,6 +23,10 @@ final class HomeAppGroups {
 
  /** Apps that always stay on the app pages, outside the folder. */
  static final String[] KEEP_OUT = {"com.anthropic.claude", "com.openai.chatgpt", "com.amazon.mShop.android.shopping"};
+ /** F02: retired standalone apps, by exact package. The obsolete Rose Models app (dev.pixel.models) is no longer
+  * shipped (Release retires its distribution); a copy already installed is never removed by Rose, only moved off main
+  * Home and the app pages into the System folder, where its owner can still open it or uninstall it (AppRemoval). */
+ static final String[] RETIRED = {"dev.pixel.models"};
  /** Second copies of a suite app (AppLabels.label names each one as such). */
  static final String[] DUPLICATES = {"dev.pixel.mail.debug", "org.fossify.calendar.pixel.debug", "dev.pixel.weather.opus"};
  /** Camera apps; the one AppLabels.preferredCamera picks is the suite's Camera, the others are duplicates. */
@@ -34,6 +39,7 @@ final class HomeAppGroups {
   */
  static int group(String packageName, boolean suite, boolean ours, boolean preinstalled, String cameraPackage) {
   if (has(KEEP_OUT, packageName)) return MAIN;
+  if (has(RETIRED, packageName)) return SYSTEM;
   if (suite) return SUITE;
   if (has(DUPLICATES, packageName)) return SYSTEM;
   if (has(CAMERAS, packageName) && !packageName.equals(cameraPackage)) return SYSTEM;

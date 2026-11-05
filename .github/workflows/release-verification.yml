@@ -96,6 +96,9 @@ on:
       - 'workspace/rose-agent/server/delivery.mjs'
       - 'scripts/host-reconcile.py'
       - 'scripts/builder-reclaim.py'
+      - 'scripts/daily-release.py'
+      - 'scripts/tests/test_daily_release.py'
+      - '.github/workflows/daily-release.yml'
       - 'scripts/mustang-allocate.py'
       - 'scripts/tests/test_builder_reclaim.py'
       - 'scripts/host-sdk-layout.py'
@@ -153,6 +156,7 @@ on:
       - 'scripts/models-publication.py'
       - 'scripts/tests/test_models_publication.py'
       - '.github/workflows/models-publish.yml'
+      - 'scripts/tests/test_models_app_not_bundled.py'
       - 'os/models-signing/**'
       - 'os/signing-bootstrap/**'
       - 'scripts/tests/test_device_contract.py'
@@ -264,6 +268,9 @@ on:
       - 'workspace/rose-agent/server/delivery.mjs'
       - 'scripts/host-reconcile.py'
       - 'scripts/builder-reclaim.py'
+      - 'scripts/daily-release.py'
+      - 'scripts/tests/test_daily_release.py'
+      - '.github/workflows/daily-release.yml'
       - 'scripts/mustang-allocate.py'
       - 'scripts/tests/test_builder_reclaim.py'
       - 'scripts/host-sdk-layout.py'
@@ -321,6 +328,7 @@ on:
       - 'scripts/models-publication.py'
       - 'scripts/tests/test_models_publication.py'
       - '.github/workflows/models-publish.yml'
+      - 'scripts/tests/test_models_app_not_bundled.py'
       - 'os/models-signing/**'
       - 'os/signing-bootstrap/**'
       - 'scripts/tests/test_device_contract.py'
@@ -400,6 +408,7 @@ jobs:
           python3 os/tests/test_apply_os_changes.py
           python3 scripts/tests/test_host_build_reconcile.py
           python3 scripts/tests/test_builder_reclaim.py
+          python3 scripts/tests/test_daily_release.py
           python3 scripts/tests/test_actions_gcp_login.py
           python3 scripts/tests/test_app_release.py
           python3 scripts/tests/test_app_release_publisher.py
@@ -416,6 +425,7 @@ jobs:
           python3 scripts/tests/test_models_signing_bootstrap.py
           python3 scripts/tests/test_models_apk_signing.py
           python3 scripts/tests/test_models_publication.py
+          python3 scripts/tests/test_models_app_not_bundled.py
           node --test workspace/rose-agent/delivery/catalog.test.mjs
           python3 -c "import sys; sys.path.insert(0, 'scripts'); import importlib.util as u; s = u.spec_from_file_location('m', 'scripts/release-manifest.py'); m = u.module_from_spec(s); s.loader.exec_module(m); [m.load_manifest(p) for p in sys.argv[1:]]" os/release-evidence/*/manifest.json
       - name: Factory package verifier (signature cases must run, so ssh-keygen is required)

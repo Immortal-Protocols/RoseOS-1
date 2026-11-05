@@ -1,0 +1,42 @@
+{
+  "schema": "roseos.daily-lanes.v1",
+  "basis": "1F (Rose daily work plan, 2026-11-05): build, sign, verify and publish each flavor daily through its existing manual entry point, isolated per flavor; manual dispatch stays. Source only: no schedule exists and every lane is disabled until an owner-approved activation change. scripts/daily-release.py reads this file.",
+  "activation": "Activation is one reviewed change: it enables a lane here and adds the daily schedule to .github/workflows/daily-release.yml. Both still need owner approval; neither is part of this source.",
+  "window": {
+    "timeZone": "America/Los_Angeles",
+    "time": null,
+    "note": "Chief publishes the chosen daily window in Pacific time; the activation change writes it here and as the workflow's schedule."
+  },
+  "lanes": [
+    {
+      "name": "frankel",
+      "enabled": false,
+      "workflow": "os-release.yml",
+      "inputs": {"mode": "latest-beta"},
+      "runTitle": "Build & publish latest Pixel 10",
+      "deliveryJob": "publisher",
+      "lastGood": "latest-beta promotes a new Beta Latest only after verification and the download check; a failed run publishes nothing new and older releases stay for rollback.",
+      "owner": "Release (Frankel route); capacity: Dev Infra"
+    },
+    {
+      "name": "mustang",
+      "enabled": false,
+      "workflow": "os-release.yml",
+      "inputs": {"mode": "mustang-ota", "mustang_publish_ota": "true"},
+      "runTitlePrefix": "mustang-ota ",
+      "deliveryJob": "mustang-ota-publisher",
+      "lastGood": "mustang-ota publishes the OTA before the channel metadata and never Latest; a failed run leaves mustang-stable on the last good build.",
+      "owner": "Mustang owner (route); capacity: Dev Infra"
+    },
+    {
+      "name": "yogi",
+      "enabled": false,
+      "workflow": "yogi-ota.yml",
+      "inputs": {"stage": "ota", "publish": "true"},
+      "runTitlePrefix": "yogi-ota ota ",
+      "deliveryJob": "publisher",
+      "lastGood": "yogi-ota publishes the OTA first and yogi-stable last, never Latest; a failed run leaves the channel on the last good build.",
+      "owner": "Yogi owner (route, PR #558); capacity: its dedicated builder"
+    }
+  ]
+}

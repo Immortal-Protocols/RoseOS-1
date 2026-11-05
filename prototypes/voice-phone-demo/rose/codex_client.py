@@ -22,7 +22,7 @@ class CodexClient:
         self.process = subprocess.Popen(command or [os.environ.get('ROSE_NODE_BIN', 'node'),
             str(self.cwd / 'rose-agent/server/codex-voice-bridge.mjs')],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-            text=True, bufsize=1)
+            text=True, encoding='utf-8', errors='strict', bufsize=1)  # the bridge writes UTF-8 whatever the host locale
         self.reader = threading.Thread(target=self._read, name='codex-events', daemon=True)
         self.reader.start()
 

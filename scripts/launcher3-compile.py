@@ -53,8 +53,19 @@ loads OS Product's checker (scripts/launcher3-compile-contract.py), which B's te
                                  shallow, commit, root tree, full fsck, its tree equals the pinned listing, nothing
                                  redirects outside the copy) and removed again on any failure; sampled stops (every
                                  SAMPLE_SECONDS)
-                                 on the output filesystem's growth (OUTPUT_STOP_BYTES) and the process group's resident
-                                 memory (MEMORY_STOP_BYTES), and a wall-clock COMPILE_SECONDS; TERM, then KILL;
+                                 on the output filesystem's growth (OUTPUT_STOP_BYTES) and the resident memory of the
+                                 stage's whole session (MEMORY_STOP_BYTES), and a wall-clock COMPILE_SECONDS; a stop
+                                 ends the stage's whole session (TERM with CONT, then KILL, to every process group in
+                                 it: ninja gives each job its own), and a session that outlives its leader's normal
+                                 exit is ended and stops the stage ('leftover'); each stage records whether its session
+                                 was confirmed gone, and one that was not stops the run. A stage runs under deferral for
+                                 its whole life: the outer timeout's TERM, or a cancel reaching this helper through the
+                                 step's exec'd timeout (SIGTERM, SIGINT, SIGHUP, SIGQUIT), is noticed within
+                                 POLL_SECONDS and ends the running stage's session within INTERRUPT_GRACE_SECONDS a
+                                 phase, inside a cancel's 7.5 s before the runner's SIGTERM, and the report says
+                                 interrupted and whether the session was confirmed gone. run holds receipts/run.lock for
+                                 its whole life and names each running stage's session in receipts/stage.json, marked
+                                 ended once run confirms it gone;
                               4. a sanitized report.json: the branch, the classification, the bound inputs (for the
                                  candidate branch the bundle report used and what of its association was taken on
                                  trust), the compile outcome, the source-list and classpath proof and both aconfig flag
@@ -62,15 +73,17 @@ loads OS Product's checker (scripts/launcher3-compile-contract.py), which B's te
                                  current bytes as provenance.
 
   finish --run-id --attempt --upload-dir
-                              always after run: only report.json and classification.json are copied for upload, then
-                              this run's tree, out, home and tmp are removed (cleanup.json says what was removed or left);
-                              nothing outside the run root is touched.
+                              always after run: it first waits up to FINISH_LOCK_SECONDS for run's lock and ends a
+                              recorded stage session that outlived run (or removes nothing and says so); then only
+                              report.json and classification.json are copied for upload, and this run's tree, out, home
+                              and tmp are removed (cleanup.json says what was removed or left); nothing outside the run
+                              root is touched.
 
 What a passing report shows: the patched handlers and overlays type-check and compile on the real classpath, and the
 generated aconfig values. Not R8, manifest merge, APK resources, packaging, signing or runtime behaviour. The sampled
 stops can overshoot and are not hard caps; containment is by paths and environment only (no cgroup or quota exists).
 Bounds are first-measurement ceilings proposed by Infra, not measurements. Exit status: 0 report written, 2 invalid,
-3 refused, 4 unbound.
+3 refused or interrupted, 4 unbound.
 """
 import argparse
 import contextlib
@@ -236,6 +249,24 @@ SOURCE_BOUND_BYTES, RESERVE_BYTES = 150 * GIB, 300 * GIB
 PREPARE_SECONDS, COMPILE_SECONDS = 120 * 60, 120 * 60
 OUTPUT_STOP_BYTES, MEMORY_STOP_BYTES = 150 * GIB, 64 * GIB
 SAMPLE_SECONDS, KILL_GRACE_SECONDS = 5, 30
+# A running stage notices an interrupt this often, and a session being ended is rescanned and re-signalled this often
+# (a job that made a new process group since the last scan is not missed).
+POLL_SECONDS = 0.25
+# After the outer timeout's TERM or a cancel: TERM, then KILL, each phase this long at most, so the stage's session is
+# gone and the report written before the runner's next step. On a cancel the runner sends SIGINT to the step's entry
+# process, SIGTERM 7.5 s later, and kills the process tree 2.5 s after that (docs.github.com, Actions reference,
+# workflow cancellation); the outer timeout's own kill-after is 30 s. A job's timeout-minutes is not described there;
+# the same budget serves it.
+INTERRUPT_GRACE_SECONDS = 2.5
+CANCEL_SIGTERM_SECONDS = 7.5
+INTERRUPT_SIGNALS = (signal.SIGTERM, signal.SIGINT, signal.SIGHUP, signal.SIGQUIT)
+# finish waits this long for run's lock (receipts/run.lock, held for run's whole life), so it never removes a tree a
+# live run still uses: the kill-after and its cleanup, with margin.
+FINISH_LOCK_SECONDS = 60
+RUN_LOCK, STAGE_RECORD = 'run.lock', 'stage.json'
+# interrupts() state: a signal while a stage runs, or while the report is written (deferred), is held: the stage takes
+# it at its next poll, once it can end its own session, and the report once it is whole.
+_INTERRUPT = {'deferring': 0, 'pending': None, 'raised': False}
 # The aconfig flags the report binds come from the contract's flagEvidence: each flag's own aconfig_declarations module,
 # its expectedOutputDir (out/... relative to OUT_DIR's parent naming) and its exact expectedLine
 # ("<package>.<name>:<permission>=<state:bool>", the format of the module's aconfig-flags.txt).
@@ -258,6 +289,14 @@ class Unbound(Exception):
 
 class Refused(Exception):
     pass
+
+
+class Interrupted(BaseException):
+    """The outer timeout's TERM or a cancel reached run (interrupts); no except Exception swallows it. stages lists
+    each stage it stopped and whether that stage's session was confirmed gone."""
+    def __init__(self, name):
+        super().__init__(name)
+        self.stages = []
 
 
 def sha256_bytes(data):
@@ -1103,39 +1142,175 @@ def dir_bytes(path):
     return total
 
 
-def end_group(proc, clock=time.monotonic, sleep=time.sleep):
-    """TERM, then KILL, the process group, each with KILL_GRACE_SECONDS to end."""
+def proc_stat(entry):
+    """(state, pgid, session, starttime) from /proc/<pid>/stat, or None when the process is gone. The comm field may hold
+    any bytes, ')' included, so the fields are read after its last ')'; any other failure raises (fail closed)."""
+    try:
+        data = (Path(entry)/'stat').read_bytes()
+    except (FileNotFoundError, ProcessLookupError):
+        return None
+    fields = data[data.rindex(b')') + 2:].split()
+    return fields[0].decode('ascii'), int(fields[2]), int(fields[3]), int(fields[19])
+
+
+def session_members(sid, proc=Path('/proc')):
+    """{pid: pgid} of every live (not zombie) process in session sid, or None when the process table cannot be read
+    whole (the caller then treats the session as alive: fail closed). While any member lives, sid names no other
+    session, so it is never another's."""
+    members = {}
+    try:
+        entries = [e for e in proc.iterdir() if e.name.isdigit()]
+        for entry in entries:
+            stat = proc_stat(entry)
+            if stat is not None and stat[0] != 'Z' and stat[2] == sid:
+                members[int(entry.name)] = stat[1]
+    except (OSError, ValueError, IndexError, UnicodeDecodeError):
+        return None
+    return members
+
+
+def signal_session(live, sig):
+    """sig (and CONT after TERM, so a stopped member wakes to it) to every process group of a session's members. A
+    group that is gone, or none of whose members may be signalled, is passed over: the caller's next scan decides."""
+    for pgid in sorted(set(live.values())):
+        for s in ((sig, signal.SIGCONT) if sig == signal.SIGTERM else (sig,)):
+            with contextlib.suppress(ProcessLookupError, PermissionError):
+                os.killpg(pgid, s)
+
+
+def take_interrupt():
+    """Raises the held interrupt, once, where the caller can still end what it started."""
+    if _INTERRUPT['pending'] and not _INTERRUPT['raised']:
+        _INTERRUPT['raised'] = True
+        raise Interrupted(_INTERRUPT['pending'])
+
+
+def session_gone(sid, members=None, sleep=time.sleep):
+    """Require two complete empty scans a poll apart. A member may fork and exit during the first enumeration; never accept
+    that one snapshot as confirmation. This remains session containment, not a cgroup guarantee against setsid."""
+    members = members or session_members
+    if members(sid) != {}:
+        return False
+    sleep(POLL_SECONDS)
+    return members(sid) == {}
+
+
+def end_session(proc, clock=time.monotonic, sleep=time.sleep, grace=None, members=None):
+    """End a stage's whole session (start_new_session makes its leader's pid the sid): TERM with CONT, then KILL, to
+    every process group in it, the leader's own and those its children made (ninja gives each job its own). The session
+    is rescanned every POLL_SECONDS: TERM goes once to each group as it is found, and KILL again to every group at
+    each scan, so a group made since the last scan is not missed. Each phase lasts grace seconds at most, or
+    INTERRUPT_GRACE_SECONDS once an interrupt is pending. True once confirmed gone; False while members
+    remain after the KILL phase or the process table cannot be read. A session already gone is never signalled. grace
+    defaults to KILL_GRACE_SECONDS, and members to session_members, as they are when called."""
+    grace = KILL_GRACE_SECONDS if grace is None else grace
+    members = members or session_members
+    sid = proc.pid
     for sig in (signal.SIGTERM, signal.SIGKILL):
-        with contextlib.suppress(ProcessLookupError):
-            os.killpg(proc.pid, sig)
-        end = clock() + KILL_GRACE_SECONDS
-        while proc.poll() is None and clock() < end:
-            sleep(1)
-        if proc.poll() is not None:
-            break
+        start, told = clock(), set()
+        while True:
+            proc.poll()
+            live = members(sid)
+            if live == {} and proc.returncode is not None and session_gone(sid, members, sleep):
+                return True
+            targets = dict(live or {})
+            if proc.returncode is None:
+                targets[sid] = sid  # the leader's own group, even when the table cannot be read
+            if sig == signal.SIGTERM:  # once to each group, so a member that handles TERM can finish doing so
+                targets = {pid: pgid for pid, pgid in targets.items() if pgid not in told}
+                told.update(targets.values())
+            signal_session(targets, sig)
+            if clock() - start >= (min(grace, INTERRUPT_GRACE_SECONDS) if _INTERRUPT['pending'] else grace):
+                break
+            sleep(POLL_SECONDS)
+    proc.poll()
+    return proc.returncode is not None and session_gone(sid, members, sleep)
 
 
 def bounded_git(argv, env, cwd, deadline, gitdir, limit, popen=subprocess.Popen, clock=time.monotonic,
-                sleep=time.sleep, measure=dir_bytes):
-    """(exit, stoppedBy or None) for one git command in its own session: every second the stage deadline and the bytes
-    under gitdir are compared with their limits, and a stop ends the group. Checked once more after exit (overshoot)."""
+                sleep=time.sleep, measure=dir_bytes, stage=None):
+    """(exit, stoppedBy or None, sessionEnded) for one git command in its own session, run under deferral for its whole
+    life (see stage_ended): every second the stage deadline and the bytes under gitdir are compared with their limits,
+    and a stop ends the session. Checked once more after exit (overshoot); a session that outlives its leader is ended
+    ('leftover'). stage(pid, label), when given, records the session as soon as it exists."""
     if clock() >= deadline:  # the stage deadline already passed: nothing is started
-        return None, 'timeout'
-    proc = popen(argv, env=env, cwd=cwd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
-    stopped = None
-    while proc.poll() is None:
-        if clock() >= deadline:
-            stopped = 'timeout'
-        elif measure(gitdir) > limit:
-            stopped = 'gitBytes'
-        if stopped:
-            end_group(proc, clock, sleep)
-            break
-        sleep(1)
-    code = proc.wait()
-    if not stopped and measure(gitdir) > limit:
-        stopped = 'gitBytes'
-    return code, stopped
+        return None, 'timeout', True
+    with deferred(lambda error: stage_failed(proc, error, 'adevtool-git', stage, clock, sleep, ended)):
+        proc, ended = None, None
+        try:
+            proc = popen(argv, env=env, cwd=cwd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         start_new_session=True)
+            if stage is not None:
+                stage(proc.pid, 'adevtool-git')
+            stopped, ended, sample = None, None, clock()
+            while proc.poll() is None:
+                take_interrupt()
+                if clock() >= sample:
+                    sample = clock() + 1
+                    if clock() >= deadline:
+                        stopped = 'timeout'
+                    elif measure(gitdir) > limit:
+                        stopped = 'gitBytes'
+                    if stopped:
+                        ended = end_session(proc, clock, sleep)
+                        break
+                sleep(POLL_SECONDS)
+            code, stopped, ended = settled(proc, stopped, ended, clock, sleep)
+            if not stopped and measure(gitdir) > limit:
+                stopped = 'gitBytes'
+            stage_ended(stage, proc, 'adevtool-git', ended)
+            take_interrupt()
+            return code, stopped, ended
+        except BaseException as error:
+            raise stage_failed(proc, error, 'adevtool-git', stage, clock, sleep, ended)  # noqa: B904
+
+
+def settled(proc, stopped, ended, clock, sleep):
+    """(exit, stoppedBy, sessionEnded) once the stage's leader has exited or a stop has ended its session: a session
+    that outlives a normal exit is ended and stops the stage ('leftover': it could still change the outputs).
+    sessionEnded is true only once the whole session is confirmed gone (a process table that cannot be read never
+    confirms it); exit is None while the leader still lives."""
+    if not stopped:
+        if session_gone(proc.pid, sleep=sleep):
+            ended = True
+        else:
+            ended = end_session(proc, clock, sleep)
+            stopped = 'leftover'
+    return proc.poll(), stopped, bool(ended)
+
+
+def stage_ended(stage, proc, label, ended):
+    """Mark only a confirmed end. finish rechecks the session before removing files, but never signals a marked ID."""
+    if stage is not None and ended:
+        with contextlib.suppress(OSError):
+            stage(proc.pid, label, ended=True)
+
+
+def stage_failed(proc, error, label, stage, clock, sleep, ended=None):
+    """The exception a stage leaves with after error (an interrupt it took, or any failure): its session is ended first,
+    within INTERRUPT_GRACE_SECONDS a phase. A stage runs under deferral, so no signal can cut this short; an interrupt
+    that arrived while it failed is raised in its place, from it. A stop's existing result is reused, never a second
+    shutdown budget. Both ordinary failures and interrupts carry the stage and its containment status."""
+    # A stop already attempted both phases. Repeating them here would double a cancel's five-second budget.
+    if proc is None:
+        ended = True
+    elif ended is None:
+        try:
+            ended = end_session(proc, clock, sleep, INTERRUPT_GRACE_SECONDS)
+        except Exception:  # noqa: BLE001  (a failure while cleaning up never replaces the error being handled)
+            ended = False
+    if proc is not None:
+        stage_ended(stage, proc, label, ended)
+    if not isinstance(error, Interrupted) and _INTERRUPT['pending'] and not _INTERRUPT['raised']:
+        _INTERRUPT['raised'] = True
+        late = Interrupted(_INTERRUPT['pending'])
+        late.__cause__ = error
+        error = late
+    if isinstance(error, Interrupted):
+        error.stages.append({'stage': label, 'started': proc is not None, 'sessionEnded': ended})
+    else:
+        error.stage_status = {'stage': label, 'started': proc is not None, 'sessionEnded': ended}
+    return error
 
 
 def git_output(argv, env, cwd, deadline, clock=time.monotonic, run=subprocess.run):
@@ -1251,11 +1426,11 @@ def gitdir_problems(tree, work, inputs, raw_listing, env, lunch_env, deadline, l
 
 def adevtool_public_fetch(tree, plan, run_root, record, root=ROOT, protocol='https', seconds=ADEVTOOL_FETCH_SECONDS,
                           limit=ADEVTOOL_GIT_BYTES, popen=subprocess.Popen, clock=time.monotonic, sleep=time.sleep,
-                          hasher=git_blob_id):
+                          hasher=git_blob_id, stage=None):
     """The admitted public fetch (gitRequirement.publicFetch) into the copy: fetch_steps under fetch_env, then every
-    acceptance item (gitdir_problems) and the working tree again, all within the attempt's ceiling. On any failure the
-    .git this attempt created is removed, nothing else, and the run refuses; record (the report's adevtoolGit section)
-    says what happened."""
+    acceptance item (gitdir_problems) and the working tree again, all within the attempt's ceiling. On failure the
+    .git this attempt created is removed only after its session is confirmed gone. Otherwise it stays for finish;
+    record (the report's adevtoolGit section) says what happened."""
     inputs, url = plan['inputs'], plan['url']
     git = inputs['gitRequirement']
     tree, run_root = Path(tree), Path(run_root)
@@ -1289,9 +1464,11 @@ def adevtool_public_fetch(tree, plan, run_root, record, root=ROOT, protocol='htt
     env, lunch_env = fetch_env(tree, home, protocol), contained_env(run_root)
     deadline = clock() + seconds
 
+    safe_to_remove = True
+
     def refuse(why):
         removed = None
-        if os.path.lexists(dotgit):
+        if safe_to_remove and os.path.lexists(dotgit):
             try:
                 if dotgit.is_symlink():
                     dotgit.unlink()
@@ -1300,12 +1477,17 @@ def adevtool_public_fetch(tree, plan, run_root, record, root=ROOT, protocol='htt
                 removed = True
             except OSError:
                 removed = False
-        record.update(ok=False, error=why, createdRemoved=removed)
+        record.update(ok=False, error=why, createdRemoved=removed, sessionEnded=safe_to_remove)
         raise Refused(f'adevtool-git: {why}')
 
     try:
         for argv in fetch_steps(work, url, git['revision']):
-            code, stopped = bounded_git(argv, env, str(work), deadline, dotgit, limit, popen, clock, sleep)
+            safe_to_remove = False  # includes an exception before the step can return its containment result
+            code, stopped, ended = bounded_git(argv, env, str(work), deadline, dotgit, limit, popen, clock, sleep,
+                                               stage=stage)
+            safe_to_remove = ended
+            if not ended:
+                refuse(f'{argv[3] if argv[1] == "-C" else argv[1]}: its session could not be confirmed ended')
             if code or stopped:
                 refuse(f'{argv[3] if argv[1] == "-C" else argv[1]} failed: {stopped or "exit " + str(code)}')
         problems = gitdir_problems(tree, work, inputs, raw_listing, env, lunch_env, deadline, limit, clock)
@@ -1330,7 +1512,16 @@ def adevtool_public_fetch(tree, plan, run_root, record, root=ROOT, protocol='htt
         return record
     except Refused:
         raise
-    except Exception as error:  # noqa: BLE001  (any other failure still removes the created .git and refuses)
+    except Interrupted as error:
+        if error.stages:
+            safe_to_remove = all(s['sessionEnded'] for s in error.stages)
+        with contextlib.suppress(Refused):
+            refuse('interrupted (the outer timeout or a cancel)')
+        raise
+    except Exception as error:  # noqa: BLE001  (any other failure refuses, preserving unconfirmed work)
+        if hasattr(error, 'stage_status'):
+            safe_to_remove = error.stage_status['sessionEnded']
+            record['stageFailure'] = error.stage_status
         refuse(f'{type(error).__name__} during the fetch or its checks')
 
 
@@ -1607,16 +1798,17 @@ def classpath_proof(out):
 
 # ---------------------------------------------------------------- bounded processes
 
-def group_rss(pgid, proc=Path('/proc')):
-    """Resident bytes of every process in a process group (sampled; may miss short-lived processes)."""
+def session_rss(sid, proc=Path('/proc')):
+    """Resident bytes of every process in a session: the stage's leader and every job group ninja makes (sampled; may
+    miss short-lived processes)."""
     total, page = 0, os.sysconf('SC_PAGE_SIZE')
     for entry in proc.iterdir():
         if not entry.name.isdigit():
             continue
         with contextlib.suppress(OSError, ValueError, IndexError):
-            stat = (entry/'stat').read_text()
-            if int(stat[stat.rindex(')') + 2:].split()[2]) == pgid:
-                total += int((entry/'statm').read_text().split()[1]) * page
+            stat = proc_stat(entry)
+            if stat is not None and stat[2] == sid:
+                total += int((entry/'statm').read_bytes().split()[1]) * page
     return total
 
 
@@ -1626,23 +1818,42 @@ def used_bytes(path):
 
 
 def supervised(argv, env, cwd, seconds, out_dir, popen=subprocess.Popen, clock=time.monotonic, sleep=time.sleep,
-               rss=group_rss, used=used_bytes):
-    """(exit, stoppedBy or None). Own session; every SAMPLE_SECONDS the output filesystem's growth and the group's RSS
-    are compared with their stop thresholds; a stop or the timeout ends the group with TERM, then KILL."""
-    proc = popen(argv, env=env, cwd=cwd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
-    start_used, deadline, stopped = used(out_dir), clock() + seconds, None
-    while proc.poll() is None:
-        if clock() > deadline:
-            stopped = 'timeout'
-        elif used(out_dir) - start_used > OUTPUT_STOP_BYTES:
-            stopped = 'output'
-        elif rss(proc.pid) > MEMORY_STOP_BYTES:
-            stopped = 'memory'
-        if stopped:
-            end_group(proc, clock, sleep)
-            break
-        sleep(SAMPLE_SECONDS)
-    return proc.wait(), stopped
+               rss=session_rss, used=used_bytes, stage=None, label='stage'):
+    """(exit, stoppedBy or None, sessionEnded). Own session, run under deferral for its whole life: an interrupting
+    signal is held, taken at the next POLL_SECONDS poll, and the session ended before it leaves (stage_failed), as on
+    any other exception. Every SAMPLE_SECONDS the output filesystem's growth and the session's RSS are compared with
+    their stop thresholds; a stop or the timeout ends the whole session (end_session), and a session that outlives its
+    leader's normal exit is ended and stops the stage ('leftover'). stage(pid, label), when given, records the session
+    as soon as it exists, and marks it ended once confirmed gone."""
+    with deferred(lambda error: stage_failed(proc, error, label, stage, clock, sleep, ended)):
+        proc, ended = None, None
+        try:
+            proc = popen(argv, env=env, cwd=cwd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         start_new_session=True)
+            if stage is not None:
+                stage(proc.pid, label)
+            start_used, deadline, stopped, ended, sample = used(out_dir), clock() + seconds, None, None, clock()
+            while proc.poll() is None:
+                take_interrupt()
+                if clock() >= sample:
+                    sample = clock() + SAMPLE_SECONDS
+                    if clock() > deadline:
+                        stopped = 'timeout'
+                    elif used(out_dir) - start_used > OUTPUT_STOP_BYTES:
+                        stopped = 'output'
+                    elif rss(proc.pid) > MEMORY_STOP_BYTES:
+                        stopped = 'memory'
+                    if stopped:
+                        ended = end_session(proc, clock, sleep)
+                        break
+                sleep(POLL_SECONDS)
+            result = settled(proc, stopped, ended, clock, sleep)
+            ended = result[2]
+            stage_ended(stage, proc, label, result[2])
+            take_interrupt()
+            return result
+        except BaseException as error:
+            raise stage_failed(proc, error, label, stage, clock, sleep, ended)  # noqa: B904
 
 
 def contained_env(run_root, path=os.environ.get('PATH', '/usr/bin:/bin')):
@@ -1653,6 +1864,10 @@ def contained_env(run_root, path=os.environ.get('PATH', '/usr/bin:/bin')):
            # Git discovery stops at the copy root (no parent repository can answer), and no system or user git
            # configuration is read.
            'GIT_CEILING_DIRECTORIES': str(run_root/'tree'), 'GIT_CONFIG_NOSYSTEM': '1', 'GIT_CONFIG_GLOBAL': '/dev/null'}
+    # The runner's own job-end sweep ends processes that carry its tracking ID: a last backstop for anything that
+    # escapes the session (best effort: a tool that rebuilds its environment drops it).
+    if os.environ.get('RUNNER_TRACKING_ID'):
+        env['RUNNER_TRACKING_ID'] = os.environ['RUNNER_TRACKING_ID']
     return env
 
 
@@ -1696,6 +1911,59 @@ def write_once(path, document):
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
     with os.fdopen(fd, 'w') as f:
         f.write(json.dumps(document, indent=2, sort_keys=True) + '\n')
+
+
+def hold_run_lock(receipts):
+    """run's own lock, receipts/run.lock, held for its whole life (the kernel releases it if python dies): finish
+    waits for it, so it never removes a tree a live run still uses."""
+    fd = os.open(Path(receipts)/RUN_LOCK, os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    fcntl.flock(fd, fcntl.LOCK_EX)
+    return fd
+
+
+def stage_recorder(receipts):
+    """stage(pid, label, ended=False): receipts/stage.json names the running stage's session (its leader's pid is its
+    sid) and the leader's start time, so finish can end a session that outlived run and never signal a reused process
+    ID; ended=True marks it confirmed gone, and finish then signals nothing."""
+    receipts = Path(receipts)
+    started = {}
+
+    def stage(pid, label, ended=False):
+        if not ended:
+            stat = proc_stat(Path('/proc')/str(pid))
+            started[pid] = None if stat is None else stat[3]
+        staging = receipts/f'.{STAGE_RECORD}.new'
+        with contextlib.suppress(FileNotFoundError):
+            staging.unlink()
+        fd = os.open(staging, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(fd, 'w') as f:
+            json.dump({'sid': pid, 'stage': label, 'startTime': started.get(pid), 'ended': ended}, f)
+        os.replace(staging, receipts/STAGE_RECORD)
+    return stage
+
+
+class deferred:
+    """While a stage runs (from before its process exists until its session is confirmed gone) and while the report is
+    written, an interrupting signal is held: the stage takes it at its next poll (take_interrupt), and anything still
+    held is raised as Interrupted once the outermost deferral ends."""
+    def __init__(self, on_interrupt=None):
+        self.on_interrupt = on_interrupt
+
+    def __enter__(self):
+        _INTERRUPT['deferring'] += 1
+
+    def __exit__(self, kind, value, traceback):
+        try:
+            if _INTERRUPT['deferring'] == 1:
+                try:
+                    take_interrupt()
+                except Interrupted as error:
+                    if self.on_interrupt is not None:
+                        raise self.on_interrupt(error)
+                    raise
+        finally:
+            _INTERRUPT['deferring'] -= 1
+        return False
 
 
 def task_root(binding, run_id, attempt):
@@ -1937,6 +2205,8 @@ def run(binding, manifest, run_id, attempt, root=ROOT, lock=None, copier=copy_tr
     run_root.mkdir(mode=0o700)
     receipts = run_root/'receipts'
     receipts.mkdir(mode=0o700)
+    run_lock = hold_run_lock(receipts)  # held until run returns, or released by the kernel if python dies
+    stage = stage_recorder(receipts)
     reference, locked = frankel_policy_args(root)
     report = {'schema': 'roseos.launcher3-compile-report.v1', 'target': TARGET, 'manifestSha256': MANIFEST_SHA256,
               'candidateSha': os.environ.get('GITHUB_SHA'), 'branchRequested': binding['branch'],
@@ -1951,103 +2221,263 @@ def run(binding, manifest, run_id, attempt, root=ROOT, lock=None, copier=copy_tr
               'identitySharing': manifest['identitySharing']}
     status, applied = 3, []
     try:
-        if binding['adevtoolGit'] not in ADEVTOOL_GIT_CLASSES:
-            raise Refused('adevtool_git_missing: the lunch runs adevtool-version-check.mk and no admitted adevtool public '
-                          'fetch is bound; nothing copied')
-        if plan is None or binding['lunch'] != plan['inputs']['lunch']['target']:
-            raise Refused('lunch-inputs: no admitted lunch-input plan for this lunch (definitions.lunch: the lunch inputs '
-                          'in lunchInputs, satisfied on the copy); nothing copied')
-        real = os.path.realpath
-        for name in ('policyReceipt', 'bundleReport'):
-            path = binding[name]['path']
-            problem = None if path is None else tree_file_problem(real(path), real(binding['sourceTree']),
-                                                                    real(binding['taskParent']))
-            if problem:
-                raise Refused(f'{name}: the bound path {problem} once resolved; nothing copied')
-        with (lock or shared_lock)(lock_path(root)):
-            for name in ('home', 'tmp', 'out'):
-                (run_root/name).mkdir(mode=0o700)
-            tree = run_root/'tree'
-            project = plan['inputs']['gitRequirement']['project'] + '/'
-            report['copy'] = copier(Path(binding['sourceTree']), tree, omit=lambda rel, is_dir: rel.startswith(project)
-                                    and adevtool_ignored(rel[len(project):], is_dir))
-            try:
-                policy, policy_sha = (policy_loader or bound_json)(binding['policyReceipt']['path'])
-            except (OSError, ValueError):
-                raise Refused('policy_missing: the bound policy receipt cannot be read') from None
-            args = (policy, policy_sha, binding['policyReceipt']['sha256'], reference, locked)
-            deadline = clock() + PIN_SECONDS
-            steps = report['conditions'] = []
-            if binding['branch'] == 'verifyBaseApplyCandidate':
+        try:
+            if binding['adevtoolGit'] not in ADEVTOOL_GIT_CLASSES:
+                raise Refused('adevtool_git_missing: the lunch runs adevtool-version-check.mk and no admitted adevtool public '
+                              'fetch is bound; nothing copied')
+            if plan is None or binding['lunch'] != plan['inputs']['lunch']['target']:
+                raise Refused('lunch-inputs: no admitted lunch-input plan for this lunch (definitions.lunch: the lunch inputs '
+                              'in lunchInputs, satisfied on the copy); nothing copied')
+            real = os.path.realpath
+            for name in ('policyReceipt', 'bundleReport'):
+                path = binding[name]['path']
+                problem = None if path is None else tree_file_problem(real(path), real(binding['sourceTree']),
+                                                                        real(binding['taskParent']))
+                if problem:
+                    raise Refused(f'{name}: the bound path {problem} once resolved; nothing copied')
+            with (lock or shared_lock)(lock_path(root)):
+                for name in ('home', 'tmp', 'out'):
+                    (run_root/name).mkdir(mode=0o700)
+                tree = run_root/'tree'
+                project = plan['inputs']['gitRequirement']['project'] + '/'
+                report['copy'] = copier(Path(binding['sourceTree']), tree, omit=lambda rel, is_dir: rel.startswith(project)
+                                        and adevtool_ignored(rel[len(project):], is_dir))
                 try:
-                    bundle, bundle_sha = (bundle_loader or bound_json)(binding['bundleReport']['path'])
+                    policy, policy_sha = (policy_loader or bound_json)(binding['policyReceipt']['path'])
                 except (OSError, ValueError):
-                    raise Refused('base-exact: the bound bundle report cannot be read') from None
-                bundle_matches(bundle, bundle_sha, binding['bundleReport']['sha256'], manifest['base'])
-                report['bundleReport'] = bundle_record(bundle, bundle_sha)
-                _, base_pins = checked(manifest['base'], tree, args, 'base-exact', pins, root, deadline)
-                steps.append({'id': 'base-exact', 'treePins': base_pins})
-                delta = manifest['candidateDelta']
-                delta_preconditions(tree, delta['files'], delta['overlays'])
-                steps.append({'id': 'delta-preimages'})
-                (applier or apply_candidate)(tree, delta['patches'], delta['overlays'], root, delta['files'], applied=applied)
-                steps.append({'id': 'isolated-apply', 'commit': delta['commit'],
-                              'patches': [{'name': p['name'], 'sha256': p['sha256']} for p in delta['patches']]})
+                    raise Refused('policy_missing: the bound policy receipt cannot be read') from None
+                args = (policy, policy_sha, binding['policyReceipt']['sha256'], reference, locked)
                 deadline = clock() + PIN_SECONDS
-            label = 'final-exact' if binding['branch'] == 'verifyBaseApplyCandidate' else 'state_refused'
-            result, final_pins = checked(manifest, tree, args, label, pins, root, deadline)
-            steps.append({'id': label if label == 'final-exact' else 'verifyIntegrated', 'treePins': final_pins})
-            report['classification'] = {'branch': binding['branch'], 'files': len(result['files']),
-                                        'requiredOverlays': len(result['overlays'])}
-            write_once(receipts/'classification.json', result)
-            out = run_root/'out'
-            targets = compile_targets(manifest, out)
-            env = contained_env(run_root)
-            leaked = environment_problems(env, plan['inputs'])
-            if leaked:
-                raise Refused('lunch-inputs: the lunch environment passes ' + ', '.join(leaked))
-            try:
-                report['lunchInputs'] = (inputs_check or lunch_input_checks)(tree, plan['inputs'], root,
-                                                                              clock() + LUNCH_INPUT_SECONDS,
-                                                                              exact=plan.get('exact'))
-            except (OSError, ValueError) as error:
-                raise Refused(f'lunch-inputs: {type(error).__name__} while reading the copy') from None
-            report['lunchInputs']['bounds'] = {'seconds': LUNCH_INPUT_SECONDS}
-            report['adevtoolGit'] = {}
-            (fetcher or adevtool_public_fetch)(tree, plan, run_root, report['adevtoolGit'], root)
-            code, stopped = compiler(lunch_argv(binding['lunch']), env, str(tree), LUNCH_SECONDS, str(out))
-            report['lunch'] = {'exit': code, 'stoppedBy': stopped}
-            if code != 0 or stopped:
-                report['result'] = 'incomplete'
-                report['incomplete'] = 'lunch did not succeed; m was not run'
+                steps = report['conditions'] = []
+                if binding['branch'] == 'verifyBaseApplyCandidate':
+                    try:
+                        bundle, bundle_sha = (bundle_loader or bound_json)(binding['bundleReport']['path'])
+                    except (OSError, ValueError):
+                        raise Refused('base-exact: the bound bundle report cannot be read') from None
+                    bundle_matches(bundle, bundle_sha, binding['bundleReport']['sha256'], manifest['base'])
+                    report['bundleReport'] = bundle_record(bundle, bundle_sha)
+                    _, base_pins = checked(manifest['base'], tree, args, 'base-exact', pins, root, deadline)
+                    steps.append({'id': 'base-exact', 'treePins': base_pins})
+                    delta = manifest['candidateDelta']
+                    delta_preconditions(tree, delta['files'], delta['overlays'])
+                    steps.append({'id': 'delta-preimages'})
+                    (applier or apply_candidate)(tree, delta['patches'], delta['overlays'], root, delta['files'], applied=applied)
+                    steps.append({'id': 'isolated-apply', 'commit': delta['commit'],
+                                  'patches': [{'name': p['name'], 'sha256': p['sha256']} for p in delta['patches']]})
+                    deadline = clock() + PIN_SECONDS
+                label = 'final-exact' if binding['branch'] == 'verifyBaseApplyCandidate' else 'state_refused'
+                result, final_pins = checked(manifest, tree, args, label, pins, root, deadline)
+                steps.append({'id': label if label == 'final-exact' else 'verifyIntegrated', 'treePins': final_pins})
+                report['classification'] = {'branch': binding['branch'], 'files': len(result['files']),
+                                            'requiredOverlays': len(result['overlays'])}
+                write_once(receipts/'classification.json', result)
+                out = run_root/'out'
+                targets = compile_targets(manifest, out)
+                env = contained_env(run_root)
+                leaked = environment_problems(env, plan['inputs'])
+                if leaked:
+                    raise Refused('lunch-inputs: the lunch environment passes ' + ', '.join(leaked))
+                try:
+                    report['lunchInputs'] = (inputs_check or lunch_input_checks)(tree, plan['inputs'], root,
+                                                                                  clock() + LUNCH_INPUT_SECONDS,
+                                                                                  exact=plan.get('exact'))
+                except (OSError, ValueError) as error:
+                    raise Refused(f'lunch-inputs: {type(error).__name__} while reading the copy') from None
+                report['lunchInputs']['bounds'] = {'seconds': LUNCH_INPUT_SECONDS}
+                report['adevtoolGit'] = {}
+                (fetcher or adevtool_public_fetch)(tree, plan, run_root, report['adevtoolGit'], root, stage=stage)
+                code, stopped, ended = compiler(lunch_argv(binding['lunch']), env, str(tree), LUNCH_SECONDS, str(out),
+                                                stage=stage, label='lunch')
+                report['lunch'] = {'exit': code, 'stoppedBy': stopped, 'sessionEnded': ended}
+                confirmed(ended, 'lunch')
+                if code != 0 or stopped:
+                    report['result'] = 'incomplete'
+                    report['incomplete'] = 'lunch did not succeed; m was not run'
+                    status = 0
+                    return status
+                code, stopped, ended = compiler(compile_argv(binding['lunch'], targets), env, str(tree), COMPILE_SECONDS,
+                                                str(out), stage=stage, label='m')
+                report['compile'] = {'exit': code, 'stoppedBy': stopped, 'sessionEnded': ended, 'targets': [TARGET, *[
+                    str(Path(t).relative_to(out.parent)) for t in targets[1:]]]}
+                confirmed(ended, 'm')
+                report['sourceProof'] = source_proof(out, manifest)
+                report['classpathProof'] = classpath_proof(out)
+                report['flags'] = flag_report(out, manifest)
+                passed = (code == 0 and not stopped and report['sourceProof']['ok'] and report['classpathProof']['ok']
+                          and all(f['ok'] for f in report['flags']))
+                report['result'] = 'compiled-and-proven' if passed else 'incomplete'
                 status = 0
-                return status
-            code, stopped = compiler(compile_argv(binding['lunch'], targets), env, str(tree), COMPILE_SECONDS, str(out))
-            report['compile'] = {'exit': code, 'stoppedBy': stopped, 'targets': [TARGET, *[
-                str(Path(t).relative_to(out.parent)) for t in targets[1:]]]}
-            report['sourceProof'] = source_proof(out, manifest)
-            report['classpathProof'] = classpath_proof(out)
-            report['flags'] = flag_report(out, manifest)
-            passed = (code == 0 and not stopped and report['sourceProof']['ok'] and report['classpathProof']['ok']
-                      and all(f['ok'] for f in report['flags']))
-            report['result'] = 'compiled-and-proven' if passed else 'incomplete'
-            status = 0
-    except Refused as error:
-        report['refused'] = str(error)
-        report['nothingApplied'] = not applied  # no candidate patch or overlay write started in the copy
-        if applied:
-            report['applied'] = list(applied)  # in order, each write that started (the last may have failed)
-        report['result'] = 'refused'
+        except Refused as error:
+            record_refusal(report, error, applied)
+        except Exception as error:
+            record_refusal(report, Refused(f'stage_error: {type(error).__name__}; see stage receipt for containment'), applied)
+            if hasattr(error, 'stage_status'):
+                report['stageFailure'] = error.stage_status
+        except Interrupted as error:
+            record_interruption(report, error, applied)
+            status = 3
+        finally:
+            late = sys.exc_info()[1]  # an interrupt that came while a refusal was being recorded is leaving now
+            if isinstance(late, Interrupted) and 'interrupted' not in report:
+                if isinstance(late.__context__, Refused) and 'refused' not in report:
+                    record_refusal(report, late.__context__, applied)
+                record_interruption(report, late, applied)
+            write_report(receipts/'report.json', report, applied)
+    except Interrupted as error:
+        if not os.path.lexists(receipts/'report.json'):
+            record_interruption(report, error, applied)
+            write_report(receipts/'report.json', report, applied)
+        raise
     finally:
-        write_once(receipts/'report.json', report)
+        os.close(run_lock)
+
     return status
 
 
-def finish(binding, run_id, attempt, upload_dir, rmtree=shutil.rmtree):
-    """After run, always: copy only the allowlisted receipts (UPLOAD, regular files, never a link) into a new upload
-    directory, then remove this run's own work directories (WORK_DIRS: the copied tree, OUT_DIR, HOME, TMPDIR) under
-    its run root, never anything else; receipts stay on the builder. Writes cleanup.json (removed, absent, left) beside
-    the uploads. A missing run root (the run never started) only records that."""
+def confirmed(ended, label):
+    """A stage whose session could not be confirmed gone stops the run before anything else runs or reads its outputs."""
+    if not ended:
+        raise Refused(f'containment: {label}\'s session could not be confirmed ended, so nothing further ran and no '
+                      'output was read; the shared lock is released with it unconfirmed (receipts/stage.json still '
+                      'names it, and finish ends it or removes nothing)')
+
+
+def record_refusal(report, error, applied):
+    report['refused'] = str(error)
+    report['nothingApplied'] = not applied  # no candidate patch or overlay write started in the copy
+    if applied:
+        report['applied'] = list(applied)  # in order, each write that started (the last may have failed)
+    report['result'] = 'refused'
+
+
+def record_interruption(report, error, applied):
+    # stages: each stage this stopped and whether its session was confirmed gone (finish ends one that was not)
+    report['interrupted'] = {'signal': str(error), 'stages': error.stages,
+                             'by': 'the outer timeout or a cancel reaching this helper through the exec\'d timeout'}
+    report['nothingApplied'] = not applied
+    if applied:
+        report['applied'] = list(applied)
+    report.setdefault('result', 'interrupted')  # a result already reached stays; the interruption is beside it
+
+
+def write_report(path, report, applied):
+    """report.json, whole: a signal while it is written waits until it is (deferred). The first signal, arriving just
+    as it is due, is recorded in it before it is written (every later signal is dropped), and then raised."""
+    try:
+        with deferred():
+            write_once(path, report)
+    except Interrupted as late:
+        if not os.path.lexists(path):
+            record_interruption(report, late, applied)
+            write_once(path, report)
+        raise
+
+
+@contextlib.contextmanager
+def interrupts(signals=INTERRUPT_SIGNALS):
+    """While run runs: the first of these signals (the outer timeout's TERM; a cancel's SIGINT or SIGTERM, which the
+    step's exec'd timeout forwards; SIGHUP; SIGQUIT) raises Interrupted where run is. While a stage runs, or the report
+    is written, it is held (deferred): the stage takes it within POLL_SECONDS, ends its session and raises it, and the
+    report raises it once whole. Every later signal is caught and dropped by a Python handler, never SIG_IGN, which a
+    process started later would inherit; the outer timeout's KILL stays the backstop. The previous handlers and state
+    are restored afterwards."""
+    def drop(signum, frame):
+        pass
+
+    def stop(signum, frame):
+        for sig in signals:
+            signal.signal(sig, drop)
+        name = signal.Signals(signum).name
+        if _INTERRUPT['deferring']:
+            _INTERRUPT['pending'] = name
+            return
+        _INTERRUPT['raised'] = True
+        raise Interrupted(name)
+    saved = dict(_INTERRUPT)
+    _INTERRUPT.update(deferring=0, pending=None, raised=False)
+    previous = {sig: signal.signal(sig, stop) for sig in signals}
+    try:
+        yield
+    finally:
+        for sig, handler in previous.items():
+            if handler is not None:
+                signal.signal(sig, handler)
+        _INTERRUPT.update(saved)
+
+
+def wait_for_run(receipts, seconds, clock=time.monotonic, sleep=time.sleep):
+    """(fd holding run's lock, waited seconds) once run has released it, within seconds; (None, seconds) while run still
+    holds it. A run root with no lock file (run ended before taking it) is not waited for: (-1, 0)."""
+    try:
+        fd = os.open(Path(receipts)/RUN_LOCK, os.O_RDWR | os.O_NOFOLLOW)
+    except FileNotFoundError:
+        return -1, 0
+    start = clock()
+    while True:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return fd, round(clock() - start)
+        except BlockingIOError:
+            if clock() - start >= seconds:
+                os.close(fd)
+                return None, seconds
+            sleep(1)
+
+
+def end_recorded(receipts, clock=time.monotonic, sleep=time.sleep, grace=None, members=None):
+    """{stage, sid, ended} for the session receipts/stage.json names, ended if it outlived run (TERM with CONT, then
+    KILL, to each of its process groups, rescanned every POLL_SECONDS, TERM once per group); None without a record. A record run
+    marked ended, or a recorded ID that now names a process started at another time (someone else's), is never
+    signalled. A record that names no stage session (sid 1 or below) or cannot be read is never confirmed ended."""
+    grace = KILL_GRACE_SECONDS if grace is None else grace
+    members = members or session_members
+    try:
+        data, _ = read_nofollow(Path(receipts)/STAGE_RECORD)
+        record = json.loads(data)
+        sid, label, started = int(record['sid']), str(record['stage']), record['startTime']
+        marked = record.get('ended') is True
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return {'stage': None, 'sid': None, 'ended': False, 'why': 'the stage record cannot be read'}
+    if sid <= 1:
+        return {'stage': label, 'sid': sid, 'ended': False, 'why': 'the stage record names no stage session'}
+    stat = proc_stat(Path('/proc')/str(sid))
+    if stat is not None and (not isinstance(started, int) or isinstance(started, bool) or started <= 0):
+        return {'stage': label, 'sid': sid, 'ended': False, 'why': 'the leader start time was not recorded'}
+    if stat is not None and stat[3] != started:
+        return {'stage': label, 'sid': sid, 'ended': True, 'why': 'its ID now names another process'}
+    if marked:
+        gone = session_gone(sid, members, sleep)
+        return {'stage': label, 'sid': sid, 'ended': gone,
+                'why': 'run confirmed it ended; rechecked' if gone else 'ended mark could not be confirmed'}
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        start, told = clock(), set()
+        while True:
+            live = members(sid)
+            if live == {} and session_gone(sid, members, sleep):
+                return {'stage': label, 'sid': sid, 'ended': True}
+            if live:
+                targets = live
+                if sig == signal.SIGTERM:
+                    targets = {pid: pgid for pid, pgid in live.items() if pgid not in told}
+                    told.update(targets.values())
+                signal_session(targets, sig)
+            if clock() - start >= grace:
+                break
+            sleep(POLL_SECONDS)
+    return {'stage': label, 'sid': sid, 'ended': session_gone(sid, members, sleep)}
+
+
+def finish(binding, run_id, attempt, upload_dir, rmtree=shutil.rmtree, clock=time.monotonic, sleep=time.sleep,
+           wait=FINISH_LOCK_SECONDS):
+    """After run, always. First it waits up to wait seconds for run's lock (receipts/run.lock): while run still holds
+    it nothing is removed. Then it ends a recorded stage session that outlived run (receipts/stage.json), and if that
+    session cannot be confirmed gone nothing is removed either. Then it copies only the allowlisted receipts (UPLOAD,
+    regular files, never a link) into a new upload directory and removes this run's own work directories (WORK_DIRS:
+    the copied tree, OUT_DIR, HOME, TMPDIR) under its run root, never anything else; receipts stay on the builder.
+    Writes cleanup.json (removed, absent, left, run, stage) beside the uploads. A missing run root (the run never
+    started) only records that."""
     run_root = task_root(binding, run_id, attempt)
     upload = Path(upload_dir)
     upload.mkdir(mode=0o700)
@@ -2058,13 +2488,39 @@ def finish(binding, run_id, attempt, upload_dir, rmtree=shutil.rmtree):
     elif not run_root.exists():
         report['absent'].append(str(run_root))
     else:
+        receipts = run_root/'receipts'
+        lock, waited, state = None, 0, 'no plain receipts directory'
+        if not receipts.is_symlink() and receipts.is_dir():
+            try:
+                lock, waited = wait_for_run(receipts, wait, clock, sleep)
+                state = {-1: 'absent', None: 'held'}.get(lock, 'released')
+            except OSError as error:  # a run.lock that cannot be opened or locked: run may still hold it
+                lock, state = None, f'unreadable ({type(error).__name__})'
+        report['run'] = {'lock': state, 'waitedSeconds': waited}
+        safe = lock is not None
+        if not safe:
+            report['left'].append({'path': '.', 'reason': f'run\'s lock is {state} after {waited} s, so run may still '
+                                   'use the tree; nothing removed'})
+        else:
+            try:
+                report['stage'] = end_recorded(receipts, clock, sleep)
+            except (OSError, ValueError, IndexError) as error:
+                report['stage'] = {'stage': None, 'sid': None, 'ended': False, 'why': f'{type(error).__name__} while '
+                                   'ending it'}
+            if report['stage'] is not None and not report['stage']['ended']:
+                safe = False
+                report['left'].append({'path': '.', 'reason': 'a recorded stage session outlived run and could not be '
+                                       'confirmed ended; nothing removed'})
         for name in UPLOAD:
-            source = run_root/'receipts'/name
-            if source.is_file() and not source.is_symlink() and not (run_root/'receipts').is_symlink():
-                data, _ = read_nofollow(source)
-                write_bytes_once(upload/name, data)
-                report['uploaded'].append(name)
-        for name in WORK_DIRS:
+            source = receipts/name
+            if source.is_file() and not source.is_symlink() and not receipts.is_symlink():
+                try:
+                    data, _ = read_nofollow(source)
+                    write_bytes_once(upload/name, data)
+                    report['uploaded'].append(name)
+                except OSError as error:
+                    report['left'].append({'path': f'receipts/{name}', 'reason': f'not uploaded ({type(error).__name__})'})
+        for name in WORK_DIRS if safe else ():
             target = run_root/name
             if target.is_symlink() or (target.exists() and not target.is_dir()):
                 report['left'].append({'path': name, 'reason': 'not a plain directory'})
@@ -2076,6 +2532,8 @@ def finish(binding, run_id, attempt, upload_dir, rmtree=shutil.rmtree):
                     report['removed'].append(name)
                 except OSError as error:
                     report['left'].append({'path': name, 'reason': type(error).__name__})
+        if lock not in (None, -1):
+            os.close(lock)
     write_once(upload/'cleanup.json', report)
     return 0 if not report['left'] else 3
 
@@ -2112,7 +2570,11 @@ def main(argv=None):
             return finish(binding, a.run_id, a.attempt, a.upload_dir)
         if a.upload_dir:
             raise Invalid('run takes no --upload-dir')
-        return run(binding, manifest, a.run_id, a.attempt, plan=plan)
+        with interrupts():
+            return run(binding, manifest, a.run_id, a.attempt, plan=plan)
+    except Interrupted as error:  # before run's report exists, or after it is whole
+        print(json.dumps({'verdict': 'INTERRUPTED', 'signal': str(error)}), file=sys.stderr)
+        return 3
     except Unbound as error:
         print(json.dumps({'verdict': 'SETUP_MISSING', 'error': str(error)}), file=sys.stderr)
         return 4
