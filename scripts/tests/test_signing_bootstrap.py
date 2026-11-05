@@ -1532,7 +1532,7 @@ class FactoryProfileValidation(unittest.TestCase):
         self.assertIn('access-unknown', [c for c, _ in sb.readiness('fold-rango-factory-v1', unopted, NOW)])
         # pro-mustang-v1 is the Mustang OS profile that load_profiles merges from os/signing-bootstrap/mustang.json.
         self.assertEqual({n for n, p in PROFILES['profiles'].items() if (p.get('access') or {}).get('liveCheck') is True},
-                         {'fold-rango-factory-v1', 'pro-blazer-factory-v1', 'pro-blazer-v1', 'pro-mustang-v1'})
+                         {'fold-rango-factory-v1', 'pro-blazer-factory-v1', 'pro-blazer-v1', 'pro-mustang-v1', 'yogi-v1'})
         checked = PROFILES['profiles']['fold-rango-factory-v1']['access']  # a committed record, if any, is never partial
         self.assertTrue(checked['basis'] or (checked['addVersionExpires'] is None and checked['accessorExpires'] is None))
         # Each opted-in policy text claims the recorded-expiry ceilings only where they are enforced (openssh_problems),
@@ -1813,6 +1813,109 @@ class BlazerProfiles(unittest.TestCase):
         recorded['profiles']['pro-blazer-factory-v1']['access'].update(
             addVersionExpires='2026-10-30T00:30:00Z', accessorExpires='2026-11-27T21:30:00Z', basis='synthetic test readback')
         self.assertEqual(sb.readiness('pro-blazer-factory-v1', recorded, NOW), [])
+
+
+
+class YogiProfile(unittest.TestCase):
+    """B1: the unbound yogi-v1 source definition. Committed files only: no host, key, secret, grant or run."""
+
+    def setUp(self):
+        self.profile = PROFILES['profiles']['yogi-v1']
+        self.mustang = PROFILES['profiles']['pro-mustang-v1']
+
+    def test_committed_profile_is_unbound_and_refused_everywhere(self):
+        self.assertEqual((self.profile['status'], self.profile['device'], self.profile['project']),
+                         ('unbound', 'yogi', 'protocols-465723'))
+        self.assertEqual(self.profile['secrets'], {'keys': 'PIXEL_OS_SIGNING_KEYS_YOGI_V1',
+                                                   'passphrase': 'PIXEL_OS_SIGNING_PASSPHRASE_YOGI_V1'})
+        self.assertEqual([c for c, _ in sb.readiness('yogi-v1', PROFILES, NOW)], ['profile-unbound'])
+        self.assertTrue(sb.guard(dict(GUARD_ENV, BOOTSTRAP_PROFILE='yogi-v1'), PROFILES, NOW))
+        flipped = copy.deepcopy(PROFILES)  # status alone never admits it while its missing list names prerequisites
+        flipped['profiles']['yogi-v1']['status'] = 'resource-bound'
+        self.assertEqual([c for c, _ in sb.readiness('yogi-v1', flipped, NOW)], ['profile-unbound'])
+        flipped['profiles']['yogi-v1']['missing'] = []  # and with nothing missing, the unmeasured proof spec refuses
+        self.assertIn('proof-spec-missing', [c for c, _ in sb.readiness('yogi-v1', flipped, NOW)])
+
+    def test_nothing_is_fabricated(self):
+        access = self.profile['access']
+        self.assertEqual((access['addVersionExpires'], access['accessorExpires'], access['basis']), (None, None, None))
+        self.assertTrue(access['liveCheck'] is True and self.profile['recheckEmptyBeforeImport'] is True)
+        for key in ('resourceBasis', 'resourceEvidence', 'accessEvidence'):
+            self.assertIsNone(self.profile[key], key)
+        self.assertIsNone(self.profile['localProof']['spec'])  # no assumed Yogi-builder tool roots
+        self.assertNotIn('/home/pixelbuild', json.dumps(self.profile))  # never the Frankel builder's paths
+        missing = ' '.join(self.profile['missing'])
+        for needed in ('approval', 'PIXEL_OS_SIGNING_KEYS_YOGI_V1', 'one binding per secret, at most 4 h',
+                       'localProof.spec', 'roseos-yogi-builder', 'never the Frankel builder', 'one approved bootstrap run'):
+            self.assertIn(needed, missing)
+        self.assertFalse((ROOT/'os/signing-bootstrap/yogi-bootstrap-receipt.json').exists())  # no pins without a run
+
+    def test_same_reviewed_recipe_as_mustang_and_own_containers(self):
+        for key in ('archive', 'keyInventory', 'tools', 'generation', 'avbAlgorithm', 'sources', 'signer'):
+            self.assertEqual(self.profile[key], self.mustang[key], key)
+        admission = ('helper', 'admittedRevision', 'admittedBlob', 'excluded')
+        self.assertEqual({k: self.profile['localProof'][k] for k in admission},
+                         {k: self.mustang['localProof'][k] for k in admission})
+        mine = set(self.profile['secrets'].values())
+        for name, other in PROFILES['profiles'].items():
+            if name != 'yogi-v1':
+                self.assertFalse(mine & set((other.get('secrets') or {}).values()), name)
+
+    def test_loader_admits_only_each_files_fixed_name(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root/'os/signing-bootstrap').mkdir(parents=True)
+            base = json.loads((ROOT/'os/signing-bootstrap/profiles.json').read_text())
+            (root/'os/signing-bootstrap/profiles.json').write_text(json.dumps(base))
+            self.assertEqual(set(sb.load_profiles(root)['profiles']), set(base['profiles']))  # extras are optional
+            yogi = json.loads((ROOT/'os/signing-bootstrap/yogi.json').read_text())
+            for content, ok in ((yogi, True), (dict(yogi, profiles={'pro-mustang-v1': self.profile}), False),
+                                (dict(yogi, profiles=dict(yogi['profiles'], other=self.profile)), False),
+                                (dict(yogi, schemaVersion=2), False)):
+                with self.subTest(ok=ok, names=sorted(content['profiles'])):
+                    (root/'os/signing-bootstrap/yogi.json').write_text(json.dumps(content))
+                    if ok:
+                        self.assertIn('yogi-v1', sb.load_profiles(root)['profiles'])
+                    else:
+                        with self.assertRaises(ValueError):
+                            sb.load_profiles(root)
+            (root/'os/signing-bootstrap/yogi.json').write_text(json.dumps(yogi))
+            dup = dict(base, profiles=dict(base['profiles'], **yogi['profiles']))  # also defined in profiles.json
+            (root/'os/signing-bootstrap/profiles.json').write_text(json.dumps(dup))
+            with self.assertRaises(ValueError):
+                sb.load_profiles(root)
+
+
+class LockOption(unittest.TestCase):
+    """prove/run --lock: the default is the original builder's lock, byte-identical; a given lock must be absolute."""
+
+    def capture(self, argv):
+        seen = []
+        def fake_prove(name, profiles, env, recipe_sha, proof_dir, lock, now=None):
+            seen.append(lock)
+            return 'blocked', ['stand-in']
+        original = sb.prove
+        sb.prove = fake_prove
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                code = sb.main(argv, env={})
+        finally:
+            sb.prove = original
+        return code, seen
+
+    def test_default_lock_is_unchanged_and_an_explicit_lock_is_used(self):
+        default = json.loads((ROOT/sb.PIPELINE_PATH).read_text())['host']['lockPath']
+        base = ['prove', '--profile', 'fold-rango-v1', '--recipe-sha', SHA, '--proof-dir', '/tmp/p']
+        self.assertEqual(self.capture(base)[1], [default])
+        self.assertEqual(self.capture(base + ['--lock', '/srv/rose-yogi/yogi-build.lock'])[1], ['/srv/rose-yogi/yogi-build.lock'])
+        for bad in ('relative/lock', '/srv/../etc/lock'):
+            with self.subTest(bad):
+                self.assertEqual(self.capture(base + ['--lock', bad]), (2, []))
+        out = io.StringIO()  # run accepts --lock too and refuses a relative one before anything else
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(sb.main(['run', '--profile', 'yogi-v1', '--recipe-sha', SHA, '--state-dir', '/tmp/s',
+                                      '--receipt-dir', '/tmp/r', '--lock', 'relative'], env={}), 2)
+        self.assertIn('--lock must be an absolute path', out.getvalue())
 
 
 if __name__ == '__main__':

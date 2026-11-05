@@ -1849,3 +1849,15 @@ bootstrap grant is one binding per secret holding `secretmanager.secrets.get`, `
 that window. A failed recheck or a denied add after generation uses up the run (`failed-before-commit` or
 `recovery-needed`). Each profile's `access.policy` states the full rule; `plan --profile P` prints the operations and
 the grant.
+
+**Yogi OS-signing profile and `--lock` (2026-11-05, source only).** `yogi-v1` (Pixel 11 Pro Fold) is defined in
+`os/signing-bootstrap/yogi.json`. Like `os/signing-bootstrap/mustang.json`, that file is admitted only when it holds
+exactly its fixed profile name and that name is not also in `profiles.json`; anything else stops the loader. The
+profile reuses the reviewed `pro-mustang-v1` recipe, inventory and tools under its own pair of secrets
+(`PIXEL_OS_SIGNING_KEYS_YOGI_V1`, `PIXEL_OS_SIGNING_PASSPHRASE_YOGI_V1`), opts in to `access.liveCheck` with
+`recheckEmptyBeforeImport`, and stays `unbound`: no expiry, evidence, `localProof.spec` root or receipt is recorded,
+and `missing` names the identity approval, both containers, the time-boxed access, the measured Yogi-builder spec
+roots, a Yogi-builder job and the one approved run. `prove` and `run` take `--lock PATH` (absolute, no `..`); without
+it the lock is still `os/release-pipeline/frankel.json` `host.lockPath`, unchanged. A Yogi job passes
+`--lock /srv/rose-yogi/yogi-build.lock` on the dedicated Yogi runner and never runs on the Frankel builder. No such job
+exists yet, and this profile admits no key operation.
