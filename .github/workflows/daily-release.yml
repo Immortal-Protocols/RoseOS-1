@@ -1,0 +1,42 @@
+name: Daily release dispatcher
+
+# 1F: once a day, dispatch each enabled flavor's existing entry (os/release-pipeline/lanes/daily.json) through
+# scripts/daily-release.py. Each lane is decided on its own: a lane with a run still pending, or whose last delivered run
+# already built this main commit, is skipped. One lane's failure never stops another, and each route keeps its last
+# good release when it fails. Manual dispatch of every entry stays as it is.
+# SOURCE ONLY. There is deliberately no `schedule:`, every lane is disabled, and a manual run is a dry run by default.
+# Activation is one reviewed, owner-approved change: enable a lane and add the daily schedule here.
+# Secret-free: only this job's short-lived GITHUB_TOKEN (actions:write to dispatch and read runs, contents:read).
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Decide every lane and report, but dispatch nothing (default). Enabled lanes only ever dispatch from main.
+        type: boolean
+        default: true
+
+permissions: {}
+
+concurrency:
+  group: daily-release-dispatcher
+  cancel-in-progress: false
+
+jobs:
+  dispatch:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: main
+          persist-credentials: false
+      - name: Decide each lane and dispatch only the enabled, undelivered ones
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: python3 scripts/daily-release.py dispatch

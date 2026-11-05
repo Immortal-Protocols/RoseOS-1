@@ -254,6 +254,41 @@ recovery record, delivery evidence), the current run's entries, and each class's
 **To add a class,** it must be data a later run regenerates by itself. Name its producer and its readers in the
 policy. `scripts/tests/test_builder_reclaim.py` checks that no class matches a never-reclaimed store.
 
+## Daily release dispatcher (1F, source only and off)
+
+`.github/workflows/daily-release.yml` runs `scripts/daily-release.py dispatch`. Once activated, it builds, signs,
+verifies and publishes each flavor once a day through that flavor's existing manual entry, as listed in
+`os/release-pipeline/lanes/daily.json`:
+
+| Lane | Entry and inputs | Delivered when | Last good release on failure |
+| --- | --- | --- | --- |
+| frankel | `os-release.yml` `mode=latest-beta` | `publisher` succeeded | Beta Latest moves only after verification and the download check |
+| mustang | `os-release.yml` `mode=mustang-ota`, `mustang_publish_ota=true` | `mustang-ota-publisher` succeeded | OTA before channel metadata, never Latest |
+| yogi | `yogi-ota.yml` `stage=ota`, `publish=true` (Yogi owner's #558) | `publisher` succeeded | OTA first, `yogi-stable` last, never Latest |
+
+**Each lane is decided on its own,** so one lane's failure never stops another. A lane is skipped when:
+- it is disabled;
+- its entry workflow is absent;
+- a run of it is still queued or in progress;
+- its newest delivered run already built the current main commit, so an identical commit is never rebuilt.
+
+Otherwise its entry is dispatched once, on main, with the committed inputs. A failed run is retried at the next daily
+run and reaches its owner through the run's own failure. The dispatcher never publishes, cancels, retries or changes a
+release. Manual dispatch of every entry is unchanged.
+
+**What is committed is inert:**
+- the workflow has no `schedule:`;
+- every lane is `enabled: false`;
+- a manual run is a dry run by default;
+- the job can only dispatch from main, with its own `actions: write` token and no secret.
+
+**Activation** is one reviewed, owner-approved change. It enables a lane, records Chief's daily window
+(`window.time`, Pacific) and adds the schedule.
+
+**Isolation:** lanes on the same host still share that host's queue and lock (today `os-release-frankel` and the
+shared builder). Independent capacity per flavor comes from Infra's verified per-flavor runner, VM, storage and
+controller mapping, not from this dispatcher.
+
 ## Retained Rango signing and separate release (source only, runtime unbound)
 
 This route was added in OCT30-INFRA-S015 as source and tests only. Nothing
