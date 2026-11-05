@@ -25,6 +25,7 @@ import host_secrets
 import release_receipts
 import mustang_edge
 import mustang_lane
+import mustang_paths
 
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG = ROOT/'os/ota/mustang.json'
@@ -95,8 +96,8 @@ def unconditional_access(ref, root=ROOT):
         return False
 
 
-def guard(cfg, automatic=False, access=False, now=None):
-    if cfg.get('publicationEnabled') is not True:
+def guard(cfg, automatic=False, access=False, now=None, publication=True):
+    if publication and cfg.get('publicationEnabled') is not True:
         raise ValueError('Mustang public OTA activation remains pending; no publication authorized by source alone')
     if automatic and cfg.get('automationEnabled') is not True:
         raise ValueError('Mustang automatic publication activation remains pending')
@@ -222,18 +223,28 @@ def observe_target(path, build, epoch, tools, pins, execute=subprocess.run):
                 'trustedOtaCertificateSha256': sorted(trust), 'packagedUpdaterVerified': True}
 
 
-def observe_baseline(out):
+def observe_baseline(out, lane=None, tools=None, target_files=None):
     cfg = config()
     baseline = cfg['baseline']
     signed = read(ROOT/baseline['signReceipt'])
     if signed['device'] != 'mustang' or signed['build'] != baseline['build'] or signed['candidateSource'] != baseline['source']:
         raise ValueError('committed baseline receipt differs')
-    tools = read(ROOT/'os/build-only/mustang-host.json')
+    if lane is None:
+        tools = read(ROOT/'os/build-only/mustang-host.json')
+        lock = read(ROOT/'os/release-pipeline/frankel.json')['host']['lockPath']
+        target_files = signed['outputs']['targetFiles']
+    else:
+        paths = mustang_paths.layout(lane)
+        lock = str(paths['lockPath'])
+        if tools is None or target_files is None or any(target_files.get(key)!=signed['outputs']['targetFiles'][key]
+                                                      for key in ('sha256','sizeBytes')) \
+                or paths['home'] not in Path(target_files['path']).parents \
+                or any(p.is_symlink() for p in (Path(target_files['path']),*Path(target_files['path']).parents)):
+            raise ValueError('dedicated baseline must retain the committed archive identity on its own disk')
     hp = module('mustang_ota_host', 'host-factory-package.py')
-    lock = read(ROOT/'os/release-pipeline/frankel.json')['host']['lockPath']
     with hp.shared_lock(lock):
-        observed = observe_target(checked_file(signed['outputs']['targetFiles']), baseline['build'], baseline['timestamp'], tools, identities())
-    observed.update(schema='roseos.mustang-ota-baseline.v1', targetFiles=signed['outputs']['targetFiles'],
+        observed = observe_target(checked_file(target_files), baseline['build'], baseline['timestamp'], tools, identities())
+    observed.update(schema='roseos.mustang-ota-baseline.v1', targetFiles=target_files,
                     installedEvidence=baseline['installationEvidence'], phoneObserved=False)
     release_receipts.write_once(out, observed)
     return observed
@@ -252,15 +263,24 @@ def ota_metadata(path, build, epoch, baseline):
     return values
 
 
-def stage(sign_run, attempt, baseline_file, out):
+def stage(sign_run, attempt, baseline_file, out, lane=None, tools=None, publication=True):
     cfg = config()
-    guard(cfg)
+    guard(cfg,publication=publication)
     adapter = module('mustang_ota_sign', 'mustang-sign-package.py')
-    signed = read(adapter.run_root('sign', sign_run, attempt)/'mustang-sign-receipt.json')
+    context = {'lane':lane} if lane is not None else {}
+    signed = read(adapter.run_root('sign', sign_run, attempt,**context)/'mustang-sign-receipt.json')
     if signed.get('status') != 'signed-command-complete' or signed.get('device') != 'mustang' \
             or signed.get('runId') != sign_run or signed.get('runAttempt') != attempt:
         raise ValueError('fresh same-run Mustang signing receipt required')
     mustang_edge.require_signing(signed)
+    if lane is not None and (signed.get('builder')!=lane['vm'] or signed.get('workflow')!=lane['workflow']):
+        raise ValueError('OTA signing receipt differs from the dedicated Mustang VM/workflow')
+    if lane is not None:
+        release=adapter.run_root('sign',sign_run,attempt,lane=lane)/'release'
+        source=adapter.run_root('prep',signed['compileRunId'],signed['compileRunAttempt'],lane=lane)/'source'
+        if Path(signed['sourceRoot'])!=source or Path(signed['outputs']['targetFiles']['path'])!=release/'signed-target_files.zip' \
+                or Path(signed['outputs']['ota']['path'])!=release/'public'/f'mustang-ota_update-{signed["build"]}.zip':
+            raise ValueError('OTA inputs leave the dedicated same-run source/release paths')
     if signed['secrets'] != {'keys': {'name': adapter.SECRETS['keys'], 'version': '1'},
                              'passphrase': {'name': adapter.SECRETS['passphrase'], 'version': '1'}}:
         raise ValueError('established Mustang signing versions must be preserved')
@@ -272,11 +292,13 @@ def stage(sign_run, attempt, baseline_file, out):
     out = Path(out)
     out.mkdir(mode=0o700)
     pins, build = identities(), signed['build']
-    lock = read(ROOT/'os/release-pipeline/frankel.json')['host']['lockPath']
+    lock = str(mustang_paths.layout(lane)['lockPath']) if lane is not None else read(ROOT/'os/release-pipeline/frankel.json')['host']['lockPath']
+    if lane is not None and tools is None: raise ValueError('dedicated OTA tools must be explicit')
+    tools = tools if lane is not None else read(ROOT/'os/build-only/mustang-host.json')
     hp = module('mustang_ota_factory', 'host-factory-package.py')
     with hp.shared_lock(lock):
         tf, ota = (checked_file(signed['outputs'][name]) for name in ('targetFiles', 'ota'))
-        collection_path = adapter.run_root('collect', sign_run, attempt)/'compile-collection.json'
+        collection_path = adapter.run_root('collect', sign_run, attempt,**context)/'compile-collection.json'
         collection = read(collection_path)
         if digest(collection_path) != signed['compileCollectionReceiptSha256'] \
                 or collection.get('roseEdge') != signed['roseEdge']['unsigned']:
@@ -284,7 +306,7 @@ def stage(sign_run, attempt, baseline_file, out):
         epoch = collection['outputs']['actualBuildIdentity']['timestamp']
         if epoch != signed['timestamp']:
             raise ValueError('raised-edge timestamp differs from collected build')
-        observed = observe_target(tf, build, epoch, read(ROOT/'os/build-only/mustang-host.json'), pins)
+        observed = observe_target(tf, build, epoch, tools, pins)
         metadata = ota_metadata(ota, build, epoch, cfg['baseline'])
         public = ota.parent
         cert, avb = public/'releasekey.x509.pem', public/'avb_pkmd.bin'
@@ -317,13 +339,14 @@ def stage(sign_run, attempt, baseline_file, out):
                    'verificationTools': verification_tools,
                    'phoneUpdatePassed': False, 'automationDemonstrated': False, 'sprintOmissions': signed['omittedChecks'],
                    'ota': {'file': ota.name, 'sizeBytes': ota.stat().st_size, 'sha256': digest(ota)}}
+        if lane is not None: receipt.update(builder=dict(lane['vm']),workflow=lane['workflow'])
         release_receipts.write_once(out/'mustang-ota-receipt.json', receipt)
         (out/'SHA256SUMS').write_text(''.join(f'{digest(p)}  {p.name}\n' for p in sorted(out.iterdir())))
     return receipt
 
 
-def verify_staged(directory, cfg):
-    guard(cfg)
+def verify_staged(directory, cfg, publication=True):
+    guard(cfg,publication=publication)
     directory = Path(directory)
     r = read(directory/'mustang-ota-receipt.json')
     if r.get('schema') != 'roseos.mustang-ota-stage.v1' or r.get('device') != 'mustang' \

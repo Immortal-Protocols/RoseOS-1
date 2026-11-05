@@ -25,6 +25,7 @@ sys.path.insert(0, str(ROOT/'scripts'))
 import mustang_integration as integration
 import release_receipts
 import mustang_lane
+import mustang_paths
 
 PLAN = 'https://app.notion.com/p/40d7c646c81b81198e60cb76ca2ea603'
 SCRUBBED = ('JAVA_TOOL_OPTIONS', 'JDK_JAVA_OPTIONS', '_JAVA_OPTIONS', 'CLASSPATH', 'JAVA_HOME', 'LD_PRELOAD',
@@ -114,16 +115,33 @@ def call(engine, argv, seconds, cwd, env):
     return result, output
 
 
-def run(run_id, attempt):
+def run(run_id, attempt, lane=None, runtime=None, inputs_dir=None):
     if not all(re.fullmatch(r'[1-9][0-9]{0,19}', x) for x in (run_id, attempt)):
         raise ValueError('run id and attempt must be positive numeric identifiers')
-    cfg, source = config(), head()
+    source = head()
+    if lane is None:
+        cfg = config()
+    else:
+        paths = mustang_paths.layout(lane)
+        if runtime is None or inputs_dir is None:
+            raise ValueError('dedicated Mustang needs admitted runtime bindings and app inputs')
+        verifier = module('mustang_app_input_verify','app-inputs-verify.py')
+        admission = verifier.verify(ROOT/runtime['appInputsRecord'], inputs_dir, runtime['tools'])
+        cfg = dict(runtime['tools'],host=lane['vm']['instance'],jobs=runtime['jobs'],
+                   appsDir=str(Path(inputs_dir)/'signed-apps'),policy=str(Path(inputs_dir)/'background-policy.json'),
+                   signingBlocker='separate same-run signing stage after unsigned proof')
     engine = module('mustang_adapter', 'mustang-build-only.py').engine()
-    recipe = engine.load(ROOT/'os/build-only/mustang.json')
-    pipeline = json.loads((ROOT/'os/release-pipeline/frankel.json').read_text())
-    lock = pipeline['host']['lockPath']
-    home = Path(pipeline['host']['sourceRoot']).parent
-    base = home/'rose-actions'
+    if lane is None:
+        recipe = engine.load(ROOT/'os/build-only/mustang.json')
+        pipeline = json.loads((ROOT/'os/release-pipeline/frankel.json').read_text())
+        lock = pipeline['host']['lockPath']
+        home = Path(pipeline['host']['sourceRoot']).parent
+        base = home/'rose-actions'
+    else:
+        recipe = mustang_paths.compiler_recipe(engine,lane,ROOT)
+        engine.SOURCE_PROVENANCE=dict(engine.SOURCE_PROVENANCE,
+            integration='copy of the admitted pristine pinned Mustang base on its dedicated VM; no other-device seed')
+        lock, home, base = str(paths['lockPath']), paths['home'], paths['storageRoot']
     run_root = base/f'mustang-prep-{run_id}-{attempt}'
     # Basic overwrite/access protections remain; no independent safe-path test suite is run.
     if not base.is_dir() or engine.symlink_in(run_root) or os.path.lexists(run_root):
@@ -136,12 +154,27 @@ def run(run_id, attempt):
         'root':str(run_root), 'label':recipe['sprint']['candidateLabel'], 'stages':{},
         'omittedChecks':omissions(), 'signed':False, 'published':False, 'phoneValidated':False,
         'signing':{'status':'separate-bootstrap-and-delivery-required', 'reason':cfg['signingBlocker']}}
+    if lane is not None:
+        report.update(builder=dict(lane['vm']),workflow=lane['workflow'],appInputAdmission=admission,
+                      sourceEvidence=runtime['sourceEvidence'],allocationState=runtime['allocationState'])
+        report['signing']={'status':'same-run-signing-pending-unsigned-proof','reason':cfg['signingBlocker']}
     env = {k:v for k,v in os.environ.items() if k not in SCRUBBED and not k.startswith('GIT_')}
     current = 'source'
+
+    def progress(name,status):
+        event={'device':'mustang','runId':run_id,'runAttempt':attempt,'source':source,'stage':name,'status':status,
+               'at':datetime.datetime.now(datetime.timezone.utc).isoformat()}
+        print(json.dumps(event),flush=True)
+        try:
+            with open(run_root/'progress.jsonl','a') as log:
+                log.write(json.dumps(event)+'\n')
+        except OSError:
+            pass  # stdout still reports the phase when the data disk cannot write.
 
     def stage(name, allocation=None, inputs=None):
         nonlocal current
         current = name
+        progress(name,'entered')
         build = allocation['build'] if allocation else None
         epoch = str(int(datetime.datetime.strptime(allocation['reservedAt'], '%Y-%m-%dT%H:%M:%SZ')
             .replace(tzinfo=datetime.timezone.utc).timestamp())) if allocation else None
@@ -155,6 +188,7 @@ def run(run_id, attempt):
         report['stages'][name] = {'exitCode':status, 'receipt':str(path), 'result':result}
         if status:
             raise RuntimeError(f'{name} failed; inspect its recorded receipt; no retry')
+        progress(name,'complete')
         return result
 
     try:
@@ -170,25 +204,41 @@ def run(run_id, attempt):
         for name in ('download', 'vendor', 'lunch'):
             stage(name)
         current = 'allocate'
+        progress(current,'entered')
         alloc = module('mustang_allocate', 'mustang-allocate.py')
-        allocation = alloc.reserve(str(home), run_id, attempt, source)
+        allocation = alloc.reserve(str(home), run_id, attempt, source, **(
+            {'lane':lane,'consumed':runtime['consumedBuilds']} if lane is not None else {}))
         release_receipts.write_once(run_root/'allocation.json', allocation)
         report['allocation'] = allocation
         work, reconcile = Path(allocation['workDir']), Path(allocation['integrationDir'])
         work.mkdir(mode=0o700)
         current = 'seed'
         copy = report['stages']['source']['result']['selectionRecord']
-        seed = module('mustang_seed', 'mustang-reconcile-seed.py')
         # Only the established Frankel receipt chain may explain the production snapshot.
         # Prior Mustang integrations are eligible on future explicit attempts; Blazer/Rango never are.
-        with alloc.allocator.shared_lock(lock):
-            seed.seed(pipeline['host']['integrate']['reconcile']['receiptDir'], str(src), run_id,
-                str(reconcile), copy['path'], copy['sha256'], str(base))
+        if lane is None:
+            seed = module('mustang_seed', 'mustang-reconcile-seed.py')
+            with alloc.allocator.shared_lock(lock):
+                seed.seed(pipeline['host']['integrate']['reconcile']['receiptDir'], str(src), run_id,
+                    str(reconcile), copy['path'], copy['sha256'], str(base))
+        else:
+            # The admitted base is a pristine pinned checkout on this VM. The
+            # existing host-reconcile HEAD path handles its first integration;
+            # no Frankel receipt/tree is copied or adopted as a Mustang seed.
+            report['stages']['seed']={'pristineBase':runtime['sourceEvidence'],
+                                     'selectionRecord':copy,'priorReconcileSeed':False}
         current = 'assemble'
+        progress(current,'entered')
         tools = {k:cfg[k] for k in ('aapt','apksigner')}
         bundle = module('mustang_bundle', 'mustang-candidate-bundle.py')
         candidate = bundle.assemble(cfg['appsDir'], cfg['policy'], allocation['build'], source, tools, work/'bundle')
-        admitted = app_input_admission(cfg, candidate, work/'bundle')
+        if lane is None:
+            admitted = app_input_admission(cfg, candidate, work/'bundle')
+        else:
+            record = json.loads((ROOT/runtime['appInputsRecord']).read_text())
+            if sorted(candidate['apps']) != sorted([a['package'],a['versionCode']] for a in record['apps']):
+                raise ValueError('dedicated app bundle differs from admitted producer versions')
+            admitted = dict(admission,builder=dict(lane['vm']),policySha256=integration.sha256_file(work/'bundle/background-policy.json'))
         if admitted is not None:
             release_receipts.write_once(run_root/'app-input-admission.json', admitted)
             report['stages']['assemble'] = admitted
@@ -200,31 +250,37 @@ def run(run_id, attempt):
         current = 'candidate'
         call(engine, ['git','-C',str(ROOT),'worktree','add','--detach',str(work/f'product-{source[:12]}'),source],300,ROOT,env)
         current = 'integrate'
+        progress(current,'entered')
         outcome, _ = call(engine, command, 3600, ROOT, env)
         report['stages']['integrate'] = {'source':source, 'result':outcome, 'inputs':str(inputs),
             'receiptDir':str(reconcile), 'compiledAppAndPolicyVerification':'omitted'}
         stage('compile', allocation, inputs)
         report['unsignedCompileComplete'] = True
-        report['nextStage'] = 'separate mustang-delivery run after successful Mustang bootstrap; this unsigned run performs no signing'
+        report['nextStage'] = ('same-run collection proof and signing with the established identity; no bootstrap' if lane is not None
+            else 'separate mustang-delivery run after successful Mustang bootstrap; this unsigned run performs no signing')
         return 0
     except BaseException as error:
         report['failedStage'] = current
+        progress(current,'failed')
         report['error'] = f'{type(error).__name__}: {error}'
         raise
     finally:
         release_receipts.write_once(run_root/'candidate-receipt.json', report)
         print(json.dumps({'device':'mustang', 'source':source, 'receipt':str(run_root/'candidate-receipt.json'),
             'failedStage':report.get('failedStage'), 'unsignedCompileComplete':report.get('unsignedCompileComplete',False),
-            'signed':False, 'signingBlocked':True}))
+            'signed':False, **({'signingBlocked':True} if lane is None else {'sameRunSigningPending':True})}))
 
 
-def collect_reports(run_id, attempt, out):
-    pipeline = json.loads((ROOT/'os/release-pipeline/frankel.json').read_text())
-    base = Path(pipeline['host']['sourceRoot']).parent/'rose-actions'/f'mustang-prep-{run_id}-{attempt}'
+def collect_reports(run_id, attempt, out, lane=None):
+    if lane is None:
+        pipeline = json.loads((ROOT/'os/release-pipeline/frankel.json').read_text())
+        base = Path(pipeline['host']['sourceRoot']).parent/'rose-actions'/f'mustang-prep-{run_id}-{attempt}'
+    else:
+        base = mustang_paths.attempt(lane,'prep',run_id,attempt)
     out = Path(out)
     out.mkdir(mode=0o700)
     # Fixed receipt names only: no source, keys, APK payloads or factory inputs are uploaded.
-    for name in ('candidate-receipt.json','allocation.json','app-input-admission.json'):
+    for name in ('candidate-receipt.json','allocation.json','app-input-admission.json','progress.jsonl'):
         path = base/name
         if path.is_file() and not path.is_symlink():
             shutil.copyfile(path, out/name)
