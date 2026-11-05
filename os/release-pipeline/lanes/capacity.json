@@ -1,7 +1,7 @@
 {
   "schema": "roseos.lane-capacity.v1",
-  "basis": "1A (Rose daily work plan, 2026-11-05): every release lane builds on its own runner, VM, storage, queue and lifecycle controller, so one lane's failure or cleanup cannot stop another; only genuinely shared atomic steps, such as app version allocation, may be serialized across lanes. This is the committed map: the host each os-release mode runs on today, and what each lane still needs. A host is listed only with values the committed route already uses or Infra's verified readback supplies, with its evidence; nothing here is a placeholder. A host builds only when it is in service: the Frankel builder is the operating builder, and Yogi's counts once os/ota/yogi.json says builder.status ready. scripts/tests/test_lane_capacity.py derives the actual routing from os-release.yml, release-pipeline.py and the host configs and checks it against this map.",
-  "binding": "Infra adds a host with verified readback (runner label carried only by that machine, VM project/zone/instance, storage root, lock path, queue, controller identity variable) and evidence. Release then moves the lane to it: the lane's host, its jobs' runs-on, a per-host queue and a lane-aware controller, in one reviewed change that this test must pass. Until then a lane with target own stays on its current host.",
+  "basis": "1A (Rose daily work plan, 2026-11-05): every release lane builds on its own runner, VM, storage, queue and lifecycle controller, so one lane's failure or cleanup cannot stop another; only genuinely shared atomic steps, such as app version allocation, may be serialized across lanes. This is the committed routing map, including explicitly retired legacy jobs for source auditing, and what each lane still needs. A host is listed only with values the committed route already uses or Infra's verified readback supplies, with its evidence; nothing here is a placeholder. A host builds only when it is in service and the lane is not retired: Mustang's shared-host route is permanently retired and its dedicated binding is unbound; Yogi's counts once os/ota/yogi.json says builder.status ready. scripts/tests/test_lane_capacity.py derives routing from os-release.yml, release-pipeline.py and host configs and excludes retired lanes from capacity claims.",
+  "binding": "Infra supplies verified readback (runner label carried only by that machine, VM project/zone/instance, storage root, lock path, queue, controller identity variable) and evidence. The named source owner then moves the lane and its dedicated workflow/controller routing together. Mustang owns its capacity-map change; Infra owns the common explicit-builder API. No proposed name is an actual host binding. Mustang's existing host field describes only retired legacy jobs, which may never run on Frankel again; its active dedicated binding is unbound and has no fallback. Other target-own lanes retain their current route until explicitly changed.",
   "unboundFields": [
     "runnerLabel",
     "vm",
@@ -70,6 +70,8 @@
       ],
       "host": "frankel-builder",
       "target": "own",
+      "runtimeStatus": "retired-shared-host",
+      "activeBinding": "os/build-only/mustang-lane.json",
       "unbound": [
         "runnerLabel",
         "vm",
@@ -78,7 +80,7 @@
         "queue",
         "controller"
       ],
-      "note": "Its own host also needs the retained Mustang source tree its pipeline reads."
+      "note": "The host/workflow/modes above describe retired legacy jobs only, not executable capacity or permission to use Frankel. Legacy entry points refuse before controller start or STOP. The active dedicated lane is unbound; fetch pinned sources on its own newly approved VM/disk and consume immutable app artifacts there. No retained Frankel-local source or path is a substitute."
     },
     "agent": {
       "workflow": ".github/workflows/os-release.yml",
@@ -172,10 +174,6 @@
     ],
     [
       "harness",
-      "yogi"
-    ],
-    [
-      "mustang",
       "yogi"
     ]
   ]

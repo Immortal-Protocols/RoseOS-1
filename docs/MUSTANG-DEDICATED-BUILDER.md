@@ -122,6 +122,10 @@ Mustang adapter paths to the dedicated profile; do not reactivate old entry
 points. Baseline target-files/trust evidence, a fresh signed-app export with
 matching receipts/policy/allocation, and the uncertain failed-run allocation
 must be reconciled before native compilation. No old local path is a substitute.
+The common capacity map keeps the retired jobs' host reference for source
+auditing, explicitly marks them retired and excludes Mustang from parallel
+capacity. The active binding remains the unbound dedicated profile. Editing a
+capacity label or retirement marker cannot restore the retired entry points.
 
 The fresh app artifact must carry its producer/export run and attempt, artifact
 identity/digest, the three APKs and per-APK receipts, and matching background
