@@ -472,13 +472,13 @@
       {
         "apk": "(SYSTEM_EXT|SYSTEM|PRODUCT)/priv-app/[^/]*Launcher3QuickStep[^/]*/[^/]+\\.apk",
         "class": "Lcom/android/quickstep/fallback/RoseEdgeGesture;",
-        "method": "stage",
+        "method": null,
         "literal": null
       },
       {
         "apk": "(SYSTEM_EXT|SYSTEM|PRODUCT)/priv-app/[^/]*Launcher3QuickStep[^/]*/[^/]+\\.apk",
         "class": "Lcom/android/quickstep/fallback/RoseEdgeSwipe;",
-        "method": "onMove",
+        "method": null,
         "literal": "persist.wm.debug.rose_edge_diag"
       },
       {
@@ -494,6 +494,6 @@
         "literal": "RoseEdgeMic"
       }
     ],
-    "basis": "OS Product's #410 1C/2A artifact checklist item 4 and its R8-literal checker (2026-11-05), run by bytes-verify and ota-verify through scripts/edge_artifact.py, which reads the dex itself (no dexdump on the builder). Props: PRODUCT_SYSTEM_PROPERTIES of rose-edge-build-make.patch and agent-tray-build-make.patch, both registered by --agent-tray, so SYSTEM/build.prop. Classes: RoseEdgeGesture.stage and RoseEdgeSwipe.onMove (os/overlays/packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback) in Launcher3QuickStep; RoseEdgeController (com.android.wm.shell.roseedge) and RoseEdgeMicSlot (com.android.wm.shell) of rose-edge-wmshell.patch in SystemUI, whose static library WindowManager-Shell is. SystemUI's R8 keeps com.android.wm.shell.* class names but not subpackages, so a class may also pass on a whole string literal only its code holds: RoseEdgeSwipe's diagnostics switch, the IRoseEdge binder descriptor (a compile-time constant of the generated interface) and the mic slot's log tag. RoseEdgeGesture has none, so a rename fails closed. Code inclusion only; behaviour is device evidence"
+    "basis": "OS Product's #410 1C/2A artifact checklist item 4 and its R8-literal checker (2026-11-05), run by bytes-verify and ota-verify through scripts/edge_artifact.py, which reads the dex itself (no dexdump on the builder). Props: PRODUCT_SYSTEM_PROPERTIES of rose-edge-build-make.patch and agent-tray-build-make.patch, both registered by --agent-tray, so SYSTEM/build.prop. Classes: RoseEdgeGesture and RoseEdgeSwipe (os/overlays/packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback) in Launcher3QuickStep, class only: at pinned Launcher3 47accce its R8 rules (-keep,allowshrinking,allowoptimization and -keepclasseswithmembernames on com.android.quickstep.**, no allowobfuscation) keep class names but may inline and remove single-call-site members such as stage and onMove (OS Product's review of #568); RoseEdgeController (com.android.wm.shell.roseedge) and RoseEdgeMicSlot (com.android.wm.shell) of rose-edge-wmshell.patch in SystemUI, whose static library WindowManager-Shell is. SystemUI's R8 keeps com.android.wm.shell.* class names but not subpackages, so a class may also pass on a whole string literal only its code holds: RoseEdgeSwipe's diagnostics switch, the IRoseEdge binder descriptor (a compile-time constant of the generated interface) and the mic slot's log tag. RoseEdgeGesture has none, so a rename fails closed. Code inclusion only; behaviour is device evidence"
   }
 }

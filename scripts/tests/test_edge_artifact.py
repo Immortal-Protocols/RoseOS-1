@@ -205,19 +205,36 @@ class CheckTest(unittest.TestCase):
         failures, _ = self.check(props='persist.wm.debug.rose_edge=true\n', extra={'VENDOR/build.prop': 'persist.wm.debug.pixel_agent_tray=1\n'})
         self.assertEqual(len(failures), 1)
 
-    def test_a_missing_or_methodless_gesture_fails_closed(self):
+    def test_a_missing_or_renamed_gesture_fails_closed(self):
         for launcher3, message, count in (
-                (False, 'RoseEdgeGesture; with method stage is not defined in the dex of the 0 matching APK(s)', 2),
-                (dex_fixture.apk([dex_fixture.dex([(GESTURE, ['<init>']), LAUNCHER3[1]])]),
-                 'RoseEdgeGesture; with method stage is not defined in the dex of the 1 matching APK(s)', 1),
-                # R8 renamed it: RoseEdgeGesture has no literal, so a rename fails closed even beside its old name's strings.
+                (False, 'RoseEdgeGesture; is not defined in the dex of the 0 matching APK(s)', 2),
+                # A rename: RoseEdgeGesture has no literal, so it fails closed even beside its old name's strings.
                 (dex_fixture.apk([dex_fixture.dex([('Lcom/android/quickstep/a;', ['stage']), LAUNCHER3[1]],
-                                                  strings=['RoseEdgeGesture', GESTURE])]), 'RoseEdgeGesture; with method stage', 1)):
+                                                  strings=['RoseEdgeGesture', GESTURE])]),
+                 'RoseEdgeGesture; is not defined in the dex of the 1 matching APK(s)', 1)):
             with self.subTest(message=message):
                 failures, receipt = self.check(launcher3=launcher3)
                 self.assertEqual(len(failures), count, failures)
                 self.assertIn(message, failures[0])
                 self.assertFalse(receipt['classes'][0]['pass'])
+
+    def test_launcher3_members_r8_inlined_away_still_pass(self):
+        # Launcher3 keeps class names but may inline and remove single-call-site members (OS Product's review of
+        # pinned 47accce): the classes are required, their methods are not.
+        failures, receipt = self.check(launcher3=dex_fixture.apk([dex_fixture.dex([(GESTURE, []), (SWIPE, ['<init>'])])]))
+        self.assertEqual(failures, [])
+        self.assertEqual([c['by'] for c in receipt['classes'][:2]], ['class', 'class'])
+
+    def test_a_named_method_must_be_defined(self):
+        # The checker supports an entry that names a method; no frankel entry does today.
+        spec = {**SPEC, 'classes': [{**SPEC['classes'][0], 'method': 'stage'}]}
+        for classes, passes in (([(GESTURE, ['stage'])], True), ([(GESTURE, ['<init>', 'stages'])], False),
+                                ([(GESTURE, []), ('La/B;', ['stage'])], False)):
+            with self.subTest(classes=classes):
+                failures, receipt = edge.check(target_files(self.path, launcher3=dex_fixture.apk([dex_fixture.dex(classes)])), spec)
+                self.assertEqual((failures == [], receipt['classes'][0]['pass']), (passes, passes))
+                if not passes:
+                    self.assertIn('RoseEdgeGesture; with method stage is not defined', failures[0])
 
     def test_renamed_classes_pass_only_on_their_whole_literal(self):
         renamed = [('Lcom/android/quickstep/fallback/b;', ['onMove']), (GESTURE, ['stage'])]
@@ -345,14 +362,14 @@ class CommandTest(unittest.TestCase):
             self.assertEqual(code, 0)
             self.assertEqual(out.splitlines()[:6], [
                 'PASS prop persist.wm.debug.rose_edge=true', 'PASS prop persist.wm.debug.pixel_agent_tray=1',
-                'PASS class com.android.quickstep.fallback.RoseEdgeGesture.stage in 1 candidate apk(s) by class',
-                'PASS class com.android.quickstep.fallback.RoseEdgeSwipe.onMove in 1 candidate apk(s) by class',
+                'PASS class com.android.quickstep.fallback.RoseEdgeGesture in 1 candidate apk(s) by class',
+                'PASS class com.android.quickstep.fallback.RoseEdgeSwipe in 1 candidate apk(s) by class',
                 'PASS class com.android.wm.shell.roseedge.RoseEdgeController in 1 candidate apk(s) by class',
                 'PASS class com.android.wm.shell.RoseEdgeMicSlot in 1 candidate apk(s) by class'])
             self.assertEqual(json.loads(out.split('\n', 6)[6])['verdict'], 'PASS')
             code, out, _ = self.run_main(target_files(Path(tmp)/'bad.zip', launcher3=False))
             self.assertEqual(code, 1)
-            self.assertIn('FAIL class com.android.quickstep.fallback.RoseEdgeGesture.stage in 0 candidate apk(s)', out)
+            self.assertIn('FAIL class com.android.quickstep.fallback.RoseEdgeGesture in 0 candidate apk(s)', out)
             config = Path(tmp)/'config.json'
             config.write_text(json.dumps({'roseEdge': {'props': SPEC['props']}}))
             code, _, err = self.run_main(good, '--config', config)
@@ -372,7 +389,7 @@ class ContractTest(unittest.TestCase):
         l3 = r'(SYSTEM_EXT|SYSTEM|PRODUCT)/priv-app/[^/]*Launcher3QuickStep[^/]*/[^/]+\.apk'
         sysui = r'(SYSTEM_EXT|SYSTEM|PRODUCT)/priv-app/SystemUI[^/]*/[^/]+\.apk'
         self.assertEqual([(c['apk'], c['class'], c['method'], c['literal']) for c in SPEC['classes']],
-                         [(l3, GESTURE, 'stage', None), (l3, SWIPE, 'onMove', DIAG),
+                         [(l3, GESTURE, None, None), (l3, SWIPE, None, DIAG),
                           (sysui, CONTROLLER, None, DESCRIPTOR), (sysui, MIC, None, MIC_TAG)])
         # The SystemUI path the tray gate already reads is one of the candidates.
         self.assertRegex(CONFIG['systemUiTray']['apkPath'], '^' + sysui + '$')
@@ -386,14 +403,17 @@ class ContractTest(unittest.TestCase):
         self.assertIn("if a.agent_tray:projects['build/make'].append('rose-edge-build-make.patch')", apply)
         self.assertIn('--agent-tray', CONFIG['host']['integrate']['reconcile']['applyArgs'])
 
-    def test_launcher3_classes_methods_and_literal(self):
+    def test_launcher3_classes_and_literal(self):
         gesture, swipe = (self.OVERLAY/'RoseEdgeGesture.java').read_text(), (self.OVERLAY/'RoseEdgeSwipe.java').read_text()
         self.assertIn('package com.android.quickstep.fallback;', gesture)
+        self.assertIn('package com.android.quickstep.fallback;', swipe)
         self.assertRegex(gesture, r'\n(public )?(final )?class RoseEdgeGesture\b')
-        self.assertRegex(gesture, r'\n    public static int stage\(')
         self.assertRegex(swipe, r'\n(public )?(final )?class RoseEdgeSwipe\b')
-        self.assertRegex(swipe, r'\n    public int onMove\(')
-        self.assertIn(f'= "{DIAG}";', swipe)
+        # The literal is a constant argument of a SystemProperties read in the code the handler constructs
+        # (rose-edge-launcher3.patch: new RoseEdgeSwipe), so shrinking cannot drop it while RoseEdgeSwipe is used.
+        self.assertIn(f'public static final String DIAG_PROPERTY = "{DIAG}";', swipe)
+        self.assertIn('SystemProperties.getBoolean(DIAG_PROPERTY, false)', swipe)
+        self.assertIn('new RoseEdgeSwipe(', (ROOT/'os/patches/rose-edge-launcher3.patch').read_text())
         # The literal is RoseEdgeSwipe's alone among the Launcher3 sources RoseOS adds.
         sources = [p for p in (ROOT/'os/overlays/packages/apps/Launcher3').rglob('*.java')]
         sources += sorted((ROOT/'os/patches').glob('*launcher3*.patch'))

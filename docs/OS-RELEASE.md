@@ -1538,15 +1538,24 @@ or published. The gate requires:
   listed file may give either another value. Both are
   `PRODUCT_SYSTEM_PROPERTIES`, registered by `--agent-tray`, so they land in
   `SYSTEM/build.prop`.
-- **#548's staged gesture in Launcher3QuickStep.** `RoseEdgeGesture` with method
-  `stage`, and `RoseEdgeSwipe` with method `onMove`.
+- **The edge gesture in Launcher3QuickStep.** The classes `RoseEdgeGesture` and
+  `RoseEdgeSwipe`, with no method required. At the pinned Launcher3 `47accce`,
+  its R8 rules (`-keep,allowshrinking,allowoptimization` and
+  `-keepclasseswithmembernames` on `com.android.quickstep.**`, without
+  `allowobfuscation`) keep class names, but may inline and then remove a member
+  with one call site, such as `stage` or `onMove`. A method requirement could
+  therefore fail a good candidate (OS Product's review of #568).
+
+  Both classes predate #548: they arrived with E2a on 11-03. So these entries
+  show the edge gesture is compiled in, not that #548 is. That the candidate
+  commit contains #548 is a source fact, checked from the candidate's commit.
 - **The Shell resize and the chin's microphone slot in SystemUI.**
   `com.android.wm.shell.roseedge.RoseEdgeController` and
   `com.android.wm.shell.RoseEdgeMicSlot`.
 
 A class counts only when a `classes*.dex` of an APK whose whole target-files
-path matches the entry's pattern defines it, and defines the named method
-where there is one. SystemUI's R8 keeps `com.android.wm.shell.*` class names
+path matches the entry's pattern defines it. An entry may also name a method,
+which the class must then define; no Frankel entry names one today. SystemUI's R8 keeps `com.android.wm.shell.*` class names
 but not their subpackages, so three entries may instead pass on a whole string
 literal that only that code holds:
 

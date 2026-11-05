@@ -785,14 +785,12 @@ class PipelineTest(unittest.TestCase):
                 shutil.rmtree(self.base)
 
     def test_candidate_without_the_raised_edge_stops_before_signing(self):
-        # bytes-verify: a Launcher3 without #548's gesture, a renamed gesture class (no literal fallback), a SystemUI
-        # without the Shell edge, a switch that is off or missing: each stops the candidate before any signer access.
+        # bytes-verify: no Launcher3 edge gesture, a renamed gesture class (no literal fallback), a SystemUI without the
+        # Shell edge, a switch that is off or missing: each stops the candidate before any signer access.
         renamed = launcher3_apk((('Lcom/android/quickstep/fallback/a;', ('stage',)), EDGE_LAUNCHER3[1]))
-        no_stage = launcher3_apk((('Lcom/android/quickstep/fallback/RoseEdgeGesture;', ('<init>',)), EDGE_LAUNCHER3[1]))
         for kwargs, message in (
-                ({'launcher3': None}, 'raised-edge class Lcom/android/quickstep/fallback/RoseEdgeGesture; with method stage is not defined in the dex of the 0 matching APK(s)'),
-                ({'launcher3': renamed}, 'raised-edge class Lcom/android/quickstep/fallback/RoseEdgeGesture; with method stage is not defined in the dex of the 1 matching APK(s)'),
-                ({'launcher3': no_stage}, 'RoseEdgeGesture; with method stage is not defined'),
+                ({'launcher3': None}, 'raised-edge class Lcom/android/quickstep/fallback/RoseEdgeGesture; is not defined in the dex of the 0 matching APK(s)'),
+                ({'launcher3': renamed}, 'raised-edge class Lcom/android/quickstep/fallback/RoseEdgeGesture; is not defined in the dex of the 1 matching APK(s)'),
                 ({'systemui': systemui_apk(edge=())}, 'raised-edge class Lcom/android/wm/shell/roseedge/RoseEdgeController; is not defined in the dex of the 1 matching APK(s), nor is the literal'),
                 ({'edge_props': 'persist.wm.debug.pixel_agent_tray=1\n'}, 'raised-edge prop persist.wm.debug.rose_edge=true is not set in'),
                 ({'edge_props': ROSE_EDGE_PROPS + 'persist.wm.debug.rose_edge=false\n'},
@@ -807,7 +805,7 @@ class PipelineTest(unittest.TestCase):
 
     def test_signed_candidate_must_carry_the_raised_edge(self):
         # ota-verify: the signed target-files themselves are checked, so a signed candidate without the edge is not published.
-        for kwargs, message in (({'launcher3': None}, 'RoseEdgeGesture; with method stage is not defined'),
+        for kwargs, message in (({'launcher3': None}, 'RoseEdgeGesture; is not defined'),
                 ({'edge_props': ''}, 'raised-edge prop persist.wm.debug.pixel_agent_tray=1 is not set in')):
             with self.subTest(message=message):
                 target_files(self.root/'fixtures/signed.zip', 'release-keys', self.placed, apex=self.signed_apex, **kwargs)
