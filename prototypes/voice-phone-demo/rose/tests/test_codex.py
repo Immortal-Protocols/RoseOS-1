@@ -769,8 +769,9 @@ class PhoneClipboard(Integration):
         engine._tool(conversation, e)
         self.assertEqual(len(link.sent), 1)
         self.assertEqual(len(engine._late_notes), 1)
-        self.assertIn('Copied to the phone clipboard.', engine._late_notes[0])
-        self.assertNotIn('hello', engine._late_notes[0])
+        self.assertEqual(engine._late_notes[0][0], engine.conversation)
+        self.assertIn('Copied to the phone clipboard.', engine._late_notes[0][1])
+        self.assertNotIn('hello', engine._late_notes[0][1])
         engine._user_turn('Did it work?')
         submitted = [c for c in engine.client.calls if c[0] == 'submit' and c[1] == 'conversation'][-1][2]['text']
         self.assertTrue(submitted.startswith('[Before this message, your interrupted copy_to_phone_clipboard call finished'))
@@ -778,6 +779,70 @@ class PhoneClipboard(Integration):
         self.assertEqual(engine._late_notes, [])
         user = [e['data']['text'] for e in self.store.export(engine.conversation) if e['kind'] == 'user_message']
         self.assertEqual(user[-1], 'Did it work?')  # the transcript keeps the owner's words only
+
+    def submitted(self):
+        return [c[2]['text'] for c in self.engine.client.calls if c[0] == 'submit' and c[1] == 'conversation']
+
+    def test_a_barge_in_during_a_copy_carries_its_outcome(self):
+        engine, conversation = self.engine, self.engine.sessions['conversation']
+        conversation.turn = 'turn-1'
+        writing, release = threading.Event(), threading.Event()
+        class SlowLink(ClipboardLink):
+            def call(self, action, **args):
+                writing.set()
+                release.wait(5)  # the phone is still writing when the owner speaks
+                return super().call(action, **args)
+        self.phone.link = SlowLink()
+        e = {'callId': 'ipc-slow', 'params': {'tool': 'copy_to_phone_clipboard', 'arguments': {'text': 'hello'},
+                                               'turnId': 'turn-1', 'callId': 'tool-slow'}}
+        copy = threading.Thread(target=engine._tool, args=(conversation, e))
+        copy.start()
+        self.assertTrue(writing.wait(2))
+        barge = threading.Thread(target=engine._user_turn, args=('Did it work?',))
+        barge.start()
+        time.sleep(0.2)
+        release.set()  # the write finishes after the barge-in interrupted the call
+        copy.join(5)
+        barge.join(5)
+        text = self.submitted()[-1]
+        self.assertTrue(text.startswith('[Before this message, your interrupted copy_to_phone_clipboard call finished: Copied'))
+        self.assertTrue(text.endswith('Did it work?'))
+        self.assertEqual(engine._late_notes, [])
+
+    def test_a_reset_drops_notes_of_the_old_conversation(self):
+        engine = self.engine
+        old = engine.sessions['conversation']
+        old.turn = 'turn-1'
+        class ResettingLink(ClipboardLink):
+            def call(self, action, **args):
+                engine.reset()  # the owner resets while the phone writes
+                return super().call(action, **args)
+        self.phone.link = ResettingLink()
+        e = {'callId': 'ipc-reset', 'params': {'tool': 'copy_to_phone_clipboard', 'arguments': {'text': 'hello'},
+                                                'turnId': 'turn-1', 'callId': 'tool-reset'}}
+        engine._tool(old, e)
+        self.assertEqual(engine._late_notes, [])
+        engine._user_turn('Hi')
+        self.assertEqual(self.submitted()[-1], 'Hi')
+
+    def test_notes_survive_a_failed_submit(self):
+        engine = self.engine
+        conversation = engine.sessions['conversation']
+        engine._late_notes.append((engine.conversation, '[note]'))
+        request = engine.client.request
+        def failing(op, session, **p):
+            if op == 'submit':
+                raise RuntimeError('bridge busy')
+            return request(op, session, **p)
+        engine.client.request = failing
+        with self.assertRaises(RuntimeError):
+            engine._submit(conversation, 'first')
+        self.assertEqual(engine._late_notes, [(engine.conversation, '[note]')])
+        engine.client.request = request
+        conversation.busy = False
+        engine._submit(conversation, 'second')
+        self.assertEqual(self.submitted()[-1], '[note]\nsecond')
+        self.assertEqual(engine._late_notes, [])
 
     def test_conversation_tool_and_policy_but_not_an_app_thread_tool(self):
         from rose.codex_conductor import CONVERSATION_TOOLS, CONVERSATION_POLICY

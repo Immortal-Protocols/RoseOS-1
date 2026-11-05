@@ -116,7 +116,12 @@ class CodexConductor:
         self._speech_start = 0
         self._announcements = queue.Queue()
         self._reported_tasks = set()
-        self._late_notes = []  # tool outcomes the conversation was told were cancelled (copy_to_phone_clipboard)
+        # Phone outcomes the conversation was told were cancelled (copy_to_phone_clipboard after an interruption):
+        # (conversation id, note), sent with that conversation's next submit. Copies in flight, so a barge-in turn
+        # can wait briefly for their outcome before it is submitted.
+        self._late_notes = []
+        self._copies = 0
+        self._copies_done = threading.Condition(self._lock)
         self.client = client_factory(self._events.put)
         self._worker = threading.Thread(target=self._loop, name='codex-conductor', daemon=True)
 
@@ -166,9 +171,9 @@ class CodexConductor:
                 s.turn = None
                 self.log(s, 'user_message', text=text, reply_id=s.rid)
                 self.bus.emit('user_turn', id=s.rid, text=redact(text))
-                with self._lock:
-                    notes, self._late_notes = self._late_notes, []
-                self._submit(s, '\n'.join(notes + [text]) if notes else text)
+                with self._lock:  # a copy this turn interrupted is usually about to answer: let this turn carry it
+                    self._copies_done.wait_for(lambda: self._copies == 0, timeout=3)
+                self._submit(s, text)
         except Exception as exc:
             self._failed(s, exc)
 
@@ -182,7 +187,17 @@ class CodexConductor:
         else:
             s.utterance = self.speaker.utterance(s.rid, s.started) if self.speaker else None
             self.bus.emit('status', state='thinking')
-        result = self.client.request('submit', s.name, text=text)
+        notes = []
+        if not s.task:
+            with self._lock:
+                notes = [n for c, n in self._late_notes if c == s.conversation]
+                self._late_notes = []
+        try:
+            result = self.client.request('submit', s.name, text='\n'.join(notes + [text]) if notes else text)
+        except Exception:
+            with self._lock:
+                self._late_notes[:0] = [(s.conversation, n) for n in notes]
+            raise
         # Completion can precede the RPC reply. Never resurrect a completed turn.
         if s.busy and not s.turn:
             s.turn = result.get('turn', {}).get('id')
@@ -496,17 +511,19 @@ class CodexConductor:
                     logged = ({'text_characters': len(args['text'])} if name == 'copy_to_phone_clipboard'
                               and isinstance(args, dict) and isinstance(args.get('text'), str) else args)
                     self.log(s, 'tool_call', call_id=p['callId'], name=name, arguments=logged)
-                    result, image = self._app_tool(s, name, args) if s.task else self._conversation_tool(name, args)
+                    copying = name == 'copy_to_phone_clipboard' and not s.task
+                    if copying:
+                        with self._lock:
+                            self._copies += 1
+                    try:
+                        result, image = self._app_tool(s, name, args) if s.task else self._conversation_tool(name, args)
+                    finally:
+                        if copying:
+                            self._copy_finished(s, p, result)
         except PhoneTaskError as exc:
             result = {'ok': False, 'reason': exc.code, 'message': str(exc)}
         except Exception:
             result = {'ok': False, 'reason': 'Tool failed'}
-        if name == 'copy_to_phone_clipboard' and 'status' in result and (
-                s.cancelled.is_set() or p['turnId'] in s.ignored_turns or (s.turn and p['turnId'] != s.turn)):
-            # An interruption already answered this call as cancelled, but the phone acted: say what really happened.
-            with self._lock:
-                self._late_notes.append('[Before this message, your interrupted copy_to_phone_clipboard call finished: '
-                                        + str(result.get('message') or result['status']) + ']')
         try:
             self.log(s, 'tool_result', call_id=p['callId'], name=name, result=result,
                      cancellation_requested=s.cancelled.is_set())
@@ -524,6 +541,17 @@ class CodexConductor:
                               'result': {'success': bool(result.get('ok', True)), 'contentItems': content}})
         except Exception:
             self._failed(s)
+
+    def _copy_finished(self, s, p, result):
+        """A copy returned. If an interruption already answered it as cancelled, keep its real outcome for that
+        conversation's next submit (only the phone's status message, never the text)."""
+        with self._lock:
+            if isinstance(result, dict) and 'status' in result and s.conversation == self.conversation and (
+                    s.cancelled.is_set() or p['turnId'] in s.ignored_turns or (s.turn and p['turnId'] != s.turn)):
+                self._late_notes.append((s.conversation, '[Before this message, your interrupted copy_to_phone_clipboard '
+                                         'call finished: ' + str(result.get('message') or result['status']) + ']'))
+            self._copies -= 1
+            self._copies_done.notify_all()
 
     def _conversation_tool(self, name, a):
         if name == 'phone_task':
@@ -695,6 +723,8 @@ class CodexConductor:
             self.log(s, 'reset', history='retained; opening a new conversation')
             self.client.request('close', s.name)
             self.conversation = self.store.new(self.model)
+            with self._lock:
+                self._late_notes = []  # the new conversation never made those calls
             s = self.sessions['conversation'] = Session('conversation', conversation=self.conversation)
             self._open(s, CONVERSATION_POLICY, CONVERSATION_TOOLS)
             self.bus.emit('reset')
