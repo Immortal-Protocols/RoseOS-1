@@ -211,6 +211,49 @@ automatic STOP is Infra's fallback, and it is configured outside this repository
 builder again for delivery. Here, a compile that runs close to its 11-hour cap leaves the signer (190-minute cap)
 without time. If the STOP interrupts signing, nothing is published and the run fails. Start a new dispatch.
 
+## Builder storage: reclaiming regenerable build data (BUILDER-RECLAIM)
+
+The `builder`, `app-builder` and `mustang-build` jobs start with **Reclaim regenerable build data**
+(`scripts/builder-reclaim.py apply`) before they write. It removes only what
+`os/release-pipeline/storage/builder-reclaim.json` names, from the attempt storage `/home/pixelbuild/rose-actions`:
+
+- **`mustang-prep-<run>-<attempt>`, `blazer-prep-<run>-<attempt>`:** the copied `source/` and `downloads/`.
+  `source/releases`, which holds signed copies, always stays. The two newest Mustang preps and the newest Blazer
+  prep stay whole, so their own delivery can still read them.
+- **`launcher3-compile-<run>-<attempt>`:** `tree`, `out`, `home` and `tmp`, the same paths the harness's own
+  `finish` removes. This is the backstop for a run whose `finish` never ran.
+- **`app-`, `app-reuse-` and `cf-alpha*-<run>`, `device-readiness-<run>-<attempt>`:** per-run scratch, removed whole.
+  Its job removes it at the end; one left behind belongs to a killed job.
+- **`alpha-source/.staging-*`:** a killed preparation's partial copy.
+
+**Kept whole:** an entry any tracked file under `.github/workflows`, `os` or `scripts` names (a bound input, a
+recovery record, delivery evidence), the current run's entries, and each class's newest.
+
+**Never touched:**
+- the retained source tree with its `OUT_DIR` and `releases/`;
+- `frankel-<build>` attempts, whose names the allocator reads as used builds;
+- allocation ledgers and reconcile receipts;
+- Mustang sign, collect, package and OTA outputs, where the next OTA reads its baseline;
+- Rango and factory records, alpha preparations and operator-staged inputs.
+
+**How it runs:**
+- It holds the shared builder lock for the whole apply. If the lock is busy, it reclaims nothing.
+- Each path moves whole into `rose-actions/.reclaim-trash` and is removed there. A symlink is never followed,
+  moved or removed, and nothing on another filesystem is touched.
+- A killed apply leaves only the trash, and the next apply empties it first.
+- Receipts: `rose-actions/reclaim/NNNN-<label>.plan.json` before anything moves, and `NNNN-<label>.json` after,
+  with each item's outcome and the available bytes before and after.
+- Exit codes:
+  - **0:** it reclaimed, found nothing to do, or the lock was busy.
+  - **3:** refused. The storage root, trash or receipt directory is unsafe, and the job stops before it builds.
+  - **2:** invalid policy.
+
+**To preview without changing anything,** run this on the builder (read-only, no lock):
+`python3 scripts/builder-reclaim.py plan --measure`
+
+**To add a class,** it must be data a later run regenerates by itself. Name its producer and its readers in the
+policy. `scripts/tests/test_builder_reclaim.py` checks that no class matches a never-reclaimed store.
+
 ## Retained Rango signing and separate release (source only, runtime unbound)
 
 This route was added in OCT30-INFRA-S015 as source and tests only. Nothing

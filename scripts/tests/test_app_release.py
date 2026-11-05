@@ -36,7 +36,7 @@ WORKFLOW = (ROOT/'.github/workflows/os-release.yml').read_text()
 # OCT30-INFRA-S014 moved both jobs once: the builder allocates the latest-beta candidate and exports its identity, and
 # the publisher takes that identity, re-derives the allocation and promotes only latest-beta or an explicit --promote.
 # + RELEASE020 M2/M2c: opt-in packaging and the default-off dedicated-signer route (publisher also needs signed-builder)
-OS_JOBS_AT_BASE = {'builder': 'ca7c630e8d3c9c82a408fafeecbd6165f594c79b0e6cba150ba3b4340dc0cff4',
+OS_JOBS_AT_BASE = {'builder': 'f14da4107765ccf0b87f48cd8e7c636a58d9b573f9714dea3ae3f61f33918383',
     'publisher': '2b8ce2b79cbb9ffe29e05762f46dc3d1f17b385479d06998f538b7926afc61fe'}
 
 def script(path, body):
@@ -439,7 +439,9 @@ class WorkflowAppOnlyTest(unittest.TestCase):
         app = self.jobs['app-builder']
         self.assertIn("    needs: controller\n    if: inputs.mode == 'app-only'\n    runs-on: [self-hosted, roseos-frankel-builder]\n", app)
         runs = re.findall(r'^      (?:- |  )run: (.+)$', app, re.M)
-        self.assertEqual(runs, ['python3 scripts/release-pipeline.py preflight --job builder', 'python3 scripts/host-app-release.py --check',
+        self.assertEqual(runs, ['python3 scripts/release-pipeline.py preflight --job builder',
+            'python3 scripts/builder-reclaim.py apply --current-run "$GITHUB_RUN_ID" --label "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-app-builder"',
+            'python3 scripts/host-app-release.py --check',
             '|', 'python3 scripts/release-allocate.py app --out "$ROSE_BASE/app-allocation.json"',
             'python3 scripts/actions-gcp-login.py login "$GCP_SIGNER_SERVICE_ACCOUNT"',
             'ROSE_CANDIDATE_SHA="$CANDIDATE_SHA" ROSE_RELEASE_DIR="$ROSE_BASE/work" python3 scripts/host-app-release.py --artifact-dir "$ROSE_BASE/artifact"',
