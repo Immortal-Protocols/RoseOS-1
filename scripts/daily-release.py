@@ -12,8 +12,8 @@ Each lane is decided on its own, in file order, so one lane's failure never stop
   - disabled: the committed lane is not enabled;
   - absent: its entry workflow file is not in this checkout;
   - pending: a run of the lane is queued, waiting or in progress, so that run delivers and nothing piles up;
-  - delivered: the lane's newest successful run whose delivery job succeeded already built this main commit, so an
-    identical commit is never rebuilt;
+  - delivered: the lane's newest completed run whose delivery job succeeded already built this main commit, so an
+    identical commit is never rebuilt (a later job's failure, such as cleanup, does not undo a delivery);
   - otherwise the lane's entry is dispatched once, on ref main, with its committed inputs (manual dispatch stays).
 The dispatcher never publishes, retries, cancels or changes a release. Each lane's route keeps its last good release when
 it fails (lane.lastGood).
@@ -37,6 +37,7 @@ NAME = re.compile(r'[a-z][a-z0-9-]{0,40}')
 WORKFLOW = re.compile(r'[a-z0-9][a-z0-9-]{0,80}\.yml')
 INPUT = re.compile(r'[a-z][a-z0-9_]{0,60}')
 PENDING = {'queued', 'in_progress', 'waiting', 'requested', 'pending'}
+DELIVERY_LOOKS = 20
 
 
 class Invalid(Exception):
@@ -136,8 +137,10 @@ def decide(lane, main_sha, runs, delivered, present=True):
     pending = [run for run in mine if run.get('status') in PENDING]
     if pending:
         return 'skip', f'pending: run {pending[0].get("id")} has not finished and will deliver'
-    for run in mine:
-        if (run.get('status'), run.get('conclusion')) == ('completed', 'success') and delivered(run):
+    # Delivered means the lane's delivery job succeeded, even if a later job (cleanup) failed. Only the newest
+    # delivery counts, and at most DELIVERY_LOOKS completed runs are examined (one jobs read each).
+    for run in [r for r in mine if r.get('status') == 'completed'][:DELIVERY_LOOKS]:
+        if delivered(run):
             if run.get('head_sha') == main_sha:
                 return 'skip', f'delivered: run {run.get("id")} already built {main_sha}'
             break

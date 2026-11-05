@@ -140,6 +140,22 @@ class Decide(unittest.TestCase):
         self.assertEqual(self.decide([run(7, OLD), run(6, MAIN)], delivered_ids={6, 7})[0], 'dispatch')
         self.assertEqual(self.decide([])[0], 'dispatch')  # never delivered
 
+    def test_a_delivery_counts_even_when_a_later_job_failed(self):
+        # The delivery job succeeded (published) and only cleanup failed: delivered, so never rebuilt.
+        self.assertEqual(self.decide([run(5, MAIN, conclusion='failure')], delivered_ids={5})[0], 'skip')
+        # A successful run whose delivery job did not succeed (another mode under the same title) is not a delivery.
+        self.assertEqual(self.decide([run(6, MAIN)], delivered_ids=())[0], 'dispatch')
+
+    def test_only_a_bounded_number_of_completed_runs_is_examined(self):
+        looked = []
+
+        def delivered(r):
+            looked.append(r['id'])
+            return r['id'] == 999
+        runs = [run(i, OLD) for i in range(1, daily.DELIVERY_LOOKS + 6)] + [run(999, MAIN)]
+        self.assertEqual(daily.decide(lane(), MAIN, runs, delivered)[0], 'dispatch')
+        self.assertEqual(len(looked), daily.DELIVERY_LOOKS)
+
     def test_only_this_lanes_runs_on_main_count(self):
         others = [run(1, status='in_progress', title='Build & publish latest Pixel 10'),   # frankel's, not mustang's
                   run(2, status='in_progress', path='yogi-ota.yml'),                     # another entry
@@ -209,6 +225,14 @@ class RunLanes(unittest.TestCase):
         self.assertEqual(results[1]['action'], 'error')
         self.assertNotIn('dispatched', results[1])
 
+    def test_lane_inputs_are_rechecked_against_the_entry_before_any_dispatch(self):
+        lanes = self.lanes('mustang')
+        lanes[1]['inputs'] = {'mode': 'mustang-otaa'}
+        api = Api(self.answers())
+        results = daily.run_lanes(ENV, lanes, api)
+        self.assertEqual(results[1]['action'], 'error')
+        self.assertFalse([c for c in api.calls if c[0] == 'POST'])
+
     def test_only_main_dispatches(self):
         with self.assertRaises(daily.Invalid):
             daily.run_lanes(dict(ENV, GITHUB_REF='refs/heads/feature'), self.lanes('mustang'), Api(self.answers()))
@@ -224,6 +248,16 @@ class RunLanes(unittest.TestCase):
             self.assertEqual(daily.main(['dispatch'], env=dict(ENV, GITHUB_REF='refs/heads/x'), opener=Api({})), 2)
         with contextlib.redirect_stderr(err):
             self.assertEqual(daily.main(['dispatch'], env=ENV, opener=Api({})), 1)  # main unreadable
+        answers = self.answers()
+        answers[('GET', '/actions/workflows/os-release.yml/runs')] = (500, {'message': 'boom'})
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp)/'lanes.json'
+            data = copy.deepcopy(LANES)
+            data['lanes'][1]['enabled'] = True
+            path.write_text(json.dumps(data))
+            with contextlib.redirect_stdout(io.StringIO()) as out:
+                self.assertEqual(daily.main(['dispatch', '--lanes', str(path)], env=ENV, opener=Api(answers)), 1)
+        self.assertEqual([r['action'] for r in json.loads(out.getvalue())['results']], ['skip', 'error', 'skip'])
 
 
 class Workflow(unittest.TestCase):
