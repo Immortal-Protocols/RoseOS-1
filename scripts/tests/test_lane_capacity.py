@@ -270,9 +270,11 @@ class MapTest(unittest.TestCase):
 
     def test_a_yogi_route_that_leans_on_the_frankel_host_is_refused(self):
         workflow = (ROOT/CONTRACT['lanes']['yogi']['workflow']).read_text()
+        # Whichever Yogi job comes first moves to the Frankel runner; exactly that one is refused.
         moved = workflow.replace('runs-on: [self-hosted, roseos-yogi-builder]', 'runs-on: [self-hosted, roseos-frankel-builder]', 1)
-        self.assertIn('yogi job build runs on roseos-frankel-builder, not on the Yogi runner roseos-yogi-builder',
-                      yogi_problems(CONTRACT, moved, YOGI))
+        refused = [p for p in yogi_problems(CONTRACT, moved, YOGI)
+                   if p.endswith('runs on roseos-frankel-builder, not on the Yogi runner roseos-yogi-builder')]
+        self.assertEqual(len(refused), 1, refused)
         queued = workflow.replace('  group: yogi-ota\n', '  group: os-release-frankel\n', 1)
         self.assertIn('yogi-ota queue os-release-frankel is not the Yogi host queue yogi-ota', yogi_problems(CONTRACT, queued, YOGI))
         controlled = workflow.replace('vars.YOGI_CONTROLLER_SERVICE_ACCOUNT', 'vars.GCP_CONTROLLER_SERVICE_ACCOUNT')
