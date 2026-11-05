@@ -41,6 +41,20 @@ final class HomeAppGroups {
   return MAIN;
  }
 
+ /** GrapheneOS's own SMS app, by package, never by label: the pinned external/Messaging (GrapheneOS
+  * platform_external_Messaging 041f08b) ships sysconfig whitelist_com.android.messaging.xml granting
+  * com.android.messaging, the pinned framework's default_sms_application. */
+ static final String OS_MESSAGING = "com.android.messaging";
+ /** Rose's Messages (BlueBubbles), the messaging app Home keeps. */
+ static final String MESSAGES = "com.bluebubbles.messaging";
+
+ /** The package Home places for a default-role holder (F04): the OS messaging app's place goes to Rose's Messages, so
+  * main Home never shows GrapheneOS Messaging; it stays installed and launchable from the System folder, and no
+  * message, role or default is touched. Every other package is placed as it is. */
+ static String homeRole(String packageName) {
+  return OS_MESSAGING.equals(packageName) ? MESSAGES : packageName;
+ }
+
  /** Rose's own apps that follow the default roles on Home (the reference's Mail, Calendar and Notes), where installed. */
  static final String[] HOME_SUITE = {"dev.pixel.mail", "org.fossify.calendar.pixel", "dev.pixel.notes.agent"};
 

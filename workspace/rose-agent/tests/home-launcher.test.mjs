@@ -225,7 +225,8 @@ test('an unchanged HOME or app-icon return reuses the built Home; changes rebuil
  for(const field of ['screenWidthDp','screenHeightDp','densityDpi','orientation','fontScale','uiMode','getLocales().toLanguageTags()'])assert.ok(main.includes('c.'+field),field);
  assert.match(main,/RoseHomeView\.dockRolePackages\(getPackageManager\(\),getPackageName\(\)\)\);\}/);
  // Home is built from the same role list the stamp compares.
- assert.match(home,/ArrayList<String> wanted = new ArrayList<>\(dockRolePackages\(pm, self\)\);/);
+ // F04: each default-role holder is placed through HomeAppGroups.homeRole (never GrapheneOS Messaging on main Home).
+ assert.match(home,/for \(String pkg : dockRolePackages\(pm, self\)\) wanted\.add\(HomeAppGroups\.homeRole\(pkg\)\);/);
 });
 
 test('Home\'s edge stays fixed over the swiping pages and reaches the screen bottom (OS-HIFI-HOME-001, #410)',()=>{
