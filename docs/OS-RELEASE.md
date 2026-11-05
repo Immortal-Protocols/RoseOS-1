@@ -1950,3 +1950,31 @@ roots, a Yogi-builder job and the one approved run. `prove` and `run` take `--lo
 it the lock is still `os/release-pipeline/frankel.json` `host.lockPath`, unchanged. A Yogi job passes
 `--lock /srv/rose-yogi/yogi-build.lock` on the dedicated Yogi runner and never runs on the Frankel builder. No such job
 exists yet, and this profile admits no key operation.
+
+## One retained private-draft recovery (2026110501)
+
+`frankel-draft-recovery.yml` is a manual, hosted-only, main-only one-off for original
+run `42063694943`, captured source `9a98e80f50b654af20f43dda41ad41f86e14b434`.
+It pins both Actions artifact IDs, exact ZIP sizes and SHA-256 digests in
+`scripts/frankel-draft-recovery.py`. It verifies the terminal producer and successful
+build/sign/verification/transfer/cleanup, safely extracts only the expected files,
+and re-derives the allocation candidate. An existing tag refuses; it never resumes
+or overwrites a partial draft. The existing publisher verifies the transferred
+bytes and creates/download-checks an **unpublished** draft with `--draft-only`.
+No controller, builder, signing, new allocation, public finalization or promotion
+runs. The existing installation token is job-scoped and revoked by its action.
+
+After exact execution authorization, the invocation is:
+`gh workflow run frankel-draft-recovery.yml --repo Immortal-Protocols/RoseOS-1 --ref main`.
+There are no caller-controlled producer inputs. One attempt only; uncertain effects
+or a refusal require inspection, never automatic retry. The job is bounded to
+90 minutes; extraction allows at most 32 members, 3 GiB OTA-expanded bytes and
+64 KiB allocation-expanded bytes. Nonsecret outcome/allocation receipts are kept
+for 14 days; hosted scratch is removed on cleanup. This workflow does not grant
+permission to retry previously denied local artifact or log reads.
+
+For Mustang's independent builder, the recovered allocation can subsequently be
+reviewed and committed under `os/latest-beta/`; `app-inputs-export` then rechecks
+and copies the retained signed apps/policy for build `2026110501`. Export does not
+require public publication, and its existing 30-minute/owned-start lifecycle is
+separate from this hosted recovery. Never substitute older app bytes.

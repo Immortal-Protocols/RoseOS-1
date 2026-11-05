@@ -118,6 +118,9 @@ on:
       - 'os/release-pipeline/**'
       - 'os/latest-beta/**'
       - '.github/workflows/os-release.yml'
+      - '.github/workflows/frankel-draft-recovery.yml'
+      - 'scripts/frankel-draft-recovery.py'
+      - 'scripts/tests/test_frankel_draft_recovery.py'
       - 'scripts/tests/test_release_*.py'
       - 'scripts/tests/test_github_publisher.py'
       - 'scripts/tests/test_host_adapters.py'
@@ -301,6 +304,9 @@ on:
       - 'os/release-pipeline/**'
       - 'os/latest-beta/**'
       - '.github/workflows/os-release.yml'
+      - '.github/workflows/frankel-draft-recovery.yml'
+      - 'scripts/frankel-draft-recovery.py'
+      - 'scripts/tests/test_frankel_draft_recovery.py'
       - 'scripts/tests/test_release_*.py'
       - 'scripts/tests/test_github_publisher.py'
       - 'scripts/tests/test_host_adapters.py'
@@ -400,6 +406,7 @@ jobs:
           python3 scripts/tests/test_permission_apex.py
           python3 scripts/tests/test_release_candidate_contract.py
           python3 scripts/tests/test_release_allocate.py
+          python3 scripts/tests/test_frankel_draft_recovery.py
           python3 scripts/tests/test_release_chain.py
           python3 scripts/tests/test_mustang_ota_chain_workflow.py
           python3 scripts/tests/test_rango_factory_observe_workflow.py
