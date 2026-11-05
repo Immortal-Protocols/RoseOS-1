@@ -1,5 +1,53 @@
 # Mustang OTA implementation and activation
 
+## Current runtime restriction: dedicated Mustang builder only
+
+Mustang must never use Frankel's immortal-os-builder again. Frankel, Mustang and
+Yogi each require a separate builder VM and storage, queue and controller/STOP
+routing; runner labels or separate output directories on one host are not
+independent builders. This overrides the historical shared-host routes below.
+
+The legacy pipeline, allocation, delivery/bootstrap, signing/package and OTA
+command entry points now refuse before runtime work. In the existing
+os-release workflow each of the four Mustang modes therefore fails its hosted
+guard before the controller can start. The controller is skipped and cleanup's
+skipped-controller condition prevents a Frankel STOP. No environment override
+or future profile binding restores these legacy entry points. Read-only staged
+receipt validation remains available.
+
+The dedicated source contract is os/build-only/mustang-lane.json, currently
+unbound. scripts/mustang_lane.py check/plan accepts only a complete dedicated
+binding and rejects another flavor's VM, runner or queue. Its plan only renders
+instance-scoped get/start/stop arguments; it performs no cloud action. STOP
+ownership must identify the exact VM project, zone, instance and numeric ID and
+must say that this operation started it. Unknown or foreign ownership refuses.
+
+Remaining exclusive owner handoffs before any new runtime:
+
+- Infra supplies actual dedicated VM/runner/storage/lock bindings and evidence,
+  after applicable provisioning/access approval. No resource identity is guessed.
+  The Mac operator owns old-host inventory and deletion; this source work does
+  not inspect, copy or delete that host.
+- Release owns the new dedicated workflow and common controller integration.
+  The common controller must accept an explicit validated instance target and
+  ownership binding without replacing Frankel's default global target. New
+  Mustang jobs need their own queue and runner, and cleanup may target only
+  their owned VM. The common capacity map must describe these actual bindings.
+- Mustang's new runtime must consume the dedicated source/storage/lock paths,
+  baseline verification inputs and preserved allocation facts, with no fallback
+  to the legacy Frankel paths. The old adapters are retired, not reactivated by
+  setting a status flag. The raised-edge proof checks remain required.
+- Fresh signed-app inputs arrive as an immutable producer artifact from the
+  independently owned app/Frankel work. Mustang consumes it only on its own
+  builder. No Mustang export, build or signing job runs on the old host.
+
+Source preparation is not activation, provisioning or runtime authorization.
+Physical-phone testing, the harness and unrelated product feedback do not gate
+this work. F08 still requires compatible app microphone removal and reachable
+OS chin control in the same delivered candidate.
+
+## Historical implementation and delivery evidence
+
 Implements the source work for [Nathan's OTA plan](https://app.notion.com/p/40d7c646c81b81ce9485e0ca3eff8614)
 and [issue #503](https://github.com/Immortal-Protocols/RoseOS-1/issues/503).
 **UI follow-up OTA authorized; Frankel 2026110403 inputs are bound for runtime

@@ -24,6 +24,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT/'scripts'))
 import mustang_integration as integration
 import release_receipts
+import mustang_lane
 
 PLAN = 'https://app.notion.com/p/40d7c646c81b81198e60cb76ca2ea603'
 SCRUBBED = ('JAVA_TOOL_OPTIONS', 'JDK_JAVA_OPTIONS', '_JAVA_OPTIONS', 'CLASSPATH', 'JAVA_HOME', 'LD_PRELOAD',
@@ -42,6 +43,7 @@ def head():
 
 
 def config():
+    mustang_lane.reject_legacy()
     # The hosted describe guard checks the same static route before starting the
     # builder. Keep this in the runtime path too, before creating a fresh attempt.
     integration.check_route(ROOT/'os/build-only/mustang-updater-route.json')
@@ -240,6 +242,7 @@ def main():
     p.add_argument('--run-attempt')
     p.add_argument('--out')
     a = p.parse_args()
+    mustang_lane.reject_legacy()
     if a.action=='describe':
         print(json.dumps({'device':'mustang', 'source':head(), 'host':config(), 'omittedChecks':omissions(),
             'stages':['source','git-meta','download','vendor','lunch','allocate','seed','integrate','compile'],

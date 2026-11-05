@@ -15,6 +15,8 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path[:0] = [str(ROOT/'scripts'), str(Path(__file__).resolve().parent)]
 import mustang_edge as gate
 import mustang_ota as ota
+import mustang_lane as lane
+import subprocess
 import dex_fixture
 import test_edge_artifact as fixtures
 
@@ -42,6 +44,100 @@ def publication_proofs(directory, candidate=SOURCE, recipe=RECIPE, build=BUILD, 
                                  (('unsigned',unsigned),('signed',signed))},
                 roseEdge={stage:gate.inspect(path,stage,binding,descriptor(path)) for stage,path in
                           (('unsigned',unsigned),('signed',signed))})
+
+
+class DedicatedLaneTest(unittest.TestCase):
+    def proposal(self):
+        value=copy.deepcopy(lane.configuration())
+        value.update(status='bound',workflow='.github/workflows/mustang-dedicated.yml',
+                     runnerLabel='synthetic-mustang-runner',queue='synthetic-mustang-queue',
+                     sourceRoot='/synthetic/source',storageRoot='/synthetic/actions',
+                     diskResource='projects/synthetic/zones/synthetic-zone/disks/synthetic-mustang',
+                     lockPath='/synthetic/mustang.lock',infraEvidence='synthetic fixture, not a real binding',
+                     vm=dict(project='synthetic',zone='synthetic-zone',instance='synthetic-mustang',instanceId='12345'),
+                     controller=dict(identityVariable='MUSTANG_CONTROLLER_SERVICE_ACCOUNT',
+                                     providerVariable='MUSTANG_CONTROLLER_WORKLOAD_IDENTITY_PROVIDER'))
+        return value
+
+    def test_committed_dedicated_lane_is_unbound_and_renders_no_commands(self):
+        self.assertEqual(lane.configuration()['status'],'unbound')
+        with self.assertRaises(ValueError): lane.controller_plan(lane.configuration())
+
+    def test_dedicated_commands_are_only_for_the_verified_instance(self):
+        value=self.proposal()
+        plan=lane.controller_plan(value)
+        for action in ('get','start','stop'):
+            self.assertIn('synthetic-mustang',plan[action])
+            self.assertNotIn('immortal-os-builder',plan[action])
+            self.assertNotIn('roseos-yogi-builder-20261103-a',plan[action])
+        self.assertEqual(plan['ownership'],value['vm'])
+        self.assertFalse(plan['runtimeAuthorized'])
+
+    def test_different_label_does_not_allow_the_same_frankel_or_yogi_vm(self):
+        capacity=json.loads((ROOT/'os/release-pipeline/lanes/capacity.json').read_text())
+        for flavor in ('frankel','yogi'):
+            value=self.proposal()
+            value['vm'].update(capacity['hosts'][capacity['lanes'][flavor]['host']]['vm'])
+            with self.subTest(flavor=flavor):
+                with self.assertRaises(ValueError): lane.controller_plan(value)
+
+    def test_retired_instance_id_runner_and_queue_cannot_be_reused(self):
+        for field,value in (('instanceId','685707771105568194'),('runnerLabel','roseos-frankel-builder'),
+                            ('queue','os-release-frankel'),('workflow','.github/workflows/os-release.yml'),
+                            ('workflow','.github/workflows/yogi-ota.yml'),('lockPath','/')):
+            profile=self.proposal()
+            (profile['vm'] if field=='instanceId' else profile)[field]=value
+            with self.subTest(field=field,value=value):
+                with self.assertRaises(ValueError): lane.controller_plan(profile)
+
+    def test_stop_requires_matching_dedicated_vm_and_known_start_ownership(self):
+        profile=self.proposal()
+        record=dict(vm=profile['vm'],startedByThisOperation=True)
+        self.assertTrue(lane.owned_start(record,profile))
+        self.assertFalse(lane.owned_start(dict(record,startedByThisOperation=False),profile))
+        for invalid in (None,{},dict(record,startedByThisOperation='true'),
+                        dict(record,vm=dict(profile['vm'],instance='immortal-os-builder')),
+                        dict(record,vm=dict(profile['vm'],instanceId='999'))):
+            with self.subTest(record=invalid):
+                with self.assertRaises(ValueError): lane.owned_start(invalid,profile)
+
+    def test_binding_future_capacity_cannot_restore_the_legacy_route(self):
+        with patch.object(lane,'configuration',return_value=self.proposal()):
+            with self.assertRaisesRegex(ValueError,'legacy route retired'): lane.reject_legacy()
+
+    def test_actual_legacy_cli_admissions_refuse_before_controller_or_credentials(self):
+        commands=[
+            ['mustang-pipeline.py','describe'],
+            ['mustang-pipeline.py','run','--run-id','1','--run-attempt','1'],
+            ['mustang-pipeline.py','report','--run-id','1','--run-attempt','1','--out','/must-not-write'],
+            ['mustang-delivery.py','guard','--mode','bootstrap'],
+            ['mustang-delivery.py','guard','--mode','sign-package','--compile-run','1','--bootstrap-run','1'],
+            ['mustang_ota.py','guard'],['mustang_ota.py','observe'],['mustang_ota.py','stage'],
+            ['mustang_ota.py','publish'],
+            ['mustang-sign-package.py','collect'],['mustang-sign-package.py','sign'],
+            ['mustang-sign-package.py','package'],['mustang-sign-package.py','_execute'],
+            ['mustang-allocate.py','reserve'],
+        ]
+        env=dict(PATH=os.environ['PATH'],GITHUB_REF='refs/heads/main',GITHUB_EVENT_NAME='workflow_dispatch',
+                 GITHUB_WORKFLOW_REF='Immortal-Protocols/RoseOS-1/.github/workflows/os-release.yml@refs/heads/main',
+                 MUSTANG_RUNTIME_ALLOW_FRANKEL='true')
+        for command in commands:
+            with self.subTest(command=command):
+                result=subprocess.run([sys.executable,str(ROOT/'scripts'/command[0]),*command[1:]],
+                                      env=env,capture_output=True,text=True,timeout=10)
+                self.assertNotEqual(result.returncode,0)
+                self.assertIn('Mustang legacy route retired',result.stderr)
+
+    def test_workflow_guard_precedes_controller_and_skipped_controller_never_stops(self):
+        import yaml
+        jobs=yaml.safe_load((ROOT/'.github/workflows/os-release.yml').read_text())['jobs']
+        commands='\n'.join(step.get('run','') for step in jobs['guard']['steps'])
+        self.assertIn('scripts/mustang-pipeline.py describe',commands)
+        self.assertIn('scripts/mustang-delivery.py guard',commands)
+        self.assertIn('scripts/mustang_ota.py guard',commands)
+        self.assertEqual(jobs['controller']['needs'],'guard')
+        self.assertNotIn('always()',jobs['controller'].get('if',''))
+        self.assertIn("needs.controller.result != 'skipped'",jobs['cleanup']['if'])
 
 
 class ProofTest(unittest.TestCase):

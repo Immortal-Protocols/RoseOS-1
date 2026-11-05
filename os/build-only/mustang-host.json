@@ -1,5 +1,7 @@
 {
   "schemaVersion": 1,
+  "runtimeStatus": "retired-shared-host",
+  "runtimePolicy": "Historical bindings only. Mustang must never run on this Frankel host again. Legacy entry points refuse; the separate lifecycle contract is os/build-only/mustang-lane.json and is unbound.",
   "host": "immortal-os-builder",
   "project": "protocols-465723",
   "zone": "us-west2-a",

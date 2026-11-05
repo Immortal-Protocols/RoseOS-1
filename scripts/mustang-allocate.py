@@ -27,6 +27,7 @@ import re
 import sys
 import time
 import datetime
+import mustang_lane
 
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location('release_allocate', ROOT/'scripts/release-allocate.py')
@@ -130,6 +131,7 @@ def reserve(home, run_id, run_attempt, source, fetch=None, clock=time.time, lock
 
 
 def main(argv=None):
+    mustang_lane.reject_legacy()
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument('command', choices=('reserve',))
     for flag in ('--home', '--run-id', '--run-attempt', '--source', '--out'):

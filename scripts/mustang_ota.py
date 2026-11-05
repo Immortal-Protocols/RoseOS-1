@@ -24,6 +24,7 @@ import github_release_publisher as publisher
 import host_secrets
 import release_receipts
 import mustang_edge
+import mustang_lane
 
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG = ROOT/'os/ota/mustang.json'
@@ -453,6 +454,8 @@ def main():
     p.add_argument('--dir')
     a = p.parse_args()
     try:
+        if a.action != 'verify-staged':
+            mustang_lane.reject_legacy()
         if a.action == 'guard':
             guard(config(), access=True)
         elif a.action == 'observe':
