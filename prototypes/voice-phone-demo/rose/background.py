@@ -76,7 +76,7 @@ CONTROLLER_STATES = {"idle", "starting", "launching", "scheduled", "ready", "blo
 NODE_ACTIONS = {"tap", "long_press", "touch_point", "set_text", "ime_enter", "scroll", "swipe", "drag"}
 LABEL_ACTIONS = {"tap_label", "touch_label"}
 UI_ACTIONS = NODE_ACTIONS | LABEL_ACTIONS | {"screenshot", "inspect_ui", "app_context", "screen_gesture",
-                                             "back", "home"}
+                                             "screen_text", "back", "home"}
 # Two-slot controllers (provider schema 4, MultiSession.java): a start in a free slot "alongside"
 # the other session, and its refusals, which open and stop nothing.
 ALONGSIDE = "alongside"
@@ -213,6 +213,7 @@ class Workspace:
         # other one, and get_state/stop name this unit's session (an unnamed one is slot 0's,
         # which may be the other unit's). ``_own`` is the last session id seen for this unit.
         self.multi = False
+        self.visual_only = False  # Screenshot observations; no accessibility reads or node refresh.
         self._own: str | None = None
         # New per process: a schema 3 controller remembers the last 32 owner-stopped task ids
         # across Rose restarts, so "rose-ws-1-<pkg>" from an earlier run must never come back.
@@ -601,7 +602,7 @@ class Workspace:
                     "backgroundExecution": True, "details": state}
         opened = self.session is None or self.session.get("sessionId") != state["sessionId"]
         self._adopt(state)
-        observation = self.call("command", {**self.session, "action": "inspect_ui"})
+        observation = self.call("command", {**self.session, "action": "screenshot" if self.visual_only else "inspect_ui"})
         if opened:
             self.closed_reason = ""
             self._changed()

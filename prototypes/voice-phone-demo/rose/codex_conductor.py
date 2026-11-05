@@ -83,6 +83,7 @@ class Session:
     close_lock: threading.Lock = field(default_factory=threading.Lock)
     closed: bool = False
     cleanup_uncertain: bool = False
+    outcome: dict | None = None
 
 
 @dataclass(frozen=True)
@@ -170,6 +171,7 @@ class CodexConductor:
             return
         s.busy, s.text, s.first_text, s.started, s.turn = True, '', None, time.monotonic(), None
         if s.task:
+            s.outcome = None
             s.task.status, s.task.finished = 'running', None
             self._task_event(s)
         else:
@@ -227,7 +229,8 @@ class CodexConductor:
             with s.submit_lock:
                 if s.cancelled.is_set():
                     return
-                s.view = self.phone.session(s.name, independent=True) if getattr(self.phone, 'real', False) else self.phone.session(s.name)
+                visual = bool(getattr(self.phone, 'real', False) and getattr(self.phone, 'vision', False))
+                s.view = self.phone.session(s.name, independent=True, visual=visual) if getattr(self.phone, 'real', False) else self.phone.session(s.name)
                 if getattr(s.view, 'workspace', None):
                     package, _ = self.phone.resolve_app(s.app)
                     if not package:
@@ -243,9 +246,13 @@ class CodexConductor:
                            for t in phone_tools(bool(getattr(self.phone, 'real', False)), bool(getattr(self.phone, 'vision', False)))
                            if t['function']['name'] not in ('finish', *DIRECT)]
                 catalog.append(tool('observe', 'Read a fresh screen before choosing an action.'))
-                self._open(s, CONVERSATION_POLICY + '\n' + REAL_PHONE_SYSTEM +
+                policy = REAL_PHONE_SYSTEM
+                if visual:
+                    from .vision_phone import VISION_POLICY, vision_tools
+                    catalog, policy = vision_tools(), VISION_POLICY
+                self._open(s, CONVERSATION_POLICY + '\n' + policy +
                            f'\nThis thread owns only {s.app}. Use tools for actions, then report the observed result in plain text. '
-                           'There is no finish tool. Do not open another app. Use this app UI for timers and other actions; '
+                           'Do not open another app. Use this app UI for timers and other actions; '
                            'device-wide intent shortcuts are unavailable in an independent session.', catalog)
                 self.log(s, 'user_message', text=s.task.goal)
                 self._submit(s, s.task.goal)
@@ -291,6 +298,7 @@ class CodexConductor:
                         s.turn = None
                     self.log(s, 'user_message', text=instruction)
                     if s.busy:
+                        s.outcome = None
                         self.client.request('submit', s.name, text=instruction)  # adapter uses turn/steer
                     else:
                         self._submit(s, instruction)
@@ -436,13 +444,21 @@ class CodexConductor:
             if s.task:
                 validation_error = None
                 if status == 'completed':
-                    from .tasks import _unseen_number
-                    why, _ = _unseen_number(s.task.goal, s.text, s.view, s.run)
-                    if not any(a.get('ok') for step in s.task.steps for a in step['actions']) or why:
-                        status = 'failed'
-                        failure = next((a.get('result') for step in reversed(s.task.steps)
-                                        for a in reversed(step['actions']) if not a.get('ok') and a.get('result')), None)
-                        validation_error = why or failure or 'No successful phone action or observation was recorded.'
+                    if getattr(s.view, 'visual_only', False):
+                        if not s.outcome:
+                            status, validation_error = 'failed', 'No verified task outcome was reported.'
+                        elif s.outcome['status'] != 'succeeded':
+                            status, validation_error = 'failed', s.outcome['summary']
+                        else:
+                            s.text = s.outcome['summary']
+                    else:
+                        from .tasks import _unseen_number
+                        why, _ = _unseen_number(s.task.goal, s.text, s.view, s.run)
+                        if not any(a.get('ok') for step in s.task.steps for a in step['actions']) or why:
+                            status = 'failed'
+                            failure = next((a.get('result') for step in reversed(s.task.steps)
+                                            for a in reversed(step['actions']) if not a.get('ok') and a.get('result')), None)
+                            validation_error = why or failure or 'No successful phone action or observation was recorded.'
                 s.task.status = {'completed': 'done', 'interrupted': 'cancelled'}.get(status, 'failed')
                 s.task.result = s.text if status == 'completed' else validation_error or f'Codex turn {status}.'
                 s.task.finished = time.time()
@@ -532,6 +548,8 @@ class CodexConductor:
         from .tasks import TaskManager, _execute, _arg_id, DIRECT
         from .brain import ToolCall
         view = s.view
+        if getattr(view, 'visual_only', False):
+            return self._vision_tool(s, name, a)
         guard = object.__new__(TaskManager)
         guard.phone, guard.guard_sends = self.phone, bool(getattr(self.phone, 'real', False))
         if name in DIRECT:
@@ -570,6 +588,32 @@ class CodexConductor:
         s.task.steps.append({'n': len(s.task.steps)+1, 'actions': [result], 'what': name})
         self._task_event(s)
         return result, image
+
+    def _vision_tool(self, s, name, a):
+        view = s.view
+        if name == 'complete_task':
+            status, summary = a.get('status'), a.get('summary')
+            if status not in ('succeeded', 'blocked', 'failed') or not isinstance(summary, str) or not summary.strip():
+                return {'ok': False, 'reason': 'Provide a valid outcome and observed summary.'}, None
+            if status == 'succeeded' and (view.image is None or not view.frame_id or not s.task.steps or not s.task.steps[-1]['actions'][0].get('ok')):
+                return {'ok': False, 'reason': 'Observe and verify the result before reporting success.'}, None
+            s.outcome = {'status': status, 'summary': summary.strip()}
+            return {'ok': True, 'outcome': s.outcome}, None
+        if name == 'open_app' and str(a.get('app', '')).casefold() != s.app.casefold():
+            return {'ok': False, 'reason': 'Use a separate app session'}, None
+        if len(s.task.steps) >= 50:
+            return {'ok': False, 'reason': 'Action limit reached; report the blocker with complete_task.'}, None
+        s.outcome = None  # An outcome cannot survive another observation or input.
+        s.task.detail = f'{"Checking" if name == "observe" else "Working in"} {s.app} using vision.'
+        self._task_event(s)
+        result = view.execute(name, a)
+        result.update(frame_id=view.frame_id, targeting='screenshot_coordinates',
+                      workspace_session_id=view.workspace.bound_id)
+        if view.image is None:
+            result['observation_error'] = view.obs.get('status') or 'No screenshot available'
+        s.task.steps.append({'n': len(s.task.steps)+1, 'actions': [result], 'what': name})
+        self._task_event(s)
+        return result, view.ensure_image()
 
     def _heard(self, utterance, rid, conversation, thread, turn):
         utterance.done.wait(180)

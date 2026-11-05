@@ -29,7 +29,7 @@ SHARED = {'appsGeneration', 'appsSignature', 'posting', 'active'}
 
 class MultiSessionWiringTest(unittest.TestCase):
     def test_every_per_session_field_moves_with_its_slot(self):
-        statics = {'session', 'generation', 'started', 'id', 'target', 'taskId', 'status', 'error', 'snapshotId', 'stops', 'width',
+        statics = {'session', 'generation', 'started', 'id', 'target', 'taskId', 'status', 'error', 'snapshotId', 'visualSnapshotId', 'stops', 'width',
                    'height', 'operations', 'blocked', 'consent', 'replacement', 'sessionToken', 'pendingToken', 'pending', 'nodes',
                    'parents', 'labels', 'truncated', 'snapshotTime', 'anyApp', 'observed', 'lastPreview'}
         # No other mutable static field exists: every one is per-session (above) or shared on purpose.

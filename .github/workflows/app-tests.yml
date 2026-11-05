@@ -236,7 +236,7 @@ jobs:
           "$RUNNER_TEMP/codex-voice-venv/bin/pip" install --disable-pip-version-check --only-binary=:all: \
             $(grep -E '^(numpy|pillow|fastapi|uvicorn|websockets|soundfile|httpx)==' prototypes/voice-phone-demo/requirements.txt) cryptography
           PYTHONPATH="$GITHUB_WORKSPACE/prototypes/voice-phone-demo" \
-            "$RUNNER_TEMP/codex-voice-venv/bin/python" -m rose.tests.test_codex
+            "$RUNNER_TEMP/codex-voice-venv/bin/python" -m unittest rose.tests.test_codex rose.tests.test_vision_phone
       - name: Offline suite
         run: bash scripts/test-local.sh
       - name: Models PR288 cases executed, not skipped (only the unpinned jinja2 render case may skip)
