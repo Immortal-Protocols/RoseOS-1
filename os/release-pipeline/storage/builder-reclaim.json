@@ -37,10 +37,10 @@
     {
       "name": "run-scratch",
       "parent": ".",
-      "entry": "(?:app|app-reuse|cf-alpha|cf-alpha-successor|cf-alpha-apk-diagnostic|cf-alpha-verify-retained|cf-alpha-export)-(?P<run>[1-9][0-9]{0,19})",
+      "entry": "(?:app|app-reuse|app-inputs-export|cf-alpha|cf-alpha-successor|cf-alpha-apk-diagnostic|cf-alpha-verify-retained|cf-alpha-export)-(?P<run>[1-9][0-9]{0,19})",
       "reclaim": [{"path": "."}],
       "keepNewest": 0,
-      "regenerate": "Each run of these routes creates its own <route>-<run id> directory (.github/workflows/os-release.yml app-builder, app-reuse and the emulator-alpha jobs).",
+      "regenerate": "Each run of these routes creates its own <route>-<run id> directory (.github/workflows/os-release.yml app-builder, app-reuse, app-inputs-export and the emulator-alpha jobs).",
       "readers": "Only that run, whose last step removes the directory whatever happened; a directory left behind belongs to a run whose job was killed before that step."
     },
     {

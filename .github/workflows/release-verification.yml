@@ -84,6 +84,10 @@ on:
       - 'scripts/host-app-build.py'
       - 'scripts/host-app-release.py'
       - 'scripts/host-app-reuse.py'
+      - 'scripts/host-app-inputs-export.py'
+      - 'scripts/app-inputs-verify.py'
+      - 'os/app-inputs/**'
+      - 'scripts/tests/test_app_inputs_export.py'
       - 'scripts/app_release_publisher.py'
       - 'scripts/emulator-alpha.py'
       - 'scripts/alpha_source.py'
@@ -256,6 +260,10 @@ on:
       - 'scripts/host-app-build.py'
       - 'scripts/host-app-release.py'
       - 'scripts/host-app-reuse.py'
+      - 'scripts/host-app-inputs-export.py'
+      - 'scripts/app-inputs-verify.py'
+      - 'os/app-inputs/**'
+      - 'scripts/tests/test_app_inputs_export.py'
       - 'scripts/app_release_publisher.py'
       - 'scripts/emulator-alpha.py'
       - 'scripts/alpha_source.py'
@@ -408,6 +416,7 @@ jobs:
           python3 os/tests/test_apply_os_changes.py
           python3 scripts/tests/test_host_build_reconcile.py
           python3 scripts/tests/test_builder_reclaim.py
+          python3 scripts/tests/test_app_inputs_export.py
           python3 scripts/tests/test_daily_release.py
           python3 scripts/tests/test_actions_gcp_login.py
           python3 scripts/tests/test_app_release.py
