@@ -178,14 +178,10 @@ def blockers(cfg, stage, access=False, now=None):
     if stage in ('bootstrap', 'ota'):
         if cfg['builder'].get('status') != 'ready':
             found.append(f'builder runner/controller not ready (builder.status={cfg["builder"].get("status")})')
-        inputs = cfg['appInputs']
-        export = inputs.get('export') or {}
-        if inputs.get('status') != 'bound' or not inputs.get('allocation') \
-                or not re.fullmatch(r'[1-9][0-9]*', str(export.get('run') or '')) \
-                or not re.fullmatch(r'[1-9][0-9]*', str(export.get('artifactId') or '')) \
-                or not re.fullmatch(r'sha256:[0-9a-f]{64}', str(export.get('artifactDigest') or '')) \
-                or not SHA.fullmatch(str(export.get('receiptSha256') or '')):
-            found.append('signed app inputs are not bound (appInputs export run/artifact/digest/receipt)')
+        try:
+            app_record(cfg)
+        except (Refused, OSError, ValueError, KeyError) as error:
+            found.append(f'signed app inputs are not bound: {error}')
         try:
             identities(cfg)
         except Refused as error:
@@ -382,44 +378,40 @@ def prepare(cfg, build, base_attempt=None, run=subprocess.run):
     return record
 
 
-EXPORT_SCHEMA = 'roseos.app-inputs-export.v1'
-SUFFIXES = ('.apk', '.receipt.json', '.apk.idsig')
+RECORD_SCHEMA = 'roseos.app-inputs-record.v1'
+VERIFIER = ROOT/'scripts/app-inputs-verify.py'
 
 
-def verify_export(cfg, directory):
-    """Release's app-inputs-export artifact (PR #565 contract), byte-checked against this repository's one record:
-    the committed receipt digest, its producer allocation path and digest, signer and SDK, and SHA256SUMS over exactly
-    the nine signed files, the policy and the receipt. Admission of the APKs themselves follows in admit_apps."""
-    pins, directory = cfg['appInputs'], regular_dir(directory, 'app-inputs export')
-    receipt_path = directory/'app-inputs-export.json'
-    if digest(receipt_path) != pins['export']['receiptSha256']:
-        raise Refused('app-inputs export receipt differs from the committed record')
-    receipt = read(receipt_path)
-    allocation = ROOT/pins['allocation']
-    producer = receipt.get('producer') or {}
-    record = read(allocation)
-    if receipt.get('schema') != EXPORT_SCHEMA or producer.get('device') != 'frankel' \
-            or producer.get('build') != record.get('build') \
-            or (producer.get('allocation') or {}) != {'path': pins['allocation'], 'sha256': digest(allocation)} \
-            or receipt.get('signerSha256') != pins['appSignerSha256'] or receipt.get('sdk') != SDK:
-        raise Refused('app-inputs export producer, allocation, signer or SDK differs from the committed record')
-    names = sorted([f'signed-apps/{p}{x}' for p in pins['packages'] for x in SUFFIXES] + ['background-policy.json'])
-    if sorted(f['path'] for f in receipt.get('files', [])) != names:
-        raise Refused('app-inputs export file inventory differs from the nine signed files and the policy')
-    present = sorted(str(p.relative_to(directory)) for p in directory.rglob('*') if p.is_file() or p.is_symlink())
-    if present != sorted(names + ['app-inputs-export.json', 'SHA256SUMS']) or any(p.is_symlink() for p in directory.rglob('*')):
-        raise Refused('app-inputs export holds missing, extra or linked files')
-    expected = {f['path']: f['sha256'] for f in receipt['files']}
-    expected['app-inputs-export.json'] = pins['export']['receiptSha256']
-    seen = {}
-    for line in (directory/'SHA256SUMS').read_text().splitlines():
-        parts = line.split('  ')
-        if len(parts) != 2 or parts[1] in seen or not SHA.fullmatch(parts[0]):
-            raise Refused('app-inputs export SHA256SUMS is malformed or ambiguous')
-        seen[parts[1]] = parts[0]
-    if seen != expected or any(digest(directory/name) != value for name, value in expected.items()):
-        raise Refused('app-inputs export bytes differ from SHA256SUMS or the receipt')
-    return {'receiptSha256': pins['export']['receiptSha256'], 'producer': producer, 'apps': receipt.get('apps')}
+def app_record(cfg):
+    """Release's committed app-input record (PR #565) for the bound fleet set; absent until its export ran."""
+    pins = cfg['appInputs']
+    if pins.get('status') != 'bound':
+        raise Refused('appInputs.status is not bound')
+    path = ROOT/pins['record']
+    if not path.is_file() or path.is_symlink() or not VERIFIER.is_file():
+        raise Refused(f'Release app-input record {pins["record"]} or its verifier is not committed')
+    rec = read(path)
+    export = rec.get('export') or {}
+    artifact = export.get('artifact') or {}
+    if rec.get('schema') != RECORD_SCHEMA or rec.get('signerSha256') != pins['appSignerSha256'] or rec.get('sdk') != SDK \
+            or sorted(a['package'] for a in rec.get('apps', [])) != sorted(pins['packages']) \
+            or not re.fullmatch(r'[1-9][0-9]*', str(export.get('run', ''))) \
+            or not re.fullmatch(r'[1-9][0-9]*', str(artifact.get('id', ''))) \
+            or not re.fullmatch(r'sha256:[0-9a-f]{64}', str(artifact.get('digest', ''))):
+        raise Refused('Release app-input record schema, signer, SDK, apps or export identity differs')
+    return rec
+
+
+def verify_export(cfg, directory, tools, run=subprocess.run):
+    """Release's own verifier on the downloaded bytes, with this builder's tools; exit 0 is admission."""
+    rec = app_record(cfg)
+    result = run([sys.executable, str(VERIFIER), 'verify', '--record', str(ROOT/cfg['appInputs']['record']),
+                  '--dir', str(directory), '--aapt', tools['aapt'], '--apksigner', tools['apksigner']],
+                 capture_output=True, text=True, cwd=str(ROOT))
+    if result.returncode:
+        raise Refused('Release app-input verifier refused the downloaded set: ' + result.stderr.strip()[-400:])
+    return {'record': cfg['appInputs']['record'], 'recordSha256': digest(ROOT/cfg['appInputs']['record']),
+            'export': rec['export'], 'verifier': json.loads(result.stdout)}
 
 
 def admit_apps(cfg, apps_dir, policy_path, tools, identity=background_apks.identity):
@@ -427,8 +419,8 @@ def admit_apps(cfg, apps_dir, policy_path, tools, identity=background_apks.ident
     pins = cfg['appInputs']
     signer, packages = pins['appSignerSha256'], pins['packages']
     apps_dir = regular_dir(apps_dir, 'signed app inputs')
-    allocation = read(ROOT/pins['allocation'])
-    expected = {package: version for package, version in allocation['apps']}
+    record = app_record(cfg)
+    expected = {a['package']: a['versionCode'] for a in record['apps']}
     if sorted(expected) != sorted(packages):
         raise Refused('bound app allocation names other packages')
     apps = []
@@ -455,8 +447,7 @@ def admit_apps(cfg, apps_dir, policy_path, tools, identity=background_apks.ident
         if not row or (row['versionCode'], row['apkSha256'], row['certificates']) != \
                 (app['versionCode'], app['sha256'], [signer.upper()]):
             raise Refused(f'the policy does not pin the signed {app["package"]} bytes and version')
-    return {'apps': apps, 'policySha256': digest(policy_path), 'allocation': pins['allocation'],
-            'appSignerSha256': signer}
+    return {'apps': apps, 'policySha256': digest(policy_path), 'record': pins['record'], 'appSignerSha256': signer}
 
 
 def cover_display(cfg):
@@ -507,7 +498,7 @@ def integrate(cfg, build, app_inputs, run=subprocess.run):
     if len(entries) == 1 and entries[0].is_dir() and not entries[0].is_symlink():
         downloaded = entries[0]  # an artifact downloaded by id may land in its own named directory
     shutil.copytree(downloaded, apps_dir, symlinks=True)
-    exported = verify_export(cfg, apps_dir)
+    exported = verify_export(cfg, apps_dir, tools)
     admitted = admit_apps(cfg, apps_dir/'signed-apps', apps_dir/'background-policy.json', tools)
     release_receipts.write_once(directory/'app-input-admission.json', dict(admitted, export=exported))
     product = directory/f'product-{allocation["source"][:12]}'

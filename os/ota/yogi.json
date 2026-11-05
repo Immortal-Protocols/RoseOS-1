@@ -67,15 +67,8 @@
       "dev.pixel.voice",
       "dev.pixel.calculator.agent"
     ],
-    "allocation": "os/ota/mustang-frankel-2026110403-allocation.json",
-    "export": {
-      "producer": "os-release.yml mode app-inputs-export (Release, PR #565), build_number 2026110403",
-      "run": null,
-      "artifactId": null,
-      "artifactDigest": null,
-      "receiptSha256": null
-    },
-    "basis": "One decision record with Release: the signed-app set is Frankel 2026110403's (dev.pixel.voice 364, dev.pixel.calculator.agent 5, dev.pixel.backgroundcontrol 38; app signer 650d47f9...0bfb), named by the committed allocation record above and exported by Release's app-inputs-export (schema roseos.app-inputs-export.v1). Never signed on the Yogi builder. Once a separately authorized export run exists, its run id, artifact id, artifact digest and receipt sha256 are committed here and status becomes bound; the Yogi job downloads exactly that artifact, checks SHA256SUMS and the receipt against this record, then re-admits signer, receipts, versions and policy with its own aapt/apksigner. Bootstrap A and OTA B use the same set, so B's app versions are never lower than A's."
+    "record": "os/app-inputs/frankel-2026110403.json",
+    "basis": "One decision record, owned by Release: os/app-inputs/frankel-2026110403.json (schema roseos.app-inputs-record.v1, PR #565), committed by Release only after a separately authorized app-inputs-export run for Frankel 2026110403 (dev.pixel.voice 364, dev.pixel.calculator.agent 5, dev.pixel.backgroundcontrol 38; signer 650d47f9...0bfb). The Yogi job downloads exactly that record's run and artifact id, admits it with Release's scripts/app-inputs-verify.py verify (its own aapt/apksigner), then re-runs its own admission. Never signed on the Yogi builder. Bootstrap A and OTA B use the same set. Status stays unbound until the record exists."
   },
   "wire": {
     "tag": "yogi-{build}",

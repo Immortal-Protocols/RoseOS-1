@@ -101,13 +101,13 @@ jobs:
             python3 scripts/yogi_ota.py prepare --build "${{ steps.allocate.outputs.build }}" \
               --base-attempt "$(python3 -c 'import json;print(json.load(open("os/ota/yogi.json"))["bootstrap"]["build"])')"
           fi
-      # Release's app-inputs-export artifact, exactly the run and artifact committed in os/ota/yogi.json (never latest).
+      # Release's app-inputs-export artifact: exactly the run and artifact of its committed record (never latest).
       - id: inputs
         run: |
           python3 - >> "$GITHUB_OUTPUT" <<'PY'
           import json
-          e = json.load(open('os/ota/yogi.json'))['appInputs']['export']
-          print(f"run={e['run']}"); print(f"artifact={e['artifactId']}")
+          r = json.load(open(json.load(open('os/ota/yogi.json'))['appInputs']['record']))['export']
+          print(f"run={r['run']}"); print(f"artifact={r['artifact']['id']}")
           PY
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:

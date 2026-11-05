@@ -46,12 +46,21 @@ class Fixture(unittest.TestCase):
         self.cfg['signing']['bootstrapReceipt'] = str(self.receipt)  # absolute: ROOT/abs == abs
         self.cfg['builder'].update(status='ready', attempts=str(self.root/'attempts'))
         (self.root/'attempts').mkdir()
-        allocation = self.root/'allocation.json'
-        allocation.write_text(json.dumps({'apps': [['dev.pixel.voice', 364], ['dev.pixel.calculator.agent', 5],
-                                                   ['dev.pixel.backgroundcontrol', 38]]}))
-        self.cfg['appInputs'].update(status='bound', allocation=str(allocation),
-                                     export={'run': '41960000001', 'artifactId': '13400000001',
-                                             'artifactDigest': 'sha256:' + 'd'*64, 'receiptSha256': 'e'*64})
+        self.record = self.root/'frankel-2026110403.json'
+        self.record_value = {'schema': 'roseos.app-inputs-record.v1', 'signerSha256': self.cfg['appInputs']['appSignerSha256'],
+            'sdk': 37, 'apps': [{'package': 'dev.pixel.voice', 'versionCode': 364},
+                                {'package': 'dev.pixel.calculator.agent', 'versionCode': 5},
+                                {'package': 'dev.pixel.backgroundcontrol', 'versionCode': 38}],
+            'export': {'run': '41960000001', 'attempt': '1', 'receiptSha256': 'e'*64,
+                       'artifact': {'name': 'app-inputs-frankel-2026110403-41960000001-1', 'id': 13400000001,
+                                    'digest': 'sha256:' + 'd'*64}}}
+        self.record.write_text(json.dumps(self.record_value))
+        self.cfg['appInputs'].update(status='bound', record=str(self.record))
+        verifier = self.root/'app-inputs-verify.py'
+        verifier.write_text('# synthetic stand-in for Release\'s verifier\n')
+        patcher = mock.patch.object(yogi, 'VERIFIER', verifier)
+        patcher.start()
+        self.addCleanup(patcher.stop)
         self.cfg['signing'].update(status='approved', access={'approvalRef': 'synthetic', 'expiresAt': '2026-11-06T12:00:00Z'})
         self.cfg['bootstrap'].update(status='signed', build=BOOT_BUILD, timestamp=BOOT_EPOCH)
         self.cfg['publicationEnabled'] = True
@@ -217,66 +226,36 @@ class AppInputTest(Fixture):
             self.admit()
 
 
-class ExportTest(Fixture):
-    """Release's roseos.app-inputs-export.v1 artifact (PR #565 shape), checked against the committed record."""
-    def setUp(self):
-        super().setUp()
-        self.cfg['appInputs']['allocation'] = 'os/ota/mustang-frankel-2026110403-allocation.json'
-        allocation = yogi.ROOT/self.cfg['appInputs']['allocation']
-        self.dir = self.root/'export'
-        (self.dir/'signed-apps').mkdir(parents=True)
-        files = []
-        for package in self.cfg['appInputs']['packages']:
-            for suffix in yogi.SUFFIXES:
-                path = self.dir/'signed-apps'/f'{package}{suffix}'
-                path.write_bytes((package+suffix).encode())
-        (self.dir/'background-policy.json').write_text('{}')
-        for path in sorted(p for p in self.dir.rglob('*') if p.is_file()):
-            files.append({'path': str(path.relative_to(self.dir)), 'sizeBytes': path.stat().st_size, 'sha256': yogi.digest(path)})
-        receipt = {'schema': 'roseos.app-inputs-export.v1', 'signerSha256': self.cfg['appInputs']['appSignerSha256'], 'sdk': 37,
-                   'producer': {'device': 'frankel', 'build': '2026110403', 'tag': 'frankel-2026110403',
-                                'allocation': {'path': self.cfg['appInputs']['allocation'], 'sha256': yogi.digest(allocation)}},
-                   'files': files}
-        self.write(receipt)
+class RecordTest(Fixture):
+    """Release's committed roseos.app-inputs-record.v1 (PR #565) is the one app-input record; its verifier admits bytes."""
+    def test_committed_record_binds_and_verifier_is_called_with_yogi_tools(self):
+        self.assertEqual(yogi.app_record(self.cfg)['export']['artifact']['id'], 13400000001)
+        calls = []
+        def run(argv, **kwargs):
+            calls.append(argv)
+            return SimpleNamespace(returncode=0, stdout='{"verdict": "ADMITTED"}', stderr='')
+        result = yogi.verify_export(self.cfg, self.root/'download', {'aapt': '/t/aapt', 'apksigner': '/t/apksigner'}, run)
+        self.assertEqual(result['verifier']['verdict'], 'ADMITTED')
+        self.assertEqual(calls[0][1:], [str(yogi.VERIFIER), 'verify', '--record', str(self.record), '--dir',
+                                        str(self.root/'download'), '--aapt', '/t/aapt', '--apksigner', '/t/apksigner'])
+        refuse = lambda argv, **kwargs: SimpleNamespace(returncode=1, stdout='', stderr='inventory differs')
+        with self.assertRaisesRegex(yogi.Refused, 'verifier refused'):
+            yogi.verify_export(self.cfg, self.root/'download', {'aapt': 'a', 'apksigner': 'b'}, refuse)
 
-    def write(self, receipt):
-        path = self.dir/'app-inputs-export.json'
-        path.write_text(json.dumps(receipt, indent=2, sort_keys=True) + '\n')
-        self.cfg['appInputs']['export']['receiptSha256'] = yogi.digest(path)
-        rows = receipt['files'] + [{'path': 'app-inputs-export.json', 'sha256': yogi.digest(path)}]
-        (self.dir/'SHA256SUMS').write_text(''.join(f'{f["sha256"]}  {f["path"]}\n' for f in sorted(rows, key=lambda f: f['path'])))
+    def test_missing_foreign_or_incomplete_records_block(self):
+        cases = [dict(signerSha256='a40da80a59d170caa950cf15c18c454d47a39b26989d8b640ecd745ba71bf5dc'), dict(sdk=36),
+                 dict(schema='roseos.latest-allocation.v1'), dict(apps=self.record_value['apps'][:2]),
+                 dict(export=dict(self.record_value['export'], run=None))]
+        for change in cases:
+            with self.subTest(change=sorted(change)):
+                self.record.write_text(json.dumps(dict(self.record_value, **change)))
+                self.assertTrue(any('signed app inputs are not bound' in b for b in yogi.blockers(self.cfg, 'bootstrap')))
+        self.record.unlink()
+        self.assertTrue(any('not committed' in b for b in yogi.blockers(self.cfg, 'ota')))
 
-    def test_committed_export_verifies(self):
-        self.assertEqual(yogi.verify_export(self.cfg, self.dir)['producer']['build'], '2026110403')
-
-    def test_uncommitted_foreign_or_changed_exports_refuse(self):
-        receipt = json.loads((self.dir/'app-inputs-export.json').read_text())
-        good = self.cfg['appInputs']['export']['receiptSha256']
-        self.cfg['appInputs']['export']['receiptSha256'] = 'f'*64
-        with self.assertRaisesRegex(yogi.Refused, 'committed record'):
-            yogi.verify_export(self.cfg, self.dir)
-        self.cfg['appInputs']['export']['receiptSha256'] = good
-        for key, value in [('signerSha256', 'a40da80a59d170caa950cf15c18c454d47a39b26989d8b640ecd745ba71bf5dc'), ('sdk', 36),
-                           ('producer', dict(receipt['producer'], build='2026110402')),
-                           ('producer', dict(receipt['producer'], allocation={'path': 'other.json', 'sha256': 'a'*64})),
-                           ('files', receipt['files'][1:])]:
-            with self.subTest(key=key):
-                self.write(dict(receipt, **{key: value}))
-                with self.assertRaises(yogi.Refused):
-                    yogi.verify_export(self.cfg, self.dir)
-        self.write(receipt)
-        (self.dir/'signed-apps/dev.pixel.voice.apk').write_bytes(b'changed')
-        with self.assertRaisesRegex(yogi.Refused, 'bytes differ'):
-            yogi.verify_export(self.cfg, self.dir)
-        (self.dir/'signed-apps/dev.pixel.voice.apk').write_bytes(b'dev.pixel.voice.apk')
-        (self.dir/'extra.apk').write_bytes(b'x')
-        with self.assertRaisesRegex(yogi.Refused, 'extra'):
-            yogi.verify_export(self.cfg, self.dir)
-
-    def test_unbound_export_fields_block(self):
-        self.cfg['appInputs']['export']['artifactId'] = None
-        self.assertIn('signed app inputs are not bound (appInputs export run/artifact/digest/receipt)',
-                      yogi.blockers(self.cfg, 'bootstrap'))
+    def test_committed_contract_points_at_the_release_record(self):
+        self.assertEqual(yogi.config()['appInputs']['record'], 'os/app-inputs/frankel-2026110403.json')
+        self.assertEqual(yogi.config()['appInputs']['status'], 'unbound')
 
 
 class AllocationTest(Fixture):
