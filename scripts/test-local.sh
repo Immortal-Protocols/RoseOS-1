@@ -90,6 +90,8 @@ python3 scripts/tests/test_release_allocate.py
 python3 scripts/tests/test_release_chain.py
 # Mustang one-button chain wiring (canned run metadata; no network, token, host or dispatch).
 python3 scripts/tests/test_mustang_ota_chain_workflow.py
+# Mustang raised-edge gate (#570): the shared checker on synthetic archives; no signer, host or dispatch.
+python3 scripts/tests/test_mustang_edge_gate.py
 python3 scripts/tests/test_agent_beta_auto.py
 # 1F daily release dispatcher (canned API answers; no network, token, dispatch or host).
 python3 scripts/tests/test_daily_release.py

@@ -23,6 +23,7 @@ import zipfile
 import github_release_publisher as publisher
 import host_secrets
 import release_receipts
+import mustang_edge
 
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG = ROOT/'os/ota/mustang.json'
@@ -37,7 +38,10 @@ VALIDATED_SOURCES = SOURCES + ('scripts/mustang*', 'os/ota/mustang.json', 'scrip
            'scripts/host-sign.py', 'scripts/host_secrets.py', 'scripts/host-decrypt-keys.py',
            'scripts/host-factory-package.py', 'scripts/github_release_publisher.py', 'scripts/release-pipeline.py',
            '.github/workflows/os-release.yml', '.github/workflows/mustang-ota*.yml',
-           'scripts/tests/test_mustang_ota.py', 'os/tests/MustangReleasesTest.java')
+           'scripts/tests/test_mustang_ota.py', 'scripts/tests/test_mustang_edge_gate.py',
+           'scripts/tests/test_edge_artifact.py', 'scripts/tests/dex_fixture.py',
+           'scripts/tests/fixtures/rose-edge-dex/*',
+           'scripts/edge_artifact.py', 'os/release-pipeline/frankel.json', 'os/tests/MustangReleasesTest.java')
 
 
 def read(path):
@@ -255,6 +259,7 @@ def stage(sign_run, attempt, baseline_file, out):
     if signed.get('status') != 'signed-command-complete' or signed.get('device') != 'mustang' \
             or signed.get('runId') != sign_run or signed.get('runAttempt') != attempt:
         raise ValueError('fresh same-run Mustang signing receipt required')
+    mustang_edge.require_signing(signed)
     if signed['secrets'] != {'keys': {'name': adapter.SECRETS['keys'], 'version': '1'},
                              'passphrase': {'name': adapter.SECRETS['passphrase'], 'version': '1'}}:
         raise ValueError('established Mustang signing versions must be preserved')
@@ -270,7 +275,14 @@ def stage(sign_run, attempt, baseline_file, out):
     hp = module('mustang_ota_factory', 'host-factory-package.py')
     with hp.shared_lock(lock):
         tf, ota = (checked_file(signed['outputs'][name]) for name in ('targetFiles', 'ota'))
-        epoch = read(adapter.run_root('collect', sign_run, attempt)/'compile-collection.json')['outputs']['actualBuildIdentity']['timestamp']
+        collection_path = adapter.run_root('collect', sign_run, attempt)/'compile-collection.json'
+        collection = read(collection_path)
+        if digest(collection_path) != signed['compileCollectionReceiptSha256'] \
+                or collection.get('roseEdge') != signed['roseEdge']['unsigned']:
+            raise ValueError('fresh unsigned raised-edge collection proof differs')
+        epoch = collection['outputs']['actualBuildIdentity']['timestamp']
+        if epoch != signed['timestamp']:
+            raise ValueError('raised-edge timestamp differs from collected build')
         observed = observe_target(tf, build, epoch, read(ROOT/'os/build-only/mustang-host.json'), pins)
         metadata = ota_metadata(ota, build, epoch, cfg['baseline'])
         public = ota.parent
@@ -294,9 +306,13 @@ def stage(sign_run, attempt, baseline_file, out):
         receipt = {'schema': 'roseos.mustang-ota-stage.v1', 'device': 'mustang', 'build': build, 'timestamp': epoch,
                    'candidateSource': signed['candidateSource'], 'recipeSource': signed['recipeSource'],
                    'runId': sign_run, 'label': LABEL, 'contentFingerprint': fingerprint(signed['candidateSource']),
+                   'runAttempt':signed['runAttempt'], 'compileRunId':signed['compileRunId'],
+                   'compileRunAttempt':signed['compileRunAttempt'],
+                   'roseEdge':signed['roseEdge'], 'edgeTargetFiles':signed['edgeTargetFiles'],
                    'baselineObservationSha256': digest(baseline_file), 'baselineBuild': baseline['build'],
                    'packagedUpdater': observed, 'otaMetadata': metadata, 'publicIdentity': pins,
-                   'checks': {'targetVersion': True, 'baselineTrust': True, 'otaSignatures': True, 'packagedUpdater': True},
+                   'checks': {'targetVersion': True, 'baselineTrust': True, 'otaSignatures': True,
+                              'packagedUpdater': True, 'roseEdge': True},
                    'verificationTools': verification_tools,
                    'phoneUpdatePassed': False, 'automationDemonstrated': False, 'sprintOmissions': signed['omittedChecks'],
                    'ota': {'file': ota.name, 'sizeBytes': ota.stat().st_size, 'sha256': digest(ota)}}
@@ -310,10 +326,12 @@ def verify_staged(directory, cfg):
     directory = Path(directory)
     r = read(directory/'mustang-ota-receipt.json')
     if r.get('schema') != 'roseos.mustang-ota-stage.v1' or r.get('device') != 'mustang' \
-            or r.get('checks') != dict(targetVersion=True, baselineTrust=True, otaSignatures=True, packagedUpdater=True) \
+            or r.get('checks') != dict(targetVersion=True, baselineTrust=True, otaSignatures=True,
+                                      packagedUpdater=True, roseEdge=True) \
             or any(v is not True for v in r['checks'].values()) \
             or r.get('publicIdentity') != identities() or r.get('baselineBuild') != cfg['baseline']['installedBuild']:
         raise ValueError('complete Mustang OTA-specific verification required')
+    mustang_edge.require_pair(r)
     if r.get('label') != LABEL or not all(re.fullmatch(r'[0-9a-f]{40}', str(r.get(k,'')))
                                          for k in ('candidateSource','recipeSource')) \
             or not re.fullmatch(r'[1-9][0-9]*', str(r.get('runId',''))):

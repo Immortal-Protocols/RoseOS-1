@@ -366,3 +366,38 @@ triggered by subsequent main work; they do not establish Android runtime,
 automatic release or phone acceptance. No full/required-CI suite was reinstated;
 source/receipt commits retain `[skip ci]`. Earlier sprint omissions remain in
 the unchanged baseline and candidate receipts.
+
+## Raised-edge inclusion exception for future outputs
+
+The later source scope adds one narrow exception to the original sprint
+omissions: every future Mustang delivery, including a private factory delivery,
+requires Release's shared raised-edge artifact check on both target-files.
+This does not restore unrelated omitted checks or rewrite historical receipts.
+
+Mustang's collect adapter checks the freshly admitted unsigned archive
+under the existing lock before collection can complete and before signer login.
+The receipt binds the archive hash/size, source, build/time, compile and delivery
+runs, shared checker bytes and canonical shared spec. The sign adapter revalidates
+that proof and the copied unsigned bytes, then checks the actual signed
+target-files under the same lock before recording success. Failures keep outputs
+and failed receipts; they do not retry signing or rewrite the producer.
+
+Both switches, Launcher3 gesture classes, SystemUI resize/microphone entries and
+the independent whole Launcher3 dex string persist.wm.debug.rose_edge_diag
+are required. Methods which R8 can inline away are not required. Mustang reads
+the explicit approved roseEdge spec; it never treats the generic wrapper's
+unsupported-device configured:false result as a pass.
+
+Factory packaging and OTA staging require both current proofs. The OTA receipt
+carries them in its existing checksum-covered asset, and hosted verify-staged
+rejects missing, failed, stale or differently bound proofs before publisher
+credentials are minted. The asset set, original identity checks, manual/automatic
+flags and lifecycle stay unchanged. The shared checker/spec are included in
+Mustang's validation fingerprint.
+
+The installed-baseline observer and retained signed-app admission are not gated
+by this feature check: older compatible baseline/app inputs remain usable.
+Passing this check proves feature inclusion in the inspected target-files,
+not signing-result completeness or physical raised-edge, resize or microphone
+behaviour. Offline tests use synthetic ZIP/APK/dex and signer/generator stand-ins;
+the new gate has no real-candidate proof until an independently authorized run.
