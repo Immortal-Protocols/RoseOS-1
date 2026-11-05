@@ -501,7 +501,12 @@ class Workflow(unittest.TestCase):
             RESUME_SIGNED_SHA256='', REUSE_BINDING='', PROMOTE='false', APP_PUBLISH='false', ALPHA_RECOVER='false',
             GITHUB_SHA='a' * 40, BOOTSTRAP_PROFILE='none', MODELS_BOOTSTRAP_RUN='', MUSTANG_PUBLISH_OTA='false',
             MUSTANG_COMPILE_RUN='', MUSTANG_BOOTSTRAP_RUN='')
-        cases = [({}, True), ({'CANDIDATE_SHA': 'b' * 40}, False), ({'BUILD_NUMBER': '2026103001'}, False),
+        cases = [({}, True), ({'DRAFT_ONLY': 'true'}, True),
+            ({'DRAFT_ONLY': 'true', 'CAMPAIGN': 'start'}, False),
+            ({'DRAFT_ONLY': 'true', 'PROMOTE': 'true'}, False),
+            ({'DRAFT_ONLY': 'garbage'}, False),
+            ({'DRAFT_ONLY': 'true', 'MODE': 'os-release', 'CANDIDATE_SHA': 'b' * 40,
+              'BUILD_NUMBER': '2026103001', 'BUILD_TIMESTAMP': str(NOW), 'APPS': '[["dev.pixel.voice", 311]]'}, False), ({'CANDIDATE_SHA': 'b' * 40}, False), ({'BUILD_NUMBER': '2026103001'}, False),
             ({'APPS': '[["dev.pixel.voice", 311]]'}, False), ({'CHANNEL': 'prod'}, False), ({'PROMOTE': 'true'}, False),
             ({'RESUME_STAGE': 'sign', 'RESUME_UNSIGNED_SHA256': 'c' * 64}, False), ({'APP_PUBLISH': 'true'}, False),
             ({'MODE': 'os-release'}, False), ({'MUSTANG_PUBLISH_OTA': 'true'}, False),
@@ -517,6 +522,38 @@ class Workflow(unittest.TestCase):
                 capture_output=True, text=True)
             self.assertEqual(result.returncode == 0, ok, (change, result.stderr[-300:]))
         self.assertIn('            git merge-base --is-ancestor "$GITHUB_SHA" origin/main\n', WORKFLOW)
+
+    def test_publisher_executes_draft_without_promotion_and_retains_allocation(self):
+        import re
+        import textwrap
+        body = WORKFLOW.split('- name: Revalidate, draft, download-check and promote if requested', 1)[1]
+        script = re.search(r'        run: \|\n((?: {10}.*\n)+)', body)[1]
+        script = textwrap.dedent(script)
+        with tempfile.TemporaryDirectory() as tmp:
+            stub = Path(tmp)/'python3'
+            stub.write_text('#!/bin/bash\nprintf "%s\\n" "$@" > "$CAPTURE"\n')
+            stub.chmod(0o755)
+            base = dict(os.environ, PATH=tmp+os.pathsep+os.environ['PATH'], CAPTURE=tmp+'/args',
+                        MODE='latest-beta', DRAFT_ONLY='true', EXPLICIT_PROMOTE='false', CAMPAIGN='',
+                        RUNNER_TEMP=tmp, ROSE_DEVICE='frankel', CANDIDATE_SHA='a'*40,
+                        BUILD_NUMBER='2026110501', BUILD_TIMESTAMP=str(NOW), CHANNEL='beta')
+            for change, ok, promoted in [({}, True, False), ({'DRAFT_ONLY': 'false'}, True, True),
+                    ({'DRAFT_ONLY': 'true', 'EXPLICIT_PROMOTE': 'true'}, False, False),
+                    ({'CAMPAIGN': 'start'}, False, False),
+                    ({'MODE': 'os-release'}, False, False),
+                    ({'MODE': 'os-release', 'DRAFT_ONLY': 'false', 'EXPLICIT_PROMOTE': 'true'}, True, True)]:
+                capture = Path(base['CAPTURE'])
+                capture.unlink(missing_ok=True)
+                result = subprocess.run(['bash', '-euo', 'pipefail', '-c', script], env={**base, **change},
+                                        capture_output=True, text=True)
+                self.assertEqual(result.returncode == 0, ok, (change, result.stderr))
+                self.assertEqual(capture.exists(), ok)
+                if ok:
+                    args = capture.read_text().splitlines()
+                    self.assertEqual('--promote' in args, promoted)
+                    self.assertEqual('--allocation' in args, change.get('MODE', 'latest-beta') == 'latest-beta')
+        self.assertIn('DRAFT_ONLY: ${{ inputs.draft_only }}', WORKFLOW)
+        self.assertIn("!inputs.draft_only && inputs.campaign != ''", WORKFLOW)
 
     def test_builder_allocates_before_any_identity_is_used_and_publisher_takes_it(self):
         import re
@@ -534,7 +571,7 @@ class Workflow(unittest.TestCase):
         # nothing publishes unless the builder verified the candidate (or, dedicated route, signed-builder did)
         self.assertIn('    needs: [builder, signed-builder]\n', publisher)
         self.assertIn("    if: always() && needs.builder.result == 'success' && (needs.signed-builder.result == 'success' || (needs.builder.outputs.dedicated != 'true' && needs.signed-builder.result == 'skipped'))\n", publisher)
-        self.assertIn('[[ "$MODE" != latest-beta ]] || extra=(--promote --allocation "$RUNNER_TEMP/allocation/allocation.json")', publisher)
+        self.assertIn('extra=(--allocation "$RUNNER_TEMP/allocation/allocation.json")', publisher)
         self.assertIn('          name: os-release-allocation-${{ github.run_id }}\n          path: ${{ runner.temp }}/allocation\n', publisher)
         self.assertIn('          fetch-depth: 0  # latest-beta re-derives', publisher)
         for job in (builder, publisher):

@@ -41,7 +41,11 @@ on:
         required: false
         default: ''
       promote:
-        description: Advanced os-release only - promote the verified draft (beta means pixel-ota Latest); latest-beta always promotes after verification
+        description: Advanced os-release only - promote the verified draft (beta means pixel-ota Latest); latest-beta promotes after verification unless draft_only is true
+        type: boolean
+        default: false
+      draft_only:
+        description: latest-beta only - allocate, build, sign and verify a fresh candidate, then leave its release as an unpublished draft; no Latest promotion or campaign successor. Storage reclaim behavior is unchanged.
         type: boolean
         default: false
       resume_failed_stage:
@@ -126,6 +130,7 @@ concurrency:
   queue: max
 
 env:
+  DRAFT_ONLY: ${{ inputs.draft_only }}
   MODE: ${{ inputs.mode }}
   MUSTANG_PUBLISH_OTA: ${{ inputs.mustang_publish_ota }}
   MUSTANG_COMPILE_RUN: ${{ inputs.mustang_compile_run }}
@@ -200,6 +205,9 @@ jobs:
           ALPHA_RECOVER: ${{ inputs.alpha_recover }}
         run: |
           set -euo pipefail
+          # Private candidates use the same allocator and receipt chain, never a campaign or explicit promotion.
+          [[ "${DRAFT_ONLY:-false}" == false || "${DRAFT_ONLY:-false}" == true ]]
+          [[ "${DRAFT_ONLY:-false}" != true || ( "$MODE" == latest-beta && -z "${CAMPAIGN:-}" && "$PROMOTE" == false ) ]]
           [[ "$MUSTANG_PUBLISH_OTA" != true || "$MODE" == mustang-build || "$MODE" == mustang-delivery || "$MODE" == mustang-ota ]]
           if [[ "$MODE" == latest-beta ]]; then
             # The normal button: no pins at all. The dispatch commit (GITHUB_SHA, on main) is the captured source; the
@@ -1772,14 +1780,21 @@ jobs:
       - name: Revalidate, draft, download-check and promote if requested
         env:
           PIXEL_OTA_TOKEN: ${{ steps.app.outputs.token }}
+          EXPLICIT_PROMOTE: ${{ inputs.promote }}
         run: |
           set -euo pipefail
           extra=()
           # latest-beta: a fresh tag only, notes from the captured source range, Beta Latest after the download check.
-          [[ "$MODE" != latest-beta ]] || extra=(--promote --allocation "$RUNNER_TEMP/allocation/allocation.json")
+          if [[ "$MODE" == latest-beta ]]; then
+            extra=(--allocation "$RUNNER_TEMP/allocation/allocation.json")
+            [[ "${DRAFT_ONLY:-false}" == true ]] || extra+=(--promote)
+          fi
+          # Defense in depth: the publisher refuses an invalid private request even if the guard were bypassed.
+          [[ "${DRAFT_ONLY:-false}" != true || ( "$MODE" == latest-beta && "$EXPLICIT_PROMOTE" == false && -z "${CAMPAIGN:-}" ) ]]
+          [[ "$EXPLICIT_PROMOTE" != true ]] || extra+=(--promote)
           python3 scripts/release-pipeline.py publish --device "$ROSE_DEVICE" --candidate-sha "$CANDIDATE_SHA" --build-number "$BUILD_NUMBER" \
             --build-timestamp "$BUILD_TIMESTAMP" --channel "$CHANNEL" --artifact-dir "$RUNNER_TEMP/artifact" \
-            ${{ inputs.promote && '--promote' || '' }} "${extra[@]}"
+            "${extra[@]}"
 
   # Public Rose Agent APK (app-only or app-reuse with app_publish): hosted, after the builder's verified private artifact.
   # Only this job mints the pixel-ota App token (revoked by the action at job end); the builder never receives it.
@@ -2374,7 +2389,7 @@ jobs:
   # allocates fresh versions itself. Owner-approved permission (Nathan 18:09:54 UTC): actions:write on this job only.
   next-release:
     needs: [builder, publisher, cleanup]
-    if: always() && inputs.mode == 'latest-beta' && inputs.campaign != ''
+    if: always() && inputs.mode == 'latest-beta' && !inputs.draft_only && inputs.campaign != ''
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:

@@ -194,7 +194,7 @@ class Workflow(unittest.TestCase):
     def test_final_job_waits_for_builder_publisher_and_cleanup(self):
         job = self.jobs()['next-release']
         self.assertIn('    needs: [builder, publisher, cleanup]\n', job)
-        self.assertIn("    if: always() && inputs.mode == 'latest-beta' && inputs.campaign != ''\n", job)
+        self.assertIn("    if: always() && inputs.mode == 'latest-beta' && !inputs.draft_only && inputs.campaign != ''\n", job)
         for name in ('builder', 'publisher', 'cleanup'):
             self.assertIn(f'      RESULT_{name.upper()}: ${{{{ needs.{name}.result }}}}\n', job)
         self.assertIn('      GH_TOKEN: ${{ github.token }}\n', job)
