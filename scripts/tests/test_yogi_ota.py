@@ -192,6 +192,21 @@ class KeyBootstrapTest(Fixture):
         self.profiles = {'profiles': {'yogi-v1': dict(bound, access={'liveCheck': True})}}  # live check only: allowed
         self.assertEqual(yogi.blockers(self.cfg, 'key-bootstrap'), [])
 
+    def test_signing_bootstrap_cli_takes_lock_on_prove_and_run_only(self):
+        """The workflow never calls a flag the committed script lacks: --lock parses for prove and run (an unsafe path
+        is refused before any work), and preflight has no --lock."""
+        bootstrap = yogi.module('yogi_test_signing_bootstrap', 'signing-bootstrap.py')
+        common = ['--profile', 'yogi-v1', '--recipe-sha', 'a'*40]
+        with mock.patch.object(bootstrap.factory_signing, 'stop_on_signals', lambda handler: None), \
+                mock.patch('sys.stdout', new_callable=io.StringIO) as out:
+            self.assertEqual(bootstrap.main(['prove', *common, '--proof-dir', str(self.root/'p'), '--lock', 'relative.lock'], env={}), 2)
+            self.assertEqual(bootstrap.main(['run', *common, '--state-dir', str(self.root/'s'), '--receipt-dir',
+                                             str(self.root/'r'), '--lock', '/srv/rose-yogi/../x.lock'], env={}), 2)
+            with mock.patch('sys.stderr', new_callable=io.StringIO), self.assertRaises(SystemExit):
+                bootstrap.main(['preflight', *common, '--lock', '/srv/rose-yogi/yogi-build.lock'], env={})
+        self.assertIn('--lock must be an absolute path', out.getvalue())
+        self.assertFalse((self.root/'p').exists() or (self.root/'s').exists() or (self.root/'r').exists())
+
     def test_committed_tree_refuses_key_bootstrap(self):
         found = yogi.blockers(yogi.config(), 'key-bootstrap')
         self.assertTrue(found)
