@@ -1,0 +1,932 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Rose Keyboard Study</title>
+<style>
+:root{--field:url(data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAzOTAgODQ0IiBwcmVzZXJ2ZUFzcGVjdFJhdGlvPSJ4TWlkWU1pZCBzbGljZSI+CiAgPCEtLSBSb3NlIEhpRmkgwrcgT3hibG9vZCBmaWVsZCBmb3IgUm9zZSwgUm9zZSdzIGFwcHMgYW5kIHRoZSBzd2l0Y2hlci4gT3JpZ2luYWwgcHJvY2VkdXJhbCBhcnR3b3JrCiAgICAgICBkcmF3biB0byB0aGUgc3R1ZHkncyBSb3NlIHJlbmRlciAoUm9zZS0xMSk6IG5lYXItYmxhY2sgZmllbGQsIGEgZmFpbnQgc3RlZXAgZ2xhc3Mgc2hlZXQgZnJvbQogICAgICAgdGhlIHJpZ2h0IGVkZ2UsIGxpdCBjcmltc29uIHBsYW5lcyBvbmx5IGluIHRoZSBsb3dlciByaWdodC4gTm8gcmFzdGVyLCBubyBncmFpbiwgbm8gYmx1ZS4gLS0+CiAgPGRlZnM+CiAgICA8bGluZWFyR3JhZGllbnQgaWQ9ImJhc2UiIHgxPSIwIiB5MT0iMCIgeDI9IjAiIHkyPSIxIj48c3RvcCBvZmZzZXQ9IjAiIHN0b3AtY29sb3I9IiMxMjBhMGQiLz48c3RvcCBvZmZzZXQ9Ii42IiBzdG9wLWNvbG9yPSIjMGUwODBiIi8+PHN0b3Agb2Zmc2V0PSIxIiBzdG9wLWNvbG9yPSIjMTIwNjBhIi8+PC9saW5lYXJHcmFkaWVudD4KICAgIDxsaW5lYXJHcmFkaWVudCBpZD0ic2hlZXQiIHgxPSIxIiB5MT0iMCIgeDI9IjAiIHkyPSIxIj48c3RvcCBvZmZzZXQ9IjAiIHN0b3AtY29sb3I9IiM4YTNhNGMiIHN0b3Atb3BhY2l0eT0iLjM1Ii8+PHN0b3Agb2Zmc2V0PSIxIiBzdG9wLWNvbG9yPSIjOGEzYTRjIiBzdG9wLW9wYWNpdHk9IjAiLz48L2xpbmVhckdyYWRpZW50PgogICAgPGxpbmVhckdyYWRpZW50IGlkPSJwbGFuZSIgeDE9IjAiIHkxPSIwIiB4Mj0iMSIgeTI9IjEiPjxzdG9wIG9mZnNldD0iMCIgc3RvcC1jb2xvcj0iIzdhMTQyOCIgc3RvcC1vcGFjaXR5PSIuOSIvPjxzdG9wIG9mZnNldD0iLjQ1IiBzdG9wLWNvbG9yPSIjMzYwMjBkIi8+PHN0b3Agb2Zmc2V0PSIxIiBzdG9wLWNvbG9yPSIjMWEwMjA3Ii8+PC9saW5lYXJHcmFkaWVudD4KICAgIDxyYWRpYWxHcmFkaWVudCBpZD0iZ2xpbnQiIGN4PSIuNSIgY3k9Ii41IiByPSIuNSI+PHN0b3Agb2Zmc2V0PSIwIiBzdG9wLWNvbG9yPSIjZmZmMGYwIiBzdG9wLW9wYWNpdHk9Ii45Ii8+PHN0b3Agb2Zmc2V0PSIxIiBzdG9wLWNvbG9yPSIjZmY4YTlhIiBzdG9wLW9wYWNpdHk9IjAiLz48L3JhZGlhbEdyYWRpZW50PgogICAgPGZpbHRlciBpZD0ic29mdCIgeD0iLTMwJSIgeT0iLTMwJSIgd2lkdGg9IjE2MCUiIGhlaWdodD0iMTYwJSI+PGZlR2F1c3NpYW5CbHVyIHN0ZERldmlhdGlvbj0iMyIvPjwvZmlsdGVyPgogIDwvZGVmcz4KICA8cmVjdCB3aWR0aD0iMzkwIiBoZWlnaHQ9Ijg0NCIgZmlsbD0idXJsKCNiYXNlKSIvPgogIDxwb2x5Z29uIHBvaW50cz0iMzkwLDExOCAzOTAsMjkyIDI5NSw1ODAiIGZpbGw9InVybCgjc2hlZXQpIi8+CiAgPHBhdGggZD0iTTM5MCAyOTIgTDI5NSA1ODAiIHN0cm9rZT0iI2ZmYjNiZCIgc3Ryb2tlLW9wYWNpdHk9Ii43IiBzdHJva2Utd2lkdGg9IjEiLz4KICA8cG9seWdvbiBwb2ludHM9IjI5NSw1ODAgMzkwLDUxNSAzOTAsODQ0IDEyMyw4NDQgMjA2LDY0MiIgZmlsbD0idXJsKCNwbGFuZSkiLz4KICA8cGF0aCBkPSJNMjA2IDY0MiBMMjk1IDU4MCBMMzkwIDUxNSIgc3Ryb2tlPSIjZmZjNGM4IiBzdHJva2Utd2lkdGg9IjQiIG9wYWNpdHk9Ii41IiBmaWxsPSJub25lIiBmaWx0ZXI9InVybCgjc29mdCkiLz4KICA8cGF0aCBkPSJNMjA2IDY0MiBMMjk1IDU4MCBMMzkwIDUxNSIgc3Ryb2tlPSIjZmZjNGM4IiBzdHJva2Utd2lkdGg9IjEuMiIgZmlsbD0ibm9uZSIvPgogIDxwYXRoIGQ9Ik0yMDYgNjQyIEwxMjMgODQ0IiBzdHJva2U9IiNjMjM4NGMiIHN0cm9rZS1vcGFjaXR5PSIuNTUiIHN0cm9rZS13aWR0aD0iMSIvPgogIDxjaXJjbGUgY3g9IjI5NSIgY3k9IjU4MCIgcj0iMjYiIGZpbGw9InVybCgjZ2xpbnQpIi8+Cjwvc3ZnPgo=)}
+/* Rose Keyboard (F10 study) — Oxblood. Tokens copied from the HiFi Oxblood layer, not imported. */
+:root{
+  --ink:#f2e6d9;--ink-2:#b9aaa0;--ink-3:#8f817a;--ruby:#b8283f;--ruby-hi:#e04a62;
+  --key:#2c1f22;--key-hi:#3a2a2e;--key-fn:#1e1417;--kb-bg:#150c0f;
+  --ease:cubic-bezier(.2,.8,.2,1);--t:260ms;
+  --screen-w:384px;--screen-h:832px;--bezel:12px;--radius:46px;
+  /* Geometry (pt). The handoff (HANDOFF.md) quotes these. */
+  --rail:24px;      /* lowered chin under an open keyboard: home handle only */
+  --chin:92px;      /* raised Rose chin */
+  --chin-in:58px;   /* raised chin's concave top: content above ends here */
+  --strip:44px;     /* suggestion / edit strip */
+  --key-h:46px;--key-gap:8px;--kb-pad:6px;
+  --kb-h:calc(var(--strip) + 4 * var(--key-h) + 3 * var(--key-gap) + 2 * var(--kb-pad) + 4px);
+  font-family:Inter,ui-sans-serif,system-ui,-apple-system,'Segoe UI',sans-serif;
+  font-synthesis:none;-webkit-font-smoothing:antialiased;
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{margin:0;background:radial-gradient(120% 90% at 30% 10%,#2a1a1d 0%,#140c0e 60%,#0d0809 100%);overflow:hidden;color:#334}
+button{font:inherit;color:inherit;border:0;background:none;padding:0;cursor:pointer;-webkit-tap-highlight-color:transparent}
+button:focus-visible,[tabindex]:focus-visible{outline:2px solid #ff9aa8;outline-offset:2px}
+[hidden]{display:none!important}
+
+/* ---------- Page ---------- */
+.page{height:100%;display:grid;grid-template-columns:minmax(0,1fr) 300px}
+.stage{position:relative;min-width:0;overflow:clip}
+.fit{position:absolute;left:50%;top:50%;width:calc(var(--screen-w) + 2*var(--bezel));height:calc(var(--screen-h) + 2*var(--bezel));transform:translate(-50%,-50%) scale(var(--fit,1));transform-origin:center}
+.device{width:100%;height:100%;padding:var(--bezel);border-radius:calc(var(--radius) + var(--bezel));background:linear-gradient(145deg,#3a2c2e,#120b0c 55%,#2a1f20);box-shadow:inset 0 0 0 1px #5a4a4c,0 40px 80px rgba(0,0,0,.55)}
+.screen{position:relative;width:100%;height:100%;border-radius:var(--radius);overflow:hidden;background:#0e080a;isolation:isolate;contain:layout paint;overflow:clip;-webkit-user-select:none;user-select:none;color:var(--ink)}
+.field-bg{position:absolute;inset:0;background:var(--field) center/cover;opacity:.9}
+.status{position:absolute;top:0;left:0;right:0;height:40px;display:flex;align-items:center;padding:0 26px;gap:8px;font-size:14px;font-weight:600;z-index:30;color:var(--ink)}
+.status .sys{margin-left:auto;display:flex;gap:4px}.status .sys i{width:5px;height:12px;border-radius:2px;background:currentColor;opacity:.75}
+.mic-ind{width:16px;height:16px;border-radius:50%;display:none;background:radial-gradient(circle,#ff5a6e 0 4px,transparent 4.5px),rgba(255,90,110,.2)}
+.screen[data-muted=true] .mic-ind{display:block}
+
+/* ---------- App window: bottom tracks keyboard + chin ---------- */
+.app{position:absolute;left:0;right:0;top:0;bottom:var(--app-bottom,0px);z-index:5;transition:bottom var(--t) var(--ease),border-radius var(--t) var(--ease);overflow:clip;background:linear-gradient(180deg,rgba(14,8,10,.55),rgba(14,8,10,.85))}
+.screen[data-kb=off][data-chin=down]{--app-bottom:0px}
+.screen[data-kb=off][data-chin=up]{--app-bottom:var(--chin-in)}
+.screen[data-kb=on][data-chin=down]{--app-bottom:calc(var(--kb-h) + var(--rail))}
+.screen[data-kb=on][data-chin=up]{--app-bottom:calc(var(--kb-h) + var(--chin-in))}
+.screen[data-chin=up][data-kb=off] .app{border-radius:0 0 34px 34px}
+.app>[data-pane]{position:absolute;inset:0;display:flex;flex-direction:column;padding-top:40px}
+.a-head{flex:none;display:flex;align-items:center;gap:12px;padding:8px 18px 12px;border-bottom:1px solid rgba(255,240,230,.07)}
+.a-head b{display:block;font-size:17px;font-weight:600}.a-head small{color:var(--ink-3);font-size:12px}
+.a-back{width:36px;height:36px;border-radius:50%;box-shadow:inset 0 0 0 1px rgba(236,205,190,.3);position:relative}
+.a-back::before{content:'';position:absolute;left:15px;top:13px;width:9px;height:9px;border-left:1.6px solid var(--ink);border-bottom:1.6px solid var(--ink);transform:rotate(45deg)}
+.avatar{width:36px;height:36px;border-radius:50%;display:grid;place-items:center;background:linear-gradient(145deg,#6a2433,#2c0a12);font-weight:600}
+.thread{flex:1 1 0;min-height:0;overflow:auto;padding:14px 16px 10px;display:flex;flex-direction:column;gap:8px;scrollbar-width:none;overscroll-behavior:contain}
+.thread::before{content:'';flex:1 0 0}
+.thread p{flex:none;margin:0;padding:9px 13px;border-radius:18px;max-width:76%;font-size:15.5px;line-height:1.35;overflow-wrap:anywhere}
+.thread .in{align-self:flex-start;background:rgba(255,240,230,.09)}
+.thread .out{align-self:flex-end;background:#8e1f33}
+.composer{flex:none;display:flex;align-items:flex-end;gap:8px;padding:8px 10px 10px}
+.c-plus{flex:none;width:38px;height:38px;border-radius:50%;background:rgba(255,240,230,.08);font-size:22px;line-height:1;color:var(--ink-2)}
+.c-send{flex:none;width:38px;height:38px;border-radius:50%;background:var(--ruby);position:relative;transition:opacity 160ms}
+.c-send::before{content:'';position:absolute;left:12px;top:13px;width:12px;height:12px;border-left:2px solid #fff;border-top:2px solid #fff;transform:rotate(45deg)}
+.c-send::after{content:'';position:absolute;left:18px;top:13px;width:2px;height:15px;background:#fff}
+.c-send:disabled{opacity:.3;cursor:default}
+
+/* Text fields: custom-rendered (no native IME); caret and selection drawn here. */
+.field{flex:1 1 auto;min-width:0;min-height:38px;max-height:118px;overflow:auto;scrollbar-width:none;border-radius:19px;padding:9px 14px;background:rgba(255,240,230,.07);box-shadow:inset 0 0 0 1px rgba(255,240,230,.12);font-size:16px;line-height:20px;white-space:pre-wrap;overflow-wrap:anywhere;cursor:text;-webkit-user-select:none;user-select:none;touch-action:pan-y}
+.field.focused{box-shadow:inset 0 0 0 1.4px rgba(255,140,155,.6)}
+.field .ph{color:var(--ink-3)}
+.field mark{background:rgba(224,74,98,.42);color:inherit;border-radius:2px}
+.caret{display:inline-block;position:relative;width:0;height:20px;vertical-align:top}
+.caret::after{content:'';position:absolute;left:-1px;top:1px;width:2px;height:19px;border-radius:1px;background:#ff8a9a;animation:blink 1.06s steps(1) infinite}
+.typing .caret::after{animation:none}
+@keyframes blink{50%{opacity:0}}
+.notes .note-body{flex:1 1 0;margin:10px 14px 0;max-height:none;border-radius:14px;padding:14px 16px;background:rgba(255,240,230,.04);box-shadow:none;font-size:16.5px;line-height:24px}
+.notes .note-body .caret{height:24px}.notes .note-body .caret::after{height:22px}
+.notes .note-body.focused{box-shadow:inset 0 0 0 1px rgba(255,140,155,.35)}
+.note-bar{flex:none;display:flex;justify-content:space-around;padding:6px 8px 8px;border-top:1px solid rgba(255,240,230,.07)}
+.note-bar button{min-height:40px;padding:0 10px;color:var(--ink-2);font-size:13px}
+
+/* ---------- Keyboard ---------- */
+.kb{position:absolute;left:0;right:0;height:var(--kb-h);bottom:var(--rail);z-index:20;background:linear-gradient(180deg,#1d1114,var(--kb-bg));box-shadow:0 -1px 0 rgba(236,205,190,.14),0 -14px 30px rgba(0,0,0,.45);
+  transform:translateY(calc(100% + var(--chin-in) + 8px));visibility:hidden;transition:transform var(--t) var(--ease),bottom var(--t) var(--ease),border-radius var(--t) var(--ease),visibility 0s linear var(--t);touch-action:none}
+.screen[data-kb=on] .kb{transform:none;visibility:visible;transition:transform var(--t) var(--ease),bottom var(--t) var(--ease),border-radius var(--t) var(--ease)}
+.screen[data-chin=up] .kb{bottom:var(--chin-in);border-radius:0 0 34px 34px}
+.rail{position:absolute;left:0;right:0;bottom:0;height:var(--rail);z-index:19;background:var(--kb-bg);opacity:0;transition:opacity var(--t) var(--ease);pointer-events:none}
+.screen[data-kb=on][data-chin=down] .rail{opacity:1}
+.strip{height:var(--strip);display:flex;align-items:stretch;padding:0 4px;border-bottom:1px solid rgba(236,205,190,.07)}
+.strip .sg{flex:1 1 0;min-width:0;display:grid;place-items:center;font-size:15.5px;color:var(--ink-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;position:relative;padding:0 6px}
+.strip .sg+.sg::before{content:'';position:absolute;left:0;top:12px;bottom:12px;width:1px;background:rgba(236,205,190,.14)}
+.strip .sg.best{color:var(--ink);font-weight:600}
+.strip .sg.correct span{border-bottom:1.5px solid var(--ruby-hi);padding-bottom:1px}
+.strip .sg.typed span::before{content:'“'}.strip .sg.typed span::after{content:'”'}
+.strip .tool{flex:1 1 0;display:grid;place-items:center;font-size:12.5px;color:var(--ink);min-width:44px}
+.strip .tool:disabled{color:var(--ink-3);opacity:.5}
+.strip .hide{flex:none;width:44px;display:grid;place-items:center;color:var(--ink-2)}
+.strip .hide::before{content:'';width:10px;height:10px;border-right:1.6px solid currentColor;border-bottom:1.6px solid currentColor;transform:translateY(-3px) rotate(45deg)}
+.strip .sg:active,.strip .tool:active{background:rgba(255,240,230,.06)}
+.keys{padding:var(--kb-pad) 3px calc(var(--kb-pad) + 4px);display:grid;gap:var(--key-gap)}
+.krow{display:flex;gap:6px;justify-content:center;height:var(--key-h)}
+.krow.mid{padding:0 18px}
+.key{flex:1 1 0;min-width:0;height:100%;border-radius:8px;background:linear-gradient(180deg,var(--key-hi),var(--key));box-shadow:inset 0 1px 0 rgba(255,240,230,.08),0 1px 0 rgba(0,0,0,.6);display:grid;place-items:center;font-size:21px;color:var(--ink);touch-action:none;position:relative}
+.key.fn{flex:1.45 1 0;background:var(--key-fn);font-size:14px;color:var(--ink-2)}
+.key.space{flex:4.6 1 0;font-size:13px;color:var(--ink-3)}
+.key.action{flex:1.45 1 0;background:linear-gradient(180deg,#c8304a,#97182e);color:#fff}
+.key.down{background:#4a3438}
+.key.fn.down{background:#33252a}
+.key.action.down{background:#e04a62}
+.key[data-k=shift][data-state=once]{color:#fff;background:#4a2a31}
+.key[data-k=shift][data-state=lock]{color:#fff;background:#7a2236;box-shadow:inset 0 -3px 0 #ff8a9a}
+.ico{width:22px;height:22px;display:block}
+.pop{position:absolute;z-index:25;width:52px;height:64px;border-radius:12px 12px 10px 10px;background:linear-gradient(180deg,#4a3438,#35262a);box-shadow:0 10px 24px rgba(0,0,0,.55),inset 0 0 0 1px rgba(255,240,230,.1);display:none;place-items:center;font-size:30px;color:#fff;pointer-events:none}
+.pop.on{display:grid}
+.kb.cursor-mode .key:not(.space){opacity:.35}
+.kb.cursor-mode .key.space{color:var(--ink)}
+
+/* ---------- Rose chin (raised) + handle ---------- */
+.chin{position:absolute;left:0;right:0;bottom:0;height:var(--chin);z-index:18;display:flex;gap:14px;justify-content:center;align-items:center;padding-top:28px;animation:chin-up var(--t) var(--ease) both}
+@keyframes chin-up{from{transform:translateY(100%)}}
+.chin::before{content:'';position:absolute;inset:0;z-index:-1;background:repeating-linear-gradient(0deg,rgba(255,255,255,.012) 0 1px,transparent 1px 3px),linear-gradient(180deg,#4a141a 34px,#3c0e13 50%,#330c10 100%);
+  -webkit-mask:linear-gradient(#000,#000) 0 34px/100% calc(100% - 34px) no-repeat,radial-gradient(circle at 100% 0,transparent 33.5px,#000 34px) 0 0/34px 34px no-repeat,radial-gradient(circle at 0 0,transparent 33.5px,#000 34px) 100% 0/34px 34px no-repeat;
+  mask:linear-gradient(#000,#000) 0 34px/100% calc(100% - 34px) no-repeat,radial-gradient(circle at 100% 0,transparent 33.5px,#000 34px) 0 0/34px 34px no-repeat,radial-gradient(circle at 0 0,transparent 33.5px,#000 34px) 100% 0/34px 34px no-repeat}
+.chin::after{content:'';position:absolute;left:0;right:0;top:-60px;height:94px;border-radius:0 0 34px 34px;box-shadow:0 1px 0 rgba(214,84,104,.65),0 4px 10px rgba(0,0,0,.45);pointer-events:none;z-index:-1}
+.plate{height:44px;position:relative;display:grid;place-items:center;color:#efe1d2}
+.plate::before{content:'';position:absolute;left:0;right:0;top:4px;bottom:4px;border-radius:8px;box-shadow:inset 0 0 0 1px rgba(236,205,190,.40),inset 0 1px 2px rgba(0,0,0,.4);background:linear-gradient(180deg,rgba(20,4,7,.28),rgba(70,18,28,.12))}
+.plate>*{position:relative}
+#chin-rose{width:103px}#chin-switch{width:106px}
+.plate.mic{width:44px}.plate.mic::before{left:6px;right:6px;top:6px;bottom:6px;border-radius:9px}
+.plate.mic[aria-pressed=true]{color:#ff8c9a}.plate.mic[aria-pressed=true]::before{box-shadow:inset 0 0 0 1.4px rgba(255,90,110,.75),0 0 10px rgba(255,70,95,.3)}
+.pearl{width:16px;height:16px;border-radius:50%;background:radial-gradient(circle at 34% 30%,#fff 0,#ffb3bf 18%,#e04a62 50%,#8e1a2e 100%);box-shadow:0 2px 4px rgba(0,0,0,.5)}
+.stacks{width:62px;height:21px}
+.handle{position:absolute;left:50%;bottom:0;width:150px;margin-left:-75px;height:24px;z-index:26;display:grid;place-items:center;touch-action:none}
+.handle i{width:118px;height:4px;border-radius:2px;background:rgba(242,230,217,.75)}
+.screen[data-chin=up] .handle{height:10px}
+.toast{position:absolute;left:50%;top:104px;transform:translateX(-50%);z-index:40;padding:7px 14px;border-radius:16px;background:rgba(30,14,18,.92);box-shadow:inset 0 0 0 1px rgba(236,205,190,.22);font-size:13px;white-space:nowrap;opacity:0;transition:opacity 200ms;pointer-events:none}
+.toast.on{opacity:1}
+
+/* Reduced motion: same states, no travel. */
+.static-motion *,.static-motion *::before,.static-motion *::after{animation-duration:1ms!important;transition-duration:1ms!important}
+
+/* ---------- Harness ---------- */
+.harness{background:#f6f1ee;padding:18px 16px;overflow:auto;font-size:12.5px;display:flex;flex-direction:column;gap:12px;border-left:1px solid rgba(0,0,0,.2)}
+.harness h1{font-size:14px;margin:0}.harness h1 small{display:block;font-weight:400;color:#7a6f6c;font-size:11.5px;margin-top:2px}
+.harness fieldset{border:0;margin:0;padding:10px 0 0;border-top:1px solid rgba(60,40,40,.12);display:grid;gap:7px}
+.harness legend{font-size:10.5px;text-transform:uppercase;letter-spacing:.12em;color:#7a6866;float:left;width:100%;padding:0;margin-bottom:4px}
+.row{display:flex;gap:6px}.row>.hbtn{flex:1}
+.hbtn{min-height:34px;padding:6px 10px;border-radius:10px;border:1px solid rgba(60,40,40,.2);background:#fff;font-size:12px;font-weight:500}
+.hbtn[aria-pressed=true]{background:#3a1820;color:#fff;border-color:#3a1820}
+.hcheck{display:flex;gap:8px;align-items:center}
+.hstatus{margin:0;font-variant-numeric:tabular-nums;line-height:1.55;color:#4a3e3c}
+.hlog{margin:0;padding-left:18px;max-height:120px;overflow:auto;color:#6a5c5a;font:11px/1.5 ui-monospace,Menlo,monospace}
+.hhelp{margin:0;padding-left:16px;color:#5a4c4a;line-height:1.45}
+.harness-toggle{display:none}
+.noscript{position:fixed;left:12px;right:12px;top:12px;z-index:200;padding:14px 16px;border-radius:14px;background:#2a0a10;color:#f6ebe0;font:14px/1.45 system-ui,sans-serif}
+@media (max-width:820px){.page{grid-template-columns:1fr}.harness{display:none}}
+
+/* ---------- Phone mode: the study fills a real phone; controls fold into a sheet ---------- */
+html.phone-mode{--bezel:0px}
+html.phone-mode,html.phone-mode body{overflow:hidden;overscroll-behavior:none;background:#000}
+html.phone-mode .page{display:block}
+html.phone-mode .stage{position:fixed;inset:0}
+html.phone-mode .device{border-radius:0;padding:0;box-shadow:none;background:#000}
+html.phone-mode .screen{border-radius:0}
+html.phone-mode .harness{display:flex;position:fixed;left:0;right:0;bottom:0;z-index:100;max-height:72vh;max-height:72dvh;border:0;border-radius:18px 18px 0 0;padding-bottom:calc(16px + env(safe-area-inset-bottom));box-shadow:0 -12px 40px rgba(0,0,0,.5);transform:translateY(105%);visibility:hidden;transition:transform var(--t) var(--ease),visibility 0s linear var(--t)}
+html.phone-mode.harness-open .harness{transform:none;visibility:visible;transition:transform var(--t) var(--ease)}
+html.phone-mode .harness-toggle{display:grid;place-items:center;position:fixed;z-index:101;top:calc(2px + env(safe-area-inset-top));right:calc(4px + env(safe-area-inset-right));width:44px;height:44px;color:#f2e6d9;font-size:20px}
+html.phone-mode .harness-toggle span{display:grid;place-items:center;width:30px;height:30px;border-radius:50%;background:rgba(20,8,10,.5);box-shadow:inset 0 0 0 1px rgba(255,240,230,.18)}
+/* With the keyboard closed and the chin lowered, the app's bottom bar clears the home handle. */
+.screen[data-kb=off][data-chin=down] :is(.composer,.note-bar){padding-bottom:28px}
+
+</style></head>
+<body>
+<noscript><div class="noscript"><b>This viewer isn’t running the prototype.</b> It shows the page without JavaScript, so nothing can move. Open the file in a browser: on Android, open it with Chrome from the Files app; on a computer, open it in Chrome, Safari, Edge or Firefox.</div></noscript>
+<div class="page">
+<main class="stage" id="stage" aria-label="Rose keyboard study">
+ <div class="fit" id="fit">
+  <section class="device" id="device" aria-label="Simulated RoseOS phone">
+   <div class="screen" id="screen" data-kb="off" data-chin="down" data-app="messages">
+    <div class="field-bg" aria-hidden="true"></div>
+    <header class="status" aria-hidden="true"><span class="clock">9:41</span><span class="mic-ind" id="mic-ind" title="Microphone muted"></span><span class="sys"><i></i><i></i><i></i></span></header>
+
+    <!-- The app window: its bottom follows the keyboard and the chin (adjust-resize). -->
+    <section class="app" id="app" aria-label="App">
+     <div class="msgs" id="msgs" data-pane="messages">
+      <header class="a-head"><button class="a-back" aria-label="Back" tabindex="-1"></button><span class="avatar" aria-hidden="true">J</span><div><b>Jamie</b><small>Messages</small></div></header>
+      <div class="thread" id="thread" role="log" aria-label="Conversation">
+       <p class="in">Are we still on for Saturday?</p>
+       <p class="out">Yes! Garden at ten?</p>
+       <p class="in">Perfect. I’ll bring coffee.</p>
+       <p class="in">Rose said the river path is open again 🌿</p>
+      </div>
+      <div class="composer">
+       <button class="c-plus" aria-label="Attach" tabindex="-1">+</button>
+       <div class="field" id="f-msg" role="textbox" aria-label="Message" aria-multiline="false" tabindex="0" data-placeholder="Message"></div>
+       <button class="c-send" id="c-send" aria-label="Send" disabled></button>
+      </div>
+     </div>
+     <div class="notes" id="notes" data-pane="notes" hidden>
+      <header class="a-head"><button class="a-back" aria-label="Back" tabindex="-1"></button><div><b>Saturday</b><small>Notes</small></div></header>
+      <div class="field note-body" id="f-note" role="textbox" aria-label="Note" aria-multiline="true" tabindex="0" data-placeholder="Start writing"></div>
+      <nav class="note-bar" aria-label="Note tools"><button tabindex="-1">Checklist</button><button tabindex="-1">Aa</button><button tabindex="-1">Photo</button><button tabindex="-1">Share</button></nav>
+     </div>
+    </section>
+
+    <!-- Keyboard: suggestion/edit strip + four rows. Built by app.js from RoseKeys.LAYOUTS. -->
+    <section class="kb" id="kb" aria-label="Keyboard" aria-hidden="true">
+     <div class="strip" id="strip" role="toolbar" aria-label="Suggestions"></div>
+     <div class="keys" id="keys"></div>
+     <div class="pop" id="pop" aria-hidden="true"></div>
+    </section>
+    <div class="rail" id="rail" aria-hidden="true"></div>
+
+    <!-- The Rose chin: OS edge with Rose, the microphone-input mute and the switcher. -->
+    <div class="chin" id="chin" role="toolbar" aria-label="Rose chin" hidden>
+     <button class="plate" id="chin-rose" aria-label="Open Rose"><span class="pearl" aria-hidden="true"></span></button>
+     <button class="plate mic" id="chin-mic" aria-pressed="false" aria-label="Mute microphone"></button>
+     <button class="plate" id="chin-switch" aria-label="Open system switcher"><svg class="stacks" viewBox="2 3 60 20" aria-hidden="true"><path d="M8 19 L14 7 L30 7 L24 19 Z M34 19 L40 7 L56 7 L50 19 Z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M50 19 L56 7" stroke="#e04a62" stroke-width="2"/></svg></button>
+    </div>
+    <button class="handle" id="handle" aria-label="Rose chin: swipe up to show, or press Arrow Up" aria-expanded="false"><i></i></button>
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+   </div>
+  </section>
+ </div>
+</main>
+
+<aside class="harness" aria-label="Study controls">
+ <h1>Rose Keyboard · F10 study<small>Oxblood · prototype only · controls outside the phone</small></h1>
+ <fieldset><legend>App</legend>
+  <div class="row"><button class="hbtn" id="h-messages" aria-pressed="true">Messages</button><button class="hbtn" id="h-notes" aria-pressed="false">Notes</button></div>
+ </fieldset>
+ <fieldset><legend>States</legend>
+  <div class="row"><button class="hbtn" id="h-kb">Show keyboard</button><button class="hbtn" id="h-chin">Raise chin</button></div>
+  <div class="row"><button class="hbtn" id="h-mic" aria-pressed="false">Mic muted</button><button class="hbtn" id="h-reset">Reset</button></div>
+  <label class="hcheck"><input type="checkbox" id="h-reduced">Reduced motion</label>
+ </fieldset>
+ <fieldset><legend>Live layout (pt)</legend>
+  <p class="hstatus" id="h-layout"></p>
+ </fieldset>
+ <fieldset><legend>Keyboard state</legend>
+  <p class="hstatus" id="h-state"></p>
+  <ol class="hlog" id="h-log" aria-label="Recent keyboard events"></ol>
+ </fieldset>
+ <fieldset><legend>Try</legend>
+  <ul class="hhelp">
+   <li>Tap the message field to open the keyboard. Desktop typing works too.</li>
+   <li>Shift: tap once for one capital, double-tap for caps lock.</li>
+   <li>Drag along the space bar to move the cursor; hold it, then drag, to select.</li>
+   <li>Hold ⌫ to repeat (it speeds up to whole words), or swipe left from ⌫ to delete a word.</li>
+   <li>Long-press text to select a word and get Cut / Copy / Paste.</li>
+   <li>Swipe down on the suggestion strip, tap ⌄, tap the conversation or press Esc to hide.</li>
+   <li>Swipe up from the bottom edge to raise the Rose chin with the keyboard open.</li>
+  </ul>
+ </fieldset>
+</aside>
+<button class="harness-toggle" id="h-toggle" aria-expanded="false" aria-label="Show study controls"><span aria-hidden="true">⋯</span></button>
+</div>
+<script>// Rose Keyboard (F10 study) — pure text/keyboard model. No DOM; runs in the page and in Node.
+// One editable field: text, selection [a, b] (a === b is a caret), shift state, symbol page,
+// suggestions, autocorrect with one-step revert, word deletion, clipboard, and undo/redo.
+(function (root) {
+  'use strict';
+
+  // Common words, most frequent first (rank = weight). Small on purpose: a prototype lexicon.
+  const WORDS = ('the I to you and a it is that of in for on be have we are this my me what with ' +
+    'so at your just can do not was but if will all get up about out how now like know there ' +
+    'one when go see time good back think they then here more today tomorrow Saturday Sunday ' +
+    'morning afternoon evening tonight great thanks thank sounds perfect okay yes no maybe sure ' +
+    'meet meeting garden gate ten eleven noon walk river lunch coffee café later soon still ' +
+    'would could should want need going come coming leave left right where why who which ' +
+    'from been has had did does make made take took let lets love lovely nice happy hope ' +
+    'plan plans weekend week day days call calling talk talked message write wrote read ' +
+    'Jamie Rose notes list book books bring open opens close closed early late quiet quieter ' +
+    'there their they\'re don\'t can\'t won\'t I\'m I\'ll I\'ve you\'re that\'s it\'s ' +
+    'receive address separate definitely tomorrow\'s keyboard typing suggestion ' +
+    'home phone place places after before again also around away really very well work ' +
+    'hello hi hey way my OK on lunch dinner tea pack call text soon reply ready').split(/\s+/).filter(Boolean);
+  const RANK = new Map(WORDS.map((w, i) => [w.toLowerCase(), i]));
+  const CANON = new Map(WORDS.map((w) => [w.toLowerCase(), w]));
+
+  // Autocorrect only for unambiguous typos; anything else is left exactly as typed.
+  const CORRECT = {
+    teh: 'the', adn: 'and', dont: "don't", cant: "can't", wont: "won't", im: "I'm", ive: "I've",
+    ill: "I'll", youre: "you're", thats: "that's", recieve: 'receive', adress: 'address',
+    tommorow: 'tomorrow', tomorow: 'tomorrow', seperate: 'separate', definately: 'definitely',
+    i: 'I', jamie: 'Jamie', saturday: 'Saturday', sunday: 'Sunday', rose: 'Rose',
+  };
+  // Next-word predictions after a completed word (empty current word).
+  const NEXT = {
+    '': ['I', 'The', 'Thanks'], see: ['you', 'the', 'it'], at: ['ten', 'the', 'noon'],
+    the: ['garden', 'river', 'gate'], sounds: ['good', 'great', 'perfect'], thank: ['you', 'you!', 'you so'],
+    i: ['think', "I'll", 'can'], "i'll": ['be', 'bring', 'call'], meet: ['at', 'you', 'there'],
+    on: ['Saturday', 'Sunday', 'the'], by: ['the', 'ten', 'noon'], good: ['morning', 'idea', 'plan'],
+  };
+
+  const SENT_END = /[.!?]\s+$/;
+  const WORD_CH = /[\p{L}\p{N}'’]/u;
+
+  function initial(opts) {
+    const text = (opts && opts.text) || '';
+    const s = {
+      text, a: text.length, b: text.length, multiline: !!(opts && opts.multiline),
+      shift: 'off', page: 'letters', undo: [], redo: [], clip: '', lastAuto: null,
+      lastShiftAt: -1e9, lastSpaceAt: -1e9, typingRun: false, events: [],
+    };
+    autoCap(s);
+    return s;
+  }
+
+  // ---------- helpers ----------
+  const snap = (s) => ({ text: s.text, a: s.a, b: s.b });
+  function pushUndo(s, coalesce) {
+    if (coalesce && s.typingRun) return;
+    s.undo.push(snap(s)); if (s.undo.length > 100) s.undo.shift();
+    s.redo = []; s.typingRun = !!coalesce;
+  }
+  const lo = (s) => Math.min(s.a, s.b), hi = (s) => Math.max(s.a, s.b);
+  function replace(s, from, to, str) {
+    s.text = s.text.slice(0, from) + str + s.text.slice(to);
+    s.a = s.b = from + str.length;
+  }
+  // The word being typed: word characters immediately before the caret.
+  function currentWord(s) {
+    if (s.a !== s.b) return { start: s.a, end: s.a, word: '' };
+    let i = s.a; while (i > 0 && WORD_CH.test(s.text[i - 1])) i--;
+    return { start: i, end: s.a, word: s.text.slice(i, s.a) };
+  }
+  function prevWord(s, before) {
+    const t = s.text.slice(0, before).replace(/\s+$/, '');
+    const m = t.match(/([\p{L}\p{N}'’]+)[^\p{L}\p{N}'’]*$/u);
+    return m ? m[1].toLowerCase() : '';
+  }
+  function autoCap(s) {
+    if (s.shift === 'lock') return;
+    const before = s.text.slice(0, lo(s));
+    s.shift = before.length === 0 || SENT_END.test(before) || /\n\s*$/.test(before) ? 'once' : 'off';
+  }
+  function matchCase(word, typed) {
+    if (typed.length > 1 && typed === typed.toUpperCase() && /[A-Z]/.test(typed)) return word.toUpperCase();
+    if (typed[0] && typed[0] === typed[0].toUpperCase() && /[A-Z]/.test(typed[0])) return word[0].toUpperCase() + word.slice(1);
+    return word;
+  }
+  const log = (s, e) => { s.events.push(e); if (s.events.length > 40) s.events.shift(); };
+
+  // ---------- typing ----------
+  function type(s, ch) {
+    const up = s.shift !== 'off' && /[a-z]/.test(ch) ? ch.toUpperCase() : ch;
+    pushUndo(s, WORD_CH.test(up));
+    if (/[.,!?;:]/.test(up) && s.a === s.b) correctCurrent(s);
+    replace(s, lo(s), hi(s), up);
+    s.lastAuto = null;
+    if (s.shift === 'once') s.shift = 'off';
+    if (!WORD_CH.test(up)) { s.typingRun = false; autoCap(s); }
+    log(s, 'type ' + up);
+  }
+
+  // Apply an unambiguous correction to the word before the caret (space, Return, punctuation).
+  function correctCurrent(s) {
+    const cw = currentWord(s);
+    const fix = cw.word && CORRECT[cw.word.toLowerCase()];
+    if (!fix || fix === cw.word || s.revertedWord === cw.word) return null;
+    const to = cw.word.length === 1 ? fix : matchCase(fix, cw.word);
+    replace(s, cw.start, cw.end, to);
+    log(s, 'autocorrect ' + cw.word + '→' + to);
+    return { from: cw.word, to };
+  }
+
+  function space(s, now) {
+    now = now || 0;
+    // Double-tap space after a word: ". " (sentence end), then auto-capitalise.
+    if (s.a === s.b && now - s.lastSpaceAt < 450 && / $/.test(s.text.slice(0, s.a)) && WORD_CH.test(s.text[s.a - 2] || '')) {
+      pushUndo(s); replace(s, s.a - 1, s.a, '. '); s.lastSpaceAt = -1e9; s.lastAuto = null; autoCap(s); log(s, 'period'); return;
+    }
+    pushUndo(s);
+    const fixed = s.a === s.b ? correctCurrent(s) : null;
+    replace(s, lo(s), hi(s), ' ');
+    s.lastAuto = fixed ? { from: fixed.from, to: fixed.to, at: s.a } : null;
+    if (!fixed) log(s, 'space');
+    s.lastSpaceAt = now; s.typingRun = false; autoCap(s);
+  }
+
+  function backspace(s) {
+    // Right after an autocorrect, backspace restores exactly what was typed.
+    if (s.lastAuto && s.a === s.b && s.a === s.lastAuto.at) {
+      const { from, to } = s.lastAuto;
+      pushUndo(s); replace(s, s.a - to.length - 1, s.a, from); s.lastAuto = null; s.revertedWord = from;
+      log(s, 'revert ' + to + '→' + from); autoCap(s); return;
+    }
+    s.lastAuto = null;
+    if (s.a !== s.b) { pushUndo(s); replace(s, lo(s), hi(s), ''); log(s, 'delete selection'); autoCap(s); return; }
+    if (s.a === 0) return;
+    pushUndo(s, true);
+    const cp = s.text.codePointAt(s.a - 2);
+    const n = cp > 0xffff && s.a >= 2 ? 2 : 1;
+    replace(s, s.a - n, s.a, ''); autoCap(s); log(s, 'backspace');
+  }
+
+  function deleteWord(s) {
+    s.lastAuto = null;
+    if (s.a !== s.b) return backspace(s);
+    let i = s.a; while (i > 0 && /\s/.test(s.text[i - 1])) i--;
+    if (i > 0 && WORD_CH.test(s.text[i - 1])) { while (i > 0 && WORD_CH.test(s.text[i - 1])) i--; }
+    else if (i > 0) i--;
+    if (i === s.a) return;
+    pushUndo(s); replace(s, i, s.a, ''); autoCap(s); log(s, 'delete word');
+  }
+
+  // Return: newline in multi-line fields; in single-purpose fields the IME action (Send) fires.
+  function enter(s) {
+    if (s.multiline) { pushUndo(s); if (s.a === s.b) correctCurrent(s); replace(s, lo(s), hi(s), '\n'); s.lastAuto = null; s.typingRun = false; autoCap(s); log(s, 'newline'); return null; }
+    if (s.a === s.b) correctCurrent(s);
+    const sent = s.text.trim();
+    if (!sent) return null;
+    pushUndo(s); s.text = ''; s.a = s.b = 0; s.lastAuto = null; autoCap(s); log(s, 'send');
+    return sent;
+  }
+
+  // ---------- shift & pages ----------
+  function shiftTap(s, now) {
+    now = now || 0;
+    if (s.page !== 'letters') return;
+    if (s.shift === 'lock') s.shift = 'off';
+    else if (s.shift === 'once' && now - s.lastShiftAt < 350) s.shift = 'lock';
+    else s.shift = s.shift === 'off' ? 'once' : 'off';
+    s.lastShiftAt = now; log(s, 'shift ' + s.shift);
+  }
+  function setPage(s, page) { s.page = page; log(s, 'page ' + page); if (page === 'letters') autoCap(s); }
+
+  // ---------- suggestions ----------
+  // Three slots. While typing: [typed-as-is, best, next]; best is a correction when one applies.
+  // Between words: next-word predictions. A just-reverted word is never re-corrected.
+  function suggestions(s) {
+    const cw = currentWord(s);
+    if (s.a !== s.b) return [];
+    if (!cw.word) {
+      const p = NEXT[prevWord(s, s.a)] || (s.text.trim() ? ['the', 'and', 'I'] : NEXT['']);
+      const cap = s.shift !== 'off';
+      return p.slice(0, 3).map((w) => ({ text: cap ? w[0].toUpperCase() + w.slice(1) : w, kind: 'predict' }));
+    }
+    const low = cw.word.toLowerCase();
+    const fix = CORRECT[low] && s.revertedWord !== cw.word ? matchCase(CORRECT[low], cw.word) : null;
+    const pre = WORDS.filter((w) => w.toLowerCase().startsWith(low) && w.toLowerCase() !== low)
+      .sort((x, y) => RANK.get(x.toLowerCase()) - RANK.get(y.toLowerCase()))
+      .map((w) => matchCase(CANON.get(w.toLowerCase()), cw.word));
+    const exact = CANON.has(low) ? matchCase(CANON.get(low), cw.word) : null;
+    const best = fix || exact || pre[0] || null;
+    const out = [{ text: cw.word, kind: 'typed' }];
+    if (best && best !== cw.word) out.push({ text: best, kind: fix ? 'correct' : 'suggest' });
+    for (const w of pre) { if (out.length >= 3) break; if (!out.some((o) => o.text === w)) out.push({ text: w, kind: 'suggest' }); }
+    // Slot order on the strip: typed | best | next (best in the middle).
+    return out.length === 3 ? [out[0], out[1], out[2]] : out;
+  }
+  function pick(s, word) {
+    const cw = currentWord(s);
+    pushUndo(s);
+    replace(s, cw.start, cw.end, word + ' ');
+    s.lastAuto = null; s.revertedWord = null; s.typingRun = false; autoCap(s);
+    log(s, 'pick ' + word);
+  }
+
+  // ---------- cursor, selection, clipboard, undo ----------
+  function setSel(s, a, b) {
+    const n = s.text.length;
+    s.a = Math.max(0, Math.min(n, a)); s.b = Math.max(0, Math.min(n, b === undefined ? a : b));
+    s.lastAuto = null; s.typingRun = false; s.revertedWord = null; autoCap(s);
+  }
+  function move(s, delta, extend) {
+    if (extend) setSel(s, s.a, s.b + delta);
+    else if (s.a !== s.b) { const p = delta < 0 ? lo(s) : hi(s); setSel(s, p); }
+    else setSel(s, s.a + delta);
+  }
+  function selectWord(s, at) {
+    let i = Math.max(0, Math.min(s.text.length, at)), j = i;
+    while (i > 0 && WORD_CH.test(s.text[i - 1])) i--;
+    while (j < s.text.length && WORD_CH.test(s.text[j])) j++;
+    if (i === j && j < s.text.length) j++;
+    setSel(s, i, j); log(s, 'select word');
+  }
+  function selectAll(s) { setSel(s, 0, s.text.length); log(s, 'select all'); }
+  const selected = (s) => s.text.slice(lo(s), hi(s));
+  function copy(s) { if (s.a !== s.b) { s.clip = selected(s); log(s, 'copy'); } }
+  function cut(s) { if (s.a !== s.b) { s.clip = selected(s); pushUndo(s); replace(s, lo(s), hi(s), ''); autoCap(s); log(s, 'cut'); } }
+  function paste(s) { if (s.clip) { pushUndo(s); replace(s, lo(s), hi(s), s.clip); s.lastAuto = null; autoCap(s); log(s, 'paste'); } }
+  function undo(s) {
+    const u = s.undo.pop(); if (!u) return;
+    s.redo.push(snap(s)); Object.assign(s, u); s.lastAuto = null; s.typingRun = false; autoCap(s); log(s, 'undo');
+  }
+  function redo(s) {
+    const r = s.redo.pop(); if (!r) return;
+    s.undo.push(snap(s)); Object.assign(s, r); s.lastAuto = null; s.typingRun = false; autoCap(s); log(s, 'redo');
+  }
+
+  // ---------- layouts ----------
+  const LAYOUTS = {
+    letters: [
+      'q w e r t y u i o p'.split(' '),
+      'a s d f g h j k l'.split(' '),
+      ['shift', ...'z x c v b n m'.split(' '), 'bksp'],
+      ['?123', ',', 'space', '.', 'action'],
+    ],
+    sym1: [
+      '1 2 3 4 5 6 7 8 9 0'.split(' '),
+      '@ # $ _ & - + ( ) /'.split(' '),
+      ['=\\<', '*', '"', "'", ':', ';', '!', '?', 'bksp'],
+      ['ABC', ',', 'space', '.', 'action'],
+    ],
+    sym2: [
+      '~ ` | • √ π ÷ × ¶ ∆'.split(' '),
+      '£ ¢ € ¥ ^ ° = { } \\'.split(' '),
+      ['?123', '%', '©', '®', '™', '✓', '[', ']', 'bksp'],
+      ['ABC', '<', 'space', '>', 'action'],
+    ],
+  };
+
+  const api = { initial, type, space, backspace, deleteWord, enter, shiftTap, setPage, suggestions, pick,
+    setSel, move, selectWord, selectAll, copy, cut, paste, undo, redo, currentWord, LAYOUTS, CORRECT };
+  if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.RoseKeys = api;
+})(typeof window !== 'undefined' ? window : globalThis);
+</script>
+<script>// Rose Keyboard (F10 study) — interface: fields, keyboard, suggestion/edit strip, Rose chin,
+// show/hide and gestures. Text state lives in RoseKeys (keyboard.js); this file renders it.
+(function () {
+  'use strict';
+  const K = window.RoseKeys;
+  const $ = (id) => document.getElementById(id);
+  const screen = $('screen'), kbEl = $('kb'), keysEl = $('keys'), strip = $('strip'), pop = $('pop');
+  const ui = { app: 'messages', kb: false, chin: false, muted: false, editHold: false, log: [] };
+  const NOTE = 'Garden at ten\nRiverside walk\nBring a book\n';
+  const fields = { messages: K.initial(), notes: K.initial({ multiline: true, text: NOTE }) };
+  const cur = () => fields[ui.app];
+  const fieldEl = () => (ui.app === 'messages' ? $('f-msg') : $('f-note'));
+  const now = () => performance.now();
+  const media = matchMedia('(prefers-reduced-motion: reduce)');
+  let reducedOverride = false;
+  const reduced = () => reducedOverride || media.matches;
+  const scaleK = () => { const r = screen.getBoundingClientRect(); return r.height / screen.offsetHeight || 1; };
+  const esc = (t) => t.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const note = (e) => { ui.log.push(e); if (ui.log.length > 40) ui.log.shift(); };
+
+  // ---------- Icons ----------
+  const svg = (body, fill) => '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true" fill="' + (fill || 'none') + '" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">' + body + '</svg>';
+  const IC = {
+    shift: (st) => svg('<path d="M12 4 L20 12 H15.5 V18 H8.5 V12 H4 Z"/>' + (st === 'lock' ? '<path d="M8.5 21 H15.5"/>' : ''), st === 'off' ? 'none' : 'currentColor'),
+    bksp: svg('<path d="M8 5 H20 V19 H8 L2.5 12 Z"/><path d="M11 9 L16 14 M16 9 L11 14"/>'),
+    send: svg('<path d="M12 19 V5 M6 11 L12 5 L18 11"/>'),
+    ret: svg('<path d="M19 6 V12 H6 M10 8 L6 12 L10 16"/>'),
+    mic: (m) => svg('<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"/>' + (m ? '<path d="M4 4 L20 20" stroke="#ff6b7d" stroke-width="2"/>' : '')),
+  };
+
+  // ---------- Keyboard build ----------
+  let keysKey = '';
+  function keyHtml(k, s) {
+    const label = { shift: 'Shift', bksp: 'Delete', '?123': 'Symbols', ABC: 'Letters', '=\\<': 'More symbols', space: 'Space', action: ui.app === 'messages' ? 'Send' : 'Return' }[k];
+    if (k === 'shift') return '<button class="key fn" data-k="shift" data-state="' + s.shift + '" aria-label="Shift, ' + (s.shift === 'off' ? 'off' : s.shift === 'lock' ? 'caps lock' : 'on') + '">' + IC.shift(s.shift) + '</button>';
+    if (k === 'bksp') return '<button class="key fn" data-k="bksp" aria-label="' + label + '">' + IC.bksp + '</button>';
+    if (k === 'space') return '<button class="key space" data-k="space" aria-label="Space">space</button>';
+    if (k === 'action') return '<button class="key action" data-k="action" aria-label="' + label + '">' + (ui.app === 'messages' ? IC.send : IC.ret) + '</button>';
+    if (label) return '<button class="key fn" data-k="' + esc(k) + '" aria-label="' + label + '">' + esc(k) + '</button>';
+    const shown = s.page === 'letters' && s.shift !== 'off' ? k.toUpperCase() : k;
+    return '<button class="key" data-k="' + esc(k) + '" data-ch="' + esc(shown) + '" aria-label="' + esc(shown) + '">' + esc(shown) + '</button>';
+  }
+  function buildKeys() {
+    const s = cur(), id = s.page + s.shift + ui.app;
+    if (id === keysKey) return;
+    keysKey = id;
+    keysEl.innerHTML = K.LAYOUTS[s.page].map((row, ri) => '<div class="krow' + (ri === 1 && s.page === 'letters' ? ' mid' : '') + '">' + row.map((k) => keyHtml(k, s)).join('') + '</div>').join('');
+  }
+
+  // ---------- Strip: suggestions, or edit tools while text is selected ----------
+  function renderStrip() {
+    const s = cur();
+    const editing = s.a !== s.b || ui.editHold;
+    let h;
+    if (editing) {
+      const sel = s.a !== s.b;
+      const t = (id, label, on) => '<button class="tool" data-tool="' + id + '"' + (on ? '' : ' disabled') + '>' + label + '</button>';
+      h = t('cut', 'Cut', sel) + t('copy', 'Copy', sel) + t('paste', 'Paste', !!s.clip) + t('all', 'Select all', s.text.length > 0) + t('undo', 'Undo', s.undo.length > 0) + t('redo', 'Redo', s.redo.length > 0);
+      strip.setAttribute('aria-label', 'Editing tools');
+    } else {
+      const sg = K.suggestions(s);
+      // A lone typed word (no alternatives) sits in the middle slot, where the eye expects the best word.
+      const slots = sg.length === 1 ? [undefined, sg[0], undefined] : [0, 1, 2].map((i) => sg[i]);
+      h = slots.map((x, i) => x ? '<button class="sg ' + x.kind + (i === 1 ? ' best' : '') + '" data-pick="' + esc(x.text) + '" aria-label="' + (x.kind === 'typed' ? 'Keep ' : x.kind === 'correct' ? 'Correct to ' : 'Insert ') + esc(x.text) + '"><span>' + esc(x.text) + '</span></button>' : '<span class="sg" aria-hidden="true"></span>').join('');
+      strip.setAttribute('aria-label', 'Suggestions');
+    }
+    strip.innerHTML = h + '<button class="hide" data-tool="hide" aria-label="Hide keyboard"></button>';
+  }
+
+  // ---------- Fields ----------
+  function renderField(el, s, focused) {
+    let h;
+    if (!s.text) h = (focused ? '<span class="caret"></span>' : '') + '<span class="ph" data-base="0">' + esc(el.dataset.placeholder) + '</span>';
+    else {
+      const a = Math.min(s.a, s.b), b = Math.max(s.a, s.b);
+      h = '<span data-base="0">' + esc(s.text.slice(0, a)) + '</span>';
+      if (a === b) { if (focused) h += '<span class="caret"></span>'; }
+      else h += '<mark data-base="' + a + '">' + esc(s.text.slice(a, b)) + '</mark>';
+      h += '<span data-base="' + b + '">' + esc(s.text.slice(b)) + '</span>';
+    }
+    el.innerHTML = h;
+    el.classList.toggle('focused', focused);
+    // Keep the caret visible inside the field (manual: never scroll the phone itself).
+    const c = el.querySelector('.caret,mark');
+    if (focused && c) {
+      const top = c.offsetTop, bot = top + c.offsetHeight;
+      if (top < el.scrollTop + 6) el.scrollTop = Math.max(0, top - 6);
+      else if (bot > el.scrollTop + el.clientHeight - 6) el.scrollTop = bot - el.clientHeight + 6;
+    }
+  }
+  // Text index under a point (caret placement, long-press word selection).
+  function indexAt(el, x, y) {
+    let node, off;
+    if (document.caretRangeFromPoint) { const r = document.caretRangeFromPoint(x, y); if (r) { node = r.startContainer; off = r.startOffset; } }
+    else if (document.caretPositionFromPoint) { const p = document.caretPositionFromPoint(x, y); if (p) { node = p.offsetNode; off = p.offset; } }
+    const s = cur();
+    if (!node || !el.contains(node)) return s.text.length;
+    const span = node.nodeType === 3 ? node.parentElement : node;
+    if (span.classList.contains('ph')) return 0;
+    if (span.dataset.base === undefined) return s.text.length;
+    return Math.min(s.text.length, +span.dataset.base + (node.nodeType === 3 ? off : 0));
+  }
+
+  // ---------- Render ----------
+  let typingTimer = 0;
+  function render() {
+    const s = cur();
+    screen.dataset.kb = ui.kb ? 'on' : 'off';
+    screen.dataset.chin = ui.chin ? 'up' : 'down';
+    screen.dataset.app = ui.app;
+    screen.dataset.muted = String(ui.muted);
+    $('chin').hidden = !ui.chin;
+    $('handle').setAttribute('aria-expanded', String(ui.chin));
+    $('chin-mic').innerHTML = IC.mic(ui.muted);
+    $('chin-mic').setAttribute('aria-pressed', String(ui.muted));
+    $('chin-mic').setAttribute('aria-label', ui.muted ? 'Unmute microphone' : 'Mute microphone');
+    kbEl.setAttribute('aria-hidden', String(!ui.kb));
+    kbEl.inert = !ui.kb;
+    $('msgs').hidden = ui.app !== 'messages';
+    $('notes').hidden = ui.app !== 'notes';
+    renderField($('f-msg'), fields.messages, ui.kb && ui.app === 'messages');
+    renderField($('f-note'), fields.notes, ui.kb && ui.app === 'notes');
+    $('c-send').disabled = !fields.messages.text.trim();
+    buildKeys(); renderStrip();
+    // Harness
+    $('h-messages').setAttribute('aria-pressed', String(ui.app === 'messages'));
+    $('h-notes').setAttribute('aria-pressed', String(ui.app === 'notes'));
+    $('h-kb').textContent = ui.kb ? 'Hide keyboard' : 'Show keyboard';
+    $('h-chin').textContent = ui.chin ? 'Lower chin' : 'Raise chin';
+    $('h-mic').setAttribute('aria-pressed', String(ui.muted));
+    const sel = s.a === s.b ? 'caret ' + s.a : 'selection ' + Math.min(s.a, s.b) + '–' + Math.max(s.a, s.b);
+    $('h-state').innerHTML = 'Page <b>' + s.page + '</b> · shift <b>' + s.shift + '</b> · ' + sel + '<br>Undo ' + s.undo.length + ' · redo ' + s.redo.length + ' · clipboard ' + (s.clip ? '“' + esc(s.clip.slice(0, 18)) + '”' : '—');
+    $('h-log').innerHTML = ui.log.slice(-8).reverse().map((e) => '<li>' + esc(e) + '</li>').join('');
+    clearTimeout(typingTimer); fieldEl().classList.add('typing'); typingTimer = setTimeout(() => fieldEl().classList.remove('typing'), 500);
+    requestAnimationFrame(measure);
+    setTimeout(measure, 320);
+  }
+  // Live geometry readout, in design points (unscaled).
+  function measure() {
+    const k = scaleK(), sr = screen.getBoundingClientRect();
+    const h = (el) => Math.round(el.getBoundingClientRect().height / k);
+    const app = $('app'), content = ui.app === 'messages' ? $('thread') : $('f-note');
+    const below = !ui.kb ? (ui.chin ? 'chin ' + 58 : 'handle overlay') : ui.chin ? 'raised chin 58' : 'rail 24';
+    $('h-layout').innerHTML = 'Screen ' + Math.round(sr.width / k) + '×' + Math.round(sr.height / k) +
+      '<br>App window <b>' + h(app) + '</b> (' + Math.round(100 * h(app) / (sr.height / k)) + '%) · content ' + h(content) +
+      '<br>Keyboard ' + (ui.kb ? h(kbEl) : 0) + ' · below it: ' + below +
+      '<br>Chin ' + (ui.chin ? 'raised (92, mic reachable)' : 'lowered (swipe up)');
+    if (ui.app === 'messages') { const t = $('thread'); t.scrollTop = t.scrollHeight; }
+  }
+
+  // ---------- Actions ----------
+  function toast(t) { const el = $('toast'); el.textContent = t; el.classList.add('on'); clearTimeout(el._t); el._t = setTimeout(() => el.classList.remove('on'), 1700); }
+  function showKb() { if (!ui.kb) { ui.kb = true; note('keyboard shown'); } render(); }
+  function hideKb(why) { if (ui.kb) { ui.kb = false; ui.editHold = false; note('keyboard hidden (' + why + ')'); } render(); }
+  function setChin(on, why) { on = !!on; if (ui.chin === on) return; ui.chin = on; note('chin ' + (on ? 'raised' : 'lowered') + (why ? ' (' + why + ')' : '')); render(); }
+  function setMuted(m) { ui.muted = m; note(m ? 'mic muted (chin)' : 'mic unmuted (chin)'); toast(m ? 'Microphone muted' : 'Microphone on'); render(); }
+  function send(text) {
+    const p = document.createElement('p'); p.className = 'out'; p.textContent = text; $('thread').appendChild(p);
+    note('sent “' + text.slice(0, 20) + '”');
+  }
+  function doAction() {
+    const s = cur();
+    if (ui.app === 'messages') { const t = K.enter(s); if (t) send(t); }
+    else K.enter(s);
+    render();
+  }
+  function commitKey(k) {
+    const s = cur(), t = now();
+    ui.editHold = false;
+    if (k === 'shift') K.shiftTap(s, t);
+    else if (k === '?123') K.setPage(s, 'sym1');
+    else if (k === '=\\<') K.setPage(s, 'sym2');
+    else if (k === 'ABC') K.setPage(s, 'letters');
+    else if (k === 'space') K.space(s, t);
+    else if (k === 'action') return doAction();
+    else if (k === 'bksp') K.backspace(s);
+    else K.type(s, k);
+    render();
+  }
+
+  // ---------- Key input: slide-to-correct, preview pop, backspace repeat, space-bar cursor ----------
+  let press = null;
+  const keyAt = (x, y) => { const el = document.elementFromPoint(x, y); return el && el.closest && el.closest('#keys .key'); };
+  function showPop(el) {
+    if (!el || !el.dataset.ch) { pop.classList.remove('on'); return; }
+    const k = scaleK(), kr = kbEl.getBoundingClientRect(), r = el.getBoundingClientRect();
+    pop.textContent = el.dataset.ch;
+    pop.style.left = ((r.left - kr.left + r.width / 2) / k - 26) + 'px';
+    pop.style.top = ((r.top - kr.top) / k - 58) + 'px';
+    pop.classList.add('on');
+  }
+  function setDown(el) { keysEl.querySelectorAll('.key.down').forEach((x) => x.classList.remove('down')); if (el) el.classList.add('down'); }
+  function endPress(commit) {
+    const p = press; if (!p) return;
+    press = null; clearTimeout(p.timer); clearInterval(p.rep);
+    pop.classList.remove('on'); setDown(null); kbEl.classList.remove('cursor-mode');
+    if (!commit) return;
+    const k = p.el && p.el.dataset.k;
+    if (p.kind === 'bksp') { if (p.swipe) { K.deleteWord(cur()); render(); } else if (!p.repeated) commitKey('bksp'); return; }
+    if (p.kind === 'space') { if (p.mode === 'none') commitKey('space'); else render(); return; }
+    if (k) commitKey(k);
+  }
+  keysEl.addEventListener('pointerdown', (e) => {
+    const el = e.target.closest('.key'); if (!el) return;
+    e.preventDefault();
+    if (press) endPress(true); // two thumbs: the earlier key commits when the next one lands
+    const k = el.dataset.k;
+    press = { id: e.pointerId, el, x0: e.clientX, y0: e.clientY, lastX: e.clientX, kind: k === 'bksp' ? 'bksp' : k === 'space' ? 'space' : 'key', mode: 'none', repeated: false, swipe: false };
+    try { keysEl.setPointerCapture(e.pointerId); } catch (_) {}
+    setDown(el); showPop(el);
+    if (press.kind === 'bksp') {
+      const p = press; let n = 0;
+      p.timer = setTimeout(() => {
+        p.repeated = true;
+        const tick = () => { n++; if (n > 12) K.deleteWord(cur()); else K.backspace(cur()); render(); };
+        tick(); p.rep = setInterval(() => { tick(); if (n === 13) { clearInterval(p.rep); p.rep = setInterval(tick, 170); } }, 75);
+      }, 420);
+    }
+    if (press.kind === 'space') {
+      const p = press;
+      p.timer = setTimeout(() => { if (p.mode === 'none') { p.mode = 'select'; kbEl.classList.add('cursor-mode'); ui.editHold = true; note('space hold: drag to select'); render(); } }, 380);
+    }
+  });
+  keysEl.addEventListener('pointermove', (e) => {
+    const p = press; if (!p || e.pointerId !== p.id) return;
+    const k = scaleK(), dx = (e.clientX - p.x0) / k;
+    if (p.kind === 'bksp') { if (dx < -28 && !p.repeated) { p.swipe = true; clearTimeout(p.timer); } return; }
+    if (p.kind === 'space') {
+      if (p.mode === 'none' && Math.abs(dx) > 10) { p.mode = 'cursor'; clearTimeout(p.timer); kbEl.classList.add('cursor-mode'); p.lastX = e.clientX; }
+      if (p.mode !== 'none') {
+        const steps = Math.trunc((e.clientX - p.lastX) / k / 9);
+        if (steps) { const s = cur(); for (let i = 0; i < Math.abs(steps); i++) K.move(s, Math.sign(steps), p.mode === 'select'); p.lastX += steps * 9 * k; render(); }
+      }
+      return;
+    }
+    const over = keyAt(e.clientX, e.clientY);
+    if (over && over !== p.el) { p.el = over; setDown(over); showPop(over); }
+  });
+  keysEl.addEventListener('pointerup', (e) => { if (press && e.pointerId === press.id) endPress(true); });
+  keysEl.addEventListener('pointercancel', () => endPress(false));
+  keysEl.addEventListener('contextmenu', (e) => e.preventDefault());
+
+  // ---------- Strip: pick / tools; swipe down hides ----------
+  let stripDown = null, stripSwallow = false;
+  strip.addEventListener('pointerdown', (e) => { stripDown = { y: e.clientY, x: e.clientX }; stripSwallow = false; });
+  window.addEventListener('pointermove', (e) => {
+    if (!stripDown) return;
+    const k = scaleK(), dy = (e.clientY - stripDown.y) / k;
+    if (Math.abs(dy) > 10 || Math.abs(e.clientX - stripDown.x) / k > 10) stripSwallow = true;
+  });
+  window.addEventListener('pointerup', (e) => {
+    if (!stripDown) return;
+    const dy = (e.clientY - stripDown.y) / scaleK(); stripDown = null;
+    if (dy > 30) hideKb('swipe down');
+  });
+  strip.addEventListener('click', (e) => {
+    if (stripSwallow) { stripSwallow = false; return; }
+    const b = e.target.closest('button'); if (!b) return;
+    const s = cur();
+    if (b.dataset.pick !== undefined) { K.pick(s, b.dataset.pick); render(); return; }
+    const t = b.dataset.tool;
+    if (t === 'hide') return hideKb('⌄ key');
+    ({ cut: K.cut, copy: K.copy, paste: K.paste, all: K.selectAll, undo: K.undo, redo: K.redo })[t](s);
+    if (t === 'copy') toast('Copied');
+    // Edit tools stay up after any of them (so Undo is one tap away) until the next keystroke.
+    ui.editHold = true;
+    render();
+  });
+
+  // ---------- Fields: tap places the caret and opens the keyboard; long-press selects a word ----------
+  let pointerFocus = false;
+  function bindField(el, app) {
+    let fp = null;
+    el.addEventListener('pointerdown', (e) => {
+      if (e.button) return;
+      // Read the caret index now: once the keyboard opens the field moves, so the point would drift.
+      fp = { x: e.clientX, y: e.clientY, moved: false, long: false, at: indexAt(el, e.clientX, e.clientY) };
+      pointerFocus = true; setTimeout(() => { pointerFocus = false; }, 0);
+      const p = fp;
+      p.timer = setTimeout(() => {
+        if (p.moved) return;
+        p.long = true; if (ui.app !== app) ui.app = app;
+        const s = cur(), i = p.at;
+        if (s.text) K.selectWord(s, Math.max(0, i)); ui.editHold = true;
+        note('long-press: select'); showKb();
+      }, 460);
+    });
+    el.addEventListener('pointermove', (e) => { if (fp && Math.hypot(e.clientX - fp.x, e.clientY - fp.y) > 8) fp.moved = true; });
+    el.addEventListener('pointerup', (e) => {
+      const p = fp; fp = null; if (!p) return;
+      clearTimeout(p.timer);
+      if (p.long || p.moved) return;
+      ui.app = app;
+      const s = cur();
+      K.setSel(s, p.at);
+      ui.editHold = false;
+      if (!ui.kb) note('field tapped');
+      showKb();
+    });
+    el.addEventListener('pointercancel', () => { if (fp) clearTimeout(fp.timer); fp = null; });
+    // Keyboard focus (Tab) opens the keyboard; pointer focus waits for the tap to finish.
+    el.addEventListener('focus', () => { if (!pointerFocus && !ui.kb && ui.app === app) { note('field focused (keyboard)'); showKb(); } });
+  }
+  bindField($('f-msg'), 'messages');
+  bindField($('f-note'), 'notes');
+  $('c-send').addEventListener('click', () => { const s = fields.messages; const t = K.enter(s); if (t) send(t); render(); });
+  // Tapping the conversation (outside the composer) hides the keyboard; the draft stays.
+  $('thread').addEventListener('click', () => { if (ui.kb) hideKb('tap outside'); });
+  $('msgs').querySelector('.a-head').addEventListener('click', () => { if (ui.kb) hideKb('tap outside'); });
+
+  // ---------- Rose chin: swipe up from the bottom edge raises it, with or without the keyboard ----------
+  let edge = null, swallowClick = false;
+  window.addEventListener('click', (e) => { if (swallowClick) { e.stopPropagation(); e.preventDefault(); swallowClick = false; } }, true);
+  function edgeStart(e) {
+    if (e.button || e.target.closest('#kb')) return;
+    const r = screen.getBoundingClientRect(), k = scaleK(), up = (r.bottom - e.clientY) / k;
+    const zone = ui.chin ? 92 : ui.kb ? 24 : 40;
+    if (up <= zone && !(ui.chin && e.target.closest('.plate'))) edge = { y: e.clientY, t: now(), moved: false };
+    else if (ui.chin && up <= 92) edge = { y: e.clientY, t: now(), moved: false, plate: true };
+  }
+  screen.addEventListener('pointerdown', edgeStart);
+  window.addEventListener('pointermove', (e) => { if (edge && Math.abs(e.clientY - edge.y) / scaleK() > 8) edge.moved = true; });
+  window.addEventListener('pointerup', (e) => {
+    const d = edge; edge = null; if (!d) return;
+    const dy = (e.clientY - d.y) / scaleK(), v = dy / Math.max(1, now() - d.t);
+    if (d.moved) { swallowClick = true; setTimeout(() => { swallowClick = false; }, 0); }
+    if (!ui.chin) {
+      if (dy < -220 || (dy < -120 && v < -0.9)) { hideKb('leaving app'); toast('Home · outside this study (the draft is kept)'); note('long swipe: Home'); }
+      else if (dy < -24) setChin(true, 'swipe up');
+    } else if (dy > 22 || (dy > 10 && v > 0.35)) setChin(false, 'swipe down');
+    else if (dy < -120) { hideKb('leaving app'); setChin(false); toast('Home · outside this study (the draft is kept)'); }
+  });
+  window.addEventListener('pointercancel', () => { edge = null; });
+  // Real touch: an edge swipe must not become a scroll.
+  let edgeTouch = false;
+  screen.addEventListener('touchstart', (e) => {
+    const r = screen.getBoundingClientRect(), k = scaleK(), up = (r.bottom - e.touches[0].clientY) / k;
+    edgeTouch = e.touches.length === 1 && (up <= (ui.chin ? 92 : ui.kb ? 24 : 40) || !!e.target.closest('#kb'));
+  }, { passive: true });
+  screen.addEventListener('touchmove', (e) => { if (edgeTouch && e.cancelable) e.preventDefault(); }, { passive: false });
+  $('chin-mic').addEventListener('click', () => setMuted(!ui.muted));
+  $('chin-rose').addEventListener('click', () => { toast('Rose opens · the keyboard hides; the draft is kept'); note('chin: Rose'); hideKb('leaving app'); setChin(false); });
+  $('chin-switch').addEventListener('click', () => { toast('Switcher opens · the draft is kept'); note('chin: switcher'); hideKb('leaving app'); setChin(false); });
+  $('handle').addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowUp') { e.preventDefault(); setChin(true, 'Arrow Up'); }
+    else if (e.key === 'ArrowDown') { e.preventDefault(); setChin(false, 'Arrow Down'); }
+  });
+
+  // ---------- Hardware keyboard (desktop reviewers) ----------
+  document.addEventListener('keydown', (e) => {
+    if (e.target.closest && e.target.closest('.harness')) return;
+    const s = cur(), mod = e.metaKey || e.ctrlKey;
+    if (e.key === 'Escape') { if (ui.chin) setChin(false, 'Esc'); else hideKb('Esc'); return; }
+    if (!ui.kb) { if (document.activeElement === fieldEl() && e.key.length === 1 && !mod) showKb(); else return; }
+    if (mod) {
+      const m = { z: e.shiftKey ? K.redo : K.undo, y: K.redo, a: K.selectAll, c: K.copy, x: K.cut, v: K.paste }[e.key.toLowerCase()];
+      if (m) { e.preventDefault(); m(s); render(); }
+      return;
+    }
+    if (e.key === 'Backspace') { e.preventDefault(); if (e.altKey) K.deleteWord(s); else K.backspace(s); render(); }
+    else if (e.key === 'Enter') { e.preventDefault(); doAction(); }
+    else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { e.preventDefault(); K.move(s, e.key === 'ArrowLeft' ? -1 : 1, e.shiftKey); render(); }
+    else if (e.key === ' ') { e.preventDefault(); K.space(s, now()); render(); }
+    else if (e.key.length === 1) { e.preventDefault(); if (s.shift === 'once' && e.key !== e.key.toLowerCase()) s.shift = 'off'; K.type(s, e.key); render(); }
+  });
+
+  // ---------- Harness ----------
+  const switchApp = (a) => { if (ui.app !== a) { ui.app = a; ui.editHold = false; keysKey = ''; note('app: ' + a); } render(); };
+  $('h-messages').onclick = () => switchApp('messages');
+  $('h-notes').onclick = () => switchApp('notes');
+  $('h-kb').onclick = () => (ui.kb ? hideKb('harness') : showKb());
+  $('h-chin').onclick = () => setChin(!ui.chin, 'harness');
+  $('h-mic').onclick = () => setMuted(!ui.muted);
+  $('h-reset').onclick = () => {
+    Object.assign(ui, { app: 'messages', kb: false, chin: false, muted: false, editHold: false, log: [] });
+    fields.messages = K.initial(); fields.notes = K.initial({ multiline: true, text: NOTE });
+    $('thread').querySelectorAll('p.out').forEach((p, i) => { if (i > 0) p.remove(); });
+    keysKey = ''; render();
+  };
+  $('h-reduced').onchange = (e) => { reducedOverride = e.target.checked; document.documentElement.classList.toggle('static-motion', reduced()); };
+  document.documentElement.classList.toggle('static-motion', reduced());
+  $('h-toggle').addEventListener('click', () => {
+    const open = !document.documentElement.classList.contains('harness-open');
+    document.documentElement.classList.toggle('harness-open', open);
+    $('h-toggle').setAttribute('aria-expanded', String(open));
+  });
+
+  // ---------- Fit: desktop stage, or phone mode (fills a real phone) ----------
+  const phoneParam = new URLSearchParams(location.search).get('phone');
+  const phoneMode = () => phoneParam === '1' || (phoneParam !== '0' && (window.innerWidth <= 540 || matchMedia('(pointer: coarse) and (max-width: 900px)').matches));
+  function fit() {
+    const root = document.documentElement, phone = phoneMode();
+    root.classList.toggle('phone-mode', phone);
+    let k;
+    if (phone) {
+      const vv = window.visualViewport, vw = vv ? vv.width : innerWidth, vh = vv ? vv.height : innerHeight;
+      const sh = Math.round(Math.max(640, Math.min(900, vh * 384 / vw)));
+      root.style.setProperty('--screen-h', sh + 'px');
+      k = Math.min(vw / 384, vh / sh);
+    } else {
+      root.style.removeProperty('--screen-h');
+      const st = $('stage');
+      k = Math.min(1, (st.clientHeight - 32) / 856, (st.clientWidth - 32) / 408);
+    }
+    $('fit').style.setProperty('--fit', Math.max(0.3, k).toFixed(4));
+    requestAnimationFrame(measure);
+  }
+  window.addEventListener('resize', fit);
+  window.addEventListener('orientationchange', () => setTimeout(fit, 250));
+  fit(); render();
+  window.__kb = { ui, fields, K, render, measure };
+})();
+</script>
+</body></html>
