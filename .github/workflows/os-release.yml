@@ -1784,7 +1784,7 @@ jobs:
           # latest-beta: a fresh tag only, notes from the captured source range, Beta Latest after the download check.
           if [[ "$MODE" == latest-beta ]]; then
             extra=(--allocation "$RUNNER_TEMP/allocation/allocation.json")
-            [[ "${DRAFT_ONLY:-false}" == true ]] || extra+=(--promote)
+            if [[ "${DRAFT_ONLY:-false}" == true ]]; then extra+=(--draft-only); else extra+=(--promote); fi
           fi
           # Defense in depth: the publisher refuses an invalid private request even if the guard were bypassed.
           [[ "${DRAFT_ONLY:-false}" != true || ( "$MODE" == latest-beta && "$EXPLICIT_PROMOTE" == false && -z "${CAMPAIGN:-}" ) ]]

@@ -456,6 +456,59 @@ class Publisher(unittest.TestCase):
         with self.assertRaisesRegex(pipeline.CheckFailed, 'allocation refused: allocation_invalid'):
             pipeline.latest_notes(args, cand, artifact)
 
+    def test_explicit_private_allocation_keeps_identity_checks(self):
+        repo, record, artifact, cand, args = self.setup()
+        args.promote = False
+        args.draft_only = True
+        self.assertIn(f'Source: RoseOS-1 {repo.source}', pipeline.latest_notes(args, cand, artifact))
+        with self.assertRaisesRegex(pipeline.CheckFailed, 'deterministic source'):
+            pipeline.latest_notes(args, dict(cand, sha=repo.source), artifact)
+        args.promote = True
+        with self.assertRaisesRegex(pipeline.CheckFailed, 'without --promote'):
+            pipeline.latest_notes(args, cand, artifact)
+        args.promote = False
+        (artifact/'expected-identities.json').write_text(json.dumps({'apps': []}))
+        with self.assertRaisesRegex(pipeline.CheckFailed, 'not the allocated apps'):
+            pipeline.latest_notes(args, cand, artifact)
+
+    def test_private_publish_rejects_scope_before_artifact_or_network_access(self):
+        for device, channel, promote, allocation in (
+                ('mustang', 'beta', False, 'allocation.json'),
+                ('frankel', 'prod', False, 'allocation.json'),
+                ('frankel', 'beta', True, 'allocation.json'),
+                ('frankel', 'beta', False, None)):
+            with self.subTest(device=device, channel=channel, promote=promote, allocation=allocation):
+                args = type('A', (), dict(draft_only=True, promote=promote, allocation=allocation))
+                with self.assertRaisesRegex(pipeline.CheckFailed, '--draft-only requires'):
+                    pipeline.publish(args, {}, dict(device=device, channel=channel), object())
+
+    def test_allocated_draft_completes_without_promote_or_finalize(self):
+        from unittest.mock import Mock, patch
+        repo, record, artifact, cand, args = self.setup()
+        args.promote = False
+        args.draft_only = True
+        args.artifact_dir = str(artifact)
+        (artifact/'pipeline-receipt.json').write_text(json.dumps(
+            dict(candidate=cand, manifestSha256='digest', simulated=False)))
+        (artifact/'assets').mkdir()
+        (artifact/'assets/releasekey.x509.pem').write_text('synthetic public certificate')
+        config = dict(target=dict(device='frankel'), identities=dict(
+            otaCertificateSha256='certificate', avbPublicKeySha256='digest'),
+            publication=dict(tag='frankel-{build}', channels=dict(beta=dict(promoteLatest=True))))
+        adapter = Mock(simulated=False)
+        adapter.publish.return_value = artifact/'downloaded-draft'
+        with patch.object(pipeline, 'sha256_file', return_value='digest'), \
+                patch.object(pipeline, 'cert_sha256', return_value='certificate'), \
+                patch.object(pipeline, 'manifest_tool') as verify:
+            report = pipeline.publish(args, config, cand, adapter)
+        self.assertFalse(report['promoted'])
+        self.assertEqual(report['draft'], 'verified')
+        adapter.publish.assert_called_once()
+        self.assertTrue(adapter.publish.call_args.kwargs['fresh'])
+        adapter.promote.assert_not_called()
+        adapter.finalize_public.assert_not_called()
+        self.assertEqual(verify.call_count, 3)
+
     def test_existing_tag_is_never_reconciled_or_overwritten(self):
         calls = []
 
@@ -560,6 +613,7 @@ class Workflow(unittest.TestCase):
                 if ok:
                     args = capture.read_text().splitlines()
                     self.assertEqual('--promote' in args, promoted)
+                    self.assertEqual('--draft-only' in args, not promoted)
                     self.assertEqual('--allocation' in args, change.get('MODE', 'latest-beta') == 'latest-beta')
         self.assertIn("DRAFT_ONLY: ${{ inputs.mode == 'latest-draft' }}", WORKFLOW)
         self.assertIn("if: always() && inputs.mode == 'latest-beta' && inputs.campaign != ''", WORKFLOW)

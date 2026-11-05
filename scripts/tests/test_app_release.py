@@ -38,7 +38,7 @@ WORKFLOW = (ROOT/'.github/workflows/os-release.yml').read_text()
 # + RELEASE020 M2/M2c: opt-in packaging and the default-off dedicated-signer route (publisher also needs signed-builder)
 # + latest-draft: same allocator/signing jobs, allocation-bound unpublished draft; behavioral tests in test_release_allocate.
 OS_JOBS_AT_BASE = {'builder': '990899e120abc4d6fa3e3477cb878b0843f0de78755a8ae34ba5f8ec823d0136',
-    'publisher': '259c984eb7544af3fefca423e6f12314b1dff3e6ce4cf65b495445929afcbd8f'}
+    'publisher': 'f2c53fc786f3e51c0b4c5f81491b25d2a2992409b06730ddf7482aa6dd9985ca'}
 
 def script(path, body):
     path.write_text('#!/usr/bin/env python3\n' + textwrap.dedent(body))
