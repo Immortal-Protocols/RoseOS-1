@@ -74,7 +74,44 @@ diff --git a/services/companion/java/com/android/server/companion/virtual/comput
 diff --git a/services/companion/java/com/android/server/companion/virtual/computercontrol/ComputerControlSessionImpl.java b/services/companion/java/com/android/server/companion/virtual/computercontrol/ComputerControlSessionImpl.java
 --- a/services/companion/java/com/android/server/companion/virtual/computercontrol/ComputerControlSessionImpl.java
 +++ b/services/companion/java/com/android/server/companion/virtual/computercontrol/ComputerControlSessionImpl.java
-@@ -678,10 +678,24 @@
+@@ -16,6 +16,7 @@
+ 
+ package com.android.server.companion.virtual.computercontrol;
+ 
++import static android.app.ActivityTaskManager.INVALID_TASK_ID;
+ import static android.app.Notification.FLAG_COMPUTER_CONTROL;
+ import static android.companion.virtual.VirtualDeviceParams.DEVICE_POLICY_CUSTOM;
+ import static android.companion.virtual.VirtualDeviceParams.POLICY_TYPE_AUDIO;
+@@ -31,7 +32,9 @@
+ import android.annotation.Nullable;
+ import android.annotation.SuppressLint;
+ import android.annotation.UserIdInt;
++import android.app.ActivityManager;
+ import android.app.ActivityOptions;
++import android.app.ActivityTaskManager;
+ import android.app.AppOpsManager;
+ import android.app.KeyguardManager;
+ import android.app.Notification;
+@@ -73,6 +76,7 @@
+ import android.os.UserHandle;
+ import android.text.TextUtils;
+ import android.util.ArraySet;
+ import android.util.Slog;
++import android.util.SparseBooleanArray;
+ import android.view.DisplayInfo;
+ import android.view.KeyEvent;
+@@ -230,6 +234,10 @@
+     @GuardedBy("mAllowlistedPackages")
+     private final Set<String> mAllowlistedPackages = new ArraySet<>();
+ 
++    /** RoseOS (F06): the owner's tasks this workspace took over, and whether each was in the foreground. */
++    @GuardedBy("mTakenOverTasks")
++    private final SparseBooleanArray mTakenOverTasks = new SparseBooleanArray();
++
+     /** Task IDs that are authorized for content visibility. */
+     @GuardedBy("mAllowedTaskIds")
+     private final Set<Integer> mAllowedTaskIds = new ArraySet<>();
+@@ -678,13 +686,108 @@
          // launch request comes in for a package that's not allowed to launch.
          final Bundle options =
                  ActivityOptions.makeBasic().setLaunchDisplayId(mVirtualDisplayId).toBundle();
@@ -83,27 +120,111 @@ diff --git a/services/companion/java/com/android/server/companion/virtual/comput
 -                mRequest.attributionSource().getAttributionTag(), intent, null,
 -                Intent.FLAG_ACTIVITY_NEW_TASK, options, mRequest.ownerUserId()));
 +        Binder.withCleanCallingIdentity(() -> {
-+            // Do not move or reuse an app that the user is currently viewing.
++            // RoseOS (F06): an app the owner already has open, in the foreground or not, moves into this
++            // workspace as the same task with its state; Android reuses that task. Only an app shown in another
++            // workspace stays where it is.
 +            final List<ActivityAssistInfo> foreground =
 +                    mActivityTaskManagerInternal.getTopVisibleActivities(mMainDisplayId);
 +            if (foreground == null) {
 +                throw new IllegalStateException("foreground_state_unavailable");
 +            }
-+            for (ActivityAssistInfo visible : foreground) {
-+                if (visible != null && visible.getComponentName() != null
-+                        && packageName.equals(visible.getComponentName().getPackageName())) {
-+                    throw new IllegalStateException("target_in_foreground: " + packageName);
++            final boolean visible = showsPackage(foreground, packageName);
++            for (int displayId : mDisplayManagerGlobal.getDisplayIds()) {
++                if (displayId != mMainDisplayId && displayId != mVirtualDisplayId && showsPackage(
++                        mActivityTaskManagerInternal.getTopVisibleActivities(displayId), packageName)) {
++                    throw new IllegalStateException("target_in_other_session: " + packageName);
 +                }
 +            }
++            final int existing = taskOf(packageName, mMainDisplayId);
++            final boolean sameSession = existing == INVALID_TASK_ID
++                    && taskOf(packageName, mVirtualDisplayId) != INVALID_TASK_ID;
 +            mActivityTaskManagerInternal.startActivityAsUser(
 +                    mRequest.appThread(), mRequest.ownerPackageName(),
 +                    mRequest.attributionSource().getAttributionTag(), intent, null,
 +                    Intent.FLAG_ACTIVITY_NEW_TASK, options, mRequest.ownerUserId());
++            if (existing != INVALID_TASK_ID) {
++                synchronized (mTakenOverTasks) {
++                    mTakenOverTasks.put(existing, visible);
++                }
++            }
++            Slog.i(TAG, "launch disposition=" + (existing != INVALID_TASK_ID
++                    ? (visible ? "foreground" : "background") : sameSession ? "same_session" : "closed")
++                    + " task=" + existing + " from=" + mMainDisplayId + " to=" + mVirtualDisplayId);
 +        });
          mStatsController.onApplicationLaunched(packageName);
      }
  
-@@ -1033,6 +1047,10 @@
++    private static boolean showsPackage(@Nullable List<ActivityAssistInfo> activities,
++            @NonNull String packageName) {
++        if (activities == null) {
++            return false;
++        }
++        for (ActivityAssistInfo activity : activities) {
++            if (activity != null && activity.getComponentName() != null
++                    && packageName.equals(activity.getComponentName().getPackageName())) {
++                return true;
++            }
++        }
++        return false;
++    }
++
++    /** The owner's task of packageName on displayId (its root activity's package), or INVALID_TASK_ID. */
++    private int taskOf(@NonNull String packageName, int displayId) {
++        for (ActivityManager.RunningTaskInfo task : tasksOn(displayId)) {
++            if (task.baseActivity != null && packageName.equals(task.baseActivity.getPackageName())
++                    && task.userId == mRequest.ownerUserId()) {
++                return task.taskId;
++            }
++        }
++        return INVALID_TASK_ID;
++    }
++
++    private static List<ActivityManager.RunningTaskInfo> tasksOn(int displayId) {
++        try {
++            final List<ActivityManager.RunningTaskInfo> tasks = ActivityTaskManager.getService().getTasks(
++                    Integer.MAX_VALUE, /* filterOnlyVisibleRecents= */ false, /* keepIntentExtra= */ false,
++                    displayId);
++            return tasks == null ? List.of() : tasks;
++        } catch (RemoteException e) {
++            return List.of();
++        }
++    }
++
++    /**
++     * RoseOS (F06): the owner's own apps that this workspace took over go back to the main display, the
++     * foreground one on top, instead of being destroyed with this private display. Hand-over moves them first.
++     */
++    private void returnTakenOverTasks() {
++        final SparseBooleanArray taken;
++        synchronized (mTakenOverTasks) {
++            taken = mTakenOverTasks.clone();
++            mTakenOverTasks.clear();
++        }
++        if (taken.size() == 0) {
++            return;
++        }
++        Binder.withCleanCallingIdentity(() -> {
++            final List<ActivityManager.RunningTaskInfo> here = tasksOn(mVirtualDisplayId);
++            for (int i = 0; i < taken.size(); i++) {
++                final int taskId = taken.keyAt(i);
++                if (here.stream().noneMatch(task -> task.taskId == taskId)) {
++                    continue;
++                }
++                try {
++                    ActivityTaskManager.getService().moveRootTaskToDisplayOnTopOrBottom(taskId,
++                            mMainDisplayId, /* onTop= */ taken.valueAt(i));
++                    Slog.i(TAG, "returned task=" + taskId + " to=" + mMainDisplayId);
++                } catch (RemoteException | RuntimeException e) {
++                    Slog.w(TAG, "Could not return task=" + taskId + " to=" + mMainDisplayId, e);
++                }
++            }
++        });
++    }
++
+     @Override
+     public void handOverApplications() {
+         Binder.withCleanCallingIdentity(
+@@ -1033,6 +1136,10 @@
              return false;
          }
  
@@ -114,14 +235,10 @@ diff --git a/services/companion/java/com/android/server/companion/virtual/comput
          // Limit screenshots to the task of allowlisted packages of the automated apps.
          // In the Blocked state, this check ensures the agent only sees authorized content.
          synchronized (mAllowedTaskIds) {
-@@ -1078,6 +1096,25 @@
-                 }
-                 mIsWaitingForScreenshotResult = false;
-                 trackWindowDrawFinishLocked();
-+            }
-+        }
-+    }
-+
+@@ -1082,6 +1189,25 @@
+         }
+     }
+ 
 +    private void refreshVisibleTaskForScreenshot() {
 +        final List<ActivityAssistInfo> activities =
 +                mActivityTaskManagerInternal.getTopVisibleActivities(mVirtualDisplayId);
@@ -137,6 +254,18 @@ diff --git a/services/companion/java/com/android/server/companion/virtual/comput
 +            mIsTopActivityScreenshotAllowed = top == null ? null : allowed;
 +            if (allowed) {
 +                mAllowedTaskIds.add(top.getTaskId());
-             }
-         }
-     }
++            }
++        }
++    }
++
+     /** Retrieves the Task ID for the top activity on a given display. */
+     private int getTopTaskId(int displayId) {
+         List<ActivityAssistInfo> topActivities =
+@@ -1156,6 +1282,7 @@
+         mSessionTimeoutTimer.close();
+         mAudioInjector.stopAudioInjection();
+         mAudioCapture.stopAudioCapture();
++        returnTakenOverTasks();
+         mVirtualDevice.close(); // closes also the VirtualAudioDevice
+         mRequest.appToken().unlinkToDeath(this, 0);
+         makeSessionNotificationCancellable();
