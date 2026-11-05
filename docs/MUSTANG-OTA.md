@@ -27,7 +27,12 @@ phone verification is optional; no phone action is authorized by this record.
 The existing [one-button route](OS-RELEASE.md#mustang-one-button-ota-mustang-ota-manual)
 from PR #529 is used once: `os-release.yml@main`, mode `mustang-ota`,
 `mustang_publish_ota=true`, other inputs default. Automatic publication stays off.
-The recorded read window still expires `2026-11-05T06:20:18Z` and is not extended.
+Signing read access no longer has a window. Nathan granted the existing signer an
+unconditional `secretAccessor` binding on both existing Mustang secrets. Existing Dev
+Infra read the two bindings back (IAM metadata only) at **2026-11-05T01:17:39Z**, and
+`signingAccess` now points to that readback (`os/ota/mustang-access-readback-unconditional.json`)
+with `expiresAt: null`. The earlier window, `2026-11-05T06:20:18Z`, no longer limits
+signing. Release read no IAM policy and changed none.
 
 Both host paths now name Frankel **2026110403**, producer **41873084560**, source
 `4e85677ee273630a79eae195e0a044d75226e122`. Its downloaded allocation artifact
@@ -294,6 +299,16 @@ variables remain unchanged.
    automatically. No new key, secret version or bootstrap permission was added.
    Later unattended signing requires an explicitly approved access period;
    this implementation always stops outside its recorded window.
+   **Superseded on 2026-11-05:** both secrets now grant the existing signer an
+   unconditional `secretAccessor`. This was read back from IAM metadata at
+   2026-11-05T01:17:39Z; older conditional bindings remain and do not expire it.
+   `signingAccess.expiresAt` is therefore `null`. `mustang_ota.guard` accepts that
+   only when `approvalRef` is a committed `os/ota` readback recording exactly those
+   two secrets, the role, the signer from
+   `os/signing-bootstrap/mustang-access-binding.json`, and no condition or expiry.
+   A recorded window is still enforced with its 30-minute margin. Unattended
+   signing still also needs `automationEnabled` and `MUSTANG_OTA_AUTO`, which
+   stay off.
 3. **Producer complete:** existing `os-release.yml@main` run 41750459835 used
    `mode=mustang-build`, `mustang_publish_ota=true`, with `candidate_sha` empty.
    The actual baseline inspection passed before preparation/compile. Native

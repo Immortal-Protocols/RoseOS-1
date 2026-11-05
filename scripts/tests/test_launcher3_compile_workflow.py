@@ -114,6 +114,21 @@ class Job(unittest.TestCase):
             with self.subTest(change=change):
                 self.assertNotEqual(run(**change), 0)
 
+    def test_an_interrupted_stage_ends_inside_the_outer_kill_after_and_a_cancels_sigint_window(self):
+        """An interrupt is noticed within POLL_SECONDS; then TERM, then KILL, each phase INTERRUPT_GRACE_SECONDS and one
+        more poll at most. That must fit, with margin, inside the outer timeout's kill-after and inside the 7.5 s a
+        cancel's SIGINT leaves before the runner's SIGTERM."""
+        # the step execs timeout, so a cancel's signal reaches it and it forwards the signal to the helper
+        line = re.search(r'run: exec timeout --kill-after=(\d+)s "\$\{OUTER_SECONDS\}s" python3 scripts/launcher3-compile.py run ',
+                         jobs()[MODE])
+        self.assertIsNotNone(line)
+        # A stop already under way must not restart these phases in stage_failed (the adapter's fake-clock
+        # stop/leftover tests exercise that path). Allow the confirmation scan's extra poll as well.
+        worst = adapter.POLL_SECONDS + 2 * (adapter.INTERRUPT_GRACE_SECONDS + adapter.POLL_SECONDS) + adapter.POLL_SECONDS
+        self.assertLessEqual(worst + 5, int(line[1]))
+        self.assertEqual(adapter.CANCEL_SIGTERM_SECONDS, 7.5)  # GitHub's documented cancel: SIGINT, 7500 ms, SIGTERM
+        self.assertLessEqual(worst + 1, adapter.CANCEL_SIGTERM_SECONDS)
+
     def test_guard_outputs_match_the_adapter_bounds(self):
         # every lunch is the contract's (definitions.lunch): its inputs and the admitted fetch come before lunch and m;
         # the candidate branch checks its tree pins twice (base-exact, final-exact)

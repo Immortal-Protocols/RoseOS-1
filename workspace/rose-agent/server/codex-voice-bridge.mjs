@@ -6,6 +6,9 @@ const sessions = new Map(), calls = new Map();
 let nextCall = 0;
 const send = value => process.stdout.write(JSON.stringify(value)+'\n');
 const fail = () => ({success:false,contentItems:[{type:'inputText',text:'Tool unavailable or cancelled.'}]});
+// The model was answered fail() for this call (interrupt or timeout): its own result will be dropped, so rose.app learns
+// which calls those were (a phone action that still finished is then reported on a later turn).
+const cancelled = (session,callId) => send({session,event:'tool_cancelled',callId});
 async function handle(m) {
  if(m.op==='tool_result') {
   const call=calls.get(m.callId);
@@ -19,7 +22,7 @@ async function handle(m) {
    developerInstructions:m.instructions,dynamicTools:m.tools.map(tool=>({type:'function',...tool})),
    handleToolCall:params=>new Promise(resolve=>{
     const callId=String(++nextCall);
-    const timer=setTimeout(()=>{calls.delete(callId);resolve(fail());},60000);
+    const timer=setTimeout(()=>{calls.delete(callId);resolve(fail());cancelled(m.session,callId);},60000);
     calls.set(callId,{resolve,timer,session:m.session});
     publish({event:'tool',callId,params});
    })});
@@ -37,7 +40,7 @@ async function handle(m) {
  if(!c)throw Error('Unknown session');
  if(m.op==='submit')return c.submit(m.text,{model:c.selectedModel,effort:'medium',serviceTier:c.serviceTier});
  if(m.op==='interrupt') {
-  for(const [id,call] of calls)if(call.session===m.session){clearTimeout(call.timer);call.resolve(fail());calls.delete(id);}
+  for(const [id,call] of calls)if(call.session===m.session){clearTimeout(call.timer);call.resolve(fail());calls.delete(id);cancelled(m.session,id);}
   return c.interruptForModelSwitch();
  }
  if(m.op==='close'){c.close();sessions.delete(m.session);return {};}

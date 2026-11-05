@@ -23,6 +23,8 @@ public final class AgentTrayService extends Service {
  private final Handler main=new Handler(Looper.getMainLooper());
  private final Map<IBinder,Messenger> clients=new HashMap<>();
  private final Map<IBinder,IBinder.DeathRecipient> deaths=new HashMap<>();
+ /** F08 (RoseChin): registered clients whose latest REGISTER declared the Rose chin reachable. */
+ private final Set<IBinder> chinReachable=new HashSet<>();
  private final Messenger endpoint=new Messenger(new Handler(Looper.getMainLooper()) {
   @Override public void handleMessage(Message m){receive(m);}
  });
@@ -47,6 +49,7 @@ public final class AgentTrayService extends Service {
     try{binder.linkToDeath(death,0);}catch(RemoteException e){return;}
     deaths.put(binder,death);clients.put(binder,m.replyTo);
    }
+   if(RoseChin.declaresReachable(m.what,m.arg2))chinReachable.add(binder);else chinReachable.remove(binder);
    send(m.replyTo,state(this));
    main.removeCallbacks(poll);main.post(poll);return;
   }
@@ -60,6 +63,8 @@ public final class AgentTrayService extends Service {
   else if(m.what==START){try{startForegroundService(new Intent(this,VoiceService.class).setAction(action));}catch(RuntimeException e){android.util.Log.w("AgentTray","Voice start unavailable",e);}}
   publish(true);
  }
+ /** F08: true while a registered trusted client has declared the Rose chin reachable (RoseChin). */
+ static boolean chinReachable(){AgentTrayService service=instance;return service!=null&&!service.chinReachable.isEmpty();}
  /** True while the platform SystemUI tray client is bound; the app-side glow then stays hidden. */
  static boolean systemTrayRegistered(){AgentTrayService service=instance;return service!=null&&!service.clients.isEmpty();}
  /** v1 state from the same ConversationState the conversation surface renders; no status-text inference. */
@@ -89,7 +94,7 @@ public final class AgentTrayService extends Service {
   try{client.send(response);}catch(RemoteException e){removeClient(client.getBinder());}
  }
  private void removeClient(IBinder binder){
-  clients.remove(binder);IBinder.DeathRecipient death=deaths.remove(binder);
+  clients.remove(binder);chinReachable.remove(binder);IBinder.DeathRecipient death=deaths.remove(binder);
   if(death!=null)binder.unlinkToDeath(death,0);
   if(clients.isEmpty())main.removeCallbacks(poll);
  }

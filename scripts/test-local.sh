@@ -72,6 +72,7 @@ python3 os/tests/test_frankel_lunch_inputs.py
 python3 os/tests/test_automated_devices_contract.py
 python3 os/tests/test_rose_edge_shell.py
 python3 os/tests/test_background_control_prototype.py
+python3 os/tests/test_anyapp_takeover_platform.py
 python3 scripts/tests/test_systemui_component_update.py
 python3 os/tests/persistent-app-experiment/test_systemui_stages.py
 python3 os/tests/persistent-app-experiment/test_setup_emulator.py
@@ -91,6 +92,8 @@ python3 scripts/tests/test_mustang_ota_chain_workflow.py
 # Yogi OTA route: contract, guards, allocation, packaged-Updater/trust and publication checks (synthetic; no host, key or network).
 python3 scripts/tests/test_yogi_ota.py
 python3 scripts/tests/test_agent_beta_auto.py
+# 1F daily release dispatcher (canned API answers; no network, token, dispatch or host).
+python3 scripts/tests/test_daily_release.py
 python3 scripts/tests/test_release_transport.py
 python3 scripts/tests/test_release_acceptance.py
 python3 scripts/tests/test_signing_job.py
@@ -100,6 +103,8 @@ python3 scripts/tests/test_rango_retained.py
 python3 scripts/tests/test_github_publisher.py
 python3 scripts/tests/test_host_adapters.py
 python3 scripts/tests/test_host_build_reconcile.py
+python3 scripts/tests/test_builder_reclaim.py
+python3 scripts/tests/test_app_inputs_export.py
 python3 scripts/tests/test_actions_gcp_login.py
 python3 scripts/tests/test_app_release.py
 python3 scripts/tests/test_app_release_publisher.py
@@ -143,6 +148,7 @@ python3 scripts/tests/test_factory_targets.py
 python3 scripts/tests/test_models_signing_bootstrap.py
 python3 scripts/tests/test_models_apk_signing.py
 python3 scripts/tests/test_models_publication.py
+python3 scripts/tests/test_models_app_not_bundled.py
 python3 scripts/tests/test_alpha_runtime.py
 python3 scripts/tests/test_emulator_alpha.py
 python3 scripts/tests/test_alpha_source.py
@@ -199,6 +205,10 @@ java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-option
  os/background-control/agent-pip/src/dev/pixel/backgroundcontrol/CurrentApps.java \
  os/background-control/agent-pip/src/dev/pixel/backgroundcontrol/ViewerStop.java os/background-control/tests/MultiSessionTest.java
 java -cp "$JAVA_TESTS/MultiSession" dev.pixel.backgroundcontrol.MultiSessionTest
+# F06: the controller never takes the owner's Home or recents (HomeTarget).
+java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/HomeTarget" \
+ os/background-control/agent-pip/src/dev/pixel/backgroundcontrol/HomeTarget.java os/background-control/tests/HomeTargetTest.java
+java -cp "$JAVA_TESTS/HomeTarget" dev.pixel.backgroundcontrol.HomeTargetTest
 # SystemUI tray tap mapping; compiled alone like the controller tests above.
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/AgentStatusControls" \
  os/overlays/frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/AgentStatusControls.java \
@@ -223,6 +233,9 @@ java -cp "$JAVA_TESTS/ConversationState" dev.pixel.voice.ConversationStateTest
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/MicInputCapture" \
  workspace/rose-agent/app/src/dev/pixel/voice/MicInputCapture.java workspace/rose-agent/app/tests/MicInputCaptureTest.java
 java -cp "$JAVA_TESTS/MicInputCapture" dev.pixel.voice.MicInputCaptureTest
+java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/ClipboardWrite" \
+ workspace/rose-agent/app/src/dev/pixel/voice/ClipboardWrite.java workspace/rose-agent/app/tests/ClipboardWriteTest.java
+java -cp "$JAVA_TESTS/ClipboardWrite" dev.pixel.voice.ClipboardWriteTest
 # Independent Rose visual axes (connection, microphone, voice) derived from ConversationState.
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/RoseVisualState" \
  workspace/rose-agent/app/src/dev/pixel/voice/ConversationState.java workspace/rose-agent/app/src/dev/pixel/voice/RoseVisualState.java \
@@ -255,6 +268,13 @@ java -cp "$JAVA_TESTS/HomeOverview" dev.pixel.voice.HomeOverviewTest
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/HomeAppLayout" \
  workspace/rose-agent/app/src/dev/pixel/voice/HomeAppLayout.java workspace/rose-agent/app/tests/HomeAppLayoutTest.java
 java -cp "$JAVA_TESTS/HomeAppLayout" dev.pixel.voice.HomeAppLayoutTest
+java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/HomePlan" \
+ workspace/rose-agent/app/src/dev/pixel/voice/HomeAppLayout.java workspace/rose-agent/app/src/dev/pixel/voice/HomePlan.java \
+ workspace/rose-agent/app/tests/HomePlanTest.java
+java -cp "$JAVA_TESTS/HomePlan" dev.pixel.voice.HomePlanTest
+java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/AppRemoval" \
+ workspace/rose-agent/app/src/dev/pixel/voice/AppRemoval.java workspace/rose-agent/app/tests/AppRemovalTest.java
+java -cp "$JAVA_TESTS/AppRemoval" dev.pixel.voice.AppRemovalTest
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/HomeAppGroups" \
  workspace/rose-agent/app/src/dev/pixel/voice/HomeAppGroups.java workspace/rose-agent/app/tests/HomeAppGroupsTest.java
 java -cp "$JAVA_TESTS/HomeAppGroups" dev.pixel.voice.HomeAppGroupsTest
@@ -264,6 +284,9 @@ java -cp "$JAVA_TESTS/HomeRoseLaunch" dev.pixel.voice.HomeRoseLaunchTest
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/RoseMicInput" \
  workspace/rose-agent/app/src/dev/pixel/voice/RoseMicInput.java workspace/rose-agent/app/tests/RoseMicInputTest.java
 java -cp "$JAVA_TESTS/RoseMicInput" dev.pixel.voice.RoseMicInputTest
+java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/RoseChin" \
+ workspace/rose-agent/app/src/dev/pixel/voice/RoseChin.java workspace/rose-agent/app/tests/RoseChinTest.java
+java -cp "$JAVA_TESTS/RoseChin" dev.pixel.voice.RoseChinTest
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/GestureContract" \
  workspace/rose-agent/app/src/dev/pixel/voice/GestureContract.java workspace/rose-agent/app/tests/GestureContractTest.java
 java -cp "$JAVA_TESTS/GestureContract" dev.pixel.voice.GestureContractTest

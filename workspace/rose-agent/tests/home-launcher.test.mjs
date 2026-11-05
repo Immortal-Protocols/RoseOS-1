@@ -36,7 +36,7 @@ test('HOME and the app icon land on Rose Home; the icon opens the Rose conversat
  assert.ok(!/voicePage|widgetsPage|HomePages\.(voice|widgets)\(/.test(main),'no legacy page index remains');
  // Cold start routes only a fresh intent; recreation (saved state) keeps the saved page, never reopening the conversation.
  assert.match(main,/home\(\);showHomeFor\(getIntent\(\),b==null\);showSettingsFor\(getIntent\(\)\);if\(b!=null&&b\.containsKey\("home-page"\)&&launcherPager!=null\)launcherPager\.showPage\(HomePages\.restore\(b\.getInt\("home-page"\),launcherPager\.getChildCount\(\)\),false\);/);
- assert.match(main,/onNewIntent\(Intent i\)\{super\.onNewIntent\(i\);int previous=launcherPager==null\?-1:launcherPager\.currentPage\(\);boolean homeShown=!homeStopped;if\(!reuseHome\(i\)\)home\(\);showHomeFor\(i,true,previous,homeShown\);showSettingsFor\(i\);gestureContract\(i,homeShown\);\}/);
+ assert.match(main,/onNewIntent\(Intent i\)\{super\.onNewIntent\(i\);RoseConversationActivity\.closeTask\(\);int previous=launcherPager==null\?-1:launcherPager\.currentPage\(\);boolean homeShown=!homeStopped;if\(!reuseHome\(i\)\)home\(\);showHomeFor\(i,true,previous,homeShown\);showSettingsFor\(i\);gestureContract\(i,homeShown\);\}/);
  const route=main.slice(main.indexOf('void showHomeFor(Intent intent,boolean fresh,int previous,boolean homeShown)'));
  assert.match(route,/^void showHomeFor\(Intent intent,boolean fresh,int previous,boolean homeShown\)\{if\(intent==null\)return;HomeEntry entry=HomeEntry\.of\(Intent\.ACTION_MAIN\.equals\(intent\.getAction\(\)\),intent\.hasCategory\(Intent\.CATEGORY_HOME\),intent\.hasCategory\(Intent\.CATEGORY_LAUNCHER\),fresh,\(intent\.getFlags\(\)&Intent\.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY\)!=0,DeviceIdentity\.paired\(this\)\);if\(entry\.showHome\)\{closeVoiceControls\(\);closeSystemFolder\(\);\}if\(entry\.showHome&&launcherPager!=null\)launcherPager\.showPage\(HomePages\.target\(true,!intent\.hasCategory\(Intent\.CATEGORY_HOME\),homeShown,previous,launcherPager\.currentPage\(\),launcherPager\.getChildCount\(\)\),false\);if\(entry\.openConversation\)openRoseConversation\(\);\}/);
  assert.match(main,/void showHomeFor\(Intent intent,boolean fresh\)\{showHomeFor\(intent,fresh,-1,true\);\}/);
@@ -104,8 +104,16 @@ test('app pages sit on the shared wallpaper with one fixed row of dots and no dr
  assert.equal((main.match(/makePageDots\(titles\)/g)||[]).length,1);
  assert.match(homeFrame,/tray\.heightPx\(\) \+ Math\.round\(HomeAppLayout\.BAND_BOTTOM_DP \* tray\.density\)\)\);/);
  assert.match(homeFrame,/addView\(dots, dotsParams\);/);
- // A re-measure re-plans once, then only when the real capacity changes.
- assert.match(main,/if\(!HomeAppLayout\.replan\(appColumns,appPerPage,width,height,cell,getResources\(\)\.getDisplayMetrics\(\)\.density\)\)return;\n  if\(width==appAreaWidth&&height==appAreaHeight&&cell==appCellHeight\)return;/);
+ // F01 (HomePlan): every measurement is recorded, even one that fits the plan; a re-plan waits for the reports to
+ // settle, happens only when the latest viewport no longer fits, and never flips straight back (Breaker).
+ assert.match(main,/void homeMeasured\(int width,int height,float cell\)\{homeViewport\.record\(width,height,cell\);settleHomePlan\(\);\}/);
+ assert.match(main,/void appPageMeasured\(int width,int height,float cell\)\{appViewport\.record\(width,height,cell\);settleHomePlan\(\);\}/);
+ assert.match(main,/if\(homePlanCheck!=null\)handler\.removeCallbacks\(homePlanCheck\);/,'one pending check, re-armed by each report');
+ assert.match(main,/handler\.postDelayed\(homePlanCheck,HomePlan\.SETTLE_MS\);/);
+ assert.match(main,/homeTray\.release\(\);if\(homePlanCheck!=null\)\{handler\.removeCallbacks\(homePlanCheck\);homePlanCheck=null;\}/,'a destroyed Home re-plans nothing');
+ assert.match(main,/if\(!homePlanStale\(\)\)\{replanPending=false;return;\}/,'a settled viewport that fits the plan never rebuilds');
+ assert.match(main,/if\(homePlanBreaker\.allow\(current,HomePlan\.key\(homeColumns,homeCapacity,appColumns,appPerPage\),SystemClock\.elapsedRealtime\(\)\)\)attachLauncherPages\(true\);/);
+ assert.doesNotMatch(main,/appAreaWidth|homeAreaWidth|attachLauncherPages\(true\);\}\);\n \}/,'the old drop-if-it-fits rule is gone');
  // Launch and return are unchanged: every tile opens its own app through WorkspaceLauncher (closing the folder first).
  assert.match(main,/tile\.setOnClickListener\(v->\{closeSystemFolder\(\);WorkspaceLauncher\.open\(this,app,label\);\}\);/);
  // The pager's gesture decisions are HomePages' tested ones.
@@ -140,7 +148,9 @@ test('the Rose entry opens App\'s conversation activity and only navigates',()=>
  assert.equal(hook,'startActivity(new Intent(this,RoseConversationActivity.class));');
  const activity=manifest.match(/<activity android:name="\.RoseConversationActivity"[^>]*\/>/)[0];
  assert.match(activity,/android:exported="false"/);
- assert.ok(!/launchMode|taskAffinity/.test(activity),'stays in the launcher task so HOME and Back return Home');
+ // F08: its own excluded task (so the OS chin can rise over it); HOME and Back still return Home because every new
+ // intent to Home closes it first (pinned in the F08 test), and Recents still never lists it.
+ assert.match(activity,/android:taskAffinity="dev\.pixel\.voice\.conversation" android:launchMode="singleTask" android:excludeFromRecents="true"/);
  for(const forbidden of ['VoiceService','command(','toggleVoice','startForegroundService','"talk"','"end"','"mute"'])
   for(const [name,src] of [['RoseHomeView',home],['HomeTray',homeTray],['HomeFrame',homeFrame],['HomeRose',homeRose]])assert.ok(!src.includes(forbidden),name+': '+forbidden);
  // The conversation surface sends voice commands only from its own controls, never on open.
@@ -217,7 +227,8 @@ test('an unchanged HOME or app-icon return reuses the built Home; changes rebuil
  for(const field of ['screenWidthDp','screenHeightDp','densityDpi','orientation','fontScale','uiMode','getLocales().toLanguageTags()'])assert.ok(main.includes('c.'+field),field);
  assert.match(main,/RoseHomeView\.dockRolePackages\(getPackageManager\(\),getPackageName\(\)\)\);\}/);
  // Home is built from the same role list the stamp compares.
- assert.match(home,/ArrayList<String> wanted = new ArrayList<>\(dockRolePackages\(pm, self\)\);/);
+ // F04: each default-role holder is placed through HomeAppGroups.homeRole (never GrapheneOS Messaging on main Home).
+ assert.match(home,/for \(String pkg : dockRolePackages\(pm, self\)\) wanted\.add\(HomeAppGroups\.homeRole\(pkg\)\);/);
 });
 
 test('Home\'s edge stays fixed over the swiping pages and reaches the screen bottom (OS-HIFI-HOME-001, #410)',()=>{
@@ -464,7 +475,7 @@ test('system and duplicate apps leave the app pages for one "…" System folder 
  assert.match(pages,/else \(group==HomeAppGroups\.SYSTEM\?systemApps:fromPlayStore\(packageName\)\?storeApps:otherApps\)\.add\(app\);/);
  const groups=read('../app/src/dev/pixel/voice/HomeAppGroups.java');
  assert.match(groups,/KEEP_OUT = \{"com\.anthropic\.claude", "com\.openai\.chatgpt", "com\.amazon\.mShop\.android\.shopping"\};/);
- assert.match(groups,/if \(has\(KEEP_OUT, packageName\)\) return MAIN;\n  if \(suite\) return SUITE;/);
+ assert.match(groups,/if \(has\(KEEP_OUT, packageName\)\) return MAIN;\n  if \(has\(RETIRED, packageName\)\) return SYSTEM;\n  if \(suite\) return SUITE;/);
  // Home's default apps come from every launchable app, the folder's included.
  assert.match(pages,/RoseHomeView\.homeApps\(getPackageManager\(\),getPackageName\(\),launchable,false\)/);
  assert.match(pages,/int\[\] share=HomeAppLayout\.homeShare\(curated\.size\(\),!folderApps\.isEmpty\(\),rest\.size\(\),homeCapacity\);/);
@@ -536,8 +547,38 @@ test('#410 gesture_nav_contract_v1: a RectF-only reply to the verified recents c
  assert.equal((g.match(/decor\.getViewTreeObserver\(\)\.removeOnPreDrawListener\(once\[0\]\)/g)||[]).length,2,'both removals on the window observer');
  assert.match(g,/handler\.post\(\(\)->sendGestureReply\(pager,tag,folder,reply,to\)\)/,'one message after the pre-draw');
  assert.match(main,/if\(pager!=launcherPager\|\|replanPending\|\|isFinishing\(\)\)return;/,'no target while Home is about to be rebuilt');
- assert.equal((main.match(/Height=cell;replanPending=true;\n  handler\.post\(\(\)->\{if\(launcherPager!=null&&!isFinishing\(\)\)attachLauncherPages\(true\);\}\);/g)||[]).length,2,'both re-plans mark it');
+ assert.match(main,/void settleHomePlan\(\)\{\n  replanPending=homePlanStale\(\);/,'a measurement that no longer fits the plan marks it, for both grids');
  assert.match(main,/void attachLauncherPages\(boolean preservePage\)\{\n  replanPending=false;/,'a rebuild clears it');
+});
+
+// F08: the conversation in its own standard task (so the OS Rose chin can rise over it), closed by every new intent to
+// Home as when it shared Home's task; Rose's own mute gives way only to a declared-reachable chin, never a visible one.
+test('the conversation runs in its own task and keeps its mute until the Rose chin is reachable (F08)',()=>{
+ const manifest=read('../app/AndroidManifest.xml'),tray=read('../app/src/dev/pixel/voice/AgentTrayService.java'),
+  conv=read('../app/src/dev/pixel/voice/RoseConversationActivity.java'),chin=read('../app/src/dev/pixel/voice/RoseChin.java');
+ assert.match(manifest,/<activity android:name="\.RoseConversationActivity" android:exported="false" android:label="Rose Agent" android:taskAffinity="dev\.pixel\.voice\.conversation" android:launchMode="singleTask" android:excludeFromRecents="true"/,'own task, never exported, never in Recents');
+ assert.match(main,/public void onNewIntent\(Intent i\)\{super\.onNewIntent\(i\);RoseConversationActivity\.closeTask\(\);/,'every new intent to Home first clears the conversation, as singleTask did');
+ assert.match(conv,/static void closeTask\(\)\{RoseConversationActivity a=shown\.get\(\);if\(a!=null&&!a\.isFinishing\(\)\)a\.finishAndRemoveTask\(\);\}/);
+ assert.match(tray,/if\(RoseChin\.declaresReachable\(m\.what,m\.arg2\)\)chinReachable\.add\(binder\);else chinReachable\.remove\(binder\);/,'only inside the trusted REGISTER branch');
+ assert.ok(tray.indexOf('if(!trusted(m.sendingUid))return;')<tray.indexOf('RoseChin.declaresReachable'),'after the unchanged caller check');
+ assert.match(tray,/clients\.remove\(binder\);chinReachable\.remove\(binder\);/,'dropped on UNREGISTER and binder death');
+ assert.match(tray,/public static final int REGISTER=1,/);assert.match(chin,/static final int REGISTER = 1;/,'the same REGISTER');
+ assert.doesNotMatch(chin.replace(/\/\*[\s\S]*?\*\//g,''),/arg1/,'the visible-now marker (arg1) never counts');
+ assert.match(conv,/mic\.setVisibility\(state\.active\(\)&&RoseChin\.showInAppMute\(AgentTrayService\.chinReachable\(\),navigationMode\(\)\)\?View\.VISIBLE:View\.GONE\);/,'checked live with the navigation mode');
+ assert.match(conv,/getIdentifier\("config_navBarInteractionMode","integer","android"\)/);
+ const convEntry=manifest.match(/<activity android:name="\.RoseConversationActivity"[^>]*\/>/)[0];
+ assert.doesNotMatch(convEntry,/resizeableActivity="false"/,'stays resizeable, so the Shell can raise the chin over it');
+ assert.match(conv,/send\(state\.muted\?"tray_unmute":"tray_mute"\)/,'the mute itself is unchanged: input-only');
+});
+
+// F03: removal only through Android's own UI; the direct confirmation only while the permission is really held.
+test('a long press offers App info and Android\'s own uninstall route, never a silent removal (F03)',()=>{
+ const manifest=read('../app/AndroidManifest.xml');
+ assert.match(main,/tile\.setOnLongClickListener\(v->\{appOptions\(v,app,label\);return true;\}\);/);
+ assert.match(main,/checkSelfPermission\("android\.permission\.REQUEST_DELETE_PACKAGES"\)==PackageManager\.PERMISSION_GRANTED\);/);
+ assert.match(main,/route==AppRemoval\.Route\.CONFIRM\?new Intent\(Intent\.ACTION_DELETE,uri\):new Intent\(android\.provider\.Settings\.ACTION_APPLICATION_DETAILS_SETTINGS,uri\)/);
+ assert.doesNotMatch(main+read('../app/src/dev/pixel/voice/AppRemoval.java').replace(/\/\*[\s\S]*?\*\//g,''),/PackageInstaller|\.uninstall\(|deletePackage|pm uninstall|ACTION_UNINSTALL_PACKAGE/,'no silent or programmatic removal');
+ assert.doesNotMatch(manifest,/DELETE_PACKAGES/,'no delete permission declared (a bounded decision for Chief)');
 });
 
 // The Settings intent must not silently disappear when the Home anchor is absent/replaced.

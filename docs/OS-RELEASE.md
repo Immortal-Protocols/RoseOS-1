@@ -211,6 +211,127 @@ automatic STOP is Infra's fallback, and it is configured outside this repository
 builder again for delivery. Here, a compile that runs close to its 11-hour cap leaves the signer (190-minute cap)
 without time. If the STOP interrupts signing, nothing is published and the run fails. Start a new dispatch.
 
+## Builder storage: reclaiming regenerable build data (BUILDER-RECLAIM)
+
+The `builder`, `app-builder` and `mustang-build` jobs start with **Reclaim regenerable build data**
+(`scripts/builder-reclaim.py apply`) before they write. It removes only what
+`os/release-pipeline/storage/builder-reclaim.json` names, from the attempt storage `/home/pixelbuild/rose-actions`:
+
+- **`mustang-prep-<run>-<attempt>`, `blazer-prep-<run>-<attempt>`:** the copied `source/` and `downloads/`.
+  `source/releases`, which holds signed copies, always stays. The two newest Mustang preps and the newest Blazer
+  prep stay whole, so their own delivery can still read them.
+- **`launcher3-compile-<run>-<attempt>`:** `tree`, `out`, `home` and `tmp`, the same paths the harness's own
+  `finish` removes. This is the backstop for a run whose `finish` never ran.
+- **`app-`, `app-reuse-` and `cf-alpha*-<run>`, `device-readiness-<run>-<attempt>`:** per-run scratch, removed whole.
+  Its job removes it at the end; one left behind belongs to a killed job.
+- **`alpha-source/.staging-*`:** a killed preparation's partial copy.
+
+**Kept whole:** an entry any tracked file under `.github/workflows`, `os` or `scripts` names (a bound input, a
+recovery record, delivery evidence), the current run's entries, and each class's newest.
+
+**Never touched:**
+- the retained source tree with its `OUT_DIR` and `releases/`;
+- `frankel-<build>` attempts, whose names the allocator reads as used builds;
+- allocation ledgers and reconcile receipts;
+- Mustang sign, collect, package and OTA outputs, where the next OTA reads its baseline;
+- Rango and factory records, alpha preparations and operator-staged inputs.
+
+**How it runs:**
+- It holds the shared builder lock for the whole apply. If the lock is busy, it reclaims nothing.
+- Each path moves whole into `rose-actions/.reclaim-trash` and is removed there. A symlink is never followed,
+  moved or removed, and nothing on another filesystem is touched.
+- A killed apply leaves only the trash, and the next apply empties it first.
+- Receipts: `rose-actions/reclaim/NNNN-<label>.plan.json` before anything moves, and `NNNN-<label>.json` after,
+  with each item's outcome and the available bytes before and after.
+- Exit codes:
+  - **0:** it reclaimed, found nothing to do, or the lock was busy.
+  - **3:** refused. The storage root, trash or receipt directory is unsafe, and the job stops before it builds.
+  - **2:** invalid policy.
+
+**To preview without changing anything,** run this on the builder (read-only, no lock):
+`python3 scripts/builder-reclaim.py plan --measure`
+
+**To add a class,** it must be data a later run regenerates by itself. Name its producer and its readers in the
+policy. `scripts/tests/test_builder_reclaim.py` checks that no class matches a never-reclaimed store.
+
+## Signed app inputs for another builder (app-inputs-export, manual)
+
+`os-release.yml` mode `app-inputs-export`, with `build_number` set to one Frankel build, hands that build's three
+signed Rose apps and its background policy to another builder: Yogi, or Mustang on its own capacity. That builder then
+needs no new Frankel compile. The job `app-inputs-export` runs `scripts/host-app-inputs-export.py` on the original
+builder, under the nonblocking shared lock.
+
+**Producer:** the build must have exactly one committed Frankel allocation record (`roseos.latest-allocation.v1` in
+`os/latest-beta` or `os/ota`). That record names the candidate, run and app versions. For 2026110403 it is
+`os/ota/mustang-frankel-2026110403-allocation.json`.
+
+**Checks, without writing in the original attempt:**
+- the attempt's receipt chain is complete through transfer;
+- `release/signed-apps` holds exactly the nine files the app signing writes (APK, `.receipt.json` and v4 `.apk.idsig`
+  per app), each a regular file;
+- every receipt matches its bytes, signer and verification;
+- `aapt` and `apksigner`, run again here, read each allocated package, versionCode and exactly the app signer;
+- the policy pins exactly those bytes.
+The pins are the candidate-bundle contract (`os/build-only/mustang-reconcile.json` `candidateInputs`), and its signer
+must equal `frankel.json`'s app signer.
+
+**Output:** a private artifact `app-inputs-frankel-<build>-<run>-<attempt>`, kept 14 days. It holds `signed-apps/`
+(nine files), `background-policy.json`, the receipt `app-inputs-export.json` and `SHA256SUMS`. Any refusal uploads
+nothing. The job stops the builder afterwards only if its own controller started it.
+
+**One committed record:** after a run, Release commits the export as `os/app-inputs/frankel-<build>.json`
+(schema `roseos.app-inputs-record.v1`). The record is built only from the downloaded receipt and the run's actual
+metadata:
+
+`python3 scripts/app-inputs-verify.py record --receipt <dir>/app-inputs-export.json --run <id> --attempt <n> --artifact-name <name> --artifact-id <id> --artifact-digest sha256:<hex>`
+
+A consuming builder points its configuration at that record. While no record exists, the consumer stays unbound.
+
+**Consumer contract:**
+1. Download the record's exact artifact by run id and artifact id.
+2. Run `python3 scripts/app-inputs-verify.py verify --record os/app-inputs/frankel-<build>.json --dir <dir> --aapt <aapt> --apksigner <apksigner>`.
+   It checks:
+   - the record and its committed producer allocation;
+   - exactly the recorded files, with their sizes and digests;
+   - the receipt's digest and contents;
+   - `SHA256SUMS`;
+   - with your own tools, the exporter's inventory, receipt, identity and policy checks on the downloaded bytes.
+3. Use the set only after exit 0. The same nine-file inventory and policy rules apply on both sides.
+## Daily release dispatcher (1F, source only and off)
+
+`.github/workflows/daily-release.yml` runs `scripts/daily-release.py dispatch`. Once activated, it builds, signs,
+verifies and publishes each flavor once a day through that flavor's existing manual entry, as listed in
+`os/release-pipeline/lanes/daily.json`:
+
+| Lane | Entry and inputs | Delivered when | Last good release on failure |
+| --- | --- | --- | --- |
+| frankel | `os-release.yml` `mode=latest-beta` | `publisher` succeeded | Beta Latest moves only after verification and the download check |
+| mustang | `os-release.yml` `mode=mustang-ota`, `mustang_publish_ota=true` | `mustang-ota-publisher` succeeded | OTA before channel metadata, never Latest |
+| yogi | `yogi-ota.yml` `stage=ota`, `publish=true` (Yogi owner's #558) | `publisher` succeeded | OTA first, `yogi-stable` last, never Latest |
+
+**Each lane is decided on its own,** so one lane's failure never stops another. A lane is skipped when:
+- it is disabled;
+- its entry workflow is absent;
+- a run of it is still queued or in progress;
+- its newest delivered run already built the current main commit, so an identical commit is never rebuilt.
+
+Otherwise its entry is dispatched once, on main, with the committed inputs. A failed run is retried at the next daily
+run and reaches its owner through the run's own failure. The dispatcher never publishes, cancels, retries or changes a
+release. Manual dispatch of every entry is unchanged.
+
+**What is committed is inert:**
+- the workflow has no `schedule:`;
+- every lane is `enabled: false`;
+- a manual run is a dry run by default;
+- the job can only dispatch from main, with its own `actions: write` token and no secret.
+
+**Activation** is one reviewed, owner-approved change. It enables a lane, records Chief's daily window
+(`window.time`, Pacific) and adds the schedule.
+
+**Isolation:** lanes on the same host still share that host's queue and lock (today `os-release-frankel` and the
+shared builder). Independent capacity per flavor comes from Infra's verified per-flavor runner, VM, storage and
+controller mapping, not from this dispatcher.
+
 ## Retained Rango signing and separate release (source only, runtime unbound)
 
 This route was added in OCT30-INFRA-S015 as source and tests only. Nothing

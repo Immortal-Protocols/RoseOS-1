@@ -28,14 +28,14 @@
 <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/><uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE"/><uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE"/><uses-permission android:name="android.permission.POST_NOTIFICATIONS"/><uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
 <queries><intent><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent></queries>
 <permission android:name="dev.pixel.voice.permission.CAMERA_CONTEXT" android:protectionLevel="signature"/>
-<application android:label="Rose Agent" android:theme="@android:style/Theme.Material.Light.NoActionBar" android:allowBackup="false" android:networkSecurityConfig="@xml/mac_screen_network" android:usesCleartextTraffic="false" android:icon="@drawable/icon">
+<application android:name=".RoseAgentApplication" android:label="Rose Agent" android:theme="@android:style/Theme.Material.Light.NoActionBar" android:allowBackup="false" android:networkSecurityConfig="@xml/mac_screen_network" android:usesCleartextTraffic="false" android:icon="@drawable/icon">
 <provider android:name=".MemoriesConnectionProvider" android:authorities="dev.pixel.voice.memories" android:exported="true" android:permission="dev.pixel.voice.permission.MEMORY_REVIEW"/>
 <provider android:name=".MessagesConnectionProvider" android:authorities="dev.pixel.voice.messages" android:exported="true" android:permission="dev.pixel.voice.permission.MESSAGES_CONNECTION"/>
 <provider android:name=".BookIllustrationProvider" android:authorities="dev.pixel.voice.book-illustrations" android:exported="true" android:permission="dev.pixel.voice.permission.BOOK_CONTEXT"/>
 <provider android:name=".CameraMicrophoneProvider" android:authorities="dev.pixel.voice.camera-microphone" android:exported="true" android:permission="dev.pixel.voice.permission.CAMERA_CONTEXT"/>
 <provider android:name=".SettingsAgentProvider" android:authorities="dev.pixel.voice.agent" android:exported="true"/>
 <activity android:name=".ServerConnectionActivity" android:exported="false"/>
-<activity android:name=".RoseConversationActivity" android:exported="false" android:label="Rose Agent" android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize"/>
+<activity android:name=".RoseConversationActivity" android:exported="false" android:label="Rose Agent" android:taskAffinity="dev.pixel.voice.conversation" android:launchMode="singleTask" android:excludeFromRecents="true" android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize"/>
 <activity android:name=".PairingActivity" android:exported="false"/>
 <activity android:name=".LocalRosePairActivity" android:exported="true" android:launchMode="singleTop" android:screenOrientation="portrait" android:excludeFromRecents="true" android:label="Pair with Rose"><intent-filter><action android:name="android.intent.action.VIEW"/><category android:name="android.intent.category.DEFAULT"/><category android:name="android.intent.category.BROWSABLE"/><data android:scheme="roseagent" android:host="pair"/></intent-filter></activity>
 <activity android:name=".SettingsAccessActivity" android:exported="false"/>

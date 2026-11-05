@@ -22,6 +22,7 @@ final class PhoneControl {
    context.startActivity(open);
    return new JSONObject().put("status","launch_requested").put("packageName","com.bluebubbles.messaging");
   }
+  if(action.equals(ClipboardWrite.ACTION))return clipboardWrite(context,command);
   if(action.equals("app_context"))return PhoneAppContext.read(context);
   if(action.equals("migration_backup_open")){context.startActivity(new Intent(context,MigrationBackupActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));return new JSONObject().put("status","opened");}
   if(action.equals("migration_private_backup_open")){context.startActivity(new Intent(context,MigrationBackupActivity.class).putExtra("privateOnly",true).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK|Intent.FLAG_ACTIVITY_CLEAR_TOP));return new JSONObject().put("status","opened");}
@@ -103,5 +104,58 @@ final class PhoneControl {
    android.app.ActivityOptions.makeBasic().setLaunchDisplayId(android.view.Display.DEFAULT_DISPLAY).toBundle());
   return new JSONObject().put("status","launch_requested").put("packageName",target)
    .put("label",AppLabels.label(pm,target,selected.loadLabel(pm).toString()));
+ }
+
+ /**
+  * F07: put the owner's requested text on this phone's clipboard (ClipboardWrite has the rules). It writes through this
+  * phone's own clipboard (the default device, not a virtual display's), refuses before writing when the text is not the
+  * producer's exact text or Android would drop the write (its write app-op), and reports copied only after
+  * setPrimaryClip returned and nothing could have dropped it silently (ClipboardWrite.outcome). The result never carries
+  * the text: it is saved as this command's receipt.
+  */
+ private static JSONObject clipboardWrite(Context context,JSONObject command)throws JSONException{
+  JSONObject result=new JSONObject().put("action",ClipboardWrite.ACTION);
+  Object raw=command.opt("text");String text=raw instanceof String?(String)raw:null;
+  Object digest=command.opt("sha256");
+  String refused=ClipboardWrite.refusal(text,digest instanceof String?(String)digest:null);
+  if(refused!=null)return result.put("status",refused).put("written",false);
+  // ClipboardService keeps one clipboard per device: a context bound to a virtual device writes to that device's.
+  if(android.os.Build.VERSION.SDK_INT>=34&&context.getDeviceId()!=Context.DEVICE_ID_DEFAULT)
+   return result.put("status",ClipboardWrite.WRONG_DEVICE).put("written",false);
+  ClipboardManager clipboard=(ClipboardManager)context.getSystemService(Context.CLIPBOARD_SERVICE);
+  android.app.AppOpsManager ops=(android.app.AppOpsManager)context.getSystemService(Context.APP_OPS_SERVICE);
+  if(clipboard==null||ops==null)return result.put("status",ClipboardWrite.UNAVAILABLE).put("written",false);
+  // Writing needs no focus, but ClipboardService silently drops a write whose app-op is not allowed: check it first.
+  int mode;
+  try{mode=ops.unsafeCheckOpNoThrow("android:write_clipboard",android.os.Process.myUid(),context.getPackageName());}
+  catch(RuntimeException e){return result.put("status",ClipboardWrite.UNAVAILABLE).put("written",false);}
+  if(mode!=android.app.AppOpsManager.MODE_ALLOWED)return result.put("status",ClipboardWrite.DENIED).put("written",false);
+  String marker=command.optString("id","");if(marker.isEmpty())marker=UUID.randomUUID().toString();
+  // Standard text (as ClipboardSync: Item.getText() readers such as Compose fields need it), marked sensitive so
+  // Android hides its preview.
+  ClipData clip=ClipData.newPlainText("Copied by Rose",text);
+  android.os.PersistableBundle extras=new android.os.PersistableBundle();
+  extras.putBoolean(ClipDescription.EXTRA_IS_SENSITIVE,true);extras.putString(ClipboardWrite.MARKER,marker);
+  clip.getDescription().setExtras(extras);
+  try{clipboard.setPrimaryClip(clip);}
+  catch(RuntimeException e){return result.put("status",ClipboardWrite.FAILED).put("reason",e.getClass().getSimpleName());}
+  // Confirm by reading back only Rose's own clip: its description first, its text only when the marker is Rose's.
+  boolean readable=false;String readMarker=null,readText=null;
+  try{
+   ClipDescription description=clipboard.hasPrimaryClip()?clipboard.getPrimaryClipDescription():null;
+   if(description!=null){
+    readable=true;android.os.PersistableBundle seen=description.getExtras();readMarker=seen==null?null:seen.getString(ClipboardWrite.MARKER);
+    if(ClipboardWrite.ours(marker,readMarker)){
+     // Another app may write between the two calls: judge the clip actually fetched by its own marker first.
+     ClipData now=clipboard.getPrimaryClip();ClipDescription fetched=now==null?null:now.getDescription();
+     android.os.PersistableBundle fe=fetched==null?null:fetched.getExtras();readMarker=fe==null?null:fe.getString(ClipboardWrite.MARKER);
+     if(ClipboardWrite.ours(marker,readMarker)){CharSequence t=now.getItemCount()==0?null:now.getItemAt(0).getText();readText=t==null?null:t.toString();}
+    }
+   }
+  }catch(RuntimeException ignored){readable=false;}
+  String status=ClipboardWrite.outcome(readable,RoseActivities.anyFocused(),RoseActivities.allOnDefaultDisplay(),marker,readMarker,text,readText);
+  result.put("status",status);
+  if(ClipboardWrite.COPIED.equals(status))result.put("written",true).put("verified",ClipboardWrite.verification(readable)).put("characters",text.codePointCount(0,text.length())).put("sensitive",true);
+  return result;
  }
 }
