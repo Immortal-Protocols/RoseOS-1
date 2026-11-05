@@ -1,9 +1,12 @@
 # RoseOS
 
-RoseOS is a GrapheneOS-based phone environment with **Rose Agent**, a voice-first
-launcher and assistant. The agent works in a separate Android workspace while
-the owner keeps using the phone. The product includes visible progress, a viewer,
-stop controls, and owner approval for consequential actions.
+RoseOS is a GrapheneOS-based Android system built around **Rose Agent**, a
+voice-first launcher and assistant. Talk to Rose to ask questions, work through
+ideas and delegate phone tasks; a server on your Mac supplies local models or
+Codex as the assistant's brain. You can install Rose Agent on an existing Android
+phone, or use the full RoseOS for OS-level integration and separate background
+app workspaces that let you keep using your phone while Rose works. Progress,
+a workspace viewer and Stop controls keep the work visible and under your control.
 
 This is the open-source RoseOS source and build repository. Original RoseOS
 material is available under the **MIT License**, except where a file or component
@@ -17,6 +20,55 @@ Public, signed Pixel 10
 [Immortal-Protocols/pixel-ota](https://github.com/Immortal-Protocols/pixel-ota).
 That release channel is separate from source and experimental build records.
 Keep credentials and private signing materials outside this repository.
+
+## Install Rose Agent without the full OS
+
+On Android 10 or newer, download the signed `dev.pixel.voice-*.apk` and its
+`SHA256SUMS` from the [Rose Agent releases](https://github.com/Immortal-Protocols/pixel-ota/releases?q=rose-agent&expanded=true),
+verify the APK's checksum, allow installation from the browser or file manager
+you used, and open the APK to install it. Start your Mac server as described
+below, open `http://127.0.0.1:8091` on the Mac and choose **Pair phone**; in Rose
+Agent, choose **Pair with Rose** (called **Pair with Mac** in older builds) and
+scan the QR code. Keep both devices on the same Wi-Fi or your Tailscale network,
+grant microphone access for voice, and enable **Rose Agent phone controls** in
+Android's Accessibility settings if you want phone actions. Regular Android can
+use supported accessibility actions on its visible screen; separate background
+workspaces require RoseOS. See [pairing and connectivity](prototypes/voice-phone-demo/REMOTE.md)
+and [building your own APK](docs/APP-BUILD.md).
+
+## Set up the Rose server on your Mac
+
+On an Apple-silicon Mac with Python 3 and enough memory for your chosen local
+models, clone this repository, run `cd prototypes/voice-phone-demo`, then run
+`bash scripts/setup.sh` once to create the Python environment and download roughly
+22 GB of model files. For the local Qwen model, start
+`bash scripts/rose.sh --phone real`. For Codex, install Node 22+ and a compatible
+Codex CLI, run `codex login` and select **Sign in with ChatGPT**, then start
+`bash scripts/rose.sh --brain codex --phone real`; this uses the account's supported
+Terra Fast model while speech processing stays local. Open `http://127.0.0.1:8091`
+and pair your phone. The current Codex phone-task mode requires RoseOS's compatible
+multi-session controller; it does not fall back to controlling a stock phone's
+visible screen. See the [local-model setup](prototypes/voice-phone-demo/README.md)
+for hardware and model details and the [Codex setup](docs/CODEX-VOICE.md) for CLI,
+account and model requirements.
+
+## Flash RoseOS onto your Pixel
+
+Use a factory-install release explicitly matching your Pixel's model and codename
+from [the OS releases](https://github.com/Immortal-Protocols/pixel-ota/releases),
+and follow that release's `FIRST-INSTALL.md`; the documented Pixel 10 target is
+`frankel`. Back up your phone first: unlocking and a factory install erase its
+data. Install current Android Platform-Tools on your computer, enable Developer
+options and OEM unlocking on the phone, connect it by USB in bootloader mode,
+confirm its codename with `fastboot getvar product`, and unlock with
+`fastboot flashing unlock`, confirming on the phone. Verify the matching factory
+archive against its published checksums and authenticity instructions, extract it,
+and run its `flash-all.sh` (`flash-all.bat` on Windows). An `*-ota_update-*.zip`
+is an update package, not a fresh-install archive; if a build provides only an
+OTA, wait for an appropriate factory installer. Factory installation is
+experimental and availability varies by build; see the [current Pixel 10 factory-install guide](docs/FRANKEL-FACTORY-INSTALL.md).
+Only consider relocking after a successful boot and the exact build's verified-boot
+instructions explicitly support it.
 
 ## APK builds and sharing
 
