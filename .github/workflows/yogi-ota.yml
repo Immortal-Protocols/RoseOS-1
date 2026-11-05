@@ -65,12 +65,18 @@ jobs:
     outputs:
       ownership: ${{ steps.start.outputs.ownership }}
     env:
-      GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+      # The Yogi controller's own workload identity provider: the shared roseos-actions provider admits only
+      # os-release.yml. Signer jobs (key-bootstrap, sign) keep the existing signer provider.
+      GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ vars.YOGI_CONTROLLER_WORKLOAD_IDENTITY_PROVIDER }}
       YOGI_CONTROLLER_SERVICE_ACCOUNT: ${{ vars.YOGI_CONTROLLER_SERVICE_ACCOUNT }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
+      - name: Yogi controller configuration present (fails closed before any login)
+        run: |
+          [[ -n "$GCP_WORKLOAD_IDENTITY_PROVIDER" ]] || { echo "::error::vars.YOGI_CONTROLLER_WORKLOAD_IDENTITY_PROVIDER is not set"; exit 1; }
+          [[ -n "$YOGI_CONTROLLER_SERVICE_ACCOUNT" ]] || { echo "::error::vars.YOGI_CONTROLLER_SERVICE_ACCOUNT is not set"; exit 1; }
       - run: python3 scripts/actions-gcp-login.py login "$YOGI_CONTROLLER_SERVICE_ACCOUNT"
       - id: start
         run: |
@@ -243,13 +249,19 @@ jobs:
       contents: read
       id-token: write
     env:
-      GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+      # The Yogi controller's own workload identity provider: the shared roseos-actions provider admits only
+      # os-release.yml. Signer jobs (key-bootstrap, sign) keep the existing signer provider.
+      GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ vars.YOGI_CONTROLLER_WORKLOAD_IDENTITY_PROVIDER }}
       YOGI_CONTROLLER_SERVICE_ACCOUNT: ${{ vars.YOGI_CONTROLLER_SERVICE_ACCOUNT }}
       OWNERSHIP: ${{ needs.controller.outputs.ownership }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
+      - name: Yogi controller configuration present (fails closed before any login)
+        run: |
+          [[ -n "$GCP_WORKLOAD_IDENTITY_PROVIDER" ]] || { echo "::error::vars.YOGI_CONTROLLER_WORKLOAD_IDENTITY_PROVIDER is not set"; exit 1; }
+          [[ -n "$YOGI_CONTROLLER_SERVICE_ACCOUNT" ]] || { echo "::error::vars.YOGI_CONTROLLER_SERVICE_ACCOUNT is not set"; exit 1; }
       - run: python3 scripts/actions-gcp-login.py login "$YOGI_CONTROLLER_SERVICE_ACCOUNT"
       # Stops only the dedicated Yogi VM and only if this run started it; the VM's 12-hour STOP stays the fallback.
       - run: |

@@ -235,6 +235,37 @@ class KeyBootstrapTest(Fixture):
         self.assertIn('needs: [controller, key-bootstrap, build, sign, publisher]', text)
 
 
+class ProviderTest(unittest.TestCase):
+    """Hosted controller/cleanup use the Yogi controller provider; signer jobs keep the signer provider."""
+    def jobs(self):
+        text = (yogi.ROOT/'.github/workflows/yogi-ota.yml').read_text()
+        body = text[text.index('\njobs:\n'):]
+        names = [n for n in ('guard', 'controller', 'key-bootstrap', 'build', 'sign', 'publisher', 'cleanup')]
+        starts = sorted((body.index(f'\n  {n}:\n'), n) for n in names)
+        return {n: body[i:(starts[k+1][0] if k+1 < len(starts) else len(body))] for k, (i, n) in enumerate(starts)}
+
+    def test_controller_and_cleanup_use_the_yogi_controller_provider_and_fail_closed_first(self):
+        jobs = self.jobs()
+        for name in ('controller', 'cleanup'):
+            job = jobs[name]
+            self.assertIn('runs-on: ubuntu-24.04', job)
+            self.assertIn('GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ vars.YOGI_CONTROLLER_WORKLOAD_IDENTITY_PROVIDER }}', job)
+            self.assertIn('YOGI_CONTROLLER_SERVICE_ACCOUNT: ${{ vars.YOGI_CONTROLLER_SERVICE_ACCOUNT }}', job)
+            self.assertNotIn('vars.GCP_WORKLOAD_IDENTITY_PROVIDER', job)
+            check, login = job.index('[[ -n "$GCP_WORKLOAD_IDENTITY_PROVIDER" ]]'), job.index('actions-gcp-login.py login')
+            self.assertLess(check, login)
+            self.assertLess(job.index('[[ -n "$YOGI_CONTROLLER_SERVICE_ACCOUNT" ]]'), login)
+
+    def test_signer_jobs_keep_the_signer_provider(self):
+        jobs = self.jobs()
+        for name in ('key-bootstrap', 'sign'):
+            self.assertIn('GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}', jobs[name])
+            self.assertIn('GCP_SIGNER_SERVICE_ACCOUNT: ${{ vars.GCP_SIGNER_SERVICE_ACCOUNT }}', jobs[name])
+            self.assertNotIn('YOGI_CONTROLLER', jobs[name])
+        for name in ('guard', 'build', 'publisher'):
+            self.assertNotIn('WORKLOAD_IDENTITY_PROVIDER', jobs[name])
+
+
 class IdentityTest(Fixture):
     def test_ready_fixture_passes_every_guard(self):
         for stage in ('bootstrap', 'ota', 'publish'):

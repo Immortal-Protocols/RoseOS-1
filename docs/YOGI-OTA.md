@@ -64,7 +64,8 @@ Package, provider and permission names are unchanged (`dev.pixel.voice`,
    `run` under the same lock, logout → upload of the public
    `signing-bootstrap-receipt.json` only → cleanup. The receipt is then committed to
    `os/signing-bootstrap/yogi-bootstrap-receipt.json`. No image is built or signed.
-2. **controller** (hosted, `YOGI_CONTROLLER_SERVICE_ACCOUNT`): starts only
+2. **controller** (hosted, `YOGI_CONTROLLER_SERVICE_ACCOUNT` through its own provider
+   `YOGI_CONTROLLER_WORKLOAD_IDENTITY_PROVIDER`; both checked non-empty before login): starts only
    `roseos-yogi-builder-20261103-a` and records whether it did.
 3. **build** (`[self-hosted, roseos-yogi-builder]`), under `/srv/rose-yogi/yogi-build.lock`:
    `preflight` (paths, lock, free space) → `allocate` (build number and
@@ -103,7 +104,7 @@ locks and queues; nothing here edits `os-release.yml` or `release-pipeline.py`.
 
 | Prerequisite | Owner | Records |
 | --- | --- | --- |
-| Repository-scoped runner `roseos-yogi-builder` on the Yogi VM; outbound GitHub/googleapis; a controller identity with get/start/stop on only that instance (`vars.YOGI_CONTROLLER_SERVICE_ACCOUNT`) and WIF admission of `yogi-ota.yml` | Dev Infra | `builder.status: ready` |
+| Repository-scoped runner `roseos-yogi-builder` on the Yogi VM; outbound GitHub/googleapis; a controller identity with get/start/stop on only that instance (`vars.YOGI_CONTROLLER_SERVICE_ACCOUNT`) through a Yogi controller workload identity provider admitting `yogi-ota.yml` (`vars.YOGI_CONTROLLER_WORKLOAD_IDENTITY_PROVIDER`; the shared roseos-actions provider admits only os-release.yml); signer jobs keep the existing signer provider. Open gap: if `vars.GCP_WORKLOAD_IDENTITY_PROVIDER` is the shared roseos-actions provider, the `key-bootstrap` and `sign` signer logins from `yogi-ota.yml` would be refused as well; which provider the Yogi signer uses is a Signing/Infra decision (os-sign.yml uses its own roseos-signing pool). Both jobs are already held by the unbound `yogi-v1` and the runner guard | Dev Infra | `builder.status: ready` |
 | `yogi-v1` profile (Signing-owned, separate authority; tools from a same-run `fold_tool_proof.py` localProof on the Yogi builder); the manual `key-bootstrap` stage of `yogi-ota.yml` on the Yogi runner (source present, never run; needs Signing's `--lock` override); the two containers; one time-boxed binding per secret (get, versions.list, versions.add; at most 4 h) for one bootstrap; a time-boxed accessor on version 1 per delivery; escrow decision | Signing and Release, approved by Nathan | profile `resource-bound` (checked by `sign()` and the guard before any login), bootstrap receipt (project, empty reasons, workspace removed), `signing.access` |
 | Release's `app-inputs-export` run for Frankel 2026110403 (PR #565) by the Frankel builder's runtime owner, then Release's committed record `os/app-inputs/frankel-2026110403.json` | Release | record present on main (guard binds it) |
 | Yogi publication in pixel-ota | Nathan | `publicationEnabled: true` |
