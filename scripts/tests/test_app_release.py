@@ -37,7 +37,7 @@ WORKFLOW = (ROOT/'.github/workflows/os-release.yml').read_text()
 # the publisher takes that identity, re-derives the allocation and promotes only latest-beta or an explicit --promote.
 # + RELEASE020 M2/M2c: opt-in packaging and the default-off dedicated-signer route (publisher also needs signed-builder)
 # + latest-draft: same allocator/signing jobs, allocation-bound unpublished draft; behavioral tests in test_release_allocate.
-OS_JOBS_AT_BASE = {'builder': '15fc6e19644cba035be35bc9f112c6115e88e8a73b5f977dd5975dbfaa33ece4',
+OS_JOBS_AT_BASE = {'builder': '990899e120abc4d6fa3e3477cb878b0843f0de78755a8ae34ba5f8ec823d0136',
     'publisher': '259c984eb7544af3fefca423e6f12314b1dff3e6ce4cf65b495445929afcbd8f'}
 
 def script(path, body):

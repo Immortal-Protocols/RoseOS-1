@@ -10,7 +10,7 @@
     "outDir": "out-rose-first-update-2026102701",
     "lockPath": "/home/pixelbuild/frankel-build.lock",
     "installclean": true,
-    "makeJobs": 48,
+    "makeJobs": 32,
     "makeGoals": [
       "vendorbootimage",
       "vendorkernelbootimage",
