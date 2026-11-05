@@ -28,6 +28,7 @@ import host_secrets
 import release_receipts
 import mustang_collection
 import mustang_edge
+import mustang_lane
 
 PROFILE = 'pro-mustang-v1'
 PROJECT = 'protocols-465723'
@@ -315,6 +316,7 @@ def main():
     for flag in ('--compile-receipt','--bootstrap-receipt','--run-id','--run-attempt','--sign-run','--sign-attempt','--config'):
         p.add_argument(flag)
     a=p.parse_args()
+    mustang_lane.reject_legacy()
     if a.action=='_execute':return execute_sign(a.config,dict(os.environ))
     if a.action=='collect':collect(a.compile_receipt,number(a.run_id),number(a.run_attempt));return 0
     if a.action=='sign':sign(a.compile_receipt,a.bootstrap_receipt,number(a.run_id),number(a.run_attempt))

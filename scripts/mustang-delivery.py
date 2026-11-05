@@ -54,6 +54,8 @@ def pin_run(run_id,path,artifact,title_prefix,allow_collection_recovery=False):
 
 
 def guard(mode,compile_run,bootstrap_run,out):
+    import mustang_lane
+    mustang_lane.reject_legacy()
     if os.environ.get('GITHUB_REF')!='refs/heads/main' or os.environ.get('GITHUB_EVENT_NAME')!='workflow_dispatch':
         raise ValueError('manual main workflow required')
     spec=importlib.util.spec_from_file_location('mustang_bootstrap',ROOT/'scripts/signing-bootstrap.py')
