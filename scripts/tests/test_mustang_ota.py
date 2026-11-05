@@ -172,6 +172,65 @@ class PublicationTest(unittest.TestCase):
             ota.guard(self.cfg, access=True, now=now)
         self.cfg['signingAccess']['expiresAt']='2026-11-04T01:00:00Z'
         ota.guard(self.cfg, access=True, now=now)
+        del self.cfg['signingAccess']['expiresAt']  # stated, or explicitly null: never inferred from absence
+        with self.assertRaisesRegex(ValueError, 'approved current binding'):
+            ota.guard(self.cfg, access=True, now=now)
+    def test_verified_unconditional_read_access_has_no_window(self):
+        committed = ota.config()
+        self.assertEqual((committed['signingAccess']['status'], committed['signingAccess']['expiresAt']), ('approved', None))
+        utc = datetime.timezone.utc
+        for now in (None, datetime.datetime(2026,11,5,6,20,18,tzinfo=utc), datetime.datetime(2030,1,1,tzinfo=utc)):
+            ota.guard(committed, access=True, now=now)
+        windowed = dict(committed['signingAccess'], approvalRef='os/ota/mustang-access-readback-2026-11-05.json')
+        with self.assertRaisesRegex(ValueError, 'recorded unconditional readback'):  # a windowed record never counts
+            ota.guard(dict(committed, signingAccess=windowed), access=True)
+        with self.assertRaisesRegex(ValueError, 'public OTA activation remains pending'):  # the other gates are unchanged
+            ota.guard(dict(committed, publicationEnabled=False), access=True)
+        with self.assertRaisesRegex(ValueError, 'automatic publication activation remains pending'):
+            ota.guard(committed, automatic=True, access=True)
+    def test_only_an_exact_unconditional_readback_counts(self):
+        ref = 'os/ota/mustang-access-readback-unconditional.json'
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for name in (ref, 'os/ota/mustang-access-readback.json', 'os/ota/mustang-access-readback-2026-11-05.json',
+                         'os/signing-bootstrap/mustang-access-binding.json'):
+                (root/name).parent.mkdir(parents=True, exist_ok=True)
+                (root/name).write_bytes((ota.ROOT/name).read_bytes())
+            good = json.loads((root/ref).read_text())
+            def variant(change):
+                record = copy.deepcopy(good)
+                change(record)
+                (root/ref).write_text(json.dumps(record))
+                return ota.unconditional_access(ref, root)
+            self.assertTrue(variant(lambda r: None))
+            window = {'title': 'window', 'expression': "request.time < timestamp('2026-11-05T06:20:18Z')"}
+            for change in (lambda r: r['bindings'][0].update(condition=window),
+                           lambda r: r['bindings'][1].pop('condition'),  # a condition not read back is never assumed absent
+                           lambda r: r['bindings'][1].update(expiresAt='2026-11-05T06:20:18Z'),
+                           lambda r: r['bindings'][1].pop('expiresAt'),
+                           lambda r: r.update(expiresAt='2026-11-05T06:20:18Z'),
+                           lambda r: r.pop('expiresAt'),
+                           lambda r: r['bindings'][0].update(member='serviceAccount:other@protocols-465723.iam.gserviceaccount.com'),
+                           lambda r: r['bindings'][0].update(role='roles/secretmanager.admin'),
+                           lambda r: r['bindings'].pop(),
+                           lambda r: r['bindings'].append(dict(r['bindings'][0], secret='PIXEL_OS_SIGNING_KEYS_FRANKEL_V1')),
+                           lambda r: r['bindings'][1].update(secret=r['bindings'][0]['secret']),
+                           lambda r: r['bindings'].append(dict(r['bindings'][0])),  # exactly one row per secret
+                           lambda r: r.update(project='another-project'),
+                           lambda r: r.update(observedAt=None),
+                           lambda r: r.update(schema='roseos.other.v1'),
+                           lambda r: r.update(bindings='both')):
+                self.assertFalse(variant(change))
+            variant(lambda r: None)
+            for other in ('os/ota/mustang-access-readback.json', 'os/ota/mustang-access-readback-2026-11-05.json',
+                          'os/ota/missing.json', 'os/signing-bootstrap/mustang-access-binding.json', '../readback.json'):
+                self.assertFalse(ota.unconditional_access(other, root), other)
+            (root/'os/readback.json').write_bytes((root/ref).read_bytes())  # a valid record outside os/ota
+            self.assertFalse(ota.unconditional_access('os/readback.json', root))
+            self.assertFalse(ota.unconditional_access('os/ota/../readback.json', root))
+            (root/'os/ota/alias.json').symlink_to(root/ref)
+            self.assertFalse(ota.unconditional_access('os/ota/alias.json', root))
+            self.assertTrue(ota.unconditional_access(ref, root))
     def test_bad_or_missing_checksums_stop(self):
         (self.assets/'SHA256SUMS').write_text('0'*64+'  '+self.r['ota']['file']+'\n')
         with self.assertRaisesRegex(ValueError,'checksum'):
