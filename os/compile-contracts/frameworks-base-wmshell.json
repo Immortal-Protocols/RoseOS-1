@@ -7,7 +7,7 @@
   "SystemUI-core"
  ],
  "confirmation": {
-  "by": "OS Core (owner of rose-edge-wmshell.patch, #516/#523/#528/#540)",
+  "by": "OS Core (owner of rose-edge-wmshell.patch, #516/#523/#528/#540/#551)",
   "state": "confirmed",
   "record": "OS Core to OS Product, 2026-11-04 06:28 UTC, computed from source against main 1df12a7 (the patch bytes bound here). It confirmed every field below and listed all six after-images, which equal candidateDelta. It corrected one point: the required inputs are wider than the tray link, namely all four Shell overlays (Shell compiles src/**), frameworks-base.patch, and the SystemUI overlays for SystemUI-core. These are all required here. The self-update and background-control patches do not decide these goals; they stay bound because the base bundle applies them",
   "fields": [
@@ -19,7 +19,8 @@
   ],
   "rule": "an adapter refuses this contract unless state is \"confirmed\"; any change to the bound patch or inputs regenerates the manifest and needs OS Core's confirmation again",
   "reconfirmed": "OS Core to OS Product, 2026-11-04 06:51 UTC, from merge bf6a9ed (#528, tested head e304a35): patch sha256 ba64ea3114f46925446c204261097aebf963a923eb355860a6f2e54bb7262be2. Only RoseEdgeMicSlot.java's after-image changes (blob a9c4a5dd62f652dcf1044b6b9774ed851083f989); the other after-images, the WMShellModule pre-image, the inputs and the goals are unchanged",
-  "rebound": "OS Core to OS Product, 2026-11-04 16:41 UTC, from #540 head d8f19fe (the javac fix for Frankel run 41861964515: RoseEdgeMicSlot.Control's super(mContext) named View's own field): patch sha256 a10a73b983430d26d432d90c8555ab052dd6917142dfad1d5d2c2d9f0efe7f75. Only RoseEdgeMicSlot.java's after-image changes (sha256 0768a732126c0cf14bdc0aee7d08ed5ea67d286cf0968e3828a87df58004a54a, blob 3a9ef4bf55ae44e3ea5a4fbd0112b9ead6e32833); the other after-images and the WMShellModule pre-image are unchanged; the inputs, the goals (WindowManager-Shell, SystemUI-core) and flagEvidence (none) are unchanged: a field rename inside one file, with no new imports, files, classpath inputs or flags"
+  "rebound": "OS Core to OS Product, 2026-11-04 16:41 UTC, from #540 head d8f19fe (the javac fix for Frankel run 41861964515: RoseEdgeMicSlot.Control's super(mContext) named View's own field): patch sha256 a10a73b983430d26d432d90c8555ab052dd6917142dfad1d5d2c2d9f0efe7f75. Only RoseEdgeMicSlot.java's after-image changes (sha256 0768a732126c0cf14bdc0aee7d08ed5ea67d286cf0968e3828a87df58004a54a, blob 3a9ef4bf55ae44e3ea5a4fbd0112b9ead6e32833); the other after-images and the WMShellModule pre-image are unchanged; the inputs, the goals (WindowManager-Shell, SystemUI-core) and flagEvidence (none) are unchanged: a field rename inside one file, with no new imports, files, classpath inputs or flags",
+  "rebased": "OS Core to OS Product, 2026-11-05 01:31 UTC, from #551 head 77c9117 (F06 app takeover and the F08 chin marker): background-control-frameworks-base.patch sha256 8e8bf2b0d9111be12b8d927bccd8ea4d2ec650a634085ac5499be7a34fb416d7, only ComputerControlSessionImpl's after-image changing; rose-edge-wmshell.patch sha256 335fcb61c6054806143a08c2d1a0202b01d71c45948a02a51eb0128b7700a95c, only RoseEdgeMicSlot.java (a613e6ee..., blob 0aa0b49d) and roseedge/RoseEdgePolicy.java (5a565842..., blob 2c664048) changing; the other after-images, the WMShellModule pre-image, the inputs, the goals and flagEvidence (none) unchanged; no new files, flags or classpath inputs (the only new imports, android.app.ActivityManager, android.app.ActivityTaskManager and android.util.SparseBooleanArray, are framework classes in ComputerControlSessionImpl)"
  },
  "registration": {
   "state": "unregistered",
@@ -71,7 +72,7 @@
     },
     {
      "name": "background-control-frameworks-base.patch",
-     "sha256": "1fdd3a7141ca7a4c886e9f0b56f661192a7af2be704e1b951499c1de3c845f01"
+     "sha256": "8e8bf2b0d9111be12b8d927bccd8ea4d2ec650a634085ac5499be7a34fb416d7"
     },
     {
      "name": "background-control-modern-frameworks-base.patch",
@@ -87,7 +88,7 @@
     },
     {
      "name": "rose-edge-wmshell.patch",
-     "sha256": "a10a73b983430d26d432d90c8555ab052dd6917142dfad1d5d2c2d9f0efe7f75"
+     "sha256": "335fcb61c6054806143a08c2d1a0202b01d71c45948a02a51eb0128b7700a95c"
     }
    ],
    "files": [
@@ -415,35 +416,35 @@
       "gitBlob": "e7313935847d1acb7b7e3889de26e54aad3e77ce"
      },
      "post": {
-      "sha256": "d141baf54df44f90075cc95c4d691e4f59eb91ff5e90bcbad5bb5da948fd1ec1",
-      "gitBlob": "93802bbf70ce3a8add0a1c9a8f59bfa48dc6c360"
+      "sha256": "29749afa6cb7339404dc5543ed3c41fc9c97b13173ff0d2631d109a75306ef59",
+      "gitBlob": "6db16d88deef3f677ba20ce5f78e244418733a9c"
      },
      "chain": [
       {
        "patch": "background-control-frameworks-base.patch",
        "before": "e7313935847d1acb7b7e3889de26e54aad3e77ce",
-       "after": "ae21baa9be8bd98db3ae3235ef422c7d85384761",
+       "after": "4a5086f7c0e4afb6de1b7d167bdc25f781689c90",
        "index": null,
        "base": "noIndex"
       },
       {
        "patch": "background-control-modern-frameworks-base.patch",
-       "before": "ae21baa9be8bd98db3ae3235ef422c7d85384761",
-       "after": "e902272ea5bace9255b8b8b8bff0d9f82c1d052a",
+       "before": "4a5086f7c0e4afb6de1b7d167bdc25f781689c90",
+       "after": "7003cb9a609e9af513e2d089ed843e5783a10732",
        "index": null,
        "base": "noIndex"
       },
       {
        "patch": "background-control-resource-import-fix.patch",
-       "before": "e902272ea5bace9255b8b8b8bff0d9f82c1d052a",
-       "after": "d41fad11e3c9c09b97e58c9493d5da08c3f6b142",
+       "before": "7003cb9a609e9af513e2d089ed843e5783a10732",
+       "after": "1e49fe53c55480ff63ec57eef60188ae640aca9f",
        "index": null,
        "base": "noIndex"
       },
       {
        "patch": "locked-control-frameworks-base.patch",
-       "before": "d41fad11e3c9c09b97e58c9493d5da08c3f6b142",
-       "after": "93802bbf70ce3a8add0a1c9a8f59bfa48dc6c360",
+       "before": "1e49fe53c55480ff63ec57eef60188ae640aca9f",
+       "after": "6db16d88deef3f677ba20ce5f78e244418733a9c",
        "index": [
         "0a88d97",
         "5f4a32d"
@@ -804,17 +805,17 @@
      "path": "libs/WindowManager/Shell/src/com/android/wm/shell/RoseEdgeMicSlot.java",
      "pre": null,
      "post": {
-      "sha256": "0768a732126c0cf14bdc0aee7d08ed5ea67d286cf0968e3828a87df58004a54a",
-      "gitBlob": "3a9ef4bf55ae44e3ea5a4fbd0112b9ead6e32833"
+      "sha256": "a613e6ee144b3be77eddf8490c545e11f96bf3a831ef87d8000c6e33d904b3ec",
+      "gitBlob": "0aa0b49d3da30819e3ae2ba63f5f292e23cc2110"
      },
      "chain": [
       {
        "patch": "rose-edge-wmshell.patch",
        "before": null,
-       "after": "3a9ef4bf55ae44e3ea5a4fbd0112b9ead6e32833",
+       "after": "0aa0b49d3da30819e3ae2ba63f5f292e23cc2110",
        "index": [
         "0000000",
-        "3a9ef4b"
+        "0aa0b49"
        ],
        "base": "exact"
       }
@@ -907,17 +908,17 @@
      "path": "libs/WindowManager/Shell/src/com/android/wm/shell/roseedge/RoseEdgePolicy.java",
      "pre": null,
      "post": {
-      "sha256": "096907d5c4861bf2def761793aa8517808f99cffd69b735559d92470e51fb28a",
-      "gitBlob": "6ac0ddae69d48b2cf4997b8891084eee46c5e7af"
+      "sha256": "5a56584288a22f6e3fd6806758ea4f8834e4125ba9ebe20df82d0aa690c6fbdd",
+      "gitBlob": "2c6640488cd13c2aed18682876893d8c0423e17c"
      },
      "chain": [
       {
        "patch": "rose-edge-wmshell.patch",
        "before": null,
-       "after": "6ac0ddae69d48b2cf4997b8891084eee46c5e7af",
+       "after": "2c6640488cd13c2aed18682876893d8c0423e17c",
        "index": [
         "0000000",
-        "6ac0dda"
+        "2c66404"
        ],
        "base": "exact"
       }
@@ -1192,7 +1193,7 @@
     {
      "project": "frameworks/base",
      "name": "background-control-frameworks-base.patch",
-     "sha256": "1fdd3a7141ca7a4c886e9f0b56f661192a7af2be704e1b951499c1de3c845f01"
+     "sha256": "8e8bf2b0d9111be12b8d927bccd8ea4d2ec650a634085ac5499be7a34fb416d7"
     },
     {
      "project": "frameworks/base",
@@ -1280,7 +1281,7 @@
      },
      {
       "name": "background-control-frameworks-base.patch",
-      "sha256": "1fdd3a7141ca7a4c886e9f0b56f661192a7af2be704e1b951499c1de3c845f01"
+      "sha256": "8e8bf2b0d9111be12b8d927bccd8ea4d2ec650a634085ac5499be7a34fb416d7"
      },
      {
       "name": "background-control-modern-frameworks-base.patch",
@@ -1575,35 +1576,35 @@
        "gitBlob": "e7313935847d1acb7b7e3889de26e54aad3e77ce"
       },
       "post": {
-       "sha256": "d141baf54df44f90075cc95c4d691e4f59eb91ff5e90bcbad5bb5da948fd1ec1",
-       "gitBlob": "93802bbf70ce3a8add0a1c9a8f59bfa48dc6c360"
+       "sha256": "29749afa6cb7339404dc5543ed3c41fc9c97b13173ff0d2631d109a75306ef59",
+       "gitBlob": "6db16d88deef3f677ba20ce5f78e244418733a9c"
       },
       "chain": [
        {
         "patch": "background-control-frameworks-base.patch",
         "before": "e7313935847d1acb7b7e3889de26e54aad3e77ce",
-        "after": "ae21baa9be8bd98db3ae3235ef422c7d85384761",
+        "after": "4a5086f7c0e4afb6de1b7d167bdc25f781689c90",
         "index": null,
         "base": "noIndex"
        },
        {
         "patch": "background-control-modern-frameworks-base.patch",
-        "before": "ae21baa9be8bd98db3ae3235ef422c7d85384761",
-        "after": "e902272ea5bace9255b8b8b8bff0d9f82c1d052a",
+        "before": "4a5086f7c0e4afb6de1b7d167bdc25f781689c90",
+        "after": "7003cb9a609e9af513e2d089ed843e5783a10732",
         "index": null,
         "base": "noIndex"
        },
        {
         "patch": "background-control-resource-import-fix.patch",
-        "before": "e902272ea5bace9255b8b8b8bff0d9f82c1d052a",
-        "after": "d41fad11e3c9c09b97e58c9493d5da08c3f6b142",
+        "before": "7003cb9a609e9af513e2d089ed843e5783a10732",
+        "after": "1e49fe53c55480ff63ec57eef60188ae640aca9f",
         "index": null,
         "base": "noIndex"
        },
        {
         "patch": "locked-control-frameworks-base.patch",
-        "before": "d41fad11e3c9c09b97e58c9493d5da08c3f6b142",
-        "after": "93802bbf70ce3a8add0a1c9a8f59bfa48dc6c360",
+        "before": "1e49fe53c55480ff63ec57eef60188ae640aca9f",
+        "after": "6db16d88deef3f677ba20ce5f78e244418733a9c",
         "index": [
          "0a88d97",
          "5f4a32d"
@@ -2240,15 +2241,15 @@
   ]
  },
  "candidateDelta": {
-  "pr": 540,
-  "commit": "d8f19fe3c20ce0361a555647da7e32aeeba26b59",
+  "pr": 551,
+  "commit": "77c9117ede0037f59d31c87906b355de64695c1b",
   "patches": [
    {
     "name": "rose-edge-wmshell.patch",
-    "sha256": "a10a73b983430d26d432d90c8555ab052dd6917142dfad1d5d2c2d9f0efe7f75",
+    "sha256": "335fcb61c6054806143a08c2d1a0202b01d71c45948a02a51eb0128b7700a95c",
     "project": "frameworks/base",
     "strip": 1,
-    "bundlePath": "os/tests/fixtures/launcher3-compile-contract/candidate-pr540/patches/rose-edge-wmshell.patch"
+    "bundlePath": "os/tests/fixtures/launcher3-compile-contract/candidate-pr551/patches/rose-edge-wmshell.patch"
    }
   ],
   "application": {
@@ -2274,8 +2275,8 @@
     "path": "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/RoseEdgeMicSlot.java",
     "before": null,
     "after": {
-     "sha256": "0768a732126c0cf14bdc0aee7d08ed5ea67d286cf0968e3828a87df58004a54a",
-     "gitBlob": "3a9ef4bf55ae44e3ea5a4fbd0112b9ead6e32833"
+     "sha256": "a613e6ee144b3be77eddf8490c545e11f96bf3a831ef87d8000c6e33d904b3ec",
+     "gitBlob": "0aa0b49d3da30819e3ae2ba63f5f292e23cc2110"
     }
    },
    {
@@ -2317,16 +2318,16 @@
     "path": "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/roseedge/RoseEdgePolicy.java",
     "before": null,
     "after": {
-     "sha256": "096907d5c4861bf2def761793aa8517808f99cffd69b735559d92470e51fb28a",
-     "gitBlob": "6ac0ddae69d48b2cf4997b8891084eee46c5e7af"
+     "sha256": "5a56584288a22f6e3fd6806758ea4f8834e4125ba9ebe20df82d0aa690c6fbdd",
+     "gitBlob": "2c6640488cd13c2aed18682876893d8c0423e17c"
     }
    }
   ],
   "overlays": [],
   "bundle": [
    {
-    "path": "os/tests/fixtures/launcher3-compile-contract/candidate-pr540/patches/rose-edge-wmshell.patch",
-    "sha256": "a10a73b983430d26d432d90c8555ab052dd6917142dfad1d5d2c2d9f0efe7f75"
+    "path": "os/tests/fixtures/launcher3-compile-contract/candidate-pr551/patches/rose-edge-wmshell.patch",
+    "sha256": "335fcb61c6054806143a08c2d1a0202b01d71c45948a02a51eb0128b7700a95c"
    }
   ],
   "pathConvention": "files[].path and overlays[].target are relative to the source tree root (project path first); projects[].files[].path and base.projects[].files[].path are relative to their project; bundlePath and bundle[].path are relative to the repository root"
