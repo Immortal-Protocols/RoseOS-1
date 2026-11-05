@@ -254,6 +254,38 @@ recovery record, delivery evidence), the current run's entries, and each class's
 **To add a class,** it must be data a later run regenerates by itself. Name its producer and its readers in the
 policy. `scripts/tests/test_builder_reclaim.py` checks that no class matches a never-reclaimed store.
 
+## Signed app inputs for another builder (app-inputs-export, manual)
+
+`os-release.yml` mode `app-inputs-export`, with `build_number` set to one Frankel build, hands that build's three
+signed Rose apps and its background policy to another builder: Yogi, or Mustang on its own capacity. That builder then
+needs no new Frankel compile. The job `app-inputs-export` runs `scripts/host-app-inputs-export.py` on the original
+builder, under the nonblocking shared lock.
+
+**Producer:** the build must have exactly one committed Frankel allocation record (`roseos.latest-allocation.v1` in
+`os/latest-beta` or `os/ota`). That record names the candidate, run and app versions. For 2026110403 it is
+`os/ota/mustang-frankel-2026110403-allocation.json`.
+
+**Checks, without writing in the original attempt:**
+- the attempt's receipt chain is complete through transfer;
+- `release/signed-apps` holds exactly the nine files the app signing writes (APK, `.receipt.json` and v4 `.apk.idsig`
+  per app), each a regular file;
+- every receipt matches its bytes, signer and verification;
+- `aapt` and `apksigner`, run again here, read each allocated package, versionCode and exactly the app signer;
+- the policy pins exactly those bytes.
+The pins are the candidate-bundle contract (`os/build-only/mustang-reconcile.json` `candidateInputs`), and its signer
+must equal `frankel.json`'s app signer.
+
+**Output:** a private artifact `app-inputs-frankel-<build>-<run>-<attempt>`, kept 14 days. It holds `signed-apps/`
+(nine files), `background-policy.json`, the receipt `app-inputs-export.json` and `SHA256SUMS`. Any refusal uploads
+nothing. The job stops the builder afterwards only if its own controller started it.
+
+**Consumer contract:**
+1. Download by exact run id and artifact id.
+2. Check `SHA256SUMS`, and check that the receipt names the same committed allocation record (path and sha256).
+3. Admit the set with your own tools, as `scripts/mustang-candidate-bundle.py assemble` does.
+
+The same nine-file inventory and policy rules apply on both sides.
+
 ## Retained Rango signing and separate release (source only, runtime unbound)
 
 This route was added in OCT30-INFRA-S015 as source and tests only. Nothing
