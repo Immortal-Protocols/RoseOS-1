@@ -7,10 +7,11 @@ pinned GrapheneOS release script with an explicit key set), the device-agnostic 
 github_release_publisher.py. Every runtime stage is refused until os/ota/yogi.json records the prerequisite it
 needs (registered runner, approved Yogi signing window, Yogi bootstrap receipt, bound app inputs, publication).
 
-Hosted:   guard --stage bootstrap|ota|publish [--access] | builder state|start|stop | verify-staged | publish
+Hosted:   guard --stage key-bootstrap|bootstrap|ota|publish [--access] | builder state|start|stop | verify-staged | publish
 Builder:  preflight | allocate | prepare | integrate | compile | sign | install-image | stage
 
-bootstrap (build A) compiles and signs the first Yogi-key image with the owned Updater and writes a private fastboot
+key-bootstrap runs the existing signing-bootstrap.py (Signing's yogi-v1 profile) once on the Yogi runner under the Yogi
+lock, with a same-run tool proof before login, and uploads only its public receipt. bootstrap (build A) compiles and signs the first Yogi-key image with the owned Updater and writes a private fastboot
 install image. The proposed supported design installs it once with a WIPE (userdata and metadata), separately
 authorized by the phone owner: the lab artifact packages no Updater and uses public development keys, while its
 installed OTA trust and any other transition path remain uninspected. ota (build B and later) compiles, signs, checks
@@ -55,7 +56,7 @@ SECRETS = {'keys': 'PIXEL_OS_SIGNING_KEYS_YOGI_V1', 'passphrase': 'PIXEL_OS_SIGN
 SIGNER = 'roseos-build-signer@protocols-465723.iam.gserviceaccount.com'
 LAB_PINS = {'7728e30f50bfa5cea165f473175a08803f6a8346642b5aa10913e9d9e6defef6',
             'a40da80a59d170caa950cf15c18c454d47a39b26989d8b640ecd745ba71bf5dc'}
-STAGES = ('bootstrap', 'ota', 'publish')
+STAGES = ('key-bootstrap', 'bootstrap', 'ota', 'publish')
 SDK = 37
 LUNCH = 'yogi-cur-user'
 GOALS = ('target-files-package', 'otatools-package')
@@ -105,7 +106,7 @@ def config(path=CONFIG):
     b = cfg['builder']
     if (b['instance'], b['runnerLabel'], b['project'], b['zone']) != (INSTANCE, RUNNER_LABEL, 'protocols-465723', 'us-west2-a'):
         raise Refused('Yogi builder binding differs from the dedicated VM')
-    for key in ('root', 'retainedSource', 'attempts', 'lock', 'coverDisplayInput'):
+    for key in ('root', 'retainedSource', 'attempts', 'lock', 'coverDisplayInput', 'bootstrapState'):
         path = Path(b[key])
         if not path.is_absolute() or '..' in path.parts or Path(b['root']) not in (path, *path.parents):
             raise Refused(f'builder.{key} must be an absolute path under {b["root"]}')
@@ -149,7 +150,7 @@ def profile_problem(profiles=None):
         return f'signing profiles unreadable ({type(error).__name__})'
     if not isinstance(profile, dict):
         return f'signing profile {PROFILE} is not defined'
-    if profile.get('status') != 'resource-bound' or profile.get('missing') != [] \
+    if profile.get('device') != DEVICE or profile.get('status') != 'resource-bound' or profile.get('missing') != [] \
             or profile.get('project') != 'protocols-465723' or profile.get('secrets') != SECRETS:
         return f'signing profile {PROFILE} is not resource-bound to the Yogi project and containers'
     return None
@@ -211,6 +212,16 @@ def blockers(cfg, stage, access=False, now=None):
             problem = access_problem(cfg, now)
             if problem:
                 found.append(problem)
+    if stage == 'key-bootstrap':
+        # One-time Yogi key generation on the Yogi runner (signing-bootstrap.py, Signing's profile); refused before the
+        # controller or any login unless the runner and a resource-bound yogi-v1 exist and no Yogi identity exists yet.
+        if cfg['builder'].get('status') != 'ready':
+            found.append(f'builder runner/controller not ready (builder.status={cfg["builder"].get("status")})')
+        problem = profile_problem()
+        if problem:
+            found.append(problem)
+        if (ROOT/cfg['signing']['bootstrapReceipt']).exists():
+            found.append('a Yogi bootstrap receipt is already committed: the key bootstrap is one-time')
     if stage == 'ota' and (cfg['bootstrap'].get('status') not in ('signed', 'installed')
                            or not BUILD.fullmatch(str(cfg['bootstrap'].get('build') or ''))):
         found.append('Yogi bootstrap build A is not signed yet (bootstrap.status)')

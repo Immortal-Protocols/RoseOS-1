@@ -17,6 +17,7 @@
     "retainedSource": "/srv/rose-yogi/src",
     "attempts": "/srv/rose-yogi/attempts",
     "lock": "/srv/rose-yogi/yogi-build.lock",
+    "bootstrapState": "/srv/rose-yogi/signing-bootstrap-state",
     "coverDisplayInput": "/srv/rose-yogi/inputs/cover-display-reference.json",
     "jobs": 48,
     "minimumFreeBytes": 700000000000,

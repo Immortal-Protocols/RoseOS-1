@@ -55,6 +55,14 @@ Package, provider and permission names are unchanged (`dev.pixel.voice`,
 `yogi-ota`) runs `scripts/yogi_ota.py`:
 
 1. **guard** (hosted): names every missing prerequisite; nothing starts otherwise.
+
+   `stage=key-bootstrap` (manual, one-time) instead runs only: guard (runner ready,
+   `yogi-v1` defined, Yogi-bound and resource-bound, no Yogi bootstrap receipt yet) →
+   controller → on the Yogi runner the guard again, `signing-bootstrap.py preflight`,
+   the same-run tool proof (`prove --lock /srv/rose-yogi/yogi-build.lock`), signer login,
+   `run` under the same lock, logout → upload of the public
+   `signing-bootstrap-receipt.json` only → cleanup. The receipt is then committed to
+   `os/signing-bootstrap/yogi-bootstrap-receipt.json`. No image is built or signed.
 2. **controller** (hosted, `YOGI_CONTROLLER_SERVICE_ACCOUNT`): starts only
    `roseos-yogi-builder-20261103-a` and records whether it did.
 3. **build** (`[self-hosted, roseos-yogi-builder]`), under `/srv/rose-yogi/yogi-build.lock`:
@@ -95,7 +103,7 @@ locks and queues; nothing here edits `os-release.yml` or `release-pipeline.py`.
 | Prerequisite | Owner | Records |
 | --- | --- | --- |
 | Repository-scoped runner `roseos-yogi-builder` on the Yogi VM; outbound GitHub/googleapis; a controller identity with get/start/stop on only that instance (`vars.YOGI_CONTROLLER_SERVICE_ACCOUNT`) and WIF admission of `yogi-ota.yml` | Dev Infra | `builder.status: ready` |
-| `yogi-v1` profile (Signing-owned, separate authority; tools from a same-run `fold_tool_proof.py` localProof on the Yogi builder); a key-bootstrap job on the Yogi runner, never the Frankel builder (none exists yet; Release-owned workflow); the two containers; one time-boxed binding per secret (get, versions.list, versions.add; at most 4 h) for one bootstrap; a time-boxed accessor on version 1 per delivery; escrow decision | Signing and Release, approved by Nathan | profile `resource-bound` (checked by `sign()` and the guard before any login), bootstrap receipt (project, empty reasons, workspace removed), `signing.access` |
+| `yogi-v1` profile (Signing-owned, separate authority; tools from a same-run `fold_tool_proof.py` localProof on the Yogi builder); the manual `key-bootstrap` stage of `yogi-ota.yml` on the Yogi runner (source present, never run; needs Signing's `--lock` override); the two containers; one time-boxed binding per secret (get, versions.list, versions.add; at most 4 h) for one bootstrap; a time-boxed accessor on version 1 per delivery; escrow decision | Signing and Release, approved by Nathan | profile `resource-bound` (checked by `sign()` and the guard before any login), bootstrap receipt (project, empty reasons, workspace removed), `signing.access` |
 | Release's `app-inputs-export` run for Frankel 2026110403 (PR #565) by the Frankel builder's runtime owner, then Release's committed record `os/app-inputs/frankel-2026110403.json` | Release | record present on main (guard binds it) |
 | Yogi publication in pixel-ota | Nathan | `publicationEnabled: true` |
 | One-time wipe install of A (proposed design), and ADB readback | Phone owner | `bootstrap.installEvidence` (not a publication gate) |

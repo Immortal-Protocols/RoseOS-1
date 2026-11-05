@@ -6,6 +6,9 @@ run-name: yogi-ota ${{ inputs.stage }} ${{ github.run_id }}
 # Mustang or Agent run never waits for it and its failure or cleanup never stops them. Manual dispatch only; no
 # schedule or automatic trigger. Every job is refused by scripts/yogi_ota.py until os/ota/yogi.json records its
 # prerequisite (registered runner, Yogi app inputs, Yogi bootstrap receipt, approved signing window, publication).
+#   key-bootstrap: one-time Yogi key generation with the existing signing-bootstrap.py and Signing's yogi-v1 profile, on
+#              the Yogi runner under the Yogi lock: preflight and same-run tool proof before login, signer login only for
+#              the run, then only the public receipt leaves. No build, signing of images or publication.
 #   bootstrap: build A - compile, sign with the Yogi key set, private fastboot install image (proposed one-time WIPE install,
 #              separately authorized). Nothing is published.
 #   ota:       build B and later - compile, sign, check and stage a full OTA newer than A; publish yogi-{build}
@@ -14,9 +17,9 @@ on:
   workflow_dispatch:
     inputs:
       stage:
-        description: bootstrap (first Yogi-key image, private install image, no publication) or ota (newer OTA)
+        description: key-bootstrap (one-time Yogi key generation, public receipt only), bootstrap (first Yogi-key image, private install image, no publication) or ota (newer OTA)
         type: choice
-        options: [ota, bootstrap]
+        options: [ota, bootstrap, key-bootstrap]
         default: ota
       publish:
         description: 'ota only: publish yogi-{build} to pixel-ota after every check (needs publicationEnabled in os/ota/yogi.json)'
@@ -46,7 +49,7 @@ jobs:
       - name: Main only, attempt 1 only
         run: |
           [[ "$GITHUB_REF" == refs/heads/main && "$GITHUB_RUN_ATTEMPT" == 1 ]] || { echo "::error::yogi-ota runs once from main"; exit 1; }
-          [[ "$STAGE" == ota || "$PUBLISH" != true ]] || { echo "::error::bootstrap never publishes"; exit 1; }
+          [[ "$STAGE" == ota || "$PUBLISH" != true ]] || { echo "::error::only the ota stage publishes"; exit 1; }
       - name: Yogi prerequisites (refuses with the missing items by name)
         run: |
           python3 scripts/yogi_ota.py guard --stage "$STAGE" --access
@@ -76,8 +79,47 @@ jobs:
       - if: always()
         run: python3 scripts/actions-gcp-login.py logout
 
+  key-bootstrap:
+    needs: controller
+    if: inputs.stage == 'key-bootstrap'
+    runs-on: [self-hosted, roseos-yogi-builder]
+    timeout-minutes: 40
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+      GCP_SIGNER_SERVICE_ACCOUNT: ${{ vars.GCP_SIGNER_SERVICE_ACCOUNT }}
+      YOGI_LOCK: /srv/rose-yogi/yogi-build.lock
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Yogi prerequisites again on the Yogi runner (before any login)
+        run: python3 scripts/yogi_ota.py guard --stage key-bootstrap
+      - name: Profile, tool and access preflight (before any login)
+        run: python3 scripts/signing-bootstrap.py preflight --profile yogi-v1 --recipe-sha "$GITHUB_SHA"
+      - name: Same-run local tool proof under the Yogi lock (before any login)
+        run: python3 scripts/signing-bootstrap.py prove --profile yogi-v1 --recipe-sha "$GITHUB_SHA" --proof-dir "$RUNNER_TEMP/yogi-proof" --lock "$YOGI_LOCK"
+      - name: Signer access for the bootstrap only
+        run: python3 scripts/actions-gcp-login.py login "$GCP_SIGNER_SERVICE_ACCOUNT"
+      - name: One-time Yogi key bootstrap under the Yogi lock
+        run: python3 scripts/signing-bootstrap.py run --profile yogi-v1 --recipe-sha "$GITHUB_SHA" --state-dir /srv/rose-yogi/signing-bootstrap-state --receipt-dir "$RUNNER_TEMP/yogi-bootstrap" --proof-file "$RUNNER_TEMP/yogi-proof/fold-tool-proof.json" --lock "$YOGI_LOCK"
+      - name: Drop signer access
+        if: always()
+        run: python3 scripts/actions-gcp-login.py logout
+      - name: Public receipt only
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: yogi-key-bootstrap-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/yogi-bootstrap/signing-bootstrap-receipt.json
+          retention-days: 7
+          if-no-files-found: warn
+
   build:
     needs: controller
+    if: inputs.stage != 'key-bootstrap'
     runs-on: [self-hosted, roseos-yogi-builder]
     timeout-minutes: 660
     permissions:
@@ -193,7 +235,7 @@ jobs:
           if-no-files-found: warn
 
   cleanup:
-    needs: [controller, build, sign, publisher]
+    needs: [controller, key-bootstrap, build, sign, publisher]
     if: always() && needs.controller.result != 'skipped'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
