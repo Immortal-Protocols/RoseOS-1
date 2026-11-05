@@ -111,7 +111,7 @@ import alpha_source  # noqa: E402  (the reviewed copy plan and per-file copy)
 MANIFEST = ROOT/'os/compile-contracts/launcher3-quickstep-lib.json'
 # OS Product's reviewed contract version (schema 3, 4f2c426: rebound to #551's b639c22, F06 and F08 base patches). A
 # different manifest is refused until this pin is updated.
-MANIFEST_SHA256 = '46278aa4b90dfd32cab1a595fe92fe437b9a1913925163273f68170226ce53c6'
+MANIFEST_SHA256 = 'bcc00b5636dba87f21224f862698bdb1f9a7eb89b7a3a36965096c7691e1688d'
 CONDITIONS = ['base-exact', 'delta-preimages', 'isolated-apply', 'final-exact']
 # The binding inputs each branch requires and forbids, in the contract's own vocabulary (branches.requires, forbids):
 # check() binds and refuses exactly these, so the contract and this adapter cannot drift.

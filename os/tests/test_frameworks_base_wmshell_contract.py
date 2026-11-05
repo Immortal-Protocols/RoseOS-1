@@ -161,11 +161,11 @@ class FrameworksBaseWmshellContractTest(unittest.TestCase):
             text=True, cwd=ROOT)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         # The shared generator moves the Launcher3 contract to schema 3; this one stays at schema 2. Its bytes change
-        # only with a rebind OS Core reconfirms (#540: 2373307d... -> ae6e5f39...; #551: -> 55bfb937...).
+        # only with a rebind OS Core reconfirms (#540: 2373307d... -> ae6e5f39...; #551: -> 55bfb937...; #563: -> c5dccd7d...).
         self.assertEqual(self.manifest['schemaVersion'], 2)
         import hashlib
         self.assertEqual(hashlib.sha256(MANIFEST.read_bytes()).hexdigest(),
-            '55bfb937e8c03d346d79ada615a2348fd20ecf42e4b0190e0e6434bb207ea7ff')
+            'c5dccd7d59ceac9194d955070b72d8642a0b0a6ea82ef999589533e34e781356')
         self.assertTrue(re.search(r'"target": "Launcher3QuickStepLib"',
             (ROOT/'os/compile-contracts/launcher3-quickstep-lib.json').read_text()))
 

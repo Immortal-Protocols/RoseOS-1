@@ -99,22 +99,33 @@ diff --git a/services/companion/java/com/android/server/companion/virtual/comput
  import android.text.TextUtils;
  import android.util.ArraySet;
  import android.util.Slog;
-+import android.util.SparseBooleanArray;
++import android.util.SparseArray;
  import android.view.DisplayInfo;
  import android.view.KeyEvent;
  import android.view.Surface;
-@@ -230,6 +236,10 @@
+@@ -230,6 +236,21 @@
      @GuardedBy("mAllowlistedPackages")
      private final Set<String> mAllowlistedPackages = new ArraySet<>();
  
-+    /** RoseOS (F06): the owner's tasks this workspace took over, and whether each was in the foreground. */
++    /** RoseOS (F06): the owner's tasks this workspace may have taken over, by task id. */
 +    @GuardedBy("mTakenOverTasks")
-+    private final SparseBooleanArray mTakenOverTasks = new SparseBooleanArray();
++    private final SparseArray<Takeover> mTakenOverTasks = new SparseArray<>();
++
++    /** How a taken-over task stood on the main display: in front or not, and the task its move revealed. */
++    private static final class Takeover {
++        final boolean foreground;
++        final int below;
++
++        Takeover(boolean foreground, int below) {
++            this.foreground = foreground;
++            this.below = below;
++        }
++    }
 +
      /** Task IDs that are authorized for content visibility. */
      @GuardedBy("mAllowedTaskIds")
      private final Set<Integer> mAllowedTaskIds = new ArraySet<>();
-@@ -678,13 +688,121 @@
+@@ -678,13 +699,145 @@
          // launch request comes in for a package that's not allowed to launch.
          final Bundle options =
                  ActivityOptions.makeBasic().setLaunchDisplayId(mVirtualDisplayId).toBundle();
@@ -131,7 +142,9 @@ diff --git a/services/companion/java/com/android/server/companion/virtual/comput
 +            if (foreground == null) {
 +                throw new IllegalStateException("foreground_state_unavailable");
 +            }
-+            final boolean visible = showsPackage(foreground, packageName);
++            // In front means the main display's top visible task is the app's own task, whoever's activity is on top.
++            final int topTask = foreground.isEmpty() || foreground.get(0) == null
++                    ? INVALID_TASK_ID : foreground.get(0).getTaskId();
 +            for (int displayId : mDisplayManagerGlobal.getDisplayIds()) {
 +                if (displayId != mMainDisplayId && displayId != mVirtualDisplayId && showsPackage(
 +                        mActivityTaskManagerInternal.getTopVisibleActivities(displayId), packageName)) {
@@ -140,27 +153,39 @@ diff --git a/services/companion/java/com/android/server/companion/virtual/comput
 +            }
 +            // A home, recents, assistant or dream task never moves: the launcher intent's start is compatible with
 +            // any task type, so Android could otherwise reuse and reparent it (the HOME holder's own task).
-+            for (ActivityManager.RunningTaskInfo task : tasksOn(mMainDisplayId)) {
++            // The main display's tasks, focused first, then visible, then the rest, each from the top down.
++            final List<ActivityManager.RunningTaskInfo> before = tasksOn(mMainDisplayId);
++            for (ActivityManager.RunningTaskInfo task : before) {
 +                if (ownsTask(task, packageName) && task.getActivityType() != ACTIVITY_TYPE_STANDARD
 +                        && task.getActivityType() != ACTIVITY_TYPE_UNDEFINED) {
 +                    throw new IllegalStateException("target_not_standard: " + packageName);
 +                }
 +            }
-+            final int existing = taskOf(packageName, mMainDisplayId);
-+            final boolean sameSession = existing == INVALID_TASK_ID
++            // Android picks which of the app's tasks it reuses, so every one is recorded and only a task that is
++            // on this display at close goes back. The first other task is the one a move reveals.
++            final List<Integer> owned = new ArrayList<>();
++            int below = INVALID_TASK_ID;
++            for (ActivityManager.RunningTaskInfo task : before) {
++                if (ownsTask(task, packageName)) {
++                    owned.add(task.taskId);
++                } else if (below == INVALID_TASK_ID) {
++                    below = task.taskId;
++                }
++            }
++            final boolean sameSession = owned.isEmpty()
 +                    && taskOf(packageName, mVirtualDisplayId) != INVALID_TASK_ID;
 +            mActivityTaskManagerInternal.startActivityAsUser(
 +                    mRequest.appThread(), mRequest.ownerPackageName(),
 +                    mRequest.attributionSource().getAttributionTag(), intent, null,
 +                    Intent.FLAG_ACTIVITY_NEW_TASK, options, mRequest.ownerUserId());
-+            if (existing != INVALID_TASK_ID) {
-+                synchronized (mTakenOverTasks) {
-+                    mTakenOverTasks.put(existing, visible);
++            synchronized (mTakenOverTasks) {
++                for (int taskId : owned) {
++                    mTakenOverTasks.put(taskId, new Takeover(taskId == topTask, below));
 +                }
 +            }
-+            Slog.i(TAG, "launch disposition=" + (existing != INVALID_TASK_ID
-+                    ? (visible ? "foreground" : "background") : sameSession ? "same_session" : "closed")
-+                    + " task=" + existing + " from=" + mMainDisplayId + " to=" + mVirtualDisplayId);
++            Slog.i(TAG, "launch disposition=" + (!owned.isEmpty()
++                    ? (owned.contains(topTask) ? "foreground" : "background") : sameSession ? "same_session" : "closed")
++                    + " tasks=" + owned + " from=" + mMainDisplayId + " to=" + mVirtualDisplayId);
 +        });
          mStatsController.onApplicationLaunched(packageName);
      }
@@ -207,11 +232,14 @@ diff --git a/services/companion/java/com/android/server/companion/virtual/comput
 +    }
 +
 +    /**
-+     * RoseOS (F06): the owner's own apps that this workspace took over go back to the main display, the
-+     * foreground one on top, instead of being destroyed with this private display. Hand-over moves them first.
++     * RoseOS (F06): the owner's own apps that this workspace took over go back to the main display instead of
++     * being destroyed with this private display; hand-over moves them first. A task goes back on top only if it
++     * was in front and the owner is still on the task its move revealed; otherwise it goes in at the bottom, so
++     * it never covers what the owner opened since. The platform cannot tell the owner's Stop from an idle or
++     * deadline close (each arrives as close()), so the screen decides.
 +     */
 +    private void returnTakenOverTasks() {
-+        final SparseBooleanArray taken;
++        final SparseArray<Takeover> taken;
 +        synchronized (mTakenOverTasks) {
 +            taken = mTakenOverTasks.clone();
 +            mTakenOverTasks.clear();
@@ -221,15 +249,22 @@ diff --git a/services/companion/java/com/android/server/companion/virtual/comput
 +        }
 +        Binder.withCleanCallingIdentity(() -> {
 +            final List<ActivityManager.RunningTaskInfo> here = tasksOn(mVirtualDisplayId);
++            final List<ActivityAssistInfo> front =
++                    mActivityTaskManagerInternal.getTopVisibleActivities(mMainDisplayId);
++            final int topNow = front == null || front.isEmpty() || front.get(0) == null
++                    ? INVALID_TASK_ID : front.get(0).getTaskId();
 +            for (int i = 0; i < taken.size(); i++) {
 +                final int taskId = taken.keyAt(i);
 +                if (here.stream().noneMatch(task -> task.taskId == taskId)) {
 +                    continue;
 +                }
++                final Takeover takeover = taken.valueAt(i);
++                final boolean onTop = takeover.foreground && takeover.below != INVALID_TASK_ID
++                        && topNow == takeover.below;
 +                try {
 +                    ActivityTaskManager.getService().moveRootTaskToDisplayOnTopOrBottom(taskId,
-+                            mMainDisplayId, /* onTop= */ taken.valueAt(i));
-+                    Slog.i(TAG, "returned task=" + taskId + " to=" + mMainDisplayId);
++                            mMainDisplayId, onTop);
++                    Slog.i(TAG, "returned task=" + taskId + " to=" + mMainDisplayId + " onTop=" + onTop);
 +                } catch (RemoteException | RuntimeException e) {
 +                    Slog.w(TAG, "Could not return task=" + taskId + " to=" + mMainDisplayId, e);
 +                }
@@ -240,7 +275,7 @@ diff --git a/services/companion/java/com/android/server/companion/virtual/comput
      @Override
      public void handOverApplications() {
          Binder.withCleanCallingIdentity(
-@@ -1033,6 +1151,10 @@
+@@ -1033,6 +1186,10 @@
              return false;
          }
  
@@ -251,7 +286,7 @@ diff --git a/services/companion/java/com/android/server/companion/virtual/comput
          // Limit screenshots to the task of allowlisted packages of the automated apps.
          // In the Blocked state, this check ensures the agent only sees authorized content.
          synchronized (mAllowedTaskIds) {
-@@ -1082,6 +1204,25 @@
+@@ -1082,6 +1239,25 @@
          }
      }
  
@@ -277,7 +312,7 @@ diff --git a/services/companion/java/com/android/server/companion/virtual/comput
      /** Retrieves the Task ID for the top activity on a given display. */
      private int getTopTaskId(int displayId) {
          List<ActivityAssistInfo> topActivities =
-@@ -1156,6 +1297,7 @@
+@@ -1156,6 +1332,7 @@
          mSessionTimeoutTimer.close();
          mAudioInjector.stopAudioInjection();
          mAudioCapture.stopAudioCapture();
