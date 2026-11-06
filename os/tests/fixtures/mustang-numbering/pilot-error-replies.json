@@ -1,0 +1,41 @@
+{
+  "schema": "roseos.synthetic-pilot-error-replay.v1",
+  "pilot": "20261106-01",
+  "source": "Saved local receipts from the completed authorized synthetic pilot; no service reread",
+  "mechanicsOnly": true,
+  "records": [
+    {
+      "case": "stale-beforeOid",
+      "reply": {
+        "errors": [
+          {
+            "message": "Something went wrong while executing your query on 2026-11-06T16:45:47Z. Please include `DD79:EA544:26F1EDE:81BBE27:6AEE043A` when reporting this issue."
+          }
+        ]
+      },
+      "observation": "origin refs unchanged; exact rejection reason unproved"
+    },
+    {
+      "case": "checkpoint-collision",
+      "reply": {
+        "errors": [
+          {
+            "message": "Something went wrong while executing your query on 2026-11-06T16:48:36Z. Please include `8C3A:18D84D:173FD66:4BD619D:6AEE04E3` when reporting this issue."
+          }
+        ]
+      },
+      "observation": "origin refs unchanged; exact rejection reason unproved"
+    },
+    {
+      "case": "mismatched-noop",
+      "reply": {
+        "errors": [
+          {
+            "message": "Something went wrong while executing your query on 2026-11-06T16:48:50Z. Please include `8C3A:18D84D:1746B6B:4BEC9CF:6AEE04ED` when reporting this issue."
+          }
+        ]
+      },
+      "observation": "origin refs unchanged; exact rejection reason unproved"
+    }
+  ]
+}

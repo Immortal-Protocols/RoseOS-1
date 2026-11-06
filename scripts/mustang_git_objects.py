@@ -189,5 +189,50 @@ def confirm_from_objects(policy, proposal, head_oid, get_object, limits, checkpo
     return numbering.confirm(policy,proposal,observed.anchor,observed.events)
 
 
+def reply_observation(reply):
+    """Non-authoritative diagnostics; never classify an error as a known conflict."""
+    if reply is None: return 'no-reply'
+    if isinstance(reply,dict):
+        if reply.get('errors'): return 'graphql-errors'
+        body=reply.get('data')
+        if isinstance(body,dict) and isinstance(body.get('updateRefs'),dict):
+            return 'success-shaped-reply'
+    return 'other-reply'
+
+
+class UnresolvedRefWrite(ValueError):
+    """Consumption is unresolved, not absent. This exception never permits reuse."""
+    retry_allowed=False
+    reallocation_allowed=False
+
+    def __init__(self,attempted_oid,observed_oid,reply):
+        self.attempted_oid=attempted_oid
+        self.observed_oid=observed_oid
+        self.reply_observation=reply_observation(reply)
+        super().__init__('ref write consumption unresolved after '+self.reply_observation+
+                         '; no automatic retry, new reservation or reuse')
+
+
+def reconcile_ref_reply(policy, proposal, attempted_oid, reply, head_oid, get_object, limits,
+                        checkpoint, verifier=None):
+    """Read-only exact-commit reconciliation after any reply, including ambiguity.
+
+    Success/error/absence in a transport reply does not establish consumption,
+    nonconsumption, freshness or authorization. An unchanged origin or another
+    writer's event remains unresolved. This function performs no mutation/retry
+    and does not authorize any downstream operation or continued denied action.
+    """
+    oid(attempted_oid)
+    if not callable(verifier): raise ValueError('independent checkpoint verification unavailable')
+    policy=json.loads(json.dumps(policy))
+    observed=decode_history(policy,head_oid,get_object,limits)
+    _check_checkpoint(policy,checkpoint,observed,verifier)
+    index=numbering.validate_proposal(policy,proposal,observed.events)
+    if index>=len(observed.git_oids) or observed.git_oids[index]!=attempted_oid \
+            or observed.events[index-1]!=proposal['reservation']:
+        raise UnresolvedRefWrite(attempted_oid,head_oid,reply)
+    return numbering.confirm(policy,proposal,observed.anchor,observed.events)
+
+
 if __name__=='__main__':
     raise SystemExit('inactive read-only codec: no transport, checkpoint provider, authority writer or allocator')

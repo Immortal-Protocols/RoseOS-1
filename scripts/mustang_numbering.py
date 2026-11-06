@@ -146,20 +146,29 @@ def propose(value, anchor, events, run, build_timestamp):
     return {'schema':'roseos.mustang-counter-proposal.v1', 'expected':dict(previous), 'reservation':event}
 
 
-def confirm(value, proposal, anchor, events):
-    """Confirm a proposal only after authoritative commit/readback, including uncertain outcomes."""
+def validate_proposal(value, proposal, events):
+    """Validate the original prefix and proposal without asserting its consumption."""
     exact(proposal, {'schema', 'expected', 'reservation'}, 'proposal')
     if proposal['schema'] != 'roseos.mustang-counter-proposal.v1': raise ValueError('proposal schema differs')
-    snapshot(value, anchor, events)
+    if not isinstance(events,list): raise ValueError('journal events required')
     event = proposal['reservation']
     exact(event, EVENT_KEYS, 'reservation')
     sequence = counter(event['counter'])
-    if sequence == 0 or sequence > len(events) or events[sequence-1] != event:
-        raise ValueError('proposal not committed by the authority; do not consume its build ID')
+    if sequence == 0 or sequence-1 > len(events):
+        raise ValueError('readback predates the proposal prefix; rollback or incomplete history')
     snapshot(value, proposal['expected'], events[:sequence-1])
-    # Revalidate the proposal at its original prefix, not merely a matching numeric ID.
     reconstructed = propose(value, proposal['expected'], events[:sequence-1],event['run'],event['buildTimestamp'])
     if proposal != reconstructed: raise ValueError('proposal content differs')
+    return sequence
+
+
+def confirm(value, proposal, anchor, events):
+    """Confirm a proposal only after authoritative commit/readback, including uncertain outcomes."""
+    snapshot(value, anchor, events)
+    sequence = validate_proposal(value,proposal,events)
+    event = proposal['reservation']
+    if sequence > len(events) or events[sequence-1] != event:
+        raise ValueError('proposal not committed by the authority; do not consume its build ID')
     return json.loads(json.dumps(event))
 
 

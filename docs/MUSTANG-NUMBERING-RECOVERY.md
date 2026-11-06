@@ -232,10 +232,66 @@ verifier/getter failure. They prove codec/protocol mechanics, not external
 authentication, freshness, protected refs or operational recovery guarantees.
 
 A future reader must enforce byte limits while obtaining objects; checking bytes
-after return cannot prove its transport's memory bound. A future CAS writer and
-the `beforeOid` conflict/service-response cases remain unimplemented. Production
+after return cannot prove its transport's memory bound. A future CAS writer
+remains unimplemented. Production
 binding still requires actual authority identity, permitted writer/reader scope,
 ref protection evidence and a verified independent recovery checkpoint source.
+
+### Completed synthetic pilot and ambiguous reply handling
+
+The authorized `20261106-01` pilot used the existing `nskpaun` CLI route in
+RoseOS-1. It staged four synthetic commits with no build/allocation records and
+left the approved pilot branch/checkpoint tags in place. Successful atomic
+head/checkpoint advance, matching no-op, later advance and exact-event ancestry
+reconciliation after an application-level lost-reply simulation passed.
+
+The stale-beforeOid, checkpoint-collision and mismatched-no-op requests each
+returned a **generic GitHub query-execution error**, not a precise conditional
+conflict code. Origin ref readback was unchanged after each, and exact synthetic
+event bytes were checked before continuing with distinct tests. No mutation was
+resubmitted. The saved replies are replayed by
+`os/tests/fixtures/mustang-numbering/pilot-error-replies.json`; this source work
+does not query or mutate the completed pilot again.
+Replay tests pair those reply bytes with controlled synthetic histories,
+including a committed event, to exercise ambiguity. They do not recast the
+actual negative pilot outcomes as committed writes.
+
+Observed final pilot refs (mechanics evidence, not production bindings):
+
+- `refs/heads/mustang-checkpoint-pilot-20261106-01` and checkpoint tag `-2`:
+  `06085984fd1e11edec8a3a8a09777d481c25f8a2` (`event-2`).
+- `refs/tags/mustang-checkpoint-pilot-20261106-01-1`:
+  `c2981579ce2c7ee099ce648a67d1f54e1853227d` (`event-1`).
+- Verified final ancestry: event-2, event-1, then genesis
+  `f1b983dcc6aa994d053a05afb40ec04cf0e90858`.
+
+No Actions runs were observed through 2026-11-06T16:50:22Z; main and source files
+were unchanged. External webhooks and billing were not verified. The pilot did
+not establish ref protections, independent freshness, disaster recovery or
+AVB/device compatibility. Its write capability was observed only within the
+approved synthetic scope; production authorization was not inferred.
+
+`reconcile_ref_reply()` now handles the resulting source-level uncertainty. It
+reuses the raw-object codec, independent checkpoint-verifier requirement and
+existing numbering invariants. It confirms only when the **exact attempted Git
+OID** and the exact proposal event occupy the expected slot in verified complete
+history, including when a later head has advanced. A transport success shape,
+generic error, lost reply, unchanged head, competing event or logically identical
+event under a different Git OID cannot alone confirm the attempted write.
+
+Absent exact confirmation, `UnresolvedRefWrite` explicitly leaves consumption
+unresolved and permits neither automatic retry nor a new allocation/reuse. It
+does not assert nonconsumption. `validate_proposal()` factors the existing prefix
+and proposal checks without asserting a reservation happened. Response categories
+are diagnostics only; no error is promoted to a known conditional-conflict code.
+This is an inactive read-only step, with no transport/writer or production caller.
+Historical consumption confirmation never authorizes a downstream action or
+continuing an access-denied operation.
+
+Actual authority/protection/recovery choices are still required for a real
+checkpoint provider. The existing unbound policy, allocation refusal and
+publication controls remain unchanged; no new approval gate is added for source
+work.
 
 Run `python3 scripts/tests/test_mustang_edge_gate.py NumberingCompatibilityTest CounterRecoveryContractTest -v`
 for the focused evidence/contract, or the already registered complete Mustang edge suite.

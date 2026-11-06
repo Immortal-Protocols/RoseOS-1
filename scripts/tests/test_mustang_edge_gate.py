@@ -1634,6 +1634,108 @@ class GitJournalCodecTest(unittest.TestCase):
             history.anchor['head']='0'*64
         self.assertEqual(self.confirm(first,checkpoint,verify),first['reservation'])
 
+    def pilot_replies(self):
+        fixture=json.loads((ROOT/'os/tests/fixtures/mustang-numbering/pilot-error-replies.json').read_text())
+        return [row['reply'] for row in fixture['records']]
+
+    def reconcile(self,proposal,attempted,reply,checkpoint=None,verify=None,head=None):
+        return self.codec.reconcile_ref_reply(self.policy,proposal,attempted,reply,head or self.head,
+            self.get,self.limits,checkpoint or self.checkpoint(),verify)
+
+    def test_recorded_pilot_errors_stay_generic_without_inventing_conflict_codes(self):
+        fixture=json.loads((ROOT/'os/tests/fixtures/mustang-numbering/pilot-error-replies.json').read_text())
+        self.assertTrue(fixture['mechanicsOnly'])
+        self.assertEqual({row['case'] for row in fixture['records']},
+                         {'stale-beforeOid','checkpoint-collision','mismatched-noop'})
+        for reply in self.pilot_replies():
+            self.assertEqual(self.codec.reply_observation(reply),'graphql-errors')
+            self.assertTrue(reply['errors'])
+            self.assertNotIn('type',reply['errors'][0])
+        self.assertEqual(self.codec.reply_observation(None),'no-reply')
+        self.assertEqual(self.codec.reply_observation({'data':{'updateRefs':{'clientMutationId':None}}}),
+                         'success-shaped-reply')
+
+    def test_unchanged_origin_is_unresolved_even_after_a_success_shaped_reply(self):
+        checkpoint=self.checkpoint();old=self.head
+        proposal=self.append();attempted=self.head
+        before=copy.deepcopy(self.objects)
+        replies=[*self.pilot_replies(),None,{'data':{'updateRefs':{'clientMutationId':None}}}]
+        for reply in replies:
+            with self.subTest(reply=self.codec.reply_observation(reply)):
+                with self.assertRaises(self.codec.UnresolvedRefWrite) as caught:
+                    self.reconcile(proposal,attempted,reply,checkpoint,self.verifier(checkpoint,current=old),old)
+                self.assertFalse(caught.exception.retry_allowed)
+                self.assertFalse(caught.exception.reallocation_allowed)
+                self.assertEqual(caught.exception.attempted_oid,attempted)
+                self.assertEqual(caught.exception.observed_oid,old)
+        self.assertEqual(self.objects,before)
+
+    def test_error_or_lost_reply_can_confirm_exact_commit_after_a_later_head(self):
+        proposal=self.append();attempted=self.head
+        self.append('102','1002');checkpoint=self.checkpoint()
+        before=copy.deepcopy(self.objects)
+        for reply in [*self.pilot_replies(),None,{'data':{'updateRefs':{}}}]:
+            with self.subTest(reply=self.codec.reply_observation(reply)):
+                event=self.reconcile(proposal,attempted,reply,checkpoint,self.verifier(checkpoint))
+                self.assertEqual(event,proposal['reservation'])
+        self.assertNotEqual(attempted,self.head)
+        self.assertEqual(self.objects,before)
+        self.assertEqual(len(self.events),2)
+
+    def test_same_logical_event_under_a_different_git_oid_does_not_confirm_attempt(self):
+        proposal=self.append();attempted=self.head
+        _,raw=self.objects[attempted]
+        changed=raw.replace(b'> 0 +0000',b'> 1 +0000',1)
+        self.head=self.put('commit',changed)
+        checkpoint=self.checkpoint()
+        self.assertNotEqual(attempted,self.head)
+        self.assertEqual(self.decode().events[0],proposal['reservation'])
+        with self.assertRaises(self.codec.UnresolvedRefWrite):
+            self.reconcile(proposal,attempted,self.pilot_replies()[0],checkpoint,self.verifier(checkpoint))
+
+    def test_competing_event_cannot_release_or_reassign_the_attempted_counter(self):
+        proposal=self.append();attempted=self.head
+        competitor=copy.deepcopy(proposal['reservation']);competitor['run']['runId']='999'
+        self.head=self.make_commit(competitor,self.genesis);self.events=[competitor]
+        checkpoint=self.checkpoint();before=copy.deepcopy(self.objects)
+        with self.assertRaises(self.codec.UnresolvedRefWrite) as caught:
+            self.reconcile(proposal,attempted,self.pilot_replies()[0],checkpoint,self.verifier(checkpoint))
+        self.assertFalse(caught.exception.reallocation_allowed)
+        self.assertEqual(self.objects,before)
+        self.assertEqual(len(self.events),1)
+
+    def test_reconciliation_still_requires_independent_evidence_for_every_reply_kind(self):
+        proposal=self.append();attempted=self.head;checkpoint=self.checkpoint()
+        for reply in [*self.pilot_replies(),None,{'data':{'updateRefs':{}}}]:
+            self.calls.clear()
+            with self.assertRaisesRegex(ValueError,'verification unavailable'):
+                self.reconcile(proposal,attempted,reply,checkpoint)
+            self.assertEqual(self.calls,[])
+        with self.assertRaisesRegex(ValueError,'unknown'):
+            self.reconcile(proposal,attempted,None,checkpoint,self.verifier(checkpoint,available=False))
+
+    def test_invalid_policy_and_proposal_do_not_become_known_response_conflicts(self):
+        proposal=self.append();attempted=self.head;checkpoint=self.checkpoint()
+        original=self.policy;self.policy=dict(original,minimumTimestamp='1')
+        with self.assertRaisesRegex(ValueError,'policy differs'):
+            self.reconcile(proposal,attempted,self.pilot_replies()[0],checkpoint,self.verifier(checkpoint))
+        self.policy=original
+        invalid=copy.deepcopy(proposal);invalid['reservation']['counter']=True
+        with self.assertRaisesRegex(ValueError,'counter outside'):
+            self.reconcile(invalid,attempted,None,checkpoint,self.verifier(checkpoint))
+
+    def test_reconciliation_checks_git_oid_domain_and_original_prefix_floor(self):
+        old=self.head;checkpoint=self.checkpoint()
+        self.append();proposal=self.append('102','1002');attempted=self.head
+        self.calls.clear()
+        with self.assertRaisesRegex(ValueError,'separate'):
+            self.reconcile(proposal,proposal['expected']['head'],None,
+                           checkpoint,self.verifier(checkpoint,current=old),old)
+        self.assertEqual(self.calls,[])
+        with self.assertRaisesRegex(ValueError,'predates'):
+            self.reconcile(proposal,attempted,self.pilot_replies()[0],checkpoint,
+                           self.verifier(checkpoint,current=old),old)
+
 
 if __name__=='__main__':
     unittest.main()
