@@ -235,7 +235,7 @@ name, a copied device label or a guessed value as readback.
 | `sourceEvidence` | Matching `builder`/`sourceRoot`, pinned manifest SHA-256, pinned `adevtoolRevision` and `pristine: true` bootstrap readback. This attestation is not a full copy-byte revision verification. |
 | `runner` | Actual group name/ID and chosen persistent/ephemeral lifetime; registration evidence matching VM, workflow and repository `1428996648`, with `publicRepositoryAdmitted: true` and `readyOnEveryStart: true`. The protected registration implementation remains Infra-owned. |
 | `signingRouteEvidence` | Actual approved admission of this workflow to the **existing** signer, matching `builder`/workflow, `identityVariable: GCP_SIGNER_SERVICE_ACCOUNT`, `providerVariable: MUSTANG_SIGNER_WORKLOAD_IDENTITY_PROVIDER`, `approved: true`, `establishedMustangIdentityPreserved: true`. No new IAM/key/credential operation is performed by source or inferred from these field names. |
-| `appInputsRecord` | The existing `roseos.app-inputs-record.v1` export record and exact committed allocation, with source/run/artifact IDs, archive digest and APK/receipt/policy identities. |
+| `appInputsRecord` | An actual `roseos.app-inputs-record.v1` Actions export, or the explicit `roseos.app-inputs-private-record.v1` private archive contract below, with the exact committed producer allocation and APK/receipt/policy identities. |
 | `baselineTargetFiles` | Actual own-disk path with the **same** SHA-256/size as the committed Mustang baseline signing receipt; the archive is rechecked on the guest. |
 | `baselineFactoryEvidence` | Optional explicitly bound [factory-image recovery contract](MUSTANG-BASELINE-RECOVERY.md), only with `baselineTargetFiles: null`. Default null; no fallback, retrieval or transfer is activated. |
 | `allocationState` | Reconciliation of failed run `41884368820`, `unknown: false`, all `consumedBuilds`, and the destination `builder`/`dataFilesystemUuid`. Deleting old data is not evidence that uncertainty disappeared. Replacing the VM/disk requires a matching updated reconciliation record. |
@@ -250,11 +250,69 @@ auditing, explicitly marks them retired and excludes Mustang from parallel
 capacity. The active binding remains the unbound dedicated profile. Editing a
 capacity label or retirement marker cannot restore the retired entry points.
 
-The fresh app artifact must carry its producer/export run and attempt, artifact
-identity/digest, the three APKs and per-APK receipts, and matching background
-policy. Verify it on Mustang's own builder before integration. Source classes
+An Actions app export must carry its actual producer/export run and attempt,
+artifact identity/digest, the three APKs and per-APK receipts, and matching
+background policy. A private export carries the same payload identities and
+the explicit archive/transfer evidence below instead of invented Actions IDs.
+Verify either export on Mustang's own builder before integration. Source classes
 alone do not establish F08 reachability; the app microphone removal and OS chin
 control must be included together. The unsigned/signed raised-edge proof gate,
 existing signing identity, automatic Beta hold and disabled Mustang automatic
 publication remain. The requested next build does not itself authorize public
 publication or Latest promotion. Physical-phone tests are separate.
+
+### Private app export transport (source only)
+
+The dedicated `fetch-inputs` step also supports one prepositioned **plain tar**
+under the actual bound Mustang data home:
+`<home>/inputs/frankel-<build>/export.tar`. It performs no download or transfer,
+and never reads a Frankel host path. This does not authorize positioning that
+file, approving a destination or spending on capacity. Both committed bindings
+remain unbound. No archive or real private-transfer record accompanies this
+source change. The Yogi budget is not Mustang approval.
+
+Release owns the shared input-record contract and verifier. Its private schema
+is `roseos.app-inputs-private-record.v1`; `producer`, `signerSha256`, `sdk`,
+`apps` and `files` retain the canonical export receipt's exact values. `export`
+has **only** `receiptSha256` and `privateArchive`. The latter has `path`, lowercase
+`sha256`, integer `sizeBytes`, and `provenance: {path, sha256}`. It has no Actions
+artifact, export run or export attempt. The producer's original Frankel run and
+attempt still come from the real committed allocation; a Mac export is not a new
+Actions run. Actions records and their existing creation/download path remain
+unchanged.
+
+`provenance.path` names an actual committed JSON under `os/`, pinned by its own
+SHA-256. Its schema is `roseos.app-inputs-private-provenance.v1`, with:
+
+- `producer` and `receiptSha256` identical to the private record, and
+  `archive: {sha256, sizeBytes}` identical to the tar's descriptor.
+- `source` containing `exporter: scripts/host-app-inputs-export.py`, the actual
+  full `exporterSource` commit, `originalAttemptChainVerified: true` and a
+  nonempty `evidenceRef` for the performed exporter/chain verification.
+- `transfer` containing actual `approved: true`, `completed: true`, `approvalRef`
+  and receiver `evidenceRef`, with `received: {sha256, sizeBytes}` matching the
+  archive and `destination: {builder, dataFilesystemUuid, path}` matching this
+  exact bound VM, data filesystem and private archive path.
+
+These fields must record actual authorization and observations. Filling them
+does not itself grant authority or perform a copy. The hosted guard validates
+their binding before controller login, including all producer fields against
+the hash-bound committed allocation. On the guest, the existing host check
+verifies VM identity and the data UUID. The importer refuses linked paths,
+special files or a file on another filesystem, then copies the archive once to
+the fresh run's private input directory and checks its size and hash again.
+It leaves the original unchanged and retains failed copies for diagnosis.
+
+No tar metadata is extracted. Only the canonical twelve regular files are
+copied; common `./` prefixes and the root/signed-apps directory entries are
+allowed. Extra, missing, duplicate, linked, sparse, special, absolute/traversing
+or oversized members refuse admission. The canonical shared verifier then
+checks every file's hash/size, export receipt, sums, APK receipt/signature,
+package/version/signer and policy with the destination's own tools. The native
+producer repeats that same admission before integration. Importing a tar alone
+is not an admission or a new build.
+
+The reported Mac export of Frankel `2026110501` (apps 365/5/39) has not been
+transferred or admitted here. Its exact tar hash/size, receipt and provenance,
+the baseline archive's availability and the failed Mustang allocation state
+remain operational inputs, not inferred facts.

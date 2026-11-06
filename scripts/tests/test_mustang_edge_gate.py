@@ -2,11 +2,13 @@
 import copy
 import functools
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
 import sys
 import tempfile
+import tarfile
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -22,6 +24,7 @@ import mustang_paths
 import subprocess
 import dex_fixture
 import test_edge_artifact as fixtures
+import test_app_inputs_export as app_fixture
 import os_release_shape as workflow_shape
 
 spec = importlib.util.spec_from_file_location('mustang_sign_gate_tests', ROOT/'scripts/mustang-sign-package.py')
@@ -411,6 +414,214 @@ class DedicatedPathsTest(unittest.TestCase):
             self.assertEqual(result.returncode,4)
             self.assertIn('dedicated Mustang bindings missing',result.stderr)
 
+class PrivateInputImportTest(app_fixture.Fixture):
+    """Canonical exporter fixtures, real tar imports and shared admission; no host/network."""
+    def setUp(self):
+        super().setUp()
+        self.receipt,self.artifact=self.export()
+        spec=importlib.util.spec_from_file_location('mustang_private_input_test',ROOT/'scripts/mustang-dedicated.py')
+        self.driver=importlib.util.module_from_spec(spec); spec.loader.exec_module(self.driver)
+        self.lane=DedicatedPathsTest().profile(self.tmp/'mustang')
+        self.cfg=dict(dataFilesystemUuid='fixture-data-uuid')
+        self.archive=Path(self.lane['storageRoot']).parent/'inputs'/self.receipt['producer']['tag']/'export.tar'
+        self.archive.parent.mkdir(parents=True)
+        reconcile=self.repo/'os/build-only/mustang-reconcile.json'; reconcile.parent.mkdir(parents=True,exist_ok=True)
+        reconcile.write_bytes((ROOT/'os/build-only/mustang-reconcile.json').read_bytes())
+        self.rec={key:self.receipt[key] for key in ('producer','signerSha256','sdk','apps','files')}
+        self.rec.update(schema=self.driver.PRIVATE_RECORD,export=dict(
+            receiptSha256=app_fixture.sha((self.artifact/'app-inputs-export.json').read_bytes()),
+            privateArchive=dict(path=str(self.archive),provenance=dict(path='os/app-inputs/private-provenance.json'))))
+        self.proof=dict(schema=self.driver.PRIVATE_PROVENANCE,producer=self.rec['producer'],
+            receiptSha256=self.rec['export']['receiptSha256'],
+            source=dict(exporter='scripts/host-app-inputs-export.py',exporterSource=SOURCE,
+                        originalAttemptChainVerified=True,evidenceRef='synthetic exporter verification'),
+            transfer=dict(approved=True,completed=True,approvalRef='synthetic transfer approval',
+                evidenceRef='synthetic receiver readback',destination=dict(builder=self.lane['vm'],
+                    dataFilesystemUuid=self.cfg['dataFilesystemUuid'],path=str(self.archive))))
+        self.path=self.repo/'os/app-inputs/private.json'
+        self.members=[(str(p.relative_to(self.artifact)),p.read_bytes())
+                      for p in sorted(self.artifact.rglob('*')) if p.is_file()]
+        self.pack()
+
+    def bind(self):
+        row=self.rec['export']['privateArchive']
+        row.update(sha256=gate.digest(self.archive),sizeBytes=self.archive.stat().st_size)
+        self.proof['archive']={key:row[key] for key in ('sha256','sizeBytes')}
+        self.proof['transfer']['received']=dict(self.proof['archive'])
+        proof_path=self.repo/row['provenance']['path']; proof_path.parent.mkdir(parents=True,exist_ok=True)
+        proof_path.write_text(json.dumps(self.proof)); row['provenance']['sha256']=gate.digest(proof_path)
+        self.path.write_text(json.dumps(self.rec))
+
+    def pack(self,members=None):
+        with tarfile.open(self.archive,'w') as stream:
+            for name,data in self.members if members is None else members:
+                if isinstance(name,tarfile.TarInfo): info=name
+                else: info=tarfile.TarInfo(name); info.size=len(data)
+                stream.addfile(info,io.BytesIO(data))
+        self.bind()
+
+    def imported(self,name='import'):
+        with patch.object(self.driver.subprocess,'run',side_effect=AssertionError('private import used network/tools')):
+            return self.driver.fetch_inputs(self.path,self.tmp/name,lane=self.lane,cfg=self.cfg,root=self.repo)
+
+    def admit(self,directory,identity=None):
+        return app_fixture.verify.verify(self.path,directory,dict(aapt='fixture-aapt',apksigner='fixture-apksigner'),
+                                         root=self.repo,identity=identity or self.identity)
+
+    def test_private_tar_imports_exact_payload_without_download_and_preserves_archive(self):
+        before=self.archive.read_bytes(); directory=self.imported()
+        self.assertEqual(self.archive.read_bytes(),before)
+        self.assertEqual({str(p.relative_to(directory)) for p in directory.rglob('*') if p.is_file()},
+                         {name for name,_ in self.members})
+        for name,data in self.members: self.assertEqual((directory/name).read_bytes(),data)
+        with self.assertRaises(FileExistsError): self.imported()
+
+    def test_common_tar_dot_prefix_and_directories_are_supported_without_extracting_metadata(self):
+        root=tarfile.TarInfo('.'); root.type=tarfile.DIRTYPE; root.mode=0o777
+        apps=tarfile.TarInfo('./signed-apps'); apps.type=tarfile.DIRTYPE; apps.mode=0o777
+        self.pack([(root,b''),(apps,b'')]+[('./'+n,d) for n,d in self.members])
+        directory=self.imported()
+        self.assertEqual((directory/'background-policy.json').read_bytes(),(self.artifact/'background-policy.json').read_bytes())
+        self.assertNotEqual(directory.stat().st_mode&0o777,0o777)
+
+    def test_mixed_actions_metadata_and_missing_or_wrong_transfer_provenance_refuse_before_copy(self):
+        original=copy.deepcopy(self.rec); proof=copy.deepcopy(self.proof)
+        cases=[lambda:self.rec['export'].update(artifact={'id':9}),
+               lambda:self.proof['transfer'].update(approved=False),
+               lambda:self.proof['transfer'].update(completed=False),
+               lambda:self.proof['transfer'].update(approvalRef=''),
+               lambda:self.proof['transfer']['destination'].update(builder=dict(self.lane['vm'],instanceId='999')),
+               lambda:self.proof['transfer']['destination'].update(dataFilesystemUuid='other-disk'),
+               lambda:self.proof['source'].update(originalAttemptChainVerified=False),
+               lambda:self.proof['source'].update(exporterSource='guessed'),
+               lambda:self.proof.update(receiptSha256='0'*64)]
+        for i,change in enumerate(cases):
+            self.rec=copy.deepcopy(original); self.proof=copy.deepcopy(proof); change(); self.bind()
+            with self.subTest(case=i),self.assertRaises(ValueError): self.imported(str(i))
+            self.assertFalse((self.tmp/str(i)).exists())
+
+    def test_changed_provenance_or_archive_hash_refuses_and_retains_bad_copy(self):
+        proof=self.repo/self.rec['export']['privateArchive']['provenance']['path']
+        proof.write_text(proof.read_text()+' ')
+        with self.assertRaisesRegex(ValueError,'provenance bytes differ'): self.imported('proof-drift')
+        self.bind(); original=self.archive.read_bytes()
+        self.archive.write_bytes(b'x'+original[1:])
+        with self.assertRaisesRegex(ValueError,'copy/hash differs'): self.imported('archive-drift')
+        self.assertEqual((self.tmp/'archive-drift/input.tar').read_bytes(),self.archive.read_bytes())
+        self.assertFalse((self.tmp/'archive-drift/files').exists())
+
+    def test_wrong_size_path_links_and_special_source_files_refuse(self):
+        original=copy.deepcopy(self.rec)
+        self.rec['export']['privateArchive']['sizeBytes']+=1
+        self.path.write_text(json.dumps(self.rec))
+        with self.assertRaises(ValueError): self.imported('size')
+        self.rec=original; self.rec['export']['privateArchive']['path']='/retired/Frankel/export.tar'
+        self.path.write_text(json.dumps(self.rec))
+        with self.assertRaisesRegex(ValueError,'path/hash/size'): self.imported('path')
+        self.rec['export']['privateArchive']['path']=str(self.archive); self.bind()
+        target=self.archive.with_name('original.tar'); self.archive.rename(target); self.archive.symlink_to(target)
+        with self.assertRaisesRegex(ValueError,'link'): self.imported('link')
+        self.archive.unlink(); os.mkfifo(self.archive)
+        with self.assertRaisesRegex(ValueError,'regular file'): self.imported('fifo')
+
+    def test_archive_on_another_filesystem_refuses(self):
+        with patch.object(self.driver.os,'fstat',return_value=SimpleNamespace(st_mode=0o100600,
+                st_size=self.archive.stat().st_size,st_dev=-1)):
+            with self.assertRaisesRegex(ValueError,'Mustang data storage'): self.imported()
+
+    def test_traversal_absolute_unexpected_duplicate_links_and_devices_refuse(self):
+        cases=[('../escape',b'x'),('/escape',b'x'),('extra',b'x'),self.members[0],
+               ('./'+self.members[0][0],self.members[0][1])]
+        for kind in (tarfile.SYMTYPE,tarfile.LNKTYPE,tarfile.FIFOTYPE,tarfile.CHRTYPE):
+            info=tarfile.TarInfo(self.members[0][0]); info.type=kind; info.linkname='outside'
+            cases.append((info,b''))
+        for i,extra in enumerate(cases):
+            with self.subTest(case=i):
+                self.pack(([extra]+self.members[1:]) if isinstance(extra[0],tarfile.TarInfo) else self.members+[extra])
+                with self.assertRaises(ValueError): self.imported(str(i))
+                self.assertTrue((self.tmp/str(i)/'input.tar').is_file())
+        self.assertFalse((self.tmp/'escape').exists())
+
+    def test_sparse_missing_oversized_and_malformed_tar_refuse(self):
+        self.pack(self.members[:-1])
+        with self.assertRaisesRegex(ValueError,'inventory differs'): self.imported('missing')
+        name='background-policy.json'; data=(self.artifact/name).read_bytes()
+        self.pack([(name,data+b'x')]+[(n,d) for n,d in self.members if n!=name])
+        with self.assertRaisesRegex(ValueError,'member size differs'): self.imported('size')
+        self.archive.write_bytes(b'not a tar'); self.bind()
+        with self.assertRaises(tarfile.TarError): self.imported('malformed')
+        self.pack()
+        with patch.object(tarfile.TarInfo,'issparse',return_value=True):
+            with self.assertRaisesRegex(ValueError,'sparse'): self.imported('sparse')
+
+    def test_payload_record_must_have_exact_canonical_inventory(self):
+        for i,files in enumerate((self.rec['files'][:-1],self.rec['files']+[self.rec['files'][0]])):
+            original=self.rec['files']; self.rec['files']=files; self.path.write_text(json.dumps(self.rec))
+            with self.assertRaisesRegex(ValueError,'canonical ten payload'): self.imported(str(i))
+            self.rec['files']=original
+
+    def test_private_producer_cannot_relabel_another_committed_candidate(self):
+        self.rec['producer']=dict(self.rec['producer'],candidateSha='f'*40)
+        self.proof['producer']=self.rec['producer']; self.bind()
+        with self.assertRaisesRegex(ValueError,'committed allocation'): self.imported()
+
+    def test_failed_extraction_retains_archive_without_modifying_source_and_retry_is_explicit(self):
+        before=self.archive.read_bytes()
+        with patch.object(self.driver.shutil,'copyfileobj',side_effect=OSError('synthetic interruption')):
+            with self.assertRaises(OSError): self.imported('interrupted')
+        self.assertEqual((self.tmp/'interrupted/input.tar').read_bytes(),before)
+        self.assertEqual(self.archive.read_bytes(),before)
+        with self.assertRaises(FileExistsError): self.imported('interrupted')
+        self.imported('new-attempt')
+
+    def test_shared_verifier_admits_private_bytes_with_signature_policy_and_receipt_checks(self):
+        directory=self.imported()
+        self.assertEqual(self.admit(directory)['verdict'],'ADMITTED')
+        with self.assertRaises(app_fixture.verify.Refused):
+            self.admit(directory,identity=lambda apk,*args:dict(self.identity(apk,*args),certificates=['0'*64]))
+        receipt=directory/'signed-apps/dev.pixel.voice.receipt.json'; receipt.write_text('{}')
+        with self.assertRaises(app_fixture.verify.Refused): self.admit(directory)
+        # Make hashes/receipt/sums self-consistent around a bad policy. Only the
+        # actual shared policy admission can reject this, not archive hashing.
+        policy=self.artifact/'background-policy.json'; changed=json.loads(policy.read_text())
+        changed['voice']['apkSha256']='0'*64; policy.write_text(json.dumps(changed))
+        for row in self.receipt['files']:
+            file=self.artifact/row['path']; row.update(sha256=gate.digest(file),sizeBytes=file.stat().st_size)
+        receipt_path=self.artifact/'app-inputs-export.json'; receipt_path.write_text(json.dumps(self.receipt))
+        self.rec['files']=copy.deepcopy(self.receipt['files'])
+        self.rec['export']['receiptSha256']=gate.digest(receipt_path)
+        self.proof['receiptSha256']=self.rec['export']['receiptSha256']
+        sums={row['path']:row['sha256'] for row in self.rec['files']}
+        sums['app-inputs-export.json']=gate.digest(receipt_path)
+        (self.artifact/'SHA256SUMS').write_text(''.join(f'{digest}  {name}\n' for name,digest in sorted(sums.items())))
+        self.members=[(str(p.relative_to(self.artifact)),p.read_bytes())
+                      for p in sorted(self.artifact.rglob('*')) if p.is_file()]
+        self.pack(); directory=self.imported('bad-policy')
+        with self.assertRaisesRegex(app_fixture.verify.Refused,'policy'): self.admit(directory)
+
+    def test_private_fetch_step_must_finish_shared_admission_before_emitting_inputs(self):
+        out=self.tmp/'fetch-main'
+        shared=SimpleNamespace(verify=lambda path,directory,tools:app_fixture.verify.verify(
+            path,directory,tools,root=self.repo,identity=self.identity))
+        cfg=dict(self.cfg,appInputsRecord=str(self.path.relative_to(self.repo)),tools=dict(aapt='aapt',apksigner='apksigner'))
+        with patch.object(self.driver,'ROOT',self.repo),patch.object(self.driver,'context',return_value=(self.lane,cfg)), \
+                patch.object(self.driver,'host_check'),patch.object(self.driver.ota,'module',return_value=shared), \
+                patch.object(self.driver,'emit') as emitted, \
+                patch.dict(os.environ,dict(GITHUB_RUN_ID='123',GITHUB_RUN_ATTEMPT='1')), \
+                patch.object(sys,'argv',['mustang-dedicated.py','fetch-inputs','--out',str(out)]):
+            self.assertEqual(self.driver.main(),0)
+            emitted.assert_called_once_with(inputs_dir=str(out/'files'))
+        emitted.reset_mock()
+        with patch.object(self.driver,'ROOT',self.repo),patch.object(self.driver,'context',return_value=(self.lane,cfg)), \
+                patch.object(self.driver,'host_check'),patch.object(self.driver.ota,'module',return_value=shared), \
+                patch.object(self.driver,'emit') as emitted, \
+                patch.object(app_fixture.verify,'verify',side_effect=app_fixture.verify.Refused('synthetic signature refusal')), \
+                patch.dict(os.environ,dict(GITHUB_RUN_ID='123',GITHUB_RUN_ATTEMPT='1')), \
+                patch.object(sys,'argv',['mustang-dedicated.py','fetch-inputs','--out',str(self.tmp/'refused-main')]):
+            with self.assertRaises(app_fixture.verify.Refused): self.driver.main()
+            emitted.assert_not_called()
+
+
 class DedicatedRuntimeTest(unittest.TestCase):
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory(); self.addCleanup(self.temp.cleanup)
@@ -471,6 +682,13 @@ class DedicatedRuntimeTest(unittest.TestCase):
         state=self.driver.load(self.root/self.cfg['allocationState']); state['unknown']=True
         (self.root/self.cfg['allocationState']).write_text(json.dumps(state))
         with self.assertRaisesRegex(ValueError,'allocation state remains unresolved'): self.admitted()
+
+    def test_private_schema_requires_private_provenance_during_hosted_guard(self):
+        path=self.root/self.cfg['appInputsRecord']; record=self.driver.load(path)
+        record['schema']=self.driver.PRIVATE_RECORD; path.write_text(json.dumps(record))
+        with patch.object(self.driver,'private_binding',side_effect=ValueError('synthetic transfer not approved')) as check:
+            with self.assertRaisesRegex(ValueError,'transfer not approved'): self.admitted()
+            check.assert_called_once_with(record,self.lane,self.cfg,self.root)
 
     def test_factory_baseline_requires_exclusive_explicit_bound_evidence_before_host_start(self):
         ref=self.record('factory-baseline',dict(schema='roseos.mustang-factory-baseline-input.v1',status='unbound'))

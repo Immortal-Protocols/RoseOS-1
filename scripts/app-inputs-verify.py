@@ -7,14 +7,31 @@ record is built only from the artifact's own receipt and the run's actual metada
 digest). A consuming builder (Yogi, or Mustang on its own capacity) downloads that exact artifact by run and
 artifact id, then admits it with `verify` before any use.
 
+A set that reached its consumer as a private archive instead of an Actions artifact has its own record schema,
+roseos.app-inputs-private-record.v1. Its export carries only receiptSha256 and privateArchive {path, sha256,
+sizeBytes, provenance {path, sha256}}: no run, attempt or artifact is invented for it. The provenance is a committed
+JSON under os/ (schema roseos.app-inputs-private-provenance.v1), written by whoever exported and transferred the
+archive. It records what they actually did and saw; committing it grants no authority and performs no transfer.
+The consumer imports the archive itself, binds the destination to its own builder and disk, and then admits the
+imported files with `verify`, exactly as an Actions download.
+
   record --receipt R --run ID --attempt N --artifact-name NAME --artifact-id ID --artifact-digest sha256:HEX
           prints the record for R's export (the receipt file as downloaded); Release commits it
+  record-private --receipt R --archive TAR --provenance os/PATH.json
+          prints the private record: R's own values, TAR's actual sha256 and size, and the committed provenance's
+          path and sha256; the provenance must already name exactly that receipt and archive. Release commits it
   verify --record PATH --dir DIR [--aapt PATH --apksigner PATH]
-          admits DIR against the committed record; nothing is written
+          admits DIR against the committed record (either schema); nothing is written
 
 verify checks:
-- the record is roseos.app-inputs-record.v1, and its producer's allocation record is committed in this checkout
-  with the recorded sha256;
+- the record is roseos.app-inputs-record.v1 or roseos.app-inputs-private-record.v1, and its producer's allocation
+  record is committed in this checkout with the recorded sha256;
+- for a private record: its export has exactly receiptSha256 and privateArchive, with exactly the fields above; the
+  provenance is committed under os/ with the recorded sha256 and names the same producer, receiptSha256 and archive
+  sha256 and size; it records the exporter (scripts/host-app-inputs-export.py at a full commit), a verified original
+  attempt chain, an approved and completed transfer whose received bytes are the archive's, and a destination
+  {builder, dataFilesystemUuid, path} at the record's archive path, each with a nonempty evidence reference. Which
+  builder and disk the destination must be is the consumer's check, against its own bound lane;
 - DIR holds exactly the recorded files plus app-inputs-export.json and SHA256SUMS, each a regular file and never a
   link;
 - every file has the recorded size and sha256;
@@ -36,9 +53,13 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 RECORD_SCHEMA = 'roseos.app-inputs-record.v1'
+PRIVATE_RECORD_SCHEMA = 'roseos.app-inputs-private-record.v1'
+PROVENANCE_SCHEMA = 'roseos.app-inputs-private-provenance.v1'
 RECEIPT_SCHEMA = 'roseos.app-inputs-export.v1'
 RECEIPT, SUMS = 'app-inputs-export.json', 'SHA256SUMS'
+EXPORTER = 'scripts/host-app-inputs-export.py'
 HEX64 = re.compile(r'[0-9a-f]{64}')
+COMMIT = re.compile(r'[0-9a-f]{40}')
 RUN = re.compile(r'[1-9][0-9]{0,19}')
 
 
@@ -79,16 +100,112 @@ def record(receipt_path, run, attempt, artifact_name, artifact_id, artifact_dige
                        'artifact': {'name': artifact_name, 'id': int(artifact_id), 'digest': artifact_digest}}}
 
 
+def private_record(receipt_path, archive_path, provenance, root=ROOT):
+    """The committed record of one private export, from its receipt as exported, the archive's actual bytes and
+    the committed provenance of that export and its transfer; nothing in it is supplied by hand."""
+    receipt = json.loads(Path(receipt_path).read_text())
+    if receipt.get('schema') != RECEIPT_SCHEMA:
+        raise Refused('not an app-inputs export receipt')
+    archive = regular(archive_path, 'the private archive')
+    proof = committed_path(root, provenance, 'the private export provenance')
+    destination = json.loads(proof.read_text())
+    for key in ('transfer', 'destination', 'path'):
+        destination = destination.get(key) if isinstance(destination, dict) else None
+    if not isinstance(destination, str):
+        raise Refused('the provenance names no transfer destination path')
+    rec = {'schema': PRIVATE_RECORD_SCHEMA, 'producer': receipt['producer'], 'signerSha256': receipt['signerSha256'],
+           'sdk': receipt['sdk'], 'apps': receipt['apps'], 'files': receipt['files'],
+           'export': {'receiptSha256': sha256(receipt_path),
+                      'privateArchive': {'path': destination, 'sha256': sha256(archive),
+                                         'sizeBytes': archive.stat().st_size,
+                                         'provenance': {'path': provenance, 'sha256': sha256(proof)}}}}
+    private_archive(rec, root)  # the provenance must already name this receipt, these archive bytes and its path
+    return rec
+
+
 def regular(path, label):
     if os.path.islink(path) or not Path(path).is_file():
         raise Refused(f'{label} must be a regular file, not a link')
     return Path(path)
 
 
+def committed_path(root, relative, label):
+    """A regular file (never a link) in this checkout, named by a relative path under os/."""
+    parts = Path(relative).parts if isinstance(relative, str) else ()
+    if not parts or parts[0] != 'os' or Path(relative).is_absolute() or '..' in parts:
+        raise Refused(f'{label} must be a committed path under os/')
+    path = Path(root)/relative
+    if path.is_symlink() or not path.is_file():
+        raise Refused(f'{label} is not committed here')
+    return path
+
+
+def committed(root, relative, digest, label):
+    """committed_path() with the recorded sha256."""
+    path = committed_path(root, relative, label)
+    if sha256(path) != digest:
+        raise Refused(f'{label} is not committed here with the recorded sha256')
+    return path
+
+
+def noted(value):
+    return isinstance(value, str) and bool(value.strip())
+
+
+def private_archive(rec, root=ROOT):
+    """The private export's archive, admitted only with a committed provenance that names exactly this export.
+
+    The provenance records what its writer did and observed (the exporter run, the attempt-chain check and the
+    approved, completed transfer). This checks that it is complete and agrees with the record; it is not itself
+    evidence that a transfer happened, and the consumer still binds the destination to its own builder and disk.
+    """
+    export = rec.get('export')
+    if not isinstance(export, dict) or set(export) != {'receiptSha256', 'privateArchive'}:
+        raise Refused('a private record carries exactly receiptSha256 and privateArchive: no Actions run or artifact')
+    if not HEX64.fullmatch(str(export['receiptSha256'])):
+        raise Refused('receiptSha256 must be a lowercase sha256')
+    archive = export['privateArchive']
+    if not isinstance(archive, dict) or set(archive) != {'path', 'sha256', 'sizeBytes', 'provenance'}:
+        raise Refused('privateArchive must be exactly path, sha256, sizeBytes and provenance')
+    if not HEX64.fullmatch(str(archive['sha256'])) or type(archive['sizeBytes']) is not int or archive['sizeBytes'] <= 0 \
+            or not isinstance(archive['path'], str) or not Path(archive['path']).is_absolute():
+        raise Refused('privateArchive needs an absolute path, a lowercase sha256 and a positive integer size')
+    ref = archive['provenance']
+    if not isinstance(ref, dict) or set(ref) != {'path', 'sha256'} or not HEX64.fullmatch(str(ref['sha256'])):
+        raise Refused('privateArchive.provenance must be exactly path and sha256')
+    proof = json.loads(committed(root, ref['path'], ref['sha256'], 'the private export provenance').read_text())
+    identity = {'sha256': archive['sha256'], 'sizeBytes': archive['sizeBytes']}
+    if not isinstance(proof, dict) or set(proof) != {'schema', 'producer', 'receiptSha256', 'archive', 'source', 'transfer'} \
+            or proof['schema'] != PROVENANCE_SCHEMA:
+        raise Refused(f'the provenance is not exactly a {PROVENANCE_SCHEMA} record')
+    if proof['producer'] != rec['producer'] or proof['receiptSha256'] != export['receiptSha256'] \
+            or proof['archive'] != identity:
+        raise Refused('the provenance names another producer, receipt or archive')
+    source, transfer = proof['source'], proof['transfer']
+    if not isinstance(source, dict) or set(source) != {'exporter', 'exporterSource', 'originalAttemptChainVerified', 'evidenceRef'} \
+            or source['exporter'] != EXPORTER or not COMMIT.fullmatch(str(source['exporterSource'])) \
+            or source['originalAttemptChainVerified'] is not True or not noted(source['evidenceRef']):
+        raise Refused(f'the provenance must record {EXPORTER} at a full commit, a verified original attempt chain '
+                      'and its evidence')
+    if not isinstance(transfer, dict) \
+            or set(transfer) != {'approved', 'completed', 'approvalRef', 'evidenceRef', 'received', 'destination'} \
+            or transfer['approved'] is not True or transfer['completed'] is not True \
+            or not noted(transfer['approvalRef']) or not noted(transfer['evidenceRef']):
+        raise Refused('the provenance must record an approved, completed transfer and its evidence')
+    destination = transfer['destination']
+    if transfer['received'] != identity or not isinstance(destination, dict) \
+            or set(destination) != {'builder', 'dataFilesystemUuid', 'path'} or not destination['builder'] \
+            or not noted(destination['dataFilesystemUuid']) or destination['path'] != archive['path']:
+        raise Refused('the transfer did not deliver this archive to the recorded path on a named builder and disk')
+    return archive
+
+
 def verify(record_path, directory, tools=None, root=ROOT, identity=None):
     rec = json.loads(Path(record_path).read_text())
-    if not isinstance(rec, dict) or rec.get('schema') != RECORD_SCHEMA:
+    if not isinstance(rec, dict) or rec.get('schema') not in (RECORD_SCHEMA, PRIVATE_RECORD_SCHEMA):
         raise Refused('not an app-inputs record')
+    if rec['schema'] == PRIVATE_RECORD_SCHEMA:
+        private_archive(rec, root)
     producer, files = rec['producer'], rec['files']
     allocation = Path(root)/producer['allocation']['path']
     if '..' in Path(producer['allocation']['path']).parts or not allocation.is_file() or allocation.is_symlink() \
@@ -133,6 +250,7 @@ def verify(record_path, directory, tools=None, root=ROOT, identity=None):
             raise Refused(str(error)) from None
         checked = True
     return {'verdict': 'ADMITTED', 'record': str(record_path), 'producer': producer['tag'],
+            'transport': 'private' if rec['schema'] == PRIVATE_RECORD_SCHEMA else 'actions',
             'export': rec['export'], 'apps': rec['apps'], 'toolsRechecked': checked}
 
 
@@ -147,6 +265,9 @@ def main(argv=None):
     r = sub.add_parser('record')
     for flag in ('--receipt', '--run', '--attempt', '--artifact-name', '--artifact-id', '--artifact-digest'):
         r.add_argument(flag, required=True)
+    q = sub.add_parser('record-private')
+    for flag in ('--receipt', '--archive', '--provenance'):
+        q.add_argument(flag, required=True)
     v = sub.add_parser('verify')
     v.add_argument('--record', required=True)
     v.add_argument('--dir', required=True)
@@ -156,11 +277,13 @@ def main(argv=None):
     try:
         if a.command == 'record':
             out = record(a.receipt, a.run, a.attempt, a.artifact_name, a.artifact_id, a.artifact_digest)
+        elif a.command == 'record-private':
+            out = private_record(a.receipt, a.archive, a.provenance, root=ROOT)
         else:
             if bool(a.aapt) != bool(a.apksigner):
                 p.error('--aapt and --apksigner go together')
             tools = {'aapt': a.aapt, 'apksigner': a.apksigner} if a.aapt else None
-            out = verify(a.record, a.dir, tools)
+            out = verify(a.record, a.dir, tools, root=ROOT)
     except (Refused, OSError, ValueError, KeyError, TypeError) as error:
         print(json.dumps({'verdict': 'REFUSED', 'error': str(error) if isinstance(error, Refused) else type(error).__name__}),
               file=sys.stderr)

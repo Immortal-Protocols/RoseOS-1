@@ -13,8 +13,10 @@ import os
 from pathlib import Path
 import re
 import shutil
+import stat
 import subprocess
 import sys
+import tarfile
 import urllib.request
 import zipfile
 
@@ -27,6 +29,8 @@ import release_receipts
 ROOT=Path(__file__).resolve().parents[1]
 CONFIG=ROOT/'os/build-only/mustang-runtime.json'
 WORKFLOW='.github/workflows/mustang-ota-dedicated.yml'
+PRIVATE_RECORD='roseos.app-inputs-private-record.v1'
+PRIVATE_PROVENANCE='roseos.app-inputs-private-provenance.v1'
 
 
 def load(file):
@@ -92,8 +96,9 @@ def guard(lane, cfg, env, publish=False, root=ROOT, diff=None):
                 not isinstance(b,str) or not re.fullmatch(r'[1-9][0-9]{9}',b) for b in state['consumedBuilds']):
         raise ValueError('prior failed Mustang allocation state remains unresolved')
     record=reference(cfg.get('appInputsRecord'),root)
-    if record.get('schema')!='roseos.app-inputs-record.v1' or record.get('producer',{}).get('device')!='frankel':
+    if record.get('schema') not in ('roseos.app-inputs-record.v1',PRIVATE_RECORD) or record.get('producer',{}).get('device')!='frankel':
         raise ValueError('actual immutable signed-app export record required')
+    if record['schema']==PRIVATE_RECORD: private_binding(record,lane,cfg,root)
     allocation=reference(record['producer']['allocation']['path'],root)
     if ota.digest(Path(root)/record['producer']['allocation']['path'])!=record['producer']['allocation']['sha256'] \
             or allocation.get('sourceSha')!=record['producer']['sourceSha']:
@@ -169,8 +174,114 @@ def host_check(lane,cfg,observe_id=metadata_id,execute=subprocess.run):
         raise ValueError('artifact/signing CLI unavailable before compile')
 
 
-def fetch_inputs(record_path,out,execute=subprocess.run):
-    rec=load(record_path); export=rec['export']; artifact=export['artifact']; out=Path(out)
+def private_binding(record,lane,cfg,root=ROOT):
+    """Admit only a separately approved, completed transfer to this exact lane.
+
+    These committed attestations do not perform or authorize a transfer. Source
+    receipt/identity/policy checks are still repeated on the imported bytes.
+    """
+    export=record['export']; archive=export['privateArchive']; producer=record['producer']
+    if set(export)!={'receiptSha256','privateArchive'} or set(archive)!={'path','sha256','sizeBytes','provenance'}:
+        raise ValueError('private transfer cannot contain Actions artifact metadata')
+    build=producer.get('build','')
+    if producer.get('device')!='frankel' or not re.fullmatch(r'[1-9][0-9]{9}',build) \
+            or producer.get('tag')!=f'frankel-{build}':
+        raise ValueError('private export producer identity differs')
+    allocation_ref=producer['allocation']; allocation=reference(allocation_ref['path'],root)
+    if ota.digest(Path(root)/allocation_ref['path'])!=allocation_ref['sha256'] or any(
+            producer.get(key)!=allocation.get(key) for key in ('device','build','tag','candidateSha','sourceSha','run')):
+        raise ValueError('private export producer differs from its committed allocation')
+    home=mustang_paths.layout(lane)['home']
+    expected=home/'inputs'/producer['tag']/'export.tar'
+    if archive.get('path')!=str(expected) or type(archive.get('sizeBytes')) is not int or archive['sizeBytes']<=0 \
+            or any(not re.fullmatch(r'[0-9a-f]{64}',str(value)) for value in
+                   (archive.get('sha256'),export.get('receiptSha256'))):
+        raise ValueError('private archive path/hash/size binding differs')
+    ref=archive['provenance']
+    if set(ref)!={'path','sha256'} or not re.fullmatch(r'[0-9a-f]{64}',str(ref['sha256'])):
+        raise ValueError('private transfer provenance digest required')
+    proof=reference(ref['path'],root)
+    if ota.digest(Path(root)/ref['path'])!=ref['sha256']:
+        raise ValueError('private transfer provenance bytes differ')
+    source=proof.get('source',{}); transfer=proof.get('transfer',{})
+    identity={k:archive[k] for k in ('sha256','sizeBytes')}
+    refs=(source.get('evidenceRef'),transfer.get('approvalRef'),transfer.get('evidenceRef'))
+    if proof.get('schema')!=PRIVATE_PROVENANCE or proof.get('producer')!=producer \
+            or proof.get('receiptSha256')!=export['receiptSha256'] or proof.get('archive')!=identity \
+            or source.get('originalAttemptChainVerified') is not True \
+            or any(not isinstance(value,str) or not value.strip() for value in refs) \
+            or source.get('exporter')!='scripts/host-app-inputs-export.py' \
+            or not re.fullmatch(r'[0-9a-f]{40}',str(source.get('exporterSource'))) \
+            or transfer.get('approved') is not True or transfer.get('completed') is not True \
+            or transfer.get('received')!=identity or transfer.get('destination')!=dict(
+                builder=lane['vm'],dataFilesystemUuid=cfg['dataFilesystemUuid'],path=str(expected)):
+        raise ValueError('private export/transfer provenance is incomplete or belongs elsewhere')
+    return archive
+
+
+def import_private(record,out,lane,cfg,root=ROOT):
+    """Copy and check one prepositioned plain tar; never extract its metadata.
+
+    A failed copy/import is retained in the fresh output directory. Original
+    inputs are never changed, and no downloader or credentials are used here.
+    """
+    archive=private_binding(record,lane,cfg,root); path=Path(archive['path']); out=Path(out)
+    if any(p.is_symlink() for p in (path,*path.parents)):
+        raise ValueError('private archive traverses a link')
+    if not stat.S_ISREG(path.lstat().st_mode):
+        raise ValueError('private archive must be a regular file')
+    with os.fdopen(os.open(path,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK),'rb') as source:
+        observed=os.fstat(source.fileno())
+        if not stat.S_ISREG(observed.st_mode) or observed.st_size!=archive['sizeBytes'] \
+                or observed.st_dev!=os.stat(mustang_paths.layout(lane)['home']).st_dev:
+            raise ValueError('private archive is not the recorded regular file on Mustang data storage')
+        out.mkdir(mode=0o700); copied=out/'input.tar'
+        with open(copied,'xb') as destination:
+            remaining=archive['sizeBytes']+1
+            while remaining:
+                chunk=source.read(min(1<<20,remaining))
+                if not chunk: break
+                destination.write(chunk); remaining-=len(chunk)
+    if copied.stat().st_size!=archive['sizeBytes'] or ota.digest(copied)!=archive['sha256']:
+        raise ValueError('private archive copy/hash differs; inputs retained')
+    rows={row['path']:row for row in record['files']}
+    packages=[app['package'] for app in load(Path(root)/'os/build-only/mustang-reconcile.json')['candidateInputs']['apps']]
+    canonical={'background-policy.json'}|{f'signed-apps/{p}{suffix}' for p in packages
+        for suffix in ('.apk','.receipt.json','.apk.idsig')}
+    if len(rows)!=len(record['files']) or set(rows)!=canonical or any(
+            type(row.get('sizeBytes')) is not int or row['sizeBytes']<0 for row in rows.values()):
+        raise ValueError('private archive record does not name the canonical ten payload files')
+    expected=canonical|{'app-inputs-export.json','SHA256SUMS'}
+    extracted=out/'files'; extracted.mkdir(mode=0o700); seen=set(); found=set()
+    with tarfile.open(copied,'r:') as stream:
+        for member in stream:
+            name=member.name
+            if name.startswith('./'): name=name[2:]
+            if name in ('.',''): name=''
+            if name in seen: raise ValueError('private archive contains duplicate paths')
+            seen.add(name)
+            if len(seen)>len(expected)+2 or member.issparse():
+                raise ValueError('private archive contains excess or sparse members')
+            if member.isdir() and name in ('','signed-apps'): continue
+            if not member.isreg() or name not in expected:
+                raise ValueError('private archive contains an unsafe type or unexpected path')
+            limit=rows[name]['sizeBytes'] if name in rows else 4<<20
+            if member.size<0 or member.size>limit or (name in rows and member.size!=limit):
+                raise ValueError('private archive member size differs')
+            target=extracted/name; target.parent.mkdir(exist_ok=True)
+            with stream.extractfile(member) as source,open(target,'xb') as destination:
+                shutil.copyfileobj(source,destination)
+            found.add(name)
+    if found!=expected: raise ValueError('private archive inventory differs')
+    return extracted
+
+
+def fetch_inputs(record_path,out,execute=subprocess.run,lane=None,cfg=None,root=ROOT):
+    rec=load(record_path)
+    if rec.get('schema')==PRIVATE_RECORD:
+        if lane is None or cfg is None: raise ValueError('private import requires the actual dedicated lane')
+        return import_private(rec,out,lane,cfg,root)
+    export=rec['export']; artifact=export['artifact']; out=Path(out)
     if not re.fullmatch(r'[1-9][0-9]*',str(artifact['id'])) or not re.fullmatch(r'sha256:[0-9a-f]{64}',artifact['digest']):
         raise ValueError('immutable artifact ID/digest required')
     endpoint=f'/repos/Immortal-Protocols/RoseOS-1/actions/artifacts/{artifact["id"]}'
@@ -286,7 +397,7 @@ def main():
         host_check(lane,cfg)
         if args.action=='host-check': return 0
         if args.action=='fetch-inputs':
-            inputs=fetch_inputs(ROOT/cfg['appInputsRecord'],args.out)
+            inputs=fetch_inputs(ROOT/cfg['appInputsRecord'],args.out,lane=lane,cfg=cfg,root=ROOT)
             ota.module('mustang_verify_apps','app-inputs-verify.py').verify(ROOT/cfg['appInputsRecord'],inputs,cfg['tools'])
             emit(inputs_dir=str(inputs))
         elif args.action=='baseline':
@@ -329,6 +440,6 @@ def main():
 if __name__=='__main__':
     try:
         sys.exit(main())
-    except (ValueError,OSError,KeyError,TypeError,subprocess.SubprocessError,zipfile.BadZipFile) as error:
+    except (ValueError,OSError,KeyError,TypeError,subprocess.SubprocessError,zipfile.BadZipFile,tarfile.TarError) as error:
         print('Dedicated Mustang stopped: '+(str(error) if isinstance(error,ValueError) else type(error).__name__),file=sys.stderr)
         sys.exit(4)

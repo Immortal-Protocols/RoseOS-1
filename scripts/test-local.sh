@@ -118,6 +118,7 @@ python3 scripts/tests/test_app_inputs_export.py
 python3 scripts/tests/test_actions_gcp_login.py
 python3 scripts/tests/test_app_release.py
 python3 scripts/tests/test_app_release_publisher.py
+python3 scripts/tests/test_hosted_app_signing_reuse.py
 python3 scripts/tests/test_app_reuse.py
 python3 scripts/tests/test_device_contract.py
 python3 scripts/tests/test_device_readiness.py

@@ -317,6 +317,39 @@ A consuming builder points its configuration at that record. While no record exi
    - `SHA256SUMS`;
    - with your own tools, the exporter's inventory, receipt, identity and policy checks on the downloaded bytes.
 3. Use the set only after exit 0. The same nine-file inventory and policy rules apply on both sides.
+
+**Private archive (`roseos.app-inputs-private-record.v1`).** A set can also reach its consumer as one private
+archive instead of an Actions artifact, for example a Mac export copied to a dedicated builder. It gets its own
+record schema, so no Actions identity is ever invented for it. The Actions record, its creation and its download
+path are unchanged.
+- **The record** carries the receipt's own `producer`, `signerSha256`, `sdk`, `apps` and `files`. Its `export` has
+  only `receiptSha256` and `privateArchive`:
+  - `path`: the absolute path the consumer reads the archive from;
+  - `sha256` and `sizeBytes`: the archive's actual bytes;
+  - `provenance`: `{path, sha256}` of a committed JSON under `os/`.
+
+  The producer's run and attempt stay the original Frankel build's, from its committed allocation.
+- **The provenance** (`roseos.app-inputs-private-provenance.v1`) is written by whoever exported and transferred the
+  archive. It records what they actually did and saw:
+  - `producer` and `receiptSha256`, the same as the record's, and `archive` `{sha256, sizeBytes}`;
+  - `source`: `exporter: scripts/host-app-inputs-export.py`, the full `exporterSource` commit,
+    `originalAttemptChainVerified: true` and an `evidenceRef`;
+  - `transfer`: `approved: true`, `completed: true`, an `approvalRef`, the receiver's `evidenceRef`, `received`
+    (the archive's sha256 and size) and `destination` `{builder, dataFilesystemUuid, path}` at the record's path.
+
+  Committing it performs no transfer and grants no approval; its fields must be actual observations.
+- **Creating the record:**
+  `python3 scripts/app-inputs-verify.py record-private --receipt <app-inputs-export.json> --archive <export.tar> --provenance os/app-inputs/<name>.json`.
+  It hashes the archive's actual bytes and refuses unless the committed provenance already names exactly that
+  receipt, those bytes and the destination path.
+- **Admission:** `verify` takes either schema. For a private record it first checks the provenance: committed under
+  `os/` with the recorded digest, exactly the fields above, and matching the record. Then the consumer contract above
+  applies unchanged to the imported files: inventory, sizes and digests, receipt, `SHA256SUMS` and, with the
+  consumer's tools, signer, package, version and policy. Its verdict says `transport: private` (an Actions record
+  says `actions`).
+- **The consumer's own checks:** importing the archive (no extraction of its metadata, only the canonical files), and
+  that `destination.builder` and `dataFilesystemUuid` are its own bound VM and disk.
+
 ## Daily release dispatcher (1F, source only and off)
 
 `.github/workflows/daily-release.yml` runs `scripts/daily-release.py dispatch`. Once activated, it builds, signs,

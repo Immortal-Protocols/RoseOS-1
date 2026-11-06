@@ -87,7 +87,7 @@ jobs:
       run: python3 scripts/mustang-dedicated.py host-check
     - name: Check actual baseline updater and trust before a new compile
       run: python3 scripts/mustang-dedicated.py baseline --out "$RUNNER_TEMP/mustang-baseline.json"
-    - name: Download and admit exact fresh app artifact and archive digest
+    - name: Admit exact fresh app artifact or prepositioned private archive
       id: apps
       run: python3 scripts/mustang-dedicated.py fetch-inputs --out "$RUNNER_TEMP/mustang-inputs"
     - name: Prepare, allocate, integrate and compile once on Mustang disk
