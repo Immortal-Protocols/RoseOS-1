@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""LAUNCHER3-COMPILE adapter (Release-owned): a compile-only proof of RoseOS's Launcher3 changes against OS Product's
+"""LAUNCHER3-COMPILE adapter: a compile-only proof of RoseOS's Launcher3 changes against OS Product's
 input contract os/compile-contracts/launcher3-quickstep-lib.json (#410/#440). It reads the contract as data only and never
 loads OS Product's checker (scripts/launcher3-compile-contract.py), which B's tests use for parity.
 
   check                       hosted and on the builder: the contract is the pinned version (MANIFEST_SHA256; the
                               text it states and this adapter implements, CONTRACT_TEXT_SHA256), the binding
-                              os/build-only/launcher3-compile-host.json is exact, every input the selected branch
+                              os/build-only/launcher3-compile-lane.json is exact and names independent capacity, every input the selected branch
                               requires is bound and every input it forbids is null (branches.requires, forbids), and
                               no bound receipt or report is a file of the source tree or of a launcher3-compile run
                               root. Exit 4 while any required input is null. Reads no host path. The lunch is the
@@ -16,7 +16,7 @@ loads OS Product's checker (scripts/launcher3-compile-contract.py), which B's te
                               exactly this adapter's mechanism; otherwise exit 4 (adevtool_git_missing or
                               adevtool_git_unadmitted), or 2 when the contract and this adapter disagree or the lunch
                               is not the contract's target.
-  run --run-id --attempt      under the nonblocking shared builder lock, into a new per-run root
+  run --run-id --attempt      under the independent lane's nonblocking builder lock, into a new per-run root
                               <taskParent>/launcher3-compile-<run>-<attempt>/{tree,out,home,tmp,receipts}:
                               1. byte-copy the bound source tree (read only; alpha exclusion policy: outputs, .repo,
                                  .git, keys, releases; less exactly what vendor/adevtool's pinned .gitignore ignores),
@@ -107,6 +107,7 @@ import zipfile
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT/'scripts'))
 import alpha_source  # noqa: E402  (the reviewed copy plan and per-file copy)
+import launcher3_lane  # noqa: E402  (dedicated capacity; no cloud operations)
 
 MANIFEST = ROOT/'os/compile-contracts/launcher3-quickstep-lib.json'
 # OS Product's reviewed contract version (schema 3, #563 base rebind plus 1193274's lunch inputs without auto
@@ -239,8 +240,8 @@ FETCH_ENV_SPEC = {'unset': 'GIT_*', 'GIT_CONFIG_NOSYSTEM': '1', 'GIT_CONFIG_GLOB
 FINISH_SECONDS = 30 * 60
 UPLOAD = ('report.json', 'classification.json')
 WORK_DIRS = ('tree', 'out', 'home', 'tmp')
-BINDING = ROOT/'os/build-only/launcher3-compile-host.json'
-BINDING_KEYS = {'schemaVersion', 'kind', 'basis', 'host', 'lockFrom', 'taskParent', 'branch', 'sourceTree', 'lunch',
+BINDING = launcher3_lane.CONFIG
+BINDING_KEYS = {'schemaVersion', 'kind', 'basis', 'lane', 'taskParent', 'branch', 'sourceTree', 'lunch',
                 'policyReceipt', 'bundleReport', 'reconstructSource', 'adevtoolGit'}
 BRANCHES = ('verifyIntegrated', 'verifyBaseApplyCandidate', 'reconstruct')
 TASK_NAME = 'launcher3-compile-{run_id}-{attempt}'
@@ -771,8 +772,8 @@ def frankel_policy_args(root=ROOT):
     return reference, '--locked-control' in args
 
 
-def lock_path(root=ROOT):
-    return json.loads((root/'os/release-pipeline/frankel.json').read_text())['host']['lockPath']
+def lock_path(binding):
+    return binding['lane']['lockPath']
 
 
 def manifest_project(path, root=ROOT):
@@ -1550,15 +1551,18 @@ def check(binding_path=BINDING, root=ROOT, manifest_path=MANIFEST, inputs_path=N
     tree or a lunch other than the contract's; Unbound while the selected branch lacks an input or the lunch lacks its
     admitted adevtool fetch."""
     manifest = load_manifest(manifest_path)
-    binding = json.loads(Path(binding_path).read_text())
-    if set(binding) != BINDING_KEYS or binding['schemaVersion'] != 3 or binding['kind'] != 'rose-launcher3-compile-host':
-        raise Invalid('the binding is not an exact rose-launcher3-compile-host v3 record')
+    binding = launcher3_lane.load(binding_path)
+    if not isinstance(binding, dict) or set(binding) != BINDING_KEYS or type(binding['schemaVersion']) is not int \
+            or binding['schemaVersion'] != 4 or binding['kind'] != 'rose-launcher3-independent-compile':
+        raise Invalid('the binding is not an exact independent Launcher3 v4 record; legacy host binding is retired')
+    try:
+        launcher3_lane.validate(binding)
+    except launcher3_lane.Unbound as error:
+        raise Unbound(str(error)) from None
+    except (OSError, KeyError, ValueError) as error:
+        raise Invalid(str(error)) from None
     if binding['adevtoolGit'] is not None and binding['adevtoolGit'] not in ADEVTOOL_GIT_CLASSES:
         raise Invalid('adevtoolGit must be null or ' + ', '.join(ADEVTOOL_GIT_CLASSES))
-    if binding['host'] != 'immortal-os-builder' or binding['lockFrom'] != 'os/release-pipeline/frankel.json host.lockPath':
-        raise Invalid('the binding must name the existing builder and its shared lock')
-    if binding['taskParent'] != '/home/pixelbuild/rose-actions':
-        raise Invalid('the run root parent must be /home/pixelbuild/rose-actions')
     if binding['branch'] not in BRANCHES:
         raise Invalid('branch must be ' + ', '.join(BRANCHES))
     receipt, bundle = binding['policyReceipt'], binding['bundleReport']
@@ -2242,7 +2246,7 @@ def run(binding, manifest, run_id, attempt, root=ROOT, lock=None, copier=copy_tr
                                                                         real(binding['taskParent']))
                 if problem:
                     raise Refused(f'{name}: the bound path {problem} once resolved; nothing copied')
-            with (lock or shared_lock)(lock_path(root)):
+            with (lock or shared_lock)(lock_path(binding)):
                 for name in ('home', 'tmp', 'out'):
                     (run_root/name).mkdir(mode=0o700)
                 tree = run_root/'tree'
@@ -2560,6 +2564,7 @@ def main(argv=None):
     p.add_argument('--binding', default=str(BINDING), help=argparse.SUPPRESS)
     a = p.parse_args(argv)
     try:
+        launcher3_lane.check_context(os.environ)
         manifest, binding, plan = check(a.binding)
         if a.command == 'check':
             if a.run_id or a.attempt or a.upload_dir:
@@ -2571,6 +2576,7 @@ def main(argv=None):
             finish_outer = FINISH_SECONDS + KILL_GRACE_SECONDS
             print(f'outer_seconds={outer}\nfinish_seconds={FINISH_SECONDS}\njob_minutes={-(-(outer + finish_outer) // 60) + 10}')
             return 0
+        launcher3_lane.worker(binding, os.environ, a.run_id, a.attempt)
         if a.command == 'finish':
             if not a.upload_dir or not os.path.isabs(a.upload_dir):
                 raise Invalid('finish needs an absolute --upload-dir')

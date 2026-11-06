@@ -6,11 +6,15 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import contextlib
+import io
 import re
 import shutil
 import sys
+import tarfile
 import tempfile
 import unittest
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT/'scripts'))
@@ -282,7 +286,8 @@ class Consumer(Fixture):
             'artifact': {'name': f'app-inputs-frankel-{BUILD}-{self.RUN}-{self.ATTEMPT}', 'id': int(self.ARTIFACT_ID),
                          'digest': self.DIGEST}})
         admitted = self.verify()
-        self.assertEqual((admitted['verdict'], admitted['toolsRechecked']), ('ADMITTED', False))
+        self.assertEqual((admitted['verdict'], admitted['transport'], admitted['toolsRechecked']),
+                         ('ADMITTED', 'actions', False))
         admitted = self.verify(tools={'aapt': 'a', 'apksigner': 's'}, identity=self.identity)  # the consumer's own tools
         self.assertTrue(admitted['toolsRechecked'])
 
@@ -335,8 +340,9 @@ class Consumer(Fixture):
         record = json.loads(self.record_path.read_text())
         self.record_path.write_text(json.dumps(dict(record, sdk=36)))
         self.rejected('does not name the recorded')
-        self.record_path.write_text(json.dumps(dict(record, schema='other')))
-        self.rejected('not an app-inputs record')
+        for schema in ('other', 'roseos.app-inputs-private-provenance.v1', 'roseos.app-inputs-export.v1'):
+            self.record_path.write_text(json.dumps(dict(record, schema=schema)))  # only the two record schemas
+            self.rejected('not an app-inputs record')
         self.record_path.write_text(json.dumps(record))
         allocation = self.repo/f'os/ota/mustang-frankel-{BUILD}-allocation.json'
         allocation.write_text(allocation.read_text() + ' ')
@@ -346,6 +352,227 @@ class Consumer(Fixture):
         def wrong(apk, *args):
             return dict(self.identity(apk, *args), versionCode=1)
         self.rejected('signed by the app signer', tools={'aapt': 'a', 'apksigner': 's'}, identity=wrong)
+
+
+class PrivateConsumer(Fixture):
+    """roseos.app-inputs-private-record.v1: an export that reached its consumer as a private archive.
+
+    The archive and provenance are synthetic; nothing is transferred. Admission is the Actions record's, after a
+    complete committed provenance. Binding the destination to an actual builder and disk is the consumer's check."""
+    DESTINATION = f'/srv/rose-mustang/inputs/frankel-{BUILD}/export.tar'
+    PROVENANCE = f'os/app-inputs/frankel-{BUILD}-private-provenance.json'
+
+    def setUp(self):
+        super().setUp()
+        self.receipt, self.artifact = self.export()
+        self.archive = self.tmp/'export.tar'
+        with tarfile.open(self.archive, 'w') as tar:  # the bytes the record names; the consumer imports them itself
+            for path in sorted(self.artifact.rglob('*')):
+                if path.is_file():
+                    tar.add(path, arcname=str(path.relative_to(self.artifact)))
+        self.receipt_sha = sha((self.artifact/'app-inputs-export.json').read_bytes())
+        self.identity_of = {'sha256': sha(self.archive.read_bytes()), 'sizeBytes': self.archive.stat().st_size}
+        self.proof = {
+            'schema': 'roseos.app-inputs-private-provenance.v1', 'producer': self.receipt['producer'],
+            'receiptSha256': self.receipt_sha, 'archive': dict(self.identity_of),
+            'source': {'exporter': 'scripts/host-app-inputs-export.py', 'exporterSource': 'e' * 40,
+                       'originalAttemptChainVerified': True, 'evidenceRef': 'synthetic exporter run'},
+            'transfer': {'approved': True, 'completed': True, 'approvalRef': 'synthetic approval',
+                         'evidenceRef': 'synthetic receiver readback', 'received': dict(self.identity_of),
+                         'destination': {'builder': {'project': 'p', 'zone': 'z', 'instance': 'mustang-synthetic'},
+                                         'dataFilesystemUuid': 'synthetic-uuid', 'path': self.DESTINATION}}}
+        self.write_record(self.PROVENANCE, self.proof)
+        self.record = verify.private_record(self.artifact/'app-inputs-export.json', self.archive, self.PROVENANCE,
+                                            root=self.repo)
+        self.record_path = self.repo/'os/app-inputs'/f'frankel-{BUILD}.json'
+        self.record_path.write_text(json.dumps(self.record))
+
+    def verify(self, directory=None, tools=None, identity=None):
+        return verify.verify(self.record_path, directory or self.artifact, tools, root=self.repo, identity=identity)
+
+    def rejected(self, message, **kwargs):
+        with self.assertRaisesRegex(verify.Refused, message):
+            self.verify(**kwargs)
+
+    def provenance_sha(self):
+        return sha((self.repo/self.PROVENANCE).read_bytes())
+
+    def test_the_record_names_the_receipt_archive_and_provenance_and_the_set_is_admitted(self):
+        self.assertEqual(self.record['schema'], 'roseos.app-inputs-private-record.v1')
+        for key in ('producer', 'signerSha256', 'sdk', 'apps', 'files'):
+            self.assertEqual(self.record[key], self.receipt[key], key)
+        self.assertEqual(self.record['export'], {'receiptSha256': self.receipt_sha, 'privateArchive': {
+            'path': self.DESTINATION, **self.identity_of,
+            'provenance': {'path': self.PROVENANCE, 'sha256': self.provenance_sha()}}})
+        admitted = self.verify()
+        self.assertEqual((admitted['verdict'], admitted['transport'], admitted['toolsRechecked']),
+                         ('ADMITTED', 'private', False))
+        self.assertEqual(admitted['export'], self.record['export'])
+        self.assertTrue(self.verify(tools={'aapt': 'a', 'apksigner': 's'}, identity=self.identity)['toolsRechecked'])
+
+    def test_no_actions_identity_and_only_the_exact_archive_fields(self):
+        archive = self.record['export']['privateArchive']
+        only, fields = 'exactly receiptSha256 and privateArchive', 'privateArchive must be exactly'
+        shape, ref = 'privateArchive needs an absolute path', 'privateArchive.provenance must be exactly'
+        cases = [  # each must be refused by its own check, not by a later mismatch
+            ('Actions run', lambda r: r['export'].update(run='41990000000'), only),
+            ('Actions attempt', lambda r: r['export'].update(attempt='1'), only),
+            ('Actions artifact', lambda r: r['export'].update(artifact={'name': 'x', 'id': 1, 'digest': 'sha256:' + 'f' * 64}), only),
+            ('no archive', lambda r: r['export'].pop('privateArchive'), only),
+            ('short receipt digest', lambda r: r['export'].update(receiptSha256='f' * 63), 'receiptSha256 must be'),
+            ('extra archive field', lambda r: r['export']['privateArchive'].update(artifactId=1), fields),
+            ('no provenance', lambda r: r['export']['privateArchive'].pop('provenance'), fields),
+            ('uppercase archive digest', lambda r: r['export']['privateArchive'].update(sha256=archive['sha256'].upper()), shape),
+            ('zero size', lambda r: r['export']['privateArchive'].update(sizeBytes=0), shape),
+            ('boolean size', lambda r: r['export']['privateArchive'].update(sizeBytes=True), shape),
+            ('text size', lambda r: r['export']['privateArchive'].update(sizeBytes=str(archive['sizeBytes'])), shape),
+            ('relative path', lambda r: r['export']['privateArchive'].update(path='inputs/export.tar'), shape),
+            ('extra provenance field', lambda r: r['export']['privateArchive']['provenance'].update(url='x'), ref),
+            ('malformed provenance digest', lambda r: r['export']['privateArchive']['provenance'].update(sha256='0'), ref),
+        ]
+        for label, change, message in cases:
+            with self.subTest(label):
+                record = json.loads(json.dumps(self.record))
+                change(record)
+                self.record_path.write_text(json.dumps(record))
+                self.rejected(message)
+        self.record_path.write_text(json.dumps(self.record))
+        self.verify()
+
+    def test_the_provenance_must_be_committed_under_os_with_its_digest(self):
+        provenance = self.repo/self.PROVENANCE
+        outside = self.tmp/'outside.json'
+        shutil.copyfile(provenance, outside)
+        (self.repo/'scripts').mkdir()
+        shutil.copyfile(provenance, self.repo/'scripts/provenance.json')
+        for path in (str(outside), '../outside.json', 'os/../../outside.json', 'scripts/provenance.json',
+                     'os/app-inputs/missing.json'):
+            with self.subTest(path):
+                record = json.loads(json.dumps(self.record))
+                record['export']['privateArchive']['provenance']['path'] = path
+                self.record_path.write_text(json.dumps(record))
+                self.rejected('provenance')
+        self.record_path.write_text(json.dumps(self.record))
+        provenance.write_text(provenance.read_text() + ' ')  # same content, other bytes: the digest is the pin
+        self.rejected('recorded sha256')
+        provenance.unlink()
+        os.symlink(outside, provenance)
+        self.rejected('not committed here')
+
+    def test_the_provenance_must_name_this_export_and_an_approved_completed_transfer(self):
+        def drop(key):
+            return lambda p: p.pop(key)
+        cases = [
+            ('schema', lambda p: p.update(schema='roseos.app-inputs-record.v1')),
+            ('extra field', lambda p: p.update(artifact={'id': 1})),
+            ('no transfer', drop('transfer')),
+            ('producer', lambda p: p['producer'].update(build='2026110400')),
+            ('receipt', lambda p: p.update(receiptSha256='0' * 64)),
+            ('archive digest', lambda p: p['archive'].update(sha256='0' * 64)),
+            ('archive size', lambda p: p['archive'].update(sizeBytes=p['archive']['sizeBytes'] + 1)),
+            ('exporter', lambda p: p['source'].update(exporter='scripts/other-export.py')),
+            ('short exporter commit', lambda p: p['source'].update(exporterSource='e' * 39)),
+            ('uppercase exporter commit', lambda p: p['source'].update(exporterSource='E' * 40)),
+            ('chain unverified', lambda p: p['source'].update(originalAttemptChainVerified=False)),
+            ('chain as text', lambda p: p['source'].update(originalAttemptChainVerified='true')),
+            ('blank export evidence', lambda p: p['source'].update(evidenceRef='  ')),
+            ('extra source field', lambda p: p['source'].update(note='x')),
+            ('not approved', lambda p: p['transfer'].update(approved=False)),
+            ('approved as 1', lambda p: p['transfer'].update(approved=1)),
+            ('not completed', lambda p: p['transfer'].update(completed=False)),
+            ('no approval reference', lambda p: p['transfer'].update(approvalRef='')),
+            ('no receiver evidence', lambda p: p['transfer'].update(evidenceRef=None)),
+            ('extra transfer field', lambda p: p['transfer'].update(artifact={'id': 1})),
+            ('received other bytes', lambda p: p['transfer']['received'].update(sha256='0' * 64)),
+            ('received other size', lambda p: p['transfer']['received'].update(sizeBytes=1)),
+            ('other destination path', lambda p: p['transfer']['destination'].update(path='/srv/other/export.tar')),
+            ('no data filesystem', lambda p: p['transfer']['destination'].update(dataFilesystemUuid='')),
+            ('no builder', lambda p: p['transfer']['destination'].update(builder={})),
+            ('extra destination field', lambda p: p['transfer']['destination'].update(host='x')),
+        ]
+        for label, change in cases:
+            with self.subTest(label):
+                proof = json.loads(json.dumps(self.proof))
+                change(proof)
+                self.write_record(self.PROVENANCE, proof)
+                record = json.loads(json.dumps(self.record))  # re-pinned: only the provenance's content can refuse
+                record['export']['privateArchive']['provenance']['sha256'] = self.provenance_sha()
+                self.record_path.write_text(json.dumps(record))
+                with self.assertRaises(verify.Refused):
+                    self.verify()
+        self.write_record(self.PROVENANCE, self.proof)
+        self.record_path.write_text(json.dumps(self.record))
+        self.verify()
+
+    def test_every_admission_check_of_an_actions_record_still_applies(self):
+        apk = self.artifact/'signed-apps'/'dev.pixel.voice.apk'
+        original = apk.read_bytes()
+        apk.write_bytes(b'tampered')
+        self.rejected('differs from the record')
+        apk.write_bytes(original)
+        (self.artifact/'extra').write_text('x')
+        self.rejected('inventory')
+        (self.artifact/'extra').unlink()
+        receipt = self.artifact/'app-inputs-export.json'
+        data = receipt.read_text()
+        receipt.write_text(data + ' ')
+        self.rejected('receiptSha256')
+        receipt.write_text(data)
+        sums = self.artifact/'SHA256SUMS'
+        lines = sums.read_text().splitlines()
+        sums.write_text('\n'.join(lines + [lines[0]]) + '\n')
+        self.rejected('malformed')
+        sums.write_text('\n'.join(lines) + '\n')
+        self.verify()
+        allocation = self.repo/f'os/ota/mustang-frankel-{BUILD}-allocation.json'
+        allocation.write_text(allocation.read_text() + ' ')
+        self.rejected('allocation record is not committed here')
+
+    def test_the_consumers_tools_must_agree(self):
+        def other_signer(apk, *args):
+            return dict(self.identity(apk, *args), certificates=['0' * 64])
+        self.rejected('signed by the app signer', tools={'aapt': 'a', 'apksigner': 's'}, identity=other_signer)
+
+    def test_the_record_is_made_from_the_archives_actual_bytes_and_a_matching_provenance(self):
+        receipt = self.artifact/'app-inputs-export.json'
+        make = lambda **kw: verify.private_record(kw.get('receipt', receipt), kw.get('archive', self.archive),
+                                                  kw.get('provenance', self.PROVENANCE), root=self.repo)
+        self.assertEqual(make(), self.record)
+        with open(self.archive, 'ab') as f:
+            f.write(b'\0' * 512)  # other bytes than the provenance recorded as transferred
+        with self.assertRaisesRegex(verify.Refused, 'another producer, receipt or archive'):
+            make()
+        link = self.tmp/'link.tar'
+        os.symlink(self.archive, link)
+        with self.assertRaisesRegex(verify.Refused, 'regular file'):
+            make(archive=link)
+        with self.assertRaisesRegex(verify.Refused, 'under os/'):
+            make(provenance=str(self.repo/self.PROVENANCE))
+        with self.assertRaisesRegex(verify.Refused, 'not committed here'):
+            make(provenance='os/app-inputs/missing.json')
+        self.write_record('os/app-inputs/no-destination.json', {'schema': 'roseos.app-inputs-private-provenance.v1'})
+        with self.assertRaisesRegex(verify.Refused, 'no transfer destination path'):
+            make(provenance='os/app-inputs/no-destination.json')
+        other = self.tmp/'other-receipt.json'
+        other.write_text(json.dumps({'schema': 'roseos.app-inputs-record.v1'}))
+        with self.assertRaisesRegex(verify.Refused, 'not an app-inputs export receipt'):
+            make(receipt=other)
+
+    def test_the_command_line_prints_the_record_and_admits_or_refuses(self):
+        def run(*argv):
+            out, err = io.StringIO(), io.StringIO()
+            with mock.patch.object(verify, 'ROOT', self.repo), contextlib.redirect_stdout(out), \
+                    contextlib.redirect_stderr(err):
+                code = verify.main(list(argv))
+            return code, out.getvalue(), err.getvalue()
+        code, out, _ = run('record-private', '--receipt', str(self.artifact/'app-inputs-export.json'),
+                           '--archive', str(self.archive), '--provenance', self.PROVENANCE)
+        self.assertEqual((code, json.loads(out)), (0, self.record))
+        code, out, _ = run('verify', '--record', str(self.record_path), '--dir', str(self.artifact))
+        self.assertEqual((code, json.loads(out)['transport']), (0, 'private'))
+        (self.artifact/'extra').write_text('x')
+        code, out, err = run('verify', '--record', str(self.record_path), '--dir', str(self.artifact))
+        self.assertEqual((code, out, json.loads(err)['verdict']), (1, '', 'REFUSED'))
 
 
 class Workflow(unittest.TestCase):
