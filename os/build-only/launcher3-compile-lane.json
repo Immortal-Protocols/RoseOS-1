@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 4,
+  "kind": "rose-launcher3-independent-compile",
+  "basis": "Active independent Launcher3 binding. Capacity, source provenance and public-fetch/runtime authorization are separate requirements. Infra supplies verified VM, disk, runner, storage and controller evidence; null values are never guessed. The v3 launcher3-compile-host.json is retained only as a legacy cleanup reference and cannot authorize this adapter. This document provisions nothing and activates no workflow.",
+  "lane": {
+    "status": "unbound",
+    "workflow": ".github/workflows/launcher3-compile.yml",
+    "runnerName": null,
+    "runnerLabel": null,
+    "vm": {"project": null, "zone": null, "instance": null, "instanceId": null},
+    "disk": {"resource": null, "id": null},
+    "storageRoot": null,
+    "lockPath": null,
+    "queue": null,
+    "controller": {"identityVariable": null, "providerVariable": null},
+    "infraEvidence": null
+  },
+  "taskParent": null,
+  "branch": "verifyBaseApplyCandidate",
+  "sourceTree": null,
+  "lunch": null,
+  "policyReceipt": {"path": null, "sha256": null},
+  "bundleReport": {"path": null, "sha256": null},
+  "reconstructSource": null,
+  "adevtoolGit": null
+}
