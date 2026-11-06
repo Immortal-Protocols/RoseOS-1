@@ -95,6 +95,8 @@ python3 scripts/tests/test_release_chain.py
 python3 scripts/tests/test_mustang_ota_chain_workflow.py
 # Yogi OTA route: contract, guards, allocation, packaged-Updater/trust and publication checks (synthetic; no host, key or network).
 python3 scripts/tests/test_yogi_ota.py
+# Yogi direct operator route: plan/start/run/status/cancel/cleanup and the guest agent (fake gcloud/ssh; no VM, SSH or key).
+python3 scripts/tests/test_yogi_direct.py
 # Mustang raised-edge gate (#570): the shared checker on synthetic archives; no signer, host or dispatch.
 python3 scripts/tests/test_mustang_edge_gate.py
 python3 scripts/tests/test_agent_beta_auto.py

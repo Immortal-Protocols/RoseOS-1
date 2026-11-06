@@ -168,7 +168,20 @@
     "retired": {
       "instance": "roseos-yogi-builder-20261103-a",
       "zone": "us-west2-a",
-      "note": "Original zone-a VM, preserved. Never a target or fallback of this route."
+      "note": "Original zone-a VM, preserved. Never a target or fallback of this route.",
+      "instanceId": "8812446529823929967",
+      "instanceIdSource": "Chief relay of the operator's control-plane readback after readiness run 42152223661 (2026-11-06): original instance 8812446529823929967 TERMINATED. The direct route checks it is TERMINATED before every operation."
+    },
+    "direct": {
+      "status": "unbound",
+      "basis": "Operator-driven direct route (scripts/yogi_direct.py, docs/YOGI-DIRECT.md): SSH to the exact replacement VM authenticated by the committed host-key pin, no GitHub self-hosted scheduling. Stages check and compile (bootstrap A to an unsigned compile) only; signing, key bootstrap, install, staging and publication are refused on this route. Every null below is an unverified dependency, not a default; status stays unbound until each is recorded from an operator receipt with provenance and separately approved.",
+      "route": null,
+      "sshUser": null,
+      "hostKey": null,
+      "runnerService": null,
+      "operatorAccess": null,
+      "operationRoot": "/srv/rose-yogi/direct",
+      "lock": "/srv/rose-yogi/yogi-direct.lock"
     },
     "basis": "Replacement dedicated Yogi VM (exact tuple: project, zone, name, numeric ID). The controller checks all four on every describe and poll. Runner label is replacement-specific because the old label's uniqueness is not evidenced. status stays runner-unregistered, and every not-ready guard stays closed, until the missing receipt fields and actual readiness evidence are recorded. Never shared with Frankel, Mustang, Rango, Blazer or Agent builds."
   },
