@@ -37,6 +37,14 @@ def receipt(**changes):
     return value
 
 
+def complete_evidence():
+    """The committed receipt values plus synthetic stand-ins for every still-missing field (test only)."""
+    evidence = copy.deepcopy(yogi.config()['builder']['evidence'])
+    evidence['runner'].update(labels=['self-hosted', 'Linux', 'X64', yogi.RUNNER_LABEL], replacementLabelInstalled=True)
+    evidence['storage']['mounts'] = {'guestDevice': '/dev/synthetic', 'filesystemUuid': 'synthetic', 'mountPoint': '/'}
+    return evidence
+
+
 class Fixture(unittest.TestCase):
     """A ready synthetic configuration whose bootstrap receipt lives in a temporary repository copy."""
     def setUp(self):
@@ -47,7 +55,7 @@ class Fixture(unittest.TestCase):
         self.receipt = self.root/'yogi-bootstrap-receipt.json'
         self.receipt.write_text(json.dumps(receipt()))
         self.cfg['signing']['bootstrapReceipt'] = str(self.receipt)  # absolute: ROOT/abs == abs
-        self.cfg['builder'].update(status='ready', attempts=str(self.root/'attempts'))
+        self.cfg['builder'].update(status='ready', attempts=str(self.root/'attempts'), evidence=complete_evidence())
         (self.root/'attempts').mkdir()
         self.record = self.root/'frankel-2026110403.json'
         self.record_value = {'schema': 'roseos.app-inputs-record.v1', 'signerSha256': self.cfg['appInputs']['appSignerSha256'],
@@ -88,7 +96,10 @@ class ContractTest(unittest.TestCase):
         cfg = yogi.config()
         self.assertFalse(cfg['publicationEnabled'])
         self.assertFalse(cfg['automationEnabled'])
-        self.assertEqual(cfg['builder']['instance'], 'roseos-yogi-builder-20261103-a')
+        self.assertEqual((cfg['builder']['project'], cfg['builder']['zone'], cfg['builder']['instance'],
+                          cfg['builder']['instanceId']),
+                         ('protocols-465723', 'us-west2-b', 'roseos-yogi-builder-20261105-b', '2720796557371812468'))
+        self.assertEqual(cfg['builder']['status'], 'runner-unregistered')
         self.assertEqual(cfg['signing']['secrets'], {'keys': 'PIXEL_OS_SIGNING_KEYS_YOGI_V1',
                                                      'passphrase': 'PIXEL_OS_SIGNING_PASSPHRASE_YOGI_V1'})
         lab = cfg['labBaseline']
@@ -158,7 +169,8 @@ class ContractTest(unittest.TestCase):
                           'make_latest: true', 'MUSTANG_V1'):
             self.assertNotIn(forbidden, text)
         self.assertIn('group: yogi-ota', text)
-        self.assertEqual(text.count('runs-on: [self-hosted, roseos-yogi-builder]'), 3)
+        self.assertEqual(text.count('runs-on: [self-hosted, roseos-yogi-builder-20261105-b]'), 4)
+        self.assertNotIn('runs-on: [self-hosted, roseos-yogi-builder]', text)
 
 
 class KeyBootstrapTest(Fixture):
@@ -216,7 +228,7 @@ class KeyBootstrapTest(Fixture):
         text = (yogi.ROOT/'.github/workflows/yogi-ota.yml').read_text()
         job = text[text.index('  key-bootstrap:\n'):text.index('  build:\n')]
         self.assertIn("if: inputs.stage == 'key-bootstrap'", job)
-        self.assertIn('runs-on: [self-hosted, roseos-yogi-builder]', job)
+        self.assertIn('runs-on: [self-hosted, roseos-yogi-builder-20261105-b]', job)
         order = ['yogi_ota.py guard --stage key-bootstrap', 'signing-bootstrap.py preflight --profile yogi-v1',
                  'signing-bootstrap.py prove --profile yogi-v1', 'actions-gcp-login.py login',
                  'signing-bootstrap.py run --profile yogi-v1', 'actions-gcp-login.py logout', 'upload-artifact']
@@ -231,8 +243,8 @@ class KeyBootstrapTest(Fixture):
         for forbidden in ('roseos-frankel-builder', 'pro-mustang-v1', 'MUSTANG', 'secrets.'):
             self.assertNotIn(forbidden, job)
         build = text[text.index('  build:\n'):text.index('  sign:\n')]
-        self.assertIn("if: inputs.stage != 'key-bootstrap'", build)
-        self.assertIn('needs: [controller, key-bootstrap, build, sign, publisher]', text)
+        self.assertIn("if: inputs.stage == 'bootstrap' || inputs.stage == 'ota'", build)
+        self.assertIn('needs: [controller, readiness, key-bootstrap, build, sign, publisher]', text)
 
 
 class ProviderTest(unittest.TestCase):
@@ -680,37 +692,264 @@ class PublicationTest(Fixture):
             yogi.verify_staged(self.assets, self.cfg)
 
 
+RUN_ENV = {'GITHUB_SHA': SHA, 'GITHUB_WORKFLOW_REF': yogi.WORKFLOW + '@refs/heads/main',
+           'GITHUB_RUN_ID': '777', 'GITHUB_RUN_ATTEMPT': '1'}
+
+
 class BuilderControlTest(Fixture):
-    def gcloud(self, states, log):
+    """Exact-tuple controller: project, zone, name and numeric ID on every describe; v2 ownership before START."""
+    def gcloud(self, states, log, identity=None, start_rc=0, stop_rc=0):
+        seen = dict(id=yogi.INSTANCE_ID, name=yogi.INSTANCE, zone='https://compute.googleapis.com/compute/v1/projects/'
+                    'protocols-465723/zones/us-west2-b', selfLink='https://compute.googleapis.com/compute/v1/projects/'
+                    'protocols-465723/zones/us-west2-b/instances/' + yogi.INSTANCE)
+        seen.update(identity or {})
+
         def run(argv, **kwargs):
-            log.append(argv[3])
+            log.append(argv[3:])
+            self.assertEqual(argv[4], yogi.INSTANCE)
+            self.assertIn('--project=protocols-465723', argv)
+            self.assertIn('--zone=us-west2-b', argv)
             if argv[3] == 'describe':
-                self.assertEqual(argv[4], 'roseos-yogi-builder-20261103-a')
-                return SimpleNamespace(returncode=0, stdout=states.pop(0) if len(states) > 1 else states[0])
-            return SimpleNamespace(returncode=0, stdout='')
+                status = states.pop(0) if len(states) > 1 else states[0]
+                return SimpleNamespace(returncode=0, stdout=json.dumps(dict(seen, status=status)))
+            return SimpleNamespace(returncode=start_rc if argv[3] == 'start' else stop_rc, stdout='')
         return run
 
-    def test_start_records_ownership_and_stop_only_what_this_run_started(self):
-        log, own = [], self.root/'own.json'
-        with mock.patch.object(yogi.subprocess, 'run', self.gcloud(['TERMINATED', 'STAGING', 'RUNNING'], log)):
-            self.assertEqual(yogi.control_builder(self.cfg, 'start', own, sleep=lambda s: None), 'RUNNING')
-        self.assertTrue(yogi.read(own)['startedByThisOperation'])
-        self.assertIn('start', log)
-        log2 = []
-        with mock.patch.object(yogi.subprocess, 'run', self.gcloud(['RUNNING', 'STOPPING', 'TERMINATED'], log2)):
-            self.assertEqual(yogi.control_builder(self.cfg, 'stop', own, sleep=lambda s: None), 'TERMINATED')
-        self.assertIn('stop', log2)
+    def control(self, action, states, log, own, env=RUN_ENV, **kwargs):
+        with mock.patch.object(yogi.subprocess, 'run', self.gcloud(states, log, **kwargs)):
+            return yogi.control_builder(self.cfg, action, own, sleep=lambda s: None, env=env)
 
-    def test_already_running_builder_is_never_stopped_and_record_is_never_reused(self):
+    def requests(self, log):
+        return [entry[0] for entry in log if entry[0] in ('start', 'stop')]
+
+    def test_owned_start_then_exact_cleanup(self):
         log, own = [], self.root/'own.json'
-        with mock.patch.object(yogi.subprocess, 'run', self.gcloud(['RUNNING'], log)):
-            yogi.control_builder(self.cfg, 'start', own, sleep=lambda s: None)
-            self.assertEqual(yogi.control_builder(self.cfg, 'stop', own), 'not-started-by-this-run')
-            self.assertEqual(yogi.control_builder(self.cfg, 'stop', self.root/'absent.json'), 'not-started-by-this-run')
-            with self.assertRaises(FileExistsError):
-                yogi.control_builder(self.cfg, 'start', own)
-        self.assertNotIn('stop', log)
-        self.assertNotIn('start', log)
+        self.assertEqual(self.control('start', ['TERMINATED', 'STAGING', 'RUNNING'], log, own), 'RUNNING')
+        record = yogi.read(own)
+        self.assertEqual(record['builder'], {'project': 'protocols-465723', 'zone': 'us-west2-b',
+                                             'instance': yogi.INSTANCE, 'instanceId': yogi.INSTANCE_ID})
+        self.assertEqual(record['run'], {'source': SHA, 'workflowRef': RUN_ENV['GITHUB_WORKFLOW_REF'],
+                                         'runId': '777', 'runAttempt': '1'})
+        self.assertTrue(record['startedByThisOperation'])
+        log2 = []
+        self.assertEqual(self.control('stop', ['RUNNING', 'STOPPING', 'TERMINATED'], log2, own), 'TERMINATED')
+        self.assertEqual(self.requests(log2), ['stop'])
+        self.assertTrue(all(e[1] == yogi.INSTANCE for e in log2))
+
+    def test_record_is_durable_before_the_start_request(self):
+        own, log = self.root/'own.json', []
+        fake = self.gcloud(['TERMINATED', 'RUNNING'], log)
+        def run(argv, **kwargs):
+            if argv[3] == 'start':
+                self.assertTrue(own.exists(), 'START sent before the ownership record existed')
+            return fake(argv, **kwargs)
+        with mock.patch.object(yogi.subprocess, 'run', run):
+            yogi.control_builder(self.cfg, 'start', own, sleep=lambda s: None, env=RUN_ENV)
+
+    def test_same_name_other_zone_or_wrong_numeric_id_or_project_is_never_controlled(self):
+        cases = [{'zone': 'https://compute.googleapis.com/compute/v1/projects/protocols-465723/zones/us-west2-a',
+                  'selfLink': 'https://compute.googleapis.com/compute/v1/projects/protocols-465723/zones/us-west2-a/'
+                              'instances/' + yogi.INSTANCE},
+                 {'id': '1111111111111111111'},
+                 {'selfLink': 'https://compute.googleapis.com/compute/v1/projects/other-project/zones/us-west2-b/'
+                              'instances/' + yogi.INSTANCE},
+                 {'name': 'roseos-yogi-builder-20261103-a'}]
+        for identity in cases:
+            with self.subTest(identity=sorted(identity)):
+                own, log = self.root/f'own-{len(identity)}-{sorted(identity)[0]}.json', []
+                with self.assertRaisesRegex(yogi.Refused, 'identity mismatch'):
+                    self.control('start', ['TERMINATED'], log, own, identity=identity)
+                self.assertFalse(own.exists())
+                self.assertEqual(self.requests(log), [])
+        # a valid record of this run still never stops a mismatched VM (same name, other zone or ID)
+        own = self.root/'own-valid.json'
+        self.control('start', ['TERMINATED', 'RUNNING'], [], own)
+        for identity in cases[:2]:
+            log = []
+            with self.assertRaisesRegex(yogi.Refused, 'identity mismatch'):
+                self.control('stop', ['RUNNING'], log, own, identity=identity)
+            self.assertEqual(self.requests(log), [])
+
+    def test_mismatch_appearing_during_a_poll_stops_polling_without_requests(self):
+        own, log, calls = self.root/'own.json', [], {'n': 0}
+        good = self.gcloud(['TERMINATED', 'STAGING'], log)
+        bad = self.gcloud(['RUNNING'], log, identity={'id': '1111111111111111111'})
+        def run(argv, **kwargs):
+            if argv[3] == 'describe':
+                calls['n'] += 1
+                return (good if calls['n'] <= 2 else bad)(argv, **kwargs)
+            return good(argv, **kwargs)
+        with mock.patch.object(yogi.subprocess, 'run', run), self.assertRaisesRegex(yogi.Refused, 'identity mismatch'):
+            yogi.control_builder(self.cfg, 'start', own, sleep=lambda s: None, env=RUN_ENV)
+        self.assertEqual(self.requests(log), ['start'])
+
+    def test_already_running_unowned_host_is_never_adopted_or_stopped(self):
+        log, own = [], self.root/'own.json'
+        self.assertIn('not started by this run', self.control('start', ['RUNNING'], log, own))
+        self.assertFalse(yogi.read(own)['startedByThisOperation'])
+        self.assertEqual(self.control('stop', ['RUNNING'], log, own), 'not-started-by-this-run')
+        self.assertEqual(self.requests(log), [])
+        with self.assertRaises(FileExistsError):
+            self.control('start', ['RUNNING'], log, own)
+
+    def test_uncertain_start_is_not_retried_and_its_record_still_lets_cleanup_stop_it(self):
+        log, own = [], self.root/'own.json'
+        with self.assertRaisesRegex(yogi.Refused, 'uncertain'):
+            self.control('start', ['TERMINATED'], log, own, start_rc=1)
+        self.assertEqual(self.requests(log), ['start'])  # exactly one request, no retry
+        self.assertTrue(yogi.read(own)['startedByThisOperation'])
+        log2 = []
+        self.assertEqual(self.control('stop', ['STAGING', 'RUNNING', 'STOPPING', 'TERMINATED'], log2, own), 'TERMINATED')
+        self.assertEqual(self.requests(log2), ['stop'])
+        log3 = []  # the uncertain START never took effect: nothing to stop, nothing requested
+        self.assertEqual(self.control('stop', ['TERMINATED'], log3, own), 'TERMINATED')
+        self.assertEqual(self.requests(log3), [])
+
+    def test_missing_legacy_stale_foreign_or_tampered_records_never_stop(self):
+        own = self.root/'own.json'
+        self.control('start', ['TERMINATED', 'RUNNING'], [], own)
+        good = yogi.read(own)
+        self.assertEqual(self.control('stop', ['RUNNING'], [], self.root/'absent.json'), 'no-ownership-record (nothing stopped)')
+        variants = [{'schema': 'roseos.yogi-builder-ownership.v1', 'instance': 'roseos-yogi-builder-20261103-a',
+                     'startedByThisOperation': True},
+                    dict(good, schema='roseos.yogi-builder-ownership.v1'),
+                    dict(good, builder=dict(good['builder'], zone='us-west2-a')),
+                    dict(good, builder=dict(good['builder'], instanceId='1')),
+                    dict(good, builder=dict(good['builder'], instance='immortal-os-builder')),
+                    dict(good, run=dict(good['run'], runId='776')),
+                    dict(good, run=dict(good['run'], runAttempt='2')),
+                    dict(good, run=dict(good['run'], source='b'*40)),
+                    dict(good, run=dict(good['run'], workflowRef='Immortal-Protocols/RoseOS-1/.github/workflows/os-release.yml@refs/heads/main')),
+                    dict(good, observedBeforeStart='RUNNING'),
+                    {k: v for k, v in good.items() if k != 'run'}]
+        for index, record in enumerate(variants):
+            with self.subTest(index=index):
+                path = self.root/f'bad-{index}.json'
+                path.write_text(json.dumps(record))
+                log = []
+                with self.assertRaisesRegex(yogi.Refused, 'legacy, malformed, stale'):
+                    self.control('stop', ['RUNNING'], log, path)
+                self.assertEqual(self.requests(log), [])
+        log = []  # same record, another run's cleanup
+        with self.assertRaises(yogi.Refused):
+            self.control('stop', ['RUNNING'], log, own, env=dict(RUN_ENV, GITHUB_RUN_ID='778'))
+        self.assertEqual(self.requests(log), [])
+
+    def test_controller_needs_this_runs_identity(self):
+        for env in ({}, dict(RUN_ENV, GITHUB_WORKFLOW_REF='Immortal-Protocols/RoseOS-1/.github/workflows/os-release.yml@x'),
+                    dict(RUN_ENV, GITHUB_SHA='short')):
+            with self.subTest(env=sorted(env)), self.assertRaises(yogi.Refused):
+                self.control('start', ['TERMINATED'], [], self.root/f'own-{len(env)}.json', env=env)
+
+    def test_legacy_or_foreign_builder_configs_refuse(self):
+        base = yogi.read(yogi.CONFIG)
+        for changes in ({'zone': 'us-west2-a'}, {'instance': 'roseos-yogi-builder-20261103-a', 'zone': 'us-west2-a'},
+                        {'instanceId': '1'}, {'instance': 'immortal-os-builder'}, {'project': 'other-project'},
+                        {'runnerLabel': 'roseos-yogi-builder'}, {'runnerLabel': 'roseos-frankel-builder'}):
+            with self.subTest(changes=sorted(changes)):
+                bad = copy.deepcopy(base)
+                bad['builder'].update(changes)
+                path = self.root/'yogi.json'
+                path.write_text(json.dumps(bad))
+                with self.assertRaises(yogi.Refused):
+                    yogi.config(path)
+
+    def test_workflow_exports_any_written_ownership_and_cleanup_uses_it(self):
+        text = (yogi.ROOT/'.github/workflows/yogi-ota.yml').read_text()
+        body = text[text.index('\njobs:\n'):]
+        controller = body[body.index('\n  controller:\n'):body.index('\n  readiness:\n')]
+        self.assertIn('ownership: ${{ steps.export.outputs.ownership }}', controller)
+        export = controller[controller.index('      - id: export\n'):]
+        self.assertIn('        if: always()\n', export[:60])
+        self.assertLess(controller.index('builder start --ownership'), controller.index('      - id: export\n'))
+        cleanup = body[body.index('\n  cleanup:\n'):]
+        self.assertIn("if: always() && needs.controller.result != 'skipped'", cleanup)
+        self.assertIn('OWNERSHIP: ${{ needs.controller.outputs.ownership }}', cleanup)
+        self.assertIn('builder stop --ownership', cleanup)
+
+
+class ReadinessTest(Fixture):
+    """Readiness gathers host evidence only; it never needs or opens builder.status, keys, builds or publication."""
+    def host(self):
+        b = self.cfg['builder']
+        root = self.root/'srv'
+        source = root/'src'
+        for d in (source/'build/make', source/'.repo', source/'script', source/'prebuilts/sdk/tools/linux/bin',
+                  source/'prebuilts/jdk/jdk21/linux-x86/bin', root/'inputs', root/'attempts'):
+            d.mkdir(parents=True, exist_ok=True)
+        (source/'build/make/envsetup.sh').write_text('# synthetic')
+        if not (source/'build/envsetup.sh').is_symlink():
+            (source/'build/envsetup.sh').symlink_to('make/envsetup.sh')
+        (source/'script/generate-release.sh').write_text('# synthetic')
+        for tool in ('prebuilts/sdk/tools/linux/bin/aapt', 'prebuilts/sdk/tools/linux/bin/apksigner',
+                     'prebuilts/jdk/jdk21/linux-x86/bin/java'):
+            (source/tool).write_text('#!/bin/sh\n')
+            (source/tool).chmod(0o755)
+        (root/'yogi-build.lock').write_text('')
+        (root/'inputs/cover-display-reference.json').write_text('{}')
+        b.update(root=str(root), retainedSource=str(source), attempts=str(root/'attempts'), lock=str(root/'yogi-build.lock'),
+                 coverDisplayInput=str(root/'inputs/cover-display-reference.json'),
+                 bootstrapState=str(root/'signing-bootstrap-state'), status='runner-unregistered')
+        return {'instance/id': yogi.INSTANCE_ID, 'instance/name': yogi.INSTANCE,
+                'instance/zone': 'projects/123/zones/us-west2-b', 'project/project-id': 'protocols-465723'}
+
+    def run_readiness(self, meta, out, free=10**13):
+        return yogi.readiness(self.cfg, out, env={'RUNNER_NAME': yogi.INSTANCE, 'GITHUB_SHA': SHA},
+                              metadata=lambda key: meta[key], which=lambda tool: '/usr/bin/' + tool,
+                              free=lambda path: SimpleNamespace(free=free))
+
+    def test_readiness_passes_on_the_exact_host_without_opening_any_other_stage(self):
+        meta = self.host()
+        record = self.run_readiness(meta, self.root/'out')
+        self.assertTrue(record['passed'], [c for c in record['checks'] if not c['passed']])
+        self.assertEqual(sorted(p.name for p in (self.root/'out').iterdir()), ['yogi-readiness.json'])
+        self.assertEqual(yogi.blockers(self.cfg, 'readiness'), [])
+        for stage in ('key-bootstrap', 'bootstrap', 'ota'):  # builder.status still closes every build/signing path
+            self.assertTrue(any('builder runner/controller not ready' in b for b in yogi.blockers(self.cfg, stage)))
+
+    def test_wrong_host_space_or_tools_fail_and_still_leave_a_receipt(self):
+        for change in ({'instance/zone': 'projects/123/zones/us-west2-a'}, {'instance/id': '1'},
+                       {'instance/name': 'roseos-yogi-builder-20261103-a'}):
+            with self.subTest(change=sorted(change)):
+                meta = dict(self.host(), **change)
+                out = self.root/('out-' + sorted(change)[0].replace('/', '-'))
+                with self.assertRaisesRegex(yogi.Refused, 'host identity'):
+                    self.run_readiness(meta, out)
+                self.assertFalse(yogi.read(out/'yogi-readiness.json')['passed'])
+        meta = self.host()
+        with self.assertRaisesRegex(yogi.Refused, 'free space'):
+            self.run_readiness(meta, self.root/'out-space', free=1)
+        (Path(self.cfg['builder']['retainedSource'])/TOOLS_APKSIGNER).unlink()
+        with self.assertRaisesRegex(yogi.Refused, 'apksigner'):
+            self.run_readiness(meta, self.root/'out-tools')
+
+    def test_committed_tree_keeps_readiness_closed_on_the_missing_receipt_fields(self):
+        found = yogi.blockers(yogi.config(), 'readiness')
+        self.assertEqual(len(found), 1)
+        for field in ('runner.labels', 'storage.mounts (filesystemUuid, guestDevice, mountPoint)',
+                      'runner label roseos-yogi-builder-20261105-b not evidenced as installed'):
+            self.assertIn(field, found[0])
+        with self.assertRaises(yogi.Refused):
+            yogi.readiness(yogi.config(), self.root/'never')
+        self.assertFalse((self.root/'never').exists())
+
+    def test_readiness_job_is_isolated_from_build_keys_signing_and_publication(self):
+        text = (yogi.ROOT/'.github/workflows/yogi-ota.yml').read_text()
+        body = text[text.index('\njobs:\n'):]
+        job = body[body.index('\n  readiness:\n'):body.index('\n  key-bootstrap:\n')]
+        self.assertIn("if: inputs.stage == 'readiness'", job)
+        self.assertIn('runs-on: [self-hosted, roseos-yogi-builder-20261105-b]', job)
+        for forbidden in ('id-token', 'permissions', 'secrets.', 'actions-gcp-login', 'signing-bootstrap', 'compile',
+                          'integrate', 'download-artifact', 'publish', 'sign ', 'allocate', 'prepare'):
+            self.assertNotIn(forbidden, job)
+        self.assertEqual(job.count('python3 scripts/yogi_ota.py'), 2)
+        for name, condition in (('key-bootstrap', "if: inputs.stage == 'key-bootstrap'"),
+                                ('build', "if: inputs.stage == 'bootstrap' || inputs.stage == 'ota'")):
+            block = body[body.index(f'\n  {name}:\n'):]
+            self.assertIn(condition, block[:200])
+
+
+TOOLS_APKSIGNER = 'prebuilts/sdk/tools/linux/bin/apksigner'
 
 
 if __name__ == '__main__':

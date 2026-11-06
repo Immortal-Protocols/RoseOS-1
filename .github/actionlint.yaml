@@ -6,8 +6,8 @@ self-hosted-runner:
     - roseos-cuttlefish-runtime
     # Dedicated signer runner, group roseos-signing (SIGN-021 .github/workflows/os-sign.yml).
     - roseos-dedicated-signer
-    # Proposed repository-scoped runner on the dedicated Yogi VM roseos-yogi-builder-20261103-a (not registered yet).
-    - roseos-yogi-builder
+    # Replacement-specific runner on the dedicated Yogi VM roseos-yogi-builder-20261105-b (runner 21, registered, disabled).
+    - roseos-yogi-builder-20261105-b
 paths:
   .github/workflows/os-release.yml:
     ignore:

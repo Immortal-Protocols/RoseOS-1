@@ -10,9 +10,11 @@
   "builder": {
     "status": "runner-unregistered",
     "project": "protocols-465723",
-    "zone": "us-west2-a",
-    "instance": "roseos-yogi-builder-20261103-a",
-    "runnerLabel": "roseos-yogi-builder",
+    "zone": "us-west2-b",
+    "instance": "roseos-yogi-builder-20261105-b",
+    "instanceId": "2720796557371812468",
+    "restoredDiskId": "938743673401685238",
+    "runnerLabel": "roseos-yogi-builder-20261105-b",
     "root": "/srv/rose-yogi",
     "retainedSource": "/srv/rose-yogi/src",
     "attempts": "/srv/rose-yogi/attempts",
@@ -21,7 +23,66 @@
     "coverDisplayInput": "/srv/rose-yogi/inputs/cover-display-reference.json",
     "jobs": 48,
     "minimumFreeBytes": 700000000000,
-    "basis": "Dedicated Yogi VM from the handoff: n2-standard-64, 2,000 GB SSD, last documented TERMINATED. It has no service account, GitHub runner or CI identity yet; status stays runner-unregistered until Infra registers the runner and the controller identity can get/start/stop only this instance. Never shared with Frankel, Mustang, Rango, Blazer or Agent builds."
+    "evidence": {
+      "runner": {
+        "id": 21,
+        "name": "roseos-yogi-builder-20261105-b",
+        "version": "2.338.2",
+        "scope": "repository Immortal-Protocols/RoseOS-1",
+        "service": "disabled, inactive",
+        "group": {
+          "poolId": 1,
+          "selection": "official default group",
+          "organizationGroupId": null
+        },
+        "labelsSupplied": [
+          "roseos-yogi-builder"
+        ],
+        "labels": null,
+        "replacementLabelInstalled": false,
+        "workflowRestriction": "not enforced by registration; only label routing separates Yogi jobs"
+      },
+      "storage": {
+        "disk": {
+          "name": "roseos-yogi-builder-20261105-b",
+          "id": "938743673401685238",
+          "sizeGiB": 2000,
+          "type": "pd-ssd",
+          "attachment": "boot",
+          "zone": "us-west2-b"
+        },
+        "diskLineage": "restored disk 938743673401685238 attached as the 2,000 GiB pd-ssd boot disk of the replacement VM",
+        "filesystemDevice": {
+          "number": 2049,
+          "paths": [
+            "/srv/rose-yogi",
+            "/srv/rose-yogi/src"
+          ]
+        },
+        "mounts": {
+          "guestDevice": null,
+          "filesystemUuid": null,
+          "mountPoint": null
+        },
+        "attemptsCreated": true,
+        "freeBytesReported": "1.709 TB",
+        "envsetupLinkVerified": true
+      },
+      "controller": {
+        "account": "roseos-yogi-controller@protocols-465723.iam.gserviceaccount.com",
+        "role": "projects/protocols-465723/roles/roseosYogiControllerV1",
+        "scope": "get/start/stop bound on the replacement VM; the original zone-a binding is retained, so the account can address more than one VM and source still rejects the original",
+        "federation": "exact repository and owner IDs, public visibility, yogi-ota.yml@refs/heads/main, manual dispatch, GitHub-hosted controller jobs"
+      },
+      "state": "TERMINATED at 2026-11-06T01:00:52Z, both disks READY and preserved; temporary SSH access removed",
+      "source": "Chief relay of the Mac operator saved receipts, 2026-11-06. Null values are unverified and must not be inferred (device number 2049 does not identify the guest device, UUID or mount point)."
+    },
+    "retired": {
+      "instance": "roseos-yogi-builder-20261103-a",
+      "zone": "us-west2-a",
+      "note": "Original zone-a VM, preserved. Never a target or fallback of this route."
+    },
+    "basis": "Replacement dedicated Yogi VM (exact tuple: project, zone, name, numeric ID). The controller checks all four on every describe and poll. Runner label is replacement-specific because the old label's uniqueness is not evidenced. status stays runner-unregistered, and every not-ready guard stays closed, until the missing receipt fields and actual readiness evidence are recorded. Never shared with Frankel, Mustang, Rango, Blazer or Agent builds."
   },
   "signing": {
     "status": "unbound",

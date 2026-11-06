@@ -374,9 +374,10 @@ standalone harness (`launcher3-compile`) and the other retained-tree work all ru
 **Yogi** has its own host in its committed route (#558): `yogi-ota.yml` and `os/ota/yogi.json`. The test checks every
 part of it against the map:
 
-- every self-hosted job of every stage on `roseos-yogi-builder`;
+- every self-hosted job of every stage on the replacement-specific `roseos-yogi-builder-20261105-b` label;
 - its own queue (`yogi-ota`) and controller identity (`YOGI_CONTROLLER_SERVICE_ACCOUNT`);
-- its own VM (`roseos-yogi-builder-20261103-a`), disk (`/srv/rose-yogi`) and lock.
+- its own VM (`protocols-465723` / `us-west2-b` / `roseos-yogi-builder-20261105-b`, numeric ID
+  `2720796557371812468`), disk (`/srv/rose-yogi`) and lock. The original zone-a VM is retired from the route.
 
 None of these is shared with the Frankel host. A host builds only when it is in service. For Yogi that is when
 `yogi.json` says `builder.status` `ready`, the rule `scripts/yogi_ota.py` applies before any stage. It is
