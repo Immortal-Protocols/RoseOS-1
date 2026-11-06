@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The hosted (off-builder) Agent route of scripts/host-app-release.py (--hosted, os/release-pipeline/agent-hosted.json).
+"""The hosted (off-builder) Agent route of scripts/host-app-release.py (--hosted, os/release-pipeline/agent/hosted.json).
 
 Signing's #608 handoff: a hosted entry point admits one owned reservation and then calls the unchanged release(), with
 none of main()'s Frankel wrapper (Frankel config, host lock, disk reserve, mustExceed/reserved floor, builder allocation
@@ -19,7 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import test_app_release as base  # noqa: E402  (fixtures only; its own tests are not re-run here)
 
 release, ROOT, PIN, OTHER = base.release, base.ROOT, base.PIN, base.OTHER
-COMMITTED = json.loads((ROOT/'os/release-pipeline/agent-hosted.json').read_text())
+COMMITTED = json.loads((ROOT/'os/release-pipeline/agent/hosted.json').read_text())
 FRANKEL = json.loads((ROOT/'os/release-pipeline/frankel.json').read_text())
 WRAPPER = ('disk_preflight', 'allocated_floor', 'requested_version', 'missing_inputs', 'main')
 WORKFLOW_REF = 'Immortal-Protocols/RoseOS-1/.github/workflows/os-release.yml@refs/heads/main'

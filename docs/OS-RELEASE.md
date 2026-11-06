@@ -521,7 +521,7 @@ A failed or another run's reservation stays consumed; it is never reused. The re
 digest, allocation, source and store instead of `mustExceed`. `main()`'s cleanup stays: the candidate worktree,
 `worktree prune`, `ROSE_RELEASE_DIR`, and any partial artifact on failure. The builder route is unchanged.
 
-**Its config, `os/release-pipeline/agent-hosted.json`,** keeps the committed signing values and pin unchanged: the
+**Its config, `os/release-pipeline/agent/hosted.json`,** keeps the committed signing values and pin unchanged: the
 project, secret version, four secret names and `appSignerSha256`. Everything else is null until its owner binds it:
 - App's portable SDK, JDK, public connection inputs and tools, as absolute paths on the hosted runner;
 - the reservation store.

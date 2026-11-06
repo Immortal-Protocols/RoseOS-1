@@ -24,7 +24,7 @@ filesystem cannot be established fails closed. Provider disk size is never taken
 It never reconciles or builds the OS, never reads the OS signing secrets, and never builds or signs the controller or
 the Calculator. Missing configuration fails closed (exit 4) naming the key.
 
---hosted is the off-builder (hosted) Agent route, source only and unbound (os/release-pipeline/agent-hosted.json). It
+--hosted is the off-builder (hosted) Agent route, source only and unbound (os/release-pipeline/agent/hosted.json). It
 runs none of the Frankel wrapper: no Frankel config, host lock, disk reserve, mustExceed/reserved floor or builder
 allocation floor. Instead it admits exactly one owned reservation (ROSE_APP_RESERVATION, a
 roseos.app-version-reservation.v1 receipt): its digest, this run as its owner (GITHUB_WORKFLOW_REF, GITHUB_RUN_ID and
@@ -51,7 +51,7 @@ import host_secrets  # noqa: E402
 from host_secrets import AdapterFailed, AdapterSetupMissing  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
-HOSTED_CONFIG = ROOT/'os/release-pipeline/agent-hosted.json'
+HOSTED_CONFIG = ROOT/'os/release-pipeline/agent/hosted.json'
 RESERVATION_SCHEMA = 'roseos.app-version-reservation.v1'
 SECRETS = ('keystore', 'config', 'storePassword', 'keyPassword')
 PACKAGE = 'dev.pixel.voice'
@@ -351,7 +351,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--artifact-dir', type=Path)
     parser.add_argument('--check', action='store_true', help='Only report missing configuration')
-    parser.add_argument('--hosted', action='store_true', help='The off-builder route (os/release-pipeline/agent-hosted.json)')
+    parser.add_argument('--hosted', action='store_true', help='The off-builder route (os/release-pipeline/agent/hosted.json)')
     a = parser.parse_args()
     try:
         if a.check:
