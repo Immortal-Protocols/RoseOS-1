@@ -68,7 +68,8 @@ class Guard(unittest.TestCase):
                       jobs()['guard'])
         for name in ('outer_seconds', 'finish_seconds', 'job_minutes'):
             self.assertIn(f'      launcher3_{name}: ${{{{ steps.launcher3-compile.outputs.{name} }}}}\n', jobs()['guard'])
-        result = subprocess.run([sys.executable, str(ROOT/'scripts/launcher3-compile.py'), 'check'], capture_output=True, text=True)
+        result = subprocess.run([sys.executable, str(ROOT/'scripts/launcher3-compile.py'), 'check'], capture_output=True,
+                                text=True, env={k: v for k, v in os.environ.items() if not k.startswith('GITHUB_')})
         self.assertEqual((result.returncode, result.stdout), (4, ''))  # the controller never starts while unbound
         self.assertIn('    needs: guard\n', jobs()['controller'])
 

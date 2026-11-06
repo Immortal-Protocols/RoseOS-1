@@ -25,6 +25,7 @@ import subprocess
 import sys
 import tempfile
 import signal
+import stat
 import time
 import unittest
 import unittest.mock
@@ -45,7 +46,32 @@ def contract_module():
 
 
 contract = contract_module()
-BINDING = json.loads((ROOT/'os/build-only/launcher3-compile-host.json').read_text())
+BINDING = json.loads((ROOT/'os/build-only/launcher3-compile-lane.json').read_text())
+import launcher3_controller as controller
+lane = adapter.launcher3_lane
+
+
+def dedicated_binding():
+    """Only synthetic capacity; never a proposed or observed host binding."""
+    binding = json.loads(json.dumps(BINDING))
+    binding['taskParent'] = '/home/pixelbuild/rose-actions'
+    binding['lane'].update(status='bound', runnerName='synthetic-launcher3', runnerLabel='synthetic-launcher3',
+                           vm={'project': 'synthetic-project', 'zone': 'test-zone-a',
+                               'instance': 'synthetic-launcher3', 'instanceId': '123456789'},
+                           disk={'resource': 'projects/synthetic-project/zones/test-zone-a/disks/synthetic-launcher3',
+                                 'id': '987654321'}, storageRoot='/home/pixelbuild',
+                           lockPath='/home/pixelbuild/launcher3.lock', queue='synthetic-launcher3',
+                           controller={'identityVariable': 'LAUNCHER3_CONTROLLER_SERVICE_ACCOUNT',
+                                       'providerVariable': 'LAUNCHER3_WORKLOAD_IDENTITY_PROVIDER'},
+                           infraEvidence='Synthetic fixture only; no actual capacity or runtime approval.')
+    return binding
+
+
+def dedicated_env():
+    return {'GITHUB_REPOSITORY': lane.REPOSITORY, 'GITHUB_WORKFLOW_REF':
+            f'{lane.REPOSITORY}/{lane.WORKFLOW}@refs/heads/main', 'GITHUB_REF': 'refs/heads/main',
+            'GITHUB_EVENT_NAME': 'workflow_dispatch', 'GITHUB_SHA': 'a' * 40, 'GITHUB_WORKFLOW_SHA': 'a' * 40,
+            'GITHUB_RUN_ID': '12345', 'GITHUB_RUN_ATTEMPT': '1', 'RUNNER_NAME': 'synthetic-launcher3'}
 LUNCH_INPUTS = ROOT/'os/compile-contracts/frankel-lunch-inputs.json'
 EMPTY_BLOB = 'e69de29bb2d1d6434b8b29ae775ad8c2e48c5391'
 def amended(edit=None):
@@ -69,7 +95,7 @@ def blob(data):
 
 def run_cli(*argv):
     return subprocess.run([sys.executable, str(ROOT/'scripts/launcher3-compile.py'), *argv], capture_output=True, text=True,
-                          cwd=ROOT)
+                          cwd=ROOT, env={k: v for k, v in os.environ.items() if not k.startswith('GITHUB_')})
 
 
 POLICY = {'agent': {'packageName': 'dev.pixel.voice', 'certificates': ['A' * 64]},
@@ -376,12 +402,11 @@ class Contract(unittest.TestCase):
         self.assertIn('apply-os-changes.py does not register', MANIFEST['candidatePatches'])
         result = run_cli('check')
         self.assertEqual((result.returncode, result.stdout), (4, ''))
-        self.assertIn('sourceTree, lunch, policyReceipt.path, policyReceipt.sha256, bundleReport.path, bundleReport.sha256',
-                      result.stderr)
+        self.assertIn('independent harness capacity is unbound', result.stderr)
 
     def binding(self, **change):
         path = Path(tempfile.mkdtemp())/'binding.json'
-        record = {**BINDING, 'branch': 'verifyIntegrated', 'sourceTree': '/home/pixelbuild/grapheneos-2026100600',
+        record = {**dedicated_binding(), 'branch': 'verifyIntegrated', 'sourceTree': '/home/pixelbuild/grapheneos-2026100600',
                   'lunch': 'frankel-cur-user', 'adevtoolGit': 'public-fetch',
                   'policyReceipt': {'path': '/home/pixelbuild/receipts/policy.json', 'sha256': 'a' * 64}, **change}
         path.write_text(json.dumps(record))
@@ -1572,9 +1597,10 @@ with a.interrupts():
         def fake_run(*args, **kwargs):
             seen.append(signal.getsignal(signal.SIGTERM))
             raise adapter.Interrupted('SIGTERM')
-        binding = {**BINDING, 'branch': 'verifyIntegrated'}
+        binding = {**dedicated_binding(), 'branch': 'verifyIntegrated', 'sourceTree': '/home/pixelbuild/source'}
         with unittest.mock.patch.object(adapter, 'check', return_value=(MANIFEST, binding, None)), \
-                unittest.mock.patch.object(adapter, 'run', side_effect=fake_run):
+                unittest.mock.patch.object(adapter, 'run', side_effect=fake_run), \
+                unittest.mock.patch.dict(os.environ, {**dedicated_env(), 'GITHUB_RUN_ID': '1'}, clear=True):
             self.assertEqual(adapter.main(['run', '--run-id', '1', '--attempt', '1']), 3)
         self.assertNotIn(seen[0], (signal.SIG_DFL, signal.SIG_IGN))
         self.assertEqual(signal.getsignal(signal.SIGTERM), before)
@@ -2124,7 +2150,7 @@ class Run(unittest.TestCase):
     def setUp(self):
         self.parent = Path(tempfile.mkdtemp())
         self.s = Synthetic(tempfile.mkdtemp())
-        self.binding = {**BINDING, 'branch': 'verifyIntegrated', 'taskParent': str(self.parent), 'sourceTree': '/src',
+        self.binding = {**dedicated_binding(), 'branch': 'verifyIntegrated', 'taskParent': str(self.parent), 'sourceTree': '/src',
                         'lunch': 'frankel-cur-user', 'adevtoolGit': 'public-fetch',
                         'policyReceipt': {'path': '/p.json', 'sha256': self.s.policy_sha}}
         self.bundle_sha = sha(json.dumps(self.s.bundle_report).encode())
@@ -3473,6 +3499,299 @@ class Fetch(unittest.TestCase):
         self.assertTrue(dotgit.is_dir())
         self.assertIsNone(self.record['createdRemoved'])
         self.assertFalse(self.record['sessionEnded'])
+
+
+class DedicatedLane(unittest.TestCase):
+    def test_capacity_is_unbound_and_legacy_binding_cannot_activate_the_adapter(self):
+        with self.assertRaisesRegex(lane.Unbound, 'capacity is unbound'):
+            lane.validate(BINDING)
+        legacy = ROOT/'os/build-only/launcher3-compile-host.json'
+        with self.assertRaisesRegex(adapter.Invalid, 'legacy host binding is retired'):
+            adapter.check(legacy)
+        # Historical task roots and WORK_DIRS remain usable by Release's old-run reclaim policy.
+        old = json.loads(legacy.read_text())
+        self.assertEqual(str(adapter.task_root(old, '1', '1')), '/home/pixelbuild/rose-actions/launcher3-compile-1-1')
+        self.assertEqual(adapter.WORK_DIRS, ('tree', 'out', 'home', 'tmp'))
+
+    def test_every_capacity_field_is_required_even_with_status_bound(self):
+        template = dedicated_binding()
+        fields = [('taskParent',)] + [('lane', k) for k, value in template['lane'].items()
+                                      if not isinstance(value, dict) and k not in ('status', 'workflow')]
+        fields += [('lane', group, k) for group in ('vm', 'disk', 'controller') for k in template['lane'][group]]
+        for path in fields:
+            with self.subTest(field=path):
+                binding = dedicated_binding()
+                parent = binding
+                for key in path[:-1]:
+                    parent = parent[key]
+                parent[path[-1]] = None
+                with self.assertRaises(lane.Unbound):
+                    lane.validate(binding)
+        self.assertEqual(lane.validate(template), template['lane'])
+        template['lane']['status'] = 'unbound'
+        with self.assertRaises(lane.Unbound):
+            lane.validate(template)
+
+    def test_capacity_shape_paths_and_controller_variables_are_strict(self):
+        edits = [lambda b: b['lane'].update(extra=True), lambda b: b['lane']['vm'].update(instanceId=123),
+                 lambda b: b['lane']['vm'].update(instance='../foreign'), lambda b: b['lane']['disk'].update(id='0'),
+                 lambda b: b['lane']['disk'].update(resource='projects/elsewhere/zones/x/disks/y'),
+                 lambda b: b['lane'].update(infraEvidence=''), lambda b: b['lane'].update(queue='${{ inputs.queue }}'),
+                 lambda b: b['lane']['controller'].update(identityVariable='GCP_CONTROLLER_SERVICE_ACCOUNT'),
+                 lambda b: b['lane']['controller'].update(providerVariable='GCP_WORKLOAD_IDENTITY_PROVIDER'),
+                 lambda b: b.update(taskParent='/elsewhere'), lambda b: b.update(taskParent='/home/pixelbuild/../x'),
+                 lambda b: b['lane'].update(lockPath=b['taskParent']+'/shared.lock'),
+                 lambda b: b['lane'].update(lockPath='/home'), lambda b: b['lane'].update(storageRoot='/'),
+                 lambda b: b.update(sourceTree='/production/source'),
+                 lambda b: b['lane'].update(workflow='.github/workflows/os-release.yml')]
+        for edit in edits:
+            with self.subTest(edit=edits.index(edit)):
+                binding = dedicated_binding()
+                edit(binding)
+                with self.assertRaises(lane.Invalid):
+                    lane.validate(binding)
+
+    def test_production_vm_aliases_labels_queues_and_disk_ids_refuse(self):
+        capacity = json.loads((ROOT/'os/release-pipeline/lanes/capacity.json').read_text())
+        for host in capacity['hosts'].values():
+            for field in ('vm', 'runnerLabel', 'queue'):
+                with self.subTest(host=host['vm']['instance'], field=field):
+                    binding = dedicated_binding()
+                    if field == 'vm':
+                        binding['lane']['vm'].update(host['vm'])
+                        vm = binding['lane']['vm']
+                        binding['lane']['disk']['resource'] = f'projects/{vm["project"]}/zones/{vm["zone"]}/disks/test-disk'
+                    else:
+                        binding['lane'][field] = host[field]
+                    with self.assertRaisesRegex(lane.Invalid, 'shares another lane'):
+                        lane.validate(binding)
+            for field in ('runnerLabel', 'queue'):
+                with self.subTest(case_alias=field, host=host['vm']['instance']):
+                    binding = dedicated_binding()
+                    binding['lane'][field] = host[field].swapcase()
+                    with self.assertRaisesRegex(lane.Invalid, 'shares another lane'):
+                        lane.validate(binding)
+        yogi = json.loads((ROOT/'os/ota/yogi.json').read_text())['builder']
+        for field, value in (('instanceId', lane.FRANKEL_INSTANCE_ID), ('instanceId', yogi['instanceId']),
+                             ('instanceId', yogi['retired']['instanceId']),
+                             ('id', yogi['restoredDiskId'])):
+            with self.subTest(alias=field, value=value):
+                binding = dedicated_binding()
+                binding['lane']['disk' if field == 'id' else 'vm'][field] = value
+                with self.assertRaises(lane.Invalid):
+                    lane.validate(binding)
+        for label in yogi['evidence']['runner']['labels']:
+            with self.subTest(alias=label):
+                binding = dedicated_binding()
+                binding['lane']['runnerLabel'] = label
+                with self.assertRaises(lane.Invalid):
+                    lane.validate(binding)
+
+    def test_future_agent_capacity_is_also_reserved_without_changing_its_api(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths = ['os/release-pipeline/lanes/capacity.json', 'os/build-only/mustang-lane.json', 'os/ota/yogi.json']
+            for path in paths:
+                target = root/path
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes((ROOT/path).read_bytes())
+            path = root/paths[0]
+            capacity = json.loads(path.read_text())
+            other = dedicated_binding()['lane']
+            capacity['hosts']['agent-synthetic'] = other
+            capacity['lanes']['agent']['host'] = 'agent-synthetic'
+            path.write_text(json.dumps(capacity))
+            with self.assertRaisesRegex(lane.Invalid, 'shares another lane'):
+                lane.validate(dedicated_binding(), root)
+
+    def test_legacy_guard_refuses_even_before_reading_a_fully_bound_override(self):
+        for workflow in ('.github/workflows/os-release.yml', '.github/workflows/yogi-ota.yml'):
+            env = dedicated_env()
+            env['GITHUB_WORKFLOW_REF'] = f'{lane.REPOSITORY}/{workflow}@refs/heads/main'
+            with self.subTest(workflow=workflow), unittest.mock.patch.dict(os.environ, env, clear=True), \
+                    unittest.mock.patch.object(adapter, 'check') as checked:
+                self.assertEqual(adapter.main(['check', '--binding', '/never-read.json']), 2)
+                checked.assert_not_called()
+
+    def test_worker_requires_its_exact_runner_workflow_source_and_fresh_attempt(self):
+        env = dedicated_env()
+        self.assertEqual(lane.invocation(env)['runId'], '12345')
+        for key, value in (('GITHUB_REPOSITORY', 'foreign/repo'), ('GITHUB_REF', 'refs/heads/topic'),
+                           ('GITHUB_EVENT_NAME', 'push'), ('GITHUB_WORKFLOW_SHA', 'b' * 40),
+                           ('GITHUB_RUN_ID', '0'), ('GITHUB_RUN_ATTEMPT', '2'), ('GITHUB_SHA', 'tag')):
+            with self.subTest(field=key), self.assertRaises(lane.Invalid):
+                lane.invocation({**env, key: value})
+        binding = dedicated_binding()
+        binding['sourceTree'] = '/home/pixelbuild/source'
+        for run_id, attempt, name in (('other', '1', 'synthetic-launcher3'), ('12345', '2', 'synthetic-launcher3'),
+                                      ('12345', '1', 'immortal-os-builder')):
+            with self.subTest(worker=name, run=run_id, attempt=attempt), self.assertRaises(lane.Invalid):
+                lane.worker(binding, {**env, 'RUNNER_NAME': name}, run_id, attempt)
+
+    def test_worker_refuses_linked_storage_paths_before_run_or_cleanup(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            storage = Path(tmp)/'storage'
+            storage.mkdir()
+            linked = Path(tmp)/'linked'
+            linked.symlink_to(storage, target_is_directory=True)
+            binding = dedicated_binding()
+            binding['lane'].update(storageRoot=str(linked), lockPath=str(linked/'build.lock'))
+            binding.update(taskParent=str(linked/'runs'), sourceTree=str(linked/'source'))
+            with self.assertRaisesRegex(lane.Invalid, 'resolve through links'):
+                lane.worker(binding, dedicated_env(), '12345', '1')
+
+    def test_lock_is_only_the_dedicated_binding_and_json_duplicates_refuse(self):
+        binding = dedicated_binding()
+        self.assertEqual(adapter.lock_path(binding), '/home/pixelbuild/launcher3.lock')
+        with self.assertRaisesRegex(lane.Invalid, 'duplicate'):
+            lane.strict_json('{"lane":null,"lane":{}}')
+
+    def test_run_and_finish_cannot_bypass_worker_admission(self):
+        binding = {**dedicated_binding(), 'sourceTree': '/home/pixelbuild/source'}
+        for action in ('run', 'finish'):
+            args = [action, '--run-id', '12345', '--attempt', '1']
+            if action == 'finish':
+                args += ['--upload-dir', '/not-created']
+            with self.subTest(action=action), \
+                    unittest.mock.patch.dict(os.environ, {**dedicated_env(), 'RUNNER_NAME': 'foreign'}, clear=True), \
+                    unittest.mock.patch.object(adapter, 'check', return_value=(MANIFEST, binding, None)), \
+                    unittest.mock.patch.object(adapter, action) as execute:
+                self.assertEqual(adapter.main(args), 2)
+                execute.assert_not_called()
+
+
+class DedicatedController(unittest.TestCase):
+    class Common:
+        def __init__(self, started=True):
+            self.calls = []
+            self.started = started
+
+        def control_builder(self, action, claim=None, *, builder):
+            if claim:
+                claim(self.started)
+            self.calls.append((action, builder))
+            return 'RUNNING' if action == 'start' else 'TERMINATED'
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.record = Path(self.tmp.name)/'ownership.json'
+        self.binding, self.env, self.api = dedicated_binding(), dedicated_env(), self.Common()
+
+    def test_start_records_exact_ownership_before_request_and_stop_uses_only_that_vm(self):
+        observed = []
+
+        def control(action, claim=None, *, builder=None):
+            if claim:
+                claim(True)
+            observed.append(controller.read_ownership(self.record, self.binding, lane.invocation(self.env)))
+            self.assertEqual(builder, self.binding['lane']['vm'])
+            return action
+
+        api = unittest.mock.Mock(control_builder=control)
+        controller.start(api, self.binding, self.env, self.record)
+        controller.stop(api, self.binding, self.env, self.record)
+        self.assertEqual(observed, [True, True])
+
+    def test_incomplete_or_foreign_capacity_never_reaches_common_control(self):
+        for binding in (BINDING, {**self.binding, 'lane': {**self.binding['lane'],
+                            'vm': {**self.binding['lane']['vm'], 'instanceId': lane.FRANKEL_INSTANCE_ID}}}):
+            with self.subTest(binding=binding['lane']['status']), self.assertRaises(ValueError):
+                controller.start(self.api, binding, self.env, self.record)
+        self.assertEqual(self.api.calls, [])
+
+    def test_old_implicit_api_is_rejected_without_calling_it(self):
+        class Old:
+            def control_builder(self, action, claim=None):
+                raise AssertionError('implicit API was called')
+        with self.assertRaisesRegex(lane.Invalid, 'no fallback'):
+            controller.start(Old(), self.binding, self.env, self.record)
+        self.assertFalse(self.record.exists())
+
+    def test_the_current_common_api_is_consumed_without_a_global_override(self):
+        common = controller.load_module('launcher3_api_shape_test', 'scripts/release-pipeline.py')
+        before = dict(common.BUILDER)
+        api = common.Production()
+        self.assertIs(controller.require_explicit_target(api), api)
+        self.assertEqual(common.BUILDER, before)
+
+    def test_missing_or_repeated_claims_are_refused(self):
+        def absent(action, claim=None, *, builder):
+            return 'RUNNING'
+        with self.assertRaisesRegex(lane.Invalid, 'without a durable ownership claim'):
+            controller.start(unittest.mock.Mock(control_builder=absent), self.binding, self.env, self.record)
+        self.assertFalse(self.record.exists())
+
+        def twice(action, claim=None, *, builder):
+            claim(True)
+            claim(True)
+        with self.assertRaisesRegex(lane.Invalid, 'repeated ownership claim'):
+            controller.start(unittest.mock.Mock(control_builder=twice), self.binding, self.env, self.record)
+        self.assertTrue(controller.read_ownership(self.record, self.binding, lane.invocation(self.env)))
+
+    def test_failed_ownership_write_prevents_the_start_request(self):
+        for directory in (False, True):
+            with self.subTest(directory=directory):
+                self.record.unlink(missing_ok=True)
+
+                def failed(fd):
+                    if stat.S_ISDIR(os.fstat(fd).st_mode) == directory:
+                        raise OSError('synthetic durability failure')
+
+                with unittest.mock.patch.object(controller.os, 'fsync', side_effect=failed):
+                    with self.assertRaises(OSError):
+                        controller.start(self.api, self.binding, self.env, self.record)
+                self.assertEqual(self.api.calls, [])
+                with self.assertRaisesRegex(lane.Invalid, 'already exists'):
+                    controller.start(self.api, self.binding, self.env, self.record)
+
+    def test_existing_running_vm_is_never_stopped(self):
+        self.api.started = False
+        controller.start(self.api, self.binding, self.env, self.record)
+        self.assertIn('skipped', controller.stop(self.api, self.binding, self.env, self.record))
+        self.assertEqual([c[0] for c in self.api.calls], ['start'])
+
+    def test_foreign_run_source_vm_or_binding_record_refuses_stop(self):
+        controller.start(self.api, self.binding, self.env, self.record)
+        good = self.record.read_bytes()
+        edits = [lambda r: r['run'].update(runId='999'), lambda r: r['run'].update(runAttempt='2'),
+                 lambda r: r['run'].update(source='f' * 40), lambda r: r['run'].update(workflow='foreign'),
+                 lambda r: r['vm'].update(instance='immortal-os-builder'), lambda r: r['vm'].update(instanceId='999'),
+                 lambda r: r.update(bindingSha256='b' * 64), lambda r: r.update(startedByThisOperation='true'),
+                 lambda r: r.update(extra=True), lambda r: r.update(schema='foreign')]
+        for edit in edits:
+            with self.subTest(edit=edits.index(edit)):
+                record = json.loads(good)
+                edit(record)
+                self.record.write_text(json.dumps(record))
+                with self.assertRaisesRegex(lane.Invalid, 'STOP refused'):
+                    controller.stop(self.api, self.binding, self.env, self.record)
+        self.assertEqual([c[0] for c in self.api.calls], ['start'])
+
+    def test_missing_linked_or_nonregular_ownership_never_calls_stop(self):
+        with self.assertRaises(OSError):
+            controller.stop(self.api, self.binding, self.env, self.record)
+        self.record.symlink_to(Path(self.tmp.name)/'absent')
+        with self.assertRaises(OSError):
+            controller.stop(self.api, self.binding, self.env, self.record)
+        self.record.unlink()
+        os.mkfifo(self.record)
+        with self.assertRaises(lane.Invalid):
+            controller.stop(self.api, self.binding, self.env, self.record)
+        self.assertEqual(self.api.calls, [])
+
+    def test_uncertain_start_retains_claim_and_is_not_retried(self):
+        def uncertain(action, claim=None, *, builder):
+            claim(True)
+            self.api.calls.append((action, builder))
+            raise RuntimeError('synthetic uncertain result')
+        api = unittest.mock.Mock(control_builder=uncertain)
+        with self.assertRaises(RuntimeError):
+            controller.start(api, self.binding, self.env, self.record)
+        self.assertTrue(controller.read_ownership(self.record, self.binding, lane.invocation(self.env)))
+        with self.assertRaisesRegex(lane.Invalid, 'already exists'):
+            controller.start(api, self.binding, self.env, self.record)
+        self.assertEqual([c[0] for c in self.api.calls], ['start'])
 
 
 if __name__ == '__main__':
