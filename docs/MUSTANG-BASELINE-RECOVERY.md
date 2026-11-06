@@ -110,14 +110,13 @@ use a write-once monotonic counter above it, retaining the old exact allocation
 as unknown. This requires proving which uncertain operations used that generator
 and auditing all consumers; it is not permission to pick a new number.
 
-The committed Updater's `RoseReleases` accepts ten numeric digits and uses Java
-`long`, and OTA metadata compares numeric build identity separately from time.
-An offline synthetic ZIP probe passed the Python full-OTA metadata boundary
-check and confirmed the current allocator's `clock_behind` refusal. A Java
-runtime boundary probe was **unrun** because this environment lacks a JDK.
-This source inspection does **not** prove native Android/releasetools or phone
-compatibility, date-format and 32-bit assumptions. The current date allocator
-would refuse that namespace with `clock_behind`, so switching only the next ID
-is not a valid migration. A different day or empty disk still cannot prove the
-lost allocation's absence. Actual reservations, signed state, timestamps and
-publication ordering must remain explicit; no `unknown: false` is fabricated.
+The follow-up [numbering audit](MUSTANG-NUMBERING-RECOVERY.md) records the captured
+failed-run generator source, pinned native/Updater assumptions, executable
+synthetic boundary probes, remaining device rollback and counter dependencies,
+and a minimal migration proposal. The Java compiler module is available even
+though no `javac` executable is on PATH, so the follow-up Java probes ran.
+The date allocator still refuses the new namespace with `clock_behind`;
+switching only the next ID is not a migration. A different day or empty disk
+cannot prove the lost allocation's absence. Actual reservations, signed state,
+timestamps and publication ordering remain explicit; no `unknown: false` is
+fabricated, and bounded source tests do not prove a real candidate or phone.

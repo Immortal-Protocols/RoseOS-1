@@ -1,0 +1,56 @@
+// Offline harness: the marked block is copied unchanged from the pinned Service.
+// Controlled Android/log/property/notification APIs; no network or UpdateEngine.
+import java.security.GeneralSecurityException;
+
+final class UpdaterProbe {
+    static final String DEVICE = "mustang", TAG = "synthetic";
+    static long sourceTime;
+    static boolean accepted, mUpdating;
+    static int updated, checks;
+    static class SystemProperties {
+        static long getLong(String key, long fallback) {
+            if (!key.equals("ro.build.date.utc")) throw new AssertionError(key);
+            return sourceTime;
+        }
+    }
+    static class notificationHandler {
+        static void showUpdatedNotification(String channel) { updated++; }
+    }
+    static class Log { static void d(String tag, String message) {} }
+    static void observe(String[] metadata) throws GeneralSecurityException {
+        String channel = "stable";
+        // PINNED_METADATA_ADMISSION
+        accepted = true;
+    }
+    static void expect(boolean value) {
+        checks++;
+        if (!value) throw new AssertionError("check " + checks);
+    }
+    static void reset() { accepted = false; updated = 0; mUpdating = true; }
+    public static void main(String[] args) throws Exception {
+        for (String syntheticId : args) {
+            sourceTime = 4102444800L;
+            String[] metadata = {syntheticId, "4102444801", "mustang", "stable"};
+            reset(); observe(metadata); expect(accepted && updated == 0);
+            metadata[1] = "4102444799";
+            reset(); observe(metadata); expect(!accepted && updated == 1 && !mUpdating);
+            metadata[1] = "4102444800";
+            reset(); observe(metadata); expect(!accepted && updated == 1);
+            metadata[1] = "4102444801"; metadata[2] = "frankel";
+            reset();
+            try { observe(metadata); throw new AssertionError("wrong device admitted"); }
+            catch (GeneralSecurityException expected) { expect(!accepted); }
+            metadata[2] = "mustang"; metadata[3] = "alpha";
+            reset();
+            try { observe(metadata); throw new AssertionError("wrong channel admitted"); }
+            catch (GeneralSecurityException expected) { expect(!accepted); }
+            metadata[3] = "stable";
+            for (String invalid : new String[]{"not-a-time", "9223372036854775808"}) {
+                metadata[1] = invalid; reset();
+                try { observe(metadata); throw new AssertionError("invalid time admitted"); }
+                catch (NumberFormatException expected) { expect(!accepted); }
+            }
+        }
+        System.out.println(checks + " updater protocol assertions passed");
+    }
+}
