@@ -1308,6 +1308,30 @@ class CounterRecoveryContractTest(unittest.TestCase):
         self.assertEqual(self.contract.recovery_suffix(self.policy,self.anchor,self.events,replica),[])
         self.assertEqual(self.anchor['counter'],3)
 
+    def test_uncertain_commit_is_confirmed_after_another_writer_advances_the_head(self):
+        first=self.proposal();self.commit_fixture(first)
+        # The first caller lost its response. Another admitted writer commits
+        # before it can read back; the current head is no longer its own event.
+        second=self.proposal('102','1002');self.commit_fixture(second)
+        before=copy.deepcopy(self.events)
+        confirmed=self.contract.confirm(self.policy,first,self.anchor,self.events)
+        self.assertEqual(confirmed,first['reservation'])
+        self.assertNotEqual(self.anchor['head'],self.contract.digest(confirmed))
+        self.assertEqual(self.events,before)
+        self.assertEqual(self.anchor['counter'],2)
+        self.assertEqual(self.contract.recovery_suffix(self.policy,self.anchor,self.events,[]),before)
+        with self.assertRaisesRegex(ValueError,'already consumes'): self.proposal()
+
+    def test_restoring_a_different_policy_under_the_same_epoch_cannot_reset_the_floor(self):
+        self.commit_fixture(self.proposal())
+        changed=dict(self.policy,minimumTimestamp='1')
+        self.assertEqual(changed['epoch'],self.policy['epoch'])
+        self.assertNotEqual(self.contract.policy(changed),self.contract.policy(self.policy))
+        with self.assertRaises(ValueError):
+            self.contract.propose(changed,self.anchor,self.events,self.run_context('102'),'1002')
+        with self.assertRaises(ValueError):
+            self.contract.recovery_suffix(changed,self.anchor,self.events,[])
+
     def test_replica_write_uncertainty_rechecks_existing_bytes(self):
         import release_receipts
         proposal=self.proposal();self.commit_fixture(proposal)
