@@ -23,6 +23,16 @@ must keep RESERVE_BYTES (300 GiB) after APP_WORKSPACE_ALLOWANCE, or the run stop
 filesystem cannot be established fails closed. Provider disk size is never taken as filesystem headroom.
 It never reconciles or builds the OS, never reads the OS signing secrets, and never builds or signs the controller or
 the Calculator. Missing configuration fails closed (exit 4) naming the key.
+
+--hosted is the off-builder (hosted) Agent route, source only and unbound (os/release-pipeline/agent-hosted.json). It
+runs none of the Frankel wrapper: no Frankel config, host lock, disk reserve, mustExceed/reserved floor or builder
+allocation floor. Instead it admits exactly one owned reservation (ROSE_APP_RESERVATION, a
+roseos.app-version-reservation.v1 receipt): its digest, this run as its owner (GITHUB_WORKFLOW_REF, GITHUB_RUN_ID and
+GITHUB_RUN_ATTEMPT), the package and versionCode APPS names, the candidate, and the store the hosted config binds.
+Then it calls the same release() (same signing values, pin and independent checks) and keeps main()'s cleanup of the
+candidate worktree, worktree prune, ROSE_RELEASE_DIR and any partial artifact. The receipt records the reservation
+instead of mustExceed. While App's portable SDK, tool and input paths or the reservation store are unbound, it exits 4
+before any worktree, build or secret.
 """
 import argparse
 import fcntl
@@ -41,6 +51,8 @@ import host_secrets  # noqa: E402
 from host_secrets import AdapterFailed, AdapterSetupMissing  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
+HOSTED_CONFIG = ROOT/'os/release-pipeline/agent-hosted.json'
+RESERVATION_SCHEMA = 'roseos.app-version-reservation.v1'
 SECRETS = ('keystore', 'config', 'storePassword', 'keyPassword')
 PACKAGE = 'dev.pixel.voice'
 SOURCE_MANIFEST = 'workspace/rose-agent/app/AndroidManifest.xml'
@@ -67,6 +79,76 @@ def missing_inputs(config):
     missing += [f'host.integrate.appSecrets.{k}' for k in SECRETS if not (integrate.get('appSecrets') or {}).get(k)]
     missing += [f'host.tools.{k}' for k in ('aapt', 'apksigner') if not config['host']['tools'].get(k)]
     return missing + [f'appRelease.{k}' for k in ('mustExceed', 'minimumTestedOs') if not release.get(k)]
+
+def hosted_missing_inputs(config):
+    """The hosted config's unbound inputs: App's portable SDK, JDK, public inputs and tools (absolute paths, nothing
+    relative to a builder source root), the signing values, minimumTestedOs and the reservation store."""
+    integrate, tools = config['host'].get('integrate') or {}, config['host'].get('tools') or {}
+    missing = [f'host.integrate.{k}' for k in ('project', 'secretVersion') if not integrate.get(k)]
+    missing += [f'host.integrate.{k}' for k in ('appSdkRoot', 'javaHome', 'publicAssetsDir')
+                if not integrate.get(k) or not Path(integrate[k]).is_absolute()]
+    missing += [f'host.integrate.appSecrets.{k}' for k in SECRETS if not (integrate.get('appSecrets') or {}).get(k)]
+    missing += [f'host.tools.{k}' for k in ('aapt', 'apksigner') if not tools.get(k) or not Path(tools[k]).is_absolute()]
+    missing += ['appRelease.minimumTestedOs'] if not (config.get('appRelease') or {}).get('minimumTestedOs') else []
+    return missing + (['reservation.store'] if not (config.get('reservation') or {}).get('store') else [])
+
+def canonical(data):
+    return json.dumps(data, sort_keys=True, separators=(',', ':')).encode()
+
+def owned_reservation(path, env, apps, candidate, store):
+    """The one reservation this run owns (the reservation step's receipt), or AdapterFailed. It must be an exact
+    roseos.app-version-reservation.v1 record whose digest holds, owned by this run (workflow ref, run id and attempt),
+    for exactly the package and versionCode APPS names and this candidate, and recorded in the bound store. A failed or
+    other run's reservation stays consumed; it is never reused or reclaimed here."""
+    if not path or os.path.islink(path) or not Path(path).is_file():
+        raise AdapterFailed('ROSE_APP_RESERVATION must name this run\'s reservation receipt, a regular file')
+    record = json.loads(Path(path).read_text())
+    keys = {'schema', 'packageName', 'versionCode', 'sourceSha', 'candidateSha', 'allocationSha256', 'owner', 'store',
+            'reservationSha256'}
+    if not isinstance(record, dict) or set(record) != keys or record['schema'] != RESERVATION_SCHEMA \
+            or record['reservationSha256'] != hashlib.sha256(canonical({k: v for k, v in record.items()
+                                                                       if k != 'reservationSha256'})).hexdigest():
+        raise AdapterFailed(f'the reservation receipt is not an exact {RESERVATION_SCHEMA} record with its digest')
+    owner = {'workflowRef': env.get('GITHUB_WORKFLOW_REF'), 'runId': env.get('GITHUB_RUN_ID'),
+             'runAttempt': env.get('GITHUB_RUN_ATTEMPT')}
+    if not all(owner.values()) or record['owner'] != owner:
+        raise AdapterFailed('the reservation is not owned by this run')
+    if record['packageName'] != PACKAGE or type(record['versionCode']) is not int \
+            or apps != [[PACKAGE, record['versionCode']]]:
+        raise AdapterFailed(f'APPS {apps} is not the reserved {PACKAGE} {record["versionCode"]}')
+    if record['candidateSha'] != candidate or not all(isinstance(record[k], str) and re.fullmatch(r'[0-9a-f]{40}', record[k])
+                                                      for k in ('sourceSha', 'candidateSha')) \
+            or not re.fullmatch(r'[0-9a-f]{64}', str(record['allocationSha256'])):
+        raise AdapterFailed('the reservation does not name this candidate, its source and its allocation digest')
+    if record['store'] != store:
+        raise AdapterFailed('the reservation is not recorded in the store the hosted config binds')
+    return record
+
+def hosted(artifact_dir, config_path=HOSTED_CONFIG, env=os.environ, gcloud='gcloud', build=None):
+    """The hosted Agent route: one owned reservation, then release(), with main()'s cleanup and none of its Frankel
+    wrapper. The job's own signer login is used; nothing here logs in, locks or measures a builder disk."""
+    config = json.loads(Path(config_path).read_text())
+    missing = hosted_missing_inputs(config)
+    if missing:
+        raise AdapterSetupMissing(missing)
+    sha, work = env['ROSE_CANDIDATE_SHA'], Path(env['ROSE_RELEASE_DIR'])
+    reservation = owned_reservation(env.get('ROSE_APP_RESERVATION'), env, json.loads(env.get('APPS', '[]')), sha,
+                                    config['reservation']['store'])
+    artifact = Path(artifact_dir)
+    if artifact.exists():
+        raise AdapterFailed(f'{artifact} already exists; use a new artifact directory')
+    if artifact.resolve().is_relative_to(work.resolve()):
+        raise AdapterFailed('the artifact directory must be outside ROSE_RELEASE_DIR, which is removed afterwards')
+    try:
+        return release(config, sha, work, reservation['versionCode'], config['host']['tools']['aapt'],
+                       config['host']['tools']['apksigner'], artifact, env, gcloud, build, reservation=reservation)
+    except BaseException:
+        shutil.rmtree(artifact, ignore_errors=True)  # never leave a partial artifact to upload
+        raise
+    finally:
+        subprocess.run(['git', '-C', str(ROOT), 'worktree', 'remove', '--force', str(work/'candidate')], capture_output=True)
+        subprocess.run(['git', '-C', str(ROOT), 'worktree', 'prune'], capture_output=True)
+        shutil.rmtree(work, ignore_errors=True)
 
 def badging(aapt, apk):
     out = subprocess.run([aapt, 'dump', 'badging', str(apk)], capture_output=True, text=True).stdout
@@ -212,7 +294,7 @@ def main(artifact_dir, config_path=ROOT/'os/release-pipeline/frankel.json', env=
         shutil.rmtree(work, ignore_errors=True)
         lock.close()
 
-def release(config, sha, work, version, aapt, apksigner, artifact, env, gcloud, build):
+def release(config, sha, work, version, aapt, apksigner, artifact, env, gcloud, build, reservation=None):
     integrate = config['host']['integrate']
     candidate = work/'candidate'
     subprocess.run(['git', '-C', str(ROOT), 'worktree', 'add', '--detach', str(candidate), sha], check=True, stdout=subprocess.DEVNULL)
@@ -247,15 +329,20 @@ def release(config, sha, work, version, aapt, apksigner, artifact, env, gcloud, 
     shutil.copyfile(signed.with_name(v4['asset']), artifact/v4['asset'])
     if sha256(artifact/v4['asset']) != v4['sha256'] or v4_signature(apksigner, artifact/signed.name, artifact/v4['asset']) != v4:
         raise AdapterFailed('the copied v4 signature differs from the verified one')
+    # The version's basis, truthfully: the hosted route's owned reservation, or the builder route's mustExceed floor.
+    basis = (f'versionCode {version} is reservation {reservation["reservationSha256"]} owned by this run' if reservation
+             else f'versionCode above {config["appRelease"]["mustExceed"]} (newest built or published)')
     receipt = {'receiptType': 'app-release', 'simulated': False, 'candidate': sha, 'packageName': PACKAGE, 'versionCode': version,
         'versionName': version_name, 'apk': signed.name, 'size': (artifact/signed.name).stat().st_size,
         'sha256': sha256(artifact/signed.name), 'signerSha256': config['identities']['appSignerSha256'].lower(),
         'minimumTestedOs': config['appRelease']['minimumTestedOs'], 'apkFacts': facts, 'v4Signature': v4,
         'checks': ['candidate worktree at the selected commit', 'Rose Agent built alone', 'unsigned package and versionCode',
-            f'versionCode above {config["appRelease"]["mustExceed"]} (newest built or published)', 'signed with the pinned app signer (sign-apk.py)',
+            basis, 'signed with the pinned app signer (sign-apk.py)',
             'independent apksigner verification: exactly the pinned signer', 'signed package and versionCode',
             'minSdk from the signed APK equal to the source', 'native-library ABIs from the signed APK',
             'v4 signature (.idsig) verified by the independent apksigner for this APK']}
+    if reservation:
+        receipt['reservation'] = {k: reservation[k] for k in ('reservationSha256', 'allocationSha256', 'sourceSha', 'store')}
     (artifact/'app-release-receipt.json').write_text(json.dumps(receipt, indent=2, sort_keys=True) + '\n')
     (artifact/'SHA256SUMS').write_text(''.join(f'{sha256(artifact/n)}  {n}\n' for n in sorted(p.name for p in artifact.iterdir())))
     return receipt
@@ -264,16 +351,18 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--artifact-dir', type=Path)
     parser.add_argument('--check', action='store_true', help='Only report missing configuration')
+    parser.add_argument('--hosted', action='store_true', help='The off-builder route (os/release-pipeline/agent-hosted.json)')
     a = parser.parse_args()
     try:
         if a.check:
-            missing = missing_inputs(json.loads((ROOT/'os/release-pipeline/frankel.json').read_text()))
+            config = json.loads((HOSTED_CONFIG if a.hosted else ROOT/'os/release-pipeline/frankel.json').read_text())
+            missing = hosted_missing_inputs(config) if a.hosted else missing_inputs(config)
             if missing:
                 raise AdapterSetupMissing(missing)
             sys.exit(0)
         if not a.artifact_dir:
             parser.error('--artifact-dir is required')
-        print(json.dumps(main(a.artifact_dir), indent=2, sort_keys=True))
+        print(json.dumps(hosted(a.artifact_dir) if a.hosted else main(a.artifact_dir), indent=2, sort_keys=True))
     except AdapterSetupMissing as error:
         print(json.dumps({'verdict': 'SETUP_MISSING', 'missing': error.missing}), file=sys.stderr)
         sys.exit(4)

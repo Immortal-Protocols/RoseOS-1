@@ -447,6 +447,40 @@ directories and its `rose-actions` reservations, under the host lock. On two hos
 the same version. So Agent stays on the ledger's host until the ledger moves to a store every lane can update
 atomically. That is the one cross-lane serialization the plan allows, and the test refuses an Agent move before it.
 
+## Hosted Agent route (source only, unbound)
+
+`scripts/host-app-release.py --hosted` is the off-builder Agent entry point (Signing's #608 handoff). It runs the
+same `release()` as the builder route: worktree at the candidate, Rose Agent built alone, the four pinned
+`PIXEL_APP_SIGNING_*` versions in owner-only RAM, `sign-apk.py`, independent `apksigner` verification of exactly the
+pinned signer, and the v4 sidecar. It runs none of the Frankel wrapper: no Frankel config, no host lock, no 300 GiB
+reserve, no `mustExceed`/`reserved` floor and no builder allocation floor.
+
+**Its version comes from one owned reservation** (`ROSE_APP_RESERVATION`, schema `roseos.app-version-reservation.v1`),
+admitted only when all of these hold:
+- the record has exactly its fields, and its `reservationSha256` holds;
+- its owner is this run: `GITHUB_WORKFLOW_REF`, `GITHUB_RUN_ID` and `GITHUB_RUN_ATTEMPT`;
+- it is for exactly the `dev.pixel.voice` versionCode `APPS` names, and for this candidate, with its source and its
+  allocation digest;
+- it was recorded in the store the hosted config binds.
+
+A failed or another run's reservation stays consumed; it is never reused. The receipt records the reservation's
+digest, allocation, source and store instead of `mustExceed`. `main()`'s cleanup stays: the candidate worktree,
+`worktree prune`, `ROSE_RELEASE_DIR`, and any partial artifact on failure. The builder route is unchanged.
+
+**Its config, `os/release-pipeline/agent-hosted.json`,** keeps the committed signing values and pin unchanged: the
+project, secret version, four secret names and `appSignerSha256`. Everything else is null until its owner binds it:
+- App's portable SDK, JDK, public connection inputs and tools, as absolute paths on the hosted runner;
+- the reservation store.
+
+`--check --hosted` exits 4 and names each one. Nothing in `os-release.yml` routes to it yet. The hosted job, its
+queue and the shared reservation store wait on the decisions in the Agent design checkpoint:
+- the reservation store and its write credential;
+- Frankel reserving in the same store;
+- App's portable inputs;
+- Infra's check of provider admission for a hosted runner.
+
+`scripts/tests/test_agent_hosted_release.py` checks the route with fakes only.
+
 ## Retained Rango signing and separate release (source only, runtime unbound)
 
 This route was added in OCT30-INFRA-S015 as source and tests only. Nothing
