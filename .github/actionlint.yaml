@@ -14,3 +14,7 @@ paths:
       # GitHub supports concurrency queue (single|max; docs control-workflow-concurrency, @actions/workflow-parser
       # concurrency-queue); actionlint 1.7.12 does not know the key yet. Only this exact diagnostic is ignored.
       - 'unexpected key "queue" for "concurrency" section\. expected one of "cancel-in-progress", "group"'
+  .github/workflows/launcher3-compile.yml:
+    ignore:
+      # The same concurrency queue key (queue: max), for the harness's own queue; only this exact diagnostic.
+      - 'unexpected key "queue" for "concurrency" section\. expected one of "cancel-in-progress", "group"'

@@ -239,7 +239,9 @@ The `builder`, `app-builder` and `mustang-build` jobs start with **Reclaim regen
   `source/releases`, which holds signed copies, always stays. The two newest Mustang preps and the newest Blazer
   prep stay whole, so their own delivery can still read them.
 - **`launcher3-compile-<run>-<attempt>`:** `tree`, `out`, `home` and `tmp`, the same paths the harness's own
-  `finish` removes. This is the backstop for a run whose `finish` never ran.
+  `finish` removes. This is the backstop for a run of the retired `os-release.yml` `launcher3-compile` mode whose
+  `finish` never ran. The dedicated harness workflow never runs here; any backstop on its own storage must be bound
+  to that storage separately.
 - **`app-`, `app-reuse-` and `cf-alpha*-<run>`, `device-readiness-<run>-<attempt>`:** per-run scratch, removed whole.
   Its job removes it at the end; one left behind belongs to a killed job.
 - **`alpha-source/.staging-*`:** a killed preparation's partial copy.
@@ -394,9 +396,8 @@ host each `os-release.yml` mode runs on today, and what each lane still needs to
 - from `release-pipeline.py`: `BUILDER`, the one VM the controller starts and stops;
 - the host lock in `frankel.json`, and the storage root of `storage/builder-reclaim.json`.
 
-**Today no two lanes can build at once** (`parallelToday` is empty). Frankel, Mustang, Agent (`app-only`), the
-standalone harness (`launcher3-compile`) and the other retained-tree work all run on one host,
-`roseos-frankel-builder`. They share:
+**Today no two lanes can build at once** (`parallelToday` is empty). Frankel, Agent (`app-only`) and the other
+retained-tree work run on one host, `roseos-frankel-builder`, where Mustang's retired legacy jobs also sit. They share:
 
 - one VM, `immortal-os-builder`;
 - one disk, `/home/pixelbuild/rose-actions`;
@@ -446,6 +447,59 @@ strings on two machines, because each VM has its own disk.
 directories and its `rose-actions` reservations, under the host lock. On two hosts that store would let both pick
 the same version. So Agent stays on the ledger's host until the ledger moves to a store every lane can update
 atomically. That is the one cross-lane serialization the plan allows, and the test refuses an Agent move before it.
+
+## Launcher3 compile harness (1E, dedicated workflow, unbound)
+
+The standalone Launcher3 compile harness has its own manual workflow, `.github/workflows/launcher3-compile.yml`, and
+no longer runs on a release builder. The `os-release.yml` `launcher3-compile` mode is removed: its option, guard
+branch and outputs, hosted check, controller and cleanup conditions, and builder job. The harness owner's adapter
+also refuses any workflow but this one (`launcher3_lane.check_context`). Frankel's `builder-reclaim` class
+`launcher3-compile` keeps cleaning leftovers of the earlier Frankel runs; nothing new routes there.
+
+**Its routing** comes from one reviewed, Infra-evidenced binding, `os/build-only/launcher3-compile-lane.json`
+(schema 4, harness-owned). That binding is **unbound**, so no job gets past the guard. The workflow:
+
+1. **`guard`** (hosted, `contents: read`, no login):
+   - `workflow_dispatch` from `main`, attempt 1 only;
+   - checkout of this run's commit (every job checks out `github.sha`);
+   - `launcher3-compile.py check`, which gives the contract, binding and bounds (exit 4 while unbound);
+   - `launcher3-routing.py guard` (Release). It runs `launcher3_controller.py check` and admits the binding only
+     when it names this workflow, its queue is this workflow's concurrency group `launcher3-compile`, and its
+     controller variables are `LAUNCHER3_CONTROLLER_SERVICE_ACCOUNT` and
+     `LAUNCHER3_CONTROLLER_WORKLOAD_IDENTITY_PROVIDER`. It outputs `runs_on` as `["self-hosted","<bound label>"]`.
+     No label is written in the workflow.
+2. **`controller`** (hosted):
+   - logs in with only the harness's own identity and provider variables;
+   - runs `launcher3_controller.py start --ownership-record`, which writes and syncs the record before the start
+     request (Infra's `control_builder('start', builder=…, claim=…)`);
+   - always uploads that record as `launcher3-ownership-<run>-<attempt>`, even when start fails or is uncertain.
+3. **`worker`**, on `${{ fromJSON(needs.guard.outputs.runs_on) }}` only, with `contents: read`. It is the earlier
+   job unchanged:
+   - the bounds recheck;
+   - one bounded `run` (exec'd timeout, 30 s kill-after);
+   - the always-run `finish` and its allowlisted reports, kept 7 days.
+
+   The adapter re-checks the exact workflow, commit, run, attempt and `RUNNER_NAME`.
+4. **`cleanup`** (hosted, always after a controller ran):
+   - downloads only this run's ownership artifact;
+   - runs `launcher3_controller.py stop --ownership-record`.
+
+   A missing, foreign, changed or malformed record refuses STOP, and a VM already running at start is left
+   running. It never uses the plain `stop-builder`.
+
+The queue `launcher3-compile` keeps waiting runs in order up to GitHub's limit of 100 pending runs (`queue: max`;
+a run past that limit can still be dropped), and `cancel-in-progress` is off. It is no release, Yogi or Agent
+queue. In the capacity map the `harness` lane names this workflow, no `os-release.yml` mode and its binding
+(`activeBinding`). Its `runtimeStatus: retired-shared-host` means it claims no capacity: the `host` field records
+only where its earlier runs ran. `test_launcher3_compile_workflow.py` and `test_lane_capacity.py` check all of this.
+
+**What remains before a compile runs:**
+- Infra's verified readback for the binding: exclusive runner name and label, VM with numeric ID, dedicated disk,
+  storage root, task parent, lock, queue, the two controller variables, and evidence;
+- the compile inputs the harness and Product owners bind;
+- a separate runtime authorization.
+
+A guard refusal is a blocker, not a compile.
 
 ## Hosted Agent route (source only, unbound)
 
