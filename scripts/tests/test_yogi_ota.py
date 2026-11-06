@@ -1220,6 +1220,50 @@ class IdentityStepTest(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertIn('host identity unavailable', result.stdout)
 
+class ReadinessEvidenceTest(unittest.TestCase):
+    """The recorded readiness proof is evidence only: it changes no stage result and claims no unrelayed raw field."""
+    def test_recorded_readiness_proof_is_the_relayed_summary_with_unknowns_kept_unknown(self):
+        cfg = yogi.config()
+        r = cfg['builder']['evidence']['readiness']
+        self.assertEqual(r['run'], {'id': '42152223661', 'attempt': '1',
+                                    'source': 'a4730376706241e0b0b1387386a5e09c9f8146e2'})
+        self.assertEqual(r['runner'], {'id': 21, 'name': yogi.RUNNER_LABEL})
+        self.assertEqual(r['builder'], yogi.tuple_of(cfg))
+        self.assertEqual((r['result']['passed'], r['result']['checksPassed'], r['result']['checksTotal'],
+                          r['result']['failures']), (True, 20, 20, 0))
+        self.assertIsNone(r['result']['checks'])  # raw check list not in the handoff: never reconstructed
+        self.assertIsNone(r['ownership']['rawRecord'])
+        self.assertTrue(r['ownership']['basis'].startswith('INFERRED, not captured'))
+        self.assertNotEqual(r['receipt']['sha256'], r['artifact']['archiveSha256'])
+        replacement = r['controlPlaneReadback']['replacement']
+        self.assertEqual(replacement['instanceId'], yogi.INSTANCE_ID)
+        self.assertLess(replacement['stopTime'], replacement['observedAt'])
+        self.assertIn('summarized relay record, not the raw readiness receipt', r['provenance'])
+
+    def test_recording_the_proof_opens_no_stage_and_changes_no_gate(self):
+        cfg = yogi.config()
+        without = copy.deepcopy(cfg)
+        del without['builder']['evidence']['readiness']
+        for stage in yogi.STAGES:
+            for access in (False, True):
+                with self.subTest(stage=stage, access=access):
+                    self.assertEqual(yogi.blockers(cfg, stage, access), yogi.blockers(without, stage, access))
+        self.assertEqual(cfg['builder']['status'], 'runner-unregistered')
+        self.assertIsNone(cfg['builder']['evidence']['runner']['organizationEligibility'])
+        self.assertEqual(yogi.blockers(cfg, 'readiness'), [])
+        for stage in ('key-bootstrap', 'bootstrap', 'ota'):
+            with self.subTest(stage=stage):
+                joined = ' '.join(yogi.blockers(cfg, stage))
+                self.assertIn('replacement builder receipt fields not recorded: runner.organizationEligibility', joined)
+                self.assertIn('builder runner/controller not ready (builder.status=runner-unregistered', joined)
+                with self.assertRaises(yogi.Refused):
+                    yogi.guard(cfg, stage, access=True)
+        self.assertEqual(yogi.blockers(cfg, 'publish'), ['Yogi publication is not enabled (publicationEnabled)'])
+        self.assertFalse(cfg['publicationEnabled'] or cfg['automationEnabled'])
+        self.assertEqual(cfg['signing']['status'], 'unbound')
+        self.assertFalse(any(f.startswith('readiness.') for f in yogi.EVIDENCE_FIELDS))  # no new gate
+
+
 TOOLS_APKSIGNER = 'prebuilts/sdk/tools/linux/bin/apksigner'
 
 
