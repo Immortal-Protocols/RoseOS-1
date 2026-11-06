@@ -40,7 +40,8 @@ def receipt(**changes):
 def complete_evidence():
     """The committed receipt values plus synthetic stand-ins for every still-missing field (test only)."""
     evidence = copy.deepcopy(yogi.config()['builder']['evidence'])
-    evidence['runner'].update(labels=['self-hosted', 'Linux', 'X64', yogi.RUNNER_LABEL], replacementLabelInstalled=True)
+    evidence['runner'].update(labels=['self-hosted', 'Linux', 'X64', yogi.RUNNER_LABEL],
+                              organizationEligibility='synthetic: no other eligible runner carries the route label')
     evidence['storage']['mounts'] = {'guestDevice': '/dev/synthetic', 'filesystemUuid': 'synthetic', 'mountPoint': '/'}
     return evidence
 
@@ -854,6 +855,21 @@ class BuilderControlTest(Fixture):
                 with self.assertRaises(yogi.Refused):
                     yogi.config(path)
 
+    def test_cleanup_check_validates_the_record_without_gcloud(self):
+        own = self.root/'own.json'
+        self.control('start', ['TERMINATED', 'RUNNING'], [], own)
+        def no_gcloud(*a, **k):
+            raise AssertionError('check must not call gcloud')
+        with mock.patch.object(yogi.subprocess, 'run', no_gcloud):
+            self.assertEqual(yogi.control_builder(self.cfg, 'check', own, env=RUN_ENV), 'stop')
+            self.assertEqual(yogi.control_builder(self.cfg, 'check', self.root/'absent.json', env=RUN_ENV), 'none')
+            unowned = self.root/'unowned.json'
+            unowned.write_text(json.dumps(dict(yogi.read(own), observedBeforeStart='RUNNING', startedByThisOperation=False)))
+            self.assertEqual(yogi.control_builder(self.cfg, 'check', unowned, env=RUN_ENV), 'none')
+            for env in (dict(RUN_ENV, GITHUB_RUN_ID='778'), dict(RUN_ENV, GITHUB_RUN_ATTEMPT='2')):
+                with self.assertRaises(yogi.Refused):
+                    yogi.control_builder(self.cfg, 'check', own, env=env)
+
     def test_workflow_exports_any_written_ownership_and_cleanup_uses_it(self):
         text = (yogi.ROOT/'.github/workflows/yogi-ota.yml').read_text()
         body = text[text.index('\njobs:\n'):]
@@ -866,6 +882,11 @@ class BuilderControlTest(Fixture):
         self.assertIn("if: always() && needs.controller.result != 'skipped'", cleanup)
         self.assertIn('OWNERSHIP: ${{ needs.controller.outputs.ownership }}', cleanup)
         self.assertIn('builder stop --ownership', cleanup)
+        check, login = cleanup.index('builder check --ownership'), cleanup.index('actions-gcp-login.py login')
+        self.assertLess(check, login)  # the record is validated before any credential exists
+        for step in ('actions-gcp-login.py login', 'builder stop --ownership', 'actions-gcp-login.py logout'):
+            before = cleanup[:cleanup.index(step)]
+            self.assertIn("steps.ownership.outputs.action == 'stop'", before[before.rindex('      - '):])
 
 
 class ReadinessTest(Fixture):
@@ -923,11 +944,34 @@ class ReadinessTest(Fixture):
         with self.assertRaisesRegex(yogi.Refused, 'apksigner'):
             self.run_readiness(meta, self.root/'out-tools')
 
+    def test_runner_name_must_be_the_exact_registered_replacement_runner(self):
+        meta = self.host()
+        for name in ('', 'roseos-yogi-builder-20261103-a', 'roseos-frankel-builder', 'other-runner'):
+            with self.subTest(name=name):
+                out = self.root/f'out-name-{len(name)}-{name[:6]}'
+                env = {'GITHUB_SHA': SHA} if not name else {'RUNNER_NAME': name, 'GITHUB_SHA': SHA}
+                with self.assertRaisesRegex(yogi.Refused, 'registered replacement runner'):
+                    yogi.readiness(self.cfg, out, env=env, metadata=lambda key: meta[key],
+                                   which=lambda tool: '/usr/bin/' + tool, free=lambda path: SimpleNamespace(free=10**13))
+                self.assertFalse(yogi.read(out/'yogi-readiness.json')['passed'])
+        self.cfg['builder']['evidence']['runner']['name'] = 'other-runner'
+        self.assertTrue(any('runner.name is not the replacement' in b for b in yogi.blockers(self.cfg, 'readiness')))
+
+    def test_routing_evidence_gates(self):
+        runner = self.cfg['builder']['evidence']['runner']
+        runner['organizationEligibility'] = None
+        self.assertTrue(any('runner.organizationEligibility' in b for b in yogi.blockers(self.cfg, 'readiness')))
+        runner.update(organizationEligibility='synthetic', labels=['self-hosted', 'roseos-yogi-builder'])
+        self.assertTrue(any('is not in the read-back runner labels' in b for b in yogi.blockers(self.cfg, 'readiness')))
+        runner['labels'] = ['self-hosted', yogi.RUNNER_LABEL, 'roseos-frankel-builder']
+        self.assertTrue(any("another builder's label" in b for b in yogi.blockers(self.cfg, 'readiness')))
+
     def test_committed_tree_keeps_readiness_closed_on_the_missing_receipt_fields(self):
         found = yogi.blockers(yogi.config(), 'readiness')
         self.assertEqual(len(found), 1)
-        for field in ('runner.labels', 'storage.mounts (filesystemUuid, guestDevice, mountPoint)',
-                      'runner label roseos-yogi-builder-20261105-b not evidenced as installed'):
+        for field in ('runner.organizationEligibility', 'storage.mounts (filesystemUuid, guestDevice, mountPoint)',
+                      "route label roseos-yogi-builder-20261105-b is not in the read-back runner labels "
+                      "['self-hosted', 'Linux', 'X64', 'roseos-yogi-builder']"):
             self.assertIn(field, found[0])
         with self.assertRaises(yogi.Refused):
             yogi.readiness(yogi.config(), self.root/'never')

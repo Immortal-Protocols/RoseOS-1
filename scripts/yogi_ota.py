@@ -63,7 +63,8 @@ OWNERSHIP_SCHEMA = 'roseos.yogi-builder-ownership.v2'
 WORKFLOW = 'Immortal-Protocols/RoseOS-1/.github/workflows/yogi-ota.yml'
 # Receipt fields the existing operator still has to supply (Chief obtains them); none is invented here. A field is
 # missing while it, or any value inside it, is null/empty.
-EVIDENCE_FIELDS = ('runner.labels', 'storage.diskLineage', 'storage.mounts', 'controller.scope')
+EVIDENCE_FIELDS = ('runner.name', 'runner.labels', 'runner.organizationEligibility', 'storage.diskLineage', 'storage.mounts',
+                   'controller.scope')
 PROFILE = 'yogi-v1'
 SECRETS = {'keys': 'PIXEL_OS_SIGNING_KEYS_YOGI_V1', 'passphrase': 'PIXEL_OS_SIGNING_PASSPHRASE_YOGI_V1'}
 SIGNER = 'roseos-build-signer@protocols-465723.iam.gserviceaccount.com'
@@ -237,10 +238,12 @@ def evidence_missing(cfg):
             missing.append(field + (' (' + ', '.join(detail) + ')' if detail else ''))
     runner = evidence.get('runner') or {}
     labels = runner.get('labels') or []
-    if runner.get('replacementLabelInstalled') is not True:
-        missing.append(f'runner label {RUNNER_LABEL} not evidenced as installed (server-side label readback)')
-    if labels and (RUNNER_LABEL not in labels or {'roseos-frankel-builder'} & set(labels)):
-        missing.append('runner.labels must carry the replacement label and no other builder label')
+    if labels and RUNNER_LABEL not in labels:
+        missing.append(f'route label {RUNNER_LABEL} is not in the read-back runner labels {labels}')
+    if {'roseos-frankel-builder'} & set(labels):
+        missing.append('runner.labels carry another builder\'s label')
+    if runner.get('name') not in (None, '', cfg['builder']['instance']):
+        missing.append('runner.name is not the replacement builder\'s registered name')
     return missing
 
 
@@ -257,7 +260,8 @@ def blockers(cfg, stage, access=False, now=None):
         return found
     if stage in ('bootstrap', 'ota'):
         if cfg['builder'].get('status') != 'ready':
-            found.append(f'builder runner/controller not ready (builder.status={cfg["builder"].get("status")})')
+            found.append(f'builder runner/controller not ready (builder.status={cfg["builder"].get("status")}: '
+                         'a not-ready source guard, not a registration claim)')
         try:
             app_record(cfg)
         except (Refused, OSError, ValueError, KeyError) as error:
@@ -277,7 +281,8 @@ def blockers(cfg, stage, access=False, now=None):
         # One-time Yogi key generation on the Yogi runner (signing-bootstrap.py, Signing's profile); refused before the
         # controller or any login unless the runner and a resource-bound yogi-v1 exist and no Yogi identity exists yet.
         if cfg['builder'].get('status') != 'ready':
-            found.append(f'builder runner/controller not ready (builder.status={cfg["builder"].get("status")})')
+            found.append(f'builder runner/controller not ready (builder.status={cfg["builder"].get("status")}: '
+                         'a not-ready source guard, not a registration claim)')
         problem = profile_problem()
         if problem:
             found.append(problem)
@@ -340,6 +345,12 @@ def control_builder(cfg, action, ownership=None, gcloud='gcloud', timeout=420, i
     the START request; a VM already running is never adopted (startedByThisOperation false). An uncertain START is not
     retried: the record exists for cleanup. stop: only with this run's own valid record that started the VM; a STAGING
     or PROVISIONING VM this run started is awaited (bounded) and then stopped."""
+    if action == 'check':
+        # Cleanup's pre-login check: no gcloud, no credential. 'stop' only for this run's own valid record that started
+        # the VM; an invalid record raises before any login.
+        if not ownership or not Path(ownership).exists():
+            return 'none'
+        return 'stop' if read_ownership(cfg, ownership, env)['startedByThisOperation'] else 'none'
     t = tuple_of(cfg)
     where = [f'--project={t["project"]}', f'--zone={t["zone"]}']
 
@@ -403,7 +414,7 @@ def control_builder(cfg, action, ownership=None, gcloud='gcloud', timeout=420, i
                 raise Refused(f'Yogi builder stop request failed (exit {result.returncode}); observed {state}')
         target, passing = 'TERMINATED', {'RUNNING', 'STOPPING'}
     else:
-        raise Refused('builder action must be state, start or stop')
+        raise Refused('builder action must be state, start, stop or check')
     deadline = clock() + timeout
     state = describe()
     while state != target:
@@ -482,7 +493,9 @@ def readiness(cfg, out, env=os.environ, metadata=metadata_read, which=shutil.whi
         seen = {'error': type(error).__name__}
     check('host identity is the exact replacement tuple', seen == {'id': b['instanceId'], 'name': b['instance'],
           'zone': b['zone'], 'project': b['project']}, json.dumps(seen, sort_keys=True))
-    check('runner name present', bool(env.get('RUNNER_NAME')), env.get('RUNNER_NAME', ''))
+    expected_runner = ((b.get('evidence') or {}).get('runner') or {}).get('name')
+    check('runner is the registered replacement runner', bool(expected_runner) and expected_runner == b['instance']
+          and env.get('RUNNER_NAME') == expected_runner, f'{env.get("RUNNER_NAME", "")!r} (expected {expected_runner!r})')
     for key in ('root', 'retainedSource', 'attempts'):
         try:
             regular_dir(b[key], key)
@@ -1133,7 +1146,7 @@ def main(argv=None):
     p.add_argument('action', choices=('describe', 'guard', 'builder', 'readiness', 'preflight', 'allocate', 'prepare', 'integrate',
                                       'compile', 'sign', 'install-image', 'stage', 'verify-staged', 'publish',
                                       '_execute-sign'))
-    p.add_argument('operation', nargs='?', choices=('state', 'start', 'stop'))
+    p.add_argument('operation', nargs='?', choices=('state', 'start', 'stop', 'check'))
     p.add_argument('--stage', choices=STAGES)
     p.add_argument('--access', action='store_true')
     p.add_argument('--build')

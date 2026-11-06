@@ -293,10 +293,19 @@ jobs:
         run: |
           [[ -n "$GCP_WORKLOAD_IDENTITY_PROVIDER" ]] || { echo "::error::vars.YOGI_CONTROLLER_WORKLOAD_IDENTITY_PROVIDER is not set"; exit 1; }
           [[ -n "$YOGI_CONTROLLER_SERVICE_ACCOUNT" ]] || { echo "::error::vars.YOGI_CONTROLLER_SERVICE_ACCOUNT is not set"; exit 1; }
-      - run: python3 scripts/actions-gcp-login.py login "$YOGI_CONTROLLER_SERVICE_ACCOUNT"
-      # Stops only the exact replacement Yogi VM, and only with this run's own valid ownership record that started it.
-      - run: |
+      # The ownership record is validated before any login: an invalid record fails here, and a missing or not-started
+      # record means nothing is this run's to stop, so no credential is requested at all.
+      - id: ownership
+        name: Validate this run's ownership record (no login, no gcloud)
+        run: |
           if [[ -n "$OWNERSHIP" ]]; then echo "$OWNERSHIP" | base64 -d > "$RUNNER_TEMP/yogi-ownership.json"; fi
-          python3 scripts/yogi_ota.py builder stop --ownership "$RUNNER_TEMP/yogi-ownership.json"
-      - if: always()
+          action="$(python3 scripts/yogi_ota.py builder check --ownership "$RUNNER_TEMP/yogi-ownership.json")"
+          [[ "$action" == stop || "$action" == none ]]
+          echo "action=$action" >> "$GITHUB_OUTPUT"
+      - if: steps.ownership.outputs.action == 'stop'
+        run: python3 scripts/actions-gcp-login.py login "$YOGI_CONTROLLER_SERVICE_ACCOUNT"
+      # Stops only the exact replacement Yogi VM, and only with this run's own valid ownership record that started it.
+      - if: steps.ownership.outputs.action == 'stop'
+        run: python3 scripts/yogi_ota.py builder stop --ownership "$RUNNER_TEMP/yogi-ownership.json"
+      - if: always() && steps.ownership.outputs.action == 'stop'
         run: python3 scripts/actions-gcp-login.py logout
