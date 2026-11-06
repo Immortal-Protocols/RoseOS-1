@@ -224,7 +224,7 @@ class PortableBuildTest(unittest.TestCase):
         self.refused('lacks jdk.compiler', self.fx.prepare)
 
     def test_relative_paths_are_refused(self):
-        self.refused('must be an absolute path', self.fx.prepare, sdk_root='sdk')
+        self.refused('must be an absolute, normalized path', self.fx.prepare, sdk_root='sdk')
 
     # ---- output collisions ----
     def test_existing_work_directory_is_refused(self):
@@ -304,44 +304,97 @@ class PortableBuildTest(unittest.TestCase):
             PB.build(str(candidate.path), str(self.tmp/'release'), str(self.tmp/'work/d3.json'), run=candidate.run)
         self.assertFalse((self.tmp/'release').exists())
 
-    # ---- bind: the runner-local hosted config ----
-    def test_bind_sets_exactly_the_six_d3_fields_and_satisfies_the_hosted_route(self):
-        self.fx.prepare()
-        shared = ROOT/'os/release-pipeline/agent/hosted.json'
-        original = json.loads(shared.read_text())
-        out = self.tmp/'hosted-runtime.json'
-        bound = PB.bind(str(shared), str(self.tmp/'work/d3.json'), str(out))
-        self.assertEqual(json.loads(shared.read_text()), original, 'the shared config is untouched')
-        changed = {('host', 'integrate', k) for k in ('appSdkRoot', 'javaHome', 'publicAssetsDir', 'publicAssetDigests')}
-        changed |= {('host', 'tools', 'aapt'), ('host', 'tools', 'apksigner')}
+    # ---- inputs: the portable-inputs overlay for the hosted release route ----
+    def test_inputs_writes_releases_exact_seven_key_record(self):
+        d3 = self.fx.prepare()
+        out = self.tmp/'portable-inputs.json'
+        written = PB.inputs(str(self.tmp/'work/d3.json'), str(out))
+        # Release's --portable-inputs record: one flat object, exactly these seven keys, this schema.
+        self.assertEqual(set(written), {'schema', 'appSdkRoot', 'javaHome', 'publicAssetsDir', 'publicAssetDigests',
+                                        'aapt', 'apksigner'})
+        self.assertEqual(written['schema'], 'roseos.agent-portable-inputs.v1')
+        self.assertEqual({k: v for k, v in written.items() if k != 'schema'}, {k: d3[k] for k in PB.D3_FIELDS})
+        self.assertEqual(set(written['publicAssetDigests']), set(HAB.PUBLIC_ASSETS))
+        for value in written['publicAssetDigests'].values():
+            self.assertRegex(value, r'^[0-9a-f]{64}$')
+        for key in PB.PATH_FIELDS:
+            self.assertEqual(os.path.normpath(written[key]), written[key], key)
+            self.assertTrue(os.path.isabs(written[key]) and written[key] != '/' and not written[key].endswith('/'), key)
+        self.assertTrue(out.is_file() and not out.is_symlink() and out.stat().st_size <= 64*1024)
+        # Strict JSON: no duplicate keys, NaN or Infinity.
+        json.loads(out.read_text(), object_pairs_hook=lambda pairs: (
+            self.assertEqual(len(pairs), len({k for k, _ in pairs})), dict(pairs))[1],
+            parse_constant=lambda c: self.fail(f'non-finite constant {c}'))
+        text = out.read_text()
+        for release_owned in ('appSecrets', 'project', 'secretVersion', 'reservation', 'appSignerSha256', 'toolchain'):
+            self.assertNotIn(release_owned, text, release_owned)
 
-        def leaves(data, prefix=()):
-            if isinstance(data, dict) and data and prefix not in changed:
-                for key, value in data.items():
-                    yield from leaves(value, prefix + (key,))
-            else:
-                yield prefix, data
-        before, after = dict(leaves(original)), dict(leaves(bound))
-        self.assertEqual({k for k in set(before) | set(after) if before.get(k) != after.get(k)}, changed)
-        # The Release consumer (scripts/host-app-release.py, PR611) then lacks only its own reservation store.
+    def test_the_six_fields_are_exactly_the_hosted_routes_unbound_app_inputs(self):
+        # Applied where hosted.json keeps them (host.integrate / host.tools), the overlay leaves the Release consumer
+        # (scripts/host-app-release.py, PR611) lacking only its own reservation store. The exact overlay nesting is
+        # Release's --portable-inputs reader's; this pins only that the six fields are the right ones.
+        self.fx.prepare()
+        written = PB.inputs(str(self.tmp/'work/d3.json'), str(self.tmp/'portable-inputs.json'))
+        shared = json.loads((ROOT/'os/release-pipeline/agent/hosted.json').read_text())
         release = load(ROOT/'scripts/host-app-release.py', 'host_app_release_for_test')
-        self.assertTrue({'host.integrate.appSdkRoot', 'host.tools.aapt'} <= set(release.hosted_missing_inputs(original)))
-        self.assertEqual(release.hosted_missing_inputs(bound), ['reservation.store'])
+        unbound = set(release.hosted_missing_inputs(shared))
+        app_fields = {'host.integrate.appSdkRoot', 'host.integrate.javaHome', 'host.integrate.publicAssetsDir',
+                      'host.tools.aapt', 'host.tools.apksigner'}
+        self.assertTrue(app_fields <= unbound)
+        for key in ('appSdkRoot', 'javaHome', 'publicAssetsDir', 'publicAssetDigests'):
+            shared['host']['integrate'][key] = written[key]
+        for key in ('aapt', 'apksigner'):
+            shared['host']['tools'][key] = written[key]
+        self.assertEqual(release.hosted_missing_inputs(shared), ['reservation.store'])
 
-    def test_bind_refuses_an_existing_output(self):
+    def test_paths_must_be_absolute_and_normalized(self):
+        base = str(self.tmp)
+        for bad in ('sdk', '/', f'{base}/sdk/', f'{base}/./sdk', f'{base}/x/../sdk', f'/{base}/sdk', f'{base}//sdk',
+                    f'{base}/sdk\0x'):
+            self.refused('absolute, normalized', self.fx.prepare, sdk_root=bad)
+
+    def test_inputs_refuses_bad_digests_or_paths_in_d3(self):
+        d3 = self.fx.prepare()
+        for mutate, fragment in ((lambda d: d['publicAssetDigests'].pop(HAB.PUBLIC_ASSETS[0]), 'exactly the five'),
+                                 (lambda d: d['publicAssetDigests'].update({HAB.PUBLIC_ASSETS[0]: 'A' * 64}), 'lowercase'),
+                                 (lambda d: d.update(aapt=d['aapt'] + '/'), 'normalized')):
+            bad = json.loads(json.dumps(d3))
+            mutate(bad)
+            path = self.tmp/f'd3-bad-{fragment[:5]}.json'
+            path.write_text(json.dumps(bad))
+            self.refused(fragment, PB.inputs, str(path), str(self.tmp/f'out-{fragment[:5]}.json'))
+            self.assertFalse((self.tmp/f'out-{fragment[:5]}.json').exists())
+
+    def test_inputs_refuses_an_existing_output(self):
         self.fx.prepare()
-        out = self.tmp/'hosted-runtime.json'
+        out = self.tmp/'portable-inputs.json'
         out.write_text('{}')
-        self.refused('already exists', PB.bind, str(ROOT/'os/release-pipeline/agent/hosted.json'),
-                     str(self.tmp/'work/d3.json'), str(out))
+        self.refused('already exists', PB.inputs, str(self.tmp/'work/d3.json'), str(out))
 
-    def test_bind_refuses_an_incomplete_d3(self):
+    def test_inputs_refuses_an_incomplete_d3(self):
         d3 = self.fx.prepare()
         d3.pop('apksigner')
         path = self.tmp/'d3-incomplete.json'
         path.write_text(json.dumps(d3))
-        self.refused('not a complete', PB.bind, str(ROOT/'os/release-pipeline/agent/hosted.json'), str(path),
-                     str(self.tmp/'out.json'))
+        self.refused('not a complete', PB.inputs, str(path), str(self.tmp/'out.json'))
+
+    def test_tool_output_goes_to_stderr_so_stdout_is_only_the_json(self):
+        seen = {}
+
+        def fake(command, **kwargs):
+            seen.update(kwargs)
+            return subprocess.CompletedProcess(command, 0)
+        original = PB.subprocess.run
+        PB.subprocess.run = fake
+        try:
+            PB.tool_run(['bash', 'workspace/rose-agent/build.sh'], cwd='/x', check=True)
+            self.assertIs(seen['stdout'], PB.sys.stderr)
+            seen.clear()
+            PB.tool_run(['node', '--version'], capture_output=True, text=True, check=True)
+            self.assertNotIn('stdout', seen, 'version probes still capture their output')
+        finally:
+            PB.subprocess.run = original
+        self.assertIs(PB.build.__defaults__[0], PB.tool_run)
 
     # ---- the command line ----
     def test_cli_reports_refusals_without_a_traceback(self):

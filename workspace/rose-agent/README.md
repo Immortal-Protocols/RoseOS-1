@@ -24,6 +24,43 @@ tools/platform-tools/adb -s YOUR_DEVICE_SERIAL shell am start -n dev.pixel.voice
 
 Initial endpoint: `https://127.0.0.1:9443`, using ADB reverse over USB. For wireless use, the phone must be able to reach the Mac service over a private network/VPN; change the endpoint in Connection settings. Network reachability is separate from wireless ADB used for APK installations. Do not expose unauthenticated ADB to the internet.
 
+## Portable Agent-only build (independent capacity)
+
+`portable-build.py` builds Rose Agent alone, unsigned, from explicit inputs, for example on a GitHub-hosted runner.
+- It reuses `scripts/host-app-build.py` unchanged: the locked `npm ci`, the SHA-pinned ZXing 3.5.4 setup, and `build.sh`.
+- It never builds Calculator or the controller, and never signs.
+
+```sh
+python3 workspace/rose-agent/portable-build.py prepare --sdk-root "$ANDROID_SDK_ROOT" --build-tools-version 35.0.0 \
+  --java-home "$JAVA_HOME_21" --public-assets /abs/public-inputs --work /abs/work      # writes /abs/work/d3.json
+python3 workspace/rose-agent/portable-build.py build --candidate /abs/candidate --release-dir /abs/release \
+  --d3 /abs/work/d3.json                                                               # unsigned/voice.apk + receipt
+python3 workspace/rose-agent/portable-build.py inputs --d3 /abs/work/d3.json --out /abs/portable-inputs.json
+```
+
+**`prepare`** checks the toolchain and the inputs, and refuses anything else:
+- platform API 35;
+- the exact build-tools 35.x.y revision;
+- JDK 21 with `jdk.compiler`;
+- a public-input directory holding exactly the five connection inputs and their `public-assets-receipt.json`.
+
+It then writes the six absolute values the hosted release route consumes: `appSdkRoot`, `javaHome`, `publicAssetsDir`, `publicAssetDigests`, `aapt` and `apksigner`.
+
+**`build`** writes `agent-build-receipt.json`, which binds:
+- the candidate commit, its tree and its `package-lock.json`;
+- the toolchain digests;
+- the input digests;
+- the unsigned APK's SHA-256.
+
+The packaging is not byte-reproducible yet: a rebuild of the same commit gives a different APK hash.
+
+**`inputs`** writes the record Release's `host-app-release.py --hosted --portable-inputs` reads: one flat `roseos.agent-portable-inputs.v1` object holding exactly the schema and those six fields.
+
+Rules for all three commands:
+- Every path is absolute.
+- Every output must be new.
+- Nothing reads a key, and no default or loopback connection data is ever invented.
+
 ## Validation
 
 - Live API WebSocket session started and closed successfully.

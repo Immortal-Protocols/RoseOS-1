@@ -18,9 +18,11 @@ explicit inputs instead of the Frankel builder's config, checked before anything
       Re-verify the toolchain and inputs against d3.json, build Rose Agent only (never Calculator, the controller or
       any signing) into RELEASE_DIR/unsigned/voice.apk, and write RELEASE_DIR/agent-build-receipt.json binding the
       exact source, toolchain, inputs and unsigned output.
-  bind --hosted-config FILE --d3 FILE --out FILE
-      Write a runner-local copy of a hosted config (os/release-pipeline/agent/hosted.json) with exactly those six D3
-      fields set from d3.json and nothing else changed. The shared config stays unbound; no path is committed.
+  inputs --d3 FILE --out FILE
+      Write the record Release's hosted route reads (`host-app-release.py --hosted --portable-inputs FILE`, and
+      `--check --hosted --portable-inputs FILE`): one flat roseos.agent-portable-inputs.v1 object with exactly the
+      schema and the six D3 fields, never a copy of the hosted config. Signing, project and reservation values stay
+      Release's; no path is committed.
 
 Every path is absolute; every output (WORK, RELEASE_DIR, OUT) must not exist yet. Nothing reads a key, password or
 credential, and no default or loopback connection data is ever invented: the five inputs come only from the caller.
@@ -39,6 +41,9 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[2]
 SCHEMA_D3, SCHEMA_RECEIPT = 'roseos.agent-portable-d3.v1', 'roseos.agent-portable-build-receipt.v1'
+# Release's --hosted --portable-inputs record (scripts/host-app-release.py): exactly these seven keys, flat.
+SCHEMA_INPUTS = 'roseos.agent-portable-inputs.v1'
+PATH_FIELDS = ('appSdkRoot', 'javaHome', 'publicAssetsDir', 'aapt', 'apksigner')
 PLATFORM_API, JDK_MAJOR, BUILD_TOOLS_MAJOR = 35, 21, 35
 # The view's names are the ones workspace/rose-agent/build.sh and host-app-build.build() read.
 VIEW_PLATFORM, VIEW_TOOLS = 'platforms/android-35', 'build-tools/android-15'
@@ -68,10 +73,11 @@ def canonical(data):
 
 
 def absolute(path, what):
-    path = Path(path)
-    if not path.is_absolute():
-        raise Refused(f'{what} must be an absolute path: {path}')
-    return path
+    """An absolute, normalized path (os.path.normpath(p) == p): not /, no trailing slash, '.', '..', '//' or NUL."""
+    text = os.fspath(path)
+    if not os.path.isabs(text) or '\0' in text or text == '/' or os.path.normpath(text) != text or text.startswith('//'):
+        raise Refused(f'{what} must be an absolute, normalized path: {text!r}')
+    return Path(text)
 
 
 def fresh(path, what):
@@ -202,7 +208,7 @@ def read_d3(path):
     d3 = json.loads(Path(absolute(path, 'd3 file')).read_text())
     if d3.get('schema') != SCHEMA_D3 or any(not d3.get(k) for k in (*D3_FIELDS, 'toolchain')):
         raise Refused(f'{path} is not a complete {SCHEMA_D3} record')
-    for key in ('appSdkRoot', 'javaHome', 'publicAssetsDir', 'aapt', 'apksigner'):
+    for key in PATH_FIELDS:
         absolute(d3[key], key)
     return d3
 
@@ -219,7 +225,14 @@ def zxing_pin(candidate):
     return match.group(1)
 
 
-def build(candidate, release_dir, d3_path, run=subprocess.run):
+def tool_run(command, **kwargs):
+    """subprocess.run for the build's tools with their output on stderr, so stdout carries only the JSON result."""
+    if not kwargs.get('capture_output') and 'stdout' not in kwargs:
+        kwargs['stdout'] = sys.stderr
+    return subprocess.run(command, **kwargs)
+
+
+def build(candidate, release_dir, d3_path, run=tool_run):
     candidate, release_dir = absolute(candidate, 'candidate'), fresh(release_dir, 'release directory')
     d3 = read_d3(d3_path)
     view, java_home, assets = Path(d3['appSdkRoot']), Path(d3['javaHome']), Path(d3['publicAssetsDir'])
@@ -263,19 +276,25 @@ def run_version(run, command):
     return (result.stdout or '').strip()
 
 
-def bind(hosted_config, d3_path, out):
-    out = fresh(out, 'bound config')
-    config = json.loads(Path(absolute(hosted_config, 'hosted config')).read_text())
-    d3 = read_d3(d3_path)
-    integrate, tools = config.get('host', {}).get('integrate'), config.get('host', {}).get('tools')
-    if not isinstance(integrate, dict) or not isinstance(tools, dict):
-        raise Refused('the hosted config has no host.integrate and host.tools')
-    for key in ('appSdkRoot', 'javaHome', 'publicAssetsDir', 'publicAssetDigests'):
-        integrate[key] = d3[key]
-    for key in ('aapt', 'apksigner'):
-        tools[key] = d3[key]
-    out.write_text(json.dumps(config, indent=2, sort_keys=True) + '\n')
-    return config
+def overlay(d3):
+    """Release's portable-inputs record: one flat object with exactly the schema and the six D3 fields. The five path
+    fields are absolute and normalized; publicAssetDigests holds exactly the five PUBLIC_ASSETS with lowercase 64-hex
+    SHA-256 values. Nothing else: no hosted config, reservation, signer, secret, package or minimum-OS field."""
+    record = {'schema': SCHEMA_INPUTS, **{key: d3[key] for key in D3_FIELDS}}
+    for key in PATH_FIELDS:
+        absolute(record[key], key)
+    digests = record['publicAssetDigests']
+    if not isinstance(digests, dict) or set(digests) != set(load_host_app_build().PUBLIC_ASSETS) \
+            or not all(isinstance(v, str) and re.fullmatch(r'[0-9a-f]{64}', v) for v in digests.values()):
+        raise Refused('publicAssetDigests must map exactly the five public inputs to lowercase SHA-256 values')
+    return record
+
+
+def inputs(d3_path, out):
+    out = fresh(out, 'portable-inputs file')
+    data = overlay(read_d3(d3_path))
+    out.write_text(json.dumps(data, indent=2, sort_keys=True) + '\n')
+    return data
 
 
 def main(argv):
@@ -288,8 +307,8 @@ def main(argv):
     b = sub.add_parser('build')
     for flag in ('--candidate', '--release-dir', '--d3'):
         b.add_argument(flag, required=True)
-    c = sub.add_parser('bind')
-    for flag in ('--hosted-config', '--d3', '--out'):
+    c = sub.add_parser('inputs')
+    for flag in ('--d3', '--out'):
         c.add_argument(flag, required=True)
     a = parser.parse_args(argv)
     try:
@@ -298,7 +317,7 @@ def main(argv):
         elif a.command == 'build':
             result = build(a.candidate, a.release_dir, a.d3)
         else:
-            result = bind(a.hosted_config, a.d3, a.out)
+            result = inputs(a.d3, a.out)
     except Refused as error:
         print(json.dumps({'verdict': 'REFUSED', 'error': str(error)}), file=sys.stderr)
         return 2
