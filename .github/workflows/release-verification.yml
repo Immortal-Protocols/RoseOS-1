@@ -140,6 +140,7 @@ on:
       - 'scripts/tests/test_app_release.py'
       - 'scripts/tests/test_app_release_publisher.py'
       - 'scripts/tests/test_hosted_app_signing_reuse.py'
+      - 'scripts/tests/test_agent_hosted_release.py'
       - 'scripts/tests/test_emulator_alpha.py'
       - 'scripts/tests/test_alpha_source.py'
       - 'scripts/tests/test_permission_apex.py'
@@ -338,6 +339,7 @@ on:
       - 'scripts/tests/test_app_release.py'
       - 'scripts/tests/test_app_release_publisher.py'
       - 'scripts/tests/test_hosted_app_signing_reuse.py'
+      - 'scripts/tests/test_agent_hosted_release.py'
       - 'scripts/tests/test_emulator_alpha.py'
       - 'scripts/tests/test_alpha_source.py'
       - 'scripts/tests/test_permission_apex.py'
@@ -471,6 +473,7 @@ jobs:
           python3 scripts/tests/test_app_release.py
           python3 scripts/tests/test_app_release_publisher.py
           python3 scripts/tests/test_hosted_app_signing_reuse.py
+          python3 scripts/tests/test_agent_hosted_release.py
           python3 scripts/tests/test_emulator_alpha.py
           python3 scripts/tests/test_alpha_source.py
           python3 os/tests/test_cuttlefish_alpha_product.py
