@@ -29,3 +29,11 @@ The current manifest pins are checked offline. A changed pin requires a new
 source review and refreshed evidence, rather than silently reusing this audit.
 The optional compiler probes report a skip when the required compiler is absent.
 No workflow, shared verifier, runtime binding or publication setting is changed.
+
+`avb/` adds complete pinned Mustang/Laguna/Pixel/mainline board-source files and
+their source hashes. Tests traverse the relevant include graph and exercise the
+exact symbolic global rollback-index assignment with synthetic Make inputs.
+The adevtool source remains under its upstream license (retained also at
+`os/tests/fixtures/adevtool-17df3b79/adevtool/LICENSE`); build/make source retains
+its upstream terms. These source defaults are not actual image rollback indices,
+firmware constraints, cryptographic verification or device-state evidence.

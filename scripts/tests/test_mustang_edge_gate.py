@@ -1023,6 +1023,53 @@ class NumberingCompatibilityTest(unittest.TestCase):
     fixtures = ROOT/'os/tests/fixtures/mustang-numbering'
     synthetic_ids = ('9999123200', '9999999999')
 
+    def test_mustang_board_include_chain_and_symbolic_avb_default(self):
+        import hashlib
+        import shutil
+        import xml.etree.ElementTree as ET
+        directory=self.fixtures/'avb'
+        audit=json.loads((directory/'sources.json').read_text())
+        self.assertFalse(audit['realImageEvidence'])
+        pins={p.attrib['name']:p.attrib['revision']
+              for p in ET.parse(ROOT/'os/pinned-manifest.xml').iter('project')}
+        adevtool=json.loads((ROOT/'os/build-only/mustang.json').read_text())['pins']['vendor/adevtool']
+        sources={}
+        for row in audit['sources']:
+            data=(directory/row['file']).read_bytes()
+            self.assertEqual(hashlib.sha256(data).hexdigest(),row['sha256'])
+            self.assertEqual(hashlib.sha1(b'blob '+str(len(data)).encode()+b'\0'+data).hexdigest(),row['gitBlob'])
+            self.assertEqual(row['revision'],adevtool if row['repository']=='GrapheneOS/adevtool' else pins['platform_build'])
+            prefix='vendor/adevtool/' if row['repository']=='GrapheneOS/adevtool' else 'build/make/'
+            sources[prefix+row['path']]=data.decode()
+        queue=['vendor/adevtool/vendor-skels/google_devices/mustang/BoardConfig.mk'];seen=set()
+        while queue:
+            path=queue.pop()
+            if path in seen: continue
+            seen.add(path)
+            for line in sources[path].splitlines():
+                if not line.startswith('include '): continue
+                included=line.removeprefix('include ').strip()
+                # Flag declarations are outside this board-include/default audit.
+                if included=='build/make/target/product/build_variables.mk': continue
+                self.assertIn(included,sources)
+                queue.append(included)
+        self.assertEqual(seen,set(sources))
+        rule=[line for text in sources.values() for line in text.splitlines()
+              if line.startswith('BOARD_AVB_ROLLBACK_INDEX :=')]
+        self.assertEqual(rule,['BOARD_AVB_ROLLBACK_INDEX := $(PLATFORM_SECURITY_PATCH_TIMESTAMP)'])
+        make=shutil.which('make')
+        if make is None: self.skipTest('Make unavailable; symbolic rollback-default probe unrun')
+        with tempfile.TemporaryDirectory() as tmp:
+            makefile=Path(tmp)/'probe.mk'
+            makefile.write_text(rule[0]+"\nprobe:\n\t@printf '%s\\n' '$(BOARD_AVB_ROLLBACK_INDEX)'\n")
+            for build,stamp in [(self.synthetic_ids[0],'4102444800'),(self.synthetic_ids[1],'4102444800'),
+                                (self.synthetic_ids[1],'4102444801')]:
+                result=subprocess.run([make,'--no-print-directory','-s','-f',str(makefile),'probe',
+                    'BUILD_NUMBER='+build,'BUILD_DATETIME=1','PLATFORM_SECURITY_PATCH_TIMESTAMP='+stamp],
+                    capture_output=True,text=True,timeout=10)
+                self.assertEqual(result.returncode,0,result.stderr)
+                self.assertEqual(result.stdout,stamp+'\n')
+
     def test_frozen_upstream_excerpts_match_the_manifest_pins(self):
         import hashlib
         import xml.etree.ElementTree as ET
@@ -1143,6 +1190,449 @@ class NumberingCompatibilityTest(unittest.TestCase):
                 result=subprocess.run([java,'-ea','-cp',str(root),main,*args],capture_output=True,text=True,timeout=10)
                 self.assertEqual(result.returncode,0,result.stderr)
                 self.assertIn(expected,result.stdout)
+
+
+class CounterRecoveryContractTest(unittest.TestCase):
+    """Synthetic authority/CAS and replica fixtures; no real numbering epoch exists."""
+    def setUp(self):
+        import mustang_numbering
+        self.contract=mustang_numbering
+        self.policy=json.loads((ROOT/'os/build-only/mustang-numbering.json').read_text())
+        self.policy.update(status='bound',epoch='1'*64,authority='https://counter.synthetic.invalid/mustang',
+                           minimumTimestamp='1000')
+        self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup)
+        self.root=Path(self.temp.name)
+        self.events=[]
+        self.anchor=self.contract.expected_anchor(self.policy,self.events)
+
+    def run_context(self,run='101'):
+        return dict(repositoryId='1428996648',workflow=self.contract.WORKFLOW,runId=run,attempt=1,source='a'*40)
+
+    def proposal(self,run='101',epoch='1001'):
+        return self.contract.propose(self.policy,self.anchor,self.events,self.run_context(run),epoch)
+
+    def commit_fixture(self,proposal):
+        """Model an external authority's atomic CAS, not a production backend."""
+        import release_receipts
+        if proposal['expected']!=self.anchor: return False
+        entry=proposal['reservation']
+        release_receipts.write_once(self.root/(str(entry['counter'])+'.json'),entry)
+        self.events.append(copy.deepcopy(entry))
+        self.anchor=self.contract.expected_anchor(self.policy,self.events)
+        return True
+
+    def test_committed_policy_and_cli_are_inert(self):
+        value=json.loads((ROOT/'os/build-only/mustang-numbering.json').read_text())
+        self.assertEqual(value['status'],'unbound')
+        for key in ('epoch','authority','minimumTimestamp'): self.assertIsNone(value[key])
+        with self.assertRaisesRegex(ValueError,'unbound'): self.contract.policy(value)
+        result=subprocess.run([sys.executable,str(ROOT/'scripts/mustang_numbering.py')],
+                              capture_output=True,text=True,timeout=10)
+        self.assertNotEqual(result.returncode,0)
+        self.assertIn('no allocator',result.stderr)
+
+    def test_monotonic_counter_and_timestamp_are_distinct(self):
+        for sequence in range(1,5):
+            proposal=self.proposal(str(100+sequence),str(1000+sequence))
+            self.assertEqual(proposal['reservation']['build'],str(self.contract.LEGACY_MAX+sequence))
+            self.assertEqual(proposal['reservation']['buildTimestamp'],str(1000+sequence))
+            with self.assertRaisesRegex(ValueError,'not committed'):
+                self.contract.confirm(self.policy,proposal,self.anchor,self.events)
+            self.assertTrue(self.commit_fixture(proposal))
+            confirmed=self.contract.confirm(self.policy,proposal,self.anchor,self.events)
+            self.assertEqual(confirmed,proposal['reservation'])
+        # Real time cannot be manufactured from the synthetic ID or silently moved backwards.
+        for epoch in ('1004','1003','0','-1','01005','9223372036854775808'):
+            with self.subTest(epoch=epoch),self.assertRaises(ValueError): self.proposal('105',epoch)
+
+    def test_counter_boundaries_cannot_wrap_or_use_a_date_sequence(self):
+        self.assertEqual(self.contract.build_for_counter(1),'9999123200')
+        self.assertEqual(self.contract.build_for_counter(self.contract.CAPACITY),'9999999999')
+        for bad in (0,-1,True,'1',self.contract.CAPACITY+1):
+            with self.subTest(counter=bad),self.assertRaises(ValueError): self.contract.build_for_counter(bad)
+
+    def test_concurrent_proposals_require_one_successful_compare_and_swap(self):
+        import concurrent.futures
+        import threading
+        proposals=[self.proposal('101'),self.proposal('102')]
+        barrier=threading.Barrier(2);cas_lock=threading.Lock()
+        def commit(proposal):
+            barrier.wait(timeout=5)
+            with cas_lock: return self.commit_fixture(proposal)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+            outcomes=list(pool.map(commit,proposals))
+        self.assertEqual(sorted(outcomes),[False,True])
+        self.assertEqual(len(self.events),1)
+        for proposal,won in zip(proposals,outcomes):
+            if won: self.assertEqual(self.contract.confirm(self.policy,proposal,self.anchor,self.events),self.events[0])
+            else:
+                with self.assertRaises(ValueError): self.contract.confirm(self.policy,proposal,self.anchor,self.events)
+
+    def test_atomic_receipt_primitive_does_not_overwrite_a_concurrent_winner(self):
+        import concurrent.futures
+        import release_receipts
+        path=self.root/'same-slot.json'
+        def write(value):
+            try: release_receipts.write_once(path,value);return True
+            except release_receipts.ReceiptExists: return False
+        rows=[self.proposal('101')['reservation'],self.proposal('102')['reservation']]
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+            self.assertEqual(sorted(pool.map(write,rows)),[False,True])
+        self.assertIn(json.loads(path.read_text()),rows)
+
+    def test_interruption_before_commit_consumes_nothing_and_after_commit_recovers_exact_receipt(self):
+        first=self.proposal()
+        self.assertEqual(self.events,[])
+        self.assertEqual(self.contract.recovery_suffix(self.policy,self.anchor,self.events,[]),[])
+        self.commit_fixture(first)
+        # Caller died before storing or seeing the receipt. Readback, not a new proposal, resolves it.
+        recovered=self.contract.recovery_suffix(self.policy,self.anchor,self.events,[])
+        self.assertEqual(recovered,[first['reservation']])
+        self.assertEqual(self.contract.confirm(self.policy,first,self.anchor,self.events),recovered[0])
+        self.assertEqual(self.contract.confirm(self.policy,first,self.anchor,self.events),recovered[0])
+        with self.assertRaisesRegex(ValueError,'already consumes'): self.proposal()
+        for attempt in (0,2,True,'1'):
+            run=self.run_context('102');run['attempt']=attempt
+            with self.subTest(attempt=attempt),self.assertRaises(ValueError):
+                self.contract.propose(self.policy,self.anchor,self.events,run,'1002')
+
+    def test_replica_restore_and_replay_are_idempotent_without_a_new_counter(self):
+        import release_receipts
+        for n in range(1,4): self.commit_fixture(self.proposal(str(100+n),str(1000+n)))
+        replica=[copy.deepcopy(self.events[0])]
+        missing=self.contract.recovery_suffix(self.policy,self.anchor,self.events,replica)
+        self.assertEqual(missing,self.events[1:])
+        for event in missing:
+            release_receipts.write_once(self.root/('replica-'+str(event['counter'])+'.json'),event)
+            replica.append(json.loads((self.root/('replica-'+str(event['counter'])+'.json')).read_text()))
+        self.assertEqual(self.contract.recovery_suffix(self.policy,self.anchor,self.events,replica),[])
+        self.assertEqual(self.anchor['counter'],3)
+
+    def test_uncertain_commit_is_confirmed_after_another_writer_advances_the_head(self):
+        first=self.proposal();self.commit_fixture(first)
+        # The first caller lost its response. Another admitted writer commits
+        # before it can read back; the current head is no longer its own event.
+        second=self.proposal('102','1002');self.commit_fixture(second)
+        before=copy.deepcopy(self.events)
+        confirmed=self.contract.confirm(self.policy,first,self.anchor,self.events)
+        self.assertEqual(confirmed,first['reservation'])
+        self.assertNotEqual(self.anchor['head'],self.contract.digest(confirmed))
+        self.assertEqual(self.events,before)
+        self.assertEqual(self.anchor['counter'],2)
+        self.assertEqual(self.contract.recovery_suffix(self.policy,self.anchor,self.events,[]),before)
+        with self.assertRaisesRegex(ValueError,'already consumes'): self.proposal()
+
+    def test_restoring_a_different_policy_under_the_same_epoch_cannot_reset_the_floor(self):
+        self.commit_fixture(self.proposal())
+        changed=dict(self.policy,minimumTimestamp='1')
+        self.assertEqual(changed['epoch'],self.policy['epoch'])
+        self.assertNotEqual(self.contract.policy(changed),self.contract.policy(self.policy))
+        with self.assertRaises(ValueError):
+            self.contract.propose(changed,self.anchor,self.events,self.run_context('102'),'1002')
+        with self.assertRaises(ValueError):
+            self.contract.recovery_suffix(changed,self.anchor,self.events,[])
+
+    def test_replica_write_uncertainty_rechecks_existing_bytes(self):
+        import release_receipts
+        proposal=self.proposal();self.commit_fixture(proposal)
+        replica=self.root/'replica.json'
+        original=os.fsync;calls=0
+        def fail_directory_sync(fd):
+            nonlocal calls
+            calls+=1
+            if calls==2: raise OSError('synthetic failure after immutable receipt link')
+            return original(fd)
+        with patch.object(release_receipts.os,'fsync',side_effect=fail_directory_sync):
+            with self.assertRaises(OSError): release_receipts.write_once(replica,self.events[0])
+        # The return was uncertain; neither retry allocation nor assert that the write did not happen.
+        observed=json.loads(replica.read_text())
+        self.assertEqual(self.contract.recovery_suffix(self.policy,self.anchor,self.events,[observed]),[])
+        self.assertEqual(self.contract.confirm(self.policy,proposal,self.anchor,self.events),observed)
+
+    def test_stale_backup_missing_receipt_or_missing_anchor_cannot_authorize_reuse(self):
+        old_anchor=copy.deepcopy(self.anchor)
+        self.commit_fixture(self.proposal())
+        for anchor,events in ((self.anchor,[]),(old_anchor,self.events),(None,self.events)):
+            with self.subTest(anchor=anchor),self.assertRaises(ValueError):
+                self.contract.propose(self.policy,anchor,events,self.run_context('102'),'1002')
+        with self.assertRaises(ValueError): self.contract.recovery_suffix(self.policy,self.anchor,[],[])
+
+    def test_checksums_cannot_establish_external_authority_freshness(self):
+        old_anchor=copy.deepcopy(self.anchor)
+        self.commit_fixture(self.proposal())
+        # A jointly replayed old head and journal are internally consistent. Only
+        # the mandatory fresh external head distinguishes them; no hash proves freshness.
+        self.assertEqual(self.contract.snapshot(self.policy,old_anchor,[]),old_anchor)
+        with self.assertRaises(ValueError): self.contract.snapshot(self.policy,self.anchor,[])
+
+    def test_epoch_or_authority_loss_requires_external_resolution_not_initialization(self):
+        self.commit_fixture(self.proposal())
+        for key,value in [('epoch',None),('epoch','2'*64),('authority',None),
+                          ('authority','https://other.synthetic.invalid/counter')]:
+            policy=dict(self.policy,**{key:value})
+            with self.subTest(key=key,value=value),self.assertRaises(ValueError):
+                self.contract.propose(policy,self.anchor,self.events,self.run_context('102'),'1002')
+
+    def test_tampered_forward_or_forked_replica_and_forged_confirmation_refuse(self):
+        proposal=self.proposal();self.commit_fixture(proposal)
+        for key,value in [('build','9999999999'),('previous','0'*64),('counter',True),
+                          ('buildTimestamp','1000'),('epoch','2'*64)]:
+            rows=copy.deepcopy(self.events);rows[0][key]=value
+            with self.subTest(key=key),self.assertRaises(ValueError):
+                self.contract.recovery_suffix(self.policy,self.anchor,self.events,rows)
+        forged=copy.deepcopy(proposal);forged['reservation']['run']['source']='b'*40
+        with self.assertRaises(ValueError): self.contract.confirm(self.policy,forged,self.anchor,self.events)
+        self.commit_fixture(self.proposal('102','1002'))
+        first_anchor=self.contract.expected_anchor(self.policy,self.events[:1])
+        with self.assertRaises(ValueError): self.contract.recovery_suffix(self.policy,first_anchor,self.events[:1],self.events)
+
+    def test_legacy_unknown_is_preserved_and_quarantine_proof_cannot_be_relaxed(self):
+        for key,value in [('legacyAllocationKnown',True),('legacyCeiling','2026110499'),
+                          ('failedSource','b'*40),('legacyProofSha256','0'*64)]:
+            with self.subTest(key=key),self.assertRaises(ValueError):
+                self.contract.policy(dict(self.policy,**{key:value}))
+        self.assertFalse(self.policy['legacyAllocationKnown'])
+
+
+class GitJournalCodecTest(unittest.TestCase):
+    """Raw synthetic Git objects and independent fixture checks, never a service."""
+    def setUp(self):
+        import mustang_git_objects
+        import mustang_numbering
+        self.codec=mustang_git_objects;self.contract=mustang_numbering
+        self.policy=json.loads((ROOT/'os/build-only/mustang-numbering.json').read_text())
+        self.policy.update(status='bound',epoch='1'*64,authority='https://counter.synthetic.invalid/mustang',
+                           minimumTimestamp='1000')
+        self.objects={};self.calls=[];self.events=[]
+        self.limits=self.codec.Limits(commits=8,total_bytes=100000)
+        self.head=self.make_commit(None,None)
+        self.genesis=self.head
+
+    def put(self,kind,data):
+        identity=self.codec.object_oid(kind,data)
+        self.objects[identity]=(kind,data)
+        return identity
+
+    def get(self,identity,limit):
+        self.calls.append((identity,limit))
+        return self.objects[identity]
+
+    def make_commit(self,event,parent,blob=None,tree=None,headers=None):
+        if tree is None:
+            if blob is None:
+                blob=self.codec.canonical(dict(schema='roseos.mustang-git-event.v1',
+                    policySha256=self.contract.policy(self.policy),event=event))
+            blob_oid=self.put('blob',blob)
+            tree=self.codec.TREE_PREFIX+bytes.fromhex(blob_oid)
+        tree_oid=self.put('tree',tree)
+        if headers is None:
+            headers=(b'tree '+tree_oid.encode()+b'\n'+
+                (b'parent '+parent.encode()+b'\n' if parent else b'')+
+                b'author Synthetic Fixture <fixture@example.invalid> 0 +0000\n'+
+                b'committer Synthetic Fixture <fixture@example.invalid> 0 +0000')
+        return self.put('commit',headers+b'\n\n'+self.codec.MESSAGE)
+
+    def append(self,run='101',epoch='1001'):
+        anchor=self.contract.expected_anchor(self.policy,self.events)
+        context=dict(repositoryId='1428996648',workflow=self.contract.WORKFLOW,runId=run,attempt=1,source='a'*40)
+        proposal=self.contract.propose(self.policy,anchor,self.events,context,epoch)
+        self.head=self.make_commit(proposal['reservation'],self.head)
+        self.events.append(proposal['reservation'])
+        return proposal
+
+    def checkpoint(self):
+        return self.codec.Checkpoint(self.head,self.codec.canonical(self.contract.expected_anchor(self.policy,self.events)))
+
+    def decode(self,head=None,limits=None):
+        return self.codec.decode_history(self.policy,head or self.head,self.get,limits or self.limits)
+
+    def verifier(self,checkpoint,current=None,available=True):
+        # Test-only state is kept separately from the getter's returned bytes.
+        # No real authenticated/fresh recovery provider is implemented here.
+        expected_head=current or self.head
+        def verify(candidate,observed):
+            if not available: raise ValueError('fixture provenance/freshness/controls unknown')
+            if candidate!=checkpoint or observed.git_oids[-1]!=expected_head:
+                raise ValueError('fixture checkpoint stale or authority replayed')
+        return verify
+
+    def confirm(self,proposal,checkpoint=None,verify=None,head=None):
+        checkpoint=checkpoint or self.checkpoint()
+        return self.codec.confirm_from_objects(self.policy,proposal,head or self.head,self.get,self.limits,
+                                               checkpoint,verify)
+
+    def test_complete_history_reuses_contract_and_keeps_two_hash_domains_separate(self):
+        self.append();self.append('102','1002')
+        observed=self.decode()
+        self.assertEqual(observed.events,self.events)
+        self.assertEqual(observed.anchor,self.contract.expected_anchor(self.policy,self.events))
+        self.assertEqual(observed.git_oids[0],self.genesis)
+        self.assertEqual(observed.git_oids[-1],self.head)
+        self.assertEqual(len(observed.git_oids),3)
+        self.assertEqual(observed.events[0]['buildTimestamp'],'1001')
+        self.assertEqual(len(self.head),40)
+        self.assertEqual(len(observed.anchor['head']),64)
+        self.assertGreater(observed.bytes_read,0)
+        self.calls.clear()
+        with self.assertRaisesRegex(ValueError,'separate'): self.decode(observed.anchor['head'])
+        self.assertEqual(self.calls,[])
+
+    def test_object_ids_match_native_git_without_object_or_ref_writes(self):
+        self.append()
+        for identity,(kind,data) in self.objects.items():
+            result=subprocess.run(['git','hash-object','--no-filters','-t',kind,'--stdin'],input=data,
+                capture_output=True,timeout=10,cwd='/tmp',env=dict(PATH=os.environ.get('PATH','/usr/bin:/bin'),
+                    GIT_CONFIG_GLOBAL='/dev/null',GIT_CONFIG_NOSYSTEM='1',GIT_CEILING_DIRECTORIES='/',
+                    GIT_DEFAULT_HASH='sha1',LC_ALL='C'))
+            self.assertEqual(result.returncode,0,result.stderr)
+            self.assertEqual(result.stdout.strip().decode(),identity)
+
+    def test_no_provider_or_unbound_policy_cannot_confirm_and_does_not_read_objects(self):
+        proposal=self.append()
+        checkpoint=self.checkpoint()
+        with self.assertRaisesRegex(ValueError,'verification unavailable'): self.confirm(proposal,checkpoint)
+        self.assertEqual(self.calls,[])
+        self.policy['status']='unbound'
+        with self.assertRaisesRegex(ValueError,'unbound'): self.decode()
+        self.assertEqual(self.calls,[])
+        result=subprocess.run([sys.executable,str(ROOT/'scripts/mustang_git_objects.py')],
+                              capture_output=True,text=True,timeout=10)
+        self.assertNotEqual(result.returncode,0)
+        self.assertIn('no transport',result.stderr)
+
+    def test_lost_reply_after_advanced_head_is_exact_and_idempotent(self):
+        first=self.append();self.append('102','1002')
+        checkpoint=self.checkpoint();verify=self.verifier(checkpoint)
+        before=copy.deepcopy(self.objects)
+        self.assertEqual(self.confirm(first,checkpoint,verify),first['reservation'])
+        self.assertEqual(self.confirm(first,checkpoint,verify),first['reservation'])
+        self.assertEqual(self.objects,before)
+        self.assertEqual(len(self.events),2)
+
+    def test_missing_or_corrupt_objects_never_retry_or_infer_nonconsumption(self):
+        self.append();identity=self.head;kind,raw=self.objects[identity]
+        del self.objects[identity]
+        with self.assertRaises(KeyError): self.decode()
+        self.assertEqual(len(self.calls),1)
+        self.calls.clear();self.objects[identity]=(kind,raw+b'changed')
+        with self.assertRaisesRegex(ValueError,'identity differs'): self.decode()
+        self.assertEqual(len(self.calls),1)
+        self.calls.clear();self.objects[identity]=('blob',raw)
+        with self.assertRaisesRegex(ValueError,'kind/byte'): self.decode()
+        self.assertEqual(len(self.calls),1)
+        self.calls.clear();self.objects[identity]=(kind,raw)
+        del self.objects[self.genesis]
+        with self.assertRaises(KeyError): self.decode()
+        self.assertEqual(sum(item[0]==self.genesis for item in self.calls),1)
+        self.assertEqual(self.calls[-1][0],self.genesis)
+
+    def test_getter_denial_propagates_without_retry_or_fallback(self):
+        calls=[]
+        def denied(identity,limit):
+            calls.append(identity)
+            raise PermissionError('synthetic getter denial, not a real service')
+        with self.assertRaises(PermissionError):
+            self.codec.decode_history(self.policy,self.head,denied,self.limits)
+        self.assertEqual(calls,[self.head])
+
+    def test_wrong_tree_modes_names_extra_entries_and_zero_object_id_refuse(self):
+        blob=self.put('blob',b'{}\n')
+        good=self.codec.TREE_PREFIX+bytes.fromhex(blob)
+        for tree in (good.replace(b'100644',b'120000'),good.replace(b'100644',b'100755'),
+                     good.replace(b'journal.json',b'../evil.json'),good+good,
+                     self.codec.TREE_PREFIX+b'\0'*20):
+            with self.subTest(tree=tree[:30]),self.assertRaises(ValueError):
+                self.decode(self.make_commit(None,None,tree=tree))
+
+    def test_merge_extra_headers_and_noncanonical_commit_layout_refuse(self):
+        self.append();_,raw=self.objects[self.head]
+        headers,message=raw.split(b'\n\n',1)
+        for changed in (headers+b'\nparent '+self.genesis.encode(),headers+b'\ngpgsig unsupported',
+                        headers.replace(b'author ',b'encoding '),headers+b'\0',b''):
+            with self.subTest(headers=changed[:40]),self.assertRaises(ValueError):
+                self.decode(self.put('commit',changed+b'\n\n'+message))
+        with self.assertRaises(ValueError): self.decode(self.put('commit',headers+b'\n\nwrong message\n'))
+
+    def test_noncanonical_duplicate_and_invalid_json_refuse_even_when_git_hashes_match(self):
+        for blob in (b'{"schema":"a","schema":"b"}\n',b'\xff',b'{"x": NaN}\n',b'{ "x": 1 }\n'):
+            with self.subTest(blob=blob),self.assertRaises(ValueError):
+                self.decode(self.make_commit(None,None,blob=blob))
+
+    def test_incomplete_genesis_and_oversized_objects_or_history_refuse(self):
+        proposal=self.append()
+        with self.assertRaisesRegex(ValueError,'genesis'): self.decode(self.make_commit(proposal['reservation'],None))
+        with self.assertRaisesRegex(ValueError,'genesis'): self.decode(self.make_commit(None,self.head))
+        observed=self.decode()
+        self.assertEqual(self.decode(limits=self.codec.Limits(2,observed.bytes_read)).events,self.events)
+        for limits in (self.codec.Limits(1,100000),self.codec.Limits(2,observed.bytes_read-1),
+                       self.codec.Limits(True,100000),self.codec.Limits(2,0)):
+            with self.subTest(limits=limits),self.assertRaises(ValueError): self.decode(limits=limits)
+        kind,raw=self.objects[self.head];self.objects[self.head]=(kind,raw+b'x'*4096)
+        with self.assertRaisesRegex(ValueError,'byte bound'): self.decode()
+
+    def test_duplicate_run_changed_policy_and_changed_event_binding_refuse(self):
+        first=self.append()
+        duplicate=copy.deepcopy(first['reservation'])
+        duplicate.update(counter=2,build=self.contract.build_for_counter(2),
+                         previous=self.contract.digest(first['reservation']),buildTimestamp='1002')
+        with self.assertRaisesRegex(ValueError,'already consumes'):
+            self.decode(self.make_commit(duplicate,self.head))
+        changed=copy.deepcopy(first['reservation']);changed['build']='9999999999'
+        with self.assertRaises(ValueError): self.decode(self.make_commit(changed,self.genesis))
+        original=self.policy;self.policy=dict(self.policy,minimumTimestamp='1')
+        with self.assertRaisesRegex(ValueError,'policy differs'): self.decode()
+        self.policy=original
+
+    def test_typed_checkpoint_and_flags_do_not_prove_provenance_or_freshness(self):
+        proposal=self.append();checkpoint=self.checkpoint()
+        with self.assertRaisesRegex(ValueError,'unknown'):
+            self.confirm(proposal,checkpoint,self.verifier(checkpoint,available=False))
+        for verdict in (True,False,{'verified':True}):
+            with self.subTest(verdict=verdict),self.assertRaisesRegex(ValueError,'flags'):
+                self.confirm(proposal,checkpoint,lambda *args:verdict)
+        extra=dict(self.contract.expected_anchor(self.policy,self.events),fresh=True)
+        flagged=self.codec.Checkpoint(self.head,self.codec.canonical(extra))
+        with self.assertRaises(ValueError): self.confirm(proposal,flagged,lambda *args:None)
+        oversized=self.codec.Checkpoint(self.head,b' '*65537)
+        with self.assertRaisesRegex(ValueError,'bounded'): self.confirm(proposal,oversized,lambda *args:None)
+
+    def test_an_unimplemented_typed_provider_cannot_become_a_successful_noop(self):
+        class MissingProvider(self.codec.CheckpointVerifier):
+            pass
+        with self.assertRaises(TypeError): MissingProvider()
+
+    def test_stale_checkpoint_joint_stale_snapshot_and_rollback_refuse(self):
+        old_head=self.head;old_checkpoint=self.checkpoint()
+        first=self.append();current_checkpoint=self.checkpoint()
+        # Both old bytes and old hashes are valid. The separate fixture verifier
+        # knows the current checkpoint/head; the codec alone cannot know freshness.
+        self.assertEqual(self.decode(old_head).events,[])
+        verify=self.verifier(current_checkpoint)
+        with self.assertRaisesRegex(ValueError,'stale'): self.confirm(first,old_checkpoint,verify)
+        with self.assertRaisesRegex(ValueError,'stale'): self.confirm(first,old_checkpoint,verify,old_head)
+        with self.assertRaisesRegex(ValueError,'rollback/fork'): self.confirm(first,current_checkpoint,verify,old_head)
+
+    def test_forked_authority_or_unknown_deletion_force_push_controls_refuse(self):
+        first=self.append();checkpoint=self.checkpoint()
+        fork=copy.deepcopy(first['reservation']);fork['run']['runId']='999'
+        fork_head=self.make_commit(fork,self.genesis)
+        with self.assertRaisesRegex(ValueError,'rollback/fork'):
+            self.confirm(first,checkpoint,self.verifier(checkpoint),fork_head)
+        with self.assertRaisesRegex(ValueError,'controls unknown'):
+            self.confirm(first,checkpoint,self.verifier(checkpoint,available=False))
+
+    def test_foreign_proposal_cannot_be_confirmed_from_valid_objects_and_checkpoint(self):
+        first=self.append();checkpoint=self.checkpoint()
+        forged=copy.deepcopy(first);forged['reservation']['run']['source']='b'*40
+        with self.assertRaises(ValueError): self.confirm(forged,checkpoint,self.verifier(checkpoint))
+
+    def test_decoded_data_copies_cannot_mutate_the_verified_input(self):
+        first=self.append();checkpoint=self.checkpoint()
+        def verify(candidate,history):
+            self.verifier(checkpoint)(candidate,history)
+            history.events[0]['run']['source']='b'*40
+            history.anchor['head']='0'*64
+        self.assertEqual(self.confirm(first,checkpoint,verify),first['reservation'])
 
 
 if __name__=='__main__':
