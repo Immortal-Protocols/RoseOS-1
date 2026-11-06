@@ -33,6 +33,14 @@ Then it calls the same release() (same signing values, pin and independent check
 candidate worktree, worktree prune, ROSE_RELEASE_DIR and any partial artifact. The receipt records the reservation
 instead of mustExceed. While App's portable SDK, tool and input paths or the reservation store are unbound, it exits 4
 before any worktree, build or secret.
+
+--portable-inputs PATH (with --hosted only) is App's nonsecret runtime record (roseos.agent-portable-inputs.v1, written
+by App's bind step on the runner and never committed). It holds exactly App's six fields and nothing else: appSdkRoot,
+javaHome, publicAssetsDir, publicAssetDigests (exactly the five public connection inputs, lowercase sha256) and the
+aapt and apksigner tools, as absolute normalized paths. It fills those fields of the committed hosted config only;
+a field the committed config already binds is never replaced. Every other value (signing identity, secret names and
+version, minimumTestedOs, the reservation store) comes from the committed config alone. The receipt records the
+record's schema and sha256.
 """
 import argparse
 import fcntl
@@ -53,6 +61,11 @@ from host_secrets import AdapterFailed, AdapterSetupMissing  # noqa: E402
 ROOT = Path(__file__).resolve().parents[1]
 HOSTED_CONFIG = ROOT/'os/release-pipeline/agent/hosted.json'
 RESERVATION_SCHEMA = 'roseos.app-version-reservation.v1'
+PORTABLE_SCHEMA = 'roseos.agent-portable-inputs.v1'
+# The only fields App's runtime record may bind: (section of host, key). Nothing else can come from it.
+PORTABLE_FIELDS = (('integrate', 'appSdkRoot'), ('integrate', 'javaHome'), ('integrate', 'publicAssetsDir'),
+                   ('integrate', 'publicAssetDigests'), ('tools', 'aapt'), ('tools', 'apksigner'))
+PORTABLE_MAX_BYTES = 64 * 1024
 SECRETS = ('keystore', 'config', 'storePassword', 'keyPassword')
 PACKAGE = 'dev.pixel.voice'
 SOURCE_MANIFEST = 'workspace/rose-agent/app/AndroidManifest.xml'
@@ -80,20 +93,75 @@ def missing_inputs(config):
     missing += [f'host.tools.{k}' for k in ('aapt', 'apksigner') if not config['host']['tools'].get(k)]
     return missing + [f'appRelease.{k}' for k in ('mustExceed', 'minimumTestedOs') if not release.get(k)]
 
+def portable_path(value):
+    """An absolute, normalized path on the hosted runner; nothing relative to a builder source root."""
+    return isinstance(value, str) and value.startswith('/') and value != '/' and '\0' not in value \
+        and os.path.normpath(value) == value and not value.startswith('//')
+
+def asset_digests(value):
+    """Exactly the five public connection inputs host-app-build restores, each pinned by its lowercase sha256."""
+    return isinstance(value, dict) and set(value) == set(load('host-app-build').PUBLIC_ASSETS) \
+        and all(isinstance(v, str) and re.fullmatch(r'[0-9a-f]{64}', v) for v in value.values())
+
 def hosted_missing_inputs(config):
-    """The hosted config's unbound inputs: App's portable SDK, JDK, public inputs and tools (absolute paths, nothing
-    relative to a builder source root), the signing values, minimumTestedOs and the reservation store."""
+    """The hosted config's unbound inputs: App's portable SDK, JDK, public inputs, their five digests and the tools
+    (absolute normalized paths, nothing relative to a builder source root), the signing values, minimumTestedOs and the
+    reservation store."""
     integrate, tools = config['host'].get('integrate') or {}, config['host'].get('tools') or {}
     missing = [f'host.integrate.{k}' for k in ('project', 'secretVersion') if not integrate.get(k)]
     missing += [f'host.integrate.{k}' for k in ('appSdkRoot', 'javaHome', 'publicAssetsDir')
-                if not integrate.get(k) or not Path(integrate[k]).is_absolute()]
+                if not portable_path(integrate.get(k))]
+    missing += [] if asset_digests(integrate.get('publicAssetDigests')) else ['host.integrate.publicAssetDigests']
     missing += [f'host.integrate.appSecrets.{k}' for k in SECRETS if not (integrate.get('appSecrets') or {}).get(k)]
-    missing += [f'host.tools.{k}' for k in ('aapt', 'apksigner') if not tools.get(k) or not Path(tools[k]).is_absolute()]
+    missing += [f'host.tools.{k}' for k in ('aapt', 'apksigner') if not portable_path(tools.get(k))]
     missing += ['appRelease.minimumTestedOs'] if not (config.get('appRelease') or {}).get('minimumTestedOs') else []
     return missing + (['reservation.store'] if not (config.get('reservation') or {}).get('store') else [])
 
 def canonical(data):
     return json.dumps(data, sort_keys=True, separators=(',', ':')).encode()
+
+def strict_json(data, label):
+    def pairs(rows):
+        found = {}
+        for key, value in rows:
+            if key in found:
+                raise AdapterFailed(f'{label} repeats the key {key!r}')
+            found[key] = value
+        return found
+    def constant(value):
+        raise AdapterFailed(f'{label} holds a non-finite number')
+    return json.loads(data, object_pairs_hook=pairs, parse_constant=constant)
+
+def hosted_config(config_path=HOSTED_CONFIG, inputs_path=None):
+    """(the effective hosted config, the portable record's {schema, sha256} or None). App's runtime record may bind only
+    PORTABLE_FIELDS, and only where the committed config leaves them null (or names the same value); everything else,
+    signing identity and allocation policy included, is the committed config's."""
+    config = json.loads(Path(config_path).read_text())
+    if inputs_path is None:
+        return config, None
+    path = Path(inputs_path)
+    if os.path.islink(path) or not path.is_file():
+        raise AdapterFailed('--portable-inputs must name a regular file, not a link')
+    data = path.read_bytes()
+    if len(data) > PORTABLE_MAX_BYTES:
+        raise AdapterFailed(f'--portable-inputs is over {PORTABLE_MAX_BYTES} bytes')
+    inputs = strict_json(data, '--portable-inputs')
+    if not isinstance(inputs, dict) or set(inputs) != {'schema', *(key for _, key in PORTABLE_FIELDS)} \
+            or inputs['schema'] != PORTABLE_SCHEMA:
+        raise AdapterFailed(f'--portable-inputs must be exactly a {PORTABLE_SCHEMA} record of '
+                            + ', '.join(key for _, key in PORTABLE_FIELDS))
+    bad = [key for _, key in PORTABLE_FIELDS if key != 'publicAssetDigests' and not portable_path(inputs[key])]
+    bad += [] if asset_digests(inputs['publicAssetDigests']) else ['publicAssetDigests']
+    if bad:
+        raise AdapterFailed('--portable-inputs needs absolute normalized paths and the five pinned public input '
+                            'digests: ' + ', '.join(bad))
+    effective = json.loads(json.dumps(config))
+    for section, key in PORTABLE_FIELDS:
+        committed = effective['host'][section].get(key)
+        if committed is not None and committed != inputs[key]:
+            raise AdapterFailed(f'host.{section}.{key} is bound in the committed config; --portable-inputs never replaces it')
+        effective['host'][section][key] = inputs[key]
+    return effective, {'schema': PORTABLE_SCHEMA, 'sha256': hashlib.sha256(data).hexdigest()}
 
 def owned_reservation(path, env, apps, candidate, store):
     """The one reservation this run owns (the reservation step's receipt), or AdapterFailed. It must be an exact
@@ -124,10 +192,10 @@ def owned_reservation(path, env, apps, candidate, store):
         raise AdapterFailed('the reservation is not recorded in the store the hosted config binds')
     return record
 
-def hosted(artifact_dir, config_path=HOSTED_CONFIG, env=os.environ, gcloud='gcloud', build=None):
+def hosted(artifact_dir, config_path=HOSTED_CONFIG, env=os.environ, gcloud='gcloud', build=None, inputs_path=None):
     """The hosted Agent route: one owned reservation, then release(), with main()'s cleanup and none of its Frankel
     wrapper. The job's own signer login is used; nothing here logs in, locks or measures a builder disk."""
-    config = json.loads(Path(config_path).read_text())
+    config, portable = hosted_config(config_path, inputs_path)
     missing = hosted_missing_inputs(config)
     if missing:
         raise AdapterSetupMissing(missing)
@@ -141,7 +209,8 @@ def hosted(artifact_dir, config_path=HOSTED_CONFIG, env=os.environ, gcloud='gclo
         raise AdapterFailed('the artifact directory must be outside ROSE_RELEASE_DIR, which is removed afterwards')
     try:
         return release(config, sha, work, reservation['versionCode'], config['host']['tools']['aapt'],
-                       config['host']['tools']['apksigner'], artifact, env, gcloud, build, reservation=reservation)
+                       config['host']['tools']['apksigner'], artifact, env, gcloud, build, reservation=reservation,
+                       portable=portable)
     except BaseException:
         shutil.rmtree(artifact, ignore_errors=True)  # never leave a partial artifact to upload
         raise
@@ -294,7 +363,7 @@ def main(artifact_dir, config_path=ROOT/'os/release-pipeline/frankel.json', env=
         shutil.rmtree(work, ignore_errors=True)
         lock.close()
 
-def release(config, sha, work, version, aapt, apksigner, artifact, env, gcloud, build, reservation=None):
+def release(config, sha, work, version, aapt, apksigner, artifact, env, gcloud, build, reservation=None, portable=None):
     integrate = config['host']['integrate']
     candidate = work/'candidate'
     subprocess.run(['git', '-C', str(ROOT), 'worktree', 'add', '--detach', str(candidate), sha], check=True, stdout=subprocess.DEVNULL)
@@ -343,6 +412,8 @@ def release(config, sha, work, version, aapt, apksigner, artifact, env, gcloud, 
             'v4 signature (.idsig) verified by the independent apksigner for this APK']}
     if reservation:
         receipt['reservation'] = {k: reservation[k] for k in ('reservationSha256', 'allocationSha256', 'sourceSha', 'store')}
+    if portable:
+        receipt['portableInputs'] = portable  # which runtime record bound the SDK, JDK, inputs and tools (no paths)
     (artifact/'app-release-receipt.json').write_text(json.dumps(receipt, indent=2, sort_keys=True) + '\n')
     (artifact/'SHA256SUMS').write_text(''.join(f'{sha256(artifact/n)}  {n}\n' for n in sorted(p.name for p in artifact.iterdir())))
     return receipt
@@ -352,17 +423,22 @@ if __name__ == '__main__':
     parser.add_argument('--artifact-dir', type=Path)
     parser.add_argument('--check', action='store_true', help='Only report missing configuration')
     parser.add_argument('--hosted', action='store_true', help='The off-builder route (os/release-pipeline/agent/hosted.json)')
+    parser.add_argument('--portable-inputs', type=Path, help=f'--hosted only: App\'s runtime record ({PORTABLE_SCHEMA})')
     a = parser.parse_args()
+    if a.portable_inputs and not a.hosted:
+        parser.error('--portable-inputs goes only with --hosted')
     try:
         if a.check:
-            config = json.loads((HOSTED_CONFIG if a.hosted else ROOT/'os/release-pipeline/frankel.json').read_text())
+            config = hosted_config(HOSTED_CONFIG, a.portable_inputs)[0] if a.hosted \
+                else json.loads((ROOT/'os/release-pipeline/frankel.json').read_text())
             missing = hosted_missing_inputs(config) if a.hosted else missing_inputs(config)
             if missing:
                 raise AdapterSetupMissing(missing)
             sys.exit(0)
         if not a.artifact_dir:
             parser.error('--artifact-dir is required')
-        print(json.dumps(hosted(a.artifact_dir) if a.hosted else main(a.artifact_dir), indent=2, sort_keys=True))
+        print(json.dumps(hosted(a.artifact_dir, inputs_path=a.portable_inputs) if a.hosted else main(a.artifact_dir),
+                         indent=2, sort_keys=True))
     except AdapterSetupMissing as error:
         print(json.dumps({'verdict': 'SETUP_MISSING', 'missing': error.missing}), file=sys.stderr)
         sys.exit(4)

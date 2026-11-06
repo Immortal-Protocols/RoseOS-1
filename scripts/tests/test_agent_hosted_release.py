@@ -25,7 +25,19 @@ WRAPPER = ('disk_preflight', 'allocated_floor', 'requested_version', 'missing_in
 WORKFLOW_REF = 'Immortal-Protocols/RoseOS-1/.github/workflows/os-release.yml@refs/heads/main'
 STORE = {'kind': 'synthetic-test-store', 'ref': 'synthetic only; no real ledger'}
 UNBOUND = ['host.integrate.appSdkRoot', 'host.integrate.javaHome', 'host.integrate.publicAssetsDir',
-           'host.tools.aapt', 'host.tools.apksigner', 'reservation.store']
+           'host.integrate.publicAssetDigests', 'host.tools.aapt', 'host.tools.apksigner', 'reservation.store']
+ASSETS = release.load('host-app-build').PUBLIC_ASSETS
+DIGESTS = {name: hashlib.sha256(name.encode()).hexdigest() for name in ASSETS}  # synthetic pins, five inputs
+
+
+def portable(**change):
+    """A roseos.agent-portable-inputs.v1 record with synthetic runner paths (nothing is read through them here)."""
+    record = {'schema': 'roseos.agent-portable-inputs.v1', 'appSdkRoot': '/opt/rose-agent/sdk',
+              'javaHome': '/opt/rose-agent/jdk21', 'publicAssetsDir': '/opt/rose-agent/public-assets',
+              'publicAssetDigests': dict(DIGESTS), 'aapt': '/opt/rose-agent/sdk/build-tools/android-15/aapt',
+              'apksigner': '/opt/rose-agent/sdk/build-tools/android-15/apksigner'}
+    record.update(change)
+    return record
 
 
 def digest(record):
@@ -68,7 +80,8 @@ class Committed(unittest.TestCase):
                                            publicAssetsDir='/opt/assets')
         config['host']['tools'].update(aapt='prebuilts/sdk/tools/linux/bin/aapt', apksigner='/opt/sdk/apksigner')
         config['reservation']['store'] = STORE
-        self.assertEqual(release.hosted_missing_inputs(config), ['host.integrate.appSdkRoot', 'host.tools.aapt'])
+        self.assertEqual(release.hosted_missing_inputs(config), ['host.integrate.appSdkRoot',
+                                                                 'host.integrate.publicAssetDigests', 'host.tools.aapt'])
 
 
 class Hosted(unittest.TestCase):
@@ -87,6 +100,7 @@ class Hosted(unittest.TestCase):
             host['integrate'].pop(key)
         data['appRelease'].pop('mustExceed')  # a hosted route has no floor to read
         data['reservation'] = {'store': STORE}
+        data['host']['integrate']['publicAssetDigests'] = dict(DIGESTS)  # a hosted build is digest-bound
         self.hosted_config = self.root/'agent-hosted.json'
         self.hosted_config.write_text(json.dumps(data))
         self.receipt_path = self.root/'reservation.json'
@@ -252,6 +266,152 @@ class Hosted(unittest.TestCase):
         with self.assertRaisesRegex(release.AdapterFailed, 'outside ROSE_RELEASE_DIR'):
             release.hosted(nested, self.hosted_config, self.env, self.gcloud, build=self.build)
         self.assertEqual(self.fetched(), [])
+
+
+class Portable(unittest.TestCase):
+    """App's runtime record (--portable-inputs) binds only App's six fields of the committed hosted config."""
+    def setUp(self):
+        import tempfile
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.root = Path(temp.name)
+        self.path = self.root/'portable-inputs.json'
+
+    def write(self, record=None, raw=None):
+        self.path.write_bytes(raw if raw is not None else json.dumps(record or portable()).encode())
+        return self.path
+
+    def effective(self, record=None, config=None, raw=None):
+        path = self.write(record, raw)
+        if config is not None:
+            target = self.root/'hosted.json'
+            target.write_text(json.dumps(config))
+            return release.hosted_config(target, path)
+        return release.hosted_config(release.HOSTED_CONFIG, path)
+
+    def test_it_binds_exactly_apps_fields_and_leaves_only_the_store_unbound(self):
+        config, record = self.effective()
+        integrate, tools = config['host']['integrate'], config['host']['tools']
+        expected = portable()
+        for key in ('appSdkRoot', 'javaHome', 'publicAssetsDir', 'publicAssetDigests'):
+            self.assertEqual(integrate[key], expected[key])
+        self.assertEqual((tools['aapt'], tools['apksigner']), (expected['aapt'], expected['apksigner']))
+        # Everything else is the committed config's, byte for byte.
+        for key in ('project', 'secretVersion', 'appSecrets'):
+            self.assertEqual(integrate[key], COMMITTED['host']['integrate'][key])
+        for key in ('identities', 'appRelease', 'reservation'):
+            self.assertEqual(config[key], COMMITTED[key])
+        self.assertEqual(release.hosted_missing_inputs(config), ['reservation.store'])  # D1 stays unbound
+        self.assertEqual(record, {'schema': 'roseos.agent-portable-inputs.v1',
+                                  'sha256': hashlib.sha256(self.path.read_bytes()).hexdigest()})
+        result = subprocess.run([sys.executable, str(ROOT/'scripts/host-app-release.py'), '--check', '--hosted',
+                                 '--portable-inputs', str(self.path)], capture_output=True, text=True)
+        self.assertEqual((result.returncode, json.loads(result.stderr)),
+                         (4, {'verdict': 'SETUP_MISSING', 'missing': ['reservation.store']}))
+
+    def test_it_can_never_set_signing_allocation_or_store_values(self):
+        for key, value in (('appSignerSha256', '0' * 64), ('identities', {}), ('project', 'other'), ('secretVersion', 'latest'),
+                           ('appSecrets', {}), ('keystore', 'OTHER'), ('minimumTestedOs', {}), ('mustExceed', 1),
+                           ('reserved', []), ('store', {'kind': 'x'}), ('reservation', {}), ('packageName', 'x'),
+                           ('sourceRoot', '/home/pixelbuild/src'), ('lockPath', '/tmp/lock')):
+            with self.subTest(extra=key), self.assertRaisesRegex(release.AdapterFailed, 'must be exactly'):
+                self.effective(portable(**{key: value}))
+        for key in ('appSdkRoot', 'javaHome', 'publicAssetsDir', 'publicAssetDigests', 'aapt', 'apksigner', 'schema'):
+            record = portable()
+            record.pop(key)
+            with self.subTest(missing=key), self.assertRaisesRegex(release.AdapterFailed, 'must be exactly'):
+                self.effective(record)
+        with self.assertRaisesRegex(release.AdapterFailed, 'must be exactly'):
+            self.effective(portable(schema='roseos.agent-hosted-release.v1'))
+
+    def test_paths_must_be_absolute_and_normalized(self):
+        for value in ('opt/sdk', './opt', '/opt/sdk/', '/opt/../sdk', '/opt//sdk', '//opt/sdk', '/', '', None, 7,
+                      '/opt/sdk\x00'):
+            for key in ('appSdkRoot', 'javaHome', 'publicAssetsDir', 'aapt', 'apksigner'):
+                with self.subTest(key=key, value=value), self.assertRaisesRegex(release.AdapterFailed, key):
+                    self.effective(portable(**{key: value}))
+
+    def test_the_five_public_inputs_must_each_be_pinned(self):
+        first = ASSETS[0]
+        for change in ({k: v for k, v in DIGESTS.items() if k != first}, {**DIGESTS, 'workspace/extra.json': '0' * 64},
+                       {**DIGESTS, first: DIGESTS[first].upper()}, {**DIGESTS, first: '0' * 63}, {**DIGESTS, first: None},
+                       None, [], 'digests'):
+            with self.subTest(change=str(change)[:60]), self.assertRaisesRegex(release.AdapterFailed, 'publicAssetDigests'):
+                self.effective(portable(publicAssetDigests=change))
+
+    def test_a_field_the_committed_config_binds_is_never_replaced(self):
+        config = json.loads(json.dumps(COMMITTED))
+        config['host']['integrate']['javaHome'] = '/opt/committed/jdk21'
+        with self.assertRaisesRegex(release.AdapterFailed, 'never replaces it'):
+            self.effective(portable(), config=config)
+        same, _ = self.effective(portable(javaHome='/opt/committed/jdk21'), config=config)  # agreeing is not replacing
+        self.assertEqual(same['host']['integrate']['javaHome'], '/opt/committed/jdk21')
+
+    def test_only_a_bounded_strict_regular_file_is_read(self):
+        with self.assertRaisesRegex(release.AdapterFailed, 'repeats the key'):
+            self.effective(raw=b'{"schema": "a", "schema": "roseos.agent-portable-inputs.v1"}')
+        with self.assertRaisesRegex(release.AdapterFailed, 'non-finite'):
+            self.effective(raw=json.dumps(portable()).replace('"javaHome": "/opt/rose-agent/jdk21"', '"javaHome": NaN').encode())
+        with self.assertRaisesRegex(release.AdapterFailed, 'over 65536 bytes'):
+            self.effective(raw=b' ' * (release.PORTABLE_MAX_BYTES + 1))
+        target = self.write()
+        link = self.root/'link.json'
+        link.symlink_to(target)
+        with self.assertRaisesRegex(release.AdapterFailed, 'regular file'):
+            release.hosted_config(release.HOSTED_CONFIG, link)
+        with self.assertRaisesRegex(release.AdapterFailed, 'regular file'):
+            release.hosted_config(release.HOSTED_CONFIG, self.root/'absent.json')
+
+    def test_the_option_is_hosted_only_and_the_builder_route_ignores_it(self):
+        result = subprocess.run([sys.executable, str(ROOT/'scripts/host-app-release.py'), '--check', '--portable-inputs',
+                                 str(self.write())], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn('--portable-inputs goes only with --hosted', result.stderr)
+        self.assertEqual(release.hosted_config(release.HOSTED_CONFIG), (COMMITTED, None))  # no record: committed only
+
+
+class PortableRun(unittest.TestCase):
+    """The full hosted route with App's record binding the fixture's SDK, JDK, inputs and tools."""
+    setUp_base = Hosted.setUp_base
+    setUp_hosted = Hosted.setUp
+    build = Hosted.build
+    fetched = Hosted.fetched
+    assert_clean = Hosted.assert_clean
+    write_reservation = Hosted.write_reservation
+    forbid_wrapper = Hosted.forbid_wrapper
+
+    def setUp(self):
+        self.setUp_hosted()
+        data = json.loads(self.hosted_config.read_text())
+        bound = {'appSdkRoot': data['host']['integrate']['appSdkRoot'], 'javaHome': data['host']['integrate']['javaHome'],
+                 'publicAssetsDir': data['host']['integrate']['publicAssetsDir'],
+                 'publicAssetDigests': data['host']['integrate']['publicAssetDigests'],
+                 'aapt': data['host']['tools']['aapt'], 'apksigner': data['host']['tools']['apksigner']}
+        for section, key in release.PORTABLE_FIELDS:
+            data['host'][section][key] = None  # unbound in the committed config, as on main
+        self.hosted_config.write_text(json.dumps(data))
+        self.inputs = self.root/'portable-inputs.json'
+        self.inputs.write_text(json.dumps({'schema': 'roseos.agent-portable-inputs.v1', **bound}))
+
+    def hosted(self):
+        return release.hosted(self.artifact, self.hosted_config, self.env, self.gcloud, build=self.build,
+                              inputs_path=self.inputs)
+
+    def test_the_record_binds_the_build_and_the_receipt_names_it(self):
+        receipt = self.hosted()
+        self.assertEqual(receipt['portableInputs'], {'schema': 'roseos.agent-portable-inputs.v1',
+                                                     'sha256': hashlib.sha256(self.inputs.read_bytes()).hexdigest()})
+        self.assertEqual(receipt['signerSha256'], PIN)  # the committed pin, never the record's
+        self.assertEqual([c['sdk'] for c in self.calls], [json.loads(self.inputs.read_text())['appSdkRoot']])
+        self.assert_clean()
+
+    def test_without_the_record_the_same_config_stops_unbound_before_any_worktree(self):
+        with self.assertRaises(release.AdapterSetupMissing) as caught:
+            release.hosted(self.artifact, self.hosted_config, self.env, self.gcloud, build=self.build)
+        self.assertEqual(caught.exception.missing, ['host.integrate.appSdkRoot', 'host.integrate.javaHome',
+                         'host.integrate.publicAssetsDir', 'host.integrate.publicAssetDigests', 'host.tools.aapt',
+                         'host.tools.apksigner'])
+        self.assertFalse(self.work.exists())
 
 
 class BuilderRoute(unittest.TestCase):
