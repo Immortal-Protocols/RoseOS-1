@@ -892,6 +892,56 @@ class BuilderControlTest(Fixture):
             self.assertIn("steps.ownership.outputs.action == 'stop'", before[before.rindex('      - '):])
 
 
+def readiness_job_spec():
+    """The readiness job's permissions, env and steps, read from yogi-ota.yml with the standard library only (the
+    offline suites carry no YAML parser). Strict about the layout it reads: anything else fails the test."""
+    text = (yogi.ROOT/'.github/workflows/yogi-ota.yml').read_text()
+    body = text[text.index('\njobs:\n'):]
+    lines = body[body.index('\n  readiness:\n') + 1:body.index('\n  key-bootstrap:\n')].splitlines()
+    assert lines[0] == '  readiness:', lines[0]
+
+    def scalar(value):
+        value = value.strip()
+        return value[1:-1] if len(value) >= 2 and value[0] == value[-1] and value[0] in '\'"' else value
+
+    def mapping(name):  # a two-level `    name:` block of `      key: value` lines
+        start = lines.index(f'    {name}:') + 1
+        found = {}
+        for line in lines[start:]:
+            if not line.startswith('      '):
+                break
+            key, _, value = line.strip().partition(': ')
+            found[key] = scalar(value)
+        return found
+    job = {key: mapping(key) for key in ('permissions', 'env')}
+    job['keys'] = [line.strip().partition(':')[0] for line in lines[1:] if line.startswith('    ') and line[4] not in ' #']
+    steps, block = [], None
+    for line in lines[lines.index('    steps:') + 1:]:
+        if line.startswith('      - '):
+            steps.append({})
+            line = '        ' + line[8:]
+        if block is not None and (line.startswith('          ') or not line.strip()):
+            if block == 'with':
+                key, _, value = line.strip().partition(': ')
+                steps[-1]['with'][key] = scalar(value.split(' #')[0])
+            else:
+                steps[-1][block] += line[10:] + '\n'
+            continue
+        block = None
+        assert line.startswith('        ') and line[8] != ' ', line
+        key, _, value = line.strip().partition(':')
+        if key == 'with':
+            block, steps[-1]['with'] = 'with', {}
+            continue
+        if value.strip() == '|':
+            block, steps[-1][key] = key, ''
+        elif key in ('uses',):
+            steps[-1][key] = value.strip().split(' #')[0]
+        else:
+            steps[-1][key] = scalar(value)
+    return job, steps
+
+
 class ReadinessTest(Fixture):
     """Readiness gathers host evidence only; it never needs or opens builder.status, keys, builds or publication."""
     def host(self):
@@ -1056,11 +1106,10 @@ class ReadinessTest(Fixture):
             self.assertIn(condition, block[:200])
 
     def test_identity_step_is_first_before_checkout_and_nothing_runs_after_a_refusal(self):
-        import yaml
-        workflow = yaml.safe_load((yogi.ROOT/'.github/workflows/yogi-ota.yml').read_text())
-        job = workflow['jobs']['readiness']
+        job, steps = readiness_job_spec()
         self.assertEqual(job['permissions'], {'contents': 'read'})
-        steps = job['steps']
+        self.assertEqual(job['keys'], ['needs', 'if', 'runs-on', 'timeout-minutes', 'permissions', 'env', 'steps'])
+        self.assertEqual(len(steps), 5)
         self.assertEqual(steps[0]['id'], 'identity')
         self.assertNotIn('uses', steps[0])
         self.assertNotIn('if', steps[0])
@@ -1075,7 +1124,7 @@ class ReadinessTest(Fixture):
             if 'always()' in condition:
                 self.assertIn("steps.identity.outcome == 'success'", condition)
                 self.assertRegex(condition, r"^always\(\) && steps\.identity\.outcome == 'success'$")
-        self.assertNotIn('continue-on-error', job)
+        self.assertNotIn('continue-on-error', job['keys'])
         b = yogi.config()['builder']
         self.assertEqual(job['env'], {'YOGI_EXPECT_RUNNER': b['evidence']['runner']['name'],
                                       'YOGI_EXPECT_PROJECT': b['project'], 'YOGI_EXPECT_ZONE': b['zone'],
@@ -1090,10 +1139,8 @@ class IdentityStepTest(unittest.TestCase):
     def setUpClass(cls):
         import http.server
         import threading
-        import yaml
-        workflow = yaml.safe_load((yogi.ROOT/'.github/workflows/yogi-ota.yml').read_text())
-        job = workflow['jobs']['readiness']
-        run = job['steps'][0]['run']
+        job, steps = readiness_job_spec()
+        run = steps[0]['run']
         start, end = run.index("<<'PY'\n") + len("<<'PY'\n"), run.rindex('\nPY')
         cls.script, cls.expect = run[start:end], dict(job['env'])
         assert 'http://metadata.google.internal/computeMetadata/v1/' in cls.script
