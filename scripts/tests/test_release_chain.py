@@ -239,11 +239,16 @@ class Concurrency(unittest.TestCase):
         self.assertEqual(re.findall(r'(?m)^ +concurrency:', WORKFLOW), [])  # no job overrides the workflow group
 
     def test_actionlint_ignores_only_the_unknown_queue_key_in_this_workflow(self):
+        # os-release.yml and the harness's own launcher3-compile.yml are the two workflows with queue: max; each ignores
+        # exactly that one diagnostic and nothing else.
         config = (ROOT/'.github/actionlint.yaml').read_text()
         paths = config[config.index('\npaths:\n'):]
-        self.assertEqual(re.findall(r"(?m)^  (\S+):$", paths), ['.github/workflows/os-release.yml'])
+        workflows = ['.github/workflows/os-release.yml', '.github/workflows/launcher3-compile.yml']
+        self.assertEqual(re.findall(r"(?m)^  (\S+):$", paths), workflows)
         self.assertEqual(re.findall(r"(?m)^      - '(.*)'$", paths),
-            ['unexpected key "queue" for "concurrency" section\\. expected one of "cancel-in-progress", "group"'])
+            ['unexpected key "queue" for "concurrency" section\\. expected one of "cancel-in-progress", "group"'] * 2)
+        for workflow in workflows:
+            self.assertIn('\n  queue: max\n', (ROOT/workflow).read_text().split('\njobs:\n', 1)[0])  # never a dead ignore
 
 
 class RunnerLabels(unittest.TestCase):

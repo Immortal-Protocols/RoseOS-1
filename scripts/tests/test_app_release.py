@@ -427,7 +427,7 @@ class WorkflowAppOnlyTest(unittest.TestCase):
         # cleanup still waits for every job that may hold the builder (other devices' jobs may follow these)
         self.assertLessEqual({'controller', 'device-readiness', 'builder', 'signing-bootstrap', 'models-signer', 'rango-builder',
                               'rango-publisher', 'rango-factory-observe', 'blazer-prep', 'rango-factory-package',
-                              'rango-factory-inspect', 'launcher3-compile', 'blazer-compile', 'blazer-integrate', 'app-builder',
+                              'rango-factory-inspect', 'blazer-compile', 'blazer-integrate', 'app-builder',
                               'alpha-builder', 'alpha-successor', 'alpha-apk-diagnostic', 'alpha-verify-retained', 'alpha-export',
                               'app-reuse', 'request-signing', 'signed-builder', 'publisher'}, set(shape.cleanup_needs()))
         self.assertIn("    if: always() && needs.controller.result != 'skipped'\n", self.jobs['cleanup'])

@@ -100,12 +100,12 @@
       "note": "The build itself needs only the public SDK, the pinned ZXing jar, the staged connection inputs and esbuild. Its host coupling is the app signer (PIXEL_APP_SIGNING_* through the signer identity), the 300 GiB free-space reserve and the shared app version ledger below. It cannot leave the ledger's host until the ledger moves."
     },
     "harness": {
-      "workflow": ".github/workflows/os-release.yml",
-      "modes": [
-        "launcher3-compile"
-      ],
+      "workflow": ".github/workflows/launcher3-compile.yml",
+      "modes": [],
       "host": "frankel-builder",
       "target": "own",
+      "runtimeStatus": "retired-shared-host",
+      "activeBinding": "os/build-only/launcher3-compile-lane.json",
       "unbound": [
         "runnerLabel",
         "vm",
@@ -114,7 +114,7 @@
         "queue",
         "controller"
       ],
-      "note": "1E: the standalone compile harness gets capacity separate from production releases."
+      "note": "1E: the standalone compile harness has its own manual workflow, launcher3-compile.yml: its own queue, an owned controller and STOP from a per-run ownership record, and a worker routed only to the bound runner label. The os-release.yml launcher3-compile mode is removed. The host above names only where its earlier runs ran; Frankel's builder-reclaim launcher3-compile class still cleans their leftovers, and nothing routes there. The active binding is unbound, so the lane claims no capacity until Infra's verified readback is bound."
     },
     "frankel-host-other": {
       "workflow": ".github/workflows/os-release.yml",
@@ -170,10 +170,6 @@
     ],
     [
       "frankel-host-other",
-      "yogi"
-    ],
-    [
-      "harness",
       "yogi"
     ]
   ]
