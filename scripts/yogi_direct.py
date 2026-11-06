@@ -382,16 +382,32 @@ def quiesced(probe):
         and probe.get('enabled') in ('disabled', 'masked')
 
 
+def gcloud_environment(environ=os.environ):
+    """NAME=value assignments for the IAP ProxyCommand's gcloud only: where the operator's gcloud configuration is
+    (CLOUDSDK_CONFIG, or gcloud's default under the operator's real HOME) and an explicit CLOUDSDK_PYTHON if set.
+    Paths only; never the configuration's contents. Refuses a location that is not a plain absolute path."""
+    config = environ.get('CLOUDSDK_CONFIG') or (
+        os.path.join(environ['HOME'], '.config', 'gcloud') if environ.get('HOME') else '')
+    found = [('CLOUDSDK_CONFIG', config)]
+    if environ.get('CLOUDSDK_PYTHON'):
+        found.append(('CLOUDSDK_PYTHON', environ['CLOUDSDK_PYTHON']))
+    for name, value in found:
+        if not os.path.isabs(value) or any(c in value for c in '\n\r\0'):
+            raise Refused(f'{name} for the IAP tunnel must be an absolute path (set CLOUDSDK_CONFIG or HOME)')
+    return [f'{name}={value}' for name, value in found]
+
+
 class Session:
     """ssh to the exact VM with the committed host-key pin as the only trusted key: no user ssh config, no agent,
     forwarding or environment, no first-use acceptance and no host-key updates."""
-    def __init__(self, cfg, address, identity_file, run=subprocess.run, gcloud='gcloud'):
+    def __init__(self, cfg, address, identity_file, run=subprocess.run, gcloud='gcloud', environ=os.environ):
         d, b = cfg['builder']['direct'], cfg['builder']
         self.cfg, self.run, self.alias = cfg, run, f'yogi-{b["instanceId"]}'
         if not identity_file or not Path(identity_file).is_file():
             raise Refused('--identity must be the operator\'s own SSH private key file (it never leaves this machine)')
         if d['route'] != 'iap' and (not address or not re.fullmatch(r'[0-9]{1,3}(\.[0-9]{1,3}){3}', address)):
             raise Refused('the replacement VM has no external address in its exact-identity describe')
+        tunnel_env = gcloud_environment(environ) if d['route'] == 'iap' else None  # refuses before anything is created
         self.temp = tempfile.TemporaryDirectory()
         self.known = Path(self.temp.name)/'known_hosts'
         self.known.write_text(f'{self.alias} {d["hostKey"]["type"]} {d["hostKey"]["key"]}\n')
@@ -403,9 +419,14 @@ class Session:
                    '-o', 'PermitLocalCommand=no', '-o', 'ConnectTimeout=20', '-o', 'ServerAliveInterval=30',
                    '-o', 'ServerAliveCountMax=4', '-l', d['sshUser']]
         if d['route'] == 'iap':
-            options += ['-o', 'ProxyCommand=' + shlex.join([
-                gcloud, 'compute', 'start-iap-tunnel', b['instance'], '22', '--listen-on-stdin',
-                f'--project={b["project"]}', f'--zone={b["zone"]}', '--verbosity=warning'])]
+            # The tunnel needs the operator's own gcloud configuration, but ssh runs ProxyCommand with ssh's minimal
+            # environment (temporary HOME). Only the configuration's location is handed to gcloud, scoped to the
+            # ProxyCommand by env(1); ssh's own environment stays minimal and nothing reaches the guest. Nothing in it
+            # is read here. '%' is doubled because ssh expands %-tokens in ProxyCommand.
+            proxy = shlex.join(['/usr/bin/env', *tunnel_env, gcloud, 'compute', 'start-iap-tunnel',
+                                b['instance'], '22', '--listen-on-stdin', f'--project={b["project"]}',
+                                f'--zone={b["zone"]}', '--verbosity=warning'])
+            options += ['-o', 'ProxyCommand=' + proxy.replace('%', '%%')]
             self.target = self.alias
         else:
             self.target = address

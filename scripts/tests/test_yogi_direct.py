@@ -386,6 +386,73 @@ class SshTest(Base):
         with self.assertRaisesRegex(yogi.Refused, 'external address'):
             direct.Session(self.cfg, None, self.identity, run=Fake())
 
+    def proxy_run(self, environ):
+        """Run the session's ProxyCommand as ssh would (/bin/sh -c, ssh's environment, %% unescaped) against a fake
+        gcloud that reports only what it was given. Synthetic paths; nothing is read."""
+        fakebin = self.root/'fakebin'
+        fakebin.mkdir(exist_ok=True)
+        (fakebin/'gcloud').write_text('#!/bin/sh\nenv | sort > "$(dirname "$0")/gcloud.env"\nprintf "%s\\n" "$@" > '
+                                      '"$(dirname "$0")/gcloud.args"\n')
+        (fakebin/'gcloud').chmod(0o755)
+        self.cfg['builder']['direct']['route'] = 'iap'
+        session = direct.Session(self.cfg, None, self.identity, run=Fake(), gcloud='gcloud', environ=environ)
+        self.addCleanup(session.close)
+        proxy = [o for o in session.argv if o.startswith('ProxyCommand=')][0][len('ProxyCommand='):]
+        env = dict(session.env, PATH=f'{fakebin}:{session.env["PATH"]}')
+        subprocess.run(['/bin/sh', '-c', proxy.replace('%%', '%')], env=env, check=True, timeout=30)
+        seen = dict(line.split('=', 1) for line in (fakebin/'gcloud.env').read_text().splitlines() if '=' in line)
+        return session, seen, (fakebin/'gcloud.args').read_text().splitlines()
+
+    def test_iap_tunnel_gets_the_operators_gcloud_config_location_and_nothing_else(self):
+        operator_home = str(self.root/'synthetic operator home')
+        environ = {'HOME': operator_home, 'PATH': os.environ['PATH'], 'CLOUDSDK_PYTHON': '/usr/bin/python3',
+                   'GOOGLE_APPLICATION_CREDENTIALS': '/synthetic/adc.json', 'CLOUDSDK_CORE_ACCOUNT': 'someone',
+                   'CLOUDSDK_AUTH_ACCESS_TOKEN_FILE': '/synthetic/token', 'HTTPS_PROXY': 'http://proxy.invalid',
+                   'SSH_AUTH_SOCK': '/synthetic/agent.sock'}
+        session, seen, args = self.proxy_run(environ)
+        self.assertEqual(seen['CLOUDSDK_CONFIG'], operator_home + '/.config/gcloud')
+        self.assertEqual(seen['CLOUDSDK_PYTHON'], '/usr/bin/python3')
+        self.assertEqual(seen['HOME'], session.temp.name)  # gcloud still runs with ssh's temporary HOME
+        for name in ('GOOGLE_APPLICATION_CREDENTIALS', 'CLOUDSDK_CORE_ACCOUNT', 'CLOUDSDK_AUTH_ACCESS_TOKEN_FILE',
+                     'HTTPS_PROXY', 'SSH_AUTH_SOCK'):
+            self.assertNotIn(name, seen)
+        self.assertEqual(set(session.env), {'PATH', 'HOME'})  # ssh itself (and so the guest) gets nothing new
+        self.assertEqual(args, ['compute', 'start-iap-tunnel', yogi.INSTANCE, '22', '--listen-on-stdin',
+                                f'--project={yogi.PROJECT}', f'--zone={yogi.ZONE}', '--verbosity=warning'])
+        argv = ' '.join(session.argv)
+        self.assertIn('StrictHostKeyChecking=yes', argv)
+        self.assertIn(f'HostKeyAlias=yogi-{yogi.INSTANCE_ID}', argv)
+
+    def test_explicit_config_with_spaces_or_percent_reaches_gcloud_exactly(self):
+        config = str(self.root/'cfg 100%done/gcloud')
+        session, seen, _ = self.proxy_run({'HOME': '/synthetic/home', 'CLOUDSDK_CONFIG': config,
+                                           'PATH': os.environ['PATH']})
+        self.assertEqual(seen['CLOUDSDK_CONFIG'], config)
+        self.assertNotIn('CLOUDSDK_PYTHON', seen)
+        proxy = [o for o in session.argv if o.startswith('ProxyCommand=')][0]
+        self.assertIn('100%%done', proxy)
+
+    def test_iap_config_location_must_be_absolute_and_external_ip_route_has_no_proxy(self):
+        self.cfg['builder']['direct']['route'] = 'iap'
+        for environ in ({}, {'HOME': 'relative'}, {'CLOUDSDK_CONFIG': 'relative/gcloud'},
+                        {'HOME': '/h', 'CLOUDSDK_CONFIG': '/a\nb'}, {'HOME': '/h', 'CLOUDSDK_PYTHON': 'python3'}):
+            with self.subTest(environ=environ):
+                with self.assertRaisesRegex(yogi.Refused, 'absolute path'):
+                    direct.Session(self.cfg, None, self.identity, run=Fake(), environ=environ)
+        self.cfg['builder']['direct']['route'] = 'external-ip'
+        session = direct.Session(self.cfg, '203.0.113.7', self.identity, run=Fake(),
+                                 environ={'HOME': '/h', 'CLOUDSDK_CONFIG': '/c'})
+        self.addCleanup(session.close)
+        self.assertFalse(any('ProxyCommand' in o or 'CLOUDSDK' in o for o in session.argv))
+
+    def test_historical_active_but_disabled_runner_is_still_refused(self):
+        # Receipt correction (Chief, 2026-11-06): the last guest observation before STOP was active/running but
+        # disabled. The route requires inactive/disabled and no runner process; that shape must refuse.
+        observed = {'builder': TUPLE, 'runnerProcess': True, 'active': 'active', 'enabled': 'disabled'}
+        self.assertFalse(direct.quiesced(observed))
+        self.assertFalse(direct.quiesced(dict(observed, runnerProcess=False)))
+        self.assertTrue(direct.quiesced(dict(observed, runnerProcess=False, active='inactive')))
+
     def test_host_verification_precedes_any_transfer(self):
         self.started()
         for fake, reason in ((Fake(states=('RUNNING',), ssh_rc=255), 'host key did not match'),

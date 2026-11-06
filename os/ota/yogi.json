@@ -30,6 +30,7 @@
         "version": "2.338.2",
         "scope": "repository Immortal-Protocols/RoseOS-1",
         "service": "disabled, inactive",
+        "serviceLatestGuestObservation": "Chief receipt correction, 2026-11-06 (no timestamp recorded): the latest guest observation before the VM STOP was active/running but disabled, not inactive. Historical guest evidence only; it is no claim about the runner on the stopped VM. The direct route still requires observed inactive/disabled and no runner process before every step.",
         "group": {
           "poolId": 1,
           "selection": "official default group",
