@@ -35,12 +35,19 @@
           "selection": "official default group",
           "organizationGroupId": null
         },
-        "labelsSupplied": [
+        "labels": [
+          "self-hosted",
+          "Linux",
+          "X64",
           "roseos-yogi-builder"
         ],
-        "labels": null,
         "replacementLabelInstalled": false,
-        "workflowRestriction": "not enforced by registration; only label routing separates Yogi jobs"
+        "workflowRestriction": "not enforced by registration; only label routing separates Yogi jobs",
+        "labelsReadback": "complete repository runner list, 2026-11-06T01:17:20Z (one runner: ID 21, offline, not busy)",
+        "repositoryLabelUnique": true,
+        "organizationEligibility": null,
+        "organizationEligibilityReadback": "denied: organization runner-group read returned HTTP 403 at 2026-11-06T01:24:17Z (needs organization admin or the runners-and-runner-groups permission); not retried, no other route",
+        "status": "registered, offline, not busy; service disabled/inactive"
       },
       "storage": {
         "disk": {
