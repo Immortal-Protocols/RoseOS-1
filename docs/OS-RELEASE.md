@@ -526,11 +526,29 @@ project, secret version, four secret names and `appSignerSha256`. Everything els
 - App's portable SDK, JDK, public connection inputs and tools, as absolute paths on the hosted runner;
 - the reservation store.
 
-`--check --hosted` exits 4 and names each one. Nothing in `os-release.yml` routes to it yet. The hosted job, its
-queue and the shared reservation store wait on the decisions in the Agent design checkpoint:
+`--check --hosted` exits 4 and names each one.
+
+**App's portable inputs (`--portable-inputs PATH`, with `--hosted` only).** App's bind step writes one nonsecret
+runtime record on the runner; it is never committed. Schema `roseos.agent-portable-inputs.v1`, exactly these keys:
+- `schema`;
+- `appSdkRoot`, `javaHome` and `publicAssetsDir`: absolute normalized paths (no trailing slash, `.`, `..` or `//`);
+- `publicAssetDigests`: exactly the five public connection inputs of `host-app-build.PUBLIC_ASSETS`, each mapped to
+  its lowercase sha256;
+- `aapt` and `apksigner`: absolute normalized paths to the independent verifier tools.
+
+The file must be a regular file of at most 64 KiB, with no repeated key and no non-finite number. It fills only those
+fields of the committed config, and never one the committed config already binds. Everything else comes from the
+committed config alone: the signing identity, secret names and version, `minimumTestedOs` and the reservation store.
+The reservation and ownership checks and the cleanup are unchanged, and the builder route refuses the option.
+`host-app-build.build()` still checks the SDK layout (`platforms/android-35`, `build-tools/android-15`) and the JDK.
+Its `restore()` checks the five inputs against `public-assets-receipt.json` and these pins. The receipt records
+`portableInputs` (the record's schema and sha256, no paths). With a valid record, `--check --hosted` names only the
+reservation store.
+
+Nothing in `os-release.yml` routes to it yet. The hosted job, its queue and the shared reservation store wait on the
+decisions in the Agent design checkpoint:
 - the reservation store and its write credential;
 - Frankel reserving in the same store;
-- App's portable inputs;
 - Infra's check of provider admission for a hosted runner.
 
 `scripts/tests/test_agent_hosted_release.py` checks the route with fakes only.
