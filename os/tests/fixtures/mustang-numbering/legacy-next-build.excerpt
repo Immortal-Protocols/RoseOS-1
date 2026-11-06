@@ -1,0 +1,9 @@
+def next_build(builds, now, limit):
+    today = now.strftime('%Y%m%d')
+    newest = max(builds) if builds else None
+    sequence = max([int(b[8:]) for b in builds if b[:8] == today] or [0]) + 1
+    if newest and newest[:8] > today:
+        raise Refused(f'clock_behind: known build {newest} is dated after the dispatch day {today}')
+    if sequence > limit:
+        raise Refused(f'build_sequence_exhausted: {today} already has build {today}{limit:02d}')
+    return f'{today}{sequence:02d}'

@@ -1018,5 +1018,132 @@ class AdapterTest(unittest.TestCase):
             self.assertFalse((self.root/'public-stage').exists())
 
 
+class NumberingCompatibilityTest(unittest.TestCase):
+    """Source/protocol evidence only. These tests never reserve a build number."""
+    fixtures = ROOT/'os/tests/fixtures/mustang-numbering'
+    synthetic_ids = ('9999123200', '9999999999')
+
+    def test_frozen_upstream_excerpts_match_the_manifest_pins(self):
+        import hashlib
+        import xml.etree.ElementTree as ET
+        audit=json.loads((self.fixtures/'sources.json').read_text())
+        projects={p.attrib['name']:p.attrib['revision']
+                  for p in ET.parse(ROOT/'os/pinned-manifest.xml').iter('project')}
+        self.assertFalse(audit['runtimeProof'])
+        for source in audit['sources']:
+            with self.subTest(source=source['key']):
+                self.assertEqual(source['revision'],projects[source['name']])
+                self.assertRegex(source['gitBlob'],r'^[0-9a-f]{40}$')
+                self.assertRegex(source['sourceSha256'],r'^[0-9a-f]{64}$')
+                for excerpt in source['excerpts']:
+                    data=(self.fixtures/excerpt['file']).read_bytes()
+                    self.assertEqual(hashlib.sha256(data).hexdigest(),excerpt['sha256'])
+                    self.assertEqual(len(data.splitlines()),excerpt['lastLine']-excerpt['firstLine']+1)
+        failed=audit['failedRunSource']
+        self.assertFalse(failed['allocationKnown'])
+        self.assertFalse(failed['runtimeExecutionAttested'])
+        self.assertTrue(failed['reservationMayPrecedeAttemptReceipt'])
+        for excerpt in failed['excerpts']:
+            data=(self.fixtures/excerpt['file']).read_bytes()
+            self.assertEqual(hashlib.sha256(data).hexdigest(),excerpt['sha256'])
+            self.assertEqual(len(data.splitlines()),excerpt['lastLine']-excerpt['firstLine']+1)
+
+    def test_captured_legacy_generator_ceiling_without_any_clock_bound(self):
+        import ast
+        import datetime
+        import hashlib
+        import inspect
+        alloc=adapter.module('mustang_numbering_legacy_test','mustang-allocate.py')
+        audit=json.loads((self.fixtures/'sources.json').read_text())['failedRunSource']['generator']
+        frozen=(self.fixtures/audit['file']).read_text()
+        self.assertEqual(hashlib.sha256(frozen.encode()).hexdigest(),audit['sha256'])
+        # The reviewed old function is still the function called by today's date allocator.
+        self.assertEqual(ast.dump(ast.parse(frozen)),ast.dump(ast.parse(inspect.getsource(alloc.allocator.next_build))))
+        self.assertEqual(alloc.DAILY_LIMIT,audit['dailyLimit'])
+        class Refused(ValueError): pass
+        scope={'Refused':Refused}
+        exec(compile(frozen,str(self.fixtures/audit['file']),'exec'),scope)
+        maximum_day=datetime.datetime(datetime.MAXYEAR,12,31,tzinfo=datetime.timezone.utc)
+        consumed=set()
+        for _ in range(99):
+            consumed.add(scope['next_build'](consumed,maximum_day,99))
+        self.assertEqual(max(consumed),audit['maximum'])
+        self.assertEqual(10**10-1-int(audit['maximum']),876800)
+        with self.assertRaisesRegex(Refused,'sequence_exhausted'):
+            scope['next_build'](consumed,maximum_day,99)
+        # A lone ID substitution is unsafe: today's allocator still refuses the new namespace.
+        with self.assertRaisesRegex(alloc.Refused,'clock_behind'):
+            alloc.allocator.next_build(set(self.synthetic_ids),datetime.datetime(2026,1,1),99)
+
+    def test_actual_releasetools_conversion_and_channel_script(self):
+        import ast
+        source=(self.fixtures/'otaTools-313-354.excerpt').read_text()
+        self.assertEqual([n.name for n in ast.parse(source).body],['BuildLegacyOtaMetadata'])
+        scope={'ota_metadata_pb2':SimpleNamespace(OtaMetadata=SimpleNamespace(AB=1,BLOCK=2))}
+        exec(compile(source,'pinned-ota_utils.py','exec'),scope)
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)
+            for build in self.synthetic_ids:
+                post=SimpleNamespace(build=[f'google/mustang/mustang:17/A/{build}:user/release-keys'],
+                    build_incremental=build,sdk_level='37',security_patch_level='2026-10-05',timestamp=4102444801)
+                pre=SimpleNamespace(build=[],device=['mustang'])
+                proto=SimpleNamespace(type=1,wipe=False,downgrade=False,required_cache=0,
+                    postcondition=post,precondition=pre,spl_downgrade=False,property_files={})
+                metadata=scope['BuildLegacyOtaMetadata'](proto)
+                self.assertEqual(metadata['post-build-incremental'],build)
+                archive=root/(build+'.zip')
+                with zipfile.ZipFile(archive,'w') as z:
+                    z.writestr('META-INF/com/android/metadata',''.join(f'{k}={v}\n' for k,v in metadata.items()))
+                result=subprocess.run([sys.executable,str(self.fixtures/'generateMetadata-1-18.excerpt'),str(archive)],
+                                      capture_output=True,text=True,timeout=10)
+                self.assertEqual(result.returncode,0,result.stderr)
+                for channel in ('stable','beta','alpha','testing'):
+                    self.assertEqual((root/('mustang-'+channel)).read_text(),f'{build} 4102444801 mustang {channel}\n')
+                self.assertEqual(ota.ota_metadata(archive,build,'4102444801',
+                    dict(build='2026110302',timestamp='1793742435')),metadata)
+                # Identity magnitude does not bypass full-update timestamp ordering.
+                with self.assertRaisesRegex(ValueError,'newer'):
+                    ota.ota_metadata(archive,build,'4102444801',dict(build='2026110302',timestamp='4102444801'))
+
+    def test_pinned_native_recovery_functions(self):
+        import shutil
+        compiler=shutil.which('g++')
+        if compiler is None: self.skipTest('C++ compiler unavailable; native boundary probe unrun')
+        with tempfile.TemporaryDirectory() as directory:
+            binary=Path(directory)/'recovery-probe'
+            compile_result=subprocess.run([compiler,'-std=c++17','-Wall','-Wextra','-Werror',
+                str(self.fixtures/'RecoveryProbe.cpp'),'-o',str(binary)],capture_output=True,text=True,timeout=30)
+            self.assertEqual(compile_result.returncode,0,compile_result.stderr)
+            for build in self.synthetic_ids:
+                result=subprocess.run([str(binary),build],capture_output=True,text=True,timeout=10)
+                self.assertEqual(result.returncode,0,result.stderr)
+                self.assertIn('8 recovery assertions passed',result.stdout)
+
+    def test_pinned_updater_protocol_block_and_real_release_selector(self):
+        import shutil
+        java=shutil.which('java')
+        if java is None: self.skipTest('Java unavailable; Java boundary probes unrun')
+        modules=subprocess.run([java,'--list-modules'],capture_output=True,text=True,timeout=10)
+        self.assertEqual(modules.returncode,0,modules.stderr)
+        if 'jdk.compiler@' not in modules.stdout:
+            self.skipTest('JDK compiler module unavailable; Java boundary probes unrun')
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)
+            template=(self.fixtures/'UpdaterProbe.java.in').read_text()
+            marker='// PINNED_METADATA_ADMISSION'
+            self.assertEqual(template.count(marker),1)
+            probe=root/'UpdaterProbe.java'
+            probe.write_text(template.replace(marker,(self.fixtures/'updaterService-301-317.excerpt').read_text()))
+            result=subprocess.run([java,'-m','jdk.compiler/com.sun.tools.javac.Main','-d',str(root),str(probe),
+                str(ROOT/'os/overlays/packages/apps/Updater/src/app/seamlessupdate/client/RoseReleases.java'),
+                str(ROOT/'os/tests/MustangReleasesTest.java')],capture_output=True,text=True,timeout=30)
+            self.assertEqual(result.returncode,0,result.stderr)
+            for main,args,expected in [('UpdaterProbe',self.synthetic_ids,'14 updater protocol assertions passed'),
+                    ('app.seamlessupdate.client.MustangReleasesTest',(),'checks passed')]:
+                result=subprocess.run([java,'-ea','-cp',str(root),main,*args],capture_output=True,text=True,timeout=10)
+                self.assertEqual(result.returncode,0,result.stderr)
+                self.assertIn(expected,result.stdout)
+
+
 if __name__=='__main__':
     unittest.main()

@@ -1,0 +1,18 @@
+	// can be parsed as ninja output.
+	ensureEmptyFileExists(ctx, filepath.Join(config.OutDir(), "ninja_build"))
+	ensureEmptyFileExists(ctx, filepath.Join(config.OutDir(), ".out-dir"))
+
+	if buildDateTimeFile, ok := config.environ.Get("BUILD_DATETIME_FILE"); ok {
+		err := os.WriteFile(buildDateTimeFile, []byte(config.buildDateTime), 0666) // a+rw
+		if err != nil {
+			ctx.Fatalln("Failed to write BUILD_DATETIME to file:", err)
+		}
+	} else {
+		ctx.Fatalln("Missing BUILD_DATETIME_FILE")
+	}
+
+	writeValueIfChanged(ctx, filepath.Join(config.OutDir(), "file_name_tag.txt"), config.DistFileNameTag())
+	// Write the build number to a file so it can be read back in
+	// without changing the command line every time.  Avoids rebuilds
+	// when using ninja.
+	writeValueIfChanged(ctx, filepath.Join(config.SoongOutDir(), "build_number.txt"), config.BuildNumber())
