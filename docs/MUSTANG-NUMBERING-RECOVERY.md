@@ -183,8 +183,63 @@ added by this proposal.
 
 ## Reproduction and limits
 
+### Inactive raw Git-object boundary
+
+`scripts/mustang_git_objects.py` adds a pure, read-only codec. It has no transport,
+ref writer, checkpoint provider, credentials, initialization, allocation or
+production integration. The committed numbering policy stays unbound and CLI
+execution refuses. This is source preparation for the Git authority candidate,
+not evidence that such an authority or trustworthy provider exists.
+
+The codec accepts only SHA-1 Git object IDs, raw `(kind, bytes)` objects from an
+injected bounded getter, and explicit commit/total-byte limits. It checks Git's
+`kind length NUL bytes` identity and a deliberately narrow journal format:
+
+- Each tree contains exactly one regular `100644 journal.json` entry. Symlinks,
+  executable files, extra entries, paths and unsupported object kinds refuse.
+- Each blob is canonical JSON with schema `roseos.mustang-git-event.v1`, the
+  exact policy SHA-256 and one event. Genesis alone has a null event.
+- Genesis is a root commit; every later commit has exactly one parent. The
+  supported headers are tree, optional parent, author and committer, followed
+  by the fixed `Mustang numbering journal` message and newline. Extra headers,
+  merges and partial history refuse. Author/committer metadata is syntax only,
+  not authenticated identity or signature evidence.
+
+Complete traversal reuses `mustang_numbering.expected_anchor()` to validate
+counter, run/source, policy, epoch, duplicate-event and timestamp invariants.
+The Git commit OIDs and SHA-256 journal digest remain separate. `History` is
+decoded data, with immutable bytes and copy-returning accessors; it is not a
+committed-consumption or trusted-freshness receipt. Unsupported Git formats fail
+closed rather than falling back to an ordinary source tree.
+
+`Checkpoint` is also only data: a Git OID and canonical anchor bytes. Its type,
+hashes and position in valid ancestry cannot establish provenance or freshness.
+The `CheckpointVerifier` interface requires separately trusted code to establish
+those properties, including authority deletion/force-push uncertainty. There is
+**no implementation or selected trust source**. `confirm_from_objects()` refuses
+when no verifier is supplied, verifies the checkpoint's exact ancestor/prefix,
+invokes that independent verifier, then reuses the existing exact-event
+confirmation. Unknown provenance/freshness must raise; transport-supplied flags
+are not accepted as a result. An arbitrary callback cannot become trusted merely
+by implementing this interface; provider selection and verification remain absent.
+
+Tests supply only in-memory raw-object getters and independently controlled
+fixture verifiers. Native `git hash-object` cross-checks run without `-w` or ref
+operations. Cases cover object corruption and bounds, missing/genesis/merge/tree
+errors, stale or forked checkpoints, jointly stale snapshots, changed policy,
+duplicate events, exact confirmation after a lost reply and advanced head, and
+verifier/getter failure. They prove codec/protocol mechanics, not external
+authentication, freshness, protected refs or operational recovery guarantees.
+
+A future reader must enforce byte limits while obtaining objects; checking bytes
+after return cannot prove its transport's memory bound. A future CAS writer and
+the `beforeOid` conflict/service-response cases remain unimplemented. Production
+binding still requires actual authority identity, permitted writer/reader scope,
+ref protection evidence and a verified independent recovery checkpoint source.
+
 Run `python3 scripts/tests/test_mustang_edge_gate.py NumberingCompatibilityTest CounterRecoveryContractTest -v`
 for the focused evidence/contract, or the already registered complete Mustang edge suite.
+Run the same script with `GitJournalCodecTest -v` for the raw-object boundary.
 It invokes the available C++ compiler and Java compiler module in temporary
 directories, with controlled platform stand-ins. Missing compilers produce an
 explicit skip. No reservation, real build ID, native OS/app build, signing,

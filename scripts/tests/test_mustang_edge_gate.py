@@ -1394,5 +1394,246 @@ class CounterRecoveryContractTest(unittest.TestCase):
         self.assertFalse(self.policy['legacyAllocationKnown'])
 
 
+class GitJournalCodecTest(unittest.TestCase):
+    """Raw synthetic Git objects and independent fixture checks, never a service."""
+    def setUp(self):
+        import mustang_git_objects
+        import mustang_numbering
+        self.codec=mustang_git_objects;self.contract=mustang_numbering
+        self.policy=json.loads((ROOT/'os/build-only/mustang-numbering.json').read_text())
+        self.policy.update(status='bound',epoch='1'*64,authority='https://counter.synthetic.invalid/mustang',
+                           minimumTimestamp='1000')
+        self.objects={};self.calls=[];self.events=[]
+        self.limits=self.codec.Limits(commits=8,total_bytes=100000)
+        self.head=self.make_commit(None,None)
+        self.genesis=self.head
+
+    def put(self,kind,data):
+        identity=self.codec.object_oid(kind,data)
+        self.objects[identity]=(kind,data)
+        return identity
+
+    def get(self,identity,limit):
+        self.calls.append((identity,limit))
+        return self.objects[identity]
+
+    def make_commit(self,event,parent,blob=None,tree=None,headers=None):
+        if tree is None:
+            if blob is None:
+                blob=self.codec.canonical(dict(schema='roseos.mustang-git-event.v1',
+                    policySha256=self.contract.policy(self.policy),event=event))
+            blob_oid=self.put('blob',blob)
+            tree=self.codec.TREE_PREFIX+bytes.fromhex(blob_oid)
+        tree_oid=self.put('tree',tree)
+        if headers is None:
+            headers=(b'tree '+tree_oid.encode()+b'\n'+
+                (b'parent '+parent.encode()+b'\n' if parent else b'')+
+                b'author Synthetic Fixture <fixture@example.invalid> 0 +0000\n'+
+                b'committer Synthetic Fixture <fixture@example.invalid> 0 +0000')
+        return self.put('commit',headers+b'\n\n'+self.codec.MESSAGE)
+
+    def append(self,run='101',epoch='1001'):
+        anchor=self.contract.expected_anchor(self.policy,self.events)
+        context=dict(repositoryId='1428996648',workflow=self.contract.WORKFLOW,runId=run,attempt=1,source='a'*40)
+        proposal=self.contract.propose(self.policy,anchor,self.events,context,epoch)
+        self.head=self.make_commit(proposal['reservation'],self.head)
+        self.events.append(proposal['reservation'])
+        return proposal
+
+    def checkpoint(self):
+        return self.codec.Checkpoint(self.head,self.codec.canonical(self.contract.expected_anchor(self.policy,self.events)))
+
+    def decode(self,head=None,limits=None):
+        return self.codec.decode_history(self.policy,head or self.head,self.get,limits or self.limits)
+
+    def verifier(self,checkpoint,current=None,available=True):
+        # Test-only state is kept separately from the getter's returned bytes.
+        # No real authenticated/fresh recovery provider is implemented here.
+        expected_head=current or self.head
+        def verify(candidate,observed):
+            if not available: raise ValueError('fixture provenance/freshness/controls unknown')
+            if candidate!=checkpoint or observed.git_oids[-1]!=expected_head:
+                raise ValueError('fixture checkpoint stale or authority replayed')
+        return verify
+
+    def confirm(self,proposal,checkpoint=None,verify=None,head=None):
+        checkpoint=checkpoint or self.checkpoint()
+        return self.codec.confirm_from_objects(self.policy,proposal,head or self.head,self.get,self.limits,
+                                               checkpoint,verify)
+
+    def test_complete_history_reuses_contract_and_keeps_two_hash_domains_separate(self):
+        self.append();self.append('102','1002')
+        observed=self.decode()
+        self.assertEqual(observed.events,self.events)
+        self.assertEqual(observed.anchor,self.contract.expected_anchor(self.policy,self.events))
+        self.assertEqual(observed.git_oids[0],self.genesis)
+        self.assertEqual(observed.git_oids[-1],self.head)
+        self.assertEqual(len(observed.git_oids),3)
+        self.assertEqual(observed.events[0]['buildTimestamp'],'1001')
+        self.assertEqual(len(self.head),40)
+        self.assertEqual(len(observed.anchor['head']),64)
+        self.assertGreater(observed.bytes_read,0)
+        self.calls.clear()
+        with self.assertRaisesRegex(ValueError,'separate'): self.decode(observed.anchor['head'])
+        self.assertEqual(self.calls,[])
+
+    def test_object_ids_match_native_git_without_object_or_ref_writes(self):
+        self.append()
+        for identity,(kind,data) in self.objects.items():
+            result=subprocess.run(['git','hash-object','--no-filters','-t',kind,'--stdin'],input=data,
+                capture_output=True,timeout=10,cwd='/tmp',env=dict(PATH=os.environ.get('PATH','/usr/bin:/bin'),
+                    GIT_CONFIG_GLOBAL='/dev/null',GIT_CONFIG_NOSYSTEM='1',GIT_CEILING_DIRECTORIES='/',
+                    GIT_DEFAULT_HASH='sha1',LC_ALL='C'))
+            self.assertEqual(result.returncode,0,result.stderr)
+            self.assertEqual(result.stdout.strip().decode(),identity)
+
+    def test_no_provider_or_unbound_policy_cannot_confirm_and_does_not_read_objects(self):
+        proposal=self.append()
+        checkpoint=self.checkpoint()
+        with self.assertRaisesRegex(ValueError,'verification unavailable'): self.confirm(proposal,checkpoint)
+        self.assertEqual(self.calls,[])
+        self.policy['status']='unbound'
+        with self.assertRaisesRegex(ValueError,'unbound'): self.decode()
+        self.assertEqual(self.calls,[])
+        result=subprocess.run([sys.executable,str(ROOT/'scripts/mustang_git_objects.py')],
+                              capture_output=True,text=True,timeout=10)
+        self.assertNotEqual(result.returncode,0)
+        self.assertIn('no transport',result.stderr)
+
+    def test_lost_reply_after_advanced_head_is_exact_and_idempotent(self):
+        first=self.append();self.append('102','1002')
+        checkpoint=self.checkpoint();verify=self.verifier(checkpoint)
+        before=copy.deepcopy(self.objects)
+        self.assertEqual(self.confirm(first,checkpoint,verify),first['reservation'])
+        self.assertEqual(self.confirm(first,checkpoint,verify),first['reservation'])
+        self.assertEqual(self.objects,before)
+        self.assertEqual(len(self.events),2)
+
+    def test_missing_or_corrupt_objects_never_retry_or_infer_nonconsumption(self):
+        self.append();identity=self.head;kind,raw=self.objects[identity]
+        del self.objects[identity]
+        with self.assertRaises(KeyError): self.decode()
+        self.assertEqual(len(self.calls),1)
+        self.calls.clear();self.objects[identity]=(kind,raw+b'changed')
+        with self.assertRaisesRegex(ValueError,'identity differs'): self.decode()
+        self.assertEqual(len(self.calls),1)
+        self.calls.clear();self.objects[identity]=('blob',raw)
+        with self.assertRaisesRegex(ValueError,'kind/byte'): self.decode()
+        self.assertEqual(len(self.calls),1)
+        self.calls.clear();self.objects[identity]=(kind,raw)
+        del self.objects[self.genesis]
+        with self.assertRaises(KeyError): self.decode()
+        self.assertEqual(sum(item[0]==self.genesis for item in self.calls),1)
+        self.assertEqual(self.calls[-1][0],self.genesis)
+
+    def test_getter_denial_propagates_without_retry_or_fallback(self):
+        calls=[]
+        def denied(identity,limit):
+            calls.append(identity)
+            raise PermissionError('synthetic getter denial, not a real service')
+        with self.assertRaises(PermissionError):
+            self.codec.decode_history(self.policy,self.head,denied,self.limits)
+        self.assertEqual(calls,[self.head])
+
+    def test_wrong_tree_modes_names_extra_entries_and_zero_object_id_refuse(self):
+        blob=self.put('blob',b'{}\n')
+        good=self.codec.TREE_PREFIX+bytes.fromhex(blob)
+        for tree in (good.replace(b'100644',b'120000'),good.replace(b'100644',b'100755'),
+                     good.replace(b'journal.json',b'../evil.json'),good+good,
+                     self.codec.TREE_PREFIX+b'\0'*20):
+            with self.subTest(tree=tree[:30]),self.assertRaises(ValueError):
+                self.decode(self.make_commit(None,None,tree=tree))
+
+    def test_merge_extra_headers_and_noncanonical_commit_layout_refuse(self):
+        self.append();_,raw=self.objects[self.head]
+        headers,message=raw.split(b'\n\n',1)
+        for changed in (headers+b'\nparent '+self.genesis.encode(),headers+b'\ngpgsig unsupported',
+                        headers.replace(b'author ',b'encoding '),headers+b'\0',b''):
+            with self.subTest(headers=changed[:40]),self.assertRaises(ValueError):
+                self.decode(self.put('commit',changed+b'\n\n'+message))
+        with self.assertRaises(ValueError): self.decode(self.put('commit',headers+b'\n\nwrong message\n'))
+
+    def test_noncanonical_duplicate_and_invalid_json_refuse_even_when_git_hashes_match(self):
+        for blob in (b'{"schema":"a","schema":"b"}\n',b'\xff',b'{"x": NaN}\n',b'{ "x": 1 }\n'):
+            with self.subTest(blob=blob),self.assertRaises(ValueError):
+                self.decode(self.make_commit(None,None,blob=blob))
+
+    def test_incomplete_genesis_and_oversized_objects_or_history_refuse(self):
+        proposal=self.append()
+        with self.assertRaisesRegex(ValueError,'genesis'): self.decode(self.make_commit(proposal['reservation'],None))
+        with self.assertRaisesRegex(ValueError,'genesis'): self.decode(self.make_commit(None,self.head))
+        observed=self.decode()
+        self.assertEqual(self.decode(limits=self.codec.Limits(2,observed.bytes_read)).events,self.events)
+        for limits in (self.codec.Limits(1,100000),self.codec.Limits(2,observed.bytes_read-1),
+                       self.codec.Limits(True,100000),self.codec.Limits(2,0)):
+            with self.subTest(limits=limits),self.assertRaises(ValueError): self.decode(limits=limits)
+        kind,raw=self.objects[self.head];self.objects[self.head]=(kind,raw+b'x'*4096)
+        with self.assertRaisesRegex(ValueError,'byte bound'): self.decode()
+
+    def test_duplicate_run_changed_policy_and_changed_event_binding_refuse(self):
+        first=self.append()
+        duplicate=copy.deepcopy(first['reservation'])
+        duplicate.update(counter=2,build=self.contract.build_for_counter(2),
+                         previous=self.contract.digest(first['reservation']),buildTimestamp='1002')
+        with self.assertRaisesRegex(ValueError,'already consumes'):
+            self.decode(self.make_commit(duplicate,self.head))
+        changed=copy.deepcopy(first['reservation']);changed['build']='9999999999'
+        with self.assertRaises(ValueError): self.decode(self.make_commit(changed,self.genesis))
+        original=self.policy;self.policy=dict(self.policy,minimumTimestamp='1')
+        with self.assertRaisesRegex(ValueError,'policy differs'): self.decode()
+        self.policy=original
+
+    def test_typed_checkpoint_and_flags_do_not_prove_provenance_or_freshness(self):
+        proposal=self.append();checkpoint=self.checkpoint()
+        with self.assertRaisesRegex(ValueError,'unknown'):
+            self.confirm(proposal,checkpoint,self.verifier(checkpoint,available=False))
+        for verdict in (True,False,{'verified':True}):
+            with self.subTest(verdict=verdict),self.assertRaisesRegex(ValueError,'flags'):
+                self.confirm(proposal,checkpoint,lambda *args:verdict)
+        extra=dict(self.contract.expected_anchor(self.policy,self.events),fresh=True)
+        flagged=self.codec.Checkpoint(self.head,self.codec.canonical(extra))
+        with self.assertRaises(ValueError): self.confirm(proposal,flagged,lambda *args:None)
+        oversized=self.codec.Checkpoint(self.head,b' '*65537)
+        with self.assertRaisesRegex(ValueError,'bounded'): self.confirm(proposal,oversized,lambda *args:None)
+
+    def test_an_unimplemented_typed_provider_cannot_become_a_successful_noop(self):
+        class MissingProvider(self.codec.CheckpointVerifier):
+            pass
+        with self.assertRaises(TypeError): MissingProvider()
+
+    def test_stale_checkpoint_joint_stale_snapshot_and_rollback_refuse(self):
+        old_head=self.head;old_checkpoint=self.checkpoint()
+        first=self.append();current_checkpoint=self.checkpoint()
+        # Both old bytes and old hashes are valid. The separate fixture verifier
+        # knows the current checkpoint/head; the codec alone cannot know freshness.
+        self.assertEqual(self.decode(old_head).events,[])
+        verify=self.verifier(current_checkpoint)
+        with self.assertRaisesRegex(ValueError,'stale'): self.confirm(first,old_checkpoint,verify)
+        with self.assertRaisesRegex(ValueError,'stale'): self.confirm(first,old_checkpoint,verify,old_head)
+        with self.assertRaisesRegex(ValueError,'rollback/fork'): self.confirm(first,current_checkpoint,verify,old_head)
+
+    def test_forked_authority_or_unknown_deletion_force_push_controls_refuse(self):
+        first=self.append();checkpoint=self.checkpoint()
+        fork=copy.deepcopy(first['reservation']);fork['run']['runId']='999'
+        fork_head=self.make_commit(fork,self.genesis)
+        with self.assertRaisesRegex(ValueError,'rollback/fork'):
+            self.confirm(first,checkpoint,self.verifier(checkpoint),fork_head)
+        with self.assertRaisesRegex(ValueError,'controls unknown'):
+            self.confirm(first,checkpoint,self.verifier(checkpoint,available=False))
+
+    def test_foreign_proposal_cannot_be_confirmed_from_valid_objects_and_checkpoint(self):
+        first=self.append();checkpoint=self.checkpoint()
+        forged=copy.deepcopy(first);forged['reservation']['run']['source']='b'*40
+        with self.assertRaises(ValueError): self.confirm(forged,checkpoint,self.verifier(checkpoint))
+
+    def test_decoded_data_copies_cannot_mutate_the_verified_input(self):
+        first=self.append();checkpoint=self.checkpoint()
+        def verify(candidate,history):
+            self.verifier(checkpoint)(candidate,history)
+            history.events[0]['run']['source']='b'*40
+            history.anchor['head']='0'*64
+        self.assertEqual(self.confirm(first,checkpoint,verify),first['reservation'])
+
+
 if __name__=='__main__':
     unittest.main()
