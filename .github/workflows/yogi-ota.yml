@@ -99,7 +99,46 @@ jobs:
     if: inputs.stage == 'readiness'
     runs-on: [self-hosted, roseos-yogi-builder-20261105-b]
     timeout-minutes: 15
+    # Nathan-approved readiness-only routing exception: organization runner eligibility is unknown (403, not retried),
+    # so another eligible runner could receive this job. Its first step refuses before checkout unless the runner name
+    # and the GCE project/zone/name/numeric ID are exactly the replacement builder's; nothing later runs after that
+    # refusal, the receipt upload included. No OIDC token, secret or variable is available to this job.
+    permissions:
+      contents: read
+    env:
+      YOGI_EXPECT_RUNNER: roseos-yogi-builder-20261105-b
+      YOGI_EXPECT_PROJECT: protocols-465723
+      YOGI_EXPECT_ZONE: us-west2-b
+      YOGI_EXPECT_INSTANCE: roseos-yogi-builder-20261105-b
+      YOGI_EXPECT_INSTANCE_ID: '2720796557371812468'
     steps:
+      - id: identity
+        name: Exact runner and GCE identity before checkout (refusal stops every later step)
+        run: |
+          python3 -I - <<'PY'
+          import os, sys, urllib.request
+          def refuse(why):
+              print(f'::error::Yogi readiness refused before checkout: {why}')
+              sys.exit(1)
+          if os.environ.get('RUNNER_NAME') != os.environ['YOGI_EXPECT_RUNNER']:
+              refuse('runner name is not the registered replacement runner')
+          def meta(key):
+              request = urllib.request.Request('http://metadata.google.internal/computeMetadata/v1/' + key,
+                                               headers={'Metadata-Flavor': 'Google'})
+              opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))  # never via a proxy
+              with opener.open(request, timeout=5) as response:
+                  return response.read(4096).decode().strip()
+          try:
+              seen = (meta('project/project-id'), meta('instance/zone').rsplit('/', 1)[-1], meta('instance/name'),
+                      meta('instance/id'))
+          except Exception as error:
+              refuse(f'host identity unavailable ({type(error).__name__})')
+          expected = tuple(os.environ[k] for k in ('YOGI_EXPECT_PROJECT', 'YOGI_EXPECT_ZONE', 'YOGI_EXPECT_INSTANCE',
+                                                   'YOGI_EXPECT_INSTANCE_ID'))
+          if seen != expected:
+              refuse('host identity is not the exact replacement project/zone/name/numeric ID')
+          print('Yogi readiness identity matches the replacement builder')
+          PY
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
@@ -107,8 +146,8 @@ jobs:
         run: python3 scripts/yogi_ota.py guard --stage readiness
       - name: Host identity, storage, build paths and tools (no build, keys, signing, publication or downloads)
         run: python3 scripts/yogi_ota.py readiness --out "$RUNNER_TEMP/yogi-readiness"
-      - name: Readiness receipt only
-        if: always()
+      - name: Readiness receipt only (never after an identity refusal)
+        if: always() && steps.identity.outcome == 'success'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: yogi-readiness-${{ github.run_id }}-${{ github.run_attempt }}
