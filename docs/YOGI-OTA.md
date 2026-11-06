@@ -66,8 +66,8 @@ Package, provider and permission names are unchanged (`dev.pixel.voice`,
    `os/signing-bootstrap/yogi-bootstrap-receipt.json`. No image is built or signed.
 2. **controller** (hosted, `YOGI_CONTROLLER_SERVICE_ACCOUNT` through its own provider
    `YOGI_CONTROLLER_WORKLOAD_IDENTITY_PROVIDER`; both checked non-empty before login): starts only
-   `roseos-yogi-builder-20261103-a` and records whether it did.
-3. **build** (`[self-hosted, roseos-yogi-builder]`), under `/srv/rose-yogi/yogi-build.lock`:
+   the exact replacement VM and records whether it did (see "Replacement builder" below).
+3. **build** (`[self-hosted, roseos-yogi-builder-20261105-b]`), under `/srv/rose-yogi/yogi-build.lock`:
    `preflight` (paths, lock, free space) → `allocate` (build number and
    BUILD_DATETIME strictly above the lab, the bootstrap and every attempt; exclusive
    attempt directory) → `prepare` (byte copy of the retained tree without `out*`;
@@ -100,11 +100,56 @@ until that record exists.
 Frankel, Mustang, Rango, Blazer and Agent builds keep their own workflows, VMs,
 locks and queues; nothing here edits `os-release.yml` or `release-pipeline.py`.
 
+## Replacement builder
+
+The route targets only the verified replacement (Mac operator receipts relayed by Chief, 2026-11-06), bound in
+`os/ota/yogi.json` `builder`, `scripts/yogi_ota.py` and `os/release-pipeline/lanes/capacity.json`:
+
+| Field | Value |
+| --- | --- |
+| Project / zone | `protocols-465723` / `us-west2-b` |
+| VM / numeric ID | `roseos-yogi-builder-20261105-b` / `2720796557371812468` |
+| Boot disk | `938743673401685238`, 2,000 GiB pd-ssd boot attachment; `/srv/rose-yogi` and the source tree on filesystem device 2049 |
+| Runner | ID 21, `roseos-yogi-builder-20261105-b`, v2.338.2, repository-scoped, poolId 1 default group, service disabled/inactive |
+| Controller | `roseos-yogi-controller@…`, role `roseosYogiControllerV1` (get/start/stop on this VM; the original zone-a binding is retained) |
+
+The original zone-a VM `roseos-yogi-builder-20261103-a` is preserved but retired: config, controller and ownership
+records refuse it, and nothing falls back to it, Frankel or Mustang.
+
+**Controller.** Every describe, including every poll, requires the project, zone, name and numeric ID. START writes
+the v2 ownership record first, holding the exact tuple, source SHA, workflow ref, run ID and attempt, and the state
+observed before START. That record is exported by an `always()` step, so an uncertain START still leaves cleanup its
+evidence. START is never retried. A VM already RUNNING is never adopted or stopped. Cleanup stops only with this run's
+own valid record that started the VM. Legacy (v1), missing, stale, foreign-tuple and foreign-run/attempt records stop
+nothing.
+
+**Readiness only** (`stage=readiness`): guard → controller → `readiness` job on the replacement label. It checks:
+- GCE metadata id/name/zone/project equal the tuple;
+- the runner name;
+- root/source/attempts directories, the lock and the private cover input;
+- free space;
+- `build/envsetup.sh` resolving inside the tree, `.repo` and the release script;
+- the pinned aapt/apksigner/JDK 21 and host tools.
+
+It writes only `yogi-readiness.json`. It has no login, id-token, secret, build, download, key bootstrap, signing or
+publication. It does not change `builder.status`. Build, key-bootstrap and signing jobs never run for this stage and
+stay closed while `builder.status` is not `ready`.
+
+**Missing receipt fields** (the guard names them; every builder stage, readiness included, stays closed):
+- `runner.labels`: the full server-side label set was not read back. Only `roseos-yogi-builder` was supplied, so
+  the replacement-specific label `roseos-yogi-builder-20261105-b` is not evidenced as installed.
+- `storage.mounts`: guest device, filesystem UUID and mount point were not captured. Device number 2049 does not
+  identify them.
+
+Recorded but noted: no organization runner-group ID, since the runner is repository-scoped with the default group.
+Registration does not restrict the runner to Yogi workflows; label routing is the only separation. The controller
+account can also address the original VM.
+
 ## Remaining prerequisites (not performed by source)
 
 | Prerequisite | Owner | Records |
 | --- | --- | --- |
-| Repository-scoped runner `roseos-yogi-builder` on the Yogi VM; outbound GitHub/googleapis; a controller identity with get/start/stop on only that instance (`vars.YOGI_CONTROLLER_SERVICE_ACCOUNT`) through a Yogi controller workload identity provider admitting `yogi-ota.yml` (`vars.YOGI_CONTROLLER_WORKLOAD_IDENTITY_PROVIDER`; the shared roseos-actions provider admits only os-release.yml); signer jobs keep the existing signer provider. Open gap: if `vars.GCP_WORKLOAD_IDENTITY_PROVIDER` is the shared roseos-actions provider, the `key-bootstrap` and `sign` signer logins from `yogi-ota.yml` would be refused as well; which provider the Yogi signer uses is a Signing/Infra decision (os-sign.yml uses its own roseos-signing pool). Both jobs are already held by the unbound `yogi-v1` and the runner guard | Dev Infra | `builder.status: ready` |
+| Repository-scoped runner on the replacement Yogi VM carrying the replacement-specific label `roseos-yogi-builder-20261105-b` (server-side label readback); outbound GitHub/googleapis; a controller identity with get/start/stop on only that instance (`vars.YOGI_CONTROLLER_SERVICE_ACCOUNT`) through a Yogi controller workload identity provider admitting `yogi-ota.yml` (`vars.YOGI_CONTROLLER_WORKLOAD_IDENTITY_PROVIDER`; the shared roseos-actions provider admits only os-release.yml); signer jobs keep the existing signer provider. Open gap: if `vars.GCP_WORKLOAD_IDENTITY_PROVIDER` is the shared roseos-actions provider, the `key-bootstrap` and `sign` signer logins from `yogi-ota.yml` would be refused as well; which provider the Yogi signer uses is a Signing/Infra decision (os-sign.yml uses its own roseos-signing pool). Both jobs are already held by the unbound `yogi-v1` and the runner guard | Dev Infra | `builder.status: ready` |
 | `yogi-v1` profile (Signing-owned, separate authority; tools from a same-run `fold_tool_proof.py` localProof on the Yogi builder); the manual `key-bootstrap` stage of `yogi-ota.yml` on the Yogi runner (source present, never run; needs Signing's `--lock` override); the two containers; one time-boxed binding per secret (get, versions.list, versions.add; at most 4 h) for one bootstrap; a time-boxed accessor on version 1 per delivery; escrow decision | Signing and Release, approved by Nathan | profile `resource-bound` (checked by `sign()` and the guard before any login), bootstrap receipt (project, empty reasons, workspace removed), `signing.access` |
 | Release's `app-inputs-export` run for Frankel 2026110403 (PR #565) by the Frankel builder's runtime owner, then Release's committed record `os/app-inputs/frankel-2026110403.json` | Release | record present on main (guard binds it) |
 | Yogi publication in pixel-ota | Nathan | `publicationEnabled: true` |
