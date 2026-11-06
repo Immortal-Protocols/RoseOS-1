@@ -487,7 +487,8 @@ also refuses any workflow but this one (`launcher3_lane.check_context`). Frankel
    A missing, foreign, changed or malformed record refuses STOP, and a VM already running at start is left
    running. It never uses the plain `stop-builder`.
 
-The queue `launcher3-compile` keeps every waiting run (`queue: max`, no cancellation). It is no release, Yogi or Agent
+The queue `launcher3-compile` keeps waiting runs in order up to GitHub's limit of 100 pending runs (`queue: max`;
+a run past that limit can still be dropped), and `cancel-in-progress` is off. It is no release, Yogi or Agent
 queue. In the capacity map the `harness` lane names this workflow, no `os-release.yml` mode and its binding
 (`activeBinding`). Its `runtimeStatus: retired-shared-host` means it claims no capacity: the `host` field records
 only where its earlier runs ran. `test_launcher3_compile_workflow.py` and `test_lane_capacity.py` check all of this.

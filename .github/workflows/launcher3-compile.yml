@@ -16,7 +16,8 @@ permissions:
 
 concurrency:
   # The harness's own queue (the bound lane.queue must equal it): never os-release-frankel, yogi-ota or an Agent queue.
-  # Every waiting run is kept, in order; none is cancelled.
+  # queue: max keeps waiting runs in order up to GitHub's limit of 100 pending runs (a run past it can still be
+  # dropped); cancel-in-progress is off, so a running compile is never cancelled by a newer dispatch.
   group: launcher3-compile
   cancel-in-progress: false
   queue: max
