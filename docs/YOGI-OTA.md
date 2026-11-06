@@ -145,6 +145,12 @@ another eligible runner carrying the route labels could receive the readiness jo
 pre-checkout identity refusal. `key-bootstrap`, `bootstrap` and `ota` still require `runner.organizationEligibility`,
 because their jobs mint OIDC tokens or handle build and signing inputs and need pre-dispatch exclusivity.
 
+**Direct operator route (source only, unbound).** `docs/YOGI-DIRECT.md` / `scripts/yogi_direct.py` define a separate,
+operator-driven path over host-key-pinned SSH that uses no GitHub self-hosted scheduling. It covers `check` and an
+unsigned `compile` of bootstrap A; signing, key bootstrap, install, staging and publication are refused on it. It does
+not change anything on this runner route: `runner.organizationEligibility`, `builder.status` and every gate above stay
+as they are. `builder.direct.status` is `unbound` until its recorded dependencies and a separate approval exist.
+
 **Receipt fields.**
 - **Route label (recorded).** Chief-verified operator relay (2026-11-06; no timestamp recorded):
   `roseos-yogi-builder-20261105-b` was added to repository runner 21 and read back, with `self-hosted, Linux, X64,

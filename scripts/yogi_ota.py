@@ -504,18 +504,28 @@ def identity_refusal(cfg, env=os.environ, metadata=metadata_read):
     return seen
 
 
-def readiness(cfg, out, env=os.environ, metadata=metadata_read, which=shutil.which, free=shutil.disk_usage):
-    """Readiness only, on the replacement runner: host identity, storage, build paths and tools. No build, download,
-    key bootstrap, signing, publication or provisioning; nothing is written but the receipt under --out."""
-    guard(cfg, 'readiness')
+def readiness(cfg, out, env=os.environ, metadata=metadata_read, which=shutil.which, free=shutil.disk_usage,
+              identity=None):
+    """Readiness only, on the replacement builder: host identity, storage, build paths and tools. No build, download,
+    key bootstrap, signing, publication or provisioning; nothing is written but the receipt under --out.
+
+    The runner route (default) refuses unless the runner name and GCE identity match. The direct operator route
+    (yogi_direct.py) passes its own `identity` callable instead: it refuses the same way or returns the (check, detail)
+    pairs it established; it is never given a runner name. Either way the identity refusal runs first."""
     b, checks = cfg['builder'], []
-    identity_refusal(cfg, env, metadata)  # first: a wrong or unavailable identity inspects and writes nothing
+    if identity is None:
+        guard(cfg, 'readiness')
+        identity_refusal(cfg, env, metadata)  # first: a wrong or unavailable identity inspects and writes nothing
+        established = [('host identity is the exact replacement tuple', json.dumps(tuple_of(cfg), sort_keys=True)),
+                       ('runner is the registered replacement runner', env.get('RUNNER_NAME', ''))]
+    else:
+        established = identity(cfg)  # the direct route's own guard and identity refusal, before any inspection
 
     def check(name, condition, detail=''):
         checks.append({'check': name, 'passed': bool(condition), 'detail': detail})
 
-    check('host identity is the exact replacement tuple', True, json.dumps(tuple_of(cfg), sort_keys=True))
-    check('runner is the registered replacement runner', True, env.get('RUNNER_NAME', ''))
+    for name, detail in established:
+        check(name, True, detail)
     for key in ('root', 'retainedSource', 'attempts'):
         try:
             regular_dir(b[key], key)
@@ -572,8 +582,9 @@ def attempt_dir(cfg, build):
     return Path(cfg['builder']['attempts'])/f'yogi-{build}'
 
 
-def allocate(cfg, run_id, attempt, source, now=None):
-    """A strictly newer build number and BUILD_DATETIME than the lab, the bootstrap and every earlier Yogi attempt."""
+def allocate(cfg, run_id, attempt, source, now=None, operation=None):
+    """A strictly newer build number and BUILD_DATETIME than the lab, the bootstrap and every earlier Yogi attempt.
+    A direct operator operation records its own operation id instead of a workflow run (never a fabricated run)."""
     now = now or datetime.datetime.now(datetime.timezone.utc)
     attempts = regular_dir(cfg['builder']['attempts'], 'Yogi attempts directory')
     used = [int(cfg['allocationFloor']['build'])]
@@ -596,6 +607,8 @@ def allocate(cfg, run_id, attempt, source, now=None):
     directory.mkdir(mode=0o700)  # exclusive: a concurrent or repeated allocation fails here
     record = {'schema': 'roseos.yogi-allocation.v1', 'device': DEVICE, 'build': str(build), 'timestamp': str(stamp),
               'source': source, 'runId': run_id, 'runAttempt': attempt, 'reservedAt': now.strftime('%Y-%m-%dT%H:%M:%SZ')}
+    if operation is not None:
+        record['directOperation'] = operation
     release_receipts.write_once(directory/'allocation.json', record)
     return record
 
