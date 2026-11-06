@@ -928,63 +928,116 @@ class ReadinessTest(Fixture):
         for stage in ('key-bootstrap', 'bootstrap', 'ota'):  # builder.status still closes every build/signing path
             self.assertTrue(any('builder runner/controller not ready' in b for b in yogi.blockers(self.cfg, stage)))
 
-    def test_wrong_host_space_or_tools_fail_and_still_leave_a_receipt(self):
+    def refused_without_inspection(self, meta, env, pattern, out):
+        """Readiness refuses with `pattern` and touches nothing after the identity step: no path, tool or space probe."""
+        def never(*args, **kwargs):
+            raise AssertionError('inspected after an identity refusal')
+        with mock.patch.object(yogi, 'regular_dir', never), mock.patch.object(yogi, 'builder_lock', never):
+            with self.assertRaisesRegex(yogi.Refused, pattern):
+                yogi.readiness(self.cfg, out, env=env, metadata=meta, which=never, free=never)
+        self.assertFalse(Path(out).exists())
+
+    def test_wrong_or_unavailable_host_identity_refuses_before_any_inspection_or_receipt(self):
+        good = self.host()
+        env = {'RUNNER_NAME': yogi.INSTANCE, 'GITHUB_SHA': SHA}
         for change in ({'instance/zone': 'projects/123/zones/us-west2-a'}, {'instance/id': '1'},
-                       {'instance/name': 'roseos-yogi-builder-20261103-a'}):
-            with self.subTest(change=sorted(change)):
-                meta = dict(self.host(), **change)
-                out = self.root/('out-' + sorted(change)[0].replace('/', '-'))
-                with self.assertRaisesRegex(yogi.Refused, 'host identity'):
-                    self.run_readiness(meta, out)
-                self.assertFalse(yogi.read(out/'yogi-readiness.json')['passed'])
+                       {'instance/name': 'roseos-yogi-builder-20261103-a'}, {'project/project-id': 'other-project'},
+                       {'instance/name': 'immortal-os-builder'}):
+            with self.subTest(change=change):
+                meta = dict(good, **change)
+                self.refused_without_inspection(lambda key: meta[key], env, 'not the exact replacement tuple',
+                                                self.root/'out-wrong')
+        for missing in good:
+            with self.subTest(missing=missing):
+                meta = {k: v for k, v in good.items() if k != missing}
+                self.refused_without_inspection(lambda key: meta[key], env, r'host identity unavailable \(KeyError\)',
+                                                self.root/'out-missing')
+
+        def unreachable(key):
+            raise OSError('metadata server unreachable')
+        self.refused_without_inspection(unreachable, env, r'host identity unavailable \(OSError\)', self.root/'out-down')
+
+    def test_space_or_tool_failures_after_a_good_identity_still_leave_a_failed_receipt(self):
         meta = self.host()
         with self.assertRaisesRegex(yogi.Refused, 'free space'):
             self.run_readiness(meta, self.root/'out-space', free=1)
+        self.assertFalse(yogi.read(self.root/'out-space/yogi-readiness.json')['passed'])
         (Path(self.cfg['builder']['retainedSource'])/TOOLS_APKSIGNER).unlink()
         with self.assertRaisesRegex(yogi.Refused, 'apksigner'):
             self.run_readiness(meta, self.root/'out-tools')
+        self.assertFalse(yogi.read(self.root/'out-tools/yogi-readiness.json')['passed'])
 
     def test_runner_name_must_be_the_exact_registered_replacement_runner(self):
         meta = self.host()
-        for name in ('', 'roseos-yogi-builder-20261103-a', 'roseos-frankel-builder', 'other-runner'):
+
+        def metadata(key):
+            raise AssertionError('metadata read after a runner-name refusal')
+        for name in (None, '', 'roseos-yogi-builder-20261103-a', 'roseos-frankel-builder', 'immortal-os-builder',
+                     'roseos-yogi-builder', yogi.INSTANCE + ' ', yogi.INSTANCE.upper()):
             with self.subTest(name=name):
-                out = self.root/f'out-name-{len(name)}-{name[:6]}'
-                env = {'GITHUB_SHA': SHA} if not name else {'RUNNER_NAME': name, 'GITHUB_SHA': SHA}
-                with self.assertRaisesRegex(yogi.Refused, 'registered replacement runner'):
-                    yogi.readiness(self.cfg, out, env=env, metadata=lambda key: meta[key],
-                                   which=lambda tool: '/usr/bin/' + tool, free=lambda path: SimpleNamespace(free=10**13))
-                self.assertFalse(yogi.read(out/'yogi-readiness.json')['passed'])
+                env = {'GITHUB_SHA': SHA} if name is None else {'RUNNER_NAME': name, 'GITHUB_SHA': SHA}
+                self.refused_without_inspection(metadata, env, 'is not the registered replacement runner',
+                                                self.root/'out-name')
+        self.assertTrue(self.run_readiness(meta, self.root/'out-ok')['passed'])
         self.cfg['builder']['evidence']['runner']['name'] = 'other-runner'
         self.assertTrue(any('runner.name is not the replacement' in b for b in yogi.blockers(self.cfg, 'readiness')))
 
-    def test_routing_evidence_gates(self):
+    def test_organization_eligibility_exception_is_readiness_only(self):
         runner = self.cfg['builder']['evidence']['runner']
         runner['organizationEligibility'] = None
-        self.assertTrue(any('runner.organizationEligibility' in b for b in yogi.blockers(self.cfg, 'readiness')))
-        runner.update(organizationEligibility='synthetic', labels=['self-hosted', 'roseos-yogi-builder'])
+        self.assertEqual(yogi.blockers(self.cfg, 'readiness'), [])
+        self.assertEqual(yogi.evidence_missing(self.cfg, 'readiness'), [])
+        self.cfg['builder']['status'] = 'ready'
+        for stage in ('key-bootstrap', 'bootstrap', 'ota'):
+            with self.subTest(stage=stage):
+                self.assertTrue(any('runner.organizationEligibility' in b for b in yogi.blockers(self.cfg, stage)))
+                with self.assertRaisesRegex(yogi.Refused, 'runner.organizationEligibility'):
+                    yogi.guard(self.cfg, stage)
+        self.assertIn('runner.organizationEligibility', yogi.evidence_missing(self.cfg))
+        self.assertEqual(yogi.READINESS_EXEMPT, frozenset({'runner.organizationEligibility'}))
+
+    def test_routing_evidence_gates(self):
+        runner = self.cfg['builder']['evidence']['runner']
+        runner.update(labels=['self-hosted', 'roseos-yogi-builder'])
         self.assertTrue(any('is not in the read-back runner labels' in b for b in yogi.blockers(self.cfg, 'readiness')))
         runner['labels'] = ['self-hosted', yogi.RUNNER_LABEL, 'roseos-frankel-builder']
         self.assertTrue(any("another builder's label" in b for b in yogi.blockers(self.cfg, 'readiness')))
+        runner['labels'] = ['self-hosted', yogi.RUNNER_LABEL]
+        self.cfg['builder']['evidence']['storage']['mounts']['mountPoint'] = None
+        self.assertTrue(any('storage.mounts' in b for b in yogi.blockers(self.cfg, 'readiness')))
 
-    def test_committed_tree_keeps_readiness_closed_on_the_missing_receipt_fields(self):
-        found = yogi.blockers(yogi.config(), 'readiness')
-        self.assertEqual(len(found), 1)
-        for field in ('runner.organizationEligibility', 'storage.mounts (filesystemUuid, guestDevice, mountPoint)',
-                      "route label roseos-yogi-builder-20261105-b is not in the read-back runner labels "
-                      "['self-hosted', 'Linux', 'X64', 'roseos-yogi-builder']"):
-            self.assertIn(field, found[0])
+    def test_committed_tree_keeps_readiness_closed_on_the_missing_mount_receipt(self):
+        cfg = yogi.config()
+        runner = cfg['builder']['evidence']['runner']
+        self.assertTrue(runner['replacementLabelInstalled'])
+        self.assertEqual(runner['labels'], ['self-hosted', 'Linux', 'X64', 'roseos-yogi-builder', yogi.RUNNER_LABEL])
+        self.assertIsNone(runner['organizationEligibility'])  # unknown after the 403; never inferred
+        self.assertIn('HTTP 403', runner['organizationEligibilityReadback'])
+        self.assertEqual(cfg['builder']['status'], 'runner-unregistered')
+        found = yogi.blockers(cfg, 'readiness')
+        self.assertEqual(found, ['replacement builder receipt fields not recorded: '
+                                 'storage.mounts (filesystemUuid, guestDevice, mountPoint)'])
+        for stage in ('key-bootstrap', 'bootstrap', 'ota'):
+            joined = ' '.join(yogi.blockers(cfg, stage))
+            self.assertIn('runner.organizationEligibility', joined)
+            self.assertIn('storage.mounts', joined)
         with self.assertRaises(yogi.Refused):
-            yogi.readiness(yogi.config(), self.root/'never')
+            yogi.readiness(cfg, self.root/'never')
         self.assertFalse((self.root/'never').exists())
 
-    def test_readiness_job_is_isolated_from_build_keys_signing_and_publication(self):
+    def readiness_job(self):
         text = (yogi.ROOT/'.github/workflows/yogi-ota.yml').read_text()
         body = text[text.index('\njobs:\n'):]
-        job = body[body.index('\n  readiness:\n'):body.index('\n  key-bootstrap:\n')]
+        return body, body[body.index('\n  readiness:\n'):body.index('\n  key-bootstrap:\n')]
+
+    def test_readiness_job_is_isolated_from_build_keys_signing_and_publication(self):
+        body, job = self.readiness_job()
         self.assertIn("if: inputs.stage == 'readiness'", job)
         self.assertIn('runs-on: [self-hosted, roseos-yogi-builder-20261105-b]', job)
-        for forbidden in ('id-token', 'permissions', 'secrets.', 'actions-gcp-login', 'signing-bootstrap', 'compile',
-                          'integrate', 'download-artifact', 'publish', 'sign ', 'allocate', 'prepare'):
+        self.assertIn('    permissions:\n      contents: read\n    env:', job)
+        for forbidden in ('id-token', 'write', 'secrets.', 'vars.', 'actions-gcp-login', 'signing-bootstrap', 'compile',
+                          'integrate', 'download-artifact', 'publish', 'sign ', 'allocate', 'prepare',
+                          'continue-on-error', 'WORKLOAD_IDENTITY'):
             self.assertNotIn(forbidden, job)
         self.assertEqual(job.count('python3 scripts/yogi_ota.py'), 2)
         for name, condition in (('key-bootstrap', "if: inputs.stage == 'key-bootstrap'"),
@@ -992,6 +1045,123 @@ class ReadinessTest(Fixture):
             block = body[body.index(f'\n  {name}:\n'):]
             self.assertIn(condition, block[:200])
 
+    def test_identity_step_is_first_before_checkout_and_nothing_runs_after_a_refusal(self):
+        import yaml
+        workflow = yaml.safe_load((yogi.ROOT/'.github/workflows/yogi-ota.yml').read_text())
+        job = workflow['jobs']['readiness']
+        self.assertEqual(job['permissions'], {'contents': 'read'})
+        steps = job['steps']
+        self.assertEqual(steps[0]['id'], 'identity')
+        self.assertNotIn('uses', steps[0])
+        self.assertNotIn('if', steps[0])
+        self.assertTrue(steps[1]['uses'].startswith('actions/checkout@'))
+        self.assertTrue(all('uses' not in s or not s['uses'].startswith('actions/checkout@') for s in steps[2:]))
+        for step in steps[1:]:
+            self.assertNotIn('continue-on-error', step)
+            condition = step.get('if')
+            if condition is None:
+                continue  # default success(): skipped after the identity step fails
+            self.assertNotRegex(condition, r'\b(failure|cancelled)\(')
+            if 'always()' in condition:
+                self.assertIn("steps.identity.outcome == 'success'", condition)
+                self.assertRegex(condition, r"^always\(\) && steps\.identity\.outcome == 'success'$")
+        self.assertNotIn('continue-on-error', job)
+        b = yogi.config()['builder']
+        self.assertEqual(job['env'], {'YOGI_EXPECT_RUNNER': b['evidence']['runner']['name'],
+                                      'YOGI_EXPECT_PROJECT': b['project'], 'YOGI_EXPECT_ZONE': b['zone'],
+                                      'YOGI_EXPECT_INSTANCE': b['instance'], 'YOGI_EXPECT_INSTANCE_ID': b['instanceId']})
+        self.assertEqual(b['evidence']['runner']['name'], yogi.INSTANCE)
+        self.assertEqual(b['instanceId'], yogi.INSTANCE_ID)
+
+
+class IdentityStepTest(unittest.TestCase):
+    """Runs the workflow's own pre-checkout identity script against a local fake metadata server (test only)."""
+    @classmethod
+    def setUpClass(cls):
+        import http.server
+        import threading
+        import yaml
+        workflow = yaml.safe_load((yogi.ROOT/'.github/workflows/yogi-ota.yml').read_text())
+        job = workflow['jobs']['readiness']
+        run = job['steps'][0]['run']
+        start, end = run.index("<<'PY'\n") + len("<<'PY'\n"), run.rindex('\nPY')
+        cls.script, cls.expect = run[start:end], dict(job['env'])
+        assert 'http://metadata.google.internal/computeMetadata/v1/' in cls.script
+        cls.values = {}
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                key = self.path.removeprefix('/computeMetadata/v1/')
+                if self.headers.get('Metadata-Flavor') != 'Google' or key not in cls.values:
+                    self.send_response(404)
+                    self.end_headers()
+                    return
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(cls.values[key].encode())
+
+            def log_message(self, *args):
+                pass
+        cls.server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+        threading.Thread(target=cls.server.serve_forever, daemon=True).start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.server.shutdown()
+        cls.server.server_close()
+
+    def setUp(self):
+        type(self).values = {'instance/id': yogi.INSTANCE_ID, 'instance/name': yogi.INSTANCE,
+                             'instance/zone': 'projects/123/zones/us-west2-b', 'project/project-id': yogi.PROJECT}
+
+    def step(self, runner=yogi.INSTANCE, url=None, proxy=False):
+        url = url or f'http://127.0.0.1:{self.server.server_port}/computeMetadata/v1/'
+        script = self.script.replace('http://metadata.google.internal/computeMetadata/v1/', url)
+        env = {'PATH': '/usr/bin:/bin', **self.expect}
+        if runner is not None:
+            env['RUNNER_NAME'] = runner
+        if proxy:  # a configured proxy must never answer for the metadata server
+            env.update(http_proxy='http://127.0.0.1:9', HTTP_PROXY='http://127.0.0.1:9', no_proxy='', NO_PROXY='')
+        return subprocess.run([sys.executable, '-I', '-'], input=script, env=env, capture_output=True, text=True,
+                              timeout=60)
+
+    def test_exact_runner_and_tuple_pass_even_with_a_proxy_configured(self):
+        for proxy in (False, True):
+            with self.subTest(proxy=proxy):
+                result = self.step(proxy=proxy)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn('identity matches the replacement builder', result.stdout)
+
+    def test_wrong_or_missing_runner_name_refuses_without_reading_metadata(self):
+        type(self).values = {}  # any metadata read would fail differently
+        for runner in (None, '', 'roseos-yogi-builder-20261103-a', 'roseos-yogi-builder', 'roseos-frankel-builder'):
+            with self.subTest(runner=runner):
+                result = self.step(runner=runner)
+                self.assertEqual(result.returncode, 1)
+                self.assertIn('runner name is not the registered replacement runner', result.stdout)
+
+    def test_wrong_metadata_refuses(self):
+        good = dict(self.values)
+        for key, value in (('instance/zone', 'projects/123/zones/us-west2-a'), ('instance/id', '1'),
+                           ('instance/name', 'roseos-yogi-builder-20261103-a'), ('project/project-id', 'other'),
+                           ('instance/name', 'immortal-os-builder')):
+            with self.subTest(key=key, value=value):
+                type(self).values = dict(good, **{key: value})
+                result = self.step()
+                self.assertEqual(result.returncode, 1)
+                self.assertIn('not the exact replacement project/zone/name/numeric ID', result.stdout)
+
+    def test_missing_or_unreachable_metadata_refuses(self):
+        good = dict(self.values)
+        for key in good:
+            with self.subTest(missing=key):
+                type(self).values = {k: v for k, v in good.items() if k != key}
+                result = self.step()
+                self.assertEqual(result.returncode, 1)
+                self.assertIn('host identity unavailable (HTTPError)', result.stdout)
+        result = self.step(url='http://127.0.0.1:9/computeMetadata/v1/')
+        self.assertEqual(result.returncode, 1)
+        self.assertIn('host identity unavailable', result.stdout)
 
 TOOLS_APKSIGNER = 'prebuilts/sdk/tools/linux/bin/apksigner'
 

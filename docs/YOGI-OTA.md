@@ -123,41 +123,48 @@ evidence. START is never retried. A VM already RUNNING is never adopted or stopp
 own valid record that started the VM. Legacy (v1), missing, stale, foreign-tuple and foreign-run/attempt records stop
 nothing.
 
-**Readiness only** (`stage=readiness`): guard → controller → `readiness` job on the replacement label. It checks:
-- GCE metadata id/name/zone/project equal the tuple;
-- the runner name;
+**Readiness only** (`stage=readiness`): guard → controller → `readiness` job on the replacement label. Its first
+step, before checkout, refuses unless `RUNNER_NAME` is exactly `roseos-yogi-builder-20261105-b` and the GCE metadata
+project/zone/name/numeric ID are exactly the replacement tuple (read directly from the metadata server, never through a
+proxy). Missing or unreachable metadata refuses. A refusal fails the job and skips every later step: checkout, the
+guard, path/lock inspection and the receipt upload (which runs only when that identity step succeeded). After checkout,
+`yogi_ota.py readiness` repeats the identity refusal before inspecting anything, then checks:
 - root/source/attempts directories, the lock and the private cover input;
 - free space;
 - `build/envsetup.sh` resolving inside the tree, `.repo` and the release script;
 - the pinned aapt/apksigner/JDK 21 and host tools.
 
-It writes only `yogi-readiness.json`. It has no login, id-token, secret, build, download, key bootstrap, signing or
-publication. It does not change `builder.status`. Build, key-bootstrap and signing jobs never run for this stage and
-stay closed while `builder.status` is not `ready`.
+It writes only `yogi-readiness.json`, and nothing at all after an identity refusal. Its token is `contents: read`: no
+login, id-token, secret, variable, build, download, key bootstrap, signing or publication. It does not change
+`builder.status`. Build, key-bootstrap and signing jobs never run for this stage and stay closed while `builder.status`
+is not `ready`.
 
-**Missing receipt fields** (the guard names them; every builder stage, readiness included, stays closed):
-- **Route label.** The complete repository runner list (2026-11-06T01:17:20Z) holds one runner, ID 21
-  `roseos-yogi-builder-20261105-b`, offline and not busy, with labels `self-hosted, Linux, X64, roseos-yogi-builder`.
-  The route's replacement-specific label `roseos-yogi-builder-20261105-b` is not among them, so no job could be delivered.
-- `runner.organizationEligibility`: unknown. The organization runner-group read was denied (HTTP 403,
-  2026-11-06T01:24:17Z; it needs organization admin or the runners-and-runner-groups permission). It was not retried
-  and no other route was used. Repository-list uniqueness of `[self-hosted, roseos-yogi-builder]` is not global routing
-  uniqueness or proof of job delivery.
-- `storage.mounts`: guest device, filesystem UUID and mount point were not captured. Device number 2049 does not
-  identify them.
+**Readiness-only routing exception (Nathan-approved, 2026-11-06).** Organization runner eligibility is unknown, so
+another eligible runner carrying the route labels could receive the readiness job. Only readiness may proceed without
+`runner.organizationEligibility`: such a runner would hold only a read-only repository token and would stop at the
+pre-checkout identity refusal. `key-bootstrap`, `bootstrap` and `ota` still require `runner.organizationEligibility`,
+because their jobs mint OIDC tokens or handle build and signing inputs and need pre-dispatch exclusivity.
+
+**Receipt fields.**
+- **Route label (recorded).** Chief-verified operator relay (2026-11-06; no timestamp recorded):
+  `roseos-yogi-builder-20261105-b` was added to repository runner 21 and read back, with `self-hosted, Linux, X64,
+  roseos-yogi-builder` preserved; runner offline/idle; both VMs stopped at that check. Before it, the complete
+  repository runner list (2026-11-06T01:17:20Z) held only runner 21 with the four original labels.
+- `runner.organizationEligibility`: unknown, still required for every stage but readiness. The organization
+  runner-group read was denied (HTTP 403, 2026-11-06T01:24:17Z; it needs organization admin or the
+  runners-and-runner-groups permission). It was not retried and no other route was used. The label readback does not
+  change this; repository-list uniqueness is not global routing uniqueness or proof of job delivery.
+- `storage.mounts`: missing, and required for readiness too. Guest device, filesystem UUID and mount point were not
+  captured. Device number 2049 does not identify them.
 
 `builder.status: runner-unregistered` is the not-ready source guard; it is not a registration claim (runner 21 is
-registered and offline). Readiness also requires `RUNNER_NAME` to equal the recorded runner name
-`roseos-yogi-builder-20261105-b`, together with the metadata tuple. Cleanup validates this run's ownership record
-before any login. A missing or not-started record requests no credential, and an invalid one fails before login.
+registered and offline). Cleanup validates this run's ownership record before any login. A missing or not-started
+record requests no credential, and an invalid one fails before login.
 
-**Smallest routing resolution (source only, once evidence exists).** Either:
-- the route switches its four `runs-on` lines, `builder.runnerLabel`/`RUNNER_LABEL` and the capacity map to the
-  existing `roseos-yogi-builder`, once a readback of the eligible-runner set for this repository (repository and
-  organization runners, including the runner groups that admit it) shows that label pair only on runner 21; or
-- the operator adds `roseos-yogi-builder-20261105-b` to runner 21 under separate authority and reads back the labels.
-
-Either way, `runner.organizationEligibility` must be recorded first.
+**Before the operator may run readiness:** Chief relays the bounded guest mount observation, and source records
+`storage.mounts` (guest device, filesystem UUID, mount point for `/srv/rose-yogi`). The dispatch itself, the VM start
+by the controller and the runner service activation then need their own authorization. Organization eligibility is
+not needed for readiness, but stays required before key bootstrap, builds or signing, alongside `builder.status: ready`.
 
 Recorded but noted: repository-scoped runner, poolId 1, official default group. Registration does not restrict it to
 Yogi workflows; label routing is the only separation. The controller account can also address the original VM.

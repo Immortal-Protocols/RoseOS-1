@@ -224,13 +224,21 @@ def access_problem(cfg, now=None):
     return None
 
 
-def evidence_missing(cfg):
+# Nathan-approved readiness-only routing exception (2026-11-06): readiness may run without organization runner
+# eligibility, because its first step refuses unless the exact runner name and GCE identity match, before checkout, and it
+# holds no OIDC token, secret or build/signing path. Every other builder stage still requires organizationEligibility.
+READINESS_EXEMPT = frozenset({'runner.organizationEligibility'})
+
+
+def evidence_missing(cfg, stage=None):
     """Operator receipt fields still unrecorded or unverified for the replacement builder, by dotted name."""
     evidence, missing = cfg['builder'].get('evidence') or {}, []
 
     def empty(value):
         return value in (None, '', [], {}) or (isinstance(value, dict) and any(empty(v) for v in value.values()))
     for field in EVIDENCE_FIELDS:
+        if stage == 'readiness' and field in READINESS_EXEMPT:
+            continue
         group, key = field.split('.')
         value = (evidence.get(group) or {}).get(key)
         if empty(value):
@@ -252,7 +260,7 @@ def blockers(cfg, stage, access=False, now=None):
     if stage not in STAGES:
         raise Refused(f'stage must be one of {STAGES}')
     found = []
-    missing = evidence_missing(cfg) if stage != 'publish' else []  # publication runs hosted, on staged assets only
+    missing = evidence_missing(cfg, stage) if stage != 'publish' else []  # publication runs hosted, on staged assets only
     if missing:
         found.append('replacement builder receipt fields not recorded: ' + ', '.join(missing))
     if stage == 'readiness':
@@ -473,8 +481,27 @@ def metadata_read(key, timeout=5):
     """The VM's own GCE metadata (run inside the readiness job only): its identity as Compute Engine reports it."""
     import urllib.request
     request = urllib.request.Request(METADATA + key, headers={'Metadata-Flavor': 'Google'})
-    with urllib.request.urlopen(request, timeout=timeout) as response:
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))  # the VM's own metadata server, never a proxy
+    with opener.open(request, timeout=timeout) as response:
         return response.read(4096).decode().strip()
+
+
+def identity_refusal(cfg, env=os.environ, metadata=metadata_read):
+    """Refuse unless this runner is the exact registered replacement runner on the exact GCE instance (project, zone,
+    name, numeric ID). Any metadata failure refuses. Runs before every other readiness action."""
+    b = cfg['builder']
+    expected_runner = ((b.get('evidence') or {}).get('runner') or {}).get('name')
+    if not expected_runner or expected_runner != b['instance'] or env.get('RUNNER_NAME') != expected_runner:
+        raise Refused(f'readiness refused: runner {env.get("RUNNER_NAME", "")!r} is not the registered replacement runner '
+                      f'{expected_runner!r}; nothing inspected')
+    try:
+        seen = {'id': metadata('instance/id'), 'name': metadata('instance/name'),
+                'zone': metadata('instance/zone').rsplit('/', 1)[-1], 'project': metadata('project/project-id')}
+    except Exception as error:  # noqa: BLE001 - unavailable metadata is a refusal, never a pass
+        raise Refused(f'readiness refused: host identity unavailable ({type(error).__name__}); nothing inspected') from None
+    if seen != {'id': b['instanceId'], 'name': b['instance'], 'zone': b['zone'], 'project': b['project']}:
+        raise Refused('readiness refused: host identity is not the exact replacement tuple; nothing inspected')
+    return seen
 
 
 def readiness(cfg, out, env=os.environ, metadata=metadata_read, which=shutil.which, free=shutil.disk_usage):
@@ -482,20 +509,13 @@ def readiness(cfg, out, env=os.environ, metadata=metadata_read, which=shutil.whi
     key bootstrap, signing, publication or provisioning; nothing is written but the receipt under --out."""
     guard(cfg, 'readiness')
     b, checks = cfg['builder'], []
+    identity_refusal(cfg, env, metadata)  # first: a wrong or unavailable identity inspects and writes nothing
 
     def check(name, condition, detail=''):
         checks.append({'check': name, 'passed': bool(condition), 'detail': detail})
 
-    try:
-        seen = {'id': metadata('instance/id'), 'name': metadata('instance/name'),
-                'zone': metadata('instance/zone').rsplit('/', 1)[-1], 'project': metadata('project/project-id')}
-    except Exception as error:  # noqa: BLE001 - any metadata failure is a failed identity check, never a pass
-        seen = {'error': type(error).__name__}
-    check('host identity is the exact replacement tuple', seen == {'id': b['instanceId'], 'name': b['instance'],
-          'zone': b['zone'], 'project': b['project']}, json.dumps(seen, sort_keys=True))
-    expected_runner = ((b.get('evidence') or {}).get('runner') or {}).get('name')
-    check('runner is the registered replacement runner', bool(expected_runner) and expected_runner == b['instance']
-          and env.get('RUNNER_NAME') == expected_runner, f'{env.get("RUNNER_NAME", "")!r} (expected {expected_runner!r})')
+    check('host identity is the exact replacement tuple', True, json.dumps(tuple_of(cfg), sort_keys=True))
+    check('runner is the registered replacement runner', True, env.get('RUNNER_NAME', ''))
     for key in ('root', 'retainedSource', 'attempts'):
         try:
             regular_dir(b[key], key)

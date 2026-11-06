@@ -39,11 +39,13 @@
           "self-hosted",
           "Linux",
           "X64",
-          "roseos-yogi-builder"
+          "roseos-yogi-builder",
+          "roseos-yogi-builder-20261105-b"
         ],
-        "replacementLabelInstalled": false,
+        "replacementLabelInstalled": true,
+        "replacementLabelReadback": "Chief-verified operator relay, 2026-11-06 (no timestamp recorded): roseos-yogi-builder-20261105-b added to repository runner ID 21 and read back with self-hosted, Linux, X64 and roseos-yogi-builder preserved; runner offline/idle; original and replacement VMs stopped at that check. Organization eligibility is not changed by this readback.",
         "workflowRestriction": "not enforced by registration; only label routing separates Yogi jobs",
-        "labelsReadback": "complete repository runner list, 2026-11-06T01:17:20Z (one runner: ID 21, offline, not busy)",
+        "labelsReadback": "before the replacement label: complete repository runner list, 2026-11-06T01:17:20Z (one runner: ID 21, offline, not busy; labels self-hosted, Linux, X64, roseos-yogi-builder)",
         "repositoryLabelUnique": true,
         "organizationEligibility": null,
         "organizationEligibilityReadback": "denied: organization runner-group read returned HTTP 403 at 2026-11-06T01:24:17Z (needs organization admin or the runners-and-runner-groups permission); not retried, no other route",
