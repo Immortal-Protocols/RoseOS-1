@@ -155,8 +155,10 @@ class Hosted(unittest.TestCase):
             'text version': lambda: self.write_reservation(versionCode='306'),
             'short source': lambda: self.write_reservation(sourceSha='d' * 39),
             'no allocation digest': lambda: self.write_reservation(allocationSha256='x'),
-            'tampered': lambda: self.receipt_path.write_text(self.receipt_path.read_text().replace('"versionCode": 306', '"versionCode": 305')),
-            'extra field': lambda: self.receipt_path.write_text(json.dumps(dict(json.loads(self.receipt_path.read_text()), note='x'))),
+            # a field no other check reads, changed without its digest: only the digest can tell
+            'tampered': lambda: self.receipt_path.write_text(json.dumps(dict(json.loads(self.receipt_path.read_text()),
+                                                                             allocationSha256='b' * 64))),
+            'extra field': lambda: self.write_reservation(note='x'),  # digest recomputed: only the exact fields refuse
             'other schema': lambda: self.write_reservation(schema='roseos.app-allocation.v1'),
             'a link': lambda: (self.root.joinpath('real.json').write_text(self.receipt_path.read_text()),
                                self.receipt_path.unlink(), self.receipt_path.symlink_to(self.root/'real.json')),
@@ -184,6 +186,37 @@ class Hosted(unittest.TestCase):
                 with self.assertRaises(release.AdapterFailed):
                     release.hosted(self.artifact, self.hosted_config, env, self.gcloud, build=self.build)
                 self.assertEqual(self.fetched(), [])
+
+    def test_an_owner_or_version_the_run_cannot_state_is_refused_before_any_worktree(self):
+        # No GITHUB_WORKFLOW_REF at all, and a record whose owner is equally empty: never an owned reservation.
+        env = {k: v for k, v in self.env.items() if k != 'GITHUB_WORKFLOW_REF'}
+        self.write_reservation(owner={'workflowRef': None, 'runId': '42000000001', 'runAttempt': '1'})
+        with self.assertRaisesRegex(release.AdapterFailed, 'not owned by this run'):
+            release.hosted(self.artifact, self.hosted_config, env, self.gcloud, build=self.build)
+        # A text versionCode, even one APPS repeats as text, is refused before any worktree or build.
+        self.write_reservation(versionCode='306')
+        env = dict(self.env, APPS=json.dumps([['dev.pixel.voice', '306']]))
+        with self.assertRaisesRegex(release.AdapterFailed, 'is not the reserved'):
+            release.hosted(self.artifact, self.hosted_config, env, self.gcloud, build=self.build)
+        self.assertEqual((self.fetched(), self.calls), ([], []))
+        self.assertFalse(self.work.exists())
+
+    def test_a_failure_after_the_artifact_started_leaves_no_partial_artifact(self):
+        copies = []
+        original = release.shutil.copyfile
+
+        def copy_then_fail(src, dst, *args, **kwargs):
+            copies.append(Path(dst).name)
+            if len(copies) == 2:  # the APK is already in the artifact directory; the v4 sidecar copy fails
+                raise OSError('synthetic interruption')
+            return original(src, dst, *args, **kwargs)
+        release.shutil.copyfile = copy_then_fail
+        self.addCleanup(setattr, release.shutil, 'copyfile', original)
+        with self.assertRaises(OSError):
+            self.hosted()
+        self.assertEqual(copies, ['dev.pixel.voice-306.apk', 'dev.pixel.voice-306.apk.idsig'])
+        self.assertFalse(self.artifact.exists(), 'the partial artifact is removed')
+        self.assert_clean()
 
     def test_an_unbound_store_or_portable_input_stops_before_the_reservation_is_read(self):
         data = json.loads(self.hosted_config.read_text())
