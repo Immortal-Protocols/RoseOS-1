@@ -121,7 +121,10 @@ class ContractTest(unittest.TestCase):
             self.assertIn(expected, joined)
         self.assertIn('Yogi bootstrap build A is not signed yet (bootstrap.status)', found['ota'])
         self.assertEqual(found['publish'], ['Yogi publication is not enabled (publicationEnabled)'])
+        self.assertEqual(found['readiness'], [])  # the approved readiness-only source handoff; host checks still refuse
         for stage in yogi.STAGES:
+            if stage == 'readiness':
+                continue
             with self.assertRaises(yogi.Refused):
                 yogi.guard(cfg, stage, access=True)
 
@@ -1006,7 +1009,7 @@ class ReadinessTest(Fixture):
         self.cfg['builder']['evidence']['storage']['mounts']['mountPoint'] = None
         self.assertTrue(any('storage.mounts' in b for b in yogi.blockers(self.cfg, 'readiness')))
 
-    def test_committed_tree_keeps_readiness_closed_on_the_missing_mount_receipt(self):
+    def test_committed_tree_opens_only_readiness_source_gates(self):
         cfg = yogi.config()
         runner = cfg['builder']['evidence']['runner']
         self.assertTrue(runner['replacementLabelInstalled'])
@@ -1014,15 +1017,22 @@ class ReadinessTest(Fixture):
         self.assertIsNone(runner['organizationEligibility'])  # unknown after the 403; never inferred
         self.assertIn('HTTP 403', runner['organizationEligibilityReadback'])
         self.assertEqual(cfg['builder']['status'], 'runner-unregistered')
-        found = yogi.blockers(cfg, 'readiness')
-        self.assertEqual(found, ['replacement builder receipt fields not recorded: '
-                                 'storage.mounts (filesystemUuid, guestDevice, mountPoint)'])
-        for stage in ('key-bootstrap', 'bootstrap', 'ota'):
+        mounts = cfg['builder']['evidence']['storage']['mounts']
+        self.assertEqual((mounts['guestDevice'], mounts['guestDisk']), ('/dev/sda1', '/dev/sda'))  # filesystem, not disk
+        self.assertEqual((mounts['filesystemType'], mounts['mountPoint']), ('ext4', '/'))
+        self.assertEqual(mounts['filesystemUuid'], '64959ab3-d595-45a4-9cb8-da4af456efdd')
+        self.assertEqual(yogi.evidence_missing(cfg, 'readiness'), [])
+        self.assertEqual(yogi.evidence_missing(cfg), ['runner.organizationEligibility'])
+        self.assertEqual(yogi.blockers(cfg, 'readiness'), [])
+        for stage in ('key-bootstrap', 'bootstrap', 'ota'):  # unknown eligibility and builder.status keep these closed
             joined = ' '.join(yogi.blockers(cfg, stage))
-            self.assertIn('runner.organizationEligibility', joined)
-            self.assertIn('storage.mounts', joined)
-        with self.assertRaises(yogi.Refused):
-            yogi.readiness(cfg, self.root/'never')
+            self.assertIn('replacement builder receipt fields not recorded: runner.organizationEligibility', joined)
+            self.assertIn('builder runner/controller not ready', joined)
+            self.assertNotIn('storage.mounts', joined)
+        self.assertFalse(cfg['publicationEnabled'] or cfg['automationEnabled'])
+        self.assertEqual(cfg['signing']['status'], 'unbound')
+        with self.assertRaisesRegex(yogi.Refused, 'not the registered replacement runner'):  # off the runner: refuses
+            yogi.readiness(cfg, self.root/'never', env={})
         self.assertFalse((self.root/'never').exists())
 
     def readiness_job(self):

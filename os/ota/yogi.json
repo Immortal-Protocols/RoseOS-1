@@ -69,9 +69,14 @@
           ]
         },
         "mounts": {
-          "guestDevice": null,
-          "filesystemUuid": null,
-          "mountPoint": null
+          "guestDevice": "/dev/sda1",
+          "guestDisk": "/dev/sda",
+          "filesystemType": "ext4",
+          "filesystemUuid": "64959ab3-d595-45a4-9cb8-da4af456efdd",
+          "mountPoint": "/",
+          "sameFilesystem": "the retained source, the attempts directory and the runner directories",
+          "meaning": "guestDevice is the mounted filesystem /dev/sda1 (partition); guestDisk is the whole replacement disk /dev/sda, the known disk 938743673401685238 on VM 2720796557371812468. They are distinct and not interchangeable.",
+          "readback": "Chief-verified operator mount receipt relay, 2026-11-06 (no timestamp recorded): bounded guest observation; temporary SSH key removed and session closed; runner service still inactive/disabled; both original and replacement VMs stopped and both disks preserved afterwards; no readiness dispatch."
         },
         "attemptsCreated": true,
         "freeBytesReported": "1.709 TB",
@@ -83,8 +88,8 @@
         "scope": "get/start/stop bound on the replacement VM; the original zone-a binding is retained, so the account can address more than one VM and source still rejects the original",
         "federation": "exact repository and owner IDs, public visibility, yogi-ota.yml@refs/heads/main, manual dispatch, GitHub-hosted controller jobs"
       },
-      "state": "TERMINATED at 2026-11-06T01:00:52Z, both disks READY and preserved; temporary SSH access removed",
-      "source": "Chief relay of the Mac operator saved receipts, 2026-11-06. Null values are unverified and must not be inferred (device number 2049 does not identify the guest device, UUID or mount point)."
+      "state": "TERMINATED at 2026-11-06T01:00:52Z, both disks READY and preserved; temporary SSH access removed. Stopped again after the later bounded mount observation (relay, no timestamp recorded), both VMs stopped and both disks preserved",
+      "source": "Chief relay of the Mac operator saved receipts, 2026-11-06; mounts from the later Chief-verified mount receipt relay (see storage.mounts.readback). Null values are unverified and must not be inferred (device number 2049 alone never identified the guest device, UUID or mount point)."
     },
     "retired": {
       "instance": "roseos-yogi-builder-20261103-a",

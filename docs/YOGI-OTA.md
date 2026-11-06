@@ -154,17 +154,30 @@ because their jobs mint OIDC tokens or handle build and signing inputs and need 
   runner-group read was denied (HTTP 403, 2026-11-06T01:24:17Z; it needs organization admin or the
   runners-and-runner-groups permission). It was not retried and no other route was used. The label readback does not
   change this; repository-list uniqueness is not global routing uniqueness or proof of job delivery.
-- `storage.mounts`: missing, and required for readiness too. Guest device, filesystem UUID and mount point were not
-  captured. Device number 2049 does not identify them.
+- **`storage.mounts` (recorded).** Chief-verified operator mount receipt relay (2026-11-06; no timestamp recorded):
+  filesystem `/dev/sda1` (`guestDevice`), ext4, UUID `64959ab3-d595-45a4-9cb8-da4af456efdd`, mounted at `/`, on the
+  whole replacement disk `/dev/sda` (`guestDisk`, the known disk `938743673401685238` on VM `2720796557371812468`).
+  The partition and the disk are recorded separately and are not interchangeable. The retained source, attempts and
+  runner directories are on that same filesystem. Afterwards the temporary SSH key was removed, the runner service
+  stayed inactive/disabled, both VMs were stopped with both disks preserved, and no readiness dispatch occurred.
 
 `builder.status: runner-unregistered` is the not-ready source guard; it is not a registration claim (runner 21 is
 registered and offline). Cleanup validates this run's ownership record before any login. A missing or not-started
 record requests no credential, and an invalid one fails before login.
 
-**Before the operator may run readiness:** Chief relays the bounded guest mount observation, and source records
-`storage.mounts` (guest device, filesystem UUID, mount point for `/srv/rose-yogi`). The dispatch itself, the VM start
-by the controller and the runner service activation then need their own authorization. Organization eligibility is
-not needed for readiness, but stays required before key bootstrap, builds or signing, alongside `builder.status: ready`.
+**Readiness source handoff.** Every source gate for `stage=readiness` is now open (`yogi_ota.py guard --stage
+readiness` passes on main); the host checks above still run and refuse at runtime. What source does not provide, and
+the operator must have separately before dispatching `stage=readiness` from `main` (attempt 1, `publish` false):
+- authorization for the dispatch, the controller's VM start (compute is billed while it runs) and runner 21's
+  service activation for the run;
+- repository variables `YOGI_CONTROLLER_WORKLOAD_IDENTITY_PROVIDER` and `YOGI_CONTROLLER_SERVICE_ACCOUNT` (the
+  controller and cleanup jobs fail closed before login without them);
+- the VM stopped (`TERMINATED`) at dispatch, so this run's own START is recorded and cleanup stops it. A VM already
+  RUNNING is never adopted or stopped by the run and would be left running.
+
+Still closed: `key-bootstrap`, `bootstrap` and `ota` (unknown `runner.organizationEligibility`, `builder.status:
+runner-unregistered`, unbound `yogi-v1` signing, no Release app-inputs record, no bootstrap receipt) and publication
+(`publicationEnabled: false`). A passing readiness receipt does not by itself change `builder.status`.
 
 Recorded but noted: repository-scoped runner, poolId 1, official default group. Registration does not restrict it to
 Yogi workflows; label routing is the only separation. The controller account can also address the original VM.
