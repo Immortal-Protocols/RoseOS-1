@@ -111,10 +111,15 @@ def guard(lane, cfg, env, publish=False, root=ROOT, diff=None):
         if changed:
             raise ValueError('fresh app export omits current app source changes: '+package['packageName'])
     baseline=cfg.get('baselineTargetFiles')
-    committed=load(Path(root)/load(Path(root)/'os/ota/mustang.json')['baseline']['signReceipt'])['outputs']['targetFiles']
-    if not isinstance(baseline,dict) or any(baseline.get(k)!=committed[k] for k in ('sha256','sizeBytes')) \
-            or paths['home'] not in Path(baseline.get('path','')).parents or '..' in Path(baseline.get('path','')).parts:
-        raise ValueError('actual own-disk baseline archive binding required')
+    factory=cfg.get('baselineFactoryEvidence')
+    if factory is not None:
+        if baseline is not None: raise ValueError('select exactly one baseline evidence kind')
+        ota.module('mustang_factory_baseline_guard','mustang-baseline-image.py').contract(reference(factory,root),lane,cfg,root)
+    else:
+        committed=load(Path(root)/load(Path(root)/'os/ota/mustang.json')['baseline']['signReceipt'])['outputs']['targetFiles']
+        if not isinstance(baseline,dict) or any(baseline.get(k)!=committed[k] for k in ('sha256','sizeBytes')) \
+                or paths['home'] not in Path(baseline.get('path','')).parents or '..' in Path(baseline.get('path','')).parts:
+            raise ValueError('actual own-disk baseline archive binding required')
     if publish:
         if cfg['publication'].get('enabled') is not True:
             raise ValueError('dedicated public OTA publication remains disabled')
@@ -396,7 +401,8 @@ def main():
             ota.module('mustang_verify_apps','app-inputs-verify.py').verify(ROOT/cfg['appInputsRecord'],inputs,cfg['tools'])
             emit(inputs_dir=str(inputs))
         elif args.action=='baseline':
-            ota.observe_baseline(args.out,lane,cfg['tools'],cfg['baselineTargetFiles'])
+            factory=reference(cfg['baselineFactoryEvidence']) if cfg.get('baselineFactoryEvidence') is not None else None
+            ota.observe_baseline(args.out,lane,cfg['tools'],cfg.get('baselineTargetFiles'),factory=factory,runtime=cfg)
         elif args.action=='produce':
             # This process has no further authenticated download/signing work.
             # Do not forward job tokens or auth/env-output capabilities to Make

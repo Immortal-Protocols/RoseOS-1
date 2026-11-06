@@ -10,6 +10,7 @@
   "allocationState": null,
   "appInputsRecord": null,
   "baselineTargetFiles": null,
+  "baselineFactoryEvidence": null,
   "runner": {"groupName": null, "groupId": null, "lifetime": null, "registrationEvidence": null},
   "signingRouteEvidence": null,
   "publication": {"enabled": false, "authorityRecord": null},

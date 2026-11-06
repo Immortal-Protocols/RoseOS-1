@@ -35,6 +35,30 @@ public final class MustangReleasesTest {
         expect(RoseReleases.choose(Collections.singletonList(incomplete), true, "mustang", "stable", "2026110302").upToDate(),
                "Metadata without matching OTA is never eligible");
         expect(RoseReleases.choose(list, true, "mustang", "alpha", "2026110302").upToDate(), "Unpublished channel has no fallback");
+        // Synthetic namespace boundaries only: no version is selected or reserved for a real build.
+        String legacyCeiling = "9999123199", aboveLegacy = "9999123200", tenDigitCeiling = "9999999999";
+        RoseReleases.Release boundary = release("mustang", aboveLegacy, false, "stable");
+        RoseReleases.Release maximum = release("mustang", tenDigitCeiling, false, "stable");
+        expect(RoseReleases.eligible(boundary, "mustang", "stable") == Long.parseLong(aboveLegacy),
+               "Non-calendar ten-digit IDs fit the actual long selector");
+        expect(RoseReleases.eligible(maximum, "mustang", "stable") == 9999999999L,
+               "The upper ten-digit ID does not overflow a signed 32-bit integer");
+        expect(("mustang-" + aboveLegacy).equals(RoseReleases.choose(Collections.singletonList(boundary), true,
+               "mustang", "stable", legacyCeiling).tag), "First synthetic namespace boundary exceeds all legacy IDs");
+        expect(("mustang-" + tenDigitCeiling).equals(RoseReleases.choose(Arrays.asList(maximum, boundary), true,
+               "mustang", "stable", legacyCeiling).tag), "Selection compares numeric IDs regardless of listing order");
+        expect(RoseReleases.choose(Collections.singletonList(boundary), true, "mustang", "stable", aboveLegacy).upToDate(),
+               "An equal migrated ID is not reoffered");
+        expect(RoseReleases.choose(Collections.singletonList(boundary), true, "mustang", "stable", tenDigitCeiling).upToDate(),
+               "A lower migrated ID is not offered as an upgrade");
+        expect(RoseReleases.eligible(release("mustang", "10000000000", false, "stable"), "mustang", "stable") == -1,
+               "Eleven digits are outside the existing selector contract");
+        expect(RoseReleases.eligible(release("mustang", "99991232x0", false, "stable"), "mustang", "stable") == -1,
+               "Non-numeric IDs remain ineligible");
+        expect(RoseReleases.choose(Collections.singletonList(release("frankel", tenDigitCeiling, false, "stable")),
+               true, "mustang", "stable", legacyCeiling).upToDate(), "High IDs never permit another device fallback");
+        expect(RoseReleases.choose(Collections.singletonList(maximum), false, "mustang", "stable", legacyCeiling).error != null,
+               "A high eligible ID cannot bypass incomplete pagination");
         System.out.println("MustangReleasesTest: " + checks + " checks passed");
     }
 }

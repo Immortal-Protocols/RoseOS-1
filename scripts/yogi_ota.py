@@ -7,8 +7,8 @@ pinned GrapheneOS release script with an explicit key set), the device-agnostic 
 github_release_publisher.py. Every runtime stage is refused until os/ota/yogi.json records the prerequisite it
 needs (registered runner, approved Yogi signing window, Yogi bootstrap receipt, bound app inputs, publication).
 
-Hosted:   guard --stage key-bootstrap|bootstrap|ota|publish [--access] | builder state|start|stop | verify-staged | publish
-Builder:  preflight | allocate | prepare | integrate | compile | sign | install-image | stage
+Hosted:   guard --stage readiness|key-bootstrap|bootstrap|ota|publish [--access] | builder state|start|stop | verify-staged | publish
+Builder:  readiness --out DIR (identity/storage/paths/tools only) | preflight | allocate | prepare | integrate | compile | sign | install-image | stage
 
 key-bootstrap runs the existing signing-bootstrap.py (Signing's yogi-v1 profile) once on the Yogi runner under the Yogi
 lock, with a same-run tool proof before login, and uploads only its public receipt. bootstrap (build A) compiles and signs the first Yogi-key image with the owned Updater and writes a private fastboot
@@ -49,14 +49,28 @@ ROUTE = ROOT/'os/build-only/yogi-updater-route.json'
 TEMPLATE = ROOT/'os/build-only/yogi-reconcile.json'
 SOURCE = ROOT/'os/fold-port/source.json'
 REPOSITORY = 'Immortal-Protocols/pixel-ota'
-INSTANCE = 'roseos-yogi-builder-20261103-a'
-RUNNER_LABEL = 'roseos-yogi-builder'
+# The verified replacement Yogi builder (Chief, 2026-11-06): the exact tuple, never a name or zone alone. The original
+# zone-a VM roseos-yogi-builder-20261103-a is preserved but retired from this route and is never a fallback.
+PROJECT = 'protocols-465723'
+ZONE = 'us-west2-b'
+INSTANCE = 'roseos-yogi-builder-20261105-b'
+INSTANCE_ID = '2720796557371812468'
+RESTORED_DISK_ID = '938743673401685238'
+RUNNER_LABEL = 'roseos-yogi-builder-20261105-b'  # replacement-specific: the old label's uniqueness is not evidenced
+LEGACY = {('roseos-yogi-builder-20261103-a', 'us-west2-a')}
+FOREIGN_INSTANCES = {'immortal-os-builder'}
+OWNERSHIP_SCHEMA = 'roseos.yogi-builder-ownership.v2'
+WORKFLOW = 'Immortal-Protocols/RoseOS-1/.github/workflows/yogi-ota.yml'
+# Receipt fields the existing operator still has to supply (Chief obtains them); none is invented here. A field is
+# missing while it, or any value inside it, is null/empty.
+EVIDENCE_FIELDS = ('runner.name', 'runner.labels', 'runner.organizationEligibility', 'storage.diskLineage', 'storage.mounts',
+                   'controller.scope')
 PROFILE = 'yogi-v1'
 SECRETS = {'keys': 'PIXEL_OS_SIGNING_KEYS_YOGI_V1', 'passphrase': 'PIXEL_OS_SIGNING_PASSPHRASE_YOGI_V1'}
 SIGNER = 'roseos-build-signer@protocols-465723.iam.gserviceaccount.com'
 LAB_PINS = {'7728e30f50bfa5cea165f473175a08803f6a8346642b5aa10913e9d9e6defef6',
             'a40da80a59d170caa950cf15c18c454d47a39b26989d8b640ecd745ba71bf5dc'}
-STAGES = ('key-bootstrap', 'bootstrap', 'ota', 'publish')
+STAGES = ('readiness', 'key-bootstrap', 'bootstrap', 'ota', 'publish')
 SDK = 37
 LUNCH = 'yogi-cur-user'
 GOALS = ('target-files-package', 'otatools-package')
@@ -70,8 +84,6 @@ LABEL = 'Yogi experimental stock-kernel build; OTA-specific checks only; physica
 BUILD = re.compile(r'[1-9][0-9]{9}')
 SHA = re.compile(r'[0-9a-f]{64}')
 COMMIT = re.compile(r'[0-9a-f]{40}')
-STATES = {'start': ('RUNNING', 'TERMINATED', {'STAGING', 'PROVISIONING'}),
-          'stop': ('TERMINATED', 'RUNNING', {'STOPPING'})}
 
 
 class Refused(Exception):
@@ -104,8 +116,10 @@ def config(path=CONFIG):
             or cfg.get('repository') != REPOSITORY:
         raise Refused('Yogi OTA configuration identity differs')
     b = cfg['builder']
-    if (b['instance'], b['runnerLabel'], b['project'], b['zone']) != (INSTANCE, RUNNER_LABEL, 'protocols-465723', 'us-west2-a'):
-        raise Refused('Yogi builder binding differs from the dedicated VM')
+    if (b.get('project'), b.get('zone'), b.get('instance'), b.get('instanceId'), b.get('runnerLabel')) != \
+            (PROJECT, ZONE, INSTANCE, INSTANCE_ID, RUNNER_LABEL) or (b.get('instance'), b.get('zone')) in LEGACY \
+            or b.get('instance') in FOREIGN_INSTANCES:
+        raise Refused('Yogi builder binding differs from the exact replacement tuple; no legacy or foreign builder')
     for key in ('root', 'retainedSource', 'attempts', 'lock', 'coverDisplayInput', 'bootstrapState'):
         path = Path(b[key])
         if not path.is_absolute() or '..' in path.parts or Path(b['root']) not in (path, *path.parents):
@@ -210,14 +224,52 @@ def access_problem(cfg, now=None):
     return None
 
 
+# Nathan-approved readiness-only routing exception (2026-11-06): readiness may run without organization runner
+# eligibility, because its first step refuses unless the exact runner name and GCE identity match, before checkout, and it
+# holds no OIDC token, secret or build/signing path. Every other builder stage still requires organizationEligibility.
+READINESS_EXEMPT = frozenset({'runner.organizationEligibility'})
+
+
+def evidence_missing(cfg, stage=None):
+    """Operator receipt fields still unrecorded or unverified for the replacement builder, by dotted name."""
+    evidence, missing = cfg['builder'].get('evidence') or {}, []
+
+    def empty(value):
+        return value in (None, '', [], {}) or (isinstance(value, dict) and any(empty(v) for v in value.values()))
+    for field in EVIDENCE_FIELDS:
+        if stage == 'readiness' and field in READINESS_EXEMPT:
+            continue
+        group, key = field.split('.')
+        value = (evidence.get(group) or {}).get(key)
+        if empty(value):
+            detail = sorted(k for k, v in value.items() if empty(v)) if isinstance(value, dict) and value else []
+            missing.append(field + (' (' + ', '.join(detail) + ')' if detail else ''))
+    runner = evidence.get('runner') or {}
+    labels = runner.get('labels') or []
+    if labels and RUNNER_LABEL not in labels:
+        missing.append(f'route label {RUNNER_LABEL} is not in the read-back runner labels {labels}')
+    if {'roseos-frankel-builder'} & set(labels):
+        missing.append('runner.labels carry another builder\'s label')
+    if runner.get('name') not in (None, '', cfg['builder']['instance']):
+        missing.append('runner.name is not the replacement builder\'s registered name')
+    return missing
+
+
 def blockers(cfg, stage, access=False, now=None):
     """Every unmet prerequisite for a stage, by name (no secret, no runtime read)."""
     if stage not in STAGES:
         raise Refused(f'stage must be one of {STAGES}')
     found = []
+    missing = evidence_missing(cfg, stage) if stage != 'publish' else []  # publication runs hosted, on staged assets only
+    if missing:
+        found.append('replacement builder receipt fields not recorded: ' + ', '.join(missing))
+    if stage == 'readiness':
+        # Readiness only gathers evidence; it never needs or opens builder.status, app inputs, keys or publication.
+        return found
     if stage in ('bootstrap', 'ota'):
         if cfg['builder'].get('status') != 'ready':
-            found.append(f'builder runner/controller not ready (builder.status={cfg["builder"].get("status")})')
+            found.append(f'builder runner/controller not ready (builder.status={cfg["builder"].get("status")}: '
+                         'a not-ready source guard, not a registration claim)')
         try:
             app_record(cfg)
         except (Refused, OSError, ValueError, KeyError) as error:
@@ -237,7 +289,8 @@ def blockers(cfg, stage, access=False, now=None):
         # One-time Yogi key generation on the Yogi runner (signing-bootstrap.py, Signing's profile); refused before the
         # controller or any login unless the runner and a resource-bound yogi-v1 exist and no Yogi identity exists yet.
         if cfg['builder'].get('status') != 'ready':
-            found.append(f'builder runner/controller not ready (builder.status={cfg["builder"].get("status")})')
+            found.append(f'builder runner/controller not ready (builder.status={cfg["builder"].get("status")}: '
+                         'a not-ready source guard, not a registration claim)')
         problem = profile_problem()
         if problem:
             found.append(problem)
@@ -263,45 +316,117 @@ def guard(cfg, stage, access=False, now=None):
 
 # ------------------------------------------------------------------------------------------------ builder control
 
-def control_builder(cfg, action, ownership=None, gcloud='gcloud', timeout=420, interval=10, sleep=time.sleep,
-                    clock=time.monotonic):
-    """Start/stop only the dedicated Yogi VM (async + describe polling, never resubmitted). A stop happens only when
-    this run's own start record says it started the VM."""
+def run_identity(env=os.environ):
+    """This workflow run, as the ownership record binds it."""
+    values = {'source': env.get('GITHUB_SHA', ''), 'workflowRef': env.get('GITHUB_WORKFLOW_REF', ''),
+              'runId': env.get('GITHUB_RUN_ID', ''), 'runAttempt': env.get('GITHUB_RUN_ATTEMPT', '')}
+    if not COMMIT.fullmatch(values['source']) or not values['workflowRef'].startswith(WORKFLOW + '@') \
+            or not all(re.fullmatch(r'[1-9][0-9]{0,19}', values[k]) for k in ('runId', 'runAttempt')):
+        raise Refused('controller needs this run\'s GITHUB_SHA, yogi-ota workflow ref, run id and attempt')
+    return values
+
+
+def tuple_of(cfg):
     b = cfg['builder']
-    where = [f'--project={b["project"]}', f'--zone={b["zone"]}']
+    return {'project': b['project'], 'zone': b['zone'], 'instance': b['instance'], 'instanceId': b['instanceId']}
+
+
+def read_ownership(cfg, path, env=os.environ):
+    """The exact v2 record this run wrote, or Refused. Legacy, malformed, stale, foreign-tuple and foreign-run records
+    are all refused: nothing is ever stopped on their account."""
+    record = read(path)
+    expected = dict(schema=OWNERSHIP_SCHEMA, builder=tuple_of(cfg), run=run_identity(env))
+    if not isinstance(record, dict) or set(record) != set(expected) | {'observedBeforeStart', 'startedByThisOperation'} \
+            or any(record.get(k) != v for k, v in expected.items()) \
+            or not isinstance(record.get('startedByThisOperation'), bool) \
+            or record['startedByThisOperation'] != (record.get('observedBeforeStart') == 'TERMINATED'):
+        raise Refused('ownership record is legacy, malformed, stale or not this run\'s exact builder; nothing stopped')
+    return record
+
+
+def control_builder(cfg, action, ownership=None, gcloud='gcloud', timeout=420, interval=10, sleep=time.sleep,
+                    clock=time.monotonic, env=os.environ):
+    """Start/stop only the exact replacement Yogi VM (project, zone, name and numeric ID checked on every describe,
+    including every poll; async requests, never resubmitted, no fallback to any other builder).
+
+    start: the v2 ownership record (exact tuple, source, workflow, run and attempt, observed state) is written before
+    the START request; a VM already running is never adopted (startedByThisOperation false). An uncertain START is not
+    retried: the record exists for cleanup. stop: only with this run's own valid record that started the VM; a STAGING
+    or PROVISIONING VM this run started is awaited (bounded) and then stopped."""
+    if action == 'check':
+        # Cleanup's pre-login check: no gcloud, no credential. 'stop' only for this run's own valid record that started
+        # the VM; an invalid record raises before any login.
+        if not ownership or not Path(ownership).exists():
+            return 'none'
+        return 'stop' if read_ownership(cfg, ownership, env)['startedByThisOperation'] else 'none'
+    t = tuple_of(cfg)
+    where = [f'--project={t["project"]}', f'--zone={t["zone"]}']
 
     def describe():
-        result = subprocess.run([gcloud, 'compute', 'instances', 'describe', INSTANCE, *where, '--format=value(status)'],
-                                capture_output=True, text=True)
+        result = subprocess.run([gcloud, 'compute', 'instances', 'describe', t['instance'], *where,
+                                 '--format=json(id,name,zone,status,selfLink)'], capture_output=True, text=True)
         if result.returncode:
             raise Refused(f'Yogi builder describe failed (exit {result.returncode})')
-        return result.stdout.strip()
+        try:
+            seen = json.loads(result.stdout)
+            link = f'/projects/{t["project"]}/zones/{t["zone"]}/instances/{t["instance"]}'
+            if str(seen['id']) != t['instanceId'] or seen['name'] != t['instance'] \
+                    or str(seen['zone']).rsplit('/', 1)[-1] != t['zone'] or not str(seen['selfLink']).endswith(link) \
+                    or not isinstance(seen['status'], str):
+                raise ValueError
+        except (KeyError, TypeError, ValueError):
+            raise Refused('Yogi builder identity mismatch (project, zone, name or numeric ID); nothing requested') from None
+        return seen['status']
     if action == 'state':
         return describe()
-    target, source, passing = STATES[action]
-    state = describe()
     if action == 'start':
         if ownership is None:
             raise Refused('start needs an ownership record path')
-        with open(ownership, 'x') as f:  # one operation, one record, written before any request
-            json.dump({'schema': 'roseos.yogi-builder-ownership.v1', 'instance': INSTANCE,
-                       'startedByThisOperation': state == source}, f)
-    else:
-        record = read(ownership) if ownership and Path(ownership).exists() else None
-        if not record or record.get('instance') != INSTANCE or record.get('startedByThisOperation') is not True:
+        run = run_identity(env)
+        state = describe()
+        with open(ownership, 'x') as f:  # one operation, one record, durable before any request
+            json.dump({'schema': OWNERSHIP_SCHEMA, 'builder': t, 'run': run, 'observedBeforeStart': state,
+                       'startedByThisOperation': state == 'TERMINATED'}, f)
+            f.flush()
+            os.fsync(f.fileno())
+        if state == 'RUNNING':
+            return 'RUNNING (not started by this run; never adopted or stopped by it)'
+        if state != 'TERMINATED':
+            raise Refused(f'Yogi builder is {state}; refusing to start it')
+        result = subprocess.run([gcloud, 'compute', 'instances', 'start', t['instance'], *where, '--async', '--quiet'],
+                                capture_output=True, text=True)
+        if result.returncode:
+            raise Refused(f'Yogi builder START request uncertain (exit {result.returncode}); not retried, record kept')
+        target, passing = 'RUNNING', {'TERMINATED', 'STAGING', 'PROVISIONING'}
+    elif action == 'stop':
+        if not ownership or not Path(ownership).exists():
+            return 'no-ownership-record (nothing stopped)'
+        if not read_ownership(cfg, ownership, env)['startedByThisOperation']:
             return 'not-started-by-this-run'
-    if state == source:
-        result = subprocess.run([gcloud, 'compute', 'instances', action, INSTANCE, *where, '--async', '--quiet'],
+        state = describe()
+        deadline = clock() + timeout
+        while state in ('STAGING', 'PROVISIONING'):  # this run's own uncertain START: wait, never re-request START
+            if clock() >= deadline:
+                raise Refused(f'Yogi builder still {state} after {timeout}s; not stopped')
+            sleep(interval)
+            state = describe()
+        if state == 'TERMINATED':
+            return state
+        if state != 'RUNNING':
+            raise Refused(f'Yogi builder is {state}; refusing to stop it')
+        result = subprocess.run([gcloud, 'compute', 'instances', 'stop', t['instance'], *where, '--async', '--quiet'],
                                 capture_output=True, text=True)
         if result.returncode:
             state = describe()
-            if state not in passing | {target}:
-                raise Refused(f'Yogi builder {action} request failed (exit {result.returncode}); observed {state}')
-    elif state not in passing | {target}:
-        raise Refused(f'Yogi builder is {state}; refusing to {action} it')
+            if state not in ('STOPPING', 'TERMINATED'):
+                raise Refused(f'Yogi builder stop request failed (exit {result.returncode}); observed {state}')
+        target, passing = 'TERMINATED', {'RUNNING', 'STOPPING'}
+    else:
+        raise Refused('builder action must be state, start, stop or check')
     deadline = clock() + timeout
+    state = describe()
     while state != target:
-        if state not in passing | {source}:
+        if state not in passing:
             raise Refused(f'Yogi builder moved to {state} while waiting for {target}')
         if clock() >= deadline:
             raise Refused(f'Yogi builder did not reach {target} within {timeout}s; last observed {state}')
@@ -349,14 +474,117 @@ def preflight(cfg, free=shutil.disk_usage):
     return {'retainedSource': b['retainedSource'], 'freeBytes': available}
 
 
+METADATA = 'http://metadata.google.internal/computeMetadata/v1/'
+
+
+def metadata_read(key, timeout=5):
+    """The VM's own GCE metadata (run inside the readiness job only): its identity as Compute Engine reports it."""
+    import urllib.request
+    request = urllib.request.Request(METADATA + key, headers={'Metadata-Flavor': 'Google'})
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))  # the VM's own metadata server, never a proxy
+    with opener.open(request, timeout=timeout) as response:
+        return response.read(4096).decode().strip()
+
+
+def identity_refusal(cfg, env=os.environ, metadata=metadata_read):
+    """Refuse unless this runner is the exact registered replacement runner on the exact GCE instance (project, zone,
+    name, numeric ID). Any metadata failure refuses. Runs before every other readiness action."""
+    b = cfg['builder']
+    expected_runner = ((b.get('evidence') or {}).get('runner') or {}).get('name')
+    if not expected_runner or expected_runner != b['instance'] or env.get('RUNNER_NAME') != expected_runner:
+        raise Refused(f'readiness refused: runner {env.get("RUNNER_NAME", "")!r} is not the registered replacement runner '
+                      f'{expected_runner!r}; nothing inspected')
+    try:
+        seen = {'id': metadata('instance/id'), 'name': metadata('instance/name'),
+                'zone': metadata('instance/zone').rsplit('/', 1)[-1], 'project': metadata('project/project-id')}
+    except Exception as error:  # noqa: BLE001 - unavailable metadata is a refusal, never a pass
+        raise Refused(f'readiness refused: host identity unavailable ({type(error).__name__}); nothing inspected') from None
+    if seen != {'id': b['instanceId'], 'name': b['instance'], 'zone': b['zone'], 'project': b['project']}:
+        raise Refused('readiness refused: host identity is not the exact replacement tuple; nothing inspected')
+    return seen
+
+
+def readiness(cfg, out, env=os.environ, metadata=metadata_read, which=shutil.which, free=shutil.disk_usage,
+              identity=None):
+    """Readiness only, on the replacement builder: host identity, storage, build paths and tools. No build, download,
+    key bootstrap, signing, publication or provisioning; nothing is written but the receipt under --out.
+
+    The runner route (default) refuses unless the runner name and GCE identity match. The direct operator route
+    (yogi_direct.py) passes its own `identity` callable instead: it refuses the same way or returns the (check, detail)
+    pairs it established; it is never given a runner name. Either way the identity refusal runs first."""
+    b, checks = cfg['builder'], []
+    if identity is None:
+        guard(cfg, 'readiness')
+        identity_refusal(cfg, env, metadata)  # first: a wrong or unavailable identity inspects and writes nothing
+        established = [('host identity is the exact replacement tuple', json.dumps(tuple_of(cfg), sort_keys=True)),
+                       ('runner is the registered replacement runner', env.get('RUNNER_NAME', ''))]
+    else:
+        established = identity(cfg)  # the direct route's own guard and identity refusal, before any inspection
+
+    def check(name, condition, detail=''):
+        checks.append({'check': name, 'passed': bool(condition), 'detail': detail})
+
+    for name, detail in established:
+        check(name, True, detail)
+    for key in ('root', 'retainedSource', 'attempts'):
+        try:
+            regular_dir(b[key], key)
+            check(f'{key} directory', True, b[key])
+        except Refused as error:
+            check(f'{key} directory', False, str(error))
+    lock = Path(b['lock'])
+    check('build lock is a regular file', lock.is_file() and not lock.is_symlink(), str(lock))
+    if lock.is_file() and not lock.is_symlink():
+        try:
+            with builder_lock(cfg):
+                check('build lock not held by another attempt', True, str(lock))
+        except Refused as error:
+            check('build lock not held by another attempt', False, str(error))
+    cover = Path(b['coverDisplayInput'])
+    check('private cover display input present', cover.is_file() and not cover.is_symlink(), str(cover))
+    state = Path(b['bootstrapState'])
+    check('bootstrap state parent present', state.parent.is_dir() and not state.parent.is_symlink(), str(state.parent))
+    try:
+        available = free(b['attempts']).free
+        check('free space for an attempt', available >= int(b['minimumFreeBytes']),
+              f'{available} free, {b["minimumFreeBytes"]} required')
+    except OSError as error:
+        check('free space for an attempt', False, type(error).__name__)
+    source = Path(b['retainedSource'])
+    envsetup = source/'build/envsetup.sh'
+    resolved = envsetup.resolve() if envsetup.exists() else None
+    check('build/envsetup.sh resolves inside the retained tree', bool(resolved and resolved.is_file()
+          and source.resolve() in resolved.parents), str(resolved or envsetup))
+    check('repo-managed tree', (source/'.repo').is_dir(), str(source/'.repo'))
+    check('pinned release script present', (source/'script/generate-release.sh').is_file(), 'script/generate-release.sh')
+    for name in ('aapt', 'apksigner'):
+        tool = source/TOOLS[name]
+        check(f'{name} present and executable', tool.is_file() and os.access(tool, os.X_OK), str(tool))
+    java = source/TOOLS['java']/'bin/java'
+    check('JDK 21 present', java.is_file() and os.access(java, os.X_OK), str(java))
+    for tool in ('python3', 'git', 'bash', 'cp'):
+        check(f'host tool {tool}', which(tool) is not None, str(which(tool) or ''))
+    out = Path(out)
+    out.mkdir(mode=0o700)
+    run = {k: env.get(k, '') for k in ('GITHUB_SHA', 'GITHUB_RUN_ID', 'GITHUB_RUN_ATTEMPT', 'RUNNER_NAME')}
+    record = {'schema': 'roseos.yogi-readiness.v1', 'builder': tuple_of(cfg), 'run': run, 'checks': checks,
+              'passed': all(c['passed'] for c in checks),
+              'scope': 'readiness only: no build, download, key bootstrap, signing, publication or provisioning'}
+    release_receipts.write_once(out/'yogi-readiness.json', record)
+    if not record['passed']:
+        raise Refused('readiness failed: ' + '; '.join(c['check'] for c in checks if not c['passed']))
+    return record
+
+
 def attempt_dir(cfg, build):
     if not BUILD.fullmatch(str(build)):
         raise Refused('build must be a ten-digit build number')
     return Path(cfg['builder']['attempts'])/f'yogi-{build}'
 
 
-def allocate(cfg, run_id, attempt, source, now=None):
-    """A strictly newer build number and BUILD_DATETIME than the lab, the bootstrap and every earlier Yogi attempt."""
+def allocate(cfg, run_id, attempt, source, now=None, operation=None):
+    """A strictly newer build number and BUILD_DATETIME than the lab, the bootstrap and every earlier Yogi attempt.
+    A direct operator operation records its own operation id instead of a workflow run (never a fabricated run)."""
     now = now or datetime.datetime.now(datetime.timezone.utc)
     attempts = regular_dir(cfg['builder']['attempts'], 'Yogi attempts directory')
     used = [int(cfg['allocationFloor']['build'])]
@@ -379,6 +607,8 @@ def allocate(cfg, run_id, attempt, source, now=None):
     directory.mkdir(mode=0o700)  # exclusive: a concurrent or repeated allocation fails here
     record = {'schema': 'roseos.yogi-allocation.v1', 'device': DEVICE, 'build': str(build), 'timestamp': str(stamp),
               'source': source, 'runId': run_id, 'runAttempt': attempt, 'reservedAt': now.strftime('%Y-%m-%dT%H:%M:%SZ')}
+    if operation is not None:
+        record['directOperation'] = operation
     release_receipts.write_once(directory/'allocation.json', record)
     return record
 
@@ -946,10 +1176,10 @@ def publish(client, directory, cfg, out):
 
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument('action', choices=('describe', 'guard', 'builder', 'preflight', 'allocate', 'prepare', 'integrate',
+    p.add_argument('action', choices=('describe', 'guard', 'builder', 'readiness', 'preflight', 'allocate', 'prepare', 'integrate',
                                       'compile', 'sign', 'install-image', 'stage', 'verify-staged', 'publish',
                                       '_execute-sign'))
-    p.add_argument('operation', nargs='?', choices=('state', 'start', 'stop'))
+    p.add_argument('operation', nargs='?', choices=('state', 'start', 'stop', 'check'))
     p.add_argument('--stage', choices=STAGES)
     p.add_argument('--access', action='store_true')
     p.add_argument('--build')
@@ -970,6 +1200,8 @@ def main(argv=None):
             guard(cfg, a.stage or p.error('guard needs --stage'), a.access)
         elif a.action == 'builder':
             print(control_builder(cfg, a.operation or p.error('builder needs state, start or stop'), a.ownership))
+        elif a.action == 'readiness':
+            print(json.dumps(readiness(cfg, a.out or p.error('readiness needs --out'))))
         elif a.action == 'preflight':
             print(json.dumps(preflight(cfg)))
         elif a.action == 'allocate':

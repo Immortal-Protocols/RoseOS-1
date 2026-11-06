@@ -88,12 +88,15 @@ python3 scripts/tests/test_permission_apex.py
 python3 scripts/tests/test_release_candidate_contract.py
 python3 scripts/tests/test_release_allocate.py
 python3 scripts/tests/test_frankel_draft_recovery.py
+python3 scripts/tests/test_frankel_draft_promotion.py
 python3 scripts/tests/test_frankel_allocation_recovery.py
 python3 scripts/tests/test_release_chain.py
 # Mustang one-button chain wiring (canned run metadata; no network, token, host or dispatch).
 python3 scripts/tests/test_mustang_ota_chain_workflow.py
 # Yogi OTA route: contract, guards, allocation, packaged-Updater/trust and publication checks (synthetic; no host, key or network).
 python3 scripts/tests/test_yogi_ota.py
+# Yogi direct operator route: plan/start/run/status/cancel/cleanup and the guest agent (fake gcloud/ssh; no VM, SSH or key).
+python3 scripts/tests/test_yogi_direct.py
 # Mustang raised-edge gate (#570): the shared checker on synthetic archives; no signer, host or dispatch.
 python3 scripts/tests/test_mustang_edge_gate.py
 python3 scripts/tests/test_agent_beta_auto.py

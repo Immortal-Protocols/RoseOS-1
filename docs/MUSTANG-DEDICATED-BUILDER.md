@@ -237,6 +237,7 @@ name, a copied device label or a guessed value as readback.
 | `signingRouteEvidence` | Actual approved admission of this workflow to the **existing** signer, matching `builder`/workflow, `identityVariable: GCP_SIGNER_SERVICE_ACCOUNT`, `providerVariable: MUSTANG_SIGNER_WORKLOAD_IDENTITY_PROVIDER`, `approved: true`, `establishedMustangIdentityPreserved: true`. No new IAM/key/credential operation is performed by source or inferred from these field names. |
 | `appInputsRecord` | An actual `roseos.app-inputs-record.v1` Actions export, or the explicit `roseos.app-inputs-private-record.v1` private archive contract below, with the exact committed producer allocation and APK/receipt/policy identities. |
 | `baselineTargetFiles` | Actual own-disk path with the **same** SHA-256/size as the committed Mustang baseline signing receipt; the archive is rechecked on the guest. |
+| `baselineFactoryEvidence` | Optional explicitly bound [factory-image recovery contract](MUSTANG-BASELINE-RECOVERY.md), only with `baselineTargetFiles: null`. Default null; no fallback, retrieval or transfer is activated. |
 | `allocationState` | Reconciliation of failed run `41884368820`, `unknown: false`, all `consumedBuilds`, and the destination `builder`/`dataFilesystemUuid`. Deleting old data is not evidence that uncertainty disappeared. Replacing the VM/disk requires a matching updated reconciliation record. |
 | `publication` | Default disabled; a later actual authority record must name device/workflow, an `approvalRef`, `approved: true` and `automatic: false`. |
 

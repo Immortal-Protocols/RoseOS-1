@@ -28,11 +28,11 @@
       "config": "os/release-pipeline/frankel.json"
     },
     "yogi-builder": {
-      "runnerLabel": "roseos-yogi-builder",
+      "runnerLabel": "roseos-yogi-builder-20261105-b",
       "vm": {
         "project": "protocols-465723",
-        "zone": "us-west2-a",
-        "instance": "roseos-yogi-builder-20261103-a"
+        "zone": "us-west2-b",
+        "instance": "roseos-yogi-builder-20261105-b"
       },
       "storageRoot": "/srv/rose-yogi",
       "lockPath": "/srv/rose-yogi/yogi-build.lock",
@@ -41,7 +41,7 @@
         "identityVariable": "YOGI_CONTROLLER_SERVICE_ACCOUNT"
       },
       "config": "os/ota/yogi.json",
-      "evidence": "the committed Yogi route on main (#558, f7ed9e2): yogi-ota.yml runs-on, concurrency and controller identity, and os/ota/yogi.json builder (from the handoff). Its builder.status is runner-unregistered, so the route is separate but not in service."
+      "evidence": "Replacement Yogi builder from the Mac operator readback relayed by Chief (2026-11-06): project protocols-465723, zone us-west2-b, VM roseos-yogi-builder-20261105-b, numeric ID 2720796557371812468, restored disk 938743673401685238, runner 21 registered and disabled; mirrored in os/ota/yogi.json builder. Runner group/labels, disk/mount lineage and controller scope are still unrecorded, so builder.status is runner-unregistered and the host is not in service. The original zone-a VM roseos-yogi-builder-20261103-a is retired from this route."
     }
   },
   "lanes": {

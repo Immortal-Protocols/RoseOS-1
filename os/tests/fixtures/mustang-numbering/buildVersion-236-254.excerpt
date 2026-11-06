@@ -1,0 +1,19 @@
+  #
+  # If there is no BUILD_ID set, make it obvious.
+  BUILD_ID := UNKNOWN
+endif
+.KATI_READONLY := BUILD_ID
+
+ifndef BUILD_DATETIME
+  # Used to reproduce builds by setting the same time. Must be the number
+  # of seconds since the Epoch.
+  BUILD_DATETIME := $(shell date +%s)
+endif
+
+DATE := date -ud @$(BUILD_DATETIME)
+.KATI_READONLY := DATE
+
+# Everything should be using BUILD_DATETIME_FROM_FILE instead.
+# BUILD_DATETIME and DATE can be removed once BUILD_NUMBER moves
+# to soong_ui.
+$(KATI_obsolete_var BUILD_DATETIME,Use BUILD_DATETIME_FROM_FILE)

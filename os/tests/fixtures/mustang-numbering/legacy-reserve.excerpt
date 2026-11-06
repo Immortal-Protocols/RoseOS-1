@@ -1,0 +1,26 @@
+def reserve(home, run_id, run_attempt, source, fetch=None, clock=time.time, lock=None, root=ROOT):
+    for label, value in (('run id', run_id), ('run attempt', run_attempt)):
+        if not (isinstance(value, str) and value.isdigit() and value[0] != '0' and len(value) <= 20):
+            raise Refused(f'invalid: a positive numeric {label} is required')
+    if not re.fullmatch(r'[0-9a-f]{40}', str(source)):
+        raise Refused('invalid: --source must be the dispatch commit')
+    pipeline = json.loads((root/'os/release-pipeline/frankel.json').read_text())
+    base = Path(home)/'rose-actions'
+    with (lock or allocator.shared_lock)(pipeline['host']['lockPath']):
+        builds, observed = observe(home, pipeline['publication']['repository'], pipeline['publication']['api'], fetch, root)
+        now = datetime.datetime.fromtimestamp(int(clock()), datetime.timezone.utc)
+        build = allocator.next_build(builds, now, DAILY_LIMIT)
+        work, integration = (base/name.format(build=build) for name in DERIVED)
+        for path in (work, integration):
+            if os.path.lexists(path):
+                raise Refused(f'state_unavailable: {path.name} already exists')
+        record = {'schema': SCHEMA, 'device': DEVICE, 'build': build, 'source': source, 'runId': run_id,
+                  'runAttempt': run_attempt, 'reservedAt': now.strftime('%Y-%m-%dT%H:%M:%SZ'), 'workDir': str(work),
+                  'integrationDir': str(integration), 'observed': observed}
+        directory = base/RESERVATIONS
+        if not directory.exists():
+            directory.mkdir(mode=0o755)
+        fd = os.open(directory/f'{build}.json', os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
+        with os.fdopen(fd, 'w') as f:
+            f.write(json.dumps(record, indent=2, sort_keys=True) + '\n')
+    return record

@@ -374,9 +374,10 @@ standalone harness (`launcher3-compile`) and the other retained-tree work all ru
 **Yogi** has its own host in its committed route (#558): `yogi-ota.yml` and `os/ota/yogi.json`. The test checks every
 part of it against the map:
 
-- every self-hosted job of every stage on `roseos-yogi-builder`;
+- every self-hosted job of every stage on the replacement-specific `roseos-yogi-builder-20261105-b` label;
 - its own queue (`yogi-ota`) and controller identity (`YOGI_CONTROLLER_SERVICE_ACCOUNT`);
-- its own VM (`roseos-yogi-builder-20261103-a`), disk (`/srv/rose-yogi`) and lock.
+- its own VM (`protocols-465723` / `us-west2-b` / `roseos-yogi-builder-20261105-b`, numeric ID
+  `2720796557371812468`), disk (`/srv/rose-yogi`) and lock. The original zone-a VM is retired from the route.
 
 None of these is shared with the Frankel host. A host builds only when it is in service. For Yogi that is when
 `yogi.json` says `builder.status` `ready`, the rule `scripts/yogi_ota.py` applies before any stage. It is
@@ -2016,3 +2017,41 @@ receipt, and hosted scratch cleanup. No PR merge, build, signing, publication,
 builder start, app export or artifact payload beyond the pinned receipt occurs.
 After approval and verified source, the exact invocation is:
 `gh workflow run frankel-allocation-recovery.yml --repo Immortal-Protocols/RoseOS-1 --ref main`.
+
+### One-shot existing Frankel 2026110501 promotion
+
+`frankel-draft-promotion.yml` is a manual, main-only, first-attempt hosted route
+for existing release 435513431. It requires explicit promotion authority; source
+merge does not authorize execution. No inputs, VM, build, signing or allocation.
+It reuses recovery's fixed producer 42063694943 and exact retained OTA/allocation
+artifact IDs, byte limits and SHA-256 pins. It derives candidate
+cc238285b3aaf379e89dc6724ff1f68e478f8920 and validates the transferred manifest,
+public identity pins and all seven assets using the existing publisher checks.
+The manifest is bound transitively by the pinned producer artifact digest.
+
+The existing draft must match its ID/tag, source/recovery description, asset set,
+sizes and digests. Every asset is downloaded and hashed before one promotion
+PATCH. No asset creation, repair, replacement or deletion is available. A changed
+draft refuses. The route verifies public release identity, Latest and anonymous
+`releases/latest/download/frankel-stable` bytes after promotion. Transport or
+readback failure after PATCH is uncertain, never an automatic retry or rollback.
+
+Uses the existing repository-scoped pixel-ota App token, revoked on completion;
+90-minute hosted job, Frankel FIFO, private JSON receipts for 14 days and hosted
+scratch removal. Re-reads the original two retained Actions artifacts plus draft
+assets and public Latest/channel; these reads belong in execution approval.
+After approval only: `gh workflow run frankel-draft-promotion.yml --repo
+Immortal-Protocols/RoseOS-1 --ref main`. Inspect existing runs and release before
+execution. Never rerun the earlier recovery or normal build to promote this draft.
+
+Promotion run 42115900771 published release 435513431 at 2026-11-05T21:48:54Z,
+then failed post-publication readback. Independent read-only checks confirmed
+Latest and the 37-byte channel SHA-256
+bf2b6bcea79e38b4f2187e6f1334ed6fbeb7eeabc71dfd10588fc78d043c1959.
+GitHub's Latest URL redirects first to the same repository's tagged download;
+the generic public downloader permits only a direct storage redirect. The
+promotion-specific reader now admits exactly that pinned tagged URL, anonymously,
+then uses the unchanged storage reader. Wrong tags, queries, schemes or hosts
+refuse. No retry or re-promotion is appropriate for the already public release.
+The original run logged only PublishError, so its exact HTTP response was not
+retained; the observed redirect reproduces the source failure independently.

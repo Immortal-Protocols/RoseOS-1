@@ -37,6 +37,7 @@ SOURCES = ('os/pinned-manifest.xml', 'os/patches/*', 'os/overlays/*', 'os/backgr
            'scripts/mustang-reconcile-seed.py', 'scripts/apply-os-changes.py', 'scripts/host-reconcile.py',
            'workspace/rose-agent/*')
 VALIDATED_SOURCES = SOURCES + ('scripts/mustang*', 'os/ota/mustang.json', 'scripts/agent-beta-auto.py',
+           'os/ota/mustang-baseline-factory.json',
            'scripts/host-sign.py', 'scripts/host_secrets.py', 'scripts/host-decrypt-keys.py',
            'scripts/host-factory-package.py', 'scripts/github_release_publisher.py', 'scripts/release-pipeline.py',
            '.github/workflows/os-release.yml', '.github/workflows/mustang-ota*.yml',
@@ -177,15 +178,24 @@ def vendor_identity(raw):
 
 def observe_target(path, build, epoch, tools, pins, execute=subprocess.run):
     """Actual packaged Updater resources, signer and system OTA trust; no phone claim."""
+    with zipfile.ZipFile(path) as archive:
+        return observe_components(member(archive,'VENDOR/build.prop',4<<20),
+            member(archive,'SYSTEM/priv-app/Updater/Updater.apk',128<<20),
+            member(archive,'SYSTEM/etc/security/otacerts.zip',4<<20),build,epoch,tools,pins,execute)
+
+
+def observe_components(vendor_props, updater, trust_store, build, epoch, tools, pins,
+                       execute=subprocess.run, workdir=None, origin='target-files'):
+    """The same baseline checks on explicitly proven image/target-files components."""
     pipeline = module('mustang_ota_resources', 'release-pipeline.py')
     route = read(ROOT/'os/build-only/mustang-updater-route.json')
-    with zipfile.ZipFile(path) as archive, tempfile.TemporaryDirectory(prefix='mustang-ota-observe-') as directory:
-        props = vendor_identity(member(archive, 'VENDOR/build.prop', 4 << 20))
+    with tempfile.TemporaryDirectory(prefix='mustang-ota-observe-',dir=workdir) as directory:
+        props = vendor_identity(vendor_props)
         if (props.get('ro.product.vendor.device'), props.get('ro.vendor.build.version.incremental'),
                 props.get('ro.vendor.build.date.utc')) != ('mustang', build, epoch):
-            raise ValueError('actual target-files device/build/time differs')
+            raise ValueError(f'actual {origin} device/build/time differs')
         apk = Path(directory)/'Updater.apk'
-        apk.write_bytes(member(archive, 'SYSTEM/priv-app/Updater/Updater.apk', 128 << 20))
+        apk.write_bytes(updater)
         with zipfile.ZipFile(apk) as package:
             dexes = [row.filename for row in package.infolist() if re.fullmatch(r'classes[0-9]*\.dex', row.filename)]
             descriptors = [b'Lapp/seamlessupdate/client/'+name+b';' for name in (b'RoseChannels', b'RoseReleases')]
@@ -209,7 +219,7 @@ def observe_target(path, build, epoch, tools, pins, execute=subprocess.run):
         if result.returncode or [x.lower() for x in certs] != [pins['otaCertificateSha256']]:
             raise ValueError('packaged Updater signer differs from the established Mustang identity')
         trust = []
-        with zipfile.ZipFile(io.BytesIO(member(archive, 'SYSTEM/etc/security/otacerts.zip', 4 << 20))) as certificates:
+        with zipfile.ZipFile(io.BytesIO(trust_store)) as certificates:
             for row in certificates.infolist():
                 pem = member(certificates, row.filename, 1 << 20)
                 cert = Path(directory)/'trusted.pem'
@@ -223,12 +233,18 @@ def observe_target(path, build, epoch, tools, pins, execute=subprocess.run):
                 'trustedOtaCertificateSha256': sorted(trust), 'packagedUpdaterVerified': True}
 
 
-def observe_baseline(out, lane=None, tools=None, target_files=None):
+def observe_baseline(out, lane=None, tools=None, target_files=None, factory=None, runtime=None):
     cfg = config()
     baseline = cfg['baseline']
     signed = read(ROOT/baseline['signReceipt'])
     if signed['device'] != 'mustang' or signed['build'] != baseline['build'] or signed['candidateSource'] != baseline['source']:
         raise ValueError('committed baseline receipt differs')
+    if factory is not None:
+        if lane is None or runtime is None or target_files is not None:
+            raise ValueError('factory baseline needs exclusive dedicated evidence')
+        hp=module('mustang_baseline_lock','host-factory-package.py')
+        with hp.shared_lock(str(mustang_paths.layout(lane)['lockPath'])):
+            return module('mustang_factory_baseline','mustang-baseline-image.py').observe(factory,lane,runtime,out,root=ROOT)
     if lane is None:
         tools = read(ROOT/'os/build-only/mustang-host.json')
         lock = read(ROOT/'os/release-pipeline/frankel.json')['host']['lockPath']
@@ -248,6 +264,16 @@ def observe_baseline(out, lane=None, tools=None, target_files=None):
                     installedEvidence=baseline['installationEvidence'], phoneObserved=False)
     release_receipts.write_once(out, observed)
     return observed
+
+
+def require_factory_baseline(record):
+    runtime=read(ROOT/'os/build-only/mustang-runtime.json')
+    ref=runtime.get('baselineFactoryEvidence')
+    if not ref or runtime.get('baselineTargetFiles') is not None:
+        raise ValueError('factory-image baseline evidence is not explicitly selected')
+    value=module('mustang_baseline_reference','mustang-dedicated.py').reference(ref,ROOT)
+    lane=read(ROOT/'os/build-only/mustang-lane.json')
+    return module('mustang_baseline_receipt','mustang-baseline-image.py').require_receipt(record,value,lane,runtime,ROOT)
 
 
 def ota_metadata(path, build, epoch, baseline):
@@ -285,6 +311,11 @@ def stage(sign_run, attempt, baseline_file, out, lane=None, tools=None, publicat
                              'passphrase': {'name': adapter.SECRETS['passphrase'], 'version': '1'}}:
         raise ValueError('established Mustang signing versions must be preserved')
     baseline = read(baseline_file)
+    factory_mode=lane is not None and read(ROOT/'os/build-only/mustang-runtime.json').get('baselineFactoryEvidence') is not None
+    if factory_mode or baseline.get('evidenceKind')=='factory-images':
+        require_factory_baseline(baseline)
+        if baseline.get('baselineSource')!=cfg['baseline']['source']:
+            raise ValueError('factory baseline original candidate differs')
     if baseline.get('packagedUpdaterVerified') is not True or baseline.get('build') != cfg['baseline']['installedBuild'] \
             or baseline.get('trustedOtaCertificateSha256') is None \
             or identities()['otaCertificateSha256'] not in baseline['trustedOtaCertificateSha256']:
@@ -340,6 +371,7 @@ def stage(sign_run, attempt, baseline_file, out, lane=None, tools=None, publicat
                    'phoneUpdatePassed': False, 'automationDemonstrated': False, 'sprintOmissions': signed['omittedChecks'],
                    'ota': {'file': ota.name, 'sizeBytes': ota.stat().st_size, 'sha256': digest(ota)}}
         if lane is not None: receipt.update(builder=dict(lane['vm']),workflow=lane['workflow'])
+        if factory_mode: receipt['baselineFactoryEvidence']=baseline
         release_receipts.write_once(out/'mustang-ota-receipt.json', receipt)
         (out/'SHA256SUMS').write_text(''.join(f'{digest(p)}  {p.name}\n' for p in sorted(out.iterdir())))
     return receipt
@@ -355,6 +387,18 @@ def verify_staged(directory, cfg, publication=True):
             or any(v is not True for v in r['checks'].values()) \
             or r.get('publicIdentity') != identities() or r.get('baselineBuild') != cfg['baseline']['installedBuild']:
         raise ValueError('complete Mustang OTA-specific verification required')
+    factory=r.get('baselineFactoryEvidence')
+    selected=read(ROOT/'os/build-only/mustang-runtime.json').get('baselineFactoryEvidence') is not None
+    if selected or factory is not None:
+        if not isinstance(factory,dict): raise ValueError('selected factory baseline proof missing')
+        require_factory_baseline(factory)
+        if factory.get('baselineSource')!=cfg['baseline']['source']:
+            raise ValueError('factory baseline original candidate differs')
+        if any(factory.get(k)!=r.get(k) for k in ('runId','runAttempt','recipeSource')):
+            raise ValueError('factory baseline and staged OTA run/source differ')
+        encoded=(json.dumps(factory,indent=2,sort_keys=True)+'\n').encode()
+        if hashlib.sha256(encoded).hexdigest()!=r.get('baselineObservationSha256'):
+            raise ValueError('embedded factory baseline receipt hash differs')
     mustang_edge.require_pair(r)
     if r.get('label') != LABEL or not all(re.fullmatch(r'[0-9a-f]{40}', str(r.get(k,'')))
                                          for k in ('candidateSource','recipeSource')) \

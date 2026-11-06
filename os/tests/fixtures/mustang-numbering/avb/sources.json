@@ -1,0 +1,78 @@
+{
+  "kind": "pinned-mustang-board-source-defaults",
+  "realImageEvidence": false,
+  "sources": [
+    {
+      "repository": "GrapheneOS/adevtool",
+      "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c",
+      "path": "vendor-skels/google_devices/mustang/BoardConfig.mk",
+      "gitBlob": "6ca44d8d2bed4021e6b5b48de7866dacc11264a4",
+      "file": "1-BoardConfig.mk",
+      "sha256": "b94e384529526cbf13628263864249a5f721d729ec0be6f80e01a4ce6a10188b",
+      "url": "https://github.com/GrapheneOS/adevtool/blob/17df3b79a73e67ad68387b35c7d41c85e1d8103c/vendor-skels/google_devices/mustang/BoardConfig.mk"
+    },
+    {
+      "repository": "GrapheneOS/adevtool",
+      "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c",
+      "path": "config/mk/google_devices/device/mustang/BoardConfig-base.mk",
+      "gitBlob": "a13aa3d18ddc71924058e89acd532459c90a3cad",
+      "file": "2-BoardConfig-base.mk",
+      "sha256": "361a62ef7c1c417c3c222e10a64292bbc40dcb0266c118209c33e880a031f466",
+      "url": "https://github.com/GrapheneOS/adevtool/blob/17df3b79a73e67ad68387b35c7d41c85e1d8103c/config/mk/google_devices/device/mustang/BoardConfig-base.mk"
+    },
+    {
+      "repository": "GrapheneOS/adevtool",
+      "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c",
+      "path": "config/mk/google_devices/platform/laguna/BoardConfig-common.mk",
+      "gitBlob": "8b7b82eb855a955d48ec856df541fa01dea30f23",
+      "file": "3-BoardConfig-common.mk",
+      "sha256": "124f1043487a17dac8bb9bcabc22b8710f0db7ce0bb99131af148e00ec9c2e2d",
+      "url": "https://github.com/GrapheneOS/adevtool/blob/17df3b79a73e67ad68387b35c7d41c85e1d8103c/config/mk/google_devices/platform/laguna/BoardConfig-common.mk"
+    },
+    {
+      "repository": "GrapheneOS/adevtool",
+      "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c",
+      "path": "config/mk/google_devices/common/BoardConfig-common-gs201-plus.mk",
+      "gitBlob": "b332c6c5578a5727ac76b1eadd9235505eaddd1e",
+      "file": "4-BoardConfig-common-gs201-plus.mk",
+      "sha256": "015e164a75c790d08ec701d764e8326797581eed143f513df29d3896ff135f12",
+      "url": "https://github.com/GrapheneOS/adevtool/blob/17df3b79a73e67ad68387b35c7d41c85e1d8103c/config/mk/google_devices/common/BoardConfig-common-gs201-plus.mk"
+    },
+    {
+      "repository": "GrapheneOS/adevtool",
+      "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c",
+      "path": "config/mk/google_devices/common/BoardConfig-common.mk",
+      "gitBlob": "ed3c1742e06fe5b15b71611bfa626b673122f29a",
+      "file": "5-BoardConfig-common.mk",
+      "sha256": "479a60afbff07f6b822a3f2a0615f62994729821f0988965989e12b383dc608d",
+      "url": "https://github.com/GrapheneOS/adevtool/blob/17df3b79a73e67ad68387b35c7d41c85e1d8103c/config/mk/google_devices/common/BoardConfig-common.mk"
+    },
+    {
+      "repository": "GrapheneOS/adevtool",
+      "revision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c",
+      "path": "config/mk/google_devices/common/BoardConfig-armv9.mk",
+      "gitBlob": "b3040800bda3dfaf4c187678707fdd13d66b5ba5",
+      "file": "6-BoardConfig-armv9.mk",
+      "sha256": "eab0f44a7b6f299b633b3bfd215181bc8b60e192c3f3640c4c04cc04bb045bfc",
+      "url": "https://github.com/GrapheneOS/adevtool/blob/17df3b79a73e67ad68387b35c7d41c85e1d8103c/config/mk/google_devices/common/BoardConfig-armv9.mk"
+    },
+    {
+      "repository": "GrapheneOS/platform_build",
+      "revision": "b0f697df8cc9519408ca0a404e918cd51bde0735",
+      "path": "target/board/BoardConfigMainlineCommon.mk",
+      "gitBlob": "68699624b26f6e13b99a6b0f87412f480a2a63de",
+      "file": "7-BoardConfigMainlineCommon.mk",
+      "sha256": "21479b9d67216a4e35d02a8652ee196681ee454d8d08118180a190884b6aed71",
+      "url": "https://github.com/GrapheneOS/platform_build/blob/b0f697df8cc9519408ca0a404e918cd51bde0735/target/board/BoardConfigMainlineCommon.mk"
+    },
+    {
+      "repository": "GrapheneOS/platform_build",
+      "revision": "b0f697df8cc9519408ca0a404e918cd51bde0735",
+      "path": "target/board/BoardConfigPixelCommon.mk",
+      "gitBlob": "22521b5ee2a462a62823f4ec6dc15eb5894d1765",
+      "file": "8-BoardConfigPixelCommon.mk",
+      "sha256": "da23cf70c1b2d5cfd69f10c7a528fb3a641f776f1af5b290d74306a0992dd8c9",
+      "url": "https://github.com/GrapheneOS/platform_build/blob/b0f697df8cc9519408ca0a404e918cd51bde0735/target/board/BoardConfigPixelCommon.mk"
+    }
+  ]
+}
