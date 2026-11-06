@@ -6,8 +6,9 @@ one VM the controller starts and stops), frankel.json's host lock and the builde
 say exactly that. The rules that a lane's move to its own host must satisfy are checked too: its jobs' runner, a queue
 keyed by host, a lane-aware controller, owned stops wherever a host's lanes do not share one queue, and the shared app
 version ledger. Yogi's own route (yogi-ota.yml and os/ota/yogi.json) is checked against its host and kept apart from the
-Frankel host. A host builds only when it is in service. Synthetic splits show each rule refuses an unsafe move. Source
-only: no runner, VM or API is touched.
+Frankel host. The standalone harness has its own manual workflow (launcher3-compile.yml), routed only through its
+unbound dedicated binding, so it claims no capacity. A host builds only when it is in service. Synthetic splits show
+each rule refuses an unsafe move. Source only: no runner, VM or API is touched.
 """
 import copy
 import importlib.util
@@ -267,6 +268,30 @@ class MapTest(unittest.TestCase):
         mislabeled['lanes']['mustang'].pop('runtimeStatus')
         self.assertIn(['mustang','yogi'], independent_pairs(mislabeled, live=False))
 
+    def test_the_harness_runs_only_on_its_own_unbound_lane(self):
+        lane = CONTRACT['lanes']['harness']
+        self.assertEqual((lane['workflow'], lane['modes'], lane['runtimeStatus']),
+                         ('.github/workflows/launcher3-compile.yml', [], 'retired-shared-host'))
+        binding = json.loads((ROOT/lane['activeBinding']).read_text())
+        self.assertEqual((binding['lane']['status'], binding['lane']['workflow']), ('unbound', lane['workflow']))
+        self.assertNotIn('launcher3-compile', shape.modes())  # the os-release.yml mode is removed
+        for live in (True, False):
+            self.assertFalse(any('harness' in pair for pair in independent_pairs(CONTRACT, live)))
+        workflow = (ROOT/lane['workflow']).read_text()
+        # Its own queue, which no host of the map uses; no static self-hosted runner, so the worker goes only to the
+        # bound runner label the hosted guard derives from the binding; its own controller identity.
+        self.assertEqual(queue_of(workflow), 'launcher3-compile')
+        self.assertNotIn(queue_of(workflow), [h['queue'] for h in CONTRACT['hosts'].values()])
+        self.assertEqual(self_hosted_jobs(workflow), {})
+        self.assertIn('    runs-on: ${{ fromJSON(needs.guard.outputs.runs_on) }}\n', shape.jobs(workflow)['worker'])
+        self.assertEqual(controller_variable(workflow, 'LAUNCHER3_CONTROLLER_SERVICE_ACCOUNT'),
+                         {'LAUNCHER3_CONTROLLER_SERVICE_ACCOUNT'})
+        self.assertEqual(controller_variable(workflow), set())
+        # Only the retirement status keeps its historical Frankel host from reading as parallel capacity.
+        mislabeled = copy.deepcopy(CONTRACT)
+        mislabeled['lanes']['harness'].pop('runtimeStatus')
+        self.assertIn(['harness', 'yogi'], independent_pairs(mislabeled, live=False))
+
     def test_folded_job_conditions_are_read_whole(self):
         jobs = self_hosted_jobs(shape.text())
         self.assertEqual(jobs['mustang-signer'], ('roseos-frankel-builder', ['mustang-delivery', 'mustang-ota']))
@@ -343,7 +368,7 @@ class SplitTest(unittest.TestCase):
     def test_a_split_host_pair_counts_as_parallel(self):
         pairs = independent_pairs(self.moved(), live=False)
         self.assertEqual([p for p in pairs if 'mustang' in p], [['agent', 'mustang'], ['frankel', 'mustang'],
-            ['frankel-host-other', 'mustang'], ['harness', 'mustang'], ['mustang', 'yogi']])
+            ['frankel-host-other', 'mustang'], ['mustang', 'yogi']])
         self.assertEqual(independent_pairs(self.moved()), [])  # a host not in service never builds in parallel
         # A second machine still on the shared queue (or runner label) does not build in parallel.
         for field, value in (('queue', 'os-release-frankel'), ('runnerLabel', 'roseos-frankel-builder')):
