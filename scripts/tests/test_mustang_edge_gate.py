@@ -1023,6 +1023,53 @@ class NumberingCompatibilityTest(unittest.TestCase):
     fixtures = ROOT/'os/tests/fixtures/mustang-numbering'
     synthetic_ids = ('9999123200', '9999999999')
 
+    def test_mustang_board_include_chain_and_symbolic_avb_default(self):
+        import hashlib
+        import shutil
+        import xml.etree.ElementTree as ET
+        directory=self.fixtures/'avb'
+        audit=json.loads((directory/'sources.json').read_text())
+        self.assertFalse(audit['realImageEvidence'])
+        pins={p.attrib['name']:p.attrib['revision']
+              for p in ET.parse(ROOT/'os/pinned-manifest.xml').iter('project')}
+        adevtool=json.loads((ROOT/'os/build-only/mustang.json').read_text())['pins']['vendor/adevtool']
+        sources={}
+        for row in audit['sources']:
+            data=(directory/row['file']).read_bytes()
+            self.assertEqual(hashlib.sha256(data).hexdigest(),row['sha256'])
+            self.assertEqual(hashlib.sha1(b'blob '+str(len(data)).encode()+b'\0'+data).hexdigest(),row['gitBlob'])
+            self.assertEqual(row['revision'],adevtool if row['repository']=='GrapheneOS/adevtool' else pins['platform_build'])
+            prefix='vendor/adevtool/' if row['repository']=='GrapheneOS/adevtool' else 'build/make/'
+            sources[prefix+row['path']]=data.decode()
+        queue=['vendor/adevtool/vendor-skels/google_devices/mustang/BoardConfig.mk'];seen=set()
+        while queue:
+            path=queue.pop()
+            if path in seen: continue
+            seen.add(path)
+            for line in sources[path].splitlines():
+                if not line.startswith('include '): continue
+                included=line.removeprefix('include ').strip()
+                # Flag declarations are outside this board-include/default audit.
+                if included=='build/make/target/product/build_variables.mk': continue
+                self.assertIn(included,sources)
+                queue.append(included)
+        self.assertEqual(seen,set(sources))
+        rule=[line for text in sources.values() for line in text.splitlines()
+              if line.startswith('BOARD_AVB_ROLLBACK_INDEX :=')]
+        self.assertEqual(rule,['BOARD_AVB_ROLLBACK_INDEX := $(PLATFORM_SECURITY_PATCH_TIMESTAMP)'])
+        make=shutil.which('make')
+        if make is None: self.skipTest('Make unavailable; symbolic rollback-default probe unrun')
+        with tempfile.TemporaryDirectory() as tmp:
+            makefile=Path(tmp)/'probe.mk'
+            makefile.write_text(rule[0]+"\nprobe:\n\t@printf '%s\\n' '$(BOARD_AVB_ROLLBACK_INDEX)'\n")
+            for build,stamp in [(self.synthetic_ids[0],'4102444800'),(self.synthetic_ids[1],'4102444800'),
+                                (self.synthetic_ids[1],'4102444801')]:
+                result=subprocess.run([make,'--no-print-directory','-s','-f',str(makefile),'probe',
+                    'BUILD_NUMBER='+build,'BUILD_DATETIME=1','PLATFORM_SECURITY_PATCH_TIMESTAMP='+stamp],
+                    capture_output=True,text=True,timeout=10)
+                self.assertEqual(result.returncode,0,result.stderr)
+                self.assertEqual(result.stdout,stamp+'\n')
+
     def test_frozen_upstream_excerpts_match_the_manifest_pins(self):
         import hashlib
         import xml.etree.ElementTree as ET
@@ -1143,6 +1190,184 @@ class NumberingCompatibilityTest(unittest.TestCase):
                 result=subprocess.run([java,'-ea','-cp',str(root),main,*args],capture_output=True,text=True,timeout=10)
                 self.assertEqual(result.returncode,0,result.stderr)
                 self.assertIn(expected,result.stdout)
+
+
+class CounterRecoveryContractTest(unittest.TestCase):
+    """Synthetic authority/CAS and replica fixtures; no real numbering epoch exists."""
+    def setUp(self):
+        import mustang_numbering
+        self.contract=mustang_numbering
+        self.policy=json.loads((ROOT/'os/build-only/mustang-numbering.json').read_text())
+        self.policy.update(status='bound',epoch='1'*64,authority='https://counter.synthetic.invalid/mustang',
+                           minimumTimestamp='1000')
+        self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup)
+        self.root=Path(self.temp.name)
+        self.events=[]
+        self.anchor=self.contract.expected_anchor(self.policy,self.events)
+
+    def run_context(self,run='101'):
+        return dict(repositoryId='1428996648',workflow=self.contract.WORKFLOW,runId=run,attempt=1,source='a'*40)
+
+    def proposal(self,run='101',epoch='1001'):
+        return self.contract.propose(self.policy,self.anchor,self.events,self.run_context(run),epoch)
+
+    def commit_fixture(self,proposal):
+        """Model an external authority's atomic CAS, not a production backend."""
+        import release_receipts
+        if proposal['expected']!=self.anchor: return False
+        entry=proposal['reservation']
+        release_receipts.write_once(self.root/(str(entry['counter'])+'.json'),entry)
+        self.events.append(copy.deepcopy(entry))
+        self.anchor=self.contract.expected_anchor(self.policy,self.events)
+        return True
+
+    def test_committed_policy_and_cli_are_inert(self):
+        value=json.loads((ROOT/'os/build-only/mustang-numbering.json').read_text())
+        self.assertEqual(value['status'],'unbound')
+        for key in ('epoch','authority','minimumTimestamp'): self.assertIsNone(value[key])
+        with self.assertRaisesRegex(ValueError,'unbound'): self.contract.policy(value)
+        result=subprocess.run([sys.executable,str(ROOT/'scripts/mustang_numbering.py')],
+                              capture_output=True,text=True,timeout=10)
+        self.assertNotEqual(result.returncode,0)
+        self.assertIn('no allocator',result.stderr)
+
+    def test_monotonic_counter_and_timestamp_are_distinct(self):
+        for sequence in range(1,5):
+            proposal=self.proposal(str(100+sequence),str(1000+sequence))
+            self.assertEqual(proposal['reservation']['build'],str(self.contract.LEGACY_MAX+sequence))
+            self.assertEqual(proposal['reservation']['buildTimestamp'],str(1000+sequence))
+            with self.assertRaisesRegex(ValueError,'not committed'):
+                self.contract.confirm(self.policy,proposal,self.anchor,self.events)
+            self.assertTrue(self.commit_fixture(proposal))
+            confirmed=self.contract.confirm(self.policy,proposal,self.anchor,self.events)
+            self.assertEqual(confirmed,proposal['reservation'])
+        # Real time cannot be manufactured from the synthetic ID or silently moved backwards.
+        for epoch in ('1004','1003','0','-1','01005','9223372036854775808'):
+            with self.subTest(epoch=epoch),self.assertRaises(ValueError): self.proposal('105',epoch)
+
+    def test_counter_boundaries_cannot_wrap_or_use_a_date_sequence(self):
+        self.assertEqual(self.contract.build_for_counter(1),'9999123200')
+        self.assertEqual(self.contract.build_for_counter(self.contract.CAPACITY),'9999999999')
+        for bad in (0,-1,True,'1',self.contract.CAPACITY+1):
+            with self.subTest(counter=bad),self.assertRaises(ValueError): self.contract.build_for_counter(bad)
+
+    def test_concurrent_proposals_require_one_successful_compare_and_swap(self):
+        import concurrent.futures
+        import threading
+        proposals=[self.proposal('101'),self.proposal('102')]
+        barrier=threading.Barrier(2);cas_lock=threading.Lock()
+        def commit(proposal):
+            barrier.wait(timeout=5)
+            with cas_lock: return self.commit_fixture(proposal)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+            outcomes=list(pool.map(commit,proposals))
+        self.assertEqual(sorted(outcomes),[False,True])
+        self.assertEqual(len(self.events),1)
+        for proposal,won in zip(proposals,outcomes):
+            if won: self.assertEqual(self.contract.confirm(self.policy,proposal,self.anchor,self.events),self.events[0])
+            else:
+                with self.assertRaises(ValueError): self.contract.confirm(self.policy,proposal,self.anchor,self.events)
+
+    def test_atomic_receipt_primitive_does_not_overwrite_a_concurrent_winner(self):
+        import concurrent.futures
+        import release_receipts
+        path=self.root/'same-slot.json'
+        def write(value):
+            try: release_receipts.write_once(path,value);return True
+            except release_receipts.ReceiptExists: return False
+        rows=[self.proposal('101')['reservation'],self.proposal('102')['reservation']]
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+            self.assertEqual(sorted(pool.map(write,rows)),[False,True])
+        self.assertIn(json.loads(path.read_text()),rows)
+
+    def test_interruption_before_commit_consumes_nothing_and_after_commit_recovers_exact_receipt(self):
+        first=self.proposal()
+        self.assertEqual(self.events,[])
+        self.assertEqual(self.contract.recovery_suffix(self.policy,self.anchor,self.events,[]),[])
+        self.commit_fixture(first)
+        # Caller died before storing or seeing the receipt. Readback, not a new proposal, resolves it.
+        recovered=self.contract.recovery_suffix(self.policy,self.anchor,self.events,[])
+        self.assertEqual(recovered,[first['reservation']])
+        self.assertEqual(self.contract.confirm(self.policy,first,self.anchor,self.events),recovered[0])
+        self.assertEqual(self.contract.confirm(self.policy,first,self.anchor,self.events),recovered[0])
+        with self.assertRaisesRegex(ValueError,'already consumes'): self.proposal()
+        for attempt in (0,2,True,'1'):
+            run=self.run_context('102');run['attempt']=attempt
+            with self.subTest(attempt=attempt),self.assertRaises(ValueError):
+                self.contract.propose(self.policy,self.anchor,self.events,run,'1002')
+
+    def test_replica_restore_and_replay_are_idempotent_without_a_new_counter(self):
+        import release_receipts
+        for n in range(1,4): self.commit_fixture(self.proposal(str(100+n),str(1000+n)))
+        replica=[copy.deepcopy(self.events[0])]
+        missing=self.contract.recovery_suffix(self.policy,self.anchor,self.events,replica)
+        self.assertEqual(missing,self.events[1:])
+        for event in missing:
+            release_receipts.write_once(self.root/('replica-'+str(event['counter'])+'.json'),event)
+            replica.append(json.loads((self.root/('replica-'+str(event['counter'])+'.json')).read_text()))
+        self.assertEqual(self.contract.recovery_suffix(self.policy,self.anchor,self.events,replica),[])
+        self.assertEqual(self.anchor['counter'],3)
+
+    def test_replica_write_uncertainty_rechecks_existing_bytes(self):
+        import release_receipts
+        proposal=self.proposal();self.commit_fixture(proposal)
+        replica=self.root/'replica.json'
+        original=os.fsync;calls=0
+        def fail_directory_sync(fd):
+            nonlocal calls
+            calls+=1
+            if calls==2: raise OSError('synthetic failure after immutable receipt link')
+            return original(fd)
+        with patch.object(release_receipts.os,'fsync',side_effect=fail_directory_sync):
+            with self.assertRaises(OSError): release_receipts.write_once(replica,self.events[0])
+        # The return was uncertain; neither retry allocation nor assert that the write did not happen.
+        observed=json.loads(replica.read_text())
+        self.assertEqual(self.contract.recovery_suffix(self.policy,self.anchor,self.events,[observed]),[])
+        self.assertEqual(self.contract.confirm(self.policy,proposal,self.anchor,self.events),observed)
+
+    def test_stale_backup_missing_receipt_or_missing_anchor_cannot_authorize_reuse(self):
+        old_anchor=copy.deepcopy(self.anchor)
+        self.commit_fixture(self.proposal())
+        for anchor,events in ((self.anchor,[]),(old_anchor,self.events),(None,self.events)):
+            with self.subTest(anchor=anchor),self.assertRaises(ValueError):
+                self.contract.propose(self.policy,anchor,events,self.run_context('102'),'1002')
+        with self.assertRaises(ValueError): self.contract.recovery_suffix(self.policy,self.anchor,[],[])
+
+    def test_checksums_cannot_establish_external_authority_freshness(self):
+        old_anchor=copy.deepcopy(self.anchor)
+        self.commit_fixture(self.proposal())
+        # A jointly replayed old head and journal are internally consistent. Only
+        # the mandatory fresh external head distinguishes them; no hash proves freshness.
+        self.assertEqual(self.contract.snapshot(self.policy,old_anchor,[]),old_anchor)
+        with self.assertRaises(ValueError): self.contract.snapshot(self.policy,self.anchor,[])
+
+    def test_epoch_or_authority_loss_requires_external_resolution_not_initialization(self):
+        self.commit_fixture(self.proposal())
+        for key,value in [('epoch',None),('epoch','2'*64),('authority',None),
+                          ('authority','https://other.synthetic.invalid/counter')]:
+            policy=dict(self.policy,**{key:value})
+            with self.subTest(key=key,value=value),self.assertRaises(ValueError):
+                self.contract.propose(policy,self.anchor,self.events,self.run_context('102'),'1002')
+
+    def test_tampered_forward_or_forked_replica_and_forged_confirmation_refuse(self):
+        proposal=self.proposal();self.commit_fixture(proposal)
+        for key,value in [('build','9999999999'),('previous','0'*64),('counter',True),
+                          ('buildTimestamp','1000'),('epoch','2'*64)]:
+            rows=copy.deepcopy(self.events);rows[0][key]=value
+            with self.subTest(key=key),self.assertRaises(ValueError):
+                self.contract.recovery_suffix(self.policy,self.anchor,self.events,rows)
+        forged=copy.deepcopy(proposal);forged['reservation']['run']['source']='b'*40
+        with self.assertRaises(ValueError): self.contract.confirm(self.policy,forged,self.anchor,self.events)
+        self.commit_fixture(self.proposal('102','1002'))
+        first_anchor=self.contract.expected_anchor(self.policy,self.events[:1])
+        with self.assertRaises(ValueError): self.contract.recovery_suffix(self.policy,first_anchor,self.events[:1],self.events)
+
+    def test_legacy_unknown_is_preserved_and_quarantine_proof_cannot_be_relaxed(self):
+        for key,value in [('legacyAllocationKnown',True),('legacyCeiling','2026110499'),
+                          ('failedSource','b'*40),('legacyProofSha256','0'*64)]:
+            with self.subTest(key=key),self.assertRaises(ValueError):
+                self.contract.policy(dict(self.policy,**{key:value}))
+        self.assertFalse(self.policy['legacyAllocationKnown'])
 
 
 if __name__=='__main__':

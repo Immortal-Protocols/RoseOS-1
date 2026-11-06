@@ -52,7 +52,7 @@ pin and excerpt digests offline.
 | Pinned Updater `Service.java` | Target incremental is a string. Newness uses `Long.parseLong(metadata[1])` and `ro.build.date.utc`; target timestamp must be strictly later. | Execute its unchanged metadata-admission block in a controlled Java harness, including times above signed 32-bit range and invalid/overflowing time. No Android/network/UpdateEngine execution. |
 | Recovery `install/install.cpp` | Source incremental uses exact string matching; target incremental is logged as a string. Downgrade comparison uses `int64_t` timestamps. | Compile and execute the unchanged functions in a controlled C++ harness. Test matching/mismatching incremental IDs and older/malformed/overflowing timestamps; no Android library/signature/payload execution. |
 | UpdateEngine `hardware_android.cc`, `hardware_interface.h`, `delta_performer.cc` | Build timestamp is `int64_t` from `ro.build.date.utc`; payload maximum-timestamp check is separate. | Pinned source inspection only. |
-| Common Make AVB wiring | Passes board-specific rollback-index variables to AVB; the inspected common rules do not establish those variables' Mustang-specific values. | **Incomplete**: generated Mustang board definitions, all partition rollback indices and bootloader behavior still need evidence. Common wiring alone cannot prove their independence from the ID. |
+| Mustang board AVB default | The pinned Mustang skeleton includes its device base, Laguna common and `BoardConfigMainlineCommon.mk`, which assigns `BOARD_AVB_ROLLBACK_INDEX := $(PLATFORM_SECURITY_PATCH_TIMESTAMP)`. | Eight complete, hash/pin-checked board-source files and include traversal; execute the exact assignment in a small Make probe. Changing only the synthetic ID does not change this default. Actual final board evaluation, image indices and device rollback floors remain unproved. |
 
 Synthetic probe IDs cover the first integer above the legacy ceiling and the
 largest ten-digit integer. These are fixtures, not release assignments. There
@@ -106,12 +106,75 @@ with these linked changes reviewed together:
    lower rollback indices, request downgrade/wipe or reuse unsigned failed-run
    outputs. Carry source pins/checker identity into the migration evidence.
 
-The exact remaining source dependency is the durable counter/epoch and recovery
-record contract, together with the missing device-specific rollback-definition
-audit. No active allocator switch is safe to claim from the current bounded
-probes alone. No counter binding or migration record has been invented here.
-These can be prepared independently of #592; activation still needs the real
-dedicated capacity, admitted inputs/baseline, and applicable runtime authority.
+### Implemented inactive recovery contract
+
+`scripts/mustang_numbering.py` implements the proposal/commit/recovery record
+contract without a network, storage or allocator adapter. Its policy in
+`os/build-only/mustang-numbering.json` is **unbound**: epoch, authority and real
+timestamp floor are null. No existing allocator, producer, workflow, publication
+or runtime admission imports it. Direct CLI execution refuses. No live version
+is assigned by this source increment.
+
+The contract requires an independently established policy/epoch, an external
+authority's **fresh authenticated head**, and its complete immutable journal.
+The policy pins the legacy source proof and retains the failed allocation as
+unknown. Records hash-bind policy, epoch, exact dedicated run/source, counter,
+previous receipt, derived ten-digit identity and a distinct explicit timestamp.
+Both counters and actual timestamps must increase; the counter never supplies
+an epoch time. Namespace exhaustion, duplicate runs, reruns and mismatched
+receipts refuse.
+
+The future adapter's protocol is: read the authoritative head/journal, call
+`propose()`, atomically compare-and-swap that exact head while durably recording
+the reservation, freshly read it back, then call `confirm()` before exposing the
+ID to a producer. A proposal is **not** consumption. An interrupted/uncertain
+commit requires readback; a confirmed reservation stays consumed even if the
+caller never received its response or no build happened. Confirming an already
+committed proposal is idempotent; proposing another counter for the same run
+refuses.
+
+`recovery_suffix()` accepts only an exact local prefix of the complete authority
+journal and returns the already consumed receipts missing from that replica.
+It neither writes files nor allocates another counter. A stale local backup
+can be replayed from a fresh independent head. Missing authority state,
+wrong/lost epoch, forward/forked replicas and incomplete journals fail closed.
+There is no initialization, epoch rollover, automatic empty-ledger replacement
+or backup-as-authority fallback.
+
+Checksums cannot establish authentication or freshness: a jointly replayed old
+head and old journal remain internally consistent. A regression test explicitly
+demonstrates this limit. **No production adapter exists**, and a caller cannot
+treat a locally manufactured anchor or a `fresh: true` assertion as evidence.
+The fixture authority models atomic CAS; replica tests use the existing
+`release_receipts.write_once()` primitive, including concurrent creation and an
+uncertain error after linking. They do not prove a deployed backend's atomicity,
+durability, independent storage, power-loss behavior or disaster recovery.
+
+The concrete remaining dependency is selection and verification of the actual
+independent authority and authenticated CAS/readback adapter, including no-reuse
+recovery after loss of the authority itself. Before integration it must reconcile
+actual consumed IDs/public timestamps and bind an evidenced epoch and timestamp
+floor; none is guessed here. Only then can the producer and receipt chain be
+changed together under the original fail-closed migration proposal. This is a
+technical dependency, not another approval gate for ordinary source work.
+
+### AVB scope now established and still missing
+
+`os/tests/fixtures/mustang-numbering/avb/` contains the reviewed complete board
+sources. The include graph reaches the security-patch timestamp default; the
+symbolic Make probe shows that fixed default stays fixed across both synthetic
+ID boundaries and changes when its timestamp input changes. This narrows the
+earlier missing board-source evidence; it does not establish every final
+partition's rollback value or all subsequent build-variable overrides.
+
+Still required from an admitted actual candidate/baseline: authenticated vbmeta
+and chained partition indices/locations, actual security-patch and payload
+timestamps, firmware versions/rollback constraints, and comparison with trusted
+installed or relevant previously published state. Device rollback floors and
+bootloader behavior are not observable from these templates. Neither this
+audit nor its Make probe verifies AVB cryptography, images or a phone. No held
+installer or image was retrieved. #593's alternative baseline paths and #592's
+separately owned shared input-verifier work remain unchanged.
 
 Primary GitHub references: [default variables](https://docs.github.com/en/actions/reference/workflows-and-actions/variables#default-environment-variables),
 [workflow-run metadata](https://docs.github.com/en/rest/actions/workflow-runs#get-a-workflow-run).
@@ -120,8 +183,8 @@ added by this proposal.
 
 ## Reproduction and limits
 
-Run `python3 scripts/tests/test_mustang_edge_gate.py NumberingCompatibilityTest -v`
-for the focused evidence, or the already registered complete Mustang edge suite.
+Run `python3 scripts/tests/test_mustang_edge_gate.py NumberingCompatibilityTest CounterRecoveryContractTest -v`
+for the focused evidence/contract, or the already registered complete Mustang edge suite.
 It invokes the available C++ compiler and Java compiler module in temporary
 directories, with controlled platform stand-ins. Missing compilers produce an
 explicit skip. No reservation, real build ID, native OS/app build, signing,
