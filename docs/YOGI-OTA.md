@@ -179,6 +179,28 @@ Still closed: `key-bootstrap`, `bootstrap` and `ota` (unknown `runner.organizati
 runner-unregistered`, unbound `yogi-v1` signing, no Release app-inputs record, no bootstrap receipt) and publication
 (`publicationEnabled: false`). A passing readiness receipt does not by itself change `builder.status`.
 
+**Readiness proof (recorded in `builder.evidence.readiness`).** This is a summarized relay of the operator's saved
+receipts, from Chief on 2026-11-06. It is not the raw receipt.
+- **Run:** `yogi-ota` readiness run 42152223661, attempt 1, source `a4730376706241e0b0b1387386a5e09c9f8146e2`, on
+  runner 21 (`roseos-yogi-builder-20261105-b`), for `protocols-465723` / `us-west2-b` /
+  `roseos-yogi-builder-20261105-b` / `2720796557371812468`.
+- **Result:** passed, 20/20 checks, no failures. The relayed categories are identity, directories, lock, inputs,
+  free space, retained-tree paths and tools. Free space was 1,708,976,877,568 bytes. The individual check names and
+  values were not relayed, so `result.checks` is null.
+- **Hashes:** the readiness JSON has SHA-256 `2574161d…a44ca`. Artifact 13472464984 (`yogi-readiness-42152223661-1`)
+  is a 1,023-byte archive with SHA-256 `fe816882…f0b9d`. The two hashes cover different files.
+- **Ownership (inferred, not captured):** `observedBeforeStart: TERMINATED` and `startedByThisOperation: true` are
+  derived from the retained source and from the ownership-gated cleanup STOP having run successfully. The raw
+  ownership JSON was not read, so `ownership.rawRecord` is null.
+- **Cleanup:** job 127678829392's ownership-validated STOP succeeded.
+- **Control-plane readback (direct):** the replacement instance `2720796557371812468` was `TERMINATED`. It stopped at
+  2026-11-06T02:47:37.143Z, and that state was read back at 2026-11-06T02:48:45.783777Z. The original instance
+  `8812446529823929967` was also `TERMINATED`, and both disks were `READY`.
+
+This proves readiness only. It is not build or signing routing exclusivity (`runner.organizationEligibility` is
+still unknown), signing readiness or publication authority. Recording it leaves `builder.status`
+(`runner-unregistered`) and every stage gate unchanged.
+
 Recorded but noted: repository-scoped runner, poolId 1, official default group. Registration does not restrict it to
 Yogi workflows; label routing is the only separation. The controller account can also address the original VM.
 
@@ -192,11 +214,18 @@ Yogi workflows; label routing is the only separation. The controller account can
 | Yogi publication in pixel-ota | Nathan | `publicationEnabled: true` |
 | One-time wipe install of A (proposed design), and ADB readback | Phone owner | `bootstrap.installEvidence` (not a publication gate) |
 
-First-run assumptions to confirm on the builder (each fails closed): the private
-cover-display input holds a decimal `referenceDisplayAddress`; `aapt`/`apksigner`
-live at `prebuilts/sdk/tools/linux/bin/` and Java 21 at `prebuilts/jdk/jdk21/linux-x86`
-in the Yogi tree; the first reconcile of the lab tree conflicts only on the listed
-lab-written paths; the copied tree's free space fits `minimumFreeBytes`.
+First-run assumptions to confirm on the builder (each fails closed):
+- **Derived from readiness run 42152223661.** The source at `a4730376…146e2` defines exactly 20 checks, and the
+  relay reports 20/20 passed. The individual results were not relayed, so the following is derived from that source,
+  not read from the raw receipt:
+  - `aapt`/`apksigner` are present at `prebuilts/sdk/tools/linux/bin/`;
+  - Java 21 is present at `prebuilts/jdk/jdk21/linux-x86`;
+  - the private cover-display input file is present;
+  - the attempts filesystem had at least `minimumFreeBytes` free (1,708,976,877,568 bytes relayed).
+- **Still open:**
+  - the cover-display input holds a decimal `referenceDisplayAddress` (readiness checks only that the file exists);
+  - the first reconcile of the lab tree conflicts only on the listed lab-written paths;
+  - the copied tree fits in the free space at build time.
 
 Known limitation: without `--agent-tray` the raised-edge build switch
 (`rose-edge-build-make.patch`) is not applied on Yogi; the tray itself is enabled
@@ -207,7 +236,8 @@ in YOGI-BUILD.md.
 
 Offline: `scripts/tests/test_yogi_ota.py` (contract, guards, allocation, copy and
 lock, app admission, packaged-Updater/trust observation, OTA metadata, publication
-order, builder ownership). No lunch, make, signing, gcloud, GitHub API, OTA
-generation or phone action has run for this route. Record **build compiled**,
+order, builder ownership). On this route only the readiness run 42152223661 has run: the controller's
+start/stop, and readiness checks on the replacement builder. No lunch, make, key bootstrap, signing, OTA generation,
+publication or phone action has run. Record **build compiled**,
 **signatures verified**, **OTA published**, **phone OTA passed** and **automation
 demonstrated** separately when they actually happen.

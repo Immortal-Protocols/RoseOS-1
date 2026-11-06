@@ -88,6 +88,80 @@
         "scope": "get/start/stop bound on the replacement VM; the original zone-a binding is retained, so the account can address more than one VM and source still rejects the original",
         "federation": "exact repository and owner IDs, public visibility, yogi-ota.yml@refs/heads/main, manual dispatch, GitHub-hosted controller jobs"
       },
+      "readiness": {
+        "provenance": "Chief relay of the operator's saved receipts, 2026-11-06: an explicitly summarized relay record, not the raw readiness receipt. Fields the handoff did not include are null and must not be reconstructed.",
+        "run": {
+          "id": "42152223661",
+          "attempt": "1",
+          "source": "a4730376706241e0b0b1387386a5e09c9f8146e2"
+        },
+        "runner": {
+          "id": 21,
+          "name": "roseos-yogi-builder-20261105-b"
+        },
+        "builder": {
+          "project": "protocols-465723",
+          "zone": "us-west2-b",
+          "instance": "roseos-yogi-builder-20261105-b",
+          "instanceId": "2720796557371812468"
+        },
+        "result": {
+          "passed": true,
+          "checksPassed": 20,
+          "checksTotal": 20,
+          "failures": 0,
+          "categories": [
+            "identity",
+            "directories",
+            "lock",
+            "inputs",
+            "free space",
+            "retained-tree paths",
+            "tools"
+          ],
+          "checks": null,
+          "checksNote": "The individual raw check names and values were not in the handoff; they are not reconstructed here.",
+          "freeBytes": 1708976877568
+        },
+        "receipt": {
+          "file": "yogi-readiness.json",
+          "sha256": "2574161d47cd6508cbe0c443feb6ea9fc1c74f5d6ad446edd6c4778d559a44ca"
+        },
+        "artifact": {
+          "id": 13472464984,
+          "name": "yogi-readiness-42152223661-1",
+          "archiveSizeBytes": 1023,
+          "archiveSha256": "fe816882b3d9141ff5cf46e98dcd5dc8535c441914a74d20a202cc2c9f7f0b9d",
+          "hashNote": "receipt.sha256 is the readiness JSON file; archiveSha256 is the artifact archive. They are distinct."
+        },
+        "ownership": {
+          "observedBeforeStart": "TERMINATED",
+          "startedByThisOperation": true,
+          "basis": "INFERRED, not captured: derived from the retained source and the successfully executed ownership-gated cleanup STOP; not read from the raw retained ownership JSON.",
+          "rawRecord": null
+        },
+        "cleanup": {
+          "job": "127678829392",
+          "result": "ownership-validated STOP succeeded"
+        },
+        "controlPlaneReadback": {
+          "basis": "Independent control-plane readback (direct), relayed by Chief.",
+          "replacement": {
+            "instanceId": "2720796557371812468",
+            "status": "TERMINATED",
+            "stopTime": "2026-11-06T02:47:37.143Z",
+            "observedAt": "2026-11-06T02:48:45.783777Z"
+          },
+          "original": {
+            "role": "original VM, as the relay names it (retired from this route)",
+            "instanceId": "8812446529823929967",
+            "status": "TERMINATED"
+          },
+          "disks": "both READY",
+          "timeNote": "stopTime is when the instance stopped; observedAt is when that state was read back."
+        },
+        "limits": "Proves readiness only on this run: not build/signing routing exclusivity (runner.organizationEligibility stays unknown), not signing readiness, not publication authority. builder.status and every stage gate are unchanged."
+      },
       "state": "TERMINATED at 2026-11-06T01:00:52Z, both disks READY and preserved; temporary SSH access removed. Stopped again after the later bounded mount observation (relay, no timestamp recorded), both VMs stopped and both disks preserved",
       "source": "Chief relay of the Mac operator saved receipts, 2026-11-06; mounts from the later Chief-verified mount receipt relay (see storage.mounts.readback). Null values are unverified and must not be inferred (device number 2049 alone never identified the guest device, UUID or mount point)."
     },
