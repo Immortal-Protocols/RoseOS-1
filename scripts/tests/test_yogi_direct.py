@@ -258,7 +258,8 @@ class PlanTest(Base):
         self.assertNotEqual(other['operationId'], manifest['operationId'])
         with self.assertRaises(FileExistsError):  # one directory per operation
             self.plan()
-        names = tarfile.open(op/'source.tar').getnames()
+        with tarfile.open(op/'source.tar') as tar:
+            names = tar.getnames()
         self.assertIn('scripts/yogi_direct.py', names)
 
     def test_unreviewed_dirty_wrong_or_short_source_refuses_before_writing(self):
@@ -418,7 +419,8 @@ class SshTest(Base):
         self.assertEqual([k for k in fake.kinds() if not k.startswith('gcloud')], ['probe', 'install'])
         sent = [kwargs['input'] for kind, _, kwargs in fake.log if kind == 'install'][0]
         self.assertEqual(hashlib.sha256(sent).hexdigest(), result['bundleSha256'])
-        self.assertEqual(sorted(tarfile.open(fileobj=io.BytesIO(sent)).getnames()), ['manifest.json', 'source.tar'])
+        with tarfile.open(fileobj=io.BytesIO(sent)) as tar:
+            self.assertEqual(sorted(tar.getnames()), ['manifest.json', 'source.tar'])
         for kind, argv, kwargs in fake.log:
             if kind.startswith('gcloud'):
                 continue
@@ -636,6 +638,13 @@ class AgentTest(Base):
         with self.assertRaisesRegex(yogi.Refused, 'direct lock'):
             self.agent([('one', lambda: 1)])
         self.assertEqual(self.status()['state'], 'refused')
+
+    def test_an_unexpected_step_error_is_recorded_failed_not_left_running(self):
+        def step():
+            raise TypeError('synthetic')
+        state = self.agent([('one', step), ('two', lambda: 2)])
+        self.assertEqual((state['state'], state['error']), ('failed', 'TypeError'))
+        self.assertEqual(self.status()['state'], 'failed')
 
     def test_sigterm_records_cancelled(self):
         import signal

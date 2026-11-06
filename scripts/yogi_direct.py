@@ -388,11 +388,13 @@ class Session:
     def __init__(self, cfg, address, identity_file, run=subprocess.run, gcloud='gcloud'):
         d, b = cfg['builder']['direct'], cfg['builder']
         self.cfg, self.run, self.alias = cfg, run, f'yogi-{b["instanceId"]}'
+        if not identity_file or not Path(identity_file).is_file():
+            raise Refused('--identity must be the operator\'s own SSH private key file (it never leaves this machine)')
+        if d['route'] != 'iap' and (not address or not re.fullmatch(r'[0-9]{1,3}(\.[0-9]{1,3}){3}', address)):
+            raise Refused('the replacement VM has no external address in its exact-identity describe')
         self.temp = tempfile.TemporaryDirectory()
         self.known = Path(self.temp.name)/'known_hosts'
         self.known.write_text(f'{self.alias} {d["hostKey"]["type"]} {d["hostKey"]["key"]}\n')
-        if not identity_file or not Path(identity_file).is_file():
-            raise Refused('--identity must be the operator\'s own SSH private key file (it never leaves this machine)')
         options = ['-F', '/dev/null', '-o', 'BatchMode=yes', '-o', 'IdentitiesOnly=yes', '-i', str(identity_file),
                    '-o', 'StrictHostKeyChecking=yes', '-o', f'UserKnownHostsFile={self.known}',
                    '-o', 'GlobalKnownHostsFile=/dev/null', '-o', f'HostKeyAlias={self.alias}',
@@ -406,8 +408,6 @@ class Session:
                 f'--project={b["project"]}', f'--zone={b["zone"]}', '--verbosity=warning'])]
             self.target = self.alias
         else:
-            if not address or not re.fullmatch(r'[0-9]{1,3}(\.[0-9]{1,3}){3}', address):
-                raise Refused('the replacement VM has no external address in its exact-identity describe')
             self.target = address
         self.argv = ['ssh', *options, self.target, '--']
         # ssh gets a minimal environment: nothing from a job, token or the operator's shell reaches it or the guest.
@@ -740,7 +740,7 @@ def agent(op_dir, manifest_sha, cfg=None, env=os.environ, now=now_utc, metadata=
             state['state'] = 'done'
     except Cancelled:
         state['state'] = 'cancelled'
-    except (Refused, OSError, ValueError, KeyError, subprocess.SubprocessError) as error:
+    except Exception as error:  # noqa: BLE001 - any step failure is recorded as failed, never left as running
         state['state'], state['error'] = 'failed', str(error) if isinstance(error, Refused) else type(error).__name__
     finally:
         signal.signal(signal.SIGTERM, previous)
