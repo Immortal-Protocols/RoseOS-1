@@ -1,7 +1,7 @@
 {
   "schema": "roseos.lane-capacity.v1",
-  "basis": "1A (Rose daily work plan, 2026-11-05): every release lane builds on its own runner, VM, storage, queue and lifecycle controller, so one lane's failure or cleanup cannot stop another; only genuinely shared atomic steps, such as app version allocation, may be serialized across lanes. This is the committed routing map, including explicitly retired legacy jobs for source auditing, and what each lane still needs. A host is listed only with values the committed route already uses or Infra's verified readback supplies, with its evidence; nothing here is a placeholder. A host builds only when it is in service and the lane is not retired: Mustang's shared-host route is permanently retired and its dedicated binding is unbound; Yogi's counts once os/ota/yogi.json says builder.status ready. scripts/tests/test_lane_capacity.py derives routing from os-release.yml, release-pipeline.py and host configs and excludes retired lanes from capacity claims.",
-  "binding": "Infra supplies verified readback (runner label carried only by that machine, VM project/zone/instance, storage root, lock path, queue, controller identity variable) and evidence. The named source owner then moves the lane and its dedicated workflow/controller routing together. Mustang owns its capacity-map change; Infra owns the common explicit-builder API. No proposed name is an actual host binding. Mustang's existing host field describes only retired legacy jobs, which may never run on Frankel again; its active dedicated binding is unbound and has no fallback. Other target-own lanes retain their current route until explicitly changed.",
+  "basis": "1A (Rose daily work plan, 2026-11-05): every release lane builds on its own runner, VM, storage, queue and lifecycle controller, so one lane's failure or cleanup cannot stop another; only genuinely shared atomic steps, such as app version allocation, may be serialized across lanes. This is the committed routing map, including explicitly retired legacy jobs for source auditing, and what each lane still needs. A host is listed only with values the committed route already uses or Infra's verified readback supplies, with its evidence; nothing here is a placeholder. A host builds only when it is in service and the lane is not retired: Mustang's shared-host route is permanently retired. Its dedicated lane file is identity-bound to the confirmed 2026-11-07 VM and data disk, but that runtime is unbound and the host is not in service. Yogi's counts once os/ota/yogi.json says builder.status ready. scripts/tests/test_lane_capacity.py derives routing from os-release.yml, release-pipeline.py and host configs and excludes retired lanes from capacity claims.",
+  "binding": "Infra supplies verified readback (runner label carried only by that machine, VM project/zone/instance, storage root, lock path, queue, controller identity variable) and evidence. The named source owner then moves the lane and its dedicated workflow/controller routing together. Mustang owns its capacity-map change; Infra owns the common explicit-builder API. No proposed name is an actual host binding. Mustang's existing host field describes only retired legacy jobs, which may never run on Frankel again. The dedicated host entry is the confirmed VM and is not in service; runtime admission, runner registration and publication remain unbound. There is no fallback. Other target-own lanes retain their current route until explicitly changed.",
   "unboundFields": [
     "runnerLabel",
     "vm",
@@ -42,6 +42,22 @@
       },
       "config": "os/ota/yogi.json",
       "evidence": "Replacement Yogi builder from the Mac operator readback relayed by Chief (2026-11-06): project protocols-465723, zone us-west2-b, VM roseos-yogi-builder-20261105-b, numeric ID 2720796557371812468, restored disk 938743673401685238, runner 21 registered and disabled; mirrored in os/ota/yogi.json builder. Runner group/labels, disk/mount lineage and controller scope are still unrecorded, so builder.status is runner-unregistered and the host is not in service. The original zone-a VM roseos-yogi-builder-20261103-a is retired from this route."
+    },
+    "mustang-builder": {
+      "runnerLabel": "roseos-mustang-builder",
+      "vm": {
+        "project": "protocols-465723",
+        "zone": "us-west2-a",
+        "instance": "roseos-mustang-builder-20261107-a"
+      },
+      "storageRoot": "/mnt/disks/mustang-data/roseos/rose-actions",
+      "lockPath": "/mnt/disks/mustang-data/roseos/mustang.lock",
+      "queue": "mustang-ota",
+      "controller": {
+        "identityVariable": "MUSTANG_CONTROLLER_SERVICE_ACCOUNT"
+      },
+      "config": "os/build-only/mustang-lane.json",
+      "evidence": "Parent-confirmed readback 2026-11-06: project protocols-465723, zone us-west2-a, VM roseos-mustang-builder-20261107-a numeric ID 5585425566393384049, data disk roseos-mustang-data-20261107-a numeric ID 4322966418460195960, ext4 UUID 4183bff8-6be4-46bb-a641-2193d19813ee mounted at /mnt/disks/mustang-data, four-hour maxRunDuration STOP. No runner, source, or dependencies are installed, so this host is not in service. It is not Frankel's immortal-os-builder and not a Yogi VM."
     }
   },
   "lanes": {
@@ -72,6 +88,9 @@
       "target": "own",
       "runtimeStatus": "retired-shared-host",
       "activeBinding": "os/build-only/mustang-lane.json",
+      "dedicatedHost": "mustang-builder",
+      "dedicatedRuntime": "os/build-only/mustang-runtime.json",
+      "dedicatedRuntimeStatus": "unbound",
       "unbound": [
         "runnerLabel",
         "vm",
@@ -80,7 +99,7 @@
         "queue",
         "controller"
       ],
-      "note": "The host/workflow/modes above describe retired legacy jobs only, not executable capacity or permission to use Frankel. Legacy entry points refuse before controller start or STOP. The active dedicated lane is unbound; fetch pinned sources on its own newly approved VM/disk and consume immutable app artifacts there. No retained Frankel-local source or path is a substitute."
+      "note": "The host/workflow/modes above describe retired legacy jobs only, not executable capacity or permission to use Frankel. Legacy entry points refuse before controller start or STOP. The dedicated host is identity-bound and its runtime is unbound, so it is not in service and claims no parallel capacity. No retained Frankel-local source or path is a substitute."
     },
     "agent": {
       "workflow": ".github/workflows/os-release.yml",

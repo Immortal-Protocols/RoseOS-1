@@ -15,17 +15,22 @@ skipped-controller condition prevents a Frankel STOP. No environment override
 or future profile binding restores these legacy entry points. Read-only staged
 receipt validation remains available.
 
-The dedicated source contract is os/build-only/mustang-lane.json, currently
-unbound. scripts/mustang_lane.py check/plan accepts only a complete dedicated
-binding and rejects another flavor's VM, runner or queue. Its plan only renders
-instance-scoped get/start/stop arguments; it performs no cloud action. STOP
-ownership must identify the exact VM project, zone, instance and numeric ID and
-must say that this operation started it. Unknown or foreign ownership refuses.
+The dedicated source contract is os/build-only/mustang-lane.json. It is
+identity-bound to roseos-mustang-builder-20261107-a
+(5585425566393384049) and its data disk. os/build-only/mustang-runtime.json
+stays unbound, so the workflow guard refuses host start. scripts/mustang_lane.py
+check/plan accepts only a complete dedicated binding and rejects another
+flavor's VM, runner, disk or queue. Its plan only renders instance-scoped
+get/start/stop arguments; it performs no cloud action. STOP ownership must
+identify the exact VM project, zone, instance and numeric ID and must say that
+this operation started it. Unknown or foreign ownership refuses. The VM's
+four-hour maxRunDuration STOP remains if cleanup does not stop it.
 
 Remaining exclusive owner handoffs before any new runtime:
 
-- Infra supplies actual dedicated VM/runner/storage/lock bindings and evidence,
-  after applicable provisioning/access approval. No resource identity is guessed.
+- The confirmed VM, data disk, mount, UUID and four-hour STOP are bound.
+  Infra still has to enroll the runner, confirm authenticated OS Login, and
+  install dependencies and source. No missing identity is guessed.
   The Mac operator owns old-host inventory and deletion; this source work does
   not inspect, copy or delete that host.
 - Mustang owns its dedicated adapter, workflow, path/receipt integration and
@@ -45,11 +50,11 @@ Remaining exclusive owner handoffs before any new runtime:
 
 Source preparation is not activation, provisioning or runtime authorization.
 The [dedicated resource proposal and source handoff](MUSTANG-DEDICATED-BUILDER.md)
-records sizing evidence, the unimplemented common-controller dependency and
-the exact approval package. It is not a deployed resource or a runnable build.
+records the confirmed VM beside the earlier, unused sizing proposal. Identity
+binding is not a runnable build.
 The dedicated manual workflow source now wires its own controller, native
 producer, same-run signing/OTA staging, optional public publisher and owned
-cleanup. Both lane and runtime binding files remain unbound; no dispatch,
+cleanup. The lane is identity-bound and the runtime remains unbound; no dispatch,
 candidate or operational proof is claimed. Public publication is default-off
 and needs its own authority; global storage reclaim is omitted from this route.
 Physical-phone testing, the harness and unrelated product feedback do not gate

@@ -125,6 +125,10 @@ def run(run_id, attempt, lane=None, runtime=None, inputs_dir=None):
         paths = mustang_paths.layout(lane)
         if runtime is None or inputs_dir is None:
             raise ValueError('dedicated Mustang needs admitted runtime bindings and app inputs')
+        consumed = runtime.get('consumedBuilds')
+        if not isinstance(consumed, list) or not consumed or any(
+                not isinstance(build, str) or not re.fullmatch(r'[1-9][0-9]{9}', build) for build in consumed):
+            raise ValueError('prior failed Mustang allocation state remains unresolved; no new build number')
         verifier = module('mustang_app_input_verify','app-inputs-verify.py')
         admission = verifier.verify(ROOT/runtime['appInputsRecord'], inputs_dir, runtime['tools'])
         cfg = dict(runtime['tools'],host=lane['vm']['instance'],jobs=runtime['jobs'],

@@ -1,0 +1,16 @@
+{
+  "schema": "roseos.mustang-candidate-archive-observation.v1",
+  "admitted": false,
+  "kind": "actions-candidate-archive",
+  "artifactId": "13280698927",
+  "name": "mustang-candidate-41738359336-1",
+  "sizeBytes": 2108061108,
+  "archiveDigest": "c6aea80e23b5aeb775454692ff2da28ca8ff27495d79603e67ec2c0dfc1a6dae",
+  "sourceRun": "41738359336",
+  "reportedHeadPrefix": "7b5848c4",
+  "expiresAtPacific": "2026-11-10 15:42 PST",
+  "retrieval": "held",
+  "holdMeaning": "unknown; the parent is asking the manager",
+  "notBaselineTargetFiles": true,
+  "basis": "Parent-reported Actions metadata. This file was not downloaded. It is not the baseline target-files receipt, which is a different object of 4884085713 bytes. A held retrieval is neither success nor denial."
+}
