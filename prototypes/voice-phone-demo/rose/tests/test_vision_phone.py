@@ -157,7 +157,10 @@ class Vision(unittest.TestCase):
                    ('', 'arrow'), ('', 'up arrow'), ('SMS', 'arrow'), ('', 'right arrow'), ('', 'arrow_upward'))
     # Navigation arrows stay ordinary after typing.
     DRAFT_ORDINARY = (('', 'back arrow'), ('', 'left arrow'), ('', 'down arrow'), ('', 'dropdown arrow'),
-                      ('', 'arrow_back'), ('', 'expand arrow'), ('', 'heart'), ('Search', ''))
+                      ('', 'arrow_back'), ('', 'expand arrow'), ('', 'heart'), ('Search', ''), ('', 'next month arrow'),
+                      ('', 'previous month arrow'), ('', 'next page arrow'), ('', 'forward arrow'), ('', 'arrow_forward'),
+                      ('Next', 'right arrow'), ('Continue', 'arrow'), ('Directions', 'directions arrow'),
+                      ('', 'share arrow'), ('', 'fill suggestion arrow'), ('', 'arrow_outward'))
     # Descriptions are not labels: only a description that is itself a final label counts.
     DESCRIBED = ('the Send button', 'the latest post', 'Like button on the post', 'the message field next to the send button',
                  'the camera icon by the send button', 'Send read receipts toggle', 'the post from NASA', 'Share post button')
@@ -218,11 +221,16 @@ class Vision(unittest.TestCase):
         self.assertFalse(self.call(s, 'tap_point', frame_id=s.view.frame_id, x=500, y=500, target='Reply', label='Reply', icon='', effect='interact')['ok'])
 
     def test_a_refused_type_is_not_a_draft(self):
-        s = self.opened()
-        with patch.object(s.view.workspace, 'command', return_value={'status': 'error', 'error': 'No focused editable field'}):
-            self.assertFalse(self.call(s, 'type_text', frame_id=s.view.frame_id, text='On my way', replace=True)['ok'])
-        s.view.refresh()
-        self.assertTrue(self.call(s, 'tap_point', frame_id=s.view.frame_id, x=500, y=500, target='Reply', label='Reply', icon='', effect='interact')['ok'])
+        for answer, draft in (({'status': 'error', 'error': 'No focused editable field'}, False),
+                              ({'status': 'stale_screen'}, False), ({'status': 'expired'}, False),
+                              ({'status': 'running'}, True), ({'status': 'uncertain'}, True), ({'status': 'timeout'}, True),
+                              ({'status': 'disconnected'}, True), ({'status': 'error', 'error': 'no answer'}, True)):
+            with self.subTest(answer=answer):
+                s = self.opened()
+                s.view._typed = False
+                with patch.object(s.view.workspace, 'command', return_value=answer):
+                    self.assertFalse(self.call(s, 'type_text', frame_id=s.view.frame_id, text='On my way', replace=True)['ok'])
+                self.assertEqual(s.view._typed, draft)
 
     def test_a_refusal_the_task_moved_past_is_not_its_result(self):
         s = self.opened()

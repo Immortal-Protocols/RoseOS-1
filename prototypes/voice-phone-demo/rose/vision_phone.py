@@ -7,8 +7,10 @@ import math
 import re
 import time
 
-# Results that do not say whether the phone acted: an input may still have landed.
-UNANSWERED = (None, 'timeout', 'disconnected', 'offline')
+# Answers that say the text never reached the field: the controller refused it (an exception before or instead of
+# insertText: no focused field, a password field, a stale frame or task), or Rose Agent did not run it. Any other
+# result (running, uncertain, timeout, a lost reply) may still have typed the draft.
+TEXT_REFUSED = ('error', 'stale_screen', 'stale_task', 'expired', 'routine_busy')
 # Line breaks a field or IME can treat as Enter (a send or submit): vision typing never carries one.
 LINE_BREAKS = ('\n', '\r', '\x85', '\u2028', '\u2029')
 
@@ -36,12 +38,14 @@ your final reply. A dispatched input is not success; verify the result in the ne
 # the accessibility path's view-id hints (tasks._ID_SEND, tasks._ID_PURCHASE).
 _ICON_SEND = re.compile(r"(?:\b|_)(?:send|submit)(?:\b|_)", re.I)
 _ICON_PURCHASE = re.compile(r"(?:\b|_)(?:buy|pay|payment|purchase|checkout)(?:\b|_)", re.I)
-# The paper-plane and arrow glyphs send a typed draft ("up arrow" in a composer); before a draft the plane opens direct
-# messages or a share sheet. A navigation arrow is not a send.
-_PLANE = re.compile(r"\bpaper[\s_-]?(?:air)?plane\b|\barrow", re.I)
-_NAV_ARROW = re.compile(r"\b(?:back|left|down|downward|previous|prev|expand|collapse|dropdown|drop[\s-]?down|menu|close|"
-                        r"undo|redo|refresh|reload|swap|sort|navigate|navigation|chevron)\b|arrow_?(?:back|left|downward|drop)",
-                        re.I)
+# The paper-plane glyph sends a typed draft; before a draft it opens direct messages or a share sheet.
+_PLANE = re.compile(r"\bpaper[\s_-]?(?:air)?plane\b", re.I)
+# A composer's bare send arrow ("arrow", "up arrow", "arrow_upward", a right arrow under "SMS"), once a draft is typed.
+# Only the bare glyph: an arrow named for anything else ("next month arrow", "back arrow") or under another label
+# ("Next", "Continue", "Directions") is navigation.
+_DRAFT_ARROW = re.compile(r"(?:(?:blue|green|white|black|gr[ae]y|filled|circled|round|small|large|send)\s+)*"
+                          r"(?:(?:up|upward|right)\s+)?arrow(?:\s+(?:up|upward|right|icon|button|circle))*", re.I)
+_DRAFT_ARROW_LABEL = re.compile(r"(?:sms|mms|rcs|chat|text|message)?", re.I)
 
 
 def final_target(label: str, icon: str, typed: bool, target: str = "") -> bool:
@@ -49,7 +53,7 @@ def final_target(label: str, icon: str, typed: bool, target: str = "") -> bool:
 
     The accessibility path's own label rule (tasks._final_control) on the control's visible text as the model read it
     from the screenshot, and on its icon name (a content description); its view-id rule on the icon name; and, once a
-    draft is typed, the paper plane or a non-navigation arrow. The free-text target description is checked only with the label rule, as before:
+    draft is typed, the paper plane or a bare send arrow. The free-text target description is checked only with the label rule, as before:
     describing a control is not a label ("the Send button at the top" is not "Send"), and guessing from it either
     misses sends or refuses feed posts and settings. Best effort: a model that misreads the label is still breaking the
     policy it was given."""
@@ -58,7 +62,8 @@ def final_target(label: str, icon: str, typed: bool, target: str = "") -> bool:
     icon_words = " ".join(re.sub(r"[_\-]+", " ", icon).split())
     return bool(_final_control(label, typed=typed) or _final_control(icon_words, typed=typed)
                 or _ICON_SEND.search(icon) or _ICON_PURCHASE.search(icon)
-                or (typed and _PLANE.search(icon) and not _NAV_ARROW.search(icon))
+                or (typed and (_PLANE.search(icon) or (_DRAFT_ARROW.fullmatch(icon_words)
+                                                       and _DRAFT_ARROW_LABEL.fullmatch(label.strip()))))
                 or _final_control(target, typed=typed))
 
 
@@ -175,7 +180,7 @@ class VisionSession(RealSession):
             self._typed = True  # dispatched: a timeout or lost reply may still have typed the draft
         result = self.workspace.command(action, **command)
         ok = result.get('status') in ('action_accepted', 'gesture_dispatched')
-        if name == 'type_text' and not ok and result.get('status') not in UNANSWERED:
+        if name == 'type_text' and result.get('status') in TEXT_REFUSED and result.get('error') != 'no answer':
             self._typed = typed  # the controller answered and refused (no focused field, a password field): nothing typed
         time.sleep(SETTLE_S)
         self.refresh()
