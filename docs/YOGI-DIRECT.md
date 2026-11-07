@@ -68,10 +68,15 @@ response from rotate-publish operation `ce79` is the only host-key input. Serial
 `gcloud compute ssh` are not used.
 
 The inspect recorded no authorized-key line and no temporary account. OS Login stays false and project SSH keys stay
-blocked, so there is no existing login to reuse. The check adds one instance-metadata `ssh-keys` line for the existing
-`pixelbuild` account, runs one read-only quiesced probe through `gcloud compute start-iap-tunnel` and OpenSSH
-`StrictHostKeyChecking=yes`, then removes that `ssh-keys` value. It does not create an account, enable the runner,
-build, sign, or publish. IAP only selects the instance. OpenSSH checks the ed25519 host key against the API blob.
+blocked, so there is no existing login to reuse. The check appends one expiring instance `ssh-keys` line for the
+existing `pixelbuild` account and leaves every other metadata key and every other `ssh-keys` line in place. One
+metadata write uses the current fingerprint and is not retried. The login private key stays a local mode `0600` file
+and is not forwarded. The one remote command is the existing read-only quiesced probe: metadata, `/proc`, and
+`systemctl is-active`/`is-enabled`. It does not use sudo and does not change the account. After it, the same
+fingerprint rule removes only that exact line. A fresh inspect, not a spent operation, must report
+`possessMarkerLines` 0 before the guest key is treated as gone. Metadata removal alone is not that proof. Every path
+that started the VM stops it. The runner is not enabled. IAP only selects the instance. OpenSSH checks the ed25519
+host key against the saved API blob. `hostKeyPinned` stays false.
 
 `handshake-plan` writes that plan and does not call GCP or SSH:
 
