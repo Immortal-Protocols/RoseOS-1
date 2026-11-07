@@ -90,7 +90,8 @@
             <testInclude>dev/pixel/voice/WorkspaceOverviewPanel.java</testInclude>
             <testInclude>dev/pixel/voice/WorkspaceOverviewPreview.java</testInclude>
             <testInclude>dev/pixel/voice/CurrentApps.java</testInclude>
-            <testInclude>dev/pixel/voice/SettingsDialog.java</testInclude>
+            <testInclude>dev/pixel/voice/SettingsScreen.java</testInclude>
+            <testInclude>dev/pixel/voice/RoseSettingsModel.java</testInclude>
             <testInclude>dev/pixel/voice/*RenderTest.java</testInclude>
           </testIncludes>
         </configuration>

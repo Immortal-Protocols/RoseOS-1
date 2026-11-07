@@ -75,7 +75,8 @@ test('Home comes first, the app pages follow it, and nothing else is a page (OS-
  assert.match(pages,/setContentView\(homeFrame\);homeBars\(\);drawer=true;if\(voiceControls\)attachVoiceControls\(\);/);
  assert.match(main,/void showVoiceControls\(\)\{voiceControls=true;attachVoiceControls\(\);\}/);
  assert.match(main,/void closeVoiceControls\(\)\{voiceControls=false;drawer=true;/);
- assert.match(main,/if\(!voiceControls\)settingsOption\(menu,"Voice controls"\)\.setOnMenuItemClickListener\(i->\{showVoiceControls\(\);return true;\}\);/);
+ // Settings no longer offers the legacy voice controls (owner request: Pair with Mac and About only).
+ assert.doesNotMatch(main,/"Voice controls"/);
  assert.match(main,/else if\(voiceControls\)closeVoiceControls\(\);/);
  assert.match(read('../app/src/dev/pixel/voice/RoseConversationActivity.java'),/add\("Settings"\)\.setOnMenuItemClickListener\(i->\{startActivity\(new Intent\(MainActivity\.ACTION_SETTINGS\)\.setClass\(this,MainActivity\.class\)\);return true;\}\);/);
  // The pager sits in a HomeFrame with the fixed tray; the frame, not the pager, is the content view.
@@ -139,7 +140,9 @@ test('Home layout, page/gesture and overview Java checks run against the product
 test('the Rose entry opens App\'s conversation activity and only navigates',()=>{
  assert.match(main,/new RoseHomeView\(this,homeEntries,homeColumns,this::homeMeasured\)\);/,'Home fills its measured rows (#410 owner density correction)');
  // Home's columns come from the same planned/measured app area as the app pages (#410: four unlabelled 60dp cells).
- assert.match(main,/homeColumns=HomeAppLayout\.homeColumns\(homeWidth\/density\);homeCapacity=HomeAppLayout\.homeCapacity\(homeWidth,homeHeight,homeCell,density\);/);
+ // Nov 7 plan 1O: the column preference (0 = this automatic rule) plans, sizes and judges staleness with one value.
+ assert.match(main,/homeColumns=CustomizationConfig\.effectiveHomeColumns\(preferred,homeWidth\/density\);homeCapacity=CustomizationConfig\.homeCapacity\(preferred,homeWidth,homeHeight,homeCell,density\);/);
+ assert.match(main,/CustomizationConfig\.homeStale\(plannedCustomization\.homeColumns,homeColumns,homeCapacity,homeViewport\.width,homeViewport\.height,homeViewport\.cell,density\)/);
  // The tray's Rose well is the plain navigation hook and nothing else.
  assert.match(homeTray,/rose\.setOnClickListener\(v -> openRose\.run\(\)\);/);
  assert.match(homeTray,/rose\.setContentDescription\("Open Rose"\);/);
@@ -219,8 +222,9 @@ test('an unchanged HOME or app-icon return reuses the built Home; changes rebuil
  assert.match(main,/if\(!reuseHome\(i\)\)home\(\);showHomeFor\(i,true,previous,homeShown\);/);
  // Only Home entries (HOME, MAIN\/LAUNCHER) qualify, judged by the same HomeEntry rule as routing.
  assert.match(main,/boolean reuseHome\(Intent i\)\{return i!=null&&HomeReuse\.reuse\(HomeEntry\.of\(Intent\.ACTION_MAIN\.equals\(i\.getAction\(\)\),i\.hasCategory\(Intent\.CATEGORY_HOME\),i\.hasCategory\(Intent\.CATEGORY_LAUNCHER\),true,false,true\)\.showHome,/);
- // Whatever home() resets still forces it: chat mode, an open visual or Mac screen, a changed Home setting, another view in place.
- assert.match(main,/homeFrame!=null&&homeFrame\.getParent\(\)!=null,builtHomeStamp,homeStamp\(\),chatMode,visualDetail!=null\|\|screenDetail!=null,experimentalHome!=getPreferences\(0\)\.getBoolean\("conversation-home",true\)\);\}/);
+ // Whatever home() resets still forces it: chat mode, an open visual or Mac screen, another view in place. There is no
+ // Home setting any more (the Classic home switch is retired), so that input is always false.
+ assert.match(main,/homeFrame!=null&&homeFrame\.getParent\(\)!=null,builtHomeStamp,homeStamp\(\),chatMode,visualDetail!=null\|\|screenDetail!=null,false\);\}/);
  // The stamp is recorded by every catalog build and covers packages, configuration and the dock's default apps.
  assert.match(main,/homeFrame\.requestApplyInsets\(\);\n  builtHomeStamp=homeStamp\(\);\n \}/);
  assert.match(main,/public void onReceive\(Context context,Intent intent\)\{packageGeneration\+\+;if\(launcherPager!=null&&!isFinishing\(\)\)attachLauncherPages\(true\);\}/);
@@ -421,7 +425,7 @@ test('app labels and page dots follow the Oxblood type and dot treatment (#410)'
  // oxblood.css:43 with style.css:590: 11.5px, weight 500, #d2b9ab, text-shadow 0 1px 4px rgba(0,0,0,.7). Inter falls
  // back to the system UI sans; no font asset is added.
  const label=cell.slice(cell.indexOf(' static TextView label('));
- assert.match(label,/name\.setTextSize\(11\.5f\);\n  name\.setTextColor\(0xffd2b9ab\);\n  name\.setTypeface\(Typeface\.create\(Typeface\.SANS_SERIF, 500, false\)\);/);
+ assert.match(label,/name\.setTextSize\(11\.5f\);\n  name\.setTextColor\(0xffd2b9ab\);\n  name\.setTypeface\(CustomizationVisuals\.labelTypeface\(context, 500\)\); \/\/ 1O font choice; default SANS_SERIF 500/);
  assert.match(label,/name\.setShadowLayer\(dp\(density, 2\), 0, dp\(density, 1\), 0xb3000000\);/);
  assert.match(cell,/static int dp\(float density, float value\) \{ return \(int\) \(value \* density\); \}/,'MainActivity.dp\'s truncation, so cells keep their sizes');
  assert.ok(!/chatFont\(800\)/.test(label),'not the rounded 800 face');
@@ -578,7 +582,22 @@ test('a long press offers App info and Android\'s own uninstall route, never a s
  assert.match(main,/checkSelfPermission\("android\.permission\.REQUEST_DELETE_PACKAGES"\)==PackageManager\.PERMISSION_GRANTED\);/);
  assert.match(main,/route==AppRemoval\.Route\.CONFIRM\?new Intent\(Intent\.ACTION_DELETE,uri\):new Intent\(android\.provider\.Settings\.ACTION_APPLICATION_DETAILS_SETTINGS,uri\)/);
  assert.doesNotMatch(main+read('../app/src/dev/pixel/voice/AppRemoval.java').replace(/\/\*[\s\S]*?\*\//g,''),/PackageInstaller|\.uninstall\(|deletePackage|pm uninstall|ACTION_UNINSTALL_PACKAGE/,'no silent or programmatic removal');
- assert.doesNotMatch(manifest,/DELETE_PACKAGES/,'no delete permission declared (a bounded decision for Chief)');
+ // 1J: the request permission (normal: granted at install or update, no prompt) opens Android's confirmation; never
+ // the privileged DELETE_PACKAGES, which removes without asking.
+ assert.match(manifest,/<uses-permission android:name="android\.permission\.REQUEST_DELETE_PACKAGES"\/>/);
+ assert.doesNotMatch(manifest,/"android\.permission\.DELETE_PACKAGES"/);
+ assert.equal((manifest.match(/DELETE_PACKAGES/g)||[]).length,1);
+ // The confirmation is asked for its result, for this exact package; the answer is checked against the package manager.
+ assert.match(main,/open\.putExtra\(Intent\.EXTRA_RETURN_RESULT,true\);removing=pkg;removingLabel=label;removingUpdates=updatesOnly;startActivityForResult\(open,REMOVE_REQUEST\);/);
+ assert.match(main,/android\.net\.Uri uri=android\.net\.Uri\.fromParts\("package",pkg,null\);/);
+ const result=main.slice(main.indexOf('@Override protected void onActivityResult('),main.indexOf('/** Any other app\'s mark'));
+ assert.match(result,/if\(request!=REMOVE_REQUEST\|\|removing==null\)return;/);
+ assert.match(result,/getPackageManager\(\)\.getPackageInfo\(pkg,0\);installed=true;\}catch\(PackageManager\.NameNotFoundException gone\)\{installed=false;\}/);
+ assert.match(result,/AppRemoval\.outcome\(result==RESULT_OK,result==RESULT_CANCELED,installed,updates\)/);
+ assert.match(result,/if\(AppRemoval\.refreshes\(outcome\)&&launcherPager!=null&&!isFinishing\(\)\)\{packageGeneration\+\+;attachLauncherPages\(true\);\}/);
+ // Uninstall updates is the only offer that keeps the package; App info stays a plain route with no result.
+ assert.match(main,/openRemoval\(pkg,label,offer\.route,AppRemoval\.UNINSTALL_UPDATES\.equals\(offer\.remove\)\)/);
+ assert.match(main,/openRemoval\(pkg,label,AppRemoval\.Route\.APP_INFO,false\)/);
 });
 
 // The Settings intent must not silently disappear when the Home anchor is absent/replaced.
@@ -586,5 +605,5 @@ test('Settings opens a window-owned dialog without depending on the launcher fra
  const route=main.slice(main.indexOf('void showSettingsFor(Intent intent)'),main.indexOf('/** HOME returning'));
  assert.ok(!route.includes('homeFrame'));
  assert.match(route,/getWindow\(\)\.getDecorView\(\)\.post/);
- assert.match(main,/SettingsDialog\.show\(this,menu\.getMenu\(\)\);/);
+ assert.match(main,/void homeOptions\(View anchor\)\{SettingsDialog\.show\(this\);\}/);
 });

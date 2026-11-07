@@ -30,7 +30,15 @@ os-release route with exactly this candidate, osBuild and buildTimestamp is acce
 must name that build, timestamp and the dispatched run and digests (the APK's sha256 among them). The public receipt keeps
 schemaVersion 1 unchanged (the app refuses unknown keys); the release body and publication.json say the bytes are the
 OS candidate's. An app-only artifact never carries a source block, and a reuse artifact is never accepted without one.
-Exit status: 0 ok, 1 check or publication failed, 4 setup missing.
+
+Hosted mode (1F, --hosted with --reservation) publishes an artifact the hosted Agent route (host-app-release.py --hosted)
+built under this run's owned reservation, instead of an app-only build. The version's basis is that reservation, checked
+exactly as the hosted build checked it (scripts/app_reservation.py: its digest, this run as owner, APPS and the
+candidate, and the store os/release-pipeline/agent/hosted.json binds), and above every committed Frankel floor
+(mustExceed and every reserved row): the store never reissues a consumed version. The receipt must record that
+reservation. Frankel's app-only and reuse routes are unchanged and refuse a hosted receipt. While the store is unbound
+(decision D1) it exits 4 before any check or API call.
+Exit status: 0 ok, 1 check or publication failed, 2 usage, 4 setup missing.
 """
 import argparse
 import hashlib
@@ -43,10 +51,12 @@ import sys
 import tempfile
 import zipfile
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import app_reservation  # noqa: E402
 import github_release_publisher as gp  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG = ROOT/'os/release-pipeline/frankel.json'
+HOSTED_CONFIG = ROOT/'os/release-pipeline/agent/hosted.json'
 RECEIPT, SUMS = 'app-release-receipt.json', 'SHA256SUMS'
 SIGNATURE_SCHEMES = (0x7109871A, 0xF05368C0)  # APK Signature Scheme v2, v3
 PUBLIC_FIELDS = ('packageName', 'versionCode', 'versionName', 'size', 'sha256', 'signerSha256', 'candidate', 'minimumTestedOs')
@@ -143,9 +153,11 @@ def reuse_source(reuse):
         'sourceRun': binding['sourceRun'], 'unsignedTargetFilesSha256': binding['unsignedTargetFilesSha256'],
         'signedTargetFilesSha256': binding['signedTargetFilesSha256']}
 
-def verify_artifact(directory, config, candidate, apps, reuse=None):
+def verify_artifact(directory, config, candidate, apps, reuse=None, hosted=None):
     """The builder's private artifact, checked completely before any API call; returns (receipt, apk path).
-    reuse ({build, timestamp, binding}) selects the OS-bundled route: the version must be that OS candidate's reservation."""
+    reuse ({build, timestamp, binding}) selects the OS-bundled route: the version must be that OS candidate's reservation.
+    hosted (this run's owned reservation, app_reservation.owned) selects the hosted Agent route: the version must be that
+    reservation, above every committed floor, and the receipt must record it."""
     directory, app = Path(directory), config['appRelease']
     package, signer = app['packageName'], config['identities']['appSignerSha256'].lower()
     if not re.fullmatch(r'[0-9a-f]{40}', candidate or ''):
@@ -156,7 +168,12 @@ def verify_artifact(directory, config, candidate, apps, reuse=None):
     reserved = app.get('reserved', [])
     row = next((r for r in reserved if r['versionCode'] == version), None)
     source = reuse_source(reuse) if reuse is not None else None
-    if source is None:
+    if hosted is not None:
+        floor = max([app['mustExceed'], *(r['versionCode'] for r in reserved)])
+        if source is not None or version != hosted['versionCode'] or version <= floor:
+            raise CheckFailed(f'{package} versionCode {version} is not this run\'s owned reservation above the committed '
+                f'floor {floor}')
+    elif source is None:
         if row and (row['route'] != 'app-only' or row['candidate'] not in (None, candidate)):
             raise CheckFailed(f'{package} versionCode {version} is reserved for the {row["route"]} route'
                 + (f' and candidate {row["candidate"]}' if row['candidate'] else ''))
@@ -203,6 +220,10 @@ def verify_artifact(directory, config, candidate, apps, reuse=None):
         raise CheckFailed('the app receipt has no versionName')
     if source is None and 'source' in receipt:
         raise CheckFailed('the app receipt describes reused OS bytes; publish it only in app-reuse mode')
+    if hosted is None and 'reservation' in receipt:
+        raise CheckFailed('the app receipt is a hosted build; publish it only with its owned reservation (--hosted)')
+    if hosted is not None and receipt.get('reservation') != app_reservation.receipt_fields(hosted):
+        raise CheckFailed('the app receipt does not record this run\'s owned reservation')
     if source is not None:
         given = receipt.get('source') if isinstance(receipt.get('source'), dict) else {}
         path = given.get('targetFilesPath')
@@ -351,13 +372,29 @@ def main(argv=None):
     p.add_argument('--reuse-binding', help='app-reuse mode: the original OS run\'s binding (host-app-reuse.py REUSE_BINDING)')
     p.add_argument('--build-number', help='app-reuse mode: the OS build that bundled the APK')
     p.add_argument('--build-timestamp', help='app-reuse mode: that build\'s BUILD_DATETIME')
+    p.add_argument('--hosted', action='store_true', help='hosted Agent route: publish under this run\'s owned reservation')
+    p.add_argument('--reservation', type=Path, help=f'--hosted only: this run\'s {app_reservation.SCHEMA} receipt')
+    p.add_argument('--hosted-config', type=Path, default=HOSTED_CONFIG, help='--hosted only: the hosted route config')
     a = p.parse_args(argv)
     if bool(a.reuse_binding) != bool(a.build_number) or bool(a.reuse_binding) != bool(a.build_timestamp):
         p.error('--reuse-binding, --build-number and --build-timestamp go together')
+    if a.hosted and (not a.reservation or a.reuse_binding):
+        p.error('--hosted takes --reservation and never --reuse-binding')
+    if a.reservation and not a.hosted:
+        p.error('--reservation goes only with --hosted')
     try:
         config = json.loads(a.config.read_text())
+        hosted = None
+        if a.hosted:
+            store = (json.loads(a.hosted_config.read_text()).get('reservation') or {}).get('store')
+            if not store:
+                print(json.dumps({'verdict': 'SETUP_MISSING', 'missing': [
+                    'reservation.store (os/release-pipeline/agent/hosted.json, decision D1)']}), file=sys.stderr)
+                return 4
+            hosted = app_reservation.owned(a.reservation, os.environ, config['appRelease']['packageName'], json.loads(a.apps),
+                                           a.candidate_sha, store, label='--reservation')
         reuse = {'build': a.build_number, 'timestamp': a.build_timestamp, 'binding': json.loads(a.reuse_binding)} if a.reuse_binding else None
-        receipt, apk = verify_artifact(a.artifact_dir, config, a.candidate_sha, json.loads(a.apps), reuse)
+        receipt, apk = verify_artifact(a.artifact_dir, config, a.candidate_sha, json.loads(a.apps), reuse, hosted)
         document, files = public_files(receipt, apk, config, a.public_dir/'assets')
         token = os.environ.get('PIXEL_OTA_TOKEN', '')
         if not token:
@@ -368,9 +405,10 @@ def main(argv=None):
             publication.get('uploads', 'https://uploads.github.com'), web=publication.get('web', 'https://github.com'), allow_http=bool(config.get('fixture')))
         with tempfile.TemporaryDirectory(dir=os.environ.get('RUNNER_TEMP')) as work:
             release = publish(client, config, document, files, a.public_dir/'assets', Path(work)/'downloaded', receipt.get('source'))
-        record = {**document, 'releaseId': release['id'], **({'source': receipt['source']} if reuse else {})}
+        record = {**document, 'releaseId': release['id'], **({'source': receipt['source']} if reuse else {}),
+                  **({'reservation': receipt['reservation']} if hosted else {})}
         (a.public_dir/'publication.json').write_text(json.dumps(record, indent=2, sort_keys=True) + '\n')
-    except (CheckFailed, gp.PublishError) as error:
+    except (CheckFailed, gp.PublishError, app_reservation.Refused) as error:
         print(json.dumps({'verdict': 'FAIL', 'error': str(error)}), file=sys.stderr)
         return 1
     except (OSError, ValueError, KeyError) as error:

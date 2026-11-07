@@ -1089,6 +1089,13 @@ def _ws_why(r: dict, label: str | None = None) -> str:
     if status == "background_blocked":
         return (f"{app} in Rose's workspace is waiting for the owner on the phone (Android blocked it); "
                 "the workspace is kept and continues once that is done.")
+    if status == "background_unavailable" and details.get("startAbandoned"):
+        # Keeps "workspace could not open": the local agent ends its task on that wording (tasks._WORKSPACE_REFUSAL).
+        # No claim about where a moved app went: only builds with F06's platform return hand it back.
+        if details.get("stopStatus") in ("stopped", "idle", "closed"):
+            return f"Rose's workspace could not open {app} in time, so Rose stopped that start."
+        return (f"Rose's workspace could not open {app} in time, and stopping that start wasn't confirmed; check "
+                "the phone before retrying.")
     if status == "background_unavailable":
         if details.get("status") in ("offline", "timeout", "disconnected"):
             return _why(details)

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Dedicated Mustang build/OTA steps. The committed lane and runtime stay unbound.
+"""Dedicated Mustang build/OTA steps. The lane is identity-bound; runtime stays unbound.
 
 No provisioning, IAM, key bootstrap, global reclaim, automatic dispatch or phone
 operation. Runtime actions require actual admitted bindings and this one fresh
@@ -24,6 +24,7 @@ import mustang_controller as controller
 import mustang_lane
 import mustang_paths
 import mustang_ota as ota
+import mustang_route as route
 import release_receipts
 
 ROOT=Path(__file__).resolve().parents[1]
@@ -67,9 +68,9 @@ def guard(lane, cfg, env, publish=False, root=ROOT, diff=None):
     if not isinstance(cfg.get('dataFilesystemUuid'),str) or not re.fullmatch(r'[A-Za-z0-9-]+',cfg['dataFilesystemUuid']):
         raise ValueError('actual dedicated data filesystem UUID required')
     network=reference(cfg.get('networkEvidence'),root)
-    if cfg.get('automaticStopHours')!=12 or network.get('builder')!=lane['vm'] \
+    if cfg.get('automaticStopHours')!=4 or network.get('builder')!=lane['vm'] \
             or network.get('githubEgressVerified') is not True or not network.get('approvedRoute'):
-        raise ValueError('actual isolated STOP and approved working GitHub egress evidence required')
+        raise ValueError('actual isolated four-hour STOP and approved working GitHub egress evidence required')
     source=reference(cfg.get('sourceEvidence'),root)
     manifest=hashlib.sha256((Path(root)/'os/pinned-manifest.xml').read_bytes()).hexdigest()
     if source.get('builder')!=lane['vm'] or source.get('sourceRoot')!=lane['sourceRoot'] \
@@ -147,12 +148,16 @@ def metadata_id():
         return response.read(64).decode().strip()
 
 
-def host_identity(lane,filesystem_uuid,observe_id=metadata_id,execute=subprocess.run):
+def host_identity(lane,filesystem_uuid,observe_id=metadata_id,execute=subprocess.run,mount=None):
     paths=mustang_paths.layout(lane)
     if observe_id()!=lane['vm']['instanceId']: raise ValueError('runner is not the admitted dedicated VM')
-    uuid=execute(['findmnt','--noheadings','--output','UUID','--target',str(paths['home'])],capture_output=True,text=True)
-    if not filesystem_uuid or uuid.returncode or uuid.stdout.strip()!=filesystem_uuid:
+    columns='UUID,TARGET' if mount else 'UUID'
+    uuid=execute(['findmnt','--noheadings','--output',columns,'--target',str(paths['home'])],capture_output=True,text=True)
+    fields=uuid.stdout.split()
+    if not filesystem_uuid or uuid.returncode or not fields or fields[0]!=filesystem_uuid:
         raise ValueError('dedicated data filesystem is not the admitted mounted disk')
+    if mount and (len(fields)<2 or fields[1]!=mount or not str(paths['home']).startswith(mount.rstrip('/')+'/')):
+        raise ValueError('dedicated data mount differs')
     for path in paths.values():
         if any(part.is_symlink() for part in (path,*path.parents)):
             raise ValueError('dedicated path traverses a link')
@@ -160,10 +165,15 @@ def host_identity(lane,filesystem_uuid,observe_id=metadata_id,execute=subprocess
 
 
 def host_check(lane,cfg,observe_id=metadata_id,execute=subprocess.run):
-    paths=host_identity(lane,cfg['dataFilesystemUuid'],observe_id,execute)
+    observed=observe_id()
+    paths=host_identity(lane,cfg['dataFilesystemUuid'],lambda:observed,execute,cfg.get('dataMount'))
     space=os.statvfs(paths['home'])
     if space.f_bavail<=0 or space.f_files<=0 or space.f_favail<=0:
         raise ValueError('dedicated data filesystem has no available bytes/inodes')
+    frsize=getattr(space,'f_frsize',0) or getattr(space,'f_bsize',0)
+    if not frsize: raise ValueError('dedicated data filesystem has no available bytes/inodes')
+    route.evaluate_guest(dict(instanceId=observed,filesystemUuid=cfg['dataFilesystemUuid'],mount=cfg.get('dataMount'),
+        availableBytes=space.f_bavail*frsize,availableInodes=space.f_favail,totalInodes=space.f_files,euid=os.geteuid()),lane,cfg)
     if not paths['sourceRoot'].is_dir() or not paths['storageRoot'].is_dir():
         raise ValueError('dedicated source/storage must already be prepared')
     if any(os.stat(paths[key]).st_dev!=os.stat(paths['home']).st_dev for key in ('sourceRoot','storageRoot')):
@@ -334,11 +344,14 @@ def verify(directory,lane,cfg,publish=False):
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('action',choices=('guard','host-check','fetch-inputs','baseline','produce','collect','sign',
-        '_execute','stage','verify-staged','publish','report','ownership-output','cleanup-prepare','require-owned'))
+        '_execute','stage','verify-staged','publish','report','ownership-output','cleanup-prepare','require-owned','preflight'))
     parser.add_argument('--dir'); parser.add_argument('--out'); parser.add_argument('--config')
     parser.add_argument('--ownership-record'); parser.add_argument('--publish',action='store_true')
     args=parser.parse_args()
     args.publish=args.publish or (args.action=='guard' and os.environ.get('MUSTANG_PUBLISH')=='true')
+    if args.action=='preflight':
+        print(json.dumps(route.report(),sort_keys=True))
+        return 0
     if args.action in ('ownership-output','cleanup-prepare','require-owned','report'):
         lane=mustang_lane.validate(mustang_lane.configuration())
         controller.invocation(lane,os.environ)
@@ -386,7 +399,8 @@ def main():
     elif args.action=='report':
         # Failure reporting may ignore signing/input readiness, but never read
         # another guest or a fallback/unmounted filesystem's attempt paths.
-        host_identity(lane,load(CONFIG).get('dataFilesystemUuid'))
+        current=load(CONFIG)
+        host_identity(lane,current.get('dataFilesystemUuid'),mount=current.get('dataMount'))
         out=Path(args.out)
         pipeline.collect_reports(run,attempt,out,lane=lane)
         for kind,name in (('collect','compile-collection.json'),('sign','mustang-sign-receipt.json')):

@@ -71,9 +71,11 @@ public final class SettingsAgentProvider extends ContentProvider {
    java.io.InputStream in=getContext().getAssets().open("settings-agent-tools.json");java.io.ByteArrayOutputStream out=new java.io.ByteArrayOutputStream();byte[] b=new byte[4096];int n;while((n=in.read(b))!=-1)out.write(b,0,n);in.close();
    JSONArray tools=new JSONArray(out.toString("UTF-8"));
    in=getContext().getAssets().open("youtube-agent-tools.json");out.reset();while((n=in.read(b))!=-1)out.write(b,0,n);in.close();JSONArray yt=new JSONArray(out.toString("UTF-8"));for(int i=0;i<yt.length();i++)tools.put(yt.get(i));
+   JSONArray cz=CustomizationAgent.catalog(getContext());for(int i=0;i<cz.length();i++)tools.put(cz.get(i));
    return new JSONObject().put("status","ok").put("schemaVersion",1).put("versionCode",getContext().getPackageManager().getPackageInfo(getContext().getPackageName(),0).getLongVersionCode()).put("tools",tools);
   }
   if(method.startsWith("youtube_"))return youtube.execute(method,p);
+  if(CustomizationAgent.handles(method))return CustomizationAgent.execute(getContext(),method,p);
   if(method.startsWith("install_approval_"))return new PlayInstallBridge(getContext()).execute(method,p);
   if(method.equals("get_state")){only(p);return state();}
   if(method.equals("request_access")){

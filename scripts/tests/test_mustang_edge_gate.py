@@ -66,9 +66,32 @@ class DedicatedLaneTest(unittest.TestCase):
                                      providerVariable='MUSTANG_CONTROLLER_WORKLOAD_IDENTITY_PROVIDER'))
         return value
 
-    def test_committed_dedicated_lane_is_unbound_and_renders_no_commands(self):
-        self.assertEqual(lane.configuration()['status'],'unbound')
-        with self.assertRaises(ValueError): lane.controller_plan(lane.configuration())
+    def test_committed_dedicated_lane_is_identity_bound_and_not_runtime_authorized(self):
+        bound_lane=lane.configuration()
+        self.assertEqual(bound_lane['status'],'bound')
+        self.assertEqual(bound_lane['vm']['instanceId'],lane.CONFIRMED_INSTANCE_ID)
+        plan=lane.controller_plan(bound_lane)
+        self.assertEqual(plan['ownership'],bound_lane['vm'])
+        self.assertEqual(plan['automaticStop'],{'seconds':14400,'action':'STOP','hours':4})
+        self.assertFalse(plan['runtimeAuthorized'])
+        self.assertNotIn('immortal-os-builder',' '.join(plan['start']))
+        self.assertNotIn('roseos-yogi-builder-20261105-b',' '.join(plan['start']))
+        yogi=json.loads((ROOT/'os/ota/yogi.json').read_text())['builder']
+        for profile in (
+                dict(bound_lane,diskResource='projects/protocols-465723/zones/us-west2-a/disks/immortal-os-builder'),
+                dict(bound_lane,vm=dict(bound_lane['vm'],instance='immortal-os-builder',instanceId=lane.FRANKEL_INSTANCE_ID)),
+                dict(bound_lane,vm=dict(bound_lane['vm'],instance=yogi['instance'],instanceId=yogi['instanceId'],zone=yogi['zone'])),
+                dict(bound_lane,vm=dict(bound_lane['vm'],instanceId=yogi['retired']['instanceId'])),
+                dict(bound_lane,disk=dict(bound_lane['disk'],id=yogi['restoredDiskId'])),
+                dict(bound_lane,runnerLabel='roseos-frankel-builder'),
+                dict(bound_lane,queue='os-release-frankel'),
+                dict(bound_lane,workflow='.github/workflows/os-release.yml'),
+                dict(bound_lane,workflow='.github/workflows/yogi-ota.yml'),
+                dict(bound_lane,sourceRoot='/home/pixelbuild/source'),
+                dict(bound_lane,sourceRoot='/srv/rose-yogi/src'),
+                dict(bound_lane,infraEvidence='synthetic fixture, not a real binding')):
+            with self.subTest(profile=profile.get('workflow'),instance=profile['vm']['instance']):
+                with self.assertRaises(ValueError): lane.controller_plan(profile)
 
     def test_dedicated_commands_are_only_for_the_verified_instance(self):
         value=self.proposal()
@@ -232,9 +255,10 @@ class DedicatedControllerTest(unittest.TestCase):
 
     def test_unbound_or_other_flavor_lanes_never_reach_control(self):
         fake = self.fake()
-        for invalid in (lane.configuration(), dict(self.lane, vm=dict(self.lane['vm'],
+        unbound = dict(lane.configuration(), status='unbound')
+        for invalid in (unbound, dict(self.lane, vm=dict(self.lane['vm'],
                                           instance='immortal-os-builder', project='protocols-465723',zone='us-west2-a'))):
-            with self.subTest(lane=invalid):
+            with self.subTest(instance=invalid['vm']['instance']):
                 with self.assertRaises(ValueError): controller.start(fake, invalid, self.run, self.record)
         self.assertEqual(fake.calls, [])
 
@@ -324,11 +348,23 @@ class DedicatedControllerTest(unittest.TestCase):
 
     def test_all_committed_controller_cli_actions_refuse_without_cloud_calls(self):
         env = dict(PATH=os.environ['PATH'])
-        for action in ('check','plan','start','ownership','stop'):
+        for action in ('check','plan'):
+            result = subprocess.run([sys.executable,str(ROOT/'scripts/mustang_controller.py'), action],
+                                    env=env, capture_output=True, text=True, timeout=20)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            body=json.loads(result.stdout)
+            self.assertFalse(body['runtimeAuthorized'])
+            self.assertNotIn('gcloud', result.stderr)
+        start = subprocess.run([sys.executable,str(ROOT/'scripts/mustang_controller.py'), 'start'],
+                               env=env, capture_output=True, text=True, timeout=10)
+        self.assertEqual(start.returncode, 4)
+        self.assertIn('runtime is not admitted', start.stderr)
+        self.assertNotIn('gcloud', start.stderr)
+        for action in ('ownership','stop'):
             result = subprocess.run([sys.executable,str(ROOT/'scripts/mustang_controller.py'), action],
                                     env=env, capture_output=True, text=True, timeout=10)
             self.assertEqual(result.returncode, 4)
-            self.assertIn('dedicated Mustang bindings missing', result.stderr)
+            self.assertNotIn('gcloud', result.stderr)
 
 
 class DedicatedPathsTest(unittest.TestCase):
@@ -342,8 +378,13 @@ class DedicatedPathsTest(unittest.TestCase):
         profile=self.profile()
         self.assertEqual(mustang_paths.attempt(profile,'prep','123','1'),
                          Path('/synthetic/rose-actions/mustang-prep-123-1'))
-        for invalid in (lane.configuration(), dict(profile,storageRoot='/elsewhere/actions'),
-                        dict(profile,lockPath=profile['sourceRoot'])):
+        committed=mustang_paths.layout(lane.configuration())
+        self.assertEqual(committed['home'], Path('/mnt/disks/mustang-data/roseos'))
+        self.assertFalse(str(committed['storageRoot']).startswith('/home/pixelbuild'))
+        for invalid in (dict(lane.configuration(), status='unbound'), dict(profile,storageRoot='/elsewhere/actions'),
+                        dict(profile,lockPath=profile['sourceRoot']),
+                        dict(profile,sourceRoot='/home/pixelbuild/source',storageRoot='/home/pixelbuild/rose-actions',
+                             lockPath='/home/pixelbuild/mustang.lock')):
             with self.assertRaises(ValueError): mustang_paths.layout(invalid)
         for kind,run,attempt in (('../prep','123','1'),('prep','../1','1'),('prep','1','0')):
             with self.assertRaises(ValueError): mustang_paths.attempt(profile,kind,run,attempt)
@@ -393,12 +434,17 @@ class DedicatedPathsTest(unittest.TestCase):
         workflow=(ROOT/'.github/workflows/mustang-ota-dedicated.yml').read_text()
         jobs=workflow_shape.jobs(workflow)
         self.assertEqual(set(jobs),{'guard','controller','builder','publisher','cleanup'})
+        self.assertNotIn('pull_request', workflow)
+        self.assertNotIn('workflow_call', workflow)
+        self.assertNotIn('pull_request_target', workflow)
         self.assertIn('    runs-on: ubuntu-24.04',jobs['guard'])
         self.assertIn('python3 scripts/mustang-dedicated.py guard',jobs['guard'])
         active='\n'.join(line for line in workflow.splitlines() if not line.lstrip().startswith('#'))
         for forbidden in ('immortal-os-builder','roseos-frankel-builder','builder-reclaim','schedule:', 'workflow_run:'):
             self.assertNotIn(forbidden,active)
         self.assertIn('  group: mustang-ota',workflow)
+        self.assertIn('timeout-minutes: 200',jobs['builder'])
+        self.assertNotIn('timeout-minutes: 600',jobs['builder'])
         self.assertIn('needs: guard',jobs['controller'])
         self.assertNotIn('always()',jobs['controller'].split('steps:',1)[0])
         self.assertIn("needs.controller.result != 'skipped'",jobs['cleanup'])
@@ -407,12 +453,20 @@ class DedicatedPathsTest(unittest.TestCase):
         self.assertLess(jobs['publisher'].index('verify-staged'),jobs['publisher'].index('actions/create-github-app-token'))
         self.assertLess(jobs['cleanup'].index('cleanup-prepare'),jobs['cleanup'].index('actions-gcp-login.py login'))
         env=dict(PATH=os.environ['PATH'])
+        preflight=subprocess.run([sys.executable,str(ROOT/'scripts/mustang-dedicated.py'),'preflight'],env=env,
+                                 capture_output=True,text=True,timeout=20)
+        self.assertEqual(preflight.returncode,0,preflight.stderr)
+        readiness=json.loads(preflight.stdout)
+        self.assertFalse(readiness['buildAuthorized'])
+        self.assertFalse(readiness['publicationAuthorized'])
+        self.assertEqual(readiness['stopSafeguard']['seconds'],14400)
+        self.assertIn('runner-unregistered',{item['code'] for item in readiness['blockers']})
         for action in ('guard','host-check','fetch-inputs','baseline','produce','collect','sign','_execute','stage',
                        'verify-staged','publish','report','ownership-output','cleanup-prepare','require-owned'):
             result=subprocess.run([sys.executable,str(ROOT/'scripts/mustang-dedicated.py'),action],env=env,
-                                  capture_output=True,text=True,timeout=10)
-            self.assertEqual(result.returncode,4)
-            self.assertIn('dedicated Mustang bindings missing',result.stderr)
+                                  capture_output=True,text=True,timeout=20)
+            self.assertEqual(result.returncode,4,action)
+            self.assertNotIn('gcloud',result.stderr)
 
 class PrivateInputImportTest(app_fixture.Fixture):
     """Canonical exporter fixtures, real tar imports and shared admission; no host/network."""
@@ -655,7 +709,7 @@ class DedicatedRuntimeTest(unittest.TestCase):
                 allocation=dict(path=allocation,sha256=gate.digest(self.root/allocation)))))
         self.cfg=dict(schema='roseos.mustang-dedicated-runtime.v1',status='bound',jobs=24,
             tools=dict(aapt=sys.executable,apksigner=sys.executable,node=sys.executable),dataFilesystemUuid='fixture-uuid',
-            automaticStopHours=12,networkEvidence=self.record('network',dict(builder=self.lane['vm'],
+            automaticStopHours=4,networkEvidence=self.record('network',dict(builder=self.lane['vm'],
                 githubEgressVerified=True,approvedRoute='synthetic approved route')),
             sourceEvidence=source_ref,allocationState=state,appInputsRecord=apps,
             baselineTargetFiles=dict(archive,path=str(self.host/'baseline.zip')),
@@ -672,7 +726,7 @@ class DedicatedRuntimeTest(unittest.TestCase):
     def test_actual_evidence_guard_allows_private_and_refuses_stale_or_unbound(self):
         self.assertEqual(self.admitted()['consumedBuilds'],['2026110402'])
         for change in (dict(status='unbound'),dict(jobs=None),dict(sourceEvidence=None),dict(signingRouteEvidence=None),
-                       dict(runner=dict(self.cfg['runner'],lifetime=None)),dict(dataFilesystemUuid=None),
+                       dict(automaticStopHours=12),dict(runner=dict(self.cfg['runner'],lifetime=None)),dict(dataFilesystemUuid=None),
                        dict(baselineTargetFiles=dict(self.cfg['baselineTargetFiles'],path='/retired/baseline.zip'))):
             with self.subTest(change=change):
                 with self.assertRaises(ValueError): self.admitted(dict(self.cfg,**change))
@@ -711,6 +765,65 @@ class DedicatedRuntimeTest(unittest.TestCase):
         with patch.object(self.driver.os,'statvfs',return_value=SimpleNamespace(f_bavail=0,f_files=100,f_favail=10)):
             with self.assertRaisesRegex(ValueError,'no available bytes/inodes'):
                 self.driver.host_check(self.lane,self.cfg,observe_id=lambda:self.lane['vm']['instanceId'],execute=process)
+        with patch.object(self.driver.os,'statvfs',return_value=SimpleNamespace(f_bavail=10,f_frsize=4096,f_files=100,f_favail=0)):
+            with self.assertRaisesRegex(ValueError,'no available bytes/inodes'):
+                self.driver.host_check(self.lane,self.cfg,observe_id=lambda:self.lane['vm']['instanceId'],execute=process)
+
+    def test_real_disk_preflight_rejects_wrong_identity_low_space_and_root(self):
+        import mustang_route as readiness
+        peak=readiness.compile_peak()
+        lane_binding=lane.configuration(); runtime=json.loads((ROOT/'os/build-only/mustang-runtime.json').read_text())
+        good=dict(instanceId=lane.CONFIRMED_INSTANCE_ID,filesystemUuid=lane.CONFIRMED_UUID,
+                  mount=lane.CONFIRMED_MOUNT,availableBytes=lane.CONFIRMED_FREE_BYTES,
+                  availableInodes=1000,totalInodes=lane.CONFIRMED_TOTAL_INODES,euid=1000)
+        observed=readiness.evaluate_guest(good,lane_binding,runtime)
+        self.assertFalse(observed['admitted'])
+        self.assertGreaterEqual(observed['availableBytes'],peak)
+        for bad,message in (
+                (dict(good,instanceId=lane.FRANKEL_INSTANCE_ID),'not the admitted dedicated VM'),
+                (dict(good,instanceId='2720796557371812468'),'not the admitted dedicated VM'),
+                (dict(good,filesystemUuid='other-uuid'),'not the admitted mounted disk'),
+                (dict(good,mount='/home/pixelbuild'),'data mount differs'),
+                (dict(good,mount='/srv/rose-yogi'),'data mount differs'),
+                (dict(good,availableBytes=peak-1),'recorded compile peak'),
+                (dict(good,availableInodes=0),'no available bytes/inodes'),
+                (dict(good,totalInodes=1),'inode count differs'),
+                (dict(good,euid=0),'nonroot')):
+            with self.subTest(message=message):
+                with self.assertRaisesRegex(ValueError,message):
+                    readiness.evaluate_guest(bad,lane_binding,runtime)
+        report=readiness.report()
+        codes={item['code'] for item in report['blockers']}
+        self.assertTrue({'runtime-unbound','runner-unregistered','allocation-unresolved','app-inputs-unadmitted',
+                         'baseline-not-on-disk','signing-route-unadmitted','publication-disabled'}<=codes)
+        self.assertFalse(report['buildAuthorized']); self.assertFalse(report['publicationAuthorized'])
+        self.assertFalse(report['admitted']['appArchive']); self.assertFalse(report['admitted']['baselineTargetFiles'])
+        self.assertEqual(report['minimumFreeBytes'],121686892544)
+        self.assertEqual(report['minimumFreeBytes'],peak)
+        self.assertEqual(report['minimumFreeBytesSource'],
+                         'os/mustang-ota/41761758623/producer/compile-completed.json peakSampledBytes')
+        self.assertEqual(report['workflowTrust']['problems'],[])
+        self.assertIsNone(report['workflowTrust']['lifetime'])
+        self.assertFalse(report['workflowTrust']['ephemeralFeasibleNow'])
+        self.assertFalse(report['signingGroupImpact']['modified'])
+        self.assertEqual(readiness.enrollment()['github']['groupId'],'5')
+        self.assertIsNone(readiness.enrollment()['github']['lifetime'])
+        self.assertIsNone(readiness.enrollment()['github']['runnerId'])
+        self.assertEqual(readiness.enrollment()['github']['runnerCount'],0)
+        self.assertIn('4884085713',' '.join(item['detail'] for item in report['blockers']))
+        plan=readiness.provision_plan()
+        rendered=json.dumps(plan)
+        self.assertEqual(plan['noblePackages']['absent'],['libncurses5','yarn'])
+        self.assertNotIn('libncurses5',plan['noblePackages']['main'])
+        self.assertFalse(plan['executedByThisRepository']); self.assertFalse(plan['selectsBuildNumber'])
+        self.assertNotIn('immortal-os-builder',rendered); self.assertNotIn('BUILD_NUMBER',rendered)
+        self.assertNotIn('2026110502',rendered); self.assertNotIn('ghp_',rendered)
+        self.assertEqual(readiness.runner_architecture()['lifetime'],None)
+        self.assertEqual(readiness.runner_architecture()['builderJob'],'self-hosted')
+        with self.assertRaisesRegex(ValueError,'no new build number'):
+            pipeline_module=ota.module('unresolved_allocation','mustang-pipeline.py')
+            pipeline_module.run('123','1',self.lane,dict(self.cfg),self.root/'inputs')
+        self.assertFalse((self.host/'rose-actions/mustang-prep-123-1').exists())
 
     def test_changed_checkout_refuses_before_any_host_or_signing_action(self):
         with patch.object(lane,'configuration',return_value=self.lane),patch.object(self.driver,'guard',return_value=self.cfg), \
@@ -1131,11 +1244,12 @@ class AdapterTest(unittest.TestCase):
             adapter.collect(str(self.receipt),'333','1',lane=profile)
         self.assertEqual(self.calls,[])
 
-    def test_unbound_dedicated_collection_fails_before_admission_or_output(self):
-        with self.assertRaisesRegex(ValueError,'dedicated Mustang bindings missing'):
+    def test_committed_lane_refuses_a_foreign_receipt_before_admission_or_output(self):
+        with self.assertRaisesRegex(ValueError,'exact dedicated Mustang VM/workflow'):
             adapter.collect(str(self.receipt),'333','1',lane=lane.configuration())
         self.assertEqual(self.calls,[])
         self.assertFalse((self.actions/'mustang-collect-333-1').exists())
+        self.assertFalse(Path('/mnt/disks/mustang-data/roseos/rose-actions/mustang-collect-333-1').exists())
 
     def test_private_factory_cannot_reuse_pre_gate_success_receipt(self):
         self.collect(); self.sign()

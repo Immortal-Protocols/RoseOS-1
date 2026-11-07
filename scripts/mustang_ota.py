@@ -446,6 +446,10 @@ def publish(client, directory, cfg, out):
     r = verify_staged(directory, cfg)
     out.mkdir(mode=0o700)
     tag = 'mustang-'+r['build']
+    names = [r['ota']['file'], 'mustang-ota-receipt.json', 'SHA256SUMS', 'mustang-stable']
+    if not tag.startswith('mustang-') or any(tag.startswith(prefix) for prefix in ('frankel-', 'blazer-', 'rango-')) \
+            or any(name.startswith(('frankel', 'blazer', 'rango')) for name in names):
+        raise ValueError('publication is not a Mustang release')
     before = client.latest_tag()
     releases = release_rows(client)
     if len(releases) >= 299:
@@ -470,7 +474,7 @@ def publish(client, directory, cfg, out):
         state.update(releaseId=release['id'], status='draft-created')
         record()
         # The channel asset is deliberately last and the release is still a draft.
-        names = [r['ota']['file'], 'mustang-ota-receipt.json', 'SHA256SUMS', 'mustang-stable']
+        # Frankel, Blazer and Rango releases are never upload targets.
         for name in names:
             client.upload(release['id'], directory/name)
             current = client.get_release(release['id'])

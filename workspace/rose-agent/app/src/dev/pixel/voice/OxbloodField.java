@@ -50,11 +50,24 @@ final class OxbloodField extends Drawable {
     cache = android.graphics.Bitmap.createBitmap(b.width(), b.height(), android.graphics.Bitmap.Config.ARGB_8888);
     Canvas c = new Canvas(cache);
     c.translate(-b.left, -b.top);
-    paintField(c);
+    paintVariant(c);
    } catch (RuntimeException | OutOfMemoryError tooLarge) { cache = null; }
   }
   if (cache != null) canvas.drawBitmap(cache, b.left, b.top, null);
-  else paintField(canvas);
+  else paintVariant(canvas);
+ }
+
+ /** Nov 7 plan 1O: a curated Oxblood variant (OxbloodVariants via CustomizationVisuals) is a colour filter over the
+  * whole field, applied when the field is drawn into its cache, so the cached field and the tiles' blurred backdrop
+  * both carry it. No filter (classic) draws exactly the shipped field. */
+ ColorFilter variant;
+ private void paintVariant(Canvas c) {
+  if (variant == null) { paintField(c); return; }
+  Paint layer = new Paint();
+  layer.setColorFilter(variant);
+  int save = c.saveLayer(null, layer);
+  paintField(c);
+  c.restoreToCount(save);
  }
 
  /** A blurred copy of the field for backdrop blur (#410: the tiles' backdrop-filter), at 1/BLUR_SCALE size: built
@@ -213,6 +226,11 @@ final class OxbloodField extends Drawable {
  }
 
  @Override public void setAlpha(int alpha) {}
- @Override public void setColorFilter(ColorFilter filter) {}
+ @Override public void setColorFilter(ColorFilter filter) {
+  if (filter == variant) return;
+  variant = filter;
+  cache = null; blurred = null; // rebuilt with the variant on the next draw; never recycled under a drawing tile
+  invalidateSelf();
+ }
  @Override public int getOpacity() { return PixelFormat.OPAQUE; }
 }

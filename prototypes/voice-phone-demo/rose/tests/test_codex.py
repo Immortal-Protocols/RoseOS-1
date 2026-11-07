@@ -365,6 +365,18 @@ class Integration(unittest.TestCase):
                 self.assertIn('nothing was opened', result['result'])
                 self.engine.cancel(a.task.id)
 
+    def test_an_abandoned_start_still_ends_a_local_background_task(self):
+        # The local agent ends a background task on workspace-refusal wording; a timed-out, stopped start is one.
+        from rose.realphone import _ws_why
+        from rose.tasks import _WORKSPACE_REFUSAL
+        for stop in ('stopped', 'timeout'):
+            with self.subTest(stop=stop):
+                why = _ws_why({'status': 'background_unavailable', 'packageName': CALC, 'details': {
+                    'status': 'launching', 'sessionId': 's', 'targetPackage': CALC,
+                    'startAbandoned': True, 'stopStatus': stop}}, 'Calculator')
+                self.assertTrue(_WORKSPACE_REFUSAL.search(why), why)
+                self.assertNotIn('goes back', why)
+
     def test_unconfirmed_slot_release_blocks_replacement_and_preserves_task_result(self):
         a, b = self.task('Calculator'), self.task('Clock')
         self.complete(a)
@@ -894,6 +906,63 @@ class PhoneClipboard(Integration):
             self.assertEqual(fake.clipboard, text)
         self.assertEqual(fake.copy_to_clipboard('a\ud83d')['status'], 'malformed_text')
         self.assertEqual(fake.clipboard, list(self.VECTORS)[-1])
+
+
+class CustomizationLink:
+    """The paired phone answering Rose Agent's customization_* app commands (Nov 7 plan 1O)."""
+    connected = True
+    def __init__(self, reply):
+        self.reply, self.sent = reply, []
+
+    def call(self, action, **args):
+        self.sent.append((action, dict(args)))
+        return self.reply
+
+
+class ConversationCustomization(Integration):
+    """The 1O controls are conversation tools from the shared catalog, sent as the existing app_command."""
+
+    def use(self, name, args, reply):
+        self.phone.link = link = CustomizationLink(reply)
+        return self.call(self.engine.sessions['conversation'], name, **args), link
+
+    def test_registered_on_the_conversation_thread_only_with_the_policy(self):
+        from rose import customization
+        from rose.codex_conductor import CONVERSATION_TOOLS, CONVERSATION_POLICY
+        names = [t['name'] for t in CONVERSATION_TOOLS]
+        self.assertTrue(customization.NAMES <= set(names))
+        self.assertEqual(len(names), len(set(names)), 'no duplicate tool names')
+        self.assertIn(customization.POLICY_LINE, CONVERSATION_POLICY)
+        opened = [c for c in self.engine.client.calls if c[0] == 'open' and c[1] == 'conversation'][0][2]
+        self.assertTrue(customization.NAMES <= {t['name'] for t in opened['tools']})
+        a = self.task('Calculator')
+        app = [c for c in self.engine.client.calls if c[0] == 'open' and c[1] == a.name][-1][2]
+        self.assertFalse(customization.NAMES & {t['name'] for t in app['tools']}, 'app threads never get them')
+
+    def test_a_control_is_the_app_command_and_ok_only_for_the_phones_verified(self):
+        reply = {'status': 'verified', 'changed': True, 'customization': {'homeColumns': 5},
+                 'home': {'applied': False, 'effectiveColumns': None}}
+        result, link = self.use('customization_home_columns', {'columns': 5}, reply)
+        self.assertEqual(link.sent, [('app_command', {'timeout': 12.0, 'packageName': 'dev.pixel.voice',
+                                                      'operation': 'customization_home_columns', 'params': {'columns': 5}})])
+        self.assertTrue(result['ok'])
+        self.assertEqual(result['home'], {'applied': False, 'effectiveColumns': None})
+        self.assertTrue(self.engine.client.results[-1]['result']['success'])
+        for status in ('uncertain', 'unavailable', 'error', 'running', 'timeout', 'offline'):
+            with self.subTest(status=status):
+                result, _ = self.use('customization_font', {'font': 'serif'}, {'status': status})
+                self.assertFalse(result['ok'])
+                self.assertFalse(self.engine.client.results[-1]['result']['success'])
+
+    def test_refused_and_unsupported_calls_send_nothing(self):
+        result, link = self.use('customization_home_columns', {'columns': 99}, {'status': 'verified'})
+        self.assertEqual((result['ok'], result['status']), (False, 'refused'))
+        self.assertEqual(link.sent, [])
+        result, link = self.use('customization_wallpaper', {'variant': 'neon'}, {'status': 'verified'})
+        self.assertEqual((result['ok'], result['status'], link.sent), (False, 'refused', []))
+        from rose.phone import Phone
+        from rose import customization
+        self.assertEqual(customization.call(Phone(), 'customization_state', {})['status'], 'customization_unsupported')
 
 
 class StorageAndContract(unittest.TestCase):

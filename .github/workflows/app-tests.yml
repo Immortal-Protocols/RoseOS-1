@@ -8,6 +8,7 @@ on:
   pull_request:
     paths:
       - 'workspace/**'
+      - 'prototypes/voice-phone-demo/**'
       - 'os/background-control/**'
       - 'qa/systemui-trial/**'
       - 'os/tests/persistent-app-experiment/**'
@@ -35,6 +36,8 @@ on:
       - 'os/tests/fixtures/yogi-port/**'
       - 'os/tests/test_yogi_port.py'
       - 'scripts/prepare-yogi-port.py'
+      - 'scripts/yogi_replacement_recover.py'
+      - 'scripts/tests/test_yogi_replacement_recover.py'
       - 'os/compile-contracts/frameworks-base-wmshell.json'
       - 'os/compile-contracts/frankel-lunch-inputs.json'
       - 'os/compile-contracts/launcher3-quickstep-lib.json'
@@ -106,6 +109,7 @@ on:
     branches: [main]
     paths:
       - 'workspace/**'
+      - 'prototypes/voice-phone-demo/**'
       - 'os/background-control/**'
       - 'qa/systemui-trial/**'
       - 'os/tests/persistent-app-experiment/**'
@@ -133,6 +137,8 @@ on:
       - 'os/tests/fixtures/yogi-port/**'
       - 'os/tests/test_yogi_port.py'
       - 'scripts/prepare-yogi-port.py'
+      - 'scripts/yogi_replacement_recover.py'
+      - 'scripts/tests/test_yogi_replacement_recover.py'
       - 'os/compile-contracts/frameworks-base-wmshell.json'
       - 'os/compile-contracts/frankel-lunch-inputs.json'
       - 'os/compile-contracts/launcher3-quickstep-lib.json'

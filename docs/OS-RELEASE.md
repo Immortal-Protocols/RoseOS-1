@@ -350,17 +350,28 @@ path are unchanged.
 - **The consumer's own checks:** importing the archive (no extraction of its metadata, only the canonical files), and
   that `destination.builder` and `dataFilesystemUuid` are its own bound VM and disk.
 
-## Daily release dispatcher (1F, source only and off)
+## Daily release dispatcher (1E: 04:00 Pacific, every lane off)
 
-`.github/workflows/daily-release.yml` runs `scripts/daily-release.py dispatch`. Once activated, it builds, signs,
-verifies and publishes each flavor once a day through that flavor's existing manual entry, as listed in
-`os/release-pipeline/lanes/daily.json`:
+`.github/workflows/daily-release.yml` runs `scripts/daily-release.py dispatch` every day at 04:00
+America/Los_Angeles. For each enabled lane in `os/release-pipeline/lanes/daily.json`, it builds, signs, verifies and
+publishes that flavor through the flavor's own entry, builder and queue:
 
-| Lane | Entry and inputs | Delivered when | Last good release on failure |
-| --- | --- | --- | --- |
-| frankel | `os-release.yml` `mode=latest-beta` | `publisher` succeeded | Beta Latest moves only after verification and the download check |
-| mustang | `os-release.yml` `mode=mustang-ota`, `mustang_publish_ota=true` | `mustang-ota-publisher` succeeded | OTA before channel metadata, never Latest |
-| yogi | `yogi-ota.yml` `stage=ota`, `publish=true` (Yogi owner's #558) | `publisher` succeeded | OTA first, `yogi-stable` last, never Latest |
+| Lane | Entry and inputs | Queue | Delivered when | Last good release on failure |
+| --- | --- | --- | --- | --- |
+| frankel | `os-release.yml` `mode=latest-beta` | `os-release-frankel` | `publisher` succeeded | Beta Latest moves only after verification and the download check |
+| mustang | `mustang-ota-dedicated.yml` `publish=true` | `mustang-ota` | `publisher` succeeded | OTA before channel metadata, never Latest |
+| yogi | `yogi-ota.yml` `stage=ota`, `publish=true` | `yogi-ota` | `publisher` succeeded | OTA first, `yogi-stable` last, never Latest |
+
+**The schedule (DST-aware).** GitHub schedules are UTC, so the workflow lists both UTC times that can be 04:00
+Pacific: 11:00 UTC (PDT) and 12:00 UTC (PST). A scheduled run acts only when the cron that fired is 04:00 in
+America/Los_Angeles on that date, so each day runs exactly once, including across daylight-saving changes:
+
+- the check uses the cron that fired (`github.event.schedule`), not the start time, so a late start still runs;
+- the other cron's run skips every lane with no API call;
+- a test checks that the crons are exactly the window's UTC times, and that exactly one cron is in the window every
+  day from 2026 through 2028.
+
+A scheduled run is never a dry run. A manual run is a dry run unless `dry_run` is false, and it ignores the window.
 
 **Each lane is decided on its own,** so one lane's failure never stops another. A lane is skipped when:
 - it is disabled;
@@ -368,22 +379,26 @@ verifies and publishes each flavor once a day through that flavor's existing man
 - a run of it is still queued or in progress;
 - its newest delivered run already built the current main commit, so an identical commit is never rebuilt.
 
+A lane's runs are its entry's runs on main titled exactly `runTitle`, or starting with `runTitlePrefix`. Only
+latest-beta is titled "Build & publish latest Pixel 10". Every other `os-release.yml` mode is titled
+`os-release <mode> <run id>`, so a latest-draft run (which leaves an unpublished draft) never counts as a Frankel
+delivery, and an advanced mode never holds the Frankel lane.
+
 Otherwise its entry is dispatched once, on main, with the committed inputs. A failed run is retried at the next daily
 run and reaches its owner through the run's own failure. The dispatcher never publishes, cancels, retries or changes a
 release. Manual dispatch of every entry is unchanged.
 
-**What is committed is inert:**
-- the workflow has no `schedule:`;
-- every lane is `enabled: false`;
-- a manual run is a dry run by default;
-- the job can only dispatch from main, with its own `actions: write` token and no secret.
+**What is committed is inert:** every lane is `enabled: false`, so a scheduled run reads main and dispatches nothing.
+The job can only dispatch from main, with its own `actions: write` token and no secret.
 
-**Activation** is one reviewed, owner-approved change. It enables a lane, records Chief's daily window
-(`window.time`, Pacific) and adds the schedule.
+**Enabling a lane** is its own reviewed change to `daily.json`, approved by that lane's owner and Chief. The lane's
+first scheduled run then builds and publishes main at the next 04:00 Pacific. The Mustang and Yogi routes are manual
+only today: before their lanes are enabled, their owners must admit this automatic dispatch on their own routes
+(Mustang's publication authority requires `automatic: false`).
 
-**Isolation:** lanes on the same host still share that host's queue and lock (today `os-release-frankel` and the
-shared builder). Independent capacity per flavor comes from Infra's verified per-flavor runner, VM, storage and
-controller mapping, not from this dispatcher.
+**Isolation:** each lane has its own entry and queue. Frankel shares `os-release-frankel` with the other
+`os-release.yml` modes, which wait in order (`queue: max`) rather than cancel each other. Independent capacity per
+flavor comes from each route's own builder binding, not from this dispatcher.
 
 ## Lane capacity map (1A, source only)
 
@@ -545,13 +560,29 @@ Its `restore()` checks the five inputs against `public-assets-receipt.json` and 
 `portableInputs` (the record's schema and sha256, no paths). With a valid record, `--check --hosted` names only the
 reservation store.
 
+**Its publication (`scripts/app_release_publisher.py --hosted --reservation PATH`, 1F).** The publisher admits a
+hosted artifact only under the same owned reservation the build used. The check is one shared implementation,
+`scripts/app_reservation.py`, so the build and the publisher cannot drift:
+- the reservation passes the same checks as above: its digest, this run as owner, `APPS` and the candidate, and the
+  store `hosted.json` binds. A re-run attempt is a new owner and needs a new reservation;
+- its version is above every committed Frankel floor: `mustExceed` and every `reserved` row. The store never reissues
+  a consumed version;
+- the receipt records exactly that reservation (digest, allocation, source and store).
+
+Every other check is the app-only route's, unchanged: artifact inventory and digests, signer, v4 sidecar,
+compatibility, a separate prerelease and OTA Latest unchanged. `publication.json` also records the reservation; the
+public receipt does not. Frankel's app-only and reuse routes refuse a hosted receipt. While the store is unbound,
+`--hosted` exits 4 before any check or API call. Neither the build nor the publisher reads the store yet: confirming
+that a reservation is recorded there comes with the store itself (decision D1).
+
 Nothing in `os-release.yml` routes to it yet. The hosted job, its queue and the shared reservation store wait on the
 decisions in the Agent design checkpoint:
 - the reservation store and its write credential;
 - Frankel reserving in the same store;
 - Infra's check of provider admission for a hosted runner.
 
-`scripts/tests/test_agent_hosted_release.py` checks the route with fakes only.
+`scripts/tests/test_agent_hosted_release.py` checks the route, and `PublisherHostedTest` in
+`scripts/tests/test_app_release_publisher.py` its publication, with fakes only.
 
 ## Retained Rango signing and separate release (source only, runtime unbound)
 
