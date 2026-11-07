@@ -100,6 +100,8 @@ python3 scripts/tests/test_mustang_ota_chain_workflow.py
 python3 scripts/tests/test_yogi_ota.py
 # Yogi direct operator route: plan/start/run/status/cancel/cleanup and the guest agent (fake gcloud/ssh; no VM, SSH or key).
 python3 scripts/tests/test_yogi_direct.py
+# Yogi replacement recovery: dry-run plan, fake control plane, in-memory guest (no GCP, SSH, or key).
+python3 scripts/tests/test_yogi_replacement_recover.py
 # Mustang raised-edge gate (#570): the shared checker on synthetic archives; no signer, host or dispatch.
 python3 scripts/tests/test_mustang_edge_gate.py
 python3 scripts/tests/test_agent_beta_auto.py
