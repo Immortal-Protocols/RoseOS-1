@@ -408,9 +408,16 @@ class HostedSignGateTest(unittest.TestCase):
         self.assertNotIn('mustang_source_sync', signer)
         self.assertNotIn('immortal-os-builder', signer)
         self.assertIn('id-token: write', signer)
+        self.assertLess(signer.index('mustang_hosted_sign.py preliminary'), signer.index('mustang-signing-inputs-'))
+        self.assertLess(signer.index('mustang-signing-inputs-'), signer.index('mustang_hosted_sign.py preflight'))
         self.assertLess(signer.index('mustang_hosted_sign.py preflight'), signer.index('actions-gcp-login.py login'))
-        self.assertLess(signer.index("steps.capacity.outputs.admit == 'true'"), signer.index('actions-gcp-login.py login'))
-        self.assertEqual(signer.count("steps.capacity.outputs.admit == 'true'"), 4)
+        self.assertIn("steps.preliminary.outputs.allow == 'true'", signer.split('mustang-signing-inputs-', 1)[0][-500:])
+        self.assertNotIn("steps.verified.outputs.admit", signer.split('name: Download the same-run input bytes', 1)[1].split('id: verified', 1)[0])
+        self.assertEqual(signer.count("steps.verified.outputs.admit == 'true'"), 3)
+        self.assertIn("steps.preliminary.outputs.allow == 'true'", builder)
+        self.assertNotIn('--checkout', workflow)
+        self.assertNotIn('--capacity', workflow)
+        self.assertNotIn('--pin ', workflow)
         self.assertIn('mustang-signing-inputs-', builder)
         self.assertIn('mustang-signing-bundle/inputs', builder)
         self.assertNotIn('mustang-signer-linux-4-core', workflow)
@@ -463,6 +470,95 @@ class HostedSignGateTest(unittest.TestCase):
                     raise
             self.assert_secret_closed(missing, 'output bound is missing: ' + name)
 
+    def test_workflow_cli_downloads_payload_only_after_metadata_gate(self):
+        bundle, files, pin = self.tiny_bundle()
+        bundle['build'] = '1'
+        root = self.checkout(files['generateRelease'].read_bytes())
+        collection = {
+            'schema': 'roseos.mustang-compile-collection.v1', 'status': 'complete', 'build': '1',
+            'runId': ENV['GITHUB_RUN_ID'], 'runAttempt': ENV['GITHUB_RUN_ATTEMPT'],
+            'collectorSource': ENV['GITHUB_SHA'], 'generateReleasePath': str(files['generateRelease']),
+            'outputs': {'artifacts': {
+                'targetFiles': {'state': 'collected', 'path': str(files['unsigned']),
+                                'sizeBytes': files['unsigned'].stat().st_size, 'sha256': digest(files['unsigned'])},
+                'otatools': {'state': 'collected', 'path': str(files['otatools']),
+                             'sizeBytes': files['otatools'].stat().st_size, 'sha256': digest(files['otatools'])},
+                'jdk': {'state': 'collected', 'path': str(files['jdk']),
+                        'sizeBytes': files['jdk'].stat().st_size, 'sha256': digest(files['jdk'])},
+            }},
+        }
+        source = Path(self.directory.name)
+        (source / 'collection.json').write_text(json.dumps(collection))
+        hosted.export_bundle(source / 'collection.json', source / 'uploaded')
+        signer = source / 'signer'
+        signer.mkdir()
+        document = json.loads((source / 'uploaded' / 'mustang-signing-bundle.json').read_text())
+        document['otatoolsExtractedBytes'] = hosted.zip_members(files['otatools'])[0]
+        document['jdkExtractedBytes'] = hosted.zip_members(files['jdk'])[0]
+        (signer / 'mustang-signing-bundle.json').write_text(json.dumps(document))
+        self.assertFalse((signer / 'inputs').exists())
+        script = str(ROOT / 'scripts' / 'mustang_hosted_sign.py')
+        output = source / 'github-output.txt'
+        output.write_text('')
+        closed_env = dict(PATH=os.environ['PATH'], GITHUB_OUTPUT=str(output), **ENV)
+        closed = subprocess.run([sys.executable, script, 'preliminary', '--bundle', str(signer)],
+                                env=closed_env, capture_output=True, text=True, timeout=30)
+        self.assertEqual(closed.returncode, 4, closed.stderr)
+        self.assertIn('hosted signer admission is closed', closed.stderr)
+        self.assertNotIn('signing bundle hash differs', closed.stderr)
+        self.assertNotIn('resumed file', closed.stderr)
+        self.assertNotIn('allow=true', output.read_text())
+        self.assertFalse((signer / 'inputs').exists())
+        capacity = source / 'capacity.json'
+        capacity.write_text(json.dumps(self.admitted()))
+        pin_path = source / 'pin.json'
+        pin_path.write_text(json.dumps(pin))
+        output.write_text('')
+        allowed = subprocess.run(
+            [sys.executable, script, 'preliminary', '--bundle', str(signer), '--capacity', str(capacity),
+             '--pin', str(pin_path), '--checkout', str(root)],
+            env=closed_env, capture_output=True, text=True, timeout=30)
+        self.assertEqual(allowed.returncode, 0, allowed.stderr)
+        self.assertEqual(output.read_text(), 'allow=true\n')
+        self.assertNotIn('admit=true', output.read_text())
+        self.assertFalse((signer / 'inputs').exists())
+        output.write_text('')
+        too_soon = subprocess.run(
+            [sys.executable, script, 'preflight', '--bundle', str(signer), '--capacity', str(capacity),
+             '--pin', str(pin_path), '--checkout', str(root)],
+            env=closed_env, capture_output=True, text=True, timeout=30)
+        self.assertEqual(too_soon.returncode, 4, too_soon.stderr)
+        self.assertNotIn('admit=true', output.read_text())
+        self.assertFalse((signer / 'inputs').exists())
+        shutil.copytree(source / 'uploaded' / 'inputs', signer / 'inputs')
+        output.write_text('')
+        verified = subprocess.run(
+            [sys.executable, script, 'preflight', '--bundle', str(signer), '--capacity', str(capacity),
+             '--pin', str(pin_path), '--checkout', str(root)],
+            env=closed_env, capture_output=True, text=True, timeout=30)
+        self.assertEqual(verified.returncode, 0, verified.stderr)
+        self.assertIn('admit=true', output.read_text())
+        login = ['login']
+        calls = []
+
+        def host_sign_main(config_path, env, managed_decrypted_keys=False, **kwargs):
+            self.assertEqual(login, ['login'])
+            java = Path(json.loads(Path(config_path).read_text())['host']['sign']['javaHome']) / 'bin' / 'java'
+            self.assertTrue(java.is_file() and os.access(java, os.X_OK))
+            calls.append('sign')
+            release = Path(env['ROSE_RELEASE_DIR'])
+            (release / 'signed-target_files.zip').write_bytes(b'signed-target')
+            public = release / 'public'
+            public.mkdir()
+            (public / 'mustang-ota_update-1.zip').write_bytes(b'signed-ota')
+            return 0
+
+        out = source / 'publisher'
+        hosted.sign(signer, out, root=root, env=ENV, capacity_config=self.admitted(),
+                    host_sign_main=host_sign_main, free=10 ** 18, pin=pin)
+        self.assertEqual(calls, ['sign'])
+        self.assertEqual(hosted.bind_outputs(out, env=ENV)['runId'], ENV['GITHUB_RUN_ID'])
+
     def test_preflight_then_sign_resumes_extract_and_publisher_sees_the_receipt(self):
         bundle, files, pin = self.tiny_bundle()
         bundle['build'] = '1'
@@ -503,6 +599,9 @@ class HostedSignGateTest(unittest.TestCase):
                             secret_access=secret_access, pin=pin, env=dict(ENV, GITHUB_SHA='a' * 40),
                             capacity_config=config)
         self.assert_secret_closed(wrong_run, 'signing bundle is not this run')
+        (downloaded / 'mustang-signing-bundle.json').write_text(json.dumps(exported))
+        exported['otatoolsExtractedBytes'] = hosted.zip_members(files['otatools'])[0]
+        exported['jdkExtractedBytes'] = hosted.zip_members(files['jdk'])[0]
         (downloaded / 'mustang-signing-bundle.json').write_text(json.dumps(exported))
         guest_pin = dict(pin, otatoolsSha256='1' * 64)
         def guest_attested(secret_access):
@@ -591,7 +690,8 @@ class HostedSignGateTest(unittest.TestCase):
         bundle['otatools'] = {'sha256': digest(tools), 'sizeBytes': tools.stat().st_size}
         bundle['generateRelease'] = {'sha256': digest(script), 'sizeBytes': script.stat().st_size}
         bundle['jdk'] = {'sha256': digest(jdk), 'sizeBytes': jdk.stat().st_size}
-        bundle['otatoolsExtractedBytes'] = 0
+        bundle['otatoolsExtractedBytes'] = hosted.zip_members(tools)[0]
+        bundle['jdkExtractedBytes'] = hosted.zip_members(jdk)[0]
         pin = {'entryPoint': hosted.ENTRY, 'generateReleasePath': 'script/generate-release.sh',
                'generateReleaseSha256': digest(script), 'jdkSha256': digest(jdk),
                'otatoolsSha256': digest(tools), 'otatoolsExecutable': 'bin/delta_generator'}

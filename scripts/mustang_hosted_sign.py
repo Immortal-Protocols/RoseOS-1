@@ -519,6 +519,11 @@ def evaluate(bundle, root, free, files=None, secret_access=None, pin=None, capac
         raise ValueError(text)
     otatools_uncompressed, _rows = zip_members(files['otatools'])
     jdk_uncompressed, _jdk_rows = zip_members(files['jdk'])
+    for label, declared, measured_size in (
+            ('otatoolsExtractedBytes', bundle.get('otatoolsExtractedBytes'), otatools_uncompressed),
+            ('jdkExtractedBytes', bundle.get('jdkExtractedBytes'), jdk_uncompressed)):
+        if isinstance(declared, bool) or not isinstance(declared, int) or declared < measured_size:
+            raise ValueError('declared expansion bound does not cover the archive')
     current = current_peak_bytes(
         files['unsigned'].stat().st_size, files['otatools'].stat().st_size, otatools_uncompressed,
         files['jdk'].stat().st_size, jdk_uncompressed, files['generateRelease'].stat().st_size, _bound_values)
@@ -595,6 +600,7 @@ def export_bundle(collection_path, out_path, root=ROOT):
         'jdk': jdk,
         'generateRelease': script,
         'otatoolsExtractedBytes': None,
+        'jdkExtractedBytes': None,
         'identity': public_identity(root),
     }
     write_json(out / 'mustang-signing-bundle.json', bundle)
@@ -655,6 +661,62 @@ def bundle_files(directory, bundle):
         if path.is_file() and directory.resolve() in path.resolve().parents:
             files[key] = path
     return files or None
+
+
+def declared_integer(bundle, name):
+    value = bundle.get(name)
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError('declared expansion bound is missing: ' + name)
+    return value
+
+
+def preliminary(bundle_path, root=ROOT, env=None, capacity_config=None, pin=None, free=None):
+    """Metadata only. Declared sizes, pins, run identity, and admission. No payload bytes."""
+    bundle, _directory = bundle_document(bundle_path)
+    env = os.environ if env is None else env
+    config = load_capacity() if capacity_config is None else capacity_config
+    if free is None:
+        space = os.statvfs('/')
+        free = space.f_bavail * space.f_frsize
+    require_bundle_identity(bundle, env, root)
+    require_entry(root)
+    loaded = load_pin(root, pin)
+    reasons = []
+    for field, key, missing in (
+            ('generateReleaseSha256', 'generateRelease', 'sign script pin is unbound'),
+            ('jdkSha256', 'jdk', 'jdk provenance is unbound'),
+            ('otatoolsSha256', 'otatools', 'otatools provenance is unbound')):
+        expected = loaded.get(field)
+        if not isinstance(expected, str) or not HEX64.fullmatch(expected):
+            reasons.append(missing)
+        elif bundle[key].get('sha256') != expected:
+            reasons.append(missing.replace(' is unbound', ' is not the trusted pin'))
+    executable = loaded.get('otatoolsExecutable')
+    if not isinstance(executable, str) or not executable or executable.startswith(('/', '\\')) or '..' in Path(executable).parts:
+        if 'otatools provenance is unbound' not in reasons:
+            reasons.append('otatools provenance is unbound')
+    _values, missing_bounds = bound_values(config)
+    if missing_bounds:
+        reasons.append('output bound is missing: ' + ','.join(missing_bounds))
+    declared = None
+    if not missing_bounds:
+        try:
+            declared = current_peak_bytes(
+                bundle['unsigned']['sizeBytes'], bundle['otatools']['sizeBytes'], declared_integer(bundle, 'otatoolsExtractedBytes'),
+                bundle['jdk']['sizeBytes'], declared_integer(bundle, 'jdkExtractedBytes'), bundle['generateRelease']['sizeBytes'],
+                _values)
+        except ValueError as error:
+            reasons.append(str(error))
+    if declared is not None:
+        stock = config['activeRunner']['ssdBytes']
+        if declared > stock or declared > free:
+            reasons.append(
+                f'hosted signer capacity exceeded: current peak {declared} bytes, stock SSD {stock} bytes, free {free} bytes')
+    if config.get('admission') is not True:
+        reasons.append('hosted signer admission is closed')
+    if reasons:
+        raise ValueError('; '.join(reasons))
+    return {'allow': True, 'declaredPeakBytes': declared}
 
 
 def preflight(bundle_path, root=ROOT, env=None, capacity_config=None, pin=None, free=None):
@@ -743,20 +805,26 @@ def sign(bundle_path, out_dir, root=ROOT, env=None, capacity_config=None, host_s
     return write_hosted_receipt(release, out_dir, bundle)
 
 
-def admit_output(value):
+def step_output(name, value):
     if os.environ.get('GITHUB_OUTPUT'):
         with open(os.environ['GITHUB_OUTPUT'], 'a') as handle:
-            handle.write('admit=' + value + '\n')
+            handle.write(name + '=' + value + '\n')
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('action', choices=('export-bundle', 'gate', 'preflight', 'sign', 'bind-outputs'))
+    parser.add_argument('action', choices=('export-bundle', 'preliminary', 'gate', 'preflight', 'sign', 'bind-outputs'))
     parser.add_argument('--collection')
     parser.add_argument('--out')
     parser.add_argument('--bundle')
     parser.add_argument('--dir')
+    parser.add_argument('--capacity')
+    parser.add_argument('--pin')
+    parser.add_argument('--checkout')
     args = parser.parse_args(argv)
+    root = Path(args.checkout) if args.checkout else ROOT
+    capacity_config = load_capacity(args.capacity) if args.capacity else None
+    pin = json.loads(Path(args.pin).read_text()) if args.pin else None
     try:
         if args.action == 'export-bundle':
             if not args.collection or not args.out:
@@ -773,23 +841,20 @@ def main(argv=None):
         if args.action == 'sign':
             if not args.out:
                 raise ValueError('hosted signed output is missing')
-            sign(args.bundle, args.out)
+            sign(args.bundle, args.out, root=root, capacity_config=capacity_config, pin=pin)
             return 0
-        if args.action == 'gate':
+        if args.action in ('preliminary', 'gate'):
             try:
-                preflight(args.bundle)
+                preliminary(args.bundle, root=root, capacity_config=capacity_config, pin=pin)
             except (ValueError, OSError, KeyError, TypeError, zipfile.BadZipFile) as error:
                 message = str(error) if isinstance(error, ValueError) else type(error).__name__
-                admit_output('false')
+                step_output('allow', 'false')
                 print('Hosted Mustang signer stopped: ' + message, file=sys.stderr)
-                closed = ('admission is closed', 'capacity exceeded', 'output bound is missing', 'unmeasured signer inputs',
-                          'sign script pin is unbound', 'jdk provenance is unbound',
-                          'otatools provenance is unbound', 'signing bundle files are absent')
-                return 0 if any(part in message for part in closed) else 4
-            admit_output('true')
+                return 4
+            step_output('allow', 'true')
             return 0
-        preflight(args.bundle)
-        admit_output('true')
+        preflight(args.bundle, root=root, capacity_config=capacity_config, pin=pin)
+        step_output('admit', 'true')
         return 0
     except (ValueError, OSError, KeyError, TypeError, zipfile.BadZipFile) as error:
         print('Hosted Mustang signer stopped: ' + (str(error) if isinstance(error, ValueError) else type(error).__name__),
