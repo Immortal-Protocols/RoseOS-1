@@ -803,6 +803,84 @@ class GuestAttributeReadbackTest(unittest.TestCase):
             self.assertIn('did not match this config', err)
             self.assertNotIn('1', err)
 
+    def test_verified_missing_key_404_waits_and_permission_errors_stop(self):
+        literal = (
+            'ERROR: (gcloud.compute.instances.get-guest-attributes) HTTPError 404: '
+            "The resource 'projects/protocols-465723/zones/us-west2-a/instances/"
+            "roseos-mustang-builder-20261107-a/guestAttributes/mustang/jit-fetched' was not found")
+        self.assertTrue(enroll.missing_guest_attribute(subprocess.CompletedProcess(['gcloud'], 1, '', literal)))
+        self.assertIn('HTTPError 404', literal)
+        permission = (
+            'ERROR: (gcloud.compute.instances.get-guest-attributes) HTTPError 403: '
+            "Required 'compute.instances.getGuestAttributes' permission for "
+            "'projects/protocols-465723/zones/us-west2-a/instances/roseos-mustang-builder-20261107-a' "
+            'ya29.permission-sentinel-not-a-token')
+        self.assertFalse(enroll.missing_guest_attribute(subprocess.CompletedProcess(['gcloud'], 1, '', permission)))
+        self.assertFalse(enroll.missing_guest_attribute(
+            subprocess.CompletedProcess(['gcloud'], 1, '', literal+' ya29.extra-secret')))
+        self.assertFalse(enroll.missing_guest_attribute(subprocess.CompletedProcess(['gcloud'], 2, '', literal)))
+        self.assertFalse(enroll.missing_guest_attribute(subprocess.CompletedProcess(
+            ['gcloud'], 1, '', literal.replace('/guestAttributes/mustang/jit-fetched', ''))))
+        self.assertFalse(enroll.missing_guest_attribute(subprocess.CompletedProcess(['gcloud'], 1, '[]', literal)))
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary)/'mustang-jit'
+            path.write_text('current-config')
+            path.chmod(0o600)
+            expected = hashlib.sha256(b'current-config').hexdigest()
+            state = {'t': 0, 'calls': 0}
+
+            def appear(argv):
+                self.assertIn('--query-path=mustang/jit-fetched', argv)
+                state['calls'] += 1
+                if state['calls'] < 3:
+                    return subprocess.CompletedProcess(argv, 1, '', literal+'\n')
+                return subprocess.CompletedProcess(argv, 0, json.dumps(self.real_list(expected)), '')
+
+            def step(seconds):
+                self.assertEqual(seconds, 5)
+                state['t'] += seconds
+
+            code, out, err = self.invoke(['wait-fetched', '--execute', '--file', str(path)], appear, step,
+                                         clock=lambda: state['t'])
+            self.assertEqual(code, 0, err)
+            self.assertEqual(state['calls'], 3)
+            self.assertNotIn('HTTPError', err)
+            self.assertNotIn('guestAttributes', err)
+            self.assertNotIn(expected, out+err)
+            calls = {'n': 0}
+
+            def forbidden(argv):
+                calls['n'] += 1
+                return subprocess.CompletedProcess(argv, 1, '', permission)
+
+            code, out, err = self.invoke(['wait-fetched', '--execute', '--file', str(path)], forbidden, step,
+                                         clock=lambda: 0)
+            self.assertEqual(code, 4)
+            self.assertEqual(calls['n'], 1)
+            self.assertIn('guest attribute query failed: exit 1', err)
+            self.assertNotIn('ya29.permission-sentinel-not-a-token', err)
+            self.assertNotIn('HTTPError', err)
+            self.assertNotIn('getGuestAttributes', err)
+            bound = {'t': 0, 'calls': 0}
+
+            def stay_missing(argv):
+                bound['calls'] += 1
+                return subprocess.CompletedProcess(argv, 1, '', literal)
+
+            def tick(seconds):
+                bound['t'] += seconds
+
+            code, out, err = self.invoke(['wait-fetched', '--execute', '--file', str(path)], stay_missing, tick,
+                                         clock=lambda: bound['t'])
+            self.assertEqual(code, 4)
+            self.assertEqual(bound['calls'], 37)
+            self.assertEqual(bound['t'], 180)
+            self.assertIn('did not match this config before the bound', err)
+            self.assertNotIn('query failed', err)
+            self.assertNotIn('HTTPError', err)
+            self.assertNotIn('protocols-465723', err)
+            self.assertNotIn('guestAttributes', err)
+
     def invoke(self, argv, transport, pause, clock=None):
         from contextlib import redirect_stderr, redirect_stdout
         import io

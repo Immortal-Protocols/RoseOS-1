@@ -356,6 +356,26 @@ def acknowledgement(payload, expected):
     return matches[0] == expected
 
 
+def missing_guest_attribute(result):
+    """True only for gcloud's verified missing-key failure: exit 1 and HTTPError 404.
+
+    The Compute not-found text names this VM's mustang/jit-fetched guest attribute.
+    Permission and every other CLI failure stay false. The raw stream is not returned.
+    """
+    if getattr(result, 'returncode', None) != 1:
+        return False
+    stderr = getattr(result, 'stderr', None)
+    stdout = getattr(result, 'stdout', None)
+    if type(stderr) is not str or type(stdout) is not str or stdout.strip():
+        return False
+    vm = mustang_lane.configuration()['vm']
+    expected = (
+        'ERROR: (gcloud.compute.instances.get-guest-attributes) HTTPError 404: '
+        "The resource 'projects/%s/zones/%s/instances/%s/guestAttributes/mustang/jit-fetched' was not found"
+        % (vm['project'], vm['zone'], vm['instance']))
+    return stderr.strip() == expected
+
+
 def watch_decision(enroll_result, jobs, elapsed_seconds, limit=QUEUE_LIMIT_SECONDS):
     """Enroll failure stops immediately. A queued builder stops only after the bound."""
     if enroll_result != 'success':
@@ -640,11 +660,15 @@ def main(argv=None, transport=None, sleep=None, clock=None):
                     else:
                         result = transport(query)
                     if result.returncode != 0:
-                        raise ValueError('guest attribute query failed: exit %s' % result.returncode)
-                    try:
-                        payload = json.loads(result.stdout) if result.stdout.strip() else []
-                    except json.JSONDecodeError:
-                        raise ValueError('guest attribute readback is not a list') from None
+                        # A missing key is not ready yet. Any other failure stops without echoing the stream.
+                        if not missing_guest_attribute(result):
+                            raise ValueError('guest attribute query failed: exit %s' % result.returncode)
+                        payload = []
+                    else:
+                        try:
+                            payload = json.loads(result.stdout) if result.stdout.strip() else []
+                        except json.JSONDecodeError:
+                            raise ValueError('guest attribute readback is not a list') from None
                     if acknowledgement(payload, expected):
                         seen = True
                         break
