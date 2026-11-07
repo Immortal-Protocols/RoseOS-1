@@ -3,6 +3,8 @@ package com.android.quickstep.fallback;
 
 import android.content.Context;
 import android.content.Intent;
+import android.content.SharedPreferences;
+import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
 import android.graphics.Canvas;
@@ -17,6 +19,7 @@ import android.graphics.RectF;
 import android.graphics.Region;
 import android.graphics.Shader;
 import android.hardware.display.DisplayManager;
+import android.provider.Settings;
 import android.util.SparseArray;
 import android.view.Display;
 import android.view.Gravity;
@@ -28,6 +31,8 @@ import android.view.ViewTreeObserver;
 import android.view.WindowManager;
 import android.view.accessibility.AccessibilityNodeInfo;
 import android.view.accessibility.AccessibilityNodeProvider;
+import android.view.inputmethod.InputMethodInfo;
+import android.view.inputmethod.InputMethodManager;
 
 /**
  * RoseOS (#410 E2c): the raised edge's window, Launcher3's half of the system edge. It is shown while a bottom swipe
@@ -89,6 +94,64 @@ public final class RoseEdgeWindow implements RoseEdgeState.Listener {
     /** Starts drawing raised edges: from now on the edge may rise (RoseEdgeState.hasListener). */
     public void start() {
         RoseEdgeState.addListener(this);
+        KeyboardDefault.applyOnce(mContext);
+    }
+
+    /**
+     * RoseOS (1M): the Rose keyboard (os/overlays/packages/apps/RoseKeyboard), whose rail and chin the edge shares, is
+     * made the user's keyboard once, the first time the edge's host starts with it installed: added to the enabled
+     * input methods and selected. A choice the user makes afterwards stands; this never runs again for that user (a
+     * marker in Launcher3's device-protected preferences). Only a system-installed copy is selected, the stock
+     * keyboard stays installed and enabled as the fallback, and nothing is done while the keyboard is absent. It uses
+     * Launcher3's existing WRITE_SECURE_SETTINGS (QuickStep's manifest); no permission is added.
+     */
+    static final class KeyboardDefault {
+        static final String PACKAGE = "dev.pixel.rose.keyboard";
+        static final String ID = PACKAGE + "/.RoseKeyboardService";
+        static final String PREFS = "rose_keyboard", DONE = "selected_once";
+
+        private KeyboardDefault() {}
+
+        /** Returns true when it selected the keyboard now. */
+        static boolean applyOnce(Context context) {
+            try {
+                Context storage = context.createDeviceProtectedStorageContext();
+                SharedPreferences prefs = storage.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+                if (prefs.getBoolean(DONE, false) || !installedAsSystem(context)) return false;
+                String enabled = Settings.Secure.getString(context.getContentResolver(),
+                        Settings.Secure.ENABLED_INPUT_METHODS);
+                Settings.Secure.putString(context.getContentResolver(), Settings.Secure.ENABLED_INPUT_METHODS,
+                        withEnabled(enabled, ID));
+                Settings.Secure.putString(context.getContentResolver(), Settings.Secure.DEFAULT_INPUT_METHOD, ID);
+                prefs.edit().putBoolean(DONE, true).apply();
+                return true;
+            } catch (RuntimeException e) {
+                // Never let a keyboard default stop the edge: the user can still pick the keyboard in Settings.
+                return false;
+            }
+        }
+
+        /** The system's input method list holds the keyboard, from a system-installed package. */
+        static boolean installedAsSystem(Context context) {
+            InputMethodManager imm = context.getSystemService(InputMethodManager.class);
+            if (imm == null) return false;
+            for (InputMethodInfo imi : imm.getInputMethodList()) {
+                if (!ID.equals(imi.getId())) continue;
+                ApplicationInfo app = imi.getServiceInfo() == null ? null : imi.getServiceInfo().applicationInfo;
+                return app != null && (app.flags & ApplicationInfo.FLAG_SYSTEM) != 0;
+            }
+            return false;
+        }
+
+        /** ENABLED_INPUT_METHODS ("id;subtype:id2...") with id added once, every existing entry kept. */
+        static String withEnabled(String enabled, String id) {
+            if (enabled == null || enabled.isEmpty()) return id;
+            for (String entry : enabled.split(":")) {
+                String entryId = entry.split(";", 2)[0];
+                if (entryId.equals(id)) return enabled;
+            }
+            return enabled + ":" + id;
+        }
     }
 
     /** Stops: removes every shown edge and stops listening, so the edge can no longer rise. */

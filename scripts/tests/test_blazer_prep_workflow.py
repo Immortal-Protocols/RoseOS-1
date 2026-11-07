@@ -97,7 +97,7 @@ class Guard(unittest.TestCase):
                        {'RESUME_SOURCE_RUN': '1'}, {'RESUME_UNSIGNED_SHA256': 'a' * 64}, {'RESUME_SIGNED_SHA256': 'a' * 64},
                        {'CAMPAIGN': 'start'}, {'APP_PUBLISH': 'true'}, {'ROSE_RANGO_PUBLISH': 'true'},
                        {'ROSE_FIRST_USE_ENROLL': 'true'}, {'ROSE_RECOVER_RUN': '41000000000'},
-                       {'BOOTSTRAP_PROFILE': 'models-v0'}, {'MODELS_BOOTSTRAP_RUN': '1'}, {'REUSE_BINDING': '{}'},
+                       {'BOOTSTRAP_PROFILE': 'models-v0'}, {'REUSE_BINDING': '{}'},
                        {'ALPHA_RECOVER': 'true'}, {'ROSE_DEVICE': 'blazer'}, {'ROSE_DEVICE': 'rango'}):
             with self.subTest(change=change):
                 self.assertNotEqual(self.run_guard(**change), 0)
@@ -110,12 +110,12 @@ class Guard(unittest.TestCase):
             self.assertNotEqual(self.run_guard(**observe, BLAZER_PREP_STAGE=stage), 0)
         line = '[[ "$MODE" == blazer-prep || "${BLAZER_PREP_STAGE:-none}" == none ]]'
         self.assertIn('          ' + line + '\n', jobs()['guard'])
-        for mode in ('latest-beta', 'device-readiness', 'app-only', 'rango-retained', 'signing-bootstrap', 'models-sign'):
+        for mode in ('latest-beta', 'device-readiness', 'app-only', 'rango-retained', 'signing-bootstrap'):
             result = subprocess.run(['bash', '-c', line], env={'MODE': mode, 'BLAZER_PREP_STAGE': 'vendor'})
             self.assertNotEqual(result.returncode, 0, mode)
 
     def test_mode_input_and_hosted_check_before_the_controller(self):
-        self.assertIn('models-sign, rango-retained, blazer-prep, emulator-alpha-successor,', WORKFLOW)
+        self.assertIn('rango-factory-inspect, rango-retained, blazer-prep, emulator-alpha-successor,', WORKFLOW)
         self.assertIn('      blazer_prep_stage:\n        description: blazer-prep only - the one preparation stage this run '
                       'executes (none for every other mode)\n        type: choice\n        options: [none, source, download, vendor, '
                       'lunch, inspect, git-inspect, git-inspect-set, git-inspect-objects, git-meta, binding-observe, ssh-keygen-observe]\n        default: none\n', WORKFLOW)

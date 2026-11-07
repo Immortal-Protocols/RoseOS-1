@@ -22,7 +22,11 @@
   "rebound": "OS Core to OS Product, 2026-11-04 16:41 UTC, from #540 head d8f19fe (the javac fix for Frankel run 41861964515: RoseEdgeMicSlot.Control's super(mContext) named View's own field): patch sha256 a10a73b983430d26d432d90c8555ab052dd6917142dfad1d5d2c2d9f0efe7f75. Only RoseEdgeMicSlot.java's after-image changes (sha256 0768a732126c0cf14bdc0aee7d08ed5ea67d286cf0968e3828a87df58004a54a, blob 3a9ef4bf55ae44e3ea5a4fbd0112b9ead6e32833); the other after-images and the WMShellModule pre-image are unchanged; the inputs, the goals (WindowManager-Shell, SystemUI-core) and flagEvidence (none) are unchanged: a field rename inside one file, with no new imports, files, classpath inputs or flags",
   "rebased": "OS Core to OS Product, 2026-11-05 01:31 UTC, from #551 head 77c9117 (F06 app takeover and the F08 chin marker), re-stated 01:52 UTC for head b639c22 (F06 target_not_standard guard): background-control-frameworks-base.patch sha256 42986c0bf5e26e97b41ca5d62145b9a0ce45dd94810afcb307be658446cd8979, only ComputerControlSessionImpl's after-image changing (1a5392ce..., blob 7a0a3757); rose-edge-wmshell.patch sha256 335fcb61c6054806143a08c2d1a0202b01d71c45948a02a51eb0128b7700a95c, only RoseEdgeMicSlot.java (a613e6ee..., blob 0aa0b49d) and roseedge/RoseEdgePolicy.java (5a565842..., blob 2c664048) changing; the other after-images, the WMShellModule pre-image, the inputs, the goals and flagEvidence (none) unchanged; no new files, flags or classpath inputs (the only new imports, android.app.ActivityManager, android.app.ActivityTaskManager, android.util.SparseBooleanArray and the framework constants WindowConfiguration.ACTIVITY_TYPE_STANDARD and ACTIVITY_TYPE_UNDEFINED, are in ComputerControlSessionImpl)",
   "retrayed": "OS Core to OS Product, 2026-11-05 02:23 UTC, from #563 head 6e2fb49 (F06 return refinements and the F08 tray reachability signal): background-control-frameworks-base.patch sha256 22fc3d7c92aa0ad6f3692dc31c2e33fc9816972be6f9899b14db9aaac447c6bd, only ComputerControlSessionImpl's after-image changing (eef0edf1..., blob 8b680261); the required Shell overlays AgentTrayPrototype.java (2982f3f1..., blob 39576fcd), AgentTrayLink.java (fdfc3560..., blob 3dca283c) and AgentStatusControls.java (86e9ceb0..., blob b5eb7993) change; rose-edge-wmshell.patch and its after-images, the WMShellModule pre-image, the goals and flagEvidence (none) unchanged; no new files, flags or classpath inputs (new imports android.util.SparseArray, android.database.ContentObserver, android.os.SystemProperties and android.provider.Settings are framework classes)",
-  "shaded": "OS Core to OS Product, 2026-11-07 01:30 UTC, from #616 head e070e6d (1G, the Rose notification shade): nine new SystemUI-core sources under packages/SystemUI/src/com/android/systemui/roseshade/ (required here, as every frameworks/base overlay is; none is a WindowManager-Shell input) and the required Shell overlay AgentTrayPrototype.java (5d3d5697..., blob 85080752: a status-bar drag hook before the tray's own touch handling) change; rose-edge-wmshell.patch and its after-images, the WMShellModule pre-image, the goals and flagEvidence (none) unchanged; the new imports (Dagger, NotificationListener, CoreStartable, the Shell's AgentTrayPrototype) are already on SystemUI-core's classpath. rose-shade-systemui.patch (one include in ReferenceSystemUIModule.java) is registered in apply-os-changes.py for the normal build, which is the compile proof; this inert contract stays bound to #551's patch and does not model it"
+  "shaded": "OS Core to OS Product, 2026-11-07 01:30 UTC, from #616 head e070e6d (1G, the Rose notification shade): nine new SystemUI-core sources under packages/SystemUI/src/com/android/systemui/roseshade/ (required here, as every frameworks/base overlay is; none is a WindowManager-Shell input) and the required Shell overlay AgentTrayPrototype.java (5d3d5697..., blob 85080752: a status-bar drag hook before the tray's own touch handling) change; rose-edge-wmshell.patch and its after-images, the WMShellModule pre-image, the goals and flagEvidence (none) unchanged; the new imports (Dagger, NotificationListener, CoreStartable, the Shell's AgentTrayPrototype) are already on SystemUI-core's classpath. rose-shade-systemui.patch (one include in ReferenceSystemUIModule.java) is registered in apply-os-changes.py for the normal build, which is the compile proof; this inert contract stays bound to #551's patch and does not model it",
+  "refined": "OS Core to OS Product, 2026-11-07 17:06 and 17:29 UTC, from #653 head 17adb26 (abe56cb, the keyboard handoff's rule 4 \"Mic off\" status-bar indicator, and the F09 shade interaction refinements): only required overlays change, AgentTrayPrototype.java (3d09bead..., blob 97719d16) and roseshade/RoseShadeController.java (3a0e0df4..., blob c60a8788), RoseShadeDrag.java (723db90e..., blob 3342c6cb), RoseShadeModel.java (c80f399e..., blob 26c258b6), RoseShadeReplies.java (c7ea0f10..., blob 82b1235b) and RoseShadeStartable.java (e6783f9f..., blob ae1e0ae0); no patch, no new file; rose-edge-wmshell.patch and its after-images, the WMShellModule pre-image, the goals and flagEvidence (none) unchanged; the new imports (android.animation.ValueAnimator, android.graphics.Rect, android.view.ViewTreeObserver, android.view.accessibility.AccessibilityManager and AccessibilityNodeInfo, android.graphics.Paint and RectF, java.util.HashSet, LinkedHashSet and Set) are framework or JDK classes",
+  "displayonly": "OS Core in #653, 2026-11-07 UTC, from carrier head 1184f14 at the owner's direction (the status-bar microphone is display-only; the Rose chin holds the only microphone control, F08 and keyboard rule 4): only required overlays change, AgentStatusControls.java (58fa34e2..., blob 92ab854c), whose tap mapping drops MUTE/UNMUTE and the mic glow's START, and AgentTrayPrototype.java (756f6f83..., blob 2d720337), its one call without the muted argument; no patch, no new file, no new import; rose-edge-wmshell.patch and its after-images, the WMShellModule pre-image, the goals and flagEvidence (none) unchanged",
+  "chinoverkeyboard": "OS Core to OS Product, 2026-11-07 18:05 and 18:10 UTC, commit 081164b (e638d34 on main 735f990, then the RoseEdgePolicy.java index line corrected to its content's blob 6d9df5f; the Rose keyboard's rules 1-2, carried in #665 with OS Product's Launcher3 half): rose-edge-wmshell.patch sha256 03f7537f388369bc785432cd67125d55011113376374dd6576006e63a9a9be6b, only roseedge/RoseEdgePolicy.java's after-image changing (6e517856..., blob 6d9df5fa: no busy refusal for a visible IME, onImeVisibility keeps the chin, LOWERED_IME keeps its number unsent); the other after-images, the WMShellModule pre-image, the overlays, the goals and flagEvidence (none) unchanged; no new files, imports or flags; the patch edit is line-count neutral (hunk headers unchanged)",
+  "javacfix": "OS Core to OS Product, 2026-11-07 18:26 UTC, commit 31c00a7 on 081164b (the Frankel 2026110702 SystemUI-core javac error, roseshade/RoseShadeController.java:990: inside the SwipeFrame FrameLayout the bare mContext is View's own field and cannot be read before super): only the required overlay RoseShadeController.java changes (1ec7b902..., blob 16b634ee), its super call now RoseShadeController.this.mContext; OS Product checked every m-prefixed name used in SwipeFrame and the three anonymous View subclasses against the pinned View, ViewGroup, FrameLayout, LinearLayout, TextView and EditText fields, and none other resolves to a framework field; no patch, no new file, no new import; goals and flagEvidence (none) unchanged"
  },
  "registration": {
   "state": "unregistered",
@@ -90,7 +94,7 @@
     },
     {
      "name": "rose-edge-wmshell.patch",
-     "sha256": "335fcb61c6054806143a08c2d1a0202b01d71c45948a02a51eb0128b7700a95c"
+     "sha256": "03f7537f388369bc785432cd67125d55011113376374dd6576006e63a9a9be6b"
     }
    ],
    "files": [
@@ -910,17 +914,17 @@
      "path": "libs/WindowManager/Shell/src/com/android/wm/shell/roseedge/RoseEdgePolicy.java",
      "pre": null,
      "post": {
-      "sha256": "5a56584288a22f6e3fd6806758ea4f8834e4125ba9ebe20df82d0aa690c6fbdd",
-      "gitBlob": "2c6640488cd13c2aed18682876893d8c0423e17c"
+      "sha256": "6e5178564ce92ac3ab0ce41847365ad3020d5c7bb88a4495bc5d5b5782032bdd",
+      "gitBlob": "6d9df5fa1c265fcbf501c95b3aad3633ac4a83b0"
      },
      "chain": [
       {
        "patch": "rose-edge-wmshell.patch",
        "before": null,
-       "after": "2c6640488cd13c2aed18682876893d8c0423e17c",
+       "after": "6d9df5fa1c265fcbf501c95b3aad3633ac4a83b0",
        "index": [
         "0000000",
-        "2c66404"
+        "6d9df5f"
        ],
        "base": "exact"
       }
@@ -1137,7 +1141,7 @@
   },
   {
    "target": "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/AgentStatusControls.java",
-   "sha256": "86e9ceb06825f138e2b56d8521c743e08cd8ba55a2e3724ad1f06e0eb837438f",
+   "sha256": "58fa34e2051ac81dba24977c6d71f86545f49e58a777fdc053025d1049cbecf4",
    "role": "required"
   },
   {
@@ -1147,7 +1151,7 @@
   },
   {
    "target": "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/AgentTrayPrototype.java",
-   "sha256": "5d3d5697194cbe256b46ee3a81e79a67ebd4833acd1cb2b3d3df9f0265d16506",
+   "sha256": "756f6f834912924d42e89f6c71650b9495dddec3864113573f737de66bf93833",
    "role": "required"
   },
   {
@@ -1172,12 +1176,12 @@
   },
   {
    "target": "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeController.java",
-   "sha256": "0d07846ab8c75acb2bee26163f872345fd5bc6ee1739af079d05749a9346437e",
+   "sha256": "1ec7b902fdf6a157398932f7dc3b27faf6399c70ffc615d6ec5ebbcf17ccf7b2",
    "role": "required"
   },
   {
    "target": "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeDrag.java",
-   "sha256": "06cd1cc58f38145e52d9f49b27d08001f5b70605edeeb1f616f1d1724e6db801",
+   "sha256": "723db90e6462b73cbb58d40597ce4836c1875f645a560e624aa5a7f956ca2393",
    "role": "required"
   },
   {
@@ -1187,7 +1191,7 @@
   },
   {
    "target": "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeModel.java",
-   "sha256": "c59582960158de8f737962020629b8daf9148529152882a4940d518c0bac8614",
+   "sha256": "c80f399e1f37e1df9cb128162784bae8c1779f647fbaeb686775e78637e55556",
    "role": "required"
   },
   {
@@ -1197,12 +1201,12 @@
   },
   {
    "target": "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeReplies.java",
-   "sha256": "97a3beae6a62bf4de2266e863c99bfc0b52af0b44ff542aa9b16dd9bab658cbd",
+   "sha256": "c7ea0f10452c6daed2ef6c065bd10d04c1e670023398cecc019f1345edf6f866",
    "role": "required"
   },
   {
    "target": "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeStartable.java",
-   "sha256": "e4a526d006d12a8e247fedf96f026dd6da24ff75109eaaf764af0fbaf581729a",
+   "sha256": "e6783f9f2f24ce1c5d835f94f1d62f947a45227cb119fc398e0d3d0a369cfcba",
    "role": "required"
   },
   {
@@ -1291,7 +1295,7 @@
     },
     {
      "target": "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/AgentStatusControls.java",
-     "sha256": "86e9ceb06825f138e2b56d8521c743e08cd8ba55a2e3724ad1f06e0eb837438f"
+     "sha256": "58fa34e2051ac81dba24977c6d71f86545f49e58a777fdc053025d1049cbecf4"
     },
     {
      "target": "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/AgentTrayLink.java",
@@ -1299,7 +1303,7 @@
     },
     {
      "target": "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/AgentTrayPrototype.java",
-     "sha256": "5d3d5697194cbe256b46ee3a81e79a67ebd4833acd1cb2b3d3df9f0265d16506"
+     "sha256": "756f6f834912924d42e89f6c71650b9495dddec3864113573f737de66bf93833"
     },
     {
      "target": "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/StatusVoiceGlow.java",
@@ -1319,11 +1323,11 @@
     },
     {
      "target": "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeController.java",
-     "sha256": "0d07846ab8c75acb2bee26163f872345fd5bc6ee1739af079d05749a9346437e"
+     "sha256": "1ec7b902fdf6a157398932f7dc3b27faf6399c70ffc615d6ec5ebbcf17ccf7b2"
     },
     {
      "target": "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeDrag.java",
-     "sha256": "06cd1cc58f38145e52d9f49b27d08001f5b70605edeeb1f616f1d1724e6db801"
+     "sha256": "723db90e6462b73cbb58d40597ce4836c1875f645a560e624aa5a7f956ca2393"
     },
     {
      "target": "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeIcons.java",
@@ -1331,7 +1335,7 @@
     },
     {
      "target": "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeModel.java",
-     "sha256": "c59582960158de8f737962020629b8daf9148529152882a4940d518c0bac8614"
+     "sha256": "c80f399e1f37e1df9cb128162784bae8c1779f647fbaeb686775e78637e55556"
     },
     {
      "target": "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeModule.java",
@@ -1339,11 +1343,11 @@
     },
     {
      "target": "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeReplies.java",
-     "sha256": "97a3beae6a62bf4de2266e863c99bfc0b52af0b44ff542aa9b16dd9bab658cbd"
+     "sha256": "c7ea0f10452c6daed2ef6c065bd10d04c1e670023398cecc019f1345edf6f866"
     },
     {
      "target": "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeStartable.java",
-     "sha256": "e4a526d006d12a8e247fedf96f026dd6da24ff75109eaaf764af0fbaf581729a"
+     "sha256": "e6783f9f2f24ce1c5d835f94f1d62f947a45227cb119fc398e0d3d0a369cfcba"
     },
     {
      "target": "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeSystem.java",
@@ -2306,7 +2310,7 @@
    },
    {
     "target": "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/AgentStatusControls.java",
-    "sha256": "86e9ceb06825f138e2b56d8521c743e08cd8ba55a2e3724ad1f06e0eb837438f",
+    "sha256": "58fa34e2051ac81dba24977c6d71f86545f49e58a777fdc053025d1049cbecf4",
     "role": "required"
    },
    {
@@ -2316,7 +2320,7 @@
    },
    {
     "target": "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/AgentTrayPrototype.java",
-    "sha256": "5d3d5697194cbe256b46ee3a81e79a67ebd4833acd1cb2b3d3df9f0265d16506",
+    "sha256": "756f6f834912924d42e89f6c71650b9495dddec3864113573f737de66bf93833",
     "role": "required"
    },
    {
@@ -2341,12 +2345,12 @@
    },
    {
     "target": "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeController.java",
-    "sha256": "0d07846ab8c75acb2bee26163f872345fd5bc6ee1739af079d05749a9346437e",
+    "sha256": "1ec7b902fdf6a157398932f7dc3b27faf6399c70ffc615d6ec5ebbcf17ccf7b2",
     "role": "required"
    },
    {
     "target": "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeDrag.java",
-    "sha256": "06cd1cc58f38145e52d9f49b27d08001f5b70605edeeb1f616f1d1724e6db801",
+    "sha256": "723db90e6462b73cbb58d40597ce4836c1875f645a560e624aa5a7f956ca2393",
     "role": "required"
    },
    {
@@ -2356,7 +2360,7 @@
    },
    {
     "target": "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeModel.java",
-    "sha256": "c59582960158de8f737962020629b8daf9148529152882a4940d518c0bac8614",
+    "sha256": "c80f399e1f37e1df9cb128162784bae8c1779f647fbaeb686775e78637e55556",
     "role": "required"
    },
    {
@@ -2366,12 +2370,12 @@
    },
    {
     "target": "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeReplies.java",
-    "sha256": "97a3beae6a62bf4de2266e863c99bfc0b52af0b44ff542aa9b16dd9bab658cbd",
+    "sha256": "c7ea0f10452c6daed2ef6c065bd10d04c1e670023398cecc019f1345edf6f866",
     "role": "required"
    },
    {
     "target": "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeStartable.java",
-    "sha256": "e4a526d006d12a8e247fedf96f026dd6da24ff75109eaaf764af0fbaf581729a",
+    "sha256": "e6783f9f2f24ce1c5d835f94f1d62f947a45227cb119fc398e0d3d0a369cfcba",
     "role": "required"
    },
    {
@@ -2387,15 +2391,15 @@
   ]
  },
  "candidateDelta": {
-  "pr": 551,
-  "commit": "b639c22f05bc1efe123cf67179f3beb6d31b8c36",
+  "pr": 665,
+  "commit": "081164b30d758e96b75bbef90856e98eb673dada",
   "patches": [
    {
     "name": "rose-edge-wmshell.patch",
-    "sha256": "335fcb61c6054806143a08c2d1a0202b01d71c45948a02a51eb0128b7700a95c",
+    "sha256": "03f7537f388369bc785432cd67125d55011113376374dd6576006e63a9a9be6b",
     "project": "frameworks/base",
     "strip": 1,
-    "bundlePath": "os/tests/fixtures/launcher3-compile-contract/candidate-pr551/patches/rose-edge-wmshell.patch"
+    "bundlePath": "os/tests/fixtures/launcher3-compile-contract/candidate-pr665/patches/rose-edge-wmshell.patch"
    }
   ],
   "application": {
@@ -2464,16 +2468,16 @@
     "path": "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/roseedge/RoseEdgePolicy.java",
     "before": null,
     "after": {
-     "sha256": "5a56584288a22f6e3fd6806758ea4f8834e4125ba9ebe20df82d0aa690c6fbdd",
-     "gitBlob": "2c6640488cd13c2aed18682876893d8c0423e17c"
+     "sha256": "6e5178564ce92ac3ab0ce41847365ad3020d5c7bb88a4495bc5d5b5782032bdd",
+     "gitBlob": "6d9df5fa1c265fcbf501c95b3aad3633ac4a83b0"
     }
    }
   ],
   "overlays": [],
   "bundle": [
    {
-    "path": "os/tests/fixtures/launcher3-compile-contract/candidate-pr551/patches/rose-edge-wmshell.patch",
-    "sha256": "335fcb61c6054806143a08c2d1a0202b01d71c45948a02a51eb0128b7700a95c"
+    "path": "os/tests/fixtures/launcher3-compile-contract/candidate-pr665/patches/rose-edge-wmshell.patch",
+    "sha256": "03f7537f388369bc785432cd67125d55011113376374dd6576006e63a9a9be6b"
    }
   ],
   "pathConvention": "files[].path and overlays[].target are relative to the source tree root (project path first); projects[].files[].path and base.projects[].files[].path are relative to their project; bundlePath and bundle[].path are relative to the repository root"

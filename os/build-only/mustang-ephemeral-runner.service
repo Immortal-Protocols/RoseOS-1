@@ -1,6 +1,12 @@
 [Unit]
 Description=Mustang one-job Actions runner
-After=network-online.target local-fs.target
+# A nofail fstab mount is not ordered before the local filesystem target, so
+# waiting on that target does not wait for the data disk. RequiresMountsFor
+# orders this unit after the mount that backs the path.
+# ConditionPathIsMountPoint still refuses to start when that path is not a mount.
+Wants=network-online.target
+After=network-online.target
+RequiresMountsFor=/mnt/disks/mustang-data
 ConditionPathIsMountPoint=/mnt/disks/mustang-data
 
 [Service]

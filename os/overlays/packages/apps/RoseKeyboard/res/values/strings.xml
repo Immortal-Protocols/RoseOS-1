@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Rose keyboard</string>
+    <string name="ime_name">Rose keyboard</string>
+    <string name="subtype_en_us">English (US)</string>
+</resources>

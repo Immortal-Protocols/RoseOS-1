@@ -25,10 +25,11 @@ import android.view.Surface;
  * switcher rule with the switcher stage, so a slow drag shows the tray instead of the switcher; an unstaged gesture is
  * stock Launcher3 throughout. Not staged: the switch persist.wm.debug.rose_edge off (the default), over Home, for a
  * trackpad, for a gesture that continues the previous one, for a task that is not full screen, in split screen,
- * without gesture navigation, with the keyboard showing (it owns the bottom of the screen; the shell also lowers the
- * edge for it), on a locked device, when the display is not in its natural rotation, while no edge window is
- * registered to draw the tray, or while WMShell's IRoseEdge is unavailable (RoseEdgeState.canRaise). Launcher3's own
- * cancel and its horizontal quick switch always stand.
+ * without gesture navigation, on a locked device, when the display is not in its natural rotation, while no edge
+ * window is registered to draw the tray, or while WMShell's IRoseEdge is unavailable (RoseEdgeState.canRaise).
+ * Launcher3's own cancel and its horizontal quick switch always stand. With the keyboard open the gesture is staged
+ * too (the Rose keyboard's rule 1): it starts on the system's rail under the keyboard, never on keys or the strip,
+ * which the keyboard's window takes; the shell keeps the chin up while the keyboard shows (RoseEdgePolicy, OS Core).
  *
  * Developer-only diagnostics: with persist.wm.debug.rose_edge_diag true, each gesture logs (tag RoseEdgeGesture) whether
  * it was staged and why not, each stage entered with its distance, and the release's distance, lift-off speed and
@@ -81,7 +82,7 @@ public final class RoseEdgeSwipe {
      * @param touchSlopPx the slop Launcher3 subtracts before the window moves (RecentsAnimationDeviceState)
      * @param excluded Launcher3 handles this gesture unchanged (Home, a trackpad, a continued gesture, not full screen)
      * @param gestureNavigation fully gestural navigation
-     * @param imeVisible the keyboard is showing
+     * @param imeVisible the keyboard is showing: it no longer stops the gesture (only logged in the diagnostics)
      */
     public RoseEdgeSwipe(Context context, int displayId, int taskId, float touchSlopPx, boolean excluded,
             boolean gestureNavigation, boolean imeVisible) {
@@ -97,12 +98,15 @@ public final class RoseEdgeSwipe {
         this.raisedAtStart = enabled && RoseEdgeState.isRaised(displayId, taskId);
         this.resizedAtStart = raisedAtStart && RoseEdgeState.isResized(displayId, taskId);
         String why = !enabled ? "switch off" : excluded ? "excluded" : !gestureNavigation ? "not gesture navigation"
-                : imeVisible ? "keyboard showing" : !naturalRotation(context, displayId) ? "rotated"
+                : !naturalRotation(context, displayId) ? "rotated"
                 : locked(context) ? "locked" : !RoseEdgeState.hasListener() ? "no edge window"
                 : !RoseEdgeShell.available() ? "shell unavailable" : null;
         this.staged = why == null;
         this.stage = raisedAtStart ? RoseEdgeGesture.TRAY : RoseEdgeGesture.NONE;
-        if (diag) Log.i(TAG, "start: staged=" + staged + (why == null ? "" : " (" + why + ")") + " raised=" + raisedAtStart);
+        if (diag) {
+            Log.i(TAG, "start: staged=" + staged + (why == null ? "" : " (" + why + ")") + " raised=" + raisedAtStart
+                    + (imeVisible ? " keyboard" : ""));
+        }
     }
 
     private static boolean naturalRotation(Context context, int displayId) {

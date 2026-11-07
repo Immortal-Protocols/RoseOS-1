@@ -140,14 +140,23 @@ class PossessionTest(unittest.TestCase):
                 self.fingerprint += 'x'
                 return 'ok'
 
+            def wait_login_ready(self):
+                self.calls.append('login-ready')
+                return {'listenerReady': True, 'backendTcp22': False, 'possession': False,
+                        'returncode': 0, 'stderr': '', 'delaySeconds': yogi_possession.LOGIN_READY_SECONDS}
+
             def ssh(self, argv, timeout):
                 self.calls.append(('ssh', timeout))
                 self.assert_timeout = timeout
+                probe = {'runnerProcess': False, 'active': 'inactive', 'enabled': 'disabled',
+                         'builder': {'instanceId': yogi_possession.INSTANCE_ID}}
                 if not self.ssh_ok:
-                    return {'runnerProcess': True, 'active': 'active', 'enabled': 'enabled',
-                            'builder': {'instanceId': yogi_possession.INSTANCE_ID}}
-                return {'runnerProcess': False, 'active': 'inactive', 'enabled': 'disabled',
-                        'builder': {'instanceId': yogi_possession.INSTANCE_ID}}
+                    probe = {'runnerProcess': True, 'active': 'active', 'enabled': 'enabled',
+                             'builder': {'instanceId': yogi_possession.INSTANCE_ID}}
+                report = {'class': 'success', 'returncode': 0, 'stderr': '', 'argv': list(argv),
+                          'attempts': 1, 'probe': probe}
+                report.update(yogi_possession.ssh_evidence('success'))
+                return report
 
             def wait_refresh(self):
                 self.calls.append('refresh')
@@ -181,6 +190,10 @@ class PossessionTest(unittest.TestCase):
                  'operationId': '638e6e9039e41b7531697bb45066a616', 'cleanup': {'possessMarkerLines': 0}}
         material = yogi_possession.login_material(plan['loginLine'])
         self.assertFalse(yogi_possession.guest_key_removed(spent, operation, material))
+        replayed = dict(spent, operationId='a5848d669170305750c61bc3effdec9f')
+        self.assertFalse(yogi_possession.guest_key_removed(replayed, operation, material))
+        fresh = dict(spent, operationId='41e30832b719be117c73c13c0459cb44')
+        self.assertFalse(yogi_possession.guest_key_removed(fresh, operation, material))
 
         good = Driver(marker=0)
         done = yogi_possession.possession_run(good, plan, str(identity))
@@ -216,12 +229,19 @@ class PossessionTest(unittest.TestCase):
         class SshFails(Driver):
             def ssh(self, argv, timeout):
                 self.calls.append(('ssh', timeout))
-                raise yogi_possession.Refused('ssh probe failed')
+                report = {'class': 'auth-failed', 'returncode': 255, 'stderr': 'Permission denied (publickey).',
+                          'argv': list(argv), 'attempts': 1, 'probe': None}
+                report.update(yogi_possession.ssh_evidence('auth-failed'))
+                return report
 
         failed_ssh = SshFails()
         ssh_result = yogi_possession.possession_run(failed_ssh, plan, str(identity))
         self.assertFalse(ssh_result['hostKeyHandshake'] or ssh_result['guestAuthenticated'] or ssh_result['hostKeyPinned'])
         self.assertTrue(ssh_result['stopped'] and ssh_result['metadataLoginRemoved'])
+        self.assertTrue(ssh_result['serverKeyAccepted'] and not ssh_result['loginAccepted'])
+        self.assertEqual(ssh_result['ssh']['returncode'], 255)
+        self.assertIn('Permission denied', ssh_result['ssh']['stderr'])
+        self.assertEqual(failed_ssh.calls.count(('ssh', 60)), 1)
         self.assertEqual(failed_ssh.items['ssh-keys'], 'other:ssh-ed25519 AAAA foreign')
         self.assertEqual(sum(1 for call in failed_ssh.calls if call[0] == 'metadata'), 2)
 
@@ -518,7 +538,9 @@ class PossessionTest(unittest.TestCase):
                 'zone': 'https://www.googleapis.com/compute/v1/projects/protocols-465723/zones/us-west2-b',
             }).encode()
 
-        def case(start='ok', stop='ok', metadata='done', ssh_code=0, receipt=None):
+        def case(start='ok', stop='ok', metadata='done', ssh_code=0, ssh_stderr=b'', ssh_log='',
+                 ssh_raise=None, iap=(True, 0, ''), iap_script=None, clock=None, receipt=None,
+                 popen=None, use_listener=False):
             state = {'status': 'TERMINATED', 'items': dict(yogi_possession.POSSESSION_BASE),
                      'fingerprint': yogi_possession.POSSESSION_FINGERPRINT}
             commands, posts = [], []
@@ -595,7 +617,13 @@ class PossessionTest(unittest.TestCase):
                 if argv and argv[0] == 'ssh':
                     self.assertEqual(timeout, yogi_possession.SSH_TIMEOUT)
                     self.assertNotIn('|', ' '.join(argv))
+                    self.assertIn('LogLevel=DEBUG', argv)
+                    self.assertEqual(argv[1], '-E')
+                    if ssh_raise == 'oserror':
+                        raise OSError('ssh spawn')
+                    Path(argv[2]).write_text(ssh_log)
                     Result.returncode = ssh_code
+                    Result.stderr = ssh_stderr
                     Result.stdout = json.dumps({
                         'runnerProcess': False, 'active': 'inactive', 'enabled': 'disabled',
                         'builder': {'instanceId': yogi_possession.INSTANCE_ID}})
@@ -627,8 +655,27 @@ class PossessionTest(unittest.TestCase):
                 self.assertTrue(request.full_url.endswith('/operations/' + op_name + '/wait'))
                 return Response(operation_body('PENDING'))
 
-            driver = yogi_possession.GcloudDriver(run=run, opener=opener, sleep=lambda _seconds: None, clock=lambda: 0,
-                                                 inspect_out=str(Path(tempfile.mkdtemp()) / 'inspect'))
+            script_at = {'n': 0}
+
+            def check():
+                if iap_script is not None:
+                    item = iap_script[min(script_at['n'], len(iap_script) - 1)]
+                    script_at['n'] += 1
+                    return item
+                return iap
+
+            if clock is None:
+                sleep, now = (lambda _seconds: None), (lambda: 0)
+            else:
+                sleep, now = clock.sleep, clock
+            driver_args = {'sleep': sleep, 'clock': now}
+            if use_listener:
+                driver_args['popen'] = popen
+            else:
+                driver_args['iap_check'] = check
+            driver = yogi_possession.GcloudDriver(run=run, opener=opener,
+                                                 inspect_out=str(Path(tempfile.mkdtemp()) / 'inspect'),
+                                                 **driver_args)
             driver.possess_comment = 'roseos-yogi-possess-' + operation
             driver.possess_material = material
             result = yogi_possession.possession_run(driver, plan, str(identity), baseline={
@@ -670,10 +717,190 @@ class PossessionTest(unittest.TestCase):
         self.assertNotIn(plan['loginLine'], conflict['cleanupInstructions']['items'].get('ssh-keys', ''))
         self.assertFalse(any(argv[0] == sys.executable for argv, _timeout in conflict_commands))
 
-        nonzero, _nonzero_commands, nonzero_posts = case(ssh_code=1)
+        nonzero, nonzero_commands, nonzero_posts = case(ssh_code=1, ssh_stderr=b'probe exited 1\n')
         self.assertFalse(nonzero['hostKeyHandshake'] or nonzero['guestAuthenticated'] or nonzero['hostKeyPinned'])
         self.assertEqual(metadata_posts(nonzero_posts), 2)
         self.assertTrue(nonzero['stopped'])
+        self.assertEqual(nonzero['ssh']['class'], 'remote-command')
+        self.assertEqual(nonzero['ssh']['evidence'], 'openssh-remote-exit')
+        self.assertTrue(nonzero['serverKeyAccepted'] and nonzero['loginAccepted'])
+        self.assertEqual(nonzero['ssh']['returncode'], 1)
+        self.assertIn('probe exited 1', nonzero['ssh']['stderr'])
+        self.assertEqual(sum(argv[0] == 'ssh' for argv, _timeout in nonzero_commands), 1)
+        forged_exit, _forged_exit_commands, _posts = case(
+            ssh_code=1, ssh_stderr=b'Host key verification failed.\nPermission denied (publickey).\n')
+        self.assertEqual(forged_exit['ssh']['class'], 'remote-command')
+        self.assertTrue(forged_exit['serverKeyAccepted'] and forged_exit['loginAccepted'])
+        logged_fail, _logged_commands, _posts = case(ssh_code=1, ssh_log='Host key verification failed.\n')
+        self.assertEqual(logged_fail['ssh']['class'], 'host-key-mismatch')
+        self.assertFalse(logged_fail['serverKeyAccepted'] or logged_fail['loginAccepted'])
+
+        alias = 'yogi-' + yogi_possession.INSTANCE_ID
+        user = yogi_possession.POSSESSION_USER
+        host_ok = "debug1: Host '" + alias + "' is known and matches the ED25519 host key.\n"
+        denied_line = user + '@' + alias + ': Permission denied (publickey).\n'
+        exact_denial = host_ok + 'debug1: Authentications that can continue: publickey\n' + denied_line
+
+        denied, denied_commands, _denied_posts = case(ssh_code=255, ssh_log=exact_denial,
+                                                      ssh_stderr=b'ERROR: (gcloud) Permission denied\n')
+        self.assertEqual(denied['ssh']['class'], 'auth-failed')
+        self.assertEqual(denied['ssh']['evidence'], 'openssh-userauth-denied')
+        self.assertTrue(denied['serverKeyAccepted'] and not denied['loginAccepted'])
+        self.assertFalse(denied['hostKeyHandshake'] or denied['hostKeyPinned'])
+        self.assertIn('auth-failed', denied['error'])
+        self.assertIn(denied_line.strip(), denied['ssh']['clientLog'])
+        self.assertEqual(sum(argv[0] == 'ssh' for argv, _timeout in denied_commands), 1)
+        identity_arg = denied['ssh']['argv'][denied['ssh']['argv'].index('-i') + 1]
+        self.assertEqual(identity_arg, 'IDENTITY_FILE')
+        self.assertNotIn('PRIVATE', identity_arg)
+
+        mismatch, mismatch_commands, _posts = case(
+            ssh_code=255, ssh_log='Host key verification failed.\n',
+            ssh_stderr=b'debug1: Authentication succeeded (publickey).\n')
+        self.assertEqual(mismatch['ssh']['class'], 'host-key-mismatch')
+        self.assertFalse(mismatch['serverKeyAccepted'] or mismatch['loginAccepted'] or mismatch['hostKeyPinned'])
+        self.assertEqual(mismatch['ssh']['evidence'], 'none')
+        self.assertIn('host-key-mismatch', mismatch['error'])
+        self.assertEqual(sum(argv[0] == 'ssh' for argv, _timeout in mismatch_commands), 1)
+
+        forged, _posts_commands, _posts = case(
+            ssh_code=255,
+            ssh_stderr=b'debug1: Authentication succeeded (publickey).\nHost key verification failed.\n'
+                       b'Permission denied (publickey).\n')
+        self.assertEqual(forged['ssh']['class'], 'unproven')
+        self.assertFalse(forged['serverKeyAccepted'] or forged['loginAccepted'])
+
+        empty, _empty_commands, _posts = case(ssh_code=255)
+        self.assertEqual(empty['ssh']['class'], 'unproven')
+        self.assertFalse(empty['serverKeyAccepted'] or empty['loginAccepted'])
+
+        iam, _iam_commands, _posts = case(
+            ssh_code=255,
+            ssh_log='ERROR: (gcloud.compute.start-iap-tunnel) [PERMISSION_DENIED] Permission denied.\n',
+            ssh_stderr=b'Permission denied\n')
+        self.assertEqual(iam['ssh']['class'], 'unproven')
+        self.assertFalse(iam['serverKeyAccepted'] or iam['loginAccepted'])
+
+        missing_key, _missing_commands, _posts = case(
+            ssh_code=255,
+            ssh_log='Warning: Identity file IDENTITY_FILE not accessible: No such file or directory.\n'
+                    + exact_denial)
+        self.assertEqual(missing_key['ssh']['class'], 'unproven')
+        self.assertFalse(missing_key['serverKeyAccepted'] or missing_key['loginAccepted'])
+
+        generic, _generic_commands, _posts = case(
+            ssh_code=255, ssh_log='Permission denied (publickey).\n')
+        self.assertEqual(generic['ssh']['class'], 'unproven')
+        self.assertFalse(generic['serverKeyAccepted'] or generic['loginAccepted'])
+
+        resolve, _resolve_commands, _posts = case(
+            ssh_code=255, ssh_log='ssh: Could not resolve hostname ' + alias + ': Name or service not known\n')
+        self.assertEqual(resolve['ssh']['class'], 'unproven')
+        self.assertFalse(resolve['serverKeyAccepted'] or resolve['loginAccepted'])
+
+        kex, _kex_commands, _posts = case(
+            ssh_code=255,
+            ssh_log='Unable to negotiate with 127.0.0.1 port 22: no matching host key type found. Their offer: ssh-rsa\n')
+        self.assertEqual(kex['ssh']['class'], 'unproven')
+        self.assertFalse(kex['serverKeyAccepted'] or kex['loginAccepted'])
+
+        killed, _killed_commands, _posts = case(ssh_code=-9, ssh_log=exact_denial)
+        self.assertEqual(killed['ssh']['class'], 'unproven')
+        self.assertFalse(killed['serverKeyAccepted'] or killed['loginAccepted'])
+
+        remote_255, _remote_commands, _posts = case(
+            ssh_code=255,
+            ssh_log='debug1: Authentication succeeded (publickey).\nprobe failed inside the guest\n')
+        self.assertEqual(remote_255['ssh']['class'], 'unproven')
+        self.assertFalse(remote_255['serverKeyAccepted'] or remote_255['loginAccepted'])
+
+        leaked, _leaked_commands, _posts = case(
+            ssh_code=255,
+            ssh_stderr=b'-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAAB3NzaC1yc2EAAAADAQAB\n'
+                       b'ya29.super-secret-token\n')
+        leaked_text = json.dumps(leaked)
+        self.assertNotIn('b3BlbnNza', leaked_text)
+        self.assertNotIn('ya29.', leaked_text)
+        self.assertNotIn('BEGIN', leaked_text)
+        self.assertEqual(leaked['ssh']['class'], 'unproven')
+
+        prefix = 'debug1: note\n' * 400
+        capped, _capped_commands, _posts = case(ssh_code=255, ssh_log=prefix + exact_denial)
+        self.assertEqual(capped['ssh']['class'], 'auth-failed')
+        self.assertTrue(capped['serverKeyAccepted'] and not capped['loginAccepted'])
+        self.assertIn('debug1: note', capped['ssh']['clientLog'])
+        self.assertIn('Permission denied (publickey).', capped['ssh']['clientLog'])
+        self.assertIn('[omitted', capped['ssh']['clientLog'])
+        self.assertLessEqual(len(capped['ssh']['clientLog']), 2048)
+
+        unready, unready_commands, _posts = case(iap=(False, 1, 'ERROR: failed to start the tunnel ya29.tunnel-token'))
+        self.assertEqual(unready['ssh']['class'], 'fatal')
+        self.assertEqual(unready['ssh']['attempts'], 0)
+        self.assertEqual(len(unready['loginReady']['attempts']), 1)
+        self.assertFalse(unready['serverKeyAccepted'] or unready['loginAccepted'] or unready['loginReady']['backendTcp22']
+                         or unready['loginReady']['possession'] or unready['loginReady']['listenerReady'])
+        self.assertFalse(any(argv[0] == 'ssh' for argv, _timeout in unready_commands))
+        self.assertIn('failed to start the tunnel', unready['ssh']['stderr'])
+        self.assertNotIn('ya29.', json.dumps(unready))
+        self.assertTrue(unready['stopped'] and unready['metadataLoginRemoved'])
+        self.assertIsNotNone(unready['inbound'])
+        self.assertEqual(unready['inbound']['ok'], True)
+        self.assertEqual(unready['metadataAdd']['result'], 'ok')
+
+        def spawn_fails(*_args, **_kwargs):
+            raise OSError('spawn failed')
+
+        spawned, spawned_commands, _posts = case(use_listener=True, popen=spawn_fails)
+        self.assertEqual(spawned['ssh']['class'], 'spawn')
+        self.assertEqual(len(spawned['loginReady']['attempts']), 1)
+        self.assertFalse(any(argv[0] == 'ssh' for argv, _timeout in spawned_commands))
+        self.assertTrue(spawned['stopped'] and spawned['metadataLoginRemoved'])
+        self.assertIn('OSError', spawned['loginReady']['stderr'])
+        self.assertFalse(spawned['loginReady']['listenerReady'] or spawned['loginReady']['backendTcp22'])
+
+        class Clock:
+            def __init__(self):
+                self.t = 0.0
+
+            def __call__(self):
+                return self.t
+
+            def sleep(self, seconds):
+                self.t += seconds
+
+        refused = ("ERROR: (gcloud.compute.start-iap-tunnel) While checking if a connection can be made: "
+                   "Error while connecting [4003: 'failed to connect to backend']. "
+                   "(Failed to connect to port 22)")
+        healthy, healthy_commands, _posts = case(
+            iap_script=[(False, 1, refused), (True, 0, 'Listening on port [127.0.0.1].')], clock=Clock())
+        self.assertTrue(healthy['loginReady']['listenerReady'] and healthy['loginReady']['backendTcp22'])
+        self.assertFalse(healthy['loginReady']['possession'])
+        self.assertGreaterEqual(healthy['loginReady']['attempts'][0]['elapsedSeconds'],
+                                yogi_possession.LOGIN_READY_SECONDS)
+        self.assertEqual([item['class'] for item in healthy['loginReady']['attempts']], ['backend-4003', 'ready'])
+        self.assertEqual(sum(argv[0] == 'ssh' for argv, _timeout in healthy_commands), 1)
+        self.assertLess(healthy['loginReady']['elapsedSeconds'], yogi_possession.TRANSPORT_BUDGET + 5)
+
+        exhausted, exhausted_commands, _posts = case(iap_script=[(False, 1, refused)], clock=Clock())
+        self.assertEqual(exhausted['ssh']['class'], 'backend-4003')
+        self.assertFalse(exhausted['loginReady']['listenerReady'] or exhausted['loginReady']['backendTcp22'])
+        self.assertGreaterEqual(len(exhausted['loginReady']['attempts']), 2)
+        self.assertTrue(all(item['class'] == 'backend-4003' for item in exhausted['loginReady']['attempts']))
+        self.assertGreaterEqual(exhausted['loginReady']['elapsedSeconds'], yogi_possession.TRANSPORT_BUDGET)
+        self.assertFalse(any(argv[0] == 'ssh' for argv, _timeout in exhausted_commands))
+        self.assertTrue(exhausted['stopped'] and exhausted['metadataLoginRemoved'])
+
+        denied_iam, iam_commands, _posts = case(
+            iap_script=[(False, 1, 'ERROR: (gcloud.compute.start-iap-tunnel) [PERMISSION_DENIED]')], clock=Clock())
+        self.assertEqual(denied_iam['ssh']['class'], 'iam')
+        self.assertEqual(len(denied_iam['loginReady']['attempts']), 1)
+        self.assertFalse(any(argv[0] == 'ssh' for argv, _timeout in iam_commands))
+        self.assertLess(denied_iam['loginReady']['elapsedSeconds'], yogi_possession.TRANSPORT_BUDGET)
+
+        crashed, crashed_commands, _posts = case(ssh_raise='oserror')
+        self.assertEqual(crashed['ssh']['class'], 'unproven')
+        self.assertTrue(crashed['stopped'] and crashed['metadataLoginRemoved'])
+        self.assertEqual(sum(argv[0] == 'ssh' for argv, _timeout in crashed_commands), 1)
 
         halted, halted_commands, _halted_posts = case(stop='timeout')
         self.assertTrue(halted['hostKeyHandshake'])
@@ -697,6 +924,13 @@ class PossessionTest(unittest.TestCase):
         done, done_commands, _done_posts = case(receipt=good_receipt)
         self.assertTrue(done['guestAuthenticated'] and done['guestKeyRemoved'] and done['clean'])
         self.assertFalse(done['hostKeyPinned'])
+        self.assertEqual(done['ssh']['class'], 'success')
+        self.assertEqual(done['loginReady']['guestWaitSeconds'], yogi_possession.LOGIN_READY_SECONDS)
+        self.assertTrue(done['loginReady']['listenerReady'] and done['loginReady']['backendTcp22'])
+        self.assertEqual(done['loginReady']['backendEvidence'], 'gcloud-iap-check')
+        self.assertFalse(done['loginReady']['possession'])
+        self.assertEqual(done['inbound']['ruleCount'], 9)
+        self.assertTrue(done['serverKeyAccepted'] and done['loginAccepted'])
         self.assertTrue(any('plan' in argv and '--possess-material' in argv for argv, _timeout in done_commands))
         self.assertTrue(any('preflight' in argv and '--execute' in argv for argv, _timeout in done_commands))
         self.assertTrue(any('apply' in argv and '--execute' in argv for argv, _timeout in done_commands))
@@ -1242,6 +1476,447 @@ class PossessionTest(unittest.TestCase):
         with self.assertRaises(yogi_possession.DescribeRefused) as drift:
             yogi_possession.possession_preflight(Untagged())
         self.assertEqual(drift.exception.code, 'firewall-tag-drift')
+
+    def test_listener_teardown_and_ssh_evidence_are_bounded(self):
+        import os
+        import subprocess
+        import time
+        read_fd, write_fd = os.pipe()
+        os.write(write_fd, b'Listening on port\n')
+        os.close(write_fd)
+        stream = os.fdopen(read_fd, 'rb')
+        killed = []
+
+        class Proc:
+            returncode = None
+            pid = None
+            stderr = stream
+
+            def poll(self):
+                return None
+
+            def kill(self):
+                killed.append(True)
+
+            def wait(self, timeout=None):
+                self.returncode = 0
+                return 0
+
+        seen = []
+
+        def popen(argv, stdout=None, stderr=None, start_new_session=False):
+            seen.append(list(argv))
+            return Proc()
+
+        attempts = {'n': 0}
+
+        def connect(_address):
+            attempts['n'] += 1
+            return attempts['n'] >= 2
+
+        clock = {'t': 0.0}
+
+        def sleep(seconds):
+            clock['t'] += seconds
+
+        driver = yogi_possession.GcloudDriver(popen=popen, connect=connect, sleep=sleep, clock=lambda: clock['t'])
+        ok, _code, err = driver._iap_tcp()
+        self.assertTrue(ok and killed)
+        self.assertIn('start-iap-tunnel', seen[0])
+        self.assertIn('Listening', err.decode() if isinstance(err, bytes) else err)
+        stream.close()
+        ready = driver.wait_login_ready()
+        self.assertTrue(ready['listenerReady'])
+        self.assertEqual(ready['backendEvidence'], 'gcloud-iap-check')
+        self.assertTrue(ready['backendTcp22'])
+        self.assertFalse(ready['possession'])
+
+        class Dead:
+            returncode = 1
+            pid = None
+            stderr = None
+
+            def poll(self):
+                return 1
+
+            def kill(self):
+                self.returncode = 1
+
+            def wait(self, timeout=None):
+                return 1
+
+        def dead_popen(*_args, **_kwargs):
+            return Dead()
+
+        def fail_connect(_address):
+            raise AssertionError('connect after exit')
+
+        early = yogi_possession.GcloudDriver(popen=dead_popen, connect=fail_connect, sleep=sleep,
+                                            clock=lambda: clock['t'])
+        before = clock['t']
+        early_ok, early_code, _early_err = early._iap_tcp()
+        self.assertFalse(early_ok)
+        self.assertEqual(early_code, 1)
+        self.assertEqual(clock['t'], before)
+
+        def spawn(*_args, **_kwargs):
+            raise OSError('spawn failed')
+
+        failed = yogi_possession.GcloudDriver(popen=spawn, sleep=sleep, clock=lambda: clock['t']).wait_login_ready()
+        self.assertFalse(failed['listenerReady'] or failed['backendTcp22'] or failed['possession'])
+        self.assertIn('OSError', failed['stderr'])
+
+        class Blocking:
+            def read(self, _n):
+                raise AssertionError('held pipe was read without a bound')
+
+        class Held:
+            returncode = None
+            pid = None
+            stderr = Blocking()
+
+            def poll(self):
+                return None
+
+            def kill(self):
+                return None
+
+            def wait(self, timeout=None):
+                return 0
+
+        held = yogi_possession.GcloudDriver(popen=lambda *_a, **_k: Held(), connect=lambda _a: True,
+                                           sleep=sleep, clock=lambda: clock['t'])
+        held_ok, _held_code, held_err = held._iap_tcp()
+        self.assertTrue(held_ok)
+        self.assertEqual(held_err, '')
+
+        directory = Path(tempfile.mkdtemp())
+        child_file = directory / 'child'
+        script = directory / 'hold.py'
+        script.write_text(
+            'import os, sys, time, pathlib\n'
+            'pid = os.fork()\n'
+            'if pid == 0:\n'
+            '    time.sleep(60)\n'
+            '    os._exit(0)\n'
+            'pathlib.Path(sys.argv[1]).write_text(str(pid))\n'
+            'time.sleep(60)\n')
+        started = time.monotonic()
+
+        def real_popen(argv, stdout=None, stderr=None, start_new_session=False):
+            return subprocess.Popen([sys.executable, str(script), str(child_file)],
+                                    stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, start_new_session=True)
+
+        def wait_child(_address):
+            for _ in range(50):
+                if child_file.exists():
+                    return True
+                time.sleep(0.02)
+            return False
+
+        real = yogi_possession.GcloudDriver(popen=real_popen, connect=wait_child)
+        real_ok, _real_code, _real_err = real._iap_tcp()
+        self.assertLess(time.monotonic() - started, 3)
+        self.assertTrue(child_file.exists())
+        grandchild = int(child_file.read_text())
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline:
+            try:
+                os.kill(grandchild, 0)
+            except ProcessLookupError:
+                break
+            time.sleep(0.05)
+        else:
+            self.fail('grandchild still alive')
+        self.assertTrue(real_ok)
+        user = yogi_possession.POSSESSION_USER
+        alias = 'yogi-' + yogi_possession.INSTANCE_ID
+        denial = (user + '@' + alias + ': Permission denied (publickey).\n').encode()
+        raw = (b'debug1: filler\n' * 5000) + denial
+        text, truncated = yogi_possession.complete_log_text(raw, yogi_possession.SSH_LOG_BOUND)
+        kind, evidence = yogi_possession.classify_ssh(255, text.splitlines(), user, alias)
+        self.assertTrue(truncated)
+        self.assertEqual(kind, 'unproven')
+        self.assertFalse(evidence['serverKeyAccepted'] or evidence['loginAccepted'])
+        host_line = ("debug1: Host '" + alias + "' is known and matches the ED25519 host key.\n").encode()
+        wide = host_line + (b'debug1: filler\n' * 5000) + denial
+        text, truncated = yogi_possession.complete_log_text(wide, yogi_possession.SSH_LOG_BOUND)
+        kind, evidence = yogi_possession.classify_ssh(255, text.splitlines(), user, alias)
+        self.assertTrue(truncated)
+        self.assertEqual(kind, 'auth-failed')
+        self.assertTrue(evidence['serverKeyAccepted'] and not evidence['loginAccepted'])
+        kind, evidence = yogi_possession.classify_ssh(
+            1, ['Warning: Identity file IDENTITY_FILE not accessible: No such file or directory.'], user, alias)
+        self.assertEqual(kind, 'unproven')
+        self.assertFalse(evidence['serverKeyAccepted'] or evidence['loginAccepted'])
+        kind, evidence = yogi_possession.classify_ssh(0, [], user, alias)
+        self.assertEqual((kind, evidence['evidence']), ('success', 'openssh-session'))
+
+        def expire(argv, capture_output=True, timeout=0):
+            raise subprocess.TimeoutExpired(argv, timeout, stderr=b'banner exchange ya29.timeout-token\n')
+
+        report = yogi_possession.GcloudDriver(run=expire).ssh(['ssh', '-i', '/tmp/id_ed25519'], 60)
+        self.assertEqual(report['class'], 'timeout')
+        self.assertIsNone(report['returncode'])
+        self.assertFalse(report['serverKeyAccepted'] or report['loginAccepted'])
+        self.assertIn('banner exchange', report['stderr'])
+        self.assertNotIn('ya29.', report['stderr'])
+        self.assertIn('/tmp/id_ed25519', report['argv'])
+        self.assertIn('LogLevel=DEBUG', report['argv'])
+        with self.assertRaises(yogi_possession.Refused):
+            yogi_possession.GcloudDriver(run=expire).ssh(['ssh'], 10)
+
+        alias = 'yogi-' + yogi_possession.INSTANCE_ID
+        user = yogi_possession.POSSESSION_USER
+        denial = user + '@' + alias + ': Permission denied (publickey).\n'
+        host_line = "debug1: Host '" + alias + "' is known and matches the ED25519 host key.\n"
+
+        def write_then(exc_factory):
+            def run(argv, capture_output=True, timeout=0):
+                log = argv[argv.index('-E') + 1]
+                Path(log).write_text('debug1: Connecting to example.\n' + host_line + denial)
+                raise exc_factory(argv, timeout)
+            return run
+
+        timed = yogi_possession.GcloudDriver(run=write_then(
+            lambda argv, timeout: subprocess.TimeoutExpired(argv, timeout, stderr=b'hung ya29.timeout-token\n'))).ssh(
+                ['ssh', '-i', '/tmp/id_ed25519', '-l', user, '-o', 'HostKeyAlias=' + alias, alias], 60)
+        self.assertEqual(timed['class'], 'timeout')
+        self.assertEqual(timed['evidence'], 'none')
+        self.assertFalse(timed['serverKeyAccepted'] or timed['loginAccepted'])
+        self.assertIn('Connecting to example.', timed['clientLog'])
+        self.assertIn('Permission denied (publickey).', timed['clientLog'])
+        self.assertNotIn('ya29.', timed['stderr'] + timed['clientLog'])
+        self.assertFalse(Path(timed['argv'][timed['argv'].index('-E') + 1]).exists())
+
+        broken = yogi_possession.GcloudDriver(run=write_then(
+            lambda argv, timeout: OSError('ssh spawn'))).ssh(
+                ['ssh', '-i', '/tmp/id_ed25519', '-l', user, '-o', 'HostKeyAlias=' + alias, alias], 60)
+        self.assertEqual(broken['class'], 'unproven')
+        self.assertIn('Connecting to example.', broken['clientLog'])
+        self.assertFalse(broken['serverKeyAccepted'] or broken['loginAccepted'])
+
+    def test_tunnel_attempt_stays_inside_the_overall_deadline(self):
+        import os
+        refused = (b"ERROR: (gcloud.compute.start-iap-tunnel) [4003: 'failed to connect to backend']. "
+                   b"(Failed to connect to port 22)\n")
+
+        class Clock:
+            def __init__(self):
+                self.t = 0.0
+
+            def __call__(self):
+                return self.t
+
+            def sleep(self, seconds):
+                self.t += seconds
+
+        clock = Clock()
+
+        def stderr_pipe(payload):
+            read_fd, write_fd = os.pipe()
+            os.write(write_fd, payload)
+            os.close(write_fd)
+            return os.fdopen(read_fd, 'rb')
+
+        class Early:
+            def __init__(self):
+                self.stderr = stderr_pipe(refused)
+                self.returncode = 1
+                self.pid = None
+
+            def poll(self):
+                return 1
+
+            def kill(self):
+                return None
+
+            def wait(self, timeout=None):
+                return 1
+
+        class Hang:
+            def __init__(self):
+                self.stderr = open(os.devnull, 'rb')
+                self.returncode = None
+                self.pid = None
+                self.waits = []
+
+            def poll(self):
+                return None
+
+            def kill(self):
+                self.returncode = -9
+
+            def wait(self, timeout=None):
+                self.waits.append(timeout)
+                if timeout:
+                    clock.sleep(timeout)
+                self.returncode = -9
+                return -9
+
+        hang = {'proc': None}
+
+        def popen(argv, stdout=None, stderr=None, start_new_session=False):
+            if clock.t < yogi_possession.TRANSPORT_BUDGET - 40:
+                return Early()
+            proc = Hang()
+            hang['proc'] = proc
+            return proc
+
+        driver = yogi_possession.GcloudDriver(popen=popen, connect=lambda _address: False,
+                                             sleep=clock.sleep, clock=clock)
+        report = driver.wait_login_ready()
+        self.assertLessEqual(clock.t, yogi_possession.TRANSPORT_BUDGET)
+        self.assertGreaterEqual(clock.t, yogi_possession.TRANSPORT_BUDGET - yogi_possession.POLL_SECONDS)
+        self.assertEqual(report['attempts'][0]['class'], 'backend-4003')
+        self.assertGreaterEqual(report['attempts'][0]['elapsedSeconds'], yogi_possession.LOGIN_READY_SECONDS)
+        self.assertIsNotNone(hang['proc'])
+        self.assertTrue(hang['proc'].waits)
+        self.assertLessEqual(max(item or 0 for item in hang['proc'].waits), 2)
+        self.assertFalse(report['listenerReady'] or report['possession'])
+        self.assertLessEqual(report['elapsedSeconds'], yogi_possession.TRANSPORT_BUDGET)
+
+    def test_openssh_9_6_debug_log_matches_a_real_sshd(self):
+        import os
+        import socket
+        import subprocess
+        import time
+        sshd = '/usr/sbin/sshd'
+        self.assertTrue(os.path.isfile(sshd), 'openssh-server is required for the localhost fixture')
+        base = Path(tempfile.mkdtemp())
+        host = base / 'host_ed25519'
+        good = base / 'client_ok'
+        bad = base / 'client_bad'
+        subprocess.check_call(['ssh-keygen', '-q', '-t', 'ed25519', '-f', str(host), '-N', '', '-C', 'host'])
+        subprocess.check_call(['ssh-keygen', '-q', '-t', 'ed25519', '-f', str(good), '-N', '', '-C', 'ok'])
+        subprocess.check_call(['ssh-keygen', '-q', '-t', 'ed25519', '-f', str(bad), '-N', '', '-C', 'bad'])
+        os.chmod(base, 0o700)
+        for path in (host, good, bad):
+            os.chmod(path, 0o600)
+        auth = base / 'authkeys'
+        auth.write_text((base / 'client_ok.pub').read_text())
+        os.chmod(auth, 0o600)
+        with socket.socket() as sock:
+            sock.bind(('127.0.0.1', 0))
+            port = sock.getsockname()[1]
+        user = subprocess.check_output(['id', '-un'], text=True).strip()
+        alias = 'yogi-localtest'
+        host_pub = (base / 'host_ed25519.pub').read_text().split()
+        known = base / 'known'
+        known.write_text(alias + ' ' + host_pub[0] + ' ' + host_pub[1] + '\n')
+        wrong = base / 'known_wrong'
+        wrong.write_text(alias + ' ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIN2pFrUsLlgUbqItVqVwLLqnC+cpPPv29xXhHWYvqGCI\n')
+        config = base / 'sshd_config'
+        config.write_text(
+            f'Port {port}\nListenAddress 127.0.0.1\nHostKey {host}\nPidFile {base / "sshd.pid"}\n'
+            f'AuthorizedKeysFile {auth}\nPasswordAuthentication no\nKbdInteractiveAuthentication no\n'
+            'ChallengeResponseAuthentication no\nPubkeyAuthentication yes\nUsePAM no\n'
+            'PermitRootLogin no\nStrictModes no\nMaxAuthTries 6\n')
+        proxy = base / 'proxy.py'
+        proxy.write_text(
+            'import os, select, socket, sys\n'
+            's = socket.create_connection(("127.0.0.1", int(sys.argv[1])))\n'
+            'while True:\n'
+            '    ready, _, _ = select.select([0, s], [], [], 30)\n'
+            '    if not ready:\n'
+            '        break\n'
+            '    if 0 in ready:\n'
+            '        data = os.read(0, 65536)\n'
+            '        if not data:\n'
+            '            break\n'
+            '        s.sendall(data)\n'
+            '    if s in ready:\n'
+            '        data = s.recv(65536)\n'
+            '        if not data:\n'
+            '            break\n'
+            '        os.write(1, data)\n')
+        log = base / 'sshd.log'
+        proc = subprocess.Popen([sshd, '-f', str(config), '-E', str(log), '-D'])
+        try:
+            deadline = time.monotonic() + 3
+            while time.monotonic() < deadline:
+                try:
+                    with socket.create_connection(('127.0.0.1', port), timeout=0.2):
+                        break
+                except OSError:
+                    if proc.poll() is not None:
+                        self.fail(log.read_text(errors='replace')[-500:])
+                    time.sleep(0.05)
+            else:
+                self.fail('sshd did not accept')
+
+            def argv(identity, known_file, command):
+                return [
+                    'ssh', '-F', '/dev/null', '-o', 'BatchMode=yes', '-o', 'RequestTTY=no',
+                    '-o', 'PasswordAuthentication=no', '-o', 'KbdInteractiveAuthentication=no',
+                    '-o', 'PreferredAuthentications=publickey', '-o', 'NumberOfPasswordPrompts=0',
+                    '-o', 'PubkeyAuthentication=yes', '-o', 'IdentitiesOnly=yes', '-o', 'IdentityAgent=none',
+                    '-i', str(identity), '-o', 'StrictHostKeyChecking=yes',
+                    '-o', 'UserKnownHostsFile=' + str(known_file), '-o', 'GlobalKnownHostsFile=/dev/null',
+                    '-o', 'HostKeyAlias=' + alias, '-o', 'HostKeyAlgorithms=ssh-ed25519',
+                    '-o', 'CheckHostIP=no', '-o', 'UpdateHostKeys=no', '-o', 'ForwardAgent=no',
+                    '-o', 'ForwardX11=no', '-o', 'ClearAllForwardings=yes', '-o', 'PermitLocalCommand=no',
+                    '-o', 'ConnectTimeout=5', '-l', user,
+                    '-o', 'ProxyCommand=python3 ' + str(proxy) + ' ' + str(port),
+                    alias, '--', command]
+
+            denied = yogi_possession.GcloudDriver().ssh(argv(bad, known, 'echo no'), 60)
+            self.assertEqual(denied['returncode'], 255)
+            self.assertEqual(denied['class'], 'auth-failed')
+            self.assertEqual(denied['evidence'], 'openssh-userauth-denied')
+            self.assertTrue(denied['serverKeyAccepted'] and not denied['loginAccepted'])
+            self.assertIn(user + '@' + alias + ': Permission denied (publickey).', denied['clientLog'])
+            self.assertIn('debug1:', denied['clientLog'])
+            self.assertIn('[omitted', denied['clientLog'])
+            self.assertIn('LogLevel=DEBUG', denied['argv'])
+            self.assertLessEqual(len(denied['clientLog']), 2048)
+            self.assertFalse(Path(denied['argv'][denied['argv'].index('-E') + 1]).exists())
+
+            verbose = base / 'verbose.log'
+            completed = subprocess.run(
+                ['ssh', '-F', '/dev/null', '-E', str(verbose), '-o', 'LogLevel=VERBOSE', *argv(bad, known, 'echo no')[1:]],
+                capture_output=True, timeout=20)
+            verbose_text = verbose.read_text(errors='replace')
+            self.assertEqual(completed.returncode, 255)
+            self.assertNotIn('debug1:', verbose_text)
+            self.assertIn(user + '@' + alias + ': Permission denied (publickey).', verbose_text)
+            kind, evidence = yogi_possession.classify_ssh(255, verbose_text.splitlines(), user, alias)
+            self.assertEqual(kind, 'unproven')
+            self.assertFalse(evidence['serverKeyAccepted'] or evidence['loginAccepted'])
+
+            mismatch = yogi_possession.GcloudDriver().ssh(argv(good, wrong, 'echo no'), 60)
+            self.assertEqual(mismatch['class'], 'host-key-mismatch')
+            self.assertIn('Host key verification failed.', mismatch['clientLog'])
+            self.assertFalse(mismatch['serverKeyAccepted'] or mismatch['loginAccepted'])
+
+            missing = yogi_possession.GcloudDriver().ssh(argv(base / 'missing', known, 'echo no'), 60)
+            self.assertEqual(missing['class'], 'unproven')
+            self.assertIn('not accessible', missing['stderr'])
+            self.assertFalse(missing['serverKeyAccepted'] or missing['loginAccepted'])
+
+            remote = yogi_possession.GcloudDriver().ssh(argv(good, known, 'exit 7'), 60)
+            self.assertEqual(remote['class'], 'remote-command')
+            self.assertEqual(remote['returncode'], 7)
+            self.assertTrue(remote['serverKeyAccepted'] and remote['loginAccepted'])
+            self.assertIn('Authenticated to ' + alias + ' (via proxy) using "publickey".', remote['clientLog'])
+
+            collided = yogi_possession.GcloudDriver().ssh(argv(good, known, 'exit 255'), 60)
+            self.assertEqual(collided['returncode'], 255)
+            self.assertEqual(collided['class'], 'unproven')
+            self.assertIn('Exit status 255', collided['clientLog'])
+            self.assertFalse(collided['serverKeyAccepted'] or collided['loginAccepted'])
+
+            proved = yogi_possession.GcloudDriver().ssh(argv(good, known, 'echo {}'), 60)
+            self.assertEqual(proved['returncode'], 0)
+            self.assertEqual(proved['class'], 'success')
+            self.assertEqual(proved['evidence'], 'openssh-session')
+        finally:
+            proc.terminate()
+            try:
+                proc.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait(timeout=2)
 
 
 if __name__ == '__main__':

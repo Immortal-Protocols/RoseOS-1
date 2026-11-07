@@ -1505,8 +1505,8 @@ class RoseEdgeSwipePatchTest(unittest.TestCase):
         self.assertIn('mRunningOverHome || mGestureState.isTrackpadGesture() || continuingLastGesture\n'
             '                        || !isRoseFullscreenTask(),\n'
             '                mDeviceState.isFullyGesturalNavMode(), mDeviceState.isImeRenderingNavButtons());', fallback,
-            'never over Home, a trackpad, a continued gesture, a task that is not full screen, three-button navigation '
-            'or with the keyboard showing')
+            'never over Home, a trackpad, a continued gesture, a task that is not full screen or three-button '
+            'navigation (the keyboard state is still passed, for the diagnostics only)')
 
     def test_every_launcher3_member_it_uses_is_declared_at_the_pinned_revision(self):
         """Derived from the patch: every method called and every m-field read on an added line is declared in the
@@ -1593,7 +1593,7 @@ class RoseEdgeSwipePatchTest(unittest.TestCase):
         self.assertIn('public static final String PROPERTY = "persist.wm.debug.rose_edge";', self.EDGE_SWIPE)
         self.assertIn('SystemProperties.getBoolean(PROPERTY, false)', self.EDGE_SWIPE)
         self.assertIn('String why = !enabled ? "switch off" : excluded ? "excluded" : !gestureNavigation ? "not gesture navigation"\n'
-            '                : imeVisible ? "keyboard showing" : !naturalRotation(context, displayId) ? "rotated"\n'
+            '                : !naturalRotation(context, displayId) ? "rotated"\n'
             '                : locked(context) ? "locked" : !RoseEdgeState.hasListener() ? "no edge window"\n'
             '                : !RoseEdgeShell.available() ? "shell unavailable" : null;\n'
             '        this.staged = why == null;', self.EDGE_SWIPE,

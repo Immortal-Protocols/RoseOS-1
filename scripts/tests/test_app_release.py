@@ -425,7 +425,7 @@ class WorkflowAppOnlyTest(unittest.TestCase):
         self.assertIn('    needs: [builder, signed-builder]\n', self.jobs['publisher'])
         self.assertIn("    if: always() && needs.builder.result == 'success' && ", self.jobs['publisher'])  # skipped whenever builder is
         # cleanup still waits for every job that may hold the builder (other devices' jobs may follow these)
-        self.assertLessEqual({'controller', 'device-readiness', 'builder', 'signing-bootstrap', 'models-signer', 'rango-builder',
+        self.assertLessEqual({'controller', 'device-readiness', 'builder', 'signing-bootstrap', 'rango-builder',
                               'rango-publisher', 'rango-factory-observe', 'blazer-prep', 'rango-factory-package',
                               'rango-factory-inspect', 'blazer-compile', 'blazer-integrate', 'app-builder',
                               'alpha-builder', 'alpha-successor', 'alpha-apk-diagnostic', 'alpha-verify-retained', 'alpha-export',
@@ -434,7 +434,8 @@ class WorkflowAppOnlyTest(unittest.TestCase):
         mode = shape.inputs()['mode']
         self.assertEqual((mode['type'], mode['default'], mode['options'][:4]), ('choice', 'latest-beta',
                          ['latest-beta', 'os-release', 'device-readiness', 'app-only']))
-        self.assertLessEqual({'emulator-alpha', 'signing-bootstrap', 'models-sign', 'rango-retained', 'app-reuse'}, set(mode['options']))
+        self.assertLessEqual({'emulator-alpha', 'signing-bootstrap', 'rango-retained', 'app-reuse'}, set(mode['options']))
+        self.assertNotIn('models-sign', mode['options'])  # Rose Models is retired (#651)
 
     def test_app_builder_runs_only_the_app_release_and_uploads_only_its_artifact(self):
         app = self.jobs['app-builder']

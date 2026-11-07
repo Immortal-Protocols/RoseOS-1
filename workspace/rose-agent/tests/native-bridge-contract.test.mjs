@@ -36,9 +36,3 @@ test('the voice page calls only methods VoiceService.Bridge exposes',()=>{
  // pageScripts() is the page's own script list; the generated ElevenLabs bundle never calls Native.
  assertContract(calledNames(pageScripts()),bridge,'index.html');
 });
-
-test('the Mac screen page calls only methods MacScreenPanel.Bridge exposes',()=>{
- const bridge=bridgeMethods('../app/src/dev/pixel/voice/MacScreenPanel.java');
- const sources=['mac-screen.html','mac-screen.js'].map(name=>({name,source:read('../app/assets/'+name)}));
- assertContract(calledNames(sources),bridge,'mac-screen.html');
-});

@@ -8,24 +8,23 @@ public class MainActivity extends Activity {
  LinearLayout page,voiceCenter;FrameLayout endSlot;TextView state,hint,route,task,connection,guardianName,taskModel;TaskStatusCard taskCard;Button end,send,guardianBack;
  EditText composer;MicControl micButton;boolean drawer=false;long seenTypedFinished=0;
  Typeface roundedFont;long startFeedbackUntil,endFeedbackUntil;String endingLabel="",lastFeedbackState="";
- boolean experimentalHome,chatMode=false,forceChatBottom=false,stickToBottom=true,userScrolling=false;long seenConversation=-2;ScrollView chatScroll,taskScroll;LinearLayout chatMessages;View breathingRoom;
+ boolean chatMode=false,forceChatBottom=false,stickToBottom=true,userScrolling=false;long seenConversation=-2;ScrollView chatScroll,taskScroll;LinearLayout chatMessages;View breathingRoom;
  float swipeStartX,swipeStartY;boolean watchHomeSwipe,consumeHomeSwipe;
  LauncherPager launcherPager;LinearLayout homePageDots;int appColumns,appPerPage,homeColumns,homeCapacity;final HomePlan.Viewport appViewport=new HomePlan.Viewport(),homeViewport=new HomePlan.Viewport();int packageGeneration;String builtHomeStamp;final ArrayList<TextView> pageDots=new ArrayList<>();
- ClockWidgetView clockWidget;WeatherWidgetView weatherWidget;GalleryWidgetView galleryWidget;int homePage=0,ourAppsPage=1;boolean voiceControls;
+ ClockWidgetView clockWidget;WeatherWidgetView weatherWidget;GalleryWidgetView galleryWidget;int homePage=0,ourAppsPage=1;
  boolean launcherReceiverRegistered;RoseHomeView roseHome;HomeFrame homeFrame;HomeTray homeTray;boolean homeStopped;final HomeOverview homeOverview=new HomeOverview();
  /** Package changes only rebuild the app pages; they must not restart voice or reset the chat. */
  final BroadcastReceiver launcherPackages=new BroadcastReceiver(){@Override public void onReceive(Context context,Intent intent){packageGeneration++;if(launcherPager!=null&&!isFinishing())attachLauncherPages(true);}};
  /** Home visual card trial. false removes the card, its detail view and its Home options entry. */
  static final boolean VISUAL_CARDS=true;
- MacScreenPanel macPanel;FrameLayout screenDetail;boolean screenHostActive;
+ boolean screenHostActive;
  FrameLayout visualSlot,visualDetail;LinearLayout visualDays,visualBody;Button visualPin,visualDismiss;JSONObject visualData;long seenVisual=-1;int visualDay;
  @Override public boolean dispatchTouchEvent(MotionEvent event){
   int action=event.getActionMasked();
   if(action==MotionEvent.ACTION_DOWN){
-   consumeHomeSwipe=false;watchHomeSwipe=!drawer&&visualDetail==null&&screenDetail==null;swipeStartX=event.getX();swipeStartY=event.getY();
+   consumeHomeSwipe=false;watchHomeSwipe=!drawer&&visualDetail==null;swipeStartX=event.getX();swipeStartY=event.getY();
    WindowInsets insets=getWindow().getDecorView().getRootWindowInsets();
    if(insets!=null&&insets.isVisible(WindowInsets.Type.ime()))watchHomeSwipe=false;
-   if(watchHomeSwipe&&macPanel!=null&&macPanel.isShown()){int[] pos=new int[2];macPanel.getLocationOnScreen(pos);if(event.getRawX()>=pos[0]&&event.getRawX()<pos[0]+macPanel.getWidth()&&event.getRawY()>=pos[1]&&event.getRawY()<pos[1]+macPanel.getHeight())watchHomeSwipe=false;}
    if(watchHomeSwipe&&composer!=null&&composer.isShown()){int[] pos=new int[2];composer.getLocationOnScreen(pos);if(event.getRawX()>=pos[0]&&event.getRawX()<pos[0]+composer.getWidth()&&event.getRawY()>=pos[1]&&event.getRawY()<pos[1]+composer.getHeight())watchHomeSwipe=false;}
    // The task area owns vertical gestures, including at the ends of its scroll range.
    if(watchHomeSwipe&&taskScroll!=null&&taskScroll.isShown()){int[] pos=new int[2];taskScroll.getLocationOnScreen(pos);if(event.getRawX()>=pos[0]&&event.getRawX()<pos[0]+taskScroll.getWidth()&&event.getRawY()>=pos[1]&&event.getRawY()<pos[1]+taskScroll.getHeight())watchHomeSwipe=false;}
@@ -49,7 +48,7 @@ public class MainActivity extends Activity {
  android.graphics.drawable.Drawable raised(int face,int edge,int radius){return PlayfulTheme.surface(face,edge,getResources().getDisplayMetrics().density,radius);}
  void command(String action){if("end".equals(action)){VoiceService s=VoiceService.instance;beginEnding(s==null||!s.live||!s.connected);startFeedbackUntil=0;}startForegroundService(new Intent(this,VoiceService.class).setAction(action));}
  void toggleVoice(){if(checkSelfPermission("android.permission.RECORD_AUDIO")!=PackageManager.PERMISSION_GRANTED){requestPermissions(new String[]{"android.permission.RECORD_AUDIO","android.permission.POST_NOTIFICATIONS"},1);return;}VoiceService s=VoiceService.instance;if(s!=null&&s.live&&s.connected)command("mute");else if(s==null||!s.communicating){startFeedbackUntil=SystemClock.uptimeMillis()+2000;renderVoice(false,true,false,"",0);command("talk");}}
- void sendTyped(){if(experimentalHome)openChat();VoiceService s=VoiceService.instance;if(s==null){Toast.makeText(this,"Still connecting. Try again shortly.",0).show();return;}if(s.submitText(composer.getText().toString().trim())){((android.view.inputmethod.InputMethodManager)getSystemService(INPUT_METHOD_SERVICE)).hideSoftInputFromWindow(composer.getWindowToken(),0);composer.clearFocus();refresh();}}
+ void sendTyped(){openChat();VoiceService s=VoiceService.instance;if(s==null){Toast.makeText(this,"Still connecting. Try again shortly.",0).show();return;}if(s.submitText(composer.getText().toString().trim())){((android.view.inputmethod.InputMethodManager)getSystemService(INPUT_METHOD_SERVICE)).hideSoftInputFromWindow(composer.getWindowToken(),0);composer.clearFocus();refresh();}}
  void saveDraft(){if(composer!=null)getPreferences(0).edit().putString("typed-draft",composer.getText().toString()).apply();}
  // The Quick Settings tile can change the choice while this activity stays resumed under the shade.
  final android.content.SharedPreferences.OnSharedPreferenceChangeListener screenPolicyChanged=(prefs,key)->{if(ScreenPolicy.KEEP_ON.equals(key))ScreenPolicy.apply(this,screenHostActive);};
@@ -57,22 +56,22 @@ public class MainActivity extends Activity {
  void requestLocationContext(){getSharedPreferences("location-context",0).edit().putBoolean("asked",true).apply();requestPermissions(new String[]{"android.permission.ACCESS_COARSE_LOCATION","android.permission.ACCESS_FINE_LOCATION"},72);}
  void requestPhotoAccess(){if(Build.VERSION.SDK_INT>=34)requestPermissions(new String[]{"android.permission.READ_MEDIA_IMAGES","android.permission.READ_MEDIA_VISUAL_USER_SELECTED"},74);else if(Build.VERSION.SDK_INT>=33)requestPermissions(new String[]{"android.permission.READ_MEDIA_IMAGES"},74);else requestPermissions(new String[]{"android.permission.READ_EXTERNAL_STORAGE"},74);}
  @Override public void onRequestPermissionsResult(int r,String[] p,int[] g){super.onRequestPermissionsResult(r,p,g);if(r==74){if(galleryWidget!=null)galleryWidget.reload();return;}if(r==72){VoiceService s=VoiceService.instance;if(s!=null){s.notification(s.communicating);PhoneEnvironment.get(this).setActive(s.communicating);s.appWindowChanged();}return;}if(checkSelfPermission("android.permission.RECORD_AUDIO")==PackageManager.PERMISSION_GRANTED){startForegroundService(new Intent(this,VoiceService.class));command("talk");}}
- void base(){getWindow().setStatusBarColor(paper);getWindow().setNavigationBarColor(paper);PixelAppearance.bars(this);if(taskCard!=null)taskCard.dispose();destroyMacScreen();visualDetail=null;page=new LinearLayout(this);page.setOrientation(1);page.setBackground(new PlayfulTheme.World());page.setPadding(dp(24),dp(18),dp(24),dp(12));setContentView(page);page.setOnApplyWindowInsetsListener((v,i)->{v.setPadding(dp(24)+i.getSystemWindowInsetLeft(),dp(18)+i.getSystemWindowInsetTop(),dp(24)+i.getSystemWindowInsetRight(),dp(12)+i.getSystemWindowInsetBottom());if(!drawer&&voiceCenter!=null)voiceCenter.setVisibility(chatMode||i.isVisible(WindowInsets.Type.ime())?View.GONE:View.VISIBLE);return i.consumeSystemWindowInsets();});}
+ void base(){getWindow().setStatusBarColor(paper);getWindow().setNavigationBarColor(paper);PixelAppearance.bars(this);if(taskCard!=null)taskCard.dispose();visualDetail=null;page=new LinearLayout(this);page.setOrientation(1);page.setBackground(new PlayfulTheme.World());page.setPadding(dp(24),dp(18),dp(24),dp(12));setContentView(page);page.setOnApplyWindowInsetsListener((v,i)->{v.setPadding(dp(24)+i.getSystemWindowInsetLeft(),dp(18)+i.getSystemWindowInsetTop(),dp(24)+i.getSystemWindowInsetRight(),dp(12)+i.getSystemWindowInsetBottom());if(!drawer&&voiceCenter!=null)voiceCenter.setVisibility(chatMode||i.isVisible(WindowInsets.Type.ime())?View.GONE:View.VISIBLE);return i.consumeSystemWindowInsets();});}
  void home(){
-  saveDraft();drawer=false;chatMode=false;experimentalHome=true;if(!experimentalHome)chatMode=false;seenConversation=-2;base();page.setFocusableInTouchMode(true);
-  LinearLayout header=new LinearLayout(this);header.setGravity(Gravity.CENTER_VERTICAL);header.setBaselineAligned(false);TextView brand=text(experimentalHome?"":"✦ Pixel",28,ink);brand.setOnLongClickListener(v->{homeOptions(brand);return true;});brand.setTypeface(null,Typeface.BOLD);guardianName=brand;header.addView(brand,new LinearLayout.LayoutParams(0,dp(44),1));guardianBack=button("Back to Pixel",()->command("guardian_back"));guardianBack.setTextSize(12);guardianBack.setVisibility(View.GONE);header.addView(guardianBack,new LinearLayout.LayoutParams(-2,dp(44)));brand.setGravity(Gravity.CENTER_VERTICAL);route=text("Microphone off",12,ink);route.setPadding(dp(12),dp(9),dp(12),dp(9));route.setBackground(raised(0xeafffff6,PixelAppearance.color(0xffd5e7f2),18));route.setVisibility(View.GONE);header.addView(route);if(experimentalHome){Button options=button("···",()->{});options.setTextSize(24);options.setBackgroundColor(Color.TRANSPARENT);options.setContentDescription("Home options");options.setOnClickListener(v->homeOptions(options));header.addView(options,new LinearLayout.LayoutParams(dp(44),dp(44)));}page.addView(header);
+  saveDraft();drawer=false;chatMode=false;seenConversation=-2;base();page.setFocusableInTouchMode(true);
+  LinearLayout header=new LinearLayout(this);header.setGravity(Gravity.CENTER_VERTICAL);header.setBaselineAligned(false);TextView brand=text("",28,ink);brand.setOnLongClickListener(v->{homeOptions(brand);return true;});brand.setTypeface(null,Typeface.BOLD);guardianName=brand;header.addView(brand,new LinearLayout.LayoutParams(0,dp(44),1));guardianBack=button("Back to Pixel",()->command("guardian_back"));guardianBack.setTextSize(12);guardianBack.setVisibility(View.GONE);header.addView(guardianBack,new LinearLayout.LayoutParams(-2,dp(44)));brand.setGravity(Gravity.CENTER_VERTICAL);route=text("Microphone off",12,ink);route.setPadding(dp(12),dp(9),dp(12),dp(9));route.setBackground(raised(0xeafffff6,PixelAppearance.color(0xffd5e7f2),18));route.setVisibility(View.GONE);header.addView(route);Button options=button("···",()->{});options.setTextSize(24);options.setBackgroundColor(Color.TRANSPARENT);options.setContentDescription("Home options");options.setOnClickListener(v->homeOptions(options));header.addView(options,new LinearLayout.LayoutParams(dp(44),dp(44)));page.addView(header);
   taskScroll=new ScrollView(this);taskScroll.setFillViewport(false);taskScroll.setClipToPadding(false);taskScroll.setPadding(0,dp(10),0,dp(14));taskScroll.setVerticalScrollBarEnabled(false);LinearLayout topContent=new LinearLayout(this);topContent.setOrientation(1);taskScroll.addView(topContent,new ScrollView.LayoutParams(-1,-2));page.addView(taskScroll,new LinearLayout.LayoutParams(-1,0,1));
   taskCard=new TaskStatusCard(this);topContent.addView(taskCard,new LinearLayout.LayoutParams(-1,-2));
   visualSlot=new FrameLayout(this);visualSlot.setVisibility(View.GONE);LinearLayout.LayoutParams visualParams=new LinearLayout.LayoutParams(-1,-2);visualParams.topMargin=dp(12);topContent.addView(visualSlot,visualParams);seenVisual=-1;
   voiceCenter=new LinearLayout(this);voiceCenter.setOrientation(1);voiceCenter.setGravity(Gravity.TOP|Gravity.CENTER_HORIZONTAL);voiceCenter.setPadding(0,dp(8),0,0);page.addView(voiceCenter,new LinearLayout.LayoutParams(-1,-2));taskModel=text("Model connecting…",13,secondary);taskModel.setGravity(Gravity.CENTER);taskModel.setMaxLines(1);taskModel.setEllipsize(android.text.TextUtils.TruncateAt.END);LinearLayout.LayoutParams modelParams=new LinearLayout.LayoutParams(-1,dp(28));modelParams.bottomMargin=dp(8);voiceCenter.addView(taskModel,modelParams);micButton=new MicControl();micButton.setOnClickListener(v->toggleVoice());voiceCenter.addView(micButton,new LinearLayout.LayoutParams(dp(188),dp(188)));
   state=text("Tap to talk",18,secondary);state.setGravity(Gravity.CENTER);state.setTypeface(chatFont(800));state.setAccessibilityHeading(true);LinearLayout.LayoutParams titleParams=new LinearLayout.LayoutParams(-1,dp(28));titleParams.topMargin=dp(12);state.setVisibility(View.VISIBLE);voiceCenter.addView(state,titleParams);hint=text("Microphone off",15,secondary);hint.setGravity(Gravity.CENTER);hint.setMaxLines(2);LinearLayout.LayoutParams hintParams=new LinearLayout.LayoutParams(-1,dp(40));hintParams.topMargin=dp(4);hint.setVisibility(View.INVISIBLE);voiceCenter.addView(hint,hintParams);
-  chatScroll=new ScrollView(this);chatScroll.setOnTouchListener((v,event)->{if(event.getActionMasked()==MotionEvent.ACTION_DOWN)userScrolling=true;return false;});chatScroll.setOnScrollChangeListener((v,x,y,oldX,oldY)->{if(userScrolling)stickToBottom=chatMessages.getHeight()-chatScroll.getHeight()-y<dp(80);});chatScroll.addOnLayoutChangeListener((v,l,t,r,b,ol,ot,or,ob)->scrollChatToEnd());chatScroll.setFillViewport(true);chatScroll.setClipToPadding(false);chatScroll.setPadding(0,0,0,dp(12));chatMessages=new LinearLayout(this);chatMessages.addOnLayoutChangeListener((v,l,t,r,b,ol,ot,or,ob)->scrollChatToEnd());chatMessages.setOrientation(1);chatScroll.addView(chatMessages,new ScrollView.LayoutParams(-1,-2));page.addView(chatScroll,new LinearLayout.LayoutParams(-1,0,1));chatScroll.setVisibility(experimentalHome&&chatMode?View.VISIBLE:View.GONE);
-  breathingRoom=taskScroll;breathingRoom.setVisibility(experimentalHome&&chatMode?View.GONE:View.VISIBLE);if(experimentalHome&&chatMode)voiceCenter.setVisibility(View.GONE);
+  chatScroll=new ScrollView(this);chatScroll.setOnTouchListener((v,event)->{if(event.getActionMasked()==MotionEvent.ACTION_DOWN)userScrolling=true;return false;});chatScroll.setOnScrollChangeListener((v,x,y,oldX,oldY)->{if(userScrolling)stickToBottom=chatMessages.getHeight()-chatScroll.getHeight()-y<dp(80);});chatScroll.addOnLayoutChangeListener((v,l,t,r,b,ol,ot,or,ob)->scrollChatToEnd());chatScroll.setFillViewport(true);chatScroll.setClipToPadding(false);chatScroll.setPadding(0,0,0,dp(12));chatMessages=new LinearLayout(this);chatMessages.addOnLayoutChangeListener((v,l,t,r,b,ol,ot,or,ob)->scrollChatToEnd());chatMessages.setOrientation(1);chatScroll.addView(chatMessages,new ScrollView.LayoutParams(-1,-2));page.addView(chatScroll,new LinearLayout.LayoutParams(-1,0,1));chatScroll.setVisibility(chatMode?View.VISIBLE:View.GONE);
+  breathingRoom=taskScroll;breathingRoom.setVisibility(chatMode?View.GONE:View.VISIBLE);if(chatMode)voiceCenter.setVisibility(View.GONE);
   endSlot=new FrameLayout(this);end=button("×",()->command("end"));end.setTextSize(36);end.setTypeface(chatFont(900));end.setIncludeFontPadding(false);end.setPadding(0,0,0,dp(5));end.setTextColor(0xff593447);android.graphics.drawable.StateListDrawable endStates=new android.graphics.drawable.StateListDrawable();endStates.addState(new int[]{android.R.attr.state_pressed},chatSurface(0xffffa18d,0xffad6458,32));endStates.addState(new int[]{},chatSurface(0xffffb5a3,0xffad6458,32));end.setBackground(endStates);end.setOnTouchListener((v,event)->{if(event.getActionMasked()==MotionEvent.ACTION_DOWN&&v.isEnabled())v.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY);return false;});end.setContentDescription("End voice session");endSlot.addView(end,new FrameLayout.LayoutParams(dp(62),dp(62),Gravity.CENTER_HORIZONTAL));page.addView(endSlot,new LinearLayout.LayoutParams(-1,dp(76)));
   task=text("",14,secondary);task.setMaxLines(4);task.setPadding(dp(16),dp(12),dp(16),dp(12));task.setBackground(raised(PixelAppearance.color(0xeafff7e5),PixelAppearance.color(0xffd5e7f2),18));LinearLayout.LayoutParams taskParams=new LinearLayout.LayoutParams(-1,-2);taskParams.bottomMargin=dp(14);topContent.addView(task,taskParams);
   LinearLayout entry=new LinearLayout(this);entry.setGravity(Gravity.CENTER_VERTICAL);entry.setPadding(dp(14),0,dp(5),0);entry.setBackground(raised(PixelAppearance.color(0xfffff7e5),PixelAppearance.color(0xffb3d0e4),24));
-  composer=new EditText(this);composer.setTextSize(experimentalHome?22:16);if(experimentalHome){composer.setTypeface(chatFont(800));composer.setIncludeFontPadding(false);composer.setLetterSpacing(.005f);}composer.setTextColor(ink);composer.setHintTextColor(secondary);composer.setHint("Message…");composer.setContentDescription("Message Pixel");composer.setSingleLine(true);composer.setOnFocusChangeListener((v,focused)->{if(focused&&experimentalHome)openChat();});composer.setInputType(android.text.InputType.TYPE_CLASS_TEXT|android.text.InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);composer.setImeOptions(android.view.inputmethod.EditorInfo.IME_ACTION_SEND);composer.setFilters(new android.text.InputFilter[]{new android.text.InputFilter.LengthFilter(12000)});composer.setBackgroundColor(Color.TRANSPARENT);composer.setPadding(0,0,dp(8),0);composer.setText(getPreferences(0).getString("typed-draft",""));composer.setOnEditorActionListener((v,action,event)->{if(action==android.view.inputmethod.EditorInfo.IME_ACTION_SEND){sendTyped();return true;}return false;});entry.addView(composer,new LinearLayout.LayoutParams(0,dp(experimentalHome?68:54),1));
-  send=button("↑",()->sendTyped());send.setTextSize(24);send.setTextColor(Color.WHITE);send.setBackground(raised(green,PixelAppearance.color(0xff3f567a),18));send.setPadding(0,0,0,0);send.setContentDescription("Send message");if(experimentalHome){entry.setBackground(chatSurface(PixelAppearance.color(0xfffff7e5),PixelAppearance.dark()?0xff101a2b:0xff789ab5,25));entry.setPadding(dp(20),0,dp(7),dp(5));send.setTypeface(chatFont(900));send.setTextSize(30);send.setTextColor(0xff29385d);send.setBackground(chatSurface(0xffffd66b,0xffb9872f,20));}entry.addView(send,new LinearLayout.LayoutParams(dp(experimentalHome?54:44),dp(experimentalHome?54:44)));page.addView(entry,new LinearLayout.LayoutParams(-1,dp(experimentalHome?70:54)));entry.setVisibility(View.GONE);
+  composer=new EditText(this);composer.setTextSize(22);composer.setTypeface(chatFont(800));composer.setIncludeFontPadding(false);composer.setLetterSpacing(.005f);composer.setTextColor(ink);composer.setHintTextColor(secondary);composer.setHint("Message…");composer.setContentDescription("Message Pixel");composer.setSingleLine(true);composer.setOnFocusChangeListener((v,focused)->{if(focused)openChat();});composer.setInputType(android.text.InputType.TYPE_CLASS_TEXT|android.text.InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);composer.setImeOptions(android.view.inputmethod.EditorInfo.IME_ACTION_SEND);composer.setFilters(new android.text.InputFilter[]{new android.text.InputFilter.LengthFilter(12000)});composer.setBackgroundColor(Color.TRANSPARENT);composer.setPadding(0,0,dp(8),0);composer.setText(getPreferences(0).getString("typed-draft",""));composer.setOnEditorActionListener((v,action,event)->{if(action==android.view.inputmethod.EditorInfo.IME_ACTION_SEND){sendTyped();return true;}return false;});entry.addView(composer,new LinearLayout.LayoutParams(0,dp(68),1));
+  send=button("↑",()->sendTyped());send.setTextSize(24);send.setTextColor(Color.WHITE);send.setBackground(raised(green,PixelAppearance.color(0xff3f567a),18));send.setPadding(0,0,0,0);send.setContentDescription("Send message");entry.setBackground(chatSurface(PixelAppearance.color(0xfffff7e5),PixelAppearance.dark()?0xff101a2b:0xff789ab5,25));entry.setPadding(dp(20),0,dp(7),dp(5));send.setTypeface(chatFont(900));send.setTextSize(30);send.setTextColor(0xff29385d);send.setBackground(chatSurface(0xffffd66b,0xffb9872f,20));entry.addView(send,new LinearLayout.LayoutParams(dp(54),dp(54)));page.addView(entry,new LinearLayout.LayoutParams(-1,dp(70)));entry.setVisibility(View.GONE);
   LinearLayout footer=new LinearLayout(this);footer.setGravity(Gravity.CENTER_VERTICAL);footer.setBaselineAligned(false);connection=text("Voice off",12,secondary);connection.setGravity(Gravity.CENTER_VERTICAL);connection.setIncludeFontPadding(false);footer.addView(connection,new LinearLayout.LayoutParams(0,dp(54),1));Button apps=button("Apps  ▦",()->apps());apps.setTextSize(14);apps.setGravity(Gravity.CENTER);apps.setIncludeFontPadding(false);apps.setPadding(0,0,0,0);apps.setTextColor(secondary);apps.setBackground(raised(PixelAppearance.color(0xcffff7e5),PixelAppearance.color(0xffb3d0e4),18));footer.addView(apps,new LinearLayout.LayoutParams(dp(100),dp(42)));footer.setVisibility(View.GONE);page.addView(footer);page.requestFocus();attachLauncherPages();refresh();
  }
 
@@ -87,7 +86,7 @@ public class MainActivity extends Activity {
   * Opened by a long press on Home and by the conversation's Settings (ACTION_SETTINGS). */
  void homeOptions(View anchor){SettingsDialog.show(this);}
  void scrollChatToEnd(){if(chatMode&&stickToBottom&&chatScroll!=null&&chatMessages!=null)chatScroll.post(()->{if(chatMode&&stickToBottom)chatScroll.scrollTo(0,chatMessages.getHeight());});}
- void openChat(){if(!experimentalHome)return;chatMode=true;forceChatBottom=true;stickToBottom=true;userScrolling=false;voiceCenter.setVisibility(View.GONE);breathingRoom.setVisibility(View.GONE);chatScroll.setVisibility(View.VISIBLE);if(visualSlot!=null)visualSlot.setVisibility(View.GONE);scrollChatToEnd();}
+ void openChat(){chatMode=true;forceChatBottom=true;stickToBottom=true;userScrolling=false;voiceCenter.setVisibility(View.GONE);breathingRoom.setVisibility(View.GONE);chatScroll.setVisibility(View.VISIBLE);if(visualSlot!=null)visualSlot.setVisibility(View.GONE);scrollChatToEnd();}
  void renderConversation(String raw){
   if(chatMessages==null)return;
   try{org.json.JSONArray messages=new org.json.JSONObject(raw).optJSONArray("messages");if(messages==null)return;
@@ -308,12 +307,11 @@ public class MainActivity extends Activity {
   LinearLayout.LayoutParams panelParams=new LinearLayout.LayoutParams(-1,-2);panelParams.topMargin=dp(12);visualBody.addView(panel,panelParams);
  }
 
- void apps(){closeVoiceControls();if(launcherPager!=null)launcherPager.showPage(ourAppsPage,true);}
+ void apps(){if(launcherPager!=null)launcherPager.showPage(ourAppsPage,true);}
  boolean canSwipePages(MotionEvent event){
-  if(screenDetail!=null||visualDetail!=null)return false;
+  if(visualDetail!=null)return false;
   WindowInsets insets=getWindow().getDecorView().getRootWindowInsets();
   if(insets!=null&&insets.isVisible(WindowInsets.Type.ime()))return false;
-  if(voiceControls)return false; // the pages stay put under the voice controls
   return true;
  }
  boolean touchInside(View view,MotionEvent event){
@@ -407,7 +405,7 @@ public class MainActivity extends Activity {
   roseHome.setOnLongClickListener(v->{homeOptions(v);return true;}); // the Home options, as a phone launcher's long press
   for(int number=HomePages.FIRST_APPS;number<count;number++)launcherPager.addView(appPage(pages.get(number),titles.get(number),appEntries.isEmpty()));
   if(homeTray!=null)homeTray.release();homeTray=new HomeTray(this,this::openRoseFromHome,this::toggleRoseMic,this::openOverview,MainActivity::overviewAvailable);homeFrame=new HomeFrame(this,launcherPager,homeTray,fixedDots);
-  setContentView(homeFrame);homeBars();drawer=true;if(voiceControls)attachVoiceControls();drawnCustomization=plannedCustomization;CustomizationStore.markHomeApplied(this,drawnCustomization.revision,homeColumns);launcherPager.showPage(selected,false);homeFrame.requestApplyInsets();
+  setContentView(homeFrame);homeBars();drawer=true;drawnCustomization=plannedCustomization;CustomizationStore.markHomeApplied(this,drawnCustomization.revision,homeColumns);launcherPager.showPage(selected,false);homeFrame.requestApplyInsets();
   builtHomeStamp=homeStamp();
  }
  /** A small square uses one of two columns; wide screens do not inflate it. */
@@ -455,7 +453,7 @@ public class MainActivity extends Activity {
   * open (both re-post it on close), and never runs on a destroyed instance. A user change bypasses homePlanBreaker,
   * which still governs automatic re-plans. */
  CustomizationConfig plannedCustomization=CustomizationConfig.DEFAULTS,drawnCustomization=null;
- final Runnable applyCustomization=()->{if(launcherPager==null||isFinishing()||isDestroyed()||visualDetail!=null||screenDetail!=null)return;
+ final Runnable applyCustomization=()->{if(launcherPager==null||isFinishing()||isDestroyed()||visualDetail!=null)return;
   CustomizationConfig drawn=drawnCustomization;if(drawn!=null&&CustomizationStore.read(this).revision==drawn.revision)return;
   int[] kept={homeColumns,homeCapacity,appColumns,appPerPage};planAppPages();CustomizationConfig next=plannedCustomization;
   if(drawn!=null&&homeColumns==kept[0]&&homeCapacity==kept[1]&&appColumns==kept[2]&&appPerPage==kept[3]&&next.wallpaper.equals(drawn.wallpaper)&&next.font.equals(drawn.font)){drawnCustomization=next;CustomizationStore.markHomeApplied(this,next.revision,homeColumns);return;}
@@ -528,6 +526,7 @@ public class MainActivity extends Activity {
     checkSelfPermission("android.permission.REQUEST_DELETE_PACKAGES")==PackageManager.PERMISSION_GRANTED);
   if(offer==null)return;
   PopupMenu menu=new PopupMenu(this,anchor);
+  if(AppRemoval.MODELS.equals(pkg)&&retiredApp(pkg))menu.getMenu().add(AppRemoval.RETIRED_NOTE).setEnabled(false); // 1I
   if(offer.remove!=null)menu.getMenu().add(offer.remove).setOnMenuItemClickListener(i->{openRemoval(pkg,label,offer.route,AppRemoval.UNINSTALL_UPDATES.equals(offer.remove));return true;});
   if(offer.note!=null)menu.getMenu().add(offer.note).setEnabled(false);
   if(offer.remove==null||offer.route!=AppRemoval.Route.APP_INFO)menu.getMenu().add(AppRemoval.APP_INFO).setOnMenuItemClickListener(i->{openRemoval(pkg,label,AppRemoval.Route.APP_INFO,false);return true;});
@@ -543,6 +542,29 @@ public class MainActivity extends Activity {
    if(route==AppRemoval.Route.CONFIRM){open.putExtra(Intent.EXTRA_RETURN_RESULT,true);removing=pkg;removingLabel=label;removingUpdates=updatesOnly;startActivityForResult(open,REMOVE_REQUEST);}
    else startActivity(open);
   }catch(ActivityNotFoundException|SecurityException unavailable){removing=null;Toast.makeText(this,"Android's app settings for "+label+" are not available",Toast.LENGTH_SHORT).show();}
+ }
+ /** 1I (AppRemoval.retired): the installed package is the genuine retired app, by its exact package and signer. */
+ boolean retiredApp(String pkg){
+  try{
+   SigningInfo info=getPackageManager().getPackageInfo(pkg,PackageManager.GET_SIGNING_CERTIFICATES).signingInfo;
+   if(info==null)return false;
+   ArrayList<String> digests=new ArrayList<>();java.security.MessageDigest sha=java.security.MessageDigest.getInstance("SHA-256");
+   for(Signature signer:info.hasMultipleSigners()?info.getApkContentsSigners():info.getSigningCertificateHistory()){
+    StringBuilder hex=new StringBuilder();for(byte b:sha.digest(signer.toByteArray()))hex.append(String.format("%02x",b));digests.add(hex.toString());}
+   return AppRemoval.retired(pkg,digests);
+  }catch(Exception absent){return false;}
+ }
+ /** 1I: once, a phone that still has the retired Rose Models app is offered its uninstall (RetiredAppNotice), through
+  * Android's own confirmation. Not now leaves it installed in the System folder, whose long press still offers it. */
+ boolean retiredOffered;
+ @Override protected void onPostResume(){super.onPostResume();handler.post(this::offerRetiredUninstall);}
+ void offerRetiredUninstall(){
+  if(retiredOffered||!drawer||launcherPager==null||isFinishing()||isDestroyed()||visualDetail!=null||systemFolder!=null)return;
+  android.content.SharedPreferences answers=getSharedPreferences(AppRemoval.RETIRED_PREFS,0);
+  if(answers.getBoolean(AppRemoval.MODELS_NOTICE,false)||!retiredApp(AppRemoval.MODELS))return;
+  retiredOffered=true;
+  RetiredAppNotice.show(this,()->answers.edit().putBoolean(AppRemoval.MODELS_NOTICE,true).apply(),
+    ()->openRemoval(AppRemoval.MODELS,AppRemoval.MODELS_NAME,checkSelfPermission("android.permission.REQUEST_DELETE_PACKAGES")==PackageManager.PERMISSION_GRANTED?AppRemoval.Route.CONFIRM:AppRemoval.Route.APP_INFO,false));
  }
  static final int REMOVE_REQUEST=0x5244;String removing,removingLabel;boolean removingUpdates;
  /** 1J: the owner's answer in Android's uninstall confirmation, checked against the package manager (AppRemoval.outcome). */
@@ -589,8 +611,8 @@ public class MainActivity extends Activity {
   starting=starting||SystemClock.uptimeMillis()<startFeedbackUntil;
   renderVoice(active,starting,isMuted,error,s==null?0:s.level);
   updateText(taskModel,s==null?"Model connecting…":s.guardianName.isEmpty()?s.taskModelLabel:s.guardianName+"’s Guardian");
-  if(taskCard!=null)taskCard.render(s==null?"{\"current\":null}":s.taskStateJson,s!=null&&s.taskStateAvailable&&(s.taskStateStreamConnected||SystemClock.elapsedRealtime()-s.taskStateReceivedAt<5000),screenHostActive&&hasWindowFocus()&&(launcherPager==null||voiceControls)&&visualDetail==null&&screenDetail==null);
-  if(s==null){task.setVisibility(View.GONE);return;}updateText(guardianName,s.guardianName.isEmpty()?(experimentalHome?"":"✦ Pixel"):s.guardianName+"’s Guardian");guardianName.setTextSize(s.guardianName.isEmpty()?28:18);guardianBack.setVisibility(s.guardianName.isEmpty()?View.GONE:View.VISIBLE);if(experimentalHome&&s.conversationRevision!=seenConversation){renderConversation(s.conversationJson);seenConversation=s.conversationRevision;}updateText(route,audioLabel(s));updateText(connection,active?"Voice connected":starting?"Connecting voice…":"Voice off");send.setEnabled(!s.typedSending);composer.setEnabled(!s.typedSending);
+  if(taskCard!=null)taskCard.render(s==null?"{\"current\":null}":s.taskStateJson,s!=null&&s.taskStateAvailable&&(s.taskStateStreamConnected||SystemClock.elapsedRealtime()-s.taskStateReceivedAt<5000),screenHostActive&&hasWindowFocus()&&launcherPager==null&&visualDetail==null);
+  if(s==null){task.setVisibility(View.GONE);return;}updateText(guardianName,s.guardianName.isEmpty()?"":s.guardianName+"’s Guardian");guardianName.setTextSize(s.guardianName.isEmpty()?28:18);guardianBack.setVisibility(s.guardianName.isEmpty()?View.GONE:View.VISIBLE);if(s.conversationRevision!=seenConversation){renderConversation(s.conversationJson);seenConversation=s.conversationRevision;}updateText(route,audioLabel(s));updateText(connection,active?"Voice connected":starting?"Connecting voice…":"Voice off");send.setEnabled(!s.typedSending);composer.setEnabled(!s.typedSending);
   if(s.typedFinished!=seenTypedFinished){seenTypedFinished=s.typedFinished;if(s.typedError.isEmpty()&&composer.getText().toString().trim().equals(s.typedLastSent)){composer.setText("");saveDraft();}}
   String progress=s.typedSending?"Sending…":!s.typedError.isEmpty()?s.typedError:s.task;task.setVisibility(s.typedSending||!s.typedError.isEmpty()?View.VISIBLE:View.GONE);updateText(task,progress);
  }
@@ -615,11 +637,11 @@ public class MainActivity extends Activity {
   endSlot.setVisibility(active||starting||ending?View.VISIBLE:View.GONE);end.setEnabled(!ending&&(active||starting));if(!ending){end.animate().cancel();end.setAlpha(1f);}
   updateText(end,"×");end.setContentDescription(ending?endingLabel:starting?"Cancel connection":"End session");
  }
- @Override protected void onResume(){super.onResume();screenHostActive=true;homeStopped=false;roseLaunch.reset();ScreenPolicy.prefs(this).registerOnSharedPreferenceChangeListener(screenPolicyChanged);ScreenPolicy.apply(this,true);CustomizationStore.register(this,customizationChanged);customizationChanged.run();if(macPanel!=null)macPanel.resume();handler.removeCallbacks(tick);handler.post(tick);}
+ @Override protected void onResume(){super.onResume();screenHostActive=true;homeStopped=false;roseLaunch.reset();ScreenPolicy.prefs(this).registerOnSharedPreferenceChangeListener(screenPolicyChanged);ScreenPolicy.apply(this,true);CustomizationStore.register(this,customizationChanged);customizationChanged.run();handler.removeCallbacks(tick);handler.post(tick);}
  @Override protected void onStop(){super.onStop();homeStopped=true;}
  /** The shown page survives recreation (HomePages.restore). */
  @Override protected void onSaveInstanceState(Bundle out){super.onSaveInstanceState(out);if(launcherPager!=null)out.putInt("home-page",launcherPager.currentPage());}
- @Override protected void onPause(){refreshHomeRose(false);homeOverview.homeLeft();roseLaunch.reset();ScreenPolicy.prefs(this).unregisterOnSharedPreferenceChangeListener(screenPolicyChanged);ScreenPolicy.apply(this,false);screenHostActive=false;if(clockWidget!=null)clockWidget.setActive(false);if(weatherWidget!=null)weatherWidget.setActive(false);if(galleryWidget!=null)galleryWidget.setActive(false);if(macPanel!=null)macPanel.pause();saveDraft();handler.removeCallbacks(tick);super.onPause();}
+ @Override protected void onPause(){refreshHomeRose(false);homeOverview.homeLeft();roseLaunch.reset();ScreenPolicy.prefs(this).unregisterOnSharedPreferenceChangeListener(screenPolicyChanged);ScreenPolicy.apply(this,false);screenHostActive=false;if(clockWidget!=null)clockWidget.setActive(false);if(weatherWidget!=null)weatherWidget.setActive(false);if(galleryWidget!=null)galleryWidget.setActive(false);saveDraft();handler.removeCallbacks(tick);super.onPause();}
  @Override public void onNewIntent(Intent i){super.onNewIntent(i);RoseConversationActivity.closeTask();int previous=launcherPager==null?-1:launcherPager.currentPage();boolean homeShown=!homeStopped;if(!reuseHome(i))home();showHomeFor(i,true,previous,homeShown);showSettingsFor(i);gestureContract(i,homeShown);}
  /** Launcher3's gesture_nav_contract_v1 on a swipe Home from an app (GestureContract; #410 comments 6593674343,
   * 6593742638): reply with the window rect of the closing app's tile on the page Home lands on, so the closing window
@@ -673,7 +695,7 @@ public class MainActivity extends Activity {
  /** What the built Home, pager and catalog came from: package changes, screen configuration and the dock's default apps. */
  String homeStamp(){android.content.res.Configuration c=getResources().getConfiguration();return HomeReuse.stamp(packageGeneration,c.screenWidthDp+"x"+c.screenHeightDp+"@"+c.densityDpi+"/"+c.orientation+"/"+c.fontScale+"/"+c.uiMode+"/"+c.getLocales().toLanguageTags(),RoseHomeView.dockRolePackages(getPackageManager(),getPackageName()));}
  /** An unchanged HOME or app-icon return keeps the built Home, pager, catalog, conversation page and draft (OS-HOME-REUSE-001). */
- boolean reuseHome(Intent i){return i!=null&&HomeReuse.reuse(HomeEntry.of(Intent.ACTION_MAIN.equals(i.getAction()),i.hasCategory(Intent.CATEGORY_HOME),i.hasCategory(Intent.CATEGORY_LAUNCHER),true,false,true).showHome,homeFrame!=null&&homeFrame.getParent()!=null,builtHomeStamp,homeStamp(),chatMode,visualDetail!=null||screenDetail!=null,false);}
+ boolean reuseHome(Intent i){return i!=null&&HomeReuse.reuse(HomeEntry.of(Intent.ACTION_MAIN.equals(i.getAction()),i.hasCategory(Intent.CATEGORY_HOME),i.hasCategory(Intent.CATEGORY_LAUNCHER),true,false,true).showHome,homeFrame!=null&&homeFrame.getParent()!=null,builtHomeStamp,homeStamp(),chatMode,visualDetail!=null,false);}
  /** The same snapshot RoseConversationActivity and AgentTrayService build: no service is inactive, never guessed. */
  static ConversationState conversationState(){VoiceService s=VoiceService.instance;return s==null?ConversationState.of(false,false,false,false,false,null,null,null)
    :ConversationState.of(true,s.live,s.connected,s.muted,s.communicating,s.lastEndReason,s.lastStartError,s.backendReachable);}
@@ -704,13 +726,10 @@ public class MainActivity extends Activity {
   * They open over Home only on request, from the Home options or the conversation's Settings; Back or HOME closes
   * them. Nothing is reset: the same views and preferences as before. */
  static final String ACTION_SETTINGS="dev.pixel.voice.action.HOME_SETTINGS";
- void showVoiceControls(){voiceControls=true;attachVoiceControls();}
- void attachVoiceControls(){if(page==null)return;if(page.getParent() instanceof ViewGroup)((ViewGroup)page.getParent()).removeView(page);page.setClickable(true);addContentView(page,new ViewGroup.LayoutParams(-1,-1));drawer=false;page.requestApplyInsets();refresh();}
- void closeVoiceControls(){voiceControls=false;drawer=true;if(page!=null&&page.getParent() instanceof ViewGroup)((ViewGroup)page.getParent()).removeView(page);}
  /** The conversation's Settings opens the Home options over Home (the setup that used to sit on the voice page). */
  void showSettingsFor(Intent intent){if(intent!=null&&ACTION_SETTINGS.equals(intent.getAction()))getWindow().getDecorView().post(()->{if(!isFinishing()&&!isDestroyed())homeOptions(getWindow().getDecorView());});}
  /** HOME returning from an app or the conversation keeps the page left (previous); HOME on Home, or the app icon, shows Home (HomePages). */
- void showHomeFor(Intent intent,boolean fresh,int previous,boolean homeShown){if(intent==null)return;HomeEntry entry=HomeEntry.of(Intent.ACTION_MAIN.equals(intent.getAction()),intent.hasCategory(Intent.CATEGORY_HOME),intent.hasCategory(Intent.CATEGORY_LAUNCHER),fresh,(intent.getFlags()&Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY)!=0,DeviceIdentity.paired(this));if(entry.showHome){closeVoiceControls();closeSystemFolder();}if(entry.showHome&&launcherPager!=null)launcherPager.showPage(HomePages.target(true,!intent.hasCategory(Intent.CATEGORY_HOME),homeShown,previous,launcherPager.currentPage(),launcherPager.getChildCount()),false);if(entry.openConversation)openRoseConversation();}
+ void showHomeFor(Intent intent,boolean fresh,int previous,boolean homeShown){if(intent==null)return;HomeEntry entry=HomeEntry.of(Intent.ACTION_MAIN.equals(intent.getAction()),intent.hasCategory(Intent.CATEGORY_HOME),intent.hasCategory(Intent.CATEGORY_LAUNCHER),fresh,(intent.getFlags()&Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY)!=0,DeviceIdentity.paired(this));if(entry.showHome)closeSystemFolder();if(entry.showHome&&launcherPager!=null)launcherPager.showPage(HomePages.target(true,!intent.hasCategory(Intent.CATEGORY_HOME),homeShown,previous,launcherPager.currentPage(),launcherPager.getChildCount()),false);if(entry.openConversation)openRoseConversation();}
  void showHomeFor(Intent intent,boolean fresh){showHomeFor(intent,fresh,-1,true);}
  /** The tray's Rose from what VoiceService already publishes, once per refresh tick; hidden or paused stops its animation. */
  /** Rose's microphone-input mute as every surface shows it: the live call's own mute during a call, else the shared state. */
@@ -718,32 +737,9 @@ public class MainActivity extends Activity {
  /** Home's mic well: asks for the other state (recorded, and applied to a live call); never starts or ends voice. */
  void toggleRoseMic(){RoseMicState.request(this,!roseMicShown());if(homeTray!=null)homeTray.applyMic(roseMicShown());}
  void refreshHomeRose(boolean shown){if(homeTray==null)return;VoiceService s=VoiceService.instance;ConversationState c=conversationState();homeTray.show(c,HomeRose.state(c,s==null?Float.NaN:s.trayInputLevel,s==null?Float.NaN:s.trayOutputLevel,s==null?0L:s.trayAudioObservedAt,SystemClock.elapsedRealtime(),HomeRose.reducedMotion(android.provider.Settings.Global.getFloat(getContentResolver(),android.provider.Settings.Global.ANIMATOR_DURATION_SCALE,1f)),shown),RoseMicInput.shown(c.active(),c.muted,RoseMicState.muted(this)));}
- @Override public void onBackPressed(){if(screenDetail!=null)closeMacScreen();else if(visualDetail!=null)closeVisual();else if(drawer&&launcherPager!=null)launcherPager.showPage(homePage,true);else if(experimentalHome&&chatMode){chatMode=false;home();}else if(voiceControls)closeVoiceControls();else if(launcherPager!=null)launcherPager.showPage(homePage,true);}
+ @Override public void onBackPressed(){if(visualDetail!=null)closeVisual();else if(drawer&&launcherPager!=null)launcherPager.showPage(homePage,true);else if(chatMode){chatMode=false;home();}else if(launcherPager!=null)launcherPager.showPage(homePage,true);}
 
- void showMacCard(){
-  if(macPanel!=null)return;
-  visualSlot.removeAllViews();
-  macPanel=new MacScreenPanel(this,true,this::expandMacScreen,()->{if(screenDetail!=null)closeMacScreen();else{getPreferences(0).edit().putBoolean("mac-screen-enabled",false).apply();home();}});
-  macPanel.setBackground(shape(paper,24));macPanel.setClipToOutline(true);visualSlot.addView(macPanel,new FrameLayout.LayoutParams(-1,-2));visualSlot.setVisibility(View.VISIBLE);visualSlot.postDelayed(()->{if(micButton!=null)micButton.invalidate();if(state!=null)state.invalidate();},350);
-  if(screenHostActive)macPanel.resume();
- }
- void expandMacScreen(){
-  if(macPanel==null||screenDetail!=null)return;
-  visualSlot.removeView(macPanel);FrameLayout overlay=new FrameLayout(this);overlay.setBackground(new PlayfulTheme.World());overlay.setPadding(page.getPaddingLeft(),page.getPaddingTop(),page.getPaddingRight(),page.getPaddingBottom());
-  overlay.setOnApplyWindowInsetsListener((v,i)->{v.setPadding(page.getPaddingLeft(),page.getPaddingTop(),page.getPaddingRight(),Math.max(page.getPaddingBottom(),i.getInsets(WindowInsets.Type.ime()).bottom));return i;});overlay.addView(macPanel,new FrameLayout.LayoutParams(-1,-1));macPanel.setCompact(false);addContentView(overlay,new ViewGroup.LayoutParams(-1,-1));screenDetail=overlay;page.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS);
- }
- void closeMacScreen(){
-  if(screenDetail==null)return;
-  customizationChanged.run(); // 1O: a change held while the Mac screen was open applies once it has closed
-  ((android.view.inputmethod.InputMethodManager)getSystemService(INPUT_METHOD_SERVICE)).hideSoftInputFromWindow(macPanel.getWindowToken(),0);
-  screenDetail.removeView(macPanel);if(screenDetail.getParent() instanceof ViewGroup)((ViewGroup)screenDetail.getParent()).removeView(screenDetail);screenDetail=null;
-  macPanel.setCompact(true);visualSlot.addView(macPanel,new FrameLayout.LayoutParams(-1,-2));page.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_AUTO);
- }
- void destroyMacScreen(){
-  if(macPanel!=null){macPanel.destroy();macPanel=null;}
-  if(screenDetail!=null&&screenDetail.getParent() instanceof ViewGroup)((ViewGroup)screenDetail.getParent()).removeView(screenDetail);screenDetail=null;
- }
- @Override protected void onDestroy(){closeSystemFolder();if(homeTray!=null)homeTray.release();if(homePlanCheck!=null){handler.removeCallbacks(homePlanCheck);homePlanCheck=null;}homeOverview.cancel();if(overviewCheck!=null){handler.removeCallbacks(overviewCheck);overviewCheck=null;}if(taskCard!=null)taskCard.dispose();if(clockWidget!=null)clockWidget.setActive(false);if(weatherWidget!=null)weatherWidget.setActive(false);if(galleryWidget!=null)galleryWidget.setActive(false);if(launcherReceiverRegistered){unregisterReceiver(launcherPackages);launcherReceiverRegistered=false;}CustomizationStore.unregister(this,customizationChanged);handler.removeCallbacks(applyCustomization);destroyMacScreen();super.onDestroy();}
+ @Override protected void onDestroy(){closeSystemFolder();if(homeTray!=null)homeTray.release();if(homePlanCheck!=null){handler.removeCallbacks(homePlanCheck);homePlanCheck=null;}homeOverview.cancel();if(overviewCheck!=null){handler.removeCallbacks(overviewCheck);overviewCheck=null;}if(taskCard!=null)taskCard.dispose();if(clockWidget!=null)clockWidget.setActive(false);if(weatherWidget!=null)weatherWidget.setActive(false);if(galleryWidget!=null)galleryWidget.setActive(false);if(launcherReceiverRegistered){unregisterReceiver(launcherPackages);launcherReceiverRegistered=false;}CustomizationStore.unregister(this,customizationChanged);handler.removeCallbacks(applyCustomization);super.onDestroy();}
  class MicControl extends View {
   final Paint paint=new Paint(Paint.ANTI_ALIAS_FLAG);String label="Start";boolean listening;float targetLevel,displayLevel;long lastFrame;
   MicControl(){super(MainActivity.this);setClickable(true);setFocusable(true);setContentDescription("Start session");}

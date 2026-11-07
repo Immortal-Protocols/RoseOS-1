@@ -358,7 +358,7 @@ class Workflow(unittest.TestCase):
                 self.assertNotEqual(self.guard(**change), 0)
 
     def test_mode_check_job_and_ownership(self):
-        self.assertIn('signing-bootstrap, rango-factory-package, rango-factory-inspect, models-sign,', WORKFLOW)
+        self.assertIn('signing-bootstrap, rango-factory-package, rango-factory-inspect, rango-retained,', WORKFLOW)
         self.assertIn("      - name: Rango factory inspect check\n        id: factory-inspect\n        if: inputs.mode == "
                       "'rango-factory-inspect'\n        run: python3 scripts/rango-factory-inspect-wiring.py check >> "
                       "\"$GITHUB_OUTPUT\"\n", jobs()['guard'])

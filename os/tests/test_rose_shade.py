@@ -10,7 +10,10 @@ surface uses them and the agreed boundaries:
   AgentTrayPrototype's hook, which runs the shade before the tray; the lock screen and other users keep the stock
   shade;
 - only an explicit Send (button or the keyboard's IME_ACTION_SEND) sends a reply; the keyboard, the chin and the shade
-  closing keep the draft; the shade has no microphone control (the Rose chin holds the only one).
+  closing keep the draft; the shade has no microphone control (the Rose chin holds the only one);
+- F09 interaction handoff: the app's own repost acknowledges a reply; a dismissal cancels through SystemUI's listener
+  only once Undo is gone, and only dismissible notifications swipe; a further pull in the header expands quick
+  settings; the list keeps its scroll place; targets are at least 48dp and motion follows the animator scale.
 
 Source and fixture logic only: no SystemUI build, emulator or device."""
 from pathlib import Path
@@ -86,7 +89,7 @@ class RoseShadeTest(unittest.TestCase):
             'bindRoseShadeStartable(RoseShadeStartable startable);', module)
         start = flat(method(self.startable, 'public void start()'))
         self.assertLess(start.index('if (!RoseShadeController.enabled()) return;'),
-            start.index('new RoseShadeController(mContext)'))
+            start.index('new RoseShadeController(mContext, mListener::cancelNotification)'))
         self.assertIn('mListener.addNotificationHandler(', start)
         self.assertIn('final StatusBarNotification[] active = mListener.getActiveNotifications();', start)
         self.assertIn('AgentTrayPrototype.setStatusBarDragHandler(shade::onStatusBarTouch);', start)
@@ -114,7 +117,7 @@ class RoseShadeTest(unittest.TestCase):
         self.assertEqual(code.count('mReplies.send('), 1)
         send = flat(method(code, 'private void send(String key)'))
         self.assertIn('RemoteInput.addResultsToIntent(inputs, fill, results);', send)
-        self.assertIn('if (ok) mReplies.delivered(key); else mReplies.failed(key);', send)
+        self.assertIn('if (ok) delivered(key, attempt); else mReplies.failed(key, attempt);', send)
         # The field is a single-line editor with the keyboard's Send key (OS Product's keyboard seam).
         self.assertIn('field.setSingleLine(true);', code)
         self.assertIn('field.setImeOptions(EditorInfo.IME_ACTION_SEND);', code)
@@ -141,6 +144,72 @@ class RoseShadeTest(unittest.TestCase):
         self.assertIn('params.softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE', attach)
         self.assertNotIn('FLAG_NOT_FOCUSABLE', attach)
         self.assertNotIn('FLAG_ALT_FOCUSABLE_IM', attach)
+
+    def test_the_apps_repost_acknowledges_a_reply_and_silence_is_not_confirmed(self):
+        posted = flat(method(self.controller, 'void onPosted(StatusBarNotification sbn)'))
+        self.assertIn('final boolean update = mNotifications.put(sbn.getKey(), sbn) != null;', posted)
+        self.assertIn('if (update) mReplies.acknowledged(sbn.getKey());', posted)
+        delivered = flat(method(self.controller, 'private void delivered(String key, int attempt)'))
+        self.assertIn('mReplies.delivered(key, attempt);', delivered)
+        self.assertIn('mReplies.timedOut(key, attempt);', delivered)
+        self.assertIn('ACK_TIMEOUT_MS', delivered)
+        # The only acknowledgment and the only places a reply's result is recorded.
+        self.assertEqual(self.controller.count('mReplies.acknowledged('), 1)
+        self.assertEqual(self.controller.count('mReplies.delivered('), 1)
+        self.assertIn('sendButton.setText(RoseShadeReplies.sendLabel(draft.status));', self.controller)
+
+    def test_dismissal_is_swiped_confirmed_undone_and_only_then_cancelled(self):
+        code = self.controller
+        self.assertIn('final boolean dismissible = sbn.isClearable() && (n.flags & '
+            'Notification.FLAG_FOREGROUND_SERVICE) == 0;', flat(code))
+        # Only a dismissible card, collapsed group or row is wrapped for the swipe and the accessibility action.
+        self.assertIn('return mModel.canDismiss(id) ? new SwipeFrame(id, content, host) : content;', code)
+        self.assertIn('info.addAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_DISMISS);', code)
+        self.assertIn('afterDismiss(mModel.dismiss(id, dirtyKeys()), replying);', code)
+        # Cancelling goes through the model's committed list and SystemUI's listener, nowhere else.
+        self.assertEqual(code.count('mCanceller.cancel('), 1)
+        self.assertIn('for (String key : mModel.takeCancels()) mCanceller.cancel(key);', code)
+        self.assertNotIn('cancelNotification', code)
+        self.assertNotIn('deleteIntent', code)
+        undo = flat(method(code,
+            'private void afterDismiss(RoseShadeModel.Dismiss result, String replyingBefore)'))
+        self.assertIn('getRecommendedTimeoutMillis( UNDO_MS,', undo)
+        self.assertIn('mModel.commit(batch);', undo)
+        self.assertIn('mModel.close(); flushCancels();', flat(method(code, 'void close()')))
+        confirm = flat(method(code, 'private void addConfirm(LinearLayout parent, String id)'))
+        self.assertIn('pill(RoseShadeModel.KEEP_DRAFT, true,', confirm)
+        self.assertIn('afterDismiss(mModel.discardDraft(), replying);', confirm)
+        # The reply field keeps its own drags (cursor and selection), never the card's swipe.
+        self.assertIn('v.getParent().requestDisallowInterceptTouchEvent(true);', code)
+
+    def test_header_pull_scroll_place_targets_and_motion(self):
+        code = self.controller
+        header = flat(method(code, 'private boolean onHeaderTouch(View header, MotionEvent event)'))
+        self.assertIn('mModel.expandQuickSettings();', header)
+        self.assertIn('return onHeaderTouch(this, event);', code)
+        self.assertIn('if (!mRestoringScroll) rememberScroll(y);', code)
+        self.assertIn('restoreScroll();', flat(method(code, 'private void render()')))
+        self.assertIn('b.setMinHeight(dp(48));', code)
+        self.assertIn('field.setMinHeight(dp(48));', code)
+        self.assertNotIn('icon(RoseShadeIcons.Glyph.GEAR', code)
+        self.assertNotIn('icon(RoseShadeIcons.Glyph.CHEVRON_DOWN, TEXT_2', code)
+        self.assertIn('return ValueAnimator.areAnimatorsEnabled() ? ms : 0;', code)
+        self.assertEqual(len(re.findall(r'setDuration\((?!motion\()', code)), 0)
+        back = flat(method(code, 'private void back()'))
+        self.assertIn('RoseShadeModel.Back.CLOSE_REPLY', back)
+        self.assertIn('RoseShadeModel.Back.KEEP_DRAFT', back)
+
+    def test_view_subclasses_never_use_a_bare_mContext(self):
+        # Inside a View subclass, mContext names View's own field: hidden in the SDK's android.jar, so an offline type
+        # check passes, but the platform build sees it, and before super() it does not compile (Frankel 2026110702,
+        # SystemUI-core javac: "cannot reference mContext before supertype constructor has been called").
+        views = r'(?:View|FrameLayout|LinearLayout|ScrollView|TextView|EditText|ImageView|SeekBar)'
+        for name, text in self.shade.items():
+            for m in re.finditer(r'(?m)^\s+(?:private |public |protected |static |final )*class (\w+) extends '
+                    + views + r'\b', text):
+                body = method(text, m.group(0).strip())
+                self.assertFalse(re.findall(r'(?<![.\w])mContext\b', body), f'{name}: {m.group(1)}')
+        self.assertIn('super(RoseShadeController.this.mContext);', self.controller)
 
 
 if __name__ == '__main__':

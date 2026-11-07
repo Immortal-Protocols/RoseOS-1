@@ -48,7 +48,7 @@ class FrameworksBaseWmshellContractTest(unittest.TestCase):
 
     def test_the_candidate_is_os_cores_patch_on_main(self):
         delta = self.manifest['candidateDelta']
-        self.assertEqual((delta['pr'], delta['commit']), (551, 'b639c22f05bc1efe123cf67179f3beb6d31b8c36'))
+        self.assertEqual((delta['pr'], delta['commit']), (665, '081164b30d758e96b75bbef90856e98eb673dada'))
         patch = (ROOT/'os/patches/rose-edge-wmshell.patch').read_bytes()
         self.assertEqual([p['name'] for p in delta['patches']], ['rose-edge-wmshell.patch'])
         self.assertEqual(delta['patches'][0]['sha256'], W.C.sha256(patch))
@@ -165,7 +165,7 @@ class FrameworksBaseWmshellContractTest(unittest.TestCase):
         self.assertEqual(self.manifest['schemaVersion'], 2)
         import hashlib
         self.assertEqual(hashlib.sha256(MANIFEST.read_bytes()).hexdigest(),
-            '88606e583304ba94e27891a76e50149c6c58251de10706fed98a9f1107143579')
+            'ace36bc186d3d4aa32dac7244d7a94934393c4f077f7458ffa6ac0530e1014b9')
         self.assertTrue(re.search(r'"target": "Launcher3QuickStepLib"',
             (ROOT/'os/compile-contracts/launcher3-quickstep-lib.json').read_text()))
 

@@ -31,8 +31,12 @@ final class AgentStatusControls {
         return edgeEnabled && user == 0 && navigationMode == NAVIGATION_GESTURAL ? CHIN_AVAILABLE : 0;
     }
 
-    int touch(int action, int pointers, float x, float y, long at, int hit,
-            boolean active, boolean muted, int slop) {
+    /**
+     * The status bar's one control: a tap on the agent glow (hit 1) starts a session at rest and ends it while
+     * active. The microphone glow (hit 2) and the "Mic off" indicator are display-only (F08, keyboard handoff rule 4:
+     * the Rose chin holds the only microphone control), so a tap there sends nothing and stays the status bar's.
+     */
+    int touch(int action, int pointers, float x, float y, long at, int hit, boolean active, int slop) {
         if (pointers != 1 || action == 3) { cancel(); return 0; }
         if (action == 0) {
             target = hit; downX = x; downY = y; downAt = at;
@@ -42,7 +46,7 @@ final class AgentStatusControls {
         if (action != 1) return 0;
         int tapped = target;
         cancel();
-        if (tapped == 0 || hit != tapped || at - downAt > 400) return 0;
-        return !active ? 3 : tapped == 1 ? 6 : muted ? 5 : 4;
+        if (tapped != 1 || hit != tapped || at - downAt > 400) return 0;
+        return active ? 6 : 3;
     }
 }

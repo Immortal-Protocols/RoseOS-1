@@ -42,6 +42,14 @@ public final class AppRemovalTest {
                 && "Work app is still installed. Android didn't uninstall it.".equals(AppRemoval.message(refused, "Work app")), "Android kept it: said so (" + confirmed + ")");
         }
         expect(AppRemoval.outcome(false, false, true, true) == AppRemoval.Outcome.NOT_REMOVED, "updates Android refused to remove");
+        // 1I: only the genuine retired Rose Models app (exact package and its release signer) is named retired.
+        java.util.List<String> models = java.util.Arrays.asList(AppRemoval.MODELS_SIGNER);
+        expect(AppRemoval.retired("dev.pixel.models", models), "the genuine app");
+        expect(AppRemoval.retired("dev.pixel.models", java.util.Arrays.asList("00", AppRemoval.MODELS_SIGNER.toUpperCase())), "any listed signer, either case");
+        expect(!AppRemoval.retired("dev.pixel.models", java.util.Arrays.asList("650d47f9")), "same package, another signer: an ordinary app");
+        expect(!AppRemoval.retired("dev.pixel.models", java.util.Collections.<String>emptyList()) && !AppRemoval.retired("dev.pixel.models", null), "no signer read");
+        expect(!AppRemoval.retired("dev.pixel.models.client", models) && !AppRemoval.retired("dev.pixel.voice", models), "exact package only");
+        expect(AppRemoval.MODELS_SIGNER.matches("[0-9a-f]{64}"), "a full SHA-256");
         System.out.println("AppRemovalTest: " + checks + " checks passed");
     }
 }

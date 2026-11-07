@@ -35,7 +35,10 @@ public final class RoseEdgeShell {
     public static final int REFUSED_NOT_TOP_TASK = 1, REFUSED_NOT_RESIZEABLE = 2, REFUSED_LOCKED = 3,
             REFUSED_ROTATION = 4, REFUSED_MULTI_WINDOW = 5, REFUSED_BUSY = 6, REFUSED_LIFT_RANGE = 7,
             REFUSED_DISABLED = 8, REFUSED_NOT_DEFAULT_DISPLAY = 9;
-    /** IRoseEdgeListener lowered reasons; the shell lowers by itself for every reason but REQUESTED. */
+    /**
+     * IRoseEdgeListener lowered reasons; the shell lowers by itself for every reason but REQUESTED. LOWERED_IME_SHOWN
+     * keeps its number but is no longer sent: the chin stays up over an open keyboard (RoseEdgePolicy, OS Core).
+     */
     public static final int LOWERED_REQUESTED = 0, LOWERED_TASK_CHANGED = 1, LOWERED_HOME_OR_RECENTS = 2,
             LOWERED_KEYGUARD = 3, LOWERED_DISPLAY_CHANGED = 4, LOWERED_IME_SHOWN = 5, LOWERED_LISTENER_DIED = 6,
             LOWERED_USER_SWITCH = 7;

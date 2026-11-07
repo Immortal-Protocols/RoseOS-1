@@ -185,7 +185,7 @@ def codes(receipt):
 
 class ZeroSideEffects(unittest.TestCase):
     def test_checked_in_profiles_stop_before_anything(self):
-        # models-v0 is source-ready (pinned-tree keytool); its host-side refusals are in test_models_signing_bootstrap.py.
+        # models-v0 is source-ready (pinned-tree keytool); the profile stays as the retired Models signer's record.
         for name, expected in (('fold-rango-v1', {'proof-missing'}),
                                ('rango', {'profile-unknown'}), ('none', {'profile-unknown'})):
             f, ex = Fixture(self), MockExecutor()
@@ -540,7 +540,8 @@ class Workflow(unittest.TestCase):
         self.assertIn("    if: always() && needs.controller.result != 'skipped'\n", JOBS['cleanup'])
         self.assertIn('  group: os-release-frankel\n', WORKFLOW)
         self.assertIn("      - name: Signing-bootstrap guard\n        if: inputs.mode == 'signing-bootstrap'\n", JOBS['guard'])
-        self.assertIn('options: [none, fold-rango-v1, models-v0, pro-blazer-v1, fold-rango-factory-v1, pro-blazer-factory-v1]', WORKFLOW)
+        self.assertIn('options: [none, fold-rango-v1, pro-blazer-v1, fold-rango-factory-v1, pro-blazer-factory-v1]', WORKFLOW)
+        self.assertNotIn('models-v0', bootstrap_options())  # Rose Models is retired (#651): no new Models key set
         self.assertIn('        options: [frankel]\n', WORKFLOW)  # no device is admitted
 
     def guard_script(self):

@@ -112,6 +112,8 @@ if a.background_policy:
     projects['frameworks/base'].append('rose-shade-systemui.patch')
     # #410: the edge's switch (persist.wm.debug.rose_edge); the mic slot is the tray's own control, so with the tray.
     if a.agent_tray:projects['build/make'].append('rose-edge-build-make.patch')
+    # 1M: the Rose keyboard (os/overlays/packages/apps/RoseKeyboard) in the product, beside the stock keyboard.
+    projects['build/make'].append('rose-keyboard-build-make.patch')
 preinstalls = preinstall_plan(policy, a.preinstall_apk) if a.preinstall_apk else []
 projects.update(rose_home_projects(preinstalls))
 if a.installed_identities:

@@ -30,7 +30,7 @@ test('the HOME activity identity is unchanged',()=>{
 
 test('HOME and the app icon land on Rose Home; the icon opens the Rose conversation; other opens keep their page',()=>{
  // Page indices are named and set from the built page list (HomePages): Home, then the apps (#223: no Widgets or voice page).
- assert.match(main,/int homePage=0,ourAppsPage=1;boolean voiceControls;/);
+ assert.match(main,/int homePage=0,ourAppsPage=1;\n/);
  assert.match(main,/homePage=HomePages\.HOME;ourAppsPage=count>HomePages\.FIRST_APPS\?HomePages\.FIRST_APPS:HomePages\.HOME;\n/,'with no app page, Apps is Home');
  assert.match(main,/int appPages=appEntries\.isEmpty\(\)&&!entries\.isEmpty\(\)\?0:HomeAppLayout\.pages\(appEntries\.size\(\),appPerPage\);/,'no empty overflow page when Home holds every app');
  assert.ok(!/voicePage|widgetsPage|HomePages\.(voice|widgets)\(/.test(main),'no legacy page index remains');
@@ -38,7 +38,7 @@ test('HOME and the app icon land on Rose Home; the icon opens the Rose conversat
  assert.match(main,/home\(\);showHomeFor\(getIntent\(\),b==null\);showSettingsFor\(getIntent\(\)\);if\(b!=null&&b\.containsKey\("home-page"\)&&launcherPager!=null\)launcherPager\.showPage\(HomePages\.restore\(b\.getInt\("home-page"\),launcherPager\.getChildCount\(\)\),false\);/);
  assert.match(main,/onNewIntent\(Intent i\)\{super\.onNewIntent\(i\);RoseConversationActivity\.closeTask\(\);int previous=launcherPager==null\?-1:launcherPager\.currentPage\(\);boolean homeShown=!homeStopped;if\(!reuseHome\(i\)\)home\(\);showHomeFor\(i,true,previous,homeShown\);showSettingsFor\(i\);gestureContract\(i,homeShown\);\}/);
  const route=main.slice(main.indexOf('void showHomeFor(Intent intent,boolean fresh,int previous,boolean homeShown)'));
- assert.match(route,/^void showHomeFor\(Intent intent,boolean fresh,int previous,boolean homeShown\)\{if\(intent==null\)return;HomeEntry entry=HomeEntry\.of\(Intent\.ACTION_MAIN\.equals\(intent\.getAction\(\)\),intent\.hasCategory\(Intent\.CATEGORY_HOME\),intent\.hasCategory\(Intent\.CATEGORY_LAUNCHER\),fresh,\(intent\.getFlags\(\)&Intent\.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY\)!=0,DeviceIdentity\.paired\(this\)\);if\(entry\.showHome\)\{closeVoiceControls\(\);closeSystemFolder\(\);\}if\(entry\.showHome&&launcherPager!=null\)launcherPager\.showPage\(HomePages\.target\(true,!intent\.hasCategory\(Intent\.CATEGORY_HOME\),homeShown,previous,launcherPager\.currentPage\(\),launcherPager\.getChildCount\(\)\),false\);if\(entry\.openConversation\)openRoseConversation\(\);\}/);
+ assert.match(route,/^void showHomeFor\(Intent intent,boolean fresh,int previous,boolean homeShown\)\{if\(intent==null\)return;HomeEntry entry=HomeEntry\.of\(Intent\.ACTION_MAIN\.equals\(intent\.getAction\(\)\),intent\.hasCategory\(Intent\.CATEGORY_HOME\),intent\.hasCategory\(Intent\.CATEGORY_LAUNCHER\),fresh,\(intent\.getFlags\(\)&Intent\.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY\)!=0,DeviceIdentity\.paired\(this\)\);if\(entry\.showHome\)closeSystemFolder\(\);if\(entry\.showHome&&launcherPager!=null\)launcherPager\.showPage\(HomePages\.target\(true,!intent\.hasCategory\(Intent\.CATEGORY_HOME\),homeShown,previous,launcherPager\.currentPage\(\),launcherPager\.getChildCount\(\)\),false\);if\(entry\.openConversation\)openRoseConversation\(\);\}/);
  assert.match(main,/void showHomeFor\(Intent intent,boolean fresh\)\{showHomeFor\(intent,fresh,-1,true\);\}/);
  // "Home shown" means only paused, never stopped: an app or the conversation over Home stops it.
  assert.match(main,/@Override protected void onStop\(\)\{super\.onStop\(\);homeStopped=true;\}/);
@@ -69,15 +69,11 @@ test('Home comes first, the app pages follow it, and nothing else is a page (OS-
  assert.deepEqual([...order].sort((a,b)=>a-b),order);
  assert.ok(order.every(i=>i>=0));
  assert.ok(pages.indexOf('launcherPager.addView(roseHome=new RoseHomeView(')<pages.indexOf('for(int number=HomePages.FIRST_APPS;number<count;number++)launcherPager.addView(appPage('));
- // Long-pressing Home opens the Home options; the legacy voice controls open over Home only from there or the
- // conversation's Settings, and only they run the voice refresh (drawer is false while they are shown).
+ // Long-pressing Home opens the Home options (settings: Pair with Mac and About only). The legacy voice controls,
+ // which only the retired "Voice controls" setting opened, are removed (1H), so nothing draws over Home.
  assert.match(pages,/roseHome\.setOnLongClickListener\(v->\{homeOptions\(v\);return true;\}\);/);
- assert.match(pages,/setContentView\(homeFrame\);homeBars\(\);drawer=true;if\(voiceControls\)attachVoiceControls\(\);/);
- assert.match(main,/void showVoiceControls\(\)\{voiceControls=true;attachVoiceControls\(\);\}/);
- assert.match(main,/void closeVoiceControls\(\)\{voiceControls=false;drawer=true;/);
- // Settings no longer offers the legacy voice controls (owner request: Pair with Mac and About only).
- assert.doesNotMatch(main,/"Voice controls"/);
- assert.match(main,/else if\(voiceControls\)closeVoiceControls\(\);/);
+ assert.match(pages,/setContentView\(homeFrame\);homeBars\(\);drawer=true;drawnCustomization=/);
+ assert.doesNotMatch(main,/"Voice controls"|voiceControls|VoiceControls/);
  assert.match(read('../app/src/dev/pixel/voice/RoseConversationActivity.java'),/add\("Settings"\)\.setOnMenuItemClickListener\(i->\{startActivity\(new Intent\(MainActivity\.ACTION_SETTINGS\)\.setClass\(this,MainActivity\.class\)\);return true;\}\);/);
  // The pager sits in a HomeFrame with the fixed tray; the frame, not the pager, is the content view.
  assert.match(pages,/homeTray=new HomeTray\(this,this::openRoseFromHome,this::toggleRoseMic,this::openOverview,MainActivity::overviewAvailable\);homeFrame=new HomeFrame\(this,launcherPager,homeTray,fixedDots\);\n  setContentView\(homeFrame\);homeBars\(\);/);
@@ -214,7 +210,7 @@ test('one persistent control bar: Home has no second shortcut dock over the tray
  assert.match(main,/dots\.setImportantForAccessibility\(View\.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS\);/);
  const pager=read('../app/src/dev/pixel/voice/LauncherPager.java');
  assert.match(pager,/AccessibilityAction\.ACTION_SCROLL_FORWARD/);assert.match(pager,/AccessibilityAction\.ACTION_SCROLL_BACKWARD/);
- assert.match(main,/void apps\(\)\{closeVoiceControls\(\);if\(launcherPager!=null\)launcherPager\.showPage\(ourAppsPage,true\);\}/);
+ assert.match(main,/void apps\(\)\{if\(launcherPager!=null\)launcherPager\.showPage\(ourAppsPage,true\);\}/);
 });
 
 test('an unchanged HOME or app-icon return reuses the built Home; changes rebuild it (OS-HOME-REUSE-001)',()=>{
@@ -222,9 +218,9 @@ test('an unchanged HOME or app-icon return reuses the built Home; changes rebuil
  assert.match(main,/if\(!reuseHome\(i\)\)home\(\);showHomeFor\(i,true,previous,homeShown\);/);
  // Only Home entries (HOME, MAIN\/LAUNCHER) qualify, judged by the same HomeEntry rule as routing.
  assert.match(main,/boolean reuseHome\(Intent i\)\{return i!=null&&HomeReuse\.reuse\(HomeEntry\.of\(Intent\.ACTION_MAIN\.equals\(i\.getAction\(\)\),i\.hasCategory\(Intent\.CATEGORY_HOME\),i\.hasCategory\(Intent\.CATEGORY_LAUNCHER\),true,false,true\)\.showHome,/);
- // Whatever home() resets still forces it: chat mode, an open visual or Mac screen, another view in place. There is no
- // Home setting any more (the Classic home switch is retired), so that input is always false.
- assert.match(main,/homeFrame!=null&&homeFrame\.getParent\(\)!=null,builtHomeStamp,homeStamp\(\),chatMode,visualDetail!=null\|\|screenDetail!=null,false\);\}/);
+ // Whatever home() resets still forces it: chat mode, an open visual, another view in place. There is no Home setting
+ // any more (the Classic home switch is retired), so that input is always false; the Mac screen is removed (1H).
+ assert.match(main,/homeFrame!=null&&homeFrame\.getParent\(\)!=null,builtHomeStamp,homeStamp\(\),chatMode,visualDetail!=null,false\);\}/);
  // The stamp is recorded by every catalog build and covers packages, configuration and the dock's default apps.
  assert.match(main,/homeFrame\.requestApplyInsets\(\);\n  builtHomeStamp=homeStamp\(\);\n \}/);
  assert.match(main,/public void onReceive\(Context context,Intent intent\)\{packageGeneration\+\+;if\(launcherPager!=null&&!isFinishing\(\)\)attachLauncherPages\(true\);\}/);
@@ -500,8 +496,8 @@ test('system and duplicate apps leave the app pages for one "…" System folder 
 
 test('no conversation-page check uses a literal page index',()=>{
  assert.ok(!/currentPage\(\)\s*==\s*\d/.test(main),'use homePage/ourAppsPage, not a number');
- // Completed-task details auto-open only while the voice controls are shown (#223: they are no longer a page).
- assert.match(main,/\(launcherPager==null\|\|voiceControls\)&&visualDetail==null&&screenDetail==null/);
+ // Completed-task details never auto-open over Rose Home (#223); the voice controls that once allowed it are removed.
+ assert.match(main,/launcherPager==null&&visualDetail==null\);/);
 });
 
 test('the tray Rose renders and speaks the same authoritative state as the tray service and conversation',()=>{
@@ -527,8 +523,8 @@ test('the tray Rose renders and speaks the same authoritative state as the tray 
 });
 
 test('Back from the conversation or app pages returns Home',()=>{
- assert.match(main,/else if\(drawer&&launcherPager!=null\)launcherPager\.showPage\(homePage,true\);else if\(experimentalHome&&chatMode\)\{chatMode=false;home\(\);\}else if\(voiceControls\)closeVoiceControls\(\);else if\(launcherPager!=null\)launcherPager\.showPage\(homePage,true\);\}/);
- // #223: Back first leaves the conversation mode inside the voice controls, then closes them back to Home.
+ assert.match(main,/public void onBackPressed\(\)\{if\(visualDetail!=null\)closeVisual\(\);else if\(drawer&&launcherPager!=null\)launcherPager\.showPage\(homePage,true\);else if\(chatMode\)\{chatMode=false;home\(\);\}else if\(launcherPager!=null\)launcherPager\.showPage\(homePage,true\);\}/);
+ // #223: Back closes an open visual, then returns to Home.
 });
 
 test('#410 gesture_nav_contract_v1: a RectF-only reply to the verified recents component, failing closed',()=>{
@@ -598,6 +594,47 @@ test('a long press offers App info and Android\'s own uninstall route, never a s
  // Uninstall updates is the only offer that keeps the package; App info stays a plain route with no result.
  assert.match(main,/openRemoval\(pkg,label,offer\.route,AppRemoval\.UNINSTALL_UPDATES\.equals\(offer\.remove\)\)/);
  assert.match(main,/openRemoval\(pkg,label,AppRemoval\.Route\.APP_INFO,false\)/);
+});
+
+// 1I: Rose Models is retired with no successor. An installed copy is offered for removal through Android's own
+// confirmation only; Rose Agent never installs, updates or calls it.
+test('the retired Rose Models app is offered for uninstall, never removed or reinstalled by Rose (1I)',()=>{
+ const removal=read('../app/src/dev/pixel/voice/AppRemoval.java'),notice=read('../app/src/dev/pixel/voice/RetiredAppNotice.java');
+ const strip=t=>t.replace(/\/\*[\s\S]*?\*\//g,'').replace(/\/\/.*$/gm,'');
+ // Genuine app only: its exact package and the Models release signer that service-auth-v1 enrolls.
+ assert.match(removal,/MODELS_SIGNER = "066c66d62518d1db6c8a7d40795fcca580412049d2c5a5cce89b7673540108da";/);
+ assert.ok(read('../../models/contracts/service-auth-v1.md').includes('066c66d62518d1db6c8a7d40795fcca580412049d2c5a5cce89b7673540108da'));
+ const signer=main.slice(main.indexOf('boolean retiredApp(String pkg){'),main.indexOf('boolean retiredOffered;'));
+ assert.match(signer,/getPackageInfo\(pkg,PackageManager\.GET_SIGNING_CERTIFICATES\)\.signingInfo/);
+ assert.match(signer,/return AppRemoval\.retired\(pkg,digests\);/);
+ // Offered once, only on Home, and handed to openRemoval for that exact package (Android's confirmation, #624).
+ const offer=main.slice(main.indexOf('void offerRetiredUninstall(){'),main.indexOf('static final int REMOVE_REQUEST'));
+ assert.match(offer,/if\(retiredOffered\|\|!drawer\|\|launcherPager==null\|\|isFinishing\(\)\|\|isDestroyed\(\)\|\|visualDetail!=null\|\|systemFolder!=null\)return;/);
+ assert.match(offer,/if\(answers\.getBoolean\(AppRemoval\.MODELS_NOTICE,false\)\|\|!retiredApp\(AppRemoval\.MODELS\)\)return;/);
+ assert.match(offer,/\(\)->openRemoval\(AppRemoval\.MODELS,AppRemoval\.MODELS_NAME,/);
+ assert.match(main,/@Override protected void onPostResume\(\)\{super\.onPostResume\(\);handler\.post\(this::offerRetiredUninstall\);\}/);
+ // Every answer is recorded (Uninstall, Not now, back), so the offer is not repeated; its long press stays.
+ assert.match(notice,/setPositiveButton\(AppRemoval\.RETIRED_UNINSTALL, \(d, which\) -> \{ record\.run\(\); uninstall\.run\(\); \}\)/);
+ assert.match(notice,/setNegativeButton\(AppRemoval\.RETIRED_LATER, \(d, which\) -> record\.run\(\)\)/);
+ assert.match(notice,/setOnCancelListener\(d -> record\.run\(\)\)/);
+ assert.match(main,/if\(AppRemoval\.MODELS\.equals\(pkg\)&&retiredApp\(pkg\)\)menu\.getMenu\(\)\.add\(AppRemoval\.RETIRED_NOTE\)\.setEnabled\(false\);/);
+ // Nothing is removed, cleared or stopped programmatically.
+ assert.doesNotMatch(strip(main+removal+notice),/PackageInstaller|\.uninstall\(|deletePackage|clearApplicationUserData|killBackgroundProcesses|forceStop/);
+ // No other Rose Agent code names the package: no install, update, delivery, launch or binding of it.
+ const roots=['../app/src/dev/pixel/voice/','../app/assets/','../server/','../delivery/'];
+ const allowed=new Set(['AppRemoval.java','HomeAppGroups.java']);
+ let scanned=0;
+ for(const root of roots){
+  const dir=new URL(root,import.meta.url);if(!fs.existsSync(dir))continue;
+  for(const entry of fs.readdirSync(dir,{recursive:true})){
+   const file=new URL(entry,dir);if(!fs.statSync(file).isFile()||entry.includes('node_modules'))continue;
+   scanned++;
+   if(allowed.has(path.basename(entry)))continue;
+   assert.ok(!fs.readFileSync(file,'utf8').includes('dev.pixel.models'),`${root}${entry} names dev.pixel.models`);
+  }
+ }
+ assert.ok(scanned>200,`scanned ${scanned} files`);
+ assert.doesNotMatch(manifest,/dev\.pixel\.models/);
 });
 
 // The Settings intent must not silently disappear when the Home anchor is absent/replaced.

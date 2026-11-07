@@ -79,6 +79,8 @@ python3 os/tests/test_rose_edge_shell.py
 python3 os/tests/test_background_control_prototype.py
 python3 os/tests/test_anyapp_takeover_platform.py
 python3 os/tests/test_rose_shade.py
+# 1M: the Rose keyboard (package boundaries, build inclusion, and the design's 37 model checks).
+python3 os/tests/test_rose_keyboard.py
 python3 scripts/tests/test_systemui_component_update.py
 python3 os/tests/persistent-app-experiment/test_systemui_stages.py
 python3 os/tests/persistent-app-experiment/test_setup_emulator.py
@@ -166,9 +168,6 @@ python3 scripts/tests/test_fold_tool_proof.py
 python3 scripts/tests/test_ssh_keygen_observe.py
 python3 scripts/tests/test_factory_delivery.py
 python3 scripts/tests/test_factory_targets.py
-python3 scripts/tests/test_models_signing_bootstrap.py
-python3 scripts/tests/test_models_apk_signing.py
-python3 scripts/tests/test_models_publication.py
 python3 scripts/tests/test_models_app_not_bundled.py
 python3 scripts/tests/test_alpha_runtime.py
 python3 scripts/tests/test_emulator_alpha.py

@@ -201,6 +201,8 @@ not a claim that this older baseline is suitable for a current stable release.
 - [Verify an alpha or beta build](docs/VERIFY.md): artifact and source inspection,
   handback-gated Cuttlefish runtime capture, Fold-reference screenshot comparison
   and the per-build checklist. Records live under `qa/verification/`.
+- [Rose Models retirement](docs/MODELS-RETIREMENT.md): the retired `dev.pixel.models` app, its
+  enrollment and trust consequence, removed distribution, and how installed copies are handled.
 
 See [structure decisions](docs/ARCHITECTURE.md) for why these boundaries were chosen.
 

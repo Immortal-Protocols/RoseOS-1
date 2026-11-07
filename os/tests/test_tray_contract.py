@@ -66,8 +66,14 @@ class TrayContractTest(unittest.TestCase):
         # the tray accepts only STATE replies.
         self.assertIn('static final int REGISTER = 1, UNREGISTER = 2;', self.link)
         self.assertIn('message.what != 100', self.tray)
-        # Tap commands the tray can send are exactly START/MUTE/UNMUTE/END.
-        self.assertIn('return !active ? 3 : tapped == 1 ? 6 : muted ? 5 : 4;', self.controls)
+        # Tap commands the status bar can send are exactly START/END, from the agent glow. The microphone glow and
+        # "Mic off" are display-only: the Rose chin holds the only microphone control (F08, keyboard rule 4), so
+        # MUTE/UNMUTE stay in the protocol for the chin but never come from a status-bar tap.
+        self.assertIn('if (tapped != 1 || hit != tapped || at - downAt > 400) return 0;', self.controls)
+        self.assertIn('return active ? 6 : 3;', self.controls)
+        touch = self.controls[self.controls.index('int touch('):]
+        self.assertNotRegex(touch, r'\bmuted\b|\? 5|\? 4|return 4|return 5')
+        self.assertNotIn('muted, ViewConfiguration', self.tray)
 
     def test_protocol_version_and_state_keys_match(self):
         self.assertIn('b.putInt("protocolVersion",1)', self.service)
@@ -125,6 +131,27 @@ class TrayContractTest(unittest.TestCase):
         controller = (ROOT/'os/patches/rose-edge-wmshell.patch').read_text()
         self.assertIn('static final String ENABLED_PROPERTY = "persist.wm.debug.rose_edge";', controller)
         self.assertIn('persist.wm.debug.rose_edge=true', (ROOT/'os/patches/rose-edge-build-make.patch').read_text())
+
+    def test_mic_off_shows_in_the_status_bar_while_muted(self):
+        # Keyboard handoff rule 4 (818a032, prototypes/rose-keyboard/HANDOFF.md): while Rose's microphone input is
+        # muted the status bar shows "Mic off" with the chin's slashed mic and ruby outline (RoseEdgeMicSlot's
+        # MUTED_INK/MUTED_RING), screen-reader label "Microphone muted", at rest or in a session.
+        waves = self.tray[self.tray.index('private final class Waves'):]
+        self.assertIn('if (muted) drawMicOff(canvas, rightStart + dp(4));', waves)
+        self.assertNotIn('if (active && muted) drawMicOff', waves)
+        draw = waves[waves.index('void drawMicOff('):]
+        self.assertIn('final String label = "Mic off";', draw)
+        self.assertIn('micOffPath.moveTo(4.5f, 3.5f); micOffPath.lineTo(19.5f, 20.5f);', ' '.join(draw.split()))
+        self.assertIn('static final int MUTED_INK = 0xffff8c9a;', waves)
+        self.assertIn('static final int MUTED_RING = 0xbfff5a6e;', waves)
+        chin = (ROOT/'os/patches/rose-edge-wmshell.patch').read_text()
+        self.assertIn('static final int MUTED_INK = 0xffff8c9a;', chin)
+        self.assertIn('static final int MUTED_RING = 0xbfff5a6e;', chin)
+        self.assertIn('setContentDescription(muted ? "Microphone muted"', waves)
+        # The description follows every state change, including a reset.
+        self.assertEqual(self.tray.count('if (view != null) view.describe();'), 2)
+        # An indicator, not a control: no new touch target.
+        self.assertNotIn('drawMicOff', self.tray[self.tray.index('int targetAt('):self.tray.index('Waves() {')])
 
     def test_app_glow_shader_matches_the_os_copy(self):
         self.assertEqual(shader(APP/'StatusVoiceGlow.java'), shader(SHELL/'StatusVoiceGlow.java'))

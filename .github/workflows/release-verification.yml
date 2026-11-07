@@ -179,15 +179,7 @@ on:
       - 'scripts/tests/test_rango_retained.py'
       - 'scripts/fold_tool_proof.py'
       - 'scripts/tests/test_fold_tool_proof.py'
-      - 'scripts/tests/test_models_signing_bootstrap.py'
-      - 'scripts/host-models-sign.py'
-      - 'scripts/models-input-ingress.py'
-      - 'scripts/tests/test_models_apk_signing.py'
-      - 'scripts/models-publication.py'
-      - 'scripts/tests/test_models_publication.py'
-      - '.github/workflows/models-publish.yml'
       - 'scripts/tests/test_models_app_not_bundled.py'
-      - 'os/models-signing/**'
       - 'os/signing-bootstrap/**'
       - 'scripts/tests/test_device_contract.py'
       - 'os/devices/**'
@@ -381,15 +373,7 @@ on:
       - 'scripts/tests/test_rango_retained.py'
       - 'scripts/fold_tool_proof.py'
       - 'scripts/tests/test_fold_tool_proof.py'
-      - 'scripts/tests/test_models_signing_bootstrap.py'
-      - 'scripts/host-models-sign.py'
-      - 'scripts/models-input-ingress.py'
-      - 'scripts/tests/test_models_apk_signing.py'
-      - 'scripts/models-publication.py'
-      - 'scripts/tests/test_models_publication.py'
-      - '.github/workflows/models-publish.yml'
       - 'scripts/tests/test_models_app_not_bundled.py'
-      - 'os/models-signing/**'
       - 'os/signing-bootstrap/**'
       - 'scripts/tests/test_device_contract.py'
       - 'os/devices/**'
@@ -491,9 +475,6 @@ jobs:
           python3 scripts/tests/test_signing_bootstrap.py
           python3 scripts/tests/test_fold_bootstrap_proof.py
           python3 scripts/tests/test_fold_tool_proof.py
-          python3 scripts/tests/test_models_signing_bootstrap.py
-          python3 scripts/tests/test_models_apk_signing.py
-          python3 scripts/tests/test_models_publication.py
           python3 scripts/tests/test_models_app_not_bundled.py
           node --test workspace/rose-agent/delivery/catalog.test.mjs
           python3 -c "import sys; sys.path.insert(0, 'scripts'); import importlib.util as u; s = u.spec_from_file_location('m', 'scripts/release-manifest.py'); m = u.module_from_spec(s); s.loader.exec_module(m); [m.load_manifest(p) for p in sys.argv[1:]]" os/release-evidence/*/manifest.json
