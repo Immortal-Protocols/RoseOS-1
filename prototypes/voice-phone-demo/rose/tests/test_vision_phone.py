@@ -139,30 +139,48 @@ class Vision(unittest.TestCase):
         self.assertEqual(len(self.commands()), before)
         self.assertIsNotNone(s.view.frame_id)  # a refusal never consumes the frame
 
+    FINAL = ('Send', 'Buy now', 'Place order', 'Pay $20', 'Submit', 'Publish', 'Confirm order', 'Checkout button',
+             'the Send button', 'Send icon', 'Send arrow', 'blue send arrow at bottom right', '"Send" button', 'Tap Send',
+             'Send to Sam', 'green send icon', 'the Submit button', 'Submit review', 'Post', 'Tweet', 'Tap Post',
+             'the Post button', 'Post comment', 'Post reply button', 'Post now', 'Post in the top right corner',
+             'Post (top right)', 'Post, top-right corner', 'Tweet in the top right corner', 'the blue Post text button',
+             'Post button (top right)', 'the blue Post button at the top right', 'Payment methods')
+    # Ordinary controls, including those naming a final control as a landmark, a field, a setting or a feed item.
+    ORDINARY = ('Reply', 'paper airplane DM icon at top right', 'Message field', 'Search', 'Sent folder', 'Settings gear',
+                'Back arrow', 'the latest post', 'Open the first post', 'Like button on the post', 'Comment on the post',
+                'Tap the post to open it', 'the post comment box', 'New post', 'Create post', 'the new post button',
+                'the Create post button', 'the compose tweet button', 'the + new post button', 'the tweet by NASA',
+                'Like button on the tweet', 'Send feedback', 'Send feedback row', "the 'Send message' field",
+                'the Send a chat text box', 'Send read receipts toggle', 'Enter is send toggle',
+                'the message field next to the send button', 'the emoji icon beside the send button',
+                'the camera icon next to the send button', 'the Share via paper plane icon')
+    # Once a draft is typed, "Reply" and the paper plane send it.
+    DRAFT_FINAL = ('Reply', 'the Reply button', 'paper plane icon', 'paper airplane icon', 'paper-airplane button')
+
+    def test_final_target_reads_the_models_description(self):
+        from rose.vision_phone import final_target
+        for target in self.FINAL:
+            self.assertTrue(final_target(target, False), target)
+            self.assertTrue(final_target(target, True), target)
+        for target in self.ORDINARY:
+            self.assertFalse(final_target(target, False), target)
+        for target in self.DRAFT_FINAL:
+            self.assertTrue(final_target(target, True), target)
+        self.assertFalse(final_target('the reply text field', True))
+
     def test_a_final_control_called_interact_is_still_the_owners(self):
         s = self.opened()
         before = len(self.commands())
-        for target in ('Send', 'Buy now', 'Place order', 'Pay $20', 'Submit', 'Publish', '', '   ',
-                       'the Send button', 'Send icon', 'Send arrow', 'blue send arrow at bottom right', '"Send" button',
-                       'Tap Send', 'the Submit button', 'paper plane icon', 'paper airplane icon', 'paper-airplane button',
-                       'the Post button', 'Tap Post', 'Tweet', 'Post', 'Post comment', 'Post reply button', 'Confirm order',
-                       'Checkout button'):
+        for target in ('', '   ', 'the Send button', 'Post (top right)', 'Buy now'):
             result = self.call(s, 'tap_point', frame_id=s.view.frame_id, x=500, y=500, target=target, effect='interact')
             self.assertFalse(result['ok'], target)
         self.assertEqual(len(self.commands()), before)
-        # "Reply" opens a composer until a draft is typed; then it is a send.
         self.assertTrue(self.call(s, 'tap_point', frame_id=s.view.frame_id, x=500, y=500, target='Reply', effect='interact')['ok'])
         self.assertTrue(self.call(s, 'type_text', frame_id=s.view.frame_id, text='On my way', replace=True)['ok'])
         before = len(self.commands())
-        for target in ('Reply', 'the Reply button'):
-            self.assertFalse(self.call(s, 'tap_point', frame_id=s.view.frame_id, x=500, y=500, target=target, effect='interact')['ok'])
+        self.assertFalse(self.call(s, 'tap_point', frame_id=s.view.frame_id, x=500, y=500, target='Reply', effect='interact')['ok'])
         self.assertEqual(len(self.commands()), before)
-        # Ordinary controls still work.
-        for target in ('Message field', 'Search', 'Sent folder', 'Settings gear', 'Back arrow', 'the latest post',
-                       'Open the first post', 'Like button on the post', 'Comment on the post', 'Tap the post to open it',
-                       'the post comment box', 'New post', 'Create post', 'the tweet by NASA', 'Like button on the tweet',
-                       'Send feedback', 'Send feedback row'):
-            self.assertTrue(self.call(s, 'tap_point', frame_id=s.view.frame_id, x=500, y=500, target=target, effect='interact')['ok'], target)
+        self.assertTrue(self.call(s, 'tap_point', frame_id=s.view.frame_id, x=500, y=500, target='the message field next to the send button', effect='interact')['ok'])
 
     def test_an_unanswered_type_still_counts_as_a_draft(self):
         s = self.opened()

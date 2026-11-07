@@ -30,31 +30,47 @@ your final reply. A dispatched input is not success; verify the result in the ne
 """
 
 # A model-written target ("the Send button", "blue send arrow", "paper airplane icon") is not the control's own label,
-# which tasks._final_control expects. A send, submit or purchase word anywhere counts ("Send feedback", a menu row, does
-# not); "post" and "tweet" are also feed items ("the latest post"), so they count only as a button or icon, or as the
-# whole label after a leading "the"/"tap" ("Post", "Tap Tweet", "Post comment"; not "post comment box").
-_VISION_FINAL = re.compile(r"\b(?:send(?!\s+feedback\b)|submit|publish|paper[\s-]?(?:air)?plane|buy|pay|payment|purchase|"
-                           r"checkout|(?:post|tweet)\s+(?:button|icon))\b", re.I)
-_VISION_REPLY = re.compile(r"\breply\b", re.I)
+# which tasks._final_control expects. final_target reads its head: the words before a location ("Post in the top
+# right", "the emoji icon next to the send button") or an aside ("Post (top right)", "Post, top right").
+_WHERE = re.compile(r"\s*(?:[(,;]|\b(?:next\s+to|beside|besides|near|above|below|under(?:neath)?|over|beneath|left\s+of|"
+                    r"right\s+of|to\s+the\s+(?:left|right)\s+of|on|in|at|inside|within|from|for|of)\b).*$", re.I)
+_LEAD = re.compile(r"^(?:(?:the|a|an|tap|press|click|hit|select|blue|green|red|white|black|gr[ae]y|bold|small|large|big|"
+                   r"round|circular|highlighted|enabled)\s+)+", re.I)
+# A control's own label as the head: the send word alone or with a message word, then an element word ("Post",
+# "Tap Tweet", "Post comment", "the Post text button"); not a feed item ("post comment box").
 _SEND_LABEL = re.compile(r"^\W*(?:(?:send|post|tweet)(?:\s+(?:it|now|message|reply|comment|tweet|text|sms))?"
-                         r"(?:\s+(?:button|icon))?\W*$|reply\b)", re.I)
-_LEAD = re.compile(r"^(?:(?:the|a|an|tap|press|click|hit|select)\s+)+", re.I)
+                         r"(?:\s+(?:text|label|link|pill|option))?(?:\s+(?:button|icon))?\W*$|reply\b)", re.I)
+# A send, submit or publish word anywhere in the head ("blue send arrow"), unless the head is a field, setting or menu
+# row ("the 'Send message' field", "Send read receipts toggle", "Send feedback"): typing into or flipping those sends
+# nothing.
+_VISION_FINAL = re.compile(r"\b(?:send|submit|publish)\b", re.I)
+_NOT_A_BUTTON = re.compile(r"\b(?:field|input|box|bar|area|placeholder|toggle|switch|checkbox|setting|settings|row|"
+                           r"tab|menu|feedback)\W*$", re.I)
+# "Post"/"Tweet" as a control, not a feed item or the composer's opener ("New post button", "compose tweet button").
+_POST_BUTTON = re.compile(r"\b(?:post|tweet)\s+(?:(?:text|label)\s+)?(?:button|icon)\b", re.I)
+_OPENER = re.compile(r"\b(?:new|create|compose|write|start|add)\s+(?:a\s+)?(?:post|tweet)\b|\+", re.I)
+# The paper-plane glyph sends a typed draft; before a draft it opens direct messages or a share sheet.
+_PLANE = re.compile(r"\bpaper[\s-]?(?:air)?plane\b", re.I)
 
 
 def final_target(target: str, typed: bool) -> bool:
     """Whether tapping the model's description of a target could send, buy or otherwise finish something.
 
-    Best effort, since it reads the model's words, not the app's: the accessibility path's label rules on the
-    description (after a leading "the"/"tap"), and a send, submit or purchase word anywhere in it. "Reply" counts once
-    a draft is typed. A miss is still the owner's action under the policy."""
+    Best effort, since it reads the model's words, not the app's: the accessibility path's label rules on the head of
+    the description, a send, submit or publish word anywhere in a button's head, "Post"/"Tweet" buttons, and once a
+    draft is typed "Reply" and the paper plane. A miss is still the owner's action under the policy."""
     from .tasks import _final_control
 
     text = " ".join(re.sub(r"[\"'“”‘’]", " ", target).split())
-    label = _LEAD.sub("", text)
-    kind = _final_control(label, typed=typed)
-    if kind == "send" and not _SEND_LABEL.match(label):
-        kind = ""  # "post to open it", "post comment box": a feed item; real sends are matched below
-    return bool(kind or _VISION_FINAL.search(text) or (typed and _VISION_REPLY.search(text)))
+    head = _WHERE.sub("", text) or text
+    label = _LEAD.sub("", head)
+    button = not _NOT_A_BUTTON.search(head)
+    kind = _final_control(label, typed=typed)  # "Reply" is a send once a draft is typed
+    if kind == "send" and not (button and _SEND_LABEL.match(label)):
+        kind = ""  # "post to open it", "the reply text field": not the send control; real sends are matched below
+    return bool(kind or (button and _VISION_FINAL.search(head))
+                or (_POST_BUTTON.search(head) and not _OPENER.search(head))
+                or (typed and _PLANE.search(head)))
 
 
 def vision_tools():

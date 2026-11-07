@@ -83,9 +83,12 @@ tools and their send/purchase guard, with screenshots alongside the UI tree.
 
 Final messages/posts, purchases and security changes remain owner actions under the
 existing policy. Vision taps declare their effect and describe their target; the server
-rejects final-action effects and any target description that reads as a send, purchase
-or other final control (the accessibility path's label rules, plus a send or purchase
-word anywhere in the description; "Reply" once a draft is typed). Both rely on the
+rejects final-action effects and any target description whose head (the words before
+a location such as "next to …" or "(top right)") reads as a send, purchase or other
+final control: the accessibility path's label rules, a send/submit/publish word in a
+button's description, "Post"/"Tweet" buttons other than a composer's opener, and once a
+draft is typed "Reply" and the paper plane. Fields, toggles and menu rows that mention
+sending ("Send read receipts") are not final controls. Both rely on the
 model's visual interpretation, rather than an independent accessibility-label check.
 Passwords and secrets remain owner input.
 The OS retains its session, protected-screen and owner-control boundaries.
