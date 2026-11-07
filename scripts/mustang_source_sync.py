@@ -71,7 +71,7 @@ def repo_init_command(pin, revision, manifest):
     """Checkout the local mustang-pin branch. Ubuntu repo 2.36 has no upstream-branch flag."""
     if not re.fullmatch(r'[0-9a-f]{40}', revision):
         raise ValueError('source sync revision differs')
-    return ['repo', 'init', '-u', pin, '-b', PIN_REF, '-m', manifest]
+    return ['repo', 'init', '-u', pin, '-b', PIN_REF, '--no-use-superproject', '-m', manifest]
 
 
 def steps(env=None):

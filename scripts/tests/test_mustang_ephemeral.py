@@ -451,6 +451,13 @@ class EnrollmentTest(unittest.TestCase):
         self.assertIn('User=mustang-runner', unit)
         self.assertIn('Type=simple', unit)
         self.assertIn('RuntimeMaxSec=14400', unit)
+        self.assertIn('NoNewPrivileges=true', unit)
+        self.assertIn('PrivateTmp=true', unit)
+        self.assertIn('RequiresMountsFor=/mnt/disks/mustang-data', unit)
+        self.assertIn('Wants=network-online.target', unit)
+        self.assertIn('After=network-online.target', unit)
+        self.assertIn('ConditionPathIsMountPoint=/mnt/disks/mustang-data', unit)
+        self.assertNotIn('local-fs.target', unit)
         self.assertNotIn('jitconfig', unit.lower())
         self.bootstrap_refuses_wrong_disk_and_keeps_a_verified_download()
 

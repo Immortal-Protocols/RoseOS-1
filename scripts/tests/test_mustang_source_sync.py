@@ -346,11 +346,18 @@ class SourceSyncRecipeTest(unittest.TestCase):
             repo = shutil.which('repo')
             self.assertIsNotNone(repo, 'repo is required; a missing tool is not a passing shallow fixture')
             source.mkdir()
+            help_text = subprocess.check_output([repo, 'init', '-h'], text=True, stderr=subprocess.STDOUT)
+            self.assertIn('--no-use-superproject', help_text)
             init = sync.repo_init_command(str(pin), revision, 'pinned-manifest.xml')
             init[0] = repo
+            self.assertIn('--no-use-superproject', init)
             subprocess.run(init, cwd=source, check=True)
             head = subprocess.check_output(['git', '-C', str(source/'.repo/manifests'), 'rev-parse', 'HEAD'], text=True).strip()
             self.assertEqual(head, revision)
+            choice = subprocess.check_output(
+                ['git', '-C', str(source/'.repo/manifests'), 'config', '--local', '--get', 'repo.superproject'],
+                text=True).strip()
+            self.assertEqual(choice, 'false')
 
 
 if __name__ == '__main__':

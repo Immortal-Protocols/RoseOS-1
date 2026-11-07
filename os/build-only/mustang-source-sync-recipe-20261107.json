@@ -165,6 +165,7 @@
       "/mnt/disks/mustang-data/roseos/roseos-pin",
       "-b",
       "mustang-pin",
+      "--no-use-superproject",
       "-m",
       "os/pinned-manifest.xml"
     ],
