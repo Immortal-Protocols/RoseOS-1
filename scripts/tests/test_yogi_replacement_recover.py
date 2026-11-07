@@ -619,7 +619,8 @@ def inspect_evidence(test):
         "hostKeys": {"baseline": baseline, "rotated": {}, "distinctFromClonedBaseline": False,
                      "unknownHostKeyCount": 0, "rolledBack": False},
         "cleanup": {"linesRemoved": 0, "unidentifiedAuthorizedKeyLines": 0, "temporaryAccount": "absent",
-                    "tempFilesRemoved": 0, "accessCleanup": "ok"},
+                    "tempFilesRemoved": 0, "accessCleanup": "ok", "possessMarkerLines": 0,
+                    "authPathsRead": 2, "possessComment": "roseos-yogi-possess-"},
         "journal": {"entries": 2, "readable": 1, "phases": ["complete"], "hasCompleteReceipt": True,
                     "unrecognized": 1},
     }
@@ -1365,7 +1366,8 @@ class GuestTest(Base):
             "hostKeys": {"baseline": baseline, "rotated": {}, "distinctFromClonedBaseline": False,
                          "unknownHostKeyCount": 0, "rolledBack": False},
             "cleanup": {"linesRemoved": 0, "unidentifiedAuthorizedKeyLines": 0, "temporaryAccount": "absent",
-                        "tempFilesRemoved": 0, "accessCleanup": "ok"},
+                        "tempFilesRemoved": 0, "accessCleanup": "ok", "possessMarkerLines": 0,
+                    "authPathsRead": 2, "possessComment": "roseos-yogi-possess-"},
             "journal": {"entries": 2, "readable": 1, "phases": ["complete"], "hasCompleteReceipt": True,
                         "unrecognized": 1},
         }
