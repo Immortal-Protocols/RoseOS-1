@@ -4,15 +4,17 @@ import copy
 import datetime
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
 import unittest
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-import yogi_ota as yogi  # noqa: E402
-import yogi_direct  # noqa: E402
+_TEST_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(_TEST_DIR))
+if not (_TEST_DIR / "yogi_replacement_recover.py").is_file():
+    sys.path.insert(0, str(_TEST_DIR.parent))
 import yogi_replacement_recover as recover  # noqa: E402
 import yogi_replacement_recover_guest as guest  # noqa: E402
 
@@ -55,7 +57,9 @@ def instance(name, zone, number, status="TERMINATED", fingerprint="fp-base", ite
         "scheduling": scheduling or {"automaticRestart": True, "maxRunDuration": {"seconds": "2700"},
                                     "instanceTerminationAction": "STOP"},
         "serviceAccounts": [] if service_accounts is None else service_accounts,
-        "networkInterfaces": [{"networkIP": "10.1.0.4"}],
+        "networkInterfaces": [{"networkIP": "10.1.0.4",
+                               "network": "https://www.googleapis.com/compute/v1/projects/protocols-465723/global/networks/default"}],
+        "tags": {"items": []},
         "disks": [{"boot": True, "source": disk}],
     }
     if nat:
@@ -99,8 +103,9 @@ class World:
         self.scheduling = {"automaticRestart": True, "maxRunDuration": {"seconds": "2700"},
                            "instanceTerminationAction": "STOP"}
         self.accounts = [{"account": recover.OPERATOR_ACCOUNT, "status": "ACTIVE"}]
-        self.firewalls = [{"name": "allow-iap-ssh", "direction": "INGRESS", "disabled": False,
-                           "sourceRanges": [recover.IAP_RANGE],
+        self.firewalls = [{"name": "allow-iap-ssh", "direction": "INGRESS", "disabled": False, "priority": 1000,
+                           "network": "https://www.googleapis.com/compute/v1/projects/protocols-465723/global/networks/default",
+                           "sourceRanges": [recover.IAP_RANGE], "targetTags": [],
                            "allowed": [{"IPProtocol": "tcp", "ports": ["22"]}]}]
         self.snapshots = {
             "preserve": {"id": recover.PRESERVE_SNAPSHOT_ID, "name": recover.PRESERVE_SNAPSHOT, "status": "READY"},
@@ -446,6 +451,11 @@ class PlanTest(Base):
         self.assertEqual(self.world.requests, [])
 
     def test_direct_route_stays_unbound(self):
+        try:
+            import yogi_direct
+            import yogi_ota as yogi
+        except ImportError:
+            self.skipTest("full repository route modules are not in this deployment bundle")
         cfg = yogi.config()
         self.assertEqual(cfg["builder"]["direct"]["status"], "unbound")
         self.assertIsNone(cfg["builder"]["direct"]["hostKey"])
@@ -1043,6 +1053,158 @@ class CommandTest(Base):
         self.assertEqual(recover.classify_metadata(
             parsed, (recover.BASE_METADATA, "fp-base"), (recover.BASE_METADATA, "fp-base"),
             {"startup-script": "s"}), "not-applied")
+        self.assertFalse(recover.interpret_metadata_http(200, None)["ok"])
+        self.assertFalse(recover.interpret_metadata_http(500, None)["ok"])
+        self.assertFalse(recover.interpret_metadata_http(200, {"status": "RUNNING", "targetId": recover.INSTANCE_ID})["ok"])
+        listing = recover.gcloud_argv({"kind": "list-firewalls", "target": "none"})
+        self.assertEqual(listing, ["gcloud", "compute", "firewall-rules", "list",
+                                   "--project=protocols-465723", "--format=json", "--quiet"])
+        self.assertNotIn("sourceRanges", " ".join(listing))
+        self.assertNotIn("--filter", listing)
+
+    def test_firewall_admission_and_iam_null_are_not_grants(self):
+        instance = {"networkInterfaces": [{"network": "https://www.googleapis.com/compute/v1/projects/protocols-465723/global/networks/default"}],
+                    "tags": {"items": []}}
+        allow = {"name": "allow-iap", "direction": "INGRESS", "disabled": False, "priority": 1000,
+                 "network": instance["networkInterfaces"][0]["network"], "sourceRanges": [recover.IAP_RANGE],
+                 "allowed": [{"IPProtocol": "tcp", "ports": ["22"]}]}
+        self.assertEqual(recover.firewall_problems([allow], instance), [])
+        self.assertEqual(recover.firewall_problems([{**allow, "disabled": True}], instance), ["iap-firewall"])
+        self.assertEqual(recover.firewall_problems([{**allow, "direction": "EGRESS"}], instance), ["iap-firewall"])
+        self.assertEqual(recover.firewall_problems([{**allow, "targetTags": ["not-this-vm"]}], instance), ["iap-firewall"])
+        self.assertEqual(recover.firewall_problems([{**allow, "network": "https://www.googleapis.com/compute/v1/projects/protocols-465723/global/networks/other"}], instance), ["iap-firewall"])
+        denied = {**allow, "name": "deny-ssh", "priority": 100, "allowed": [], "denied": [{"IPProtocol": "tcp", "ports": ["22"]}]}
+        self.assertEqual(recover.firewall_problems([allow, denied], instance), ["iap-firewall-denied"])
+        self.assertEqual(recover.iam_url("project"),
+                         "https://cloudresourcemanager.googleapis.com/v1/projects/protocols-465723:testIamPermissions")
+        self.assertNotIn("compute.googleapis.com", recover.iam_url("project"))
+        self.assertTrue(recover.iam_url("replacement").startswith("https://compute.googleapis.com/compute/v1/"))
+        self.assertTrue(recover.iam_url("replacement").endswith("/instances/roseos-yogi-builder-20261105-b/testIamPermissions"))
+        self.assertIsNone(recover.permissions_from_iam_body(None))
+        self.assertIsNone(recover.permissions_from_iam_body({"permissions": None}))
+        self.assertEqual(recover.permissions_from_iam_body({"permissions": []}), [])
+        self.assertIn("permission-check-failed", recover.iam_problems({"project": None, "replacement": [], "original": []}))
+        seen = {}
+
+        class Response:
+            def __init__(self, status, body):
+                self.status, self._body = status, body
+
+            def read(self, _limit):
+                return self._body
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+        def opener(request, timeout):
+            seen.setdefault("urls", []).append(request.full_url)
+            seen["calls"] = seen.get("calls", 0) + 1
+            body = b"null" if seen["calls"] == 1 else b'{"error":{"status":"INTERNAL"}}'
+            status = 200 if seen["calls"] == 1 else 500
+            return Response(status, body)
+
+        def run(_argv, **_kwargs):
+            return type("Proc", (), {"returncode": 0, "stdout": "token\n", "stderr": ""})()
+
+        transport = recover.RealTransport(run=run, opener=opener)
+        request = {"kind": "test-iam", "target": "project", "permissions": list(recover.IAM_REQUIRED["project"])}
+        with self.assertRaises(recover.TransportError):
+            transport(request)
+        with self.assertRaises(recover.TransportError):
+            transport(request)
+        self.assertEqual(seen["calls"], 2)
+        self.assertEqual(seen["urls"], [recover.iam_url("project"), recover.iam_url("project")])
+        with self.assertRaises(recover.Refused):
+            recover.plan("Mac operator", Path(self.temp.name) / "spent", now=NOW,
+                         token=tokens("e75b0fd782e43f585c621c74f95bfa90", "ab" * 16), revision="a" * 40, env=ENV)
+
+    def test_metadata_http_null_and_internal_are_one_call(self):
+        """A null body or HTTP error is not a successful setMetadata, and that call is not repeated."""
+        bodies = [b"null", b'{"error":{"code":500,"status":"INTERNAL"}}']
+        statuses = [200, 500]
+
+        class Response:
+            def __init__(self, status, body):
+                self.status, self._body = status, body
+
+            def read(self, _limit):
+                return self._body
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+        calls = {"n": 0}
+
+        def opener(_request, timeout):
+            index = calls["n"]
+            calls["n"] += 1
+            return Response(statuses[index], bodies[index])
+
+        def run(_argv, **_kwargs):
+            return type("Proc", (), {"returncode": 0, "stdout": "token\n", "stderr": ""})()
+
+        transport = recover.RealTransport(run=run, opener=opener)
+        request = {"kind": "set-metadata", "target": "replacement", "fingerprint": "fp-base",
+                   "items": dict(recover.BASE_METADATA)}
+        first = transport(request)
+        second = transport(request)
+        self.assertEqual(calls["n"], 2)
+        self.assertFalse(first["attempt"]["ok"])
+        self.assertEqual(first["attempt"]["errorCode"], "unparseable")
+        self.assertFalse(second["attempt"]["ok"])
+        self.assertEqual(second["attempt"]["errorCode"], "INTERNAL")
+        seen = []
+
+        def once(inner):
+            seen.append(inner["kind"])
+            if inner["kind"] == "set-metadata":
+                return {"attempt": recover.interpret_metadata_http(500, {"error": {"status": "INTERNAL"}})}
+            if inner["kind"] == "describe-instance":
+                return instance(recover.INSTANCE, recover.ZONE, recover.INSTANCE_ID)
+            raise AssertionError(inner["kind"])
+
+        attempt, after = recover.one_set(once, "fp-base", dict(recover.BASE_METADATA))
+        self.assertEqual(seen.count("set-metadata"), 1)
+        self.assertFalse(attempt["ok"])
+        self.assertIsNotNone(after)
+
+    def test_bundle_unittest_and_archive_reject_bytecode(self):
+        if os.environ.get("YOGI_RECOVER_BUNDLE_TEST") == "1":
+            self.skipTest("the exported bundle is already running this suite")
+        bundle = Path(self.temp.name) / "fresh-bundle"
+        recover.export_bundle(bundle)
+        env = {"PATH": ENV["PATH"], "PYTHONDONTWRITEBYTECODE": "1", "YOGI_RECOVER_BUNDLE_TEST": "1"}
+        result = subprocess.run([sys.executable, "-B", "-m", "unittest", "test_yogi_replacement_recover"],
+                                cwd=bundle, env=env, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        self.assertFalse((bundle / "__pycache__").exists())
+        recover.self_check(bundle)
+        tar_path = Path(self.temp.name) / "bundle.tar.gz"
+        second = Path(self.temp.name) / "bundle-again.tar.gz"
+        recover.pack_bundle(bundle, tar_path)
+        recover.pack_bundle(bundle, second)
+        self.assertEqual(tar_path.read_bytes(), second.read_bytes())
+        import tarfile
+        with tarfile.open(tar_path) as archive:
+            names = archive.getnames()
+        self.assertTrue(names)
+        self.assertFalse(any(name.endswith(".pyc") or "__pycache__" in name for name in names))
+        extra = bundle / "notes.txt"
+        extra.write_text("not in the manifest\n")
+        with self.assertRaises(recover.Refused):
+            recover.self_check(bundle)
+        extra.unlink()
+        cache = bundle / "__pycache__"
+        cache.mkdir()
+        (cache / "yogi_replacement_recover_guest.cpython-312.pyc").write_bytes(b"not-bytecode")
+        with self.assertRaises(recover.Refused):
+            recover.self_check(bundle)
 
     def test_historical_collision_is_refused_without_reading_the_packet(self):
         banned = next(iter(recover.historical_hashes()))

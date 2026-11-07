@@ -13,7 +13,10 @@ Exit status: 0 procedure finished or dry-run, 1 refused or halted, 2 usage.
 """
 import argparse
 import datetime
+import gzip
 import hashlib
+import io
+import ipaddress
 import json
 import os
 from pathlib import Path
@@ -22,6 +25,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import tarfile
 import urllib.error
 import urllib.request
 
@@ -72,7 +76,7 @@ DOCS = {
     "maxRunDuration": "https://docs.cloud.google.com/compute/docs/instances/limit-vm-runtime",
     "scheduling": "https://docs.cloud.google.com/compute/docs/instances/setting-instance-scheduling-options",
     "testIamPermissions": "https://docs.cloud.google.com/compute/docs/reference/rest/v1/instances/testIamPermissions",
-    "projectTestIamPermissions": "https://docs.cloud.google.com/compute/docs/reference/rest/v1/projects/testIamPermissions",
+    "resourceManagerTestIamPermissions": "https://docs.cloud.google.com/resource-manager/reference/rest/v1/projects/testIamPermissions",
 }
 PLAN_TTL = datetime.timedelta(hours=12)
 PREFLIGHT_TTL = datetime.timedelta(minutes=20)
@@ -83,6 +87,7 @@ PREFLIGHT_SCHEMA = "roseos.yogi-replacement-recover-preflight.v1"
 OUTCOME_SCHEMA = "roseos.yogi-replacement-recover-outcome.v1"
 GITHUB_CONTEXT = ("GITHUB_ACTIONS", "ACTIONS_ID_TOKEN_REQUEST_URL", "ACTIONS_ID_TOKEN_REQUEST_TOKEN",
                   "ACTIONS_RUNTIME_TOKEN", "ACTIONS_RUNTIME_URL", "ACTIONS_CACHE_URL", "GITHUB_TOKEN")
+SPENT_OPERATION_IDS = frozenset({"e75b0fd782e43f585c621c74f95bfa90"})
 OPERATOR = re.compile(r"[A-Za-z0-9 ._@-]{1,80}")
 HEX32 = re.compile(r"[0-9a-f]{32}")
 SHA256 = re.compile(r"[0-9a-f]{64}")
@@ -102,6 +107,7 @@ LIMITATIONS = (
     "unknown-host-key-names-stop-rotation",
     "unit-hardlink-or-unexpected-mode-is-not-changed",
     "metadata-write-is-single-attempt",
+    "urllib-metadata-client-is-not-a-fix-for-the-unknown-internal-error",
     "automatic-restart-can-reexecute-until-stop",
 )
 HISTORICAL = {
@@ -165,7 +171,9 @@ def manual_context(env):
     if found:
         raise Refused("recovery is manual operator only and refuses inside a GitHub Actions job")
     if env.get("GOOGLE_APPLICATION_CREDENTIALS"):
-        raise Refused("GOOGLE_APPLICATION_CREDENTIALS is set; use the active gcloud account and do not pass a key path")
+        raise Refused("GOOGLE_APPLICATION_CREDENTIALS is set in this process. For this command only, run it as "
+                      "`env -u GOOGLE_APPLICATION_CREDENTIALS` so gcloud uses the already-active account. "
+                      "Do not copy, print, or request a key file.")
     if env.get("CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT"):
         raise Refused("service-account impersonation is set; the active gcloud account must be the operator account")
 
@@ -423,34 +431,131 @@ def snapshot_problems(snap, name, number):
     return problems
 
 
-def firewall_problems(rules):
-    if not isinstance(rules, list):
+def firewall_list_argv(project):
+    """No server-side sourceRanges filter.
+
+    The operator preflight sent `direction=INGRESS AND sourceRanges:35.235.240.0/20` and Compute Engine rejected
+    it as an invalid list filter. `gcloud compute firewall-rules list` forwards `--filter` to that API
+    (https://cloud.google.com/compute/docs/reference/rest/v1/firewalls/list). This list is unfiltered. Direction,
+    disabled, network, target tags, source, protocol, port, and priority are checked on the returned rules.
+    """
+    return ["gcloud", "compute", "firewall-rules", "list", project, "--format=json", "--quiet"]
+
+
+def _network_name(value):
+    if not isinstance(value, str) or not value or ".." in value:
+        return None
+    return value.rstrip("/").rsplit("/", 1)[-1]
+
+
+def _covers_iap(ranges):
+    try:
+        needed = ipaddress.ip_network(IAP_RANGE, strict=False)
+    except ValueError:
+        return False
+    for item in ranges or []:
+        try:
+            network = ipaddress.ip_network(item, strict=False)
+        except (TypeError, ValueError):
+            continue
+        if needed.subnet_of(network):
+            return True
+    return False
+
+
+def _tcp22(entries):
+    for entry in entries or []:
+        if not isinstance(entry, dict):
+            continue
+        protocol = str(entry.get("IPProtocol") or "").lower()
+        if protocol not in ("tcp", "6", "all"):
+            continue
+        ports = entry.get("ports")
+        if ports in (None, []) or (isinstance(ports, list) and "22" in [str(port) for port in ports]):
+            return True
+    return False
+
+
+def _priority(rule):
+    value = rule.get("priority", 1000)
+    if value is True or value is False:
+        return None
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return None
+    if number < 0 or number > 65535:
+        return None
+    return number
+
+
+def firewall_problems(rules, instance):
+    """Client-side IAP SSH admission. A missing or ambiguous winning rule is not treated as allowed."""
+    if not isinstance(rules, list) or not isinstance(instance, dict):
         return ["iap-firewall"]
+    nics = [nic for nic in instance.get("networkInterfaces") or [] if isinstance(nic, dict)]
+    network = _network_name(nics[0].get("network")) if nics else None
+    tags = [item for item in ((instance.get("tags") or {}).get("items") or []) if isinstance(item, str)]
+    if not network:
+        return ["iap-firewall-network"]
+    matched = []
     for rule in rules:
         if not isinstance(rule, dict) or rule.get("disabled") is True:
             continue
-        if rule.get("direction") not in (None, "INGRESS"):
+        if rule.get("direction") != "INGRESS":
             continue
-        if IAP_RANGE not in (rule.get("sourceRanges") or []):
+        if _network_name(rule.get("network")) != network:
             continue
-        for entry in rule.get("allowed") or []:
-            if not isinstance(entry, dict) or entry.get("IPProtocol") not in ("tcp", "6"):
-                continue
-            ports = entry.get("ports")
-            if ports in (None, []) or (isinstance(ports, list) and "22" in ports):
-                return []
-    return ["iap-firewall"]
+        targets = rule.get("targetTags") or []
+        if targets and not set(targets) & set(tags):
+            continue
+        if not _covers_iap(rule.get("sourceRanges") or []):
+            continue
+        priority = _priority(rule)
+        if priority is None:
+            return ["iap-firewall-priority"]
+        if rule.get("denied") and _tcp22(rule.get("denied")):
+            matched.append((priority, "deny"))
+        elif rule.get("allowed") and _tcp22(rule.get("allowed")) and not rule.get("denied"):
+            matched.append((priority, "allow"))
+    if not matched:
+        return ["iap-firewall"]
+    best = min(item[0] for item in matched)
+    winners = [item[1] for item in matched if item[0] == best]
+    if "deny" in winners or "allow" not in winners:
+        return ["iap-firewall-denied"]
+    return []
 
 
 def iam_url(target):
-    root = "https://compute.googleapis.com/compute/v1/projects/" + PROJECT
+    """Instance checks use Compute Engine. Project checks use Resource Manager.
+
+    `POST https://compute.googleapis.com/compute/v1/projects/protocols-465723/testIamPermissions` returned null on
+    the operator preflight. That Compute project URL is not the documented project IAM test. Resource Manager is
+    `POST https://cloudresourcemanager.googleapis.com/v1/projects/{resource}:testIamPermissions`
+    (https://docs.cloud.google.com/resource-manager/reference/rest/v1/projects/testIamPermissions).
+    Instance checks stay on
+    https://docs.cloud.google.com/compute/docs/reference/rest/v1/instances/testIamPermissions.
+    """
     if target == "replacement":
-        return root + "/zones/" + ZONE + "/instances/" + INSTANCE + "/testIamPermissions"
+        return ("https://compute.googleapis.com/compute/v1/projects/" + PROJECT + "/zones/" + ZONE
+                + "/instances/" + INSTANCE + "/testIamPermissions")
     if target == "original":
-        return root + "/zones/" + ORIGINAL_ZONE + "/instances/" + ORIGINAL_INSTANCE + "/testIamPermissions"
+        return ("https://compute.googleapis.com/compute/v1/projects/" + PROJECT + "/zones/" + ORIGINAL_ZONE
+                + "/instances/" + ORIGINAL_INSTANCE + "/testIamPermissions")
     if target == "project":
-        return root + "/testIamPermissions"
+        return "https://cloudresourcemanager.googleapis.com/v1/projects/" + PROJECT + ":testIamPermissions"
     raise Refused("permission check target is outside the recovery set")
+
+
+def permissions_from_iam_body(parsed):
+    """A null body or a null permissions field is not a grant. Only an explicit list is a result."""
+    if not isinstance(parsed, dict) or "permissions" not in parsed:
+        return None
+    granted = parsed.get("permissions")
+    if not isinstance(granted, list) or any(not isinstance(item, str) for item in granted):
+        return None
+    return granted
 
 
 def iam_problems(found):
@@ -516,8 +621,7 @@ def gcloud_argv(request):
     if kind == "auth-list":
         return ["gcloud", "auth", "list", "--format=json", "--quiet"]
     if kind == "list-firewalls":
-        return ["gcloud", "compute", "firewall-rules", "list", project, "--format=json", "--quiet",
-                "--filter=direction=INGRESS AND sourceRanges:35.235.240.0/20"]
+        return firewall_list_argv(project)
     if kind == "describe-snapshot":
         name = PRESERVE_SNAPSHOT if request["target"] == "preserve" else PREKEY_SNAPSHOT
         return ["gcloud", "compute", "snapshots", "describe", name, project, "--format=json", "--quiet"]
@@ -591,14 +695,15 @@ class RealTransport:
         except Exception:
             raise TransportError("timeout") from None
         if status != 200:
-            raise TransportError("exit")
+            raise TransportError("http")
         try:
             parsed = json.loads(raw.decode())
         except (ValueError, UnicodeError):
             raise TransportError("unparseable") from None
-        if not isinstance(parsed, dict) or not isinstance(parsed.get("permissions"), list):
-            raise TransportError("unparseable")
-        return {"permissions": parsed["permissions"]}
+        granted = permissions_from_iam_body(parsed)
+        if granted is None:
+            raise TransportError("null-permissions")
+        return {"permissions": granted}
 
     def __call__(self, request):
         guard_request(request)
@@ -707,7 +812,7 @@ def apply_problems(snapshot):
         (snapshot.get("snapshots") or {}).get("preserve"), PRESERVE_SNAPSHOT, PRESERVE_SNAPSHOT_ID)]
     problems += [f"prekey-{item}" for item in snapshot_problems(
         (snapshot.get("snapshots") or {}).get("prekey"), PREKEY_SNAPSHOT, PREKEY_SNAPSHOT_ID)]
-    problems += firewall_problems(snapshot.get("firewalls"))
+    problems += firewall_problems(snapshot.get("firewalls"), snapshot.get("replacement"))
     problems += iam_problems(snapshot.get("iam"))
     if snapshot.get("errors"):
         problems.append("read-failed")
@@ -920,6 +1025,8 @@ def plan(operator, out, now=None, token=None, revision=None, repo=ROOT, template
     operation_id, nonce = token(), token()
     if not HEX32.fullmatch(operation_id or "") or not HEX32.fullmatch(nonce or "") or operation_id == nonce:
         raise Refused("binding generator failed")
+    if operation_id in SPENT_OPERATION_IDS or nonce in SPENT_OPERATION_IDS:
+        raise Refused("this operation id was already used and its preflight expired; plan a new binding")
     if template is None:
         if mode == "inspect":
             template = guest.inspect_template()
@@ -1012,6 +1119,8 @@ def load_operation(path, now=None, allow_expired=False):
     if sha256_bytes(script.encode()) != document.get("startupScriptSha256") or binding["payloadSha256"] not in script:
         raise Refused("startup script does not match the binding")
     reject_historical(binding["operationId"], binding["nonce"], binding["payloadSha256"])
+    if binding["operationId"] in SPENT_OPERATION_IDS or binding["nonce"] in SPENT_OPERATION_IDS:
+        raise Refused("this operation id was already used and its preflight expired; plan a new binding")
     if not allow_expired and (now or now_utc()) >= parse_stamp(document["expiresAt"]):
         raise Refused("operation plan has expired")
     return {"path": path, "plan": document, "binding": binding, "guest": rendered, "script": script}
@@ -1318,45 +1427,86 @@ def cleanup(path, confirm, execute=False, transport=None, now=None, env=None):
     return document
 
 
-def self_check():
-    """Offline check that the inspect payload cannot repair and, in a bundle, that the manifest matches."""
+def bundle_unexpected(directory):
+    directory = Path(directory)
+    sums = directory / "SHA256SUMS"
+    if not sums.is_file():
+        raise Refused("bundle manifest is missing")
+    listed = set()
+    for line in sums.read_text().splitlines():
+        digest, name = line.split("  ", 1)
+        if "/" in name or name.startswith(".") or name in ("SHA256SUMS",) or not SHA256.fullmatch(digest):
+            raise Refused("bundle manifest entry is not a single file name")
+        if sha256_bytes((directory / name).read_bytes()) != digest:
+            raise Refused("bundle manifest does not match " + name)
+        listed.add(name)
+    unexpected = []
+    for path in sorted(directory.rglob("*")):
+        rel = path.relative_to(directory).as_posix()
+        if path.is_dir():
+            if path.name == "__pycache__" or any(part == "__pycache__" for part in path.parts):
+                unexpected.append(rel)
+            continue
+        if rel == "SHA256SUMS":
+            continue
+        if rel.endswith((".pyc", ".pyo")) or "__pycache__" in rel.split("/") or rel not in listed:
+            unexpected.append(rel)
+    if unexpected:
+        raise Refused("bundle contains files that are not in SHA256SUMS: " + ", ".join(unexpected))
+    return sorted(listed)
+
+
+def self_check(directory=None):
+    """Offline check that the inspect payload cannot repair and that a bundle has only manifested files."""
     guest.inspect_template()
     if any(token in guest.INSPECT_TEMPLATE for token in ("ssh-keygen", "userdel", "fchmod", "os.chmod", "BEGIN OPENSSH")):
         raise Refused("inspect payload is not read-only")
-    checked = []
-    sums = HERE / "SHA256SUMS"
-    if sums.is_file():
-        for line in sums.read_text().splitlines():
-            digest, name = line.split("  ", 1)
-            if sha256_bytes((HERE / name).read_bytes()) != digest:
-                raise Refused("bundle manifest does not match " + name)
-            checked.append(name)
+    directory = Path(directory) if directory is not None else HERE
+    checked = bundle_unexpected(directory) if (directory / "SHA256SUMS").is_file() else []
     return {"inspectRepairs": False, "secretsInInspect": False, "manifestFiles": checked}
+
+
+def bundle_sources():
+    """Repo layout and the flattened operator bundle both resolve. A bundle has no checkout."""
+    test = HERE / "test_yogi_replacement_recover.py"
+    if not test.is_file():
+        test = HERE / "tests" / "test_yogi_replacement_recover.py"
+    docs = HERE / "YOGI-REPLACEMENT-RECOVER.md"
+    if not docs.is_file():
+        docs = HERE.parent / "docs" / "YOGI-REPLACEMENT-RECOVER.md"
+    return {
+        "yogi_replacement_recover.py": HERE / "yogi_replacement_recover.py",
+        "yogi_replacement_recover_guest.py": HERE / "yogi_replacement_recover_guest.py",
+        "test_yogi_replacement_recover.py": test,
+        "YOGI-REPLACEMENT-RECOVER.md": docs,
+    }
 
 
 def export_bundle(out):
     """Copy the runnable operator files, the runbook, the offline tests, and a sha256 manifest."""
     out = Path(out)
     out.mkdir(mode=0o700)
-    mapping = {
-        "yogi_replacement_recover.py": HERE / "yogi_replacement_recover.py",
-        "yogi_replacement_recover_guest.py": HERE / "yogi_replacement_recover_guest.py",
-        "test_yogi_replacement_recover.py": HERE / "tests" / "test_yogi_replacement_recover.py",
-        "YOGI-REPLACEMENT-RECOVER.md": HERE.parent / "docs" / "YOGI-REPLACEMENT-RECOVER.md",
-    }
+    mapping = bundle_sources()
     readme = (
         "Offline operator bundle. No repository checkout is required.\n"
         "\n"
-        "Verify this directory:\n"
-        "  python3 yogi_replacement_recover.py self-check\n"
+        "Verify this directory without writing bytecode:\n"
+        "  python3 -B yogi_replacement_recover.py self-check\n"
+        "  python3 -B -m unittest test_yogi_replacement_recover\n"
         "\n"
-        "Live read-only preflight (describes and testIamPermissions only; does not start or change metadata):\n"
-        "  python3 yogi_replacement_recover.py plan --mode repair --operator NAME --out DIR\n"
-        "  python3 yogi_replacement_recover.py preflight --op DIR --confirm-instance 2720796557371812468 --execute\n"
+        "Live read-only preflight. This process must not see a key-file variable and must not copy one.\n"
+        "The gcloud account already active on this computer is grok-bots@protocols-465723.iam.gserviceaccount.com.\n"
+        "  env -u GOOGLE_APPLICATION_CREDENTIALS -u CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT \\\n"
+        "    python3 -B yogi_replacement_recover.py plan --mode repair --operator NAME --out DIR\n"
+        "  env -u GOOGLE_APPLICATION_CREDENTIALS -u CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT \\\n"
+        "    python3 -B yogi_replacement_recover.py preflight --op DIR \\\n"
+        "    --confirm-instance 2720796557371812468 --execute\n"
         "\n"
-        "Without --execute, preflight only rechecks the local plan. Do not run apply from this report.\n"
-        "plan --mode inspect builds a startup script that only inventories. It does not chmod, rotate, or delete keys.\n"
-        "SHA256SUMS lists every file here except itself.\n"
+        "preflight --execute only describes, lists firewalls with no server-side sourceRanges filter, and calls\n"
+        "instances.testIamPermissions plus Resource Manager projects:testIamPermissions. It does not start the VM\n"
+        "and it does not call setMetadata. Without --execute, preflight only rechecks the local plan.\n"
+        "Do not run apply from this report. A previous operation id e75b0fd782e43f585c621c74f95bfa90 is spent;\n"
+        "plan a new binding. plan --mode inspect only inventories and does not chmod, rotate, or delete keys.\n"
     )
     (out / "README.md").write_text(readme)
     for name, source in mapping.items():
@@ -1365,7 +1515,31 @@ def export_bundle(out):
              "yogi_replacement_recover.py", "yogi_replacement_recover_guest.py")
     sums = "".join(f"{sha256_bytes((out / name).read_bytes())}  {name}\n" for name in names)
     (out / "SHA256SUMS").write_text(sums)
+    bundle_unexpected(out)
     return {name: sha256_bytes((out / name).read_bytes()) for name in names + ("SHA256SUMS",)}
+
+
+def pack_bundle(directory, tar_path):
+    """Deterministic tar.gz of a clean bundle. Bytecode and unmanifested files are refused."""
+    directory = Path(directory)
+    bundle_unexpected(directory)
+    tar_path = Path(tar_path)
+    members = ["SHA256SUMS"]
+    members += [line.split("  ", 1)[1] for line in (directory / "SHA256SUMS").read_text().splitlines()]
+    raw = io.BytesIO()
+    with tarfile.open(fileobj=raw, mode="w", format=tarfile.GNU_FORMAT) as archive:
+        for name in members:
+            path = directory / name
+            info = archive.gettarinfo(path, arcname="yogi-replacement-recover-bundle/" + name)
+            info.mtime = 0
+            info.uid = info.gid = 0
+            info.uname = info.gname = ""
+            info.mode = 0o644
+            with path.open("rb") as handle:
+                archive.addfile(info, handle)
+    with tar_path.open("wb") as handle, gzip.GzipFile(filename="", mode="wb", fileobj=handle, mtime=0) as compressed:
+        compressed.write(raw.getvalue())
+    return tar_path
 
 
 def main(argv, transport=None, now=None, clock=None, sleep=None, env=None, token=None, revision=None):

@@ -38,9 +38,25 @@ and writes `plan.json`, `binding.json`, `guest.py`, `startup-script.sh`, and `SH
 are copied into the plan as reference identifiers. They are not the payload hash.
 
 The live read-only check is `preflight --execute`. It describes the replacement, the original VM and disk, and both
-snapshots, lists the IAP firewall, reads the active gcloud account, and calls `testIamPermissions` on the replacement,
-the original, and the project. It does not start the VM and it does not call `setMetadata`. Without `--execute`,
-preflight only rechecks the local plan file.
+snapshots, lists firewall rules with no server-side `sourceRanges` filter, reads the active gcloud account, and calls
+`testIamPermissions` on the replacement instance, the original instance, and the project. It does not start the VM and
+it does not call `setMetadata`. Without `--execute`, preflight only rechecks the local plan file.
+
+Compute Engine rejected `direction=INGRESS AND sourceRanges:35.235.240.0/20` as an invalid list filter. The list is
+therefore `gcloud compute firewall-rules list --project=protocols-465723 --format=json --quiet`
+([firewalls.list](https://cloud.google.com/compute/docs/reference/rest/v1/firewalls/list)). Direction, disabled,
+network, target tags, source, protocol, port, and priority are checked on the returned rules. A missing direction is
+not treated as ingress. An empty `targetTags` list applies to every instance on that network; any other tag list must
+intersect the instance tags. The winning priority (lower number) must be an allow of tcp/22, or all protocols, whose
+source range contains `35.235.240.0/20`. A deny at that priority blocks preflight.
+
+Instance permission checks stay on Compute Engine
+`POST https://compute.googleapis.com/compute/v1/projects/protocols-465723/zones/<zone>/instances/<name>/testIamPermissions`
+([instances.testIamPermissions](https://docs.cloud.google.com/compute/docs/reference/rest/v1/instances/testIamPermissions)).
+The project check is Resource Manager, not Compute:
+`POST https://cloudresourcemanager.googleapis.com/v1/projects/protocols-465723:testIamPermissions`
+([projects.testIamPermissions](https://docs.cloud.google.com/resource-manager/reference/rest/v1/projects/testIamPermissions)).
+A null body, a null `permissions` field, or any HTTP status other than 200 is a failed check. It is not a grant.
 
 Contract the live read must show before any write:
 
@@ -111,49 +127,48 @@ and its keys are not read. Distinct means the new public fingerprints differ fro
 
 ## Operator commands
 
-On the operator computer, outside GitHub Actions, in a clean checkout of the reviewed commit. gcloud is already
-authenticated as the account above. Do not pass a key file.
+On the operator computer, outside GitHub Actions. gcloud is already authenticated as the account above. Do not pass,
+copy, or print a key file. A shared environment may set `GOOGLE_APPLICATION_CREDENTIALS`. Unset that variable, and
+the impersonation variable, for this process only:
 
 ```sh
-python3 scripts/yogi_replacement_recover.py plan \
+env -u GOOGLE_APPLICATION_CREDENTIALS -u CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT \
+  python3 -B yogi_replacement_recover.py plan \
   --mode repair \
   --operator "NAME" \
   --out ~/yogi-ops/recover-LABEL
 
 # Local file check only. This does not contact GCP.
-python3 scripts/yogi_replacement_recover.py preflight \
+env -u GOOGLE_APPLICATION_CREDENTIALS -u CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT \
+  python3 -B yogi_replacement_recover.py preflight \
   --op ~/yogi-ops/recover-LABEL \
   --confirm-instance 2720796557371812468
 
-# Live read-only preflight: describe, firewall list, account, and testIamPermissions.
+# Live read-only preflight: describe, unfiltered firewall list, account, and testIamPermissions.
 # It does not start the VM and it does not call setMetadata.
-python3 scripts/yogi_replacement_recover.py preflight \
+env -u GOOGLE_APPLICATION_CREDENTIALS -u CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT \
+  python3 -B yogi_replacement_recover.py preflight \
   --op ~/yogi-ops/recover-LABEL \
   --confirm-instance 2720796557371812468 \
   --execute
 ```
 
-`plan --mode inspect` builds the inventory script for a unit already at mode `0644`. This review does not ask the
-operator to run `apply`. `cleanup --execute` remains the stop path if a previous apply was interrupted.
-
-```sh
-python3 scripts/yogi_replacement_recover.py cleanup \
-  --op ~/yogi-ops/recover-LABEL \
-  --confirm-instance 2720796557371812468 \
-  --execute
-```
+`python3 -B` does not write `__pycache__`. Operation id `e75b0fd782e43f585c621c74f95bfa90` already had a preflight
+and that preflight expired. `plan` and `preflight` refuse that id. Mint a new plan. This review does not ask the
+operator to run `apply`. `plan --mode inspect` builds the inventory script for a unit already at mode `0644`.
+`cleanup --execute` remains the stop path if a previous apply was interrupted.
 
 Keep the operation directory. Do not reuse it. A stale fingerprint, an expired preflight (20 minutes), or a second
 apply needs a new `plan`. If apply is interrupted, run `cleanup --execute` even when `started.json` was not written.
 
-To hand the operator a directory that runs without cloning this repository:
+The operator bundle is a directory with the two programs, this runbook, the offline tests, `README.md`, and
+`SHA256SUMS`. Every file except `SHA256SUMS` is named in that manifest. `self-check` refuses bytecode and any other
+extra file. From the unpacked directory, with no repository checkout and no `PYTHONPATH`:
 
 ```sh
-python3 scripts/yogi_replacement_recover.py export-bundle --out /path/to/yogi-replacement-recover-bundle
+python3 -B yogi_replacement_recover.py self-check
+python3 -B -m unittest test_yogi_replacement_recover
 ```
-
-`SHA256SUMS` in that directory covers the two programs, this runbook, and `README.md`. Run `plan` from inside the
-directory with `python3 yogi_replacement_recover.py`.
 
 SSH, `ssh-keyscan`, and `gcloud compute ssh` are not used. Trust-on-first-use is not used. The direct route's host-key
 pin stays unset.
@@ -204,15 +219,22 @@ Base path named in the relay: `/Users/nathanspaun/Documents/Codex/2026-10-27/tas
 disk before the rotation. It is not a comparison with the original VM. `distinctFromOriginalVerified` is false.
 No original fingerprint is claimed.
 
-The active gcloud account must be `grok-bots@protocols-465723.iam.gserviceaccount.com`, with no
-`GOOGLE_APPLICATION_CREDENTIALS` and no impersonation variable set. Expected permissions are get, setMetadata, start,
-stop, and getSerialPortOutput on the replacement, plus get on its disk, the original VM and disk, both snapshots, and
-firewall list. This tool does not call IAM, project metadata, snapshot restore, or delete.
+The active gcloud account must be `grok-bots@protocols-465723.iam.gserviceaccount.com`. If
+`GOOGLE_APPLICATION_CREDENTIALS` or `CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT` is set in the process, the tool
+refuses. Unset them for that process with `env -u`. Do not copy a key into the command. Expected permissions are get,
+setMetadata, start, stop, and getSerialPortOutput on the replacement, plus disk get, snapshot get, and firewall list
+on the project, and get on the original instance. This tool does not change IAM, project metadata, snapshots, or
+delete anything. The project permission call is the Resource Manager URL above. An HTTP error or a null permissions
+list does not count as allowed.
 
 ## Residual limits
 
 - The earlier `setMetadata` `INTERNAL` / gRPC code 13 failure has no known cause. One successful call the same day does
-  not clear it. This tool sends one write and then reads the instance back. It does not retry that write.
+  not clear it. This tool sends one write and then reads the instance back. It does not retry that write. A null body,
+  an HTTP error, `INTERNAL`, a timeout, or an unparseable operation is not success. The metadata call still uses
+  `urllib`. That is the same client family as the failed requests. Using it again is not a fix for the unknown cause.
+- The operator reported that the blocked preflight left the replacement `TERMINATED`, id `2720796557371812468`,
+  metadata fingerprint `pSAPI4eI6q4=`, and that no cloud resource changed. This repository did not re-read that state.
 - There is no trusted measurement of the guest. A serial line is guest-written. The cursor, nonce, boot id, and
   instance id bind the line to this operation's output window. They do not prove the guest is honest. Do not commit
   the receipt as `builder.direct.hostKey`.
