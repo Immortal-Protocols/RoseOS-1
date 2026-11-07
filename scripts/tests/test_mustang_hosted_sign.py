@@ -67,6 +67,7 @@ class HostedSignGateTest(unittest.TestCase):
         config = hosted.load_capacity()
         config['admission'] = True
         config['activeRunner'] = dict(config['activeRunner'], ssdBytes=10 ** 18)
+        config['outputBounds'] = {name: 4096 for name in hosted.OUTPUT_BOUNDS}
         return config
 
     def bundle(self, **changes):
@@ -103,7 +104,7 @@ class HostedSignGateTest(unittest.TestCase):
         def call(secret_access):
             hosted.evaluate(bundle, ROOT, free=10 ** 18, secret_access=secret_access, env=ENV)
 
-        self.assert_secret_closed(call, 'hosted signer capacity exceeded')
+        self.assert_secret_closed(call, 'output bound is missing')
         with self.assertRaises(hosted.CapacityExceeded) as caught:
             hosted.capacity(bundle, free=10 ** 18, config=hosted.load_capacity())
         self.assertIn(f'required {required} bytes', str(caught.exception))
@@ -343,9 +344,9 @@ class HostedSignGateTest(unittest.TestCase):
                                      'preflight', '--bundle', str(path)],
                                     env=env, capture_output=True, text=True, timeout=20)
             self.assertEqual(result.returncode, 4, result.stderr)
-            self.assertIn('hosted signer capacity exceeded', result.stderr)
+            self.assertIn('output bound is missing', result.stderr)
             self.assertIn('hosted signer admission is closed', result.stderr)
-            self.assertIn(str(required), result.stderr)
+            self.assertNotIn(str(required), result.stderr)
             self.assertEqual(output.read_text(), '')
             self.assertNotIn('gcloud', result.stderr)
 
@@ -429,6 +430,38 @@ class HostedSignGateTest(unittest.TestCase):
         self.assertIsNone(runtime['signingRouteEvidence'])
         self.assertIsNone(runtime['sourceEvidence'])
         self.assertFalse(runtime['publication']['enabled'])
+
+    def test_each_peak_term_and_a_missing_bound_deny_before_secrets(self):
+        bundle, files, pin = self.tiny_bundle()
+        root = self.checkout(files['generateRelease'].read_bytes())
+        config = self.admitted()
+        bounds = config['outputBounds']
+        otatools_uncompressed, _rows = hosted.zip_members(files['otatools'])
+        jdk_uncompressed, _jdk_rows = hosted.zip_members(files['jdk'])
+        terms = hosted.current_peak_terms(
+            files['unsigned'].stat().st_size, files['otatools'].stat().st_size, otatools_uncompressed,
+            files['jdk'].stat().st_size, jdk_uncompressed, files['generateRelease'].stat().st_size, bounds)
+        total = sum(terms.values())
+        self.assertGreater(total, 0)
+        for name, value in terms.items():
+            self.assertGreater(value, 0, name)
+            without = total - value
+            def tight(secret_access, free=without):
+                hosted.evaluate(bundle, root, free, files=files, secret_access=secret_access, pin=pin,
+                                env=ENV, capacity_config=config)
+            self.assert_secret_closed(tight, f'current peak {total} bytes')
+        for name in hosted.OUTPUT_BOUNDS:
+            broken = self.admitted()
+            broken['outputBounds'][name] = None
+            def missing(secret_access, broken=broken, missing_name=name):
+                try:
+                    hosted.evaluate(bundle, root, 10 ** 18, files=files, secret_access=secret_access, pin=pin,
+                                    env=ENV, capacity_config=broken)
+                except ValueError as error:
+                    self.assertNotIn('22868848092', str(error))
+                    self.assertIn('output bound is missing: ' + missing_name, str(error))
+                    raise
+            self.assert_secret_closed(missing, 'output bound is missing: ' + name)
 
     def test_preflight_then_sign_resumes_extract_and_publisher_sees_the_receipt(self):
         bundle, files, pin = self.tiny_bundle()
@@ -520,9 +553,9 @@ class HostedSignGateTest(unittest.TestCase):
                         pin=pin, env=ENV, capacity_config=config)
         self.assertEqual(called, ['first', 'second'])
         tool = Path(files['otatools']).parent / 'otatools-extracted' / 'bin' / 'delta_generator'
-        os.chmod(tool, 0o644)
-        with self.assertRaisesRegex(ValueError, 'otatools extraction destination exists'):
-            hosted.safe_extract(files['otatools'], tool.parent.parent, 10 ** 18)
+        tool.write_bytes(b'TAMPERED')
+        os.chmod(tool, 0o755)
+        self.assertEqual(stat.S_IMODE(tool.stat().st_mode), 0o755)
         duplicate = Path(self.directory.name) / 'duplicate.zip'
         with zipfile.ZipFile(duplicate, 'w') as archive:
             archive.writestr('bin/delta_generator', b'one')
@@ -531,7 +564,7 @@ class HostedSignGateTest(unittest.TestCase):
             hosted.reject_unsafe_zip(duplicate, 10 ** 9)
         with self.assertRaisesRegex(ValueError, 'zip expansion exceeds capacity'):
             hosted.reject_unsafe_zip(files['otatools'], 1)
-        self.assert_secret_closed(attempt, 'otatools extraction destination exists')
+        self.assert_secret_closed(attempt, 'resumed file does not match the trusted archive')
 
     def tiny_bundle(self, zip_member='payload.txt', symlink=False):
         self.directory = tempfile.TemporaryDirectory()

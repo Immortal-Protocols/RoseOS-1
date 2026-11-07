@@ -8,6 +8,14 @@
     "ssdLabel": "14 GB",
     "basis": "Standard GitHub-hosted ubuntu-24.04 whole-disk label, read as 14 GiB. Not a measured free-space figure."
   },
+  "outputBounds": {
+    "signedTargetFilesBytes": null,
+    "otaBytes": null,
+    "signedTargetFilesCopyBytes": null,
+    "otaCopyBytes": null,
+    "scratchBytes": null,
+    "reserveBytes": null
+  },
   "historicalLowerBoundBytes": 22868848092,
   "historicalSource": "os/mustang-delivery/41738359336/sign.json",
   "proposedRunner": {

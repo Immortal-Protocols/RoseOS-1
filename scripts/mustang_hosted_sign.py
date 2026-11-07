@@ -293,13 +293,13 @@ def zip_members(path):
                 raise ValueError('duplicate zip member')
             seen.add(key)
             if name.endswith('/'):
-                rows.append((key, None, 0, True))
+                rows.append((key, None, 0, True, None))
                 continue
             if stat.S_ISLNK(info.external_attr >> 16):
                 raise ValueError('unsafe zip symlink')
             mode = approved_mode(info)
             total += info.file_size
-            rows.append((key, mode, info.file_size, False))
+            rows.append((key, mode, info.file_size, False, info))
     return total, rows
 
 
@@ -310,12 +310,52 @@ def reject_unsafe_zip(path, max_uncompressed):
     return total
 
 
-def current_peak_bytes(unsigned, otatools_zip, otatools_uncompressed, jdk_zip, jdk_uncompressed, script):
-    """Bytes this bundle will occupy. The historical 22.87 GB figure is not a substitute."""
-    values = (unsigned, otatools_zip, otatools_uncompressed, jdk_zip, jdk_uncompressed, script)
-    if any(not isinstance(value, int) or isinstance(value, bool) or value < 0 for value in values):
+OUTPUT_BOUNDS = (
+    'signedTargetFilesBytes', 'otaBytes', 'signedTargetFilesCopyBytes', 'otaCopyBytes',
+    'scratchBytes', 'reserveBytes')
+
+
+def bound_values(config):
+    bounds = config.get('outputBounds')
+    if not isinstance(bounds, dict):
+        return {}, list(OUTPUT_BOUNDS)
+    missing, values = [], {}
+    for name in OUTPUT_BOUNDS:
+        value = bounds.get(name)
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            missing.append(name)
+        else:
+            values[name] = value
+    return values, missing
+
+
+def current_peak_terms(unsigned, otatools_zip, otatools_uncompressed, jdk_zip, jdk_uncompressed, script, bounds):
+    """Input copies, expansion, and explicit output/scratch/reserve bounds.
+
+    A missing bound is not filled from the historical estimate.
+    """
+    terms = {
+        'unsignedCopies': 2 * unsigned,
+        'otatoolsCopies': 2 * otatools_zip,
+        'otatoolsExpansion': otatools_uncompressed,
+        'jdkArchive': jdk_zip,
+        'jdkExpansion': jdk_uncompressed,
+        'script': script,
+        'signedTargetFiles': bounds['signedTargetFilesBytes'],
+        'ota': bounds['otaBytes'],
+        'signedTargetFilesCopy': bounds['signedTargetFilesCopyBytes'],
+        'otaCopy': bounds['otaCopyBytes'],
+        'scratch': bounds['scratchBytes'],
+        'reserve': bounds['reserveBytes'],
+    }
+    if any(not isinstance(value, int) or isinstance(value, bool) or value < 0 for value in terms.values()):
         raise ValueError('size is not a byte count')
-    return 2 * unsigned + 2 * otatools_zip + otatools_uncompressed + jdk_zip + jdk_uncompressed + script
+    return terms
+
+
+def current_peak_bytes(unsigned, otatools_zip, otatools_uncompressed, jdk_zip, jdk_uncompressed, script, bounds):
+    return sum(current_peak_terms(
+        unsigned, otatools_zip, otatools_uncompressed, jdk_zip, jdk_uncompressed, script, bounds).values())
 
 
 def _member_path(root, key):
@@ -325,20 +365,50 @@ def _member_path(root, key):
     return target
 
 
-def resume_extract(dest, digest, rows):
-    marker_path = Path(dest) / EXTRACT_MARKER
-    if marker_path.is_symlink() or not marker_path.is_file():
-        raise ValueError('otatools extraction destination exists')
-    marker = json.loads(marker_path.read_text())
-    if marker.get('sha256') != digest:
-        raise ValueError('otatools extraction destination exists')
+def resume_extract(dest, archive_path, rows):
+    """Every resumed file must match the trusted archive bytes, not only its mode."""
     root = Path(dest).resolve()
-    for key, mode, _size, is_dir in rows:
-        if is_dir:
+    digest = sha256_file(archive_path)
+    marker_path = Path(dest) / EXTRACT_MARKER
+    if marker_path.is_symlink() or not marker_path.is_file() or marker_path.resolve().parent != root:
+        raise ValueError('extract marker does not match the trusted archive')
+    try:
+        marker = json.loads(marker_path.read_text())
+    except (json.JSONDecodeError, OSError):
+        raise ValueError('extract marker does not match the trusted archive')
+    if marker.get('sha256') != digest or not isinstance(marker.get('members'), list):
+        raise ValueError('extract marker does not match the trusted archive')
+    expected = {}
+    with zipfile.ZipFile(archive_path) as archive:
+        for key, mode, size, is_dir, info in rows:
+            if is_dir:
+                continue
+            if key in expected:
+                raise ValueError('duplicate zip member')
+            data = archive.read(info)
+            if len(data) != size:
+                raise ValueError('resumed file does not match the trusted archive')
+            expected[key] = (hashlib.sha256(data).hexdigest(), len(data), mode)
+    seen = []
+    for file in root.rglob('*'):
+        if file.is_symlink():
+            raise ValueError('resumed file does not match the trusted archive')
+        if file.is_dir():
             continue
-        path = _member_path(root, key)
-        if path.is_symlink() or not path.is_file() or stat.S_IMODE(path.stat().st_mode) != mode:
-            raise ValueError('otatools extraction destination exists')
+        rel = file.relative_to(root).as_posix()
+        if rel == EXTRACT_MARKER:
+            continue
+        if rel in seen:
+            raise ValueError('duplicate zip member')
+        seen.append(rel)
+        if rel not in expected:
+            raise ValueError('resumed file does not match the trusted archive')
+        want_hash, want_size, want_mode = expected[rel]
+        if file.stat().st_size != want_size or sha256_file(file) != want_hash \
+                or stat.S_IMODE(file.stat().st_mode) != want_mode:
+            raise ValueError('resumed file does not match the trusted archive')
+    if set(seen) != set(expected):
+        raise ValueError('resumed file does not match the trusted archive')
     return Path(dest)
 
 
@@ -351,7 +421,7 @@ def safe_extract(archive_path, dest, max_uncompressed):
     if dest.is_symlink():
         raise ValueError('otatools extraction destination exists')
     if dest.exists():
-        return resume_extract(dest, digest, rows)
+        return resume_extract(dest, archive_path, rows)
     dest.mkdir(mode=0o700)
     root = dest.resolve()
     with zipfile.ZipFile(archive_path) as archive:
@@ -369,7 +439,7 @@ def safe_extract(archive_path, dest, max_uncompressed):
             with archive.open(info) as source, open(target, 'wb') as copied:
                 shutil.copyfileobj(source, copied)
             os.chmod(target, approved_mode(info))
-    recorded = [{'name': key, 'mode': mode} for key, mode, _size, is_dir in rows if not is_dir]
+    recorded = [{'name': key, 'mode': mode} for key, mode, _size, is_dir, _info in rows if not is_dir]
     (dest / EXTRACT_MARKER).write_text(json.dumps({'sha256': digest, 'members': recorded}, sort_keys=True) + '\n')
     os.chmod(dest / EXTRACT_MARKER, 0o644)
     return dest
@@ -423,10 +493,10 @@ def evaluate(bundle, root, free, files=None, secret_access=None, pin=None, capac
     require_entry(root)
     stock = config['activeRunner']['ssdBytes']
     historical = config.get('historicalLowerBoundBytes')
+    _bound_values, missing_bounds = bound_values(config)
     early = []
-    if isinstance(historical, int) and stock < historical:
-        early.append(
-            f'hosted signer capacity exceeded: historical estimate {historical} bytes, stock SSD {stock} bytes')
+    if missing_bounds:
+        early.append('output bound is missing: ' + ','.join(missing_bounds))
     if config.get('admission') is not True:
         early.append('hosted signer admission is closed')
     missing = [name for name in ('jdk', 'generateRelease') if bundle[name].get('sha256') is None or bundle[name].get('sizeBytes') is None]
@@ -440,14 +510,21 @@ def evaluate(bundle, root, free, files=None, secret_access=None, pin=None, capac
             raise CapacityExceeded('; '.join(early)) if early[0].startswith('hosted signer capacity') else ValueError('; '.join(early))
         raise ValueError('signing bundle files are absent')
     verify_files(bundle, files)
-    for label, path in (('otatools', files['otatools']), ('jdk', files['jdk']), ('unsigned', files['unsigned'])):
+    for path in (files['otatools'], files['jdk'], files['unsigned']):
         reject_unsafe_zip(path, free)
-    otatools_uncompressed = reject_unsafe_zip(files['otatools'], free)
-    jdk_uncompressed = reject_unsafe_zip(files['jdk'], free)
+    if missing_bounds:
+        text = 'output bound is missing: ' + ','.join(missing_bounds)
+        if config.get('admission') is not True:
+            text += '; hosted signer admission is closed'
+        raise ValueError(text)
+    otatools_uncompressed, _rows = zip_members(files['otatools'])
+    jdk_uncompressed, _jdk_rows = zip_members(files['jdk'])
     current = current_peak_bytes(
         files['unsigned'].stat().st_size, files['otatools'].stat().st_size, otatools_uncompressed,
-        files['jdk'].stat().st_size, jdk_uncompressed, files['generateRelease'].stat().st_size)
-    reasons = list(early)
+        files['jdk'].stat().st_size, jdk_uncompressed, files['generateRelease'].stat().st_size, _bound_values)
+    reasons = []
+    if config.get('admission') is not True:
+        reasons.append('hosted signer admission is closed')
     if current > stock or current > free:
         reasons.insert(0, f'hosted signer capacity exceeded: current peak {current} bytes, stock SSD {stock} bytes, free {free} bytes')
     if reasons:
@@ -458,13 +535,9 @@ def evaluate(bundle, root, free, files=None, secret_access=None, pin=None, capac
     jdk_home = safe_extract(files['jdk'], parent / 'jdk-extracted', free)
     require_java_home(jdk_home)
     require_otatools_executable(extracted, trusted['otatoolsExecutable'])
-    expanded = tree_bytes(extracted) + tree_bytes(jdk_home)
-    if current + expanded > stock or current + expanded > free:
-        raise CapacityExceeded(
-            f'hosted signer capacity exceeded: current peak {current + expanded} bytes, stock SSD {stock} bytes, free {free} bytes')
     if secret_access is not None:
         secret_access()
-    return {'admit': True, 'requiredBytes': current + expanded, 'currentPeakBytes': current,
+    return {'admit': True, 'requiredBytes': current, 'currentPeakBytes': current,
             'historicalEstimateBytes': historical, 'extracted': extracted, 'javaHome': jdk_home}
 
 
@@ -709,7 +782,7 @@ def main(argv=None):
                 message = str(error) if isinstance(error, ValueError) else type(error).__name__
                 admit_output('false')
                 print('Hosted Mustang signer stopped: ' + message, file=sys.stderr)
-                closed = ('admission is closed', 'capacity exceeded', 'unmeasured signer inputs',
+                closed = ('admission is closed', 'capacity exceeded', 'output bound is missing', 'unmeasured signer inputs',
                           'sign script pin is unbound', 'jdk provenance is unbound',
                           'otatools provenance is unbound', 'signing bundle files are absent')
                 return 0 if any(part in message for part in closed) else 4
