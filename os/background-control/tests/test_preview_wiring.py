@@ -43,7 +43,7 @@ class PreviewWiringTest(unittest.TestCase):
         self.assertIn('clearNodes();snapshotId=UUID.randomUUID().toString();snapshotTime=SystemClock.elapsedRealtime();', self.capture)
         self.assertTrue(writes(self.capture, 'width') and writes(self.capture, 'height'))
         self.assertIn('static void clearNodes(){', CONTROLLER)
-        self.assertIn('snapshotId=null;}', method(CONTROLLER, 'static void clearNodes()'), 'clearing nodes drops the snapshot id')
+        self.assertIn('snapshotId=null;visualSnapshotId=null;}', method(CONTROLLER, 'static void clearNodes()'), 'clearing an observation drops both tree and vision snapshot ids')
         self.assertIn('fresh(p);', method(CONTROLLER, 'static synchronized JSONObject command(Context c,JSONObject p)'),
                       'every action needs the latest snapshot id, so a polled screenshot breaks it')
 

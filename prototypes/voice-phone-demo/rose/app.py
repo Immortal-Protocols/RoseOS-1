@@ -807,6 +807,8 @@ class Server:
             self.transcripts = Transcripts(getattr(args, 'transcript_dir', None))
         # --phone real: the user's Android phone through Rose Agent (rose/realphone.py), not the fake one.
         self.phone = RealPhone(bus=self.bus) if getattr(args, "phone", "fake") == "real" else Phone(bus=self.bus)
+        if getattr(args, "vision_control", False):
+            self.phone.vision_control = True  # parse_args allows it only with --brain codex --phone real
         self.mic = MicFeed(self.bus)
         self.voice = args.voice
         self.ready = False
@@ -1413,6 +1415,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--ui-only", action="store_true", help="no models: replay a scripted demo session")
     p.add_argument("--phone", choices=("fake", "real"), default="fake",
                    help="real: control the Android phone running Rose Agent (USB: adb reverse tcp:8091 tcp:8091)")
+    p.add_argument("--vision-control", action="store_true",
+                   help="Codex app threads control apps from screenshots and coordinates only (needs --brain codex "
+                        "--phone real; typing needs a controller with vision text input)")
     p.add_argument("--remote-port", type=int, default=DEFAULT_REMOTE_PORT,
                    help="TLS listener on 0.0.0.0 for phones paired by QR code (Wi-Fi/Tailscale)")
     p.add_argument("--no-remote", dest="remote", action="store_false",
@@ -1423,6 +1428,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     args = p.parse_args(argv)
     if args.cloud_audio and args.brain != 'codex':
         p.error('--cloud-audio requires --brain codex')
+    if args.vision_control and (args.brain != 'codex' or args.phone != 'real'):
+        p.error('--vision-control requires --brain codex --phone real')
     from .remote import configured_hosts
     try:
         args.pair_host = configured_hosts(args.pair_host)
