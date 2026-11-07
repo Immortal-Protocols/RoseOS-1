@@ -1225,9 +1225,11 @@ class GuestTest(Base):
         }
         path = Path(self.temp.name) / "inspect-evidence.json"
         path.write_text(json.dumps(evidence))
+        commitment = recover.baseline_commitment(baseline)
         out = Path(self.temp.name) / "rotate-op"
         plan = recover.plan("Mac operator", out, now=NOW, token=tokens("44" * 16, "55" * 16), revision="a" * 40,
-                            env=ENV, mode="rotate", inspect_receipt=path)
+                            env=ENV, mode="rotate", inspect_receipt=path,
+                            confirm_inspect_operation=evidence["operationId"], confirm_baseline=commitment)
         self.assertFalse(plan["hostKeyPinned"])
         self.assertFalse(plan["repairsGuest"])
         self.assertTrue(plan["rotatesHostKeys"])
@@ -1266,9 +1268,11 @@ class GuestTest(Base):
         })
         live_path = Path(self.temp.name) / "live-inspect.json"
         live_path.write_text(json.dumps(live))
+        live_commitment = recover.baseline_commitment(live["hostKeys"]["baseline"])
         refused = Path(self.temp.name) / "rotate-refused"
         recover.plan("Mac operator", refused, now=NOW, token=tokens("66" * 16, "77" * 16), revision="a" * 40,
-                     env=ENV, mode="rotate", inspect_receipt=live_path)
+                     env=ENV, mode="rotate", inspect_receipt=live_path,
+                     confirm_inspect_operation=live["operationId"], confirm_baseline=live_commitment)
         other = DictHost(json.loads((refused / "binding.json").read_text()), refused / "guest.py")
         other.unit["mode"] = 0o644
         other.prior_unrecognized = 1
@@ -1280,6 +1284,48 @@ class GuestTest(Base):
         with self.assertRaises(recover.Refused):
             recover.plan("Mac operator", Path(self.temp.name) / "spent-inspect", now=NOW,
                          token=tokens("638e6e9039e41b7531697bb45066a616", "89" * 16), revision="a" * 40, env=ENV)
+        with self.assertRaises(recover.Refused):
+            recover.plan("Mac operator", Path(self.temp.name) / "stale-op", now=NOW,
+                         token=tokens("98" * 16, "97" * 16), revision="a" * 40, env=ENV, mode="rotate",
+                         inspect_receipt=path, confirm_inspect_operation="ab" * 16, confirm_baseline=commitment)
+        with self.assertRaises(recover.Refused):
+            recover.plan("Mac operator", Path(self.temp.name) / "stale-baseline", now=NOW,
+                         token=tokens("96" * 16, "95" * 16), revision="a" * 40, env=ENV, mode="rotate",
+                         inspect_receipt=path, confirm_inspect_operation=evidence["operationId"],
+                         confirm_baseline="ab" * 32)
+        for index, (mutated, label) in enumerate((
+                ({"runner": {"active": "inactive", "enabled": "enabled", "process": False}}, "runner"),
+                ({"hostKeys": dict(evidence["hostKeys"], unknownHostKeyCount=1)}, "unknown"),
+                ({"unit": dict(evidence["unit"], problem="nlink")}, "hardlink"),
+        )):
+            bad = json.loads(json.dumps(evidence))
+            bad.update(mutated)
+            bad_path = Path(self.temp.name) / ("bad-" + label + ".json")
+            bad_path.write_text(json.dumps(bad))
+            with self.assertRaises(recover.Refused):
+                recover.plan("Mac operator", Path(self.temp.name) / ("plan-" + label), now=NOW,
+                             token=tokens(f"{80 + index:02d}" * 16, f"{90 + index:02d}" * 16),
+                             revision="a" * 40, env=ENV, mode="rotate",
+                             inspect_receipt=bad_path, confirm_inspect_operation=bad["operationId"],
+                             confirm_baseline=commitment)
+        disk = DictHost(json.loads((out / "binding.json").read_text()), out / "guest.py")
+        disk.unit = {"kind": "regular", "mode": 0o644, "uid": 0, "gid": 0, "size": 347, "nlink": 2}
+        stopped = module.run(disk)
+        self.assertEqual(disk.generate_calls, 0)
+        self.assertEqual(disk.chmod_calls, 0)
+        self.assertEqual(stopped["unit"]["problem"], "nlink")
+        disk = DictHost(json.loads((out / "binding.json").read_text()), out / "guest.py")
+        disk.unit["mode"] = 0o644
+        disk.names.append("ssh_host_extra_key")
+        stopped = module.run(disk)
+        self.assertEqual(disk.generate_calls, 0)
+        self.assertEqual(stopped["unit"]["problem"], "unknown-host-key")
+        disk = DictHost(json.loads((out / "binding.json").read_text()), out / "guest.py")
+        disk.unit["mode"] = 0o644
+        disk.runner_state = {"active": "inactive", "enabled": "enabled", "process": False}
+        stopped = module.run(disk)
+        self.assertEqual(disk.generate_calls, 0)
+        self.assertEqual(stopped["unit"]["problem"], "runner-enabled")
 
 
 class CommandTest(Base):

@@ -669,8 +669,12 @@ def run_rotate(io):
         before, runner = None, {}
     if identity != EXPECTED_IDENTITY:
         return _rotate_refuse(io, binding, boot, before, runner, "identity")
-    if not isinstance(before, dict) or unit_problem(before) != "already-0644" or runner_problem(runner):
-        problem = "mode" if not isinstance(before, dict) else (unit_problem(before) or runner_problem(runner) or "mode")
+    if not isinstance(before, dict):
+        return _rotate_refuse(io, binding, boot, before, runner, "mode")
+    unit_state = unit_problem(before)
+    runner_state = runner_problem(runner) if isinstance(runner, dict) else "runner-active"
+    if unit_state != "already-0644" or runner_state:
+        problem = runner_state if unit_state == "already-0644" and runner_state else (unit_state or "mode")
         return _rotate_refuse(io, binding, boot, before, runner, problem)
     expected = _bound_baseline()
     if any(not FP.fullmatch(expected[alg]) for alg in ALGORITHMS):

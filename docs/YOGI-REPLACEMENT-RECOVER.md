@@ -207,18 +207,40 @@ a previous rotation finished. A journal phase of `complete`, or an unrecognized 
 the rotation. Unrecognized markers are counted and left in place. Their bytes are not copied into the new receipt.
 
 `plan --mode rotate --inspect-receipt FILE` copies the three public fingerprints from that reviewed inspect receipt
-into the new guest. On boot the guest reads the public files again. It generates a key only when all three still
-match that bound evidence, the unit is a root-owned regular file mode `0644` size 347, and the runner is inactive,
-disabled, and has no listener or worker. A mismatch stops with the mode unchanged.
+into the new guest. The command also requires `--confirm-inspect-operation` and `--confirm-baseline`. Those must
+equal the receipt's operation id and the SHA-256 of the canonical three fingerprints. A different file, a different
+id, or a different fingerprint set is refused before a guest is written. On boot the guest reads the public files
+again. It generates a key only when all three still match that bound evidence, the unit is a root-owned regular
+file mode `0644` size 347 with one link, and the runner is inactive, disabled, and has no listener or worker. A
+hard link, an extra `ssh_host_*` name, or any other runner state stops with the mode unchanged.
 
-That match is consistency with the inspect, not trust in the guest and not a comparison with the original VM.
-`hostKeyPinned` stays false. A later inspect that reports the new public fingerprints is a second guest report.
-The prekey snapshot remains the restore point and is not applied here. `builder.direct.hostKey` stays unset until
-a separate explicit pin decision.
+## Host identity after rotation
+
+Nothing in this tool pins an SSH host key. A serial receipt and a second inspect are both written by the guest.
+Agreement between them is not an independent observation.
+
+Google's instance identity token is a Google-signed JWT that names the project, zone, and instance id
+([verifying instance identity](https://docs.cloud.google.com/compute/docs/instances/verifying-instance-identity)).
+The instance can obtain it only from the metadata server, and only when the instance has a service account. This
+replacement has no service account. Attaching one is outside this recovery. The token also does not contain the
+SSH host public key, so it would not by itself pin that key even if a service account were present.
+
+An operator-generated host keypair would keep the private key off this repository only if it is never placed in
+instance metadata, the startup script, or serial output. Those are the channels this tool has, and each of them
+would disclose the private key. This tool refuses private-key material in the inspect receipt and does not install
+an operator private key. A public fingerprint typed by the operator, if it was copied from the guest's own receipt,
+is the same guest report again.
+
+No authenticated read of `/etc/ssh` public keys is available inside the preservation rules: no SSH, no trust on
+first use, no service account, and no private-key delivery. `hostIdentity.blocker` is
+`no-authenticated-observation-of-ssh-public-key`. `hostKeyPinned` stays false. `builder.direct.hostKey` stays unset.
 
 ```sh
 env -u GOOGLE_APPLICATION_CREDENTIALS -u CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT \
-  python3 -B yogi_replacement_recover.py plan --mode rotate --inspect-receipt INSPECT.json \
+  python3 -B yogi_replacement_recover.py plan --mode rotate \
+  --inspect-receipt INSPECT.json \
+  --confirm-inspect-operation INSPECT_OPERATION_ID \
+  --confirm-baseline BASELINE_SHA256 \
   --operator "NAME" --out ~/yogi-ops/rotate-LABEL
 ```
 

@@ -1314,6 +1314,14 @@ def head_revision(repo):
     return revision
 
 
+def baseline_commitment(baseline):
+    """SHA-256 of the three public fingerprints. This is not a host-key pin."""
+    if not isinstance(baseline, dict):
+        raise Refused("inspect baseline commitment does not match the reviewed receipt")
+    payload = json.dumps({alg: baseline.get(alg) for alg in guest.ALGORITHMS}, sort_keys=True, separators=(",", ":"))
+    return sha256_bytes(payload.encode())
+
+
 def inspect_evidence_problems(receipt):
     """The inspect receipt is evidence the operator reviewed. It is not authority to pin a host key."""
     if not isinstance(receipt, dict):
@@ -1351,7 +1359,7 @@ def inspect_evidence_problems(receipt):
 
 
 def plan(operator, out, now=None, token=None, revision=None, repo=ROOT, template=None, env=None, mode="repair",
-         inspect_receipt=None):
+         inspect_receipt=None, confirm_inspect_operation=None, confirm_baseline=None):
     manual_context(env if env is not None else os.environ)
     now = now or now_utc()
     if mode not in ("repair", "inspect", "rotate"):
@@ -1382,6 +1390,13 @@ def plan(operator, out, now=None, token=None, revision=None, repo=ROOT, template
             raise Refused("inspect receipt is not a usable rotation baseline")
         if evidence["operationId"] in (operation_id, nonce):
             raise Refused("inspect evidence is not a new binding")
+        if confirm_inspect_operation != evidence["operationId"]:
+            raise Refused("inspect operation id does not match the reviewed receipt")
+        if confirm_baseline != baseline_commitment(evidence["hostKeys"]["baseline"]):
+            raise Refused("inspect baseline commitment does not match the reviewed receipt")
+        raw_evidence = Path(inspect_receipt).read_text()
+        if any(token in raw_evidence for token in ("BEGIN ", "PRIVATE", "OPENSSH")):
+            raise Refused("inspect receipt contains key material")
     if template is None:
         if mode == "inspect":
             template = guest.inspect_template()
@@ -1438,9 +1453,14 @@ def plan(operator, out, now=None, token=None, revision=None, repo=ROOT, template
         "inspectEvidence": None if evidence is None else {
             "role": "guest-evidence-not-authority", "operationId": evidence["operationId"],
             "baseline": evidence["hostKeys"]["baseline"],
+            "baselineCommitment": baseline_commitment(evidence["hostKeys"]["baseline"]),
             "journalUnrecognized": evidence.get("journal", {}).get("unrecognized", 0),
             "priorCompletePhaseIsNotAuthority": True, "hostKeyPinned": False,
             "distinctFromOriginalVerified": False},
+        "hostIdentity": {"pinned": False, "serialTrustedForPin": False, "repeatedGuestReportIsProof": False,
+                         "instanceIdentityToken": "unavailable-no-guest-service-account",
+                         "privateKeyDelivery": "refused-no-disclosure-channel",
+                         "blocker": "no-authenticated-observation-of-ssh-public-key"},
         "cleanup": {"authorizedKeyComment": "roseos-yogi-recover-<operationId>",
                     "temporaryAccount": guest.TEMP_ACCOUNT, "paths": list(guest.AUTH_PATHS)},
         "route": "gce-metadata-startup-script-and-bounded-serial-read",
@@ -1951,6 +1971,8 @@ def main(argv, transport=None, now=None, clock=None, sleep=None, env=None, token
     planned.add_argument("--out", required=True)
     planned.add_argument("--mode", choices=("repair", "inspect", "rotate"), default="repair")
     planned.add_argument("--inspect-receipt")
+    planned.add_argument("--confirm-inspect-operation")
+    planned.add_argument("--confirm-baseline")
     sub.add_parser("self-check")
     exported = sub.add_parser("export-bundle")
     exported.add_argument("--out", required=True)
@@ -1967,7 +1989,9 @@ def main(argv, transport=None, now=None, clock=None, sleep=None, env=None, token
             result, code = self_check(), 0
         elif args.command == "plan":
             document = plan(args.operator, args.out, now=now, token=token, revision=revision, env=env,
-                            mode=args.mode, inspect_receipt=args.inspect_receipt)
+                            mode=args.mode, inspect_receipt=args.inspect_receipt,
+                            confirm_inspect_operation=args.confirm_inspect_operation,
+                            confirm_baseline=args.confirm_baseline)
             result, code = {"dryRun": True, "executed": False, "operationId": document["operationId"],
                             "payloadSha256": document["payloadSha256"],
                             "startupScriptSha256": document["startupScriptSha256"],
