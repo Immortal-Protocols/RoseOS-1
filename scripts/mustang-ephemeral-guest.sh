@@ -1,8 +1,10 @@
 #!/bin/bash
-# One-job runner for the dedicated Mustang VM. Installed by the reviewed
-# bootstrap; it contains no registration token. A missing metadata key exits
-# without registering. The local copy of the config is removed on the way out.
+# One-job runner for the dedicated Mustang VM. No registration token is stored
+# in this file. The JIT config is written straight to a 0600 file and removed
+# on every exit. After that write, the guest marks the key fetched so the
+# hosted job can delete the instance metadata.
 set -euo pipefail
+umask 077
 install=/mnt/disks/mustang-data/roseos/runner
 source=/mnt/disks/mustang-data/roseos/source
 work="$install/_work"
@@ -16,23 +18,27 @@ if [[ "$(id -u)" == 0 ]]; then
   echo 'Mustang runner must not be root' >&2
   exit 4
 fi
+find "$install" -maxdepth 1 -name 'jit.*' -type f -delete
+file=$(mktemp "$install/jit.XXXXXX")
+cleanup() {
+  rm -f "$file" "$install/.runner" "$install/.credentials" "$install/.credentials_rsaparams" "$install/.path"
+}
+trap cleanup EXIT
 attribute=http://metadata.google.internal/computeMetadata/v1/instance/attributes/mustang-jitconfig
 deadline=$((SECONDS + 720))
-config=
-while [[ -z "$config" && SECONDS -lt deadline ]]; do
-  config=$(curl --fail --silent --show-error --max-time 5 -H 'Metadata-Flavor: Google' "$attribute" || true)
-  if [[ -z "$config" ]]; then
+while [[ ! -s "$file" && SECONDS -lt deadline ]]; do
+  if ! curl --fail --silent --show-error --max-time 5 -H 'Metadata-Flavor: Google' --output "$file" "$attribute"; then
+    : > "$file"
     sleep 10
   fi
 done
-if [[ -z "$config" ]]; then
+if [[ ! -s "$file" ]]; then
   exit 0
 fi
-file=$(mktemp "$install/jit.XXXXXX")
 chmod 600 "$file"
-cleanup() { rm -f "$file"; }
-trap cleanup EXIT
-printf '%s' "$config" >"$file"
-unset config
+curl --fail --silent --show-error --max-time 5 -X PUT -H 'Metadata-Flavor: Google' --data '1' \
+  http://metadata.google.internal/computeMetadata/v1/instance/guest-attributes/mustang/jit-fetched
 cd "$install"
-exec ./run.sh --jitconfig "$file"
+status=0
+./run.sh --jitconfig "$file" || status=$?
+exit "$status"

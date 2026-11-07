@@ -89,6 +89,8 @@ jobs:
       with:
         ref: ${{ github.sha }}
         persist-credentials: false
+    - id: login
+      run: python3 scripts/actions-gcp-login.py login "$MUSTANG_CONTROLLER_SERVICE_ACCOUNT"
     - id: app
       uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510
       with:
@@ -99,16 +101,22 @@ jobs:
       env:
         GH_TOKEN: ${{ steps.app.outputs.token }}
       run: python3 scripts/mustang_ephemeral.py issue --execute --run-id "$GITHUB_RUN_ID" --out "$RUNNER_TEMP/mustang-jit"
-    - run: python3 scripts/actions-gcp-login.py login "$MUSTANG_CONTROLLER_SERVICE_ACCOUNT"
     - name: Deliver the config through instance metadata from a file
-      run: gcloud compute instances add-metadata roseos-mustang-builder-20261107-a --project=protocols-465723 --zone=us-west2-a --quiet --metadata-from-file=mustang-jitconfig="$RUNNER_TEMP/mustang-jit"
+      run: python3 scripts/mustang_ephemeral.py put-metadata --execute --file "$RUNNER_TEMP/mustang-jit"
+    - name: Remove the metadata key as soon as the guest has fetched it
+      run: python3 scripts/mustang_ephemeral.py wait-fetched --execute
+    - if: always() && steps.login.outcome == 'success'
+      name: Delete JIT metadata on success and on every enroll failure
+      run: python3 scripts/mustang_ephemeral.py clear-metadata --execute
     - if: always()
+      run: rm -f "$RUNNER_TEMP/mustang-jit"
+    - if: always() && steps.login.outcome == 'success'
       run: python3 scripts/actions-gcp-login.py logout
   queue-watch:
     needs:
     - controller
     - enroll
-    if: always() && needs.controller.result == 'success' && needs.enroll.result == 'success'
+    if: always() && needs.controller.result == 'success'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
@@ -119,28 +127,33 @@ jobs:
       GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ vars.MUSTANG_CONTROLLER_WORKLOAD_IDENTITY_PROVIDER }}
       MUSTANG_CONTROLLER_SERVICE_ACCOUNT: ${{ vars.MUSTANG_CONTROLLER_SERVICE_ACCOUNT }}
       MUSTANG_OWNER_B64: ${{ needs.controller.outputs.ownership }}
+      ENROLL_RESULT: ${{ needs.enroll.result }}
       GH_TOKEN: ${{ github.token }}
     steps:
     - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
         ref: ${{ github.sha }}
         persist-credentials: false
-    - id: decision
-      name: Bound the wait for a runner that never accepts the job
-      run: python3 scripts/mustang_ephemeral.py queue-watch --execute
-    - if: steps.decision.outputs.stop == 'true'
-      run: python3 scripts/mustang-dedicated.py cleanup-prepare --ownership-record "$RUNNER_TEMP/mustang-owner.json"
-    - if: steps.decision.outputs.stop == 'true'
+    - id: login
       run: python3 scripts/actions-gcp-login.py login "$MUSTANG_CONTROLLER_SERVICE_ACCOUNT"
-    - if: steps.decision.outputs.stop == 'true'
-      run: python3 scripts/mustang_controller.py stop --ownership-record "$RUNNER_TEMP/mustang-owner.json"
-    - if: steps.decision.outputs.stop == 'true'
+    - if: steps.login.outcome == 'success'
+      name: Delete any JIT metadata before deciding the runner wait
       run: python3 scripts/mustang_ephemeral.py clear-metadata --execute
-    - if: always() && steps.decision.outputs.stop == 'true'
+    - id: decision
+      if: always()
+      name: Stop immediately if enroll failed, otherwise bound the runner wait
+      run: python3 scripts/mustang_ephemeral.py queue-watch --execute
+    - if: always() && steps.decision.outputs.stop == 'true' && steps.login.outcome == 'success'
+      run: python3 scripts/mustang-dedicated.py cleanup-prepare --ownership-record "$RUNNER_TEMP/mustang-owner.json"
+    - if: always() && steps.decision.outputs.stop == 'true' && steps.login.outcome == 'success'
+      run: python3 scripts/mustang_controller.py stop --ownership-record "$RUNNER_TEMP/mustang-owner.json"
+    - if: always() && steps.login.outcome == 'success'
+      run: python3 scripts/mustang_ephemeral.py clear-metadata --execute
+    - if: always() && steps.login.outcome == 'success'
       run: python3 scripts/actions-gcp-login.py logout
-    - if: steps.decision.outputs.stop == 'true'
-      name: Cancel this run so the queued builder cannot attach to a later boot
-      run: gh api --method POST "/repos/Immortal-Protocols/RoseOS-1/actions/runs/${GITHUB_RUN_ID}/cancel"
+    - if: always() && steps.decision.outputs.stop == 'true'
+      name: Cancel only this run so a queued builder cannot attach to a later boot
+      run: python3 scripts/mustang_ephemeral.py cancel --execute
   builder:
     needs:
     - guard
@@ -271,11 +284,12 @@ jobs:
     - id: owned
       name: Validate exact owner before login, independent of signing/input readiness
       run: python3 scripts/mustang-dedicated.py cleanup-prepare --ownership-record "$RUNNER_TEMP/mustang-owner.json"
-    - if: steps.owned.outputs.started == 'true'
+    - id: login
+      if: steps.owned.outputs.started == 'true'
       run: python3 scripts/actions-gcp-login.py login "$MUSTANG_CONTROLLER_SERVICE_ACCOUNT"
     - if: steps.owned.outputs.started == 'true'
       run: python3 scripts/mustang_controller.py stop --ownership-record "$RUNNER_TEMP/mustang-owner.json"
-    - if: steps.owned.outputs.started == 'true'
+    - if: always() && steps.login.outcome == 'success'
       run: python3 scripts/mustang_ephemeral.py clear-metadata --execute
-    - if: always() && steps.owned.outputs.started == 'true'
+    - if: always() && steps.login.outcome == 'success'
       run: python3 scripts/actions-gcp-login.py logout

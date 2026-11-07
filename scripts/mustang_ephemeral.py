@@ -9,6 +9,8 @@ the queue watchdog remove the metadata key. Nothing here mints a token unless
 --execute is passed, and --execute is not used by the tests.
 """
 import argparse
+import base64
+import binascii
 import json
 import os
 from pathlib import Path
@@ -17,6 +19,7 @@ import stat
 import subprocess
 import sys
 import time
+import urllib.error
 import urllib.request
 
 import mustang_lane
@@ -47,8 +50,17 @@ RUNNER_APP = {
     'version': '2.338.2',
     'file': 'actions-runner-linux-x64-2.338.2.tar.gz',
     'sha256': 'baebf204307bac6193480852732f0aba2ae97b6c5597c244f4d5558390147c40',
+    'digestSource': 'GitHub release asset digest for actions/runner v2.338.2 actions-runner-linux-x64-2.338.2.tar.gz',
     'url': 'https://github.com/actions/runner/releases/download/v2.338.2/actions-runner-linux-x64-2.338.2.tar.gz',
     'install': str(RUNNER_ROOT)}
+APP_PERMISSION = {
+    'name': 'Organization permissions for Self-hosted runners',
+    'access': 'write',
+    'token': 'GitHub App installation access token',
+    'endpoint': 'POST /orgs/{org}/actions/runners/generate-jitconfig',
+    'source': 'https://docs.github.com/en/rest/authentication/permissions-required-for-github-apps',
+    'notUsed': 'admin:org user token',
+    'installation': 'An organization owner installs the app on Immortal-Protocols. That installation is not performed on the VM.'}
 
 
 def paths():
@@ -80,6 +92,56 @@ def accept_jit(body, run_id):
             or runner.get('name') != f'mustang-{run_id}':
         raise ValueError('JIT runner is not an ephemeral group 5 runner for this run')
     return {'name': runner['name'], 'groupId': 5, 'ephemeral': True, 'configBytes': len(encoded)}
+
+
+def contains_secret(text, secret):
+    """True when the encoded JIT config or its decoded bytes appear in text."""
+    if not secret:
+        return False
+    if secret in text:
+        return True
+    try:
+        decoded = base64.b64decode(secret, validate=True)
+    except (binascii.Error, ValueError):
+        return False
+    if len(decoded) < 8:
+        return False
+    return decoded.decode('latin-1') in text
+
+
+def guest_attribute_argv():
+    vm = mustang_lane.configuration()['vm']
+    return ['gcloud', 'compute', 'instances', 'get-guest-attributes', vm['instance'],
+            '--project='+vm['project'], '--zone='+vm['zone'],
+            '--query-path=mustang/jit-fetched', '--format=json']
+
+
+def metadata_keys_argv():
+    vm = mustang_lane.configuration()['vm']
+    return ['gcloud', 'compute', 'instances', 'describe', vm['instance'],
+            '--project='+vm['project'], '--zone='+vm['zone'],
+            '--format=json(metadata.items.key)']
+
+
+def metadata_is_present(described):
+    items = ((described or {}).get('metadata') or {}).get('items') or []
+    for item in items:
+        if item == METADATA_KEY or (isinstance(item, dict) and item.get('key') == METADATA_KEY):
+            return True
+    return False
+
+
+def guest_fetched(payload):
+    if isinstance(payload, dict):
+        return payload.get('value') == '1' or payload.get('variableValue') == '1'
+    return str(payload).strip() == '1'
+
+
+def watch_decision(enroll_result, jobs, elapsed_seconds, limit=QUEUE_LIMIT_SECONDS):
+    """Enroll failure stops immediately. A queued builder stops only after the bound."""
+    if enroll_result != 'success':
+        return 'stop'
+    return queue_decision(jobs, elapsed_seconds, limit)
 
 
 def metadata_argv(action, instance=None):
@@ -144,8 +206,11 @@ def post_json(path, body, token):
         'https://api.github.com'+path, data=json.dumps(body).encode(), method='POST',
         headers={'Authorization': 'Bearer '+token, 'Accept': 'application/vnd.github+json',
                  'Content-Type': 'application/json', 'X-GitHub-Api-Version': '2026-03-10'})
-    with urllib.request.urlopen(request, timeout=30) as response:
-        return json.load(response)
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            return json.load(response)
+    except urllib.error.HTTPError as error:
+        raise ValueError('JIT request failed with HTTP '+str(error.code)) from None
 
 
 def issue(run_id, token, post, out):
@@ -188,6 +253,12 @@ def write_secret_file(path, payload):
     return {'path': str(path), 'bytes': len(payload)}
 
 
+def public_error(error):
+    if not isinstance(error, ValueError):
+        return type(error).__name__
+    return re.sub(r'\S{20,}', '[redacted]', str(error))
+
+
 def emit_stop(decision):
     if os.environ.get('GITHUB_OUTPUT'):
         with open(os.environ['GITHUB_OUTPUT'], 'a') as handle:
@@ -196,7 +267,7 @@ def emit_stop(decision):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('action', choices=('plan', 'issue', 'clear-metadata', 'queue-watch'))
+    parser.add_argument('action', choices=('plan', 'issue', 'put-metadata', 'wait-fetched', 'clear-metadata', 'queue-watch', 'cancel'))
     parser.add_argument('--run-id')
     parser.add_argument('--out')
     parser.add_argument('--execute', action='store_true')
@@ -213,25 +284,70 @@ def main(argv=None):
             if not args.out or not args.run_id:
                 raise ValueError('JIT minting needs this run id and a private output file')
             value = issue(args.run_id, os.environ.get('GH_TOKEN', ''), post_json, args.out)
-        elif args.action == 'queue-watch':
+        elif args.action == 'put-metadata':
+            if not args.execute or not args.file:
+                raise ValueError('metadata delivery requires --execute and the private file')
+            path = Path(args.file)
+            if not path.is_file() or path.is_symlink() or stat.S_IMODE(path.stat().st_mode) != 0o600:
+                raise ValueError('JIT metadata file must be a private regular file')
+            argv = metadata_argv('add-metadata')
+            argv[-1] = argv[-1]+'='+str(path)
+            subprocess.check_call(argv)
+            value = {'delivered': METADATA_KEY, 'execute': True}
+        elif args.action == 'wait-fetched':
             if not args.execute:
-                value = {'limitSeconds': QUEUE_LIMIT_SECONDS, 'execute': False}
+                value = {'query': 'mustang/jit-fetched', 'execute': False}
+            else:
+                deadline = time.monotonic() + 180
+                seen = False
+                while time.monotonic() <= deadline:
+                    result = subprocess.run(guest_attribute_argv(), capture_output=True, text=True)
+                    payload = {}
+                    if result.returncode == 0 and result.stdout.strip():
+                        try:
+                            payload = json.loads(result.stdout)
+                        except json.JSONDecodeError:
+                            payload = result.stdout
+                    if guest_fetched(payload):
+                        seen = True
+                        break
+                    time.sleep(5)
+                if not seen:
+                    raise ValueError('guest did not fetch the JIT metadata before the bound')
+                value = {'fetched': True}
+        elif args.action == 'queue-watch':
+            enroll_result = os.environ.get('ENROLL_RESULT', 'success')
+            if not args.execute:
+                value = {'limitSeconds': QUEUE_LIMIT_SECONDS, 'execute': False,
+                         'enrollFailureStops': True}
+            elif enroll_result != 'success':
+                emit_stop('stop')
+                value = {'decision': 'stop', 'runId': os.environ.get('GITHUB_RUN_ID', '')}
             else:
                 run = os.environ['GITHUB_RUN_ID']
                 decision = watch(lambda: jobs(run), time.sleep, time.monotonic)
                 emit_stop(decision)
                 value = {'decision': decision, 'runId': run}
+        elif args.action == 'cancel':
+            if not args.execute:
+                raise ValueError('cancel requires --execute')
+            run = os.environ['GITHUB_RUN_ID']
+            post_json(cancel_path(run, run), {}, os.environ.get('GH_TOKEN', ''))
+            value = {'cancelled': run}
         else:
             if args.execute:
-                subprocess.check_call(metadata_argv('remove-metadata'))
-                value = {'cleared': METADATA_KEY, 'execute': True}
+                described = json.loads(subprocess.check_output(metadata_keys_argv(), text=True) or '{}')
+                if metadata_is_present(described):
+                    subprocess.check_call(metadata_argv('remove-metadata'))
+                    value = {'cleared': METADATA_KEY, 'state': 'removed'}
+                else:
+                    value = {'cleared': METADATA_KEY, 'state': 'absent'}
             else:
                 value = {'clear': metadata_argv('remove-metadata'), 'execute': False}
         print(json.dumps({k: v for k, v in value.items() if k != 'encoded_jit_config'}, sort_keys=True))
         return 0
-    except (OSError, ValueError, KeyError, TypeError) as error:
-        print('Mustang ephemeral enrollment stopped: '+(str(error) if isinstance(error, ValueError) else type(error).__name__),
-              file=sys.stderr)
+    except (OSError, ValueError, KeyError, TypeError, subprocess.CalledProcessError) as error:
+        print('Mustang ephemeral enrollment stopped: '+public_error(error), file=sys.stderr)
         return 4
 
 

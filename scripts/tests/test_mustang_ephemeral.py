@@ -30,6 +30,27 @@ class EnrollmentTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             enroll.jit_body('0')
 
+    def test_base64_jit_payload_never_reaches_the_summary_or_stderr(self):
+        import base64
+        raw = b'jit-secret-not-for-logs'
+        secret = base64.b64encode(raw).decode()
+        body = {'encoded_jit_config': secret, 'runner': {'name': 'mustang-12', 'runner_group_id': 4, 'ephemeral': True}}
+        try:
+            enroll.accept_jit(body, '12')
+        except ValueError as error:
+            message = str(error)
+        else:
+            self.fail('wrong group was accepted')
+        self.assertFalse(enroll.contains_secret(message, secret))
+        self.assertNotIn(raw.decode(), message)
+        self.assertTrue(enroll.contains_secret('runner started with '+raw.decode(), secret))
+        self.assertTrue(enroll.contains_secret('config '+secret, secret))
+        self.assertNotIn(secret, enroll.public_error(ValueError('refused '+secret)))
+        self.assertNotIn(raw.decode(), enroll.public_error(ValueError('refused '+raw.decode())))
+        plan = __import__('subprocess').run([sys.executable, str(ROOT/'scripts/mustang_ephemeral.py'), 'plan', '--run-id', '12'],
+                                             capture_output=True, text=True)
+        self.assertFalse(enroll.contains_secret(plan.stdout + plan.stderr, secret))
+
     def test_response_must_be_ephemeral_and_the_summary_omits_the_config(self):
         secret = 'A'*40
         body = {'encoded_jit_config': secret, 'runner': {'name': 'mustang-12', 'runner_group_id': 5, 'ephemeral': True}}
@@ -74,6 +95,8 @@ class EnrollmentTest(unittest.TestCase):
         self.assertEqual(enroll.queue_decision(queued, 30), 'wait')
         self.assertEqual(enroll.queue_decision(queued, enroll.QUEUE_LIMIT_SECONDS), 'stop')
         self.assertEqual(enroll.queue_decision([{'name': 'builder', 'status': 'in_progress'}], enroll.QUEUE_LIMIT_SECONDS), 'ready')
+        self.assertEqual(enroll.watch_decision('failure', [{'name': 'builder', 'status': 'in_progress'}], 0), 'stop')
+        self.assertNotIn('value', ' '.join(enroll.metadata_keys_argv()))
         clock = {'now': 0}
         def fetch():
             return queued if clock['now'] < enroll.QUEUE_LIMIT_SECONDS else [{'name': 'builder', 'status': 'in_progress'}]
@@ -111,13 +134,66 @@ class EnrollmentTest(unittest.TestCase):
         self.assertNotIn('encoded_jit_config', plan)
         script = (ROOT/'scripts/mustang-ephemeral-guest.sh').read_text()
         self.assertIn('./run.sh --jitconfig', script)
+        self.assertNotIn('exec ./run.sh', script)
+        self.assertIn('trap cleanup EXIT', script)
+        self.assertIn('--output "$file"', script)
+        self.assertIn('guest-attributes/mustang/jit-fetched', script)
+        self.assertNotIn('config=$(curl', script)
         self.assertNotIn('config.sh', script)
         self.assertNotIn('--token', script)
+        workflow = (ROOT/'.github/workflows/mustang-ota-dedicated.yml').read_text()
+        watch = workflow.split('queue-watch:', 1)[1].split('builder:', 1)[0]
+        self.assertIn("needs.controller.result == 'success'", watch)
+        self.assertNotIn("needs.enroll.result == 'success'", watch)
+        self.assertIn('mustang_ephemeral.py cancel --execute', watch)
+        self.assertNotIn('gh api --method POST', workflow)
+        enroll_job = workflow.split('enroll:', 1)[1].split('queue-watch:', 1)[0]
+        self.assertIn('clear-metadata --execute', enroll_job)
+        self.assertNotIn('permission-contents:', enroll_job)
+        self.assertEqual(enroll.APP_PERMISSION['access'], 'write')
+        self.assertIn('generate-jitconfig', enroll.APP_PERMISSION['endpoint'])
         env = dict(os.environ, MUSTANG_EPHEMERAL_CHECK='1')
         self.assertEqual(__import__('subprocess').run(['bash', str(ROOT/'scripts/mustang-ephemeral-guest.sh')], env=env).returncode, 0)
         unit = (ROOT/'os/build-only/mustang-ephemeral-runner.service').read_text()
         self.assertIn('User=mustang-runner', unit)
+        self.assertIn('Type=simple', unit)
+        self.assertIn('RuntimeMaxSec=14400', unit)
         self.assertNotIn('jitconfig', unit.lower())
+        self.bootstrap_refuses_wrong_disk_and_keeps_a_verified_download()
+
+    def bootstrap_refuses_wrong_disk_and_keeps_a_verified_download(self):
+        import hashlib
+        import subprocess
+        script = ROOT/'scripts/mustang-guest-bootstrap.sh'
+        text = script.read_text()
+        self.assertLess(text.index('instance id differs'), text.index('sudo tee'))
+        self.assertNotIn('rm -rf', text)
+        self.assertNotIn('"$home/source"', text.split('tar ', 1)[-1])
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            bindir = root/'bin'
+            bindir.mkdir()
+            log = root/'sudo.log'
+            (bindir/'curl').write_text('#!/bin/sh\necho wrong-instance\n')
+            (bindir/'sudo').write_text('#!/bin/sh\necho "$@" >>"$MUSTANG_SUDO_LOG"\nexit 99\n')
+            for path in (bindir/'curl', bindir/'sudo'):
+                path.chmod(0o755)
+            env = dict(os.environ, PATH=str(bindir)+os.pathsep+os.environ['PATH'], MUSTANG_SUDO_LOG=str(log))
+            refused = subprocess.run(['bash', str(script)], env=env, capture_output=True, text=True)
+            self.assertEqual(refused.returncode, 4, refused.stderr)
+            self.assertFalse(log.exists())
+            payload = b'official-bytes'
+            digest = hashlib.sha256(payload).hexdigest()
+            archive = root/'node.tar.xz'
+            archive.write_bytes(payload)
+            (bindir/'curl').write_text('#!/bin/sh\necho curl-called >>"$MUSTANG_CURL_LOG"\nexit 99\n')
+            marker = root/'curl.log'
+            checked = subprocess.run(['bash', str(script), '--check-fetch', 'https://example.invalid/node', digest, str(archive)],
+                                     env=dict(env, MUSTANG_BOOTSTRAP_DIRECT='1', MUSTANG_CURL_LOG=str(marker)),
+                                     capture_output=True, text=True)
+            self.assertEqual(checked.returncode, 0, checked.stderr)
+            self.assertFalse(marker.exists())
+            self.assertEqual(archive.read_bytes(), payload)
 
 
 if __name__ == '__main__':

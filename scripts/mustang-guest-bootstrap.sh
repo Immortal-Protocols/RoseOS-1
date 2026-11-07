@@ -9,9 +9,33 @@ tools=$home/tools
 user=mustang-runner
 instance=5585425566393384049
 uuid=4183bff8-6be4-46bb-a641-2193d19813ee
-test "$(curl --fail --silent --show-error --max-time 5 -H 'Metadata-Flavor: Google' http://metadata.google.internal/computeMetadata/v1/instance/id)" = "$instance"
-test "$(findmnt --noheadings --output UUID --target /mnt/disks/mustang-data)" = "$uuid"
-test "$(findmnt --noheadings --output TARGET --target /mnt/disks/mustang-data)" = /mnt/disks/mustang-data
+refuse() { echo "$1" >&2; exit 4; }
+fetch() {
+  local url=$1 sha=$2 dest=$3
+  if [[ -f "$dest" ]] && printf '%s  %s\n' "$sha" "$dest" | sha256sum --check --status; then
+    return 0
+  fi
+  local tmp
+  tmp=$(mktemp /tmp/mustang-fetch.XXXXXX)
+  curl --fail --location --retry 2 --output "$tmp" "$url" || { rm -f "$tmp"; refuse 'download failed'; }
+  printf '%s  %s\n' "$sha" "$tmp" | sha256sum --check --status || { rm -f "$tmp"; refuse 'checksum mismatch'; }
+  if [[ "${MUSTANG_BOOTSTRAP_DIRECT:-}" == 1 ]]; then
+    mv "$tmp" "$dest"
+  else
+    sudo install -o "$user" -g "$user" -m 0644 "$tmp" "$dest"
+    rm -f "$tmp"
+  fi
+}
+if [[ "${1:-}" == --check-fetch ]]; then
+  fetch "$2" "$3" "$4"
+  exit 0
+fi
+seen=$(curl --fail --silent --show-error --max-time 5 -H 'Metadata-Flavor: Google' http://metadata.google.internal/computeMetadata/v1/instance/id) || refuse 'instance identity unreadable'
+[[ "$seen" == "$instance" ]] || refuse 'instance id differs'
+seen=$(findmnt --noheadings --output UUID --target /mnt/disks/mustang-data) || refuse 'disk identity unreadable'
+[[ "$seen" == "$uuid" ]] || refuse 'disk UUID differs'
+seen=$(findmnt --noheadings --output TARGET --target /mnt/disks/mustang-data) || refuse 'disk mount unreadable'
+[[ "$seen" == /mnt/disks/mustang-data ]] || refuse 'disk mount differs'
 sudo tee /etc/apt/sources.list.d/mustang-noble.sources >/dev/null <<'EOF'
 Types: deb
 URIs: http://archive.ubuntu.com/ubuntu/
@@ -30,11 +54,9 @@ fi
 sudo install -d -o "$user" -g "$user" -m 0750 \
   "$home/source" "$home/rose-actions" "$home/runner" "$home/inputs" \
   "$tools/node" "$tools/android-sdk/downloads" "$tools/android-sdk/build-tools"
-fetch() {
-  local url=$1 sha=$2 dest=$3
-  sudo -u "$user" curl --fail --location --retry 2 --output "$dest" "$url"
-  printf '%s  %s\n' "$sha" "$dest" | sudo -u "$user" sha256sum --check --status
-}
+if [[ -n "$(find "$home/source" -mindepth 1 -print -quit 2>/dev/null || true)" ]]; then
+  echo 'existing Mustang source retained'
+fi
 node=$tools/node/node-v24.22.2-linux-x64.tar.xz
 sdk=$tools/android-sdk/downloads/build-tools_r35_linux.zip
 runner=$home/runner/actions-runner-linux-x64-2.338.2.tar.gz
@@ -44,6 +66,10 @@ fetch https://dl.google.com/android/repository/build-tools_r35_linux.zip \
   bd3a4966912eb8b30ed0d00b0cda6b6543b949d5ffe00bea54c04c81e1561d88 "$sdk"
 fetch https://github.com/actions/runner/releases/download/v2.338.2/actions-runner-linux-x64-2.338.2.tar.gz \
   baebf204307bac6193480852732f0aba2ae97b6c5597c244f4d5558390147c40 "$runner"
+sudo rm -f \
+  "$home/runner/.runner" "$home/runner/.credentials" \
+  "$home/runner/.credentials_rsaparams" "$home/runner/.path"
+sudo find "$home/runner" -maxdepth 1 -name 'jit.*' -type f -delete
 sudo -u "$user" tar -xJf "$node" -C "$tools/node"
 sudo -u "$user" unzip -qo "$sdk" -d "$tools/android-sdk/build-tools"
 sudo -u "$user" tar -xzf "$runner" -C "$home/runner"
