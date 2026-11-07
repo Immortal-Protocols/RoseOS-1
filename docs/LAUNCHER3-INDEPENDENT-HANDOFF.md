@@ -111,12 +111,10 @@ Physical-phone testing is not a completion gate.
 
 ## Fresh export bound for verifyIntegrated (2026-11-07)
 
-Schema 4 has no fields for the commit, tree pins, resolved manifest, export
-ids, or the boot and source disks. Those values are recorded here and in the
-binding `basis`. `policyReceipt` holds only the path and sha256. `lane.disk` is
-the data disk mounted at `/srv/rose-launcher3`: the controller starts and stops
-the VM, and that disk is the storage root holding `tasks/`, `locks/`, and
-`inputs/`.
+Schema 4 has no fields for the commit, tree pins, resolved manifest, or export
+ids. Those values are recorded here and in the binding `basis`. `policyReceipt`
+holds only the path and sha256. `lane.disk` is the boot disk only. The attached
+data and source disks are observed and are not that field.
 
 | Field | Value |
 | --- | --- |
@@ -134,8 +132,6 @@ the VM, and that disk is the storage root holding `tasks/`, `locks/`, and
 | Updater | `6ee911e5ecfdf7957d57c6f8c595a4b78ea63a71` |
 | Permission | `f1b2ad113f43609d839e7d897892ff59398cf7c5` |
 | VM instanceId | `8380049696571473017` |
-| lane.disk | `roseos-launcher3-compile-data-01` / `263837443130866785` |
-| boot disk | `roseos-launcher3-compile-01` / `5299228702637505657` (100 GB) |
-| source disk | `roseos-launcher3-src-02` / `7922451502759869665` at `/srv/rose-launcher3/src` |
-| taskParent | `/srv/rose-launcher3/tasks` |
-| lockPath | `/srv/rose-launcher3/locks/launcher3.lock` |
+| lane.disk (boot only) | `roseos-launcher3-compile-01` / `5299228702637505657` |
+| taskParent | `/srv/rose-launcher3/rose-actions` |
+| lockPath | `/srv/rose-launcher3/launcher3.lock` |

@@ -413,10 +413,10 @@ class Contract(unittest.TestCase):
         self.assertEqual(BINDING['lane']['queue'], 'launcher3-compile')
         self.assertEqual(BINDING['lane']['vm']['instanceId'], '8380049696571473017')
         self.assertEqual(BINDING['lane']['disk'], {
-            'resource': 'projects/protocols-465723/zones/us-west2-b/disks/roseos-launcher3-compile-data-01',
-            'id': '263837443130866785'})
-        self.assertEqual(BINDING['taskParent'], '/srv/rose-launcher3/tasks')
-        self.assertEqual(BINDING['lane']['lockPath'], '/srv/rose-launcher3/locks/launcher3.lock')
+            'resource': 'projects/protocols-465723/zones/us-west2-b/disks/roseos-launcher3-compile-01',
+            'id': '5299228702637505657'})
+        self.assertEqual(BINDING['taskParent'], '/srv/rose-launcher3/rose-actions')
+        self.assertEqual(BINDING['lane']['lockPath'], '/srv/rose-launcher3/launcher3.lock')
         self.assertIn('candidateDelta is retired and empty', MANIFEST['candidatePatches'])
         result = run_cli('check')
         self.assertEqual((result.returncode, result.stdout),

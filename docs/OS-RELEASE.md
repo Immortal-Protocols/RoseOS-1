@@ -514,8 +514,8 @@ queue. In the capacity map the `harness` lane names this workflow, no `os-releas
 only where its earlier runs ran. `test_launcher3_compile_workflow.py` and `test_lane_capacity.py` check all of this.
 
 **What remains before a compile runs:** a separate dispatch. This section does not authorize one, and the binding
-does not gate any OTA or release workflow. The VM id and the data-disk id in the binding are the observed gcloud
-values; the controller still starts and stops only that VM.
+does not gate any OTA or release workflow. `lane.vm.instanceId` and `lane.disk` are the observed boot VM and boot
+disk; the controller still starts and stops only that VM.
 
 A guard refusal is a blocker, not a compile.
 
