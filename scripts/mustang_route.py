@@ -182,10 +182,10 @@ def workflow_trust(text):
     for kind in ('pull_request', 'pull_request_target', 'workflow_call', 'workflow_run', 'schedule'):
         if re.search(r'(?m)^  %s:\n' % kind, body):
             problems.append(kind)
-    if re.search(r'\$\{\{\s*(inputs\.(?!publish\b)|github\.event)', body):
+    if re.search(r'\$\{\{\s*(inputs\.(?!(?:publish|dry_run)\b)|github\.event)', body):
         problems.append('untrusted expression reaches the workflow')
-    if 'inputs.publish' in body and re.search(r'(?m)^[ ]+run:.*inputs\.publish', body):
-        problems.append('publish input is interpolated into a shell script')
+    if re.search(r'(?m)^[ ]+run:.*inputs\.(?:publish|dry_run)', body):
+        problems.append('workflow input is interpolated into a shell script')
     blocks = body.split('- uses: actions/checkout@')
     if len(blocks) < 2:
         problems.append('checkout missing')

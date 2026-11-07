@@ -49,13 +49,20 @@ def reference(value, root=ROOT):
     return value
 
 
-def guard(lane, cfg, env, publish=False, root=ROOT, diff=None):
+def guard(lane, cfg, env, publish=False, root=ROOT, diff=None, dry_run=False):
     run=controller.invocation(lane,env)
     paths=mustang_paths.layout(lane)
     if env.get('GITHUB_REPOSITORY_ID')!='1428996648':
         raise ValueError('dedicated workflow repository ID differs')
     if lane['workflow']!=WORKFLOW or lane['queue']!='mustang-ota' \
-            or cfg.get('schema')!='roseos.mustang-dedicated-runtime.v1' or cfg.get('status')!='bound':
+            or cfg.get('schema')!='roseos.mustang-dedicated-runtime.v1':
+        raise ValueError('dedicated Mustang runtime inputs are unbound')
+    if dry_run:
+        if publish: raise ValueError('dry run cannot publish')
+        import mustang_ephemeral
+        mustang_ephemeral.require_group5(cfg)
+        return cfg
+    if cfg.get('status')!='bound':
         raise ValueError('dedicated Mustang runtime inputs are unbound')
     controller.require_explicit_target(controller.common_controller())
     if type(cfg.get('jobs')) is not int or not 1<=cfg['jobs']<=256 \
@@ -77,13 +84,18 @@ def guard(lane, cfg, env, publish=False, root=ROOT, diff=None):
             or source.get('manifestSha256')!=manifest or source.get('pristine') is not True \
             or source.get('adevtoolRevision')!=load(Path(root)/'os/build-only/mustang.json')['pins']['vendor/adevtool']:
         raise ValueError('dedicated pristine pinned source/bootstrap evidence differs')
-    runner=cfg['runner']; registration=reference(runner.get('registrationEvidence'),root)
-    if not isinstance(runner.get('groupName'),str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9 _-]{0,99}',runner['groupName']) \
-            or not re.fullmatch(r'[1-9][0-9]*',str(runner.get('groupId',''))) or runner.get('lifetime') not in ('persistent','ephemeral') \
-            or registration.get('builder')!=lane['vm'] or registration.get('repositoryId')!='1428996648' \
-            or registration.get('workflow')!=WORKFLOW or registration.get('groupId')!=runner['groupId'] \
-            or registration.get('readyOnEveryStart') is not True or registration.get('publicRepositoryAdmitted') is not True:
-        raise ValueError('dedicated protected runner registration-on-start evidence required')
+    runner=cfg['runner']
+    if str(runner.get('groupId'))=='5':
+        import mustang_ephemeral
+        mustang_ephemeral.require_group5(cfg)
+    else:
+        registration=reference(runner.get('registrationEvidence'),root)
+        if not isinstance(runner.get('groupName'),str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9 _-]{0,99}',runner['groupName']) \
+                or not re.fullmatch(r'[1-9][0-9]*',str(runner.get('groupId',''))) or runner.get('lifetime') not in ('persistent','ephemeral') \
+                or registration.get('builder')!=lane['vm'] or registration.get('repositoryId')!='1428996648' \
+                or registration.get('workflow')!=WORKFLOW or registration.get('groupId')!=runner['groupId'] \
+                or registration.get('readyOnEveryStart') is not True or registration.get('publicRepositoryAdmitted') is not True:
+            raise ValueError('dedicated protected runner registration-on-start evidence required')
     signing=reference(cfg.get('signingRouteEvidence'),root)
     if signing.get('builder')!=lane['vm'] or signing.get('workflow')!=WORKFLOW \
             or signing.get('identityVariable')!='GCP_SIGNER_SERVICE_ACCOUNT' \
@@ -325,7 +337,8 @@ def fetch_inputs(record_path,out,execute=subprocess.run,lane=None,cfg=None,root=
 
 def context(publish=False):
     lane=mustang_lane.configuration()
-    cfg=guard(lane,load(CONFIG),os.environ,publish)
+    dry=os.environ.get('MUSTANG_DRY_RUN')=='true'
+    cfg=guard(lane,load(CONFIG),os.environ,publish,dry_run=dry)
     if subprocess.check_output(['git','-C',str(ROOT),'rev-parse','HEAD'],text=True).strip()!=os.environ['GITHUB_SHA'] \
             or subprocess.check_output(['git','-C',str(ROOT),'status','--porcelain'],text=True).strip():
         raise ValueError('dedicated checkout differs from the captured clean source')
@@ -366,12 +379,17 @@ def main():
         os.environ.update(EXPECTED_COMPILE_RUN=run,EXPECTED_COMPILE_SOURCE=os.environ['GITHUB_SHA'],
             EXPECTED_COMPILE_RECOVERY='false',EXPECTED_BOOTSTRAP_SOURCE=load(ROOT/'os/signing-bootstrap/mustang-bootstrap-receipt.json')['recipeSha'])
     if args.action=='guard':
-        for name in ('MUSTANG_CONTROLLER_SERVICE_ACCOUNT','MUSTANG_CONTROLLER_WORKLOAD_IDENTITY_PROVIDER',
-                     'MUSTANG_SIGNER_WORKLOAD_IDENTITY_PROVIDER','GCP_SIGNER_SERVICE_ACCOUNT'):
+        dry=os.environ.get('MUSTANG_DRY_RUN')=='true'
+        names=('MUSTANG_CONTROLLER_SERVICE_ACCOUNT','MUSTANG_CONTROLLER_WORKLOAD_IDENTITY_PROVIDER') if dry else (
+            'MUSTANG_CONTROLLER_SERVICE_ACCOUNT','MUSTANG_CONTROLLER_WORKLOAD_IDENTITY_PROVIDER',
+            'MUSTANG_SIGNER_WORKLOAD_IDENTITY_PROVIDER','GCP_SIGNER_SERVICE_ACCOUNT')
+        for name in names:
             if not os.environ.get(name): raise ValueError(name+' is unbound; no host start')
-        if os.environ['GCP_SIGNER_SERVICE_ACCOUNT']!=ota.module('mustang_route_identity','mustang-sign-package.py').SIGNER:
+        if not dry and os.environ['GCP_SIGNER_SERVICE_ACCOUNT']!=ota.module('mustang_route_identity','mustang-sign-package.py').SIGNER:
             raise ValueError('existing Mustang signer identity differs; no host start')
         emit(runner_group=cfg['runner']['groupName'],runner_label=lane['runnerLabel'])
+    elif args.action=='produce' and os.environ.get('MUSTANG_DRY_RUN')=='true':
+        raise ValueError('dry run cannot compile')
     elif args.action=='cleanup-prepare':
         encoded=os.environ.get('MUSTANG_OWNER_B64','')
         if len(encoded)>8192: raise ValueError('oversized controller ownership refused')

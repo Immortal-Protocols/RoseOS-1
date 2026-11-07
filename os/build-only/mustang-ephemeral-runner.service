@@ -1,0 +1,16 @@
+[Unit]
+Description=Mustang one-job Actions runner
+After=network-online.target local-fs.target
+ConditionPathIsMountPoint=/mnt/disks/mustang-data
+
+[Service]
+Type=oneshot
+User=mustang-runner
+Group=mustang-runner
+WorkingDirectory=/mnt/disks/mustang-data/roseos/runner
+ExecStart=/mnt/disks/mustang-data/roseos/runner/mustang-ephemeral-guest.sh
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
