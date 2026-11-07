@@ -48,7 +48,7 @@ class FrameworksBaseWmshellContractTest(unittest.TestCase):
 
     def test_the_candidate_is_os_cores_patch_on_main(self):
         delta = self.manifest['candidateDelta']
-        self.assertEqual((delta['pr'], delta['commit']), (551, 'b639c22f05bc1efe123cf67179f3beb6d31b8c36'))
+        self.assertEqual((delta['pr'], delta['commit']), (665, '8f715d22206587e036c038f19dd06b1539afcc24'))
         patch = (ROOT/'os/patches/rose-edge-wmshell.patch').read_bytes()
         self.assertEqual([p['name'] for p in delta['patches']], ['rose-edge-wmshell.patch'])
         self.assertEqual(delta['patches'][0]['sha256'], W.C.sha256(patch))

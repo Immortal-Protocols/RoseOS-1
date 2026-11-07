@@ -1066,7 +1066,7 @@ index 0000000..2c66404
 +    public static final int REFUSED_LOCKED = 3;
 +    public static final int REFUSED_ROTATION = 4;
 +    public static final int REFUSED_MULTI_WINDOW = 5;
-+    /** Another caller's edge is raised, a raise or lower is still in flight, or the IME is showing. */
++    /** Another caller's edge is raised, or a raise or lower is still in flight (the IME no longer refuses). */
 +    public static final int REFUSED_BUSY = 6;
 +    public static final int REFUSED_LIFT = 7;
 +    public static final int REFUSED_DISABLED = 8;
@@ -1078,7 +1078,7 @@ index 0000000..2c66404
 +    public static final int LOWERED_HOME = 2;
 +    public static final int LOWERED_KEYGUARD = 3;
 +    public static final int LOWERED_DISPLAY = 4;
-+    public static final int LOWERED_IME = 5;
++    public static final int LOWERED_IME = 5; // Kept for the wire; never sent: the chin rides over the keyboard.
 +    public static final int LOWERED_CALLER_DIED = 6;
 +    public static final int LOWERED_USER = 7;
 +
@@ -1152,7 +1152,7 @@ index 0000000..2c66404
 +        if (displayId != DEFAULT_DISPLAY) return REFUSED_DISPLAY;
 +        if (liftPx <= 0 || liftPx > maxLiftPx(c.displayHeight, c.density)) return REFUSED_LIFT;
 +        if (c.keyguardVisible) return REFUSED_LOCKED;
-+        if (busy || c.imeVisible) return REFUSED_BUSY;
++        if (busy) return REFUSED_BUSY; // The chin rises over an open keyboard (F10 rule 1).
 +        if (c.rotation != ROTATION_0) return REFUSED_ROTATION;
 +        if (c.multiWindowVisible) return REFUSED_MULTI_WINDOW;
 +        if (top == null || top.taskId != taskId || top.displayId != displayId || !top.visible || !top.fullscreen
@@ -1343,7 +1343,7 @@ index 0000000..2c66404
 +        }
 +
 +        public int onImeVisibility(int displayId, boolean showing) {
-+            return raised() && showing && displayId == mDisplayId ? LOWERED_IME : KEEP;
++            return KEEP; // F10 rules 1-2: the keyboard shows or hides under a raised chin; only a swipe lowers.
 +        }
 +
 +        public int onUserChanged() {
