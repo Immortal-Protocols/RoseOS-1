@@ -1,217 +1,194 @@
 #!/usr/bin/env python3
-"""Bounded same-source host-tools contract for Mustang otatools-package.
+"""Non-executing Mustang host-tools proposal.
 
-The synced tree has no Pixel product makefiles. lunch mustang-cur-user needs
-vendor/google_devices/mustang from adevtool generate-all, which needs the
-factory image on the dedicated disk and the adevtool host-tool closure. Those
-records are absent, so this module does not admit a compile and does not set
-the production otatools pin.
+readyForControlledStart stays false and no Make argv is emitted. Caller
+declarations are not measurements. The prerequisite readers below hash or
+stat a tree; a fixture that passes a reader is not an otatools proof and
+does not authorize START.
 
-It also does not start the VM. The builder is stopped. A later run that has
-the missing proofs would use the existing controller START, enroll, and
-cleanup STOP. Acknowledging that lifecycle is not a power-on.
+Factory transfer has to be a regular file contained in the dedicated mount,
+with the pinned size and sha256. Adevtool's host tools follow
+blazer-build-only.deps_problems: the revision marker is the pin plus one
+newline, and each depsTool is a regular executable. Vendor generation is
+not shown by an arbitrary file hash; the product makefile must be the
+regular file vendor/google_devices/mustang/mustang.mk and include the
+adevtool version check. None of those readers consumes or sets the
+otatools pin.
 """
+import hashlib
 import json
+import os
 from pathlib import Path
-import re
+import stat
 import sys
 
-import mustang_lane
 import mustang_route as route
 
 ROOT = Path(__file__).resolve().parents[1]
 TARGET = 'otatools-package'
-PRODUCT_GOALS = ('vendorbootimage', 'vendorkernelbootimage', 'target-files-package', 'droid', 'dist')
-HELD_OTATOOLS = (
-    '4e13f55b',
-    'f8fc065e87083a51f64c74be57f4f06611721645273b9ae45081148203cebc22',
-)
-MAX_JOBS = 8
-MAX_TIMEOUT = 7200
-GENERATED_PREFIX = 'vendor/google_devices/mustang/'
-OUT_NAME = re.compile(r'out-mustang-hosttools-[0-9]{8,}\Z')
-SHA = re.compile(r'[0-9a-f]{64}\Z')
+MOUNT = '/mnt/disks/mustang-data'
+PRODUCT_MK = Path('vendor/google_devices/mustang/mustang.mk')
+VERSION_INCLUDE = b'include vendor/google_devices/mustang/adevtool-version-check.mk'
+PRODUCT_MK_BOUND = 1 << 20
 LIFECYCLE = (
-    'The dedicated VM is stopped. A later host-tools run has to START it through '
-    'scripts/mustang_controller.py, enroll with the existing group-5 path, and STOP '
-    'in the existing cleanup job. This module does not start, enroll, compile, or stop.'
+    'The dedicated VM is stopped. Measuring these prerequisites does not start it. '
+    'A later run, after the readers match on that disk, would still need '
+    'scripts/mustang_controller.py START, the existing group-5 enroll, and the '
+    'existing cleanup STOP. This module does not start, enroll, compile, or stop.'
 )
-
-
-def _add(problems, code):
-    if code not in problems:
-        problems.append(code)
 
 
 def pins_null(root=ROOT):
     pin = json.loads((Path(root)/'os/build-only/mustang-hosted-sign-script.json').read_text())
-    return all(pin.get(name) is None for name in ('generateReleaseSha256', 'jdkSha256', 'otatoolsSha256', 'otatoolsExecutable'))
+    return all(pin.get(name) is None for name in (
+        'generateReleaseSha256', 'jdkSha256', 'otatoolsSha256', 'otatoolsExecutable'))
 
 
-def deps_required(root=ROOT):
-    recipe = json.loads((Path(root)/'os/build-only/mustang.json').read_text())
-    return tuple(recipe['adevtool']['depsTools'])
+def recipe(root=ROOT):
+    return json.loads((Path(root)/'os/build-only/mustang.json').read_text())
 
 
-def current_observation(root=ROOT):
-    """What the committed records actually show. Missing proofs stay missing."""
-    factory = json.loads((Path(root)/'os/build-only/mustang-factory-box-20261107.json').read_text())
-    identity = route.ACCEPTED_SOURCE_SYNC
-    return {
-        'instanceId': identity['instanceId'],
-        'diskUuid': identity['diskUuid'],
-        'sourceRoot': identity['sourceRoot'],
-        'roseRevision': identity['roseRevision'],
-        'manifestSha256': identity['manifestSha256'],
-        'projectCount': identity['projectCount'],
-        'symlinks': [],
-        'outDir': None,
-        'outExists': False,
-        'outEmpty': True,
-        'priorProductOutputs': False,
-        'targets': [TARGET],
-        'jobs': 4,
-        'timeoutSeconds': 3600,
-        'factoryOnDedicatedDisk': factory.get('transferred') is True and factory.get('location') != 'box-only',
-        'factoryExtracted': factory.get('extracted') is True,
-        'factorySha256': factory.get('sha256'),
-        'factoryPath': factory.get('path'),
-        'vendorGenerated': factory.get('vendorGenerated') is True,
-        'generated': [],
-        'dependencies': [],
-        'startAcknowledged': False,
-        'otatoolsSha256': None,
-        'integration': None,
-    }
-
-
-def _held(value):
-    if not isinstance(value, str):
-        return False
-    return any(value == held or value.startswith(held) for held in HELD_OTATOOLS)
-
-
-def _generated_ok(rows):
-    if not isinstance(rows, list) or not rows:
-        return False
-    for row in rows:
-        path = row.get('path') if isinstance(row, dict) else None
-        digest = row.get('sha256') if isinstance(row, dict) else None
-        if not isinstance(path, str) or path.startswith('/') or '..' in Path(path).parts \
-                or not path.startswith(GENERATED_PREFIX) or not SHA.fullmatch(digest or ''):
-            return False
-    return True
-
-
-def _deps_ok(rows, root):
-    if not isinstance(rows, list):
-        return False
-    found = {}
-    for row in rows:
-        if not isinstance(row, dict) or not SHA.fullmatch(row.get('sha256') or ''):
-            return False
-        found[row.get('name')] = row['sha256']
-    return all(name in found for name in deps_required(root))
-
-
-def problems_for(obs, root=ROOT):
+def current_gaps(root=ROOT):
+    """Gaps in the committed records. There is no caller observation to satisfy them."""
     problems = []
     identity = route.ACCEPTED_SOURCE_SYNC
     record = json.loads((Path(root)/identity['path']).read_text())
     if not route.accepted_source_sync(record, identity['path'], root):
-        _add(problems, 'source-receipt-unbound')
-    if obs.get('instanceId') != identity['instanceId']:
-        _add(problems, 'wrong-vm')
-    if obs.get('diskUuid') != identity['diskUuid']:
-        _add(problems, 'wrong-disk')
-    if obs.get('sourceRoot') != identity['sourceRoot']:
-        _add(problems, 'wrong-tree')
-    if obs.get('roseRevision') != identity['roseRevision'] or obs.get('manifestSha256') != identity['manifestSha256'] \
-            or obs.get('projectCount') != identity['projectCount']:
-        _add(problems, 'source-changed')
-    links = obs.get('symlinks') or []
-    if not isinstance(links, list) or any(name in links for name in ('source', 'manifest', 'out', 'factory')):
-        _add(problems, 'symlink')
-    out = obs.get('outDir')
-    if not isinstance(out, str) or not OUT_NAME.fullmatch(out) or '/' in out or out.startswith('out-mustang-build-'):
-        _add(problems, 'out-dir-unspecified')
-    elif obs.get('outExists') is not False or obs.get('outEmpty') is not True or obs.get('priorProductOutputs') is not False:
-        _add(problems, 'reused-out-dir')
-    targets = obs.get('targets')
-    if targets != [TARGET] or any(goal in (obs.get('argv') or []) for goal in PRODUCT_GOALS):
-        _add(problems, 'untrusted-target')
-    argv = ' '.join(obs.get('argv') or [])
-    if any(goal in argv for goal in PRODUCT_GOALS) or any(word in argv for word in (' sign', 'publish', 'secret', 'fastboot', '/keys')):
-        _add(problems, 'forbidden-path')
-    jobs, timeout = obs.get('jobs'), obs.get('timeoutSeconds')
-    if type(jobs) is not int or type(timeout) is not int or not 1 <= jobs <= MAX_JOBS \
-            or not 1 <= timeout <= MAX_TIMEOUT or timeout >= mustang_lane.CONFIRMED_STOP['seconds']:
-        _add(problems, 'bounds')
-    if obs.get('factoryOnDedicatedDisk') is not True or str(obs.get('factoryPath') or '').startswith('/workspace/'):
-        _add(problems, 'factory-not-on-dedicated-disk')
-    if obs.get('factoryExtracted') is not True:
-        _add(problems, 'factory-not-extracted')
-    recipe = json.loads((Path(root)/'os/build-only/mustang.json').read_text())
-    if obs.get('factorySha256') != recipe['factory']['sha256']:
-        _add(problems, 'factory-hash-differs')
-    if obs.get('vendorGenerated') is not True or not _generated_ok(obs.get('generated')):
-        _add(problems, 'vendor-not-generated')
-        _add(problems, 'mustang-product-config-absent')
-    if not _deps_ok(obs.get('dependencies'), root):
-        _add(problems, 'host-dependency-closure-absent')
-    integration = obs.get('integration')
-    if integration not in (None, {'deliberate': False}):
-        if not isinstance(integration, dict) or integration.get('deliberate') is not True \
-                or not isinstance(integration.get('paths'), list):
-            _add(problems, 'unrecorded-mutation')
-    if _held(obs.get('otatoolsSha256')):
-        _add(problems, 'held-otatools-substitute')
-    if obs.get('requireExistingOtatoolsPin') is True or (obs.get('otatoolsSha256') not in (None,) and not _held(obs.get('otatoolsSha256'))):
-        _add(problems, 'circular-pin')
+        problems.append('source-receipt-unbound')
+    factory = json.loads((Path(root)/'os/build-only/mustang-factory-box-20261107.json').read_text())
+    if factory.get('location') == 'box-only' or factory.get('transferred') is not True:
+        problems.append('factory-not-on-dedicated-disk')
+    if factory.get('extracted') is not True:
+        problems.append('factory-not-extracted')
+    if factory.get('vendorGenerated') is not True:
+        problems.append('vendor-not-generated')
+    problems.append('mustang-product-config-absent')
+    problems.append('host-dependency-closure-absent')
+    problems.append('out-dir-unspecified')
     if not pins_null(root):
-        _add(problems, 'production-pin-changed')
-    proof_gaps = [code for code in problems if code in {
-        'factory-not-on-dedicated-disk', 'factory-not-extracted', 'factory-hash-differs',
-        'vendor-not-generated', 'mustang-product-config-absent', 'host-dependency-closure-absent',
-        'source-receipt-unbound', 'source-changed', 'wrong-vm', 'wrong-disk', 'wrong-tree',
-        'symlink', 'out-dir-unspecified', 'reused-out-dir', 'untrusted-target', 'forbidden-path',
-        'bounds', 'unrecorded-mutation', 'held-otatools-substitute', 'circular-pin', 'production-pin-changed'}]
-    if not proof_gaps and obs.get('startAcknowledged') is not True:
-        _add(problems, 'start-not-acknowledged')
+        problems.append('production-pin-changed')
     return problems
 
 
-def allowlisted_argv(obs):
-    return {
-        'cwd': obs['sourceRoot'],
-        'env': {'OUT_DIR': obs['outDir'], 'PATH': '/usr/bin:/bin'},
-        'argv': ['bash', '-c', 'source build/envsetup.sh && lunch mustang-cur-user && m -j%d %s' % (obs['jobs'], TARGET)],
-        'timeoutSeconds': obs['timeoutSeconds'],
-        'mutation': 'create only this empty OUT_DIR',
-        'cleanup': 'delete only this OUT_DIR; the source tree stays; VM STOP stays on the existing cleanup job',
-    }
-
-
-def decide(obs, root=ROOT):
-    found = problems_for(obs, root)
-    ready = not found
+def decide(root=ROOT):
+    """The proposal. Arguments other than the checkout are ignored; none can make it ready."""
     return {
         'schema': 'roseos.mustang-hosttools-contract.v1',
+        'kind': 'non-executing-proposal',
         'target': TARGET,
         'execute': False,
         'startAuthorized': False,
-        'readyForControlledStart': ready,
-        'problems': found,
-        'argv': allowlisted_argv(obs) if ready else None,
+        'readyForControlledStart': False,
+        'problems': current_gaps(root),
+        'argv': None,
         'lifecycle': LIFECYCLE,
         'productionPins': 'null',
-        'heldOtatools': HELD_OTATOOLS[0],
+        'heldOtatools': '4e13f55b',
     }
 
 
+def _contained(mount, path):
+    """Lexical containment plus a no-symlink walk. abspath drops .. without following links."""
+    base = Path(os.path.abspath(mount))
+    candidate = Path(os.path.abspath(path))
+    if candidate == base or base.parts != candidate.parts[:len(base.parts)]:
+        return False
+    if base.is_symlink():
+        return False
+    cursor = base
+    for part in candidate.relative_to(base).parts:
+        cursor = cursor/part
+        if cursor.is_symlink():
+            return False
+    return True
+
+
+def measure_factory(mount, path, root=ROOT):
+    """Read a factory archive. The expected hash and size come from mustang.json, not the caller."""
+    pin = recipe(root)['factory']
+    problems = []
+    if not _contained(mount, path):
+        problems.append('factory-not-contained')
+        return {'measured': False, 'matchesPinnedFactory': False, 'admitsOtatools': False, 'problems': problems}
+    candidate = Path(path)
+    try:
+        info = os.lstat(candidate)
+    except OSError:
+        problems.append('factory-unreadable')
+        return {'measured': False, 'matchesPinnedFactory': False, 'admitsOtatools': False, 'problems': problems}
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
+        problems.append('factory-not-regular')
+        return {'measured': False, 'matchesPinnedFactory': False, 'admitsOtatools': False, 'problems': problems}
+    if info.st_size != pin['sizeBytes']:
+        problems.append('factory-size-differs')
+        return {'measured': True, 'matchesPinnedFactory': False, 'admitsOtatools': False, 'problems': problems}
+    digest = hashlib.sha256()
+    with open(candidate, 'rb') as handle:
+        for block in iter(lambda: handle.read(1 << 20), b''):
+            digest.update(block)
+    if digest.hexdigest() != pin['sha256']:
+        problems.append('factory-hash-differs')
+    return {'measured': True, 'matchesPinnedFactory': not problems, 'admitsOtatools': False, 'problems': problems}
+
+
+def measure_deps(source, root=ROOT):
+    """The deps_problems read: pin newline, then each host tool as a regular executable."""
+    spec = recipe(root)
+    deps = Path(source)/spec['adevtool']['depsDir']
+    problems = []
+    marker = deps/'adevtool_revision'
+    want = (spec['pins']['vendor/adevtool'] + '\n').encode()
+    try:
+        fd = os.open(marker, os.O_RDONLY | os.O_NOFOLLOW)
+        try:
+            have = os.read(fd, 128)
+        finally:
+            os.close(fd)
+    except OSError:
+        have = None
+    if have != want:
+        problems.append('adevtool-revision-differs')
+    tools = deps/'host/linux-x86/bin'
+    missing = []
+    for name in spec['adevtool']['depsTools']:
+        tool = tools/name
+        try:
+            info = os.lstat(tool)
+        except OSError:
+            missing.append(name)
+            continue
+        if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode) or not os.access(tool, os.X_OK):
+            missing.append(name)
+    if missing:
+        problems.append('adevtool-host-tools-unmeasured')
+    return {'measured': not problems, 'admitsOtatools': False, 'problems': problems,
+            'tools': list(spec['adevtool']['depsTools'])}
+
+
+def measure_vendor(source):
+    """Read the product makefile. A hash supplied beside an arbitrary vendor path is not this check."""
+    path = Path(source)/PRODUCT_MK
+    source = Path(source)
+    problems = []
+    if not _contained(source, path):
+        problems.append('mustang-product-config-absent')
+        return {'measured': False, 'admitsVendorTree': False, 'admitsOtatools': False, 'problems': problems}
+    try:
+        info = os.lstat(path)
+    except OSError:
+        problems.append('mustang-product-config-absent')
+        return {'measured': False, 'admitsVendorTree': False, 'admitsOtatools': False, 'problems': problems}
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode) or info.st_size > PRODUCT_MK_BOUND or info.st_size <= 0:
+        problems.append('mustang-product-config-absent')
+        return {'measured': False, 'admitsVendorTree': False, 'admitsOtatools': False, 'problems': problems}
+    data = path.read_bytes()
+    if VERSION_INCLUDE not in data:
+        problems.append('mustang-product-config-absent')
+    return {'measured': not problems, 'admitsVendorTree': False, 'admitsOtatools': False, 'problems': problems}
+
+
 def main(argv=None):
-    parser_out = decide(current_observation())
-    json.dump(parser_out, sys.stdout, sort_keys=True)
+    json.dump(decide(), sys.stdout, sort_keys=True)
     sys.stdout.write('\n')
     return 4
 
