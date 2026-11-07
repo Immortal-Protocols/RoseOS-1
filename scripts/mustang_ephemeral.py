@@ -264,14 +264,33 @@ def emit_stop(decision):
             handle.write('stop='+('true' if decision == 'stop' else 'false')+'\n')
 
 
-def main(argv=None):
+def private_jit_file(value):
+    """A 0600 regular file. The bytes are not read and are not part of any error."""
+    if type(value) is not str or not value or any(char in value for char in '\n\r\x00') or '..' in Path(value).parts:
+        raise ValueError('JIT metadata file must be a private regular file')
+    path = Path(value)
+    if not path.is_absolute():
+        raise ValueError('JIT metadata file must be a private regular file')
+    try:
+        info = path.lstat()
+    except OSError:
+        raise ValueError('JIT metadata file must be a private regular file') from None
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode) or stat.S_IMODE(info.st_mode) != 0o600:
+        raise ValueError('JIT metadata file must be a private regular file')
+    return path
+
+
+def main(argv=None, transport=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('action', choices=('plan', 'issue', 'put-metadata', 'wait-fetched', 'clear-metadata', 'queue-watch', 'cancel'))
     parser.add_argument('--run-id')
     parser.add_argument('--out')
+    parser.add_argument('--file')
     parser.add_argument('--execute', action='store_true')
     args = parser.parse_args(argv)
     try:
+        if args.file is not None and args.action != 'put-metadata':
+            raise ValueError('private JIT file is only accepted by put-metadata')
         if args.action == 'plan':
             body = jit_body(args.run_id or '1')
             value = {'request': body, 'endpoint': API, 'metadata': metadata_argv('add-metadata'),
@@ -286,12 +305,15 @@ def main(argv=None):
         elif args.action == 'put-metadata':
             if not args.execute or not args.file:
                 raise ValueError('metadata delivery requires --execute and the private file')
-            path = Path(args.file)
-            if not path.is_file() or path.is_symlink() or stat.S_IMODE(path.stat().st_mode) != 0o600:
-                raise ValueError('JIT metadata file must be a private regular file')
+            path = private_jit_file(args.file)
             argv = metadata_argv('add-metadata')
             argv[-1] = argv[-1]+'='+str(path)
-            subprocess.check_call(argv)
+            if transport is None:
+                subprocess.check_call(argv)
+            else:
+                result = transport(argv)
+                if getattr(result, 'returncode', 0):
+                    raise subprocess.CalledProcessError(result.returncode, argv)
             value = {'delivered': METADATA_KEY, 'execute': True}
         elif args.action == 'wait-fetched':
             if not args.execute:
