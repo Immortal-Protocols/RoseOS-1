@@ -2,7 +2,7 @@ package dev.pixel.voice;
 
 /** Home page order and where an entry lands (OS-HIFI-HOME-001, #223). Pages run Home, then the app pages, and
  * nothing else: the legacy Widgets and voice ("Tap to talk") pages are no longer pages, so normal swipes stay in
- * the current Home. The voice controls open only on request (MainActivity.showVoiceControls). A HOME press that
+ * the current Home; the legacy voice controls that opened over it are removed with their setting (1H). A HOME press that
  * returns from an app or the Rose conversation keeps the page the owner left, like a phone launcher; HOME while
  * Home is already showing, or the app icon, goes to Home. Pure logic, no Android types. */
 final class HomePages {
