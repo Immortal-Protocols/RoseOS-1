@@ -16,8 +16,10 @@ import os
 from pathlib import Path
 import re
 import shlex
+import signal
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -528,58 +530,141 @@ def possession_ssh(hostkeys, identity_path, environ):
     return {'knownHosts': known, 'argv': argv, 'timeoutSeconds': 60}
 
 
+_SECRET_TEXT = re.compile(
+    r'ya29\.[A-Za-z0-9_\-]*|Bearer[ \t]+[A-Za-z0-9._\-+/=]*|'
+    r'access_token[\'"\s:=]+[A-Za-z0-9._\-+/=]*|Authorization:[ \t]*\S+',
+    re.I)
+_HOST_KEY_UNKNOWN = re.compile(
+    r"^No ED25519 host key is known for .+ and you have requested strict checking\.$")
+
+
 def sanitize_text(text, limit=2048):
-    """Capped text with private-key blocks removed. The identity path is not a secret."""
+    """Redact credential material, then cap. A truncated BEGIN block is removed through the buffer end."""
     if isinstance(text, bytes):
         text = text.decode('utf-8', 'replace')
     if not isinstance(text, str):
         return ''
-    text = re.sub(r'-----BEGIN [A-Z0-9 ]*-----.*?-----END [A-Z0-9 ]*-----', '[redacted]', text, flags=re.S)
+    text = re.sub(r'-----BEGIN [A-Z0-9 -]*-*[^\n]*\n?.*?(?:-----END [A-Z0-9 -]*-*[^\n]*|$)',
+                  '[redacted]', text, flags=re.S)
     kept = []
     for line in text.splitlines():
-        if 'PRIVATE' in line or 'BEGIN ' in line:
+        if '-----BEGIN' in line or 'PRIVATE KEY' in line or 'OPENSSH PRIVATE' in line:
             continue
-        kept.append(line)
+        if len(line) >= 80 and re.fullmatch(r'[A-Za-z0-9+/=]+', line.strip()):
+            continue
+        kept.append(_SECRET_TEXT.sub('[redacted]', line))
     return '\n'.join(kept)[:limit]
 
 
 def sanitize_argv(argv):
     clean = []
     for arg in argv or []:
-        if not isinstance(arg, str) or 'BEGIN ' in arg or 'PRIVATE KEY' in arg:
+        if not isinstance(arg, str) or any(mark in arg for mark in (
+                '-----BEGIN', 'PRIVATE KEY', 'ya29.', 'Bearer ', 'access_token')):
             clean.append('[redacted]')
         else:
             clean.append(arg)
     return clean
 
 
-def classify_ssh(returncode, stderr):
-    """OpenSSH's own outcome. Host-key acceptance is only 'proceeded to userauth', not a pin."""
-    text = stderr or ''
-    if any(phrase in text for phrase in (
-            'Host key verification failed', 'REMOTE HOST IDENTIFICATION HAS CHANGED',
-            'WARNING: POSSIBLE DNS SPOOFING', 'No ED25519 host key is known')):
-        return 'host-key-mismatch'
-    if 'Permission denied' in text:
-        return 'auth-failed'
+def _none():
+    return {'serverKeyAccepted': False, 'loginAccepted': False, 'evidence': 'none'}
+
+
+def _host_key_failure(lines):
+    for line in lines:
+        if line == 'Host key verification failed.' or 'REMOTE HOST IDENTIFICATION HAS CHANGED' in line:
+            return True
+        if _HOST_KEY_UNKNOWN.fullmatch(line):
+            return True
+    return False
+
+
+def _disqualified(lines):
+    """Local and pre-auth client failures. They are not userauth proof."""
+    for line in lines:
+        if line.startswith('Warning: Identity file ') and 'not accessible' in line:
+            return True
+        if 'bad permissions' in line or 'UNPROTECTED PRIVATE KEY' in line:
+            return True
+        if 'Could not resolve hostname' in line or 'no matching' in line or line.startswith('Unable to negotiate'):
+            return True
+    return False
+
+
+def _userauth_denied(lines, user, alias):
+    """OpenSSH 9.6 fatal line, only after the verbose host-key acceptance line."""
+    if not user or not alias:
+        return False
+    accepted = "debug1: Host '" + alias + "' is known and matches the ED25519 host key."
+    denied = re.compile(r'^' + re.escape(user) + r'@' + re.escape(alias)
+                        + r': Permission denied \(publickey(?:,[A-Za-z0-9-]+)*\)\.$')
+    seen_host = False
+    for line in lines:
+        if line == 'debug1: Authentication succeeded (publickey).':
+            return False
+        if line == accepted:
+            seen_host = True
+        elif seen_host and denied.fullmatch(line):
+            return True
+    return False
+
+
+def classify_ssh(returncode, lines, user, alias):
+    """Evidence from the OpenSSH client log and the process exit, never from mixed stderr.
+
+    Exit 0 is a completed session. Exit 1 through 254 is the remote command's status.
+    Exit 255 proves an authentication failure only for the exact user@alias denial that
+    follows host-key acceptance. Every other 255, a negative status, and a generic
+    Permission denied are unproven.
+    """
+    lines = [line for line in (lines or []) if isinstance(line, str)]
     if returncode is None:
-        return 'timeout'
-    lowered = text.lower()
-    if any(phrase in lowered for phrase in (
-            'connection refused', 'connection timed out', 'connection reset',
-            'kex_exchange_identification', 'operation timed out', 'failed to connect')):
-        return 'transport'
+        return 'timeout', _none()
+    if not isinstance(returncode, int) or returncode < 0:
+        return 'unproven', _none()
+    failed = _host_key_failure(lines)
+    succeeded = any(line == 'debug1: Authentication succeeded (publickey).' for line in lines)
+    if failed and succeeded:
+        return 'unproven', _none()
+    if failed and returncode != 0:
+        return 'host-key-mismatch', _none()
     if returncode == 0:
-        return 'success'
-    return 'remote-command'
+        if failed or _disqualified(lines):
+            return 'unproven', _none()
+        return 'success', {'serverKeyAccepted': True, 'loginAccepted': True, 'evidence': 'openssh-session'}
+    if 1 <= returncode <= 254:
+        if _disqualified(lines):
+            return 'unproven', _none()
+        return 'remote-command', {'serverKeyAccepted': True, 'loginAccepted': True,
+                                  'evidence': 'openssh-remote-exit'}
+    if (returncode == 255 and not succeeded and not _disqualified(lines)
+            and _userauth_denied(lines, user, alias)):
+        return 'auth-failed', {'serverKeyAccepted': True, 'loginAccepted': False,
+                               'evidence': 'openssh-userauth-denied'}
+    return 'unproven', _none()
 
 
 def ssh_evidence(kind):
-    """Strict OpenSSH ordering only. No banner and no keyscan."""
-    server = kind in ('auth-failed', 'remote-command', 'success', 'not-json')
-    login = kind in ('remote-command', 'success', 'not-json')
-    return {'serverKeyAccepted': server, 'loginAccepted': login,
-            'evidence': 'openssh-userauth' if server else 'none'}
+    """Positive evidence is only a completed session, a non-255 remote exit, or the exact denial."""
+    if kind in ('success', 'not-json'):
+        return {'serverKeyAccepted': True, 'loginAccepted': True, 'evidence': 'openssh-session'}
+    if kind == 'remote-command':
+        return {'serverKeyAccepted': True, 'loginAccepted': True, 'evidence': 'openssh-remote-exit'}
+    if kind == 'auth-failed':
+        return {'serverKeyAccepted': True, 'loginAccepted': False, 'evidence': 'openssh-userauth-denied'}
+    return _none()
+
+
+def complete_log_text(raw, bound):
+    """Bytes the client log reader kept. A partial trailing line at the bound is dropped."""
+    if not isinstance(raw, (bytes, bytearray)):
+        raw = b''
+    truncated = len(raw) > bound
+    raw = raw[:bound]
+    if truncated:
+        raw = raw.rsplit(b'\n', 1)[0]
+    return raw.decode('utf-8', 'replace'), truncated
 
 
 def possession_plan(api, client_public, operation_id, current_items=None, expected=None, environ=None, now=None,
@@ -661,6 +746,96 @@ def guest_key_removed(receipt, possession_id, material):
     return cleanup.get('possessMarkerLines') == 0
 
 
+def _process_exited(proc):
+    poll = getattr(proc, 'poll', None)
+    if not callable(poll):
+        return False
+    try:
+        return poll() is not None
+    except OSError:
+        return True
+
+
+def _process_code(proc):
+    code = getattr(proc, 'returncode', None)
+    if code is not None:
+        return code
+    poll = getattr(proc, 'poll', None)
+    if not callable(poll):
+        return None
+    try:
+        return poll()
+    except OSError:
+        return None
+
+
+def _read_available(stream, limit):
+    """Non-blocking read. An unknown stream is skipped so a held pipe cannot extend the wait."""
+    if stream is None:
+        return b''
+    try:
+        fd = stream.fileno()
+    except (AttributeError, OSError, ValueError):
+        return b''
+    try:
+        os.set_blocking(fd, False)
+    except (AttributeError, OSError):
+        return b''
+    try:
+        data = stream.read(limit)
+    except (OSError, ValueError):
+        return b''
+    if isinstance(data, str):
+        data = data.encode()
+    return data or b''
+
+
+def _teardown_process(proc):
+    if isinstance(proc, subprocess.Popen):
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except (OSError, ProcessLookupError):
+            try:
+                proc.kill()
+            except OSError:
+                pass
+        try:
+            proc.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            try:
+                proc.kill()
+            except OSError:
+                pass
+            try:
+                proc.wait(timeout=1)
+            except (OSError, subprocess.TimeoutExpired):
+                pass
+        except OSError:
+            pass
+    else:
+        kill = getattr(proc, 'kill', None)
+        if callable(kill):
+            try:
+                kill()
+            except OSError:
+                pass
+        wait = getattr(proc, 'wait', None)
+        if callable(wait):
+            try:
+                wait(timeout=2)
+            except (OSError, subprocess.TimeoutExpired):
+                pass
+    stream = getattr(proc, 'stderr', None)
+    data = _read_available(stream, SSH_STDERR_CAP)
+    close = getattr(stream, 'close', None)
+    if callable(close):
+        try:
+            close()
+        except OSError:
+            pass
+    return data
+
+
 def _now(driver):
     clock = getattr(driver, 'clock', None)
     return clock() if callable(clock) else 0
@@ -734,11 +909,12 @@ def possession_run(driver, plan, identity_path, baseline=None):
                                 'fingerprint': seen.get('fingerprint'), 'doNotRetryBlindly': True}
                 raise Refused('metadata add is unresolved')
         login_ready = driver.wait_login_ready()
-        if login_ready.get('iap') != 'ready':
-            ssh_report = {'class': 'transport', 'returncode': login_ready.get('returncode'),
-                          'stderr': login_ready.get('stderr') or '', 'argv': [], 'attempts': 0,
-                          'serverKeyAccepted': False, 'loginAccepted': False, 'evidence': 'none'}
-            raise Refused('ssh transport exit ' + str(login_ready.get('returncode')))
+        if not login_ready.get('listenerReady'):
+            ssh_report = {'class': 'unproven', 'returncode': login_ready.get('returncode'),
+                          'stderr': login_ready.get('stderr') or '', 'clientLog': '', 'argv': [],
+                          'attempts': 0, 'serverKeyAccepted': False, 'loginAccepted': False,
+                          'evidence': 'none', 'listenerReady': False, 'backendTcp22': False}
+            raise Refused('ssh listener-not-ready exit ' + str(login_ready.get('returncode')))
         ssh_report = driver.ssh(plan['argv'], 60)
         kind = ssh_report.get('class')
         if kind == 'host-key-mismatch':
@@ -747,11 +923,10 @@ def possession_run(driver, plan, identity_path, baseline=None):
             raise Refused('ssh ' + str(kind) + ' exit ' + str(ssh_report.get('returncode')))
         if not _quiesced(ssh_report.get('probe') or {}):
             ssh_report['class'] = 'remote-command'
-            ssh_report.update(ssh_evidence('remote-command'))
             raise Refused('ssh remote-command exit 0')
         probe_ok = True
-    except Refused as exc:
-        error = str(exc)
+    except (Refused, OSError, subprocess.SubprocessError) as exc:
+        error = sanitize_text(type(exc).__name__ + ': ' + str(exc)) or type(exc).__name__
     meta_removed = False
     refreshed = False
     if added:
@@ -836,6 +1011,8 @@ REFRESH_SECONDS = 45
 LOGIN_READY_SECONDS = 60
 IAP_READY_SECONDS = 45
 SSH_STDERR_CAP = 2048
+# Client-log bound used for classification. Storage is capped separately, after classification.
+SSH_LOG_BOUND = 65536
 INSPECT_TIMEOUT = 600
 
 
@@ -1194,40 +1371,74 @@ class GcloudDriver:
         return kind
 
     def ssh(self, argv, timeout):
-        """One strict attempt. A nonzero exit is a report, not a discarded exception."""
+        """One strict attempt. Classification uses the OpenSSH -E log, not mixed stderr."""
         if timeout != SSH_TIMEOUT:
             raise Refused('ssh timeout is not 60 seconds')
-        clean_argv = sanitize_argv(argv)
+        log_fd, log_path = tempfile.mkstemp(prefix='yogi-ssh-')
+        os.close(log_fd)
+        executed = [argv[0], '-E', log_path, '-o', 'LogLevel=VERBOSE', *list(argv[1:])] if argv else []
+        clean_argv = sanitize_argv(executed)
+        user = POSSESSION_USER
+        alias = ''
+        for index, arg in enumerate(executed):
+            if arg == '-l' and index + 1 < len(executed):
+                user = executed[index + 1]
+            elif isinstance(arg, str) and arg.startswith('HostKeyAlias='):
+                alias = arg.split('=', 1)[1]
         try:
-            result = self.run(argv, capture_output=True, timeout=timeout)
-        except subprocess.TimeoutExpired as expired:
-            stderr = sanitize_text(getattr(expired, 'stderr', b'') or b'')
-            report = {'class': 'timeout', 'returncode': None, 'stderr': stderr, 'argv': clean_argv,
-                      'attempts': 1, 'probe': None}
-            report.update(ssh_evidence('timeout'))
-            return report
-        stderr = sanitize_text(getattr(result, 'stderr', b'') or b'')
-        kind = classify_ssh(result.returncode, stderr)
-        probe = None
-        if result.returncode == 0 and kind == 'success':
             try:
-                probe = json.loads(result.stdout.decode() if isinstance(result.stdout, bytes) else result.stdout)
-            except (ValueError, AttributeError):
-                kind = 'not-json'
-        report = {'class': kind, 'returncode': result.returncode, 'stderr': stderr, 'argv': clean_argv,
-                  'attempts': 1, 'probe': probe}
+                result = self.run(executed, capture_output=True, timeout=timeout)
+            except subprocess.TimeoutExpired as expired:
+                return self._ssh_report('timeout', None, getattr(expired, 'stderr', b'') or b'',
+                                        b'', clean_argv, False)
+            except (OSError, subprocess.SubprocessError) as exc:
+                return self._ssh_report('unproven', None, type(exc).__name__, b'', clean_argv, False)
+            raw, truncated = self._read_client_log(log_path)
+            text, truncated = complete_log_text(raw, SSH_LOG_BOUND)
+            kind, evidence = classify_ssh(result.returncode, text.splitlines(), user, alias)
+            probe = None
+            if result.returncode == 0 and kind == 'success':
+                try:
+                    probe = json.loads(result.stdout.decode() if isinstance(result.stdout, bytes) else result.stdout)
+                except (ValueError, AttributeError):
+                    kind = 'not-json'
+            report = self._ssh_report(kind, result.returncode, getattr(result, 'stderr', b'') or b'',
+                                      text.encode(), clean_argv, truncated, probe)
+            report.update(evidence)
+            return report
+        finally:
+            try:
+                os.unlink(log_path)
+            except OSError:
+                pass
+
+    def _ssh_report(self, kind, returncode, stderr, client_log, argv, truncated, probe=None):
+        report = {'class': kind, 'returncode': returncode, 'stderr': sanitize_text(stderr),
+                  'clientLog': sanitize_text(client_log), 'argv': argv, 'attempts': 1,
+                  'probe': probe, 'logTruncated': bool(truncated)}
         report.update(ssh_evidence(kind))
         return report
 
+    def _read_client_log(self, path):
+        try:
+            with open(path, 'rb') as handle:
+                raw = handle.read(SSH_LOG_BOUND + 1)
+        except OSError:
+            return b'', False
+        return raw, len(raw) > SSH_LOG_BOUND
+
     def wait_login_ready(self):
-        """IAP TCP must accept a connection, then one conservative guest-agent delay, then the caller probes once."""
+        """Local gcloud listener only. Acceptance is not backend TCP 22 and not possession."""
         started = self.clock()
-        if self.iap_check is not None:
-            ok, code, err = self.iap_check()
-        else:
-            ok, code, err = self._iap_tcp()
-        report = {'iap': 'ready' if ok else 'unready', 'returncode': code, 'stderr': sanitize_text(err),
-                  'delaySeconds': 0}
+        try:
+            if self.iap_check is not None:
+                ok, code, err = self.iap_check()
+            else:
+                ok, code, err = self._iap_tcp()
+        except (OSError, subprocess.SubprocessError) as exc:
+            ok, code, err = False, None, type(exc).__name__
+        report = {'listenerReady': bool(ok), 'backendTcp22': False, 'possession': False,
+                  'returncode': code, 'stderr': sanitize_text(err), 'delaySeconds': 0}
         if ok:
             self.sleep(LOGIN_READY_SECONDS)
             report['delaySeconds'] = LOGIN_READY_SECONDS
@@ -1235,40 +1446,61 @@ class GcloudDriver:
         return report
 
     def _iap_tcp(self):
+        """Accept on the local gcloud listener, then always reap the process group."""
         import socket
-        with socket.socket() as sock:
-            sock.bind(('127.0.0.1', 0))
-            port = sock.getsockname()[1]
+        try:
+            with socket.socket() as sock:
+                sock.bind(('127.0.0.1', 0))
+                port = sock.getsockname()[1]
+        except OSError as exc:
+            return False, None, type(exc).__name__
         argv = ['gcloud', 'compute', 'start-iap-tunnel', INSTANCE, '22',
                 '--local-host-port=127.0.0.1:' + str(port), '--zone', ZONE, '--project', PROJECT, '--quiet']
-        proc = self.popen(argv, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-        deadline = self.clock() + IAP_READY_SECONDS
-        stalls = 0
+        try:
+            try:
+                proc = self.popen(argv, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                                  start_new_session=True)
+            except TypeError:
+                proc = self.popen(argv, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        except (OSError, subprocess.SubprocessError, TypeError) as exc:
+            return False, None, type(exc).__name__
         ok = False
-        while True:
-            if self.connect is not None:
-                ok = bool(self.connect(('127.0.0.1', port)))
-            else:
-                try:
-                    with socket.create_connection(('127.0.0.1', port), timeout=1):
-                        ok = True
-                except OSError:
-                    ok = False
-            if ok or self.clock() >= deadline:
-                break
-            before = self.clock()
-            self.sleep(POLL_SECONDS)
-            if self.clock() <= before:
-                stalls += 1
-                if stalls >= 3:
-                    break
+        code = None
         err = b''
         try:
-            proc.kill()
-            err = proc.stderr.read(SSH_STDERR_CAP) if proc.stderr else b''
-        except Exception:
-            err = b''
-        return ok, getattr(proc, 'returncode', None), err
+            deadline = self.clock() + IAP_READY_SECONDS
+            stalls = 0
+            while True:
+                if _process_exited(proc):
+                    break
+                try:
+                    if self.connect is not None:
+                        ok = bool(self.connect(('127.0.0.1', port)))
+                    else:
+                        try:
+                            with socket.create_connection(('127.0.0.1', port), timeout=1):
+                                ok = True
+                        except OSError:
+                            ok = False
+                except OSError:
+                    ok = False
+                if ok or self.clock() >= deadline:
+                    break
+                before = self.clock()
+                self.sleep(POLL_SECONDS)
+                if self.clock() <= before:
+                    stalls += 1
+                    if stalls >= 3:
+                        break
+        except (OSError, subprocess.SubprocessError) as exc:
+            ok = False
+            err = type(exc).__name__.encode()
+        finally:
+            code = _process_code(proc)
+            captured = _teardown_process(proc)
+        if not err:
+            err = captured
+        return ok, code, err
 
     def wait_refresh(self):
         self.sleep(REFRESH_SECONDS)
