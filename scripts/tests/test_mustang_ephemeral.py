@@ -409,7 +409,7 @@ class EnrollmentTest(unittest.TestCase):
         self.assertIn('./run.sh --jitconfig', script)
         self.assertNotIn('exec ./run.sh', script)
         self.assertIn('trap cleanup EXIT', script)
-        self.assertIn('--output "$file"', script)
+        self.assertIn('-o "$outfile"', script)
         self.assertIn('guest-attributes/mustang/jit-fetched', script)
         self.assertNotIn('config=$(curl', script)
         self.assertNotIn('config.sh', script)
@@ -733,6 +733,86 @@ class WorkflowCliContractTest(unittest.TestCase):
         self.assertIn('instance/attributes/'+enroll.METADATA_KEY, guest)
         self.assertIn('guest-attributes/mustang/jit-fetched', guest)
         self.assertIn('--jitconfig', guest)
+
+
+class GuestMetadataOrderTest(unittest.TestCase):
+    """The config read and the guest-attribute acknowledgement are different requests."""
+
+    def run_guest(self, root, plan):
+        binary = Path(root)/'bin'
+        runner = Path(root)/'roseos/runner'
+        binary.mkdir(parents=True)
+        runner.mkdir(parents=True)
+        body = 'jit-body-must-not-be-logged'
+        (binary/'curl').write_text(
+            '#!/usr/bin/env python3\n'
+            'import os, sys\n'
+            'args=sys.argv[1:]; method, outfile, url="GET", None, None\n'
+            'i=0\n'
+            'while i < len(args):\n'
+            '    if args[i]=="-X" and i+1<len(args): method=args[i+1]; i+=2; continue\n'
+            '    if args[i]=="-o" and i+1<len(args): outfile=args[i+1]; i+=2; continue\n'
+            '    if args[i]=="-w": i+=2; continue\n'
+            '    if args[i].startswith("http"): url=args[i]\n'
+            '    i+=1\n'
+            'plan=os.environ["MUSTANG_CURL_PLAN"]\n'
+            'lines=open(plan).read().splitlines()\n'
+            'op, status=lines[0].split(); open(plan,"w").write("\\n".join(lines[1:]))\n'
+            'open(os.environ["MUSTANG_CURL_LOG"],"a").write(method+" "+url+"\\n")\n'
+            'if method!=op: sys.stderr.write("unexpected "+method+"\\n"); sys.exit(3)\n'
+            'if status=="network": sys.exit(7)\n'
+            'if outfile and status=="200" and method=="GET":\n'
+            '    open(outfile,"w").write(os.environ["MUSTANG_CURL_BODY"])\n'
+            'elif outfile: open(outfile,"w").write("")\n'
+            'sys.stdout.write(status)\n')
+        (binary/'curl').chmod(0o755)
+        (runner/'run.sh').write_text('#!/bin/sh\necho ran >> "$MUSTANG_RUN_LOG"\nexit 0\n')
+        (runner/'run.sh').chmod(0o755)
+        plan_path = Path(root)/'plan'
+        plan_path.write_text('\n'.join(plan)+'\n')
+        log = Path(root)/'curl.log'
+        ran = Path(root)/'ran'
+        env = dict(os.environ, PATH=str(binary)+':'+os.environ['PATH'],
+                   MUSTANG_GUEST_ROOT=str(Path(root)/'roseos'),
+                   MUSTANG_METADATA_URL='http://metadata.test/computeMetadata/v1',
+                   MUSTANG_GUEST_WAIT_SECONDS='5', MUSTANG_GUEST_POLL_SECONDS='0',
+                   MUSTANG_CURL_PLAN=str(plan_path), MUSTANG_CURL_LOG=str(log),
+                   MUSTANG_CURL_BODY=body, MUSTANG_RUN_LOG=str(ran))
+        result = subprocess.run(['bash', str(ROOT/'scripts/mustang-ephemeral-guest.sh')],
+                                env=env, capture_output=True, text=True)
+        self.assertNotIn(body, result.stdout)
+        self.assertNotIn(body, result.stderr)
+        leftover = list(runner.glob('jit.*'))
+        return result, log.read_text() if log.exists() else '', ran.exists(), leftover
+
+    def test_not_ready_is_a_get_and_a_forbidden_ack_does_not_start_the_runner(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            ready, log, ran, leftover = self.run_guest(base/'ready', ['GET 404', 'GET 200', 'PUT 200'])
+            self.assertEqual(ready.returncode, 0, ready.stderr)
+            self.assertIn('metadata GET failed: HTTP 404', ready.stderr)
+            self.assertNotIn('ack failed', ready.stderr)
+            self.assertTrue(ran)
+            self.assertEqual(leftover, [])
+            self.assertIn('GET http://metadata.test/computeMetadata/v1/instance/attributes/mustang-jitconfig', log)
+            self.assertIn('PUT http://metadata.test/computeMetadata/v1/instance/guest-attributes/mustang/jit-fetched', log)
+            denied, log, ran, leftover = self.run_guest(base/'denied', ['GET 200', 'PUT 403'])
+            self.assertEqual(denied.returncode, 4, denied.stderr)
+            self.assertIn('guest attribute ack failed: HTTP 403', denied.stderr)
+            self.assertNotIn('metadata GET failed: HTTP 403', denied.stderr)
+            self.assertFalse(ran)
+            self.assertEqual(leftover, [])
+            self.assertFalse((base/'denied/roseos/runner/.runner').exists())
+            get_denied, _, ran, leftover = self.run_guest(base/'get-denied', ['GET 403', 'PUT 200'])
+            self.assertEqual(get_denied.returncode, 4, get_denied.stderr)
+            self.assertIn('metadata GET failed: HTTP 403', get_denied.stderr)
+            self.assertNotIn('ack failed', get_denied.stderr)
+            self.assertFalse(ran)
+            self.assertEqual(leftover, [])
+            networked, _, ran, _ = self.run_guest(base/'network', ['GET network', 'GET 200', 'PUT 200'])
+            self.assertEqual(networked.returncode, 0, networked.stderr)
+            self.assertIn('metadata GET failed: network', networked.stderr)
+            self.assertTrue(ran)
 
 
 if __name__ == '__main__':
