@@ -109,6 +109,8 @@ SPENT_OPERATION_IDS = frozenset({
     "20ef6008b1ef78137d201de13176af42",
     "638e6e9039e41b7531697bb45066a616",
 })
+# ce79ffe4 is the recorded rotate-publish id prefix. The unsaved suffix must not be reused either.
+SPENT_BINDING_PREFIXES = ("ce79ffe4",)
 SPENT_ZONE_OPERATIONS = frozenset({
     "operation-1794025967141-65fa8387d4384-e9bed427-7ed969ab",
     "operation-1794025969883-65fa838a71873-581e64cf-6e23ae4e",
@@ -219,6 +221,10 @@ def historical_hashes():
         if row.get("indexSha256"):
             found.add(row["indexSha256"])
     return found
+
+
+def spent_binding(value):
+    return value in SPENT_OPERATION_IDS or any(str(value).startswith(prefix) for prefix in SPENT_BINDING_PREFIXES)
 
 
 def reject_historical(operation_id, nonce, payload_sha):
@@ -1562,7 +1568,8 @@ def inspect_evidence_problems(receipt):
 
 
 def plan(operator, out, now=None, token=None, revision=None, repo=ROOT, template=None, env=None, mode="repair",
-         inspect_receipt=None, confirm_inspect_operation=None, confirm_baseline=None):
+         inspect_receipt=None, confirm_inspect_operation=None, confirm_baseline=None, possess_comment=None,
+         possess_material=None):
     manual_context(env if env is not None else os.environ)
     now = now or now_utc()
     if mode not in ("repair", "inspect", "rotate", "rotate-publish"):
@@ -1580,7 +1587,7 @@ def plan(operator, out, now=None, token=None, revision=None, repo=ROOT, template
     operation_id, nonce = token(), token()
     if not HEX32.fullmatch(operation_id or "") or not HEX32.fullmatch(nonce or "") or operation_id == nonce:
         raise Refused("binding generator failed")
-    if operation_id in SPENT_OPERATION_IDS or nonce in SPENT_OPERATION_IDS:
+    if spent_binding(operation_id) or spent_binding(nonce):
         raise Refused("this operation id was already used and its preflight expired; plan a new binding")
     evidence = None
     if mode in ("rotate", "rotate-publish"):
@@ -1604,7 +1611,8 @@ def plan(operator, out, now=None, token=None, revision=None, repo=ROOT, template
         if mode == "inspect":
             template = guest.inspect_template()
             op_token, nonce_token = "@@INSPECT_OP@@", "@@INSPECT_NONCE@@"
-            extra = None
+            extra = {"@@POSSESS_COMMENT@@": possess_comment or "roseos-yogi-possess-",
+                     "@@POSSESS_MATERIAL@@": possess_material or "roseos-yogi-possess-material-unset"}
         else:
             template = (HERE / "yogi_replacement_recover_guest.py").read_text()
             op_token, nonce_token = "@@OP@@", "@@NONCE@@"
@@ -2224,6 +2232,8 @@ def main(argv, transport=None, now=None, clock=None, sleep=None, env=None, token
     planned.add_argument("--inspect-receipt")
     planned.add_argument("--confirm-inspect-operation")
     planned.add_argument("--confirm-baseline")
+    planned.add_argument("--possess-comment")
+    planned.add_argument("--possess-material")
     sub.add_parser("self-check")
     exported = sub.add_parser("export-bundle")
     exported.add_argument("--out", required=True)
@@ -2242,7 +2252,8 @@ def main(argv, transport=None, now=None, clock=None, sleep=None, env=None, token
             document = plan(args.operator, args.out, now=now, token=token, revision=revision, env=env,
                             mode=args.mode, inspect_receipt=args.inspect_receipt,
                             confirm_inspect_operation=args.confirm_inspect_operation,
-                            confirm_baseline=args.confirm_baseline)
+                            confirm_baseline=args.confirm_baseline,
+                            possess_comment=args.possess_comment, possess_material=args.possess_material)
             result, code = {"dryRun": True, "executed": False, "operationId": document["operationId"],
                             "payloadSha256": document["payloadSha256"],
                             "startupScriptSha256": document["startupScriptSha256"],
