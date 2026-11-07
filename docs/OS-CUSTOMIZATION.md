@@ -19,7 +19,7 @@ Every change is app-side in Rose Agent: no OS rebuild.
 | Bundled font | `customization_font` | default (shipped type), nunito (app asset), sans, serif, condensed, mono (platform families) |
 | Glasses-on hook | `customization_glasses_hook` | enabled; action `tray` (Rose Home and its tray forward) or `app` + packageName |
 
-`customization_state` reads all four, plus Home's applied revision and the glasses-worn signal's availability.
+`customization_state` reads all four, plus Home's applied revision and the glasses-on signal's state.
 
 Each result reports three things separately, as decided by `CustomizationOutcome`:
 - `status`: `verified` means stored; it never means visible.
@@ -81,30 +81,13 @@ permissioned API that raises the OS edge, a direct command endpoint, and any tru
   over the current app is a documented limitation: there is no exported or permissioned entry. Rebuilding the in-app
   `HomeTray` through `attachLauncherPages(true)` does not interact with the 1A OS edge (#618).
 - **OS Core** (`session_015TFqkUBnNiWWDvKDuGw3hi`). Nothing in SystemUI, the shade or gestures is touched. OS Core
-  confirmed that the platform has no glasses-worn signal.
-- **Unassigned:** `GlassesReconnect`, `GlassesAdvertisement` and the glasses side of `VoiceService` are read-only
-  here until an owner is agreed. App Core will accept a 1–3 line `GlassesWearHookRunner` call in `VoiceService` once a
-  real wear source exists.
+  confirmed no platform change is needed.
+- **Untouched:** `GlassesReconnect`, `GlassesAdvertisement` and `VoiceService`. The Bluetooth audio signal needs none of
+  them; it is registered from `RoseAgentApplication`.
 
 ## Glasses-on signal
 
-This repository has no real worn signal (finding below); the owner chose a Bluetooth audio proxy instead.
-
-| In-repo signal | What it actually is |
-| --- | --- |
-| HFP/A2DP connection events (`GlassesReconnect`) | Bluetooth connection |
-| `GlassesAdvertisement.hinge` | RB Meta 05XH BLE advertisement byte, `0x01ab` `80 0a 01 33`, then `0x14` open / `0x04` closed. Means unfolded, not worn, and is scanned only while disconnected. |
-| `GlassesAutoStartPolicy` | Infers a "new wearing" from a reconnect gap of at least 10 s |
-
-`voice-match/README.md:7` says the connection exposes "not reliable worn-state events". OS Core reports no platform
-or vendor wear API.
-
-**The real source is Meta's Wearables Device Access Toolkit.** `Device.donState` (`DONNED`/`DOFFED`/`UNKNOWN`,
-module `com.meta.wearable.dat.core`) is per Meta's DAT 1.0 Android reference. It has not been verified on hardware
-here. DAT is not in this repo. The external Glasses Camera app (`dev.pixel.glassescamera`) uses it, and only during its
-own camera session.
-
-**Owner decision (Nathan, 2026-11-07): skip both the Glasses Camera relay and Meta DAT.** The hook's signal is any
+**Owner decision (Nathan, 2026-11-07).** The hook's signal is any
 Bluetooth audio device connecting (glasses on) and the last one disconnecting (removal). `BluetoothAudioWear` reports
 this from AudioManager's device list, which needs no permission, and registers once from `RoseAgentApplication`.
 
@@ -158,10 +141,21 @@ What was not done:
 
 - #626 (merge `002d5d4`): the controls, Home integration, provider forward, conversation module, CLI and this record.
 - #627 (merge `db03077`, App Core): conductor registration.
+- #645 (merge `3d6f1ad`): the glasses-on hook's signal is Bluetooth audio connect/disconnect (owner's choice).
 
-On a phone the controls are reachable through conversation only after the Mac/cloud producer is restarted from main and
-an Agent build with this source is installed. Neither has happened: nothing is deployed or activated. No APK has been
-built or run on a device in this workstream. The glasses-on hook stays inert until a real worn signal exists.
+Builds that carry it:
+- **Frankel 2026110701** (Beta Latest; os-release run 42389218389 on main `74b7ef8`; Rose Agent `voice` versionCode
+  366). It includes #626 and #627: columns, wallpaper, font and the conversation tools. It does not include #645, so
+  the glasses-on hook has no signal in that build.
+- **The next Frankel daily build** (04:00 America/Los_Angeles, enabled by #621) builds from main, so it carries #645.
+
+This workstream has not verified either build, installed it or run it on a device. The identities above come from the
+Release lane's run record.
+
+On a phone the controls are reachable through conversation only after the Rose backend is restarted from main and a
+build that carries them is installed. Frankel 2026110701 is published as Beta Latest, but its installation on a phone
+and a backend restart from main have not been confirmed. This workstream itself has not built, installed or run an APK.
+The glasses-on hook fires only in a build that includes #645.
 
 ## Demo runbook (for whoever deploys; nothing here has been run)
 
