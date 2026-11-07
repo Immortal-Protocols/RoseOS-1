@@ -1,16 +1,25 @@
 #!/usr/bin/env python3
 import hashlib
+import importlib.util
+import io
 import json
 import os
 from pathlib import Path
+import shlex
 import shutil
 import stat
+import subprocess
 import sys
 import tempfile
 import unittest
+import zipfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import mustang_tool_closure as closure
+
+_spec = importlib.util.spec_from_file_location('host_sign_for_closure', Path(__file__).resolve().parents[1] / 'host-sign.py')
+host_sign = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(host_sign)
 
 ROOT = Path(__file__).resolve().parents[2]
 FIXTURE = ROOT / 'scripts/tests/fixtures/mustang-jdk-pack/tree'
@@ -134,6 +143,54 @@ class ToolClosureTest(unittest.TestCase):
                 closure.follow_symlink(tree, tree / 'returned')
             with self.assertRaisesRegex(closure.ClosureError, 'symlink escape'):
                 closure.pack_tree(tree)
+
+    def test_derived_helpers_execute_the_checkout_after_the_otatools_directory_change(self):
+        original = (ROOT / 'script/generate-release.sh').read_text()
+        self.assertLess(original.index('cd $RELEASE_OUT'), original.index('source device/common/clear-factory-images-variables.sh'))
+        self.assertLess(original.index('cd $RELEASE_OUT'), original.index('script/generate-metadata'))
+        self.assertEqual((ROOT / 'script/generate-metadata').stat().st_mode & 0o111, 0)
+        derived = host_sign.derive_release_script(
+            original, str(ROOT / 'script/common.sh'), '/dev/shm/k', '/dev/shm/p', '/tmp/release-keys', '/tmp/wrappers')
+        source_line = next(line for line in derived.splitlines() if 'clear-factory-images-variables.sh' in line)
+        metadata_line = next(line for line in derived.splitlines() if 'generate-metadata' in line)
+        self.assertEqual(source_line, 'source ' + shlex.quote(str(ROOT / 'device/common/clear-factory-images-variables.sh')))
+        self.assertEqual(metadata_line, shlex.quote(sys.executable) + ' ' + shlex.quote(str(ROOT / 'script/generate-metadata'))
+                         + ' $DEVICE-ota_update-$BUILD_NUMBER.zip')
+        self.assertLess(derived.index('cd $RELEASE_OUT'), derived.index(source_line))
+        self.assertNotRegex(derived, r'(?m)^source device/common/clear-factory-images-variables\.sh$')
+        self.assertNotRegex(derived, r'(?m)^script/generate-metadata\b')
+        for line in ('BUILD=$BUILD_NUMBER', 'VERSION=$BUILD_NUMBER', 'DEVICE=$1'):
+            self.assertIn(line, derived)
+        archive = io.BytesIO()
+        with zipfile.ZipFile(archive, 'w') as zipped:
+            zipped.writestr('META-INF/com/android/metadata',
+                            'pre-device=mustang\npost-build=a/b/c/d/999:user/release-keys\npost-timestamp=1\n')
+        payload = archive.getvalue()
+        script = '\n'.join(['set -euo pipefail', 'AVB_PKMD=payload-value', 'BUILD_NUMBER=2026110701',
+                            source_line, 'BUILD=$BUILD_NUMBER', 'VERSION=$BUILD_NUMBER', 'DEVICE=$1',
+                            metadata_line, 'if [[ -n ${AVB_PKMD+x} ]]; then echo still-set >&2; exit 4; fi', ''])
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            hostile = base / 'hostile'
+            (hostile / 'device/common').mkdir(parents=True)
+            (hostile / 'script').mkdir()
+            (hostile / 'device/common/clear-factory-images-variables.sh').write_text('echo HOSTILE > hostile-clear\nexit 9\n')
+            (hostile / 'script/generate-metadata').write_text('#!/bin/sh\necho HOSTILE > hostile-meta\nexit 9\n')
+            (hostile / 'script/generate-metadata').chmod(0o755)
+            absent = base / 'absent'
+            absent.mkdir()
+            elsewhere = base / 'elsewhere'
+            elsewhere.mkdir()
+            for cwd in (hostile, absent, elsewhere):
+                (cwd / 'mustang-ota_update-2026110701.zip').write_bytes(payload)
+                result = subprocess.run(['bash', '-c', script, 'release', 'mustang', '2026110701'],
+                                        cwd=cwd, capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertFalse((cwd / 'hostile-clear').exists())
+                self.assertFalse((cwd / 'hostile-meta').exists())
+                self.assertEqual((cwd / 'mustang-beta').read_text(), '999 1 mustang beta\n')
+                self.assertNotIn('HOSTILE', result.stdout)
+                self.assertNotIn('HOSTILE', result.stderr)
 
     def copy_checkout(self, base):
         if base.exists():
