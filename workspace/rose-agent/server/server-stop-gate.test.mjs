@@ -24,7 +24,7 @@ function fixture({backgroundEnabled}){
  const executed=[],responses=[];
  const taskStop=new TaskStop({task:()=>launcher.current,stopping:d=>launcher.stopping(d),interrupt:async()=>executed.push('interrupt'),abortReview:()=>{},closeWorkspace:async()=>executed.push('close')});
  const context=vm.createContext({taskStop,backgroundEnabled,crypto,setImmediate,Date,Error,Object,Set,AsyncLocalStorage,
-  checkPausedApp:()=>{},peerIdentity:req=>req?.phone?{id:'nathan-pixel'}:null,autoGenerator:{active:false},visualTrial:false,busy:true,taskStarted:0,lastRoute:null,
+  checkPausedApp:()=>{},peerIdentity:req=>req?.phone?{id:'nathan-pixel'}:null,deviceAuth:{paired:req=>!!req?.phone},autoGenerator:{active:false},visualTrial:false,busy:true,taskStarted:0,lastRoute:null,
   backgroundPhone:{execute:async(c,o={})=>{executed.push('background:'+c.action+(o.taskId?'@'+o.taskId:'')+(c.taskId?':leaked':''));return {status:'ok'};}},
   rawFastPhone:async c=>{executed.push('raw:'+c.action+(c.taskId?':leaked':''));return {status:'ok'};},
   phone:{create:c=>{executed.push('created:'+c.action);return {id:'c1',action:c.action,status:'pending'};},complete:()=>{}},
@@ -135,7 +135,7 @@ test('origin is bound at every in-process, output and turn boundary',()=>{
  assert.match(server,/new AppGenerationDriver\(\{store:generationStore,phone:nonTaskPhone,/);
  assert.match(server,/await phoneOrigin\.run\(NON_TASK,\(\)=>loadAppToolCatalog\(/);
  assert.match(server,/const jobTask=taskStop\.current\(\),taskPhone=\(data,genericVisual\)=>fastPhone\(\{\.\.\.data,taskId:jobTask\},genericVisual\);/);
- assert.match(server,/checkPausedApp\(data\);delete data\.taskId;const stopped=phoneCommandRejection\(req,data\);/);
+ assert.match(server,/checkPausedApp\(data\);delete data\.taskId;const paired=!!pairedPhone\(req\);const stopped=phoneCommandRejection\(paired,data\);/);
  assert.match(fs.readFileSync(new URL('./codex.mjs',import.meta.url),'utf8'),/this\.emit\('message',p\.item\.text,p\.item\.phase,p\.turnId\)/);
 });
 
