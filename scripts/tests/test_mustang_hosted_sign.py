@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -415,9 +416,8 @@ class HostedSignGateTest(unittest.TestCase):
         self.assertNotIn("steps.verified.outputs.admit", signer.split('name: Download the same-run input bytes', 1)[1].split('id: verified', 1)[0])
         self.assertEqual(signer.count("steps.verified.outputs.admit == 'true'"), 3)
         self.assertIn("steps.preliminary.outputs.allow == 'true'", builder)
-        self.assertNotIn('--checkout', workflow)
-        self.assertNotIn('--capacity', workflow)
-        self.assertNotIn('--pin ', workflow)
+        for flag in ('--checkout', '--capacity', '--pin'):
+            self.assertNotIn(flag, workflow)
         self.assertIn('mustang-signing-inputs-', builder)
         self.assertIn('mustang-signing-bundle/inputs', builder)
         self.assertNotIn('mustang-signer-linux-4-core', workflow)
@@ -509,53 +509,65 @@ class HostedSignGateTest(unittest.TestCase):
         self.assertNotIn('resumed file', closed.stderr)
         self.assertNotIn('allow=true', output.read_text())
         self.assertFalse((signer / 'inputs').exists())
+        for action in ('preliminary', 'gate', 'preflight', 'sign'):
+            for flag in ('--capacity', '--pin', '--checkout'):
+                refused = subprocess.run(
+                    [sys.executable, script, action, '--bundle', str(signer), flag, str(source / 'override')],
+                    env=dict(PATH=os.environ['PATH'], **ENV), capture_output=True, text=True, timeout=30)
+                self.assertEqual(refused.returncode, 2, refused.stderr)
+                self.assertIn('unrecognized arguments', refused.stderr)
+                self.assertIn(flag, refused.stderr)
+                self.assertNotIn('allow=true', refused.stdout)
+                self.assertNotIn('admit=true', refused.stdout)
+                self.assertFalse((signer / 'inputs').exists())
         capacity = source / 'capacity.json'
         capacity.write_text(json.dumps(self.admitted()))
         pin_path = source / 'pin.json'
         pin_path.write_text(json.dumps(pin))
-        output.write_text('')
-        allowed = subprocess.run(
-            [sys.executable, script, 'preliminary', '--bundle', str(signer), '--capacity', str(capacity),
-             '--pin', str(pin_path), '--checkout', str(root)],
-            env=closed_env, capture_output=True, text=True, timeout=30)
-        self.assertEqual(allowed.returncode, 0, allowed.stderr)
-        self.assertEqual(output.read_text(), 'allow=true\n')
-        self.assertNotIn('admit=true', output.read_text())
+
+        def resolver():
+            return root, capacity, pin_path
+
+        def run_parser(action, extra=()):
+            output.write_text('')
+            with patch.object(hosted, 'trusted_paths', resolver), patch.dict(os.environ, closed_env, clear=False):
+                code = hosted.main([action, '--bundle', str(signer), *extra])
+            return code, output.read_text()
+
+        code, text = run_parser('preliminary')
+        self.assertEqual(code, 0, text)
+        self.assertEqual(text, 'allow=true\n')
+        self.assertNotIn('admit=true', text)
         self.assertFalse((signer / 'inputs').exists())
-        output.write_text('')
-        too_soon = subprocess.run(
-            [sys.executable, script, 'preflight', '--bundle', str(signer), '--capacity', str(capacity),
-             '--pin', str(pin_path), '--checkout', str(root)],
-            env=closed_env, capture_output=True, text=True, timeout=30)
-        self.assertEqual(too_soon.returncode, 4, too_soon.stderr)
-        self.assertNotIn('admit=true', output.read_text())
+        code, text = run_parser('preflight')
+        self.assertEqual(code, 4)
+        self.assertNotIn('admit=true', text)
         self.assertFalse((signer / 'inputs').exists())
         shutil.copytree(source / 'uploaded' / 'inputs', signer / 'inputs')
-        output.write_text('')
-        verified = subprocess.run(
-            [sys.executable, script, 'preflight', '--bundle', str(signer), '--capacity', str(capacity),
-             '--pin', str(pin_path), '--checkout', str(root)],
-            env=closed_env, capture_output=True, text=True, timeout=30)
-        self.assertEqual(verified.returncode, 0, verified.stderr)
-        self.assertIn('admit=true', output.read_text())
+        code, text = run_parser('preflight')
+        self.assertEqual(code, 0, text)
+        self.assertIn('admit=true', text)
         login = ['login']
         calls = []
 
-        def host_sign_main(config_path, env, managed_decrypted_keys=False, **kwargs):
+        def run_host_sign(source_root, release_dir, extracted, jdk_home, bundle, env, host_sign_main=None):
             self.assertEqual(login, ['login'])
-            java = Path(json.loads(Path(config_path).read_text())['host']['sign']['javaHome']) / 'bin' / 'java'
+            java = Path(jdk_home) / 'bin' / 'java'
             self.assertTrue(java.is_file() and os.access(java, os.X_OK))
             calls.append('sign')
-            release = Path(env['ROSE_RELEASE_DIR'])
+            release = Path(release_dir)
+            release.mkdir(parents=True, exist_ok=True)
             (release / 'signed-target_files.zip').write_bytes(b'signed-target')
             public = release / 'public'
             public.mkdir()
             (public / 'mustang-ota_update-1.zip').write_bytes(b'signed-ota')
-            return 0
+            return release
 
         out = source / 'publisher'
-        hosted.sign(signer, out, root=root, env=ENV, capacity_config=self.admitted(),
-                    host_sign_main=host_sign_main, free=10 ** 18, pin=pin)
+        with patch.object(hosted, 'trusted_paths', resolver), patch.object(hosted, 'run_host_sign', run_host_sign), \
+                patch.dict(os.environ, closed_env, clear=False):
+            code = hosted.main(['sign', '--bundle', str(signer), '--out', str(out)])
+        self.assertEqual(code, 0)
         self.assertEqual(calls, ['sign'])
         self.assertEqual(hosted.bind_outputs(out, env=ENV)['runId'], ENV['GITHUB_RUN_ID'])
 

@@ -169,8 +169,13 @@ def require_bundle_identity(bundle, env, root=ROOT):
         raise ValueError('size is not a byte count')
 
 
+def trusted_paths():
+    """Reviewed checkout only. Callers cannot replace these paths."""
+    return ROOT, CAPACITY, ROOT / SCRIPT_PIN
+
+
 def load_capacity(path=None):
-    data = json.loads(Path(path or CAPACITY).read_text())
+    data = json.loads(Path(path or trusted_paths()[1]).read_text())
     if data.get('schema') != 'roseos.mustang-hosted-signer-capacity.v1' or data.get('trust') != 'held':
         raise ValueError('hosted signer capacity config is missing')
     runner = data.get('activeRunner')
@@ -234,7 +239,7 @@ EXTRACT_MARKER = '.mustang-extract.json'
 
 def load_pin(root, pin):
     if pin is None:
-        pin = json.loads((Path(root) / SCRIPT_PIN).read_text())
+        pin = json.loads(Path(trusted_paths()[2]).read_text())
     if pin.get('entryPoint') != ENTRY:
         raise ValueError('sign entry point is not the checkout script')
     return pin
@@ -670,10 +675,11 @@ def declared_integer(bundle, name):
     return value
 
 
-def preliminary(bundle_path, root=ROOT, env=None, capacity_config=None, pin=None, free=None):
+def preliminary(bundle_path, root=None, env=None, capacity_config=None, pin=None, free=None):
     """Metadata only. Declared sizes, pins, run identity, and admission. No payload bytes."""
     bundle, _directory = bundle_document(bundle_path)
     env = os.environ if env is None else env
+    root = trusted_paths()[0] if root is None else root
     config = load_capacity() if capacity_config is None else capacity_config
     if free is None:
         space = os.statvfs('/')
@@ -719,8 +725,9 @@ def preliminary(bundle_path, root=ROOT, env=None, capacity_config=None, pin=None
     return {'allow': True, 'declaredPeakBytes': declared}
 
 
-def preflight(bundle_path, root=ROOT, env=None, capacity_config=None, pin=None, free=None):
+def preflight(bundle_path, root=None, env=None, capacity_config=None, pin=None, free=None):
     bundle, directory = bundle_document(bundle_path)
+    root = trusted_paths()[0] if root is None else root
     if free is None:
         space = os.statvfs('/')
         free = space.f_bavail * space.f_frsize
@@ -793,8 +800,9 @@ def write_hosted_receipt(release_dir, out_dir, bundle):
     return receipt
 
 
-def sign(bundle_path, out_dir, root=ROOT, env=None, capacity_config=None, host_sign_main=None, free=None, pin=None):
+def sign(bundle_path, out_dir, root=None, env=None, capacity_config=None, host_sign_main=None, free=None, pin=None):
     bundle, directory = bundle_document(bundle_path)
+    root = trusted_paths()[0] if root is None else root
     if free is None:
         space = os.statvfs('/')
         free = space.f_bavail * space.f_frsize
@@ -818,13 +826,7 @@ def main(argv=None):
     parser.add_argument('--out')
     parser.add_argument('--bundle')
     parser.add_argument('--dir')
-    parser.add_argument('--capacity')
-    parser.add_argument('--pin')
-    parser.add_argument('--checkout')
     args = parser.parse_args(argv)
-    root = Path(args.checkout) if args.checkout else ROOT
-    capacity_config = load_capacity(args.capacity) if args.capacity else None
-    pin = json.loads(Path(args.pin).read_text()) if args.pin else None
     try:
         if args.action == 'export-bundle':
             if not args.collection or not args.out:
@@ -841,11 +843,11 @@ def main(argv=None):
         if args.action == 'sign':
             if not args.out:
                 raise ValueError('hosted signed output is missing')
-            sign(args.bundle, args.out, root=root, capacity_config=capacity_config, pin=pin)
+            sign(args.bundle, args.out)
             return 0
         if args.action in ('preliminary', 'gate'):
             try:
-                preliminary(args.bundle, root=root, capacity_config=capacity_config, pin=pin)
+                preliminary(args.bundle)
             except (ValueError, OSError, KeyError, TypeError, zipfile.BadZipFile) as error:
                 message = str(error) if isinstance(error, ValueError) else type(error).__name__
                 step_output('allow', 'false')
@@ -853,7 +855,7 @@ def main(argv=None):
                 return 4
             step_output('allow', 'true')
             return 0
-        preflight(args.bundle, root=root, capacity_config=capacity_config, pin=pin)
+        preflight(args.bundle)
         step_output('admit', 'true')
         return 0
     except (ValueError, OSError, KeyError, TypeError, zipfile.BadZipFile) as error:
