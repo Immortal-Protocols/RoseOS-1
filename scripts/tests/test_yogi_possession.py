@@ -8,8 +8,16 @@ import sys
 import tempfile
 import unittest
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+def _possession_root():
+    """The directory that contains yogi_possession.py: beside this test, or its parent in the repo."""
+    here = Path(__file__).resolve().parent
+    for candidate in (here, here.parent):
+        if (candidate / 'yogi_possession.py').is_file():
+            return candidate
+    raise AssertionError('yogi_possession.py is not beside this test or in its parent directory')
+
+
+sys.path.insert(0, str(_possession_root()))
 import yogi_possession  # noqa: E402
 
 REAL_HOSTKEYS = '[\n  {\n    "key": "ecdsa-sha2-nistp256",\n    "namespace": "hostkeys",\n    "value": "AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBP5yomg6p17Uoyq81/3JX15Z05YxRDE0gtPOoIUp03o/KqmWLf8IVIFe7kFFaO0lb7kxVGxbhZ/gYMjsDbxgl+8="\n  },\n  {\n    "key": "ssh-ed25519",\n    "namespace": "hostkeys",\n    "value": "AAAAC3NzaC1lZDI1NTE5AAAAIN2pFrUsLlgUbqItVqVwLLqnC+cpPPv29xXhHWYvqGCI"\n  },\n  {\n    "key": "ssh-rsa",\n    "namespace": "hostkeys",\n    "value": "AAAAB3NzaC1yc2EAAAADAQABAAABgQC63HzpRewfI4E6MsoAuQPo/KBN/SpCNkEn4bi2SYpGlxRdMfWiQgwZph4i3VP3NBcrlyRNRjk7k0IvesEcrCDvks1sD8EKSFYpdagg1MGWCpahpUSta216AIaldbm5folmFM3bGob+EtZY3o31s85PsEAvkLQpfmDaX+vgY3MRsqxuVQqOJcLAC7z6jAD5bzivcy5rFWqhFVj/+E74u7hMM5M0uii6QBoDQ11Or4iAWyGyCFFb+c0TB16BNJqmnf5bmz+Fpu+QrwELcClsYh1NJB6Gb7s7GHTUeqjKJJePs8uic8+MLGSyXBDES/NzfsjgayvDyJfphNJL+luKG9flP5udesBwwXEECOkoaboc+orCGBk6J3Iaf8oAZs+zFBLcUePl9XWIHEYdaIbBBPKB3ZkrxBaOoDu0vnjvmN88CGRQo6jVikXp+wkDhSATGUtGZC/9KDBY5eeLs7G6vRkkGJ6olrTAk1Qy4gXe4eVrtfgXPLDYJ0PR+nrWW2cNV1U="\n  }\n]\n'
@@ -328,10 +336,12 @@ class PossessionTest(unittest.TestCase):
                     stdout = secret + '\n'
                 return Result()
             if argv[1:4] == ['compute', 'instances', 'start']:
-                self.assertEqual(timeout, yogi_possession.START_TIMEOUT)
+                self.assertIn('--async', argv)
+                self.assertEqual(timeout, yogi_possession.DESCRIBE_TIMEOUT)
                 raise subprocess.TimeoutExpired(argv, timeout)
             if argv[1:4] == ['compute', 'instances', 'stop']:
-                self.assertEqual(timeout, yogi_possession.STOP_TIMEOUT)
+                self.assertIn('--async', argv)
+                self.assertEqual(timeout, yogi_possession.DESCRIBE_TIMEOUT)
                 raise subprocess.TimeoutExpired(argv, timeout)
             raise AssertionError(argv)
 
@@ -516,19 +526,33 @@ class PossessionTest(unittest.TestCase):
                     Result.stdout = instance()
                     return Result()
                 if argv[:4] == ['gcloud', 'compute', 'instances', 'start']:
-                    self.assertEqual(timeout, yogi_possession.START_TIMEOUT)
+                    self.assertIn('--async', argv)
+                    self.assertEqual(timeout, yogi_possession.DESCRIBE_TIMEOUT)
                     if start == 'timeout':
                         raise subprocess.TimeoutExpired(argv, timeout)
                     if start == 'failed':
                         Result.returncode = 1
                         return Result()
                     state['status'] = 'STAGING' if start == 'staging' else 'RUNNING'
+                    Result.stdout = json.dumps({'name': 'operation-1794068000000-65fb200000000-aaaaaaaa-bbbbbbbb',
+                                                'operationType': 'start', 'status': 'PENDING',
+                                                'targetId': yogi_possession.INSTANCE_ID})
+                    return Result()
+                if argv[:4] == ['gcloud', 'compute', 'operations', 'describe']:
+                    self.assertEqual(timeout, yogi_possession.DESCRIBE_TIMEOUT)
+                    kind = 'stop' if 'cccccccc' in argv[4] else 'start'
+                    Result.stdout = json.dumps({'name': argv[4], 'operationType': kind, 'status': 'DONE',
+                                                'targetId': yogi_possession.INSTANCE_ID, 'progress': 100})
                     return Result()
                 if argv[:4] == ['gcloud', 'compute', 'instances', 'stop']:
-                    self.assertEqual(timeout, yogi_possession.STOP_TIMEOUT)
+                    self.assertIn('--async', argv)
+                    self.assertEqual(timeout, yogi_possession.DESCRIBE_TIMEOUT)
                     if stop == 'timeout':
                         raise subprocess.TimeoutExpired(argv, timeout)
                     state['status'] = 'RUNNING' if stop == 'running' else 'TERMINATED'
+                    Result.stdout = json.dumps({'name': 'operation-1794068001000-65fb200000100-cccccccc-dddddddd',
+                                                'operationType': 'stop', 'status': 'PENDING',
+                                                'targetId': yogi_possession.INSTANCE_ID})
                     return Result()
                 if argv and argv[0] == 'ssh':
                     self.assertEqual(timeout, yogi_possession.SSH_TIMEOUT)
@@ -661,6 +685,265 @@ class PossessionTest(unittest.TestCase):
         self.assertIn('BLOB', guest)
         self.assertNotIn('638e6e9039e41b7531697bb45066a616', guest)
         self.assertNotIn('ce79ffe4', guest)
+
+
+    def _clock(self):
+        class Clock:
+            def __init__(self):
+                self.now = 0.0
+            def __call__(self):
+                return self.now
+            def sleep(self, seconds):
+                self.now += seconds
+        return Clock()
+
+    def _instance_json(self, status):
+        return json.dumps({
+            'id': yogi_possession.INSTANCE_ID, 'name': yogi_possession.INSTANCE, 'status': status,
+            'zone': 'https://www.googleapis.com/compute/v1/projects/protocols-465723/zones/us-west2-b',
+            'selfLink': ('https://www.googleapis.com/compute/v1/projects/protocols-465723/zones/us-west2-b/instances/'
+                         + yogi_possession.INSTANCE),
+            'networkInterfaces': [{}],
+            'metadata': {'fingerprint': yogi_possession.POSSESSION_FINGERPRINT,
+                         'items': [{'key': key, 'value': value}
+                                   for key, value in yogi_possession.POSSESSION_BASE.items()]},
+        })
+
+    def test_a_done_start_is_polled_until_running_and_stop_waits_past_120_seconds(self):
+        start_name = 'operation-1794068100000-65fb210000000-11111111-22222222'
+        stop_name = 'operation-1794068200000-65fb220000000-33333333-44444444'
+        clock = self._clock()
+        commands = []
+
+        def operation(name, kind, status, error=None):
+            body = {'name': name, 'operationType': kind, 'status': status, 'targetId': yogi_possession.INSTANCE_ID,
+                    'progress': 100 if status == 'DONE' else 0,
+                    'zone': 'https://www.googleapis.com/compute/v1/projects/protocols-465723/zones/us-west2-b'}
+            if error:
+                body['error'] = {'errors': [{'code': error}]}
+            if status == 'DONE':
+                body['endTime'] = '2026-11-07T07:57:55.387-08:00'
+            return json.dumps(body)
+
+        def run_start(argv, capture_output=True, text=True, timeout=0):
+            commands.append(list(argv))
+            class Result:
+                returncode = 0
+                stdout = ''
+            if argv[1:4] == ['compute', 'instances', 'describe']:
+                Result.stdout = self._instance_json('STAGING' if clock.now < 8 else 'RUNNING')
+                return Result()
+            if argv[1:4] == ['compute', 'instances', 'start']:
+                Result.stdout = operation(start_name, 'start', 'PENDING')
+                return Result()
+            if argv[1:4] == ['compute', 'operations', 'describe']:
+                Result.stdout = operation(start_name, 'start', 'DONE' if clock.now >= 6 else 'RUNNING')
+                return Result()
+            raise AssertionError(argv)
+
+        driver = yogi_possession.GcloudDriver(run=run_start, sleep=clock.sleep, clock=clock)
+        self.assertEqual(driver.start(), 'started')
+        self.assertEqual(driver.start_report['observed'], 'running')
+        self.assertEqual(driver.start_report['operation']['status'], 'DONE')
+        self.assertEqual(driver.start_report['operation']['targetId'], yogi_possession.INSTANCE_ID)
+        self.assertGreaterEqual(clock.now, 8)
+        self.assertLess(clock.now, 120)
+        self.assertFalse(any(argv[1:4] == ['compute', 'instances', 'stop'] for argv in commands))
+        self.assertNotIn('selfLink', json.dumps(driver.start_report))
+
+        clock.now = 0
+        def run_stop(argv, capture_output=True, text=True, timeout=0):
+            commands.append(list(argv))
+            class Result:
+                returncode = 0
+                stdout = ''
+            if argv[1:4] == ['compute', 'instances', 'stop']:
+                Result.stdout = operation(stop_name, 'stop', 'RUNNING')
+                return Result()
+            if argv[1:4] == ['compute', 'operations', 'describe']:
+                Result.stdout = operation(stop_name, 'stop', 'DONE' if clock.now >= 138 else 'RUNNING')
+                return Result()
+            if argv[1:4] == ['compute', 'instances', 'describe']:
+                Result.stdout = self._instance_json('TERMINATED' if clock.now >= 138 else 'STOPPING')
+                return Result()
+            raise AssertionError(argv)
+        driver = yogi_possession.GcloudDriver(run=run_stop, sleep=clock.sleep, clock=clock)
+        self.assertEqual(driver.stop(), 'stopped')
+        self.assertEqual(driver.stop_report['observed'], 'terminated')
+        self.assertEqual(driver.stop_report['instanceStatus'], 'TERMINATED')
+        self.assertEqual(driver.stop_report['operation']['status'], 'DONE')
+        self.assertEqual(driver.stop_report['operation']['endTime'], '2026-11-07T07:57:55.387-08:00')
+        # The instance stays STOPPING and the operation stays RUNNING until 138s.
+        # The old 120s client wait would already have aborted. The 240s budget has not.
+        self.assertGreater(clock.now, 120)
+        self.assertGreaterEqual(clock.now, 138)
+        self.assertLess(clock.now, yogi_possession.STOP_WAIT_SECONDS)
+        self.assertGreater(yogi_possession.STOP_WAIT_SECONDS, 120)
+
+        clock.now = 0
+        short = yogi_possession.GcloudDriver(run=run_stop, sleep=clock.sleep, clock=clock)
+        original = yogi_possession.STOP_WAIT_SECONDS
+        yogi_possession.STOP_WAIT_SECONDS = 120
+        try:
+            self.assertEqual(short.stop(), 'unresolved')
+        finally:
+            yogi_possession.STOP_WAIT_SECONDS = original
+        self.assertEqual(short.stop_report['observed'], 'unresolved')
+        self.assertEqual(short.stop_report['instanceStatus'], 'STOPPING')
+        self.assertEqual(short.stop_report['operation']['status'], 'RUNNING')
+        self.assertGreaterEqual(clock.now, 120)
+        self.assertLess(clock.now, 138)
+
+    def test_operation_error_drift_and_a_pending_budget_stay_unresolved(self):
+        clock = self._clock()
+        name = 'operation-1794068300000-65fb230000000-55555555-66666666'
+
+        def run(argv, capture_output=True, text=True, timeout=0):
+            class Result:
+                returncode = 0
+                stdout = ''
+            if argv[1:4] == ['compute', 'instances', 'start']:
+                Result.stdout = json.dumps({'name': name, 'operationType': 'start', 'status': 'PENDING',
+                                            'targetId': yogi_possession.INSTANCE_ID})
+                return Result()
+            if argv[1:4] == ['compute', 'operations', 'describe']:
+                Result.stdout = json.dumps({'name': name, 'operationType': 'start', 'status': 'DONE',
+                                            'targetId': yogi_possession.INSTANCE_ID,
+                                            'error': {'errors': [{'code': 'ZONE_RESOURCE_POOL_EXHAUSTED'}]}})
+                return Result()
+            if argv[1:4] == ['compute', 'instances', 'describe']:
+                Result.stdout = self._instance_json('TERMINATED')
+                return Result()
+            raise AssertionError(argv)
+
+        driver = yogi_possession.GcloudDriver(run=run, sleep=clock.sleep, clock=clock)
+        self.assertEqual(driver.start(), 'failed')
+        self.assertEqual(driver.start_report['operation']['error'], 'ZONE_RESOURCE_POOL_EXHAUSTED')
+        self.assertNotIn('Bearer', json.dumps(driver.start_report))
+
+        def drifted(argv, capture_output=True, text=True, timeout=0):
+            class Result:
+                returncode = 0
+                stdout = ''
+            if argv[1:4] == ['compute', 'instances', 'start']:
+                Result.stdout = json.dumps({'name': name, 'operationType': 'start', 'status': 'DONE',
+                                            'targetId': yogi_possession.INSTANCE_ID})
+                return Result()
+            if argv[1:4] == ['compute', 'instances', 'describe']:
+                body = json.loads(self._instance_json('RUNNING'))
+                body['id'] = '1'
+                Result.stdout = json.dumps(body)
+                return Result()
+            raise AssertionError(argv)
+
+        drifted_driver = yogi_possession.GcloudDriver(run=drifted, sleep=clock.sleep, clock=clock)
+        self.assertEqual(drifted_driver.start(), 'failed')
+        self.assertEqual(drifted_driver.start_report['instanceStatus'], 'mismatch')
+
+        def pending(argv, capture_output=True, text=True, timeout=0):
+            class Result:
+                returncode = 0
+                stdout = ''
+            if argv[1:4] == ['compute', 'instances', 'start']:
+                Result.stdout = json.dumps({'name': name, 'operationType': 'start', 'status': 'PENDING',
+                                            'targetId': yogi_possession.INSTANCE_ID})
+                return Result()
+            if argv[1:4] == ['compute', 'operations', 'describe']:
+                Result.stdout = json.dumps({'name': name, 'operationType': 'start', 'status': 'PENDING',
+                                            'targetId': yogi_possession.INSTANCE_ID})
+                return Result()
+            if argv[1:4] == ['compute', 'instances', 'describe']:
+                Result.stdout = self._instance_json('STAGING')
+                return Result()
+            raise AssertionError(argv)
+
+        waiting = yogi_possession.GcloudDriver(run=pending, sleep=clock.sleep, clock=clock)
+        self.assertEqual(waiting.start(), 'timeout')
+        self.assertEqual(waiting.start_report['observed'], 'unresolved')
+        self.assertEqual(waiting.start_report['operation']['status'], 'PENDING')
+        self.assertEqual(waiting.start_report['instanceStatus'], 'STAGING')
+        self.assertGreaterEqual(clock.now, yogi_possession.START_WAIT_SECONDS)
+
+    def test_cli_exit_is_1_when_the_guest_is_not_authenticated(self):
+        import os
+        import subprocess
+        import sys
+        directory = Path(tempfile.mkdtemp())
+        hostkeys = directory / 'hostkeys.json'
+        hostkeys.write_text(REAL_HOSTKEYS)
+        client = directory / 'client.pub'
+        client.write_text('ssh-ed25519 ' + base64.b64encode(_wire(b'ssh-ed25519', bytes(range(32, 64)))).decode() + '\n')
+        identity = directory / 'id_ed25519'
+        identity.write_text('not-read')
+        identity.chmod(0o600)
+        out = directory / 'out'
+        bin_dir = directory / 'bin'
+        bin_dir.mkdir()
+        state = directory / 'describes'
+        state.write_text('0')
+        (bin_dir / 'gcloud').write_text(
+            '#!/usr/bin/env python3\n'
+            'import json, sys\n'
+            'from pathlib import Path\n'
+            'args = sys.argv[1:]\n'
+            f'state = Path({str(state)!r})\n'
+            'instance = ' + json.dumps(yogi_possession.INSTANCE_ID) + '\n'
+            'name = ' + json.dumps(yogi_possession.INSTANCE) + '\n'
+            'zone = "https://www.googleapis.com/compute/v1/projects/protocols-465723/zones/us-west2-b"\n'
+            'def emit(body, code=0):\n'
+            '    print(json.dumps(body))\n'
+            '    raise SystemExit(code)\n'
+            'if args[:2] == ["auth", "list"]:\n'
+            '    emit([{"account": "grok-bots@protocols-465723.iam.gserviceaccount.com", "status": "ACTIVE"}])\n'
+            'if args[:2] == ["auth", "print-access-token"]:\n'
+            '    raise SystemExit(1)\n'
+            'if args[:3] == ["compute", "instances", "describe"]:\n'
+            '    n = int(state.read_text()); state.write_text(str(n + 1))\n'
+            '    status = {0: "TERMINATED", 1: "TERMINATED", 2: "STAGING", 3: "RUNNING"}.get(n, "TERMINATED")\n'
+            '    emit({"id": instance, "name": name, "status": status, "zone": zone,\n'
+            '          "selfLink": zone + "/instances/" + name, "networkInterfaces": [{}],\n'
+            '          "metadata": {"fingerprint": "pSAPI4eI6q4=", "items": [\n'
+            '              {"key": "block-project-ssh-keys", "value": "TRUE"},\n'
+            '              {"key": "enable-oslogin", "value": "FALSE"}]}})\n'
+            'if args[:3] == ["compute", "instances", "start"]:\n'
+            '    emit({"name": "operation-1794068400000-65fb240000000-77777777-88888888",\n'
+            '          "operationType": "start", "status": "PENDING", "targetId": instance})\n'
+            'if args[:3] == ["compute", "instances", "stop"]:\n'
+            '    emit({"name": "operation-1794068500000-65fb250000000-99999999-aaaaaaa0",\n'
+            '          "operationType": "stop", "status": "RUNNING", "targetId": instance})\n'
+            'if args[:3] == ["compute", "operations", "describe"]:\n'
+            '    kind = "start" if args[3].endswith("77777777-88888888") else "stop"\n'
+            '    emit({"name": args[3], "operationType": kind, "status": "DONE", "targetId": instance,\n'
+            '          "progress": 100})\n'
+            'raise SystemExit("unexpected " + " ".join(args))\n')
+        (bin_dir / 'gcloud').chmod(0o755)
+        env = os.environ.copy()
+        for key in ('GOOGLE_APPLICATION_CREDENTIALS', 'CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT',
+                    'GITHUB_ACTIONS', 'ACTIONS_ID_TOKEN_REQUEST_URL', 'ACTIONS_ID_TOKEN_REQUEST_TOKEN',
+                    'ACTIONS_RUNTIME_TOKEN', 'ACTIONS_RUNTIME_URL', 'ACTIONS_CACHE_URL', 'GITHUB_TOKEN'):
+            env.pop(key, None)
+        env['PATH'] = str(bin_dir) + os.pathsep + env.get('PATH', '')
+        cli = _possession_root() / 'yogi_possession.py'
+        plan = subprocess.run([sys.executable, '-B', str(cli), 'handshake-plan',
+                               '--hostkeys', str(hostkeys), '--client-public', str(client),
+                               '--out', str(directory / 'plan')], cwd=str(cli.parent), env=env,
+                              capture_output=True, text=True, timeout=30)
+        self.assertEqual(plan.returncode, 0, plan.stderr)
+        self.assertFalse(json.loads(plan.stdout)['executed'])
+        proc = subprocess.run([sys.executable, '-B', str(cli), 'handshake', '--execute',
+                               '--hostkeys', str(hostkeys), '--client-public', str(client),
+                               '--identity', str(identity), '--out', str(out)], cwd=str(cli.parent), env=env,
+                              capture_output=True, text=True, timeout=30)
+        self.assertEqual(proc.returncode, 1, proc.stderr)
+        self.assertEqual(proc.stderr, '')
+        outcome = json.loads((out / 'possession-outcome.json').read_text())
+        self.assertFalse(outcome['guestAuthenticated'] or outcome['hostKeyPinned'] or outcome['hostKeyHandshake'])
+        self.assertEqual(outcome['startReport']['observed'], 'running')
+        self.assertEqual(outcome['startReport']['instanceStatus'], 'RUNNING')
+        self.assertEqual(outcome['stopReport']['observed'], 'terminated')
+        self.assertEqual(outcome['stopReport']['instanceStatus'], 'TERMINATED')
+        self.assertNotIn('PRIVATE', json.dumps(outcome))
+        self.assertNotIn('ya29', proc.stdout)
 
 
 if __name__ == '__main__':

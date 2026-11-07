@@ -53,6 +53,8 @@ SPENT_ZONE_OPERATIONS = frozenset({
     'operation-1794026874731-65fa86e95fb00-d547145e-45241669',
     'operation-1794027065214-65fa879f086ca-4cf61ef5-4480e200',
     'operation-1794027069962-65fa87a38f91f-6bc72969-2fdd5f07',
+    'operation-1794066928521-65fb1c1fa4fa7-28daba8e-205f8105',
+    'operation-1794066937204-65fb1c27ed0fd-78949f7d-9a3a6b1b',
 })
 GITHUB_CONTEXT = ('GITHUB_ACTIONS', 'ACTIONS_ID_TOKEN_REQUEST_URL', 'ACTIONS_ID_TOKEN_REQUEST_TOKEN',
                   'ACTIONS_RUNTIME_TOKEN', 'ACTIONS_RUNTIME_URL', 'ACTIONS_CACHE_URL', 'GITHUB_TOKEN')
@@ -361,8 +363,7 @@ def possession_run(driver, plan, identity_path, baseline=None):
         start_state = driver.start()
         if start_state != 'started':
             ambiguous = True
-            raise Refused('start timed out and the instance state is unresolved' if start_state == 'timeout'
-                          else 'start failed')
+            raise Refused(_phase_error('start', start_state, getattr(driver, 'start_report', None)))
         started = True
         view = driver.describe()
         pre_add = {'fingerprint': view['fingerprint'], 'items': dict(view['items'])}
@@ -419,7 +420,7 @@ def possession_run(driver, plan, identity_path, baseline=None):
         try:
             stopped = driver.stop() == 'stopped'
             if not stopped:
-                error = error or 'stop is unresolved'
+                error = error or _phase_error('stop', 'timeout', getattr(driver, 'stop_report', None))
         except Refused as exc:
             error = error or str(exc)
             stopped = False
@@ -435,16 +436,30 @@ def possession_run(driver, plan, identity_path, baseline=None):
         'guestAuthenticated': bool(probe_ok and clean), 'clean': clean,
         'probeOk': probe_ok, 'metadataLoginRemoved': meta_removed, 'guestKeyRemoved': guest_removed,
         'refreshed': refreshed, 'stopped': stopped, 'error': error, 'runnerEnabled': False,
+        'startReport': getattr(driver, 'start_report', None),
+        'stopReport': getattr(driver, 'stop_report', None),
         'cleanupInstructions': None if meta_removed else instructions,
     }
+
+
+def _phase_error(phase, state, report):
+    """Name the last operation status and instance status. Do not collapse them into one timeout."""
+    report = report or {}
+    operation = report.get('operation') or {}
+    observed = report.get('observed') or ('failed' if state == 'failed' else 'unresolved')
+    return (phase + ' ' + observed + ': operation ' + (operation.get('status') or 'none')
+            + ' instance ' + (report.get('instanceStatus') or 'unknown')
+            + ((' error ' + operation['error']) if operation.get('error') else ''))
 
 
 OPERATOR_ACCOUNT = 'grok-bots@protocols-465723.iam.gserviceaccount.com'
 METADATA_URL = ('https://compute.googleapis.com/compute/v1/projects/protocols-465723/zones/us-west2-b/instances/'
                 'roseos-yogi-builder-20261105-b/setMetadata')
 DESCRIBE_TIMEOUT = 30
-START_TIMEOUT = 120
-STOP_TIMEOUT = 120
+START_WAIT_SECONDS = 120
+# The 2026-11-07 possession stop ran 138s and was still open when a 120s client wait gave up.
+STOP_WAIT_SECONDS = 240
+POLL_SECONDS = 2
 TOKEN_TIMEOUT = 30
 METADATA_TIMEOUT = 60
 METADATA_WAIT_SECONDS = 180
@@ -518,33 +533,159 @@ class GcloudDriver:
             raise Refused('replacement has an external address')
         return {'status': seen.get('status'), 'fingerprint': fingerprint, 'items': items, 'id': str(seen.get('id'))}
 
-    def start(self):
+    def _blank_report(self):
+        return {'observed': 'unresolved', 'instanceStatus': '', 'operation': None, 'polls': 0}
+
+    def _json_stdout(self, result):
+        if result is None or result.returncode:
+            return None
         try:
-            result = self.run(['gcloud', 'compute', 'instances', 'start', INSTANCE, f'--project={PROJECT}',
-                               f'--zone={ZONE}', '--quiet'], capture_output=True, text=True, timeout=START_TIMEOUT)
+            parsed = json.loads(result.stdout)
+        except (ValueError, AttributeError):
+            return None
+        if isinstance(parsed, list):
+            if len(parsed) == 1 and isinstance(parsed[0], dict):
+                return parsed[0]
+            return None
+        return parsed if isinstance(parsed, dict) else None
+
+    def _public_operation(self, parsed, expected_type):
+        """Whitelist fields only. No raw body, token, or selfLink is kept."""
+        if not isinstance(parsed, dict):
+            return None
+        name = parsed.get('name')
+        if not isinstance(name, str) or not OPERATION_NAME.fullmatch(name) or name in SPENT_ZONE_OPERATIONS:
+            return None
+        target = str(parsed.get('targetId') or '')
+        if target and target != INSTANCE_ID:
+            return None
+        op_type = parsed.get('operationType')
+        if op_type not in (None, '', expected_type):
+            return None
+        zone = str(parsed.get('zone') or '')
+        if zone and not zone.rstrip('/').endswith('/' + ZONE):
+            return None
+        error = parsed.get('error')
+        code = ''
+        if isinstance(error, dict):
+            errors = error.get('errors')
+            if isinstance(errors, list) and errors and isinstance(errors[0], dict):
+                code = str(errors[0].get('code') or 'operation-error')[:40]
+            else:
+                code = str(error.get('code') or 'operation-error')[:40]
+        elif error:
+            code = 'operation-error'
+        progress = parsed.get('progress')
+        return {
+            'name': name, 'id': str(parsed.get('id') or ''),
+            'operationType': str(op_type or expected_type), 'status': str(parsed.get('status') or ''),
+            'targetId': target, 'progress': progress if isinstance(progress, int) else None, 'error': code,
+            'insertTime': parsed.get('insertTime') if isinstance(parsed.get('insertTime'), str) else '',
+            'startTime': parsed.get('startTime') if isinstance(parsed.get('startTime'), str) else '',
+            'endTime': parsed.get('endTime') if isinstance(parsed.get('endTime'), str) else '',
+        }
+
+    def _submit_instance(self, verb):
+        try:
+            return self.run(['gcloud', 'compute', 'instances', verb, INSTANCE, f'--project={PROJECT}',
+                             f'--zone={ZONE}', '--async', '--format=json', '--quiet'],
+                            capture_output=True, text=True, timeout=DESCRIBE_TIMEOUT)
         except subprocess.TimeoutExpired:
-            return 'timeout'
-        if result.returncode:
-            return 'failed'
+            return None
+
+    def _describe_operation(self, name):
+        try:
+            result = self.run(['gcloud', 'compute', 'operations', 'describe', name, f'--project={PROJECT}',
+                               f'--zone={ZONE}', '--format=json', '--quiet'],
+                              capture_output=True, text=True, timeout=DESCRIBE_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            return None
+        return self._json_stdout(result)
+
+    def _read_instance_status(self, report):
         try:
             view = self.describe()
-        except Refused:
+        except Refused as exc:
+            report['instanceStatus'] = 'mismatch' if 'identity' in str(exc) else 'unreadable'
+            return None
+        report['instanceStatus'] = str(view.get('status') or '')
+        return view
+
+    def _poll_phase(self, report, expected_type, want_status, budget):
+        """Poll the submitted operation and the instance until want_status, the budget, or a hard error.
+
+        One non-matching describe is not terminal. A frozen clock stops after three polls.
+        """
+        operation = report.get('operation')
+        deadline = self.clock() + budget
+        stalls = 0
+        while True:
+            report['polls'] += 1
+            if operation and operation.get('status') != 'DONE':
+                nxt = self._public_operation(self._describe_operation(operation['name']), expected_type)
+                if nxt and nxt['name'] == operation['name']:
+                    operation = nxt
+                    report['operation'] = operation
+            if operation and operation.get('error'):
+                report['observed'] = 'failed'
+                return 'failed'
+            view = self._read_instance_status(report)
+            if report.get('instanceStatus') == 'mismatch':
+                report['observed'] = 'failed'
+                return 'failed'
+            if view and view.get('status') == want_status and (not operation or operation.get('status') == 'DONE'):
+                report['observed'] = 'running' if want_status == 'RUNNING' else 'terminated'
+                return 'ready'
+            remaining = deadline - self.clock()
+            if remaining <= 0:
+                report['observed'] = 'unresolved'
+                return 'timeout'
+            before = remaining
+            self.sleep(min(POLL_SECONDS, remaining))
+            if deadline - self.clock() >= before - 0.001:
+                stalls += 1
+                if stalls >= 3:
+                    report['observed'] = 'unresolved'
+                    return 'timeout'
+
+    def start(self):
+        """Submit start asynchronously and poll until the instance is RUNNING.
+
+        gcloud's return is not RUNNING. The 2026-11-07 start operation was DONE at 15:55:34Z
+        and a single following describe was treated as unresolved at 15:55:37Z.
+        """
+        self.start_report = self._blank_report()
+        result = self._submit_instance('start')
+        if result is None:
             return 'timeout'
-        return 'started' if view.get('status') == 'RUNNING' else 'timeout'
+        operation = self._public_operation(self._json_stdout(result), 'start')
+        if operation is None:
+            self.start_report['observed'] = 'failed' if result.returncode else 'unresolved'
+            return 'failed' if result.returncode else 'timeout'
+        self.start_report['operation'] = operation
+        polled = self._poll_phase(self.start_report, 'start', 'RUNNING', START_WAIT_SECONDS)
+        if polled == 'ready':
+            return 'started'
+        return 'failed' if polled == 'failed' else 'timeout'
 
     def stop(self):
-        try:
-            result = self.run(['gcloud', 'compute', 'instances', 'stop', INSTANCE, f'--project={PROJECT}',
-                               f'--zone={ZONE}', '--quiet'], capture_output=True, text=True, timeout=STOP_TIMEOUT)
-        except subprocess.TimeoutExpired:
+        """Submit stop asynchronously and poll until the instance is TERMINATED.
+
+        A client timeout is not a finished stop. The 2026-11-07 stop was still running at 120s
+        and reached DONE at 138s.
+        """
+        self.stop_report = self._blank_report()
+        result = self._submit_instance('stop')
+        if result is None:
+            self.stop_report['observed'] = 'unresolved'
             return 'unresolved'
-        if result.returncode:
+        operation = self._public_operation(self._json_stdout(result), 'stop')
+        if operation is None:
+            self.stop_report['observed'] = 'unresolved'
             return 'unresolved'
-        try:
-            view = self.describe()
-        except Refused:
-            return 'unresolved'
-        return 'stopped' if view.get('status') == 'TERMINATED' else 'unresolved'
+        self.stop_report['operation'] = operation
+        polled = self._poll_phase(self.stop_report, 'stop', 'TERMINATED', STOP_WAIT_SECONDS)
+        return 'stopped' if polled == 'ready' else 'unresolved'
 
     def _post(self, url, body, token, timeout):
         request = urllib.request.Request(url, data=body, method='POST', headers={
