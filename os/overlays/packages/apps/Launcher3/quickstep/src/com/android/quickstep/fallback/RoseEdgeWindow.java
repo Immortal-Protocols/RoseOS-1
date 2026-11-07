@@ -9,6 +9,7 @@ import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
 import android.graphics.Canvas;
 import android.graphics.Color;
+import android.graphics.Insets;
 import android.graphics.LinearGradient;
 import android.graphics.Paint;
 import android.graphics.Path;
@@ -19,15 +20,18 @@ import android.graphics.RectF;
 import android.graphics.Region;
 import android.graphics.Shader;
 import android.hardware.display.DisplayManager;
+import android.os.Binder;
 import android.provider.Settings;
 import android.util.SparseArray;
 import android.view.Display;
 import android.view.Gravity;
 import android.view.HapticFeedbackConstants;
+import android.view.InsetsFrameProvider;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewConfiguration;
 import android.view.ViewTreeObserver;
+import android.view.WindowInsets;
 import android.view.WindowManager;
 import android.view.accessibility.AccessibilityNodeInfo;
 import android.view.accessibility.AccessibilityNodeProvider;
@@ -51,6 +55,13 @@ import android.view.inputmethod.InputMethodManager;
  * RoseEdgeGesture.TRAY_TO_SWITCHER_DP the switcher well lights with a haptic and a release opens the switcher (back
  * below TRAY_TO_SWITCHER_EXIT_DP, it does not). A swipe that starts in the bottom
  * system area still belongs to the system gesture (Launcher3's input consumer, RoseEdgeSwipe). Main thread only.
+ *
+ * Insets (with OS Core): once the shell has really shortened the app (RoseEdgeState onResized), the window provides a
+ * systemOverlays() inset of the lift (RoseEdgeGesture.raisedInsetPx, 58dp) along its bottom, so windows that still
+ * reach the bottom of the display, the keyboard and the shade, can stand clear of the raised edge. Never before the
+ * shell's onRaised: until then the app is full height and an app padding by systemBars() would lift twice. Never
+ * navigationBars(): the focused app controls those, and an immersive app would hide the edge. The shortened app does
+ * not overlap the source frame, so it gets none. The inset goes with the window when the edge lowers.
  */
 public final class RoseEdgeWindow implements RoseEdgeState.Listener {
     /** What the host (TouchInteractionService, via rose-edge-launcher3.patch) does for the edge's two own controls. */
@@ -85,6 +96,8 @@ public final class RoseEdgeWindow implements RoseEdgeState.Listener {
     private final Context mContext;
     private final Actions mActions;
     private final SparseArray<EdgeView> mShown = new SparseArray<>();
+    /** Identifies this window's inset source to the window manager (as the taskbar's insets owner does). */
+    private final Binder mInsetsOwner = new Binder();
 
     public RoseEdgeWindow(Context context, Actions actions) {
         mContext = context.getApplicationContext() != null ? context.getApplicationContext() : context;
@@ -168,6 +181,31 @@ public final class RoseEdgeWindow implements RoseEdgeState.Listener {
         } else {
             remove(displayId);
         }
+    }
+
+    @Override
+    public void onResized(int displayId) {
+        EdgeView view = mShown.get(displayId);
+        if (view == null || !(view.getLayoutParams() instanceof WindowManager.LayoutParams)) return;
+        WindowManager.LayoutParams lp = (WindowManager.LayoutParams) view.getLayoutParams();
+        int lift = RoseEdgeGesture.raisedInsetPx(view.mDensity);
+        if (insetPx(lp) == lift) return;
+        lp.providedInsets = new InsetsFrameProvider[] {
+                new InsetsFrameProvider(mInsetsOwner, 0, WindowInsets.Type.systemOverlays())
+                        .setInsetsSize(Insets.of(0, 0, 0, lift))};
+        view.getContext().getSystemService(WindowManager.class).updateViewLayout(view, lp);
+    }
+
+    /** The bottom systemOverlays() inset these layout params provide, or 0 (tests read it). */
+    static int insetPx(WindowManager.LayoutParams lp) {
+        if (lp == null || lp.providedInsets == null) return 0;
+        for (InsetsFrameProvider provider : lp.providedInsets) {
+            if (provider != null && provider.getType() == WindowInsets.Type.systemOverlays()
+                    && provider.getInsetsSize() != null) {
+                return provider.getInsetsSize().bottom;
+            }
+        }
+        return 0;
     }
 
     @Override
