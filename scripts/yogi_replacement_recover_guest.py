@@ -144,7 +144,9 @@ def _service_problems(value):
         return ["services"]
     config = value["config"]
     if not isinstance(config, dict) or set(config) != {
-            "port", "listen", "passwordAuth", "permitRoot", "pubkey", "matchBlocks"}:
+            "scope", "port", "listen", "passwordAuth", "permitRoot", "pubkey", "matchBlocks"}:
+        return ["services"]
+    if config.get("scope") != "root-file-static":
         return ["services"]
     if config["port"] not in ("22", "other", "absent", "unreadable"):
         return ["services"]
@@ -1937,13 +1939,44 @@ def _unit_token(root, verb, name, allowed):
     return token if token in allowed else "unknown"
 
 
+def read_proc_table(root, name):
+    """Read one proc net table. None means this file was not read.
+
+    /proc/net is a symlink and its files report size 0. The final component is opened
+    with O_NOFOLLOW and, on the live root only, a zero-size regular file is read up to
+    a cap. That exception is not applied to read_file.
+    """
+    if name not in ("tcp", "tcp6"):
+        return None
+    if root == "/":
+        path = "/proc/" + str(os.getpid()) + "/net/" + name
+    else:
+        path = under(root, "/proc/net/" + name)
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    except OSError:
+        return None
+    try:
+        info = os.fstat(fd)
+        if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
+            return None
+        if info.st_size > (1 << 20):
+            return None
+        if root == "/" and info.st_size == 0:
+            return os.read(fd, 1 << 20)
+        return os.read(fd, info.st_size)
+    finally:
+        os.close(fd)
+
+
 def _listen_addresses(root):
     found = []
+    read_ok = 0
     for name in ("tcp", "tcp6"):
-        try:
-            data, _info = read_file(root, "/proc/net/" + name, 1 << 20)
-        except OSError:
+        data = read_proc_table(root, name)
+        if data is None:
             continue
+        read_ok += 1
         for raw in data.decode(errors="replace").splitlines()[1:]:
             parts = raw.split()
             if len(parts) < 4 or parts[3] != "0A" or ":" not in parts[1]:
@@ -1952,7 +1985,10 @@ def _listen_addresses(root):
             if port.lower() != "0016":
                 continue
             if name == "tcp" and len(address) == 8:
-                raw_ip = bytes.fromhex(address)
+                try:
+                    raw_ip = bytes.fromhex(address)
+                except ValueError:
+                    continue
                 shown = ".".join(str(b) for b in raw_ip[::-1]) + ":22"
             elif name == "tcp6" and len(address) == 32:
                 shown = "[ipv6]:22" if set(address) != {"0"} else "[::]:22"
@@ -1960,7 +1996,7 @@ def _listen_addresses(root):
                 continue
             if shown not in found and len(found) < 4:
                 found.append(shown)
-    return found
+    return found, read_ok
 
 
 def _config_class(text):
@@ -1973,6 +2009,8 @@ def _config_class(text):
         parts = line.split()
         key = parts[0].lower()
         value = parts[1].lower() if len(parts) > 1 else ""
+        if key == "include":
+            continue
         if key == "match":
             matches += 1
             blocked = True
@@ -2000,27 +2038,37 @@ def _config_class(text):
         permit = "unset"
     if pubkey == "other":
         pubkey = "unset"
-    return {"port": port, "listen": listen, "passwordAuth": password, "permitRoot": permit,
-            "pubkey": pubkey, "matchBlocks": min(matches, 20)}
+    return {"scope": "root-file-static", "port": port, "listen": listen, "passwordAuth": password,
+            "permitRoot": permit, "pubkey": pubkey, "matchBlocks": min(matches, 20)}
 
 
 def read_services(root):
-    """Read-only sshd, guest-agent, and port-22 facts. No service is started and no key is read."""
+    """Read-only service facts. sshd_config scope is the root file only, not the effective config.
+
+    Include drop-ins and Match blocks are not applied. No service is started and no key is read.
+    """
     active = {"active", "inactive", "failed", "unknown", "activating"}
     enabled = {"enabled", "disabled", "static", "masked", "indirect", "unknown"}
     def unit(name):
         return {"active": _unit_token(root, "is-active", name, active),
                 "enabled": _unit_token(root, "is-enabled", name, enabled)}
-    listen = _listen_addresses(root)
+    listen, read_ok = _listen_addresses(root)
     try:
         data, _info = read_file(root, "/etc/ssh/sshd_config", 1 << 16)
         config = _config_class(data.decode(errors="replace"))
     except OSError:
-        config = {"port": "unreadable", "listen": "unreadable", "passwordAuth": "unreadable",
-                  "permitRoot": "unreadable", "pubkey": "unreadable", "matchBlocks": 0}
+        config = {"scope": "root-file-static", "port": "unreadable", "listen": "unreadable",
+                  "passwordAuth": "unreadable", "permitRoot": "unreadable", "pubkey": "unreadable",
+                  "matchBlocks": 0}
+    if listen:
+        port22 = "listening"
+    elif read_ok == 2:
+        port22 = "absent"
+    else:
+        port22 = "unreadable"
     return {"ssh": unit("ssh.service"), "sshd": unit("sshd.service"),
             "guestAgent": unit("google-guest-agent.service"), "listen": listen,
-            "port22": "listening" if listen else "absent", "config": config}
+            "port22": port22, "config": config}
 
 
 def main(argv):

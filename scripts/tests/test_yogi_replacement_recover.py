@@ -1095,13 +1095,82 @@ class ControlTest(Base):
         self.assertEqual(receipt["journal"]["entries"], 0)
         self.assertEqual(receipt["hostKeys"]["rotated"], {})
         self.assertEqual(guest.validate_shape(receipt, json.loads(binding.read_text())), [])
-        self.assertEqual(receipt["services"]["port22"], "absent")
+        self.assertEqual(receipt["services"]["port22"], "unreadable")
+        self.assertEqual(receipt["services"]["listen"], [])
         self.assertEqual(receipt["services"]["ssh"]["active"], "unknown")
+        self.assertEqual(receipt["services"]["config"]["scope"], "root-file-static")
         self.assertEqual(receipt["services"]["config"]["port"], "absent")
         self.assertNotIn("KEEP", json.dumps(receipt["services"]))
         self.assertEqual(receipt["cleanup"]["linesRemoved"], 0)
         self.assertGreater(receipt["cleanup"]["unidentifiedAuthorizedKeyLines"], 0)
         self.assertFalse(guest.success_problems(receipt) == [] or receipt["purpose"] == "repair")
+
+    def test_port22_unreadable_is_not_absent_and_config_is_the_root_file(self):
+        op = Path(self.temp.name) / "listen-op"
+        recover.plan("Mac operator", op, now=NOW, token=tokens("12" * 16, "34" * 16), revision="a" * 40,
+                     env=ENV, mode="inspect")
+        binding = op / "binding.json"
+        identity = Path(self.temp.name) / "listen-identity.json"
+        identity.write_text(json.dumps({"project": recover.PROJECT, "zone": recover.ZONE,
+                                        "instance": recover.INSTANCE, "instanceId": recover.INSTANCE_ID}))
+
+        def run(root):
+            unit = root / guest.UNIT_PATH.lstrip("/")
+            unit.parent.mkdir(parents=True, exist_ok=True)
+            unit.write_text("u" * 347)
+            unit.chmod(0o644)
+            result = subprocess.run([sys.executable, str(op / "guest.py"), "--root", str(root), str(binding),
+                                     str(identity), BOOT], capture_output=True, text=True)
+            self.assertIn(guest.PREFIX, result.stdout, result.stderr)
+            receipt = json.loads(result.stdout.strip().split(guest.PREFIX, 1)[1])
+            self.assertEqual(guest.validate_shape(receipt, json.loads(binding.read_text())), [])
+            return receipt
+
+        missing = Path(self.temp.name) / "no-proc"
+        receipt = run(missing)
+        self.assertEqual(receipt["services"]["port22"], "unreadable")
+        self.assertEqual(receipt["services"]["listen"], [])
+
+        linked = Path(self.temp.name) / "linked-proc"
+        table = ("  sl  local_address rem_address   st\n"
+                 "   0: 00000000:0016 00000000:0000 0A 00000000:0000 00:00000000 00000000 0 0 0\n")
+        net = linked / "proc/self/net"
+        net.mkdir(parents=True)
+        (net / "tcp").write_text(table)
+        (net / "tcp6").write_text("  sl  local_address rem_address   st\n")
+        proc = linked / "proc"
+        (proc / "net").symlink_to("self/net")
+        ssh = linked / "etc/ssh"
+        ssh.mkdir(parents=True)
+        (ssh / "sshd_config").write_text(
+            "Include /etc/ssh/sshd_config.d/*.conf\nPasswordAuthentication no\nMatch User root\n"
+            "PasswordAuthentication yes\n")
+        drop = ssh / "sshd_config.d"
+        drop.mkdir()
+        (drop / "extra.conf").write_text("PasswordAuthentication yes\nPort 2222\n")
+        receipt = run(linked)
+        self.assertEqual(receipt["services"]["port22"], "listening")
+        self.assertEqual(receipt["services"]["listen"], ["0.0.0.0:22"])
+        self.assertEqual(receipt["services"]["config"]["scope"], "root-file-static")
+        self.assertEqual(receipt["services"]["config"]["passwordAuth"], "no")
+        self.assertEqual(receipt["services"]["config"]["port"], "absent")
+        self.assertEqual(receipt["services"]["config"]["matchBlocks"], 1)
+        self.assertNotIn("2222", json.dumps(receipt["services"]))
+
+        broken = Path(self.temp.name) / "symlink-proc"
+        (broken / "proc/net").mkdir(parents=True)
+        (broken / "proc/net/tcp").symlink_to("missing")
+        (broken / "proc/net/tcp6").symlink_to("missing")
+        receipt = run(broken)
+        self.assertEqual(receipt["services"]["port22"], "unreadable")
+
+        live = subprocess.run([sys.executable, str(op / "guest.py"), "--root", "/", str(binding),
+                               str(identity), BOOT], capture_output=True, text=True)
+        self.assertIn(guest.PREFIX, live.stdout, live.stderr)
+        live_receipt = json.loads(live.stdout.strip().split(guest.PREFIX, 1)[1])
+        self.assertIn(live_receipt["services"]["port22"], ("absent", "listening"))
+        self.assertEqual(live_receipt["services"]["config"]["scope"], "root-file-static")
+        self.assertNotIn("BEGIN ", json.dumps(live_receipt["services"]))
 
     def _fresh(self, mark):
         path = Path(self.temp.name) / ("op" + mark)

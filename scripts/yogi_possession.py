@@ -864,7 +864,9 @@ def _read_available(stream, limit):
     return data or b''
 
 
-def _teardown_process(proc):
+def _teardown_process(proc, timeout=2):
+    """Reap within timeout. The caller caps timeout to the readiness budget still left."""
+    timeout = 0.0 if timeout is None else max(0.0, min(2.0, float(timeout)))
     if isinstance(proc, subprocess.Popen):
         try:
             os.killpg(proc.pid, signal.SIGKILL)
@@ -874,14 +876,14 @@ def _teardown_process(proc):
             except OSError:
                 pass
         try:
-            proc.wait(timeout=2)
+            proc.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
             try:
                 proc.kill()
             except OSError:
                 pass
             try:
-                proc.wait(timeout=1)
+                proc.wait(timeout=0)
             except (OSError, subprocess.TimeoutExpired):
                 pass
         except OSError:
@@ -896,7 +898,7 @@ def _teardown_process(proc):
         wait = getattr(proc, 'wait', None)
         if callable(wait):
             try:
-                wait(timeout=2)
+                wait(timeout=timeout)
             except (OSError, subprocess.TimeoutExpired):
                 pass
     stream = getattr(proc, 'stderr', None)
@@ -1554,7 +1556,7 @@ class GcloudDriver:
                     outcome = self.iap_check()
                     ok, code, err, kind = _tunnel_outcome(outcome)
                 else:
-                    ok, code, err, kind = self._iap_once()
+                    ok, code, err, kind = self._iap_once(deadline)
             except (OSError, subprocess.SubprocessError) as exc:
                 ok, code, err, kind = False, None, type(exc).__name__, 'spawn'
             text = sanitize_text(err, 240)
@@ -1571,25 +1573,28 @@ class GcloudDriver:
                 break
             if kind != 'backend-4003':
                 break
+            remain = deadline - self.clock()
+            if remain <= 0:
+                break
             before = self.clock()
-            self.sleep(POLL_SECONDS)
+            self.sleep(min(POLL_SECONDS, remain))
             if self.clock() <= before:
                 stalls += 1
                 if stalls >= 3:
                     break
-            if self.clock() >= deadline:
-                break
         report['elapsedSeconds'] = round(self.clock() - started, 3)
         return report
 
     def _iap_tcp(self):
         """One tunnel attempt. The readiness loop decides whether a 4003 is retried."""
-        ok, code, err, _kind = self._iap_once()
+        ok, code, err, _kind = self._iap_once(self.clock() + IAP_READY_SECONDS)
         return ok, code, err
 
-    def _iap_once(self):
-        """Accept on the local gcloud listener, then always reap the process group."""
+    def _iap_once(self, deadline):
+        """One tunnel check that stops at deadline, then reaps within the time still left."""
         import socket
+        if self.clock() >= deadline:
+            return False, None, '', 'deadline'
         try:
             with socket.socket() as sock:
                 sock.bind(('127.0.0.1', 0))
@@ -1610,26 +1615,30 @@ class GcloudDriver:
         code = None
         err = b''
         try:
-            deadline = self.clock() + IAP_READY_SECONDS
+            attempt_end = min(deadline, self.clock() + IAP_READY_SECONDS)
             stalls = 0
-            while True:
+            while self.clock() < attempt_end:
                 if _process_exited(proc):
                     break
+                remain = attempt_end - self.clock()
                 try:
                     if self.connect is not None:
                         ok = bool(self.connect(('127.0.0.1', port)))
                     else:
                         try:
-                            with socket.create_connection(('127.0.0.1', port), timeout=1):
+                            with socket.create_connection(('127.0.0.1', port), timeout=min(1.0, remain)):
                                 ok = True
                         except OSError:
                             ok = False
                 except OSError:
                     ok = False
-                if ok or self.clock() >= deadline:
+                if ok or self.clock() >= attempt_end:
+                    break
+                pause = min(POLL_SECONDS, attempt_end - self.clock())
+                if pause <= 0:
                     break
                 before = self.clock()
-                self.sleep(POLL_SECONDS)
+                self.sleep(pause)
                 if self.clock() <= before:
                     stalls += 1
                     if stalls >= 3:
@@ -1639,7 +1648,7 @@ class GcloudDriver:
             err = type(exc).__name__.encode()
         finally:
             code = _process_code(proc)
-            captured = _teardown_process(proc)
+            captured = _teardown_process(proc, timeout=max(0.0, deadline - self.clock()))
         if not err:
             err = captured
         if isinstance(err, bytes):

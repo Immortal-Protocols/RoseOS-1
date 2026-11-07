@@ -1696,6 +1696,86 @@ class PossessionTest(unittest.TestCase):
         self.assertIn('Connecting to example.', broken['clientLog'])
         self.assertFalse(broken['serverKeyAccepted'] or broken['loginAccepted'])
 
+    def test_tunnel_attempt_stays_inside_the_overall_deadline(self):
+        import os
+        refused = (b"ERROR: (gcloud.compute.start-iap-tunnel) [4003: 'failed to connect to backend']. "
+                   b"(Failed to connect to port 22)\n")
+
+        class Clock:
+            def __init__(self):
+                self.t = 0.0
+
+            def __call__(self):
+                return self.t
+
+            def sleep(self, seconds):
+                self.t += seconds
+
+        clock = Clock()
+
+        def stderr_pipe(payload):
+            read_fd, write_fd = os.pipe()
+            os.write(write_fd, payload)
+            os.close(write_fd)
+            return os.fdopen(read_fd, 'rb')
+
+        class Early:
+            def __init__(self):
+                self.stderr = stderr_pipe(refused)
+                self.returncode = 1
+                self.pid = None
+
+            def poll(self):
+                return 1
+
+            def kill(self):
+                return None
+
+            def wait(self, timeout=None):
+                return 1
+
+        class Hang:
+            def __init__(self):
+                self.stderr = open(os.devnull, 'rb')
+                self.returncode = None
+                self.pid = None
+                self.waits = []
+
+            def poll(self):
+                return None
+
+            def kill(self):
+                self.returncode = -9
+
+            def wait(self, timeout=None):
+                self.waits.append(timeout)
+                if timeout:
+                    clock.sleep(timeout)
+                self.returncode = -9
+                return -9
+
+        hang = {'proc': None}
+
+        def popen(argv, stdout=None, stderr=None, start_new_session=False):
+            if clock.t < yogi_possession.TRANSPORT_BUDGET - 40:
+                return Early()
+            proc = Hang()
+            hang['proc'] = proc
+            return proc
+
+        driver = yogi_possession.GcloudDriver(popen=popen, connect=lambda _address: False,
+                                             sleep=clock.sleep, clock=clock)
+        report = driver.wait_login_ready()
+        self.assertLessEqual(clock.t, yogi_possession.TRANSPORT_BUDGET)
+        self.assertGreaterEqual(clock.t, yogi_possession.TRANSPORT_BUDGET - yogi_possession.POLL_SECONDS)
+        self.assertEqual(report['attempts'][0]['class'], 'backend-4003')
+        self.assertGreaterEqual(report['attempts'][0]['elapsedSeconds'], yogi_possession.LOGIN_READY_SECONDS)
+        self.assertIsNotNone(hang['proc'])
+        self.assertTrue(hang['proc'].waits)
+        self.assertLessEqual(max(item or 0 for item in hang['proc'].waits), 2)
+        self.assertFalse(report['listenerReady'] or report['possession'])
+        self.assertLessEqual(report['elapsedSeconds'], yogi_possession.TRANSPORT_BUDGET)
+
     def test_openssh_9_6_debug_log_matches_a_real_sshd(self):
         import os
         import socket
