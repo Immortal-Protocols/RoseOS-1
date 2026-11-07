@@ -1,20 +1,24 @@
 package dev.pixel.voice;
 
-/** The glasses-on hook's decision (Nov 7 plan 1O): run the configured action once per real not-worn to worn
- * transition of the glasses.
+/** The glasses-on hook's decision (Nov 7 plan 1O): run the configured action once per not-worn to worn transition.
  *
- * <p>Only a wear signal can drive it. {@link #observe} takes a {@link Source} whose kind says what the signal
- * measures, and anything that is not {@link Source#WEAR_SENSOR} is refused: a Bluetooth/HFP connection, an A2DP
- * stream or the RB Meta hinge (unfold) advertisement are not "worn" and must never be substituted silently.
- * At this revision the repository has no wear source (GlassesAdvertisement reports hinge open/closed only, and
- * GlassesAutoStartPolicy approximates wearing from reconnects), so on a real phone {@link #status} reports the signal
- * as unavailable and the hook never fires until a wear source is added and agreed.
+ * <p>Two sources can drive it. {@link Source#BLUETOOTH_AUDIO} is the owner's chosen signal (Nathan, 2026-11-07): any
+ * Bluetooth audio device connecting counts as glasses on, and the last one disconnecting counts as removal
+ * (BluetoothAudioWear). It is a proxy, not a worn sensor, and status says so. {@link Source#WEAR_SENSOR} is kept for a
+ * real worn signal if one is ever added. Any other kind is refused, including a generic connection event and the RB
+ * Meta hinge (unfold) advertisement.
  *
- * <p>Rules: the first observation after start only establishes the state (an unknown-to-worn change is not a
- * transition anyone saw); worn must follow an observed not-worn that lasted at least {@link #MIN_REMOVED_MS}, so a
- * sensor's brief flicker is not a second put-on; repeated worn reports fire nothing; a disabled hook still tracks the
- * state, so enabling it while the glasses are on does not fire until the next put-on; the action and package are read
- * at the moment of the transition, so a change applies from the next transition. Pure logic, no Android types. */
+ * <p>Rules:
+ * <ul>
+ * <li>The first observation after start only establishes the state. A device already connected at start, an unknown
+ * state followed by worn, is not a transition.</li>
+ * <li>Worn must follow an observed not-worn that lasted at least {@link #MIN_REMOVED_MS}, so a brief disconnect is not
+ * a second put-on.</li>
+ * <li>Repeated worn reports fire nothing.</li>
+ * <li>A disabled hook still tracks the state.</li>
+ * <li>The action and package are read at the transition, so a change applies from the next one.</li>
+ * </ul>
+ * Pure logic, no Android types. */
 final class GlassesWearHook {
  static final int UNKNOWN = 0, NOT_WORN = 1, WORN = 2;
  /** A removal shorter than this is treated as a flicker of the same wearing. */
@@ -22,10 +26,11 @@ final class GlassesWearHook {
 
  /** What a signal measures. Only WEAR_SENSOR can drive the hook. */
  static final class Source {
-  static final String WEAR_SENSOR = "wear_sensor", CONNECTION = "connection", HINGE = "hinge";
+  static final String WEAR_SENSOR = "wear_sensor", BLUETOOTH_AUDIO = "bluetooth_audio", CONNECTION = "connection", HINGE = "hinge";
   final String kind, name;
   Source(String kind, String name) { this.kind = kind; this.name = name; }
-  boolean isWear() { return WEAR_SENSOR.equals(kind); }
+  /** Whether this source may drive the hook: a worn sensor, or the owner's chosen Bluetooth audio connection. */
+  boolean isWear() { return WEAR_SENSOR.equals(kind) || BLUETOOTH_AUDIO.equals(kind); }
  }
 
  /** What the caller should do after an observation. */
@@ -52,7 +57,7 @@ final class GlassesWearHook {
  /** One observation of the glasses' wear state from source at elapsed time now (ms, monotonic). */
  synchronized Decision observe(Source from, int observed, long now, CustomizationConfig config) {
   if (from == null || !from.isWear())
-   return new Decision(Decision.REFUSED, null, null, "Not a glasses-worn signal: " + (from == null ? "no source" : from.kind));
+   return new Decision(Decision.REFUSED, null, null, "Not a signal the hook accepts: " + (from == null ? "no source" : from.kind));
   if (observed != WORN && observed != NOT_WORN && observed != UNKNOWN) return new Decision(Decision.REFUSED, null, null, "Unknown wear state");
   source = from;
   int before = state;

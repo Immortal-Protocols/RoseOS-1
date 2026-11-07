@@ -86,9 +86,9 @@ permissioned API that raises the OS edge, a direct command endpoint, and any tru
   here until an owner is agreed. App Core will accept a 1–3 line `GlassesWearHookRunner` call in `VoiceService` once a
   real wear source exists.
 
-## Glasses-worn signal: finding
+## Glasses-on signal
 
-This repository has no real worn signal.
+This repository has no real worn signal (finding below); the owner chose a Bluetooth audio proxy instead.
 
 | In-repo signal | What it actually is |
 | --- | --- |
@@ -104,19 +104,19 @@ module `com.meta.wearable.dat.core`) is per Meta's DAT 1.0 Android reference. It
 here. DAT is not in this repo. The external Glasses Camera app (`dev.pixel.glassescamera`) uses it, and only during its
 own camera session.
 
-Getting a worn event into Rose needs one of:
-- (a) a coordinated change outside this repo: Glasses Camera relays `donState` to Rose Agent;
-- (b) DAT in Rose Agent: a Meta App ID, Meta AI app registration and developer terms.
+**Owner decision (Nathan, 2026-11-07): skip both the Glasses Camera relay and Meta DAT.** The hook's signal is any
+Bluetooth audio device connecting (glasses on) and the last one disconnecting (removal). `BluetoothAudioWear` reports
+this from AudioManager's device list, which needs no permission, and registers once from `RoseAgentApplication`.
 
-Either is an owner/access decision.
-
-Until then:
-- `GlassesWearHook` refuses every non-wear source (connection, hinge) and never fires.
-- `customization_state` reports `signalAvailable: false` with this limitation.
+This is a proxy, not a worn sensor: other Bluetooth headphones count too. `customization_state` says so in
+`glassesWear.basis`, and names the source `bluetooth_audio_connection`. The RB Meta hinge advertisement and generic
+connection events are still refused.
 
 The hook's rules, tested on the host:
-- it fires once per observed not-worn → worn transition, with not-worn lasting at least 3 s;
-- an unknown → worn change does not fire;
+- it fires once per observed not-worn → worn transition, with not-worn lasting at least 3 s, so a reconnect blip does
+  not fire;
+- a device already connected when the process starts does not fire;
+- a second device joining while one is connected does not fire;
 - disable and change take effect from the next transition.
 
 ## CLI route
@@ -183,7 +183,8 @@ Each step is an owner or operator action. This workstream performs none of them.
      `node workspace/rose-agent/customization/rose-customize.mjs --say columns 5`.
    - Then ask for the state: `home.applied` should be true and `home.effectiveColumns` should be what Home draws.
    - Repeat for `wallpaper ember` and `font serif`.
-   - `glasses-hook --on --tray` is stored, but `glassesWear.signalAvailable` stays false and the hook never fires.
+   - With `glasses-hook --on --tray`, connect any Bluetooth audio device: Rose Home comes forward once. Disconnect it for at
+     least 3 s and reconnect: it fires again. `glassesWear.basis` names the Bluetooth audio proxy.
    - Restore with `columns auto`, `wallpaper classic`, `font default` and `glasses-hook --off`.
 
 What counts as evidence: a phone check like this is physical-device evidence for this exact build only. Record the

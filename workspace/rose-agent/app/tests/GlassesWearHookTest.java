@@ -105,6 +105,20 @@ public final class GlassesWearHookTest {
 
         expect("worn".equals(GlassesWearHook.stateName(WORN)) && "not_worn".equals(GlassesWearHook.stateName(NOT_WORN))
                 && "unknown".equals(GlassesWearHook.stateName(UNKNOWN)), "state names");
+        // Owner's choice (2026-11-07): any Bluetooth audio device connecting is glasses on, disconnecting is removal.
+        GlassesWearHook.Source audio = new GlassesWearHook.Source(GlassesWearHook.Source.BLUETOOTH_AUDIO, "bluetooth_audio_connection");
+        expect(audio.isWear() && !BT.isWear() && !HINGE.isWear(), "Bluetooth audio drives the hook; a generic connection or the hinge does not");
+        GlassesWearHook b = new GlassesWearHook();
+        expect(!b.observe(audio, NOT_WORN, 0, tray).fires(), "start with nothing connected: baseline, no fire");
+        GlassesWearHook.Decision on = b.observe(audio, WORN, 5_000, tray);
+        expect(on.fires() && CustomizationConfig.ACTION_TRAY.equals(on.action), "a Bluetooth audio device connecting fires once");
+        expect(!b.observe(audio, WORN, 6_000, tray).fires(), "a second device while one is connected is not a new put-on");
+        expect(!b.observe(audio, NOT_WORN, 10_000, tray).fires() && b.state() == NOT_WORN, "the last device disconnecting is removal");
+        expect(!b.observe(audio, WORN, 11_000, tray).fires(), "a reconnect within " + GlassesWearHook.MIN_REMOVED_MS + " ms is a blip");
+        expect(!b.observe(audio, NOT_WORN, 12_000, tray).fires() && b.observe(audio, WORN, 20_000, app).fires(), "a real removal then reconnect fires again, with the current action");
+        GlassesWearHook c = new GlassesWearHook();
+        expect(!c.observe(audio, WORN, 0, tray).fires(), "already connected at start: not a transition");
+        expect(!c.observe(audio, NOT_WORN, 1_000, off).fires() && !c.observe(audio, WORN, 9_000, off).fires(), "disabled: tracks, never fires");
         System.out.println("GlassesWearHookTest: " + checks + " checks passed");
     }
 

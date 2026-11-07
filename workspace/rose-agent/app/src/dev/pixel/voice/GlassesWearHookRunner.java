@@ -3,30 +3,29 @@ package dev.pixel.voice;
 import android.content.Context;
 import android.content.Intent;
 import android.os.SystemClock;
-import org.json.JSONArray;
 import org.json.JSONObject;
 
-/** Runs the glasses-on hook (Nov 7 plan 1O) and reports honestly whether it can run at all.
+/** Runs the glasses-on hook (Nov 7 plan 1O) and reports which signal drives it.
  *
- * <p>One GlassesWearHook per process decides; this class only performs its decision. Only a wear_sensor source can
- * drive it: a Bluetooth/HFP connection, an audio route or the hinge/unfold advertisement is not "worn", and the hook
- * refuses them. Nothing calls {@link #onWearSignal} in this revision, because the repository has no wear source. The
- * real one is Meta DAT's Device.donState (DONNED/DOFFED), which only the external Glasses Camera app
- * (dev.pixel.glassescamera) links; relaying it here needs a coordinated change outside this repository and Meta
- * developer registration, which is a user/access decision. Until then {@link #status} says the signal is unavailable.
+ * <p>One GlassesWearHook per process decides; this class only performs its decision. The signal is the owner's chosen
+ * proxy (Nathan, 2026-11-07), reported by BluetoothAudioWear: any Bluetooth audio device connecting counts as glasses
+ * on, and the last one disconnecting counts as removal. Status names it as that proxy, never as a worn sensor.
  *
- * <p>Actions: tray starts Rose Home (MainActivity as HOME), which brings Home and its tray forward; raising the OS
- * edge tray over another app needs an OS Product seam and is not attempted. app opens packageName through
- * PhoneControl's open_app, with its keyguard and launcher checks. The last fire is kept in memory only. */
+ * <p>Actions:
+ * <ul>
+ * <li>tray starts Rose Home (MainActivity as HOME), which brings Home and its tray forward. Raising the OS edge tray
+ * over another app needs an OS Product seam and is not attempted.</li>
+ * <li>app opens packageName through PhoneControl's open_app, with its keyguard and launcher checks.</li>
+ * </ul>
+ * The last fire is kept in memory only. */
 final class GlassesWearHookRunner {
  private GlassesWearHookRunner() {}
 
  static final GlassesWearHook HOOK = new GlassesWearHook();
- static final String LIMITATION = "No glasses-worn signal is available at this revision. The real source is Meta DAT "
-   + "Device.donState (DONNED/DOFFED), which is not in this repository: only the external Glasses Camera app "
-   + "(dev.pixel.glassescamera) uses DAT. Relaying it needs a coordinated change outside this repository and Meta "
-   + "developer registration (a user/access decision). Bluetooth connection, HFP audio and the hinge/unfold "
-   + "advertisement are not treated as worn, so the hook does not fire.";
+ static final String BASIS = "Owner-chosen proxy (2026-11-07): any Bluetooth audio device connecting counts as glasses "
+   + "on and the last one disconnecting as removal. It is not a worn sensor: other Bluetooth audio devices count too.";
+ static final String LIMITATION = "No glasses signal has been reported in this process yet (Bluetooth audio watching "
+   + "has not started).";
 
  private static boolean wearReported;
  private static JSONObject lastFire;
@@ -69,14 +68,15 @@ final class GlassesWearHookRunner {
      .put("source", available && name != null ? name : "none")
      .put("state", GlassesWearHook.stateName(HOOK.state())).put("fires", HOOK.fires())
      .put("lastFire", fire == null ? JSONObject.NULL : new JSONObject(fire.toString()));
+   s.put("basis", BASIS);
    if (!available) s.put("limitation", LIMITATION);
    if (refusal != null) s.put("lastRefused", refusal);
    if (invalid != null) s.put("lastInvalidWearReport", invalid);
-   return s.put("notWear", new JSONArray().put("bluetooth_connection").put("hfp_audio").put("hinge_unfold_advertisement"));
+   return s;
   } catch (Exception e) {
-   // Never drop the limitation: the minimal form still says no wear signal is available.
+   // Never drop the basis: the minimal form still names the signal for what it is.
    JSONObject s = new JSONObject();
-   try { s.put("signalAvailable", false).put("limitation", LIMITATION); } catch (Exception ignored) {}
+   try { s.put("signalAvailable", false).put("basis", BASIS).put("limitation", LIMITATION); } catch (Exception ignored) {}
    return s;
   }
  }
