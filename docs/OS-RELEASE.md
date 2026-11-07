@@ -465,7 +465,7 @@ directories and its `rose-actions` reservations, under the host lock. On two hos
 the same version. So Agent stays on the ledger's host until the ledger moves to a store every lane can update
 atomically. That is the one cross-lane serialization the plan allows, and the test refuses an Agent move before it.
 
-## Launcher3 compile harness (1E, dedicated workflow, unbound)
+## Launcher3 compile harness (1E, dedicated workflow, source-bound)
 
 The standalone Launcher3 compile harness has its own manual workflow, `.github/workflows/launcher3-compile.yml`, and
 no longer runs on a release builder. The `os-release.yml` `launcher3-compile` mode is removed: its option, guard
@@ -474,7 +474,10 @@ also refuses any workflow but this one (`launcher3_lane.check_context`). Frankel
 `launcher3-compile` keeps cleaning leftovers of the earlier Frankel runs; nothing new routes there.
 
 **Its routing** comes from one reviewed, Infra-evidenced binding, `os/build-only/launcher3-compile-lane.json`
-(schema 4, harness-owned). That binding is **unbound**, so no job gets past the guard. The workflow:
+(schema 4, harness-owned). That binding is **source-bound** for `verifyIntegrated` on its own runner.
+It is not an OTA or release gate: no os-release or OTA workflow reads it, and the capacity-map
+harness lane stays `retired-shared-host` with no release mode. The workflow is still manual
+dispatch only:
 
 1. **`guard`** (hosted, `contents: read`, no login):
    - `workflow_dispatch` from `main`, attempt 1 only;
@@ -511,10 +514,9 @@ queue. In the capacity map the `harness` lane names this workflow, no `os-releas
 only where its earlier runs ran. `test_launcher3_compile_workflow.py` and `test_lane_capacity.py` check all of this.
 
 **What remains before a compile runs:**
-- Infra's verified readback for the binding: exclusive runner name and label, VM with numeric ID, dedicated disk,
-  storage root, task parent, lock, queue, the two controller variables, and evidence;
-- the compile inputs the harness and Product owners bind;
-- a separate runtime authorization.
+- the numeric VM id and disk id in the binding were not in the supplied readback (placeholders; describe fails closed
+  on a mismatch before any start);
+- a separate dispatch. This section does not authorize one, and the binding does not gate any OTA or release workflow.
 
 A guard refusal is a blocker, not a compile.
 
