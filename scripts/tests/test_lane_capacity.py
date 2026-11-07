@@ -266,7 +266,7 @@ class MapTest(unittest.TestCase):
         self.assertNotEqual(binding['vm']['instance'], 'immortal-os-builder')
         self.assertEqual(runtime['status'], 'unbound')
         self.assertFalse(runtime['publication']['enabled'])
-        self.assertIsNone(runtime['appInputsRecord'])
+        self.assertEqual(runtime['appInputsRecord'], 'os/app-inputs/frankel-2026110704.json')
         self.assertIsNone(runtime['baselineTargetFiles'])
         self.assertTrue(json.loads((ROOT/runtime['allocationState']).read_text())['unknown'])
         self.assertEqual(lane['dedicatedRuntimeStatus'], 'unbound')

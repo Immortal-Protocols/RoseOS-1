@@ -117,13 +117,9 @@ def guard(lane, cfg, env, publish=False, root=ROOT, diff=None, dry_run=False):
     if ota.digest(Path(root)/record['producer']['allocation']['path'])!=record['producer']['allocation']['sha256'] \
             or allocation.get('sourceSha')!=record['producer']['sourceSha']:
         raise ValueError('app producer allocation binding differs')
-    packages=load(Path(root)/'os/latest-beta/allocation.json')['packages']
-    for package in packages:
-        changed=(diff or (lambda before,after,paths:subprocess.check_output(
-            ['git','-C',str(root),'diff','--name-only',before,after,'--',*paths],text=True)))(
-                record['producer']['sourceSha'],run['source'],package['sources'])
-        if changed:
-            raise ValueError('fresh app export omits current app source changes: '+package['packageName'])
+    drift=route.app_source_drift(record, run['source'], root, diff)
+    if drift:
+        raise ValueError('fresh app export omits current app source changes: '+drift[0])
     baseline=cfg.get('baselineTargetFiles')
     factory=cfg.get('baselineFactoryEvidence')
     continuity=cfg.get('candidateContinuity')

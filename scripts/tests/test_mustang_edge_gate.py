@@ -847,8 +847,28 @@ class DedicatedRuntimeTest(unittest.TestCase):
                     readiness.evaluate_guest(bad,lane_binding,runtime)
         report=readiness.report()
         codes={item['code'] for item in report['blockers']}
-        self.assertTrue({'runtime-unbound','runner-unregistered','allocation-unresolved','app-inputs-unadmitted',
+        self.assertTrue({'runtime-unbound','runner-unregistered','allocation-unresolved',
                          'baseline-not-on-disk','signing-route-unadmitted','publication-disabled'}<=codes)
+        self.assertNotIn('app-inputs-unadmitted', codes)
+        self.assertNotIn('app-inputs-stale', codes)
+        self.assertEqual(runtime['appInputsRecord'], readiness.ACCEPTED_APP_EXPORT['path'])
+        self.assertEqual(runtime['status'], 'unbound')
+        self.assertIsNone(runtime['signingRouteEvidence'])
+        self.assertIsNone(runtime['sourceEvidence'])
+        record=json.loads((ROOT/runtime['appInputsRecord']).read_text())
+        export=readiness.ACCEPTED_APP_EXPORT
+        self.assertTrue(readiness.accepted_app_export(record, runtime['appInputsRecord']))
+        self.assertEqual(record['apps'], [
+            {'package':'dev.pixel.backgroundcontrol','versionCode':40,'apkSha256':'14f0f842e3ba8266939d6fa63d0f6a6b7355b34388d5e6af5cc492e464e7cf04'},
+            {'package':'dev.pixel.voice','versionCode':368,'apkSha256':'21d6be95065ec7f0568711b457dacdf0e63442c293bc1f35938864ec403d8da5'},
+            {'package':'dev.pixel.calculator.agent','versionCode':5,'apkSha256':'37649ab5b977b9418556f63576a92e9b755757a6b403ac5304194ea92733b699'}])
+        self.assertIn(str(export['archiveBytes']), runtime['basis'])
+        self.assertIn('not an OTA extraction', runtime['basis'])
+        head=subprocess.check_output(['git','-C',str(ROOT),'rev-parse','HEAD'],text=True).strip()
+        self.assertEqual(readiness.app_source_drift(record, head), [])
+        self.assertEqual(readiness.app_source_drift(record, '149dd4e1d8fb4003aa16b51385b4780cbdc45d66'), [])
+        self.assertEqual(readiness.app_source_drift(record, head, diff=lambda *args:'workspace/rose-agent/changed\n'),
+                         ['dev.pixel.voice','dev.pixel.calculator.agent','dev.pixel.backgroundcontrol'])
         self.assertFalse(report['buildAuthorized']); self.assertFalse(report['publicationAuthorized'])
         self.assertFalse(report['admitted']['appArchive']); self.assertFalse(report['admitted']['baselineTargetFiles'])
         self.assertEqual(report['minimumFreeBytes'],121686892544)
