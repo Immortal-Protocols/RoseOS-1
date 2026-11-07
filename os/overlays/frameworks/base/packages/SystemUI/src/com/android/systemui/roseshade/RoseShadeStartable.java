@@ -16,9 +16,9 @@ import javax.inject.Inject;
 
 /**
  * Starts the Rose notification shade (1G) with SystemUI: it receives the owner's notifications from SystemUI's own
- * NotificationListener (no second listener service) and takes downward status-bar pulls through
- * AgentTrayPrototype's status-bar hook. Bound by {@link RoseShadeModule}; off when persist.wm.debug.rose_shade is
- * false.
+ * NotificationListener (no second listener service), cancels the ones the owner dismissed through it, and takes
+ * downward status-bar pulls through AgentTrayPrototype's status-bar hook. Bound by {@link RoseShadeModule}; off when
+ * persist.wm.debug.rose_shade is false.
  */
 @SysUISingleton
 public final class RoseShadeStartable implements CoreStartable {
@@ -34,7 +34,7 @@ public final class RoseShadeStartable implements CoreStartable {
     @Override
     public void start() {
         if (!RoseShadeController.enabled()) return;
-        final RoseShadeController shade = new RoseShadeController(mContext);
+        final RoseShadeController shade = new RoseShadeController(mContext, mListener::cancelNotification);
         // SystemUI's listener calls its handlers on the main thread.
         mListener.addNotificationHandler(new NotificationListener.NotificationHandler() {
             @Override
