@@ -324,9 +324,10 @@ public final class Controller {
  }
  /** The session's input focus, which vision text would land in, in the window that has input focus (every window, top
   * first, when none reports it): findFocus(FOCUS_INPUT) when it names an editable node (the View hierarchy's one input
-  * target), else the focused editable node found by its own state (focusedEditable), since a released Compose answers
-  * findFocus with its non-editable host for nodes it has not described. Either lookup finding a password field refuses
-  * (a WebView can keep a stale focused input beside the real target). Every node is released at once. Throws unless
+  * target), else the one focused editable node found by its own state (focusedEditables), since a released Compose
+  * answers findFocus with its non-editable host for nodes it has not described. A password field anywhere among those
+  * refuses (a WebView can keep a stale focused input beside the real target), and so does an ambiguous state lookup
+  * (several focused editable nodes, or a tree larger than the bound). Every node is released at once. Throws unless
   * VisionInput.refusal allows it: a password field (SecurityException), or nothing editable focused. */
  @SuppressWarnings("unchecked") static void visionFocus()throws Exception{
   List<AccessibilityWindowInfo> windows=(List<AccessibilityWindowInfo>)session.getClass().getMethod("getAccessibilityWindows").invoke(session);
@@ -334,30 +335,33 @@ public final class Controller {
   boolean found=false,editable=false,password=false;
   for(AccessibilityWindowInfo w:windows){
    if(!found&&(!anyFocused||w.isFocused())){AccessibilityNodeInfo root=w.getRoot();
-    if(root!=null){AccessibilityNodeInfo input=root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT),state=focusedEditable(root);
-     AccessibilityNodeInfo f=input!=null&&input.isEditable()?input:state!=null?state:input;
-     if(f!=null){found=true;editable=f.isEditable();}
-     password|=(input!=null&&input.isPassword())||(state!=null&&state.isPassword());
+    if(root!=null){AccessibilityNodeInfo input=root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT);
+     FocusScan scan=focusedEditables(root);
+     boolean target=input!=null&&input.isEditable();
+     found=target||scan.count>0||input!=null;
+     editable=target||(scan.count==1&&!scan.truncated);
+     password|=(input!=null&&input.isPassword())||scan.password;
      if(input!=null&&input!=root)input.recycle();
-     if(state!=null&&state!=root&&state!=input)state.recycle();
      root.recycle();}}
    w.recycle();
   }
   String why=VisionInput.refusal(found,editable,password);
   if(why!=null){if(password)throw new SecurityException(why);throw new IllegalStateException(why);}
  }
- /** The focused editable node under root, breadth-first within VISION_FOCUS_NODES nodes, or null; every other node read
-  * is released. */
- static AccessibilityNodeInfo focusedEditable(AccessibilityNodeInfo root){
-  ArrayDeque<AccessibilityNodeInfo> queue=new ArrayDeque<>();queue.add(root);AccessibilityNodeInfo hit=null;int seen=0;
+ /** What a breadth-first scan of up to VISION_FOCUS_NODES nodes under root found: how many nodes are focused and
+  * editable, whether any of them is a password field, and whether the tree was larger than the bound. Every node read
+  * except root is released. */
+ static final class FocusScan{int count;boolean password,truncated;}
+ static FocusScan focusedEditables(AccessibilityNodeInfo root){
+  FocusScan scan=new FocusScan();ArrayDeque<AccessibilityNodeInfo> queue=new ArrayDeque<>();queue.add(root);int seen=0;
   while(!queue.isEmpty()){AccessibilityNodeInfo n=queue.poll();
-   if(hit==null&&seen++<VISION_FOCUS_NODES){
-    if(n.isFocused()&&n.isEditable()){hit=n;continue;}
+   if(seen++<VISION_FOCUS_NODES){
+    if(n.isFocused()&&n.isEditable()){scan.count++;scan.password|=n.isPassword();}
     for(int i=0;i<n.getChildCount();i++){AccessibilityNodeInfo c=n.getChild(i);if(c!=null)queue.add(c);}
-   }
+   }else scan.truncated=true;
    if(n!=root)n.recycle();
   }
-  return hit;
+  return scan;
  }
  static final int VISION_FOCUS_NODES=2000;
  /** A session display's application window packages, top first, or null when unreadable; every root is released at once.

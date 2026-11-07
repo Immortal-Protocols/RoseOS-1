@@ -22,14 +22,16 @@ class VisionInputWiring(unittest.TestCase):
         self.assertIn('findFocus(AccessibilityNodeInfo.FOCUS_INPUT)', focus)
         self.assertIn('VisionInput.refusal(found,editable,password)', focus)
         self.assertNotIn('performAction', focus)
-        # The window that has input focus, judged by its focused editable node's own state (released Compose answers
-        # findFocus only for nodes it has described), then findFocus.
+        # The window that has input focus: findFocus when it names an editable node, else exactly one focused editable
+        # node by its own state (released Compose answers findFocus with its host); a password anywhere refuses.
         self.assertIn('w.isFocused()', focus)
-        self.assertIn('input!=null&&input.isEditable()?input:state', focus)  # findFocus is the target when editable
-        self.assertIn('password|=(input!=null&&input.isPassword())||(state!=null&&state.isPassword());', focus)
-        walk = source.split('static AccessibilityNodeInfo focusedEditable(', 1)[1].split('\n }\n', 1)[0]
-        self.assertIn('n.isFocused()&&n.isEditable()', walk)
+        self.assertIn('boolean target=input!=null&&input.isEditable();', focus)
+        self.assertIn('editable=target||(scan.count==1&&!scan.truncated);', focus)
+        self.assertIn('password|=(input!=null&&input.isPassword())||scan.password;', focus)
+        walk = source.split('static FocusScan focusedEditables(', 1)[1].split('\n }\n', 1)[0]
+        self.assertIn('if(n.isFocused()&&n.isEditable()){scan.count++;scan.password|=n.isPassword();}', walk)
         self.assertIn('VISION_FOCUS_NODES', walk)
+        self.assertIn('scan.truncated=true', walk)
         self.assertIn('n.recycle()', walk)
         self.assertNotIn('performAction', walk)
         self.assertIn('s.visualSnapshotId=visualSnapshotId;', source)
