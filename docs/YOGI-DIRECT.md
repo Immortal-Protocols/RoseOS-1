@@ -60,6 +60,26 @@ Residual risks, stated rather than claimed away:
 - If `systemd-logind` `KillUserProcesses` is enabled for the SSH user, the agent would be killed at logout. That shows
   as `lost`, never as success.
 
+## Strict possession check
+
+This is not the direct route and it does not record `builder.direct.hostKey`. `hostKeyPinned` and
+`guestAuthenticated` stay false until a later strict handshake succeeds. The saved `getGuestAttributes` `hostkeys/`
+response from rotate-publish operation `ce79` is the only host-key input. Serial output, trust on first use, and
+`gcloud compute ssh` are not used.
+
+The inspect recorded no authorized-key line and no temporary account. OS Login stays false and project SSH keys stay
+blocked, so there is no existing login to reuse. The check adds one instance-metadata `ssh-keys` line for the existing
+`pixelbuild` account, runs one read-only quiesced probe through `gcloud compute start-iap-tunnel` and OpenSSH
+`StrictHostKeyChecking=yes`, then removes that `ssh-keys` value. It does not create an account, enable the runner,
+build, sign, or publish. IAP only selects the instance. OpenSSH checks the ed25519 host key against the API blob.
+
+`handshake-plan` writes that plan and does not call GCP or SSH:
+
+```sh
+python3 scripts/yogi_direct.py handshake-plan \
+  --hostkeys HOSTKEYS.json --client-public CLIENT.pub --out ~/yogi-ops/possess-LABEL
+```
+
 ## Dependencies (all unverified today, all fail-closed)
 
 | `builder.direct` field | What must be recorded | Owner |

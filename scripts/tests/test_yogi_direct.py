@@ -782,5 +782,54 @@ class UnzipTest(unittest.TestCase):
             self.assertTrue((direct.safe_unzip(good, temp/'good')/'apps/a.apk').is_file())
 
 
+def _wire(kind, payload):
+    return _u32(len(kind)) + kind + _u32(len(payload)) + payload
+
+
+def _u32(value):
+    return value.to_bytes(4, 'big')
+
+
+class PossessionTest(unittest.TestCase):
+    def test_saved_api_blobs_build_strict_iap_ssh_and_a_removed_login(self):
+        keys = {
+            'ssh-ed25519': _wire(b'ssh-ed25519', bytes(range(32))),
+            'ecdsa-sha2-nistp256': _wire(b'ecdsa-sha2-nistp256', bytes(range(40))),
+            'ssh-rsa': _wire(b'ssh-rsa', bytes(range(64))),
+        }
+        expected = {name: 'SHA256:' + base64.b64encode(hashlib.sha256(blob).digest()).decode().rstrip('=')
+                    for name, blob in keys.items()}
+        api = {'queryValue': {'items': [
+            {'namespace': 'hostkeys', 'key': name, 'value': base64.b64encode(blob).decode()}
+            for name, blob in keys.items()]}}
+        client = 'ssh-ed25519 ' + base64.b64encode(_wire(b'ssh-ed25519', bytes(range(32, 64)))).decode() + ' comment'
+        operation = 'ab' * 16
+        plan = direct.possession_plan(api, client, operation, expected=expected,
+                                      environ={'HOME': '/home/operator'})
+        self.assertFalse(plan['executed'] or plan['hostKeyPinned'] or plan['guestAuthenticated'])
+        self.assertFalse(plan['serialTrustedForPin'] or plan['distinctFromOriginal'] or plan['iapAuthenticatesHostKey'])
+        self.assertEqual(plan['sshUser'], 'pixelbuild')
+        self.assertEqual(plan['metadataAdd']['enable-oslogin'], 'FALSE')
+        self.assertEqual(plan['metadataAdd']['block-project-ssh-keys'], 'TRUE')
+        self.assertIn('roseos-yogi-possess-' + operation, plan['metadataAdd']['ssh-keys'])
+        self.assertNotIn('gcloud compute ssh', ' '.join(plan['argv']))
+        self.assertIn('start-iap-tunnel', ' '.join(plan['argv']))
+        self.assertIn('StrictHostKeyChecking=yes', plan['argv'])
+        self.assertIn('UpdateHostKeys=no', plan['argv'])
+        self.assertEqual(plan['knownHosts'].count('yogi-' + yogi.INSTANCE_ID), 3)
+        self.assertIn(base64.b64encode(keys['ssh-ed25519']).decode(), plan['knownHosts'])
+        self.assertNotIn('PRIVATE', json.dumps(plan))
+        removed = direct.metadata_without_login(plan['metadataAdd'], plan['metadataAdd']['ssh-keys'])
+        self.assertEqual(removed, direct.POSSESSION_BASE)
+        with self.assertRaises(direct.Refused):
+            direct.possession_plan(api, client, operation, environ={'HOME': '/home/operator'})
+        self.assertEqual(direct.POSSESSION_FINGERPRINTS['ssh-ed25519'],
+                         'SHA256:n4xqiwBsyYqkQ/aF19AXkVr9fqAZJmJLWPqfZwhUweE')
+        poisoned = json.loads(json.dumps(api))
+        poisoned['queryValue']['items'][0]['value'] = '-----BEGIN OPENSSH PRIVATE KEY-----'
+        with self.assertRaises(direct.Refused):
+            direct.hostkeys_from_api(poisoned, expected)
+
+
 if __name__ == '__main__':
     unittest.main()

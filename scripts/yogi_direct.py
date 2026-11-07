@@ -790,11 +790,162 @@ def stage_steps(cfg, manifest, op_dir, identity):
             ('compile', lambda: bool(yogi.compile_build(cfg, built['build'])))]
 
 
+# ------------------------------------------------------------------------------------------------ possession check
+
+# Public fingerprints from the authenticated getGuestAttributes hostkeys/ read after rotate-publish
+# operation ce79. They are not a committed route pin. builder.direct.hostKey stays null until a strict
+# handshake succeeds and is separately recorded.
+POSSESSION_FINGERPRINTS = {
+    'ssh-ed25519': 'SHA256:n4xqiwBsyYqkQ/aF19AXkVr9fqAZJmJLWPqfZwhUweE',
+    'ecdsa-sha2-nistp256': 'SHA256:TCnFbeIJ1450hxNHg99j4b9NpdzV7W5DmPNyho5YAnQ',
+    'ssh-rsa': 'SHA256:c5YklLIyN4gjq16yBM+dYMVq3VpAodoA0TbseKXDT/c',
+}
+POSSESSION_USER = 'pixelbuild'
+POSSESSION_UNIT = ('actions.runner.Immortal-Protocols-RoseOS-1.roseos-yogi-builder-20261105-b.service')
+POSSESSION_BASE = {'enable-oslogin': 'FALSE', 'block-project-ssh-keys': 'TRUE'}
+
+
+def _fingerprint(blob):
+    return 'SHA256:' + base64.b64encode(hashlib.sha256(blob).digest()).decode().rstrip('=')
+
+
+def _public_blob(value):
+    if not isinstance(value, str) or any(token in value for token in ('BEGIN', 'PRIVATE', 'OPENSSH', ' ', '\n', '\r')):
+        raise Refused('host key material is not a public blob')
+    try:
+        blob = base64.b64decode(value, validate=True)
+        length = int.from_bytes(blob[:4], 'big')
+        embedded = blob[4:4 + length].decode()
+    except (ValueError, UnicodeError, IndexError):
+        raise Refused('host key material is not a public blob') from None
+    if not 8 <= len(blob) <= 4096 or embedded not in POSSESSION_FINGERPRINTS:
+        raise Refused('host key material is not a public blob')
+    return embedded, blob, _fingerprint(blob)
+
+
+def hostkeys_from_api(document, expected=None):
+    """Public host keys from one getGuestAttributes hostkeys/ response for this instance.
+
+    Serial output is not accepted. The fingerprints must be the saved API fingerprints.
+    """
+    expected = POSSESSION_FINGERPRINTS if expected is None else expected
+    if isinstance(document, dict) and document.get('absent') is True:
+        raise Refused('guest-attribute host keys are absent')
+    if isinstance(document, list):
+        items = document
+    elif isinstance(document, dict) and isinstance((document.get('queryValue') or {}).get('items'), list):
+        items = document['queryValue']['items']
+    else:
+        raise Refused('guest-attribute host keys are not the hostkeys response')
+    found = {}
+    for item in items:
+        if not isinstance(item, dict) or item.get('namespace') not in (None, 'hostkeys'):
+            raise Refused('host key material is not a public blob')
+        name, blob, fingerprint = _public_blob(item.get('value'))
+        if item.get('key') not in (None, name) or name in found:
+            raise Refused('host key material is not a public blob')
+        if expected.get(name) != fingerprint:
+            raise Refused('guest-attribute host key fingerprint does not match the saved API read')
+        found[name] = base64.b64encode(blob).decode()
+    if set(found) != set(expected):
+        raise Refused('guest-attribute host keys are not the three saved public keys')
+    return found
+
+
+def client_login_line(text, operation_id):
+    """One ssh-ed25519 login public key. The private half is not read."""
+    if not OP_ID.fullmatch(operation_id or ''):
+        raise Refused('possession operation id is not a fresh 32 hex characters')
+    if not isinstance(text, str) or any(token in text for token in ('BEGIN', 'PRIVATE', 'OPENSSH')):
+        raise Refused('client login key is not a public line')
+    parts = text.strip().split()
+    if len(parts) < 2 or parts[0] != 'ssh-ed25519':
+        raise Refused('client login key must be one ssh-ed25519 public line')
+    _name, _blob, _fp = _public_blob(parts[1])
+    if _name != 'ssh-ed25519':
+        raise Refused('client login key must be one ssh-ed25519 public line')
+    return f'pixelbuild:ssh-ed25519 {parts[1]} roseos-yogi-possess-{operation_id}'
+
+
+def metadata_without_login(items, login_value):
+    """Drop only this operation's instance ssh-keys value. Base keys must still match."""
+    if not isinstance(items, dict) or any(not isinstance(value, str) for value in items.values()):
+        raise Refused('metadata is not the preserved instance map')
+    for key, value in POSSESSION_BASE.items():
+        if items.get(key) != value:
+            raise Refused('metadata base keys are not enable-oslogin FALSE and block-project-ssh-keys TRUE')
+    if items.get('ssh-keys') != login_value:
+        raise Refused('metadata ssh-keys value is not this operation')
+    if 'startup-script' in items:
+        raise Refused('metadata still has a startup script')
+    kept = {key: value for key, value in items.items() if key != 'ssh-keys'}
+    return kept
+
+
+def possession_ssh(hostkeys, login_value, environ=None):
+    """Exact ssh argv. IAP selects the instance. OpenSSH checks the ed25519 host key. No gcloud compute ssh."""
+    alias = f'yogi-{yogi.INSTANCE_ID}'
+    known = ''.join(f'{alias} {name} {hostkeys[name]}\n' for name in (
+        'ssh-ed25519', 'ecdsa-sha2-nistp256', 'ssh-rsa'))
+    tunnel = gcloud_environment(os.environ if environ is None else environ)
+    proxy = shlex.join(['/usr/bin/env', *tunnel, 'gcloud', 'compute', 'start-iap-tunnel',
+                        yogi.INSTANCE, '22', '--listen-on-stdin', f'--project={yogi.PROJECT}',
+                        f'--zone={yogi.ZONE}', '--verbosity=warning']).replace('%', '%%')
+    argv = ['ssh', '-F', '/dev/null', '-o', 'BatchMode=yes', '-o', 'IdentitiesOnly=yes', '-i', 'IDENTITY_FILE',
+            '-o', 'StrictHostKeyChecking=yes', '-o', 'UserKnownHostsFile=KNOWN_HOSTS_FILE',
+            '-o', 'GlobalKnownHostsFile=/dev/null', '-o', f'HostKeyAlias={alias}',
+            '-o', 'HostKeyAlgorithms=ssh-ed25519', '-o', 'CheckHostIP=no', '-o', 'UpdateHostKeys=no',
+            '-o', 'ForwardAgent=no', '-o', 'ForwardX11=no', '-o', 'ClearAllForwardings=yes',
+            '-o', 'PermitLocalCommand=no', '-o', 'ConnectTimeout=20', '-l', POSSESSION_USER,
+            '-o', 'ProxyCommand=' + proxy, alias, '--',
+            f'python3 -I -c {shlex.quote(PROBE)} {shlex.quote(POSSESSION_UNIT)}']
+    if 'gcloud compute ssh' in ' '.join(argv):
+        raise Refused('possession ssh must not use gcloud compute ssh')
+    return {'knownHosts': known, 'argv': argv, 'loginValue': login_value,
+            'timeoutSeconds': 60, 'hostKeyPinned': False, 'guestAuthenticated': False}
+
+
+def possession_plan(api, client_public, operation_id, expected=None, environ=None):
+    """Offline plan. It does not call GCP or SSH and does not record builder.direct.hostKey."""
+    manual_context(os.environ if environ is None else environ)
+    hostkeys = hostkeys_from_api(api, expected)
+    login = client_login_line(client_public, operation_id)
+    ssh = possession_ssh(hostkeys, login, environ)
+    added = dict(POSSESSION_BASE)
+    added['ssh-keys'] = login
+    return {
+        'schema': 'roseos.yogi-possession-plan.v1', 'executed': False, 'operationId': operation_id,
+        'instanceId': yogi.INSTANCE_ID, 'route': 'iap', 'sshUser': POSSESSION_USER,
+        'observedVia': 'guest-attributes-hostkeys', 'serialTrustedForPin': False,
+        'distinctFromOriginal': False, 'iapAuthenticatesHostKey': False,
+        'hostKeyPinned': False, 'guestAuthenticated': False,
+        'gcloudComputeSsh': 'refused', 'osLogin': 'FALSE', 'projectSshKeys': 'blocked',
+        'login': 'one instance ssh-keys line for the existing pixelbuild account; no new account',
+        'knownHosts': ssh['knownHosts'], 'argv': ssh['argv'], 'commandTimeoutSeconds': 60,
+        'metadataAdd': added,
+        'metadataRemoveKeeps': dict(POSSESSION_BASE),
+        'cleanup': 'remove this ssh-keys value after the one command; do not start the runner',
+    }
+
+
+def write_possession_plan(api_path, client_path, out, operation_id=None, environ=None):
+    operation_id = operation_id or secrets.token_hex(16)
+    api = json.loads(Path(api_path).read_text())
+    plan = possession_plan(api, Path(client_path).read_text(), operation_id, environ=environ)
+    destination = Path(out)
+    destination.mkdir(mode=0o700)
+    (destination / 'possession-plan.json').write_text(json.dumps(plan, indent=2, sort_keys=True) + '\n')
+    return plan
+
+
 # ------------------------------------------------------------------------------------------------ CLI
 
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument('action', choices=('describe', 'plan', 'start', 'run', 'status', 'cancel', 'cleanup', 'agent'))
+    p.add_argument('action', choices=('describe', 'plan', 'start', 'run', 'status', 'cancel', 'cleanup', 'agent',
+                                     'handshake-plan'))
+    p.add_argument('--hostkeys')
+    p.add_argument('--client-public')
     p.add_argument('--stage', choices=STAGES + tuple(NOT_DIRECT))
     p.add_argument('--source')
     p.add_argument('--operator')
@@ -809,6 +960,11 @@ def main(argv=None):
     try:
         if a.action == 'agent':
             print(json.dumps(agent(a.op_dir, a.manifest_sha)))
+            return 0
+        if a.action == 'handshake-plan':
+            if not a.hostkeys or not a.client_public or not a.out:
+                p.error('handshake-plan needs --hostkeys, --client-public and --out')
+            print(json.dumps(write_possession_plan(a.hostkeys, a.client_public, a.out), sort_keys=True))
             return 0
         cfg = yogi.config()
         if a.action == 'describe':
