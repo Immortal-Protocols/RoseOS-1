@@ -1,0 +1,38 @@
+{
+  "schema": "roseos.mustang-hosted-signer-capacity.v1",
+  "admission": false,
+  "trust": "held",
+  "activeRunner": {
+    "label": "ubuntu-24.04",
+    "ssdBytes": 15032385536,
+    "ssdLabel": "14 GB",
+    "basis": "Standard GitHub-hosted ubuntu-24.04 whole-disk label, read as 14 GiB. Not a measured free-space figure."
+  },
+  "historicalLowerBoundBytes": 22868848092,
+  "historicalSource": "os/mustang-delivery/41738359336/sign.json",
+  "proposedRunner": {
+    "isolated": true,
+    "purchased": false,
+    "configured": false,
+    "selected": false,
+    "label": "mustang-signer-linux-4-core",
+    "platform": "Linux x64",
+    "image": "ubuntu-24.04",
+    "size": "4-core",
+    "vcpu": 4,
+    "memoryLabel": "16 GB",
+    "ssdLabel": "150 GB",
+    "ssdBytes": 150000000000,
+    "sku": "linux_4_core",
+    "usdPerMinute": "0.012",
+    "jobCapMinutes": 360,
+    "computeBoundUsd": "4.32",
+    "eligibility": "GitHub Team or GitHub Enterprise Cloud only. Larger runners are not free on public repositories and require a payment method. One organization owner creates this runner in a group limited to Immortal-Protocols/RoseOS-1 and .github/workflows/mustang-ota-dedicated.yml."
+  },
+  "storage": {
+    "includedAllowancesAreNotPerArtifactLimits": true,
+    "accountPlan": null,
+    "overageUsdPerGbMonth": "0.25",
+    "budgetCanBlock": true
+  }
+}

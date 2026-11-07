@@ -3,6 +3,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import shutil
 import stat
 import subprocess
 import sys
@@ -41,10 +42,27 @@ class HostedSignGateTest(unittest.TestCase):
         self.assertGreater(required, hosted.STOCK_SSD_BYTES)
         self.assertGreater(required, 14 * 10 ** 9)
         self.assertEqual(hosted.STOCK_SSD_BYTES, 14 * 1024 ** 3)
-        self.assertEqual(hosted.FREE_ARTIFACT_BYTES, 500 * 1000 * 1000)
-        for size in measured.values():
-            self.assertGreater(size, hosted.FREE_ARTIFACT_BYTES)
+        config = hosted.load_capacity()
+        self.assertFalse(config['admission'])
+        self.assertEqual(config['trust'], 'held')
+        self.assertIsNone(config['storage']['accountPlan'])
+        self.assertTrue(config['storage']['includedAllowancesAreNotPerArtifactLimits'])
+        self.assertFalse(config['proposedRunner']['purchased'])
+        self.assertFalse(config['proposedRunner']['configured'])
+        self.assertFalse(config['proposedRunner']['selected'])
+        self.assertEqual(config['proposedRunner']['sku'], 'linux_4_core')
+        self.assertEqual(config['proposedRunner']['usdPerMinute'], '0.012')
+        self.assertEqual(config['proposedRunner']['ssdBytes'], 150000000000)
+        self.assertGreater(config['proposedRunner']['ssdBytes'], required)
+        self.assertEqual(config['activeRunner']['label'], 'ubuntu-24.04')
+        self.assertEqual(config['activeRunner']['ssdBytes'], hosted.STOCK_SSD_BYTES)
         return measured, required
+
+    def admitted(self):
+        config = hosted.load_capacity()
+        config['admission'] = True
+        config['activeRunner'] = dict(config['activeRunner'], ssdBytes=10 ** 18)
+        return config
 
     def bundle(self, **changes):
         measured, _ = self.measured_peak()
@@ -82,10 +100,10 @@ class HostedSignGateTest(unittest.TestCase):
 
         self.assert_secret_closed(call, 'hosted signer capacity exceeded')
         with self.assertRaises(hosted.CapacityExceeded) as caught:
-            hosted.capacity(bundle, free=10 ** 18)
+            hosted.capacity(bundle, free=10 ** 18, config=hosted.load_capacity())
         self.assertIn(f'required {required} bytes', str(caught.exception))
         self.assertIn(f'stock SSD {hosted.STOCK_SSD_BYTES} bytes', str(caught.exception))
-        self.assertIn('unsigned', str(caught.exception))
+        self.assertIn('hosted signer admission is closed', str(caught.exception))
 
     def test_unmeasured_jdk_and_script_do_not_count_as_zero_when_space_would_fit(self):
         bundle = self.bundle()
@@ -95,7 +113,7 @@ class HostedSignGateTest(unittest.TestCase):
         def call(secret_access):
             hosted.evaluate(bundle, ROOT, free=10 ** 18, secret_access=secret_access, env=ENV)
 
-        self.assert_secret_closed(call, 'unmeasured signer inputs: jdk,otatoolsExtractedBytes,generateRelease')
+        self.assert_secret_closed(call, 'unmeasured signer inputs: jdk,generateRelease')
 
     def test_script_pin_stays_unbound_and_blocks_secret_access(self):
         pin = json.loads((ROOT / hosted.SCRIPT_PIN).read_text())
@@ -104,7 +122,8 @@ class HostedSignGateTest(unittest.TestCase):
         bundle, files, _ = self.tiny_bundle()
 
         def call(secret_access):
-            hosted.evaluate(bundle, ROOT, free=10 ** 18, files=files, secret_access=secret_access, env=ENV)
+            hosted.evaluate(bundle, ROOT, free=10 ** 18, files=files, secret_access=secret_access, env=ENV,
+                            capacity_config=self.admitted())
 
         self.assert_secret_closed(call, 'sign script pin is unbound')
 
@@ -113,24 +132,25 @@ class HostedSignGateTest(unittest.TestCase):
         Path(files['unsigned']).write_bytes(b'changed')
 
         def hashed(secret_access):
-            hosted.evaluate(bundle, ROOT, free=10 ** 18, files=files, secret_access=secret_access, pin=pin, env=ENV)
+            hosted.evaluate(bundle, ROOT, free=10 ** 18, files=files, secret_access=secret_access, pin=pin, env=ENV,
+                            capacity_config=self.admitted())
 
         self.assert_secret_closed(hashed, 'signing bundle hash differs')
         unsafe = self.tiny_bundle(zip_member='../escape')
         def slipped(secret_access):
             hosted.evaluate(unsafe[0], ROOT, free=10 ** 18, files=unsafe[1], secret_access=secret_access,
-                            pin=unsafe[2], env=ENV)
+                            pin=unsafe[2], env=ENV, capacity_config=self.admitted())
         self.assert_secret_closed(slipped, 'unsafe zip member')
         linked = self.tiny_bundle(symlink=True)
         def link(secret_access):
             hosted.evaluate(linked[0], ROOT, free=10 ** 18, files=linked[1], secret_access=secret_access,
-                            pin=linked[2], env=ENV)
+                            pin=linked[2], env=ENV, capacity_config=self.admitted())
         self.assert_secret_closed(link, 'unsafe zip symlink')
         absent_bundle, absent_files, absent_pin = self.tiny_bundle()
         absent_files.pop('jdk')
         def absent(secret_access):
             hosted.evaluate(absent_bundle, ROOT, free=10 ** 18, files=absent_files,
-                            secret_access=secret_access, pin=absent_pin, env=ENV)
+                            secret_access=secret_access, pin=absent_pin, env=ENV, capacity_config=self.admitted())
         self.assert_secret_closed(absent, 'signing bundle files are absent')
         wrong = self.bundle()
         wrong['sourceSha'] = 'b' * 40
@@ -143,36 +163,95 @@ class HostedSignGateTest(unittest.TestCase):
             hosted.evaluate(incomplete, ROOT, free=10 ** 18, secret_access=secret_access, env=ENV)
         self.assert_secret_closed(missing_artifact, 'signing bundle is missing unsigned')
 
-    def test_free_space_and_artifact_quota_fail_closed_before_secret_access(self):
+    def test_free_space_fails_closed_and_included_storage_is_not_a_file_cap(self):
         bundle, files, pin = self.tiny_bundle()
 
         def tight(secret_access):
-            hosted.evaluate(bundle, ROOT, free=0, files=files, secret_access=secret_access, pin=pin, env=ENV)
+            hosted.evaluate(bundle, ROOT, free=0, files=files, secret_access=secret_access, pin=pin, env=ENV,
+                            capacity_config=self.admitted())
 
         self.assert_secret_closed(tight, 'hosted signer capacity exceeded')
         oversized = self.bundle()
-        oversized['unsigned'] = {'sha256': 'c' * 64, 'sizeBytes': hosted.FREE_ARTIFACT_BYTES + 1}
+        oversized['unsigned'] = {'sha256': 'c' * 64, 'sizeBytes': 600000000}
         oversized['otatools'] = {'sha256': 'd' * 64, 'sizeBytes': 1}
         oversized['jdk'] = {'sha256': 'e' * 64, 'sizeBytes': 1}
         oversized['generateRelease'] = {'sha256': 'f' * 64, 'sizeBytes': 1}
-        oversized['otatoolsExtractedBytes'] = 0
-        measured = {'unsigned': hosted.FREE_ARTIFACT_BYTES + 1, 'otatools': 1,
-                    'signedTargetFiles': 1, 'ota': 1}
+        measured = {'unsigned': 600000000, 'otatools': 1, 'signedTargetFiles': 1, 'ota': 1}
 
-        def quota(secret_access):
-            hosted.evaluate(oversized, ROOT, free=10 ** 18, secret_access=secret_access, pin=pin, env=ENV,
-                            stock_bytes=10 ** 18, measured=measured)
+        def over_allowance(secret_access):
+            try:
+                hosted.evaluate(oversized, ROOT, free=10 ** 18, secret_access=secret_access, pin=pin, env=ENV,
+                                capacity_config=self.admitted(), measured=measured)
+            except ValueError as error:
+                self.assertNotIn('artifact quota', str(error))
+                self.assertNotIn('500', str(error))
+                raise
 
-        self.assert_secret_closed(quota, 'artifact quota')
+        self.assert_secret_closed(over_allowance, 'signing bundle files are absent')
 
-    def test_secret_callback_runs_only_after_capacity_pin_hash_and_zip_checks(self):
+    def checkout(self, script_bytes):
+        root = Path(self.directory.name) / 'checkout'
+        bootstrap = root / 'os/signing-bootstrap'
+        bootstrap.mkdir(parents=True)
+        shutil.copy(ROOT / 'os/signing-bootstrap/mustang-bootstrap-receipt.json', bootstrap / 'mustang-bootstrap-receipt.json')
+        scripts = root / 'scripts'
+        scripts.mkdir()
+        shutil.copy(ROOT / 'scripts/mustang_hosted_sign.py', scripts / 'mustang_hosted_sign.py')
+        script = root / 'script/generate-release.sh'
+        script.parent.mkdir()
+        script.write_bytes(script_bytes)
+        return root
+
+    def test_secret_callback_runs_only_after_capacity_pin_hash_extract_and_checkout_bytes(self):
         bundle, files, pin = self.tiny_bundle()
+        root = self.checkout(files['generateRelease'].read_bytes())
         called = []
-        admitted = hosted.evaluate(bundle, ROOT, free=10 ** 18, files=files,
-                                   secret_access=lambda: called.append('secret'), pin=pin, env=ENV)
+        admitted = hosted.evaluate(bundle, root, free=10 ** 18, files=files,
+                                   secret_access=lambda: called.append('secret'), pin=pin, env=ENV,
+                                   capacity_config=self.admitted())
         self.assertEqual(called, ['secret'])
         self.assertTrue(admitted['admit'])
-        self.assertLess(admitted['requiredBytes'], hosted.STOCK_SSD_BYTES)
+        self.assertTrue((Path(files['otatools']).parent / 'otatools-extracted' / 'payload.txt').is_file())
+        self.assertLess(admitted['requiredBytes'], 10 ** 18)
+
+    def test_sign_calls_host_sign_only_after_admission_and_writes_the_receipt(self):
+        bundle, files, pin = self.tiny_bundle()
+        bundle['build'] = '1'
+        root = self.checkout(files['generateRelease'].read_bytes())
+        calls = []
+
+        def host_sign_main(config_path, env, managed_decrypted_keys=False, **kwargs):
+            self.assertTrue(managed_decrypted_keys)
+            self.assertEqual(env['ROSE_CANDIDATE_SHA'], ENV['GITHUB_SHA'])
+            config = json.loads(Path(config_path).read_text())
+            self.assertEqual(config['host']['sign']['keysSecret'], hosted.KEYS)
+            self.assertEqual(config['host']['sign']['secretVersion'], '1')
+            self.assertEqual(Path(config['host']['sign']['javaHome']).read_bytes(), b'jdk-bytes')
+            calls.append(config_path)
+            release = Path(env['ROSE_RELEASE_DIR'])
+            (release / 'signed-target_files.zip').write_bytes(b'signed-target')
+            public = release / 'public'
+            public.mkdir()
+            (public / 'mustang-ota_update-1.zip').write_bytes(b'signed-ota')
+            return 0
+
+        with self.assertRaisesRegex(ValueError, 'hosted signer admission is closed'):
+            hosted.sign(self.write_bundle(bundle, files), Path(self.directory.name) / 'closed-out', root=root,
+                        env=ENV, host_sign_main=host_sign_main, free=10 ** 18, pin=pin)
+        self.assertEqual(calls, [])
+        out = Path(self.directory.name) / 'signed-out'
+        receipt = hosted.sign(self.write_bundle(bundle, files), out, root=root, env=ENV,
+                              capacity_config=self.admitted(), host_sign_main=host_sign_main, free=10 ** 18, pin=pin)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(receipt['sourceSha'], ENV['GITHUB_SHA'])
+        self.assertEqual(receipt['runId'], ENV['GITHUB_RUN_ID'])
+        hosted.bind_outputs(out, env=ENV)
+        escaped = dict(receipt)
+        escaped['outputs'] = dict(receipt['outputs'])
+        escaped['outputs']['ota'] = dict(receipt['outputs']['ota'], file='../ota.zip')
+        (out / 'mustang-hosted-sign-receipt.json').write_text(json.dumps(escaped))
+        with self.assertRaisesRegex(ValueError, 'left the receipt directory'):
+            hosted.bind_outputs(out, env=ENV)
 
     def test_symlink_entry_and_guest_shm_paths_are_refused(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -210,9 +289,12 @@ class HostedSignGateTest(unittest.TestCase):
             }
             path = root / 'collection.json'
             path.write_text(json.dumps(collection))
-            out = root / 'bundle.json'
+            out = root / 'bundle'
             bundle = hosted.export_bundle(path, out)
-            text = out.read_text()
+            text = (out / 'mustang-signing-bundle.json').read_text()
+            self.assertEqual((out / 'inputs/unsigned-target_files.zip').read_bytes(), unsigned.read_bytes())
+            self.assertEqual((out / 'inputs/otatools.zip').read_bytes(), tools.read_bytes())
+            self.assertFalse((out / 'inputs/jdk.bin').exists())
             self.assertNotIn('pk8', text)
             self.assertNotIn('"passphrase":', text)
             self.assertEqual(bundle['identity']['passphraseSecret'], hosted.PASSPHRASE)
@@ -225,6 +307,7 @@ class HostedSignGateTest(unittest.TestCase):
                                      'preflight', '--bundle', str(out)],
                                     env=env, capture_output=True, text=True, timeout=20)
             self.assertEqual(result.returncode, 4, result.stderr)
+            self.assertIn('hosted signer admission is closed', result.stderr)
             self.assertIn('unmeasured signer inputs', result.stderr)
             self.assertNotIn('admit=true', result.stdout)
             self.assertNotIn('gcloud', result.stderr)
@@ -250,6 +333,7 @@ class HostedSignGateTest(unittest.TestCase):
                                     env=env, capture_output=True, text=True, timeout=20)
             self.assertEqual(result.returncode, 4, result.stderr)
             self.assertIn('hosted signer capacity exceeded', result.stderr)
+            self.assertIn('hosted signer admission is closed', result.stderr)
             self.assertIn(str(required), result.stderr)
             self.assertEqual(output.read_text(), '')
             self.assertNotIn('gcloud', result.stderr)
@@ -277,7 +361,8 @@ class HostedSignGateTest(unittest.TestCase):
             (directory / 'ota.zip').write_bytes(payload)
             receipt = {
                 'schema': hosted.RECEIPT_SCHEMA, 'device': 'mustang', 'signer': hosted.SIGNER,
-                'secretVersion': hosted.SECRET_VERSION,
+                'secretVersion': hosted.SECRET_VERSION, 'workflow': hosted.WORKFLOW,
+                'runId': ENV['GITHUB_RUN_ID'], 'runAttempt': ENV['GITHUB_RUN_ATTEMPT'], 'sourceSha': ENV['GITHUB_SHA'],
                 'outputs': {
                     'signedTargetFiles': {'file': 'ota.zip', 'sizeBytes': len(payload), 'sha256': digest(directory / 'ota.zip')},
                     'ota': {'file': 'ota.zip', 'sizeBytes': len(payload), 'sha256': '0' * 64},
@@ -285,7 +370,11 @@ class HostedSignGateTest(unittest.TestCase):
             }
             (directory / 'mustang-hosted-sign-receipt.json').write_text(json.dumps(receipt))
             with self.assertRaisesRegex(ValueError, 'hosted signed output hash differs'):
-                hosted.bind_outputs(directory)
+                hosted.bind_outputs(directory, env=ENV)
+            receipt['sourceSha'] = 'b' * 40
+            (directory / 'mustang-hosted-sign-receipt.json').write_text(json.dumps(receipt))
+            with self.assertRaisesRegex(ValueError, 'hosted signing receipt is not this run'):
+                hosted.bind_outputs(directory, env=ENV)
 
     def test_workflow_keeps_signer_login_off_the_guest_and_behind_capacity(self):
         workflow = WORKFLOW.read_text()
@@ -309,7 +398,11 @@ class HostedSignGateTest(unittest.TestCase):
         self.assertIn('id-token: write', signer)
         self.assertLess(signer.index('mustang_hosted_sign.py preflight'), signer.index('actions-gcp-login.py login'))
         self.assertLess(signer.index("steps.capacity.outputs.admit == 'true'"), signer.index('actions-gcp-login.py login'))
-        self.assertEqual(signer.count("steps.capacity.outputs.admit == 'true'"), 3)
+        self.assertEqual(signer.count("steps.capacity.outputs.admit == 'true'"), 4)
+        self.assertIn('mustang-signing-inputs-', builder)
+        self.assertIn('mustang-signing-bundle/inputs', builder)
+        self.assertNotIn('mustang-signer-linux-4-core', workflow)
+        self.assertIn('--out "$RUNNER_TEMP/mustang-hosted-signed"', signer)
         signer_jobs = [name for name, body in jobs.items()
                        if 'MUSTANG_SIGNER_WORKLOAD_IDENTITY_PROVIDER' in body and 'id-token: write' in body]
         self.assertEqual(signer_jobs, ['signer'])
@@ -351,8 +444,29 @@ class HostedSignGateTest(unittest.TestCase):
         bundle['generateRelease'] = {'sha256': digest(script), 'sizeBytes': script.stat().st_size}
         bundle['jdk'] = {'sha256': digest(jdk), 'sizeBytes': jdk.stat().st_size}
         bundle['otatoolsExtractedBytes'] = 0
-        pin = {'entryPoint': hosted.ENTRY, 'generateReleaseSha256': digest(script)}
+        pin = {'entryPoint': hosted.ENTRY, 'generateReleasePath': 'script/generate-release.sh',
+               'generateReleaseSha256': digest(script), 'jdkSha256': digest(jdk)}
         return bundle, files, pin
+
+    def write_bundle(self, bundle, files):
+        directory = Path(self.directory.name) / 'saved-bundle'
+        if directory.exists():
+            shutil.rmtree(directory)
+        inputs = directory / 'inputs'
+        inputs.mkdir(parents=True)
+        mapping = {
+            'unsigned': 'inputs/unsigned-target_files.zip',
+            'otatools': 'inputs/otatools.zip',
+            'jdk': 'inputs/jdk.bin',
+            'generateRelease': 'inputs/generate-release.sh',
+        }
+        saved = json.loads(json.dumps(bundle))
+        for key, relative in mapping.items():
+            target = directory / relative
+            shutil.copy(files[key], target)
+            saved[key] = dict(saved[key], file=relative)
+        (directory / 'mustang-signing-bundle.json').write_text(json.dumps(saved))
+        return directory
 
 
 if __name__ == '__main__':

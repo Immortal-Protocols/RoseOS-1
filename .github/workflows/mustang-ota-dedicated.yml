@@ -204,14 +204,25 @@ jobs:
       if: inputs.dry_run == false
       id: collect
       run: python3 scripts/mustang-dedicated.py collect
-    - name: Record same-run bundle hashes; no signer login and no key material
+    - name: Bundle the same-run unsigned target-files, otatools, and JDK bytes
       if: inputs.dry_run == false
-      run: python3 scripts/mustang_hosted_sign.py export-bundle --collection "${{ steps.collect.outputs.collection_receipt }}" --out "$RUNNER_TEMP/mustang-signing-bundle.json"
+      run: python3 scripts/mustang_hosted_sign.py export-bundle --collection "${{ steps.collect.outputs.collection_receipt }}" --out "$RUNNER_TEMP/mustang-signing-bundle"
+    - id: capacity
+      if: inputs.dry_run == false
+      run: python3 scripts/mustang_hosted_sign.py gate --bundle "$RUNNER_TEMP/mustang-signing-bundle"
     - if: inputs.dry_run == false
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
       with:
         name: mustang-signing-bundle-${{ github.run_id }}-${{ github.run_attempt }}
-        path: ${{ runner.temp }}/mustang-signing-bundle.json
+        path: ${{ runner.temp }}/mustang-signing-bundle/mustang-signing-bundle.json
+        retention-days: 14
+        if-no-files-found: error
+    - name: Upload the bundled inputs only after admission
+      if: steps.capacity.outputs.admit == 'true'
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: mustang-signing-inputs-${{ github.run_id }}-${{ github.run_attempt }}
+        path: ${{ runner.temp }}/mustang-signing-bundle/inputs
         retention-days: 14
         if-no-files-found: error
     - if: always() && inputs.dry_run == false
@@ -247,15 +258,21 @@ jobs:
         name: mustang-signing-bundle-${{ github.run_id }}-${{ github.run_attempt }}
         path: ${{ runner.temp }}/mustang-signing-bundle
     - id: capacity
-      name: Fail closed on disk, artifact quota and the checkout script pin before any signer secret
-      run: python3 scripts/mustang_hosted_sign.py preflight --bundle "$RUNNER_TEMP/mustang-signing-bundle/mustang-signing-bundle.json"
+      name: Fail closed on disk, closed admission, and trusted pins before any signer secret
+      run: python3 scripts/mustang_hosted_sign.py preflight --bundle "$RUNNER_TEMP/mustang-signing-bundle"
+    - name: Download the same-run input bytes only after admission
+      if: steps.capacity.outputs.admit == 'true'
+      uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      with:
+        name: mustang-signing-inputs-${{ github.run_id }}-${{ github.run_attempt }}
+        path: ${{ runner.temp }}/mustang-signing-bundle/inputs
     - name: OIDC login only after the capacity gate admits this checkout
       if: steps.capacity.outputs.admit == 'true'
       id: login
       run: python3 scripts/actions-gcp-login.py login "$GCP_SIGNER_SERVICE_ACCOUNT"
     - name: Sign with the checkout entry point, never a guest-supplied executable
       if: steps.capacity.outputs.admit == 'true'
-      run: python3 scripts/mustang_hosted_sign.py sign --bundle "$RUNNER_TEMP/mustang-signing-bundle/mustang-signing-bundle.json"
+      run: python3 scripts/mustang_hosted_sign.py sign --bundle "$RUNNER_TEMP/mustang-signing-bundle" --out "$RUNNER_TEMP/mustang-hosted-signed"
     - if: always() && steps.login.outcome == 'success'
       run: python3 scripts/actions-gcp-login.py logout
     - name: Upload the hosted signed outputs
