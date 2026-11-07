@@ -137,6 +137,15 @@ CONFIRMATION = {
         '(e6783f9f..., blob ae1e0ae0); no patch, no new file; rose-edge-wmshell.patch and its after-images, the '
         'WMShellModule pre-image, the goals and flagEvidence (none) unchanged; the new imports (android.graphics.Paint, '
         'RectF) are framework classes',
+    'displayonly': 'OS Core in #653, 2026-11-07 UTC, from carrier head 1184f14 at the owner\'s direction (the status-bar '
+        'microphone is display-only; the Rose chin holds the only microphone control, F08 and keyboard rule 4): only '
+        'required overlays change, AgentStatusControls.java (58fa34e2..., blob 92ab854c), whose tap mapping drops '
+        'MUTE/UNMUTE and the mic glow\'s START, and AgentTrayPrototype.java (756f6f83..., blob 2d720337), its one call '
+        'without the muted argument; no patch, no new file, no new import; rose-edge-wmshell.patch and its '
+        'after-images, the WMShellModule pre-image, the goals and flagEvidence (none) unchanged. Correction to '
+        '\'refined\': 17adb26 also adds android.animation.ValueAnimator, android.graphics.Rect, '
+        'android.view.ViewTreeObserver, android.view.accessibility.AccessibilityManager and AccessibilityNodeInfo, '
+        'and java.util.HashSet, LinkedHashSet and Set, all framework or JDK classes',
 }
 
 # Where each goal's sources come from, read from the pinned Android.bp files (committed byte for byte under

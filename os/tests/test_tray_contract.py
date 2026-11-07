@@ -66,8 +66,14 @@ class TrayContractTest(unittest.TestCase):
         # the tray accepts only STATE replies.
         self.assertIn('static final int REGISTER = 1, UNREGISTER = 2;', self.link)
         self.assertIn('message.what != 100', self.tray)
-        # Tap commands the tray can send are exactly START/MUTE/UNMUTE/END.
-        self.assertIn('return !active ? 3 : tapped == 1 ? 6 : muted ? 5 : 4;', self.controls)
+        # Tap commands the status bar can send are exactly START/END, from the agent glow. The microphone glow and
+        # "Mic off" are display-only: the Rose chin holds the only microphone control (F08, keyboard rule 4), so
+        # MUTE/UNMUTE stay in the protocol for the chin but never come from a status-bar tap.
+        self.assertIn('if (tapped != 1 || hit != tapped || at - downAt > 400) return 0;', self.controls)
+        self.assertIn('return active ? 6 : 3;', self.controls)
+        touch = self.controls[self.controls.index('int touch('):]
+        self.assertNotRegex(touch, r'\bmuted\b|\? 5|\? 4|return 4|return 5')
+        self.assertNotIn('muted, ViewConfiguration', self.tray)
 
     def test_protocol_version_and_state_keys_match(self):
         self.assertIn('b.putInt("protocolVersion",1)', self.service)

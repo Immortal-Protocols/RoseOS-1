@@ -91,8 +91,7 @@ public final class AgentTrayPrototype implements DisplayManager.DisplayListener 
         float x = event.getRawX() - location[0], y = event.getRawY() - location[1];
         int target = y >= 0 && y < view.getHeight() ? view.targetAt(x) : 0;
         int command = controls.touch(event.getActionMasked(), event.getPointerCount(),
-                x, y, event.getEventTime(), target, active, muted,
-                ViewConfiguration.get(context).getScaledTouchSlop());
+                x, y, event.getEventTime(), target, active, ViewConfiguration.get(context).getScaledTouchSlop());
         if (command == 0) return false;
         long now = SystemClock.elapsedRealtime();
         if (now - lastCommandAt >= 600) {

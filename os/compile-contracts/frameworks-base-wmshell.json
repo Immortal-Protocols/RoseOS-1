@@ -23,7 +23,8 @@
   "rebased": "OS Core to OS Product, 2026-11-05 01:31 UTC, from #551 head 77c9117 (F06 app takeover and the F08 chin marker), re-stated 01:52 UTC for head b639c22 (F06 target_not_standard guard): background-control-frameworks-base.patch sha256 42986c0bf5e26e97b41ca5d62145b9a0ce45dd94810afcb307be658446cd8979, only ComputerControlSessionImpl's after-image changing (1a5392ce..., blob 7a0a3757); rose-edge-wmshell.patch sha256 335fcb61c6054806143a08c2d1a0202b01d71c45948a02a51eb0128b7700a95c, only RoseEdgeMicSlot.java (a613e6ee..., blob 0aa0b49d) and roseedge/RoseEdgePolicy.java (5a565842..., blob 2c664048) changing; the other after-images, the WMShellModule pre-image, the inputs, the goals and flagEvidence (none) unchanged; no new files, flags or classpath inputs (the only new imports, android.app.ActivityManager, android.app.ActivityTaskManager, android.util.SparseBooleanArray and the framework constants WindowConfiguration.ACTIVITY_TYPE_STANDARD and ACTIVITY_TYPE_UNDEFINED, are in ComputerControlSessionImpl)",
   "retrayed": "OS Core to OS Product, 2026-11-05 02:23 UTC, from #563 head 6e2fb49 (F06 return refinements and the F08 tray reachability signal): background-control-frameworks-base.patch sha256 22fc3d7c92aa0ad6f3692dc31c2e33fc9816972be6f9899b14db9aaac447c6bd, only ComputerControlSessionImpl's after-image changing (eef0edf1..., blob 8b680261); the required Shell overlays AgentTrayPrototype.java (2982f3f1..., blob 39576fcd), AgentTrayLink.java (fdfc3560..., blob 3dca283c) and AgentStatusControls.java (86e9ceb0..., blob b5eb7993) change; rose-edge-wmshell.patch and its after-images, the WMShellModule pre-image, the goals and flagEvidence (none) unchanged; no new files, flags or classpath inputs (new imports android.util.SparseArray, android.database.ContentObserver, android.os.SystemProperties and android.provider.Settings are framework classes)",
   "shaded": "OS Core to OS Product, 2026-11-07 01:30 UTC, from #616 head e070e6d (1G, the Rose notification shade): nine new SystemUI-core sources under packages/SystemUI/src/com/android/systemui/roseshade/ (required here, as every frameworks/base overlay is; none is a WindowManager-Shell input) and the required Shell overlay AgentTrayPrototype.java (5d3d5697..., blob 85080752: a status-bar drag hook before the tray's own touch handling) change; rose-edge-wmshell.patch and its after-images, the WMShellModule pre-image, the goals and flagEvidence (none) unchanged; the new imports (Dagger, NotificationListener, CoreStartable, the Shell's AgentTrayPrototype) are already on SystemUI-core's classpath. rose-shade-systemui.patch (one include in ReferenceSystemUIModule.java) is registered in apply-os-changes.py for the normal build, which is the compile proof; this inert contract stays bound to #551's patch and does not model it",
-  "refined": "OS Core to OS Product, 2026-11-07 17:06 and 17:29 UTC, from #653 head 17adb26 (abe56cb, the keyboard handoff's rule 4 \"Mic off\" status-bar indicator, and the F09 shade interaction refinements): only required overlays change, AgentTrayPrototype.java (3d09bead..., blob 97719d16) and roseshade/RoseShadeController.java (3a0e0df4..., blob c60a8788), RoseShadeDrag.java (723db90e..., blob 3342c6cb), RoseShadeModel.java (c80f399e..., blob 26c258b6), RoseShadeReplies.java (c7ea0f10..., blob 82b1235b) and RoseShadeStartable.java (e6783f9f..., blob ae1e0ae0); no patch, no new file; rose-edge-wmshell.patch and its after-images, the WMShellModule pre-image, the goals and flagEvidence (none) unchanged; the new imports (android.graphics.Paint, RectF) are framework classes"
+  "refined": "OS Core to OS Product, 2026-11-07 17:06 and 17:29 UTC, from #653 head 17adb26 (abe56cb, the keyboard handoff's rule 4 \"Mic off\" status-bar indicator, and the F09 shade interaction refinements): only required overlays change, AgentTrayPrototype.java (3d09bead..., blob 97719d16) and roseshade/RoseShadeController.java (3a0e0df4..., blob c60a8788), RoseShadeDrag.java (723db90e..., blob 3342c6cb), RoseShadeModel.java (c80f399e..., blob 26c258b6), RoseShadeReplies.java (c7ea0f10..., blob 82b1235b) and RoseShadeStartable.java (e6783f9f..., blob ae1e0ae0); no patch, no new file; rose-edge-wmshell.patch and its after-images, the WMShellModule pre-image, the goals and flagEvidence (none) unchanged; the new imports (android.graphics.Paint, RectF) are framework classes",
+  "displayonly": "OS Core in #653, 2026-11-07 UTC, from carrier head 1184f14 at the owner's direction (the status-bar microphone is display-only; the Rose chin holds the only microphone control, F08 and keyboard rule 4): only required overlays change, AgentStatusControls.java (58fa34e2..., blob 92ab854c), whose tap mapping drops MUTE/UNMUTE and the mic glow's START, and AgentTrayPrototype.java (756f6f83..., blob 2d720337), its one call without the muted argument; no patch, no new file, no new import; rose-edge-wmshell.patch and its after-images, the WMShellModule pre-image, the goals and flagEvidence (none) unchanged. Correction to 'refined': 17adb26 also adds android.animation.ValueAnimator, android.graphics.Rect, android.view.ViewTreeObserver, android.view.accessibility.AccessibilityManager and AccessibilityNodeInfo, and java.util.HashSet, LinkedHashSet and Set, all framework or JDK classes"
  },
  "registration": {
   "state": "unregistered",
@@ -1138,7 +1139,7 @@
   },
   {
    "target": "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/AgentStatusControls.java",
-   "sha256": "86e9ceb06825f138e2b56d8521c743e08cd8ba55a2e3724ad1f06e0eb837438f",
+   "sha256": "58fa34e2051ac81dba24977c6d71f86545f49e58a777fdc053025d1049cbecf4",
    "role": "required"
   },
   {
@@ -1148,7 +1149,7 @@
   },
   {
    "target": "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/AgentTrayPrototype.java",
-   "sha256": "3d09bead8a81744a8875e2062c49dcbd2e5ea4b975ffe544047b84825019b226",
+   "sha256": "756f6f834912924d42e89f6c71650b9495dddec3864113573f737de66bf93833",
    "role": "required"
   },
   {
@@ -1292,7 +1293,7 @@
     },
     {
      "target": "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/AgentStatusControls.java",
-     "sha256": "86e9ceb06825f138e2b56d8521c743e08cd8ba55a2e3724ad1f06e0eb837438f"
+     "sha256": "58fa34e2051ac81dba24977c6d71f86545f49e58a777fdc053025d1049cbecf4"
     },
     {
      "target": "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/AgentTrayLink.java",
@@ -1300,7 +1301,7 @@
     },
     {
      "target": "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/AgentTrayPrototype.java",
-     "sha256": "3d09bead8a81744a8875e2062c49dcbd2e5ea4b975ffe544047b84825019b226"
+     "sha256": "756f6f834912924d42e89f6c71650b9495dddec3864113573f737de66bf93833"
     },
     {
      "target": "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/StatusVoiceGlow.java",
@@ -2307,7 +2308,7 @@
    },
    {
     "target": "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/AgentStatusControls.java",
-    "sha256": "86e9ceb06825f138e2b56d8521c743e08cd8ba55a2e3724ad1f06e0eb837438f",
+    "sha256": "58fa34e2051ac81dba24977c6d71f86545f49e58a777fdc053025d1049cbecf4",
     "role": "required"
    },
    {
@@ -2317,7 +2318,7 @@
    },
    {
     "target": "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/AgentTrayPrototype.java",
-    "sha256": "3d09bead8a81744a8875e2062c49dcbd2e5ea4b975ffe544047b84825019b226",
+    "sha256": "756f6f834912924d42e89f6c71650b9495dddec3864113573f737de66bf93833",
     "role": "required"
    },
    {
