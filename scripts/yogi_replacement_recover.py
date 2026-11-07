@@ -101,10 +101,15 @@ GITHUB_CONTEXT = ("GITHUB_ACTIONS", "ACTIONS_ID_TOKEN_REQUEST_URL", "ACTIONS_ID_
 SPENT_OPERATION_IDS = frozenset({
     "e75b0fd782e43f585c621c74f95bfa90",
     "5cf6fe9a62880b89ee6e7e822a0379d2",
+    "20ef6008b1ef78137d201de13176af42",
 })
 SPENT_ZONE_OPERATIONS = frozenset({
     "operation-1794025967141-65fa8387d4384-e9bed427-7ed969ab",
     "operation-1794025969883-65fa838a71873-581e64cf-6e23ae4e",
+    "operation-1794026872649-65fa86e763554-67c3c575-aa4d2c66",
+    "operation-1794026874731-65fa86e95fb00-d547145e-45241669",
+    "operation-1794027065214-65fa879f086ca-4cf61ef5-4480e200",
+    "operation-1794027069962-65fa87a38f91f-6bc72969-2fdd5f07",
 })
 OPERATION_NAME = re.compile(r"operation-[0-9]{10,16}-[0-9a-f]{8,20}-[0-9a-f]{6,20}-[0-9a-f]{6,20}")
 OPERATOR = re.compile(r"[A-Za-z0-9 ._@-]{1,80}")
@@ -1130,17 +1135,74 @@ def read_new(call, cursor):
     return str(response.get("contents") or ""), nxt
 
 
-def collect_receipt(call, binding, deadline, sleep):
+def serial_evidence(binding, text, reason, detail=""):
+    """Allowlisted record of one serial window. The raw console is not stored."""
+    lines = []
+    for line in str(text).splitlines():
+        if len(lines) >= 8:
+            break
+        at = line.find(guest.PREFIX)
+        if at < 0:
+            continue
+        payload = line[at + len(guest.PREFIX):].strip()
+        entry = {"length": len(payload), "sha256": sha256_bytes(payload.encode()), "redacted": True, "reason": reason}
+        try:
+            parsed = json.loads(payload)
+        except ValueError:
+            entry["reason"] = "json"
+            lines.append(entry)
+            continue
+        if isinstance(parsed, dict) and not guest.validate_shape(parsed, binding):
+            entry["redacted"] = False
+            entry["reason"] = "parsed"
+            entry["receipt"] = json.loads(guest.canonical(parsed))
+        else:
+            entry["reason"] = "shape"
+        lines.append(entry)
+    safe_reason = reason if re.fullmatch(r"[a-z0-9-]{1,40}", reason or "") else "unrecognized"
+    safe_detail = detail if re.fullmatch(r"[a-z0-9-]{1,40}", detail or "") else ""
+    return {"schema": "roseos.yogi-replacement-recover-serial-evidence.v1",
+            "operationId": binding.get("operationId"), "reason": safe_reason, "detail": safe_detail,
+            "totalBytes": len(str(text).encode()), "contentsSha256": sha256_bytes(str(text).encode()),
+            "receiptLines": lines}
+
+
+def save_serial_evidence(directory, binding, text, reason, detail=""):
+    if directory is None:
+        return
+    path = Path(directory) / "serial-evidence.json"
+    if path.exists():
+        return
+    try:
+        exclusive_json(path, serial_evidence(binding, text, reason, detail))
+    except OSError:
+        return
+
+
+def collect_receipt(call, binding, deadline, sleep, evidence_dir=None):
     """Read serial only after the instance is RUNNING. The first read may include older bytes.
 
     A receipt is accepted only when it matches this operation's nonce. Output from before this
     operation cannot contain that nonce. A follow-up read uses the returned byte cursor. The
-    serial console is still guest-written and is not a pin.
+    serial console is still guest-written and is not a pin. An unparsed window is saved, without
+    the raw console, before the caller classifies it.
     """
     if deadline.expired():
         return None, "budget"
     chunks = []
     cursor = "0"
+
+    def consider(final):
+        text = "".join(chunks)
+        try:
+            receipt = guest.parse_serial(text, binding, final=final)
+        except guest.Malformed as error:
+            save_serial_evidence(evidence_dir, binding, text, error.code, getattr(error, "detail", ""))
+            return None, "serial-" + error.code
+        if receipt is not None:
+            save_serial_evidence(evidence_dir, binding, text, "parsed")
+        return receipt, None
+
     try:
         text, cursor = read_new(call, cursor)
     except guest.Malformed:
@@ -1148,13 +1210,12 @@ def collect_receipt(call, binding, deadline, sleep):
     except TransportError:
         return None, "serial-failed"
     chunks.append(text)
-    try:
-        receipt = guest.parse_serial("".join(chunks), binding)
-    except guest.Malformed:
-        return None, "malicious"
+    receipt, failed = consider(False)
+    if failed:
+        return None, failed
     if receipt is not None:
         return receipt, "read"
-    for delay in SERIAL_DELAYS:
+    for index, delay in enumerate(SERIAL_DELAYS):
         if deadline.expired():
             return None, "budget"
         wait = min(delay, max(0, int(deadline.remaining())))
@@ -1169,10 +1230,9 @@ def collect_receipt(call, binding, deadline, sleep):
         except TransportError:
             return None, "serial-failed"
         chunks.append(text)
-        try:
-            receipt = guest.parse_serial("".join(chunks), binding)
-        except guest.Malformed:
-            return None, "malicious"
+        receipt, failed = consider(index == len(SERIAL_DELAYS) - 1)
+        if failed:
+            return None, failed
         if receipt is not None:
             return receipt, "read"
     return None, "absent"
@@ -1437,12 +1497,14 @@ def finish(path, document, code):
 
 def inspect_reported(receipt):
     """An inspect receipt inventoried the guest and changed nothing. It is not a repair and not a pin."""
-    if not isinstance(receipt, dict) or receipt.get("purpose") != "inspect" or receipt.get("status") != "complete":
+    if not isinstance(receipt, dict) or receipt.get("purpose") != "inspect" \
+            or receipt.get("status") not in ("complete", "refused"):
         return False
     unit, keys, cleanup = receipt.get("unit") or {}, receipt.get("hostKeys") or {}, receipt.get("cleanup") or {}
-    return unit.get("action") == "not-modified" and unit.get("problem") == "none" and not keys.get("rotated") \
+    return unit.get("action") == "not-modified" and not keys.get("rotated") \
         and keys.get("rolledBack") is False and keys.get("distinctFromClonedBaseline") is False \
-        and cleanup.get("linesRemoved") == 0 and cleanup.get("temporaryAccount") in ("absent", "preserved-mismatch")
+        and cleanup.get("linesRemoved") == 0 and cleanup.get("tempFilesRemoved") == 0 \
+        and cleanup.get("temporaryAccount") in ("absent", "preserved-mismatch")
 
 
 def _write_outcome(op, document, code):
@@ -1594,7 +1656,7 @@ def apply(path, confirm, execute=False, transport=None, now=None, clock=None, sl
                          "metadata": "clean", "operation": started_op.get("name") or None,
                          "operationStatus": started_op.get("operationStatus"), "preserved": preserved})
         try:
-            receipt, reason = collect_receipt(call, binding, work, sleep_fn)
+            receipt, reason = collect_receipt(call, binding, work, sleep_fn, op)
         except Refused:
             receipt, reason = None, "serial-cursor-failed"
         attribute = None
@@ -1752,9 +1814,11 @@ def export_bundle(out):
         "preflight --execute only describes, lists firewalls with no server-side sourceRanges filter, and calls\n"
         "instances.testIamPermissions plus Resource Manager projects:testIamPermissions. It does not start the VM\n"
         "and it does not call setMetadata. Without --execute, preflight only rechecks the local plan.\n"
-        "Do not run apply from this report. Spent operation ids e75b0fd782e43f585c621c74f95bfa90 and\n"
-        "5cf6fe9a62880b89ee6e7e822a0379d2 are refused. Plan a new binding. plan --mode inspect only inventories\n"
-        "and does not chmod, rotate, or delete keys.\n"
+        "Do not run repair apply from this report. Spent operation ids include\n"
+        "20ef6008b1ef78137d201de13176af42. Plan a new binding. The next guest pass is inspect only:\n"
+        "  env -u GOOGLE_APPLICATION_CREDENTIALS -u CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT \\\n"
+        "    python3 -B yogi_replacement_recover.py plan --mode inspect --operator NAME --out DIR\n"
+        "Inspect does not chmod, rotate, or delete keys. It still uses one temporary metadata write and one start.\n"
     )
     (out / "README.md").write_text(readme)
     for name, source in mapping.items():

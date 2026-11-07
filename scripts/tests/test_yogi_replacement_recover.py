@@ -5,6 +5,7 @@ import datetime
 import importlib.util
 import json
 import os
+import stat
 import subprocess
 import sys
 import tempfile
@@ -713,7 +714,13 @@ class ControlTest(Base):
         self.preflight()
         self.world.boot_guest = lambda items: guest.PREFIX + "{not-json}\n"
         result = self.apply()
-        self.assertEqual(result["guestRead"], "malicious")
+        self.assertEqual(result["guestRead"], "serial-json")
+        evidence = json.loads((self.op / "serial-evidence.json").read_text())
+        self.assertEqual(evidence["reason"], "json")
+        self.assertNotIn("{not-json}", (self.op / "serial-evidence.json").read_text())
+        self.assertEqual(stat.S_IMODE((self.op / "serial-evidence.json").stat().st_mode), 0o600)
+        self.assertTrue(evidence["receiptLines"][0]["redacted"])
+        self.assertEqual(evidence["receiptLines"][0]["sha256"], recover.sha256_bytes(b"{not-json}"))
         self.assertEqual(result["stop"], "stopped")
         self.assertEqual(self.world.replacement_status, "TERMINATED")
         self.assertEqual(self.world.items, recover.BASE_METADATA)
@@ -933,6 +940,13 @@ class ControlTest(Base):
         receipt = json.loads(result.stdout.strip().split(guest.PREFIX, 1)[1])
         self.assertEqual(receipt["purpose"], "inspect")
         self.assertEqual(receipt["unit"]["action"], "not-modified")
+        self.assertEqual(receipt["unit"]["beforeMode"], "0644")
+        self.assertEqual(receipt["unit"]["problem"], "owner")
+        self.assertIn('elif before["mode"] == 0o644:', script)
+        self.assertIn('problem = "already-0644"', script)
+        self.assertEqual(receipt["journal"]["entries"], 0)
+        self.assertEqual(receipt["hostKeys"]["rotated"], {})
+        self.assertEqual(guest.validate_shape(receipt, json.loads(binding.read_text())), [])
         self.assertEqual(receipt["cleanup"]["linesRemoved"], 0)
         self.assertGreater(receipt["cleanup"]["unidentifiedAuthorizedKeyLines"], 0)
         self.assertFalse(guest.success_problems(receipt) == [] or receipt["purpose"] == "repair")
@@ -1129,6 +1143,44 @@ class GuestTest(Base):
         self.assertEqual(result["stop"], "stopped")
         self.assertEqual(self.world.items, recover.BASE_METADATA)
         self.assertGreater(result["guestReceipt"]["cleanup"]["unidentifiedAuthorizedKeyLines"], 0)
+
+    def test_real_guest_receipt_survives_serial_framing_without_weakening_the_binding(self):
+        module = load_rendered(self.op / "guest.py")
+        binding = json.loads((self.op / "binding.json").read_text())
+        host = DictHost(binding, self.op / "guest.py")
+        receipt = module.run(host)
+        line = host.emitted[-1]
+        self.assertEqual(len(host.emitted), 1)
+        self.assertLessEqual(len(line), 8000)
+        self.assertEqual(guest.parse_serial(line + "\n", binding)["operationId"], binding["operationId"])
+        lead = "Nov  7 08:47:58 roseos google_metadata_script_runner[214]: startup-script: "
+        wrapped = []
+        body = line
+        width = 80
+        for offset in range(0, len(body), width):
+            wrapped.append(lead + body[offset:offset + width])
+        framed = "\r\n".join(wrapped) + "\r\n" + line + "\r\n"
+        parsed = guest.parse_serial(framed, binding)
+        self.assertEqual(parsed, receipt)
+        other = json.loads(guest.canonical(receipt))
+        other["bootId"] = "33333333-3333-3333-3333-333333333333"
+        foreign = guest.PREFIX + guest.canonical(other)
+        with self.assertRaises(guest.Malformed) as raised:
+            guest.parse_serial(line + "\n" + foreign + "\n", binding)
+        self.assertEqual(raised.exception.code, "sequence")
+        huge = guest.PREFIX + ("{" * 8001)
+        with self.assertRaises(guest.Malformed) as raised:
+            guest.parse_serial(huge + "\n", binding)
+        self.assertEqual(raised.exception.code, "oversize")
+        fragment = line[len(guest.PREFIX):][:40]
+        window = lead + guest.PREFIX + fragment + "\n"
+        record = recover.serial_evidence(binding, window, "json")
+        self.assertNotIn(fragment, json.dumps(record))
+        self.assertEqual(record["receiptLines"][0]["reason"], "json")
+        self.assertEqual(record["receiptLines"][0]["length"], 40)
+        with self.assertRaises(recover.Refused):
+            recover.plan("Mac operator", Path(self.temp.name) / "spent-serial", now=NOW,
+                         token=tokens("20ef6008b1ef78137d201de13176af42", "cd" * 16), revision="a" * 40, env=ENV)
 
 
 class CommandTest(Base):

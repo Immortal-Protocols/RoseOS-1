@@ -103,10 +103,15 @@ Contract the live read must show before any write:
    budget is 35 minutes. The last 10 minutes of the 45-minute policy stay available for cleanup. `maxRunDuration.seconds`
    must be the integer 2700, not a gcloud duration flag.
 4. Accepts one receipt line, `ROSEOS-YOGI-RECOVER-RECEIPT`, only from bytes after that cursor, only when it matches
-   this binding. A second line is accepted only as a reprint of the same public fingerprints with `reexecution` true.
-   Anything else is malicious output: restore metadata, stop, exit 1. A guest attribute, if present, must parse to the
-   same receipt. Absence is expected (`enable-guest-attributes` is not turned on). A different value stops the success
-   path.
+   this binding. The guest writes that line once to stdout. The startup-script runner copies stdout to the serial
+   console, so the guest does not write the serial device again. A syslog prefix, a CRLF line ending, or a wrapped
+   copy of the same line is still one receipt. Two identical receipts are one observation. A second different receipt
+   is a sequence failure. A line that is not valid JSON, is over 8000 bytes, or does not match this binding is
+   `serial-json`, `serial-oversize`, or `serial-shape`. That is an unparsed window, not a claim that an actor was
+   malicious. Before that classification, the tool writes `serial-evidence.json` in the operation directory, mode
+   `0600`, with the reason, the window's sha256 and length, and only a shape-valid public receipt. It does not store
+   the raw console. Restore metadata, stop, exit 1. A guest attribute, if present, must parse to the same receipt.
+   Absence is expected (`enable-guest-attributes` is not turned on). A different value stops the success path.
 5. Restores the two original metadata keys with one `setMetadata`, waited the same way, then stops the instance with
    one empty-body `instances.stop`
    ([instances.stop](https://docs.cloud.google.com/compute/docs/reference/rest/v1/instances/stop)) and the same operation
@@ -172,8 +177,24 @@ env -u GOOGLE_APPLICATION_CREDENTIALS -u CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOU
 ```
 
 `python3 -B` does not write `__pycache__`. These operation ids are spent and `plan` refuses them:
-`e75b0fd782e43f585c621c74f95bfa90` and `5cf6fe9a62880b89ee6e7e822a0379d2`. Mint a new plan. This review does not ask
-the operator to run `apply`. `plan --mode inspect` builds the inventory script for a unit already at mode `0644`.
+`e75b0fd782e43f585c621c74f95bfa90`, `5cf6fe9a62880b89ee6e7e822a0379d2`, and `20ef6008b1ef78137d201de13176af42`.
+Do not run repair. The guest for `20ef6008b1ef78137d201de13176af42` reached the serial console and the parser rejected
+the window without saving the line. Unit mode, host keys, and authorized_keys on that disk are unknown. The next guest
+pass is inspect only. It reports the unit, current public fingerprints, authorized_keys counts, and whether a local
+recovery marker exists. It does not chmod, generate keys, or delete anything. The control plane still sends one
+temporary metadata write and one start:
+
+```sh
+env -u GOOGLE_APPLICATION_CREDENTIALS -u CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT \
+  python3 -B yogi_replacement_recover.py plan --mode inspect --operator "NAME" --out ~/yogi-ops/inspect-LABEL
+env -u GOOGLE_APPLICATION_CREDENTIALS -u CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT \
+  python3 -B yogi_replacement_recover.py preflight --op ~/yogi-ops/inspect-LABEL \
+  --confirm-instance 2720796557371812468 --execute
+env -u GOOGLE_APPLICATION_CREDENTIALS -u CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT \
+  python3 -B yogi_replacement_recover.py apply --op ~/yogi-ops/inspect-LABEL \
+  --confirm-instance 2720796557371812468 --execute
+```
+
 `cleanup --execute` remains the stop path if a previous apply was interrupted.
 
 Keep the operation directory. Do not reuse it. A stale fingerprint, an expired preflight (20 minutes), or a second
@@ -265,6 +286,16 @@ Serial output is a `compute#serialPortOutput` resource when `kind` is present.
   `operation-1794025967141-65fa8387d4384-e9bed427-7ed969ab` and
   `operation-1794025969883-65fa838a71873-581e64cf-6e23ae4e` are spent and are not waited on again. This repository did
   not re-read that state.
+- A following apply, operation `20ef6008b1ef78137d201de13176af42`, awaited every mutation to `DONE`: metadata
+  `operation-1794026872649-65fa86e763554-67c3c575-aa4d2c66`, start
+  `operation-1794026874731-65fa86e95fb00-d547145e-45241669`, restore
+  `operation-1794027065214-65fa879f086ca-4cf61ef5-4480e200`, and stop
+  `operation-1794027069962-65fa87a38f91f-6bc72969-2fdd5f07`. Two serial reads then `parse_serial` raised `Malformed`.
+  The tool did not save the window. The post-stop serial API was empty. The final control-plane read was
+  `TERMINATED`, the same id, the two base metadata keys, fingerprint `pSAPI4eI6q4=`, and `startupScriptRemoved` true.
+  The original VM, disk, and both snapshots were unchanged. The guest's unit, host keys, and authorized_keys are
+  unknown. Do not run repair again and do not claim those files are unchanged. Those zone operations are spent. This
+  repository did not re-read that state.
 - There is no trusted measurement of the guest. A serial line is guest-written. The cursor, nonce, boot id, and
   instance id bind the line to this operation's output window. They do not prove the guest is honest. Do not commit
   the receipt as `builder.direct.hostKey`.

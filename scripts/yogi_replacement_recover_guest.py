@@ -54,9 +54,12 @@ FP = re.compile(r"SHA256:[A-Za-z0-9+/]{43}")
 BOOT = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 SAFE_NAME = re.compile(r"[A-Za-z0-9._-]{1,64}")
 EXPECTED_IDENTITY = {"project": PROJECT, "zone": ZONE, "instance": INSTANCE, "instanceId": INSTANCE_ID}
+JOURNAL_PHASES = {"started", "unit-done", "baseline", "refused", "partial", "complete", "unrecognized"}
+JOURNAL_KEYS = {"entries", "readable", "phases", "hasCompleteReceipt", "unrecognized"}
 TOP_KEYS = {
     "schema", "purpose", "operationId", "nonce", "payloadSha256", "instanceId", "bootId", "reexecution",
     "previousBootId", "originalVmAccessed", "snapshotsUsed", "status", "unit", "runner", "hostKeys", "cleanup",
+    "journal",
 }
 UNIT_KEYS = {
     "action", "problem", "beforeMode", "beforeSize", "beforeUid", "beforeGid", "afterMode", "afterSize", "afterUid",
@@ -76,7 +79,10 @@ class GuestRefused(Exception):
 
 
 class Malformed(Exception):
-    pass
+    def __init__(self, code, detail=""):
+        super().__init__(code)
+        self.code = code
+        self.detail = detail if isinstance(detail, str) and re.fullmatch(r"[a-z0-9-]{0,40}", detail) else ""
 
 
 def canonical(value):
@@ -173,6 +179,20 @@ def validate_shape(receipt, binding):
     for key in ("linesRemoved", "unidentifiedAuthorizedKeyLines", "tempFilesRemoved"):
         if not isinstance(cleanup[key], int) or cleanup[key] < 0 or cleanup[key] > 100000:
             return ["cleanup"]
+    journal = receipt.get("journal")
+    if not isinstance(journal, dict) or set(journal) != JOURNAL_KEYS:
+        return ["journal"]
+    if not isinstance(journal["entries"], int) or not 0 <= journal["entries"] <= 20:
+        return ["journal"]
+    if not isinstance(journal["readable"], int) or not 0 <= journal["readable"] <= journal["entries"]:
+        return ["journal"]
+    phases = journal["phases"]
+    if not isinstance(phases, list) or len(phases) > 20 or any(item not in JOURNAL_PHASES for item in phases):
+        return ["journal"]
+    if not isinstance(journal["hasCompleteReceipt"], bool):
+        return ["journal"]
+    if not isinstance(journal["unrecognized"], int) or not 0 <= journal["unrecognized"] <= 20:
+        return ["journal"]
     for text in _strings(receipt):
         if len(text) > 80 or any(token in text for token in FORBIDDEN):
             return ["receipt-text"]
@@ -210,30 +230,80 @@ def success_problems(receipt):
     return problems
 
 
-def parse_serial(contents, binding):
+def journal_summary(marker):
+    """Public summary of one local marker. It does not copy the marker body."""
+    if not marker:
+        return {"entries": 0, "readable": 0, "phases": [], "hasCompleteReceipt": False, "unrecognized": 0}
+    phase = marker.get("phase") if isinstance(marker, dict) else None
+    if phase in JOURNAL_PHASES and phase != "unrecognized":
+        phases, unrecognized = [phase], 0
+    else:
+        phases, unrecognized = ["unrecognized"], 1
+    receipt = marker.get("receipt") if isinstance(marker, dict) else None
+    complete = phase == "complete" and isinstance(receipt, dict) and receipt.get("status") == "complete"
+    return {"entries": 1, "readable": 1, "phases": phases, "hasCompleteReceipt": bool(complete),
+            "unrecognized": unrecognized}
+
+
+def parse_serial(contents, binding, final=True):
+    """Accept one receipt from a serial console capture.
+
+    A syslog prefix may precede the receipt. CRLF is one line. A console that wraps a long line and
+    repeats that prefix is joined back into one JSON value. Two byte-for-byte equal receipts are one
+    observation. A second different receipt is still a sequence failure. An unfinished tail waits
+    unless this is the last read.
+    """
+    text = str(contents).replace("\r\n", "\n").replace("\r", "\n")
+    closed = text.endswith("\n")
+    parts = text.split("\n")
+    if closed:
+        parts = parts[:-1]
     found = []
-    for line in str(contents).splitlines():
-        idx = line.find(PREFIX)
-        if idx < 0:
+    index = 0
+    while index < len(parts):
+        line = parts[index]
+        at = line.find(PREFIX)
+        if at < 0:
+            index += 1
             continue
-        payload = line[idx + len(PREFIX):].strip()
-        if len(payload) > 8000:
-            raise Malformed("oversize")
-        try:
-            receipt = json.loads(payload)
-        except ValueError:
-            raise Malformed("json") from None
-        if validate_shape(receipt, binding):
-            raise Malformed("shape")
+        lead = line[:at]
+        payload = line[at + len(PREFIX):]
+        cursor = index + 1
+        while True:
+            if len(payload) > 8000:
+                raise Malformed("oversize")
+            try:
+                receipt = json.loads(payload.strip())
+                break
+            except ValueError:
+                if cursor >= len(parts):
+                    if not closed and not final:
+                        return None
+                    raise Malformed("json") from None
+                nxt = parts[cursor]
+                if PREFIX in nxt:
+                    raise Malformed("json")
+                if lead and nxt.startswith(lead):
+                    nxt = nxt[len(lead):]
+                payload += nxt
+                cursor += 1
+        problems = validate_shape(receipt, binding)
+        if problems:
+            raise Malformed("shape", problems[0])
         found.append(receipt)
-    if not found:
+        index = cursor
+    unique = []
+    for receipt in found:
+        if not unique or unique[-1] != receipt:
+            unique.append(receipt)
+    if not unique:
         return None
-    if len(found) == 1:
-        return found[0]
-    if len(found) == 2 and found[0]["reexecution"] is False and found[1]["reexecution"] is True \
-            and found[0]["hostKeys"]["baseline"] == found[1]["hostKeys"]["baseline"] \
-            and found[0]["hostKeys"]["rotated"] == found[1]["hostKeys"]["rotated"]:
-        return found[1]
+    if len(unique) == 1:
+        return unique[0]
+    if len(unique) == 2 and unique[0]["reexecution"] is False and unique[1]["reexecution"] is True \
+            and unique[0]["hostKeys"]["baseline"] == unique[1]["hostKeys"]["baseline"] \
+            and unique[0]["hostKeys"]["rotated"] == unique[1]["hostKeys"]["rotated"]:
+        return unique[1]
     raise Malformed("sequence")
 
 
@@ -347,6 +417,7 @@ def _skeleton(binding, boot, status):
                      "rolledBack": False},
         "cleanup": {"linesRemoved": 0, "unidentifiedAuthorizedKeyLines": 0, "temporaryAccount": "absent",
                     "tempFilesRemoved": 0, "accessCleanup": "ok"},
+        "journal": {"entries": 0, "readable": 0, "phases": [], "hasCompleteReceipt": False, "unrecognized": 0},
     }
 
 
@@ -430,6 +501,10 @@ def cleanup_access(io, operation_id):
 
 
 def _emit(io, receipt, binding):
+    try:
+        receipt["journal"] = journal_summary(io.marker_load())
+    except (GuestRefused, OSError, ValueError, TypeError):
+        receipt["journal"] = journal_summary({"phase": "unrecognized"})
     if validate_shape(receipt, binding):
         raise GuestRefused("receipt-shape")
     line = PREFIX + canonical(receipt)
@@ -1110,14 +1185,26 @@ class LinuxHost:
         return "removed-home-leftover" if leftover else "removed"
 
     def emit(self, line):
+        """One stdout line. The startup-script runner already copies stdout to the serial console.
+
+        A second write to the serial device made parse_serial see two receipts and reject the sequence.
+        The same public line is appended to this operation's local journal for a later inspect.
+        """
+        if "\n" in line or not line.startswith(PREFIX) or len(line) > 8000:
+            raise GuestRefused("receipt-line")
         sys.stdout.write(line + "\n")
         sys.stdout.flush()
         try:
-            fd = os.open("/dev/ttyS0", os.O_WRONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+            directory = self._marker_dir()
+            if not os.path.isdir(directory):
+                return
+            fd = os.open(directory + "/journal.log",
+                         os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
         except OSError:
             return
         try:
             os.write(fd, (line + "\n").encode())
+            os.fsync(fd)
         finally:
             os.close(fd)
 
@@ -1129,6 +1216,7 @@ import errno
 import hashlib
 import json
 import os
+import re
 import stat
 import sys
 import urllib.request
@@ -1197,14 +1285,52 @@ def emit(receipt):
     line = PREFIX + json.dumps(receipt, sort_keys=True, separators=(",", ":"))
     sys.stdout.write(line + "\n")
     sys.stdout.flush()
+
+
+def journal_summary(root):
+    """Count local markers. The receipt does not copy marker bytes."""
+    phases = []
+    entries = readable = unrecognized = 0
+    complete = False
+    allowed = {"started", "unit-done", "baseline", "refused", "partial", "complete"}
     try:
-        fd = os.open("/dev/ttyS0", os.O_WRONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        names = sorted(os.listdir(under(root, "/var/lib/roseos-yogi-recover")))
     except OSError:
-        return
-    try:
-        os.write(fd, (line + "\n").encode())
-    finally:
-        os.close(fd)
+        names = []
+    for name in names:
+        if entries >= 20 or not re.fullmatch(r"[0-9a-f]{32}", name):
+            continue
+        entries += 1
+        path = under(root, "/var/lib/roseos-yogi-recover") + "/" + name + "/state.json"
+        try:
+            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        except OSError:
+            unrecognized += 1
+            continue
+        try:
+            data = os.read(fd, 65537)
+        finally:
+            os.close(fd)
+        if len(data) > 65536:
+            unrecognized += 1
+            continue
+        try:
+            marker = json.loads(data.decode())
+        except (ValueError, UnicodeError):
+            unrecognized += 1
+            continue
+        readable += 1
+        phase = marker.get("phase") if isinstance(marker, dict) else None
+        if phase in allowed:
+            phases.append(phase)
+        else:
+            phases.append("unrecognized")
+            unrecognized += 1
+        stored = marker.get("receipt") if isinstance(marker, dict) else None
+        if phase == "complete" and isinstance(stored, dict) and stored.get("status") == "complete":
+            complete = True
+    return {"entries": entries, "readable": readable, "phases": phases[:20],
+            "hasCompleteReceipt": complete, "unrecognized": min(unrecognized, 20)}
 
 
 def main(argv):
@@ -1249,7 +1375,9 @@ def main(argv):
             problem = "owner"
         elif before["size"] != UNIT_SIZE:
             problem = "size"
-        elif before["mode"] not in (0o664, 0o644):
+        elif before["mode"] == 0o644:
+            problem = "already-0644"
+        elif before["mode"] != 0o664:
             problem = "mode"
     runner = {"active": "unchecked", "enabled": "unchecked", "process": False}
     if identity != expected:
@@ -1321,7 +1449,7 @@ def main(argv):
         "schema": "roseos.yogi-replacement-recover-receipt.v1", "purpose": "inspect",
         "operationId": OPERATION_ID, "nonce": NONCE, "payloadSha256": own, "instanceId": INSTANCE_ID,
         "bootId": boot, "reexecution": False, "previousBootId": "none", "originalVmAccessed": False,
-        "snapshotsUsed": False, "status": "complete" if problem == "none" else "refused",
+        "snapshotsUsed": False, "status": "refused" if problem == "identity" else "complete",
         "unit": {"action": "not-modified", "problem": problem, "beforeMode": mode, "beforeSize": before["size"],
                  "beforeUid": before["uid"], "beforeGid": before["gid"], "afterMode": mode,
                  "afterSize": before["size"], "afterUid": before["uid"], "afterGid": before["gid"]},
@@ -1330,6 +1458,7 @@ def main(argv):
                      "unknownHostKeyCount": unknown, "rolledBack": False},
         "cleanup": {"linesRemoved": 0, "unidentifiedAuthorizedKeyLines": unidentified,
                     "temporaryAccount": account, "tempFilesRemoved": 0, "accessCleanup": "ok"},
+        "journal": journal_summary(root),
     }
     emit(receipt)
     return 0 if problem == "none" else 1
