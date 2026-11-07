@@ -186,7 +186,11 @@ archive's updater/trust before starting a compile. It downloads the exact app
 artifact by ID, verifies its producer-run metadata and ZIP digest, and runs the
 existing per-file/APK/receipt/policy admission. The app producer's source must
 match the current three-app source paths in the existing allocation contract;
-later OS-only source changes do not require rebuilding unchanged apps.
+later OS-only source changes do not require rebuilding unchanged apps. The
+comparison reads both commits from the local checkout and does not fetch. A
+missing producer or head commit fails closed and is not an empty change list.
+The offline checks job and the dedicated guard checkout fetch full history
+before that comparison runs.
 
 The native producer copies only its own admitted pristine pinned base, fetches
 the existing pinned metadata, prepares vendor inputs, allocates under its own

@@ -316,7 +316,7 @@ class EnrollmentTest(unittest.TestCase):
     def test_infrastructure_host_check_starts_without_fabricated_inputs(self):
         runtime = json.loads((ROOT/'os/build-only/mustang-runtime.json').read_text())
         self.assertEqual(runtime['status'], 'unbound')
-        self.assertIsNone(runtime['appInputsRecord'])
+        self.assertEqual(runtime['appInputsRecord'], 'os/app-inputs/frankel-2026110704.json')
         self.assertIsNone(runtime['signingRouteEvidence'])
         self.assertIsNone(runtime['sourceEvidence'])
         self.assertIsNone(runtime['baselineTargetFiles'])
@@ -387,7 +387,7 @@ class EnrollmentTest(unittest.TestCase):
         cfg = json.loads((ROOT/'os/build-only/mustang-runtime.json').read_text())
         bound = lane.configuration()
         self.assertIsNone(cfg['runner']['lifetime'])
-        self.assertIsNone(cfg['appInputsRecord'])
+        self.assertEqual(cfg['appInputsRecord'], 'os/app-inputs/frankel-2026110704.json')
         got = dedicated.guard(bound, cfg, env, dry_run=True)
         self.assertIsNone(got['baselineTargetFiles'])
         with self.assertRaisesRegex(ValueError, 'cannot publish'):

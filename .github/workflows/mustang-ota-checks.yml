@@ -15,6 +15,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
+          fetch-depth: 0  # app-source freshness diffs the accepted export producer commit locally; a missing object is not unchanged
       - run: python3 scripts/tests/test_mustang_ota.py
       - run: python3 scripts/tests/test_mustang_edge_gate.py
       - run: python3 os/tests/test_updater_channels.py && python3 os/tests/test_updater_releases.py

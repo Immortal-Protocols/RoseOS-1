@@ -15,6 +15,7 @@ import json
 import os
 from pathlib import Path
 import re
+import subprocess
 import sys
 import xml.etree.ElementTree as ET
 
@@ -107,6 +108,86 @@ def enrollment():
                     'Provisioning needs a fresh authorized session. This repository does not store a key, open SSH, attach a service account, or mint a registration token.'}}
 
 
+ACCEPTED_APP_EXPORT = {
+    'path': 'os/app-inputs/frankel-2026110704.json',
+    'run': '42408244069',
+    'artifact': 13588167823,
+    'digest': 'sha256:24596d4dd26889e705988a4fa2462c2d2d4890945aec6c139664532f5e213dac',
+    'producerRun': '42403912447',
+    'sourceSha': 'f5b1210c358a31f305b004d8b9dc98a3906f398f',
+    'recordMerge': 'c89d530cda33354ec593c1fb1338aa50e5dc7484',
+    'archiveBytes': 1865839,
+    'sdk': 37,
+    'signerSha256': '650d47f91b7f5af3c530fef53fe92018aa4521efba065bcb1d6fc9b699060bfb',
+    'targetSdk': 35,
+    'apps': {'dev.pixel.backgroundcontrol': 40, 'dev.pixel.calculator.agent': 5, 'dev.pixel.voice': 368},
+}
+
+
+def git_local(root, args):
+    """Read local objects only. protocol.allow=never stops a partial clone from fetching."""
+    return subprocess.run(
+        ['git', '-C', str(root), '-c', 'protocol.allow=never', *args],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+
+def require_local_commit(root, rev):
+    if not re.fullmatch(r'[0-9a-f]{40}', str(rev)):
+        raise ValueError('app source revision differs')
+    if git_local(root, ['cat-file', '-e', rev + '^{commit}']).returncode != 0:
+        raise ValueError('app source history is unavailable')
+
+
+def git_name_diff(root, before, after, paths):
+    """Name-only diff of two local commits. A missing object is never an empty diff."""
+    require_local_commit(root, before)
+    require_local_commit(root, after)
+    for path in paths:
+        if not isinstance(path, str) or path.startswith('/') or '..' in Path(path).parts:
+            raise ValueError('app source path differs')
+    diff = git_local(root, ['diff', '--name-only', before, after, '--', *paths])
+    if diff.returncode != 0:
+        raise ValueError('app source history is unavailable')
+    return diff.stdout
+
+
+def app_source_drift(record, head, root=ROOT, diff=None):
+    """Names of allocated apps whose sources differ between the export and head."""
+    differ = diff or (lambda before, after, paths: git_name_diff(root, before, after, paths))
+    packages = load(Path(root)/'os/latest-beta/allocation.json')['packages']
+    return [package['packageName'] for package in packages
+            if differ(record['producer']['sourceSha'], head, package['sources'])]
+
+
+def bound_app_freshness(record, root=ROOT):
+    """Stale packages, or None when the producer commit is not in this checkout."""
+    head = git_local(root, ['rev-parse', 'HEAD'])
+    if head.returncode != 0 or not re.fullmatch(r'[0-9a-f]{40}', head.stdout.strip()):
+        return None
+    try:
+        return app_source_drift(record, head.stdout.strip(), root)
+    except ValueError as error:
+        if str(error) != 'app source history is unavailable':
+            raise
+        return None
+
+
+def accepted_app_export(record, path):
+    artifact = (record.get('export') or {}).get('artifact') or {}
+    apps = {row.get('package'): row.get('versionCode') for row in record.get('apps') or []}
+    producer = record.get('producer') or {}
+    return path == ACCEPTED_APP_EXPORT['path'] and record.get('schema') == 'roseos.app-inputs-record.v1' \
+        and (record.get('export') or {}).get('run') == ACCEPTED_APP_EXPORT['run'] \
+        and (record.get('export') or {}).get('attempt') == '1' \
+        and artifact.get('id') == ACCEPTED_APP_EXPORT['artifact'] \
+        and artifact.get('digest') == ACCEPTED_APP_EXPORT['digest'] \
+        and record.get('sdk') == ACCEPTED_APP_EXPORT['sdk'] \
+        and record.get('signerSha256') == ACCEPTED_APP_EXPORT['signerSha256'] \
+        and apps == ACCEPTED_APP_EXPORT['apps'] \
+        and producer.get('sourceSha') == ACCEPTED_APP_EXPORT['sourceSha'] \
+        and (producer.get('run') or {}).get('id') == ACCEPTED_APP_EXPORT['producerRun']
+
+
 def blockers(root=ROOT):
     """Every fact that still blocks a build or a public release. None of these are guesses to fill in."""
     root = Path(root)
@@ -156,9 +237,24 @@ def blockers(root=ROOT):
                                 'The former owner has no authoritative ledger. Do not guess whether it consumed a number and do not inspect Frankel. '
                                 'The last confirmed public Mustang allocation is 2026110401. '
                                 'No replacement number is selected, and 9999123199 is only the old date allocator\'s maximum output, not the next build.'})
-    if runtime.get('appInputsRecord') is None:
+    app_record = runtime.get('appInputsRecord')
+    if app_record is None:
         items.append({'code': 'app-inputs-unadmitted',
-                      'detail': 'The private Frankel 2026110501 export is twelve files. Archive transfer and hash were not verified, so it is not admitted.'})
+                      'detail': 'No immutable signed-app export is bound.'})
+    else:
+        bound = load(root/app_record)
+        if not accepted_app_export(bound, app_record):
+            items.append({'code': 'app-inputs-unadmitted',
+                          'detail': 'The bound app export is not the accepted frankel-2026110704 artifact.'})
+        else:
+            drift = bound_app_freshness(bound, root)
+            if drift is None:
+                items.append({'code': 'app-inputs-history-unavailable',
+                              'detail': 'The accepted app export producer commit is not a local commit in this checkout. '
+                                        'Missing history is not an unchanged app source, and this check does not fetch it.'})
+            elif drift:
+                items.append({'code': 'app-inputs-stale',
+                              'detail': 'The bound app export omits current app source changes.'})
     if runtime.get('baselineTargetFiles') is None and runtime.get('baselineFactoryEvidence') is None:
         candidate = load(root/'os/build-only/mustang-candidate-archive-41738359336.json')
         inventory = candidate.get('inventory') or {}

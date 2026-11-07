@@ -444,6 +444,8 @@ class DedicatedPathsTest(unittest.TestCase):
         self.assertNotIn('pull_request_target', workflow)
         self.assertIn('    runs-on: ubuntu-24.04',jobs['guard'])
         self.assertIn('python3 scripts/mustang-dedicated.py guard',jobs['guard'])
+        guard_checkout=jobs['guard'].split('python3 scripts/mustang-dedicated.py guard',1)[0]
+        self.assertIn('fetch-depth: 0', guard_checkout)
         active='\n'.join(line for line in workflow.splitlines() if not line.lstrip().startswith('#'))
         for forbidden in ('immortal-os-builder','roseos-frankel-builder','builder-reclaim','schedule:', 'workflow_run:'):
             self.assertNotIn(forbidden,active)
@@ -847,8 +849,47 @@ class DedicatedRuntimeTest(unittest.TestCase):
                     readiness.evaluate_guest(bad,lane_binding,runtime)
         report=readiness.report()
         codes={item['code'] for item in report['blockers']}
-        self.assertTrue({'runtime-unbound','runner-unregistered','allocation-unresolved','app-inputs-unadmitted',
+        self.assertTrue({'runtime-unbound','runner-unregistered','allocation-unresolved',
                          'baseline-not-on-disk','signing-route-unadmitted','publication-disabled'}<=codes)
+        self.assertNotIn('app-inputs-unadmitted', codes)
+        self.assertNotIn('app-inputs-stale', codes)
+        self.assertEqual(runtime['appInputsRecord'], readiness.ACCEPTED_APP_EXPORT['path'])
+        self.assertEqual(runtime['status'], 'unbound')
+        self.assertIsNone(runtime['signingRouteEvidence'])
+        self.assertIsNone(runtime['sourceEvidence'])
+        record=json.loads((ROOT/runtime['appInputsRecord']).read_text())
+        export=readiness.ACCEPTED_APP_EXPORT
+        self.assertTrue(readiness.accepted_app_export(record, runtime['appInputsRecord']))
+        self.assertEqual(record['apps'], [
+            {'package':'dev.pixel.backgroundcontrol','versionCode':40,'apkSha256':'14f0f842e3ba8266939d6fa63d0f6a6b7355b34388d5e6af5cc492e464e7cf04'},
+            {'package':'dev.pixel.voice','versionCode':368,'apkSha256':'21d6be95065ec7f0568711b457dacdf0e63442c293bc1f35938864ec403d8da5'},
+            {'package':'dev.pixel.calculator.agent','versionCode':5,'apkSha256':'37649ab5b977b9418556f63576a92e9b755757a6b403ac5304194ea92733b699'}])
+        self.assertIn(str(export['archiveBytes']), runtime['basis'])
+        self.assertIn('not an OTA extraction', runtime['basis'])
+        head=subprocess.check_output(['git','-C',str(ROOT),'-c','protocol.allow=never','rev-parse','HEAD'],text=True).strip()
+        self.assertNotIn('app-inputs-history-unavailable', codes)
+        self.assertEqual(readiness.bound_app_freshness(record), [])
+        self.assertEqual(readiness.app_source_drift(record, head), [])
+        self.assertEqual(readiness.app_source_drift(record, '149dd4e1d8fb4003aa16b51385b4780cbdc45d66'), [])
+        self.assertEqual(readiness.app_source_drift(record, head, diff=lambda *args:'workspace/rose-agent/changed\n'),
+                         ['dev.pixel.voice','dev.pixel.calculator.agent','dev.pixel.backgroundcontrol'])
+        missing='0000000000000000000000000000000000000000'
+        with self.assertRaisesRegex(ValueError,'app source history is unavailable'):
+            readiness.git_name_diff(ROOT, record['producer']['sourceSha'], missing, ['workspace/rose-agent'])
+        with self.assertRaisesRegex(ValueError,'app source history is unavailable'):
+            readiness.app_source_drift(record, missing)
+        original=readiness.git_local
+        def shallow(root,args):
+            if args and args[0]=='cat-file':
+                return SimpleNamespace(returncode=128,stdout='',stderr='fatal: bad object')
+            return original(root,args)
+        with patch.object(readiness,'git_local',side_effect=shallow):
+            self.assertIsNone(readiness.bound_app_freshness(record))
+            with self.assertRaisesRegex(ValueError,'app source history is unavailable'):
+                readiness.app_source_drift(record, head)
+        checks=(ROOT/'.github/workflows/mustang-ota-checks.yml').read_text().split('steps:',1)[1]
+        self.assertLess(checks.index('fetch-depth: 0'), checks.index('scripts/tests/test_mustang_edge_gate.py'))
+        self.assertIn('persist-credentials: false\n', checks)
         self.assertFalse(report['buildAuthorized']); self.assertFalse(report['publicationAuthorized'])
         self.assertFalse(report['admitted']['appArchive']); self.assertFalse(report['admitted']['baselineTargetFiles'])
         self.assertEqual(report['minimumFreeBytes'],121686892544)
