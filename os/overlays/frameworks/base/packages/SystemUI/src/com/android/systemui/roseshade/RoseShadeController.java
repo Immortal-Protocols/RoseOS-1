@@ -552,13 +552,20 @@ final class RoseShadeController {
         mRoot.setOnApplyWindowInsetsListener((v, insets) -> {
             final int top = insets.getInsets(WindowInsets.Type.statusBars()
                     | WindowInsets.Type.displayCutout()).top;
+            // The raised Rose chin provides a systemOverlays() inset of its lift (OS Product's RoseEdgeWindow). With
+            // the keyboard and the navigation area it keeps the panel above (F09: the chin preserves the shade).
             final int bottom = insets.getInsets(WindowInsets.Type.ime()
-                    | WindowInsets.Type.navigationBars()).bottom;
+                    | WindowInsets.Type.navigationBars() | WindowInsets.Type.systemOverlays()).bottom;
+            final int chin = insets.getInsets(WindowInsets.Type.systemOverlays()).bottom;
             mImeVisible = insets.isVisible(WindowInsets.Type.ime());
             final FrameLayout.LayoutParams lp = (FrameLayout.LayoutParams) mPanel.getLayoutParams();
             lp.topMargin = top + dp(4);
             lp.bottomMargin = bottom + dp(8);
             mPanel.setLayoutParams(lp);
+            // The scrim stops above the raised chin, so the chin stays visible and its controls reachable.
+            final FrameLayout.LayoutParams scrim = (FrameLayout.LayoutParams) mScrim.getLayoutParams();
+            scrim.bottomMargin = chin;
+            mScrim.setLayoutParams(scrim);
             // Keyboard or chin changes never touch a draft (RoseShadeReplies.inputSurfaceChanged).
             mReplies.inputSurfaceChanged();
             return WindowInsets.CONSUMED;
