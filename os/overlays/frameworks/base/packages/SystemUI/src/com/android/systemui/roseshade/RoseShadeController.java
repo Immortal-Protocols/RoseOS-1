@@ -987,7 +987,9 @@ final class RoseShadeController {
         private VelocityTracker mTracker;
 
         SwipeFrame(String id, View content, View host) {
-            super(mContext);
+            // Qualified: inside a View subclass the unqualified name is View's own hidden context field, which the
+            // platform build sees and which cannot be read before super() (Frankel 2026110702, SystemUI-core javac).
+            super(RoseShadeController.this.mContext);
             mId = id;
             addView(content, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
                     ViewGroup.LayoutParams.WRAP_CONTENT));

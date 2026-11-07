@@ -199,6 +199,18 @@ class RoseShadeTest(unittest.TestCase):
         self.assertIn('RoseShadeModel.Back.CLOSE_REPLY', back)
         self.assertIn('RoseShadeModel.Back.KEEP_DRAFT', back)
 
+    def test_view_subclasses_never_use_a_bare_mContext(self):
+        # Inside a View subclass, mContext names View's own field: hidden in the SDK's android.jar, so an offline type
+        # check passes, but the platform build sees it, and before super() it does not compile (Frankel 2026110702,
+        # SystemUI-core javac: "cannot reference mContext before supertype constructor has been called").
+        views = r'(?:View|FrameLayout|LinearLayout|ScrollView|TextView|EditText|ImageView|SeekBar)'
+        for name, text in self.shade.items():
+            for m in re.finditer(r'(?m)^\s+(?:private |public |protected |static |final )*class (\w+) extends '
+                    + views + r'\b', text):
+                body = method(text, m.group(0).strip())
+                self.assertFalse(re.findall(r'(?<![.\w])mContext\b', body), f'{name}: {m.group(1)}')
+        self.assertIn('super(RoseShadeController.this.mContext);', self.controller)
+
 
 if __name__ == '__main__':
     unittest.main()
