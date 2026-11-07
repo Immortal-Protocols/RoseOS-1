@@ -1,6 +1,11 @@
 """Source sync uses exact argv, the pinned checkout, and a bounded stop."""
 import json
+import shutil
+import signal
+import subprocess
 import sys
+import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -213,6 +218,85 @@ class SourceSyncRecipeTest(unittest.TestCase):
                              denied.append, lambda: 0, lambda _seconds: None)
         self.assertEqual(denied[-1]['reason'], 'source-sync-not-admitted')
         self.assertIn('owner.json', denied[-1]['argv'])
+
+    def test_real_poll_reads_more_than_a_pipe_without_deadlocking(self):
+        size = 256 * 1024
+        argv = [sys.executable, '-c',
+                'import sys; sys.stdout.buffer.write(b"o"*%d); sys.stderr.buffer.write(b"e"*%d)' % (size, size)]
+        with tempfile.TemporaryDirectory() as temporary:
+            seen = []
+
+            def spawn(command):
+                proc = sync.spawn_subprocess(command, temporary)
+                seen.append(proc)
+                return proc
+
+            started = time.monotonic()
+            text = sync.run_bounded(argv, 20, spawn, lambda _detail: None, time.monotonic, time.sleep)
+            elapsed = time.monotonic() - started
+            self.assertEqual(len(text), size)
+            self.assertLess(elapsed, 15)
+            self.assertEqual(len(Path(seen[-1].stderr_path).read_bytes()), size)
+            self.assertLessEqual(len(text.encode()), sync.MAX_STDOUT_RECEIPT)
+
+    def test_sigterm_kills_the_child_and_requests_vm_stop(self):
+        argv = [sys.executable, '-c', 'import time; time.sleep(30)']
+        with tempfile.TemporaryDirectory() as temporary:
+            proc = sync.spawn_subprocess(argv, temporary)
+            stops = []
+            handler = sync.cancellation_handler({'proc': proc}, 'owner.json', stops.append)
+            try:
+                handler(signal.SIGTERM, None)
+            except SystemExit as error:
+                self.assertEqual(error.code, 4)
+            deadline = time.monotonic() + 8
+            while proc.poll() is None and time.monotonic() < deadline:
+                time.sleep(0.1)
+            self.assertIsNotNone(proc.poll())
+            self.assertEqual(stops[-1]['reason'], 'source-sync-cancelled')
+            self.assertEqual(stops[-1]['argv'][-1], 'owner.json')
+            self.assertEqual(sync.mustang_lane.CONFIRMED_STOP['seconds'], 14400)
+
+    def test_pin_fetch_is_idempotent_and_repo_init_checks_out_the_sha(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            origin = root/'origin'
+            pin = root/'pin'
+            source = root/'source'
+            subprocess.run(['git', 'init', '-q', '-b', 'main', str(origin)], check=True)
+            subprocess.run(['git', '-C', str(origin), 'config', 'user.email', 't@example.com'], check=True)
+            subprocess.run(['git', '-C', str(origin), 'config', 'user.name', 't'], check=True)
+            subprocess.run(['git', '-C', str(origin), 'config', 'uploadpack.allowReachableSHA1InWant', 'true'], check=True)
+            manifest = origin/'pinned-manifest.xml'
+            manifest.write_text('<?xml version="1.0" encoding="UTF-8"?>\n<manifest>\n'
+                                '  <remote name="aosp" fetch="."/>\n'
+                                '  <default remote="aosp" revision="refs/heads/main"/>\n'
+                                '  <project name="toy" path="toy" revision="0123456789abcdef0123456789abcdef01234567"/>\n'
+                                '</manifest>\n')
+            subprocess.run(['git', '-C', str(origin), 'add', 'pinned-manifest.xml'], check=True)
+            subprocess.run(['git', '-C', str(origin), 'commit', '-q', '-m', 'init'], check=True)
+            revision = subprocess.check_output(['git', '-C', str(origin), 'rev-parse', 'HEAD'], text=True).strip()
+            commands = sync.pin_commands(str(pin), str(origin), revision)
+            commands[0] = ['git', 'init', '-q', '-b', 'main', str(pin)]
+            for _attempt in (1, 2):
+                for command in commands:
+                    subprocess.run(command, check=True)
+            self.assertEqual(subprocess.check_output(['git', '-C', str(pin), 'rev-parse', 'HEAD'], text=True).strip(), revision)
+            partial = root/'partial'
+            subprocess.run(['git', 'init', '-q', '-b', 'main', str(partial)], check=True)
+            subprocess.run(['git', '-C', str(partial), 'config', 'remote.origin.url', str(origin)], check=True)
+            for command in sync.pin_commands(str(partial), str(origin), revision)[1:]:
+                subprocess.run(command, check=True)
+            self.assertEqual(subprocess.check_output(['git', '-C', str(partial), 'rev-parse', 'HEAD'], text=True).strip(), revision)
+            repo = shutil.which('repo')
+            if repo is None:
+                return
+            source.mkdir()
+            init = sync.repo_init_command(str(pin), revision, 'pinned-manifest.xml')
+            init[0] = repo
+            subprocess.run(init, cwd=source, check=True)
+            head = subprocess.check_output(['git', '-C', str(source/'.repo/manifests'), 'rev-parse', 'HEAD'], text=True).strip()
+            self.assertEqual(head, revision)
 
 
 if __name__ == '__main__':

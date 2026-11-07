@@ -3,6 +3,8 @@
 import argparse
 import hashlib
 import json
+import os
+import signal
 import subprocess
 import time
 from pathlib import Path
@@ -17,6 +19,9 @@ SOURCE = '/mnt/disks/mustang-data/roseos/source'
 PIN = '/mnt/disks/mustang-data/roseos/roseos-pin'
 ORIGIN = 'https://github.com/Immortal-Protocols/RoseOS-1.git'
 MANIFEST_CHECKOUT = '.repo/manifests'
+PIN_REF = 'mustang-pin'
+LOG_ROOT = '/mnt/disks/mustang-data/roseos/sync-logs'
+MAX_STDOUT_RECEIPT = 8 * 1024 * 1024
 USER = 'mustang-runner'
 SYNC_TIMEOUT_SECONDS = 10800
 STOP_ARGV = ['python3', 'scripts/mustang_controller.py', 'stop', '--ownership-record']
@@ -38,6 +43,22 @@ def install_dir(path):
     return ['sudo', 'install', '-d', '-o', USER, '-g', USER, '-m', '0750', path]
 
 
+def pin_commands(pin, origin, revision):
+    """Idempotent pin setup. config overwrites a remote left by a failed fetch."""
+    return [
+        ['git', 'init', pin],
+        ['git', '-C', pin, 'config', 'remote.origin.url', origin],
+        ['git', '-C', pin, 'config', 'remote.origin.fetch', '+refs/heads/*:refs/remotes/origin/*'],
+        ['git', '-C', pin, 'fetch', '--depth', '1', 'origin', revision],
+        ['git', '-C', pin, 'checkout', '--detach', revision],
+        ['git', '-C', pin, 'branch', '-f', PIN_REF, revision],
+    ]
+
+
+def repo_init_command(pin, revision, manifest):
+    return ['repo', 'init', '-u', pin, '-b', revision, '--manifest-upstream-branch', PIN_REF, '-m', manifest]
+
+
 def steps(env=None):
     """Bootstrap the pinned RoseOS tree on the builder, then sync only after that checkout matches."""
     if env is not None and not isinstance(env, dict):
@@ -50,19 +71,18 @@ def steps(env=None):
          'argv': ['findmnt', '--noheadings', '--output', 'UUID', '--target', '/mnt/disks/mustang-data']},
         {'name': 'pin-dir', 'limit': 60, 'argv': install_dir(PIN)},
         {'name': 'source-dir', 'limit': 60, 'argv': install_dir(SOURCE)},
-        {'name': 'git-init', 'limit': 60, 'argv': as_runner(['git', 'init', PIN], '/tmp')},
-        {'name': 'git-remote', 'limit': 60,
-         'argv': as_runner(['git', '-C', PIN, 'remote', 'add', 'origin', ORIGIN], '/tmp')},
-        {'name': 'git-fetch', 'limit': 600,
-         'argv': as_runner(['git', '-C', PIN, 'fetch', '--depth', '1', 'origin', REVISION], '/tmp')},
-        {'name': 'git-checkout', 'limit': 60,
-         'argv': as_runner(['git', '-C', PIN, 'checkout', '--detach', REVISION], '/tmp')},
+        {'name': 'git-init', 'limit': 60, 'argv': as_runner(pin_commands(PIN, ORIGIN, REVISION)[0], '/tmp')},
+        {'name': 'git-url', 'limit': 60, 'argv': as_runner(pin_commands(PIN, ORIGIN, REVISION)[1], '/tmp')},
+        {'name': 'git-fetchspec', 'limit': 60, 'argv': as_runner(pin_commands(PIN, ORIGIN, REVISION)[2], '/tmp')},
+        {'name': 'git-fetch', 'limit': 600, 'argv': as_runner(pin_commands(PIN, ORIGIN, REVISION)[3], '/tmp')},
+        {'name': 'git-checkout', 'limit': 60, 'argv': as_runner(pin_commands(PIN, ORIGIN, REVISION)[4], '/tmp')},
+        {'name': 'git-branch', 'limit': 60, 'argv': as_runner(pin_commands(PIN, ORIGIN, REVISION)[5], '/tmp')},
         {'name': 'pin-head', 'limit': 60, 'expect': REVISION,
          'argv': as_runner(['git', '-C', PIN, 'rev-parse', 'HEAD'], '/tmp')},
         {'name': 'pin-hash', 'limit': 60, 'expect': MANIFEST_SHA+'  '+PIN+'/os/pinned-manifest.xml',
          'argv': as_runner(['sha256sum', PIN+'/os/pinned-manifest.xml'], '/tmp')},
         {'name': 'repo-init', 'limit': 600,
-         'argv': as_runner(['repo', 'init', '-u', PIN, '-b', REVISION, '-m', 'os/pinned-manifest.xml'], SOURCE)},
+         'argv': as_runner(repo_init_command(PIN, REVISION, 'os/pinned-manifest.xml'), SOURCE)},
         {'name': 'manifest-head', 'limit': 60, 'expect': REVISION,
          'argv': as_runner(['git', '-C', MANIFEST_CHECKOUT, 'rev-parse', 'HEAD'], SOURCE)},
         {'name': 'manifest-hash', 'limit': 60,
@@ -268,20 +288,67 @@ def run_bounded(argv, timeout, spawn, stop, clock, sleep):
         raise ValueError('source sync failed and the VM stop was requested')
 
 
-def spawn_subprocess(argv):
-    proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+def spawn_subprocess(argv, log_dir=None):
+    """Write step output to private files. A full pipe is not polled, so it would deadlock."""
+    directory = Path(log_dir) if log_dir is not None else Path(LOG_ROOT)
+    directory.mkdir(parents=True, exist_ok=True)
+    os.chmod(directory, 0o700)
+    stamp = str(time.time_ns())
+    stdout_path = directory/(stamp+'.stdout')
+    stderr_path = directory/(stamp+'.stderr')
+    stdout_handle = os.fdopen(os.open(stdout_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), 'wb')
+    stderr_handle = os.fdopen(os.open(stderr_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), 'wb')
+    try:
+        proc = subprocess.Popen(argv, stdout=stdout_handle, stderr=stderr_handle, start_new_session=True)
+    finally:
+        stdout_handle.close()
+        stderr_handle.close()
 
     class Bound:
         def poll(self):
             return proc.poll()
 
         def kill(self):
-            proc.kill()
+            try:
+                os.killpg(proc.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                return
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                try:
+                    os.killpg(proc.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                proc.wait(timeout=5)
 
         def output(self):
-            stdout, _stderr = proc.communicate()
-            return stdout
+            size = stdout_path.stat().st_size
+            with stdout_path.open('rb') as handle:
+                data = handle.read(MAX_STDOUT_RECEIPT)
+            if size > MAX_STDOUT_RECEIPT:
+                return data.decode(errors='replace')
+            return data.decode()
+
+        @property
+        def stdout_path(self):
+            return stdout_path
+
+        @property
+        def stderr_path(self):
+            return stderr_path
     return Bound()
+
+
+def cancellation_handler(holder, ownership, stop):
+    """SIGTERM kills the current step and requests VM stop. SIGKILL still ends at 14400 seconds."""
+    def handler(signum, _frame):
+        proc = holder.get('proc')
+        if proc is not None:
+            proc.kill()
+        stop(stop_request(ownership, 'source-sync-cancelled'))
+        raise SystemExit(4)
+    return handler
 
 
 def request_stop(ownership, reason):
@@ -341,6 +408,8 @@ def orchestrate(approval, ownership, spawn, stop, clock, sleep, root=ROOT):
     return {'schema': 'roseos.mustang-source-sync-run.v1', 'admitted': 'source-sync-only', 'executed': True,
             'observed': observed, 'historical': {'oidcExercised': False},
             'compileAuthorized': False, 'signAuthorized': False, 'runtimeBound': False,
+            'runnerCrashStopSeconds': mustang_lane.CONFIRMED_STOP['seconds'],
+            'cancellation': 'SIGTERM kills the step process group and requests VM stop. SIGKILL still ends at the runner 14400 second stop.',
             'recipeSha256': admitted['recipeSha256']}
 
 
@@ -365,6 +434,7 @@ def main(argv=None):
         print('source sync admission is closed')
         return 4
     sent = {'done': False}
+    holder = {}
 
     def stop_once(detail):
         if sent['done']:
@@ -372,17 +442,26 @@ def main(argv=None):
         sent['done'] = True
         subprocess.run(detail['argv'], check=False)
 
+    def spawn(argv):
+        proc = spawn_subprocess(argv)
+        holder['proc'] = proc
+        return proc
+
+    previous = signal.signal(signal.SIGTERM, cancellation_handler(holder, args.ownership_record, stop_once))
     try:
-        approval = json.loads(Path(args.approval).read_text())
-        receipt = orchestrate(approval, args.ownership_record, spawn_subprocess, stop_once, time.monotonic, time.sleep)
-    except (OSError, ValueError, json.JSONDecodeError):
-        if args.ownership_record and not sent['done']:
-            try:
-                stop_once(stop_request(args.ownership_record, 'source-sync-failed'))
-            except ValueError:
-                pass
-        print('source sync failed and the VM stop was requested')
-        return 4
+        try:
+            approval = json.loads(Path(args.approval).read_text())
+            receipt = orchestrate(approval, args.ownership_record, spawn, stop_once, time.monotonic, time.sleep)
+        except (OSError, ValueError, json.JSONDecodeError):
+            if args.ownership_record and not sent['done']:
+                try:
+                    stop_once(stop_request(args.ownership_record, 'source-sync-failed'))
+                except ValueError:
+                    pass
+            print('source sync failed and the VM stop was requested')
+            return 4
+    finally:
+        signal.signal(signal.SIGTERM, previous)
     print(json.dumps(receipt, sort_keys=True))
     return 0
 
