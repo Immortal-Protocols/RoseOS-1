@@ -1,0 +1,72 @@
+{
+  "basis": "The receipt object is the stdout of scripts/mustang_source_sync.py run --execute on source job 128515080622. Provenance is that workflow run's job record. The 2026-11-06 infrastructure readback is not rewritten.",
+  "buildAuthorized": false,
+  "freshnessForever": false,
+  "pristine": false,
+  "provenance": {
+    "event": "workflow_dispatch",
+    "headBranch": "main",
+    "headSha": "c89d530cda33354ec593c1fb1338aa50e5dc7484",
+    "jobs": {
+      "builder": {
+        "conclusion": "skipped"
+      },
+      "cleanup": {
+        "clearMetadata": "success",
+        "completedAt": "2026-11-07T21:19:22Z",
+        "conclusion": "success",
+        "group5Sweep": "success",
+        "id": 128531518997,
+        "stop": "success"
+      },
+      "enroll": {
+        "clearMetadata": "success",
+        "conclusion": "success",
+        "id": 128514935513
+      },
+      "publisher": {
+        "conclusion": "skipped"
+      },
+      "signer": {
+        "conclusion": "skipped"
+      },
+      "source": {
+        "conclusion": "success",
+        "id": 128515080622
+      }
+    },
+    "runAttempt": "1",
+    "workflow": ".github/workflows/mustang-ota-dedicated.yml",
+    "workflowRunId": "42409634329"
+  },
+  "receipt": {
+    "admitted": "source-sync-only",
+    "authenticatedStop": false,
+    "cancellation": "SIGTERM kills the step process group only. The guest does not stop the VM. Workflow cleanup performs the owned STOP. The instance maxRunDuration remains 14400 seconds.",
+    "compileAuthorized": false,
+    "executed": true,
+    "historical": {
+      "oidcExercised": false
+    },
+    "observed": {
+      "disk": "4183bff8-6be4-46bb-a641-2193d19813ee",
+      "instance": "5585425566393384049",
+      "manifest-hash": "32d30e70ee59d373a17fe8090bdded898afa80651f27c331caca4578b3008888",
+      "manifest-head": "2ac24c5475de121ebe4e9e6a5c1a404ef44aa9c8",
+      "pin-hash": "32d30e70ee59d373a17fe8090bdded898afa80651f27c331caca4578b3008888",
+      "pin-head": "2ac24c5475de121ebe4e9e6a5c1a404ef44aa9c8",
+      "projectCount": 1057,
+      "resolvedSha256": "32d30e70ee59d373a17fe8090bdded898afa80651f27c331caca4578b3008888"
+    },
+    "recipeSha256": "0af7e942f7baf3ec0594d01b6b75bfdd40f5e6514f099a6ec8564816b2e3b28c",
+    "runnerCrashStopSeconds": 14400,
+    "runtimeBound": false,
+    "schema": "roseos.mustang-source-sync-run.v1",
+    "signAuthorized": false
+  },
+  "receiptSha256": "5e4012c279d5a7be5bed6810a9e490dffd087bc0ebd9efaab5c3230a5013b52c",
+  "runtimeProvisioned": false,
+  "schema": "roseos.mustang-source-sync-evidence.v1",
+  "signingAttested": false,
+  "toolsAttested": false
+}

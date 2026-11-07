@@ -318,7 +318,7 @@ class EnrollmentTest(unittest.TestCase):
         self.assertEqual(runtime['status'], 'unbound')
         self.assertEqual(runtime['appInputsRecord'], 'os/app-inputs/frankel-2026110704.json')
         self.assertIsNone(runtime['signingRouteEvidence'])
-        self.assertIsNone(runtime['sourceEvidence'])
+        self.assertEqual(runtime['sourceEvidence'], 'os/build-only/mustang-source-sync-42409634329.json')
         self.assertIsNone(runtime['baselineTargetFiles'])
         self.assertEqual(controller.start_gate(runtime, {'MUSTANG_DRY_RUN': 'true'}), 'infrastructure-host-check')
         with self.assertRaisesRegex(ValueError, 'not admitted'):

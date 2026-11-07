@@ -443,7 +443,7 @@ class HostedSignGateTest(unittest.TestCase):
         runtime = json.loads((ROOT / 'os/build-only/mustang-runtime.json').read_text())
         self.assertEqual(runtime['status'], 'unbound')
         self.assertIsNone(runtime['signingRouteEvidence'])
-        self.assertIsNone(runtime['sourceEvidence'])
+        self.assertEqual(runtime['sourceEvidence'], 'os/build-only/mustang-source-sync-42409634329.json')
         self.assertFalse(runtime['publication']['enabled'])
 
     def test_each_peak_term_and_a_missing_bound_deny_before_secrets(self):
