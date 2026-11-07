@@ -38,7 +38,7 @@ Open the loopback dashboard at `http://127.0.0.1:8091`, choose **Pair phone**, a
 
 ## Start on Linux/cloud
 
-Use the same command with `--cloud-audio /private/audio.json --pair-host rose.example.com`. The advertised DNS/IPv4 host must already reach this backend's pinned TLS listener (default 8443). This flag only fills the existing QR host field; it creates no DNS, network route, certificate or proxy configuration. Pairing management/export stays on the loopback dashboard; use an already authorized tunnel for access. Keep the dashboard off the public listener.
+Use the same command with `--cloud-audio /private/audio.json --pair-host rose.tailnet-name.ts.net`. The advertised Tailscale MagicDNS/IPv4 host must already reach this backend's pinned TLS listener (default 8443). This flag only fills the existing QR host field; it creates no DNS, network route, certificate or proxy configuration. Pairing management/export stays on the loopback dashboard; use an already authorized tunnel for access. Keep the dashboard off the public listener.
 
 Linux voice reuses `workspace/models/rose_cloud`'s `nomlx`, listener and Phonon providers. Supply existing pinned local assets and installed runtime dependencies (NumPy, SciPy, Pillow, SoundFile, FastAPI, Uvicorn, websockets, cryptography, PyTorch, transformers, onnxruntime, ptts). See that directory's README for model revisions and library requirements. Do not install the Mac MLX requirements on Linux. The loader verifies its existing asset pins and fails if they are missing; it does not download weights or revive vLLM/the historical cloud stack.
 

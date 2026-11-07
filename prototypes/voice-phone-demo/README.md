@@ -48,17 +48,17 @@ Things to try:
 - "Text Mom I'll call her tonight", then "actually, make that tomorrow."
 - The **Simulate incoming text** buttons: Rose mentions the text at the next quiet moment.
 
-## The real phone, over USB, Wi-Fi or Tailscale
+## The real phone, over Tailscale
 
 `--phone real` replaces the fake phone with an Android phone running Rose Agent
-(`workspace/rose-agent/`; protocol in `rose/realphone.py`). Over USB the phone
-reaches Rose through `adb reverse tcp:8091 tcp:8091`. Without a cable, click
-**Pair phone** in the dashboard (or run `.venv/bin/python -m rose.pair`) and
-scan the QR code from Rose Agent's **Pair with Mac** menu item. After that the
-phone reconnects over the same Wi-Fi or from anywhere on your Tailscale network,
-through a TLS listener on port 8443 that accepts only paired, signed requests.
-Setup and the security model are in [REMOTE.md](REMOTE.md); `--no-remote` turns
-the listener off.
+(`workspace/rose-agent/`; protocol in `rose/realphone.py`). Connect Tailscale on
+both devices using the same tailnet. Click **Pair phone** in the Mac dashboard
+(or run `.venv/bin/python -m rose.pair`), then scan its QR from Rose Agent's
+**Pair with Rose** menu. The phone reconnects through the pinned TLS listener
+on port 8443 after network or app changes. Pairing advertises only full MagicDNS
+names and Tailscale IPv4 addresses; it reports a disconnected Tailscale client
+instead of falling back to LAN or USB. The dashboard stays on localhost.
+Setup and the security model are in [REMOTE.md](REMOTE.md).
 
 **She sees the screen.** The brain is a vision-language model, and with the
 real phone both Rose and her phone agent look at screenshots (Rose Agent's

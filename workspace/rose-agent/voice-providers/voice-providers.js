@@ -302,8 +302,7 @@
    }
   };
  }
- // Local Rose: the models run on the Mac, reached over Wi-Fi or Tailscale once paired by QR code, or over
- // USB before that (LocalRoseConnection). The native LocalRoseLink does the audio
+ // Local Rose: the models run on the Mac, reached over Tailscale once paired by QR code (LocalRoseConnection). The native LocalRoseLink does the audio
  // (voice-call capture with Android's echo canceller; a player that reports what was actually heard)
  // and Rose listens, decides, speaks and drives the phone herself, so this maps its events onto the contract.
  let localConnections=0;
@@ -315,7 +314,7 @@
    let onEvent=null;
    const handle={close:async()=>{if(closed)return;closed=true;if(root.localRoseEvent===onEvent)root.localRoseEvent=null;root.Native?.localRoseStop(link);tasks.end();},setMuted:v=>root.Native.localRoseMute(!!v),sendContext:()=>{},sendMessage:()=>{},inputLevel:()=>input,outputLevel:()=>output};
    const fail=message=>{clearTimeout(timer);if(!live){void handle.close();reject(Error(message));}};
-   const unpaired='Not paired: open the menu and choose Pair with Rose';
+   const unpaired='Connect Tailscale on the phone and backend, then choose Pair with Rose in the menu';
    const timer=setTimeout(()=>fail('Rose is not reachable. Check that the paired backend is running and reachable from this phone.'),8000);
    root.localRoseEvent=onEvent=m=>{
     if(closed)return;

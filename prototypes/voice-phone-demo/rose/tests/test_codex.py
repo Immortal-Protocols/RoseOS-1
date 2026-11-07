@@ -1019,7 +1019,7 @@ class StorageAndContract(unittest.TestCase):
         self.assertEqual(calls,['capabilities'])
 
     def test_cloud_hosts_use_existing_qr_grammar(self):
-        self.assertEqual(configured_hosts(['Rose.Example.com','100.90.1.2']),['rose.example.com','100.90.1.2'])
+        self.assertEqual(configured_hosts(['Rose.tail1.ts.net','100.90.1.2']),['rose.tail1.ts.net','100.90.1.2'])
         for host in ('https://example.com','user:password@example.com','a/b','999.1.1.1'):
             with self.assertRaises(ValueError):configured_hosts([host])
 

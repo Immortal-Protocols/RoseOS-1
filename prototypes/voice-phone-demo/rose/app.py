@@ -8,7 +8,7 @@ FastAPI on 127.0.0.1 carries the dashboard, the browser's audio socket and
 the event stream; the MLX runtime thread runs every model; the conductor
 thread decides who speaks. A second listener in the same event loop (TLS on
 0.0.0.0:8443, rose/remote.py) lets a paired phone reach the same websockets
-over Wi-Fi or Tailscale; it serves nothing else (see REMOTE.md). The server comes up first and the models load
+over Tailscale; it serves nothing else (see REMOTE.md). The server comes up first and the models load
 behind it, reporting progress as ``status`` events, so the page is never dead.
 
 Spoken input without a microphone (``POST /api/say``) goes through macOS
@@ -1300,12 +1300,10 @@ def build_app(server: Server, remote: Remote | None = None) -> FastAPI:
 
     @app.websocket("/ws/phone")
     async def ws_phone(ws: WebSocket) -> None:
-        # The unauthenticated USB path. A paired phone never uses it (it signs in on the remote
-        # port), so while one is paired and the listener is up this path stays shut.
-        if remote is not None and remote.listening and remote.devices.has_active():
+        # Phone control always uses the signed Tailscale endpoint when remote mode is on.
+        if remote is not None:
             await ws.accept()
-            await ws.close(code=PAIRED_ONLY, reason="a phone is paired: it connects over Wi-Fi or Tailscale "
-                                                    "(remove it under Pair phone to use USB)")
+            await ws.close(code=PAIRED_ONLY, reason="Pair Rose Agent over Tailscale; unsigned USB phone control is unavailable")
             return
         await server.serve_phone(ws)
 
@@ -1318,7 +1316,7 @@ def build_app(server: Server, remote: Remote | None = None) -> FastAPI:
 
 # SIGHUP too: closing the terminal should stop Rose cleanly (main's finally saves lastSeen).
 STOP_SIGNALS = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
-PAIRED_ONLY = 4009  # /ws/phone close code on the dashboard while a phone is paired
+PAIRED_ONLY = 4009  # Phone control uses the signed Tailscale listener, never implicit USB.
 
 
 class _Uvicorn(uvicorn.Server):
@@ -1401,7 +1399,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                         "or codex: GPT 6.1 Terra Fast via Sign in with ChatGPT")
     p.add_argument("--transcript-dir", help="durable private transcript directory (Codex mode)")
     p.add_argument("--cloud-audio", help="Linux voice provider JSON with existing local model paths")
-    p.add_argument("--pair-host", action="append", default=[], help="advertised DNS/IPv4 host for the shared QR; repeatable")
+    p.add_argument("--pair-host", action="append", default=[], help="Tailscale MagicDNS/IPv4 host for the shared QR; repeatable")
     p.add_argument("--port", type=int, default=8091)
     p.add_argument("--voice", default="zoey", help="Phonon voice name (see /api/state voices)")
     p.add_argument("--no-browser-audio", dest="browser_audio", action="store_false",

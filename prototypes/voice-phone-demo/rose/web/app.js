@@ -797,7 +797,7 @@ function toast(text, kind = '') {
 
 // --------------------------------------------------------------- pairing
 // "Pair phone": a one-time QR code (10 minutes, single use) from /api/pair/new
-// that Rose Agent scans to reach this Mac over Wi-Fi or Tailscale; the list of
+// that Rose Agent scans to reach this Mac over Tailscale; the list of
 // paired phones with Remove buttons. The server keeps the code; this page only
 // shows the QR image and polls /api/pair/status until a phone uses it.
 // note: a message that replaces the countdown until the next code (e.g. the lockout).

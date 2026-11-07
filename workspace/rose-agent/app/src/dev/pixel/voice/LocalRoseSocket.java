@@ -5,14 +5,12 @@ import java.io.DataInputStream;
 import java.io.EOFException;
 import java.io.IOException;
 import java.io.OutputStream;
-import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.net.SocketTimeoutException;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.SecureRandom;
 import java.util.Base64;
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.Locale;
 import java.util.Map;
@@ -74,21 +72,8 @@ final class LocalRoseSocket {
         this.in = new DataInputStream(new BufferedInputStream(socket.getInputStream(), 1 << 16));
     }
 
-    /** Plain ws:// to host:port (the USB path). */
-    static LocalRoseSocket connect(String host, int port, String path) throws IOException {
-        Socket s = new Socket();
-        s.setTcpNoDelay(true);
-        s.connect(new InetSocketAddress(host, port), 2000);
-        return over(s, host + ":" + port, path, Collections.<String, String>emptyMap());
-    }
-
-    /** The websocket upgrade on an already connected socket; the socket is closed if it fails. */
-    static LocalRoseSocket over(Socket s, String hostPort, String path, Map<String, String> headers) throws IOException {
-        return over(s, s, hostPort, path, headers);
-    }
-
     /**
-     * As above, for a layered socket s (TLS) over the TCP socket raw; {@link #close} closes raw
+     * The websocket upgrade over layered socket s (TLS) and TCP socket raw; {@link #close} closes raw
      * first so a write blocked inside s cannot hold the close up.
      */
     static LocalRoseSocket over(Socket s, Socket raw, String hostPort, String path, Map<String, String> headers) throws IOException {
