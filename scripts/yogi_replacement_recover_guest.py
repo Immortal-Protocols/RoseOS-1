@@ -121,6 +121,43 @@ def _strings(value):
             yield from _strings(item)
 
 
+_UNIT_ACTIVE = {"active", "inactive", "failed", "unknown", "activating"}
+_UNIT_ENABLED = {"enabled", "disabled", "static", "masked", "indirect", "unknown"}
+def _service_unit(value):
+    return isinstance(value, dict) and set(value) == {"active", "enabled"} \
+        and value["active"] in _UNIT_ACTIVE and value["enabled"] in _UNIT_ENABLED
+
+
+def _service_problems(value):
+    if not isinstance(value, dict) or set(value) != {
+            "ssh", "sshd", "guestAgent", "listen", "port22", "config"}:
+        return ["services"]
+    if not _service_unit(value["ssh"]) or not _service_unit(value["sshd"]) or not _service_unit(value["guestAgent"]):
+        return ["services"]
+    listen = value["listen"]
+    if not isinstance(listen, list) or len(listen) > 4:
+        return ["services"]
+    for item in listen:
+        if not isinstance(item, str) or not re.fullmatch(r"[0-9A-Za-z:.\[\]]{2,60}:22", item):
+            return ["services"]
+    if value["port22"] not in ("listening", "absent", "unreadable"):
+        return ["services"]
+    config = value["config"]
+    if not isinstance(config, dict) or set(config) != {
+            "port", "listen", "passwordAuth", "permitRoot", "pubkey", "matchBlocks"}:
+        return ["services"]
+    if config["port"] not in ("22", "other", "absent", "unreadable"):
+        return ["services"]
+    if config["listen"] not in ("any", "localhost", "other", "absent", "unreadable"):
+        return ["services"]
+    for key in ("passwordAuth", "permitRoot", "pubkey"):
+        if config[key] not in ("yes", "no", "unset", "unreadable", "prohibit-password"):
+            return ["services"]
+    if not isinstance(config["matchBlocks"], int) or not 0 <= config["matchBlocks"] <= 20:
+        return ["services"]
+    return []
+
+
 def _mode_token(value):
     return value == "unknown" or bool(re.fullmatch(r"[0-7]{4}", value or ""))
 
@@ -134,8 +171,13 @@ def _fp_map(value):
 def validate_shape(receipt, binding):
     """Structural gate for a receipt. A well-formed lie can still pass; this only rejects the wrong shape."""
     problems = binding_problems(binding)
-    if not isinstance(receipt, dict) or set(receipt) != TOP_KEYS:
+    if not isinstance(receipt, dict):
         return ["receipt-keys"]
+    extra = set(receipt) - TOP_KEYS
+    if extra - {"services"} or TOP_KEYS - set(receipt):
+        return ["receipt-keys"]
+    if "services" in receipt and _service_problems(receipt["services"]):
+        return ["services"]
     if receipt.get("purpose") not in ("repair", "inspect", "rotate", "rotate-publish"):
         return ["purpose"]
     if receipt["schema"] != RECEIPT_SCHEMA or receipt["operationId"] != binding["operationId"]:
@@ -1882,6 +1924,105 @@ def journal_summary(root):
             "hasCompleteReceipt": complete, "unrecognized": min(unrecognized, 20)}
 
 
+def _unit_token(root, verb, name, allowed):
+    if root != "/":
+        return "unknown"
+    try:
+        import subprocess
+        result = subprocess.run(["/bin/systemctl", verb, name], capture_output=True, text=True, timeout=10)
+        text = (result.stdout or "").strip().splitlines()
+        token = text[0] if text else "unknown"
+    except (OSError, subprocess.TimeoutExpired):
+        return "unknown"
+    return token if token in allowed else "unknown"
+
+
+def _listen_addresses(root):
+    found = []
+    for name in ("tcp", "tcp6"):
+        try:
+            data, _info = read_file(root, "/proc/net/" + name, 1 << 20)
+        except OSError:
+            continue
+        for raw in data.decode(errors="replace").splitlines()[1:]:
+            parts = raw.split()
+            if len(parts) < 4 or parts[3] != "0A" or ":" not in parts[1]:
+                continue
+            address, port = parts[1].split(":", 1)
+            if port.lower() != "0016":
+                continue
+            if name == "tcp" and len(address) == 8:
+                raw_ip = bytes.fromhex(address)
+                shown = ".".join(str(b) for b in raw_ip[::-1]) + ":22"
+            elif name == "tcp6" and len(address) == 32:
+                shown = "[ipv6]:22" if set(address) != {"0"} else "[::]:22"
+            else:
+                continue
+            if shown not in found and len(found) < 4:
+                found.append(shown)
+    return found
+
+
+def _config_class(text):
+    port, listen, password, permit, pubkey, matches = "absent", "absent", "unset", "unset", "unset", 0
+    blocked = False
+    for raw in text.splitlines():
+        line = raw.split("#", 1)[0].strip()
+        if not line:
+            continue
+        parts = line.split()
+        key = parts[0].lower()
+        value = parts[1].lower() if len(parts) > 1 else ""
+        if key == "match":
+            matches += 1
+            blocked = True
+            continue
+        if blocked:
+            continue
+        if key == "port":
+            port = "22" if value == "22" else "other"
+        elif key == "listenaddress":
+            if value in ("0.0.0.0", "::", "*", "[::]"):
+                listen = "any"
+            elif value in ("127.0.0.1", "::1", "localhost"):
+                listen = "localhost"
+            else:
+                listen = "other"
+        elif key == "passwordauthentication":
+            password = value if value in ("yes", "no") else "other"
+        elif key == "permitrootlogin":
+            permit = value if value in ("yes", "no", "prohibit-password") else "other"
+        elif key == "pubkeyauthentication":
+            pubkey = value if value in ("yes", "no") else "other"
+    if password == "other":
+        password = "unset"
+    if permit == "other":
+        permit = "unset"
+    if pubkey == "other":
+        pubkey = "unset"
+    return {"port": port, "listen": listen, "passwordAuth": password, "permitRoot": permit,
+            "pubkey": pubkey, "matchBlocks": min(matches, 20)}
+
+
+def read_services(root):
+    """Read-only sshd, guest-agent, and port-22 facts. No service is started and no key is read."""
+    active = {"active", "inactive", "failed", "unknown", "activating"}
+    enabled = {"enabled", "disabled", "static", "masked", "indirect", "unknown"}
+    def unit(name):
+        return {"active": _unit_token(root, "is-active", name, active),
+                "enabled": _unit_token(root, "is-enabled", name, enabled)}
+    listen = _listen_addresses(root)
+    try:
+        data, _info = read_file(root, "/etc/ssh/sshd_config", 1 << 16)
+        config = _config_class(data.decode(errors="replace"))
+    except OSError:
+        config = {"port": "unreadable", "listen": "unreadable", "passwordAuth": "unreadable",
+                  "permitRoot": "unreadable", "pubkey": "unreadable", "matchBlocks": 0}
+    return {"ssh": unit("ssh.service"), "sshd": unit("sshd.service"),
+            "guestAgent": unit("google-guest-agent.service"), "listen": listen,
+            "port22": "listening" if listen else "absent", "config": config}
+
+
 def main(argv):
     root = "/"
     binding = identity = boot = None
@@ -2025,6 +2166,7 @@ def main(argv):
                     "possessMarkerLines": possess, "authPathsRead": paths, "possessComment": needle,
                     "possessMaterial": material},
         "journal": journal_summary(root),
+        "services": read_services(root),
     }
     emit(receipt)
     return 0 if problem == "none" else 1

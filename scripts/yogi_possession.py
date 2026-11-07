@@ -44,6 +44,7 @@ SPENT_INSPECT_IDS = {
     '20ef6008b1ef78137d201de13176af42',
     '638e6e9039e41b7531697bb45066a616',
     'a5848d669170305750c61bc3effdec9f',
+    '41e30832b719be117c73c13c0459cb44',
 }
 # Recorded rotate-publish id prefix. The full 32 hex id was not saved; no fresh binding may reuse it.
 SPENT_BINDING_PREFIXES = ('ce79ffe4',)
@@ -62,6 +63,14 @@ SPENT_ZONE_OPERATIONS = frozenset({
     'operation-1794068240866-65fb210331ca7-8bb70fef-dd412780',
     'operation-1794069573860-65fb25fa6fb6b-2cdbb51b-2d04c90d',
     'operation-1794069640347-65fb2639d7df7-42a82e9e-f9247439',
+    'operation-1794073461023-65fb347586360-98ed018a-b7696fb8',
+    'operation-1794073473856-65fb3481c3563-3c8452c4-3d020ae2',
+    'operation-1794073480074-65fb3487b162f-8c7d56fd-4f86d627',
+    'operation-1794073528347-65fb34b5baa80-6178a243-76f2fb80',
+    'operation-1794073566065-65fb34d9b3373-1e7494ff-6a693180',
+    'operation-1794073568394-65fb34dbebee4-180141f9-b48db238',
+    'operation-1794073760446-65fb3593139e7-3bb91b6c-f8cbdb4b',
+    'operation-1794073765555-65fb3597f2ddd-7630e10f-130475d1',
 })
 GITHUB_CONTEXT = ('GITHUB_ACTIONS', 'ACTIONS_ID_TOKEN_REQUEST_URL', 'ACTIONS_ID_TOKEN_REQUEST_TOKEN',
                   'ACTIONS_RUNTIME_TOKEN', 'ACTIONS_RUNTIME_URL', 'ACTIONS_CACHE_URL', 'GITHUB_TOKEN')
@@ -684,6 +693,16 @@ def classify_ssh(returncode, lines, user, alias, stderr_lines=None):
     return 'unproven', _none()
 
 
+def classify_tunnel(text):
+    """Only IAP backend 4003 is retryable. IAM and every other tunnel error are fatal."""
+    lowered = text.lower() if isinstance(text, str) else ''
+    if '4003' in lowered and 'failed to connect to backend' in lowered:
+        return 'backend-4003'
+    if 'permission_denied' in lowered or 'permission denied' in lowered or 'iam_permission' in lowered:
+        return 'iam'
+    return 'fatal'
+
+
 def ssh_evidence(kind):
     """Positive evidence is only a completed session, a non-255 remote exit, or the exact denial."""
     if kind in ('success', 'not-json'):
@@ -791,6 +810,14 @@ def guest_key_removed(receipt, possession_id, material):
     if cleanup.get('possessComment') != comment or cleanup.get('possessMaterial') != material or not material:
         return False
     return cleanup.get('possessMarkerLines') == 0
+
+
+def _tunnel_outcome(result):
+    if isinstance(result, tuple) and len(result) == 4:
+        return result
+    ok, code, err = result
+    text = err.decode('utf-8', 'replace') if isinstance(err, bytes) else (err or '')
+    return bool(ok), code, text, ('ready' if ok else classify_tunnel(text))
 
 
 def _process_exited(proc):
@@ -957,11 +984,14 @@ def possession_run(driver, plan, identity_path, baseline=None):
                 raise Refused('metadata add is unresolved')
         login_ready = driver.wait_login_ready()
         if not login_ready.get('listenerReady'):
-            ssh_report = {'class': 'unproven', 'returncode': login_ready.get('returncode'),
+            ssh_report = {'class': login_ready.get('class') or 'unproven',
+                          'returncode': login_ready.get('returncode'),
                           'stderr': login_ready.get('stderr') or '', 'clientLog': '', 'argv': [],
-                          'attempts': 0, 'serverKeyAccepted': False, 'loginAccepted': False,
-                          'evidence': 'none', 'listenerReady': False, 'backendTcp22': False}
-            raise Refused('ssh listener-not-ready exit ' + str(login_ready.get('returncode')))
+                          'attempts': 0, 'tunnelAttempts': login_ready.get('attempts') or [],
+                          'serverKeyAccepted': False, 'loginAccepted': False,
+                          'evidence': 'none', 'listenerReady': False,
+                          'backendTcp22': False, 'possession': False}
+            raise Refused('ssh ' + ssh_report['class'] + ' exit ' + str(login_ready.get('returncode')))
         ssh_report = driver.ssh(plan['argv'], 60)
         kind = ssh_report.get('class')
         if kind == 'host-key-mismatch':
@@ -1057,6 +1087,8 @@ REFRESH_SECONDS = 45
 # BatchMode rejects authentication immediately. The guest agent is not waited on inside ssh.
 LOGIN_READY_SECONDS = 60
 IAP_READY_SECONDS = 45
+# One deadline for the guest-agent/sshd wait and recognized IAP 4003 retries. Not an auth retry.
+TRANSPORT_BUDGET = 120
 SSH_STDERR_CAP = 2048
 # Client-log bound used for classification. Storage is capped separately, after classification.
 SSH_LOG_BOUND = 65536
@@ -1496,24 +1528,66 @@ class GcloudDriver:
         return (head + tail).decode('utf-8', 'replace'), True
 
     def wait_login_ready(self):
-        """Local gcloud listener only. Acceptance is not backend TCP 22 and not possession."""
+        """Wait for the guest agent and sshd, then retry only IAP backend 4003 until one deadline.
+
+        A local accept after gcloud's own backend check is not an SSH session and not possession.
+        """
         started = self.clock()
-        try:
-            if self.iap_check is not None:
-                ok, code, err = self.iap_check()
-            else:
-                ok, code, err = self._iap_tcp()
-        except (OSError, subprocess.SubprocessError) as exc:
-            ok, code, err = False, None, type(exc).__name__
-        report = {'listenerReady': bool(ok), 'backendTcp22': False, 'possession': False,
-                  'returncode': code, 'stderr': sanitize_text(err), 'delaySeconds': 0}
-        if ok:
-            self.sleep(LOGIN_READY_SECONDS)
-            report['delaySeconds'] = LOGIN_READY_SECONDS
+        deadline = started + TRANSPORT_BUDGET
+        report = {'listenerReady': False, 'backendTcp22': False, 'backendEvidence': 'none',
+                  'possession': False, 'class': 'unproven', 'deadlineSeconds': TRANSPORT_BUDGET,
+                  'guestWaitSeconds': LOGIN_READY_SECONDS, 'delaySeconds': 0, 'elapsedSeconds': 0,
+                  'attempts': [], 'returncode': None, 'stderr': ''}
+        target = min(deadline, started + LOGIN_READY_SECONDS)
+        stalls = 0
+        while self.clock() < target:
+            before = self.clock()
+            self.sleep(min(POLL_SECONDS, max(0.0, target - before)))
+            if self.clock() <= before:
+                stalls += 1
+                if stalls >= 3:
+                    break
+        report['delaySeconds'] = round(self.clock() - started, 3)
+        while self.clock() < deadline and len(report['attempts']) < 40:
+            try:
+                if self.iap_check is not None:
+                    outcome = self.iap_check()
+                    ok, code, err, kind = _tunnel_outcome(outcome)
+                else:
+                    ok, code, err, kind = self._iap_once()
+            except (OSError, subprocess.SubprocessError) as exc:
+                ok, code, err, kind = False, None, type(exc).__name__, 'spawn'
+            text = sanitize_text(err, 240)
+            report['attempts'].append({'n': len(report['attempts']) + 1,
+                                       'elapsedSeconds': round(self.clock() - started, 3),
+                                       'returncode': code, 'class': kind, 'stderr': text})
+            report['returncode'] = code
+            report['stderr'] = text
+            report['class'] = 'ready' if ok else kind
+            if ok:
+                report['listenerReady'] = True
+                report['backendTcp22'] = True
+                report['backendEvidence'] = 'gcloud-iap-check'
+                break
+            if kind != 'backend-4003':
+                break
+            before = self.clock()
+            self.sleep(POLL_SECONDS)
+            if self.clock() <= before:
+                stalls += 1
+                if stalls >= 3:
+                    break
+            if self.clock() >= deadline:
+                break
         report['elapsedSeconds'] = round(self.clock() - started, 3)
         return report
 
     def _iap_tcp(self):
+        """One tunnel attempt. The readiness loop decides whether a 4003 is retried."""
+        ok, code, err, _kind = self._iap_once()
+        return ok, code, err
+
+    def _iap_once(self):
         """Accept on the local gcloud listener, then always reap the process group."""
         import socket
         try:
@@ -1521,7 +1595,7 @@ class GcloudDriver:
                 sock.bind(('127.0.0.1', 0))
                 port = sock.getsockname()[1]
         except OSError as exc:
-            return False, None, type(exc).__name__
+            return False, None, type(exc).__name__, 'spawn'
         argv = ['gcloud', 'compute', 'start-iap-tunnel', INSTANCE, '22',
                 '--local-host-port=127.0.0.1:' + str(port), '--zone', ZONE, '--project', PROJECT, '--quiet']
         try:
@@ -1531,7 +1605,7 @@ class GcloudDriver:
             except TypeError:
                 proc = self.popen(argv, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
         except (OSError, subprocess.SubprocessError, TypeError) as exc:
-            return False, None, type(exc).__name__
+            return False, None, type(exc).__name__, 'spawn'
         ok = False
         code = None
         err = b''
@@ -1568,7 +1642,12 @@ class GcloudDriver:
             captured = _teardown_process(proc)
         if not err:
             err = captured
-        return ok, code, err
+        if isinstance(err, bytes):
+            text = err.decode('utf-8', 'replace')
+        else:
+            text = err or ''
+        kind = 'ready' if ok else classify_tunnel(text)
+        return ok, code, text, kind
 
     def wait_refresh(self):
         self.sleep(REFRESH_SECONDS)

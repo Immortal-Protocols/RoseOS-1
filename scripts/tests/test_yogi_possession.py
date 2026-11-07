@@ -192,6 +192,8 @@ class PossessionTest(unittest.TestCase):
         self.assertFalse(yogi_possession.guest_key_removed(spent, operation, material))
         replayed = dict(spent, operationId='a5848d669170305750c61bc3effdec9f')
         self.assertFalse(yogi_possession.guest_key_removed(replayed, operation, material))
+        fresh = dict(spent, operationId='41e30832b719be117c73c13c0459cb44')
+        self.assertFalse(yogi_possession.guest_key_removed(fresh, operation, material))
 
         good = Driver(marker=0)
         done = yogi_possession.possession_run(good, plan, str(identity))
@@ -537,7 +539,8 @@ class PossessionTest(unittest.TestCase):
             }).encode()
 
         def case(start='ok', stop='ok', metadata='done', ssh_code=0, ssh_stderr=b'', ssh_log='',
-                 ssh_raise=None, iap=(True, 0, ''), receipt=None, popen=None, use_listener=False):
+                 ssh_raise=None, iap=(True, 0, ''), iap_script=None, clock=None, receipt=None,
+                 popen=None, use_listener=False):
             state = {'status': 'TERMINATED', 'items': dict(yogi_possession.POSSESSION_BASE),
                      'fingerprint': yogi_possession.POSSESSION_FINGERPRINT}
             commands, posts = [], []
@@ -652,12 +655,25 @@ class PossessionTest(unittest.TestCase):
                 self.assertTrue(request.full_url.endswith('/operations/' + op_name + '/wait'))
                 return Response(operation_body('PENDING'))
 
-            driver_args = {}
+            script_at = {'n': 0}
+
+            def check():
+                if iap_script is not None:
+                    item = iap_script[min(script_at['n'], len(iap_script) - 1)]
+                    script_at['n'] += 1
+                    return item
+                return iap
+
+            if clock is None:
+                sleep, now = (lambda _seconds: None), (lambda: 0)
+            else:
+                sleep, now = clock.sleep, clock
+            driver_args = {'sleep': sleep, 'clock': now}
             if use_listener:
                 driver_args['popen'] = popen
             else:
-                driver_args['iap_check'] = lambda: iap
-            driver = yogi_possession.GcloudDriver(run=run, opener=opener, sleep=lambda _seconds: None, clock=lambda: 0,
+                driver_args['iap_check'] = check
+            driver = yogi_possession.GcloudDriver(run=run, opener=opener,
                                                  inspect_out=str(Path(tempfile.mkdtemp()) / 'inspect'),
                                                  **driver_args)
             driver.possess_comment = 'roseos-yogi-possess-' + operation
@@ -818,8 +834,9 @@ class PossessionTest(unittest.TestCase):
         self.assertLessEqual(len(capped['ssh']['clientLog']), 2048)
 
         unready, unready_commands, _posts = case(iap=(False, 1, 'ERROR: failed to start the tunnel ya29.tunnel-token'))
-        self.assertEqual(unready['ssh']['class'], 'unproven')
+        self.assertEqual(unready['ssh']['class'], 'fatal')
         self.assertEqual(unready['ssh']['attempts'], 0)
+        self.assertEqual(len(unready['loginReady']['attempts']), 1)
         self.assertFalse(unready['serverKeyAccepted'] or unready['loginAccepted'] or unready['loginReady']['backendTcp22']
                          or unready['loginReady']['possession'] or unready['loginReady']['listenerReady'])
         self.assertFalse(any(argv[0] == 'ssh' for argv, _timeout in unready_commands))
@@ -834,11 +851,51 @@ class PossessionTest(unittest.TestCase):
             raise OSError('spawn failed')
 
         spawned, spawned_commands, _posts = case(use_listener=True, popen=spawn_fails)
-        self.assertEqual(spawned['ssh']['class'], 'unproven')
+        self.assertEqual(spawned['ssh']['class'], 'spawn')
+        self.assertEqual(len(spawned['loginReady']['attempts']), 1)
         self.assertFalse(any(argv[0] == 'ssh' for argv, _timeout in spawned_commands))
         self.assertTrue(spawned['stopped'] and spawned['metadataLoginRemoved'])
         self.assertIn('OSError', spawned['loginReady']['stderr'])
         self.assertFalse(spawned['loginReady']['listenerReady'] or spawned['loginReady']['backendTcp22'])
+
+        class Clock:
+            def __init__(self):
+                self.t = 0.0
+
+            def __call__(self):
+                return self.t
+
+            def sleep(self, seconds):
+                self.t += seconds
+
+        refused = ("ERROR: (gcloud.compute.start-iap-tunnel) While checking if a connection can be made: "
+                   "Error while connecting [4003: 'failed to connect to backend']. "
+                   "(Failed to connect to port 22)")
+        healthy, healthy_commands, _posts = case(
+            iap_script=[(False, 1, refused), (True, 0, 'Listening on port [127.0.0.1].')], clock=Clock())
+        self.assertTrue(healthy['loginReady']['listenerReady'] and healthy['loginReady']['backendTcp22'])
+        self.assertFalse(healthy['loginReady']['possession'])
+        self.assertGreaterEqual(healthy['loginReady']['attempts'][0]['elapsedSeconds'],
+                                yogi_possession.LOGIN_READY_SECONDS)
+        self.assertEqual([item['class'] for item in healthy['loginReady']['attempts']], ['backend-4003', 'ready'])
+        self.assertEqual(sum(argv[0] == 'ssh' for argv, _timeout in healthy_commands), 1)
+        self.assertLess(healthy['loginReady']['elapsedSeconds'], yogi_possession.TRANSPORT_BUDGET + 5)
+
+        exhausted, exhausted_commands, _posts = case(iap_script=[(False, 1, refused)], clock=Clock())
+        self.assertEqual(exhausted['ssh']['class'], 'backend-4003')
+        self.assertFalse(exhausted['loginReady']['listenerReady'] or exhausted['loginReady']['backendTcp22'])
+        self.assertGreaterEqual(len(exhausted['loginReady']['attempts']), 2)
+        self.assertTrue(all(item['class'] == 'backend-4003' for item in exhausted['loginReady']['attempts']))
+        self.assertGreaterEqual(exhausted['loginReady']['elapsedSeconds'], yogi_possession.TRANSPORT_BUDGET)
+        self.assertFalse(any(argv[0] == 'ssh' for argv, _timeout in exhausted_commands))
+        self.assertTrue(exhausted['stopped'] and exhausted['metadataLoginRemoved'])
+
+        denied_iam, iam_commands, _posts = case(
+            iap_script=[(False, 1, 'ERROR: (gcloud.compute.start-iap-tunnel) [PERMISSION_DENIED]')], clock=Clock())
+        self.assertEqual(denied_iam['ssh']['class'], 'iam')
+        self.assertEqual(len(denied_iam['loginReady']['attempts']), 1)
+        self.assertFalse(any(argv[0] == 'ssh' for argv, _timeout in iam_commands))
+        self.assertLess(denied_iam['loginReady']['elapsedSeconds'], yogi_possession.TRANSPORT_BUDGET)
 
         crashed, crashed_commands, _posts = case(ssh_raise='oserror')
         self.assertEqual(crashed['ssh']['class'], 'unproven')
@@ -868,9 +925,10 @@ class PossessionTest(unittest.TestCase):
         self.assertTrue(done['guestAuthenticated'] and done['guestKeyRemoved'] and done['clean'])
         self.assertFalse(done['hostKeyPinned'])
         self.assertEqual(done['ssh']['class'], 'success')
-        self.assertEqual(done['loginReady']['delaySeconds'], yogi_possession.LOGIN_READY_SECONDS)
-        self.assertTrue(done['loginReady']['listenerReady'])
-        self.assertFalse(done['loginReady']['backendTcp22'] or done['loginReady']['possession'])
+        self.assertEqual(done['loginReady']['guestWaitSeconds'], yogi_possession.LOGIN_READY_SECONDS)
+        self.assertTrue(done['loginReady']['listenerReady'] and done['loginReady']['backendTcp22'])
+        self.assertEqual(done['loginReady']['backendEvidence'], 'gcloud-iap-check')
+        self.assertFalse(done['loginReady']['possession'])
         self.assertEqual(done['inbound']['ruleCount'], 9)
         self.assertTrue(done['serverKeyAccepted'] and done['loginAccepted'])
         self.assertTrue(any('plan' in argv and '--possess-material' in argv for argv, _timeout in done_commands))
@@ -1469,7 +1527,9 @@ class PossessionTest(unittest.TestCase):
         stream.close()
         ready = driver.wait_login_ready()
         self.assertTrue(ready['listenerReady'])
-        self.assertFalse(ready['backendTcp22'] or ready['possession'])
+        self.assertEqual(ready['backendEvidence'], 'gcloud-iap-check')
+        self.assertTrue(ready['backendTcp22'])
+        self.assertFalse(ready['possession'])
 
         class Dead:
             returncode = 1
@@ -1528,7 +1588,7 @@ class PossessionTest(unittest.TestCase):
                                            sleep=sleep, clock=lambda: clock['t'])
         held_ok, _held_code, held_err = held._iap_tcp()
         self.assertTrue(held_ok)
-        self.assertEqual(held_err, b'')
+        self.assertEqual(held_err, '')
 
         directory = Path(tempfile.mkdtemp())
         child_file = directory / 'child'
