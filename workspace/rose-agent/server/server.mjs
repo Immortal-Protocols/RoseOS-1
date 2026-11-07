@@ -353,7 +353,7 @@ setInterval(()=>autoGenerator.tick(),30000).unref();
 codex.on('threadChanged',data=>{capture.attachTranscript(data.path);capture.record('runtime.provider_changed',data,captureContext());});
 await codex.init();capture.attachTranscript(codex.transcriptPath);capture.record('runtime.configuration',{taskModel:taskModelState(),decisions:decisionsConfig.read(),voiceRouting:voiceRouting.read(),visualTrial,observationBatching:observationBatchingConfig},captureContext());ready=true;console.log('CODEX_READY',codex.thread);setTimeout(()=>autoGenerator.tick(),2000).unref();
 function authorized(req){return deviceAuth.authorize(req,priv+'/pair-token');}
-function targetPhone(req){return !backgroundEnabled||peerIdentity(req)?.id===backgroundConfig.deviceId;}
+function targetPhone(req){return !backgroundEnabled||pairedPhone(req)?.id===backgroundConfig.deviceId;}
 async function body(req){const limit=req.url==='/bookmarks/capture'?1300000:req.url==='/glasses/photo'?750000:req.url?.startsWith("/music/")?2000000:req.url?.startsWith("/phone/commands/")?1500000:180000;let parts=[],n=0;for await(const p of req){n+=p.length;if(n>limit)throw new Error('Request too large');parts.push(p)}return JSON.parse(Buffer.concat(parts).toString()||'{}');}
 function answer(res,status,obj){res.writeHead(status,{'content-type':'application/json','cache-control':'no-store'});res.end(JSON.stringify(obj));}
 // POST /phone/commands from the paired phone itself carries the voice page's direct tools
