@@ -1,4 +1,5 @@
 """Offline checks for one-job Mustang enrollment. No token mint, metadata write, or VM call."""
+import hashlib
 import importlib.util
 import json
 import os
@@ -406,8 +407,13 @@ class EnrollmentTest(unittest.TestCase):
         self.assertEqual(plan['tools']['runner']['sha256'], enroll.RUNNER_APP['sha256'])
         self.assertNotIn('encoded_jit_config', plan)
         script = (ROOT/'scripts/mustang-ephemeral-guest.sh').read_text()
-        self.assertIn('./run.sh --jitconfig', script)
+        self.assertIn('ACTIONS_RUNNER_INPUT_JITCONFIG=$jit_config', script)
+        self.assertIn('export ACTIONS_RUNNER_INPUT_JITCONFIG', script)
+        self.assertIn('./run.sh || status=$?', script)
+        self.assertNotIn('--jitconfig', script)
         self.assertNotIn('exec ./run.sh', script)
+        self.assertNotIn('eval ', script)
+        self.assertNotIn('set -x', script)
         self.assertIn('trap cleanup EXIT', script)
         self.assertIn('-o "$outfile"', script)
         self.assertIn('guest-attributes/mustang/jit-fetched', script)
@@ -646,7 +652,9 @@ class WorkflowCliContractTest(unittest.TestCase):
             calls.append(list(argv))
             text = ' '.join(argv)
             if 'get-guest-attributes' in argv:
-                return subprocess.CompletedProcess(argv, 0, '{"value":"1"}\n', '')
+                digest = hashlib.sha256(secret.encode()).hexdigest()
+                body = json.dumps([{'key': 'jit-fetched', 'namespace': 'mustang', 'value': digest}])
+                return subprocess.CompletedProcess(argv, 0, body+'\n', '')
             if 'describe' in argv:
                 seen_describe = sum(1 for call in calls if 'describe' in call)
                 if seen_describe % 2 == 1:
@@ -732,33 +740,216 @@ class WorkflowCliContractTest(unittest.TestCase):
         guest = (ROOT/'scripts/mustang-ephemeral-guest.sh').read_text()
         self.assertIn('instance/attributes/'+enroll.METADATA_KEY, guest)
         self.assertIn('guest-attributes/mustang/jit-fetched', guest)
-        self.assertIn('--jitconfig', guest)
+        self.assertIn('ACTIONS_RUNNER_INPUT_JITCONFIG', guest)
+        self.assertNotIn('--jitconfig', guest)
+
+
+class GuestAttributeReadbackTest(unittest.TestCase):
+    def real_list(self, value):
+        return [{'key': 'jit-fetched', 'namespace': 'mustang', 'value': value}]
+
+    def test_current_config_matches_the_gcloud_list_and_stale_values_do_not(self):
+        current = 'a'*64
+        prior = 'b'*64
+        self.assertTrue(enroll.acknowledgement(self.real_list(current), current))
+        self.assertFalse(enroll.acknowledgement(self.real_list('1'), current))
+        self.assertFalse(enroll.acknowledgement(self.real_list(prior), current))
+        self.assertFalse(enroll.acknowledgement([], current))
+        for payload in ({'value': '1'}, {'variableValue': '1'}, '1', None,
+                        [{'key': 'jit-fetched', 'namespace': 'mustang'}],
+                        [{'key': 'jit-fetched', 'namespace': 'other', 'value': current}],
+                        [{'key': 'other', 'namespace': 'mustang', 'value': current}],
+                        self.real_list(current)+self.real_list(current)):
+            with self.assertRaises(ValueError):
+                enroll.acknowledgement(payload, current)
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary)/'mustang-jit'
+            path.write_text('current-config')
+            path.chmod(0o600)
+            expected = hashlib.sha256(b'current-config').hexdigest()
+            state = {'t': 0, 'calls': 0}
+
+            def transport(argv):
+                self.assertIn('get-guest-attributes', argv)
+                self.assertIn('--query-path=mustang/jit-fetched', argv)
+                self.assertIn('--format=json', argv)
+                state['calls'] += 1
+                if state['calls'] == 1:
+                    body = json.dumps(self.real_list('1'))
+                else:
+                    body = json.dumps(self.real_list(expected))
+                return subprocess.CompletedProcess(argv, 0, body, '')
+
+            def pause(seconds):
+                state['t'] += seconds
+
+            code, out, err = self.invoke(['wait-fetched', '--execute', '--file', str(path)], transport, pause,
+                                         clock=lambda: state['t'])
+            self.assertEqual(code, 0, err)
+            self.assertIn('"fetched": true', out)
+            self.assertNotIn('current-config', out+err)
+            self.assertNotIn(expected, out+err)
+            failed = subprocess.CompletedProcess(['gcloud'], 1, '', 'denied')
+            code, out, err = self.invoke(['wait-fetched', '--execute', '--file', str(path)],
+                                         lambda argv: failed, pause)
+            self.assertEqual(code, 4)
+            self.assertIn('guest attribute query failed: exit 1', err)
+            self.assertNotIn('denied', err)
+            stale = {'t': 0}
+
+            def only_legacy(argv):
+                return subprocess.CompletedProcess(argv, 0, json.dumps(self.real_list('1')), '')
+
+            def advance(seconds):
+                stale['t'] += 200
+
+            code, out, err = self.invoke(['wait-fetched', '--execute', '--file', str(path)], only_legacy, advance,
+                                         clock=lambda: stale['t'])
+            self.assertEqual(code, 4)
+            self.assertIn('did not match this config', err)
+            self.assertNotIn('1', err)
+
+    def test_verified_missing_key_404_waits_and_permission_errors_stop(self):
+        # Readonly capture, 10:24, of get-guest-attributes for a missing probe key.
+        # The jit-fetched line keeps this header and account sentence and changes only the resource.
+        captured = (
+            'ERROR: (gcloud.compute.instances.get-guest-attributes) HTTPError 404: '
+            "The resource 'mustang/nonexistent-probe' of type 'Guest Attribute' was not found. "
+            'This command is authenticated as grok-bots@protocols-465723.iam.gserviceaccount.com '
+            'which is the active account specified by the [core/account] property.')
+        operator = captured.replace("'mustang/nonexistent-probe'", "'mustang/jit-fetched'", 1)
+        controller = operator.replace(
+            'grok-bots@protocols-465723.iam.gserviceaccount.com',
+            'mustang-controller@protocols-465723.iam.gserviceaccount.com', 1)
+        self.assertEqual(operator, enroll.GUEST_ATTRIBUTE_404_HEADER % 'mustang/jit-fetched'
+                         + enroll.GUEST_ATTRIBUTE_ACCOUNTS[0] + enroll.GUEST_ATTRIBUTE_404_SUFFIX)
+        self.assertEqual(controller, enroll.GUEST_ATTRIBUTE_404_HEADER % 'mustang/jit-fetched'
+                         + enroll.GUEST_ATTRIBUTE_ACCOUNTS[1] + enroll.GUEST_ATTRIBUTE_404_SUFFIX)
+        for line in (operator, controller):
+            self.assertTrue(enroll.missing_guest_attribute(subprocess.CompletedProcess(['gcloud'], 1, '', line)))
+            self.assertTrue(enroll.missing_guest_attribute(subprocess.CompletedProcess(['gcloud'], 1, ' \n', line+'\n')))
+        self.assertFalse(enroll.missing_guest_attribute(subprocess.CompletedProcess(['gcloud'], 1, '', captured)))
+        handwritten = (
+            'ERROR: (gcloud.compute.instances.get-guest-attributes) HTTPError 404: '
+            "The resource 'projects/protocols-465723/zones/us-west2-a/instances/"
+            "roseos-mustang-builder-20261107-a/guestAttributes/mustang/jit-fetched' was not found")
+        self.assertFalse(enroll.missing_guest_attribute(subprocess.CompletedProcess(['gcloud'], 1, '', handwritten)))
+        unknown = operator.replace(
+            'grok-bots@protocols-465723.iam.gserviceaccount.com',
+            'other@protocols-465723.iam.gserviceaccount.com', 1)
+        self.assertFalse(enroll.missing_guest_attribute(subprocess.CompletedProcess(['gcloud'], 1, '', unknown)))
+        self.assertFalse(enroll.missing_guest_attribute(
+            subprocess.CompletedProcess(['gcloud'], 1, '', operator+' ya29.extra-secret')))
+        self.assertFalse(enroll.missing_guest_attribute(subprocess.CompletedProcess(['gcloud'], 2, '', operator)))
+        self.assertFalse(enroll.missing_guest_attribute(subprocess.CompletedProcess(['gcloud'], 1, '[]', operator)))
+        permission = (
+            'ERROR: (gcloud.compute.instances.get-guest-attributes) HTTPError 403: '
+            "Required 'compute.instances.getGuestAttributes' permission for "
+            "'projects/protocols-465723/zones/us-west2-a/instances/roseos-mustang-builder-20261107-a' "
+            'ya29.permission-sentinel-not-a-token')
+        self.assertFalse(enroll.missing_guest_attribute(subprocess.CompletedProcess(['gcloud'], 1, '', permission)))
+        literal = controller
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary)/'mustang-jit'
+            path.write_text('current-config')
+            path.chmod(0o600)
+            expected = hashlib.sha256(b'current-config').hexdigest()
+            state = {'t': 0, 'calls': 0}
+
+            def appear(argv):
+                self.assertIn('--query-path=mustang/jit-fetched', argv)
+                state['calls'] += 1
+                if state['calls'] < 3:
+                    return subprocess.CompletedProcess(argv, 1, '', literal+'\n')
+                return subprocess.CompletedProcess(argv, 0, json.dumps(self.real_list(expected)), '')
+
+            def step(seconds):
+                self.assertEqual(seconds, 5)
+                state['t'] += seconds
+
+            code, out, err = self.invoke(['wait-fetched', '--execute', '--file', str(path)], appear, step,
+                                         clock=lambda: state['t'])
+            self.assertEqual(code, 0, err)
+            self.assertEqual(state['calls'], 3)
+            self.assertNotIn('HTTPError', err)
+            self.assertNotIn('guestAttributes', err)
+            self.assertNotIn('grok-bots', err)
+            self.assertNotIn('mustang-controller', err)
+            self.assertNotIn('serviceaccount', err.lower())
+            self.assertNotIn(expected, out+err)
+            calls = {'n': 0}
+
+            def forbidden(argv):
+                calls['n'] += 1
+                return subprocess.CompletedProcess(argv, 1, '', permission)
+
+            code, out, err = self.invoke(['wait-fetched', '--execute', '--file', str(path)], forbidden, step,
+                                         clock=lambda: 0)
+            self.assertEqual(code, 4)
+            self.assertEqual(calls['n'], 1)
+            self.assertIn('guest attribute query failed: exit 1', err)
+            self.assertNotIn('ya29.permission-sentinel-not-a-token', err)
+            self.assertNotIn('HTTPError', err)
+            self.assertNotIn('getGuestAttributes', err)
+            self.assertNotIn('grok-bots', err)
+            self.assertNotIn('ya29', err)
+            bound = {'t': 0, 'calls': 0}
+
+            def stay_missing(argv):
+                bound['calls'] += 1
+                return subprocess.CompletedProcess(argv, 1, '', literal)
+
+            def tick(seconds):
+                bound['t'] += seconds
+
+            code, out, err = self.invoke(['wait-fetched', '--execute', '--file', str(path)], stay_missing, tick,
+                                         clock=lambda: bound['t'])
+            self.assertEqual(code, 4)
+            self.assertEqual(bound['calls'], 37)
+            self.assertEqual(bound['t'], 180)
+            self.assertIn('did not match this config before the bound', err)
+            self.assertNotIn('query failed', err)
+            self.assertNotIn('HTTPError', err)
+            self.assertNotIn('protocols-465723', err)
+            self.assertNotIn('guestAttributes', err)
+            self.assertNotIn('mustang-controller', err)
+            self.assertNotIn('grok-bots', err)
+            self.assertNotIn('core/account', err)
+
+    def invoke(self, argv, transport, pause, clock=None):
+        from contextlib import redirect_stderr, redirect_stdout
+        import io
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            code = enroll.main(argv, transport=transport, sleep=pause, clock=clock)
+        return code, out.getvalue(), err.getvalue()
 
 
 class GuestMetadataOrderTest(unittest.TestCase):
     """The config read and the guest-attribute acknowledgement are different requests."""
 
-    def run_guest(self, root, plan):
+    def run_guest(self, root, plan, body='jit-body-must-not-be-logged',
+                  run_exit='0', run_signal=''):
         binary = Path(root)/'bin'
         runner = Path(root)/'roseos/runner'
         binary.mkdir(parents=True)
         runner.mkdir(parents=True)
-        body = 'jit-body-must-not-be-logged'
         (binary/'curl').write_text(
             '#!/usr/bin/env python3\n'
             'import os, sys\n'
-            'args=sys.argv[1:]; method, outfile, url="GET", None, None\n'
+            'args=sys.argv[1:]; method, outfile, url, data="GET", None, None, ""\n'
             'i=0\n'
             'while i < len(args):\n'
             '    if args[i]=="-X" and i+1<len(args): method=args[i+1]; i+=2; continue\n'
             '    if args[i]=="-o" and i+1<len(args): outfile=args[i+1]; i+=2; continue\n'
+            '    if args[i]=="--data" and i+1<len(args): data=args[i+1]; i+=2; continue\n'
             '    if args[i]=="-w": i+=2; continue\n'
             '    if args[i].startswith("http"): url=args[i]\n'
             '    i+=1\n'
             'plan=os.environ["MUSTANG_CURL_PLAN"]\n'
             'lines=open(plan).read().splitlines()\n'
             'op, status=lines[0].split(); open(plan,"w").write("\\n".join(lines[1:]))\n'
-            'open(os.environ["MUSTANG_CURL_LOG"],"a").write(method+" "+url+"\\n")\n'
+            'open(os.environ["MUSTANG_CURL_LOG"],"a").write(method+" "+url+" "+data+"\\n")\n'
             'if method!=op: sys.stderr.write("unexpected "+method+"\\n"); sys.exit(3)\n'
             'if status=="network": sys.exit(7)\n'
             'if outfile and status=="200" and method=="GET":\n'
@@ -766,53 +957,132 @@ class GuestMetadataOrderTest(unittest.TestCase):
             'elif outfile: open(outfile,"w").write("")\n'
             'sys.stdout.write(status)\n')
         (binary/'curl').chmod(0o755)
-        (runner/'run.sh').write_text('#!/bin/sh\necho ran >> "$MUSTANG_RUN_LOG"\nexit 0\n')
+        (runner/'run.sh').write_text(
+            '#!/usr/bin/env python3\n'
+            'import hashlib, os, pathlib, signal, sys, time\n'
+            'argv = pathlib.Path(os.environ["MUSTANG_ARGV_LOG"])\n'
+            'argv.write_text("".join(arg + "\\n" for arg in sys.argv[1:]))\n'
+            'value = os.environ.get("ACTIONS_RUNNER_INPUT_JITCONFIG", "")\n'
+            'pathlib.Path(os.environ["MUSTANG_ENV_HASH_LOG"]).write_text(\n'
+            '    hashlib.sha256(value.encode()).hexdigest() + "\\n")\n'
+            'command = pathlib.Path("/proc/self/cmdline").read_bytes()\n'
+            'mark = "argv-has-secret\\n" if value.encode() in command else "argv-clean\\n"\n'
+            'pathlib.Path(os.environ["MUSTANG_ARGV_MARK"]).write_text(mark)\n'
+            'if os.environ.get("MUSTANG_RUN_SIGNAL") == "TERM":\n'
+            '    pid = os.getppid()\n'
+            '    for _ in range(4):\n'
+            '        comm = pathlib.Path("/proc/%s/comm" % pid).read_text().strip()\n'
+            '        if comm == "bash":\n'
+            '            break\n'
+            '        status = pathlib.Path("/proc/%s/status" % pid).read_text().splitlines()\n'
+            '        pid = int(next(line.split()[1] for line in status if line.startswith("PPid:")))\n'
+            '    os.kill(pid, signal.SIGTERM)\n'
+            '    time.sleep(2)\n'
+            'code = int(os.environ.get("MUSTANG_RUN_EXIT", "0"))\n'
+            'if code == 0 and os.environ.get("MUSTANG_RUN_SIGNAL") != "TERM":\n'
+            '    with open(os.environ["MUSTANG_RUN_LOG"], "a") as handle:\n'
+            '        handle.write("ran\\n")\n'
+            'sys.exit(code)\n')
         (runner/'run.sh').chmod(0o755)
         plan_path = Path(root)/'plan'
         plan_path.write_text('\n'.join(plan)+'\n')
         log = Path(root)/'curl.log'
         ran = Path(root)/'ran'
+        argv_log = Path(root)/'argv.log'
+        env_hash = Path(root)/'env.sha'
+        argv_mark = Path(root)/'argv.mark'
+        cleanup_log = Path(root)/'cleanup.log'
         env = dict(os.environ, PATH=str(binary)+':'+os.environ['PATH'],
                    MUSTANG_GUEST_ROOT=str(Path(root)/'roseos'),
                    MUSTANG_METADATA_URL='http://metadata.test/computeMetadata/v1',
                    MUSTANG_GUEST_WAIT_SECONDS='5', MUSTANG_GUEST_POLL_SECONDS='0',
                    MUSTANG_CURL_PLAN=str(plan_path), MUSTANG_CURL_LOG=str(log),
-                   MUSTANG_CURL_BODY=body, MUSTANG_RUN_LOG=str(ran))
+                   MUSTANG_CURL_BODY=body, MUSTANG_RUN_LOG=str(ran),
+                   MUSTANG_ARGV_LOG=str(argv_log), MUSTANG_ENV_HASH_LOG=str(env_hash),
+                   MUSTANG_ARGV_MARK=str(argv_mark), MUSTANG_CLEANUP_LOG=str(cleanup_log),
+                   MUSTANG_RUN_EXIT=run_exit, MUSTANG_RUN_SIGNAL=run_signal)
         result = subprocess.run(['bash', str(ROOT/'scripts/mustang-ephemeral-guest.sh')],
                                 env=env, capture_output=True, text=True)
         self.assertNotIn(body, result.stdout)
         self.assertNotIn(body, result.stderr)
+        cleanup = cleanup_log.read_text() if cleanup_log.exists() else ''
+        self.assertNotIn(body, cleanup)
+        argv = argv_log.read_text() if argv_log.exists() else ''
+        self.assertNotIn(body, argv)
+        self.assertNotIn('--jitconfig', argv)
+        if env_hash.exists():
+            self.assertEqual(env_hash.read_text().strip(),
+                             hashlib.sha256(body.encode()).hexdigest())
+            self.assertEqual(argv_mark.read_text(), 'argv-clean\n')
+            self.assertNotIn(body, argv_mark.read_text())
         leftover = list(runner.glob('jit.*'))
-        return result, log.read_text() if log.exists() else '', ran.exists(), leftover
+        return result, log.read_text() if log.exists() else '', ran.exists(), leftover, cleanup
 
     def test_not_ready_is_a_get_and_a_forbidden_ack_does_not_start_the_runner(self):
         with tempfile.TemporaryDirectory() as temporary:
             base = Path(temporary)
-            ready, log, ran, leftover = self.run_guest(base/'ready', ['GET 404', 'GET 200', 'PUT 200'])
+            ready, log, ran, leftover, cleanup = self.run_guest(base/'ready', ['GET 404', 'GET 200', 'PUT 200'])
             self.assertEqual(ready.returncode, 0, ready.stderr)
             self.assertIn('metadata GET failed: HTTP 404', ready.stderr)
             self.assertNotIn('ack failed', ready.stderr)
             self.assertTrue(ran)
             self.assertEqual(leftover, [])
+            self.assertTrue(cleanup)
+            self.assertTrue(all(line == 'unset' for line in cleanup.splitlines()))
             self.assertIn('GET http://metadata.test/computeMetadata/v1/instance/attributes/mustang-jitconfig', log)
-            self.assertIn('PUT http://metadata.test/computeMetadata/v1/instance/guest-attributes/mustang/jit-fetched', log)
-            denied, log, ran, leftover = self.run_guest(base/'denied', ['GET 200', 'PUT 403'])
+            digest = hashlib.sha256(b'jit-body-must-not-be-logged').hexdigest()
+            self.assertIn('PUT http://metadata.test/computeMetadata/v1/instance/guest-attributes/mustang/jit-fetched '+digest, log)
+            self.assertNotIn('jit-body-must-not-be-logged', log)
+            denied, log, ran, leftover, _ = self.run_guest(base/'denied', ['GET 200', 'PUT 403'])
             self.assertEqual(denied.returncode, 4, denied.stderr)
             self.assertIn('guest attribute ack failed: HTTP 403', denied.stderr)
             self.assertNotIn('metadata GET failed: HTTP 403', denied.stderr)
             self.assertFalse(ran)
             self.assertEqual(leftover, [])
             self.assertFalse((base/'denied/roseos/runner/.runner').exists())
-            get_denied, _, ran, leftover = self.run_guest(base/'get-denied', ['GET 403', 'PUT 200'])
+            get_denied, _, ran, leftover, _ = self.run_guest(base/'get-denied', ['GET 403', 'PUT 200'])
             self.assertEqual(get_denied.returncode, 4, get_denied.stderr)
             self.assertIn('metadata GET failed: HTTP 403', get_denied.stderr)
             self.assertNotIn('ack failed', get_denied.stderr)
             self.assertFalse(ran)
             self.assertEqual(leftover, [])
-            networked, _, ran, _ = self.run_guest(base/'network', ['GET network', 'GET 200', 'PUT 200'])
+            networked, _, ran, _, _ = self.run_guest(base/'network', ['GET network', 'GET 200', 'PUT 200'])
             self.assertEqual(networked.returncode, 0, networked.stderr)
             self.assertIn('metadata GET failed: network', networked.stderr)
             self.assertTrue(ran)
+
+    def test_runner_input_is_the_exact_config_and_leaves_no_env_on_failure_or_signal(self):
+        body = 'exact-config-bytes=\nnot-a-path\n'
+        sentinel = 'SENTINEL-NOT-A-PATH'
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            exact, _, ran, leftover, cleanup = self.run_guest(
+                base/'exact', ['GET 200', 'PUT 200'], body=body)
+            self.assertEqual(exact.returncode, 0, exact.stderr)
+            self.assertTrue(ran)
+            self.assertEqual(leftover, [])
+            self.assertNotIn(body, exact.stdout)
+            self.assertNotIn(body, exact.stderr)
+            self.assertNotIn(body, cleanup)
+            self.assertTrue(all(line == 'unset' for line in cleanup.splitlines()))
+            failed, _, ran, leftover, cleanup = self.run_guest(
+                base/'failed', ['GET 200', 'PUT 200'], body=sentinel, run_exit='9')
+            self.assertEqual(failed.returncode, 9, failed.stderr)
+            self.assertFalse(ran)
+            self.assertEqual(leftover, [])
+            self.assertNotIn(sentinel, failed.stdout)
+            self.assertNotIn(sentinel, failed.stderr)
+            self.assertNotIn(sentinel, cleanup)
+            self.assertTrue(all(line == 'unset' for line in cleanup.splitlines()))
+            signalled, _, ran, leftover, cleanup = self.run_guest(
+                base/'signal', ['GET 200', 'PUT 200'], body=sentinel, run_signal='TERM')
+            self.assertEqual(signalled.returncode, 143, signalled.stderr)
+            self.assertFalse(ran)
+            self.assertEqual(leftover, [])
+            self.assertNotIn(sentinel, signalled.stdout)
+            self.assertNotIn(sentinel, signalled.stderr)
+            self.assertNotIn(sentinel, cleanup)
+            self.assertTrue(all(line == 'unset' for line in cleanup.splitlines()))
 
 
 if __name__ == '__main__':

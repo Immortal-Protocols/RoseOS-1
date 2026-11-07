@@ -5,7 +5,7 @@
  "target": "Launcher3QuickStepLib",
  "proves": "the patched handlers and overlays type-check and compile on the real classpath, plus the generated aconfig values. Not R8, manifest merge, APK resources, packaging, signing or runtime.",
  "provenance": "every hash here is an expected value derived from pinned public sources and the committed patches; an adapter compares current bytes with them and never records current bytes as provenance",
- "candidatePatches": "frameworks/base and build/release in apply-os-changes.py --background-policy order; Launcher3 adds rose-edge-launcher3.patch then rose-edge-resize-launcher3.patch (candidateDelta), which apply-os-changes.py does not register, so a tree integrated by any patcher today is not at these final images",
+ "candidatePatches": "every project in the trusted patcher's own registration order for frankel's applyArgs (re-pinned 2026-11-07 to the live apply-os-changes.py): frameworks/base through rose-edge-wmshell.patch and rose-shade-systemui.patch, build/release, and Launcher3 switcher, rose-edge and rose-edge-resize. #440's candidateDelta is retired and empty, so a tree integrated by this patcher is at these final images",
  "branches": {
   "verifyIntegrated": "every affected file equals post (config.xml only through integrationRewrite with its bound inputs), every required overlay is present with its sha256 (notAnInput overlays may be present with any bytes), every unlisted path matches its treePin, no extra path, no patch is applied again",
   "reconstruct": "every affected file equals pre (sha256 and gitBlob at revision), new files and every overlay target are absent beforehand, patches are applied in order and must give exactly post; required overlays are then copied; every unlisted path matches its treePin, no extra path",
@@ -31,7 +31,7 @@
    ],
    "otherwise": "refuse at the first failed condition, naming its id; partial, already applied or unknown state refuses"
   },
-  "otherwise": "refuse: mixed pre/post, unknown hash, missing file, overlay, input or binding. A tree integrated by the current patcher (Launcher3 switcher only) is such a state and must not be completed by applying the candidate's patches except through all four verifyBaseApplyCandidate conditions. Never reset or trust a snapshot.",
+  "otherwise": "refuse: mixed pre/post, unknown hash, missing file, overlay, input or binding. A tree integrated by an older patcher (for example Launcher3 switcher only) is such a state and is refused: with candidateDelta empty, no branch completes it. Never reset or trust a snapshot.",
   "requires": {
    "verifyIntegrated": [
     "sourceTree",
@@ -100,6 +100,14 @@
     {
      "name": "locked-control-frameworks-base.patch",
      "sha256": "8a9c06333f30462513839f55471678c84f7ce78233a386b2a11a0a293dca9abd"
+    },
+    {
+     "name": "rose-edge-wmshell.patch",
+     "sha256": "03f7537f388369bc785432cd67125d55011113376374dd6576006e63a9a9be6b"
+    },
+    {
+     "name": "rose-shade-systemui.patch",
+     "sha256": "df6179afa0c87691122e97873982fab5d8465631176d0ea56b6f097a973921d5"
     }
    ],
    "files": [
@@ -811,6 +819,149 @@
        "base": "different"
       }
      ]
+    },
+    {
+     "path": "libs/WindowManager/Shell/src/com/android/wm/shell/RoseEdgeMicSlot.java",
+     "pre": null,
+     "post": {
+      "sha256": "a613e6ee144b3be77eddf8490c545e11f96bf3a831ef87d8000c6e33d904b3ec",
+      "gitBlob": "0aa0b49d3da30819e3ae2ba63f5f292e23cc2110"
+     },
+     "chain": [
+      {
+       "patch": "rose-edge-wmshell.patch",
+       "before": null,
+       "after": "0aa0b49d3da30819e3ae2ba63f5f292e23cc2110",
+       "index": [
+        "0000000",
+        "0aa0b49"
+       ],
+       "base": "exact"
+      }
+     ]
+    },
+    {
+     "path": "libs/WindowManager/Shell/src/com/android/wm/shell/dagger/WMShellModule.java",
+     "pre": {
+      "sha256": "62d968a9484b7cc64dcf599996be38125b0aba0ceddd60bf75efec3afbd744d9",
+      "gitBlob": "237f47124837e3f939172f25f18a2d3444423641"
+     },
+     "post": {
+      "sha256": "17767983aa31d6269f30eb992787e32a34c4600b8493b875273027562b91686a",
+      "gitBlob": "236bd8168e93d206cea91a0954f07ddacf971bf4"
+     },
+     "chain": [
+      {
+       "patch": "rose-edge-wmshell.patch",
+       "before": "237f47124837e3f939172f25f18a2d3444423641",
+       "after": "236bd8168e93d206cea91a0954f07ddacf971bf4",
+       "index": [
+        "237f471",
+        "236bd81"
+       ],
+       "base": "exact"
+      }
+     ]
+    },
+    {
+     "path": "libs/WindowManager/Shell/src/com/android/wm/shell/roseedge/IRoseEdge.aidl",
+     "pre": null,
+     "post": {
+      "sha256": "4f2b67d421a4897956a20f38a29c8ad67d5ec10b9f748ce9a95aefb076da73ee",
+      "gitBlob": "5b3e5cd455ffc4af929e516feb4498347f4a2432"
+     },
+     "chain": [
+      {
+       "patch": "rose-edge-wmshell.patch",
+       "before": null,
+       "after": "5b3e5cd455ffc4af929e516feb4498347f4a2432",
+       "index": [
+        "0000000",
+        "5b3e5cd"
+       ],
+       "base": "exact"
+      }
+     ]
+    },
+    {
+     "path": "libs/WindowManager/Shell/src/com/android/wm/shell/roseedge/IRoseEdgeListener.aidl",
+     "pre": null,
+     "post": {
+      "sha256": "29a37cf4f88f6bf3bd9729ee015f41b6eff3a51d8480f1e082b516faa322cfe5",
+      "gitBlob": "08838b143685050c414779876534b775f91c9640"
+     },
+     "chain": [
+      {
+       "patch": "rose-edge-wmshell.patch",
+       "before": null,
+       "after": "08838b143685050c414779876534b775f91c9640",
+       "index": [
+        "0000000",
+        "08838b1"
+       ],
+       "base": "exact"
+      }
+     ]
+    },
+    {
+     "path": "libs/WindowManager/Shell/src/com/android/wm/shell/roseedge/RoseEdgeController.java",
+     "pre": null,
+     "post": {
+      "sha256": "e9b3a43c9624f6d8cdb4aa27711529d6abcbfc4c99e69cda7f46b22cef881d98",
+      "gitBlob": "6d064bbf87b06bcc5052f5b68d00e506c587225f"
+     },
+     "chain": [
+      {
+       "patch": "rose-edge-wmshell.patch",
+       "before": null,
+       "after": "6d064bbf87b06bcc5052f5b68d00e506c587225f",
+       "index": [
+        "0000000",
+        "6d064bb"
+       ],
+       "base": "exact"
+      }
+     ]
+    },
+    {
+     "path": "libs/WindowManager/Shell/src/com/android/wm/shell/roseedge/RoseEdgePolicy.java",
+     "pre": null,
+     "post": {
+      "sha256": "6e5178564ce92ac3ab0ce41847365ad3020d5c7bb88a4495bc5d5b5782032bdd",
+      "gitBlob": "6d9df5fa1c265fcbf501c95b3aad3633ac4a83b0"
+     },
+     "chain": [
+      {
+       "patch": "rose-edge-wmshell.patch",
+       "before": null,
+       "after": "6d9df5fa1c265fcbf501c95b3aad3633ac4a83b0",
+       "index": [
+        "0000000",
+        "6d9df5f"
+       ],
+       "base": "exact"
+      }
+     ]
+    },
+    {
+     "path": "packages/SystemUI/src/com/android/systemui/dagger/ReferenceSystemUIModule.java",
+     "pre": {
+      "sha256": "9ba02efa08a38d9bf98831bca55eca82704b802d95a34415ece5420214c51f37",
+      "gitBlob": "9b2c98685f8c45272d39df42dafa7294486c6552"
+     },
+     "post": {
+      "sha256": "3132689774e6bb341a4b1e2d7235a4edbbd3b8475285f45fedef115e7a898731",
+      "gitBlob": "e7bb8771233a2af4df1e5a7a90ce0217246f9058"
+     },
+     "chain": [
+      {
+       "patch": "rose-shade-systemui.patch",
+       "before": "9b2c98685f8c45272d39df42dafa7294486c6552",
+       "after": "e7bb8771233a2af4df1e5a7a90ce0217246f9058",
+       "index": null,
+       "base": "noIndex"
+      }
+     ]
     }
    ],
    "treePin": {
@@ -841,13 +992,20 @@
       "libs/WindowManager/Shell/src/com/android/wm/shell/AgentTrayLink.java",
       "libs/WindowManager/Shell/src/com/android/wm/shell/AgentTrayPrototype.java",
       "libs/WindowManager/Shell/src/com/android/wm/shell/RootTaskDisplayAreaOrganizer.java",
+      "libs/WindowManager/Shell/src/com/android/wm/shell/RoseEdgeMicSlot.java",
       "libs/WindowManager/Shell/src/com/android/wm/shell/StatusVoiceGlow.java",
       "libs/WindowManager/Shell/src/com/android/wm/shell/dagger/WMShellBaseModule.java",
+      "libs/WindowManager/Shell/src/com/android/wm/shell/dagger/WMShellModule.java",
+      "libs/WindowManager/Shell/src/com/android/wm/shell/roseedge/IRoseEdge.aidl",
+      "libs/WindowManager/Shell/src/com/android/wm/shell/roseedge/IRoseEdgeListener.aidl",
+      "libs/WindowManager/Shell/src/com/android/wm/shell/roseedge/RoseEdgeController.java",
+      "libs/WindowManager/Shell/src/com/android/wm/shell/roseedge/RoseEdgePolicy.java",
       "libs/computercontrol/src/com/android/extensions/computercontrol/ComputerControlExtensions.java",
       "libs/computercontrol/src/com/android/extensions/computercontrol/ComputerControlSession.java",
       "packages/SystemUI/AndroidManifest.xml",
       "packages/SystemUI/assets/fonts/Nunito.ttf",
       "packages/SystemUI/assets/licenses/Nunito-OFL.txt",
+      "packages/SystemUI/src/com/android/systemui/dagger/ReferenceSystemUIModule.java",
       "packages/SystemUI/src/com/android/systemui/roseshade/RoseQuickSettings.java",
       "packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeController.java",
       "packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeDrag.java",
@@ -872,10 +1030,10 @@
       "services/core/java/com/android/server/pm/PackageInstallerSession.java"
      ],
      "excludedAre": "exactly this project's files paths and overlay targets, relative to it; no globs. A path the pinned tree lacks (a new file or an overlay target) must be absent from it and excludes nothing",
-     "count": 65203,
+     "count": 65201,
      "recordFormat": "<mode> SP <oid> TAB <path> LF, with path relative to the project",
      "order": "the raw bytes of path",
-     "digest": "db4d6ce25d92c6f0b715872bc3d5868bdbf1d437d7822b398fc656fcdc41e994",
+     "digest": "ef00b628eca1f5aa2f7e76f38dcbe3eb56fd339ee93612aa746fac54f4ae34ab",
      "digestOf": "the concatenated records, sha256"
     },
     "modes": [
@@ -918,7 +1076,7 @@
     },
     {
      "name": "rose-edge-launcher3.patch",
-     "sha256": "a1c76e1e03845573501790509a7e620e48476a2bae47889f839d81144dd35460"
+     "sha256": "c240d8121235e48716d108ca2d43be56d142ee2e7a4d00ec6f1a58e253332e28"
     },
     {
      "name": "rose-edge-resize-launcher3.patch",
@@ -1174,17 +1332,17 @@
       "gitBlob": "afa87a5619fe4b7c7781a21b7f4aaccf677a6188"
      },
      "post": {
-      "sha256": "1ffec7b9b83e694db1938e38b2c64a1f86f107b0bd41504be0946dacb93e466a",
-      "gitBlob": "b337029b7f710b87231ca0e8d8b7bb1f60c8155b"
+      "sha256": "7e91f9fdfd773dfc7355532eb6bc73a659b159e34d09db06f599bd0763bc40b5",
+      "gitBlob": "940c58e6c52c02eb211a348ad16f50f9341a0a13"
      },
      "chain": [
       {
        "patch": "rose-edge-launcher3.patch",
        "before": "afa87a5619fe4b7c7781a21b7f4aaccf677a6188",
-       "after": "b337029b7f710b87231ca0e8d8b7bb1f60c8155b",
+       "after": "940c58e6c52c02eb211a348ad16f50f9341a0a13",
        "index": [
         "afa87a5",
-        "b337029"
+        "940c58e"
        ],
        "base": "exact"
       }
@@ -1197,17 +1355,17 @@
       "gitBlob": "8c46fbde20449710dbc23b306441f3c9758c80dc"
      },
      "post": {
-      "sha256": "e04263f576e5246d64aba1258735b038e63db9504963c125da84976a068fd45e",
-      "gitBlob": "82865d9bc7c6e4b72cecd82d94bb4a9f7134e539"
+      "sha256": "a76f7267a8086001ced822a0befb678cf8a8a815e6dea1d24556ce3fbb769d78",
+      "gitBlob": "9a13ec3b90f779a8d4c6a13eee17bd262339b7e2"
      },
      "chain": [
       {
        "patch": "rose-edge-launcher3.patch",
        "before": "8c46fbde20449710dbc23b306441f3c9758c80dc",
-       "after": "82865d9bc7c6e4b72cecd82d94bb4a9f7134e539",
+       "after": "9a13ec3b90f779a8d4c6a13eee17bd262339b7e2",
        "index": [
         "8c46fbd",
-        "82865d9"
+        "9a13ec3"
        ],
        "base": "exact"
       }
@@ -1550,7 +1708,7 @@
   },
   {
    "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeGesture.java",
-   "sha256": "2c0be858885695b77dffaa637f328ce0033d099cc60b10df270e51c67061a570",
+   "sha256": "ba3df1ea30a9baf65e414cd252901dd9458497e3dc7813fad8a4f4d959cdc3e5",
    "role": "required"
   },
   {
@@ -1560,22 +1718,22 @@
   },
   {
    "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeShell.java",
-   "sha256": "7e588aba36ad31e2b155dcf214dda8bc3b45109aa504a7ec0f6bf0b92522f1b7",
+   "sha256": "779b4f9ed1fdfdc86601ae3ac1a2632ffe6571fb6942348783b3ace4a9681f81",
    "role": "required"
   },
   {
    "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeState.java",
-   "sha256": "94fa3db8d5fde02496620983f039797716d8b6d7d59797fe9a8b2426ddc5e360",
+   "sha256": "ae617fbcee7a017ce0a798e3433ea770fac73a1152da5047b3a57c749656c144",
    "role": "required"
   },
   {
    "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeSwipe.java",
-   "sha256": "6fc31005ef63869e003539ee56d5878a452ba520095d5f15062f027f42dc4fd2",
+   "sha256": "2c2af87499504706ca4604c05257d702517eebf53a667ad97d5f5958e4cccb7f",
    "role": "required"
   },
   {
    "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeWindow.java",
-   "sha256": "a14dfd66ad6d07fdba5b5e08f72dc6160a5e0886051b40cc2416cd2fc05fc70a",
+   "sha256": "1f188a054fee08ddfd547bdfce0aaebf1569ed13eab5df3106e98ca49c731fbb",
    "role": "required"
   },
   {
@@ -1644,9 +1802,29 @@
      "sha256": "8a9c06333f30462513839f55471678c84f7ce78233a386b2a11a0a293dca9abd"
     },
     {
+     "project": "frameworks/base",
+     "name": "rose-edge-wmshell.patch",
+     "sha256": "03f7537f388369bc785432cd67125d55011113376374dd6576006e63a9a9be6b"
+    },
+    {
+     "project": "frameworks/base",
+     "name": "rose-shade-systemui.patch",
+     "sha256": "df6179afa0c87691122e97873982fab5d8465631176d0ea56b6f097a973921d5"
+    },
+    {
      "project": "packages/apps/Launcher3",
      "name": "rose-switcher-launcher3.patch",
      "sha256": "654bb0cbc5db6c47bfe79e0bc4b6264ce26547617a9e8d8a4cffd91baea6fdbc"
+    },
+    {
+     "project": "packages/apps/Launcher3",
+     "name": "rose-edge-launcher3.patch",
+     "sha256": "c240d8121235e48716d108ca2d43be56d142ee2e7a4d00ec6f1a58e253332e28"
+    },
+    {
+     "project": "packages/apps/Launcher3",
+     "name": "rose-edge-resize-launcher3.patch",
+     "sha256": "94f6842a9f4a41d1311482a18e1a59d5d29d2ff8de5f0e612a8f0ca350404c47"
     },
     {
      "project": "build/release",
@@ -1685,7 +1863,27 @@
     },
     {
      "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeGesture.java",
-     "sha256": "3966202de90e4567e92d09ffbd9eaa71624a552c92aed1cfdcffd9bdaf682a21"
+     "sha256": "ba3df1ea30a9baf65e414cd252901dd9458497e3dc7813fad8a4f4d959cdc3e5"
+    },
+    {
+     "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeLayout.java",
+     "sha256": "da66349f5c3290766883aa0aad43c5458b5206db2e812d54fa857b624288710c"
+    },
+    {
+     "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeShell.java",
+     "sha256": "779b4f9ed1fdfdc86601ae3ac1a2632ffe6571fb6942348783b3ace4a9681f81"
+    },
+    {
+     "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeState.java",
+     "sha256": "ae617fbcee7a017ce0a798e3433ea770fac73a1152da5047b3a57c749656c144"
+    },
+    {
+     "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeSwipe.java",
+     "sha256": "2c2af87499504706ca4604c05257d702517eebf53a667ad97d5f5958e4cccb7f"
+    },
+    {
+     "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeWindow.java",
+     "sha256": "1f188a054fee08ddfd547bdfce0aaebf1569ed13eab5df3106e98ca49c731fbb"
     },
     {
      "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseFan.java",
@@ -1745,6 +1943,14 @@
      {
       "name": "locked-control-frameworks-base.patch",
       "sha256": "8a9c06333f30462513839f55471678c84f7ce78233a386b2a11a0a293dca9abd"
+     },
+     {
+      "name": "rose-edge-wmshell.patch",
+      "sha256": "03f7537f388369bc785432cd67125d55011113376374dd6576006e63a9a9be6b"
+     },
+     {
+      "name": "rose-shade-systemui.patch",
+      "sha256": "df6179afa0c87691122e97873982fab5d8465631176d0ea56b6f097a973921d5"
      }
     ],
     "files": [
@@ -2456,6 +2662,149 @@
         "base": "different"
        }
       ]
+     },
+     {
+      "path": "libs/WindowManager/Shell/src/com/android/wm/shell/RoseEdgeMicSlot.java",
+      "pre": null,
+      "post": {
+       "sha256": "a613e6ee144b3be77eddf8490c545e11f96bf3a831ef87d8000c6e33d904b3ec",
+       "gitBlob": "0aa0b49d3da30819e3ae2ba63f5f292e23cc2110"
+      },
+      "chain": [
+       {
+        "patch": "rose-edge-wmshell.patch",
+        "before": null,
+        "after": "0aa0b49d3da30819e3ae2ba63f5f292e23cc2110",
+        "index": [
+         "0000000",
+         "0aa0b49"
+        ],
+        "base": "exact"
+       }
+      ]
+     },
+     {
+      "path": "libs/WindowManager/Shell/src/com/android/wm/shell/dagger/WMShellModule.java",
+      "pre": {
+       "sha256": "62d968a9484b7cc64dcf599996be38125b0aba0ceddd60bf75efec3afbd744d9",
+       "gitBlob": "237f47124837e3f939172f25f18a2d3444423641"
+      },
+      "post": {
+       "sha256": "17767983aa31d6269f30eb992787e32a34c4600b8493b875273027562b91686a",
+       "gitBlob": "236bd8168e93d206cea91a0954f07ddacf971bf4"
+      },
+      "chain": [
+       {
+        "patch": "rose-edge-wmshell.patch",
+        "before": "237f47124837e3f939172f25f18a2d3444423641",
+        "after": "236bd8168e93d206cea91a0954f07ddacf971bf4",
+        "index": [
+         "237f471",
+         "236bd81"
+        ],
+        "base": "exact"
+       }
+      ]
+     },
+     {
+      "path": "libs/WindowManager/Shell/src/com/android/wm/shell/roseedge/IRoseEdge.aidl",
+      "pre": null,
+      "post": {
+       "sha256": "4f2b67d421a4897956a20f38a29c8ad67d5ec10b9f748ce9a95aefb076da73ee",
+       "gitBlob": "5b3e5cd455ffc4af929e516feb4498347f4a2432"
+      },
+      "chain": [
+       {
+        "patch": "rose-edge-wmshell.patch",
+        "before": null,
+        "after": "5b3e5cd455ffc4af929e516feb4498347f4a2432",
+        "index": [
+         "0000000",
+         "5b3e5cd"
+        ],
+        "base": "exact"
+       }
+      ]
+     },
+     {
+      "path": "libs/WindowManager/Shell/src/com/android/wm/shell/roseedge/IRoseEdgeListener.aidl",
+      "pre": null,
+      "post": {
+       "sha256": "29a37cf4f88f6bf3bd9729ee015f41b6eff3a51d8480f1e082b516faa322cfe5",
+       "gitBlob": "08838b143685050c414779876534b775f91c9640"
+      },
+      "chain": [
+       {
+        "patch": "rose-edge-wmshell.patch",
+        "before": null,
+        "after": "08838b143685050c414779876534b775f91c9640",
+        "index": [
+         "0000000",
+         "08838b1"
+        ],
+        "base": "exact"
+       }
+      ]
+     },
+     {
+      "path": "libs/WindowManager/Shell/src/com/android/wm/shell/roseedge/RoseEdgeController.java",
+      "pre": null,
+      "post": {
+       "sha256": "e9b3a43c9624f6d8cdb4aa27711529d6abcbfc4c99e69cda7f46b22cef881d98",
+       "gitBlob": "6d064bbf87b06bcc5052f5b68d00e506c587225f"
+      },
+      "chain": [
+       {
+        "patch": "rose-edge-wmshell.patch",
+        "before": null,
+        "after": "6d064bbf87b06bcc5052f5b68d00e506c587225f",
+        "index": [
+         "0000000",
+         "6d064bb"
+        ],
+        "base": "exact"
+       }
+      ]
+     },
+     {
+      "path": "libs/WindowManager/Shell/src/com/android/wm/shell/roseedge/RoseEdgePolicy.java",
+      "pre": null,
+      "post": {
+       "sha256": "6e5178564ce92ac3ab0ce41847365ad3020d5c7bb88a4495bc5d5b5782032bdd",
+       "gitBlob": "6d9df5fa1c265fcbf501c95b3aad3633ac4a83b0"
+      },
+      "chain": [
+       {
+        "patch": "rose-edge-wmshell.patch",
+        "before": null,
+        "after": "6d9df5fa1c265fcbf501c95b3aad3633ac4a83b0",
+        "index": [
+         "0000000",
+         "6d9df5f"
+        ],
+        "base": "exact"
+       }
+      ]
+     },
+     {
+      "path": "packages/SystemUI/src/com/android/systemui/dagger/ReferenceSystemUIModule.java",
+      "pre": {
+       "sha256": "9ba02efa08a38d9bf98831bca55eca82704b802d95a34415ece5420214c51f37",
+       "gitBlob": "9b2c98685f8c45272d39df42dafa7294486c6552"
+      },
+      "post": {
+       "sha256": "3132689774e6bb341a4b1e2d7235a4edbbd3b8475285f45fedef115e7a898731",
+       "gitBlob": "e7bb8771233a2af4df1e5a7a90ce0217246f9058"
+      },
+      "chain": [
+       {
+        "patch": "rose-shade-systemui.patch",
+        "before": "9b2c98685f8c45272d39df42dafa7294486c6552",
+        "after": "e7bb8771233a2af4df1e5a7a90ce0217246f9058",
+        "index": null,
+        "base": "noIndex"
+       }
+      ]
      }
     ],
     "treePin": {
@@ -2486,13 +2835,20 @@
        "libs/WindowManager/Shell/src/com/android/wm/shell/AgentTrayLink.java",
        "libs/WindowManager/Shell/src/com/android/wm/shell/AgentTrayPrototype.java",
        "libs/WindowManager/Shell/src/com/android/wm/shell/RootTaskDisplayAreaOrganizer.java",
+       "libs/WindowManager/Shell/src/com/android/wm/shell/RoseEdgeMicSlot.java",
        "libs/WindowManager/Shell/src/com/android/wm/shell/StatusVoiceGlow.java",
        "libs/WindowManager/Shell/src/com/android/wm/shell/dagger/WMShellBaseModule.java",
+       "libs/WindowManager/Shell/src/com/android/wm/shell/dagger/WMShellModule.java",
+       "libs/WindowManager/Shell/src/com/android/wm/shell/roseedge/IRoseEdge.aidl",
+       "libs/WindowManager/Shell/src/com/android/wm/shell/roseedge/IRoseEdgeListener.aidl",
+       "libs/WindowManager/Shell/src/com/android/wm/shell/roseedge/RoseEdgeController.java",
+       "libs/WindowManager/Shell/src/com/android/wm/shell/roseedge/RoseEdgePolicy.java",
        "libs/computercontrol/src/com/android/extensions/computercontrol/ComputerControlExtensions.java",
        "libs/computercontrol/src/com/android/extensions/computercontrol/ComputerControlSession.java",
        "packages/SystemUI/AndroidManifest.xml",
        "packages/SystemUI/assets/fonts/Nunito.ttf",
        "packages/SystemUI/assets/licenses/Nunito-OFL.txt",
+       "packages/SystemUI/src/com/android/systemui/dagger/ReferenceSystemUIModule.java",
        "packages/SystemUI/src/com/android/systemui/roseshade/RoseQuickSettings.java",
        "packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeController.java",
        "packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeDrag.java",
@@ -2517,10 +2873,10 @@
        "services/core/java/com/android/server/pm/PackageInstallerSession.java"
       ],
       "excludedAre": "exactly this project's files paths and overlay targets, relative to it; no globs. A path the pinned tree lacks (a new file or an overlay target) must be absent from it and excludes nothing",
-      "count": 65203,
+      "count": 65201,
       "recordFormat": "<mode> SP <oid> TAB <path> LF, with path relative to the project",
       "order": "the raw bytes of path",
-      "digest": "db4d6ce25d92c6f0b715872bc3d5868bdbf1d437d7822b398fc656fcdc41e994",
+      "digest": "ef00b628eca1f5aa2f7e76f38dcbe3eb56fd339ee93612aa746fac54f4ae34ab",
       "digestOf": "the concatenated records, sha256"
      },
      "modes": [
@@ -2560,6 +2916,14 @@
      {
       "name": "rose-switcher-launcher3.patch",
       "sha256": "654bb0cbc5db6c47bfe79e0bc4b6264ce26547617a9e8d8a4cffd91baea6fdbc"
+     },
+     {
+      "name": "rose-edge-launcher3.patch",
+      "sha256": "c240d8121235e48716d108ca2d43be56d142ee2e7a4d00ec6f1a58e253332e28"
+     },
+     {
+      "name": "rose-edge-resize-launcher3.patch",
+      "sha256": "94f6842a9f4a41d1311482a18e1a59d5d29d2ff8de5f0e612a8f0ca350404c47"
      }
     ],
     "files": [
@@ -2811,10 +3175,21 @@
        "gitBlob": "afa87a5619fe4b7c7781a21b7f4aaccf677a6188"
       },
       "post": {
-       "sha256": "7bd5815f17eed4c5e59cfe323f8f61ad6d3c5bfbdedc2d95a83183984350e0df",
-       "gitBlob": "afa87a5619fe4b7c7781a21b7f4aaccf677a6188"
+       "sha256": "7e91f9fdfd773dfc7355532eb6bc73a659b159e34d09db06f599bd0763bc40b5",
+       "gitBlob": "940c58e6c52c02eb211a348ad16f50f9341a0a13"
       },
-      "chain": []
+      "chain": [
+       {
+        "patch": "rose-edge-launcher3.patch",
+        "before": "afa87a5619fe4b7c7781a21b7f4aaccf677a6188",
+        "after": "940c58e6c52c02eb211a348ad16f50f9341a0a13",
+        "index": [
+         "afa87a5",
+         "940c58e"
+        ],
+        "base": "exact"
+       }
+      ]
      },
      {
       "path": "quickstep/src/com/android/quickstep/FallbackSwipeHandler.java",
@@ -2823,10 +3198,21 @@
        "gitBlob": "8c46fbde20449710dbc23b306441f3c9758c80dc"
       },
       "post": {
-       "sha256": "194138f4ee572d6edef485087a08ae3377ad941b06bf8b5342d63b23e9805161",
-       "gitBlob": "8c46fbde20449710dbc23b306441f3c9758c80dc"
+       "sha256": "a76f7267a8086001ced822a0befb678cf8a8a815e6dea1d24556ce3fbb769d78",
+       "gitBlob": "9a13ec3b90f779a8d4c6a13eee17bd262339b7e2"
       },
-      "chain": []
+      "chain": [
+       {
+        "patch": "rose-edge-launcher3.patch",
+        "before": "8c46fbde20449710dbc23b306441f3c9758c80dc",
+        "after": "9a13ec3b90f779a8d4c6a13eee17bd262339b7e2",
+        "index": [
+         "8c46fbd",
+         "9a13ec3"
+        ],
+        "base": "exact"
+       }
+      ]
      },
      {
       "path": "quickstep/src/com/android/quickstep/window/RecentsWindowSwipeHandler.java",
@@ -2835,10 +3221,21 @@
        "gitBlob": "8148e084538ee9ef14a0795fb89be14521bdd180"
       },
       "post": {
-       "sha256": "c080919fbc48e1871591d7da4ee42d154d60865d771d7a4331120d48a136a59c",
-       "gitBlob": "8148e084538ee9ef14a0795fb89be14521bdd180"
+       "sha256": "6c65b9d6a96f53661383eb5dfcb9ec0bd682e05032b3b9b49b5b9e76858a09cf",
+       "gitBlob": "7dbbada48dc4b13c741a3dcee013bfec4d5ca82d"
       },
-      "chain": []
+      "chain": [
+       {
+        "patch": "rose-edge-launcher3.patch",
+        "before": "8148e084538ee9ef14a0795fb89be14521bdd180",
+        "after": "7dbbada48dc4b13c741a3dcee013bfec4d5ca82d",
+        "index": [
+         "8148e08",
+         "7dbbada"
+        ],
+        "base": "exact"
+       }
+      ]
      },
      {
       "path": "quickstep/src/com/android/quickstep/SystemUiProxy.kt",
@@ -2847,10 +3244,21 @@
        "gitBlob": "8f75b946e622440cc32566fce0f7f8c8a5a0caa9"
       },
       "post": {
-       "sha256": "3a8943768b31f86d84a62a0f9078fa6e6e84d138b74c114510f76ee6ae99d276",
-       "gitBlob": "8f75b946e622440cc32566fce0f7f8c8a5a0caa9"
+       "sha256": "f3a894b1271d4afd2410c6337da3712b639bad564f19de1b2a702f68f40eaea3",
+       "gitBlob": "a881058aee94c322041b7ec2307baf022a48afab"
       },
-      "chain": []
+      "chain": [
+       {
+        "patch": "rose-edge-resize-launcher3.patch",
+        "before": "8f75b946e622440cc32566fce0f7f8c8a5a0caa9",
+        "after": "a881058aee94c322041b7ec2307baf022a48afab",
+        "index": [
+         "8f75b94",
+         "a881058"
+        ],
+        "base": "exact"
+       }
+      ]
      },
      {
       "path": "quickstep/src/com/android/quickstep/TouchInteractionService.kt",
@@ -2859,10 +3267,21 @@
        "gitBlob": "256c991afb42d068a1d5f4520ea003f845a5c6f3"
       },
       "post": {
-       "sha256": "c7b96d539c7c3d9271df2d887eadc7ad259b53c4af65d5ee1780a13704e1ed49",
-       "gitBlob": "256c991afb42d068a1d5f4520ea003f845a5c6f3"
+       "sha256": "4730ac469f5a87f02ed43f300dcfa035b2466f55c321a38b6ccd6ebe79c569bb",
+       "gitBlob": "e75c0302ed42eb5d12c3cf356097dfff88477106"
       },
-      "chain": []
+      "chain": [
+       {
+        "patch": "rose-edge-resize-launcher3.patch",
+        "before": "256c991afb42d068a1d5f4520ea003f845a5c6f3",
+        "after": "e75c0302ed42eb5d12c3cf356097dfff88477106",
+        "index": [
+         "256c991",
+         "e75c030"
+        ],
+        "base": "exact"
+       }
+      ]
      }
     ],
     "treePin": {
@@ -3132,7 +3551,32 @@
    },
    {
     "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeGesture.java",
-    "sha256": "3966202de90e4567e92d09ffbd9eaa71624a552c92aed1cfdcffd9bdaf682a21",
+    "sha256": "ba3df1ea30a9baf65e414cd252901dd9458497e3dc7813fad8a4f4d959cdc3e5",
+    "role": "required"
+   },
+   {
+    "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeLayout.java",
+    "sha256": "da66349f5c3290766883aa0aad43c5458b5206db2e812d54fa857b624288710c",
+    "role": "required"
+   },
+   {
+    "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeShell.java",
+    "sha256": "779b4f9ed1fdfdc86601ae3ac1a2632ffe6571fb6942348783b3ace4a9681f81",
+    "role": "required"
+   },
+   {
+    "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeState.java",
+    "sha256": "ae617fbcee7a017ce0a798e3433ea770fac73a1152da5047b3a57c749656c144",
+    "role": "required"
+   },
+   {
+    "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeSwipe.java",
+    "sha256": "2c2af87499504706ca4604c05257d702517eebf53a667ad97d5f5958e4cccb7f",
+    "role": "required"
+   },
+   {
+    "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeWindow.java",
+    "sha256": "1f188a054fee08ddfd547bdfce0aaebf1569ed13eab5df3106e98ca49c731fbb",
     "role": "required"
    },
    {
@@ -3169,7 +3613,7 @@
    "patcher": {
     "patcher": "trusted",
     "sha256": {
-     "apply-os-changes.py": "86ec1b2a41dec367490409a435423dbdbc0f5537a0437eac9094f4ea4c7bef35",
+     "apply-os-changes.py": "6b7b11c32f4c533483dfa70b367cbe56aa7ab1db0ba36dcd10592ca4ea42cc6d",
      "background_apks.py": "af981b5b4309924664c758f1d479cf752fa6032911af447148302178c24c40fb",
      "integration_copy.py": "440574cbd3144571f647fc13f17c6c1188b1c61d12ef92a7028fba7eb2a24a05"
     }
@@ -3200,12 +3644,28 @@
      "name": "locked-control-frameworks-base.patch"
     },
     {
+     "project": "frameworks/base",
+     "name": "rose-edge-wmshell.patch"
+    },
+    {
+     "project": "frameworks/base",
+     "name": "rose-shade-systemui.patch"
+    },
+    {
      "project": "build/release",
      "name": "background-control-build-release.patch"
     },
     {
      "project": "packages/apps/Launcher3",
      "name": "rose-switcher-launcher3.patch"
+    },
+    {
+     "project": "packages/apps/Launcher3",
+     "name": "rose-edge-launcher3.patch"
+    },
+    {
+     "project": "packages/apps/Launcher3",
+     "name": "rose-edge-resize-launcher3.patch"
     }
    ],
    "derivation": "executed: scripts/apply-os-changes.py's own argument parser with applyArgs (each placeholder an empty file), then its statements from `projects = {...}` through `projects.update(rose_home_projects(preinstalls))`, with validate_policy and preinstall_plan replaced because they check data and never registration; the result is filtered to this contract's projects. rose_home_projects adds only packages/modules/Permission",
@@ -3303,22 +3763,7 @@
  "candidateDelta": {
   "pr": 440,
   "commit": "2f57a5f28e3c3cc97177bf3f9294ea807d514469",
-  "patches": [
-   {
-    "name": "rose-edge-launcher3.patch",
-    "sha256": "a1c76e1e03845573501790509a7e620e48476a2bae47889f839d81144dd35460",
-    "project": "packages/apps/Launcher3",
-    "strip": 1,
-    "bundlePath": "os/tests/fixtures/launcher3-compile-contract/candidate-pr440/patches/rose-edge-launcher3.patch"
-   },
-   {
-    "name": "rose-edge-resize-launcher3.patch",
-    "sha256": "94f6842a9f4a41d1311482a18e1a59d5d29d2ff8de5f0e612a8f0ca350404c47",
-    "project": "packages/apps/Launcher3",
-    "strip": 1,
-    "bundlePath": "os/tests/fixtures/launcher3-compile-contract/candidate-pr440/patches/rose-edge-resize-launcher3.patch"
-   }
-  ],
+  "patches": [],
   "application": {
    "where": "only in the isolated copy, never in the source tree",
    "steps": [
@@ -3337,135 +3782,9 @@
    ],
    "note": "whitespace is left unchanged; any failure of --check refuses before anything is applied"
   },
-  "files": [
-   {
-    "path": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/AbsSwipeUpHandler.java",
-    "before": {
-     "sha256": "7bd5815f17eed4c5e59cfe323f8f61ad6d3c5bfbdedc2d95a83183984350e0df",
-     "gitBlob": "afa87a5619fe4b7c7781a21b7f4aaccf677a6188"
-    },
-    "after": {
-     "sha256": "1ffec7b9b83e694db1938e38b2c64a1f86f107b0bd41504be0946dacb93e466a",
-     "gitBlob": "b337029b7f710b87231ca0e8d8b7bb1f60c8155b"
-    }
-   },
-   {
-    "path": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/FallbackSwipeHandler.java",
-    "before": {
-     "sha256": "194138f4ee572d6edef485087a08ae3377ad941b06bf8b5342d63b23e9805161",
-     "gitBlob": "8c46fbde20449710dbc23b306441f3c9758c80dc"
-    },
-    "after": {
-     "sha256": "e04263f576e5246d64aba1258735b038e63db9504963c125da84976a068fd45e",
-     "gitBlob": "82865d9bc7c6e4b72cecd82d94bb4a9f7134e539"
-    }
-   },
-   {
-    "path": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/window/RecentsWindowSwipeHandler.java",
-    "before": {
-     "sha256": "c080919fbc48e1871591d7da4ee42d154d60865d771d7a4331120d48a136a59c",
-     "gitBlob": "8148e084538ee9ef14a0795fb89be14521bdd180"
-    },
-    "after": {
-     "sha256": "6c65b9d6a96f53661383eb5dfcb9ec0bd682e05032b3b9b49b5b9e76858a09cf",
-     "gitBlob": "7dbbada48dc4b13c741a3dcee013bfec4d5ca82d"
-    }
-   },
-   {
-    "path": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/SystemUiProxy.kt",
-    "before": {
-     "sha256": "3a8943768b31f86d84a62a0f9078fa6e6e84d138b74c114510f76ee6ae99d276",
-     "gitBlob": "8f75b946e622440cc32566fce0f7f8c8a5a0caa9"
-    },
-    "after": {
-     "sha256": "f3a894b1271d4afd2410c6337da3712b639bad564f19de1b2a702f68f40eaea3",
-     "gitBlob": "a881058aee94c322041b7ec2307baf022a48afab"
-    }
-   },
-   {
-    "path": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/TouchInteractionService.kt",
-    "before": {
-     "sha256": "c7b96d539c7c3d9271df2d887eadc7ad259b53c4af65d5ee1780a13704e1ed49",
-     "gitBlob": "256c991afb42d068a1d5f4520ea003f845a5c6f3"
-    },
-    "after": {
-     "sha256": "4730ac469f5a87f02ed43f300dcfa035b2466f55c321a38b6ccd6ebe79c569bb",
-     "gitBlob": "e75c0302ed42eb5d12c3cf356097dfff88477106"
-    }
-   }
-  ],
-  "overlays": [
-   {
-    "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeGesture.java",
-    "bundlePath": "os/tests/fixtures/launcher3-compile-contract/candidate-pr440/overlays/packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeGesture.java",
-    "before": "3966202de90e4567e92d09ffbd9eaa71624a552c92aed1cfdcffd9bdaf682a21",
-    "after": "2c0be858885695b77dffaa637f328ce0033d099cc60b10df270e51c67061a570"
-   },
-   {
-    "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeLayout.java",
-    "bundlePath": "os/tests/fixtures/launcher3-compile-contract/candidate-pr440/overlays/packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeLayout.java",
-    "before": null,
-    "after": "da66349f5c3290766883aa0aad43c5458b5206db2e812d54fa857b624288710c"
-   },
-   {
-    "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeShell.java",
-    "bundlePath": "os/tests/fixtures/launcher3-compile-contract/candidate-pr440/overlays/packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeShell.java",
-    "before": null,
-    "after": "7e588aba36ad31e2b155dcf214dda8bc3b45109aa504a7ec0f6bf0b92522f1b7"
-   },
-   {
-    "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeState.java",
-    "bundlePath": "os/tests/fixtures/launcher3-compile-contract/candidate-pr440/overlays/packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeState.java",
-    "before": null,
-    "after": "94fa3db8d5fde02496620983f039797716d8b6d7d59797fe9a8b2426ddc5e360"
-   },
-   {
-    "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeSwipe.java",
-    "bundlePath": "os/tests/fixtures/launcher3-compile-contract/candidate-pr440/overlays/packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeSwipe.java",
-    "before": null,
-    "after": "6fc31005ef63869e003539ee56d5878a452ba520095d5f15062f027f42dc4fd2"
-   },
-   {
-    "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeWindow.java",
-    "bundlePath": "os/tests/fixtures/launcher3-compile-contract/candidate-pr440/overlays/packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeWindow.java",
-    "before": null,
-    "after": "a14dfd66ad6d07fdba5b5e08f72dc6160a5e0886051b40cc2416cd2fc05fc70a"
-   }
-  ],
-  "bundle": [
-   {
-    "path": "os/tests/fixtures/launcher3-compile-contract/candidate-pr440/overlays/packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeGesture.java",
-    "sha256": "2c0be858885695b77dffaa637f328ce0033d099cc60b10df270e51c67061a570"
-   },
-   {
-    "path": "os/tests/fixtures/launcher3-compile-contract/candidate-pr440/overlays/packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeLayout.java",
-    "sha256": "da66349f5c3290766883aa0aad43c5458b5206db2e812d54fa857b624288710c"
-   },
-   {
-    "path": "os/tests/fixtures/launcher3-compile-contract/candidate-pr440/overlays/packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeShell.java",
-    "sha256": "7e588aba36ad31e2b155dcf214dda8bc3b45109aa504a7ec0f6bf0b92522f1b7"
-   },
-   {
-    "path": "os/tests/fixtures/launcher3-compile-contract/candidate-pr440/overlays/packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeState.java",
-    "sha256": "94fa3db8d5fde02496620983f039797716d8b6d7d59797fe9a8b2426ddc5e360"
-   },
-   {
-    "path": "os/tests/fixtures/launcher3-compile-contract/candidate-pr440/overlays/packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeSwipe.java",
-    "sha256": "6fc31005ef63869e003539ee56d5878a452ba520095d5f15062f027f42dc4fd2"
-   },
-   {
-    "path": "os/tests/fixtures/launcher3-compile-contract/candidate-pr440/overlays/packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeWindow.java",
-    "sha256": "a14dfd66ad6d07fdba5b5e08f72dc6160a5e0886051b40cc2416cd2fc05fc70a"
-   },
-   {
-    "path": "os/tests/fixtures/launcher3-compile-contract/candidate-pr440/patches/rose-edge-launcher3.patch",
-    "sha256": "a1c76e1e03845573501790509a7e620e48476a2bae47889f839d81144dd35460"
-   },
-   {
-    "path": "os/tests/fixtures/launcher3-compile-contract/candidate-pr440/patches/rose-edge-resize-launcher3.patch",
-    "sha256": "94f6842a9f4a41d1311482a18e1a59d5d29d2ff8de5f0e612a8f0ca350404c47"
-   }
-  ],
+  "files": [],
+  "overlays": [],
+  "bundle": [],
   "pathConvention": "files[].path and overlays[].target are relative to the source tree root (project path first); projects[].files[].path and base.projects[].files[].path are relative to their project; bundlePath and bundle[].path are relative to the repository root"
  },
  "flagEvidence": {

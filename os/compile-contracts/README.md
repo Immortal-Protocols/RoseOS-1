@@ -33,15 +33,13 @@ Shell patch, `os/patches/rose-edge-wmshell.patch` (#516/#523/#528, #540's javac 
   one adds `WMShellModule.java`'s pinned pre-image and the inert copy of the candidate patch in `candidate-pr551/`.
 - **Tests:** `os/tests/test_frameworks_base_wmshell_contract.py`.
 
-**The candidate** is #440, a draft that stays unregistered and default-off. Its inputs that are not in this bundle sit in
-`os/tests/fixtures/launcher3-compile-contract/candidate-pr440/`:
-- E2a's edge patch (`rose-edge-launcher3.patch`, byte-identical) and E2c's wiring patch
-  (`rose-edge-resize-launcher3.patch`: the SystemUiProxy hand-off and the TouchInteractionService edge window);
-- the six `RoseEdge*` overlay classes: E2a's `RoseEdgeGesture`, and E2c's `RoseEdgeShell`, `RoseEdgeState`,
-  `RoseEdgeSwipe`, `RoseEdgeLayout` and `RoseEdgeWindow`.
-
-They are byte-identical copies of the reviewed commit `2f57a5f`, bound by their digests. They live outside `os/patches`
-and `os/overlays`, so nothing applies or copies them.
+**The candidate (retired 2026-11-07).** #440 (`2f57a5f`) was a draft, unregistered candidate whose inert copies sat in
+`candidate-pr440/`. The live `apply-os-changes.py` now registers its edge patches (and OS Core's `rose-edge-wmshell.patch`
+and 1G's `rose-shade-systemui.patch` on frameworks/base), so the contract is re-pinned to that patcher: the base is the
+patcher's whole registration for frankel's applyArgs, `candidateDelta` is empty (its PR and commit kept for provenance),
+and base + delta = final. The `candidate-pr440/` copies are removed.
+The integrating-run fields (policy receipt, export run) live in `docs/LAUNCHER3-INDEPENDENT-HANDOFF.md`, section
+"SWAP WHEN FRESH EXPORT LANDS".
 
 **Schema 3** adds, as agreed with Release on #410:
 - **`base.registration`.** The patches the trusted patcher registers in the three projects, derived by *executing*

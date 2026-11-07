@@ -3,7 +3,8 @@
 
 A GitHub-hosted job mints one just-in-time config for runner group 5, then
 places it in this VM's instance metadata. The guest unit, running as
-mustang-runner, reads that key once, starts run.sh --jitconfig, and deletes
+mustang-runner, reads that key once, starts run.sh with the encoded config
+in ACTIONS_RUNNER_INPUT_JITCONFIG, and deletes
 the local copy. Source stays outside the runner work directory. Cleanup and
 the queue watchdog remove the metadata key. Nothing here mints a token unless
 --execute is passed, and --execute is not used by the tests.
@@ -11,6 +12,7 @@ the queue watchdog remove the metadata key. Nothing here mints a token unless
 import argparse
 import base64
 import binascii
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -327,10 +329,64 @@ def parse_metadata_document(raw):
     return metadata_key_names(described)
 
 
-def guest_fetched(payload):
-    if isinstance(payload, dict):
-        return payload.get('value') == '1' or payload.get('variableValue') == '1'
-    return str(payload).strip() == '1'
+def config_digest(path):
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def acknowledgement(payload, expected):
+    """True only for this config. A stale value is not ready. A bad document is an error."""
+    if not isinstance(expected, str) or not re.fullmatch(r'[0-9a-f]{64}', expected):
+        raise ValueError('guest acknowledgement is not bound to this config')
+    if not isinstance(payload, list):
+        raise ValueError('guest attribute readback is not a list')
+    matches = []
+    for item in payload:
+        if not isinstance(item, dict) or type(item.get('key')) is not str or not item.get('key') \
+                or type(item.get('namespace')) is not str or not item.get('namespace') \
+                or type(item.get('value')) is not str:
+            raise ValueError('guest attribute readback is not a list')
+        if item['namespace'] != 'mustang':
+            raise ValueError('guest acknowledgement namespace differs')
+        if item['key'] != 'jit-fetched':
+            raise ValueError('guest acknowledgement key differs')
+        matches.append(item['value'])
+    if len(matches) > 1:
+        raise ValueError('guest acknowledgement is duplicated')
+    if not matches:
+        return False
+    return matches[0] == expected
+
+
+# Readonly gcloud stderr for a missing guest attribute is one line: HTTPError 404,
+# resource '<namespace>/<key>' of type 'Guest Attribute', then the active-account sentence.
+# The probe that established the shape used mustang/nonexistent-probe. This query accepts
+# only mustang/jit-fetched. The account must be the operator who captured that line or the
+# dedicated controller the Actions enroll job uses. The stream is not returned.
+GUEST_ATTRIBUTE_404_HEADER = (
+    'ERROR: (gcloud.compute.instances.get-guest-attributes) HTTPError 404: '
+    "The resource '%s' of type 'Guest Attribute' was not found. "
+    'This command is authenticated as ')
+GUEST_ATTRIBUTE_404_SUFFIX = ' which is the active account specified by the [core/account] property.'
+GUEST_ATTRIBUTE_ACCOUNTS = (
+    'grok-bots@protocols-465723.iam.gserviceaccount.com',
+    'mustang-controller@protocols-465723.iam.gserviceaccount.com',
+)
+
+
+def missing_guest_attribute(result):
+    """True only for exit 1, empty stdout, and the captured Guest Attribute 404 for this key."""
+    if getattr(result, 'returncode', None) != 1:
+        return False
+    stderr = getattr(result, 'stderr', None)
+    stdout = getattr(result, 'stdout', None)
+    if type(stderr) is not str or type(stdout) is not str or stdout.strip():
+        return False
+    text = stderr.strip()
+    prefix = GUEST_ATTRIBUTE_404_HEADER % 'mustang/jit-fetched'
+    if not text.startswith(prefix) or not text.endswith(GUEST_ATTRIBUTE_404_SUFFIX):
+        return False
+    account = text[len(prefix):-len(GUEST_ATTRIBUTE_404_SUFFIX)]
+    return account in GUEST_ATTRIBUTE_ACCOUNTS and text == prefix + account + GUEST_ATTRIBUTE_404_SUFFIX
 
 
 def watch_decision(enroll_result, jobs, elapsed_seconds, limit=QUEUE_LIMIT_SECONDS):
@@ -562,7 +618,7 @@ def emit_stop(decision):
             handle.write('stop='+('true' if decision == 'stop' else 'false')+'\n')
 
 
-def main(argv=None, transport=None):
+def main(argv=None, transport=None, sleep=None, clock=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('action', choices=('plan', 'issue', 'put-metadata', 'wait-fetched', 'clear-metadata', 'queue-watch', 'cancel', 'sweep'))
     parser.add_argument('--run-id')
@@ -571,8 +627,8 @@ def main(argv=None, transport=None):
     parser.add_argument('--execute', action='store_true')
     args = parser.parse_args(argv)
     try:
-        if args.file is not None and args.action != 'put-metadata':
-            raise ValueError('private JIT file is only accepted by put-metadata')
+        if args.file is not None and args.action not in ('put-metadata', 'wait-fetched'):
+            raise ValueError('private JIT file is only accepted by put-metadata and wait-fetched')
         if args.action == 'plan':
             body = jit_body(args.run_id or '1')
             value = {'request': body, 'endpoint': API, 'metadata': metadata_argv('add-metadata'),
@@ -602,27 +658,39 @@ def main(argv=None, transport=None):
             if not args.execute:
                 value = {'query': 'mustang/jit-fetched', 'execute': False}
             else:
-                deadline = time.monotonic() + 180
+                if not args.file:
+                    raise ValueError('metadata delivery requires --execute and the private file')
+                path = private_jit_file(args.file)
+                expected = config_digest(path)
+                pause = sleep or time.sleep
+                now = clock or time.monotonic
+                deadline = now() + 180
                 seen = False
-                while time.monotonic() <= deadline:
+                while now() <= deadline:
                     query = guest_attribute_argv()
                     if transport is None:
                         result = subprocess.run(query, capture_output=True, text=True)
                     else:
                         result = transport(query)
-                    payload = {}
-                    if result.returncode == 0 and result.stdout.strip():
+                    if result.returncode != 0:
+                        # A missing key is not ready yet. Any other failure stops without echoing the stream.
+                        if not missing_guest_attribute(result):
+                            raise ValueError('guest attribute query failed: exit %s' % result.returncode)
+                        payload = []
+                    else:
                         try:
-                            payload = json.loads(result.stdout)
+                            payload = json.loads(result.stdout) if result.stdout.strip() else []
                         except json.JSONDecodeError:
-                            payload = result.stdout
-                    if guest_fetched(payload):
+                            raise ValueError('guest attribute readback is not a list') from None
+                    if acknowledgement(payload, expected):
                         seen = True
                         break
-                    time.sleep(5)
+                    if now() >= deadline:
+                        break
+                    pause(5)
                 if not seen:
-                    raise ValueError('guest did not fetch the JIT metadata before the bound')
-                value = {'fetched': True}
+                    raise ValueError('guest acknowledgement did not match this config before the bound')
+                value = {'fetched': True, 'execute': True}
         elif args.action == 'queue-watch':
             enroll_result = os.environ.get('ENROLL_RESULT', 'success')
             if not args.execute:

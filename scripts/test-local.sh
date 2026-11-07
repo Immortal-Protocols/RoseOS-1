@@ -57,6 +57,7 @@ python3 os/background-control/tests/test_current_apps_wiring.py
 python3 os/background-control/tests/test_current_apps_parity.py
 python3 os/background-control/tests/test_replacement_wiring.py
 python3 os/background-control/tests/test_multi_session_wiring.py
+python3 os/background-control/tests/test_vision_input_wiring.py
 python3 os/background-control/tests/test_preinstall.py
 python3 os/tests/test_apply_os_changes.py
 python3 os/tests/test_yogi_port.py
@@ -210,6 +211,9 @@ node --test workspace/rose-agent/delivery/catalog.test.mjs
 # Pure controller logic; each test compiles with only the class it covers.
 JAVA_TESTS="$(mktemp -d)"
 trap 'rm -rf "$JAVA_TESTS"' EXIT
+java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/VisionInput" \
+ os/background-control/agent-pip/src/dev/pixel/backgroundcontrol/VisionInput.java os/background-control/tests/VisionInputTest.java
+java -cp "$JAVA_TESTS/VisionInput" dev.pixel.backgroundcontrol.VisionInputTest
 for pair in LabelTargets:agent-pip MirrorWindowFrame:agent-pip StopLedger:agent-pip WatchBinding:agent-pip AnyAppControl:agent-pip ViewerPresentation:agent-pip PreviewPolicy:agent-pip CurrentApps:agent-pip Replacement:agent-pip \
  PanePolicy:agent-split InstallerRecoveryPolicy:agent-split; do
  name="${pair%%:*}" variant="${pair##*:}"

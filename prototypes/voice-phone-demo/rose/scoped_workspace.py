@@ -10,6 +10,7 @@ class ScopedWorkspace(Workspace):
         self.package = None
         self.uncertain = False
         self.stop_requested = threading.Event()
+        self.capabilities = {}
 
     def request_stop(self):
         # No lock: cancel may arrive while an action waits on the phone. Prevent
@@ -24,6 +25,7 @@ class ScopedWorkspace(Workspace):
         if self.uncertain:
             return {'status': 'background_unavailable', 'reason': 'Start outcome unknown; inspect the phone before retrying.'}
         caps = self.send('capabilities', {})
+        self.capabilities = caps
         if caps.get('multiSession') is not True or caps.get('maxSessions', 0) < 2:
             return {'status': 'background_unavailable', 'reason': 'Phone does not support independent app sessions.'}
         self.package = package

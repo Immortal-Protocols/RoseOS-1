@@ -278,11 +278,12 @@ class Contract(unittest.TestCase):
         self.assertEqual(sha(data), adapter.MANIFEST_SHA256)
         manifest = adapter.load_manifest()
         self.assertEqual({p['path']: len(p['files']) for p in manifest['projects']},
-                         {'frameworks/base': 27, 'packages/apps/Launcher3': 16, 'build/release': 1})
+                         {'frameworks/base': 34, 'packages/apps/Launcher3': 16, 'build/release': 1})
         self.assertEqual(sum(o['role'] == 'required' for o in manifest['overlays']), 15)
         self.assertEqual(manifest['schemaVersion'], 3)
-        self.assertEqual([p['name'] for p in manifest['candidateDelta']['patches']],
-                         ['rose-edge-launcher3.patch', 'rose-edge-resize-launcher3.patch'])
+        # 2026-11-07 re-pin: base is the live patcher's registration; #440's delta is retired (empty).
+        self.assertEqual(manifest['candidateDelta']['patches'], [])
+        self.assertIn('rose-edge-launcher3.patch', [p['name'] for p in manifest['base']['bundleContent']['patches']])
         self.assertEqual(manifest['lunchInputs'], {'path': adapter.LUNCH_INPUTS, 'sha256': adapter.LUNCH_INPUTS_SHA256})
         self.assertEqual((manifest['branches']['requires'], manifest['branches']['forbids']),
                          (adapter.BRANCH_REQUIRES, adapter.BRANCH_FORBIDS))
@@ -302,8 +303,9 @@ class Contract(unittest.TestCase):
                    lambda m: m['projects'][1]['treePin']['blobHash']['argv'].append('-w'),
                    lambda m: m['base']['projects'][0]['treePin'].__setitem__('objectFormat', 'sha256'),
                    lambda m: m['projects'][2]['treePin']['modes'].append('160000'),
-                   lambda m: m['candidateDelta']['bundle'].pop(),
-                   lambda m: m['candidateDelta']['patches'][0].__setitem__('strip', '1'),
+                   lambda m: m['candidateDelta']['bundle'].append({'path': 'os/tests/fixtures/x.patch', 'sha256': '0' * 64}),
+                   lambda m: m['candidateDelta']['patches'].append({'name': 'x.patch', 'sha256': '0' * 64, 'strip': '1',
+                       'bundlePath': 'os/tests/fixtures/x.patch', 'project': 'packages/apps/Launcher3'}),
                    lambda m: CONFIG(m)['integrationRewrite']['inputRules'].__setitem__('certificate', '[0-9A-Fa-f]{64}'),
                    lambda m: CONFIG(m)['integrationRewrite']['templates']['arrays'].__setitem__(
                        'config_pixelComputerControlPrototypeAgents', 'PrototypeAgents: the agent row'),
@@ -399,7 +401,7 @@ class Contract(unittest.TestCase):
         self.assertEqual(BINDING['bundleReport'], {'path': None, 'sha256': None})
         # the selected branch: no patcher registers the candidate delta, so only base-plus-delta can reach the final images
         self.assertEqual(BINDING['branch'], 'verifyBaseApplyCandidate')
-        self.assertIn('apply-os-changes.py does not register', MANIFEST['candidatePatches'])
+        self.assertIn('candidateDelta is retired and empty', MANIFEST['candidatePatches'])
         result = run_cli('check')
         self.assertEqual((result.returncode, result.stdout), (4, ''))
         self.assertIn('independent harness capacity is unbound', result.stderr)
@@ -2099,7 +2101,7 @@ class RealDelta(unittest.TestCase):
 
     def test_the_base_overlay_comes_from_whichever_source_holds_the_before_image(self):
         """Synthetic images in a temporary root, so this holds on any branch."""
-        target = next(o for o in MANIFEST['candidateDelta']['overlays'] if o['before'] is not None)['target']
+        target = 'packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeGesture.java'
         base, candidate = b'base image\n', b'candidate image\n'
         root = Path(tempfile.mkdtemp())
         live, pinned = root/'os/overlays'/target, root/'os/tests/fixtures/launcher3-compile-contract'/target
@@ -2121,30 +2123,19 @@ class RealDelta(unittest.TestCase):
         with self.assertRaisesRegex(AssertionError, 'no source holds the base image'):
             self.base_overlay(target, sha(base), root)
 
-    def test_the_real_delta_reaches_the_contract_final_images_from_the_real_base(self):
+    def test_the_retired_delta_is_empty_and_base_is_already_final(self):
+        """2026-11-07 re-pin: the live patcher registers #440's edge, so the delta is empty; applying it changes nothing
+        and every base image already equals its final image."""
         delta = MANIFEST['candidateDelta']
-        fixtures = ROOT/'os/tests/fixtures/launcher3-compile-contract'
+        self.assertEqual((delta['files'], delta['overlays'], delta['patches'], delta['bundle']), ([], [], [], []))
         tree = Path(tempfile.mkdtemp())/'tree'
-        for item in delta['files']:
-            (tree/item['path']).parent.mkdir(parents=True, exist_ok=True)
-            (tree/item['path']).write_bytes((fixtures/item['path']).read_bytes())
-        for item in delta['overlays']:
-            if item['before'] is not None:
-                (tree/item['target']).parent.mkdir(parents=True, exist_ok=True)
-                (tree/item['target']).write_bytes(self.base_overlay(item['target'], item['before']))
+        tree.mkdir()
         adapter.delta_preconditions(tree, delta['files'], delta['overlays'])
         adapter.apply_candidate(tree, delta['patches'], delta['overlays'], ROOT, delta['files'])
+        self.assertEqual(list(tree.iterdir()), [])
         final = {f'{p["path"]}/{f["path"]}': f['post'] for p in MANIFEST['projects'] for f in p['files']}
-        overlays = {o['target']: o['sha256'] for o in MANIFEST['overlays'] if o['role'] == 'required'}
-        for item in delta['files']:
-            self.assertTrue(adapter.image_is(tree/item['path'], item['after']))
-            self.assertEqual(item['after'], final[item['path']])
-        for item in delta['overlays']:
-            self.assertEqual(sha((tree/item['target']).read_bytes()), item['after'])
-            self.assertEqual(item['after'], overlays[item['target']])
-        with self.assertRaisesRegex(adapter.Refused, 'delta-preimages'):
-            adapter.delta_preconditions(tree, delta['files'], delta['overlays'])
-
+        base = {f'{p["path"]}/{f["path"]}': f['post'] for p in MANIFEST['base']['projects'] for f in p['files']}
+        self.assertEqual(base, final)
 
 class Run(unittest.TestCase):
     def setUp(self):
