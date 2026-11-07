@@ -288,18 +288,6 @@ jobs:
       with:
         ref: ${{ github.sha }}
         persist-credentials: false
-    - id: app
-      if: always()
-      uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510
-      with:
-        app-id: ${{ vars.MUSTANG_RUNNER_APP_ID }}
-        private-key: ${{ secrets.MUSTANG_RUNNER_APP_PRIVATE_KEY }}
-        owner: Immortal-Protocols
-    - name: Remove this run's offline group 5 runner after the job
-      if: always() && steps.app.outcome == 'success'
-      env:
-        GH_TOKEN: ${{ steps.app.outputs.token }}
-      run: python3 scripts/mustang_ephemeral.py sweep --execute --run-id "$GITHUB_RUN_ID"
     - id: owned
       name: Validate exact owner before login, independent of signing/input readiness
       run: python3 scripts/mustang-dedicated.py cleanup-prepare --ownership-record "$RUNNER_TEMP/mustang-owner.json"
@@ -312,3 +300,15 @@ jobs:
       run: python3 scripts/mustang_ephemeral.py clear-metadata --execute
     - if: always() && steps.login.outcome == 'success'
       run: python3 scripts/actions-gcp-login.py logout
+    - id: app
+      if: always()
+      uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510
+      with:
+        app-id: ${{ vars.MUSTANG_RUNNER_APP_ID }}
+        private-key: ${{ secrets.MUSTANG_RUNNER_APP_PRIVATE_KEY }}
+        owner: Immortal-Protocols
+    - name: Remove this run's offline group 5 runner after the VM stop
+      if: always() && steps.app.outcome == 'success'
+      env:
+        GH_TOKEN: ${{ steps.app.outputs.token }}
+      run: python3 scripts/mustang_ephemeral.py sweep --execute --run-id "$GITHUB_RUN_ID"

@@ -68,15 +68,21 @@ class EnrollmentTest(unittest.TestCase):
         self.assertTrue(summary['ephemeral'])
         self.assertEqual(summary['oneJobProof'], 'POST '+enroll.API)
         body['runner']['ephemeral'] = False
-        with self.assertRaisesRegex(ValueError, 'not an ephemeral'):
-            enroll.accept_jit(body, '12')
+        refused = enroll.accept_jit(body, '12')
+        self.assertIs(refused['ephemeral'], False)
+        self.assertFalse(refused['oneJob'])
         body['runner'].update(ephemeral=True, runner_group_id=4)
         with self.assertRaisesRegex(ValueError, 'not an ephemeral'):
             enroll.accept_jit(body, '12')
-        omitted = {'encoded_jit_config': secret, 'runner': self.runner()}
+        bare = self.runner()
+        del bare['runner_group_id']
+        omitted = {'encoded_jit_config': secret, 'runner': bare}
         self.assertNotIn('ephemeral', omitted['runner'])
+        self.assertNotIn('runner_group_id', omitted['runner'])
         accepted = enroll.accept_jit(omitted, '12')
         self.assertIsNone(accepted['ephemeral'])
+        self.assertIsNone(accepted['responseGroupId'])
+        self.assertNotIn('groupId', accepted)
         self.assertTrue(accepted['oneJob'])
         self.assertNotEqual(accepted['ephemeral'], True)
         nulled = {'encoded_jit_config': secret, 'runner': self.runner(ephemeral=None)}
@@ -94,54 +100,87 @@ class EnrollmentTest(unittest.TestCase):
 
     def test_issue_writes_a_private_file_and_does_not_return_the_config(self):
         secret = 'B'*48
+        minted = self.runner('9')
+        del minted['runner_group_id']
         def post(path, body, token):
             self.assertEqual(path, enroll.API)
             self.assertEqual(body['runner_group_id'], 5)
             self.assertEqual(token, 'x'*24)
-            return {'encoded_jit_config': secret, 'runner': self.runner('9', ephemeral=True)}
+            return {'encoded_jit_config': secret, 'runner': minted}
+        def group(page, token):
+            self.assertEqual(page, 1)
+            return {'total_count': 1, 'runners': [dict(minted)]}
         with tempfile.TemporaryDirectory() as temporary:
             out = Path(temporary)/'jit'
-            summary = enroll.issue('9', 'x'*24, post, out)
+            summary = enroll.issue('9', 'x'*24, post, out, group)
             self.assertNotIn(secret, json.dumps(summary))
+            self.assertIsNone(summary['responseGroupId'])
+            self.assertEqual(summary['groupId'], 5)
+            self.assertEqual(summary['groupProof'], 'GET '+enroll.GROUP_RUNNERS)
             self.assertEqual(out.read_text(), secret)
             self.assertEqual(stat.S_IMODE(out.stat().st_mode), 0o600)
 
-    def test_failed_mint_deletes_only_this_group_5_runner_before_the_file(self):
+    def pages(self, runners):
+        def group(page, token):
+            self.assertEqual(page, 1)
+            return {'total_count': len(runners), 'runners': list(runners)}
+        return group
+
+    def test_group_membership_is_the_list_and_a_failed_mint_deletes_only_after_that_proof(self):
         secret = 'C'*40
         deleted = []
+        bare = self.runner(ephemeral=False)
+        member = dict(bare)
         def post(path, body, token):
-            self.assertEqual(path, enroll.API)
-            return {'encoded_jit_config': secret, 'runner': self.runner(ephemeral=False)}
+            return {'encoded_jit_config': secret, 'runner': bare}
         with tempfile.TemporaryDirectory() as temporary:
             out = Path(temporary)/'jit'
             with self.assertRaisesRegex(ValueError, 'not an ephemeral'):
-                enroll.issue('12', 'x'*24, post, out, delete=lambda path, token: deleted.append(path))
+                enroll.issue('12', 'x'*24, post, out, self.pages([member]), lambda path, token: deleted.append(path))
             self.assertFalse(out.exists())
         self.assertEqual(deleted, ['/orgs/Immortal-Protocols/actions/runners/1144'])
         deleted.clear()
+        with tempfile.TemporaryDirectory() as temporary:
+            out = Path(temporary)/'jit'
+            with self.assertRaisesRegex(ValueError, 'not a member'):
+                enroll.issue('12', 'x'*24, post, out, self.pages([]), lambda path, token: deleted.append(path))
+            self.assertFalse(out.exists())
+        self.assertEqual(deleted, [])
         def other_group(path, body, token):
             return {'encoded_jit_config': secret, 'runner': self.runner(ephemeral=False, runner_group_id=4)}
         with tempfile.TemporaryDirectory() as temporary:
             out = Path(temporary)/'jit'
             with self.assertRaises(ValueError):
-                enroll.issue('12', 'x'*24, other_group, out, delete=lambda path, token: deleted.append(path))
+                enroll.issue('12', 'x'*24, other_group, out, self.pages([member]), lambda path, token: deleted.append(path))
             self.assertFalse(out.exists())
         self.assertEqual(deleted, [])
-        read = {'busy': False, 'ephemeral': None, 'id': 1144, 'labels': ['roseos-mustang-builder'],
-                'name': 'mustang-42387816754', 'status': 'offline'}
+        missing = self.runner('42387816754')
+        del missing['runner_group_id']
+        missing.pop('ephemeral', None)
         def mint(path, body, token):
-            return {'encoded_jit_config': secret, 'runner': self.runner('42387816754')}
-        def get(path, token):
-            self.assertEqual(path, '/orgs/Immortal-Protocols/actions/runners/1144')
-            return read
+            return {'encoded_jit_config': secret, 'runner': missing}
+        listed = {'busy': False, 'ephemeral': None, 'id': 1144, 'labels': ['roseos-mustang-builder'],
+                  'name': 'mustang-42387816754', 'status': 'offline'}
         with tempfile.TemporaryDirectory() as temporary:
             out = Path(temporary)/'jit'
-            summary = enroll.issue('42387816754', 'x'*24, mint, out, get=get, delete=lambda path, token: deleted.append(path))
+            summary = enroll.issue('42387816754', 'x'*24, mint, out, self.pages([listed]),
+                                   lambda path, token: deleted.append(path))
             self.assertIsNone(summary['ephemeral'])
-            self.assertIsNone(summary['readbackEphemeral'])
+            self.assertIsNone(summary['responseGroupId'])
+            self.assertEqual(summary['groupId'], 5)
             self.assertTrue(summary['readbackEphemeralOmitted'])
             self.assertTrue(summary['oneJob'])
             self.assertEqual(out.read_text(), secret)
+        self.assertEqual(deleted, [])
+        def short(page, token):
+            if page == 1:
+                return {'total_count': 2, 'runners': [listed]}
+            return {'total_count': 2, 'runners': []}
+        with tempfile.TemporaryDirectory() as temporary:
+            out = Path(temporary)/'jit'
+            with self.assertRaisesRegex(ValueError, 'incomplete'):
+                enroll.issue('42387816754', 'x'*24, mint, out, short, lambda path, token: deleted.append(path))
+            self.assertFalse(out.exists())
         self.assertEqual(deleted, [])
 
     def test_sweep_deletes_only_an_offline_exact_name_leftover(self):
@@ -158,15 +197,28 @@ class EnrollmentTest(unittest.TestCase):
         busy = [dict(leftover, busy=True, status='online')]
         self.assertEqual(enroll.orphan_ids(busy, '42387816754'), [])
         deleted = []
-        def get(path, token):
-            self.assertEqual(path, enroll.GROUP_RUNNERS)
-            self.assertNotIn('/runner-groups/4/', path)
+        def group(page, token):
+            self.assertEqual(page, 1)
             return {'total_count': 3, 'runners': others}
-        enroll.sweep('42387816754', 'y'*24, get, lambda path, token: deleted.append(path))
+        enroll.sweep('42387816754', 'y'*24, group, lambda path, token: deleted.append(path))
         self.assertEqual(deleted, ['/orgs/Immortal-Protocols/actions/runners/1144'])
+        paged = []
+        def two_pages(page, token):
+            if page == 1:
+                return {'total_count': 2, 'runners': [others[1]]}
+            if page == 2:
+                return {'total_count': 2, 'runners': [leftover]}
+            raise AssertionError(page)
+        enroll.sweep('42387816754', 'y'*24, two_pages, lambda path, token: paged.append(path))
+        self.assertEqual(paged, ['/orgs/Immortal-Protocols/actions/runners/1144'])
+        blocked = []
+        def short(page, token):
+            if page == 1:
+                return {'total_count': 2, 'runners': [leftover]}
+            return {'total_count': 2, 'runners': []}
         with self.assertRaisesRegex(ValueError, 'incomplete'):
-            enroll.sweep('42387816754', 'y'*24, lambda path, token: {'total_count': 2, 'runners': [leftover]},
-                         lambda path, token: deleted.append(path))
+            enroll.sweep('42387816754', 'y'*24, short, lambda path, token: blocked.append(path))
+        self.assertEqual(blocked, [])
         with self.assertRaisesRegex(ValueError, 'leaves the Mustang'):
             enroll.allowed_path('DELETE', '/orgs/Immortal-Protocols/actions/runners/1144'.replace('1144', '0'))
         with self.assertRaisesRegex(ValueError, 'registration token'):
@@ -313,10 +365,23 @@ class EnrollmentTest(unittest.TestCase):
         self.assertLess(enroll_job.index('sweep --execute'), enroll_job.index('clear-metadata --execute'))
         self.assertIn("failure() && steps.app.outcome == 'success'", enroll_job)
         cleanup = workflow.split('\n  cleanup:', 1)[1]
-        self.assertIn('sweep --execute --run-id "$GITHUB_RUN_ID"', cleanup)
+        self.assertLess(cleanup.index('mustang_controller.py stop'), cleanup.index('id: app'))
+        self.assertLess(cleanup.index('clear-metadata --execute'), cleanup.index('sweep --execute'))
         app = cleanup[cleanup.index('create-github-app-token'):cleanup.index('sweep --execute')]
         self.assertNotIn('repositories:', app)
         self.assertNotIn('permission-contents:', app)
+        self.assertEqual(self.cleanup_outcomes(cleanup, fail='app')['stop'], 'success')
+        self.assertEqual(self.cleanup_outcomes(cleanup, fail='app')['owned'], 'success')
+        self.assertEqual(self.cleanup_outcomes(cleanup, fail='app')['login'], 'success')
+        self.assertEqual(self.cleanup_outcomes(cleanup, fail='app')['clear-metadata'], 'success')
+        self.assertEqual(self.cleanup_outcomes(cleanup, fail='app')['sweep'], 'skipped')
+        self.assertEqual(self.cleanup_outcomes(cleanup, fail='sweep')['stop'], 'success')
+        self.assertEqual(self.cleanup_outcomes(cleanup, fail='sweep')['clear-metadata'], 'success')
+        blocked = [{'id': 'app', 'if': None, 'run': '', 'uses': 'create-github-app-token'},
+                   {'id': 'owned', 'if': None, 'run': 'cleanup-prepare', 'uses': ''},
+                   {'id': None, 'if': "steps.owned.outputs.started == 'true'", 'run': 'mustang_controller.py stop', 'uses': ''}]
+        self.assertEqual(self.step_outcomes(blocked, fail='app')['owned'], 'skipped')
+        self.assertEqual(self.step_outcomes(blocked, fail='app')['stop'], 'skipped')
         self.assertNotIn('permission-contents:', enroll_job)
         self.assertEqual(enroll.APP_PERMISSION['access'], 'write')
         self.assertIn('generate-jitconfig', enroll.APP_PERMISSION['endpoint'])
@@ -328,6 +393,79 @@ class EnrollmentTest(unittest.TestCase):
         self.assertIn('RuntimeMaxSec=14400', unit)
         self.assertNotIn('jitconfig', unit.lower())
         self.bootstrap_refuses_wrong_disk_and_keeps_a_verified_download()
+
+    def cleanup_steps(self, job):
+        steps = []
+        current = None
+        body = job.split('\n    steps:\n', 1)[1]
+        for line in body.splitlines():
+            if line.startswith('    - '):
+                if current:
+                    steps.append(current)
+                current = {'if': None, 'id': None, 'run': '', 'uses': ''}
+                key, _, value = line[6:].partition(':')
+                if key in ('if', 'id', 'run', 'uses'):
+                    current[key] = value.strip()
+            elif current is not None and line.startswith('      ') and not line.startswith('        '):
+                key, _, value = line.strip().partition(':')
+                if key in ('if', 'id', 'run', 'uses'):
+                    current[key] = value.strip()
+        if current:
+            steps.append(current)
+        return steps
+
+    def step_key(self, step):
+        if step.get('id'):
+            return step['id']
+        blob = (step.get('run') or '') + (step.get('uses') or '')
+        for name in ('stop', 'clear-metadata', 'logout', 'sweep', 'checkout'):
+            if name in blob:
+                return name
+        return blob or 'step'
+
+    def step_runs(self, condition, failed, outcomes):
+        text = (condition or '').strip().strip('"').strip("'")
+        status = 'success'
+        rest = text
+        for function, name in (('always()', 'always'), ('success()', 'success'), ('failure()', 'failure')):
+            if text.startswith(function):
+                status = name
+                rest = text[len(function):].strip()
+                if rest.startswith('&&'):
+                    rest = rest[2:].strip()
+                break
+        else:
+            if failed:
+                return False
+        if status == 'success' and failed:
+            return False
+        if status == 'failure' and not failed:
+            return False
+        if 'steps.owned.outputs.started' in rest:
+            return outcomes.get('owned') == 'success'
+        if 'steps.login.outcome' in rest:
+            return outcomes.get('login') == 'success'
+        if 'steps.app.outcome' in rest:
+            return outcomes.get('app') == 'success'
+        return True
+
+    def step_outcomes(self, steps, fail):
+        failed = False
+        outcomes = {}
+        for step in steps:
+            key = self.step_key(step)
+            if not self.step_runs(step.get('if'), failed, outcomes):
+                outcomes[key] = 'skipped'
+                continue
+            if key == fail:
+                outcomes[key] = 'failure'
+                failed = True
+                continue
+            outcomes[key] = 'success'
+        return outcomes
+
+    def cleanup_outcomes(self, job, fail):
+        return self.step_outcomes(self.cleanup_steps(job), fail)
 
     def bootstrap_refuses_wrong_disk_and_keeps_a_verified_download(self):
         import hashlib

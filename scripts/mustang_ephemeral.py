@@ -69,6 +69,7 @@ APP_PERMISSION = {
     'source': 'https://docs.github.com/en/rest/actions/self-hosted-runners#create-configuration-for-a-just-in-time-runner-for-an-organization',
     'oneJob': 'GitHub documents that a just-in-time runner can only run a single job. The generate-jitconfig endpoint has no persistent mode.',
     'ephemeralField': 'The runner schema lists ephemeral as an optional boolean. A live readback can omit it as null. Null is not proof, and false is rejected.',
+    'groupField': 'runner_group_id is also optional on that schema. Membership is GET /orgs/{org}/actions/runner-groups/5/runners, not a missing field.',
     'removal': ONE_JOB_DOC,
     'notUsed': 'repository permissions and admin:org user token',
     'installation': 'Organization installation 179610845 of app 5657668. It is not installed on the VM.'}
@@ -129,19 +130,24 @@ def accept_jit(body, run_id):
     if not isinstance(encoded, str) or len(encoded) < 20 or any(c in encoded for c in '\n\r'):
         raise ValueError('JIT config is missing')
     name = f'mustang-{run_id}'
-    if runner.get('name') != name or positive_int(runner.get('runner_group_id') or 0, 'runner group') != 5 \
-            or runner.get('status') != 'offline' or runner.get('busy') is not False \
+    if 'runner_group_id' in runner:
+        reported_group = runner.get('runner_group_id')
+        if isinstance(reported_group, bool) or type(reported_group) is not int or reported_group != 5:
+            raise ValueError('JIT runner is not an ephemeral group 5 runner for this run')
+    else:
+        reported_group = None
+    if runner.get('name') != name or runner.get('status') != 'offline' or runner.get('busy') is not False \
             or type(runner.get('os')) is not str or not runner.get('os'):
         raise ValueError('JIT runner is not an ephemeral group 5 runner for this run')
     label_names(runner.get('labels'))
     runner_id = positive_int(runner.get('id'), 'runner id')
     reported = runner.get('ephemeral', None)
-    if reported is False or (reported is not None and reported is not True):
+    if reported is not None and reported is not True and reported is not False:
         raise ValueError('JIT runner is not an ephemeral group 5 runner for this run')
     config_agrees(encoded, run_id, runner_id)
-    return {'name': name, 'id': runner_id, 'groupId': 5,
-            'ephemeral': True if reported is True else None,
-            'oneJob': True, 'oneJobProof': 'POST '+API, 'configBytes': len(encoded)}
+    return {'name': name, 'id': runner_id, 'responseGroupId': reported_group,
+            'ephemeral': True if reported is True else (False if reported is False else None),
+            'oneJob': reported is not False, 'oneJobProof': 'POST '+API, 'configBytes': len(encoded)}
 
 
 def config_agrees(encoded, run_id, runner_id):
@@ -185,19 +191,53 @@ def confirm_readback(readback, run_id, runner_id):
     return {'ephemeral': readback.get('ephemeral', None), 'omitted': readback.get('ephemeral', None) is None}
 
 
-def minted_id(body, run_id):
-    """The runner this request created. Other groups and other names are not deleted."""
-    runner = body.get('runner') if isinstance(body, dict) else None
-    if not isinstance(runner, dict) or runner.get('name') != f'mustang-{run_id}':
-        return None
+def group_page_path(page):
+    if isinstance(page, bool) or type(page) is not int or page < 1:
+        raise ValueError('runner list page is incomplete')
+    return GROUP_RUNNERS+'?per_page=100&page='+str(page)
+
+
+def collect_pages(fetch):
+    """Read every group 5 page. A short page is not membership and not a delete list."""
+    collected = []
+    total = None
+    for page in range(1, 21):
+        payload = fetch(page)
+        if not isinstance(payload, dict) or not isinstance(payload.get('runners'), list) \
+                or isinstance(payload.get('total_count'), bool) or type(payload.get('total_count')) is not int:
+            raise ValueError('runner list page is incomplete')
+        if total is None:
+            total = payload['total_count']
+        elif payload['total_count'] != total:
+            raise ValueError('runner list page is incomplete')
+        if payload['total_count'] < len(collected):
+            raise ValueError('runner list page is incomplete')
+        collected.extend(payload['runners'])
+        if len(collected) == total:
+            return collected
+        if not payload['runners'] or len(collected) > total:
+            raise ValueError('runner list page is incomplete')
+    raise ValueError('runner list page is incomplete')
+
+
+def group5_member(runners, run_id, runner_id):
+    """Membership is an entry in the group 5 list. A missing group field is not membership."""
+    if not isinstance(runners, list):
+        raise ValueError('JIT runner is not a member of group 5')
+    name = f'mustang-{run_id}'
+    hits = [runner for runner in runners if isinstance(runner, dict)
+            and (runner.get('id') == runner_id or runner.get('name') == name)]
+    if len(hits) != 1:
+        raise ValueError('JIT runner is not a member of group 5')
+    runner = hits[0]
+    if positive_int(runner.get('id'), 'runner id') != runner_id or runner.get('name') != name:
+        raise ValueError('JIT runner is not a member of group 5')
+    label_names(runner.get('labels'))
     if 'runner_group_id' in runner and (isinstance(runner.get('runner_group_id'), bool)
                                         or type(runner.get('runner_group_id')) is not int
                                         or runner.get('runner_group_id') != 5):
-        return None
-    try:
-        return positive_int(runner.get('id'), 'runner id')
-    except ValueError:
-        return None
+        raise ValueError('JIT runner group readback contradicts group 5')
+    return runner
 
 
 def orphan_ids(runners, run_id):
@@ -332,8 +372,11 @@ def allowed_path(method, path):
         raise ValueError('registration token is not a just-in-time runner')
     if method == 'POST' and path == API:
         return
-    if method == 'GET' and path == GROUP_RUNNERS:
-        return
+    if method == 'GET' and path.split('?', 1)[0] == GROUP_RUNNERS:
+        query = path[len(GROUP_RUNNERS):]
+        if query == '' or re.fullmatch(r'\?per_page=100&page=[1-9][0-9]*', query):
+            return
+        raise ValueError('runner request leaves the Mustang organization runners API')
     if method in ('GET', 'DELETE') and re.fullmatch(r'/orgs/Immortal-Protocols/actions/runners/[1-9][0-9]*', path):
         return
     if method == 'POST' and re.fullmatch(r'/repos/Immortal-Protocols/RoseOS-1/actions/runs/[1-9][0-9]*/cancel', path):
@@ -375,22 +418,29 @@ def delete_json(path, token):
     return api('DELETE', path, token)
 
 
-def issue(run_id, token, post, out, get=None, delete=None):
+def issue(run_id, token, post, out, group, delete=None):
     if not isinstance(token, str) or len(token) < 20:
         raise ValueError('runner registrar token is missing')
+    if group is None:
+        raise ValueError('JIT runner is not a member of group 5')
     body = post(API, jit_body(run_id), token)
+    proven = None
     try:
         summary, encoded = accept_pair(body, run_id)
-        if get is not None:
-            readback = get('/orgs/Immortal-Protocols/actions/runners/'+str(summary['id']), token)
-            checked = confirm_readback(readback, run_id, summary['id'])
-            summary = dict(summary, readbackEphemeral=checked['ephemeral'], readbackEphemeralOmitted=checked['omitted'])
+        member = group5_member(collect_pages(lambda page: group(page, token)), run_id, summary['id'])
+        if member.get('busy') is not False or member.get('status') != 'offline':
+            raise ValueError('JIT runner readback is not an offline unused runner')
+        proven = summary['id']
+        if summary['ephemeral'] is False or member.get('ephemeral') is False:
+            raise ValueError('JIT runner is not an ephemeral group 5 runner for this run')
+        checked = confirm_readback(member, run_id, summary['id'])
+        summary = dict(summary, groupId=5, groupProof='GET '+GROUP_RUNNERS,
+                       readbackEphemeral=checked['ephemeral'], readbackEphemeralOmitted=checked['omitted'])
         written = write_secret_file(out, encoded)
     except Exception:
-        orphan = minted_id(body, run_id) if isinstance(body, dict) else None
-        if delete is not None and orphan is not None:
+        if delete is not None and proven is not None:
             try:
-                delete('/orgs/Immortal-Protocols/actions/runners/'+str(orphan), token)
+                delete('/orgs/Immortal-Protocols/actions/runners/'+str(proven), token)
             except Exception:
                 pass
         path = Path(out)
@@ -400,16 +450,12 @@ def issue(run_id, token, post, out, get=None, delete=None):
     return dict(summary, file=written['path'])
 
 
-def sweep(run_id, token, get, delete):
+def sweep(run_id, token, group, delete):
     if not re.fullmatch(r'[1-9][0-9]{0,19}', str(run_id)):
         raise ValueError('JIT runner name must be this run id')
-    payload = get(GROUP_RUNNERS, token)
-    if not isinstance(payload, dict) or not isinstance(payload.get('runners'), list) \
-            or isinstance(payload.get('total_count'), bool) or type(payload.get('total_count')) is not int \
-            or payload['total_count'] != len(payload['runners']):
-        raise ValueError('runner list page is incomplete')
+    runners = collect_pages(lambda page: group(page, token))
     deleted = []
-    for runner_id in orphan_ids(payload['runners'], run_id):
+    for runner_id in orphan_ids(runners, run_id):
         delete('/orgs/Immortal-Protocols/actions/runners/'+str(runner_id), token)
         deleted.append(runner_id)
     return {'deleted': deleted, 'runId': str(run_id), 'groupId': 5}
@@ -477,7 +523,8 @@ def main(argv=None):
                 raise ValueError('JIT minting requires --execute and is not the offline plan')
             if not args.out or not args.run_id:
                 raise ValueError('JIT minting needs this run id and a private output file')
-            value = issue(args.run_id, os.environ.get('GH_TOKEN', ''), post_json, args.out, get_json, delete_json)
+            value = issue(args.run_id, os.environ.get('GH_TOKEN', ''), post_json, args.out,
+                          lambda page, tok: get_json(group_page_path(page), tok), delete_json)
         elif args.action == 'put-metadata':
             if not args.execute or not args.file:
                 raise ValueError('metadata delivery requires --execute and the private file')
@@ -528,7 +575,8 @@ def main(argv=None):
             else:
                 if not args.run_id:
                     raise ValueError('runner sweep needs this run id')
-                value = sweep(args.run_id, os.environ.get('GH_TOKEN', ''), get_json, delete_json)
+                value = sweep(args.run_id, os.environ.get('GH_TOKEN', ''),
+                              lambda page, tok: get_json(group_page_path(page), tok), delete_json)
         elif args.action == 'cancel':
             if not args.execute:
                 raise ValueError('cancel requires --execute')
