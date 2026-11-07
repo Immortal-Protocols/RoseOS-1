@@ -26,6 +26,22 @@ public final class AppRemovalTest {
             expect(builtIn.remove == null && AppRemoval.BUILT_IN.equals(builtIn.note) && builtIn.route == AppRemoval.Route.APP_INFO,
                 "built-in: no fake delete, named, App info (" + may + ")");
         }
+        // 1J: the confirmation's answer, always checked against the package manager.
+        AppRemoval.Outcome gone = AppRemoval.outcome(true, false, false, false);
+        expect(gone == AppRemoval.Outcome.REMOVED && AppRemoval.refreshes(gone) && "Notes was uninstalled".equals(AppRemoval.message(gone, "Notes")), "removed: Home refreshes");
+        expect(AppRemoval.outcome(false, true, false, false) == AppRemoval.Outcome.REMOVED, "gone is gone, whatever the result code");
+        expect(AppRemoval.outcome(false, false, false, true) == AppRemoval.Outcome.REMOVED, "an updated built-in app that is fully gone");
+        AppRemoval.Outcome kept = AppRemoval.outcome(false, true, true, false);
+        expect(kept == AppRemoval.Outcome.KEPT && !AppRemoval.refreshes(kept) && AppRemoval.message(kept, "Notes") == null, "cancel: stays installed, Home unchanged, nothing said");
+        expect(AppRemoval.outcome(false, true, true, true) == AppRemoval.Outcome.KEPT, "cancelled Uninstall updates");
+        AppRemoval.Outcome factory = AppRemoval.outcome(true, false, true, true);
+        expect(factory == AppRemoval.Outcome.UPDATES_REMOVED && AppRemoval.refreshes(factory) && "Maps updates were uninstalled".equals(AppRemoval.message(factory, "Maps")), "updates removed, factory version stays");
+        for (boolean confirmed : new boolean[]{false, true}) {
+            AppRemoval.Outcome refused = AppRemoval.outcome(confirmed, false, true, false);
+            expect(refused == AppRemoval.Outcome.NOT_REMOVED && !AppRemoval.refreshes(refused)
+                && "Work app is still installed. Android didn't uninstall it.".equals(AppRemoval.message(refused, "Work app")), "Android kept it: said so (" + confirmed + ")");
+        }
+        expect(AppRemoval.outcome(false, false, true, true) == AppRemoval.Outcome.NOT_REMOVED, "updates Android refused to remove");
         System.out.println("AppRemovalTest: " + checks + " checks passed");
     }
 }
