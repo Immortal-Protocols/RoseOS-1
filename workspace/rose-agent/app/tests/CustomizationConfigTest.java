@@ -260,6 +260,27 @@ public final class CustomizationConfigTest {
         }
     }
 
+    /** Home's capacity and stale check carry the preferred count: automatic matches HomeAppLayout/HomePlan exactly, a
+     * chosen count never overfills its rows, and a plan built with a chosen count is not stale on the same viewport. */
+    static void capacity() {
+        for (float density : new float[]{1f, 2.625f, 3.5f}) for (int wdp = 200; wdp <= 900; wdp += 37) for (int hdp : new int[]{120, 300, 520}) {
+            int w = Math.round(wdp * density), h = Math.round(hdp * density);
+            float cell = 64 * density;
+            int autoCols = HomeAppLayout.homeColumns(w / density), autoCap = HomeAppLayout.homeCapacity(w, h, cell, density);
+            expect(CustomizationConfig.homeCapacity(0, w, h, cell, density) == autoCap, "automatic capacity matches HomeAppLayout");
+            expect(!CustomizationConfig.homeStale(0, autoCols, autoCap, w, h, cell, density), "automatic plan not stale");
+            expect(CustomizationConfig.homeStale(0, autoCols + 1, autoCap, w, h, cell, density), "automatic plan stale on other columns");
+            int rows = HomeAppLayout.rows(h, cell, density);
+            for (int pref = 3; pref <= 8; pref++) {
+                int cols = CustomizationConfig.effectiveHomeColumns(pref, w / density);
+                int cap = CustomizationConfig.homeCapacity(pref, w, h, cell, density);
+                expect(cap == cols * rows, "capacity is effective columns x rows");
+                expect(HomeAppLayout.usedRows(cap, cols) <= rows, "a full Home fits its rows: pref " + pref);
+                expect(!CustomizationConfig.homeStale(pref, cols, cap, w, h, cell, density), "chosen plan not stale on its viewport: pref " + pref);
+            }
+        }
+    }
+
     static void fonts() {
         expect(RoseFonts.IDS.get(0).equals(RoseFonts.DEFAULT) && RoseFonts.IDS.size() == 6, "font ids, default first");
         expect(RoseFonts.NUNITO_ASSET.equals(RoseFonts.conversationFamily(RoseFonts.DEFAULT)), "default conversation is the Nunito asset");
@@ -282,6 +303,7 @@ public final class CustomizationConfigTest {
         model();
         columns();
         reflow();
+        capacity();
         fonts();
         System.out.println("CustomizationConfigTest: " + checks + " checks passed");
     }

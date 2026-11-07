@@ -1,4 +1,5 @@
-// Nov 7 plan 1O: the four live Rose customization controls, shared by
+// Nov 7 plan 1O: the four Rose customization controls (designed to change live,
+// with no OS rebuild, once the app dispatch and Home seams land), shared by
 // conversation and this CLI. One catalog (app/assets/customization-agent-tools.json)
 // defines them; conversation registers it as dev.pixel.voice app tools and the
 // CLI builds the identical app_command from it. Nothing here touches the network.
@@ -8,6 +9,9 @@ export const PACKAGE_NAME = 'dev.pixel.voice';
 export const DEFAULT_CATALOG = new URL('../app/assets/customization-agent-tools.json', import.meta.url);
 
 export class UsageError extends Error {}
+
+// server/app-tool-catalog.mjs's package rule, which the phone's CustomizationConfig.PACKAGE also applies.
+export const PACKAGE_PATTERN = /^(?:[a-zA-Z][\w]*\.)+[\w]+$/;
 
 export function loadCatalog(path = DEFAULT_CATALOG) {
  const tools = JSON.parse(fs.readFileSync(path, 'utf8'));
@@ -76,6 +80,7 @@ export function parseArgv(argv) {
    if (flag === '--app') {
     const pkg = rest[++i];
     if (pkg === undefined || pkg.startsWith('--')) throw new UsageError('--app needs a package name');
+    if (pkg.length > 255 || !PACKAGE_PATTERN.test(pkg)) throw new UsageError('--app needs a valid package name, such as com.example.notes');
     args.packageName = pkg;
    }
   } else throw new UsageError('Unknown glasses-hook option: ' + flag);

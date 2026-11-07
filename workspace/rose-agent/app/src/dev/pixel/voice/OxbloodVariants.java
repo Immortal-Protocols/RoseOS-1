@@ -111,13 +111,14 @@ final class OxbloodVariants {
  }
 
  /** Whether a colour belongs to the oxblood family: either a near-neutral (desaturated ink, highlight or near-black)
-  * or a red whose hue lies between crimson-magenta and red-orange; a pale tint (the field's ivory and rose highlights)
- * may be a little warmer, up to 35 degrees, but never green, blue or violet. */
+  * or a red whose hue lies between crimson-magenta and red-orange; a pale, muted tint (the field's ivory and rose
+  * highlights, saturation at most 0.65) may be a little warmer, up to 35 degrees, but never green, blue or violet,
+  * and a saturated peach or orange is not Oxblood. */
  static boolean oxbloodFamily(int rgb) {
   float[] h = hsl(rgb);
   if (h[1] < 0.2f || h[2] < 0.04f || h[2] > 0.88f) return true;
   // A pale tint is one of the field's warm highlights (the ivory beam edges, the rose hairlines): warm hue only.
-  if (h[2] > 0.72f) return h[0] >= 325 || h[0] <= 35;
+  if (h[2] > 0.72f && h[1] <= 0.65f) return h[0] >= 325 || h[0] <= 35;
   return h[0] >= 325 || h[0] <= 22;
  }
 }

@@ -32,6 +32,8 @@ public final class OxbloodVariantsTest {
         return new ArrayList<>(out);
     }
 
+    static final int[] STRICT_REDS = {0xff5e0a1a, 0xff8a1426, 0xffc0283f, 0xffd65a69, 0xffa0283c};
+
     public static void main(String[] a) throws Exception {
         if (a.length < 1) throw new IllegalArgumentException("usage: OxbloodVariantsTest <OxbloodField.java>");
         List<Integer> palette = palette(new String(Files.readAllBytes(Paths.get(a[0])), StandardCharsets.UTF_8));
@@ -53,7 +55,7 @@ public final class OxbloodVariantsTest {
         for (String id : OxbloodVariants.IDS) {
             float[] p = OxbloodVariants.parameters(id);
             expect(p.length == 3 && Math.abs(p[0]) <= OxbloodVariants.MAX_HUE_TURN_DEG, "hue turn bounded: " + id);
-            expect(p[1] > 0 && p[2] > 0, "positive factors: " + id);
+            expect(p[1] >= 0.75f && p[1] <= 1.25f && p[2] >= 0.75f && p[2] <= 1.25f, "saturation and brightness bounded to 0.75..1.25: " + id);
             expect(!OxbloodVariants.label(id).isEmpty(), "label: " + id);
             if (id.equals(OxbloodVariants.CLASSIC)) continue;
             float[] m = OxbloodVariants.matrix(id);
@@ -65,6 +67,12 @@ public final class OxbloodVariantsTest {
                 expect(OxbloodVariants.oxbloodFamily(t), id + " keeps " + hex(c) + " Oxblood, got " + hex(t));
                 int translucent = (0x40 << 24) | (c & 0xffffff);
                 expect((OxbloodVariants.apply(m, translucent) >>> 24) == 0x40, "alpha kept: " + id);
+            }
+            // The classic's saturated reds stay saturated reds: no passing through the neutral or pale exemptions.
+            for (int red : STRICT_REDS) {
+                float[] hsl = OxbloodVariants.hsl(OxbloodVariants.apply(m, red));
+                expect((hsl[0] >= 325 || hsl[0] <= 22) && hsl[1] >= 0.3f && hsl[2] <= 0.72f && hsl[2] >= 0.04f,
+                        id + " keeps " + hex(red) + " a saturated red, got hsl " + hsl[0] + "," + hsl[1] + "," + hsl[2]);
             }
             expect(OxbloodVariants.apply(m, 0xff170104) != 0xff170104 || OxbloodVariants.apply(m, 0xff5e0a1a) != 0xff5e0a1a,
                     "variant differs from classic: " + id);
@@ -78,6 +86,9 @@ public final class OxbloodVariantsTest {
                 && !OxbloodVariants.oxbloodFamily(0xffe0a020), "family check rejects blue, green and amber");
         expect(!OxbloodVariants.oxbloodFamily(0xffc0d0f0) && !OxbloodVariants.oxbloodFamily(0xffc8f0c8) && !OxbloodVariants.oxbloodFamily(0xffe0c8f0)
                 && !OxbloodVariants.oxbloodFamily(0xfff0e0a0), "pale blue, green, violet and yellow tints are not Oxblood highlights");
+        expect(!OxbloodVariants.oxbloodFamily(0xffffd8b0) && OxbloodVariants.oxbloodFamily(0xfff0cfc2) && OxbloodVariants.oxbloodFamily(0xffc9b6ad),
+                "a saturated peach is not Oxblood; the field's muted ivory and rose tints are");
+        for (int red : STRICT_REDS) expect(palette.contains(red), "strict red is in the classic palette: " + hex(red));
         for (String bad : new String[]{"ocean", "", null}) {
             try { OxbloodVariants.matrix(bad); throw new AssertionError("unsupported variant accepted: " + bad); } catch (IllegalArgumentException expected) { checks++; }
         }

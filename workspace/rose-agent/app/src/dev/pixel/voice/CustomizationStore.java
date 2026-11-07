@@ -17,11 +17,14 @@ import java.util.Map;
  * is on disk rather than of the in-memory cache alone. All writes are serialized on the class lock.
  *
  * <p>Home reports what it has drawn through {@link #markHomeApplied}; the command result compares that revision with
- * the stored one, so "saved" and "visible on Home" are never confused. */
+ * the stored one, so "saved" and "visible on Home" are never confused. NEVER_APPLIED means Home has never reported.
+ * A change always gets a revision above the mark, even after a damaged config reset the revision to 0, so a reset
+ * can never make an undrawn revision look drawn. */
 final class CustomizationStore {
  private CustomizationStore() {}
 
  static final String PREFS = "rose-customization", CONFIG = "config", HOME_APPLIED = "homeAppliedRevision";
+ static final long NEVER_APPLIED = -1;
 
  /** The outcome of one operation: the value before, the value the operation asked for, and the stored read-back. */
  static final class Applied {
@@ -42,6 +45,8 @@ final class CustomizationStore {
  static synchronized Applied apply(Context c, String operation, Map<String, Object> params) {
   CustomizationConfig before = read(c);
   CustomizationConfig next = before.apply(operation, params);
+  long mark = homeAppliedRevision(c);
+  if (!next.sameValues(before) && next.revision <= mark) next = next.withRevision(mark + 1);
   if (!next.sameValues(before) && !prefs(c).edit().putString(CONFIG, next.toJson()).commit())
    throw new IllegalStateException("Could not save customization");
   return new Applied(before, next, read(c));
@@ -53,7 +58,7 @@ final class CustomizationStore {
  }
 
  static synchronized long homeAppliedRevision(Context c) {
-  try { return prefs(c).getLong(HOME_APPLIED, 0); } catch (ClassCastException damaged) { return 0; }
+  try { return prefs(c).getLong(HOME_APPLIED, NEVER_APPLIED); } catch (ClassCastException damaged) { return NEVER_APPLIED; }
  }
 
  // SharedPreferences holds its listeners weakly, so the store keeps them alive until unregister.

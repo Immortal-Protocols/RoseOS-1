@@ -38,9 +38,12 @@ final class CustomizationAgent {
  }
 
  static JSONObject result(Context ctx, String status, String operation, boolean changed, CustomizationConfig stored) throws Exception {
+  // Only an exact match counts: a mark above the stored revision (the config was reset) is not proof either.
   long applied = CustomizationStore.homeAppliedRevision(ctx);
-  JSONObject home = new JSONObject().put("appliedRevision", applied).put("applied", applied >= stored.revision);
-  if (applied < stored.revision) home.put("note", HOME_PENDING_NOTE);
+  boolean drawn = applied == stored.revision;
+  JSONObject home = new JSONObject().put("appliedRevision", applied == CustomizationStore.NEVER_APPLIED ? JSONObject.NULL : (Object) applied)
+    .put("applied", drawn);
+  if (!drawn) home.put("note", HOME_PENDING_NOTE);
   return new JSONObject().put("status", status).put("operation", operation).put("changed", changed)
     .put("customization", new JSONObject(stored.toJson())).put("home", home)
     .put("glassesWear", GlassesWearHookRunner.status(ctx));

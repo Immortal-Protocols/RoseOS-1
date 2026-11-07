@@ -30,12 +30,16 @@ final class GlassesWearHookRunner {
 
  private static boolean wearReported;
  private static JSONObject lastFire;
- private static String lastRefusal;
+ private static String lastRefusal, lastInvalidWear;
 
  static void onWearSignal(Context ctx, GlassesWearHook.Source source, int state) {
   GlassesWearHook.Decision d = HOOK.observe(source, state, SystemClock.elapsedRealtime(), CustomizationStore.read(ctx));
   synchronized (GlassesWearHookRunner.class) {
-   if (GlassesWearHook.Decision.REFUSED.equals(d.kind)) { lastRefusal = d.reason; return; }
+   if (GlassesWearHook.Decision.REFUSED.equals(d.kind)) {
+    // lastRefused is for turned-away non-wear sources; a wear sensor's bad state is reported apart.
+    if (source != null && source.isWear()) lastInvalidWear = d.reason; else lastRefusal = d.reason;
+    return;
+   }
    if (source != null && source.isWear()) wearReported = true;
   }
   if (!d.fires()) return;
@@ -58,8 +62,8 @@ final class GlassesWearHookRunner {
 
  static JSONObject status(Context ctx) {
   try {
-   boolean available; JSONObject fire; String refusal;
-   synchronized (GlassesWearHookRunner.class) { available = wearReported; fire = lastFire; refusal = lastRefusal; }
+   boolean available; JSONObject fire; String refusal, invalid;
+   synchronized (GlassesWearHookRunner.class) { available = wearReported; fire = lastFire; refusal = lastRefusal; invalid = lastInvalidWear; }
    String name = HOOK.sourceName();
    JSONObject s = new JSONObject().put("signalAvailable", available)
      .put("source", available && name != null ? name : "none")
@@ -67,9 +71,13 @@ final class GlassesWearHookRunner {
      .put("lastFire", fire == null ? JSONObject.NULL : new JSONObject(fire.toString()));
    if (!available) s.put("limitation", LIMITATION);
    if (refusal != null) s.put("lastRefused", refusal);
+   if (invalid != null) s.put("lastInvalidWearReport", invalid);
    return s.put("notWear", new JSONArray().put("bluetooth_connection").put("hfp_audio").put("hinge_unfold_advertisement"));
   } catch (Exception e) {
-   return new JSONObject();
+   // Never drop the limitation: the minimal form still says no wear signal is available.
+   JSONObject s = new JSONObject();
+   try { s.put("signalAvailable", false).put("limitation", LIMITATION); } catch (Exception ignored) {}
+   return s;
   }
  }
 }

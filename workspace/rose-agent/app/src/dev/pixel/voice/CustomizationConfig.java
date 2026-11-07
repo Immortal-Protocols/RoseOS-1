@@ -58,6 +58,19 @@ final class CustomizationConfig {
   return Math.max(MIN_COLUMNS, Math.min(preferred, Math.min(MAX_COLUMNS, fit)));
  }
 
+ /** HomeAppLayout.homeCapacity with the preferred count: effective columns x rows (px inputs, like the original).
+  * Home must use this, not HomeAppLayout.homeCapacity, once it honours a preference, or a narrower grid overfills. */
+ static int homeCapacity(int preferred, float width, float height, float cellHeight, float density) {
+  return effectiveHomeColumns(preferred, width / density) * HomeAppLayout.rows(height, cellHeight, density);
+ }
+
+ /** HomePlan.homeStale with the preferred count, for a known viewport (px): whether a plan built with these columns
+  * and capacity no longer fits. With AUTO_COLUMNS it gives the same answer as HomePlan.homeStale; with a chosen count
+  * it does not report every pass stale just because the columns differ from automatic. */
+ static boolean homeStale(int preferred, int columns, int capacity, int width, int height, float cellHeight, float density) {
+  return columns != effectiveHomeColumns(preferred, width / density) || capacity != homeCapacity(preferred, width, height, cellHeight, density);
+ }
+
  /** The result of an operation on this value. STATE returns this value unchanged, and so does a request identical
   * to the current value (idempotent). A real change returns a new value with revision + 1. */
  CustomizationConfig apply(String operation, Map<String, Object> params) {
