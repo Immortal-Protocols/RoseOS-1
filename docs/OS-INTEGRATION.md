@@ -122,7 +122,7 @@ installed phone and current release channel, not from this repository:
 3. Installed `dev.pixel.voice` and `dev.pixel.backgroundcontrol` version codes and
    signing certificates. The controller prebuilt must have a greater version code
    than any installed copy, or Android keeps the installed one. `agent-pip` is now
-   28 (`2.1.5-pip`); the verified draft 2026102802 carried 27. The policy must pin the same certificate as Rose Agent.
+   28 (`2.1.5-pip`) in source; a release's controller version is the one its allocator assigns (vision text input, `visionText`, ships only in a build that includes it; not yet signed or device-verified); the verified draft 2026102802 carried 27. The policy must pin the same certificate as Rose Agent.
 4. Which app holds the HOME role. Android keeps the role holder across an OTA;
    expected, not yet observed on this phone.
 5. How Rose Agent reaches the existing Pixel Voice VM (endpoint and pinned

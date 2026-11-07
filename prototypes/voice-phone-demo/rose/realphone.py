@@ -592,6 +592,10 @@ class RealPhone:
 
     real = True
     vision = True  # observations carry a screenshot; the agent may tap points in it
+    # Screenshot-only control of Codex app threads (rose/vision_phone.py, --vision-control): off by default, so app
+    # threads keep the accessibility tools and their send/purchase guard until the owner opts in. Its typing also
+    # needs a controller that reports visionText.
+    vision_control = False
 
     def __init__(self, bus=None):
         self.bus = bus
@@ -621,7 +625,7 @@ class RealPhone:
         self._last_shot: tuple[float, Image.Image | None, dict] = (float("-inf"), None, {})
 
     # ----- the fake Phone's surface ------------------------------------
-    def session(self, name: str, on_screen: bool = False, independent: bool = False) -> RealSession:
+    def session(self, name: str, on_screen: bool = False, independent: bool = False, visual: bool = False) -> RealSession:
         """A task's view (made on first use; ``on_screen`` is fixed then).
 
         ``on_screen`` False (the default): the task works in Rose's workspace when the phone has
@@ -635,7 +639,14 @@ class RealPhone:
                 if independent:
                     from .scoped_workspace import ScopedWorkspace
                     workspace = ScopedWorkspace(self._controller)
-                s = self._sessions[name] = RealSession(self, name, on_screen=on_screen, workspace=workspace)
+                if visual:
+                    if not independent or on_screen:
+                        raise ValueError('Vision control requires an independent background workspace')
+                    from .vision_phone import VisionSession
+                    session_class = VisionSession
+                else:
+                    session_class = RealSession
+                s = self._sessions[name] = session_class(self, name, on_screen=on_screen, workspace=workspace)
                 if independent:
                     s._background = True  # never fall back to the owner's screen
                 if not on_screen:

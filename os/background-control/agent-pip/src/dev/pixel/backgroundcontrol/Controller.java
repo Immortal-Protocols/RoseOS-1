@@ -18,7 +18,7 @@ public final class Controller {
  static final String EXT="com.android.extensions.computercontrol.";
  static final Handler main=new Handler(Looper.getMainLooper());
  static final Executor worker=Executors.newSingleThreadExecutor();
- static Object session; static long generation,started; static String id,target,taskId,status="idle",error="",snapshotId;
+ static Object session; static long generation,started; static String id,target,taskId,status="idle",error="",snapshotId,visualSnapshotId;
  static StopLedger stops=new StopLedger(); static int width,height,operations; static boolean blocked; static IntentSender consent;
  // The replacement race (Replacement): sessionToken is the start token of the held session; pending is a start's request
  // waiting for the earliest point Android can admit it. Closed sessions stay unconfirmed until Android admits a later request.
@@ -38,17 +38,17 @@ public final class Controller {
   * run inside their own slot (in(), executor()), so a late or stale event of one session never touches the other. */
  static final class Slot{
   final int index;Object session;long generation,started,sessionToken,pendingToken,snapshotTime,lastPreview;
-  String id,target,taskId,status="idle",error="",snapshotId,observed;StopLedger stops=new StopLedger();int width,height,operations;
+  String id,target,taskId,status="idle",error="",snapshotId,visualSnapshotId,observed;StopLedger stops=new StopLedger();int width,height,operations;
   boolean blocked,truncated,anyApp;IntentSender consent;Replacement replacement=new Replacement();Runnable pending;
   Map<Integer,AccessibilityNodeInfo> nodes=new HashMap<>();Map<Integer,Integer> parents=new HashMap<>();Map<Integer,LabelTargets.Node> labels=new LinkedHashMap<>();
   Slot(int index){this.index=index;}
  }
  static final Slot[] slots={new Slot(0),new Slot(1)}; static Slot active=slots[0];
  static void save(Slot s){s.session=session;s.generation=generation;s.started=started;s.sessionToken=sessionToken;s.pendingToken=pendingToken;s.snapshotTime=snapshotTime;s.lastPreview=lastPreview;
-  s.id=id;s.target=target;s.taskId=taskId;s.status=status;s.error=error;s.snapshotId=snapshotId;s.observed=observed;s.stops=stops;s.width=width;s.height=height;s.operations=operations;
+  s.id=id;s.target=target;s.taskId=taskId;s.status=status;s.error=error;s.snapshotId=snapshotId;s.visualSnapshotId=visualSnapshotId;s.observed=observed;s.stops=stops;s.width=width;s.height=height;s.operations=operations;
   s.blocked=blocked;s.truncated=truncated;s.anyApp=anyApp;s.consent=consent;s.replacement=replacement;s.pending=pending;s.nodes=nodes;s.parents=parents;s.labels=labels;}
  static void load(Slot s){session=s.session;generation=s.generation;started=s.started;sessionToken=s.sessionToken;pendingToken=s.pendingToken;snapshotTime=s.snapshotTime;lastPreview=s.lastPreview;
-  id=s.id;target=s.target;taskId=s.taskId;status=s.status;error=s.error;snapshotId=s.snapshotId;observed=s.observed;stops=s.stops;width=s.width;height=s.height;operations=s.operations;
+  id=s.id;target=s.target;taskId=s.taskId;status=s.status;error=s.error;snapshotId=s.snapshotId;visualSnapshotId=s.visualSnapshotId;observed=s.observed;stops=s.stops;width=s.width;height=s.height;operations=s.operations;
   blocked=s.blocked;truncated=s.truncated;anyApp=s.anyApp;consent=s.consent;replacement=s.replacement;pending=s.pending;nodes=s.nodes;parents=s.parents;labels=s.labels;}
  static Slot enter(Slot s){Slot was=active;if(s!=was){save(was);load(s);active=s;}return was;}
  static void leave(Slot was){enter(was);}
@@ -73,7 +73,7 @@ public final class Controller {
  // Android refuses locked creation with ERROR_DEVICE_LOCKED (2) unless the OS build and owner
  // allow it; a locked session blocks on installer, permission, settings and secure screens.
  static String reason(Context c){if(error.contains("target_in_foreground"))return "target_in_foreground";if(error.contains("owner_unlock_required")||blocked&&locked(c))return "owner_unlock_required";if("rejected".equals(status)&&error.equals("Android session error 2"))return "device_locked";if("starting".equals(status)){String w=pending!=null&&pendingToken==generation?replacement.blocker():replacement.unanswered(generation)?Replacement.REQUEST_UNANSWERED:"";if(!w.isEmpty())return w;}if("rejected".equals(status))return Replacement.reason(error);return "";}
- static void clearNodes(){for(AccessibilityNodeInfo n:nodes.values())n.recycle();nodes.clear();parents.clear();labels.clear();truncated=false;snapshotId=null;}
+ static void clearNodes(){for(AccessibilityNodeInfo n:nodes.values())n.recycle();nodes.clear();parents.clear();labels.clear();truncated=false;snapshotId=null;visualSnapshotId=null;}
  // Only the owner's Stops (notification, Rose's owner_stop, the viewer's confirmed Stop) are "user"; that also refuses
  // later starts of that task.
  static synchronized void stop(Context c,String why){stops.stopped(why,id,taskId);if(StopLedger.USER.equals(why))announceOwnerStop(c,id,taskId);++generation;Object old=session;session=null;consent=null;clearNodes();blocked=false;status="stopped";if(old!=null)try{old.getClass().getMethod("close").invoke(old);replacement.closing(sessionToken,old);}catch(Throwable e){session=old;error=root(e).toString();status="cleanup_failed";} }
@@ -188,6 +188,15 @@ public final class Controller {
   }
   else if(action.equals("ime_enter")){AccessibilityNodeInfo n=node(p);if(n.isPassword()||!n.isEditable()||!n.performAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_IME_ENTER.getId()))throw new IllegalStateException("Background editor submit rejected");}
   else if(action.equals("swipe")||action.equals("drag")){AccessibilityNodeInfo n=node(p);Rect r=new Rect();n.getBoundsInScreen(r);JSONArray points=p.optJSONArray("points");if(points==null){JSONArray bounds=p.getJSONArray("bounds");Rect requested=new Rect(bounds.getInt(0),bounds.getInt(1),bounds.getInt(2),bounds.getInt(3));if(!r.contains(requested))throw new IllegalArgumentException("Swipe outside observed node");int y=requested.centerY();boolean left=p.getString("direction").equals("left");points=new JSONArray(new int[]{left?requested.right-1:requested.left,y,left?requested.left:requested.right-1,y});}for(int i=0;i<4;i+=2)if(!r.contains(points.getInt(i),points.getInt(i+1)))throw new IllegalArgumentException("Gesture outside observed node");swipe(points);}
+  else if(action.equals("screen_text")){
+   // Vision focuses the editor by tapping its screenshot position. No node lookup or accessibility action on a target;
+   // only the input focus the text would land in is checked (visionFocus): never a password field.
+   if(visualSnapshotId==null||!visualSnapshotId.equals(snapshotId))throw new IllegalArgumentException("Fresh screenshot required for vision text");
+   String text=p.getString("text");boolean replace=p.getBoolean("replace");VisionInput.validate(text);
+   clearNodes(); // consume the observed frame before dispatch, even if the platform call fails
+   visionFocus();
+   VisionInput.insert(session,text,replace);
+  }
   else if(action.equals("set_text")){AccessibilityNodeInfo n=node(p);if(!n.isEditable()||!n.isEnabled()||!n.isVisibleToUser())throw new IllegalArgumentException("Node is not an editable visible control");if(n.isPassword())throw new SecurityException("Password fields require user interaction");String text=p.getString("text");if(text.length()>4000)throw new IllegalArgumentException("Text exceeds limit");if(!n.isFocused()){n.performAction(AccessibilityNodeInfo.ACTION_FOCUS);long focusUntil=SystemClock.elapsedRealtime()+500;while(n.refresh()&&!n.isFocused()&&SystemClock.elapsedRealtime()<focusUntil)SystemClock.sleep(25);if(!n.isFocused())throw new IllegalStateException("Could not focus background field");}session.getClass().getMethod("insertText",String.class,boolean.class,boolean.class).invoke(session,text,true,p.optBoolean("commit",false));}
   else if(action.equals("scroll")){AccessibilityNodeInfo n=node(p);String d=p.optString("direction","forward");if(!d.equals("forward")&&!d.equals("backward"))throw new IllegalArgumentException("direction must be forward or backward");if(!n.isScrollable()||!n.performAction(d.equals("forward")?AccessibilityNodeInfo.ACTION_SCROLL_FORWARD:AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD))throw new IllegalStateException("Background scroll rejected");}
   else if(action.equals("back"))session.getClass().getMethod("performAction",int.class).invoke(session,Class.forName(EXT+"ComputerControlSession").getField("ACTION_GO_BACK").getInt(null));
@@ -313,6 +322,48 @@ public final class Controller {
   }
   return MultiSession.bind(occupied,owned);
  }
+ /** The session's input focus, which vision text would land in, in the window that has input focus (every window, top
+  * first, when none reports it): findFocus(FOCUS_INPUT) when it names an editable node (the View hierarchy's one input
+  * target), else the one focused editable node found by its own state (focusedEditables), since a released Compose
+  * answers findFocus with its non-editable host for nodes it has not described. A password field anywhere among those
+  * refuses (a WebView can keep a stale focused input beside the real target), and so does an ambiguous state lookup
+  * (several focused editable nodes, or a tree larger than the bound). Every node is released at once. Throws unless
+  * VisionInput.refusal allows it: a password field (SecurityException), or nothing editable focused. */
+ @SuppressWarnings("unchecked") static void visionFocus()throws Exception{
+  List<AccessibilityWindowInfo> windows=(List<AccessibilityWindowInfo>)session.getClass().getMethod("getAccessibilityWindows").invoke(session);
+  boolean anyFocused=false;for(AccessibilityWindowInfo w:windows)anyFocused|=w.isFocused();
+  boolean found=false,editable=false,password=false;
+  for(AccessibilityWindowInfo w:windows){
+   if(!found&&(!anyFocused||w.isFocused())){AccessibilityNodeInfo root=w.getRoot();
+    if(root!=null){AccessibilityNodeInfo input=root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT);
+     FocusScan scan=focusedEditables(root);
+     boolean target=input!=null&&input.isEditable();
+     found=target||scan.count>0||input!=null;
+     editable=target||(scan.count==1&&!scan.truncated);
+     password|=(input!=null&&input.isPassword())||scan.password;
+     if(input!=null&&input!=root)input.recycle();
+     root.recycle();}}
+   w.recycle();
+  }
+  String why=VisionInput.refusal(found,editable,password);
+  if(why!=null){if(password)throw new SecurityException(why);throw new IllegalStateException(why);}
+ }
+ /** What a breadth-first scan of up to VISION_FOCUS_NODES nodes under root found: how many nodes are focused and
+  * editable, whether any of them is a password field, and whether the tree was larger than the bound. Every node read
+  * except root is released. */
+ static final class FocusScan{int count;boolean password,truncated;}
+ static FocusScan focusedEditables(AccessibilityNodeInfo root){
+  FocusScan scan=new FocusScan();ArrayDeque<AccessibilityNodeInfo> queue=new ArrayDeque<>();queue.add(root);int seen=0;
+  while(!queue.isEmpty()){AccessibilityNodeInfo n=queue.poll();
+   if(seen++<VISION_FOCUS_NODES){
+    if(n.isFocused()&&n.isEditable()){scan.count++;scan.password|=n.isPassword();}
+    for(int i=0;i<n.getChildCount();i++){AccessibilityNodeInfo c=n.getChild(i);if(c!=null)queue.add(c);}
+   }else scan.truncated=true;
+   if(n!=root)n.recycle();
+  }
+  return scan;
+ }
+ static final int VISION_FOCUS_NODES=2000;
  /** A session display's application window packages, top first, or null when unreadable; every root is released at once.
   * Read-only: never the agent's observation. */
  @SuppressWarnings("unchecked") static List<String> windows(Object s){
@@ -454,7 +505,7 @@ public final class Controller {
     if(nextWidth<64||nextHeight<64)throw new IllegalStateException("Background image exceeds safe Binder transport limit");
     Bitmap smaller=Bitmap.createScaledBitmap(encoded,nextWidth,nextHeight,true);if(encoded!=crop)encoded.recycle();encoded=smaller;quality=80;
    }
-   clearNodes();snapshotId=UUID.randomUUID().toString();snapshotTime=SystemClock.elapsedRealtime();
+   clearNodes();snapshotId=UUID.randomUUID().toString();snapshotTime=SystemClock.elapsedRealtime();visualSnapshotId=snapshotId;
    return base().put("width",encoded.getWidth()).put("height",encoded.getHeight()).put("capturedAt",System.currentTimeMillis()).put("screenshotId",snapshotId).put("mimeType","image/jpeg").put("imageBase64",android.util.Base64.encodeToString(out.toByteArray(),android.util.Base64.NO_WRAP));
   }finally{if(encoded!=null&&encoded!=crop)encoded.recycle();if(crop!=null&&crop!=all)crop.recycle();if(all!=null)all.recycle();image.close();}
  }

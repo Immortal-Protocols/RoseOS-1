@@ -110,7 +110,7 @@ jobs:
     - name: Deliver the config through instance metadata from a file
       run: python3 scripts/mustang_ephemeral.py put-metadata --execute --file "$RUNNER_TEMP/mustang-jit"
     - name: Remove the metadata key as soon as the guest has fetched it
-      run: python3 scripts/mustang_ephemeral.py wait-fetched --execute
+      run: python3 scripts/mustang_ephemeral.py wait-fetched --execute --file "$RUNNER_TEMP/mustang-jit"
     - name: Remove this run's offline group 5 runner if enrollment failed
       if: failure() && steps.app.outcome == 'success'
       env:
