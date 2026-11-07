@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import re
+import secrets
 
 import yogi_possess_guest as guest
 import yogi_possession
@@ -168,6 +169,9 @@ def apply_install(out, root, evidence, controller_unix):
         raise Refused('unit')
     if any(token in evidence.get('probe', '') for token in ('setsid', 'start_new_session', 'setpgrp')):
         raise Refused('probe')
+    effective = evidence.get('sshdEffective') if isinstance(evidence, dict) else None
+    if not isinstance(effective, str) or not effective.strip():
+        raise Refused('sshd-config-unproven')
     expected_expiry = _expiry_precheck(evidence, controller_unix)
     record['lineState'] = 'maybe-present'
     _atomic_json(out, JOURNAL, record)
@@ -176,7 +180,8 @@ def apply_install(out, root, evidence, controller_unix):
             root, blob=record['blob'], operation_id=record['operationId'], probe=evidence['probe'],
             unit=evidence['unit'], now_unix=evidence['guestUnix'], synchronized=True,
             sshd_version=evidence['sshdVersion'], sshd_config=evidence['sshdConfig'],
-            passwd_text=evidence['passwd'], sshd_effective=evidence.get('sshdEffective'))
+            passwd_text=evidence['passwd'], sshd_effective=effective,
+            include_read=evidence.get('includeRead'))
     except guest.GuestRefused as error:
         raise Refused(error.code) from None
     if receipt['expiryUnix'] != expected_expiry:
@@ -245,16 +250,19 @@ def _guest_receipt(document):
     return receipt
 
 
-def plan_inspect(out, operation_id, nonce):
-    """Persist the inspect binding only after a durable revoke. A boot UUID is not an order."""
+def plan_inspect(out):
+    """Mint a fresh inspect id after revoke and persist it before returning.
+
+    The caller does not choose the operation id or nonce. An older receipt cannot be
+    selected into the plan. A boot UUID is not an order.
+    """
     record = _load(out)
     if record.get('phase') != 'revoked':
         raise Refused('inspect-not-planned')
-    if not OP_ID.fullmatch(operation_id or '') or not OP_ID.fullmatch(nonce or ''):
-        raise Refused('inspect-nonce')
-    if operation_id in (record.get('operationId'), nonce) or nonce == record.get('operationId'):
-        raise Refused('inspect-nonce')
-    if (yogi_possession.spent_binding(operation_id) or yogi_possession.spent_binding(nonce)
+    operation_id = secrets.token_hex(16)
+    nonce = secrets.token_hex(16)
+    if (operation_id == nonce or operation_id == record.get('operationId') or nonce == record.get('operationId')
+            or yogi_possession.spent_binding(operation_id) or yogi_possession.spent_binding(nonce)
             or nonce in SPENT_INSPECT_NONCES or operation_id in SPENT_INSPECT_NONCES):
         raise Refused('inspect-replay')
     record['phase'] = 'inspect-planned'
@@ -266,7 +274,10 @@ def plan_inspect(out, operation_id, nonce):
     record['clean'] = False
     record['guestAuthenticated'] = False
     _atomic_json(out, JOURNAL, record)
-    return _load(out)
+    stored = _load(out)
+    if stored.get('inspectPlan') != record['inspectPlan'] or stored.get('phase') != 'inspect-planned':
+        raise Refused('journal-write')
+    return stored
 
 
 def accept_inspect(out, document):

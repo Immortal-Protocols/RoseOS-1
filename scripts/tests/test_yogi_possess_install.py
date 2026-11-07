@@ -55,11 +55,23 @@ def passwd():
     return f'pixelbuild:x:{os.getuid()}:{os.getgid()}::/home/pixelbuild:/bin/bash\n'
 
 
+EFFECTIVE = (
+    'pubkeyauthentication yes\npasswordauthentication no\nkbdinteractiveauthentication no\n'
+    'challengeresponseauthentication no\nauthenticationmethods any\nforcecommand none\n'
+    'authorizedkeyscommand none\npermituserenvironment no\nauthorizedkeysfile .ssh/authorized_keys\n'
+)
+
+
 def evidence(now=NOW, version=VERSION, config=CONFIG, synchronized=True):
     return {
         'guestUnix': now, 'synchronized': synchronized, 'sshdVersion': version,
-        'sshdConfig': config, 'passwd': passwd(), 'probe': PROBE, 'unit': UNIT,
+        'sshdConfig': config, 'sshdEffective': EFFECTIVE, 'passwd': passwd(), 'probe': PROBE, 'unit': UNIT,
     }
+
+
+def ginstall(root, **kwargs):
+    kwargs.setdefault('sshd_effective', EFFECTIVE)
+    return guest.install(root, **kwargs)
 
 
 def seed(root):
@@ -96,7 +108,7 @@ class PossessInstallTest(unittest.TestCase):
         held = os.open(self.auth, os.O_RDONLY)
         os.chmod(self.auth.parent, 0o600)
         with self.assertRaises(guest.GuestRefused) as caught:
-            guest.install(self.root, blob=BLOB, operation_id=OP, probe=PROBE, unit=UNIT, now_unix=NOW,
+            ginstall(self.root, blob=BLOB, operation_id=OP, probe=PROBE, unit=UNIT, now_unix=NOW,
                           synchronized=True, sshd_version=VERSION, sshd_config=CONFIG, passwd_text=passwd())
         self.assertEqual(caught.exception.code, 'directory-mode')
         os.lseek(held, 0, os.SEEK_SET)
@@ -105,14 +117,14 @@ class PossessInstallTest(unittest.TestCase):
         os.chmod(self.auth.parent, 0o700)
         os.chmod(self.auth.parent.parent, 0o777)
         with self.assertRaises(guest.GuestRefused) as caught:
-            guest.install(self.root, blob=BLOB, operation_id=OP, probe=PROBE, unit=UNIT, now_unix=NOW,
+            ginstall(self.root, blob=BLOB, operation_id=OP, probe=PROBE, unit=UNIT, now_unix=NOW,
                           synchronized=True, sshd_version=VERSION, sshd_config=CONFIG, passwd_text=passwd())
         self.assertEqual(caught.exception.code, 'directory-mode')
         os.chmod(self.auth.parent.parent, 0o755)
         link = self.auth.with_name('linked')
         os.link(self.auth, link)
         with self.assertRaises(guest.GuestRefused) as caught:
-            guest.install(self.root, blob=BLOB, operation_id=OP, probe=PROBE, unit=UNIT, now_unix=NOW,
+            ginstall(self.root, blob=BLOB, operation_id=OP, probe=PROBE, unit=UNIT, now_unix=NOW,
                           synchronized=True, sshd_version=VERSION, sshd_config=CONFIG, passwd_text=passwd())
         self.assertEqual(caught.exception.code, 'auth-hardlink')
         self.assertEqual(self.auth.read_bytes(), original)
@@ -122,7 +134,7 @@ class PossessInstallTest(unittest.TestCase):
         self.auth.symlink_to(link)
         link.write_bytes(target)
         with self.assertRaises(guest.GuestRefused) as caught:
-            guest.install(self.root, blob=BLOB, operation_id=OP, probe=PROBE, unit=UNIT, now_unix=NOW,
+            ginstall(self.root, blob=BLOB, operation_id=OP, probe=PROBE, unit=UNIT, now_unix=NOW,
                           synchronized=True, sshd_version=VERSION, sshd_config=CONFIG, passwd_text=passwd())
         self.assertEqual(caught.exception.code, 'symlink')
         self.assertEqual(link.read_bytes(), target)
@@ -158,7 +170,7 @@ class PossessInstallTest(unittest.TestCase):
 
     def test_install_preserves_foreign_bytes_and_refuses_a_different_line(self):
         original = self.auth.read_bytes()
-        receipt = guest.install(self.root, blob=BLOB, operation_id=OP, probe=PROBE, unit=UNIT, now_unix=NOW,
+        receipt = ginstall(self.root, blob=BLOB, operation_id=OP, probe=PROBE, unit=UNIT, now_unix=NOW,
                                 synchronized=True, sshd_version=VERSION, sshd_config=CONFIG, passwd_text=passwd())
         written = self.auth.read_bytes()
         self.assertTrue(written.startswith(original))
@@ -169,17 +181,17 @@ class PossessInstallTest(unittest.TestCase):
         self.assertNotIn('-', receipt['expiry'])
         self.assertEqual(receipt['deadlineSeconds'], 45)
         self.assertIn('backward', receipt['backwardClock'])
-        again = guest.install(self.root, blob=BLOB, operation_id=OP, probe=PROBE, unit=UNIT, now_unix=NOW,
+        again = ginstall(self.root, blob=BLOB, operation_id=OP, probe=PROBE, unit=UNIT, now_unix=NOW,
                               synchronized=True, sshd_version=VERSION, sshd_config=CONFIG, passwd_text=passwd())
         self.assertTrue(again['idempotent'])
         self.assertEqual(self.auth.read_bytes(), written)
         with self.assertRaises(guest.GuestRefused) as caught:
-            guest.install(self.root, blob=BLOB, operation_id=OP, probe=PROBE, unit=UNIT, now_unix=NOW + 60,
+            ginstall(self.root, blob=BLOB, operation_id=OP, probe=PROBE, unit=UNIT, now_unix=NOW + 60,
                           synchronized=True, sshd_version=VERSION, sshd_config=CONFIG, passwd_text=passwd())
         self.assertEqual(caught.exception.code, 'duplicate-key')
         self.assertEqual(self.auth.read_bytes(), written)
         with self.assertRaises(guest.GuestRefused) as caught:
-            guest.install(self.root, blob=BLOB, operation_id='cd' * 16, probe=PROBE, unit=UNIT, now_unix=NOW,
+            ginstall(self.root, blob=BLOB, operation_id='cd' * 16, probe=PROBE, unit=UNIT, now_unix=NOW,
                           synchronized=True, sshd_version=VERSION, sshd_config=CONFIG, passwd_text=passwd())
         self.assertEqual(caught.exception.code, 'duplicate-key')
         self.assertEqual((self.root / 'root' / '.ssh' / 'authorized_keys').read_bytes(), b'ROOT KEY\n')
@@ -191,12 +203,12 @@ class PossessInstallTest(unittest.TestCase):
             {'synchronized': True, 'sshd_version': 'OpenSSH_9.6p1 Ubuntu-3ubuntu13.20'},
         ):
             with self.assertRaises(guest.GuestRefused):
-                guest.install(self.root, blob=BLOB, operation_id=OP, probe=PROBE, unit=UNIT, now_unix=NOW,
+                ginstall(self.root, blob=BLOB, operation_id=OP, probe=PROBE, unit=UNIT, now_unix=NOW,
                               sshd_config=CONFIG, passwd_text=passwd(), **kwargs)
             self.assertEqual(self.auth.read_bytes(), original)
 
     def test_revoke_keeps_concurrent_bytes_and_ignores_a_stale_backup(self):
-        receipt = guest.install(self.root, blob=BLOB, operation_id=OP, probe=PROBE, unit=UNIT, now_unix=NOW,
+        receipt = ginstall(self.root, blob=BLOB, operation_id=OP, probe=PROBE, unit=UNIT, now_unix=NOW,
                                 synchronized=True, sshd_version=VERSION, sshd_config=CONFIG, passwd_text=passwd())
         extra = b'ssh-ed25519 ' + b'C' * 40 + b' concurrent\n'
         with self.auth.open('ab') as handle:
@@ -215,7 +227,7 @@ class PossessInstallTest(unittest.TestCase):
         self.assertEqual(self.auth.read_bytes(), (FOREIGN + '\n').encode() + extra)
 
     def test_revoke_refuses_a_line_that_is_not_the_recorded_one(self):
-        receipt = guest.install(self.root, blob=BLOB, operation_id=OP, probe=PROBE, unit=UNIT, now_unix=NOW,
+        receipt = ginstall(self.root, blob=BLOB, operation_id=OP, probe=PROBE, unit=UNIT, now_unix=NOW,
                                 synchronized=True, sshd_version=VERSION, sshd_config=CONFIG, passwd_text=passwd())
         current = self.auth.read_bytes()
         with self.assertRaises(guest.GuestRefused) as caught:
@@ -254,7 +266,7 @@ class PossessInstallTest(unittest.TestCase):
     def test_receipt_loss_restart_and_inspect_gate(self):
         install.begin(self.out, OP, BLOB)
         # Guest write succeeds and the controller dies before recording the line.
-        guest.install(self.root, blob=BLOB, operation_id=OP, probe=PROBE, unit=UNIT, now_unix=NOW,
+        ginstall(self.root, blob=BLOB, operation_id=OP, probe=PROBE, unit=UNIT, now_unix=NOW,
                       synchronized=True, sshd_version=VERSION, sshd_config=CONFIG, passwd_text=passwd())
         self.assertIn(BLOB, self.auth.read_text())
         with self.assertRaises(install.Refused):
@@ -269,18 +281,27 @@ class PossessInstallTest(unittest.TestCase):
             install.accept_inspect(self.out, early)
         self.assertEqual(caught.exception.code, 'inspect-not-planned')
         self.assertEqual(install._load(self.out)['phase'], 'revoked')
-        planned = install.plan_inspect(self.out, INSPECT_OP, INSPECT_NONCE)
+        with self.assertRaises(TypeError):
+            install.plan_inspect(self.out, INSPECT_OP, INSPECT_NONCE)
+        planned = install.plan_inspect(self.out)
+        plan = planned['inspectPlan']
         self.assertEqual(planned['phase'], 'inspect-planned')
-        self.assertEqual(install._load(self.out)['inspectPlan']['nonce'], INSPECT_NONCE)
+        self.assertNotEqual(plan['operationId'], INSPECT_OP)
+        self.assertNotEqual(plan['nonce'], INSPECT_NONCE)
+        self.assertEqual(install._load(self.out)['inspectPlan'], plan)
         saved = json.loads(FIXTURE.read_text())
         with self.assertRaises(install.Refused) as caught:
             install.accept_inspect(self.out, saved)
         self.assertEqual(caught.exception.code, 'inspect-binding')
-        wrong = fresh_outcome(INSPECT_OP, INSPECT_NONCE, 'roseos-yogi-possess-' + OP, 'C' * 68)
+        with self.assertRaises(install.Refused) as caught:
+            install.accept_inspect(self.out, early)
+        self.assertEqual(caught.exception.code, 'inspect-binding')
+        wrong = fresh_outcome(plan['operationId'], plan['nonce'], 'roseos-yogi-possess-' + OP, 'C' * 68)
         with self.assertRaises(install.Refused) as caught:
             install.accept_inspect(self.out, wrong)
         self.assertEqual(caught.exception.code, 'inspect-not-clean')
-        done = install.accept_inspect(self.out, early)
+        done = install.accept_inspect(
+            self.out, fresh_outcome(plan['operationId'], plan['nonce'], 'roseos-yogi-possess-' + OP, BLOB))
         self.assertEqual(done['state'], 'revoked')
         self.assertTrue(done['clean'])
         self.assertFalse(done['guestAuthenticated'])
@@ -362,7 +383,7 @@ class PossessInstallTest(unittest.TestCase):
         original = (FOREIGN + '\nssh-ed25519 ' + BLOB + '\n').encode()
         self.auth.write_bytes(original)
         with self.assertRaises(guest.GuestRefused) as caught:
-            guest.install(self.root, blob=BLOB, operation_id=OP, probe=PROBE, unit=UNIT, now_unix=NOW,
+            ginstall(self.root, blob=BLOB, operation_id=OP, probe=PROBE, unit=UNIT, now_unix=NOW,
                           synchronized=True, sshd_version=VERSION, sshd_config=CONFIG, passwd_text=passwd())
         self.assertEqual(caught.exception.code, 'duplicate-key')
         self.assertEqual(self.auth.read_bytes(), original)
@@ -376,14 +397,14 @@ class PossessInstallTest(unittest.TestCase):
     def test_missing_or_wrong_mode_auth_file_is_not_created(self):
         self.auth.unlink()
         with self.assertRaises(guest.GuestRefused) as caught:
-            guest.install(self.root, blob=BLOB, operation_id=OP, probe=PROBE, unit=UNIT, now_unix=NOW,
+            ginstall(self.root, blob=BLOB, operation_id=OP, probe=PROBE, unit=UNIT, now_unix=NOW,
                           synchronized=True, sshd_version=VERSION, sshd_config=CONFIG, passwd_text=passwd())
         self.assertEqual(caught.exception.code, 'auth-absent')
         self.assertFalse(self.auth.exists())
         self.auth.write_text(FOREIGN + '\n')
         os.chmod(self.auth, 0o644)
         with self.assertRaises(guest.GuestRefused) as caught:
-            guest.install(self.root, blob=BLOB, operation_id=OP, probe=PROBE, unit=UNIT, now_unix=NOW,
+            ginstall(self.root, blob=BLOB, operation_id=OP, probe=PROBE, unit=UNIT, now_unix=NOW,
                           synchronized=True, sshd_version=VERSION, sshd_config=CONFIG, passwd_text=passwd())
         self.assertEqual(caught.exception.code, 'auth-mode')
         self.assertEqual(stat.S_IMODE(self.auth.stat().st_mode), 0o644)
@@ -446,7 +467,7 @@ class PossessInstallTest(unittest.TestCase):
         temp = self.auth.parent / f'.authorized_keys.{os.urandom(8).hex()}.tmp'
         temp.write_text('partial-key\n')
         os.chmod(temp, 0o600)
-        receipt = guest.install(self.root, blob=BLOB, operation_id=OP, probe=PROBE, unit=UNIT, now_unix=NOW,
+        receipt = ginstall(self.root, blob=BLOB, operation_id=OP, probe=PROBE, unit=UNIT, now_unix=NOW,
                                 synchronized=True, sshd_version=VERSION, sshd_config=CONFIG, passwd_text=passwd())
         self.assertIn(temp.name, receipt['removedTemps'])
         self.assertFalse(temp.exists())
@@ -515,16 +536,15 @@ class PossessInstallTest(unittest.TestCase):
     def test_replayed_nonce_and_unidentified_marker_are_refused(self):
         install.begin(self.out, OP, BLOB)
         install.resume_revoke(self.out, self.root, passwd())
-        with self.assertRaises(install.Refused) as caught:
+        with self.assertRaises(TypeError):
             install.plan_inspect(self.out, INSPECT_OP, '38545d88138e8b49aeef032f660a8acf')
-        self.assertEqual(caught.exception.code, 'inspect-replay')
-        install.plan_inspect(self.out, INSPECT_OP, INSPECT_NONCE)
-        replay = fresh_outcome(INSPECT_OP, '38545d88138e8b49aeef032f660a8acf',
-                               'roseos-yogi-possess-' + OP, BLOB)
+        planned = install.plan_inspect(self.out)
+        plan = planned['inspectPlan']
+        replay = json.loads(FIXTURE.read_text())
         with self.assertRaises(install.Refused) as caught:
             install.accept_inspect(self.out, replay)
         self.assertEqual(caught.exception.code, 'inspect-binding')
-        dirty = fresh_outcome(INSPECT_OP, INSPECT_NONCE, 'roseos-yogi-possess-' + OP, BLOB,
+        dirty = fresh_outcome(plan['operationId'], plan['nonce'], 'roseos-yogi-possess-' + OP, BLOB,
                               unidentifiedAuthorizedKeyLines=1)
         with self.assertRaises(install.Refused) as caught:
             install.accept_inspect(self.out, dirty)
@@ -545,14 +565,15 @@ class PossessInstallTest(unittest.TestCase):
         with self.assertRaises(install.Refused) as caught:
             install.accept_inspect(self.out, before)
         self.assertEqual(caught.exception.code, 'inspect-not-planned')
-        install.plan_inspect(self.out, INSPECT_OP, INSPECT_NONCE)
+        planned = install.plan_inspect(self.out)
+        plan = planned['inspectPlan']
         self.assertEqual(install._load(self.out)['phase'], 'inspect-planned')
         later_boot = fresh_outcome('ff' * 16, 'ee' * 16, 'roseos-yogi-possess-' + OP, BLOB)
         later_boot['guestReceipt']['bootId'] = 'ffffffff-ffff-4fff-8fff-ffffffffffff'
         with self.assertRaises(install.Refused) as caught:
             install.accept_inspect(self.out, later_boot)
         self.assertEqual(caught.exception.code, 'inspect-binding')
-        early_boot = fresh_outcome(INSPECT_OP, INSPECT_NONCE, 'roseos-yogi-possess-' + OP, BLOB)
+        early_boot = fresh_outcome(plan['operationId'], plan['nonce'], 'roseos-yogi-possess-' + OP, BLOB)
         early_boot['guestReceipt']['bootId'] = '00000000-0000-4000-8000-000000000001'
         done = install.accept_inspect(self.out, early_boot)
         self.assertEqual(done['phase'], 'clean')
@@ -560,7 +581,7 @@ class PossessInstallTest(unittest.TestCase):
         other.mkdir()
         install.begin(other, 'ab' * 15 + 'cd', BLOB)
         install.resume_revoke(other, self.root, passwd())
-        install.plan_inspect(other, '12' * 15 + '34', '56' * 16)
+        install.plan_inspect(other)
         with self.assertRaises(install.Refused) as caught:
             install.accept_inspect(other, early_boot)
         self.assertEqual(caught.exception.code, 'inspect-binding')
@@ -572,12 +593,67 @@ class PossessInstallTest(unittest.TestCase):
                    + ' google-ssh {"userName":"pixelbuild"}\n')
         original = (foreign + options).encode()
         self.auth.write_bytes(original)
-        receipt = guest.install(self.root, blob=BLOB, operation_id=OP, probe=PROBE, unit=UNIT, now_unix=NOW,
+        receipt = ginstall(self.root, blob=BLOB, operation_id=OP, probe=PROBE, unit=UNIT, now_unix=NOW,
                                 synchronized=True, sshd_version=VERSION, sshd_config=CONFIG, passwd_text=passwd())
         written = self.auth.read_bytes()
         self.assertTrue(written.startswith(original))
         guest.revoke(self.root, blob=BLOB, comment=receipt['comment'], passwd_text=passwd(),
                      exact_line=receipt['line'])
+        self.assertEqual(self.auth.read_bytes(), original)
+
+    def test_missing_effective_config_does_not_write(self):
+        original = self.auth.read_bytes()
+        with self.assertRaises(guest.GuestRefused) as caught:
+            guest.install(self.root, blob=BLOB, operation_id=OP, probe=PROBE, unit=UNIT, now_unix=NOW,
+                          synchronized=True, sshd_version=VERSION, sshd_config=CONFIG, passwd_text=passwd(),
+                          sshd_effective=None)
+        self.assertEqual(caught.exception.code, 'sshd-config-unproven')
+        with self.assertRaises(guest.GuestRefused) as caught:
+            guest.install(self.root, blob=BLOB, operation_id=OP, probe=PROBE, unit=UNIT, now_unix=NOW,
+                          synchronized=True, sshd_version=VERSION, sshd_config=CONFIG, passwd_text=passwd(),
+                          sshd_effective='   ')
+        self.assertEqual(caught.exception.code, 'sshd-config-unproven')
+        self.assertEqual(self.auth.read_bytes(), original)
+        install.begin(self.out, OP, BLOB)
+        incomplete = evidence()
+        del incomplete['sshdEffective']
+        with self.assertRaises(install.Refused) as caught:
+            install.apply_install(self.out, self.root, incomplete, NOW)
+        self.assertEqual(caught.exception.code, 'sshd-config-unproven')
+        self.assertEqual(install._load(self.out)['lineState'], 'absent')
+        self.assertEqual(self.auth.read_bytes(), original)
+
+    def test_iap_match_is_not_proven_by_localhost(self):
+        if not Path('/usr/sbin/sshd').is_file():
+            raise AssertionError('sshd fixture did not run: /usr/sbin/sshd is missing')
+        drop = self.root / 'iap-drop'
+        drop.mkdir()
+        (drop / 'iap.conf').write_text(
+            'Match Address 35.235.240.1\nForceCommand /bin/false\n'
+            'Match Address 35.235.240.8\nAuthorizedKeysFile /root/.ssh/authorized_keys\n')
+        host = self.root / 'iap-host'
+        subprocess.run(['ssh-keygen', '-q', '-t', 'ed25519', '-f', str(host), '-N', ''], check=True)
+        config = self.root / 'iap.conf'
+        config.write_text(
+            f'HostKey {host}\nInclude {drop}/*.conf\nPubkeyAuthentication yes\n'
+            'PasswordAuthentication no\nKbdInteractiveAuthentication no\n')
+        hidden = subprocess.run(
+            ['/usr/sbin/sshd', '-T', '-f', str(config), '-C', 'user=pixelbuild,host=localhost,addr=127.0.0.1'],
+            capture_output=True, text=True, check=False)
+        self.assertEqual(hidden.returncode, 0, hidden.stderr)
+        self.assertIn('forcecommand none', hidden.stdout)
+        self.assertEqual(guest.match_graph_problem(config.read_text(), guest.filesystem_includes),
+                         'sshd-match-unproven')
+        original = self.auth.read_bytes()
+
+        def reader(pattern):
+            return guest.filesystem_includes(pattern)
+
+        with self.assertRaises(guest.GuestRefused) as caught:
+            guest.install(self.root, blob=BLOB, operation_id=OP, probe=PROBE, unit=UNIT, now_unix=NOW,
+                          synchronized=True, sshd_version=VERSION, sshd_config=config.read_text(),
+                          passwd_text=passwd(), sshd_effective=EFFECTIVE, include_read=reader)
+        self.assertEqual(caught.exception.code, 'sshd-match-unproven')
         self.assertEqual(self.auth.read_bytes(), original)
 
     def test_nonzero_sshd_t_and_force_command_refuse(self):
@@ -869,7 +945,7 @@ def ensure_openssh_92():
         raise AssertionError('OpenSSH 9.2 build failed:\n' + built.stderr[-500:])
     if binary.resolve() == PLANTED_SSHD.resolve():
         raise AssertionError('OpenSSH 9.2 build resolved to the planted path')
-    return binary
+    return binary, work
 
 
 class OpenSshSupplyTest(unittest.TestCase):
@@ -902,10 +978,21 @@ class OpenSsh92Test(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        PLANTED_SSHD.parent.mkdir(parents=True, exist_ok=True)
-        PLANTED_SSHD.write_text('#!/bin/sh\necho PLANTED\n')
-        os.chmod(PLANTED_SSHD, 0o755)
-        cls.sshd = ensure_openssh_92()
+        cls.planted_created = False
+        cls.created_dirs = []
+        if not PLANTED_SSHD.exists():
+            missing = []
+            parent = PLANTED_SSHD.parent
+            while not parent.exists():
+                missing.append(parent)
+                parent = parent.parent
+            for directory in reversed(missing):
+                directory.mkdir()
+                cls.created_dirs.append(directory)
+            PLANTED_SSHD.write_text('#!/bin/sh\necho PLANTED\n')
+            os.chmod(PLANTED_SSHD, 0o755)
+            cls.planted_created = True
+        cls.sshd, cls.work = ensure_openssh_92()
         if cls.sshd.resolve() == PLANTED_SSHD.resolve():
             raise AssertionError('9.2 fixture executed the planted sshd')
         completed = subprocess.run([str(cls.sshd), '-V'], capture_output=True, text=True, check=False)
@@ -917,6 +1004,19 @@ class OpenSsh92Test(unittest.TestCase):
         print('sshd-fixture-9.2 provenance portable-tarball not-debian-package', flush=True)
         if 'PLANTED' in cls.version or not guest.version_allowed(cls.version):
             raise AssertionError(f'built sshd -V is not the 9.2 gate: {cls.version}')
+
+    @classmethod
+    def tearDownClass(cls):
+        work = getattr(cls, 'work', None)
+        if work is not None:
+            shutil.rmtree(work, ignore_errors=True)
+        if getattr(cls, 'planted_created', False):
+            PLANTED_SSHD.unlink(missing_ok=True)
+            for directory in reversed(getattr(cls, 'created_dirs', [])):
+                try:
+                    directory.rmdir()
+                except OSError:
+                    pass
 
     def test_version_expiry_and_watchdog_on_9_2(self):
         self.assertTrue(self.version.startswith('OpenSSH_9.2,'), self.version)

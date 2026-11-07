@@ -12,6 +12,7 @@ import base64
 import ctypes
 import datetime
 import errno
+import glob
 import json
 import os
 from pathlib import Path
@@ -221,11 +222,72 @@ def sshd_config_decision(text, effective=None):
     return _key_file_decision(authorized)
 
 
+def filesystem_includes(pattern):
+    """Read Include targets. A missing explicit path is unproven. A glob may match nothing."""
+    if not isinstance(pattern, str) or not pattern.strip():
+        raise OSError('empty include')
+    explicit = not any(mark in pattern for mark in '*?[]')
+    paths = [pattern] if explicit else sorted(glob.glob(pattern))
+    if explicit and not os.path.isfile(pattern):
+        raise OSError(pattern)
+    found = []
+    for path in paths:
+        with open(path, 'r', encoding='utf-8') as handle:
+            found.append((path, handle.read()))
+    return found
+
+
+def match_graph_problem(text, read_include=None):
+    """Any Match in the root file or its Include graph is unproven for an IAP connection.
+
+    One `sshd -T -C addr=127.0.0.1` does not cover Match Address/Host/LocalAddress inside
+    35.235.240.0/20 or a narrower address. Refuse until the real connection context is known.
+    """
+    seen = set()
+
+    def walk(body):
+        includes = []
+        for parsed in (_config_value(raw) for raw in body.splitlines()):
+            if not parsed:
+                continue
+            keyword, value = parsed
+            if keyword == 'match':
+                return 'sshd-match-unproven'
+            if keyword == 'include':
+                includes.append(value)
+        for pattern in includes:
+            if read_include is None:
+                return 'sshd-config-unproven'
+            try:
+                files = read_include(pattern)
+            except OSError:
+                return 'sshd-config-unproven'
+            if not isinstance(files, list):
+                return 'sshd-config-unproven'
+            for item in files:
+                if not isinstance(item, tuple) or len(item) != 2:
+                    return 'sshd-config-unproven'
+                path, content = item
+                if path in seen:
+                    continue
+                seen.add(path)
+                if not isinstance(content, str):
+                    return 'sshd-config-unproven'
+                code = walk(content)
+                if code:
+                    return code
+        return None
+
+    if not isinstance(text, str):
+        return 'sshd-config-unreadable'
+    return walk(text)
+
+
 def sshd_effective_text(sshd, config_path):
-    """Run sshd -T for pixelbuild. Nonzero status is a refusal and does not return raw config."""
+    """Run sshd -T. Nonzero status is a refusal. This does not invent an IAP peer address."""
     try:
         completed = subprocess.run(
-            [sshd, '-T', '-f', str(config_path), '-C', 'user=pixelbuild,host=localhost,addr=127.0.0.1'],
+            [sshd, '-T', '-f', str(config_path), '-C', 'user=pixelbuild'],
             capture_output=True, text=True, check=False)
     except OSError:
         raise GuestRefused('sshd-config-unproven') from None
@@ -713,12 +775,17 @@ def _mutate(root, uid, gid, *, mode, blob, comment, line=None):
 
 
 def install(root, *, blob, operation_id, probe, unit, now_unix, synchronized, sshd_version, sshd_config,
-            passwd_text, sshd_effective=None):
+            passwd_text, sshd_effective=None, include_read=None):
     if synchronized is not True:
         raise GuestRefused('clock-unsynchronized')
     if not version_allowed(sshd_version):
         raise GuestRefused('sshd-version')
-    decision = sshd_config_decision(sshd_config, sshd_effective)
+    problem = match_graph_problem(sshd_config, include_read)
+    if problem:
+        raise GuestRefused(problem)
+    if not isinstance(sshd_effective, str) or not sshd_effective.strip():
+        raise GuestRefused('sshd-config-unproven')
+    decision = decision_from_effective(sshd_effective)
     if not decision['ok']:
         raise GuestRefused(decision['code'])
     uid, gid, shell = account_from_passwd(passwd_text)
@@ -772,10 +839,14 @@ def main(argv=None):
             version = subprocess.run(['sshd', '-V'], capture_output=True, text=True, check=False)
             sync = subprocess.run(['timedatectl', 'show', '-p', 'NTPSynchronized', '--value'],
                                   capture_output=True, text=True, check=False)
+            config_text = Path('/etc/ssh/sshd_config').read_text()
+            problem = match_graph_problem(config_text, filesystem_includes)
+            if problem:
+                raise GuestRefused(problem)
             effective = sshd_effective_text('sshd', '/etc/ssh/sshd_config')
             evidence = evidence_from_outputs(
                 version_text=(version.stderr or version.stdout),
-                config_text=Path('/etc/ssh/sshd_config').read_text(),
+                config_text=config_text,
                 passwd_text=Path('/etc/passwd').read_text(),
                 now=time.time(), sync_text=sync.stdout, effective_text=effective)
         else:
