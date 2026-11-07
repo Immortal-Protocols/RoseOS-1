@@ -160,6 +160,17 @@ public class RoseKeyboardNativeTest {
     }
 
     @Test
+    public void singleLineReturnWithoutAnActionKeepsTheTextAndSendsEnter() {
+        // TextView turns an unspecified action into Done; NO_ENTER_ACTION is how a single-line field asks for Enter.
+        open(InputType.TYPE_CLASS_TEXT, EditorInfo.IME_ACTION_DONE | EditorInfo.IME_FLAG_NO_ENTER_ACTION, "");
+        typeStr("hello there");
+        key("action");
+        assertEquals("the field keeps its text: never the prototype's send-and-clear", "Hello there", text());
+        assertFalse("no new line in a single-line field", text().contains("\n"));
+        assertTrue("Enter, not the field's editor action", actions.isEmpty() || !actions.contains(EditorInfo.IME_ACTION_DONE));
+    }
+
+    @Test
     public void multiLineReturnIsANewLineWithACapitalAfterIt() {
         open(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE, EditorInfo.IME_ACTION_NONE, "");
         typeStr("list");

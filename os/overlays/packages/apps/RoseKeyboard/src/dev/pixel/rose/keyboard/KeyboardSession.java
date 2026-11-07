@@ -215,15 +215,19 @@ public final class KeyboardSession implements RoseKeyboardView.Listener {
             case "bksp":
                 edit(() -> RoseKeys.backspace(model));
                 return;
-            case "action":
-                if (action == EditorInfo.IME_ACTION_NONE) {
-                    edit(() -> RoseKeys.enter(model));  // multi-line: a new line
-                } else {
-                    edit(() -> RoseKeys.beforeAction(model));
-                    InputConnection ic = ic();
-                    if (ic != null) ic.performEditorAction(action);
+            case "action": {
+                if (multiline) {
+                    edit(() -> RoseKeys.enter(model));  // a new line, after any correction
+                    return;
                 }
+                // Never the model's single-line "send": the field's text is the app's to keep or clear.
+                edit(() -> RoseKeys.beforeAction(model));
+                InputConnection ic = ic();
+                if (ic == null) return;
+                if (action == EditorInfo.IME_ACTION_NONE) sendEnter(ic);
+                else ic.performEditorAction(action);
                 return;
+            }
             default:
                 edit(() -> RoseKeys.type(model, id));
         }
