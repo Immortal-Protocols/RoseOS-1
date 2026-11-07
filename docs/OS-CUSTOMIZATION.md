@@ -161,17 +161,16 @@ The glasses-on hook fires only in a build that includes #645.
 
 Each step is an owner or operator action. This workstream performs none of them.
 
-1. **Agent release (Release / 1F owner, owner-approved).** Today `agent-beta-auto.yml:29` holds automatic Agent releases
-   with `if: false`. The remaining route is an owner-approved `os-release.yml` dispatch on main at or after `d74a8e0`,
-   with `mode: app-only`, `apps: auto`, `app_publish: true`. It runs on `immortal-os-builder`, which has to be back in
-   service first. The output must be a Rose Agent prerelease with a higher versionCode and its v4 `.apk.idsig`; without
-   the `.idsig` the phone refuses the system-app update. Verify it per `docs/VERIFY.md`.
+1. **Build (Release lane).** Use a Frankel latest-beta build from main at or after `3d6f1ad`; the daily Frankel lane
+   (04:00 America/Los_Angeles, #621) produces one. Frankel 2026110701 predates #645, so the glasses-on hook has no
+   signal in it. Verify the build per `docs/VERIFY.md`.
 2. **Producer (the owner's Mac).**
    - Integrate main at or after `db03077`, keeping any local changes.
    - Rerun `bash scripts/setup.sh` only if `requirements.txt` changed.
    - Restart with `bash scripts/rose.sh --brain codex --phone real` from `prototypes/voice-phone-demo`. The local brain
      does not carry the customization tools.
-3. **Phone.** Install the new Rose Agent and confirm Android's prompt. Nothing installs on its own.
+3. **Phone.** Install the build through the OS Updater on the Beta channel and reboot. Keep the phone unlocked for the
+   glasses-on check, because a locked phone refuses `open_app` and the tray action only reaches Home behind the lock.
 4. **Check.**
    - Ask Rose "set Home to five columns", or on the producer Mac run
      `node workspace/rose-agent/customization/rose-customize.mjs --say columns 5`.
