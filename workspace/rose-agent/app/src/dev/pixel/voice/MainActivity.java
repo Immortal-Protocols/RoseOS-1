@@ -76,7 +76,7 @@ public class MainActivity extends Activity {
   LinearLayout footer=new LinearLayout(this);footer.setGravity(Gravity.CENTER_VERTICAL);footer.setBaselineAligned(false);connection=text("Voice off",12,secondary);connection.setGravity(Gravity.CENTER_VERTICAL);connection.setIncludeFontPadding(false);footer.addView(connection,new LinearLayout.LayoutParams(0,dp(54),1));Button apps=button("Apps  ▦",()->apps());apps.setTextSize(14);apps.setGravity(Gravity.CENTER);apps.setIncludeFontPadding(false);apps.setPadding(0,0,0,0);apps.setTextColor(secondary);apps.setBackground(raised(PixelAppearance.color(0xcffff7e5),PixelAppearance.color(0xffb3d0e4),18));footer.addView(apps,new LinearLayout.LayoutParams(dp(100),dp(42)));footer.setVisibility(View.GONE);page.addView(footer);page.requestFocus();attachLauncherPages();refresh();
  }
 
- Typeface chatFont(int weight){if(roundedFont==null)roundedFont=Typeface.createFromAsset(getAssets(),"fonts/nunito.ttf");return Typeface.create(roundedFont,weight,false);}
+ Typeface chatFont(int weight){return CustomizationVisuals.conversationTypeface(this,CustomizationStore.read(this).font,weight);} // 1O: default is the same Nunito face
  android.graphics.drawable.Drawable chatSurface(int face,int shadow,int radius){
   float d=getResources().getDisplayMetrics().density;
   GradientDrawable back=new GradientDrawable();back.setColor(shadow);back.setCornerRadius(dp(radius));
@@ -171,6 +171,7 @@ public class MainActivity extends Activity {
  }
  void closeVisual(){
   if(visualDetail==null)return;
+  customizationChanged.run(); // 1O: a change held while the card was open applies once it has closed
   if(visualDetail.getParent() instanceof ViewGroup)((ViewGroup)visualDetail.getParent()).removeView(visualDetail);
   visualDetail=null;if(page!=null)page.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_AUTO);
  }
@@ -394,7 +395,7 @@ public class MainActivity extends Activity {
   int count=pages.size();homePage=HomePages.HOME;ourAppsPage=count>HomePages.FIRST_APPS?HomePages.FIRST_APPS:HomePages.HOME;
   selected=HomePages.restore(selected,count);
   // One Oxblood field behind every page (#410), drawn at the scroll position so it stays put while the pages slide.
-  pageDots.clear();launcherPager=new LauncherPager(this);launcherPager.setBackground(new OxbloodField(OxbloodField.HOME));
+  pageDots.clear();launcherPager=new LauncherPager(this);launcherPager.setBackground(new OxbloodField(OxbloodField.HOME));launcherPager.getBackground().setColorFilter(CustomizationVisuals.wallpaperFilter(plannedCustomization.wallpaper));
   HomeGlassTile.Backdrop.set((OxbloodField)launcherPager.getBackground(),launcherPager); // the tiles' backdrop blur samples this field (#410)
   launcherPager.permission=this::canSwipePages;
   launcherPager.listener=index->{launcherPager.setContentDescription(titles.get(index));for(TextView dot:pageDots)dot.setSelected(((Integer)dot.getTag())==index);};
@@ -406,7 +407,7 @@ public class MainActivity extends Activity {
   roseHome.setOnLongClickListener(v->{homeOptions(v);return true;}); // the Home options, as a phone launcher's long press
   for(int number=HomePages.FIRST_APPS;number<count;number++)launcherPager.addView(appPage(pages.get(number),titles.get(number),appEntries.isEmpty()));
   if(homeTray!=null)homeTray.release();homeTray=new HomeTray(this,this::openRoseFromHome,this::toggleRoseMic,this::openOverview,MainActivity::overviewAvailable);homeFrame=new HomeFrame(this,launcherPager,homeTray,fixedDots);
-  setContentView(homeFrame);homeBars();drawer=true;if(voiceControls)attachVoiceControls();launcherPager.showPage(selected,false);homeFrame.requestApplyInsets();
+  setContentView(homeFrame);homeBars();drawer=true;if(voiceControls)attachVoiceControls();drawnCustomization=plannedCustomization;CustomizationStore.markHomeApplied(this,drawnCustomization.revision,homeColumns);launcherPager.showPage(selected,false);homeFrame.requestApplyInsets();
   builtHomeStamp=homeStamp();
  }
  /** A small square uses one of two columns; wide screens do not inflate it. */
@@ -437,7 +438,8 @@ public class MainActivity extends Activity {
   float homeWidth=homeKnown?homeViewport.width:width;
   float homeHeight=homeKnown?homeViewport.height:HomeAppLayout.estimatedHomeHeightDp(c.screenHeightDp,HomeAppLayout.DATE_SP*c.fontScale*1.17f)*density;
   float homeCell=homeKnown?homeViewport.cell:HomeAppLayout.TILE_DP*density;
-  homeColumns=HomeAppLayout.homeColumns(homeWidth/density);homeCapacity=HomeAppLayout.homeCapacity(homeWidth,homeHeight,homeCell,density);
+  plannedCustomization=CustomizationStore.read(this);int preferred=plannedCustomization.homeColumns; // 1O: 0 is today's automatic rule
+  homeColumns=CustomizationConfig.effectiveHomeColumns(preferred,homeWidth/density);homeCapacity=CustomizationConfig.homeCapacity(preferred,homeWidth,homeHeight,homeCell,density);
  }
  /** F01 (HomePlan): every measurement Home's grid reports is recorded, including one that fits the current plan (the
   * old rule dropped those, and a build reporting two sizes then re-planned between them forever). */
@@ -446,8 +448,21 @@ public class MainActivity extends Activity {
   * viewport no longer fits the plan, and never straight back to the plan Home just left (HomePlan.Breaker). */
  final HomePlan.Breaker homePlanBreaker=new HomePlan.Breaker();
  Runnable homePlanCheck;
+ /** Nov 7 plan 1O: the customization Home planned with and last drew. A change (a new revision in CustomizationStore)
+  * re-plans Home, coalesced on the main thread, and rebuilds it once only when what Home draws differs: the effective
+  * plan (columns and capacity, so 0 -> 4 where automatic is already 4 is not a rebuild), the wallpaper variant or the
+  * font. Other changes are acknowledged without a rebuild. A change waits while the visual card or the Mac screen is
+  * open (both re-post it on close), and never runs on a destroyed instance. A user change bypasses homePlanBreaker,
+  * which still governs automatic re-plans. */
+ CustomizationConfig plannedCustomization=CustomizationConfig.DEFAULTS,drawnCustomization=null;
+ final Runnable applyCustomization=()->{if(launcherPager==null||isFinishing()||isDestroyed()||visualDetail!=null||screenDetail!=null)return;
+  CustomizationConfig drawn=drawnCustomization;if(drawn!=null&&CustomizationStore.read(this).revision==drawn.revision)return;
+  int[] kept={homeColumns,homeCapacity,appColumns,appPerPage};planAppPages();CustomizationConfig next=plannedCustomization;
+  if(drawn!=null&&homeColumns==kept[0]&&homeCapacity==kept[1]&&appColumns==kept[2]&&appPerPage==kept[3]&&next.wallpaper.equals(drawn.wallpaper)&&next.font.equals(drawn.font)){drawnCustomization=next;CustomizationStore.markHomeApplied(this,next.revision,homeColumns);return;}
+  if(homePlanCheck!=null){handler.removeCallbacks(homePlanCheck);homePlanCheck=null;}attachLauncherPages(true);};
+ final Runnable customizationChanged=()->{handler.removeCallbacks(applyCustomization);handler.post(applyCustomization);};
  boolean homePlanStale(){float density=getResources().getDisplayMetrics().density;
-  return HomePlan.homeStale(homeColumns,homeCapacity,homeViewport,density)||HomePlan.appsStale(appColumns,appPerPage,appViewport,density);}
+  return homeViewport.known()&&CustomizationConfig.homeStale(plannedCustomization.homeColumns,homeColumns,homeCapacity,homeViewport.width,homeViewport.height,homeViewport.cell,density)||HomePlan.appsStale(appColumns,appPerPage,appViewport,density);}
  void settleHomePlan(){
   replanPending=homePlanStale();
   if(homePlanCheck!=null)handler.removeCallbacks(homePlanCheck);
@@ -457,7 +472,7 @@ public class MainActivity extends Activity {
    int[] kept={homeColumns,homeCapacity,appColumns,appPerPage};
    planAppPages();
    if(homePlanBreaker.allow(current,HomePlan.key(homeColumns,homeCapacity,appColumns,appPerPage),SystemClock.elapsedRealtime()))attachLauncherPages(true);
-   else{homeColumns=kept[0];homeCapacity=kept[1];appColumns=kept[2];appPerPage=kept[3];replanPending=false;}};
+   else{homeColumns=kept[0];homeCapacity=kept[1];appColumns=kept[2];appPerPage=kept[3];if(drawnCustomization!=null)plannedCustomization=drawnCustomization;replanPending=false;}};
   handler.postDelayed(homePlanCheck,HomePlan.SETTLE_MS);
  }
  /** The identity of a launchable entry (package and activity), for placing each app exactly once. */
@@ -600,7 +615,7 @@ public class MainActivity extends Activity {
   endSlot.setVisibility(active||starting||ending?View.VISIBLE:View.GONE);end.setEnabled(!ending&&(active||starting));if(!ending){end.animate().cancel();end.setAlpha(1f);}
   updateText(end,"×");end.setContentDescription(ending?endingLabel:starting?"Cancel connection":"End session");
  }
- @Override protected void onResume(){super.onResume();screenHostActive=true;homeStopped=false;roseLaunch.reset();ScreenPolicy.prefs(this).registerOnSharedPreferenceChangeListener(screenPolicyChanged);ScreenPolicy.apply(this,true);if(macPanel!=null)macPanel.resume();handler.removeCallbacks(tick);handler.post(tick);}
+ @Override protected void onResume(){super.onResume();screenHostActive=true;homeStopped=false;roseLaunch.reset();ScreenPolicy.prefs(this).registerOnSharedPreferenceChangeListener(screenPolicyChanged);ScreenPolicy.apply(this,true);CustomizationStore.register(this,customizationChanged);customizationChanged.run();if(macPanel!=null)macPanel.resume();handler.removeCallbacks(tick);handler.post(tick);}
  @Override protected void onStop(){super.onStop();homeStopped=true;}
  /** The shown page survives recreation (HomePages.restore). */
  @Override protected void onSaveInstanceState(Bundle out){super.onSaveInstanceState(out);if(launcherPager!=null)out.putInt("home-page",launcherPager.currentPage());}
@@ -719,6 +734,7 @@ public class MainActivity extends Activity {
  }
  void closeMacScreen(){
   if(screenDetail==null)return;
+  customizationChanged.run(); // 1O: a change held while the Mac screen was open applies once it has closed
   ((android.view.inputmethod.InputMethodManager)getSystemService(INPUT_METHOD_SERVICE)).hideSoftInputFromWindow(macPanel.getWindowToken(),0);
   screenDetail.removeView(macPanel);if(screenDetail.getParent() instanceof ViewGroup)((ViewGroup)screenDetail.getParent()).removeView(screenDetail);screenDetail=null;
   macPanel.setCompact(true);visualSlot.addView(macPanel,new FrameLayout.LayoutParams(-1,-2));page.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_AUTO);
@@ -727,7 +743,7 @@ public class MainActivity extends Activity {
   if(macPanel!=null){macPanel.destroy();macPanel=null;}
   if(screenDetail!=null&&screenDetail.getParent() instanceof ViewGroup)((ViewGroup)screenDetail.getParent()).removeView(screenDetail);screenDetail=null;
  }
- @Override protected void onDestroy(){closeSystemFolder();if(homeTray!=null)homeTray.release();if(homePlanCheck!=null){handler.removeCallbacks(homePlanCheck);homePlanCheck=null;}homeOverview.cancel();if(overviewCheck!=null){handler.removeCallbacks(overviewCheck);overviewCheck=null;}if(taskCard!=null)taskCard.dispose();if(clockWidget!=null)clockWidget.setActive(false);if(weatherWidget!=null)weatherWidget.setActive(false);if(galleryWidget!=null)galleryWidget.setActive(false);if(launcherReceiverRegistered){unregisterReceiver(launcherPackages);launcherReceiverRegistered=false;}destroyMacScreen();super.onDestroy();}
+ @Override protected void onDestroy(){closeSystemFolder();if(homeTray!=null)homeTray.release();if(homePlanCheck!=null){handler.removeCallbacks(homePlanCheck);homePlanCheck=null;}homeOverview.cancel();if(overviewCheck!=null){handler.removeCallbacks(overviewCheck);overviewCheck=null;}if(taskCard!=null)taskCard.dispose();if(clockWidget!=null)clockWidget.setActive(false);if(weatherWidget!=null)weatherWidget.setActive(false);if(galleryWidget!=null)galleryWidget.setActive(false);if(launcherReceiverRegistered){unregisterReceiver(launcherPackages);launcherReceiverRegistered=false;}CustomizationStore.unregister(this,customizationChanged);handler.removeCallbacks(applyCustomization);destroyMacScreen();super.onDestroy();}
  class MicControl extends View {
   final Paint paint=new Paint(Paint.ANTI_ALIAS_FLAG);String label="Start";boolean listening;float targetLevel,displayLevel;long lastFrame;
   MicControl(){super(MainActivity.this);setClickable(true);setFocusable(true);setContentDescription("Start session");}

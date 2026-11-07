@@ -1,7 +1,6 @@
 package dev.pixel.voice;
 
 import android.content.Context;
-import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.view.Gravity;
 import android.view.View;
@@ -54,7 +53,7 @@ final class HomeFolder extends FrameLayout {
   title.setText(name);
   title.setTextSize(17f);
   title.setTextColor(HomeGlyph.CREAM);
-  title.setTypeface(Typeface.create(Typeface.SANS_SERIF, 500, false));
+  title.setTypeface(CustomizationVisuals.labelTypeface(context, 500)); // 1O font choice; default SANS_SERIF 500
   title.setGravity(Gravity.CENTER);
   title.setAccessibilityHeading(true);
   LinearLayout.LayoutParams titleParams = new LinearLayout.LayoutParams(-1, -2);
