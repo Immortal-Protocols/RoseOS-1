@@ -513,10 +513,9 @@ queue. In the capacity map the `harness` lane names this workflow, no `os-releas
 (`activeBinding`). Its `runtimeStatus: retired-shared-host` means it claims no capacity: the `host` field records
 only where its earlier runs ran. `test_launcher3_compile_workflow.py` and `test_lane_capacity.py` check all of this.
 
-**What remains before a compile runs:**
-- the numeric VM id and disk id in the binding were not in the supplied readback (placeholders; describe fails closed
-  on a mismatch before any start);
-- a separate dispatch. This section does not authorize one, and the binding does not gate any OTA or release workflow.
+**What remains before a compile runs:** a separate dispatch. This section does not authorize one, and the binding
+does not gate any OTA or release workflow. The VM id and the data-disk id in the binding are the observed gcloud
+values; the controller still starts and stops only that VM.
 
 A guard refusal is a blocker, not a compile.
 
