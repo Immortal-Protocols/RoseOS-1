@@ -1,9 +1,9 @@
-"""Mocked Mustang allocation: races, crashes, replays, and corrupt journals."""
+"""GCS-shaped Mustang allocation: pages, generations, conflicts, and closed admission."""
 import json
 import sys
-import threading
 import unittest
 from pathlib import Path
+from urllib.parse import parse_qs, unquote, urlsplit
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path[:0] = [str(ROOT/'scripts')]
@@ -12,133 +12,224 @@ import mustang_epoch as epoch
 
 PATCH = '2026-10-05'
 ROLLBACK = 1791158400
+BUCKET = 'roseos-mustang-allocation-1072799993443'
 
 
-class MemoryStore:
+class GcsFake:
     def __init__(self):
         self.objects = {}
-        self.lock = threading.Lock()
-        self.drop_after_create = False
+        self.next_gen = 1700000000000000
+        self.page_size = 1
+        self.lose_create = False
+        self.tamper = None
+        self.hide_list_once = False
+        self.requests = []
 
-    def get(self, name):
-        with self.lock:
-            if name not in self.objects:
-                raise KeyError(name)
-            body, generation = self.objects[name]
-            return json.loads(json.dumps(body)), generation
+    def __call__(self, request):
+        self.requests.append(json.loads(json.dumps(request)))
+        if request['method'] == 'POST':
+            return self._create(request)
+        url = request['url']
+        if 'alt=media' in url:
+            return self._media(url)
+        if '/o?' in url:
+            return self._list(url)
+        return self._metadata(url)
 
-    def create(self, name, body):
-        with self.lock:
-            if name in self.objects:
-                raise allocator.PreconditionFailed(name)
-            self.objects[name] = (json.loads(json.dumps(body)), 1)
-            if self.drop_after_create:
-                self.drop_after_create = False
-                raise RuntimeError('response lost after create')
-            return 1
+    def _name(self, url):
+        return unquote(url.split('/o/')[1].split('?')[0])
 
-    def list_prefix(self, prefix):
-        with self.lock:
-            return sorted(name for name in self.objects if name.startswith(prefix))
+    def _create(self, request):
+        self.assert_precondition = 'ifGenerationMatch=0' in request['url']
+        if not self.assert_precondition:
+            return 400, {'error': {'code': 400}}
+        name = unquote(parse_qs(urlsplit(request['url']).query)['name'][0])
+        if name in self.objects:
+            return 412, {'error': {'code': 412, 'message': 'Precondition Failed'}}
+        generation = str(self.next_gen)
+        self.next_gen += 1
+        self.objects[name] = {'body': json.loads(json.dumps(request['body'])), 'generation': generation}
+        if self.lose_create:
+            self.lose_create = False
+            raise allocator.TransportLost('response lost after the object was stored')
+        return 200, {'kind': 'storage#object', 'name': name, 'generation': generation, 'metageneration': '1'}
 
-    def insert(self, name, body):
-        with self.lock:
-            self.objects[name] = (body, 1)
+    def _list(self, url):
+        if self.hide_list_once:
+            self.hide_list_once = False
+            return 200, {'kind': 'storage#objects'}
+        query = parse_qs(urlsplit(url).query)
+        prefix = query['prefix'][0]
+        start = int(query['pageToken'][0]) if 'pageToken' in query else 0
+        names = sorted(name for name in self.objects if name.startswith(prefix))
+        page = names[start:start+self.page_size]
+        payload = {'kind': 'storage#objects',
+                   'items': [{'kind': 'storage#object', 'name': name,
+                              'generation': self.objects[name]['generation']} for name in page]}
+        if start+self.page_size < len(names):
+            payload['nextPageToken'] = str(start+self.page_size)
+        return 200, payload
+
+    def _metadata(self, url):
+        name = self._name(url)
+        if name not in self.objects:
+            return 404, {'error': {'code': 404, 'message': 'Not Found'}}
+        generation = self.objects[name]['generation']
+        if self.tamper == 'metadata':
+            generation = str(int(generation)+10)
+        elif self.tamper == 'small':
+            generation = '1'
+        elif self.tamper == 'float':
+            generation = 1700000000000000
+        return 200, {'kind': 'storage#object', 'name': name, 'generation': generation, 'metageneration': '1'}
+
+    def _media(self, url):
+        name = self._name(url)
+        if name not in self.objects:
+            return 404, {'error': {'code': 404}}
+        match = parse_qs(urlsplit(url).query).get('ifGenerationMatch', [None])[0]
+        if match != self.objects[name]['generation']:
+            return 412, {'error': {'code': 412, 'message': 'Precondition Failed'}}
+        if self.tamper == 'media-sequence':
+            body = json.loads(json.dumps(self.objects[name]['body']))
+            body['sequence'] = 0.0
+            return 200, body
+        return 200, json.loads(json.dumps(self.objects[name]['body']))
 
 
 class AllocatorTest(unittest.TestCase):
-    def reserve(self, store, run, attempt=1, timestamp=1793755348):
-        return allocator.reserve(store, run, attempt, timestamp, ROLLBACK, PATCH, backend_established=True)
+    def store(self, fake=None):
+        fake = fake or GcsFake()
+        return allocator.TransportStore(fake, BUCKET), fake
 
-    def test_provision_is_unestablished_and_the_cli_issues_nothing(self):
+    def reserve(self, store, run, attempt=1, timestamp=1793755348, observed=()):
+        return allocator.reserve(store, run, attempt, timestamp, ROLLBACK, PATCH, observed,
+                                 backend_established=True)
+
+    def test_provision_is_closed_and_list_is_not_an_object_prefix_grant(self):
         record = allocator.provision()
         self.assertFalse(record['backendEstablished'])
-        self.assertFalse(record['bucketCreated'])
-        self.assertEqual(record['permissions'], ['storage.objects.create', 'storage.objects.get', 'storage.objects.list'])
-        self.assertIn('storage.objects.delete', record['notGranted'])
-        self.assertEqual(allocator.main(), 4)
+        self.assertFalse(record['networkAdmitted'])
+        self.assertFalse(record['issueAdmitted'])
+        self.assertTrue(allocator.prove_iam(record))
+        broken = json.loads(json.dumps(record))
+        broken['bindings'][0]['condition'] = broken['bindings'][1]['condition']
+        with self.assertRaisesRegex(ValueError, 'dedicated bucket'):
+            allocator.prove_iam(broken)
+        self.assertEqual(allocator.main([]), 4)
+        self.assertEqual(allocator.main(['reserve']), 4)
+        self.assertEqual(allocator.main(['issue']), 4)
 
-    def test_replay_returns_the_same_object_and_a_changed_retry_conflicts(self):
-        store = MemoryStore()
-        first = self.reserve(store, '501')
-        again = self.reserve(store, '501')
-        self.assertEqual(again, first)
-        self.assertFalse(first['issued'])
+    def test_closed_admission_does_not_open_a_socket(self):
+        def boom(*args, **kwargs):
+            raise AssertionError('network')
+        with self.assertRaisesRegex(ValueError, 'not established'):
+            allocator.open_admitted_transport(allocator.provision(), lambda: 'ya29.example-token-value', boom)
+        seen = []
+
+        def http(request):
+            seen.append(request)
+            return 200, {'kind': 'storage#objects'}
+
+        admitted = {'backendEstablished': True, 'networkAdmitted': True, 'issueAdmitted': False}
+        transport = allocator.AuthorizedTransport(http, lambda: 'ya29.example-token-value', admitted)
+        self.assertEqual(allocator.list_objects(transport, BUCKET, allocator.NUMBER_PREFIX), [])
+        self.assertEqual(seen[0]['headers']['Authorization'], 'Bearer ya29.example-token-value')
+        with self.assertRaisesRegex(ValueError, 'not established'):
+            allocator.list_objects(allocator.AuthorizedTransport(http, lambda: 'ya29.example-token-value',
+                                                                allocator.provision()), BUCKET, allocator.NUMBER_PREFIX)
+
+    def test_pages_generations_replay_and_a_lost_create(self):
+        store, fake = self.store()
+        first = self.reserve(store, '501', observed=['2026110401'])
         self.assertEqual(first['build'], '2026130001')
-        self.assertEqual(len(store.objects), 1)
-        with self.assertRaisesRegex(ValueError, 'replay differs'):
-            self.reserve(store, '501', timestamp=1793755349)
-        with self.assertRaisesRegex(ValueError, 'backend is not established'):
-            allocator.reserve(store, '501', 1, 1793755348, ROLLBACK, PATCH, backend_established=False)
-        self.assertEqual(len(store.objects), 1)
-
-    def test_crash_after_create_reads_the_same_reservation_back(self):
-        store = MemoryStore()
-        store.drop_after_create = True
-        got = self.reserve(store, '502')
-        self.assertEqual(got['build'], '2026130001')
-        self.assertFalse(got['issued'])
-        self.assertEqual(self.reserve(store, '502'), got)
-
-    def test_create_conflict_reads_the_winner_and_takes_the_next_number(self):
-        side = MemoryStore()
-        winner = self.reserve(side, '601', timestamp=1793755348)
-        store = MemoryStore()
-        state = {'armed': True}
-
-        def create(name, body):
-            if state['armed']:
-                state['armed'] = False
-                store.objects[allocator.object_name(winner['build'])] = (winner, 1)
-                raise allocator.PreconditionFailed(name)
-            return MemoryStore.create(store, name, body)
-
-        store.create = create
-        second = self.reserve(store, '602', timestamp=1793755349)
+        self.assertFalse(first['issued'])
+        self.assertEqual(first['observed'], ['2026110401'])
+        self.assertGreaterEqual(fake.objects[allocator.object_name(first['build'])]['generation'], '1700000000000000')
+        self.assertNotEqual(fake.objects[allocator.object_name(first['build'])]['generation'], '1')
+        media_urls = [item['url'] for item in fake.requests if 'alt=media' in item['url']]
+        self.assertTrue(media_urls)
+        self.assertIn('ifGenerationMatch=1700000000000000', media_urls[0])
+        self.assertEqual(self.reserve(store, '501', observed=['2026110401']), first)
+        fake.lose_create = True
+        second = self.reserve(store, '502', timestamp=1793755349, observed=['2026110401'])
         self.assertEqual(second['build'], '2026130002')
-        self.assertFalse(second['issued'])
-        self.assertNotEqual(second['runId'], winner['runId'])
-        chain = allocator.read_chain(store)
-        self.assertEqual([item['build'] for item in chain], ['2026130001', '2026130002'])
+        self.assertEqual([item['build'] for item, _gen in zip(*allocator.read_chain(store, ['2026110401']))],
+                         ['2026130001', '2026130002'])
+        self.assertGreater(len([item for item in fake.requests if 'pageToken=' in item['url']]), 0)
 
-    def test_corrupt_prefix_rejects_the_next_create(self):
-        store = MemoryStore()
-        store.insert(allocator.object_name('2026130001'), {'schema': 'broken'})
-        with self.assertRaises(ValueError):
-            self.reserve(store, '503')
-        self.assertEqual(list(store.objects), [allocator.object_name('2026130001')])
+    def test_precondition_loss_reads_the_winner_and_takes_the_next_number(self):
+        store, fake = self.store()
+        winner = self.reserve(store, '601', observed=['2026110401'])
+        fake.hide_list_once = True
+        second = self.reserve(store, '602', timestamp=1793755349, observed=['2026110401'])
+        self.assertEqual(winner['build'], '2026130001')
+        self.assertEqual(second['build'], '2026130002')
+        posts = [item for item in fake.requests if item['method'] == 'POST' and 'ifGenerationMatch=0' in item['url']]
+        self.assertGreaterEqual(len(posts), 3)
 
-    def test_transport_uses_create_only_and_readback(self):
-        backing = MemoryStore()
-        bucket = allocator.provision()['bucket']
+    def test_higher_observed_id_fails_before_a_write(self):
+        store, fake = self.store()
+        with self.assertRaisesRegex(ValueError, 'not strictly newer'):
+            self.reserve(store, '501', observed=['2027010101'])
+        self.assertEqual(fake.objects, {})
+        self.assertFalse(any(item['method'] == 'POST' for item in fake.requests))
 
-        def transport(request):
-            self.assertNotIn('delete', request['url'])
-            if request['method'] == 'POST':
-                self.assertIn('ifGenerationMatch=0', request['url'])
-                name = request['url'].split('name=')[1].split('&')[0]
-                name = name.replace('%2F', '/')
-                try:
-                    backing.create(name, request['body'])
-                except allocator.PreconditionFailed:
-                    return 412, {}
-                return 200, {}
-            if 'alt=media' in request['url']:
-                name = request['url'].split('/o/')[1].split('?')[0].replace('%2F', '/')
-                try:
-                    body, _generation = backing.get(name)
-                except KeyError:
-                    return 404, {}
-                return 200, body
-            names = backing.list_prefix(allocator.PREFIX)
-            return 200, {'names': names}
+    def test_generation_and_sequence_tampering_fail_closed(self):
+        store, fake = self.store()
+        self.reserve(store, '501', observed=['2026110401'])
+        for mode in ('metadata', 'small', 'float', 'media-sequence'):
+            fake.tamper = mode
+            with self.assertRaises(ValueError):
+                self.reserve(store, '503', timestamp=1793755349, observed=['2026110401'])
+            fake.tamper = None
+        self.assertEqual(list(fake.objects), [allocator.object_name('2026130001')])
 
-        store = allocator.TransportStore(transport, bucket)
-        got = self.reserve(store, '504')
-        self.assertEqual(got['status'], 'reserved')
-        self.assertFalse(got['issued'])
+    def test_issue_is_a_separate_object_and_stays_closed_by_default(self):
+        store, fake = self.store()
+        reserved = self.reserve(store, '501', observed=['2026110401'])
+        with self.assertRaisesRegex(ValueError, 'not admitted'):
+            allocator.issue(store, '501', 1, ['2026110401'], admission=allocator.provision())
+        self.assertNotIn(allocator.ISSUE_PREFIX+reserved['build']+'.json', fake.objects)
+        issued = allocator.issue(store, '501', 1, ['2026110401'], admission={
+            'backendEstablished': True, 'networkAdmitted': True, 'issueAdmitted': True})
+        self.assertTrue(issued['issued'])
+        self.assertGreaterEqual(issued['reservationGeneration'], allocator.MIN_GENERATION)
+        self.assertFalse(fake.objects[allocator.object_name(reserved['build'])]['body']['issued'])
+        self.assertEqual(issued['reservationSha256'], allocator.digest(reserved))
+        self.assertEqual(allocator.issue(store, '501', 1, ['2026110401'], admission={
+            'backendEstablished': True, 'networkAdmitted': True, 'issueAdmitted': True}), issued)
+
+    def test_urlopen_parser_reads_a_gcs_json_body(self):
+        class Response:
+            status = 200
+            def read(self):
+                return (b'{"kind":"storage#objects","items":[{"name":"epoch-202613/numbers/2026130001.json",'
+                        b'"generation":"1700000000000001"}]}')
+            def __enter__(self):
+                return self
+            def __exit__(self, *args):
+                return False
+        status, payload = allocator.urlopen_http(
+            {'method': 'GET', 'url': 'https://storage.googleapis.com/storage/v1/b/x/o?prefix=epoch'},
+            lambda request, timeout: Response())
+        self.assertEqual(status, 200)
+        self.assertEqual(payload['items'][0]['generation'], '1700000000000001')
+        self.assertIs(type(payload['items'][0]['generation']), str)
+
+    def test_names_schema_is_rejected(self):
+        def http(request):
+            return 200, {'names': ['epoch-202613/numbers/2026130001.json']}
+        with self.assertRaisesRegex(ValueError, 'items schema'):
+            allocator.list_objects(http, BUCKET, allocator.NUMBER_PREFIX)
+
+    def test_epoch_proposal_remains_unissued(self):
+        store, _fake = self.store()
+        got = self.reserve(store, '504', observed=[])
         self.assertEqual(got['proposal']['status'], 'proposal')
+        self.assertFalse(got['proposal']['issued'])
         self.assertEqual(got['proposal']['epoch'], epoch.EPOCH)
+        self.assertIs(type(got['sequence']), int)
 
 
 if __name__ == '__main__':
