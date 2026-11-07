@@ -90,7 +90,7 @@ COMPILE_TARGETS = ['Launcher3QuickStepLib']
 COMPILED_PROJECTS = ('packages/apps/Launcher3', 'build/release')
 CANDIDATE_PROJECT = 1
 # The reviewed overlays that are not inputs of Launcher3QuickStepLib, by exact target (M4): WindowManager-Shell and
-# SystemUI sources and assets, off the library's classpath. Any other overlay outside REQUIRED_OVERLAYS is refused, so a
+# SystemUI sources and assets, off the library's classpath (1G's roseshade package, OS Core, among them). Any other overlay outside REQUIRED_OVERLAYS is refused, so a
 # new one can never become an unpinned input by its location alone.
 NOT_AN_INPUT = (
     'frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/AgentStatusControls.java',
@@ -99,6 +99,15 @@ NOT_AN_INPUT = (
     'frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/StatusVoiceGlow.java',
     'frameworks/base/packages/SystemUI/assets/fonts/Nunito.ttf',
     'frameworks/base/packages/SystemUI/assets/licenses/Nunito-OFL.txt',
+    'frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseQuickSettings.java',
+    'frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeController.java',
+    'frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeDrag.java',
+    'frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeIcons.java',
+    'frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeModel.java',
+    'frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeModule.java',
+    'frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeReplies.java',
+    'frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeStartable.java',
+    'frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeSystem.java',
     'frameworks/base/packages/SystemUI/src/com/android/systemui/statusbar/phone/PixelStatusBarFilter.java',
 )
 # The two flags the adapter must show from the build's own decoded aconfig output. Each comes from one

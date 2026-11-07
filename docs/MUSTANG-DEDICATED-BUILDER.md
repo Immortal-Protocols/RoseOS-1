@@ -1,8 +1,20 @@
 # Dedicated Mustang builder: source preparation and resource proposal
 
-The [proposal](../os/build-only/mustang-builder-proposal.json) is not deployed.
-The active [lane](../os/build-only/mustang-lane.json) remains **unbound**. Mustang
-must never use Frankel's `immortal-os-builder` again; Yogi also has its own VM.
+The active [lane](../os/build-only/mustang-lane.json) is **identity-bound** to the
+confirmed VM `roseos-mustang-builder-20261107-a` (`5585425566393384049`) and data
+disk `roseos-mustang-data-20261107-a` (`4322966418460195960`), ext4 UUID
+`4183bff8-6be4-46bb-a641-2193d19813ee`, mounted at `/mnt/disks/mustang-data`.
+The [runtime](../os/build-only/mustang-runtime.json) stays **unbound**. That
+binding does not admit source, tools, a runner, app inputs, the baseline
+archive, allocation reconciliation, signing-route approval, or publication.
+The builder job has to be a self-hosted runner on this VM. Guard, controller,
+publisher and cleanup stay on GitHub-hosted runners. Runner group 5,
+`roseos-mustang-builder`, allows only this public repository and
+`mustang-ota-dedicated.yml` at `refs/heads/main`. It has zero runners.
+Lifetime is not selected and no runner is enrolled. The VM's own safeguard is a four-hour `maxRunDuration` STOP.
+Mustang must never use Frankel's `immortal-os-builder` again; Yogi also has its own VM.
+The earlier [proposal](../os/build-only/mustang-builder-proposal.json) (c3-standard-44,
+2 TiB balanced, 12-hour STOP) is not this machine and is not deployed.
 The old host's data removal belongs to the Mac operator, separately from this
 source work. No VM, access, cleanup, signing, build or publication action has
 been performed by this source change.
@@ -111,7 +123,8 @@ Before creating anything, the exact approval package must resolve:
 - The exact GitHub egress choice and its network resource/access scope and cost.
 - The separate runner group, protected registration route and runner lifetime.
 - The dedicated controller/provider with the restricted trust and instance-only
-  permissions below, plus the isolated 12-hour automatic STOP fallback.
+  permissions below. The earlier proposal asked for a 12-hour STOP. The VM that
+  was created uses a four-hour maxRunDuration STOP, which the lane records.
 - Approved host setup and actual resource readback before binding the lane.
   Build, signing, live reclaim and publication remain separately held.
 
@@ -141,8 +154,8 @@ It verifies numeric ID/name on each describe, retains bounded polling and
 no-resubmit behavior, and calls the ownership claim before start. Frankel's
 default is preserved. Mustang integration tests exercise those actual merged
 bytes with mocked process responses for start/STOP, wrong IDs and uncertain
-request reconciliation. They perform no gcloud process or VM operation; actual
-dedicated resource readback and runtime admission remain unverified.
+request reconciliation. They perform no gcloud process or VM operation. The
+2026-11-06 VM and disk identity is recorded; runtime admission remains unverified.
 
 The Mustang adapter records exact VM identity plus workflow, source, run and
 attempt in a write-once ownership file before the common controller can submit
@@ -153,8 +166,9 @@ API for STOP. It performs no login or provisioning.
 
 The manual `.github/workflows/mustang-ota-dedicated.yml` source now wires hosted
 admission, the dedicated controller, one builder job, optional publication and
-ownership cleanup. **Both `mustang-lane.json` and `mustang-runtime.json` remain
-unbound. No resource or runtime is activated.** The old source-only inspector is
+ownership cleanup. **`mustang-lane.json` is identity-bound and
+`mustang-runtime.json` remains unbound. No runner, source, signing route, or
+publication is activated.** The old source-only inspector is
 superseded by `scripts/mustang-dedicated.py guard`. No workflow dispatch or real
 candidate has been performed to prove this implementation.
 
@@ -206,9 +220,11 @@ Failure receipts use fixed allowlisted JSON names, never signing configs,
 key material or raw logs. Reporting verifies guest/disk identity even on failure.
 Cleanup validates the exact ownership before login and does not depend on
 signing, app or baseline readiness. It stops only this run's owned VM; absent
-or foreign ownership refuses, with the approved isolated 12-hour automatic STOP
-as fallback. No global policy reclaim/deletion is called. The builder job has a
-10-hour outer limit; individual historical stage ceilings remain unchanged and
+or foreign ownership refuses, with this VM's four-hour `maxRunDuration` STOP
+(14400 seconds) as the safeguard when cleanup does not stop it. No global policy
+reclaim/deletion is called. The builder job's outer limit is 200 minutes, inside
+that four-hour window, so cleanup is requested before the VM stops itself.
+Individual historical stage ceilings remain unchanged and
 are not a promise they can all consume their maxima within that job.
 
 `scripts/mustang_paths.py` derives explicit dedicated attempt/storage/lock paths
@@ -230,7 +246,7 @@ name, a copied device label or a guessed value as readback.
 
 | Runtime field | Required actual content |
 | --- | --- |
-| `jobs`, `tools`, `dataFilesystemUuid`, `automaticStopHours` | Approved Make parallelism, executable aapt/apksigner/Node paths, the dedicated data UUID and verified 12-hour STOP setting. |
+| `jobs`, `tools`, `dataFilesystemUuid`, `automaticStopHours` | Approved Make parallelism, executable aapt/apksigner/Node paths, the dedicated data UUID and the confirmed four-hour STOP. The UUID and four-hour STOP are already recorded; jobs and tools are not. |
 | `networkEvidence` | JSON with matching `builder`, `githubEgressVerified: true` and the actual `approvedRoute`; no denied lookup retry or implicit NAT/proxy. |
 | `sourceEvidence` | Matching `builder`/`sourceRoot`, pinned manifest SHA-256, pinned `adevtoolRevision` and `pristine: true` bootstrap readback. This attestation is not a full copy-byte revision verification. |
 | `runner` | Actual group name/ID and chosen persistent/ephemeral lifetime; registration evidence matching VM, workflow and repository `1428996648`, with `publicRepositoryAdmitted: true` and `readyOnEveryStart: true`. The protected registration implementation remains Infra-owned. |
@@ -247,7 +263,7 @@ under applicable authorization before binding it. No bootstrap or new key set
 is supported by this workflow. The legacy Mustang entry points remain retired.
 The common capacity map keeps the retired jobs' host reference for source
 auditing, explicitly marks them retired and excludes Mustang from parallel
-capacity. The active binding remains the unbound dedicated profile. Editing a
+capacity. The lane is identity-bound and the runtime remains unbound. Editing a
 capacity label or retirement marker cannot restore the retired entry points.
 
 An Actions app export must carry its actual producer/export run and attempt,
@@ -267,8 +283,8 @@ The dedicated `fetch-inputs` step also supports one prepositioned **plain tar**
 under the actual bound Mustang data home:
 `<home>/inputs/frankel-<build>/export.tar`. It performs no download or transfer,
 and never reads a Frankel host path. This does not authorize positioning that
-file, approving a destination or spending on capacity. Both committed bindings
-remain unbound. No archive or real private-transfer record accompanies this
+file, approving a destination or spending on capacity. The lane is identity-bound
+and the runtime remains unbound. No archive or real private-transfer record accompanies this
 source change. The Yogi budget is not Mustang approval.
 
 Release owns the shared input-record contract and verifier. Its private schema

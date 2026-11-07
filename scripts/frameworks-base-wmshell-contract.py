@@ -120,6 +120,15 @@ CONFIRMATION = {
         'flagEvidence (none) unchanged; no new files, flags or classpath inputs (new imports android.util.SparseArray, '
         'android.database.ContentObserver, android.os.SystemProperties and android.provider.Settings are framework '
         'classes)',
+    'shaded': 'OS Core to OS Product, 2026-11-07 01:30 UTC, from #616 head e070e6d (1G, the Rose notification shade): '
+        'nine new SystemUI-core sources under packages/SystemUI/src/com/android/systemui/roseshade/ (required here, as '
+        'every frameworks/base overlay is; none is a WindowManager-Shell input) and the required Shell overlay '
+        'AgentTrayPrototype.java (5d3d5697..., blob 85080752: a status-bar drag hook before the tray\'s own touch '
+        'handling) change; rose-edge-wmshell.patch and its after-images, the WMShellModule pre-image, the goals and '
+        'flagEvidence (none) unchanged; the new imports (Dagger, NotificationListener, CoreStartable, the Shell\'s '
+        'AgentTrayPrototype) are already on SystemUI-core\'s classpath. rose-shade-systemui.patch (one include in '
+        'ReferenceSystemUIModule.java) is registered in apply-os-changes.py for the normal build, which is the compile '
+        'proof; this inert contract stays bound to #551\'s patch and does not model it',
 }
 
 # Where each goal's sources come from, read from the pinned Android.bp files (committed byte for byte under

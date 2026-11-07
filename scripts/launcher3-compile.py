@@ -112,7 +112,7 @@ import launcher3_lane  # noqa: E402  (dedicated capacity; no cloud operations)
 MANIFEST = ROOT/'os/compile-contracts/launcher3-quickstep-lib.json'
 # OS Product's reviewed contract version (schema 3, #563 base rebind plus 1193274's lunch inputs without auto
 # maintenance). A different manifest is refused until this pin is updated.
-MANIFEST_SHA256 = 'd7a6b1735754b1eca7caef5bc08fef3c9a11dd5f31f3521dada8a990f3878e9a'
+MANIFEST_SHA256 = '272bf259d71d4b8949fbd068d4fd5590d8b07e5a3641a75128d13d7bf2e5c0e8'
 CONDITIONS = ['base-exact', 'delta-preimages', 'isolated-apply', 'final-exact']
 # The binding inputs each branch requires and forbids, in the contract's own vocabulary (branches.requires, forbids):
 # check() binds and refuses exactly these, so the contract and this adapter cannot drift.

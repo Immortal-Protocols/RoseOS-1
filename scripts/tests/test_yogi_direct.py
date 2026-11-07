@@ -22,6 +22,7 @@ import zipfile
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import yogi_direct as direct  # noqa: E402
 import yogi_ota as yogi  # noqa: E402
+import yogi_possession  # noqa: E402
 
 UTC = datetime.timezone.utc
 NOW = datetime.datetime(2026, 11, 7, 3, 0, tzinfo=UTC)
@@ -780,6 +781,9 @@ class UnzipTest(unittest.TestCase):
             with zipfile.ZipFile(good, 'w') as z:
                 z.writestr('apps/a.apk', b'x')
             self.assertTrue((direct.safe_unzip(good, temp/'good')/'apps/a.apk').is_file())
+
+
+from test_yogi_possession import PossessionTest  # noqa: E402,F401
 
 
 if __name__ == '__main__':

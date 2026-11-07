@@ -790,11 +790,25 @@ def stage_steps(cfg, manifest, op_dir, identity):
             ('compile', lambda: bool(yogi.compile_build(cfg, built['build'])))]
 
 
+# ------------------------------------------------------------------------------------------------ possession check
+
+import yogi_possession  # noqa: E402
+
+POSSESSION_FINGERPRINTS = yogi_possession.POSSESSION_FINGERPRINTS
+POSSESSION_BASE = yogi_possession.POSSESSION_BASE
+hostkeys_from_api = yogi_possession.hostkeys_from_api
+possession_plan = yogi_possession.possession_plan
+write_possession_plan = yogi_possession.write_possession_plan
+
+
 # ------------------------------------------------------------------------------------------------ CLI
 
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument('action', choices=('describe', 'plan', 'start', 'run', 'status', 'cancel', 'cleanup', 'agent'))
+    p.add_argument('action', choices=('describe', 'plan', 'start', 'run', 'status', 'cancel', 'cleanup', 'agent',
+                                     'handshake-plan'))
+    p.add_argument('--hostkeys')
+    p.add_argument('--client-public')
     p.add_argument('--stage', choices=STAGES + tuple(NOT_DIRECT))
     p.add_argument('--source')
     p.add_argument('--operator')
@@ -809,6 +823,11 @@ def main(argv=None):
     try:
         if a.action == 'agent':
             print(json.dumps(agent(a.op_dir, a.manifest_sha)))
+            return 0
+        if a.action == 'handshake-plan':
+            if not a.hostkeys or not a.client_public or not a.out:
+                p.error('handshake-plan needs --hostkeys, --client-public and --out')
+            print(json.dumps(yogi_possession.write_possession_plan(a.hostkeys, a.client_public, a.out), sort_keys=True))
             return 0
         cfg = yogi.config()
         if a.action == 'describe':

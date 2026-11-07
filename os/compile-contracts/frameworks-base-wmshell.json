@@ -21,7 +21,8 @@
   "reconfirmed": "OS Core to OS Product, 2026-11-04 06:51 UTC, from merge bf6a9ed (#528, tested head e304a35): patch sha256 ba64ea3114f46925446c204261097aebf963a923eb355860a6f2e54bb7262be2. Only RoseEdgeMicSlot.java's after-image changes (blob a9c4a5dd62f652dcf1044b6b9774ed851083f989); the other after-images, the WMShellModule pre-image, the inputs and the goals are unchanged",
   "rebound": "OS Core to OS Product, 2026-11-04 16:41 UTC, from #540 head d8f19fe (the javac fix for Frankel run 41861964515: RoseEdgeMicSlot.Control's super(mContext) named View's own field): patch sha256 a10a73b983430d26d432d90c8555ab052dd6917142dfad1d5d2c2d9f0efe7f75. Only RoseEdgeMicSlot.java's after-image changes (sha256 0768a732126c0cf14bdc0aee7d08ed5ea67d286cf0968e3828a87df58004a54a, blob 3a9ef4bf55ae44e3ea5a4fbd0112b9ead6e32833); the other after-images and the WMShellModule pre-image are unchanged; the inputs, the goals (WindowManager-Shell, SystemUI-core) and flagEvidence (none) are unchanged: a field rename inside one file, with no new imports, files, classpath inputs or flags",
   "rebased": "OS Core to OS Product, 2026-11-05 01:31 UTC, from #551 head 77c9117 (F06 app takeover and the F08 chin marker), re-stated 01:52 UTC for head b639c22 (F06 target_not_standard guard): background-control-frameworks-base.patch sha256 42986c0bf5e26e97b41ca5d62145b9a0ce45dd94810afcb307be658446cd8979, only ComputerControlSessionImpl's after-image changing (1a5392ce..., blob 7a0a3757); rose-edge-wmshell.patch sha256 335fcb61c6054806143a08c2d1a0202b01d71c45948a02a51eb0128b7700a95c, only RoseEdgeMicSlot.java (a613e6ee..., blob 0aa0b49d) and roseedge/RoseEdgePolicy.java (5a565842..., blob 2c664048) changing; the other after-images, the WMShellModule pre-image, the inputs, the goals and flagEvidence (none) unchanged; no new files, flags or classpath inputs (the only new imports, android.app.ActivityManager, android.app.ActivityTaskManager, android.util.SparseBooleanArray and the framework constants WindowConfiguration.ACTIVITY_TYPE_STANDARD and ACTIVITY_TYPE_UNDEFINED, are in ComputerControlSessionImpl)",
-  "retrayed": "OS Core to OS Product, 2026-11-05 02:23 UTC, from #563 head 6e2fb49 (F06 return refinements and the F08 tray reachability signal): background-control-frameworks-base.patch sha256 22fc3d7c92aa0ad6f3692dc31c2e33fc9816972be6f9899b14db9aaac447c6bd, only ComputerControlSessionImpl's after-image changing (eef0edf1..., blob 8b680261); the required Shell overlays AgentTrayPrototype.java (2982f3f1..., blob 39576fcd), AgentTrayLink.java (fdfc3560..., blob 3dca283c) and AgentStatusControls.java (86e9ceb0..., blob b5eb7993) change; rose-edge-wmshell.patch and its after-images, the WMShellModule pre-image, the goals and flagEvidence (none) unchanged; no new files, flags or classpath inputs (new imports android.util.SparseArray, android.database.ContentObserver, android.os.SystemProperties and android.provider.Settings are framework classes)"
+  "retrayed": "OS Core to OS Product, 2026-11-05 02:23 UTC, from #563 head 6e2fb49 (F06 return refinements and the F08 tray reachability signal): background-control-frameworks-base.patch sha256 22fc3d7c92aa0ad6f3692dc31c2e33fc9816972be6f9899b14db9aaac447c6bd, only ComputerControlSessionImpl's after-image changing (eef0edf1..., blob 8b680261); the required Shell overlays AgentTrayPrototype.java (2982f3f1..., blob 39576fcd), AgentTrayLink.java (fdfc3560..., blob 3dca283c) and AgentStatusControls.java (86e9ceb0..., blob b5eb7993) change; rose-edge-wmshell.patch and its after-images, the WMShellModule pre-image, the goals and flagEvidence (none) unchanged; no new files, flags or classpath inputs (new imports android.util.SparseArray, android.database.ContentObserver, android.os.SystemProperties and android.provider.Settings are framework classes)",
+  "shaded": "OS Core to OS Product, 2026-11-07 01:30 UTC, from #616 head e070e6d (1G, the Rose notification shade): nine new SystemUI-core sources under packages/SystemUI/src/com/android/systemui/roseshade/ (required here, as every frameworks/base overlay is; none is a WindowManager-Shell input) and the required Shell overlay AgentTrayPrototype.java (5d3d5697..., blob 85080752: a status-bar drag hook before the tray's own touch handling) change; rose-edge-wmshell.patch and its after-images, the WMShellModule pre-image, the goals and flagEvidence (none) unchanged; the new imports (Dagger, NotificationListener, CoreStartable, the Shell's AgentTrayPrototype) are already on SystemUI-core's classpath. rose-shade-systemui.patch (one include in ReferenceSystemUIModule.java) is registered in apply-os-changes.py for the normal build, which is the compile proof; this inert contract stays bound to #551's patch and does not model it"
  },
  "registration": {
   "state": "unregistered",
@@ -967,6 +968,15 @@
       "packages/SystemUI/AndroidManifest.xml",
       "packages/SystemUI/assets/fonts/Nunito.ttf",
       "packages/SystemUI/assets/licenses/Nunito-OFL.txt",
+      "packages/SystemUI/src/com/android/systemui/roseshade/RoseQuickSettings.java",
+      "packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeController.java",
+      "packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeDrag.java",
+      "packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeIcons.java",
+      "packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeModel.java",
+      "packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeModule.java",
+      "packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeReplies.java",
+      "packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeStartable.java",
+      "packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeSystem.java",
       "packages/SystemUI/src/com/android/systemui/statusbar/phone/PhoneStatusBarView.java",
       "packages/SystemUI/src/com/android/systemui/statusbar/phone/PixelStatusBarFilter.java",
       "packages/SystemUI/src/com/android/systemui/statusbar/pipeline/shared/ui/composable/StatusBarRoot.kt",
@@ -1137,7 +1147,7 @@
   },
   {
    "target": "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/AgentTrayPrototype.java",
-   "sha256": "2982f3f106bf602754918d606f4190470b8f9530c7590dd5de1496932621e756",
+   "sha256": "5d3d5697194cbe256b46ee3a81e79a67ebd4833acd1cb2b3d3df9f0265d16506",
    "role": "required"
   },
   {
@@ -1153,6 +1163,51 @@
   {
    "target": "frameworks/base/packages/SystemUI/assets/licenses/Nunito-OFL.txt",
    "sha256": "580df76c95a1ec5ab878ceb25bb3d85c6a076804e9c970c8c6972aea775fdf65",
+   "role": "required"
+  },
+  {
+   "target": "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseQuickSettings.java",
+   "sha256": "018f2a535c8bc0bf7f8b00177ae5c6abbcacae6690be125e783a47de924bb0cb",
+   "role": "required"
+  },
+  {
+   "target": "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeController.java",
+   "sha256": "0d07846ab8c75acb2bee26163f872345fd5bc6ee1739af079d05749a9346437e",
+   "role": "required"
+  },
+  {
+   "target": "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeDrag.java",
+   "sha256": "06cd1cc58f38145e52d9f49b27d08001f5b70605edeeb1f616f1d1724e6db801",
+   "role": "required"
+  },
+  {
+   "target": "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeIcons.java",
+   "sha256": "4636577582cf9b961c5aaa03d7ead1957ff71d66fe51ce1af55e6b97fae9f93d",
+   "role": "required"
+  },
+  {
+   "target": "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeModel.java",
+   "sha256": "c59582960158de8f737962020629b8daf9148529152882a4940d518c0bac8614",
+   "role": "required"
+  },
+  {
+   "target": "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeModule.java",
+   "sha256": "05d1344e4801ce28cdf914bd2fd67ea4c9df32875f7ce08192f929604c18b6c5",
+   "role": "required"
+  },
+  {
+   "target": "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeReplies.java",
+   "sha256": "97a3beae6a62bf4de2266e863c99bfc0b52af0b44ff542aa9b16dd9bab658cbd",
+   "role": "required"
+  },
+  {
+   "target": "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeStartable.java",
+   "sha256": "e4a526d006d12a8e247fedf96f026dd6da24ff75109eaaf764af0fbaf581729a",
+   "role": "required"
+  },
+  {
+   "target": "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeSystem.java",
+   "sha256": "b8a0adc03582538cf67cb8ceb7e8c6a89c18c124629657669b4d23ccdc76606e",
    "role": "required"
   },
   {
@@ -1244,7 +1299,7 @@
     },
     {
      "target": "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/AgentTrayPrototype.java",
-     "sha256": "2982f3f106bf602754918d606f4190470b8f9530c7590dd5de1496932621e756"
+     "sha256": "5d3d5697194cbe256b46ee3a81e79a67ebd4833acd1cb2b3d3df9f0265d16506"
     },
     {
      "target": "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/StatusVoiceGlow.java",
@@ -1257,6 +1312,42 @@
     {
      "target": "frameworks/base/packages/SystemUI/assets/licenses/Nunito-OFL.txt",
      "sha256": "580df76c95a1ec5ab878ceb25bb3d85c6a076804e9c970c8c6972aea775fdf65"
+    },
+    {
+     "target": "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseQuickSettings.java",
+     "sha256": "018f2a535c8bc0bf7f8b00177ae5c6abbcacae6690be125e783a47de924bb0cb"
+    },
+    {
+     "target": "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeController.java",
+     "sha256": "0d07846ab8c75acb2bee26163f872345fd5bc6ee1739af079d05749a9346437e"
+    },
+    {
+     "target": "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeDrag.java",
+     "sha256": "06cd1cc58f38145e52d9f49b27d08001f5b70605edeeb1f616f1d1724e6db801"
+    },
+    {
+     "target": "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeIcons.java",
+     "sha256": "4636577582cf9b961c5aaa03d7ead1957ff71d66fe51ce1af55e6b97fae9f93d"
+    },
+    {
+     "target": "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeModel.java",
+     "sha256": "c59582960158de8f737962020629b8daf9148529152882a4940d518c0bac8614"
+    },
+    {
+     "target": "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeModule.java",
+     "sha256": "05d1344e4801ce28cdf914bd2fd67ea4c9df32875f7ce08192f929604c18b6c5"
+    },
+    {
+     "target": "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeReplies.java",
+     "sha256": "97a3beae6a62bf4de2266e863c99bfc0b52af0b44ff542aa9b16dd9bab658cbd"
+    },
+    {
+     "target": "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeStartable.java",
+     "sha256": "e4a526d006d12a8e247fedf96f026dd6da24ff75109eaaf764af0fbaf581729a"
+    },
+    {
+     "target": "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeSystem.java",
+     "sha256": "b8a0adc03582538cf67cb8ceb7e8c6a89c18c124629657669b4d23ccdc76606e"
     },
     {
      "target": "frameworks/base/packages/SystemUI/src/com/android/systemui/statusbar/phone/PixelStatusBarFilter.java",
@@ -2046,6 +2137,15 @@
        "packages/SystemUI/AndroidManifest.xml",
        "packages/SystemUI/assets/fonts/Nunito.ttf",
        "packages/SystemUI/assets/licenses/Nunito-OFL.txt",
+       "packages/SystemUI/src/com/android/systemui/roseshade/RoseQuickSettings.java",
+       "packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeController.java",
+       "packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeDrag.java",
+       "packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeIcons.java",
+       "packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeModel.java",
+       "packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeModule.java",
+       "packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeReplies.java",
+       "packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeStartable.java",
+       "packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeSystem.java",
        "packages/SystemUI/src/com/android/systemui/statusbar/phone/PhoneStatusBarView.java",
        "packages/SystemUI/src/com/android/systemui/statusbar/phone/PixelStatusBarFilter.java",
        "packages/SystemUI/src/com/android/systemui/statusbar/pipeline/shared/ui/composable/StatusBarRoot.kt",
@@ -2216,7 +2316,7 @@
    },
    {
     "target": "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/AgentTrayPrototype.java",
-    "sha256": "2982f3f106bf602754918d606f4190470b8f9530c7590dd5de1496932621e756",
+    "sha256": "5d3d5697194cbe256b46ee3a81e79a67ebd4833acd1cb2b3d3df9f0265d16506",
     "role": "required"
    },
    {
@@ -2232,6 +2332,51 @@
    {
     "target": "frameworks/base/packages/SystemUI/assets/licenses/Nunito-OFL.txt",
     "sha256": "580df76c95a1ec5ab878ceb25bb3d85c6a076804e9c970c8c6972aea775fdf65",
+    "role": "required"
+   },
+   {
+    "target": "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseQuickSettings.java",
+    "sha256": "018f2a535c8bc0bf7f8b00177ae5c6abbcacae6690be125e783a47de924bb0cb",
+    "role": "required"
+   },
+   {
+    "target": "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeController.java",
+    "sha256": "0d07846ab8c75acb2bee26163f872345fd5bc6ee1739af079d05749a9346437e",
+    "role": "required"
+   },
+   {
+    "target": "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeDrag.java",
+    "sha256": "06cd1cc58f38145e52d9f49b27d08001f5b70605edeeb1f616f1d1724e6db801",
+    "role": "required"
+   },
+   {
+    "target": "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeIcons.java",
+    "sha256": "4636577582cf9b961c5aaa03d7ead1957ff71d66fe51ce1af55e6b97fae9f93d",
+    "role": "required"
+   },
+   {
+    "target": "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeModel.java",
+    "sha256": "c59582960158de8f737962020629b8daf9148529152882a4940d518c0bac8614",
+    "role": "required"
+   },
+   {
+    "target": "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeModule.java",
+    "sha256": "05d1344e4801ce28cdf914bd2fd67ea4c9df32875f7ce08192f929604c18b6c5",
+    "role": "required"
+   },
+   {
+    "target": "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeReplies.java",
+    "sha256": "97a3beae6a62bf4de2266e863c99bfc0b52af0b44ff542aa9b16dd9bab658cbd",
+    "role": "required"
+   },
+   {
+    "target": "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeStartable.java",
+    "sha256": "e4a526d006d12a8e247fedf96f026dd6da24ff75109eaaf764af0fbaf581729a",
+    "role": "required"
+   },
+   {
+    "target": "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeSystem.java",
+    "sha256": "b8a0adc03582538cf67cb8ceb7e8c6a89c18c124629657669b4d23ccdc76606e",
     "role": "required"
    },
    {
@@ -2363,6 +2508,15 @@
     "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/StatusVoiceGlow.java",
     "frameworks/base/packages/SystemUI/assets/fonts/Nunito.ttf",
     "frameworks/base/packages/SystemUI/assets/licenses/Nunito-OFL.txt",
+    "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseQuickSettings.java",
+    "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeController.java",
+    "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeDrag.java",
+    "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeIcons.java",
+    "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeModel.java",
+    "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeModule.java",
+    "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeReplies.java",
+    "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeStartable.java",
+    "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeSystem.java",
     "frameworks/base/packages/SystemUI/src/com/android/systemui/statusbar/phone/PixelStatusBarFilter.java"
    ],
    "rule": "present with exactly its sha256 in overlays"
@@ -2499,6 +2653,69 @@
      "module": "SystemUI-core",
      "list": "assets",
      "via": "Soong's android_library default asset directory (SystemUI-core sets no asset_dirs)"
+    },
+    {
+     "file": "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseQuickSettings.java",
+     "goal": "SystemUI-core",
+     "module": "SystemUI-core",
+     "list": "javac sources",
+     "via": "srcs"
+    },
+    {
+     "file": "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeController.java",
+     "goal": "SystemUI-core",
+     "module": "SystemUI-core",
+     "list": "javac sources",
+     "via": "srcs"
+    },
+    {
+     "file": "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeDrag.java",
+     "goal": "SystemUI-core",
+     "module": "SystemUI-core",
+     "list": "javac sources",
+     "via": "srcs"
+    },
+    {
+     "file": "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeIcons.java",
+     "goal": "SystemUI-core",
+     "module": "SystemUI-core",
+     "list": "javac sources",
+     "via": "srcs"
+    },
+    {
+     "file": "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeModel.java",
+     "goal": "SystemUI-core",
+     "module": "SystemUI-core",
+     "list": "javac sources",
+     "via": "srcs"
+    },
+    {
+     "file": "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeModule.java",
+     "goal": "SystemUI-core",
+     "module": "SystemUI-core",
+     "list": "javac sources",
+     "via": "srcs"
+    },
+    {
+     "file": "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeReplies.java",
+     "goal": "SystemUI-core",
+     "module": "SystemUI-core",
+     "list": "javac sources",
+     "via": "srcs"
+    },
+    {
+     "file": "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeStartable.java",
+     "goal": "SystemUI-core",
+     "module": "SystemUI-core",
+     "list": "javac sources",
+     "via": "srcs"
+    },
+    {
+     "file": "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeSystem.java",
+     "goal": "SystemUI-core",
+     "module": "SystemUI-core",
+     "list": "javac sources",
+     "via": "srcs"
     },
     {
      "file": "frameworks/base/packages/SystemUI/src/com/android/systemui/statusbar/phone/PhoneStatusBarView.java",

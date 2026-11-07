@@ -3,6 +3,8 @@
 Source: `scripts/yogi_direct.py`, contract in `os/ota/yogi.json` `builder.direct`, tests in
 `scripts/tests/test_yogi_direct.py`. **Status: `unbound`.** Nothing here has run. The route stays refused until every
 dependency below is recorded from an operator receipt with provenance, and its first use is separately approved.
+Replacement-builder recovery (unit mode, host-key rotation, temporary-access cleanup, and STOP) is a different tool:
+[YOGI-REPLACEMENT-RECOVER.md](YOGI-REPLACEMENT-RECOVER.md). It does not satisfy this route's host-key pin.
 
 ## Why a separate route
 
@@ -57,6 +59,43 @@ Residual risks, stated rather than claimed away:
 - The guest clock is used for the per-step expiry.
 - If `systemd-logind` `KillUserProcesses` is enabled for the SSH user, the agent would be killed at logout. That shows
   as `lost`, never as success.
+
+## Strict possession check
+
+This is not the direct route and it does not record `builder.direct.hostKey`. `guestAuthenticated` stays
+false until the strict handshake and the fresh inspect both succeed. `hostKeyPinned` stays false even after
+that success: this check does not record a config pin. The host-key input is the bare `gcloud --format=json`
+list from `get-guest-attributes --query-path=hostkeys/`, three `{namespace, key, value}` objects. A wrapper
+with provenance is not that response. The fresh terminated read at 2026-11-07T15:01:24Z matches the `ce79`
+fingerprints. Preflight refuses unless that read is still the instance: fingerprint `pSAPI4eI6q4=`,
+only the two base metadata keys, status `TERMINATED`, and instance id `2720796557371812468`. Serial output, trust on first use, and `gcloud compute ssh` are not used.
+
+The inspect recorded no authorized-key line and no temporary account. OS Login stays false and project SSH keys stay
+blocked, so there is no existing login to reuse. The check appends one expiring instance `ssh-keys` line for the
+existing `pixelbuild` account and leaves every other metadata key and every other `ssh-keys` line in place. One
+metadata write uses the current fingerprint and is not retried. The login private key stays a local mode `0600` file
+and is not forwarded. The one remote command is the existing read-only quiesced probe: metadata, `/proc`, and
+`systemctl is-active`/`is-enabled`. It does not use sudo and does not change the account. After it, the same
+fingerprint rule removes only that exact line. A 412 keeps the intended map and is not written again.
+The same removal and STOP run when SSH fails or start times out without a confirmed state. After a removal
+that was accepted, the guest agent is given one bounded refresh, the VM is stopped, and a fresh inspect boot
+must read both `/root/.ssh/authorized_keys` and `/home/pixelbuild/.ssh/authorized_keys`. The receipt has to
+name this operation's exact `roseos-yogi-possess-<id>` comment, `authPathsRead` 2, `accessCleanup` ok, and
+`possessMarkerLines` 0. A missing count is not zero. An unreadable path is not proof. Metadata removal alone
+is not that proof. The runner is not enabled. IAP only selects the instance. OpenSSH checks the ed25519 host
+key against the saved API blob. `hostKeyPinned` stays false.
+
+`handshake-plan` writes that plan and does not call GCP or SSH. `handshake --execute` is the whole operator run, including the fresh inspect. There is no second command. After the probe it removes only that line, waits one bounded guest-agent refresh, stops the VM, and then plans a new inspect with a new operation id and nonce. That inspect is `yogi_replacement_recover.py plan`, `preflight --execute`, and `apply --execute` in the same process: the apply boots the guest, reads the receipt, removes the startup script, and stops again. It does not start that inspect when the metadata removal was not accepted, the refresh failed, or the stop is unconfirmed. Those outcomes leave cleanup instructions and leave `guestAuthenticated` false. The guest agent installs the metadata text after the first colon and uses `expireOn` only to drop an already-expired line; it does not delete the JSON comment. The inspect counts a line that still contains that comment or the login public blob, including a rebuilt `google-ssh` line that dropped the comment. `possessMarkerLines` 0 means neither remained. A missing count is not zero.
+
+```sh
+env -u GOOGLE_APPLICATION_CREDENTIALS -u CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT \
+  python3 -B yogi_possession.py handshake-plan \
+  --hostkeys HOSTKEYS.json --client-public CLIENT.pub --out ~/yogi-ops/possess-LABEL
+env -u GOOGLE_APPLICATION_CREDENTIALS -u CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT \
+  python3 -B yogi_possession.py handshake --execute \
+  --hostkeys HOSTKEYS.json --client-public CLIENT.pub --identity ~/yogi-ops/possess-LABEL/id_ed25519 \
+  --out ~/yogi-ops/possess-LABEL
+```
 
 ## Dependencies (all unverified today, all fail-closed)
 

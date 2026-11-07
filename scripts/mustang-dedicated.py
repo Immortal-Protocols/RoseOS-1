@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Dedicated Mustang build/OTA steps. The committed lane and runtime stay unbound.
+"""Dedicated Mustang build/OTA steps. The lane is identity-bound; runtime stays unbound.
 
 No provisioning, IAM, key bootstrap, global reclaim, automatic dispatch or phone
 operation. Runtime actions require actual admitted bindings and this one fresh
@@ -24,6 +24,7 @@ import mustang_controller as controller
 import mustang_lane
 import mustang_paths
 import mustang_ota as ota
+import mustang_route as route
 import release_receipts
 
 ROOT=Path(__file__).resolve().parents[1]
@@ -48,13 +49,20 @@ def reference(value, root=ROOT):
     return value
 
 
-def guard(lane, cfg, env, publish=False, root=ROOT, diff=None):
+def guard(lane, cfg, env, publish=False, root=ROOT, diff=None, dry_run=False):
     run=controller.invocation(lane,env)
     paths=mustang_paths.layout(lane)
     if env.get('GITHUB_REPOSITORY_ID')!='1428996648':
         raise ValueError('dedicated workflow repository ID differs')
     if lane['workflow']!=WORKFLOW or lane['queue']!='mustang-ota' \
-            or cfg.get('schema')!='roseos.mustang-dedicated-runtime.v1' or cfg.get('status')!='bound':
+            or cfg.get('schema')!='roseos.mustang-dedicated-runtime.v1':
+        raise ValueError('dedicated Mustang runtime inputs are unbound')
+    if dry_run:
+        if publish: raise ValueError('dry run cannot publish')
+        import mustang_ephemeral
+        mustang_ephemeral.require_group5(cfg)
+        return cfg
+    if cfg.get('status')!='bound':
         raise ValueError('dedicated Mustang runtime inputs are unbound')
     controller.require_explicit_target(controller.common_controller())
     if type(cfg.get('jobs')) is not int or not 1<=cfg['jobs']<=256 \
@@ -67,22 +75,28 @@ def guard(lane, cfg, env, publish=False, root=ROOT, diff=None):
     if not isinstance(cfg.get('dataFilesystemUuid'),str) or not re.fullmatch(r'[A-Za-z0-9-]+',cfg['dataFilesystemUuid']):
         raise ValueError('actual dedicated data filesystem UUID required')
     network=reference(cfg.get('networkEvidence'),root)
-    if cfg.get('automaticStopHours')!=12 or network.get('builder')!=lane['vm'] \
+    if cfg.get('automaticStopHours')!=4 or network.get('builder')!=lane['vm'] \
             or network.get('githubEgressVerified') is not True or not network.get('approvedRoute'):
-        raise ValueError('actual isolated STOP and approved working GitHub egress evidence required')
+        raise ValueError('actual isolated four-hour STOP and approved working GitHub egress evidence required')
     source=reference(cfg.get('sourceEvidence'),root)
+    route.reject_copy_time_source(source)
     manifest=hashlib.sha256((Path(root)/'os/pinned-manifest.xml').read_bytes()).hexdigest()
     if source.get('builder')!=lane['vm'] or source.get('sourceRoot')!=lane['sourceRoot'] \
             or source.get('manifestSha256')!=manifest or source.get('pristine') is not True \
             or source.get('adevtoolRevision')!=load(Path(root)/'os/build-only/mustang.json')['pins']['vendor/adevtool']:
         raise ValueError('dedicated pristine pinned source/bootstrap evidence differs')
-    runner=cfg['runner']; registration=reference(runner.get('registrationEvidence'),root)
-    if not isinstance(runner.get('groupName'),str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9 _-]{0,99}',runner['groupName']) \
-            or not re.fullmatch(r'[1-9][0-9]*',str(runner.get('groupId',''))) or runner.get('lifetime') not in ('persistent','ephemeral') \
-            or registration.get('builder')!=lane['vm'] or registration.get('repositoryId')!='1428996648' \
-            or registration.get('workflow')!=WORKFLOW or registration.get('groupId')!=runner['groupId'] \
-            or registration.get('readyOnEveryStart') is not True or registration.get('publicRepositoryAdmitted') is not True:
-        raise ValueError('dedicated protected runner registration-on-start evidence required')
+    runner=cfg['runner']
+    if str(runner.get('groupId'))=='5':
+        import mustang_ephemeral
+        mustang_ephemeral.require_group5(cfg)
+    else:
+        registration=reference(runner.get('registrationEvidence'),root)
+        if not isinstance(runner.get('groupName'),str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9 _-]{0,99}',runner['groupName']) \
+                or not re.fullmatch(r'[1-9][0-9]*',str(runner.get('groupId',''))) or runner.get('lifetime') not in ('persistent','ephemeral') \
+                or registration.get('builder')!=lane['vm'] or registration.get('repositoryId')!='1428996648' \
+                or registration.get('workflow')!=WORKFLOW or registration.get('groupId')!=runner['groupId'] \
+                or registration.get('readyOnEveryStart') is not True or registration.get('publicRepositoryAdmitted') is not True:
+            raise ValueError('dedicated protected runner registration-on-start evidence required')
     signing=reference(cfg.get('signingRouteEvidence'),root)
     if signing.get('builder')!=lane['vm'] or signing.get('workflow')!=WORKFLOW \
             or signing.get('identityVariable')!='GCP_SIGNER_SERVICE_ACCOUNT' \
@@ -112,9 +126,13 @@ def guard(lane, cfg, env, publish=False, root=ROOT, diff=None):
             raise ValueError('fresh app export omits current app source changes: '+package['packageName'])
     baseline=cfg.get('baselineTargetFiles')
     factory=cfg.get('baselineFactoryEvidence')
+    continuity=cfg.get('candidateContinuity')
+    if sum(item is not None for item in (baseline, factory, continuity)) > 1:
+        raise ValueError('select exactly one baseline evidence kind')
     if factory is not None:
-        if baseline is not None: raise ValueError('select exactly one baseline evidence kind')
         ota.module('mustang_factory_baseline_guard','mustang-baseline-image.py').contract(reference(factory,root),lane,cfg,root)
+    elif continuity is not None:
+        ota.candidate_continuity(reference(continuity, root))
     else:
         committed=load(Path(root)/load(Path(root)/'os/ota/mustang.json')['baseline']['signReceipt'])['outputs']['targetFiles']
         if not isinstance(baseline,dict) or any(baseline.get(k)!=committed[k] for k in ('sha256','sizeBytes')) \
@@ -147,30 +165,56 @@ def metadata_id():
         return response.read(64).decode().strip()
 
 
-def host_identity(lane,filesystem_uuid,observe_id=metadata_id,execute=subprocess.run):
+def host_identity(lane,filesystem_uuid,observe_id=metadata_id,execute=subprocess.run,mount=None):
     paths=mustang_paths.layout(lane)
     if observe_id()!=lane['vm']['instanceId']: raise ValueError('runner is not the admitted dedicated VM')
-    uuid=execute(['findmnt','--noheadings','--output','UUID','--target',str(paths['home'])],capture_output=True,text=True)
-    if not filesystem_uuid or uuid.returncode or uuid.stdout.strip()!=filesystem_uuid:
+    columns='UUID,TARGET' if mount else 'UUID'
+    uuid=execute(['findmnt','--noheadings','--output',columns,'--target',str(paths['home'])],capture_output=True,text=True)
+    fields=uuid.stdout.split()
+    if not filesystem_uuid or uuid.returncode or not fields or fields[0]!=filesystem_uuid:
         raise ValueError('dedicated data filesystem is not the admitted mounted disk')
+    if mount and (len(fields)<2 or fields[1]!=mount or not str(paths['home']).startswith(mount.rstrip('/')+'/')):
+        raise ValueError('dedicated data mount differs')
     for path in paths.values():
         if any(part.is_symlink() for part in (path,*path.parents)):
             raise ValueError('dedicated path traverses a link')
     return paths
 
 
+DRY_RUN_BLOCKED=frozenset(('fetch-inputs','baseline','produce','collect','sign','_execute','stage','verify-staged','publish','report'))
+
+
+def refuse_dry_run(action):
+    if os.environ.get('MUSTANG_DRY_RUN')=='true' and action in DRY_RUN_BLOCKED:
+        raise ValueError('dry run cannot compile, sign, or publish')
+
+
+def infrastructure_tool_paths():
+    """Bootstrap pins. These are install paths, not admitted app or baseline records."""
+    import mustang_ephemeral
+    return (mustang_ephemeral.NODE['install'], mustang_ephemeral.SDK['aapt'], mustang_ephemeral.SDK['apksigner'])
+
+
 def host_check(lane,cfg,observe_id=metadata_id,execute=subprocess.run):
-    paths=host_identity(lane,cfg['dataFilesystemUuid'],observe_id,execute)
+    observed=observe_id()
+    paths=host_identity(lane,cfg['dataFilesystemUuid'],lambda:observed,execute,cfg.get('dataMount'))
     space=os.statvfs(paths['home'])
     if space.f_bavail<=0 or space.f_files<=0 or space.f_favail<=0:
         raise ValueError('dedicated data filesystem has no available bytes/inodes')
+    frsize=getattr(space,'f_frsize',0) or getattr(space,'f_bsize',0)
+    if not frsize: raise ValueError('dedicated data filesystem has no available bytes/inodes')
+    route.evaluate_guest(dict(instanceId=observed,filesystemUuid=cfg['dataFilesystemUuid'],mount=cfg.get('dataMount'),
+        availableBytes=space.f_bavail*frsize,availableInodes=space.f_favail,totalInodes=space.f_files,euid=os.geteuid()),lane,cfg)
     if not paths['sourceRoot'].is_dir() or not paths['storageRoot'].is_dir():
         raise ValueError('dedicated source/storage must already be prepared')
     if any(os.stat(paths[key]).st_dev!=os.stat(paths['home']).st_dev for key in ('sourceRoot','storageRoot')):
         raise ValueError('dedicated source/storage are not on the admitted data filesystem')
-    for tool in cfg['tools'].values():
-        if not Path(tool).is_file() or not os.access(tool,os.X_OK): raise ValueError('dedicated tool unavailable')
-    if any(shutil.which(tool) is None for tool in ('gh','gcloud')):
+    infrastructure=os.environ.get('MUSTANG_DRY_RUN')=='true'
+    tools=infrastructure_tool_paths() if infrastructure else cfg['tools'].values()
+    for tool in tools:
+        if not isinstance(tool,str) or not Path(tool).is_file() or not os.access(tool,os.X_OK):
+            raise ValueError('dedicated tool unavailable')
+    if not infrastructure and any(shutil.which(tool) is None for tool in ('gh','gcloud')):
         raise ValueError('artifact/signing CLI unavailable before compile')
 
 
@@ -315,7 +359,8 @@ def fetch_inputs(record_path,out,execute=subprocess.run,lane=None,cfg=None,root=
 
 def context(publish=False):
     lane=mustang_lane.configuration()
-    cfg=guard(lane,load(CONFIG),os.environ,publish)
+    dry=os.environ.get('MUSTANG_DRY_RUN')=='true'
+    cfg=guard(lane,load(CONFIG),os.environ,publish,dry_run=dry)
     if subprocess.check_output(['git','-C',str(ROOT),'rev-parse','HEAD'],text=True).strip()!=os.environ['GITHUB_SHA'] \
             or subprocess.check_output(['git','-C',str(ROOT),'status','--porcelain'],text=True).strip():
         raise ValueError('dedicated checkout differs from the captured clean source')
@@ -334,11 +379,15 @@ def verify(directory,lane,cfg,publish=False):
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('action',choices=('guard','host-check','fetch-inputs','baseline','produce','collect','sign',
-        '_execute','stage','verify-staged','publish','report','ownership-output','cleanup-prepare','require-owned'))
+        '_execute','stage','verify-staged','publish','report','ownership-output','cleanup-prepare','require-owned','preflight'))
     parser.add_argument('--dir'); parser.add_argument('--out'); parser.add_argument('--config')
     parser.add_argument('--ownership-record'); parser.add_argument('--publish',action='store_true')
     args=parser.parse_args()
     args.publish=args.publish or (args.action=='guard' and os.environ.get('MUSTANG_PUBLISH')=='true')
+    refuse_dry_run(args.action)
+    if args.action=='preflight':
+        print(json.dumps(route.report(),sort_keys=True))
+        return 0
     if args.action in ('ownership-output','cleanup-prepare','require-owned','report'):
         lane=mustang_lane.validate(mustang_lane.configuration())
         controller.invocation(lane,os.environ)
@@ -353,10 +402,13 @@ def main():
         os.environ.update(EXPECTED_COMPILE_RUN=run,EXPECTED_COMPILE_SOURCE=os.environ['GITHUB_SHA'],
             EXPECTED_COMPILE_RECOVERY='false',EXPECTED_BOOTSTRAP_SOURCE=load(ROOT/'os/signing-bootstrap/mustang-bootstrap-receipt.json')['recipeSha'])
     if args.action=='guard':
-        for name in ('MUSTANG_CONTROLLER_SERVICE_ACCOUNT','MUSTANG_CONTROLLER_WORKLOAD_IDENTITY_PROVIDER',
-                     'MUSTANG_SIGNER_WORKLOAD_IDENTITY_PROVIDER','GCP_SIGNER_SERVICE_ACCOUNT'):
+        dry=os.environ.get('MUSTANG_DRY_RUN')=='true'
+        names=('MUSTANG_CONTROLLER_SERVICE_ACCOUNT','MUSTANG_CONTROLLER_WORKLOAD_IDENTITY_PROVIDER') if dry else (
+            'MUSTANG_CONTROLLER_SERVICE_ACCOUNT','MUSTANG_CONTROLLER_WORKLOAD_IDENTITY_PROVIDER',
+            'MUSTANG_SIGNER_WORKLOAD_IDENTITY_PROVIDER','GCP_SIGNER_SERVICE_ACCOUNT')
+        for name in names:
             if not os.environ.get(name): raise ValueError(name+' is unbound; no host start')
-        if os.environ['GCP_SIGNER_SERVICE_ACCOUNT']!=ota.module('mustang_route_identity','mustang-sign-package.py').SIGNER:
+        if not dry and os.environ['GCP_SIGNER_SERVICE_ACCOUNT']!=ota.module('mustang_route_identity','mustang-sign-package.py').SIGNER:
             raise ValueError('existing Mustang signer identity differs; no host start')
         emit(runner_group=cfg['runner']['groupName'],runner_label=lane['runnerLabel'])
     elif args.action=='cleanup-prepare':
@@ -386,7 +438,8 @@ def main():
     elif args.action=='report':
         # Failure reporting may ignore signing/input readiness, but never read
         # another guest or a fallback/unmounted filesystem's attempt paths.
-        host_identity(lane,load(CONFIG).get('dataFilesystemUuid'))
+        current=load(CONFIG)
+        host_identity(lane,current.get('dataFilesystemUuid'),mount=current.get('dataMount'))
         out=Path(args.out)
         pipeline.collect_reports(run,attempt,out,lane=lane)
         for kind,name in (('collect','compile-collection.json'),('sign','mustang-sign-receipt.json')):
@@ -401,8 +454,11 @@ def main():
             ota.module('mustang_verify_apps','app-inputs-verify.py').verify(ROOT/cfg['appInputsRecord'],inputs,cfg['tools'])
             emit(inputs_dir=str(inputs))
         elif args.action=='baseline':
-            factory=reference(cfg['baselineFactoryEvidence']) if cfg.get('baselineFactoryEvidence') is not None else None
-            ota.observe_baseline(args.out,lane,cfg['tools'],cfg.get('baselineTargetFiles'),factory=factory,runtime=cfg)
+            if cfg.get('candidateContinuity') and cfg.get('baselineTargetFiles') is None:
+                release_receipts.write_once(args.out, ota.candidate_continuity(reference(cfg['candidateContinuity'])))
+            else:
+                factory=reference(cfg['baselineFactoryEvidence']) if cfg.get('baselineFactoryEvidence') is not None else None
+                ota.observe_baseline(args.out,lane,cfg['tools'],cfg.get('baselineTargetFiles'),factory=factory,runtime=cfg)
         elif args.action=='produce':
             # This process has no further authenticated download/signing work.
             # Do not forward job tokens or auth/env-output capabilities to Make

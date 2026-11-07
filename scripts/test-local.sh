@@ -77,6 +77,7 @@ python3 os/tests/test_automated_devices_contract.py
 python3 os/tests/test_rose_edge_shell.py
 python3 os/tests/test_background_control_prototype.py
 python3 os/tests/test_anyapp_takeover_platform.py
+python3 os/tests/test_rose_shade.py
 python3 scripts/tests/test_systemui_component_update.py
 python3 os/tests/persistent-app-experiment/test_systemui_stages.py
 python3 os/tests/persistent-app-experiment/test_setup_emulator.py
@@ -101,6 +102,8 @@ python3 scripts/tests/test_mustang_ota_chain_workflow.py
 python3 scripts/tests/test_yogi_ota.py
 # Yogi direct operator route: plan/start/run/status/cancel/cleanup and the guest agent (fake gcloud/ssh; no VM, SSH or key).
 python3 scripts/tests/test_yogi_direct.py
+# Yogi replacement recovery: dry-run plan, fake control plane, in-memory guest (no GCP, SSH, or key).
+python3 scripts/tests/test_yogi_replacement_recover.py
 # Mustang raised-edge gate (#570): the shared checker on synthetic archives; no signer, host or dispatch.
 python3 scripts/tests/test_mustang_edge_gate.py
 python3 scripts/tests/test_agent_beta_auto.py
@@ -236,6 +239,13 @@ java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-option
  os/overlays/frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/AgentTrayLink.java \
  os/tests/AgentTrayLinkTest.java
 java -cp "$JAVA_TESTS/AgentTrayLink" com.android.wm.shell.AgentTrayLinkTest
+java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -encoding UTF-8 -d "$JAVA_TESTS/RoseShade" \
+ os/overlays/frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeModel.java \
+ os/overlays/frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeReplies.java \
+ os/overlays/frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseQuickSettings.java \
+ os/overlays/frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeDrag.java \
+ os/tests/roseshade/RoseShadeTest.java
+java -cp "$JAVA_TESTS/RoseShade" com.android.systemui.roseshade.RoseShadeTest
 # Updater channel rules (Prod/Beta/Alpha, legacy migration, unpublished feeds).
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/RoseChannels" \
  os/overlays/packages/apps/Updater/src/app/seamlessupdate/client/RoseChannels.java os/tests/RoseChannelsTest.java

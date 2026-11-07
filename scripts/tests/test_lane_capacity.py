@@ -260,7 +260,17 @@ class MapTest(unittest.TestCase):
         lane = CONTRACT['lanes']['mustang']
         self.assertEqual(lane['runtimeStatus'], 'retired-shared-host')
         binding = json.loads((ROOT/lane['activeBinding']).read_text())
-        self.assertEqual(binding['status'], 'unbound')
+        runtime = json.loads((ROOT/'os/build-only/mustang-runtime.json').read_text())
+        self.assertEqual(binding['status'], 'bound')
+        self.assertEqual(binding['vm']['instance'], 'roseos-mustang-builder-20261107-a')
+        self.assertNotEqual(binding['vm']['instance'], 'immortal-os-builder')
+        self.assertEqual(runtime['status'], 'unbound')
+        self.assertFalse(runtime['publication']['enabled'])
+        self.assertIsNone(runtime['appInputsRecord'])
+        self.assertIsNone(runtime['baselineTargetFiles'])
+        self.assertTrue(json.loads((ROOT/runtime['allocationState']).read_text())['unknown'])
+        self.assertEqual(lane['dedicatedRuntimeStatus'], 'unbound')
+        self.assertFalse(in_service('mustang-builder', CONTRACT['hosts']['mustang-builder']))
         for live in (True, False):
             self.assertFalse(any('mustang' in pair for pair in independent_pairs(CONTRACT, live)))
         # A historical runner/VM label must not manufacture a parallel lane.

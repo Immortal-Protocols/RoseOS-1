@@ -1,0 +1,32 @@
+{
+  "schema": "roseos.mustang-candidate-archive-observation.v1",
+  "admitted": false,
+  "kind": "actions-candidate-archive",
+  "artifactId": "13280698927",
+  "name": "mustang-candidate-41738359336-1",
+  "sizeBytes": 2108061108,
+  "archiveDigest": "c6aea80e23b5aeb775454692ff2da28ca8ff27495d79603e67ec2c0dfc1a6dae",
+  "sourceRun": "41738359336",
+  "reportedHeadPrefix": "7b5848c4",
+  "expiresAtPacific": "2026-11-10 15:42 PST",
+  "retrieval": "preserve-and-verify",
+  "holdMeaning": "Chief agent source-only direction. Not a Nathan block and not a network block.",
+  "parentDecision": "Preserve and verify the candidate under Nathan delegated discretion. Do not admit it and do not install it.",
+  "installed": false,
+  "inventory": {
+    "signedTargetFilesZip": false,
+    "innerInstaller": "mustang-install-2026110302.zip",
+    "innerInstallerIsBaselineTargetFiles": false,
+    "source": "Parent verified the preserved candidate. This repository did not download it."
+  },
+  "notBaselineTargetFiles": true,
+  "baselineStillRequired": {
+    "build": "2026110302",
+    "sha256": "baf24f4b433d66e7115e5fc5a15af1394482a59af10c08e222913a65e6bf7814",
+    "sizeBytes": 4884085713,
+    "formerPath": "/home/pixelbuild/rose-actions/mustang-sign-41738359336-1/release/signed-target_files.zip",
+    "existence": "unproved",
+    "inspectFrankel": false
+  },
+  "basis": "The preserved candidate is an outer archive of 2108061108 bytes. Its inventory has no signed-target_files.zip. The inner mustang-install-2026110302.zip is not the 4884085713-byte baseline. Preserving the candidate does not supply that baseline. The old Frankel path was not inspected."
+}
