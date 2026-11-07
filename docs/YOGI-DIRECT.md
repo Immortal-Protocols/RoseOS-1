@@ -3,6 +3,8 @@
 Source: `scripts/yogi_direct.py`, contract in `os/ota/yogi.json` `builder.direct`, tests in
 `scripts/tests/test_yogi_direct.py`. **Status: `unbound`.** Nothing here has run. The route stays refused until every
 dependency below is recorded from an operator receipt with provenance, and its first use is separately approved.
+Replacement-builder recovery (unit mode, host-key rotation, temporary-access cleanup, and STOP) is a different tool:
+[YOGI-REPLACEMENT-RECOVER.md](YOGI-REPLACEMENT-RECOVER.md). It does not satisfy this route's host-key pin.
 
 ## Why a separate route
 
