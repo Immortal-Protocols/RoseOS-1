@@ -103,7 +103,17 @@ if a.background_policy:
     projects.setdefault('build/make', []).append('background-control-build-make.patch')
     projects['build/release'] = ['background-control-build-release.patch']
     # #156: Rose Agent's work row in Launcher3's fallback overview (Rose holds HOME); needs the controller above.
-    projects['packages/apps/Launcher3'] = ['rose-switcher-launcher3.patch']
+    # #410: the raised edge after it: E2a's short-swipe gesture, then E2c's shell hand-off and edge window.
+    projects['packages/apps/Launcher3'] = ['rose-switcher-launcher3.patch', 'rose-edge-launcher3.patch',
+        'rose-edge-resize-launcher3.patch']
+    # #410: WMShell's real app resize and the edge's mic slot (OS Core, #516/#523/#528).
+    projects['frameworks/base'].append('rose-edge-wmshell.patch')
+    # 1G: the Rose notification shade's one SystemUI binding (OS Core): RoseShadeModule in ReferenceSystemUIModule.
+    projects['frameworks/base'].append('rose-shade-systemui.patch')
+    # #410: the edge's switch (persist.wm.debug.rose_edge); the mic slot is the tray's own control, so with the tray.
+    if a.agent_tray:projects['build/make'].append('rose-edge-build-make.patch')
+    # 1M: the Rose keyboard (os/overlays/packages/apps/RoseKeyboard) in the product, beside the stock keyboard.
+    projects['build/make'].append('rose-keyboard-build-make.patch')
 preinstalls = preinstall_plan(policy, a.preinstall_apk) if a.preinstall_apk else []
 projects.update(rose_home_projects(preinstalls))
 if a.installed_identities:
