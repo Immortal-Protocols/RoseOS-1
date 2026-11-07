@@ -197,6 +197,33 @@ env -u GOOGLE_APPLICATION_CREDENTIALS -u CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOU
 
 `cleanup --execute` remains the stop path if a previous apply was interrupted.
 
+## Rotation-only continuation
+
+Repair still stops when the unit is already mode `0644`. That guard is unchanged. A later rotation is a new plan,
+`--mode rotate`, and it does not change the mode in either direction.
+
+The inspect receipt is guest evidence. It is not a host-key pin, not proof the keys are still the clone, and not proof
+a previous rotation finished. A journal phase of `complete`, or an unrecognized marker, does not authorize or skip
+the rotation. Unrecognized markers are counted and left in place. Their bytes are not copied into the new receipt.
+
+`plan --mode rotate --inspect-receipt FILE` copies the three public fingerprints from that reviewed inspect receipt
+into the new guest. On boot the guest reads the public files again. It generates a key only when all three still
+match that bound evidence, the unit is a root-owned regular file mode `0644` size 347, and the runner is inactive,
+disabled, and has no listener or worker. A mismatch stops with the mode unchanged.
+
+That match is consistency with the inspect, not trust in the guest and not a comparison with the original VM.
+`hostKeyPinned` stays false. A later inspect that reports the new public fingerprints is a second guest report.
+The prekey snapshot remains the restore point and is not applied here. `builder.direct.hostKey` stays unset until
+a separate explicit pin decision.
+
+```sh
+env -u GOOGLE_APPLICATION_CREDENTIALS -u CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT \
+  python3 -B yogi_replacement_recover.py plan --mode rotate --inspect-receipt INSPECT.json \
+  --operator "NAME" --out ~/yogi-ops/rotate-LABEL
+```
+
+Do not point `--inspect-receipt` at a repair plan. Do not reuse operation `638e6e9039e41b7531697bb45066a616`.
+
 Keep the operation directory. Do not reuse it. A stale fingerprint, an expired preflight (20 minutes), or a second
 apply needs a new `plan`. If apply is interrupted, run `cleanup --execute` even when `started.json` was not written.
 

@@ -362,6 +362,7 @@ class DictHost:
         self.account_entry = None
         self.account_fail = False
         self.removed_account = False
+        self.prior_unrecognized = 0
         self.private = "PRIVATE-KEY-MATERIAL-SENTINEL"
         self.public = {}
         payloads = {
@@ -477,6 +478,9 @@ class DictHost:
 
     def emit(self, line):
         self.emitted.append(line)
+
+    def prior_journal(self):
+        return self.prior_unrecognized
 
 
 def load_rendered(path):
@@ -1197,6 +1201,85 @@ class GuestTest(Base):
         with self.assertRaises(recover.Refused):
             recover.plan("Mac operator", Path(self.temp.name) / "spent-serial", now=NOW,
                          token=tokens("20ef6008b1ef78137d201de13176af42", "cd" * 16), revision="a" * 40, env=ENV)
+
+    def test_rotate_only_requires_the_inspected_keys_and_does_not_chmod(self):
+        host = DictHost(json.loads((self.op / "binding.json").read_text()), self.op / "guest.py")
+        baseline = {}
+        for alg, name in guest.KEY_NAMES.items():
+            _kind, fingerprint = guest.parse_public(host.ssh_public(name + ".pub"))
+            baseline[alg] = fingerprint
+        evidence = {
+            "schema": guest.RECEIPT_SCHEMA, "purpose": "inspect", "operationId": "11" * 16, "nonce": "22" * 16,
+            "payloadSha256": "33" * 32, "instanceId": recover.INSTANCE_ID, "bootId": BOOT,
+            "reexecution": False, "previousBootId": "none", "originalVmAccessed": False, "snapshotsUsed": False,
+            "status": "complete",
+            "unit": {"action": "not-modified", "problem": "already-0644", "beforeMode": "0644", "beforeSize": 347,
+                     "beforeUid": 0, "beforeGid": 0, "afterMode": "0644", "afterSize": 347, "afterUid": 0, "afterGid": 0},
+            "runner": {"active": "inactive", "enabled": "disabled", "process": False},
+            "hostKeys": {"baseline": baseline, "rotated": {}, "distinctFromClonedBaseline": False,
+                         "unknownHostKeyCount": 0, "rolledBack": False},
+            "cleanup": {"linesRemoved": 0, "unidentifiedAuthorizedKeyLines": 0, "temporaryAccount": "absent",
+                        "tempFilesRemoved": 0, "accessCleanup": "ok"},
+            "journal": {"entries": 2, "readable": 1, "phases": ["complete"], "hasCompleteReceipt": True,
+                        "unrecognized": 1},
+        }
+        path = Path(self.temp.name) / "inspect-evidence.json"
+        path.write_text(json.dumps(evidence))
+        out = Path(self.temp.name) / "rotate-op"
+        plan = recover.plan("Mac operator", out, now=NOW, token=tokens("44" * 16, "55" * 16), revision="a" * 40,
+                            env=ENV, mode="rotate", inspect_receipt=path)
+        self.assertFalse(plan["hostKeyPinned"])
+        self.assertFalse(plan["repairsGuest"])
+        self.assertTrue(plan["rotatesHostKeys"])
+        self.assertEqual(plan["inspectEvidence"]["role"], "guest-evidence-not-authority")
+        self.assertTrue(plan["inspectEvidence"]["priorCompletePhaseIsNotAuthority"])
+        module = load_rendered(out / "guest.py")
+        host = DictHost(json.loads((out / "binding.json").read_text()), out / "guest.py")
+        host.unit["mode"] = 0o644
+        host.prior_unrecognized = 1
+        receipt = module.run(host)
+        self.assertEqual(host.chmod_calls, 0)
+        self.assertEqual(host.generate_calls, 3)
+        self.assertEqual(host.unit["mode"], 0o644)
+        self.assertEqual(receipt["purpose"], "rotate")
+        self.assertEqual(receipt["unit"]["action"], "not-modified")
+        self.assertEqual(receipt["hostKeys"]["baseline"], baseline)
+        self.assertEqual(guest.rotate_success_problems(receipt, baseline), [])
+        self.assertGreaterEqual(receipt["journal"]["unrecognized"], 1)
+        self.assertNotIn("BEGIN OPENSSH", json.dumps(receipt))
+        framed = "\n".join([
+            "[    0.000000] Linux version 6.8.0-roseos",
+            "-----BEGIN OPENSSH PRIVATE KEY-----",
+            host.emitted[-1],
+            "sshd[240]: Server listening on 0.0.0.0 port 22.",
+        ]) + "\n"
+        self.assertEqual(module.parse_serial(framed, json.loads((out / "binding.json").read_text())), receipt)
+        saved = recover.serial_evidence(json.loads((out / "binding.json").read_text()), framed, "parsed", receipt=receipt)
+        self.assertNotIn("BEGIN OPENSSH", json.dumps(saved))
+        self.assertNotIn("Linux version", json.dumps(saved))
+        live = dict(evidence)
+        live["operationId"] = "638e6e9039e41b7531697bb45066a616"
+        live["hostKeys"] = dict(evidence["hostKeys"], baseline={
+            "ed25519": "SHA256:7q5hBI1kjRbG/OjjOFOj+5URxaJPujYAjZ92S/xyrHs",
+            "ecdsa": "SHA256:ddKB95EKzKYE6UlZE0rVIqqgKQ3Le3ZKhh7nmSKTrTc",
+            "rsa": "SHA256:uV/VcrkukvQqcWntQbRl1cKauw9f1viUCc5vsVu7nqM",
+        })
+        live_path = Path(self.temp.name) / "live-inspect.json"
+        live_path.write_text(json.dumps(live))
+        refused = Path(self.temp.name) / "rotate-refused"
+        recover.plan("Mac operator", refused, now=NOW, token=tokens("66" * 16, "77" * 16), revision="a" * 40,
+                     env=ENV, mode="rotate", inspect_receipt=live_path)
+        other = DictHost(json.loads((refused / "binding.json").read_text()), refused / "guest.py")
+        other.unit["mode"] = 0o644
+        other.prior_unrecognized = 1
+        stopped = load_rendered(refused / "guest.py").run(other)
+        self.assertEqual(other.chmod_calls, 0)
+        self.assertEqual(other.generate_calls, 0)
+        self.assertEqual(stopped["unit"]["problem"], "baseline")
+        self.assertEqual(other.unit["mode"], 0o644)
+        with self.assertRaises(recover.Refused):
+            recover.plan("Mac operator", Path(self.temp.name) / "spent-inspect", now=NOW,
+                         token=tokens("638e6e9039e41b7531697bb45066a616", "89" * 16), revision="a" * 40, env=ENV)
 
 
 class CommandTest(Base):

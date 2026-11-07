@@ -29,6 +29,10 @@ INSTANCE = "roseos-yogi-builder-20261105-b"
 INSTANCE_ID = "2720796557371812468"
 OPERATION_ID = "@@OP@@"
 NONCE = "@@NONCE@@"
+GUEST_PURPOSE = "@@PURPOSE@@"
+BOUND_ED25519 = "@@FP_ED25519@@"
+BOUND_ECDSA = "@@FP_ECDSA@@"
+BOUND_RSA = "@@FP_RSA@@"
 UNIT_PATH = ("/etc/systemd/system/"
              "actions.runner.Immortal-Protocols-RoseOS-1.roseos-yogi-builder-20261105-b.service")
 UNIT_NAME = "actions.runner.Immortal-Protocols-RoseOS-1.roseos-yogi-builder-20261105-b.service"
@@ -128,7 +132,7 @@ def validate_shape(receipt, binding):
     problems = binding_problems(binding)
     if not isinstance(receipt, dict) or set(receipt) != TOP_KEYS:
         return ["receipt-keys"]
-    if receipt.get("purpose") not in ("repair", "inspect"):
+    if receipt.get("purpose") not in ("repair", "inspect", "rotate"):
         return ["purpose"]
     if receipt["schema"] != RECEIPT_SCHEMA or receipt["operationId"] != binding["operationId"]:
         return ["receipt-binding"]
@@ -228,6 +232,51 @@ def success_problems(receipt):
     if cleanup["temporaryAccount"] not in ("absent", "removed"):
         problems.append("account")
     return problems
+
+
+def rotate_success_problems(receipt, expected_baseline):
+    """Empty only when this boot rotated keys and did not change the unit mode.
+
+    The expected baseline is the operator-reviewed inspect evidence. Matching it is not a host-key pin
+    and not a comparison with the original VM.
+    """
+    if not isinstance(receipt, dict) or receipt.get("purpose") != "rotate":
+        return ["purpose"]
+    unit = receipt.get("unit") or {}
+    runner = receipt.get("runner") or {}
+    keys = receipt.get("hostKeys") or {}
+    cleanup = receipt.get("cleanup") or {}
+    problems = []
+    if receipt.get("status") != "complete" or unit.get("action") != "not-modified" or unit.get("problem") != "none":
+        problems.append("status")
+    if (unit.get("beforeMode"), unit.get("afterMode")) != ("0644", "0644"):
+        problems.append("mode")
+    if (unit.get("beforeSize"), unit.get("afterSize")) != (UNIT_SIZE, UNIT_SIZE):
+        problems.append("size")
+    if (unit.get("beforeUid"), unit.get("beforeGid"), unit.get("afterUid"), unit.get("afterGid")) != (0, 0, 0, 0):
+        problems.append("owner")
+    if runner != {"active": "inactive", "enabled": "disabled", "process": False}:
+        problems.append("runner")
+    if not isinstance(expected_baseline, dict) or set(expected_baseline) != set(ALGORITHMS):
+        problems.append("baseline")
+    elif keys.get("baseline") != expected_baseline or set(keys.get("rotated") or {}) != set(ALGORITHMS):
+        problems.append("baseline")
+    else:
+        for alg in ALGORITHMS:
+            if not FP.fullmatch(expected_baseline[alg]) or keys["rotated"].get(alg) == expected_baseline[alg]:
+                problems.append("distinct")
+    if keys.get("unknownHostKeyCount") != 0 or keys.get("distinctFromClonedBaseline") is not True \
+            or keys.get("rolledBack") is not False:
+        problems.append("distinct")
+    if cleanup.get("linesRemoved") != 0 or cleanup.get("tempFilesRemoved") != 0 \
+            or cleanup.get("unidentifiedAuthorizedKeyLines") != 0 or cleanup.get("accessCleanup") != "ok" \
+            or cleanup.get("temporaryAccount") != "absent":
+        problems.append("cleanup")
+    return problems
+
+
+def _bound_baseline():
+    return {"ed25519": BOUND_ED25519, "ecdsa": BOUND_ECDSA, "rsa": BOUND_RSA}
 
 
 def journal_summary(marker):
@@ -501,10 +550,15 @@ def cleanup_access(io, operation_id):
 
 
 def _emit(io, receipt, binding):
+    prior_unrecognized = 0
+    if isinstance(receipt.get("journal"), dict) and isinstance(receipt["journal"].get("unrecognized"), int):
+        prior_unrecognized = receipt["journal"]["unrecognized"]
     try:
         receipt["journal"] = journal_summary(io.marker_load())
     except (GuestRefused, OSError, ValueError, TypeError):
         receipt["journal"] = journal_summary({"phase": "unrecognized"})
+    if 0 <= prior_unrecognized <= 20 and prior_unrecognized > receipt["journal"]["unrecognized"]:
+        receipt["journal"]["unrecognized"] = prior_unrecognized
     if validate_shape(receipt, binding):
         raise GuestRefused("receipt-shape")
     line = PREFIX + canonical(receipt)
@@ -566,8 +620,127 @@ def _observe_access(io, operation_id):
             "tempFilesRemoved": 0, "accessCleanup": "failed" if failed else "ok"}
 
 
+def _rotate_refuse(io, binding, boot, before, runner, problem, baseline=None, unknown=0):
+    receipt = _skeleton(binding, boot, "refused")
+    receipt["purpose"] = "rotate"
+    _fill_unit(receipt, before if isinstance(before, dict) else None, before if isinstance(before, dict) else None,
+               problem, "not-modified")
+    if isinstance(before, dict) and before.get("mode") == UNIT_AFTER:
+        receipt["unit"]["beforeMode"] = receipt["unit"]["afterMode"] = "0644"
+    receipt["runner"] = _public_runner(runner) if isinstance(runner, dict) else receipt["runner"]
+    if isinstance(baseline, dict):
+        receipt["hostKeys"]["baseline"] = {k: v for k, v in baseline.items() if k in ALGORITHMS and FP.fullmatch(v or "")}
+    receipt["hostKeys"]["unknownHostKeyCount"] = unknown
+    receipt["cleanup"] = _observe_access(io, OPERATION_ID)
+    try:
+        receipt["journal"]["unrecognized"] = min(20, int(io.prior_journal()))
+    except (GuestRefused, OSError, TypeError, ValueError):
+        receipt["journal"]["unrecognized"] = 1
+    io.marker_store({"phase": "refused", "operationId": OPERATION_ID, "nonce": NONCE, "receipt": receipt})
+    return _emit(io, receipt, binding)
+
+
+def run_rotate(io):
+    """Rotate the three named host keys only. The unit mode is not changed in either direction."""
+    try:
+        binding = io.binding()
+    except GuestRefused:
+        return None
+    if binding_problems(binding) or binding["operationId"] != OPERATION_ID or binding["nonce"] != NONCE:
+        return None
+    try:
+        if io.self_sha256() != binding["payloadSha256"]:
+            return None
+        boot = _boot(io)
+    except GuestRefused:
+        return None
+    marker = io.marker_load()
+    if marker:
+        return _rerun(io, marker, binding, boot)
+    io.marker_store({"phase": "started", "operationId": OPERATION_ID, "nonce": NONCE})
+    try:
+        identity = io.instance_identity()
+    except GuestRefused:
+        identity = None
+    try:
+        before = io.unit_stat()
+        runner = io.runner()
+    except GuestRefused:
+        before, runner = None, {}
+    if identity != EXPECTED_IDENTITY:
+        return _rotate_refuse(io, binding, boot, before, runner, "identity")
+    if not isinstance(before, dict) or unit_problem(before) != "already-0644" or runner_problem(runner):
+        problem = "mode" if not isinstance(before, dict) else (unit_problem(before) or runner_problem(runner) or "mode")
+        return _rotate_refuse(io, binding, boot, before, runner, problem)
+    expected = _bound_baseline()
+    if any(not FP.fullmatch(expected[alg]) for alg in ALGORITHMS):
+        return _rotate_refuse(io, binding, boot, before, runner, "baseline")
+    baseline, unknown = _observe_keys(io)
+    access = _observe_access(io, OPERATION_ID)
+    if unknown or baseline != expected or access["unidentifiedAuthorizedKeyLines"] or access["temporaryAccount"] != "absent" \
+            or access["accessCleanup"] != "ok":
+        problem = "unknown-host-key" if unknown else ("cleanup" if access["unidentifiedAuthorizedKeyLines"] or access["temporaryAccount"] != "absent" or access["accessCleanup"] != "ok" else "baseline")
+        return _rotate_refuse(io, binding, boot, before, runner, problem, baseline, unknown)
+    io.marker_store({"phase": "baseline", "operationId": OPERATION_ID, "nonce": NONCE, "baseline": baseline})
+    rotated = {}
+    try:
+        for alg in ALGORITHMS:
+            key_type, fingerprint = parse_public(io.ssh_generate(alg))
+            if key_type != PUBLIC_TYPES[alg] or fingerprint == baseline[alg]:
+                io.ssh_discard_temp()
+                raise GuestRefused("rotate-same")
+            io.ssh_preserve(alg)
+            io.ssh_commit(alg)
+            key_type, confirmed = parse_public(io.ssh_public(KEY_NAMES[alg] + ".pub"))
+            if key_type != PUBLIC_TYPES[alg] or confirmed != fingerprint or confirmed == baseline[alg]:
+                raise GuestRefused("rotate-partial")
+            rotated[alg] = confirmed
+    except (GuestRefused, OSError) as error:
+        code = str(error) if str(error) in ("rotate-same", "rotate-partial") else "rotate-partial"
+        rolled = _rollback(io)
+        receipt = _skeleton(binding, boot, "partial")
+        receipt["purpose"] = "rotate"
+        _fill_unit(receipt, before, before, code, "not-modified")
+        receipt["unit"]["beforeMode"] = receipt["unit"]["afterMode"] = "0644"
+        receipt["runner"] = _public_runner(runner)
+        receipt["hostKeys"]["baseline"] = baseline
+        receipt["hostKeys"]["rotated"] = {}
+        receipt["hostKeys"]["rolledBack"] = rolled
+        receipt["cleanup"] = access
+        io.marker_store({"phase": "partial", "operationId": OPERATION_ID, "nonce": NONCE, "baseline": baseline,
+                         "receipt": receipt})
+        return _emit(io, receipt, binding)
+    for alg in ALGORITHMS:
+        io.ssh_drop_prev_private(alg)
+    receipt = _skeleton(binding, boot, "complete")
+    receipt["purpose"] = "rotate"
+    _fill_unit(receipt, before, before, "none", "not-modified")
+    receipt["unit"]["beforeMode"] = receipt["unit"]["afterMode"] = "0644"
+    receipt["runner"] = _public_runner(runner)
+    receipt["hostKeys"]["baseline"] = baseline
+    receipt["hostKeys"]["rotated"] = rotated
+    receipt["hostKeys"]["rolledBack"] = False
+    receipt["hostKeys"]["distinctFromClonedBaseline"] = True
+    receipt["hostKeys"]["unknownHostKeyCount"] = 0
+    receipt["cleanup"] = access
+    try:
+        receipt["journal"]["unrecognized"] = min(20, int(io.prior_journal()))
+    except (GuestRefused, OSError, TypeError, ValueError):
+        receipt["journal"]["unrecognized"] = 1
+    io.marker_store({"phase": "complete", "operationId": OPERATION_ID, "nonce": NONCE, "baseline": baseline,
+                     "rotated": rotated, "receipt": receipt})
+    return _emit(io, receipt, binding)
+
+
 def run(io):
-    """One guest pass. A marker other than a finished complete receipt never continues a rotation."""
+    """One guest pass. Repair still stops before rotation when the unit is already mode 0644.
+
+    Rotate is a separate purpose. It requires that mode and does not change it.
+    """
+    if GUEST_PURPOSE == "rotate":
+        return run_rotate(io)
+    if GUEST_PURPOSE != "repair":
+        return None
     try:
         binding = io.binding()
     except GuestRefused:
@@ -766,7 +939,10 @@ def _rerun(io, marker, binding, boot):
     receipt["hostKeys"]["rotated"] = {}
     receipt["hostKeys"]["rolledBack"] = rolled
     receipt["hostKeys"]["distinctFromClonedBaseline"] = False
-    receipt["cleanup"] = cleanup_access(io, OPERATION_ID)
+    if GUEST_PURPOSE == "rotate":
+        receipt["cleanup"] = _observe_access(io, OPERATION_ID)
+    else:
+        receipt["cleanup"] = cleanup_access(io, OPERATION_ID)
     io.marker_store({"phase": "partial", "operationId": OPERATION_ID, "nonce": NONCE, "baseline": baseline,
                      "receipt": receipt})
     return _emit(io, receipt, binding)
@@ -867,6 +1043,43 @@ class LinuxHost:
         finally:
             os.close(fd)
         os.rename(temporary, target)
+
+    def prior_journal(self):
+        """Count other operation markers that are not a readable known phase. Their bytes are not returned."""
+        base = self._real("/var/lib/roseos-yogi-recover")
+        unrecognized = 0
+        allowed = {"started", "unit-done", "baseline", "refused", "partial", "complete"}
+        try:
+            names = os.listdir(base)
+        except OSError:
+            return 0
+        for name in names:
+            if unrecognized >= 20:
+                break
+            if name == OPERATION_ID or not HEX32.fullmatch(name):
+                continue
+            path = base + "/" + name + "/state.json"
+            try:
+                fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+            except OSError:
+                unrecognized += 1
+                continue
+            try:
+                data = os.read(fd, 65537)
+            finally:
+                os.close(fd)
+            if len(data) > 65536:
+                unrecognized += 1
+                continue
+            try:
+                marker = json.loads(data.decode())
+            except (ValueError, UnicodeError):
+                unrecognized += 1
+                continue
+            phase = marker.get("phase") if isinstance(marker, dict) else None
+            if phase not in allowed:
+                unrecognized += 1
+        return unrecognized
 
     def _stat_path(self, path):
         try:

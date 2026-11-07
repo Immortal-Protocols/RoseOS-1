@@ -102,6 +102,7 @@ SPENT_OPERATION_IDS = frozenset({
     "e75b0fd782e43f585c621c74f95bfa90",
     "5cf6fe9a62880b89ee6e7e822a0379d2",
     "20ef6008b1ef78137d201de13176af42",
+    "638e6e9039e41b7531697bb45066a616",
 })
 SPENT_ZONE_OPERATIONS = frozenset({
     "operation-1794025967141-65fa8387d4384-e9bed427-7ed969ab",
@@ -132,6 +133,7 @@ LIMITATIONS = (
     "unit-hardlink-or-unexpected-mode-is-not-changed",
     "metadata-write-is-single-attempt",
     "pending-zone-operation-is-waited-not-resubmitted",
+    "inspect-receipt-is-guest-evidence-not-a-pin",
     "urllib-metadata-client-is-not-a-fix-for-the-unknown-internal-error",
     "automatic-restart-can-reexecute-until-stop",
 )
@@ -223,13 +225,17 @@ def binding_canonical(operation_id, nonce, payload_sha):
                        "schema": guest.BINDING_SCHEMA}, sort_keys=True, separators=(",", ":"))
 
 
-def render_guest(operation_id, nonce, template, op_token="@@OP@@", nonce_token="@@NONCE@@"):
+def render_guest(operation_id, nonce, template, op_token="@@OP@@", nonce_token="@@NONCE@@", extra=None):
     if template.count(op_token) != 1 or template.count(nonce_token) != 1:
         raise Refused("guest template placeholders are not unique")
     if not HEX32.fullmatch(operation_id or "") or not HEX32.fullmatch(nonce or "") or operation_id == nonce:
         raise Refused("binding generator failed")
     rendered = template.replace(op_token, operation_id).replace(nonce_token, nonce)
-    if op_token in rendered or nonce_token in rendered:
+    for token, value in (extra or {}).items():
+        if template.count(token) != 1 or not isinstance(value, str) or "@@" in value:
+            raise Refused("guest template placeholders are not unique")
+        rendered = rendered.replace(token, value)
+    if op_token in rendered or nonce_token in rendered or any(token in rendered for token in (extra or {})):
         raise Refused("guest template placeholder remains")
     if not rendered.endswith("\n"):
         rendered += "\n"
@@ -1308,11 +1314,48 @@ def head_revision(repo):
     return revision
 
 
-def plan(operator, out, now=None, token=None, revision=None, repo=ROOT, template=None, env=None, mode="repair"):
+def inspect_evidence_problems(receipt):
+    """The inspect receipt is evidence the operator reviewed. It is not authority to pin a host key."""
+    if not isinstance(receipt, dict):
+        return ["inspect-evidence"]
+    unit, runner, keys, cleanup = receipt.get("unit") or {}, receipt.get("runner") or {}, receipt.get("hostKeys") or {}, receipt.get("cleanup") or {}
+    journal = receipt.get("journal") if isinstance(receipt.get("journal"), dict) else {}
+    problems = []
+    if receipt.get("purpose") != "inspect" or receipt.get("status") not in ("complete", "refused"):
+        problems.append("inspect-evidence")
+    if unit.get("action") != "not-modified" or unit.get("problem") != "already-0644":
+        problems.append("inspect-unit")
+    if (unit.get("beforeMode"), unit.get("afterMode")) != ("0644", "0644"):
+        problems.append("inspect-mode")
+    if (unit.get("beforeSize"), unit.get("afterSize")) != (guest.UNIT_SIZE, guest.UNIT_SIZE):
+        problems.append("inspect-size")
+    if (unit.get("beforeUid"), unit.get("beforeGid"), unit.get("afterUid"), unit.get("afterGid")) != (0, 0, 0, 0):
+        problems.append("inspect-owner")
+    if runner != {"active": "inactive", "enabled": "disabled", "process": False}:
+        problems.append("inspect-runner")
+    baseline = keys.get("baseline")
+    if not isinstance(baseline, dict) or set(baseline) != set(guest.ALGORITHMS) \
+            or any(not guest.FP.fullmatch(baseline.get(alg) or "") for alg in guest.ALGORITHMS):
+        problems.append("inspect-baseline")
+    if keys.get("rotated") not in ({},) or keys.get("distinctFromClonedBaseline") is not False \
+            or keys.get("unknownHostKeyCount") != 0 or keys.get("rolledBack") is not False:
+        problems.append("inspect-rotation")
+    if cleanup.get("linesRemoved") != 0 or cleanup.get("tempFilesRemoved") != 0 \
+            or cleanup.get("unidentifiedAuthorizedKeyLines") != 0 or cleanup.get("temporaryAccount") != "absent":
+        problems.append("inspect-cleanup")
+    if not isinstance(journal.get("unrecognized", 0), int) or not 0 <= journal.get("unrecognized", 0) <= 20:
+        problems.append("inspect-journal")
+    if not guest.HEX32.fullmatch(receipt.get("operationId") or ""):
+        problems.append("inspect-evidence")
+    return problems
+
+
+def plan(operator, out, now=None, token=None, revision=None, repo=ROOT, template=None, env=None, mode="repair",
+         inspect_receipt=None):
     manual_context(env if env is not None else os.environ)
     now = now or now_utc()
-    if mode not in ("repair", "inspect"):
-        raise Refused("mode must be repair or inspect")
+    if mode not in ("repair", "inspect", "rotate"):
+        raise Refused("mode must be repair, inspect, or rotate")
     if not isinstance(operator, str) or not OPERATOR.fullmatch(operator):
         raise Refused("operator name is empty or uses unsupported characters")
     if revision is None:
@@ -1328,16 +1371,34 @@ def plan(operator, out, now=None, token=None, revision=None, repo=ROOT, template
         raise Refused("binding generator failed")
     if operation_id in SPENT_OPERATION_IDS or nonce in SPENT_OPERATION_IDS:
         raise Refused("this operation id was already used and its preflight expired; plan a new binding")
+    evidence = None
+    if mode == "rotate":
+        try:
+            evidence = json.loads(Path(inspect_receipt).read_text())
+        except (OSError, TypeError, ValueError):
+            raise Refused("rotate requires the reviewed inspect receipt") from None
+        evidence_problems = inspect_evidence_problems(evidence)
+        if evidence_problems:
+            raise Refused("inspect receipt is not a usable rotation baseline")
+        if evidence["operationId"] in (operation_id, nonce):
+            raise Refused("inspect evidence is not a new binding")
     if template is None:
         if mode == "inspect":
             template = guest.inspect_template()
             op_token, nonce_token = "@@INSPECT_OP@@", "@@INSPECT_NONCE@@"
+            extra = None
         else:
             template = (HERE / "yogi_replacement_recover_guest.py").read_text()
             op_token, nonce_token = "@@OP@@", "@@NONCE@@"
+            baseline = evidence["hostKeys"]["baseline"] if evidence else {}
+            extra = {"@@PURPOSE@@": "rotate" if mode == "rotate" else "repair",
+                     "@@FP_ED25519@@": baseline.get("ed25519", "unused"),
+                     "@@FP_ECDSA@@": baseline.get("ecdsa", "unused"),
+                     "@@FP_RSA@@": baseline.get("rsa", "unused")}
     else:
         op_token, nonce_token = ("@@INSPECT_OP@@", "@@INSPECT_NONCE@@") if mode == "inspect" else ("@@OP@@", "@@NONCE@@")
-    rendered = render_guest(operation_id, nonce, template, op_token, nonce_token)
+        extra = None
+    rendered = render_guest(operation_id, nonce, template, op_token, nonce_token, extra)
     payload_sha = sha256_bytes(rendered.encode())
     reject_historical(operation_id, nonce, payload_sha)
     script = startup_script(rendered, payload_sha, operation_id)
@@ -1349,7 +1410,8 @@ def plan(operator, out, now=None, token=None, revision=None, repo=ROOT, template
     (out / "startup-script.sh").write_text(script)
     (out / "binding.json").write_text(binding_canonical(operation_id, nonce, payload_sha) + "\n")
     document = {
-        "schema": PLAN_SCHEMA, "mode": mode, "repairsGuest": mode == "repair", "dryRun": True, "executed": False, "liveRecovery": False, "hostKeyPinned": False,
+        "schema": PLAN_SCHEMA, "mode": mode, "repairsGuest": mode == "repair", "rotatesHostKeys": mode == "rotate",
+        "dryRun": True, "executed": False, "liveRecovery": False, "hostKeyPinned": False,
         "claim": "procedure-evidence-only", "operationId": operation_id, "nonce": nonce,
         "payloadSha256": payload_sha, "startupScriptSha256": sha256_bytes(script.encode()),
         "templateSha256": sha256_bytes(template.encode()), "sourceRevision": revision, "operator": operator,
@@ -1367,10 +1429,18 @@ def plan(operator, out, now=None, token=None, revision=None, repo=ROOT, template
                      "snapshots": [{"name": PRESERVE_SNAPSHOT, "id": PRESERVE_SNAPSHOT_ID},
                                    {"name": PREKEY_SNAPSHOT, "id": PREKEY_SNAPSHOT_ID}]},
         "metadataBefore": BASE_METADATA, "metadataAdded": list(OUR_KEYS),
-        "unit": {"path": guest.UNIT_PATH, "beforeMode": "0664", "afterMode": "0644", "size": guest.UNIT_SIZE,
+        "unit": {"path": guest.UNIT_PATH,
+                 "beforeMode": "0644" if mode == "rotate" else "0664",
+                 "afterMode": "0644", "size": guest.UNIT_SIZE,
                  "owner": "root:root", "runner": "inactive/disabled"},
-        "hostKeys": {"inventory": list(guest.INVENTORY), "rotate": list(guest.ALGORITHMS),
+        "hostKeys": {"inventory": list(guest.INVENTORY), "rotate": list(guest.ALGORITHMS) if mode != "inspect" else [],
                      "baseline": "public fingerprints read on this boot of the replacement disk"},
+        "inspectEvidence": None if evidence is None else {
+            "role": "guest-evidence-not-authority", "operationId": evidence["operationId"],
+            "baseline": evidence["hostKeys"]["baseline"],
+            "journalUnrecognized": evidence.get("journal", {}).get("unrecognized", 0),
+            "priorCompletePhaseIsNotAuthority": True, "hostKeyPinned": False,
+            "distinctFromOriginalVerified": False},
         "cleanup": {"authorizedKeyComment": "roseos-yogi-recover-<operationId>",
                     "temporaryAccount": guest.TEMP_ACCOUNT, "paths": list(guest.AUTH_PATHS)},
         "route": "gce-metadata-startup-script-and-bounded-serial-read",
@@ -1598,6 +1668,12 @@ def apply(path, confirm, execute=False, transport=None, now=None, clock=None, sl
             fields["result"] = "inspect-complete"
             fields["repairSucceeded"] = False
             code = 0
+        elif mode == "rotate" and guest_ok and restored and stopped and fields.get("metadata") == "clean":
+            fields["result"] = "rotate-complete-guest-reported"
+            fields["repairSucceeded"] = False
+            fields["rotationSucceeded"] = True
+            fields["hostKeyPinned"] = False
+            code = 0
         elif mode == "repair" and guest_ok and restored and stopped and fields.get("metadata") == "clean":
             fields["result"] = "procedure-complete-guest-reported"
             fields["repairSucceeded"] = True
@@ -1664,10 +1740,21 @@ def apply(path, confirm, execute=False, transport=None, now=None, clock=None, sl
         attribute = None
         guest_ok = False
         mode = loaded["plan"].get("mode")
-        if mode not in ("inspect", "repair"):
-            raise Refused("operation mode is not inspect or repair")
+        if mode not in ("inspect", "repair", "rotate"):
+            raise Refused("operation mode is not inspect, repair, or rotate")
         if mode == "inspect":
             guest_ok = bool(receipt) and reason == "read" and inspect_reported(receipt)
+        elif mode == "rotate" and receipt is not None and reason == "read":
+            expected = (loaded["plan"].get("inspectEvidence") or {}).get("baseline")
+            attribute = attribute_state(call, receipt)
+            if attribute == "mismatch":
+                reason = "attribute-mismatch"
+            elif attribute == "failed":
+                reason = "attribute-failed"
+            elif guest.rotate_success_problems(receipt, expected):
+                reason = "guest-incomplete"
+            else:
+                guest_ok = True
         elif receipt is not None and reason == "read":
             attribute = attribute_state(call, receipt)
             if attribute == "mismatch":
@@ -1862,7 +1949,8 @@ def main(argv, transport=None, now=None, clock=None, sleep=None, env=None, token
     planned = sub.add_parser("plan")
     planned.add_argument("--operator", required=True)
     planned.add_argument("--out", required=True)
-    planned.add_argument("--mode", choices=("repair", "inspect"), default="repair")
+    planned.add_argument("--mode", choices=("repair", "inspect", "rotate"), default="repair")
+    planned.add_argument("--inspect-receipt")
     sub.add_parser("self-check")
     exported = sub.add_parser("export-bundle")
     exported.add_argument("--out", required=True)
@@ -1878,7 +1966,8 @@ def main(argv, transport=None, now=None, clock=None, sleep=None, env=None, token
         elif args.command == "self-check":
             result, code = self_check(), 0
         elif args.command == "plan":
-            document = plan(args.operator, args.out, now=now, token=token, revision=revision, env=env, mode=args.mode)
+            document = plan(args.operator, args.out, now=now, token=token, revision=revision, env=env,
+                            mode=args.mode, inspect_receipt=args.inspect_receipt)
             result, code = {"dryRun": True, "executed": False, "operationId": document["operationId"],
                             "payloadSha256": document["payloadSha256"],
                             "startupScriptSha256": document["startupScriptSha256"],
