@@ -153,9 +153,12 @@ def validate_shape(receipt, binding):
     if runner["enabled"] not in ("disabled", "enabled", "static", "masked", "indirect", "unchecked"):
         return ["runner"]
     keys = receipt["hostKeys"]
-    if not isinstance(keys, dict) or set(keys) != {"baseline", "rotated", "distinctFromClonedBaseline", "unknownHostKeyCount"}:
+    if not isinstance(keys, dict) or set(keys) != {
+            "baseline", "rotated", "distinctFromClonedBaseline", "unknownHostKeyCount", "rolledBack"}:
         return ["hostkeys"]
-    if keys["distinctFromClonedBaseline"] not in (True, False) or not _fp_map(keys["baseline"]) or not _fp_map(keys["rotated"]):
+    if keys["distinctFromClonedBaseline"] not in (True, False) or keys["rolledBack"] not in (True, False):
+        return ["hostkeys"]
+    if not _fp_map(keys["baseline"]) or not _fp_map(keys["rotated"]):
         return ["hostkeys"]
     if not isinstance(keys["unknownHostKeyCount"], int) or not 0 <= keys["unknownHostKeyCount"] <= 1000:
         return ["hostkeys"]
@@ -192,7 +195,7 @@ def success_problems(receipt):
         problems.append("runner")
     if set(keys["baseline"]) != set(ALGORITHMS) or set(keys["rotated"]) != set(ALGORITHMS):
         problems.append("rotation")
-    if keys["unknownHostKeyCount"] != 0 or keys["distinctFromClonedBaseline"] is not True:
+    if keys["unknownHostKeyCount"] != 0 or keys["distinctFromClonedBaseline"] is not True or keys["rolledBack"] is not False:
         problems.append("distinct")
     for alg in ALGORITHMS:
         if keys["baseline"].get(alg) == keys["rotated"].get(alg):
@@ -335,7 +338,8 @@ def _skeleton(binding, boot, status):
                  "beforeUid": -1, "beforeGid": -1, "afterMode": "unknown", "afterSize": -1, "afterUid": -1,
                  "afterGid": -1},
         "runner": {"active": "unchecked", "enabled": "unchecked", "process": False},
-        "hostKeys": {"baseline": {}, "rotated": {}, "distinctFromClonedBaseline": False, "unknownHostKeyCount": 0},
+        "hostKeys": {"baseline": {}, "rotated": {}, "distinctFromClonedBaseline": False, "unknownHostKeyCount": 0,
+                     "rolledBack": False},
         "cleanup": {"linesRemoved": 0, "unidentifiedAuthorizedKeyLines": 0, "temporaryAccount": "absent",
                     "tempFilesRemoved": 0, "accessCleanup": "ok"},
     }
@@ -536,6 +540,7 @@ def run(io):
             if key_type != PUBLIC_TYPES[alg] or fingerprint == baseline[alg]:
                 io.ssh_discard_temp()
                 raise GuestRefused("rotate-same")
+            io.ssh_preserve(alg)
             io.ssh_commit(alg)
             key_type, confirmed = parse_public(io.ssh_public(KEY_NAMES[alg] + ".pub"))
             if key_type != PUBLIC_TYPES[alg] or confirmed != fingerprint or confirmed == baseline[alg]:
@@ -543,17 +548,23 @@ def run(io):
             rotated[alg] = confirmed
     except (GuestRefused, OSError) as error:
         code = str(error) if str(error) in ("rotate-same", "rotate-partial") else "rotate-partial"
+        rolled = _rollback(io)
         receipt["status"] = "partial"
         receipt["unit"]["problem"] = code
         receipt["hostKeys"]["baseline"] = baseline
-        receipt["hostKeys"]["rotated"] = rotated
+        receipt["hostKeys"]["rotated"] = {}
+        receipt["hostKeys"]["rolledBack"] = rolled
+        receipt["hostKeys"]["distinctFromClonedBaseline"] = False
         receipt["cleanup"] = cleanup_access(io, OPERATION_ID)
         io.marker_store({"phase": "partial", "operationId": OPERATION_ID, "nonce": NONCE, "baseline": baseline,
-                         "rotated": rotated, "receipt": receipt})
+                         "receipt": receipt})
         return _emit(io, receipt, binding)
+    for alg in ALGORITHMS:
+        io.ssh_drop_prev_private(alg)
     receipt["status"] = "complete"
     receipt["hostKeys"]["baseline"] = baseline
     receipt["hostKeys"]["rotated"] = rotated
+    receipt["hostKeys"]["rolledBack"] = False
     receipt["hostKeys"]["distinctFromClonedBaseline"] = True
     receipt["cleanup"] = cleanup_access(io, OPERATION_ID)
     if receipt["cleanup"]["accessCleanup"] != "ok" or receipt["cleanup"]["unidentifiedAuthorizedKeyLines"] \
@@ -565,6 +576,19 @@ def run(io):
     io.marker_store({"phase": phase, "operationId": OPERATION_ID, "nonce": NONCE, "baseline": baseline,
                      "rotated": rotated, "receipt": receipt})
     return _emit(io, receipt, binding)
+
+
+def _rollback(io):
+    """Copy any preserved previous keys back over the live names. Previous public files stay."""
+    rolled = False
+    for alg in ALGORITHMS:
+        try:
+            if io.ssh_restore(alg):
+                rolled = True
+            io.ssh_drop_prev_private(alg)
+        except (GuestRefused, OSError):
+            rolled = True
+    return rolled
 
 
 def _rerun(io, marker, binding, boot):
@@ -584,21 +608,32 @@ def _rerun(io, marker, binding, boot):
                 discarded = io.ssh_discard_temp()
             except GuestRefused:
                 discarded = {"removed": 0, "skippedSymlink": 1}
+            for alg in ALGORITHMS:
+                try:
+                    io.ssh_drop_prev_private(alg)
+                except (GuestRefused, OSError):
+                    receipt["status"] = "partial"
             if int(discarded.get("skippedSymlink") or 0) > 0:
                 receipt["status"] = "partial"
                 receipt["cleanup"] = dict(receipt["cleanup"], accessCleanup="failed")
             return _emit(io, receipt, binding)
+    # A crash or reboot must not generate another key. Restore any preserved previous pair.
+    rolled = _rollback(io)
+    try:
+        io.ssh_discard_temp()
+    except (GuestRefused, OSError):
+        rolled = True
     receipt = _skeleton(binding, boot, "partial")
     receipt["reexecution"] = False
     receipt["unit"]["problem"] = "reexecution-partial"
-    # The first pass already changed the disk. This pass must not chmod or rotate.
     baseline = marker.get("baseline") if isinstance(marker.get("baseline"), dict) else {}
-    rotated = marker.get("rotated") if isinstance(marker.get("rotated"), dict) else {}
     receipt["hostKeys"]["baseline"] = {k: v for k, v in baseline.items() if k in ALGORITHMS and isinstance(v, str) and FP.fullmatch(v)}
-    receipt["hostKeys"]["rotated"] = {k: v for k, v in rotated.items() if k in ALGORITHMS and isinstance(v, str) and FP.fullmatch(v)}
+    receipt["hostKeys"]["rotated"] = {}
+    receipt["hostKeys"]["rolledBack"] = rolled
+    receipt["hostKeys"]["distinctFromClonedBaseline"] = False
     receipt["cleanup"] = cleanup_access(io, OPERATION_ID)
     io.marker_store({"phase": "partial", "operationId": OPERATION_ID, "nonce": NONCE, "baseline": baseline,
-                     "rotated": rotated, "receipt": receipt})
+                     "receipt": receipt})
     return _emit(io, receipt, binding)
 
 
@@ -768,9 +803,82 @@ class LinuxHost:
         for alg in ALGORITHMS:
             allowed.add(KEY_NAMES[alg] + ".roseos-new")
             allowed.add(KEY_NAMES[alg] + ".roseos-new.pub")
+            if HEX32.fullmatch(OPERATION_ID):
+                allowed.add(KEY_NAMES[alg] + ".roseos-prev-" + OPERATION_ID)
+                allowed.add(KEY_NAMES[alg] + ".roseos-prev-" + OPERATION_ID + ".pub")
         if name not in allowed:
             raise GuestRefused("ssh-name")
         return name
+
+    def _copy_ssh(self, source_name, dest_name, overwrite):
+        source = self._real("/etc/ssh/" + self._ssh_name(source_name))
+        dest = self._real("/etc/ssh/" + self._ssh_name(dest_name))
+        if os.path.lexists(dest):
+            info = os.lstat(dest)
+            if not stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode):
+                raise GuestRefused("prev-symlink")
+            if not overwrite:
+                return False
+        try:
+            src = os.open(source, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        except OSError as error:
+            if error.errno == errno.ELOOP:
+                raise GuestRefused("symlink") from None
+            raise GuestRefused("ssh-file") from None
+        try:
+            info = os.fstat(src)
+            if not stat.S_ISREG(info.st_mode) or info.st_size > 1 << 20:
+                raise GuestRefused("ssh-file")
+            data = os.read(src, info.st_size)
+            mode = stat.S_IMODE(info.st_mode)
+            uid, gid = info.st_uid, info.st_gid
+        finally:
+            os.close(src)
+        if os.path.lexists(dest):
+            out = os.open(dest, os.O_WRONLY | os.O_TRUNC | os.O_NOFOLLOW | os.O_CLOEXEC)
+        else:
+            out = os.open(dest, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, mode)
+        try:
+            os.write(out, data)
+            os.fchmod(out, mode)
+            try:
+                os.fchown(out, uid, gid)
+            except OSError:
+                pass
+            os.fsync(out)
+        finally:
+            os.close(out)
+        return True
+
+    def ssh_preserve(self, algorithm):
+        if algorithm not in ALGORITHMS or not HEX32.fullmatch(OPERATION_ID):
+            raise GuestRefused("algorithm")
+        for suffix in ("", ".pub"):
+            self._copy_ssh(KEY_NAMES[algorithm] + suffix,
+                           KEY_NAMES[algorithm] + ".roseos-prev-" + OPERATION_ID + suffix, overwrite=False)
+
+    def ssh_restore(self, algorithm):
+        if algorithm not in ALGORITHMS or not HEX32.fullmatch(OPERATION_ID):
+            return False
+        restored = False
+        for suffix in ("", ".pub"):
+            prev = KEY_NAMES[algorithm] + ".roseos-prev-" + OPERATION_ID + suffix
+            if not os.path.lexists(self._real("/etc/ssh/" + prev)):
+                continue
+            self._copy_ssh(prev, KEY_NAMES[algorithm] + suffix, overwrite=True)
+            restored = True
+        return restored
+
+    def ssh_drop_prev_private(self, algorithm):
+        if algorithm not in ALGORITHMS or not HEX32.fullmatch(OPERATION_ID):
+            return
+        path = self._real("/etc/ssh/" + KEY_NAMES[algorithm] + ".roseos-prev-" + OPERATION_ID)
+        if not os.path.lexists(path):
+            return
+        info = os.lstat(path)
+        if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
+            raise GuestRefused("prev-symlink")
+        os.unlink(path)
 
     def ssh_stat(self, name):
         return self._stat_path(self._real("/etc/ssh/" + self._ssh_name(name)))
@@ -863,20 +971,39 @@ class LinuxHost:
         return data.decode().splitlines()
 
     def auth_write(self, path, lines):
-        if path not in AUTH_PATHS:
+        if path not in AUTH_PATHS or not HEX32.fullmatch(OPERATION_ID):
             raise GuestRefused("auth-path")
         full = self._real(path)
-        fd = os.open(full, os.O_WRONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
-        try:
-            info = os.fstat(fd)
+        evidence = full + ".roseos-prev-" + OPERATION_ID
+        if os.path.lexists(evidence):
+            info = os.lstat(evidence)
             if not stat.S_ISREG(info.st_mode):
-                raise GuestRefused("auth-file")
-            payload = ("\n".join(lines) + "\n").encode()
-            os.ftruncate(fd, 0)
-            os.write(fd, payload)
-            os.fsync(fd)
+                raise GuestRefused("auth-symlink")
+        else:
+            src = os.open(full, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+            try:
+                info = os.fstat(src)
+                if not stat.S_ISREG(info.st_mode) or info.st_size > 1 << 20:
+                    raise GuestRefused("auth-file")
+                original = os.read(src, info.st_size)
+                mode = stat.S_IMODE(info.st_mode)
+            finally:
+                os.close(src)
+            out = os.open(evidence, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, mode)
+            try:
+                os.write(out, original)
+                os.fsync(out)
+            finally:
+                os.close(out)
+        payload = ("\n".join(lines) + "\n").encode()
+        temporary = full + ".roseos-new-" + OPERATION_ID
+        out = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+        try:
+            os.write(out, payload)
+            os.fsync(out)
         finally:
-            os.close(fd)
+            os.close(out)
+        os.rename(temporary, full)
 
     def account(self):
         if self.passwd_fn:

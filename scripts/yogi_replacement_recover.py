@@ -18,13 +18,16 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
+import shutil
 import subprocess
 import sys
 import urllib.error
 import urllib.request
 
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "scripts"))
+HERE = Path(__file__).resolve().parent
+ROOT = HERE.parent
+sys.path.insert(0, str(HERE))
 import yogi_replacement_recover_guest as guest  # noqa: E402
 
 PROJECT = "protocols-465723"
@@ -51,7 +54,16 @@ OUR_KEYS = ("startup-script", BINDING_KEY)
 POLICY_SECONDS = 45 * 60
 CLEANUP_RESERVE_SECONDS = 10 * 60
 WORK_BUDGET_SECONDS = POLICY_SECONDS - CLEANUP_RESERVE_SECONDS
-SERIAL_DELAYS = (180, 300)
+SERIAL_DELAYS = (180,)
+DOCS = {
+    "setMetadata": "https://docs.cloud.google.com/compute/docs/reference/rest/v1/instances/setMetadata",
+    "metadataKeepExisting": "https://docs.cloud.google.com/compute/docs/metadata/setting-custom-metadata",
+    "startupScript": "https://docs.cloud.google.com/compute/docs/instances/startup-scripts/linux",
+    "serialPort": "https://docs.cloud.google.com/compute/docs/troubleshooting/viewing-serial-port-output",
+    "guestAttributes": "https://docs.cloud.google.com/compute/docs/metadata/manage-guest-attributes",
+    "maxRunDuration": "https://docs.cloud.google.com/compute/docs/instances/limit-vm-runtime",
+    "scheduling": "https://docs.cloud.google.com/compute/docs/instances/setting-instance-scheduling-options",
+}
 PLAN_TTL = datetime.timedelta(hours=12)
 PREFLIGHT_TTL = datetime.timedelta(minutes=20)
 METADATA_URL = ("https://compute.googleapis.com/compute/v1/projects/protocols-465723/zones/us-west2-b/instances/"
@@ -142,6 +154,10 @@ def manual_context(env):
     found = sorted(key for key in GITHUB_CONTEXT if key in env)
     if found:
         raise Refused("recovery is manual operator only and refuses inside a GitHub Actions job")
+    if env.get("GOOGLE_APPLICATION_CREDENTIALS"):
+        raise Refused("GOOGLE_APPLICATION_CREDENTIALS is set; use the active gcloud account and do not pass a key path")
+    if env.get("CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT"):
+        raise Refused("service-account impersonation is set; the active gcloud account must be the operator account")
 
 
 def historical_hashes():
@@ -188,12 +204,12 @@ def startup_script(guest_text, guest_sha, operation_id):
         "set -eu",
         "set -o pipefail",
         "umask 077",
-        f"op={operation_id}",
-        '/usr/bin/install -d -m 0700 "/var/lib/roseos-yogi-recover/$op"',
+        f"op={shlex.quote(operation_id)}",
+        '/usr/bin/install -d -m 0700 -- "/var/lib/roseos-yogi-recover/$op"',
         'cat > "/var/lib/roseos-yogi-recover/$op/guest.py" <<\'END_GUEST\'',
         guest_text.rstrip("\n"),
         "END_GUEST",
-        f'printf "%s  %s\\n" "{guest_sha}" "/var/lib/roseos-yogi-recover/$op/guest.py" | /usr/bin/sha256sum -c --quiet -',
+        f'printf "%s  %s\\n" {shlex.quote(guest_sha)} "/var/lib/roseos-yogi-recover/$op/guest.py" | /usr/bin/sha256sum -c --quiet -',
         'exec /usr/bin/python3 -I "/var/lib/roseos-yogi-recover/$op/guest.py" --guest',
         "",
     ]
@@ -201,18 +217,48 @@ def startup_script(guest_text, guest_sha, operation_id):
 
 
 def metadata_body(fingerprint, items):
+    """setMetadata replaces the whole map. Every key in `items` is sent; none are dropped here."""
     if not FINGERPRINT_RE.fullmatch(fingerprint or ""):
         raise Refused("metadata fingerprint is not usable")
-    allowed = set(BASE_METADATA) | set(OUR_KEYS)
-    if set(items) - allowed or any(not isinstance(items[key], str) for key in items):
+    if not isinstance(items, dict) or any(not isinstance(value, str) for value in items.values()):
         raise Refused("metadata items are outside the recovery set")
+    for key in items:
+        if not isinstance(key, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,127}", key):
+            raise Refused("metadata items are outside the recovery set")
     for key, value in BASE_METADATA.items():
         if key in items and items[key] != value:
             raise Refused("preserved metadata value differs")
-    ordered = [{"key": key, "value": items[key]} for key in BASE_ORDER + OUR_KEYS if key in items]
-    if {entry["key"] for entry in ordered} != set(items):
-        raise Refused("metadata items are outside the recovery set")
+    ordered_keys = [key for key in BASE_ORDER + OUR_KEYS if key in items]
+    ordered_keys += sorted(key for key in items if key not in ordered_keys)
+    ordered = [{"key": key, "value": items[key]} for key in ordered_keys]
     return {"fingerprint": fingerprint, "items": ordered}
+
+
+def removal_items(items, script, binding_text):
+    """Drop this operation's startup-script and binding only when the values match exactly.
+
+    Every other key, including a key added after our write, is copied through. A different value
+    in either of our key names is left untouched and no write is offered.
+    """
+    if not isinstance(items, dict) or any(not isinstance(value, str) for value in items.values()):
+        return None
+    for key, value in BASE_METADATA.items():
+        if items.get(key) != value:
+            return None
+    if items.get("startup-script") not in (None, script):
+        return None
+    if items.get(BINDING_KEY) not in (None, binding_text):
+        return None
+    drop = set()
+    if items.get("startup-script") == script:
+        drop.add("startup-script")
+    if items.get(BINDING_KEY) == binding_text:
+        drop.add(BINDING_KEY)
+    return {key: value for key, value in items.items() if key not in drop}
+
+
+def startup_script_absent(view):
+    return isinstance(view, dict) and "startup-script" not in view["items"] and BINDING_KEY not in view["items"]
 
 
 def interpret_metadata_http(status, body):
@@ -275,11 +321,8 @@ def classify_metadata(attempt, before, after, intended):
 
 
 def restore_allowed(items):
-    if not isinstance(items, dict):
-        return False
-    if set(items) - (set(BASE_METADATA) | set(OUR_KEYS)):
-        return False
-    return all(items.get(key) == value for key, value in BASE_METADATA.items())
+    """True when a preserving removal can be attempted. Unknown keys do not forbid it."""
+    return removal_items(items, items.get("startup-script"), items.get(BINDING_KEY)) is not None
 
 
 def instance_problems(seen, name, zone, number):
@@ -312,10 +355,14 @@ def external_address(instance):
 
 
 def scheduling_problem(scheduling):
+    """REST shape: scheduling.maxRunDuration.seconds is an int64, not a gcloud duration flag."""
     if not isinstance(scheduling, dict) or scheduling.get("automaticRestart") is not True:
         return "automatic-restart"
     duration = scheduling.get("maxRunDuration") if isinstance(scheduling.get("maxRunDuration"), dict) else {}
-    if str(duration.get("seconds")) not in ("2700", "2700s"):
+    seconds = duration.get("seconds")
+    if seconds not in (2700, "2700"):
+        return "max-run-duration"
+    if duration.get("nanos", 0) not in (0, "0", None):
         return "max-run-duration"
     if scheduling.get("instanceTerminationAction") != "STOP":
         return "termination-action"
@@ -633,20 +680,22 @@ def one_set(call, fingerprint, items):
     return attempt, after
 
 
-def restore_metadata(call):
+def restore_metadata(call, script, binding_text):
+    """One preserving removal of this operation's exact metadata values, then one readback. No second write."""
     try:
         current = metadata_view(call({"kind": "describe-instance", "target": "replacement"}))
     except TransportError:
         return "readback-failed", None
     if current is None:
         return "readback-failed", None
-    if not restore_allowed(current["items"]):
-        return "skipped-unknown-keys", current
-    if current["items"] == BASE_METADATA:
+    kept = removal_items(current["items"], script, binding_text)
+    if kept is None:
+        return "skipped-foreign-value", current
+    if kept == current["items"]:
         return "already-base", current
-    attempt, after = one_set(call, current["fingerprint"], dict(BASE_METADATA))
+    attempt, after = one_set(call, current["fingerprint"], kept)
     kind = classify_metadata(attempt, (current["items"], current["fingerprint"]),
-                             None if after is None else (after["items"], after["fingerprint"]), dict(BASE_METADATA))
+                             None if after is None else (after["items"], after["fingerprint"]), kept)
     return kind, after
 
 
@@ -702,8 +751,30 @@ def read_new(call, cursor):
     return str(response.get("contents") or ""), nxt
 
 
-def collect_receipt(call, binding, deadline, sleep, cursor):
+def collect_receipt(call, binding, deadline, sleep):
+    """Read serial only after the instance is RUNNING. The first read may include older bytes.
+
+    A receipt is accepted only when it matches this operation's nonce. Output from before this
+    operation cannot contain that nonce. A follow-up read uses the returned byte cursor. The
+    serial console is still guest-written and is not a pin.
+    """
+    if deadline.expired():
+        return None, "budget"
     chunks = []
+    cursor = "0"
+    try:
+        text, cursor = read_new(call, cursor)
+    except guest.Malformed:
+        return None, "stale-cursor"
+    except TransportError:
+        return None, "serial-failed"
+    chunks.append(text)
+    try:
+        receipt = guest.parse_serial("".join(chunks), binding)
+    except guest.Malformed:
+        return None, "malicious"
+    if receipt is not None:
+        return receipt, "read"
     for delay in SERIAL_DELAYS:
         if deadline.expired():
             return None, "budget"
@@ -769,14 +840,17 @@ def plan(operator, out, now=None, token=None, revision=None, repo=ROOT, template
     if not isinstance(operator, str) or not OPERATOR.fullmatch(operator):
         raise Refused("operator name is empty or uses unsupported characters")
     if revision is None:
-        revision = head_revision(repo)
-    elif not COMMIT.fullmatch(revision):
+        try:
+            revision = head_revision(Path.cwd())
+        except Refused:
+            revision = "unbound"
+    elif revision != "unbound" and not COMMIT.fullmatch(revision):
         raise Refused("source revision is not a commit")
     token = token or (lambda: __import__("secrets").token_hex(16))
     operation_id, nonce = token(), token()
     if not HEX32.fullmatch(operation_id or "") or not HEX32.fullmatch(nonce or "") or operation_id == nonce:
         raise Refused("binding generator failed")
-    template = template if template is not None else (ROOT / "scripts" / "yogi_replacement_recover_guest.py").read_text()
+    template = template if template is not None else (HERE / "yogi_replacement_recover_guest.py").read_text()
     rendered = render_guest(operation_id, nonce, template)
     payload_sha = sha256_bytes(rendered.encode())
     reject_historical(operation_id, nonce, payload_sha)
@@ -812,6 +886,12 @@ def plan(operator, out, now=None, token=None, revision=None, repo=ROOT, template
         "cleanup": {"authorizedKeyComment": "roseos-yogi-recover-<operationId>",
                     "temporaryAccount": guest.TEMP_ACCOUNT, "paths": list(guest.AUTH_PATHS)},
         "route": "gce-metadata-startup-script-and-bounded-serial-read",
+        "docs": DOCS, "operatorAccount": OPERATOR_ACCOUNT,
+        "permissionsExpected": ["compute.instances.get", "compute.instances.setMetadata", "compute.instances.start",
+                                "compute.instances.stop", "compute.instances.getSerialPortOutput",
+                                "compute.disks.get", "compute.snapshots.get", "compute.firewalls.list"],
+        "permissionsRefused": ["compute.instances.setMetadata on the original", "setCommonInstanceMetadata",
+                               "setIamPolicy", "snapshots.useReadOnly", "instances.delete"],
         "limitations": list(LIMITATIONS), "historicalReference": HISTORICAL,
         "historicalReferenceReplayed": False,
     }
@@ -866,7 +946,8 @@ def confirm_instance(value):
 
 def outcome_shell(**fields):
     base = {"schema": OUTCOME_SCHEMA, "dryRun": False, "executed": True, "liveRecovery": False, "hostKeyPinned": False,
-            "guestAuthenticated": False, "claim": "procedure-evidence-only", "historicalReferenceReplayed": False}
+            "guestAuthenticated": False, "serialReceiptTrustedForPin": False, "distinctFromOriginalVerified": False,
+            "claim": "procedure-evidence-only", "historicalReferenceReplayed": False}
     base.update(fields)
     return base
 
@@ -918,6 +999,38 @@ def finish(path, document, code):
     return document
 
 
+def _write_outcome(op, document, code):
+    try:
+        return finish(op, document, code)
+    except OSError:
+        document["outcomeWrite"] = "failed"
+        document["exit"] = code
+        try:
+            (Path(op) / "outcome-unwritten.json").write_text(json.dumps(document, indent=2, sort_keys=True) + "\n")
+        except OSError:
+            pass
+        return document
+
+
+def observed_ids(snapshot):
+    def ident(obj):
+        if not isinstance(obj, dict):
+            return None
+        return {"id": str(obj.get("id")), "name": obj.get("name"), "status": obj.get("status")}
+    shots = snapshot.get("snapshots") or {}
+    return {"original": ident(snapshot.get("original")), "originalDisk": ident(snapshot.get("originalDisk")),
+            "preserve": ident(shots.get("preserve")), "prekey": ident(shots.get("prekey"))}
+
+
+def ids_match(observed):
+    return (observed["original"] or {}).get("id") == ORIGINAL_INSTANCE_ID \
+        and (observed["originalDisk"] or {}).get("id") == ORIGINAL_DISK_ID \
+        and (observed["preserve"] or {}).get("id") == PRESERVE_SNAPSHOT_ID \
+        and (observed["prekey"] or {}).get("id") == PREKEY_SNAPSHOT_ID \
+        and (observed["preserve"] or {}).get("status") == "READY" \
+        and (observed["prekey"] or {}).get("status") == "READY"
+
+
 def apply(path, confirm, execute=False, transport=None, now=None, clock=None, sleep=None, env=None):
     manual_context(env if env is not None else os.environ)
     confirm_instance(confirm)
@@ -932,122 +1045,195 @@ def apply(path, confirm, execute=False, transport=None, now=None, clock=None, sl
     pre = load_preflight(op, binding, moment)
     log = []
     call = logged(transport, log)
-    snapshot = collect(call)
-    problems = apply_problems(snapshot)
-    view = metadata_view(snapshot.get("replacement")) if isinstance(snapshot.get("replacement"), dict) else None
-    if problems or view is None:
-        return finish(op, outcome_shell(result="preflight-mismatch", operationId=binding["operationId"],
-                                        problems=problems, requests=log, metadata="not-attempted", stop="not-started"), 1)
-    if view["fingerprint"] != pre["fingerprint"]:
-        return finish(op, outcome_shell(result="stale-fingerprint", operationId=binding["operationId"], requests=log,
-                                        metadata="not-attempted", stop="not-started"), 1)
-    intended = dict(BASE_METADATA)
-    intended["startup-script"] = loaded["script"]
-    intended[BINDING_KEY] = binding_canonical(binding["operationId"], binding["nonce"], binding["payloadSha256"])
-    exclusive_json(op / "started.json", {"operationId": binding["operationId"], "nonce": binding["nonce"],
-                                        "fingerprint": view["fingerprint"], "at": stamp(moment)})
-    attempt, after = one_set(call, view["fingerprint"], intended)
-    kind = classify_metadata(attempt, (view["items"], view["fingerprint"]),
-                             None if after is None else (after["items"], after["fingerprint"]), intended)
-    if kind != "clean":
-        restore = "not-needed" if kind == "not-applied" else "not-attempted"
-        if kind == "readback-failed":
-            restore = "not-attempted-readback-failed"
-        elif after is not None and restore_allowed(after["items"]) and after["items"] != BASE_METADATA:
-            restore, _seen = restore_metadata(call)
-        elif after is not None and not restore_allowed(after["items"]):
-            restore = "skipped-unknown-keys"
-        stop = ensure_stopped(call, start_attempted=False)
-        return finish(op, outcome_shell(result="metadata-" + kind, operationId=binding["operationId"], requests=log,
-                                        metadata=kind, restore=restore, stop=stop, metadataError=attempt.get("errorCode")), 1)
-    clock = clock or __import__("time").monotonic
-    sleep = sleep or __import__("time").sleep
-    start_attempted = False
-    try:
-        cursor = capture_cursor(call)
-    except Refused:
-        restore, _seen = restore_metadata(call)
-        return finish(op, outcome_shell(result="serial-cursor-failed", operationId=binding["operationId"], requests=log,
-                                        metadata="clean", restore=restore, stop=ensure_stopped(call, False)), 1)
-    work = Deadline(clock, WORK_BUDGET_SECONDS)
-    if work.expired() or work.remaining() < 30:
-        restore, _seen = restore_metadata(call)
-        return finish(op, outcome_shell(result="budget-before-start", operationId=binding["operationId"], requests=log,
-                                        metadata="clean", restore=restore, stop=ensure_stopped(call, False)), 1)
-    start_attempted = True
-    try:
-        call({"kind": "start", "target": "replacement", "timeout": min(240, int(work.remaining()))})
-    except TransportError:
-        pass
-    try:
-        started = call({"kind": "describe-instance", "target": "replacement"})
-    except TransportError:
-        started = None
-    if not isinstance(started, dict) or not replacement_identity_ok(started) or started.get("status") != "RUNNING":
-        restore, _seen = restore_metadata(call)
-        return finish(op, outcome_shell(result="start-unconfirmed", operationId=binding["operationId"], requests=log,
-                                        metadata="clean", restore=restore, stop=ensure_stopped(call, True)), 1)
-    try:
-        receipt, reason = collect_receipt(call, binding, work, sleep, cursor)
-    except Refused:
-        receipt, reason = None, "serial-cursor-failed"
-    attribute = None
-    guest_ok = False
-    if receipt is not None and reason == "read":
-        attribute = attribute_state(call, receipt)
-        if attribute == "mismatch":
-            reason = "attribute-mismatch"
-        elif attribute == "failed":
-            reason = "attribute-failed"
-        elif guest.success_problems(receipt):
-            reason = "guest-incomplete"
+    script = loaded["script"]
+    binding_text = binding_canonical(binding["operationId"], binding["nonce"], binding["payloadSha256"])
+    state = {"marker": False, "start": False, "sealed": False}
+
+    def seal(fields):
+        if state["sealed"]:
+            return fields
+        if not state["marker"]:
+            fields.setdefault("restore", "not-attempted")
+            fields.setdefault("stop", "not-started")
+            fields["startupScriptRemoved"] = False
+            state["sealed"] = True
+            return _write_outcome(op, outcome_shell(**fields), 1 if fields.get("result") != "procedure-complete-guest-reported" else 0)
+        if fields.get("metadata") == "readback-failed":
+            restore, after = "not-attempted-readback-failed", None
         else:
-            guest_ok = True
-    elif reason == "malicious":
+            try:
+                restore, after = restore_metadata(call, script, binding_text)
+            except Exception:
+                restore, after = "seal-failed", None
+        try:
+            stop = ensure_stopped(call, state["start"])
+        except Exception:
+            stop = "seal-failed"
+        state["sealed"] = True
+        fields["restore"] = restore
+        fields["stop"] = stop
+        removed = startup_script_absent(after) or restore == "already-base"
+        fields["startupScriptRemoved"] = bool(removed)
+        fields["metadataKeysAfter"] = sorted(after["items"]) if isinstance(after, dict) else None
+        fields["startupScriptRemovalProof"] = "control-plane-readback" if removed else "absent"
+        guest_ok = fields.pop("guestOk", False)
+        reason = fields.get("guestRead")
+        stopped = stop in ("stopped", "stopped-after-restart")
+        restored = restore in ("clean", "already-base") and removed
+        if guest_ok and restored and stopped and fields.get("metadata") == "clean":
+            fields["result"] = "procedure-complete-guest-reported"
+            code = 0
+        else:
+            fields.setdefault("result", "halted-" + str(reason))
+            if fields["result"] == "procedure-complete-guest-reported":
+                fields["result"] = "halted-stop"
+            code = 1
+        return _write_outcome(op, outcome_shell(**fields), code)
+
+    def body():
+        snapshot = collect(call)
+        problems = apply_problems(snapshot)
+        view = metadata_view(snapshot.get("replacement")) if isinstance(snapshot.get("replacement"), dict) else None
+        preserved = observed_ids(snapshot)
+        if problems or view is None:
+            return seal({"result": "preflight-mismatch", "operationId": binding["operationId"], "problems": problems,
+                         "requests": log, "metadata": "not-attempted", "preserved": preserved})
+        if not ids_match(preserved):
+            return seal({"result": "preserved-id-mismatch", "operationId": binding["operationId"], "requests": log,
+                         "metadata": "not-attempted", "preserved": preserved})
+        if view["fingerprint"] != pre["fingerprint"] or view["items"] != BASE_METADATA:
+            return seal({"result": "stale-fingerprint", "operationId": binding["operationId"], "requests": log,
+                         "metadata": "not-attempted", "preserved": preserved})
+        intended = dict(BASE_METADATA)
+        intended["startup-script"] = script
+        intended[BINDING_KEY] = binding_text
+        exclusive_json(op / "started.json", {"operationId": binding["operationId"], "nonce": binding["nonce"],
+                                            "fingerprint": view["fingerprint"], "at": stamp(moment)})
+        state["marker"] = True
+        attempt, after = one_set(call, view["fingerprint"], intended)
+        kind = classify_metadata(attempt, (view["items"], view["fingerprint"]),
+                                 None if after is None else (after["items"], after["fingerprint"]), intended)
+        if kind != "clean":
+            return seal({"result": "metadata-" + kind, "operationId": binding["operationId"], "requests": log,
+                         "metadata": kind, "metadataError": attempt.get("errorCode"), "preserved": preserved})
+        clock_fn = clock or __import__("time").monotonic
+        sleep_fn = sleep or __import__("time").sleep
+        work = Deadline(clock_fn, WORK_BUDGET_SECONDS)
+        if work.expired() or work.remaining() < 30:
+            return seal({"result": "budget-before-start", "operationId": binding["operationId"], "requests": log,
+                         "metadata": "clean", "preserved": preserved})
+        state["start"] = True
+        try:
+            call({"kind": "start", "target": "replacement", "timeout": min(240, int(work.remaining()))})
+        except TransportError:
+            pass
+        try:
+            started = call({"kind": "describe-instance", "target": "replacement"})
+        except TransportError:
+            started = None
+        if not isinstance(started, dict) or not replacement_identity_ok(started) or started.get("status") != "RUNNING":
+            return seal({"result": "start-unconfirmed", "operationId": binding["operationId"], "requests": log,
+                         "metadata": "clean", "preserved": preserved})
+        try:
+            receipt, reason = collect_receipt(call, binding, work, sleep_fn)
+        except Refused:
+            receipt, reason = None, "serial-cursor-failed"
+        attribute = None
         guest_ok = False
-    restore, _seen = restore_metadata(call)
-    stop = ensure_stopped(call, start_attempted)
-    stopped = stop in ("stopped", "stopped-after-restart")
-    restored = restore in ("clean", "already-base")
-    result = "procedure-complete-guest-reported" if guest_ok and restored and stopped else "halted-" + str(reason)
-    if not stopped:
-        guest_ok = False
-        if result.startswith("procedure"):
-            result = "halted-stop"
-    code = 0 if result == "procedure-complete-guest-reported" else 1
-    public_receipt = receipt if isinstance(receipt, dict) else None
-    return finish(op, outcome_shell(result=result, operationId=binding["operationId"], requests=log, metadata="clean",
-                                    restore=restore, stop=stop, guestReceipt=public_receipt, guestRead=reason,
-                                    guestAttribute=attribute), code)
+        if receipt is not None and reason == "read":
+            attribute = attribute_state(call, receipt)
+            if attribute == "mismatch":
+                reason = "attribute-mismatch"
+            elif attribute == "failed":
+                reason = "attribute-failed"
+            elif guest.success_problems(receipt):
+                reason = "guest-incomplete"
+            else:
+                guest_ok = True
+        return seal({"operationId": binding["operationId"], "requests": log, "metadata": "clean",
+                     "guestOk": guest_ok, "guestRead": reason, "guestReceipt": receipt if isinstance(receipt, dict) else None,
+                     "guestAttribute": attribute, "preserved": preserved,
+                     "distinctFromOriginalVerified": False, "serialReceiptTrustedForPin": False})
+
+    try:
+        return body()
+    except KeyboardInterrupt:
+        if not state["sealed"]:
+            try:
+                seal({"result": "interrupted", "operationId": binding["operationId"], "requests": log,
+                      "guestRead": "interrupted", "metadata": "unknown"})
+            except Exception:
+                try:
+                    ensure_stopped(call, True)
+                except Exception:
+                    pass
+        raise
 
 
 def cleanup(path, confirm, execute=False, transport=None, now=None, env=None):
+    """Discover the replacement from the control plane. started.json is not required to stop or to remove our keys."""
     manual_context(env if env is not None else os.environ)
     confirm_instance(confirm)
     loaded = load_operation(path, now, allow_expired=True)
     if not execute:
         return outcome_shell(dryRun=True, executed=False, result="dry-run",
                              operationId=loaded["binding"]["operationId"])
-    if not (loaded["path"] / "started.json").exists():
-        return outcome_shell(result="nothing-started", operationId=loaded["binding"]["operationId"],
-                             metadata="not-attempted", stop="not-started", executed=False)
     log = []
     call = logged(transport, log)
-    try:
-        instance = call({"kind": "describe-instance", "target": "replacement"})
-    except TransportError:
-        instance = None
+    snapshot = collect(call)
+    preserved = observed_ids(snapshot)
+    instance = snapshot.get("replacement")
+    script = loaded["script"]
+    binding_text = binding_canonical(loaded["binding"]["operationId"], loaded["binding"]["nonce"],
+                                     loaded["binding"]["payloadSha256"])
     if not replacement_identity_ok(instance):
-        return outcome_shell(result="cleanup-identity-mismatch", operationId=loaded["binding"]["operationId"],
-                             requests=log, metadata="not-attempted", stop="not-started")
-    running = instance.get("status") != "TERMINATED"
-    restore, _seen = restore_metadata(call)
-    stop = ensure_stopped(call, start_attempted=running)
-    code = 0 if restore in ("clean", "already-base") and stop in ("stopped", "stopped-after-restart", "not-started") else 1
-    document = outcome_shell(result="cleanup", operationId=loaded["binding"]["operationId"], requests=log,
-                             restore=restore, stop=stop, exit=code)
-    (loaded["path"] / "cleanup.json").write_text(json.dumps(document, indent=2, sort_keys=True) + "\n")
+        stop = ensure_stopped(call, True) if instance is None else "identity-mismatch"
+        document = outcome_shell(result="cleanup-identity-mismatch" if instance is not None else "cleanup-read-failed",
+                                 operationId=loaded["binding"]["operationId"], requests=log, restore="not-attempted",
+                                 stop=stop, preserved=preserved, preservedIdsMatch=ids_match(preserved),
+                                 startupScriptRemoved=False, exit=1)
+    else:
+        restore, after = restore_metadata(call, script, binding_text)
+        stop = ensure_stopped(call, instance.get("status") != "TERMINATED")
+        removed = startup_script_absent(after) or restore in ("already-base", "clean")
+        code = 0 if restore in ("clean", "already-base") and removed and stop in (
+            "stopped", "stopped-after-restart", "not-started") and ids_match(preserved) else 1
+        document = outcome_shell(result="cleanup", operationId=loaded["binding"]["operationId"], requests=log,
+                                 restore=restore, stop=stop, preserved=preserved, preservedIdsMatch=ids_match(preserved),
+                                 startupScriptRemoved=bool(removed),
+                                 startupScriptRemovalProof="control-plane-readback" if removed else "absent",
+                                 metadataKeysAfter=sorted(after["items"]) if isinstance(after, dict) else None, exit=code)
+    try:
+        (loaded["path"] / "cleanup.json").write_text(json.dumps(document, indent=2, sort_keys=True) + "\n")
+    except OSError:
+        document["outcomeWrite"] = "failed"
     return document
+
+
+def export_bundle(out):
+    """Copy the runnable operator files and a sha256 manifest. No cloud call and no git checkout required to run them."""
+    out = Path(out)
+    out.mkdir(mode=0o700)
+    mapping = {
+        "yogi_replacement_recover.py": HERE / "yogi_replacement_recover.py",
+        "yogi_replacement_recover_guest.py": HERE / "yogi_replacement_recover_guest.py",
+        "YOGI-REPLACEMENT-RECOVER.md": HERE.parent / "docs" / "YOGI-REPLACEMENT-RECOVER.md",
+    }
+    readme = (
+        "Run from this directory. No repository checkout is required.\n"
+        "python3 yogi_replacement_recover.py plan --operator NAME --out DIR\n"
+        "Review the operation directory, then preflight and apply only with --execute "
+        "and --confirm-instance 2720796557371812468.\n"
+        "SHA256SUMS lists every file in this directory except itself.\n"
+    )
+    (out / "README.md").write_text(readme)
+    for name, source in mapping.items():
+        shutil.copyfile(source, out / name)
+    names = ("README.md", "YOGI-REPLACEMENT-RECOVER.md", "yogi_replacement_recover.py",
+             "yogi_replacement_recover_guest.py")
+    sums = "".join(f"{sha256_bytes((out / name).read_bytes())}  {name}\n" for name in names)
+    (out / "SHA256SUMS").write_text(sums)
+    return {name: sha256_bytes((out / name).read_bytes()) for name in names + ("SHA256SUMS",)}
 
 
 def main(argv, transport=None, now=None, clock=None, sleep=None, env=None, token=None, revision=None):
@@ -1056,6 +1242,8 @@ def main(argv, transport=None, now=None, clock=None, sleep=None, env=None, token
     planned = sub.add_parser("plan")
     planned.add_argument("--operator", required=True)
     planned.add_argument("--out", required=True)
+    exported = sub.add_parser("export-bundle")
+    exported.add_argument("--out", required=True)
     for name in ("preflight", "apply", "cleanup"):
         command = sub.add_parser(name)
         command.add_argument("--op", required=True)
@@ -1063,7 +1251,9 @@ def main(argv, transport=None, now=None, clock=None, sleep=None, env=None, token
         command.add_argument("--execute", action="store_true")
     args = parser.parse_args(argv)
     try:
-        if args.command == "plan":
+        if args.command == "export-bundle":
+            result, code = {"dryRun": True, "executed": False, "artifacts": export_bundle(args.out)}, 0
+        elif args.command == "plan":
             document = plan(args.operator, args.out, now=now, token=token, revision=revision, env=env)
             result, code = {"dryRun": True, "executed": False, "operationId": document["operationId"],
                             "payloadSha256": document["payloadSha256"],

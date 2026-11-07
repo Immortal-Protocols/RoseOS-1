@@ -53,16 +53,23 @@ Contract the live read must show before any write:
 
 `apply --execute` then:
 
-1. Writes `started.json` and sends **one** `setMetadata` for this instance, with the fingerprint just read. The body
-   keeps the two existing keys and adds `startup-script` plus `roseos-yogi-recover-binding`.
-2. Reads the instance back once. The guest starts only when that read shows the intended items, the fingerprint
+1. Writes and fsyncs `started.json` before any metadata write or start. It then sends **one** `instances.setMetadata`
+   with the fingerprint just read. `setMetadata` replaces the whole metadata map
+   ([instances.setMetadata](https://docs.cloud.google.com/compute/docs/reference/rest/v1/instances/setMetadata)), so the
+   body repeats every key from that read and adds `startup-script` plus `roseos-yogi-recover-binding`. A mismatched
+   fingerprint is `412 conditionNotMet` and is not retried
+   ([setting custom metadata](https://docs.cloud.google.com/compute/docs/metadata/setting-custom-metadata)).
+2. Reads the instance back once. The guest starts only when that read shows exactly the intended items, the fingerprint
    changed, and the operation is `DONE` for this numeric id. `INTERNAL`, a timeout, an unparseable body, a pending
-   operation, or any other mismatch does not get a second attempt of the same write. A read that shows our keys were
-   stored anyway is restored once, when the key set is still only the recovery set, and the VM is not started. If the
-   read itself fails, there is no second write.
-3. Records the serial-port cursor, then starts the replacement. The work budget is 35 minutes. The last 10 minutes of
-   the 45-minute stop policy stay available for cleanup. Serial output is read at most twice (after 180s, then after
-   another 300s if the first read has no receipt). That is a fixed schedule, not a poll loop.
+   operation, or any other mismatch does not get a second attempt of the same write. If the read shows our exact values
+   landed, one later removal may drop only those exact values. Any other key is sent back unchanged. A different value
+   stored under `startup-script` or the binding key is not removed. If the read itself fails, there is no second write.
+3. Starts the replacement only after that clean read. Serial output is read after the instance is `RUNNING`, because
+   `get-serial-port-output` is the running-instance view and keeps about 1 MiB
+   ([viewing serial port output](https://docs.cloud.google.com/compute/docs/troubleshooting/viewing-serial-port-output)).
+   There is one immediate read and, only if it has no matching receipt, one more read 180 seconds later. The work
+   budget is 35 minutes. The last 10 minutes of the 45-minute policy stay available for cleanup. `maxRunDuration.seconds`
+   must be the integer 2700, not a gcloud duration flag.
 4. Accepts one receipt line, `ROSEOS-YOGI-RECOVER-RECEIPT`, only from bytes after that cursor, only when it matches
    this binding. A second line is accepted only as a reprint of the same public fingerprints with `reexecution` true.
    Anything else is malicious output: restore metadata, stop, exit 1. A guest attribute, if present, must parse to the
@@ -71,8 +78,11 @@ Contract the live read must show before any write:
 5. Restores the two original metadata keys with one `setMetadata`, then stops the instance. If the instance is
    `RUNNING` again after that stop, one more stop is sent for `automaticRestart`. There is no third stop.
 
-`cleanup --execute` is the same restore-and-stop path when `apply` was interrupted after `started.json`. It does not
-start the VM. It does not restore a snapshot.
+`cleanup --execute` always describes the replacement, the original VM and disk, and both snapshots. It does not need
+`started.json`. If the replacement is not proved `TERMINATED`, or the describe fails, it stops the replacement by its
+constant name. It removes startup metadata only when the values are exactly this operation's. It does not start the VM
+and it does not restore a snapshot. `KeyboardInterrupt` during apply still runs that stop and removal before the
+interrupt is re-raised. A failed local outcome write does not skip the stop.
 
 The guest, if the metadata server identity matches, may:
 
@@ -130,7 +140,16 @@ python3 scripts/yogi_replacement_recover.py cleanup \
 ```
 
 Keep the operation directory. Do not reuse it. A stale fingerprint, an expired preflight (20 minutes), or a second
-apply needs a new `plan`.
+apply needs a new `plan`. If apply is interrupted, run `cleanup --execute` even when `started.json` was not written.
+
+To hand the operator a directory that runs without cloning this repository:
+
+```sh
+python3 scripts/yogi_replacement_recover.py export-bundle --out /path/to/yogi-replacement-recover-bundle
+```
+
+`SHA256SUMS` in that directory covers the two programs, this runbook, and `README.md`. Run `plan` from inside the
+directory with `python3 yogi_replacement_recover.py`.
 
 SSH, `ssh-keyscan`, and `gcloud compute ssh` are not used. Trust-on-first-use is not used. The direct route's host-key
 pin stays unset.
@@ -153,6 +172,39 @@ Base path named in the relay: `/Users/nathanspaun/Documents/Codex/2026-10-27/tas
 | `yogi-identity-bound-v4.tar.gz` | `8608f2c2c8315f648dc7d3fa0fbcbbff393911d748b4c9a9b264b2e0f3ff58bf` |
 | index of that archive (38 files) | `21677d17c97dc9d2d045392dba4d4db703855b0b49e095d96488493fd3495e02` |
 
+## What the API actually guarantees
+
+- [instances.setMetadata](https://docs.cloud.google.com/compute/docs/reference/rest/v1/instances/setMetadata) replaces
+  the entire metadata set. The fingerprint is required. A stale fingerprint fails with `412 conditionNotMet` and this
+  tool does not retry that write.
+- [Custom metadata](https://docs.cloud.google.com/compute/docs/metadata/setting-custom-metadata) tells you to send back
+  every existing key you intend to keep. Removal therefore copies every current key except this operation's exact
+  `startup-script` and binding values.
+- [Linux startup scripts](https://docs.cloud.google.com/compute/docs/instances/startup-scripts/linux) run
+  `startup-script` on each boot after the initial boot, which is why the key has to be removed before the instance can
+  be left stopped. The guest has no service account, so it cannot remove that key. Removal is proved only by the
+  control-plane readback (`startupScriptRemoved`).
+- [Serial port output](https://docs.cloud.google.com/compute/docs/troubleshooting/viewing-serial-port-output) is written
+  by the guest OS, BIOS, and other system-level entities. It is not signed. A receipt that matches this operation's
+  nonce is bound to this operation, and it is still not a host-key pin (`serialReceiptTrustedForPin` is false).
+- [Guest attributes](https://docs.cloud.google.com/compute/docs/metadata/manage-guest-attributes) are data the guest
+  writes. A matching attribute is not authentication. This tool does not enable them.
+- The 45-minute limit is `scheduling.maxRunDuration.seconds` of `2700` with `instanceTerminationAction` `STOP`
+  ([limit VM runtime](https://docs.cloud.google.com/compute/docs/instances/limit-vm-runtime)).
+  `automaticRestart` restarts a crashed guest
+  ([scheduling options](https://docs.cloud.google.com/compute/docs/instances/setting-instance-scheduling-options)).
+  It is not this tool's stop. The tool still stops the instance, and it sends one more stop if the instance is
+  `RUNNING` again. It does not send a third.
+
+`distinctFromClonedBaseline` compares the new public fingerprints with the public keys read from this replacement
+disk before the rotation. It is not a comparison with the original VM. `distinctFromOriginalVerified` is false.
+No original fingerprint is claimed.
+
+The active gcloud account must be `grok-bots@protocols-465723.iam.gserviceaccount.com`, with no
+`GOOGLE_APPLICATION_CREDENTIALS` and no impersonation variable set. Expected permissions are get, setMetadata, start,
+stop, and getSerialPortOutput on the replacement, plus get on its disk, the original VM and disk, both snapshots, and
+firewall list. This tool does not call IAM, project metadata, snapshot restore, or delete.
+
 ## Residual limits
 
 - The earlier `setMetadata` `INTERNAL` / gRPC code 13 failure has no known cause. One successful call the same day does
@@ -165,8 +217,15 @@ Base path named in the relay: `/Users/nathanspaun/Documents/Codex/2026-10-27/tas
   that count to be zero. This tool cannot name the earlier temporary key: that material is not in reviewed source.
 - If chmod succeeds and a later step stops, a new operation still requires mode `0664`. It will not rotate on a unit
   that is already `0644`. Rolling the disk back is a separate snapshot decision and is not performed here.
-- A crash between the two renames of one host-key pair can leave a mismatched pair. The pre-key snapshot remains the
-  restore point, unused by this tool.
-- `automaticRestart` can boot the guest again until metadata is removed and the instance stays `TERMINATED`. The
-  marker blocks a second rotation. The stopper sends at most two stop requests.
+- Before a live host key is replaced, both the private and public files are copied to
+  `ssh_host_<alg>_key.roseos-prev-<operation id>` (and `.pub`). A failed rotation copies those bytes back and does not
+  generate another key. The next boot of the same startup script does the same and does not rotate again. The previous
+  public file is kept. The previous private file is unlinked after that restore or after success. A crash in the
+  middle of the copy can leave the previous private file until that next boot unlinks it.
+- If the metadata readback fails, this tool does not guess and does not send another write. A startup script that was
+  stored but not visible in that read stays until a later `cleanup` can read the instance. Cleanup stops the
+  replacement when the describe fails.
+- The serial buffer is about 1 MiB. A receipt that never appears in the two reads ends the procedure and stops the VM.
+- `automaticRestart` can boot the guest again until the startup-script key is gone and the instance stays
+  `TERMINATED`. The on-disk marker blocks a second rotation. The stopper sends at most two stop requests.
 - If `maxRunDuration` is not 2700 seconds with action `STOP`, preflight stops. This tool does not change scheduling.

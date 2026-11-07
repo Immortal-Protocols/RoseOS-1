@@ -4,6 +4,7 @@ import copy
 import datetime
 import importlib.util
 import json
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -202,6 +203,9 @@ class World:
         if self.start_mode == "timeout-up":
             self.replacement_status = "RUNNING"
             raise recover.TransportError("timeout")
+        if self.start_mode == "interrupt":
+            self.replacement_status = "RUNNING"
+            raise KeyboardInterrupt()
         self.replacement_status = "RUNNING"
         if self.on_start:
             self.on_start()
@@ -236,6 +240,8 @@ class DictHost:
         self.names = list(guest.INVENTORY)
         self.fail_commit = None
         self.same_fingerprint = False
+        self.prev = {}
+        self.prev_public = {}
         self.auth = {path: None for path in guest.AUTH_PATHS}
         self.account_entry = None
         self.account_fail = False
@@ -306,6 +312,11 @@ class DictHost:
             return self.public[guest.KEY_NAMES[algorithm] + ".pub"]
         return self.public[guest.KEY_NAMES[algorithm] + ".roseos-new.pub"]
 
+    def ssh_preserve(self, algorithm):
+        self.log.append(("preserve", algorithm))
+        live = guest.KEY_NAMES[algorithm] + ".pub"
+        self.prev[algorithm] = self.public[live]
+
     def ssh_commit(self, algorithm):
         self.commit_calls += 1
         self.log.append(("commit", algorithm))
@@ -313,6 +324,17 @@ class DictHost:
             raise OSError("rotate-partial")
         live = guest.KEY_NAMES[algorithm] + ".pub"
         self.public[live] = self.public[guest.KEY_NAMES[algorithm] + ".roseos-new.pub"]
+
+    def ssh_restore(self, algorithm):
+        if algorithm not in self.prev:
+            return False
+        self.public[guest.KEY_NAMES[algorithm] + ".pub"] = self.prev[algorithm]
+        return True
+
+    def ssh_drop_prev_private(self, algorithm):
+        if algorithm in self.prev:
+            self.prev_public[algorithm] = self.prev[algorithm]
+        self.log.append(("drop-private", algorithm))
 
     def ssh_discard_temp(self):
         self.log.append("discard")
@@ -406,7 +428,8 @@ class PlanTest(Base):
         text = (ROOT_TEXT())
         self.assertNotIn("ssh-keyscan", text)
         self.assertNotIn("gcloud compute ssh", text)
-        self.assertNotIn("setCommonInstanceMetadata", text)
+        self.assertNotIn("/setCommonInstanceMetadata", text)
+        self.assertNotIn("setCommonInstanceMetadata(", text)
 
     def test_actions_context_and_bad_confirmation_are_refused(self):
         with self.assertRaises(recover.Refused):
@@ -516,7 +539,7 @@ class ControlTest(Base):
         self.world.fail_sets = ["internal"]
         result = self.apply()
         self.assertEqual(result["metadata"], "not-applied")
-        self.assertEqual(result["restore"], "not-needed")
+        self.assertEqual(result["restore"], "already-base")
         self.assertEqual(self.world.targets("set-metadata"), ["replacement"])
         self.assertNotIn("start", self.world.kinds())
         self.assertEqual(result["stop"], "not-started")
@@ -550,9 +573,9 @@ class ControlTest(Base):
         world.fail_sets = ["divergent"]
         recover.preflight(fresh, recover.INSTANCE_ID, True, world, now=NOW, env=ENV)
         result = recover.apply(fresh, recover.INSTANCE_ID, True, world, now=NOW, clock=Clock(), sleep=lambda s: None, env=ENV)
-        self.assertEqual(result["restore"], "skipped-unknown-keys")
+        self.assertEqual(result["restore"], "already-base")
         self.assertEqual(len(world.targets("set-metadata")), 1)
-        self.assertIn("ssh-keys", world.items)
+        self.assertEqual(world.items["ssh-keys"], "other")
 
     def test_readback_failure_does_not_send_a_second_set(self):
         self.preflight()
@@ -590,10 +613,13 @@ class ControlTest(Base):
         world = World()
         world.bad_cursor = True
         recover.preflight(fresh, recover.INSTANCE_ID, True, world, now=NOW, env=ENV)
-        result = recover.apply(fresh, recover.INSTANCE_ID, True, world, now=NOW, clock=Clock(), sleep=lambda s: None, env=ENV)
-        self.assertEqual(result["result"], "serial-cursor-failed")
-        self.assertNotIn("start", world.kinds())
-        self.assertEqual(world.items, recover.BASE_METADATA)
+        clock = Clock()
+        result = recover.apply(fresh, recover.INSTANCE_ID, True, world, now=NOW, clock=clock, sleep=clock.sleep, env=ENV)
+        self.assertEqual(result["guestRead"], "stale-cursor")
+        self.assertEqual(result["stop"], "stopped")
+        self.assertEqual(world.replacement_status, "TERMINATED")
+        self.assertNotIn("startup-script", world.items)
+        self.assertFalse(result["serialReceiptTrustedForPin"])
 
     def test_start_timeout_still_stops_when_the_vm_came_up(self):
         self.preflight()
@@ -640,16 +666,95 @@ class ControlTest(Base):
         self.preflight()
         self.world.fail_sets = ["applied-internal"]
         self.apply()
+        script = (self.op / "startup-script.sh").read_text()
+        binding_text = (self.op / "binding.json").read_text().strip()
         self.world.replacement_status = "RUNNING"
         self.world.items = {"enable-oslogin": "FALSE", "block-project-ssh-keys": "TRUE",
-                            "startup-script": "left", recover.BINDING_KEY: "left"}
+                            "startup-script": script, recover.BINDING_KEY: binding_text, "ssh-keys": "keep-me"}
         self.world.fingerprint = "fp-left"
         before = len(self.world.targets("start"))
         result = recover.cleanup(self.op, recover.INSTANCE_ID, True, self.world, now=NOW, env=ENV)
         self.assertEqual(result["exit"], 0)
-        self.assertEqual(self.world.items, recover.BASE_METADATA)
+        self.assertEqual(self.world.items["ssh-keys"], "keep-me")
+        self.assertNotIn("startup-script", self.world.items)
+        self.assertTrue(result["startupScriptRemoved"])
+        self.assertTrue(result["preservedIdsMatch"])
+        self.assertEqual(result["preserved"]["original"]["id"], recover.ORIGINAL_INSTANCE_ID)
+        self.assertEqual(result["preserved"]["originalDisk"]["id"], recover.ORIGINAL_DISK_ID)
+        self.assertEqual(result["preserved"]["preserve"]["id"], recover.PRESERVE_SNAPSHOT_ID)
+        self.assertEqual(result["preserved"]["prekey"]["id"], recover.PREKEY_SNAPSHOT_ID)
         self.assertEqual(self.world.replacement_status, "TERMINATED")
         self.assertEqual(len(self.world.targets("start")), before)
+        self.assertNotIn("original", self.world.targets("stop") + self.world.targets("set-metadata"))
+
+    def test_interrupt_after_start_still_stops_and_removes_our_metadata(self):
+        self.preflight()
+        self.world.start_mode = "interrupt"
+        with self.assertRaises(KeyboardInterrupt):
+            self.apply()
+        self.assertEqual(self.world.replacement_status, "TERMINATED")
+        self.assertNotIn("startup-script", self.world.items)
+        self.assertIn("stop", self.world.kinds())
+        self.assertTrue((self.op / "outcome.json").is_file() or (self.op / "outcome-unwritten.json").is_file())
+
+    def test_cleanup_stops_a_running_replacement_without_started_json(self):
+        fresh = self._fresh("21")
+        world = World()
+        world.replacement_status = "RUNNING"
+        result = recover.cleanup(fresh, recover.INSTANCE_ID, True, world, now=NOW, env=ENV)
+        self.assertEqual(world.replacement_status, "TERMINATED")
+        self.assertIn("stop", world.kinds())
+        self.assertNotIn("original", world.targets("stop"))
+        self.assertEqual(result["stop"], "stopped")
+        self.assertFalse((fresh / "started.json").exists())
+
+    def test_cleanup_leaves_a_stopped_base_vm_alone(self):
+        result = recover.cleanup(self.op, recover.INSTANCE_ID, True, self.world, now=NOW, env=ENV)
+        self.assertEqual(result["stop"], "not-started")
+        self.assertNotIn("stop", self.world.kinds())
+        self.assertNotIn("set-metadata", self.world.kinds())
+
+    def test_foreign_metadata_value_is_not_erased(self):
+        script = (self.op / "startup-script.sh").read_text()
+        binding_text = recover.binding_canonical(self.plan["operationId"], self.plan["nonce"], self.plan["payloadSha256"])
+        self.world.items = {"enable-oslogin": "FALSE", "block-project-ssh-keys": "TRUE",
+                            "startup-script": "operator-script", "ssh-keys": "keep-me"}
+        kind, _after = recover.restore_metadata(self.world, script, binding_text)
+        self.assertEqual(kind, "skipped-foreign-value")
+        self.assertEqual(self.world.items["startup-script"], "operator-script")
+        self.assertEqual(self.world.items["ssh-keys"], "keep-me")
+        self.assertNotIn("set-metadata", self.world.kinds())
+
+    def test_schedule_accepts_integer_seconds_and_rejects_flag_syntax(self):
+        self.assertIsNone(recover.scheduling_problem({"automaticRestart": True, "maxRunDuration": {"seconds": 2700},
+                                                     "instanceTerminationAction": "STOP"}))
+        self.assertEqual(recover.scheduling_problem({"automaticRestart": True, "maxRunDuration": {"seconds": "2700s"},
+                                                    "instanceTerminationAction": "STOP"}), "max-run-duration")
+        self.assertLessEqual(sum(recover.SERIAL_DELAYS) + 240 * 2, recover.CLEANUP_RESERVE_SECONDS + recover.WORK_BUDGET_SECONDS)
+
+    def test_key_path_and_impersonation_are_refused(self):
+        with self.assertRaises(recover.Refused):
+            recover.plan("Mac operator", Path(self.temp.name) / "keys", revision="e" * 40,
+                         env={"PATH": "/usr/bin", "GOOGLE_APPLICATION_CREDENTIALS": "/tmp/key.json"})
+        with self.assertRaises(recover.Refused):
+            recover.plan("Mac operator", Path(self.temp.name) / "imp", revision="e" * 40,
+                         env={"PATH": "/usr/bin", "CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT": recover.OPERATOR_ACCOUNT})
+
+    def test_export_bundle_plans_without_the_repository(self):
+        bundle = Path(self.temp.name) / "bundle"
+        artifacts = recover.export_bundle(bundle)
+        listed = (bundle / "SHA256SUMS").read_text().splitlines()
+        self.assertEqual(len(listed), 4)
+        for line in listed:
+            digest, name = line.split("  ")
+            self.assertEqual(digest, artifacts[name])
+        op = Path(self.temp.name) / "from-bundle"
+        result = subprocess.run([sys.executable, str(bundle / "yogi_replacement_recover.py"), "plan",
+                                 "--operator", "Mac operator", "--out", str(op)], capture_output=True, text=True,
+                                env=dict(ENV))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue((op / "SHA256SUMS").is_file())
+        self.assertNotIn("@@", (op / "guest.py").read_text())
 
     def _fresh(self, mark):
         path = Path(self.temp.name) / ("op" + mark)
@@ -717,6 +822,8 @@ class GuestTest(Base):
         host.fail_commit = "ecdsa"
         _module, host, receipt = self.run_guest(host)
         self.assertEqual(receipt["status"], "partial")
+        self.assertTrue(receipt["hostKeys"]["rolledBack"])
+        self.assertEqual(host.public[guest.KEY_NAMES["ed25519"] + ".pub"], host.prev["ed25519"])
         self.assertEqual(host.generate_calls, 2)
         module, host, second = self.run_guest(host)
         self.assertEqual(host.generate_calls, 2)
@@ -783,6 +890,44 @@ class GuestTest(Base):
         self.assertEqual(keep.read_text(), "KEEP")
         self.assertTrue((ssh / "ssh_host_ecdsa_key.roseos-new").is_symlink())
         self.assertGreater(discarded["skippedSymlink"], 0)
+        module = load_rendered(self.op / "guest.py")
+        disk = Path(self.temp.name) / "disk"
+        ssh = disk / "etc/ssh"
+        ssh.mkdir(parents=True)
+        private = ssh / "ssh_host_ed25519_key"
+        public = ssh / "ssh_host_ed25519_key.pub"
+        private.write_text("OLD-PRIVATE")
+        public.write_text("ssh-ed25519 AAAA clone\n")
+        private.chmod(0o600)
+        rendered = module.LinuxHost(root=str(disk))
+        rendered.ssh_preserve("ed25519")
+        private.write_text("NEW-PRIVATE")
+        self.assertTrue(rendered.ssh_restore("ed25519"))
+        self.assertEqual(private.read_text(), "OLD-PRIVATE")
+        rendered.ssh_drop_prev_private("ed25519")
+        self.assertFalse((ssh / ("ssh_host_ed25519_key.roseos-prev-" + module.OPERATION_ID)).exists())
+        self.assertTrue((ssh / ("ssh_host_ed25519_key.roseos-prev-" + module.OPERATION_ID + ".pub")).is_file())
+        (ssh / "ssh_host_rsa_key").symlink_to(private)
+        with self.assertRaises(module.GuestRefused):
+            rendered.ssh_preserve("rsa")
+        auth = disk / "root/.ssh"
+        auth.mkdir(parents=True)
+        keys = auth / "authorized_keys"
+        keys.write_text("ssh-ed25519 AAAA keep\nssh-ed25519 AAAA roseos-yogi-recover-" + module.OPERATION_ID + "\n")
+        other = disk / "home/pixelbuild/secret"
+        other.parent.mkdir(parents=True)
+        other.write_text("STAY")
+        rendered.auth_write("/root/.ssh/authorized_keys", ["ssh-ed25519 AAAA keep"])
+        evidence = Path(str(keys) + ".roseos-prev-" + module.OPERATION_ID)
+        self.assertIn("roseos-yogi-recover-", evidence.read_text())
+        self.assertEqual(other.read_text(), "STAY")
+        calls = []
+        rendered.userdel_fn = calls.append
+        rendered.passwd_fn = lambda name: {"name": module.TEMP_ACCOUNT, "uid": 60001, "gid": 60001,
+                                           "home": module.TEMP_HOME, "shell": "/usr/sbin/nologin"}
+        self.assertEqual(rendered.account_remove(), "removed-home-leftover")
+        self.assertEqual(calls, [module.TEMP_ACCOUNT])
+        self.assertNotIn('"-r"', Path(guest.__file__).read_text().split("def account_remove", 1)[1].split("def emit", 1)[0])
 
     def test_partial_cleanup_still_stops(self):
         def boot(items):
