@@ -55,6 +55,8 @@ SPENT_ZONE_OPERATIONS = frozenset({
     'operation-1794027069962-65fa87a38f91f-6bc72969-2fdd5f07',
     'operation-1794066928521-65fb1c1fa4fa7-28daba8e-205f8105',
     'operation-1794066937204-65fb1c27ed0fd-78949f7d-9a3a6b1b',
+    'operation-1794068119100-65fb208f11af8-c71e25d6-b4bccbbf',
+    'operation-1794068240866-65fb210331ca7-8bb70fef-dd412780',
 })
 GITHUB_CONTEXT = ('GITHUB_ACTIONS', 'ACTIONS_ID_TOKEN_REQUEST_URL', 'ACTIONS_ID_TOKEN_REQUEST_TOKEN',
                   'ACTIONS_RUNTIME_TOKEN', 'ACTIONS_RUNTIME_URL', 'ACTIONS_CACHE_URL', 'GITHUB_TOKEN')
@@ -90,6 +92,275 @@ print(json.dumps({'builder': seen, 'runnerProcess': runner, 'active': systemctl(
 
 class Refused(Exception):
     pass
+
+
+class DescribeRefused(Refused):
+    """One instance describe did not return a usable view. The code is ours; it is not the response body."""
+
+    def __init__(self, code, returncode=None, status='', stdout_class=''):
+        super().__init__(code)
+        self.code = code
+        self.returncode = returncode
+        self.status = status
+        self.stdout_class = stdout_class
+        self.network = None
+        self.terminal = code not in ('describe-exit', 'describe-not-json', 'describe-timeout')
+
+
+def _stdout_class(text):
+    stripped = (text or '').lstrip()
+    if not stripped:
+        return 'empty'
+    if stripped[0] == '{':
+        return 'object'
+    if stripped[0] == '[':
+        return 'array'
+    return 'other'
+
+
+def _config_row(row, address_key):
+    if not isinstance(row, dict):
+        return None
+    return {
+        'name': row.get('name') if isinstance(row.get('name'), str) else '',
+        'type': row.get('type') if isinstance(row.get('type'), str) else '',
+        'networkTier': row.get('networkTier') if isinstance(row.get('networkTier'), str) else '',
+        'addressPresent': bool(row.get(address_key)),
+    }
+
+
+def network_observation(seen):
+    """Observed access configs only. An absent address is not recorded as an allocation."""
+    nics = []
+    for nic in (seen or {}).get('networkInterfaces') or []:
+        if not isinstance(nic, dict):
+            continue
+        access = [row for row in (_config_row(item, 'natIP') for item in nic.get('accessConfigs') or []) if row]
+        ipv6 = [row for row in (_config_row(item, 'externalIpv6') for item in nic.get('ipv6AccessConfigs') or []) if row]
+        nics.append({
+            'name': nic.get('name') if isinstance(nic.get('name'), str) else '',
+            'stackType': nic.get('stackType') if isinstance(nic.get('stackType'), str) else '',
+            'network': nic.get('network') if isinstance(nic.get('network'), str) else '',
+            'subnetwork': nic.get('subnetwork') if isinstance(nic.get('subnetwork'), str) else '',
+            'accessConfigs': access,
+            'ipv6AccessConfigs': ipv6,
+        })
+    return {'observed': True, 'allocationInferred': False, 'nics': nics}
+
+
+def external_exposure(network):
+    """Observed config versus an address actually present in this read.
+
+    `describe-external-nat` means a ONE_TO_ONE_NAT config was observed and no address was.
+    It does not assert that an address is allocated. A present address is `describe-external-address`.
+    """
+    if not isinstance(network, dict):
+        return None
+    nat = ipv6 = address = False
+    for nic in network.get('nics') or []:
+        for row in nic.get('accessConfigs') or []:
+            nat = True
+            address = address or bool(row.get('addressPresent'))
+        for row in nic.get('ipv6AccessConfigs') or []:
+            ipv6 = True
+            address = address or bool(row.get('addressPresent'))
+    if address:
+        return 'describe-external-address'
+    if nat:
+        return 'describe-external-nat'
+    if ipv6:
+        return 'describe-external-ipv6'
+    return None
+
+
+REVIEWED_TAGS = ('roseos-yogi-b-20261105', 'roseos-yogi-builder')
+IAP_SOURCE = '35.235.240.0/20'
+FIREWALL_PERMISSION = 'compute.instances.getEffectiveFirewalls'
+_RULE_KEYS = frozenset({
+    'allowed', 'denied', 'creationTimestamp', 'description', 'direction', 'disabled', 'id', 'kind',
+    'logConfig', 'name', 'network', 'priority', 'selfLink', 'sourceRanges', 'sourceTags',
+    'sourceServiceAccounts', 'targetTags', 'targetServiceAccounts', 'destinationRanges',
+})
+
+
+def network_drift(network, tags):
+    """The reviewed nic0 External NAT shape. addressPresent is not part of identity."""
+    if list(tags or []) != list(REVIEWED_TAGS) and set(tags or []) != set(REVIEWED_TAGS):
+        return 'firewall-tag-drift'
+    if set(tags or []) != set(REVIEWED_TAGS):
+        return 'firewall-tag-drift'
+    nics = (network or {}).get('nics') if isinstance(network, dict) else None
+    if not isinstance(nics, list) or len(nics) != 1:
+        return 'network-drift'
+    nic = nics[0]
+    if nic.get('name') != 'nic0' or nic.get('stackType') != 'IPV4_ONLY':
+        return 'network-drift'
+    if not str(nic.get('network') or '').endswith('/global/networks/default'):
+        return 'network-drift'
+    if not str(nic.get('subnetwork') or '').endswith('/regions/us-west2/subnetworks/default'):
+        return 'network-drift'
+    if nic.get('ipv6AccessConfigs'):
+        return 'describe-external-ipv6'
+    access = nic.get('accessConfigs') or []
+    if len(access) != 1:
+        return 'network-drift'
+    row = access[0]
+    if (row.get('name'), row.get('type'), row.get('networkTier')) != ('External NAT', 'ONE_TO_ONE_NAT', 'PREMIUM'):
+        return 'network-drift'
+    return None
+
+
+def network_identity(view):
+    """Comparable nic/tag shape. The ephemeral natIP flag is omitted."""
+    network = view.get('network') if isinstance(view, dict) else None
+    nics = []
+    for nic in (network or {}).get('nics') or []:
+        nics.append({
+            'name': nic.get('name'), 'stackType': nic.get('stackType'),
+            'network': nic.get('network'), 'subnetwork': nic.get('subnetwork'),
+            'accessConfigs': [{key: row.get(key) for key in ('name', 'type', 'networkTier')}
+                              for row in nic.get('accessConfigs') or []],
+            'ipv6AccessConfigs': [{key: row.get(key) for key in ('name', 'type', 'networkTier')}
+                                  for row in nic.get('ipv6AccessConfigs') or []],
+        })
+    return {'tags': sorted(view.get('tags') or []), 'nics': nics}
+
+
+def _string_list(value, allow_missing=True):
+    if value is None and allow_missing:
+        return ()
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        return None
+    return tuple(value)
+
+
+def _specs(value, allow_missing=True):
+    if value is None and allow_missing:
+        return ()
+    if not isinstance(value, list):
+        return None
+    found = []
+    for spec in value:
+        if not isinstance(spec, dict) or set(spec) - {'IPProtocol', 'ports'}:
+            return None
+        proto = spec.get('IPProtocol')
+        if not isinstance(proto, str) or not proto:
+            return None
+        ports = spec.get('ports')
+        if ports is None:
+            found.append((proto, None))
+            continue
+        if not isinstance(ports, list) or not all(isinstance(port, str) for port in ports):
+            return None
+        found.append((proto, tuple(ports)))
+    return tuple(found)
+
+
+def _covers_ssh(specs):
+    for proto, ports in specs:
+        if proto == 'all':
+            return True
+        if proto != 'tcp':
+            continue
+        if ports is None:
+            return True
+        for port in ports:
+            if port == '22':
+                return True
+            if '-' in port:
+                left, right = port.split('-', 1)
+                if left.isdigit() and right.isdigit() and int(left) <= 22 <= int(right):
+                    return True
+    return False
+
+
+def _parse_rule(rule):
+    if not isinstance(rule, dict) or set(rule) - _RULE_KEYS:
+        return None
+    log = rule.get('logConfig')
+    if log is not None and (not isinstance(log, dict) or set(log) != {'enable'} or not isinstance(log.get('enable'), bool)):
+        return None
+    direction = rule.get('direction')
+    if direction not in ('INGRESS', 'EGRESS') or not isinstance(rule.get('name'), str):
+        return None
+    if not isinstance(rule.get('priority'), int):
+        return None
+    disabled = rule.get('disabled')
+    if disabled is None:
+        disabled = False
+    if not isinstance(disabled, bool):
+        return None
+    allow, deny = _specs(rule.get('allowed')), _specs(rule.get('denied'))
+    source_ranges = _string_list(rule.get('sourceRanges'))
+    source_tags = _string_list(rule.get('sourceTags'))
+    source_accounts = _string_list(rule.get('sourceServiceAccounts'))
+    target_tags = _string_list(rule.get('targetTags'))
+    if _string_list(rule.get('destinationRanges')) is None or _string_list(rule.get('targetServiceAccounts')) is None:
+        return None
+    if None in (allow, deny, source_ranges, source_tags, source_accounts, target_tags):
+        return None
+    network = rule.get('network')
+    if network is not None and (not isinstance(network, str) or not network.endswith('/global/networks/default')):
+        return None
+    return {
+        'name': rule['name'], 'direction': direction, 'priority': rule['priority'], 'disabled': disabled,
+        'allow': allow, 'deny': deny, 'sourceRanges': source_ranges, 'sourceTags': source_tags,
+        'sourceServiceAccounts': source_accounts, 'targetTags': target_tags,
+        'ipv6': any(':' in item for item in source_ranges),
+        'ssh': _covers_ssh(allow),
+    }
+
+
+def _baseline_iap(rule):
+    return (rule['name'] == 'yogi-b-20261105-iap-ssh' and rule['direction'] == 'INGRESS' and not rule['disabled']
+            and rule['priority'] == 900 and rule['sourceRanges'] == (IAP_SOURCE,) and not rule['sourceTags']
+            and not rule['sourceServiceAccounts'] and rule['targetTags'] == ('roseos-yogi-b-20261105',)
+            and rule['allow'] == (('tcp', ('22',)),) and not rule['deny'])
+
+
+def _baseline_deny(rule):
+    return (rule['name'] == 'yogi-b-20261105-deny-ingress' and rule['direction'] == 'INGRESS' and not rule['disabled']
+            and rule['priority'] == 901 and rule['sourceRanges'] == ('0.0.0.0/0',) and not rule['sourceTags']
+            and not rule['sourceServiceAccounts'] and rule['targetTags'] == ('roseos-yogi-b-20261105',)
+            and rule['deny'] == (('all', None),) and not rule['allow'])
+
+
+def evaluate_inbound(document):
+    """IAP-only inbound under the reviewed nic0 effective-firewall read.
+
+    Priority 901 deny-all from 0.0.0.0/0 shadows lower IPv4 allows, including 0.0.0.0/0 at 65534
+    and the priority 1000 connector rules. It does not shadow IPv6. A nonempty or unexpected
+    policy field fails closed. Egress rules are not an inbound decision.
+    """
+    if not isinstance(document, dict) or 'firewalls' not in document or not isinstance(document.get('firewalls'), list):
+        return {'ok': False, 'code': 'firewall-unknown-shape', 'shadowed': [], 'ruleCount': 0}
+    extra = set(document) - {'firewalls'}
+    if extra:
+        return {'ok': False, 'code': 'firewall-unreviewed-policy', 'shadowed': [], 'ruleCount': len(document['firewalls'])}
+    rules = []
+    for raw in document['firewalls']:
+        parsed = _parse_rule(raw)
+        if parsed is None:
+            return {'ok': False, 'code': 'firewall-unknown-shape', 'shadowed': [], 'ruleCount': len(document['firewalls'])}
+        rules.append(parsed)
+    if not any(_baseline_iap(rule) for rule in rules) or not any(_baseline_deny(rule) for rule in rules):
+        return {'ok': False, 'code': 'firewall-baseline', 'shadowed': [], 'ruleCount': len(rules)}
+    shadowed = []
+    for rule in rules:
+        if rule['disabled'] or rule['direction'] == 'EGRESS' or _baseline_iap(rule) or _baseline_deny(rule):
+            continue
+        if rule['priority'] < 900 or rule['priority'] in (900, 901):
+            return {'ok': False, 'code': 'firewall-unreviewed-priority', 'shadowed': shadowed, 'ruleCount': len(rules)}
+        if rule['ipv6']:
+            return {'ok': False, 'code': 'firewall-public-inbound', 'shadowed': shadowed, 'ruleCount': len(rules)}
+        shadowed.append(rule['name'])
+    return {'ok': True, 'code': None, 'shadowed': sorted(shadowed), 'ruleCount': len(rules),
+            'permission': FIREWALL_PERMISSION, 'nic': 'nic0'}
+
+
+def effective_firewall_argv():
+    return ['gcloud', 'compute', 'instances', 'network-interfaces', 'get-effective-firewalls', INSTANCE,
+            '--network-interface=nic0', f'--zone={ZONE}', f'--project={PROJECT}', '--format=json', '--quiet']
 
 
 def manual_context(env):
@@ -354,6 +625,8 @@ def possession_run(driver, plan, identity_path, baseline=None):
     instructions = None
     try:
         view = driver.describe()
+        bound = network_identity(view)
+        _require_inbound(view, driver.effective_firewalls())
         if baseline is not None and (view.get('fingerprint') != baseline.get('fingerprint')
                                      or view.get('items') != baseline.get('items')):
             raise Refused('metadata changed since preflight')
@@ -366,6 +639,9 @@ def possession_run(driver, plan, identity_path, baseline=None):
             raise Refused(_phase_error('start', start_state, getattr(driver, 'start_report', None)))
         started = True
         view = driver.describe()
+        if network_identity(view) != bound:
+            raise Refused('network-drift')
+        _require_inbound(view, driver.effective_firewalls())
         pre_add = {'fingerprint': view['fingerprint'], 'items': dict(view['items'])}
         added_items = add_login_line(view['items'], plan['loginLine'])
         add_state = driver.set_metadata(view['fingerprint'], added_items)
@@ -447,9 +723,13 @@ def _phase_error(phase, state, report):
     report = report or {}
     operation = report.get('operation') or {}
     observed = report.get('observed') or ('failed' if state == 'failed' else 'unresolved')
+    detail = (' describe ' + report['describeError']) if report.get('describeError') else ''
+    if report.get('returncode') is not None:
+        detail += ' exit ' + str(report['returncode'])
     return (phase + ' ' + observed + ': operation ' + (operation.get('status') or 'none')
             + ' instance ' + (report.get('instanceStatus') or 'unknown')
-            + ((' error ' + operation['error']) if operation.get('error') else ''))
+            + ((' error ' + operation['error']) if operation.get('error') else '')
+            + detail)
 
 
 OPERATOR_ACCOUNT = 'grok-bots@protocols-465723.iam.gserviceaccount.com'
@@ -487,6 +767,23 @@ class GcloudDriver:
         except subprocess.TimeoutExpired:
             raise Refused('command timed out: ' + ' '.join(argv[:4])) from None
 
+    def effective_firewalls(self):
+        """Official nic0 effective-firewall read. SDK 592 prints an object with only `firewalls`."""
+        argv = effective_firewall_argv()
+        try:
+            result = self.run(argv, capture_output=True, text=True, timeout=DESCRIBE_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            raise DescribeRefused('firewall-timeout') from None
+        stdout = result.stdout if isinstance(result.stdout, str) else ''
+        if result.returncode:
+            raise DescribeRefused('firewall-unreadable', returncode=result.returncode, stdout_class=_stdout_class(stdout))
+        try:
+            parsed = json.loads(stdout)
+        except ValueError:
+            raise DescribeRefused('firewall-unreadable', returncode=result.returncode,
+                                  stdout_class=_stdout_class(stdout)) from None
+        return parsed
+
     def account(self):
         result = self._cmd(['gcloud', 'auth', 'list', '--format=json', '--quiet'], DESCRIBE_TIMEOUT)
         if result.returncode:
@@ -501,37 +798,57 @@ class GcloudDriver:
         return active[0]
 
     def describe(self):
-        result = self._cmd(['gcloud', 'compute', 'instances', 'describe', INSTANCE, f'--project={PROJECT}',
-                            f'--zone={ZONE}', '--format=json', '--quiet'], DESCRIBE_TIMEOUT)
-        if result.returncode:
-            raise Refused('describe of the replacement failed')
+        """Read one instance. This is the only instance-describe used by preflight, start, and stop.
+
+        gcloud's exit 0 is not enough. A policy refusal keeps the parsed status when the body was an object.
+        The 2026-11-07 start polled this call 40 times, recorded only 'unreadable', then the same call
+        accepted the terminated instance.
+        """
+        argv = ['gcloud', 'compute', 'instances', 'describe', INSTANCE, f'--project={PROJECT}',
+                f'--zone={ZONE}', '--format=json', '--quiet']
         try:
-            seen = json.loads(result.stdout)
+            result = self.run(argv, capture_output=True, text=True, timeout=DESCRIBE_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            raise DescribeRefused('describe-timeout') from None
+        stdout = result.stdout if isinstance(result.stdout, str) else ''
+        if result.returncode:
+            raise DescribeRefused('describe-exit', returncode=result.returncode, stdout_class=_stdout_class(stdout))
+        try:
+            seen = json.loads(stdout)
         except ValueError:
-            raise Refused('describe was not JSON') from None
+            raise DescribeRefused('describe-not-json', returncode=result.returncode,
+                                  stdout_class=_stdout_class(stdout)) from None
+        if not isinstance(seen, dict):
+            raise DescribeRefused('describe-not-object', returncode=result.returncode, stdout_class='array')
+        status = seen.get('status') if isinstance(seen.get('status'), str) else ''
         zone = str(seen.get('zone') or '').rstrip('/').rsplit('/', 1)[-1]
         link = f'/projects/{PROJECT}/zones/{ZONE}/instances/{INSTANCE}'
         if str(seen.get('id')) != INSTANCE_ID or seen.get('name') != INSTANCE or zone != ZONE \
                 or not str(seen.get('selfLink') or '').endswith(link):
-            raise Refused('replacement identity does not match the saved instance id')
+            raise DescribeRefused('describe-identity', status=status)
         items = {}
         meta = seen.get('metadata') if isinstance(seen.get('metadata'), dict) else {}
         for entry in meta.get('items') or []:
             if not isinstance(entry, dict) or not isinstance(entry.get('key'), str) or not isinstance(entry.get('value'), str):
-                raise Refused('instance metadata is not a string map')
+                raise DescribeRefused('describe-metadata', status=status)
             if entry['key'] in items:
-                raise Refused('instance metadata has a duplicate key')
+                raise DescribeRefused('describe-metadata', status=status)
             items[entry['key']] = entry['value']
         fingerprint = meta.get('fingerprint')
         if not isinstance(fingerprint, str) or not fingerprint:
-            raise Refused('instance metadata has no fingerprint')
-        address = None
+            raise DescribeRefused('describe-fingerprint', status=status)
         for nic in seen.get('networkInterfaces') or []:
-            for access in (nic.get('accessConfigs') or []) if isinstance(nic, dict) else []:
-                address = address or access.get('natIP')
-        if address:
-            raise Refused('replacement has an external address')
-        return {'status': seen.get('status'), 'fingerprint': fingerprint, 'items': items, 'id': str(seen.get('id'))}
+            if not isinstance(nic, dict):
+                raise DescribeRefused('describe-network', status=status)
+        tags = seen.get('tags') if isinstance(seen.get('tags'), dict) else {}
+        tag_items = tags.get('items') if isinstance(tags, dict) else None
+        if tag_items is None:
+            tag_items = []
+        if not isinstance(tag_items, list) or not all(isinstance(item, str) for item in tag_items):
+            raise DescribeRefused('describe-tags', status=status)
+        network = network_observation(seen)
+        return {'status': status, 'fingerprint': fingerprint, 'items': items, 'id': str(seen.get('id')),
+                'tags': sorted(tag_items), 'network': network}
 
     def _blank_report(self):
         return {'observed': 'unresolved', 'instanceStatus': '', 'operation': None, 'polls': 0}
@@ -605,11 +922,17 @@ class GcloudDriver:
     def _read_instance_status(self, report):
         try:
             view = self.describe()
-        except Refused as exc:
-            report['instanceStatus'] = 'mismatch' if 'identity' in str(exc) else 'unreadable'
-            return None
+        except DescribeRefused as exc:
+            report['describeError'] = exc.code
+            report['returncode'] = exc.returncode
+            report['stdoutClass'] = exc.stdout_class or None
+            report['instanceStatus'] = exc.status or ('mismatch' if exc.code == 'describe-identity' else 'unreadable')
+            return None, exc.terminal
+        report['describeError'] = None
+        report['returncode'] = None
+        report['stdoutClass'] = None
         report['instanceStatus'] = str(view.get('status') or '')
-        return view
+        return view, False
 
     def _poll_phase(self, report, expected_type, want_status, budget):
         """Poll the submitted operation and the instance until want_status, the budget, or a hard error.
@@ -629,8 +952,8 @@ class GcloudDriver:
             if operation and operation.get('error'):
                 report['observed'] = 'failed'
                 return 'failed'
-            view = self._read_instance_status(report)
-            if report.get('instanceStatus') == 'mismatch':
+            view, terminal = self._read_instance_status(report)
+            if terminal:
                 report['observed'] = 'failed'
                 return 'failed'
             if view and view.get('status') == want_status and (not operation or operation.get('status') == 'DONE'):
@@ -822,16 +1145,30 @@ class GcloudDriver:
         return receipt
 
 
+def _require_inbound(view, document):
+    """Fail closed before start and before the login line. The reviewed NAT may keep its address bit."""
+    drift = network_drift(view.get('network') if isinstance(view, dict) else None,
+                          (view or {}).get('tags'))
+    if drift:
+        raise DescribeRefused(drift, status=(view or {}).get('status') or '')
+    decision = evaluate_inbound(document)
+    if not decision.get('ok'):
+        raise DescribeRefused(decision.get('code') or 'firewall-unknown-shape', status=(view or {}).get('status') or '')
+    return decision
+
+
 def possession_preflight(driver):
     """Account, replacement id, and the reviewed metadata baseline. No mutation."""
     driver.account()
     view = driver.describe()
+    decision = _require_inbound(view, driver.effective_firewalls())
     if view.get('status') != 'TERMINATED' or view.get('id') != INSTANCE_ID:
         raise Refused('replacement is not the terminated saved instance')
     if view.get('fingerprint') != POSSESSION_FINGERPRINT or view.get('items') != POSSESSION_BASE:
         raise Refused('metadata does not match the reviewed baseline')
     _require_base(view['items'])
-    return {'fingerprint': view['fingerprint'], 'items': dict(view['items']), 'status': view['status']}
+    return {'fingerprint': view['fingerprint'], 'items': dict(view['items']), 'status': view['status'],
+            'inbound': decision, 'network': view.get('network')}
 
 
 def execute_handshake(api_path, client_path, identity, out, driver=None, operation_id=None, environ=None, now=None):
@@ -864,16 +1201,53 @@ def write_possession_plan(api_path, client_path, out, operation_id=None, environ
     return plan
 
 
+def describe_instance(driver=None):
+    """Read the instance and nic0 effective firewalls. No start, stop, metadata write, or SSH."""
+    driver = driver or GcloudDriver()
+    try:
+        view = driver.describe()
+    except DescribeRefused as exc:
+        return {'readOnly': True, 'mutation': False, 'describeError': exc.code,
+                'returncode': exc.returncode, 'stdoutClass': exc.stdout_class or None,
+                'status': exc.status or None, 'id': None, 'fingerprint': None, 'metadataKeys': [],
+                'network': exc.network, 'firewall': None, 'allocationInferred': False}
+    try:
+        document = driver.effective_firewalls()
+    except DescribeRefused as exc:
+        return {'readOnly': True, 'mutation': False, 'describeError': None, 'firewallError': exc.code,
+                'returncode': exc.returncode, 'stdoutClass': exc.stdout_class or None,
+                'status': view['status'], 'id': view['id'], 'fingerprint': view['fingerprint'],
+                'metadataKeys': sorted(view['items']), 'network': view.get('network'), 'firewall': None,
+                'allocationInferred': False}
+    try:
+        decision = _require_inbound(view, document)
+        code = None
+    except DescribeRefused as exc:
+        decision = None
+        code = exc.code
+    return {'readOnly': True, 'mutation': False, 'describeError': code, 'firewallError': None,
+            'returncode': 0, 'stdoutClass': 'object', 'status': view['status'], 'id': view['id'],
+            'fingerprint': view['fingerprint'], 'metadataKeys': sorted(view['items']),
+            'network': view.get('network'), 'firewall': decision, 'allocationInferred': False,
+            'permission': FIREWALL_PERMISSION}
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description='Strict IAP possession plan. --execute is the operator run; tests inject a driver.')
-    parser.add_argument('action', choices=('handshake-plan', 'handshake'))
-    parser.add_argument('--hostkeys', required=True)
-    parser.add_argument('--client-public', required=True)
-    parser.add_argument('--out', required=True)
+    parser.add_argument('action', choices=('handshake-plan', 'handshake', 'describe-instance'))
+    parser.add_argument('--hostkeys')
+    parser.add_argument('--client-public')
+    parser.add_argument('--out')
     parser.add_argument('--identity', help='local mode 0600 private key; required with handshake --execute')
     parser.add_argument('--execute', action='store_true')
     args = parser.parse_args(argv)
     try:
+        if args.action == 'describe-instance':
+            result = describe_instance()
+            print(json.dumps(result, sort_keys=True))
+            return 0 if result.get('describeError') is None and result.get('firewallError') is None else 1
+        if not args.hostkeys or not args.client_public or not args.out:
+            parser.error('handshake needs --hostkeys, --client-public and --out')
         if args.action == 'handshake' and args.execute:
             if not args.identity:
                 parser.error('handshake --execute needs --identity')

@@ -20,6 +20,8 @@ def _possession_root():
 sys.path.insert(0, str(_possession_root()))
 import yogi_possession  # noqa: E402
 
+EFFECTIVE_FIREWALLS = '{\n  "firewalls": [\n    {\n      "allowed": [\n        {\n          "IPProtocol": "tcp",\n          "ports": [\n            "22"\n          ]\n        }\n      ],\n      "creationTimestamp": "2026-11-05T15:12:13.037-08:00",\n      "description": "Approved replacement-only Yogi readiness ingress; no existing VM or rule modified.",\n      "direction": "INGRESS",\n      "disabled": false,\n      "id": "5330425627088565155",\n      "kind": "compute#firewall",\n      "logConfig": {\n        "enable": false\n      },\n      "name": "yogi-b-20261105-iap-ssh",\n      "network": "https://www.googleapis.com/compute/v1/projects/protocols-465723/global/networks/default",\n      "priority": 900,\n      "selfLink": "https://www.googleapis.com/compute/v1/projects/protocols-465723/global/firewalls/yogi-b-20261105-iap-ssh",\n      "sourceRanges": [\n        "35.235.240.0/20"\n      ],\n      "targetTags": [\n        "roseos-yogi-b-20261105"\n      ]\n    },\n    {\n      "creationTimestamp": "2026-11-05T15:12:21.093-08:00",\n      "denied": [\n        {\n          "IPProtocol": "all"\n        }\n      ],\n      "description": "Approved replacement-only Yogi readiness ingress; no existing VM or rule modified.",\n      "direction": "INGRESS",\n      "disabled": false,\n      "id": "2143899672614319035",\n      "kind": "compute#firewall",\n      "logConfig": {\n        "enable": false\n      },\n      "name": "yogi-b-20261105-deny-ingress",\n      "network": "https://www.googleapis.com/compute/v1/projects/protocols-465723/global/networks/default",\n      "priority": 901,\n      "selfLink": "https://www.googleapis.com/compute/v1/projects/protocols-465723/global/firewalls/yogi-b-20261105-deny-ingress",\n      "sourceRanges": [\n        "0.0.0.0/0"\n      ],\n      "targetTags": [\n        "roseos-yogi-b-20261105"\n      ]\n    },\n    {\n      "allowed": [\n        {\n          "IPProtocol": "tcp",\n          "ports": [\n            "22"\n          ]\n        }\n      ],\n      "creationTimestamp": "2026-11-03T21:54:02.749-08:00",\n      "description": "IAP SSH to isolated Yogi build VMs only",\n      "direction": "INGRESS",\n      "disabled": false,\n      "id": "6201501568027031189",\n      "kind": "compute#firewall",\n      "logConfig": {\n        "enable": false\n      },\n      "name": "roseos-yogi-iap-ssh",\n      "network": "https://www.googleapis.com/compute/v1/projects/protocols-465723/global/networks/default",\n      "priority": 1000,\n      "selfLink": "https://www.googleapis.com/compute/v1/projects/protocols-465723/global/firewalls/roseos-yogi-iap-ssh",\n      "sourceRanges": [\n        "35.235.240.0/20"\n      ],\n      "targetTags": [\n        "roseos-yogi-builder"\n      ]\n    },\n    {\n      "allowed": [\n        {\n          "IPProtocol": "tcp"\n        },\n        {\n          "IPProtocol": "udp"\n        },\n        {\n          "IPProtocol": "icmp"\n        }\n      ],\n      "creationTimestamp": "2026-01-08T13:50:56.382-08:00",\n      "description": "",\n      "direction": "INGRESS",\n      "disabled": false,\n      "id": "1842537047467595823",\n      "kind": "compute#firewall",\n      "logConfig": {\n        "enable": false\n      },\n      "name": "aet-uswest2-a--list--connector-tagfw",\n      "network": "https://www.googleapis.com/compute/v1/projects/protocols-465723/global/networks/default",\n      "priority": 1000,\n      "selfLink": "https://www.googleapis.com/compute/v1/projects/protocols-465723/global/firewalls/aet-uswest2-a--list--connector-tagfw",\n      "sourceTags": [\n        "aet-uswest2-a--list--connector"\n      ]\n    },\n    {\n      "allowed": [\n        {\n          "IPProtocol": "tcp"\n        },\n        {\n          "IPProtocol": "udp"\n        },\n        {\n          "IPProtocol": "icmp"\n        }\n      ],\n      "creationTimestamp": "2026-01-08T13:50:56.383-08:00",\n      "description": "",\n      "direction": "INGRESS",\n      "disabled": false,\n      "id": "319457170889218095",\n      "kind": "compute#firewall",\n      "logConfig": {\n        "enable": false\n      },\n      "name": "aet-uswest2-a--list--connector-sbntfw",\n      "network": "https://www.googleapis.com/compute/v1/projects/protocols-465723/global/networks/default",\n      "priority": 1000,\n      "selfLink": "https://www.googleapis.com/compute/v1/projects/protocols-465723/global/firewalls/aet-uswest2-a--list--connector-sbntfw",\n      "sourceRanges": [\n        "10.9.0.0/28"\n      ]\n    },\n    {\n      "allowed": [\n        {\n          "IPProtocol": "tcp",\n          "ports": [\n            "0-65535"\n          ]\n        },\n        {\n          "IPProtocol": "udp",\n          "ports": [\n            "0-65535"\n          ]\n        },\n        {\n          "IPProtocol": "icmp"\n        }\n      ],\n      "creationTimestamp": "2026-01-05T14:30:33.660-08:00",\n      "description": "Allow internal traffic on the default network",\n      "direction": "INGRESS",\n      "disabled": false,\n      "id": "8583724390203622758",\n      "kind": "compute#firewall",\n      "logConfig": {\n        "enable": false\n      },\n      "name": "default-allow-internal",\n      "network": "https://www.googleapis.com/compute/v1/projects/protocols-465723/global/networks/default",\n      "priority": 65534,\n      "selfLink": "https://www.googleapis.com/compute/v1/projects/protocols-465723/global/firewalls/default-allow-internal",\n      "sourceRanges": [\n        "10.128.0.0/9"\n      ]\n    },\n    {\n      "allowed": [\n        {\n          "IPProtocol": "tcp",\n          "ports": [\n            "3389"\n          ]\n        }\n      ],\n      "creationTimestamp": "2026-01-05T14:30:33.822-08:00",\n      "description": "Allow RDP from anywhere",\n      "direction": "INGRESS",\n      "disabled": false,\n      "id": "5089601416384841062",\n      "kind": "compute#firewall",\n      "logConfig": {\n        "enable": false\n      },\n      "name": "default-allow-rdp",\n      "network": "https://www.googleapis.com/compute/v1/projects/protocols-465723/global/networks/default",\n      "priority": 65534,\n      "selfLink": "https://www.googleapis.com/compute/v1/projects/protocols-465723/global/firewalls/default-allow-rdp",\n      "sourceRanges": [\n        "0.0.0.0/0"\n      ]\n    },\n    {\n      "allowed": [\n        {\n          "IPProtocol": "icmp"\n        }\n      ],\n      "creationTimestamp": "2026-01-05T14:30:33.903-08:00",\n      "description": "Allow ICMP from anywhere",\n      "direction": "INGRESS",\n      "disabled": false,\n      "id": "5305455786803168614",\n      "kind": "compute#firewall",\n      "logConfig": {\n        "enable": false\n      },\n      "name": "default-allow-icmp",\n      "network": "https://www.googleapis.com/compute/v1/projects/protocols-465723/global/networks/default",\n      "priority": 65534,\n      "selfLink": "https://www.googleapis.com/compute/v1/projects/protocols-465723/global/firewalls/default-allow-icmp",\n      "sourceRanges": [\n        "0.0.0.0/0"\n      ]\n    },\n    {\n      "allowed": [\n        {\n          "IPProtocol": "tcp",\n          "ports": [\n            "22"\n          ]\n        }\n      ],\n      "creationTimestamp": "2026-01-05T14:30:33.741-08:00",\n      "description": "Allow SSH from anywhere",\n      "direction": "INGRESS",\n      "disabled": false,\n      "id": "5910327979697866086",\n      "kind": "compute#firewall",\n      "logConfig": {\n        "enable": false\n      },\n      "name": "default-allow-ssh",\n      "network": "https://www.googleapis.com/compute/v1/projects/protocols-465723/global/networks/default",\n      "priority": 65534,\n      "selfLink": "https://www.googleapis.com/compute/v1/projects/protocols-465723/global/firewalls/default-allow-ssh",\n      "sourceRanges": [\n        "0.0.0.0/0"\n      ]\n    }\n  ]\n}\n'
+
 REAL_HOSTKEYS = '[\n  {\n    "key": "ecdsa-sha2-nistp256",\n    "namespace": "hostkeys",\n    "value": "AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBP5yomg6p17Uoyq81/3JX15Z05YxRDE0gtPOoIUp03o/KqmWLf8IVIFe7kFFaO0lb7kxVGxbhZ/gYMjsDbxgl+8="\n  },\n  {\n    "key": "ssh-ed25519",\n    "namespace": "hostkeys",\n    "value": "AAAAC3NzaC1lZDI1NTE5AAAAIN2pFrUsLlgUbqItVqVwLLqnC+cpPPv29xXhHWYvqGCI"\n  },\n  {\n    "key": "ssh-rsa",\n    "namespace": "hostkeys",\n    "value": "AAAAB3NzaC1yc2EAAAADAQABAAABgQC63HzpRewfI4E6MsoAuQPo/KBN/SpCNkEn4bi2SYpGlxRdMfWiQgwZph4i3VP3NBcrlyRNRjk7k0IvesEcrCDvks1sD8EKSFYpdagg1MGWCpahpUSta216AIaldbm5folmFM3bGob+EtZY3o31s85PsEAvkLQpfmDaX+vgY3MRsqxuVQqOJcLAC7z6jAD5bzivcy5rFWqhFVj/+E74u7hMM5M0uii6QBoDQ11Or4iAWyGyCFFb+c0TB16BNJqmnf5bmz+Fpu+QrwELcClsYh1NJB6Gb7s7GHTUeqjKJJePs8uic8+MLGSyXBDES/NzfsjgayvDyJfphNJL+luKG9flP5udesBwwXEECOkoaboc+orCGBk6J3Iaf8oAZs+zFBLcUePl9XWIHEYdaIbBBPKB3ZkrxBaOoDu0vnjvmN88CGRQo6jVikXp+wkDhSATGUtGZC/9KDBY5eeLs7G6vRkkGJ6olrTAk1Qy4gXe4eVrtfgXPLDYJ0PR+nrWW2cNV1U="\n  }\n]\n'
 
 def _wire(kind, payload):
@@ -102,7 +104,21 @@ class PossessionTest(unittest.TestCase):
                 self.status = 'TERMINATED'
 
             def describe(self):
-                return {'status': self.status, 'fingerprint': self.fingerprint, 'items': dict(self.items)}
+                return {'status': self.status, 'fingerprint': self.fingerprint, 'items': dict(self.items),
+                        'id': yogi_possession.INSTANCE_ID, 'tags': list(yogi_possession.REVIEWED_TAGS),
+                        'network': self.network()}
+
+            def network(self):
+                return {'observed': True, 'allocationInferred': False, 'nics': [{
+                    'name': 'nic0', 'stackType': 'IPV4_ONLY',
+                    'network': 'https://www.googleapis.com/compute/v1/projects/protocols-465723/global/networks/default',
+                    'subnetwork': 'https://www.googleapis.com/compute/v1/projects/protocols-465723/regions/us-west2/subnetworks/default',
+                    'accessConfigs': [{'name': 'External NAT', 'type': 'ONE_TO_ONE_NAT', 'networkTier': 'PREMIUM',
+                                       'addressPresent': False}],
+                    'ipv6AccessConfigs': []}]}
+
+            def effective_firewalls(self):
+                return json.loads(EFFECTIVE_FIREWALLS)
 
             def start(self):
                 self.calls.append('start')
@@ -410,7 +426,18 @@ class PossessionTest(unittest.TestCase):
                 return yogi_possession.OPERATOR_ACCOUNT
             def describe(self):
                 return {'status': 'TERMINATED', 'id': yogi_possession.INSTANCE_ID,
-                        'fingerprint': self.fingerprint, 'items': self.items}
+                        'fingerprint': self.fingerprint, 'items': self.items,
+                        'tags': list(yogi_possession.REVIEWED_TAGS),
+                        'network': {'observed': True, 'allocationInferred': False, 'nics': [{
+                            'name': 'nic0', 'stackType': 'IPV4_ONLY',
+                            'network': 'https://www.googleapis.com/compute/v1/projects/protocols-465723/global/networks/default',
+                            'subnetwork': 'https://www.googleapis.com/compute/v1/projects/protocols-465723/regions/us-west2/subnetworks/default',
+                            'accessConfigs': [{'name': 'External NAT', 'type': 'ONE_TO_ONE_NAT',
+                                               'networkTier': 'PREMIUM', 'addressPresent': False}],
+                            'ipv6AccessConfigs': []}]}}
+
+            def effective_firewalls(self):
+                return json.loads(EFFECTIVE_FIREWALLS)
 
         baseline = yogi_possession.possession_preflight(Gate(
             yogi_possession.POSSESSION_FINGERPRINT, dict(yogi_possession.POSSESSION_BASE)))
@@ -503,7 +530,13 @@ class PossessionTest(unittest.TestCase):
                     'zone': 'https://www.googleapis.com/compute/v1/projects/protocols-465723/zones/us-west2-b',
                     'selfLink': ('https://www.googleapis.com/compute/v1/projects/protocols-465723/zones/us-west2-b'
                                  '/instances/' + yogi_possession.INSTANCE),
-                    'networkInterfaces': [{}],
+                    'networkInterfaces': [{
+                        'name': 'nic0', 'stackType': 'IPV4_ONLY',
+                        'network': 'https://www.googleapis.com/compute/v1/projects/protocols-465723/global/networks/default',
+                        'subnetwork': 'https://www.googleapis.com/compute/v1/projects/protocols-465723/regions/us-west2/subnetworks/default',
+                        'accessConfigs': [{'name': 'External NAT', 'type': 'ONE_TO_ONE_NAT', 'networkTier': 'PREMIUM'}],
+                    }],
+                    'tags': {'items': list(yogi_possession.REVIEWED_TAGS)},
                     'metadata': {'fingerprint': state['fingerprint'],
                                  'items': [{'key': key, 'value': value} for key, value in state['items'].items()]},
                 })
@@ -520,6 +553,11 @@ class PossessionTest(unittest.TestCase):
                 if argv[:3] == ['gcloud', 'auth', 'print-access-token']:
                     self.assertEqual(timeout, yogi_possession.TOKEN_TIMEOUT)
                     Result.stdout = 'ya29.not-a-real-token\n'
+                    return Result()
+                if argv[1:5] == ['compute', 'instances', 'network-interfaces', 'get-effective-firewalls']:
+                    self.assertIn('--network-interface=nic0', argv)
+                    self.assertIn('--format=json', argv)
+                    Result.stdout = EFFECTIVE_FIREWALLS
                     return Result()
                 if argv[:4] == ['gcloud', 'compute', 'instances', 'describe']:
                     self.assertEqual(timeout, yogi_possession.DESCRIBE_TIMEOUT)
@@ -838,7 +876,8 @@ class PossessionTest(unittest.TestCase):
 
         drifted_driver = yogi_possession.GcloudDriver(run=drifted, sleep=clock.sleep, clock=clock)
         self.assertEqual(drifted_driver.start(), 'failed')
-        self.assertEqual(drifted_driver.start_report['instanceStatus'], 'mismatch')
+        self.assertEqual(drifted_driver.start_report['describeError'], 'describe-identity')
+        self.assertEqual(drifted_driver.start_report['instanceStatus'], 'RUNNING')
 
         def pending(argv, capture_output=True, text=True, timeout=0):
             class Result:
@@ -881,6 +920,7 @@ class PossessionTest(unittest.TestCase):
         bin_dir.mkdir()
         state = directory / 'describes'
         state.write_text('0')
+        (directory / 'firewalls.json').write_text(EFFECTIVE_FIREWALLS)
         (bin_dir / 'gcloud').write_text(
             '#!/usr/bin/env python3\n'
             'import json, sys\n'
@@ -901,10 +941,18 @@ class PossessionTest(unittest.TestCase):
             '    n = int(state.read_text()); state.write_text(str(n + 1))\n'
             '    status = {0: "TERMINATED", 1: "TERMINATED", 2: "STAGING", 3: "RUNNING"}.get(n, "TERMINATED")\n'
             '    emit({"id": instance, "name": name, "status": status, "zone": zone,\n'
-            '          "selfLink": zone + "/instances/" + name, "networkInterfaces": [{}],\n'
+            '          "selfLink": zone + "/instances/" + name,\n'
+            '          "tags": {"items": ["roseos-yogi-b-20261105", "roseos-yogi-builder"]},\n'
+            '          "networkInterfaces": [{"name": "nic0", "stackType": "IPV4_ONLY",\n'
+            '            "network": "https://www.googleapis.com/compute/v1/projects/protocols-465723/global/networks/default",\n'
+            '            "subnetwork": "https://www.googleapis.com/compute/v1/projects/protocols-465723/regions/us-west2/subnetworks/default",\n'
+            '            "accessConfigs": [{"name": "External NAT", "type": "ONE_TO_ONE_NAT", "networkTier": "PREMIUM"}]}],\n'
             '          "metadata": {"fingerprint": "pSAPI4eI6q4=", "items": [\n'
             '              {"key": "block-project-ssh-keys", "value": "TRUE"},\n'
             '              {"key": "enable-oslogin", "value": "FALSE"}]}})\n'
+            'if args[:4] == ["compute", "instances", "network-interfaces", "get-effective-firewalls"]:\n'
+            f'    print(Path({str(directory / "firewalls.json")!r}).read_text())\n'
+            '    raise SystemExit(0)\n'
             'if args[:3] == ["compute", "instances", "start"]:\n'
             '    emit({"name": "operation-1794068400000-65fb240000000-77777777-88888888",\n'
             '          "operationType": "start", "status": "PENDING", "targetId": instance})\n'
@@ -944,6 +992,256 @@ class PossessionTest(unittest.TestCase):
         self.assertEqual(outcome['stopReport']['instanceStatus'], 'TERMINATED')
         self.assertNotIn('PRIVATE', json.dumps(outcome))
         self.assertNotIn('ya29', proc.stdout)
+
+
+    def _gcloud_instance(self, status, nat=None, identity='2720796557371812468', items=None, raw_id=None):
+        """The compute instances describe --format=json contract: one instance resource, not a status summary."""
+        item_rows = [{'key': key, 'value': value} for key, value in (items or yogi_possession.POSSESSION_BASE).items()]
+        access = {'kind': 'compute#accessConfig', 'name': 'External NAT', 'type': 'ONE_TO_ONE_NAT',
+                  'networkTier': 'PREMIUM'}
+        if nat is not None:
+            access['natIP'] = nat
+        nic = {
+            'kind': 'compute#networkInterface', 'name': 'nic0',
+            'network': 'https://www.googleapis.com/compute/v1/projects/protocols-465723/global/networks/default',
+            'subnetwork': 'https://www.googleapis.com/compute/v1/projects/protocols-465723/regions/us-west2/subnetworks/default',
+            'networkIP': '10.168.0.4', 'stackType': 'IPV4_ONLY', 'fingerprint': 'nic-fingerprint=',
+            'accessConfigs': [access],
+        }
+        body = {
+            'kind': 'compute#instance',
+            'id': yogi_possession.INSTANCE_ID if raw_id is None else raw_id,
+            'name': yogi_possession.INSTANCE,
+            'status': status,
+            'zone': 'https://www.googleapis.com/compute/v1/projects/protocols-465723/zones/us-west2-b',
+            'machineType': 'https://www.googleapis.com/compute/v1/projects/protocols-465723/zones/us-west2-b/machineTypes/n2-standard-16',
+            'cpuPlatform': 'Intel Cascade Lake' if status == 'RUNNING' else None,
+            'networkInterfaces': [nic],
+            'metadata': {'kind': 'compute#metadata', 'fingerprint': 'pSAPI4eI6q4=', 'items': item_rows},
+            'selfLink': ('https://www.googleapis.com/compute/v1/projects/protocols-465723/zones/us-west2-b/instances/'
+                         + yogi_possession.INSTANCE),
+            'tags': {'items': list(yogi_possession.REVIEWED_TAGS)},
+            'scheduling': {'automaticRestart': True, 'onHostMaintenance': 'MIGRATE'},
+            'disks': [{'boot': True, 'source': 'https://www.googleapis.com/compute/v1/projects/protocols-465723/zones/us-west2-b/disks/'
+                       + yogi_possession.INSTANCE}],
+        }
+        if identity != yogi_possession.INSTANCE_ID and raw_id is None:
+            body['id'] = identity
+        if body['cpuPlatform'] is None:
+            del body['cpuPlatform']
+        return json.dumps(body)
+
+    def test_describe_uses_the_gcloud_instance_document(self):
+        expected = ['gcloud', 'compute', 'instances', 'describe', yogi_possession.INSTANCE,
+                    '--project=' + yogi_possession.PROJECT, '--zone=' + yogi_possession.ZONE,
+                    '--format=json', '--quiet']
+
+        def run(argv, capture_output=True, text=True, timeout=0):
+            self.assertEqual(list(argv), expected)
+            self.assertEqual(timeout, yogi_possession.DESCRIBE_TIMEOUT)
+            class Result:
+                returncode = 0
+                stdout = run.stdout
+            return Result()
+        run.stdout = self._gcloud_instance('RUNNING')
+        view = yogi_possession.GcloudDriver(run=run).describe()
+        self.assertEqual(view['status'], 'RUNNING')
+        self.assertEqual(view['fingerprint'], 'pSAPI4eI6q4=')
+        self.assertEqual(view['items'], yogi_possession.POSSESSION_BASE)
+
+        run.stdout = self._gcloud_instance('TERMINATED')
+        self.assertEqual(yogi_possession.GcloudDriver(run=run).describe()['status'], 'TERMINATED')
+
+        run.stdout = self._gcloud_instance('RUNNING', raw_id=int(yogi_possession.INSTANCE_ID))
+        self.assertEqual(yogi_possession.GcloudDriver(run=run).describe()['id'], yogi_possession.INSTANCE_ID)
+
+        run.stdout = self._gcloud_instance('RUNNING', nat='203.0.113.9')
+        addressed = yogi_possession.GcloudDriver(run=run).describe()
+        self.assertEqual(addressed['status'], 'RUNNING')
+        self.assertTrue(addressed['network']['nics'][0]['accessConfigs'][0]['addressPresent'])
+        run.stdout = self._gcloud_instance('TERMINATED')
+        stopped = yogi_possession.GcloudDriver(run=run).describe()
+        self.assertFalse(stopped['network']['nics'][0]['accessConfigs'][0]['addressPresent'])
+        self.assertEqual(yogi_possession.network_identity(addressed), yogi_possession.network_identity(stopped))
+        self.assertNotIn('203.0.113.9', json.dumps(addressed['network']))
+
+        def fail(argv, capture_output=True, text=True, timeout=0):
+            self.assertEqual(list(argv), expected)
+            class Result:
+                returncode = 1
+                stdout = 'ERROR: not the instance body\n'
+            return Result()
+        with self.assertRaises(yogi_possession.DescribeRefused) as failed:
+            yogi_possession.GcloudDriver(run=fail).describe()
+        self.assertEqual(failed.exception.code, 'describe-exit')
+        self.assertEqual(failed.exception.returncode, 1)
+        self.assertEqual(failed.exception.stdout_class, 'other')
+        self.assertNotIn('ERROR', str(failed.exception))
+
+        clock = self._clock()
+        calls = []
+
+        def running_with_address(argv, capture_output=True, text=True, timeout=0):
+            calls.append(list(argv))
+            class Result:
+                returncode = 0
+                stdout = ''
+            if argv[1:4] == ['compute', 'instances', 'start']:
+                Result.stdout = json.dumps({'name': 'operation-1794068600000-65fb260000000-bbbbbbb1-cccccccc',
+                                            'operationType': 'start', 'status': 'DONE',
+                                            'targetId': yogi_possession.INSTANCE_ID, 'progress': 100})
+                return Result()
+            if argv[1:4] == ['compute', 'instances', 'describe']:
+                self.assertEqual(list(argv), expected)
+                Result.stdout = self._gcloud_instance('RUNNING', nat='203.0.113.9')
+                return Result()
+            raise AssertionError(argv)
+
+        driver = yogi_possession.GcloudDriver(run=running_with_address, sleep=clock.sleep, clock=clock)
+        self.assertEqual(driver.start(), 'started')
+        self.assertEqual(driver.start_report['instanceStatus'], 'RUNNING')
+        self.assertIsNone(driver.start_report['describeError'])
+        self.assertNotIn('203.0.113.9', json.dumps(driver.start_report))
+
+        import os
+        import subprocess
+        import sys
+        directory = Path(tempfile.mkdtemp())
+        bin_dir = directory / 'bin'
+        bin_dir.mkdir()
+        (directory / 'firewalls.json').write_text(EFFECTIVE_FIREWALLS)
+        document = self._gcloud_instance('TERMINATED')
+        (bin_dir / 'gcloud').write_text(
+            '#!/usr/bin/env python3\n'
+            'import json, sys\n'
+            'from pathlib import Path\n'
+            'args = sys.argv[1:]\n'
+            'if args[:4] == ["compute", "instances", "network-interfaces", "get-effective-firewalls"]:\n'
+            f'    print(Path({str(directory / "firewalls.json")!r}).read_text())\n'
+            '    raise SystemExit(0)\n'
+            'if args[:3] != ["compute", "instances", "describe"] or "--format=json" not in args:\n'
+            '    raise SystemExit("refusing " + " ".join(args))\n'
+            'if any(word in args for word in ("start", "stop", "set-metadata")):\n'
+            '    raise SystemExit("mutation")\n'
+            'print(' + json.dumps(document) + ')\n')
+        (bin_dir / 'gcloud').chmod(0o755)
+        env = os.environ.copy()
+        env['PATH'] = str(bin_dir) + os.pathsep + env.get('PATH', '')
+        for key in ('GOOGLE_APPLICATION_CREDENTIALS', 'CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT'):
+            env.pop(key, None)
+        cli = _possession_root() / 'yogi_possession.py'
+        proc = subprocess.run([sys.executable, '-B', str(cli), 'describe-instance'], cwd=str(cli.parent),
+                              env=env, capture_output=True, text=True, timeout=30)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        reported = json.loads(proc.stdout)
+        self.assertTrue(reported['readOnly'])
+        self.assertFalse(reported['mutation'])
+        self.assertEqual(reported['status'], 'TERMINATED')
+        self.assertEqual(reported['fingerprint'], 'pSAPI4eI6q4=')
+        self.assertEqual(reported['metadataKeys'], ['block-project-ssh-keys', 'enable-oslogin'])
+        self.assertIsNone(reported['describeError'])
+
+
+    def test_effective_firewall_fixture_shadows_lower_allows_and_rejects_drift(self):
+        import copy
+        raw = EFFECTIVE_FIREWALLS.encode()
+        self.assertEqual(len(raw), 7560)
+        self.assertEqual(hashlib.sha256(raw).hexdigest(),
+                         '64fa8369d59c8e9337518d0e78cd92080575402fc8be6bcd6167460e8e00bd2e')
+        document = json.loads(EFFECTIVE_FIREWALLS)
+        self.assertEqual(set(document), {'firewalls'})
+        self.assertEqual(len(document['firewalls']), 9)
+        decision = yogi_possession.evaluate_inbound(document)
+        self.assertTrue(decision['ok'])
+        self.assertIsNone(decision['code'])
+        for name in ('default-allow-ssh', 'default-allow-rdp', 'default-allow-icmp', 'default-allow-internal',
+                     'aet-uswest2-a--list--connector-tagfw', 'aet-uswest2-a--list--connector-sbntfw',
+                     'roseos-yogi-iap-ssh'):
+            self.assertIn(name, decision['shadowed'])
+        self.assertEqual(yogi_possession.effective_firewall_argv()[1:6],
+                         ['compute', 'instances', 'network-interfaces', 'get-effective-firewalls',
+                          yogi_possession.INSTANCE])
+        self.assertIn('--network-interface=nic0', yogi_possession.effective_firewall_argv())
+
+        def rejected(mutate):
+            body = json.loads(EFFECTIVE_FIREWALLS)
+            mutate(body)
+            found = yogi_possession.evaluate_inbound(body)
+            self.assertFalse(found['ok'])
+            return found['code']
+
+        def add_rule(rule):
+            def mutate(body):
+                body['firewalls'].append(rule)
+            return mutate
+
+        public = {'name': 'public-ssh', 'direction': 'INGRESS', 'priority': 100, 'disabled': False,
+                  'sourceRanges': ['0.0.0.0/0'], 'allowed': [{'IPProtocol': 'tcp', 'ports': ['22']}],
+                  'network': document['firewalls'][0]['network']}
+        self.assertEqual(rejected(add_rule(public)), 'firewall-unreviewed-priority')
+        tied = dict(public, priority=901, name='tied-ssh')
+        self.assertEqual(rejected(add_rule(tied)), 'firewall-unreviewed-priority')
+        ipv6 = {'name': 'ipv6-ssh', 'direction': 'INGRESS', 'priority': 1000, 'disabled': False,
+                'sourceRanges': ['::/0'], 'allowed': [{'IPProtocol': 'tcp', 'ports': ['22']}],
+                'network': document['firewalls'][0]['network']}
+        self.assertEqual(rejected(add_rule(ipv6)), 'firewall-public-inbound')
+        self.assertEqual(rejected(lambda body: body.__setitem__('firewallPolicys', [{'name': 'org'}])),
+                         'firewall-unreviewed-policy')
+        self.assertEqual(rejected(lambda body: body.__setitem__('firewallPolicys', [])),
+                         'firewall-unreviewed-policy')
+        self.assertEqual(rejected(lambda body: body['firewalls'][0].__setitem__('unexpected', True)),
+                         'firewall-unknown-shape')
+
+        def drop_deny(body):
+            body['firewalls'] = [rule for rule in body['firewalls'] if rule['name'] != 'yogi-b-20261105-deny-ingress']
+        self.assertEqual(rejected(drop_deny), 'firewall-baseline')
+
+        disabled = dict(public, disabled=True, name='disabled-public')
+        kept = json.loads(EFFECTIVE_FIREWALLS)
+        kept['firewalls'].append(disabled)
+        self.assertTrue(yogi_possession.evaluate_inbound(kept)['ok'])
+        egress = {'name': 'egress-web', 'direction': 'EGRESS', 'priority': 1000, 'disabled': False,
+                  'destinationRanges': ['0.0.0.0/0'], 'allowed': [{'IPProtocol': 'tcp', 'ports': ['443']}],
+                  'network': document['firewalls'][0]['network']}
+        kept = json.loads(EFFECTIVE_FIREWALLS)
+        kept['firewalls'].append(egress)
+        self.assertTrue(yogi_possession.evaluate_inbound(kept)['ok'])
+
+        class ApiDown:
+            def account(self):
+                return yogi_possession.OPERATOR_ACCOUNT
+            def describe(self):
+                return {'status': 'TERMINATED', 'id': yogi_possession.INSTANCE_ID,
+                        'fingerprint': yogi_possession.POSSESSION_FINGERPRINT,
+                        'items': dict(yogi_possession.POSSESSION_BASE),
+                        'tags': list(yogi_possession.REVIEWED_TAGS),
+                        'network': {'observed': True, 'allocationInferred': False, 'nics': [{
+                            'name': 'nic0', 'stackType': 'IPV4_ONLY',
+                            'network': 'https://www.googleapis.com/compute/v1/projects/protocols-465723/global/networks/default',
+                            'subnetwork': 'https://www.googleapis.com/compute/v1/projects/protocols-465723/regions/us-west2/subnetworks/default',
+                            'accessConfigs': [{'name': 'External NAT', 'type': 'ONE_TO_ONE_NAT',
+                                               'networkTier': 'PREMIUM', 'addressPresent': False}],
+                            'ipv6AccessConfigs': []}]}}
+            def effective_firewalls(self):
+                raise yogi_possession.DescribeRefused('firewall-unreadable', returncode=1)
+            def start(self):
+                raise AssertionError('started')
+        with self.assertRaises(yogi_possession.DescribeRefused) as down:
+            yogi_possession.possession_preflight(ApiDown())
+        self.assertEqual(down.exception.code, 'firewall-unreadable')
+
+        class Untagged(ApiDown):
+            def describe(self):
+                view = ApiDown.describe(self)
+                view['tags'] = ['roseos-yogi-builder']
+                return view
+            def effective_firewalls(self):
+                return json.loads(EFFECTIVE_FIREWALLS)
+            def start(self):
+                raise AssertionError('started')
+        with self.assertRaises(yogi_possession.DescribeRefused) as drift:
+            yogi_possession.possession_preflight(Untagged())
+        self.assertEqual(drift.exception.code, 'firewall-tag-drift')
 
 
 if __name__ == '__main__':
