@@ -838,7 +838,8 @@ class PossessionTest(unittest.TestCase):
 
         drifted_driver = yogi_possession.GcloudDriver(run=drifted, sleep=clock.sleep, clock=clock)
         self.assertEqual(drifted_driver.start(), 'failed')
-        self.assertEqual(drifted_driver.start_report['instanceStatus'], 'mismatch')
+        self.assertEqual(drifted_driver.start_report['describeError'], 'describe-identity')
+        self.assertEqual(drifted_driver.start_report['instanceStatus'], 'RUNNING')
 
         def pending(argv, capture_output=True, text=True, timeout=0):
             class Result:
@@ -944,6 +945,147 @@ class PossessionTest(unittest.TestCase):
         self.assertEqual(outcome['stopReport']['instanceStatus'], 'TERMINATED')
         self.assertNotIn('PRIVATE', json.dumps(outcome))
         self.assertNotIn('ya29', proc.stdout)
+
+
+    def _gcloud_instance(self, status, nat=None, identity='2720796557371812468', items=None, raw_id=None):
+        """The compute instances describe --format=json contract: one instance resource, not a status summary."""
+        item_rows = [{'key': key, 'value': value} for key, value in (items or yogi_possession.POSSESSION_BASE).items()]
+        nic = {
+            'kind': 'compute#networkInterface',
+            'network': 'https://www.googleapis.com/compute/v1/projects/protocols-465723/global/networks/default',
+            'networkIP': '10.168.0.4',
+            'stackType': 'IPV4_ONLY',
+            'fingerprint': 'nic-fingerprint=',
+        }
+        if nat is not None:
+            nic['accessConfigs'] = [{'kind': 'compute#accessConfig', 'name': 'External NAT',
+                                     'type': 'ONE_TO_ONE_NAT', 'natIP': nat, 'networkTier': 'PREMIUM'}]
+        body = {
+            'kind': 'compute#instance',
+            'id': yogi_possession.INSTANCE_ID if raw_id is None else raw_id,
+            'name': yogi_possession.INSTANCE,
+            'status': status,
+            'zone': 'https://www.googleapis.com/compute/v1/projects/protocols-465723/zones/us-west2-b',
+            'machineType': 'https://www.googleapis.com/compute/v1/projects/protocols-465723/zones/us-west2-b/machineTypes/n2-standard-16',
+            'cpuPlatform': 'Intel Cascade Lake' if status == 'RUNNING' else None,
+            'networkInterfaces': [nic],
+            'metadata': {'kind': 'compute#metadata', 'fingerprint': 'pSAPI4eI6q4=', 'items': item_rows},
+            'selfLink': ('https://www.googleapis.com/compute/v1/projects/protocols-465723/zones/us-west2-b/instances/'
+                         + yogi_possession.INSTANCE),
+            'scheduling': {'automaticRestart': True, 'onHostMaintenance': 'MIGRATE'},
+            'disks': [{'boot': True, 'source': 'https://www.googleapis.com/compute/v1/projects/protocols-465723/zones/us-west2-b/disks/'
+                       + yogi_possession.INSTANCE}],
+        }
+        if identity != yogi_possession.INSTANCE_ID and raw_id is None:
+            body['id'] = identity
+        if body['cpuPlatform'] is None:
+            del body['cpuPlatform']
+        return json.dumps(body)
+
+    def test_describe_uses_the_gcloud_instance_document(self):
+        expected = ['gcloud', 'compute', 'instances', 'describe', yogi_possession.INSTANCE,
+                    '--project=' + yogi_possession.PROJECT, '--zone=' + yogi_possession.ZONE,
+                    '--format=json', '--quiet']
+
+        def run(argv, capture_output=True, text=True, timeout=0):
+            self.assertEqual(list(argv), expected)
+            self.assertEqual(timeout, yogi_possession.DESCRIBE_TIMEOUT)
+            class Result:
+                returncode = 0
+                stdout = run.stdout
+            return Result()
+        run.stdout = self._gcloud_instance('RUNNING')
+        view = yogi_possession.GcloudDriver(run=run).describe()
+        self.assertEqual(view['status'], 'RUNNING')
+        self.assertEqual(view['fingerprint'], 'pSAPI4eI6q4=')
+        self.assertEqual(view['items'], yogi_possession.POSSESSION_BASE)
+
+        run.stdout = self._gcloud_instance('TERMINATED')
+        self.assertEqual(yogi_possession.GcloudDriver(run=run).describe()['status'], 'TERMINATED')
+
+        run.stdout = self._gcloud_instance('RUNNING', raw_id=int(yogi_possession.INSTANCE_ID))
+        self.assertEqual(yogi_possession.GcloudDriver(run=run).describe()['id'], yogi_possession.INSTANCE_ID)
+
+        run.stdout = self._gcloud_instance('RUNNING', nat='203.0.113.9')
+        with self.assertRaises(yogi_possession.DescribeRefused) as raised:
+            yogi_possession.GcloudDriver(run=run).describe()
+        self.assertEqual(raised.exception.code, 'describe-external-address')
+        self.assertEqual(raised.exception.status, 'RUNNING')
+        self.assertTrue(raised.exception.terminal)
+
+        def fail(argv, capture_output=True, text=True, timeout=0):
+            self.assertEqual(list(argv), expected)
+            class Result:
+                returncode = 1
+                stdout = 'ERROR: not the instance body\n'
+            return Result()
+        with self.assertRaises(yogi_possession.DescribeRefused) as failed:
+            yogi_possession.GcloudDriver(run=fail).describe()
+        self.assertEqual(failed.exception.code, 'describe-exit')
+        self.assertEqual(failed.exception.returncode, 1)
+        self.assertEqual(failed.exception.stdout_class, 'other')
+        self.assertNotIn('ERROR', str(failed.exception))
+
+        clock = self._clock()
+        calls = []
+
+        def running_with_address(argv, capture_output=True, text=True, timeout=0):
+            calls.append(list(argv))
+            class Result:
+                returncode = 0
+                stdout = ''
+            if argv[1:4] == ['compute', 'instances', 'start']:
+                Result.stdout = json.dumps({'name': 'operation-1794068600000-65fb260000000-bbbbbbb1-cccccccc',
+                                            'operationType': 'start', 'status': 'DONE',
+                                            'targetId': yogi_possession.INSTANCE_ID, 'progress': 100})
+                return Result()
+            if argv[1:4] == ['compute', 'instances', 'describe']:
+                self.assertEqual(list(argv), expected)
+                Result.stdout = self._gcloud_instance('RUNNING', nat='203.0.113.9')
+                return Result()
+            raise AssertionError(argv)
+
+        driver = yogi_possession.GcloudDriver(run=running_with_address, sleep=clock.sleep, clock=clock)
+        self.assertEqual(driver.start(), 'failed')
+        self.assertEqual(driver.start_report['describeError'], 'describe-external-address')
+        self.assertEqual(driver.start_report['instanceStatus'], 'RUNNING')
+        self.assertEqual(driver.start_report['operation']['status'], 'DONE')
+        self.assertEqual(sum(1 for argv in calls if argv[1:4] == ['compute', 'instances', 'describe']), 1)
+        self.assertLess(clock.now, 2)
+        self.assertNotIn('203.0.113.9', json.dumps(driver.start_report))
+
+        import os
+        import subprocess
+        import sys
+        directory = Path(tempfile.mkdtemp())
+        bin_dir = directory / 'bin'
+        bin_dir.mkdir()
+        document = self._gcloud_instance('TERMINATED')
+        (bin_dir / 'gcloud').write_text(
+            '#!/usr/bin/env python3\n'
+            'import json, sys\n'
+            'args = sys.argv[1:]\n'
+            'if args[:3] != ["compute", "instances", "describe"] or "--format=json" not in args:\n'
+            '    raise SystemExit("refusing " + " ".join(args))\n'
+            'if any(word in args for word in ("start", "stop", "set-metadata")):\n'
+            '    raise SystemExit("mutation")\n'
+            'print(' + json.dumps(document) + ')\n')
+        (bin_dir / 'gcloud').chmod(0o755)
+        env = os.environ.copy()
+        env['PATH'] = str(bin_dir) + os.pathsep + env.get('PATH', '')
+        for key in ('GOOGLE_APPLICATION_CREDENTIALS', 'CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT'):
+            env.pop(key, None)
+        cli = _possession_root() / 'yogi_possession.py'
+        proc = subprocess.run([sys.executable, '-B', str(cli), 'describe-instance'], cwd=str(cli.parent),
+                              env=env, capture_output=True, text=True, timeout=30)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        reported = json.loads(proc.stdout)
+        self.assertTrue(reported['readOnly'])
+        self.assertFalse(reported['mutation'])
+        self.assertEqual(reported['status'], 'TERMINATED')
+        self.assertEqual(reported['fingerprint'], 'pSAPI4eI6q4=')
+        self.assertEqual(reported['metadataKeys'], ['block-project-ssh-keys', 'enable-oslogin'])
+        self.assertIsNone(reported['describeError'])
 
 
 if __name__ == '__main__':

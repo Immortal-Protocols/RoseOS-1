@@ -55,6 +55,8 @@ SPENT_ZONE_OPERATIONS = frozenset({
     'operation-1794027069962-65fa87a38f91f-6bc72969-2fdd5f07',
     'operation-1794066928521-65fb1c1fa4fa7-28daba8e-205f8105',
     'operation-1794066937204-65fb1c27ed0fd-78949f7d-9a3a6b1b',
+    'operation-1794068119100-65fb208f11af8-c71e25d6-b4bccbbf',
+    'operation-1794068240866-65fb210331ca7-8bb70fef-dd412780',
 })
 GITHUB_CONTEXT = ('GITHUB_ACTIONS', 'ACTIONS_ID_TOKEN_REQUEST_URL', 'ACTIONS_ID_TOKEN_REQUEST_TOKEN',
                   'ACTIONS_RUNTIME_TOKEN', 'ACTIONS_RUNTIME_URL', 'ACTIONS_CACHE_URL', 'GITHUB_TOKEN')
@@ -90,6 +92,29 @@ print(json.dumps({'builder': seen, 'runnerProcess': runner, 'active': systemctl(
 
 class Refused(Exception):
     pass
+
+
+class DescribeRefused(Refused):
+    """One instance describe did not return a usable view. The code is ours; it is not the response body."""
+
+    def __init__(self, code, returncode=None, status='', stdout_class=''):
+        super().__init__(code)
+        self.code = code
+        self.returncode = returncode
+        self.status = status
+        self.stdout_class = stdout_class
+        self.terminal = code not in ('describe-exit', 'describe-not-json', 'describe-timeout')
+
+
+def _stdout_class(text):
+    stripped = (text or '').lstrip()
+    if not stripped:
+        return 'empty'
+    if stripped[0] == '{':
+        return 'object'
+    if stripped[0] == '[':
+        return 'array'
+    return 'other'
 
 
 def manual_context(env):
@@ -447,9 +472,13 @@ def _phase_error(phase, state, report):
     report = report or {}
     operation = report.get('operation') or {}
     observed = report.get('observed') or ('failed' if state == 'failed' else 'unresolved')
+    detail = (' describe ' + report['describeError']) if report.get('describeError') else ''
+    if report.get('returncode') is not None:
+        detail += ' exit ' + str(report['returncode'])
     return (phase + ' ' + observed + ': operation ' + (operation.get('status') or 'none')
             + ' instance ' + (report.get('instanceStatus') or 'unknown')
-            + ((' error ' + operation['error']) if operation.get('error') else ''))
+            + ((' error ' + operation['error']) if operation.get('error') else '')
+            + detail)
 
 
 OPERATOR_ACCOUNT = 'grok-bots@protocols-465723.iam.gserviceaccount.com'
@@ -501,37 +530,55 @@ class GcloudDriver:
         return active[0]
 
     def describe(self):
-        result = self._cmd(['gcloud', 'compute', 'instances', 'describe', INSTANCE, f'--project={PROJECT}',
-                            f'--zone={ZONE}', '--format=json', '--quiet'], DESCRIBE_TIMEOUT)
-        if result.returncode:
-            raise Refused('describe of the replacement failed')
+        """Read one instance. This is the only instance-describe used by preflight, start, and stop.
+
+        gcloud's exit 0 is not enough. A policy refusal keeps the parsed status when the body was an object.
+        The 2026-11-07 start polled this call 40 times, recorded only 'unreadable', then the same call
+        accepted the terminated instance.
+        """
+        argv = ['gcloud', 'compute', 'instances', 'describe', INSTANCE, f'--project={PROJECT}',
+                f'--zone={ZONE}', '--format=json', '--quiet']
         try:
-            seen = json.loads(result.stdout)
+            result = self.run(argv, capture_output=True, text=True, timeout=DESCRIBE_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            raise DescribeRefused('describe-timeout') from None
+        stdout = result.stdout if isinstance(result.stdout, str) else ''
+        if result.returncode:
+            raise DescribeRefused('describe-exit', returncode=result.returncode, stdout_class=_stdout_class(stdout))
+        try:
+            seen = json.loads(stdout)
         except ValueError:
-            raise Refused('describe was not JSON') from None
+            raise DescribeRefused('describe-not-json', returncode=result.returncode,
+                                  stdout_class=_stdout_class(stdout)) from None
+        if not isinstance(seen, dict):
+            raise DescribeRefused('describe-not-object', returncode=result.returncode, stdout_class='array')
+        status = seen.get('status') if isinstance(seen.get('status'), str) else ''
         zone = str(seen.get('zone') or '').rstrip('/').rsplit('/', 1)[-1]
         link = f'/projects/{PROJECT}/zones/{ZONE}/instances/{INSTANCE}'
         if str(seen.get('id')) != INSTANCE_ID or seen.get('name') != INSTANCE or zone != ZONE \
                 or not str(seen.get('selfLink') or '').endswith(link):
-            raise Refused('replacement identity does not match the saved instance id')
+            raise DescribeRefused('describe-identity', status=status)
         items = {}
         meta = seen.get('metadata') if isinstance(seen.get('metadata'), dict) else {}
         for entry in meta.get('items') or []:
             if not isinstance(entry, dict) or not isinstance(entry.get('key'), str) or not isinstance(entry.get('value'), str):
-                raise Refused('instance metadata is not a string map')
+                raise DescribeRefused('describe-metadata', status=status)
             if entry['key'] in items:
-                raise Refused('instance metadata has a duplicate key')
+                raise DescribeRefused('describe-metadata', status=status)
             items[entry['key']] = entry['value']
         fingerprint = meta.get('fingerprint')
         if not isinstance(fingerprint, str) or not fingerprint:
-            raise Refused('instance metadata has no fingerprint')
-        address = None
+            raise DescribeRefused('describe-fingerprint', status=status)
         for nic in seen.get('networkInterfaces') or []:
-            for access in (nic.get('accessConfigs') or []) if isinstance(nic, dict) else []:
-                address = address or access.get('natIP')
-        if address:
-            raise Refused('replacement has an external address')
-        return {'status': seen.get('status'), 'fingerprint': fingerprint, 'items': items, 'id': str(seen.get('id'))}
+            if not isinstance(nic, dict):
+                raise DescribeRefused('describe-network', status=status)
+            for access in nic.get('accessConfigs') or []:
+                if isinstance(access, dict) and access.get('natIP'):
+                    raise DescribeRefused('describe-external-address', status=status)
+            for access in nic.get('ipv6AccessConfigs') or []:
+                if isinstance(access, dict) and access.get('externalIpv6'):
+                    raise DescribeRefused('describe-external-address', status=status)
+        return {'status': status, 'fingerprint': fingerprint, 'items': items, 'id': str(seen.get('id'))}
 
     def _blank_report(self):
         return {'observed': 'unresolved', 'instanceStatus': '', 'operation': None, 'polls': 0}
@@ -605,11 +652,17 @@ class GcloudDriver:
     def _read_instance_status(self, report):
         try:
             view = self.describe()
-        except Refused as exc:
-            report['instanceStatus'] = 'mismatch' if 'identity' in str(exc) else 'unreadable'
-            return None
+        except DescribeRefused as exc:
+            report['describeError'] = exc.code
+            report['returncode'] = exc.returncode
+            report['stdoutClass'] = exc.stdout_class or None
+            report['instanceStatus'] = exc.status or ('mismatch' if exc.code == 'describe-identity' else 'unreadable')
+            return None, exc.terminal
+        report['describeError'] = None
+        report['returncode'] = None
+        report['stdoutClass'] = None
         report['instanceStatus'] = str(view.get('status') or '')
-        return view
+        return view, False
 
     def _poll_phase(self, report, expected_type, want_status, budget):
         """Poll the submitted operation and the instance until want_status, the budget, or a hard error.
@@ -629,8 +682,8 @@ class GcloudDriver:
             if operation and operation.get('error'):
                 report['observed'] = 'failed'
                 return 'failed'
-            view = self._read_instance_status(report)
-            if report.get('instanceStatus') == 'mismatch':
+            view, terminal = self._read_instance_status(report)
+            if terminal:
                 report['observed'] = 'failed'
                 return 'failed'
             if view and view.get('status') == want_status and (not operation or operation.get('status') == 'DONE'):
@@ -864,16 +917,36 @@ def write_possession_plan(api_path, client_path, out, operation_id=None, environ
     return plan
 
 
+def describe_instance(driver=None):
+    """Read the replacement once. No start, stop, metadata write, or SSH."""
+    driver = driver or GcloudDriver()
+    try:
+        view = driver.describe()
+    except DescribeRefused as exc:
+        return {'readOnly': True, 'mutation': False, 'describeError': exc.code,
+                'returncode': exc.returncode, 'stdoutClass': exc.stdout_class or None,
+                'status': exc.status or None, 'id': None, 'fingerprint': None, 'metadataKeys': []}
+    return {'readOnly': True, 'mutation': False, 'describeError': None, 'returncode': 0,
+            'stdoutClass': 'object', 'status': view['status'], 'id': view['id'],
+            'fingerprint': view['fingerprint'], 'metadataKeys': sorted(view['items'])}
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description='Strict IAP possession plan. --execute is the operator run; tests inject a driver.')
-    parser.add_argument('action', choices=('handshake-plan', 'handshake'))
-    parser.add_argument('--hostkeys', required=True)
-    parser.add_argument('--client-public', required=True)
-    parser.add_argument('--out', required=True)
+    parser.add_argument('action', choices=('handshake-plan', 'handshake', 'describe-instance'))
+    parser.add_argument('--hostkeys')
+    parser.add_argument('--client-public')
+    parser.add_argument('--out')
     parser.add_argument('--identity', help='local mode 0600 private key; required with handshake --execute')
     parser.add_argument('--execute', action='store_true')
     args = parser.parse_args(argv)
     try:
+        if args.action == 'describe-instance':
+            result = describe_instance()
+            print(json.dumps(result, sort_keys=True))
+            return 0 if result.get('describeError') is None else 1
+        if not args.hostkeys or not args.client_public or not args.out:
+            parser.error('handshake needs --hostkeys, --client-public and --out')
         if args.action == 'handshake' and args.execute:
             if not args.identity:
                 parser.error('handshake --execute needs --identity')
