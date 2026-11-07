@@ -9,13 +9,16 @@ synthetic root.
 """
 import argparse
 import base64
+import ctypes
 import datetime
 import errno
 import json
 import os
 from pathlib import Path
 import re
+import secrets
 import stat
+import subprocess
 import sys
 
 ACCOUNT = 'pixelbuild'
@@ -33,7 +36,14 @@ MAX_AUTH_BYTES = 1_000_000
 COMMENT_RE = re.compile(r'^roseos-yogi-possess-[0-9a-f]{32}$')
 EXPIRY_RE = re.compile(r'^\d{14}Z$')
 BLOB_RE = re.compile(r'^[A-Za-z0-9+/]+={0,2}$')
-VERSION_RE = re.compile(r'^OpenSSH_9\.2p1(\s|$)')
+# OpenSSH 9.2p1 `sshd -V` prints SSH_VERSION, which is "OpenSSH_9.2" with no portable suffix.
+# `ssh -V` and the protocol banner include "p1". A 9.6 binary is a different string.
+VERSION_RE = re.compile(r'^OpenSSH_9\.2(,|$)')
+KEY_RE = re.compile(r'(?:^|\s)ssh-ed25519\s+([A-Za-z0-9+/]+=*)(?=\s|$)')
+TEMP_RE = re.compile(r'^\.authorized_keys\.[0-9a-f]{16}\.tmp$')
+PRIMARY_KEY_FILES = {'.ssh/authorized_keys', '%h/.ssh/authorized_keys', '/home/pixelbuild/.ssh/authorized_keys'}
+SECONDARY_KEY_FILES = {'.ssh/authorized_keys2', '%h/.ssh/authorized_keys2'}
+ALLOWED_KEY_FILES = PRIMARY_KEY_FILES | SECONDARY_KEY_FILES
 BINDING_JSON = None
 BACKWARD_CLOCK = (
     'sshd compares expiry-time to the guest clock. A guest clock stepped backward after '
@@ -41,15 +51,20 @@ BACKWARD_CLOCK = (
     'that step. The 20 minute value is the sshd UTC expiry, not a controller-enforced kill.'
 )
 QUALIFIED_PARSER = (
-    'expiry-time grammar is the OpenSSH 9.2p1 parser: YYYYMMDDHHMMSSZ means UTC. '
-    'This source did not run an OpenSSH 9.2 binary. A local sshd fixture reports its own version.'
+    'OpenSSH 9.2p1 sshd -V prints OpenSSH_9.2 with no p1 suffix. '
+    'That was read from a portable 9.2p1 build and from the Debian 9.2p1-2+deb12u10 sshd binary. '
+    'The protocol banner is OpenSSH_9.2p1 and is not the sshd -V gate. '
+    'YYYYMMDDHHMMSSZ is UTC. A forced sleep is signal 9, status 137, because the watchdog is in the group it kills. '
+    'OpenSSH 9.6 is a separate local fixture and is not this gate.'
 )
+WATCHDOG_STATUS = 137
 
 
 class GuestRefused(Exception):
     def __init__(self, code):
         super().__init__(code)
         self.code = code
+        self.detail = {}
 
 
 def comment_for(operation_id):
@@ -59,6 +74,7 @@ def comment_for(operation_id):
 
 
 def version_allowed(text):
+    """True only for the sshd -V line verified on OpenSSH 9.2p1."""
     first = (text or '').splitlines()[0].strip() if isinstance(text, str) else ''
     return VERSION_RE.match(first) is not None
 
@@ -97,48 +113,131 @@ def account_from_passwd(text):
     raise GuestRefused('passwd-missing')
 
 
-def sshd_config_decision(text):
-    """Root sshd_config only. Include and Match make the effective path unproven."""
+def _config_value(line):
+    """Return (keyword, value). A bare keyword or `Keyword=` has an empty value and does not index it."""
+    text = line.split('#', 1)[0].strip()
+    if not text:
+        return None
+    head = text.split(None, 1)[0]
+    if '=' in head:
+        keyword, _, value = head.partition('=')
+        extra = text[len(head):].strip()
+        if extra:
+            value = (value + ' ' + extra).strip()
+        return keyword.lower(), value.strip()
+    parts = text.split(None, 1)
+    if len(parts) == 1:
+        return parts[0].lower(), ''
+    return parts[0].lower(), parts[1].strip()
+
+
+def _key_file_decision(value):
+    tokens = [item for item in (value or '').split() if item]
+    if not tokens:
+        return {'ok': False, 'code': 'sshd-config-malformed', 'path': value or ''}
+    if any(token not in ALLOWED_KEY_FILES for token in tokens):
+        return {'ok': False, 'code': 'authorized-keys-path', 'path': value}
+    if not any(token in PRIMARY_KEY_FILES for token in tokens):
+        return {'ok': False, 'code': 'authorized-keys-path', 'path': value}
+    return {'ok': True, 'code': 'authorized-keys-path', 'path': tokens[0], 'tokens': tokens}
+
+
+def decision_from_effective(text):
+    """Parse `sshd -T` output for pixelbuild. This is the effective config, after Include and Match."""
+    if not isinstance(text, str) or not text.strip():
+        return {'ok': False, 'code': 'sshd-config-unreadable'}
+    values = {}
+    guarded = {'pubkeyauthentication', 'authorizedkeyscommand', 'permituserenvironment', 'allowusers',
+               'denyusers', 'authorizedkeysfile'}
+    for raw in text.splitlines():
+        parsed = _config_value(raw)
+        if parsed is None:
+            continue
+        keyword, value = parsed
+        if keyword in guarded and keyword in values:
+            return {'ok': False, 'code': 'sshd-config-malformed'}
+        values.setdefault(keyword, value)
+    if values.get('pubkeyauthentication', 'yes') != 'yes':
+        return {'ok': False, 'code': 'pubkey-authentication'}
+    if values.get('authorizedkeyscommand', 'none') not in ('none', ''):
+        return {'ok': False, 'code': 'authorized-keys-command'}
+    if values.get('permituserenvironment', 'no') != 'no':
+        return {'ok': False, 'code': 'permit-user-environment'}
+    allow = values.get('allowusers')
+    if allow is not None and 'pixelbuild' not in allow.split():
+        return {'ok': False, 'code': 'allow-users'}
+    if 'pixelbuild' in values.get('denyusers', '').split():
+        return {'ok': False, 'code': 'deny-users'}
+    if 'authorizedkeysfile' not in values:
+        return {'ok': False, 'code': 'sshd-config-malformed'}
+    return _key_file_decision(values.get('authorizedkeysfile', ''))
+
+
+def sshd_config_decision(text, effective=None):
+    """Raw files with Include or Match need an sshd -T dump. A bare keyword cannot raise IndexError."""
+    if effective:
+        return decision_from_effective(effective)
     if not isinstance(text, str) or not text.strip():
         return {'ok': False, 'code': 'sshd-config-unreadable'}
     authorized = None
     for raw in text.splitlines():
-        line = raw.split('#', 1)[0].strip()
-        if not line:
+        parsed = _config_value(raw)
+        if parsed is None:
             continue
-        if re.match(r'(?i)^(include|match)\b', line):
-            return {'ok': False, 'code': 'sshd-config-unproven'}
-        if re.match(r'(?i)^authorizedkeysfile\b', line):
+        keyword, value = parsed
+        if keyword in ('include', 'match'):
+            return {'ok': False, 'code': 'sshd-config-needs-effective'}
+        if keyword == 'pubkeyauthentication' and value not in ('yes', ''):
+            return {'ok': False, 'code': 'pubkey-authentication'}
+        if keyword == 'authorizedkeyscommand' and value not in ('none', ''):
+            return {'ok': False, 'code': 'authorized-keys-command'}
+        if keyword == 'permituserenvironment' and value not in ('no', ''):
+            return {'ok': False, 'code': 'permit-user-environment'}
+        if keyword == 'allowusers' and 'pixelbuild' not in value.split():
+            return {'ok': False, 'code': 'allow-users'}
+        if keyword == 'denyusers' and 'pixelbuild' in value.split():
+            return {'ok': False, 'code': 'deny-users'}
+        if keyword == 'authorizedkeysfile':
             if authorized is not None:
-                return {'ok': False, 'code': 'sshd-config-unproven'}
-            authorized = line.split(None, 1)[1] if len(line.split(None, 1)) == 2 else ''
+                return {'ok': False, 'code': 'sshd-config-malformed'}
+            authorized = value
     if authorized is None:
-        return {'ok': True, 'code': 'default-authorized-keys', 'path': '.ssh/authorized_keys'}
-    tokens = authorized.split()
-    allowed = {'.ssh/authorized_keys', '%h/.ssh/authorized_keys', '/home/pixelbuild/.ssh/authorized_keys'}
-    if tokens != [tokens[0]] or tokens[0] not in allowed:
-        return {'ok': False, 'code': 'authorized-keys-path', 'path': authorized}
-    return {'ok': True, 'code': 'authorized-keys-path', 'path': tokens[0]}
+        return {'ok': True, 'code': 'default-authorized-keys', 'path': '.ssh/authorized_keys',
+                'tokens': ['.ssh/authorized_keys']}
+    return _key_file_decision(authorized)
 
 
-def ancestor_allows(uid, mode, require_root, account_uid):
-    """`/home` is root-owned on the guest. A synthetic root may be owned by the account."""
+def sshd_effective_text(sshd, config_path):
+    """Run sshd -T for pixelbuild. A failing parser is a refusal, not an exception from this process."""
+    try:
+        completed = subprocess.run(
+            [sshd, '-T', '-f', str(config_path), '-C', 'user=pixelbuild,host=localhost,addr=127.0.0.1'],
+            capture_output=True, text=True, check=False)
+    except OSError:
+        raise GuestRefused('sshd-config-unproven') from None
+    if completed.returncode != 0 or not completed.stdout.strip():
+        raise GuestRefused('sshd-config-unproven')
+    return completed.stdout
+
+
+def ancestor_allows(uid, gid, mode, require_root, account_uid, account_gid):
+    """`/home` is root-owned mode 0755 on the guest. A synthetic root may be owned by the account."""
     if stat.S_IMODE(mode) != ANCESTOR_MODE:
         raise GuestRefused('ancestor-mode')
     if require_root:
-        if uid != 0:
+        if uid != 0 or gid != 0:
             raise GuestRefused('ancestor-owner')
         return
-    if uid not in (0, account_uid):
+    if uid not in (0, account_uid) or gid not in (0, account_gid):
         raise GuestRefused('ancestor-owner')
 
 
-def evidence_from_outputs(*, version_text, config_text, passwd_text, now, sync_text):
+def evidence_from_outputs(*, version_text, config_text, passwd_text, now, sync_text, effective_text=None):
     if not isinstance(sync_text, str) or sync_text.strip() != 'yes':
         raise GuestRefused('clock-unsynchronized')
     if not version_allowed(version_text):
         raise GuestRefused('sshd-version')
-    decision = sshd_config_decision(config_text)
+    decision = sshd_config_decision(config_text, effective_text)
     if not decision['ok']:
         raise GuestRefused(decision['code'])
     uid, gid, shell = account_from_passwd(passwd_text)
@@ -148,7 +247,7 @@ def evidence_from_outputs(*, version_text, config_text, passwd_text, now, sync_t
         'guestUnix': int(now), 'synchronized': True, 'sshdVersion': version_text.splitlines()[0].strip(),
         'sshdConfig': config_text, 'passwd': passwd_text, 'uid': uid, 'gid': gid, 'shell': shell,
         'authorizedKeys': decision['path'], 'qualifiedParser': QUALIFIED_PARSER,
-        'backwardClock': BACKWARD_CLOCK,
+        'backwardClock': BACKWARD_CLOCK, 'sshdEffective': effective_text,
     }
 
 
@@ -160,7 +259,8 @@ def watchdog_source(deadline, probe, unit):
         raise GuestRefused('probe')
     if not isinstance(unit, str) or not re.fullmatch(r'[A-Za-z0-9@._:-]+', unit):
         raise GuestRefused('unit')
-    if 'SSH_ORIGINAL_COMMAND' in probe or 'shell=True' in probe or 'os.system' in probe:
+    if any(token in probe for token in (
+            'SSH_ORIGINAL_COMMAND', 'shell=True', 'os.system', 'setsid', 'start_new_session', 'setpgrp')):
         raise GuestRefused('probe')
     probe_b64 = base64.b64encode(probe.encode()).decode()
     return (
@@ -169,11 +269,13 @@ def watchdog_source(deadline, probe, unit):
         f'PROBE_B64 = {json.dumps(probe_b64)}\n'
         f'UNIT = {json.dumps(unit)}\n'
         'def _kill_group(_signum=None, _frame=None):\n'
+        '    # The watchdog is in this process group, so SIGKILL applies to it too.\n'
+        '    # The status a waiter observes is 137. os._exit here runs only if this process survives.\n'
         '    try:\n'
         '        os.killpg(os.getpgrp(), 9)\n'
         '    except OSError:\n'
         '        pass\n'
-        '    os._exit(124)\n'
+        '    os._exit(125)\n'
         'try:\n'
         '    os.setpgrp()\n'
         'except OSError as error:\n'
@@ -264,14 +366,113 @@ def authorized_line(blob, comment, expiry, command):
 
 
 def parse_key_line(line):
-    """Blob and comment from the key at the end of a line. Options may contain spaces."""
-    match = re.search(r'(?:^|\s)ssh-ed25519 ([A-Za-z0-9+/]+=*) (\S+)$', line or '')
-    if not match:
+    """One ssh-ed25519 blob, with or without a comment. Options may contain spaces.
+
+    Trailing whitespace still counts. Two key blobs, or more than one comment token, are ambiguous.
+    """
+    if not isinstance(line, str) or line.strip() == '' or line.strip().startswith('#'):
         return None
-    return match.group(1), match.group(2)
+    matches = list(KEY_RE.finditer(line.strip()))
+    if not matches:
+        return None
+    if len(matches) != 1:
+        raise GuestRefused('key-ambiguous')
+    blob = matches[0].group(1)
+    rest = line.strip()[matches[0].end():].strip()
+    if rest == '':
+        return blob, ''
+    tokens = rest.split()
+    if len(tokens) != 1:
+        raise GuestRefused('key-ambiguous')
+    return blob, tokens[0]
 
 
-def _open_dir(parent, name, *, uid, modes):
+def _temp_token():
+    return secrets.token_hex(8)
+
+
+def _list_names(dirfd):
+    """Names in an already-open directory. Does not use a /proc path."""
+    libc = ctypes.CDLL(None, use_errno=True)
+
+    class Dirent(ctypes.Structure):
+        _fields_ = [
+            ('d_ino', ctypes.c_uint64), ('d_off', ctypes.c_int64), ('d_reclen', ctypes.c_ushort),
+            ('d_type', ctypes.c_ubyte), ('d_name', ctypes.c_char * 256),
+        ]
+
+    duped = os.dup(dirfd)
+    libc.fdopendir.restype = ctypes.c_void_p
+    handle = libc.fdopendir(duped)
+    if not handle:
+        os.close(duped)
+        raise GuestRefused('directory-open')
+    libc.readdir.argtypes = [ctypes.c_void_p]
+    libc.readdir.restype = ctypes.POINTER(Dirent)
+    libc.closedir.argtypes = [ctypes.c_void_p]
+    names = []
+    try:
+        while True:
+            entry = libc.readdir(handle)
+            if not entry:
+                break
+            name = entry.contents.d_name.split(b'\x00', 1)[0].decode('utf-8', 'replace')
+            if name not in ('.', '..'):
+                names.append(name)
+    finally:
+        libc.closedir(handle)
+    return names
+
+
+def _stat_name(parent, name, *, directory):
+    flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC
+    if directory:
+        flags |= os.O_DIRECTORY
+    try:
+        fd = os.open(name, flags, dir_fd=parent)
+    except OSError as error:
+        if error.errno == errno.ELOOP:
+            raise GuestRefused('symlink') from None
+        raise GuestRefused('directory-race') from None
+    try:
+        return os.fstat(fd)
+    finally:
+        os.close(fd)
+
+
+def recover_owned_leftovers(dirfd, uid, gid):
+    """Remove only our regular temp files. Anything else with that shape stays visible and blocks."""
+    removed, blocked = [], []
+    for name in _list_names(dirfd):
+        if not TEMP_RE.fullmatch(name):
+            continue
+        try:
+            fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=dirfd)
+        except OSError:
+            blocked.append(name)
+            continue
+        try:
+            st = os.fstat(fd)
+        finally:
+            os.close(fd)
+        safe = stat.S_ISREG(st.st_mode) and st.st_nlink == 1 and st.st_uid == uid and st.st_gid == gid
+        if not safe:
+            blocked.append(name)
+            continue
+        try:
+            os.unlink(name, dir_fd=dirfd)
+        except OSError:
+            blocked.append(name)
+            continue
+        removed.append(name)
+    if blocked:
+        error = GuestRefused('temp-leftover')
+        error.detail = {'blockedLeftovers': blocked, 'removedTemps': removed}
+        raise error
+    return removed
+
+
+def _open_dir(parent, name, *, uid, gid, modes):
     try:
         fd = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=parent)
     except OSError as error:
@@ -280,11 +481,9 @@ def _open_dir(parent, name, *, uid, modes):
         raise GuestRefused('directory-open') from None
     st = os.fstat(fd)
     mode = stat.S_IMODE(st.st_mode)
-    if not stat.S_ISDIR(st.st_mode) or mode not in modes or mode & 0o022 or st.st_uid != uid:
+    if not stat.S_ISDIR(st.st_mode) or mode not in modes or mode & 0o022 or st.st_uid != uid or st.st_gid != gid:
         os.close(fd)
-        if mode == 0o600:
-            raise GuestRefused('directory-mode')
-        if st.st_uid != uid:
+        if st.st_uid != uid or st.st_gid != gid:
             raise GuestRefused('directory-owner')
         raise GuestRefused('directory-mode')
     return fd
@@ -345,68 +544,78 @@ def _join_lines(parts, newline):
     return body.encode()
 
 
-def _write_auth(dirfd, uid, gid, previous_inode, payload):
-    tmp = f'.authorized_keys.{os.getpid()}.tmp'
-    fd = os.open(tmp, os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW | os.O_CLOEXEC, FILE_MODE, dir_fd=dirfd)
+def _write_all(fd, payload):
+    view = payload
+    while view:
+        wrote = os.write(fd, view)
+        if wrote <= 0:
+            raise GuestRefused('auth-write')
+        view = view[wrote:]
+    os.fsync(fd)
+
+
+def _write_auth(dirfd, parent_fd, uid, gid, read_stat, payload):
+    removed = recover_owned_leftovers(dirfd, uid, gid)
+    tmp = f'.authorized_keys.{_temp_token()}.tmp'
+    try:
+        fd = os.open(tmp, os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW | os.O_CLOEXEC, FILE_MODE, dir_fd=dirfd)
+    except FileExistsError:
+        raise GuestRefused('auth-temp') from None
     try:
         os.fchown(fd, uid, gid)
         os.fchmod(fd, FILE_MODE)
-        view = payload
-        while view:
-            wrote = os.write(fd, view)
-            if wrote <= 0:
-                raise GuestRefused('auth-write')
-            view = view[wrote:]
-        os.fsync(fd)
+        _write_all(fd, payload)
         st = os.fstat(fd)
         if st.st_uid != uid or st.st_gid != gid or stat.S_IMODE(st.st_mode) != FILE_MODE or st.st_nlink != 1:
             raise GuestRefused('auth-write')
-    except GuestRefused:
+    except Exception:
         os.close(fd)
         try:
             os.unlink(tmp, dir_fd=dirfd)
         except OSError:
             pass
         raise
-    except OSError:
-        os.close(fd)
-        try:
-            os.unlink(tmp, dir_fd=dirfd)
-        except OSError:
-            pass
-        raise GuestRefused('auth-write') from None
     os.close(fd)
-    current = os.fstat(dirfd)
-    if current.st_ino != previous_inode:
+    directory_now = _stat_name(parent_fd, SSH_DIR, directory=True)
+    held = os.fstat(dirfd)
+    if (directory_now.st_dev, directory_now.st_ino) != (held.st_dev, held.st_ino):
         try:
             os.unlink(tmp, dir_fd=dirfd)
         except OSError:
             pass
         raise GuestRefused('directory-race')
-    os.rename(f'/proc/self/fd/{dirfd}/{tmp}', f'/proc/self/fd/{dirfd}/{AUTH_NAME}')
+    file_now = _stat_name(dirfd, AUTH_NAME, directory=False)
+    if (file_now.st_dev, file_now.st_ino) != (read_stat.st_dev, read_stat.st_ino):
+        try:
+            os.unlink(tmp, dir_fd=dirfd)
+        except OSError:
+            pass
+        raise GuestRefused('directory-race')
+    os.rename(tmp, AUTH_NAME, src_dir_fd=dirfd, dst_dir_fd=dirfd)
     os.fsync(dirfd)
     checked, written = _read_auth(dirfd)
     if checked.st_uid != uid or written != payload:
         raise GuestRefused('auth-write')
-    return written
+    return written, removed
 
 
 def _walk(root, uid, gid, require_root_ancestor):
     root_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
     fds = [root_fd]
     try:
-        home_fd = _open_dir(root_fd, HOME_NAME, uid=0 if require_root_ancestor else uid, modes={ANCESTOR_MODE})
+        home_uid, home_gid = (0, 0) if require_root_ancestor else (uid, gid)
+        home_fd = _open_dir(root_fd, HOME_NAME, uid=home_uid, gid=home_gid, modes={ANCESTOR_MODE})
         fds.append(home_fd)
-        if require_root_ancestor:
-            ancestor_allows(os.fstat(home_fd).st_uid, os.fstat(home_fd).st_mode, True, uid)
-        user_fd = _open_dir(home_fd, USER_DIR, uid=uid, modes=HOME_MODES)
+        home_stat = os.fstat(home_fd)
+        ancestor_allows(home_stat.st_uid, home_stat.st_gid, home_stat.st_mode, require_root_ancestor, uid, gid)
+        user_fd = _open_dir(home_fd, USER_DIR, uid=uid, gid=gid, modes=HOME_MODES)
         fds.append(user_fd)
-        ssh_fd = _open_dir(user_fd, SSH_DIR, uid=uid, modes={SSH_MODE})
+        ssh_fd = _open_dir(user_fd, SSH_DIR, uid=uid, gid=gid, modes={SSH_MODE})
         fds.append(ssh_fd)
         st, data = _read_auth(ssh_fd)
         if st.st_uid != uid or st.st_gid != gid:
             raise GuestRefused('auth-owner')
-        return ssh_fd, fds, os.fstat(ssh_fd).st_ino, data
+        return ssh_fd, user_fd, fds, st, data
     except Exception:
         for fd in reversed(fds):
             os.close(fd)
@@ -421,68 +630,82 @@ def _close(fds):
             pass
 
 
+def _foreign_payload(parts, newline, line=None):
+    kept = list(parts) if line is None else [item for item in parts if item != line]
+    if not kept:
+        return b''
+    body = '\n'.join(kept)
+    if newline:
+        body += '\n'
+    return body.encode()
+
+
 def _mutate(root, uid, gid, *, mode, blob, comment, line=None):
     require_root = os.path.abspath(root) == '/'
-    ssh_fd, fds, inode, data = _walk(root, uid, gid, require_root)
+    ssh_fd, user_fd, fds, read_stat, data = _walk(root, uid, gid, require_root)
     try:
+        removed = recover_owned_leftovers(ssh_fd, uid, gid)
         parts, newline = _split_lines(data)
         parsed = []
         for item in parts:
             found = parse_key_line(item)
             parsed.append(found)
         blob_hits = [item for item, found in zip(parts, parsed) if found and found[0] == blob]
-        comment_hits = [item for item, found in zip(parts, parsed) if found and found[1] == comment]
+        comment_hits = [item for item, found in zip(parts, parsed) if found and found[1] == comment and comment]
         if mode == 'install':
             if line in parts:
-                return {'rewritten': False, 'idempotent': True, 'line': line}
+                return {'rewritten': False, 'idempotent': True, 'line': line, 'tempFilesRemoved': len(removed),
+                        'removedTemps': removed}
             if blob_hits or comment_hits:
                 raise GuestRefused('duplicate-key')
-            updated = list(parts)
-            updated.append(line)
-            payload = _join_lines(updated, True if newline or parts else True)
-            # A non-empty original without a trailing newline keeps foreign bytes and gains a separator.
             if parts and not newline:
                 payload = ('\n'.join(parts) + '\n' + line).encode()
             elif not parts:
                 payload = (line + '\n').encode()
             else:
                 payload = ('\n'.join(parts) + '\n' + line + '\n').encode()
-            written = _write_auth(ssh_fd, uid, gid, inode, payload)
-            if not written.startswith(data.splitlines()[0]) and data:
-                raise GuestRefused('auth-write')
-            return {'rewritten': True, 'idempotent': False, 'line': line}
-        matches = [item for item in comment_hits if item in blob_hits]
+            _written, more = _write_auth(ssh_fd, user_fd, uid, gid, read_stat, payload)
+            removed.extend(more)
+            return {'rewritten': True, 'idempotent': False, 'line': line, 'tempFilesRemoved': len(removed),
+                    'removedTemps': removed}
+        matches = [item for item in parts if parse_key_line(item) and parse_key_line(item)[0] == blob
+                   and (not comment or parse_key_line(item)[1] == comment)]
+        # A blob with no comment, or a different comment, is not an exact revoke and is not rewritten.
+        if any(found and found[0] == blob and found[1] != comment for found in parsed):
+            raise GuestRefused('revoke-foreign')
+        if any(found and found[1] == comment and found[0] != blob for found in parsed if comment):
+            raise GuestRefused('revoke-foreign')
         if len(matches) > 1:
             raise GuestRefused('revoke-ambiguous')
-        if any(item not in matches for item in comment_hits) or any(item not in matches for item in blob_hits):
-            raise GuestRefused('revoke-foreign')
         if not matches:
-            return {'rewritten': False, 'removed': False, 'absent': True}
+            return {'rewritten': False, 'removed': False, 'absent': True, 'tempFilesRemoved': len(removed),
+                    'removedTemps': removed}
         if line is not None and matches != [line]:
             raise GuestRefused('revoke-not-exact')
-        kept = [item for item in parts if item != matches[0]]
-        if newline:
-            payload = ('\n'.join(kept) + ('\n' if kept else '')).encode() if kept else b''
-            if kept:
-                payload = ('\n'.join(kept) + '\n').encode()
-            else:
-                payload = b''
+        payload = _foreign_payload(parts, newline, matches[0])
+        if data.startswith(matches[0].encode()):
+            prefix = data.split(matches[0].encode(), 1)[0]
         else:
-            payload = '\n'.join(kept).encode()
-        written = _write_auth(ssh_fd, uid, gid, inode, payload)
+            prefix = b''
+        written, more = _write_auth(ssh_fd, user_fd, uid, gid, read_stat, payload)
+        removed.extend(more)
         if matches[0].encode() in written:
             raise GuestRefused('revoke-residue')
-        return {'rewritten': True, 'removed': True, 'absent': False, 'line': matches[0]}
+        if prefix and not written.startswith(prefix) and prefix.strip():
+            raise GuestRefused('revoke-residue')
+        return {'rewritten': True, 'removed': True, 'absent': False, 'line': matches[0],
+                'tempFilesRemoved': len(removed), 'removedTemps': removed}
     finally:
-        _close([ssh_fd] if ssh_fd not in fds else fds)
+        _close(fds)
 
 
-def install(root, *, blob, operation_id, probe, unit, now_unix, synchronized, sshd_version, sshd_config, passwd_text):
+def install(root, *, blob, operation_id, probe, unit, now_unix, synchronized, sshd_version, sshd_config,
+            passwd_text, sshd_effective=None):
     if synchronized is not True:
         raise GuestRefused('clock-unsynchronized')
     if not version_allowed(sshd_version):
         raise GuestRefused('sshd-version')
-    decision = sshd_config_decision(sshd_config)
+    decision = sshd_config_decision(sshd_config, sshd_effective)
     if not decision['ok']:
         raise GuestRefused(decision['code'])
     uid, gid, shell = account_from_passwd(passwd_text)
@@ -532,16 +755,18 @@ def main(argv=None):
         return 1
     try:
         if os.path.abspath(args.root) == '/':
-            import subprocess
             import time
             version = subprocess.run(['sshd', '-V'], capture_output=True, text=True, check=False)
             sync = subprocess.run(['timedatectl', 'show', '-p', 'NTPSynchronized', '--value'],
                                   capture_output=True, text=True, check=False)
+            effective = subprocess.run(
+                ['sshd', '-T', '-C', 'user=pixelbuild,host=localhost,addr=127.0.0.1'],
+                capture_output=True, text=True, check=False)
             evidence = evidence_from_outputs(
                 version_text=(version.stderr or version.stdout),
                 config_text=Path('/etc/ssh/sshd_config').read_text(),
                 passwd_text=Path('/etc/passwd').read_text(),
-                now=time.time(), sync_text=sync.stdout)
+                now=time.time(), sync_text=sync.stdout, effective_text=effective.stdout)
         else:
             evidence = binding['evidence']
         action = binding.get('action')
@@ -550,7 +775,7 @@ def main(argv=None):
                 args.root, blob=binding['blob'], operation_id=binding['operationId'], probe=binding['probe'],
                 unit=binding['unit'], now_unix=evidence['guestUnix'], synchronized=evidence['synchronized'],
                 sshd_version=evidence['sshdVersion'], sshd_config=evidence['sshdConfig'],
-                passwd_text=evidence['passwd'])
+                passwd_text=evidence['passwd'], sshd_effective=evidence.get('sshdEffective'))
         elif action == 'revoke':
             result = revoke(args.root, blob=binding['blob'], comment=binding['comment'],
                             passwd_text=evidence['passwd'], exact_line=binding.get('exactLine'))
