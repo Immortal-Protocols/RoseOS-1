@@ -151,9 +151,13 @@ class Vision(unittest.TestCase):
                 ('', 'gear'), ('', 'back arrow'), ('', 'heart'), ('Like', 'heart'), ('Comment', 'speech bubble'),
                 ('New post', ''), ('Create post', ''), ('', 'plus'), ('Share', 'share'), ('Send feedback', ''),
                 ('Message', ''), ('Send read receipts', ''), ('Confirm', ''), ('Undo', ''), ('', 'camera'),
-                ('', 'microphone'), ('', 'emoji'), ('Quote', ''), ('Boost post', ''), ('', 'up arrow'))
+                ('', 'microphone'), ('', 'emoji'), ('Quote', ''), ('Boost post', ''), ('', 'up arrow'), ('', 'arrow'))
     # Once a draft is typed, "Reply" and the paper plane send it.
-    DRAFT_FINAL = (('Reply', ''), ('Reply', 'arrow'), ('', 'paper plane'), ('', 'paper airplane'), ('', 'paper-airplane'))
+    DRAFT_FINAL = (('Reply', ''), ('Reply', 'arrow'), ('', 'paper plane'), ('', 'paper airplane'), ('', 'paper-airplane'),
+                   ('', 'arrow'), ('', 'up arrow'), ('SMS', 'arrow'), ('', 'right arrow'), ('', 'arrow_upward'))
+    # Navigation arrows stay ordinary after typing.
+    DRAFT_ORDINARY = (('', 'back arrow'), ('', 'left arrow'), ('', 'down arrow'), ('', 'dropdown arrow'),
+                      ('', 'arrow_back'), ('', 'expand arrow'), ('', 'heart'), ('Search', ''))
     # Descriptions are not labels: only a description that is itself a final label counts.
     DESCRIBED = ('the Send button', 'the latest post', 'Like button on the post', 'the message field next to the send button',
                  'the camera icon by the send button', 'Send read receipts toggle', 'the post from NASA', 'Share post button')
@@ -167,6 +171,8 @@ class Vision(unittest.TestCase):
             self.assertFalse(final_target(label, icon, False), (label, icon))
         for label, icon in self.DRAFT_FINAL:
             self.assertTrue(final_target(label, icon, True), (label, icon))
+        for label, icon in self.DRAFT_ORDINARY:
+            self.assertFalse(final_target(label, icon, True), (label, icon))
         for target in self.DESCRIBED:
             self.assertFalse(final_target('', '', False, target), target)
         self.assertTrue(final_target('', '', False, 'Send'))
@@ -211,6 +217,13 @@ class Vision(unittest.TestCase):
         s.view.refresh()
         self.assertFalse(self.call(s, 'tap_point', frame_id=s.view.frame_id, x=500, y=500, target='Reply', label='Reply', icon='', effect='interact')['ok'])
 
+    def test_a_refused_type_is_not_a_draft(self):
+        s = self.opened()
+        with patch.object(s.view.workspace, 'command', return_value={'status': 'error', 'error': 'No focused editable field'}):
+            self.assertFalse(self.call(s, 'type_text', frame_id=s.view.frame_id, text='On my way', replace=True)['ok'])
+        s.view.refresh()
+        self.assertTrue(self.call(s, 'tap_point', frame_id=s.view.frame_id, x=500, y=500, target='Reply', label='Reply', icon='', effect='interact')['ok'])
+
     def test_a_refusal_the_task_moved_past_is_not_its_result(self):
         s = self.opened()
         self.assertFalse(self.call(s, 'tap_point', frame_id='old', x=500, y=500, target='input', label='', icon='', effect='interact')['ok'])
@@ -254,6 +267,7 @@ class VisionOptIn(unittest.TestCase):
         tools = {t['name'] for t in opening['tools']}
         self.assertIn('tap', tools)  # the accessibility tools, with their send/purchase guard
         self.assertNotIn('complete_task', tools)
+        self.assertIn('There is no finish tool.', opening['instructions'])  # as on main: finish is not in the catalog
 
     def test_the_flag_needs_codex_and_the_real_phone(self):
         from rose import app

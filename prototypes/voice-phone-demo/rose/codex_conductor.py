@@ -271,7 +271,7 @@ class CodexConductor:
                            for t in phone_tools(bool(getattr(self.phone, 'real', False)), bool(getattr(self.phone, 'vision', False)))
                            if t['function']['name'] not in ('finish', *DIRECT)]
                 catalog.append(tool('observe', 'Read a fresh screen before choosing an action.'))
-                policy = REAL_PHONE_SYSTEM
+                policy = REAL_PHONE_SYSTEM + '\nThere is no finish tool.'  # REAL_PHONE_SYSTEM speaks of finishing
                 if visual:
                     from .vision_phone import VISION_POLICY, vision_tools
                     catalog, policy = vision_tools(), VISION_POLICY

@@ -7,6 +7,8 @@ import math
 import re
 import time
 
+# Results that do not say whether the phone acted: an input may still have landed.
+UNANSWERED = (None, 'timeout', 'disconnected', 'offline')
 # Line breaks a field or IME can treat as Enter (a send or submit): vision typing never carries one.
 LINE_BREAKS = ('\n', '\r', '\x85', '\u2028', '\u2029')
 
@@ -21,7 +23,7 @@ Never invent accessibility ids, infer controls from a text tree, or repeat an un
 Tap the visible input first, verify focus in the next image, then type_text into it.
 Typing does not press Enter or send, and text cannot contain line breaks. Check the new image to verify the entered text.
 If no image is available, report the blocker; do not act or fall back to another screen.
-For tap_point give the control's visible text exactly as shown (label) and, for an icon, its plain name (icon),
+For tap_point give the control's visible text exactly as shown (label) and, for an icon, what it is and does (icon),
 describe the target, and declare its effect honestly. Only ordinary
 interaction is permitted by this backend's current policy; final sends, purchases, publication,
 deletion and security changes remain owner actions. Do not type passwords or secrets.
@@ -34,8 +36,12 @@ your final reply. A dispatched input is not success; verify the result in the ne
 # the accessibility path's view-id hints (tasks._ID_SEND, tasks._ID_PURCHASE).
 _ICON_SEND = re.compile(r"(?:\b|_)(?:send|submit)(?:\b|_)", re.I)
 _ICON_PURCHASE = re.compile(r"(?:\b|_)(?:buy|pay|payment|purchase|checkout)(?:\b|_)", re.I)
-# The paper-plane glyph sends a typed draft; before a draft it opens direct messages or a share sheet.
-_PLANE = re.compile(r"\bpaper[\s_-]?(?:air)?plane\b", re.I)
+# The paper-plane and arrow glyphs send a typed draft ("up arrow" in a composer); before a draft the plane opens direct
+# messages or a share sheet. A navigation arrow is not a send.
+_PLANE = re.compile(r"\bpaper[\s_-]?(?:air)?plane\b|\barrow", re.I)
+_NAV_ARROW = re.compile(r"\b(?:back|left|down|downward|previous|prev|expand|collapse|dropdown|drop[\s-]?down|menu|close|"
+                        r"undo|redo|refresh|reload|swap|sort|navigate|navigation|chevron)\b|arrow_?(?:back|left|downward|drop)",
+                        re.I)
 
 
 def final_target(label: str, icon: str, typed: bool, target: str = "") -> bool:
@@ -43,7 +49,7 @@ def final_target(label: str, icon: str, typed: bool, target: str = "") -> bool:
 
     The accessibility path's own label rule (tasks._final_control) on the control's visible text as the model read it
     from the screenshot, and on its icon name (a content description); its view-id rule on the icon name; and, once a
-    draft is typed, the paper plane. The free-text target description is checked only with the label rule, as before:
+    draft is typed, the paper plane or a non-navigation arrow. The free-text target description is checked only with the label rule, as before:
     describing a control is not a label ("the Send button at the top" is not "Send"), and guessing from it either
     misses sends or refuses feed posts and settings. Best effort: a model that misreads the label is still breaking the
     policy it was given."""
@@ -51,7 +57,8 @@ def final_target(label: str, icon: str, typed: bool, target: str = "") -> bool:
 
     icon_words = " ".join(re.sub(r"[_\-]+", " ", icon).split())
     return bool(_final_control(label, typed=typed) or _final_control(icon_words, typed=typed)
-                or _ICON_SEND.search(icon) or _ICON_PURCHASE.search(icon) or (typed and _PLANE.search(icon))
+                or _ICON_SEND.search(icon) or _ICON_PURCHASE.search(icon)
+                or (typed and _PLANE.search(icon) and not _NAV_ARROW.search(icon))
                 or _final_control(target, typed=typed))
 
 
@@ -66,8 +73,8 @@ def vision_tools():
         t('open_app', 'Open only this thread\'s app in its background workspace.', app=string),
         t('observe', 'Get a fresh screenshot and frame_id. No accessibility tree is read.'),
         t('tap_point', 'Tap a visible target in the supplied frame. Read the returned image to verify. label: the '
-          'control\'s visible text exactly as shown ("" only when it shows none). icon: the icon\'s plain name, such as '
-          '"send arrow", "paper plane", "heart" ("" when it has none).',
+          'control\'s visible text exactly as shown ("" only when it shows none). icon: what the icon is and does, such as '
+          '"send arrow", "back arrow", "paper plane", "heart" ("" when it has none).',
           frame_id=string, x=coordinate, y=coordinate, target=string, label=string, icon=string,
           effect={'type': 'string', 'enum': ['interact', 'send_message', 'purchase', 'publish', 'delete', 'security']}),
         t('swipe', 'Swipe between visible image coordinates, including scrolling.',
@@ -163,10 +170,13 @@ class VisionSession(RealSession):
             action = 'back'
         # Consume before dispatch, including timeouts: never retry an input on the same image.
         self.frame_id = None
+        typed = self._typed
         if name == 'type_text':
             self._typed = True  # dispatched: a timeout or lost reply may still have typed the draft
         result = self.workspace.command(action, **command)
         ok = result.get('status') in ('action_accepted', 'gesture_dispatched')
+        if name == 'type_text' and not ok and result.get('status') not in UNANSWERED:
+            self._typed = typed  # the controller answered and refused (no focused field, a password field): nothing typed
         time.sleep(SETTLE_S)
         self.refresh()
         return {'ok': ok, 'changed': False, 'result': 'Input dispatched; verify its effect in the new screenshot.' if ok else _ws_why(result),

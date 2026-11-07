@@ -86,8 +86,8 @@ existing policy. Vision taps declare their effect and describe their target; the
 rejects final-action effects. Each tap also names the control's visible text (`label`)
 and icon (`icon`) as the model reads them from the screenshot; the accessibility path's
 own send/purchase label rule applies to them exactly as to an accessibility label (the
-icon name also as a view-id hint), and once a draft is typed "Reply" and the paper plane
-count as sends. The free-text description of the target is not a label and is judged
+icon name also as a view-id hint), and once a draft is typed "Reply", the paper plane and
+any arrow other than a navigation arrow count as sends. The free-text description of the target is not a label and is judged
 only by that same rule. Both rely on the
 model's visual interpretation, rather than an independent accessibility-label check.
 Passwords and secrets remain owner input.
