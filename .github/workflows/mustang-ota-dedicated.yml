@@ -1,6 +1,7 @@
 # Manual only. The lane is identity-bound; runtime stays unbound, so guard refuses before any VM start.
 # Builder job is self-hosted on roseos-mustang-builder and has no signer token.
-# The signer job is stock ubuntu-24.04 and is the only job that may OIDC-login as the existing signer.
+# The signer job is the only job that may OIDC-login as the existing signer.
+# It targets group roseos-mustang-signer and label mustang-signer-4core. Admission stays closed.
 # Guard, controller, publisher and cleanup are GitHub-hosted.
 # Lifetime is selected only by real registration evidence. The VM STOPs itself after four hours if cleanup does not.
 # No provisioning, runner registration, key bootstrap or policy reclaim.
@@ -239,7 +240,9 @@ jobs:
     needs:
     - builder
     if: inputs.dry_run == false && inputs.source_only == false && needs.builder.result == 'success'
-    runs-on: ubuntu-24.04
+    runs-on:
+      group: roseos-mustang-signer
+      labels: mustang-signer-4core
     timeout-minutes: 360
     permissions:
       contents: read

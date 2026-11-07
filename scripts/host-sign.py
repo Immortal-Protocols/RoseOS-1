@@ -8,8 +8,12 @@ ROSE_CANDIDATE_SHA, BUILD_NUMBER, BUILD_DATETIME, OUT_DIR and ROSE_RELEASE_DIR s
 2. derive the release script from the source tree's script/generate-release.sh: truncate before
    img_from_target_files (OTA only; with the opt-in host.sign.factory, keep the factory tail instead: see
    derive_release_script), source the absolute script/common.sh, point PERSISTENT_KEY_DIR at the
-   discovered key directory and replace script/decrypt-keys with host-decrypt-keys.py (file passphrase). Each
-   anchor must occur exactly once; original and derived hashes are recorded;
+   discovered key directory and replace script/decrypt-keys with host-decrypt-keys.py (file passphrase).
+   The upstream script cds into the unpacked otatools tree before sourcing
+   device/common/clear-factory-images-variables.sh and invoking script/generate-metadata, so those two
+   references are rewritten to the same checkout as common.sh. generate-metadata is run with the trusted
+   Python interpreter because the reviewed file is not executable. Each anchor must occur exactly once;
+   original and derived hashes are recorded;
 3. read the pinned PIXEL_OS_SIGNING_* versions with the job's short-lived signer identity into owner-only RAM,
    validate the archive and discover the unique pinned key directory;
 4. run the derived script and map its outputs: signed target-files, the OTA, the public certificate and AVB key
@@ -198,6 +202,7 @@ def derive_release_script(original, common_sh, key_dir, passfile, release_keys, 
     decrypt = once(r'script/decrypt-keys\s+(\S+)', text)
     text = text[:decrypt.start()] + ' '.join(map(shlex.quote, (python, helper))) + ' ' + decrypt.group(1) + ' ' + \
         shlex.quote(str(passfile)) + text[decrypt.end():]
+    text = bind_checkout_helpers(text, common_sh, python)
     once(r'^KEY_DIR=keys$', text, re.M)
     for path in (release_keys, wrapper_dir):
         if not re.fullmatch(r'/[\w./-]+', str(path)):
@@ -223,6 +228,51 @@ def derive_release_script(original, common_sh, key_dir, passfile, release_keys, 
             lines.insert(i, 'rose_trace_exit_trap() { printf \'{"event":"exit-trap","wall":%s,"pid":%d}\\n\' '
                 f'"$EPOCHREALTIME" $$ >> {shlex.quote(str(trace))} 2>/dev/null || true; }}\n')
     return ''.join(lines)
+
+def bind_checkout_helpers(text, common_sh, python):
+    """Bind the helpers that run after cd into the otatools tree to common.sh's checkout.
+
+    A missing anchor means this is not the upstream release script. A repeated anchor is drift.
+    """
+    variables = list(re.finditer(r'^source device/common/clear-factory-images-variables\.sh$', text, re.M))
+    metadata = list(re.finditer(r'^script/generate-metadata(?:\s+(\S+))?$', text, re.M))
+    if not variables and not metadata:
+        return text
+    if len(variables) != 1 or len(metadata) != 1:
+        raise AdapterFailed('release script helper anchor is not unique')
+    common = Path(common_sh)
+    if common.name != 'common.sh' or common.parent.name != 'script':
+        raise AdapterFailed('release helper is not a plain checkout file')
+    checkout = common.parent.parent
+    variable_path = checkout_helper(checkout, 'device/common/clear-factory-images-variables.sh')
+    metadata_path = checkout_helper(checkout, 'script/generate-metadata')
+    interpreter = Path(python)
+    resolved_interpreter = interpreter.resolve()
+    if not interpreter.is_absolute() or not re.fullmatch(r'/[\w./-]+', str(interpreter)) \
+            or not resolved_interpreter.is_file() or resolved_interpreter.is_symlink():
+        raise AdapterFailed('release helper interpreter is not an absolute file')
+    text = text[:variables[0].start()] + 'source ' + shlex.quote(str(variable_path)) + text[variables[0].end():]
+    metadata = list(re.finditer(r'^script/generate-metadata(?:\s+(\S+))?$', text, re.M))
+    if len(metadata) != 1:
+        raise AdapterFailed('release script helper anchor is not unique')
+    argument = metadata[0].group(1) or ''
+    replacement = shlex.quote(str(interpreter)) + ' ' + shlex.quote(str(metadata_path))
+    if argument:
+        replacement += ' ' + argument
+    text = text[:metadata[0].start()] + replacement + text[metadata[0].end():]
+    if re.search(r'^source device/common/clear-factory-images-variables\.sh$', text, re.M) \
+            or re.search(r'^script/generate-metadata\b', text, re.M):
+        raise AdapterFailed('release script helper stayed relative to the working directory')
+    return text
+
+def checkout_helper(checkout, relative):
+    path = Path(checkout) / relative
+    if not re.fullmatch(r'/[\w./-]+', str(path)) or path.is_symlink() or not path.is_file():
+        raise AdapterFailed('release helper is not a plain checkout file')
+    resolved = path.resolve()
+    if Path(checkout).resolve() not in resolved.parents:
+        raise AdapterFailed('release helper left the checkout')
+    return path
 
 FACTORY_VARIABLES = r'^source device/common/clear-factory-images-variables\.sh$'
 FACTORY_SIGN_START = r'^sign_target_files_apks '
