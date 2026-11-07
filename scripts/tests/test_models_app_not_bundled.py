@@ -8,8 +8,10 @@ These tests keep it out of:
 
 Retired, not erased: the models-v0 signing-bootstrap profile and its signer identity, key and secrets stay (no key or
 secret is deleted), and so does the already-published rose-models-2 prerelease in pixel-ota (never Latest). The app's
-unsigned CI build (models-android.yml) and its source go next, on Home's side: that artifact only fed the removed
-models-sign route. Core's cloud Models serving, its auth and the Rose Agent backend are untouched."""
+unsigned CI build (models-android.yml), its source (workspace/models/android) and its JNI adapter
+(workspace/models/rose-chat-android, whose exports bind dev.pixel.models.NativeAgent) are removed too. Core's chat
+core (rose-chat-core, still tested by models-rust.yml), cloud Models serving, its auth and the Rose Agent backend
+are untouched."""
 import json
 from pathlib import Path
 import re
@@ -71,14 +73,19 @@ class NotBundled(unittest.TestCase):
         workflows = sorted((ROOT/'.github/workflows').glob('*.yml'))
         self.assertGreater(len(workflows), 10)
         for path in workflows:
-            if path.name == 'models-android.yml':  # the app's unsigned CI build, removed next on Home's side
-                continue
             text = path.read_text()
             self.assertNotIn(PACKAGE, text, path.name)
             self.assertNotRegex(text, r'models-(sign|signer|signing|publish|publication)\b', path.name)
         for path in sorted((ROOT/'scripts').glob('*.py')) + sorted((ROOT/'scripts').glob('*.sh')):
             self.assertNotIn(PACKAGE, path.read_text(errors='ignore'), path.name)
         self.assertNotIn('models', (ROOT/'scripts/sign-apk.py').read_text().lower())  # no Models diagnostic hook
+
+    def test_the_app_source_and_its_build_are_gone(self):
+        # Removed with the app: its source, its unsigned CI build and its JNI adapter. Nothing can build it again.
+        for path in ('workspace/models/android', 'workspace/models/rose-chat-android', '.github/workflows/models-android.yml'):
+            self.assertFalse((ROOT/path).exists(), path)
+        self.assertTrue((ROOT/'workspace/models/rose-chat-core').is_dir())  # Core's chat core stays (models-rust.yml)
+        self.assertTrue((ROOT/'.github/workflows/models-rust.yml').is_file())
 
     def test_the_signer_record_stays_without_a_route(self):
         # Kept: the retired signer's identity record. No key or secret is deleted; nothing dispatches it any more.
