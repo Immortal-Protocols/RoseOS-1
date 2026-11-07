@@ -26,8 +26,53 @@ fetch() {
     rm -f "$tmp"
   fi
 }
+health() {
+  local runner_home=$home/runner
+  local node_bin=$tools/node/node-v24.22.2-linux-x64/bin/node
+  local aapt_bin=$tools/android-sdk/build-tools/android-15/aapt
+  local apksigner_bin=$tools/android-sdk/build-tools/android-15/apksigner
+  local listener_bin=$runner_home/bin/Runner.Listener
+  as_runner() {
+    # Stay out of the operator home, then enter the runner home as that user.
+    # sudo --chdir is rejected by the guest sudoers policy, so env performs the chdir.
+    ( cd /tmp && sudo -H -u "$user" -- /usr/bin/env --chdir "$runner_home" -- "$@" )
+  }
+  require_runner_exec() {
+    local label=$1 path=$2
+    if ! as_runner test -x "$path"; then
+      refuse "$label is not executable by $user: $path"
+    fi
+  }
+  require_version() {
+    local label=$1 expected="$2" out
+    shift 2
+    if ! out=$(as_runner "$@" 2>&1); then
+      refuse "$label failed as $user in $runner_home: ${out:-no output}"
+    fi
+    out=${out//$'\r'/}
+    out=${out%$'\n'}
+    [[ "$out" == "$expected" ]] || refuse "$label version is '${out}', expected ${expected}"
+  }
+  require_runner_exec node "$node_bin"
+  require_version node v24.22.2 "$node_bin" --version
+  require_runner_exec aapt "$aapt_bin"
+  require_version aapt 'Android Asset Packaging Tool, v0.2-11948202' "$aapt_bin" version
+  require_runner_exec apksigner "$apksigner_bin"
+  require_version apksigner 0.9 "$apksigner_bin" --version
+  require_runner_exec 'runner listener' "$listener_bin"
+  require_version 'runner listener' 2.338.2 "$listener_bin" --version
+  require_runner_exec run.sh "$runner_home/run.sh"
+}
 if [[ "${1:-}" == --check-fetch ]]; then
   fetch "$2" "$3" "$4"
+  exit 0
+fi
+if [[ "${1:-}" == --check-health ]]; then
+  [[ -n ${MUSTANG_BOOTSTRAP_HOME:-} ]] || refuse 'health check home is unset'
+  home=$MUSTANG_BOOTSTRAP_HOME
+  tools=$home/tools
+  user=${MUSTANG_BOOTSTRAP_USER:-mustang-runner}
+  health
   exit 0
 fi
 seen=$(curl --fail --silent --show-error --max-time 5 -H 'Metadata-Flavor: Google' http://metadata.google.internal/computeMetadata/v1/instance/id) || refuse 'instance identity unreadable'
@@ -77,7 +122,4 @@ sudo install -o "$user" -g "$user" -m 0750 "$root/scripts/mustang-ephemeral-gues
 sudo install -m 0644 "$root/os/build-only/mustang-ephemeral-runner.service" /etc/systemd/system/mustang-ephemeral-runner.service
 sudo systemctl daemon-reload
 sudo systemctl enable mustang-ephemeral-runner.service
-test -x "$tools/node/node-v24.22.2-linux-x64/bin/node"
-test -x "$tools/android-sdk/build-tools/android-15/aapt"
-test -x "$tools/android-sdk/build-tools/android-15/apksigner"
-test -x "$home/runner/run.sh"
+health

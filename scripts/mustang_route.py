@@ -10,11 +10,13 @@ This module prints bindings, blockers and reviewed commands. It does not start
 a VM, register a runner, allocate a build, sign, or publish.
 """
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
 import re
 import sys
+import xml.etree.ElementTree as ET
 
 import mustang_lane
 
@@ -152,7 +154,7 @@ def blockers(root=ROOT):
                       'detail': 'Run 41884368820 has no artifacts, a null compile-step conclusion, and allocatedBuild null. '
                                 'The former owner has no authoritative ledger. Do not guess whether it consumed a number and do not inspect Frankel. '
                                 'The last confirmed public Mustang allocation is 2026110401. '
-                                'A later build needs a new numbering epoch above 9999123199. No number is selected.'})
+                                'No replacement number is selected, and 9999123199 is only the old date allocator\'s maximum output, not the next build.'})
     if runtime.get('appInputsRecord') is None:
         items.append({'code': 'app-inputs-unadmitted',
                       'detail': 'The private Frankel 2026110501 export is twelve files. Archive transfer and hash were not verified, so it is not admitted.'})
@@ -235,6 +237,9 @@ def report(root=ROOT):
         'workflowTrust': workflow_trust((root/'.github/workflows/mustang-ota-dedicated.yml').read_text()),
         'numberStrategy': number_strategy(root),
         'sourceRequirement': load(root/'os/build-only/mustang-source-requirement-20261107.json'),
+        'sourcePin': source_pin_facts(root),
+        'otaContinuity': ota_continuity(root),
+        'controllerWif': controller_wif_prerequisites(),
         'signingGroupImpact': {
             'modified': False,
             'workflow': '.github/workflows/os-sign.yml',
@@ -293,27 +298,136 @@ def reject_copy_time_source(source):
 
 
 def number_strategy(root=ROOT):
-    """Say how a future number can be unique. Do not select or reserve one."""
+    """Record the lost legacy gap. Do not select, backfill, or reserve a number."""
     state = load(Path(root)/'os/build-only/mustang-allocation-state-20261107.json')
     policy = load(Path(root)/'os/build-only/mustang-numbering.json')
+    baseline = load(Path(root)/'os/ota/mustang.json')['baseline']
     if state.get('failedRun') != '41884368820' or state.get('allocatedBuild') is not None \
             or state.get('unknown') is not True or state.get('consumedBuilds') is not None \
-            or state.get('authoritativeLedger') is not False or state.get('guessSpentAllocation') is not False:
+            or state.get('authoritativeLedger') is not False or state.get('guessSpentAllocation') is not False \
+            or state.get('recovery') is not None:
         raise ValueError('failed-run allocation was guessed')
     if policy.get('status') != 'unbound' or policy.get('legacyAllocationKnown') is not False \
             or policy.get('epoch') is not None or policy.get('authority') is not None \
             or policy.get('legacyCeiling') != '9999123199':
-        raise ValueError('legacy allocation stays unknown until an independent epoch exists')
+        raise ValueError('legacy allocation stays unknown')
     return {
         'selectsBuildNumber': False,
+        'selectedMode': None,
         'allocatedBuild': None,
         'authoritativeLedger': False,
         'guessSpentAllocation': False,
+        'backfill': False,
         'inspectFrankel': False,
         'failedRun': '41884368820',
+        'lastConfirmedPublicBuild': state.get('lastConfirmedPublicBuild'),
         'legacyCeiling': '9999123199',
-        'strategy': 'Retire the legacy date namespace. Do not guess whether run 41884368820 consumed a number and do not backfill a ledger. '
-                    'A future dedicated build needs a new epoch and an external authority journal above that ceiling. This record does not create that epoch.'}
+        'legacyCeilingMeaning': 'Maximum output of release-allocate.next_build: UTC YYYYMMDD plus sequence 01..99. '
+                                'Python cannot format a year above 9999. This is not a build date, not ro.build.date.utc, '
+                                'and not the next BUILD_NUMBER.',
+        'dateAllocatorConstraint': 'next_build raises clock_behind when any known build\'s first eight digits are after the UTC day. '
+                                   'An ID above the ceiling must not be inserted into that allocator.',
+        'incremental': {'field': 'ro.build.version.incremental', 'width': 10,
+                        'installedBaseline': baseline['build'],
+                        'mustExceedInstalled': True},
+        'timestamp': {'field': 'ro.build.date.utc', 'separateFromBuildNumber': True,
+                      'installedBaseline': baseline['timestamp'],
+                      'mustExceedInstalled': True},
+        'modesNotSelected': {
+            'recovered-ledger': 'Set unknown false only from an authoritative consumedBuilds list, then the existing date allocator may run. A missing receipt is not that list.',
+            'retired-namespace': 'A later explicit epoch whose IDs stay exactly ten digits and are not passed through next_build. Not created here.',
+        }}
+
+
+def source_pin_facts(root=ROOT):
+    """What the pinned manifest actually identifies. This does not sync a tree."""
+    root = Path(root)
+    manifest = root/'os/pinned-manifest.xml'
+    projects = list(ET.parse(manifest).getroot().iter('project'))
+    pinned = [item for item in projects if re.fullmatch(r'[0-9a-f]{40}', item.get('revision') or '')]
+    device = load(root/'os/devices/pixel10.json')
+    vendor = device['devices']['mustang']['vendorInputs']['factoryImage']
+    return {
+        'pinned': False,
+        'roseRevision': None,
+        'syncAuthorized': False,
+        'manifestPath': 'os/pinned-manifest.xml',
+        'manifestSha256': hashlib.sha256(manifest.read_bytes()).hexdigest(),
+        'projectCount': len(projects),
+        'projectsWith40HexRevision': len(pinned),
+        'projectsWithout40HexRevision': [item.get('name') for item in projects if item not in pinned],
+        'mustangProjectInManifest': any('mustang' in ((item.get('name') or '') + (item.get('path') or '')) for item in projects),
+        'manifestNote': device['source']['note'],
+        'vendorFactoryFile': vendor.get('file'),
+        'vendorFactoryStatus': vendor.get('status'),
+        'vendorFactoryDownloaded': False,
+    }
+
+
+def ota_continuity(root=ROOT):
+    """Full payload and installed-trust are different requirements. Neither is satisfied here."""
+    baseline = load(Path(root)/'os/ota/mustang.json')['baseline']
+    return {
+        'fullOtaUsesPreviousTargetFiles': False,
+        'producer': 'generate-release.sh calls ota_from_target_files on the new target-files only; OTA_ARGS is --disable_ublk and there is no --incremental_from',
+        'incrementalPackageNeedsPreviousTargetFiles': True,
+        'metadataRejectsPreBuildIncremental': True,
+        'oldSignedTargetFilesNeededForFullPayload': False,
+        'oldSignedTargetFilesNeededForInstalledTrust': True,
+        'stagingRequiresInstalledTrustObservation': True,
+        'newSignedTargetFilesIsCandidateOnly': True,
+        'phoneAcceptanceIncluded': False,
+        'installedBuild': baseline['build'],
+        'installedTimestamp': baseline['timestamp'],
+    }
+
+
+def controller_wif_prerequisites():
+    """The live controller binding. OIDC has not been exercised, and this does not grant anything."""
+    return {
+        'expandsPermissions': False,
+        'neededBeforeBootstrap': False,
+        'signerRequiredForDryRun': False,
+        'oidcTested': False,
+        'appHandoff': 'underway',
+        'vmStoppedAtPacific': '2026-11-07 06:46',
+        'jitPresent': False,
+        'buildStarted': False,
+        'githubApp': {
+            'permission': 'Organization permissions: Self-hosted runners, write',
+            'endpoint': 'POST /orgs/{org}/actions/runners/generate-jitconfig',
+            'notIncluded': ['repository contents', 'administration', 'admin:org user token'],
+            'installation': 'An organization owner installs the app on Immortal-Protocols. Not on the VM.',
+            'variable': 'MUSTANG_RUNNER_APP_ID',
+            'secret': 'MUSTANG_RUNNER_APP_PRIVATE_KEY',
+            'status': 'handoff underway',
+        },
+        'controller': {
+            'serviceAccount': 'mustang-controller@protocols-465723.iam.gserviceaccount.com',
+            'keyless': True,
+            'accountVariable': 'MUSTANG_CONTROLLER_SERVICE_ACCOUNT',
+            'provider': 'projects/1072799993443/locations/global/workloadIdentityPools/mustang-actions/providers/mustang-main',
+            'providerVariable': 'MUSTANG_CONTROLLER_WORKLOAD_IDENTITY_PROVIDER',
+            'workflowVariablesSet': True,
+            'instance': 'roseos-mustang-builder-20261107-a',
+            'project': 'protocols-465723',
+            'zone': 'us-west2-a',
+            'permissions': ['compute.instances.get', 'compute.instances.start', 'compute.instances.stop',
+                            'compute.instances.setMetadata', 'compute.instances.getGuestAttributes'],
+            'scope': 'this instance only',
+            'statusPoll': 'compute.instances.get',
+            'providerChecks': {
+                'repositoryId': '1428996648',
+                'ownerId': '223367958',
+                'ref': 'refs/heads/main',
+                'event': 'workflow_dispatch',
+                'workflowRef': 'Immortal-Protocols/RoseOS-1/.github/workflows/mustang-ota-dedicated.yml@refs/heads/main',
+                'jobWorkflowRef': 'not used; a direct workflow has no job_workflow_ref',
+            },
+            'notGranted': ['a service account on the VM', 'Owner', 'signer secret access',
+                           'setMetadata on any other instance', 'compute.zoneOperations', 'a project-wide compute grant'],
+        },
+    }
 
 
 def provision_plan():
@@ -330,7 +444,7 @@ def provision_plan():
         'python3 scripts/mustang_route.py preflight --live',
         f'if ! id -u {user} >/dev/null 2>&1; then sudo useradd --system --create-home --home-dir {home}/runner --shell /usr/sbin/nologin {user}; fi',
         f'sudo install -d -o {user} -g {user} -m 0750 {home}/source {home}/rose-actions {home}/runner {home}/inputs',
-        f'sudo -u {user} -H bash -lc \'cd {home}/source && repo init -u https://github.com/Immortal-Protocols/RoseOS-1.git -b "$ROSE_REVISION" -m os/pinned-manifest.xml && repo sync -c -j4 --fail-fast && repo manifest -r -o {home}/rose-actions/resolved-manifest.xml\'',
+        '# ROSE_REVISION is unset. Do not repo sync until a reviewed commit is named. The pinned manifest is not a synced tree.',
         '# Do not register a runner from this script. Group 5 already exists and has zero runners.',
         '# scripts/mustang-guest-bootstrap.sh enables the one-job unit and does not mint a token or select a build number.',
         '# No persistent registration is substituted.',

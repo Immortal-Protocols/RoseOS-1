@@ -264,6 +264,48 @@ class EnrollmentTest(unittest.TestCase):
             self.assertEqual(checked.returncode, 0, checked.stderr)
             self.assertFalse(marker.exists())
             self.assertEqual(archive.read_bytes(), payload)
+        self.assertNotIn('test -x "$tools', text)
+        self.assertIn('sudo -H -u "$user" -- /usr/bin/env --chdir "$runner_home"', text)
+        self.assertIn('-m 0750', text)
+
+    def test_health_check_uses_the_runner_when_parents_are_not_searchable(self):
+        import subprocess
+        script = ROOT/'scripts/mustang-guest-bootstrap.sh'
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary)/'roseos'
+            binaries = {
+                home/'tools/node/node-v24.22.2-linux-x64/bin/node': 'echo v24.22.2\n',
+                home/'tools/android-sdk/build-tools/android-15/aapt': 'echo "Android Asset Packaging Tool, v0.2-11948202"\n',
+                home/'tools/android-sdk/build-tools/android-15/apksigner': 'echo 0.9\n',
+                home/'runner/bin/Runner.Listener': 'mkdir -p "$(dirname "$0")/../_diag" && echo 2.338.2\n',
+                home/'runner/run.sh': 'echo ok\n',
+            }
+            for path, body in binaries.items():
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text('#!/bin/sh\n'+body)
+                path.chmod(0o755)
+            for directory in (home, home/'tools', home/'tools/node', home/'tools/android-sdk',
+                              home/'tools/android-sdk/build-tools', home/'tools/android-sdk/build-tools/android-15',
+                              home/'runner', home/'runner/bin'):
+                directory.chmod(0o750)
+            node = home/'tools/node/node-v24.22.2-linux-x64/bin/node'
+            blocked = subprocess.run(['sudo', '-n', '-u', 'nobody', '--', 'test', '-x', str(node)],
+                                     capture_output=True, text=True)
+            self.assertNotEqual(blocked.returncode, 0)
+            env = dict(os.environ, MUSTANG_BOOTSTRAP_HOME=str(home), MUSTANG_BOOTSTRAP_USER='ubuntu')
+            passed = subprocess.run(['bash', str(script), '--check-health'], env=env, capture_output=True, text=True)
+            self.assertEqual(passed.returncode, 0, passed.stderr)
+            self.assertTrue((home/'runner/_diag').is_dir())
+            denied = subprocess.run(['bash', str(script), '--check-health'],
+                                    env=dict(env, MUSTANG_BOOTSTRAP_USER='nobody'), capture_output=True, text=True)
+            self.assertEqual(denied.returncode, 4, denied.stderr)
+            self.assertIn('not executable by nobody', denied.stderr)
+            node.write_text('#!/bin/sh\necho v0.0.0\n')
+            node.chmod(0o755)
+            wrong = subprocess.run(['bash', str(script), '--check-health'], env=env, capture_output=True, text=True)
+            self.assertEqual(wrong.returncode, 4, wrong.stderr)
+            self.assertIn("node version is 'v0.0.0'", wrong.stderr)
+            self.assertIn('expected v24.22.2', wrong.stderr)
 
 
 if __name__ == '__main__':
