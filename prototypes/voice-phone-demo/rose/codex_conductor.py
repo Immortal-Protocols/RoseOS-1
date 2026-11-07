@@ -253,7 +253,8 @@ class CodexConductor:
             with s.submit_lock:
                 if s.cancelled.is_set():
                     return
-                visual = bool(getattr(self.phone, 'real', False) and getattr(self.phone, 'vision', False))
+                visual = bool(getattr(self.phone, 'real', False) and getattr(self.phone, 'vision', False)
+                              and getattr(self.phone, 'vision_control', False))
                 s.view = self.phone.session(s.name, independent=True, visual=visual) if getattr(self.phone, 'real', False) else self.phone.session(s.name)
                 if getattr(s.view, 'workspace', None):
                     package, _ = self.phone.resolve_app(s.app)
@@ -473,7 +474,10 @@ class CodexConductor:
                 if status == 'completed':
                     if getattr(s.view, 'visual_only', False):
                         if not s.outcome:
-                            status, validation_error = 'failed', 'No verified task outcome was reported.'
+                            # Keep the phone's own refusal (an app Rose could not open, a final action) when there is one.
+                            failure = next((a.get('result') for step in reversed(s.task.steps)
+                                            for a in reversed(step['actions']) if not a.get('ok') and a.get('result')), None)
+                            status, validation_error = 'failed', failure or 'No verified task outcome was reported.'
                         elif s.outcome['status'] != 'succeeded':
                             status, validation_error = 'failed', s.outcome['summary']
                         else:

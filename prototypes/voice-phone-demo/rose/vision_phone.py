@@ -6,6 +6,9 @@ Every input consumes the frame the model saw; the next frame verifies its effect
 import math
 import time
 
+# Line breaks a field or IME can treat as Enter (a send or submit): vision typing never carries one.
+LINE_BREAKS = ('\n', '\r', '\x85', '\u2028', '\u2029')
+
 from .phone import Screen
 from .realphone import RealSession, SETTLE_S, _ws_why
 
@@ -15,7 +18,7 @@ First open_app or observe. Coordinates run from 0 to 1000 across the attached im
 Use the frame_id returned with that image for exactly one input, then inspect the new image.
 Never invent accessibility ids, infer controls from a text tree, or repeat an uncertain submission.
 Tap the visible input first, verify focus in the next image, then type_text into it.
-Typing does not press Enter or send. Check the new image to verify the entered text.
+Typing does not press Enter or send, and text cannot contain line breaks. Check the new image to verify the entered text.
 If no image is available, report the blocker; do not act or fall back to another screen.
 For tap_point describe the visible target and declare its effect honestly. Only ordinary
 interaction is permitted by this backend's current policy; final sends, purchases, publication,
@@ -57,6 +60,7 @@ class VisionSession(RealSession):
         self.workspace.visual_only = True
         self.frame_id = None
         self.frame_at = 0
+        self._typed = False  # a draft was typed: "Reply" then counts as a send (tasks._final_control)
         self.screen = Screen('phone', 'Phone (vision)', [])
 
     def _frame(self, shot):
@@ -88,13 +92,22 @@ class VisionSession(RealSession):
             result = self.workspace.start(package)
             self._frame(result.get('observation') or result)
             ok = result.get('status') == 'opened' and self.image is not None
-            return {'ok': ok, 'result': f'Opened {label}; inspect the screenshot.' if ok else _ws_why(result)}
+            return {'ok': ok, 'result': f'Opened {label}; inspect the screenshot.' if ok else _ws_why(result, label)}
         if name not in ('tap_point', 'swipe', 'type_text', 'back'):
             return {'ok': False, 'result': 'Only screenshot coordinate controls are available.'}
         if not self.frame_id or args.get('frame_id') != self.frame_id or time.monotonic() - self.frame_at > 30:
             return {'ok': False, 'result': 'Observe a fresh screenshot before this input.'}
         if name == 'tap_point' and args.get('effect') != 'interact':
             return {'ok': False, 'result': 'This final action remains with the owner under the current send/purchase policy.'}
+        if name == 'tap_point':
+            # The same send/purchase rule as the accessibility path, applied to the model's own description of the
+            # target, so a final control the model calls "interact" is still the owner's.
+            from .tasks import _final_control
+            target = args.get('target')
+            if not isinstance(target, str) or not target.strip():
+                return {'ok': False, 'result': 'Describe the visible target of the tap.'}
+            if _final_control(target, typed=self._typed):
+                return {'ok': False, 'result': 'This final action remains with the owner under the current send/purchase policy.'}
         if name == 'type_text' and self.workspace.capabilities.get('visionText') is not True:
             return {'ok': False, 'result': 'The phone controller needs the vision text-input update. No accessibility fallback was used.'}
         command = {'snapshotId': self.frame_id}
@@ -115,6 +128,8 @@ class VisionSession(RealSession):
             text = args.get('text')
             if not isinstance(text, str) or len(text) > 4000 or not isinstance(args.get('replace'), bool):
                 return {'ok': False, 'result': 'Text must be at most 4000 characters, with an explicit replace flag.'}
+            if any(c in text for c in LINE_BREAKS):
+                return {'ok': False, 'result': 'Text must be a single line; a line break could send or submit. Nothing was typed.'}
             action = 'screen_text'
             command.update(text=text, replace=args['replace'])
         else:
@@ -123,6 +138,8 @@ class VisionSession(RealSession):
         self.frame_id = None
         result = self.workspace.command(action, **command)
         ok = result.get('status') in ('action_accepted', 'gesture_dispatched')
+        if ok and name == 'type_text':
+            self._typed = True
         time.sleep(SETTLE_S)
         self.refresh()
         return {'ok': ok, 'changed': False, 'result': 'Input dispatched; verify its effect in the new screenshot.' if ok else _ws_why(result),

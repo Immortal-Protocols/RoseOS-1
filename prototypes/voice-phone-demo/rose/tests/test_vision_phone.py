@@ -32,6 +32,7 @@ class Vision(unittest.TestCase):
     def setUp(self):
         fixtures.Integration.setUp(self)
         self.phone.vision = True
+        self.phone.vision_control = True  # --vision-control
         self.controller.slots = [PixelsOnly(Clock(), start_polls=0) for _ in range(2)]
         original = self.controller.__class__.__call__
         self.has_text = True
@@ -71,7 +72,7 @@ class Vision(unittest.TestCase):
         raw = [p for op, p in self.controller.calls if op == 'command' and p['action'] == 'screen_gesture'][-1]
         self.assertEqual(raw['points'], [151, 2242])
         self.assertNotIn('nodeId', raw)
-        self.assertTrue(self.call(s, 'type_text', frame_id=s.view.frame_id, text='Product feedback\nSecond line', replace=True)['ok'])
+        self.assertTrue(self.call(s, 'type_text', frame_id=s.view.frame_id, text='Product feedback, second line', replace=True)['ok'])
         self.assertTrue(self.call(s, 'swipe', frame_id=s.view.frame_id, x1=500, y1=800, x2=500, y2=200)['ok'])
         self.assertTrue(self.call(s, 'back', frame_id=s.view.frame_id)['ok'])
         self.assertTrue(all(p.get('action') != 'inspect_ui' for op, p in self.controller.calls))
@@ -127,6 +128,74 @@ class Vision(unittest.TestCase):
             self.assertFalse(self.call(s, 'tap_point', frame_id=s.view.frame_id, x=500, y=500, target='submit', effect=effect)['ok'])
         self.engine._event({'event': 'done', 'session': s.name, 'turn': {'id': s.turn, 'status': 'completed'}})
         self.assertEqual(s.task.status, 'failed')
+
+    def test_line_breaks_are_refused_before_any_input(self):
+        s = self.opened()
+        before = len(self.commands())
+        for text in ('first\nsecond', 'sent\r', 'a\u2028b', 'a\u2029b', 'a\x85b'):
+            result = self.call(s, 'type_text', frame_id=s.view.frame_id, text=text, replace=True)
+            self.assertFalse(result['ok'])
+            self.assertIn('single line', result['result'])
+        self.assertEqual(len(self.commands()), before)
+        self.assertIsNotNone(s.view.frame_id)  # a refusal never consumes the frame
+
+    def test_a_final_control_called_interact_is_still_the_owners(self):
+        s = self.opened()
+        before = len(self.commands())
+        for target in ('Send', 'Buy now', 'Place order', 'Pay $20', 'Submit', 'Publish', '', '   '):
+            result = self.call(s, 'tap_point', frame_id=s.view.frame_id, x=500, y=500, target=target, effect='interact')
+            self.assertFalse(result['ok'], target)
+        self.assertEqual(len(self.commands()), before)
+        # "Reply" opens a composer until a draft is typed; then it is a send.
+        self.assertTrue(self.call(s, 'tap_point', frame_id=s.view.frame_id, x=500, y=500, target='Reply', effect='interact')['ok'])
+        self.assertTrue(self.call(s, 'type_text', frame_id=s.view.frame_id, text='On my way', replace=True)['ok'])
+        before = len(self.commands())
+        self.assertFalse(self.call(s, 'tap_point', frame_id=s.view.frame_id, x=500, y=500, target='Reply', effect='interact')['ok'])
+        self.assertEqual(len(self.commands()), before)
+
+    def test_a_refused_open_names_the_app_and_survives_as_the_task_result(self):
+        s = self.task('Calculator')
+        with patch.object(s.view.workspace, 'start', return_value={'status': 'background_target_not_allowed'}):
+            result = self.call(s, 'open_app', app='Calculator')
+        self.assertFalse(result['ok'])
+        self.assertIn('Calculator', result['result'])
+        self.assertNotIn('that app', result['result'])
+        self.engine._event({'event': 'done', 'session': s.name, 'turn': {'id': s.turn, 'status': 'completed'}})
+        self.assertEqual(s.task.status, 'failed')
+        self.assertEqual(s.task.result, result['result'])
+
+
+class VisionOptIn(unittest.TestCase):
+    """Vision routing is the owner's opt-in (--vision-control); by default app threads keep the accessibility path."""
+    call = fixtures.Integration.call
+    task = fixtures.Integration.task
+
+    def setUp(self):
+        fixtures.Integration.setUp(self)
+        self.phone.vision = True  # RealPhone's default: screenshots with the UI tree
+
+    def tearDown(self):
+        fixtures.Integration.tearDown(self)
+
+    def test_default_real_phone_keeps_the_accessibility_session(self):
+        from rose.realphone import RealPhone
+        from rose.vision_phone import VisionSession
+        self.assertFalse(RealPhone.vision_control)
+        s = self.task('Calculator')
+        self.assertNotIsInstance(s.view, VisionSession)
+        self.assertFalse(getattr(s.view, 'visual_only', False))
+        opening = next(p for op, name, p in self.engine.client.calls if op == 'open' and name == s.name)
+        tools = {t['name'] for t in opening['tools']}
+        self.assertIn('tap', tools)  # the accessibility tools, with their send/purchase guard
+        self.assertNotIn('complete_task', tools)
+
+    def test_the_flag_needs_codex_and_the_real_phone(self):
+        from rose import app
+        self.assertTrue(app.parse_args(['--brain', 'codex', '--phone', 'real', '--vision-control']).vision_control)
+        self.assertFalse(app.parse_args(['--brain', 'codex', '--phone', 'real']).vision_control)
+        for argv in (['--brain', 'codex', '--vision-control'], ['--phone', 'real', '--vision-control']):
+            with self.assertRaises(SystemExit), patch('sys.stderr'):
+                app.parse_args(argv)
 
 
 if __name__ == '__main__':

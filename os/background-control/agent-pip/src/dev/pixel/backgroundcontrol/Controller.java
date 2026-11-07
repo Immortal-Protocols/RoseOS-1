@@ -189,10 +189,12 @@ public final class Controller {
   else if(action.equals("ime_enter")){AccessibilityNodeInfo n=node(p);if(n.isPassword()||!n.isEditable()||!n.performAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_IME_ENTER.getId()))throw new IllegalStateException("Background editor submit rejected");}
   else if(action.equals("swipe")||action.equals("drag")){AccessibilityNodeInfo n=node(p);Rect r=new Rect();n.getBoundsInScreen(r);JSONArray points=p.optJSONArray("points");if(points==null){JSONArray bounds=p.getJSONArray("bounds");Rect requested=new Rect(bounds.getInt(0),bounds.getInt(1),bounds.getInt(2),bounds.getInt(3));if(!r.contains(requested))throw new IllegalArgumentException("Swipe outside observed node");int y=requested.centerY();boolean left=p.getString("direction").equals("left");points=new JSONArray(new int[]{left?requested.right-1:requested.left,y,left?requested.left:requested.right-1,y});}for(int i=0;i<4;i+=2)if(!r.contains(points.getInt(i),points.getInt(i+1)))throw new IllegalArgumentException("Gesture outside observed node");swipe(points);}
   else if(action.equals("screen_text")){
-   // Vision focuses the editor by tapping its screenshot position. No node lookup or accessibility action.
+   // Vision focuses the editor by tapping its screenshot position. No node lookup or accessibility action on a target;
+   // only the input focus the text would land in is checked (visionFocus): never a password field.
    if(visualSnapshotId==null||!visualSnapshotId.equals(snapshotId))throw new IllegalArgumentException("Fresh screenshot required for vision text");
    String text=p.getString("text");boolean replace=p.getBoolean("replace");VisionInput.validate(text);
    clearNodes(); // consume the observed frame before dispatch, even if the platform call fails
+   visionFocus();
    VisionInput.insert(session,text,replace);
   }
   else if(action.equals("set_text")){AccessibilityNodeInfo n=node(p);if(!n.isEditable()||!n.isEnabled()||!n.isVisibleToUser())throw new IllegalArgumentException("Node is not an editable visible control");if(n.isPassword())throw new SecurityException("Password fields require user interaction");String text=p.getString("text");if(text.length()>4000)throw new IllegalArgumentException("Text exceeds limit");if(!n.isFocused()){n.performAction(AccessibilityNodeInfo.ACTION_FOCUS);long focusUntil=SystemClock.elapsedRealtime()+500;while(n.refresh()&&!n.isFocused()&&SystemClock.elapsedRealtime()<focusUntil)SystemClock.sleep(25);if(!n.isFocused())throw new IllegalStateException("Could not focus background field");}session.getClass().getMethod("insertText",String.class,boolean.class,boolean.class).invoke(session,text,true,p.optBoolean("commit",false));}
@@ -319,6 +321,20 @@ public final class Controller {
    occupied.add(new MultiSession.Bind(s.index,s.id,s.taskId,s.target,s.status,device,closed,w!=null,w==null||w.isEmpty()?null:w.get(0)));
   }
   return MultiSession.bind(occupied,owned);
+ }
+ /** The session's input focus, which vision text would land in, across its own windows (every node released at once);
+  * throws unless VisionInput.refusal allows it: a password field (SecurityException), or nothing editable focused. */
+ @SuppressWarnings("unchecked") static void visionFocus()throws Exception{
+  boolean found=false,editable=false,password=false;
+  for(AccessibilityWindowInfo w:(List<AccessibilityWindowInfo>)session.getClass().getMethod("getAccessibilityWindows").invoke(session)){
+   if(!found){AccessibilityNodeInfo root=w.getRoot();
+    if(root!=null){AccessibilityNodeInfo f=root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT);
+     if(f!=null){found=true;editable=f.isEditable();password=f.isPassword();f.recycle();}
+     root.recycle();}}
+   w.recycle();
+  }
+  String why=VisionInput.refusal(found,editable,password);
+  if(why!=null){if(password)throw new SecurityException(why);throw new IllegalStateException(why);}
  }
  /** A session display's application window packages, top first, or null when unreadable; every root is released at once.
   * Read-only: never the agent's observation. */

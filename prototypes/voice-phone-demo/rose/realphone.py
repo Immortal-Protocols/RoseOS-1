@@ -592,6 +592,10 @@ class RealPhone:
 
     real = True
     vision = True  # observations carry a screenshot; the agent may tap points in it
+    # Screenshot-only control of Codex app threads (rose/vision_phone.py, --vision-control): off by default, so app
+    # threads keep the accessibility tools and their send/purchase guard until the owner opts in. Its typing also
+    # needs a controller that reports visionText.
+    vision_control = False
 
     def __init__(self, bus=None):
         self.bus = bus

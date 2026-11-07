@@ -66,22 +66,27 @@ Local task progress also feeds Rose Agent's main native task card through its ex
 
 ## Sessions, stop and transcripts
 
-One conversation thread coordinates up to two independent app threads. On the real phone,
-Terra uses screenshots and coordinate input through `VisionSession`: no accessibility-tree
+One conversation thread coordinates up to two independent app threads. On the real phone
+with `--vision-control` (an opt-in; it needs `--brain codex --phone real`), Terra uses
+screenshots and coordinate input through `VisionSession`: no accessibility-tree
 inspection, node matching, semantic clicks, or node-bound typing. Each input names the
 specific screenshot the model saw; it consumes that frame and returns a new image for
 verification. Taps and swipes use the controller's existing `screen_gesture` command.
 The additive `screen_text` command inserts literal text through the session's virtual
 input device into the field the model focused visually, with an explicit replace/append
-flag and commit disabled. It requires the controller's `visionText=true` capability;
-an older controller reports an update requirement and never falls back to accessibility.
-The default real-phone path has vision enabled; the legacy nonvision adapter remains for
-existing text-only fixtures and the separate local-model path.
+flag and commit disabled. Text is a single line: a line break could act as Enter, so
+Rose and the controller both refuse one. The controller types only into an input-focused
+editable field and refuses a password field. It requires the controller's `visionText=true`
+capability; an older controller reports an update requirement and never falls back to
+accessibility. Without `--vision-control` (the default) app threads keep the accessibility
+tools and their send/purchase guard, with screenshots alongside the UI tree.
 
 Final messages/posts, purchases and security changes remain owner actions under the
-existing policy. Vision taps declare their effect; the server rejects final-action
-effects. This declaration relies on the model's visual interpretation, rather than
-an independent accessibility-label check. Passwords and secrets remain owner input.
+existing policy. Vision taps declare their effect and describe their target; the server
+rejects final-action effects and, with the same send/purchase rule as the accessibility
+path, a target that reads as a send, purchase or other final control. Both rely on the
+model's visual interpretation, rather than an independent accessibility-label check.
+Passwords and secrets remain owner input.
 The OS retains its session, protected-screen and owner-control boundaries.
 Task completion must include a structured `complete_task` result: a blocked or failed
 goal becomes failed, even if the model turn completed normally. Success requires an

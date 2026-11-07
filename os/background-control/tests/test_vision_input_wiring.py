@@ -15,6 +15,13 @@ class VisionInputWiring(unittest.TestCase):
         self.assertLess(source.index('fresh(p);if(operations>=200)'), source.index('else if(action.equals("screen_text"))'))
         self.assertIn('visualSnapshotId==null||!visualSnapshotId.equals(snapshotId)', branch)
         self.assertLess(branch.index('clearNodes();'), branch.index('VisionInput.insert('))
+        # The input focus the text lands in is checked first: never a password field, never nothing focused.
+        self.assertLess(branch.index('clearNodes();'), branch.index('visionFocus();'))
+        self.assertLess(branch.index('visionFocus();'), branch.index('VisionInput.insert('))
+        focus = source.split('static void visionFocus()', 1)[1].split('\n }\n', 1)[0]
+        self.assertIn('findFocus(AccessibilityNodeInfo.FOCUS_INPUT)', focus)
+        self.assertIn('VisionInput.refusal(found,editable,password)', focus)
+        self.assertNotIn('performAction', focus)
         self.assertIn('s.visualSnapshotId=visualSnapshotId;', source)
         self.assertIn('visualSnapshotId=s.visualSnapshotId;', source)
         self.assertIn('snapshotId=null;visualSnapshotId=null;', source)
