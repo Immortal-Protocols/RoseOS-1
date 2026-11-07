@@ -52,9 +52,13 @@ SOURCES=(); while IFS= read -r f; do SOURCES+=("$f"); done < <(find "$STAGE/src"
 CLASSES=(); while IFS= read -r f; do CLASSES+=("$f"); done < <(find "$OUT/classes" -name '*.class' -type f | sort)
 "$BT/d8" --min-api 29 --lib "$SDK/platforms/android-35/android.jar" --output "$OUT/dex" "${CLASSES[@]}" "$ZXING"
 cp "$OUT/resources.apk" "$OUT/unaligned.apk"
-(cd "$OUT/dex" && zip -q "$OUT/unaligned.apk" classes*.dex)
+# Dex is stored, not deflated: the OS bundles this APK as a preprocessed import.
+(cd "$OUT/dex" && zip -q -0 "$OUT/unaligned.apk" classes*.dex)
 "$BT/zipalign" -f 4 "$OUT/unaligned.apk" "$OUT/rose-agent-unsigned.apk"
-"$BT/zipalign" -c 4 "$OUT/rose-agent-unsigned.apk"
+"$BT/zipalign" -c -p 4 "$OUT/rose-agent-unsigned.apk"
+if unzip -v "$OUT/rose-agent-unsigned.apk" | awk '$NF ~ /\.dex$/ && $2 != "Stored" {bad=1} END {exit !bad}'; then
+  echo "Compressed dex in $OUT/rose-agent-unsigned.apk" >&2; exit 1
+fi
 unzip -t "$OUT/rose-agent-unsigned.apk" > "$OUT/zip-check.txt"
 "$BT/aapt" dump badging "$OUT/rose-agent-unsigned.apk" > "$OUT/apk-metadata.txt"
 (cd "$OUT" && sha256sum rose-agent-unsigned.apk > SHA256SUMS)
