@@ -8,6 +8,7 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path[:0] = [str(ROOT/'scripts')]
@@ -45,8 +46,8 @@ class SourceSyncRecipeTest(unittest.TestCase):
         for command in sync.canonical_argv():
             if 'repo' not in command:
                 continue
-            self.assertEqual(command[:8], ['/usr/bin/env', '--chdir', '/tmp', '--', 'sudo', '-H', '-u', 'mustang-runner'])
-            self.assertEqual(command[11], sync.SOURCE)
+            self.assertEqual(command[:3], ['/usr/bin/env', '--chdir', sync.SOURCE])
+            self.assertNotIn('sudo', command)
             self.assertNotIn('root', command)
 
     def test_parent_hash_admits_source_sync_only(self):
@@ -115,16 +116,19 @@ class SourceSyncRecipeTest(unittest.TestCase):
         stops = []
         sync.watch_sync(0, 10, stops.append)
         self.assertEqual(stops, [])
-        with self.assertRaisesRegex(ValueError, 'VM stop'):
+        with self.assertRaisesRegex(ValueError, 'did not stop the VM'):
             sync.watch_sync(1, 10, stops.append)
         self.assertEqual(stops[-1]['reason'], 'source-sync-failed')
-        self.assertEqual(stops[-1]['stopArgv'][:4], sync.STOP_ARGV)
+        self.assertFalse(stops[-1]['authenticatedStop'])
+        self.assertFalse(stops[-1]['localControllerStop'])
+        self.assertNotIn('argv', stops[-1])
         with self.assertRaisesRegex(ValueError, 'bounded timeout'):
             sync.watch_sync(None, sync.SYNC_TIMEOUT_SECONDS, stops.append)
         self.assertEqual(stops[-1]['reason'], 'source-sync-timeout')
+        self.assertFalse(stops[-1]['authenticatedStop'])
         with self.assertRaisesRegex(ValueError, 'crash stop'):
             sync.watch_sync(None, 0, stops.append, timeout=14400)
-        with self.assertRaisesRegex(ValueError, 'VM stop'):
+        with self.assertRaisesRegex(ValueError, 'did not stop the VM'):
             sync.on_command('git rev-parse', 1, stops.append)
         self.assertEqual(stops[-1]['command'], 'git rev-parse')
         self.assertLess(sync.SYNC_TIMEOUT_SECONDS, 14400)
@@ -175,6 +179,8 @@ class SourceSyncRecipeTest(unittest.TestCase):
         self.assertFalse(receipt['historical']['oidcExercised'])
         self.assertEqual(receipt['observed']['manifest-head'], sync.REVISION)
         self.assertEqual(receipt['observed']['projectCount'], sync.require_resolved(sync.normalized_resolved())['projectCount'])
+        self.assertFalse(receipt['authenticatedStop'])
+        self.assertNotIn('gcloud', receipt['cancellation'])
         self.assertEqual(stops, [])
         self.assertIn('git', spawned[4])
         self.assertIn(sync.PIN, spawned[4])
@@ -185,10 +191,11 @@ class SourceSyncRecipeTest(unittest.TestCase):
             ran.append(list(argv))
             return Proc(argv, 1 if 'sync' in argv else 0)
 
-        with self.assertRaisesRegex(ValueError, 'VM stop'):
+        with self.assertRaisesRegex(ValueError, 'did not stop the VM'):
             sync.orchestrate(self.approval(), 'owner.json', failing, failed.append, lambda: 0, lambda _seconds: None)
         self.assertEqual(failed[-1]['reason'], 'source-sync-failed')
-        self.assertEqual(failed[-1]['argv'][-1], 'owner.json')
+        self.assertFalse(failed[-1]['authenticatedStop'])
+        self.assertNotIn('argv', failed[-1])
         self.assertTrue(any('sync' in command for command in ran))
         self.assertFalse(any(command[-2:] == ['cat', 'resolved-manifest.xml'] for command in ran))
         clock = {'t': 0}
@@ -217,7 +224,8 @@ class SourceSyncRecipeTest(unittest.TestCase):
                              lambda argv: (_ for _ in ()).throw(AssertionError('spawned')),
                              denied.append, lambda: 0, lambda _seconds: None)
         self.assertEqual(denied[-1]['reason'], 'source-sync-not-admitted')
-        self.assertIn('owner.json', denied[-1]['argv'])
+        self.assertFalse(denied[-1]['authenticatedStop'])
+        self.assertNotIn('argv', denied[-1])
 
     def test_real_poll_reads_more_than_a_pipe_without_deadlocking(self):
         size = 256 * 1024
@@ -243,8 +251,7 @@ class SourceSyncRecipeTest(unittest.TestCase):
         argv = [sys.executable, '-c', 'import time; time.sleep(30)']
         with tempfile.TemporaryDirectory() as temporary:
             proc = sync.spawn_subprocess(argv, temporary)
-            stops = []
-            handler = sync.cancellation_handler({'proc': proc}, 'owner.json', stops.append)
+            handler = sync.cancellation_handler({'proc': proc})
             try:
                 handler(signal.SIGTERM, None)
             except SystemExit as error:
@@ -253,9 +260,41 @@ class SourceSyncRecipeTest(unittest.TestCase):
             while proc.poll() is None and time.monotonic() < deadline:
                 time.sleep(0.1)
             self.assertIsNotNone(proc.poll())
-            self.assertEqual(stops[-1]['reason'], 'source-sync-cancelled')
-            self.assertEqual(stops[-1]['argv'][-1], 'owner.json')
+            source = Path(sync.__file__).read_text()
+            self.assertNotIn('mustang_controller.py', source)
+            self.assertNotIn('gcloud', source)
             self.assertEqual(sync.mustang_lane.CONFIRMED_STOP['seconds'], 14400)
+
+    def test_execute_refuses_a_local_stop_and_a_hosted_runner_outside_the_source_job(self):
+        called = []
+
+        def refuse(argv, *args, **kwargs):
+            called.append(argv)
+            raise AssertionError('guest executed a process during a refused run')
+
+        with mock.patch('mustang_source_sync.subprocess.run', refuse), \
+                mock.patch('mustang_source_sync.subprocess.Popen', refuse):
+            closed = sync.main(['run', '--execute', '--ownership-record', 'owner.json'])
+            self.assertEqual(closed, 4)
+            outside = sync.main(['run', '--execute'])
+            self.assertEqual(outside, 4)
+        self.assertEqual(called, [])
+        workflow = (ROOT/'.github/workflows/mustang-ota-dedicated.yml').read_text()
+        source = workflow.split('\n  source:\n', 1)[1].split('\n  cleanup:\n', 1)[0]
+        self.assertIn('timeout-minutes: 185', source)
+        self.assertIn('timeout-minutes: 180', source)
+        self.assertIn('python3 scripts/mustang_source_sync.py run --execute', source)
+        self.assertNotIn('mustang_controller.py', source)
+        self.assertNotIn('id-token:', source)
+        self.assertNotIn('sudo', source)
+        cleanup = workflow.split('\n  cleanup:\n', 1)[1]
+        self.assertIn('- source', cleanup)
+        self.assertIn('always() && needs.controller.result != \'skipped\'', cleanup)
+        self.assertIn('python3 scripts/mustang_controller.py stop --ownership-record', cleanup)
+        self.assertIn('if: inputs.source_only == false', workflow.split('\n  builder:\n', 1)[1].split('\n    runs-on:', 1)[0])
+        unit = (ROOT/'os/build-only/mustang-ephemeral-runner.service').read_text()
+        self.assertIn('NoNewPrivileges=true', unit)
+        self.assertIn('User=mustang-runner', unit)
 
     def test_pin_fetch_is_idempotent_and_repo_init_checks_out_the_sha(self):
         with tempfile.TemporaryDirectory() as temporary:

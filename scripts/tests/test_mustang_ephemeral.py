@@ -85,6 +85,27 @@ class EnrollmentTest(unittest.TestCase):
         add = enroll.metadata_argv('add-metadata')
         self.assertIn('roseos-mustang-builder-20261107-a', add)
         self.assertIn('--metadata-from-file=mustang-jitconfig', add)
+        secret = 'encoded-jit-config-secret-value-not-for-logs'
+        with tempfile.TemporaryDirectory() as temporary:
+            private = Path(temporary)/'mustang-jit'
+            private.write_text(secret)
+            private.chmod(0o600)
+            seen = []
+            def transport(argv):
+                seen.append(list(argv))
+                return subprocess.CompletedProcess(argv, 0, '', '')
+            code = enroll.main(['put-metadata', '--execute', '--file', str(private)], transport=transport)
+            self.assertEqual(code, 0)
+            self.assertEqual(seen[0][-1], '--metadata-from-file=mustang-jitconfig='+str(private))
+            self.assertNotIn(secret, ' '.join(seen[0]))
+            refused = enroll.main(['issue', '--execute', '--run-id', '12', '--out', str(private), '--file', str(private)])
+            self.assertEqual(refused, 4)
+        missing = subprocess.run([sys.executable, str(ROOT/'scripts/mustang_ephemeral.py'),
+                                  'put-metadata', '--execute', '--file', '/tmp/mustang-jit-missing'],
+                                 capture_output=True, text=True)
+        self.assertEqual(missing.returncode, 4)
+        self.assertNotIn('unrecognized arguments', missing.stderr)
+        self.assertIn('private regular file', missing.stderr)
         self.assertNotIn('immortal-os-builder', add)
         self.assertIn('--keys=mustang-jitconfig', enroll.metadata_argv('remove-metadata'))
         with self.assertRaises(ValueError):
@@ -98,6 +119,8 @@ class EnrollmentTest(unittest.TestCase):
         self.assertEqual(enroll.queue_decision(queued, 30), 'wait')
         self.assertEqual(enroll.queue_decision(queued, enroll.QUEUE_LIMIT_SECONDS), 'stop')
         self.assertEqual(enroll.queue_decision([{'name': 'builder', 'status': 'in_progress'}], enroll.QUEUE_LIMIT_SECONDS), 'ready')
+        self.assertEqual(enroll.queue_decision([{'name': 'builder', 'status': 'skipped'},
+                                                {'name': 'source', 'status': 'in_progress'}], enroll.QUEUE_LIMIT_SECONDS), 'ready')
         self.assertEqual(enroll.watch_decision('failure', [{'name': 'builder', 'status': 'in_progress'}], 0), 'stop')
         self.assertNotIn('value', ' '.join(enroll.metadata_keys_argv()))
         clock = {'now': 0}
