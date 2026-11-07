@@ -241,6 +241,18 @@ class EnrollmentTest(unittest.TestCase):
         self.assertEqual(enroll.queue_decision(queued, 30), 'wait')
         self.assertEqual(enroll.queue_decision(queued, enroll.QUEUE_LIMIT_SECONDS), 'stop')
         self.assertEqual(enroll.queue_decision([{'name': 'builder', 'status': 'in_progress'}], enroll.QUEUE_LIMIT_SECONDS), 'ready')
+        skipped_builder = {'name': 'builder', 'status': 'completed', 'conclusion': 'skipped'}
+        queued_source = {'name': 'source', 'status': 'queued'}
+        self.assertEqual(enroll.queue_decision([skipped_builder, queued_source], 30), 'wait')
+        self.assertEqual(enroll.queue_decision([skipped_builder, queued_source], enroll.QUEUE_LIMIT_SECONDS), 'stop')
+        skipped_source = {'name': 'source', 'status': 'completed', 'conclusion': 'skipped'}
+        queued_builder = {'name': 'builder', 'status': 'queued'}
+        self.assertEqual(enroll.queue_decision([skipped_source, queued_builder], 30), 'wait')
+        self.assertEqual(enroll.queue_decision([skipped_source, queued_builder], enroll.QUEUE_LIMIT_SECONDS), 'stop')
+        self.assertEqual(enroll.queue_decision([skipped_builder, {'name': 'source', 'status': 'in_progress'}],
+                                               enroll.QUEUE_LIMIT_SECONDS), 'ready')
+        self.assertEqual(enroll.queue_decision([skipped_source, {'name': 'builder', 'status': 'in_progress'}],
+                                               enroll.QUEUE_LIMIT_SECONDS), 'ready')
         self.assertEqual(enroll.watch_decision('failure', [{'name': 'builder', 'status': 'in_progress'}], 0), 'stop')
         self.assertNotIn('value', ' '.join(enroll.metadata_keys_argv()))
         clock = {'now': 0}

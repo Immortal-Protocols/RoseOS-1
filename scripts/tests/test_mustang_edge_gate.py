@@ -433,7 +433,12 @@ class DedicatedPathsTest(unittest.TestCase):
     def test_dedicated_workflow_orders_proofs_and_ownership_before_credentials(self):
         workflow=(ROOT/'.github/workflows/mustang-ota-dedicated.yml').read_text()
         jobs=workflow_shape.jobs(workflow)
-        self.assertEqual(set(jobs),{'guard','controller','enroll','queue-watch','builder','publisher','cleanup'})
+        self.assertEqual(set(jobs),{'guard','controller','enroll','queue-watch','builder','source','publisher','cleanup'})
+        self.assertNotIn('id-token', jobs['source'])
+        self.assertNotIn('actions-gcp-login', jobs['source'])
+        self.assertIn('mustang_source_sync.py run --execute', jobs['source'])
+        self.assertIn('- source', jobs['cleanup'].split('steps:',1)[0])
+        self.assertLess(jobs['cleanup'].index('mustang_controller.py stop'), jobs['cleanup'].index('sweep --execute'))
         self.assertNotIn('pull_request', workflow)
         self.assertNotIn('workflow_call', workflow)
         self.assertNotIn('pull_request_target', workflow)

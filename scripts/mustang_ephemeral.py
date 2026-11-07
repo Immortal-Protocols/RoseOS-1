@@ -325,13 +325,24 @@ def metadata_argv(action, instance=None):
     raise ValueError('metadata action refused')
 
 
+def selected_guest_jobs(jobs):
+    """The unselected guest job is completed with conclusion skipped. That is not acceptance."""
+    found = []
+    for job in jobs or []:
+        if not isinstance(job, dict) or job.get('name') not in ('builder', 'source'):
+            continue
+        if job.get('status') == 'skipped' or job.get('conclusion') == 'skipped':
+            continue
+        found.append(job)
+    return found
+
+
 def queue_decision(jobs, elapsed_seconds, limit=QUEUE_LIMIT_SECONDS):
-    """ready: builder has been accepted. wait: still inside the bound. stop: cancel this run."""
+    """ready: the selected guest job was accepted. wait: still inside the bound. stop: cancel this run."""
     if type(elapsed_seconds) is not int or elapsed_seconds < 0:
         raise ValueError('queue wait is invalid')
-    matches = [job for job in jobs or [] if isinstance(job, dict) and job.get('name') == 'builder']
-    status = matches[-1].get('status') if matches else None
-    if status in ('in_progress', 'completed'):
+    rows = selected_guest_jobs(jobs)
+    if any(job.get('status') in ('in_progress', 'completed') for job in rows):
         return 'ready'
     if elapsed_seconds >= limit:
         return 'stop'
