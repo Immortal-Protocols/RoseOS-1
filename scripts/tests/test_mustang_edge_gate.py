@@ -844,6 +844,12 @@ class DedicatedRuntimeTest(unittest.TestCase):
         self.assertFalse(report['sourcePin']['mustangProjectInManifest'])
         self.assertFalse(report['sourcePin']['vendorFactoryDownloaded'])
         self.assertFalse(report['sourcePin']['vendorFactoryBodyHashed'])
+        self.assertTrue(report['sourcePin']['factoryBodyHashMatchesIndex'])
+        self.assertFalse(report['sourcePin']['factoryOnDedicatedDisk'])
+        self.assertFalse(report['sourcePin']['factoryExtracted'])
+        self.assertEqual(report['sourcePin']['factoryBox']['sizeBytes'], 11366092596)
+        self.assertFalse(report['otaContinuity']['installerAlternative']['apkExtracted'])
+        self.assertEqual(report['otaContinuity']['installerAlternative']['inventory']['safeEntries'], 34)
         self.assertFalse(report['otaContinuity']['installerAlternative']['isTargetFiles'])
         self.assertFalse(report['otaContinuity']['phoneUpdatePassed'])
         self.assertEqual(report['otaContinuity']['updater']['otaCertificateSha256'],

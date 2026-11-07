@@ -359,6 +359,16 @@ def source_pin_facts(root=ROOT):
         raise ValueError('pinned adevtool revision differs from the upstream record')
     device = load(root/'os/devices/pixel10.json')
     vendor = device['devices']['mustang']['vendorInputs']['factoryImage']
+    factory = load(root/'os/build-only/mustang-factory-box-20261107.json')
+    index_line = factory['index']['entry'][2]
+    if factory.get('match') is not True or factory.get('admitted') is not False or factory.get('extracted') is not False \
+            or factory.get('transferred') is not False or factory.get('sourceTreePinned') is not False \
+            or factory.get('sha256') != factory.get('expectedSha256') \
+            or factory['sha256'] not in index_line or factory['index']['revision'] != upstream.get('adevtool') \
+            or factory['index']['sha256'] != 'a108c6dd08afe9ad5e3fe09f36ae513b2fac34c7d18a2a66d5a90ebb742933f4' \
+            or factory['installerInventory'].get('apkExtracted') is not False \
+            or factory['installerInventory'].get('phoneAcceptance') is not False:
+        raise ValueError('factory box observation was promoted or does not match the pinned index')
     return {
         'pinned': False,
         'admitted': False,
@@ -377,6 +387,10 @@ def source_pin_facts(root=ROOT):
         'vendorFactoryStatus': vendor.get('status'),
         'vendorFactoryDownloaded': False,
         'vendorFactoryBodyHashed': False,
+        'factoryBodyHashMatchesIndex': True,
+        'factoryOnDedicatedDisk': False,
+        'factoryExtracted': False,
+        'factoryBox': {'sha256': factory['sha256'], 'sizeBytes': factory['sizeBytes'], 'location': factory['location']},
     }
 
 
@@ -425,6 +439,9 @@ def ota_continuity(root=ROOT):
             'members': ['system image /system/priv-app/Updater/Updater.apk',
                         'system image /system/etc/security/otacerts.zip'],
             'extracted': False,
+            'inventory': {'safeEntries': 34, 'uncompressed': 'about 4.63GB', 'androidSparseSuper': '1..16'},
+            'apkExtracted': False,
+            'certificateExtracted': False,
         },
     }
 
