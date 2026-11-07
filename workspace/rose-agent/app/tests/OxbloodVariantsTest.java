@@ -76,6 +76,8 @@ public final class OxbloodVariantsTest {
 
         expect(OxbloodVariants.oxbloodFamily(0xff8a1426) && !OxbloodVariants.oxbloodFamily(0xff1e6fd0) && !OxbloodVariants.oxbloodFamily(0xff2a9d3a)
                 && !OxbloodVariants.oxbloodFamily(0xffe0a020), "family check rejects blue, green and amber");
+        expect(!OxbloodVariants.oxbloodFamily(0xffc0d0f0) && !OxbloodVariants.oxbloodFamily(0xffc8f0c8) && !OxbloodVariants.oxbloodFamily(0xffe0c8f0)
+                && !OxbloodVariants.oxbloodFamily(0xfff0e0a0), "pale blue, green, violet and yellow tints are not Oxblood highlights");
         for (String bad : new String[]{"ocean", "", null}) {
             try { OxbloodVariants.matrix(bad); throw new AssertionError("unsupported variant accepted: " + bad); } catch (IllegalArgumentException expected) { checks++; }
         }

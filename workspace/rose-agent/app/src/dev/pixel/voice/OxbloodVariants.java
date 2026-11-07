@@ -111,7 +111,8 @@ final class OxbloodVariants {
  }
 
  /** Whether a colour belongs to the oxblood family: either a near-neutral (desaturated ink, highlight or near-black)
-  * or a red whose hue lies between crimson-magenta and red-orange, and never bright. */
+  * or a red whose hue lies between crimson-magenta and red-orange; a pale tint (the field's ivory and rose highlights)
+ * may be a little warmer, up to 35 degrees, but never green, blue or violet. */
  static boolean oxbloodFamily(int rgb) {
   float[] h = hsl(rgb);
   if (h[1] < 0.2f || h[2] < 0.04f || h[2] > 0.88f) return true;
