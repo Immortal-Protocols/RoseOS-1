@@ -25,7 +25,8 @@ TIMEOUT_S = 12.0  # SettingsAgentProvider allows 8 s per operation; the link add
 
 POLICY_LINE = ('Use the customization tools only when the owner asks to change or check Rose Home columns, the Oxblood '
                'wallpaper variant, the font or the glasses-on hook; read customization_state for relative requests and '
-               'report the returned state, including when the glasses-worn signal is unavailable.')
+               'report the returned state: a saved preference is not a visible change, so give Home\'s effectiveColumns, say so '
+               'when home.applied is false, and say when the glasses-worn signal is unavailable.')
 
 
 class CustomizationRefused(ValueError):

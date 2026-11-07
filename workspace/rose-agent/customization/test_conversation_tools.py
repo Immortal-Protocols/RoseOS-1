@@ -1,4 +1,6 @@
-"""rose.customization: the conversation side of Rose's four customization controls, offline (fake phone link)."""
+"""rose.customization (prototypes/voice-phone-demo): the conversation side of Rose's four customization controls,
+offline with a fake phone link. Kept beside the CLI so the offline suite runs it under the existing workspace/** CI
+trigger (scripts/tests/test_app_tests_paths.py); stdlib only."""
 from __future__ import annotations
 
 import json
@@ -6,7 +8,7 @@ import sys
 import unittest
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3] / 'prototypes/voice-phone-demo'))
 from rose import customization as c  # noqa: E402
 
 

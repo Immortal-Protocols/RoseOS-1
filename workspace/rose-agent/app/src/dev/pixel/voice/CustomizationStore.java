@@ -13,8 +13,11 @@ import java.util.Map;
  *
  * <p>Its own preferences file, "rose-customization", keeps these values apart from every other Rose preference: no
  * other code reads or clears it, and a damaged value only resets customization (CustomizationConfig.parse falls back
- * to the shipped defaults). Writes use commit(), not apply(), so the caller's read-back is a real verification of what
- * is on disk rather than of the in-memory cache alone. All writes are serialized on the class lock.
+ * to the shipped defaults). Writes use commit(), whose result says whether the value reached disk; the read-back that
+ * follows reads SharedPreferences' in-memory map, so it confirms what every reader now sees, not the disk itself. When
+ * commit() fails, the in-memory map (and its listeners) already hold the new value, so the previous value is written
+ * back and the result is unverified, instead of reporting an error while customization_state shows a change that a
+ * restart would revert. All writes are serialized on the class lock.
  *
  * <p>Home reports what it has drawn through {@link #markHomeApplied}; the command result compares that revision with
  * the stored one, so "saved" and "visible on Home" are never confused. NEVER_APPLIED means Home has never reported.
@@ -23,8 +26,9 @@ import java.util.Map;
 final class CustomizationStore {
  private CustomizationStore() {}
 
- static final String PREFS = "rose-customization", CONFIG = "config", HOME_APPLIED = "homeAppliedRevision";
- static final long NEVER_APPLIED = -1;
+ static final String PREFS = "rose-customization", CONFIG = "config", HOME_APPLIED = "homeAppliedRevision",
+   HOME_COLUMNS = "homeAppliedColumns";
+ static final long NEVER_APPLIED = CustomizationOutcome.NEVER_APPLIED;
 
  /** The outcome of one operation: the value before, the value the operation asked for, and the stored read-back. */
  static final class Applied {
@@ -41,20 +45,31 @@ final class CustomizationStore {
  static synchronized CustomizationConfig read(Context c) { return CustomizationConfig.parse(prefs(c).getString(CONFIG, null)); }
 
  /** Validates and stores one operation. A validation failure throws IllegalArgumentException and stores nothing;
-  * an identical request stores nothing and keeps the revision; a failed commit throws IllegalStateException. */
+  * an identical request stores nothing and keeps the revision; a failed commit restores the previous value and
+  * returns an unverified result. */
  static synchronized Applied apply(Context c, String operation, Map<String, Object> params) {
   CustomizationConfig before = read(c);
   CustomizationConfig next = before.apply(operation, params);
   long mark = homeAppliedRevision(c);
   if (!next.sameValues(before) && next.revision <= mark) next = next.withRevision(mark + 1);
-  if (!next.sameValues(before) && !prefs(c).edit().putString(CONFIG, next.toJson()).commit())
-   throw new IllegalStateException("Could not save customization");
+  if (!next.sameValues(before) && !prefs(c).edit().putString(CONFIG, next.toJson()).commit()) {
+   prefs(c).edit().putString(CONFIG, before.toJson()).commit(); // best effort; the result is unverified either way
+   CustomizationConfig now = read(c);
+   return new Applied(before, next, now.sameValues(next) ? before : now);
+  }
   return new Applied(before, next, read(c));
  }
 
- /** Home calls this after it has drawn revision; older reports never move the mark backwards. */
- static synchronized void markHomeApplied(Context c, long revision) {
-  if (revision > homeAppliedRevision(c)) prefs(c).edit().putLong(HOME_APPLIED, revision).apply();
+ /** Home calls this after it has drawn revision with effectiveColumns (the count it actually lays out); older
+  * reports never move the mark backwards. Both values are written together. */
+ static synchronized void markHomeApplied(Context c, long revision, int effectiveColumns) {
+  long mark = homeAppliedRevision(c);
+  if (revision > mark || revision == mark && effectiveColumns != homeAppliedColumns(c))
+   prefs(c).edit().putLong(HOME_APPLIED, revision).putInt(HOME_COLUMNS, effectiveColumns).apply();
+ }
+
+ static synchronized int homeAppliedColumns(Context c) {
+  try { return prefs(c).getInt(HOME_COLUMNS, 0); } catch (ClassCastException damaged) { return 0; }
  }
 
  static synchronized long homeAppliedRevision(Context c) {

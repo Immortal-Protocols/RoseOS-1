@@ -12,6 +12,7 @@ node --test workspace/rose-agent/tests/native-bridge-contract.test.mjs
 node --test workspace/rose-agent/tests/local-rose-auth.test.mjs
 # Nov 7 plan 1O: the customization CLI drives the same catalog operations as conversation.
 node --test workspace/rose-agent/customization/rose-customize.test.mjs
+python3 -I workspace/rose-agent/customization/test_conversation_tools.py
 # Local Rose task events from the real PR318 producer, through the local() provider bridge.
 node --test workspace/rose-agent/voice-providers/local-tasks.test.cjs
 # #410 item 6: microphone-input mute on the capture side, and the provider contract it relies on.
@@ -383,6 +384,11 @@ java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-option
  workspace/rose-agent/app/src/dev/pixel/voice/RoseFonts.java workspace/rose-agent/app/src/dev/pixel/voice/CustomizationConfig.java workspace/rose-agent/app/src/dev/pixel/voice/GlassesWearHook.java \
  workspace/rose-agent/app/tests/GlassesWearHookTest.java
 java -cp "$JAVA_TESTS/GlassesWearHook" dev.pixel.voice.GlassesWearHookTest
+java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/CustomizationOutcome" \
+ workspace/rose-agent/app/src/dev/pixel/voice/MiniJson.java workspace/rose-agent/app/src/dev/pixel/voice/HomeAppLayout.java workspace/rose-agent/app/src/dev/pixel/voice/OxbloodVariants.java \
+ workspace/rose-agent/app/src/dev/pixel/voice/RoseFonts.java workspace/rose-agent/app/src/dev/pixel/voice/CustomizationConfig.java workspace/rose-agent/app/src/dev/pixel/voice/CustomizationOutcome.java \
+ workspace/rose-agent/app/tests/CustomizationOutcomeTest.java
+java -cp "$JAVA_TESTS/CustomizationOutcome" dev.pixel.voice.CustomizationOutcomeTest
 # Native glasses-button duplicate suppression (media-button handling on the native side).
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/Button" \
  workspace/rose-agent/app/src/dev/pixel/voice/GlassesButtonGate.java workspace/rose-agent/tests/java/dev/pixel/voice/ButtonTest.java

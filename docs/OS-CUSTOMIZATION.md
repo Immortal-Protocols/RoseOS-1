@@ -21,6 +21,15 @@ Every change is app-side in Rose Agent: no OS rebuild.
 
 `customization_state` reads all four, plus Home's applied revision and the glasses-worn signal's availability.
 
+Each result reports three things separately, as decided by `CustomizationOutcome`:
+- `status`: `verified` means stored; it never means visible.
+- `home`: `applied`, and `effectiveColumns`, the count Home actually draws. `effectiveColumns` is null until Home has
+  drawn that exact revision.
+- `glassesWear`.
+
+So a 6-column request on a screen that fits 4 is never reported as 6. Home reports what it drew through
+`CustomizationStore.markHomeApplied(revision, effectiveColumns)`, which is part of the Home seam.
+
 The wallpaper variants are bounded colour transforms of the shipped Oxblood field: a hue turn of at most 12° and
 saturation/brightness factors in 0.75–1.25. `OxbloodVariantsTest` checks them against `OxbloodField`'s own palette.
 
@@ -32,11 +41,12 @@ permissioned API that raises the OS edge, a direct command endpoint, and any tru
 **This workstream (new files):**
 - `app/assets/customization-agent-tools.json`
 - In `app/src/dev/pixel/voice/`:
-  - `CustomizationConfig`, `OxbloodVariants`, `RoseFonts`, `GlassesWearHook` (pure)
+  - `CustomizationConfig`, `CustomizationOutcome`, `OxbloodVariants`, `RoseFonts`, `GlassesWearHook` (pure)
   - `CustomizationStore`, `CustomizationAgent`, `CustomizationVisuals`, `GlassesWearHookRunner` (Android)
-- `app/tests/{CustomizationConfig,OxbloodVariants,GlassesWearHook}Test.java`
+- `app/tests/{CustomizationConfig,CustomizationOutcome,OxbloodVariants,GlassesWearHook}Test.java`
 - `workspace/rose-agent/customization/` (CLI, test, README)
-- `prototypes/voice-phone-demo/rose/customization.py` and `rose/tests/test_customization.py`
+- `prototypes/voice-phone-demo/rose/customization.py`, tested by `workspace/rose-agent/customization/test_conversation_tools.py`.
+  The test sits there so the offline suite runs it under the existing `workspace/**` CI trigger.
 - Appended units in `scripts/test-local.sh`
 - This document
 
