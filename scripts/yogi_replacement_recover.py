@@ -1562,7 +1562,7 @@ def inspect_evidence_problems(receipt):
 
 
 def plan(operator, out, now=None, token=None, revision=None, repo=ROOT, template=None, env=None, mode="repair",
-         inspect_receipt=None, confirm_inspect_operation=None, confirm_baseline=None):
+         inspect_receipt=None, confirm_inspect_operation=None, confirm_baseline=None, possess_comment=None):
     manual_context(env if env is not None else os.environ)
     now = now or now_utc()
     if mode not in ("repair", "inspect", "rotate", "rotate-publish"):
@@ -1604,7 +1604,7 @@ def plan(operator, out, now=None, token=None, revision=None, repo=ROOT, template
         if mode == "inspect":
             template = guest.inspect_template()
             op_token, nonce_token = "@@INSPECT_OP@@", "@@INSPECT_NONCE@@"
-            extra = None
+            extra = {"@@POSSESS_COMMENT@@": possess_comment or "roseos-yogi-possess-"}
         else:
             template = (HERE / "yogi_replacement_recover_guest.py").read_text()
             op_token, nonce_token = "@@OP@@", "@@NONCE@@"
@@ -2224,6 +2224,7 @@ def main(argv, transport=None, now=None, clock=None, sleep=None, env=None, token
     planned.add_argument("--inspect-receipt")
     planned.add_argument("--confirm-inspect-operation")
     planned.add_argument("--confirm-baseline")
+    planned.add_argument("--possess-comment")
     sub.add_parser("self-check")
     exported = sub.add_parser("export-bundle")
     exported.add_argument("--out", required=True)
@@ -2242,7 +2243,8 @@ def main(argv, transport=None, now=None, clock=None, sleep=None, env=None, token
             document = plan(args.operator, args.out, now=now, token=token, revision=revision, env=env,
                             mode=args.mode, inspect_receipt=args.inspect_receipt,
                             confirm_inspect_operation=args.confirm_inspect_operation,
-                            confirm_baseline=args.confirm_baseline)
+                            confirm_baseline=args.confirm_baseline,
+                            possess_comment=args.possess_comment)
             result, code = {"dryRun": True, "executed": False, "operationId": document["operationId"],
                             "payloadSha256": document["payloadSha256"],
                             "startupScriptSha256": document["startupScriptSha256"],

@@ -181,7 +181,7 @@ def validate_shape(receipt, binding):
     cleanup = receipt["cleanup"]
     if not isinstance(cleanup, dict) or set(cleanup) != {
             "linesRemoved", "unidentifiedAuthorizedKeyLines", "temporaryAccount", "tempFilesRemoved",
-            "accessCleanup", "possessMarkerLines"}:
+            "accessCleanup", "possessMarkerLines", "authPathsRead", "possessComment"}:
         return ["cleanup"]
     if cleanup["temporaryAccount"] not in ACCOUNT_STATES or cleanup["accessCleanup"] not in ("ok", "failed"):
         return ["cleanup"]
@@ -202,7 +202,11 @@ def validate_shape(receipt, binding):
         return ["journal"]
     if not isinstance(journal["unrecognized"], int) or not 0 <= journal["unrecognized"] <= 20:
         return ["journal"]
-    if not isinstance(cleanup.get("possessMarkerLines"), int) or not 0 <= cleanup["possessMarkerLines"] <= 1000:
+    if not isinstance(cleanup.get("possessMarkerLines"), int) or not -1 <= cleanup["possessMarkerLines"] <= 1000:
+        return ["cleanup"]
+    if not isinstance(cleanup.get("authPathsRead"), int) or not 0 <= cleanup["authPathsRead"] <= 2:
+        return ["cleanup"]
+    if not isinstance(cleanup.get("possessComment"), str) or len(cleanup["possessComment"]) > 80:
         return ["cleanup"]
     for text in _strings(receipt):
         if len(text) > 80 or any(token in text for token in FORBIDDEN):
@@ -602,7 +606,8 @@ def _skeleton(binding, boot, status):
         "hostKeys": {"baseline": {}, "rotated": {}, "distinctFromClonedBaseline": False, "unknownHostKeyCount": 0,
                      "rolledBack": False},
         "cleanup": {"linesRemoved": 0, "unidentifiedAuthorizedKeyLines": 0, "temporaryAccount": "absent",
-                    "tempFilesRemoved": 0, "accessCleanup": "ok", "possessMarkerLines": 0},
+                    "tempFilesRemoved": 0, "accessCleanup": "ok", "possessMarkerLines": 0,
+                    "authPathsRead": 2, "possessComment": "roseos-yogi-possess-"},
         "journal": {"entries": 0, "readable": 0, "phases": [], "hasCompleteReceipt": False, "unrecognized": 0},
     }
 
@@ -634,24 +639,28 @@ def _public_stat_problem(record):
     return None
 
 
-def possess_marker_lines(lines):
-    """How many authorized_keys lines carry a possession marker. The line text is not returned."""
+def possess_marker_lines(lines, comment):
+    """How many lines contain this exact possession comment. The line text is not returned."""
+    if not isinstance(comment, str) or not comment:
+        return 0
     count = 0
     for line in lines or []:
-        if isinstance(line, str) and "roseos-yogi-possess-" in line:
+        if isinstance(line, str) and comment in line:
             count += 1
     return count
 
 
 def cleanup_access(io, operation_id):
-    removed = unidentified = possess = 0
+    removed = unidentified = possess = paths = 0
     failed = False
+    comment = "roseos-yogi-possess-"
     for path in AUTH_PATHS:
         try:
             lines = io.auth_lines(path)
         except (GuestRefused, OSError):
             failed = True
             continue
+        paths += 1
         if lines is None:
             continue
         kept, changed = [], False
@@ -664,7 +673,7 @@ def cleanup_access(io, operation_id):
                 if action == "unidentified":
                     unidentified += 1
                 kept.append(line)
-            possess += possess_marker_lines([line])
+            possess += possess_marker_lines([line], comment)
         if changed:
             try:
                 io.auth_write(path, kept)
@@ -691,9 +700,12 @@ def cleanup_access(io, operation_id):
             failed = True
     except (GuestRefused, KeyError, TypeError, ValueError):
         failed = True
+    if failed or paths != len(AUTH_PATHS):
+        possess = -1
     return {"linesRemoved": removed, "unidentifiedAuthorizedKeyLines": unidentified,
             "temporaryAccount": account_state, "tempFilesRemoved": temp_removed,
-            "accessCleanup": "failed" if failed else "ok", "possessMarkerLines": possess}
+            "accessCleanup": "failed" if failed or paths != len(AUTH_PATHS) else "ok",
+            "possessMarkerLines": possess, "authPathsRead": paths, "possessComment": comment}
 
 
 def _emit(io, receipt, binding):
@@ -742,20 +754,24 @@ def _observe_keys(io):
 
 def _observe_access(io, operation_id):
     """Count authorized_keys lines and the temporary account. Does not rewrite either."""
-    unidentified = possess = 0
+    unidentified = possess = paths = 0
     failed = False
+    comment = "roseos-yogi-possess-"
     for path in AUTH_PATHS:
         try:
             lines = io.auth_lines(path)
         except (GuestRefused, OSError):
             failed = True
             continue
+        paths += 1
         if not lines:
             continue
         for line in lines:
             if line_disposition(line, operation_id) == "unidentified":
                 unidentified += 1
-            possess += possess_marker_lines([line])
+            possess += possess_marker_lines([line], comment)
+    if failed or paths != len(AUTH_PATHS):
+        possess = -1
     account_state = "absent"
     try:
         entry = io.account()
@@ -765,7 +781,8 @@ def _observe_access(io, operation_id):
         failed = True
         account_state = "preserved-mismatch"
     return {"linesRemoved": 0, "unidentifiedAuthorizedKeyLines": unidentified, "temporaryAccount": account_state,
-            "tempFilesRemoved": 0, "accessCleanup": "failed" if failed else "ok", "possessMarkerLines": possess}
+            "tempFilesRemoved": 0, "accessCleanup": "failed" if failed or paths != len(AUTH_PATHS) else "ok",
+            "possessMarkerLines": possess, "authPathsRead": paths, "possessComment": comment}
 
 
 def _rotate_refuse(io, binding, boot, before, runner, problem, baseline=None, unknown=0):
@@ -1953,18 +1970,27 @@ def main(argv):
             continue
         if parsed and parsed[0] == PUBLIC[alg]:
             baseline[alg] = parsed[1]
-    unidentified = possess = 0
+    unidentified = possess = paths = 0
+    needle = "@@POSSESS_COMMENT@@"
+    unreadable = False
     for path in AUTH:
         try:
             data, _info = read_file(root, path, 1 << 20)
-        except OSError:
+        except OSError as error:
+            if getattr(error, "errno", None) == errno.ENOENT:
+                paths += 1
+                continue
+            unreadable = True
             continue
+        paths += 1
         for line in data.decode(errors="replace").splitlines():
             parts = line.split()
             if line and not line.startswith("#") and not (len(parts) == 3 and parts[2] == "roseos-yogi-recover-" + OPERATION_ID):
                 unidentified += 1
-            if "roseos-yogi-possess-" in line:
+            if needle and needle in line:
                 possess += 1
+    if unreadable or paths != len(AUTH):
+        possess = -1
     account = "absent"
     try:
         data, _info = read_file(root, "/etc/passwd", 1 << 20)
@@ -1986,8 +2012,9 @@ def main(argv):
         "hostKeys": {"baseline": baseline, "rotated": {}, "distinctFromClonedBaseline": False,
                      "unknownHostKeyCount": unknown, "rolledBack": False},
         "cleanup": {"linesRemoved": 0, "unidentifiedAuthorizedKeyLines": unidentified,
-                    "temporaryAccount": account, "tempFilesRemoved": 0, "accessCleanup": "ok",
-                    "possessMarkerLines": possess},
+                    "temporaryAccount": account, "tempFilesRemoved": 0,
+                    "accessCleanup": "failed" if unreadable or paths != len(AUTH) else "ok",
+                    "possessMarkerLines": possess, "authPathsRead": paths, "possessComment": needle},
         "journal": journal_summary(root),
     }
     emit(receipt)

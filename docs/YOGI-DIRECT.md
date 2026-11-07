@@ -62,10 +62,13 @@ Residual risks, stated rather than claimed away:
 
 ## Strict possession check
 
-This is not the direct route and it does not record `builder.direct.hostKey`. `hostKeyPinned` and
-`guestAuthenticated` stay false until a later strict handshake succeeds. The saved `getGuestAttributes` `hostkeys/`
-response from rotate-publish operation `ce79` is the only host-key input. Serial output, trust on first use, and
-`gcloud compute ssh` are not used.
+This is not the direct route and it does not record `builder.direct.hostKey`. `guestAuthenticated` stays
+false until the strict handshake and the fresh inspect both succeed. `hostKeyPinned` stays false even after
+that success: this check does not record a config pin. The host-key input is the bare `gcloud --format=json`
+list from `get-guest-attributes --query-path=hostkeys/`, three `{namespace, key, value}` objects. A wrapper
+with provenance is not that response. The fresh terminated read at 2026-11-07T15:01:24Z matches the `ce79`
+fingerprints. Preflight refuses unless that read is still the instance: fingerprint `pSAPI4eI6q4=`,
+only the two base metadata keys, status `TERMINATED`, and instance id `2720796557371812468`. Serial output, trust on first use, and `gcloud compute ssh` are not used.
 
 The inspect recorded no authorized-key line and no temporary account. OS Login stays false and project SSH keys stay
 blocked, so there is no existing login to reuse. The check appends one expiring instance `ssh-keys` line for the
@@ -73,16 +76,25 @@ existing `pixelbuild` account and leaves every other metadata key and every othe
 metadata write uses the current fingerprint and is not retried. The login private key stays a local mode `0600` file
 and is not forwarded. The one remote command is the existing read-only quiesced probe: metadata, `/proc`, and
 `systemctl is-active`/`is-enabled`. It does not use sudo and does not change the account. After it, the same
-fingerprint rule removes only that exact line. A fresh inspect, not a spent operation, must report
-`possessMarkerLines` 0 before the guest key is treated as gone. Metadata removal alone is not that proof. Every path
-that started the VM stops it. The runner is not enabled. IAP only selects the instance. OpenSSH checks the ed25519
-host key against the saved API blob. `hostKeyPinned` stays false.
+fingerprint rule removes only that exact line. A 412 keeps the intended map and is not written again.
+The same removal and STOP run when SSH fails or start times out without a confirmed state. After a removal
+that was accepted, the guest agent is given one bounded refresh, the VM is stopped, and a fresh inspect boot
+must read both `/root/.ssh/authorized_keys` and `/home/pixelbuild/.ssh/authorized_keys`. The receipt has to
+name this operation's exact `roseos-yogi-possess-<id>` comment, `authPathsRead` 2, `accessCleanup` ok, and
+`possessMarkerLines` 0. A missing count is not zero. An unreadable path is not proof. Metadata removal alone
+is not that proof. The runner is not enabled. IAP only selects the instance. OpenSSH checks the ed25519 host
+key against the saved API blob. `hostKeyPinned` stays false.
 
-`handshake-plan` writes that plan and does not call GCP or SSH:
+`handshake-plan` writes that plan and does not call GCP or SSH. `handshake --execute` is the operator run:
 
 ```sh
-python3 scripts/yogi_direct.py handshake-plan \
+env -u GOOGLE_APPLICATION_CREDENTIALS -u CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT \
+  python3 -B yogi_possession.py handshake-plan \
   --hostkeys HOSTKEYS.json --client-public CLIENT.pub --out ~/yogi-ops/possess-LABEL
+env -u GOOGLE_APPLICATION_CREDENTIALS -u CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT \
+  python3 -B yogi_possession.py handshake --execute \
+  --hostkeys HOSTKEYS.json --client-public CLIENT.pub --identity ~/yogi-ops/possess-LABEL/id_ed25519 \
+  --out ~/yogi-ops/possess-LABEL
 ```
 
 ## Dependencies (all unverified today, all fail-closed)
