@@ -781,6 +781,11 @@ class DedicatedRuntimeTest(unittest.TestCase):
         dest.write_text(json.dumps(broken))
         with self.assertRaisesRegex(ValueError,'not a current phone'): self.admitted(cfg)
 
+    def test_source_sync_receipt_is_not_bootstrap_admission(self):
+        ref=self.record('sync', {'schema':'roseos.mustang-source-sync-evidence.v1', 'pristine':False})
+        with self.assertRaisesRegex(ValueError, 'not pristine bootstrap'):
+            self.admitted(dict(self.cfg, sourceEvidence=ref))
+
     def test_copy_time_frankel_snapshot_is_not_a_source_pin(self):
         path=self.root/self.cfg['sourceEvidence']
         source=self.driver.load(path)
@@ -856,7 +861,17 @@ class DedicatedRuntimeTest(unittest.TestCase):
         self.assertEqual(runtime['appInputsRecord'], readiness.ACCEPTED_APP_EXPORT['path'])
         self.assertEqual(runtime['status'], 'unbound')
         self.assertIsNone(runtime['signingRouteEvidence'])
-        self.assertIsNone(runtime['sourceEvidence'])
+        self.assertEqual(runtime['sourceEvidence'], readiness.ACCEPTED_SOURCE_SYNC['path'])
+        self.assertTrue(readiness.accepted_source_sync(
+            json.loads((ROOT/runtime['sourceEvidence']).read_text()), runtime['sourceEvidence']))
+        self.assertIn('source-unprovisioned', codes)
+        self.assertNotIn('source-sync-unverified', codes)
+        self.assertTrue(report['sourceSync']['bound'])
+        self.assertFalse(report['sourceSync']['buildAuthorized'])
+        self.assertFalse(report['sourceSync']['pristine'])
+        self.assertEqual(report['sourceSync']['projectCount'], 1057)
+        self.assertFalse(report['sourcePin']['pinned'])
+        self.assertFalse(report['sourcePin']['syncAuthorized'])
         record=json.loads((ROOT/runtime['appInputsRecord']).read_text())
         export=readiness.ACCEPTED_APP_EXPORT
         self.assertTrue(readiness.accepted_app_export(record, runtime['appInputsRecord']))

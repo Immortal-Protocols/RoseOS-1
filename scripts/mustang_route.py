@@ -172,6 +172,87 @@ def bound_app_freshness(record, root=ROOT):
         return None
 
 
+ACCEPTED_SOURCE_SYNC = {
+    'path': 'os/build-only/mustang-source-sync-42409634329.json',
+    'schema': 'roseos.mustang-source-sync-evidence.v1',
+    'receiptSchema': 'roseos.mustang-source-sync-run.v1',
+    'receiptSha256': '5e4012c279d5a7be5bed6810a9e490dffd087bc0ebd9efaab5c3230a5013b52c',
+    'recipeSha256': '0af7e942f7baf3ec0594d01b6b75bfdd40f5e6514f099a6ec8564816b2e3b28c',
+    'workflowRunId': '42409634329',
+    'runAttempt': '1',
+    'headSha': 'c89d530cda33354ec593c1fb1338aa50e5dc7484',
+    'headBranch': 'main',
+    'event': 'workflow_dispatch',
+    'workflow': '.github/workflows/mustang-ota-dedicated.yml',
+    'sourceJobId': 128515080622,
+    'roseRevision': '2ac24c5475de121ebe4e9e6a5c1a404ef44aa9c8',
+    'manifestSha256': '32d30e70ee59d373a17fe8090bdded898afa80651f27c331caca4578b3008888',
+    'projectCount': 1057,
+    'instanceId': '5585425566393384049',
+    'diskUuid': '4183bff8-6be4-46bb-a641-2193d19813ee',
+    'sourceRoot': '/mnt/disks/mustang-data/roseos/source',
+}
+
+
+def accepted_source_sync(record, path, root=ROOT):
+    """The source-only stdout receipt still matches the current recipe. It admits no build."""
+    expected = ACCEPTED_SOURCE_SYNC
+    if path != expected['path'] or not isinstance(record, dict):
+        return False
+    if record.get('schema') != expected['schema'] or record.get('pristine') is not False \
+            or record.get('buildAuthorized') is not False or record.get('toolsAttested') is not False \
+            or record.get('signingAttested') is not False or record.get('runtimeProvisioned') is not False \
+            or record.get('freshnessForever') is not False or record.get('receiptSha256') != expected['receiptSha256']:
+        return False
+    receipt = record.get('receipt')
+    if not isinstance(receipt, dict):
+        return False
+    receipt_sha = hashlib.sha256(json.dumps(receipt, sort_keys=True).encode()).hexdigest()
+    if receipt_sha != expected['receiptSha256']:
+        return False
+    observed = receipt.get('observed') or {}
+    provenance = record.get('provenance') or {}
+    jobs = provenance.get('jobs') or {}
+    source_job = jobs.get('source') or {}
+    if receipt.get('schema') != expected['receiptSchema'] or receipt.get('admitted') != 'source-sync-only' \
+            or receipt.get('executed') is not True or receipt.get('compileAuthorized') is not False \
+            or receipt.get('signAuthorized') is not False or receipt.get('runtimeBound') is not False \
+            or receipt.get('authenticatedStop') is not False or receipt.get('recipeSha256') != expected['recipeSha256'] \
+            or receipt.get('runnerCrashStopSeconds') != mustang_lane.CONFIRMED_STOP['seconds'] \
+            or (receipt.get('historical') or {}).get('oidcExercised') is not False:
+        return False
+    if observed.get('instance') != expected['instanceId'] or observed.get('disk') != expected['diskUuid'] \
+            or observed.get('pin-head') != expected['roseRevision'] or observed.get('manifest-head') != expected['roseRevision'] \
+            or observed.get('pin-hash') != expected['manifestSha256'] or observed.get('manifest-hash') != expected['manifestSha256'] \
+            or observed.get('resolvedSha256') != expected['manifestSha256'] or observed.get('projectCount') != expected['projectCount']:
+        return False
+    if provenance.get('workflowRunId') != expected['workflowRunId'] or provenance.get('runAttempt') != expected['runAttempt'] \
+            or provenance.get('headSha') != expected['headSha'] or provenance.get('headBranch') != expected['headBranch'] \
+            or provenance.get('event') != expected['event'] or provenance.get('workflow') != expected['workflow'] \
+            or source_job.get('id') != expected['sourceJobId'] or source_job.get('conclusion') != 'success' \
+            or (jobs.get('builder') or {}).get('conclusion') != 'skipped' \
+            or (jobs.get('signer') or {}).get('conclusion') != 'skipped' \
+            or (jobs.get('publisher') or {}).get('conclusion') != 'skipped':
+        return False
+    import mustang_source_sync as sync
+    recipe = sync.load(root)
+    if sync.recipe_sha256(root) != expected['recipeSha256'] or recipe.get('roseRevision') != expected['roseRevision'] \
+            or recipe.get('manifestSha256') != expected['manifestSha256'] or recipe.get('sourceRoot') != expected['sourceRoot'] \
+            or recipe.get('executed') is not False or recipe.get('compileAuthorized') is not False \
+            or (recipe.get('checkoutHost') or {}).get('instanceId') != expected['instanceId'] \
+            or (recipe.get('checkoutHost') or {}).get('diskUuid') != expected['diskUuid']:
+        return False
+    if expected['instanceId'] != mustang_lane.CONFIRMED_INSTANCE_ID or expected['diskUuid'] != mustang_lane.CONFIRMED_UUID:
+        return False
+    projects = list(ET.parse(Path(root)/'os/pinned-manifest.xml').getroot().iter('project'))
+    if len(projects) != expected['projectCount']:
+        return False
+    shown = git_local(root, ['show', expected['headSha'] + ':os/build-only/mustang-source-sync-recipe-20261107.json'])
+    if shown.returncode != 0 or hashlib.sha256(shown.stdout.encode()).hexdigest() != expected['recipeSha256']:
+        return False
+    return True
+
+
 def accepted_app_export(record, path):
     artifact = (record.get('export') or {}).get('artifact') or {}
     apps = {row.get('package'): row.get('versionCode') for row in record.get('apps') or []}
@@ -209,11 +290,34 @@ def blockers(root=ROOT):
                                 + mustang_lane.RUNNER_GROUP_WORKFLOW
                                 + '. allows_public_repositories is true because that repository is public. The group has zero runners. '
                                 'Lifetime is unset. No registration token is stored.'})
-    if runtime.get('sourceEvidence') is None or evidence['observed'].get('sourceInstalled') is not True:
+    sync_path = runtime.get('sourceEvidence')
+    sync_record = None
+    sync_ok = False
+    if sync_path is not None:
+        try:
+            sync_record = load(root/sync_path)
+        except (OSError, json.JSONDecodeError, ValueError):
+            sync_record = None
+        sync_ok = accepted_source_sync(sync_record, sync_path, root)
+    if sync_path == ACCEPTED_SOURCE_SYNC['path'] and not sync_ok:
+        items.append({'code': 'source-sync-unverified',
+                      'detail': 'The bound source evidence is not the source-only receipt for run 42409634329.'})
+    copy_time = ('The old /home/pixelbuild/grapheneos-2026100600 snapshot has resolvedManifest null. '
+                 'Selection 34cdc3a98e8cfc614a88c5a40d002c51e87404aaec8a4f2962cb46e824c4f6e4 is copy-time only and is not a source pin.')
+    if sync_ok:
+        items.append({'code': 'source-unprovisioned',
+                      'detail': 'Source-only run 42409634329 attempt 1 on main c89d530cda33354ec593c1fb1338aa50e5dc7484 is bound. '
+                                'Rose 2ac24c5475de121ebe4e9e6a5c1a404ef44aa9c8, manifest pin and resolved sha256 '
+                                '32d30e70ee59d373a17fe8090bdded898afa80651f27c331caca4578b3008888, 1057 projects, tree '
+                                '/mnt/disks/mustang-data/roseos/source, VM 5585425566393384049, disk '
+                                '4183bff8-6be4-46bb-a641-2193d19813ee. The 2026-11-06 infra readback still has '
+                                'sourceInstalled false and roseosDirectory empty; this receipt does not refresh that readback. '
+                                'It does not attest tools, a pristine bootstrap, signing capacity, or build admission. '
+                                + copy_time})
+    elif sync_path is None or evidence['observed'].get('sourceInstalled') is not True:
         items.append({'code': 'source-unprovisioned',
                       'detail': 'roseos/ on the data disk is empty. Pinned source has not been synced and source evidence is unset. '
-                                'The old /home/pixelbuild/grapheneos-2026100600 snapshot has resolvedManifest null. '
-                                'Selection 34cdc3a98e8cfc614a88c5a40d002c51e87404aaec8a4f2962cb46e824c4f6e4 is copy-time only and is not a source pin.'})
+                                + copy_time})
     if runtime.get('jobs') is None:
         items.append({'code': 'jobs-unbound',
                       'detail': 'Make parallelism is unset. Do not copy the withdrawn c3-standard-44 proposal of 24 jobs onto this n2-highmem-32 VM.'})
@@ -341,6 +445,11 @@ def report(root=ROOT):
         'numberStrategy': number_strategy(root),
         'sourceRequirement': load(root/'os/build-only/mustang-source-requirement-20261107.json'),
         'sourcePin': source_pin_facts(root),
+        'sourceSync': {'bound': True, 'buildAuthorized': False, 'pristine': False,
+                       'path': ACCEPTED_SOURCE_SYNC['path'], 'workflowRunId': ACCEPTED_SOURCE_SYNC['workflowRunId'],
+                       'projectCount': ACCEPTED_SOURCE_SYNC['projectCount']}
+        if accepted_source_sync(load(root/ACCEPTED_SOURCE_SYNC['path']), ACCEPTED_SOURCE_SYNC['path'], root)
+        else {'bound': False, 'buildAuthorized': False},
         'otaContinuity': ota_continuity(root),
         'controllerWif': controller_wif_prerequisites(),
         'signingGroupImpact': {

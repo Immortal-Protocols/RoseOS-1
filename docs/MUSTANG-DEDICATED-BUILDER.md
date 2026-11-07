@@ -167,10 +167,11 @@ API for STOP. It performs no login or provisioning.
 The manual `.github/workflows/mustang-ota-dedicated.yml` source now wires hosted
 admission, the dedicated controller, one builder job, optional publication and
 ownership cleanup. **`mustang-lane.json` is identity-bound and
-`mustang-runtime.json` remains unbound. No runner, source, signing route, or
-publication is activated.** The old source-only inspector is
-superseded by `scripts/mustang-dedicated.py guard`. No workflow dispatch or real
-candidate has been performed to prove this implementation.
+`mustang-runtime.json` remains unbound. No runner, signing route, or
+publication is activated.** The source-only receipt for run 42409634329 is
+bound and does not admit a build. The old source-only inspector is
+superseded by `scripts/mustang-dedicated.py guard`. That source-only dispatch
+is not a build candidate.
 
 The hosted guard checks the exact repository ID, main workflow, attempt 1,
 actual binding evidence and app-source freshness before any controller login.
@@ -252,7 +253,7 @@ name, a copied device label or a guessed value as readback.
 | --- | --- |
 | `jobs`, `tools`, `dataFilesystemUuid`, `automaticStopHours` | Approved Make parallelism, executable aapt/apksigner/Node paths, the dedicated data UUID and the confirmed four-hour STOP. The UUID and four-hour STOP are already recorded; jobs and tools are not. |
 | `networkEvidence` | JSON with matching `builder`, `githubEgressVerified: true` and the actual `approvedRoute`; no denied lookup retry or implicit NAT/proxy. |
-| `sourceEvidence` | Matching `builder`/`sourceRoot`, pinned manifest SHA-256, pinned `adevtoolRevision` and `pristine: true` bootstrap readback. This attestation is not a full copy-byte revision verification. |
+| `sourceEvidence` | A build still requires matching `builder`/`sourceRoot`, pinned manifest SHA-256, pinned `adevtoolRevision` and `pristine: true` bootstrap readback. This attestation is not a full copy-byte revision verification. A `roseos.mustang-source-sync-evidence.v1` record may cite one source-only run receipt instead. That record does not satisfy the pristine bootstrap requirement and does not admit a build. |
 | `runner` | Actual group name/ID and chosen persistent/ephemeral lifetime; registration evidence matching VM, workflow and repository `1428996648`, with `publicRepositoryAdmitted: true` and `readyOnEveryStart: true`. The protected registration implementation remains Infra-owned. |
 | `signingRouteEvidence` | Actual approved admission of this workflow to the **existing** signer, matching `builder`/workflow, `identityVariable: GCP_SIGNER_SERVICE_ACCOUNT`, `providerVariable: MUSTANG_SIGNER_WORKLOAD_IDENTITY_PROVIDER`, `approved: true`, `establishedMustangIdentityPreserved: true`. No new IAM/key/credential operation is performed by source or inferred from these field names. |
 | `appInputsRecord` | An actual `roseos.app-inputs-record.v1` Actions export, or the explicit `roseos.app-inputs-private-record.v1` private archive contract below, with the exact committed producer allocation and APK/receipt/policy identities. |
