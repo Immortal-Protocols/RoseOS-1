@@ -11,10 +11,10 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
-/** App-command handler for the customization_* operations (Nov 7 plan 1O). It is meant to be reached from
- * SettingsAgentProvider.execute by the "customization_" prefix, so conversation and CLI share one signed path and one
- * catalog (assets/customization-agent-tools.json); that wiring is pending agreement with the provider's owner and is
- * not made here.
+/** App-command handler for the customization_* operations (Nov 7 plan 1O). SettingsAgentProvider.execute forwards the
+ * "customization_" prefix here, after the provider's existing signature gate in call(), and its capabilities merge
+ * appends {@link #catalog}, so conversation and CLI share one signed path and one catalog
+ * (assets/customization-agent-tools.json).
  *
  * <p>Arguments arrive as org.json and are converted to the plain types CustomizationConfig validates (Long, Double,
  * Boolean, String); nested objects, arrays and null are refused. Every failure is an exception, which the provider turns

@@ -8,8 +8,8 @@ import java.util.IdentityHashMap;
 import java.util.Map;
 
 /** Durable home of the four customization controls (Nov 7 plan 1O). Conversation and CLI both write through
- * {@link #apply}, Home and the conversation surface listen through {@link #register}, so a change is live in every
- * surface that has integrated the listener, without an OS rebuild or a restart.
+ * {@link #apply}; Home (MainActivity) listens through {@link #register} and rebuilds when what it draws changes, so a
+ * change is live without an OS rebuild or a restart.
  *
  * <p>Its own preferences file, "rose-customization", keeps these values apart from every other Rose preference: no
  * other code reads or clears it, and a damaged value only resets customization (CustomizationConfig.parse falls back
@@ -69,10 +69,12 @@ final class CustomizationStore {
  }
 
  /** Home calls this after it has drawn revision with effectiveColumns (the count it actually lays out); older
-  * reports never move the mark backwards. Both values are written together. */
+  * reports never move the mark backwards, except a report of exactly the stored revision (Home drew the defaults a
+  * damaged config was reset to, whose revision is below an earlier mark). Both values are written together. */
  static synchronized void markHomeApplied(Context c, long revision, int effectiveColumns) {
   long mark = homeAppliedRevision(c);
-  if (revision > mark || revision == mark && effectiveColumns != homeAppliedColumns(c))
+  boolean current = revision == read(c).revision && revision != mark;
+  if (revision > mark || current || revision == mark && effectiveColumns != homeAppliedColumns(c))
    prefs(c).edit().putLong(HOME_APPLIED, revision).putInt(HOME_COLUMNS, effectiveColumns).apply();
  }
 

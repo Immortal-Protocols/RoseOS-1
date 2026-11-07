@@ -1,8 +1,9 @@
 # Rose customization CLI
 
-Nov 7 plan 1O. Rose's four customization controls are designed to change live,
-with no OS rebuild, once integrated. At this revision no control changes
-anything on the phone yet (see limitations e and f):
+Nov 7 plan 1O. Rose's four customization controls change live, with no OS
+rebuild. Rose Agent dispatches them and Home applies them in this source. On a
+phone they still need the conversation tools registered (limitation e) and an
+installed Agent build. Host tests here are not device evidence:
 
 | Control | Tool | Values |
 | --- | --- | --- |
@@ -85,18 +86,11 @@ d. **No glasses-worn signal.** The hook can be configured, but it never fires
    (`dev.pixel.glassescamera`), not in this repo. Relaying it needs a
    coordinated change outside this repo and Meta registration. A Bluetooth
    connection and the hinge/unfold advertisement are never treated as worn.
-e. **Home does not apply changes yet.** Home picks up changes only after the
-   Home/App integration seam lands. Home/App Product agreed to it: one isolated
-   commit after #617.
-h. **Conversation tools are not registered yet.** App Core adds
-   `rose.customization.TOOLS` to `codex_conductor.py` once this module is in a
-   PR they can review.
-f. **The app does not dispatch `customization_*` yet.** `CustomizationAgent`
-   is meant to be reached from SettingsAgentProvider by the `customization_`
-   prefix. App Core accepted that forward as the provider's owner, subject to
-   a security-relevant review of the exact diff. Until it lands, no control
-   changes anything on the phone.
-g. **Some glasses-hook rules are enforced only on the phone.** The server's
+e. **Conversation tools are not registered yet.** App Core adds
+   `rose.customization.TOOLS` to `codex_conductor.py` after this module is on
+   main. Until then, and until an Agent build with this source is installed,
+   `--say` reaches a Rose that has no customization tools.
+f. **Some glasses-hook rules are enforced only on the phone.** The server's
    validator (and this CLI's mirror of it) accepts these, and the phone's
    `CustomizationConfig` refuses them, which is the intended authority:
    `{}`; `packageName` alone while the stored action is tray; `action: tray`

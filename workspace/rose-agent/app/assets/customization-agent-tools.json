@@ -48,7 +48,7 @@
   {
     "name": "customization_font",
     "operation": "customization_font",
-    "description": "Choose Rose's font from the fonts bundled on the phone, live. default restores Rose's shipped type: Nunito for conversation text and the system sans-serif for Home labels. nunito, sans, serif, condensed and mono apply one family throughout Rose's own text. Other apps are not affected.",
+    "description": "Choose Rose's font from the fonts bundled on the phone, live. default restores Rose's shipped type: Nunito for conversation text and the system sans-serif for Home labels. nunito, sans, serif, condensed and mono apply one family to Home and folder labels and to Rose's conversation text and cards drawn after the change; some built-in controls and widgets keep their own faces, and other apps are not affected.",
     "foregroundRequired": false,
     "inputSchema": {
       "type": "object",

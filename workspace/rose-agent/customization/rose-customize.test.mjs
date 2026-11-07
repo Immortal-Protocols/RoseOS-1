@@ -157,3 +157,17 @@ test('Python conversation module builds the identical command', () => {
  assert.equal(py.status, 0, py.stderr);
  assert.deepEqual(JSON.parse(py.stdout), appCommand('customization_home_columns', {columns: 5}));
 });
+
+test('dev.pixel.voice dispatches customization_* only behind the provider signature gate', async () => {
+ const {readFileSync} = await import('node:fs');
+ const src = readFileSync(new URL('../app/src/dev/pixel/voice/SettingsAgentProvider.java', import.meta.url), 'utf8');
+ const execute = src.slice(src.indexOf(' private JSONObject execute('), src.indexOf(' @Override public Bundle call('));
+ assert.match(execute, /if\(CustomizationAgent\.handles\(method\)\)return CustomizationAgent\.execute\(getContext\(\),method,p\);/, 'forward lives in execute()');
+ assert.match(execute, /JSONArray cz=CustomizationAgent\.catalog\(getContext\(\)\);for\(int i=0;i<cz\.length\(\);i\+\+\)tools\.put\(cz\.get\(i\)\);/, 'capabilities merge the shared catalog');
+ assert.equal(src.split('CustomizationAgent.').length - 1, 3, 'only catalog, handles and execute: no other CustomizationAgent entry point in the provider');
+ const call = src.slice(src.indexOf(' @Override public Bundle call('));
+ const gate = call.indexOf('checkSignatures(android.os.Process.myUid(),Binder.getCallingUid())!=PackageManager.SIGNATURE_MATCH)throw new SecurityException');
+ assert.ok(gate >= 0 && gate < call.indexOf('execute(method'), 'the signature gate runs before execute');
+ const manifest = readFileSync(new URL('../app/AndroidManifest.xml', import.meta.url), 'utf8');
+ assert.ok(!/customization/i.test(manifest), 'no new manifest entry');
+});

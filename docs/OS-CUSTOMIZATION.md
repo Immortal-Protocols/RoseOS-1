@@ -50,28 +50,31 @@ permissioned API that raises the OS edge, a direct command endpoint, and any tru
 - Appended units in `scripts/test-local.sh`
 - This document
 
-**Seams agreed with existing owners. None is applied yet; each lands as its own reviewable change:**
-- **Home/App Product** (`session_01EA17TTWtj67hdeC1KgHTe2`). This workstream authors one isolated commit on main after
-  #617 merges:
-  - `MainActivity`: listener, effective columns and capacity, wallpaper filter and `HomeGlassTile.Backdrop`,
-    `chatFont`, `homeStamp`;
-  - `HomeAppLayout`/`HomePlan`: column overloads;
-  - typefaces in `HomeAppTile`/`HomeFolder`;
-  - an `OxbloodField` colour-filter hook;
-  - `home-launcher.test.mjs` pins, reported back to Home.
+**Existing files this workstream edits, as agreed with their owners and applied in PR #626:**
+- **Home/App Product** (`session_01EA17TTWtj67hdeC1KgHTe2`) reviewed the Home commits (`4c84aff` and `f2c492e`, on main
+  after #617):
+  - `MainActivity`:
+    - the listener and a coalesced apply;
+    - planning, capacity and staleness through `CustomizationConfig.effectiveHomeColumns`/`homeCapacity`/`homeStale`;
+    - the wallpaper filter on Home's `OxbloodField`, so `HomeGlassTile.Backdrop` gets it;
+    - `chatFont`;
+    - the `markHomeApplied` report.
+  - `OxbloodField`: the `setColorFilter` variant hook.
+  - `HomeAppTile` and `HomeFolder`: label typefaces.
+  - `tests/home-launcher.test.mjs`: the planning and label pins.
+  - `HomeAppLayout` and `HomePlan` are unchanged.
 
-  Conditions:
-  - keep `homePlanBreaker` for automatic replans and bypass it only when the revision changes;
-  - rebuild only on an effective change, coalesced;
-  - no flip-flop between pages, and never hide a second page;
-  - test max columns with an inventory that overflows;
-  - local hunks only;
-  - no settings-dialog entry.
+  Conditions, all met:
+  - `homePlanBreaker` still governs automatic replans; only a customization change bypasses it.
+  - Home rebuilds only on an effective change (plan, wallpaper or font), coalesced.
+  - No page flip-flop, and a second page is never hidden.
+  - The max-columns overflow case is covered by `CustomizationConfigTest.reflow`.
+  - Hunks are local, and there is no settings-dialog entry.
 - **App Core** (`session_015TFqkSQ4kabGkMUynZZPrN`).
-  - **`SettingsAgentProvider`:** a ~6-line `customization_` forward plus the capabilities merge. App Core accepted it
-    as owner and will treat it as a security-relevant review. `CustomizationAgent` stays in its own file. The
-    provider's signature gate is unchanged.
-  - **`rose/codex_conductor.py`:** App Core adds the ~4 lines that register `rose.customization.TOOLS` and the policy
+  - **`SettingsAgentProvider`** (`7a14fef`, applied): a two-line `customization_` forward inside the signature-gated
+    `execute()`, plus the capabilities merge. App Core reviewed it as owner and treated it as security-relevant.
+    `CustomizationAgent` stays in its own file. The gate, receipts and timeout are unchanged, and a node test pins this.
+  - **Not applied here: `rose/codex_conductor.py`.** After this merges, App Core adds the ~4 lines that register `rose.customization.TOOLS` and the policy
     line. Their conditions: no free-text logging, `ok` only for the phone's confirmed status, no retries. Not
     touched here while App Core reconciles #550.
 - **OS Product** (`session_015TFqkUvLjBgRPN1soK4VYh`). The Home fallback for "tray" is agreed. Raising the OS edge
@@ -151,5 +154,5 @@ What was not done:
 - no glasses hardware evidence;
 - no publication.
 
-The controls change nothing on a phone until the Home, provider and conductor seams land and an Agent build is
-installed.
+On a phone the controls work through conversation only after App Core registers the conductor tools (after this merges)
+and an Agent build with this source is installed. No APK has been built or run on a device in this workstream.
