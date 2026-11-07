@@ -54,8 +54,27 @@ public final class AgentTrayPrototype implements DisplayManager.DisplayListener 
     private boolean active;
     private long lastCommandAt;
 
+    /** A status-bar touch consumer that runs before the tray (the Rose notification shade, 1G). */
+    public interface StatusBarDragHandler {
+        /** True to take this touch; the status bar then cancels its own gesture. */
+        boolean onStatusBarTouch(MotionEvent event);
+    }
+
+    private static volatile StatusBarDragHandler dragHandler;
+
+    /** Set by SystemUI's RoseShadeStartable; the shade lives in SystemUI, which this library cannot reference. */
+    public static void setStatusBarDragHandler(StatusBarDragHandler handler) {
+        dragHandler = handler;
+    }
+
     /** Called by the native status window; the decorative overlay stays non-touchable. */
     public static boolean onStatusBarTouch(MotionEvent event) {
+        final StatusBarDragHandler handler = dragHandler;
+        if (handler != null && handler.onStatusBarTouch(event)) {
+            // The pull is the shade's; a tray tap that began with it is abandoned.
+            if (instance != null) instance.controls.cancel();
+            return true;
+        }
         return instance != null && instance.handleTouch(event);
     }
 

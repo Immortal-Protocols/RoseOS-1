@@ -73,6 +73,7 @@ python3 os/tests/test_automated_devices_contract.py
 python3 os/tests/test_rose_edge_shell.py
 python3 os/tests/test_background_control_prototype.py
 python3 os/tests/test_anyapp_takeover_platform.py
+python3 os/tests/test_rose_shade.py
 python3 scripts/tests/test_systemui_component_update.py
 python3 os/tests/persistent-app-experiment/test_systemui_stages.py
 python3 os/tests/persistent-app-experiment/test_setup_emulator.py
@@ -236,6 +237,7 @@ java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-option
  os/overlays/frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeModel.java \
  os/overlays/frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeReplies.java \
  os/overlays/frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseQuickSettings.java \
+ os/overlays/frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeDrag.java \
  os/tests/roseshade/RoseShadeTest.java
 java -cp "$JAVA_TESTS/RoseShade" com.android.systemui.roseshade.RoseShadeTest
 # Updater channel rules (Prod/Beta/Alpha, legacy migration, unpublished feeds).

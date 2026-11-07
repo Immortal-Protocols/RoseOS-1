@@ -168,6 +168,32 @@ public final class RoseShadeTest {
         r.removed("alex");
         expect("removed notification drops its draft", "", r.get("alex").text);
 
+        // The status-bar pull: the status bar keeps taps and sideways moves; the shade takes a downward pull.
+        RoseShadeDrag d = new RoseShadeDrag(10);
+        d.down(100, 5);
+        expect("within slop the status bar keeps it", RoseShadeDrag.Result.NONE, d.move(100, 12, 900));
+        expect("a tap stays the status bar's", RoseShadeDrag.Result.NONE, d.up(0));
+        d.down(100, 5);
+        expect("sideways is never the shade's", RoseShadeDrag.Result.NONE, d.move(160, 30, 900));
+        expect("upward is never the shade's", RoseShadeDrag.Result.NONE, d.move(100, -40, 900));
+        d.cancel();
+        d.down(100, 5);
+        expect("a downward pull is the shade's", RoseShadeDrag.Result.TRACK, d.move(105, 100, 900));
+        expect("progress follows the finger", true, Math.abs(d.progress() - 95f / 900f) < 1e-4);
+        expect("then keeps tracking even sideways", RoseShadeDrag.Result.TRACK, d.move(300, 120, 900));
+        expect("a short slow pull goes back", RoseShadeDrag.Result.CANCEL, d.up(200));
+        d.down(100, 5);
+        d.move(100, 60, 900);
+        expect("a short fling opens", RoseShadeDrag.Result.OPEN, d.up(1500));
+        d.down(100, 5);
+        d.move(100, 400, 900);
+        expect("a third of the way opens", RoseShadeDrag.Result.OPEN, d.up(0));
+        d.down(100, 5);
+        d.move(100, 2000, 900);
+        expect("progress is clamped", 1f, d.progress());
+        expect("cancel while tracking goes back", RoseShadeDrag.Result.CANCEL, d.cancel());
+        expect("cancel when idle does nothing", RoseShadeDrag.Result.NONE, d.cancel());
+
         System.out.println("RoseShadeTest: " + checks + " checks passed");
     }
 }
