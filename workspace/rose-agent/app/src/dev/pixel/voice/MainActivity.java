@@ -528,6 +528,7 @@ public class MainActivity extends Activity {
     checkSelfPermission("android.permission.REQUEST_DELETE_PACKAGES")==PackageManager.PERMISSION_GRANTED);
   if(offer==null)return;
   PopupMenu menu=new PopupMenu(this,anchor);
+  if(AppRemoval.MODELS.equals(pkg)&&retiredApp(pkg))menu.getMenu().add(AppRemoval.RETIRED_NOTE).setEnabled(false); // 1I
   if(offer.remove!=null)menu.getMenu().add(offer.remove).setOnMenuItemClickListener(i->{openRemoval(pkg,label,offer.route,AppRemoval.UNINSTALL_UPDATES.equals(offer.remove));return true;});
   if(offer.note!=null)menu.getMenu().add(offer.note).setEnabled(false);
   if(offer.remove==null||offer.route!=AppRemoval.Route.APP_INFO)menu.getMenu().add(AppRemoval.APP_INFO).setOnMenuItemClickListener(i->{openRemoval(pkg,label,AppRemoval.Route.APP_INFO,false);return true;});
@@ -543,6 +544,29 @@ public class MainActivity extends Activity {
    if(route==AppRemoval.Route.CONFIRM){open.putExtra(Intent.EXTRA_RETURN_RESULT,true);removing=pkg;removingLabel=label;removingUpdates=updatesOnly;startActivityForResult(open,REMOVE_REQUEST);}
    else startActivity(open);
   }catch(ActivityNotFoundException|SecurityException unavailable){removing=null;Toast.makeText(this,"Android's app settings for "+label+" are not available",Toast.LENGTH_SHORT).show();}
+ }
+ /** 1I (AppRemoval.retired): the installed package is the genuine retired app, by its exact package and signer. */
+ boolean retiredApp(String pkg){
+  try{
+   SigningInfo info=getPackageManager().getPackageInfo(pkg,PackageManager.GET_SIGNING_CERTIFICATES).signingInfo;
+   if(info==null)return false;
+   ArrayList<String> digests=new ArrayList<>();java.security.MessageDigest sha=java.security.MessageDigest.getInstance("SHA-256");
+   for(Signature signer:info.hasMultipleSigners()?info.getApkContentsSigners():info.getSigningCertificateHistory()){
+    StringBuilder hex=new StringBuilder();for(byte b:sha.digest(signer.toByteArray()))hex.append(String.format("%02x",b));digests.add(hex.toString());}
+   return AppRemoval.retired(pkg,digests);
+  }catch(Exception absent){return false;}
+ }
+ /** 1I: once, a phone that still has the retired Rose Models app is offered its uninstall (RetiredAppNotice), through
+  * Android's own confirmation. Not now leaves it installed in the System folder, whose long press still offers it. */
+ boolean retiredOffered;
+ @Override protected void onPostResume(){super.onPostResume();handler.post(this::offerRetiredUninstall);}
+ void offerRetiredUninstall(){
+  if(retiredOffered||!drawer||launcherPager==null||isFinishing()||isDestroyed()||visualDetail!=null||systemFolder!=null)return;
+  android.content.SharedPreferences answers=getSharedPreferences(AppRemoval.RETIRED_PREFS,0);
+  if(answers.getBoolean(AppRemoval.MODELS_NOTICE,false)||!retiredApp(AppRemoval.MODELS))return;
+  retiredOffered=true;
+  RetiredAppNotice.show(this,()->answers.edit().putBoolean(AppRemoval.MODELS_NOTICE,true).apply(),
+    ()->openRemoval(AppRemoval.MODELS,AppRemoval.MODELS_NAME,checkSelfPermission("android.permission.REQUEST_DELETE_PACKAGES")==PackageManager.PERMISSION_GRANTED?AppRemoval.Route.CONFIRM:AppRemoval.Route.APP_INFO,false));
  }
  static final int REMOVE_REQUEST=0x5244;String removing,removingLabel;boolean removingUpdates;
  /** 1J: the owner's answer in Android's uninstall confirmation, checked against the package manager (AppRemoval.outcome). */

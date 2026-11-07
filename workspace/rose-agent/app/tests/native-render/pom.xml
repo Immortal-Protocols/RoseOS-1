@@ -92,6 +92,8 @@
             <testInclude>dev/pixel/voice/CurrentApps.java</testInclude>
             <testInclude>dev/pixel/voice/SettingsScreen.java</testInclude>
             <testInclude>dev/pixel/voice/RoseSettingsModel.java</testInclude>
+            <testInclude>dev/pixel/voice/RetiredAppNotice.java</testInclude>
+            <testInclude>dev/pixel/voice/AppRemoval.java</testInclude>
             <testInclude>dev/pixel/voice/*RenderTest.java</testInclude>
           </testIncludes>
         </configuration>
