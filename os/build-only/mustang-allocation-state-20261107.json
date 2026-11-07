@@ -13,6 +13,6 @@
   "consumedBuilds": null,
   "builder": null,
   "dataFilesystemUuid": null,
-  "recovery": null,
-  "basis": "Run 41884368820 has no artifacts, a null compile-step conclusion, and allocatedBuild null. The former owner has no authoritative ledger, so that reservation cannot be recovered and must not be guessed or backfilled. Do not inspect Frankel. 9999123199 is only the maximum output of the old UTC date allocator, not a build date and not the next number. Neither a recovered ledger nor a retired namespace is selected."
+  "recovery": "retired-legacy-epoch",
+  "basis": "Run 41884368820 has allocatedBuild null and no authoritative ledger. consumedBuilds stays null; 2026110402-2026110499 is only the unproved clock-matched day, not a consumed list. The retired epoch reserves 2026130001-2026139999, which is ten digits, above the evidenced builds, and not a date next_build can emit. No ID has been issued."
 }

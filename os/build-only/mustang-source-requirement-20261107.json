@@ -11,7 +11,23 @@
     "selectionSha256": "34cdc3a98e8cfc614a88c5a40d002c51e87404aaec8a4f2962cb46e824c4f6e4",
     "selectionMeaning": "copy-time only; not a source pin"
   },
-  "required": "A later dedicated sync needs an explicit reviewed ROSE_REVISION. os/pinned-manifest.xml pins 1057 project revisions and has no Mustang device project. The vendor tree comes from a factory image that is indexed and not downloaded. The manifest file hash alone is not a synced tree, and the copy-time selection hash is not a source pin.",
-  "roseRevision": null,
+  "required": "Sync RoseOS-1 at roseRevision with -m os/pinned-manifest.xml. That file byte-matches GrapheneOS platform_manifest tag 2026100600. Mustang is not a manifest project; adevtool 17df3b79 generates it from the factory image. The factory body hash is still unverified, so this record does not admit a pin or authorize a sync.",
+  "roseRevision": "2ac24c5475de121ebe4e9e6a5c1a404ef44aa9c8",
+  "admitted": false,
+  "syncAuthorized": false,
+  "upstream": {
+    "roseRevision": "2ac24c5475de121ebe4e9e6a5c1a404ef44aa9c8",
+    "defaultXmlSha256": "32d30e70ee59d373a17fe8090bdded898afa80651f27c331caca4578b3008888",
+    "grapheneosTag": "refs/tags/2026100600",
+    "grapheneosTagObject": "bff830c5e298027889ec3bfa51ba1e48b23801f4",
+    "grapheneosCommit": "26f7e8a760d4343a501faf09773ec4cc61a6b56b",
+    "adevtool": "17df3b79a73e67ad68387b35c7d41c85e1d8103c",
+    "mustangConfigGitBlob": "b0bd0a3c40570a5e6e3149ff190b5b60956ee019",
+    "mustangConfigPath": "config/device/mustang.yml",
+    "vendorState": "1469180711293a5852bfda9a5f67b8f53d9828ad",
+    "lagunaKernel": "275dad3c1f144f6bdd6d2c1ec22eccbfbd467da9",
+    "factoryUrl": "https://dl.google.com/dl/android/aosp/mustang-cp3a.261005.005-factory-099acc44.zip",
+    "factoryBodyHashed": false
+  },
   "basis": "The old snapshot records resolvedManifest null and says the selection identifies copied paths at copy time only. Version-control metadata was excluded, so project revisions cannot be re-derived from it. This file does not claim a sync occurred."
 }
