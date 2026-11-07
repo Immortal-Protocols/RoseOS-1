@@ -1,6 +1,7 @@
 /* Copyright 2026. SPDX-License-Identifier: Apache-2.0 */
 package com.android.systemui.roseshade;
 
+import android.animation.ValueAnimator;
 import android.app.ActivityManager;
 import android.app.ActivityOptions;
 import android.app.KeyguardManager;
@@ -14,6 +15,7 @@ import android.content.IntentFilter;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
 import android.graphics.PixelFormat;
+import android.graphics.Rect;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Bundle;
@@ -37,8 +39,11 @@ import android.view.VelocityTracker;
 import android.view.View;
 import android.view.ViewConfiguration;
 import android.view.ViewGroup;
+import android.view.ViewTreeObserver;
 import android.view.WindowInsets;
 import android.view.WindowManager;
+import android.view.accessibility.AccessibilityManager;
+import android.view.accessibility.AccessibilityNodeInfo;
 import android.view.animation.DecelerateInterpolator;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputMethodManager;
@@ -53,24 +58,34 @@ import android.window.OnBackInvokedCallback;
 import android.window.OnBackInvokedDispatcher;
 
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * The Rose notification shade (1G, Designer's F09 Refinement v1): a focusable SystemUI window that enters from
  * the top over the owner's screen. It shows the compact quick settings row, brightness and the owner's
  * notifications, grouped per app, with inline replies.
  *
- * <p>All the rules live in pure, tested classes: {@link RoseShadeModel} (list, modes, back),
- * {@link RoseShadeReplies} (drafts and truthful send states), {@link RoseQuickSettings} (tiles) and
- * {@link RoseShadeDrag} (the status-bar pull). This class only draws them and talks to Android.
+ * <p>All the rules live in pure, tested classes: {@link RoseShadeModel} (list, modes, back, dismissal with Undo,
+ * scroll place), {@link RoseShadeReplies} (drafts and app-acknowledged send states), {@link RoseQuickSettings}
+ * (tiles), {@link RoseShadeDrag} (the status-bar pull and the header pull) and {@link RoseShadeDrag.Swipe} (the
+ * dismiss swipe). This class only draws them and talks to Android.
  *
  * <p>Boundaries: the shade is pulled from the status bar through AgentTrayPrototype's status-bar hook; the lock
  * screen keeps the stock shade. The reply field is a single-line editor with the keyboard's Send action; the
  * keyboard (OS Product) and the Rose chin keep their own space through the window insets. The shade has no
- * microphone control: the chin holds the only one.
+ * microphone control: the chin holds the only one. A dismissal cancels the notification through SystemUI's own
+ * listener, which Android refuses for ongoing and protected notifications; a running service's notification is never
+ * offered for dismissal, so dismissing never stops its work.
  */
 final class RoseShadeController {
+    /** Cancels a notification the owner dismissed (SystemUI's NotificationListener). */
+    interface Canceller {
+        void cancel(String key);
+    }
+
     private static final String TAG = "RoseShade";
     /** Off switch for the shade; on unless a build or the owner sets it false. */
     static final String ENABLED_PROPERTY = "persist.wm.debug.rose_shade";
@@ -86,8 +101,16 @@ final class RoseShadeController {
     private static final int TEXT_2 = 0xFFB9AEB0;
     private static final int SCRIM = 0x8C000000;
     private static final long ENTER_MS = 240;
+    private static final long SWIPE_MS = 160;
+    /** How long Undo stays, before accessibility's recommended timeout stretches it. */
+    private static final int UNDO_MS = 5000;
+    /** How long the app has to acknowledge a delivered reply before the shade says it is not confirmed. */
+    private static final long ACK_TIMEOUT_MS = 10_000;
+    /** The further pull, beginning in the header, that expands quick settings: a third of this. */
+    private static final int HEADER_PULL_DP = 120;
 
     private final Context mContext;
+    private final Canceller mCanceller;
     private final Handler mHandler = new Handler(Looper.getMainLooper());
     private final Handler mSendHandler;
     private final WindowManager mWindows;
@@ -96,6 +119,8 @@ final class RoseShadeController {
     private final RoseQuickSettings mQuickSettings = new RoseQuickSettings();
     private final RoseShadeSystem mSystem;
     private final RoseShadeDrag mDrag;
+    private final RoseShadeDrag mHeaderDrag;
+    private final int mSlop;
     private final Map<String, StatusBarNotification> mNotifications = new HashMap<>();
     private final Map<String, ReplyRow> mReplyRows = new HashMap<>();
     private VelocityTracker mVelocity;
@@ -108,17 +133,20 @@ final class RoseShadeController {
     private ScrollView mScroll;
     private boolean mAttached;
     private boolean mImeVisible;
-    private String mReplyingKey;
+    private boolean mRestoringScroll;
     private OnBackInvokedCallback mBack;
 
-    RoseShadeController(Context context) {
+    RoseShadeController(Context context, Canceller canceller) {
         mContext = context.createWindowContext(WindowManager.LayoutParams.TYPE_STATUS_BAR_ADDITIONAL, null);
+        mCanceller = canceller;
         mWindows = mContext.getSystemService(WindowManager.class);
         final HandlerThread sender = new HandlerThread("RoseShadeReply");
         sender.start();
         mSendHandler = new Handler(sender.getLooper());
         mSystem = new RoseShadeSystem(mContext, mHandler, mQuickSettings, this::render);
-        mDrag = new RoseShadeDrag(ViewConfiguration.get(mContext).getScaledTouchSlop());
+        mSlop = ViewConfiguration.get(mContext).getScaledTouchSlop();
+        mDrag = new RoseShadeDrag(mSlop);
+        mHeaderDrag = new RoseShadeDrag(mSlop);
         final IntentFilter filter = new IntentFilter();
         filter.addAction(Intent.ACTION_CLOSE_SYSTEM_DIALOGS);
         filter.addAction(Intent.ACTION_SCREEN_OFF);
@@ -142,8 +170,10 @@ final class RoseShadeController {
             onRemoved(sbn.getKey());
             return;
         }
-        mNotifications.put(sbn.getKey(), sbn);
+        final boolean update = mNotifications.put(sbn.getKey(), sbn) != null;
         mModel.post(item(sbn));
+        // An app acknowledges a direct reply by posting its notification again (RoseShadeReplies).
+        if (update) mReplies.acknowledged(sbn.getKey());
         render();
     }
 
@@ -153,7 +183,6 @@ final class RoseShadeController {
         mReplies.removed(key);
         final ReplyRow row = mReplyRows.remove(key);
         if (row != null) detach(row.view);
-        if (key.equals(mReplyingKey)) mReplyingKey = null;
         render();
     }
 
@@ -179,9 +208,11 @@ final class RoseShadeController {
             }
         }
         if (primary == null && n.contentIntent != null) primary = "Open";
+        // Ongoing, protected (no clear) and running-service notifications stay; dismissing never stops work.
+        final boolean dismissible = sbn.isClearable() && (n.flags & Notification.FLAG_FOREGROUND_SERVICE) == 0;
         return new RoseShadeModel.Item(sbn.getKey(), sbn.getPackageName(), appLabel(sbn),
                 title == null ? "" : title.toString(), text == null ? "" : text.toString(), sbn.getPostTime(),
-                primary, canReply);
+                primary, canReply, dismissible);
     }
 
     private String appLabel(StatusBarNotification sbn) {
@@ -281,17 +312,26 @@ final class RoseShadeController {
         mScrim.setAlpha(progress);
     }
 
-    private void settleOpen() {
-        attach();
-        mPanel.animate().translationY(0).setDuration(ENTER_MS).setInterpolator(new DecelerateInterpolator())
-                .start();
-        mScrim.animate().alpha(1f).setDuration(ENTER_MS).start();
+    /** Reduced motion: no animation when the owner turned animations off (animator duration scale 0). */
+    private static long motion(long ms) {
+        return ValueAnimator.areAnimatorsEnabled() ? ms : 0;
     }
 
-    /** Closes the shade; drafts stay in {@link RoseShadeReplies} for the next opening. */
+    private void settleOpen() {
+        attach();
+        mPanel.animate().translationY(0).setDuration(motion(ENTER_MS))
+                .setInterpolator(new DecelerateInterpolator()).start();
+        mScrim.animate().alpha(1f).setDuration(motion(ENTER_MS)).start();
+    }
+
+    /**
+     * Closes the shade; drafts stay in {@link RoseShadeReplies} and the scroll place in the model for the next
+     * opening. A dismissal waiting on Undo becomes final; a Keep draft / Discard question keeps the draft.
+     */
     void close() {
         if (!mAttached) return;
         mModel.close();
+        flushCancels();
         hideKeyboard();
         mSystem.stop();
         // This window's views and callback leave with it; a reopening during the exit builds its own.
@@ -300,10 +340,9 @@ final class RoseShadeController {
         final Map<String, ReplyRow> rows = new HashMap<>(mReplyRows);
         mReplyRows.clear();
         mBack = null;
-        mReplyingKey = null;
         final float height = Math.max(mPanel.getHeight(), pullHeight());
-        mScrim.animate().alpha(0f).setDuration(ENTER_MS).start();
-        mPanel.animate().translationY(-height).setDuration(ENTER_MS).withEndAction(() -> {
+        mScrim.animate().alpha(0f).setDuration(motion(ENTER_MS)).start();
+        mPanel.animate().translationY(-height).setDuration(motion(ENTER_MS)).withEndAction(() -> {
             if (back != null) {
                 final OnBackInvokedDispatcher dispatcher = root.findOnBackInvokedDispatcher();
                 if (dispatcher != null) dispatcher.unregisterOnBackInvokedCallback(back);
@@ -314,11 +353,54 @@ final class RoseShadeController {
         mAttached = false;
     }
 
+    /** Back: keyboard, Keep draft / Discard (kept), the reply, quick settings, then the shade (RoseShadeModel.back). */
     private void back() {
         final RoseShadeModel.Back back = mModel.back(mImeVisible);
-        if (back == RoseShadeModel.Back.HIDE_KEYBOARD) hideKeyboard();
-        else if (back == RoseShadeModel.Back.COLLAPSE_QUICK_SETTINGS) render();
-        else if (back == RoseShadeModel.Back.CLOSE_SHADE) close();
+        if (back == RoseShadeModel.Back.HIDE_KEYBOARD) {
+            hideKeyboard();
+        } else if (back == RoseShadeModel.Back.CLOSE_REPLY) {
+            hideKeyboard();
+            render();
+        } else if (back == RoseShadeModel.Back.KEEP_DRAFT || back == RoseShadeModel.Back.COLLAPSE_QUICK_SETTINGS) {
+            render();
+        } else if (back == RoseShadeModel.Back.CLOSE_SHADE) {
+            close();
+        }
+    }
+
+    private void toggleQuickSettings() {
+        mModel.toggleQuickSettings();
+        if (mModel.mode() == RoseShadeModel.Mode.QUICK_SETTINGS) hideKeyboard();
+        render();
+    }
+
+    /** A further pull that began in the header opens the labelled quick settings. */
+    private boolean onHeaderTouch(View header, MotionEvent event) {
+        switch (event.getActionMasked()) {
+            case MotionEvent.ACTION_DOWN:
+                mHeaderDrag.down(event.getRawX(), event.getRawY());
+                return false;
+            case MotionEvent.ACTION_MOVE:
+                if (mModel.mode() != RoseShadeModel.Mode.OPEN || mHeaderDrag.move(event.getRawX(), event.getRawY(),
+                        dp(HEADER_PULL_DP)) != RoseShadeDrag.Result.TRACK) {
+                    return false;
+                }
+                header.getParent().requestDisallowInterceptTouchEvent(true);
+                return true;
+            case MotionEvent.ACTION_UP:
+                if (mHeaderDrag.up(0) == RoseShadeDrag.Result.OPEN && mModel.mode() == RoseShadeModel.Mode.OPEN) {
+                    hideKeyboard();
+                    mModel.expandQuickSettings();
+                    render();
+                    return true;
+                }
+                return false;
+            case MotionEvent.ACTION_CANCEL:
+                mHeaderDrag.cancel();
+                return false;
+            default:
+                return mHeaderDrag.tracking();
+        }
     }
 
     private void hideKeyboard() {
@@ -362,11 +444,24 @@ final class RoseShadeController {
         final TextView b = text(label, 14, TEXT, false);
         b.setGravity(Gravity.CENTER);
         b.setPadding(dp(18), dp(8), dp(18), dp(8));
-        final GradientDrawable bg = round(primary ? RUBY : 0x00000000, dp(18));
+        // Touch targets of at least 48dp (F09 handoff).
+        b.setMinHeight(dp(48));
+        b.setMinWidth(dp(48));
+        final GradientDrawable bg = round(primary ? RUBY : 0x00000000, dp(24));
         if (!primary) bg.setStroke(dp(1), 0x66F4EEEE);
         b.setBackground(bg);
         b.setOnClickListener(click);
         return b;
+    }
+
+    /** A 48dp touch target around a glyph. */
+    private ImageView button(RoseShadeIcons.Glyph glyph, int color, int glyphDp, String description) {
+        final ImageView v = icon(glyph, color, glyphDp);
+        final int pad = dp((48 - glyphDp) / 2f);
+        v.setPadding(pad, pad, pad, pad);
+        v.setLayoutParams(new LinearLayout.LayoutParams(dp(48), dp(48)));
+        v.setContentDescription(description);
+        return v;
     }
 
     private void buildViews() {
@@ -409,17 +504,25 @@ final class RoseShadeController {
         mRoot.addView(mPanel, panel);
         mPanel.setTranslationY(-pullHeight());
 
-        final LinearLayout header = new LinearLayout(mContext);
+        // A further pull that begins here expands quick settings (F09 handoff).
+        final LinearLayout header = new LinearLayout(mContext) {
+            @Override
+            public boolean onInterceptTouchEvent(MotionEvent event) {
+                return onHeaderTouch(this, event);
+            }
+
+            @Override
+            public boolean onTouchEvent(MotionEvent event) {
+                onHeaderTouch(this, event);
+                return true;
+            }
+        };
         header.setGravity(Gravity.CENTER_VERTICAL);
         final TextView title = text("Notifications", 28, TEXT, false);
         header.addView(title, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
         // Opens or folds the labelled quick settings view (board panel 04); a tile long press does the same.
-        final ImageView more = icon(RoseShadeIcons.Glyph.CHEVRON_DOWN, TEXT_2, 28);
-        more.setContentDescription("Quick settings");
-        more.setOnClickListener(v -> {
-            mModel.toggleQuickSettings();
-            render();
-        });
+        final ImageView more = button(RoseShadeIcons.Glyph.CHEVRON_DOWN, TEXT_2, 28, "Quick settings");
+        more.setOnClickListener(v -> toggleQuickSettings());
         header.addView(more);
         mPanel.addView(header);
 
@@ -432,6 +535,10 @@ final class RoseShadeController {
 
         mScroll = new ScrollView(mContext);
         mScroll.setVerticalScrollBarEnabled(false);
+        // The list keeps its place across updates and reopening (RoseShadeModel.scrolled).
+        mScroll.setOnScrollChangeListener((v, x, y, oldX, oldY) -> {
+            if (!mRestoringScroll) rememberScroll(y);
+        });
         mList = new LinearLayout(mContext);
         mList.setOrientation(LinearLayout.VERTICAL);
         mScroll.addView(mList, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
@@ -467,6 +574,7 @@ final class RoseShadeController {
             if (row.field == focus) typing = row.key;
         }
         renderList();
+        restoreScroll();
         final ReplyRow row = typing == null ? null : mReplyRows.get(typing);
         if (row != null && row.view.getParent() != null && !row.field.hasFocus()) {
             row.field.requestFocus();
@@ -483,13 +591,24 @@ final class RoseShadeController {
             final String count = mModel.countLabel();
             if (count != null) {
                 final LinearLayout row = row(RoseShadeIcons.Glyph.BUBBLE, count, RoseShadeIcons.Glyph.CHEVRON_DOWN);
-                row.setOnClickListener(v -> {
-                    mModel.toggleQuickSettings();
-                    render();
-                });
+                row.setOnClickListener(v -> toggleQuickSettings());
                 mList.addView(row, cardParams());
             }
             return;
+        }
+        final String undo = mModel.undoLabel();
+        if (undo != null) {
+            final LinearLayout row = new LinearLayout(mContext);
+            row.setGravity(Gravity.CENTER_VERTICAL);
+            row.setBackground(round(TILE, dp(22)));
+            row.setPadding(dp(16), dp(4), dp(8), dp(4));
+            row.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
+            row.addView(text(undo, 15, TEXT, false),
+                    new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+            row.addView(pill(RoseShadeModel.UNDO, false, v -> {
+                if (mModel.undo()) render();
+            }));
+            mList.addView(row, cardParams());
         }
         final List<RoseShadeModel.Entry> entries = mModel.entries();
         if (entries.isEmpty()) {
@@ -507,7 +626,55 @@ final class RoseShadeController {
             return;
         }
         final long now = System.currentTimeMillis();
-        for (RoseShadeModel.Entry entry : entries) mList.addView(card(entry, now), cardParams());
+        for (RoseShadeModel.Entry entry : entries) {
+            final View card = card(entry, now);
+            card.setTag(entry.id);
+            mList.addView(card, cardParams());
+        }
+    }
+
+    private void rememberScroll(int y) {
+        if (mModel.mode() != RoseShadeModel.Mode.OPEN) return;
+        if (y <= 0) {
+            // At the top the list stays at the top, so a new notification shows.
+            mModel.scrolled(null, 0);
+            return;
+        }
+        for (int i = 0; i < mList.getChildCount(); i++) {
+            final View child = mList.getChildAt(i);
+            if (child.getTag() instanceof String && child.getBottom() > y) {
+                mModel.scrolled((String) child.getTag(), y - child.getTop());
+                return;
+            }
+        }
+    }
+
+    /** Puts the list back at the kept entry once the rebuilt list is laid out. */
+    private void restoreScroll() {
+        final RoseShadeModel.ScrollAnchor anchor = mModel.scrollAnchor();
+        final ScrollView scroll = mScroll;
+        mRestoringScroll = true;
+        scroll.getViewTreeObserver().addOnPreDrawListener(new ViewTreeObserver.OnPreDrawListener() {
+            @Override
+            public boolean onPreDraw() {
+                scroll.getViewTreeObserver().removeOnPreDrawListener(this);
+                int y = 0;
+                if (anchor != null) {
+                    for (int i = 0; i < mList.getChildCount(); i++) {
+                        final View child = mList.getChildAt(i);
+                        if (anchor.entryId.equals(child.getTag())) y = child.getTop() + anchor.offset;
+                    }
+                }
+                scroll.scrollTo(0, y);
+                // The reply being typed stays in view above the keyboard.
+                final View focus = scroll.findFocus();
+                if (focus != null) {
+                    focus.requestRectangleOnScreen(new Rect(0, 0, focus.getWidth(), focus.getHeight()), true);
+                }
+                mRestoringScroll = false;
+                return true;
+            }
+        });
     }
 
     private LinearLayout.LayoutParams cardParams() {
@@ -546,8 +713,7 @@ final class RoseShadeController {
                 t.setOnClickListener(v -> mSystem.toggle(tile));
                 // A long press opens the labelled quick settings view (board panel 04).
                 t.setOnLongClickListener(v -> {
-                    mModel.toggleQuickSettings();
-                    render();
+                    toggleQuickSettings();
                     return true;
                 });
                 final LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, dp(48), 1);
@@ -602,10 +768,9 @@ final class RoseShadeController {
             @Override
             public void onStopTrackingTouch(SeekBar bar) {}
         });
-        brightness.addView(slider, new LinearLayout.LayoutParams(0, dp(40), 1));
+        brightness.addView(slider, new LinearLayout.LayoutParams(0, dp(48), 1));
         if (expanded) {
-            final ImageView settings = icon(RoseShadeIcons.Glyph.GEAR, TEXT, 24);
-            settings.setContentDescription("Settings");
+            final ImageView settings = button(RoseShadeIcons.Glyph.GEAR, TEXT, 24, "Settings");
             settings.setOnClickListener(v -> {
                 // The shade runs only for the owner (user 0), SystemUI's own user.
                 mContext.startActivity(new Intent(Settings.ACTION_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
@@ -621,6 +786,8 @@ final class RoseShadeController {
 
     private View card(RoseShadeModel.Entry entry, long now) {
         final LinearLayout card = new LinearLayout(mContext);
+        // A collapsed group or a card swipes away as a whole; an expanded group's rows swipe alone.
+        final boolean whole = !entry.isGroup() || !entry.expanded;
         card.setOrientation(LinearLayout.VERTICAL);
         card.setBackground(round(CARD, dp(22)));
         card.setPadding(dp(16), dp(14), dp(16), dp(14));
@@ -641,6 +808,8 @@ final class RoseShadeController {
         if (entry.isGroup()) {
             head.addView(icon(entry.expanded ? RoseShadeIcons.Glyph.CHEVRON_UP : RoseShadeIcons.Glyph.CHEVRON_DOWN,
                     TEXT, 20));
+            head.setMinimumHeight(dp(48));
+            head.setContentDescription(entry.header() + (entry.expanded ? ", collapse" : ", expand"));
             head.setOnClickListener(v -> {
                 mModel.toggleExpanded(entry.id);
                 render();
@@ -655,6 +824,7 @@ final class RoseShadeController {
             if (!newest.text.isEmpty()) card.addView(text(newest.text, 14, TEXT_2, false));
             card.setOnClickListener(v -> open(newest.key));
             addActions(card, newest);
+            addConfirm(card, entry.id);
         } else if (!entry.expanded) {
             for (int i = 0; i < Math.min(3, entry.items.size()); i++) {
                 final RoseShadeModel.Item item = entry.items.get(i);
@@ -671,6 +841,7 @@ final class RoseShadeController {
                 mModel.toggleExpanded(entry.id);
                 render();
             });
+            addConfirm(card, entry.id);
         } else {
             for (RoseShadeModel.Item item : entry.items) {
                 final LinearLayout one = new LinearLayout(mContext);
@@ -689,19 +860,56 @@ final class RoseShadeController {
                 top.setOnClickListener(v -> open(item.key));
                 one.addView(top);
                 addActions(one, item);
-                card.addView(one);
+                addConfirm(one, item.key);
+                card.addView(swipeable(one, item.key, top));
             }
         }
-        return card;
+        return whole ? swipeable(card, entry.id, card) : card;
+    }
+
+    /** Keep draft / Discard, asked before dismissing a notification whose reply holds unsent text. */
+    private void addConfirm(LinearLayout parent, String id) {
+        if (!id.equals(mModel.confirming())) return;
+        final LinearLayout box = new LinearLayout(mContext);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(0, dp(10), 0, 0);
+        box.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
+        box.addView(text(RoseShadeModel.CONFIRM_DRAFT_LINE, 14, TEXT, false));
+        final LinearLayout buttons = new LinearLayout(mContext);
+        buttons.setPadding(0, dp(8), 0, 0);
+        buttons.addView(pill(RoseShadeModel.KEEP_DRAFT, true, v -> {
+            mModel.keepDraft();
+            render();
+        }), actionParams());
+        buttons.addView(pill(RoseShadeModel.DISCARD, false, v -> {
+            final String replying = mModel.replying();
+            afterDismiss(mModel.discardDraft(), replying);
+        }), actionParams());
+        box.addView(buttons);
+        parent.addView(box);
+    }
+
+    /**
+     * Wraps a card, collapsed group or group row that may be dismissed; others are returned as they are. The
+     * dismiss action for screen readers goes on {@code host}, the node they focus.
+     */
+    private View swipeable(View content, String id, View host) {
+        return mModel.canDismiss(id) ? new SwipeFrame(id, content, host) : content;
     }
 
     /** The notification's own action, Reply when it offers an inline reply, and the reply row while in use. */
     private void addActions(LinearLayout parent, RoseShadeModel.Item item) {
         final LinearLayout actions = new LinearLayout(mContext);
         actions.setPadding(0, dp(10), 0, 0);
+        final RoseShadeReplies.Draft draft = mReplies.get(item.key);
+        // The reply row shows while open, and while a send is pending, failed or unconfirmed.
+        final boolean showRow = item.key.equals(mModel.replying())
+                || draft.status == RoseShadeReplies.Status.PENDING || draft.status == RoseShadeReplies.Status.FAILED
+                || draft.status == RoseShadeReplies.Status.UNCONFIRMED;
         boolean any = false;
-        if (item.canReply) {
-            actions.addView(pill("Reply", true, v -> startReply(item.key)), actionParams());
+        if (item.canReply && !showRow) {
+            actions.addView(pill(draft.dirty() ? "Continue draft" : "Reply", true, v -> startReply(item.key)),
+                    actionParams());
             any = true;
         }
         // Beside Reply, the app's own action (e.g. "Mark read"); without Reply, the card's action or "Open".
@@ -712,9 +920,7 @@ final class RoseShadeController {
             any = true;
         }
         if (any) parent.addView(actions);
-        final RoseShadeReplies.Draft draft = mReplies.get(item.key);
-        if (item.key.equals(mReplyingKey) || !draft.text.isEmpty()
-                || draft.status != RoseShadeReplies.Status.EDITING) {
+        if (showRow) {
             final ReplyRow row = replyRow(item.key);
             row.sync();
             detach(row.view);
@@ -732,6 +938,132 @@ final class RoseShadeController {
     private static void detach(View view) {
         final ViewGroup parent = (ViewGroup) view.getParent();
         if (parent != null) parent.removeView(view);
+    }
+
+    // ---- Dismissal ----
+
+    /** The notifications whose reply holds unsent text. */
+    private Set<String> dirtyKeys() {
+        final Set<String> dirty = new HashSet<>();
+        for (String key : mNotifications.keySet()) {
+            if (mReplies.get(key).dirty()) dirty.add(key);
+        }
+        return dirty;
+    }
+
+    private void dismiss(String id) {
+        if (!mAttached) return;
+        final String replying = mModel.replying();
+        afterDismiss(mModel.dismiss(id, dirtyKeys()), replying);
+    }
+
+    private void afterDismiss(RoseShadeModel.Dismiss result, String replyingBefore) {
+        // An earlier dismissal whose Undo this one replaced is final now.
+        flushCancels();
+        if (result == RoseShadeModel.Dismiss.HIDDEN) {
+            // A dismissed notification's open reply folded with it.
+            if (replyingBefore != null && mModel.replying() == null) hideKeyboard();
+            final int batch = mModel.undoBatch();
+            final int timeout = mContext.getSystemService(AccessibilityManager.class).getRecommendedTimeoutMillis(
+                    UNDO_MS, AccessibilityManager.FLAG_CONTENT_TEXT | AccessibilityManager.FLAG_CONTENT_CONTROLS);
+            mHandler.postDelayed(() -> {
+                mModel.commit(batch);
+                flushCancels();
+                render();
+            }, timeout);
+        }
+        render();
+    }
+
+    /** Cancels what the owner dismissed once Undo is gone; Android refuses ongoing and protected ones. */
+    private void flushCancels() {
+        for (String key : mModel.takeCancels()) mCanceller.cancel(key);
+    }
+
+    /** A card, collapsed group or group row that follows a sideways swipe and may be dismissed. */
+    private final class SwipeFrame extends FrameLayout {
+        private final String mId;
+        private final RoseShadeDrag.Swipe mSwipe = new RoseShadeDrag.Swipe(mSlop);
+        private VelocityTracker mTracker;
+
+        SwipeFrame(String id, View content, View host) {
+            super(mContext);
+            mId = id;
+            addView(content, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT));
+            // Screen readers dismiss through the focused node's action instead of the swipe.
+            host.setAccessibilityDelegate(new View.AccessibilityDelegate() {
+                @Override
+                public void onInitializeAccessibilityNodeInfo(View host, AccessibilityNodeInfo info) {
+                    super.onInitializeAccessibilityNodeInfo(host, info);
+                    info.setDismissable(true);
+                    info.addAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_DISMISS);
+                }
+
+                @Override
+                public boolean performAccessibilityAction(View host, int action, Bundle args) {
+                    if (action == AccessibilityNodeInfo.AccessibilityAction.ACTION_DISMISS.getId()) {
+                        dismiss(mId);
+                        return true;
+                    }
+                    return super.performAccessibilityAction(host, action, args);
+                }
+            });
+        }
+
+        @Override
+        public boolean onInterceptTouchEvent(MotionEvent event) {
+            return track(event);
+        }
+
+        @Override
+        public boolean onTouchEvent(MotionEvent event) {
+            track(event);
+            return true;
+        }
+
+        private boolean track(MotionEvent event) {
+            if (mTracker == null) mTracker = VelocityTracker.obtain();
+            // Screen coordinates: the frame itself moves under the finger.
+            final MotionEvent screen = MotionEvent.obtain(event);
+            screen.setLocation(event.getRawX(), event.getRawY());
+            mTracker.addMovement(screen);
+            screen.recycle();
+            switch (event.getActionMasked()) {
+                case MotionEvent.ACTION_DOWN:
+                    mSwipe.down(event.getRawX(), event.getRawY());
+                    return false;
+                case MotionEvent.ACTION_MOVE: {
+                    if (mSwipe.move(event.getRawX(), event.getRawY(), getWidth(), true)
+                            != RoseShadeDrag.Swipe.Result.TRACK) {
+                        return false;
+                    }
+                    getParent().requestDisallowInterceptTouchEvent(true);
+                    setTranslationX(mSwipe.offset());
+                    setAlpha(1f - Math.min(1f, Math.abs(mSwipe.offset()) / Math.max(1, getWidth())));
+                    return true;
+                }
+                case MotionEvent.ACTION_UP:
+                case MotionEvent.ACTION_CANCEL: {
+                    mTracker.computeCurrentVelocity(1000);
+                    final float vx = mTracker.getXVelocity();
+                    mTracker.recycle();
+                    mTracker = null;
+                    final RoseShadeDrag.Swipe.Result result = event.getActionMasked() == MotionEvent.ACTION_UP
+                            ? mSwipe.up(vx) : mSwipe.cancel();
+                    if (result == RoseShadeDrag.Swipe.Result.DISMISS) {
+                        final float out = Math.signum(getTranslationX()) * getWidth();
+                        animate().translationX(out).alpha(0f).setDuration(motion(SWIPE_MS))
+                                .withEndAction(() -> dismiss(mId)).start();
+                    } else if (result == RoseShadeDrag.Swipe.Result.RETURN) {
+                        animate().translationX(0).alpha(1f).setDuration(motion(SWIPE_MS)).start();
+                    }
+                    return result != RoseShadeDrag.Swipe.Result.NONE;
+                }
+                default:
+                    return mSwipe.tracking();
+            }
+        }
     }
 
     // ---- Actions and replies ----
@@ -775,7 +1107,7 @@ final class RoseShadeController {
     }
 
     private void startReply(String key) {
-        mReplyingKey = key;
+        mModel.startReply(key);
         render();
         final ReplyRow row = mReplyRows.get(key);
         if (row == null) return;
@@ -787,6 +1119,8 @@ final class RoseShadeController {
     private void send(String key) {
         final String text = mReplies.send(key);
         if (text == null) return;
+        // Results for an earlier try never touch this one.
+        final int attempt = mReplies.get(key).attempt;
         render();
         final StatusBarNotification sbn = mNotifications.get(key);
         Notification.Action reply = null;
@@ -799,7 +1133,7 @@ final class RoseShadeController {
             }
         }
         if (reply == null || reply.actionIntent == null) {
-            mReplies.failed(key);
+            mReplies.failed(key, attempt);
             render();
             return;
         }
@@ -826,11 +1160,19 @@ final class RoseShadeController {
             }
             final boolean ok = delivered;
             mHandler.post(() -> {
-                if (ok) mReplies.delivered(key);
-                else mReplies.failed(key);
+                if (ok) delivered(key, attempt); else mReplies.failed(key, attempt);
                 render();
             });
         });
+    }
+
+    /** Handed to the app: still "Sending…" until it acknowledges, or "Not confirmed" if it never does. */
+    private void delivered(String key, int attempt) {
+        mReplies.delivered(key, attempt);
+        mHandler.postDelayed(() -> {
+            mReplies.timedOut(key, attempt);
+            render();
+        }, ACK_TIMEOUT_MS);
     }
 
     private ReplyRow replyRow(String key) {
@@ -878,6 +1220,14 @@ final class RoseShadeController {
             bg.setStroke(dp(1), 0x66F4EEEE);
             field.setBackground(bg);
             field.setPadding(dp(14), dp(8), dp(14), dp(8));
+            field.setMinHeight(dp(48));
+            // Dragging in the field moves its cursor and selection; it never swipes the card or scrolls the list.
+            field.setOnTouchListener((v, event) -> {
+                if (event.getActionMasked() == MotionEvent.ACTION_DOWN) {
+                    v.getParent().requestDisallowInterceptTouchEvent(true);
+                }
+                return false;
+            });
             field.addTextChangedListener(new TextWatcher() {
                 @Override
                 public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
@@ -909,6 +1259,8 @@ final class RoseShadeController {
             view.addView(line);
             status = text("", 13, TEXT_2, false);
             status.setPadding(dp(4), dp(6), 0, 0);
+            // Sending, Sent and the failures are announced as they happen.
+            status.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
             view.addView(status);
         }
 
@@ -926,12 +1278,14 @@ final class RoseShadeController {
         void updateControls() {
             final RoseShadeReplies.Draft draft = mReplies.get(key);
             field.setEnabled(draft.status != RoseShadeReplies.Status.PENDING);
+            sendButton.setText(RoseShadeReplies.sendLabel(draft.status));
             sendButton.setEnabled(mReplies.canSend(key));
             sendButton.setAlpha(mReplies.canSend(key) ? 1f : 0.45f);
             final String line = RoseShadeReplies.statusLine(draft.status);
             status.setText(line == null ? "" : line);
             status.setVisibility(line == null ? View.GONE : View.VISIBLE);
-            status.setTextColor(draft.status == RoseShadeReplies.Status.FAILED ? RUBY_LIGHT : TEXT_2);
+            status.setTextColor(draft.status == RoseShadeReplies.Status.FAILED
+                    || draft.status == RoseShadeReplies.Status.UNCONFIRMED ? RUBY_LIGHT : TEXT_2);
         }
     }
 }
