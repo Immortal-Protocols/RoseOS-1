@@ -1,5 +1,5 @@
 diff --git a/quickstep/src/com/android/quickstep/AbsSwipeUpHandler.java b/quickstep/src/com/android/quickstep/AbsSwipeUpHandler.java
-index afa87a5..e93da3e 100644
+index afa87a5..940c58e 100644
 --- a/quickstep/src/com/android/quickstep/AbsSwipeUpHandler.java
 +++ b/quickstep/src/com/android/quickstep/AbsSwipeUpHandler.java
 @@ -869,7 +869,8 @@ public abstract class AbsSwipeUpHandler<
@@ -12,7 +12,7 @@ index afa87a5..e93da3e 100644
          }
  
          if (!isGestureMode) {
-@@ -1590,6 +1591,35 @@ public abstract class AbsSwipeUpHandler<
+@@ -1590,6 +1591,44 @@ public abstract class AbsSwipeUpHandler<
          mCanSlowSwipeGoHome = canSlowSwipeGoHome;
      }
  
@@ -40,6 +40,15 @@ index afa87a5..e93da3e 100644
 +        taskViewSimulator.apply(transformParams);
 +    }
 +
++    /**
++     * RoseOS (#410): the gesture went back to the last task and the shell has completed the recents finish, so no
++     * recents transition owns that task any more (also called at once when there was no recents animation). Stock
++     * Launcher3 does nothing here.
++     */
++    @UiThread
++    protected void onLastTaskResumed() {
++    }
++
 +    /** RoseOS (#410): whether this gesture is likely a quick switch to another task. */
 +    protected boolean isLikelyToStartNewTask() {
 +        return mIsLikelyToStartNewTask;
@@ -48,7 +57,7 @@ index afa87a5..e93da3e 100644
      @UiThread
      private void handleNormalGestureEnd(
              float endVelocityPxPerMs,
-@@ -1599,8 +1629,9 @@ public abstract class AbsSwipeUpHandler<
+@@ -1599,8 +1638,9 @@ public abstract class AbsSwipeUpHandler<
              boolean horizontalTouchSlopPassed) {
          long duration = MAX_SWIPE_DURATION;
          float currentShift = getCurrentShiftValue();
@@ -60,7 +69,20 @@ index afa87a5..e93da3e 100644
          // Set the state, but don't notify until the animation completes
          mGestureState.setEndTarget(endTarget, false /* isAtomic */);
          mAnimationFactory.setEndTarget(endTarget);
-@@ -3126,7 +3157,7 @@ public abstract class AbsSwipeUpHandler<
+@@ -2361,9 +2401,11 @@ public abstract class AbsSwipeUpHandler<
+         if (mRecentsAnimationController != null) {
+             mRecentsAnimationController.finish(
+                     /* toHome= */ false,
+-                    /* onFinishComplete= */ null,
++                    /* onFinishComplete= */ this::onLastTaskResumed,
+                     /* reason= */ new ActiveGestureLog.CompoundString(
+                             "AbsSwipeUpHandler.resumeLastTask"));
++        } else {
++            onLastTaskResumed();
+         }
+         doLogGesture(LAST_TASK, null);
+         reset();
+@@ -3126,7 +3168,7 @@ public abstract class AbsSwipeUpHandler<
                          transformParams, taskViewSimulator, progress)) {
                      continue;
                  }
@@ -70,7 +92,7 @@ index afa87a5..e93da3e 100644
          }
      }
 diff --git a/quickstep/src/com/android/quickstep/FallbackSwipeHandler.java b/quickstep/src/com/android/quickstep/FallbackSwipeHandler.java
-index 8c46fbd..022eac6 100644
+index 8c46fbd..9a13ec3 100644
 --- a/quickstep/src/com/android/quickstep/FallbackSwipeHandler.java
 +++ b/quickstep/src/com/android/quickstep/FallbackSwipeHandler.java
 @@ -16,6 +16,7 @@
@@ -139,7 +161,7 @@ index 8c46fbd..022eac6 100644
          if (mRunningOverHome) {
              runActionOnRemoteHandles(remoteTargetHandle ->
                      remoteTargetHandle.getTransformParams().setHomeBuilderProxy(
-@@ -140,6 +165,157 @@ public class FallbackSwipeHandler extends
+@@ -140,6 +165,170 @@ public class FallbackSwipeHandler extends
          }
      }
  
@@ -264,6 +286,19 @@ index 8c46fbd..022eac6 100644
 +    }
 +
 +    /**
++     * RoseOS (#410): the release went back to the app and the recents transition has finished, so a tray release now
++     * asks the shell to shorten the app (RoseEdgeSwipe.returnedToApp). Raising earlier would resize the app while the
++     * recents transition still owns it.
++     */
++    @Override
++    protected void onLastTaskResumed() {
++        if (mRoseEdge != null) {
++            mRoseEdge.returnedToApp();
++        }
++        super.onLastTaskResumed();
++    }
++
++    /**
 +     * RoseOS (#410): while a staged gesture is outside the switcher stage, the app's own leash follows the tray at
 +     * full width (RoseEdgeSwipe.preview); in the switcher stage, for a quick switch or once the release goes Home or to
 +     * the switcher, Launcher3's transform as before.
@@ -297,7 +332,7 @@ index 8c46fbd..022eac6 100644
      private void updateHomeActivityTransformDuringSwipeUp(
              SurfaceProperties builder, RemoteAnimationTarget app, TransformParams params) {
          if (mActiveAnimationFactory != null) {
-@@ -219,7 +395,10 @@ public class FallbackSwipeHandler extends
+@@ -219,7 +408,10 @@ public class FallbackSwipeHandler extends
              @Nullable TaskView targetTaskView,
              @Nullable IBinder launchCookie,
              @NonNull String reason) {

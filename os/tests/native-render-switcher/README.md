@@ -52,6 +52,11 @@ ANDROID_SDK_ROOT=/opt/roseos/android-sdk mvn -q -B test   # android.jar is compi
   quick flick before the switcher goes Home; the switcher stage wins over any release speed; dragging back below the
   switcher's exit returns to the tray. Launcher3's cancel stands, and after the release (or an abandon) a move reveals
   nothing.
+- **A tray release waits for the return to the app** (Frankel2026110501). The tray stays fully drawn, and the shell is
+  asked to raise only once Launcher3's recents finish back to the app has completed (`returnedToApp`), exactly once.
+  The tray then stays until it is deliberately lowered. The pending raise is dropped, and the tray goes, if the recents
+  animation is cancelled, another gesture starts, the gesture leaves the app, or nothing arrives within
+  `PENDING_RAISE_TIMEOUT_MS`.
 - **Tray already up.** The stage starts at the tray: release keeps it, a flick goes Home and leaving lowers it.
 - **Preview.** The crop follows the tray at full width, unscaled; toward the switcher it shrinks 10% about the
   shortened window's centre and lifts 24dp. In the switcher stage, or with no size, Launcher3's own transform applies.
