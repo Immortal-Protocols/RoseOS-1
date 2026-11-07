@@ -30,16 +30,23 @@ your final reply. A dispatched input is not success; verify the result in the ne
 """
 
 # A model-written target ("the Send button", "blue send arrow", "paper airplane icon") is not the control's own label,
-# which tasks._final_control expects. final_target reads its head: the words before a location ("Post in the top
-# right", "the emoji icon next to the send button") or an aside ("Post (top right)", "Post, top right").
-_WHERE = re.compile(r"\s*(?:[(,;]|\b(?:next\s+to|beside|besides|near|above|below|under(?:neath)?|over|beneath|left\s+of|"
-                    r"right\s+of|to\s+the\s+(?:left|right)\s+of|on|in|at|inside|within|from|for|of)\b).*$", re.I)
-_LEAD = re.compile(r"^(?:(?:the|a|an|tap|press|click|hit|select|blue|green|red|white|black|gr[ae]y|bold|small|large|big|"
-                   r"round|circular|highlighted|enabled)\s+)+", re.I)
-# A control's own label as the head: the send word alone or with a message word, then an element word ("Post",
-# "Tap Tweet", "Post comment", "the Post text button"); not a feed item ("post comment box").
+# which tasks._final_control expects. final_target reads its head: after a lead verb ("Tap on"), the words before a
+# location or landmark ("Post in the top right", "the emoji icon next to the send button", "the camera icon by the send
+# button") or an aside ("Post (top right)", "Post, top right").
+_VERB = re.compile(r"^(?:(?:tap|press|click|hit|select|choose)(?:\s+on)?\s+)+", re.I)
+_WHERE = re.compile(r"\s*(?:[(,;]|\b(?:next\s+to|beside|besides|near|above|below|under(?:neath)?|over|beneath|behind|left\s+of|"
+                    r"right\s+of|to\s+the\s+(?:left|right)\s+of|by|with|between|before|after|around|on|in|at|inside|within|"
+                    r"from|for|of)\b).*$", re.I)
+_LEAD = re.compile(r"^(?:(?:the|a|an|blue|green|red|white|black|gr[ae]y|bold|small|large|big|round|circular|highlighted|"
+                   r"enabled)\s+)+", re.I)
+# A feed item, not the Post/Tweet control: an article and the lowercase noun ("the post from NASA", "the latest tweet").
+_FEED_ITEM = re.compile(r"(?i:the|a|an|this|that)\s+(?:(?i:latest|first|top|next|last|newest|pinned)\s+)?(?:post|tweet)")
+# A control's own label as the head: the send word alone, with a message word or an audience ("Post", "Post comment",
+# "Post to feed", "the Post text button"); not a feed item ("post comment box", "post to open it").
 _SEND_LABEL = re.compile(r"^\W*(?:(?:send|post|tweet)(?:\s+(?:it|now|message|reply|comment|tweet|text|sms))?"
-                         r"(?:\s+(?:text|label|link|pill|option))?(?:\s+(?:button|icon))?\W*$|reply\b)", re.I)
+                         r"(?:\s+(?:text|label|link|pill|option))?(?:\s+(?:button|icon))?\W*$|reply\b|"
+                         r"(?:send|post|tweet)\s+to\s+(?!(?:open|see|view|read|expand|like|comment|reply|share|play|watch|go)\b)\w)",
+                         re.I)
 # A send, submit or publish word that ends the head, with only message, element or shape words after it ("blue send
 # arrow", "button to send the message", "Send to Sam"), unless the head is a field, setting or menu row ("the 'Send
 # message' field", "Send read receipts", "Undo send", "Enter is send", "Send feedback button"): those send nothing.
@@ -50,9 +57,8 @@ _NOT_A_BUTTON = re.compile(r"\b(?:field|input|box|bar|area|placeholder|toggle|sw
                            r"tab|menu|dropdown|picker|selector|feedback)\W*$", re.I)
 # The element word a model adds after a label ("the Confirm button"), which is not part of the label.
 _ELEMENT = re.compile(r"(?:\s+(?:button|icon|text|label|link|option|pill))+\W*$", re.I)
-# "Post"/"Tweet" as a control, not a feed item or the composer's opener ("New post button", "compose tweet button").
-_POST_BUTTON = re.compile(r"\b(?:post|tweet)\s+(?:(?:text|label)\s+)?(?:button|icon)\b", re.I)
-_OPENER = re.compile(r"\b(?:new|create|compose|write|start|add)\s+(?:a\s+)?(?:post|tweet)\b|\+", re.I)
+# The Post/Tweet control named as one ("the blue Post button"); not "Share post button" or "New post button".
+_POST_BUTTON = re.compile(r"^(?:post|tweet)\s+(?:(?:text|label)\s+)?(?:button|icon)\b", re.I)
 # The paper-plane glyph sends a typed draft; before a draft it opens direct messages or a share sheet.
 _PLANE = re.compile(r"\bpaper[\s-]?(?:air)?plane\b", re.I)
 
@@ -65,15 +71,14 @@ def final_target(target: str, typed: bool) -> bool:
     draft is typed "Reply" and the paper plane. A miss is still the owner's action under the policy."""
     from .tasks import _final_control
 
-    text = " ".join(re.sub(r"[\"'“”‘’]", " ", target).split())
+    text = _VERB.sub("", " ".join(re.sub(r"[\"'“”‘’]", " ", target).split()))
     head = _WHERE.sub("", text) or text
     label = _LEAD.sub("", head)
     button = not _NOT_A_BUTTON.search(head)
     kind = _final_control(_ELEMENT.sub("", label) or label, typed=typed)  # "Reply" is a send once a draft is typed
-    if kind == "send" and not (button and _SEND_LABEL.match(label)):
-        kind = ""  # "post to open it", "the reply text field": not the send control; real sends are matched below
-    return bool(kind or (button and _VISION_FINAL.search(head))
-                or (_POST_BUTTON.search(head) and not _OPENER.search(head))
+    if kind == "send" and not (button and _SEND_LABEL.match(label) and not _FEED_ITEM.fullmatch(head)):
+        kind = ""  # "post to open it", "the post from NASA", "the reply text field": not the send control
+    return bool(kind or (button and _VISION_FINAL.search(head)) or _POST_BUTTON.match(label)
                 or (typed and _PLANE.search(head)))
 
 

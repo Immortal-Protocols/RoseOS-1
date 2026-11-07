@@ -145,7 +145,10 @@ class Vision(unittest.TestCase):
              'the Post button', 'Post comment', 'Post reply button', 'Post now', 'Post in the top right corner',
              'Post (top right)', 'Post, top-right corner', 'Tweet in the top right corner', 'the blue Post text button',
              'Post button (top right)', 'the blue Post button at the top right', 'Payment methods',
-             'button to send the message', 'Send message button', 'Confirm order button', 'Submit button at bottom of form')
+             'button to send the message', 'Send message button', 'Confirm order button', 'Submit button at bottom of form',
+             'Tap on Send', 'Tap on the Send button', 'tap on the send arrow', 'Click on Post', 'Click on the Post button',
+             'Press on Submit', 'Tap on Buy now', 'Post to feed', 'Post to story', 'Post to group', 'Post to Facebook',
+             'the Post to feed button', 'the Post in the top right')
     # Ordinary controls, including those naming a final control as a landmark, a field, a setting or a feed item.
     ORDINARY = ('Reply', 'paper airplane DM icon at top right', 'Message field', 'Search', 'Sent folder', 'Settings gear',
                 'Back arrow', 'the latest post', 'Open the first post', 'Like button on the post', 'Comment on the post',
@@ -157,7 +160,12 @@ class Vision(unittest.TestCase):
                 'the camera icon next to the send button', 'the Share via paper plane icon', 'Confirm',
                 'the Confirm button', 'Send read receipts', 'Undo send', 'Enter is send', 'Send usage and diagnostics',
                 'Send feedback button', 'Send feedback option', 'the Send to dropdown', 'the email titled Submit your timesheet',
-                'the message saying send me the file')
+                'the message saying send me the file', 'the post from NASA', 'the post in the feed',
+                'the post at the top of the feed', 'the tweet from Elon', 'the post', 'the tweet',
+                'the plus icon by the send button', 'the text field before the Send button',
+                'the mic icon after the send button', 'the input field with the send button',
+                'the GIF button between the text box and the send button', 'Boost post button', 'Share post button',
+                'Delete post button', 'Pin post button', 'Quote tweet button', 'Tap on the message field')
     # Once a draft is typed, "Reply" and the paper plane send it.
     DRAFT_FINAL = ('Reply', 'the Reply button', 'paper plane icon', 'paper airplane icon', 'paper-airplane button')
 
