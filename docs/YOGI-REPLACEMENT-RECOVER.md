@@ -410,10 +410,11 @@ Serial output is a `compute#serialPortOutput` resource when `kind` is present.
 - If chmod succeeds and a later step stops, a new operation still requires mode `0664`. It will not rotate on a unit
   that is already `0644`. Rolling the disk back is a separate snapshot decision and is not performed here.
 - Before a live host key is replaced, both the private and public files are copied to
-  `ssh_host_<alg>_key.roseos-prev-<operation id>` (and `.pub`). A failed rotation copies those bytes back and does not
-  generate another key. The next boot of the same startup script does the same and does not rotate again. The previous
-  public file is kept. The previous private file is unlinked after that restore or after success. A crash in the
-  middle of the copy can leave the previous private file until that next boot unlinks it.
+  `ssh_host_<alg>_key.roseos-prev-<operation id>` (and `.pub`). Those two files stay until the guest journal has been
+  fsynced. A crash before that journal restores a backup only when both halves are one pair, private file first. It
+  does not copy a public file alone, and it does not generate another key. If neither the live pair nor the backup
+  pair is valid, the receipt is `partial` with problem `pair`. The previous private file is unlinked only after that
+  journal is stored.
 - If the metadata readback fails, this tool does not guess and does not send another write. A startup script that was
   stored but not visible in that read stays until a later `cleanup` can read the instance. Cleanup stops the
   replacement when the describe fails.

@@ -76,7 +76,7 @@ UNIT_KEYS = {
 UNIT_PROBLEMS = {
     "none", "missing", "symlink", "kind", "mode", "owner", "size", "nlink", "runner-active", "runner-enabled",
     "runner-process", "chmod", "identity", "unknown-host-key", "baseline", "rotate-same", "rotate-partial",
-    "reexecution-partial", "cleanup", "already-0644", "hostkey-publish",
+    "reexecution-partial", "cleanup", "already-0644", "hostkey-publish", "pair",
 }
 ACCOUNT_STATES = {"absent", "removed", "preserved-mismatch", "remove-failed", "removed-home-leftover"}
 FORBIDDEN = ("BEGIN ", "PRIVATE", "OPENSSH", "-----")
@@ -425,6 +425,111 @@ def publish_public_hostkeys(io, lines_by_alg):
     return bool(io.publish_hostkey_attributes(puts))
 
 
+def _u32(value):
+    return int(value).to_bytes(4, "big")
+
+
+def _ssh_bytes(payload):
+    if isinstance(payload, str):
+        payload = payload.encode()
+    return _u32(len(payload)) + payload
+
+
+def _take_bytes(blob, offset):
+    if offset + 4 > len(blob):
+        raise GuestRefused("pair")
+    length = int.from_bytes(blob[offset:offset + 4], "big")
+    offset += 4
+    if length < 0 or length > 1 << 20 or offset + length > len(blob):
+        raise GuestRefused("pair")
+    return blob[offset:offset + length], offset + length
+
+
+def _pem_body(blob):
+    try:
+        text = blob.decode("ascii")
+    except UnicodeError:
+        raise GuestRefused("pair") from None
+    body = []
+    inside = False
+    for line in text.splitlines():
+        if line.startswith("-----BEGIN ") and line.endswith(" PRIVATE KEY-----"):
+            inside = True
+            continue
+        if line.startswith("-----END ") and line.endswith(" PRIVATE KEY-----"):
+            break
+        if inside and line.strip():
+            body.append(line.strip())
+    if not body:
+        raise GuestRefused("pair")
+    try:
+        return base64.b64decode("".join(body), validate=True)
+    except ValueError:
+        raise GuestRefused("pair") from None
+
+
+def _public_wire_from_private_section(section):
+    """Public wire blob from the private section. Secret fields are not returned."""
+    try:
+        check_a = int.from_bytes(section[:4], "big")
+        check_b = int.from_bytes(section[4:8], "big")
+    except (IndexError, TypeError):
+        raise GuestRefused("pair") from None
+    if len(section) < 8 or check_a != check_b:
+        raise GuestRefused("pair")
+    key_type, offset = _take_bytes(section, 8)
+    if key_type == b"ssh-ed25519":
+        public, _offset = _take_bytes(section, offset)
+        _secret, _offset = _take_bytes(section, _offset)
+        return _ssh_bytes(key_type) + _ssh_bytes(public)
+    if key_type.startswith(b"ecdsa-sha2-"):
+        curve, offset = _take_bytes(section, offset)
+        point, offset = _take_bytes(section, offset)
+        _secret, _offset = _take_bytes(section, offset)
+        return _ssh_bytes(key_type) + _ssh_bytes(curve) + _ssh_bytes(point)
+    if key_type == b"ssh-rsa":
+        modulus, offset = _take_bytes(section, offset)
+        exponent, _offset = _take_bytes(section, offset)
+        return _ssh_bytes(key_type) + _ssh_bytes(exponent) + _ssh_bytes(modulus)
+    raise GuestRefused("pair")
+
+
+def public_fingerprint_from_private(blob):
+    """Fingerprint of the public key carried in an unencrypted OpenSSH private key.
+
+    The return value is the key type and the SHA256 fingerprint. Private scalars are not returned.
+    """
+    try:
+        raw = _pem_body(blob)
+    except GuestRefused:
+        raise
+    magic = b"openssh-key-v1\x00"
+    if not raw.startswith(magic):
+        raise GuestRefused("pair")
+    offset = len(magic)
+    cipher, offset = _take_bytes(raw, offset)
+    kdf, offset = _take_bytes(raw, offset)
+    _options, offset = _take_bytes(raw, offset)
+    if cipher != b"none" or kdf != b"none" or offset + 4 > len(raw):
+        raise GuestRefused("pair")
+    count = int.from_bytes(raw[offset:offset + 4], "big")
+    offset += 4
+    if count != 1:
+        raise GuestRefused("pair")
+    header_public, offset = _take_bytes(raw, offset)
+    private_section, _offset = _take_bytes(raw, offset)
+    derived = _public_wire_from_private_section(private_section)
+    if derived != header_public:
+        raise GuestRefused("pair")
+    key_type, _rest = _take_bytes(derived, 0)
+    try:
+        name = key_type.decode("ascii")
+    except UnicodeError:
+        raise GuestRefused("pair") from None
+    line = name + " " + base64.b64encode(derived).decode("ascii")
+    return parse_public(line)
+
+
 def parse_public(line):
     parts = str(line).strip().split()
     if len(parts) < 2 or parts[0] not in PUBLIC_TYPES.values():
@@ -733,18 +838,19 @@ def run_rotate(io):
             public_lines[alg] = public_line
     except (GuestRefused, OSError) as error:
         code = str(error) if str(error) in ("rotate-same", "rotate-partial") else "rotate-partial"
-        rolled = _rollback(io)
+        outcome = _rollback(io)
         receipt = _skeleton(binding, boot, "partial")
-        receipt["purpose"] = "rotate"
-        _fill_unit(receipt, before, before, code, "not-modified")
+        receipt["purpose"] = "rotate-publish" if GUEST_PURPOSE == "rotate-publish" else "rotate"
+        _fill_unit(receipt, before, before, "pair" if outcome == "partial" else code, "not-modified")
         receipt["unit"]["beforeMode"] = receipt["unit"]["afterMode"] = "0644"
         receipt["runner"] = _public_runner(runner)
         receipt["hostKeys"]["baseline"] = baseline
         receipt["hostKeys"]["rotated"] = {}
-        receipt["hostKeys"]["rolledBack"] = rolled
+        receipt["hostKeys"]["rolledBack"] = outcome == "restored"
         receipt["cleanup"] = access
         io.marker_store({"phase": "partial", "operationId": OPERATION_ID, "nonce": NONCE, "baseline": baseline,
                          "receipt": receipt})
+        _drop_backups(io)
         return _emit(io, receipt, binding)
     receipt = _skeleton(binding, boot, "complete")
     _fill_unit(receipt, before, before, "none", "not-modified")
@@ -761,16 +867,16 @@ def run_rotate(io):
     except (GuestRefused, OSError, TypeError, ValueError):
         receipt["journal"]["unrecognized"] = 1
     receipt["purpose"] = "rotate-publish" if GUEST_PURPOSE == "rotate-publish" else "rotate"
-    for alg in ALGORITHMS:
-        io.ssh_drop_prev_private(alg)
     if GUEST_PURPOSE == "rotate-publish" and not _publish_rotated_hostkeys(io, public_lines):
         receipt["status"] = "partial"
         receipt["unit"]["problem"] = "hostkey-publish"
         io.marker_store({"phase": "publish-failed", "operationId": OPERATION_ID, "nonce": NONCE,
                          "baseline": baseline, "rotated": rotated, "receipt": receipt})
+        _drop_backups(io)
         return _emit(io, receipt, binding)
     io.marker_store({"phase": "complete", "operationId": OPERATION_ID, "nonce": NONCE, "baseline": baseline,
                      "rotated": rotated, "receipt": receipt})
+    _drop_backups(io)
     return _emit(io, receipt, binding)
 
 
@@ -922,19 +1028,18 @@ def run(io):
             rotated[alg] = confirmed
     except (GuestRefused, OSError) as error:
         code = str(error) if str(error) in ("rotate-same", "rotate-partial") else "rotate-partial"
-        rolled = _rollback(io)
+        outcome = _rollback(io)
         receipt["status"] = "partial"
-        receipt["unit"]["problem"] = code
+        receipt["unit"]["problem"] = "pair" if outcome == "partial" else code
         receipt["hostKeys"]["baseline"] = baseline
         receipt["hostKeys"]["rotated"] = {}
-        receipt["hostKeys"]["rolledBack"] = rolled
+        receipt["hostKeys"]["rolledBack"] = outcome == "restored"
         receipt["hostKeys"]["distinctFromClonedBaseline"] = False
         receipt["cleanup"] = cleanup_access(io, OPERATION_ID)
         io.marker_store({"phase": "partial", "operationId": OPERATION_ID, "nonce": NONCE, "baseline": baseline,
                          "receipt": receipt})
+        _drop_backups(io)
         return _emit(io, receipt, binding)
-    for alg in ALGORITHMS:
-        io.ssh_drop_prev_private(alg)
     receipt["status"] = "complete"
     receipt["hostKeys"]["baseline"] = baseline
     receipt["hostKeys"]["rotated"] = rotated
@@ -949,20 +1054,57 @@ def run(io):
     phase = "complete" if receipt["status"] == "complete" else "partial"
     io.marker_store({"phase": phase, "operationId": OPERATION_ID, "nonce": NONCE, "baseline": baseline,
                      "rotated": rotated, "receipt": receipt})
+    _drop_backups(io)
     return _emit(io, receipt, binding)
 
 
-def _rollback(io):
-    """Copy any preserved previous keys back over the live names. Previous public files stay."""
-    rolled = False
+def restore_backup_pairs(io):
+    """Restore a backup only when both halves are one valid pair. Never copy a single half.
+
+    Returns restored, unchanged, or partial. Does not delete the backup private key and does not
+    generate a new key.
+    """
+    restored = False
+    partial = False
     for alg in ALGORITHMS:
         try:
-            if io.ssh_restore(alg):
-                rolled = True
-            io.ssh_drop_prev_private(alg)
+            backup = io.pair_status(alg, "backup")
+            live = io.pair_status(alg, "live")
         except (GuestRefused, OSError):
-            rolled = True
-    return rolled
+            partial = True
+            continue
+        if backup == "match":
+            try:
+                same = live == "match" and io.pairs_agree(alg)
+            except (GuestRefused, OSError):
+                same = False
+            if same:
+                continue
+            try:
+                copied = io.restore_pair(alg) and io.pair_status(alg, "live") == "match"
+            except (GuestRefused, OSError):
+                copied = False
+            if copied:
+                restored = True
+            else:
+                partial = True
+            continue
+        if live != "match":
+            partial = True
+    if partial:
+        return "partial"
+    return "restored" if restored else "unchanged"
+
+
+def _drop_backups(io):
+    """Drop backup private keys only after the caller has stored a durable journal."""
+    for alg in ALGORITHMS:
+        io.ssh_drop_prev_private(alg)
+
+
+def _rollback(io):
+    """Restore complete backup pairs. The backup private key stays until the journal is stored."""
+    return restore_backup_pairs(io)
 
 
 def _rerun(io, marker, binding, boot):
@@ -984,28 +1126,29 @@ def _rerun(io, marker, binding, boot):
                 discarded = io.ssh_discard_temp()
             except GuestRefused:
                 discarded = {"removed": 0, "skippedSymlink": 1}
-            for alg in ALGORITHMS:
-                try:
-                    io.ssh_drop_prev_private(alg)
-                except (GuestRefused, OSError):
-                    receipt["status"] = "partial"
+            try:
+                _drop_backups(io)
+            except (GuestRefused, OSError):
+                receipt["status"] = "partial"
             if int(discarded.get("skippedSymlink") or 0) > 0:
                 receipt["status"] = "partial"
                 receipt["cleanup"] = dict(receipt["cleanup"], accessCleanup="failed")
             return _emit(io, receipt, binding)
-    # A crash or reboot must not generate another key. Restore any preserved previous pair.
-    rolled = _rollback(io)
+    # A crash or reboot must not generate another key. Restore only a complete backup pair.
+    outcome = _rollback(io)
     try:
         io.ssh_discard_temp()
     except (GuestRefused, OSError):
-        rolled = True
+        outcome = "partial"
     receipt = _skeleton(binding, boot, "partial")
+    receipt["purpose"] = "rotate-publish" if GUEST_PURPOSE == "rotate-publish" else (
+        "rotate" if GUEST_PURPOSE == "rotate" else "repair")
     receipt["reexecution"] = False
-    receipt["unit"]["problem"] = "reexecution-partial"
+    receipt["unit"]["problem"] = "pair" if outcome == "partial" else "reexecution-partial"
     baseline = marker.get("baseline") if isinstance(marker.get("baseline"), dict) else {}
     receipt["hostKeys"]["baseline"] = {k: v for k, v in baseline.items() if k in ALGORITHMS and isinstance(v, str) and FP.fullmatch(v)}
     receipt["hostKeys"]["rotated"] = {}
-    receipt["hostKeys"]["rolledBack"] = rolled
+    receipt["hostKeys"]["rolledBack"] = outcome == "restored"
     receipt["hostKeys"]["distinctFromClonedBaseline"] = False
     if GUEST_PURPOSE in ("rotate", "rotate-publish"):
         receipt["cleanup"] = _observe_access(io, OPERATION_ID)
@@ -1013,6 +1156,10 @@ def _rerun(io, marker, binding, boot):
         receipt["cleanup"] = cleanup_access(io, OPERATION_ID)
     io.marker_store({"phase": "partial", "operationId": OPERATION_ID, "nonce": NONCE, "baseline": baseline,
                      "receipt": receipt})
+    try:
+        _drop_backups(io)
+    except (GuestRefused, OSError):
+        pass
     return _emit(io, receipt, binding)
 
 
@@ -1111,6 +1258,11 @@ class LinuxHost:
         finally:
             os.close(fd)
         os.rename(temporary, target)
+        directory_fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
 
     def prior_journal(self):
         """Count other operation markers that are not a readable known phase. Their bytes are not returned."""
@@ -1273,17 +1425,70 @@ class LinuxHost:
             self._copy_ssh(KEY_NAMES[algorithm] + suffix,
                            KEY_NAMES[algorithm] + ".roseos-prev-" + OPERATION_ID + suffix, overwrite=False)
 
-    def ssh_restore(self, algorithm):
+    def _read_regular(self, name, limit):
+        fd = os.open(self._real("/etc/ssh/" + self._ssh_name(name)), os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        try:
+            info = os.fstat(fd)
+            if not stat.S_ISREG(info.st_mode) or info.st_size > limit:
+                raise GuestRefused("pair")
+            return os.read(fd, info.st_size)
+        finally:
+            os.close(fd)
+
+    def _pair_names(self, algorithm, place):
+        base = KEY_NAMES[algorithm]
+        if place == "live":
+            return base, base + ".pub"
+        backup = base + ".roseos-prev-" + OPERATION_ID
+        return backup, backup + ".pub"
+
+    def pair_status(self, algorithm, place):
+        """match, mismatch, or absent. Private bytes are not returned."""
+        if algorithm not in ALGORITHMS or not HEX32.fullmatch(OPERATION_ID):
+            return "mismatch"
+        private_name, public_name = self._pair_names(algorithm, place)
+        private_path = self._real("/etc/ssh/" + private_name)
+        public_path = self._real("/etc/ssh/" + public_name)
+        private_exists = os.path.lexists(private_path)
+        public_exists = os.path.lexists(public_path)
+        if not private_exists and not public_exists:
+            return "absent"
+        if not private_exists or not public_exists:
+            return "mismatch"
+        try:
+            private_type, private_fp = public_fingerprint_from_private(self._read_regular(private_name, 1 << 20))
+            public_type, public_fp = parse_public(self.ssh_public(public_name))
+        except (GuestRefused, OSError):
+            return "mismatch"
+        if private_type == public_type and private_fp == public_fp:
+            return "match"
+        return "mismatch"
+
+    def pairs_agree(self, algorithm):
+        """True when the live and backup public fingerprints are the same. No key bytes are returned."""
+        _live_private, live_public = self._pair_names(algorithm, "live")
+        _backup_private, backup_public = self._pair_names(algorithm, "backup")
+        try:
+            _live_type, live_fp = parse_public(self.ssh_public(live_public))
+            _backup_type, backup_fp = parse_public(self.ssh_public(backup_public))
+        except (GuestRefused, OSError):
+            return False
+        return live_fp == backup_fp
+
+    def restore_pair(self, algorithm):
+        """Copy both backup halves, private first. A single half is not copied."""
         if algorithm not in ALGORITHMS or not HEX32.fullmatch(OPERATION_ID):
             return False
-        restored = False
-        for suffix in ("", ".pub"):
-            prev = KEY_NAMES[algorithm] + ".roseos-prev-" + OPERATION_ID + suffix
-            if not os.path.lexists(self._real("/etc/ssh/" + prev)):
-                continue
-            self._copy_ssh(prev, KEY_NAMES[algorithm] + suffix, overwrite=True)
-            restored = True
-        return restored
+        if self.pair_status(algorithm, "backup") != "match":
+            return False
+        private_name, public_name = self._pair_names(algorithm, "backup")
+        live_private, live_public = self._pair_names(algorithm, "live")
+        self._copy_ssh(private_name, live_private, overwrite=True)
+        self._copy_ssh(public_name, live_public, overwrite=True)
+        return self.pair_status(algorithm, "live") == "match"
+
+    def ssh_restore(self, algorithm):
+        return self.restore_pair(algorithm)
 
     def ssh_drop_prev_private(self, algorithm):
         if algorithm not in ALGORITHMS or not HEX32.fullmatch(OPERATION_ID):
@@ -1368,6 +1573,11 @@ class LinuxHost:
             finally:
                 os.close(fd)
             os.rename(source, dest)
+        directory = os.open(self._real("/etc/ssh"), os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
 
     def ssh_discard_temp(self):
         removed = skipped = 0
