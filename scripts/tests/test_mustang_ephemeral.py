@@ -4,12 +4,15 @@ import json
 import os
 from pathlib import Path
 import stat
+import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path[:0] = [str(ROOT/'scripts')]
+import mustang_controller as controller
 import mustang_ephemeral as enroll
 import mustang_lane as lane
 
@@ -105,6 +108,73 @@ class EnrollmentTest(unittest.TestCase):
         self.assertEqual(enroll.watch(fetch, sleep, lambda: clock['now']), 'ready')
         clock['now'] = enroll.QUEUE_LIMIT_SECONDS
         self.assertEqual(enroll.watch(lambda: queued, sleep, lambda: clock['now']), 'stop')
+
+    def test_infrastructure_host_check_starts_without_fabricated_inputs(self):
+        runtime = json.loads((ROOT/'os/build-only/mustang-runtime.json').read_text())
+        self.assertEqual(runtime['status'], 'unbound')
+        self.assertIsNone(runtime['appInputsRecord'])
+        self.assertIsNone(runtime['signingRouteEvidence'])
+        self.assertIsNone(runtime['sourceEvidence'])
+        self.assertIsNone(runtime['baselineTargetFiles'])
+        self.assertEqual(controller.start_gate(runtime, {'MUSTANG_DRY_RUN': 'true'}), 'infrastructure-host-check')
+        with self.assertRaisesRegex(ValueError, 'not admitted'):
+            controller.start_gate(runtime, {})
+        with self.assertRaisesRegex(ValueError, 'cannot publish'):
+            controller.start_gate(runtime, {'MUSTANG_DRY_RUN': 'true', 'MUSTANG_PUBLISH': 'true'})
+        for action in dedicated.DRY_RUN_BLOCKED:
+            with patch.dict(os.environ, {'MUSTANG_DRY_RUN': 'true'}):
+                with self.assertRaisesRegex(ValueError, 'cannot compile, sign, or publish'):
+                    dedicated.refuse_dry_run(action)
+        with patch.dict(os.environ, {'MUSTANG_DRY_RUN': 'true'}):
+            dedicated.refuse_dry_run('host-check')
+        env = dict(PATH=os.environ['PATH'], MUSTANG_DRY_RUN='true')
+        started = subprocess.run([sys.executable, str(ROOT/'scripts/mustang_controller.py'), 'start',
+                                  '--ownership-record', '/tmp/mustang-owner-absent.json'],
+                                 env=env, capture_output=True, text=True, timeout=20)
+        self.assertEqual(started.returncode, 4, started.stderr)
+        self.assertIn('exact main workflow', started.stderr)
+        self.assertNotIn('gcloud', started.stderr)
+        published = subprocess.run([sys.executable, str(ROOT/'scripts/mustang_controller.py'), 'start'],
+                                   env=dict(env, MUSTANG_PUBLISH='true'), capture_output=True, text=True, timeout=20)
+        self.assertEqual(published.returncode, 4)
+        self.assertIn('cannot publish', published.stderr)
+        self.assertNotIn('gcloud', published.stderr)
+        workflow = (ROOT/'.github/workflows/mustang-ota-dedicated.yml').read_text()
+        builder = workflow.split('builder:', 1)[1].split('publisher:', 1)[0]
+        self.assertIn('if: inputs.dry_run == false\n      run: python3 scripts/mustang-dedicated.py baseline', builder)
+        self.assertIn('if: inputs.dry_run == false\n      env:\n        APP_INPUTS: ${{ steps.apps.outputs.inputs_dir }}\n      run: python3 scripts/mustang-dedicated.py produce', builder)
+        self.assertIn("if: always() && inputs.dry_run == false\n      run: python3 scripts/mustang-dedicated.py report", builder)
+        self.assertNotIn('mustang-dedicated.py baseline', builder.split('if: inputs.dry_run == false', 1)[0])
+
+    def test_dry_run_host_check_uses_pinned_tools_not_null_runtime_records(self):
+        cfg = json.loads((ROOT/'os/build-only/mustang-runtime.json').read_text())
+        bound = lane.configuration()
+        seen = []
+
+        def is_file(path):
+            seen.append(str(path))
+            return True
+
+        space = type('Space', (), {'f_bavail': 10**9, 'f_frsize': 4096, 'f_bsize': 4096,
+                                    'f_files': lane.CONFIRMED_TOTAL_INODES, 'f_favail': 1000})()
+
+        def execute(argv, **kwargs):
+            self.assertEqual(argv[0], 'findmnt')
+            return type('Result', (), {'returncode': 0, 'stdout': lane.CONFIRMED_UUID+' '+lane.CONFIRMED_MOUNT+'\n'})()
+
+        with patch.dict(os.environ, {'MUSTANG_DRY_RUN': 'true'}), \
+                patch.object(Path, 'is_file', is_file), patch.object(Path, 'is_dir', lambda path: True), \
+                patch.object(Path, 'is_symlink', lambda path: False), \
+                patch.object(dedicated.os, 'statvfs', return_value=space), \
+                patch.object(dedicated.os, 'stat', return_value=type('Stat', (), {'st_dev': 1})()), \
+                patch.object(dedicated.os, 'access', return_value=True), \
+                patch.object(dedicated.os, 'geteuid', return_value=1000), \
+                patch.object(dedicated.shutil, 'which', side_effect=AssertionError('signing CLI is not an infrastructure check')):
+            dedicated.host_check(bound, cfg, observe_id=lambda: bound['vm']['instanceId'], execute=execute)
+        self.assertIn(enroll.NODE['install'], seen)
+        self.assertIn(enroll.SDK['aapt'], seen)
+        self.assertIn(enroll.SDK['apksigner'], seen)
+        self.assertNotIn(None, seen)
 
     def test_dry_run_uses_group_5_without_admitting_inputs_or_publishing(self):
         env = dict(GITHUB_EVENT_NAME='workflow_dispatch', GITHUB_REF='refs/heads/main', GITHUB_SHA='a'*40,

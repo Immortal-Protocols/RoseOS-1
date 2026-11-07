@@ -179,6 +179,7 @@ jobs:
     - name: Verify guest ID, mounted data disk, bytes/inodes and tools
       run: python3 scripts/mustang-dedicated.py host-check
     - name: Check actual baseline updater and trust before a new compile
+      if: inputs.dry_run == false
       run: python3 scripts/mustang-dedicated.py baseline --out "$RUNNER_TEMP/mustang-baseline.json"
     - name: Admit exact fresh app artifact or prepositioned private archive
       if: inputs.dry_run == false
@@ -194,20 +195,21 @@ jobs:
     - name: Require unsigned raised-edge proof before signer login
       if: inputs.dry_run == false
       run: python3 scripts/mustang-dedicated.py collect
-    - if: inputs.dry_run == false
+    - id: login
+      if: inputs.dry_run == false
       run: python3 scripts/actions-gcp-login.py login "$GCP_SIGNER_SERVICE_ACCOUNT"
     - name: Sign once using established identity and require signed proof
       if: inputs.dry_run == false
       run: python3 scripts/mustang-dedicated.py sign
-    - if: always()
+    - if: always() && steps.login.outcome == 'success'
       run: python3 scripts/actions-gcp-login.py logout
     - name: Verify signatures, updater and trust; stage private OTA
       if: inputs.dry_run == false
       id: stage
       run: python3 scripts/mustang-dedicated.py stage --dir "$RUNNER_TEMP/mustang-baseline.json" --out "$RUNNER_TEMP/mustang-ota"
-    - if: always()
+    - if: always() && inputs.dry_run == false
       run: python3 scripts/mustang-dedicated.py report --out "$RUNNER_TEMP/mustang-receipts" --dir "$RUNNER_TEMP/mustang-baseline.json"
-    - if: always()
+    - if: always() && inputs.dry_run == false
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
       with:
         name: mustang-dedicated-receipts-${{ github.run_id }}-${{ github.run_attempt }}

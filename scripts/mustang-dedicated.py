@@ -176,6 +176,20 @@ def host_identity(lane,filesystem_uuid,observe_id=metadata_id,execute=subprocess
     return paths
 
 
+DRY_RUN_BLOCKED=frozenset(('fetch-inputs','baseline','produce','collect','sign','_execute','stage','verify-staged','publish','report'))
+
+
+def refuse_dry_run(action):
+    if os.environ.get('MUSTANG_DRY_RUN')=='true' and action in DRY_RUN_BLOCKED:
+        raise ValueError('dry run cannot compile, sign, or publish')
+
+
+def infrastructure_tool_paths():
+    """Bootstrap pins. These are install paths, not admitted app or baseline records."""
+    import mustang_ephemeral
+    return (mustang_ephemeral.NODE['install'], mustang_ephemeral.SDK['aapt'], mustang_ephemeral.SDK['apksigner'])
+
+
 def host_check(lane,cfg,observe_id=metadata_id,execute=subprocess.run):
     observed=observe_id()
     paths=host_identity(lane,cfg['dataFilesystemUuid'],lambda:observed,execute,cfg.get('dataMount'))
@@ -190,9 +204,12 @@ def host_check(lane,cfg,observe_id=metadata_id,execute=subprocess.run):
         raise ValueError('dedicated source/storage must already be prepared')
     if any(os.stat(paths[key]).st_dev!=os.stat(paths['home']).st_dev for key in ('sourceRoot','storageRoot')):
         raise ValueError('dedicated source/storage are not on the admitted data filesystem')
-    for tool in cfg['tools'].values():
-        if not Path(tool).is_file() or not os.access(tool,os.X_OK): raise ValueError('dedicated tool unavailable')
-    if any(shutil.which(tool) is None for tool in ('gh','gcloud')):
+    infrastructure=os.environ.get('MUSTANG_DRY_RUN')=='true'
+    tools=infrastructure_tool_paths() if infrastructure else cfg['tools'].values()
+    for tool in tools:
+        if not isinstance(tool,str) or not Path(tool).is_file() or not os.access(tool,os.X_OK):
+            raise ValueError('dedicated tool unavailable')
+    if not infrastructure and any(shutil.which(tool) is None for tool in ('gh','gcloud')):
         raise ValueError('artifact/signing CLI unavailable before compile')
 
 
@@ -362,6 +379,7 @@ def main():
     parser.add_argument('--ownership-record'); parser.add_argument('--publish',action='store_true')
     args=parser.parse_args()
     args.publish=args.publish or (args.action=='guard' and os.environ.get('MUSTANG_PUBLISH')=='true')
+    refuse_dry_run(args.action)
     if args.action=='preflight':
         print(json.dumps(route.report(),sort_keys=True))
         return 0
@@ -388,8 +406,6 @@ def main():
         if not dry and os.environ['GCP_SIGNER_SERVICE_ACCOUNT']!=ota.module('mustang_route_identity','mustang-sign-package.py').SIGNER:
             raise ValueError('existing Mustang signer identity differs; no host start')
         emit(runner_group=cfg['runner']['groupName'],runner_label=lane['runnerLabel'])
-    elif args.action=='produce' and os.environ.get('MUSTANG_DRY_RUN')=='true':
-        raise ValueError('dry run cannot compile')
     elif args.action=='cleanup-prepare':
         encoded=os.environ.get('MUSTANG_OWNER_B64','')
         if len(encoded)>8192: raise ValueError('oversized controller ownership refused')
