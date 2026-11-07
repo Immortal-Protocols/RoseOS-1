@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
-"""Mustang source-sync run contract. This process does not start repo."""
+"""Mustang source-sync orchestration. The default command does not start repo."""
+import argparse
 import hashlib
 import json
+import subprocess
+import time
 from pathlib import Path
 import xml.etree.ElementTree as ET
 
@@ -12,6 +15,8 @@ REVISION = '2ac24c5475de121ebe4e9e6a5c1a404ef44aa9c8'
 MANIFEST_SHA = '32d30e70ee59d373a17fe8090bdded898afa80651f27c331caca4578b3008888'
 SOURCE = '/mnt/disks/mustang-data/roseos/source'
 PIN = '/mnt/disks/mustang-data/roseos/roseos-pin'
+ORIGIN = 'https://github.com/Immortal-Protocols/RoseOS-1.git'
+MANIFEST_CHECKOUT = '.repo/manifests'
 USER = 'mustang-runner'
 SYNC_TIMEOUT_SECONDS = 10800
 STOP_ARGV = ['python3', 'scripts/mustang_controller.py', 'stop', '--ownership-record']
@@ -23,28 +28,58 @@ APPROVAL_KEYS = {'schema', 'recipeSha256', 'scope', *FLAGS}
 def as_runner(argv, workdir):
     if not isinstance(argv, list) or not argv or any(type(part) is not str for part in argv):
         raise ValueError('source sync argv differs')
-    if workdir not in (SOURCE, PIN):
+    if workdir not in (SOURCE, PIN, '/tmp'):
         raise ValueError('source sync working directory leaves the Mustang data disk')
     return ['/usr/bin/env', '--chdir', '/tmp', '--', 'sudo', '-H', '-u', USER, '--',
             '/usr/bin/env', '--chdir', workdir, '--', *argv]
 
 
-def canonical_argv(env=None):
-    """Exact commands. A caller environment cannot change the revision."""
+def install_dir(path):
+    return ['sudo', 'install', '-d', '-o', USER, '-g', USER, '-m', '0750', path]
+
+
+def steps(env=None):
+    """Bootstrap the pinned RoseOS tree on the builder, then sync only after that checkout matches."""
     if env is not None and not isinstance(env, dict):
         raise ValueError('source sync environment differs')
     return [
-        ['curl', '-fsS', '-H', 'Metadata-Flavor: Google',
-         'http://metadata.google.internal/computeMetadata/v1/instance/id'],
-        ['findmnt', '--noheadings', '--output', 'UUID', '--target', '/mnt/disks/mustang-data'],
-        as_runner(['stat', '-c', '%U %a', SOURCE], SOURCE),
-        as_runner(['git', 'rev-parse', 'HEAD'], PIN),
-        as_runner(['sha256sum', 'os/pinned-manifest.xml'], PIN),
-        as_runner(['repo', 'init', '-u', 'https://github.com/Immortal-Protocols/RoseOS-1.git',
-                   '-b', REVISION, '-m', 'os/pinned-manifest.xml'], SOURCE),
-        as_runner(['repo', 'sync', '-c', '-j4', '--fail-fast'], SOURCE),
-        as_runner(['repo', 'manifest', '-r', '-o', 'resolved-manifest.xml'], SOURCE),
+        {'name': 'instance', 'limit': 60, 'expect': mustang_lane.CONFIRMED_INSTANCE_ID,
+         'argv': ['curl', '-fsS', '-H', 'Metadata-Flavor: Google',
+                  'http://metadata.google.internal/computeMetadata/v1/instance/id']},
+        {'name': 'disk', 'limit': 60, 'expect': mustang_lane.CONFIRMED_UUID,
+         'argv': ['findmnt', '--noheadings', '--output', 'UUID', '--target', '/mnt/disks/mustang-data']},
+        {'name': 'pin-dir', 'limit': 60, 'argv': install_dir(PIN)},
+        {'name': 'source-dir', 'limit': 60, 'argv': install_dir(SOURCE)},
+        {'name': 'git-init', 'limit': 60, 'argv': as_runner(['git', 'init', PIN], '/tmp')},
+        {'name': 'git-remote', 'limit': 60,
+         'argv': as_runner(['git', '-C', PIN, 'remote', 'add', 'origin', ORIGIN], '/tmp')},
+        {'name': 'git-fetch', 'limit': 600,
+         'argv': as_runner(['git', '-C', PIN, 'fetch', '--depth', '1', 'origin', REVISION], '/tmp')},
+        {'name': 'git-checkout', 'limit': 60,
+         'argv': as_runner(['git', '-C', PIN, 'checkout', '--detach', REVISION], '/tmp')},
+        {'name': 'pin-head', 'limit': 60, 'expect': REVISION,
+         'argv': as_runner(['git', '-C', PIN, 'rev-parse', 'HEAD'], '/tmp')},
+        {'name': 'pin-hash', 'limit': 60, 'expect': MANIFEST_SHA+'  '+PIN+'/os/pinned-manifest.xml',
+         'argv': as_runner(['sha256sum', PIN+'/os/pinned-manifest.xml'], '/tmp')},
+        {'name': 'repo-init', 'limit': 600,
+         'argv': as_runner(['repo', 'init', '-u', PIN, '-b', REVISION, '-m', 'os/pinned-manifest.xml'], SOURCE)},
+        {'name': 'manifest-head', 'limit': 60, 'expect': REVISION,
+         'argv': as_runner(['git', '-C', MANIFEST_CHECKOUT, 'rev-parse', 'HEAD'], SOURCE)},
+        {'name': 'manifest-hash', 'limit': 60,
+         'expect': MANIFEST_SHA+'  '+MANIFEST_CHECKOUT+'/os/pinned-manifest.xml',
+         'argv': as_runner(['sha256sum', MANIFEST_CHECKOUT+'/os/pinned-manifest.xml'], SOURCE)},
+        {'name': 'repo-sync', 'limit': SYNC_TIMEOUT_SECONDS,
+         'argv': as_runner(['repo', 'sync', '-c', '-j4', '--fail-fast'], SOURCE)},
+        {'name': 'resolved', 'limit': 120,
+         'argv': as_runner(['repo', 'manifest', '-r', '-o', 'resolved-manifest.xml'], SOURCE)},
+        {'name': 'resolved-bytes', 'limit': 120,
+         'argv': as_runner(['cat', 'resolved-manifest.xml'], SOURCE)},
     ]
+
+
+def canonical_argv(env=None):
+    """Exact commands. A caller environment cannot change the revision."""
+    return [step['argv'] for step in steps(env)]
 
 
 def _load(path):
@@ -69,26 +104,35 @@ def require_before_sync(instance_text, uuid_text, stat_text, head_text, manifest
     _exact(manifest_sum_text, MANIFEST_SHA+'  os/pinned-manifest.xml', 'pinned manifest hash differs')
 
 
-def project_count(root=ROOT):
-    return len(list(ET.parse(Path(root)/'os/pinned-manifest.xml').getroot().iter('project')))
+def project_identities(xml_bytes):
+    try:
+        document = ET.fromstring(xml_bytes)
+    except ET.ParseError:
+        raise ValueError('resolved manifest is not XML') from None
+    default = document.find('default')
+    default_remote = default.get('remote') if default is not None else None
+    found = []
+    for project in document.iter('project'):
+        name = project.get('name')
+        path = project.get('path') or name
+        remote = project.get('remote') or default_remote
+        revision = project.get('revision')
+        if type(name) is not str or type(path) is not str or type(remote) is not str or type(revision) is not str:
+            raise ValueError('resolved manifest project is incomplete')
+        found.append((name, path, remote, revision))
+    if len(found) != len(set(found)):
+        raise ValueError('resolved manifest project is repeated')
+    return found
 
 
 def require_resolved(xml_bytes, root=ROOT):
     if not isinstance(xml_bytes, (bytes, bytearray)):
         raise ValueError('resolved manifest bytes are absent')
-    expected = project_count(root)
-    try:
-        document = ET.fromstring(xml_bytes)
-    except ET.ParseError:
-        raise ValueError('resolved manifest is not XML') from None
-    projects = list(document.iter('project'))
-    if expected < 1000 or len(projects) != expected:
-        raise ValueError('resolved manifest project count differs')
-    for project in projects:
-        revision = project.get('revision')
-        if type(revision) is not str or len(revision) != 40 or any(char not in '0123456789abcdef' for char in revision):
-            raise ValueError('resolved manifest revision is not a commit')
-    return {'sha256': hashlib.sha256(bytes(xml_bytes)).hexdigest(), 'projectCount': expected,
+    pinned = project_identities((Path(root)/'os/pinned-manifest.xml').read_bytes())
+    resolved = project_identities(xml_bytes)
+    if sorted(resolved) != sorted(pinned):
+        raise ValueError('resolved manifest does not match the pinned project set')
+    return {'sha256': hashlib.sha256(bytes(xml_bytes)).hexdigest(), 'projectCount': len(pinned),
             'executed': False, 'compileAuthorized': False}
 
 
@@ -190,12 +234,157 @@ def admit(approval, root=ROOT):
             'syncTimeoutSeconds': SYNC_TIMEOUT_SECONDS, 'recipeSha256': approval['recipeSha256']}
 
 
-def main():
+def stop_request(ownership, reason):
+    if type(ownership) is not str or not ownership or ownership.startswith('-') or '\n' in ownership or '\x00' in ownership:
+        raise ValueError('source sync ownership record is missing')
+    return {'reason': reason, 'ownershipRecord': ownership, 'argv': STOP_ARGV+[ownership]}
+
+
+def elapsed_seconds(start, now):
+    if isinstance(now, bool) or isinstance(start, bool) or type(now) not in (int, float) or type(start) not in (int, float):
+        raise ValueError('source sync clock differs')
+    return int(now - start)
+
+
+def run_bounded(argv, timeout, spawn, stop, clock, sleep):
+    if isinstance(timeout, bool) or type(timeout) is not int or timeout <= 0 \
+            or timeout >= mustang_lane.CONFIRMED_STOP['seconds']:
+        raise ValueError('source sync timeout is not tighter than the runner crash stop')
+    started = clock()
+    proc = spawn(argv)
+    while True:
+        code = proc.poll()
+        elapsed = elapsed_seconds(started, clock())
+        if code == 0 and elapsed < timeout:
+            return proc.output()
+        if code is None and elapsed < timeout:
+            sleep(min(5, timeout-elapsed))
+            continue
+        if code is None:
+            proc.kill()
+            stop({'reason': 'source-sync-timeout'})
+            raise ValueError('source sync exceeded the bounded timeout and the VM stop was requested')
+        stop({'reason': 'source-sync-failed', 'exit': code})
+        raise ValueError('source sync failed and the VM stop was requested')
+
+
+def spawn_subprocess(argv):
+    proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+    class Bound:
+        def poll(self):
+            return proc.poll()
+
+        def kill(self):
+            proc.kill()
+
+        def output(self):
+            stdout, _stderr = proc.communicate()
+            return stdout
+    return Bound()
+
+
+def request_stop(ownership, reason):
+    detail = stop_request(ownership, reason)
+    subprocess.run(detail['argv'], check=False)
+    return detail
+
+
+def normalized_resolved(root=ROOT, mutate=None):
+    projects = project_identities((Path(root)/'os/pinned-manifest.xml').read_bytes())
+    if mutate is not None:
+        projects = mutate(list(projects))
+    body = '<manifest>\n'+''.join(
+        '<project name="%s" path="%s" remote="%s" revision="%s"/>\n' % item for item in projects)+'</manifest>'
+    return body.encode()
+
+
+def orchestrate(approval, ownership, spawn, stop, clock, sleep, root=ROOT):
+    """Run the admitted source sync. Any check or sync failure requests VM stop."""
+    detail = stop_request(ownership, 'source-sync-failed')
+    halted = {'done': False}
+
+    def halt(reason):
+        if not halted['done']:
+            halted['done'] = True
+            stop(dict(detail, reason=reason))
+
+    try:
+        admitted = admit(approval, root)
+    except ValueError:
+        halt('source-sync-not-admitted')
+        raise
+    observed = {}
+    started = clock()
+    try:
+        for step in steps():
+            remaining = SYNC_TIMEOUT_SECONDS - elapsed_seconds(started, clock())
+            if remaining <= 0:
+                halt('source-sync-timeout')
+                raise ValueError('source sync exceeded the bounded timeout and the VM stop was requested')
+            limit = step['limit'] if step['limit'] < remaining else remaining
+            try:
+                text = run_bounded(step['argv'], limit, spawn, lambda item: halt(item['reason']), clock, sleep)
+            except ValueError:
+                halt('source-sync-failed')
+                raise
+            if 'expect' in step:
+                _exact(text, step['expect'], 'source sync '+step['name']+' differs')
+                observed[step['name']] = text.strip().split('  ', 1)[0]
+            if step['name'] == 'resolved-bytes':
+                compared = require_resolved(text.encode(), root)
+                observed['resolvedSha256'] = compared['sha256']
+                observed['projectCount'] = compared['projectCount']
+    except ValueError:
+        halt('source-sync-failed')
+        raise
+    return {'schema': 'roseos.mustang-source-sync-run.v1', 'admitted': 'source-sync-only', 'executed': True,
+            'observed': observed, 'historical': {'oidcExercised': False},
+            'compileAuthorized': False, 'signAuthorized': False, 'runtimeBound': False,
+            'recipeSha256': admitted['recipeSha256']}
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('action', nargs='?', default='show', choices=('show', 'run'))
+    parser.add_argument('--execute', action='store_true')
+    parser.add_argument('--approval')
+    parser.add_argument('--ownership-record')
+    args = parser.parse_args(argv)
     record = load()
-    print(json.dumps({'admitted': False, 'executed': False, 'roseRevision': record['roseRevision'],
-                      'sourceRoot': record['sourceRoot'], 'recipeSha256': recipe_sha256(),
-                      'syncTimeoutSeconds': record['syncTimeoutSeconds']}, sort_keys=True))
-    return 4
+    if args.action == 'show' or not args.execute:
+        print(json.dumps({'admitted': False, 'executed': False, 'roseRevision': record['roseRevision'],
+                          'sourceRoot': record['sourceRoot'], 'recipeSha256': recipe_sha256(),
+                          'syncTimeoutSeconds': record['syncTimeoutSeconds']}, sort_keys=True))
+        return 4
+    if not args.ownership_record:
+        print('source sync admission is closed')
+        return 4
+    if not args.approval:
+        request_stop(args.ownership_record, 'source-sync-not-admitted')
+        print('source sync admission is closed')
+        return 4
+    sent = {'done': False}
+
+    def stop_once(detail):
+        if sent['done']:
+            return
+        sent['done'] = True
+        subprocess.run(detail['argv'], check=False)
+
+    try:
+        approval = json.loads(Path(args.approval).read_text())
+        receipt = orchestrate(approval, args.ownership_record, spawn_subprocess, stop_once, time.monotonic, time.sleep)
+    except (OSError, ValueError, json.JSONDecodeError):
+        if args.ownership_record and not sent['done']:
+            try:
+                stop_once(stop_request(args.ownership_record, 'source-sync-failed'))
+            except ValueError:
+                pass
+        print('source sync failed and the VM stop was requested')
+        return 4
+    print(json.dumps(receipt, sort_keys=True))
+    return 0
 
 
 if __name__ == '__main__':
