@@ -241,8 +241,22 @@ class EnrollmentTest(unittest.TestCase):
         self.assertEqual(enroll.queue_decision(queued, 30), 'wait')
         self.assertEqual(enroll.queue_decision(queued, enroll.QUEUE_LIMIT_SECONDS), 'stop')
         self.assertEqual(enroll.queue_decision([{'name': 'builder', 'status': 'in_progress'}], enroll.QUEUE_LIMIT_SECONDS), 'ready')
+        skipped_builder = {'name': 'builder', 'status': 'completed', 'conclusion': 'skipped'}
+        queued_source = {'name': 'source', 'status': 'queued'}
+        self.assertEqual(enroll.queue_decision([skipped_builder, queued_source], 30), 'wait')
+        self.assertEqual(enroll.queue_decision([skipped_builder, queued_source], enroll.QUEUE_LIMIT_SECONDS), 'stop')
+        skipped_source = {'name': 'source', 'status': 'completed', 'conclusion': 'skipped'}
+        queued_builder = {'name': 'builder', 'status': 'queued'}
+        self.assertEqual(enroll.queue_decision([skipped_source, queued_builder], 30), 'wait')
+        self.assertEqual(enroll.queue_decision([skipped_source, queued_builder], enroll.QUEUE_LIMIT_SECONDS), 'stop')
+        self.assertEqual(enroll.queue_decision([skipped_builder, {'name': 'source', 'status': 'in_progress'}],
+                                               enroll.QUEUE_LIMIT_SECONDS), 'ready')
+        self.assertEqual(enroll.queue_decision([skipped_source, {'name': 'builder', 'status': 'in_progress'}],
+                                               enroll.QUEUE_LIMIT_SECONDS), 'ready')
         self.assertEqual(enroll.watch_decision('failure', [{'name': 'builder', 'status': 'in_progress'}], 0), 'stop')
         self.assertNotIn('value', ' '.join(enroll.metadata_keys_argv()))
+        self.assertIn('--format=json(metadata.items[].key)', enroll.metadata_keys_argv())
+        self.assertNotIn('metadata.items.key)', ' '.join(enroll.metadata_keys_argv()))
         clock = {'now': 0}
         def fetch():
             return queued if clock['now'] < enroll.QUEUE_LIMIT_SECONDS else [{'name': 'builder', 'status': 'in_progress'}]
@@ -251,6 +265,52 @@ class EnrollmentTest(unittest.TestCase):
         self.assertEqual(enroll.watch(fetch, sleep, lambda: clock['now']), 'ready')
         clock['now'] = enroll.QUEUE_LIMIT_SECONDS
         self.assertEqual(enroll.watch(lambda: queued, sleep, lambda: clock['now']), 'stop')
+
+    def test_metadata_clear_rejects_a_null_projection_and_requires_readback(self):
+        post_remove = {'metadata': {'items': [{'key': 'block-project-ssh-keys'}, {'key': 'enable-oslogin'}]},
+                       'status': 'TERMINATED'}
+        self.assertEqual(enroll.metadata_key_names(post_remove), ['block-project-ssh-keys', 'enable-oslogin'])
+        self.assertFalse(enroll.metadata_is_present(post_remove))
+        self.assertEqual(enroll.metadata_key_names(['block-project-ssh-keys', 'mustang-jitconfig']),
+                         ['block-project-ssh-keys', 'mustang-jitconfig'])
+        for raw in ('null', '', '   ', '{"metadata": null}', '{"metadata": {"items": null}}',
+                    '{"metadata": {"items": {"key": null}}}', '{}', '["mustang-jitconfig", null]'):
+            with self.assertRaisesRegex(ValueError, 'not a key list'):
+                enroll.parse_metadata_document(raw)
+        reads = {'n': 0}
+
+        def transport(argv):
+            if 'describe' not in argv:
+                return subprocess.CompletedProcess(argv, 0, '', '')
+            reads['n'] += 1
+            if reads['n'] == 1:
+                body = '["enable-oslogin", "mustang-jitconfig"]\n'
+            else:
+                body = json.dumps(post_remove)
+            return subprocess.CompletedProcess(argv, 0, body, '')
+
+        code, out, err = self.invoke_clear(transport)
+        self.assertEqual(code, 0, err)
+        self.assertIn('"state": "removed"', out)
+        stuck = {'n': 0}
+
+        def still_there(argv):
+            if 'describe' not in argv:
+                return subprocess.CompletedProcess(argv, 0, '', '')
+            stuck['n'] += 1
+            return subprocess.CompletedProcess(argv, 0, '["mustang-jitconfig"]\n', '')
+
+        code, out, err = self.invoke_clear(still_there)
+        self.assertEqual(code, 4)
+        self.assertIn('remained after removal', err)
+
+    def invoke_clear(self, transport):
+        from contextlib import redirect_stderr, redirect_stdout
+        import io
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            code = enroll.main(['clear-metadata', '--execute'], transport=transport)
+        return code, out.getvalue(), err.getvalue()
 
     def test_infrastructure_host_check_starts_without_fabricated_inputs(self):
         runtime = json.loads((ROOT/'os/build-only/mustang-runtime.json').read_text())
@@ -349,7 +409,7 @@ class EnrollmentTest(unittest.TestCase):
         self.assertIn('./run.sh --jitconfig', script)
         self.assertNotIn('exec ./run.sh', script)
         self.assertIn('trap cleanup EXIT', script)
-        self.assertIn('--output "$file"', script)
+        self.assertIn('-o "$outfile"', script)
         self.assertIn('guest-attributes/mustang/jit-fetched', script)
         self.assertNotIn('config=$(curl', script)
         self.assertNotIn('config.sh', script)
@@ -391,6 +451,13 @@ class EnrollmentTest(unittest.TestCase):
         self.assertIn('User=mustang-runner', unit)
         self.assertIn('Type=simple', unit)
         self.assertIn('RuntimeMaxSec=14400', unit)
+        self.assertIn('NoNewPrivileges=true', unit)
+        self.assertIn('PrivateTmp=true', unit)
+        self.assertIn('RequiresMountsFor=/mnt/disks/mustang-data', unit)
+        self.assertIn('Wants=network-online.target', unit)
+        self.assertIn('After=network-online.target', unit)
+        self.assertIn('ConditionPathIsMountPoint=/mnt/disks/mustang-data', unit)
+        self.assertNotIn('local-fs.target', unit)
         self.assertNotIn('jitconfig', unit.lower())
         self.bootstrap_refuses_wrong_disk_and_keeps_a_verified_download()
 
@@ -581,7 +648,13 @@ class WorkflowCliContractTest(unittest.TestCase):
             if 'get-guest-attributes' in argv:
                 return subprocess.CompletedProcess(argv, 0, '{"value":"1"}\n', '')
             if 'describe' in argv:
-                return subprocess.CompletedProcess(argv, 0, '{"metadata":{"items":[{"key":"mustang-jitconfig"}]}}\n', '')
+                seen_describe = sum(1 for call in calls if 'describe' in call)
+                if seen_describe % 2 == 1:
+                    body = '{"metadata":{"items":[{"key":"mustang-jitconfig"}]}}\n'
+                else:
+                    body = ('{"metadata":{"items":[{"key":"block-project-ssh-keys"},'
+                            '{"key":"enable-oslogin"}]},"status":"TERMINATED"}\n')
+                return subprocess.CompletedProcess(argv, 0, body, '')
             self.assertNotIn(secret, text)
             return subprocess.CompletedProcess(argv, 0, '', '')
 
@@ -660,6 +733,86 @@ class WorkflowCliContractTest(unittest.TestCase):
         self.assertIn('instance/attributes/'+enroll.METADATA_KEY, guest)
         self.assertIn('guest-attributes/mustang/jit-fetched', guest)
         self.assertIn('--jitconfig', guest)
+
+
+class GuestMetadataOrderTest(unittest.TestCase):
+    """The config read and the guest-attribute acknowledgement are different requests."""
+
+    def run_guest(self, root, plan):
+        binary = Path(root)/'bin'
+        runner = Path(root)/'roseos/runner'
+        binary.mkdir(parents=True)
+        runner.mkdir(parents=True)
+        body = 'jit-body-must-not-be-logged'
+        (binary/'curl').write_text(
+            '#!/usr/bin/env python3\n'
+            'import os, sys\n'
+            'args=sys.argv[1:]; method, outfile, url="GET", None, None\n'
+            'i=0\n'
+            'while i < len(args):\n'
+            '    if args[i]=="-X" and i+1<len(args): method=args[i+1]; i+=2; continue\n'
+            '    if args[i]=="-o" and i+1<len(args): outfile=args[i+1]; i+=2; continue\n'
+            '    if args[i]=="-w": i+=2; continue\n'
+            '    if args[i].startswith("http"): url=args[i]\n'
+            '    i+=1\n'
+            'plan=os.environ["MUSTANG_CURL_PLAN"]\n'
+            'lines=open(plan).read().splitlines()\n'
+            'op, status=lines[0].split(); open(plan,"w").write("\\n".join(lines[1:]))\n'
+            'open(os.environ["MUSTANG_CURL_LOG"],"a").write(method+" "+url+"\\n")\n'
+            'if method!=op: sys.stderr.write("unexpected "+method+"\\n"); sys.exit(3)\n'
+            'if status=="network": sys.exit(7)\n'
+            'if outfile and status=="200" and method=="GET":\n'
+            '    open(outfile,"w").write(os.environ["MUSTANG_CURL_BODY"])\n'
+            'elif outfile: open(outfile,"w").write("")\n'
+            'sys.stdout.write(status)\n')
+        (binary/'curl').chmod(0o755)
+        (runner/'run.sh').write_text('#!/bin/sh\necho ran >> "$MUSTANG_RUN_LOG"\nexit 0\n')
+        (runner/'run.sh').chmod(0o755)
+        plan_path = Path(root)/'plan'
+        plan_path.write_text('\n'.join(plan)+'\n')
+        log = Path(root)/'curl.log'
+        ran = Path(root)/'ran'
+        env = dict(os.environ, PATH=str(binary)+':'+os.environ['PATH'],
+                   MUSTANG_GUEST_ROOT=str(Path(root)/'roseos'),
+                   MUSTANG_METADATA_URL='http://metadata.test/computeMetadata/v1',
+                   MUSTANG_GUEST_WAIT_SECONDS='5', MUSTANG_GUEST_POLL_SECONDS='0',
+                   MUSTANG_CURL_PLAN=str(plan_path), MUSTANG_CURL_LOG=str(log),
+                   MUSTANG_CURL_BODY=body, MUSTANG_RUN_LOG=str(ran))
+        result = subprocess.run(['bash', str(ROOT/'scripts/mustang-ephemeral-guest.sh')],
+                                env=env, capture_output=True, text=True)
+        self.assertNotIn(body, result.stdout)
+        self.assertNotIn(body, result.stderr)
+        leftover = list(runner.glob('jit.*'))
+        return result, log.read_text() if log.exists() else '', ran.exists(), leftover
+
+    def test_not_ready_is_a_get_and_a_forbidden_ack_does_not_start_the_runner(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            ready, log, ran, leftover = self.run_guest(base/'ready', ['GET 404', 'GET 200', 'PUT 200'])
+            self.assertEqual(ready.returncode, 0, ready.stderr)
+            self.assertIn('metadata GET failed: HTTP 404', ready.stderr)
+            self.assertNotIn('ack failed', ready.stderr)
+            self.assertTrue(ran)
+            self.assertEqual(leftover, [])
+            self.assertIn('GET http://metadata.test/computeMetadata/v1/instance/attributes/mustang-jitconfig', log)
+            self.assertIn('PUT http://metadata.test/computeMetadata/v1/instance/guest-attributes/mustang/jit-fetched', log)
+            denied, log, ran, leftover = self.run_guest(base/'denied', ['GET 200', 'PUT 403'])
+            self.assertEqual(denied.returncode, 4, denied.stderr)
+            self.assertIn('guest attribute ack failed: HTTP 403', denied.stderr)
+            self.assertNotIn('metadata GET failed: HTTP 403', denied.stderr)
+            self.assertFalse(ran)
+            self.assertEqual(leftover, [])
+            self.assertFalse((base/'denied/roseos/runner/.runner').exists())
+            get_denied, _, ran, leftover = self.run_guest(base/'get-denied', ['GET 403', 'PUT 200'])
+            self.assertEqual(get_denied.returncode, 4, get_denied.stderr)
+            self.assertIn('metadata GET failed: HTTP 403', get_denied.stderr)
+            self.assertNotIn('ack failed', get_denied.stderr)
+            self.assertFalse(ran)
+            self.assertEqual(leftover, [])
+            networked, _, ran, _ = self.run_guest(base/'network', ['GET network', 'GET 200', 'PUT 200'])
+            self.assertEqual(networked.returncode, 0, networked.stderr)
+            self.assertIn('metadata GET failed: network', networked.stderr)
+            self.assertTrue(ran)
 
 
 if __name__ == '__main__':

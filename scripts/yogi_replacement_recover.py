@@ -108,6 +108,8 @@ SPENT_OPERATION_IDS = frozenset({
     "5cf6fe9a62880b89ee6e7e822a0379d2",
     "20ef6008b1ef78137d201de13176af42",
     "638e6e9039e41b7531697bb45066a616",
+    "a5848d669170305750c61bc3effdec9f",
+    "41e30832b719be117c73c13c0459cb44",
 })
 # ce79ffe4 is the recorded rotate-publish id prefix. The unsaved suffix must not be reused either.
 SPENT_BINDING_PREFIXES = ("ce79ffe4",)

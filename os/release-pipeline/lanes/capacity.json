@@ -145,7 +145,6 @@
         "emulator-alpha-verify-retained",
         "emulator-alpha-export",
         "signing-bootstrap",
-        "models-sign",
         "rango-retained",
         "rango-factory-observe",
         "rango-factory-package",

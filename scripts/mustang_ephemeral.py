@@ -46,7 +46,7 @@ NODE = {
 SDK = {
     'url': 'https://dl.google.com/android/repository/build-tools_r35_linux.zip',
     'sha256': 'bd3a4966912eb8b30ed0d00b0cda6b6543b949d5ffe00bea54c04c81e1561d88',
-    'source': 'scripts/setup-android-sdk.sh and os/models-signing/models-sign.json',
+    'source': 'scripts/setup-android-sdk.sh',
     'aapt': '/mnt/disks/mustang-data/roseos/tools/android-sdk/build-tools/android-15/aapt',
     'apksigner': '/mnt/disks/mustang-data/roseos/tools/android-sdk/build-tools/android-15/apksigner'}
 RUNNER_APP = {
@@ -284,17 +284,47 @@ def guest_attribute_argv():
 
 def metadata_keys_argv():
     vm = mustang_lane.configuration()['vm']
+    # items.key without a slice is a null projection. items[].key is the key list.
     return ['gcloud', 'compute', 'instances', 'describe', vm['instance'],
             '--project='+vm['project'], '--zone='+vm['zone'],
-            '--format=json(metadata.items.key)']
+            '--format=json(metadata.items[].key)']
+
+
+def metadata_key_names(described):
+    """Known gcloud shapes only. Null and unknown documents are not an empty key list."""
+    if isinstance(described, list):
+        if any(type(item) is not str or not item for item in described):
+            raise ValueError('metadata key readback is not a key list')
+        return list(described)
+    if not isinstance(described, dict) or 'metadata' not in described or not isinstance(described.get('metadata'), dict) \
+            or 'items' not in described['metadata']:
+        raise ValueError('metadata key readback is not a key list')
+    items = described['metadata']['items']
+    if isinstance(items, list):
+        names = []
+        for item in items:
+            if not isinstance(item, dict) or type(item.get('key')) is not str or not item['key']:
+                raise ValueError('metadata key readback is not a key list')
+            names.append(item['key'])
+        return names
+    if isinstance(items, dict) and isinstance(items.get('key'), list) \
+            and all(type(item) is str and item for item in items['key']):
+        return list(items['key'])
+    raise ValueError('metadata key readback is not a key list')
 
 
 def metadata_is_present(described):
-    items = ((described or {}).get('metadata') or {}).get('items') or []
-    for item in items:
-        if item == METADATA_KEY or (isinstance(item, dict) and item.get('key') == METADATA_KEY):
-            return True
-    return False
+    return METADATA_KEY in metadata_key_names(described)
+
+
+def parse_metadata_document(raw):
+    if type(raw) is not str or not raw.strip():
+        raise ValueError('metadata key readback is not a key list')
+    try:
+        described = json.loads(raw)
+    except json.JSONDecodeError:
+        raise ValueError('metadata key readback is not a key list') from None
+    return metadata_key_names(described)
 
 
 def guest_fetched(payload):
@@ -325,13 +355,24 @@ def metadata_argv(action, instance=None):
     raise ValueError('metadata action refused')
 
 
+def selected_guest_jobs(jobs):
+    """The unselected guest job is completed with conclusion skipped. That is not acceptance."""
+    found = []
+    for job in jobs or []:
+        if not isinstance(job, dict) or job.get('name') not in ('builder', 'source'):
+            continue
+        if job.get('status') == 'skipped' or job.get('conclusion') == 'skipped':
+            continue
+        found.append(job)
+    return found
+
+
 def queue_decision(jobs, elapsed_seconds, limit=QUEUE_LIMIT_SECONDS):
-    """ready: builder has been accepted. wait: still inside the bound. stop: cancel this run."""
+    """ready: the selected guest job was accepted. wait: still inside the bound. stop: cancel this run."""
     if type(elapsed_seconds) is not int or elapsed_seconds < 0:
         raise ValueError('queue wait is invalid')
-    matches = [job for job in jobs or [] if isinstance(job, dict) and job.get('name') == 'builder']
-    status = matches[-1].get('status') if matches else None
-    if status in ('in_progress', 'completed'):
+    rows = selected_guest_jobs(jobs)
+    if any(job.get('status') in ('in_progress', 'completed') for job in rows):
         return 'ready'
     if elapsed_seconds >= limit:
         return 'stop'
@@ -612,12 +653,17 @@ def main(argv=None, transport=None):
         else:
             if args.execute:
                 query = metadata_keys_argv()
-                if transport is None:
-                    raw = subprocess.check_output(query, text=True) or '{}'
+
+                def read_keys():
+                    if transport is None:
+                        raw = subprocess.check_output(query, text=True)
+                    else:
+                        raw = transport(query).stdout
+                    return parse_metadata_document(raw)
+
+                if METADATA_KEY not in read_keys():
+                    value = {'cleared': METADATA_KEY, 'state': 'absent'}
                 else:
-                    raw = transport(query).stdout or '{}'
-                described = json.loads(raw)
-                if metadata_is_present(described):
                     remove = metadata_argv('remove-metadata')
                     if transport is None:
                         subprocess.check_call(remove)
@@ -625,9 +671,9 @@ def main(argv=None, transport=None):
                         result = transport(remove)
                         if getattr(result, 'returncode', 0):
                             raise subprocess.CalledProcessError(result.returncode, remove)
+                    if METADATA_KEY in read_keys():
+                        raise ValueError('JIT metadata key remained after removal')
                     value = {'cleared': METADATA_KEY, 'state': 'removed'}
-                else:
-                    value = {'cleared': METADATA_KEY, 'state': 'absent'}
             else:
                 value = {'clear': metadata_argv('remove-metadata'), 'execute': False}
         print(json.dumps({k: v for k, v in value.items() if k != 'encoded_jit_config'}, sort_keys=True))

@@ -20,16 +20,13 @@ development stays paused. The cloud Models services are not shut down.
 
 ## Distribution
 - **OS images, OTAs and Rose Agent delivery never carry it.** `scripts/tests/test_models_app_not_bundled.py` (F02) enforces this.
-- **Standalone routes being removed:**
-  - the `models-sign` mode of `os-release.yml`;
-  - `models-publish.yml`, the one-off `rose-models-2` prerelease route;
-  - the Models signing adapter and its tests;
-  - then the app source (`workspace/models/android/`) and its CI, `models-android.yml`.
-  - The routes are in Release-owned files, and the app source can only go after them, because its artifact feeds `models-sign`.
+- **Standalone routes, removed:**
+  - Release's slice (#658): the `models-sign` mode of `os-release.yml`, `models-publish.yml` (the one-off `rose-models-2` prerelease route), and the Models signing adapter, scripts and tests.
+  - Then the app itself: its source (`workspace/models/android/`), its unsigned CI build (`models-android.yml`) and its JNI adapter (`workspace/models/rose-chat-android/`, whose exports bind `dev.pixel.models.NativeAgent`). Nothing can build, sign or publish it any more.
 - **Kept, with no live action:**
   - the already-published `rose-models-2` prerelease in pixel-ota (never Latest);
   - the `models-v0` signer identity, key and secrets;
-  - `workspace/models/serving`, `rose_cloud`, `contracts`, and the shared Rust and JNI libraries.
+  - `workspace/models/serving`, `rose_cloud`, `contracts`, and Core's Rust chat core (`rose-chat-core`, still tested by `models-rust.yml`).
 
 ## Installed copies and upgrades
 - **Nothing is removed silently.** Rose Agent holds no permission that could do it: `REQUEST_DELETE_PACKAGES` only opens Android's confirmation (#624).

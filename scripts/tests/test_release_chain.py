@@ -232,7 +232,7 @@ class Workflow(unittest.TestCase):
 
 class Concurrency(unittest.TestCase):
     """One run at a time in os-release-frankel, and every waiting run keeps its place: with the default single pending
-    slot a campaign successor queued behind a running gen cancels an unrelated pending run (e.g. models-sign)."""
+    slot a campaign successor queued behind a running gen cancels an unrelated pending run (e.g. signing-bootstrap)."""
 
     def test_the_shared_group_queues_every_pending_run_and_never_cancels_one_in_progress(self):
         block = re.search(r'(?m)^concurrency:\n((?:  .*\n)+)', WORKFLOW)[1]

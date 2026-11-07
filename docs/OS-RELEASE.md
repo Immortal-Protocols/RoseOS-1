@@ -2092,7 +2092,9 @@ Current state (OCT29-INFRA-S006): `fold-rango-v1` is resource-bound but blocked.
 - **Tool identities.** Each tool records its source identity separately from its installed path and sha256. The
   installed identity is a later builder preflight (`plan` lists it as `laterHostPreflight`). None is measured.
 
-`models-v0` is unbound until its own secret resources, signer access, algorithm and package identity are supplied.
+`models-v0` is retired with Rose Models (#651, `docs/MODELS-RETIREMENT.md`): it is no longer a `bootstrap_profile`
+choice, and `os-release.yml` has no `models-sign` mode. Its profile record, signer identity, key and secrets are kept;
+nothing deletes them, and no workflow signs or publishes `dev.pixel.models`.
 The collision check needs `secretmanager.secrets.get` and `secretmanager.versions.list` on both secrets. The add-only
 and accessor grants do not include them, so metadata stays unavailable and the run stops. `python3
 scripts/signing-bootstrap.py plan --profile fold-rango-v1` prints the exact operations. A merged workflow is not an admitted key operation.

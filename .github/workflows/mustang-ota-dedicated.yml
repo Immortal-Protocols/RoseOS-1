@@ -15,6 +15,10 @@ on:
         description: Enroll one ephemeral runner and host-check only; no compile, sign, or publication
         type: boolean
         default: false
+      source_only:
+        description: Sync the pinned tree on the guest only. The guest cannot stop the VM; cleanup does.
+        type: boolean
+        default: false
 permissions:
   contents: read
 concurrency:
@@ -22,7 +26,7 @@ concurrency:
   cancel-in-progress: false
 env:
   MUSTANG_PUBLISH: ${{ inputs.publish }}
-  MUSTANG_DRY_RUN: ${{ inputs.dry_run }}
+  MUSTANG_DRY_RUN: ${{ inputs.dry_run || inputs.source_only }}
 jobs:
   guard:
     runs-on: ubuntu-24.04
@@ -164,6 +168,7 @@ jobs:
     - guard
     - controller
     - enroll
+    if: inputs.source_only == false
     runs-on:
       group: ${{ needs.guard.outputs.runner_group }}
       labels: ${{ needs.guard.outputs.runner_label }}
@@ -267,11 +272,35 @@ jobs:
         path: ${{ runner.temp }}/mustang-publication
         retention-days: 14
         if-no-files-found: warn
+  source:
+    needs:
+    - guard
+    - controller
+    - enroll
+    if: inputs.source_only
+    runs-on:
+      group: ${{ needs.guard.outputs.runner_group }}
+      labels: ${{ needs.guard.outputs.runner_label }}
+    timeout-minutes: 185
+    permissions:
+      contents: read
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        ref: ${{ github.sha }}
+        fetch-depth: 0
+        persist-credentials: false
+    - name: Sync pinned source only; this process cannot stop the VM
+      timeout-minutes: 180
+      env:
+        MUSTANG_SOURCE_ONLY: 'true'
+      run: python3 scripts/mustang_source_sync.py run --execute
   cleanup:
     needs:
     - guard
     - controller
     - builder
+    - source
     - publisher
     if: always() && needs.controller.result != 'skipped'
     runs-on: ubuntu-24.04

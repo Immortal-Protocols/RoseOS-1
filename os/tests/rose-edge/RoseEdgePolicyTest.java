@@ -44,7 +44,11 @@ public final class RoseEdgePolicyTest {
                 mail, false) == REFUSED_LOCKED, "keyguard");
         expect(refusal(DEFAULT_DISPLAY, 7, LIFT, ok(), mail, true) == REFUSED_BUSY, "something in flight or owned");
         expect(refusal(DEFAULT_DISPLAY, 7, LIFT, new Conditions(true, H, DENSITY, ROTATION_0, false, true, false),
-                mail, false) == REFUSED_BUSY, "IME showing: a raise would be lowered at once");
+                mail, false) == 0, "IME showing: the chin rises over the open keyboard (F10 rule 1)");
+        expect(refusal(DEFAULT_DISPLAY, 7, LIFT, new Conditions(true, H, DENSITY, ROTATION_0, false, true, false),
+                mail, true) == REFUSED_BUSY, "IME showing and something in flight: still busy");
+        expect(refusal(DEFAULT_DISPLAY, 7, LIFT, new Conditions(true, H, DENSITY, ROTATION_0, true, true, false),
+                mail, false) == REFUSED_LOCKED, "IME showing over the keyguard: still locked");
         expect(refusal(DEFAULT_DISPLAY, 7, LIFT, new Conditions(true, H, DENSITY, 1, false, false, false),
                 mail, false) == REFUSED_ROTATION, "natural rotation only");
         expect(refusal(DEFAULT_DISPLAY, 7, LIFT, new Conditions(true, H, DENSITY, ROTATION_0, false, false, true),
@@ -117,7 +121,9 @@ public final class RoseEdgePolicyTest {
         expect(s.onDisplayChanged(2) == KEEP && s.onDisplayChanged(0) == LOWERED_DISPLAY,
                 "rotation, size or density change of the raised display");
         expect(s.onImeVisibility(0, false) == KEEP && s.onImeVisibility(2, true) == KEEP
-                && s.onImeVisibility(0, true) == LOWERED_IME, "the IME shows: full height for typing");
+                && s.onImeVisibility(0, true) == KEEP && s.raised(),
+                "the keyboard showing or hiding never lowers the chin (F10 rules 1-2)");
+        expect(LOWERED_IME == 5, "LOWERED_IME keeps its wire number, though it is no longer sent");
         expect(s.onUserChanged() == LOWERED_USER, "user switch");
         expect(s.onLowerRequested(2) == KEEP && s.onLowerRequested(0) == LOWERED_REQUESTED, "explicit lower");
     }

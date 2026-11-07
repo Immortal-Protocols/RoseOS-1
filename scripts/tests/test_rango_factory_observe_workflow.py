@@ -46,7 +46,7 @@ class Guard(unittest.TestCase):
     BASE = {'MODE': MODE, 'CANDIDATE_SHA': '', 'BUILD_NUMBER': '', 'BUILD_TIMESTAMP': '', 'APPS': '', 'PROMOTE': 'false',
             'RESUME_STAGE': 'none', 'RESUME_SOURCE_RUN': '', 'RESUME_UNSIGNED_SHA256': '', 'RESUME_SIGNED_SHA256': '',
             'CAMPAIGN': '', 'APP_PUBLISH': 'false', 'ROSE_RANGO_PUBLISH': 'false', 'ROSE_FIRST_USE_ENROLL': 'false',
-            'ROSE_RECOVER_RUN': '', 'BOOTSTRAP_PROFILE': 'none', 'MODELS_BOOTSTRAP_RUN': '', 'REUSE_BINDING': '',
+            'ROSE_RECOVER_RUN': '', 'BOOTSTRAP_PROFILE': 'none', 'REUSE_BINDING': '',
             'ALPHA_RECOVER': 'false', 'ROSE_DEVICE': 'frankel'}
 
     def branch(self):
@@ -66,7 +66,7 @@ class Guard(unittest.TestCase):
                        {'RESUME_SOURCE_RUN': '1'}, {'RESUME_UNSIGNED_SHA256': 'a' * 64}, {'RESUME_SIGNED_SHA256': 'a' * 64},
                        {'CAMPAIGN': 'start'}, {'APP_PUBLISH': 'true'}, {'ROSE_RANGO_PUBLISH': 'true'},
                        {'ROSE_FIRST_USE_ENROLL': 'true'}, {'ROSE_RECOVER_RUN': '41000000000'},
-                       {'BOOTSTRAP_PROFILE': 'models-v0'}, {'MODELS_BOOTSTRAP_RUN': '1'}, {'REUSE_BINDING': '{}'},
+                       {'BOOTSTRAP_PROFILE': 'models-v0'}, {'REUSE_BINDING': '{}'},
                        {'ALPHA_RECOVER': 'true'}, {'ROSE_DEVICE': 'blazer'}, {'ROSE_DEVICE': 'rango'}):
             with self.subTest(change=change):
                 self.assertNotEqual(self.run_branch(**change), 0)

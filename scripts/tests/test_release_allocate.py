@@ -552,7 +552,7 @@ class Workflow(unittest.TestCase):
         base = dict(os.environ, MODE='latest-beta', ROSE_DEVICE='frankel', CHANNEL='beta', CANDIDATE_SHA='', BUILD_NUMBER='',
             BUILD_TIMESTAMP='', APPS='', RESUME_STAGE='none', RESUME_UNSIGNED_SHA256='', RESUME_SOURCE_RUN='',
             RESUME_SIGNED_SHA256='', REUSE_BINDING='', PROMOTE='false', APP_PUBLISH='false', ALPHA_RECOVER='false',
-            GITHUB_SHA='a' * 40, BOOTSTRAP_PROFILE='none', MODELS_BOOTSTRAP_RUN='', MUSTANG_PUBLISH_OTA='false',
+            GITHUB_SHA='a' * 40, BOOTSTRAP_PROFILE='none', MUSTANG_PUBLISH_OTA='false',
             MUSTANG_COMPILE_RUN='', MUSTANG_BOOTSTRAP_RUN='')
         cases = [({}, True), ({'DRAFT_ONLY': 'true'}, True),
             ({'DRAFT_ONLY': 'true', 'CAMPAIGN': 'start'}, False),

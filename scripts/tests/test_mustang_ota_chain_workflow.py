@@ -266,7 +266,7 @@ class Guard(unittest.TestCase):
                        {'BUILD_TIMESTAMP': '1793900000'}, {'APPS': '[["dev.pixel.voice",1]]'}, {'PROMOTE': 'true'},
                        {'RESUME_STAGE': 'sign'}, {'RESUME_SOURCE_RUN': '1'}, {'CAMPAIGN': 'start'}, {'APP_PUBLISH': 'true'},
                        {'ROSE_RANGO_PUBLISH': 'true'}, {'ROSE_FIRST_USE_ENROLL': 'true'}, {'BOOTSTRAP_PROFILE': 'pro-mustang-v1'},
-                       {'MODELS_BOOTSTRAP_RUN': '1'}, {'REUSE_BINDING': '{}'}, {'ALPHA_RECOVER': 'true'}, {'ROSE_DEVICE': 'rango'},
+                       {'REUSE_BINDING': '{}'}, {'ALPHA_RECOVER': 'true'}, {'ROSE_DEVICE': 'rango'},
                        {'BLAZER_PREP_STAGE': 'source'}):
             with self.subTest(change=change):
                 self.assertNotEqual(self.run_guard(**change).returncode, 0)
