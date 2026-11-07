@@ -233,6 +233,42 @@ class SourceSyncRecipeTest(unittest.TestCase):
         self.assertFalse(denied[-1]['authenticatedStop'])
         self.assertNotIn('argv', denied[-1])
 
+    def test_sync_logs_stay_private_when_the_parent_is_not_writable(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            parent = Path(temporary)/'roseos'
+            parent.mkdir()
+            parent.chmod(0o755)
+            missing_logs = parent/'sync-logs'
+            with self.assertRaises(ValueError) as missing_dir:
+                sync.spawn_subprocess(['true'], missing_logs)
+            self.assertEqual(missing_dir.exception.stage, 'sync-logs')
+            self.assertEqual(sync.failure_line(missing_dir.exception), 'source sync failed: sync-logs')
+            self.assertNotIn(str(parent), str(missing_dir.exception))
+            self.assertNotIn('Permission', str(missing_dir.exception))
+            self.assertFalse(missing_logs.exists())
+            self.assertEqual(list(parent.iterdir()), [])
+            logs = parent/'sync-logs'
+            logs.mkdir(mode=0o700)
+            self.assertEqual(parent.stat().st_mode & 0o777, 0o755)
+            proc = sync.spawn_subprocess([sys.executable, '-c', 'print("ready")'], logs)
+            deadline = time.monotonic()+5
+            while proc.poll() is None and time.monotonic() < deadline:
+                time.sleep(0.05)
+            self.assertEqual(proc.output().strip(), 'ready')
+            self.assertEqual(parent.stat().st_mode & 0o777, 0o755)
+            self.assertFalse((parent/'roseos-pin').exists())
+            logs.chmod(0o755)
+            with self.assertRaises(ValueError) as wrong_mode:
+                sync.spawn_subprocess(['true'], logs)
+            self.assertEqual(wrong_mode.exception.stage, 'sync-logs')
+            self.assertEqual(logs.stat().st_mode & 0o777, 0o755)
+            link = parent/'linked-logs'
+            link.symlink_to(logs)
+            with self.assertRaises(ValueError) as linked:
+                sync.spawn_subprocess(['true'], link)
+            self.assertEqual(linked.exception.stage, 'sync-logs')
+            self.assertTrue(link.is_symlink())
+
     def test_real_poll_reads_more_than_a_pipe_without_deadlocking(self):
         size = 256 * 1024
         argv = [sys.executable, '-c',

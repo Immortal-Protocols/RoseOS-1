@@ -10,6 +10,7 @@ user=mustang-runner
 instance=5585425566393384049
 uuid=4183bff8-6be4-46bb-a641-2193d19813ee
 refuse() { echo "$1" >&2; exit 4; }
+source "$root/scripts/mustang-source-dirs.sh"
 fetch() {
   local url=$1 sha=$2 dest=$3
   if [[ -f "$dest" ]] && printf '%s  %s\n' "$sha" "$dest" | sha256sum --check --status; then
@@ -99,6 +100,7 @@ fi
 sudo install -d -o "$user" -g "$user" -m 0750 \
   "$home/source" "$home/rose-actions" "$home/runner" "$home/inputs" \
   "$tools/node" "$tools/android-sdk/downloads" "$tools/android-sdk/build-tools"
+prepare_source_dirs
 if [[ -n "$(find "$home/source" -mindepth 1 -print -quit 2>/dev/null || true)" ]]; then
   echo 'existing Mustang source retained'
 fi
