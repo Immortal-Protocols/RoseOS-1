@@ -2,6 +2,7 @@
 redirects and the public github.com download route): artifact and signer verification before any API call, a
 separate prerelease that never becomes Latest, idempotent reruns, refusal to modify a different release, sanitized
 public files and no token or response body in any output. Synthetic APKs carry a real-format v2 signing block.
+The hosted Agent route (--hosted) publishes only under this run's owned reservation, above every committed floor.
 The public receipt is also read by the app's own DirectUpdate parser (DirectUpdateReceiptProbe, compiled with javac from
 the app sources) so the producer and the direct-GitHub client agree on schemaVersion 1 and its compatibility."""
 import hashlib
@@ -643,6 +644,157 @@ APP_SOURCES = ROOT/'workspace/rose-agent/app/src/dev/pixel/voice'
 PROBE = SCRIPTS/'tests/java/dev/pixel/voice/DirectUpdateReceiptProbe.java'
 CHECK_PROBE = SCRIPTS/'tests/java/dev/pixel/voice/DirectUpdateCheckProbe.java'
 RECEIPT_304 = SCRIPTS/'tests/fixtures/app-publication/dev.pixel.voice-304.receipt.json'
+
+HOSTED_REF = 'Immortal-Protocols/RoseOS-1/.github/workflows/agent-release.yml@refs/heads/main'
+STORE = 'synthetic-reservation-store'
+OWNER_ENV = ('GITHUB_WORKFLOW_REF', 'GITHUB_RUN_ID', 'GITHUB_RUN_ATTEMPT')
+
+
+class PublisherHostedTest(unittest.TestCase):
+    """1F hosted Agent route (--hosted): an artifact host-app-release.py --hosted built under this run's owned reservation
+    is published only with that reservation (scripts/app_reservation.py, the build's own check), above every committed
+    Frankel floor. Frankel's routes never publish a hosted receipt. PublisherTest's fixtures, not its tests."""
+    make_artifact, api_writes = PublisherTest.make_artifact, PublisherTest.api_writes
+    VERSION = 312  # above mustExceed 307 and every reserved row (the newest is 311)
+
+    def setUp(self):
+        PublisherTest.setUp(self)
+        hosted = json.loads((ROOT/'os/release-pipeline/agent/hosted.json').read_text())
+        self.assertIsNone(hosted['reservation']['store'], 'the committed store is unbound (D1)')
+        hosted['reservation']['store'] = STORE
+        self.hosted_config = self.root/'hosted.json'
+        self.hosted_config.write_text(json.dumps(hosted))
+        self.owner = {'GITHUB_WORKFLOW_REF': HOSTED_REF, 'GITHUB_RUN_ID': '4242', 'GITHUB_RUN_ATTEMPT': '1'}
+        self.reserve()
+        self.make_hosted()
+
+    def reserve(self, version=VERSION, edit=lambda r: r, **change):
+        record = {'schema': 'roseos.app-version-reservation.v1', 'packageName': 'dev.pixel.voice', 'versionCode': version,
+                  'sourceSha': 'a' * 40, 'candidateSha': CANDIDATE, 'allocationSha256': 'b' * 64,
+                  'owner': {'workflowRef': HOSTED_REF, 'runId': '4242', 'runAttempt': '1'}, 'store': STORE, **change}
+        record['reservationSha256'] = hashlib.sha256(json.dumps(record, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+        self.record = record
+        self.reservation = self.root/f'reservation-{len(list(self.root.glob("reservation-*")))}.json'
+        self.reservation.write_text(json.dumps(edit(dict(record))))
+        return record
+
+    def make_hosted(self, edit=lambda r: r, name='hosted', version=None):
+        version = version or self.record['versionCode']
+        directory = self.root/name
+        directory.mkdir()
+        data = apk_bytes(self.certificate, f'rose agent {version} hosted'.encode())
+        apk = f'dev.pixel.voice-{version}.apk'
+        (directory/apk).write_bytes(data)
+        receipt = edit({'receiptType': 'app-release', 'simulated': False, 'candidate': CANDIDATE, 'packageName': 'dev.pixel.voice',
+            'versionCode': version, 'versionName': f'{version}-app-beta', 'apk': apk, 'size': len(data),
+            'sha256': hashlib.sha256(data).hexdigest(), 'signerSha256': self.signer,
+            'minimumTestedOs': FRANKEL['appRelease']['minimumTestedOs'], 'apkFacts': {'minSdk': 29, 'nativeAbis': []},
+            'checks': ['hosted checks'],
+            'reservation': {k: self.record[k] for k in ('reservationSha256', 'allocationSha256', 'sourceSha', 'store')}})
+        (directory/'app-release-receipt.json').write_text(json.dumps(receipt))
+        names = ['app-release-receipt.json', apk]
+        (directory/'SHA256SUMS').write_text(''.join(f'{hashlib.sha256((directory/n).read_bytes()).hexdigest()}  {n}\n' for n in names))
+        self.artifact = directory
+        return directory
+
+    def publish(self, public='public', apps=None, candidate=CANDIDATE, owner=None, hosted=True, extra=()):
+        apps = apps or json.dumps([['dev.pixel.voice', self.record['versionCode']]])
+        env = {k: v for k, v in os.environ.items() if k not in OWNER_ENV}
+        env.update(PIXEL_OTA_TOKEN=TOKEN, **(self.owner if owner is None else owner))
+        args = ['--hosted', '--reservation', str(self.reservation), '--hosted-config', str(self.hosted_config)] if hosted else []
+        return subprocess.run([sys.executable, str(SCRIPTS/'app_release_publisher.py'), '--artifact-dir', str(self.artifact),
+            '--candidate-sha', candidate, '--apps', apps, '--public-dir', str(self.root/public), '--config', str(self.config_path),
+            *args, *extra], capture_output=True, text=True, env=env)
+
+    def refused(self, message, code=1, **kwargs):
+        public = f'refused{len(list(self.root.glob("refused*")))}'
+        result = self.publish(public=public, **kwargs)
+        self.assertEqual(result.returncode, code, result.stderr)
+        self.assertIn(message, result.stderr)
+        self.assertEqual(self.server.log, [], 'nothing reached the API')
+        self.assertFalse((self.root/public).exists())
+
+    def test_publishes_the_owned_reservation_as_its_own_prerelease(self):
+        result = self.publish()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        release, = self.server.releases
+        self.assertEqual((release['tag_name'], release['draft'], release['prerelease'], release['make_latest']),
+                         ('rose-agent-312', False, True, 'false'))
+        self.assertEqual(self.server.latest, 'frankel-2026102901', 'OTA Latest is untouched')
+        public = json.loads(result.stdout)
+        self.assertEqual((public['versionCode'], public['candidate']), (312, CANDIDATE))
+        self.assertNotIn('reservation', public, 'the public receipt keeps only the allowlisted fields')
+        record = json.loads((self.root/'public/publication.json').read_text())
+        self.assertEqual(record, {**public, 'releaseId': release['id'], 'reservation': {k: self.record[k] for k in (
+            'reservationSha256', 'allocationSha256', 'sourceSha', 'store')}})
+        rerun = self.publish(public='again')
+        self.assertEqual(rerun.returncode, 0, 'an identical rerun is an idempotent no-op')
+        self.assertEqual(len(self.server.releases), 1)
+
+    def test_an_unbound_store_stops_before_any_check_or_api_call(self):
+        hosted = json.loads(self.hosted_config.read_text())
+        hosted['reservation']['store'] = None
+        self.hosted_config.write_text(json.dumps(hosted))
+        result = self.publish(public='unbound')
+        self.assertEqual((result.returncode, json.loads(result.stderr)['verdict']), (4, 'SETUP_MISSING'))
+        self.assertIn('reservation.store', result.stderr)
+        self.assertEqual(self.server.log, [])
+
+    def test_only_this_runs_exact_reservation_is_admitted(self):
+        self.refused('not owned by this run', owner=dict(self.owner, GITHUB_RUN_ATTEMPT='2'))  # a re-run reserves anew
+        self.refused('not owned by this run', owner=dict(self.owner, GITHUB_RUN_ID='4243'))
+        self.refused('not owned by this run', owner={k: v for k, v in self.owner.items() if k != 'GITHUB_RUN_ID'})
+        self.refused('is not the reserved dev.pixel.voice 312', apps='[["dev.pixel.voice", 313]]')
+        self.refused('does not name this candidate', candidate='e' * 40)
+        for edit in (lambda r: {**r, 'versionCode': 313}, lambda r: {**r, 'extra': 1},
+                     lambda r: {k: v for k, v in r.items() if k != 'store'}, lambda r: {**r, 'schema': 'other'}):
+            self.reserve(edit=edit)
+            self.refused('is not an exact roseos.app-version-reservation.v1 record with its digest')
+        self.reserve(store='another-store')
+        self.make_hosted(name='other-store')
+        self.refused('not recorded in the store the hosted config binds')
+        self.reserve()
+        link = self.root/'link.json'
+        link.symlink_to(self.reservation)
+        self.reservation = link
+        self.refused("--reservation must name this run's reservation receipt, a regular file")
+
+    def test_the_receipt_must_record_the_reservation_and_the_version_must_clear_every_committed_floor(self):
+        for index, edit in enumerate((lambda r: {k: v for k, v in r.items() if k != 'reservation'},
+                                      lambda r: {**r, 'reservation': {**r['reservation'], 'sourceSha': 'c' * 40}})):
+            self.make_hosted(edit=edit, name=f'unrecorded{index}')
+            self.refused("does not record this run's owned reservation")
+        for version in (309, 311):  # reserved app-only rows: consumed, never reissued by the store
+            self.reserve(version=version)
+            self.make_hosted(name=f'floor{version}')
+            self.refused('above the committed floor 311')
+        self.reserve(version=307)
+        self.make_hosted(name='floor307')
+        self.refused('with N above 307')
+
+    def test_frankel_routes_never_publish_a_hosted_receipt(self):
+        self.refused('publish it only with its owned reservation (--hosted)', hosted=False)
+        self.refused('--hosted takes --reservation', code=2, hosted=False, extra=['--hosted'])
+        self.refused('--reservation goes only with --hosted', code=2, hosted=False,
+                     extra=['--reservation', str(self.reservation)])
+        self.refused('never --reuse-binding', code=2, extra=['--reuse-binding', '{}', '--build-number', '2026102806',
+                                                              '--build-timestamp', '1793220605'])
+
+    def test_verify_artifact_alone_refuses_another_version_or_a_reuse_binding(self):
+        # Below the command line too: only the reservation's own version, and never OS-bundled bytes.
+        apps = [['dev.pixel.voice', 312]]
+        for kwargs in (dict(hosted=dict(self.record, versionCode=313)),
+                       dict(hosted=self.record, reuse={'build': '2026102806', 'timestamp': '1793220605', 'binding': dict(REUSE, apkSha256='c' * 64)})):
+            with self.assertRaisesRegex(arp.CheckFailed, "is not this run's owned reservation above the committed floor 311"):
+                arp.verify_artifact(self.artifact, self.config, CANDIDATE, apps, **kwargs)
+        receipt, _ = arp.verify_artifact(self.artifact, self.config, CANDIDATE, apps, hosted=self.record)
+        self.assertEqual(receipt['reservation']['reservationSha256'], self.record['reservationSha256'])
+        self.assertEqual(self.server.log, [])
+
+    def test_one_reservation_check_serves_the_hosted_build_and_its_publisher(self):
+        for script in ('host-app-release.py', 'app_release_publisher.py'):
+            self.assertIn('app_reservation.owned(', (SCRIPTS/script).read_text(), script)
+
 
 class DirectUpdateContractTest(unittest.TestCase):
     """The producer's public receipt read by the app's own DirectUpdate.offer/incompatibility (unchanged App #74 sources)."""

@@ -560,13 +560,29 @@ Its `restore()` checks the five inputs against `public-assets-receipt.json` and 
 `portableInputs` (the record's schema and sha256, no paths). With a valid record, `--check --hosted` names only the
 reservation store.
 
+**Its publication (`scripts/app_release_publisher.py --hosted --reservation PATH`, 1F).** The publisher admits a
+hosted artifact only under the same owned reservation the build used. The check is one shared implementation,
+`scripts/app_reservation.py`, so the build and the publisher cannot drift:
+- the reservation passes the same checks as above: its digest, this run as owner, `APPS` and the candidate, and the
+  store `hosted.json` binds. A re-run attempt is a new owner and needs a new reservation;
+- its version is above every committed Frankel floor: `mustExceed` and every `reserved` row. The store never reissues
+  a consumed version;
+- the receipt records exactly that reservation (digest, allocation, source and store).
+
+Every other check is the app-only route's, unchanged: artifact inventory and digests, signer, v4 sidecar,
+compatibility, a separate prerelease and OTA Latest unchanged. `publication.json` also records the reservation; the
+public receipt does not. Frankel's app-only and reuse routes refuse a hosted receipt. While the store is unbound,
+`--hosted` exits 4 before any check or API call. Neither the build nor the publisher reads the store yet: confirming
+that a reservation is recorded there comes with the store itself (decision D1).
+
 Nothing in `os-release.yml` routes to it yet. The hosted job, its queue and the shared reservation store wait on the
 decisions in the Agent design checkpoint:
 - the reservation store and its write credential;
 - Frankel reserving in the same store;
 - Infra's check of provider admission for a hosted runner.
 
-`scripts/tests/test_agent_hosted_release.py` checks the route with fakes only.
+`scripts/tests/test_agent_hosted_release.py` checks the route, and `PublisherHostedTest` in
+`scripts/tests/test_app_release_publisher.py` its publication, with fakes only.
 
 ## Retained Rango signing and separate release (source only, runtime unbound)
 

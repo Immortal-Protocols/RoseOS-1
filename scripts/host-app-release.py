@@ -55,12 +55,13 @@ import sys
 import importlib.util
 import zipfile
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import app_reservation  # noqa: E402
 import host_secrets  # noqa: E402
 from host_secrets import AdapterFailed, AdapterSetupMissing  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 HOSTED_CONFIG = ROOT/'os/release-pipeline/agent/hosted.json'
-RESERVATION_SCHEMA = 'roseos.app-version-reservation.v1'
+RESERVATION_SCHEMA = app_reservation.SCHEMA
 PORTABLE_SCHEMA = 'roseos.agent-portable-inputs.v1'
 # The only fields App's runtime record may bind: (section of host, key). Nothing else can come from it.
 PORTABLE_FIELDS = (('integrate', 'appSdkRoot'), ('integrate', 'javaHome'), ('integrate', 'publicAssetsDir'),
@@ -117,9 +118,6 @@ def hosted_missing_inputs(config):
     missing += ['appRelease.minimumTestedOs'] if not (config.get('appRelease') or {}).get('minimumTestedOs') else []
     return missing + (['reservation.store'] if not (config.get('reservation') or {}).get('store') else [])
 
-def canonical(data):
-    return json.dumps(data, sort_keys=True, separators=(',', ':')).encode()
-
 def strict_json(data, label):
     def pairs(rows):
         found = {}
@@ -167,30 +165,12 @@ def owned_reservation(path, env, apps, candidate, store):
     """The one reservation this run owns (the reservation step's receipt), or AdapterFailed. It must be an exact
     roseos.app-version-reservation.v1 record whose digest holds, owned by this run (workflow ref, run id and attempt),
     for exactly the package and versionCode APPS names and this candidate, and recorded in the bound store. A failed or
-    other run's reservation stays consumed; it is never reused or reclaimed here."""
-    if not path or os.path.islink(path) or not Path(path).is_file():
-        raise AdapterFailed('ROSE_APP_RESERVATION must name this run\'s reservation receipt, a regular file')
-    record = json.loads(Path(path).read_text())
-    keys = {'schema', 'packageName', 'versionCode', 'sourceSha', 'candidateSha', 'allocationSha256', 'owner', 'store',
-            'reservationSha256'}
-    if not isinstance(record, dict) or set(record) != keys or record['schema'] != RESERVATION_SCHEMA \
-            or record['reservationSha256'] != hashlib.sha256(canonical({k: v for k, v in record.items()
-                                                                       if k != 'reservationSha256'})).hexdigest():
-        raise AdapterFailed(f'the reservation receipt is not an exact {RESERVATION_SCHEMA} record with its digest')
-    owner = {'workflowRef': env.get('GITHUB_WORKFLOW_REF'), 'runId': env.get('GITHUB_RUN_ID'),
-             'runAttempt': env.get('GITHUB_RUN_ATTEMPT')}
-    if not all(owner.values()) or record['owner'] != owner:
-        raise AdapterFailed('the reservation is not owned by this run')
-    if record['packageName'] != PACKAGE or type(record['versionCode']) is not int \
-            or apps != [[PACKAGE, record['versionCode']]]:
-        raise AdapterFailed(f'APPS {apps} is not the reserved {PACKAGE} {record["versionCode"]}')
-    if record['candidateSha'] != candidate or not all(isinstance(record[k], str) and re.fullmatch(r'[0-9a-f]{40}', record[k])
-                                                      for k in ('sourceSha', 'candidateSha')) \
-            or not re.fullmatch(r'[0-9a-f]{64}', str(record['allocationSha256'])):
-        raise AdapterFailed('the reservation does not name this candidate, its source and its allocation digest')
-    if record['store'] != store:
-        raise AdapterFailed('the reservation is not recorded in the store the hosted config binds')
-    return record
+    other run's reservation stays consumed; it is never reused or reclaimed here. scripts/app_reservation.py holds the
+    check, shared with the hosted publisher (app_release_publisher.py --hosted)."""
+    try:
+        return app_reservation.owned(path, env, PACKAGE, apps, candidate, store)
+    except app_reservation.Refused as error:
+        raise AdapterFailed(str(error)) from None
 
 def hosted(artifact_dir, config_path=HOSTED_CONFIG, env=os.environ, gcloud='gcloud', build=None, inputs_path=None):
     """The hosted Agent route: one owned reservation, then release(), with main()'s cleanup and none of its Frankel
@@ -411,7 +391,7 @@ def release(config, sha, work, version, aapt, apksigner, artifact, env, gcloud, 
             'minSdk from the signed APK equal to the source', 'native-library ABIs from the signed APK',
             'v4 signature (.idsig) verified by the independent apksigner for this APK']}
     if reservation:
-        receipt['reservation'] = {k: reservation[k] for k in ('reservationSha256', 'allocationSha256', 'sourceSha', 'store')}
+        receipt['reservation'] = app_reservation.receipt_fields(reservation)
     if portable:
         receipt['portableInputs'] = portable  # which runtime record bound the SDK, JDK, inputs and tools (no paths)
     (artifact/'app-release-receipt.json').write_text(json.dumps(receipt, indent=2, sort_keys=True) + '\n')
