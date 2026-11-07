@@ -162,3 +162,29 @@ What was not done:
 On a phone the controls are reachable through conversation only after the Mac/cloud producer is restarted from main and
 an Agent build with this source is installed. Neither has happened: nothing is deployed or activated. No APK has been
 built or run on a device in this workstream. The glasses-on hook stays inert until a real worn signal exists.
+
+## Demo runbook (for whoever deploys; nothing here has been run)
+
+Each step is an owner or operator action. This workstream performs none of them.
+
+1. **Agent release (Release / 1F owner, owner-approved).** Today `agent-beta-auto.yml:29` holds automatic Agent releases
+   with `if: false`. The remaining route is an owner-approved `os-release.yml` dispatch on main at or after `d74a8e0`,
+   with `mode: app-only`, `apps: auto`, `app_publish: true`. It runs on `immortal-os-builder`, which has to be back in
+   service first. The output must be a Rose Agent prerelease with a higher versionCode and its v4 `.apk.idsig`; without
+   the `.idsig` the phone refuses the system-app update. Verify it per `docs/VERIFY.md`.
+2. **Producer (the owner's Mac).**
+   - Integrate main at or after `db03077`, keeping any local changes.
+   - Rerun `bash scripts/setup.sh` only if `requirements.txt` changed.
+   - Restart with `bash scripts/rose.sh --brain codex --phone real` from `prototypes/voice-phone-demo`. The local brain
+     does not carry the customization tools.
+3. **Phone.** Install the new Rose Agent and confirm Android's prompt. Nothing installs on its own.
+4. **Check.**
+   - Ask Rose "set Home to five columns", or on the producer Mac run
+     `node workspace/rose-agent/customization/rose-customize.mjs --say columns 5`.
+   - Then ask for the state: `home.applied` should be true and `home.effectiveColumns` should be what Home draws.
+   - Repeat for `wallpaper ember` and `font serif`.
+   - `glasses-hook --on --tray` is stored, but `glassesWear.signalAvailable` stays false and the hook never fires.
+   - Restore with `columns auto`, `wallpaper classic`, `font default` and `glasses-hook --off`.
+
+What counts as evidence: a phone check like this is physical-device evidence for this exact build only. Record the
+Agent tag, versionCode, source commit and producer commit next to it. Host tests are not a substitute.
