@@ -180,7 +180,10 @@ public final class RoseKeyboardView extends View {
 
     @Override
     public WindowInsets onApplyWindowInsets(WindowInsets insets) {
-        int lift = chinLiftPx(insets);
+        // Both bottoms from the window's own insets, before any parent in InputMethodService's frame consumed one:
+        // the subtraction needs navigationBars() and systemOverlays() measured against the same frame.
+        WindowInsets root = getRootWindowInsets();
+        int lift = chinLiftPx(root != null ? root : insets);
         if (lift != chinLiftPx) {
             chinLiftPx = lift;
             requestLayout();
