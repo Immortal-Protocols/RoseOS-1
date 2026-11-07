@@ -154,7 +154,10 @@ class Vision(unittest.TestCase):
                 ('', 'microphone'), ('', 'emoji'), ('Quote', ''), ('Boost post', ''), ('', 'up arrow'), ('', 'arrow'))
     # Once a draft is typed, "Reply" and the paper plane send it.
     DRAFT_FINAL = (('Reply', ''), ('Reply', 'arrow'), ('', 'paper plane'), ('', 'paper airplane'), ('', 'paper-airplane'),
-                   ('', 'arrow'), ('', 'up arrow'), ('SMS', 'arrow'), ('', 'right arrow'), ('', 'arrow_upward'))
+                   ('', 'arrow'), ('', 'up arrow'), ('SMS', 'arrow'), ('', 'right arrow'), ('', 'arrow_upward'),
+                   ('', 'up arrow, sends the message'), ('', 'up arrow (sends the message)'), ('', 'arrow, sends the text'),
+                   ('', 'arrow pointing up'), ('', 'upward-pointing arrow'), ('', 'up arrow in circle'),
+                   ('', 'circle with up arrow'), ('', 'white up arrow on blue circle'), ('', 'green circle with arrow'))
     # Navigation arrows stay ordinary after typing.
     DRAFT_ORDINARY = (('', 'back arrow'), ('', 'left arrow'), ('', 'down arrow'), ('', 'dropdown arrow'),
                       ('', 'arrow_back'), ('', 'expand arrow'), ('', 'heart'), ('Search', ''), ('', 'next month arrow'),

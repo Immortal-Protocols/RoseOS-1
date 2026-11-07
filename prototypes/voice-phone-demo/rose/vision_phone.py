@@ -35,17 +35,25 @@ your final reply. A dispatched input is not success; verify the result in the ne
 """
 
 # A view-id-style icon name ("send arrow", "ic_send", "cart checkout"): a send or purchase word anywhere counts, as for
-# the accessibility path's view-id hints (tasks._ID_SEND, tasks._ID_PURCHASE).
-_ICON_SEND = re.compile(r"(?:\b|_)(?:send|submit)(?:\b|_)", re.I)
+# the accessibility path's view-id hints (tasks._ID_SEND, tasks._ID_PURCHASE), including what the icon does ("up arrow,
+# sends the message").
+_ICON_SEND = re.compile(r"(?:\b|_)(?:send(?:s|ing)?|submit(?:s|ting)?)(?:\b|_)", re.I)
 _ICON_PURCHASE = re.compile(r"(?:\b|_)(?:buy|pay|payment|purchase|checkout)(?:\b|_)", re.I)
 # The paper-plane glyph sends a typed draft; before a draft it opens direct messages or a share sheet.
 _PLANE = re.compile(r"\bpaper[\s_-]?(?:air)?plane\b", re.I)
-# A composer's bare send arrow ("arrow", "up arrow", "arrow_upward", a right arrow under "SMS"), once a draft is typed.
-# Only the bare glyph: an arrow named for anything else ("next month arrow", "back arrow") or under another label
-# ("Next", "Continue", "Directions") is navigation.
-_DRAFT_ARROW = re.compile(r"(?:(?:blue|green|white|black|gr[ae]y|filled|circled|round|small|large|send)\s+)*"
-                          r"(?:(?:up|upward|right)\s+)?arrow(?:\s+(?:up|upward|right|icon|button|circle))*", re.I)
+# A composer's bare send arrow, once a draft is typed: an arrow described only by its shape, colour and placement
+# ("up arrow", "arrow_upward", "white up arrow on a blue circle", "arrow pointing up"), with no label or one like "SMS".
+# An arrow named for anything else ("next month arrow", "back arrow", "share arrow") or under another label ("Next",
+# "Continue", "Directions") is navigation.
+_ARROW_SHAPE = frozenset("""arrow arrows arrowhead up upward upwards right pointing pointed facing shaped circle
+    circled round rounded filled solid outlined bold thick in inside on with within a an the of icon button glyph symbol
+    small large big blue green white black gray grey purple teal dark light bright""".split())
 _DRAFT_ARROW_LABEL = re.compile(r"(?:sms|mms|rcs|chat|text|message)?", re.I)
+
+
+def _bare_arrow(icon_words: str) -> bool:
+    words = re.findall(r"[a-z]+", icon_words.lower())
+    return "arrow" in words and all(w in _ARROW_SHAPE for w in words)
 
 
 def final_target(label: str, icon: str, typed: bool, target: str = "") -> bool:
@@ -62,7 +70,7 @@ def final_target(label: str, icon: str, typed: bool, target: str = "") -> bool:
     icon_words = " ".join(re.sub(r"[_\-]+", " ", icon).split())
     return bool(_final_control(label, typed=typed) or _final_control(icon_words, typed=typed)
                 or _ICON_SEND.search(icon) or _ICON_PURCHASE.search(icon)
-                or (typed and (_PLANE.search(icon) or (_DRAFT_ARROW.fullmatch(icon_words)
+                or (typed and (_PLANE.search(icon) or (_bare_arrow(icon_words)
                                                        and _DRAFT_ARROW_LABEL.fullmatch(label.strip()))))
                 or _final_control(target, typed=typed))
 
