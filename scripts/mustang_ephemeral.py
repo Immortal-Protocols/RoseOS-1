@@ -11,6 +11,7 @@ the queue watchdog remove the metadata key. Nothing here mints a token unless
 import argparse
 import base64
 import binascii
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -327,10 +328,32 @@ def parse_metadata_document(raw):
     return metadata_key_names(described)
 
 
-def guest_fetched(payload):
-    if isinstance(payload, dict):
-        return payload.get('value') == '1' or payload.get('variableValue') == '1'
-    return str(payload).strip() == '1'
+def config_digest(path):
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def acknowledgement(payload, expected):
+    """True only for this config. A stale value is not ready. A bad document is an error."""
+    if not isinstance(expected, str) or not re.fullmatch(r'[0-9a-f]{64}', expected):
+        raise ValueError('guest acknowledgement is not bound to this config')
+    if not isinstance(payload, list):
+        raise ValueError('guest attribute readback is not a list')
+    matches = []
+    for item in payload:
+        if not isinstance(item, dict) or type(item.get('key')) is not str or not item.get('key') \
+                or type(item.get('namespace')) is not str or not item.get('namespace') \
+                or type(item.get('value')) is not str:
+            raise ValueError('guest attribute readback is not a list')
+        if item['namespace'] != 'mustang':
+            raise ValueError('guest acknowledgement namespace differs')
+        if item['key'] != 'jit-fetched':
+            raise ValueError('guest acknowledgement key differs')
+        matches.append(item['value'])
+    if len(matches) > 1:
+        raise ValueError('guest acknowledgement is duplicated')
+    if not matches:
+        return False
+    return matches[0] == expected
 
 
 def watch_decision(enroll_result, jobs, elapsed_seconds, limit=QUEUE_LIMIT_SECONDS):
@@ -562,7 +585,7 @@ def emit_stop(decision):
             handle.write('stop='+('true' if decision == 'stop' else 'false')+'\n')
 
 
-def main(argv=None, transport=None):
+def main(argv=None, transport=None, sleep=None, clock=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('action', choices=('plan', 'issue', 'put-metadata', 'wait-fetched', 'clear-metadata', 'queue-watch', 'cancel', 'sweep'))
     parser.add_argument('--run-id')
@@ -571,8 +594,8 @@ def main(argv=None, transport=None):
     parser.add_argument('--execute', action='store_true')
     args = parser.parse_args(argv)
     try:
-        if args.file is not None and args.action != 'put-metadata':
-            raise ValueError('private JIT file is only accepted by put-metadata')
+        if args.file is not None and args.action not in ('put-metadata', 'wait-fetched'):
+            raise ValueError('private JIT file is only accepted by put-metadata and wait-fetched')
         if args.action == 'plan':
             body = jit_body(args.run_id or '1')
             value = {'request': body, 'endpoint': API, 'metadata': metadata_argv('add-metadata'),
@@ -602,27 +625,35 @@ def main(argv=None, transport=None):
             if not args.execute:
                 value = {'query': 'mustang/jit-fetched', 'execute': False}
             else:
-                deadline = time.monotonic() + 180
+                if not args.file:
+                    raise ValueError('metadata delivery requires --execute and the private file')
+                path = private_jit_file(args.file)
+                expected = config_digest(path)
+                pause = sleep or time.sleep
+                now = clock or time.monotonic
+                deadline = now() + 180
                 seen = False
-                while time.monotonic() <= deadline:
+                while now() <= deadline:
                     query = guest_attribute_argv()
                     if transport is None:
                         result = subprocess.run(query, capture_output=True, text=True)
                     else:
                         result = transport(query)
-                    payload = {}
-                    if result.returncode == 0 and result.stdout.strip():
-                        try:
-                            payload = json.loads(result.stdout)
-                        except json.JSONDecodeError:
-                            payload = result.stdout
-                    if guest_fetched(payload):
+                    if result.returncode != 0:
+                        raise ValueError('guest attribute query failed: exit %s' % result.returncode)
+                    try:
+                        payload = json.loads(result.stdout) if result.stdout.strip() else []
+                    except json.JSONDecodeError:
+                        raise ValueError('guest attribute readback is not a list') from None
+                    if acknowledgement(payload, expected):
                         seen = True
                         break
-                    time.sleep(5)
+                    if now() >= deadline:
+                        break
+                    pause(5)
                 if not seen:
-                    raise ValueError('guest did not fetch the JIT metadata before the bound')
-                value = {'fetched': True}
+                    raise ValueError('guest acknowledgement did not match this config before the bound')
+                value = {'fetched': True, 'execute': True}
         elif args.action == 'queue-watch':
             enroll_result = os.environ.get('ENROLL_RESULT', 'success')
             if not args.execute:
