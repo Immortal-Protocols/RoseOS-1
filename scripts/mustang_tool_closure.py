@@ -178,42 +178,75 @@ def stored_mode(mode):
     return 0o755 if mode & 0o111 else 0o644
 
 
-def lexical_child(root, candidate):
-    root_abs = Path(os.path.abspath(root))
-    candidate_abs = Path(os.path.abspath(candidate))
-    relative = Path(os.path.relpath(candidate_abs, root_abs))
-    if relative.is_absolute() or relative.parts[:1] == ('..',) or '..' in relative.parts:
+def _contained(root, path):
+    """Containment without resolving symlinks or collapsing `..`."""
+    path = Path(os.path.abspath(path))
+    if path == root or root in path.parents:
+        return path
+    raise ClosureError('symlink escape')
+
+
+def _components(raw):
+    if os.path.isabs(raw) or '\\' in raw or raw.startswith('/'):
         raise ClosureError('symlink escape')
-    return root_abs / relative
+    return [part for part in raw.split('/') if part not in ('', '.')]
 
 
-def follow_symlink(root, link):
-    current = link
-    for _ in range(8):
-        if not current.is_symlink():
-            break
-        raw = os.readlink(current)
-        if os.path.isabs(raw) or raw.startswith('\\'):
-            raise ClosureError('symlink escape')
-        current = lexical_child(root, Path(os.path.normpath(str(current.parent / raw))))
-    else:
-        raise ClosureError('symlink cycle')
-    if current.is_symlink():
-        raise ClosureError('symlink cycle')
-    if not current.exists():
-        raise ClosureError('symlink target missing')
+def resolve_from(root, directory, raw, seen):
+    """Apply each path component after the previous symlink, matching the filesystem.
+
+    Lexical normalization of `alias/../file` would drop `alias` before reading it.
+    `..` is applied to the directory that alias actually reached.
+    """
+    current = _contained(root, directory)
+    parts = _components(raw)
+    for index, part in enumerate(parts):
+        if part == '..':
+            if current == root:
+                raise ClosureError('symlink escape')
+            current = _contained(root, current.parent)
+        else:
+            nxt = current / part
+            if nxt.is_symlink():
+                key = str(Path(os.path.abspath(nxt)))
+                if key in seen or len(seen) >= 40:
+                    raise ClosureError('symlink cycle')
+                seen.add(key)
+                nxt = resolve_from(root, current, os.readlink(nxt), seen)
+            elif not nxt.exists():
+                raise ClosureError('symlink target missing')
+            else:
+                nxt = _contained(root, nxt)
+            if nxt.is_symlink() or not nxt.exists():
+                raise ClosureError('symlink target missing')
+            current = nxt
+        if index + 1 < len(parts) and not current.is_dir():
+            raise ClosureError('jdk member is not a directory')
     return current
 
 
+def follow_symlink(root, link):
+    link = Path(os.path.abspath(link))
+    if not link.is_symlink():
+        raise ClosureError('jdk member is not a symlink')
+    seen = {str(link)}
+    return resolve_from(root, link.parent, os.readlink(link), seen)
+
+
 def collect_members(root):
-    root = Path(root)
+    root = Path(os.path.abspath(root))
+    if root.is_symlink() or not root.is_dir():
+        raise ClosureError('jdk root is not a real directory')
     found = []
 
     def walk(directory, prefix, stack):
-        directory = lexical_child(root, directory)
-        if directory in stack:
+        directory = _contained(root, directory)
+        if directory.is_symlink() or not directory.is_dir():
+            raise ClosureError('jdk member is not a directory')
+        key = str(directory)
+        if key in stack:
             raise ClosureError('symlink cycle')
-        stack = stack + (directory,)
+        stack = stack + (key,)
         try:
             names = sorted(os.listdir(directory))
         except NotADirectoryError as exc:

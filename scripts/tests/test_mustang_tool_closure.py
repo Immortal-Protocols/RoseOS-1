@@ -110,6 +110,31 @@ class ToolClosureTest(unittest.TestCase):
             with self.assertRaisesRegex(closure.ClosureError, 'privileged mode'):
                 closure.pack_tree(tree)
 
+    def test_directory_alias_parent_is_not_collapsed_and_intermediate_escape_is_rejected(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            tree = base / 'tree'
+            (tree / 'x' / 'y').mkdir(parents=True)
+            (tree / 'x' / 'file').write_bytes(b'after-alias')
+            (tree / 'file').write_bytes(b'lexical-wrong')
+            (tree / 'a').symlink_to('x/y')
+            (tree / 'link').symlink_to('a/../file')
+            packed = closure.pack_tree(tree)
+            member = closure.archive_member(packed, 'link')
+            self.assertEqual(member['sha256'], hashlib.sha256(b'after-alias').hexdigest())
+            self.assertNotEqual(member['sha256'], hashlib.sha256(b'lexical-wrong').hexdigest())
+            self.assertNotIn(b'lexical-wrong', packed)
+            (tree / 'inside').write_bytes(b'inside')
+            outside = base / 'outside'
+            outside.mkdir()
+            (outside / 'secret').write_bytes(b'secret-bytes')
+            (tree / 'alias').symlink_to('../outside')
+            (tree / 'returned').symlink_to('alias/../inside')
+            with self.assertRaisesRegex(closure.ClosureError, 'symlink escape'):
+                closure.follow_symlink(tree, tree / 'returned')
+            with self.assertRaisesRegex(closure.ClosureError, 'symlink escape'):
+                closure.pack_tree(tree)
+
     def copy_checkout(self, base):
         if base.exists():
             shutil.rmtree(base)

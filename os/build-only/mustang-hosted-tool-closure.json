@@ -107,7 +107,7 @@
     "binJavaSha256": "cfa21aeadd00925925c9e1287f5c08f3e04ee7f26a9e23d9dbfb16149153d842",
     "binJavaSizeBytes": 8528,
     "binJavaMode": "0755",
-    "basis": "Gitiles archive of linux-x86 at the manifest revision. In-tree symlinks are stored as the target regular file with mode 0755 if any execute bit is set and 0644 otherwise. Privileged modes and links that leave the tree are rejected. The resulting zip is not committed. prebuiltSourceLine is the release file's own short id and was not resolved to an OpenJDK commit."
+    "basis": "Gitiles archive of linux-x86 at the manifest revision. Each symlink component is resolved before the next component, so alias/../file follows the directory alias and then applies .. . A step above the tree root is rejected, including an intermediate step that lexical normalization would hide. In-tree targets are stored as regular files with mode 0755 if any execute bit is set and 0644 otherwise. Privileged modes are rejected. The resulting zip is not committed. prebuiltSourceLine is the release file's own short id and was not resolved to an OpenJDK commit."
   },
   "otatools": {
     "sha256": null,
