@@ -8,5 +8,5 @@
   "otatoolsExecutable": null,
   "status": "unbound",
   "trust": "held",
-  "basis": "script/generate-release.sh is not in this checkout. The hosted signer refuses secret access until a reviewed sha256 of that script is committed here. A guest-uploaded copy is not executed."
+  "basis": "Reviewed helpers are in this checkout and hashed in os/build-only/mustang-hosted-tool-closure.json. generateReleaseSha256, jdkSha256, otatoolsSha256 and otatoolsExecutable stay null until the independent otatools receipt and parent review. Admission is not enabled. A guest-uploaded copy is not executed."
 }
