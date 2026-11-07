@@ -1,0 +1,49 @@
+{
+  "schema": "roseos.mustang-allocation-provision.v1",
+  "backendEstablished": false,
+  "bucketCreated": false,
+  "identityCreated": false,
+  "bindingCreated": false,
+  "objectsWritten": false,
+  "issued": false,
+  "projectNumber": "1072799993443",
+  "projectId": "protocols-465723",
+  "bucket": "roseos-mustang-allocation-1072799993443",
+  "location": "us-west2",
+  "storageClass": "STANDARD",
+  "uniformBucketLevelAccess": true,
+  "publicAccessPrevention": "enforced",
+  "versioning": false,
+  "prefix": "epoch-202613/numbers/",
+  "serviceAccount": "mustang-allocator@protocols-465723.iam.gserviceaccount.com",
+  "separateFrom": [
+    "mustang-controller@protocols-465723.iam.gserviceaccount.com"
+  ],
+  "customRole": "projects/protocols-465723/roles/mustangAllocationWriter",
+  "permissions": [
+    "storage.objects.create",
+    "storage.objects.get",
+    "storage.objects.list"
+  ],
+  "notGranted": [
+    "storage.objects.delete",
+    "storage.objects.update",
+    "storage.buckets.setIamPolicy",
+    "storage.buckets.delete",
+    "compute.instances.get",
+    "compute.instances.start",
+    "compute.instances.stop",
+    "iam.serviceAccounts.actAs"
+  ],
+  "iamCondition": "resource.name.startsWith('projects/_/buckets/roseos-mustang-allocation-1072799993443/objects/epoch-202613/numbers/')",
+  "atomicCreate": "POST https://storage.googleapis.com/upload/storage/v1/b/roseos-mustang-allocation-1072799993443/o?uploadType=media&name=OBJECT&ifGenerationMatch=0",
+  "read": "GET https://storage.googleapis.com/storage/v1/b/roseos-mustang-allocation-1072799993443/o/OBJECT",
+  "list": "GET https://storage.googleapis.com/storage/v1/b/roseos-mustang-allocation-1072799993443/o?prefix=epoch-202613/numbers/",
+  "initialization": [
+    "Create the bucket in us-west2 with uniform bucket-level access and public access prevention enforced.",
+    "Create mustang-allocator, a service account that is not the controller and is not attached to the VM.",
+    "Create the custom role with only storage.objects.create, get, and list.",
+    "Bind that role on this bucket with the prefix condition. Do not write an object.",
+    "A later reviewed change may set backendEstablished. This file does not."
+  ]
+}
