@@ -20,7 +20,8 @@
     "mount": "/mnt/disks/mustang-data",
     "fstabPersistentSecondBoot": true,
     "availableBytesObserved": 1584163655680,
-    "availableInodesObserved": null,
+    "availableInodesObserved": 98303988,
+    "totalInodesObserved": 98304000,
     "roseosDirectory": "empty"
   },
   "layout": {
@@ -33,6 +34,19 @@
   "queue": "mustang-ota",
   "workflow": ".github/workflows/mustang-ota-dedicated.yml",
   "automaticStop": {"seconds": 14400, "action": "STOP", "hours": 4},
+  "runnerGroup": {
+    "id": "5",
+    "name": "roseos-mustang-builder",
+    "selectedRepositoryIds": ["1428996648"],
+    "repositoryVisibility": "public",
+    "restrictedToWorkflows": true,
+    "selectedWorkflows": ["Immortal-Protocols/RoseOS-1/.github/workflows/mustang-ota-dedicated.yml@refs/heads/main"],
+    "allowsPublicRepositories": true,
+    "runnerCount": 0,
+    "runnerId": null,
+    "lifetime": null,
+    "organizationPlan": "team"
+  },
   "httpChecks": {
     "github": true,
     "apiGithub": true,
@@ -44,13 +58,15 @@
     "machineType": "n2-highmem-32",
     "image": "Ubuntu 24.04.5",
     "status": "STOPPED",
+    "stoppedAtPacific": "19:57:31",
     "bootDiskGiB": 100,
     "bootDiskType": "pd-balanced",
     "attachedServiceAccount": null,
     "osLogin": "on",
     "projectSsh": "blocked",
-    "osLoginAuthenticated": false,
-    "iapSsh": "banner-only",
+    "osLoginAuthenticated": true,
+    "osLoginKeyRemaining": false,
+    "iapSsh": "authenticated once with the shared grok-bots Owner identity; temporary OS Login key removed",
     "ingress": "IAP tcp/22 allow; deny all other ingress",
     "externalIpv4": "ephemeral",
     "startupScript": null,
@@ -58,5 +74,5 @@
     "sourceInstalled": false,
     "dependenciesInstalled": false
   },
-  "basis": "Identity of the dedicated Mustang VM and data disk only. Available inodes were not observed, so no inode count is recorded. HTTP checks are not runner egress, authenticated OS Login, source, app admission, or publication authority. The earlier c3-standard-44 / 12-hour proposal is not this machine."
+  "basis": "Parent readback through 2026-11-07. Free bytes were observed again at 1584163655680. Free inodes were 98303988 of 98304000; those counts are the empty-filesystem observation, not a permanent free-inode floor. Runner group 5 is the readback and has zero runners. No runner id or lifetime is recorded. Groups other than 5 were not modified. HTTP checks are not runner egress. The candidate Actions archive is not a baseline target-files admission."
 }

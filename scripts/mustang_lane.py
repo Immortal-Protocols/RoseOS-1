@@ -19,7 +19,12 @@ CONFIRMED_UUID = '4183bff8-6be4-46bb-a641-2193d19813ee'
 CONFIRMED_MOUNT = '/mnt/disks/mustang-data'
 CONFIRMED_DISK_ID = '4322966418460195960'
 CONFIRMED_FREE_BYTES = 1584163655680
+CONFIRMED_FREE_INODES = 98303988
+CONFIRMED_TOTAL_INODES = 98304000
 CONFIRMED_STOP = {'seconds': 14400, 'action': 'STOP', 'hours': 4}
+RUNNER_GROUP_ID = '5'
+RUNNER_GROUP_NAME = 'roseos-mustang-builder'
+RUNNER_GROUP_WORKFLOW = 'Immortal-Protocols/RoseOS-1/.github/workflows/mustang-ota-dedicated.yml@refs/heads/main'
 FRANKEL_INSTANCE_ID = '685707771105568194'
 RETIRED = 'Mustang legacy route retired: Frankel builder is forbidden; dedicated Mustang lifecycle is not activated'
 OTHER_STORAGE = ('/home/pixelbuild', '/srv/rose-yogi')
@@ -57,8 +62,16 @@ def attached_readback(lane, root=ROOT):
             or identity.get('id') != CONFIRMED_DISK_ID or identity.get('uuid') != CONFIRMED_UUID \
             or identity.get('mount') != CONFIRMED_MOUNT or vm.get('instanceId') != CONFIRMED_INSTANCE_ID \
             or identity.get('availableBytesObserved') != CONFIRMED_FREE_BYTES \
-            or identity.get('availableInodesObserved') is not None \
+            or identity.get('availableInodesObserved') != CONFIRMED_FREE_INODES \
+            or identity.get('totalInodesObserved') != CONFIRMED_TOTAL_INODES \
             or not str(lane.get('sourceRoot', '')).startswith(CONFIRMED_MOUNT + '/'):
+        raise ValueError
+    group = value.get('runnerGroup') or {}
+    if group.get('id') != RUNNER_GROUP_ID or group.get('name') != RUNNER_GROUP_NAME \
+            or group.get('runnerCount') != 0 or group.get('lifetime') is not None or group.get('runnerId') is not None \
+            or group.get('restrictedToWorkflows') is not True or group.get('allowsPublicRepositories') is not True \
+            or group.get('selectedRepositoryIds') != ['1428996648'] \
+            or group.get('selectedWorkflows') != [RUNNER_GROUP_WORKFLOW]:
         raise ValueError
     return value
 

@@ -434,6 +434,9 @@ class DedicatedPathsTest(unittest.TestCase):
         workflow=(ROOT/'.github/workflows/mustang-ota-dedicated.yml').read_text()
         jobs=workflow_shape.jobs(workflow)
         self.assertEqual(set(jobs),{'guard','controller','builder','publisher','cleanup'})
+        self.assertNotIn('pull_request', workflow)
+        self.assertNotIn('workflow_call', workflow)
+        self.assertNotIn('pull_request_target', workflow)
         self.assertIn('    runs-on: ubuntu-24.04',jobs['guard'])
         self.assertIn('python3 scripts/mustang-dedicated.py guard',jobs['guard'])
         active='\n'.join(line for line in workflow.splitlines() if not line.lstrip().startswith('#'))
@@ -771,7 +774,8 @@ class DedicatedRuntimeTest(unittest.TestCase):
         peak=readiness.compile_peak()
         lane_binding=lane.configuration(); runtime=json.loads((ROOT/'os/build-only/mustang-runtime.json').read_text())
         good=dict(instanceId=lane.CONFIRMED_INSTANCE_ID,filesystemUuid=lane.CONFIRMED_UUID,
-                  mount=lane.CONFIRMED_MOUNT,availableBytes=lane.CONFIRMED_FREE_BYTES,availableInodes=1000,euid=1000)
+                  mount=lane.CONFIRMED_MOUNT,availableBytes=lane.CONFIRMED_FREE_BYTES,
+                  availableInodes=1000,totalInodes=lane.CONFIRMED_TOTAL_INODES,euid=1000)
         observed=readiness.evaluate_guest(good,lane_binding,runtime)
         self.assertFalse(observed['admitted'])
         self.assertGreaterEqual(observed['availableBytes'],peak)
@@ -783,6 +787,7 @@ class DedicatedRuntimeTest(unittest.TestCase):
                 (dict(good,mount='/srv/rose-yogi'),'data mount differs'),
                 (dict(good,availableBytes=peak-1),'recorded compile peak'),
                 (dict(good,availableInodes=0),'no available bytes/inodes'),
+                (dict(good,totalInodes=1),'inode count differs'),
                 (dict(good,euid=0),'nonroot')):
             with self.subTest(message=message):
                 with self.assertRaisesRegex(ValueError,message):
@@ -793,10 +798,23 @@ class DedicatedRuntimeTest(unittest.TestCase):
                          'baseline-not-on-disk','signing-route-unadmitted','publication-disabled'}<=codes)
         self.assertFalse(report['buildAuthorized']); self.assertFalse(report['publicationAuthorized'])
         self.assertFalse(report['admitted']['appArchive']); self.assertFalse(report['admitted']['baselineTargetFiles'])
+        self.assertEqual(report['minimumFreeBytes'],121686892544)
         self.assertEqual(report['minimumFreeBytes'],peak)
+        self.assertEqual(report['minimumFreeBytesSource'],
+                         'os/mustang-ota/41761758623/producer/compile-completed.json peakSampledBytes')
+        self.assertEqual(report['workflowTrust']['problems'],[])
+        self.assertIsNone(report['workflowTrust']['lifetime'])
+        self.assertFalse(report['workflowTrust']['ephemeralFeasibleNow'])
+        self.assertFalse(report['signingGroupImpact']['modified'])
+        self.assertEqual(readiness.enrollment()['github']['groupId'],'5')
+        self.assertIsNone(readiness.enrollment()['github']['lifetime'])
+        self.assertIsNone(readiness.enrollment()['github']['runnerId'])
+        self.assertEqual(readiness.enrollment()['github']['runnerCount'],0)
         self.assertIn('4884085713',' '.join(item['detail'] for item in report['blockers']))
         plan=readiness.provision_plan()
         rendered=json.dumps(plan)
+        self.assertEqual(plan['noblePackages']['absent'],['libncurses5','yarn'])
+        self.assertNotIn('libncurses5',plan['noblePackages']['main'])
         self.assertFalse(plan['executedByThisRepository']); self.assertFalse(plan['selectsBuildNumber'])
         self.assertNotIn('immortal-os-builder',rendered); self.assertNotIn('BUILD_NUMBER',rendered)
         self.assertNotIn('2026110502',rendered); self.assertNotIn('ghp_',rendered)

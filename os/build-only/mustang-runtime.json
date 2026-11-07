@@ -12,8 +12,8 @@
   "appInputsRecord": null,
   "baselineTargetFiles": null,
   "baselineFactoryEvidence": null,
-  "runner": {"groupName": null, "groupId": null, "lifetime": null, "registrationEvidence": null},
+  "runner": {"groupName": "roseos-mustang-builder", "groupId": "5", "lifetime": null, "registrationEvidence": null},
   "signingRouteEvidence": null,
   "publication": {"enabled": false, "authorityRecord": null},
-  "basis": "The data filesystem UUID, mount, and four-hour STOP match the confirmed VM. Status stays unbound: no runner, source, tools, Make job count, signing-route admission, app archive, on-disk baseline, allocation reconciliation, or publication authority is recorded. No field here is a placeholder for a missing hash or build number."
+  "basis": "UUID, mount, four-hour STOP, and runner group 5 are recorded. Status stays unbound: group 5 has zero runners, so lifetime and registration evidence stay null. No source, tools, Make job count, signing-route admission, app archive, on-disk baseline, allocation reconciliation, or publication authority is recorded."
 }

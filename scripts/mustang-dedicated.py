@@ -173,7 +173,7 @@ def host_check(lane,cfg,observe_id=metadata_id,execute=subprocess.run):
     frsize=getattr(space,'f_frsize',0) or getattr(space,'f_bsize',0)
     if not frsize: raise ValueError('dedicated data filesystem has no available bytes/inodes')
     route.evaluate_guest(dict(instanceId=observed,filesystemUuid=cfg['dataFilesystemUuid'],mount=cfg.get('dataMount'),
-        availableBytes=space.f_bavail*frsize,availableInodes=space.f_favail,euid=os.geteuid()),lane,cfg)
+        availableBytes=space.f_bavail*frsize,availableInodes=space.f_favail,totalInodes=space.f_files,euid=os.geteuid()),lane,cfg)
     if not paths['sourceRoot'].is_dir() or not paths['storageRoot'].is_dir():
         raise ValueError('dedicated source/storage must already be prepared')
     if any(os.stat(paths[key]).st_dev!=os.stat(paths['home']).st_dev for key in ('sourceRoot','storageRoot')):

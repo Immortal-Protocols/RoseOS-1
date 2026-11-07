@@ -8,8 +8,10 @@ The [runtime](../os/build-only/mustang-runtime.json) stays **unbound**. That
 binding does not admit source, tools, a runner, app inputs, the baseline
 archive, allocation reconciliation, signing-route approval, or publication.
 The builder job has to be a self-hosted runner on this VM. Guard, controller,
-publisher and cleanup stay on GitHub-hosted runners. Runner lifetime is not
-selected. The VM's own safeguard is a four-hour `maxRunDuration` STOP.
+publisher and cleanup stay on GitHub-hosted runners. Runner group 5,
+`roseos-mustang-builder`, allows only this public repository and
+`mustang-ota-dedicated.yml` at `refs/heads/main`. It has zero runners.
+Lifetime is not selected and no runner is enrolled. The VM's own safeguard is a four-hour `maxRunDuration` STOP.
 Mustang must never use Frankel's `immortal-os-builder` again; Yogi also has its own VM.
 The earlier [proposal](../os/build-only/mustang-builder-proposal.json) (c3-standard-44,
 2 TiB balanced, 12-hour STOP) is not this machine and is not deployed.
