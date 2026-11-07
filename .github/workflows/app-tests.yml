@@ -8,6 +8,7 @@ on:
   pull_request:
     paths:
       - 'workspace/**'
+      - 'prototypes/voice-phone-demo/**'
       - 'os/background-control/**'
       - 'qa/systemui-trial/**'
       - 'os/tests/persistent-app-experiment/**'
@@ -103,6 +104,7 @@ on:
     branches: [main]
     paths:
       - 'workspace/**'
+      - 'prototypes/voice-phone-demo/**'
       - 'os/background-control/**'
       - 'qa/systemui-trial/**'
       - 'os/tests/persistent-app-experiment/**'
