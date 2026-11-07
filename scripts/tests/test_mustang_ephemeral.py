@@ -241,8 +241,22 @@ class EnrollmentTest(unittest.TestCase):
         self.assertEqual(enroll.queue_decision(queued, 30), 'wait')
         self.assertEqual(enroll.queue_decision(queued, enroll.QUEUE_LIMIT_SECONDS), 'stop')
         self.assertEqual(enroll.queue_decision([{'name': 'builder', 'status': 'in_progress'}], enroll.QUEUE_LIMIT_SECONDS), 'ready')
+        skipped_builder = {'name': 'builder', 'status': 'completed', 'conclusion': 'skipped'}
+        queued_source = {'name': 'source', 'status': 'queued'}
+        self.assertEqual(enroll.queue_decision([skipped_builder, queued_source], 30), 'wait')
+        self.assertEqual(enroll.queue_decision([skipped_builder, queued_source], enroll.QUEUE_LIMIT_SECONDS), 'stop')
+        skipped_source = {'name': 'source', 'status': 'completed', 'conclusion': 'skipped'}
+        queued_builder = {'name': 'builder', 'status': 'queued'}
+        self.assertEqual(enroll.queue_decision([skipped_source, queued_builder], 30), 'wait')
+        self.assertEqual(enroll.queue_decision([skipped_source, queued_builder], enroll.QUEUE_LIMIT_SECONDS), 'stop')
+        self.assertEqual(enroll.queue_decision([skipped_builder, {'name': 'source', 'status': 'in_progress'}],
+                                               enroll.QUEUE_LIMIT_SECONDS), 'ready')
+        self.assertEqual(enroll.queue_decision([skipped_source, {'name': 'builder', 'status': 'in_progress'}],
+                                               enroll.QUEUE_LIMIT_SECONDS), 'ready')
         self.assertEqual(enroll.watch_decision('failure', [{'name': 'builder', 'status': 'in_progress'}], 0), 'stop')
         self.assertNotIn('value', ' '.join(enroll.metadata_keys_argv()))
+        self.assertIn('--format=json(metadata.items[].key)', enroll.metadata_keys_argv())
+        self.assertNotIn('metadata.items.key)', ' '.join(enroll.metadata_keys_argv()))
         clock = {'now': 0}
         def fetch():
             return queued if clock['now'] < enroll.QUEUE_LIMIT_SECONDS else [{'name': 'builder', 'status': 'in_progress'}]
@@ -251,6 +265,52 @@ class EnrollmentTest(unittest.TestCase):
         self.assertEqual(enroll.watch(fetch, sleep, lambda: clock['now']), 'ready')
         clock['now'] = enroll.QUEUE_LIMIT_SECONDS
         self.assertEqual(enroll.watch(lambda: queued, sleep, lambda: clock['now']), 'stop')
+
+    def test_metadata_clear_rejects_a_null_projection_and_requires_readback(self):
+        post_remove = {'metadata': {'items': [{'key': 'block-project-ssh-keys'}, {'key': 'enable-oslogin'}]},
+                       'status': 'TERMINATED'}
+        self.assertEqual(enroll.metadata_key_names(post_remove), ['block-project-ssh-keys', 'enable-oslogin'])
+        self.assertFalse(enroll.metadata_is_present(post_remove))
+        self.assertEqual(enroll.metadata_key_names(['block-project-ssh-keys', 'mustang-jitconfig']),
+                         ['block-project-ssh-keys', 'mustang-jitconfig'])
+        for raw in ('null', '', '   ', '{"metadata": null}', '{"metadata": {"items": null}}',
+                    '{"metadata": {"items": {"key": null}}}', '{}', '["mustang-jitconfig", null]'):
+            with self.assertRaisesRegex(ValueError, 'not a key list'):
+                enroll.parse_metadata_document(raw)
+        reads = {'n': 0}
+
+        def transport(argv):
+            if 'describe' not in argv:
+                return subprocess.CompletedProcess(argv, 0, '', '')
+            reads['n'] += 1
+            if reads['n'] == 1:
+                body = '["enable-oslogin", "mustang-jitconfig"]\n'
+            else:
+                body = json.dumps(post_remove)
+            return subprocess.CompletedProcess(argv, 0, body, '')
+
+        code, out, err = self.invoke_clear(transport)
+        self.assertEqual(code, 0, err)
+        self.assertIn('"state": "removed"', out)
+        stuck = {'n': 0}
+
+        def still_there(argv):
+            if 'describe' not in argv:
+                return subprocess.CompletedProcess(argv, 0, '', '')
+            stuck['n'] += 1
+            return subprocess.CompletedProcess(argv, 0, '["mustang-jitconfig"]\n', '')
+
+        code, out, err = self.invoke_clear(still_there)
+        self.assertEqual(code, 4)
+        self.assertIn('remained after removal', err)
+
+    def invoke_clear(self, transport):
+        from contextlib import redirect_stderr, redirect_stdout
+        import io
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            code = enroll.main(['clear-metadata', '--execute'], transport=transport)
+        return code, out.getvalue(), err.getvalue()
 
     def test_infrastructure_host_check_starts_without_fabricated_inputs(self):
         runtime = json.loads((ROOT/'os/build-only/mustang-runtime.json').read_text())
@@ -391,6 +451,13 @@ class EnrollmentTest(unittest.TestCase):
         self.assertIn('User=mustang-runner', unit)
         self.assertIn('Type=simple', unit)
         self.assertIn('RuntimeMaxSec=14400', unit)
+        self.assertIn('NoNewPrivileges=true', unit)
+        self.assertIn('PrivateTmp=true', unit)
+        self.assertIn('RequiresMountsFor=/mnt/disks/mustang-data', unit)
+        self.assertIn('Wants=network-online.target', unit)
+        self.assertIn('After=network-online.target', unit)
+        self.assertIn('ConditionPathIsMountPoint=/mnt/disks/mustang-data', unit)
+        self.assertNotIn('local-fs.target', unit)
         self.assertNotIn('jitconfig', unit.lower())
         self.bootstrap_refuses_wrong_disk_and_keeps_a_verified_download()
 
@@ -581,7 +648,13 @@ class WorkflowCliContractTest(unittest.TestCase):
             if 'get-guest-attributes' in argv:
                 return subprocess.CompletedProcess(argv, 0, '{"value":"1"}\n', '')
             if 'describe' in argv:
-                return subprocess.CompletedProcess(argv, 0, '{"metadata":{"items":[{"key":"mustang-jitconfig"}]}}\n', '')
+                seen_describe = sum(1 for call in calls if 'describe' in call)
+                if seen_describe % 2 == 1:
+                    body = '{"metadata":{"items":[{"key":"mustang-jitconfig"}]}}\n'
+                else:
+                    body = ('{"metadata":{"items":[{"key":"block-project-ssh-keys"},'
+                            '{"key":"enable-oslogin"}]},"status":"TERMINATED"}\n')
+                return subprocess.CompletedProcess(argv, 0, body, '')
             self.assertNotIn(secret, text)
             return subprocess.CompletedProcess(argv, 0, '', '')
 
