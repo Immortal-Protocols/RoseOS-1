@@ -580,7 +580,22 @@ test('a long press offers App info and Android\'s own uninstall route, never a s
  assert.match(main,/checkSelfPermission\("android\.permission\.REQUEST_DELETE_PACKAGES"\)==PackageManager\.PERMISSION_GRANTED\);/);
  assert.match(main,/route==AppRemoval\.Route\.CONFIRM\?new Intent\(Intent\.ACTION_DELETE,uri\):new Intent\(android\.provider\.Settings\.ACTION_APPLICATION_DETAILS_SETTINGS,uri\)/);
  assert.doesNotMatch(main+read('../app/src/dev/pixel/voice/AppRemoval.java').replace(/\/\*[\s\S]*?\*\//g,''),/PackageInstaller|\.uninstall\(|deletePackage|pm uninstall|ACTION_UNINSTALL_PACKAGE/,'no silent or programmatic removal');
- assert.doesNotMatch(manifest,/DELETE_PACKAGES/,'no delete permission declared (a bounded decision for Chief)');
+ // 1J: the request permission (normal: granted at install or update, no prompt) opens Android's confirmation; never
+ // the privileged DELETE_PACKAGES, which removes without asking.
+ assert.match(manifest,/<uses-permission android:name="android\.permission\.REQUEST_DELETE_PACKAGES"\/>/);
+ assert.doesNotMatch(manifest,/"android\.permission\.DELETE_PACKAGES"/);
+ assert.equal((manifest.match(/DELETE_PACKAGES/g)||[]).length,1);
+ // The confirmation is asked for its result, for this exact package; the answer is checked against the package manager.
+ assert.match(main,/open\.putExtra\(Intent\.EXTRA_RETURN_RESULT,true\);removing=pkg;removingLabel=label;removingUpdates=updatesOnly;startActivityForResult\(open,REMOVE_REQUEST\);/);
+ assert.match(main,/android\.net\.Uri uri=android\.net\.Uri\.fromParts\("package",pkg,null\);/);
+ const result=main.slice(main.indexOf('@Override protected void onActivityResult('),main.indexOf('/** Any other app\'s mark'));
+ assert.match(result,/if\(request!=REMOVE_REQUEST\|\|removing==null\)return;/);
+ assert.match(result,/getPackageManager\(\)\.getPackageInfo\(pkg,0\);installed=true;\}catch\(PackageManager\.NameNotFoundException gone\)\{installed=false;\}/);
+ assert.match(result,/AppRemoval\.outcome\(result==RESULT_OK,result==RESULT_CANCELED,installed,updates\)/);
+ assert.match(result,/if\(AppRemoval\.refreshes\(outcome\)&&launcherPager!=null&&!isFinishing\(\)\)\{packageGeneration\+\+;attachLauncherPages\(true\);\}/);
+ // Uninstall updates is the only offer that keeps the package; App info stays a plain route with no result.
+ assert.match(main,/openRemoval\(pkg,label,offer\.route,AppRemoval\.UNINSTALL_UPDATES\.equals\(offer\.remove\)\)/);
+ assert.match(main,/openRemoval\(pkg,label,AppRemoval\.Route\.APP_INFO,false\)/);
 });
 
 // The Settings intent must not silently disappear when the Home anchor is absent/replaced.
