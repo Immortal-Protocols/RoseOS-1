@@ -794,8 +794,9 @@ class PossessionTest(unittest.TestCase):
             ssh_code=255,
             ssh_log='Warning: Identity file IDENTITY_FILE not accessible: No such file or directory.\n'
                     + exact_denial)
-        self.assertEqual(missing_key['ssh']['class'], 'unproven')
-        self.assertFalse(missing_key['serverKeyAccepted'] or missing_key['loginAccepted'])
+        self.assertEqual(missing_key['ssh']['class'], 'identity-unreadable')
+        self.assertTrue(missing_key['serverKeyAccepted'])
+        self.assertFalse(missing_key['loginAccepted'])
 
         generic, _generic_commands, _posts = case(
             ssh_code=255, ssh_log='Permission denied (publickey).\n')
@@ -2046,6 +2047,16 @@ class PossessionTest(unittest.TestCase):
             self.assertNotEqual(missing['class'], 'host-key-mismatch')
             self.assertFalse(missing['serverKeyAccepted'])
 
+            loose = base / 'loose'
+            loose.write_bytes(client.read_bytes())
+            os.chmod(loose, 0o644)
+            loose_argv = [str(loose) if arg == str(client) else arg for arg in local]
+            loose_report = yogi_possession.GcloudDriver().ssh(loose_argv, 60)
+            self.assertEqual(loose_report['class'], 'identity-unreadable')
+            self.assertTrue(loose_report['serverKeyAccepted'])
+            self.assertFalse(loose_report['loginAccepted'])
+            self.assertIn('bad permissions', loose_report['clientLog'])
+
             os.chmod(known_path, 0)
             unreadable = yogi_possession.GcloudDriver().ssh(local, 60)
             self.assertEqual(unreadable['class'], 'known-hosts-unreadable')
@@ -2069,6 +2080,113 @@ class PossessionTest(unittest.TestCase):
         kind, evidence = yogi_possession.classify_ssh(255, live, 'pixelbuild', 'yogi-' + yogi_possession.INSTANCE_ID)
         self.assertEqual(kind, 'known-hosts-missing')
         self.assertFalse(evidence['serverKeyAccepted'] or evidence['loginAccepted'])
+        accepted = "debug1: Host 'yogi-probe' is known and matches the ED25519 host key."
+        denial = "ubuntu@yogi-probe: Permission denied (publickey)."
+        unrelated = "debug1: load_hostkeys: fopen /etc/ssh/ssh_known_hosts: No such file or directory"
+        kind, evidence = yogi_possession.classify_ssh(255, [accepted, unrelated, denial], 'ubuntu', 'yogi-probe')
+        self.assertEqual(kind, 'auth-failed')
+        self.assertTrue(evidence['serverKeyAccepted'] and not evidence['loginAccepted'])
+        kind, evidence = yogi_possession.classify_ssh(0, [accepted, unrelated, 'debug1: Exit status 0'], 'ubuntu', 'yogi-probe')
+        self.assertEqual(kind, 'success')
+        self.assertTrue(evidence['serverKeyAccepted'] and evidence['loginAccepted'])
+        kind, evidence = yogi_possession.classify_ssh(255, [
+            accepted, "Load key \"/tmp/id\": bad permissions", denial], 'ubuntu', 'yogi-probe',
+            known_path='/tmp/yogi-known')
+        self.assertEqual(kind, 'identity-unreadable')
+        self.assertTrue(evidence['serverKeyAccepted'])
+        self.assertFalse(evidence['loginAccepted'])
+
+    def test_possession_run_binds_known_hosts_and_unlinks_after_ssh_fails(self):
+        keys, expected, api = self._api()
+        client = 'ssh-ed25519 ' + base64.b64encode(_wire(b'ssh-ed25519', bytes(range(32, 64)))).decode()
+        operation = 'ab' * 16
+        now = datetime.datetime(2026, 11, 7, 18, 0, tzinfo=datetime.timezone.utc)
+        plan = yogi_possession.possession_plan(api, client, operation, expected=expected,
+                                              environ={'HOME': '/home/operator'}, now=now)
+        identity = Path(tempfile.mkdtemp()) / 'id_ed25519'
+        identity.write_text('not-read')
+        identity.chmod(0o600)
+        seen = {}
+
+        class Driver:
+            def __init__(self):
+                self.items = dict(yogi_possession.POSSESSION_BASE)
+                self.fingerprint = yogi_possession.POSSESSION_FINGERPRINT
+                self.status = 'TERMINATED'
+                self.fail = True
+
+            def describe(self):
+                return {'status': self.status, 'fingerprint': self.fingerprint, 'items': dict(self.items),
+                        'id': yogi_possession.INSTANCE_ID, 'tags': list(yogi_possession.REVIEWED_TAGS),
+                        'network': {'observed': True, 'allocationInferred': False, 'nics': [{
+                            'name': 'nic0', 'stackType': 'IPV4_ONLY',
+                            'network': 'https://www.googleapis.com/compute/v1/projects/protocols-465723/global/networks/default',
+                            'subnetwork': 'https://www.googleapis.com/compute/v1/projects/protocols-465723/regions/us-west2/subnetworks/default',
+                            'accessConfigs': [{'name': 'External NAT', 'type': 'ONE_TO_ONE_NAT',
+                                               'networkTier': 'PREMIUM', 'addressPresent': False}],
+                            'ipv6AccessConfigs': []}]}}
+
+            def effective_firewalls(self):
+                return json.loads(EFFECTIVE_FIREWALLS)
+
+            def start(self):
+                self.status = 'RUNNING'
+                return 'started'
+
+            def stop(self):
+                self.status = 'TERMINATED'
+                return 'stopped'
+
+            def set_metadata(self, fingerprint, items):
+                self.items = dict(items)
+                self.fingerprint += 'x'
+                return 'ok'
+
+            def wait_login_ready(self):
+                return {'listenerReady': True, 'backendTcp22': True, 'possession': False,
+                        'class': 'ready', 'returncode': 0, 'stderr': ''}
+
+            def ssh(self, argv, timeout):
+                seen['argv'] = list(argv)
+                known = next(arg.split('=', 1)[1] for arg in argv if arg.startswith('UserKnownHostsFile='))
+                seen['path'] = known
+                seen['existed'] = os.path.isfile(known)
+                seen['mode'] = oct(os.stat(known).st_mode & 0o777)
+                seen['body'] = Path(known).read_text()
+                if self.fail:
+                    raise OSError('ssh failed after the file was bound')
+                report = {'class': 'success', 'returncode': 0, 'stderr': '', 'argv': list(argv),
+                          'attempts': 1, 'probe': {
+                              'runnerProcess': False, 'active': 'inactive', 'enabled': 'disabled',
+                              'builder': {'instanceId': yogi_possession.INSTANCE_ID}}}
+                report.update(yogi_possession.ssh_evidence('success'))
+                return report
+
+            def wait_refresh(self):
+                return 'ok'
+
+            def inspect(self):
+                return {'purpose': 'inspect', 'status': 'complete', 'instanceId': yogi_possession.INSTANCE_ID,
+                        'operationId': '12' * 16, 'cleanup': {
+                            'possessMarkerLines': 0, 'authPathsRead': 2, 'accessCleanup': 'ok',
+                            'possessComment': 'roseos-yogi-possess-' + operation,
+                            'possessMaterial': yogi_possession.login_material(plan['loginLine'])}}
+
+        import os
+        driver = Driver()
+        failed = yogi_possession.possession_run(driver, plan, str(identity))
+        self.assertNotIn('KNOWN_HOSTS_FILE', seen['argv'])
+        self.assertNotIn('IDENTITY_FILE', seen['argv'])
+        self.assertTrue(seen['existed'])
+        self.assertEqual(seen['mode'], '0o600')
+        self.assertIn('ssh-ed25519 ', seen['body'])
+        self.assertFalse(Path(seen['path']).exists())
+        self.assertTrue(failed['stopped'] and failed['metadataLoginRemoved'])
+        self.assertFalse(failed['hostKeyHandshake'])
+        driver.fail = False
+        done = yogi_possession.possession_run(driver, plan, str(identity))
+        self.assertTrue(done['hostKeyHandshake'])
+        self.assertFalse(Path(seen['path']).exists())
 
 
 if __name__ == '__main__':

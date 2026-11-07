@@ -659,26 +659,55 @@ def _host_key_conflict(lines):
     return False
 
 
-def _known_hosts_problem(lines):
+def _known_hosts_path(argv):
+    for arg in argv or []:
+        if isinstance(arg, str) and arg.startswith('UserKnownHostsFile='):
+            return arg.split('=', 1)[1]
+    return ''
+
+
+def _known_hosts_problem(lines, known_path=''):
+    """Only the executed UserKnownHostsFile, or OpenSSH's strict-checking fatal line.
+
+    A debug fopen of some other missing file is not this failure.
+    """
+    path = known_path or ''
+    fatal_missing = False
     for line in lines:
-        lowered = line.lower()
-        if 'bad owner or permissions' in lowered:
-            return 'known-hosts-unreadable'
-        if ('load_hostkeys' in lowered or 'fopen' in lowered) and 'permission denied' in lowered:
-            return 'known-hosts-unreadable'
         if _HOST_KEY_UNKNOWN.fullmatch(line):
+            fatal_missing = True
+        if not path or path not in line:
+            continue
+        lowered = line.lower()
+        if 'no such file' in lowered or 'not found' in lowered:
             return 'known-hosts-missing'
-        if ('load_hostkeys' in lowered or 'fopen' in lowered) and 'no such file' in lowered:
-            return 'known-hosts-missing'
+        if 'permission denied' in lowered or 'bad owner or permissions' in lowered:
+            return 'known-hosts-unreadable'
+    if fatal_missing:
+        return 'known-hosts-missing'
     return None
+
+
+def _identity_rejected(lines):
+    """The client refused the identity file. This is not a known_hosts permission error."""
+    for line in lines:
+        if 'UNPROTECTED PRIVATE KEY' in line:
+            return True
+        if line.startswith('Load key ') and 'bad permissions' in line:
+            return True
+        if line.startswith('Warning: Identity file ') and 'not accessible' in line:
+            return True
+    return False
+
+
+def _host_accepted(lines):
+    return any('is known and matches the ED25519 host key.' in line for line in lines)
 
 
 def _disqualified(lines):
     """Local and pre-auth client failures. They are not userauth proof."""
     for line in lines:
         if line.startswith('Warning: Identity file ') and 'not accessible' in line:
-            return True
-        if 'bad permissions' in line or 'UNPROTECTED PRIVATE KEY' in line:
             return True
         if 'Could not resolve hostname' in line or 'no matching' in line or line.startswith('Unable to negotiate'):
             return True
@@ -711,7 +740,7 @@ def _userauth_denied(lines, user, alias):
     return False
 
 
-def classify_ssh(returncode, lines, user, alias, stderr_lines=None):
+def classify_ssh(returncode, lines, user, alias, stderr_lines=None, known_path=''):
     """Evidence from the OpenSSH client log and the process exit.
 
     Mixed stderr cannot prove a session. It can only disqualify one: OpenSSH 9.6 writes
@@ -727,7 +756,9 @@ def classify_ssh(returncode, lines, user, alias, stderr_lines=None):
     if not isinstance(returncode, int) or returncode < 0:
         return 'unproven', _none()
     conflict = _host_key_conflict(lines)
-    known = _known_hosts_problem(lines)
+    host_ok = _host_accepted(lines)
+    known = None if host_ok else _known_hosts_problem(lines, known_path)
+    identity = _identity_rejected(lines)
     succeeded = _client_authenticated(lines)
     blocked = _disqualified(lines) or _disqualified(extra)
     if conflict and succeeded:
@@ -736,8 +767,13 @@ def classify_ssh(returncode, lines, user, alias, stderr_lines=None):
         return 'host-key-mismatch', _none()
     if known and returncode != 0:
         return known, _none()
+    if identity and returncode != 0 and not (isinstance(returncode, int) and 1 <= returncode <= 254):
+        evidence = _none()
+        if host_ok:
+            evidence = {'serverKeyAccepted': True, 'loginAccepted': False, 'evidence': 'none'}
+        return 'identity-unreadable', evidence
     if returncode == 0:
-        if conflict or known or blocked:
+        if conflict or known or identity or blocked:
             return 'unproven', _none()
         return 'success', {'serverKeyAccepted': True, 'loginAccepted': True, 'evidence': 'openssh-session'}
     if 1 <= returncode <= 254:
@@ -1062,7 +1098,8 @@ def possession_run(driver, plan, identity_path, baseline=None):
                 except OSError:
                     pass
         kind = ssh_report.get('class')
-        if kind in ('host-key-mismatch', 'known-hosts-missing', 'known-hosts-unreadable'):
+        if kind in ('host-key-mismatch', 'known-hosts-missing', 'known-hosts-unreadable',
+                    'identity-unreadable'):
             raise Refused('ssh ' + kind + ' exit ' + str(ssh_report.get('returncode')))
         if kind != 'success':
             raise Refused('ssh ' + str(kind) + ' exit ' + str(ssh_report.get('returncode')))
@@ -1548,7 +1585,8 @@ class GcloudDriver:
             stderr = getattr(result, 'stderr', b'') or b''
             stderr_text = stderr.decode('utf-8', 'replace') if isinstance(stderr, bytes) else str(stderr)
             kind, evidence = classify_ssh(result.returncode, text.splitlines(), user, alias,
-                                         stderr_lines=stderr_text.splitlines())
+                                         stderr_lines=stderr_text.splitlines(),
+                                         known_path=_known_hosts_path(executed))
             probe = None
             if result.returncode == 0 and kind == 'success':
                 try:
