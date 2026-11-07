@@ -88,7 +88,7 @@ public final class LocalRosePairActivity extends Activity {
     private static final int MAX_RESPONSE = 16384;
     private static final long PAIR_ENABLE_DELAY_MS = 1000;
     private static final String EXTRA_OFFER = "dev.pixel.voice.extra.LOCAL_ROSE_OFFER";
-    static final String UNREACHABLE = "Is this phone on the same Wi-Fi or Tailscale as the backend?";
+    static final String UNREACHABLE = "Connect Tailscale on this phone and the backend using the same network/account.";
 
     private final ExecutorService io = Executors.newSingleThreadExecutor();
     private final ExecutorService decoder = Executors.newSingleThreadExecutor();
@@ -116,22 +116,18 @@ public final class LocalRosePairActivity extends Activity {
     private int sensorOrientation;
 
     /**
-     * Opens the pairing screen at launch when local mode is on, not paired, and USB Rose is not
-     * answering, once per install (later: the menu's Pair with Rose). The offered screen asks for
+     * Opens the pairing screen at launch when local mode is on, not paired, once per install
+     * (later: the menu's Pair with Rose). The offered screen asks for
      * the camera only when the user taps Scan code.
      */
     static void offerOnLaunch(Activity a) {
         if (!LocalRoseLink.enabled(a) || LocalRoseConnection.pairedFlag(a)) return;
         if (LocalRoseConnection.prefs(a).getBoolean("pairOffered", false)) return;
-        android.content.Context app = a.getApplicationContext();
-        new Thread(() -> {
-            if (LocalRoseLink.reachable(app)) return;
-            a.runOnUiThread(() -> {
-                if (a.isFinishing() || a.isDestroyed()) return;
-                LocalRoseConnection.prefs(a).edit().putBoolean("pairOffered", true).apply();
-                a.startActivity(new Intent(a, LocalRosePairActivity.class).putExtra(EXTRA_OFFER, true));
-            });
-        }, "local-rose-pair-offer").start();
+        a.runOnUiThread(() -> {
+            if (a.isFinishing() || a.isDestroyed()) return;
+            LocalRoseConnection.prefs(a).edit().putBoolean("pairOffered", true).apply();
+            a.startActivity(new Intent(a, LocalRosePairActivity.class).putExtra(EXTRA_OFFER, true));
+        });
     }
 
     @Override
@@ -254,7 +250,7 @@ public final class LocalRosePairActivity extends Activity {
         scanning = false;
         frame.setVisibility(View.GONE);
         title.setText("Pair with your backend");
-        body.setText("To use Rose on your backend over Wi-Fi or Tailscale, scan the code it shows: on the backend, open Rose and choose Pair phone (or run python -m rose.pair).\n\nYou can do this later from the menu: Pair with Rose.");
+        body.setText("To use Rose on your backend over Tailscale, scan the code it shows: on the backend, open Rose and choose Pair phone (or run python -m rose.pair).\n\nYou can do this later from the menu: Pair with Rose.");
         status.setText("");
         button(secondary, "Not now", v -> finish());
         button(primary, "Scan code", v -> showScanner(null));
@@ -310,7 +306,8 @@ public final class LocalRosePairActivity extends Activity {
         frame.setVisibility(View.GONE);
         LocalRoseConnection.Paired p = LocalRoseConnection.paired(this);
         if (p == null) {
-            showScanner(note);
+            showScanner(note != null ? note : LocalRoseConnection.pairedFlag(this)
+                    ? "This saved pairing cannot be used. Connect Tailscale on the backend and scan a new pairing code." : null);
             return;
         }
         title.setText("Paired with " + p.serverName);

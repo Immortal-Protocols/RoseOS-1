@@ -20,7 +20,7 @@ import java.util.concurrent.Executors;
 /**
  * Local Rose's hands: phone commands from the Mac on /ws/phone (see LocalRoseLink). This link
  * runs whenever local mode is on, so it is also how the phone stays connected to the Mac in
- * the background (over USB, or Wi-Fi/Tailscale once paired; LocalRoseConnection).
+ * the background (over Tailscale once paired; LocalRoseConnection).
  *
  * Screen commands (inspect_ui, tap_label, tap, set_text, open_app, list_apps, home, back...)
  * run through the same on-device path as the backend's, VoiceService.localPhoneCommand, so

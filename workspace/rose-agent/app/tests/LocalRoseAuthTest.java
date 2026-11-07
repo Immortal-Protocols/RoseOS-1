@@ -55,20 +55,20 @@ public final class LocalRoseAuthTest {
         }
 
         // ---- the QR invite ----
-        LocalRoseAuth.Invite inv = LocalRoseAuth.parseInvite(uri("nathans-mbp.tail1234.ts.net,100.101.102.103,192.168.1.20", ""));
+        LocalRoseAuth.Invite inv = LocalRoseAuth.parseInvite(uri("nathans-mbp.tail1234.ts.net,100.101.102.103", ""));
         expect(inv.name.equals("Rose on Nathan’s MacBook"), "name is percent-decoded UTF-8: " + inv.name);
-        expect(inv.hosts.equals(Arrays.asList("nathans-mbp.tail1234.ts.net", "100.101.102.103", "192.168.1.20")), "hosts keep QR order");
+        expect(inv.hosts.equals(Arrays.asList("nathans-mbp.tail1234.ts.net", "100.101.102.103")), "hosts keep QR order");
         expect(inv.port == 8443 && inv.pin.equals(PIN) && inv.code.equals(CODE), "port, pin and code");
         expect(inv.serverId().equals(PIN.substring(0, 16)), "serverId is the first 16 hex of the pin");
-        LocalRoseAuth.Invite upper = LocalRoseAuth.parseInvite(("ROSEAGENT://PAIR?v=1&name=Mac&hosts=10.0.0.2&port=8443&pin="
+        LocalRoseAuth.Invite upper = LocalRoseAuth.parseInvite(("ROSEAGENT://PAIR?v=1&name=Mac&hosts=100.64.0.2&port=8443&pin="
                 + PIN.toUpperCase() + "&code=" + CODE.toLowerCase()));
         expect(upper.pin.equals(PIN) && upper.code.equals(CODE), "scheme/host case-insensitive; pin lowercased, code uppercased");
-        expect(LocalRoseAuth.parseInvite(uri("10.0.0.2%2C10.0.0.3", "")).hosts.size() == 2, "an encoded comma separates hosts");
-        expect(LocalRoseAuth.parseInvite("roseagent://pair?v=1&name=Rose+on+Mac&hosts=10.0.0.2&port=1&pin=" + PIN + "&code=" + CODE)
+        expect(LocalRoseAuth.parseInvite(uri("100.64.0.2%2C100.64.0.3", "")).hosts.size() == 2, "an encoded comma separates hosts");
+        expect(LocalRoseAuth.parseInvite("roseagent://pair?v=1&name=Rose+on+Mac&hosts=100.64.0.2&port=1&pin=" + PIN + "&code=" + CODE)
                 .name.equals("Rose on Mac"), "form-encoded spaces decode too");
-        expect(LocalRoseAuth.parseInvite(uri("10.0.0.2", "&future=1")).hosts.size() == 1, "unknown parameters are ignored");
-        expect(LocalRoseAuth.parseInvite(uri("a,a,b", "")).hosts.size() == 2, "duplicate hosts collapse");
-        expect(LocalRoseAuth.parseInvite(uri("1.2.3.4,1.2.3.5,1.2.3.6,1.2.3.7,1.2.3.8,1.2.3.9,1.2.3.10,1.2.3.11", "")).hosts.size() == 8,
+        expect(LocalRoseAuth.parseInvite(uri("100.64.0.2", "&future=1")).hosts.size() == 1, "unknown parameters are ignored");
+        expect(LocalRoseAuth.parseInvite(uri("a.ts.net,a.ts.net,b.ts.net", "")).hosts.size() == 2, "duplicate hosts collapse");
+        expect(LocalRoseAuth.parseInvite(uri("100.64.0.4,100.64.0.5,100.64.0.6,100.64.0.7,100.64.0.8,100.64.0.9,100.64.0.10,100.64.0.11", "")).hosts.size() == 8,
                 "eight hosts is the limit");
 
         invalid("https://pair?v=1", "another scheme");
@@ -89,22 +89,33 @@ public final class LocalRoseAuthTest {
         invalid(uri("a,", ""), "an empty host");
         invalid(uri("%5B::1%5D", ""), "IPv6");
         invalid(uri("256.1.1.1", ""), "a bad IPv4");
-        invalid(uri("01.2.3.4", ""), "an IPv4 with a leading zero");
+        invalid(uri("0100.64.0.4", ""), "an IPv4 with a leading zero");
         invalid(uri("bad_host", ""), "an underscore host");
         invalid(uri("-a.b", ""), "a label starting with a hyphen");
-        invalid(uri("1.2.3.4,1.2.3.5,1.2.3.6,1.2.3.7,1.2.3.8,1.2.3.9,1.2.3.10,1.2.3.11,1.2.3.12", ""), "nine hosts");
+        invalid(uri("100.64.0.4,100.64.0.5,100.64.0.6,100.64.0.7,100.64.0.8,100.64.0.9,100.64.0.10,100.64.0.11,100.64.0.12", ""), "nine hosts");
         invalid(uri("a", "&code=" + CODE), "a repeated parameter");
         invalid(uri("a", "").replace("name=Rose%20on%20Nathan%E2%80%99s%20MacBook", "name=%0A"), "a control character name");
         invalid(uri("a", "").replace("name=Rose%20on%20Nathan%E2%80%99s%20MacBook", "name="), "an empty name");
         invalid(uri("a", "").replace("name=Rose", "name=%ZZ"), "broken percent-encoding");
         invalid(null, "null");
 
+        for (String h : new String[]{"192.168.1.20", "10.0.0.1", "172.16.0.1", "127.0.0.1", "localhost", "mac.local", "example.com", "100.63.255.255", "100.128.0.1", "evil.ts.net.attacker.com"}) {
+            expect(!LocalRoseAuth.tailscaleHost(h), "not a Tailscale endpoint: " + h);
+            invalid(uri(h, ""), "non-Tailscale invite: " + h);
+        }
+
+        expect(LocalRoseAuth.tailscaleHosts(Arrays.asList("192.168.1.20", "mac.tail1.ts.net", "100.64.0.2", "127.0.0.1"), "192.168.1.20")
+                .equals(Arrays.asList("mac.tail1.ts.net", "100.64.0.2")), "saved LAN-first pairing keeps only Tailscale endpoints");
+        expect(LocalRoseAuth.tailscaleHosts(Arrays.asList("mac.tail1.ts.net", "100.64.0.2"), "100.64.0.2")
+                .equals(Arrays.asList("100.64.0.2", "mac.tail1.ts.net")), "last working Tailscale endpoint stays first");
+        expect(LocalRoseAuth.tailscaleHosts(Arrays.asList("192.168.1.20", "127.0.0.1"), "192.168.1.20").isEmpty(), "old LAN-only pairing requires re-pairing");
+
         // ---- routes for the UI ----
         expect(LocalRoseAuth.route("nathans-mbp.tail1234.ts.net").equals("Tailscale"), "MagicDNS is Tailscale");
         expect(LocalRoseAuth.route("100.64.0.1").equals("Tailscale") && LocalRoseAuth.route("100.127.255.254").equals("Tailscale"), "100.64/10");
-        expect(LocalRoseAuth.route("100.63.0.1").equals("Wi-Fi") && LocalRoseAuth.route("100.128.0.1").equals("Wi-Fi"), "outside 100.64/10");
-        expect(LocalRoseAuth.route("192.168.1.20").equals("Wi-Fi") && LocalRoseAuth.route("macbook.local").equals("Wi-Fi"), "LAN is Wi-Fi");
-        expect(LocalRoseAuth.route("127.0.0.1").equals("USB") && LocalRoseAuth.route("localhost").equals("USB"), "loopback is USB");
+        expect(LocalRoseAuth.route("100.63.0.1").equals("Unsupported") && LocalRoseAuth.route("100.128.0.1").equals("Unsupported"), "outside 100.64/10");
+        expect(LocalRoseAuth.route("192.168.1.20").equals("Unsupported") && LocalRoseAuth.route("macbook.local").equals("Unsupported"), "LAN is Wi-Fi");
+        expect(LocalRoseAuth.route("127.0.0.1").equals("Unsupported") && LocalRoseAuth.route("localhost").equals("Unsupported"), "loopback is USB");
 
         // ---- the signed message ----
         String canonical = new String(LocalRoseAuth.canonical("GET", "/ws/audio", "1767225600000", "AAECAwQFBgcICQoLDA0ODw", PIN),

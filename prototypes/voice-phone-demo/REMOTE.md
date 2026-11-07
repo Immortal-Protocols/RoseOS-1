@@ -1,10 +1,9 @@
-# Rose remote link (v1): the phone over Wi-Fi or Tailscale
+# Rose remote link (v1): the phone over Tailscale
 
-Without a cable, Rose Agent reaches Rose on this Mac over the same Wi-Fi or
-from anywhere on your Tailscale network. You pair it once by scanning a QR
-code, and after that it reconnects by itself (after app restarts, network
-changes and Mac restarts). USB (`adb reverse tcp:8091 tcp:8091`) still works
-for a phone that is not paired.
+Rose Agent reaches this Mac from anywhere on your Tailscale network. Connect
+Tailscale on both devices using the same tailnet before pairing. Pair once by
+scanning the QR code; subsequent app, network and Mac restarts reconnect over
+Tailscale. There is no automatic LAN or USB phone connection.
 
 ## Setup
 
@@ -20,13 +19,17 @@ for a phone that is not paired.
    `python -m rose.pair --revoke <id prefix>`. `python -m rose.pair --list`
    lists paired phones.
 
-The QR code lists the addresses the phone tries, in this order: the Mac's
-Tailscale MagicDNS name, its Tailscale IPv4s (100.64.0.0/10), then its private
-LAN IPv4s. The name comes from `tailscale status --json`, using the `tailscale`
-CLI on PATH or the one inside `/Applications/Tailscale.app`. Without the CLI,
-Rose finds the Tailscale IPv4 by scanning the network interfaces. If Tailscale
-is off, the code lists only LAN addresses. In that case, make a new code after
-you turn Tailscale on.
+The QR code lists only the Mac's full Tailscale MagicDNS name and Tailscale
+IPv4 addresses (100.64.0.0/10). The running Tailscale client is authoritative;
+when it is missing, signed out or disconnected, code creation reports that
+Tailscale must be connected. It does not substitute a LAN address. Explicit
+`--pair-host` values must also be full `.ts.net` names or Tailscale IPv4 addresses.
+
+An updated Rose Agent skips LAN and USB addresses in existing saved pairings.
+If a saved pairing has a Tailscale endpoint, it keeps working with the same key
+and certificate pin. LAN-only pairings need a new code. New codes containing
+non-Tailscale hosts are refused. This client cleanup requires an updated APK;
+restarting the server does not replace the installed client.
 
 Firewall: macOS may ask whether Python can accept incoming connections. Allow
 it, or the phone cannot reach port 8443.
@@ -38,10 +41,10 @@ it, or the phone cannot reach port 8443.
   `/ws/phone`, `/ws/audio`, `/ws/events`, `/api/realphone` and `/api/pair/*`)
   must carry a loopback `Host` and an `Origin` that is absent or loopback, so a
   web page in your browser cannot drive the phone, read its screen or create
-  codes (this blocks cross-site websockets and DNS rebinding). While a phone is
-  paired, the dashboard's unauthenticated `/ws/phone` (the USB path) is shut
-  (close code 4009), and an unauthenticated phone link never replaces a signed
-  one. To use USB again, remove the paired phone. The remote listener (TLS on
+  codes (this blocks cross-site websockets and DNS rebinding). The dashboard's
+  unauthenticated `/ws/phone` is shut whenever remote mode is enabled (close code
+  4009), even before pairing or when the remote listener fails. Phone control uses signed TLS.
+  An unauthenticated link never replaces a signed one. The remote listener (TLS on
   0.0.0.0:8443) serves only `POST /pair`, `GET /hello`, `/ws/audio`,
   `/ws/events` and `/ws/phone`. It never serves the dashboard, static files or
   `/api/*`. A remote connection must send its request headers within 10 s,

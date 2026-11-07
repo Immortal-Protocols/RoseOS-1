@@ -13,15 +13,13 @@ import org.json.JSONException;
 import org.json.JSONObject;
 
 import java.io.IOException;
-import java.net.InetSocketAddress;
-import java.net.Socket;
 import java.util.ArrayList;
 import java.util.List;
 
 /**
  * Local Rose: every model runs on the Mac (prototypes/voice-phone-demo, `bash scripts/rose.sh`).
- * Once paired by QR code it is reached over Wi-Fi or Tailscale with pinned TLS and signed
- * requests; before pairing, over USB with `adb reverse tcp:8091 tcp:8091` (LocalRoseConnection).
+ * Once paired by QR code it is reached over Tailscale with pinned TLS and signed
+ * requests (LocalRoseConnection). Unpaired phones wait for owner pairing.
  * No cloud provider or Rose Agent backend.
  *
  * This is the voice. Mic frames go up and Rose's voice comes down on /ws/audio (wire protocol
@@ -62,17 +60,6 @@ final class LocalRoseLink {
     /** On unless the "local-rose" preference "enabled" is set false (then the cloud backend path runs). */
     static boolean enabled(Context c) {
         return c.getSharedPreferences("local-rose", 0).getBoolean("enabled", true);
-    }
-
-    /** A quick check that Rose's server answers on the USB link (only while that path is allowed). */
-    static boolean reachable(Context c) {
-        if (!LocalRoseConnection.usbAllowed(c)) return false;
-        try (Socket s = new Socket()) {
-            s.connect(new InetSocketAddress(LocalRoseConnection.USB_HOST, LocalRoseConnection.USB_PORT), 400);
-            return true;
-        } catch (IOException e) {
-            return false;
-        }
     }
 
     private static int lastToken;

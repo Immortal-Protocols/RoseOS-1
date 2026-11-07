@@ -1,5 +1,5 @@
-"""The real phone: Rose Agent on an Android phone, reached over USB (``adb reverse tcp:8091 tcp:8091``)
-or, once paired by QR code, over Wi-Fi or Tailscale through the TLS listener (rose/remote.py).
+"""The real phone: Rose Agent on Android, paired by QR code and reached over Tailscale
+through the pinned TLS listener (rose/remote.py).
 
 Rose Agent dials ``/ws/phone``. Commands go down as ``{"id", "action", ...args}`` and results
 come back as ``{"type": "result", "id", "result"}`` (the phone side is
@@ -155,7 +155,7 @@ class PhoneLink:
             if ws is None or loop is None:
                 return {"status": "offline",
                         "message": "Rose Agent is not connected. Open it on the phone "
-                                   "(paired over Wi-Fi or Tailscale, or on USB)."}
+                                   "(connect Tailscale on both devices and pair with Rose)."}
             cid = str(uuid.uuid4())
             fut: concurrent.futures.Future = concurrent.futures.Future()
             self._pending[cid] = fut

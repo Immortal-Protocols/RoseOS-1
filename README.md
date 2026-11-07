@@ -29,7 +29,7 @@ verify the APK's checksum, allow installation from the browser or file manager
 you used, and open the APK to install it. Start your Mac server as described
 below, open `http://127.0.0.1:8091` on the Mac and choose **Pair phone**; in Rose
 Agent, choose **Pair with Rose** (called **Pair with Mac** in older builds) and
-scan the QR code. Keep both devices on the same Wi-Fi or your Tailscale network,
+scan the QR code. Connect Tailscale on both devices using the same tailnet,
 grant microphone access for voice, and enable **Rose Agent phone controls** in
 Android's Accessibility settings if you want phone actions. Regular Android can
 use supported accessibility actions on its visible screen; separate background
