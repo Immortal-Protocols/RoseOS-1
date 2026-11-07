@@ -26,6 +26,7 @@ import shutil
 import subprocess
 import sys
 import tarfile
+import time
 import urllib.error
 import urllib.request
 
@@ -63,7 +64,8 @@ IAM_REQUIRED = {
     "replacement": ("compute.instances.get", "compute.instances.setMetadata", "compute.instances.start",
                     "compute.instances.stop", "compute.instances.getSerialPortOutput"),
     "original": ("compute.instances.get",),
-    "project": ("compute.disks.get", "compute.snapshots.get", "compute.firewalls.list"),
+    "project": ("compute.disks.get", "compute.snapshots.get", "compute.firewalls.list",
+                "compute.zoneOperations.get"),
 }
 READ_ONLY_KINDS = {"auth-list", "describe-instance", "describe-disk", "describe-snapshot", "list-firewalls",
                    "test-iam", "serial", "guest-attribute"}
@@ -77,17 +79,34 @@ DOCS = {
     "scheduling": "https://docs.cloud.google.com/compute/docs/instances/setting-instance-scheduling-options",
     "testIamPermissions": "https://docs.cloud.google.com/compute/docs/reference/rest/v1/instances/testIamPermissions",
     "resourceManagerTestIamPermissions": "https://docs.cloud.google.com/resource-manager/reference/rest/v1/projects/testIamPermissions",
+    "zoneOperationsWait": "https://docs.cloud.google.com/compute/docs/reference/rest/v1/zoneOperations/wait",
+    "zoneOperationsGet": "https://docs.cloud.google.com/compute/docs/reference/rest/v1/zoneOperations/get",
+    "instancesStart": "https://docs.cloud.google.com/compute/docs/reference/rest/v1/instances/start",
+    "instancesStop": "https://docs.cloud.google.com/compute/docs/reference/rest/v1/instances/stop",
 }
 PLAN_TTL = datetime.timedelta(hours=12)
 PREFLIGHT_TTL = datetime.timedelta(minutes=20)
 METADATA_URL = ("https://compute.googleapis.com/compute/v1/projects/protocols-465723/zones/us-west2-b/instances/"
                 "roseos-yogi-builder-20261105-b/setMetadata")
+START_URL = METADATA_URL[:METADATA_URL.rindex("/")] + "/start"
+STOP_URL = METADATA_URL[:METADATA_URL.rindex("/")] + "/stop"
+METADATA_WAIT_SECONDS = 180
+START_WAIT_SECONDS = 180
+STOP_WAIT_SECONDS = 180
 PLAN_SCHEMA = "roseos.yogi-replacement-recover-plan.v1"
 PREFLIGHT_SCHEMA = "roseos.yogi-replacement-recover-preflight.v1"
 OUTCOME_SCHEMA = "roseos.yogi-replacement-recover-outcome.v1"
 GITHUB_CONTEXT = ("GITHUB_ACTIONS", "ACTIONS_ID_TOKEN_REQUEST_URL", "ACTIONS_ID_TOKEN_REQUEST_TOKEN",
                   "ACTIONS_RUNTIME_TOKEN", "ACTIONS_RUNTIME_URL", "ACTIONS_CACHE_URL", "GITHUB_TOKEN")
-SPENT_OPERATION_IDS = frozenset({"e75b0fd782e43f585c621c74f95bfa90"})
+SPENT_OPERATION_IDS = frozenset({
+    "e75b0fd782e43f585c621c74f95bfa90",
+    "5cf6fe9a62880b89ee6e7e822a0379d2",
+})
+SPENT_ZONE_OPERATIONS = frozenset({
+    "operation-1794025967141-65fa8387d4384-e9bed427-7ed969ab",
+    "operation-1794025969883-65fa838a71873-581e64cf-6e23ae4e",
+})
+OPERATION_NAME = re.compile(r"operation-[0-9]{10,16}-[0-9a-f]{8,20}-[0-9a-f]{6,20}-[0-9a-f]{6,20}")
 OPERATOR = re.compile(r"[A-Za-z0-9 ._@-]{1,80}")
 HEX32 = re.compile(r"[0-9a-f]{32}")
 SHA256 = re.compile(r"[0-9a-f]{64}")
@@ -107,6 +126,7 @@ LIMITATIONS = (
     "unknown-host-key-names-stop-rotation",
     "unit-hardlink-or-unexpected-mode-is-not-changed",
     "metadata-write-is-single-attempt",
+    "pending-zone-operation-is-waited-not-resubmitted",
     "urllib-metadata-client-is-not-a-fix-for-the-unknown-internal-error",
     "automatic-restart-can-reexecute-until-stop",
 )
@@ -279,31 +299,114 @@ def startup_script_absent(view):
     return isinstance(view, dict) and "startup-script" not in view["items"] and BINDING_KEY not in view["items"]
 
 
-def interpret_metadata_http(status, body):
-    attempt = {"ok": False, "unparseable": False, "httpStatus": status, "operationStatus": "none",
-               "errorCode": "", "targetId": ""}
+def compute_resource_path(value):
+    """Path after the Compute API prefix. Response links use either documented host."""
+    if not isinstance(value, str):
+        return None
+    for prefix in ("https://www.googleapis.com/compute/v1/", "https://compute.googleapis.com/compute/v1/"):
+        if value.startswith(prefix):
+            return value[len(prefix):].rstrip("/")
+    return None
+
+
+def operation_url(name, wait):
+    """Build our zone operation URL. The name is checked; a selfLink from the response is never followed."""
+    if name in SPENT_ZONE_OPERATIONS or not OPERATION_NAME.fullmatch(name or ""):
+        raise Refused("operation handle is not a fresh operation for this replacement")
+    base = ("https://compute.googleapis.com/compute/v1/projects/" + PROJECT + "/zones/" + ZONE
+            + "/operations/" + name)
+    return base + "/wait" if wait else base
+
+
+def _operation_error_code(body):
+    error = body.get("error") if isinstance(body, dict) else None
+    if isinstance(error, dict):
+        errors = error.get("errors")
+        if isinstance(errors, list) and errors and isinstance(errors[0], dict):
+            return str(errors[0].get("code") or "operation-error")[:40]
+        return str(error.get("status") or error.get("code") or "http")[:40]
+    code = body.get("httpErrorStatusCode") if isinstance(body, dict) else None
+    if isinstance(code, int) and code >= 400:
+        return "http-" + str(code)
+    return ""
+
+
+def interpret_operation(status, body, operation_type, expected_name=None):
+    """Classify one Operation response. PENDING and RUNNING are accepted, not failures.
+
+    `ok` is true only for a finished operation with no error and this replacement's identity.
+    A non-200 response, a null body, or a body with no operation name is a submission or transport
+    failure. Those do not produce a handle to wait on.
+    """
+    attempt = {"ok": False, "unparseable": False, "disposition": "submission-error", "httpStatus": status,
+               "operationStatus": "none", "errorCode": "", "targetId": "", "name": "", "operationType": ""}
     if not isinstance(body, dict):
         attempt["unparseable"] = True
         attempt["errorCode"] = "unparseable"
+        attempt["disposition"] = "malformed"
         return attempt
     if status != 200:
-        error = body.get("error")
-        if isinstance(error, dict):
-            attempt["errorCode"] = str(error.get("status") or error.get("code") or "http")[:40]
-        else:
-            attempt["errorCode"] = "http"
+        attempt["errorCode"] = _operation_error_code(body) or "http"
         return attempt
-    operation = str(body.get("status") or "")
-    attempt["operationStatus"] = operation or "missing"
+    name = body.get("name")
+    if not isinstance(name, str) or not OPERATION_NAME.fullmatch(name) or name in SPENT_ZONE_OPERATIONS:
+        attempt["disposition"] = "malformed"
+        attempt["errorCode"] = "no-operation"
+        attempt["unparseable"] = "status" not in body and "name" not in body
+        return attempt
+    if expected_name is not None and name != expected_name:
+        attempt["disposition"] = "mismatch"
+        attempt["errorCode"] = "handle"
+        attempt["name"] = name
+        return attempt
+    attempt["name"] = name
+    attempt["operationType"] = str(body.get("operationType") or "")
+    attempt["operationStatus"] = str(body.get("status") or "")
     attempt["targetId"] = str(body.get("targetId") or "")
-    if body.get("error"):
-        attempt["errorCode"] = "operation-error"
+    zone_path = compute_resource_path(body.get("zone"))
+    self_path = compute_resource_path(body.get("selfLink"))
+    target_path = compute_resource_path(body.get("targetLink"))
+    expected_self = "projects/" + PROJECT + "/zones/" + ZONE + "/operations/" + name
+    expected_zone = "projects/" + PROJECT + "/zones/" + ZONE
+    expected_target = expected_zone + "/instances/" + INSTANCE
+    problems = []
+    if body.get("kind") != "compute#operation":
+        problems.append("kind")
+    if zone_path != expected_zone:
+        problems.append("zone")
+    if self_path != expected_self:
+        problems.append("selfLink")
+    if attempt["operationType"] != operation_type:
+        problems.append("operationType")
+    if attempt["targetId"] != INSTANCE_ID:
+        problems.append("target")
+    if target_path != expected_target:
+        problems.append("targetLink")
+    if body.get("region"):
+        problems.append("region")
+    if attempt["operationStatus"] not in ("PENDING", "RUNNING", "DONE"):
+        problems.append("status")
+    if problems:
+        attempt["disposition"] = "mismatch"
+        attempt["errorCode"] = problems[0]
         return attempt
-    if operation != "DONE" or attempt["targetId"] != INSTANCE_ID:
-        attempt["errorCode"] = "not-done" if operation != "DONE" else "target"
+    error_code = _operation_error_code(body)
+    if error_code or body.get("error"):
+        attempt["disposition"] = "done-error"
+        attempt["errorCode"] = error_code or "operation-error"
         return attempt
-    attempt["ok"] = True
+    if attempt["operationStatus"] == "DONE":
+        attempt["disposition"] = "done"
+        attempt["ok"] = True
+        return attempt
+    attempt["disposition"] = "accepted"
+    attempt["errorCode"] = ""
     return attempt
+
+
+def interpret_metadata_http(status, body):
+    """setMetadata responses are Operation resources. DONE is not required of the first response."""
+    return interpret_operation(status, body, "setMetadata")
 
 
 def metadata_view(instance):
@@ -328,10 +431,15 @@ def classify_metadata(attempt, before, after, intended):
         return "readback-failed"
     before_items, before_fp = before
     after_items, after_fp = after
-    clean = attempt.get("ok") is True and attempt.get("targetId") == INSTANCE_ID and not attempt.get("errorCode")
+    clean = attempt.get("ok") is True and attempt.get("disposition") == "done" \
+        and attempt.get("targetId") == INSTANCE_ID and not attempt.get("errorCode")
     if clean and after_items == intended and after_fp != before_fp and before_items != intended:
         return "clean"
     if after_items == before_items and after_fp == before_fp:
+        if attempt.get("disposition") == "pending-timeout":
+            return "pending-timeout"
+        if attempt.get("disposition") == "mismatch":
+            return "mismatch"
         return "not-applied"
     if after_items == intended:
         return "ambiguous-applied"
@@ -584,9 +692,14 @@ def account_problems(listing):
 
 def guard_request(request):
     if not isinstance(request, dict) or set(request) - {"kind", "target", "name", "zone", "start", "timeout",
-                                                       "fingerprint", "items", "permissions"}:
+                                                       "fingerprint", "items", "permissions", "operationType"}:
         raise Refused("control-plane request is outside the recovery set")
     kind, target = request.get("kind"), request.get("target", "none")
+    if kind in ("operation-wait", "operation-get") and target == "replacement" \
+            and request.get("zone", ZONE) == ZONE and request.get("operationType") in ("setMetadata", "start", "stop") \
+            and "items" not in request and "fingerprint" not in request \
+            and OPERATION_NAME.fullmatch(request.get("name") or "") and request.get("name") not in SPENT_ZONE_OPERATIONS:
+        return request
     if kind == "test-iam" and target in IAM_REQUIRED and isinstance(request.get("permissions"), list) \
             and request["permissions"] == list(IAM_REQUIRED[target]):
         return request
@@ -616,7 +729,7 @@ def guard_request(request):
 def gcloud_argv(request):
     guard_request(request)
     kind, project = request["kind"], f"--project={PROJECT}"
-    if kind in ("set-metadata", "test-iam"):
+    if kind in ("set-metadata", "test-iam", "start", "stop", "operation-wait", "operation-get"):
         raise Refused("that request is one HTTP call, not a gcloud argv")
     if kind == "auth-list":
         return ["gcloud", "auth", "list", "--format=json", "--quiet"]
@@ -638,8 +751,6 @@ def gcloud_argv(request):
     if kind == "guest-attribute":
         return ["gcloud", "compute", "instances", "get-guest-attributes", INSTANCE, project, f"--zone={ZONE}",
                 "--query-path=roseos-yogi-recover/receipt", "--format=json", "--quiet"]
-    if kind in ("start", "stop"):
-        return ["gcloud", "compute", "instances", kind, INSTANCE, project, f"--zone={ZONE}", "--quiet"]
     raise Refused("control-plane request is outside the recovery set")
 
 
@@ -648,7 +759,10 @@ def token_argv():
 
 
 class RealTransport:
-    """Operator gcloud plus one urllib setMetadata. The access token stays in this process and off argv."""
+    """Operator gcloud for reads. Mutations and operation waits are one fresh urllib call each.
+
+    A wait or get posts or gets the zone operation URL only. It does not resend setMetadata, start, or stop.
+    """
 
     def __init__(self, run=subprocess.run, opener=urllib.request.urlopen):
         self.run, self.opener = run, opener
@@ -663,24 +777,38 @@ class RealTransport:
             raise TransportError("token")
         return token
 
-    def _set(self, request):
-        body = metadata_body(request["fingerprint"], request["items"])
+    def _http(self, url, method, payload, timeout):
         token = self._token()
-        http_request = urllib.request.Request(
-            METADATA_URL, data=json.dumps(body).encode(), method="POST",
-            headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"})
+        headers = {"Authorization": "Bearer " + token}
+        data = None
+        if payload is not None:
+            headers["Content-Type"] = "application/json"
+            data = json.dumps(payload).encode()
+        http_request = urllib.request.Request(url, data=data, method=method, headers=headers)
         try:
-            with self.opener(http_request, timeout=60) as response:
+            with self.opener(http_request, timeout=timeout) as response:
                 raw, status = response.read(1 << 20), getattr(response, "status", 200)
         except urllib.error.HTTPError as error:
             raw, status = error.read(1 << 20), error.code
         except Exception:
             raise TransportError("timeout") from None
         try:
-            parsed = json.loads(raw.decode())
+            parsed = json.loads(raw.decode()) if raw else None
         except (ValueError, UnicodeError):
             parsed = None
-        return {"attempt": interpret_metadata_http(status, parsed)}
+        return {"httpStatus": status, "body": parsed}
+
+    def _set(self, request):
+        return self._http(METADATA_URL, "POST", metadata_body(request["fingerprint"], request["items"]),
+                          min(60, int(request.get("timeout", 60))))
+
+    def _action(self, request, url):
+        return self._http(url, "POST", None, min(60, int(request.get("timeout", 60))))
+
+    def _operation(self, request):
+        waiting = request["kind"] == "operation-wait"
+        timeout = min(150 if waiting else 30, max(1, int(request.get("timeout", 30))))
+        return self._http(operation_url(request["name"], waiting), "POST" if waiting else "GET", None, timeout)
 
     def _iam(self, request):
         token = self._token()
@@ -709,6 +837,12 @@ class RealTransport:
         guard_request(request)
         if request["kind"] == "set-metadata":
             return self._set(request)
+        if request["kind"] == "start":
+            return self._action(request, START_URL)
+        if request["kind"] == "stop":
+            return self._action(request, STOP_URL)
+        if request["kind"] in ("operation-wait", "operation-get"):
+            return self._operation(request)
         if request["kind"] == "test-iam":
             return self._iam(request)
         try:
@@ -736,6 +870,9 @@ def logged(transport, log):
         if request["kind"] == "set-metadata":
             entry["keys"] = sorted(request["items"])
             entry["fingerprint"] = request["fingerprint"]
+        if request["kind"] in ("operation-wait", "operation-get"):
+            entry["name"] = request["name"]
+            entry["operationType"] = request["operationType"]
         if request["kind"] == "test-iam":
             entry["permissions"] = list(request.get("permissions") or [])
         log.append(entry)
@@ -834,18 +971,83 @@ class Deadline:
         return self.remaining() <= 0
 
 
-def blank_attempt(code):
-    return {"ok": False, "unparseable": True, "httpStatus": 0, "operationStatus": "none", "errorCode": code,
-            "targetId": ""}
+def blank_attempt(code, disposition="submission-error"):
+    return {"ok": False, "unparseable": True, "disposition": disposition, "httpStatus": 0,
+            "operationStatus": "none", "errorCode": code, "targetId": "", "name": "", "operationType": ""}
 
 
-def one_set(call, fingerprint, items):
+def complete_operation(call, response, operation_type, deadline, sleep):
+    """Wait or get one accepted zone operation until DONE, the stage deadline, or a bad handle.
+
+    zoneOperations.wait returns the current operation within about two minutes, which can still be
+    PENDING or RUNNING. Another wait is the documented follow-up. It is not another mutation.
+    """
+    if not isinstance(response, dict) or "httpStatus" not in response:
+        return blank_attempt("timeout")
+    attempt = interpret_operation(response.get("httpStatus"), response.get("body"), operation_type)
+    if attempt["disposition"] != "accepted":
+        return attempt
+    name = attempt["name"]
+    stalls = 0
+    while True:
+        if deadline.expired():
+            attempt["ok"] = False
+            attempt["disposition"] = "pending-timeout"
+            attempt["errorCode"] = "pending-timeout"
+            return attempt
+        remaining = deadline.remaining()
+        kind = "operation-wait" if remaining >= 5 else "operation-get"
+        timeout = min(150 if kind == "operation-wait" else 30, max(1, int(remaining)))
+        before = remaining
+        try:
+            waited = call({"kind": kind, "target": "replacement", "name": name, "zone": ZONE,
+                           "operationType": operation_type, "timeout": timeout})
+        except TransportError:
+            attempt["ok"] = False
+            attempt["disposition"] = "pending-timeout"
+            attempt["errorCode"] = "wait-timeout"
+            return attempt
+        if not isinstance(waited, dict) or waited.get("httpStatus") != 200:
+            attempt["ok"] = False
+            attempt["disposition"] = "pending-timeout"
+            attempt["errorCode"] = "wait-http"
+            return attempt
+        nxt = interpret_operation(200, waited.get("body"), operation_type, name)
+        if nxt["disposition"] == "malformed":
+            attempt["ok"] = False
+            attempt["disposition"] = "pending-timeout"
+            attempt["errorCode"] = "wait-malformed"
+            return attempt
+        if nxt["disposition"] != "accepted":
+            return nxt
+        attempt = nxt
+        pause = min(2.0, max(0.0, deadline.remaining() - 1))
+        if pause:
+            sleep(pause)
+        if deadline.remaining() >= before - 0.001:
+            stalls += 1
+            if stalls >= 3:
+                attempt["ok"] = False
+                attempt["disposition"] = "pending-timeout"
+                attempt["errorCode"] = "pending-timeout"
+                return attempt
+
+
+def submit_and_wait(call, request, operation_type, deadline, sleep):
     try:
-        response = call({"kind": "set-metadata", "target": "replacement", "fingerprint": fingerprint, "items": items,
-                         "timeout": 60})
-        attempt = response["attempt"] if isinstance(response, dict) else blank_attempt("unparseable")
-    except (TransportError, KeyError, TypeError):
-        attempt = blank_attempt("timeout")
+        response = call(request)
+    except TransportError:
+        return blank_attempt("timeout")
+    return complete_operation(call, response, operation_type, deadline, sleep)
+
+
+def one_set(call, fingerprint, items, deadline=None, sleep=None):
+    deadline = deadline or Deadline(time.monotonic, METADATA_WAIT_SECONDS)
+    sleep = sleep or time.sleep
+    attempt = submit_and_wait(
+        call, {"kind": "set-metadata", "target": "replacement", "fingerprint": fingerprint, "items": items,
+               "timeout": 60},
+        "setMetadata", deadline, sleep)
     try:
         after = metadata_view(call({"kind": "describe-instance", "target": "replacement"}))
     except TransportError:
@@ -853,7 +1055,7 @@ def one_set(call, fingerprint, items):
     return attempt, after
 
 
-def restore_metadata(call, script, binding_text):
+def restore_metadata(call, script, binding_text, deadline=None, sleep=None):
     """One preserving removal of this operation's exact metadata values, then one readback. No second write."""
     try:
         current = metadata_view(call({"kind": "describe-instance", "target": "replacement"}))
@@ -866,13 +1068,17 @@ def restore_metadata(call, script, binding_text):
         return "skipped-foreign-value", current
     if kept == current["items"]:
         return "already-base", current
-    attempt, after = one_set(call, current["fingerprint"], kept)
+    deadline = deadline or Deadline(time.monotonic, METADATA_WAIT_SECONDS)
+    attempt, after = one_set(call, current["fingerprint"], kept, deadline, sleep or time.sleep)
     kind = classify_metadata(attempt, (current["items"], current["fingerprint"]),
                              None if after is None else (after["items"], after["fingerprint"]), kept)
     return kind, after
 
 
-def ensure_stopped(call, start_attempted):
+def ensure_stopped(call, start_attempted, clock=None, sleep=None):
+    clock = clock or time.monotonic
+    sleep = sleep or time.sleep
+
     def status():
         try:
             instance = call({"kind": "describe-instance", "target": "replacement"})
@@ -887,12 +1093,10 @@ def ensure_stopped(call, start_attempted):
         return "identity-mismatch"
     if state == "TERMINATED" and not start_attempted:
         return "not-started"
-    # Two stop requests, each followed by one read. The second covers one automaticRestart.
+    # Two stop submissions, each waited on its own handle, then one read. The second covers one automaticRestart.
     for label in ("stopped", "stopped-after-restart"):
-        try:
-            call({"kind": "stop", "target": "replacement", "timeout": 240})
-        except TransportError:
-            pass
+        submit_and_wait(call, {"kind": "stop", "target": "replacement", "timeout": 60}, "stop",
+                        Deadline(clock, STOP_WAIT_SECONDS), sleep)
         state = status()
         if state == "TERMINATED":
             return label
@@ -906,7 +1110,8 @@ def capture_cursor(call):
         response = call({"kind": "serial", "target": "replacement", "start": 0, "timeout": 60})
     except TransportError:
         raise Refused("serial cursor read failed") from None
-    if not isinstance(response, dict) or str(response.get("start")) != "0":
+    if not isinstance(response, dict) or response.get("kind") not in (None, "compute#serialPortOutput") \
+            or str(response.get("start")) != "0":
         raise Refused("serial cursor is not the start of a fresh read")
     nxt = str(response.get("next") or "")
     if not re.fullmatch(r"[0-9]{1,12}", nxt):
@@ -916,7 +1121,8 @@ def capture_cursor(call):
 
 def read_new(call, cursor):
     response = call({"kind": "serial", "target": "replacement", "start": int(cursor), "timeout": 60})
-    if not isinstance(response, dict) or str(response.get("start")) != str(cursor):
+    if not isinstance(response, dict) or response.get("kind") not in (None, "compute#serialPortOutput") \
+            or str(response.get("start")) != str(cursor):
         raise guest.Malformed("cursor")
     nxt = str(response.get("next") or "")
     if not re.fullmatch(r"[0-9]{1,12}", nxt) or int(nxt) < int(cursor):
@@ -972,15 +1178,48 @@ def collect_receipt(call, binding, deadline, sleep):
     return None, "absent"
 
 
+def attribute_text(response):
+    """Guest-attribute text from the REST resource or the gcloud JSON projection.
+
+    REST GuestAttributes uses variableValue and queryValue.items[].value
+    (https://docs.cloud.google.com/compute/docs/reference/rest/v1/instances/getGuestAttributes).
+    A flattened `{value}` or a one-element list of that object is the gcloud projection. Conflicting
+    copies are not a match.
+    """
+    if isinstance(response, list):
+        if len(response) != 1:
+            return None
+        response = response[0]
+    if not isinstance(response, dict) or response.get("kind") not in (None, "compute#guestAttributes"):
+        return None
+    found = []
+    if isinstance(response.get("variableValue"), str):
+        found.append(response["variableValue"])
+    if isinstance(response.get("value"), str):
+        found.append(response["value"])
+    query = response.get("queryValue")
+    items = query.get("items") if isinstance(query, dict) else None
+    if isinstance(items, list):
+        for item in items:
+            if isinstance(item, dict) and isinstance(item.get("value"), str):
+                found.append(item["value"])
+    if not found or any(item != found[0] for item in found):
+        return None
+    return found[0]
+
+
 def attribute_state(call, receipt):
     try:
         response = call({"kind": "guest-attribute", "target": "replacement", "timeout": 30})
     except TransportError:
         return "failed"
-    if not isinstance(response, dict) or response.get("absent") is True:
+    if isinstance(response, dict) and response.get("absent") is True:
         return "absent"
+    text = attribute_text(response)
+    if text is None:
+        return "mismatch"
     try:
-        parsed = json.loads(response.get("value"))
+        parsed = json.loads(text)
     except (TypeError, ValueError):
         return "mismatch"
     return "matched" if parsed == receipt else "mismatch"
@@ -1056,7 +1295,9 @@ def plan(operator, out, now=None, token=None, revision=None, repo=ROOT, template
         "binding": binding, "deadlines": {
             "policySeconds": POLICY_SECONDS, "workBudgetSeconds": WORK_BUDGET_SECONDS,
             "cleanupReserveSeconds": CLEANUP_RESERVE_SECONDS, "serialDelaysSeconds": list(SERIAL_DELAYS),
-            "metadataAttempts": 1, "stopAttempts": 2},
+            "metadataAttempts": 1, "stopAttempts": 2,
+            "metadataWaitSeconds": METADATA_WAIT_SECONDS, "startWaitSeconds": START_WAIT_SECONDS,
+            "stopWaitSeconds": STOP_WAIT_SECONDS},
         "target": {"project": PROJECT, "zone": ZONE, "instance": INSTANCE, "instanceId": INSTANCE_ID,
                    "disk": DISK_NAME, "diskId": DISK_ID, "diskSizeGb": DISK_SIZE_GB},
         "readOnly": {"originalInstance": ORIGINAL_INSTANCE, "originalZone": ORIGINAL_ZONE,
@@ -1253,6 +1494,8 @@ def apply(path, confirm, execute=False, transport=None, now=None, clock=None, sl
     script = loaded["script"]
     binding_text = binding_canonical(binding["operationId"], binding["nonce"], binding["payloadSha256"])
     state = {"marker": False, "start": False, "sealed": False}
+    clock_fn = clock or time.monotonic
+    sleep_fn = sleep or time.sleep
 
     def seal(fields):
         if state["sealed"]:
@@ -1267,11 +1510,12 @@ def apply(path, confirm, execute=False, transport=None, now=None, clock=None, sl
             restore, after = "not-attempted-readback-failed", None
         else:
             try:
-                restore, after = restore_metadata(call, script, binding_text)
+                restore, after = restore_metadata(
+                    call, script, binding_text, Deadline(clock_fn, METADATA_WAIT_SECONDS), sleep_fn)
             except Exception:
                 restore, after = "seal-failed", None
         try:
-            stop = ensure_stopped(call, state["start"])
+            stop = ensure_stopped(call, state["start"], clock_fn, sleep_fn)
         except Exception:
             stop = "seal-failed"
         state["sealed"] = True
@@ -1322,30 +1566,33 @@ def apply(path, confirm, execute=False, transport=None, now=None, clock=None, sl
         exclusive_json(op / "started.json", {"operationId": binding["operationId"], "nonce": binding["nonce"],
                                             "fingerprint": view["fingerprint"], "at": stamp(moment)})
         state["marker"] = True
-        attempt, after = one_set(call, view["fingerprint"], intended)
+        attempt, after = one_set(call, view["fingerprint"], intended,
+                                 Deadline(clock_fn, METADATA_WAIT_SECONDS), sleep_fn)
         kind = classify_metadata(attempt, (view["items"], view["fingerprint"]),
                                  None if after is None else (after["items"], after["fingerprint"]), intended)
         if kind != "clean":
             return seal({"result": "metadata-" + kind, "operationId": binding["operationId"], "requests": log,
-                         "metadata": kind, "metadataError": attempt.get("errorCode"), "preserved": preserved})
-        clock_fn = clock or __import__("time").monotonic
-        sleep_fn = sleep or __import__("time").sleep
+                         "metadata": kind, "metadataError": attempt.get("errorCode"),
+                         "operation": attempt.get("name") or None,
+                         "operationStatus": attempt.get("operationStatus"), "preserved": preserved})
         work = Deadline(clock_fn, WORK_BUDGET_SECONDS)
         if work.expired() or work.remaining() < 30:
             return seal({"result": "budget-before-start", "operationId": binding["operationId"], "requests": log,
                          "metadata": "clean", "preserved": preserved})
         state["start"] = True
-        try:
-            call({"kind": "start", "target": "replacement", "timeout": min(240, int(work.remaining()))})
-        except TransportError:
-            pass
+        start_budget = min(START_WAIT_SECONDS, max(1, int(work.remaining())))
+        started_op = submit_and_wait(
+            call, {"kind": "start", "target": "replacement", "timeout": min(60, start_budget)},
+            "start", Deadline(clock_fn, start_budget), sleep_fn)
         try:
             started = call({"kind": "describe-instance", "target": "replacement"})
         except TransportError:
             started = None
-        if not isinstance(started, dict) or not replacement_identity_ok(started) or started.get("status") != "RUNNING":
+        running = isinstance(started, dict) and replacement_identity_ok(started) and started.get("status") == "RUNNING"
+        if not (started_op.get("ok") and started_op.get("operationType") == "start" and running):
             return seal({"result": "start-unconfirmed", "operationId": binding["operationId"], "requests": log,
-                         "metadata": "clean", "preserved": preserved})
+                         "metadata": "clean", "operation": started_op.get("name") or None,
+                         "operationStatus": started_op.get("operationStatus"), "preserved": preserved})
         try:
             receipt, reason = collect_receipt(call, binding, work, sleep_fn)
         except Refused:
@@ -1381,7 +1628,7 @@ def apply(path, confirm, execute=False, transport=None, now=None, clock=None, sl
                       "guestRead": "interrupted", "metadata": "unknown"})
             except Exception:
                 try:
-                    ensure_stopped(call, True)
+                    ensure_stopped(call, True, clock_fn, sleep_fn)
                 except Exception:
                     pass
         raise
@@ -1404,14 +1651,14 @@ def cleanup(path, confirm, execute=False, transport=None, now=None, env=None):
     binding_text = binding_canonical(loaded["binding"]["operationId"], loaded["binding"]["nonce"],
                                      loaded["binding"]["payloadSha256"])
     if not replacement_identity_ok(instance):
-        stop = ensure_stopped(call, True) if instance is None else "identity-mismatch"
+        stop = ensure_stopped(call, True, time.monotonic, time.sleep) if instance is None else "identity-mismatch"
         document = outcome_shell(result="cleanup-identity-mismatch" if instance is not None else "cleanup-read-failed",
                                  operationId=loaded["binding"]["operationId"], requests=log, restore="not-attempted",
                                  stop=stop, preserved=preserved, preservedIdsMatch=ids_match(preserved),
                                  startupScriptRemoved=False, exit=1)
     else:
         restore, after = restore_metadata(call, script, binding_text)
-        stop = ensure_stopped(call, instance.get("status") != "TERMINATED")
+        stop = ensure_stopped(call, instance.get("status") != "TERMINATED", time.monotonic, time.sleep)
         removed = startup_script_absent(after) or restore in ("already-base", "clean")
         code = 0 if restore in ("clean", "already-base") and removed and stop in (
             "stopped", "stopped-after-restart", "not-started") and ids_match(preserved) else 1
@@ -1505,8 +1752,9 @@ def export_bundle(out):
         "preflight --execute only describes, lists firewalls with no server-side sourceRanges filter, and calls\n"
         "instances.testIamPermissions plus Resource Manager projects:testIamPermissions. It does not start the VM\n"
         "and it does not call setMetadata. Without --execute, preflight only rechecks the local plan.\n"
-        "Do not run apply from this report. A previous operation id e75b0fd782e43f585c621c74f95bfa90 is spent;\n"
-        "plan a new binding. plan --mode inspect only inventories and does not chmod, rotate, or delete keys.\n"
+        "Do not run apply from this report. Spent operation ids e75b0fd782e43f585c621c74f95bfa90 and\n"
+        "5cf6fe9a62880b89ee6e7e822a0379d2 are refused. Plan a new binding. plan --mode inspect only inventories\n"
+        "and does not chmod, rotate, or delete keys.\n"
     )
     (out / "README.md").write_text(readme)
     for name, source in mapping.items():

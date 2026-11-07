@@ -73,9 +73,25 @@ def disk(name, zone, number, user, size="2000"):
             "users": [f"https://www.googleapis.com/compute/v1/projects/{recover.PROJECT}/zones/{zone}/instances/{user}"]}
 
 
-def attempt(ok=True, code="", status="DONE", target=recover.INSTANCE_ID, http=200):
-    return {"ok": ok, "unparseable": code == "unparseable", "httpStatus": http, "operationStatus": status,
-            "errorCode": code, "targetId": target}
+def _operation(operation_type, status, name="operation-1794026000000-65fa8387d4384-e9bed427-00000001",
+              target=recover.INSTANCE_ID, error=None):
+    body = {
+        "kind": "compute#operation",
+        "id": "8000000000000000001",
+        "name": name,
+        "zone": f"https://www.googleapis.com/compute/v1/projects/{recover.PROJECT}/zones/{recover.ZONE}",
+        "operationType": operation_type,
+        "targetLink": (f"https://www.googleapis.com/compute/v1/projects/{recover.PROJECT}/zones/{recover.ZONE}"
+                       f"/instances/{recover.INSTANCE}"),
+        "targetId": str(target),
+        "status": status,
+        "selfLink": (f"https://www.googleapis.com/compute/v1/projects/{recover.PROJECT}/zones/{recover.ZONE}"
+                     f"/operations/{name}"),
+    }
+    if error:
+        body["error"] = {"errors": [{"code": error, "message": error}]}
+        body["httpErrorStatusCode"] = 400
+    return body
 
 
 class Clock:
@@ -118,11 +134,14 @@ class World:
         self.fail_sets = []
         self.fail_describe = 0
         self.start_mode = "ok"
+        self.stop_mode = "ok"
         self.leave_running = 0
         self.boot_guest = None
         self.requests = []
         self.on_start = None
         self.iam_missing = {}
+        self.op_serial = 0
+        self.jobs = {}
 
     def _replacement(self):
         return instance(recover.INSTANCE, recover.ZONE, self.replacement_id, self.replacement_status,
@@ -157,6 +176,8 @@ class World:
             return copy.deepcopy(self.firewalls)
         if kind == "set-metadata":
             return self._set(request)
+        if kind in ("operation-wait", "operation-get"):
+            return self._wait(request["name"])
         if kind == "serial":
             return self._serial(request["start"])
         if kind == "guest-attribute":
@@ -170,29 +191,104 @@ class World:
             return self._stop()
         raise AssertionError(kind)
 
+    def _alloc_name(self):
+        self.op_serial += 1
+        return f"operation-1794026000000-65fa8387d4384-e9bed427-{self.op_serial:08x}"
+
+    def _operation_body(self, name, operation_type, status, error=None, target_id=None):
+        target = recover.INSTANCE_ID if target_id is None else str(target_id)
+        body = {
+            "kind": "compute#operation",
+            "id": str(8000000000000000000 + self.op_serial),
+            "name": name,
+            "zone": f"https://www.googleapis.com/compute/v1/projects/{recover.PROJECT}/zones/{recover.ZONE}",
+            "operationType": operation_type,
+            "targetLink": (f"https://www.googleapis.com/compute/v1/projects/{recover.PROJECT}/zones/{recover.ZONE}"
+                           f"/instances/{recover.INSTANCE}"),
+            "targetId": target,
+            "status": status,
+            "selfLink": (f"https://www.googleapis.com/compute/v1/projects/{recover.PROJECT}/zones/{recover.ZONE}"
+                         f"/operations/{name}"),
+        }
+        if error:
+            body["error"] = {"errors": [{"code": error, "message": error}]}
+            body["httpErrorStatusCode"] = 400
+        return body
+
+    def _begin(self, operation_type, effect, statuses=("PENDING", "DONE"), error=None, interrupt=False):
+        name = self._alloc_name()
+        job = {"type": operation_type, "effect": effect, "statuses": list(statuses), "error": error,
+               "applied": False, "interrupt": interrupt, "mismatch": False}
+        self.jobs[name] = job
+        if statuses[0] == "DONE":
+            self._finish(job, "DONE")
+        return {"httpStatus": 200, "body": self._operation_body(name, operation_type, statuses[0],
+                                                                error if statuses[0] == "DONE" else None)}
+
+    def _finish(self, job, status):
+        if status == "DONE" and not job["applied"]:
+            job["applied"] = True
+            if job["error"] is None and job["effect"]:
+                job["effect"]()
+
+    def _wait(self, name):
+        job = self.jobs.get(name)
+        if job is None:
+            return {"httpStatus": 404, "body": {"error": {"code": 404, "status": "NOT_FOUND"}}}
+        if job["interrupt"]:
+            job["interrupt"] = False
+            raise KeyboardInterrupt()
+        if job["mismatch"]:
+            job["mismatch"] = False
+            other = self._alloc_name()
+            return {"httpStatus": 200, "body": self._operation_body(other, job["type"], "DONE")}
+        if len(job["statuses"]) > 1:
+            job["statuses"].pop(0)
+        status = job["statuses"][0]
+        self._finish(job, status)
+        return {"httpStatus": 200, "body": self._operation_body(
+            name, job["type"], status, job["error"] if status == "DONE" else None)}
+
     def _set(self, request):
         mode = self.fail_sets.pop(0) if self.fail_sets else "ok"
+
+        def apply_items():
+            if request["fingerprint"] == self.fingerprint:
+                self._apply_items(request["items"])
+
         if mode == "timeout":
             raise recover.TransportError("timeout")
         if mode == "readback":
             self.fail_describe += 1
-            return {"attempt": attempt(False, "INTERNAL", "none", "", 500)}
+            return self._begin("setMetadata", apply_items)
         if mode == "internal":
-            return {"attempt": attempt(False, "INTERNAL", "none", "", 500)}
+            return {"httpStatus": 500, "body": {"error": {"code": 13, "status": "INTERNAL"}}}
         if mode == "unparseable":
-            return {"attempt": attempt(False, "unparseable", "none", "", 200)}
+            return {"httpStatus": 200, "body": None}
         if mode == "pending":
-            return {"attempt": attempt(False, "not-done", "RUNNING", recover.INSTANCE_ID, 200)}
+            return self._begin("setMetadata", apply_items, statuses=("PENDING",))
+        if mode == "running-then-done":
+            return self._begin("setMetadata", apply_items, statuses=("PENDING", "RUNNING", "DONE"))
         if mode == "divergent":
             self._apply_items(dict(self.items, **{"ssh-keys": "other"}))
-            return {"attempt": attempt(False, "INTERNAL", "none", "", 500)}
+            return {"httpStatus": 500, "body": {"error": {"code": 13, "status": "INTERNAL"}}}
         if mode == "applied-internal":
             self._apply_items(request["items"])
-            return {"attempt": attempt(False, "INTERNAL", "none", "", 500)}
+            return {"httpStatus": 500, "body": {"error": {"code": 13, "status": "INTERNAL"}}}
+        if mode == "done-error":
+            return self._begin("setMetadata", apply_items, statuses=("PENDING", "DONE"), error="CONDITION_NOT_MET")
+        if mode == "wait-mismatch":
+            response = self._begin("setMetadata", apply_items)
+            self.jobs[response["body"]["name"]]["mismatch"] = True
+            return response
+        if mode == "wait-interrupt":
+            return self._begin("setMetadata", apply_items, interrupt=True)
+        if mode == "wrong-target":
+            name = self._alloc_name()
+            return {"httpStatus": 200, "body": self._operation_body(name, "setMetadata", "PENDING", target_id="1")}
         if request["fingerprint"] != self.fingerprint:
-            return {"attempt": attempt(False, "fingerprint", "DONE", recover.INSTANCE_ID, 412)}
-        self._apply_items(request["items"])
-        return {"attempt": attempt()}
+            return {"httpStatus": 412, "body": {"error": {"code": 412, "status": "conditionNotMet"}}}
+        return self._begin("setMetadata", apply_items)
 
     def _serial(self, start):
         if self.bad_cursor:
@@ -207,6 +303,13 @@ class World:
         return {"contents": text, "start": str(start), "next": self.cursor}
 
     def _start(self):
+        def up():
+            self.replacement_status = "RUNNING"
+            if self.on_start:
+                self.on_start()
+            if self.boot_guest:
+                self.pending = self.boot_guest(self.items) or ""
+
         if self.start_mode == "timeout-down":
             raise recover.TransportError("timeout")
         if self.start_mode == "timeout-up":
@@ -215,20 +318,23 @@ class World:
         if self.start_mode == "interrupt":
             self.replacement_status = "RUNNING"
             raise KeyboardInterrupt()
-        self.replacement_status = "RUNNING"
-        if self.on_start:
-            self.on_start()
-        if self.boot_guest:
-            self.pending = self.boot_guest(self.items) or ""
-        return {"requested": True}
+        if self.start_mode == "pending":
+            return self._begin("start", up, statuses=("PENDING",))
+        if self.start_mode == "done-error":
+            return self._begin("start", up, statuses=("PENDING", "DONE"), error="ZONE_RESOURCE_POOL_EXHAUSTED")
+        return self._begin("start", up)
 
     def _stop(self):
-        if self.leave_running:
-            self.leave_running -= 1
-            self.replacement_status = "RUNNING"
-            return {"requested": True}
-        self.replacement_status = "TERMINATED"
-        return {"requested": True}
+        def down():
+            if self.leave_running:
+                self.leave_running -= 1
+                self.replacement_status = "RUNNING"
+            else:
+                self.replacement_status = "TERMINATED"
+
+        if self.stop_mode == "pending":
+            return self._begin("stop", down, statuses=("PENDING",))
+        return self._begin("stop", down)
 
     def kinds(self):
         return [request["kind"] for request in self.requests]
@@ -581,7 +687,9 @@ class ControlTest(Base):
         world.fail_sets = ["pending"]
         recover.preflight(fresh, recover.INSTANCE_ID, True, world, now=NOW, env=ENV)
         result = recover.apply(fresh, recover.INSTANCE_ID, True, world, now=NOW, clock=Clock(), sleep=lambda s: None, env=ENV)
-        self.assertEqual(result["metadata"], "not-applied")
+        self.assertEqual(result["metadata"], "pending-timeout")
+        self.assertEqual(world.targets("set-metadata"), ["replacement"])
+        self.assertGreaterEqual(world.kinds().count("operation-wait"), 1)
         self.assertNotIn("start", world.kinds())
         fresh = self._fresh("13")
         world = World()
@@ -1025,10 +1133,12 @@ class GuestTest(Base):
 
 class CommandTest(Base):
     def test_argv_stays_on_the_replacement_and_metadata_is_one_http_body(self):
-        start = recover.gcloud_argv({"kind": "start", "target": "replacement"})
-        self.assertEqual(start[4], recover.INSTANCE)
-        self.assertNotIn("ssh", start)
-        self.assertNotIn("--async", start)
+        self.assertTrue(recover.START_URL.endswith(
+            "/projects/protocols-465723/zones/us-west2-b/instances/roseos-yogi-builder-20261105-b/start"))
+        self.assertTrue(recover.STOP_URL.endswith(
+            "/projects/protocols-465723/zones/us-west2-b/instances/roseos-yogi-builder-20261105-b/stop"))
+        with self.assertRaises(recover.Refused):
+            recover.gcloud_argv({"kind": "start", "target": "replacement"})
         with self.assertRaises(recover.Refused):
             recover.gcloud_argv({"kind": "start", "target": "original"})
         with self.assertRaises(recover.Refused):
@@ -1041,11 +1151,16 @@ class CommandTest(Base):
         self.assertEqual([item["key"] for item in body["items"][:2]], list(recover.BASE_ORDER))
         self.assertTrue(recover.METADATA_URL.endswith(
             "/projects/protocols-465723/zones/us-west2-b/instances/roseos-yogi-builder-20261105-b/setMetadata"))
-        parsed = recover.interpret_metadata_http(500, {"error": {"code": 500, "status": "INTERNAL"}})
+        parsed = recover.interpret_metadata_http(500, {"error": {"code": 13, "status": "INTERNAL"}})
         self.assertFalse(parsed["ok"])
+        self.assertEqual(parsed["disposition"], "submission-error")
         self.assertEqual(parsed["errorCode"], "INTERNAL")
-        done = recover.interpret_metadata_http(200, {"status": "DONE", "targetId": recover.INSTANCE_ID})
+        incomplete = recover.interpret_metadata_http(200, {"status": "DONE", "targetId": recover.INSTANCE_ID})
+        self.assertFalse(incomplete["ok"])
+        self.assertEqual(incomplete["disposition"], "malformed")
+        done = recover.interpret_operation(200, _operation("setMetadata", "DONE"), "setMetadata")
         self.assertTrue(done["ok"])
+        self.assertEqual(done["disposition"], "done")
         self.assertEqual(recover.classify_metadata(
             done, (recover.BASE_METADATA, "fp-base"),
             (dict(recover.BASE_METADATA, **{"startup-script": "s", recover.BINDING_KEY: "b"}), "fp-next"),
@@ -1053,9 +1168,11 @@ class CommandTest(Base):
         self.assertEqual(recover.classify_metadata(
             parsed, (recover.BASE_METADATA, "fp-base"), (recover.BASE_METADATA, "fp-base"),
             {"startup-script": "s"}), "not-applied")
-        self.assertFalse(recover.interpret_metadata_http(200, None)["ok"])
-        self.assertFalse(recover.interpret_metadata_http(500, None)["ok"])
-        self.assertFalse(recover.interpret_metadata_http(200, {"status": "RUNNING", "targetId": recover.INSTANCE_ID})["ok"])
+        self.assertEqual(recover.interpret_metadata_http(200, None)["disposition"], "malformed")
+        self.assertEqual(recover.interpret_metadata_http(500, None)["disposition"], "malformed")
+        accepted = recover.interpret_operation(200, _operation("setMetadata", "RUNNING"), "setMetadata")
+        self.assertEqual(accepted["disposition"], "accepted")
+        self.assertFalse(accepted["ok"])
         listing = recover.gcloud_argv({"kind": "list-firewalls", "target": "none"})
         self.assertEqual(listing, ["gcloud", "compute", "firewall-rules", "list",
                                    "--project=protocols-465723", "--format=json", "--quiet"])
@@ -1075,6 +1192,15 @@ class CommandTest(Base):
         self.assertEqual(recover.firewall_problems([{**allow, "network": "https://www.googleapis.com/compute/v1/projects/protocols-465723/global/networks/other"}], instance), ["iap-firewall"])
         denied = {**allow, "name": "deny-ssh", "priority": 100, "allowed": [], "denied": [{"IPProtocol": "tcp", "ports": ["22"]}]}
         self.assertEqual(recover.firewall_problems([allow, denied], instance), ["iap-firewall-denied"])
+        self.assertEqual(recover.firewall_problems({"items": [allow]}, instance), ["iap-firewall"])
+        self.assertEqual(recover.attribute_text({
+            "kind": "compute#guestAttributes", "variableValue": "{\"a\":1}",
+            "queryValue": {"items": [{"namespace": "roseos-yogi-recover", "key": "receipt", "value": "{\"a\":1}"}]},
+        }), "{\"a\":1}")
+        self.assertIsNone(recover.attribute_text({"variableValue": "one", "value": "two"}))
+        self.assertIsNone(recover.attribute_text([{"value": "one"}, {"value": "two"}]))
+        with self.assertRaises(guest.Malformed):
+            recover.read_new(lambda _request: {"kind": "compute#instance", "contents": "", "start": "0", "next": "1"}, "0")
         self.assertEqual(recover.iam_url("project"),
                          "https://cloudresourcemanager.googleapis.com/v1/projects/protocols-465723:testIamPermissions")
         self.assertNotIn("compute.googleapis.com", recover.iam_url("project"))
@@ -1155,24 +1281,216 @@ class CommandTest(Base):
         first = transport(request)
         second = transport(request)
         self.assertEqual(calls["n"], 2)
-        self.assertFalse(first["attempt"]["ok"])
-        self.assertEqual(first["attempt"]["errorCode"], "unparseable")
-        self.assertFalse(second["attempt"]["ok"])
-        self.assertEqual(second["attempt"]["errorCode"], "INTERNAL")
+        first_view = recover.interpret_operation(first["httpStatus"], first["body"], "setMetadata")
+        second_view = recover.interpret_operation(second["httpStatus"], second["body"], "setMetadata")
+        self.assertEqual(first_view["disposition"], "malformed")
+        self.assertEqual(first_view["errorCode"], "unparseable")
+        self.assertEqual(second_view["disposition"], "submission-error")
+        self.assertEqual(second_view["errorCode"], "INTERNAL")
         seen = []
 
         def once(inner):
             seen.append(inner["kind"])
             if inner["kind"] == "set-metadata":
-                return {"attempt": recover.interpret_metadata_http(500, {"error": {"status": "INTERNAL"}})}
+                return {"httpStatus": 500, "body": {"error": {"code": 13, "status": "INTERNAL"}}}
             if inner["kind"] == "describe-instance":
                 return instance(recover.INSTANCE, recover.ZONE, recover.INSTANCE_ID)
             raise AssertionError(inner["kind"])
 
         attempt, after = recover.one_set(once, "fp-base", dict(recover.BASE_METADATA))
-        self.assertEqual(seen.count("set-metadata"), 1)
+        self.assertEqual(seen, ["set-metadata", "describe-instance"])
         self.assertFalse(attempt["ok"])
+        self.assertEqual(attempt["disposition"], "submission-error")
+        self.assertEqual(attempt["errorCode"], "INTERNAL")
         self.assertIsNotNone(after)
+
+    def test_accepted_pending_operation_is_waited_then_classified(self):
+        name = "operation-1794026000001-65fa8387d4384-e9bed427-00000002"
+        other = "operation-1794026000002-65fa8387d4384-e9bed427-00000003"
+        pending = _operation("setMetadata", "PENDING", name)
+        running = _operation("setMetadata", "RUNNING", name)
+        done = _operation("setMetadata", "DONE", name)
+        failed = _operation("setMetadata", "DONE", name, error="CONDITION_NOT_MET")
+        phases = {"set": [running, done]}
+
+        class Response:
+            def __init__(self, status, body):
+                self.status, self._body = status, body
+
+            def read(self, _limit):
+                return self._body
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+        calls = []
+
+        def opener(request, timeout):
+            calls.append((request.full_url, request.get_method(), request.data, timeout))
+            if request.full_url.endswith("/setMetadata"):
+                body = phases["set"].pop(0)
+            elif request.full_url.endswith("/wait"):
+                body = phases["set"].pop(0)
+            else:
+                raise AssertionError(request.full_url)
+            return Response(200, json.dumps(body).encode())
+
+        def run(_argv, **_kwargs):
+            return type("Proc", (), {"returncode": 0, "stdout": "token\n", "stderr": ""})()
+
+        transport = recover.RealTransport(run=run, opener=opener)
+        clock = Clock()
+        attempt = recover.complete_operation(
+            transport, {"httpStatus": 200, "body": pending}, "setMetadata",
+            recover.Deadline(clock, 30), clock.sleep)
+        self.assertTrue(attempt["ok"])
+        self.assertEqual(attempt["disposition"], "done")
+        self.assertEqual(attempt["name"], name)
+        self.assertEqual([item[1] for item in calls], ["POST", "POST"])
+        self.assertTrue(calls[0][0].endswith("/setMetadata") is False)
+        self.assertTrue(calls[0][0].endswith("/operations/" + name + "/wait"))
+        self.assertIsNone(calls[0][2])
+        self.assertTrue(calls[1][0].endswith("/operations/" + name + "/wait"))
+        self.assertIsNone(calls[1][2])
+        self.assertNotIn("setMetadata", calls[1][0])
+
+        def mismatch_opener(request, timeout):
+            calls.append(request.full_url)
+            return Response(200, json.dumps(_operation("setMetadata", "DONE", other)).encode())
+
+        calls.clear()
+        mismatch = recover.RealTransport(run=run, opener=mismatch_opener)
+        bad = recover.complete_operation(
+            mismatch, {"httpStatus": 200, "body": pending}, "setMetadata",
+            recover.Deadline(Clock(), 30), lambda _seconds: None)
+        self.assertEqual(bad["disposition"], "mismatch")
+        self.assertEqual(bad["errorCode"], "handle")
+        self.assertEqual(calls, [recover.operation_url(name, True)])
+
+        refused = recover.complete_operation(
+            transport, {"httpStatus": 500, "body": {"error": {"code": 13, "status": "INTERNAL"}}},
+            "setMetadata", recover.Deadline(Clock(), 30), lambda _seconds: None)
+        self.assertEqual(refused["disposition"], "submission-error")
+        self.assertEqual(refused["errorCode"], "INTERNAL")
+        self.assertFalse(refused["ok"])
+
+        missing = recover.complete_operation(
+            transport, {"httpStatus": 200, "body": None}, "setMetadata",
+            recover.Deadline(Clock(), 30), lambda _seconds: None)
+        self.assertEqual(missing["disposition"], "malformed")
+        self.assertEqual(missing["errorCode"], "unparseable")
+
+        errored = recover.complete_operation(
+            lambda request: {"httpStatus": 200, "body": failed} if request["kind"] == "operation-wait"
+            else (_ for _ in ()).throw(AssertionError(request["kind"])),
+            {"httpStatus": 200, "body": pending}, "setMetadata",
+            recover.Deadline(Clock(), 30), lambda _seconds: None)
+        self.assertEqual(errored["disposition"], "done-error")
+        self.assertFalse(errored["ok"])
+
+        def hang(request):
+            calls.append(request["kind"])
+            if request["kind"] != "operation-wait":
+                raise AssertionError(request["kind"])
+            return {"httpStatus": 200, "body": pending}
+
+        calls.clear()
+        hung = recover.complete_operation(
+            hang, {"httpStatus": 200, "body": pending}, "setMetadata",
+            recover.Deadline(Clock(), 180), lambda _seconds: None)
+        self.assertEqual(hung["disposition"], "pending-timeout")
+        self.assertEqual(calls, ["operation-wait", "operation-wait", "operation-wait"])
+        self.assertNotIn("set-metadata", calls)
+
+    def test_live_pending_metadata_waits_and_a_rollback_wait_can_succeed(self):
+        self.preflight()
+        self.world.fail_sets = ["running-then-done"]
+        self.world.boot_guest = self.boot
+        result = self.apply()
+        self.assertEqual(result["metadata"], "clean")
+        self.assertEqual(result["exit"], 0)
+        self.assertIn("operation-wait", self.world.kinds())
+        self.assertEqual(self.world.targets("set-metadata"), ["replacement", "replacement"])
+        self.assertEqual(self.world.items, recover.BASE_METADATA)
+        self.assertNotIn(self.world.requests[0].get("name"), recover.SPENT_ZONE_OPERATIONS)
+
+        def plan_op(mark):
+            path = Path(self.temp.name) / ("op" + mark)
+            recover.plan("Mac operator", path, now=NOW, token=tokens(mark * 16, "aa" * 16),
+                         revision="d" * 40, env=ENV)
+            return path
+
+        def emit(op, items):
+            module = load_rendered(Path(op) / "guest.py")
+            host = DictHost(json.loads(items[recover.BINDING_KEY]), Path(op) / "guest.py")
+            module.run(host)
+            return host.emitted[-1] + "\n"
+
+        fresh = plan_op("31")
+        world = World()
+        world.fail_sets = ["wait-mismatch"]
+        recover.preflight(fresh, recover.INSTANCE_ID, True, world, now=NOW, env=ENV)
+        result = recover.apply(fresh, recover.INSTANCE_ID, True, world, now=NOW, clock=Clock(),
+                               sleep=lambda _seconds: None, env=ENV)
+        self.assertEqual(result["metadata"], "mismatch")
+        self.assertEqual(world.targets("set-metadata"), ["replacement"])
+        self.assertEqual(world.kinds().count("operation-wait"), 1)
+        self.assertNotIn("start", world.kinds())
+        fresh = plan_op("32")
+        world = World()
+        world.fail_sets = ["wrong-target"]
+        recover.preflight(fresh, recover.INSTANCE_ID, True, world, now=NOW, env=ENV)
+        result = recover.apply(fresh, recover.INSTANCE_ID, True, world, now=NOW, clock=Clock(),
+                               sleep=lambda _seconds: None, env=ENV)
+        self.assertEqual(result["metadata"], "mismatch")
+        self.assertNotIn("operation-wait", world.kinds())
+        fresh = plan_op("33")
+        world = World()
+        world.fail_sets = ["done-error"]
+        recover.preflight(fresh, recover.INSTANCE_ID, True, world, now=NOW, env=ENV)
+        result = recover.apply(fresh, recover.INSTANCE_ID, True, world, now=NOW, clock=Clock(),
+                               sleep=lambda _seconds: None, env=ENV)
+        self.assertEqual(result["metadata"], "not-applied")
+        self.assertEqual(world.kinds().count("operation-wait"), 1)
+        self.assertNotIn("start", world.kinds())
+        fresh = plan_op("34")
+        world = World()
+        world.fail_sets = ["wait-interrupt"]
+        recover.preflight(fresh, recover.INSTANCE_ID, True, world, now=NOW, env=ENV)
+        with self.assertRaises(KeyboardInterrupt):
+            recover.apply(fresh, recover.INSTANCE_ID, True, world, now=NOW, clock=Clock(),
+                          sleep=lambda _seconds: None, env=ENV)
+        self.assertNotIn("start", world.kinds())
+        self.assertEqual(world.replacement_status, "TERMINATED")
+        fresh = plan_op("35")
+        world = World()
+        world.start_mode = "pending"
+        world.boot_guest = lambda items, op=fresh: emit(op, items)
+        recover.preflight(fresh, recover.INSTANCE_ID, True, world, now=NOW, env=ENV)
+        clock = Clock()
+        result = recover.apply(fresh, recover.INSTANCE_ID, True, world, now=NOW, clock=clock, sleep=lambda _s: None,
+                               env=ENV)
+        self.assertEqual(result["result"], "start-unconfirmed")
+        self.assertEqual(result["stop"], "stopped")
+        self.assertNotIn("startup-script", world.items)
+        self.assertEqual(world.replacement_status, "TERMINATED")
+        fresh = plan_op("36")
+        world = World()
+        world.stop_mode = "pending"
+        world.boot_guest = lambda items, op=fresh: emit(op, items)
+        recover.preflight(fresh, recover.INSTANCE_ID, True, world, now=NOW, env=ENV)
+        result = recover.apply(fresh, recover.INSTANCE_ID, True, world, now=NOW, clock=Clock(),
+                               sleep=lambda _s: None, env=ENV)
+        self.assertEqual(result["exit"], 1)
+        self.assertNotEqual(result["result"], "procedure-complete-guest-reported")
+        with self.assertRaises(recover.Refused):
+            recover.plan("Mac operator", Path(self.temp.name) / "spent-live", now=NOW,
+                         token=tokens("5cf6fe9a62880b89ee6e7e822a0379d2", "ab" * 16), revision="a" * 40, env=ENV)
+        with self.assertRaises(recover.Refused):
+            recover.operation_url(next(iter(recover.SPENT_ZONE_OPERATIONS)), True)
 
     def test_bundle_unittest_and_archive_reject_bytecode(self):
         if os.environ.get("YOGI_RECOVER_BUNDLE_TEST") == "1":

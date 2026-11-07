@@ -76,12 +76,27 @@ Contract the live read must show before any write:
    body repeats every key from that read and adds `startup-script` plus `roseos-yogi-recover-binding`. A mismatched
    fingerprint is `412 conditionNotMet` and is not retried
    ([setting custom metadata](https://docs.cloud.google.com/compute/docs/metadata/setting-custom-metadata)).
-2. Reads the instance back once. The guest starts only when that read shows exactly the intended items, the fingerprint
-   changed, and the operation is `DONE` for this numeric id. `INTERNAL`, a timeout, an unparseable body, a pending
-   operation, or any other mismatch does not get a second attempt of the same write. If the read shows our exact values
-   landed, one later removal may drop only those exact values. Any other key is sent back unchanged. A different value
-   stored under `startup-script` or the binding key is not removed. If the read itself fails, there is no second write.
-3. Starts the replacement only after that clean read. Serial output is read after the instance is `RUNNING`, because
+   The POST returns an Operation. `PENDING` or `RUNNING` means the write was accepted, not that it failed. This tool
+   then calls `zoneOperations.wait` on that operation name, with an empty body and a newly fetched token
+   ([zoneOperations.wait](https://docs.cloud.google.com/compute/docs/reference/rest/v1/zoneOperations/wait)). The server
+   returns within about two minutes even when the operation is still running, so a later wait or, near the deadline,
+   one `zoneOperations.get` may follow
+   ([zoneOperations.get](https://docs.cloud.google.com/compute/docs/reference/rest/v1/zoneOperations/get)). That follow-up
+   is not another `setMetadata`. The stage budget is 180 seconds.
+2. A finished operation is usable only when `kind` is `compute#operation`, the name, zone, and `selfLink` are this
+   project and `us-west2-b`, `operationType` is `setMetadata`, `targetId` is `2720796557371812468`, `targetLink` is this
+   instance, `status` is `DONE`, and `error` is absent. The instance is then read once. The guest starts only when that
+   read shows exactly the intended items and a new fingerprint. An HTTP error, a null body, or a body with no operation
+   name is a submission failure and is not waited. `INTERNAL` / gRPC 13 is that kind of failure. It did not recur on
+   the apply that exposed the pending-operation bug, and waiting for `DONE` does not claim its cause is fixed. A wait
+   timeout still reads the instance once and then runs cleanup and STOP. It does not send the mutation again. If the
+   read shows our exact values landed, one later removal may drop only those exact values. Any other key is sent back
+   unchanged. A different value stored under `startup-script` or the binding key is not removed. If the read itself
+   fails, there is no second write.
+3. Starts the replacement only after that clean read, with the same wait on `instances.start`
+   ([instances.start](https://docs.cloud.google.com/compute/docs/reference/rest/v1/instances/start)). The POST body is
+   empty. The guest procedure runs only when that operation is `DONE` with `operationType` `start` and the following
+   read shows `RUNNING`. Serial output is read after the instance is `RUNNING`, because
    `get-serial-port-output` is the running-instance view and keeps about 1 MiB
    ([viewing serial port output](https://docs.cloud.google.com/compute/docs/troubleshooting/viewing-serial-port-output)).
    There is one immediate read and, only if it has no matching receipt, one more read 180 seconds later. The work
@@ -92,8 +107,11 @@ Contract the live read must show before any write:
    Anything else is malicious output: restore metadata, stop, exit 1. A guest attribute, if present, must parse to the
    same receipt. Absence is expected (`enable-guest-attributes` is not turned on). A different value stops the success
    path.
-5. Restores the two original metadata keys with one `setMetadata`, then stops the instance. If the instance is
-   `RUNNING` again after that stop, one more stop is sent for `automaticRestart`. There is no third stop.
+5. Restores the two original metadata keys with one `setMetadata`, waited the same way, then stops the instance with
+   one empty-body `instances.stop`
+   ([instances.stop](https://docs.cloud.google.com/compute/docs/reference/rest/v1/instances/stop)) and the same operation
+   wait. If the instance is `RUNNING` again after that stop, one more stop is sent for `automaticRestart`. There is no
+   third stop. `cleanup` uses the same restore and stop waits.
 
 `cleanup --execute` always describes the replacement, the original VM and disk, and both snapshots. It does not need
 `started.json`. If the replacement is not proved `TERMINATED`, or the describe fails, it stops the replacement by its
@@ -153,9 +171,9 @@ env -u GOOGLE_APPLICATION_CREDENTIALS -u CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOU
   --execute
 ```
 
-`python3 -B` does not write `__pycache__`. Operation id `e75b0fd782e43f585c621c74f95bfa90` already had a preflight
-and that preflight expired. `plan` and `preflight` refuse that id. Mint a new plan. This review does not ask the
-operator to run `apply`. `plan --mode inspect` builds the inventory script for a unit already at mode `0644`.
+`python3 -B` does not write `__pycache__`. These operation ids are spent and `plan` refuses them:
+`e75b0fd782e43f585c621c74f95bfa90` and `5cf6fe9a62880b89ee6e7e822a0379d2`. Mint a new plan. This review does not ask
+the operator to run `apply`. `plan --mode inspect` builds the inventory script for a unit already at mode `0644`.
 `cleanup --execute` remains the stop path if a previous apply was interrupted.
 
 Keep the operation directory. Do not reuse it. A stale fingerprint, an expired preflight (20 minutes), or a second
@@ -222,19 +240,31 @@ No original fingerprint is claimed.
 The active gcloud account must be `grok-bots@protocols-465723.iam.gserviceaccount.com`. If
 `GOOGLE_APPLICATION_CREDENTIALS` or `CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT` is set in the process, the tool
 refuses. Unset them for that process with `env -u`. Do not copy a key into the command. Expected permissions are get,
-setMetadata, start, stop, and getSerialPortOutput on the replacement, plus disk get, snapshot get, and firewall list
-on the project, and get on the original instance. This tool does not change IAM, project metadata, snapshots, or
-delete anything. The project permission call is the Resource Manager URL above. An HTTP error or a null permissions
-list does not count as allowed.
+setMetadata, start, stop, and getSerialPortOutput on the replacement, plus disk get, snapshot get, firewall list, and
+`compute.zoneOperations.get` on the project, and get on the original instance. The operation wait uses that get
+permission. This tool does not change IAM, project metadata, snapshots, or delete anything. The project permission
+call is the Resource Manager URL above. An HTTP error or a null permissions list does not count as allowed. `gcloud
+compute firewall-rules list --format=json` is a JSON array of Firewall resources. A REST list page object is not
+treated as that array. Guest attributes are read from `variableValue` or `queryValue.items[].value`
+([getGuestAttributes](https://docs.cloud.google.com/compute/docs/reference/rest/v1/instances/getGuestAttributes)).
+Serial output is a `compute#serialPortOutput` resource when `kind` is present.
 
 ## Residual limits
 
-- The earlier `setMetadata` `INTERNAL` / gRPC code 13 failure has no known cause. One successful call the same day does
-  not clear it. This tool sends one write and then reads the instance back. It does not retry that write. A null body,
-  an HTTP error, `INTERNAL`, a timeout, or an unparseable operation is not success. The metadata call still uses
-  `urllib`. That is the same client family as the failed requests. Using it again is not a fix for the unknown cause.
-- The operator reported that the blocked preflight left the replacement `TERMINATED`, id `2720796557371812468`,
-  metadata fingerprint `pSAPI4eI6q4=`, and that no cloud resource changed. This repository did not re-read that state.
+- The earlier `setMetadata` `INTERNAL` / gRPC code 13 failure has no known cause. It did not recur on the later apply.
+  This tool still does not claim that cause is fixed. A null body, an HTTP error, or `INTERNAL` is a submission
+  failure: no operation handle, no wait, and no second mutation. `PENDING` and `RUNNING` are different. They are
+  waited on `zoneOperations.wait` / `get` until `DONE` or the 180-second stage deadline. The same rule covers start,
+  stop, and the rollback write. The calls still use `urllib`. That is not a fix for the unknown `INTERNAL` failure.
+- The operator reported a later apply, operation `5cf6fe9a62880b89ee6e7e822a0379d2`, exited
+  `metadata-ambiguous-applied` after the metadata write and the rollback both reached `DONE` with no error. No start
+  occurred. The operator's independent read showed the replacement `TERMINATED`, id `2720796557371812468`, metadata
+  only `enable-oslogin` and `block-project-ssh-keys`, fingerprint `pSAPI4eI6q4=`, and `lastStartTimestamp` still
+  9:18 AM. Cleanup exited 0 with `restore` `already-base`, `startupScriptRemoved` true, and `preservedIdsMatch` true.
+  No guest repair or rotation occurred. The original VM, disk, and both snapshots were unchanged. Zone operations
+  `operation-1794025967141-65fa8387d4384-e9bed427-7ed969ab` and
+  `operation-1794025969883-65fa838a71873-581e64cf-6e23ae4e` are spent and are not waited on again. This repository did
+  not re-read that state.
 - There is no trusted measurement of the guest. A serial line is guest-written. The cursor, nonce, boot id, and
   instance id bind the line to this operation's output window. They do not prove the guest is honest. Do not commit
   the receipt as `builder.direct.hostKey`.
