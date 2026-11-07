@@ -75,7 +75,8 @@ test('Home comes first, the app pages follow it, and nothing else is a page (OS-
  assert.match(pages,/setContentView\(homeFrame\);homeBars\(\);drawer=true;if\(voiceControls\)attachVoiceControls\(\);/);
  assert.match(main,/void showVoiceControls\(\)\{voiceControls=true;attachVoiceControls\(\);\}/);
  assert.match(main,/void closeVoiceControls\(\)\{voiceControls=false;drawer=true;/);
- assert.match(main,/if\(!voiceControls\)settingsOption\(menu,"Voice controls"\)\.setOnMenuItemClickListener\(i->\{showVoiceControls\(\);return true;\}\);/);
+ // Settings no longer offers the legacy voice controls (owner request: Pair with Mac and About only).
+ assert.doesNotMatch(main,/"Voice controls"/);
  assert.match(main,/else if\(voiceControls\)closeVoiceControls\(\);/);
  assert.match(read('../app/src/dev/pixel/voice/RoseConversationActivity.java'),/add\("Settings"\)\.setOnMenuItemClickListener\(i->\{startActivity\(new Intent\(MainActivity\.ACTION_SETTINGS\)\.setClass\(this,MainActivity\.class\)\);return true;\}\);/);
  // The pager sits in a HomeFrame with the fixed tray; the frame, not the pager, is the content view.
@@ -219,8 +220,9 @@ test('an unchanged HOME or app-icon return reuses the built Home; changes rebuil
  assert.match(main,/if\(!reuseHome\(i\)\)home\(\);showHomeFor\(i,true,previous,homeShown\);/);
  // Only Home entries (HOME, MAIN\/LAUNCHER) qualify, judged by the same HomeEntry rule as routing.
  assert.match(main,/boolean reuseHome\(Intent i\)\{return i!=null&&HomeReuse\.reuse\(HomeEntry\.of\(Intent\.ACTION_MAIN\.equals\(i\.getAction\(\)\),i\.hasCategory\(Intent\.CATEGORY_HOME\),i\.hasCategory\(Intent\.CATEGORY_LAUNCHER\),true,false,true\)\.showHome,/);
- // Whatever home() resets still forces it: chat mode, an open visual or Mac screen, a changed Home setting, another view in place.
- assert.match(main,/homeFrame!=null&&homeFrame\.getParent\(\)!=null,builtHomeStamp,homeStamp\(\),chatMode,visualDetail!=null\|\|screenDetail!=null,experimentalHome!=getPreferences\(0\)\.getBoolean\("conversation-home",true\)\);\}/);
+ // Whatever home() resets still forces it: chat mode, an open visual or Mac screen, another view in place. There is no
+ // Home setting any more (the Classic home switch is retired), so that input is always false.
+ assert.match(main,/homeFrame!=null&&homeFrame\.getParent\(\)!=null,builtHomeStamp,homeStamp\(\),chatMode,visualDetail!=null\|\|screenDetail!=null,false\);\}/);
  // The stamp is recorded by every catalog build and covers packages, configuration and the dock's default apps.
  assert.match(main,/homeFrame\.requestApplyInsets\(\);\n  builtHomeStamp=homeStamp\(\);\n \}/);
  assert.match(main,/public void onReceive\(Context context,Intent intent\)\{packageGeneration\+\+;if\(launcherPager!=null&&!isFinishing\(\)\)attachLauncherPages\(true\);\}/);
@@ -586,5 +588,5 @@ test('Settings opens a window-owned dialog without depending on the launcher fra
  const route=main.slice(main.indexOf('void showSettingsFor(Intent intent)'),main.indexOf('/** HOME returning'));
  assert.ok(!route.includes('homeFrame'));
  assert.match(route,/getWindow\(\)\.getDecorView\(\)\.post/);
- assert.match(main,/SettingsDialog\.show\(this,menu\.getMenu\(\)\);/);
+ assert.match(main,/void homeOptions\(View anchor\)\{SettingsDialog\.show\(this\);\}/);
 });
