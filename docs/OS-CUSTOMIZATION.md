@@ -169,9 +169,10 @@ Builds that carry it:
 This workstream has not verified either build, installed it or run it on a device. The identities above come from the
 Release lane's run record.
 
-On a phone the controls are reachable through conversation only after the Mac/cloud producer is restarted from main and
-an Agent build with this source is installed. Neither has happened: nothing is deployed or activated. No APK has been
-built or run on a device in this workstream. The glasses-on hook stays inert until a real worn signal exists.
+On a phone the controls are reachable through conversation only after the Rose backend is restarted from main and a
+build that carries them is installed. Frankel 2026110701 is published as Beta Latest, but its installation on a phone
+and a backend restart from main have not been confirmed. This workstream itself has not built, installed or run an APK.
+The glasses-on hook fires only in a build that includes #645.
 
 ## Demo runbook (for whoever deploys; nothing here has been run)
 
