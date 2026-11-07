@@ -1,0 +1,285 @@
+{
+  "claim": "procedure-evidence-only",
+  "distinctFromOriginalVerified": false,
+  "dryRun": false,
+  "executed": true,
+  "guestAttribute": null,
+  "guestAuthenticated": false,
+  "guestRead": "read",
+  "guestReceipt": {
+    "bootId": "64cc806f-866d-4e0d-8043-9a47f888e784",
+    "cleanup": {
+      "accessCleanup": "ok",
+      "authPathsRead": 2,
+      "linesRemoved": 0,
+      "possessComment": "roseos-yogi-possess-0ab4287d8370bb86bba1d457bf79e96f",
+      "possessMarkerLines": 0,
+      "possessMaterial": "AAAAC3NzaC1lZDI1NTE5AAAAIMbzgr5vH7dN42b+tTsg3/tSHS9QWlSUNweoeS/9XXzB",
+      "tempFilesRemoved": 0,
+      "temporaryAccount": "absent",
+      "unidentifiedAuthorizedKeyLines": 0
+    },
+    "hostKeys": {
+      "baseline": {
+        "ecdsa": "SHA256:TCnFbeIJ1450hxNHg99j4b9NpdzV7W5DmPNyho5YAnQ",
+        "ed25519": "SHA256:n4xqiwBsyYqkQ/aF19AXkVr9fqAZJmJLWPqfZwhUweE",
+        "rsa": "SHA256:c5YklLIyN4gjq16yBM+dYMVq3VpAodoA0TbseKXDT/c"
+      },
+      "distinctFromClonedBaseline": false,
+      "rolledBack": false,
+      "rotated": {},
+      "unknownHostKeyCount": 0
+    },
+    "instanceId": "2720796557371812468",
+    "journal": {
+      "entries": 6,
+      "hasCompleteReceipt": true,
+      "phases": [
+        "complete",
+        "complete"
+      ],
+      "readable": 2,
+      "unrecognized": 4
+    },
+    "nonce": "38545d88138e8b49aeef032f660a8acf",
+    "operationId": "e0d23fb40aacb99f8278965a500ed5b8",
+    "originalVmAccessed": false,
+    "payloadSha256": "3d718d741affff0f2781e0e44e6f602e2fa51a44fd57050b58dc3732f13c0228",
+    "previousBootId": "none",
+    "purpose": "inspect",
+    "reexecution": false,
+    "runner": {
+      "active": "inactive",
+      "enabled": "disabled",
+      "process": false
+    },
+    "schema": "roseos.yogi-replacement-recover-receipt.v1",
+    "services": {
+      "config": {
+        "listen": "absent",
+        "matchBlocks": 0,
+        "passwordAuth": "no",
+        "permitRoot": "no",
+        "port": "absent",
+        "pubkey": "unset",
+        "scope": "root-file-static"
+      },
+      "guestAgent": {
+        "active": "inactive",
+        "enabled": "disabled"
+      },
+      "listen": [
+        "0.0.0.0:22",
+        "[::]:22"
+      ],
+      "port22": "listening",
+      "ssh": {
+        "active": "active",
+        "enabled": "enabled"
+      },
+      "sshd": {
+        "active": "active",
+        "enabled": "unknown"
+      }
+    },
+    "snapshotsUsed": false,
+    "status": "complete",
+    "unit": {
+      "action": "not-modified",
+      "afterGid": 0,
+      "afterMode": "0644",
+      "afterSize": 347,
+      "afterUid": 0,
+      "beforeGid": 0,
+      "beforeMode": "0644",
+      "beforeSize": 347,
+      "beforeUid": 0,
+      "problem": "already-0644"
+    }
+  },
+  "historicalReferenceReplayed": false,
+  "hostKeyPinned": false,
+  "liveRecovery": false,
+  "metadata": "clean",
+  "metadataKeysAfter": [
+    "block-project-ssh-keys",
+    "enable-oslogin"
+  ],
+  "operationId": "e0d23fb40aacb99f8278965a500ed5b8",
+  "preserved": {
+    "original": {
+      "id": "8812446529823929967",
+      "name": "roseos-yogi-builder-20261103-a",
+      "status": "TERMINATED"
+    },
+    "originalDisk": {
+      "id": "6647020458376394351",
+      "name": "roseos-yogi-builder-20261103-a",
+      "status": "READY"
+    },
+    "prekey": {
+      "id": "1721727283888335524",
+      "name": "yogi-b-prekey-20261107-030026",
+      "status": "READY"
+    },
+    "preserve": {
+      "id": "8970504972743521862",
+      "name": "yogi-preserve-20261105-2252",
+      "status": "READY"
+    }
+  },
+  "repairSucceeded": false,
+  "requests": [
+    {
+      "kind": "auth-list",
+      "target": "none"
+    },
+    {
+      "kind": "describe-instance",
+      "target": "replacement"
+    },
+    {
+      "kind": "describe-instance",
+      "target": "original"
+    },
+    {
+      "kind": "describe-disk",
+      "target": "replacement"
+    },
+    {
+      "kind": "list-firewalls",
+      "target": "none"
+    },
+    {
+      "kind": "describe-disk",
+      "target": "original"
+    },
+    {
+      "kind": "describe-snapshot",
+      "target": "preserve"
+    },
+    {
+      "kind": "describe-snapshot",
+      "target": "prekey"
+    },
+    {
+      "kind": "test-iam",
+      "permissions": [
+        "compute.instances.get",
+        "compute.instances.setMetadata",
+        "compute.instances.start",
+        "compute.instances.stop",
+        "compute.instances.getSerialPortOutput"
+      ],
+      "target": "replacement"
+    },
+    {
+      "kind": "test-iam",
+      "permissions": [
+        "compute.instances.get"
+      ],
+      "target": "original"
+    },
+    {
+      "kind": "test-iam",
+      "permissions": [
+        "compute.disks.get",
+        "compute.snapshots.get",
+        "compute.firewalls.list",
+        "compute.zoneOperations.get"
+      ],
+      "target": "project"
+    },
+    {
+      "fingerprint": "pSAPI4eI6q4=",
+      "keys": [
+        "block-project-ssh-keys",
+        "enable-oslogin",
+        "roseos-yogi-recover-binding",
+        "startup-script"
+      ],
+      "kind": "set-metadata",
+      "target": "replacement"
+    },
+    {
+      "kind": "operation-wait",
+      "name": "operation-1794076486246-65fb3fba99f04-a7ebd856-0dca3c32",
+      "operationType": "setMetadata",
+      "target": "replacement"
+    },
+    {
+      "kind": "describe-instance",
+      "target": "replacement"
+    },
+    {
+      "kind": "start",
+      "target": "replacement"
+    },
+    {
+      "kind": "operation-wait",
+      "name": "operation-1794076488270-65fb3fbc8843a-583c3cf8-47106870",
+      "operationType": "start",
+      "target": "replacement"
+    },
+    {
+      "kind": "describe-instance",
+      "target": "replacement"
+    },
+    {
+      "kind": "serial",
+      "target": "replacement"
+    },
+    {
+      "kind": "serial",
+      "target": "replacement"
+    },
+    {
+      "kind": "describe-instance",
+      "target": "replacement"
+    },
+    {
+      "fingerprint": "F2qMzRY135c=",
+      "keys": [
+        "block-project-ssh-keys",
+        "enable-oslogin"
+      ],
+      "kind": "set-metadata",
+      "target": "replacement"
+    },
+    {
+      "kind": "operation-wait",
+      "name": "operation-1794076679125-65fb40728baa5-eeb25437-5fc4b997",
+      "operationType": "setMetadata",
+      "target": "replacement"
+    },
+    {
+      "kind": "describe-instance",
+      "target": "replacement"
+    },
+    {
+      "kind": "describe-instance",
+      "target": "replacement"
+    },
+    {
+      "kind": "stop",
+      "target": "replacement"
+    },
+    {
+      "kind": "operation-wait",
+      "name": "operation-1794076684226-65fb407768de8-0775bed1-3c864e58",
+      "operationType": "stop",
+      "target": "replacement"
+    },
+    {
+      "kind": "describe-instance",
+      "target": "replacement"
+    }
+  ],
+  "restore": "clean",
+  "result": "inspect-complete",
+  "schema": "roseos.yogi-replacement-recover-outcome.v1",
+  "serialReceiptTrustedForPin": false,
+  "startupScriptRemovalProof": "control-plane-readback",
+  "startupScriptRemoved": true,
+  "stop": "stopped"
+}

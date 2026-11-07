@@ -99,6 +99,8 @@ env -u GOOGLE_APPLICATION_CREDENTIALS -u CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOU
   --out ~/yogi-ops/possess-LABEL
 ```
 
+`guest-install-plan` is a separate opt-in. It writes a plan and does not call GCP or SSH. `guest-install-execute` refuses. `handshake --execute` does not install an authorized_keys line. The guest-agent metadata comment is not an sshd expiry.
+
 ## Dependencies (all unverified today, all fail-closed)
 
 | `builder.direct` field | What must be recorded | Owner |
