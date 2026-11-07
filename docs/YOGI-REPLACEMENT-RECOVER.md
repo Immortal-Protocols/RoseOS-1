@@ -37,9 +37,10 @@ service-account key, and it does not read one.
 and writes `plan.json`, `binding.json`, `guest.py`, `startup-script.sh`, and `SHA256SUMS`. Historical proposal hashes
 are copied into the plan as reference identifiers. They are not the payload hash.
 
-With `--execute`, `preflight` is a read of the replacement, the original, both disks, both snapshots, the IAP SSH
-firewall, and the active gcloud account. `apply` continues only when that read matches the contract below and its
-metadata fingerprint is still the preflight fingerprint.
+The live read-only check is `preflight --execute`. It describes the replacement, the original VM and disk, and both
+snapshots, lists the IAP firewall, reads the active gcloud account, and calls `testIamPermissions` on the replacement,
+the original, and the project. It does not start the VM and it does not call `setMetadata`. Without `--execute`,
+preflight only rechecks the local plan file.
 
 Contract the live read must show before any write:
 
@@ -84,17 +85,21 @@ constant name. It removes startup metadata only when the values are exactly this
 and it does not restore a snapshot. `KeyboardInterrupt` during apply still runs that stop and removal before the
 interrupt is re-raised. A failed local outcome write does not skip the stop.
 
-The guest, if the metadata server identity matches, may:
+The repair guest, if the metadata server identity matches, may:
 
-- chmod the runner unit to `0644` only when the path is a root:root regular file, mode `0664`, size 347, link count 1,
-  and the unit is inactive and disabled with no `Runner.Listener` or `Runner.Worker`
-- inventory the named `ssh_host_*` files under `/etc/ssh` and rotate `ed25519`, `ecdsa`, and `rsa` by renaming a new
-  key over each named pair after the new public fingerprint differs from the pre-rotation fingerprint
+- chmod the runner unit to `0644` only when it is a root:root regular file, mode `0664`, size 347, link count 1, and the
+  runner is inactive and disabled with no `Runner.Listener` or `Runner.Worker`. If that file is already mode `0644`
+  with the same size and owner, repair stops before any chmod or rotation and reports `already-0644`. It does not
+  change the mode back and it does not generate new host keys.
+- inventory the named `ssh_host_*` files under `/etc/ssh` and rotate `ed25519`, `ecdsa`, and `rsa` only on the `0664`
+  path, after the new public fingerprint differs from the pre-rotation fingerprint
 - delete an `authorized_keys` line only when it is exactly three fields and the comment is
-  `roseos-yogi-recover-<this operation id>`, on `/root/.ssh/authorized_keys` or
-  `/home/pixelbuild/.ssh/authorized_keys`
+  `roseos-yogi-recover-<this operation id>`. Any other line is preserved and makes a repair receipt fail success
 - delete the account `roseos-yogi-recover` only when its uid and gid are at least 60000, its home is
   `/var/lib/roseos-yogi-recover/account`, and its shell is `nologin` or `false`
+
+`plan --mode inspect` writes a different startup script. That script has no `ssh-keygen`, `userdel`, or mode change.
+It reports the unit, public fingerprints, and authorized_keys counts, including when the unit is already `0644`.
 
 A marker for this operation makes a second boot reprint or refuse. It does not chmod or rotate again. Unknown
 `ssh_host_*` names, a symlink, a DSA key, and any other authorized_keys line stay in place. The receipt counts
@@ -111,26 +116,25 @@ authenticated as the account above. Do not pass a key file.
 
 ```sh
 python3 scripts/yogi_replacement_recover.py plan \
+  --mode repair \
   --operator "NAME" \
   --out ~/yogi-ops/recover-LABEL
 
+# Local file check only. This does not contact GCP.
 python3 scripts/yogi_replacement_recover.py preflight \
   --op ~/yogi-ops/recover-LABEL \
   --confirm-instance 2720796557371812468
 
+# Live read-only preflight: describe, firewall list, account, and testIamPermissions.
+# It does not start the VM and it does not call setMetadata.
 python3 scripts/yogi_replacement_recover.py preflight \
-  --op ~/yogi-ops/recover-LABEL \
-  --confirm-instance 2720796557371812468 \
-  --execute
-
-python3 scripts/yogi_replacement_recover.py apply \
   --op ~/yogi-ops/recover-LABEL \
   --confirm-instance 2720796557371812468 \
   --execute
 ```
 
-Review `plan.json`, `guest.py`, `startup-script.sh`, and `SHA256SUMS` before `--execute`. If apply is interrupted
-after `started.json`:
+`plan --mode inspect` builds the inventory script for a unit already at mode `0644`. This review does not ask the
+operator to run `apply`. `cleanup --execute` remains the stop path if a previous apply was interrupted.
 
 ```sh
 python3 scripts/yogi_replacement_recover.py cleanup \

@@ -55,6 +55,14 @@ POLICY_SECONDS = 45 * 60
 CLEANUP_RESERVE_SECONDS = 10 * 60
 WORK_BUDGET_SECONDS = POLICY_SECONDS - CLEANUP_RESERVE_SECONDS
 SERIAL_DELAYS = (180,)
+IAM_REQUIRED = {
+    "replacement": ("compute.instances.get", "compute.instances.setMetadata", "compute.instances.start",
+                    "compute.instances.stop", "compute.instances.getSerialPortOutput"),
+    "original": ("compute.instances.get",),
+    "project": ("compute.disks.get", "compute.snapshots.get", "compute.firewalls.list"),
+}
+READ_ONLY_KINDS = {"auth-list", "describe-instance", "describe-disk", "describe-snapshot", "list-firewalls",
+                   "test-iam", "serial", "guest-attribute"}
 DOCS = {
     "setMetadata": "https://docs.cloud.google.com/compute/docs/reference/rest/v1/instances/setMetadata",
     "metadataKeepExisting": "https://docs.cloud.google.com/compute/docs/metadata/setting-custom-metadata",
@@ -63,6 +71,8 @@ DOCS = {
     "guestAttributes": "https://docs.cloud.google.com/compute/docs/metadata/manage-guest-attributes",
     "maxRunDuration": "https://docs.cloud.google.com/compute/docs/instances/limit-vm-runtime",
     "scheduling": "https://docs.cloud.google.com/compute/docs/instances/setting-instance-scheduling-options",
+    "testIamPermissions": "https://docs.cloud.google.com/compute/docs/reference/rest/v1/instances/testIamPermissions",
+    "projectTestIamPermissions": "https://docs.cloud.google.com/compute/docs/reference/rest/v1/projects/testIamPermissions",
 }
 PLAN_TTL = datetime.timedelta(hours=12)
 PREFLIGHT_TTL = datetime.timedelta(minutes=20)
@@ -180,13 +190,13 @@ def binding_canonical(operation_id, nonce, payload_sha):
                        "schema": guest.BINDING_SCHEMA}, sort_keys=True, separators=(",", ":"))
 
 
-def render_guest(operation_id, nonce, template):
-    if template.count("@@OP@@") != 1 or template.count("@@NONCE@@") != 1:
+def render_guest(operation_id, nonce, template, op_token="@@OP@@", nonce_token="@@NONCE@@"):
+    if template.count(op_token) != 1 or template.count(nonce_token) != 1:
         raise Refused("guest template placeholders are not unique")
     if not HEX32.fullmatch(operation_id or "") or not HEX32.fullmatch(nonce or "") or operation_id == nonce:
         raise Refused("binding generator failed")
-    rendered = template.replace("@@OP@@", operation_id).replace("@@NONCE@@", nonce)
-    if "@@" in rendered:
+    rendered = template.replace(op_token, operation_id).replace(nonce_token, nonce)
+    if op_token in rendered or nonce_token in rendered:
         raise Refused("guest template placeholder remains")
     if not rendered.endswith("\n"):
         rendered += "\n"
@@ -432,6 +442,30 @@ def firewall_problems(rules):
     return ["iap-firewall"]
 
 
+def iam_url(target):
+    root = "https://compute.googleapis.com/compute/v1/projects/" + PROJECT
+    if target == "replacement":
+        return root + "/zones/" + ZONE + "/instances/" + INSTANCE + "/testIamPermissions"
+    if target == "original":
+        return root + "/zones/" + ORIGINAL_ZONE + "/instances/" + ORIGINAL_INSTANCE + "/testIamPermissions"
+    if target == "project":
+        return root + "/testIamPermissions"
+    raise Refused("permission check target is outside the recovery set")
+
+
+def iam_problems(found):
+    if not isinstance(found, dict):
+        return ["permission-check-failed"]
+    problems = []
+    for target, required in IAM_REQUIRED.items():
+        granted = found.get(target)
+        if not isinstance(granted, list):
+            problems.append("permission-check-failed")
+            continue
+        problems += ["missing-permission:" + name for name in required if name not in granted]
+    return problems
+
+
 def account_problems(listing):
     if isinstance(listing, dict):
         listing = listing.get("accounts")
@@ -445,9 +479,12 @@ def account_problems(listing):
 
 def guard_request(request):
     if not isinstance(request, dict) or set(request) - {"kind", "target", "name", "zone", "start", "timeout",
-                                                       "fingerprint", "items"}:
+                                                       "fingerprint", "items", "permissions"}:
         raise Refused("control-plane request is outside the recovery set")
     kind, target = request.get("kind"), request.get("target", "none")
+    if kind == "test-iam" and target in IAM_REQUIRED and isinstance(request.get("permissions"), list) \
+            and request["permissions"] == list(IAM_REQUIRED[target]):
+        return request
     if kind == "auth-list" and target == "none":
         return request
     if kind == "list-firewalls" and target == "none":
@@ -474,8 +511,8 @@ def guard_request(request):
 def gcloud_argv(request):
     guard_request(request)
     kind, project = request["kind"], f"--project={PROJECT}"
-    if kind == "set-metadata":
-        raise Refused("setMetadata is one HTTP call, not a gcloud argv")
+    if kind in ("set-metadata", "test-iam"):
+        raise Refused("that request is one HTTP call, not a gcloud argv")
     if kind == "auth-list":
         return ["gcloud", "auth", "list", "--format=json", "--quiet"]
     if kind == "list-firewalls":
@@ -541,10 +578,34 @@ class RealTransport:
             parsed = None
         return {"attempt": interpret_metadata_http(status, parsed)}
 
+    def _iam(self, request):
+        token = self._token()
+        http_request = urllib.request.Request(
+            iam_url(request["target"]), data=json.dumps({"permissions": list(request["permissions"])}).encode(),
+            method="POST", headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"})
+        try:
+            with self.opener(http_request, timeout=60) as response:
+                raw, status = response.read(1 << 20), getattr(response, "status", 200)
+        except urllib.error.HTTPError as error:
+            raw, status = error.read(1 << 20), error.code
+        except Exception:
+            raise TransportError("timeout") from None
+        if status != 200:
+            raise TransportError("exit")
+        try:
+            parsed = json.loads(raw.decode())
+        except (ValueError, UnicodeError):
+            raise TransportError("unparseable") from None
+        if not isinstance(parsed, dict) or not isinstance(parsed.get("permissions"), list):
+            raise TransportError("unparseable")
+        return {"permissions": parsed["permissions"]}
+
     def __call__(self, request):
         guard_request(request)
         if request["kind"] == "set-metadata":
             return self._set(request)
+        if request["kind"] == "test-iam":
+            return self._iam(request)
         try:
             result = self.run(gcloud_argv(request), capture_output=True, text=True, timeout=request.get("timeout", 120))
         except subprocess.TimeoutExpired:
@@ -570,6 +631,8 @@ def logged(transport, log):
         if request["kind"] == "set-metadata":
             entry["keys"] = sorted(request["items"])
             entry["fingerprint"] = request["fingerprint"]
+        if request["kind"] == "test-iam":
+            entry["permissions"] = list(request.get("permissions") or [])
         log.append(entry)
         return transport(request)
     return call
@@ -604,6 +667,10 @@ def collect(call):
         errors.append("original-identity")
     for target, _name in (("preserve", PRESERVE_SNAPSHOT), ("prekey", PREKEY_SNAPSHOT)):
         snapshot["snapshots"][target] = grab({"kind": "describe-snapshot", "target": target})
+    snapshot["iam"] = {}
+    for target, permissions in IAM_REQUIRED.items():
+        found = grab({"kind": "test-iam", "target": target, "permissions": list(permissions)})
+        snapshot["iam"][target] = None if not isinstance(found, dict) else found.get("permissions")
     return snapshot
 
 
@@ -641,6 +708,7 @@ def apply_problems(snapshot):
     problems += [f"prekey-{item}" for item in snapshot_problems(
         (snapshot.get("snapshots") or {}).get("prekey"), PREKEY_SNAPSHOT, PREKEY_SNAPSHOT_ID)]
     problems += firewall_problems(snapshot.get("firewalls"))
+    problems += iam_problems(snapshot.get("iam"))
     if snapshot.get("errors"):
         problems.append("read-failed")
     return problems
@@ -834,9 +902,11 @@ def head_revision(repo):
     return revision
 
 
-def plan(operator, out, now=None, token=None, revision=None, repo=ROOT, template=None, env=None):
+def plan(operator, out, now=None, token=None, revision=None, repo=ROOT, template=None, env=None, mode="repair"):
     manual_context(env if env is not None else os.environ)
     now = now or now_utc()
+    if mode not in ("repair", "inspect"):
+        raise Refused("mode must be repair or inspect")
     if not isinstance(operator, str) or not OPERATOR.fullmatch(operator):
         raise Refused("operator name is empty or uses unsupported characters")
     if revision is None:
@@ -850,8 +920,16 @@ def plan(operator, out, now=None, token=None, revision=None, repo=ROOT, template
     operation_id, nonce = token(), token()
     if not HEX32.fullmatch(operation_id or "") or not HEX32.fullmatch(nonce or "") or operation_id == nonce:
         raise Refused("binding generator failed")
-    template = template if template is not None else (HERE / "yogi_replacement_recover_guest.py").read_text()
-    rendered = render_guest(operation_id, nonce, template)
+    if template is None:
+        if mode == "inspect":
+            template = guest.inspect_template()
+            op_token, nonce_token = "@@INSPECT_OP@@", "@@INSPECT_NONCE@@"
+        else:
+            template = (HERE / "yogi_replacement_recover_guest.py").read_text()
+            op_token, nonce_token = "@@OP@@", "@@NONCE@@"
+    else:
+        op_token, nonce_token = ("@@INSPECT_OP@@", "@@INSPECT_NONCE@@") if mode == "inspect" else ("@@OP@@", "@@NONCE@@")
+    rendered = render_guest(operation_id, nonce, template, op_token, nonce_token)
     payload_sha = sha256_bytes(rendered.encode())
     reject_historical(operation_id, nonce, payload_sha)
     script = startup_script(rendered, payload_sha, operation_id)
@@ -863,7 +941,7 @@ def plan(operator, out, now=None, token=None, revision=None, repo=ROOT, template
     (out / "startup-script.sh").write_text(script)
     (out / "binding.json").write_text(binding_canonical(operation_id, nonce, payload_sha) + "\n")
     document = {
-        "schema": PLAN_SCHEMA, "dryRun": True, "executed": False, "liveRecovery": False, "hostKeyPinned": False,
+        "schema": PLAN_SCHEMA, "mode": mode, "repairsGuest": mode == "repair", "dryRun": True, "executed": False, "liveRecovery": False, "hostKeyPinned": False,
         "claim": "procedure-evidence-only", "operationId": operation_id, "nonce": nonce,
         "payloadSha256": payload_sha, "startupScriptSha256": sha256_bytes(script.encode()),
         "templateSha256": sha256_bytes(template.encode()), "sourceRevision": revision, "operator": operator,
@@ -957,23 +1035,31 @@ def preflight(path, confirm, execute=False, transport=None, now=None, env=None):
     confirm_instance(confirm)
     loaded = load_operation(path, now)
     if not execute:
-        return outcome_shell(dryRun=True, executed=False, result="dry-run", operationId=loaded["binding"]["operationId"])
+        return outcome_shell(dryRun=True, executed=False, cloudReadOnly=False, mutated=False, result="dry-run",
+                             operationId=loaded["binding"]["operationId"])
     log = []
-    snapshot = collect(logged(transport, log))
+
+    def readonly(request):
+        if request.get("kind") not in READ_ONLY_KINDS:
+            raise Refused("preflight is read-only and cannot start, stop, or set metadata")
+        return transport(request)
+
+    snapshot = collect(logged(readonly, log))
     problems = apply_problems(snapshot)
     view = metadata_view(snapshot.get("replacement")) if isinstance(snapshot.get("replacement"), dict) else None
     moment = now or now_utc()
     record = {"schema": PREFLIGHT_SCHEMA, "operationId": loaded["binding"]["operationId"],
               "nonce": loaded["binding"]["nonce"], "payloadSha256": loaded["binding"]["payloadSha256"],
+              "cloudReadOnly": True, "mutated": False,
               "fingerprint": None if view is None else view["fingerprint"], "observedAt": stamp(moment),
               "expiresAt": stamp(moment + PREFLIGHT_TTL), "problems": problems,
               "replacementStatus": (snapshot.get("replacement") or {}).get("status") if isinstance(snapshot.get("replacement"), dict) else None,
               "originalStatus": (snapshot.get("original") or {}).get("status") if isinstance(snapshot.get("original"), dict) else None,
               "requests": log}
     (loaded["path"] / "preflight.json").write_text(json.dumps(record, indent=2, sort_keys=True) + "\n")
-    return outcome_shell(result="preflight-ok" if not problems else "preflight-blocked",
-                         operationId=loaded["binding"]["operationId"], problems=problems, requests=log,
-                         fingerprint=record["fingerprint"])
+    return outcome_shell(result="preflight-ok" if not problems else "preflight-blocked", cloudReadOnly=True,
+                         mutated=False, operationId=loaded["binding"]["operationId"], problems=problems, requests=log,
+                         fingerprint=record["fingerprint"], permissions=snapshot.get("iam"))
 
 
 def load_preflight(path, binding, now):
@@ -997,6 +1083,16 @@ def finish(path, document, code):
     exclusive_json(Path(path) / "outcome.json", document)
     document["exit"] = code
     return document
+
+
+def inspect_reported(receipt):
+    """An inspect receipt inventoried the guest and changed nothing. It is not a repair and not a pin."""
+    if not isinstance(receipt, dict) or receipt.get("purpose") != "inspect" or receipt.get("status") != "complete":
+        return False
+    unit, keys, cleanup = receipt.get("unit") or {}, receipt.get("hostKeys") or {}, receipt.get("cleanup") or {}
+    return unit.get("action") == "not-modified" and unit.get("problem") == "none" and not keys.get("rotated") \
+        and keys.get("rolledBack") is False and keys.get("distinctFromClonedBaseline") is False \
+        and cleanup.get("linesRemoved") == 0 and cleanup.get("temporaryAccount") in ("absent", "preserved-mismatch")
 
 
 def _write_outcome(op, document, code):
@@ -1078,14 +1174,21 @@ def apply(path, confirm, execute=False, transport=None, now=None, clock=None, sl
         fields["startupScriptRemovalProof"] = "control-plane-readback" if removed else "absent"
         guest_ok = fields.pop("guestOk", False)
         reason = fields.get("guestRead")
+        mode = fields.pop("mode", "repair")
         stopped = stop in ("stopped", "stopped-after-restart")
         restored = restore in ("clean", "already-base") and removed
-        if guest_ok and restored and stopped and fields.get("metadata") == "clean":
+        if mode == "inspect" and guest_ok and restored and stopped and fields.get("metadata") == "clean":
+            fields["result"] = "inspect-complete"
+            fields["repairSucceeded"] = False
+            code = 0
+        elif mode == "repair" and guest_ok and restored and stopped and fields.get("metadata") == "clean":
             fields["result"] = "procedure-complete-guest-reported"
+            fields["repairSucceeded"] = True
             code = 0
         else:
             fields.setdefault("result", "halted-" + str(reason))
-            if fields["result"] == "procedure-complete-guest-reported":
+            fields["repairSucceeded"] = False
+            if fields["result"] in ("procedure-complete-guest-reported", "inspect-complete"):
                 fields["result"] = "halted-stop"
             code = 1
         return _write_outcome(op, outcome_shell(**fields), code)
@@ -1140,7 +1243,12 @@ def apply(path, confirm, execute=False, transport=None, now=None, clock=None, sl
             receipt, reason = None, "serial-cursor-failed"
         attribute = None
         guest_ok = False
-        if receipt is not None and reason == "read":
+        mode = loaded["plan"].get("mode")
+        if mode not in ("inspect", "repair"):
+            raise Refused("operation mode is not inspect or repair")
+        if mode == "inspect":
+            guest_ok = bool(receipt) and reason == "read" and inspect_reported(receipt)
+        elif receipt is not None and reason == "read":
             attribute = attribute_state(call, receipt)
             if attribute == "mismatch":
                 reason = "attribute-mismatch"
@@ -1150,7 +1258,7 @@ def apply(path, confirm, execute=False, transport=None, now=None, clock=None, sl
                 reason = "guest-incomplete"
             else:
                 guest_ok = True
-        return seal({"operationId": binding["operationId"], "requests": log, "metadata": "clean",
+        return seal({"operationId": binding["operationId"], "requests": log, "metadata": "clean", "mode": mode,
                      "guestOk": guest_ok, "guestRead": reason, "guestReceipt": receipt if isinstance(receipt, dict) else None,
                      "guestAttribute": attribute, "preserved": preserved,
                      "distinctFromOriginalVerified": False, "serialReceiptTrustedForPin": False})
@@ -1210,27 +1318,51 @@ def cleanup(path, confirm, execute=False, transport=None, now=None, env=None):
     return document
 
 
+def self_check():
+    """Offline check that the inspect payload cannot repair and, in a bundle, that the manifest matches."""
+    guest.inspect_template()
+    if any(token in guest.INSPECT_TEMPLATE for token in ("ssh-keygen", "userdel", "fchmod", "os.chmod", "BEGIN OPENSSH")):
+        raise Refused("inspect payload is not read-only")
+    checked = []
+    sums = HERE / "SHA256SUMS"
+    if sums.is_file():
+        for line in sums.read_text().splitlines():
+            digest, name = line.split("  ", 1)
+            if sha256_bytes((HERE / name).read_bytes()) != digest:
+                raise Refused("bundle manifest does not match " + name)
+            checked.append(name)
+    return {"inspectRepairs": False, "secretsInInspect": False, "manifestFiles": checked}
+
+
 def export_bundle(out):
-    """Copy the runnable operator files and a sha256 manifest. No cloud call and no git checkout required to run them."""
+    """Copy the runnable operator files, the runbook, the offline tests, and a sha256 manifest."""
     out = Path(out)
     out.mkdir(mode=0o700)
     mapping = {
         "yogi_replacement_recover.py": HERE / "yogi_replacement_recover.py",
         "yogi_replacement_recover_guest.py": HERE / "yogi_replacement_recover_guest.py",
+        "test_yogi_replacement_recover.py": HERE / "tests" / "test_yogi_replacement_recover.py",
         "YOGI-REPLACEMENT-RECOVER.md": HERE.parent / "docs" / "YOGI-REPLACEMENT-RECOVER.md",
     }
     readme = (
-        "Run from this directory. No repository checkout is required.\n"
-        "python3 yogi_replacement_recover.py plan --operator NAME --out DIR\n"
-        "Review the operation directory, then preflight and apply only with --execute "
-        "and --confirm-instance 2720796557371812468.\n"
-        "SHA256SUMS lists every file in this directory except itself.\n"
+        "Offline operator bundle. No repository checkout is required.\n"
+        "\n"
+        "Verify this directory:\n"
+        "  python3 yogi_replacement_recover.py self-check\n"
+        "\n"
+        "Live read-only preflight (describes and testIamPermissions only; does not start or change metadata):\n"
+        "  python3 yogi_replacement_recover.py plan --mode repair --operator NAME --out DIR\n"
+        "  python3 yogi_replacement_recover.py preflight --op DIR --confirm-instance 2720796557371812468 --execute\n"
+        "\n"
+        "Without --execute, preflight only rechecks the local plan. Do not run apply from this report.\n"
+        "plan --mode inspect builds a startup script that only inventories. It does not chmod, rotate, or delete keys.\n"
+        "SHA256SUMS lists every file here except itself.\n"
     )
     (out / "README.md").write_text(readme)
     for name, source in mapping.items():
         shutil.copyfile(source, out / name)
-    names = ("README.md", "YOGI-REPLACEMENT-RECOVER.md", "yogi_replacement_recover.py",
-             "yogi_replacement_recover_guest.py")
+    names = ("README.md", "YOGI-REPLACEMENT-RECOVER.md", "test_yogi_replacement_recover.py",
+             "yogi_replacement_recover.py", "yogi_replacement_recover_guest.py")
     sums = "".join(f"{sha256_bytes((out / name).read_bytes())}  {name}\n" for name in names)
     (out / "SHA256SUMS").write_text(sums)
     return {name: sha256_bytes((out / name).read_bytes()) for name in names + ("SHA256SUMS",)}
@@ -1242,6 +1374,8 @@ def main(argv, transport=None, now=None, clock=None, sleep=None, env=None, token
     planned = sub.add_parser("plan")
     planned.add_argument("--operator", required=True)
     planned.add_argument("--out", required=True)
+    planned.add_argument("--mode", choices=("repair", "inspect"), default="repair")
+    sub.add_parser("self-check")
     exported = sub.add_parser("export-bundle")
     exported.add_argument("--out", required=True)
     for name in ("preflight", "apply", "cleanup"):
@@ -1253,8 +1387,10 @@ def main(argv, transport=None, now=None, clock=None, sleep=None, env=None, token
     try:
         if args.command == "export-bundle":
             result, code = {"dryRun": True, "executed": False, "artifacts": export_bundle(args.out)}, 0
+        elif args.command == "self-check":
+            result, code = self_check(), 0
         elif args.command == "plan":
-            document = plan(args.operator, args.out, now=now, token=token, revision=revision, env=env)
+            document = plan(args.operator, args.out, now=now, token=token, revision=revision, env=env, mode=args.mode)
             result, code = {"dryRun": True, "executed": False, "operationId": document["operationId"],
                             "payloadSha256": document["payloadSha256"],
                             "startupScriptSha256": document["startupScriptSha256"],

@@ -117,6 +117,7 @@ class World:
         self.boot_guest = None
         self.requests = []
         self.on_start = None
+        self.iam_missing = {}
 
     def _replacement(self):
         return instance(recover.INSTANCE, recover.ZONE, self.replacement_id, self.replacement_status,
@@ -155,6 +156,9 @@ class World:
             return self._serial(request["start"])
         if kind == "guest-attribute":
             return copy.deepcopy(self.attribute)
+        if kind == "test-iam":
+            missing = self.iam_missing.get(target, ())
+            return {"permissions": [item for item in request["permissions"] if item not in missing]}
         if kind == "start":
             return self._start()
         if kind == "stop":
@@ -424,7 +428,8 @@ class PlanTest(Base):
         other = recover.plan("Mac operator", Path(self.temp.name) / "op2", now=NOW,
                              token=tokens("12" * 16, "34" * 16), revision="b" * 40, env=ENV)
         self.assertNotEqual(other["operationId"], self.plan["operationId"])
-        self.assertNotIn("@@", (self.op / "guest.py").read_text())
+        self.assertNotIn("@@OP@@", (self.op / "guest.py").read_text())
+        self.assertNotIn("@@NONCE@@", (self.op / "guest.py").read_text())
         text = (ROOT_TEXT())
         self.assertNotIn("ssh-keyscan", text)
         self.assertNotIn("gcloud compute ssh", text)
@@ -744,7 +749,7 @@ class ControlTest(Base):
         bundle = Path(self.temp.name) / "bundle"
         artifacts = recover.export_bundle(bundle)
         listed = (bundle / "SHA256SUMS").read_text().splitlines()
-        self.assertEqual(len(listed), 4)
+        self.assertEqual(len(listed), 5)
         for line in listed:
             digest, name = line.split("  ")
             self.assertEqual(digest, artifacts[name])
@@ -754,7 +759,65 @@ class ControlTest(Base):
                                 env=dict(ENV))
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue((op / "SHA256SUMS").is_file())
-        self.assertNotIn("@@", (op / "guest.py").read_text())
+        self.assertNotIn("@@OP@@", (op / "guest.py").read_text())
+        self.assertNotIn("@@NONCE@@", (op / "guest.py").read_text())
+
+    def test_preflight_execute_is_read_only_and_checks_permissions(self):
+        report = self.preflight()
+        self.assertTrue(report["cloudReadOnly"])
+        self.assertFalse(report["mutated"])
+        self.assertEqual(report["result"], "preflight-ok")
+        self.assertFalse(set(self.world.kinds()) & {"start", "stop", "set-metadata"})
+        self.assertIn("test-iam", self.world.kinds())
+        blocked = World()
+        blocked.iam_missing = {"replacement": ["compute.instances.setMetadata"]}
+        refused = recover.preflight(self.op, recover.INSTANCE_ID, True, blocked, now=NOW, env=ENV)
+        self.assertEqual(refused["result"], "preflight-blocked")
+        self.assertIn("missing-permission:compute.instances.setMetadata", refused["problems"])
+        self.assertNotIn("start", blocked.kinds())
+        local = recover.preflight(self.op, recover.INSTANCE_ID, False, blocked, now=NOW, env=ENV)
+        self.assertEqual(local["result"], "dry-run")
+        self.assertFalse(local["cloudReadOnly"])
+
+    def test_inspect_payload_does_not_repair_a_0644_unit(self):
+        op = Path(self.temp.name) / "inspect-op"
+        recover.plan("Mac operator", op, now=NOW, token=tokens("ab" * 16, "cd" * 16), revision="a" * 40,
+                     env=ENV, mode="inspect")
+        script = (op / "guest.py").read_text()
+        for banned in ("ssh-keygen", "userdel", "fchmod", "os.chmod", "BEGIN OPENSSH"):
+            self.assertNotIn(banned, script)
+        root = Path(self.temp.name) / "inspect-root"
+        unit = root / guest.UNIT_PATH.lstrip("/")
+        unit.parent.mkdir(parents=True)
+        unit.write_text("u" * 347)
+        unit.chmod(0o644)
+        ssh = root / "etc/ssh"
+        ssh.mkdir()
+        (ssh / "sshd_config").write_text("KEEP")
+        (ssh / "ssh_host_ed25519_key.pub").write_text(public_line("ssh-ed25519", b"\x00\x00\x00\x20" + bytes(range(32)), "clone") + "\n")
+        auth = root / "root/.ssh"
+        auth.mkdir(parents=True)
+        keys = auth / "authorized_keys"
+        keys.write_text("ssh-ed25519 AAAA someone-else\n")
+        (root / "proc").mkdir()
+        binding = op / "binding.json"
+        identity = Path(self.temp.name) / "identity.json"
+        identity.write_text(json.dumps({"project": recover.PROJECT, "zone": recover.ZONE,
+                                        "instance": recover.INSTANCE, "instanceId": recover.INSTANCE_ID}))
+        before = keys.read_bytes()
+        mode = unit.stat().st_mode
+        result = subprocess.run([sys.executable, str(op / "guest.py"), "--root", str(root), str(binding),
+                                 str(identity), BOOT], capture_output=True, text=True)
+        self.assertEqual(keys.read_bytes(), before)
+        self.assertEqual(unit.stat().st_mode, mode)
+        self.assertEqual((ssh / "sshd_config").read_text(), "KEEP")
+        self.assertIn(guest.PREFIX, result.stdout)
+        receipt = json.loads(result.stdout.strip().split(guest.PREFIX, 1)[1])
+        self.assertEqual(receipt["purpose"], "inspect")
+        self.assertEqual(receipt["unit"]["action"], "not-modified")
+        self.assertEqual(receipt["cleanup"]["linesRemoved"], 0)
+        self.assertGreater(receipt["cleanup"]["unidentifiedAuthorizedKeyLines"], 0)
+        self.assertFalse(guest.success_problems(receipt) == [] or receipt["purpose"] == "repair")
 
     def _fresh(self, mark):
         path = Path(self.temp.name) / ("op" + mark)
@@ -796,6 +859,10 @@ class GuestTest(Base):
                 self.assertEqual(host.chmod_calls, 0)
                 self.assertEqual(host.generate_calls, 0)
                 self.assertNotEqual(receipt["status"], "complete")
+                if name == "mode":
+                    self.assertEqual(receipt["unit"]["problem"], "already-0644")
+                    self.assertEqual(receipt["unit"]["action"], "not-modified")
+                    self.assertEqual(receipt["cleanup"]["linesRemoved"], 0)
         binding = json.loads((self.op / "binding.json").read_text())
         for runner in ({"active": "active"}, {"enabled": "enabled"}, {"process": True}):
             host = DictHost(binding, self.op / "guest.py")

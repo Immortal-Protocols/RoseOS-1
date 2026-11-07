@@ -55,8 +55,8 @@ BOOT = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}
 SAFE_NAME = re.compile(r"[A-Za-z0-9._-]{1,64}")
 EXPECTED_IDENTITY = {"project": PROJECT, "zone": ZONE, "instance": INSTANCE, "instanceId": INSTANCE_ID}
 TOP_KEYS = {
-    "schema", "operationId", "nonce", "payloadSha256", "instanceId", "bootId", "reexecution", "previousBootId",
-    "originalVmAccessed", "snapshotsUsed", "status", "unit", "runner", "hostKeys", "cleanup",
+    "schema", "purpose", "operationId", "nonce", "payloadSha256", "instanceId", "bootId", "reexecution",
+    "previousBootId", "originalVmAccessed", "snapshotsUsed", "status", "unit", "runner", "hostKeys", "cleanup",
 }
 UNIT_KEYS = {
     "action", "problem", "beforeMode", "beforeSize", "beforeUid", "beforeGid", "afterMode", "afterSize", "afterUid",
@@ -65,7 +65,7 @@ UNIT_KEYS = {
 UNIT_PROBLEMS = {
     "none", "missing", "symlink", "kind", "mode", "owner", "size", "nlink", "runner-active", "runner-enabled",
     "runner-process", "chmod", "identity", "unknown-host-key", "baseline", "rotate-same", "rotate-partial",
-    "reexecution-partial", "cleanup",
+    "reexecution-partial", "cleanup", "already-0644",
 }
 ACCOUNT_STATES = {"absent", "removed", "preserved-mismatch", "remove-failed", "removed-home-leftover"}
 FORBIDDEN = ("BEGIN ", "PRIVATE", "OPENSSH", "-----")
@@ -122,6 +122,8 @@ def validate_shape(receipt, binding):
     problems = binding_problems(binding)
     if not isinstance(receipt, dict) or set(receipt) != TOP_KEYS:
         return ["receipt-keys"]
+    if receipt.get("purpose") not in ("repair", "inspect"):
+        return ["purpose"]
     if receipt["schema"] != RECEIPT_SCHEMA or receipt["operationId"] != binding["operationId"]:
         return ["receipt-binding"]
     if receipt["nonce"] != binding["nonce"] or receipt["payloadSha256"] != binding["payloadSha256"]:
@@ -183,7 +185,8 @@ def success_problems(receipt):
     """Empty only for a guest-reported complete repair. This is not a host-key pin."""
     unit, runner, keys, cleanup = receipt["unit"], receipt["runner"], receipt["hostKeys"], receipt["cleanup"]
     problems = []
-    if receipt["status"] != "complete" or unit["action"] != "chmod-0644" or unit["problem"] != "none":
+    if receipt.get("purpose") != "repair" or receipt["status"] != "complete" or unit["action"] != "chmod-0644" \
+            or unit["problem"] != "none":
         problems.append("status")
     if (unit["beforeMode"], unit["afterMode"]) != ("0664", "0644"):
         problems.append("mode")
@@ -245,10 +248,12 @@ def unit_problem(record):
         return "nlink"
     if record.get("uid") != 0 or record.get("gid") != 0:
         return "owner"
-    if record.get("mode") != UNIT_BEFORE:
-        return "mode"
     if record.get("size") != UNIT_SIZE:
         return "size"
+    if record.get("mode") == UNIT_AFTER:
+        return "already-0644"
+    if record.get("mode") != UNIT_BEFORE:
+        return "mode"
     return None
 
 
@@ -330,7 +335,7 @@ def _public_runner(runner):
 
 def _skeleton(binding, boot, status):
     return {
-        "schema": RECEIPT_SCHEMA, "operationId": binding["operationId"], "nonce": binding["nonce"],
+        "schema": RECEIPT_SCHEMA, "purpose": "repair", "operationId": binding["operationId"], "nonce": binding["nonce"],
         "payloadSha256": binding["payloadSha256"], "instanceId": INSTANCE_ID, "bootId": boot,
         "reexecution": False, "previousBootId": "none", "originalVmAccessed": False, "snapshotsUsed": False,
         "status": status,
@@ -441,6 +446,51 @@ def _boot(io):
     return boot
 
 
+def _observe_keys(io):
+    """Public fingerprints only. Does not generate, rename, or delete host keys."""
+    unknown = 0
+    for name in io.ssh_names():
+        if name.startswith("ssh_host_") and name not in INVENTORY and ".roseos-prev-" not in name \
+                and ".roseos-new" not in name:
+            unknown += 1
+    baseline = {}
+    for alg in ALGORITHMS:
+        try:
+            key_type, fingerprint = parse_public(io.ssh_public(KEY_NAMES[alg] + ".pub"))
+        except (GuestRefused, OSError):
+            continue
+        if key_type == PUBLIC_TYPES[alg] and FP.fullmatch(fingerprint):
+            baseline[alg] = fingerprint
+    return baseline, unknown
+
+
+def _observe_access(io, operation_id):
+    """Count authorized_keys lines and the temporary account. Does not rewrite either."""
+    unidentified = 0
+    failed = False
+    for path in AUTH_PATHS:
+        try:
+            lines = io.auth_lines(path)
+        except (GuestRefused, OSError):
+            failed = True
+            continue
+        if not lines:
+            continue
+        for line in lines:
+            if line_disposition(line, operation_id) == "unidentified":
+                unidentified += 1
+    account_state = "absent"
+    try:
+        entry = io.account()
+        if entry is not None:
+            account_state = "preserved-mismatch"
+    except (GuestRefused, OSError):
+        failed = True
+        account_state = "preserved-mismatch"
+    return {"linesRemoved": 0, "unidentifiedAuthorizedKeyLines": unidentified, "temporaryAccount": account_state,
+            "tempFilesRemoved": 0, "accessCleanup": "failed" if failed else "ok"}
+
+
 def run(io):
     """One guest pass. A marker other than a finished complete receipt never continues a rotation."""
     try:
@@ -479,6 +529,16 @@ def run(io):
         io.marker_store({"phase": "refused", "operationId": OPERATION_ID, "nonce": NONCE, "receipt": receipt})
         return _emit(io, receipt, binding)
     problem = unit_problem(before) or runner_problem(runner)
+    if problem == "already-0644" and runner_problem(runner) is None:
+        baseline, unknown = _observe_keys(io)
+        receipt = _skeleton(binding, boot, "refused")
+        _fill_unit(receipt, before, None, "already-0644", "not-modified")
+        receipt["runner"] = _public_runner(runner)
+        receipt["hostKeys"]["baseline"] = baseline
+        receipt["hostKeys"]["unknownHostKeyCount"] = unknown
+        receipt["cleanup"] = _observe_access(io, OPERATION_ID)
+        io.marker_store({"phase": "refused", "operationId": OPERATION_ID, "nonce": NONCE, "receipt": receipt})
+        return _emit(io, receipt, binding)
     if problem:
         receipt = _skeleton(binding, boot, "refused")
         _fill_unit(receipt, before if isinstance(before, dict) else None, None, problem, "not-modified")
@@ -1060,6 +1120,232 @@ class LinuxHost:
             os.write(fd, (line + "\n").encode())
         finally:
             os.close(fd)
+
+
+INSPECT_TEMPLATE = r'''#!/usr/bin/env python3
+"""Read-only Yogi replacement inventory. It does not change mode, keys, accounts, or authorized_keys."""
+import base64
+import errno
+import hashlib
+import json
+import os
+import stat
+import sys
+import urllib.request
+
+OPERATION_ID = "@@INSPECT_OP@@"
+NONCE = "@@INSPECT_NONCE@@"
+PREFIX = "ROSEOS-YOGI-RECOVER-RECEIPT "
+PROJECT = "protocols-465723"
+ZONE = "us-west2-b"
+INSTANCE = "roseos-yogi-builder-20261105-b"
+INSTANCE_ID = "2720796557371812468"
+UNIT_PATH = "/etc/systemd/system/actions.runner.Immortal-Protocols-RoseOS-1.roseos-yogi-builder-20261105-b.service"
+UNIT_NAME = "actions.runner.Immortal-Protocols-RoseOS-1.roseos-yogi-builder-20261105-b.service"
+UNIT_SIZE = 347
+PUBLIC = {"ed25519": "ssh-ed25519", "ecdsa": "ecdsa-sha2-nistp256", "rsa": "ssh-rsa"}
+NAMES = {"ed25519": "ssh_host_ed25519_key.pub", "ecdsa": "ssh_host_ecdsa_key.pub", "rsa": "ssh_host_rsa_key.pub"}
+INVENTORY = (
+    "ssh_host_ed25519_key", "ssh_host_ed25519_key.pub", "ssh_host_ecdsa_key", "ssh_host_ecdsa_key.pub",
+    "ssh_host_rsa_key", "ssh_host_rsa_key.pub", "ssh_host_dsa_key", "ssh_host_dsa_key.pub",
+)
+AUTH = ("/root/.ssh/authorized_keys", "/home/pixelbuild/.ssh/authorized_keys")
+ACCOUNT = "roseos-yogi-recover"
+
+
+def under(root, path):
+    if not path.startswith("/") or ".." in path.split("/"):
+        raise OSError("path")
+    return path if root == "/" else root.rstrip("/") + path
+
+
+def read_file(root, path, limit):
+    fd = os.open(under(root, path), os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_size > limit:
+            raise OSError("file")
+        return os.read(fd, info.st_size), info
+    finally:
+        os.close(fd)
+
+
+def meta_text(path):
+    request = urllib.request.Request("http://metadata.google.internal/computeMetadata/v1/" + path,
+                                     headers={"Metadata-Flavor": "Google"})
+    with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(request, timeout=5) as response:
+        return response.read(8192).decode()
+
+
+def fingerprint(line):
+    parts = line.strip().split()
+    if len(parts) < 2 or parts[0] not in PUBLIC.values():
+        return None
+    try:
+        blob = base64.b64decode(parts[1], validate=True)
+        length = int.from_bytes(blob[:4], "big")
+        embedded = blob[4:4 + length].decode()
+    except (ValueError, UnicodeError, IndexError):
+        return None
+    if embedded != parts[0] or not 8 <= len(blob) <= 4096:
+        return None
+    value = "SHA256:" + base64.b64encode(hashlib.sha256(blob).digest()).decode().rstrip("=")
+    return parts[0], value
+
+
+def emit(receipt):
+    line = PREFIX + json.dumps(receipt, sort_keys=True, separators=(",", ":"))
+    sys.stdout.write(line + "\n")
+    sys.stdout.flush()
+    try:
+        fd = os.open("/dev/ttyS0", os.O_WRONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    except OSError:
+        return
+    try:
+        os.write(fd, (line + "\n").encode())
+    finally:
+        os.close(fd)
+
+
+def main(argv):
+    root = "/"
+    binding = identity = boot = None
+    args = argv[1:]
+    if args[:1] == ["--root"]:
+        root = args[1]
+        binding = json.loads(open(args[2], encoding="utf-8").read())
+        identity = json.loads(open(args[3], encoding="utf-8").read())
+        boot = args[4]
+    elif args == ["--guest"]:
+        binding = json.loads(meta_text("instance/attributes/roseos-yogi-recover-binding"))
+        identity = {"project": meta_text("project/project-id").strip(),
+                    "zone": meta_text("instance/zone").strip().rsplit("/", 1)[-1],
+                    "instance": meta_text("instance/name").strip(),
+                    "instanceId": meta_text("instance/id").strip()}
+        boot = open("/proc/sys/kernel/random/boot_id", encoding="utf-8").read().strip()
+    else:
+        return 2
+    own = hashlib.sha256(open(__file__, "rb").read()).hexdigest()
+    if binding.get("operationId") != OPERATION_ID or binding.get("nonce") != NONCE or binding.get("payloadSha256") != own:
+        return 1
+    expected = {"project": PROJECT, "zone": ZONE, "instance": INSTANCE, "instanceId": INSTANCE_ID}
+    problem = "none"
+    before = {"kind": "missing", "mode": 0, "uid": -1, "gid": -1, "size": -1, "nlink": -1}
+    try:
+        fd = os.open(under(root, UNIT_PATH), os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        info = os.fstat(fd)
+        os.close(fd)
+        kind = "regular" if stat.S_ISREG(info.st_mode) else "other"
+        before = {"kind": kind, "mode": stat.S_IMODE(info.st_mode), "uid": info.st_uid, "gid": info.st_gid,
+                  "size": info.st_size, "nlink": info.st_nlink}
+    except OSError as error:
+        problem = "symlink" if error.errno == errno.ELOOP else "missing"
+    if problem == "none":
+        if before["kind"] != "regular":
+            problem = "kind"
+        elif before["nlink"] != 1:
+            problem = "nlink"
+        elif before["uid"] != 0 or before["gid"] != 0:
+            problem = "owner"
+        elif before["size"] != UNIT_SIZE:
+            problem = "size"
+        elif before["mode"] not in (0o664, 0o644):
+            problem = "mode"
+    runner = {"active": "unchecked", "enabled": "unchecked", "process": False}
+    if identity != expected:
+        problem = "identity"
+    else:
+        try:
+            def verb(name):
+                import subprocess
+                result = subprocess.run(["/bin/systemctl", name, UNIT_NAME], capture_output=True, text=True, timeout=20)
+                text = (result.stdout or result.stderr).strip()
+                return text.splitlines()[0] if text else "unknown"
+            process = False
+            for pid in os.listdir("/proc" if root == "/" else under(root, "/proc")):
+                if not str(pid).isdigit():
+                    continue
+                try:
+                    raw = open(("/proc/" if root == "/" else under(root, "/proc/")) + str(pid) + "/cmdline", "rb").read(4096)
+                except OSError:
+                    continue
+                text = raw.replace(b"\x00", b" ").decode("utf-8", "replace")
+                if "Runner.Listener" in text or "Runner.Worker" in text:
+                    process = True
+            active = verb("is-active") if root == "/" else "inactive"
+            enabled = verb("is-enabled") if root == "/" else "disabled"
+            if active not in ("inactive", "active", "failed", "unchecked", "activating"):
+                active = "failed"
+            if enabled not in ("disabled", "enabled", "static", "masked", "indirect", "unchecked"):
+                enabled = "enabled"
+            runner = {"active": active, "enabled": enabled, "process": process}
+        except OSError:
+            runner = {"active": "unchecked", "enabled": "unchecked", "process": False}
+    baseline = {}
+    unknown = 0
+    try:
+        names = os.listdir(under(root, "/etc/ssh"))
+    except OSError:
+        names = []
+    for name in names:
+        if name.startswith("ssh_host_") and name not in INVENTORY and ".roseos-prev-" not in name and ".roseos-new" not in name:
+            unknown += 1
+    for alg, name in NAMES.items():
+        try:
+            data, _info = read_file(root, "/etc/ssh/" + name, 4096)
+            parsed = fingerprint(data.decode())
+        except (OSError, UnicodeError):
+            continue
+        if parsed and parsed[0] == PUBLIC[alg]:
+            baseline[alg] = parsed[1]
+    unidentified = 0
+    for path in AUTH:
+        try:
+            data, _info = read_file(root, path, 1 << 20)
+        except OSError:
+            continue
+        for line in data.decode(errors="replace").splitlines():
+            parts = line.split()
+            if line and not line.startswith("#") and not (len(parts) == 3 and parts[2] == "roseos-yogi-recover-" + OPERATION_ID):
+                unidentified += 1
+    account = "absent"
+    try:
+        data, _info = read_file(root, "/etc/passwd", 1 << 20)
+        for line in data.decode(errors="replace").splitlines():
+            if line.startswith(ACCOUNT + ":"):
+                account = "preserved-mismatch"
+    except OSError:
+        pass
+    mode = f"{before['mode'] & 0o777:04o}" if problem != "missing" else "unknown"
+    receipt = {
+        "schema": "roseos.yogi-replacement-recover-receipt.v1", "purpose": "inspect",
+        "operationId": OPERATION_ID, "nonce": NONCE, "payloadSha256": own, "instanceId": INSTANCE_ID,
+        "bootId": boot, "reexecution": False, "previousBootId": "none", "originalVmAccessed": False,
+        "snapshotsUsed": False, "status": "complete" if problem == "none" else "refused",
+        "unit": {"action": "not-modified", "problem": problem, "beforeMode": mode, "beforeSize": before["size"],
+                 "beforeUid": before["uid"], "beforeGid": before["gid"], "afterMode": mode,
+                 "afterSize": before["size"], "afterUid": before["uid"], "afterGid": before["gid"]},
+        "runner": runner,
+        "hostKeys": {"baseline": baseline, "rotated": {}, "distinctFromClonedBaseline": False,
+                     "unknownHostKeyCount": unknown, "rolledBack": False},
+        "cleanup": {"linesRemoved": 0, "unidentifiedAuthorizedKeyLines": unidentified,
+                    "temporaryAccount": account, "tempFilesRemoved": 0, "accessCleanup": "ok"},
+    }
+    emit(receipt)
+    return 0 if problem == "none" else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))
+'''
+
+
+def inspect_template():
+    if any(token in INSPECT_TEMPLATE for token in ("ssh-keygen", "userdel", "fchmod", "os.chmod", "BEGIN OPENSSH")):
+        raise GuestRefused("inspect template is not read-only")
+    if INSPECT_TEMPLATE.count("@@INSPECT_OP@@") != 1 or INSPECT_TEMPLATE.count("@@INSPECT_NONCE@@") != 1:
+        raise GuestRefused("inspect template placeholders are not unique")
+    return INSPECT_TEMPLATE
 
 
 def main(argv):
