@@ -618,14 +618,24 @@ class EnrollmentTest(unittest.TestCase):
 
     def test_source_dirs_are_runner_writable_under_a_root_owned_parent(self):
         import os
+        import shlex
         import subprocess
         script = ROOT/'scripts/mustang-guest-bootstrap.sh'
+        helper = ROOT/'scripts/mustang-source-dirs.sh'
         user = subprocess.check_output(['id', '-un'], text=True).strip()
+        text = script.read_text()
+        self.assertNotIn('--prepare-source-dirs', text)
+        self.assertLess(text.index("refuse 'disk mount differs'"), text.index('\nprepare_source_dirs\n'))
 
         def run(home):
-            return subprocess.run(['bash', str(script), '--prepare-source-dirs'],
-                                  env=dict(os.environ, MUSTANG_BOOTSTRAP_HOME=str(home), MUSTANG_BOOTSTRAP_USER=user),
-                                  capture_output=True, text=True)
+            command = '\n'.join([
+                'set -euo pipefail',
+                'source '+shlex.quote(str(helper)),
+                'home='+shlex.quote(str(home)),
+                'user='+shlex.quote(user),
+                'prepare_source_dirs',
+            ])
+            return subprocess.run(['bash', '-c', command], capture_output=True, text=True)
 
         with tempfile.TemporaryDirectory() as temporary:
             home = Path(temporary)/'roseos'
