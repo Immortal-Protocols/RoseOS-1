@@ -1,4 +1,6 @@
 """Opt-in possess install. No GCP, no guest boot, no live SSH to Yogi."""
+import base64
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -27,7 +29,26 @@ CONFIG = 'Port 22\n# AuthorizedKeysFile is the default\n'
 NOW = 1760000000
 UNIT = yogi_possession.POSSESSION_UNIT
 PROBE = yogi_possession.PROBE
-HUNG = 'import subprocess, time\nsubprocess.Popen(["sleep", "30"])\ntime.sleep(30)\n'
+def hung_probe(marker):
+    return (
+        'import subprocess, time\n'
+        f'subprocess.Popen(["python3", "-c", "import time; time.sleep(30)", "{marker}"])\n'
+        'time.sleep(30)\n'
+    )
+
+
+def marker_pids(marker):
+    found = []
+    for name in os.listdir('/proc'):
+        if not name.isdigit():
+            continue
+        try:
+            command = Path('/proc', name, 'cmdline').read_bytes().decode('utf-8', 'replace')
+        except OSError:
+            continue
+        if marker in command:
+            found.append(int(name))
+    return found
 
 
 def passwd():
@@ -243,15 +264,23 @@ class PossessInstallTest(unittest.TestCase):
         self.assertNotIn(BLOB, self.auth.read_text())
         self.assertFalse(revoked['guestAuthenticated'])
         self.assertFalse(revoked['clean'])
+        early = fresh_outcome(INSPECT_OP, INSPECT_NONCE, 'roseos-yogi-possess-' + OP, BLOB)
+        with self.assertRaises(install.Refused) as caught:
+            install.accept_inspect(self.out, early)
+        self.assertEqual(caught.exception.code, 'inspect-not-planned')
+        self.assertEqual(install._load(self.out)['phase'], 'revoked')
+        planned = install.plan_inspect(self.out, INSPECT_OP, INSPECT_NONCE)
+        self.assertEqual(planned['phase'], 'inspect-planned')
+        self.assertEqual(install._load(self.out)['inspectPlan']['nonce'], INSPECT_NONCE)
         saved = json.loads(FIXTURE.read_text())
         with self.assertRaises(install.Refused) as caught:
             install.accept_inspect(self.out, saved)
-        self.assertEqual(caught.exception.code, 'inspect-not-clean')
+        self.assertEqual(caught.exception.code, 'inspect-binding')
         wrong = fresh_outcome(INSPECT_OP, INSPECT_NONCE, 'roseos-yogi-possess-' + OP, 'C' * 68)
-        with self.assertRaises(install.Refused):
+        with self.assertRaises(install.Refused) as caught:
             install.accept_inspect(self.out, wrong)
-        done = install.accept_inspect(self.out, fresh_outcome(INSPECT_OP, INSPECT_NONCE,
-                                                              'roseos-yogi-possess-' + OP, BLOB))
+        self.assertEqual(caught.exception.code, 'inspect-not-clean')
+        done = install.accept_inspect(self.out, early)
         self.assertEqual(done['state'], 'revoked')
         self.assertTrue(done['clean'])
         self.assertFalse(done['guestAuthenticated'])
@@ -301,12 +330,13 @@ class PossessInstallTest(unittest.TestCase):
         self.assertIn('ROOT KEY', (self.root / 'root' / '.ssh' / 'authorized_keys').read_text())
 
     def test_watchdog_kills_a_hung_child_without_the_client(self):
-        command = guest.forced_command(HUNG, UNIT, 1)
+        marker = 'yogi-hung-watch-' + OP
+        command = guest.forced_command(hung_probe(marker), UNIT, 1)
         started = time.monotonic()
         completed = subprocess.run(command, shell=True, capture_output=True, text=True, timeout=8)
         self.assertLess(time.monotonic() - started, 6)
         self.assertEqual(completed.returncode, guest.WATCHDOG_STATUS)
-        self.assertFalse(self._sleep30())
+        self.assertEqual(marker_pids(marker), [])
 
     def test_plan_and_execute_cli_do_not_touch_the_guest(self):
         completed = subprocess.run(
@@ -370,6 +400,7 @@ class PossessInstallTest(unittest.TestCase):
         config = self.root / 'sshd_config'
         config.write_text(
             f'HostKey {host}\nInclude {drop}/*.conf\nPubkeyAuthentication yes\n'
+            'PasswordAuthentication no\nKbdInteractiveAuthentication no\n'
             'Match User nobody\nAuthorizedKeysFile /tmp/other\nAuthorizedKeysCommand /bin/false\n')
         raw = guest.sshd_config_decision(config.read_text())
         self.assertEqual(raw['code'], 'sshd-config-needs-effective')
@@ -382,6 +413,7 @@ class PossessInstallTest(unittest.TestCase):
         matched = self.root / 'matched.conf'
         matched.write_text(
             f'HostKey {host}\nInclude {drop}/*.conf\nPubkeyAuthentication yes\n'
+            'PasswordAuthentication no\nKbdInteractiveAuthentication no\n'
             'Match User pixelbuild\nAuthorizedKeysCommand /bin/false\n')
         matched_effective = guest.sshd_effective_text('/usr/sbin/sshd', matched)
         self.assertEqual(guest.decision_from_effective(matched_effective)['code'], 'authorized-keys-command')
@@ -458,16 +490,22 @@ class PossessInstallTest(unittest.TestCase):
         self.assertEqual(leftovers, [])
 
     def test_parent_death_kills_the_probe_child(self):
-        command = guest.forced_command(HUNG, UNIT, 30)
+        marker = 'yogi-hung-parent-' + OP
+        command = guest.forced_command(hung_probe(marker), UNIT, 30)
         shell = subprocess.Popen(command, shell=True, start_new_session=True)
         deadline = time.monotonic() + 3
-        while time.monotonic() < deadline and not self._sleep30():
+        pids = []
+        while time.monotonic() < deadline and not pids:
+            pids = marker_pids(marker)
             time.sleep(0.05)
-        self.assertTrue(self._sleep30())
+        self.assertTrue(pids)
+        group = os.getpgid(pids[0])
         os.kill(shell.pid, 9)
         shell.wait(timeout=2)
         time.sleep(0.8)
-        self.assertFalse(self._sleep30())
+        self.assertEqual(marker_pids(marker), [])
+        with self.assertRaises(ProcessLookupError):
+            os.killpg(group, 0)
 
     def test_setsid_probe_is_refused(self):
         with self.assertRaises(guest.GuestRefused) as caught:
@@ -477,11 +515,15 @@ class PossessInstallTest(unittest.TestCase):
     def test_replayed_nonce_and_unidentified_marker_are_refused(self):
         install.begin(self.out, OP, BLOB)
         install.resume_revoke(self.out, self.root, passwd())
+        with self.assertRaises(install.Refused) as caught:
+            install.plan_inspect(self.out, INSPECT_OP, '38545d88138e8b49aeef032f660a8acf')
+        self.assertEqual(caught.exception.code, 'inspect-replay')
+        install.plan_inspect(self.out, INSPECT_OP, INSPECT_NONCE)
         replay = fresh_outcome(INSPECT_OP, '38545d88138e8b49aeef032f660a8acf',
                                'roseos-yogi-possess-' + OP, BLOB)
         with self.assertRaises(install.Refused) as caught:
             install.accept_inspect(self.out, replay)
-        self.assertEqual(caught.exception.code, 'inspect-replay')
+        self.assertEqual(caught.exception.code, 'inspect-binding')
         dirty = fresh_outcome(INSPECT_OP, INSPECT_NONCE, 'roseos-yogi-possess-' + OP, BLOB,
                               unidentifiedAuthorizedKeyLines=1)
         with self.assertRaises(install.Refused) as caught:
@@ -491,6 +533,70 @@ class PossessInstallTest(unittest.TestCase):
         with self.assertRaises(install.Refused) as caught:
             install.accept_inspect(self.out, flat)
         self.assertEqual(caught.exception.code, 'inspect-shape')
+
+    def test_inspect_phase_survives_restart_and_rejects_another_journal(self):
+        install.begin(self.out, OP, BLOB)
+        before = fresh_outcome(INSPECT_OP, INSPECT_NONCE, 'roseos-yogi-possess-' + OP, BLOB)
+        with self.assertRaises(install.Refused) as caught:
+            install.accept_inspect(self.out, before)
+        self.assertEqual(caught.exception.code, 'inspect-not-planned')
+        install.resume_revoke(self.out, self.root, passwd())
+        self.assertEqual(install._load(self.out)['phase'], 'revoked')
+        with self.assertRaises(install.Refused) as caught:
+            install.accept_inspect(self.out, before)
+        self.assertEqual(caught.exception.code, 'inspect-not-planned')
+        install.plan_inspect(self.out, INSPECT_OP, INSPECT_NONCE)
+        self.assertEqual(install._load(self.out)['phase'], 'inspect-planned')
+        later_boot = fresh_outcome('ff' * 16, 'ee' * 16, 'roseos-yogi-possess-' + OP, BLOB)
+        later_boot['guestReceipt']['bootId'] = 'ffffffff-ffff-4fff-8fff-ffffffffffff'
+        with self.assertRaises(install.Refused) as caught:
+            install.accept_inspect(self.out, later_boot)
+        self.assertEqual(caught.exception.code, 'inspect-binding')
+        early_boot = fresh_outcome(INSPECT_OP, INSPECT_NONCE, 'roseos-yogi-possess-' + OP, BLOB)
+        early_boot['guestReceipt']['bootId'] = '00000000-0000-4000-8000-000000000001'
+        done = install.accept_inspect(self.out, early_boot)
+        self.assertEqual(done['phase'], 'clean')
+        other = self.out.parent / 'other-journal'
+        other.mkdir()
+        install.begin(other, 'ab' * 15 + 'cd', BLOB)
+        install.resume_revoke(other, self.root, passwd())
+        install.plan_inspect(other, '12' * 15 + '34', '56' * 16)
+        with self.assertRaises(install.Refused) as caught:
+            install.accept_inspect(other, early_boot)
+        self.assertEqual(caught.exception.code, 'inspect-binding')
+
+    def test_google_ssh_comment_stays_byte_for_byte(self):
+        payload = '{"comment":"other","expireOn":"2026-11-07T12:00:00Z","userName":"pixelbuild"}'
+        foreign = 'ssh-ed25519 ' + ('A' * 40) + ' google-ssh ' + payload + ' \n'
+        options = ('restrict,command="echo hello there" ssh-ed25519 ' + ('C' * 40)
+                   + ' google-ssh {"userName":"pixelbuild"}\n')
+        original = (foreign + options).encode()
+        self.auth.write_bytes(original)
+        receipt = guest.install(self.root, blob=BLOB, operation_id=OP, probe=PROBE, unit=UNIT, now_unix=NOW,
+                                synchronized=True, sshd_version=VERSION, sshd_config=CONFIG, passwd_text=passwd())
+        written = self.auth.read_bytes()
+        self.assertTrue(written.startswith(original))
+        guest.revoke(self.root, blob=BLOB, comment=receipt['comment'], passwd_text=passwd(),
+                     exact_line=receipt['line'])
+        self.assertEqual(self.auth.read_bytes(), original)
+
+    def test_nonzero_sshd_t_and_force_command_refuse(self):
+        if not Path('/usr/sbin/sshd').is_file():
+            raise AssertionError('sshd fixture did not run: /usr/sbin/sshd is missing')
+        plain = self.root / 'plain.conf'
+        plain.write_text('Port 22\nPubkeyAuthentication yes\n')
+        with self.assertRaises(guest.GuestRefused) as caught:
+            guest.sshd_effective_text('/usr/sbin/sshd', plain)
+        self.assertEqual(caught.exception.code, 'sshd-config-unproven')
+        self.assertEqual(guest.sshd_config_decision(plain.read_text(), effective='')['code'], 'sshd-config-unproven')
+        host = self.root / 'host-force'
+        subprocess.run(['ssh-keygen', '-q', '-t', 'ed25519', '-f', str(host), '-N', ''], check=True)
+        forced = self.root / 'forced.conf'
+        forced.write_text(
+            f'HostKey {host}\nPubkeyAuthentication yes\nPasswordAuthentication no\n'
+            'KbdInteractiveAuthentication no\nForceCommand /bin/false\n')
+        effective = guest.sshd_effective_text('/usr/sbin/sshd', forced)
+        self.assertEqual(guest.decision_from_effective(effective)['code'], 'force-command')
 
     def _sleep30(self):
         return bool(subprocess.run(['pgrep', '-f', 'sleep 30'], capture_output=True).stdout.strip())
@@ -671,23 +777,26 @@ class PossessSshdTest(unittest.TestCase):
                     pass
 
     def test_disconnect_and_hung_probe_do_not_leave_a_child(self):
-        command = guest.forced_command(HUNG, UNIT, 30).replace('"', '\\"')
+        marker = 'yogi-hung-ssh-' + str(self.port)
+        command = guest.forced_command(hung_probe(marker), UNIT, 30).replace('"', '\\"')
         future = guest.format_expiry(int(time.time()) + 600)
         self._write(f'restrict,command="{command}",expiry-time="{future}"')
         proc = subprocess.Popen(self._ssh_argv(self.base / 'known'), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        time.sleep(0.6)
-        self.assertTrue(self._sleep30_count())
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline and not marker_pids(marker):
+            time.sleep(0.05)
+        self.assertTrue(marker_pids(marker))
         proc.kill()
         proc.wait(timeout=3)
         proc.stdout.close()
         proc.stderr.close()
         time.sleep(1.2)
-        self.assertFalse(self._sleep30_count())
-        short = guest.forced_command(HUNG, UNIT, 1).replace('"', '\\"')
+        self.assertEqual(marker_pids(marker), [])
+        short = guest.forced_command(hung_probe(marker + '-short'), UNIT, 1).replace('"', '\\"')
         self._write(f'restrict,command="{short}",expiry-time="{future}"')
         completed = self._ssh(self.base / 'known')
         self.assertNotEqual(completed.returncode, 0)
-        self.assertFalse(self._sleep30_count())
+        self.assertEqual(marker_pids(marker + '-short'), [])
 
     def _ssh_argv(self, known):
         return [
@@ -702,34 +811,90 @@ class PossessSshdTest(unittest.TestCase):
         return bool(subprocess.run(['pgrep', '-f', 'sleep 30'], capture_output=True).stdout.strip())
 
 
-def ensure_openssh_92():
-    binary = Path('/tmp/openssh-build/openssh-9.2p1/sshd')
-    if binary.is_file():
-        return binary
+# Published in https://www.openssh.com/txt/release-9.2 as base64, not taken from a local cache.
+OPENSSH_92_SHA256_B64 = 'P2bb8WVftF9Q4cVtpiqwEhjCKIB7ITONY068351xz0Y='
+OPENSSH_92_SHA256 = base64.b64decode(OPENSSH_92_SHA256_B64)
+OPENSSH_92_RELEASE_LINE = 'SHA256 (openssh-9.2p1.tar.gz) = ' + OPENSSH_92_SHA256_B64
+OPENSSH_92_TARBALL = 'https://cdn.openbsd.org/pub/OpenBSD/OpenSSH/portable/openssh-9.2p1.tar.gz'
+OPENSSH_92_NOTE = 'https://www.openssh.com/txt/release-9.2'
+PLANTED_SSHD = Path('/tmp/openssh-build/openssh-9.2p1/sshd')
+
+
+def verify_openssh_92_bytes(tarball, release_note):
+    if not isinstance(release_note, str) or OPENSSH_92_RELEASE_LINE not in release_note:
+        raise AssertionError('OpenSSH 9.2 release note does not contain the pinned digest')
+    digest = hashlib.sha256(tarball).digest()
+    if digest != OPENSSH_92_SHA256:
+        raise AssertionError('OpenSSH 9.2 tarball does not match the pinned digest')
+
+
+def safe_extract_tarball(tarball_path, dest):
     import tarfile
+    dest = Path(dest).resolve()
+    with tarfile.open(tarball_path) as archive:
+        for member in archive.getmembers():
+            parts = Path(member.name).parts
+            if (member.issym() or member.islnk() or member.isdev() or member.isfifo()
+                    or not parts or '..' in parts or member.name.startswith('/')):
+                raise AssertionError(f'refusing tar member {member.name}')
+        archive.extractall(dest, filter='data')
+
+
+def ensure_openssh_92():
+    """Build portable OpenSSH 9.2p1 in a private directory. A planted /tmp path is never executed."""
     import urllib.request
-    root = Path('/tmp/openssh-build')
-    root.mkdir(exist_ok=True)
-    tarball = root / 'openssh-9.2p1.tar.gz'
-    if not tarball.is_file():
-        try:
-            urllib.request.urlretrieve(
-                'https://cdn.openbsd.org/pub/OpenBSD/OpenSSH/portable/openssh-9.2p1.tar.gz', tarball)
-        except OSError as error:
-            raise AssertionError(f'OpenSSH 9.2 source was not fetched: {error}') from None
-    source = root / 'openssh-9.2p1'
+    if not OPENSSH_92_SHA256:
+        raise AssertionError('OpenSSH 9.2 pin is empty')
+    work = Path(tempfile.mkdtemp(prefix='openssh-9.2-'))
+    note_path = work / 'release-9.2.txt'
+    tarball_path = work / 'openssh-9.2p1.tar.gz'
+    try:
+        urllib.request.urlretrieve(OPENSSH_92_NOTE, note_path)
+        urllib.request.urlretrieve(OPENSSH_92_TARBALL, tarball_path)
+    except OSError as error:
+        raise AssertionError(f'OpenSSH 9.2 source was not fetched: {error}') from None
+    verify_openssh_92_bytes(tarball_path.read_bytes(), note_path.read_text(errors='replace'))
+    safe_extract_tarball(tarball_path, work)
+    source = work / 'openssh-9.2p1'
     if not source.is_dir():
-        with tarfile.open(tarball) as archive:
-            archive.extractall(root)
+        raise AssertionError('OpenSSH 9.2 source directory was not extracted')
     configured = subprocess.run(
-        ['./configure', '--prefix=/tmp/openssh-9.2', '--without-zlib-version-check'],
+        ['./configure', '--prefix', str(work / 'prefix'), '--without-zlib-version-check'],
         cwd=source, capture_output=True, text=True, check=False)
     if configured.returncode != 0:
         raise AssertionError('OpenSSH 9.2 configure failed:\n' + configured.stderr[-500:])
     built = subprocess.run(['make', '-j', '2', 'sshd', 'ssh'], cwd=source, capture_output=True, text=True, check=False)
+    binary = source / 'sshd'
     if built.returncode != 0 or not binary.is_file():
         raise AssertionError('OpenSSH 9.2 build failed:\n' + built.stderr[-500:])
+    if binary.resolve() == PLANTED_SSHD.resolve():
+        raise AssertionError('OpenSSH 9.2 build resolved to the planted path')
     return binary
+
+
+class OpenSshSupplyTest(unittest.TestCase):
+    def test_corrupt_tarball_fails_before_extract(self):
+        with self.assertRaises(AssertionError) as caught:
+            verify_openssh_92_bytes(b'corrupt', 'preamble\n' + OPENSSH_92_RELEASE_LINE + '\n')
+        self.assertIn('does not match the pinned digest', str(caught.exception))
+
+    def test_release_note_without_the_pin_fails(self):
+        with self.assertRaises(AssertionError) as caught:
+            verify_openssh_92_bytes(OPENSSH_92_SHA256, 'SHA256 (openssh-9.2p1.tar.gz) = AAAA\n')
+        self.assertIn('release note', str(caught.exception))
+
+    def test_symlink_member_is_not_extracted(self):
+        import tarfile
+        dest = Path(tempfile.mkdtemp())
+        tar_path = dest / 'bad.tar'
+        with tarfile.open(tar_path, 'w') as archive:
+            info = tarfile.TarInfo('escape')
+            info.type = tarfile.SYMTYPE
+            info.linkname = '/tmp'
+            archive.addfile(info)
+        with self.assertRaises(AssertionError):
+            safe_extract_tarball(tar_path, dest / 'out')
+        self.assertFalse((dest / 'out' / 'escape').exists())
 
 
 class OpenSsh92Test(unittest.TestCase):
@@ -737,16 +902,28 @@ class OpenSsh92Test(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
+        PLANTED_SSHD.parent.mkdir(parents=True, exist_ok=True)
+        PLANTED_SSHD.write_text('#!/bin/sh\necho PLANTED\n')
+        os.chmod(PLANTED_SSHD, 0o755)
         cls.sshd = ensure_openssh_92()
+        if cls.sshd.resolve() == PLANTED_SSHD.resolve():
+            raise AssertionError('9.2 fixture executed the planted sshd')
         completed = subprocess.run([str(cls.sshd), '-V'], capture_output=True, text=True, check=False)
         cls.version = (completed.stderr or completed.stdout).strip()
-        print(f'sshd-fixture-9.2 {cls.version}', flush=True)
-        if not guest.version_allowed(cls.version):
+        client = subprocess.run(['ssh', '-V'], capture_output=True, text=True, check=False)
+        cls.client_version = (client.stderr or client.stdout).strip()
+        print(f'sshd-fixture-9.2 portable server {cls.version}', flush=True)
+        print(f'ssh-client-system {cls.client_version}', flush=True)
+        print('sshd-fixture-9.2 provenance portable-tarball not-debian-package', flush=True)
+        if 'PLANTED' in cls.version or not guest.version_allowed(cls.version):
             raise AssertionError(f'built sshd -V is not the 9.2 gate: {cls.version}')
 
     def test_version_expiry_and_watchdog_on_9_2(self):
         self.assertTrue(self.version.startswith('OpenSSH_9.2,'), self.version)
         self.assertNotIn('9.6', self.version)
+        self.assertIn('OpenSSH_', self.client_version)
+        print(f'sshd-fixture-result 9.2 {self._testMethodName} server={self.version} client={self.client_version}',
+              flush=True)
         base = Path(tempfile.mkdtemp(dir=str(Path.home())))
         os.chmod(base, 0o755)
         try:
@@ -778,11 +955,12 @@ class OpenSsh92Test(unittest.TestCase):
                 denied = _ssh92(port, base, known)
                 self.assertNotEqual(denied.returncode, 0)
                 self.assertNotIn('FORCED92', denied.stdout)
-                command = guest.forced_command(HUNG, UNIT, 1).replace('"', '\\"')
+                marker = 'yogi-hung-92-' + str(port)
+                command = guest.forced_command(hung_probe(marker), UNIT, 1).replace('"', '\\"')
                 auth.write_text(f'restrict,command="{command}",expiry-time="{future}" ssh-ed25519 {pub} client\n')
                 hung = _ssh92(port, base, known)
                 self.assertNotEqual(hung.returncode, 0)
-                self.assertFalse(subprocess.run(['pgrep', '-f', 'sleep 30'], capture_output=True).stdout.strip())
+                self.assertEqual(marker_pids(marker), [])
             finally:
                 if (base / 'sshd.pid').is_file():
                     os.kill(int((base / 'sshd.pid').read_text()), 15)

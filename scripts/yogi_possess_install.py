@@ -22,6 +22,7 @@ RECEIPT_SCHEMA = 'roseos.yogi-replacement-recover-receipt.v1'
 # Nonce from the saved inspect outcome whose operation id is already spent.
 SPENT_INSPECT_NONCES = frozenset({'38545d88138e8b49aeef032f660a8acf'})
 OP_ID = re.compile(r'[0-9a-f]{32}')
+BOOT_UUID = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')
 
 
 class Refused(guest.GuestRefused):
@@ -124,6 +125,8 @@ def begin(out, operation_id, blob):
         'startupScriptInstalled': False,
         'lineState': 'absent',
         'seenNonces': [],
+        'phase': 'open',
+        'inspectPlan': None,
     }
     _atomic_json(out, JOURNAL, record)
     stored = _load(out)
@@ -210,8 +213,10 @@ def resume_revoke(out, root, passwd_text):
     if result.get('removed') or result.get('absent'):
         record['lineState'] = 'absent'
         record['exactLine'] = None
+        record['phase'] = 'revoked'
     record['guestAuthenticated'] = False
     record['clean'] = False
+    record['inspectPlan'] = None
     _atomic_json(out, JOURNAL, record)
     result['journal'] = 'revoke-required'
     result['guestAuthenticated'] = False
@@ -240,15 +245,47 @@ def _guest_receipt(document):
     return receipt
 
 
-def accept_inspect(out, document):
-    """Clean only from a real fresh inspect receipt bound to this journal's comment and blob."""
+def plan_inspect(out, operation_id, nonce):
+    """Persist the inspect binding only after a durable revoke. A boot UUID is not an order."""
     record = _load(out)
+    if record.get('phase') != 'revoked':
+        raise Refused('inspect-not-planned')
+    if not OP_ID.fullmatch(operation_id or '') or not OP_ID.fullmatch(nonce or ''):
+        raise Refused('inspect-nonce')
+    if operation_id in (record.get('operationId'), nonce) or nonce == record.get('operationId'):
+        raise Refused('inspect-nonce')
+    if (yogi_possession.spent_binding(operation_id) or yogi_possession.spent_binding(nonce)
+            or nonce in SPENT_INSPECT_NONCES or operation_id in SPENT_INSPECT_NONCES):
+        raise Refused('inspect-replay')
+    record['phase'] = 'inspect-planned'
+    record['inspectPlan'] = {
+        'operationId': operation_id,
+        'nonce': nonce,
+        'instanceId': yogi_possession.INSTANCE_ID,
+    }
+    record['clean'] = False
+    record['guestAuthenticated'] = False
+    _atomic_json(out, JOURNAL, record)
+    return _load(out)
+
+
+def accept_inspect(out, document):
+    """Clean only when the receipt is the inspect planned after this journal's revoke."""
+    record = _load(out)
+    if record.get('phase') != 'inspect-planned':
+        raise Refused('inspect-not-planned')
     if record.get('state') != 'revoke-required':
         raise Refused('journal-state')
+    plan = record.get('inspectPlan')
+    if not isinstance(plan, dict):
+        raise Refused('inspect-not-planned')
     revoke = record.get('revoke')
     if not isinstance(revoke, dict) or not (revoke.get('removed') or revoke.get('absent')):
         raise Refused('revoke-not-run')
     receipt = _guest_receipt(document)
+    if (receipt.get('operationId') != plan.get('operationId') or receipt.get('nonce') != plan.get('nonce')
+            or receipt.get('instanceId') != plan.get('instanceId')):
+        raise Refused('inspect-binding')
     if not yogi_possession.guest_key_removed(receipt, record['operationId'], record['blob']):
         raise Refused('inspect-not-clean')
     cleanup = receipt.get('cleanup') if isinstance(receipt.get('cleanup'), dict) else {}
@@ -266,7 +303,8 @@ def accept_inspect(out, document):
     if receipt.get('instanceId') != yogi_possession.INSTANCE_ID or receipt.get('status') != 'complete':
         raise Refused('inspect-not-clean')
     boot = receipt.get('bootId')
-    if not isinstance(boot, str) or len(boot) < 8 or boot == 'none':
+    # A boot UUID is an identifier, not a clock. Later text is not a later boot.
+    if not isinstance(boot, str) or not BOOT_UUID.fullmatch(boot):
         raise Refused('inspect-boot')
     nonce = receipt.get('nonce')
     operation = receipt.get('operationId')
@@ -277,6 +315,7 @@ def accept_inspect(out, document):
         raise Refused('inspect-replay')
     record['seenNonces'] = list(record.get('seenNonces') or []) + [nonce]
     record['state'] = 'revoked'
+    record['phase'] = 'clean'
     record['lineState'] = 'absent'
     record['guestAuthenticated'] = False
     record['clean'] = True

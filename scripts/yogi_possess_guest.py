@@ -159,6 +159,15 @@ def decision_from_effective(text):
         values.setdefault(keyword, value)
     if values.get('pubkeyauthentication', 'yes') != 'yes':
         return {'ok': False, 'code': 'pubkey-authentication'}
+    if values.get('forcecommand', 'none') not in ('none', ''):
+        return {'ok': False, 'code': 'force-command'}
+    methods = values.get('authenticationmethods', 'any').strip()
+    if methods == 'any':
+        for key in ('passwordauthentication', 'kbdinteractiveauthentication', 'challengeresponseauthentication'):
+            if values.get(key, 'no') not in ('no', ''):
+                return {'ok': False, 'code': 'authentication-methods'}
+    elif methods != 'publickey':
+        return {'ok': False, 'code': 'authentication-methods'}
     if values.get('authorizedkeyscommand', 'none') not in ('none', ''):
         return {'ok': False, 'code': 'authorized-keys-command'}
     if values.get('permituserenvironment', 'no') != 'no':
@@ -174,8 +183,13 @@ def decision_from_effective(text):
 
 
 def sshd_config_decision(text, effective=None):
-    """Raw files with Include or Match need an sshd -T dump. A bare keyword cannot raise IndexError."""
-    if effective:
+    """Raw files with Include or Match need an sshd -T dump. A bare keyword cannot raise IndexError.
+
+    An empty effective dump is a failed `sshd -T`, not permission to read the raw file instead.
+    """
+    if effective is not None:
+        if not str(effective).strip():
+            return {'ok': False, 'code': 'sshd-config-unproven'}
         return decision_from_effective(effective)
     if not isinstance(text, str) or not text.strip():
         return {'ok': False, 'code': 'sshd-config-unreadable'}
@@ -208,7 +222,7 @@ def sshd_config_decision(text, effective=None):
 
 
 def sshd_effective_text(sshd, config_path):
-    """Run sshd -T for pixelbuild. A failing parser is a refusal, not an exception from this process."""
+    """Run sshd -T for pixelbuild. Nonzero status is a refusal and does not return raw config."""
     try:
         completed = subprocess.run(
             [sshd, '-T', '-f', str(config_path), '-C', 'user=pixelbuild,host=localhost,addr=127.0.0.1'],
@@ -365,26 +379,25 @@ def authorized_line(blob, comment, expiry, command):
     return f'restrict,command="{quoted}",expiry-time="{expiry}" ssh-ed25519 {blob} {comment}'
 
 
-def parse_key_line(line):
-    """One ssh-ed25519 blob, with or without a comment. Options may contain spaces.
+def parse_key_line(line, our_blob=None):
+    """One ssh-ed25519 blob and the rest of the line as its comment.
 
-    Trailing whitespace still counts. Two key blobs, or more than one comment token, are ambiguous.
+    A google-ssh JSON comment contains spaces and stays one foreign line. Ambiguous means this
+    line has more than one ssh-ed25519 blob and one of them is ours. Other lines are preserved.
     """
     if not isinstance(line, str) or line.strip() == '' or line.strip().startswith('#'):
         return None
     matches = list(KEY_RE.finditer(line.strip()))
     if not matches:
         return None
+    blobs = [match.group(1) for match in matches]
     if len(matches) != 1:
-        raise GuestRefused('key-ambiguous')
-    blob = matches[0].group(1)
-    rest = line.strip()[matches[0].end():].strip()
-    if rest == '':
-        return blob, ''
-    tokens = rest.split()
-    if len(tokens) != 1:
-        raise GuestRefused('key-ambiguous')
-    return blob, tokens[0]
+        if our_blob is not None and our_blob in blobs:
+            raise GuestRefused('key-ambiguous')
+        return None
+    blob = blobs[0]
+    comment = line.strip()[matches[0].end():].strip()
+    return blob, comment
 
 
 def _temp_token():
@@ -648,7 +661,7 @@ def _mutate(root, uid, gid, *, mode, blob, comment, line=None):
         parts, newline = _split_lines(data)
         parsed = []
         for item in parts:
-            found = parse_key_line(item)
+            found = parse_key_line(item, our_blob=blob)
             parsed.append(found)
         blob_hits = [item for item, found in zip(parts, parsed) if found and found[0] == blob]
         comment_hits = [item for item, found in zip(parts, parsed) if found and found[1] == comment and comment]
@@ -668,8 +681,8 @@ def _mutate(root, uid, gid, *, mode, blob, comment, line=None):
             removed.extend(more)
             return {'rewritten': True, 'idempotent': False, 'line': line, 'tempFilesRemoved': len(removed),
                     'removedTemps': removed}
-        matches = [item for item in parts if parse_key_line(item) and parse_key_line(item)[0] == blob
-                   and (not comment or parse_key_line(item)[1] == comment)]
+        matches = [item for item, found in zip(parts, parsed)
+                   if found and found[0] == blob and found[1] == comment]
         # A blob with no comment, or a different comment, is not an exact revoke and is not rewritten.
         if any(found and found[0] == blob and found[1] != comment for found in parsed):
             raise GuestRefused('revoke-foreign')
@@ -759,14 +772,12 @@ def main(argv=None):
             version = subprocess.run(['sshd', '-V'], capture_output=True, text=True, check=False)
             sync = subprocess.run(['timedatectl', 'show', '-p', 'NTPSynchronized', '--value'],
                                   capture_output=True, text=True, check=False)
-            effective = subprocess.run(
-                ['sshd', '-T', '-C', 'user=pixelbuild,host=localhost,addr=127.0.0.1'],
-                capture_output=True, text=True, check=False)
+            effective = sshd_effective_text('sshd', '/etc/ssh/sshd_config')
             evidence = evidence_from_outputs(
                 version_text=(version.stderr or version.stdout),
                 config_text=Path('/etc/ssh/sshd_config').read_text(),
                 passwd_text=Path('/etc/passwd').read_text(),
-                now=time.time(), sync_text=sync.stdout, effective_text=effective.stdout)
+                now=time.time(), sync_text=sync.stdout, effective_text=effective)
         else:
             evidence = binding['evidence']
         action = binding.get('action')
