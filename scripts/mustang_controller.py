@@ -2,8 +2,8 @@
 """Dedicated Mustang controller adapter; the retired shared-host route stays retired.
 
 This adapter requires the common controller's explicit-builder API. It refuses
-the old implicit Frankel target before any control call. The committed Mustang
-lane remains unbound, so this source addition cannot activate a builder.
+the old implicit Frankel target before any control call. The committed runtime
+stays unbound, so the start command refuses before any cloud call.
 """
 import argparse
 import importlib.util
@@ -113,6 +113,13 @@ def main():
             require_explicit_target(common_controller())
             result = {'status':'source-bound', 'runtimeAuthorized':False}
         else:
+            if args.action == 'start':
+                runtime = json.loads((ROOT/'os/build-only/mustang-runtime.json').read_text())
+                publication = runtime.get('publication') or {}
+                if runtime.get('status') != 'bound' or not runtime.get('appInputsRecord') \
+                        or not runtime.get('signingRouteEvidence') or not runtime.get('sourceEvidence') \
+                        or (publication.get('enabled') is True and not publication.get('authorityRecord')):
+                    raise ValueError('dedicated Mustang runtime is not admitted; refusing to start the VM')
             run = invocation(lane, os.environ)
             if not args.ownership_record:
                 raise ValueError('dedicated Mustang controller needs --ownership-record')

@@ -1,0 +1,62 @@
+{
+  "schema": "roseos.mustang-infra-readback.v1",
+  "buildAuthorized": false,
+  "publicationAuthorized": false,
+  "vm": {
+    "project": "protocols-465723",
+    "zone": "us-west2-a",
+    "instance": "roseos-mustang-builder-20261107-a",
+    "instanceId": "5585425566393384049"
+  },
+  "diskResource": "projects/protocols-465723/zones/us-west2-a/disks/roseos-mustang-data-20261107-a",
+  "disk": {
+    "name": "roseos-mustang-data-20261107-a",
+    "id": "4322966418460195960",
+    "sizeGiB": 1500,
+    "type": "pd-ssd",
+    "autoDelete": false,
+    "fstype": "ext4",
+    "uuid": "4183bff8-6be4-46bb-a641-2193d19813ee",
+    "mount": "/mnt/disks/mustang-data",
+    "fstabPersistentSecondBoot": true,
+    "availableBytesObserved": 1584163655680,
+    "availableInodesObserved": null,
+    "roseosDirectory": "empty"
+  },
+  "layout": {
+    "sourceRoot": "/mnt/disks/mustang-data/roseos/source",
+    "storageRoot": "/mnt/disks/mustang-data/roseos/rose-actions",
+    "lockPath": "/mnt/disks/mustang-data/roseos/mustang.lock"
+  },
+  "runnerLabel": "roseos-mustang-builder",
+  "networkTag": "roseos-mustang-builder",
+  "queue": "mustang-ota",
+  "workflow": ".github/workflows/mustang-ota-dedicated.yml",
+  "automaticStop": {"seconds": 14400, "action": "STOP", "hours": 4},
+  "httpChecks": {
+    "github": true,
+    "apiGithub": true,
+    "archiveUbuntu": true,
+    "runnerEgressVerified": false
+  },
+  "observed": {
+    "readback": "Parent-confirmed infrastructure readback, 2026-11-06. This file records those observations and does not query a cloud API.",
+    "machineType": "n2-highmem-32",
+    "image": "Ubuntu 24.04.5",
+    "status": "STOPPED",
+    "bootDiskGiB": 100,
+    "bootDiskType": "pd-balanced",
+    "attachedServiceAccount": null,
+    "osLogin": "on",
+    "projectSsh": "blocked",
+    "osLoginAuthenticated": false,
+    "iapSsh": "banner-only",
+    "ingress": "IAP tcp/22 allow; deny all other ingress",
+    "externalIpv4": "ephemeral",
+    "startupScript": null,
+    "runnerInstalled": false,
+    "sourceInstalled": false,
+    "dependenciesInstalled": false
+  },
+  "basis": "Identity of the dedicated Mustang VM and data disk only. Available inodes were not observed, so no inode count is recorded. HTTP checks are not runner egress, authenticated OS Login, source, app admission, or publication authority. The earlier c3-standard-44 / 12-hour proposal is not this machine."
+}

@@ -3,16 +3,17 @@
   "status": "unbound",
   "jobs": null,
   "tools": {"aapt": null, "apksigner": null, "node": null},
-  "dataFilesystemUuid": null,
-  "automaticStopHours": null,
+  "dataFilesystemUuid": "4183bff8-6be4-46bb-a641-2193d19813ee",
+  "dataMount": "/mnt/disks/mustang-data",
+  "automaticStopHours": 4,
   "networkEvidence": null,
   "sourceEvidence": null,
-  "allocationState": null,
+  "allocationState": "os/build-only/mustang-allocation-state-20261107.json",
   "appInputsRecord": null,
   "baselineTargetFiles": null,
   "baselineFactoryEvidence": null,
   "runner": {"groupName": null, "groupId": null, "lifetime": null, "registrationEvidence": null},
   "signingRouteEvidence": null,
   "publication": {"enabled": false, "authorityRecord": null},
-  "basis": "Source contract only. Infra must supply actual approved dedicated source/tool/mount, runner registration-on-every-start and signing-route evidence. Existing Mustang signing identity is preserved. No resource, credential, access, runtime, reclaim or public release is enabled. No bindings or evidence may be guessed."
+  "basis": "The data filesystem UUID, mount, and four-hour STOP match the confirmed VM. Status stays unbound: no runner, source, tools, Make job count, signing-route admission, app archive, on-disk baseline, allocation reconciliation, or publication authority is recorded. No field here is a placeholder for a missing hash or build number."
 }

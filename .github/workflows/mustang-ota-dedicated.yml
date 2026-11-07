@@ -1,5 +1,7 @@
-# Manual only; committed lane/runtime stay unbound. No provisioning, runner registration, key bootstrap or policy reclaim.
-# One builder job supports a persistent runner or approved protected ephemeral registration on every start.
+# Manual only. The lane is identity-bound; runtime stays unbound, so guard refuses before any VM start.
+# Builder job is self-hosted on roseos-mustang-builder. Guard, controller, publisher and cleanup are GitHub-hosted.
+# Lifetime is selected only by real registration evidence. The VM STOPs itself after four hours if cleanup does not.
+# No provisioning, runner registration, key bootstrap or policy reclaim.
 name: Mustang dedicated OTA
 run-name: mustang-dedicated-ota ${{ github.run_id }}
 on:
@@ -69,7 +71,7 @@ jobs:
     runs-on:
       group: ${{ needs.guard.outputs.runner_group }}
       labels: ${{ needs.guard.outputs.runner_label }}
-    timeout-minutes: 600
+    timeout-minutes: 200
     permissions:
       contents: read
       actions: read

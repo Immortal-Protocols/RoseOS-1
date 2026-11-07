@@ -53,7 +53,8 @@ class Client:
     api, repository = 'https://api.github.com', ota.REPOSITORY
     def __init__(self, fail=None):
         self.rows = [dict(id=1, tag_name='frankel-2026110301', draft=False, assets=[], body='retained'),
-                     dict(id=2, tag_name='rango-2026103001', draft=False, assets=[], body='retained')]
+                     dict(id=2, tag_name='rango-2026103001', draft=False, assets=[], body='retained'),
+                     dict(id=4, tag_name='blazer-2026103001', draft=False, assets=[], body='retained')]
         self.before = copy.deepcopy(self.rows)
         self.log, self.blobs, self.fail = [], {}, fail
     def _request(self, *args):
@@ -107,7 +108,8 @@ class PublicationTest(unittest.TestCase):
         result = ota.publish(client, self.assets, self.cfg, self.out)
         self.assertEqual(result['status'], 'ota-published')
         self.assertTrue(result['publicDownloadVerified'])
-        self.assertEqual(client.rows[:2], client.before)
+        self.assertEqual(client.rows[:len(client.before)], client.before)
+        self.assertTrue(all(not item[1].startswith(('frankel', 'blazer', 'rango')) for item in client.log if item[0] == 'upload'))
         self.assertLess(client.log.index(('readback', self.r['ota']['file'])), client.log.index(('upload', 'mustang-stable')))
         self.assertLess(client.log.index(('readback', 'mustang-stable')), client.log.index(('finalize', 3)))
         self.assertEqual(result['latestBefore'], result['latestAfter'])
@@ -260,7 +262,7 @@ class PublicationTest(unittest.TestCase):
             ota.verify_staged(self.assets,self.cfg)
     def test_updater_listing_still_fits_after_new_release(self):
         client=Client()
-        client.rows += [dict(tag_name='other-'+str(i),draft=False) for i in range(297)]
+        client.rows += [dict(tag_name='other-'+str(i),draft=False) for i in range(299-len(client.rows))]
         with self.assertRaisesRegex(ValueError,'discovery completeness'):
             ota.publish(client,self.assets,self.cfg,self.out)
         self.assertEqual(client.log,[])

@@ -1,0 +1,10 @@
+{
+  "schema": "roseos.mustang-allocation-state.v1",
+  "failedRun": "41884368820",
+  "unknown": true,
+  "lastConfirmedPublicBuild": "2026110401",
+  "consumedBuilds": null,
+  "builder": null,
+  "dataFilesystemUuid": null,
+  "basis": "Run 41884368820 failed before receipt artifacts were uploaded. Whether it consumed a build number was not established. The new data disk is empty and does not reconcile the old ledger. This record does not select a build number."
+}
