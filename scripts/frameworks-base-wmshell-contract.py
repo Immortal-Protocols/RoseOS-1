@@ -53,7 +53,7 @@ C.SCHEMA = 2
 C.MANIFEST = ROOT/'os/compile-contracts/frameworks-base-wmshell.json'
 # The reviewed candidate: the commit holding the patch's current bytes (#516, #523, #528, #540's fix for the first
 # real compile's javac error, then #551's chin marker on REGISTER for Rose Agent, F08).
-C.CANDIDATE = {'pr': 665, 'commit': '8f715d22206587e036c038f19dd06b1539afcc24'}
+C.CANDIDATE = {'pr': 665, 'commit': '081164b30d758e96b75bbef90856e98eb673dada'}
 C.BUNDLE = C.FIXTURES/'candidate-pr665'
 C.CANDIDATE_PATCHES = ['rose-edge-wmshell.patch']
 # frameworks/base: apply-os-changes.py's --background-policy order (as in the Launcher3 contract), then the candidate.
@@ -145,9 +145,10 @@ CONFIRMATION = {
         'MUTE/UNMUTE and the mic glow\'s START, and AgentTrayPrototype.java (756f6f83..., blob 2d720337), its one call '
         'without the muted argument; no patch, no new file, no new import; rose-edge-wmshell.patch and its '
         'after-images, the WMShellModule pre-image, the goals and flagEvidence (none) unchanged',
-    'chinoverkeyboard': 'OS Core to OS Product, 2026-11-07 18:05 UTC, commit 8f715d2 (e638d34 on main 735f990; the '
+    'chinoverkeyboard': 'OS Core to OS Product, 2026-11-07 18:05 and 18:10 UTC, commit 081164b (e638d34 on main '
+        '735f990, then the RoseEdgePolicy.java index line corrected to its content\'s blob 6d9df5f; the '
         'Rose keyboard\'s rules 1-2, carried in #665 with OS Product\'s Launcher3 half): rose-edge-wmshell.patch '
-        'sha256 320522223884751036996d3ca2dc0544524fe154a34c350207d7470eb1debe9d, only roseedge/RoseEdgePolicy.java\'s '
+        'sha256 03f7537f388369bc785432cd67125d55011113376374dd6576006e63a9a9be6b, only roseedge/RoseEdgePolicy.java\'s '
         'after-image changing (6e517856..., blob 6d9df5fa: no busy refusal for a visible IME, onImeVisibility keeps the '
         'chin, LOWERED_IME keeps its number unsent); the other after-images, the WMShellModule pre-image, the overlays, '
         'the goals and flagEvidence (none) unchanged; no new files, imports or flags; the patch edit is line-count '
