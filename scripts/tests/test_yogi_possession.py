@@ -134,7 +134,8 @@ class PossessionTest(unittest.TestCase):
                 return {'purpose': 'inspect', 'status': 'complete', 'instanceId': yogi_possession.INSTANCE_ID,
                         'operationId': '12' * 16, 'cleanup': {
                             'possessMarkerLines': self.marker, 'authPathsRead': 2, 'accessCleanup': 'ok',
-                            'possessComment': 'roseos-yogi-possess-' + operation}}
+                            'possessComment': 'roseos-yogi-possess-' + operation,
+                            'possessMaterial': yogi_possession.login_material(plan['loginLine'])}}
 
         bad = Driver(ssh_ok=False, marker=1)
         result = yogi_possession.possession_run(bad, plan, str(identity))
@@ -154,7 +155,8 @@ class PossessionTest(unittest.TestCase):
 
         spent = {'purpose': 'inspect', 'instanceId': yogi_possession.INSTANCE_ID,
                  'operationId': '638e6e9039e41b7531697bb45066a616', 'cleanup': {'possessMarkerLines': 0}}
-        self.assertFalse(yogi_possession.guest_key_removed(spent, operation))
+        material = yogi_possession.login_material(plan['loginLine'])
+        self.assertFalse(yogi_possession.guest_key_removed(spent, operation, material))
 
         good = Driver(marker=0)
         done = yogi_possession.possession_run(good, plan, str(identity))
@@ -164,7 +166,7 @@ class PossessionTest(unittest.TestCase):
         self.assertTrue(done['hostKeyHandshake'])
         self.assertFalse(yogi_possession.guest_key_removed(
             {'purpose': 'inspect', 'status': 'complete', 'instanceId': yogi_possession.INSTANCE_ID,
-             'operationId': '12' * 16, 'cleanup': {'possessMarkerLines': 0}}, operation))
+             'operationId': '12' * 16, 'cleanup': {'possessMarkerLines': 0}}, operation, material))
 
         class TimeoutStart(Driver):
             def start(self):
@@ -224,7 +226,8 @@ class PossessionTest(unittest.TestCase):
                 return {'purpose': 'inspect', 'status': 'complete', 'instanceId': yogi_possession.INSTANCE_ID,
                         'operationId': '12' * 16, 'cleanup': {
                             'possessMarkerLines': -1, 'authPathsRead': 1, 'accessCleanup': 'failed',
-                            'possessComment': 'roseos-yogi-possess-' + operation}}
+                            'possessComment': 'roseos-yogi-possess-' + operation,
+                            'possessMaterial': yogi_possession.login_material(plan['loginLine'])}}
 
         unread = Unreadable()
         unread_result = yogi_possession.possession_run(unread, plan, str(identity))
@@ -423,6 +426,240 @@ class PossessionTest(unittest.TestCase):
         with self.assertRaises(yogi_possession.Refused):
             yogi_possession.execute_handshake(str(hostkeys), str(client), str(identity), str(directory / 'out'),
                                              driver=NoStart('other-fingerprint', dict(yogi_possession.POSSESSION_BASE)))
+
+
+    def test_installed_line_keeps_the_comment_and_the_blob_still_counts(self):
+        _keys, expected, api = self._api()
+        client = 'ssh-ed25519 ' + base64.b64encode(_wire(b'ssh-ed25519', bytes(range(32, 64)))).decode()
+        operation = 'ef' * 16
+        now = datetime.datetime(2026, 11, 7, 18, 0, tzinfo=datetime.timezone.utc)
+        plan = yogi_possession.possession_plan(api, client, operation, expected=expected,
+                                              environ={'HOME': '/home/operator'}, now=now)
+        installed = yogi_possession.installed_key_text(plan['loginLine'])
+        material = yogi_possession.login_material(plan['loginLine'])
+        self.assertTrue(installed.startswith('ssh-ed25519 ' + material + ' google-ssh '))
+        self.assertIn('roseos-yogi-possess-' + operation, installed)
+        self.assertIn('"expireOn":"', installed)
+        rebuilt = 'ssh-ed25519 ' + material + ' google-ssh {"expireOn":"2026-11-07T18:20:00+0000","userName":"pixelbuild"}'
+        self.assertNotIn('roseos-yogi-possess-', rebuilt)
+        self.assertIn(material, rebuilt)
+        self.assertNotIn('|', plan['argv'][-1])
+        self.assertNotIn('||', plan['argv'][-1])
+        self.assertEqual(plan['argv'][0], 'ssh')
+
+    def test_gcloud_driver_failures_stop_and_do_not_count_a_nonzero_ssh(self):
+        import io
+        import subprocess
+        import sys
+        import urllib.error
+        keys, expected, api = self._api()
+        client = 'ssh-ed25519 ' + base64.b64encode(_wire(b'ssh-ed25519', bytes(range(32, 64)))).decode()
+        operation = 'cd' * 16
+        now = datetime.datetime(2026, 11, 7, 18, 0, tzinfo=datetime.timezone.utc)
+        plan = yogi_possession.possession_plan(api, client, operation, expected=expected,
+                                              environ={'HOME': '/home/operator'}, now=now)
+        identity = Path(tempfile.mkdtemp()) / 'id_ed25519'
+        identity.write_text('not-read')
+        identity.chmod(0o600)
+        material = yogi_possession.login_material(plan['loginLine'])
+        op_name = 'operation-1794029000000-65fa910000000-cccccccc-dddddddd'
+
+        class Response:
+            def __init__(self, payload):
+                self.payload, self.status = payload, 200
+            def read(self, _n):
+                return self.payload
+            def __enter__(self):
+                return self
+            def __exit__(self, *_args):
+                return False
+
+        def operation_body(status):
+            return json.dumps({
+                'kind': 'compute#operation', 'name': op_name, 'status': status,
+                'targetId': yogi_possession.INSTANCE_ID, 'operationType': 'setMetadata',
+                'zone': 'https://www.googleapis.com/compute/v1/projects/protocols-465723/zones/us-west2-b',
+            }).encode()
+
+        def case(start='ok', stop='ok', metadata='done', ssh_code=0, receipt=None):
+            state = {'status': 'TERMINATED', 'items': dict(yogi_possession.POSSESSION_BASE),
+                     'fingerprint': yogi_possession.POSSESSION_FINGERPRINT}
+            commands, posts = [], []
+
+            def instance():
+                return json.dumps({
+                    'id': yogi_possession.INSTANCE_ID, 'name': yogi_possession.INSTANCE,
+                    'status': state['status'],
+                    'zone': 'https://www.googleapis.com/compute/v1/projects/protocols-465723/zones/us-west2-b',
+                    'selfLink': ('https://www.googleapis.com/compute/v1/projects/protocols-465723/zones/us-west2-b'
+                                 '/instances/' + yogi_possession.INSTANCE),
+                    'networkInterfaces': [{}],
+                    'metadata': {'fingerprint': state['fingerprint'],
+                                 'items': [{'key': key, 'value': value} for key, value in state['items'].items()]},
+                })
+
+            def run(argv, capture_output=True, text=True, timeout=0):
+                commands.append((list(argv), timeout))
+                class Result:
+                    returncode = 0
+                    stdout = ''
+                if argv[:3] == ['gcloud', 'auth', 'list']:
+                    self.assertEqual(timeout, yogi_possession.DESCRIBE_TIMEOUT)
+                    Result.stdout = json.dumps([{'account': yogi_possession.OPERATOR_ACCOUNT, 'status': 'ACTIVE'}])
+                    return Result()
+                if argv[:3] == ['gcloud', 'auth', 'print-access-token']:
+                    self.assertEqual(timeout, yogi_possession.TOKEN_TIMEOUT)
+                    Result.stdout = 'ya29.not-a-real-token\n'
+                    return Result()
+                if argv[:4] == ['gcloud', 'compute', 'instances', 'describe']:
+                    self.assertEqual(timeout, yogi_possession.DESCRIBE_TIMEOUT)
+                    Result.stdout = instance()
+                    return Result()
+                if argv[:4] == ['gcloud', 'compute', 'instances', 'start']:
+                    self.assertEqual(timeout, yogi_possession.START_TIMEOUT)
+                    if start == 'timeout':
+                        raise subprocess.TimeoutExpired(argv, timeout)
+                    if start == 'failed':
+                        Result.returncode = 1
+                        return Result()
+                    state['status'] = 'STAGING' if start == 'staging' else 'RUNNING'
+                    return Result()
+                if argv[:4] == ['gcloud', 'compute', 'instances', 'stop']:
+                    self.assertEqual(timeout, yogi_possession.STOP_TIMEOUT)
+                    if stop == 'timeout':
+                        raise subprocess.TimeoutExpired(argv, timeout)
+                    state['status'] = 'RUNNING' if stop == 'running' else 'TERMINATED'
+                    return Result()
+                if argv and argv[0] == 'ssh':
+                    self.assertEqual(timeout, yogi_possession.SSH_TIMEOUT)
+                    self.assertNotIn('|', ' '.join(argv))
+                    Result.returncode = ssh_code
+                    Result.stdout = json.dumps({
+                        'runnerProcess': False, 'active': 'inactive', 'enabled': 'disabled',
+                        'builder': {'instanceId': yogi_possession.INSTANCE_ID}})
+                    return Result()
+                if argv and argv[0] == sys.executable and 'apply' in argv:
+                    out = Path(argv[argv.index('--op') + 1])
+                    out.mkdir(parents=True, exist_ok=True)
+                    (out / 'outcome.json').write_text(json.dumps({'guestReceipt': receipt}))
+                    return Result()
+                if argv and argv[0] == sys.executable:
+                    return Result()
+                raise AssertionError(argv)
+
+            def opener(request, timeout=0):
+                posts.append(request.full_url)
+                if request.full_url == yogi_possession.METADATA_URL:
+                    self.assertEqual(timeout, yogi_possession.METADATA_TIMEOUT)
+                    nth = posts.count(yogi_possession.METADATA_URL)
+                    if metadata == 'timeout' and nth == 1:
+                        raise TimeoutError('metadata timed out')
+                    if metadata == 'conflict-add' or (metadata == 'conflict-remove' and nth == 2):
+                        raise urllib.error.HTTPError(request.full_url, 412, 'conflict', {}, io.BytesIO(b'{}'))
+                    if metadata == 'pending' and nth == 1:
+                        return Response(operation_body('PENDING'))
+                    body = json.loads(request.data)
+                    state['items'] = {item['key']: item['value'] for item in body['items']}
+                    state['fingerprint'] += 'x'
+                    return Response(operation_body('DONE'))
+                self.assertTrue(request.full_url.endswith('/operations/' + op_name + '/wait'))
+                return Response(operation_body('PENDING'))
+
+            driver = yogi_possession.GcloudDriver(run=run, opener=opener, sleep=lambda _seconds: None, clock=lambda: 0)
+            driver.possess_comment = 'roseos-yogi-possess-' + operation
+            driver.possess_material = material
+            result = yogi_possession.possession_run(driver, plan, str(identity), baseline={
+                'fingerprint': yogi_possession.POSSESSION_FINGERPRINT, 'items': dict(yogi_possession.POSSESSION_BASE)})
+            return result, commands, posts
+
+        def stopped(commands):
+            return any(argv[:4] == ['gcloud', 'compute', 'instances', 'stop'] for argv, _timeout in commands)
+
+        def metadata_posts(posts):
+            return sum(1 for url in posts if url == yogi_possession.METADATA_URL)
+
+        timed, timed_commands, timed_posts = case(start='timeout')
+        self.assertTrue(stopped(timed_commands))
+        self.assertEqual(metadata_posts(timed_posts), 0)
+        self.assertFalse(timed['guestAuthenticated'] or timed['hostKeyHandshake'] or timed['hostKeyPinned'])
+
+        failed, failed_commands, failed_posts = case(start='failed')
+        self.assertTrue(stopped(failed_commands))
+        self.assertEqual(metadata_posts(failed_posts), 0)
+        self.assertFalse(failed['guestAuthenticated'])
+
+        staging, staging_commands, _posts = case(start='staging')
+        self.assertTrue(stopped(staging_commands))
+        self.assertFalse(staging['guestAuthenticated'] or staging['hostKeyHandshake'])
+
+        pending, pending_commands, pending_posts = case(metadata='pending')
+        self.assertTrue(stopped(pending_commands))
+        self.assertEqual(metadata_posts(pending_posts), 1)
+        self.assertGreaterEqual(sum(1 for url in pending_posts if url.endswith('/wait')), 1)
+        self.assertFalse(any(argv[0] == 'ssh' for argv, _timeout in pending_commands))
+        self.assertFalse(pending['guestAuthenticated'])
+
+        conflict, conflict_commands, conflict_posts = case(metadata='conflict-remove')
+        self.assertTrue(conflict['hostKeyHandshake'] and conflict['stopped'])
+        self.assertFalse(conflict['guestAuthenticated'] or conflict['metadataLoginRemoved'] or conflict['hostKeyPinned'])
+        self.assertEqual(metadata_posts(conflict_posts), 2)
+        self.assertEqual(conflict['cleanupInstructions']['loginLine'], plan['loginLine'])
+        self.assertNotIn(plan['loginLine'], conflict['cleanupInstructions']['items'].get('ssh-keys', ''))
+        self.assertFalse(any(argv[0] == sys.executable for argv, _timeout in conflict_commands))
+
+        nonzero, _nonzero_commands, nonzero_posts = case(ssh_code=1)
+        self.assertFalse(nonzero['hostKeyHandshake'] or nonzero['guestAuthenticated'] or nonzero['hostKeyPinned'])
+        self.assertEqual(metadata_posts(nonzero_posts), 2)
+        self.assertTrue(nonzero['stopped'])
+
+        halted, halted_commands, _halted_posts = case(stop='timeout')
+        self.assertTrue(halted['hostKeyHandshake'])
+        self.assertFalse(halted['guestAuthenticated'] or halted['stopped'] or halted['clean'] or halted['hostKeyPinned'])
+        self.assertFalse(any('apply' in argv for argv, _timeout in halted_commands))
+
+        missing = {'purpose': 'inspect', 'status': 'complete', 'instanceId': yogi_possession.INSTANCE_ID,
+                   'operationId': '12' * 16, 'cleanup': {'accessCleanup': 'ok', 'authPathsRead': 2,
+                   'possessComment': 'roseos-yogi-possess-' + operation, 'possessMaterial': material}}
+        unread = dict(missing, cleanup={'possessMarkerLines': -1, 'authPathsRead': 1, 'accessCleanup': 'failed',
+                      'possessComment': 'roseos-yogi-possess-' + operation, 'possessMaterial': material})
+        good_receipt = {'purpose': 'inspect', 'status': 'complete', 'instanceId': yogi_possession.INSTANCE_ID,
+                        'operationId': '12' * 16, 'cleanup': {
+                            'possessMarkerLines': 0, 'authPathsRead': 2, 'accessCleanup': 'ok',
+                            'possessComment': 'roseos-yogi-possess-' + operation, 'possessMaterial': material}}
+        for receipt in (missing, unread):
+            result, commands, _posts = case(receipt=receipt)
+            self.assertTrue(result['hostKeyHandshake'] and result['stopped'])
+            self.assertFalse(result['guestAuthenticated'] or result['guestKeyRemoved'] or result['hostKeyPinned'])
+            self.assertTrue(any('apply' in argv for argv, _timeout in commands))
+        done, done_commands, _done_posts = case(receipt=good_receipt)
+        self.assertTrue(done['guestAuthenticated'] and done['guestKeyRemoved'] and done['clean'])
+        self.assertFalse(done['hostKeyPinned'])
+        self.assertTrue(any('plan' in argv and '--possess-material' in argv for argv, _timeout in done_commands))
+        self.assertTrue(any('preflight' in argv and '--execute' in argv for argv, _timeout in done_commands))
+        self.assertTrue(any('apply' in argv and '--execute' in argv for argv, _timeout in done_commands))
+        self.assertNotIn('ya29.not-a-real-token', json.dumps(done))
+
+    def test_one_execute_invocation_plans_a_fresh_inspect(self):
+        import yogi_replacement_recover as recover
+        directory = Path(tempfile.mkdtemp())
+        def pair(first, second):
+            values = [first, second]
+            return lambda: values.pop(0)
+        with self.assertRaises(recover.Refused):
+            recover.plan('possession', str(directory / 'spent'), mode='inspect', revision='a' * 40, env={},
+                         token=pair('638e6e9039e41b7531697bb45066a616', 'ab' * 16))
+        with self.assertRaises(recover.Refused):
+            recover.plan('possession', str(directory / 'ce79'), mode='inspect', revision='a' * 40, env={},
+                         token=pair('ce79ffe4' + 'cd' * 12, 'ab' * 16))
+        fresh = recover.plan('possession', str(directory / 'fresh'), mode='inspect', revision='a' * 40, env={},
+                             token=pair('12' * 16, '34' * 16), possess_comment='roseos-yogi-possess-' + 'ef' * 16,
+                             possess_material='BLOB')
+        self.assertEqual((fresh['operationId'], fresh['nonce']), ('12' * 16, '34' * 16))
+        guest = (directory / 'fresh' / 'guest.py').read_text()
+        self.assertNotIn('@@', guest)
+        self.assertIn('BLOB', guest)
+        self.assertNotIn('638e6e9039e41b7531697bb45066a616', guest)
+        self.assertNotIn('ce79ffe4', guest)
 
 
 if __name__ == '__main__':

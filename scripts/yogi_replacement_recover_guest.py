@@ -181,7 +181,7 @@ def validate_shape(receipt, binding):
     cleanup = receipt["cleanup"]
     if not isinstance(cleanup, dict) or set(cleanup) != {
             "linesRemoved", "unidentifiedAuthorizedKeyLines", "temporaryAccount", "tempFilesRemoved",
-            "accessCleanup", "possessMarkerLines", "authPathsRead", "possessComment"}:
+            "accessCleanup", "possessMarkerLines", "authPathsRead", "possessComment", "possessMaterial"}:
         return ["cleanup"]
     if cleanup["temporaryAccount"] not in ACCOUNT_STATES or cleanup["accessCleanup"] not in ("ok", "failed"):
         return ["cleanup"]
@@ -207,6 +207,8 @@ def validate_shape(receipt, binding):
     if not isinstance(cleanup.get("authPathsRead"), int) or not 0 <= cleanup["authPathsRead"] <= 2:
         return ["cleanup"]
     if not isinstance(cleanup.get("possessComment"), str) or len(cleanup["possessComment"]) > 80:
+        return ["cleanup"]
+    if not isinstance(cleanup.get("possessMaterial"), str) or len(cleanup["possessMaterial"]) > 2000:
         return ["cleanup"]
     for text in _strings(receipt):
         if len(text) > 80 or any(token in text for token in FORBIDDEN):
@@ -607,7 +609,8 @@ def _skeleton(binding, boot, status):
                      "rolledBack": False},
         "cleanup": {"linesRemoved": 0, "unidentifiedAuthorizedKeyLines": 0, "temporaryAccount": "absent",
                     "tempFilesRemoved": 0, "accessCleanup": "ok", "possessMarkerLines": 0,
-                    "authPathsRead": 2, "possessComment": "roseos-yogi-possess-"},
+                    "authPathsRead": 2, "possessComment": "roseos-yogi-possess-",
+                    "possessMaterial": "roseos-yogi-possess-material-unset"},
         "journal": {"entries": 0, "readable": 0, "phases": [], "hasCompleteReceipt": False, "unrecognized": 0},
     }
 
@@ -705,7 +708,8 @@ def cleanup_access(io, operation_id):
     return {"linesRemoved": removed, "unidentifiedAuthorizedKeyLines": unidentified,
             "temporaryAccount": account_state, "tempFilesRemoved": temp_removed,
             "accessCleanup": "failed" if failed or paths != len(AUTH_PATHS) else "ok",
-            "possessMarkerLines": possess, "authPathsRead": paths, "possessComment": comment}
+            "possessMarkerLines": possess, "authPathsRead": paths, "possessComment": comment,
+            "possessMaterial": "roseos-yogi-possess-material-unset"}
 
 
 def _emit(io, receipt, binding):
@@ -782,7 +786,8 @@ def _observe_access(io, operation_id):
         account_state = "preserved-mismatch"
     return {"linesRemoved": 0, "unidentifiedAuthorizedKeyLines": unidentified, "temporaryAccount": account_state,
             "tempFilesRemoved": 0, "accessCleanup": "failed" if failed or paths != len(AUTH_PATHS) else "ok",
-            "possessMarkerLines": possess, "authPathsRead": paths, "possessComment": comment}
+            "possessMarkerLines": possess, "authPathsRead": paths, "possessComment": comment,
+            "possessMaterial": "roseos-yogi-possess-material-unset"}
 
 
 def _rotate_refuse(io, binding, boot, before, runner, problem, baseline=None, unknown=0):
@@ -1972,6 +1977,7 @@ def main(argv):
             baseline[alg] = parsed[1]
     unidentified = possess = paths = 0
     needle = "@@POSSESS_COMMENT@@"
+    material = "@@POSSESS_MATERIAL@@"
     unreadable = False
     for path in AUTH:
         try:
@@ -1987,7 +1993,9 @@ def main(argv):
             parts = line.split()
             if line and not line.startswith("#") and not (len(parts) == 3 and parts[2] == "roseos-yogi-recover-" + OPERATION_ID):
                 unidentified += 1
-            if needle and needle in line:
+            comment_hit = bool(needle) and needle in line
+            blob_hit = bool(material) and material != "roseos-yogi-possess-material-unset" and material in line
+            if comment_hit or blob_hit:
                 possess += 1
     if unreadable or paths != len(AUTH):
         possess = -1
@@ -2014,7 +2022,8 @@ def main(argv):
         "cleanup": {"linesRemoved": 0, "unidentifiedAuthorizedKeyLines": unidentified,
                     "temporaryAccount": account, "tempFilesRemoved": 0,
                     "accessCleanup": "failed" if unreadable or paths != len(AUTH) else "ok",
-                    "possessMarkerLines": possess, "authPathsRead": paths, "possessComment": needle},
+                    "possessMarkerLines": possess, "authPathsRead": paths, "possessComment": needle,
+                    "possessMaterial": material},
         "journal": journal_summary(root),
     }
     emit(receipt)
@@ -2030,6 +2039,8 @@ def inspect_template():
     if any(token in INSPECT_TEMPLATE for token in ("ssh-keygen", "userdel", "fchmod", "os.chmod", "BEGIN OPENSSH")):
         raise GuestRefused("inspect template is not read-only")
     if INSPECT_TEMPLATE.count("@@INSPECT_OP@@") != 1 or INSPECT_TEMPLATE.count("@@INSPECT_NONCE@@") != 1:
+        raise GuestRefused("inspect template placeholders are not unique")
+    if INSPECT_TEMPLATE.count("@@POSSESS_COMMENT@@") != 1 or INSPECT_TEMPLATE.count("@@POSSESS_MATERIAL@@") != 1:
         raise GuestRefused("inspect template placeholders are not unique")
     return INSPECT_TEMPLATE
 

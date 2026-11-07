@@ -85,7 +85,7 @@ name this operation's exact `roseos-yogi-possess-<id>` comment, `authPathsRead` 
 is not that proof. The runner is not enabled. IAP only selects the instance. OpenSSH checks the ed25519 host
 key against the saved API blob. `hostKeyPinned` stays false.
 
-`handshake-plan` writes that plan and does not call GCP or SSH. `handshake --execute` is the operator run:
+`handshake-plan` writes that plan and does not call GCP or SSH. `handshake --execute` is the whole operator run, including the fresh inspect. There is no second command. After the probe it removes only that line, waits one bounded guest-agent refresh, stops the VM, and then plans a new inspect with a new operation id and nonce. That inspect is `yogi_replacement_recover.py plan`, `preflight --execute`, and `apply --execute` in the same process: the apply boots the guest, reads the receipt, removes the startup script, and stops again. It does not start that inspect when the metadata removal was not accepted, the refresh failed, or the stop is unconfirmed. Those outcomes leave cleanup instructions and leave `guestAuthenticated` false. The guest agent installs the metadata text after the first colon and uses `expireOn` only to drop an already-expired line; it does not delete the JSON comment. The inspect counts a line that still contains that comment or the login public blob, including a rebuilt `google-ssh` line that dropped the comment. `possessMarkerLines` 0 means neither remained. A missing count is not zero.
 
 ```sh
 env -u GOOGLE_APPLICATION_CREDENTIALS -u CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT \

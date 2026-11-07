@@ -42,6 +42,8 @@ SPENT_INSPECT_IDS = {
     '20ef6008b1ef78137d201de13176af42',
     '638e6e9039e41b7531697bb45066a616',
 }
+# Recorded rotate-publish id prefix. The full 32 hex id was not saved; no fresh binding may reuse it.
+SPENT_BINDING_PREFIXES = ('ce79ffe4',)
 OP_ID = re.compile(r'[0-9a-f]{32}')
 OPERATION_NAME = re.compile(r'operation-[0-9]{10,16}-[0-9a-f]{8,20}-[0-9a-f]{6,20}-[0-9a-f]{6,20}')
 SPENT_ZONE_OPERATIONS = frozenset({
@@ -231,6 +233,8 @@ def possession_ssh(hostkeys, identity_path, environ):
                         INSTANCE, '22', '--listen-on-stdin', f'--project={PROJECT}', f'--zone={ZONE}',
                         '--verbosity=warning']).replace('%', '%%')
     command = f'python3 -I -c {shlex.quote(PROBE)} {shlex.quote(POSSESSION_UNIT)}'
+    if any(token in command for token in ('|', '||', '&&', ';')):
+        raise Refused('possession ssh is not the strict read-only command')
     argv = ['ssh', '-F', '/dev/null', '-o', 'BatchMode=yes', '-o', 'RequestTTY=no',
             '-o', 'PasswordAuthentication=no', '-o', 'KbdInteractiveAuthentication=no',
             '-o', 'PreferredAuthentications=publickey', '-o', 'NumberOfPasswordPrompts=0',
@@ -281,23 +285,48 @@ def possession_plan(api, client_public, operation_id, current_items=None, expect
     }
 
 
-def guest_key_removed(receipt, possession_id):
-    """True only when a fresh inspect read both auth paths and the exact comment was absent.
+def spent_binding(value):
+    return value in SPENT_INSPECT_IDS or any(str(value).startswith(prefix) for prefix in SPENT_BINDING_PREFIXES)
 
-    A missing field is not zero. An unreadable path is not proof.
+
+def login_material(line):
+    """The public blob the guest agent keeps even if it rewrites the google-ssh JSON."""
+    parts = str(line).split(' ')
+    if len(parts) < 3 or not parts[0].endswith(':ssh-ed25519') or not parts[1]:
+        raise Refused('login line is not the expiring pixelbuild key')
+    return parts[1]
+
+
+def installed_key_text(line):
+    """Text the current guest agent writes: everything after the first colon, unchanged.
+
+    utils.GetUserKey returns that remainder. CheckExpiredKey reads expireOn and does not
+    rebuild the line, so the JSON comment stays. A rebuilt line that drops the comment
+    still contains this blob.
+    """
+    user, sep, key = str(line).partition(':')
+    if sep != ':' or user != POSSESSION_USER or 'ssh-ed25519 ' not in key:
+        raise Refused('login line is not the expiring pixelbuild key')
+    return key
+
+
+def guest_key_removed(receipt, possession_id, material):
+    """True only when a fresh inspect read both auth paths and neither the comment nor the blob remained.
+
+    A missing field is not zero. An unreadable path is not proof. A spent inspect id is not proof.
     """
     if not isinstance(receipt, dict) or receipt.get('purpose') != 'inspect':
         return False
     if receipt.get('instanceId') != INSTANCE_ID or receipt.get('status') != 'complete':
         return False
     operation = receipt.get('operationId')
-    if operation in SPENT_INSPECT_IDS or operation == possession_id or not OP_ID.fullmatch(operation or ''):
+    if spent_binding(operation) or operation == possession_id or not OP_ID.fullmatch(operation or ''):
         return False
     cleanup = receipt.get('cleanup') if isinstance(receipt.get('cleanup'), dict) else {}
     comment = 'roseos-yogi-possess-' + possession_id
     if cleanup.get('accessCleanup') != 'ok' or cleanup.get('authPathsRead') != 2:
         return False
-    if cleanup.get('possessComment') != comment:
+    if cleanup.get('possessComment') != comment or cleanup.get('possessMaterial') != material or not material:
         return False
     return cleanup.get('possessMarkerLines') == 0
 
@@ -330,11 +359,10 @@ def possession_run(driver, plan, identity_path, baseline=None):
             raise Refused('replacement is not TERMINATED')
         _require_base(view['items'])
         start_state = driver.start()
-        if start_state == 'timeout':
-            ambiguous = True
-            raise Refused('start timed out and the instance state is unresolved')
         if start_state != 'started':
-            raise Refused('start failed')
+            ambiguous = True
+            raise Refused('start timed out and the instance state is unresolved' if start_state == 'timeout'
+                          else 'start failed')
         started = True
         view = driver.describe()
         pre_add = {'fingerprint': view['fingerprint'], 'items': dict(view['items'])}
@@ -398,7 +426,7 @@ def possession_run(driver, plan, identity_path, baseline=None):
     guest_removed = False
     if meta_removed and stopped and refreshed:
         try:
-            guest_removed = guest_key_removed(driver.inspect(), plan['operationId'])
+            guest_removed = guest_key_removed(driver.inspect(), plan['operationId'], login_material(plan['loginLine']))
         except Refused as exc:
             error = error or str(exc)
     clean = bool(meta_removed and refreshed and guest_removed and stopped)
@@ -432,9 +460,10 @@ class GcloudDriver:
     """
 
     def __init__(self, run=subprocess.run, opener=urllib.request.urlopen, sleep=time.sleep,
-                 clock=time.monotonic, possess_comment='', inspect_out=None):
+                 clock=time.monotonic, possess_comment='', possess_material='', inspect_out=None):
         self.run, self.opener, self.sleep, self.clock = run, opener, sleep, clock
         self.possess_comment = possess_comment
+        self.possess_material = possess_material
         self.inspect_out = inspect_out
 
     def _cmd(self, argv, timeout):
@@ -615,7 +644,7 @@ class GcloudDriver:
             result = self.run(argv, capture_output=True, timeout=timeout)
         except subprocess.TimeoutExpired:
             raise Refused('ssh probe timed out') from None
-        if result.returncode:
+        if result.returncode != 0:
             raise Refused('ssh probe failed')
         try:
             return json.loads(result.stdout.decode() if isinstance(result.stdout, bytes) else result.stdout)
@@ -630,7 +659,8 @@ class GcloudDriver:
         script = str(Path(__file__).resolve().parents[0] / 'yogi_replacement_recover.py')
         out = self.inspect_out or str(Path(os.getcwd()) / 'possess-inspect')
         plan = self._cmd([sys.executable, script, 'plan', '--mode', 'inspect', '--operator', 'possession',
-                          '--out', out, '--possess-comment', self.possess_comment], DESCRIBE_TIMEOUT)
+                          '--out', out, '--possess-comment', self.possess_comment,
+                          '--possess-material', self.possess_material], DESCRIBE_TIMEOUT)
         if plan.returncode:
             raise Refused('fresh inspect plan failed')
         pre = self._cmd([sys.executable, script, 'preflight', '--op', out, '--confirm-instance', INSTANCE_ID,
@@ -672,11 +702,12 @@ def execute_handshake(api_path, client_path, identity, out, driver=None, operati
     api = json.loads(Path(api_path).read_text())
     plan = possession_plan(api, Path(client_path).read_text(), operation_id, current_items=baseline['items'],
                            environ=environ, now=now, identity_path=identity)
-    driver.possess_comment = 'roseos-yogi-possess-' + operation_id
-    driver.inspect_out = str(Path(out) / 'inspect')
-    result = possession_run(driver, plan, identity, baseline=baseline)
     destination = Path(out)
     destination.mkdir(mode=0o700, exist_ok=True)
+    driver.possess_comment = 'roseos-yogi-possess-' + operation_id
+    driver.possess_material = login_material(plan['loginLine'])
+    driver.inspect_out = str(destination / 'inspect')
+    result = possession_run(driver, plan, identity, baseline=baseline)
     (destination / 'possession-plan.json').write_text(json.dumps(plan, indent=2, sort_keys=True) + '\n')
     (destination / 'possession-outcome.json').write_text(json.dumps(result, indent=2, sort_keys=True) + '\n')
     return result
