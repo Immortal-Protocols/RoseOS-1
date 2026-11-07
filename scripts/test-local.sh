@@ -232,6 +232,12 @@ java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-option
  os/overlays/frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/AgentTrayLink.java \
  os/tests/AgentTrayLinkTest.java
 java -cp "$JAVA_TESTS/AgentTrayLink" com.android.wm.shell.AgentTrayLinkTest
+java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -encoding UTF-8 -d "$JAVA_TESTS/RoseShade" \
+ os/overlays/frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeModel.java \
+ os/overlays/frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeReplies.java \
+ os/overlays/frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseQuickSettings.java \
+ os/tests/roseshade/RoseShadeTest.java
+java -cp "$JAVA_TESTS/RoseShade" com.android.systemui.roseshade.RoseShadeTest
 # Updater channel rules (Prod/Beta/Alpha, legacy migration, unpublished feeds).
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/RoseChannels" \
  os/overlays/packages/apps/Updater/src/app/seamlessupdate/client/RoseChannels.java os/tests/RoseChannelsTest.java
