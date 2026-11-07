@@ -1881,7 +1881,8 @@ def describe_instance(driver=None):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description='Strict IAP possession plan. --execute is the operator run; tests inject a driver.')
-    parser.add_argument('action', choices=('handshake-plan', 'handshake', 'describe-instance'))
+    parser.add_argument('action', choices=(
+        'handshake-plan', 'handshake', 'describe-instance', 'guest-install-plan', 'guest-install-execute'))
     parser.add_argument('--hostkeys')
     parser.add_argument('--client-public')
     parser.add_argument('--out')
@@ -1889,6 +1890,14 @@ def main(argv=None):
     parser.add_argument('--execute', action='store_true')
     args = parser.parse_args(argv)
     try:
+        if args.action == 'guest-install-execute':
+            raise Refused('live guest install is not authorized')
+        if args.action == 'guest-install-plan':
+            if not args.out:
+                parser.error('guest-install-plan needs --out')
+            from yogi_possess_install import write_plan
+            print(json.dumps(write_plan(args.out), sort_keys=True))
+            return 0
         if args.action == 'describe-instance':
             result = describe_instance()
             print(json.dumps(result, sort_keys=True))
