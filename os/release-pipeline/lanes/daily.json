@@ -1,11 +1,11 @@
 {
   "schema": "roseos.daily-lanes.v1",
-  "basis": "1F (Rose daily work plan, 2026-11-05): build, sign, verify and publish each flavor daily through its existing manual entry point, isolated per flavor; manual dispatch stays. Source only: no schedule exists and every lane is disabled until an owner-approved activation change. scripts/daily-release.py reads this file.",
-  "activation": "Activation is one reviewed change: it enables a lane here and adds the daily schedule to .github/workflows/daily-release.yml. Both still need owner approval; neither is part of this source.",
+  "basis": "1E (Rose daily work plan, 2026-11-07; first built as 1F on 2026-11-05): build, sign, verify and publish each flavor daily at 4 a.m. Pacific through its own entry point, builder and lifecycle, so one unavailable flavor never blocks another; manual dispatch stays. scripts/daily-release.py reads this file.",
+  "activation": "The schedule is in .github/workflows/daily-release.yml and does nothing while every lane is disabled. Enabling a lane is its own reviewed change here, approved by that lane's owner and Chief; the lane's first scheduled run then builds and publishes main at the next window.",
   "window": {
     "timeZone": "America/Los_Angeles",
-    "time": null,
-    "note": "Chief publishes the chosen daily window in Pacific time; the activation change writes it here and as the workflow's schedule."
+    "time": "04:00",
+    "note": "1E: 4 a.m. Pacific in America/Los_Angeles, so the local time survives daylight-saving changes. The workflow's crons are exactly the UTC times that can be this local time (11:00 and 12:00 UTC); the dispatcher acts only on the one that is 04:00 local on that date."
   },
   "lanes": [
     {
@@ -21,12 +21,12 @@
     {
       "name": "mustang",
       "enabled": false,
-      "workflow": "os-release.yml",
-      "inputs": {"mode": "mustang-ota", "mustang_publish_ota": "true"},
-      "runTitlePrefix": "mustang-ota ",
-      "deliveryJob": "mustang-ota-publisher",
-      "lastGood": "mustang-ota publishes the OTA before the channel metadata and never Latest; a failed run leaves mustang-stable on the last good build.",
-      "owner": "Mustang owner (route); capacity: Dev Infra"
+      "workflow": "mustang-ota-dedicated.yml",
+      "inputs": {"publish": "true"},
+      "runTitlePrefix": "mustang-dedicated-ota ",
+      "deliveryJob": "publisher",
+      "lastGood": "mustang-ota-dedicated publishes the OTA before the channel metadata and never Latest; a failed run leaves mustang-stable on the last good build.",
+      "owner": "Mustang Grok owner (dedicated route and builder; the shared-host os-release mustang-ota route is retired). Before enabling, the route must admit this automatic dispatch: its publication authority today requires automatic false."
     },
     {
       "name": "yogi",
@@ -36,7 +36,7 @@
       "runTitlePrefix": "yogi-ota ota ",
       "deliveryJob": "publisher",
       "lastGood": "yogi-ota publishes the OTA first and yogi-stable last, never Latest; a failed run leaves the channel on the last good build.",
-      "owner": "Yogi owner (route, PR #558); capacity: its dedicated builder"
+      "owner": "Yogi Grok owner (route and its dedicated builder). Before enabling, the route must admit this automatic dispatch: yogi-ota.yml is manual only today."
     }
   ]
 }
