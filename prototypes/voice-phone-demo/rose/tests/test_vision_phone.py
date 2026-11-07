@@ -66,7 +66,7 @@ class Vision(unittest.TestCase):
         self.assertEqual(tools, {'open_app', 'observe', 'tap_point', 'swipe', 'type_text', 'back', 'complete_task'})
         self.assertNotIn('UI tree', opening['instructions'])
         first = s.view.frame_id
-        tapped = self.call(s, 'tap_point', frame_id=first, x=140, y=934, target='Work on Cloud', effect='interact')
+        tapped = self.call(s, 'tap_point', frame_id=first, x=140, y=934, target='Work on Cloud', label='', icon='', effect='interact')
         self.assertTrue(tapped['ok'])
         self.assertNotEqual(first, tapped['frame_id'])
         raw = [p for op, p in self.controller.calls if op == 'command' and p['action'] == 'screen_gesture'][-1]
@@ -85,11 +85,11 @@ class Vision(unittest.TestCase):
         a, b = self.opened(), self.opened('Clock')
         before = len(self.commands())
         for frame in ('old', b.view.frame_id):
-            self.assertFalse(self.call(a, 'tap_point', frame_id=frame, x=500, y=500, target='input', effect='interact')['ok'])
+            self.assertFalse(self.call(a, 'tap_point', frame_id=frame, x=500, y=500, target='input', label='', icon='', effect='interact')['ok'])
         for x in (-1, 1001, float('nan'), True):
-            self.assertFalse(self.call(a, 'tap_point', frame_id=a.view.frame_id, x=x, y=500, target='input', effect='interact')['ok'])
+            self.assertFalse(self.call(a, 'tap_point', frame_id=a.view.frame_id, x=x, y=500, target='input', label='', icon='', effect='interact')['ok'])
         self.assertEqual(len(self.commands()), before)
-        self.assertTrue(self.call(a, 'tap_point', frame_id=a.view.frame_id, x=1000, y=1000, target='corner', effect='interact')['ok'])
+        self.assertTrue(self.call(a, 'tap_point', frame_id=a.view.frame_id, x=1000, y=1000, target='corner', label='', icon='', effect='interact')['ok'])
         raw = [p for op, p in self.controller.calls if op == 'command' and p['action'] == 'screen_gesture'][-1]
         self.assertEqual(raw['points'], [DISPLAY[0]-1, DISPLAY[1]-1])
 
@@ -113,7 +113,7 @@ class Vision(unittest.TestCase):
         self.call(s, 'observe')
         slot = next(x for x in self.controller.slots if x.id == s.view.workspace.bound_id)
         slot.locked = True
-        self.assertFalse(self.call(s, 'tap_point', frame_id=s.view.frame_id, x=500, y=500, target='input', effect='interact')['ok'])
+        self.assertFalse(self.call(s, 'tap_point', frame_id=s.view.frame_id, x=500, y=500, target='input', label='', icon='', effect='interact')['ok'])
         self.assertIsNone(s.view.image)
         self.assertFalse(self.call(s, 'back', frame_id='missing')['ok'])
         slot.locked = False
@@ -125,7 +125,7 @@ class Vision(unittest.TestCase):
     def test_no_outcome_and_forbidden_submissions_never_report_success(self):
         s = self.opened()
         for effect in ('send_message', 'purchase', 'publish', 'delete', 'security'):
-            self.assertFalse(self.call(s, 'tap_point', frame_id=s.view.frame_id, x=500, y=500, target='submit', effect=effect)['ok'])
+            self.assertFalse(self.call(s, 'tap_point', frame_id=s.view.frame_id, x=500, y=500, target='submit', label='', icon='', effect=effect)['ok'])
         self.engine._event({'event': 'done', 'session': s.name, 'turn': {'id': s.turn, 'status': 'completed'}})
         self.assertEqual(s.task.status, 'failed')
 
@@ -139,72 +139,82 @@ class Vision(unittest.TestCase):
         self.assertEqual(len(self.commands()), before)
         self.assertIsNotNone(s.view.frame_id)  # a refusal never consumes the frame
 
-    FINAL = ('Send', 'Buy now', 'Place order', 'Pay $20', 'Submit', 'Publish', 'Confirm order', 'Checkout button',
-             'the Send button', 'Send icon', 'Send arrow', 'blue send arrow at bottom right', '"Send" button', 'Tap Send',
-             'Send to Sam', 'green send icon', 'the Submit button', 'Submit review', 'Post', 'Tweet', 'Tap Post',
-             'the Post button', 'Post comment', 'Post reply button', 'Post now', 'Post in the top right corner',
-             'Post (top right)', 'Post, top-right corner', 'Tweet in the top right corner', 'the blue Post text button',
-             'Post button (top right)', 'the blue Post button at the top right', 'Payment methods',
-             'button to send the message', 'Send message button', 'Confirm order button', 'Submit button at bottom of form',
-             'Tap on Send', 'Tap on the Send button', 'tap on the send arrow', 'Click on Post', 'Click on the Post button',
-             'Press on Submit', 'Tap on Buy now', 'Post to feed', 'Post to story', 'Post to group', 'Post to Facebook',
-             'the Post to feed button', 'the Post in the top right')
-    # Ordinary controls, including those naming a final control as a landmark, a field, a setting or a feed item.
-    ORDINARY = ('Reply', 'paper airplane DM icon at top right', 'Message field', 'Search', 'Sent folder', 'Settings gear',
-                'Back arrow', 'the latest post', 'Open the first post', 'Like button on the post', 'Comment on the post',
-                'Tap the post to open it', 'the post comment box', 'New post', 'Create post', 'the new post button',
-                'the Create post button', 'the compose tweet button', 'the + new post button', 'the tweet by NASA',
-                'Like button on the tweet', 'Send feedback', 'Send feedback row', "the 'Send message' field",
-                'the Send a chat text box', 'Send read receipts toggle', 'Enter is send toggle',
-                'the message field next to the send button', 'the emoji icon beside the send button',
-                'the camera icon next to the send button', 'the Share via paper plane icon', 'Confirm',
-                'the Confirm button', 'Send read receipts', 'Undo send', 'Enter is send', 'Send usage and diagnostics',
-                'Send feedback button', 'Send feedback option', 'the Send to dropdown', 'the email titled Submit your timesheet',
-                'the message saying send me the file', 'the post from NASA', 'the post in the feed',
-                'the post at the top of the feed', 'the tweet from Elon', 'the post', 'the tweet',
-                'the plus icon by the send button', 'the text field before the Send button',
-                'the mic icon after the send button', 'the input field with the send button',
-                'the GIF button between the text box and the send button', 'Boost post button', 'Share post button',
-                'Delete post button', 'Pin post button', 'Quote tweet button', 'Tap on the message field')
+    # (label, icon): the control's visible text and icon name as the model read them from the screenshot.
+    FINAL = (('Send', ''), ('Buy now', ''), ('Place order', ''), ('Pay $20', ''), ('Submit', ''), ('Publish', ''),
+             ('Confirm order', ''), ('Checkout', ''), ('Post', ''), ('Tweet', ''), ('Post comment', ''),
+             ('Post to feed', ''), ('Send message', ''), ('Send to Sam', ''), ('Send message to Sam', ''),
+             ('Send end-to-end encrypted message', ''), ('Submit review', ''), ('Payment methods', ''),
+             ('', 'send arrow'), ('', 'Send'), ('', 'ic_send'), ('', 'green send icon'), ('', 'shopping cart checkout'),
+             ('', 'pay'), ('Pay', 'card'))
+    # Ordinary controls: what the accessibility path also leaves to the agent.
+    ORDINARY = (('', ''), ('Reply', ''), ('', 'paper airplane'), ('', 'paper plane'), ('Search', ''), ('Sent', ''),
+                ('', 'gear'), ('', 'back arrow'), ('', 'heart'), ('Like', 'heart'), ('Comment', 'speech bubble'),
+                ('New post', ''), ('Create post', ''), ('', 'plus'), ('Share', 'share'), ('Send feedback', ''),
+                ('Message', ''), ('Send read receipts', ''), ('Confirm', ''), ('Undo', ''), ('', 'camera'),
+                ('', 'microphone'), ('', 'emoji'), ('Quote', ''), ('Boost post', ''), ('', 'up arrow'))
     # Once a draft is typed, "Reply" and the paper plane send it.
-    DRAFT_FINAL = ('Reply', 'the Reply button', 'paper plane icon', 'paper airplane icon', 'paper-airplane button')
+    DRAFT_FINAL = (('Reply', ''), ('Reply', 'arrow'), ('', 'paper plane'), ('', 'paper airplane'), ('', 'paper-airplane'))
+    # Descriptions are not labels: only a description that is itself a final label counts.
+    DESCRIBED = ('the Send button', 'the latest post', 'Like button on the post', 'the message field next to the send button',
+                 'the camera icon by the send button', 'Send read receipts toggle', 'the post from NASA', 'Share post button')
 
-    def test_final_target_reads_the_models_description(self):
+    def test_final_target_reads_the_label_and_icon(self):
         from rose.vision_phone import final_target
-        for target in self.FINAL:
-            self.assertTrue(final_target(target, False), target)
-            self.assertTrue(final_target(target, True), target)
-        for target in self.ORDINARY:
-            self.assertFalse(final_target(target, False), target)
-        for target in self.DRAFT_FINAL:
-            self.assertTrue(final_target(target, True), target)
-        self.assertFalse(final_target('the reply text field', True))
+        for label, icon in self.FINAL:
+            self.assertTrue(final_target(label, icon, False), (label, icon))
+            self.assertTrue(final_target(label, icon, True), (label, icon))
+        for label, icon in self.ORDINARY:
+            self.assertFalse(final_target(label, icon, False), (label, icon))
+        for label, icon in self.DRAFT_FINAL:
+            self.assertTrue(final_target(label, icon, True), (label, icon))
+        for target in self.DESCRIBED:
+            self.assertFalse(final_target('', '', False, target), target)
+        self.assertTrue(final_target('', '', False, 'Send'))
+        self.assertTrue(final_target('', '', False, 'Buy now'))
+
+    def test_a_label_is_judged_exactly_as_the_accessibility_path_judges_it(self):
+        from rose.tasks import _final_control
+        from rose.vision_phone import final_target
+        labels = [label for label, _ in self.FINAL + self.ORDINARY + self.DRAFT_FINAL if label]
+        labels += ['Post Office', 'Send money', 'Book now', 'Start free trial', 'Subscribe', 'Reply all', 'Done', 'Next']
+        for label in labels:
+            for typed in (False, True):
+                self.assertEqual(final_target(label, '', typed), bool(_final_control(label, typed=typed)), (label, typed))
 
     def test_a_final_control_called_interact_is_still_the_owners(self):
         s = self.opened()
         before = len(self.commands())
-        for target in ('', '   ', 'the Send button', 'Post (top right)', 'Buy now'):
-            result = self.call(s, 'tap_point', frame_id=s.view.frame_id, x=500, y=500, target=target, effect='interact')
-            self.assertFalse(result['ok'], target)
+        for args in (dict(target='', label='', icon=''), dict(target='   ', label='', icon=''),
+                     dict(target='the Send button'), dict(target='the Send button', label='Send', icon=''),
+                     dict(target='the blue arrow at the bottom right', label='', icon='send arrow'),
+                     dict(target='the top-right Post button', label='Post', icon=''),
+                     dict(target='Buy now', label='Buy now', icon=''), dict(target='x', label=3, icon='')):
+            result = self.call(s, 'tap_point', frame_id=s.view.frame_id, x=500, y=500, effect='interact', **args)
+            self.assertFalse(result['ok'], args)
         self.assertEqual(len(self.commands()), before)
-        self.assertTrue(self.call(s, 'tap_point', frame_id=s.view.frame_id, x=500, y=500, target='Reply', effect='interact')['ok'])
+        self.assertTrue(self.call(s, 'tap_point', frame_id=s.view.frame_id, x=500, y=500, target='the Reply button',
+                                  label='Reply', icon='', effect='interact')['ok'])
         self.assertTrue(self.call(s, 'type_text', frame_id=s.view.frame_id, text='On my way', replace=True)['ok'])
         before = len(self.commands())
-        self.assertFalse(self.call(s, 'tap_point', frame_id=s.view.frame_id, x=500, y=500, target='Reply', effect='interact')['ok'])
+        for label, icon in (('Reply', ''), ('', 'paper plane')):
+            self.assertFalse(self.call(s, 'tap_point', frame_id=s.view.frame_id, x=500, y=500, target='the control',
+                                       label=label, icon=icon, effect='interact')['ok'])
         self.assertEqual(len(self.commands()), before)
-        self.assertTrue(self.call(s, 'tap_point', frame_id=s.view.frame_id, x=500, y=500, target='the message field next to the send button', effect='interact')['ok'])
+        self.assertTrue(self.call(s, 'tap_point', frame_id=s.view.frame_id, x=500, y=500,
+                                  target='the message field next to the send button', label='Message', icon='',
+                                  effect='interact')['ok'])
 
     def test_an_unanswered_type_still_counts_as_a_draft(self):
         s = self.opened()
         with patch.object(s.view.workspace, 'command', return_value={'status': 'timeout'}):
             self.assertFalse(self.call(s, 'type_text', frame_id=s.view.frame_id, text='On my way', replace=True)['ok'])
         s.view.refresh()
-        self.assertFalse(self.call(s, 'tap_point', frame_id=s.view.frame_id, x=500, y=500, target='Reply', effect='interact')['ok'])
+        self.assertFalse(self.call(s, 'tap_point', frame_id=s.view.frame_id, x=500, y=500, target='Reply', label='Reply', icon='', effect='interact')['ok'])
 
     def test_a_refusal_the_task_moved_past_is_not_its_result(self):
         s = self.opened()
-        self.assertFalse(self.call(s, 'tap_point', frame_id='old', x=500, y=500, target='input', effect='interact')['ok'])
-        self.assertTrue(self.call(s, 'tap_point', frame_id=s.view.frame_id, x=500, y=500, target='input', effect='interact')['ok'])
+        self.assertFalse(self.call(s, 'tap_point', frame_id='old', x=500, y=500, target='input', label='', icon='', effect='interact')['ok'])
+        self.assertTrue(self.call(s, 'tap_point', frame_id=s.view.frame_id, x=500, y=500, target='input', label='', icon='', effect='interact')['ok'])
         self.engine._event({'event': 'done', 'session': s.name, 'turn': {'id': s.turn, 'status': 'completed'}})
         self.assertEqual(s.task.status, 'failed')
         self.assertEqual(s.task.result, 'No verified task outcome was reported.')

@@ -83,12 +83,12 @@ tools and their send/purchase guard, with screenshots alongside the UI tree.
 
 Final messages/posts, purchases and security changes remain owner actions under the
 existing policy. Vision taps declare their effect and describe their target; the server
-rejects final-action effects and any target description whose head (the words before
-a location such as "next to …" or "(top right)") reads as a send, purchase or other
-final control: the accessibility path's label rules, a send/submit/publish word ending a
-button's description ("blue send arrow"), "Post"/"Tweet" buttons other than a composer's opener, and once a
-draft is typed "Reply" and the paper plane. Fields, toggles and menu rows that mention
-sending ("Send read receipts", "Send feedback") are not final controls. Both rely on the
+rejects final-action effects. Each tap also names the control's visible text (`label`)
+and icon (`icon`) as the model reads them from the screenshot; the accessibility path's
+own send/purchase label rule applies to them exactly as to an accessibility label (the
+icon name also as a view-id hint), and once a draft is typed "Reply" and the paper plane
+count as sends. The free-text description of the target is not a label and is judged
+only by that same rule. Both rely on the
 model's visual interpretation, rather than an independent accessibility-label check.
 Passwords and secrets remain owner input.
 The OS retains its session, protected-screen and owner-control boundaries.
