@@ -45,6 +45,7 @@ SPENT_INSPECT_IDS = {
     '638e6e9039e41b7531697bb45066a616',
     'a5848d669170305750c61bc3effdec9f',
     '41e30832b719be117c73c13c0459cb44',
+    'e0d23fb40aacb99f8278965a500ed5b8',
 }
 # Recorded rotate-publish id prefix. The full 32 hex id was not saved; no fresh binding may reuse it.
 SPENT_BINDING_PREFIXES = ('ce79ffe4',)
@@ -71,6 +72,14 @@ SPENT_ZONE_OPERATIONS = frozenset({
     'operation-1794073568394-65fb34dbebee4-180141f9-b48db238',
     'operation-1794073760446-65fb3593139e7-3bb91b6c-f8cbdb4b',
     'operation-1794073765555-65fb3597f2ddd-7630e10f-130475d1',
+    'operation-1794076322017-65fb3f1dfb219-b6636d67-10ace58b',
+    'operation-1794076333827-65fb3f293e725-1ff9b97f-558b7ddc',
+    'operation-1794076401065-65fb3f695dfd9-348dbe7e-219b3232',
+    'operation-1794076449611-65fb3f97a9f1b-e11156b2-49f18218',
+    'operation-1794076486246-65fb3fba99f04-a7ebd856-0dca3c32',
+    'operation-1794076488270-65fb3fbc8843a-583c3cf8-47106870',
+    'operation-1794076679125-65fb40728baa5-eeb25437-5fc4b997',
+    'operation-1794076684226-65fb407768de8-0775bed1-3c864e58',
 })
 GITHUB_CONTEXT = ('GITHUB_ACTIONS', 'ACTIONS_ID_TOKEN_REQUEST_URL', 'ACTIONS_ID_TOKEN_REQUEST_TOKEN',
                   'ACTIONS_RUNTIME_TOKEN', 'ACTIONS_RUNTIME_URL', 'ACTIONS_CACHE_URL', 'GITHUB_TOKEN')
@@ -539,6 +548,39 @@ def possession_ssh(hostkeys, identity_path, environ):
     return {'knownHosts': known, 'argv': argv, 'timeoutSeconds': 60}
 
 
+def bind_execution_argv(argv, known_hosts, identity_path=None):
+    """Replace plan placeholders with the files SSH will actually open.
+
+    The plan may display KNOWN_HOSTS_FILE and IDENTITY_FILE. Execution must not.
+    The caller unlinks the known-hosts file when the SSH attempt returns.
+    """
+    argv = list(argv or [])
+    if identity_path:
+        argv = [identity_path if arg == 'IDENTITY_FILE' else arg for arg in argv]
+    path = None
+    if any(isinstance(arg, str) and arg.endswith('=KNOWN_HOSTS_FILE') for arg in argv):
+        text = known_hosts if isinstance(known_hosts, str) else ''
+        if 'ssh-ed25519 ' not in text or '\n' not in text:
+            raise Refused('known hosts for execution are not the API lines')
+        fd, path = tempfile.mkstemp(prefix='yogi-known-')
+        try:
+            os.fchmod(fd, 0o600)
+            os.write(fd, text.encode())
+        except OSError:
+            os.close(fd)
+            os.unlink(path)
+            raise Refused('known hosts file was not written') from None
+        os.close(fd)
+        argv = [('UserKnownHostsFile=' + path) if isinstance(arg, str) and arg.endswith('=KNOWN_HOSTS_FILE') else arg
+                for arg in argv]
+    for arg in argv:
+        if isinstance(arg, str) and ('KNOWN_HOSTS_FILE' in arg or arg == 'IDENTITY_FILE'):
+            if path:
+                os.unlink(path)
+            raise Refused('ssh argv still has a display placeholder')
+    return argv, path
+
+
 _SECRET_TEXT = re.compile(
     r'ya29\.[A-Za-z0-9_\-]*|Bearer[ \t]+[A-Za-z0-9._\-+/=]*|'
     r'access_token[\'"\s:=]+[A-Za-z0-9._\-+/=]*|Authorization:[ \t]*\S+',
@@ -609,13 +651,26 @@ def _none():
     return {'serverKeyAccepted': False, 'loginAccepted': False, 'evidence': 'none'}
 
 
-def _host_key_failure(lines):
+def _host_key_conflict(lines):
+    """An observed different key. A missing known_hosts file is not this."""
     for line in lines:
-        if line == 'Host key verification failed.' or 'REMOTE HOST IDENTIFICATION HAS CHANGED' in line:
-            return True
-        if _HOST_KEY_UNKNOWN.fullmatch(line):
+        if 'REMOTE HOST IDENTIFICATION HAS CHANGED' in line or line.startswith('Offending '):
             return True
     return False
+
+
+def _known_hosts_problem(lines):
+    for line in lines:
+        lowered = line.lower()
+        if 'bad owner or permissions' in lowered:
+            return 'known-hosts-unreadable'
+        if ('load_hostkeys' in lowered or 'fopen' in lowered) and 'permission denied' in lowered:
+            return 'known-hosts-unreadable'
+        if _HOST_KEY_UNKNOWN.fullmatch(line):
+            return 'known-hosts-missing'
+        if ('load_hostkeys' in lowered or 'fopen' in lowered) and 'no such file' in lowered:
+            return 'known-hosts-missing'
+    return None
 
 
 def _disqualified(lines):
@@ -671,15 +726,18 @@ def classify_ssh(returncode, lines, user, alias, stderr_lines=None):
         return 'timeout', _none()
     if not isinstance(returncode, int) or returncode < 0:
         return 'unproven', _none()
-    failed = _host_key_failure(lines)
+    conflict = _host_key_conflict(lines)
+    known = _known_hosts_problem(lines)
     succeeded = _client_authenticated(lines)
     blocked = _disqualified(lines) or _disqualified(extra)
-    if failed and succeeded:
+    if conflict and succeeded:
         return 'unproven', _none()
-    if failed and returncode != 0:
+    if conflict and returncode != 0:
         return 'host-key-mismatch', _none()
+    if known and returncode != 0:
+        return known, _none()
     if returncode == 0:
-        if failed or blocked:
+        if conflict or known or blocked:
             return 'unproven', _none()
         return 'success', {'serverKeyAccepted': True, 'loginAccepted': True, 'evidence': 'openssh-session'}
     if 1 <= returncode <= 254:
@@ -994,10 +1052,18 @@ def possession_run(driver, plan, identity_path, baseline=None):
                           'evidence': 'none', 'listenerReady': False,
                           'backendTcp22': False, 'possession': False}
             raise Refused('ssh ' + ssh_report['class'] + ' exit ' + str(login_ready.get('returncode')))
-        ssh_report = driver.ssh(plan['argv'], 60)
+        argv, known_path = bind_execution_argv(plan['argv'], plan.get('knownHosts'), identity_path)
+        try:
+            ssh_report = driver.ssh(argv, 60)
+        finally:
+            if known_path:
+                try:
+                    os.unlink(known_path)
+                except OSError:
+                    pass
         kind = ssh_report.get('class')
-        if kind == 'host-key-mismatch':
-            raise Refused('ssh host-key-mismatch exit ' + str(ssh_report.get('returncode')))
+        if kind in ('host-key-mismatch', 'known-hosts-missing', 'known-hosts-unreadable'):
+            raise Refused('ssh ' + kind + ' exit ' + str(ssh_report.get('returncode')))
         if kind != 'success':
             raise Refused('ssh ' + str(kind) + ' exit ' + str(ssh_report.get('returncode')))
         if not _quiesced(ssh_report.get('probe') or {}):
