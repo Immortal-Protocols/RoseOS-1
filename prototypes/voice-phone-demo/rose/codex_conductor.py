@@ -474,9 +474,10 @@ class CodexConductor:
                 if status == 'completed':
                     if getattr(s.view, 'visual_only', False):
                         if not s.outcome:
-                            # Keep the phone's own refusal (an app Rose could not open, a final action) when there is one.
-                            failure = next((a.get('result') for step in reversed(s.task.steps)
-                                            for a in reversed(step['actions']) if not a.get('ok') and a.get('result')), None)
+                            # Keep the phone's refusal (an app Rose could not open, a final action) when it is what the
+                            # task ended on; an earlier refusal the task moved past is not why it stopped.
+                            last = s.task.steps[-1]['actions'][-1] if s.task.steps and s.task.steps[-1]['actions'] else {}
+                            failure = None if last.get('ok') else last.get('result')
                             status, validation_error = 'failed', failure or 'No verified task outcome was reported.'
                         elif s.outcome['status'] != 'succeeded':
                             status, validation_error = 'failed', s.outcome['summary']

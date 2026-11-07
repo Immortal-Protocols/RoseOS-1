@@ -142,7 +142,10 @@ class Vision(unittest.TestCase):
     def test_a_final_control_called_interact_is_still_the_owners(self):
         s = self.opened()
         before = len(self.commands())
-        for target in ('Send', 'Buy now', 'Place order', 'Pay $20', 'Submit', 'Publish', '', '   '):
+        for target in ('Send', 'Buy now', 'Place order', 'Pay $20', 'Submit', 'Publish', '', '   ',
+                       'the Send button', 'Send icon', 'Send arrow', 'blue send arrow at bottom right', '"Send" button',
+                       'Tap Send', 'the Submit button', 'paper plane icon', 'the Post button', 'Confirm order',
+                       'Checkout button'):
             result = self.call(s, 'tap_point', frame_id=s.view.frame_id, x=500, y=500, target=target, effect='interact')
             self.assertFalse(result['ok'], target)
         self.assertEqual(len(self.commands()), before)
@@ -150,8 +153,27 @@ class Vision(unittest.TestCase):
         self.assertTrue(self.call(s, 'tap_point', frame_id=s.view.frame_id, x=500, y=500, target='Reply', effect='interact')['ok'])
         self.assertTrue(self.call(s, 'type_text', frame_id=s.view.frame_id, text='On my way', replace=True)['ok'])
         before = len(self.commands())
-        self.assertFalse(self.call(s, 'tap_point', frame_id=s.view.frame_id, x=500, y=500, target='Reply', effect='interact')['ok'])
+        for target in ('Reply', 'the Reply button'):
+            self.assertFalse(self.call(s, 'tap_point', frame_id=s.view.frame_id, x=500, y=500, target=target, effect='interact')['ok'])
         self.assertEqual(len(self.commands()), before)
+        # Ordinary controls still work.
+        for target in ('Message field', 'Search', 'Sent folder', 'Settings gear', 'Back arrow'):
+            self.assertTrue(self.call(s, 'tap_point', frame_id=s.view.frame_id, x=500, y=500, target=target, effect='interact')['ok'], target)
+
+    def test_an_unanswered_type_still_counts_as_a_draft(self):
+        s = self.opened()
+        with patch.object(s.view.workspace, 'command', return_value={'status': 'timeout'}):
+            self.assertFalse(self.call(s, 'type_text', frame_id=s.view.frame_id, text='On my way', replace=True)['ok'])
+        s.view.refresh()
+        self.assertFalse(self.call(s, 'tap_point', frame_id=s.view.frame_id, x=500, y=500, target='Reply', effect='interact')['ok'])
+
+    def test_a_refusal_the_task_moved_past_is_not_its_result(self):
+        s = self.opened()
+        self.assertFalse(self.call(s, 'tap_point', frame_id='old', x=500, y=500, target='input', effect='interact')['ok'])
+        self.assertTrue(self.call(s, 'tap_point', frame_id=s.view.frame_id, x=500, y=500, target='input', effect='interact')['ok'])
+        self.engine._event({'event': 'done', 'session': s.name, 'turn': {'id': s.turn, 'status': 'completed'}})
+        self.assertEqual(s.task.status, 'failed')
+        self.assertEqual(s.task.result, 'No verified task outcome was reported.')
 
     def test_a_refused_open_names_the_app_and_survives_as_the_task_result(self):
         s = self.task('Calculator')
