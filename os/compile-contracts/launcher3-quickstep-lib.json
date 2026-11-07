@@ -1723,7 +1723,7 @@
   },
   {
    "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeState.java",
-   "sha256": "ae617fbcee7a017ce0a798e3433ea770fac73a1152da5047b3a57c749656c144",
+   "sha256": "ff38ddd9d8a66aa24c3b6745fded164402631aa449183fc70c4906adf483879a",
    "role": "required"
   },
   {
@@ -1733,7 +1733,7 @@
   },
   {
    "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeWindow.java",
-   "sha256": "1f188a054fee08ddfd547bdfce0aaebf1569ed13eab5df3106e98ca49c731fbb",
+   "sha256": "47f6a7f079220179d660e2f5e8aefc949071b74b187931d4abe4bae8b865080e",
    "role": "required"
   },
   {
@@ -1875,7 +1875,7 @@
     },
     {
      "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeState.java",
-     "sha256": "ae617fbcee7a017ce0a798e3433ea770fac73a1152da5047b3a57c749656c144"
+     "sha256": "ff38ddd9d8a66aa24c3b6745fded164402631aa449183fc70c4906adf483879a"
     },
     {
      "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeSwipe.java",
@@ -1883,7 +1883,7 @@
     },
     {
      "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeWindow.java",
-     "sha256": "1f188a054fee08ddfd547bdfce0aaebf1569ed13eab5df3106e98ca49c731fbb"
+     "sha256": "47f6a7f079220179d660e2f5e8aefc949071b74b187931d4abe4bae8b865080e"
     },
     {
      "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseFan.java",
@@ -3566,7 +3566,7 @@
    },
    {
     "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeState.java",
-    "sha256": "ae617fbcee7a017ce0a798e3433ea770fac73a1152da5047b3a57c749656c144",
+    "sha256": "ff38ddd9d8a66aa24c3b6745fded164402631aa449183fc70c4906adf483879a",
     "role": "required"
    },
    {
@@ -3576,7 +3576,7 @@
    },
    {
     "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeWindow.java",
-    "sha256": "1f188a054fee08ddfd547bdfce0aaebf1569ed13eab5df3106e98ca49c731fbb",
+    "sha256": "47f6a7f079220179d660e2f5e8aefc949071b74b187931d4abe4bae8b865080e",
     "role": "required"
    },
    {

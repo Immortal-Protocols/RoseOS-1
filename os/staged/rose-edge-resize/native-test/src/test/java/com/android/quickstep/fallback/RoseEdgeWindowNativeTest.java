@@ -17,6 +17,8 @@ import android.os.SystemClock;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewTreeObserver;
+import android.view.WindowInsets;
+import android.view.WindowManager;
 import com.android.wm.shell.roseedge.IRoseEdge;
 import com.android.wm.shell.roseedge.IRoseEdgeListener;
 import java.util.ArrayList;
@@ -258,6 +260,44 @@ public class RoseEdgeWindowNativeTest {
         idle();
         Rect expected = RoseEdgeLayout.micSlotOnScreen(dp(384), density, 0, dp(832) - dp(92));
         assertEquals(List.of("raise", "slot " + expected), shell.calls);
+    }
+
+    @Test
+    public void theInsetIsProvidedOnlyOnceTheShellShortenedTheApp() throws Exception {
+        RoseEdgeWindow.EdgeView view = raise();
+        WindowManager.LayoutParams lp = (WindowManager.LayoutParams) view.getLayoutParams();
+        assertEquals("raised but not yet resized: the full-height app must not see an inset", 0,
+                RoseEdgeWindow.insetPx(lp));
+        shell.listener.onRaised(DISPLAY, TASK, new Rect(0, 0, dp(384), dp(832 - 58)));
+        idle();
+        lp = (WindowManager.LayoutParams) window.shownOn(DISPLAY).getLayoutParams();
+        assertEquals("the lift, as a systemOverlays inset", RoseEdgeGesture.raisedInsetPx(density),
+                RoseEdgeWindow.insetPx(lp));
+        assertEquals(1, lp.providedInsets.length);
+        assertEquals("never navigationBars: the focused app controls those", WindowInsets.Type.systemOverlays(),
+                lp.providedInsets[0].getType());
+        // A repeated onRaised changes nothing.
+        shell.listener.onRaised(DISPLAY, TASK, new Rect(0, 0, dp(384), dp(832 - 58)));
+        idle();
+        assertEquals(1, ((WindowManager.LayoutParams) window.shownOn(DISPLAY).getLayoutParams()).providedInsets.length);
+        // Lowered: the window, and its inset with it, is gone; the next raise starts without one.
+        RoseEdgeState.lower(DISPLAY);
+        idle();
+        assertNull(window.shownOn(DISPLAY));
+        view = raise();
+        assertEquals(0, RoseEdgeWindow.insetPx((WindowManager.LayoutParams) view.getLayoutParams()));
+    }
+
+    @Test
+    public void aRefusedRaiseNeverProvidesTheInset() throws Exception {
+        raise();
+        shell.listener.onRefused(DISPLAY, TASK, 1);
+        idle();
+        assertNull(window.shownOn(DISPLAY));
+        // A late onRaised for a raise already taken down is ignored.
+        shell.listener.onRaised(DISPLAY, TASK, new Rect(0, 0, dp(384), dp(832 - 58)));
+        idle();
+        assertNull(window.shownOn(DISPLAY));
     }
 
     MotionEvent touch(int action, float x, float y) {

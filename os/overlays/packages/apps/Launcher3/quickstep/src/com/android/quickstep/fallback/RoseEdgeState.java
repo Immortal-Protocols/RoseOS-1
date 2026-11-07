@@ -39,6 +39,13 @@ public final class RoseEdgeState {
          * the edge rose.
          */
         default void onPeek(int displayId, float reveal, float approach, int stage) {}
+
+        /**
+         * The shell really shortened the raised task (its onRaised, again on every later onRaised): from here on
+         * nothing of the app lies under the edge, so the window may report its own height as an inset. A lower always
+         * arrives as onRaisedChanged(displayId, false).
+         */
+        default void onResized(int displayId) {}
     }
 
     /** Display id to the task id the edge rose over; absent when lowered. */
@@ -139,7 +146,10 @@ public final class RoseEdgeState {
             if (RESIZED.get(displayId) != null) RoseEdgeShell.setMicSlot(displayId, new Rect());
             return;
         }
-        MIC_SLOT.put(displayId, new MicSlot(slot, widthPx, heightPx, density));
+        MicSlot now = new MicSlot(slot, widthPx, heightPx, density), was = MIC_SLOT.get(displayId);
+        // The same slot laid out again (a relayout, such as the window taking its inset) was already sent.
+        if (now.equals(was)) return;
+        MIC_SLOT.put(displayId, now);
         if (RESIZED.get(displayId) != null) sendMicSlot(displayId);
     }
 
@@ -173,6 +183,19 @@ public final class RoseEdgeState {
             this.heightPx = heightPx;
             this.density = density;
         }
+
+        @Override
+        public boolean equals(Object o) {
+            if (!(o instanceof MicSlot)) return false;
+            MicSlot other = (MicSlot) o;
+            return bounds.equals(other.bounds) && widthPx == other.widthPx && heightPx == other.heightPx
+                    && Float.compare(density, other.density) == 0;
+        }
+
+        @Override
+        public int hashCode() {
+            return bounds.hashCode() * 31 + widthPx * 7 + heightPx;
+        }
     }
 
     public static void addListener(Listener listener) {
@@ -194,6 +217,7 @@ public final class RoseEdgeState {
             RESIZED.put(displayId, new Rect(appBounds));
             // The slot belongs to this raise (the shell dropped any earlier one on its last lower).
             sendMicSlot(displayId);
+            for (Listener listener : new ArrayList<>(LISTENERS)) listener.onResized(displayId);
         }
 
         @Override

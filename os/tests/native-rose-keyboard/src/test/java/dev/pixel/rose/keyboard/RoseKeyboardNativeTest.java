@@ -8,7 +8,9 @@ import android.content.Context;
 import android.os.SystemClock;
 import android.text.InputType;
 import android.view.MotionEvent;
+import android.graphics.Insets;
 import android.view.View;
+import android.view.WindowInsets;
 import android.view.accessibility.AccessibilityNodeInfo;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputConnection;
@@ -244,6 +246,40 @@ public class RoseKeyboardNativeTest {
         view.dispatchTouchEvent(MotionEvent.obtain(t, t, MotionEvent.ACTION_DOWN, k.bounds.centerX(), k.bounds.centerY(), 0));
         view.dispatchTouchEvent(MotionEvent.obtain(t, t + 50, MotionEvent.ACTION_UP, k.bounds.centerX(), k.bounds.centerY(), 0));
         session.selectionChanged(field.getSelectionStart(), field.getSelectionEnd());
+    }
+
+    WindowInsets bottoms(float overlaysDp, float navDp) {
+        float d = context.getResources().getDisplayMetrics().density;
+        return new WindowInsets.Builder()
+                .setInsets(WindowInsets.Type.systemOverlays(), Insets.of(0, 0, 0, Math.round(overlaysDp * d)))
+                .setInsets(WindowInsets.Type.navigationBars(), Insets.of(0, 0, 0, Math.round(navDp * d))).build();
+    }
+
+    int heightAfter(RoseKeyboardView view, WindowInsets insets) {
+        view.dispatchApplyWindowInsets(insets);
+        view.measure(View.MeasureSpec.makeMeasureSpec(view.getWidth(), View.MeasureSpec.EXACTLY),
+                View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED));
+        view.layout(0, 0, view.getMeasuredWidth(), view.getMeasuredHeight());
+        return view.getHeight();
+    }
+
+    @Test
+    public void underTheRaisedChinTheKeysRideUpByWhatPassesTheNavigationBar() {
+        RoseKeyboardView view = laidOut();
+        float d = context.getResources().getDisplayMetrics().density;
+        int base = Math.round(268 * d);
+        RoseKeyboardView.Key space = keyNamed(view, "space");
+        float spaceTop = space.bounds.top;
+        assertEquals("lowered: no systemOverlays inset, the design's 268dp", base, heightAfter(view, bottoms(0, 24)));
+        // Framed against the display under the raised chin: 58dp of chin, 24dp of it the system's rail.
+        assertEquals(base + Math.round(58 * d) - Math.round(24 * d), heightAfter(view, bottoms(58, 24)));
+        assertEquals("the keys stay put in the view; the added space is below them", spaceTop,
+                keyNamed(view, "space").bounds.top, 0f);
+        // Already framed above the navigation bar: the chin reaches 34dp into the keyboard, no bar inset.
+        assertEquals(base + Math.round(34 * d), heightAfter(view, bottoms(34, 0)));
+        // Already laid out above the chin: nothing reaches it, nothing is added.
+        assertEquals(base, heightAfter(view, bottoms(0, 0)));
+        assertEquals("lowered again", base, heightAfter(view, bottoms(0, 24)));
     }
 
     @Test

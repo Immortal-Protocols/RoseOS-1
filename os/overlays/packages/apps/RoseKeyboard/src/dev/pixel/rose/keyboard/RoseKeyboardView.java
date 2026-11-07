@@ -17,6 +17,7 @@ import android.os.SystemClock;
 import android.view.HapticFeedbackConstants;
 import android.view.MotionEvent;
 import android.view.View;
+import android.view.WindowInsets;
 import android.view.accessibility.AccessibilityEvent;
 import android.view.accessibility.AccessibilityNodeInfo;
 import android.view.accessibility.AccessibilityNodeProvider;
@@ -30,6 +31,9 @@ import java.util.List;
  * Paste | Select all | Undo, Redo); then four 46dp key rows with 8dp row gaps and 6dp key gaps, inside 8dp padding:
  * 268dp in all. No number row and no microphone key: voice and microphone-input mute stay on the Rose chin. The 24dp
  * rail under the space row is the system gesture area (Home and the chin), drawn by the system, never by this view.
+ * While the Rose chin is raised it provides a systemOverlays() inset (agreed with OS Core); whatever of it reaches past
+ * the navigation bar's (34dp under the 58dp chin) is added below the space row, so the keys ride up onto the chin's
+ * concave top. Lowered, or where the keyboard already sits above the chin, that is 0 and nothing is added.
  *
  * Touch: a key commits on release, wherever the finger ends (sliding to another key before release types that key);
  * with two thumbs the earlier key commits when the next one lands. A press shows a preview above the key. Holding
@@ -168,7 +172,30 @@ public final class RoseKeyboardView extends View {
 
     @Override
     protected void onMeasure(int widthSpec, int heightSpec) {
-        setMeasuredDimension(MeasureSpec.getSize(widthSpec), Math.round(TOTAL_DP * density));
+        setMeasuredDimension(MeasureSpec.getSize(widthSpec), Math.round(TOTAL_DP * density) + chinLiftPx);
+    }
+
+    /** Below the keys: the raised chin's inset beyond the navigation bar's, or 0. */
+    private int chinLiftPx;
+
+    @Override
+    public WindowInsets onApplyWindowInsets(WindowInsets insets) {
+        // Both bottoms from the window's own insets, before any parent in InputMethodService's frame consumed one:
+        // the subtraction needs navigationBars() and systemOverlays() measured against the same frame.
+        WindowInsets root = getRootWindowInsets();
+        int lift = chinLiftPx(root != null ? root : insets);
+        if (lift != chinLiftPx) {
+            chinLiftPx = lift;
+            requestLayout();
+        }
+        return super.onApplyWindowInsets(insets);
+    }
+
+    /** max(0, systemOverlays().bottom - navigationBars().bottom): what of the raised chin the keys must clear. */
+    static int chinLiftPx(WindowInsets insets) {
+        if (insets == null) return 0;
+        return Math.max(0, insets.getInsets(WindowInsets.Type.systemOverlays()).bottom
+                - insets.getInsets(WindowInsets.Type.navigationBars()).bottom);
     }
 
     @Override
