@@ -322,19 +322,24 @@ public final class Controller {
   }
   return MultiSession.bind(occupied,owned);
  }
- /** The session's input focus, which vision text would land in: the focused editable node of the window that has input
-  * focus (every window, top first, when none reports it), by its own state (focusedEditable), else findFocus(FOCUS_INPUT),
-  * which a released Compose answers only for nodes it has already described. Every node is released at once. Throws
-  * unless VisionInput.refusal allows it: a password field (SecurityException), or nothing editable focused. */
+ /** The session's input focus, which vision text would land in, in the window that has input focus (every window, top
+  * first, when none reports it): findFocus(FOCUS_INPUT) when it names an editable node (the View hierarchy's one input
+  * target), else the focused editable node found by its own state (focusedEditable), since a released Compose answers
+  * findFocus with its non-editable host for nodes it has not described. Either lookup finding a password field refuses
+  * (a WebView can keep a stale focused input beside the real target). Every node is released at once. Throws unless
+  * VisionInput.refusal allows it: a password field (SecurityException), or nothing editable focused. */
  @SuppressWarnings("unchecked") static void visionFocus()throws Exception{
   List<AccessibilityWindowInfo> windows=(List<AccessibilityWindowInfo>)session.getClass().getMethod("getAccessibilityWindows").invoke(session);
   boolean anyFocused=false;for(AccessibilityWindowInfo w:windows)anyFocused|=w.isFocused();
   boolean found=false,editable=false,password=false;
   for(AccessibilityWindowInfo w:windows){
    if(!found&&(!anyFocused||w.isFocused())){AccessibilityNodeInfo root=w.getRoot();
-    if(root!=null){AccessibilityNodeInfo f=focusedEditable(root);
-     if(f==null)f=root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT);
-     if(f!=null){found=true;editable=f.isEditable();password=f.isPassword();if(f!=root)f.recycle();}
+    if(root!=null){AccessibilityNodeInfo input=root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT),state=focusedEditable(root);
+     AccessibilityNodeInfo f=input!=null&&input.isEditable()?input:state!=null?state:input;
+     if(f!=null){found=true;editable=f.isEditable();}
+     password|=(input!=null&&input.isPassword())||(state!=null&&state.isPassword());
+     if(input!=null&&input!=root)input.recycle();
+     if(state!=null&&state!=root&&state!=input)state.recycle();
      root.recycle();}}
    w.recycle();
   }

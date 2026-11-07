@@ -25,7 +25,8 @@ class VisionInputWiring(unittest.TestCase):
         # The window that has input focus, judged by its focused editable node's own state (released Compose answers
         # findFocus only for nodes it has described), then findFocus.
         self.assertIn('w.isFocused()', focus)
-        self.assertLess(focus.index('focusedEditable(root)'), focus.index('findFocus(AccessibilityNodeInfo.FOCUS_INPUT)'))
+        self.assertIn('input!=null&&input.isEditable()?input:state', focus)  # findFocus is the target when editable
+        self.assertIn('password|=(input!=null&&input.isPassword())||(state!=null&&state.isPassword());', focus)
         walk = source.split('static AccessibilityNodeInfo focusedEditable(', 1)[1].split('\n }\n', 1)[0]
         self.assertIn('n.isFocused()&&n.isEditable()', walk)
         self.assertIn('VISION_FOCUS_NODES', walk)
