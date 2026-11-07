@@ -65,7 +65,7 @@
   {
     "name": "customization_glasses_hook",
     "operation": "customization_glasses_hook",
-    "description": "Turn the glasses-on hook on or off, or change what it does: action tray brings Rose Home and its tray forward, and action app opens packageName. The hook runs once each time the glasses go from not worn to worn. It runs only on a real glasses-worn signal, never on a Bluetooth connection, and the returned state says whether this phone has one. Supply at least one of enabled, action or packageName.",
+    "description": "Turn the glasses-on hook on or off, or change what it does: action tray brings Rose Home and its tray forward, and action app opens packageName. The hook runs once each time the glasses go on. Glasses on means any Bluetooth audio device connecting, and removal means the last one disconnecting; this is the owner's chosen signal, not a worn sensor, so other Bluetooth headphones count too. The returned state names the signal. Supply at least one of enabled, action or packageName.",
     "foregroundRequired": false,
     "inputSchema": {
       "type": "object",

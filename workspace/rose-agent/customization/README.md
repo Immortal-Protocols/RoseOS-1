@@ -81,12 +81,10 @@ b. **Node server only: the tools load only when configured.** `dev.pixel.voice` 
 c. **Node server only: background-control mode filters them.** In that mode,
    `background-app-policy.mjs` drops any `dev.pixel.voice` operation that is not
    on its allowlist. None of the `customization_*` operations are on it yet.
-d. **No glasses-worn signal.** The hook can be configured, but it never fires
-   at this revision. The real source is Meta DAT `Device.donState`
-   (DONNED/DOFFED). That lives in the external Glasses Camera app
-   (`dev.pixel.glassescamera`), not in this repo. Relaying it needs a
-   coordinated change outside this repo and Meta registration. A Bluetooth
-   connection and the hinge/unfold advertisement are never treated as worn.
+d. **Glasses on is a Bluetooth audio proxy (owner's choice, 2026-11-07).**
+   Any Bluetooth audio device connecting counts as glasses on, and the last
+   one disconnecting as removal. Other Bluetooth headphones count too. The
+   state's `glassesWear.basis` says so.
 e. **Not deployed.** The conversation tools are registered in source (#627),
    but `--say` reaches them only when Rose on this Mac runs from main and the
    phone has an Agent build with this source installed.
