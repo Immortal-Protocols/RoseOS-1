@@ -82,8 +82,14 @@ if [[ ! -s $file ]]; then
   exit 0
 fi
 chmod 600 "$file"
+digest=$(sha256sum "$file" | awk 'NR==1 {print $1}')
+if [[ ! $digest =~ ^[0-9a-f]{64}$ ]]; then
+  echo 'guest attribute ack failed: digest' >&2
+  cleanup
+  exit 4
+fi
 ackfile=$(mktemp "$install/jit.ack.XXXXXX")
-if ! request PUT "$ack" "$ackfile" 1; then
+if ! request PUT "$ack" "$ackfile" "$digest"; then
   rm -f "$ackfile"
   echo 'guest attribute ack failed: network' >&2
   cleanup
