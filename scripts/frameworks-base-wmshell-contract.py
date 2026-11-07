@@ -153,6 +153,13 @@ CONFIRMATION = {
         'chin, LOWERED_IME keeps its number unsent); the other after-images, the WMShellModule pre-image, the overlays, '
         'the goals and flagEvidence (none) unchanged; no new files, imports or flags; the patch edit is line-count '
         'neutral (hunk headers unchanged)',
+    'javacfix': 'OS Core to OS Product, 2026-11-07 18:26 UTC, commit 31c00a7 on 081164b (the Frankel 2026110702 '
+        'SystemUI-core javac error, roseshade/RoseShadeController.java:990: inside the SwipeFrame FrameLayout the bare '
+        'mContext is View\'s own field and cannot be read before super): only the required overlay '
+        'RoseShadeController.java changes (1ec7b902..., blob 16b634ee), its super call now RoseShadeController.this.'
+        'mContext; OS Product checked every m-prefixed name used in SwipeFrame and the three anonymous View subclasses '
+        'against the pinned View, ViewGroup, FrameLayout, LinearLayout, TextView and EditText fields, and none other '
+        'resolves to a framework field; no patch, no new file, no new import; goals and flagEvidence (none) unchanged',
 }
 
 # Where each goal's sources come from, read from the pinned Android.bp files (committed byte for byte under
