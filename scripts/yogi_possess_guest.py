@@ -222,14 +222,29 @@ def sshd_config_decision(text, effective=None):
     return _key_file_decision(authorized)
 
 
-def filesystem_includes(pattern):
+# OpenSSH 9.2 servconf.c prefixes a non-absolute Include with SSHDIR (/etc/ssh), then globs.
+SSH_CONFIG_DIR = '/etc/ssh'
+
+
+def resolve_include_pattern(pattern, config_dir=SSH_CONFIG_DIR):
+    """Return the path sshd globs. Relative patterns are not resolved against the process cwd."""
+    if not isinstance(pattern, str):
+        raise OSError('bad include')
+    text = pattern.strip()
+    if not text or text.startswith('~') or '\x00' in text:
+        raise OSError('bad include')
+    if not text.startswith('/'):
+        text = str(Path(config_dir) / text)
+    return text
+
+
+def filesystem_includes(pattern, config_dir=SSH_CONFIG_DIR):
     """Read Include targets. A missing explicit path is unproven. A glob may match nothing."""
-    if not isinstance(pattern, str) or not pattern.strip():
-        raise OSError('empty include')
-    explicit = not any(mark in pattern for mark in '*?[]')
-    paths = [pattern] if explicit else sorted(glob.glob(pattern))
-    if explicit and not os.path.isfile(pattern):
-        raise OSError(pattern)
+    text = resolve_include_pattern(pattern, config_dir)
+    explicit = not any(mark in text for mark in '*?[]')
+    paths = [text] if explicit else sorted(glob.glob(text))
+    if explicit and not os.path.isfile(text):
+        raise OSError(text)
     found = []
     for path in paths:
         with open(path, 'r', encoding='utf-8') as handle:
@@ -254,7 +269,7 @@ def match_graph_problem(text, read_include=None):
             if keyword == 'match':
                 return 'sshd-match-unproven'
             if keyword == 'include':
-                includes.append(value)
+                includes.extend(value.split())
         for pattern in includes:
             if read_include is None:
                 return 'sshd-config-unproven'

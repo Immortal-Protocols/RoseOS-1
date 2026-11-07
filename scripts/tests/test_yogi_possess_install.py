@@ -656,6 +656,35 @@ class PossessInstallTest(unittest.TestCase):
         self.assertEqual(caught.exception.code, 'sshd-match-unproven')
         self.assertEqual(self.auth.read_bytes(), original)
 
+    def test_relative_include_glob_match_is_not_missed(self):
+        ssh_dir = self.root / 'etc-ssh'
+        drop = ssh_dir / 'sshd_config.d'
+        drop.mkdir(parents=True)
+        (drop / '99-match.conf').write_text('Match Address 35.235.240.1\nForceCommand /bin/false\n')
+        elsewhere = self.root / 'cwd'
+        elsewhere.mkdir()
+        (elsewhere / 'sshd_config.d').mkdir()
+        (elsewhere / 'sshd_config.d' / 'benign.conf').write_text('PasswordAuthentication no\n')
+        config = 'Include sshd_config.d/*.conf\nPubkeyAuthentication yes\n'
+        previous = os.getcwd()
+        os.chdir(elsewhere)
+        try:
+            def reader(pattern):
+                return guest.filesystem_includes(pattern, config_dir=ssh_dir)
+
+            self.assertEqual(guest.match_graph_problem(config, reader), 'sshd-match-unproven')
+            original = self.auth.read_bytes()
+            with self.assertRaises(guest.GuestRefused) as caught:
+                guest.install(self.root, blob=BLOB, operation_id=OP, probe=PROBE, unit=UNIT, now_unix=NOW,
+                              synchronized=True, sshd_version=VERSION, sshd_config=config, passwd_text=passwd(),
+                              sshd_effective=EFFECTIVE, include_read=reader)
+            self.assertEqual(caught.exception.code, 'sshd-match-unproven')
+            self.assertEqual(self.auth.read_bytes(), original)
+            self.assertEqual(guest.resolve_include_pattern('sshd_config.d/*.conf', ssh_dir),
+                             str(ssh_dir / 'sshd_config.d/*.conf'))
+        finally:
+            os.chdir(previous)
+
     def test_nonzero_sshd_t_and_force_command_refuse(self):
         if not Path('/usr/sbin/sshd').is_file():
             raise AssertionError('sshd fixture did not run: /usr/sbin/sshd is missing')
