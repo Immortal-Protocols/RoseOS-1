@@ -616,6 +616,74 @@ class EnrollmentTest(unittest.TestCase):
             self.assertIn("node version is 'v0.0.0'", wrong.stderr)
             self.assertIn('expected v24.22.2', wrong.stderr)
 
+    def test_source_dirs_are_runner_writable_under_a_root_owned_parent(self):
+        import os
+        import subprocess
+        script = ROOT/'scripts/mustang-guest-bootstrap.sh'
+        user = subprocess.check_output(['id', '-un'], text=True).strip()
+
+        def run(home):
+            return subprocess.run(['bash', str(script), '--prepare-source-dirs'],
+                                  env=dict(os.environ, MUSTANG_BOOTSTRAP_HOME=str(home), MUSTANG_BOOTSTRAP_USER=user),
+                                  capture_output=True, text=True)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary)/'roseos'
+            home.mkdir()
+            (home/'source').mkdir(mode=0o750)
+            (home/'runner').mkdir(mode=0o750)
+            subprocess.run(['sudo', '-n', 'chown', 'root:root', str(home)], check=True)
+            subprocess.run(['sudo', '-n', 'chmod', '755', str(home)], check=True)
+            try:
+                before = subprocess.check_output(['stat', '-c', '%u:%a', str(home)], text=True).strip()
+                created = run(home)
+                self.assertEqual(created.returncode, 0, created.stderr)
+                self.assertEqual(created.stdout, '')
+                self.assertEqual(subprocess.check_output(['stat', '-c', '%u:%a', str(home)], text=True).strip(), '0:755')
+                self.assertEqual(before, '0:755')
+                self.assertEqual(subprocess.check_output(['stat', '-c', '%a', str(home/'source')], text=True).strip(), '750')
+                self.assertEqual(subprocess.check_output(['stat', '-c', '%a', str(home/'runner')], text=True).strip(), '750')
+                for name, mode in (('sync-logs', '700'), ('roseos-pin', '750')):
+                    path = home/name
+                    self.assertEqual(subprocess.check_output(['stat', '-c', '%U:%a', str(path)], text=True).strip(), user+':'+mode)
+                    self.assertFalse(path.is_symlink())
+                    (path/'probe').write_text('runner-write')
+                    blocked = subprocess.run(['sudo', '-n', '-u', 'nobody', 'touch', str(path/'denied')],
+                                             capture_output=True, text=True)
+                    self.assertNotEqual(blocked.returncode, 0)
+                    self.assertFalse((path/'denied').exists())
+                sibling = subprocess.run(['mkdir', str(home/'extra')], capture_output=True, text=True)
+                self.assertNotEqual(sibling.returncode, 0)
+                self.assertFalse((home/'extra').exists())
+                again = run(home)
+                self.assertEqual(again.returncode, 0, again.stderr)
+            finally:
+                subprocess.run(['sudo', '-n', 'chown', '-R', user, str(home)], check=False)
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary)/'roseos'
+            home.mkdir(mode=0o755)
+            (home/'source').mkdir()
+            (home/'runner').mkdir()
+            (home/'sync-logs').symlink_to('/tmp')
+            linked = run(home)
+            self.assertEqual(linked.returncode, 4)
+            self.assertEqual(linked.stderr.strip(), 'sync-logs')
+            self.assertTrue((home/'sync-logs').is_symlink())
+            self.assertFalse((home/'roseos-pin').exists())
+            (home/'sync-logs').unlink()
+            (home/'sync-logs').mkdir(mode=0o755)
+            unexpected = run(home)
+            self.assertEqual(unexpected.returncode, 4)
+            self.assertEqual(unexpected.stderr.strip(), 'sync-logs')
+            self.assertEqual(subprocess.check_output(['stat', '-c', '%a', str(home/'sync-logs')], text=True).strip(), '755')
+            (home/'roseos-pin').write_text('not-a-directory')
+            (home/'sync-logs').chmod(0o700)
+            # owner is the test user and mode is now correct, so the next refusal is the file
+            refused_file = run(home)
+            self.assertEqual(refused_file.returncode, 4)
+            self.assertEqual(refused_file.stderr.strip(), 'roseos-pin')
+            self.assertTrue((home/'roseos-pin').is_file())
+
 
 class WorkflowCliContractTest(unittest.TestCase):
     """Every dedicated-workflow ephemeral command is parsed by main, not a helper."""

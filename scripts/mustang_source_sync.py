@@ -13,6 +13,7 @@ import os
 import pwd
 import re
 import signal
+import stat
 import subprocess
 import time
 from pathlib import Path
@@ -330,21 +331,55 @@ def run_bounded(argv, timeout, spawn, stop, clock, sleep):
         raise ValueError('source sync failed; the guest did not stop the VM')
 
 
+def stage_name(value):
+    if isinstance(value, str) and re.fullmatch(r'[a-z][a-z0-9-]{0,40}', value):
+        return value
+    return None
+
+
+def failed(stage):
+    """A diagnosable stage name. The message and any chained error stay empty of command output."""
+    error = ValueError('source sync failed; the guest did not stop the VM')
+    name = stage_name(stage)
+    if name is not None:
+        error.stage = name
+    return error
+
+
+def failure_line(error):
+    name = stage_name(getattr(error, 'stage', None))
+    if name is None:
+        return 'source sync failed; the guest did not stop the VM'
+    return 'source sync failed: '+name
+
+
+def require_sync_logs(directory):
+    """Use the bootstrap-created log directory. Never create or chmod its parent."""
+    directory = Path(directory)
+    if directory.is_symlink() or not directory.is_dir():
+        raise failed('sync-logs')
+    info = directory.stat()
+    if info.st_uid != os.geteuid() or stat.S_IMODE(info.st_mode) != 0o700:
+        raise failed('sync-logs')
+    return directory
+
+
 def spawn_subprocess(argv, log_dir=None):
     """Write step output to private files. A full pipe is not polled, so it would deadlock."""
-    directory = Path(log_dir) if log_dir is not None else Path(LOG_ROOT)
-    directory.mkdir(parents=True, exist_ok=True)
-    os.chmod(directory, 0o700)
+    directory = require_sync_logs(Path(log_dir) if log_dir is not None else Path(LOG_ROOT))
     stamp = str(time.time_ns())
     stdout_path = directory/(stamp+'.stdout')
     stderr_path = directory/(stamp+'.stderr')
-    stdout_handle = os.fdopen(os.open(stdout_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), 'wb')
-    stderr_handle = os.fdopen(os.open(stderr_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), 'wb')
     try:
-        proc = subprocess.Popen(argv, stdout=stdout_handle, stderr=stderr_handle, start_new_session=True)
-    finally:
-        stdout_handle.close()
-        stderr_handle.close()
+        stdout_handle = os.fdopen(os.open(stdout_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), 'wb')
+        stderr_handle = os.fdopen(os.open(stderr_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), 'wb')
+        try:
+            proc = subprocess.Popen(argv, stdout=stdout_handle, stderr=stderr_handle, start_new_session=True)
+        finally:
+            stdout_handle.close()
+            stderr_handle.close()
+    except OSError:
+        raise failed('sync-logs') from None
 
     class Bound:
         def poll(self):
@@ -426,8 +461,10 @@ def orchestrate(approval, _ownership, spawn, stop, clock, sleep, root=ROOT):
             limit = step['limit'] if step['limit'] < remaining else remaining
             try:
                 text = run_bounded(step['argv'], limit, spawn, lambda item: halt(item['reason']), clock, sleep)
-            except ValueError:
+            except ValueError as error:
                 halt('source-sync-failed')
+                if stage_name(getattr(error, 'stage', None)) is None:
+                    error.stage = step['name']
                 raise
             if 'expect' in step:
                 _exact(text, step['expect'], 'source sync '+step['name']+' differs')
@@ -479,8 +516,8 @@ def main(argv=None):
             require_runner_user()
             approval = json.loads(Path(args.approval).read_text()) if args.approval else workflow_approval()
             receipt = orchestrate(approval, None, spawn, lambda _detail: None, time.monotonic, time.sleep)
-        except (OSError, ValueError, json.JSONDecodeError):
-            print('source sync failed; the guest did not stop the VM')
+        except (OSError, ValueError, json.JSONDecodeError) as error:
+            print(failure_line(error))
             return 4
     finally:
         signal.signal(signal.SIGTERM, previous)
