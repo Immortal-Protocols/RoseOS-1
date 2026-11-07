@@ -42,7 +42,15 @@ final class CustomizationStore {
 
  private static SharedPreferences prefs(Context c) { return c.getApplicationContext().getSharedPreferences(PREFS, Context.MODE_PRIVATE); }
 
- static synchronized CustomizationConfig read(Context c) { return CustomizationConfig.parse(prefs(c).getString(CONFIG, null)); }
+ /** The stored config. Home's tile labels and chat rows read it per view, so the parse is cached against the exact
+  * stored text: an unchanged value costs a string comparison, a new one is parsed once. */
+ private static String cachedText;
+ private static CustomizationConfig cached = CustomizationConfig.DEFAULTS;
+ static synchronized CustomizationConfig read(Context c) {
+  String text = prefs(c).getString(CONFIG, null);
+  if (text == null ? cachedText != null : !text.equals(cachedText)) { cached = CustomizationConfig.parse(text); cachedText = text; }
+  return cached;
+ }
 
  /** Validates and stores one operation. A validation failure throws IllegalArgumentException and stores nothing;
   * an identical request stores nothing and keeps the revision; a failed commit restores the previous value and

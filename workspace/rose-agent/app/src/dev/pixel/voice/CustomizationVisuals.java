@@ -11,7 +11,8 @@ import android.graphics.Typeface;
  *
  * <p>The defaults reproduce today's drawing exactly: classic has no filter, the default conversation face is
  * MainActivity.chatFont (the Nunito asset at the requested weight) and the default label face is
- * Typeface.create(Typeface.SANS_SERIF, weight, false) as HomeAppTile and HomeFolder use. Nothing here throws: a
+ * Typeface.create(Typeface.SANS_SERIF, weight, false), which HomeAppTile and HomeFolder used before they called
+ * labelTypeface. Nothing here throws: a
  * missing asset or an unknown id falls back to the default face, because a font choice must never break Home.
  * Weighted Typeface.create needs API 28; minSdk is 29. */
 final class CustomizationVisuals {
