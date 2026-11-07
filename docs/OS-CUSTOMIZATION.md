@@ -158,6 +158,16 @@ What was not done:
 
 - #626 (merge `002d5d4`): the controls, Home integration, provider forward, conversation module, CLI and this record.
 - #627 (merge `db03077`, App Core): conductor registration.
+- #645 (merge `3d6f1ad`): the glasses-on hook's signal is Bluetooth audio connect/disconnect (owner's choice).
+
+Builds that carry it:
+- **Frankel 2026110701** (Beta Latest; os-release run 42389218389 on main `74b7ef8`; Rose Agent `voice` versionCode
+  366). It includes #626 and #627: columns, wallpaper, font and the conversation tools. It does not include #645, so
+  the glasses-on hook has no signal in that build.
+- **The next Frankel daily build** (04:00 America/Los_Angeles, enabled by #621) builds from main, so it carries #645.
+
+This workstream has not verified either build, installed it or run it on a device. The identities above come from the
+Release lane's run record.
 
 On a phone the controls are reachable through conversation only after the Mac/cloud producer is restarted from main and
 an Agent build with this source is installed. Neither has happened: nothing is deployed or activated. No APK has been
