@@ -55,6 +55,10 @@ test('retired settings: their screens and plumbing are removed; stored values ar
  assert.doesNotMatch(main,/experimentalHome|"✦ Pixel"/);
  // The Live Mac screen card is removed from Home with its setting; nothing in MainActivity opens the Mac screen.
  assert.doesNotMatch(main,/MacScreenPanel|macPanel|screenDetail|showMacCard|expandMacScreen|closeMacScreen|"mac-screen-enabled"/);
+ // ... and the panel, its page and its example connection file are removed (its card had no other entry).
+ for(const file of ['MacScreenPanel.java'])assert.ok(!exists(file),file);
+ for(const asset of ['mac-screen.html','mac-screen.js','mac-screen-connection.example.json'])
+  assert.ok(!fs.existsSync(new URL('../app/assets/'+asset,import.meta.url)),asset);
  // Keep screen on stays the owner's through the Quick Settings tile.
  assert.match(source('ScreenTile.java'),/ScreenPolicy\.setKeepScreenOn\(/);
  // No migration: opening Rose Agent or its settings changes no stored setting.

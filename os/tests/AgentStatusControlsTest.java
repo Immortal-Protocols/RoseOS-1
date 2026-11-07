@@ -15,8 +15,9 @@ public final class AgentStatusControlsTest {
     }
 
     static int tap(AgentStatusControls c, int down, int up, long heldMs, boolean active, boolean muted) {
-        c.touch(DOWN, 1, 10, 5, 1000, down, active, muted, SLOP);
-        return c.touch(UP, 1, 10, 5, 1000 + heldMs, up, active, muted, SLOP);
+        // muted is shown, never acted on: the status-bar microphone is display-only.
+        c.touch(DOWN, 1, 10, 5, 1000, down, active, SLOP);
+        return c.touch(UP, 1, 10, 5, 1000 + heldMs, up, active, SLOP);
     }
 
     public static void main(String[] args) {
@@ -30,36 +31,39 @@ public final class AgentStatusControlsTest {
 
         AgentStatusControls c = new AgentStatusControls();
         expect("idle agent tap starts", START, tap(c, AGENT, AGENT, 100, false, false));
-        expect("idle mic tap starts", START, tap(c, MIC, MIC, 100, false, false));
         expect("active agent tap ends", END, tap(c, AGENT, AGENT, 100, true, false));
-        expect("active mic tap mutes", MUTE, tap(c, MIC, MIC, 100, true, false));
-        expect("muted mic tap unmutes", UNMUTE, tap(c, MIC, MIC, 100, true, true));
+        // F08 and keyboard rule 4: the chin holds the only microphone control; the status-bar mic is display-only.
+        expect("idle mic tap does nothing", 0, tap(c, MIC, MIC, 100, false, false));
+        expect("active mic tap never mutes", 0, tap(c, MIC, MIC, 100, true, false));
+        expect("muted mic tap never unmutes", 0, tap(c, MIC, MIC, 100, true, true));
+        expect("a tap on Mic off at rest does nothing", 0, tap(c, MIC, MIC, 100, false, true));
         expect("tap outside both glows", 0, tap(c, NONE, NONE, 100, true, false));
         expect("down and up on different glows", 0, tap(c, AGENT, MIC, 100, true, false));
-        expect("long press is not a tap", 0, tap(c, MIC, MIC, 401, true, false));
-        expect("400 ms is still a tap", MUTE, tap(c, MIC, MIC, 400, true, false));
+        expect("down on the mic, up on the agent", 0, tap(c, MIC, AGENT, 100, true, false));
+        expect("long press is not a tap", 0, tap(c, AGENT, AGENT, 401, true, false));
+        expect("400 ms is still a tap", END, tap(c, AGENT, AGENT, 400, true, false));
 
-        c.touch(DOWN, 1, 10, 5, 1000, MIC, true, false, SLOP);
-        c.touch(MOVE, 1, 10 + SLOP + 1, 5, 1010, MIC, true, false, SLOP);
+        c.touch(DOWN, 1, 10, 5, 1000, AGENT, true, SLOP);
+        c.touch(MOVE, 1, 10 + SLOP + 1, 5, 1010, AGENT, true, SLOP);
         expect("drag past slop (to the shade) is not a tap", 0,
-                c.touch(UP, 1, 10, 5, 1020, MIC, true, false, SLOP));
+                c.touch(UP, 1, 10, 5, 1020, AGENT, true, SLOP));
 
-        c.touch(DOWN, 1, 10, 5, 1000, MIC, true, false, SLOP);
-        c.touch(MOVE, 1, 10 + SLOP, 5 + SLOP, 1010, MIC, true, false, SLOP);
-        expect("movement within slop still taps", MUTE, c.touch(UP, 1, 10, 5, 1020, MIC, true, false, SLOP));
+        c.touch(DOWN, 1, 10, 5, 1000, AGENT, true, SLOP);
+        c.touch(MOVE, 1, 10 + SLOP, 5 + SLOP, 1010, AGENT, true, SLOP);
+        expect("movement within slop still taps", END, c.touch(UP, 1, 10, 5, 1020, AGENT, true, SLOP));
 
-        c.touch(DOWN, 1, 10, 5, 1000, AGENT, true, false, SLOP);
-        expect("second pointer cancels", 0, c.touch(MOVE, 2, 10, 5, 1010, AGENT, true, false, SLOP));
-        expect("up after multi-touch cancel", 0, c.touch(UP, 1, 10, 5, 1020, AGENT, true, false, SLOP));
+        c.touch(DOWN, 1, 10, 5, 1000, AGENT, true, SLOP);
+        expect("second pointer cancels", 0, c.touch(MOVE, 2, 10, 5, 1010, AGENT, true, SLOP));
+        expect("up after multi-touch cancel", 0, c.touch(UP, 1, 10, 5, 1020, AGENT, true, SLOP));
 
-        c.touch(DOWN, 1, 10, 5, 1000, AGENT, true, false, SLOP);
-        expect("cancel event", 0, c.touch(CANCEL, 1, 10, 5, 1010, AGENT, true, false, SLOP));
-        expect("up after cancel", 0, c.touch(UP, 1, 10, 5, 1020, AGENT, true, false, SLOP));
+        c.touch(DOWN, 1, 10, 5, 1000, AGENT, true, SLOP);
+        expect("cancel event", 0, c.touch(CANCEL, 1, 10, 5, 1010, AGENT, true, SLOP));
+        expect("up after cancel", 0, c.touch(UP, 1, 10, 5, 1020, AGENT, true, SLOP));
 
-        c.touch(DOWN, 1, 10, 5, 1000, AGENT, true, false, SLOP);
+        c.touch(DOWN, 1, 10, 5, 1000, AGENT, true, SLOP);
         c.cancel();  // keyguard, screen-off or lost binding while the finger is down
-        expect("up after external cancel", 0, c.touch(UP, 1, 10, 5, 1020, AGENT, true, false, SLOP));
-        expect("stray up without down", 0, c.touch(UP, 1, 10, 5, 1030, AGENT, true, false, SLOP));
+        expect("up after external cancel", 0, c.touch(UP, 1, 10, 5, 1020, AGENT, true, SLOP));
+        expect("stray up without down", 0, c.touch(UP, 1, 10, 5, 1030, AGENT, true, SLOP));
         // F08: the chin is available only with the edge switch, user 0 and gesture navigation.
         expect("chin available", 1, AgentStatusControls.chinArg(true, 0, 2));
         expect("switch off", 0, AgentStatusControls.chinArg(false, 0, 2));
