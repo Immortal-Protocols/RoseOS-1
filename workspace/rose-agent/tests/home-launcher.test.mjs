@@ -140,7 +140,9 @@ test('Home layout, page/gesture and overview Java checks run against the product
 test('the Rose entry opens App\'s conversation activity and only navigates',()=>{
  assert.match(main,/new RoseHomeView\(this,homeEntries,homeColumns,this::homeMeasured\)\);/,'Home fills its measured rows (#410 owner density correction)');
  // Home's columns come from the same planned/measured app area as the app pages (#410: four unlabelled 60dp cells).
- assert.match(main,/homeColumns=HomeAppLayout\.homeColumns\(homeWidth\/density\);homeCapacity=HomeAppLayout\.homeCapacity\(homeWidth,homeHeight,homeCell,density\);/);
+ // Nov 7 plan 1O: the column preference (0 = this automatic rule) plans, sizes and judges staleness with one value.
+ assert.match(main,/homeColumns=CustomizationConfig\.effectiveHomeColumns\(preferred,homeWidth\/density\);homeCapacity=CustomizationConfig\.homeCapacity\(preferred,homeWidth,homeHeight,homeCell,density\);/);
+ assert.match(main,/CustomizationConfig\.homeStale\(plannedCustomization\.homeColumns,homeColumns,homeCapacity,homeViewport\.width,homeViewport\.height,homeViewport\.cell,density\)/);
  // The tray's Rose well is the plain navigation hook and nothing else.
  assert.match(homeTray,/rose\.setOnClickListener\(v -> openRose\.run\(\)\);/);
  assert.match(homeTray,/rose\.setContentDescription\("Open Rose"\);/);
@@ -423,7 +425,7 @@ test('app labels and page dots follow the Oxblood type and dot treatment (#410)'
  // oxblood.css:43 with style.css:590: 11.5px, weight 500, #d2b9ab, text-shadow 0 1px 4px rgba(0,0,0,.7). Inter falls
  // back to the system UI sans; no font asset is added.
  const label=cell.slice(cell.indexOf(' static TextView label('));
- assert.match(label,/name\.setTextSize\(11\.5f\);\n  name\.setTextColor\(0xffd2b9ab\);\n  name\.setTypeface\(Typeface\.create\(Typeface\.SANS_SERIF, 500, false\)\);/);
+ assert.match(label,/name\.setTextSize\(11\.5f\);\n  name\.setTextColor\(0xffd2b9ab\);\n  name\.setTypeface\(CustomizationVisuals\.labelTypeface\(context, 500\)\); \/\/ 1O font choice; default SANS_SERIF 500/);
  assert.match(label,/name\.setShadowLayer\(dp\(density, 2\), 0, dp\(density, 1\), 0xb3000000\);/);
  assert.match(cell,/static int dp\(float density, float value\) \{ return \(int\) \(value \* density\); \}/,'MainActivity.dp\'s truncation, so cells keep their sizes');
  assert.ok(!/chatFont\(800\)/.test(label),'not the rounded 800 face');

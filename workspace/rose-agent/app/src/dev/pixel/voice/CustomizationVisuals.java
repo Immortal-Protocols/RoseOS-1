@@ -41,6 +41,9 @@ final class CustomizationVisuals {
   return t != null ? t : weighted(Typeface.SANS_SERIF, weight);
  }
 
+ /** The label face for the stored font choice (Home and folder labels). */
+ static Typeface labelTypeface(Context ctx, int weight) { return labelTypeface(ctx, CustomizationStore.read(ctx).font, weight); }
+
  private static Typeface fallbackConversation(Context ctx, int weight) {
   Typeface n = nunito(ctx);
   return weighted(n != null ? n : Typeface.DEFAULT, weight);

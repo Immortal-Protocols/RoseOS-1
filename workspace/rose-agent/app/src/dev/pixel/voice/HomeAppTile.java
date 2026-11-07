@@ -76,7 +76,7 @@ final class HomeAppTile {
   name.setText(label);
   name.setTextSize(11.5f);
   name.setTextColor(0xffd2b9ab);
-  name.setTypeface(Typeface.create(Typeface.SANS_SERIF, 500, false));
+  name.setTypeface(CustomizationVisuals.labelTypeface(context, 500)); // 1O font choice; default SANS_SERIF 500
   name.setShadowLayer(dp(density, 2), 0, dp(density, 1), 0xb3000000);
   name.setIncludeFontPadding(false);
   name.setGravity(Gravity.TOP | Gravity.CENTER_HORIZONTAL);
