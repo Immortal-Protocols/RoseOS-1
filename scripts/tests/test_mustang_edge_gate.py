@@ -737,6 +737,17 @@ class DedicatedRuntimeTest(unittest.TestCase):
         (self.root/self.cfg['allocationState']).write_text(json.dumps(state))
         with self.assertRaisesRegex(ValueError,'allocation state remains unresolved'): self.admitted()
 
+    def test_candidate_continuity_satisfies_guard_without_the_old_target_files(self):
+        name='os/build-only/mustang-candidate-continuity-20261107.json'
+        dest=self.root/name
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes((ROOT/name).read_bytes())
+        cfg=dict(self.cfg, baselineTargetFiles=None, candidateContinuity=name)
+        self.assertIsNone(self.admitted(cfg)['baselineTargetFiles'])
+        broken=json.loads(dest.read_text()); broken['currentPhone']=True
+        dest.write_text(json.dumps(broken))
+        with self.assertRaisesRegex(ValueError,'not a current phone'): self.admitted(cfg)
+
     def test_copy_time_frankel_snapshot_is_not_a_source_pin(self):
         path=self.root/self.cfg['sourceEvidence']
         source=self.driver.load(path)
@@ -823,6 +834,8 @@ class DedicatedRuntimeTest(unittest.TestCase):
         self.assertEqual(readiness.enrollment()['github']['runnerCount'],0)
         self.assertIn('4884085713',' '.join(item['detail'] for item in report['blockers']))
         self.assertIn('signed-target_files.zip', ' '.join(item['detail'] for item in report['blockers']))
+        self.assertIn('mustang-candidate-continuity-20261107.json', ' '.join(item['detail'] for item in report['blockers']))
+        self.assertIn('Runtime stays unbound', ' '.join(item['detail'] for item in report['blockers']))
         self.assertIn('no authoritative ledger', ' '.join(item['detail'] for item in report['blockers']))
         self.assertIn('copy-time only', ' '.join(item['detail'] for item in report['blockers']))
         self.assertFalse(report['numberStrategy']['selectsBuildNumber'])
@@ -859,16 +872,25 @@ class DedicatedRuntimeTest(unittest.TestCase):
         self.assertFalse(report['sourcePin']['factoryOnDedicatedDisk'])
         self.assertFalse(report['sourcePin']['factoryExtracted'])
         self.assertEqual(report['sourcePin']['factoryBox']['sizeBytes'], 11366092596)
+        self.assertTrue(report['otaContinuity']['installerAlternative']['historical'])
         self.assertFalse(report['otaContinuity']['installerAlternative']['apkExtracted'])
         self.assertEqual(report['otaContinuity']['installerAlternative']['inventory']['safeEntries'], 34)
         self.assertFalse(report['otaContinuity']['installerAlternative']['isTargetFiles'])
+        current = report['otaContinuity']['currentContinuity']
+        self.assertEqual(current['updaterSha256'], '32d5f335098c14839641784552fbed513932921c26f4b83647967747198c2cd9')
+        self.assertEqual(current['certificateDerSha256'], '93cc757e7f4e4e5c4ef7726fbeec9acc77b1f97d471c1cd0d62753cf94e471a8')
+        self.assertFalse(current['apkSignerRemeasured'])
+        self.assertFalse(current['currentPhone'])
+        self.assertEqual(current['runtimeStatus'], 'unbound')
         self.assertFalse(report['otaContinuity']['phoneUpdatePassed'])
         self.assertEqual(report['otaContinuity']['updater']['otaCertificateSha256'],
                          '93cc757e7f4e4e5c4ef7726fbeec9acc77b1f97d471c1cd0d62753cf94e471a8')
         self.assertEqual(report['sourcePin']['projectsWith40HexRevision'], report['sourcePin']['projectCount'])
         self.assertGreater(report['sourcePin']['projectCount'], 1000)
         self.assertFalse(report['otaContinuity']['fullOtaUsesPreviousTargetFiles'])
-        self.assertTrue(report['otaContinuity']['oldSignedTargetFilesNeededForInstalledTrust'])
+        self.assertFalse(report['otaContinuity']['oldSignedTargetFilesNeededForInstalledTrust'])
+        self.assertTrue(report['otaContinuity']['installedTrustObservationRequired'])
+        self.assertEqual(report['otaContinuity']['installedTrustPath'], 'candidate-installer-continuity')
         self.assertFalse(report['otaContinuity']['phoneAcceptanceIncluded'])
         self.assertEqual(report['otaContinuity']['installedTimestamp'], '1793742435')
         self.assertNotIn('secretAccessor', json.dumps(report['controllerWif']))
