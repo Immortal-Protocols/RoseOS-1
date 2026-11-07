@@ -133,7 +133,7 @@
         "queue",
         "controller"
       ],
-      "note": "1E: the standalone compile harness has its own manual workflow, launcher3-compile.yml: its own queue, an owned controller and STOP from a per-run ownership record, and a worker routed only to the bound runner label. The os-release.yml launcher3-compile mode is removed. The host above names only where its earlier runs ran; Frankel's builder-reclaim launcher3-compile class still cleans their leftovers, and nothing routes there. The active binding is unbound, so the lane claims no capacity until Infra's verified readback is bound."
+      "note": "1E: the standalone compile harness has its own manual workflow, launcher3-compile.yml: its own queue, an owned controller and STOP from a per-run ownership record, and a worker routed only to the bound runner label. The os-release.yml launcher3-compile mode is removed. The host above names only where its earlier runs ran; Frankel's builder-reclaim launcher3-compile class still cleans their leftovers, and nothing routes there. The active binding is source-bound for the manual compile workflow only. This lane still claims no release or OTA capacity: runtimeStatus stays retired-shared-host, modes stay empty, and no os-release or OTA workflow reads the binding."
     },
     "frankel-host-other": {
       "workflow": ".github/workflows/os-release.yml",

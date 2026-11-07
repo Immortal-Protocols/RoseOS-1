@@ -1,11 +1,11 @@
 """LAUNCHER3-COMPILE workflow wiring: the dedicated manual workflow .github/workflows/launcher3-compile.yml.
 
-The harness has its own queue, a hosted guard that runs the adapter's and the controller's checks (an unbound binding
+The harness has its own queue, a hosted guard that runs the adapter's and the controller's checks (a missing input
 exits 4 before any login, VM start or self-hosted routing), an owned controller start whose ownership record is always
 preserved, a worker routed only to the bound runner label that re-checks the bounds, runs one bounded adapter run and
 always finishes (allowlisted reports, this run's own cleanup), and a hosted cleanup that stops only a VM this run
-started, from this run's own record. The os-release.yml launcher3-compile mode is retired. Text, the real unbound
-binding and stand-ins only: no host, VM, lock, copy, lunch, build or cloud call is made."""
+started, from this run's own record. The os-release.yml launcher3-compile mode is retired. Text, the committed
+verifyIntegrated binding and stand-ins only: no host, VM, lock, copy, lunch, build or cloud call is made."""
 import contextlib
 import importlib.util
 import io
@@ -113,18 +113,29 @@ class Guard(unittest.TestCase):
             with self.subTest(change=change):
                 self.assertNotEqual(run(**{**ok, **change}), 0)
 
-    def test_the_committed_binding_is_unbound_so_nothing_is_routed(self):
+    def test_the_committed_binding_routes_only_this_workflow(self):
         env = {k: v for k, v in os.environ.items() if not k.startswith('GITHUB_')}
         env.update(GITHUB_ACTIONS='true', GITHUB_WORKFLOW_REF=f'Immortal-Protocols/RoseOS-1/{PATH}@refs/heads/main')
-        for script in ('scripts/launcher3-compile.py', 'scripts/launcher3_controller.py'):
-            with self.subTest(script=script):
-                result = subprocess.run([sys.executable, str(ROOT/script), 'check'], capture_output=True, text=True,
-                                        env=env, cwd=ROOT)
-                self.assertEqual((result.returncode, result.stdout), (4, ''))
+        compile_check = subprocess.run([sys.executable, str(ROOT/'scripts/launcher3-compile.py'), 'check'],
+                                       capture_output=True, text=True, env=env, cwd=ROOT)
+        self.assertEqual(compile_check.returncode, 0, compile_check.stderr)
+        self.assertIn('outer_seconds=21720\n', compile_check.stdout)
+        controller = subprocess.run([sys.executable, str(ROOT/'scripts/launcher3_controller.py'), 'check'],
+                                    capture_output=True, text=True, env=env, cwd=ROOT)
+        self.assertEqual(controller.returncode, 0, controller.stderr)
+        reported = json.loads(controller.stdout)
+        self.assertEqual(reported['status'], 'source-bound')
+        self.assertIs(reported['runtimeAuthorized'], False)
+        self.assertEqual((reported['workflow'], reported['queue'], reported['runnerLabel']),
+                         (PATH, 'launcher3-compile', 'roseos-launcher3-compile-01'))
+        binding = json.loads((ROOT/'os/build-only/launcher3-compile-lane.json').read_text())
+        digest = adapter.launcher3_lane.digest(binding)
         result = subprocess.run([sys.executable, str(ROOT/'scripts/launcher3-routing.py'), 'guard'], capture_output=True,
                                 text=True, env=env, cwd=ROOT)
-        self.assertEqual((result.returncode, result.stdout), (4, ''))  # no runs_on output while unbound
-        self.assertIn('unbound', result.stderr)
+        self.assertEqual((result.returncode, result.stdout), (0,
+            'runs_on=["self-hosted","roseos-launcher3-compile-01"]\n'
+            'runner_name=roseos-launcher3-compile-01\n'
+            f'binding_sha256={digest}\n'))
         # From the retired os-release.yml route, or any other workflow, the lane refuses outright.
         env['GITHUB_WORKFLOW_REF'] = 'Immortal-Protocols/RoseOS-1/.github/workflows/os-release.yml@refs/heads/main'
         result = subprocess.run([sys.executable, str(ROOT/'scripts/launcher3_controller.py'), 'check'],
