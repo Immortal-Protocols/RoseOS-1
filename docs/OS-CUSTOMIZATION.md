@@ -74,9 +74,9 @@ permissioned API that raises the OS edge, a direct command endpoint, and any tru
   - **`SettingsAgentProvider`** (`7a14fef`, applied): a two-line `customization_` forward inside the signature-gated
     `execute()`, plus the capabilities merge. App Core reviewed it as owner and treated it as security-relevant.
     `CustomizationAgent` stays in its own file. The gate, receipts and timeout are unchanged, and a node test pins this.
-  - **Not applied here: `rose/codex_conductor.py`.** After this merges, App Core adds the ~4 lines that register `rose.customization.TOOLS` and the policy
-    line. Their conditions: no free-text logging, `ok` only for the phone's confirmed status, no retries. Not
-    touched here while App Core reconciles #550.
+  - **`rose/codex_conductor.py`** (App Core's file; their #627, merge `db03077`): registers `rose.customization.TOOLS`
+    and the policy line on the conversation thread. Their conditions were no free-text logging, `ok` only for the
+    phone's confirmed status, and no retries. This workstream did not edit the file.
 - **OS Product** (`session_015TFqkUvLjBgRPN1soK4VYh`). The Home fallback for "tray" is agreed. Raising the OS edge
   over the current app is a documented limitation: there is no exported or permissioned entry. Rebuilding the in-app
   `HomeTray` through `attachLauncherPages(true)` does not interact with the 1A OS edge (#618).
@@ -154,5 +154,11 @@ What was not done:
 - no glasses hardware evidence;
 - no publication.
 
-On a phone the controls work through conversation only after App Core registers the conductor tools (after this merges)
-and an Agent build with this source is installed. No APK has been built or run on a device in this workstream.
+## Source delivery
+
+- #626 (merge `002d5d4`): the controls, Home integration, provider forward, conversation module, CLI and this record.
+- #627 (merge `db03077`, App Core): conductor registration.
+
+On a phone the controls are reachable through conversation only after the Mac/cloud producer is restarted from main and
+an Agent build with this source is installed. Neither has happened: nothing is deployed or activated. No APK has been
+built or run on a device in this workstream. The glasses-on hook stays inert until a real worn signal exists.

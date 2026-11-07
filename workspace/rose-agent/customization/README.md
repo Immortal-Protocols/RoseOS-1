@@ -1,9 +1,10 @@
 # Rose customization CLI
 
 Nov 7 plan 1O. Rose's four customization controls change live, with no OS
-rebuild. Rose Agent dispatches them and Home applies them in this source. On a
-phone they still need the conversation tools registered (limitation e) and an
-installed Agent build. Host tests here are not device evidence:
+rebuild. Rose Agent dispatches them, Home applies them and Rose's conversation
+registers them in this source (#626, #627). On a phone they still need an
+installed Agent build and a Rose backend restarted from main (limitation e).
+Host tests here are not device evidence:
 
 | Control | Tool | Values |
 | --- | --- | --- |
@@ -22,7 +23,7 @@ Both paths use `../app/assets/customization-agent-tools.json`:
   the same code on the Mac and in the cloud) gets the tools from
   `rose/customization.py`: `TOOLS` is the catalog unchanged, and `call()` sends
   the command over the existing phone link. App Core registers them in
-  `rose/codex_conductor.py` (about 4 lines, App Core's file). The older Node
+  `rose/codex_conductor.py` (App Core's file, #627). The older Node
   server can load the same catalog as `dev.pixel.voice` app tools
   (`server/app-tool-catalog.mjs`).
 - **This CLI.** `controls.mjs` loads the same file. It validates arguments with
@@ -86,10 +87,9 @@ d. **No glasses-worn signal.** The hook can be configured, but it never fires
    (`dev.pixel.glassescamera`), not in this repo. Relaying it needs a
    coordinated change outside this repo and Meta registration. A Bluetooth
    connection and the hinge/unfold advertisement are never treated as worn.
-e. **Conversation tools are not registered yet.** App Core adds
-   `rose.customization.TOOLS` to `codex_conductor.py` after this module is on
-   main. Until then, and until an Agent build with this source is installed,
-   `--say` reaches a Rose that has no customization tools.
+e. **Not deployed.** The conversation tools are registered in source (#627),
+   but `--say` reaches them only when Rose on this Mac runs from main and the
+   phone has an Agent build with this source installed.
 f. **Some glasses-hook rules are enforced only on the phone.** The server's
    validator (and this CLI's mirror of it) accepts these, and the phone's
    `CustomizationConfig` refuses them, which is the intended authority:
