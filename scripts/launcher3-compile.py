@@ -113,7 +113,7 @@ MANIFEST = ROOT/'os/compile-contracts/launcher3-quickstep-lib.json'
 # OS Product's reviewed contract version (schema 3). Re-pinned 2026-11-07 to the live trusted patcher:
 # #440's delta is empty, so base equals final, and branches.otherwise is Product's wording on #662.
 # A different manifest is refused until this pin is updated.
-MANIFEST_SHA256 = 'ff03a08249146a014dafaa5e1a9ef5084100b2f01f5a35ff7948e84506fd5461'
+MANIFEST_SHA256 = '5190f87dd39a60ff76ce9a62615225af6ad976f1073391a7e73cdfd2a84d42eb'
 CONDITIONS = ['base-exact', 'delta-preimages', 'isolated-apply', 'final-exact']
 # The binding inputs each branch requires and forbids, in the contract's own vocabulary (branches.requires, forbids):
 # check() binds and refuses exactly these, so the contract and this adapter cannot drift.
@@ -185,7 +185,7 @@ APPLY_ARGS_SOURCE = {'path': 'os/release-pipeline/frankel.json', 'key': 'host.in
 # and acceptance, the overlay role rules and the unaffected, notInputs, provenance, proves, candidatePatches and
 # outputsToBind statements. A re-pinned contract that changes any of it is invalid until this adapter is reviewed
 # against the new text, so a re-pin is never only a hash bump.
-CONTRACT_TEXT_SHA256 = '22fc9d8c08576d41ea590f1bcc493e82c03818a3a7ebc47bdafe70ef7cf99d69'
+CONTRACT_TEXT_SHA256 = '5cf3f74ae875db0f7ce7433ef864d9707d01e98374a476ce088a32dce1ac3bd6'
 APPLY_STEPS = ['git -C <copy>/<project> apply --check -p<strip> <bundlePath>', 'git -C <copy>/<project> apply -p<strip> <bundlePath>']
 BLOB_ARGV = ['git', 'hash-object', '-t', 'blob', '--no-filters', '--stdin']
 LISTING_BYTES = 64 << 20

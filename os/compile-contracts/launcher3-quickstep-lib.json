@@ -31,7 +31,7 @@
    ],
    "otherwise": "refuse at the first failed condition, naming its id; partial, already applied or unknown state refuses"
   },
-  "otherwise": "A tree integrated by an older patcher (for example Launcher3 switcher only) is such a state and is refused: with candidateDelta empty, no branch completes it. Never reset or trust a snapshot.",
+  "otherwise": "refuse: mixed pre/post, unknown hash, missing file, overlay, input or binding. A tree integrated by an older patcher (for example Launcher3 switcher only) is such a state and is refused: with candidateDelta empty, no branch completes it. Never reset or trust a snapshot.",
   "requires": {
    "verifyIntegrated": [
     "sourceTree",

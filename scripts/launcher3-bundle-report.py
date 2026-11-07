@@ -52,7 +52,7 @@ ROOT = Path(__file__).resolve().parents[1]
 CONTRACT = 'os/compile-contracts/launcher3-quickstep-lib.json'
 # The contract version this producer reads; the adapter pins the same bytes (MANIFEST_SHA256), and the tests hold the
 # two pins equal.
-CONTRACT_SHA256 = 'ff03a08249146a014dafaa5e1a9ef5084100b2f01f5a35ff7948e84506fd5461'
+CONTRACT_SHA256 = '5190f87dd39a60ff76ce9a62615225af6ad976f1073391a7e73cdfd2a84d42eb'
 RUN = 'os/build-only/launcher3-bundle-run.json'
 PRODUCER = 'scripts/launcher3-bundle-report.py'
 RECIPE = 'os/release-pipeline/frankel.json'

@@ -912,8 +912,9 @@ def describe():
         'candidateDelta is retired and empty, so a tree integrated by this patcher is at these final images')
     branches = d['branches']
     branches['reconstruct'] += '; every unlisted path matches its treePin, no extra path'
-    branches['otherwise'] = ('A tree integrated by an older patcher (for example Launcher3 switcher only) is such a '
-        'state and is refused: with candidateDelta empty, no branch completes it. Never reset or trust a snapshot.')
+    branches['otherwise'] = ('refuse: mixed pre/post, unknown hash, missing file, overlay, input or binding. A tree '
+        'integrated by an older patcher (for example Launcher3 switcher only) is such a state and is refused: with '
+        'candidateDelta empty, no branch completes it. Never reset or trust a snapshot.')
     branches['requires'] = {
         'verifyIntegrated': ['sourceTree', 'lunch', 'policyReceipt'],
         'reconstruct': ['sourceTree', 'lunch', 'reconstructSource'],
