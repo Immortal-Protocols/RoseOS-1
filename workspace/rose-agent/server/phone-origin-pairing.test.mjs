@@ -141,6 +141,11 @@ test('the explicit, expiring legacy path still authenticates, never as the paire
  assert.ok(refused(await open.call(MUTATION,remote)),'a legacy caller gets no mutations');
  await open.call(READ,remote);
  assert.deepEqual(open.executed,['screenshot:legacy_read']);
+ // The case the fix changes: during the window, an unpaired key sent with the legacy token is still only a legacy caller.
+ const stranger=request({cert:'stranger',token:'host-token',address:'203.0.113.9'});
+ assert.ok(refused(await open.call(MUTATION,stranger)),'an unpaired key adds no mutations in the legacy window');
+ await open.call(READ,stranger);
+ assert.deepEqual(open.executed,['screenshot:legacy_read','screenshot:legacy_read'],'never NON_TASK');
  const expired=fixture({backgroundEnabled:true,legacyUntil:Date.now()-1});
  assert.equal((await expired.call(READ,remote)).status,401);
  assert.equal((await expired.call(READ,request({cert:'stranger',token:'host-token',address:'203.0.113.9'}))).status,401,'an unpaired key adds nothing remotely');
