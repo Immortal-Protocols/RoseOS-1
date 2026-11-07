@@ -173,6 +173,24 @@ bound and does not admit a build. The old source-only inspector is
 superseded by `scripts/mustang-dedicated.py guard`. That source-only dispatch
 is not a build candidate.
 
+`scripts/mustang_hosttools.py` is a non-executing proposal.
+`readyForControlledStart` stays false and it emits no Make command; a
+declaration of paths, hashes, or `deliberate: true` cannot clear it. The
+prerequisite readers measure a tree and still do not admit otatools. Factory
+transfer has to be a regular file reached with no `..` and no symlink
+component, whose size and sha256 match `mustang.json` (the committed record
+is still box-only and unextracted). The adevtool revision marker is the pin
+plus one newline, read from that same descriptor. Opening the fourteen
+`depsTools` paths as regular files is not provenance of those binaries; the
+product makefile include is not a vendor-tree proof. None of those reads uses
+the otatools pin. The fourteen tools are built by adevtool `run-build.sh` as
+`sdk_phone64_x86_64` into `out_adevtool_deps` before `generate-all` writes the
+Mustang product tree. Mustang's vendor stage sets `ADEVTOOL_SKIP_DEP_BUILD=1`
+and does not perform that build. The builder VM is stopped; a later run that has those
+measurements would still START through the existing controller, enroll on the
+existing path, and STOP in the existing cleanup job. This proposal does not
+perform that START.
+
 The hosted guard checks the exact repository ID, main workflow, attempt 1,
 actual binding evidence and app-source freshness before any controller login.
 The controller validates the exact VM through Infra's API, records ownership
