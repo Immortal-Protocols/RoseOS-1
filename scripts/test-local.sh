@@ -10,6 +10,8 @@ node --test workspace/rose-agent/tests/voice-state.test.mjs workspace/rose-agent
 # Every Native.* call in the app's pages names a method its Java bridge exposes.
 node --test workspace/rose-agent/tests/native-bridge-contract.test.mjs
 node --test workspace/rose-agent/tests/local-rose-auth.test.mjs
+# Nov 7 plan 1O: the customization CLI drives the same catalog operations as conversation.
+node --test workspace/rose-agent/customization/rose-customize.test.mjs
 # Local Rose task events from the real PR318 producer, through the local() provider bridge.
 node --test workspace/rose-agent/voice-providers/local-tasks.test.cjs
 # #410 item 6: microphone-input mute on the capture side, and the provider contract it relies on.
@@ -368,6 +370,19 @@ java -cp "$JAVA_TESTS/CallbackOwner" dev.pixel.voice.CallbackOwnerTest
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/PhoneCommandGate" \
  workspace/rose-agent/app/src/dev/pixel/voice/PhoneCommandGate.java workspace/rose-agent/app/tests/PhoneCommandGateTest.java
 java -cp "$JAVA_TESTS/PhoneCommandGate" dev.pixel.voice.PhoneCommandGateTest
+# Nov 7 plan 1O: the shared customization catalog and model, curated Oxblood variants, and the glasses-on hook.
+java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/CustomizationConfig" \
+ workspace/rose-agent/app/src/dev/pixel/voice/MiniJson.java workspace/rose-agent/app/src/dev/pixel/voice/HomeAppLayout.java workspace/rose-agent/app/src/dev/pixel/voice/OxbloodVariants.java \
+ workspace/rose-agent/app/src/dev/pixel/voice/RoseFonts.java workspace/rose-agent/app/src/dev/pixel/voice/CustomizationConfig.java workspace/rose-agent/app/tests/CustomizationConfigTest.java
+java -cp "$JAVA_TESTS/CustomizationConfig" dev.pixel.voice.CustomizationConfigTest workspace/rose-agent/app/assets/customization-agent-tools.json
+java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/OxbloodVariants" \
+ workspace/rose-agent/app/src/dev/pixel/voice/OxbloodVariants.java workspace/rose-agent/app/tests/OxbloodVariantsTest.java
+java -cp "$JAVA_TESTS/OxbloodVariants" dev.pixel.voice.OxbloodVariantsTest workspace/rose-agent/app/src/dev/pixel/voice/OxbloodField.java
+java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/GlassesWearHook" \
+ workspace/rose-agent/app/src/dev/pixel/voice/MiniJson.java workspace/rose-agent/app/src/dev/pixel/voice/HomeAppLayout.java workspace/rose-agent/app/src/dev/pixel/voice/OxbloodVariants.java \
+ workspace/rose-agent/app/src/dev/pixel/voice/RoseFonts.java workspace/rose-agent/app/src/dev/pixel/voice/CustomizationConfig.java workspace/rose-agent/app/src/dev/pixel/voice/GlassesWearHook.java \
+ workspace/rose-agent/app/tests/GlassesWearHookTest.java
+java -cp "$JAVA_TESTS/GlassesWearHook" dev.pixel.voice.GlassesWearHookTest
 # Native glasses-button duplicate suppression (media-button handling on the native side).
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/Button" \
  workspace/rose-agent/app/src/dev/pixel/voice/GlassesButtonGate.java workspace/rose-agent/tests/java/dev/pixel/voice/ButtonTest.java

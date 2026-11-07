@@ -115,7 +115,8 @@ final class OxbloodVariants {
  static boolean oxbloodFamily(int rgb) {
   float[] h = hsl(rgb);
   if (h[1] < 0.2f || h[2] < 0.04f || h[2] > 0.88f) return true;
-  boolean redHue = h[0] >= 325 || h[0] <= 22;
-  return redHue && h[2] <= 0.72f;
+  // A pale tint is one of the field's warm highlights (the ivory beam edges, the rose hairlines): warm hue only.
+  if (h[2] > 0.72f) return h[0] >= 325 || h[0] <= 35;
+  return h[0] >= 325 || h[0] <= 22;
  }
 }
