@@ -456,7 +456,7 @@ class DedicatedPathsTest(unittest.TestCase):
         self.assertNotIn('id-token', jobs['builder'])
         self.assertNotIn('actions-gcp-login', jobs['builder'])
         self.assertNotIn('mustang-dedicated.py sign', jobs['builder'])
-        self.assertIn('runs-on: ubuntu-24.04', jobs['signer'])
+        self.assert_signer_targets_the_approved_runner(jobs['signer'])
         self.assertLess(jobs['signer'].index('mustang_hosted_sign.py preflight'), jobs['signer'].index('actions-gcp-login.py login'))
         self.assertLess(jobs['builder'].index('mustang-dedicated.py collect'), jobs['builder'].index('mustang_hosted_sign.py export-bundle'))
         self.assertLess(jobs['builder'].index('mustang-dedicated.py baseline'),jobs['builder'].index('mustang-dedicated.py produce'))
@@ -477,6 +477,27 @@ class DedicatedPathsTest(unittest.TestCase):
                                   capture_output=True,text=True,timeout=20)
             self.assertEqual(result.returncode,4,action)
             self.assertNotIn('gcloud',result.stderr)
+        signer=jobs['signer']
+        for label,rewritten in (
+                ('raw ubuntu', signer.replace(
+                    '    runs-on:\n      group: roseos-mustang-signer\n      labels: mustang-signer-4core\n',
+                    '    runs-on: ubuntu-24.04\n')),
+                ('builder group', signer.replace(
+                    '      group: roseos-mustang-signer\n      labels: mustang-signer-4core\n',
+                    '      group: ${{ needs.guard.outputs.runner_group }}\n      labels: ${{ needs.guard.outputs.runner_label }}\n')),
+                ('other group', signer.replace('roseos-mustang-signer','roseos-other-signer'))):
+            with self.assertRaisesRegex(AssertionError,'signer is misrouted'):
+                self.assert_signer_targets_the_approved_runner(rewritten)
+
+    def assert_signer_targets_the_approved_runner(self, signer):
+        expected=('    runs-on:\n'
+                  '      group: roseos-mustang-signer\n'
+                  '      labels: mustang-signer-4core\n')
+        if expected not in signer or 'runs-on: ubuntu-24.04' in signer \
+                or 'needs.guard.outputs.runner_group' in signer or 'roseos-mustang-builder' in signer \
+                or signer.count('group: roseos-mustang-signer') != 1 \
+                or signer.count('labels: mustang-signer-4core') != 1:
+            raise AssertionError('signer is misrouted')
 
 class PrivateInputImportTest(app_fixture.Fixture):
     """Canonical exporter fixtures, real tar imports and shared admission; no host/network."""
