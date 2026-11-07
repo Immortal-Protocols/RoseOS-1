@@ -177,14 +177,16 @@ is not a build candidate.
 `readyForControlledStart` stays false and it emits no Make command; a
 declaration of paths, hashes, or `deliberate: true` cannot clear it. The
 prerequisite readers measure a tree and still do not admit otatools. Factory
-transfer has to be a regular file contained in `/mnt/disks/mustang-data` whose
-size and sha256 match `mustang.json` (the committed record is still box-only
-and unextracted). Adevtool host tools follow `deps_problems`: `adevtool_revision`
-is the pin plus one newline, and each of the fourteen `depsTools` is a regular
-executable. Vendor generation is the regular file
-`vendor/google_devices/mustang/mustang.mk` including
-`adevtool-version-check.mk`, not an arbitrary vendor path. None of those reads
-uses the otatools pin. The builder VM is stopped; a later run that has those
+transfer has to be a regular file reached with no `..` and no symlink
+component, whose size and sha256 match `mustang.json` (the committed record
+is still box-only and unextracted). The adevtool revision marker is the pin
+plus one newline, read from that same descriptor. Opening the fourteen
+`depsTools` paths as regular files is not provenance of those binaries; the
+product makefile include is not a vendor-tree proof. None of those reads uses
+the otatools pin. The fourteen tools are built by adevtool `run-build.sh` as
+`sdk_phone64_x86_64` into `out_adevtool_deps` before `generate-all` writes the
+Mustang product tree. Mustang's vendor stage sets `ADEVTOOL_SKIP_DEP_BUILD=1`
+and does not perform that build. The builder VM is stopped; a later run that has those
 measurements would still START through the existing controller, enroll on the
 existing path, and STOP in the existing cleanup job. This proposal does not
 perform that START.

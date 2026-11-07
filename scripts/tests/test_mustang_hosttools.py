@@ -34,6 +34,12 @@ class ProposalTest(unittest.TestCase):
         runtime = json.loads((ROOT/'os/build-only/mustang-runtime.json').read_text())
         self.assertEqual(runtime['status'], 'unbound')
         self.assertFalse(runtime['publication']['enabled'])
+        self.assertIsNone(runtime['jobs'])
+        self.assertEqual(runtime['tools'], {'aapt': None, 'apksigner': None, 'node': None})
+        self.assertIsNone(runtime['runner']['lifetime'])
+        self.assertIsNone(runtime['runner']['registrationEvidence'])
+        self.assertEqual(runtime['runner']['groupId'], '5')
+        self.assertEqual(runtime['automaticStopHours'], 4)
         self.assertTrue(route.accepted_source_sync(
             json.loads((ROOT/route.ACCEPTED_SOURCE_SYNC['path']).read_text()), route.ACCEPTED_SOURCE_SYNC['path']))
 
@@ -45,6 +51,17 @@ class ProposalTest(unittest.TestCase):
 
 
 class ReaderTest(unittest.TestCase):
+    def bounded(self, call):
+        import signal
+        def handler(signum, frame):
+            raise TimeoutError('read blocked')
+        previous = signal.signal(signal.SIGALRM, handler)
+        signal.alarm(2)
+        try:
+            return call()
+        finally:
+            signal.alarm(0)
+            signal.signal(signal.SIGALRM, previous)
     def test_factory_reader_rejects_escape_symlink_and_wrong_bytes(self):
         pin = host.recipe()['factory']
         with tempfile.TemporaryDirectory() as tmp:
@@ -68,6 +85,18 @@ class ReaderTest(unittest.TestCase):
             link = mount/'roseos'/'linked.zip'
             link.symlink_to(inside)
             self.assertIn('factory-not-contained', host.measure_factory(mount, link)['problems'])
+            outside = Path(tmp)/'outside'
+            (outside/'sub').mkdir(parents=True)
+            (outside/'factory.zip').write_bytes(b'OUTSIDE')
+            (mount/'a').symlink_to(outside/'sub')
+            (mount/'link').symlink_to(outside)
+            traversed = host.measure_factory(mount, str(mount) + '/a/../factory.zip')
+            self.assertFalse(traversed['matchesPinnedFactory'])
+            self.assertIn('factory-not-contained', traversed['problems'])
+            self.assertNotIn('factory-size-differs', traversed['problems'])
+            followed = host.measure_factory(mount, str(mount) + '/link/factory.zip')
+            self.assertFalse(followed['matchesPinnedFactory'])
+            self.assertNotIn('factory-size-differs', followed['problems'])
         self.assertFalse(host.decide()['readyForControlledStart'])
         self.assertIsNone(host.decide()['argv'])
 
@@ -85,22 +114,25 @@ class ReaderTest(unittest.TestCase):
             (deps/'adevtool_revision').write_text(PIN + '\n')
             for name in names:
                 (bindir/name).write_text('x')
-            unmeasured = host.measure_deps(source)
-            self.assertIn('adevtool-host-tools-unmeasured', unmeasured['problems'])
-            self.assertFalse(unmeasured['measured'])
-            for name in names:
-                os.chmod(bindir/name, 0o755)
+            opened = host.measure_deps(source)
+            self.assertEqual(opened['problems'], [])
+            self.assertFalse(opened['provenance'])
+            self.assertFalse(opened['admitsOtatools'])
             (bindir/names[0]).unlink()
             (bindir/names[0]).symlink_to(bindir/names[1])
             self.assertIn('adevtool-host-tools-unmeasured', host.measure_deps(source)['problems'])
-            (bindir/names[0]).unlink()
-            (bindir/names[0]).write_text('tool')
-            os.chmod(bindir/names[0], 0o755)
-            measured = host.measure_deps(source)
-            self.assertEqual(measured['problems'], [])
-            self.assertTrue(measured['measured'])
-            self.assertFalse(measured['admitsOtatools'])
-            self.assertEqual((deps/'adevtool_revision').read_bytes(), (PIN + '\n').encode())
+            (deps/'adevtool_revision').unlink()
+            os.mkfifo(deps/'adevtool_revision')
+            self.assertIn('adevtool-revision-differs', self.bounded(lambda: host.measure_deps(source))['problems'])
+            (deps/'adevtool_revision').unlink()
+            outside = Path(tmp)/'outside-deps'
+            outside.mkdir()
+            (outside/'adevtool_revision').write_text(PIN + '\n')
+            (source/'out_adevtool_deps').rename(source/'deps-real')
+            (source/'out_adevtool_deps').symlink_to(outside)
+            linked = self.bounded(lambda: host.measure_deps(source))
+            self.assertIn('adevtool-revision-differs', linked['problems'])
+            self.assertFalse(linked['provenance'])
         self.assertFalse(host.decide()['readyForControlledStart'])
 
     def test_vendor_reader_reads_the_product_makefile_only(self):
@@ -117,12 +149,23 @@ class ReaderTest(unittest.TestCase):
             product.write_bytes(b'# generated\n' + INCLUDE + b'\n')
             measured = host.measure_vendor(source)
             self.assertEqual(measured['problems'], [])
-            self.assertTrue(measured['measured'])
+            self.assertTrue(measured['includeSeen'])
+            self.assertFalse(measured['provenance'])
             self.assertFalse(measured['admitsVendorTree'])
             self.assertFalse(measured['admitsOtatools'])
             product.unlink()
             product.symlink_to(note)
-            self.assertIn('mustang-product-config-absent', host.measure_vendor(source)['problems'])
+            self.assertFalse(host.measure_vendor(source)['includeSeen'])
+            outside = Path(tmp)/'outside-vendor'/'google_devices'/'mustang'
+            outside.mkdir(parents=True)
+            (outside/'mustang.mk').write_bytes(INCLUDE + b'\n')
+            import shutil
+            shutil.rmtree(source/'vendor')
+            (source/'vendor').symlink_to(Path(tmp)/'outside-vendor')
+            stolen = host.measure_vendor(source)
+            self.assertFalse(stolen['includeSeen'])
+            self.assertFalse(stolen['provenance'])
+            self.assertIn('mustang-product-config-absent', stolen['problems'])
         self.assertIsNone(host.decide()['argv'])
 
     def test_cli_stays_a_refusal(self):
