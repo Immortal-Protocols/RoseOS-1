@@ -1,9 +1,17 @@
 #!/usr/bin/env python3
-"""Mustang source-sync orchestration. The default command does not start repo."""
+"""Mustang source-sync orchestration. The default command does not start repo.
+
+The guest has no attached service account and no controller credential. This
+process does not stop the VM. The dedicated workflow's GitHub-hosted cleanup
+job is the owned STOP, and the instance maxRunDuration of 14400 seconds
+remains the backstop.
+"""
 import argparse
 import hashlib
 import json
 import os
+import pwd
+import re
 import signal
 import subprocess
 import time
@@ -24,7 +32,7 @@ LOG_ROOT = '/mnt/disks/mustang-data/roseos/sync-logs'
 MAX_STDOUT_RECEIPT = 8 * 1024 * 1024
 USER = 'mustang-runner'
 SYNC_TIMEOUT_SECONDS = 10800
-STOP_ARGV = ['python3', 'scripts/mustang_controller.py', 'stop', '--ownership-record']
+WORKFLOW_REF = 'Immortal-Protocols/RoseOS-1/.github/workflows/mustang-ota-dedicated.yml@refs/heads/main'
 FLAGS = ('compileAuthorized', 'signAuthorized', 'publishAuthorized', 'vendorGenerateAuthorized',
          'allocateAuthorized', 'runtimeBound', 'executed', 'enrollmentClaimed', 'oidcTested', 'jitTested')
 APPROVAL_KEYS = {'schema', 'recipeSha256', 'scope', *FLAGS}
@@ -35,12 +43,12 @@ def as_runner(argv, workdir):
         raise ValueError('source sync argv differs')
     if workdir not in (SOURCE, PIN, '/tmp'):
         raise ValueError('source sync working directory leaves the Mustang data disk')
-    return ['/usr/bin/env', '--chdir', '/tmp', '--', 'sudo', '-H', '-u', USER, '--',
-            '/usr/bin/env', '--chdir', workdir, '--', *argv]
+    # The runner service sets NoNewPrivileges, so sudo cannot run in the job.
+    return ['/usr/bin/env', '--chdir', workdir, '--', *argv]
 
 
 def install_dir(path):
-    return ['sudo', 'install', '-d', '-o', USER, '-g', USER, '-m', '0750', path]
+    return ['install', '-d', '-m', '0750', path]
 
 
 def pin_commands(pin, origin, revision):
@@ -156,8 +164,15 @@ def require_resolved(xml_bytes, root=ROOT):
             'executed': False, 'compileAuthorized': False}
 
 
+def guest_failure(reason, **extra):
+    """A local failure record. It is not a STOP and it carries no command to run."""
+    if 'argv' in extra or 'stopArgv' in extra:
+        raise ValueError('source sync failure cannot carry a stop command')
+    return {'reason': reason, 'authenticatedStop': False, 'localControllerStop': False, **extra}
+
+
 def _stop(stop, reason, **extra):
-    stop({'reason': reason, 'stopArgv': list(STOP_ARGV), **extra})
+    stop(guest_failure(reason, **extra))
 
 
 def on_command(name, exit_code, stop):
@@ -165,7 +180,7 @@ def on_command(name, exit_code, stop):
         raise ValueError('source sync exit differs')
     if exit_code != 0:
         _stop(stop, 'source-sync-failed', command=name, exit=exit_code)
-        raise ValueError('source sync failed and the VM stop was requested')
+        raise ValueError('source sync failed; the guest did not stop the VM')
 
 
 def watch_sync(state, elapsed, stop, timeout=SYNC_TIMEOUT_SECONDS):
@@ -176,7 +191,7 @@ def watch_sync(state, elapsed, stop, timeout=SYNC_TIMEOUT_SECONDS):
         raise ValueError('source sync clock differs')
     if state is None and elapsed >= timeout:
         _stop(stop, 'source-sync-timeout', timeoutSeconds=timeout)
-        raise ValueError('source sync exceeded the bounded timeout and the VM stop was requested')
+        raise ValueError('source sync exceeded the bounded timeout; the guest did not stop the VM')
     if state is None:
         return 'wait'
     if isinstance(state, bool) or type(state) is not int:
@@ -184,7 +199,7 @@ def watch_sync(state, elapsed, stop, timeout=SYNC_TIMEOUT_SECONDS):
     if state != 0 or elapsed >= timeout:
         reason = 'source-sync-timeout' if elapsed >= timeout else 'source-sync-failed'
         _stop(stop, reason, timeoutSeconds=timeout, exit=state)
-        raise ValueError('source sync failed and the VM stop was requested')
+        raise ValueError('source sync failed; the guest did not stop the VM')
     return 'exited'
 
 
@@ -254,10 +269,30 @@ def admit(approval, root=ROOT):
             'syncTimeoutSeconds': SYNC_TIMEOUT_SECONDS, 'recipeSha256': approval['recipeSha256']}
 
 
-def stop_request(ownership, reason):
-    if type(ownership) is not str or not ownership or ownership.startswith('-') or '\n' in ownership or '\x00' in ownership:
-        raise ValueError('source sync ownership record is missing')
-    return {'reason': reason, 'ownershipRecord': ownership, 'argv': STOP_ARGV+[ownership]}
+def hosted_source_job(env):
+    """Execute only inside the dedicated workflow's source job. That job's cleanup stops the VM."""
+    if env.get('GITHUB_EVENT_NAME') != 'workflow_dispatch' or env.get('GITHUB_REF') != 'refs/heads/main' \
+            or env.get('GITHUB_WORKFLOW_REF') != WORKFLOW_REF or env.get('GITHUB_RUN_ATTEMPT') != '1' \
+            or env.get('GITHUB_JOB') != 'source' or env.get('MUSTANG_SOURCE_ONLY') != 'true' \
+            or not re.fullmatch(r'[1-9][0-9]{0,19}', env.get('GITHUB_RUN_ID', '')) \
+            or not re.fullmatch(r'[0-9a-f]{40}', env.get('GITHUB_SHA', '')):
+        raise ValueError('source sync execute is only the dedicated workflow source job')
+
+
+def require_runner_user():
+    try:
+        record = pwd.getpwnam(USER)
+    except KeyError:
+        raise ValueError('source sync runner user is absent') from None
+    if os.geteuid() != record.pw_uid:
+        raise ValueError('source sync must run as mustang-runner without sudo')
+
+
+def workflow_approval(root=ROOT):
+    raw = recipe_path(root).read_bytes()
+    recipe = json.loads(raw)
+    return {'schema': 'roseos.mustang-source-sync-approval.v1', 'scope': 'source-sync-only',
+            'recipeSha256': hashlib.sha256(raw).hexdigest(), **{flag: recipe[flag] for flag in FLAGS}}
 
 
 def elapsed_seconds(start, now):
@@ -282,10 +317,10 @@ def run_bounded(argv, timeout, spawn, stop, clock, sleep):
             continue
         if code is None:
             proc.kill()
-            stop({'reason': 'source-sync-timeout'})
-            raise ValueError('source sync exceeded the bounded timeout and the VM stop was requested')
-        stop({'reason': 'source-sync-failed', 'exit': code})
-        raise ValueError('source sync failed and the VM stop was requested')
+            stop(guest_failure('source-sync-timeout'))
+            raise ValueError('source sync exceeded the bounded timeout; the guest did not stop the VM')
+        stop(guest_failure('source-sync-failed', exit=code))
+        raise ValueError('source sync failed; the guest did not stop the VM')
 
 
 def spawn_subprocess(argv, log_dir=None):
@@ -340,21 +375,14 @@ def spawn_subprocess(argv, log_dir=None):
     return Bound()
 
 
-def cancellation_handler(holder, ownership, stop):
-    """SIGTERM kills the current step and requests VM stop. SIGKILL still ends at 14400 seconds."""
+def cancellation_handler(holder):
+    """SIGTERM kills the current step only. It does not authenticate or request a VM stop."""
     def handler(signum, _frame):
         proc = holder.get('proc')
         if proc is not None:
             proc.kill()
-        stop(stop_request(ownership, 'source-sync-cancelled'))
         raise SystemExit(4)
     return handler
-
-
-def request_stop(ownership, reason):
-    detail = stop_request(ownership, reason)
-    subprocess.run(detail['argv'], check=False)
-    return detail
 
 
 def normalized_resolved(root=ROOT, mutate=None):
@@ -366,15 +394,14 @@ def normalized_resolved(root=ROOT, mutate=None):
     return body.encode()
 
 
-def orchestrate(approval, ownership, spawn, stop, clock, sleep, root=ROOT):
-    """Run the admitted source sync. Any check or sync failure requests VM stop."""
-    detail = stop_request(ownership, 'source-sync-failed')
+def orchestrate(approval, _ownership, spawn, stop, clock, sleep, root=ROOT):
+    """Run the admitted source sync. A failure is recorded locally and does not stop the VM."""
     halted = {'done': False}
 
     def halt(reason):
         if not halted['done']:
             halted['done'] = True
-            stop(dict(detail, reason=reason))
+            stop(guest_failure(reason))
 
     try:
         admitted = admit(approval, root)
@@ -388,7 +415,7 @@ def orchestrate(approval, ownership, spawn, stop, clock, sleep, root=ROOT):
             remaining = SYNC_TIMEOUT_SECONDS - elapsed_seconds(started, clock())
             if remaining <= 0:
                 halt('source-sync-timeout')
-                raise ValueError('source sync exceeded the bounded timeout and the VM stop was requested')
+                raise ValueError('source sync exceeded the bounded timeout; the guest did not stop the VM')
             limit = step['limit'] if step['limit'] < remaining else remaining
             try:
                 text = run_bounded(step['argv'], limit, spawn, lambda item: halt(item['reason']), clock, sleep)
@@ -408,8 +435,10 @@ def orchestrate(approval, ownership, spawn, stop, clock, sleep, root=ROOT):
     return {'schema': 'roseos.mustang-source-sync-run.v1', 'admitted': 'source-sync-only', 'executed': True,
             'observed': observed, 'historical': {'oidcExercised': False},
             'compileAuthorized': False, 'signAuthorized': False, 'runtimeBound': False,
+            'authenticatedStop': False,
             'runnerCrashStopSeconds': mustang_lane.CONFIRMED_STOP['seconds'],
-            'cancellation': 'SIGTERM kills the step process group and requests VM stop. SIGKILL still ends at the runner 14400 second stop.',
+            'cancellation': 'SIGTERM kills the step process group only. The guest does not stop the VM. '
+                            'Workflow cleanup performs the owned STOP. The instance maxRunDuration remains 14400 seconds.',
             'recipeSha256': admitted['recipeSha256']}
 
 
@@ -426,39 +455,25 @@ def main(argv=None):
                           'sourceRoot': record['sourceRoot'], 'recipeSha256': recipe_sha256(),
                           'syncTimeoutSeconds': record['syncTimeoutSeconds']}, sort_keys=True))
         return 4
-    if not args.ownership_record:
-        print('source sync admission is closed')
+    if args.ownership_record:
+        print('the guest does not stop the VM')
         return 4
-    if not args.approval:
-        request_stop(args.ownership_record, 'source-sync-not-admitted')
-        print('source sync admission is closed')
-        return 4
-    sent = {'done': False}
     holder = {}
-
-    def stop_once(detail):
-        if sent['done']:
-            return
-        sent['done'] = True
-        subprocess.run(detail['argv'], check=False)
 
     def spawn(argv):
         proc = spawn_subprocess(argv)
         holder['proc'] = proc
         return proc
 
-    previous = signal.signal(signal.SIGTERM, cancellation_handler(holder, args.ownership_record, stop_once))
+    previous = signal.signal(signal.SIGTERM, cancellation_handler(holder))
     try:
         try:
-            approval = json.loads(Path(args.approval).read_text())
-            receipt = orchestrate(approval, args.ownership_record, spawn, stop_once, time.monotonic, time.sleep)
+            hosted_source_job(os.environ)
+            require_runner_user()
+            approval = json.loads(Path(args.approval).read_text()) if args.approval else workflow_approval()
+            receipt = orchestrate(approval, None, spawn, lambda _detail: None, time.monotonic, time.sleep)
         except (OSError, ValueError, json.JSONDecodeError):
-            if args.ownership_record and not sent['done']:
-                try:
-                    stop_once(stop_request(args.ownership_record, 'source-sync-failed'))
-                except ValueError:
-                    pass
-            print('source sync failed and the VM stop was requested')
+            print('source sync failed; the guest did not stop the VM')
             return 4
     finally:
         signal.signal(signal.SIGTERM, previous)

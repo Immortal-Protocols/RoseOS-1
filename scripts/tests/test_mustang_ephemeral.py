@@ -98,6 +98,8 @@ class EnrollmentTest(unittest.TestCase):
         self.assertEqual(enroll.queue_decision(queued, 30), 'wait')
         self.assertEqual(enroll.queue_decision(queued, enroll.QUEUE_LIMIT_SECONDS), 'stop')
         self.assertEqual(enroll.queue_decision([{'name': 'builder', 'status': 'in_progress'}], enroll.QUEUE_LIMIT_SECONDS), 'ready')
+        self.assertEqual(enroll.queue_decision([{'name': 'builder', 'status': 'skipped'},
+                                                {'name': 'source', 'status': 'in_progress'}], enroll.QUEUE_LIMIT_SECONDS), 'ready')
         self.assertEqual(enroll.watch_decision('failure', [{'name': 'builder', 'status': 'in_progress'}], 0), 'stop')
         self.assertNotIn('value', ' '.join(enroll.metadata_keys_argv()))
         clock = {'now': 0}
