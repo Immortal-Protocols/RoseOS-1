@@ -105,6 +105,11 @@ jobs:
       run: python3 scripts/mustang_ephemeral.py put-metadata --execute --file "$RUNNER_TEMP/mustang-jit"
     - name: Remove the metadata key as soon as the guest has fetched it
       run: python3 scripts/mustang_ephemeral.py wait-fetched --execute
+    - name: Remove this run's offline group 5 runner if enrollment failed
+      if: failure() && steps.app.outcome == 'success'
+      env:
+        GH_TOKEN: ${{ steps.app.outputs.token }}
+      run: python3 scripts/mustang_ephemeral.py sweep --execute --run-id "$GITHUB_RUN_ID"
     - if: always() && steps.login.outcome == 'success'
       name: Delete JIT metadata on success and on every enroll failure
       run: python3 scripts/mustang_ephemeral.py clear-metadata --execute
@@ -295,3 +300,15 @@ jobs:
       run: python3 scripts/mustang_ephemeral.py clear-metadata --execute
     - if: always() && steps.login.outcome == 'success'
       run: python3 scripts/actions-gcp-login.py logout
+    - id: app
+      if: always()
+      uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510
+      with:
+        app-id: ${{ vars.MUSTANG_RUNNER_APP_ID }}
+        private-key: ${{ secrets.MUSTANG_RUNNER_APP_PRIVATE_KEY }}
+        owner: Immortal-Protocols
+    - name: Remove this run's offline group 5 runner after the VM stop
+      if: always() && steps.app.outcome == 'success'
+      env:
+        GH_TOKEN: ${{ steps.app.outputs.token }}
+      run: python3 scripts/mustang_ephemeral.py sweep --execute --run-id "$GITHUB_RUN_ID"
