@@ -240,28 +240,29 @@ public blob. The connecting-securely page says the attribute has to be enabled b
 agent logs that it could not write the host key. This replacement has already booted, and the feature is off. Do not
 rely on that agent to publish the rotated keys.
 
-After a successful rotate, this guest PUTs only the three new public blobs to
-`instance/guest-attributes/hostkeys/<openssh-type>`. It does not read or send a private key file. If the metadata
-server rejects the write because guest attributes are disabled, the rotation still stands and the marker records
-`hostkeyAttributesPublished` false. A later boot of the same startup script retries that PUT and does not generate
-another key. The serial receipt is not changed by the publish. Compare it to the control-plane read only as a
-consistency check. A match is not a pin.
+`--mode rotate` does not enable guest attributes and does not publish. Use it when the goal is only to rotate the
+three files.
 
-This rotate plan does not perform the next phase. `hostIdentity.nextPhase.executedByThisTool` is false.
+`--mode rotate-publish` is the opt-in that makes the control-plane read possible in the same boot. Its one
+`setMetadata` adds the startup script, the binding, and `enable-guest-attributes=TRUE`, and it copies every other
+existing key. `enable-oslogin` stays `FALSE`. `block-project-ssh-keys` stays `TRUE`. Project metadata is not
+changed. Preflight for this mode requires `compute.instances.getGuestAttributes` on the replacement. After the
+guest commits the new files, it PUTs only the three new public blobs to `hostkeys/<openssh-type>`. It does not send
+a private key. The control plane then makes one `getGuestAttributes` call, query path `hostkeys/`, timeout 30
+seconds, and checks the three public types, the blob shape, and the fingerprints against this operation's receipt.
+The receipt's operation id and nonce are the binding's. A match is consistency with this instance's metadata
+server. It is not a pin and not an IAP result.
 
-- Do not set project metadata. A separate `setMetadata`, not this plan, may add `enable-guest-attributes=TRUE` for
-  that one boot, keep `enable-oslogin=FALSE` and `block-project-ssh-keys=TRUE`, and remove the enable key again on
-  cleanup. This plan's metadata stays the two preserved keys plus the temporary startup script and binding.
-- That later preflight needs `compute.instances.getGuestAttributes` on this instance. The current rotate preflight
-  does not require it.
-- The operator then reads `hostkeys/` for instance id `2720796557371812468` and compares the three fingerprints with
-  the serial receipt. Inequality or a private-key token stops. Absence means the publish did not land.
-- IAP TCP forwarding checks IAM and connects the tunnel to that instance
-  ([SSH through IAP](https://docs.cloud.google.com/compute/docs/connect/ssh-using-iap)). It does not retrieve or check
-  the SSH host key. A later, separate ephemeral login can use plain OpenSSH through
-  `gcloud compute start-iap-tunnel`, with `StrictHostKeyChecking=yes` and a `known_hosts` file built only from the
-  control-plane public blobs. No trust on first use. No `accept-new`. Do not use `gcloud compute ssh`: it writes SSH
-  metadata and its own known-hosts file. That SSH step is not implemented here.
+If the PUT fails, the receipt is `partial` with problem `hostkey-publish`. The new files stay. The tool does not
+generate another key, does not publish again, and does not roll back. Cleanup restores metadata and stops the
+instance. A fresh inspect is required before any later plan. The same cleanup runs when the control-plane read is
+absent, stale (the previous fingerprints), malformed, or a different blob. A preexisting `enable-guest-attributes`
+value of `TRUE` or `FALSE` is put back. A flag this operation added is removed. Other keys are copied through on
+both the write and the restore.
+
+IAP TCP forwarding checks IAM and connects a tunnel to the instance
+([SSH through IAP](https://docs.cloud.google.com/compute/docs/connect/ssh-using-iap)). It does not retrieve or check
+the SSH host key. This mode does not SSH and does not run `gcloud compute ssh`.
 
 Google's instance identity token is a Google-signed JWT that names the project, zone, and instance id
 ([verifying instance identity](https://docs.cloud.google.com/compute/docs/instances/verifying-instance-identity)).
@@ -281,6 +282,17 @@ env -u GOOGLE_APPLICATION_CREDENTIALS -u CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOU
   --confirm-inspect-operation INSPECT_OPERATION_ID \
   --confirm-baseline BASELINE_SHA256 \
   --operator "NAME" --out ~/yogi-ops/rotate-LABEL
+```
+
+The publish opt-in uses the same inspect confirmation and a different mode. It still does not SSH:
+
+```sh
+env -u GOOGLE_APPLICATION_CREDENTIALS -u CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT \
+  python3 -B yogi_replacement_recover.py plan --mode rotate-publish \
+  --inspect-receipt INSPECT.json \
+  --confirm-inspect-operation INSPECT_OPERATION_ID \
+  --confirm-baseline BASELINE_SHA256 \
+  --operator "NAME" --out ~/yogi-ops/rotate-publish-LABEL
 ```
 
 Do not point `--inspect-receipt` at a repair plan. Do not reuse operation `638e6e9039e41b7531697bb45066a616`.
@@ -337,7 +349,8 @@ Base path named in the relay: `/Users/nathanspaun/Documents/Codex/2026-10-27/tas
   process on that VM, with no service account, and are read back with `getGuestAttributes` on that instance.
   [Storing host keys](https://docs.cloud.google.com/solutions/connecting-securely) is the documented use of the
   `hostkeys/` namespace against a network man-in-the-middle. A match with the serial receipt is consistency, not
-  proof the guest is honest. This rotate plan does not set `enable-guest-attributes`. The receipt attribute under
+  proof the guest is honest. `--mode rotate` does not set `enable-guest-attributes`. `--mode rotate-publish` sets it
+  in the same metadata write and removes only the value it added. The receipt attribute under
   `roseos-yogi-recover/receipt` is a different path. Its absence is still expected.
 - The 45-minute limit is `scheduling.maxRunDuration.seconds` of `2700` with `instanceTerminationAction` `STOP`
   ([limit VM runtime](https://docs.cloud.google.com/compute/docs/instances/limit-vm-runtime)).

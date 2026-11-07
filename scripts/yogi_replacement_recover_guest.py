@@ -6,9 +6,10 @@ text as the instance startup-script. This template is not a spent binding. It do
 original VM, or restore a snapshot.
 
 On the guest it may chmod one unit file when every precondition matches, rotate three named host keys, and remove one
-exact authorized_keys comment plus one exact temporary account. It writes a single public receipt line. After a
-successful rotate it also PUTs only the new public key blobs to the metadata server under hostkeys/. That write
-uses the instance metadata server, not a service account. It is not a pin and it does not run on repair.
+exact authorized_keys comment plus one exact temporary account. It writes a single public receipt line. Purpose
+rotate-publish, and only that purpose, then PUTs the new public blobs to hostkeys/ on this instance's metadata
+server. That write uses no service account. A failed PUT does not roll the keys back and is not retried. Repair
+and plain rotate do not publish.
 """
 import base64
 import errno
@@ -75,7 +76,7 @@ UNIT_KEYS = {
 UNIT_PROBLEMS = {
     "none", "missing", "symlink", "kind", "mode", "owner", "size", "nlink", "runner-active", "runner-enabled",
     "runner-process", "chmod", "identity", "unknown-host-key", "baseline", "rotate-same", "rotate-partial",
-    "reexecution-partial", "cleanup", "already-0644",
+    "reexecution-partial", "cleanup", "already-0644", "hostkey-publish",
 }
 ACCOUNT_STATES = {"absent", "removed", "preserved-mismatch", "remove-failed", "removed-home-leftover"}
 FORBIDDEN = ("BEGIN ", "PRIVATE", "OPENSSH", "-----")
@@ -135,7 +136,7 @@ def validate_shape(receipt, binding):
     problems = binding_problems(binding)
     if not isinstance(receipt, dict) or set(receipt) != TOP_KEYS:
         return ["receipt-keys"]
-    if receipt.get("purpose") not in ("repair", "inspect", "rotate"):
+    if receipt.get("purpose") not in ("repair", "inspect", "rotate", "rotate-publish"):
         return ["purpose"]
     if receipt["schema"] != RECEIPT_SCHEMA or receipt["operationId"] != binding["operationId"]:
         return ["receipt-binding"]
@@ -237,13 +238,14 @@ def success_problems(receipt):
     return problems
 
 
-def rotate_success_problems(receipt, expected_baseline):
+def rotate_success_problems(receipt, expected_baseline, purpose="rotate"):
     """Empty only when this boot rotated keys and did not change the unit mode.
 
     The expected baseline is the operator-reviewed inspect evidence. Matching it is not a host-key pin
-    and not a comparison with the original VM.
+    and not a comparison with the original VM. purpose rotate-publish is the same rotation plus a public
+    hostkeys publish; a partial publish is not success.
     """
-    if not isinstance(receipt, dict) or receipt.get("purpose") != "rotate":
+    if not isinstance(receipt, dict) or receipt.get("purpose") != purpose:
         return ["purpose"]
     unit = receipt.get("unit") or {}
     runner = receipt.get("runner") or {}
@@ -744,10 +746,7 @@ def run_rotate(io):
         io.marker_store({"phase": "partial", "operationId": OPERATION_ID, "nonce": NONCE, "baseline": baseline,
                          "receipt": receipt})
         return _emit(io, receipt, binding)
-    for alg in ALGORITHMS:
-        io.ssh_drop_prev_private(alg)
     receipt = _skeleton(binding, boot, "complete")
-    receipt["purpose"] = "rotate"
     _fill_unit(receipt, before, before, "none", "not-modified")
     receipt["unit"]["beforeMode"] = receipt["unit"]["afterMode"] = "0644"
     receipt["runner"] = _public_runner(runner)
@@ -761,9 +760,33 @@ def run_rotate(io):
         receipt["journal"]["unrecognized"] = min(20, int(io.prior_journal()))
     except (GuestRefused, OSError, TypeError, ValueError):
         receipt["journal"]["unrecognized"] = 1
-    published = _publish_rotated_hostkeys(io, public_lines)
+    receipt["purpose"] = "rotate-publish" if GUEST_PURPOSE == "rotate-publish" else "rotate"
+    for alg in ALGORITHMS:
+        io.ssh_drop_prev_private(alg)
+    if GUEST_PURPOSE == "rotate-publish" and not _publish_rotated_hostkeys(io, public_lines):
+        receipt["status"] = "partial"
+        receipt["unit"]["problem"] = "hostkey-publish"
+        io.marker_store({"phase": "publish-failed", "operationId": OPERATION_ID, "nonce": NONCE,
+                         "baseline": baseline, "rotated": rotated, "receipt": receipt})
+        return _emit(io, receipt, binding)
     io.marker_store({"phase": "complete", "operationId": OPERATION_ID, "nonce": NONCE, "baseline": baseline,
-                     "rotated": rotated, "hostkeyAttributesPublished": published, "receipt": receipt})
+                     "rotated": rotated, "receipt": receipt})
+    return _emit(io, receipt, binding)
+
+
+def _emit_publish_failure(io, marker, binding, boot):
+    """Re-emit the partial receipt. Do not generate, publish, or roll the new keys back."""
+    prior = marker.get("receipt")
+    if not isinstance(prior, dict) or validate_shape(prior, binding) or prior.get("status") != "partial":
+        return None
+    if (prior.get("unit") or {}).get("problem") != "hostkey-publish":
+        return None
+    if prior.get("bootId") == boot:
+        return None
+    receipt = json.loads(canonical(prior))
+    receipt["reexecution"] = True
+    receipt["previousBootId"] = prior["bootId"]
+    receipt["bootId"] = boot
     return _emit(io, receipt, binding)
 
 
@@ -780,7 +803,7 @@ def run(io):
 
     Rotate is a separate purpose. It requires that mode and does not change it.
     """
-    if GUEST_PURPOSE == "rotate":
+    if GUEST_PURPOSE in ("rotate", "rotate-publish"):
         return run_rotate(io)
     if GUEST_PURPOSE != "repair":
         return None
@@ -945,6 +968,8 @@ def _rollback(io):
 def _rerun(io, marker, binding, boot):
     if not isinstance(marker, dict) or marker.get("operationId") != OPERATION_ID or marker.get("nonce") != NONCE:
         return None
+    if marker.get("phase") == "publish-failed":
+        return _emit_publish_failure(io, marker, binding, boot)
     if marker.get("phase") == "complete" and isinstance(marker.get("receipt"), dict):
         prior = marker["receipt"]
         if validate_shape(prior, binding) or prior.get("status") != "complete":
@@ -967,16 +992,6 @@ def _rerun(io, marker, binding, boot):
             if int(discarded.get("skippedSymlink") or 0) > 0:
                 receipt["status"] = "partial"
                 receipt["cleanup"] = dict(receipt["cleanup"], accessCleanup="failed")
-            if GUEST_PURPOSE == "rotate" and marker.get("hostkeyAttributesPublished") is not True \
-                    and receipt.get("status") == "complete":
-                try:
-                    lines = {alg: io.ssh_public(KEY_NAMES[alg] + ".pub") for alg in ALGORITHMS}
-                except (GuestRefused, OSError):
-                    lines = None
-                if lines is not None and _publish_rotated_hostkeys(io, lines):
-                    stored = dict(marker)
-                    stored["hostkeyAttributesPublished"] = True
-                    io.marker_store(stored)
             return _emit(io, receipt, binding)
     # A crash or reboot must not generate another key. Restore any preserved previous pair.
     rolled = _rollback(io)
@@ -992,7 +1007,7 @@ def _rerun(io, marker, binding, boot):
     receipt["hostKeys"]["rotated"] = {}
     receipt["hostKeys"]["rolledBack"] = rolled
     receipt["hostKeys"]["distinctFromClonedBaseline"] = False
-    if GUEST_PURPOSE == "rotate":
+    if GUEST_PURPOSE in ("rotate", "rotate-publish"):
         receipt["cleanup"] = _observe_access(io, OPERATION_ID)
     else:
         receipt["cleanup"] = cleanup_access(io, OPERATION_ID)

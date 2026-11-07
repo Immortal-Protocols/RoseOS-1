@@ -132,6 +132,7 @@ class World:
         self.pending = ""
         self.bad_cursor = False
         self.attribute = {"absent": True}
+        self.hostkeys = {"absent": True}
         self.fail_sets = []
         self.fail_describe = 0
         self.start_mode = "ok"
@@ -182,6 +183,8 @@ class World:
         if kind == "serial":
             return self._serial(request["start"])
         if kind == "guest-attribute":
+            if request.get("query") == "hostkeys":
+                return copy.deepcopy(self.hostkeys)
             return copy.deepcopy(self.attribute)
         if kind == "test-iam":
             missing = self.iam_missing.get(target, ())
@@ -490,6 +493,30 @@ class DictHost:
 
     def prior_journal(self):
         return self.prior_unrecognized
+
+
+def inspect_evidence(test):
+    host = DictHost(json.loads((test.op / "binding.json").read_text()), test.op / "guest.py")
+    baseline = {}
+    for alg, name in guest.KEY_NAMES.items():
+        _kind, fingerprint = guest.parse_public(host.ssh_public(name + ".pub"))
+        baseline[alg] = fingerprint
+    evidence = {
+        "schema": guest.RECEIPT_SCHEMA, "purpose": "inspect", "operationId": "11" * 16, "nonce": "22" * 16,
+        "payloadSha256": "33" * 32, "instanceId": recover.INSTANCE_ID, "bootId": BOOT,
+        "reexecution": False, "previousBootId": "none", "originalVmAccessed": False, "snapshotsUsed": False,
+        "status": "complete",
+        "unit": {"action": "not-modified", "problem": "already-0644", "beforeMode": "0644", "beforeSize": 347,
+                 "beforeUid": 0, "beforeGid": 0, "afterMode": "0644", "afterSize": 347, "afterUid": 0, "afterGid": 0},
+        "runner": {"active": "inactive", "enabled": "disabled", "process": False},
+        "hostKeys": {"baseline": baseline, "rotated": {}, "distinctFromClonedBaseline": False,
+                     "unknownHostKeyCount": 0, "rolledBack": False},
+        "cleanup": {"linesRemoved": 0, "unidentifiedAuthorizedKeyLines": 0, "temporaryAccount": "absent",
+                    "tempFilesRemoved": 0, "accessCleanup": "ok"},
+        "journal": {"entries": 2, "readable": 1, "phases": ["complete"], "hasCompleteReceipt": True,
+                    "unrecognized": 1},
+    }
+    return evidence, baseline
 
 
 def load_rendered(path):
@@ -1252,17 +1279,17 @@ class GuestTest(Base):
         self.assertEqual(host.chmod_calls, 0)
         self.assertEqual(host.generate_calls, 3)
         self.assertEqual(host.unit["mode"], 0o644)
-        self.assertEqual(len(host.hostkey_puts), 3)
-        self.assertTrue(host.marker.get("hostkeyAttributesPublished"))
-        self.assertTrue(all("PRIVATE" not in blob and " " not in blob for _key, blob in host.hostkey_puts))
+        self.assertEqual(host.hostkey_puts, [])
         self.assertNotIn("PRIVATE", json.dumps(receipt))
+        self.assertFalse(plan["publishHostkeys"])
+        self.assertNotIn(recover.GUEST_ATTRIBUTES_KEY, plan["metadataAdded"])
         identity = plan["hostIdentity"]
         self.assertFalse(identity["pinned"])
         self.assertFalse(identity["iapAuthenticatesHostKey"])
         self.assertNotIn("blocker", identity)
-        self.assertFalse(identity["guestAttributes"]["enabledOnThisInstance"])
         self.assertFalse(identity["guestAttributes"]["requiresGuestServiceAccount"])
-        self.assertFalse(identity["nextPhase"]["executedByThisTool"])
+        self.assertFalse(identity["nextPhase"]["publishHostkeys"])
+        self.assertEqual(identity["nextPhase"]["enable"], "not-this-mode")
         self.assertNotIn("enable-guest-attributes", recover.BASE_METADATA)
         self.assertEqual(receipt["purpose"], "rotate")
         self.assertEqual(receipt["unit"]["action"], "not-modified")
@@ -1280,22 +1307,11 @@ class GuestTest(Base):
         saved = recover.serial_evidence(json.loads((out / "binding.json").read_text()), framed, "parsed", receipt=receipt)
         self.assertNotIn("BEGIN OPENSSH", json.dumps(saved))
         self.assertNotIn("Linux version", json.dumps(saved))
-        failed = DictHost(json.loads((out / "binding.json").read_text()), out / "guest.py")
-        failed.unit["mode"] = 0o644
-        failed.publish_fails = True
-        failed_receipt = module.run(failed)
-        self.assertEqual(guest.rotate_success_problems(failed_receipt, baseline), [])
-        self.assertFalse(failed.marker.get("hostkeyAttributesPublished"))
-        self.assertEqual(failed.unit["mode"], 0o644)
-        self.assertEqual(failed.generate_calls, 3)
-        failed.publish_fails = False
-        failed.hostkey_puts = []
-        failed.boot = "01234567-89ab-cdef-0123-456789abcdef"
-        again = module.run(failed)
-        self.assertEqual(failed.generate_calls, 3)
-        self.assertEqual(guest.rotate_success_problems(again, baseline), [])
-        self.assertTrue(failed.marker.get("hostkeyAttributesPublished"))
-        self.assertEqual(len(failed.hostkey_puts), 3)
+        world = World()
+        checked = recover.preflight(out, recover.INSTANCE_ID, True, world, now=NOW, env=ENV)
+        self.assertEqual(checked["result"], "preflight-ok")
+        iam = [req for req in world.requests if req["kind"] == "test-iam" and req["target"] == "replacement"]
+        self.assertNotIn(recover.HOSTKEY_PERMISSION, iam[0]["permissions"])
         live = dict(evidence)
         live["operationId"] = "638e6e9039e41b7531697bb45066a616"
         live["hostKeys"] = dict(evidence["hostKeys"], baseline={
@@ -1401,13 +1417,163 @@ class GuestTest(Base):
                 fingerprints)
         with self.assertRaises(guest.GuestRefused):
             guest.publish_public_hostkeys(IO(), dict(lines, ed25519="-----BEGIN OPENSSH PRIVATE KEY-----"))
-        phase = recover.hostkey_observation_phase()
-        self.assertFalse(phase["executedByThisTool"])
-        self.assertFalse(phase["iapAuthenticatesHostKey"])
+        absent = recover.hostkey_consistency({"absent": True}, fingerprints)
+        self.assertFalse(absent["consistentWithSerial"] or absent["pinned"] or absent["iapAuthenticatesHostKey"])
+        self.assertTrue(absent["absent"])
+        phase = recover.hostkey_observation_phase("rotate")
+        self.assertFalse(phase["publishHostkeys"] or phase["ssh"] or phase["iapAuthenticatesHostKey"])
         self.assertEqual(phase["gcloudComputeSsh"], "refused")
-        self.assertIn("start-iap-tunnel", phase["laterSsh"])
-        self.assertNotIn("compute ssh", phase["laterSsh"])
-        self.assertNotIn("compute.instances.getGuestAttributes", recover.IAM_REQUIRED["replacement"])
+        self.assertNotIn(recover.HOSTKEY_PERMISSION, recover.IAM_REQUIRED["replacement"])
+
+    def test_rotate_publish_enables_reads_and_restores_without_a_second_boot(self):
+        evidence, baseline = inspect_evidence(self)
+        path = Path(self.temp.name) / "publish-inspect.json"
+        path.write_text(json.dumps(evidence))
+        out = Path(self.temp.name) / "publish-op"
+        plan = recover.plan("Mac operator", out, now=NOW, token=tokens("46" * 16, "57" * 16), revision="a" * 40,
+                            env=ENV, mode="rotate-publish", inspect_receipt=path,
+                            confirm_inspect_operation=evidence["operationId"],
+                            confirm_baseline=recover.baseline_commitment(baseline))
+        self.assertTrue(plan["publishHostkeys"])
+        self.assertIn(recover.GUEST_ATTRIBUTES_KEY, plan["metadataAdded"])
+        self.assertIn(recover.HOSTKEY_PERMISSION, plan["permissionsExpected"])
+        module = load_rendered(out / "guest.py")
+        host = DictHost(json.loads((out / "binding.json").read_text()), out / "guest.py")
+        host.unit["mode"] = 0o644
+        receipt = module.run(host)
+        self.assertEqual(receipt["purpose"], "rotate-publish")
+        self.assertEqual(guest.rotate_success_problems(receipt, baseline, purpose="rotate-publish"), [])
+        self.assertEqual(len(host.hostkey_puts), 3)
+        self.assertNotIn("PRIVATE", json.dumps(receipt))
+        self.assertNotIn(host.private, json.dumps(receipt))
+        failed = DictHost(json.loads((out / "binding.json").read_text()), out / "guest.py")
+        failed.unit["mode"] = 0o644
+        failed.publish_fails = True
+        partial = module.run(failed)
+        self.assertEqual(partial["status"], "partial")
+        self.assertEqual(partial["unit"]["problem"], "hostkey-publish")
+        self.assertFalse(partial["hostKeys"]["rolledBack"])
+        self.assertEqual(failed.generate_calls, 3)
+        self.assertEqual(failed.unit["mode"], 0o644)
+        failed.boot = "01234567-89ab-cdef-0123-456789abcdef"
+        puts_before = list(failed.hostkey_puts)
+        again = module.run(failed)
+        self.assertEqual(failed.generate_calls, 3)
+        self.assertEqual(failed.hostkey_puts, puts_before)
+        self.assertEqual(again["status"], "partial")
+        self.assertEqual(again["unit"]["problem"], "hostkey-publish")
+        self.assertNotIn("PRIVATE", json.dumps(again))
+
+        def run_apply(items, hostkeys, publish_fails=False, operation="48" * 16):
+            directory = Path(self.temp.name) / ("apply-" + operation[:4])
+            recover.plan("Mac operator", directory, now=NOW, token=tokens(operation, "59" * 16), revision="a" * 40,
+                         env=ENV, mode="rotate-publish", inspect_receipt=path,
+                         confirm_inspect_operation=evidence["operationId"],
+                         confirm_baseline=recover.baseline_commitment(baseline))
+            world = World()
+            world.items = dict(items)
+            clock = Clock()
+
+            def boot(metadata):
+                rendered = load_rendered(directory / "guest.py")
+                disk = DictHost(json.loads(metadata[recover.BINDING_KEY]), directory / "guest.py")
+                disk.unit["mode"] = 0o644
+                disk.publish_fails = publish_fails
+                rendered.run(disk)
+                world.host = disk
+                if hostkeys == "published":
+                    world.hostkeys = {"queryValue": {"items": [
+                        {"namespace": "hostkeys", "key": key, "value": blob} for key, blob in disk.hostkey_puts]}}
+                elif hostkeys == "stale":
+                    stale = []
+                    for alg, name in guest.KEY_NAMES.items():
+                        kind, _fp = guest.parse_public(disk.prev[alg])
+                        stale.append({"namespace": "hostkeys", "key": kind, "value": str(disk.prev[alg]).split()[1]})
+                    world.hostkeys = {"queryValue": {"items": stale}}
+                elif hostkeys == "private":
+                    world.hostkeys = {"queryValue": {"items": [
+                        {"namespace": "hostkeys", "key": "ssh-ed25519",
+                         "value": "-----BEGIN OPENSSH PRIVATE KEY-----"}]}}
+                return disk.emitted[-1] + "\n"
+
+            world.boot_guest = boot
+            pre = recover.preflight(directory, recover.INSTANCE_ID, True, world, now=NOW, env=ENV)
+            self.assertEqual(pre["result"], "preflight-ok", pre.get("problems"))
+            result = recover.apply(directory, recover.INSTANCE_ID, True, world, now=NOW, clock=clock,
+                                   sleep=clock.sleep, env=ENV)
+            return world, result, clock
+
+        world, result, clock = run_apply(recover.BASE_METADATA, "published", operation="48" * 16)
+        self.assertEqual(result["exit"], 0, result["result"])
+        self.assertEqual(result["result"], "rotate-publish-complete")
+        self.assertFalse(result["hostKeyPinned"])
+        self.assertEqual(result["guestAttribute"], "matched")
+        self.assertEqual(world.items, recover.BASE_METADATA)
+        self.assertEqual(world.replacement_status, "TERMINATED")
+        self.assertEqual(world.targets("start"), ["replacement"])
+        self.assertEqual(world.targets("set-metadata"), ["replacement", "replacement"])
+        first = [req for req in world.requests if req["kind"] == "set-metadata"][0]["items"]
+        self.assertEqual(first[recover.GUEST_ATTRIBUTES_KEY], "TRUE")
+        self.assertEqual(first["enable-oslogin"], "FALSE")
+        self.assertNotIn("PRIVATE", json.dumps(result))
+        self.assertEqual(clock.sleeps, [180])
+        hostkey_reads = [req for req in world.requests if req.get("query") == "hostkeys"]
+        self.assertEqual(len(hostkey_reads), 1)
+        self.assertEqual(hostkey_reads[0]["timeout"], 30)
+
+        kept = dict(recover.BASE_METADATA, **{recover.GUEST_ATTRIBUTES_KEY: "TRUE", "fleet-label": "west"})
+        world, result, _clock = run_apply(kept, "published", operation="49" * 16)
+        self.assertEqual(result["exit"], 0, result["result"])
+        self.assertEqual(world.items[recover.GUEST_ATTRIBUTES_KEY], "TRUE")
+        self.assertEqual(world.items["fleet-label"], "west")
+        self.assertNotIn("startup-script", world.items)
+        self.assertNotIn(recover.BINDING_KEY, world.items)
+
+        prior_false = dict(recover.BASE_METADATA, **{recover.GUEST_ATTRIBUTES_KEY: "FALSE", "fleet-label": "west"})
+        world, result, _clock = run_apply(prior_false, "published", operation="4a" * 16)
+        self.assertEqual(result["exit"], 0, result["result"])
+        self.assertEqual(world.items[recover.GUEST_ATTRIBUTES_KEY], "FALSE")
+        self.assertEqual(world.items["fleet-label"], "west")
+        submitted = [req for req in world.requests if req["kind"] == "set-metadata"][0]["items"]
+        self.assertEqual(submitted[recover.GUEST_ATTRIBUTES_KEY], "TRUE")
+        self.assertEqual(submitted["fleet-label"], "west")
+
+        world, result, _clock = run_apply(recover.BASE_METADATA, "published", publish_fails=True, operation="4b" * 16)
+        self.assertEqual(result["exit"], 1)
+        self.assertNotEqual(result["result"], "rotate-publish-complete")
+        self.assertEqual(result["guestReceipt"]["status"], "partial")
+        self.assertEqual(result["guestReceipt"]["unit"]["problem"], "hostkey-publish")
+        self.assertEqual(world.items, recover.BASE_METADATA)
+        self.assertEqual(world.replacement_status, "TERMINATED")
+        self.assertEqual(world.targets("start"), ["replacement"])
+        self.assertEqual(world.targets("set-metadata"), ["replacement", "replacement"])
+        self.assertNotIn("PRIVATE", json.dumps(result))
+
+        world, result, _clock = run_apply(recover.BASE_METADATA, "stale", operation="4c" * 16)
+        self.assertEqual(result["exit"], 1)
+        self.assertEqual(result["guestRead"], "hostkey-stale")
+        self.assertEqual(world.items, recover.BASE_METADATA)
+        self.assertEqual(world.replacement_status, "TERMINATED")
+        self.assertEqual(world.targets("start"), ["replacement"])
+
+        world, result, _clock = run_apply(recover.BASE_METADATA, "private", operation="4d" * 16)
+        self.assertEqual(result["exit"], 1)
+        self.assertEqual(result["guestRead"], "hostkey-malformed")
+        self.assertEqual(world.items, recover.BASE_METADATA)
+        self.assertEqual(world.replacement_status, "TERMINATED")
+        self.assertNotIn("BEGIN OPENSSH", json.dumps(result))
+
+        blocked = World()
+        blocked.iam_missing = {"replacement": [recover.HOSTKEY_PERMISSION]}
+        directory = Path(self.temp.name) / "apply-blocked"
+        recover.plan("Mac operator", directory, now=NOW, token=tokens("4e" * 16, "59" * 16), revision="a" * 40,
+                     env=ENV, mode="rotate-publish", inspect_receipt=path,
+                     confirm_inspect_operation=evidence["operationId"],
+                     confirm_baseline=recover.baseline_commitment(baseline))
+        pre = recover.preflight(directory, recover.INSTANCE_ID, True, blocked, now=NOW, env=ENV)
+        self.assertEqual(pre["result"], "preflight-blocked")
+        self.assertIn("missing-permission:" + recover.HOSTKEY_PERMISSION, pre["problems"])
+        self.assertNotIn("set-metadata", blocked.kinds())
 
 
 class CommandTest(Base):
