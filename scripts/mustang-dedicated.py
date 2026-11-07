@@ -385,6 +385,8 @@ def main():
     args=parser.parse_args()
     args.publish=args.publish or (args.action=='guard' and os.environ.get('MUSTANG_PUBLISH')=='true')
     refuse_dry_run(args.action)
+    if args.action in ('sign','_execute'):
+        raise ValueError('guest signing is closed; only the hosted ubuntu signer may sign')
     if args.action=='preflight':
         print(json.dumps(route.report(),sort_keys=True))
         return 0

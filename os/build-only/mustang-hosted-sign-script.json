@@ -1,0 +1,12 @@
+{
+  "schema": "roseos.mustang-hosted-sign-script.v1",
+  "entryPoint": "scripts/mustang_hosted_sign.py",
+  "generateReleasePath": "script/generate-release.sh",
+  "generateReleaseSha256": null,
+  "jdkSha256": null,
+  "otatoolsSha256": null,
+  "otatoolsExecutable": null,
+  "status": "unbound",
+  "trust": "held",
+  "basis": "script/generate-release.sh is not in this checkout. The hosted signer refuses secret access until a reviewed sha256 of that script is committed here. A guest-uploaded copy is not executed."
+}
