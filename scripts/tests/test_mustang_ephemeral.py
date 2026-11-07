@@ -544,5 +544,123 @@ class EnrollmentTest(unittest.TestCase):
             self.assertIn('expected v24.22.2', wrong.stderr)
 
 
+class WorkflowCliContractTest(unittest.TestCase):
+    """Every dedicated-workflow ephemeral command is parsed by main, not a helper."""
+
+    def workflow_commands(self):
+        import shlex
+        marker = 'python3 scripts/mustang_ephemeral.py '
+        found = []
+        for line in (ROOT/'.github/workflows/mustang-ota-dedicated.yml').read_text().splitlines():
+            if marker not in line:
+                continue
+            found.append(shlex.split(line.split(marker, 1)[1].strip()))
+        self.assertGreaterEqual(len(found), 8)
+        self.assertIn(['put-metadata', '--execute', '--file', '$RUNNER_TEMP/mustang-jit'], found)
+        return found
+
+    def invoke(self, argv, transport, extra=None):
+        from contextlib import redirect_stderr, redirect_stdout
+        import io
+        out, err = io.StringIO(), io.StringIO()
+        env = {'GH_TOKEN': '', 'GITHUB_TOKEN': '', 'ENROLL_RESULT': 'failure', 'GITHUB_RUN_ID': '42391012772'}
+        if extra:
+            env.update(extra)
+        with patch.dict(os.environ, env, clear=False):
+            with redirect_stdout(out), redirect_stderr(err):
+                code = enroll.main(list(argv), transport=transport)
+        return code, out.getvalue(), err.getvalue()
+
+    def test_workflow_commands_parse_and_deliver_only_a_private_file(self):
+        secret = 'encoded-jit-config-secret-value-not-for-logs'
+        calls = []
+
+        def transport(argv):
+            calls.append(list(argv))
+            text = ' '.join(argv)
+            if 'get-guest-attributes' in argv:
+                return subprocess.CompletedProcess(argv, 0, '{"value":"1"}\n', '')
+            if 'describe' in argv:
+                return subprocess.CompletedProcess(argv, 0, '{"metadata":{"items":[{"key":"mustang-jitconfig"}]}}\n', '')
+            self.assertNotIn(secret, text)
+            return subprocess.CompletedProcess(argv, 0, '', '')
+
+        with tempfile.TemporaryDirectory() as temporary:
+            private = Path(temporary)/'mustang-jit'
+            private.write_text(secret)
+            private.chmod(0o600)
+            public = Path(temporary)/'public'
+            public.write_text(secret)
+            public.chmod(0o644)
+            link = Path(temporary)/'link'
+            link.symlink_to(private)
+            values = {'$GITHUB_RUN_ID': '42391012772', '$RUNNER_TEMP/mustang-jit': str(private)}
+            seen = set()
+            for raw in self.workflow_commands():
+                argv = [values.get(part, part) for part in raw]
+                seen.add(argv[0])
+                code, out, err = self.invoke(argv, transport)
+                self.assertNotIn('unrecognized arguments', err)
+                self.assertNotIn(secret, out)
+                self.assertNotIn(secret, err)
+                if argv[0] in ('issue', 'sweep', 'cancel'):
+                    self.assertEqual(code, 4)
+                    self.assertIn('token', err)
+                elif argv[0] == 'put-metadata':
+                    self.assertEqual(code, 0, err)
+                elif argv[0] == 'wait-fetched':
+                    self.assertEqual(code, 0, err)
+                elif argv[0] == 'clear-metadata':
+                    self.assertEqual(code, 0, err)
+                    self.assertIn('"state": "removed"', out)
+                elif argv[0] == 'queue-watch':
+                    self.assertEqual(code, 0, err)
+                    self.assertIn('"decision": "stop"', out)
+            self.assertEqual(seen, {'issue', 'put-metadata', 'wait-fetched', 'sweep', 'clear-metadata', 'queue-watch', 'cancel'})
+            delivered = [argv for argv in calls if 'add-metadata' in argv]
+            self.assertEqual(len(delivered), 1)
+            self.assertEqual(delivered[0][-1], '--metadata-from-file=mustang-jitconfig='+str(private))
+            self.assertIn('roseos-mustang-builder-20261107-a', delivered[0])
+            self.assertTrue(all('immortal-os-builder' not in ' '.join(argv) and 'frankel' not in ' '.join(argv) for argv in calls))
+            removed = [argv for argv in calls if 'remove-metadata' in argv]
+            self.assertTrue(removed)
+            self.assertTrue(all('--keys=mustang-jitconfig' in argv for argv in removed))
+            fetched = [argv for argv in calls if 'get-guest-attributes' in argv]
+            self.assertEqual(len(fetched), 1)
+            self.assertIn('--query-path=mustang/jit-fetched', fetched[0])
+
+            for bad in (str(Path(temporary)/'missing'), str(public), str(link), 'relative-jit', str(Path(temporary)/'..'/'passwd')):
+                code, out, err = self.invoke(['put-metadata', '--execute', '--file', bad], transport)
+                self.assertEqual(code, 4)
+                self.assertIn('private regular file', err)
+                self.assertNotIn(secret, err)
+            code, out, err = self.invoke(['issue', '--execute', '--run-id', '42391012772', '--out', str(private), '--file', str(private)], transport)
+            self.assertEqual(code, 4)
+            self.assertIn('only accepted by put-metadata', err)
+            self.assertNotIn(secret, err)
+            code, out, err = self.invoke(['put-metadata', '--file', str(private)], transport)
+            self.assertEqual(code, 4)
+            self.assertIn('--execute', err)
+
+        script = [sys.executable, str(ROOT/'scripts/mustang_ephemeral.py')]
+        env = dict(os.environ)
+        env.pop('GH_TOKEN', None)
+        env.pop('GITHUB_TOKEN', None)
+        missing = subprocess.run(script+['put-metadata', '--execute', '--file', '/tmp/mustang-jit-missing-not-a-secret'],
+                                 capture_output=True, text=True, env=env)
+        self.assertEqual(missing.returncode, 4)
+        self.assertNotIn('unrecognized arguments', missing.stderr)
+        self.assertIn('private regular file', missing.stderr)
+        refused = subprocess.run(script+['sweep', '--execute', '--run-id', '42391012772', '--file', '/tmp/not-used'],
+                                 capture_output=True, text=True, env=env)
+        self.assertEqual(refused.returncode, 4)
+        self.assertNotIn('unrecognized arguments', refused.stderr)
+        self.assertIn('only accepted by put-metadata', refused.stderr)
+        guest = (ROOT/'scripts/mustang-ephemeral-guest.sh').read_text()
+        self.assertIn('instance/attributes/'+enroll.METADATA_KEY, guest)
+        self.assertIn('guest-attributes/mustang/jit-fetched', guest)
+        self.assertIn('--jitconfig', guest)
+
+
 if __name__ == '__main__':
     unittest.main()
