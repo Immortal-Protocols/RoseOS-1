@@ -10,7 +10,7 @@ const source=name=>fs.readFileSync(new URL(name,dir),'utf8');
 const owners=fs.readdirSync(dir).filter(f=>f.endsWith('.java')&&/new WebView\(|extends WebView\b/.test(source(f)));
 
 test('every app WebView owner handles renderer loss',()=>{
- assert.deepEqual(owners.sort(),['MacScreenPanel.java','TaskHtmlView.java','VoiceService.java'],'known owners; a new one needs a handler too');
+ assert.deepEqual(owners.sort(),['TaskHtmlView.java','VoiceService.java'],'known owners; a new one needs a handler too (the Mac screen panel is removed)');
  for(const name of owners){
   const text=source(name);
   const clients=text.match(/setWebViewClient\(new WebViewClient\(\)\{/g)?.length||0;
@@ -33,14 +33,10 @@ test('voice renderer loss ends the call truthfully and leaves tasks alone',()=>{
  assert.match(source('ConversationState.java'),/case "renderer_gone":return Failure\.DISCONNECTED/,'the surface understands the reason');
 });
 
-test('result cards and the Mac screen recover locally',()=>{
- const html=source('TaskHtmlView.java'),card=source('TaskStatusCard.java'),mac=source('MacScreenPanel.java');
+test('result cards recover locally',()=>{
+ const html=source('TaskHtmlView.java'),card=source('TaskStatusCard.java');
  assert.match(html,/removeView\(TaskHtmlView\.this\);\s*dispose\(\)/,'the dead card view is removed then destroyed');
  assert.match(card,/htmlLostFor=/,'the card falls back to its text result for that task');
- assert.match(mac,/removeView\(dead\);dead\.destroy\(\)/,'the dead panel view is removed then destroyed');
- assert.match(mac,/renderer\.allow\(SystemClock\.elapsedRealtime\(\)\)\)\{createWeb\(\);return;\}/,'recreated through the same setup, within a budget');
- assert.match(mac,/Mac screen unavailable/,'otherwise an honest unavailable state');
- assert.ok(!/web\.evaluateJavascript/.test(mac.replace(/(if\([^)]*web!=null[^)]*\)|&&web!=null\))web\.evaluateJavascript/g,'')),'every panel call checks for a live view');
 });
 
 test('R20: voice bridge callbacks reach only the view generation that issued them',()=>{
