@@ -8,8 +8,8 @@ caller: Rose Agent serves it as its app-tool capabilities, this module turns it 
 link. Nothing here adds an endpoint or a phone action.
 
 The controls are the Home column count (0 = automatic), a curated Oxblood wallpaper variant, a bundled font, and the
-glasses-on hook. The hook runs only on a real glasses-worn signal; ``customization_state`` reports whether this phone
-has one (at this revision it does not, and connection is never substituted).
+glasses-on hook. The hook's signal is any Bluetooth audio device connecting (glasses on) or the last one
+disconnecting (removal), the owner's choice; ``customization_state`` names it in ``glassesWear.basis``.
 
 Success is the phone's own ``verified``/``ok`` after it stored the value. Anything else, a lost or late reply
 included, is not success, and nothing is retried here.
@@ -26,7 +26,7 @@ TIMEOUT_S = 12.0  # SettingsAgentProvider allows 8 s per operation; the link add
 POLICY_LINE = ('Use the customization tools only when the owner asks to change or check Rose Home columns, the Oxblood '
                'wallpaper variant, the font or the glasses-on hook; read customization_state for relative requests and '
                'report the returned state: a saved preference is not a visible change, so give Home\'s effectiveColumns, say so '
-               'when home.applied is false, and say when the glasses-worn signal is unavailable.')
+               'when home.applied is false. The glasses-on hook runs when a Bluetooth audio device connects.')
 
 
 class CustomizationRefused(ValueError):
