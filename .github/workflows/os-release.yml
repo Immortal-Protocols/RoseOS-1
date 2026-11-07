@@ -1,6 +1,8 @@
 name: Build & publish latest Pixel 10
 # RELEASE020: a campaign run carries its campaign in the run name; scripts/release-chain.py finds successors by it.
-run-name: ${{ inputs.mode == 'mustang-build' && inputs.candidate_sha != '' && format('mustang-build auto-{0}', inputs.candidate_sha) || inputs.mode == 'mustang-delivery' && inputs.mustang_publish_ota && format('mustang-delivery ota-{0}', inputs.mustang_compile_run) || startsWith(inputs.mode, 'mustang-') && format('{0} {1}', inputs.mode, github.run_id) || inputs.campaign && format('Build & publish latest Pixel 10 - campaign {0}', inputs.campaign) || inputs.mode == 'app-only' && inputs.apps == 'auto' && format('Agent Beta auto {0}', inputs.candidate_sha) || 'Build & publish latest Pixel 10' }}
+# 1E: only latest-beta (the normal button) is titled 'Build & publish latest Pixel 10', so scripts/daily-release.py
+# counts exactly its runs as the Frankel lane's; every other mode is titled 'os-release <mode> <run id>'.
+run-name: ${{ inputs.mode == 'mustang-build' && inputs.candidate_sha != '' && format('mustang-build auto-{0}', inputs.candidate_sha) || inputs.mode == 'mustang-delivery' && inputs.mustang_publish_ota && format('mustang-delivery ota-{0}', inputs.mustang_compile_run) || startsWith(inputs.mode, 'mustang-') && format('{0} {1}', inputs.mode, github.run_id) || inputs.campaign && format('Build & publish latest Pixel 10 - campaign {0}', inputs.campaign) || inputs.mode == 'app-only' && inputs.apps == 'auto' && format('Agent Beta auto {0}', inputs.candidate_sha) || inputs.mode == 'latest-beta' && 'Build & publish latest Pixel 10' || format('os-release {0} {1}', inputs.mode, github.run_id) }}
 
 # Build, sign, verify and publish one Frankel candidate on the existing builder. The default mode, latest-beta, is the
 # normal button (OCT30-INFRA-S014): it needs no input. Every other mode and input is advanced. Proposed setup is

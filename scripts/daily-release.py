@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
-"""Daily release dispatcher (1F): build, sign, verify and publish each flavor once a day through its existing entry.
+"""Daily release dispatcher (1E): build, sign, verify and publish each flavor once a day through its own entry.
 
-Source only, and inert as committed:
-- .github/workflows/daily-release.yml has no schedule;
-- every lane in os/release-pipeline/lanes/daily.json is disabled;
-- a manual run is a dry run by default.
-Activation is one reviewed, owner-approved change: enable a lane and add the schedule.
+Inert as committed: every lane in os/release-pipeline/lanes/daily.json is disabled. Enabling a lane is its own
+reviewed change, approved by that lane's owner and Chief; a manual run is a dry run by default.
+
+The daily window is os/release-pipeline/lanes/daily.json window (04:00 America/Los_Angeles). GitHub schedules are UTC,
+so .github/workflows/daily-release.yml lists every UTC time that can be that local time (11:00 and 12:00 UTC for 04:00
+Pacific). A scheduled run acts only when the cron that fired (github.event.schedule, not the start time, so a late
+start still runs) is the window's local time on that UTC date; otherwise every lane is skipped with no API call. A
+daylight-saving change therefore never runs the day twice or not at all.
 
 The hosted job runs `dispatch` with only actions:write on its short-lived GITHUB_TOKEN, and no stored token or secret.
 Each lane is decided on its own, in file order, so one lane's failure never stops another:
@@ -15,14 +18,18 @@ Each lane is decided on its own, in file order, so one lane's failure never stop
   - delivered: the lane's newest completed run whose delivery job succeeded already built this main commit, so an
     identical commit is never rebuilt (a later job's failure, such as cleanup, does not undo a delivery);
   - otherwise the lane's entry is dispatched once, on ref main, with its committed inputs (manual dispatch stays).
+A lane's runs are the entry's runs on main titled exactly runTitle, or starting with runTitlePrefix.
 The dispatcher never publishes, retries, cancels or changes a release. Each lane's route keeps its last good release when
 it fails (lane.lastGood).
 
-  dispatch   env: GITHUB_API_URL, GITHUB_REPOSITORY, GITHUB_REF, GH_TOKEN, DRY_RUN ('false' dispatches)
+  dispatch   env: GITHUB_API_URL, GITHUB_REPOSITORY, GITHUB_REF, GITHUB_EVENT_NAME, GH_TOKEN,
+             SCHEDULE (the cron that fired, for schedule), DRY_RUN (workflow_dispatch only: 'false' dispatches)
+  check      validate the lanes, the window and each present entry's inputs
 Exit status: 0 every lane decided (dispatched or skipped, with the reason); 1 a lane errored (the others still ran);
-2 invalid lanes or usage.
+2 invalid lanes, window, trigger or usage.
 """
 import argparse
+from datetime import date, datetime, timedelta, timezone
 import json
 from pathlib import Path
 import re
@@ -38,6 +45,8 @@ WORKFLOW = re.compile(r'[a-z0-9][a-z0-9-]{0,80}\.yml')
 INPUT = re.compile(r'[a-z][a-z0-9_]{0,60}')
 PENDING = {'queued', 'in_progress', 'waiting', 'requested', 'pending'}
 DELIVERY_LOOKS = 20
+CRON = re.compile(r'([0-9]|[1-5][0-9]) ([0-9]|1[0-9]|2[0-3]) \* \* \*')
+CLOCK = re.compile(r'([01][0-9]|2[0-3]):([0-5][0-9])')
 
 
 class Invalid(Exception):
@@ -76,6 +85,68 @@ def load_lanes(path=LANES):
     if not lanes:
         raise Invalid('no lanes')
     return lanes
+
+
+def load_window(path=LANES):
+    """The committed daily window {timeZone, time}: an IANA zone and HH:MM local time, or time null (no schedule)."""
+    try:
+        data = json.loads(Path(path).read_text())
+    except (OSError, ValueError) as error:
+        raise Invalid(f'unreadable lanes ({type(error).__name__})') from None
+    window = data.get('window') if isinstance(data, dict) else None
+    if not isinstance(window, dict) or not isinstance(window.get('timeZone'), str):
+        raise Invalid('the daily window needs a timeZone')
+    zone(window)
+    if window.get('time') is not None and not CLOCK.fullmatch(str(window['time'])):
+        raise Invalid('the daily window time must be HH:MM or null')
+    return window
+
+
+def zone(window):
+    try:
+        from zoneinfo import ZoneInfo
+        return ZoneInfo(window['timeZone'])
+    except (ImportError, ValueError, KeyError, OSError) as error:
+        raise Invalid(f'unknown time zone {window.get("timeZone")!r} ({type(error).__name__})') from None
+
+
+def local_time(window, utc_hour, utc_minute, day):
+    """HH:MM in the window's zone at utc_hour:utc_minute UTC on the UTC date day."""
+    instant = datetime(day.year, day.month, day.day, utc_hour, utc_minute, tzinfo=timezone.utc)
+    return instant.astimezone(zone(window)).strftime('%H:%M')
+
+
+def window_crons(window, year):
+    """Every 'M H * * *' UTC cron that is the window's local time on some day of year (two for a zone with DST)."""
+    hour, minute = (int(x) for x in window['time'].split(':'))
+    crons, day = set(), date(year, 1, 1)
+    while day.year == year:
+        utc = datetime(day.year, day.month, day.day, hour, minute, tzinfo=zone(window)).astimezone(timezone.utc)
+        if local_time(window, utc.hour, utc.minute, utc.date()) == window['time']:  # a local time that exists that day
+            crons.add(f'{utc.minute} {utc.hour} * * *')
+        day += timedelta(days=1)
+    return crons
+
+
+def trigger(env, window, now):
+    """(dry, off-window reason or None) for this run. A scheduled run is real but acts only inside the window."""
+    event = env.get('GITHUB_EVENT_NAME')
+    if event == 'workflow_dispatch':
+        return env.get('DRY_RUN', 'true') != 'false', None
+    if event != 'schedule':
+        raise Invalid('the daily dispatcher runs only from its schedule or a manual dispatch')
+    if window.get('time') is None:
+        raise Invalid('a scheduled run needs the committed daily window time')
+    cron = env.get('SCHEDULE', '')
+    match = CRON.fullmatch(cron)
+    if not match or cron not in window_crons(window, now.year):
+        raise Invalid(f'the schedule that fired is not a cron of the {window["time"]} {window["timeZone"]} window')
+    minute, hour = (int(x) for x in match.groups())
+    local = local_time(window, hour, minute, now.date())
+    if local != window['time']:
+        return False, (f'off-window: {cron} (UTC) is {local} {window["timeZone"]} on {now.date().isoformat()}, '
+                       f'not the {window["time"]} window')
+    return False, None
 
 
 def dispatch_inputs(workflow_text):
@@ -164,10 +235,14 @@ def get(env, path, opener):
     return data
 
 
-def run_lanes(env, lanes, opener=urllib.request.urlopen, root=ROOT):
+def run_lanes(env, lanes, opener=urllib.request.urlopen, root=ROOT, window=None, now=None):
     if env.get('GITHUB_REF') != 'refs/heads/main':
         raise Invalid('the daily dispatcher runs only from main')
-    dry = env.get('DRY_RUN', 'true') != 'false'
+    window = load_window() if window is None else window
+    dry, off_window = trigger(env, window, now or datetime.now(timezone.utc))
+    if off_window:
+        return [{'lane': lane['name'], 'workflow': lane['workflow'], 'action': 'skip', 'reason': off_window}
+                for lane in lanes]
     main_sha = get(env, '/commits/main', opener).get('sha', '')
     if not re.fullmatch(r'[0-9a-f]{40}', main_sha):
         raise RuntimeError('main has no readable commit')
@@ -204,7 +279,7 @@ def run_lanes(env, lanes, opener=urllib.request.urlopen, root=ROOT):
     return results
 
 
-def main(argv=None, env=None, opener=urllib.request.urlopen):
+def main(argv=None, env=None, opener=urllib.request.urlopen, now=None):
     import os
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument('command', choices=['dispatch', 'check'])
@@ -213,14 +288,16 @@ def main(argv=None, env=None, opener=urllib.request.urlopen):
     env = dict(os.environ) if env is None else env
     try:
         lanes = load_lanes(a.lanes)
+        window = load_window(a.lanes)
         if a.command == 'check':
             for lane in lanes:
                 entry = ROOT/'.github/workflows'/lane['workflow']
                 if entry.is_file():
                     check_inputs(lane, entry.read_text())
-            print(json.dumps({'lanes': [{'lane': lane['name'], 'enabled': lane['enabled']} for lane in lanes]}))
+            print(json.dumps({'window': {'timeZone': window['timeZone'], 'time': window.get('time')},
+                              'lanes': [{'lane': lane['name'], 'enabled': lane['enabled']} for lane in lanes]}))
             return 0
-        results = run_lanes(env, lanes, opener)
+        results = run_lanes(env, lanes, opener, window=window, now=now)
     except Invalid as error:
         print(json.dumps({'verdict': 'INVALID', 'error': str(error)}), file=sys.stderr)
         return 2
