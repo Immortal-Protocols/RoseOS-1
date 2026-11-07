@@ -82,4 +82,27 @@ final class AppRemoval {
    default: return null;
   }
  }
+ /**
+  * 1I (owner decision, 2026-11-07): Rose Models (dev.pixel.models) is retired with no successor. Nothing ships it any
+  * more and Rose Agent never installs, updates or calls it. A copy already on a phone stays until its owner removes
+  * it: Home offers that once (RetiredAppNotice) and on the app's long press, always through Android's own
+  * confirmation, never silently. Only the genuine app counts: the exact package signed by the Models release key
+  * (the signer service-auth-v1 enrolls). Another app reusing the package name is an ordinary app.
+  */
+ static final String MODELS = "dev.pixel.models";
+ static final String MODELS_SIGNER = "066c66d62518d1db6c8a7d40795fcca580412049d2c5a5cce89b7673540108da";
+ static final String MODELS_NAME = "Rose Models", RETIRED_NOTE = "Retired · no longer updated";
+ static final String RETIRED_TITLE = "Rose Models is retired", RETIRED_UNINSTALL = "Uninstall", RETIRED_LATER = "Not now",
+   RETIRED_BODY = "It no longer gets updates, and Rose Agent doesn't use it. Uninstalling it removes the app and its "
+     + "saved sign-in key from this phone. If you keep it for now, it stays in the System folder, and you can "
+     + "uninstall it there with a long press.";
+ /** Where Home records that the owner has answered the notice, so it is offered once. */
+ static final String RETIRED_PREFS = "retired-apps", MODELS_NOTICE = "models-notice-answered";
+
+ /** @param signerSha256 the SHA-256 (hex) of each of the installed package's signing certificates */
+ static boolean retired(String packageName, Iterable<String> signerSha256) {
+  if (!MODELS.equals(packageName) || signerSha256 == null) return false;
+  for (String signer : signerSha256) if (MODELS_SIGNER.equalsIgnoreCase(signer)) return true;
+  return false;
+ }
 }

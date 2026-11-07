@@ -23,9 +23,9 @@ final class HomeAppGroups {
 
  /** Apps that always stay on the app pages, outside the folder. */
  static final String[] KEEP_OUT = {"com.anthropic.claude", "com.openai.chatgpt", "com.amazon.mShop.android.shopping"};
- /** F02: retired standalone apps, by exact package. The obsolete Rose Models app (dev.pixel.models) is no longer
-  * shipped (Release retires its distribution); a copy already installed is never removed by Rose, only moved off main
-  * Home and the app pages into the System folder, where its owner can still open it or uninstall it (AppRemoval). */
+ /** F02/1I: retired standalone apps, by exact package. Rose Models (dev.pixel.models) is retired and no longer shipped;
+  * a copy already installed is never removed by Rose. It sits in the System folder, where its owner can still open it,
+  * and Home offers its uninstall through Android's own confirmation (AppRemoval.retired, RetiredAppNotice). */
  static final String[] RETIRED = {"dev.pixel.models"};
  /** Second copies of a suite app (AppLabels.label names each one as such). */
  static final String[] DUPLICATES = {"dev.pixel.mail.debug", "org.fossify.calendar.pixel.debug", "dev.pixel.weather.opus"};

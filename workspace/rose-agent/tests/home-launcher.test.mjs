@@ -600,6 +600,47 @@ test('a long press offers App info and Android\'s own uninstall route, never a s
  assert.match(main,/openRemoval\(pkg,label,AppRemoval\.Route\.APP_INFO,false\)/);
 });
 
+// 1I: Rose Models is retired with no successor. An installed copy is offered for removal through Android's own
+// confirmation only; Rose Agent never installs, updates or calls it.
+test('the retired Rose Models app is offered for uninstall, never removed or reinstalled by Rose (1I)',()=>{
+ const removal=read('../app/src/dev/pixel/voice/AppRemoval.java'),notice=read('../app/src/dev/pixel/voice/RetiredAppNotice.java');
+ const strip=t=>t.replace(/\/\*[\s\S]*?\*\//g,'').replace(/\/\/.*$/gm,'');
+ // Genuine app only: its exact package and the Models release signer that service-auth-v1 enrolls.
+ assert.match(removal,/MODELS_SIGNER = "066c66d62518d1db6c8a7d40795fcca580412049d2c5a5cce89b7673540108da";/);
+ assert.ok(read('../../models/contracts/service-auth-v1.md').includes('066c66d62518d1db6c8a7d40795fcca580412049d2c5a5cce89b7673540108da'));
+ const signer=main.slice(main.indexOf('boolean retiredApp(String pkg){'),main.indexOf('boolean retiredOffered;'));
+ assert.match(signer,/getPackageInfo\(pkg,PackageManager\.GET_SIGNING_CERTIFICATES\)\.signingInfo/);
+ assert.match(signer,/return AppRemoval\.retired\(pkg,digests\);/);
+ // Offered once, only on Home, and handed to openRemoval for that exact package (Android's confirmation, #624).
+ const offer=main.slice(main.indexOf('void offerRetiredUninstall(){'),main.indexOf('static final int REMOVE_REQUEST'));
+ assert.match(offer,/if\(retiredOffered\|\|!drawer\|\|launcherPager==null\|\|isFinishing\(\)\|\|isDestroyed\(\)\|\|visualDetail!=null\|\|systemFolder!=null\)return;/);
+ assert.match(offer,/if\(answers\.getBoolean\(AppRemoval\.MODELS_NOTICE,false\)\|\|!retiredApp\(AppRemoval\.MODELS\)\)return;/);
+ assert.match(offer,/\(\)->openRemoval\(AppRemoval\.MODELS,AppRemoval\.MODELS_NAME,/);
+ assert.match(main,/@Override protected void onPostResume\(\)\{super\.onPostResume\(\);handler\.post\(this::offerRetiredUninstall\);\}/);
+ // Every answer is recorded (Uninstall, Not now, back), so the offer is not repeated; its long press stays.
+ assert.match(notice,/setPositiveButton\(AppRemoval\.RETIRED_UNINSTALL, \(d, which\) -> \{ record\.run\(\); uninstall\.run\(\); \}\)/);
+ assert.match(notice,/setNegativeButton\(AppRemoval\.RETIRED_LATER, \(d, which\) -> record\.run\(\)\)/);
+ assert.match(notice,/setOnCancelListener\(d -> record\.run\(\)\)/);
+ assert.match(main,/if\(AppRemoval\.MODELS\.equals\(pkg\)&&retiredApp\(pkg\)\)menu\.getMenu\(\)\.add\(AppRemoval\.RETIRED_NOTE\)\.setEnabled\(false\);/);
+ // Nothing is removed, cleared or stopped programmatically.
+ assert.doesNotMatch(strip(main+removal+notice),/PackageInstaller|\.uninstall\(|deletePackage|clearApplicationUserData|killBackgroundProcesses|forceStop/);
+ // No other Rose Agent code names the package: no install, update, delivery, launch or binding of it.
+ const roots=['../app/src/dev/pixel/voice/','../app/assets/','../server/','../delivery/'];
+ const allowed=new Set(['AppRemoval.java','HomeAppGroups.java']);
+ let scanned=0;
+ for(const root of roots){
+  const dir=new URL(root,import.meta.url);if(!fs.existsSync(dir))continue;
+  for(const entry of fs.readdirSync(dir,{recursive:true})){
+   const file=new URL(entry,dir);if(!fs.statSync(file).isFile()||entry.includes('node_modules'))continue;
+   scanned++;
+   if(allowed.has(path.basename(entry)))continue;
+   assert.ok(!fs.readFileSync(file,'utf8').includes('dev.pixel.models'),`${root}${entry} names dev.pixel.models`);
+  }
+ }
+ assert.ok(scanned>200,`scanned ${scanned} files`);
+ assert.doesNotMatch(manifest,/dev\.pixel\.models/);
+});
+
 // The Settings intent must not silently disappear when the Home anchor is absent/replaced.
 test('Settings opens a window-owned dialog without depending on the launcher frame',()=>{
  const route=main.slice(main.indexOf('void showSettingsFor(Intent intent)'),main.indexOf('/** HOME returning'));
