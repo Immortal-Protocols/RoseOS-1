@@ -36,7 +36,16 @@
     "apkExtracted": false,
     "certificateExtracted": false,
     "phoneAcceptance": false,
-    "readers": "simg2img, lpunpack, and a filesystem reader are not in use yet; apt returned HTTP 500 and the retry is the same official source over HTTPS with signatures"
+    "inventoryObservedBeforeSparseConversion": true,
+    "simg2img": {
+      "completed": true,
+      "output": "super.raw.img",
+      "sizeBytes": 4191461376,
+      "source": "Debian signed sparse tools"
+    },
+    "lpunpackApplied": false,
+    "filesystemReaderApplied": false,
+    "readers": "The 34-entry inventory is from before sparse conversion. simg2img has since written super.raw.img of 4191461376 bytes. lpunpack and a filesystem reader have not run; APK and certificate bytes are still unextracted."
   },
   "basis": "The official factory ZIP was hashed on the box and matches the pinned adevtool build index. It has not been extracted, transferred to the Mustang disk, or admitted. The candidate installer inventory was rechecked without reading updater or certificate bytes."
 }

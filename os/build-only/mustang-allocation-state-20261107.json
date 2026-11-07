@@ -14,5 +14,5 @@
   "builder": null,
   "dataFilesystemUuid": null,
   "recovery": "retired-legacy-epoch",
-  "basis": "Run 41884368820 has allocatedBuild null and no authoritative ledger. consumedBuilds stays null; 2026110402-2026110499 is only the unproved clock-matched day, not a consumed list. The retired epoch reserves 2026130001-2026139999, which is ten digits, above the evidenced builds, and not a date next_build can emit. No ID has been issued."
+  "basis": "Run 41884368820 has allocatedBuild null and no authoritative ledger. consumedBuilds stays null; 2026110402-2026110499 is only the unproved clock-matched day, not a consumed list. 2026130001-2026139999 is a proposal only: reserved is false and no durable authority exists. No ID has been issued."
 }
