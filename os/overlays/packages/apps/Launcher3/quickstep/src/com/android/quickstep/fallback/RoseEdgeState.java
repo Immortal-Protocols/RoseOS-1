@@ -3,6 +3,8 @@ package com.android.quickstep.fallback;
 
 import android.graphics.Rect;
 import android.os.Looper;
+import android.os.SystemProperties;
+import android.util.Log;
 import android.util.SparseArray;
 import android.util.SparseIntArray;
 
@@ -185,6 +187,7 @@ public final class RoseEdgeState {
     static final RoseEdgeShell.Callback SHELL_REPLIES = new RoseEdgeShell.Callback() {
         @Override
         public void onRaised(int displayId, int taskId, Rect appBounds) {
+            diag("shell: raised");
             if (!isRaised(displayId, taskId) || appBounds == null) return;
             RESIZED.put(displayId, new Rect(appBounds));
             // The slot belongs to this raise (the shell dropped any earlier one on its last lower).
@@ -193,16 +196,29 @@ public final class RoseEdgeState {
 
         @Override
         public void onRefused(int displayId, int taskId, int reason) {
+            diag("shell: refused, reason " + reason);
             // Nothing was resized: take the edge down again, but only if it is still up over that same task.
             if (isRaised(displayId, taskId)) lowerHere(displayId);
         }
 
         @Override
         public void onLowered(int displayId, int reason) {
+            diag("shell: lowered, reason " + reason);
             // The shell already restored the full height (it lowered by itself, or confirms a lower).
             lowerHere(displayId);
         }
     };
+
+    /**
+     * Developer-only (RoseEdgeSwipe.DIAG_PROPERTY): the shell's answers with their IRoseEdgeListener reason number, so
+     * a dismissed tray can be traced to the rule that took it down. Content-free; off by default.
+     */
+    private static void diag(String message) {
+        if (SystemProperties.getBoolean(RoseEdgeSwipe.PROPERTY, false)
+                && SystemProperties.getBoolean(RoseEdgeSwipe.DIAG_PROPERTY, false)) {
+            Log.i(RoseEdgeSwipe.TAG, message);
+        }
+    }
 
     /** Takes the edge down here only; true when it was up. */
     private static boolean lowerHere(int displayId) {

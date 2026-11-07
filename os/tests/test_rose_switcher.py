@@ -1399,6 +1399,7 @@ class RoseEdgeSwipePatchTest(unittest.TestCase):
         self.assertEqual(removed, ['-            recentsAttachedToAppWindow = mHasMotionEverBeenPaused || mIsLikelyToStartNewTask;',
             '-        final GestureEndTarget endTarget = calculateEndTarget(',
             '-                velocityPxPerMs, endVelocityPxPerMs, isFling, isCancel, horizontalTouchSlopPassed);',
+            '-                    /* onFinishComplete= */ null,',
             '-                taskViewSimulator.apply(transformParams);',
             '-        ActivityOptions options = ActivityOptions.makeCustomAnimation(mContext, 0, 0);',
             '-        ActivityOptions options = ActivityOptions.makeCustomAnimation(mContext, 0, 0);'])
@@ -1433,6 +1434,12 @@ class RoseEdgeSwipePatchTest(unittest.TestCase):
             '        return hasMotionEverBeenPaused || isLikelyToStartNewTask;\n    }', abs_, 'stock attach rule by default')
         self.assertIn('recentsAttachedToAppWindow = isRecentsAttachRequested(\n'
             '                    mHasMotionEverBeenPaused, mIsLikelyToStartNewTask);', abs_)
+        # Frankel2026110501: a tray release is raised only once the recents finish back to the app has completed.
+        self.assertIn('    protected void onLastTaskResumed() {\n    }', abs_, 'the hook does nothing in stock Launcher3')
+        resume = abs_[abs_.index('private void resumeLastTask() {'):abs_.index('private void finishRejectHome() {')]
+        self.assertIn('/* onFinishComplete= */ this::onLastTaskResumed,', resume)
+        self.assertIn('} else {\n            onLastTaskResumed();\n        }', resume, 'no recents animation: at once')
+        self.assertEqual(abs_.count('onLastTaskResumed'), 3, 'called only from resumeLastTask')
         self.assertIn('return mIsLikelyToStartNewTask;', abs_)
         self.assertEqual(abs_.count('applyTargetTransform(taskViewSimulator, transformParams);'), 1)
         self.assertNotIn('Rose', abs_.replace('RoseOS (#410)', ''), 'no Rose logic in the shared base class')

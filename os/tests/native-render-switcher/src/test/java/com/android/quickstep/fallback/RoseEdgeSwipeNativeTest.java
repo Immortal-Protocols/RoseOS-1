@@ -13,8 +13,10 @@ import android.graphics.Matrix;
 import android.graphics.Rect;
 import android.graphics.RectF;
 import android.hardware.display.DisplayManager;
+import android.os.Looper;
 import android.os.SystemProperties;
 import android.view.Surface;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import org.junit.After;
@@ -93,6 +95,7 @@ public class RoseEdgeSwipeNativeTest {
     @After
     public void tearDown() throws Exception {
         RoseEdgeState.removeListener(listener);
+        swipe(false);  // a new gesture drops any tray release a test left pending
         RoseEdgeState.lower(DISPLAY);
         RoseEdgeState.lower(OTHER_DISPLAY);
         SystemProperties.set(RoseEdgeSwipe.PROPERTY, "");
@@ -177,17 +180,83 @@ public class RoseEdgeSwipeNativeTest {
         assertFalse(RoseEdgeState.isRaised(DISPLAY));
     }
 
+    /** Runs the main looper's due work after ms (the pending raise's timeout is a main-thread Handler). */
+    static void idle(long ms) {
+        shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(ms));
+    }
+
     @Test
     public void releaseAtTheTrayRaisesOnceAndTheTrayStays() {
         RoseEdgeSwipe s = swipe(true);
         drag(s, 10, 30, 55, 70);
         assertEquals(RoseEdgeGesture.RAISE, release(s, 0.05f));
+        // Frankel2026110501: the shell is not asked while Launcher3's recents transition still owns the app.
+        assertTrue("the tray stays drawn, fully shown", s.raisePending());
+        assertEquals("0 TRAY 100%", peeks.get(peeks.size() - 1));
+        assertTrue("no shell call before the return to the app", shellCalls.isEmpty());
+        assertFalse(RoseEdgeState.isRaised(DISPLAY));
+        s.settled(true);
+        assertTrue("settling back to the app keeps it pending, still drawn", s.raisePending());
+        assertEquals("0 TRAY 100%", peeks.get(peeks.size() - 1));
+        s.returnedToApp();
+        assertFalse(s.raisePending());
         assertTrue(RoseEdgeState.isRaised(DISPLAY, TASK));
         assertEquals("one raise", List.of("0 up"), events);
         assertEquals("one shell raise", List.of(RoseEdgeShell.TRANSACTION_RAISE), shellCalls);
         assertEquals("the reveal ended after the raise", "0 end", peeks.get(peeks.size() - 1));
-        s.settled(true);
-        assertTrue("back to the app keeps it up", RoseEdgeState.isRaised(DISPLAY, TASK));
+        s.returnedToApp();
+        s.abandon();
+        idle(RoseEdgeSwipe.PENDING_RAISE_TIMEOUT_MS * 3);
+        assertTrue("it stays up until deliberately dismissed", RoseEdgeState.isRaised(DISPLAY, TASK));
+        assertEquals("still one raise", List.of(RoseEdgeShell.TRANSACTION_RAISE), shellCalls);
+        RoseEdgeState.lower(DISPLAY);
+        assertEquals("a deliberate dismissal lowers it", List.of("0 up", "0 down"), events);
+        assertEquals(List.of(RoseEdgeShell.TRANSACTION_RAISE, RoseEdgeShell.TRANSACTION_LOWER), shellCalls);
+    }
+
+    @Test
+    public void aPendingTrayReleaseIsDroppedUnlessItReturnsToTheApp() {
+        // The recents animation was cancelled after the release.
+        RoseEdgeSwipe cancelled = swipe(true);
+        drag(cancelled, 30, 70);
+        assertEquals(RoseEdgeGesture.RAISE, release(cancelled, 0));
+        cancelled.abandon();
+        assertFalse(cancelled.raisePending());
+        assertEquals("the tray goes", "0 end", peeks.get(peeks.size() - 1));
+        cancelled.returnedToApp();
+        // Another gesture starts before the return completed: its recents transition owns the app again.
+        RoseEdgeSwipe first = swipe(true);
+        drag(first, 30, 70);
+        assertEquals(RoseEdgeGesture.RAISE, release(first, 0));
+        RoseEdgeSwipe next = swipe(true);
+        assertFalse(first.raisePending());
+        first.returnedToApp();
+        assertEquals("the next gesture starts from nothing raised", RoseEdgeGesture.NONE, next.stage());
+        // The final end target left the app.
+        RoseEdgeSwipe left = swipe(true);
+        drag(left, 30, 70);
+        assertEquals(RoseEdgeGesture.RAISE, release(left, 0));
+        left.settled(false);
+        assertFalse(left.raisePending());
+        // Nothing arrives: the pending raise times out.
+        RoseEdgeSwipe lost = swipe(true);
+        drag(lost, 30, 70);
+        assertEquals(RoseEdgeGesture.RAISE, release(lost, 0));
+        idle(RoseEdgeSwipe.PENDING_RAISE_TIMEOUT_MS - 1);
+        assertTrue("not yet", lost.raisePending());
+        idle(2);
+        assertFalse(lost.raisePending());
+        lost.returnedToApp();
+        assertEquals("the tray went", "0 end", peeks.get(peeks.size() - 1));
+        assertTrue("nothing was ever raised or sent", events.isEmpty() && shellCalls.isEmpty());
+        assertFalse(RoseEdgeState.isRaised(DISPLAY));
+        // Without an edge window there is no tray to keep: the release cancels at once.
+        RoseEdgeSwipe noWindow = swipe(true);
+        drag(noWindow, 30, 70);
+        RoseEdgeState.removeListener(listener);
+        assertEquals(RoseEdgeGesture.CANCEL, release(noWindow, 0));
+        assertFalse(noWindow.raisePending());
+        RoseEdgeState.addListener(listener);
     }
 
     @Test
@@ -229,6 +298,7 @@ public class RoseEdgeSwipeNativeTest {
         assertEquals("hysteresis: still the switcher at 180dp", RoseEdgeGesture.SWITCHER, drag(back, 180));
         assertEquals("back below 170dp: the tray again", RoseEdgeGesture.TRAY, drag(back, 160));
         assertEquals(RoseEdgeGesture.RAISE, release(back, 0));
+        back.returnedToApp();
         assertTrue(RoseEdgeState.isRaised(DISPLAY, TASK));
     }
 
@@ -284,6 +354,7 @@ public class RoseEdgeSwipeNativeTest {
         RoseEdgeSwipe s = swipe(true, false, true, false, other, TASK);
         drag(s, 70);
         assertEquals(RoseEdgeGesture.RAISE, release(s, 0));
+        s.returnedToApp();
         assertTrue(RoseEdgeState.isRaised(other, TASK));
         assertFalse(RoseEdgeState.isRaised(DISPLAY));
         assertEquals(List.of(other + " up"), events);

@@ -304,11 +304,26 @@ public class RoseEdgeResizeNativeTest {
     }
 
     @Test
-    public void aReleaseAtTheTrayAsksForTheReferenceLiftOf58dp() {
-        assertEquals(RoseEdgeGesture.RAISE, release(swipe(true), 60, 0));
+    public void aReleaseAtTheTrayAsksForTheReferenceLiftOf58dp() throws Exception {
+        RoseEdgeSwipe s = swipe(true);
+        assertEquals(RoseEdgeGesture.RAISE, release(s, 60, 0));
+        // Frankel2026110501: nothing reaches the shell until the recents transition has finished back to the app.
+        assertTrue(shell.calls.isEmpty());
+        s.settled(true);
+        assertTrue(shell.calls.isEmpty());
+        s.returnedToApp();
         int lift = Math.round(58 * density);
         assertEquals(List.of("raise 0 41 " + lift), shell.calls);
         assertEquals(RoseEdgeGesture.raisedInsetPx(density), lift);
+        // The shell's real answer through the generated listener: the tray stays and the app is really shortened.
+        int width = Math.round(384 * density), shortened = Math.round(832 * density) - lift;
+        shell.listener.onRaised(DISPLAY, TASK, new Rect(0, 0, width, shortened));
+        idle();
+        assertTrue(RoseEdgeState.isRaised(DISPLAY, TASK));
+        assertTrue(RoseEdgeState.isResized(DISPLAY, TASK));
+        assertEquals(new Rect(0, 0, width, shortened), RoseEdgeState.resizedBounds(DISPLAY));
+        s.returnedToApp();
+        assertEquals("one raise", 1, shell.calls.size());
     }
 
     @Test
