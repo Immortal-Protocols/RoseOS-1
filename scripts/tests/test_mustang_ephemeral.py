@@ -54,18 +54,43 @@ class EnrollmentTest(unittest.TestCase):
                                              capture_output=True, text=True)
         self.assertFalse(enroll.contains_secret(plan.stdout + plan.stderr, secret))
 
+    def runner(self, run='12', **extra):
+        value = {'id': 1144, 'name': 'mustang-'+run, 'runner_group_id': 5, 'os': 'linux',
+                 'status': 'offline', 'busy': False, 'labels': ['roseos-mustang-builder']}
+        value.update(extra)
+        return value
+
     def test_response_must_be_ephemeral_and_the_summary_omits_the_config(self):
         secret = 'A'*40
-        body = {'encoded_jit_config': secret, 'runner': {'name': 'mustang-12', 'runner_group_id': 5, 'ephemeral': True}}
+        body = {'encoded_jit_config': secret, 'runner': self.runner(ephemeral=True)}
         summary = enroll.accept_jit(body, '12')
         self.assertNotIn(secret, json.dumps(summary))
         self.assertTrue(summary['ephemeral'])
+        self.assertEqual(summary['oneJobProof'], 'POST '+enroll.API)
         body['runner']['ephemeral'] = False
         with self.assertRaisesRegex(ValueError, 'not an ephemeral'):
             enroll.accept_jit(body, '12')
         body['runner'].update(ephemeral=True, runner_group_id=4)
         with self.assertRaisesRegex(ValueError, 'not an ephemeral'):
             enroll.accept_jit(body, '12')
+        omitted = {'encoded_jit_config': secret, 'runner': self.runner()}
+        self.assertNotIn('ephemeral', omitted['runner'])
+        accepted = enroll.accept_jit(omitted, '12')
+        self.assertIsNone(accepted['ephemeral'])
+        self.assertTrue(accepted['oneJob'])
+        self.assertNotEqual(accepted['ephemeral'], True)
+        nulled = {'encoded_jit_config': secret, 'runner': self.runner(ephemeral=None)}
+        self.assertIsNone(enroll.accept_jit(nulled, '12')['ephemeral'])
+        with self.assertRaisesRegex(ValueError, 'registration token'):
+            enroll.accept_jit({'token': secret, 'expires_at': '2026-11-07T00:00:00Z'}, '12')
+        readback = {'busy': False, 'ephemeral': None, 'id': 1144, 'labels': ['roseos-mustang-builder'],
+                    'name': 'mustang-42387816754', 'status': 'offline'}
+        checked = enroll.confirm_readback(readback, '42387816754', 1144)
+        self.assertIsNone(checked['ephemeral'])
+        self.assertTrue(checked['omitted'])
+        readback['ephemeral'] = False
+        with self.assertRaisesRegex(ValueError, 'not an ephemeral'):
+            enroll.confirm_readback(readback, '42387816754', 1144)
 
     def test_issue_writes_a_private_file_and_does_not_return_the_config(self):
         secret = 'B'*48
@@ -73,13 +98,79 @@ class EnrollmentTest(unittest.TestCase):
             self.assertEqual(path, enroll.API)
             self.assertEqual(body['runner_group_id'], 5)
             self.assertEqual(token, 'x'*24)
-            return {'encoded_jit_config': secret, 'runner': {'name': 'mustang-9', 'runner_group_id': 5, 'ephemeral': True}}
+            return {'encoded_jit_config': secret, 'runner': self.runner('9', ephemeral=True)}
         with tempfile.TemporaryDirectory() as temporary:
             out = Path(temporary)/'jit'
             summary = enroll.issue('9', 'x'*24, post, out)
             self.assertNotIn(secret, json.dumps(summary))
             self.assertEqual(out.read_text(), secret)
             self.assertEqual(stat.S_IMODE(out.stat().st_mode), 0o600)
+
+    def test_failed_mint_deletes_only_this_group_5_runner_before_the_file(self):
+        secret = 'C'*40
+        deleted = []
+        def post(path, body, token):
+            self.assertEqual(path, enroll.API)
+            return {'encoded_jit_config': secret, 'runner': self.runner(ephemeral=False)}
+        with tempfile.TemporaryDirectory() as temporary:
+            out = Path(temporary)/'jit'
+            with self.assertRaisesRegex(ValueError, 'not an ephemeral'):
+                enroll.issue('12', 'x'*24, post, out, delete=lambda path, token: deleted.append(path))
+            self.assertFalse(out.exists())
+        self.assertEqual(deleted, ['/orgs/Immortal-Protocols/actions/runners/1144'])
+        deleted.clear()
+        def other_group(path, body, token):
+            return {'encoded_jit_config': secret, 'runner': self.runner(ephemeral=False, runner_group_id=4)}
+        with tempfile.TemporaryDirectory() as temporary:
+            out = Path(temporary)/'jit'
+            with self.assertRaises(ValueError):
+                enroll.issue('12', 'x'*24, other_group, out, delete=lambda path, token: deleted.append(path))
+            self.assertFalse(out.exists())
+        self.assertEqual(deleted, [])
+        read = {'busy': False, 'ephemeral': None, 'id': 1144, 'labels': ['roseos-mustang-builder'],
+                'name': 'mustang-42387816754', 'status': 'offline'}
+        def mint(path, body, token):
+            return {'encoded_jit_config': secret, 'runner': self.runner('42387816754')}
+        def get(path, token):
+            self.assertEqual(path, '/orgs/Immortal-Protocols/actions/runners/1144')
+            return read
+        with tempfile.TemporaryDirectory() as temporary:
+            out = Path(temporary)/'jit'
+            summary = enroll.issue('42387816754', 'x'*24, mint, out, get=get, delete=lambda path, token: deleted.append(path))
+            self.assertIsNone(summary['ephemeral'])
+            self.assertIsNone(summary['readbackEphemeral'])
+            self.assertTrue(summary['readbackEphemeralOmitted'])
+            self.assertTrue(summary['oneJob'])
+            self.assertEqual(out.read_text(), secret)
+        self.assertEqual(deleted, [])
+
+    def test_sweep_deletes_only_an_offline_exact_name_leftover(self):
+        leftover = {'busy': False, 'ephemeral': None, 'id': 1144, 'labels': ['roseos-mustang-builder'],
+                    'name': 'mustang-42387816754', 'status': 'offline'}
+        others = [
+            leftover,
+            {'busy': False, 'ephemeral': None, 'id': 9, 'labels': ['roseos-mustang-builder'],
+             'name': 'mustang-1', 'status': 'offline'},
+            {'busy': True, 'ephemeral': None, 'id': 8, 'labels': ['other'], 'name': 'kept', 'status': 'online',
+             'runner_group_id': 4},
+        ]
+        self.assertEqual(enroll.orphan_ids(others, '42387816754'), [1144])
+        busy = [dict(leftover, busy=True, status='online')]
+        self.assertEqual(enroll.orphan_ids(busy, '42387816754'), [])
+        deleted = []
+        def get(path, token):
+            self.assertEqual(path, enroll.GROUP_RUNNERS)
+            self.assertNotIn('/runner-groups/4/', path)
+            return {'total_count': 3, 'runners': others}
+        enroll.sweep('42387816754', 'y'*24, get, lambda path, token: deleted.append(path))
+        self.assertEqual(deleted, ['/orgs/Immortal-Protocols/actions/runners/1144'])
+        with self.assertRaisesRegex(ValueError, 'incomplete'):
+            enroll.sweep('42387816754', 'y'*24, lambda path, token: {'total_count': 2, 'runners': [leftover]},
+                         lambda path, token: deleted.append(path))
+        with self.assertRaisesRegex(ValueError, 'leaves the Mustang'):
+            enroll.allowed_path('DELETE', '/orgs/Immortal-Protocols/actions/runners/1144'.replace('1144', '0'))
+        with self.assertRaisesRegex(ValueError, 'registration token'):
+            enroll.allowed_path('POST', '/orgs/Immortal-Protocols/actions/runners/registration-token')
 
     def test_metadata_and_cancel_stay_on_this_vm_and_run(self):
         add = enroll.metadata_argv('add-metadata')
@@ -219,6 +310,13 @@ class EnrollmentTest(unittest.TestCase):
         self.assertNotIn('gh api --method POST', workflow)
         enroll_job = workflow.split('enroll:', 1)[1].split('queue-watch:', 1)[0]
         self.assertIn('clear-metadata --execute', enroll_job)
+        self.assertLess(enroll_job.index('sweep --execute'), enroll_job.index('clear-metadata --execute'))
+        self.assertIn("failure() && steps.app.outcome == 'success'", enroll_job)
+        cleanup = workflow.split('\n  cleanup:', 1)[1]
+        self.assertIn('sweep --execute --run-id "$GITHUB_RUN_ID"', cleanup)
+        app = cleanup[cleanup.index('create-github-app-token'):cleanup.index('sweep --execute')]
+        self.assertNotIn('repositories:', app)
+        self.assertNotIn('permission-contents:', app)
         self.assertNotIn('permission-contents:', enroll_job)
         self.assertEqual(enroll.APP_PERMISSION['access'], 'write')
         self.assertIn('generate-jitconfig', enroll.APP_PERMISSION['endpoint'])

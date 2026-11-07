@@ -26,7 +26,10 @@ import mustang_lane
 
 ORG = 'Immortal-Protocols'
 API = '/orgs/Immortal-Protocols/actions/runners/generate-jitconfig'
+GROUP_RUNNERS = '/orgs/Immortal-Protocols/actions/runner-groups/5/runners'
 LABEL = 'roseos-mustang-builder'
+READ_ONLY_LABELS = {'self-hosted', 'Linux', 'X64', 'linux', 'x64'}
+ONE_JOB_DOC = 'https://docs.github.com/en/actions/how-tos/manage-runners/self-hosted-runners/remove-runners'
 METADATA_KEY = 'mustang-jitconfig'
 QUEUE_LIMIT_SECONDS = 12 * 60
 RUNNER_ROOT = Path('/mnt/disks/mustang-data/roseos/runner')
@@ -56,11 +59,19 @@ RUNNER_APP = {
 APP_PERMISSION = {
     'name': 'Organization permissions for Self-hosted runners',
     'access': 'write',
+    'appId': '5657668',
+    'installationId': '179610845',
     'token': 'GitHub App installation access token',
     'endpoint': 'POST /orgs/{org}/actions/runners/generate-jitconfig',
-    'source': 'https://docs.github.com/en/rest/authentication/permissions-required-for-github-apps',
-    'notUsed': 'admin:org user token',
-    'installation': 'An organization owner installs the app on Immortal-Protocols. That installation is not performed on the VM.'}
+    'readback': 'GET /orgs/{org}/actions/runners/{runner_id}',
+    'listGroup': 'GET /orgs/{org}/actions/runner-groups/5/runners',
+    'delete': 'DELETE /orgs/{org}/actions/runners/{runner_id}',
+    'source': 'https://docs.github.com/en/rest/actions/self-hosted-runners#create-configuration-for-a-just-in-time-runner-for-an-organization',
+    'oneJob': 'GitHub documents that a just-in-time runner can only run a single job. The generate-jitconfig endpoint has no persistent mode.',
+    'ephemeralField': 'The runner schema lists ephemeral as an optional boolean. A live readback can omit it as null. Null is not proof, and false is rejected.',
+    'removal': ONE_JOB_DOC,
+    'notUsed': 'repository permissions and admin:org user token',
+    'installation': 'Organization installation 179610845 of app 5657668. It is not installed on the VM.'}
 
 
 def paths():
@@ -80,18 +91,133 @@ def jit_body(run_id, group_id=5):
             'labels': [LABEL], 'work_folder': '_work'}
 
 
+def positive_int(value, label):
+    if isinstance(value, bool) or type(value) is not int or value < 1:
+        raise ValueError(label+' must be a positive int')
+    return value
+
+
+def label_names(labels):
+    if not isinstance(labels, list) or not labels:
+        raise ValueError('JIT runner labels differ')
+    names = []
+    for label in labels:
+        if isinstance(label, str):
+            name, kind = label, None
+        elif isinstance(label, dict) and type(label.get('name')) is str:
+            name, kind = label['name'], label.get('type')
+        else:
+            raise ValueError('JIT runner labels differ')
+        if kind == 'custom' and name != LABEL:
+            raise ValueError('JIT runner labels differ')
+        if kind != 'read-only' and name not in READ_ONLY_LABELS | {LABEL}:
+            raise ValueError('JIT runner labels differ')
+        names.append(name)
+    if LABEL not in names:
+        raise ValueError('JIT runner labels differ')
+    return names
+
+
 def accept_jit(body, run_id):
-    """Keep the encoded config out of the returned summary."""
+    """Prove one job from the JIT endpoint. A null ephemeral field is not that proof."""
     if not isinstance(body, dict):
         raise ValueError('JIT response is not an object')
+    if 'encoded_jit_config' not in body and 'token' in body:
+        raise ValueError('registration token is not a just-in-time runner')
     encoded = body.get('encoded_jit_config')
     runner = body.get('runner') if isinstance(body.get('runner'), dict) else {}
     if not isinstance(encoded, str) or len(encoded) < 20 or any(c in encoded for c in '\n\r'):
         raise ValueError('JIT config is missing')
-    if runner.get('runner_group_id') != 5 or runner.get('ephemeral') is not True \
-            or runner.get('name') != f'mustang-{run_id}':
+    name = f'mustang-{run_id}'
+    if runner.get('name') != name or positive_int(runner.get('runner_group_id') or 0, 'runner group') != 5 \
+            or runner.get('status') != 'offline' or runner.get('busy') is not False \
+            or type(runner.get('os')) is not str or not runner.get('os'):
         raise ValueError('JIT runner is not an ephemeral group 5 runner for this run')
-    return {'name': runner['name'], 'groupId': 5, 'ephemeral': True, 'configBytes': len(encoded)}
+    label_names(runner.get('labels'))
+    runner_id = positive_int(runner.get('id'), 'runner id')
+    reported = runner.get('ephemeral', None)
+    if reported is False or (reported is not None and reported is not True):
+        raise ValueError('JIT runner is not an ephemeral group 5 runner for this run')
+    config_agrees(encoded, run_id, runner_id)
+    return {'name': name, 'id': runner_id, 'groupId': 5,
+            'ephemeral': True if reported is True else None,
+            'oneJob': True, 'oneJobProof': 'POST '+API, 'configBytes': len(encoded)}
+
+
+def config_agrees(encoded, run_id, runner_id):
+    """Reject a decoded config that names a different runner. Never return its credential fields."""
+    try:
+        parsed = json.loads(base64.b64decode(encoded, validate=True).decode())
+    except (binascii.Error, ValueError, json.JSONDecodeError, UnicodeError):
+        return
+    if not isinstance(parsed, dict):
+        raise ValueError('JIT config is missing')
+    expected = f'mustang-{run_id}'
+    for key in ('runnerName', 'runner_name', 'name'):
+        if key in parsed and parsed.get(key) != expected:
+            raise ValueError('JIT config name differs')
+    for key in ('runnerId', 'runner_id', 'id'):
+        if key in parsed and parsed.get(key) != runner_id:
+            raise ValueError('JIT config runner id differs')
+    inner = parsed.get('runner')
+    if isinstance(inner, dict):
+        if 'name' in inner and inner.get('name') != expected:
+            raise ValueError('JIT config name differs')
+        if 'id' in inner and inner.get('id') != runner_id:
+            raise ValueError('JIT config runner id differs')
+
+
+def confirm_readback(readback, run_id, runner_id):
+    """The get-runner schema can omit ephemeral. False is a contradiction, not a missing field."""
+    if not isinstance(readback, dict):
+        raise ValueError('JIT runner readback is not an object')
+    if readback.get('name') != f'mustang-{run_id}' or positive_int(readback.get('id'), 'runner id') != runner_id:
+        raise ValueError('JIT runner readback does not match this run')
+    if readback.get('ephemeral') is False:
+        raise ValueError('JIT runner is not an ephemeral group 5 runner for this run')
+    if readback.get('ephemeral') is not None and readback.get('ephemeral') is not True:
+        raise ValueError('JIT runner readback ephemeral field is not a boolean')
+    if readback.get('busy') is not False or readback.get('status') != 'offline':
+        raise ValueError('JIT runner readback is not an offline unused runner')
+    label_names(readback.get('labels'))
+    if 'runner_group_id' in readback and positive_int(readback.get('runner_group_id'), 'runner group') != 5:
+        raise ValueError('JIT runner readback is not group 5')
+    return {'ephemeral': readback.get('ephemeral', None), 'omitted': readback.get('ephemeral', None) is None}
+
+
+def minted_id(body, run_id):
+    """The runner this request created. Other groups and other names are not deleted."""
+    runner = body.get('runner') if isinstance(body, dict) else None
+    if not isinstance(runner, dict) or runner.get('name') != f'mustang-{run_id}':
+        return None
+    if 'runner_group_id' in runner and (isinstance(runner.get('runner_group_id'), bool)
+                                        or type(runner.get('runner_group_id')) is not int
+                                        or runner.get('runner_group_id') != 5):
+        return None
+    try:
+        return positive_int(runner.get('id'), 'runner id')
+    except ValueError:
+        return None
+
+
+def orphan_ids(runners, run_id):
+    """Offline, idle, exact-name leftovers. A busy or online runner with this name is left alone."""
+    if not isinstance(runners, list):
+        raise ValueError('runner list is not a list')
+    name = f'mustang-{run_id}'
+    named = [runner for runner in runners if isinstance(runner, dict) and runner.get('name') == name]
+    if any(runner.get('busy') is not False or runner.get('status') != 'offline' for runner in named):
+        return []
+    found = []
+    for runner in named:
+        try:
+            label_names(runner.get('labels'))
+            if 'runner_group_id' in runner and positive_int(runner.get('runner_group_id'), 'runner group') != 5:
+                continue
+            found.append(positive_int(runner.get('id'), 'runner id'))
+        except ValueError:
+            continue
+    return found
 
 
 def contains_secret(text, secret):
@@ -201,24 +327,92 @@ def jobs(run_id):
     return value
 
 
-def post_json(path, body, token):
+def allowed_path(method, path):
+    if path.endswith('/registration-token'):
+        raise ValueError('registration token is not a just-in-time runner')
+    if method == 'POST' and path == API:
+        return
+    if method == 'GET' and path == GROUP_RUNNERS:
+        return
+    if method in ('GET', 'DELETE') and re.fullmatch(r'/orgs/Immortal-Protocols/actions/runners/[1-9][0-9]*', path):
+        return
+    if method == 'POST' and re.fullmatch(r'/repos/Immortal-Protocols/RoseOS-1/actions/runs/[1-9][0-9]*/cancel', path):
+        return
+    raise ValueError('runner request leaves the Mustang organization runners API')
+
+
+def api(method, path, token, body=None):
+    if not isinstance(token, str) or len(token) < 20:
+        raise ValueError('runner registrar token is missing')
+    allowed_path(method, path)
+    data = None if body is None else json.dumps(body).encode()
     request = urllib.request.Request(
-        'https://api.github.com'+path, data=json.dumps(body).encode(), method='POST',
+        'https://api.github.com'+path, data=data, method=method,
         headers={'Authorization': 'Bearer '+token, 'Accept': 'application/vnd.github+json',
                  'Content-Type': 'application/json', 'X-GitHub-Api-Version': '2026-03-10'})
     try:
         with urllib.request.urlopen(request, timeout=30) as response:
-            return json.load(response)
+            raw = response.read()
     except urllib.error.HTTPError as error:
         raise ValueError('JIT request failed with HTTP '+str(error.code)) from None
+    if not raw:
+        return {}
+    value = json.loads(raw.decode())
+    if not isinstance(value, dict):
+        raise ValueError('JIT response is not an object')
+    return value
 
 
-def issue(run_id, token, post, out):
+def post_json(path, body, token):
+    return api('POST', path, token, body)
+
+
+def get_json(path, token):
+    return api('GET', path, token)
+
+
+def delete_json(path, token):
+    return api('DELETE', path, token)
+
+
+def issue(run_id, token, post, out, get=None, delete=None):
     if not isinstance(token, str) or len(token) < 20:
         raise ValueError('runner registrar token is missing')
-    summary, encoded = accept_pair(post(API, jit_body(run_id), token), run_id)
-    written = write_secret_file(out, encoded)
+    body = post(API, jit_body(run_id), token)
+    try:
+        summary, encoded = accept_pair(body, run_id)
+        if get is not None:
+            readback = get('/orgs/Immortal-Protocols/actions/runners/'+str(summary['id']), token)
+            checked = confirm_readback(readback, run_id, summary['id'])
+            summary = dict(summary, readbackEphemeral=checked['ephemeral'], readbackEphemeralOmitted=checked['omitted'])
+        written = write_secret_file(out, encoded)
+    except Exception:
+        orphan = minted_id(body, run_id) if isinstance(body, dict) else None
+        if delete is not None and orphan is not None:
+            try:
+                delete('/orgs/Immortal-Protocols/actions/runners/'+str(orphan), token)
+            except Exception:
+                pass
+        path = Path(out)
+        if path.exists() and not path.is_symlink():
+            path.unlink()
+        raise
     return dict(summary, file=written['path'])
+
+
+def sweep(run_id, token, get, delete):
+    if not re.fullmatch(r'[1-9][0-9]{0,19}', str(run_id)):
+        raise ValueError('JIT runner name must be this run id')
+    payload = get(GROUP_RUNNERS, token)
+    if not isinstance(payload, dict) or not isinstance(payload.get('runners'), list) \
+            or isinstance(payload.get('total_count'), bool) or type(payload.get('total_count')) is not int \
+            or payload['total_count'] != len(payload['runners']):
+        raise ValueError('runner list page is incomplete')
+    deleted = []
+    for runner_id in orphan_ids(payload['runners'], run_id):
+        delete('/orgs/Immortal-Protocols/actions/runners/'+str(runner_id), token)
+        deleted.append(runner_id)
+    return {'deleted': deleted, 'runId': str(run_id), 'groupId': 5}
 
 
 def accept_pair(body, run_id):
@@ -267,7 +461,7 @@ def emit_stop(decision):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('action', choices=('plan', 'issue', 'put-metadata', 'wait-fetched', 'clear-metadata', 'queue-watch', 'cancel'))
+    parser.add_argument('action', choices=('plan', 'issue', 'put-metadata', 'wait-fetched', 'clear-metadata', 'queue-watch', 'cancel', 'sweep'))
     parser.add_argument('--run-id')
     parser.add_argument('--out')
     parser.add_argument('--execute', action='store_true')
@@ -283,7 +477,7 @@ def main(argv=None):
                 raise ValueError('JIT minting requires --execute and is not the offline plan')
             if not args.out or not args.run_id:
                 raise ValueError('JIT minting needs this run id and a private output file')
-            value = issue(args.run_id, os.environ.get('GH_TOKEN', ''), post_json, args.out)
+            value = issue(args.run_id, os.environ.get('GH_TOKEN', ''), post_json, args.out, get_json, delete_json)
         elif args.action == 'put-metadata':
             if not args.execute or not args.file:
                 raise ValueError('metadata delivery requires --execute and the private file')
@@ -328,6 +522,13 @@ def main(argv=None):
                 decision = watch(lambda: jobs(run), time.sleep, time.monotonic)
                 emit_stop(decision)
                 value = {'decision': decision, 'runId': run}
+        elif args.action == 'sweep':
+            if not args.execute:
+                value = {'groupId': 5, 'execute': False, 'runId': args.run_id}
+            else:
+                if not args.run_id:
+                    raise ValueError('runner sweep needs this run id')
+                value = sweep(args.run_id, os.environ.get('GH_TOKEN', ''), get_json, delete_json)
         elif args.action == 'cancel':
             if not args.execute:
                 raise ValueError('cancel requires --execute')
