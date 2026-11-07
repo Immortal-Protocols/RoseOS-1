@@ -14,8 +14,14 @@ package dev.pixel.voice;
  *   permission and where the owner uninstalls, or disables a built-in app, with Android's own confirmation.
  *
  * Built-in apps cannot be uninstalled: they are offered App info only, named honestly. An updated built-in app offers
- * "Uninstall updates", which is what Android's confirmation then does (the factory version stays). A successful
- * removal reaches Home through its existing package receiver, which rebuilds the pages. Pure logic, no Android types.
+ * "Uninstall updates", which is what Android's confirmation then does (the factory version stays). Android's own
+ * screens decide everything else (a device administrator, a policy-blocked app) and its refusal is reported as such.
+ *
+ * 1J: Rose Agent declares REQUEST_DELETE_PACKAGES (protection level normal: granted at install or update, no prompt),
+ * so the long press opens Android's uninstall confirmation directly, asking for its result (EXTRA_RETURN_RESULT).
+ * The result is checked against the package manager (outcome): Home refreshes once the app is gone, a cancelled
+ * confirmation leaves it installed and says nothing, and an app Android kept is named as still installed. Home's
+ * package receiver also rebuilds the pages on any removal. Pure logic, no Android types.
  */
 final class AppRemoval {
  private AppRemoval() {}
@@ -45,5 +51,35 @@ final class AppRemoval {
   if (updatedSystem) return new Offer(mayRequestDelete ? UNINSTALL_UPDATES : IN_APP_INFO, null, route);
   if (system) return new Offer(null, BUILT_IN, Route.APP_INFO);
   return new Offer(mayRequestDelete ? UNINSTALL : IN_APP_INFO, null, route);
+ }
+ /** What the owner's answer in Android's confirmation came to. */
+ enum Outcome { REMOVED, UPDATES_REMOVED, KEPT, NOT_REMOVED }
+
+ static final String UPDATES = " updates were uninstalled", GONE = " was uninstalled", STILL = " is still installed. Android didn't uninstall it.";
+
+ /**
+  * @param confirmed      Android returned RESULT_OK
+  * @param cancelled      Android returned RESULT_CANCELED (the owner cancelled, or backed out)
+  * @param stillInstalled the package manager still has the package after the confirmation closed
+  * @param updatesOnly    the offer was Uninstall updates (an updated built-in app keeps its factory version)
+  */
+ static Outcome outcome(boolean confirmed, boolean cancelled, boolean stillInstalled, boolean updatesOnly) {
+  if (!stillInstalled) return Outcome.REMOVED; // the package manager is the truth, whatever the result code
+  if (updatesOnly && confirmed) return Outcome.UPDATES_REMOVED;
+  if (cancelled) return Outcome.KEPT;
+  return Outcome.NOT_REMOVED;
+ }
+
+ /** Home rebuilds its pages for these; a kept app leaves Home as it is. */
+ static boolean refreshes(Outcome outcome) { return outcome == Outcome.REMOVED || outcome == Outcome.UPDATES_REMOVED; }
+
+ /** The short confirmation shown afterwards, or null when nothing changed because the owner cancelled. */
+ static String message(Outcome outcome, String label) {
+  switch (outcome) {
+   case REMOVED: return label + GONE;
+   case UPDATES_REMOVED: return label + UPDATES;
+   case NOT_REMOVED: return label + STILL;
+   default: return null;
+  }
  }
 }

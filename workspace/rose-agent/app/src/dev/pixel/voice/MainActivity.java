@@ -513,17 +513,32 @@ public class MainActivity extends Activity {
     checkSelfPermission("android.permission.REQUEST_DELETE_PACKAGES")==PackageManager.PERMISSION_GRANTED);
   if(offer==null)return;
   PopupMenu menu=new PopupMenu(this,anchor);
-  if(offer.remove!=null)menu.getMenu().add(offer.remove).setOnMenuItemClickListener(i->{openRemoval(pkg,label,offer.route);return true;});
+  if(offer.remove!=null)menu.getMenu().add(offer.remove).setOnMenuItemClickListener(i->{openRemoval(pkg,label,offer.route,AppRemoval.UNINSTALL_UPDATES.equals(offer.remove));return true;});
   if(offer.note!=null)menu.getMenu().add(offer.note).setEnabled(false);
-  if(offer.remove==null||offer.route!=AppRemoval.Route.APP_INFO)menu.getMenu().add(AppRemoval.APP_INFO).setOnMenuItemClickListener(i->{openRemoval(pkg,label,AppRemoval.Route.APP_INFO);return true;});
+  if(offer.remove==null||offer.route!=AppRemoval.Route.APP_INFO)menu.getMenu().add(AppRemoval.APP_INFO).setOnMenuItemClickListener(i->{openRemoval(pkg,label,AppRemoval.Route.APP_INFO,false);return true;});
   menu.show();
  }
- /** Opens the route's Android screen for the package; a removal reaches Home through launcherPackages (rebuild). */
- void openRemoval(String pkg,String label,AppRemoval.Route route){
+ /** Opens the route's Android screen for the package. The confirmation is asked for its result (1J, onActivityResult);
+  * any removal also reaches Home through launcherPackages (rebuild). */
+ void openRemoval(String pkg,String label,AppRemoval.Route route,boolean updatesOnly){
   closeSystemFolder();
   android.net.Uri uri=android.net.Uri.fromParts("package",pkg,null);
   Intent open=route==AppRemoval.Route.CONFIRM?new Intent(Intent.ACTION_DELETE,uri):new Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,uri);
-  try{startActivity(open);}catch(ActivityNotFoundException|SecurityException unavailable){Toast.makeText(this,"Android's app settings for "+label+" are not available",Toast.LENGTH_SHORT).show();}
+  try{
+   if(route==AppRemoval.Route.CONFIRM){open.putExtra(Intent.EXTRA_RETURN_RESULT,true);removing=pkg;removingLabel=label;removingUpdates=updatesOnly;startActivityForResult(open,REMOVE_REQUEST);}
+   else startActivity(open);
+  }catch(ActivityNotFoundException|SecurityException unavailable){removing=null;Toast.makeText(this,"Android's app settings for "+label+" are not available",Toast.LENGTH_SHORT).show();}
+ }
+ static final int REMOVE_REQUEST=0x5244;String removing,removingLabel;boolean removingUpdates;
+ /** 1J: the owner's answer in Android's uninstall confirmation, checked against the package manager (AppRemoval.outcome). */
+ @Override protected void onActivityResult(int request,int result,Intent data){
+  super.onActivityResult(request,result,data);
+  if(request!=REMOVE_REQUEST||removing==null)return;
+  String pkg=removing,label=removingLabel;boolean updates=removingUpdates;removing=null;
+  boolean installed;try{getPackageManager().getPackageInfo(pkg,0);installed=true;}catch(PackageManager.NameNotFoundException gone){installed=false;}
+  AppRemoval.Outcome outcome=AppRemoval.outcome(result==RESULT_OK,result==RESULT_CANCELED,installed,updates);
+  if(AppRemoval.refreshes(outcome)&&launcherPager!=null&&!isFinishing()){packageGeneration++;attachLauncherPages(true);}
+  String message=AppRemoval.message(outcome,label);if(message!=null)Toast.makeText(this,message,Toast.LENGTH_SHORT).show();
  }
  /** Any other app's mark (#410): its own icon, unrestyled, so a regular installed app keeps its identity. Rose's suite
   * and its duplicates draw the simplified glyph instead (appTile, HomeAppGroups.glyph). */
