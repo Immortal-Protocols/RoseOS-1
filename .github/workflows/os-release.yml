@@ -6,7 +6,8 @@ concurrency:
   group: private-pixel-classic-signing
   cancel-in-progress: false
 permissions:
-  contents: read
+  # Draft release assets require push access even when only downloading them.
+  contents: write
   id-token: write
 jobs:
   sign:
