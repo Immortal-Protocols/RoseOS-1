@@ -212,13 +212,15 @@ class Workflow(unittest.TestCase):
     def test_run_name_matches_the_successor_lookup(self):
         # AGENT-BETA-AUTO: an apps=auto app-only run is named for its tested SHA (the dispatcher's duplicate check).
         # Mustang build/delivery duplicate checks also use their exact run names.
-        # Keep the whole expression pinned, including branch order and the legacy fallback.
+        # Keep the whole expression pinned, including branch order. 1E: only latest-beta keeps the normal button's
+        # title (the daily dispatcher's Frankel lane); every other mode is titled 'os-release <mode> <run id>'.
         self.assertIn("\nrun-name: ${{ inputs.mode == 'mustang-build' && inputs.candidate_sha != '' && "
             "format('mustang-build auto-{0}', inputs.candidate_sha) || inputs.mode == 'mustang-delivery' && "
             "inputs.mustang_publish_ota && format('mustang-delivery ota-{0}', inputs.mustang_compile_run) || "
             "startsWith(inputs.mode, 'mustang-') && format('{0} {1}', inputs.mode, github.run_id) || "
             "inputs.campaign && format('%s - campaign {0}', inputs.campaign) || inputs.mode == 'app-only' && "
-            "inputs.apps == 'auto' && format('Agent Beta auto {0}', inputs.candidate_sha) || '%s' }}\n" % (rc.TITLE, rc.TITLE), WORKFLOW)
+            "inputs.apps == 'auto' && format('Agent Beta auto {0}', inputs.candidate_sha) || inputs.mode == 'latest-beta' && "
+            "'%s' || format('os-release {0} {1}', inputs.mode, github.run_id) }}\n" % (rc.TITLE, rc.TITLE), WORKFLOW)
         self.assertEqual(rc.run_name('7.1793380000.2'), f'{rc.TITLE} - campaign 7.1793380000.2')
 
     def test_guard_checks_the_campaign_before_any_host(self):

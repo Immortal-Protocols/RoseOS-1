@@ -1,6 +1,8 @@
-"""1F daily release dispatcher: scripts/daily-release.py, .github/workflows/daily-release.yml and
+"""1E daily release dispatcher: scripts/daily-release.py, .github/workflows/daily-release.yml and
 os/release-pipeline/lanes/daily.json. Canned API answers only: no network, token, dispatch or host."""
+import contextlib
 import copy
+from datetime import date, datetime, timedelta, timezone
 import importlib.util
 import io
 import json
@@ -17,7 +19,14 @@ WORKFLOW = (ROOT/'.github/workflows/daily-release.yml').read_text()
 LANES = json.loads((ROOT/'os/release-pipeline/lanes/daily.json').read_text())
 MAIN, OLD = 'a' * 40, 'b' * 40
 ENV = {'GITHUB_API_URL': 'https://api.invalid', 'GITHUB_REPOSITORY': 'o/r', 'GH_TOKEN': 'x',
-       'GITHUB_REF': 'refs/heads/main', 'DRY_RUN': 'false'}
+       'GITHUB_REF': 'refs/heads/main', 'GITHUB_EVENT_NAME': 'workflow_dispatch', 'DRY_RUN': 'false'}
+SCHEDULED = dict(ENV, GITHUB_EVENT_NAME='schedule', DRY_RUN='')  # an absent input renders empty on a schedule
+CRONS = re.findall(r"(?m)^    - cron: '([^']+)'$", WORKFLOW)
+DEDICATED = 'mustang-ota-dedicated.yml'
+
+
+def utc(text):
+    return datetime.fromisoformat(text).replace(tzinfo=timezone.utc)
 
 
 def lane(name='mustang', enabled=True):
@@ -26,7 +35,7 @@ def lane(name='mustang', enabled=True):
     return found
 
 
-def run(id_, sha=MAIN, status='completed', conclusion='success', title='mustang-ota 1', path='os-release.yml'):
+def run(id_, sha=MAIN, status='completed', conclusion='success', title='mustang-dedicated-ota 1', path=DEDICATED):
     return {'id': id_, 'head_sha': sha, 'status': status, 'conclusion': conclusion, 'display_title': title,
             'path': f'.github/workflows/{path}', 'head_branch': 'main'}
 
@@ -68,26 +77,40 @@ class CommittedLanes(unittest.TestCase):
         lanes = daily.load_lanes()
         self.assertEqual([x['name'] for x in lanes], ['frankel', 'mustang', 'yogi'])
         self.assertEqual({x['name']: x['enabled'] for x in lanes}, {'frankel': False, 'mustang': False, 'yogi': False})
-        self.assertIsNone(LANES['window']['time'])  # the activation change writes Chief's daily window
+        window = daily.load_window()
+        self.assertEqual((window['timeZone'], window['time']), ('America/Los_Angeles', '04:00'))  # 1E: 4 a.m. Pacific
         for x in lanes:
-            entry = ROOT/'.github/workflows'/x['workflow']
-            if entry.is_file():  # yogi-ota.yml arrives with the Yogi owner's PR #558
-                daily.check_inputs(x, entry.read_text())
-        frankel, mustang = lanes[0], lanes[1]
+            daily.check_inputs(x, (ROOT/'.github/workflows'/x['workflow']).read_text())  # every entry is committed
+        frankel, mustang, yogi = lanes
         self.assertEqual((frankel['workflow'], frankel['inputs'], frankel['deliveryJob']),
                          ('os-release.yml', {'mode': 'latest-beta'}, 'publisher'))
+        # Each flavor on its own entry, builder and queue: Mustang's shared-host os-release route is retired.
         self.assertEqual((mustang['workflow'], mustang['inputs'], mustang['deliveryJob']),
-                         ('os-release.yml', {'mode': 'mustang-ota', 'mustang_publish_ota': 'true'}, 'mustang-ota-publisher'))
+                         (DEDICATED, {'publish': 'true'}, 'publisher'))
+        self.assertEqual((yogi['workflow'], yogi['inputs'], yogi['deliveryJob']),
+                         ('yogi-ota.yml', {'stage': 'ota', 'publish': 'true'}, 'publisher'))
+        queues = {x['name']: re.search(r'(?m)^concurrency:\n(?:  #.*\n)*  group: (\S+)$',
+                                       (ROOT/'.github/workflows'/x['workflow']).read_text())[1] for x in lanes}
+        self.assertEqual(queues, {'frankel': 'os-release-frankel', 'mustang': 'mustang-ota', 'yogi': 'yogi-ota'})
 
     def test_the_lane_titles_match_the_entries_run_names(self):
-        os_release = (ROOT/'.github/workflows/os-release.yml').read_text()
-        run_name = re.search(r'^run-name: (.*)$', os_release, re.M).group(1)
-        self.assertIn("|| 'Build & publish latest Pixel 10' }}", run_name)  # latest-beta's title
-        self.assertIn("startsWith(inputs.mode, 'mustang-') && format('{0} {1}', inputs.mode, github.run_id)", run_name)
+        def entry(name):
+            return (ROOT/'.github/workflows'/name).read_text()
+
+        def run_name(name):
+            return re.search(r'^run-name: (.*)$', entry(name), re.M).group(1)
+        # Only latest-beta is titled exactly like the Frankel lane; latest-draft and every other mode are not.
+        self.assertTrue(run_name('os-release.yml').endswith(
+            "|| inputs.mode == 'latest-beta' && 'Build & publish latest Pixel 10' || "
+            "format('os-release {0} {1}', inputs.mode, github.run_id) }}"))
+        self.assertEqual(run_name('os-release.yml').count("'Build & publish latest Pixel 10'"), 1)
         self.assertEqual(lane('frankel')['runTitle'], 'Build & publish latest Pixel 10')
-        self.assertEqual(lane('mustang')['runTitlePrefix'], 'mustang-ota ')
-        for name in ('publisher', 'mustang-ota-publisher'):
-            self.assertRegex(os_release, rf'(?m)^  {name}:$')
+        self.assertEqual(run_name(DEDICATED), 'mustang-dedicated-ota ${{ github.run_id }}')
+        self.assertEqual(lane('mustang')['runTitlePrefix'], 'mustang-dedicated-ota ')
+        self.assertEqual(run_name('yogi-ota.yml'), 'yogi-ota ${{ inputs.stage }} ${{ github.run_id }}')
+        self.assertEqual(lane('yogi')['runTitlePrefix'], f'yogi-ota {lane("yogi")["inputs"]["stage"]} ')
+        for x in LANES['lanes']:
+            self.assertRegex(entry(x['workflow']), rf'(?m)^  {x["deliveryJob"]}:$', x['name'])
 
     def test_invalid_lanes_are_refused(self):
         def broken(change):
@@ -116,6 +139,10 @@ class CommittedLanes(unittest.TestCase):
                        {'mode': 'mustang-ota', 'no_such_input': 'x'}):
             with self.assertRaises(daily.Invalid):
                 daily.check_inputs(dict(lane(), inputs=inputs), os_release)
+        dedicated = (ROOT/'.github/workflows'/DEDICATED).read_text()
+        for inputs in ({'publish': 'yes'}, {'mode': 'mustang-ota'}):
+            with self.assertRaises(daily.Invalid):
+                daily.check_inputs(dict(lane(), inputs=inputs), dedicated)
 
 
 class Decide(unittest.TestCase):
@@ -124,7 +151,7 @@ class Decide(unittest.TestCase):
 
     def test_a_disabled_or_absent_lane_is_skipped_without_reading_runs(self):
         self.assertEqual(self.decide([run(1, OLD)], enabled=False)[0], 'skip')
-        self.assertEqual(self.decide([], present=False), ('skip', 'absent: os-release.yml is not in this checkout'))
+        self.assertEqual(self.decide([], present=False), ('skip', f'absent: {DEDICATED} is not in this checkout'))
 
     def test_a_pending_run_of_the_lane_means_no_second_dispatch(self):
         for status in ('queued', 'in_progress', 'waiting', 'requested', 'pending'):
@@ -162,16 +189,27 @@ class Decide(unittest.TestCase):
                   dict(run(3, status='in_progress'), head_branch='feature'),            # not main
                   run(4, MAIN, title='mustang-build 4')]                                # another mustang mode
         self.assertEqual(self.decide(others, delivered_ids={4})[0], 'dispatch')
-        exact = [run(8, status='queued', title='Build & publish latest Pixel 10 - campaign x')]
+        exact = [run(8, status='queued', title='Build & publish latest Pixel 10 - campaign x', path='os-release.yml')]
         self.assertEqual(self.decide(exact, name='frankel')[0], 'dispatch')  # an exact title, not a prefix
+
+    def test_frankel_counts_only_latest_beta_runs(self):
+        # A latest-draft run's publisher success leaves an unpublished draft, and an advanced mode never delivers:
+        # neither is a Frankel delivery nor holds the lane. Their runs are titled 'os-release <mode> <run id>'.
+        others = [run(6, status='in_progress', title='os-release blazer-compile 6', path='os-release.yml'),
+                  run(5, MAIN, title='os-release latest-draft 5', path='os-release.yml')]
+        self.assertEqual(self.decide(others, delivered_ids={5}, name='frankel')[0], 'dispatch')
+        beta = run(4, MAIN, title='Build & publish latest Pixel 10', path='os-release.yml')
+        self.assertEqual(self.decide([beta], delivered_ids={4}, name='frankel')[0], 'skip')
+        self.assertEqual(self.decide([dict(beta, status='queued')], name='frankel')[0], 'skip')
 
 
 class RunLanes(unittest.TestCase):
-    def answers(self, mustang_runs=(), mustang_jobs=None):
+    @staticmethod
+    def answers(mustang_runs=(), mustang_jobs=None):
         return {('GET', '/commits/main'): (200, {'sha': MAIN}),
-                ('GET', '/actions/workflows/os-release.yml/runs'): (200, {'workflow_runs': list(mustang_runs)}),
-                ('GET', '/actions/runs/5/jobs'): (200, mustang_jobs or jobs(('mustang-ota-publisher', 'success'))),
-                ('POST', '/actions/workflows/os-release.yml/dispatches'): (204, None)}
+                ('GET', f'/actions/workflows/{DEDICATED}/runs'): (200, {'workflow_runs': list(mustang_runs)}),
+                ('GET', '/actions/runs/5/jobs'): (200, mustang_jobs or jobs(('publisher', 'success'))),
+                ('POST', f'/actions/workflows/{DEDICATED}/dispatches'): (204, None)}
 
     def lanes(self, *enabled):
         return [dict(x, enabled=x['name'] in enabled) for x in daily.load_lanes()]
@@ -187,8 +225,8 @@ class RunLanes(unittest.TestCase):
         results = daily.run_lanes(ENV, self.lanes('mustang'), api)
         self.assertEqual([r['action'] for r in results], ['skip', 'dispatch', 'skip'])
         posts = [c for c in api.calls if c[0] == 'POST']
-        self.assertEqual(posts, [('POST', '/actions/workflows/os-release.yml/dispatches',
-                                  {'ref': 'main', 'inputs': {'mode': 'mustang-ota', 'mustang_publish_ota': 'true'}})])
+        self.assertEqual(posts, [('POST', f'/actions/workflows/{DEDICATED}/dispatches',
+                                  {'ref': 'main', 'inputs': {'publish': 'true'}})])
 
     def test_a_dry_run_decides_but_sends_nothing(self):
         api = Api(self.answers())
@@ -202,11 +240,12 @@ class RunLanes(unittest.TestCase):
     def test_one_lanes_failure_never_stops_another(self):
         answers = self.answers()
         answers[('GET', '/actions/workflows/os-release.yml/runs')] = (500, {'message': 'boom'})
+        answers[('GET', f'/actions/workflows/{DEDICATED}/runs')] = (OSError('reset'), None)
         api = Api(answers)
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root/'.github/workflows').mkdir(parents=True)
-            for name in ('os-release.yml',):
+            for name in ('os-release.yml', DEDICATED):
                 (root/'.github/workflows'/name).write_text((ROOT/'.github/workflows'/name).read_text())
             (root/'.github/workflows/yogi-ota.yml').write_text(
                 'on:\n  workflow_dispatch:\n    inputs:\n      stage:\n        type: choice\n        options: [ota, bootstrap]\n'
@@ -220,14 +259,14 @@ class RunLanes(unittest.TestCase):
 
     def test_a_refused_dispatch_is_an_error_not_a_success(self):
         answers = self.answers()
-        answers[('POST', '/actions/workflows/os-release.yml/dispatches')] = (422, {'message': 'bad'})
+        answers[('POST', f'/actions/workflows/{DEDICATED}/dispatches')] = (422, {'message': 'bad'})
         results = daily.run_lanes(ENV, self.lanes('mustang'), Api(answers))
         self.assertEqual(results[1]['action'], 'error')
         self.assertNotIn('dispatched', results[1])
 
     def test_lane_inputs_are_rechecked_against_the_entry_before_any_dispatch(self):
         lanes = self.lanes('mustang')
-        lanes[1]['inputs'] = {'mode': 'mustang-otaa'}
+        lanes[1]['inputs'] = {'publish': 'yes'}
         api = Api(self.answers())
         results = daily.run_lanes(ENV, lanes, api)
         self.assertEqual(results[1]['action'], 'error')
@@ -249,7 +288,7 @@ class RunLanes(unittest.TestCase):
         with contextlib.redirect_stderr(err):
             self.assertEqual(daily.main(['dispatch'], env=ENV, opener=Api({})), 1)  # main unreadable
         answers = self.answers()
-        answers[('GET', '/actions/workflows/os-release.yml/runs')] = (500, {'message': 'boom'})
+        answers[('GET', f'/actions/workflows/{DEDICATED}/runs')] = (500, {'message': 'boom'})
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp)/'lanes.json'
             data = copy.deepcopy(LANES)
@@ -260,10 +299,102 @@ class RunLanes(unittest.TestCase):
         self.assertEqual([r['action'] for r in json.loads(out.getvalue())['results']], ['skip', 'error', 'skip'])
 
 
+class Schedule(unittest.TestCase):
+    """04:00 America/Los_Angeles through two UTC crons, decided by the cron that fired (1E)."""
+    WINDOW = daily.load_window()
+
+    def in_window(self, cron, now):
+        dry, off = daily.trigger(dict(SCHEDULED, SCHEDULE=cron), self.WINDOW, now)
+        self.assertFalse(dry)  # a scheduled run is never a dry run
+        return off is None
+
+    def test_exactly_one_cron_is_the_window_every_day_across_daylight_saving_changes(self):
+        from zoneinfo import ZoneInfo
+        pacific = ZoneInfo('America/Los_Angeles')
+        day = date(2026, 1, 1)
+        while day < date(2029, 1, 1):
+            chosen = [c for c in CRONS if self.in_window(c, datetime(day.year, day.month, day.day, 13, tzinfo=timezone.utc))]
+            daylight = bool(datetime(day.year, day.month, day.day, 11, tzinfo=timezone.utc).astimezone(pacific).dst())
+            self.assertEqual(chosen, ['0 11 * * *' if daylight else '0 12 * * *'], day)
+            day += timedelta(days=1)
+        for when, cron in (('2026-03-07', '0 12 * * *'), ('2026-03-08', '0 11 * * *'),   # spring forward
+                           ('2026-10-31', '0 11 * * *'), ('2026-11-01', '0 12 * * *'),   # fall back
+                           ('2026-11-07', '0 12 * * *')):
+            self.assertEqual([c for c in CRONS if self.in_window(c, utc(when + 'T12:30:00'))], [cron], when)
+
+    def test_a_late_start_is_judged_by_the_cron_that_fired_not_the_clock(self):
+        self.assertTrue(self.in_window('0 12 * * *', utc('2026-11-07T13:40:00')))   # 05:40 local, but the 04:00 run
+        self.assertFalse(self.in_window('0 11 * * *', utc('2026-11-07T12:01:00')))  # 04:01 local, but the 03:00 cron
+
+    def test_an_off_window_scheduled_run_skips_every_lane_without_any_api_call(self):
+        api = Api({})
+        lanes = [dict(x, enabled=True) for x in daily.load_lanes()]
+        results = daily.run_lanes(dict(SCHEDULED, SCHEDULE='0 11 * * *'), lanes, api, now=utc('2026-11-07T11:04:00'))
+        self.assertEqual([r['action'] for r in results], ['skip', 'skip', 'skip'])
+        self.assertTrue(all(r['reason'].startswith('off-window: 0 11 * * * (UTC) is 03:00 America/Los_Angeles on '
+                                                   '2026-11-07') for r in results), results)
+        self.assertEqual(api.calls, [])
+
+    def test_a_scheduled_run_in_the_window_dispatches_an_enabled_lane_for_real(self):
+        answers = RunLanes.answers([run(5, OLD)])
+        api = Api(answers)
+        lanes = [dict(x, enabled=x['name'] == 'mustang') for x in daily.load_lanes()]
+        results = daily.run_lanes(dict(SCHEDULED, SCHEDULE='0 12 * * *'), lanes, api, now=utc('2026-11-07T12:16:00'))
+        self.assertEqual([(r['action'], r.get('dispatched')) for r in results],
+                         [('skip', None), ('dispatch', True), ('skip', None)])
+        self.assertEqual([c for c in api.calls if c[0] == 'POST'],
+                         [('POST', f'/actions/workflows/{DEDICATED}/dispatches', {'ref': 'main', 'inputs': {'publish': 'true'}})])
+        # The committed lanes: a real scheduled run still dispatches nothing and reads only main.
+        api = Api(answers)
+        results = daily.run_lanes(dict(SCHEDULED, SCHEDULE='0 12 * * *'), daily.load_lanes(), api,
+                                  now=utc('2026-11-07T12:16:00'))
+        self.assertEqual([r['action'] for r in results], ['skip', 'skip', 'skip'])
+        self.assertEqual(api.calls, [('GET', '/commits/main', None)])
+
+    def test_an_unknown_trigger_cron_or_window_is_refused_before_any_api_call(self):
+        lanes = daily.load_lanes()
+        now = utc('2026-11-07T12:00:00')
+        for env in (dict(ENV, GITHUB_EVENT_NAME='push'), {k: v for k, v in ENV.items() if k != 'GITHUB_EVENT_NAME'},
+                    dict(SCHEDULED, SCHEDULE='30 11 * * *'), dict(SCHEDULED, SCHEDULE=''),
+                    dict(SCHEDULED, SCHEDULE='0 13 * * *'), dict(SCHEDULED, SCHEDULE='0 12 * * 1-5')):
+            api = Api({})
+            with self.assertRaises(daily.Invalid, msg=env.get('SCHEDULE')):
+                daily.run_lanes(env, lanes, api, now=now)
+            self.assertEqual(api.calls, [])
+        api = Api({})
+        with self.assertRaises(daily.Invalid):  # no window time: a schedule cannot run
+            daily.run_lanes(dict(SCHEDULED, SCHEDULE='0 12 * * *'), lanes, api, window=dict(self.WINDOW, time=None), now=now)
+        self.assertEqual(daily.trigger(ENV, dict(self.WINDOW, time=None), now), (False, None))  # manual still works
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(daily.main(['dispatch'], env=dict(ENV, GITHUB_EVENT_NAME='push'), opener=Api({}), now=now), 2)
+
+    def test_the_window_is_validated(self):
+        def window(change):
+            data = copy.deepcopy(LANES)
+            change(data)
+            with tempfile.TemporaryDirectory() as tmp:
+                path = Path(tmp)/'lanes.json'
+                path.write_text(json.dumps(data))
+                return daily.load_window(path)
+        for change in (lambda d: d['window'].update(time='4:00'), lambda d: d['window'].update(time='24:00'),
+                       lambda d: d['window'].update(time=400), lambda d: d['window'].update(timeZone='Mars/Base'),
+                       lambda d: d['window'].pop('timeZone'), lambda d: d.pop('window')):
+            with self.assertRaises(daily.Invalid):
+                window(change)
+        self.assertIsNone(window(lambda d: d['window'].update(time=None))['time'])
+        # A zone without daylight saving needs exactly one cron; Pacific needs the two committed ones.
+        self.assertEqual(daily.window_crons({'timeZone': 'UTC', 'time': '04:00'}, 2026), {'0 4 * * *'})
+        for year in (2026, 2027, 2028):
+            self.assertEqual(daily.window_crons(self.WINDOW, year), {'0 11 * * *', '0 12 * * *'})
+
+
 class Workflow(unittest.TestCase):
-    def test_source_only_no_schedule_manual_dry_run_by_default(self):
+    def test_the_schedule_is_exactly_the_windows_utc_crons_and_a_manual_run_stays_dry_by_default(self):
         triggers = WORKFLOW.split('\non:\n', 1)[1].split('\npermissions:', 1)[0]
-        self.assertNotIn('schedule', triggers)
+        self.assertTrue(triggers.startswith("  schedule:\n    - cron: '0 11 * * *'\n    - cron: '0 12 * * *'\n"
+                                            "  workflow_dispatch:\n"), triggers)
+        self.assertEqual(set(CRONS), daily.window_crons(daily.load_window(), 2026))
+        self.assertEqual(len(CRONS), 2)
         self.assertNotIn('workflow_run', triggers)
         self.assertNotIn('push', triggers)
         self.assertRegex(triggers, r'dry_run:\n(?:        .*\n)*        type: boolean\n        default: true')
@@ -281,6 +412,7 @@ class Workflow(unittest.TestCase):
         self.assertNotIn('secrets.', WORKFLOW)
         self.assertEqual(re.findall(r'run: (.+)', job), ['python3 scripts/daily-release.py dispatch'])
         self.assertIn('DRY_RUN: ${{ inputs.dry_run }}', job)
+        self.assertIn('SCHEDULE: ${{ github.event.schedule }}', job)  # the cron that fired, not the start time
         self.assertIn('group: daily-release-dispatcher', WORKFLOW)
 
 

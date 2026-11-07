@@ -144,6 +144,19 @@ import java.util.HashMap;
     }
 
     /**
+     * RoseOS (#410): the release went back to the app and the recents transition has finished, so a tray release now
+     * asks the shell to shorten the app (RoseEdgeSwipe.returnedToApp). Raising earlier would resize the app while the
+     * recents transition still owns it.
+     */
+    @Override
+    protected void onLastTaskResumed() {
+        if (mRoseEdge != null) {
+            mRoseEdge.returnedToApp();
+        }
+        super.onLastTaskResumed();
+    }
+
+    /**
      * RoseOS (#410): while a staged gesture is outside the switcher stage, the app's own leash follows the tray at
      * full width (RoseEdgeSwipe.preview); in the switcher stage, for a quick switch or once the release goes Home or to
      * the switcher, Launcher3's transform as before.
