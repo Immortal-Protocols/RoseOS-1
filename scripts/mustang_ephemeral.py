@@ -46,7 +46,7 @@ NODE = {
 SDK = {
     'url': 'https://dl.google.com/android/repository/build-tools_r35_linux.zip',
     'sha256': 'bd3a4966912eb8b30ed0d00b0cda6b6543b949d5ffe00bea54c04c81e1561d88',
-    'source': 'scripts/setup-android-sdk.sh and os/models-signing/models-sign.json',
+    'source': 'scripts/setup-android-sdk.sh',
     'aapt': '/mnt/disks/mustang-data/roseos/tools/android-sdk/build-tools/android-15/aapt',
     'apksigner': '/mnt/disks/mustang-data/roseos/tools/android-sdk/build-tools/android-15/apksigner'}
 RUNNER_APP = {

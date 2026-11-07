@@ -1451,7 +1451,7 @@ class WorkflowAlphaTest(unittest.TestCase):
         self.assertIn('[[ "$MODE" == os-release || ( "$RESUME_STAGE" == none && -z "$RESUME_SOURCE_RUN" && "$PROMOTE" == false ) ]]', guard)
         self.assertIn('    needs: guard\n', self.jobs['controller'])
         # cleanup still waits for every job that may hold the builder (other devices' jobs may follow these)
-        self.assertLessEqual({'controller', 'device-readiness', 'builder', 'signing-bootstrap', 'models-signer', 'rango-builder',
+        self.assertLessEqual({'controller', 'device-readiness', 'builder', 'signing-bootstrap', 'rango-builder',
                               'rango-publisher', 'rango-factory-observe', 'blazer-prep', 'rango-factory-package',
                               'rango-factory-inspect', 'blazer-compile', 'blazer-integrate', 'app-builder',
                               'alpha-builder', 'alpha-successor', 'alpha-apk-diagnostic', 'alpha-verify-retained', 'alpha-export',

@@ -773,7 +773,7 @@ class Guard(unittest.TestCase):
                            {'RESUME_SOURCE_RUN': '1'}, {'RESUME_UNSIGNED_SHA256': 'a' * 64}, {'RESUME_SIGNED_SHA256': 'a' * 64},
                            {'CAMPAIGN': 'start'}, {'APP_PUBLISH': 'true'}, {'ROSE_RANGO_PUBLISH': 'true'},
                            {'ROSE_FIRST_USE_ENROLL': 'true'}, {'ROSE_RECOVER_RUN': '41000000000'},
-                           {'BOOTSTRAP_PROFILE': 'fold-rango-factory-v1'}, {'MODELS_BOOTSTRAP_RUN': '1'}, {'REUSE_BINDING': '{}'},
+                           {'BOOTSTRAP_PROFILE': 'fold-rango-factory-v1'}, {'REUSE_BINDING': '{}'},
                            {'ALPHA_RECOVER': 'true'}, {'ROSE_DEVICE': 'rango'}, {'ROSE_DEVICE': 'mustang'},
                            {'BLAZER_PREP_STAGE': 'source'}, {'MUSTANG_PUBLISH_OTA': 'true'}, {'MUSTANG_COMPILE_RUN': '1'}):
                 with self.subTest(mode=mode, change=change):
