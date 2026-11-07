@@ -7,8 +7,8 @@ name: Daily release dispatcher
 # Schedules are UTC, so both UTC hours that can be 04:00 Pacific are listed: 11:00 (PDT) and 12:00 (PST). The dispatcher
 # acts only on the one that is the committed window's local time on that date, judged by the cron that fired rather
 # than the start time, so a late start still runs and a daylight-saving change never runs a day twice or not at all.
-# Inert until a lane is enabled: every lane is committed disabled, so a scheduled run dispatches nothing. Enabling a
-# lane is its own reviewed change, approved by that lane's owner and Chief. A manual run is a dry run by default.
+# Only enabled lanes dispatch (today Frankel; Mustang and Yogi stay disabled). Enabling a lane is its own reviewed
+# change, approved by that lane's owner and Chief. A manual run is a dry run by default.
 # Secret-free: only this job's short-lived GITHUB_TOKEN (actions:write to dispatch and read runs, contents:read).
 
 on:
