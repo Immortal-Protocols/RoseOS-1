@@ -179,7 +179,8 @@ def load_capacity(path=None):
     if not isinstance(runner, dict) or not isinstance(runner.get('ssdBytes'), int) or isinstance(runner.get('ssdBytes'), bool) \
             or runner['ssdBytes'] <= 0 or data.get('admission') not in (True, False):
         raise ValueError('hosted signer capacity config is missing')
-    if proposed.get('selected') is True or proposed.get('purchased') is True or proposed.get('configured') is True:
+    if proposed.get('selected') is True or proposed.get('purchased') is True or proposed.get('configured') is True \
+            or proposed.get('approved') is True or proposed.get('sizingProof') is True:
         raise ValueError('hosted signer capacity config is missing')
     if storage.get('accountPlan') is not None or storage.get('includedAllowancesAreNotPerArtifactLimits') is not True:
         raise ValueError('hosted signer capacity config is missing')
@@ -228,51 +229,166 @@ def require_entry(root=ROOT):
         raise ValueError('sign entry point left the checkout')
 
 
-def require_script_pin(bundle, root=ROOT, pin=None):
+EXTRACT_MARKER = '.mustang-extract.json'
+
+
+def load_pin(root, pin):
     if pin is None:
         pin = json.loads((Path(root) / SCRIPT_PIN).read_text())
     if pin.get('entryPoint') != ENTRY:
         raise ValueError('sign entry point is not the checkout script')
+    return pin
+
+
+def require_trusted_pins(bundle, root, files, pin=None):
+    """Checkout pins are the authority. A guest-recorded hash is not."""
+    pin = load_pin(root, pin)
     expected = pin.get('generateReleaseSha256')
     jdk = pin.get('jdkSha256')
+    tools = pin.get('otatoolsSha256')
     if not isinstance(expected, str) or not HEX64.fullmatch(expected):
         raise ValueError('sign script pin is unbound')
     if not isinstance(jdk, str) or not HEX64.fullmatch(jdk):
         raise ValueError('jdk provenance is unbound')
-    if bundle['generateRelease']['sha256'] != expected or bundle['jdk']['sha256'] != jdk:
-        raise ValueError('generate-release.sh is not the pinned checkout script')
+    if not isinstance(tools, str) or not HEX64.fullmatch(tools):
+        raise ValueError('otatools provenance is unbound')
+    executable = pin.get('otatoolsExecutable')
+    if not isinstance(executable, str) or not executable or executable.startswith(('/', '\\')) or '..' in Path(executable).parts:
+        raise ValueError('otatools provenance is unbound')
     script = Path(root) / pin.get('generateReleasePath', 'script/generate-release.sh')
-    if script.is_symlink() or not script.is_file() or sha256_file(script) != expected:
+    if script.is_symlink() or not script.is_file() or Path(root).resolve() not in script.resolve().parents \
+            or sha256_file(script) != expected or bundle['generateRelease']['sha256'] != expected \
+            or sha256_file(files['generateRelease']) != expected:
         raise ValueError('generate-release.sh is not the pinned checkout script')
-    if Path(root).resolve() not in script.resolve().parents:
-        raise ValueError('generate-release.sh is not the pinned checkout script')
+    if sha256_file(files['jdk']) != jdk or bundle['jdk']['sha256'] != jdk:
+        raise ValueError('jdk provenance is not the trusted pin')
+    if sha256_file(files['otatools']) != tools or bundle['otatools']['sha256'] != tools:
+        raise ValueError('otatools provenance is not the trusted pin')
+    return pin
+
+
+def approved_mode(info):
+    mode = info.external_attr >> 16
+    if stat.S_ISLNK(mode) or mode & 0o7000:
+        raise ValueError('unsafe zip mode')
+    return 0o755 if mode & 0o111 else 0o644
+
+
+def zip_members(path):
+    seen = set()
+    total = 0
+    rows = []
+    with zipfile.ZipFile(path) as archive:
+        for info in archive.infolist():
+            name = info.filename.replace('\\', '/')
+            if EXTRACT_MARKER in Path(name).parts:
+                raise ValueError('unsafe zip member')
+            parts = [part for part in name.split('/') if part not in ('', '.')]
+            if name.startswith('/') or '..' in parts or '\x00' in info.filename:
+                raise ValueError('unsafe zip member')
+            if not parts:
+                continue
+            key = '/'.join(parts)
+            if key in seen:
+                raise ValueError('duplicate zip member')
+            seen.add(key)
+            if name.endswith('/'):
+                rows.append((key, None, 0, True))
+                continue
+            if stat.S_ISLNK(info.external_attr >> 16):
+                raise ValueError('unsafe zip symlink')
+            mode = approved_mode(info)
+            total += info.file_size
+            rows.append((key, mode, info.file_size, False))
+    return total, rows
+
+
+def reject_unsafe_zip(path, max_uncompressed):
+    total, _rows = zip_members(path)
+    if total > max_uncompressed:
+        raise ValueError('zip expansion exceeds capacity')
+    return total
+
+
+def current_peak_bytes(unsigned, otatools_zip, otatools_uncompressed, jdk_zip, jdk_uncompressed, script):
+    """Bytes this bundle will occupy. The historical 22.87 GB figure is not a substitute."""
+    values = (unsigned, otatools_zip, otatools_uncompressed, jdk_zip, jdk_uncompressed, script)
+    if any(not isinstance(value, int) or isinstance(value, bool) or value < 0 for value in values):
+        raise ValueError('size is not a byte count')
+    return 2 * unsigned + 2 * otatools_zip + otatools_uncompressed + jdk_zip + jdk_uncompressed + script
+
+
+def _member_path(root, key):
+    target = root.joinpath(*key.split('/'))
+    if target.resolve() != root and root not in target.resolve().parents:
+        raise ValueError('unsafe zip member')
+    return target
+
+
+def resume_extract(dest, digest, rows):
+    marker_path = Path(dest) / EXTRACT_MARKER
+    if marker_path.is_symlink() or not marker_path.is_file():
+        raise ValueError('otatools extraction destination exists')
+    marker = json.loads(marker_path.read_text())
+    if marker.get('sha256') != digest:
+        raise ValueError('otatools extraction destination exists')
+    root = Path(dest).resolve()
+    for key, mode, _size, is_dir in rows:
+        if is_dir:
+            continue
+        path = _member_path(root, key)
+        if path.is_symlink() or not path.is_file() or stat.S_IMODE(path.stat().st_mode) != mode:
+            raise ValueError('otatools extraction destination exists')
+    return Path(dest)
 
 
 def safe_extract(archive_path, dest, max_uncompressed):
     dest = Path(dest)
-    if dest.exists() or dest.is_symlink():
+    digest = sha256_file(archive_path)
+    total, rows = zip_members(archive_path)
+    if total > max_uncompressed:
+        raise ValueError('zip expansion exceeds capacity')
+    if dest.is_symlink():
         raise ValueError('otatools extraction destination exists')
-    reject_unsafe_zip(archive_path, max_uncompressed)
+    if dest.exists():
+        return resume_extract(dest, digest, rows)
     dest.mkdir(mode=0o700)
     root = dest.resolve()
     with zipfile.ZipFile(archive_path) as archive:
         for info in archive.infolist():
             name = info.filename.replace('\\', '/')
             parts = [part for part in name.split('/') if part not in ('', '.')]
-            if not parts:
+            if not parts or name.endswith('/'):
+                if parts and not name.endswith('/'):
+                    continue
+                if parts:
+                    _member_path(root, '/'.join(parts)).mkdir(parents=True, exist_ok=True)
                 continue
-            if name.startswith('/') or '..' in parts or '\x00' in info.filename:
-                raise ValueError('unsafe zip member')
-            target = root.joinpath(*parts)
-            if target.resolve() != root and root not in target.resolve().parents:
-                raise ValueError('unsafe zip member')
-            if name.endswith('/'):
-                target.mkdir(parents=True, exist_ok=True)
-                continue
+            target = _member_path(root, '/'.join(parts))
             target.parent.mkdir(parents=True, exist_ok=True)
             with archive.open(info) as source, open(target, 'wb') as copied:
                 shutil.copyfileobj(source, copied)
+            os.chmod(target, approved_mode(info))
+    recorded = [{'name': key, 'mode': mode} for key, mode, _size, is_dir in rows if not is_dir]
+    (dest / EXTRACT_MARKER).write_text(json.dumps({'sha256': digest, 'members': recorded}, sort_keys=True) + '\n')
+    os.chmod(dest / EXTRACT_MARKER, 0o644)
     return dest
+
+
+def require_java_home(jdk_root):
+    java = Path(jdk_root) / 'bin' / 'java'
+    if java.is_symlink() or not java.is_file() or Path(jdk_root).resolve() not in java.resolve().parents \
+            or not os.access(java, os.X_OK):
+        raise ValueError('jdk home has no runnable bin/java')
+    return Path(jdk_root)
+
+
+def require_otatools_executable(extracted, relative):
+    tool = Path(extracted) / relative
+    if tool.is_symlink() or not tool.is_file() or Path(extracted).resolve() not in tool.resolve().parents \
+            or not os.access(tool, os.X_OK):
+        raise ValueError('otatools executable provenance is not the trusted pin')
+    return tool
 
 
 def tree_bytes(path):
@@ -285,23 +401,7 @@ def tree_bytes(path):
     return total
 
 
-def reject_unsafe_zip(path, max_uncompressed):
-    with zipfile.ZipFile(path) as archive:
-        total = 0
-        for info in archive.infolist():
-            name = info.filename.replace('\\', '/')
-            parts = [part for part in name.split('/') if part not in ('', '.')]
-            if name.startswith('/') or '..' in parts or '\x00' in info.filename:
-                raise ValueError('unsafe zip member')
-            mode = info.external_attr >> 16
-            if stat.S_ISLNK(mode):
-                raise ValueError('unsafe zip symlink')
-            total += info.file_size
-            if total > max_uncompressed:
-                raise ValueError('zip expansion exceeds capacity')
-
-
-def verify_files(bundle, files, max_uncompressed):
+def verify_files(bundle, files):
     if not isinstance(files, dict):
         raise ValueError('signing bundle files are absent')
     for key in ('unsigned', 'otatools', 'generateRelease', 'jdk'):
@@ -313,35 +413,59 @@ def verify_files(bundle, files, max_uncompressed):
         row = bundle[key]
         if path.stat().st_size != row['sizeBytes'] or sha256_file(path) != row['sha256']:
             raise ValueError('signing bundle hash differs')
-        if key in ('unsigned', 'otatools'):
-            reject_unsafe_zip(path, max_uncompressed)
 
 
 def evaluate(bundle, root, free, files=None, secret_access=None, pin=None, capacity_config=None,
-             env=None, measured=None, extract_dir=None):
+             env=None, measured=None):
     env = os.environ if env is None else env
     config = load_capacity() if capacity_config is None else capacity_config
     require_bundle_identity(bundle, env, root)
-    plan = capacity(bundle, free, config, measured)
     require_entry(root)
-    if files is None:
-        raise ValueError('signing bundle files are absent')
-    verify_files(bundle, files, plan['requiredBytes'])
-    require_script_pin(bundle, root, pin)
-    if sha256_file(files['jdk']) != bundle['jdk']['sha256']:
-        raise ValueError('jdk provenance is unbound')
-    if extract_dir is None:
-        extract_dir = Path(files['otatools']).parent / 'otatools-extracted'
-    extracted = safe_extract(files['otatools'], extract_dir, plan['requiredBytes'])
-    expanded = tree_bytes(extracted)
     stock = config['activeRunner']['ssdBytes']
-    if plan['requiredBytes'] + expanded > stock or plan['requiredBytes'] + expanded > free:
+    historical = config.get('historicalLowerBoundBytes')
+    early = []
+    if isinstance(historical, int) and stock < historical:
+        early.append(
+            f'hosted signer capacity exceeded: historical estimate {historical} bytes, stock SSD {stock} bytes')
+    if config.get('admission') is not True:
+        early.append('hosted signer admission is closed')
+    missing = [name for name in ('jdk', 'generateRelease') if bundle[name].get('sha256') is None or bundle[name].get('sizeBytes') is None]
+    if bundle['otatools'].get('sha256') is None:
+        missing.append('otatools')
+    if missing:
+        early.append('unmeasured signer inputs: ' + ','.join(missing))
+    needed = ('unsigned', 'otatools', 'generateRelease', 'jdk')
+    if not isinstance(files, dict) or any(key not in files for key in needed):
+        if early:
+            raise CapacityExceeded('; '.join(early)) if early[0].startswith('hosted signer capacity') else ValueError('; '.join(early))
+        raise ValueError('signing bundle files are absent')
+    verify_files(bundle, files)
+    for label, path in (('otatools', files['otatools']), ('jdk', files['jdk']), ('unsigned', files['unsigned'])):
+        reject_unsafe_zip(path, free)
+    otatools_uncompressed = reject_unsafe_zip(files['otatools'], free)
+    jdk_uncompressed = reject_unsafe_zip(files['jdk'], free)
+    current = current_peak_bytes(
+        files['unsigned'].stat().st_size, files['otatools'].stat().st_size, otatools_uncompressed,
+        files['jdk'].stat().st_size, jdk_uncompressed, files['generateRelease'].stat().st_size)
+    reasons = list(early)
+    if current > stock or current > free:
+        reasons.insert(0, f'hosted signer capacity exceeded: current peak {current} bytes, stock SSD {stock} bytes, free {free} bytes')
+    if reasons:
+        raise CapacityExceeded('; '.join(reasons)) if reasons[0].startswith('hosted signer capacity') else ValueError('; '.join(reasons))
+    trusted = require_trusted_pins(bundle, root, files, pin)
+    parent = Path(files['otatools']).parent
+    extracted = safe_extract(files['otatools'], parent / 'otatools-extracted', free)
+    jdk_home = safe_extract(files['jdk'], parent / 'jdk-extracted', free)
+    require_java_home(jdk_home)
+    require_otatools_executable(extracted, trusted['otatoolsExecutable'])
+    expanded = tree_bytes(extracted) + tree_bytes(jdk_home)
+    if current + expanded > stock or current + expanded > free:
         raise CapacityExceeded(
-            f'hosted signer capacity exceeded: required {plan["requiredBytes"] + expanded} bytes, '
-            f'stock SSD {stock} bytes, free {free} bytes')
+            f'hosted signer capacity exceeded: current peak {current + expanded} bytes, stock SSD {stock} bytes, free {free} bytes')
     if secret_access is not None:
         secret_access()
-    return {'admit': True, 'requiredBytes': plan['requiredBytes'] + expanded, 'extracted': extracted}
+    return {'admit': True, 'requiredBytes': current + expanded, 'currentPeakBytes': current,
+            'historicalEstimateBytes': historical, 'extracted': extracted, 'javaHome': jdk_home}
 
 
 def _collected(row, name, dest, filename):
@@ -377,7 +501,7 @@ def export_bundle(collection_path, out_path, root=ROOT):
     jdk = {'sha256': None, 'sizeBytes': None, 'file': None}
     script = {'sha256': None, 'sizeBytes': None, 'file': None}
     if isinstance(artifacts.get('jdk'), dict) and artifacts['jdk'].get('state') == 'collected':
-        jdk = _collected(artifacts['jdk'], 'jdk', inputs, 'jdk.bin')
+        jdk = _collected(artifacts['jdk'], 'jdk', inputs, 'jdk.zip')
     script_path = collection.get('generateReleasePath')
     if isinstance(script_path, str):
         script_file = Path(script_path)
@@ -460,12 +584,13 @@ def bundle_files(directory, bundle):
     return files or None
 
 
-def preflight(bundle_path, root=ROOT, env=None, capacity_config=None):
+def preflight(bundle_path, root=ROOT, env=None, capacity_config=None, pin=None, free=None):
     bundle, directory = bundle_document(bundle_path)
-    space = os.statvfs('/')
-    evaluate(bundle, root, space.f_bavail * space.f_frsize, files=bundle_files(directory, bundle),
-             secret_access=None, env=env, capacity_config=capacity_config)
-    return bundle
+    if free is None:
+        space = os.statvfs('/')
+        free = space.f_bavail * space.f_frsize
+    return evaluate(bundle, root, free, files=bundle_files(directory, bundle),
+                    secret_access=None, pin=pin, env=env, capacity_config=capacity_config)
 
 
 def run_host_sign(source_root, release_dir, extracted, jdk_home, bundle, env, host_sign_main=None):
@@ -541,7 +666,7 @@ def sign(bundle_path, out_dir, root=ROOT, env=None, capacity_config=None, host_s
     files = bundle_files(directory, bundle)
     result = evaluate(bundle, root, free, files=files, secret_access=None, pin=pin, capacity_config=capacity_config, env=env)
     release = Path(out_dir).parent / 'hosted-sign-work'
-    run_host_sign(root, release, result['extracted'], files['jdk'], bundle, env or os.environ, host_sign_main)
+    run_host_sign(root, release, result['extracted'], result['javaHome'], bundle, env or os.environ, host_sign_main)
     return write_hosted_receipt(release, out_dir, bundle)
 
 
@@ -585,7 +710,8 @@ def main(argv=None):
                 admit_output('false')
                 print('Hosted Mustang signer stopped: ' + message, file=sys.stderr)
                 closed = ('admission is closed', 'capacity exceeded', 'unmeasured signer inputs',
-                          'sign script pin is unbound', 'jdk provenance is unbound', 'signing bundle files are absent')
+                          'sign script pin is unbound', 'jdk provenance is unbound',
+                          'otatools provenance is unbound', 'signing bundle files are absent')
                 return 0 if any(part in message for part in closed) else 4
             admit_output('true')
             return 0

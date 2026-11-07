@@ -24,9 +24,14 @@ def digest(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
-def write_zip(path, name='payload.txt', data=b'payload'):
+def write_zip(path, name='payload.txt', data=b'payload', mode=0o644, members=None):
     with zipfile.ZipFile(path, 'w') as archive:
-        archive.writestr(name, data)
+        rows = members if members is not None else [(name, data, mode)]
+        for member_name, member_data, member_mode in rows:
+            info = zipfile.ZipInfo(member_name)
+            info.date_time = (2026, 1, 1, 0, 0, 0)
+            info.external_attr = (member_mode & 0o777) << 16
+            archive.writestr(info, member_data)
 
 
 class HostedSignGateTest(unittest.TestCase):
@@ -170,7 +175,7 @@ class HostedSignGateTest(unittest.TestCase):
             hosted.evaluate(bundle, ROOT, free=0, files=files, secret_access=secret_access, pin=pin, env=ENV,
                             capacity_config=self.admitted())
 
-        self.assert_secret_closed(tight, 'hosted signer capacity exceeded')
+        self.assert_secret_closed(tight, 'zip expansion exceeds capacity')
         oversized = self.bundle()
         oversized['unsigned'] = {'sha256': 'c' * 64, 'sizeBytes': 600000000}
         oversized['otatools'] = {'sha256': 'd' * 64, 'sizeBytes': 1}
@@ -211,7 +216,9 @@ class HostedSignGateTest(unittest.TestCase):
                                    capacity_config=self.admitted())
         self.assertEqual(called, ['secret'])
         self.assertTrue(admitted['admit'])
-        self.assertTrue((Path(files['otatools']).parent / 'otatools-extracted' / 'payload.txt').is_file())
+        self.assertTrue(os.access(Path(files['otatools']).parent / 'otatools-extracted' / 'bin' / 'delta_generator', os.X_OK))
+        self.assertFalse(os.access(Path(files['otatools']).parent / 'otatools-extracted' / 'bin' / 'readme.txt', os.X_OK))
+        self.assertTrue(os.access(admitted['javaHome'] / 'bin' / 'java', os.X_OK))
         self.assertLess(admitted['requiredBytes'], 10 ** 18)
 
     def test_sign_calls_host_sign_only_after_admission_and_writes_the_receipt(self):
@@ -226,7 +233,11 @@ class HostedSignGateTest(unittest.TestCase):
             config = json.loads(Path(config_path).read_text())
             self.assertEqual(config['host']['sign']['keysSecret'], hosted.KEYS)
             self.assertEqual(config['host']['sign']['secretVersion'], '1')
-            self.assertEqual(Path(config['host']['sign']['javaHome']).read_bytes(), b'jdk-bytes')
+            java = Path(config['host']['sign']['javaHome']) / 'bin' / 'java'
+            tool = Path(config['host']['sign']['otatools']) / 'bin' / 'delta_generator'
+            self.assertTrue(java.is_file() and os.access(java, os.X_OK))
+            self.assertEqual(java.read_bytes(), b'java-stub')
+            self.assertTrue(tool.is_file() and os.access(tool, os.X_OK))
             calls.append(config_path)
             release = Path(env['ROSE_RELEASE_DIR'])
             (release / 'signed-target_files.zip').write_bytes(b'signed-target')
@@ -419,6 +430,109 @@ class HostedSignGateTest(unittest.TestCase):
         self.assertIsNone(runtime['sourceEvidence'])
         self.assertFalse(runtime['publication']['enabled'])
 
+    def test_preflight_then_sign_resumes_extract_and_publisher_sees_the_receipt(self):
+        bundle, files, pin = self.tiny_bundle()
+        bundle['build'] = '1'
+        root = self.checkout(files['generateRelease'].read_bytes())
+        collection = {
+            'schema': 'roseos.mustang-compile-collection.v1', 'status': 'complete', 'build': '1',
+            'runId': ENV['GITHUB_RUN_ID'], 'runAttempt': ENV['GITHUB_RUN_ATTEMPT'],
+            'collectorSource': ENV['GITHUB_SHA'], 'generateReleasePath': str(files['generateRelease']),
+            'outputs': {'artifacts': {
+                'targetFiles': {'state': 'collected', 'path': str(files['unsigned']),
+                                'sizeBytes': files['unsigned'].stat().st_size, 'sha256': digest(files['unsigned'])},
+                'otatools': {'state': 'collected', 'path': str(files['otatools']),
+                             'sizeBytes': files['otatools'].stat().st_size, 'sha256': digest(files['otatools'])},
+                'jdk': {'state': 'collected', 'path': str(files['jdk']),
+                        'sizeBytes': files['jdk'].stat().st_size, 'sha256': digest(files['jdk'])},
+            }},
+        }
+        collection_path = Path(self.directory.name) / 'collection.json'
+        collection_path.write_text(json.dumps(collection))
+        exported = hosted.export_bundle(collection_path, Path(self.directory.name) / 'uploaded')
+        downloaded = Path(self.directory.name) / 'downloaded'
+        shutil.copytree(Path(self.directory.name) / 'uploaded', downloaded)
+        self.assertEqual(exported['otatools']['sha256'], pin['otatoolsSha256'])
+        login, secret = [], []
+        config = self.admitted()
+        lied = json.loads((downloaded / 'mustang-signing-bundle.json').read_text())
+        lied['otatools']['sha256'] = '0' * 64
+        (downloaded / 'mustang-signing-bundle.json').write_text(json.dumps(lied))
+
+        def denied(secret_access):
+            hosted.evaluate(lied, root, 10 ** 18, files=hosted.bundle_files(downloaded, lied),
+                            secret_access=secret_access, pin=pin, env=ENV, capacity_config=config)
+        self.assert_secret_closed(denied, 'signing bundle hash differs')
+        lied['otatools']['sha256'] = pin['otatoolsSha256']
+        lied['sourceSha'] = 'b' * 40
+        def wrong_run(secret_access):
+            hosted.evaluate(lied, root, 10 ** 18, files=hosted.bundle_files(downloaded, lied),
+                            secret_access=secret_access, pin=pin, env=dict(ENV, GITHUB_SHA='a' * 40),
+                            capacity_config=config)
+        self.assert_secret_closed(wrong_run, 'signing bundle is not this run')
+        (downloaded / 'mustang-signing-bundle.json').write_text(json.dumps(exported))
+        guest_pin = dict(pin, otatoolsSha256='1' * 64)
+        def guest_attested(secret_access):
+            hosted.evaluate(exported, root, 10 ** 18, files=hosted.bundle_files(downloaded, exported),
+                            secret_access=secret_access, pin=guest_pin, env=ENV, capacity_config=config)
+        self.assert_secret_closed(guest_attested, 'otatools provenance is not the trusted pin')
+        hosted.preflight(downloaded, root=root, env=ENV, capacity_config=config, pin=pin, free=10 ** 18)
+        login.append('login')
+
+        def host_sign_main(config_path, env, managed_decrypted_keys=False, **kwargs):
+            self.assertTrue(managed_decrypted_keys)
+            config = json.loads(Path(config_path).read_text())
+            java = Path(config['host']['sign']['javaHome']) / 'bin' / 'java'
+            tool = Path(config['host']['sign']['otatools']) / 'bin' / 'delta_generator'
+            readme = Path(config['host']['sign']['otatools']) / 'bin' / 'readme.txt'
+            self.assertTrue(java.is_file() and os.access(java, os.X_OK))
+            self.assertTrue(tool.is_file() and os.access(tool, os.X_OK))
+            self.assertTrue(readme.is_file() and not os.access(readme, os.X_OK))
+            self.assertEqual(digest(downloaded / 'inputs' / 'otatools.zip'), pin['otatoolsSha256'])
+            secret.append('sign')
+            release = Path(env['ROSE_RELEASE_DIR'])
+            (release / 'signed-target_files.zip').write_bytes(b'signed-target')
+            public = release / 'public'
+            public.mkdir()
+            (public / 'mustang-ota_update-1.zip').write_bytes(b'signed-ota')
+            return 0
+
+        out = Path(self.directory.name) / 'publisher'
+        receipt = hosted.sign(downloaded, out, root=root, env=ENV, capacity_config=config,
+                              host_sign_main=host_sign_main, free=10 ** 18, pin=pin)
+        self.assertEqual(login, ['login'])
+        self.assertEqual(secret, ['sign'])
+        self.assertEqual(hosted.bind_outputs(out, env=ENV)['sourceSha'], ENV['GITHUB_SHA'])
+        self.assertEqual(receipt['outputs']['signedTargetFiles']['sha256'], digest(out / 'signed-target_files.zip'))
+
+    def test_zip_traversal_symlink_duplicate_bomb_modes_and_resume(self):
+        bundle, files, pin = self.tiny_bundle()
+        root = self.checkout(files['generateRelease'].read_bytes())
+        config = self.admitted()
+        called = []
+
+        def attempt(secret_access):
+            hosted.evaluate(bundle, root, 10 ** 18, files=files, secret_access=secret_access, pin=pin,
+                            env=ENV, capacity_config=config)
+        hosted.evaluate(bundle, root, 10 ** 18, files=files, secret_access=lambda: called.append('first'),
+                        pin=pin, env=ENV, capacity_config=config)
+        hosted.evaluate(bundle, root, 10 ** 18, files=files, secret_access=lambda: called.append('second'),
+                        pin=pin, env=ENV, capacity_config=config)
+        self.assertEqual(called, ['first', 'second'])
+        tool = Path(files['otatools']).parent / 'otatools-extracted' / 'bin' / 'delta_generator'
+        os.chmod(tool, 0o644)
+        with self.assertRaisesRegex(ValueError, 'otatools extraction destination exists'):
+            hosted.safe_extract(files['otatools'], tool.parent.parent, 10 ** 18)
+        duplicate = Path(self.directory.name) / 'duplicate.zip'
+        with zipfile.ZipFile(duplicate, 'w') as archive:
+            archive.writestr('bin/delta_generator', b'one')
+            archive.writestr('bin/delta_generator', b'two')
+        with self.assertRaisesRegex(ValueError, 'duplicate zip member'):
+            hosted.reject_unsafe_zip(duplicate, 10 ** 9)
+        with self.assertRaisesRegex(ValueError, 'zip expansion exceeds capacity'):
+            hosted.reject_unsafe_zip(files['otatools'], 1)
+        self.assert_secret_closed(attempt, 'otatools extraction destination exists')
+
     def tiny_bundle(self, zip_member='payload.txt', symlink=False):
         self.directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
@@ -426,17 +540,18 @@ class HostedSignGateTest(unittest.TestCase):
         unsigned = root / 'unsigned.zip'
         tools = root / 'otatools.zip'
         script = root / 'generate-release.sh'
-        jdk = root / 'jdk.bin'
+        jdk = root / 'jdk.zip'
         if symlink:
             info = zipfile.ZipInfo('link')
+            info.date_time = (2026, 1, 1, 0, 0, 0)
             info.external_attr = (stat.S_IFLNK | 0o777) << 16
             with zipfile.ZipFile(unsigned, 'w') as archive:
                 archive.writestr(info, 'target')
         else:
             write_zip(unsigned, zip_member, b'unsigned')
-        write_zip(tools, data=b'tools')
+        write_zip(tools, members=[('bin/delta_generator', b'tool', 0o755), ('bin/readme.txt', b'note', 0o644)])
         script.write_bytes(b'script-bytes')
-        jdk.write_bytes(b'jdk-bytes')
+        write_zip(jdk, members=[('bin/java', b'java-stub', 0o755)])
         files = {'unsigned': unsigned, 'otatools': tools, 'generateRelease': script, 'jdk': jdk}
         bundle = self.bundle()
         bundle['unsigned'] = {'sha256': digest(unsigned), 'sizeBytes': unsigned.stat().st_size}
@@ -445,7 +560,8 @@ class HostedSignGateTest(unittest.TestCase):
         bundle['jdk'] = {'sha256': digest(jdk), 'sizeBytes': jdk.stat().st_size}
         bundle['otatoolsExtractedBytes'] = 0
         pin = {'entryPoint': hosted.ENTRY, 'generateReleasePath': 'script/generate-release.sh',
-               'generateReleaseSha256': digest(script), 'jdkSha256': digest(jdk)}
+               'generateReleaseSha256': digest(script), 'jdkSha256': digest(jdk),
+               'otatoolsSha256': digest(tools), 'otatoolsExecutable': 'bin/delta_generator'}
         return bundle, files, pin
 
     def write_bundle(self, bundle, files):
@@ -457,7 +573,7 @@ class HostedSignGateTest(unittest.TestCase):
         mapping = {
             'unsigned': 'inputs/unsigned-target_files.zip',
             'otatools': 'inputs/otatools.zip',
-            'jdk': 'inputs/jdk.bin',
+            'jdk': 'inputs/jdk.zip',
             'generateRelease': 'inputs/generate-release.sh',
         }
         saved = json.loads(json.dumps(bundle))
