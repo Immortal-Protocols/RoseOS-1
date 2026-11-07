@@ -144,7 +144,8 @@ class Vision(unittest.TestCase):
         before = len(self.commands())
         for target in ('Send', 'Buy now', 'Place order', 'Pay $20', 'Submit', 'Publish', '', '   ',
                        'the Send button', 'Send icon', 'Send arrow', 'blue send arrow at bottom right', '"Send" button',
-                       'Tap Send', 'the Submit button', 'paper plane icon', 'the Post button', 'Confirm order',
+                       'Tap Send', 'the Submit button', 'paper plane icon', 'paper airplane icon', 'paper-airplane button',
+                       'the Post button', 'Tap Post', 'Tweet', 'Post', 'Post comment', 'Post reply button', 'Confirm order',
                        'Checkout button'):
             result = self.call(s, 'tap_point', frame_id=s.view.frame_id, x=500, y=500, target=target, effect='interact')
             self.assertFalse(result['ok'], target)
@@ -157,7 +158,10 @@ class Vision(unittest.TestCase):
             self.assertFalse(self.call(s, 'tap_point', frame_id=s.view.frame_id, x=500, y=500, target=target, effect='interact')['ok'])
         self.assertEqual(len(self.commands()), before)
         # Ordinary controls still work.
-        for target in ('Message field', 'Search', 'Sent folder', 'Settings gear', 'Back arrow'):
+        for target in ('Message field', 'Search', 'Sent folder', 'Settings gear', 'Back arrow', 'the latest post',
+                       'Open the first post', 'Like button on the post', 'Comment on the post', 'Tap the post to open it',
+                       'the post comment box', 'New post', 'Create post', 'the tweet by NASA', 'Like button on the tweet',
+                       'Send feedback', 'Send feedback row'):
             self.assertTrue(self.call(s, 'tap_point', frame_id=s.view.frame_id, x=500, y=500, target=target, effect='interact')['ok'], target)
 
     def test_an_unanswered_type_still_counts_as_a_draft(self):

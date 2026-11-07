@@ -29,26 +29,32 @@ Use complete_task with succeeded, blocked, or failed and a concise observed summ
 your final reply. A dispatched input is not success; verify the result in the next screenshot.
 """
 
-# Final-control words anywhere in a model-written target ("the Send button", "blue send arrow", "paper plane icon"),
-# beyond tasks._final_control's label rules, which expect the control's own label at the start.
-_VISION_FINAL = re.compile(r"\b(?:send|submit|publish|tweet|paper[\s-]?plane|buy|pay|payment|purchase|checkout)\b", re.I)
+# A model-written target ("the Send button", "blue send arrow", "paper airplane icon") is not the control's own label,
+# which tasks._final_control expects. A send, submit or purchase word anywhere counts ("Send feedback", a menu row, does
+# not); "post" and "tweet" are also feed items ("the latest post"), so they count only as a button or icon, or as the
+# whole label after a leading "the"/"tap" ("Post", "Tap Tweet", "Post comment"; not "post comment box").
+_VISION_FINAL = re.compile(r"\b(?:send(?!\s+feedback\b)|submit|publish|paper[\s-]?(?:air)?plane|buy|pay|payment|purchase|"
+                           r"checkout|(?:post|tweet)\s+(?:button|icon))\b", re.I)
 _VISION_REPLY = re.compile(r"\breply\b", re.I)
+_SEND_LABEL = re.compile(r"^\W*(?:(?:send|post|tweet)(?:\s+(?:it|now|message|reply|comment|tweet|text|sms))?"
+                         r"(?:\s+(?:button|icon))?\W*$|reply\b)", re.I)
+_LEAD = re.compile(r"^(?:(?:the|a|an|tap|press|click|hit|select)\s+)+", re.I)
 
 
 def final_target(target: str, typed: bool) -> bool:
     """Whether tapping the model's description of a target could send, buy or otherwise finish something.
 
-    Best effort and deliberately broad, since it reads the model's words, not the app's: the accessibility path's
-    label rules on the description and on every word-start suffix of it (purchases, "Post", "Confirm order"), and
-    a send or purchase word anywhere. "Reply" counts once a draft is typed. A miss is still the owner's action under
-    the policy; an over-broad refusal only leaves a tap to the owner."""
+    Best effort, since it reads the model's words, not the app's: the accessibility path's label rules on the
+    description (after a leading "the"/"tap"), and a send, submit or purchase word anywhere in it. "Reply" counts once
+    a draft is typed. A miss is still the owner's action under the policy."""
     from .tasks import _final_control
 
-    words = re.sub(r"[\"'“”‘’]", " ", target).split()
-    if any(_final_control(" ".join(words[i:]), typed=typed) for i in range(len(words))):
-        return True
-    text = " ".join(words)
-    return bool(_VISION_FINAL.search(text) or (typed and _VISION_REPLY.search(text)))
+    text = " ".join(re.sub(r"[\"'“”‘’]", " ", target).split())
+    label = _LEAD.sub("", text)
+    kind = _final_control(label, typed=typed)
+    if kind == "send" and not _SEND_LABEL.match(label):
+        kind = ""  # "post to open it", "post comment box": a feed item; real sends are matched below
+    return bool(kind or _VISION_FINAL.search(text) or (typed and _VISION_REPLY.search(text)))
 
 
 def vision_tools():
