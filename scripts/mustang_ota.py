@@ -262,6 +262,14 @@ def candidate_continuity(record):
         raise ValueError('candidate updater or v1 certificate does not match the installed baseline')
     if obs.get('apkMatchesExpected') is not True or obs.get('certMatchesExpected') is not True:
         raise ValueError('candidate updater or v1 certificate does not match the installed baseline')
+    if 'updaterSignerSha256' in obs:
+        raise ValueError('candidate inspection did not measure the APK signer')
+    prebuild = read(ROOT/'os/mustang-ota/41761758623/producer/baseline-prebuild.json')
+    historical_signer = prior.get('updaterSignerSha256')
+    if type(historical_signer) is not str or not re.fullmatch(r'[0-9a-f]{64}', historical_signer) \
+            or historical_signer != staged.get('packagedUpdater', {}).get('updaterSignerSha256') \
+            or historical_signer != prebuild.get('updaterSignerSha256'):
+        raise ValueError('historical updater signer observations disagree')
     return {
         'schema': 'roseos.mustang-ota-baseline.v1',
         'evidenceKind': 'candidate-installer-continuity',
@@ -269,6 +277,7 @@ def candidate_continuity(record):
         'currentPhone': False,
         'phoneObserved': False,
         'admitsRuntime': False,
+        'apkSignerRemeasured': False,
         'targetFiles': None,
         'build': prior['build'],
         'timestamp': prior['timestamp'],
@@ -277,11 +286,24 @@ def candidate_continuity(record):
         'updaterApkSha256': apk,
         'updaterBytes': obs['updaterBytes'],
         'trustedOtaCertificateSha256': [identity],
-        'updaterSignerSha256': identity,
+        'historicalUpdaterSignerSha256': historical_signer,
         'discoveryClassesPresent': prior.get('discoveryClassesPresent') is True,
         'installedEvidence': prior.get('installedEvidence'),
         'continuityRecord': 'os/build-only/mustang-candidate-continuity-20261107.json',
     }
+
+
+def require_staged_baseline(baseline):
+    """Reject a relabeled baseline before any artifact work. Equality is against the vetted object."""
+    if not isinstance(baseline, dict) or baseline.get('evidenceKind') != 'candidate-installer-continuity':
+        raise ValueError('staged baseline differs from the vetted candidate continuity')
+    path = baseline.get('continuityRecord')
+    if path != 'os/build-only/mustang-candidate-continuity-20261107.json':
+        raise ValueError('staged baseline differs from the vetted candidate continuity')
+    expected = candidate_continuity(read(ROOT/path))
+    if baseline != expected:
+        raise ValueError('staged baseline differs from the vetted candidate continuity')
+    return expected
 
 
 def observe_baseline(out, lane=None, tools=None, target_files=None, factory=None, runtime=None):
@@ -362,16 +384,13 @@ def stage(sign_run, attempt, baseline_file, out, lane=None, tools=None, publicat
                              'passphrase': {'name': adapter.SECRETS['passphrase'], 'version': '1'}}:
         raise ValueError('established Mustang signing versions must be preserved')
     baseline = read(baseline_file)
+    if baseline.get('evidenceKind')=='candidate-installer-continuity':
+        baseline = require_staged_baseline(baseline)
     factory_mode=lane is not None and read(ROOT/'os/build-only/mustang-runtime.json').get('baselineFactoryEvidence') is not None
     if factory_mode or baseline.get('evidenceKind')=='factory-images':
         require_factory_baseline(baseline)
         if baseline.get('baselineSource')!=cfg['baseline']['source']:
             raise ValueError('factory baseline original candidate differs')
-    if baseline.get('evidenceKind')=='candidate-installer-continuity':
-        if baseline.get('currentPhone') is not False or baseline.get('phoneObserved') is not False \
-                or baseline.get('targetFiles') is not None or baseline.get('admitsRuntime') is not False:
-            raise ValueError('candidate continuity is not the current phone or target-files')
-        candidate_continuity(read(ROOT/baseline['continuityRecord']))
     if baseline.get('packagedUpdaterVerified') is not True or baseline.get('build') != cfg['baseline']['installedBuild'] \
             or baseline.get('trustedOtaCertificateSha256') is None \
             or identities()['otaCertificateSha256'] not in baseline['trustedOtaCertificateSha256']:
