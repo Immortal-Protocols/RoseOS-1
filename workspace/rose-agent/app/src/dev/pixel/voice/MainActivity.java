@@ -171,6 +171,7 @@ public class MainActivity extends Activity {
  }
  void closeVisual(){
   if(visualDetail==null)return;
+  customizationChanged.run(); // 1O: a change held while the card was open applies once it has closed
   if(visualDetail.getParent() instanceof ViewGroup)((ViewGroup)visualDetail.getParent()).removeView(visualDetail);
   visualDetail=null;if(page!=null)page.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_AUTO);
  }
@@ -448,13 +449,16 @@ public class MainActivity extends Activity {
  final HomePlan.Breaker homePlanBreaker=new HomePlan.Breaker();
  Runnable homePlanCheck;
  /** Nov 7 plan 1O: the customization Home planned with and last drew. A change (a new revision in CustomizationStore)
-  * re-plans and rebuilds Home once, coalesced on the main thread, and only when something Home draws differs: the
-  * column preference, the wallpaper variant or the font. Hook-only changes are acknowledged without a rebuild. A user
-  * change bypasses homePlanBreaker, which still governs automatic re-plans. */
+  * re-plans Home, coalesced on the main thread, and rebuilds it once only when what Home draws differs: the effective
+  * plan (columns and capacity, so 0 -> 4 where automatic is already 4 is not a rebuild), the wallpaper variant or the
+  * font. Other changes are acknowledged without a rebuild. A change waits while the visual card or the Mac screen is
+  * open (both re-post it on close), and never runs on a destroyed instance. A user change bypasses homePlanBreaker,
+  * which still governs automatic re-plans. */
  CustomizationConfig plannedCustomization=CustomizationConfig.DEFAULTS,drawnCustomization=null;
- final Runnable applyCustomization=()->{if(launcherPager==null||isFinishing())return;CustomizationConfig next=CustomizationStore.read(this),drawn=drawnCustomization;
-  if(drawn!=null&&next.revision==drawn.revision)return;
-  if(drawn!=null&&next.homeColumns==drawn.homeColumns&&next.wallpaper.equals(drawn.wallpaper)&&next.font.equals(drawn.font)){drawnCustomization=next;plannedCustomization=next;CustomizationStore.markHomeApplied(this,next.revision,homeColumns);return;}
+ final Runnable applyCustomization=()->{if(launcherPager==null||isFinishing()||isDestroyed()||visualDetail!=null||screenDetail!=null)return;
+  CustomizationConfig drawn=drawnCustomization;if(drawn!=null&&CustomizationStore.read(this).revision==drawn.revision)return;
+  int[] kept={homeColumns,homeCapacity,appColumns,appPerPage};planAppPages();CustomizationConfig next=plannedCustomization;
+  if(drawn!=null&&homeColumns==kept[0]&&homeCapacity==kept[1]&&appColumns==kept[2]&&appPerPage==kept[3]&&next.wallpaper.equals(drawn.wallpaper)&&next.font.equals(drawn.font)){drawnCustomization=next;CustomizationStore.markHomeApplied(this,next.revision,homeColumns);return;}
   if(homePlanCheck!=null){handler.removeCallbacks(homePlanCheck);homePlanCheck=null;}attachLauncherPages(true);};
  final Runnable customizationChanged=()->{handler.removeCallbacks(applyCustomization);handler.post(applyCustomization);};
  boolean homePlanStale(){float density=getResources().getDisplayMetrics().density;
@@ -652,7 +656,7 @@ public class MainActivity extends Activity {
    return id==0?null:GestureContract.recentsPackage(r.getString(id));}catch(RuntimeException unavailable){return null;}
  }
  /** What the built Home, pager and catalog came from: package changes, screen configuration and the dock's default apps. */
- String homeStamp(){android.content.res.Configuration c=getResources().getConfiguration();return HomeReuse.stamp(packageGeneration,c.screenWidthDp+"x"+c.screenHeightDp+"@"+c.densityDpi+"/"+c.orientation+"/"+c.fontScale+"/"+c.uiMode+"/"+c.getLocales().toLanguageTags()+"/c"+CustomizationStore.read(this).revision,RoseHomeView.dockRolePackages(getPackageManager(),getPackageName()));}
+ String homeStamp(){android.content.res.Configuration c=getResources().getConfiguration();return HomeReuse.stamp(packageGeneration,c.screenWidthDp+"x"+c.screenHeightDp+"@"+c.densityDpi+"/"+c.orientation+"/"+c.fontScale+"/"+c.uiMode+"/"+c.getLocales().toLanguageTags(),RoseHomeView.dockRolePackages(getPackageManager(),getPackageName()));}
  /** An unchanged HOME or app-icon return keeps the built Home, pager, catalog, conversation page and draft (OS-HOME-REUSE-001). */
  boolean reuseHome(Intent i){return i!=null&&HomeReuse.reuse(HomeEntry.of(Intent.ACTION_MAIN.equals(i.getAction()),i.hasCategory(Intent.CATEGORY_HOME),i.hasCategory(Intent.CATEGORY_LAUNCHER),true,false,true).showHome,homeFrame!=null&&homeFrame.getParent()!=null,builtHomeStamp,homeStamp(),chatMode,visualDetail!=null||screenDetail!=null,false);}
  /** The same snapshot RoseConversationActivity and AgentTrayService build: no service is inactive, never guessed. */
@@ -715,6 +719,7 @@ public class MainActivity extends Activity {
  }
  void closeMacScreen(){
   if(screenDetail==null)return;
+  customizationChanged.run(); // 1O: a change held while the Mac screen was open applies once it has closed
   ((android.view.inputmethod.InputMethodManager)getSystemService(INPUT_METHOD_SERVICE)).hideSoftInputFromWindow(macPanel.getWindowToken(),0);
   screenDetail.removeView(macPanel);if(screenDetail.getParent() instanceof ViewGroup)((ViewGroup)screenDetail.getParent()).removeView(screenDetail);screenDetail=null;
   macPanel.setCompact(true);visualSlot.addView(macPanel,new FrameLayout.LayoutParams(-1,-2));page.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_AUTO);
