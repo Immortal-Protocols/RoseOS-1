@@ -124,14 +124,31 @@ ACCEPTED_APP_EXPORT = {
 }
 
 
-def git_name_diff(root, before, after, paths):
-    if not re.fullmatch(r'[0-9a-f]{40}', str(before)) or not re.fullmatch(r'[0-9a-f]{40}', str(after)):
+def git_local(root, args):
+    """Read local objects only. protocol.allow=never stops a partial clone from fetching."""
+    return subprocess.run(
+        ['git', '-C', str(root), '-c', 'protocol.allow=never', *args],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+
+def require_local_commit(root, rev):
+    if not re.fullmatch(r'[0-9a-f]{40}', str(rev)):
         raise ValueError('app source revision differs')
+    if git_local(root, ['cat-file', '-e', rev + '^{commit}']).returncode != 0:
+        raise ValueError('app source history is unavailable')
+
+
+def git_name_diff(root, before, after, paths):
+    """Name-only diff of two local commits. A missing object is never an empty diff."""
+    require_local_commit(root, before)
+    require_local_commit(root, after)
     for path in paths:
         if not isinstance(path, str) or path.startswith('/') or '..' in Path(path).parts:
             raise ValueError('app source path differs')
-    return subprocess.check_output(
-        ['git', '-C', str(root), 'diff', '--name-only', before, after, '--', *paths], text=True)
+    diff = git_local(root, ['diff', '--name-only', before, after, '--', *paths])
+    if diff.returncode != 0:
+        raise ValueError('app source history is unavailable')
+    return diff.stdout
 
 
 def app_source_drift(record, head, root=ROOT, diff=None):
@@ -140,6 +157,19 @@ def app_source_drift(record, head, root=ROOT, diff=None):
     packages = load(Path(root)/'os/latest-beta/allocation.json')['packages']
     return [package['packageName'] for package in packages
             if differ(record['producer']['sourceSha'], head, package['sources'])]
+
+
+def bound_app_freshness(record, root=ROOT):
+    """Stale packages, or None when the producer commit is not in this checkout."""
+    head = git_local(root, ['rev-parse', 'HEAD'])
+    if head.returncode != 0 or not re.fullmatch(r'[0-9a-f]{40}', head.stdout.strip()):
+        return None
+    try:
+        return app_source_drift(record, head.stdout.strip(), root)
+    except ValueError as error:
+        if str(error) != 'app source history is unavailable':
+            raise
+        return None
 
 
 def accepted_app_export(record, path):
@@ -216,10 +246,15 @@ def blockers(root=ROOT):
         if not accepted_app_export(bound, app_record):
             items.append({'code': 'app-inputs-unadmitted',
                           'detail': 'The bound app export is not the accepted frankel-2026110704 artifact.'})
-        elif app_source_drift(bound, subprocess.check_output(
-                ['git', '-C', str(root), 'rev-parse', 'HEAD'], text=True).strip(), root):
-            items.append({'code': 'app-inputs-stale',
-                          'detail': 'The bound app export omits current app source changes.'})
+        else:
+            drift = bound_app_freshness(bound, root)
+            if drift is None:
+                items.append({'code': 'app-inputs-history-unavailable',
+                              'detail': 'The accepted app export producer commit is not a local commit in this checkout. '
+                                        'Missing history is not an unchanged app source, and this check does not fetch it.'})
+            elif drift:
+                items.append({'code': 'app-inputs-stale',
+                              'detail': 'The bound app export omits current app source changes.'})
     if runtime.get('baselineTargetFiles') is None and runtime.get('baselineFactoryEvidence') is None:
         candidate = load(root/'os/build-only/mustang-candidate-archive-41738359336.json')
         inventory = candidate.get('inventory') or {}
