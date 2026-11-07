@@ -173,6 +173,19 @@ bound and does not admit a build. The old source-only inspector is
 superseded by `scripts/mustang-dedicated.py guard`. That source-only dispatch
 is not a build candidate.
 
+`scripts/mustang_hosttools.py` reviews a same-source `otatools-package` proof
+only. The synced manifest has no Pixel product tree, so `lunch mustang-cur-user`
+needs `vendor/google_devices/mustang` from `adevtool generate-all`. That
+generation needs the factory image on the dedicated disk and the adevtool host
+dependency closure. The factory record is still box-only, unextracted, and
+`vendorGenerated: false`, so the contract's current decision is not ready and
+it emits no Make command. It does not set `otatoolsSha256`,
+`otatoolsExecutable`, or the other production pins, and it does not accept
+`4e13f55b` or the 2026110302 otatools archive as a substitute. The builder VM
+is stopped; a later run that has those proofs would START through the existing
+controller, enroll on the existing path, and STOP in the existing cleanup job.
+This contract does not perform that START.
+
 The hosted guard checks the exact repository ID, main workflow, attempt 1,
 actual binding evidence and app-source freshness before any controller login.
 The controller validates the exact VM through Infra's API, records ownership
