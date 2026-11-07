@@ -1038,7 +1038,7 @@ index 0000000..6d064bb
 +}
 diff --git a/libs/WindowManager/Shell/src/com/android/wm/shell/roseedge/RoseEdgePolicy.java b/libs/WindowManager/Shell/src/com/android/wm/shell/roseedge/RoseEdgePolicy.java
 new file mode 100644
-index 0000000..2c66404
+index 0000000..6d9df5f
 --- /dev/null
 +++ b/libs/WindowManager/Shell/src/com/android/wm/shell/roseedge/RoseEdgePolicy.java
 @@ -0,0 +1,319 @@
