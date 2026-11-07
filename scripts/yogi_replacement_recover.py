@@ -1135,8 +1135,8 @@ def read_new(call, cursor):
     return str(response.get("contents") or ""), nxt
 
 
-def serial_evidence(binding, text, reason, detail=""):
-    """Allowlisted record of one serial window. The raw console is not stored."""
+def serial_evidence(binding, text, reason, detail="", receipt=None):
+    """Allowlisted record of one serial window. Boot text and unfinished fragments are not stored."""
     lines = []
     for line in str(text).splitlines():
         if len(lines) >= 8:
@@ -1145,11 +1145,10 @@ def serial_evidence(binding, text, reason, detail=""):
         if at < 0:
             continue
         payload = line[at + len(guest.PREFIX):].strip()
-        entry = {"length": len(payload), "sha256": sha256_bytes(payload.encode()), "redacted": True, "reason": reason}
+        entry = {"length": len(payload), "sha256": sha256_bytes(payload.encode()), "redacted": True, "reason": "json"}
         try:
             parsed = json.loads(payload)
         except ValueError:
-            entry["reason"] = "json"
             lines.append(entry)
             continue
         if isinstance(parsed, dict) and not guest.validate_shape(parsed, binding):
@@ -1159,22 +1158,25 @@ def serial_evidence(binding, text, reason, detail=""):
         else:
             entry["reason"] = "shape"
         lines.append(entry)
+    accepted = None
+    if isinstance(receipt, dict) and not guest.validate_shape(receipt, binding):
+        accepted = json.loads(guest.canonical(receipt))
     safe_reason = reason if re.fullmatch(r"[a-z0-9-]{1,40}", reason or "") else "unrecognized"
     safe_detail = detail if re.fullmatch(r"[a-z0-9-]{1,40}", detail or "") else ""
     return {"schema": "roseos.yogi-replacement-recover-serial-evidence.v1",
             "operationId": binding.get("operationId"), "reason": safe_reason, "detail": safe_detail,
             "totalBytes": len(str(text).encode()), "contentsSha256": sha256_bytes(str(text).encode()),
-            "receiptLines": lines}
+            "acceptedReceipt": accepted, "receiptLines": lines}
 
 
-def save_serial_evidence(directory, binding, text, reason, detail=""):
+def save_serial_evidence(directory, binding, text, reason, detail="", receipt=None):
     if directory is None:
         return
     path = Path(directory) / "serial-evidence.json"
     if path.exists():
         return
     try:
-        exclusive_json(path, serial_evidence(binding, text, reason, detail))
+        exclusive_json(path, serial_evidence(binding, text, reason, detail, receipt))
     except OSError:
         return
 
@@ -1200,7 +1202,7 @@ def collect_receipt(call, binding, deadline, sleep, evidence_dir=None):
             save_serial_evidence(evidence_dir, binding, text, error.code, getattr(error, "detail", ""))
             return None, "serial-" + error.code
         if receipt is not None:
-            save_serial_evidence(evidence_dir, binding, text, "parsed")
+            save_serial_evidence(evidence_dir, binding, text, "parsed", receipt=receipt)
         return receipt, None
 
     try:

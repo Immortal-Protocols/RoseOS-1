@@ -1159,9 +1159,25 @@ class GuestTest(Base):
         width = 80
         for offset in range(0, len(body), width):
             wrapped.append(lead + body[offset:offset + width])
-        framed = "\r\n".join(wrapped) + "\r\n" + line + "\r\n"
+        boot = "\n".join([
+            "[    0.000000] Linux version 6.8.0-roseos",
+            "cloud-init[211]: startup-script: Cloud-init v. 24.1 finished",
+            "sshd[240]: Server listening on 0.0.0.0 port 22.",
+            "-----BEGIN OPENSSH PRIVATE KEY-----",
+            "b3BlbnNzaC1rZXktdjEAAAAA",
+            "-----END OPENSSH PRIVATE KEY-----",
+        ])
+        framed = boot + "\r\n" + "\r\n".join(wrapped) + "\r\n" + line + "\r\n" + boot + "\r\n"
         parsed = guest.parse_serial(framed, binding)
         self.assertEqual(parsed, receipt)
+        saved = recover.serial_evidence(binding, framed, "parsed", receipt=parsed)
+        encoded = json.dumps(saved)
+        self.assertNotIn("BEGIN OPENSSH", encoded)
+        self.assertNotIn("Linux version", encoded)
+        self.assertNotIn("Server listening", encoded)
+        self.assertEqual(saved["acceptedReceipt"]["operationId"], binding["operationId"])
+        self.assertEqual(saved["acceptedReceipt"]["nonce"], binding["nonce"])
+        self.assertTrue(saved["receiptLines"][0]["redacted"])
         other = json.loads(guest.canonical(receipt))
         other["bootId"] = "33333333-3333-3333-3333-333333333333"
         foreign = guest.PREFIX + guest.canonical(other)
