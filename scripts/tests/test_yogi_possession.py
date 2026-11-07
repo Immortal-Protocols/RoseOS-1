@@ -8,8 +8,16 @@ import sys
 import tempfile
 import unittest
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+def _possession_root():
+    """The directory that contains yogi_possession.py: beside this test, or its parent in the repo."""
+    here = Path(__file__).resolve().parent
+    for candidate in (here, here.parent):
+        if (candidate / 'yogi_possession.py').is_file():
+            return candidate
+    raise AssertionError('yogi_possession.py is not beside this test or in its parent directory')
+
+
+sys.path.insert(0, str(_possession_root()))
 import yogi_possession  # noqa: E402
 
 REAL_HOSTKEYS = '[\n  {\n    "key": "ecdsa-sha2-nistp256",\n    "namespace": "hostkeys",\n    "value": "AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBP5yomg6p17Uoyq81/3JX15Z05YxRDE0gtPOoIUp03o/KqmWLf8IVIFe7kFFaO0lb7kxVGxbhZ/gYMjsDbxgl+8="\n  },\n  {\n    "key": "ssh-ed25519",\n    "namespace": "hostkeys",\n    "value": "AAAAC3NzaC1lZDI1NTE5AAAAIN2pFrUsLlgUbqItVqVwLLqnC+cpPPv29xXhHWYvqGCI"\n  },\n  {\n    "key": "ssh-rsa",\n    "namespace": "hostkeys",\n    "value": "AAAAB3NzaC1yc2EAAAADAQABAAABgQC63HzpRewfI4E6MsoAuQPo/KBN/SpCNkEn4bi2SYpGlxRdMfWiQgwZph4i3VP3NBcrlyRNRjk7k0IvesEcrCDvks1sD8EKSFYpdagg1MGWCpahpUSta216AIaldbm5folmFM3bGob+EtZY3o31s85PsEAvkLQpfmDaX+vgY3MRsqxuVQqOJcLAC7z6jAD5bzivcy5rFWqhFVj/+E74u7hMM5M0uii6QBoDQ11Or4iAWyGyCFFb+c0TB16BNJqmnf5bmz+Fpu+QrwELcClsYh1NJB6Gb7s7GHTUeqjKJJePs8uic8+MLGSyXBDES/NzfsjgayvDyJfphNJL+luKG9flP5udesBwwXEECOkoaboc+orCGBk6J3Iaf8oAZs+zFBLcUePl9XWIHEYdaIbBBPKB3ZkrxBaOoDu0vnjvmN88CGRQo6jVikXp+wkDhSATGUtGZC/9KDBY5eeLs7G6vRkkGJ6olrTAk1Qy4gXe4eVrtfgXPLDYJ0PR+nrWW2cNV1U="\n  }\n]\n'
@@ -765,8 +773,12 @@ class PossessionTest(unittest.TestCase):
         self.assertEqual(driver.stop_report['instanceStatus'], 'TERMINATED')
         self.assertEqual(driver.stop_report['operation']['status'], 'DONE')
         self.assertEqual(driver.stop_report['operation']['endTime'], '2026-11-07T07:57:55.387-08:00')
+        # The instance stays STOPPING and the operation stays RUNNING until 138s.
+        # The old 120s client wait would already have aborted. The 240s budget has not.
+        self.assertGreater(clock.now, 120)
         self.assertGreaterEqual(clock.now, 138)
         self.assertLess(clock.now, yogi_possession.STOP_WAIT_SECONDS)
+        self.assertGreater(yogi_possession.STOP_WAIT_SECONDS, 120)
 
         clock.now = 0
         short = yogi_possession.GcloudDriver(run=run_stop, sleep=clock.sleep, clock=clock)
@@ -779,6 +791,7 @@ class PossessionTest(unittest.TestCase):
         self.assertEqual(short.stop_report['observed'], 'unresolved')
         self.assertEqual(short.stop_report['instanceStatus'], 'STOPPING')
         self.assertEqual(short.stop_report['operation']['status'], 'RUNNING')
+        self.assertGreaterEqual(clock.now, 120)
         self.assertLess(clock.now, 138)
 
     def test_operation_error_drift_and_a_pending_budget_stay_unresolved(self):
@@ -910,15 +923,16 @@ class PossessionTest(unittest.TestCase):
                     'ACTIONS_RUNTIME_TOKEN', 'ACTIONS_RUNTIME_URL', 'ACTIONS_CACHE_URL', 'GITHUB_TOKEN'):
             env.pop(key, None)
         env['PATH'] = str(bin_dir) + os.pathsep + env.get('PATH', '')
-        plan = subprocess.run([sys.executable, '-B', 'scripts/yogi_possession.py', 'handshake-plan',
+        cli = _possession_root() / 'yogi_possession.py'
+        plan = subprocess.run([sys.executable, '-B', str(cli), 'handshake-plan',
                                '--hostkeys', str(hostkeys), '--client-public', str(client),
-                               '--out', str(directory / 'plan')], cwd='/workspace', env=env,
+                               '--out', str(directory / 'plan')], cwd=str(cli.parent), env=env,
                               capture_output=True, text=True, timeout=30)
         self.assertEqual(plan.returncode, 0, plan.stderr)
         self.assertFalse(json.loads(plan.stdout)['executed'])
-        proc = subprocess.run([sys.executable, '-B', 'scripts/yogi_possession.py', 'handshake', '--execute',
+        proc = subprocess.run([sys.executable, '-B', str(cli), 'handshake', '--execute',
                                '--hostkeys', str(hostkeys), '--client-public', str(client),
-                               '--identity', str(identity), '--out', str(out)], cwd='/workspace', env=env,
+                               '--identity', str(identity), '--out', str(out)], cwd=str(cli.parent), env=env,
                               capture_output=True, text=True, timeout=30)
         self.assertEqual(proc.returncode, 1, proc.stderr)
         self.assertEqual(proc.stderr, '')
