@@ -18,6 +18,7 @@ import re
 import sys
 import xml.etree.ElementTree as ET
 
+import mustang_epoch
 import mustang_lane
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -304,16 +305,22 @@ def number_strategy(root=ROOT):
     baseline = load(Path(root)/'os/ota/mustang.json')['baseline']
     if state.get('failedRun') != '41884368820' or state.get('allocatedBuild') is not None \
             or state.get('unknown') is not True or state.get('consumedBuilds') is not None \
-            or state.get('authoritativeLedger') is not False or state.get('guessSpentAllocation') is not False \
-            or state.get('recovery') is not None:
+            or state.get('authoritativeLedger') is not False             or state.get('guessSpentAllocation') is not False \
+            or state.get('recovery') != 'retired-legacy-epoch':
         raise ValueError('failed-run allocation was guessed')
     if policy.get('status') != 'unbound' or policy.get('legacyAllocationKnown') is not False \
             or policy.get('epoch') is not None or policy.get('authority') is not None \
             or policy.get('legacyCeiling') != '9999123199':
         raise ValueError('legacy allocation stays unknown')
+    chosen = mustang_epoch.describe()
     return {
         'selectsBuildNumber': False,
-        'selectedMode': None,
+        'selectedMode': chosen['selectedMode'],
+        'epoch': chosen['epoch'],
+        'proposalStart': chosen['proposalStart'],
+        'reserved': False,
+        'authority': None,
+        'issued': False,
         'allocatedBuild': None,
         'authoritativeLedger': False,
         'guessSpentAllocation': False,
@@ -325,48 +332,91 @@ def number_strategy(root=ROOT):
         'legacyCeilingMeaning': 'Maximum output of release-allocate.next_build: UTC YYYYMMDD plus sequence 01..99. '
                                 'Python cannot format a year above 9999. This is not a build date, not ro.build.date.utc, '
                                 'and not the next BUILD_NUMBER.',
-        'dateAllocatorConstraint': 'next_build raises clock_behind when any known build\'s first eight digits are after the UTC day. '
-                                   'An ID above the ceiling must not be inserted into that allocator.',
+        'dateAllocatorConstraint': 'The retired range is not a valid UTC date, so it is not passed to next_build.',
         'incremental': {'field': 'ro.build.version.incremental', 'width': 10,
                         'installedBaseline': baseline['build'],
                         'mustExceedInstalled': True},
         'timestamp': {'field': 'ro.build.date.utc', 'separateFromBuildNumber': True,
                       'installedBaseline': baseline['timestamp'],
+                      'publishedFloor': str(mustang_epoch.PUBLISHED_TIMESTAMP),
                       'mustExceedInstalled': True},
-        'modesNotSelected': {
-            'recovered-ledger': 'Set unknown false only from an authoritative consumedBuilds list, then the existing date allocator may run. A missing receipt is not that list.',
-            'retired-namespace': 'A later explicit epoch whose IDs stay exactly ten digits and are not passed through next_build. Not created here.',
-        }}
+        'range': {'start': chosen['rangeStart'], 'end': chosen['rangeEnd']}}
 
 
 def source_pin_facts(root=ROOT):
-    """What the pinned manifest actually identifies. This does not sync a tree."""
+    """The sync commit and upstream refs. This does not sync a tree or admit the pin."""
     root = Path(root)
+    record = load(root/'os/build-only/mustang-source-requirement-20261107.json')
     manifest = root/'os/pinned-manifest.xml'
+    digest = hashlib.sha256(manifest.read_bytes()).hexdigest()
+    upstream = record.get('upstream') or {}
+    if digest != upstream.get('defaultXmlSha256') or record.get('roseRevision') != upstream.get('roseRevision'):
+        raise ValueError('pinned manifest no longer matches the recorded GrapheneOS tag')
     projects = list(ET.parse(manifest).getroot().iter('project'))
     pinned = [item for item in projects if re.fullmatch(r'[0-9a-f]{40}', item.get('revision') or '')]
+    adevtool = next(item.get('revision') for item in projects if item.get('path') == 'vendor/adevtool')
+    if adevtool != upstream.get('adevtool'):
+        raise ValueError('pinned adevtool revision differs from the upstream record')
     device = load(root/'os/devices/pixel10.json')
     vendor = device['devices']['mustang']['vendorInputs']['factoryImage']
+    factory = load(root/'os/build-only/mustang-factory-box-20261107.json')
+    index_line = factory['index']['entry'][2]
+    if factory.get('match') is not True or factory.get('admitted') is not False or factory.get('extracted') is not False \
+            or factory.get('transferred') is not False or factory.get('sourceTreePinned') is not False \
+            or factory.get('sha256') != factory.get('expectedSha256') \
+            or factory['sha256'] not in index_line or factory['index']['revision'] != upstream.get('adevtool') \
+            or factory['index']['sha256'] != 'a108c6dd08afe9ad5e3fe09f36ae513b2fac34c7d18a2a66d5a90ebb742933f4' \
+            or factory['installerInventory'].get('apkExtracted') is not False \
+            or factory['installerInventory'].get('phoneAcceptance') is not False:
+        raise ValueError('factory box observation was promoted or does not match the pinned index')
     return {
         'pinned': False,
-        'roseRevision': None,
+        'admitted': False,
         'syncAuthorized': False,
+        'deviceSupport': 'adevtool-generated',
+        'blockedOnMissingUpstreamDevice': False,
+        'roseRevision': record['roseRevision'],
         'manifestPath': 'os/pinned-manifest.xml',
-        'manifestSha256': hashlib.sha256(manifest.read_bytes()).hexdigest(),
+        'manifestSha256': digest,
         'projectCount': len(projects),
         'projectsWith40HexRevision': len(pinned),
         'projectsWithout40HexRevision': [item.get('name') for item in projects if item not in pinned],
         'mustangProjectInManifest': any('mustang' in ((item.get('name') or '') + (item.get('path') or '')) for item in projects),
-        'manifestNote': device['source']['note'],
+        'upstream': upstream,
         'vendorFactoryFile': vendor.get('file'),
         'vendorFactoryStatus': vendor.get('status'),
         'vendorFactoryDownloaded': False,
+        'vendorFactoryBodyHashed': False,
+        'factoryBodyHashMatchesIndex': True,
+        'factoryOnDedicatedDisk': False,
+        'factoryExtracted': False,
+        'factoryBox': {'sha256': factory['sha256'], 'sizeBytes': factory['sizeBytes'], 'location': factory['location']},
     }
+
+
+def installer_members_match(updater_sha256, certificate_sha256, root=ROOT):
+    """Compare extracted installer bytes with the committed observations. This admits nothing."""
+    expected = ota_continuity(root)['updater']
+    return {'matches': updater_sha256 == expected['updaterApkSha256']
+            and certificate_sha256 == expected['otaCertificateSha256'],
+            'labelsInstallerAsTargetFiles': False, 'phoneObserved': False}
 
 
 def ota_continuity(root=ROOT):
     """Full payload and installed-trust are different requirements. Neither is satisfied here."""
-    baseline = load(Path(root)/'os/ota/mustang.json')['baseline']
+    root = Path(root)
+    baseline = load(root/'os/ota/mustang.json')['baseline']
+    observed = load(root/'os/mustang-ota/41761758623/baseline.json')
+    staged = load(root/'os/mustang-ota/41761758623/mustang-ota-receipt.json')
+    installer = load(root/'os/mustang-delivery/41738359336/package.json')['output']
+    identity = load(root/'os/signing-bootstrap/mustang-bootstrap-receipt.json')['publicIdentity']
+    updater = observed['updaterApkSha256']
+    certificate = observed['trustedOtaCertificateSha256']
+    if observed.get('phoneObserved') is not False or staged.get('phoneUpdatePassed') is not False:
+        raise ValueError('phone acceptance was recorded without an observation')
+    if updater != staged['packagedUpdater']['updaterApkSha256'] or certificate != [identity['otaCertificateSha256']] \
+            or certificate != staged['packagedUpdater']['trustedOtaCertificateSha256']:
+        raise ValueError('committed updater or v1 certificate observations disagree')
     return {
         'fullOtaUsesPreviousTargetFiles': False,
         'producer': 'generate-release.sh calls ota_from_target_files on the new target-files only; OTA_ARGS is --disable_ublk and there is no --incremental_from',
@@ -377,8 +427,22 @@ def ota_continuity(root=ROOT):
         'stagingRequiresInstalledTrustObservation': True,
         'newSignedTargetFilesIsCandidateOnly': True,
         'phoneAcceptanceIncluded': False,
+        'phoneUpdatePassed': False,
         'installedBuild': baseline['build'],
         'installedTimestamp': baseline['timestamp'],
+        'updater': {'updaterApkSha256': updater, 'otaCertificateSha256': identity['otaCertificateSha256'],
+                    'observedFrom': 'os/mustang-ota/41761758623/baseline.json',
+                    'agreesWithPublishedOta': 'os/mustang-ota/41761758623/mustang-ota-receipt.json'},
+        'installerAlternative': {
+            'file': installer['file'], 'sha256': installer['sha256'], 'sizeBytes': installer['sizeBytes'],
+            'isTargetFiles': False, 'phoneAcceptance': False,
+            'members': ['system image /system/priv-app/Updater/Updater.apk',
+                        'system image /system/etc/security/otacerts.zip'],
+            'extracted': False,
+            'inventory': {'safeEntries': 34, 'uncompressed': 'about 4.63GB', 'androidSparseSuper': '1..16'},
+            'apkExtracted': False,
+            'certificateExtracted': False,
+        },
     }
 
 
@@ -444,7 +508,7 @@ def provision_plan():
         'python3 scripts/mustang_route.py preflight --live',
         f'if ! id -u {user} >/dev/null 2>&1; then sudo useradd --system --create-home --home-dir {home}/runner --shell /usr/sbin/nologin {user}; fi',
         f'sudo install -d -o {user} -g {user} -m 0750 {home}/source {home}/rose-actions {home}/runner {home}/inputs',
-        '# ROSE_REVISION is unset. Do not repo sync until a reviewed commit is named. The pinned manifest is not a synced tree.',
+        '# ROSE_REVISION is 2ac24c5475de121ebe4e9e6a5c1a404ef44aa9c8. Do not repo sync from this plan.',
         '# Do not register a runner from this script. Group 5 already exists and has zero runners.',
         '# scripts/mustang-guest-bootstrap.sh enables the one-job unit and does not mint a token or select a build number.',
         '# No persistent registration is substituted.',
