@@ -112,7 +112,7 @@ import launcher3_lane  # noqa: E402  (dedicated capacity; no cloud operations)
 MANIFEST = ROOT/'os/compile-contracts/launcher3-quickstep-lib.json'
 # OS Product's reviewed contract version (schema 3, #563 base rebind plus 1193274's lunch inputs without auto
 # maintenance). A different manifest is refused until this pin is updated.
-MANIFEST_SHA256 = '272bf259d71d4b8949fbd068d4fd5590d8b07e5a3641a75128d13d7bf2e5c0e8'
+MANIFEST_SHA256 = '44471fa60727ede4b0f068e2dc22708f60dbe12814a1620119ef3bc80b33d711'
 CONDITIONS = ['base-exact', 'delta-preimages', 'isolated-apply', 'final-exact']
 # The binding inputs each branch requires and forbids, in the contract's own vocabulary (branches.requires, forbids):
 # check() binds and refuses exactly these, so the contract and this adapter cannot drift.
@@ -184,7 +184,7 @@ APPLY_ARGS_SOURCE = {'path': 'os/release-pipeline/frankel.json', 'key': 'host.in
 # and acceptance, the overlay role rules and the unaffected, notInputs, provenance, proves, candidatePatches and
 # outputsToBind statements. A re-pinned contract that changes any of it is invalid until this adapter is reviewed
 # against the new text, so a re-pin is never only a hash bump.
-CONTRACT_TEXT_SHA256 = '788bb334023711e8545c6f0b2fd3a36e09e5618b4f983cbff8ab28d648c4a3f3'
+CONTRACT_TEXT_SHA256 = 'db0f91c020574c6af3ec0fc963eb22988df2a2ea9e530baa0708bc4041b71372'
 APPLY_STEPS = ['git -C <copy>/<project> apply --check -p<strip> <bundlePath>', 'git -C <copy>/<project> apply -p<strip> <bundlePath>']
 BLOB_ARGV = ['git', 'hash-object', '-t', 'blob', '--no-filters', '--stdin']
 LISTING_BYTES = 64 << 20

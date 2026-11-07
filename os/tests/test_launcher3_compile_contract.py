@@ -13,9 +13,12 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
 CONTRACT_FIXTURES = ROOT/'os/tests/fixtures/launcher3-compile-contract'
+# #440 retired (2026-11-07 re-pin): its fixture bundle is gone; the edge patches are the live, registered os/patches.
 BUNDLE = CONTRACT_FIXTURES/'candidate-pr440'
-EDGE_PATCH = BUNDLE/'patches/rose-edge-launcher3.patch'
-RESIZE_PATCH = BUNDLE/'patches/rose-edge-resize-launcher3.patch'
+SWITCHER_PATCH = ROOT/'os/patches/rose-switcher-launcher3.patch'
+EDGE_PATCH = ROOT/'os/patches/rose-edge-launcher3.patch'
+RESIZE_PATCH = ROOT/'os/patches/rose-edge-resize-launcher3.patch'
+LIVE_PATCHER = ('apply-os-changes.py', 'background_apks.py', 'integration_copy.py')
 QUICKSTEP = 'quickstep/src/com/android/quickstep'
 EDGE_TARGETS = {'AbsSwipeUpHandler.java': f'{QUICKSTEP}/AbsSwipeUpHandler.java',
     'FallbackSwipeHandler.java': f'{QUICKSTEP}/FallbackSwipeHandler.java',
@@ -33,7 +36,7 @@ class Launcher3CompileContractTest(unittest.TestCase):
     SCRIPT = ROOT/'scripts/launcher3-compile-contract.py'
     MANIFEST = ROOT/'os/compile-contracts/launcher3-quickstep-lib.json'
     # The agreed version (#410). Changing the manifest changes this, and the change needs re-agreement with Release.
-    AGREED_SHA256 = '272bf259d71d4b8949fbd068d4fd5590d8b07e5a3641a75128d13d7bf2e5c0e8'
+    AGREED_SHA256 = '44471fa60727ede4b0f068e2dc22708f60dbe12814a1620119ef3bc80b33d711'
 
     def contract(self):
         import importlib.util
@@ -52,30 +55,25 @@ class Launcher3CompileContractTest(unittest.TestCase):
         self.assertEqual((manifest['kind'], manifest['schemaVersion']), ('rose-launcher3-compile-inputs', 3))
         result = subprocess.run(['python3', str(self.SCRIPT)], capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn('44 files recomputed from pinned fixtures', result.stdout)
+        self.assertIn('51 files recomputed from pinned fixtures', result.stdout)
 
-    def test_the_patch_order_is_the_patchers_plus_the_unregistered_edge_patch(self):
+    def test_the_patch_order_is_the_live_patchers_own_registration(self):
+        """Re-pinned model: the pinned patcher copy is byte-identical to the live patcher, and every contract project's
+        patch list is exactly what it registers for frankel's flags (edge, WMShell edge and shade included)."""
         contract = self.contract()
-        # This inert contract describes the reviewed pre-registration patcher (committed copy); the live patcher now
-        # registers the edge patches for the normal OS build (#410), which this test also checks.
-        patcher = (ROOT/'os/tests/fixtures/launcher3-compile-contract/patcher'/'apply-os-changes.py').read_text()
-        background = (ROOT/'os/tests/fixtures/launcher3-compile-contract/patcher'/'background_apks.py').read_text()
-        base = re.search(r"projects = \{'frameworks/base': (\[[^\]]*\])\}", patcher).group(1)
-        extra = re.search(r'BACKGROUND_FRAMEWORK_PATCHES = (\[[^\]]*\])', background).group(1)
-        import ast
+        for name in LIVE_PATCHER:
+            self.assertEqual((ROOT/'os/tests/fixtures/launcher3-compile-contract/patcher'/name).read_bytes(),
+                (ROOT/'scripts'/name).read_bytes(), f'{name}: the pinned copy is the live patcher')
+        registered = {}
+        for project, name in contract.registered_order(contract.frankel_apply_args()):
+            registered.setdefault(project, []).append(name)
         order = dict((p, patches) for p, _, patches in contract.PROJECTS)
-        self.assertEqual(order['frameworks/base'], ast.literal_eval(base) + ast.literal_eval(extra))
-        self.assertIn("projects['build/release'] = " + repr(order['build/release']), patcher)
-        self.assertIn("projects['packages/apps/Launcher3'] = " + repr(order['packages/apps/Launcher3'][:1]), patcher)
-        self.assertEqual(order['packages/apps/Launcher3'][1:], ['rose-edge-launcher3.patch',
+        for project, patches in order.items():
+            self.assertEqual(patches, registered[project], f'{project}: exactly the patcher\'s registration')
+        self.assertEqual(order['packages/apps/Launcher3'], ['rose-switcher-launcher3.patch', 'rose-edge-launcher3.patch',
             'rose-edge-resize-launcher3.patch'])
-        manifest = self.manifest()
-        self.assertIn('which apply-os-changes.py does not register', manifest['candidatePatches'])
-        self.assertEqual(contract.CANDIDATE_PATCHES, order['packages/apps/Launcher3'][1:])
-        for name in contract.CANDIDATE_PATCHES:
-            self.assertNotIn(name, patcher, 'the reviewed pre-registration patcher does not register them')
-            self.assertIn(name, (ROOT/'scripts/apply-os-changes.py').read_text(), 'the live patcher does (#410)')
-        self.assertIn('except through all four verifyBaseApplyCandidate conditions', manifest['branches']['otherwise'])
+        self.assertEqual(order['frameworks/base'][-2:], ['rose-edge-wmshell.patch', 'rose-shade-systemui.patch'])
+        self.assertEqual(contract.CANDIDATE_PATCHES, [], '#440 is retired: nothing outside the registration')
 
     def test_the_registration_is_the_patchers_own_execution_for_frankels_flags(self):
         contract = self.contract()
@@ -161,63 +159,27 @@ class Launcher3CompileContractTest(unittest.TestCase):
             change(changed)
             self.assertTrue(contract.check(changed), 'a changed schema-3 field must be refused')
 
-    def test_the_candidate_is_inert_and_bound_by_its_reviewed_commit_and_digests(self):
-        contract = self.contract()
+    def test_the_retired_candidate_is_empty_and_keeps_its_provenance(self):
         manifest = self.manifest()
         delta = manifest['candidateDelta']
-        self.assertEqual((delta['pr'], delta['commit']), (440, CANDIDATE_COMMIT))
-        fallback = 'overlays/packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/'
-        self.assertEqual(sorted(str(f.relative_to(BUNDLE)) for f in BUNDLE.rglob('*') if f.is_file()),
-            [fallback + f'RoseEdge{name}.java' for name in ('Gesture', 'Layout', 'Shell', 'State', 'Swipe', 'Window')]
-            + ['patches/rose-edge-launcher3.patch', 'patches/rose-edge-resize-launcher3.patch'])
-        for row in delta['bundle']:
-            self.assertTrue(row['path'].startswith('os/tests/fixtures/'), 'outside os/patches and os/overlays: inert')
-            self.assertEqual(hashlib.sha256((ROOT/row['path']).read_bytes()).hexdigest(), row['sha256'])
-        self.assertEqual([(p['name'], p['sha256']) for p in delta['patches']], [('rose-edge-launcher3.patch',
-            hashlib.sha256(EDGE_PATCH.read_bytes()).hexdigest()), ('rose-edge-resize-launcher3.patch',
-            hashlib.sha256(RESIZE_PATCH.read_bytes()).hexdigest())])
-        self.assertEqual(delta['patches'][0]['sha256'], 'a1c76e1e03845573501790509a7e620e48476a2bae47889f839d81144dd35460',
-            'E2a\'s patch is byte-identical')
-        # The contract is bound to its own bundle, not the live os/: #440 is registered and later Launcher3 work (#410's
-        # staged bottom gesture) moves the committed files past the candidate. The bundle keeps #440's exact bytes.
-        for o in delta['overlays']:
-            self.assertEqual(hashlib.sha256((ROOT/o['bundlePath']).read_bytes()).hexdigest(), o['after'], o['target'])
+        self.assertEqual((delta['pr'], delta['commit']), (440, CANDIDATE_COMMIT), 'provenance kept')
+        self.assertEqual((delta['patches'], delta['files'], delta['overlays'], delta['bundle']), ([], [], [], []))
+        self.assertFalse(BUNDLE.exists(), 'no inert candidate copies remain to drift from os/')
 
     def test_base_plus_the_delta_is_exactly_the_candidate(self):
-        """The base is the patcher's own output at this bundle (Launcher3: switcher only); the delta is disjoint from it,
-        so base plus delta equals an integration with the edge patch registered after the switcher patch."""
+        """Re-pinned model: base is the live patcher's whole output, the delta is empty, so base equals final in every
+        project, file and overlay (and verifyBaseApplyCandidate degenerates to base-exact plus final-exact)."""
         manifest = self.manifest()
         base, delta = manifest['base'], manifest['candidateDelta']
-        self.assertEqual([p['name'] for p in base['projects'][1]['patches']], ['rose-switcher-launcher3.patch'])
-        self.assertEqual(base['projects'][0], manifest['projects'][0], 'frameworks/base: the candidate does not change it')
-        self.assertEqual(base['projects'][2], manifest['projects'][2], 'build/release: the candidate does not change it')
-        launcher = {f'packages/apps/Launcher3/{r["path"]}': r for r in manifest['projects'][1]['files']}
-        base_files = {f'packages/apps/Launcher3/{r["path"]}': r['post'] for r in base['projects'][1]['files']}
-        delta_files = {f['path']: f for f in delta['files']}
-        self.assertEqual(sorted(delta_files), sorted(f'packages/apps/Launcher3/{p}' for p in
-            list(EDGE_TARGETS.values()) + list(RESIZE_TARGETS.values())))
-        for path, row in launcher.items():
-            post = {k: row['post'][k] for k in ('sha256', 'gitBlob')}
-            if path in delta_files:
-                self.assertEqual(delta_files[path]['before'], base_files[path], f'{path}: delta starts at the base')
-                self.assertEqual(delta_files[path]['after'], post, f'{path}: delta ends at the candidate')
-                self.assertEqual(base_files[path], {k: row['pre'][k] for k in ('sha256', 'gitBlob')},
-                    f'{path}: the switcher patch never touches the edge files')
-            else:
-                self.assertEqual(base_files[path], post, f'{path}: outside the delta the base is already final')
-        candidate_overlays = {o['target']: o.get('sha256') for o in manifest['overlays']}
-        base_overlays = {o['target']: o.get('sha256') for o in base['overlays']}
+        self.assertEqual(delta['files'], [])
+        for b, f in zip(base['projects'], manifest['projects']):
+            self.assertEqual([p['name'] for p in b['patches']], [p['name'] for p in f['patches']], b['path'])
+            self.assertEqual([(r['path'], r['post']) for r in b['files']], [(r['path'], r['post']) for r in f['files']],
+                f'{b["path"]}: the base is already final')
+        self.assertEqual({o['target']: o.get('sha256') for o in base['overlays']},
+            {o['target']: o.get('sha256') for o in manifest['overlays']})
         for o in manifest['overlays'] + base['overlays']:
             self.assertEqual('sha256' in o, o['role'] == 'required', f'{o["target"]}: hashed exactly when required')
-        for o in delta['overlays']:
-            self.assertEqual(candidate_overlays[o['target']], o['after'])
-            self.assertEqual(base_overlays.get(o['target']), o['before'])
-        for target, digest in candidate_overlays.items():
-            if target not in {o['target'] for o in delta['overlays']}:
-                self.assertEqual(base_overlays[target], digest, f'{target}: unchanged by the candidate')
-        self.assertIn('verifyBaseApplyCandidate', manifest['branches'])
-        self.assertIn('proposal, stated as data only', manifest['branches']['verifyBaseApplyCandidate']['status'])
-        self.assertIn('partial, already applied or unknown state refuses', manifest['branches']['verifyBaseApplyCandidate']['otherwise'])
         result = subprocess.run(['python3', str(self.SCRIPT)], capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
@@ -226,85 +188,37 @@ class Launcher3CompileContractTest(unittest.TestCase):
         contract = self.contract()
         manifest = self.manifest()
         for edit in (lambda m: m['candidateDelta'].__setitem__('commit', '0' * 40),
-                lambda m: m['candidateDelta']['overlays'][0].__setitem__('before', '1' * 64),
-                lambda m: m['candidateDelta']['files'][0]['after'].__setitem__('sha256', '2' * 64),
+                lambda m: m['candidateDelta']['patches'].append({'name': 'x.patch', 'sha256': '1' * 64}),
                 lambda m: m['base']['projects'][1]['files'][0]['post'].__setitem__('sha256', '3' * 64),
                 lambda m: m['base']['projects'][1].__setitem__('patches', []),
                 lambda m: m['base']['bundleContent']['patches'].pop(),
-                lambda m: m['candidateDelta']['patches'][0].__setitem__('strip', 0),
                 lambda m: m['base']['projects'][0]['treePin']['unlisted'].__setitem__('digest', '4' * 64)):
             changed = copy.deepcopy(manifest)
             edit(changed)
-            self.assertTrue(contract.check_candidate(changed), 'a tampered candidate binding must be refused')
+            self.assertTrue(contract.check_candidate(changed), 'a tampered base or delta must be refused')
             self.assertTrue(contract.check(changed), 'and the whole check refuses it too')
         self.assertEqual(contract.check_candidate(manifest), [])
         self.assertEqual(contract.check(manifest), [])
 
-    def test_the_committed_os_must_be_wholly_base_or_wholly_candidate(self):
-        """Run the checker against a copy of os/ in which the candidate's inputs are at the base, at the candidate, mixed,
-        or at neither."""
+    def test_the_committed_os_is_the_pinned_base(self):
+        """With the delta empty the committed os/ is the base itself: the check passes on it and refuses when a
+        registered patch the base pins is changed or removed."""
         manifest = self.manifest()
         work = Path(tempfile.mkdtemp(prefix='contract-os-'))
         self.addCleanup(shutil.rmtree, work, True)
         shutil.copytree(ROOT/'os/overlays', work/'os/overlays')
         shutil.copytree(ROOT/'os/patches', work/'os/patches')
-
         def run():
             contract = self.contract()
             contract.OS = work/'os'
-            return contract.check_candidate(manifest)
-        gesture = 'packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeGesture.java'
+            return contract.check(manifest)
+        self.assertEqual(run(), [])
         edge = work/'os/patches/rose-edge-launcher3.patch'
-        resize = work/'os/patches/rose-edge-resize-launcher3.patch'
-        mixed = ['os/ mixes base and candidate inputs: it must be wholly one or the other']
-        # The committed os/ is at the base, the candidate, or past it (main since #440 merged and later edge work).
-        self.assertEqual(run(), [], 'the committed os/ is never a mix')
-        # Bring the copy to the base: no candidate patch, each candidate overlay at its pinned base image or absent.
-        for path in (edge, resize):
-            path.unlink(missing_ok=True)
-        for o in manifest['candidateDelta']['overlays']:
-            target = work/'os/overlays'/o['target']
-            if o['before'] is None:
-                target.unlink(missing_ok=True)
-            else:
-                shutil.copyfile(CONTRACT_FIXTURES/o['target'], target)
-        self.assertEqual(run(), [], 'wholly at the base')
-        for o in manifest['candidateDelta']['overlays']:
-            shutil.copyfile(ROOT/o['bundlePath'], work/'os/overlays'/o['target'])
-        self.assertEqual(run(), mixed, 'candidate overlays without the candidate patches')
-        shutil.copyfile(EDGE_PATCH, edge)
-        self.assertEqual(run(), mixed, 'one of the two candidate patches is not a candidate')
-        shutil.copyfile(RESIZE_PATCH, resize)
-        self.assertEqual(run(), [], "#440's branch: wholly at the candidate")
-        # Later work moves the candidate's files on: still not a mix, and the contract stays bound to its bundle.
-        edge.write_bytes(EDGE_PATCH.read_bytes() + b'\n')
-        (work/'os/overlays'/gesture).write_bytes(b'// a later version\n')
-        self.assertEqual(run(), [], 'past the candidate')
-        # A base-state candidate overlay beside candidate patches is still a mix.
-        shutil.copyfile(CONTRACT_FIXTURES/gesture, work/'os/overlays'/gesture)
-        self.assertEqual(run(), mixed, 'the base gesture with the candidate patches')
+        edge.write_bytes(edge.read_bytes() + b'\n')
+        self.assertTrue(run(), 'a changed registered patch refuses')
 
-    def test_each_base_overlay_image_has_a_pinned_copy(self):
-        """A consumer can reach every candidate overlay's base image even when the committed os/ is at the candidate
-        (#440's branch): a pinned copy sits beside the pre-image fixtures, at exactly candidateDelta's before."""
-        manifest = self.manifest()
-        contract = self.contract()
-        bases = [o for o in manifest['candidateDelta']['overlays'] if o['before'] is not None]
-        self.assertEqual([o['target'].rsplit('/', 1)[1] for o in bases], ['RoseEdgeGesture.java'])
-        for o in bases:
-            copy = CONTRACT_FIXTURES/o['target']
-            self.assertEqual(hashlib.sha256(copy.read_bytes()).hexdigest(), o['before'])
-            self.assertEqual(contract.base_overlay_copy(o['target']), copy)
-        work = Path(tempfile.mkdtemp(prefix='contract-base-copy-'))
-        self.addCleanup(shutil.rmtree, work, True)
-        shutil.copytree(CONTRACT_FIXTURES, work/'fixtures')
-        target = work/'fixtures'/bases[0]['target']
-        for change in (lambda: target.write_bytes(target.read_bytes() + b'\n'), target.unlink):
-            contract = self.contract()
-            contract.FIXTURES = work/'fixtures'
-            change()
-            self.assertTrue(any('no pinned copy of the base overlay image' in e for e in contract.check_candidate(manifest)))
-            shutil.copyfile(CONTRACT_FIXTURES/bases[0]['target'], target)
+    def test_no_base_overlay_copy_is_needed_without_a_delta(self):
+        self.assertEqual(self.manifest()['candidateDelta']['overlays'], [])
 
     def test_every_project_is_pinned_by_its_own_tree_and_base_is_bound_by_content(self):
         import gzip
@@ -331,7 +245,7 @@ class Launcher3CompileContractTest(unittest.TestCase):
         content = manifest['base']['bundleContent']
         self.assertEqual([(p['project'], p['name']) for p in content['patches']],
             [(p['path'], x['name']) for p in manifest['base']['projects'] for x in p['patches']])
-        self.assertNotIn('rose-edge-launcher3.patch', [p['name'] for p in content['patches']])
+        self.assertIn('rose-edge-launcher3.patch', [p['name'] for p in content['patches']], 'registered: in base')
         self.assertEqual({o['target'] for o in content['overlays']},
             {o['target'] for o in manifest['base']['overlays'] if o['role'] == 'required'})
         self.assertEqual(set(content['notAnInputOverlays']),
@@ -860,7 +774,10 @@ class Launcher3CompileContractTest(unittest.TestCase):
             (tree/relative).parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(CONTRACT_FIXTURES/'packages/apps/Launcher3'/relative, tree/relative)
         subprocess.run(['git', 'init', '-q', str(tree)], check=True)
-        subprocess.run(['git', '-C', str(tree), 'apply', str(EDGE_PATCH)], check=True)
+        # The edge patch now applies after the registered switcher patch, on exactly the edge targets.
+        includes = [f'--include={relative}' for relative in EDGE_TARGETS.values()]
+        for patch in (SWITCHER_PATCH, EDGE_PATCH):
+            subprocess.run(['git', '-C', str(tree), 'apply', *includes, str(patch)], check=True)
         checked = 0
         for name, relative in EDGE_TARGETS.items():
             code = (tree/relative).read_text()

@@ -111,3 +111,17 @@ workflow integration. Runtime completion additionally needs authorized execution
 on the verified independent capacity and a successful compile/classpath/flag
 report plus cleanup evidence. A setup refusal is a blocker, not completion.
 Physical-phone testing is not a completion gate.
+
+## SWAP WHEN FRESH EXPORT LANDS
+
+The integrating-run provenance for the verifyIntegrated binding (Infra binds these into
+`os/build-only/launcher3-compile-lane.json` only after Product approves; the lane stays `unbound` here).
+Replace this whole block when Release's fresh common-APK export from current main lands.
+
+| Field | Value (2026-11-07) |
+| --- | --- |
+| policyReceipt sha256 (`--background-policy`) | `a4841230581abcad543636786bc088f8cfa49c410e52f523e24e8c3f7f10f71b` |
+| app-inputs export run | `42392772006` — **STALE**: Mustang's guard rejected it (voice versionCode 366 behind current rose-agent source) |
+| producer run / build | `42389218389` / `2026110701` |
+| producer candidateSha | `f00d576473058c2e83a9fb0ded2c96a243b81152` — not on the remote as of 2026-11-07 |
+| integrated RoseOS-1 commit | `2ac24c5475de121ebe4e9e6a5c1a404ef44aa9c8` |

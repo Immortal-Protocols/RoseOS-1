@@ -60,7 +60,8 @@ C.CANDIDATE_PATCHES = ['rose-edge-wmshell.patch']
 # build/release: unchanged, because framework's classpath needs its aconfig declarations.
 _FRAMEWORKS, _, _BUILD_RELEASE = L3['PROJECTS']
 C.PROJECTS = [
-    (_FRAMEWORKS[0], _FRAMEWORKS[1], _FRAMEWORKS[2] + C.CANDIDATE_PATCHES),
+    (_FRAMEWORKS[0], _FRAMEWORKS[1],
+     [x for x in _FRAMEWORKS[2] if x not in ('rose-edge-wmshell.patch', 'rose-shade-systemui.patch')] + C.CANDIDATE_PATCHES),
     _BUILD_RELEASE,
 ]
 C.CANDIDATE_PROJECT = 0

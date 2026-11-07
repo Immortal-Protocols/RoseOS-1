@@ -9,8 +9,9 @@ blob chain between them, and it lists the overlays copied into those projects. I
 from pinned public sources and the committed patches; an adapter compares current bytes with them and never records
 the current bytes' hashes as provenance.
 
-The candidate is #440 (draft, unregistered, default-off). Its own inputs are inert copies in the fixtures; the base
-is what a bundle with the contents in base.bundleContent produces (Launcher3 with the switcher patch only). A tree
+Re-pinned 2026-11-07: the base is what the live trusted patcher registers for frankel (the edge included), and #440's
+candidate delta is retired and empty, so base + delta = final. Historical note: #440 was a draft, unregistered
+candidate; its inert copies have been removed. A tree
 integrated by today's patcher is therefore at base, not at the candidate's final images.
 
 The adapter takes exactly one of these branches, and refuses anything else:
@@ -52,9 +53,11 @@ PINNED = ROOT/'os/pinned-manifest.xml'
 FIXTURES = ROOT/'os/tests/fixtures/launcher3-compile-contract'
 # The candidate (#440, draft): its only inputs not in the base bundle, as inert copies (never applied or copied by any
 # build: they are outside os/patches and os/overlays), bound to the reviewed commit by their digests.
+# Retired 2026-11-07: #440's edge patches and overlays are registered by the trusted patcher at the re-pinned sha
+# (base), so the delta is empty and base + delta = final. The record of the reviewed commit stays for provenance.
 CANDIDATE = {'pr': 440, 'commit': '2f57a5f28e3c3cc97177bf3f9294ea807d514469'}
 BUNDLE = FIXTURES/'candidate-pr440'
-CANDIDATE_PATCHES = ['rose-edge-launcher3.patch', 'rose-edge-resize-launcher3.patch']
+CANDIDATE_PATCHES = []
 # The manifest's schema. 3 adds base.registration, base.bundleReport, branches.requires/forbids, lunchInputs and the
 # wording fixes agreed with Release on #410; the sibling frameworks-base contract stays at 2 until its own re-pin.
 SCHEMA = 3
@@ -65,7 +68,7 @@ SCHEMA = 3
 PATCHER = ('scripts/apply-os-changes.py', 'scripts/background_apks.py', 'scripts/integration_copy.py')
 PATCHER_COPY = ROOT/'os/tests/fixtures/launcher3-compile-contract/patcher'
 PATCHER_SHA256 = {
-    'apply-os-changes.py': '86ec1b2a41dec367490409a435423dbdbc0f5537a0437eac9094f4ea4c7bef35',
+    'apply-os-changes.py': '6b7b11c32f4c533483dfa70b367cbe56aa7ab1db0ba36dcd10592ca4ea42cc6d',
     'background_apks.py': 'af981b5b4309924664c758f1d479cf752fa6032911af447148302178c24c40fb',
     'integration_copy.py': '440574cbd3144571f647fc13f17c6c1188b1c61d12ef92a7028fba7eb2a24a05',
 }
@@ -77,7 +80,7 @@ PROJECTS = [
     ('frameworks/base', 'platform_frameworks_base', ['frameworks-base.patch',
         'rose-agent-self-update-frameworks-base.patch', 'background-control-frameworks-base.patch',
         'background-control-modern-frameworks-base.patch', 'background-control-resource-import-fix.patch',
-        'locked-control-frameworks-base.patch']),
+        'locked-control-frameworks-base.patch', 'rose-edge-wmshell.patch', 'rose-shade-systemui.patch']),
     ('packages/apps/Launcher3', 'platform_packages_apps_Launcher3', ['rose-switcher-launcher3.patch',
         'rose-edge-launcher3.patch', 'rose-edge-resize-launcher3.patch']),
     ('build/release', 'platform_build_release', ['background-control-build-release.patch']),
@@ -904,15 +907,16 @@ def describe():
     if SCHEMA < 3:
         return d
     d['schemaVersion'] = 3
-    d['candidatePatches'] = ('frameworks/base and build/release in apply-os-changes.py --background-policy order; '
-        'Launcher3 adds rose-edge-launcher3.patch then rose-edge-resize-launcher3.patch (candidateDelta), which '
-        'apply-os-changes.py does not register, so a tree integrated by any patcher today is not at these final images')
+    d['candidatePatches'] = ('every project in the trusted patcher\'s own registration order for frankel\'s applyArgs '
+        '(re-pinned 2026-11-07 to the live apply-os-changes.py): frameworks/base through rose-edge-wmshell.patch and '
+        'rose-shade-systemui.patch, build/release, and Launcher3 switcher, rose-edge and rose-edge-resize. #440\'s '
+        'candidateDelta is retired and empty, so a tree integrated by this patcher is at these final images')
     branches = d['branches']
     branches['reconstruct'] += '; every unlisted path matches its treePin, no extra path'
     branches['otherwise'] = ('refuse: mixed pre/post, unknown hash, missing file, overlay, input or binding. A tree '
-        'integrated by the current patcher (Launcher3 switcher only) is such a state and must not be completed by '
-        'applying the candidate\'s patches except through all four verifyBaseApplyCandidate conditions. Never reset or '
-        'trust a snapshot.')
+        'integrated by an older patcher (Launcher3 switcher only) is such a state and must not be completed by '
+        'applying patches except through all four verifyBaseApplyCandidate conditions. Never reset or trust a '
+        'snapshot.')
     branches['requires'] = {
         'verifyIntegrated': ['sourceTree', 'lunch', 'policyReceipt'],
         'reconstruct': ['sourceTree', 'lunch', 'reconstructSource'],
