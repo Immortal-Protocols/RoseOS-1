@@ -784,6 +784,7 @@ class UnzipTest(unittest.TestCase):
 
 
 from test_yogi_possession import PossessionTest  # noqa: E402,F401
+from test_yogi_possess_install import PossessInstallTest, PossessSshdTest  # noqa: E402,F401
 
 
 if __name__ == '__main__':
