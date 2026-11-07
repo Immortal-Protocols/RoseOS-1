@@ -538,8 +538,8 @@ _HOST_KEY_UNKNOWN = re.compile(
     r"^No ED25519 host key is known for .+ and you have requested strict checking\.$")
 
 
-def sanitize_text(text, limit=2048):
-    """Redact credential material, then cap. A truncated BEGIN block is removed through the buffer end."""
+def redact_text(text):
+    """Remove credential material from a whole buffer, including a BEGIN block with no END line."""
     if isinstance(text, bytes):
         text = text.decode('utf-8', 'replace')
     if not isinstance(text, str):
@@ -553,7 +553,36 @@ def sanitize_text(text, limit=2048):
         if len(line) >= 80 and re.fullmatch(r'[A-Za-z0-9+/=]+', line.strip()):
             continue
         kept.append(_SECRET_TEXT.sub('[redacted]', line))
-    return '\n'.join(kept)[:limit]
+    return '\n'.join(kept)
+
+
+def cap_diagnostic(text, limit=2048):
+    """Keep a prefix and the fatal tail. DEBUG setup lines must not push the last lines out."""
+    if len(text) <= limit:
+        return text
+    tail_budget = max(1, limit // 2)
+    head_budget = max(1, limit - tail_budget - 48)
+    head = text[:head_budget]
+    split = head.rfind('\n')
+    if split >= 0:
+        head = head[:split]
+    tail = text[-tail_budget:]
+    split = tail.find('\n')
+    if split >= 0:
+        tail = tail[split + 1:]
+    omitted = max(0, len(text) - len(head) - len(tail))
+    capped = head + f'\n[omitted {omitted} bytes]\n' + tail
+    if len(capped) > limit:
+        capped = capped[-limit:]
+        split = capped.find('\n')
+        if split >= 0:
+            capped = capped[split + 1:]
+    return capped
+
+
+def sanitize_text(text, limit=2048):
+    """Redact, then keep the start and the tail inside the cap."""
+    return cap_diagnostic(redact_text(text), limit)
 
 
 def sanitize_argv(argv):
@@ -592,17 +621,25 @@ def _disqualified(lines):
     return False
 
 
+def _client_authenticated(lines):
+    """Lines OpenSSH 9.6 actually writes. VERBOSE does not write the debug1 host line."""
+    for line in lines:
+        if 'Authentication succeeded (publickey)' in line:
+            return True
+        if line.startswith('Authenticated to ') and 'using "publickey"' in line:
+            return True
+    return False
+
+
 def _userauth_denied(lines, user, alias):
-    """OpenSSH 9.6 fatal line, only after the verbose host-key acceptance line."""
-    if not user or not alias:
+    """Exact denial after the DEBUG host-key line. VERBOSE on OpenSSH 9.6 does not emit that line."""
+    if not user or not alias or _client_authenticated(lines):
         return False
     accepted = "debug1: Host '" + alias + "' is known and matches the ED25519 host key."
     denied = re.compile(r'^' + re.escape(user) + r'@' + re.escape(alias)
                         + r': Permission denied \(publickey(?:,[A-Za-z0-9-]+)*\)\.$')
     seen_host = False
     for line in lines:
-        if line == 'debug1: Authentication succeeded (publickey).':
-            return False
         if line == accepted:
             seen_host = True
         elif seen_host and denied.fullmatch(line):
@@ -610,36 +647,38 @@ def _userauth_denied(lines, user, alias):
     return False
 
 
-def classify_ssh(returncode, lines, user, alias):
-    """Evidence from the OpenSSH client log and the process exit, never from mixed stderr.
+def classify_ssh(returncode, lines, user, alias, stderr_lines=None):
+    """Evidence from the OpenSSH client log and the process exit.
 
-    Exit 0 is a completed session. Exit 1 through 254 is the remote command's status.
-    Exit 255 proves an authentication failure only for the exact user@alias denial that
-    follows host-key acceptance. Every other 255, a negative status, and a generic
-    Permission denied are unproven.
+    Mixed stderr cannot prove a session. It can only disqualify one: OpenSSH 9.6 writes
+    `Warning: Identity file ... not accessible` on stderr, not in the -E log. Exit 0 is a
+    completed session. Exit 1 through 254 is the remote command. Exit 255 is an
+    authentication failure only when the DEBUG host-key line precedes the exact denial.
+    A timeout is never upgraded by whatever the log already contains.
     """
     lines = [line for line in (lines or []) if isinstance(line, str)]
+    extra = [line for line in (stderr_lines or []) if isinstance(line, str)]
     if returncode is None:
         return 'timeout', _none()
     if not isinstance(returncode, int) or returncode < 0:
         return 'unproven', _none()
     failed = _host_key_failure(lines)
-    succeeded = any(line == 'debug1: Authentication succeeded (publickey).' for line in lines)
+    succeeded = _client_authenticated(lines)
+    blocked = _disqualified(lines) or _disqualified(extra)
     if failed and succeeded:
         return 'unproven', _none()
     if failed and returncode != 0:
         return 'host-key-mismatch', _none()
     if returncode == 0:
-        if failed or _disqualified(lines):
+        if failed or blocked:
             return 'unproven', _none()
         return 'success', {'serverKeyAccepted': True, 'loginAccepted': True, 'evidence': 'openssh-session'}
     if 1 <= returncode <= 254:
-        if _disqualified(lines):
+        if blocked:
             return 'unproven', _none()
         return 'remote-command', {'serverKeyAccepted': True, 'loginAccepted': True,
                                   'evidence': 'openssh-remote-exit'}
-    if (returncode == 255 and not succeeded and not _disqualified(lines)
-            and _userauth_denied(lines, user, alias)):
+    if returncode == 255 and not succeeded and not blocked and _userauth_denied(lines, user, alias):
         return 'auth-failed', {'serverKeyAccepted': True, 'loginAccepted': False,
                                'evidence': 'openssh-userauth-denied'}
     return 'unproven', _none()
@@ -657,14 +696,22 @@ def ssh_evidence(kind):
 
 
 def complete_log_text(raw, bound):
-    """Bytes the client log reader kept. A partial trailing line at the bound is dropped."""
+    """Complete lines from a client log. A log past the bound keeps a prefix and the tail."""
     if not isinstance(raw, (bytes, bytearray)):
         raw = b''
-    truncated = len(raw) > bound
-    raw = raw[:bound]
-    if truncated:
-        raw = raw.rsplit(b'\n', 1)[0]
-    return raw.decode('utf-8', 'replace'), truncated
+    if len(raw) <= bound:
+        return raw.decode('utf-8', 'replace'), False
+    head = raw[:bound // 2]
+    tail = raw[-(bound // 2):]
+    if b'\n' in head:
+        head = head.rsplit(b'\n', 1)[0] + b'\n'
+    else:
+        head = b''
+    if b'\n' in tail:
+        tail = tail.split(b'\n', 1)[1]
+    else:
+        tail = b''
+    return (head + tail).decode('utf-8', 'replace'), True
 
 
 def possession_plan(api, client_public, operation_id, current_items=None, expected=None, environ=None, now=None,
@@ -1376,7 +1423,9 @@ class GcloudDriver:
             raise Refused('ssh timeout is not 60 seconds')
         log_fd, log_path = tempfile.mkstemp(prefix='yogi-ssh-')
         os.close(log_fd)
-        executed = [argv[0], '-E', log_path, '-o', 'LogLevel=VERBOSE', *list(argv[1:])] if argv else []
+        # DEBUG is the minimum OpenSSH 9.6 level that emits the host-key acceptance line.
+        # VERBOSE writes the denial and nothing at debug1, so it cannot prove userauth.
+        executed = [argv[0], '-E', log_path, '-o', 'LogLevel=DEBUG', *list(argv[1:])] if argv else []
         clean_argv = sanitize_argv(executed)
         user = POSSESSION_USER
         alias = ''
@@ -1389,21 +1438,24 @@ class GcloudDriver:
             try:
                 result = self.run(executed, capture_output=True, timeout=timeout)
             except subprocess.TimeoutExpired as expired:
+                text, truncated = self._load_client_log(log_path)
                 return self._ssh_report('timeout', None, getattr(expired, 'stderr', b'') or b'',
-                                        b'', clean_argv, False)
+                                        text, clean_argv, truncated)
             except (OSError, subprocess.SubprocessError) as exc:
-                return self._ssh_report('unproven', None, type(exc).__name__, b'', clean_argv, False)
-            raw, truncated = self._read_client_log(log_path)
-            text, truncated = complete_log_text(raw, SSH_LOG_BOUND)
-            kind, evidence = classify_ssh(result.returncode, text.splitlines(), user, alias)
+                text, truncated = self._load_client_log(log_path)
+                return self._ssh_report('unproven', None, type(exc).__name__, text, clean_argv, truncated)
+            text, truncated = self._load_client_log(log_path)
+            stderr = getattr(result, 'stderr', b'') or b''
+            stderr_text = stderr.decode('utf-8', 'replace') if isinstance(stderr, bytes) else str(stderr)
+            kind, evidence = classify_ssh(result.returncode, text.splitlines(), user, alias,
+                                         stderr_lines=stderr_text.splitlines())
             probe = None
             if result.returncode == 0 and kind == 'success':
                 try:
                     probe = json.loads(result.stdout.decode() if isinstance(result.stdout, bytes) else result.stdout)
                 except (ValueError, AttributeError):
                     kind = 'not-json'
-            report = self._ssh_report(kind, result.returncode, getattr(result, 'stderr', b'') or b'',
-                                      text.encode(), clean_argv, truncated, probe)
+            report = self._ssh_report(kind, result.returncode, stderr, text, clean_argv, truncated, probe)
             report.update(evidence)
             return report
         finally:
@@ -1419,13 +1471,29 @@ class GcloudDriver:
         report.update(ssh_evidence(kind))
         return report
 
-    def _read_client_log(self, path):
+    def _load_client_log(self, path):
         try:
+            size = os.path.getsize(path)
             with open(path, 'rb') as handle:
-                raw = handle.read(SSH_LOG_BOUND + 1)
+                if size <= SSH_LOG_BOUND:
+                    raw = handle.read()
+                    return complete_log_text(raw, SSH_LOG_BOUND)
+                head_n = SSH_LOG_BOUND // 2
+                tail_n = SSH_LOG_BOUND // 2
+                head = handle.read(head_n)
+                handle.seek(max(0, size - tail_n))
+                tail = handle.read(tail_n)
         except OSError:
-            return b'', False
-        return raw, len(raw) > SSH_LOG_BOUND
+            return '', False
+        if b'\n' in head:
+            head = head.rsplit(b'\n', 1)[0] + b'\n'
+        else:
+            head = b''
+        if b'\n' in tail:
+            tail = tail.split(b'\n', 1)[1]
+        else:
+            tail = b''
+        return (head + tail).decode('utf-8', 'replace'), True
 
     def wait_login_ready(self):
         """Local gcloud listener only. Acceptance is not backend TCP 22 and not possession."""
