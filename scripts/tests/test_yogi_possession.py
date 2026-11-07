@@ -565,7 +565,8 @@ class PossessionTest(unittest.TestCase):
                 self.assertTrue(request.full_url.endswith('/operations/' + op_name + '/wait'))
                 return Response(operation_body('PENDING'))
 
-            driver = yogi_possession.GcloudDriver(run=run, opener=opener, sleep=lambda _seconds: None, clock=lambda: 0)
+            driver = yogi_possession.GcloudDriver(run=run, opener=opener, sleep=lambda _seconds: None, clock=lambda: 0,
+                                                 inspect_out=str(Path(tempfile.mkdtemp()) / 'inspect'))
             driver.possess_comment = 'roseos-yogi-possess-' + operation
             driver.possess_material = material
             result = yogi_possession.possession_run(driver, plan, str(identity), baseline={
