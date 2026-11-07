@@ -11,6 +11,7 @@
     "selectionSha256": "34cdc3a98e8cfc614a88c5a40d002c51e87404aaec8a4f2962cb46e824c4f6e4",
     "selectionMeaning": "copy-time only; not a source pin"
   },
-  "required": "A later dedicated sync on this VM's source directory, with pristine true and manifestSha256 equal to the hash of os/pinned-manifest.xml. The copy-time selection hash is not that pin.",
+  "required": "A later dedicated sync needs an explicit reviewed ROSE_REVISION. os/pinned-manifest.xml pins 1057 project revisions and has no Mustang device project. The vendor tree comes from a factory image that is indexed and not downloaded. The manifest file hash alone is not a synced tree, and the copy-time selection hash is not a source pin.",
+  "roseRevision": null,
   "basis": "The old snapshot records resolvedManifest null and says the selection identifies copied paths at copy time only. Version-control metadata was excluded, so project revisions cannot be re-derived from it. This file does not claim a sync occurred."
 }
