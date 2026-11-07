@@ -129,6 +129,14 @@ CONFIRMATION = {
         'AgentTrayPrototype) are already on SystemUI-core\'s classpath. rose-shade-systemui.patch (one include in '
         'ReferenceSystemUIModule.java) is registered in apply-os-changes.py for the normal build, which is the compile '
         'proof; this inert contract stays bound to #551\'s patch and does not model it',
+    'refined': 'OS Core to OS Product, 2026-11-07 17:06 and 17:29 UTC, from #653 head 17adb26 (abe56cb, the keyboard '
+        'handoff\'s rule 4 "Mic off" status-bar indicator, and the F09 shade interaction refinements): only required '
+        'overlays change, AgentTrayPrototype.java (3d09bead..., blob 97719d16) and roseshade/RoseShadeController.java '
+        '(3a0e0df4..., blob c60a8788), RoseShadeDrag.java (723db90e..., blob 3342c6cb), RoseShadeModel.java '
+        '(c80f399e..., blob 26c258b6), RoseShadeReplies.java (c7ea0f10..., blob 82b1235b) and RoseShadeStartable.java '
+        '(e6783f9f..., blob ae1e0ae0); no patch, no new file; rose-edge-wmshell.patch and its after-images, the '
+        'WMShellModule pre-image, the goals and flagEvidence (none) unchanged; the new imports (android.graphics.Paint, '
+        'RectF) are framework classes',
 }
 
 # Where each goal's sources come from, read from the pinned Android.bp files (committed byte for byte under
