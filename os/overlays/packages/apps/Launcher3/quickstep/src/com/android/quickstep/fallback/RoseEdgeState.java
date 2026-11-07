@@ -20,8 +20,9 @@ import java.util.List;
  * The edge can only rise while a listener is registered (something draws it) and the shell's IRoseEdge is available
  * (something really resizes the app): otherwise the release ends as stock Launcher3. On a raise the edge shows at once
  * and the shell is asked to shorten the app by liftPx. A refusal (the app is not resizeable, the device is locked, and
- * so on) lowers it again, with nothing resized; the shell lowering by itself (the task changed, the keyguard, the IME,
- * the display) lowers it here too. It counts as raised only over the task it rose over, so it can never leak into a
+ * so on) lowers it again, with nothing resized; the shell lowering by itself (the task changed, the keyguard, the
+ * display) lowers it here too. The keyboard showing does not lower it: the chin rises over an open keyboard (the
+ * shell no longer sends LOWERED_IME_SHOWN, which keeps its number on the wire). It counts as raised only over the task it rose over, so it can never leak into a
  * gesture over another app. Main thread only: the swipe handler, the window and the shell's replies run there.
  */
 public final class RoseEdgeState {

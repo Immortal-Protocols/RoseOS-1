@@ -151,7 +151,8 @@ public class RoseEdgeSwipeNativeTest {
         assertFalse("over Home, a trackpad, a continued gesture or not full screen",
                 swipe(true, true, true, false, DISPLAY, TASK).staged());
         assertFalse("three-button navigation", swipe(true, false, false, false, DISPLAY, TASK).staged());
-        assertFalse("the keyboard is showing", swipe(true, false, true, true, DISPLAY, TASK).staged());
+        assertTrue("the chin rises over an open keyboard (rule 1): the keyboard no longer stops it",
+                swipe(true, false, true, true, DISPLAY, TASK).staged());
         shadowOf(context.getSystemService(KeyguardManager.class)).setKeyguardLocked(true);
         assertFalse("locked", swipe(true).staged());
         shadowOf(context.getSystemService(KeyguardManager.class)).setKeyguardLocked(false);
