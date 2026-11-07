@@ -167,6 +167,8 @@ def blockers(root=ROOT):
                 or inventory.get('innerInstallerIsBaselineTargetFiles') is not False \
                 or candidate.get('sizeBytes') == baseline['sizeBytes']:
             raise ValueError('candidate archive observation must stay distinct and unadmitted')
+        observed = load(root/'os/mustang-ota/41761758623/baseline.json')
+        current = current_continuity(root, observed['updaterApkSha256'], observed['trustedOtaCertificateSha256'][0])
         items.append({'code': 'baseline-not-on-disk',
                       'detail': 'Baseline build 2026110302 target-files receipt '
                                 + baseline['sha256'] + ' is ' + str(baseline['sizeBytes'])
@@ -175,7 +177,11 @@ def blockers(root=ROOT):
                                 'Actions artifact ' + candidate['artifactId']
                                 + ' is a preserved candidate of ' + str(candidate['sizeBytes'])
                                 + ' bytes with no signed-target_files.zip. The inner mustang-install-2026110302.zip is not that receipt. '
-                                'Preserving the candidate does not supply the baseline.'})
+                                'The historical installer inventory was recorded before lpunpack. '
+                                'Current continuity ' + current['record'] + ' matches Updater.apk '
+                                + current['updaterSha256'] + ' and v1 certificate ' + current['certificateDerSha256']
+                                + '. The APK signer was not remeasured. Runtime stays unbound. '
+                                'This is not a current phone observation and does not admit the old target-files.'})
     if runtime.get('signingRouteEvidence') is None:
         items.append({'code': 'signing-route-unadmitted',
                       'detail': 'The existing signer ' + SIGNER + ' and Mustang v1 secret versions stay in place. '
@@ -423,7 +429,9 @@ def ota_continuity(root=ROOT):
         'incrementalPackageNeedsPreviousTargetFiles': True,
         'metadataRejectsPreBuildIncremental': True,
         'oldSignedTargetFilesNeededForFullPayload': False,
-        'oldSignedTargetFilesNeededForInstalledTrust': True,
+        'oldSignedTargetFilesNeededForInstalledTrust': False,
+        'installedTrustObservationRequired': True,
+        'installedTrustPath': 'candidate-installer-continuity',
         'stagingRequiresInstalledTrustObservation': True,
         'newSignedTargetFilesIsCandidateOnly': True,
         'phoneAcceptanceIncluded': False,
@@ -434,6 +442,8 @@ def ota_continuity(root=ROOT):
                     'observedFrom': 'os/mustang-ota/41761758623/baseline.json',
                     'agreesWithPublishedOta': 'os/mustang-ota/41761758623/mustang-ota-receipt.json'},
         'installerAlternative': {
+            'historical': True,
+            'asOf': 'inventory recorded before lpunpack',
             'file': installer['file'], 'sha256': installer['sha256'], 'sizeBytes': installer['sizeBytes'],
             'isTargetFiles': False, 'phoneAcceptance': False,
             'members': ['system image /system/priv-app/Updater/Updater.apk',
@@ -443,6 +453,37 @@ def ota_continuity(root=ROOT):
             'apkExtracted': False,
             'certificateExtracted': False,
         },
+        'currentContinuity': current_continuity(root, updater, identity['otaCertificateSha256']),
+    }
+
+
+def current_continuity(root, updater, certificate):
+    """The matching extraction. It does not admit the runtime or remeasure the APK signer."""
+    root = Path(root)
+    record = load(root/'os/build-only/mustang-candidate-continuity-20261107.json')
+    obs = record.get('observations') or {}
+    certs = obs.get('otaCerts') or []
+    der = certs[0].get('derSha256') if certs and isinstance(certs[0], dict) else None
+    runtime = load(root/'os/build-only/mustang-runtime.json')
+    if record.get('candidateOnly') is not True or record.get('currentPhone') is not False \
+            or obs.get('updaterSha256') != updater or obs.get('updaterBytes') != 5752573 \
+            or der != certificate or certs[0].get('derBytes') != 1297 \
+            or runtime.get('status') != 'unbound' or runtime.get('candidateContinuity') is not None:
+        raise ValueError('current continuity receipt does not match the installed updater and v1 certificate')
+    return {
+        'record': 'os/build-only/mustang-candidate-continuity-20261107.json',
+        'matchesInstalledUpdater': True,
+        'matchesV1Certificate': True,
+        'updaterBytes': 5752573,
+        'updaterSha256': updater,
+        'certificateDerSha256': certificate,
+        'certificateDerBytes': 1297,
+        'apkSignerRemeasured': False,
+        'currentPhone': False,
+        'phoneObserved': False,
+        'admitsRuntime': False,
+        'runtimeStatus': 'unbound',
+        'tools': {'lpunpackSha256': record['tools']['lpunpackSha256'], 'rawBytes': record['tools']['rawBytes']},
     }
 
 
