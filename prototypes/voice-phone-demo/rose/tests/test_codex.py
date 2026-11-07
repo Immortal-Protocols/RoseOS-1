@@ -365,6 +365,18 @@ class Integration(unittest.TestCase):
                 self.assertIn('nothing was opened', result['result'])
                 self.engine.cancel(a.task.id)
 
+    def test_an_abandoned_start_still_ends_a_local_background_task(self):
+        # The local agent ends a background task on workspace-refusal wording; a timed-out, stopped start is one.
+        from rose.realphone import _ws_why
+        from rose.tasks import _WORKSPACE_REFUSAL
+        for stop in ('stopped', 'timeout'):
+            with self.subTest(stop=stop):
+                why = _ws_why({'status': 'background_unavailable', 'packageName': CALC, 'details': {
+                    'status': 'launching', 'sessionId': 's', 'targetPackage': CALC,
+                    'startAbandoned': True, 'stopStatus': stop}}, 'Calculator')
+                self.assertTrue(_WORKSPACE_REFUSAL.search(why), why)
+                self.assertNotIn('goes back', why)
+
     def test_unconfirmed_slot_release_blocks_replacement_and_preserves_task_result(self):
         a, b = self.task('Calculator'), self.task('Clock')
         self.complete(a)

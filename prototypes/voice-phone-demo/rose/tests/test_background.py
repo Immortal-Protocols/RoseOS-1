@@ -556,7 +556,7 @@ def controller_checks(bad: list) -> None:
         bad.append(f"abandoned start not reported: {r.get('details')}")
     from rose.realphone import _ws_why
     why = _ws_why(r, "Calculator")
-    if "didn't open in Rose's workspace in time, so Rose stopped that start" not in why or "nothing was opened" in why:
+    if "could not open Calculator in time, so Rose stopped that start" not in why or "nothing was opened" in why:
         bad.append(f"abandoned start wording: {why}")
     # a slow start that becomes ready after 14 s (the controller still within its 15 s wait) now opens
     ws, fc, clock = make(start_polls=round(14 / 0.15))
