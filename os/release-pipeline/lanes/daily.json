@@ -10,7 +10,7 @@
   "lanes": [
     {
       "name": "frankel",
-      "enabled": false,
+      "enabled": true,
       "workflow": "os-release.yml",
       "inputs": {"mode": "latest-beta"},
       "runTitle": "Build & publish latest Pixel 10",

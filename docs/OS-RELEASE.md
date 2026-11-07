@@ -350,7 +350,7 @@ path are unchanged.
 - **The consumer's own checks:** importing the archive (no extraction of its metadata, only the canonical files), and
   that `destination.builder` and `dataFilesystemUuid` are its own bound VM and disk.
 
-## Daily release dispatcher (1E: 04:00 Pacific, every lane off)
+## Daily release dispatcher (1E: 04:00 Pacific; Frankel on)
 
 `.github/workflows/daily-release.yml` runs `scripts/daily-release.py dispatch` every day at 04:00
 America/Los_Angeles. For each enabled lane in `os/release-pipeline/lanes/daily.json`, it builds, signs, verifies and
@@ -388,8 +388,10 @@ Otherwise its entry is dispatched once, on main, with the committed inputs. A fa
 run and reaches its owner through the run's own failure. The dispatcher never publishes, cancels, retries or changes a
 release. Manual dispatch of every entry is unchanged.
 
-**What is committed is inert:** every lane is `enabled: false`, so a scheduled run reads main and dispatches nothing.
-The job can only dispatch from main, with its own `actions: write` token and no secret.
+**What is committed:** only Frankel is `enabled: true`, so each day's 04:00 Pacific run dispatches one
+`os-release.yml` latest-beta of main unless that commit is already delivered or a latest-beta run is still pending.
+Mustang and Yogi stay `enabled: false`. The job can only dispatch from main, with its own `actions: write` token and no
+secret.
 
 **Enabling a lane** is its own reviewed change to `daily.json`, approved by that lane's owner and Chief. The lane's
 first scheduled run then builds and publishes main at the next 04:00 Pacific. The Mustang and Yogi routes are manual

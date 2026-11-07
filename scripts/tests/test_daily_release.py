@@ -73,10 +73,11 @@ def jobs(*pairs):
 
 
 class CommittedLanes(unittest.TestCase):
-    def test_every_lane_is_off_and_names_its_existing_entry_and_last_good_rule(self):
+    def test_only_frankel_is_on_and_every_lane_names_its_existing_entry_and_last_good_rule(self):
         lanes = daily.load_lanes()
         self.assertEqual([x['name'] for x in lanes], ['frankel', 'mustang', 'yogi'])
-        self.assertEqual({x['name']: x['enabled'] for x in lanes}, {'frankel': False, 'mustang': False, 'yogi': False})
+        # Frankel on (Chief/Nathan's go); Mustang and Yogi stay off until their owners admit automatic dispatch.
+        self.assertEqual({x['name']: x['enabled'] for x in lanes}, {'frankel': True, 'mustang': False, 'yogi': False})
         window = daily.load_window()
         self.assertEqual((window['timeZone'], window['time']), ('America/Los_Angeles', '04:00'))  # 1E: 4 a.m. Pacific
         for x in lanes:
@@ -214,11 +215,15 @@ class RunLanes(unittest.TestCase):
     def lanes(self, *enabled):
         return [dict(x, enabled=x['name'] in enabled) for x in daily.load_lanes()]
 
-    def test_the_committed_lanes_dispatch_nothing_and_read_no_runs(self):
-        api = Api(self.answers())
+    def test_the_committed_lanes_dispatch_only_frankel(self):
+        answers = self.answers()
+        answers[('GET', '/actions/workflows/os-release.yml/runs')] = (200, {'workflow_runs': []})
+        answers[('POST', '/actions/workflows/os-release.yml/dispatches')] = (204, None)
+        api = Api(answers)
         results = daily.run_lanes(ENV, daily.load_lanes(), api)
-        self.assertEqual([r['action'] for r in results], ['skip', 'skip', 'skip'])
-        self.assertEqual(api.calls, [('GET', '/commits/main', None)])
+        self.assertEqual([r['action'] for r in results], ['dispatch', 'skip', 'skip'])
+        self.assertEqual([c for c in api.calls if c[0] == 'POST'],
+                         [('POST', '/actions/workflows/os-release.yml/dispatches', {'ref': 'main', 'inputs': {'mode': 'latest-beta'}})])
 
     def test_an_enabled_undelivered_lane_dispatches_its_entry_once_on_main(self):
         api = Api(self.answers([run(5, OLD)]))
@@ -279,9 +284,12 @@ class RunLanes(unittest.TestCase):
     def test_exit_status(self):
         out = io.StringIO()
         import contextlib
+        committed = self.answers()
+        committed[('GET', '/actions/workflows/os-release.yml/runs')] = (200, {'workflow_runs': []})
+        committed[('POST', '/actions/workflows/os-release.yml/dispatches')] = (204, None)
         with contextlib.redirect_stdout(out):
-            self.assertEqual(daily.main(['dispatch'], env=ENV, opener=Api(self.answers())), 0)
-        self.assertEqual([r['action'] for r in json.loads(out.getvalue())['results']], ['skip', 'skip', 'skip'])
+            self.assertEqual(daily.main(['dispatch'], env=ENV, opener=Api(committed)), 0)
+        self.assertEqual([r['action'] for r in json.loads(out.getvalue())['results']], ['dispatch', 'skip', 'skip'])
         err = io.StringIO()
         with contextlib.redirect_stderr(err):
             self.assertEqual(daily.main(['dispatch'], env=dict(ENV, GITHUB_REF='refs/heads/x'), opener=Api({})), 2)
@@ -292,7 +300,7 @@ class RunLanes(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp)/'lanes.json'
             data = copy.deepcopy(LANES)
-            data['lanes'][1]['enabled'] = True
+            data['lanes'][0]['enabled'], data['lanes'][1]['enabled'] = False, True
             path.write_text(json.dumps(data))
             with contextlib.redirect_stdout(io.StringIO()) as out:
                 self.assertEqual(daily.main(['dispatch', '--lanes', str(path)], env=ENV, opener=Api(answers)), 1)
@@ -344,12 +352,15 @@ class Schedule(unittest.TestCase):
                          [('skip', None), ('dispatch', True), ('skip', None)])
         self.assertEqual([c for c in api.calls if c[0] == 'POST'],
                          [('POST', f'/actions/workflows/{DEDICATED}/dispatches', {'ref': 'main', 'inputs': {'publish': 'true'}})])
-        # The committed lanes: a real scheduled run still dispatches nothing and reads only main.
+        # The committed lanes: a real scheduled run dispatches Frankel's latest-beta only.
+        answers[('GET', '/actions/workflows/os-release.yml/runs')] = (200, {'workflow_runs': []})
+        answers[('POST', '/actions/workflows/os-release.yml/dispatches')] = (204, None)
         api = Api(answers)
         results = daily.run_lanes(dict(SCHEDULED, SCHEDULE='0 12 * * *'), daily.load_lanes(), api,
                                   now=utc('2026-11-07T12:16:00'))
-        self.assertEqual([r['action'] for r in results], ['skip', 'skip', 'skip'])
-        self.assertEqual(api.calls, [('GET', '/commits/main', None)])
+        self.assertEqual([r['action'] for r in results], ['dispatch', 'skip', 'skip'])
+        self.assertEqual([c for c in api.calls if c[0] == 'POST'],
+                         [('POST', '/actions/workflows/os-release.yml/dispatches', {'ref': 'main', 'inputs': {'mode': 'latest-beta'}})])
 
     def test_an_unknown_trigger_cron_or_window_is_refused_before_any_api_call(self):
         lanes = daily.load_lanes()
