@@ -233,6 +233,57 @@ def observe_components(vendor_props, updater, trust_store, build, epoch, tools, 
                 'trustedOtaCertificateSha256': sorted(trust), 'packagedUpdaterVerified': True}
 
 
+def candidate_continuity(record):
+    """Installed updater and v1 cert from the candidate installer. Not the current phone or target-files."""
+    if not isinstance(record, dict) or record.get('schema') != 'roseos.mustang-candidate-continuity.v1' \
+            or record.get('candidateOnly') is not True or record.get('currentPhone') is not False \
+            or record.get('phoneObserved') is not False or record.get('admitsRuntime') is not False \
+            or record.get('admitsSourcePin') is not False or record.get('targetFiles') is not None \
+            or record.get('kernelMount') is not False:
+        raise ValueError('candidate continuity is not a current phone, target-files, or admission')
+    obs = record.get('observations') or {}
+    certs = obs.get('otaCerts')
+    if not isinstance(certs, list) or len(certs) != 1 or not isinstance(certs[0], dict):
+        raise ValueError('candidate OTA certificate observation is incomplete')
+    prior = read(ROOT/'os/mustang-ota/41761758623/baseline.json')
+    staged = read(ROOT/'os/mustang-ota/41761758623/mustang-ota-receipt.json')
+    installer = read(ROOT/'os/mustang-delivery/41738359336/package.json')['output']
+    identity = identities()['otaCertificateSha256']
+    apk, der = obs.get('updaterSha256'), certs[0].get('derSha256')
+    if obs.get('updaterBytes') != 5752573 or apk != prior.get('updaterApkSha256') \
+            or apk != staged.get('packagedUpdater', {}).get('updaterApkSha256') \
+            or certs[0].get('derBytes') != 1297 or der != identity \
+            or prior.get('trustedOtaCertificateSha256') != [identity] \
+            or staged.get('packagedUpdater', {}).get('trustedOtaCertificateSha256') != [identity] \
+            or record.get('installerSha256') != installer.get('sha256') \
+            or record.get('installerSize') != installer.get('sizeBytes') \
+            or (record.get('tools') or {}).get('rawBytes') != 4191461376 \
+            or (record.get('tools') or {}).get('lpunpackSha256') != '95a07401e3f54e0a16f948938b464cab6d0f31b40cb08e196b4cc45f7e8811e5':
+        raise ValueError('candidate updater or v1 certificate does not match the installed baseline')
+    if obs.get('apkMatchesExpected') is not True or obs.get('certMatchesExpected') is not True:
+        raise ValueError('candidate updater or v1 certificate does not match the installed baseline')
+    return {
+        'schema': 'roseos.mustang-ota-baseline.v1',
+        'evidenceKind': 'candidate-installer-continuity',
+        'candidateOnly': True,
+        'currentPhone': False,
+        'phoneObserved': False,
+        'admitsRuntime': False,
+        'targetFiles': None,
+        'build': prior['build'],
+        'timestamp': prior['timestamp'],
+        'device': 'mustang',
+        'packagedUpdaterVerified': True,
+        'updaterApkSha256': apk,
+        'updaterBytes': obs['updaterBytes'],
+        'trustedOtaCertificateSha256': [identity],
+        'updaterSignerSha256': identity,
+        'discoveryClassesPresent': prior.get('discoveryClassesPresent') is True,
+        'installedEvidence': prior.get('installedEvidence'),
+        'continuityRecord': 'os/build-only/mustang-candidate-continuity-20261107.json',
+    }
+
+
 def observe_baseline(out, lane=None, tools=None, target_files=None, factory=None, runtime=None):
     cfg = config()
     baseline = cfg['baseline']
@@ -316,6 +367,11 @@ def stage(sign_run, attempt, baseline_file, out, lane=None, tools=None, publicat
         require_factory_baseline(baseline)
         if baseline.get('baselineSource')!=cfg['baseline']['source']:
             raise ValueError('factory baseline original candidate differs')
+    if baseline.get('evidenceKind')=='candidate-installer-continuity':
+        if baseline.get('currentPhone') is not False or baseline.get('phoneObserved') is not False \
+                or baseline.get('targetFiles') is not None or baseline.get('admitsRuntime') is not False:
+            raise ValueError('candidate continuity is not the current phone or target-files')
+        candidate_continuity(read(ROOT/baseline['continuityRecord']))
     if baseline.get('packagedUpdaterVerified') is not True or baseline.get('build') != cfg['baseline']['installedBuild'] \
             or baseline.get('trustedOtaCertificateSha256') is None \
             or identities()['otaCertificateSha256'] not in baseline['trustedOtaCertificateSha256']:
@@ -368,9 +424,11 @@ def stage(sign_run, attempt, baseline_file, out, lane=None, tools=None, publicat
                    'checks': {'targetVersion': True, 'baselineTrust': True, 'otaSignatures': True,
                               'packagedUpdater': True, 'roseEdge': True},
                    'verificationTools': verification_tools,
-                   'phoneUpdatePassed': False, 'automationDemonstrated': False, 'sprintOmissions': signed['omittedChecks'],
+                   'phoneUpdatePassed': False, 'currentPhone': False, 'automationDemonstrated': False, 'sprintOmissions': signed['omittedChecks'],
                    'ota': {'file': ota.name, 'sizeBytes': ota.stat().st_size, 'sha256': digest(ota)}}
         if lane is not None: receipt.update(builder=dict(lane['vm']),workflow=lane['workflow'])
+        if baseline.get('evidenceKind')=='candidate-installer-continuity':
+            receipt['baselineEvidenceKind']='candidate-installer-continuity'
         if factory_mode: receipt['baselineFactoryEvidence']=baseline
         release_receipts.write_once(out/'mustang-ota-receipt.json', receipt)
         (out/'SHA256SUMS').write_text(''.join(f'{digest(p)}  {p.name}\n' for p in sorted(out.iterdir())))

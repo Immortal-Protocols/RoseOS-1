@@ -737,6 +737,17 @@ class DedicatedRuntimeTest(unittest.TestCase):
         (self.root/self.cfg['allocationState']).write_text(json.dumps(state))
         with self.assertRaisesRegex(ValueError,'allocation state remains unresolved'): self.admitted()
 
+    def test_candidate_continuity_satisfies_guard_without_the_old_target_files(self):
+        name='os/build-only/mustang-candidate-continuity-20261107.json'
+        dest=self.root/name
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes((ROOT/name).read_bytes())
+        cfg=dict(self.cfg, baselineTargetFiles=None, candidateContinuity=name)
+        self.assertIsNone(self.admitted(cfg)['baselineTargetFiles'])
+        broken=json.loads(dest.read_text()); broken['currentPhone']=True
+        dest.write_text(json.dumps(broken))
+        with self.assertRaisesRegex(ValueError,'not a current phone'): self.admitted(cfg)
+
     def test_copy_time_frankel_snapshot_is_not_a_source_pin(self):
         path=self.root/self.cfg['sourceEvidence']
         source=self.driver.load(path)

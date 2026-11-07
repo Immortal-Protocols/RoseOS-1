@@ -126,9 +126,13 @@ def guard(lane, cfg, env, publish=False, root=ROOT, diff=None, dry_run=False):
             raise ValueError('fresh app export omits current app source changes: '+package['packageName'])
     baseline=cfg.get('baselineTargetFiles')
     factory=cfg.get('baselineFactoryEvidence')
+    continuity=cfg.get('candidateContinuity')
+    if sum(item is not None for item in (baseline, factory, continuity)) > 1:
+        raise ValueError('select exactly one baseline evidence kind')
     if factory is not None:
-        if baseline is not None: raise ValueError('select exactly one baseline evidence kind')
         ota.module('mustang_factory_baseline_guard','mustang-baseline-image.py').contract(reference(factory,root),lane,cfg,root)
+    elif continuity is not None:
+        ota.candidate_continuity(reference(continuity, root))
     else:
         committed=load(Path(root)/load(Path(root)/'os/ota/mustang.json')['baseline']['signReceipt'])['outputs']['targetFiles']
         if not isinstance(baseline,dict) or any(baseline.get(k)!=committed[k] for k in ('sha256','sizeBytes')) \
@@ -450,8 +454,11 @@ def main():
             ota.module('mustang_verify_apps','app-inputs-verify.py').verify(ROOT/cfg['appInputsRecord'],inputs,cfg['tools'])
             emit(inputs_dir=str(inputs))
         elif args.action=='baseline':
-            factory=reference(cfg['baselineFactoryEvidence']) if cfg.get('baselineFactoryEvidence') is not None else None
-            ota.observe_baseline(args.out,lane,cfg['tools'],cfg.get('baselineTargetFiles'),factory=factory,runtime=cfg)
+            if cfg.get('candidateContinuity') and cfg.get('baselineTargetFiles') is None:
+                release_receipts.write_once(args.out, ota.candidate_continuity(reference(cfg['candidateContinuity'])))
+            else:
+                factory=reference(cfg['baselineFactoryEvidence']) if cfg.get('baselineFactoryEvidence') is not None else None
+                ota.observe_baseline(args.out,lane,cfg['tools'],cfg.get('baselineTargetFiles'),factory=factory,runtime=cfg)
         elif args.action=='produce':
             # This process has no further authenticated download/signing work.
             # Do not forward job tokens or auth/env-output capabilities to Make
