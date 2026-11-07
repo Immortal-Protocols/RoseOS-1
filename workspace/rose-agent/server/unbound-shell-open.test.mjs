@@ -34,7 +34,7 @@ function fixture({backgroundEnabled}){
  // app-tool-catalog's foreground routes, keeping the requested display.
  const appRuntime={handleToolCall:async request=>({success:true,result:await context.fastPhone({action:'open_app',...request.arguments})})};
  const context=vm.createContext({taskStop,backgroundEnabled,appRuntime,crypto,setImmediate,Date,Error,Object,Set,Promise,JSON,AsyncLocalStorage,
-  checkPausedApp:()=>{},peerIdentity:req=>req?.phone?{id:'paired-phone'}:null,autoGenerator:{active:false},visualTrial:false,busy:true,taskStarted:0,lastRoute:null,
+  checkPausedApp:()=>{},peerIdentity:req=>req?.phone?{id:'paired-phone'}:null,deviceAuth:{paired:req=>!!req?.phone},autoGenerator:{active:false},visualTrial:false,busy:true,taskStarted:0,lastRoute:null,
   backgroundPhone:{execute:async(c,o)=>{executed.push('background:'+describe(c,o));return {status:'opened',packageName:c.packageName};}},
   rawFastPhone:async c=>{executed.push('raw:'+describe(c));return {status:'opened',packageName:c.packageName};},
   phone:{create:c=>{executed.push('created:'+describe(c));return {id:'c1',action:c.action,status:'pending'};},complete:()=>{}},
