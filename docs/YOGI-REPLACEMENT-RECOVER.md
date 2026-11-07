@@ -216,24 +216,63 @@ hard link, an extra `ssh_host_*` name, or any other runner state stops with the 
 
 ## Host identity after rotation
 
-Nothing in this tool pins an SSH host key. A serial receipt and a second inspect are both written by the guest.
-Agreement between them is not an independent observation.
+Nothing in this tool pins an SSH host key. `hostKeyPinned` stays false. `builder.direct.hostKey` stays unset.
+`hostIdentity.iapAuthenticatesHostKey` is false. IAP does not authenticate the key.
+
+Two threats are different:
+
+- A network attacker, or a connection to the wrong host, is the transport threat. Google's documented binding for
+  that threat is guest attributes. With `enable-guest-attributes=TRUE` and OS Login left `FALSE`, the guest
+  environment publishes SSH host public keys and `gcloud` reads them through the API before SSH
+  ([guest attributes](https://docs.cloud.google.com/compute/docs/metadata/manage-guest-attributes),
+  [storing host keys](https://docs.cloud.google.com/solutions/connecting-securely)). The read is
+  `getGuestAttributes` on this instance, query path `hostkeys/`. The keys are `ssh-ed25519`,
+  `ecdsa-sha2-nistp256`, and `ssh-rsa`. The value is the public blob. Writing from inside the VM uses the metadata
+  server's instance authentication. No guest service account is required. Any process on that VM can write its own
+  metadata server, and no other VM can.
+- A fully compromised guest is a different threat. The same process can publish a host key and serve that key.
+  Guest attributes, serial output, and IAP do not prove the guest is honest. No mechanism in this recovery does.
+
+The stock guest agent is not a reliable publisher on this disk. In
+[guest-agent `instance_setup.go` at `84f5e2ffedb6`](https://github.com/GoogleCloudPlatform/guest-agent/blob/84f5e2ffedb6/google_guest_agent/instance_setup.go),
+`generateSSHKeys` runs when the stored instance id changes, generates keys, and writes `hostkeys/<type>` with the
+public blob. The connecting-securely page says the attribute has to be enabled before the first boot; otherwise the
+agent logs that it could not write the host key. This replacement has already booted, and the feature is off. Do not
+rely on that agent to publish the rotated keys.
+
+After a successful rotate, this guest PUTs only the three new public blobs to
+`instance/guest-attributes/hostkeys/<openssh-type>`. It does not read or send a private key file. If the metadata
+server rejects the write because guest attributes are disabled, the rotation still stands and the marker records
+`hostkeyAttributesPublished` false. A later boot of the same startup script retries that PUT and does not generate
+another key. The serial receipt is not changed by the publish. Compare it to the control-plane read only as a
+consistency check. A match is not a pin.
+
+This rotate plan does not perform the next phase. `hostIdentity.nextPhase.executedByThisTool` is false.
+
+- Do not set project metadata. A separate `setMetadata`, not this plan, may add `enable-guest-attributes=TRUE` for
+  that one boot, keep `enable-oslogin=FALSE` and `block-project-ssh-keys=TRUE`, and remove the enable key again on
+  cleanup. This plan's metadata stays the two preserved keys plus the temporary startup script and binding.
+- That later preflight needs `compute.instances.getGuestAttributes` on this instance. The current rotate preflight
+  does not require it.
+- The operator then reads `hostkeys/` for instance id `2720796557371812468` and compares the three fingerprints with
+  the serial receipt. Inequality or a private-key token stops. Absence means the publish did not land.
+- IAP TCP forwarding checks IAM and connects the tunnel to that instance
+  ([SSH through IAP](https://docs.cloud.google.com/compute/docs/connect/ssh-using-iap)). It does not retrieve or check
+  the SSH host key. A later, separate ephemeral login can use plain OpenSSH through
+  `gcloud compute start-iap-tunnel`, with `StrictHostKeyChecking=yes` and a `known_hosts` file built only from the
+  control-plane public blobs. No trust on first use. No `accept-new`. Do not use `gcloud compute ssh`: it writes SSH
+  metadata and its own known-hosts file. That SSH step is not implemented here.
 
 Google's instance identity token is a Google-signed JWT that names the project, zone, and instance id
 ([verifying instance identity](https://docs.cloud.google.com/compute/docs/instances/verifying-instance-identity)).
 The instance can obtain it only from the metadata server, and only when the instance has a service account. This
 replacement has no service account. Attaching one is outside this recovery. The token also does not contain the
-SSH host public key, so it would not by itself pin that key even if a service account were present.
+SSH host public key.
 
-An operator-generated host keypair would keep the private key off this repository only if it is never placed in
-instance metadata, the startup script, or serial output. Those are the channels this tool has, and each of them
-would disclose the private key. This tool refuses private-key material in the inspect receipt and does not install
-an operator private key. A public fingerprint typed by the operator, if it was copied from the guest's own receipt,
-is the same guest report again.
-
-No authenticated read of `/etc/ssh` public keys is available inside the preservation rules: no SSH, no trust on
-first use, no service account, and no private-key delivery. `hostIdentity.blocker` is
-`no-authenticated-observation-of-ssh-public-key`. `hostKeyPinned` stays false. `builder.direct.hostKey` stays unset.
+An operator-generated host keypair would disclose the private key if it were placed in instance metadata, the
+startup script, serial output, or a guest attribute. This tool refuses private-key material in the inspect receipt
+and publishes only public blobs. A public fingerprint copied from the guest's own receipt is still that guest's
+report. The authenticated observation is the control-plane read of what this instance's metadata server stored.
 
 ```sh
 env -u GOOGLE_APPLICATION_CREDENTIALS -u CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT \
@@ -294,8 +333,12 @@ Base path named in the relay: `/Users/nathanspaun/Documents/Codex/2026-10-27/tas
 - [Serial port output](https://docs.cloud.google.com/compute/docs/troubleshooting/viewing-serial-port-output) is written
   by the guest OS, BIOS, and other system-level entities. It is not signed. A receipt that matches this operation's
   nonce is bound to this operation, and it is still not a host-key pin (`serialReceiptTrustedForPin` is false).
-- [Guest attributes](https://docs.cloud.google.com/compute/docs/metadata/manage-guest-attributes) are data the guest
-  writes. A matching attribute is not authentication. This tool does not enable them.
+- [Guest attributes](https://docs.cloud.google.com/compute/docs/metadata/manage-guest-attributes) are written by any
+  process on that VM, with no service account, and are read back with `getGuestAttributes` on that instance.
+  [Storing host keys](https://docs.cloud.google.com/solutions/connecting-securely) is the documented use of the
+  `hostkeys/` namespace against a network man-in-the-middle. A match with the serial receipt is consistency, not
+  proof the guest is honest. This rotate plan does not set `enable-guest-attributes`. The receipt attribute under
+  `roseos-yogi-recover/receipt` is a different path. Its absence is still expected.
 - The 45-minute limit is `scheduling.maxRunDuration.seconds` of `2700` with `instanceTerminationAction` `STOP`
   ([limit VM runtime](https://docs.cloud.google.com/compute/docs/instances/limit-vm-runtime)).
   `automaticRestart` restarts a crashed guest

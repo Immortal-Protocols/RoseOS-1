@@ -350,6 +350,8 @@ class DictHost:
         self.marker = None
         self.log, self.emitted = [], []
         self.chmod_calls = self.generate_calls = self.commit_calls = 0
+        self.hostkey_puts = []
+        self.publish_fails = False
         self.identity = dict(guest.EXPECTED_IDENTITY)
         self.unit = {"kind": "regular", "mode": 0o664, "uid": 0, "gid": 0, "size": 347, "nlink": 1}
         self.runner_state = {"active": "inactive", "enabled": "disabled", "process": False}
@@ -421,6 +423,13 @@ class DictHost:
         if name not in self.public:
             raise OSError("baseline")
         return self.public[name]
+
+    def publish_hostkey_attributes(self, writes):
+        self.hostkey_puts = list(writes)
+        for key_type, blob in writes:
+            if any(token in blob for token in ("BEGIN", "PRIVATE", "OPENSSH", " ")):
+                raise guest.GuestRefused("private-attribute")
+        return not self.publish_fails
 
     def ssh_generate(self, algorithm):
         self.generate_calls += 1
@@ -1243,6 +1252,18 @@ class GuestTest(Base):
         self.assertEqual(host.chmod_calls, 0)
         self.assertEqual(host.generate_calls, 3)
         self.assertEqual(host.unit["mode"], 0o644)
+        self.assertEqual(len(host.hostkey_puts), 3)
+        self.assertTrue(host.marker.get("hostkeyAttributesPublished"))
+        self.assertTrue(all("PRIVATE" not in blob and " " not in blob for _key, blob in host.hostkey_puts))
+        self.assertNotIn("PRIVATE", json.dumps(receipt))
+        identity = plan["hostIdentity"]
+        self.assertFalse(identity["pinned"])
+        self.assertFalse(identity["iapAuthenticatesHostKey"])
+        self.assertNotIn("blocker", identity)
+        self.assertFalse(identity["guestAttributes"]["enabledOnThisInstance"])
+        self.assertFalse(identity["guestAttributes"]["requiresGuestServiceAccount"])
+        self.assertFalse(identity["nextPhase"]["executedByThisTool"])
+        self.assertNotIn("enable-guest-attributes", recover.BASE_METADATA)
         self.assertEqual(receipt["purpose"], "rotate")
         self.assertEqual(receipt["unit"]["action"], "not-modified")
         self.assertEqual(receipt["hostKeys"]["baseline"], baseline)
@@ -1259,6 +1280,22 @@ class GuestTest(Base):
         saved = recover.serial_evidence(json.loads((out / "binding.json").read_text()), framed, "parsed", receipt=receipt)
         self.assertNotIn("BEGIN OPENSSH", json.dumps(saved))
         self.assertNotIn("Linux version", json.dumps(saved))
+        failed = DictHost(json.loads((out / "binding.json").read_text()), out / "guest.py")
+        failed.unit["mode"] = 0o644
+        failed.publish_fails = True
+        failed_receipt = module.run(failed)
+        self.assertEqual(guest.rotate_success_problems(failed_receipt, baseline), [])
+        self.assertFalse(failed.marker.get("hostkeyAttributesPublished"))
+        self.assertEqual(failed.unit["mode"], 0o644)
+        self.assertEqual(failed.generate_calls, 3)
+        failed.publish_fails = False
+        failed.hostkey_puts = []
+        failed.boot = "01234567-89ab-cdef-0123-456789abcdef"
+        again = module.run(failed)
+        self.assertEqual(failed.generate_calls, 3)
+        self.assertEqual(guest.rotate_success_problems(again, baseline), [])
+        self.assertTrue(failed.marker.get("hostkeyAttributesPublished"))
+        self.assertEqual(len(failed.hostkey_puts), 3)
         live = dict(evidence)
         live["operationId"] = "638e6e9039e41b7531697bb45066a616"
         live["hostKeys"] = dict(evidence["hostKeys"], baseline={
@@ -1279,6 +1316,7 @@ class GuestTest(Base):
         stopped = load_rendered(refused / "guest.py").run(other)
         self.assertEqual(other.chmod_calls, 0)
         self.assertEqual(other.generate_calls, 0)
+        self.assertEqual(other.hostkey_puts, [])
         self.assertEqual(stopped["unit"]["problem"], "baseline")
         self.assertEqual(other.unit["mode"], 0o644)
         with self.assertRaises(recover.Refused):
@@ -1326,6 +1364,50 @@ class GuestTest(Base):
         stopped = module.run(disk)
         self.assertEqual(disk.generate_calls, 0)
         self.assertEqual(stopped["unit"]["problem"], "runner-enabled")
+
+    def test_hostkey_attributes_match_serial_only_as_consistency(self):
+        host = DictHost(json.loads((self.op / "binding.json").read_text()), self.op / "guest.py")
+        lines, fingerprints = {}, {}
+        for alg, name in guest.KEY_NAMES.items():
+            lines[alg] = host.public[name + ".roseos-new.pub"]
+            _kind, fingerprints[alg] = guest.parse_public(lines[alg])
+        puts = []
+
+        class IO:
+            def publish_hostkey_attributes(self, writes):
+                puts.extend(writes)
+                return True
+
+        self.assertTrue(guest.publish_public_hostkeys(IO(), lines))
+        self.assertTrue(all(" " not in blob and "PRIVATE" not in blob for _key, blob in puts))
+        items = [{"namespace": "hostkeys", "key": key, "value": blob} for key, blob in puts]
+        observed = recover.hostkey_consistency({"queryValue": {"items": items}}, fingerprints)
+        self.assertTrue(observed["consistentWithSerial"])
+        self.assertFalse(observed["pinned"])
+        self.assertFalse(observed["honestGuest"])
+        self.assertFalse(observed["iapAuthenticatesHostKey"])
+        self.assertFalse(observed["requiresGuestServiceAccount"])
+        self.assertEqual(observed["binding"], "control-plane-read-of-this-instance-metadata-server")
+        short = dict(fingerprints)
+        short["ed25519"] = "SHA256:" + "A" * 43
+        self.assertFalse(recover.hostkey_consistency({"queryValue": {"items": items}}, short)["consistentWithSerial"])
+        self.assertFalse(recover.hostkey_consistency({"queryValue": {"items": items[:2]}}, fingerprints)["pinned"])
+        self.assertFalse(recover.hostkey_consistency(
+            {"queryValue": {"items": items[:2]}}, fingerprints)["consistentWithSerial"])
+        with self.assertRaises(recover.Refused):
+            recover.hostkey_consistency(
+                {"queryValue": {"items": [{"namespace": "hostkeys", "key": "ssh-ed25519",
+                                           "value": "-----BEGIN OPENSSH PRIVATE KEY-----"}]}},
+                fingerprints)
+        with self.assertRaises(guest.GuestRefused):
+            guest.publish_public_hostkeys(IO(), dict(lines, ed25519="-----BEGIN OPENSSH PRIVATE KEY-----"))
+        phase = recover.hostkey_observation_phase()
+        self.assertFalse(phase["executedByThisTool"])
+        self.assertFalse(phase["iapAuthenticatesHostKey"])
+        self.assertEqual(phase["gcloudComputeSsh"], "refused")
+        self.assertIn("start-iap-tunnel", phase["laterSsh"])
+        self.assertNotIn("compute ssh", phase["laterSsh"])
+        self.assertNotIn("compute.instances.getGuestAttributes", recover.IAM_REQUIRED["replacement"])
 
 
 class CommandTest(Base):

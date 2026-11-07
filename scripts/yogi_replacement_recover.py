@@ -75,6 +75,9 @@ DOCS = {
     "startupScript": "https://docs.cloud.google.com/compute/docs/instances/startup-scripts/linux",
     "serialPort": "https://docs.cloud.google.com/compute/docs/troubleshooting/viewing-serial-port-output",
     "guestAttributes": "https://docs.cloud.google.com/compute/docs/metadata/manage-guest-attributes",
+    "guestAttributeHostKeys": "https://docs.cloud.google.com/solutions/connecting-securely",
+    "iapTcp": "https://docs.cloud.google.com/compute/docs/connect/ssh-using-iap",
+    "instanceIdentity": "https://docs.cloud.google.com/compute/docs/instances/verifying-instance-identity",
     "maxRunDuration": "https://docs.cloud.google.com/compute/docs/instances/limit-vm-runtime",
     "scheduling": "https://docs.cloud.google.com/compute/docs/instances/setting-instance-scheduling-options",
     "testIamPermissions": "https://docs.cloud.google.com/compute/docs/reference/rest/v1/instances/testIamPermissions",
@@ -127,7 +130,9 @@ LIMITATIONS = (
     "unidentified-authorized-keys-are-preserved",
     "snapshot-restore-is-not-performed",
     "ssh-is-not-used",
-    "guest-attributes-are-not-trusted",
+    "gcloud-compute-ssh-is-not-used",
+    "iap-does-not-authenticate-the-ssh-host-key",
+    "guest-attributes-do-not-prove-an-honest-guest",
     "serial-output-is-guest-written",
     "unknown-host-key-names-stop-rotation",
     "unit-hardlink-or-unexpected-mode-is-not-changed",
@@ -1276,6 +1281,86 @@ def attribute_text(response):
     return found[0]
 
 
+def hostkey_consistency(response, serial_fingerprints):
+    """Compare a getGuestAttributes hostkeys/ read with a serial receipt's public fingerprints.
+
+    The API call is authenticated to this instance. The values were written by a process on that
+    guest. Equality with the serial receipt is consistency between two guest publications. It is
+    not a pin, not proof the guest is honest, and not an IAP result. IAP is not an input here:
+    an IAP tunnel selects the instance and does not check the SSH host key.
+    """
+    if not isinstance(serial_fingerprints, dict) or set(serial_fingerprints) != set(guest.ALGORITHMS) \
+            or any(not guest.FP.fullmatch(serial_fingerprints.get(alg) or "") for alg in guest.ALGORITHMS):
+        raise Refused("serial fingerprints are not a public host-key set")
+    items = _hostkey_items(response)
+    found = {}
+    for item in items:
+        namespace = item.get("namespace")
+        key = item.get("key")
+        value = item.get("value")
+        if namespace not in (None, "hostkeys") or not isinstance(key, str) or not isinstance(value, str):
+            raise Refused("hostkey attribute is not a public blob")
+        if any(token in value for token in ("BEGIN", "PRIVATE", "OPENSSH", " ", "\n", "\r")):
+            raise Refused("private-attribute")
+        try:
+            key_type, fingerprint = guest.parse_public(key + " " + value.strip())
+        except guest.GuestRefused:
+            raise Refused("hostkey attribute is not a public blob") from None
+        if key_type != key:
+            raise Refused("hostkey attribute is not a public blob")
+        if key_type in found:
+            raise Refused("hostkey attribute is not a public blob")
+        found[key_type] = fingerprint
+    expected = {guest.PUBLIC_TYPES[alg]: serial_fingerprints[alg] for alg in guest.ALGORITHMS}
+    consistent = found == expected
+    return {
+        "binding": "control-plane-read-of-this-instance-metadata-server",
+        "namespace": "hostkeys",
+        "consistentWithSerial": consistent,
+        "serialRole": "consistency-only",
+        "pinned": False,
+        "honestGuest": False,
+        "iapAuthenticatesHostKey": False,
+        "requiresGuestServiceAccount": False,
+    }
+
+
+def _hostkey_items(response):
+    if isinstance(response, list):
+        return response
+    if not isinstance(response, dict):
+        raise Refused("hostkey attribute is not a public blob")
+    query = response.get("queryValue")
+    items = query.get("items") if isinstance(query, dict) else None
+    if isinstance(items, list):
+        return items
+    raise Refused("hostkey attribute is not a public blob")
+
+
+def hostkey_observation_phase():
+    """The later phase. This rotate plan does not enable guest attributes and does not SSH."""
+    return {
+        "executedByThisTool": False,
+        "enable": "separate-setMetadata-adds-enable-guest-attributes-TRUE-for-one-boot-then-removes-it",
+        "preserves": list(BASE_ORDER),
+        "projectMetadata": "unchanged",
+        "osLogin": "stays-FALSE",
+        "preflightPermission": "compute.instances.getGuestAttributes",
+        "requiredOnCurrentRotatePreflight": False,
+        "publish": "rotate-guest-PUT-hostkeys-public-blob-only-after-commit",
+        "stockAgent": "not-relied-on-publishes-on-instance-id-change-only",
+        "read": "getGuestAttributes queryPath hostkeys/ bound to this instance id",
+        "serial": "consistency-only",
+        "pinned": False,
+        "honestGuest": False,
+        "iapAuthenticatesHostKey": False,
+        "gcloudComputeSsh": "refused",
+        "laterSsh": "plain-openssh-through-start-iap-tunnel-StrictHostKeyChecking-yes-separate-ephemeral-access",
+        "privateKeyInAttributes": False,
+        "tofu": False,
+    }
+
+
 def attribute_state(call, receipt):
     try:
         response = call({"kind": "guest-attribute", "target": "replacement", "timeout": 30})
@@ -1457,10 +1542,25 @@ def plan(operator, out, now=None, token=None, revision=None, repo=ROOT, template
             "journalUnrecognized": evidence.get("journal", {}).get("unrecognized", 0),
             "priorCompletePhaseIsNotAuthority": True, "hostKeyPinned": False,
             "distinctFromOriginalVerified": False},
-        "hostIdentity": {"pinned": False, "serialTrustedForPin": False, "repeatedGuestReportIsProof": False,
-                         "instanceIdentityToken": "unavailable-no-guest-service-account",
-                         "privateKeyDelivery": "refused-no-disclosure-channel",
-                         "blocker": "no-authenticated-observation-of-ssh-public-key"},
+        "hostIdentity": {
+            "pinned": False, "serialTrustedForPin": False, "repeatedGuestReportIsProof": False,
+            "instanceIdentityToken": "unavailable-no-guest-service-account-and-does-not-carry-ssh-host-key",
+            "privateKeyDelivery": "refused",
+            "iapAuthenticatesHostKey": False,
+            "gcloudComputeSsh": "refused-implicit-metadata-and-known-hosts-writes",
+            "guestAttributes": {
+                "requiresGuestServiceAccount": False,
+                "enabledOnThisInstance": False,
+                "namespace": "hostkeys",
+                "publisher": "rotate-guest-public-blob-only" if mode == "rotate" else "not-this-mode",
+                "stockAgent": "version-dependent-publishes-on-generation-only",
+                "controlPlaneRead": "getGuestAttributes-names-this-instance",
+                "serialRole": "consistency-only",
+                "networkWrongHost": "control-plane-binding-when-the-attribute-is-enabled-and-read-back",
+                "compromisedGuest": "not-a-defense",
+            },
+            "nextPhase": hostkey_observation_phase(),
+        },
         "cleanup": {"authorizedKeyComment": "roseos-yogi-recover-<operationId>",
                     "temporaryAccount": guest.TEMP_ACCOUNT, "paths": list(guest.AUTH_PATHS)},
         "route": "gce-metadata-startup-script-and-bounded-serial-read",

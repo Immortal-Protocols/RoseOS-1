@@ -6,7 +6,9 @@ text as the instance startup-script. This template is not a spent binding. It do
 original VM, or restore a snapshot.
 
 On the guest it may chmod one unit file when every precondition matches, rotate three named host keys, and remove one
-exact authorized_keys comment plus one exact temporary account. It writes a single public receipt line.
+exact authorized_keys comment plus one exact temporary account. It writes a single public receipt line. After a
+successful rotate it also PUTs only the new public key blobs to the metadata server under hostkeys/. That write
+uses the instance metadata server, not a service account. It is not a pin and it does not run on repair.
 """
 import base64
 import errno
@@ -18,6 +20,7 @@ import re
 import stat
 import subprocess
 import sys
+import urllib.error
 import urllib.request
 
 RECEIPT_SCHEMA = "roseos.yogi-replacement-recover-receipt.v1"
@@ -396,6 +399,30 @@ def runner_problem(runner):
     return None
 
 
+def publish_public_hostkeys(io, lines_by_alg):
+    """PUT each new public blob to hostkeys/<openssh-type> on this instance's metadata server.
+
+    The value is the base64 blob only, matching the guest-attribute key the guest environment uses.
+    Private key files are not read. A metadata rejection (guest attributes disabled) returns False.
+    That does not roll the new keys back and does not prove the guest is honest.
+    """
+    if set(lines_by_alg) != set(ALGORITHMS):
+        raise GuestRefused("public-type")
+    puts = []
+    for alg in ALGORITHMS:
+        line = lines_by_alg[alg]
+        key_type, _fingerprint = parse_public(line)
+        if key_type != PUBLIC_TYPES[alg]:
+            raise GuestRefused("public-type")
+        blob = str(line).strip().split()[1]
+        if not re.fullmatch(r"[A-Za-z0-9+/]+=*", blob):
+            raise GuestRefused("public-blob")
+        if any(token in blob or token in key_type for token in ("BEGIN", "PRIVATE", "OPENSSH")):
+            raise GuestRefused("private-attribute")
+        puts.append((key_type, blob))
+    return bool(io.publish_hostkey_attributes(puts))
+
+
 def parse_public(line):
     parts = str(line).strip().split()
     if len(parts) < 2 or parts[0] not in PUBLIC_TYPES.values():
@@ -687,6 +714,7 @@ def run_rotate(io):
         return _rotate_refuse(io, binding, boot, before, runner, problem, baseline, unknown)
     io.marker_store({"phase": "baseline", "operationId": OPERATION_ID, "nonce": NONCE, "baseline": baseline})
     rotated = {}
+    public_lines = {}
     try:
         for alg in ALGORITHMS:
             key_type, fingerprint = parse_public(io.ssh_generate(alg))
@@ -695,10 +723,12 @@ def run_rotate(io):
                 raise GuestRefused("rotate-same")
             io.ssh_preserve(alg)
             io.ssh_commit(alg)
-            key_type, confirmed = parse_public(io.ssh_public(KEY_NAMES[alg] + ".pub"))
+            public_line = io.ssh_public(KEY_NAMES[alg] + ".pub")
+            key_type, confirmed = parse_public(public_line)
             if key_type != PUBLIC_TYPES[alg] or confirmed != fingerprint or confirmed == baseline[alg]:
                 raise GuestRefused("rotate-partial")
             rotated[alg] = confirmed
+            public_lines[alg] = public_line
     except (GuestRefused, OSError) as error:
         code = str(error) if str(error) in ("rotate-same", "rotate-partial") else "rotate-partial"
         rolled = _rollback(io)
@@ -731,9 +761,18 @@ def run_rotate(io):
         receipt["journal"]["unrecognized"] = min(20, int(io.prior_journal()))
     except (GuestRefused, OSError, TypeError, ValueError):
         receipt["journal"]["unrecognized"] = 1
+    published = _publish_rotated_hostkeys(io, public_lines)
     io.marker_store({"phase": "complete", "operationId": OPERATION_ID, "nonce": NONCE, "baseline": baseline,
-                     "rotated": rotated, "receipt": receipt})
+                     "rotated": rotated, "hostkeyAttributesPublished": published, "receipt": receipt})
     return _emit(io, receipt, binding)
+
+
+def _publish_rotated_hostkeys(io, lines_by_alg):
+    """Best-effort public publish. Failure leaves the rotated files in place."""
+    try:
+        return bool(publish_public_hostkeys(io, lines_by_alg))
+    except (GuestRefused, OSError):
+        return False
 
 
 def run(io):
@@ -928,6 +967,16 @@ def _rerun(io, marker, binding, boot):
             if int(discarded.get("skippedSymlink") or 0) > 0:
                 receipt["status"] = "partial"
                 receipt["cleanup"] = dict(receipt["cleanup"], accessCleanup="failed")
+            if GUEST_PURPOSE == "rotate" and marker.get("hostkeyAttributesPublished") is not True \
+                    and receipt.get("status") == "complete":
+                try:
+                    lines = {alg: io.ssh_public(KEY_NAMES[alg] + ".pub") for alg in ALGORITHMS}
+                except (GuestRefused, OSError):
+                    lines = None
+                if lines is not None and _publish_rotated_hostkeys(io, lines):
+                    stored = dict(marker)
+                    stored["hostkeyAttributesPublished"] = True
+                    io.marker_store(stored)
             return _emit(io, receipt, binding)
     # A crash or reboot must not generate another key. Restore any preserved previous pair.
     rolled = _rollback(io)
@@ -1247,6 +1296,28 @@ class LinuxHost:
         finally:
             os.close(fd)
         return data.decode()
+
+    def publish_hostkey_attributes(self, writes):
+        """PUT only a public blob. The private key file is not opened."""
+        if self.metadata:
+            return bool(self.metadata("publish-hostkeys", writes))
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        for key_type, blob in writes:
+            if key_type not in PUBLIC_TYPES.values():
+                raise GuestRefused("public-type")
+            if not isinstance(blob, str) or not re.fullmatch(r"[A-Za-z0-9+/]+=*", blob):
+                raise GuestRefused("public-blob")
+            if any(token in blob for token in ("BEGIN", "PRIVATE", "OPENSSH", " ", "\n")):
+                raise GuestRefused("private-attribute")
+            request = urllib.request.Request(
+                "http://metadata.google.internal/computeMetadata/v1/instance/guest-attributes/hostkeys/" + key_type,
+                data=blob.encode("ascii"), method="PUT", headers={"Metadata-Flavor": "Google"})
+            try:
+                with opener.open(request, timeout=5) as response:
+                    response.read(256)
+            except (OSError, urllib.error.URLError, ValueError):
+                return False
+        return True
 
     def ssh_generate(self, algorithm):
         if algorithm not in ALGORITHMS:
