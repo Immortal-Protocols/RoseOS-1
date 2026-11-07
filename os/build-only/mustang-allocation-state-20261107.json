@@ -4,9 +4,15 @@
   "unknown": true,
   "artifactCount": 0,
   "compileStepConclusion": null,
+  "allocatedBuild": null,
+  "authoritativeLedger": false,
+  "formerOwnerLedger": "absent",
+  "guessSpentAllocation": false,
+  "inspectFrankel": false,
   "lastConfirmedPublicBuild": "2026110401",
   "consumedBuilds": null,
   "builder": null,
   "dataFilesystemUuid": null,
-  "basis": "Run 41884368820 has no artifacts and its compile step conclusion is null. Whether it consumed a build number is still unknown. Recover that reservation from the former Mustang owner. Do not inspect Frankel for it. This record does not select a build number."
+  "recovery": "new-epoch-above-legacy-ceiling",
+  "basis": "Run 41884368820 has no artifacts, a null compile-step conclusion, and allocatedBuild null. The former owner has no authoritative ledger, so that reservation cannot be recovered from them and must not be guessed. Do not inspect Frankel. The legacy date namespace stays retired. A later dedicated build needs a new numbering epoch and an external authority journal above 9999123199. This record does not create that epoch or select a build number."
 }

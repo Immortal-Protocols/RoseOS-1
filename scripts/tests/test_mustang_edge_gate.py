@@ -737,6 +737,17 @@ class DedicatedRuntimeTest(unittest.TestCase):
         (self.root/self.cfg['allocationState']).write_text(json.dumps(state))
         with self.assertRaisesRegex(ValueError,'allocation state remains unresolved'): self.admitted()
 
+    def test_copy_time_frankel_snapshot_is_not_a_source_pin(self):
+        path=self.root/self.cfg['sourceEvidence']
+        source=self.driver.load(path)
+        source['selectionSha256']='34cdc3a98e8cfc614a88c5a40d002c51e87404aaec8a4f2962cb46e824c4f6e4'
+        path.write_text(json.dumps(source))
+        with self.assertRaisesRegex(ValueError,'not a dedicated source pin'): self.admitted()
+        source.pop('selectionSha256')
+        source['base']='/home/pixelbuild/grapheneos-2026100600'
+        path.write_text(json.dumps(source))
+        with self.assertRaisesRegex(ValueError,'not a dedicated source pin'): self.admitted()
+
     def test_private_schema_requires_private_provenance_during_hosted_guard(self):
         path=self.root/self.cfg['appInputsRecord']; record=self.driver.load(path)
         record['schema']=self.driver.PRIVATE_RECORD; path.write_text(json.dumps(record))
@@ -811,6 +822,13 @@ class DedicatedRuntimeTest(unittest.TestCase):
         self.assertIsNone(readiness.enrollment()['github']['runnerId'])
         self.assertEqual(readiness.enrollment()['github']['runnerCount'],0)
         self.assertIn('4884085713',' '.join(item['detail'] for item in report['blockers']))
+        self.assertIn('signed-target_files.zip', ' '.join(item['detail'] for item in report['blockers']))
+        self.assertIn('no authoritative ledger', ' '.join(item['detail'] for item in report['blockers']))
+        self.assertIn('copy-time only', ' '.join(item['detail'] for item in report['blockers']))
+        self.assertFalse(report['numberStrategy']['selectsBuildNumber'])
+        self.assertIsNone(report['numberStrategy']['allocatedBuild'])
+        self.assertFalse(report['sourceRequirement']['pinned'])
+        self.assertIsNone(report['sourceRequirement']['rejected']['resolvedManifest'])
         plan=readiness.provision_plan()
         rendered=json.dumps(plan)
         self.assertEqual(plan['noblePackages']['absent'],['libncurses5','yarn'])
