@@ -110,9 +110,10 @@ import alpha_source  # noqa: E402  (the reviewed copy plan and per-file copy)
 import launcher3_lane  # noqa: E402  (dedicated capacity; no cloud operations)
 
 MANIFEST = ROOT/'os/compile-contracts/launcher3-quickstep-lib.json'
-# OS Product's reviewed contract version (schema 3, #563 base rebind plus 1193274's lunch inputs without auto
-# maintenance). A different manifest is refused until this pin is updated.
-MANIFEST_SHA256 = '44471fa60727ede4b0f068e2dc22708f60dbe12814a1620119ef3bc80b33d711'
+# OS Product's reviewed contract version (schema 3). Re-pinned 2026-11-07 to the live trusted patcher:
+# #440's delta is empty, so base equals final, and branches.otherwise is Product's wording on #662.
+# A different manifest is refused until this pin is updated.
+MANIFEST_SHA256 = 'ff03a08249146a014dafaa5e1a9ef5084100b2f01f5a35ff7948e84506fd5461'
 CONDITIONS = ['base-exact', 'delta-preimages', 'isolated-apply', 'final-exact']
 # The binding inputs each branch requires and forbids, in the contract's own vocabulary (branches.requires, forbids):
 # check() binds and refuses exactly these, so the contract and this adapter cannot drift.
@@ -184,7 +185,7 @@ APPLY_ARGS_SOURCE = {'path': 'os/release-pipeline/frankel.json', 'key': 'host.in
 # and acceptance, the overlay role rules and the unaffected, notInputs, provenance, proves, candidatePatches and
 # outputsToBind statements. A re-pinned contract that changes any of it is invalid until this adapter is reviewed
 # against the new text, so a re-pin is never only a hash bump.
-CONTRACT_TEXT_SHA256 = 'db0f91c020574c6af3ec0fc963eb22988df2a2ea9e530baa0708bc4041b71372'
+CONTRACT_TEXT_SHA256 = '22fc9d8c08576d41ea590f1bcc493e82c03818a3a7ebc47bdafe70ef7cf99d69'
 APPLY_STEPS = ['git -C <copy>/<project> apply --check -p<strip> <bundlePath>', 'git -C <copy>/<project> apply -p<strip> <bundlePath>']
 BLOB_ARGV = ['git', 'hash-object', '-t', 'blob', '--no-filters', '--stdin']
 LISTING_BYTES = 64 << 20

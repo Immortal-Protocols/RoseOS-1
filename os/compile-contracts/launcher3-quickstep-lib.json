@@ -31,7 +31,7 @@
    ],
    "otherwise": "refuse at the first failed condition, naming its id; partial, already applied or unknown state refuses"
   },
-  "otherwise": "refuse: mixed pre/post, unknown hash, missing file, overlay, input or binding. A tree integrated by an older patcher (Launcher3 switcher only) is such a state and must not be completed by applying patches except through all four verifyBaseApplyCandidate conditions. Never reset or trust a snapshot.",
+  "otherwise": "A tree integrated by an older patcher (for example Launcher3 switcher only) is such a state and is refused: with candidateDelta empty, no branch completes it. Never reset or trust a snapshot.",
   "requires": {
    "verifyIntegrated": [
     "sourceTree",
@@ -103,7 +103,7 @@
     },
     {
      "name": "rose-edge-wmshell.patch",
-     "sha256": "335fcb61c6054806143a08c2d1a0202b01d71c45948a02a51eb0128b7700a95c"
+     "sha256": "03f7537f388369bc785432cd67125d55011113376374dd6576006e63a9a9be6b"
     },
     {
      "name": "rose-shade-systemui.patch",
@@ -927,17 +927,17 @@
      "path": "libs/WindowManager/Shell/src/com/android/wm/shell/roseedge/RoseEdgePolicy.java",
      "pre": null,
      "post": {
-      "sha256": "5a56584288a22f6e3fd6806758ea4f8834e4125ba9ebe20df82d0aa690c6fbdd",
-      "gitBlob": "2c6640488cd13c2aed18682876893d8c0423e17c"
+      "sha256": "6e5178564ce92ac3ab0ce41847365ad3020d5c7bb88a4495bc5d5b5782032bdd",
+      "gitBlob": "6d9df5fa1c265fcbf501c95b3aad3633ac4a83b0"
      },
      "chain": [
       {
        "patch": "rose-edge-wmshell.patch",
        "before": null,
-       "after": "2c6640488cd13c2aed18682876893d8c0423e17c",
+       "after": "6d9df5fa1c265fcbf501c95b3aad3633ac4a83b0",
        "index": [
         "0000000",
-        "2c66404"
+        "6d9df5f"
        ],
        "base": "exact"
       }
@@ -1718,17 +1718,17 @@
   },
   {
    "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeShell.java",
-   "sha256": "7e588aba36ad31e2b155dcf214dda8bc3b45109aa504a7ec0f6bf0b92522f1b7",
+   "sha256": "779b4f9ed1fdfdc86601ae3ac1a2632ffe6571fb6942348783b3ace4a9681f81",
    "role": "required"
   },
   {
    "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeState.java",
-   "sha256": "853ade9a6915ecd1cade24f60dc61a82c7cbfed54a02f4d71257b11709532167",
+   "sha256": "ae617fbcee7a017ce0a798e3433ea770fac73a1152da5047b3a57c749656c144",
    "role": "required"
   },
   {
    "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeSwipe.java",
-   "sha256": "340f2a92b1a61592c027183868b0aa2306282dd2762e89e487e4cf310d2e9a11",
+   "sha256": "2c2af87499504706ca4604c05257d702517eebf53a667ad97d5f5958e4cccb7f",
    "role": "required"
   },
   {
@@ -1804,7 +1804,7 @@
     {
      "project": "frameworks/base",
      "name": "rose-edge-wmshell.patch",
-     "sha256": "335fcb61c6054806143a08c2d1a0202b01d71c45948a02a51eb0128b7700a95c"
+     "sha256": "03f7537f388369bc785432cd67125d55011113376374dd6576006e63a9a9be6b"
     },
     {
      "project": "frameworks/base",
@@ -1871,15 +1871,15 @@
     },
     {
      "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeShell.java",
-     "sha256": "7e588aba36ad31e2b155dcf214dda8bc3b45109aa504a7ec0f6bf0b92522f1b7"
+     "sha256": "779b4f9ed1fdfdc86601ae3ac1a2632ffe6571fb6942348783b3ace4a9681f81"
     },
     {
      "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeState.java",
-     "sha256": "853ade9a6915ecd1cade24f60dc61a82c7cbfed54a02f4d71257b11709532167"
+     "sha256": "ae617fbcee7a017ce0a798e3433ea770fac73a1152da5047b3a57c749656c144"
     },
     {
      "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeSwipe.java",
-     "sha256": "340f2a92b1a61592c027183868b0aa2306282dd2762e89e487e4cf310d2e9a11"
+     "sha256": "2c2af87499504706ca4604c05257d702517eebf53a667ad97d5f5958e4cccb7f"
     },
     {
      "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeWindow.java",
@@ -1946,7 +1946,7 @@
      },
      {
       "name": "rose-edge-wmshell.patch",
-      "sha256": "335fcb61c6054806143a08c2d1a0202b01d71c45948a02a51eb0128b7700a95c"
+      "sha256": "03f7537f388369bc785432cd67125d55011113376374dd6576006e63a9a9be6b"
      },
      {
       "name": "rose-shade-systemui.patch",
@@ -2770,17 +2770,17 @@
       "path": "libs/WindowManager/Shell/src/com/android/wm/shell/roseedge/RoseEdgePolicy.java",
       "pre": null,
       "post": {
-       "sha256": "5a56584288a22f6e3fd6806758ea4f8834e4125ba9ebe20df82d0aa690c6fbdd",
-       "gitBlob": "2c6640488cd13c2aed18682876893d8c0423e17c"
+       "sha256": "6e5178564ce92ac3ab0ce41847365ad3020d5c7bb88a4495bc5d5b5782032bdd",
+       "gitBlob": "6d9df5fa1c265fcbf501c95b3aad3633ac4a83b0"
       },
       "chain": [
        {
         "patch": "rose-edge-wmshell.patch",
         "before": null,
-        "after": "2c6640488cd13c2aed18682876893d8c0423e17c",
+        "after": "6d9df5fa1c265fcbf501c95b3aad3633ac4a83b0",
         "index": [
          "0000000",
-         "2c66404"
+         "6d9df5f"
         ],
         "base": "exact"
        }
@@ -3561,17 +3561,17 @@
    },
    {
     "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeShell.java",
-    "sha256": "7e588aba36ad31e2b155dcf214dda8bc3b45109aa504a7ec0f6bf0b92522f1b7",
+    "sha256": "779b4f9ed1fdfdc86601ae3ac1a2632ffe6571fb6942348783b3ace4a9681f81",
     "role": "required"
    },
    {
     "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeState.java",
-    "sha256": "853ade9a6915ecd1cade24f60dc61a82c7cbfed54a02f4d71257b11709532167",
+    "sha256": "ae617fbcee7a017ce0a798e3433ea770fac73a1152da5047b3a57c749656c144",
     "role": "required"
    },
    {
     "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeSwipe.java",
-    "sha256": "340f2a92b1a61592c027183868b0aa2306282dd2762e89e487e4cf310d2e9a11",
+    "sha256": "2c2af87499504706ca4604c05257d702517eebf53a667ad97d5f5958e4cccb7f",
     "role": "required"
    },
    {

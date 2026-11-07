@@ -12,14 +12,14 @@ the current bytes' hashes as provenance.
 Re-pinned 2026-11-07: the base is what the live trusted patcher registers for frankel (the edge included), and #440's
 candidate delta is retired and empty, so base + delta = final. Historical note: #440 was a draft, unregistered
 candidate; its inert copies have been removed. A tree
-integrated by today's patcher is therefore at base, not at the candidate's final images.
+integrated by today's patcher is therefore at base, which equals final.
 
 The adapter takes exactly one of these branches, and refuses anything else:
 - verifyIntegrated: every affected file already equals its candidate post-image, every required overlay is present
   with its hash, and no patch is applied again. config.xml is the one file the patcher rewrites afterwards: it is
-  accepted only by the integrationRewrite rule with its separately bound generating inputs. It refuses a tree at base.
+  accepted only by the integrationRewrite rule with its separately bound generating inputs.
 - reconstruct: every affected file equals its pinned pre-image (and its pinned git blob), new files are absent, and
-  the patches are applied in order to give exactly the post-images. It refuses a tree at base.
+  the patches are applied in order to give exactly the post-images.
 - verifyBaseApplyCandidate (a proposal stated as data; any run needs separate authority): the tree is exactly at base,
   then the candidate delta is applied in an isolated copy only, and the result must be exactly the candidate.
 - Any other state (some files pre and some post, an unknown hash, a missing input or binding) is refused. Nothing is
@@ -51,12 +51,11 @@ OS = ROOT/'os'
 PINNED = ROOT/'os/pinned-manifest.xml'
 # Pinned pre-images, byte for byte, under their project paths.
 FIXTURES = ROOT/'os/tests/fixtures/launcher3-compile-contract'
-# The candidate (#440, draft): its only inputs not in the base bundle, as inert copies (never applied or copied by any
-# build: they are outside os/patches and os/overlays), bound to the reviewed commit by their digests.
-# Retired 2026-11-07: #440's edge patches and overlays are registered by the trusted patcher at the re-pinned sha
-# (base), so the delta is empty and base + delta = final. The record of the reviewed commit stays for provenance.
+# #440 is provenance only (pr and commit). Its patches and overlays are registered by the live patcher, so the
+# delta is empty, base + delta = final, and there is no bundle of inert copies. BUNDLE is an absent directory:
+# bundle_files() is empty and bundle_or_os reads every input from os/.
 CANDIDATE = {'pr': 440, 'commit': '2f57a5f28e3c3cc97177bf3f9294ea807d514469'}
-BUNDLE = FIXTURES/'candidate-pr440'
+BUNDLE = FIXTURES/'retired-empty-delta'
 CANDIDATE_PATCHES = []
 # The manifest's schema. 3 adds base.registration, base.bundleReport, branches.requires/forbids, lunchInputs and the
 # wording fixes agreed with Release on #410; the sibling frameworks-base contract stays at 2 until its own re-pin.
@@ -913,10 +912,8 @@ def describe():
         'candidateDelta is retired and empty, so a tree integrated by this patcher is at these final images')
     branches = d['branches']
     branches['reconstruct'] += '; every unlisted path matches its treePin, no extra path'
-    branches['otherwise'] = ('refuse: mixed pre/post, unknown hash, missing file, overlay, input or binding. A tree '
-        'integrated by an older patcher (Launcher3 switcher only) is such a state and must not be completed by '
-        'applying patches except through all four verifyBaseApplyCandidate conditions. Never reset or trust a '
-        'snapshot.')
+    branches['otherwise'] = ('A tree integrated by an older patcher (for example Launcher3 switcher only) is such a '
+        'state and is refused: with candidateDelta empty, no branch completes it. Never reset or trust a snapshot.')
     branches['requires'] = {
         'verifyIntegrated': ['sourceTree', 'lunch', 'policyReceipt'],
         'reconstruct': ['sourceTree', 'lunch', 'reconstructSource'],
