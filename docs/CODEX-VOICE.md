@@ -66,7 +66,29 @@ Local task progress also feeds Rose Agent's main native task card through its ex
 
 ## Sessions, stop and transcripts
 
-One conversation thread coordinates up to two independent app threads. App work reuses Python's phone actions and send/purchase guards. Final messages/posts, purchases and security changes remain owner actions. Each app is bound to one target; device-wide intent shortcuts are excluded, so timers and other actions use that app’s workspace UI; reads, commands and stop carry the controller session ID and task ID. Schema-4 `multiSession=true,maxSessions>=2` is required for this mode: older controllers are refused rather than replacing a workspace or falling back to the owner's visible screen. Native owner Stop is observed on that same binding and interrupts only its Codex thread. A command already dispatched can complete before stop; its outcome is retained, and unacknowledged cleanup is recorded as uncertain.
+One conversation thread coordinates up to two independent app threads. On the real phone,
+Terra uses screenshots and coordinate input through `VisionSession`: no accessibility-tree
+inspection, node matching, semantic clicks, or node-bound typing. Each input names the
+specific screenshot the model saw; it consumes that frame and returns a new image for
+verification. Taps and swipes use the controller's existing `screen_gesture` command.
+The additive `screen_text` command inserts literal text through the session's virtual
+input device into the field the model focused visually, with an explicit replace/append
+flag and commit disabled. It requires the controller's `visionText=true` capability;
+an older controller reports an update requirement and never falls back to accessibility.
+The default real-phone path has vision enabled; the legacy nonvision adapter remains for
+existing text-only fixtures and the separate local-model path.
+
+Final messages/posts, purchases and security changes remain owner actions under the
+existing policy. Vision taps declare their effect; the server rejects final-action
+effects. This declaration relies on the model's visual interpretation, rather than
+an independent accessibility-label check. Passwords and secrets remain owner input.
+The OS retains its session, protected-screen and owner-control boundaries.
+Task completion must include a structured `complete_task` result: a blocked or failed
+goal becomes failed, even if the model turn completed normally. Success requires an
+available screenshot and a successful latest observation/action; it remains the model's
+visual judgment, not an assertion that a dispatched tap succeeded.
+
+Each app is bound to one target; device-wide intent shortcuts are excluded, so timers and other actions use that app’s workspace UI; reads, commands and stop carry the controller session ID and task ID. Schema-4 `multiSession=true,maxSessions>=2` is required for this mode: older controllers are refused rather than replacing a workspace or falling back to the owner's visible screen. Native owner Stop is observed on that same binding and interrupts only its Codex thread. A command already dispatched can complete before stop; its outcome is retained, and unacknowledged cleanup is recorded as uncertain.
 
 App threads and their workspaces are reused for follow-ups during a backend run. Reconnect rechecks each bound session. Stop latches against late tool calls. Reset starts a new conversation without deleting earlier logs. A backend restart explicitly creates new Codex threads, leaving prior transcripts available. Codex threads are **ephemeral** to avoid native rollout persistence of private reasoning or screenshots; prior transcripts are not silently uploaded or replayed as commands.
 
@@ -99,6 +121,7 @@ Automated validation uses synthetic data, simulated Codex/controller replies and
 node --test workspace/rose-agent/server/codex-voice.test.mjs workspace/rose-agent/server/codex-provider-start.test.mjs
 cd prototypes/voice-phone-demo
 python -m rose.tests.test_codex
+python -m rose.tests.test_vision_phone
 python -m rose.tests.test_background
 python -m rose.tests.test_remote
 ```
