@@ -1,0 +1,16 @@
+{
+  "schema": "roseos.mustang-source-requirement.v1",
+  "status": "unbound",
+  "pinned": false,
+  "rejected": {
+    "kind": "production-working-tree-byte-snapshot",
+    "base": "/home/pixelbuild/grapheneos-2026100600",
+    "resolvedManifest": null,
+    "pinnedManifestVerified": false,
+    "projectRevisionsVerified": false,
+    "selectionSha256": "34cdc3a98e8cfc614a88c5a40d002c51e87404aaec8a4f2962cb46e824c4f6e4",
+    "selectionMeaning": "copy-time only; not a source pin"
+  },
+  "required": "A later dedicated sync on this VM's source directory, with pristine true and manifestSha256 equal to the hash of os/pinned-manifest.xml. The copy-time selection hash is not that pin.",
+  "basis": "The old snapshot records resolvedManifest null and says the selection identifies copied paths at copy time only. Version-control metadata was excluded, so project revisions cannot be re-derived from it. This file does not claim a sync occurred."
+}

@@ -127,7 +127,9 @@ def blockers(root=ROOT):
                                 'Lifetime is unset. No registration token is stored.'})
     if runtime.get('sourceEvidence') is None or evidence['observed'].get('sourceInstalled') is not True:
         items.append({'code': 'source-unprovisioned',
-                      'detail': 'roseos/ on the data disk is empty. Pinned source has not been synced and source evidence is unset.'})
+                      'detail': 'roseos/ on the data disk is empty. Pinned source has not been synced and source evidence is unset. '
+                                'The old /home/pixelbuild/grapheneos-2026100600 snapshot has resolvedManifest null. '
+                                'Selection 34cdc3a98e8cfc614a88c5a40d002c51e87404aaec8a4f2962cb46e824c4f6e4 is copy-time only and is not a source pin.'})
     if runtime.get('jobs') is None:
         items.append({'code': 'jobs-unbound',
                       'detail': 'Make parallelism is unset. Do not copy the withdrawn c3-standard-44 proposal of 24 jobs onto this n2-highmem-32 VM.'})
@@ -144,24 +146,33 @@ def blockers(root=ROOT):
     else:
         items.append({'code': 'os-login-no-standing-key',
                       'detail': 'IAP OS Login was authenticated once and the temporary key was removed. No key remains for a later session.'})
-    if state.get('unknown') is not False or not isinstance(state.get('consumedBuilds'), list):
+    if state.get('unknown') is not False or not isinstance(state.get('consumedBuilds'), list) \
+            or state.get('allocatedBuild') is not None or state.get('authoritativeLedger') is not False:
         items.append({'code': 'allocation-unresolved',
-                      'detail': 'Run 41884368820 has no artifacts and a null compile-step conclusion. It may have consumed a build number. '
-                                'The last confirmed public Mustang allocation is 2026110401. Recover the reservation from the former owner without inspecting Frankel. '
-                                'No replacement number is selected.'})
+                      'detail': 'Run 41884368820 has no artifacts, a null compile-step conclusion, and allocatedBuild null. '
+                                'The former owner has no authoritative ledger. Do not guess whether it consumed a number and do not inspect Frankel. '
+                                'The last confirmed public Mustang allocation is 2026110401. '
+                                'A later build needs a new numbering epoch above 9999123199. No number is selected.'})
     if runtime.get('appInputsRecord') is None:
         items.append({'code': 'app-inputs-unadmitted',
                       'detail': 'The private Frankel 2026110501 export is twelve files. Archive transfer and hash were not verified, so it is not admitted.'})
     if runtime.get('baselineTargetFiles') is None and runtime.get('baselineFactoryEvidence') is None:
         candidate = load(root/'os/build-only/mustang-candidate-archive-41738359336.json')
-        if candidate.get('admitted') is not False or candidate.get('sizeBytes') == baseline['sizeBytes']:
+        inventory = candidate.get('inventory') or {}
+        if candidate.get('admitted') is not False or candidate.get('installed') is True \
+                or inventory.get('signedTargetFilesZip') is not False \
+                or inventory.get('innerInstallerIsBaselineTargetFiles') is not False \
+                or candidate.get('sizeBytes') == baseline['sizeBytes']:
             raise ValueError('candidate archive observation must stay distinct and unadmitted')
         items.append({'code': 'baseline-not-on-disk',
                       'detail': 'Baseline build 2026110302 target-files receipt '
                                 + baseline['sha256'] + ' is ' + str(baseline['sizeBytes'])
-                                + ' bytes. That archive is not on this disk and is not admitted. Actions artifact '
-                                + candidate['artifactId'] + ' is a candidate archive of ' + str(candidate['sizeBytes'])
-                                + ' bytes and is not that receipt. Its retrieval is held; the hold meaning is unknown.'})
+                                + ' bytes. That archive is not on this disk and is not admitted. '
+                                'Its former Frankel path was not inspected and its existence is unproved. '
+                                'Actions artifact ' + candidate['artifactId']
+                                + ' is a preserved candidate of ' + str(candidate['sizeBytes'])
+                                + ' bytes with no signed-target_files.zip. The inner mustang-install-2026110302.zip is not that receipt. '
+                                'Preserving the candidate does not supply the baseline.'})
     if runtime.get('signingRouteEvidence') is None:
         items.append({'code': 'signing-route-unadmitted',
                       'detail': 'The existing signer ' + SIGNER + ' and Mustang v1 secret versions stay in place. '
@@ -182,10 +193,10 @@ def workflow_trust(text):
     for kind in ('pull_request', 'pull_request_target', 'workflow_call', 'workflow_run', 'schedule'):
         if re.search(r'(?m)^  %s:\n' % kind, body):
             problems.append(kind)
-    if re.search(r'\$\{\{\s*(inputs\.(?!publish\b)|github\.event)', body):
+    if re.search(r'\$\{\{\s*(inputs\.(?!(?:publish|dry_run)\b)|github\.event)', body):
         problems.append('untrusted expression reaches the workflow')
-    if 'inputs.publish' in body and re.search(r'(?m)^[ ]+run:.*inputs\.publish', body):
-        problems.append('publish input is interpolated into a shell script')
+    if re.search(r'(?m)^[ ]+run:.*inputs\.(?:publish|dry_run)', body):
+        problems.append('workflow input is interpolated into a shell script')
     blocks = body.split('- uses: actions/checkout@')
     if len(blocks) < 2:
         problems.append('checkout missing')
@@ -222,6 +233,8 @@ def report(root=ROOT):
         'freeInodeObservation': {'free': mustang_lane.CONFIRMED_FREE_INODES, 'total': mustang_lane.CONFIRMED_TOTAL_INODES},
         'freeInodeFloor': 'positive only; the empty-disk free count is not reused after files are written',
         'workflowTrust': workflow_trust((root/'.github/workflows/mustang-ota-dedicated.yml').read_text()),
+        'numberStrategy': number_strategy(root),
+        'sourceRequirement': load(root/'os/build-only/mustang-source-requirement-20261107.json'),
         'signingGroupImpact': {
             'modified': False,
             'workflow': '.github/workflows/os-sign.yml',
@@ -263,6 +276,46 @@ def evaluate_guest(obs, lane, cfg, root=ROOT):
     return {'identity': 'matched', 'availableBytes': available, 'availableInodes': inodes, 'admitted': False}
 
 
+COPY_TIME_SELECTION = '34cdc3a98e8cfc614a88c5a40d002c51e87404aaec8a4f2962cb46e824c4f6e4'
+FRANKEL_SOURCE_BASE = '/home/pixelbuild/grapheneos-2026100600'
+
+
+def reject_copy_time_source(source):
+    """The old Frankel snapshot is not a pin for the dedicated builder."""
+    if not isinstance(source, dict):
+        raise ValueError('dedicated source pin is missing')
+    rendered = json.dumps(source, sort_keys=True)
+    if COPY_TIME_SELECTION in rendered or FRANKEL_SOURCE_BASE in rendered \
+            or str(source.get('sourceRoot', '')).startswith('/home/pixelbuild') \
+            or str(source.get('base', '')).startswith('/home/pixelbuild') \
+            or (source.get('resolvedManifest') is None and source.get('selectionSha256')):
+        raise ValueError('copy-time Frankel snapshot is not a dedicated source pin')
+
+
+def number_strategy(root=ROOT):
+    """Say how a future number can be unique. Do not select or reserve one."""
+    state = load(Path(root)/'os/build-only/mustang-allocation-state-20261107.json')
+    policy = load(Path(root)/'os/build-only/mustang-numbering.json')
+    if state.get('failedRun') != '41884368820' or state.get('allocatedBuild') is not None \
+            or state.get('unknown') is not True or state.get('consumedBuilds') is not None \
+            or state.get('authoritativeLedger') is not False or state.get('guessSpentAllocation') is not False:
+        raise ValueError('failed-run allocation was guessed')
+    if policy.get('status') != 'unbound' or policy.get('legacyAllocationKnown') is not False \
+            or policy.get('epoch') is not None or policy.get('authority') is not None \
+            or policy.get('legacyCeiling') != '9999123199':
+        raise ValueError('legacy allocation stays unknown until an independent epoch exists')
+    return {
+        'selectsBuildNumber': False,
+        'allocatedBuild': None,
+        'authoritativeLedger': False,
+        'guessSpentAllocation': False,
+        'inspectFrankel': False,
+        'failedRun': '41884368820',
+        'legacyCeiling': '9999123199',
+        'strategy': 'Retire the legacy date namespace. Do not guess whether run 41884368820 consumed a number and do not backfill a ledger. '
+                    'A future dedicated build needs a new epoch and an external authority journal above that ceiling. This record does not create that epoch.'}
+
+
 def provision_plan():
     mount = mustang_lane.CONFIRMED_MOUNT
     home = mount + '/roseos'
@@ -279,7 +332,8 @@ def provision_plan():
         f'sudo install -d -o {user} -g {user} -m 0750 {home}/source {home}/rose-actions {home}/runner {home}/inputs',
         f'sudo -u {user} -H bash -lc \'cd {home}/source && repo init -u https://github.com/Immortal-Protocols/RoseOS-1.git -b "$ROSE_REVISION" -m os/pinned-manifest.xml && repo sync -c -j4 --fail-fast && repo manifest -r -o {home}/rose-actions/resolved-manifest.xml\'',
         '# Do not register a runner from this script. Group 5 already exists and has zero runners.',
-        '# A one-job ephemeral registration needs a fresh token at boot. That path does not exist, and no persistent registration is substituted.',
+        '# scripts/mustang-guest-bootstrap.sh enables the one-job unit and does not mint a token or select a build number.',
+        '# No persistent registration is substituted.',
         '# Do not use runner groups 3 or 4, and do not use Frankel, Yogi, Blazer or Rango runners, disks, locks or controllers.']
     return {
         'executedByThisRepository': False,

@@ -11,6 +11,10 @@ on:
         description: Public publication needs separate recorded authority; default is private
         type: boolean
         default: false
+      dry_run:
+        description: Enroll one ephemeral runner and host-check only; no compile, sign, or publication
+        type: boolean
+        default: false
 permissions:
   contents: read
 concurrency:
@@ -18,6 +22,7 @@ concurrency:
   cancel-in-progress: false
 env:
   MUSTANG_PUBLISH: ${{ inputs.publish }}
+  MUSTANG_DRY_RUN: ${{ inputs.dry_run }}
 jobs:
   guard:
     runs-on: ubuntu-24.04
@@ -66,10 +71,94 @@ jobs:
       run: python3 scripts/mustang-dedicated.py ownership-output --ownership-record "$RUNNER_TEMP/mustang-owner.json"
     - if: always()
       run: python3 scripts/actions-gcp-login.py logout
+  enroll:
+    needs:
+    - guard
+    - controller
+    if: needs.controller.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ vars.MUSTANG_CONTROLLER_WORKLOAD_IDENTITY_PROVIDER }}
+      MUSTANG_CONTROLLER_SERVICE_ACCOUNT: ${{ vars.MUSTANG_CONTROLLER_SERVICE_ACCOUNT }}
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        ref: ${{ github.sha }}
+        persist-credentials: false
+    - id: login
+      run: python3 scripts/actions-gcp-login.py login "$MUSTANG_CONTROLLER_SERVICE_ACCOUNT"
+    - id: app
+      uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510
+      with:
+        app-id: ${{ vars.MUSTANG_RUNNER_APP_ID }}
+        private-key: ${{ secrets.MUSTANG_RUNNER_APP_PRIVATE_KEY }}
+        owner: Immortal-Protocols
+    - name: Mint one group 5 JIT config and store it only in a private file
+      env:
+        GH_TOKEN: ${{ steps.app.outputs.token }}
+      run: python3 scripts/mustang_ephemeral.py issue --execute --run-id "$GITHUB_RUN_ID" --out "$RUNNER_TEMP/mustang-jit"
+    - name: Deliver the config through instance metadata from a file
+      run: python3 scripts/mustang_ephemeral.py put-metadata --execute --file "$RUNNER_TEMP/mustang-jit"
+    - name: Remove the metadata key as soon as the guest has fetched it
+      run: python3 scripts/mustang_ephemeral.py wait-fetched --execute
+    - if: always() && steps.login.outcome == 'success'
+      name: Delete JIT metadata on success and on every enroll failure
+      run: python3 scripts/mustang_ephemeral.py clear-metadata --execute
+    - if: always()
+      run: rm -f "$RUNNER_TEMP/mustang-jit"
+    - if: always() && steps.login.outcome == 'success'
+      run: python3 scripts/actions-gcp-login.py logout
+  queue-watch:
+    needs:
+    - controller
+    - enroll
+    if: always() && needs.controller.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      actions: write
+      id-token: write
+    env:
+      GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ vars.MUSTANG_CONTROLLER_WORKLOAD_IDENTITY_PROVIDER }}
+      MUSTANG_CONTROLLER_SERVICE_ACCOUNT: ${{ vars.MUSTANG_CONTROLLER_SERVICE_ACCOUNT }}
+      MUSTANG_OWNER_B64: ${{ needs.controller.outputs.ownership }}
+      ENROLL_RESULT: ${{ needs.enroll.result }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        ref: ${{ github.sha }}
+        persist-credentials: false
+    - id: login
+      run: python3 scripts/actions-gcp-login.py login "$MUSTANG_CONTROLLER_SERVICE_ACCOUNT"
+    - if: steps.login.outcome == 'success'
+      name: Delete any JIT metadata before deciding the runner wait
+      run: python3 scripts/mustang_ephemeral.py clear-metadata --execute
+    - id: decision
+      if: always()
+      name: Stop immediately if enroll failed, otherwise bound the runner wait
+      run: python3 scripts/mustang_ephemeral.py queue-watch --execute
+    - if: always() && steps.decision.outputs.stop == 'true' && steps.login.outcome == 'success'
+      run: python3 scripts/mustang-dedicated.py cleanup-prepare --ownership-record "$RUNNER_TEMP/mustang-owner.json"
+    - if: always() && steps.decision.outputs.stop == 'true' && steps.login.outcome == 'success'
+      run: python3 scripts/mustang_controller.py stop --ownership-record "$RUNNER_TEMP/mustang-owner.json"
+    - if: always() && steps.login.outcome == 'success'
+      run: python3 scripts/mustang_ephemeral.py clear-metadata --execute
+    - if: always() && steps.login.outcome == 'success'
+      run: python3 scripts/actions-gcp-login.py logout
+    - if: always() && steps.decision.outputs.stop == 'true'
+      name: Cancel only this run so a queued builder cannot attach to a later boot
+      run: python3 scripts/mustang_ephemeral.py cancel --execute
   builder:
     needs:
     - guard
     - controller
+    - enroll
     runs-on:
       group: ${{ needs.guard.outputs.runner_group }}
       labels: ${{ needs.guard.outputs.runner_label }}
@@ -79,7 +168,6 @@ jobs:
       actions: read
       id-token: write
     env:
-      GH_TOKEN: ${{ github.token }}
       GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ vars.MUSTANG_SIGNER_WORKLOAD_IDENTITY_PROVIDER }}
       GCP_SIGNER_SERVICE_ACCOUNT: ${{ vars.GCP_SIGNER_SERVICE_ACCOUNT }}
     steps:
@@ -91,34 +179,45 @@ jobs:
     - name: Verify guest ID, mounted data disk, bytes/inodes and tools
       run: python3 scripts/mustang-dedicated.py host-check
     - name: Check actual baseline updater and trust before a new compile
+      if: inputs.dry_run == false
       run: python3 scripts/mustang-dedicated.py baseline --out "$RUNNER_TEMP/mustang-baseline.json"
     - name: Admit exact fresh app artifact or prepositioned private archive
+      if: inputs.dry_run == false
       id: apps
+      env:
+        GH_TOKEN: ${{ github.token }}
       run: python3 scripts/mustang-dedicated.py fetch-inputs --out "$RUNNER_TEMP/mustang-inputs"
     - name: Prepare, allocate, integrate and compile once on Mustang disk
+      if: inputs.dry_run == false
       env:
         APP_INPUTS: ${{ steps.apps.outputs.inputs_dir }}
       run: python3 scripts/mustang-dedicated.py produce --dir "$APP_INPUTS"
     - name: Require unsigned raised-edge proof before signer login
+      if: inputs.dry_run == false
       run: python3 scripts/mustang-dedicated.py collect
-    - run: python3 scripts/actions-gcp-login.py login "$GCP_SIGNER_SERVICE_ACCOUNT"
+    - id: login
+      if: inputs.dry_run == false
+      run: python3 scripts/actions-gcp-login.py login "$GCP_SIGNER_SERVICE_ACCOUNT"
     - name: Sign once using established identity and require signed proof
+      if: inputs.dry_run == false
       run: python3 scripts/mustang-dedicated.py sign
-    - if: always()
+    - if: always() && steps.login.outcome == 'success'
       run: python3 scripts/actions-gcp-login.py logout
     - name: Verify signatures, updater and trust; stage private OTA
+      if: inputs.dry_run == false
       id: stage
       run: python3 scripts/mustang-dedicated.py stage --dir "$RUNNER_TEMP/mustang-baseline.json" --out "$RUNNER_TEMP/mustang-ota"
-    - if: always()
+    - if: always() && inputs.dry_run == false
       run: python3 scripts/mustang-dedicated.py report --out "$RUNNER_TEMP/mustang-receipts" --dir "$RUNNER_TEMP/mustang-baseline.json"
-    - if: always()
+    - if: always() && inputs.dry_run == false
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
       with:
         name: mustang-dedicated-receipts-${{ github.run_id }}-${{ github.run_attempt }}
         path: ${{ runner.temp }}/mustang-receipts
         retention-days: 14
         if-no-files-found: warn
-    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+    - if: inputs.dry_run == false
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
       with:
         name: mustang-dedicated-ota-${{ github.run_id }}-${{ github.run_attempt }}
         path: ${{ steps.stage.outputs.directory }}
@@ -126,7 +225,7 @@ jobs:
         if-no-files-found: error
   publisher:
     needs: builder
-    if: inputs.publish
+    if: inputs.publish && inputs.dry_run == false
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     permissions:
@@ -187,9 +286,12 @@ jobs:
     - id: owned
       name: Validate exact owner before login, independent of signing/input readiness
       run: python3 scripts/mustang-dedicated.py cleanup-prepare --ownership-record "$RUNNER_TEMP/mustang-owner.json"
-    - if: steps.owned.outputs.started == 'true'
+    - id: login
+      if: steps.owned.outputs.started == 'true'
       run: python3 scripts/actions-gcp-login.py login "$MUSTANG_CONTROLLER_SERVICE_ACCOUNT"
     - if: steps.owned.outputs.started == 'true'
       run: python3 scripts/mustang_controller.py stop --ownership-record "$RUNNER_TEMP/mustang-owner.json"
-    - if: always() && steps.owned.outputs.started == 'true'
+    - if: always() && steps.login.outcome == 'success'
+      run: python3 scripts/mustang_ephemeral.py clear-metadata --execute
+    - if: always() && steps.login.outcome == 'success'
       run: python3 scripts/actions-gcp-login.py logout

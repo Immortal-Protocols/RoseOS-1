@@ -3,7 +3,9 @@
 
 This adapter requires the common controller's explicit-builder API. It refuses
 the old implicit Frankel target before any control call. The committed runtime
-stays unbound, so the start command refuses before any cloud call.
+stays unbound, so a normal start refuses before any cloud call. An
+infrastructure host check may start the same VM only when MUSTANG_DRY_RUN is
+true and publication was not requested. That path does not admit inputs.
 """
 import argparse
 import importlib.util
@@ -100,6 +102,20 @@ def stop(adapter, lane, run, record):
     return {'observed':adapter.control_builder('stop', builder=dict(lane['vm']))}
 
 
+def start_gate(runtime, env):
+    """Admit a real build, or an infrastructure host check that writes no evidence."""
+    if env.get('MUSTANG_DRY_RUN') == 'true':
+        if env.get('MUSTANG_PUBLISH') == 'true':
+            raise ValueError('dry run cannot publish')
+        return 'infrastructure-host-check'
+    publication = runtime.get('publication') or {}
+    if runtime.get('status') != 'bound' or not runtime.get('appInputsRecord') \
+            or not runtime.get('signingRouteEvidence') or not runtime.get('sourceEvidence') \
+            or (publication.get('enabled') is True and not publication.get('authorityRecord')):
+        raise ValueError('dedicated Mustang runtime is not admitted; refusing to start the VM')
+    return 'admitted'
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('action', choices=('check', 'plan', 'start', 'ownership', 'stop'))
@@ -115,11 +131,7 @@ def main():
         else:
             if args.action == 'start':
                 runtime = json.loads((ROOT/'os/build-only/mustang-runtime.json').read_text())
-                publication = runtime.get('publication') or {}
-                if runtime.get('status') != 'bound' or not runtime.get('appInputsRecord') \
-                        or not runtime.get('signingRouteEvidence') or not runtime.get('sourceEvidence') \
-                        or (publication.get('enabled') is True and not publication.get('authorityRecord')):
-                    raise ValueError('dedicated Mustang runtime is not admitted; refusing to start the VM')
+                start_gate(runtime, os.environ)
             run = invocation(lane, os.environ)
             if not args.ownership_record:
                 raise ValueError('dedicated Mustang controller needs --ownership-record')
