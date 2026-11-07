@@ -116,10 +116,11 @@ class RoseEdgeShellTest(unittest.TestCase):
         # compile proof, so apply-os-changes.py registers the patch, last in frameworks/base; no overlay is added.
         self.assertIn("projects['frameworks/base'].append('rose-edge-wmshell.patch')",
             (ROOT/'scripts/apply-os-changes.py').read_text())
-        # host-reconcile (#543) mirrors that order: its frameworks/base sequence names the patch once, last.
+        # host-reconcile (#543) mirrors that order: its frameworks/base sequence names the patch once, after the
+        # background patches (1G's rose-shade-systemui.patch follows it).
         reconcile = (ROOT/'scripts/host-reconcile.py').read_text()
         self.assertEqual(reconcile.count('rose-edge-wmshell'), 1)
-        self.assertRegex(reconcile, r"FRAMEWORKS_BASE_SEQUENCE = \([^)]*'rose-edge-wmshell\.patch'\)")
+        self.assertRegex(reconcile, r"FRAMEWORKS_BASE_SEQUENCE = \([^)]*'rose-edge-wmshell\.patch',\s*'rose-shade-systemui\.patch'\)")
         self.assertFalse(list((ROOT/'os/overlays').rglob('roseedge')))
         # Default off even once registered.
         self.assertIn('static final String ENABLED_PROPERTY = "persist.wm.debug.rose_edge";', self.controller)

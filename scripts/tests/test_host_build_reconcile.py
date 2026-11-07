@@ -358,10 +358,14 @@ class RetainedIntegrationOutputTest(unittest.TestCase):
         self.assertIn("projects['frameworks/base'].append('rose-edge-wmshell.patch')", patcher)
         self.assertLess(patcher.index("projects['frameworks/base'] += BACKGROUND_FRAMEWORK_PATCHES"),
             patcher.index("projects['frameworks/base'].append('rose-edge-wmshell.patch')"))
+        # 1G: the shade's one SystemUI binding comes after the Shell patch, last in frameworks/base.
+        self.assertLess(patcher.index("projects['frameworks/base'].append('rose-edge-wmshell.patch')"),
+            patcher.index("projects['frameworks/base'].append('rose-shade-systemui.patch')"))
         sys.path.insert(0, str(ROOT/'scripts'))
         from background_apks import BACKGROUND_FRAMEWORK_PATCHES, ROSE_HOME_PATCHES
         self.assertEqual(reconcile.FRAMEWORKS_BASE_SEQUENCE, ('frameworks-base.patch',
-            'rose-agent-self-update-frameworks-base.patch', *BACKGROUND_FRAMEWORK_PATCHES, 'rose-edge-wmshell.patch'))
+            'rose-agent-self-update-frameworks-base.patch', *BACKGROUND_FRAMEWORK_PATCHES, 'rose-edge-wmshell.patch',
+            'rose-shade-systemui.patch'))
         self.assertIs(reconcile.PATCH_SEQUENCES['frameworks/base'], reconcile.FRAMEWORKS_BASE_SEQUENCE)
         # build/make: the tray's list, then the updater product, the background controller and the edge switch.
         make = ["if a.agent_tray:projects['build/make'] = ['agent-tray-build-make.patch']",
