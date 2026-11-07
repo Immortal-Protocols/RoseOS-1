@@ -1089,6 +1089,12 @@ def _ws_why(r: dict, label: str | None = None) -> str:
     if status == "background_blocked":
         return (f"{app} in Rose's workspace is waiting for the owner on the phone (Android blocked it); "
                 "the workspace is kept and continues once that is done.")
+    if status == "background_unavailable" and details.get("startAbandoned"):
+        if details.get("stopStatus") in ("stopped", "idle", "closed"):
+            return (f"{app} didn't open in Rose's workspace in time, so Rose stopped that start; if Android had "
+                    "already moved it there, it goes back to your phone.")
+        return (f"{app} didn't open in Rose's workspace in time, and stopping that start wasn't confirmed; check the "
+                "phone before retrying.")
     if status == "background_unavailable":
         if details.get("status") in ("offline", "timeout", "disconnected"):
             return _why(details)

@@ -542,12 +542,28 @@ def controller_checks(bad: list) -> None:
     if any(c[0] == "command" for c in fc.calls):
         bad.append("an action followed target_not_allowed")
 
-    # a start that never becomes ready gives up after 12 s
+    # a start that never becomes ready gives up after 20 s (past the controller's 15 s frame wait) and stops
+    # exactly that session, so it cannot land later and hold the app unseen
     ws, fc, clock = make(start_polls=10_000)
     t0 = clock.t
     r = ws.start(CALC)
-    if r["status"] != "background_unavailable" or not 12 <= clock.t - t0 < 12.5:
+    if r["status"] != "background_unavailable" or not 20 <= clock.t - t0 < 20.5:
         bad.append(f"start timeout: {r['status']} after {clock.t - t0:.2f} s")
+    stops = [c[1] for c in fc.calls if c[0] == "stop"]
+    if not stops or stops[-1].get("sessionId") != fc.stopped_session or fc.status != "stopped":
+        bad.append(f"an abandoned start was not stopped by its own session id: {stops} status={fc.status}")
+    if not r.get("details", {}).get("startAbandoned") or r["details"].get("stopStatus") != "stopped":
+        bad.append(f"abandoned start not reported: {r.get('details')}")
+    from rose.realphone import _ws_why
+    why = _ws_why(r, "Calculator")
+    if "didn't open in Rose's workspace in time, so Rose stopped that start" not in why or "nothing was opened" in why:
+        bad.append(f"abandoned start wording: {why}")
+    # a slow start that becomes ready after 14 s (the controller still within its 15 s wait) now opens
+    ws, fc, clock = make(start_polls=round(14 / 0.15))
+    t0 = clock.t
+    r = ws.start(CALC)
+    if r["status"] != "opened" or not 13.5 <= clock.t - t0 < 15 or any(c[0] == "stop" for c in fc.calls[1:]):
+        bad.append(f"slow start: {r['status']} after {clock.t - t0:.2f} s")
 
     owner_stop_checks(bad)
     idle_checks(bad)

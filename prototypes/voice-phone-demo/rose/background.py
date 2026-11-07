@@ -55,7 +55,10 @@ from typing import Any, Callable
 
 CONTROLLER = "dev.pixel.backgroundcontrol"
 START_POLL_S = 0.15     # get_state interval while the workspace starts (BackgroundPhone: 150 ms)
-START_WAIT_S = 12.0     # how long a start may stay starting/launching/scheduled
+# How long a start may stay starting/launching/scheduled. The controller waits up to 15 s for the target's first
+# allowed frame after Android creates the session (Controller.java launch), so a shorter wait here gave up while a
+# slow takeover was still landing and left it running unseen. Outlast it, and stop what is left when it expires.
+START_WAIT_S = 20.0
 WORKSPACE_IDLE_S = 180.0  # an unused workspace is closed after this long
 MAX_OBSERVATIONS = 16   # remembered observations (for refreshing a node by its identity)
 # A session has 200 operations and 600 s (Controller.java). The workspace is kept across tasks,
@@ -577,6 +580,13 @@ class Workspace:
             while state.get("status") in STARTING and self.now() < deadline:
                 self.sleep(START_POLL_S)
                 state = self.call("get_state")
+            if state.get("status") in STARTING and state.get("sessionId"):
+                # Still not ready: stop exactly that session, so a start that lands later is not left holding the
+                # app (with F06 the platform returns an owner's taken-over app to the main display on close).
+                stopped = self.call("stop", {"sessionId": state["sessionId"]})
+                self.record({"stage": "background_start_abandoned", "packageName": package,
+                             "status": state.get("status"), "stopStatus": stopped.get("status")})
+                state = {**state, "startAbandoned": True, "stopStatus": stopped.get("status")}
         if state.get("status") != "ready" or not state.get("sessionId") or state.get("targetPackage") != package:
             had = self.session is not None
             self.session = None
