@@ -168,6 +168,78 @@ class AllocatorTest(unittest.TestCase):
         posts = [item for item in fake.requests if item['method'] == 'POST' and 'ifGenerationMatch=0' in item['url']]
         self.assertGreaterEqual(len(posts), 3)
 
+    def test_published_reservation_does_not_wedge_the_next_number(self):
+        store, fake = self.store()
+        first = self.reserve(store, '501', observed=['2026110401'])
+        self.assertEqual(self.reserve(store, '501', observed=['2026110401']), first)
+        posts = [item for item in fake.requests if item['method'] == 'POST']
+        second = self.reserve(store, '502', timestamp=1793755349, observed=['2026110401', '2026130001'])
+        self.assertEqual(second['build'], '2026130002')
+        self.assertEqual(second['observed'], ['2026110401', '2026130001'])
+        self.assertGreater(len([item for item in fake.requests if item['method'] == 'POST']), len(posts))
+        before = len([item for item in fake.requests if item['method'] == 'POST'])
+        with self.assertRaisesRegex(ValueError, 'not strictly newer'):
+            self.reserve(store, '503', timestamp=1793755350,
+                         observed=['2026110401', '2026130001', '2027010101'])
+        self.assertEqual(len([item for item in fake.requests if item['method'] == 'POST']), before)
+        with self.assertRaisesRegex(ValueError, 'dropped or reordered'):
+            self.reserve(store, '504', timestamp=1793755350, observed=['2026130001'])
+        self.assertEqual(allocator.parse_generation('17'), 17)
+        with self.assertRaises(ValueError):
+            allocator.parse_generation(1)
+
+    def test_opener_timeout_after_write_is_recovered_from_the_stored_generation(self):
+        import urllib.error
+        from urllib.parse import parse_qs, unquote, urlsplit
+        generation = '17'
+        objects = {}
+
+        class Response:
+            def __init__(self, status, body):
+                self.status = status
+                self._body = body
+            def read(self):
+                return self._body
+            def __enter__(self):
+                return self
+            def __exit__(self, *args):
+                return False
+
+        lost = {'armed': True}
+
+        def opener(request, timeout):
+            method = request.get_method()
+            url = request.full_url
+            if method == 'POST':
+                name = unquote(parse_qs(urlsplit(url).query)['name'][0])
+                objects[name] = json.loads(request.data.decode())
+                if lost['armed']:
+                    lost['armed'] = False
+                    raise urllib.error.URLError('timed out after write')
+                return Response(200, json.dumps({'kind': 'storage#object', 'name': name, 'generation': generation}).encode())
+            if 'alt=media' in url:
+                name = unquote(url.split('/o/')[1].split('?')[0])
+                match = parse_qs(urlsplit(url).query).get('ifGenerationMatch', [None])[0]
+                if match != generation:
+                    return Response(412, b'{"error":{"code":412}}')
+                return Response(200, json.dumps(objects[name]).encode())
+            if '/o?' in url:
+                items = [{'kind': 'storage#object', 'name': name, 'generation': generation} for name in sorted(objects)]
+                return Response(200, json.dumps({'kind': 'storage#objects', 'items': items}).encode())
+            name = unquote(url.split('/o/')[1].split('?')[0])
+            return Response(200, json.dumps({'kind': 'storage#object', 'name': name, 'generation': generation}).encode())
+
+        def boom(request, timeout):
+            raise urllib.error.URLError('timed out')
+
+        with self.assertRaises(allocator.TransportLost):
+            allocator.urlopen_http({'method': 'GET', 'url': 'https://storage.googleapis.com/storage/v1/b/x/o/y'}, boom)
+        transport = lambda request: allocator.urlopen_http(request, opener)
+        store = allocator.TransportStore(transport, BUCKET)
+        got = self.reserve(store, '701', observed=['2026110401'])
+        self.assertEqual(got['build'], '2026130001')
+        self.assertEqual(int(generation), allocator.parse_generation(generation))
+
     def test_higher_observed_id_fails_before_a_write(self):
         store, fake = self.store()
         with self.assertRaisesRegex(ValueError, 'not strictly newer'):
@@ -194,7 +266,14 @@ class AllocatorTest(unittest.TestCase):
         issued = allocator.issue(store, '501', 1, ['2026110401'], admission={
             'backendEstablished': True, 'networkAdmitted': True, 'issueAdmitted': True})
         self.assertTrue(issued['issued'])
-        self.assertGreaterEqual(issued['reservationGeneration'], allocator.MIN_GENERATION)
+        self.assertEqual(issued['reservationGeneration'],
+                         int(fake.objects[allocator.object_name(reserved['build'])]['generation']))
+        with self.assertRaisesRegex(ValueError, 'run identity'):
+            allocator.issue(store, '501', True, ['2026110401'], admission={
+                'backendEstablished': True, 'networkAdmitted': True, 'issueAdmitted': True})
+        with self.assertRaisesRegex(ValueError, 'run identity'):
+            allocator.issue(store, 501, 1, ['2026110401'], admission={
+                'backendEstablished': True, 'networkAdmitted': True, 'issueAdmitted': True})
         self.assertFalse(fake.objects[allocator.object_name(reserved['build'])]['body']['issued'])
         self.assertEqual(issued['reservationSha256'], allocator.digest(reserved))
         self.assertEqual(allocator.issue(store, '501', 1, ['2026110401'], admission={

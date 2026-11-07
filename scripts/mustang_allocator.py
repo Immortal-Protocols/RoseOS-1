@@ -9,6 +9,7 @@ import json
 from pathlib import Path
 import re
 import sys
+import socket
 import urllib.error
 import urllib.request
 from urllib.parse import quote
@@ -26,7 +27,6 @@ KEYS = {'schema', 'epoch', 'sequence', 'build', 'previous', 'proposal', 'observe
 ISSUE_KEYS = {'schema', 'build', 'reservation', 'reservationGeneration', 'reservationSha256',
               'runId', 'runAttempt', 'issued', 'status'}
 RUN = re.compile(r'[1-9][0-9]{0,11}')
-MIN_GENERATION = 10**15
 MAX_GENERATION = 2**63 - 1
 BUCKET_CONDITION = re.compile(
     r"resource\.type == 'storage\.googleapis\.com/Bucket' && "
@@ -45,12 +45,12 @@ class TransportLost(Exception):
 
 
 def parse_generation(value):
-    """GCS JSON returns generation as a decimal string. A fabricated 1 is not one."""
-    if type(value) is not str or not re.fullmatch(r'[1-9][0-9]+', value):
-        raise ValueError('GCS generation must be the server decimal string')
+    """GCS returns an opaque positive decimal int64. Callers must use that string, not a stand-in."""
+    if type(value) is not str or not re.fullmatch(r'[1-9][0-9]*', value):
+        raise ValueError('GCS generation must be a positive decimal int64')
     number = int(value)
-    if not MIN_GENERATION <= number <= MAX_GENERATION:
-        raise ValueError('GCS generation is not a server-assigned value')
+    if number > MAX_GENERATION:
+        raise ValueError('GCS generation must be a positive decimal int64')
     return number
 
 
@@ -152,13 +152,29 @@ def normalize_observed(observed):
     return found
 
 
-def authenticate(events, observed):
-    ids = normalize_observed(observed)
+def extends(previous, latest):
+    if not isinstance(latest, list) or latest[:len(previous)] != list(previous):
+        raise ValueError('allocation observed IDs were dropped or reordered')
+    return latest
+
+
+def proposal_for(prior, build, timestamp, rollback_index, security_patch):
+    previous = epoch.genesis() if not prior else epoch.digest(prior[-1])
+    return {'schema': epoch.EVENT_SCHEMA, 'epoch': epoch.EPOCH, 'sequence': len(prior), 'build': build,
+            'previous': previous, 'timestamp': timestamp, 'rollbackIndex': rollback_index,
+            'securityPatchLevel': security_patch, 'issued': False, 'status': 'proposal'}
+
+
+def authenticate(events, latest=None):
+    """Each stored proposal is checked against the observations recorded with it."""
     if not isinstance(events, list):
         raise ValueError('allocation journal must be a list')
-    previous = epoch.genesis()
+    outer = epoch.genesis()
     inners = []
     seen = set()
+    recorded = []
+    prior_time = epoch.PUBLISHED_TIMESTAMP
+    prior_rollback = epoch.security_patch_timestamp(epoch.SECURITY_PATCH_FLOOR) - 1
     for index, event in enumerate(events):
         if not isinstance(event, dict) or set(event) != KEYS:
             raise ValueError('allocation reservation fields differ')
@@ -167,7 +183,7 @@ def authenticate(events, observed):
             raise ValueError('allocation sequence must be an int')
         if event.get('schema') != SCHEMA or event.get('epoch') != epoch.EPOCH or event.get('issued') is not False \
                 or event.get('status') != 'reserved' or event.get('build') != str(epoch.RANGE_START+index) \
-                or event.get('previous') != previous:
+                or event.get('previous') != outer:
             raise ValueError('allocation reservation is not the next unissued reserve')
         run_id, attempt = event.get('runId'), event.get('runAttempt')
         if type(run_id) is not str or not RUN.fullmatch(run_id) or run_id in seen:
@@ -175,25 +191,28 @@ def authenticate(events, observed):
         if isinstance(attempt, bool) or type(attempt) is not int or attempt < 1:
             raise ValueError('allocation attempt must be an int')
         seen.add(run_id)
-        stored = event.get('observed')
-        if not isinstance(stored, list) or any(item not in ids for item in stored):
-            raise ValueError('allocation observed IDs were dropped')
+        stored = normalize_observed(event.get('observed'))
+        if event.get('observed') != stored or stored[:len(recorded)] != recorded:
+            raise ValueError('allocation observed IDs were dropped or reordered')
         proposal = event.get('proposal')
         if not isinstance(proposal, dict) or isinstance(proposal.get('sequence'), bool) \
                 or type(proposal.get('sequence')) is not int:
             raise ValueError('allocation sequence must be an int')
         epoch.check_candidate(event['build'], proposal.get('timestamp'), proposal.get('rollbackIndex'),
-                              proposal.get('securityPatchLevel'), ids)
-        expected = epoch.append(inners, {'build': event['build'], 'timestamp': proposal.get('timestamp'),
-                                         'rollbackIndex': proposal.get('rollbackIndex'),
-                                         'securityPatchLevel': proposal.get('securityPatchLevel'),
-                                         'epoch': epoch.EPOCH, 'previous': proposal.get('previous'),
-                                         'observed': ids})[-1]
-        if proposal != expected:
+                              proposal.get('securityPatchLevel'), stored)
+        if proposal.get('timestamp') <= prior_time or proposal.get('rollbackIndex') < prior_rollback:
+            raise ValueError('allocation timestamp or rollback moved backwards')
+        if proposal != proposal_for(inners, event['build'], proposal.get('timestamp'), proposal.get('rollbackIndex'),
+                                    proposal.get('securityPatchLevel')):
             raise ValueError('allocation proposal is not the vetted epoch event')
         inners.append(proposal)
-        previous = digest(event)
-    return previous
+        prior_time = proposal['timestamp']
+        prior_rollback = proposal['rollbackIndex']
+        recorded = stored
+        outer = digest(event)
+    if latest is not None:
+        extends(recorded, normalize_observed(latest))
+    return outer
 
 
 def _object_url(bucket, name):
@@ -317,6 +336,8 @@ def urlopen_http(request, opener=urllib.request.urlopen):
             status, raw = response.status, response.read()
     except urllib.error.HTTPError as error:
         status, raw = error.code, error.read()
+    except (urllib.error.URLError, TimeoutError, socket.timeout):
+        raise TransportLost('allocation response was lost') from None
     if not raw:
         return status, {}
     payload = json.loads(raw.decode())
@@ -371,9 +392,8 @@ def read_chain(store, observed):
 def _body(events, run_id, attempt, timestamp, rollback_index, security_patch, observed):
     build = str(epoch.RANGE_START+len(events))
     inners = [item['proposal'] for item in events]
-    proposal = epoch.append(inners, {'build': build, 'timestamp': timestamp, 'rollbackIndex': rollback_index,
-                                     'securityPatchLevel': security_patch, 'epoch': epoch.EPOCH,
-                                     'previous': epoch.authenticate(inners, observed), 'observed': observed})[-1]
+    epoch.check_candidate(build, timestamp, rollback_index, security_patch, observed)
+    proposal = proposal_for(inners, build, timestamp, rollback_index, security_patch)
     strict_int(proposal['sequence'], 'allocation sequence')
     return {'schema': SCHEMA, 'epoch': epoch.EPOCH, 'sequence': proposal['sequence'], 'build': build,
             'previous': epoch.genesis() if not events else digest(events[-1]), 'proposal': proposal,
@@ -420,6 +440,9 @@ def issue(store, run_id, attempt, observed, *, admission):
     if not isinstance(admission, dict) or admission.get('issueAdmitted') is not True \
             or admission.get('backendEstablished') is not True:
         raise ValueError('allocation issue is not admitted')
+    if type(run_id) is not str or not RUN.fullmatch(run_id) or isinstance(attempt, bool) \
+            or type(attempt) is not int or attempt < 1:
+        raise ValueError('allocation run identity differs')
     ids = normalize_observed(observed)
     events, generations = read_chain(store, ids)
     owned = [(event, generation) for event, generation in zip(events, generations)
@@ -428,6 +451,8 @@ def issue(store, run_id, attempt, observed, *, admission):
         raise ValueError('allocation issue has no matching reservation')
     event, generation = owned[0]
     strict_int(generation, 'reservation generation')
+    epoch.check_candidate(event['build'], event['proposal']['timestamp'], event['proposal']['rollbackIndex'],
+                          event['proposal']['securityPatchLevel'], [item for item in ids if item != event['build']])
     body = {'schema': ISSUE_SCHEMA, 'build': event['build'], 'reservation': object_name(event['build']),
             'reservationGeneration': generation, 'reservationSha256': digest(event),
             'runId': run_id, 'runAttempt': attempt, 'issued': True, 'status': 'issued'}
@@ -435,12 +460,12 @@ def issue(store, run_id, attempt, observed, *, admission):
         raise ValueError('allocation issue fields differ')
     name = ISSUE_PREFIX+event['build']+'.json'
     try:
-        store.create(name, body)
+        created = store.create(name, body)
     except PreconditionFailed:
-        pass
+        created = None
     listed = dict(store.list_entries(ISSUE_PREFIX))
     stored, stored_gen = store.get(name, listed[name])
-    if stored != body or stored_gen < MIN_GENERATION:
+    if stored != body or (created is not None and stored_gen != created):
         raise ValueError('allocation issue readback differs')
     return stored
 
