@@ -87,6 +87,7 @@ public final class RoseKeyboardView extends View {
     private final RectF hide = new RectF();
     private final List<RectF> editRects = new ArrayList<>();
     private final Handler handler = new Handler(Looper.getMainLooper());
+    private final android.graphics.Matrix rowShift = new android.graphics.Matrix();
 
     // State the service sets.
     private String page = RoseKeys.LETTERS, shift = RoseKeys.OFF, actionLabel = "Return";
@@ -175,9 +176,9 @@ public final class RoseKeyboardView extends View {
         layoutKeys(w);
         layoutStrip(w);
         board.setShader(new LinearGradient(0, 0, 0, h, BOARD_TOP, BOARD_BOTTOM, Shader.TileMode.CLAMP));
-        keyPaint.setShader(new LinearGradient(0, 0, 0, KEY_DP * density, KEY_TOP, KEY_BOTTOM, Shader.TileMode.MIRROR));
+        keyPaint.setShader(new LinearGradient(0, 0, 0, KEY_DP * density, KEY_TOP, KEY_BOTTOM, Shader.TileMode.CLAMP));
         actionPaint.setShader(new LinearGradient(0, 0, 0, KEY_DP * density, ACTION_TOP, ACTION_BOTTOM,
-                Shader.TileMode.MIRROR));
+                Shader.TileMode.CLAMP));
     }
 
     /** Width units per key: 1 for a letter; shift, delete, the page keys and the action key 1.5; space 5. */
@@ -269,6 +270,11 @@ public final class RoseKeyboardView extends View {
             boolean pressed = indexOf(k) >= 0;
             Paint fill = "action".equals(k.id) ? actionPaint : k.function && !"space".equals(k.id) ? fnPaint : keyPaint;
             fill.setAlpha(pressed ? 0xCC : dim);
+            // Each key's own top-to-bottom gradient (the design's key tokens), whatever its row.
+            if (fill.getShader() != null) {
+                rowShift.setTranslate(0, k.bounds.top);
+                fill.getShader().setLocalMatrix(rowShift);
+            }
             canvas.drawRoundRect(k.bounds, r, r, fill);
             fill.setAlpha(0xFF);
             label.setAlpha(dim);

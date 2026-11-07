@@ -138,6 +138,7 @@
             <additionalClasspathElement>${project.build.directory}/aar/idling/classes.jar</additionalClasspathElement>
           </additionalClasspathElements>
           <systemPropertyVariables>
+            <render.out>${project.build.directory}/render</render.out>
             <robolectric.offline>true</robolectric.offline>
             <robolectric.dependency.dir>${project.build.directory}/robolectric-deps</robolectric.dependency.dir>
           </systemPropertyVariables>
