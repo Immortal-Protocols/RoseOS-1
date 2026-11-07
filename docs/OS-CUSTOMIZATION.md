@@ -147,13 +147,19 @@ Builds that carry it:
 - **Frankel 2026110701** (Beta Latest; os-release run 42389218389 on main `74b7ef8`; Rose Agent `voice` versionCode
   366). It includes #626 and #627: columns, wallpaper, font and the conversation tools. It does not include #645, so
   the glasses-on hook has no signal in that build.
-- **The next Frankel daily build** (04:00 America/Los_Angeles, enabled by #621) builds from main, so it carries #645.
+- **Frankel 2026110703** (Beta Latest; os-release run 42402706396 on main `7e7741c`; integrated candidate `2ff76ce`;
+  Rose Agent `voice` versionCode 368, `368-os-beta-2026110703`). It carries #626, #627 and #645, so it has all four
+  controls including the Bluetooth glasses-on signal. The candidate's Rose Agent sources match main `7e7741c`, and it
+  registers `BluetoothAudioWear` and forwards `customization_*`. Release's record:
+  `os/latest-beta/frankel-2026110703-included.md`. The first attempt (run 42399788831) failed in SystemUI on an OS Core
+  shade bug, fixed by #665.
+- Later Frankel builds from main (the daily lane, #621) carry all four controls too.
 
-This workstream has not verified either build, installed it or run it on a device. The identities above come from the
+This workstream checked these build records and sources only; it has not installed a build or run one on a device. The identities above come from the
 Release lane's run record.
 
 On a phone the controls are reachable through conversation only after the Rose backend is restarted from main and a
-build that carries them is installed. Frankel 2026110701 is published as Beta Latest, but its installation on a phone
+build that carries them is installed. Frankel 2026110703 is published as Beta Latest, but its installation on a phone
 and a backend restart from main have not been confirmed. This workstream itself has not built, installed or run an APK.
 The glasses-on hook fires only in a build that includes #645.
 

@@ -433,7 +433,7 @@ class DedicatedPathsTest(unittest.TestCase):
     def test_dedicated_workflow_orders_proofs_and_ownership_before_credentials(self):
         workflow=(ROOT/'.github/workflows/mustang-ota-dedicated.yml').read_text()
         jobs=workflow_shape.jobs(workflow)
-        self.assertEqual(set(jobs),{'guard','controller','enroll','queue-watch','builder','source','publisher','cleanup'})
+        self.assertEqual(set(jobs),{'guard','controller','enroll','queue-watch','builder','signer','source','publisher','cleanup'})
         self.assertNotIn('id-token', jobs['source'])
         self.assertNotIn('actions-gcp-login', jobs['source'])
         self.assertIn('mustang_source_sync.py run --execute', jobs['source'])
@@ -453,7 +453,12 @@ class DedicatedPathsTest(unittest.TestCase):
         self.assertIn('needs: guard',jobs['controller'])
         self.assertNotIn('always()',jobs['controller'].split('steps:',1)[0])
         self.assertIn("needs.controller.result != 'skipped'",jobs['cleanup'])
-        self.assertLess(jobs['builder'].index('mustang-dedicated.py collect'),jobs['builder'].index('actions-gcp-login.py login'))
+        self.assertNotIn('id-token', jobs['builder'])
+        self.assertNotIn('actions-gcp-login', jobs['builder'])
+        self.assertNotIn('mustang-dedicated.py sign', jobs['builder'])
+        self.assertIn('runs-on: ubuntu-24.04', jobs['signer'])
+        self.assertLess(jobs['signer'].index('mustang_hosted_sign.py preflight'), jobs['signer'].index('actions-gcp-login.py login'))
+        self.assertLess(jobs['builder'].index('mustang-dedicated.py collect'), jobs['builder'].index('mustang_hosted_sign.py export-bundle'))
         self.assertLess(jobs['builder'].index('mustang-dedicated.py baseline'),jobs['builder'].index('mustang-dedicated.py produce'))
         self.assertLess(jobs['publisher'].index('verify-staged'),jobs['publisher'].index('actions/create-github-app-token'))
         self.assertLess(jobs['cleanup'].index('cleanup-prepare'),jobs['cleanup'].index('actions-gcp-login.py login'))
@@ -1014,16 +1019,9 @@ class DedicatedRuntimeTest(unittest.TestCase):
                 patch.object(ota,'module',return_value=fake),patch.dict(os.environ,env,clear=True), \
                 patch.object(sys,'argv',['mustang-dedicated.py','_execute','--config',str(config)]), \
                 patch.object(Path,'cwd',return_value=source):
-            for change in (dict(keysSecret='FOREIGN_CONTAINER'),dict(secretVersion='2'),dict(project='foreign-project')):
-                config.write_text(json.dumps(dict(target=dict(device='mustang'),host=dict(sign=dict(sign,**change)))))
-                with self.assertRaisesRegex(ValueError,'version-1 scope'): self.driver.main()
-            self.assertEqual(calls,[])
             config.write_text(json.dumps(dict(target=dict(device='mustang'),host=dict(sign=sign))))
-            self.assertEqual(self.driver.main(),0)
-            self.assertEqual(calls,['proof','keys'])
-            unsigned.write_bytes(b'changed copy')
-            with self.assertRaisesRegex(ValueError,'unsigned proof'): self.driver.main()
-            self.assertEqual(calls,['proof','keys','proof'])
+            with self.assertRaisesRegex(ValueError,'guest signing is closed'): self.driver.main()
+            self.assertEqual(calls,[])
 
     def test_dedicated_producer_uses_pristine_own_base_and_never_seeds_from_frankel(self):
         pipeline=ota.module('dedicated_producer_fixture','mustang-pipeline.py')
