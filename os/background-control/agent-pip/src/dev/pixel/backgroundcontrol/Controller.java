@@ -322,20 +322,39 @@ public final class Controller {
   }
   return MultiSession.bind(occupied,owned);
  }
- /** The session's input focus, which vision text would land in, across its own windows (every node released at once);
-  * throws unless VisionInput.refusal allows it: a password field (SecurityException), or nothing editable focused. */
+ /** The session's input focus, which vision text would land in: the focused editable node of the window that has input
+  * focus (every window, top first, when none reports it), by its own state (focusedEditable), else findFocus(FOCUS_INPUT),
+  * which a released Compose answers only for nodes it has already described. Every node is released at once. Throws
+  * unless VisionInput.refusal allows it: a password field (SecurityException), or nothing editable focused. */
  @SuppressWarnings("unchecked") static void visionFocus()throws Exception{
+  List<AccessibilityWindowInfo> windows=(List<AccessibilityWindowInfo>)session.getClass().getMethod("getAccessibilityWindows").invoke(session);
+  boolean anyFocused=false;for(AccessibilityWindowInfo w:windows)anyFocused|=w.isFocused();
   boolean found=false,editable=false,password=false;
-  for(AccessibilityWindowInfo w:(List<AccessibilityWindowInfo>)session.getClass().getMethod("getAccessibilityWindows").invoke(session)){
-   if(!found){AccessibilityNodeInfo root=w.getRoot();
-    if(root!=null){AccessibilityNodeInfo f=root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT);
-     if(f!=null){found=true;editable=f.isEditable();password=f.isPassword();f.recycle();}
+  for(AccessibilityWindowInfo w:windows){
+   if(!found&&(!anyFocused||w.isFocused())){AccessibilityNodeInfo root=w.getRoot();
+    if(root!=null){AccessibilityNodeInfo f=focusedEditable(root);
+     if(f==null)f=root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT);
+     if(f!=null){found=true;editable=f.isEditable();password=f.isPassword();if(f!=root)f.recycle();}
      root.recycle();}}
    w.recycle();
   }
   String why=VisionInput.refusal(found,editable,password);
   if(why!=null){if(password)throw new SecurityException(why);throw new IllegalStateException(why);}
  }
+ /** The focused editable node under root, breadth-first within VISION_FOCUS_NODES nodes, or null; every other node read
+  * is released. */
+ static AccessibilityNodeInfo focusedEditable(AccessibilityNodeInfo root){
+  ArrayDeque<AccessibilityNodeInfo> queue=new ArrayDeque<>();queue.add(root);AccessibilityNodeInfo hit=null;int seen=0;
+  while(!queue.isEmpty()){AccessibilityNodeInfo n=queue.poll();
+   if(hit==null&&seen++<VISION_FOCUS_NODES){
+    if(n.isFocused()&&n.isEditable()){hit=n;continue;}
+    for(int i=0;i<n.getChildCount();i++){AccessibilityNodeInfo c=n.getChild(i);if(c!=null)queue.add(c);}
+   }
+   if(n!=root)n.recycle();
+  }
+  return hit;
+ }
+ static final int VISION_FOCUS_NODES=2000;
  /** A session display's application window packages, top first, or null when unreadable; every root is released at once.
   * Read-only: never the agent's observation. */
  @SuppressWarnings("unchecked") static List<String> windows(Object s){

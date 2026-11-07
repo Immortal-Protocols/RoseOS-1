@@ -22,6 +22,15 @@ class VisionInputWiring(unittest.TestCase):
         self.assertIn('findFocus(AccessibilityNodeInfo.FOCUS_INPUT)', focus)
         self.assertIn('VisionInput.refusal(found,editable,password)', focus)
         self.assertNotIn('performAction', focus)
+        # The window that has input focus, judged by its focused editable node's own state (released Compose answers
+        # findFocus only for nodes it has described), then findFocus.
+        self.assertIn('w.isFocused()', focus)
+        self.assertLess(focus.index('focusedEditable(root)'), focus.index('findFocus(AccessibilityNodeInfo.FOCUS_INPUT)'))
+        walk = source.split('static AccessibilityNodeInfo focusedEditable(', 1)[1].split('\n }\n', 1)[0]
+        self.assertIn('n.isFocused()&&n.isEditable()', walk)
+        self.assertIn('VISION_FOCUS_NODES', walk)
+        self.assertIn('n.recycle()', walk)
+        self.assertNotIn('performAction', walk)
         self.assertIn('s.visualSnapshotId=visualSnapshotId;', source)
         self.assertIn('visualSnapshotId=s.visualSnapshotId;', source)
         self.assertIn('snapshotId=null;visualSnapshotId=null;', source)
