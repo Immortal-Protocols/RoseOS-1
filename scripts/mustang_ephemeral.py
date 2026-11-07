@@ -356,24 +356,36 @@ def acknowledgement(payload, expected):
     return matches[0] == expected
 
 
-def missing_guest_attribute(result):
-    """True only for gcloud's verified missing-key failure: exit 1 and HTTPError 404.
+# Readonly gcloud stderr for a missing guest attribute is one line: HTTPError 404,
+# resource '<namespace>/<key>' of type 'Guest Attribute', then the active-account sentence.
+# The probe that established the shape used mustang/nonexistent-probe. This query accepts
+# only mustang/jit-fetched. The account must be the operator who captured that line or the
+# dedicated controller the Actions enroll job uses. The stream is not returned.
+GUEST_ATTRIBUTE_404_HEADER = (
+    'ERROR: (gcloud.compute.instances.get-guest-attributes) HTTPError 404: '
+    "The resource '%s' of type 'Guest Attribute' was not found. "
+    'This command is authenticated as ')
+GUEST_ATTRIBUTE_404_SUFFIX = ' which is the active account specified by the [core/account] property.'
+GUEST_ATTRIBUTE_ACCOUNTS = (
+    'grok-bots@protocols-465723.iam.gserviceaccount.com',
+    'mustang-controller@protocols-465723.iam.gserviceaccount.com',
+)
 
-    The Compute not-found text names this VM's mustang/jit-fetched guest attribute.
-    Permission and every other CLI failure stay false. The raw stream is not returned.
-    """
+
+def missing_guest_attribute(result):
+    """True only for exit 1, empty stdout, and the captured Guest Attribute 404 for this key."""
     if getattr(result, 'returncode', None) != 1:
         return False
     stderr = getattr(result, 'stderr', None)
     stdout = getattr(result, 'stdout', None)
     if type(stderr) is not str or type(stdout) is not str or stdout.strip():
         return False
-    vm = mustang_lane.configuration()['vm']
-    expected = (
-        'ERROR: (gcloud.compute.instances.get-guest-attributes) HTTPError 404: '
-        "The resource 'projects/%s/zones/%s/instances/%s/guestAttributes/mustang/jit-fetched' was not found"
-        % (vm['project'], vm['zone'], vm['instance']))
-    return stderr.strip() == expected
+    text = stderr.strip()
+    prefix = GUEST_ATTRIBUTE_404_HEADER % 'mustang/jit-fetched'
+    if not text.startswith(prefix) or not text.endswith(GUEST_ATTRIBUTE_404_SUFFIX):
+        return False
+    account = text[len(prefix):-len(GUEST_ATTRIBUTE_404_SUFFIX)]
+    return account in GUEST_ATTRIBUTE_ACCOUNTS and text == prefix + account + GUEST_ATTRIBUTE_404_SUFFIX
 
 
 def watch_decision(enroll_result, jobs, elapsed_seconds, limit=QUEUE_LIMIT_SECONDS):

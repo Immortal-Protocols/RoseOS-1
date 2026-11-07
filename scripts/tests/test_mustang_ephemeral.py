@@ -804,24 +804,45 @@ class GuestAttributeReadbackTest(unittest.TestCase):
             self.assertNotIn('1', err)
 
     def test_verified_missing_key_404_waits_and_permission_errors_stop(self):
-        literal = (
+        # Readonly capture, 10:24, of get-guest-attributes for a missing probe key.
+        # The jit-fetched line keeps this header and account sentence and changes only the resource.
+        captured = (
+            'ERROR: (gcloud.compute.instances.get-guest-attributes) HTTPError 404: '
+            "The resource 'mustang/nonexistent-probe' of type 'Guest Attribute' was not found. "
+            'This command is authenticated as grok-bots@protocols-465723.iam.gserviceaccount.com '
+            'which is the active account specified by the [core/account] property.')
+        operator = captured.replace("'mustang/nonexistent-probe'", "'mustang/jit-fetched'", 1)
+        controller = operator.replace(
+            'grok-bots@protocols-465723.iam.gserviceaccount.com',
+            'mustang-controller@protocols-465723.iam.gserviceaccount.com', 1)
+        self.assertEqual(operator, enroll.GUEST_ATTRIBUTE_404_HEADER % 'mustang/jit-fetched'
+                         + enroll.GUEST_ATTRIBUTE_ACCOUNTS[0] + enroll.GUEST_ATTRIBUTE_404_SUFFIX)
+        self.assertEqual(controller, enroll.GUEST_ATTRIBUTE_404_HEADER % 'mustang/jit-fetched'
+                         + enroll.GUEST_ATTRIBUTE_ACCOUNTS[1] + enroll.GUEST_ATTRIBUTE_404_SUFFIX)
+        for line in (operator, controller):
+            self.assertTrue(enroll.missing_guest_attribute(subprocess.CompletedProcess(['gcloud'], 1, '', line)))
+            self.assertTrue(enroll.missing_guest_attribute(subprocess.CompletedProcess(['gcloud'], 1, ' \n', line+'\n')))
+        self.assertFalse(enroll.missing_guest_attribute(subprocess.CompletedProcess(['gcloud'], 1, '', captured)))
+        handwritten = (
             'ERROR: (gcloud.compute.instances.get-guest-attributes) HTTPError 404: '
             "The resource 'projects/protocols-465723/zones/us-west2-a/instances/"
             "roseos-mustang-builder-20261107-a/guestAttributes/mustang/jit-fetched' was not found")
-        self.assertTrue(enroll.missing_guest_attribute(subprocess.CompletedProcess(['gcloud'], 1, '', literal)))
-        self.assertIn('HTTPError 404', literal)
+        self.assertFalse(enroll.missing_guest_attribute(subprocess.CompletedProcess(['gcloud'], 1, '', handwritten)))
+        unknown = operator.replace(
+            'grok-bots@protocols-465723.iam.gserviceaccount.com',
+            'other@protocols-465723.iam.gserviceaccount.com', 1)
+        self.assertFalse(enroll.missing_guest_attribute(subprocess.CompletedProcess(['gcloud'], 1, '', unknown)))
+        self.assertFalse(enroll.missing_guest_attribute(
+            subprocess.CompletedProcess(['gcloud'], 1, '', operator+' ya29.extra-secret')))
+        self.assertFalse(enroll.missing_guest_attribute(subprocess.CompletedProcess(['gcloud'], 2, '', operator)))
+        self.assertFalse(enroll.missing_guest_attribute(subprocess.CompletedProcess(['gcloud'], 1, '[]', operator)))
         permission = (
             'ERROR: (gcloud.compute.instances.get-guest-attributes) HTTPError 403: '
             "Required 'compute.instances.getGuestAttributes' permission for "
             "'projects/protocols-465723/zones/us-west2-a/instances/roseos-mustang-builder-20261107-a' "
             'ya29.permission-sentinel-not-a-token')
         self.assertFalse(enroll.missing_guest_attribute(subprocess.CompletedProcess(['gcloud'], 1, '', permission)))
-        self.assertFalse(enroll.missing_guest_attribute(
-            subprocess.CompletedProcess(['gcloud'], 1, '', literal+' ya29.extra-secret')))
-        self.assertFalse(enroll.missing_guest_attribute(subprocess.CompletedProcess(['gcloud'], 2, '', literal)))
-        self.assertFalse(enroll.missing_guest_attribute(subprocess.CompletedProcess(
-            ['gcloud'], 1, '', literal.replace('/guestAttributes/mustang/jit-fetched', ''))))
-        self.assertFalse(enroll.missing_guest_attribute(subprocess.CompletedProcess(['gcloud'], 1, '[]', literal)))
+        literal = controller
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary)/'mustang-jit'
             path.write_text('current-config')
@@ -846,6 +867,9 @@ class GuestAttributeReadbackTest(unittest.TestCase):
             self.assertEqual(state['calls'], 3)
             self.assertNotIn('HTTPError', err)
             self.assertNotIn('guestAttributes', err)
+            self.assertNotIn('grok-bots', err)
+            self.assertNotIn('mustang-controller', err)
+            self.assertNotIn('serviceaccount', err.lower())
             self.assertNotIn(expected, out+err)
             calls = {'n': 0}
 
@@ -861,6 +885,8 @@ class GuestAttributeReadbackTest(unittest.TestCase):
             self.assertNotIn('ya29.permission-sentinel-not-a-token', err)
             self.assertNotIn('HTTPError', err)
             self.assertNotIn('getGuestAttributes', err)
+            self.assertNotIn('grok-bots', err)
+            self.assertNotIn('ya29', err)
             bound = {'t': 0, 'calls': 0}
 
             def stay_missing(argv):
@@ -880,6 +906,9 @@ class GuestAttributeReadbackTest(unittest.TestCase):
             self.assertNotIn('HTTPError', err)
             self.assertNotIn('protocols-465723', err)
             self.assertNotIn('guestAttributes', err)
+            self.assertNotIn('mustang-controller', err)
+            self.assertNotIn('grok-bots', err)
+            self.assertNotIn('core/account', err)
 
     def invoke(self, argv, transport, pause, clock=None):
         from contextlib import redirect_stderr, redirect_stdout
