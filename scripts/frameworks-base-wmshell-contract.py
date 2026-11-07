@@ -160,6 +160,12 @@ CONFIRMATION = {
         'mContext; OS Product checked every m-prefixed name used in SwipeFrame and the three anonymous View subclasses '
         'against the pinned View, ViewGroup, FrameLayout, LinearLayout, TextView and EditText fields, and none other '
         'resolves to a framework field; no patch, no new file, no new import; goals and flagEvidence (none) unchanged',
+    'chininset': 'OS Core to OS Product, 2026-11-07 18:42 UTC, commit 8142ffb on 31c00a7 (the chin inset, items 3-4, '
+        'with OS Product\'s RoseEdgeWindow systemOverlays() inset in the same carrier): only the required overlay '
+        'RoseShadeController.java changes (7978a7c1..., blob 1d3d8ad9), its panel inset now ime() | navigationBars() | '
+        'systemOverlays() and its scrim\'s bottom margin the systemOverlays() bottom, a no-op while the chin provides '
+        'nothing; systemOverlays() is public API 34; no patch, no new file, no new import; goals and flagEvidence '
+        '(none) unchanged',
 }
 
 # Where each goal's sources come from, read from the pinned Android.bp files (committed byte for byte under

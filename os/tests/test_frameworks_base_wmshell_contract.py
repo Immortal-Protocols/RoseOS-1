@@ -165,7 +165,7 @@ class FrameworksBaseWmshellContractTest(unittest.TestCase):
         self.assertEqual(self.manifest['schemaVersion'], 2)
         import hashlib
         self.assertEqual(hashlib.sha256(MANIFEST.read_bytes()).hexdigest(),
-            'ace36bc186d3d4aa32dac7244d7a94934393c4f077f7458ffa6ac0530e1014b9')
+            '5937a0f2c66a0c7d513b365e2e5f88f906a7cb1b8ab431ec4344cdb903ad20ee')
         self.assertTrue(re.search(r'"target": "Launcher3QuickStepLib"',
             (ROOT/'os/compile-contracts/launcher3-quickstep-lib.json').read_text()))
 
