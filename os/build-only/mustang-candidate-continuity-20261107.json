@@ -1,0 +1,220 @@
+{
+  "candidateOnly": true,
+  "installerSize": 2108057621,
+  "installerSha256": "4eae7e7e54191f30168649e75f2cfefb10fdbff1bffbfc2655ec079a4a8cce5e",
+  "safeEntries": true,
+  "inventory": [
+    {
+      "name": "mustang-install-2026110302/evt.ec.bin",
+      "size": 1048576,
+      "compressed": 487932
+    },
+    {
+      "name": "mustang-install-2026110302/bootloader-mustang-deepspace-17.4-16119390.img",
+      "size": 20043164,
+      "compressed": 9536694
+    },
+    {
+      "name": "mustang-install-2026110302/proto11.ec.bin",
+      "size": 1048576,
+      "compressed": 484029
+    },
+    {
+      "name": "mustang-install-2026110302/radio-mustang-g5400i-260604-260807-b-16035863.img",
+      "size": 191500428,
+      "compressed": 139528512
+    },
+    {
+      "name": "mustang-install-2026110302/d3m2.ec.bin",
+      "size": 1048576,
+      "compressed": 487927
+    },
+    {
+      "name": "mustang-install-2026110302/avb_pkmd.bin",
+      "size": 1032,
+      "compressed": 1037
+    },
+    {
+      "name": "mustang-install-2026110302/android-info.txt",
+      "size": 175,
+      "compressed": 130
+    },
+    {
+      "name": "mustang-install-2026110302/android-info.zip",
+      "size": 382,
+      "compressed": 251
+    },
+    {
+      "name": "mustang-install-2026110302/boot.img",
+      "size": 67108864,
+      "compressed": 16950414
+    },
+    {
+      "name": "mustang-install-2026110302/init_boot.img",
+      "size": 8388608,
+      "compressed": 2428699
+    },
+    {
+      "name": "mustang-install-2026110302/dtbo.img",
+      "size": 16777216,
+      "compressed": 1251536
+    },
+    {
+      "name": "mustang-install-2026110302/vendor_kernel_boot.img",
+      "size": 67108864,
+      "compressed": 4618163
+    },
+    {
+      "name": "mustang-install-2026110302/pvmfw.img",
+      "size": 1048576,
+      "compressed": 366804
+    },
+    {
+      "name": "mustang-install-2026110302/vendor_boot.img",
+      "size": 67108864,
+      "compressed": 22404930
+    },
+    {
+      "name": "mustang-install-2026110302/vbmeta.img",
+      "size": 8192,
+      "compressed": 2958
+    },
+    {
+      "name": "mustang-install-2026110302/super_1.img",
+      "size": 268431596,
+      "compressed": 105397509
+    },
+    {
+      "name": "mustang-install-2026110302/super_2.img",
+      "size": 268431424,
+      "compressed": 137670871
+    },
+    {
+      "name": "mustang-install-2026110302/super_3.img",
+      "size": 268431424,
+      "compressed": 131376976
+    },
+    {
+      "name": "mustang-install-2026110302/super_4.img",
+      "size": 268431424,
+      "compressed": 108774209
+    },
+    {
+      "name": "mustang-install-2026110302/super_5.img",
+      "size": 268431424,
+      "compressed": 113094128
+    },
+    {
+      "name": "mustang-install-2026110302/super_6.img",
+      "size": 268431472,
+      "compressed": 123054407
+    },
+    {
+      "name": "mustang-install-2026110302/super_7.img",
+      "size": 268431424,
+      "compressed": 108142743
+    },
+    {
+      "name": "mustang-install-2026110302/super_8.img",
+      "size": 268431448,
+      "compressed": 118317469
+    },
+    {
+      "name": "mustang-install-2026110302/super_9.img",
+      "size": 268431424,
+      "compressed": 136522333
+    },
+    {
+      "name": "mustang-install-2026110302/super_10.img",
+      "size": 268431424,
+      "compressed": 119662154
+    },
+    {
+      "name": "mustang-install-2026110302/super_11.img",
+      "size": 268431424,
+      "compressed": 127460757
+    },
+    {
+      "name": "mustang-install-2026110302/super_12.img",
+      "size": 268431448,
+      "compressed": 153490111
+    },
+    {
+      "name": "mustang-install-2026110302/super_13.img",
+      "size": 268431424,
+      "compressed": 130318521
+    },
+    {
+      "name": "mustang-install-2026110302/super_14.img",
+      "size": 268431424,
+      "compressed": 113518465
+    },
+    {
+      "name": "mustang-install-2026110302/super_15.img",
+      "size": 268431424,
+      "compressed": 123922611
+    },
+    {
+      "name": "mustang-install-2026110302/super_16.img",
+      "size": 160677964,
+      "compressed": 58774456
+    },
+    {
+      "name": "mustang-install-2026110302/script.txt",
+      "size": 1365,
+      "compressed": 472
+    },
+    {
+      "name": "mustang-install-2026110302/flash-all.sh",
+      "size": 6144,
+      "compressed": 1895
+    },
+    {
+      "name": "mustang-install-2026110302/flash-all.bat",
+      "size": 8113,
+      "compressed": 2122
+    }
+  ],
+  "super1HeaderHex": "3aff26ed010000001c000c00001000004a9d0f001100000000000000",
+  "androidSparseMagic": true,
+  "blocker": null,
+  "tools": {
+    "officialDebianIndex": "https://deb.debian.org/debian/dists/trixie/InRelease",
+    "signature": "verified using existing Debian archive keyring with gpg",
+    "packageReceipt": "/workspace/mustang-ota/debian-https-tools/package-receipt.json",
+    "conversion": "official Debian simg2img 1:34.0.5-12; inputs super_1.img through super_16.img numerically ordered; no raw concatenation",
+    "rawPath": "/workspace/mustang-ota/artifacts/13280698927-20261106T203456/inspection-20261107/super.raw.img",
+    "rawBytes": 4191461376,
+    "lpunpackSha256": "95a07401e3f54e0a16f948938b464cab6d0f31b40cb08e196b4cc45f7e8811e5",
+    "lpunpackProvenancePath": "/workspace/mustang-ota/artifacts/13280698927-20261106T203456/inspection-20261107/lpunpack-provenance.json",
+    "partitionExtraction": "lpunpack -p system_a -p system_ext_a -p product_a; debugfs read-only dump exact regular files"
+  },
+  "observations": {
+    "updaterPath": "/workspace/mustang-ota/artifacts/13280698927-20261106T203456/inspection-20261107/observed/Updater.apk",
+    "updaterBytes": 5752573,
+    "updaterSha256": "32d5f335098c14839641784552fbed513932921c26f4b83647967747198c2cd9",
+    "apkMatchesExpected": true,
+    "otaCerts": [
+      {
+        "zipMember": "keys/releasekey.x509.pem",
+        "pemSha256": "3b5370f27bbafc50e7a1f4c88322d0be5075f0d933fbe51ea4d7814b4571569a",
+        "derSha256": "93cc757e7f4e4e5c4ef7726fbeec9acc77b1f97d471c1cd0d62753cf94e471a8",
+        "derBytes": 1297
+      }
+    ],
+    "certMatchesExpected": true,
+    "fingerprintDefinition": "SHA256 of X509 DER serialization, openssl x509 -inform PEM -outform DER; not PEM/archive digest",
+    "imagePaths": [
+      "system_a.img:/system/priv-app/Updater/Updater.apk",
+      "system_a.img:/system/etc/security/otacerts.zip"
+    ],
+    "scope": "candidate archive bytes only; not installed phone proof, target-files or admission"
+  },
+  "schema": "roseos.mustang-candidate-continuity.v1",
+  "currentPhone": false,
+  "phoneObserved": false,
+  "admitsRuntime": false,
+  "admitsSourcePin": false,
+  "targetFiles": null,
+  "kernelMount": false
+}
