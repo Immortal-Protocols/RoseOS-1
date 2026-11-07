@@ -144,7 +144,8 @@ class Vision(unittest.TestCase):
              'Send to Sam', 'green send icon', 'the Submit button', 'Submit review', 'Post', 'Tweet', 'Tap Post',
              'the Post button', 'Post comment', 'Post reply button', 'Post now', 'Post in the top right corner',
              'Post (top right)', 'Post, top-right corner', 'Tweet in the top right corner', 'the blue Post text button',
-             'Post button (top right)', 'the blue Post button at the top right', 'Payment methods')
+             'Post button (top right)', 'the blue Post button at the top right', 'Payment methods',
+             'button to send the message', 'Send message button', 'Confirm order button', 'Submit button at bottom of form')
     # Ordinary controls, including those naming a final control as a landmark, a field, a setting or a feed item.
     ORDINARY = ('Reply', 'paper airplane DM icon at top right', 'Message field', 'Search', 'Sent folder', 'Settings gear',
                 'Back arrow', 'the latest post', 'Open the first post', 'Like button on the post', 'Comment on the post',
@@ -153,7 +154,10 @@ class Vision(unittest.TestCase):
                 'Like button on the tweet', 'Send feedback', 'Send feedback row', "the 'Send message' field",
                 'the Send a chat text box', 'Send read receipts toggle', 'Enter is send toggle',
                 'the message field next to the send button', 'the emoji icon beside the send button',
-                'the camera icon next to the send button', 'the Share via paper plane icon')
+                'the camera icon next to the send button', 'the Share via paper plane icon', 'Confirm',
+                'the Confirm button', 'Send read receipts', 'Undo send', 'Enter is send', 'Send usage and diagnostics',
+                'Send feedback button', 'Send feedback option', 'the Send to dropdown', 'the email titled Submit your timesheet',
+                'the message saying send me the file')
     # Once a draft is typed, "Reply" and the paper plane send it.
     DRAFT_FINAL = ('Reply', 'the Reply button', 'paper plane icon', 'paper airplane icon', 'paper-airplane button')
 

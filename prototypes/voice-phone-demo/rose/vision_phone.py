@@ -40,12 +40,16 @@ _LEAD = re.compile(r"^(?:(?:the|a|an|tap|press|click|hit|select|blue|green|red|w
 # "Tap Tweet", "Post comment", "the Post text button"); not a feed item ("post comment box").
 _SEND_LABEL = re.compile(r"^\W*(?:(?:send|post|tweet)(?:\s+(?:it|now|message|reply|comment|tweet|text|sms))?"
                          r"(?:\s+(?:text|label|link|pill|option))?(?:\s+(?:button|icon))?\W*$|reply\b)", re.I)
-# A send, submit or publish word anywhere in the head ("blue send arrow"), unless the head is a field, setting or menu
-# row ("the 'Send message' field", "Send read receipts toggle", "Send feedback"): typing into or flipping those sends
-# nothing.
-_VISION_FINAL = re.compile(r"\b(?:send|submit|publish)\b", re.I)
+# A send, submit or publish word that ends the head, with only message, element or shape words after it ("blue send
+# arrow", "button to send the message", "Send to Sam"), unless the head is a field, setting or menu row ("the 'Send
+# message' field", "Send read receipts", "Undo send", "Enter is send", "Send feedback button"): those send nothing.
+_VISION_FINAL = re.compile(r"(?<!undo\s)(?<!is\s)\b(?:send|submit|publish)(?:\s+(?:it|now|the|a|this|my|your|message|"
+                           r"messages|reply|text|sms|mms|comment|chat|email|button|icon|arrow|key|plane|glyph|symbol))*\W*$|"
+                           r"\bsend\s+to\b", re.I)
 _NOT_A_BUTTON = re.compile(r"\b(?:field|input|box|bar|area|placeholder|toggle|switch|checkbox|setting|settings|row|"
-                           r"tab|menu|feedback)\W*$", re.I)
+                           r"tab|menu|dropdown|picker|selector|feedback)\W*$", re.I)
+# The element word a model adds after a label ("the Confirm button"), which is not part of the label.
+_ELEMENT = re.compile(r"(?:\s+(?:button|icon|text|label|link|option|pill))+\W*$", re.I)
 # "Post"/"Tweet" as a control, not a feed item or the composer's opener ("New post button", "compose tweet button").
 _POST_BUTTON = re.compile(r"\b(?:post|tweet)\s+(?:(?:text|label)\s+)?(?:button|icon)\b", re.I)
 _OPENER = re.compile(r"\b(?:new|create|compose|write|start|add)\s+(?:a\s+)?(?:post|tweet)\b|\+", re.I)
@@ -57,7 +61,7 @@ def final_target(target: str, typed: bool) -> bool:
     """Whether tapping the model's description of a target could send, buy or otherwise finish something.
 
     Best effort, since it reads the model's words, not the app's: the accessibility path's label rules on the head of
-    the description, a send, submit or publish word anywhere in a button's head, "Post"/"Tweet" buttons, and once a
+    the description, a send, submit or publish word ending a button's head, "Post"/"Tweet" buttons, and once a
     draft is typed "Reply" and the paper plane. A miss is still the owner's action under the policy."""
     from .tasks import _final_control
 
@@ -65,7 +69,7 @@ def final_target(target: str, typed: bool) -> bool:
     head = _WHERE.sub("", text) or text
     label = _LEAD.sub("", head)
     button = not _NOT_A_BUTTON.search(head)
-    kind = _final_control(label, typed=typed)  # "Reply" is a send once a draft is typed
+    kind = _final_control(_ELEMENT.sub("", label) or label, typed=typed)  # "Reply" is a send once a draft is typed
     if kind == "send" and not (button and _SEND_LABEL.match(label)):
         kind = ""  # "post to open it", "the reply text field": not the send control; real sends are matched below
     return bool(kind or (button and _VISION_FINAL.search(head))
