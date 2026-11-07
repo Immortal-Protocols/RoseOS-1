@@ -19,7 +19,7 @@ Every change is app-side in Rose Agent: no OS rebuild.
 | Bundled font | `customization_font` | default (shipped type), nunito (app asset), sans, serif, condensed, mono (platform families) |
 | Glasses-on hook | `customization_glasses_hook` | enabled; action `tray` (Rose Home and its tray forward) or `app` + packageName |
 
-`customization_state` reads all four, plus Home's applied revision and the glasses-worn signal's availability.
+`customization_state` reads all four, plus Home's applied revision and the glasses-on signal's state.
 
 Each result reports three things separately, as decided by `CustomizationOutcome`:
 - `status`: `verified` means stored; it never means visible.
@@ -81,30 +81,13 @@ permissioned API that raises the OS edge, a direct command endpoint, and any tru
   over the current app is a documented limitation: there is no exported or permissioned entry. Rebuilding the in-app
   `HomeTray` through `attachLauncherPages(true)` does not interact with the 1A OS edge (#618).
 - **OS Core** (`session_015TFqkUBnNiWWDvKDuGw3hi`). Nothing in SystemUI, the shade or gestures is touched. OS Core
-  confirmed that the platform has no glasses-worn signal.
-- **Unassigned:** `GlassesReconnect`, `GlassesAdvertisement` and the glasses side of `VoiceService` are read-only
-  here until an owner is agreed. App Core will accept a 1–3 line `GlassesWearHookRunner` call in `VoiceService` once a
-  real wear source exists.
+  confirmed no platform change is needed.
+- **Untouched:** `GlassesReconnect`, `GlassesAdvertisement` and `VoiceService`. The Bluetooth audio signal needs none of
+  them; it is registered from `RoseAgentApplication`.
 
 ## Glasses-on signal
 
-This repository has no real worn signal (finding below); the owner chose a Bluetooth audio proxy instead.
-
-| In-repo signal | What it actually is |
-| --- | --- |
-| HFP/A2DP connection events (`GlassesReconnect`) | Bluetooth connection |
-| `GlassesAdvertisement.hinge` | RB Meta 05XH BLE advertisement byte, `0x01ab` `80 0a 01 33`, then `0x14` open / `0x04` closed. Means unfolded, not worn, and is scanned only while disconnected. |
-| `GlassesAutoStartPolicy` | Infers a "new wearing" from a reconnect gap of at least 10 s |
-
-`voice-match/README.md:7` says the connection exposes "not reliable worn-state events". OS Core reports no platform
-or vendor wear API.
-
-**The real source is Meta's Wearables Device Access Toolkit.** `Device.donState` (`DONNED`/`DOFFED`/`UNKNOWN`,
-module `com.meta.wearable.dat.core`) is per Meta's DAT 1.0 Android reference. It has not been verified on hardware
-here. DAT is not in this repo. The external Glasses Camera app (`dev.pixel.glassescamera`) uses it, and only during its
-own camera session.
-
-**Owner decision (Nathan, 2026-11-07): skip both the Glasses Camera relay and Meta DAT.** The hook's signal is any
+**Owner decision (Nathan, 2026-11-07).** The hook's signal is any
 Bluetooth audio device connecting (glasses on) and the last one disconnecting (removal). `BluetoothAudioWear` reports
 this from AudioManager's device list, which needs no permission, and registers once from `RoseAgentApplication`.
 
