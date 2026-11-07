@@ -518,7 +518,7 @@ only where its earlier runs ran. `test_launcher3_compile_workflow.py` and `test_
 
 A guard refusal is a blocker, not a compile.
 
-## Hosted Agent route (source only, unbound)
+## Hosted Agent route (agent-hosted, agent-hosted-probe)
 
 `scripts/host-app-release.py --hosted` is the off-builder Agent entry point (Signing's #608 handoff). It runs the
 same `release()` as the builder route: worktree at the candidate, Rose Agent built alone, the four pinned
@@ -539,11 +539,12 @@ digest, allocation, source and store instead of `mustExceed`. `main()`'s cleanup
 `worktree prune`, `ROSE_RELEASE_DIR`, and any partial artifact on failure. The builder route is unchanged.
 
 **Its config, `os/release-pipeline/agent/hosted.json`,** keeps the committed signing values and pin unchanged: the
-project, secret version, four secret names and `appSignerSha256`. Everything else is null until its owner binds it:
-- App's portable SDK, JDK, public connection inputs and tools, as absolute paths on the hosted runner;
-- the reservation store.
+project, secret version, four secret names and `appSignerSha256`. It binds two more things:
+- `reservation.store`: the shared version ledger (decision D1, below);
+- `publicInputs`: where the five public connection inputs come from (below).
 
-`--check --hosted` exits 4 and names each one.
+App's portable SDK, JDK, public-input directory and tools stay null: they are absolute paths on the hosted runner,
+bound at run time by App's record. Without that record, `--check --hosted` exits 4 and names each one.
 
 **App's portable inputs (`--portable-inputs PATH`, with `--hosted` only).** App's bind step writes one nonsecret
 runtime record on the runner; it is never committed. Schema `roseos.agent-portable-inputs.v1`, exactly these keys:
@@ -559,8 +560,7 @@ committed config alone: the signing identity, secret names and version, `minimum
 The reservation and ownership checks and the cleanup are unchanged, and the builder route refuses the option.
 `host-app-build.build()` still checks the SDK layout (`platforms/android-35`, `build-tools/android-15`) and the JDK.
 Its `restore()` checks the five inputs against `public-assets-receipt.json` and these pins. The receipt records
-`portableInputs` (the record's schema and sha256, no paths). With a valid record, `--check --hosted` names only the
-reservation store.
+`portableInputs` (the record's schema and sha256, no paths). With a valid record, `--check --hosted` exits 0.
 
 **Its publication (`scripts/app_release_publisher.py --hosted --reservation PATH`, 1F).** The publisher admits a
 hosted artifact only under the same owned reservation the build used. The check is one shared implementation,
@@ -573,18 +573,57 @@ hosted artifact only under the same owned reservation the build used. The check 
 
 Every other check is the app-only route's, unchanged: artifact inventory and digests, signer, v4 sidecar,
 compatibility, a separate prerelease and OTA Latest unchanged. `publication.json` also records the reservation; the
-public receipt does not. Frankel's app-only and reuse routes refuse a hosted receipt. While the store is unbound,
-`--hosted` exits 4 before any check or API call. Neither the build nor the publisher reads the store yet: confirming
-that a reservation is recorded there comes with the store itself (decision D1).
+public receipt does not. Frankel's app-only and reuse routes refuse a hosted receipt. If a config has no store,
+`--hosted` exits 4 before any check or API call. The workflow's own jobs confirm that the ledger holds the
+reservation before the build and again before publication (`agent-hosted.py bind` and `confirm`).
 
-Nothing in `os-release.yml` routes to it yet. The hosted job, its queue and the shared reservation store wait on the
-decisions in the Agent design checkpoint:
-- the reservation store and its write credential;
-- Frankel reserving in the same store;
-- Infra's check of provider admission for a hosted runner.
+**The shared version ledger (decision D1, `scripts/app_reservation_store.py`).** It is a set of annotated tags in
+`Immortal-Protocols/pixel-ota`, the repository whose `rose-agent-N` releases the versions name:
+- **Reservations.** Version N is held by `refs/tags/app-reservations/dev.pixel.voice/N`. The tag's message is
+  exactly the canonical JSON of its `roseos.app-version-reservation.v1` record.
+- **Atomic creation.** GitHub creates a ref only when it is absent, and answers 422 otherwise. So one run ever holds
+  a version, whichever lane asks first. Nothing moves, replaces, deletes or reuses a reservation, and a failed run's
+  version stays consumed.
+- **Floors.** `refs/tags/app-floors/dev.pixel.voice/<run>-<attempt>` holds a `roseos.app-version-floor.v1` record:
+  the highest version a builder's own ledger had consumed when that run allocated. That is how the Frankel builder's
+  history (its allocations, attempts and app reservations, which no hosted job can read) reaches the hosted lane.
+  Every version at or below the highest floor counts as consumed.
+- **Credentials.** Writes use the existing pixel-ota publisher App (contents: write). Its token is minted only in
+  hosted jobs and never reaches a builder. Reads use git, anonymously, from any lane, with no API page limit.
+- **No side effects.** pixel-ota has no workflows, so a ledger tag triggers nothing. Ledger tags are not releases,
+  so the OTA feed, Latest and the app's release listing never see them.
 
-`scripts/tests/test_agent_hosted_release.py` checks the route, and `PublisherHostedTest` in
-`scripts/tests/test_app_release_publisher.py` its publication, with fakes only.
+**Public connection inputs (`publicInputs`).** The five inputs stay git-ignored deployment files. The hosted build
+takes them from one public, immutable release asset, pinned by URL, size and sha256: the `rose-agent-352` APK.
+Its four stored entries are byte-identical to those of the Rose Agent 368 that Frankel 2026110704 and 2026110705
+bundle, and both APKs carry the same compiled network security config. `agent-hosted.py public-inputs` copies the four
+stored files out and regenerates the network security config with App's `scripts/configure-local.py` template for
+the endpoint host. Each of the five must equal its committed digest. After the build, `agent-hosted.py check-apk`
+requires the built APK to carry all five entries exactly as the pinned APK does, compiled config included. A new
+endpoint or input set is a new pin.
+
+**The workflow (os-release.yml modes `agent-hosted` and `agent-hosted-probe`, manual only).** Both run only on
+GitHub-hosted runners: no controller, builder, storage or host lock, and the controller and cleanup jobs are skipped.
+They share the workflow's one queue (`os-release-frankel`), so they claim no parallel capacity yet. The guard admits a
+bare dispatch from main only: no candidate, build, timestamp or apps pin, no resume, campaign or other mode's input,
+and attempt 1 only. The jobs:
+
+| Job | Modes | What it does |
+| --- | --- | --- |
+| `agent-signer` | both | Logs in as the signer identity through WIF (decision D4). Reads each of the four `PIXEL_APP_SIGNING_*` versions into owner-only RAM, then overwrites and removes it at once. Uploads a receipt naming each secret and a fixed result category (`read`, `token-exchange-refused`, `permission-denied` and so on), never a payload or gcloud's text. Nothing else runs unless all four were read. |
+| `agent-reserve` | agent-hosted | Mints the publisher token. Either skips, because the newest published rose-agent release already has these Rose Agent sources, or allocates one fresh version and holds it in the ledger for this run. The fresh version clears the ledger's reservations and highest floor, every pixel-ota release (drafts included), and the committed Frankel config and allocation records. It is derived as `release-allocate.py`'s version-only candidate, named `N-hosted-beta`. Exits 4 while the ledger holds no builder floor. |
+| `agent-build` | both | Installs the pinned SDK archives (`scripts/setup-android-sdk.sh`), the pinned public inputs and App's portable record (`portable-build.py prepare` and `inputs`), then runs `host-app-release.py --check --hosted`. Probe: an unsigned Agent-only build of the dispatch commit plus `check-apk`. agent-hosted: `bind` (the same candidate, re-derived, owned by this run, held by the ledger), signer login, `host-app-release.py --hosted`, then `check-apk` on the signed APK. |
+| `agent-publisher` | agent-hosted with `app_publish` | Confirms the ledger still holds the reservation, mints the token and runs `app_release_publisher.py --hosted`. Publishes its own prerelease, never Latest. |
+
+**What remains (decision D2).** The Frankel builder must record its consumed versions in the ledger: a floor once,
+and a reservation for each fresh Rose Agent version, before it builds. Its allocator must also count the ledger's
+versions as consumed. Until that floor exists, `agent-reserve` refuses (exit 4) and no hosted version is ever issued.
+`agent-hosted-probe` needs none of it.
+
+`scripts/tests/test_agent_hosted_release.py` checks the entry point and `PublisherHostedTest` in
+`scripts/tests/test_app_release_publisher.py` its publication. `scripts/tests/test_app_reservation_store.py` checks the
+ledger against a real local git repository, and `scripts/tests/test_agent_hosted.py` checks the route and workflow.
+All use fakes only.
 
 ## Retained Rango signing and separate release (source only, runtime unbound)
 

@@ -12,10 +12,10 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: latest-beta (default, the normal button) builds the main commit this run was started from for Pixel 10 (frankel) Beta with a freshly allocated build number, BUILD_DATETIME and app versions, signs and verifies it, publishes a PUBLIC pixel-ota release and makes it the Beta Latest only after verification and the download check (this is not the production channel; older releases stay for rollback); leave every other field at its default. Advanced modes - latest-draft uses the normal fresh allocator and leaves a verified unpublished draft, with no campaign or promotion; policy reclaim is skipped; os-release builds the whole candidate from explicit pins; app-only builds, signs and verifies Rose Agent alone; emulator-alpha builds an unsigned test-only Cuttlefish image of the bound retained tree (no OS signing, no publication); emulator-alpha-successor only moves the pinned alpha preparation to the configured delta, re-hashes and probes it (no compile, signing or publication); emulator-alpha-apk-diagnostic reads aapt evidence for three fixed APKs from the retained alpha super.img of run 40765631053 (build_timestamp = that run's BUILD_DATETIME; no compile, signing or publication); emulator-alpha-verify-retained re-runs the full alpha image gate on run 40765631053's retained output, bound to its measured super.img (build_timestamp 1793220134; no compile, signing or publication); emulator-alpha-export stages the retained alpha images and host package verified by run 40777816699 (build_timestamp 1793220134), re-hashed against that run's receipt, as a private artifact for the separate alpha-runtime.yml (no compile, signing, login or publication); app-reuse hands the signed Rose Agent a verified OS candidate bundled (candidate_sha, build_number, build_timestamp of that build, reuse_binding) to the app publisher unchanged (no app build, compile, signing, signer login or OS promotion); device-readiness reads metadata of the retained source tree for the fixed Pixel 10 targets of os/devices/pixel10.json under the shared lock (candidate_sha = this workflow commit; PARTIAL by design - no lunch, envsetup or vendor script is executed, so target results stay unknown; no make, signing, secrets, login, download or publication; admits no device); signing-bootstrap runs one reviewed os/signing-bootstrap profile under the shared lock (candidate_sha = this workflow commit; no build, OS signing or publication; admits no device; fails closed until the profile's tools, inventory and access are ready); rango-retained checks the retained Rango (Pixel 10 Pro Fold) signing and separate-release bindings of os/retained-rango/release.json on the hosted guard only and only when every binding is bound signs it on the original builder under the shared lock, verifies it, and publishes a separate public rango-{build} release that never becomes Latest (refused before the controller while any binding is unbound); rango-factory-observe (manual only) runs scripts/rango-factory-observe.py on the original builder under the nonblocking shared lock and reads only the retained Rango build 2026103001 signed marker and target-files, the TRANSFER007 hash-bound input receipt and otatools and the committed contracts, and uploads only its three JSON receipts (candidate_sha = empty, the recipe is this workflow commit; no build, signing, secrets, login, download, enrollment, recovery or publication; Blazer is never observed); blazer-prep (manual only) runs one Pixel 10 Pro (blazer) preparation stage of scripts/blazer-build-only.py (blazer_prep_stage = source, download, vendor or lunch; source is a byte copy of the production working tree whose provenance stays unverified), or its metadata-only inspect (blazer_prep_stage = inspect; at most 20 minutes, no process, network, lock or write) or git-only inspect-git of the two fixed vendor/adevtool/.git targets (blazer_prep_stage = git-inspect; at most 13 minutes, no git process, lock or write) or the git-only inspect-git-set of the adevtool projects gitdir (blazer_prep_stage = git-inspect-set; the same bounds) or the metadata-only inspect-git-objects of the fixed adevtool objects directory (blazer_prep_stage = git-inspect-objects; at most 14 minutes, no file content, link, lock or write) or git-meta, genuine Git metadata of the seven pinned projects fetched depth 1 from the public pinned-manifest remote into the isolated tree (blazer_prep_stage = git-meta; at most 111 minutes, 8 GiB) or the read-only binding-observe of exactly the files, names and resources the blazer bindings still need (blazer_prep_stage = binding-observe; at most 19 minutes, no link, write, lock or tool invocation; the stage passes only for a complete observation with no problems) or the read-only ssh-keygen-observe of the builder's fixed /usr/bin/ssh-keygen identity and package-reported version for factory signing (blazer_prep_stage = ssh-keygen-observe, Signing's scripts/ssh-keygen-observe.py; at most 16 minutes; runs no program, reads only the tool and the package database files; the stage passes only for a complete observation that Signing's bind accepts), on the original builder in an isolated work tree under the nonblocking shared lock, with the committed os/build-only/blazer-prep-host.json inputs (refused before the controller while any is unbound), and uploads only its three JSON receipts (candidate_sha = empty; no compile, make, signing, secrets, login, enrollment, recovery or publication; it stops the builder afterwards only if its own controller started it); rango-factory-inspect (manual only) inspects the installer ZIP an earlier rango-factory-package run retained on the builder, without regeneration - under the nonblocking shared lock it verifies that ZIP and its package receipt against the committed identity (the committed identity of run 41515240855 attempt 1), then runs observe, the firmware observer and classify, and uploads only their JSON reports (no generation, export, signing, secrets, login, download, install, phone action or publication; it stops the builder afterwards only if its own controller started it); rango-factory-package (manual only) runs the packaging-only scripts/host-factory-package.py on the original builder for the retained signed Rango build 2026103001 with literal historical expected pins (checked before use; the helper holds the nonblocking shared lock), then inspects the generated install ZIP with scripts/factory-package.py observe and classify, keeping the ZIP, receipts and capped raw log in a new task directory on the builder and uploading only the package receipt, the observation, the classify report and the cleanup report (candidate_sha = empty; no signing, keys, secrets, signer login, download, install, phone action or publication; it stops the builder afterwards only if its own controller started it); blazer-compile (manual only) runs one first build of the Pixel 10 Pro (blazer) target-files with scripts/blazer-build-only.py run --stage compile in the isolated blazer-prep work tree under the nonblocking shared lock, with the committed os/build-only/blazer-compile-host.json inputs (refused before the controller while any is unbound) and the one completed blazer-integrate of this same workflow commit, selected on the builder from its blazer-allocate reservation (none or several refuse before the helper) - the helper re-checks isolation, the admitted Rose integration of that tree, space against the reviewed first-build allowance and its own 8-hour cap, and uploads only its three JSON receipts with the collected output paths and hashes (candidate_sha = empty; no signing, packaging, secrets, login, download, install, phone action or publication; it stops the builder afterwards only if its own controller started it); blazer-integrate (manual only) integrates Rose into the isolated blazer-prep work tree after git-meta with scripts/blazer-integrate-wiring.py, chaining only the existing owners' commands in order and stopping at the first failure - the reconcile seed from the Frankel receipt that matches the copy, the already-signed candidate bundle, Flavors' admit and render, a local candidate checkout and the rendered host-reconcile apply under the nonblocking shared lock - with the committed os/build-only/blazer-integrate-host.json inputs (refused before the controller while any is unbound), and uploads only its JSON reports (candidate_sha = empty; no signing, compile, secrets, login, download, install, phone action or publication; it stops the builder afterwards only if its own controller started it); frankel-factory-observe (manual only) reads, without writing and under the nonblocking shared lock, the inputs one Frankel (Pixel 10) initial factory installer would use for the published Frankel build named by os/factory-package/frankel.json - that build's original attempt receipt chain, sign and verification receipts and signed target-files sha256, its signing release directory markers and the otatools copy its signing kept there with its bin/fastboot and device/common generator members, the release script and the free space - and uploads only its JSON receipt (candidate_sha = empty; refused before the controller while a value it needs is unbound; no packaging, signing, secrets, login, download, install, phone action or publication; it stops the builder afterwards only if its own controller started it); frankel-factory-package (manual only) packages that build's exact signed target-files into frankel-install-<build>.zip with the shared factory machinery (scripts/host-factory-package.py, then scripts/factory-package.py observe, the firmware observation and classify), stages it only after inspection as a private 3-day artifact labelled an unsigned intermediate (no archive signature, so signatureVerified is missing; not factory-ready and not the delivered installer) and uploads its JSON receipts (candidate_sha = empty; refused before the controller while any binding value is unbound; no signing, secrets, login, download, install, phone action or publication; it stops the builder afterwards only if its own controller started it); mustang-ota (manual only, the Mustang one-button OTA) builds, signs and publishes one newer Mustang OTA in one run - the existing mustang-build producer with a fresh allocation, then the existing signing and publication jobs bound to that same run's own successful producer, so no run id is typed - with mustang_publish_ota true and every other input at its default; the signing read-access window is checked at the start, after the compile and right before signer login; never Latest, nothing is retried (each of its jobs refuses a re-run attempt), and the automatic dispatcher stays off; app-inputs-export (manual only) re-checks, under the nonblocking shared lock on the original builder, the three signed Rose apps and the background policy of the one Frankel build named by build_number and its committed allocation record, and uploads them unchanged as a private artifact for another builder (no build, signing, secrets, login, download or publication; it stops the builder afterwards only if its own controller started it)
+        description: latest-beta (default, the normal button) builds the main commit this run was started from for Pixel 10 (frankel) Beta with a freshly allocated build number, BUILD_DATETIME and app versions, signs and verifies it, publishes a PUBLIC pixel-ota release and makes it the Beta Latest only after verification and the download check (this is not the production channel; older releases stay for rollback); leave every other field at its default. Advanced modes - latest-draft uses the normal fresh allocator and leaves a verified unpublished draft, with no campaign or promotion; policy reclaim is skipped; os-release builds the whole candidate from explicit pins; app-only builds, signs and verifies Rose Agent alone; emulator-alpha builds an unsigned test-only Cuttlefish image of the bound retained tree (no OS signing, no publication); emulator-alpha-successor only moves the pinned alpha preparation to the configured delta, re-hashes and probes it (no compile, signing or publication); emulator-alpha-apk-diagnostic reads aapt evidence for three fixed APKs from the retained alpha super.img of run 40765631053 (build_timestamp = that run's BUILD_DATETIME; no compile, signing or publication); emulator-alpha-verify-retained re-runs the full alpha image gate on run 40765631053's retained output, bound to its measured super.img (build_timestamp 1793220134; no compile, signing or publication); emulator-alpha-export stages the retained alpha images and host package verified by run 40777816699 (build_timestamp 1793220134), re-hashed against that run's receipt, as a private artifact for the separate alpha-runtime.yml (no compile, signing, login or publication); app-reuse hands the signed Rose Agent a verified OS candidate bundled (candidate_sha, build_number, build_timestamp of that build, reuse_binding) to the app publisher unchanged (no app build, compile, signing, signer login or OS promotion); device-readiness reads metadata of the retained source tree for the fixed Pixel 10 targets of os/devices/pixel10.json under the shared lock (candidate_sha = this workflow commit; PARTIAL by design - no lunch, envsetup or vendor script is executed, so target results stay unknown; no make, signing, secrets, login, download or publication; admits no device); signing-bootstrap runs one reviewed os/signing-bootstrap profile under the shared lock (candidate_sha = this workflow commit; no build, OS signing or publication; admits no device; fails closed until the profile's tools, inventory and access are ready); rango-retained checks the retained Rango (Pixel 10 Pro Fold) signing and separate-release bindings of os/retained-rango/release.json on the hosted guard only and only when every binding is bound signs it on the original builder under the shared lock, verifies it, and publishes a separate public rango-{build} release that never becomes Latest (refused before the controller while any binding is unbound); rango-factory-observe (manual only) runs scripts/rango-factory-observe.py on the original builder under the nonblocking shared lock and reads only the retained Rango build 2026103001 signed marker and target-files, the TRANSFER007 hash-bound input receipt and otatools and the committed contracts, and uploads only its three JSON receipts (candidate_sha = empty, the recipe is this workflow commit; no build, signing, secrets, login, download, enrollment, recovery or publication; Blazer is never observed); blazer-prep (manual only) runs one Pixel 10 Pro (blazer) preparation stage of scripts/blazer-build-only.py (blazer_prep_stage = source, download, vendor or lunch; source is a byte copy of the production working tree whose provenance stays unverified), or its metadata-only inspect (blazer_prep_stage = inspect; at most 20 minutes, no process, network, lock or write) or git-only inspect-git of the two fixed vendor/adevtool/.git targets (blazer_prep_stage = git-inspect; at most 13 minutes, no git process, lock or write) or the git-only inspect-git-set of the adevtool projects gitdir (blazer_prep_stage = git-inspect-set; the same bounds) or the metadata-only inspect-git-objects of the fixed adevtool objects directory (blazer_prep_stage = git-inspect-objects; at most 14 minutes, no file content, link, lock or write) or git-meta, genuine Git metadata of the seven pinned projects fetched depth 1 from the public pinned-manifest remote into the isolated tree (blazer_prep_stage = git-meta; at most 111 minutes, 8 GiB) or the read-only binding-observe of exactly the files, names and resources the blazer bindings still need (blazer_prep_stage = binding-observe; at most 19 minutes, no link, write, lock or tool invocation; the stage passes only for a complete observation with no problems) or the read-only ssh-keygen-observe of the builder's fixed /usr/bin/ssh-keygen identity and package-reported version for factory signing (blazer_prep_stage = ssh-keygen-observe, Signing's scripts/ssh-keygen-observe.py; at most 16 minutes; runs no program, reads only the tool and the package database files; the stage passes only for a complete observation that Signing's bind accepts), on the original builder in an isolated work tree under the nonblocking shared lock, with the committed os/build-only/blazer-prep-host.json inputs (refused before the controller while any is unbound), and uploads only its three JSON receipts (candidate_sha = empty; no compile, make, signing, secrets, login, enrollment, recovery or publication; it stops the builder afterwards only if its own controller started it); rango-factory-inspect (manual only) inspects the installer ZIP an earlier rango-factory-package run retained on the builder, without regeneration - under the nonblocking shared lock it verifies that ZIP and its package receipt against the committed identity (the committed identity of run 41515240855 attempt 1), then runs observe, the firmware observer and classify, and uploads only their JSON reports (no generation, export, signing, secrets, login, download, install, phone action or publication; it stops the builder afterwards only if its own controller started it); rango-factory-package (manual only) runs the packaging-only scripts/host-factory-package.py on the original builder for the retained signed Rango build 2026103001 with literal historical expected pins (checked before use; the helper holds the nonblocking shared lock), then inspects the generated install ZIP with scripts/factory-package.py observe and classify, keeping the ZIP, receipts and capped raw log in a new task directory on the builder and uploading only the package receipt, the observation, the classify report and the cleanup report (candidate_sha = empty; no signing, keys, secrets, signer login, download, install, phone action or publication; it stops the builder afterwards only if its own controller started it); blazer-compile (manual only) runs one first build of the Pixel 10 Pro (blazer) target-files with scripts/blazer-build-only.py run --stage compile in the isolated blazer-prep work tree under the nonblocking shared lock, with the committed os/build-only/blazer-compile-host.json inputs (refused before the controller while any is unbound) and the one completed blazer-integrate of this same workflow commit, selected on the builder from its blazer-allocate reservation (none or several refuse before the helper) - the helper re-checks isolation, the admitted Rose integration of that tree, space against the reviewed first-build allowance and its own 8-hour cap, and uploads only its three JSON receipts with the collected output paths and hashes (candidate_sha = empty; no signing, packaging, secrets, login, download, install, phone action or publication; it stops the builder afterwards only if its own controller started it); blazer-integrate (manual only) integrates Rose into the isolated blazer-prep work tree after git-meta with scripts/blazer-integrate-wiring.py, chaining only the existing owners' commands in order and stopping at the first failure - the reconcile seed from the Frankel receipt that matches the copy, the already-signed candidate bundle, Flavors' admit and render, a local candidate checkout and the rendered host-reconcile apply under the nonblocking shared lock - with the committed os/build-only/blazer-integrate-host.json inputs (refused before the controller while any is unbound), and uploads only its JSON reports (candidate_sha = empty; no signing, compile, secrets, login, download, install, phone action or publication; it stops the builder afterwards only if its own controller started it); frankel-factory-observe (manual only) reads, without writing and under the nonblocking shared lock, the inputs one Frankel (Pixel 10) initial factory installer would use for the published Frankel build named by os/factory-package/frankel.json - that build's original attempt receipt chain, sign and verification receipts and signed target-files sha256, its signing release directory markers and the otatools copy its signing kept there with its bin/fastboot and device/common generator members, the release script and the free space - and uploads only its JSON receipt (candidate_sha = empty; refused before the controller while a value it needs is unbound; no packaging, signing, secrets, login, download, install, phone action or publication; it stops the builder afterwards only if its own controller started it); frankel-factory-package (manual only) packages that build's exact signed target-files into frankel-install-<build>.zip with the shared factory machinery (scripts/host-factory-package.py, then scripts/factory-package.py observe, the firmware observation and classify), stages it only after inspection as a private 3-day artifact labelled an unsigned intermediate (no archive signature, so signatureVerified is missing; not factory-ready and not the delivered installer) and uploads its JSON receipts (candidate_sha = empty; refused before the controller while any binding value is unbound; no signing, secrets, login, download, install, phone action or publication; it stops the builder afterwards only if its own controller started it); mustang-ota (manual only, the Mustang one-button OTA) builds, signs and publishes one newer Mustang OTA in one run - the existing mustang-build producer with a fresh allocation, then the existing signing and publication jobs bound to that same run's own successful producer, so no run id is typed - with mustang_publish_ota true and every other input at its default; the signing read-access window is checked at the start, after the compile and right before signer login; never Latest, nothing is retried (each of its jobs refuses a re-run attempt), and the automatic dispatcher stays off; app-inputs-export (manual only) re-checks, under the nonblocking shared lock on the original builder, the three signed Rose apps and the background policy of the one Frankel build named by build_number and its committed allocation record, and uploads them unchanged as a private artifact for another builder (no build, signing, secrets, login, download or publication; it stops the builder afterwards only if its own controller started it); agent-hosted (manual only, 1F) builds, signs and verifies Rose Agent alone from the dispatch commit on GitHub-hosted runners with no OS rebuild, controller, builder or host lock - the signer identity first proves it can read the four app signing secrets, then one fresh versionCode is held atomically in the shared pixel-ota ledger for this run (refused until the Frankel builder has recorded its own consumed versions there), the build uses App's portable seam with the pinned public connection inputs, and app_publish publishes its own pixel-ota prerelease (never Latest); agent-hosted-probe (manual only) proves the same signer admission, secrets, toolchain and an unsigned Agent-only build, and reserves, signs and publishes nothing
         # mustang-build prepares/integrates/compiles only; mustang-bootstrap creates the separately bound key set once; mustang-delivery signs/packages/exports privately.
         type: choice
-        options: [latest-beta, os-release, device-readiness, app-only, emulator-alpha, signing-bootstrap, rango-factory-package, rango-factory-inspect, rango-retained, blazer-prep, emulator-alpha-successor, emulator-alpha-apk-diagnostic, emulator-alpha-verify-retained, app-reuse, emulator-alpha-export, rango-factory-observe, blazer-compile, blazer-integrate, mustang-build, mustang-bootstrap, mustang-delivery, frankel-factory-observe, frankel-factory-package, mustang-ota, app-inputs-export, latest-draft]
+        options: [latest-beta, os-release, device-readiness, app-only, emulator-alpha, signing-bootstrap, rango-factory-package, rango-factory-inspect, rango-retained, blazer-prep, emulator-alpha-successor, emulator-alpha-apk-diagnostic, emulator-alpha-verify-retained, app-reuse, emulator-alpha-export, rango-factory-observe, blazer-compile, blazer-integrate, mustang-build, mustang-bootstrap, mustang-delivery, frankel-factory-observe, frankel-factory-package, mustang-ota, app-inputs-export, latest-draft, agent-hosted, agent-hosted-probe]
         default: latest-beta
       device:
         description: Normal full-release selector (frankel only); mustang-* modes ignore this field and pin Pixel 10 Pro XL in their own recipe
@@ -64,7 +64,7 @@ on:
         required: false
         default: ''
       app_publish:
-        description: app-only and app-reuse only - publish the verified signed APK as its own pixel-ota prerelease (never Latest)
+        description: app-only, app-reuse and agent-hosted only - publish the verified signed APK as its own pixel-ota prerelease (never Latest)
         type: boolean
         default: false
       reuse_binding:
@@ -253,6 +253,16 @@ jobs:
             [[ "$PROMOTE" == false && "$RESUME_STAGE" == none && -z "$RESUME_SOURCE_RUN" && -z "$RESUME_UNSIGNED_SHA256" && -z "$RESUME_SIGNED_SHA256" ]]
             [[ -z "${CAMPAIGN:-}" && "$APP_PUBLISH" == false && "${ROSE_RANGO_PUBLISH:-false}" == false && "${ROSE_FIRST_USE_ENROLL:-false}" == false && -z "${ROSE_RECOVER_RUN:-}" ]]
             [[ "${BOOTSTRAP_PROFILE:-none}" == none && -z "$REUSE_BINDING" && "$ALPHA_RECOVER" == false && "$ROSE_DEVICE" == frankel ]]
+          elif [[ "$MODE" == agent-hosted || "$MODE" == agent-hosted-probe ]]; then
+            # 1F hosted Agent route: the dispatch commit (GITHUB_SHA, on main) is the source and the shared ledger
+            # allocates the version, so no pin is admitted. It runs once: a re-run attempt is refused here (and its
+            # reservation, owned by attempt 1, is never reused). Only agent-hosted may publish.
+            [[ -z "$CANDIDATE_SHA" && -z "$BUILD_NUMBER" && -z "$BUILD_TIMESTAMP" && -z "$APPS" ]]
+            [[ "${GITHUB_RUN_ATTEMPT:-}" == 1 && ( "$MODE" == agent-hosted || "$APP_PUBLISH" == false ) ]]
+            [[ "$PROMOTE" == false && "$RESUME_STAGE" == none && -z "$RESUME_SOURCE_RUN" && -z "$RESUME_UNSIGNED_SHA256" && -z "$RESUME_SIGNED_SHA256" ]]
+            [[ -z "${CAMPAIGN:-}" && "${ROSE_RANGO_PUBLISH:-false}" == false && "${ROSE_FIRST_USE_ENROLL:-false}" == false && -z "${ROSE_RECOVER_RUN:-}" ]]
+            [[ "${BOOTSTRAP_PROFILE:-none}" == none && -z "$REUSE_BINDING" && "$ALPHA_RECOVER" == false && "$ROSE_DEVICE" == frankel ]]
+            git merge-base --is-ancestor "$GITHUB_SHA" origin/main
           elif [[ "$MODE" == mustang-build || "$MODE" == mustang-bootstrap || "$MODE" == mustang-delivery || "$MODE" == mustang-ota ]]; then
             # Optional candidate_sha pins the tested main source for automatic unsigned builds.
             # MUSTANG-OTA (one button): the dispatch commit is the source, publication is the point, and the producer
@@ -299,15 +309,15 @@ jobs:
           [[ "$MODE" == rango-retained || "${ROSE_RANGO_PUBLISH:-false}" == false ]]
           [[ "$MODE" == rango-retained || "${ROSE_FIRST_USE_ENROLL:-false}" == false ]]
           [[ -z "${ROSE_RECOVER_RUN:-}" || ( "$MODE" == rango-retained && "$ROSE_RECOVER_RUN" =~ ^[1-9][0-9]{0,19}$ && "${ROSE_FIRST_USE_ENROLL:-false}" == false ) ]]
-          [[ "$MODE" == latest-beta || "$MODE" == rango-retained || "$MODE" == rango-factory-package || "$MODE" == rango-factory-inspect || "$MODE" == blazer-prep || "$MODE" == rango-factory-observe || "$MODE" == blazer-compile || "$MODE" == blazer-integrate || "$MODE" == mustang-build || "$MODE" == mustang-bootstrap || "$MODE" == mustang-delivery || "$MODE" == frankel-factory-observe || "$MODE" == frankel-factory-package || "$MODE" == mustang-ota || "$MODE" == app-inputs-export || ( "$MODE" == app-only && "$APPS" == auto ) ]] || python3 -c 'import json, os, re; apps = json.loads(os.environ["APPS"]); assert apps and all(re.fullmatch(r"[a-z][\w.]+", p) and isinstance(v, int) and v > 0 for p, v in apps)'
-          [[ "$MODE" == latest-beta || "$MODE" == rango-retained || "$MODE" == rango-factory-package || "$MODE" == rango-factory-inspect || "$MODE" == blazer-prep || "$MODE" == rango-factory-observe || "$MODE" == blazer-compile || "$MODE" == blazer-integrate || "$MODE" == mustang-build || "$MODE" == mustang-bootstrap || "$MODE" == mustang-delivery || "$MODE" == frankel-factory-observe || "$MODE" == frankel-factory-package || "$MODE" == mustang-ota || "$MODE" == app-inputs-export ]] || git merge-base --is-ancestor "$CANDIDATE_SHA" origin/main
+          [[ "$MODE" == latest-beta || "$MODE" == rango-retained || "$MODE" == rango-factory-package || "$MODE" == rango-factory-inspect || "$MODE" == blazer-prep || "$MODE" == rango-factory-observe || "$MODE" == blazer-compile || "$MODE" == blazer-integrate || "$MODE" == mustang-build || "$MODE" == mustang-bootstrap || "$MODE" == mustang-delivery || "$MODE" == frankel-factory-observe || "$MODE" == frankel-factory-package || "$MODE" == mustang-ota || "$MODE" == app-inputs-export || "$MODE" == agent-hosted || "$MODE" == agent-hosted-probe || ( "$MODE" == app-only && "$APPS" == auto ) ]] || python3 -c 'import json, os, re; apps = json.loads(os.environ["APPS"]); assert apps and all(re.fullmatch(r"[a-z][\w.]+", p) and isinstance(v, int) and v > 0 for p, v in apps)'
+          [[ "$MODE" == latest-beta || "$MODE" == rango-retained || "$MODE" == rango-factory-package || "$MODE" == rango-factory-inspect || "$MODE" == blazer-prep || "$MODE" == rango-factory-observe || "$MODE" == blazer-compile || "$MODE" == blazer-integrate || "$MODE" == mustang-build || "$MODE" == mustang-bootstrap || "$MODE" == mustang-delivery || "$MODE" == frankel-factory-observe || "$MODE" == frankel-factory-package || "$MODE" == mustang-ota || "$MODE" == app-inputs-export || "$MODE" == agent-hosted || "$MODE" == agent-hosted-probe ]] || git merge-base --is-ancestor "$CANDIDATE_SHA" origin/main
           [[ "$RESUME_STAGE" == none || "$RESUME_UNSIGNED_SHA256" =~ ^[0-9a-f]{64}$ ]]
           [[ -z "$RESUME_SOURCE_RUN" || ( "$RESUME_STAGE" != none && "$RESUME_SOURCE_RUN" =~ ^[0-9]+$ ) ]]
           [[ "$RESUME_STAGE" != ota-verify || ( "$RESUME_SIGNED_SHA256" =~ ^[0-9a-f]{64}$ && -n "$RESUME_SOURCE_RUN" ) ]]
           # app-only and emulator-alpha: no resume and no promotion (neither reaches the publisher); app-only is exactly Rose Agent.
           [[ "$MODE" == os-release || ( "$RESUME_STAGE" == none && -z "$RESUME_SOURCE_RUN" && "$PROMOTE" == false ) ]]
-          # Public app publication exists only in app-only and app-reuse modes.
-          [[ "$APP_PUBLISH" == false || "$MODE" == app-only || "$MODE" == app-reuse ]]
+          # Public app publication exists only in app-only, app-reuse and agent-hosted modes.
+          [[ "$APP_PUBLISH" == false || "$MODE" == app-only || "$MODE" == app-reuse || "$MODE" == agent-hosted ]]
           # Successor recovery exists only in emulator-alpha-successor mode.
           [[ "$ALPHA_RECOVER" == false || "$MODE" == emulator-alpha-successor ]]
           # device-readiness: the candidate is this exact workflow recipe; the probe takes no other input.
@@ -357,7 +367,7 @@ jobs:
           MUSTANG_OTA_AUTO: ${{ vars.MUSTANG_OTA_AUTO }}
         run: python3 scripts/mustang-ota-auto.py admit-build
       - name: Bootstrap preflight
-        if: ${{ !startsWith(inputs.mode, 'mustang-') }}
+        if: ${{ !startsWith(inputs.mode, 'mustang-') && !startsWith(inputs.mode, 'agent-hosted') }}
         env:
           ROSEOS_BUILDER_RUNNER_READY: ${{ vars.ROSEOS_BUILDER_RUNNER_READY }}
           GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
@@ -479,7 +489,7 @@ jobs:
 
   controller:
     needs: guard
-    if: needs.guard.outputs.mustang_skip != 'true'
+    if: needs.guard.outputs.mustang_skip != 'true' && inputs.mode != 'agent-hosted' && inputs.mode != 'agent-hosted-probe'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     outputs:
@@ -1732,6 +1742,220 @@ jobs:
           reuse=()
           [[ "$MODE" != app-reuse ]] || reuse=(--reuse-binding "$REUSE_BINDING" --build-number "$BUILD_NUMBER" --build-timestamp "$BUILD_TIMESTAMP")
           python3 scripts/app_release_publisher.py --artifact-dir "$RUNNER_TEMP/app-artifact" --candidate-sha "$CANDIDATE_SHA" --apps "$APPS" --public-dir "$RUNNER_TEMP/app-public" "${reuse[@]}"
+      - name: Public publication receipt
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: app-publication-dev.pixel.voice-${{ github.run_id }}
+          path: ${{ runner.temp }}/app-public
+          retention-days: 7
+          if-no-files-found: error
+
+  # 1F hosted Agent route (agent-hosted, agent-hosted-probe; scripts/agent-hosted.py): GitHub-hosted runners only, with
+  # no controller, builder, host lock or Frankel path. The signer probe runs first, so nothing is reserved unless this
+  # route's signer identity can read the four app signing secrets (decision D4). agent-hosted then holds one versionCode
+  # in the shared pixel-ota ledger (decision D1, scripts/app_reservation_store.py) with the publisher token minted in
+  # that job only, builds with App's portable seam and the pinned public connection inputs, signs and verifies with
+  # host-app-release.py --hosted, and publishes its own prerelease when app_publish is set. agent-hosted-probe reserves,
+  # signs and publishes nothing: it proves the signer admission, the secrets, the toolchain and an unsigned build.
+  agent-signer:
+    needs: guard
+    if: inputs.mode == 'agent-hosted' || inputs.mode == 'agent-hosted-probe'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+      GCP_SIGNER_SERVICE_ACCOUNT: ${{ vars.GCP_SIGNER_SERVICE_ACCOUNT }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Signer access for the probe
+        run: python3 scripts/actions-gcp-login.py login "$GCP_SIGNER_SERVICE_ACCOUNT"
+      - name: The four app signing secrets are readable (read into RAM, destroyed, never printed)
+        run: python3 scripts/agent-hosted.py probe-signer --out "$RUNNER_TEMP/agent-signer-probe.json"
+      - name: Drop signer access
+        if: always()
+        run: python3 scripts/actions-gcp-login.py logout
+      - name: Signer probe receipt
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: agent-signer-probe-${{ github.run_id }}
+          path: ${{ runner.temp }}/agent-signer-probe.json
+          retention-days: 7
+          if-no-files-found: ignore
+
+  agent-reserve:
+    needs: agent-signer
+    if: inputs.mode == 'agent-hosted'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      app_skip: ${{ steps.reserve.outputs.app_skip }}
+      candidate_sha: ${{ steps.reserve.outputs.candidate_sha }}
+      apps: ${{ steps.reserve.outputs.apps }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0  # the version-only candidate is derived from the dispatch commit; the unchanged check reads history
+          persist-credentials: false
+      - name: Mint pixel-ota publisher token (the shared ledger)
+        id: app
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ vars.PIXEL_OTA_APP_ID }}
+          private-key: ${{ secrets.PIXEL_OTA_APP_PRIVATE_KEY }}
+          owner: Immortal-Protocols
+          repositories: pixel-ota
+          permission-contents: write
+      - name: Hold one fresh Rose Agent version in the shared ledger for this run
+        id: reserve
+        env:
+          PIXEL_OTA_TOKEN: ${{ steps.app.outputs.token }}
+        run: python3 scripts/agent-hosted.py reserve --out "$RUNNER_TEMP/agent-reservation"
+      - name: Reservation records
+        if: steps.reserve.outputs.app_skip == 'false'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: agent-reservation-${{ github.run_id }}
+          path: ${{ runner.temp }}/agent-reservation
+          retention-days: 7
+          if-no-files-found: error
+
+  agent-build:
+    needs: [agent-signer, agent-reserve]
+    if: >-
+      !cancelled() && needs.agent-signer.result == 'success' && (inputs.mode == 'agent-hosted-probe' ||
+      (inputs.mode == 'agent-hosted' && needs.agent-reserve.result == 'success' && needs.agent-reserve.outputs.app_skip == 'false'))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+      GCP_SIGNER_SERVICE_ACCOUNT: ${{ vars.GCP_SIGNER_SERVICE_ACCOUNT }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0  # the candidate is re-derived from the dispatch commit and checked out as a worktree
+          persist-credentials: false
+      - name: Reservation records
+        if: inputs.mode == 'agent-hosted'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: agent-reservation-${{ github.run_id }}
+          path: ${{ runner.temp }}/agent-reservation
+      # Exports ROSE_CANDIDATE_SHA, APPS and ROSE_APP_RESERVATION for the hosted build.
+      - name: Bind the reservation (the same candidate, owned by this run, held by the ledger)
+        if: inputs.mode == 'agent-hosted'
+        run: python3 scripts/agent-hosted.py bind --dir "$RUNNER_TEMP/agent-reservation"
+      - name: Pinned Android SDK (scripts/setup-android-sdk.sh, sha256-checked archives)
+        run: |
+          set -euo pipefail
+          sdk="$RUNNER_TEMP/android-sdk"
+          ANDROID_SDK_ROOT="$sdk" bash scripts/setup-android-sdk.sh
+          # The build-tools r35 archive unpacks as android-15; portable-build.py reads the exact revision directory.
+          grep -qx 'Pkg.Revision=35.0.0' "$sdk/build-tools/android-15/source.properties"
+          mv "$sdk/build-tools/android-15" "$sdk/build-tools/35.0.0"
+          echo "AGENT_SDK=$sdk" >> "$GITHUB_ENV"
+          node --version
+          "$JAVA_HOME_21_X64/bin/java" -version
+      - name: Pinned public connection inputs (hosted.json publicInputs)
+        run: |
+          set -euo pipefail
+          url="$(python3 -c 'import json; print(json.load(open("os/release-pipeline/agent/hosted.json"))["publicInputs"]["sourceApk"]["url"])')"
+          mkdir "$RUNNER_TEMP/agent-source"
+          curl --fail --silent --show-error --location --retry 2 --max-filesize 67108864 --output "$RUNNER_TEMP/agent-source/source.apk" "$url"
+          python3 scripts/agent-hosted.py public-inputs --apk "$RUNNER_TEMP/agent-source/source.apk" --out "$RUNNER_TEMP/agent-public-inputs"
+      - name: App's portable toolchain record (portable-build.py prepare and inputs)
+        run: |
+          set -euo pipefail
+          python3 workspace/rose-agent/portable-build.py prepare --sdk-root "$AGENT_SDK" --build-tools-version 35.0.0 --java-home "$JAVA_HOME_21_X64" --public-assets "$RUNNER_TEMP/agent-public-inputs" --work "$RUNNER_TEMP/agent-d3" > /dev/null
+          python3 workspace/rose-agent/portable-build.py inputs --d3 "$RUNNER_TEMP/agent-d3/d3.json" --out "$RUNNER_TEMP/agent-portable-inputs.json" > /dev/null
+          python3 scripts/host-app-release.py --check --hosted --portable-inputs "$RUNNER_TEMP/agent-portable-inputs.json"
+      - name: Unsigned Agent-only build of the dispatch commit (probe)
+        if: inputs.mode == 'agent-hosted-probe'
+        run: |
+          set -euo pipefail
+          mkdir "$RUNNER_TEMP/agent-probe"
+          python3 workspace/rose-agent/portable-build.py build --candidate "$GITHUB_WORKSPACE" --release-dir "$RUNNER_TEMP/agent-probe-build" --d3 "$RUNNER_TEMP/agent-d3/d3.json" > "$RUNNER_TEMP/agent-probe/agent-build-receipt.json"
+          python3 scripts/agent-hosted.py check-apk --apk "$RUNNER_TEMP/agent-probe-build/unsigned/voice.apk" > "$RUNNER_TEMP/agent-probe/public-inputs-check.json"
+      - name: Signer access for app signing
+        if: inputs.mode == 'agent-hosted'
+        run: python3 scripts/actions-gcp-login.py login "$GCP_SIGNER_SERVICE_ACCOUNT"
+      - name: Build, sign and verify Rose Agent (hosted)
+        if: inputs.mode == 'agent-hosted'
+        run: |
+          set -euo pipefail
+          ROSE_RELEASE_DIR="$RUNNER_TEMP/agent-work" python3 scripts/host-app-release.py --hosted --portable-inputs "$RUNNER_TEMP/agent-portable-inputs.json" --artifact-dir "$RUNNER_TEMP/agent-artifact"
+          version="$(python3 -c 'import json, os; print(json.loads(os.environ["APPS"])[0][1])')"
+          python3 scripts/agent-hosted.py check-apk --apk "$RUNNER_TEMP/agent-artifact/dev.pixel.voice-$version.apk"
+      - name: Drop signer access
+        if: always() && inputs.mode == 'agent-hosted'
+        run: python3 scripts/actions-gcp-login.py logout
+      - name: Private Actions artifact
+        if: inputs.mode == 'agent-hosted'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: app-release-dev.pixel.voice-${{ github.run_id }}
+          path: ${{ runner.temp }}/agent-artifact
+          retention-days: 3
+          if-no-files-found: error
+      - name: Probe receipts
+        if: inputs.mode == 'agent-hosted-probe'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: agent-probe-${{ github.run_id }}
+          path: ${{ runner.temp }}/agent-probe
+          retention-days: 7
+          if-no-files-found: error
+
+  agent-publisher:
+    needs: [agent-reserve, agent-build]
+    if: >-
+      !cancelled() && inputs.mode == 'agent-hosted' && inputs.app_publish && needs.agent-build.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      CANDIDATE_SHA: ${{ needs.agent-reserve.outputs.candidate_sha }}
+      APPS: ${{ needs.agent-reserve.outputs.apps }}
+      PIXEL_OTA_PUBLISHER: ${{ vars.PIXEL_OTA_PUBLISHER }}
+      PIXEL_OTA_APP_ID: ${{ vars.PIXEL_OTA_APP_ID }}
+      PIXEL_OTA_APP_KEY_PRESENT: ${{ secrets.PIXEL_OTA_APP_PRIVATE_KEY != '' }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - run: python3 scripts/release-pipeline.py preflight --job publisher
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: app-release-dev.pixel.voice-${{ github.run_id }}
+          path: ${{ runner.temp }}/app-artifact
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: agent-reservation-${{ github.run_id }}
+          path: ${{ runner.temp }}/agent-reservation
+      - name: The ledger still holds this run's reservation
+        run: python3 scripts/agent-hosted.py confirm --reservation "$RUNNER_TEMP/agent-reservation/reservation.json"
+      - name: Mint pixel-ota publisher token
+        id: app
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ vars.PIXEL_OTA_APP_ID }}
+          private-key: ${{ secrets.PIXEL_OTA_APP_PRIVATE_KEY }}
+          owner: Immortal-Protocols
+          repositories: pixel-ota
+          permission-contents: write
+      - name: Verify the signed APK and publish its own prerelease (hosted)
+        env:
+          PIXEL_OTA_TOKEN: ${{ steps.app.outputs.token }}
+        run: python3 scripts/app_release_publisher.py --hosted --reservation "$RUNNER_TEMP/agent-reservation/reservation.json" --artifact-dir "$RUNNER_TEMP/app-artifact" --candidate-sha "$CANDIDATE_SHA" --apps "$APPS" --public-dir "$RUNNER_TEMP/app-public"
       - name: Public publication receipt
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
