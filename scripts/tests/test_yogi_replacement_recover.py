@@ -132,6 +132,7 @@ class World:
         self.pending = ""
         self.bad_cursor = False
         self.attribute = {"absent": True}
+        self.hostkeys = {"absent": True}
         self.fail_sets = []
         self.fail_describe = 0
         self.start_mode = "ok"
@@ -182,6 +183,8 @@ class World:
         if kind == "serial":
             return self._serial(request["start"])
         if kind == "guest-attribute":
+            if request.get("query") == "hostkeys":
+                return copy.deepcopy(self.hostkeys)
             return copy.deepcopy(self.attribute)
         if kind == "test-iam":
             missing = self.iam_missing.get(target, ())
@@ -350,6 +353,12 @@ class DictHost:
         self.marker = None
         self.log, self.emitted = [], []
         self.chmod_calls = self.generate_calls = self.commit_calls = 0
+        self.hostkey_puts = []
+        self.publish_fails = False
+        self.crash_at = None
+        self.original_public = {}
+        self.priv = {}
+        self.backup_priv = {}
         self.identity = dict(guest.EXPECTED_IDENTITY)
         self.unit = {"kind": "regular", "mode": 0o664, "uid": 0, "gid": 0, "size": 347, "nlink": 1}
         self.runner_state = {"active": "inactive", "enabled": "disabled", "process": False}
@@ -362,6 +371,7 @@ class DictHost:
         self.account_entry = None
         self.account_fail = False
         self.removed_account = False
+        self.prior_unrecognized = 0
         self.private = "PRIVATE-KEY-MATERIAL-SENTINEL"
         self.public = {}
         payloads = {
@@ -371,8 +381,12 @@ class DictHost:
         }
         for alg, (old, new) in payloads.items():
             kind = guest.PUBLIC_TYPES[alg]
-            self.public[guest.KEY_NAMES[alg] + ".pub"] = public_line(kind, old, "clone-baseline")
-            self.public[guest.KEY_NAMES[alg] + ".roseos-new.pub"] = public_line(kind, new, "roseos-yogi-recover")
+            name = guest.KEY_NAMES[alg]
+            self.public[name + ".pub"] = public_line(kind, old, "clone-baseline")
+            self.public[name + ".roseos-new.pub"] = public_line(kind, new, "roseos-yogi-recover")
+            self.original_public[alg] = self.public[name + ".pub"]
+            self.priv[name] = "old"
+            self.priv[name + ".roseos-new"] = "new"
 
     def binding(self):
         return dict(self.record)
@@ -387,6 +401,11 @@ class DictHost:
         return None if self.marker is None else json.loads(json.dumps(self.marker))
 
     def marker_store(self, obj):
+        phase = obj.get("phase")
+        self.log.append(("journal", phase))
+        if self.crash_at == ("journal", phase):
+            self.crash_at = None
+            raise OSError("journal")
         self.marker = json.loads(json.dumps(obj))
 
     def instance_identity(self):
@@ -421,6 +440,13 @@ class DictHost:
             raise OSError("baseline")
         return self.public[name]
 
+    def publish_hostkey_attributes(self, writes):
+        self.hostkey_puts = list(writes)
+        for key_type, blob in writes:
+            if any(token in blob for token in ("BEGIN", "PRIVATE", "OPENSSH", " ")):
+                raise guest.GuestRefused("private-attribute")
+        return not self.publish_fails
+
     def ssh_generate(self, algorithm):
         self.generate_calls += 1
         self.log.append(("generate", algorithm))
@@ -428,28 +454,79 @@ class DictHost:
             return self.public[guest.KEY_NAMES[algorithm] + ".pub"]
         return self.public[guest.KEY_NAMES[algorithm] + ".roseos-new.pub"]
 
+    def _public_generation(self, algorithm, line):
+        if line == self.original_public.get(algorithm):
+            return "old"
+        new_line = self.public.get(guest.KEY_NAMES[algorithm] + ".roseos-new.pub")
+        if line == new_line:
+            return "new"
+        return None
+
+    def pair_status(self, algorithm, place):
+        name = guest.KEY_NAMES[algorithm]
+        if place == "live":
+            public = self.public.get(name + ".pub")
+            private = self.priv.get(name)
+        else:
+            if algorithm not in self.prev or algorithm not in self.backup_priv:
+                return "absent"
+            public = self.prev[algorithm]
+            private = self.backup_priv[algorithm]
+        if public is None or private is None:
+            return "absent"
+        generation = self._public_generation(algorithm, public)
+        if generation is None or private != generation:
+            return "mismatch"
+        return "match"
+
+    def pairs_agree(self, algorithm):
+        if algorithm not in self.prev:
+            return False
+        return self.public.get(guest.KEY_NAMES[algorithm] + ".pub") == self.prev[algorithm]
+
+    def restore_pair(self, algorithm):
+        if self.pair_status(algorithm, "backup") != "match":
+            return False
+        self.log.append(("restore-pair", algorithm))
+        name = guest.KEY_NAMES[algorithm]
+        self.priv[name] = self.backup_priv[algorithm]
+        self.public[name + ".pub"] = self.prev[algorithm]
+        return self.pair_status(algorithm, "live") == "match"
+
     def ssh_preserve(self, algorithm):
         self.log.append(("preserve", algorithm))
-        live = guest.KEY_NAMES[algorithm] + ".pub"
-        self.prev[algorithm] = self.public[live]
+        name = guest.KEY_NAMES[algorithm]
+        self.prev[algorithm] = self.public[name + ".pub"]
+        self.backup_priv[algorithm] = self.priv[name]
 
     def ssh_commit(self, algorithm):
         self.commit_calls += 1
         self.log.append(("commit", algorithm))
         if self.fail_commit == algorithm:
             raise OSError("rotate-partial")
-        live = guest.KEY_NAMES[algorithm] + ".pub"
-        self.public[live] = self.public[guest.KEY_NAMES[algorithm] + ".roseos-new.pub"]
+        name = guest.KEY_NAMES[algorithm]
+
+        def boundary(step):
+            if self.crash_at == (algorithm, step):
+                self.crash_at = None
+                raise OSError("crash")
+
+        boundary("fsync")
+        self.priv[name] = "new"
+        boundary("rename-private")
+        self.public[name + ".pub"] = self.public[name + ".roseos-new.pub"]
+        boundary("rename-public")
 
     def ssh_restore(self, algorithm):
-        if algorithm not in self.prev:
-            return False
-        self.public[guest.KEY_NAMES[algorithm] + ".pub"] = self.prev[algorithm]
-        return True
+        return self.restore_pair(algorithm)
 
     def ssh_drop_prev_private(self, algorithm):
+        if self.crash_at == ("unlink", algorithm):
+            self.crash_at = None
+            raise OSError("unlink")
         if algorithm in self.prev:
             self.prev_public[algorithm] = self.prev[algorithm]
+        self.backup_priv.pop(algorithm, None)
         self.log.append(("drop-private", algorithm))
 
     def ssh_discard_temp(self):
@@ -477,6 +554,76 @@ class DictHost:
 
     def emit(self, line):
         self.emitted.append(line)
+
+    def prior_journal(self):
+        return self.prior_unrecognized
+
+
+def sample_openssh_ed25519(public, secret):
+    section = guest._u32(7) + guest._u32(7)
+    section += guest._ssh_bytes(b"ssh-ed25519")
+    section += guest._ssh_bytes(public)
+    section += guest._ssh_bytes(secret)
+    section += guest._ssh_bytes(b"comment")
+    section += bytes(range(1, (8 - (len(section) % 8)) % 8 + 1))
+    wire = guest._ssh_bytes(b"ssh-ed25519") + guest._ssh_bytes(public)
+    return openssh_private_pem(wire, section), "ssh-ed25519 " + base64.b64encode(wire).decode()
+
+
+def sample_openssh_ecdsa(point, scalar):
+    section = guest._u32(9) + guest._u32(9)
+    section += guest._ssh_bytes(b"ecdsa-sha2-nistp256")
+    section += guest._ssh_bytes(b"nistp256")
+    section += guest._ssh_bytes(point)
+    section += guest._ssh_bytes(scalar)
+    section += guest._ssh_bytes(b"comment")
+    section += bytes(range(1, (8 - (len(section) % 8)) % 8 + 1))
+    wire = guest._ssh_bytes(b"ecdsa-sha2-nistp256") + guest._ssh_bytes(b"nistp256") + guest._ssh_bytes(point)
+    return openssh_private_pem(wire, section), "ecdsa-sha2-nistp256 " + base64.b64encode(wire).decode()
+
+
+def sample_openssh_rsa(modulus, exponent, secret):
+    section = guest._u32(11) + guest._u32(11)
+    section += guest._ssh_bytes(b"ssh-rsa")
+    section += guest._ssh_bytes(modulus)
+    section += guest._ssh_bytes(exponent)
+    section += guest._ssh_bytes(secret)
+    section += guest._ssh_bytes(b"comment")
+    section += bytes(range(1, (8 - (len(section) % 8)) % 8 + 1))
+    wire = guest._ssh_bytes(b"ssh-rsa") + guest._ssh_bytes(exponent) + guest._ssh_bytes(modulus)
+    return openssh_private_pem(wire, section), "ssh-rsa " + base64.b64encode(wire).decode()
+
+
+def openssh_private_pem(public_wire, private_section):
+    raw = b"openssh-key-v1\x00" + guest._ssh_bytes(b"none") + guest._ssh_bytes(b"none")
+    raw += guest._ssh_bytes(b"") + guest._u32(1) + guest._ssh_bytes(public_wire) + guest._ssh_bytes(private_section)
+    body = base64.b64encode(raw).decode()
+    lines = [body[i:i + 70] for i in range(0, len(body), 70)]
+    return ("-----BEGIN OPENSSH PRIVATE KEY-----\n" + "\n".join(lines) + "\n-----END OPENSSH PRIVATE KEY-----\n").encode()
+
+
+def inspect_evidence(test):
+    host = DictHost(json.loads((test.op / "binding.json").read_text()), test.op / "guest.py")
+    baseline = {}
+    for alg, name in guest.KEY_NAMES.items():
+        _kind, fingerprint = guest.parse_public(host.ssh_public(name + ".pub"))
+        baseline[alg] = fingerprint
+    evidence = {
+        "schema": guest.RECEIPT_SCHEMA, "purpose": "inspect", "operationId": "11" * 16, "nonce": "22" * 16,
+        "payloadSha256": "33" * 32, "instanceId": recover.INSTANCE_ID, "bootId": BOOT,
+        "reexecution": False, "previousBootId": "none", "originalVmAccessed": False, "snapshotsUsed": False,
+        "status": "complete",
+        "unit": {"action": "not-modified", "problem": "already-0644", "beforeMode": "0644", "beforeSize": 347,
+                 "beforeUid": 0, "beforeGid": 0, "afterMode": "0644", "afterSize": 347, "afterUid": 0, "afterGid": 0},
+        "runner": {"active": "inactive", "enabled": "disabled", "process": False},
+        "hostKeys": {"baseline": baseline, "rotated": {}, "distinctFromClonedBaseline": False,
+                     "unknownHostKeyCount": 0, "rolledBack": False},
+        "cleanup": {"linesRemoved": 0, "unidentifiedAuthorizedKeyLines": 0, "temporaryAccount": "absent",
+                    "tempFilesRemoved": 0, "accessCleanup": "ok"},
+        "journal": {"entries": 2, "readable": 1, "phases": ["complete"], "hasCompleteReceipt": True,
+                    "unrecognized": 1},
+    }
+    return evidence, baseline
 
 
 def load_rendered(path):
@@ -1095,14 +1242,17 @@ class GuestTest(Base):
         ssh.mkdir(parents=True)
         private = ssh / "ssh_host_ed25519_key"
         public = ssh / "ssh_host_ed25519_key.pub"
-        private.write_text("OLD-PRIVATE")
-        public.write_text("ssh-ed25519 AAAA clone\n")
+        old_pem, old_public = sample_openssh_ed25519(bytes(range(32)), bytes(range(32, 96)))
+        new_pem, _new_public = sample_openssh_ed25519(bytes(range(32, 64)), bytes(range(64, 128)))
+        private.write_bytes(old_pem)
+        public.write_text(old_public + "\n")
         private.chmod(0o600)
         rendered = module.LinuxHost(root=str(disk))
         rendered.ssh_preserve("ed25519")
-        private.write_text("NEW-PRIVATE")
+        private.write_bytes(new_pem)
         self.assertTrue(rendered.ssh_restore("ed25519"))
-        self.assertEqual(private.read_text(), "OLD-PRIVATE")
+        self.assertEqual(private.read_bytes(), old_pem)
+        self.assertEqual(public.read_text(), old_public + "\n")
         rendered.ssh_drop_prev_private("ed25519")
         self.assertFalse((ssh / ("ssh_host_ed25519_key.roseos-prev-" + module.OPERATION_ID)).exists())
         self.assertTrue((ssh / ("ssh_host_ed25519_key.roseos-prev-" + module.OPERATION_ID + ".pub")).is_file())
@@ -1197,6 +1347,445 @@ class GuestTest(Base):
         with self.assertRaises(recover.Refused):
             recover.plan("Mac operator", Path(self.temp.name) / "spent-serial", now=NOW,
                          token=tokens("20ef6008b1ef78137d201de13176af42", "cd" * 16), revision="a" * 40, env=ENV)
+
+    def test_rotate_only_requires_the_inspected_keys_and_does_not_chmod(self):
+        host = DictHost(json.loads((self.op / "binding.json").read_text()), self.op / "guest.py")
+        baseline = {}
+        for alg, name in guest.KEY_NAMES.items():
+            _kind, fingerprint = guest.parse_public(host.ssh_public(name + ".pub"))
+            baseline[alg] = fingerprint
+        evidence = {
+            "schema": guest.RECEIPT_SCHEMA, "purpose": "inspect", "operationId": "11" * 16, "nonce": "22" * 16,
+            "payloadSha256": "33" * 32, "instanceId": recover.INSTANCE_ID, "bootId": BOOT,
+            "reexecution": False, "previousBootId": "none", "originalVmAccessed": False, "snapshotsUsed": False,
+            "status": "complete",
+            "unit": {"action": "not-modified", "problem": "already-0644", "beforeMode": "0644", "beforeSize": 347,
+                     "beforeUid": 0, "beforeGid": 0, "afterMode": "0644", "afterSize": 347, "afterUid": 0, "afterGid": 0},
+            "runner": {"active": "inactive", "enabled": "disabled", "process": False},
+            "hostKeys": {"baseline": baseline, "rotated": {}, "distinctFromClonedBaseline": False,
+                         "unknownHostKeyCount": 0, "rolledBack": False},
+            "cleanup": {"linesRemoved": 0, "unidentifiedAuthorizedKeyLines": 0, "temporaryAccount": "absent",
+                        "tempFilesRemoved": 0, "accessCleanup": "ok"},
+            "journal": {"entries": 2, "readable": 1, "phases": ["complete"], "hasCompleteReceipt": True,
+                        "unrecognized": 1},
+        }
+        path = Path(self.temp.name) / "inspect-evidence.json"
+        path.write_text(json.dumps(evidence))
+        commitment = recover.baseline_commitment(baseline)
+        out = Path(self.temp.name) / "rotate-op"
+        plan = recover.plan("Mac operator", out, now=NOW, token=tokens("44" * 16, "55" * 16), revision="a" * 40,
+                            env=ENV, mode="rotate", inspect_receipt=path,
+                            confirm_inspect_operation=evidence["operationId"], confirm_baseline=commitment)
+        self.assertFalse(plan["hostKeyPinned"])
+        self.assertFalse(plan["repairsGuest"])
+        self.assertTrue(plan["rotatesHostKeys"])
+        self.assertEqual(plan["inspectEvidence"]["role"], "guest-evidence-not-authority")
+        self.assertTrue(plan["inspectEvidence"]["priorCompletePhaseIsNotAuthority"])
+        module = load_rendered(out / "guest.py")
+        host = DictHost(json.loads((out / "binding.json").read_text()), out / "guest.py")
+        host.unit["mode"] = 0o644
+        host.prior_unrecognized = 1
+        receipt = module.run(host)
+        self.assertEqual(host.chmod_calls, 0)
+        self.assertEqual(host.generate_calls, 3)
+        self.assertEqual(host.unit["mode"], 0o644)
+        self.assertEqual(host.hostkey_puts, [])
+        self.assertNotIn("PRIVATE", json.dumps(receipt))
+        self.assertFalse(plan["publishHostkeys"])
+        self.assertNotIn(recover.GUEST_ATTRIBUTES_KEY, plan["metadataAdded"])
+        identity = plan["hostIdentity"]
+        self.assertFalse(identity["pinned"])
+        self.assertFalse(identity["iapAuthenticatesHostKey"])
+        self.assertNotIn("blocker", identity)
+        self.assertFalse(identity["guestAttributes"]["requiresGuestServiceAccount"])
+        self.assertFalse(identity["nextPhase"]["publishHostkeys"])
+        self.assertEqual(identity["nextPhase"]["enable"], "not-this-mode")
+        self.assertNotIn("enable-guest-attributes", recover.BASE_METADATA)
+        self.assertEqual(receipt["purpose"], "rotate")
+        self.assertEqual(receipt["unit"]["action"], "not-modified")
+        self.assertEqual(receipt["hostKeys"]["baseline"], baseline)
+        self.assertEqual(guest.rotate_success_problems(receipt, baseline), [])
+        self.assertGreaterEqual(receipt["journal"]["unrecognized"], 1)
+        self.assertNotIn("BEGIN OPENSSH", json.dumps(receipt))
+        framed = "\n".join([
+            "[    0.000000] Linux version 6.8.0-roseos",
+            "-----BEGIN OPENSSH PRIVATE KEY-----",
+            host.emitted[-1],
+            "sshd[240]: Server listening on 0.0.0.0 port 22.",
+        ]) + "\n"
+        self.assertEqual(module.parse_serial(framed, json.loads((out / "binding.json").read_text())), receipt)
+        saved = recover.serial_evidence(json.loads((out / "binding.json").read_text()), framed, "parsed", receipt=receipt)
+        self.assertNotIn("BEGIN OPENSSH", json.dumps(saved))
+        self.assertNotIn("Linux version", json.dumps(saved))
+        world = World()
+        checked = recover.preflight(out, recover.INSTANCE_ID, True, world, now=NOW, env=ENV)
+        self.assertEqual(checked["result"], "preflight-ok")
+        iam = [req for req in world.requests if req["kind"] == "test-iam" and req["target"] == "replacement"]
+        self.assertNotIn(recover.HOSTKEY_PERMISSION, iam[0]["permissions"])
+        live = dict(evidence)
+        live["operationId"] = "638e6e9039e41b7531697bb45066a616"
+        live["hostKeys"] = dict(evidence["hostKeys"], baseline={
+            "ed25519": "SHA256:7q5hBI1kjRbG/OjjOFOj+5URxaJPujYAjZ92S/xyrHs",
+            "ecdsa": "SHA256:ddKB95EKzKYE6UlZE0rVIqqgKQ3Le3ZKhh7nmSKTrTc",
+            "rsa": "SHA256:uV/VcrkukvQqcWntQbRl1cKauw9f1viUCc5vsVu7nqM",
+        })
+        live_path = Path(self.temp.name) / "live-inspect.json"
+        live_path.write_text(json.dumps(live))
+        live_commitment = recover.baseline_commitment(live["hostKeys"]["baseline"])
+        refused = Path(self.temp.name) / "rotate-refused"
+        recover.plan("Mac operator", refused, now=NOW, token=tokens("66" * 16, "77" * 16), revision="a" * 40,
+                     env=ENV, mode="rotate", inspect_receipt=live_path,
+                     confirm_inspect_operation=live["operationId"], confirm_baseline=live_commitment)
+        other = DictHost(json.loads((refused / "binding.json").read_text()), refused / "guest.py")
+        other.unit["mode"] = 0o644
+        other.prior_unrecognized = 1
+        stopped = load_rendered(refused / "guest.py").run(other)
+        self.assertEqual(other.chmod_calls, 0)
+        self.assertEqual(other.generate_calls, 0)
+        self.assertEqual(other.hostkey_puts, [])
+        self.assertEqual(stopped["unit"]["problem"], "baseline")
+        self.assertEqual(other.unit["mode"], 0o644)
+        with self.assertRaises(recover.Refused):
+            recover.plan("Mac operator", Path(self.temp.name) / "spent-inspect", now=NOW,
+                         token=tokens("638e6e9039e41b7531697bb45066a616", "89" * 16), revision="a" * 40, env=ENV)
+        with self.assertRaises(recover.Refused):
+            recover.plan("Mac operator", Path(self.temp.name) / "stale-op", now=NOW,
+                         token=tokens("98" * 16, "97" * 16), revision="a" * 40, env=ENV, mode="rotate",
+                         inspect_receipt=path, confirm_inspect_operation="ab" * 16, confirm_baseline=commitment)
+        with self.assertRaises(recover.Refused):
+            recover.plan("Mac operator", Path(self.temp.name) / "stale-baseline", now=NOW,
+                         token=tokens("96" * 16, "95" * 16), revision="a" * 40, env=ENV, mode="rotate",
+                         inspect_receipt=path, confirm_inspect_operation=evidence["operationId"],
+                         confirm_baseline="ab" * 32)
+        for index, (mutated, label) in enumerate((
+                ({"runner": {"active": "inactive", "enabled": "enabled", "process": False}}, "runner"),
+                ({"hostKeys": dict(evidence["hostKeys"], unknownHostKeyCount=1)}, "unknown"),
+                ({"unit": dict(evidence["unit"], problem="nlink")}, "hardlink"),
+        )):
+            bad = json.loads(json.dumps(evidence))
+            bad.update(mutated)
+            bad_path = Path(self.temp.name) / ("bad-" + label + ".json")
+            bad_path.write_text(json.dumps(bad))
+            with self.assertRaises(recover.Refused):
+                recover.plan("Mac operator", Path(self.temp.name) / ("plan-" + label), now=NOW,
+                             token=tokens(f"{80 + index:02d}" * 16, f"{90 + index:02d}" * 16),
+                             revision="a" * 40, env=ENV, mode="rotate",
+                             inspect_receipt=bad_path, confirm_inspect_operation=bad["operationId"],
+                             confirm_baseline=commitment)
+        disk = DictHost(json.loads((out / "binding.json").read_text()), out / "guest.py")
+        disk.unit = {"kind": "regular", "mode": 0o644, "uid": 0, "gid": 0, "size": 347, "nlink": 2}
+        stopped = module.run(disk)
+        self.assertEqual(disk.generate_calls, 0)
+        self.assertEqual(disk.chmod_calls, 0)
+        self.assertEqual(stopped["unit"]["problem"], "nlink")
+        disk = DictHost(json.loads((out / "binding.json").read_text()), out / "guest.py")
+        disk.unit["mode"] = 0o644
+        disk.names.append("ssh_host_extra_key")
+        stopped = module.run(disk)
+        self.assertEqual(disk.generate_calls, 0)
+        self.assertEqual(stopped["unit"]["problem"], "unknown-host-key")
+        disk = DictHost(json.loads((out / "binding.json").read_text()), out / "guest.py")
+        disk.unit["mode"] = 0o644
+        disk.runner_state = {"active": "inactive", "enabled": "enabled", "process": False}
+        stopped = module.run(disk)
+        self.assertEqual(disk.generate_calls, 0)
+        self.assertEqual(stopped["unit"]["problem"], "runner-enabled")
+
+    def test_hostkey_attributes_match_serial_only_as_consistency(self):
+        host = DictHost(json.loads((self.op / "binding.json").read_text()), self.op / "guest.py")
+        lines, fingerprints = {}, {}
+        for alg, name in guest.KEY_NAMES.items():
+            lines[alg] = host.public[name + ".roseos-new.pub"]
+            _kind, fingerprints[alg] = guest.parse_public(lines[alg])
+        puts = []
+
+        class IO:
+            def publish_hostkey_attributes(self, writes):
+                puts.extend(writes)
+                return True
+
+        self.assertTrue(guest.publish_public_hostkeys(IO(), lines))
+        self.assertTrue(all(" " not in blob and "PRIVATE" not in blob for _key, blob in puts))
+        items = [{"namespace": "hostkeys", "key": key, "value": blob} for key, blob in puts]
+        observed = recover.hostkey_consistency({"queryValue": {"items": items}}, fingerprints)
+        self.assertTrue(observed["consistentWithSerial"])
+        self.assertFalse(observed["pinned"])
+        self.assertFalse(observed["honestGuest"])
+        self.assertFalse(observed["iapAuthenticatesHostKey"])
+        self.assertFalse(observed["requiresGuestServiceAccount"])
+        self.assertEqual(observed["binding"], "control-plane-read-of-this-instance-metadata-server")
+        short = dict(fingerprints)
+        short["ed25519"] = "SHA256:" + "A" * 43
+        self.assertFalse(recover.hostkey_consistency({"queryValue": {"items": items}}, short)["consistentWithSerial"])
+        self.assertFalse(recover.hostkey_consistency({"queryValue": {"items": items[:2]}}, fingerprints)["pinned"])
+        self.assertFalse(recover.hostkey_consistency(
+            {"queryValue": {"items": items[:2]}}, fingerprints)["consistentWithSerial"])
+        with self.assertRaises(recover.Refused):
+            recover.hostkey_consistency(
+                {"queryValue": {"items": [{"namespace": "hostkeys", "key": "ssh-ed25519",
+                                           "value": "-----BEGIN OPENSSH PRIVATE KEY-----"}]}},
+                fingerprints)
+        with self.assertRaises(guest.GuestRefused):
+            guest.publish_public_hostkeys(IO(), dict(lines, ed25519="-----BEGIN OPENSSH PRIVATE KEY-----"))
+        absent = recover.hostkey_consistency({"absent": True}, fingerprints)
+        self.assertFalse(absent["consistentWithSerial"] or absent["pinned"] or absent["iapAuthenticatesHostKey"])
+        self.assertTrue(absent["absent"])
+        phase = recover.hostkey_observation_phase("rotate")
+        self.assertFalse(phase["publishHostkeys"] or phase["ssh"] or phase["iapAuthenticatesHostKey"])
+        self.assertEqual(phase["gcloudComputeSsh"], "refused")
+        self.assertNotIn(recover.HOSTKEY_PERMISSION, recover.IAM_REQUIRED["replacement"])
+
+    def test_rotate_publish_enables_reads_and_restores_without_a_second_boot(self):
+        evidence, baseline = inspect_evidence(self)
+        path = Path(self.temp.name) / "publish-inspect.json"
+        path.write_text(json.dumps(evidence))
+        out = Path(self.temp.name) / "publish-op"
+        plan = recover.plan("Mac operator", out, now=NOW, token=tokens("46" * 16, "57" * 16), revision="a" * 40,
+                            env=ENV, mode="rotate-publish", inspect_receipt=path,
+                            confirm_inspect_operation=evidence["operationId"],
+                            confirm_baseline=recover.baseline_commitment(baseline))
+        self.assertTrue(plan["publishHostkeys"])
+        self.assertIn(recover.GUEST_ATTRIBUTES_KEY, plan["metadataAdded"])
+        self.assertIn(recover.HOSTKEY_PERMISSION, plan["permissionsExpected"])
+        module = load_rendered(out / "guest.py")
+        host = DictHost(json.loads((out / "binding.json").read_text()), out / "guest.py")
+        host.unit["mode"] = 0o644
+        receipt = module.run(host)
+        self.assertEqual(receipt["purpose"], "rotate-publish")
+        self.assertEqual(guest.rotate_success_problems(receipt, baseline, purpose="rotate-publish"), [])
+        self.assertEqual(len(host.hostkey_puts), 3)
+        self.assertNotIn("PRIVATE", json.dumps(receipt))
+        self.assertNotIn(host.private, json.dumps(receipt))
+        failed = DictHost(json.loads((out / "binding.json").read_text()), out / "guest.py")
+        failed.unit["mode"] = 0o644
+        failed.publish_fails = True
+        partial = module.run(failed)
+        self.assertEqual(partial["status"], "partial")
+        self.assertEqual(partial["unit"]["problem"], "hostkey-publish")
+        self.assertFalse(partial["hostKeys"]["rolledBack"])
+        self.assertEqual(failed.generate_calls, 3)
+        self.assertEqual(failed.unit["mode"], 0o644)
+        failed.boot = "01234567-89ab-cdef-0123-456789abcdef"
+        puts_before = list(failed.hostkey_puts)
+        again = module.run(failed)
+        self.assertEqual(failed.generate_calls, 3)
+        self.assertEqual(failed.hostkey_puts, puts_before)
+        self.assertEqual(again["status"], "partial")
+        self.assertEqual(again["unit"]["problem"], "hostkey-publish")
+        self.assertNotIn("PRIVATE", json.dumps(again))
+
+        def run_apply(items, hostkeys, publish_fails=False, operation="48" * 16):
+            directory = Path(self.temp.name) / ("apply-" + operation[:4])
+            recover.plan("Mac operator", directory, now=NOW, token=tokens(operation, "59" * 16), revision="a" * 40,
+                         env=ENV, mode="rotate-publish", inspect_receipt=path,
+                         confirm_inspect_operation=evidence["operationId"],
+                         confirm_baseline=recover.baseline_commitment(baseline))
+            world = World()
+            world.items = dict(items)
+            clock = Clock()
+
+            def boot(metadata):
+                rendered = load_rendered(directory / "guest.py")
+                disk = DictHost(json.loads(metadata[recover.BINDING_KEY]), directory / "guest.py")
+                disk.unit["mode"] = 0o644
+                disk.publish_fails = publish_fails
+                rendered.run(disk)
+                world.host = disk
+                if hostkeys == "published":
+                    world.hostkeys = {"queryValue": {"items": [
+                        {"namespace": "hostkeys", "key": key, "value": blob} for key, blob in disk.hostkey_puts]}}
+                elif hostkeys == "stale":
+                    stale = []
+                    for alg, name in guest.KEY_NAMES.items():
+                        kind, _fp = guest.parse_public(disk.prev[alg])
+                        stale.append({"namespace": "hostkeys", "key": kind, "value": str(disk.prev[alg]).split()[1]})
+                    world.hostkeys = {"queryValue": {"items": stale}}
+                elif hostkeys == "private":
+                    world.hostkeys = {"queryValue": {"items": [
+                        {"namespace": "hostkeys", "key": "ssh-ed25519",
+                         "value": "-----BEGIN OPENSSH PRIVATE KEY-----"}]}}
+                return disk.emitted[-1] + "\n"
+
+            world.boot_guest = boot
+            pre = recover.preflight(directory, recover.INSTANCE_ID, True, world, now=NOW, env=ENV)
+            self.assertEqual(pre["result"], "preflight-ok", pre.get("problems"))
+            result = recover.apply(directory, recover.INSTANCE_ID, True, world, now=NOW, clock=clock,
+                                   sleep=clock.sleep, env=ENV)
+            return world, result, clock
+
+        world, result, clock = run_apply(recover.BASE_METADATA, "published", operation="48" * 16)
+        self.assertEqual(result["exit"], 0, result["result"])
+        self.assertEqual(result["result"], "rotate-publish-complete")
+        self.assertFalse(result["hostKeyPinned"])
+        self.assertEqual(result["guestAttribute"], "matched")
+        self.assertEqual(world.items, recover.BASE_METADATA)
+        self.assertEqual(world.replacement_status, "TERMINATED")
+        self.assertEqual(world.targets("start"), ["replacement"])
+        self.assertEqual(world.targets("set-metadata"), ["replacement", "replacement"])
+        first = [req for req in world.requests if req["kind"] == "set-metadata"][0]["items"]
+        self.assertEqual(first[recover.GUEST_ATTRIBUTES_KEY], "TRUE")
+        self.assertEqual(first["enable-oslogin"], "FALSE")
+        self.assertNotIn("PRIVATE", json.dumps(result))
+        self.assertEqual(clock.sleeps, [180])
+        hostkey_reads = [req for req in world.requests if req.get("query") == "hostkeys"]
+        self.assertEqual(len(hostkey_reads), 1)
+        self.assertEqual(hostkey_reads[0]["timeout"], 30)
+
+        kept = dict(recover.BASE_METADATA, **{recover.GUEST_ATTRIBUTES_KEY: "TRUE", "fleet-label": "west"})
+        world, result, _clock = run_apply(kept, "published", operation="49" * 16)
+        self.assertEqual(result["exit"], 0, result["result"])
+        self.assertEqual(world.items[recover.GUEST_ATTRIBUTES_KEY], "TRUE")
+        self.assertEqual(world.items["fleet-label"], "west")
+        self.assertNotIn("startup-script", world.items)
+        self.assertNotIn(recover.BINDING_KEY, world.items)
+
+        prior_false = dict(recover.BASE_METADATA, **{recover.GUEST_ATTRIBUTES_KEY: "FALSE", "fleet-label": "west"})
+        world, result, _clock = run_apply(prior_false, "published", operation="4a" * 16)
+        self.assertEqual(result["exit"], 0, result["result"])
+        self.assertEqual(world.items[recover.GUEST_ATTRIBUTES_KEY], "FALSE")
+        self.assertEqual(world.items["fleet-label"], "west")
+        submitted = [req for req in world.requests if req["kind"] == "set-metadata"][0]["items"]
+        self.assertEqual(submitted[recover.GUEST_ATTRIBUTES_KEY], "TRUE")
+        self.assertEqual(submitted["fleet-label"], "west")
+
+        world, result, _clock = run_apply(recover.BASE_METADATA, "published", publish_fails=True, operation="4b" * 16)
+        self.assertEqual(result["exit"], 1)
+        self.assertNotEqual(result["result"], "rotate-publish-complete")
+        self.assertEqual(result["guestReceipt"]["status"], "partial")
+        self.assertEqual(result["guestReceipt"]["unit"]["problem"], "hostkey-publish")
+        self.assertEqual(world.items, recover.BASE_METADATA)
+        self.assertEqual(world.replacement_status, "TERMINATED")
+        self.assertEqual(world.targets("start"), ["replacement"])
+        self.assertEqual(world.targets("set-metadata"), ["replacement", "replacement"])
+        self.assertNotIn("PRIVATE", json.dumps(result))
+
+        world, result, _clock = run_apply(recover.BASE_METADATA, "stale", operation="4c" * 16)
+        self.assertEqual(result["exit"], 1)
+        self.assertEqual(result["guestRead"], "hostkey-stale")
+        self.assertEqual(world.items, recover.BASE_METADATA)
+        self.assertEqual(world.replacement_status, "TERMINATED")
+        self.assertEqual(world.targets("start"), ["replacement"])
+
+        world, result, _clock = run_apply(recover.BASE_METADATA, "private", operation="4d" * 16)
+        self.assertEqual(result["exit"], 1)
+        self.assertEqual(result["guestRead"], "hostkey-malformed")
+        self.assertEqual(world.items, recover.BASE_METADATA)
+        self.assertEqual(world.replacement_status, "TERMINATED")
+        self.assertNotIn("BEGIN OPENSSH", json.dumps(result))
+
+        blocked = World()
+        blocked.iam_missing = {"replacement": [recover.HOSTKEY_PERMISSION]}
+        directory = Path(self.temp.name) / "apply-blocked"
+        recover.plan("Mac operator", directory, now=NOW, token=tokens("4e" * 16, "59" * 16), revision="a" * 40,
+                     env=ENV, mode="rotate-publish", inspect_receipt=path,
+                     confirm_inspect_operation=evidence["operationId"],
+                     confirm_baseline=recover.baseline_commitment(baseline))
+        pre = recover.preflight(directory, recover.INSTANCE_ID, True, blocked, now=NOW, env=ENV)
+        self.assertEqual(pre["result"], "preflight-blocked")
+        self.assertIn("missing-permission:" + recover.HOSTKEY_PERMISSION, pre["problems"])
+        self.assertNotIn("set-metadata", blocked.kinds())
+
+    def test_private_file_yields_only_the_public_fingerprint(self):
+        samples = (
+            sample_openssh_ed25519(bytes(range(32)), bytes(range(32, 96))),
+            sample_openssh_ecdsa(bytes(range(40)), bytes(range(40, 72))),
+            sample_openssh_rsa(bytes(range(64)), bytes(range(4)), bytes(range(64, 96))),
+        )
+        for pem, public in samples:
+            kind, fingerprint = guest.public_fingerprint_from_private(pem)
+            self.assertEqual((kind, fingerprint), guest.parse_public(public))
+            self.assertNotIn(b"\x00" * 8, fingerprint.encode())
+            self.assertNotIn("BEGIN", fingerprint)
+        secret = bytes(range(32, 96))
+        with self.assertRaises(guest.GuestRefused) as raised:
+            guest.public_fingerprint_from_private(b"not-a-key" + secret)
+        self.assertEqual(str(raised.exception), "pair")
+        self.assertNotIn(secret.hex(), str(raised.exception))
+
+    def test_crash_boundaries_do_not_mix_or_retry_a_keypair(self):
+        evidence, _baseline = inspect_evidence(self)
+        path = Path(self.temp.name) / "pair-inspect.json"
+        path.write_text(json.dumps(evidence))
+        out = Path(self.temp.name) / "pair-op"
+        recover.plan("Mac operator", out, now=NOW, token=tokens("47" * 16, "58" * 16), revision="a" * 40,
+                     env=ENV, mode="rotate", inspect_receipt=path,
+                     confirm_inspect_operation=evidence["operationId"],
+                     confirm_baseline=recover.baseline_commitment(evidence["hostKeys"]["baseline"]))
+        module = load_rendered(out / "guest.py")
+        binding = json.loads((out / "binding.json").read_text())
+
+        def fresh():
+            host = DictHost(binding, out / "guest.py")
+            host.unit["mode"] = 0o644
+            return host
+
+        def assert_generation(host, generation):
+            for alg in guest.ALGORITHMS:
+                self.assertEqual(host.pair_status(alg, "live"), "match", alg)
+                name = guest.KEY_NAMES[alg]
+                self.assertEqual(host.priv[name], generation)
+                expected = host.original_public[alg] if generation == "old" else host.public[name + ".roseos-new.pub"]
+                self.assertEqual(host.public[name + ".pub"], expected)
+
+        for alg in guest.ALGORITHMS:
+            for step in ("fsync", "rename-private", "rename-public"):
+                host = fresh()
+                host.crash_at = (alg, step)
+                receipt = module.run(host)
+                self.assertEqual(receipt["status"], "partial")
+                self.assertEqual(receipt["hostKeys"]["rotated"], {})
+                self.assertNotIn(host.private, json.dumps(receipt))
+                assert_generation(host, "old")
+                generated = host.generate_calls
+                host.boot = "01234567-89ab-cdef-0123-456789abcdef"
+                again = module.run(host)
+                self.assertEqual(host.generate_calls, generated)
+                self.assertEqual(again["unit"]["problem"], "reexecution-partial")
+                assert_generation(host, "old")
+
+        host = fresh()
+        host.crash_at = ("journal", "complete")
+        with self.assertRaises(OSError):
+            module.run(host)
+        self.assertEqual(host.marker["phase"], "baseline")
+        self.assertNotIn(("drop-private", "ed25519"), host.log)
+        generated = host.generate_calls
+        again = module.run(host)
+        self.assertEqual(host.generate_calls, generated)
+        self.assertEqual(again["hostKeys"]["rotated"], {})
+        assert_generation(host, "old")
+
+        host = fresh()
+        host.crash_at = ("unlink", "ed25519")
+        with self.assertRaises(OSError):
+            module.run(host)
+        self.assertEqual(host.marker["phase"], "complete")
+        journal_at = host.log.index(("journal", "complete"))
+        self.assertTrue(all(index > journal_at for index, item in enumerate(host.log) if item[0] == "drop-private"))
+        assert_generation(host, "new")
+        generated = host.generate_calls
+        host.boot = "fedcba98-7654-3210-fedc-ba9876543210"
+        again = module.run(host)
+        self.assertTrue(again["reexecution"])
+        self.assertEqual(host.generate_calls, generated)
+        assert_generation(host, "new")
+
+        for alg in guest.ALGORITHMS:
+            host = fresh()
+            host.marker = {"phase": "baseline", "operationId": binding["operationId"], "nonce": binding["nonce"]}
+            name = guest.KEY_NAMES[alg]
+            host.priv[name] = "new"
+            host.public[name + ".pub"] = host.original_public[alg]
+            host.prev[alg] = host.original_public[alg]
+            receipt = module.run(host)
+            self.assertEqual(receipt["unit"]["problem"], "pair")
+            self.assertEqual(receipt["hostKeys"]["rotated"], {})
+            self.assertFalse(receipt["hostKeys"]["rolledBack"])
+            self.assertEqual(host.priv[name], "new")
+            self.assertEqual(host.public[name + ".pub"], host.original_public[alg])
+            self.assertNotIn(("restore-pair", alg), host.log)
+            self.assertEqual(host.generate_calls, 0)
+            self.assertNotIn("PRIVATE", json.dumps(receipt))
 
 
 class CommandTest(Base):

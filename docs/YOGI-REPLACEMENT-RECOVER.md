@@ -197,6 +197,106 @@ env -u GOOGLE_APPLICATION_CREDENTIALS -u CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOU
 
 `cleanup --execute` remains the stop path if a previous apply was interrupted.
 
+## Rotation-only continuation
+
+Repair still stops when the unit is already mode `0644`. That guard is unchanged. A later rotation is a new plan,
+`--mode rotate`, and it does not change the mode in either direction.
+
+The inspect receipt is guest evidence. It is not a host-key pin, not proof the keys are still the clone, and not proof
+a previous rotation finished. A journal phase of `complete`, or an unrecognized marker, does not authorize or skip
+the rotation. Unrecognized markers are counted and left in place. Their bytes are not copied into the new receipt.
+
+`plan --mode rotate --inspect-receipt FILE` copies the three public fingerprints from that reviewed inspect receipt
+into the new guest. The command also requires `--confirm-inspect-operation` and `--confirm-baseline`. Those must
+equal the receipt's operation id and the SHA-256 of the canonical three fingerprints. A different file, a different
+id, or a different fingerprint set is refused before a guest is written. On boot the guest reads the public files
+again. It generates a key only when all three still match that bound evidence, the unit is a root-owned regular
+file mode `0644` size 347 with one link, and the runner is inactive, disabled, and has no listener or worker. A
+hard link, an extra `ssh_host_*` name, or any other runner state stops with the mode unchanged.
+
+## Host identity after rotation
+
+Nothing in this tool pins an SSH host key. `hostKeyPinned` stays false. `builder.direct.hostKey` stays unset.
+`hostIdentity.iapAuthenticatesHostKey` is false. IAP does not authenticate the key.
+
+Two threats are different:
+
+- A network attacker, or a connection to the wrong host, is the transport threat. Google's documented binding for
+  that threat is guest attributes. With `enable-guest-attributes=TRUE` and OS Login left `FALSE`, the guest
+  environment publishes SSH host public keys and `gcloud` reads them through the API before SSH
+  ([guest attributes](https://docs.cloud.google.com/compute/docs/metadata/manage-guest-attributes),
+  [storing host keys](https://docs.cloud.google.com/solutions/connecting-securely)). The read is
+  `getGuestAttributes` on this instance, query path `hostkeys/`. The keys are `ssh-ed25519`,
+  `ecdsa-sha2-nistp256`, and `ssh-rsa`. The value is the public blob. Writing from inside the VM uses the metadata
+  server's instance authentication. No guest service account is required. Any process on that VM can write its own
+  metadata server, and no other VM can.
+- A fully compromised guest is a different threat. The same process can publish a host key and serve that key.
+  Guest attributes, serial output, and IAP do not prove the guest is honest. No mechanism in this recovery does.
+
+The stock guest agent is not a reliable publisher on this disk. In
+[guest-agent `instance_setup.go` at `84f5e2ffedb6`](https://github.com/GoogleCloudPlatform/guest-agent/blob/84f5e2ffedb6/google_guest_agent/instance_setup.go),
+`generateSSHKeys` runs when the stored instance id changes, generates keys, and writes `hostkeys/<type>` with the
+public blob. The connecting-securely page says the attribute has to be enabled before the first boot; otherwise the
+agent logs that it could not write the host key. This replacement has already booted, and the feature is off. Do not
+rely on that agent to publish the rotated keys.
+
+`--mode rotate` does not enable guest attributes and does not publish. Use it when the goal is only to rotate the
+three files.
+
+`--mode rotate-publish` is the opt-in that makes the control-plane read possible in the same boot. Its one
+`setMetadata` adds the startup script, the binding, and `enable-guest-attributes=TRUE`, and it copies every other
+existing key. `enable-oslogin` stays `FALSE`. `block-project-ssh-keys` stays `TRUE`. Project metadata is not
+changed. Preflight for this mode requires `compute.instances.getGuestAttributes` on the replacement. After the
+guest commits the new files, it PUTs only the three new public blobs to `hostkeys/<openssh-type>`. It does not send
+a private key. The control plane then makes one `getGuestAttributes` call, query path `hostkeys/`, timeout 30
+seconds, and checks the three public types, the blob shape, and the fingerprints against this operation's receipt.
+The receipt's operation id and nonce are the binding's. A match is consistency with this instance's metadata
+server. It is not a pin and not an IAP result.
+
+If the PUT fails, the receipt is `partial` with problem `hostkey-publish`. The new files stay. The tool does not
+generate another key, does not publish again, and does not roll back. Cleanup restores metadata and stops the
+instance. A fresh inspect is required before any later plan. The same cleanup runs when the control-plane read is
+absent, stale (the previous fingerprints), malformed, or a different blob. A preexisting `enable-guest-attributes`
+value of `TRUE` or `FALSE` is put back. A flag this operation added is removed. Other keys are copied through on
+both the write and the restore.
+
+IAP TCP forwarding checks IAM and connects a tunnel to the instance
+([SSH through IAP](https://docs.cloud.google.com/compute/docs/connect/ssh-using-iap)). It does not retrieve or check
+the SSH host key. This mode does not SSH and does not run `gcloud compute ssh`.
+
+Google's instance identity token is a Google-signed JWT that names the project, zone, and instance id
+([verifying instance identity](https://docs.cloud.google.com/compute/docs/instances/verifying-instance-identity)).
+The instance can obtain it only from the metadata server, and only when the instance has a service account. This
+replacement has no service account. Attaching one is outside this recovery. The token also does not contain the
+SSH host public key.
+
+An operator-generated host keypair would disclose the private key if it were placed in instance metadata, the
+startup script, serial output, or a guest attribute. This tool refuses private-key material in the inspect receipt
+and publishes only public blobs. A public fingerprint copied from the guest's own receipt is still that guest's
+report. The authenticated observation is the control-plane read of what this instance's metadata server stored.
+
+```sh
+env -u GOOGLE_APPLICATION_CREDENTIALS -u CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT \
+  python3 -B yogi_replacement_recover.py plan --mode rotate \
+  --inspect-receipt INSPECT.json \
+  --confirm-inspect-operation INSPECT_OPERATION_ID \
+  --confirm-baseline BASELINE_SHA256 \
+  --operator "NAME" --out ~/yogi-ops/rotate-LABEL
+```
+
+The publish opt-in uses the same inspect confirmation and a different mode. It still does not SSH:
+
+```sh
+env -u GOOGLE_APPLICATION_CREDENTIALS -u CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT \
+  python3 -B yogi_replacement_recover.py plan --mode rotate-publish \
+  --inspect-receipt INSPECT.json \
+  --confirm-inspect-operation INSPECT_OPERATION_ID \
+  --confirm-baseline BASELINE_SHA256 \
+  --operator "NAME" --out ~/yogi-ops/rotate-publish-LABEL
+```
+
+Do not point `--inspect-receipt` at a repair plan. Do not reuse operation `638e6e9039e41b7531697bb45066a616`.
+
 Keep the operation directory. Do not reuse it. A stale fingerprint, an expired preflight (20 minutes), or a second
 apply needs a new `plan`. If apply is interrupted, run `cleanup --execute` even when `started.json` was not written.
 
@@ -245,8 +345,13 @@ Base path named in the relay: `/Users/nathanspaun/Documents/Codex/2026-10-27/tas
 - [Serial port output](https://docs.cloud.google.com/compute/docs/troubleshooting/viewing-serial-port-output) is written
   by the guest OS, BIOS, and other system-level entities. It is not signed. A receipt that matches this operation's
   nonce is bound to this operation, and it is still not a host-key pin (`serialReceiptTrustedForPin` is false).
-- [Guest attributes](https://docs.cloud.google.com/compute/docs/metadata/manage-guest-attributes) are data the guest
-  writes. A matching attribute is not authentication. This tool does not enable them.
+- [Guest attributes](https://docs.cloud.google.com/compute/docs/metadata/manage-guest-attributes) are written by any
+  process on that VM, with no service account, and are read back with `getGuestAttributes` on that instance.
+  [Storing host keys](https://docs.cloud.google.com/solutions/connecting-securely) is the documented use of the
+  `hostkeys/` namespace against a network man-in-the-middle. A match with the serial receipt is consistency, not
+  proof the guest is honest. `--mode rotate` does not set `enable-guest-attributes`. `--mode rotate-publish` sets it
+  in the same metadata write and removes only the value it added. The receipt attribute under
+  `roseos-yogi-recover/receipt` is a different path. Its absence is still expected.
 - The 45-minute limit is `scheduling.maxRunDuration.seconds` of `2700` with `instanceTerminationAction` `STOP`
   ([limit VM runtime](https://docs.cloud.google.com/compute/docs/instances/limit-vm-runtime)).
   `automaticRestart` restarts a crashed guest
@@ -305,10 +410,11 @@ Serial output is a `compute#serialPortOutput` resource when `kind` is present.
 - If chmod succeeds and a later step stops, a new operation still requires mode `0664`. It will not rotate on a unit
   that is already `0644`. Rolling the disk back is a separate snapshot decision and is not performed here.
 - Before a live host key is replaced, both the private and public files are copied to
-  `ssh_host_<alg>_key.roseos-prev-<operation id>` (and `.pub`). A failed rotation copies those bytes back and does not
-  generate another key. The next boot of the same startup script does the same and does not rotate again. The previous
-  public file is kept. The previous private file is unlinked after that restore or after success. A crash in the
-  middle of the copy can leave the previous private file until that next boot unlinks it.
+  `ssh_host_<alg>_key.roseos-prev-<operation id>` (and `.pub`). Those two files stay until the guest journal has been
+  fsynced. A crash before that journal restores a backup only when both halves are one pair, private file first. It
+  does not copy a public file alone, and it does not generate another key. If neither the live pair nor the backup
+  pair is valid, the receipt is `partial` with problem `pair`. The previous private file is unlinked only after that
+  journal is stored.
 - If the metadata readback fails, this tool does not guess and does not send another write. A startup script that was
   stored but not visible in that read stays until a later `cleanup` can read the instance. Cleanup stops the
   replacement when the describe fails.

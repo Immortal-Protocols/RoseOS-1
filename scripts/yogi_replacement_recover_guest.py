@@ -6,7 +6,10 @@ text as the instance startup-script. This template is not a spent binding. It do
 original VM, or restore a snapshot.
 
 On the guest it may chmod one unit file when every precondition matches, rotate three named host keys, and remove one
-exact authorized_keys comment plus one exact temporary account. It writes a single public receipt line.
+exact authorized_keys comment plus one exact temporary account. It writes a single public receipt line. Purpose
+rotate-publish, and only that purpose, then PUTs the new public blobs to hostkeys/ on this instance's metadata
+server. That write uses no service account. A failed PUT does not roll the keys back and is not retried. Repair
+and plain rotate do not publish.
 """
 import base64
 import errno
@@ -18,6 +21,7 @@ import re
 import stat
 import subprocess
 import sys
+import urllib.error
 import urllib.request
 
 RECEIPT_SCHEMA = "roseos.yogi-replacement-recover-receipt.v1"
@@ -29,6 +33,10 @@ INSTANCE = "roseos-yogi-builder-20261105-b"
 INSTANCE_ID = "2720796557371812468"
 OPERATION_ID = "@@OP@@"
 NONCE = "@@NONCE@@"
+GUEST_PURPOSE = "@@PURPOSE@@"
+BOUND_ED25519 = "@@FP_ED25519@@"
+BOUND_ECDSA = "@@FP_ECDSA@@"
+BOUND_RSA = "@@FP_RSA@@"
 UNIT_PATH = ("/etc/systemd/system/"
              "actions.runner.Immortal-Protocols-RoseOS-1.roseos-yogi-builder-20261105-b.service")
 UNIT_NAME = "actions.runner.Immortal-Protocols-RoseOS-1.roseos-yogi-builder-20261105-b.service"
@@ -68,7 +76,7 @@ UNIT_KEYS = {
 UNIT_PROBLEMS = {
     "none", "missing", "symlink", "kind", "mode", "owner", "size", "nlink", "runner-active", "runner-enabled",
     "runner-process", "chmod", "identity", "unknown-host-key", "baseline", "rotate-same", "rotate-partial",
-    "reexecution-partial", "cleanup", "already-0644",
+    "reexecution-partial", "cleanup", "already-0644", "hostkey-publish", "pair",
 }
 ACCOUNT_STATES = {"absent", "removed", "preserved-mismatch", "remove-failed", "removed-home-leftover"}
 FORBIDDEN = ("BEGIN ", "PRIVATE", "OPENSSH", "-----")
@@ -128,7 +136,7 @@ def validate_shape(receipt, binding):
     problems = binding_problems(binding)
     if not isinstance(receipt, dict) or set(receipt) != TOP_KEYS:
         return ["receipt-keys"]
-    if receipt.get("purpose") not in ("repair", "inspect"):
+    if receipt.get("purpose") not in ("repair", "inspect", "rotate", "rotate-publish"):
         return ["purpose"]
     if receipt["schema"] != RECEIPT_SCHEMA or receipt["operationId"] != binding["operationId"]:
         return ["receipt-binding"]
@@ -228,6 +236,52 @@ def success_problems(receipt):
     if cleanup["temporaryAccount"] not in ("absent", "removed"):
         problems.append("account")
     return problems
+
+
+def rotate_success_problems(receipt, expected_baseline, purpose="rotate"):
+    """Empty only when this boot rotated keys and did not change the unit mode.
+
+    The expected baseline is the operator-reviewed inspect evidence. Matching it is not a host-key pin
+    and not a comparison with the original VM. purpose rotate-publish is the same rotation plus a public
+    hostkeys publish; a partial publish is not success.
+    """
+    if not isinstance(receipt, dict) or receipt.get("purpose") != purpose:
+        return ["purpose"]
+    unit = receipt.get("unit") or {}
+    runner = receipt.get("runner") or {}
+    keys = receipt.get("hostKeys") or {}
+    cleanup = receipt.get("cleanup") or {}
+    problems = []
+    if receipt.get("status") != "complete" or unit.get("action") != "not-modified" or unit.get("problem") != "none":
+        problems.append("status")
+    if (unit.get("beforeMode"), unit.get("afterMode")) != ("0644", "0644"):
+        problems.append("mode")
+    if (unit.get("beforeSize"), unit.get("afterSize")) != (UNIT_SIZE, UNIT_SIZE):
+        problems.append("size")
+    if (unit.get("beforeUid"), unit.get("beforeGid"), unit.get("afterUid"), unit.get("afterGid")) != (0, 0, 0, 0):
+        problems.append("owner")
+    if runner != {"active": "inactive", "enabled": "disabled", "process": False}:
+        problems.append("runner")
+    if not isinstance(expected_baseline, dict) or set(expected_baseline) != set(ALGORITHMS):
+        problems.append("baseline")
+    elif keys.get("baseline") != expected_baseline or set(keys.get("rotated") or {}) != set(ALGORITHMS):
+        problems.append("baseline")
+    else:
+        for alg in ALGORITHMS:
+            if not FP.fullmatch(expected_baseline[alg]) or keys["rotated"].get(alg) == expected_baseline[alg]:
+                problems.append("distinct")
+    if keys.get("unknownHostKeyCount") != 0 or keys.get("distinctFromClonedBaseline") is not True \
+            or keys.get("rolledBack") is not False:
+        problems.append("distinct")
+    if cleanup.get("linesRemoved") != 0 or cleanup.get("tempFilesRemoved") != 0 \
+            or cleanup.get("unidentifiedAuthorizedKeyLines") != 0 or cleanup.get("accessCleanup") != "ok" \
+            or cleanup.get("temporaryAccount") != "absent":
+        problems.append("cleanup")
+    return problems
+
+
+def _bound_baseline():
+    return {"ed25519": BOUND_ED25519, "ecdsa": BOUND_ECDSA, "rsa": BOUND_RSA}
 
 
 def journal_summary(marker):
@@ -345,6 +399,135 @@ def runner_problem(runner):
     if runner.get("enabled") != "disabled":
         return "runner-enabled"
     return None
+
+
+def publish_public_hostkeys(io, lines_by_alg):
+    """PUT each new public blob to hostkeys/<openssh-type> on this instance's metadata server.
+
+    The value is the base64 blob only, matching the guest-attribute key the guest environment uses.
+    Private key files are not read. A metadata rejection (guest attributes disabled) returns False.
+    That does not roll the new keys back and does not prove the guest is honest.
+    """
+    if set(lines_by_alg) != set(ALGORITHMS):
+        raise GuestRefused("public-type")
+    puts = []
+    for alg in ALGORITHMS:
+        line = lines_by_alg[alg]
+        key_type, _fingerprint = parse_public(line)
+        if key_type != PUBLIC_TYPES[alg]:
+            raise GuestRefused("public-type")
+        blob = str(line).strip().split()[1]
+        if not re.fullmatch(r"[A-Za-z0-9+/]+=*", blob):
+            raise GuestRefused("public-blob")
+        if any(token in blob or token in key_type for token in ("BEGIN", "PRIVATE", "OPENSSH")):
+            raise GuestRefused("private-attribute")
+        puts.append((key_type, blob))
+    return bool(io.publish_hostkey_attributes(puts))
+
+
+def _u32(value):
+    return int(value).to_bytes(4, "big")
+
+
+def _ssh_bytes(payload):
+    if isinstance(payload, str):
+        payload = payload.encode()
+    return _u32(len(payload)) + payload
+
+
+def _take_bytes(blob, offset):
+    if offset + 4 > len(blob):
+        raise GuestRefused("pair")
+    length = int.from_bytes(blob[offset:offset + 4], "big")
+    offset += 4
+    if length < 0 or length > 1 << 20 or offset + length > len(blob):
+        raise GuestRefused("pair")
+    return blob[offset:offset + length], offset + length
+
+
+def _pem_body(blob):
+    try:
+        text = blob.decode("ascii")
+    except UnicodeError:
+        raise GuestRefused("pair") from None
+    body = []
+    inside = False
+    for line in text.splitlines():
+        if line.startswith("-----BEGIN ") and line.endswith(" PRIVATE KEY-----"):
+            inside = True
+            continue
+        if line.startswith("-----END ") and line.endswith(" PRIVATE KEY-----"):
+            break
+        if inside and line.strip():
+            body.append(line.strip())
+    if not body:
+        raise GuestRefused("pair")
+    try:
+        return base64.b64decode("".join(body), validate=True)
+    except ValueError:
+        raise GuestRefused("pair") from None
+
+
+def _public_wire_from_private_section(section):
+    """Public wire blob from the private section. Secret fields are not returned."""
+    try:
+        check_a = int.from_bytes(section[:4], "big")
+        check_b = int.from_bytes(section[4:8], "big")
+    except (IndexError, TypeError):
+        raise GuestRefused("pair") from None
+    if len(section) < 8 or check_a != check_b:
+        raise GuestRefused("pair")
+    key_type, offset = _take_bytes(section, 8)
+    if key_type == b"ssh-ed25519":
+        public, _offset = _take_bytes(section, offset)
+        _secret, _offset = _take_bytes(section, _offset)
+        return _ssh_bytes(key_type) + _ssh_bytes(public)
+    if key_type.startswith(b"ecdsa-sha2-"):
+        curve, offset = _take_bytes(section, offset)
+        point, offset = _take_bytes(section, offset)
+        _secret, _offset = _take_bytes(section, offset)
+        return _ssh_bytes(key_type) + _ssh_bytes(curve) + _ssh_bytes(point)
+    if key_type == b"ssh-rsa":
+        modulus, offset = _take_bytes(section, offset)
+        exponent, _offset = _take_bytes(section, offset)
+        return _ssh_bytes(key_type) + _ssh_bytes(exponent) + _ssh_bytes(modulus)
+    raise GuestRefused("pair")
+
+
+def public_fingerprint_from_private(blob):
+    """Fingerprint of the public key carried in an unencrypted OpenSSH private key.
+
+    The return value is the key type and the SHA256 fingerprint. Private scalars are not returned.
+    """
+    try:
+        raw = _pem_body(blob)
+    except GuestRefused:
+        raise
+    magic = b"openssh-key-v1\x00"
+    if not raw.startswith(magic):
+        raise GuestRefused("pair")
+    offset = len(magic)
+    cipher, offset = _take_bytes(raw, offset)
+    kdf, offset = _take_bytes(raw, offset)
+    _options, offset = _take_bytes(raw, offset)
+    if cipher != b"none" or kdf != b"none" or offset + 4 > len(raw):
+        raise GuestRefused("pair")
+    count = int.from_bytes(raw[offset:offset + 4], "big")
+    offset += 4
+    if count != 1:
+        raise GuestRefused("pair")
+    header_public, offset = _take_bytes(raw, offset)
+    private_section, _offset = _take_bytes(raw, offset)
+    derived = _public_wire_from_private_section(private_section)
+    if derived != header_public:
+        raise GuestRefused("pair")
+    key_type, _rest = _take_bytes(derived, 0)
+    try:
+        name = key_type.decode("ascii")
+    except UnicodeError:
+        raise GuestRefused("pair") from None
+    line = name + " " + base64.b64encode(derived).decode("ascii")
+    return parse_public(line)
 
 
 def parse_public(line):
@@ -501,10 +684,15 @@ def cleanup_access(io, operation_id):
 
 
 def _emit(io, receipt, binding):
+    prior_unrecognized = 0
+    if isinstance(receipt.get("journal"), dict) and isinstance(receipt["journal"].get("unrecognized"), int):
+        prior_unrecognized = receipt["journal"]["unrecognized"]
     try:
         receipt["journal"] = journal_summary(io.marker_load())
     except (GuestRefused, OSError, ValueError, TypeError):
         receipt["journal"] = journal_summary({"phase": "unrecognized"})
+    if 0 <= prior_unrecognized <= 20 and prior_unrecognized > receipt["journal"]["unrecognized"]:
+        receipt["journal"]["unrecognized"] = prior_unrecognized
     if validate_shape(receipt, binding):
         raise GuestRefused("receipt-shape")
     line = PREFIX + canonical(receipt)
@@ -566,8 +754,165 @@ def _observe_access(io, operation_id):
             "tempFilesRemoved": 0, "accessCleanup": "failed" if failed else "ok"}
 
 
+def _rotate_refuse(io, binding, boot, before, runner, problem, baseline=None, unknown=0):
+    receipt = _skeleton(binding, boot, "refused")
+    receipt["purpose"] = "rotate"
+    _fill_unit(receipt, before if isinstance(before, dict) else None, before if isinstance(before, dict) else None,
+               problem, "not-modified")
+    if isinstance(before, dict) and before.get("mode") == UNIT_AFTER:
+        receipt["unit"]["beforeMode"] = receipt["unit"]["afterMode"] = "0644"
+    receipt["runner"] = _public_runner(runner) if isinstance(runner, dict) else receipt["runner"]
+    if isinstance(baseline, dict):
+        receipt["hostKeys"]["baseline"] = {k: v for k, v in baseline.items() if k in ALGORITHMS and FP.fullmatch(v or "")}
+    receipt["hostKeys"]["unknownHostKeyCount"] = unknown
+    receipt["cleanup"] = _observe_access(io, OPERATION_ID)
+    try:
+        receipt["journal"]["unrecognized"] = min(20, int(io.prior_journal()))
+    except (GuestRefused, OSError, TypeError, ValueError):
+        receipt["journal"]["unrecognized"] = 1
+    io.marker_store({"phase": "refused", "operationId": OPERATION_ID, "nonce": NONCE, "receipt": receipt})
+    return _emit(io, receipt, binding)
+
+
+def run_rotate(io):
+    """Rotate the three named host keys only. The unit mode is not changed in either direction."""
+    try:
+        binding = io.binding()
+    except GuestRefused:
+        return None
+    if binding_problems(binding) or binding["operationId"] != OPERATION_ID or binding["nonce"] != NONCE:
+        return None
+    try:
+        if io.self_sha256() != binding["payloadSha256"]:
+            return None
+        boot = _boot(io)
+    except GuestRefused:
+        return None
+    marker = io.marker_load()
+    if marker:
+        return _rerun(io, marker, binding, boot)
+    io.marker_store({"phase": "started", "operationId": OPERATION_ID, "nonce": NONCE})
+    try:
+        identity = io.instance_identity()
+    except GuestRefused:
+        identity = None
+    try:
+        before = io.unit_stat()
+        runner = io.runner()
+    except GuestRefused:
+        before, runner = None, {}
+    if identity != EXPECTED_IDENTITY:
+        return _rotate_refuse(io, binding, boot, before, runner, "identity")
+    if not isinstance(before, dict):
+        return _rotate_refuse(io, binding, boot, before, runner, "mode")
+    unit_state = unit_problem(before)
+    runner_state = runner_problem(runner) if isinstance(runner, dict) else "runner-active"
+    if unit_state != "already-0644" or runner_state:
+        problem = runner_state if unit_state == "already-0644" and runner_state else (unit_state or "mode")
+        return _rotate_refuse(io, binding, boot, before, runner, problem)
+    expected = _bound_baseline()
+    if any(not FP.fullmatch(expected[alg]) for alg in ALGORITHMS):
+        return _rotate_refuse(io, binding, boot, before, runner, "baseline")
+    baseline, unknown = _observe_keys(io)
+    access = _observe_access(io, OPERATION_ID)
+    if unknown or baseline != expected or access["unidentifiedAuthorizedKeyLines"] or access["temporaryAccount"] != "absent" \
+            or access["accessCleanup"] != "ok":
+        problem = "unknown-host-key" if unknown else ("cleanup" if access["unidentifiedAuthorizedKeyLines"] or access["temporaryAccount"] != "absent" or access["accessCleanup"] != "ok" else "baseline")
+        return _rotate_refuse(io, binding, boot, before, runner, problem, baseline, unknown)
+    io.marker_store({"phase": "baseline", "operationId": OPERATION_ID, "nonce": NONCE, "baseline": baseline})
+    rotated = {}
+    public_lines = {}
+    try:
+        for alg in ALGORITHMS:
+            key_type, fingerprint = parse_public(io.ssh_generate(alg))
+            if key_type != PUBLIC_TYPES[alg] or fingerprint == baseline[alg]:
+                io.ssh_discard_temp()
+                raise GuestRefused("rotate-same")
+            io.ssh_preserve(alg)
+            io.ssh_commit(alg)
+            public_line = io.ssh_public(KEY_NAMES[alg] + ".pub")
+            key_type, confirmed = parse_public(public_line)
+            if key_type != PUBLIC_TYPES[alg] or confirmed != fingerprint or confirmed == baseline[alg]:
+                raise GuestRefused("rotate-partial")
+            rotated[alg] = confirmed
+            public_lines[alg] = public_line
+    except (GuestRefused, OSError) as error:
+        code = str(error) if str(error) in ("rotate-same", "rotate-partial") else "rotate-partial"
+        outcome = _rollback(io)
+        receipt = _skeleton(binding, boot, "partial")
+        receipt["purpose"] = "rotate-publish" if GUEST_PURPOSE == "rotate-publish" else "rotate"
+        _fill_unit(receipt, before, before, "pair" if outcome == "partial" else code, "not-modified")
+        receipt["unit"]["beforeMode"] = receipt["unit"]["afterMode"] = "0644"
+        receipt["runner"] = _public_runner(runner)
+        receipt["hostKeys"]["baseline"] = baseline
+        receipt["hostKeys"]["rotated"] = {}
+        receipt["hostKeys"]["rolledBack"] = outcome == "restored"
+        receipt["cleanup"] = access
+        io.marker_store({"phase": "partial", "operationId": OPERATION_ID, "nonce": NONCE, "baseline": baseline,
+                         "receipt": receipt})
+        _drop_backups(io)
+        return _emit(io, receipt, binding)
+    receipt = _skeleton(binding, boot, "complete")
+    _fill_unit(receipt, before, before, "none", "not-modified")
+    receipt["unit"]["beforeMode"] = receipt["unit"]["afterMode"] = "0644"
+    receipt["runner"] = _public_runner(runner)
+    receipt["hostKeys"]["baseline"] = baseline
+    receipt["hostKeys"]["rotated"] = rotated
+    receipt["hostKeys"]["rolledBack"] = False
+    receipt["hostKeys"]["distinctFromClonedBaseline"] = True
+    receipt["hostKeys"]["unknownHostKeyCount"] = 0
+    receipt["cleanup"] = access
+    try:
+        receipt["journal"]["unrecognized"] = min(20, int(io.prior_journal()))
+    except (GuestRefused, OSError, TypeError, ValueError):
+        receipt["journal"]["unrecognized"] = 1
+    receipt["purpose"] = "rotate-publish" if GUEST_PURPOSE == "rotate-publish" else "rotate"
+    if GUEST_PURPOSE == "rotate-publish" and not _publish_rotated_hostkeys(io, public_lines):
+        receipt["status"] = "partial"
+        receipt["unit"]["problem"] = "hostkey-publish"
+        io.marker_store({"phase": "publish-failed", "operationId": OPERATION_ID, "nonce": NONCE,
+                         "baseline": baseline, "rotated": rotated, "receipt": receipt})
+        _drop_backups(io)
+        return _emit(io, receipt, binding)
+    io.marker_store({"phase": "complete", "operationId": OPERATION_ID, "nonce": NONCE, "baseline": baseline,
+                     "rotated": rotated, "receipt": receipt})
+    _drop_backups(io)
+    return _emit(io, receipt, binding)
+
+
+def _emit_publish_failure(io, marker, binding, boot):
+    """Re-emit the partial receipt. Do not generate, publish, or roll the new keys back."""
+    prior = marker.get("receipt")
+    if not isinstance(prior, dict) or validate_shape(prior, binding) or prior.get("status") != "partial":
+        return None
+    if (prior.get("unit") or {}).get("problem") != "hostkey-publish":
+        return None
+    if prior.get("bootId") == boot:
+        return None
+    receipt = json.loads(canonical(prior))
+    receipt["reexecution"] = True
+    receipt["previousBootId"] = prior["bootId"]
+    receipt["bootId"] = boot
+    return _emit(io, receipt, binding)
+
+
+def _publish_rotated_hostkeys(io, lines_by_alg):
+    """Best-effort public publish. Failure leaves the rotated files in place."""
+    try:
+        return bool(publish_public_hostkeys(io, lines_by_alg))
+    except (GuestRefused, OSError):
+        return False
+
+
 def run(io):
-    """One guest pass. A marker other than a finished complete receipt never continues a rotation."""
+    """One guest pass. Repair still stops before rotation when the unit is already mode 0644.
+
+    Rotate is a separate purpose. It requires that mode and does not change it.
+    """
+    if GUEST_PURPOSE in ("rotate", "rotate-publish"):
+        return run_rotate(io)
+    if GUEST_PURPOSE != "repair":
+        return None
     try:
         binding = io.binding()
     except GuestRefused:
@@ -683,19 +1028,18 @@ def run(io):
             rotated[alg] = confirmed
     except (GuestRefused, OSError) as error:
         code = str(error) if str(error) in ("rotate-same", "rotate-partial") else "rotate-partial"
-        rolled = _rollback(io)
+        outcome = _rollback(io)
         receipt["status"] = "partial"
-        receipt["unit"]["problem"] = code
+        receipt["unit"]["problem"] = "pair" if outcome == "partial" else code
         receipt["hostKeys"]["baseline"] = baseline
         receipt["hostKeys"]["rotated"] = {}
-        receipt["hostKeys"]["rolledBack"] = rolled
+        receipt["hostKeys"]["rolledBack"] = outcome == "restored"
         receipt["hostKeys"]["distinctFromClonedBaseline"] = False
         receipt["cleanup"] = cleanup_access(io, OPERATION_ID)
         io.marker_store({"phase": "partial", "operationId": OPERATION_ID, "nonce": NONCE, "baseline": baseline,
                          "receipt": receipt})
+        _drop_backups(io)
         return _emit(io, receipt, binding)
-    for alg in ALGORITHMS:
-        io.ssh_drop_prev_private(alg)
     receipt["status"] = "complete"
     receipt["hostKeys"]["baseline"] = baseline
     receipt["hostKeys"]["rotated"] = rotated
@@ -710,25 +1054,64 @@ def run(io):
     phase = "complete" if receipt["status"] == "complete" else "partial"
     io.marker_store({"phase": phase, "operationId": OPERATION_ID, "nonce": NONCE, "baseline": baseline,
                      "rotated": rotated, "receipt": receipt})
+    _drop_backups(io)
     return _emit(io, receipt, binding)
 
 
-def _rollback(io):
-    """Copy any preserved previous keys back over the live names. Previous public files stay."""
-    rolled = False
+def restore_backup_pairs(io):
+    """Restore a backup only when both halves are one valid pair. Never copy a single half.
+
+    Returns restored, unchanged, or partial. Does not delete the backup private key and does not
+    generate a new key.
+    """
+    restored = False
+    partial = False
     for alg in ALGORITHMS:
         try:
-            if io.ssh_restore(alg):
-                rolled = True
-            io.ssh_drop_prev_private(alg)
+            backup = io.pair_status(alg, "backup")
+            live = io.pair_status(alg, "live")
         except (GuestRefused, OSError):
-            rolled = True
-    return rolled
+            partial = True
+            continue
+        if backup == "match":
+            try:
+                same = live == "match" and io.pairs_agree(alg)
+            except (GuestRefused, OSError):
+                same = False
+            if same:
+                continue
+            try:
+                copied = io.restore_pair(alg) and io.pair_status(alg, "live") == "match"
+            except (GuestRefused, OSError):
+                copied = False
+            if copied:
+                restored = True
+            else:
+                partial = True
+            continue
+        if live != "match":
+            partial = True
+    if partial:
+        return "partial"
+    return "restored" if restored else "unchanged"
+
+
+def _drop_backups(io):
+    """Drop backup private keys only after the caller has stored a durable journal."""
+    for alg in ALGORITHMS:
+        io.ssh_drop_prev_private(alg)
+
+
+def _rollback(io):
+    """Restore complete backup pairs. The backup private key stays until the journal is stored."""
+    return restore_backup_pairs(io)
 
 
 def _rerun(io, marker, binding, boot):
     if not isinstance(marker, dict) or marker.get("operationId") != OPERATION_ID or marker.get("nonce") != NONCE:
         return None
+    if marker.get("phase") == "publish-failed":
+        return _emit_publish_failure(io, marker, binding, boot)
     if marker.get("phase") == "complete" and isinstance(marker.get("receipt"), dict):
         prior = marker["receipt"]
         if validate_shape(prior, binding) or prior.get("status") != "complete":
@@ -743,32 +1126,40 @@ def _rerun(io, marker, binding, boot):
                 discarded = io.ssh_discard_temp()
             except GuestRefused:
                 discarded = {"removed": 0, "skippedSymlink": 1}
-            for alg in ALGORITHMS:
-                try:
-                    io.ssh_drop_prev_private(alg)
-                except (GuestRefused, OSError):
-                    receipt["status"] = "partial"
+            try:
+                _drop_backups(io)
+            except (GuestRefused, OSError):
+                receipt["status"] = "partial"
             if int(discarded.get("skippedSymlink") or 0) > 0:
                 receipt["status"] = "partial"
                 receipt["cleanup"] = dict(receipt["cleanup"], accessCleanup="failed")
             return _emit(io, receipt, binding)
-    # A crash or reboot must not generate another key. Restore any preserved previous pair.
-    rolled = _rollback(io)
+    # A crash or reboot must not generate another key. Restore only a complete backup pair.
+    outcome = _rollback(io)
     try:
         io.ssh_discard_temp()
     except (GuestRefused, OSError):
-        rolled = True
+        outcome = "partial"
     receipt = _skeleton(binding, boot, "partial")
+    receipt["purpose"] = "rotate-publish" if GUEST_PURPOSE == "rotate-publish" else (
+        "rotate" if GUEST_PURPOSE == "rotate" else "repair")
     receipt["reexecution"] = False
-    receipt["unit"]["problem"] = "reexecution-partial"
+    receipt["unit"]["problem"] = "pair" if outcome == "partial" else "reexecution-partial"
     baseline = marker.get("baseline") if isinstance(marker.get("baseline"), dict) else {}
     receipt["hostKeys"]["baseline"] = {k: v for k, v in baseline.items() if k in ALGORITHMS and isinstance(v, str) and FP.fullmatch(v)}
     receipt["hostKeys"]["rotated"] = {}
-    receipt["hostKeys"]["rolledBack"] = rolled
+    receipt["hostKeys"]["rolledBack"] = outcome == "restored"
     receipt["hostKeys"]["distinctFromClonedBaseline"] = False
-    receipt["cleanup"] = cleanup_access(io, OPERATION_ID)
+    if GUEST_PURPOSE in ("rotate", "rotate-publish"):
+        receipt["cleanup"] = _observe_access(io, OPERATION_ID)
+    else:
+        receipt["cleanup"] = cleanup_access(io, OPERATION_ID)
     io.marker_store({"phase": "partial", "operationId": OPERATION_ID, "nonce": NONCE, "baseline": baseline,
                      "receipt": receipt})
+    try:
+        _drop_backups(io)
+    except (GuestRefused, OSError):
+        pass
     return _emit(io, receipt, binding)
 
 
@@ -867,6 +1258,48 @@ class LinuxHost:
         finally:
             os.close(fd)
         os.rename(temporary, target)
+        directory_fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+
+    def prior_journal(self):
+        """Count other operation markers that are not a readable known phase. Their bytes are not returned."""
+        base = self._real("/var/lib/roseos-yogi-recover")
+        unrecognized = 0
+        allowed = {"started", "unit-done", "baseline", "refused", "partial", "complete"}
+        try:
+            names = os.listdir(base)
+        except OSError:
+            return 0
+        for name in names:
+            if unrecognized >= 20:
+                break
+            if name == OPERATION_ID or not HEX32.fullmatch(name):
+                continue
+            path = base + "/" + name + "/state.json"
+            try:
+                fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+            except OSError:
+                unrecognized += 1
+                continue
+            try:
+                data = os.read(fd, 65537)
+            finally:
+                os.close(fd)
+            if len(data) > 65536:
+                unrecognized += 1
+                continue
+            try:
+                marker = json.loads(data.decode())
+            except (ValueError, UnicodeError):
+                unrecognized += 1
+                continue
+            phase = marker.get("phase") if isinstance(marker, dict) else None
+            if phase not in allowed:
+                unrecognized += 1
+        return unrecognized
 
     def _stat_path(self, path):
         try:
@@ -992,17 +1425,70 @@ class LinuxHost:
             self._copy_ssh(KEY_NAMES[algorithm] + suffix,
                            KEY_NAMES[algorithm] + ".roseos-prev-" + OPERATION_ID + suffix, overwrite=False)
 
-    def ssh_restore(self, algorithm):
+    def _read_regular(self, name, limit):
+        fd = os.open(self._real("/etc/ssh/" + self._ssh_name(name)), os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        try:
+            info = os.fstat(fd)
+            if not stat.S_ISREG(info.st_mode) or info.st_size > limit:
+                raise GuestRefused("pair")
+            return os.read(fd, info.st_size)
+        finally:
+            os.close(fd)
+
+    def _pair_names(self, algorithm, place):
+        base = KEY_NAMES[algorithm]
+        if place == "live":
+            return base, base + ".pub"
+        backup = base + ".roseos-prev-" + OPERATION_ID
+        return backup, backup + ".pub"
+
+    def pair_status(self, algorithm, place):
+        """match, mismatch, or absent. Private bytes are not returned."""
+        if algorithm not in ALGORITHMS or not HEX32.fullmatch(OPERATION_ID):
+            return "mismatch"
+        private_name, public_name = self._pair_names(algorithm, place)
+        private_path = self._real("/etc/ssh/" + private_name)
+        public_path = self._real("/etc/ssh/" + public_name)
+        private_exists = os.path.lexists(private_path)
+        public_exists = os.path.lexists(public_path)
+        if not private_exists and not public_exists:
+            return "absent"
+        if not private_exists or not public_exists:
+            return "mismatch"
+        try:
+            private_type, private_fp = public_fingerprint_from_private(self._read_regular(private_name, 1 << 20))
+            public_type, public_fp = parse_public(self.ssh_public(public_name))
+        except (GuestRefused, OSError):
+            return "mismatch"
+        if private_type == public_type and private_fp == public_fp:
+            return "match"
+        return "mismatch"
+
+    def pairs_agree(self, algorithm):
+        """True when the live and backup public fingerprints are the same. No key bytes are returned."""
+        _live_private, live_public = self._pair_names(algorithm, "live")
+        _backup_private, backup_public = self._pair_names(algorithm, "backup")
+        try:
+            _live_type, live_fp = parse_public(self.ssh_public(live_public))
+            _backup_type, backup_fp = parse_public(self.ssh_public(backup_public))
+        except (GuestRefused, OSError):
+            return False
+        return live_fp == backup_fp
+
+    def restore_pair(self, algorithm):
+        """Copy both backup halves, private first. A single half is not copied."""
         if algorithm not in ALGORITHMS or not HEX32.fullmatch(OPERATION_ID):
             return False
-        restored = False
-        for suffix in ("", ".pub"):
-            prev = KEY_NAMES[algorithm] + ".roseos-prev-" + OPERATION_ID + suffix
-            if not os.path.lexists(self._real("/etc/ssh/" + prev)):
-                continue
-            self._copy_ssh(prev, KEY_NAMES[algorithm] + suffix, overwrite=True)
-            restored = True
-        return restored
+        if self.pair_status(algorithm, "backup") != "match":
+            return False
+        private_name, public_name = self._pair_names(algorithm, "backup")
+        live_private, live_public = self._pair_names(algorithm, "live")
+        self._copy_ssh(private_name, live_private, overwrite=True)
+        self._copy_ssh(public_name, live_public, overwrite=True)
+        return self.pair_status(algorithm, "live") == "match"
+
+    def ssh_restore(self, algorithm):
+        return self.restore_pair(algorithm)
 
     def ssh_drop_prev_private(self, algorithm):
         if algorithm not in ALGORITHMS or not HEX32.fullmatch(OPERATION_ID):
@@ -1030,6 +1516,28 @@ class LinuxHost:
         finally:
             os.close(fd)
         return data.decode()
+
+    def publish_hostkey_attributes(self, writes):
+        """PUT only a public blob. The private key file is not opened."""
+        if self.metadata:
+            return bool(self.metadata("publish-hostkeys", writes))
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        for key_type, blob in writes:
+            if key_type not in PUBLIC_TYPES.values():
+                raise GuestRefused("public-type")
+            if not isinstance(blob, str) or not re.fullmatch(r"[A-Za-z0-9+/]+=*", blob):
+                raise GuestRefused("public-blob")
+            if any(token in blob for token in ("BEGIN", "PRIVATE", "OPENSSH", " ", "\n")):
+                raise GuestRefused("private-attribute")
+            request = urllib.request.Request(
+                "http://metadata.google.internal/computeMetadata/v1/instance/guest-attributes/hostkeys/" + key_type,
+                data=blob.encode("ascii"), method="PUT", headers={"Metadata-Flavor": "Google"})
+            try:
+                with opener.open(request, timeout=5) as response:
+                    response.read(256)
+            except (OSError, urllib.error.URLError, ValueError):
+                return False
+        return True
 
     def ssh_generate(self, algorithm):
         if algorithm not in ALGORITHMS:
@@ -1065,6 +1573,11 @@ class LinuxHost:
             finally:
                 os.close(fd)
             os.rename(source, dest)
+        directory = os.open(self._real("/etc/ssh"), os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
 
     def ssh_discard_temp(self):
         removed = skipped = 0

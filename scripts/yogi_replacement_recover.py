@@ -56,6 +56,8 @@ BINDING_KEY = "roseos-yogi-recover-binding"
 BASE_METADATA = {"enable-oslogin": "FALSE", "block-project-ssh-keys": "TRUE"}
 BASE_ORDER = ("enable-oslogin", "block-project-ssh-keys")
 OUR_KEYS = ("startup-script", BINDING_KEY)
+GUEST_ATTRIBUTES_KEY = "enable-guest-attributes"
+HOSTKEY_PERMISSION = "compute.instances.getGuestAttributes"
 POLICY_SECONDS = 45 * 60
 CLEANUP_RESERVE_SECONDS = 10 * 60
 WORK_BUDGET_SECONDS = POLICY_SECONDS - CLEANUP_RESERVE_SECONDS
@@ -75,6 +77,9 @@ DOCS = {
     "startupScript": "https://docs.cloud.google.com/compute/docs/instances/startup-scripts/linux",
     "serialPort": "https://docs.cloud.google.com/compute/docs/troubleshooting/viewing-serial-port-output",
     "guestAttributes": "https://docs.cloud.google.com/compute/docs/metadata/manage-guest-attributes",
+    "guestAttributeHostKeys": "https://docs.cloud.google.com/solutions/connecting-securely",
+    "iapTcp": "https://docs.cloud.google.com/compute/docs/connect/ssh-using-iap",
+    "instanceIdentity": "https://docs.cloud.google.com/compute/docs/instances/verifying-instance-identity",
     "maxRunDuration": "https://docs.cloud.google.com/compute/docs/instances/limit-vm-runtime",
     "scheduling": "https://docs.cloud.google.com/compute/docs/instances/setting-instance-scheduling-options",
     "testIamPermissions": "https://docs.cloud.google.com/compute/docs/reference/rest/v1/instances/testIamPermissions",
@@ -102,6 +107,7 @@ SPENT_OPERATION_IDS = frozenset({
     "e75b0fd782e43f585c621c74f95bfa90",
     "5cf6fe9a62880b89ee6e7e822a0379d2",
     "20ef6008b1ef78137d201de13176af42",
+    "638e6e9039e41b7531697bb45066a616",
 })
 SPENT_ZONE_OPERATIONS = frozenset({
     "operation-1794025967141-65fa8387d4384-e9bed427-7ed969ab",
@@ -126,12 +132,15 @@ LIMITATIONS = (
     "unidentified-authorized-keys-are-preserved",
     "snapshot-restore-is-not-performed",
     "ssh-is-not-used",
-    "guest-attributes-are-not-trusted",
+    "gcloud-compute-ssh-is-not-used",
+    "iap-does-not-authenticate-the-ssh-host-key",
+    "guest-attributes-do-not-prove-an-honest-guest",
     "serial-output-is-guest-written",
     "unknown-host-key-names-stop-rotation",
     "unit-hardlink-or-unexpected-mode-is-not-changed",
     "metadata-write-is-single-attempt",
     "pending-zone-operation-is-waited-not-resubmitted",
+    "inspect-receipt-is-guest-evidence-not-a-pin",
     "urllib-metadata-client-is-not-a-fix-for-the-unknown-internal-error",
     "automatic-restart-can-reexecute-until-stop",
 )
@@ -223,13 +232,17 @@ def binding_canonical(operation_id, nonce, payload_sha):
                        "schema": guest.BINDING_SCHEMA}, sort_keys=True, separators=(",", ":"))
 
 
-def render_guest(operation_id, nonce, template, op_token="@@OP@@", nonce_token="@@NONCE@@"):
+def render_guest(operation_id, nonce, template, op_token="@@OP@@", nonce_token="@@NONCE@@", extra=None):
     if template.count(op_token) != 1 or template.count(nonce_token) != 1:
         raise Refused("guest template placeholders are not unique")
     if not HEX32.fullmatch(operation_id or "") or not HEX32.fullmatch(nonce or "") or operation_id == nonce:
         raise Refused("binding generator failed")
     rendered = template.replace(op_token, operation_id).replace(nonce_token, nonce)
-    if op_token in rendered or nonce_token in rendered:
+    for token, value in (extra or {}).items():
+        if template.count(token) != 1 or not isinstance(value, str) or "@@" in value:
+            raise Refused("guest template placeholders are not unique")
+        rendered = rendered.replace(token, value)
+    if op_token in rendered or nonce_token in rendered or any(token in rendered for token in (extra or {})):
         raise Refused("guest template placeholder remains")
     if not rendered.endswith("\n"):
         rendered += "\n"
@@ -277,11 +290,12 @@ def metadata_body(fingerprint, items):
     return {"fingerprint": fingerprint, "items": ordered}
 
 
-def removal_items(items, script, binding_text):
+def removal_items(items, script, binding_text, guest_attributes_before=None, publish=False):
     """Drop this operation's startup-script and binding only when the values match exactly.
 
-    Every other key, including a key added after our write, is copied through. A different value
-    in either of our key names is left untouched and no write is offered.
+    Every other key is copied through. A rotate-publish submission may also have added
+    enable-guest-attributes=TRUE. That key is removed only when this operation added it. A preexisting
+    TRUE or FALSE is restored to that exact value. A different value in a preserved key is not written.
     """
     if not isinstance(items, dict) or any(not isinstance(value, str) for value in items.values()):
         return None
@@ -297,7 +311,72 @@ def removal_items(items, script, binding_text):
         drop.add("startup-script")
     if items.get(BINDING_KEY) == binding_text:
         drop.add(BINDING_KEY)
-    return {key: value for key, value in items.items() if key not in drop}
+    kept = {key: value for key, value in items.items() if key not in drop}
+    if not publish:
+        return kept
+    if guest_attributes_before == "unknown":
+        return None
+    current = kept.get(GUEST_ATTRIBUTES_KEY)
+    if guest_attributes_before is None:
+        if current == "TRUE":
+            kept.pop(GUEST_ATTRIBUTES_KEY, None)
+        elif current is not None:
+            return None
+        return kept
+    if guest_attributes_before not in ("TRUE", "FALSE"):
+        return None
+    if current not in ("TRUE", "FALSE"):
+        return None
+    kept[GUEST_ATTRIBUTES_KEY] = guest_attributes_before
+    return kept
+
+
+def metadata_admission(items, mode):
+    """Base keys must match. Only rotate-publish may see other keys, and it keeps them."""
+    if not isinstance(items, dict):
+        return ["metadata"]
+    for key, value in BASE_METADATA.items():
+        if items.get(key) != value:
+            return ["metadata"]
+    if "startup-script" in items or BINDING_KEY in items:
+        return ["metadata"]
+    if mode != "rotate-publish":
+        return ["metadata"] if items != BASE_METADATA else []
+    flag = items.get(GUEST_ATTRIBUTES_KEY)
+    if flag is not None and flag not in ("TRUE", "FALSE"):
+        return ["metadata"]
+    for key, value in items.items():
+        if not isinstance(key, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,127}", key):
+            return ["metadata"]
+        if not isinstance(value, str) or len(value) > 32768:
+            return ["metadata"]
+    return []
+
+
+def metadata_submission(items, script, binding_text, publish):
+    """One setMetadata body. rotate-publish turns guest attributes on in this same map."""
+    intended = dict(items)
+    intended["startup-script"] = script
+    intended[BINDING_KEY] = binding_text
+    if publish:
+        intended[GUEST_ATTRIBUTES_KEY] = "TRUE"
+    return intended
+
+
+def publication_context(path):
+    """What this operation added, from started.json. Missing means do not touch the enable flag."""
+    try:
+        record = json.loads((Path(path) / "started.json").read_text())
+    except (OSError, ValueError):
+        return False, None
+    if not isinstance(record, dict) or record.get("publishHostkeys") is not True:
+        return False, None
+    if "guestAttributesBefore" not in record:
+        return True, "unknown"
+    before = record.get("guestAttributesBefore")
+    if before is not None and before not in ("TRUE", "FALSE"):
+        return True, "unknown"
+    return True, before
 
 
 def startup_script_absent(view):
@@ -671,11 +750,26 @@ def permissions_from_iam_body(parsed):
     return granted
 
 
-def iam_problems(found):
+def permissions_for(mode):
+    required = {target: list(names) for target, names in IAM_REQUIRED.items()}
+    if mode == "rotate-publish":
+        required["replacement"].append(HOSTKEY_PERMISSION)
+    return required
+
+
+def permissions_accepted(target):
+    base = list(IAM_REQUIRED[target])
+    accepted = [base]
+    if target == "replacement":
+        accepted.append(base + [HOSTKEY_PERMISSION])
+    return accepted
+
+
+def iam_problems(found, mode="repair"):
     if not isinstance(found, dict):
         return ["permission-check-failed"]
     problems = []
-    for target, required in IAM_REQUIRED.items():
+    for target, required in permissions_for(mode).items():
         granted = found.get(target)
         if not isinstance(granted, list):
             problems.append("permission-check-failed")
@@ -697,16 +791,18 @@ def account_problems(listing):
 
 def guard_request(request):
     if not isinstance(request, dict) or set(request) - {"kind", "target", "name", "zone", "start", "timeout",
-                                                       "fingerprint", "items", "permissions", "operationType"}:
+                                                       "fingerprint", "items", "permissions", "operationType", "query"}:
         raise Refused("control-plane request is outside the recovery set")
     kind, target = request.get("kind"), request.get("target", "none")
+    if "query" in request and (kind != "guest-attribute" or request.get("query") not in ("receipt", "hostkeys")):
+        raise Refused("control-plane request is outside the recovery set")
     if kind in ("operation-wait", "operation-get") and target == "replacement" \
             and request.get("zone", ZONE) == ZONE and request.get("operationType") in ("setMetadata", "start", "stop") \
             and "items" not in request and "fingerprint" not in request \
             and OPERATION_NAME.fullmatch(request.get("name") or "") and request.get("name") not in SPENT_ZONE_OPERATIONS:
         return request
     if kind == "test-iam" and target in IAM_REQUIRED and isinstance(request.get("permissions"), list) \
-            and request["permissions"] == list(IAM_REQUIRED[target]):
+            and request["permissions"] in permissions_accepted(target):
         return request
     if kind == "auth-list" and target == "none":
         return request
@@ -754,8 +850,9 @@ def gcloud_argv(request):
         return ["gcloud", "compute", "instances", "get-serial-port-output", INSTANCE, project, f"--zone={ZONE}",
                 "--port=1", f"--start={int(request['start'])}", "--format=json", "--quiet"]
     if kind == "guest-attribute":
+        query = "hostkeys/" if request.get("query") == "hostkeys" else "roseos-yogi-recover/receipt"
         return ["gcloud", "compute", "instances", "get-guest-attributes", INSTANCE, project, f"--zone={ZONE}",
-                "--query-path=roseos-yogi-recover/receipt", "--format=json", "--quiet"]
+                f"--query-path={query}", "--format=json", "--quiet"]
     raise Refused("control-plane request is outside the recovery set")
 
 
@@ -885,7 +982,7 @@ def logged(transport, log):
     return call
 
 
-def collect(call):
+def collect(call, mode="repair"):
     errors = []
 
     def grab(request):
@@ -915,13 +1012,13 @@ def collect(call):
     for target, _name in (("preserve", PRESERVE_SNAPSHOT), ("prekey", PREKEY_SNAPSHOT)):
         snapshot["snapshots"][target] = grab({"kind": "describe-snapshot", "target": target})
     snapshot["iam"] = {}
-    for target, permissions in IAM_REQUIRED.items():
+    for target, permissions in permissions_for(mode).items():
         found = grab({"kind": "test-iam", "target": target, "permissions": list(permissions)})
         snapshot["iam"][target] = None if not isinstance(found, dict) else found.get("permissions")
     return snapshot
 
 
-def apply_problems(snapshot):
+def apply_problems(snapshot, mode="repair"):
     problems = list(account_problems(snapshot.get("account")))
     problems += [f"replacement-{item}" for item in instance_problems(
         snapshot.get("replacement"), INSTANCE, ZONE, INSTANCE_ID)]
@@ -936,7 +1033,7 @@ def apply_problems(snapshot):
     if schedule:
         problems.append(schedule)
     view = metadata_view(replacement) if replacement else None
-    if view is None or view["items"] != BASE_METADATA:
+    if view is None or metadata_admission(view["items"], mode):
         problems.append("metadata")
     if replacement and boot_disk_name(replacement, ZONE) != DISK_NAME:
         problems.append("boot-disk")
@@ -955,7 +1052,7 @@ def apply_problems(snapshot):
     problems += [f"prekey-{item}" for item in snapshot_problems(
         (snapshot.get("snapshots") or {}).get("prekey"), PREKEY_SNAPSHOT, PREKEY_SNAPSHOT_ID)]
     problems += firewall_problems(snapshot.get("firewalls"), snapshot.get("replacement"))
-    problems += iam_problems(snapshot.get("iam"))
+    problems += iam_problems(snapshot.get("iam"), mode)
     if snapshot.get("errors"):
         problems.append("read-failed")
     return problems
@@ -1060,7 +1157,8 @@ def one_set(call, fingerprint, items, deadline=None, sleep=None):
     return attempt, after
 
 
-def restore_metadata(call, script, binding_text, deadline=None, sleep=None):
+def restore_metadata(call, script, binding_text, deadline=None, sleep=None, guest_attributes_before=None,
+                     publish=False):
     """One preserving removal of this operation's exact metadata values, then one readback. No second write."""
     try:
         current = metadata_view(call({"kind": "describe-instance", "target": "replacement"}))
@@ -1068,7 +1166,7 @@ def restore_metadata(call, script, binding_text, deadline=None, sleep=None):
         return "readback-failed", None
     if current is None:
         return "readback-failed", None
-    kept = removal_items(current["items"], script, binding_text)
+    kept = removal_items(current["items"], script, binding_text, guest_attributes_before, publish)
     if kept is None:
         return "skipped-foreign-value", current
     if kept == current["items"]:
@@ -1270,6 +1368,117 @@ def attribute_text(response):
     return found[0]
 
 
+def hostkey_consistency(response, serial_fingerprints):
+    """Compare a getGuestAttributes hostkeys/ read with a serial receipt's public fingerprints.
+
+    The API call is authenticated to this instance. The values were written by a process on that
+    guest. Equality with the serial receipt is consistency between two guest publications. It is
+    not a pin, not proof the guest is honest, and not an IAP result. IAP is not an input here:
+    an IAP tunnel selects the instance and does not check the SSH host key.
+    """
+    if not isinstance(serial_fingerprints, dict) or set(serial_fingerprints) != set(guest.ALGORITHMS) \
+            or any(not guest.FP.fullmatch(serial_fingerprints.get(alg) or "") for alg in guest.ALGORITHMS):
+        raise Refused("serial fingerprints are not a public host-key set")
+    if isinstance(response, dict) and response.get("absent") is True:
+        return _hostkey_verdict(False, absent=True)
+    items = _hostkey_items(response)
+    found = {}
+    by_alg = {}
+    for item in items:
+        namespace = item.get("namespace")
+        key = item.get("key")
+        value = item.get("value")
+        if namespace not in (None, "hostkeys") or not isinstance(key, str) or not isinstance(value, str):
+            raise Refused("hostkey attribute is not a public blob")
+        if any(token in value for token in ("BEGIN", "PRIVATE", "OPENSSH", " ", "\n", "\r")):
+            raise Refused("private-attribute")
+        try:
+            key_type, fingerprint = guest.parse_public(key + " " + value.strip())
+        except guest.GuestRefused:
+            raise Refused("hostkey attribute is not a public blob") from None
+        if key_type != key:
+            raise Refused("hostkey attribute is not a public blob")
+        if key_type in found:
+            raise Refused("hostkey attribute is not a public blob")
+        found[key_type] = fingerprint
+        matched = [alg for alg, kind in guest.PUBLIC_TYPES.items() if kind == key_type]
+        if len(matched) != 1:
+            raise Refused("hostkey attribute is not a public blob")
+        by_alg[matched[0]] = fingerprint
+    expected = {guest.PUBLIC_TYPES[alg]: serial_fingerprints[alg] for alg in guest.ALGORITHMS}
+    return _hostkey_verdict(found == expected, fingerprints=by_alg)
+
+
+def _hostkey_verdict(consistent, absent=False, fingerprints=None):
+    return {
+        "binding": "control-plane-read-of-this-instance-metadata-server",
+        "namespace": "hostkeys",
+        "consistentWithSerial": consistent,
+        "absent": absent,
+        "fingerprints": fingerprints or {},
+        "serialRole": "consistency-only",
+        "pinned": False,
+        "honestGuest": False,
+        "iapAuthenticatesHostKey": False,
+        "requiresGuestServiceAccount": False,
+    }
+
+
+def _hostkey_items(response):
+    if isinstance(response, list):
+        return response
+    if not isinstance(response, dict):
+        raise Refused("hostkey attribute is not a public blob")
+    query = response.get("queryValue")
+    items = query.get("items") if isinstance(query, dict) else None
+    if isinstance(items, list):
+        return items
+    raise Refused("hostkey attribute is not a public blob")
+
+
+def hostkey_observation_phase(mode):
+    """rotate-publish enables guest attributes in the same setMetadata. Default rotate does neither."""
+    publish = mode == "rotate-publish"
+    return {
+        "publishHostkeys": publish,
+        "enable": "same-setMetadata-temporary-TRUE" if publish else "not-this-mode",
+        "preservesForeignMetadata": publish,
+        "restoresPreexistingEnableFlag": publish,
+        "projectMetadata": "unchanged",
+        "osLogin": "stays-FALSE",
+        "preflightPermission": HOSTKEY_PERMISSION if publish else "not-required",
+        "publishFailure": "partial-no-second-rotation-cleanup-and-stop" if publish else "not-this-mode",
+        "read": "one-getGuestAttributes-hostkeys-on-this-instance" if publish else "not-this-mode",
+        "serial": "consistency-with-operation-and-nonce",
+        "pinned": False,
+        "honestGuest": False,
+        "iapAuthenticatesHostKey": False,
+        "ssh": False,
+        "gcloudComputeSsh": "refused",
+        "privateKeyInAttributes": False,
+        "tofu": False,
+    }
+
+
+def read_published_hostkeys(call, rotated, expected_baseline):
+    """One getGuestAttributes of hostkeys/ on this instance. No retry and no SSH."""
+    try:
+        observed = call({"kind": "guest-attribute", "target": "replacement", "query": "hostkeys", "timeout": 30})
+    except TransportError:
+        return False, "hostkey-read-failed", "failed"
+    try:
+        verdict = hostkey_consistency(observed, rotated)
+    except Refused:
+        return False, "hostkey-malformed", "malformed"
+    if verdict["absent"]:
+        return False, "hostkey-absent", "absent"
+    if isinstance(expected_baseline, dict) and verdict["fingerprints"] == expected_baseline:
+        return False, "hostkey-stale", "stale"
+    if not verdict["consistentWithSerial"]:
+        return False, "hostkey-mismatch", "mismatch"
+    return True, "read", "matched"
+
+
 def attribute_state(call, receipt):
     try:
         response = call({"kind": "guest-attribute", "target": "replacement", "timeout": 30})
@@ -1308,11 +1517,56 @@ def head_revision(repo):
     return revision
 
 
-def plan(operator, out, now=None, token=None, revision=None, repo=ROOT, template=None, env=None, mode="repair"):
+def baseline_commitment(baseline):
+    """SHA-256 of the three public fingerprints. This is not a host-key pin."""
+    if not isinstance(baseline, dict):
+        raise Refused("inspect baseline commitment does not match the reviewed receipt")
+    payload = json.dumps({alg: baseline.get(alg) for alg in guest.ALGORITHMS}, sort_keys=True, separators=(",", ":"))
+    return sha256_bytes(payload.encode())
+
+
+def inspect_evidence_problems(receipt):
+    """The inspect receipt is evidence the operator reviewed. It is not authority to pin a host key."""
+    if not isinstance(receipt, dict):
+        return ["inspect-evidence"]
+    unit, runner, keys, cleanup = receipt.get("unit") or {}, receipt.get("runner") or {}, receipt.get("hostKeys") or {}, receipt.get("cleanup") or {}
+    journal = receipt.get("journal") if isinstance(receipt.get("journal"), dict) else {}
+    problems = []
+    if receipt.get("purpose") != "inspect" or receipt.get("status") not in ("complete", "refused"):
+        problems.append("inspect-evidence")
+    if unit.get("action") != "not-modified" or unit.get("problem") != "already-0644":
+        problems.append("inspect-unit")
+    if (unit.get("beforeMode"), unit.get("afterMode")) != ("0644", "0644"):
+        problems.append("inspect-mode")
+    if (unit.get("beforeSize"), unit.get("afterSize")) != (guest.UNIT_SIZE, guest.UNIT_SIZE):
+        problems.append("inspect-size")
+    if (unit.get("beforeUid"), unit.get("beforeGid"), unit.get("afterUid"), unit.get("afterGid")) != (0, 0, 0, 0):
+        problems.append("inspect-owner")
+    if runner != {"active": "inactive", "enabled": "disabled", "process": False}:
+        problems.append("inspect-runner")
+    baseline = keys.get("baseline")
+    if not isinstance(baseline, dict) or set(baseline) != set(guest.ALGORITHMS) \
+            or any(not guest.FP.fullmatch(baseline.get(alg) or "") for alg in guest.ALGORITHMS):
+        problems.append("inspect-baseline")
+    if keys.get("rotated") not in ({},) or keys.get("distinctFromClonedBaseline") is not False \
+            or keys.get("unknownHostKeyCount") != 0 or keys.get("rolledBack") is not False:
+        problems.append("inspect-rotation")
+    if cleanup.get("linesRemoved") != 0 or cleanup.get("tempFilesRemoved") != 0 \
+            or cleanup.get("unidentifiedAuthorizedKeyLines") != 0 or cleanup.get("temporaryAccount") != "absent":
+        problems.append("inspect-cleanup")
+    if not isinstance(journal.get("unrecognized", 0), int) or not 0 <= journal.get("unrecognized", 0) <= 20:
+        problems.append("inspect-journal")
+    if not guest.HEX32.fullmatch(receipt.get("operationId") or ""):
+        problems.append("inspect-evidence")
+    return problems
+
+
+def plan(operator, out, now=None, token=None, revision=None, repo=ROOT, template=None, env=None, mode="repair",
+         inspect_receipt=None, confirm_inspect_operation=None, confirm_baseline=None):
     manual_context(env if env is not None else os.environ)
     now = now or now_utc()
-    if mode not in ("repair", "inspect"):
-        raise Refused("mode must be repair or inspect")
+    if mode not in ("repair", "inspect", "rotate", "rotate-publish"):
+        raise Refused("mode must be repair, inspect, rotate, or rotate-publish")
     if not isinstance(operator, str) or not OPERATOR.fullmatch(operator):
         raise Refused("operator name is empty or uses unsupported characters")
     if revision is None:
@@ -1328,16 +1582,41 @@ def plan(operator, out, now=None, token=None, revision=None, repo=ROOT, template
         raise Refused("binding generator failed")
     if operation_id in SPENT_OPERATION_IDS or nonce in SPENT_OPERATION_IDS:
         raise Refused("this operation id was already used and its preflight expired; plan a new binding")
+    evidence = None
+    if mode in ("rotate", "rotate-publish"):
+        try:
+            evidence = json.loads(Path(inspect_receipt).read_text())
+        except (OSError, TypeError, ValueError):
+            raise Refused("rotate requires the reviewed inspect receipt") from None
+        evidence_problems = inspect_evidence_problems(evidence)
+        if evidence_problems:
+            raise Refused("inspect receipt is not a usable rotation baseline")
+        if evidence["operationId"] in (operation_id, nonce):
+            raise Refused("inspect evidence is not a new binding")
+        if confirm_inspect_operation != evidence["operationId"]:
+            raise Refused("inspect operation id does not match the reviewed receipt")
+        if confirm_baseline != baseline_commitment(evidence["hostKeys"]["baseline"]):
+            raise Refused("inspect baseline commitment does not match the reviewed receipt")
+        raw_evidence = Path(inspect_receipt).read_text()
+        if any(token in raw_evidence for token in ("BEGIN ", "PRIVATE", "OPENSSH")):
+            raise Refused("inspect receipt contains key material")
     if template is None:
         if mode == "inspect":
             template = guest.inspect_template()
             op_token, nonce_token = "@@INSPECT_OP@@", "@@INSPECT_NONCE@@"
+            extra = None
         else:
             template = (HERE / "yogi_replacement_recover_guest.py").read_text()
             op_token, nonce_token = "@@OP@@", "@@NONCE@@"
+            baseline = evidence["hostKeys"]["baseline"] if evidence else {}
+            extra = {"@@PURPOSE@@": mode if mode in ("rotate", "rotate-publish") else "repair",
+                     "@@FP_ED25519@@": baseline.get("ed25519", "unused"),
+                     "@@FP_ECDSA@@": baseline.get("ecdsa", "unused"),
+                     "@@FP_RSA@@": baseline.get("rsa", "unused")}
     else:
         op_token, nonce_token = ("@@INSPECT_OP@@", "@@INSPECT_NONCE@@") if mode == "inspect" else ("@@OP@@", "@@NONCE@@")
-    rendered = render_guest(operation_id, nonce, template, op_token, nonce_token)
+        extra = None
+    rendered = render_guest(operation_id, nonce, template, op_token, nonce_token, extra)
     payload_sha = sha256_bytes(rendered.encode())
     reject_historical(operation_id, nonce, payload_sha)
     script = startup_script(rendered, payload_sha, operation_id)
@@ -1349,7 +1628,10 @@ def plan(operator, out, now=None, token=None, revision=None, repo=ROOT, template
     (out / "startup-script.sh").write_text(script)
     (out / "binding.json").write_text(binding_canonical(operation_id, nonce, payload_sha) + "\n")
     document = {
-        "schema": PLAN_SCHEMA, "mode": mode, "repairsGuest": mode == "repair", "dryRun": True, "executed": False, "liveRecovery": False, "hostKeyPinned": False,
+        "schema": PLAN_SCHEMA, "mode": mode, "repairsGuest": mode == "repair",
+        "rotatesHostKeys": mode in ("rotate", "rotate-publish"),
+        "publishHostkeys": mode == "rotate-publish",
+        "dryRun": True, "executed": False, "liveRecovery": False, "hostKeyPinned": False,
         "claim": "procedure-evidence-only", "operationId": operation_id, "nonce": nonce,
         "payloadSha256": payload_sha, "startupScriptSha256": sha256_bytes(script.encode()),
         "templateSha256": sha256_bytes(template.encode()), "sourceRevision": revision, "operator": operator,
@@ -1366,18 +1648,49 @@ def plan(operator, out, now=None, token=None, revision=None, repo=ROOT, template
                      "originalInstanceId": ORIGINAL_INSTANCE_ID, "originalDiskId": ORIGINAL_DISK_ID,
                      "snapshots": [{"name": PRESERVE_SNAPSHOT, "id": PRESERVE_SNAPSHOT_ID},
                                    {"name": PREKEY_SNAPSHOT, "id": PREKEY_SNAPSHOT_ID}]},
-        "metadataBefore": BASE_METADATA, "metadataAdded": list(OUR_KEYS),
-        "unit": {"path": guest.UNIT_PATH, "beforeMode": "0664", "afterMode": "0644", "size": guest.UNIT_SIZE,
+        "metadataBefore": BASE_METADATA,
+        "metadataAdded": list(OUR_KEYS) + ([GUEST_ATTRIBUTES_KEY] if mode == "rotate-publish" else []),
+        "unit": {"path": guest.UNIT_PATH,
+                 "beforeMode": "0644" if mode in ("rotate", "rotate-publish") else "0664",
+                 "afterMode": "0644", "size": guest.UNIT_SIZE,
                  "owner": "root:root", "runner": "inactive/disabled"},
-        "hostKeys": {"inventory": list(guest.INVENTORY), "rotate": list(guest.ALGORITHMS),
+        "hostKeys": {"inventory": list(guest.INVENTORY),
+                     "rotate": list(guest.ALGORITHMS) if mode != "inspect" else [],
                      "baseline": "public fingerprints read on this boot of the replacement disk"},
+        "inspectEvidence": None if evidence is None else {
+            "role": "guest-evidence-not-authority", "operationId": evidence["operationId"],
+            "baseline": evidence["hostKeys"]["baseline"],
+            "baselineCommitment": baseline_commitment(evidence["hostKeys"]["baseline"]),
+            "journalUnrecognized": evidence.get("journal", {}).get("unrecognized", 0),
+            "priorCompletePhaseIsNotAuthority": True, "hostKeyPinned": False,
+            "distinctFromOriginalVerified": False},
+        "hostIdentity": {
+            "pinned": False, "serialTrustedForPin": False, "repeatedGuestReportIsProof": False,
+            "instanceIdentityToken": "unavailable-no-guest-service-account-and-does-not-carry-ssh-host-key",
+            "privateKeyDelivery": "refused",
+            "iapAuthenticatesHostKey": False,
+            "gcloudComputeSsh": "refused-implicit-metadata-and-known-hosts-writes",
+            "guestAttributes": {
+                "requiresGuestServiceAccount": False,
+                "enabledOnThisInstance": False,
+                "namespace": "hostkeys",
+                "publisher": "rotate-publish-public-blob-only" if mode == "rotate-publish" else "not-this-mode",
+                "stockAgent": "version-dependent-publishes-on-generation-only",
+                "controlPlaneRead": "getGuestAttributes-names-this-instance",
+                "serialRole": "consistency-only",
+                "networkWrongHost": "control-plane-binding-when-the-attribute-is-enabled-and-read-back",
+                "compromisedGuest": "not-a-defense",
+            },
+            "nextPhase": hostkey_observation_phase(mode),
+        },
         "cleanup": {"authorizedKeyComment": "roseos-yogi-recover-<operationId>",
                     "temporaryAccount": guest.TEMP_ACCOUNT, "paths": list(guest.AUTH_PATHS)},
         "route": "gce-metadata-startup-script-and-bounded-serial-read",
         "docs": DOCS, "operatorAccount": OPERATOR_ACCOUNT,
         "permissionsExpected": ["compute.instances.get", "compute.instances.setMetadata", "compute.instances.start",
                                 "compute.instances.stop", "compute.instances.getSerialPortOutput",
-                                "compute.disks.get", "compute.snapshots.get", "compute.firewalls.list"],
+                                "compute.disks.get", "compute.snapshots.get", "compute.firewalls.list"]
+                               + ([HOSTKEY_PERMISSION] if mode == "rotate-publish" else []),
         "permissionsRefused": ["compute.instances.setMetadata on the original", "setCommonInstanceMetadata",
                                "setIamPolicy", "snapshots.useReadOnly", "instances.delete"],
         "limitations": list(LIMITATIONS), "historicalReference": HISTORICAL,
@@ -1456,8 +1769,9 @@ def preflight(path, confirm, execute=False, transport=None, now=None, env=None):
             raise Refused("preflight is read-only and cannot start, stop, or set metadata")
         return transport(request)
 
-    snapshot = collect(logged(readonly, log))
-    problems = apply_problems(snapshot)
+    mode = loaded["plan"].get("mode", "repair")
+    snapshot = collect(logged(readonly, log), mode)
+    problems = apply_problems(snapshot, mode)
     view = metadata_view(snapshot.get("replacement")) if isinstance(snapshot.get("replacement"), dict) else None
     moment = now or now_utc()
     record = {"schema": PREFLIGHT_SCHEMA, "operationId": loaded["binding"]["operationId"],
@@ -1573,9 +1887,11 @@ def apply(path, confirm, execute=False, transport=None, now=None, clock=None, sl
         if fields.get("metadata") == "readback-failed":
             restore, after = "not-attempted-readback-failed", None
         else:
+            publish, attributes_before = publication_context(op)
             try:
                 restore, after = restore_metadata(
-                    call, script, binding_text, Deadline(clock_fn, METADATA_WAIT_SECONDS), sleep_fn)
+                    call, script, binding_text, Deadline(clock_fn, METADATA_WAIT_SECONDS), sleep_fn,
+                    attributes_before, publish)
             except Exception:
                 restore, after = "seal-failed", None
         try:
@@ -1598,6 +1914,19 @@ def apply(path, confirm, execute=False, transport=None, now=None, clock=None, sl
             fields["result"] = "inspect-complete"
             fields["repairSucceeded"] = False
             code = 0
+        elif mode == "rotate" and guest_ok and restored and stopped and fields.get("metadata") == "clean":
+            fields["result"] = "rotate-complete-guest-reported"
+            fields["repairSucceeded"] = False
+            fields["rotationSucceeded"] = True
+            fields["hostKeyPinned"] = False
+            code = 0
+        elif mode == "rotate-publish" and guest_ok and restored and stopped and fields.get("metadata") == "clean":
+            fields["result"] = "rotate-publish-complete"
+            fields["repairSucceeded"] = False
+            fields["rotationSucceeded"] = True
+            fields["hostkeysPublished"] = True
+            fields["hostKeyPinned"] = False
+            code = 0
         elif mode == "repair" and guest_ok and restored and stopped and fields.get("metadata") == "clean":
             fields["result"] = "procedure-complete-guest-reported"
             fields["repairSucceeded"] = True
@@ -1605,14 +1934,18 @@ def apply(path, confirm, execute=False, transport=None, now=None, clock=None, sl
         else:
             fields.setdefault("result", "halted-" + str(reason))
             fields["repairSucceeded"] = False
-            if fields["result"] in ("procedure-complete-guest-reported", "inspect-complete"):
+            if fields["result"] in ("procedure-complete-guest-reported", "inspect-complete",
+                                    "rotate-complete-guest-reported", "rotate-publish-complete"):
                 fields["result"] = "halted-stop"
             code = 1
         return _write_outcome(op, outcome_shell(**fields), code)
 
     def body():
-        snapshot = collect(call)
-        problems = apply_problems(snapshot)
+        mode = loaded["plan"].get("mode")
+        if mode not in ("inspect", "repair", "rotate", "rotate-publish"):
+            raise Refused("operation mode is not inspect, repair, rotate, or rotate-publish")
+        snapshot = collect(call, mode)
+        problems = apply_problems(snapshot, mode)
         view = metadata_view(snapshot.get("replacement")) if isinstance(snapshot.get("replacement"), dict) else None
         preserved = observed_ids(snapshot)
         if problems or view is None:
@@ -1621,14 +1954,15 @@ def apply(path, confirm, execute=False, transport=None, now=None, clock=None, sl
         if not ids_match(preserved):
             return seal({"result": "preserved-id-mismatch", "operationId": binding["operationId"], "requests": log,
                          "metadata": "not-attempted", "preserved": preserved})
-        if view["fingerprint"] != pre["fingerprint"] or view["items"] != BASE_METADATA:
+        if view["fingerprint"] != pre["fingerprint"] or metadata_admission(view["items"], mode):
             return seal({"result": "stale-fingerprint", "operationId": binding["operationId"], "requests": log,
                          "metadata": "not-attempted", "preserved": preserved})
-        intended = dict(BASE_METADATA)
-        intended["startup-script"] = script
-        intended[BINDING_KEY] = binding_text
+        publish = mode == "rotate-publish"
+        intended = metadata_submission(view["items"], script, binding_text, publish)
         exclusive_json(op / "started.json", {"operationId": binding["operationId"], "nonce": binding["nonce"],
-                                            "fingerprint": view["fingerprint"], "at": stamp(moment)})
+                                            "fingerprint": view["fingerprint"], "at": stamp(moment),
+                                            "publishHostkeys": publish,
+                                            "guestAttributesBefore": view["items"].get(GUEST_ATTRIBUTES_KEY)})
         state["marker"] = True
         attempt, after = one_set(call, view["fingerprint"], intended,
                                  Deadline(clock_fn, METADATA_WAIT_SECONDS), sleep_fn)
@@ -1664,10 +1998,32 @@ def apply(path, confirm, execute=False, transport=None, now=None, clock=None, sl
         attribute = None
         guest_ok = False
         mode = loaded["plan"].get("mode")
-        if mode not in ("inspect", "repair"):
-            raise Refused("operation mode is not inspect or repair")
+        if mode not in ("inspect", "repair", "rotate", "rotate-publish"):
+            raise Refused("operation mode is not inspect, repair, rotate, or rotate-publish")
         if mode == "inspect":
             guest_ok = bool(receipt) and reason == "read" and inspect_reported(receipt)
+        elif mode == "rotate" and receipt is not None and reason == "read":
+            expected = (loaded["plan"].get("inspectEvidence") or {}).get("baseline")
+            attribute = attribute_state(call, receipt)
+            if attribute == "mismatch":
+                reason = "attribute-mismatch"
+            elif attribute == "failed":
+                reason = "attribute-failed"
+            elif guest.rotate_success_problems(receipt, expected):
+                reason = "guest-incomplete"
+            else:
+                guest_ok = True
+        elif mode == "rotate-publish" and receipt is not None and reason == "read":
+            expected = (loaded["plan"].get("inspectEvidence") or {}).get("baseline")
+            if guest.rotate_success_problems(receipt, expected, purpose="rotate-publish") \
+                    or receipt.get("operationId") != binding["operationId"] \
+                    or receipt.get("nonce") != binding["nonce"]:
+                reason = "guest-incomplete"
+            elif work.expired():
+                reason = "budget"
+            else:
+                guest_ok, reason, attribute = read_published_hostkeys(
+                    call, receipt["hostKeys"]["rotated"], expected)
         elif receipt is not None and reason == "read":
             attribute = attribute_state(call, receipt)
             if attribute == "mismatch":
@@ -1721,7 +2077,9 @@ def cleanup(path, confirm, execute=False, transport=None, now=None, env=None):
                                  stop=stop, preserved=preserved, preservedIdsMatch=ids_match(preserved),
                                  startupScriptRemoved=False, exit=1)
     else:
-        restore, after = restore_metadata(call, script, binding_text)
+        publish, attributes_before = publication_context(loaded["path"])
+        restore, after = restore_metadata(call, script, binding_text, guest_attributes_before=attributes_before,
+                                         publish=publish)
         stop = ensure_stopped(call, instance.get("status") != "TERMINATED", time.monotonic, time.sleep)
         removed = startup_script_absent(after) or restore in ("already-base", "clean")
         code = 0 if restore in ("clean", "already-base") and removed and stop in (
@@ -1862,7 +2220,10 @@ def main(argv, transport=None, now=None, clock=None, sleep=None, env=None, token
     planned = sub.add_parser("plan")
     planned.add_argument("--operator", required=True)
     planned.add_argument("--out", required=True)
-    planned.add_argument("--mode", choices=("repair", "inspect"), default="repair")
+    planned.add_argument("--mode", choices=("repair", "inspect", "rotate", "rotate-publish"), default="repair")
+    planned.add_argument("--inspect-receipt")
+    planned.add_argument("--confirm-inspect-operation")
+    planned.add_argument("--confirm-baseline")
     sub.add_parser("self-check")
     exported = sub.add_parser("export-bundle")
     exported.add_argument("--out", required=True)
@@ -1878,7 +2239,10 @@ def main(argv, transport=None, now=None, clock=None, sleep=None, env=None, token
         elif args.command == "self-check":
             result, code = self_check(), 0
         elif args.command == "plan":
-            document = plan(args.operator, args.out, now=now, token=token, revision=revision, env=env, mode=args.mode)
+            document = plan(args.operator, args.out, now=now, token=token, revision=revision, env=env,
+                            mode=args.mode, inspect_receipt=args.inspect_receipt,
+                            confirm_inspect_operation=args.confirm_inspect_operation,
+                            confirm_baseline=args.confirm_baseline)
             result, code = {"dryRun": True, "executed": False, "operationId": document["operationId"],
                             "payloadSha256": document["payloadSha256"],
                             "startupScriptSha256": document["startupScriptSha256"],
