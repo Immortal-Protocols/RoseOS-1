@@ -125,6 +125,12 @@ class RoseShadeTest(unittest.TestCase):
         insets = flat(code[code.index('mRoot.setOnApplyWindowInsetsListener'):])
         self.assertIn('WindowInsets.Type.ime() | WindowInsets.Type.navigationBars()', insets)
         self.assertIn('mReplies.inputSurfaceChanged();', insets)
+        # The raised chin's systemOverlays() inset (never navigationBars(), which an immersive app could hide):
+        # the panel and the scrim both stop above it.
+        self.assertIn('WindowInsets.Type.ime() | WindowInsets.Type.navigationBars() | '
+            'WindowInsets.Type.systemOverlays()).bottom;', insets)
+        self.assertIn('final int chin = insets.getInsets(WindowInsets.Type.systemOverlays()).bottom;', insets)
+        self.assertIn('scrim.bottomMargin = chin;', insets)
         close = flat(method(code, 'void close()'))
         self.assertNotIn('mReplies', close)
         # Back: keyboard, then quick settings, then the shade (RoseShadeModel.back).
