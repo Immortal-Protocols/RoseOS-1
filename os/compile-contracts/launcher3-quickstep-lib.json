@@ -848,6 +848,15 @@
       "packages/SystemUI/AndroidManifest.xml",
       "packages/SystemUI/assets/fonts/Nunito.ttf",
       "packages/SystemUI/assets/licenses/Nunito-OFL.txt",
+      "packages/SystemUI/src/com/android/systemui/roseshade/RoseQuickSettings.java",
+      "packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeController.java",
+      "packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeDrag.java",
+      "packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeIcons.java",
+      "packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeModel.java",
+      "packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeModule.java",
+      "packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeReplies.java",
+      "packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeStartable.java",
+      "packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeSystem.java",
       "packages/SystemUI/src/com/android/systemui/statusbar/phone/PhoneStatusBarView.java",
       "packages/SystemUI/src/com/android/systemui/statusbar/phone/PixelStatusBarFilter.java",
       "packages/SystemUI/src/com/android/systemui/statusbar/pipeline/shared/ui/composable/StatusBarRoot.kt",
@@ -1485,6 +1494,42 @@
    "role": "notAnInput"
   },
   {
+   "target": "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseQuickSettings.java",
+   "role": "notAnInput"
+  },
+  {
+   "target": "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeController.java",
+   "role": "notAnInput"
+  },
+  {
+   "target": "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeDrag.java",
+   "role": "notAnInput"
+  },
+  {
+   "target": "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeIcons.java",
+   "role": "notAnInput"
+  },
+  {
+   "target": "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeModel.java",
+   "role": "notAnInput"
+  },
+  {
+   "target": "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeModule.java",
+   "role": "notAnInput"
+  },
+  {
+   "target": "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeReplies.java",
+   "role": "notAnInput"
+  },
+  {
+   "target": "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeStartable.java",
+   "role": "notAnInput"
+  },
+  {
+   "target": "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeSystem.java",
+   "role": "notAnInput"
+  },
+  {
    "target": "frameworks/base/packages/SystemUI/src/com/android/systemui/statusbar/phone/PixelStatusBarFilter.java",
    "role": "notAnInput"
   },
@@ -1658,6 +1703,15 @@
     "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/StatusVoiceGlow.java",
     "frameworks/base/packages/SystemUI/assets/fonts/Nunito.ttf",
     "frameworks/base/packages/SystemUI/assets/licenses/Nunito-OFL.txt",
+    "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseQuickSettings.java",
+    "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeController.java",
+    "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeDrag.java",
+    "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeIcons.java",
+    "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeModel.java",
+    "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeModule.java",
+    "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeReplies.java",
+    "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeStartable.java",
+    "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeSystem.java",
     "frameworks/base/packages/SystemUI/src/com/android/systemui/statusbar/phone/PixelStatusBarFilter.java"
    ]
   },
@@ -2439,6 +2493,15 @@
        "packages/SystemUI/AndroidManifest.xml",
        "packages/SystemUI/assets/fonts/Nunito.ttf",
        "packages/SystemUI/assets/licenses/Nunito-OFL.txt",
+       "packages/SystemUI/src/com/android/systemui/roseshade/RoseQuickSettings.java",
+       "packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeController.java",
+       "packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeDrag.java",
+       "packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeIcons.java",
+       "packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeModel.java",
+       "packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeModule.java",
+       "packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeReplies.java",
+       "packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeStartable.java",
+       "packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeSystem.java",
        "packages/SystemUI/src/com/android/systemui/statusbar/phone/PhoneStatusBarView.java",
        "packages/SystemUI/src/com/android/systemui/statusbar/phone/PixelStatusBarFilter.java",
        "packages/SystemUI/src/com/android/systemui/statusbar/pipeline/shared/ui/composable/StatusBarRoot.kt",
@@ -3013,6 +3076,42 @@
     "role": "notAnInput"
    },
    {
+    "target": "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseQuickSettings.java",
+    "role": "notAnInput"
+   },
+   {
+    "target": "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeController.java",
+    "role": "notAnInput"
+   },
+   {
+    "target": "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeDrag.java",
+    "role": "notAnInput"
+   },
+   {
+    "target": "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeIcons.java",
+    "role": "notAnInput"
+   },
+   {
+    "target": "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeModel.java",
+    "role": "notAnInput"
+   },
+   {
+    "target": "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeModule.java",
+    "role": "notAnInput"
+   },
+   {
+    "target": "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeReplies.java",
+    "role": "notAnInput"
+   },
+   {
+    "target": "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeStartable.java",
+    "role": "notAnInput"
+   },
+   {
+    "target": "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeSystem.java",
+    "role": "notAnInput"
+   },
+   {
     "target": "frameworks/base/packages/SystemUI/src/com/android/systemui/statusbar/phone/PixelStatusBarFilter.java",
     "role": "notAnInput"
    },
@@ -3471,6 +3570,15 @@
     "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/StatusVoiceGlow.java",
     "frameworks/base/packages/SystemUI/assets/fonts/Nunito.ttf",
     "frameworks/base/packages/SystemUI/assets/licenses/Nunito-OFL.txt",
+    "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseQuickSettings.java",
+    "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeController.java",
+    "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeDrag.java",
+    "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeIcons.java",
+    "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeModel.java",
+    "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeModule.java",
+    "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeReplies.java",
+    "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeStartable.java",
+    "frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeSystem.java",
     "frameworks/base/packages/SystemUI/src/com/android/systemui/statusbar/phone/PixelStatusBarFilter.java"
    ],
    "rule": "exact target only: present with any bytes, or absent; excluded from its project's treePin by exact path (treePin.unlisted.excludedPaths); never a source of Launcher3QuickStepLib, a compileGoals entry or a flagEvidence input. Adding or removing one changes the contract"

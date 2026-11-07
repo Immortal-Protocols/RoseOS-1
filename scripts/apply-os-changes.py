@@ -108,6 +108,8 @@ if a.background_policy:
         'rose-edge-resize-launcher3.patch']
     # #410: WMShell's real app resize and the edge's mic slot (OS Core, #516/#523/#528).
     projects['frameworks/base'].append('rose-edge-wmshell.patch')
+    # 1G: the Rose notification shade's one SystemUI binding (OS Core): RoseShadeModule in ReferenceSystemUIModule.
+    projects['frameworks/base'].append('rose-shade-systemui.patch')
     # #410: the edge's switch (persist.wm.debug.rose_edge); the mic slot is the tray's own control, so with the tray.
     if a.agent_tray:projects['build/make'].append('rose-edge-build-make.patch')
 preinstalls = preinstall_plan(policy, a.preinstall_apk) if a.preinstall_apk else []

@@ -33,7 +33,7 @@ class Launcher3CompileContractTest(unittest.TestCase):
     SCRIPT = ROOT/'scripts/launcher3-compile-contract.py'
     MANIFEST = ROOT/'os/compile-contracts/launcher3-quickstep-lib.json'
     # The agreed version (#410). Changing the manifest changes this, and the change needs re-agreement with Release.
-    AGREED_SHA256 = 'd7a6b1735754b1eca7caef5bc08fef3c9a11dd5f31f3521dada8a990f3878e9a'
+    AGREED_SHA256 = '272bf259d71d4b8949fbd068d4fd5590d8b07e5a3641a75128d13d7bf2e5c0e8'
 
     def contract(self):
         import importlib.util
@@ -607,13 +607,13 @@ class Launcher3CompileContractTest(unittest.TestCase):
             self.assertEqual(ids, [i for _, i in bodies], f'{project["path"]}: every tree object as git hashes it')
 
     def test_not_an_input_overlays_are_exact_excluded_and_unused(self):
-        """M4: the seven notAnInput overlays keep exact targets, are excluded from frameworks/base's treePin by exact
+        """M4: the sixteen notAnInput overlays (seven, then 1G's nine roseshade sources) keep exact targets, are excluded from frameworks/base's treePin by exact
         path, and none is a compile goal, a flagEvidence input or inside Launcher3 or build/release. Required overlays
         stay pinned by sha256."""
         manifest = self.manifest()
         roles = manifest['overlayRoles']
         not_input = roles['notAnInput']['targets']
-        self.assertEqual(len(not_input), 7)
+        self.assertEqual(len(not_input), 16)
         self.assertEqual(not_input, [o['target'] for o in manifest['overlays'] if o['role'] == 'notAnInput'])
         self.assertEqual(not_input, [o['target'] for o in manifest['base']['overlays'] if o['role'] == 'notAnInput'])
         self.assertEqual(not_input, manifest['base']['bundleContent']['notAnInputOverlays'])
