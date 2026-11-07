@@ -3,7 +3,8 @@
 
 A GitHub-hosted job mints one just-in-time config for runner group 5, then
 places it in this VM's instance metadata. The guest unit, running as
-mustang-runner, reads that key once, starts run.sh --jitconfig, and deletes
+mustang-runner, reads that key once, starts run.sh with the encoded config
+in ACTIONS_RUNNER_INPUT_JITCONFIG, and deletes
 the local copy. Source stays outside the runner work directory. Cleanup and
 the queue watchdog remove the metadata key. Nothing here mints a token unless
 --execute is passed, and --execute is not used by the tests.

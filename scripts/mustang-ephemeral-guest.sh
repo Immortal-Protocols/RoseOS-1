@@ -29,10 +29,19 @@ find "$install" -maxdepth 1 -name 'jit.*' -type f -delete
 file=$(mktemp "$install/jit.XXXXXX")
 ackfile=
 cleanup() {
+  unset ACTIONS_RUNNER_INPUT_JITCONFIG
+  if [[ -n ${MUSTANG_CLEANUP_LOG:-} ]]; then
+    if [[ -z ${ACTIONS_RUNNER_INPUT_JITCONFIG+x} ]]; then
+      printf 'unset\n' >> "$MUSTANG_CLEANUP_LOG"
+    else
+      printf 'still-set\n' >> "$MUSTANG_CLEANUP_LOG"
+    fi
+  fi
   rm -f "$file" "$ackfile" "$install/.runner" "$install/.credentials" \
     "$install/.credentials_rsaparams" "$install/.path"
 }
 trap cleanup EXIT
+trap 'cleanup; exit 143' TERM INT HUP
 
 # Prints the HTTP status in REPLY_CODE. Network loss returns 2 and does not
 # print the curl error text, which can include a URL but never a body here.
@@ -103,5 +112,15 @@ if [[ $REPLY_CODE != 200 ]]; then
 fi
 cd "$install"
 status=0
-./run.sh --jitconfig "$file" || status=$?
+# actions/runner v2.338.2 CommandSettings reads ACTIONS_RUNNER_INPUT_JITCONFIG
+# (Args.JitConfig is "jitconfig") when the command line does not supply it,
+# trims that value, and Runner.Listener base64-decodes it. The 0600 file stays
+# the private source and is not passed to run.sh.
+jit_config=$(cat -- "$file"; printf x)
+jit_config=${jit_config%x}
+ACTIONS_RUNNER_INPUT_JITCONFIG=$jit_config
+export ACTIONS_RUNNER_INPUT_JITCONFIG
+unset jit_config
+./run.sh || status=$?
+unset ACTIONS_RUNNER_INPUT_JITCONFIG
 exit "$status"
