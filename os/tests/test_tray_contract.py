@@ -126,6 +126,27 @@ class TrayContractTest(unittest.TestCase):
         self.assertIn('static final String ENABLED_PROPERTY = "persist.wm.debug.rose_edge";', controller)
         self.assertIn('persist.wm.debug.rose_edge=true', (ROOT/'os/patches/rose-edge-build-make.patch').read_text())
 
+    def test_mic_off_shows_in_the_status_bar_while_muted(self):
+        # Keyboard handoff rule 4 (818a032, prototypes/rose-keyboard/HANDOFF.md): while Rose's microphone input is
+        # muted the status bar shows "Mic off" with the chin's slashed mic and ruby outline (RoseEdgeMicSlot's
+        # MUTED_INK/MUTED_RING), screen-reader label "Microphone muted", at rest or in a session.
+        waves = self.tray[self.tray.index('private final class Waves'):]
+        self.assertIn('if (muted) drawMicOff(canvas, rightStart + dp(4));', waves)
+        self.assertNotIn('if (active && muted) drawMicOff', waves)
+        draw = waves[waves.index('void drawMicOff('):]
+        self.assertIn('final String label = "Mic off";', draw)
+        self.assertIn('micOffPath.moveTo(4.5f, 3.5f); micOffPath.lineTo(19.5f, 20.5f);', ' '.join(draw.split()))
+        self.assertIn('static final int MUTED_INK = 0xffff8c9a;', waves)
+        self.assertIn('static final int MUTED_RING = 0xbfff5a6e;', waves)
+        chin = (ROOT/'os/patches/rose-edge-wmshell.patch').read_text()
+        self.assertIn('static final int MUTED_INK = 0xffff8c9a;', chin)
+        self.assertIn('static final int MUTED_RING = 0xbfff5a6e;', chin)
+        self.assertIn('setContentDescription(muted ? "Microphone muted"', waves)
+        # The description follows every state change, including a reset.
+        self.assertEqual(self.tray.count('if (view != null) view.describe();'), 2)
+        # An indicator, not a control: no new touch target.
+        self.assertNotIn('drawMicOff', self.tray[self.tray.index('int targetAt('):self.tray.index('Waves() {')])
+
     def test_app_glow_shader_matches_the_os_copy(self):
         self.assertEqual(shader(APP/'StatusVoiceGlow.java'), shader(SHELL/'StatusVoiceGlow.java'))
 

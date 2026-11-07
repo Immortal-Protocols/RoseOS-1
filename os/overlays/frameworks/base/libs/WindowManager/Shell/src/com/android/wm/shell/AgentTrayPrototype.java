@@ -14,8 +14,10 @@ import android.content.IntentFilter;
 import android.content.ServiceConnection;
 import android.database.ContentObserver;
 import android.graphics.Canvas;
+import android.graphics.Paint;
 import android.graphics.Path;
 import android.graphics.Rect;
+import android.graphics.RectF;
 import android.hardware.display.DisplayManager;
 import android.os.Bundle;
 import android.os.Handler;
@@ -117,6 +119,7 @@ public final class AgentTrayPrototype implements DisplayManager.DisplayListener 
         if (data.getInt("protocolVersion") != 1) return true;
         listening = data.getBoolean("listening");
         muted = data.getBoolean("muted");
+        if (view != null) view.describe();
         connected = data.getBoolean("connected");
         active = AgentStatusControls.active(connected, listening, data.getString("status"));
         input = data.getFloat("inputLevel", 0);
@@ -215,6 +218,7 @@ public final class AgentTrayPrototype implements DisplayManager.DisplayListener 
 
     private void clearState() {
         connected = listening = muted = active = false;
+        if (view != null) view.describe();
         controls.cancel();
         input = output = 0;
         observed = 0;
@@ -289,10 +293,72 @@ public final class AgentTrayPrototype implements DisplayManager.DisplayListener 
             if (x >= rightStart - dp(4) && x <= rightStart + glowWidth + dp(4)) return 2;
             return 0;
         }
+        // The Rose chin's muted look (RoseEdgeMicSlot): slashed mic, ruby ring, the same inks.
+        static final int MUTED_INK = 0xffff8c9a;
+        static final int MUTED_RING = 0xbfff5a6e;
+        static final int MUTED_FILL = 0x47140407;
+        final Paint micOffPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        final Path micOffPath = new Path();
         Waves() {
             super(context);
             setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_YES);
-            setContentDescription("Agent voice glow left, microphone voice glow right");
+            describe();
+        }
+        void describe() {
+            setContentDescription(muted ? "Microphone muted"
+                    : "Agent voice glow left, microphone voice glow right");
+        }
+        /**
+         * Keyboard handoff rule 4: while Rose's microphone input is muted, the status bar shows "Mic off" with
+         * the chin's slashed mic and ruby outline, so the state stays visible after the chin lowers. It is an
+         * indicator only: the chin holds the microphone control.
+         */
+        void drawMicOff(Canvas canvas, float left) {
+            final float h = Math.min(getHeight() - dp(4), dp(20));
+            final float top = (getHeight() - h) / 2f;
+            micOffPaint.reset();
+            micOffPaint.setAntiAlias(true);
+            micOffPaint.setTextSize(dp(11));
+            micOffPaint.setFakeBoldText(true);
+            final String label = "Mic off";
+            final float glyph = h - dp(4);
+            final float width = dp(6) + glyph + dp(4) + micOffPaint.measureText(label) + dp(8);
+            final RectF pill = new RectF(left, top, left + width, top + h);
+            micOffPaint.setColor(MUTED_FILL);
+            canvas.drawRoundRect(pill, h / 2, h / 2, micOffPaint);
+            micOffPaint.setStyle(Paint.Style.STROKE);
+            micOffPaint.setStrokeWidth(dp(1));
+            micOffPaint.setColor(MUTED_RING);
+            canvas.drawRoundRect(pill, h / 2, h / 2, micOffPaint);
+            // The chin's 24-unit mic glyph, scaled to the pill, with its slash.
+            final int save = canvas.save();
+            final float s = glyph / 24f;
+            canvas.translate(left + dp(6), top + (h - glyph) / 2f);
+            canvas.scale(s, s);
+            micOffPaint.setStyle(Paint.Style.FILL);
+            micOffPaint.setColor((MUTED_INK & 0x00ffffff) | (Math.round(.55f * 255) << 24));
+            canvas.drawRoundRect(new RectF(8.6f, 2.5f, 15.4f, 15f), 3.4f, 3.4f, micOffPaint);
+            micOffPaint.setStyle(Paint.Style.STROKE);
+            micOffPaint.setStrokeWidth(1.9f);
+            micOffPaint.setStrokeCap(Paint.Cap.ROUND);
+            canvas.drawArc(new RectF(5.6f, 4.4f, 18.4f, 17.2f), 0, 180, false, micOffPaint);
+            micOffPath.reset();
+            micOffPath.moveTo(12, 17.4f);
+            micOffPath.lineTo(12, 20.6f);
+            micOffPath.moveTo(8.8f, 20.8f);
+            micOffPath.lineTo(15.2f, 20.8f);
+            canvas.drawPath(micOffPath, micOffPaint);
+            micOffPath.reset();
+            micOffPath.moveTo(4.5f, 3.5f);
+            micOffPath.lineTo(19.5f, 20.5f);
+            micOffPaint.setColor(MUTED_INK);
+            canvas.drawPath(micOffPath, micOffPaint);
+            canvas.restoreToCount(save);
+            micOffPaint.setStyle(Paint.Style.FILL);
+            micOffPaint.setColor(MUTED_INK);
+            final Paint.FontMetrics m = micOffPaint.getFontMetrics();
+            canvas.drawText(label, left + dp(6) + glyph + dp(4), top + h / 2f - (m.ascent + m.descent) / 2f,
+                    micOffPaint);
         }
         @Override protected void onDraw(Canvas canvas) {
             long now = SystemClock.elapsedRealtime();
@@ -324,6 +390,8 @@ public final class AgentTrayPrototype implements DisplayManager.DisplayListener 
                 micGlow.draw(canvas,rightStart,0,glowWidth,getHeight(),
                         fresh ? input : 0,now/1000f+1.7f,elapsed,false);
             } else micGlow.clear();
+            // While muted, at rest or in a session: the "Mic off" indicator where the mic glow would be.
+            if (muted) drawMicOff(canvas, rightStart + dp(4));
             // The service sends STATE only on change, so a Connecting glow drawn once would freeze; animate
             // for the whole active span, the same span the glow is drawn for.
             if (active) postInvalidateOnAnimation();
