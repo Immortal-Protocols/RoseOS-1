@@ -383,11 +383,16 @@ def ota_continuity(root=ROOT):
 
 
 def controller_wif_prerequisites():
-    """Least privilege for a later enroll. This does not grant it, and dry-run does not add signer access."""
+    """The live controller binding. OIDC has not been exercised, and this does not grant anything."""
     return {
         'expandsPermissions': False,
         'neededBeforeBootstrap': False,
         'signerRequiredForDryRun': False,
+        'oidcTested': False,
+        'appHandoff': 'underway',
+        'vmStoppedAtPacific': '2026-11-07 06:46',
+        'jitPresent': False,
+        'buildStarted': False,
         'githubApp': {
             'permission': 'Organization permissions: Self-hosted runners, write',
             'endpoint': 'POST /orgs/{org}/actions/runners/generate-jitconfig',
@@ -395,20 +400,32 @@ def controller_wif_prerequisites():
             'installation': 'An organization owner installs the app on Immortal-Protocols. Not on the VM.',
             'variable': 'MUSTANG_RUNNER_APP_ID',
             'secret': 'MUSTANG_RUNNER_APP_PRIVATE_KEY',
+            'status': 'handoff underway',
         },
         'controller': {
+            'serviceAccount': 'mustang-controller@protocols-465723.iam.gserviceaccount.com',
+            'keyless': True,
             'accountVariable': 'MUSTANG_CONTROLLER_SERVICE_ACCOUNT',
+            'provider': 'projects/1072799993443/locations/global/workloadIdentityPools/mustang-actions/providers/mustang-main',
             'providerVariable': 'MUSTANG_CONTROLLER_WORKLOAD_IDENTITY_PROVIDER',
+            'workflowVariablesSet': True,
             'instance': 'roseos-mustang-builder-20261107-a',
             'project': 'protocols-465723',
             'zone': 'us-west2-a',
             'permissions': ['compute.instances.get', 'compute.instances.start', 'compute.instances.stop',
                             'compute.instances.setMetadata', 'compute.instances.getGuestAttributes'],
             'scope': 'this instance only',
-            'wifRole': 'roles/iam.workloadIdentityUser on the controller service account only',
-            'wifCondition': 'repository Immortal-Protocols/RoseOS-1 and workflow mustang-ota-dedicated.yml at refs/heads/main',
+            'statusPoll': 'compute.instances.get',
+            'providerChecks': {
+                'repositoryId': '1428996648',
+                'ownerId': '223367958',
+                'ref': 'refs/heads/main',
+                'event': 'workflow_dispatch',
+                'workflowRef': 'Immortal-Protocols/RoseOS-1/.github/workflows/mustang-ota-dedicated.yml@refs/heads/main',
+                'jobWorkflowRef': 'not used; a direct workflow has no job_workflow_ref',
+            },
             'notGranted': ['a service account on the VM', 'Owner', 'signer secret access',
-                           'setMetadata on any other instance'],
+                           'setMetadata on any other instance', 'compute.zoneOperations', 'a project-wide compute grant'],
         },
     }
 

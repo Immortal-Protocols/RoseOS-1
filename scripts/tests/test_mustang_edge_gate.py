@@ -843,8 +843,14 @@ class DedicatedRuntimeTest(unittest.TestCase):
         self.assertFalse(report['otaContinuity']['phoneAcceptanceIncluded'])
         self.assertEqual(report['otaContinuity']['installedTimestamp'], '1793742435')
         self.assertNotIn('secretAccessor', json.dumps(report['controllerWif']))
+        self.assertNotIn('zoneOperations', json.dumps(report['controllerWif']['controller']['permissions']))
         self.assertFalse(report['controllerWif']['signerRequiredForDryRun'])
         self.assertFalse(report['controllerWif']['neededBeforeBootstrap'])
+        self.assertFalse(report['controllerWif']['oidcTested'])
+        self.assertEqual(report['controllerWif']['controller']['providerChecks']['repositoryId'], '1428996648')
+        self.assertEqual(report['controllerWif']['controller']['providerChecks']['workflowRef'],
+                         'Immortal-Protocols/RoseOS-1/.github/workflows/mustang-ota-dedicated.yml@refs/heads/main')
+        self.assertEqual(report['controllerWif']['controller']['statusPoll'], 'compute.instances.get')
         import datetime
         import importlib.util
         spec = importlib.util.spec_from_file_location('release_allocate_ceiling', ROOT/'scripts/release-allocate.py')
