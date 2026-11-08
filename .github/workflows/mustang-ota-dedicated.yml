@@ -38,6 +38,10 @@ on:
         description: Bootstrap pinned adevtool and generate Mustang vendor from verified inputs; no Make or signing
         type: boolean
         default: false
+      otatools_only:
+        description: Build and independently hash Mustang otatools only; no release allocation or signing
+        type: boolean
+        default: false
 permissions:
   contents: read
 concurrency:
@@ -45,11 +49,12 @@ concurrency:
   cancel-in-progress: false
 env:
   MUSTANG_PUBLISH: ${{ inputs.publish }}
-  MUSTANG_DRY_RUN: ${{ inputs.dry_run || inputs.source_only || inputs.hostdeps_only || inputs.lock_admin_only || inputs.factory_only || inputs.vendor_only }}
+  MUSTANG_DRY_RUN: ${{ inputs.dry_run || inputs.source_only || inputs.hostdeps_only || inputs.lock_admin_only || inputs.factory_only || inputs.vendor_only || inputs.otatools_only }}
   MUSTANG_HOSTDEPS_ONLY: ${{ inputs.hostdeps_only }}
   MUSTANG_LOCK_ADMIN_ONLY: ${{ inputs.lock_admin_only }}
   MUSTANG_FACTORY_ONLY: ${{ inputs.factory_only }}
   MUSTANG_VENDOR_ONLY: ${{ inputs.vendor_only }}
+  MUSTANG_OTATOOLS_ONLY: ${{ inputs.otatools_only }}
 jobs:
   guard:
     runs-on: ubuntu-24.04
@@ -191,7 +196,7 @@ jobs:
     - guard
     - controller
     - enroll
-    if: inputs.source_only == false && inputs.hostdeps_only == false && inputs.lock_admin_only == false && inputs.factory_only == false && inputs.vendor_only == false
+    if: inputs.source_only == false && inputs.hostdeps_only == false && inputs.lock_admin_only == false && inputs.factory_only == false && inputs.vendor_only == false && inputs.otatools_only == false
     runs-on:
       group: ${{ needs.guard.outputs.runner_group }}
       labels: ${{ needs.guard.outputs.runner_label }}
@@ -269,7 +274,7 @@ jobs:
   signer:
     needs:
     - builder
-    if: inputs.dry_run == false && inputs.source_only == false && inputs.hostdeps_only == false && inputs.lock_admin_only == false && inputs.factory_only == false && inputs.vendor_only == false && needs.builder.result == 'success'
+    if: inputs.dry_run == false && inputs.source_only == false && inputs.hostdeps_only == false && inputs.lock_admin_only == false && inputs.factory_only == false && inputs.vendor_only == false && inputs.otatools_only == false && needs.builder.result == 'success'
     runs-on:
       group: roseos-mustang-signer
       labels: mustang-signer-4core
@@ -418,6 +423,70 @@ jobs:
           ${{ runner.temp }}/hostdeps-failure.json
         retention-days: 14
         if-no-files-found: warn
+  otatools:
+    needs:
+    - guard
+    - controller
+    - enroll
+    if: inputs.otatools_only
+    runs-on:
+      group: ${{ needs.guard.outputs.runner_group }}
+      labels: ${{ needs.guard.outputs.runner_label }}
+    timeout-minutes: 175
+    permissions:
+      contents: read
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        ref: ${{ github.sha }}
+        fetch-depth: 0
+        persist-credentials: false
+    - name: Rehash prepared vendor and build the separate Mustang otatools package
+      timeout-minutes: 155
+      run: python3 scripts/mustang_otatools_prep.py run --execute
+    - if: always()
+      name: Copy only this attempt's structured otatools receipt
+      run: python3 scripts/mustang_otatools_prep.py report --out "$RUNNER_TEMP/otatools-preparation-receipt.json"
+    - if: always()
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: mustang-otatools-receipt-${{ github.run_id }}-${{ github.run_attempt }}
+        path: ${{ runner.temp }}/otatools-preparation-receipt.json
+        retention-days: 14
+        if-no-files-found: warn
+    - name: Export the measured package without including source or vendor payloads
+      run: python3 scripts/mustang_otatools_prep.py export --out "$RUNNER_TEMP/mustang-otatools-export"
+    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: mustang-otatools-package-${{ github.run_id }}-${{ github.run_attempt }}
+        path: ${{ runner.temp }}/mustang-otatools-export
+        retention-days: 14
+        if-no-files-found: error
+  otatools-verify:
+    needs: otatools
+    if: inputs.otatools_only && needs.otatools.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      actions: read
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        ref: ${{ github.sha }}
+        persist-credentials: false
+    - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      with:
+        name: mustang-otatools-package-${{ github.run_id }}-${{ github.run_attempt }}
+        path: ${{ runner.temp }}/mustang-otatools-readback
+    - name: Independently hash the downloaded same-run package without executing it
+      run: python3 scripts/mustang_otatools_prep.py verify-export --dir "$RUNNER_TEMP/mustang-otatools-readback" --out "$RUNNER_TEMP/otatools-independent-readback.json"
+    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: mustang-otatools-independent-readback-${{ github.run_id }}-${{ github.run_attempt }}
+        path: ${{ runner.temp }}/otatools-independent-readback.json
+        retention-days: 14
+        if-no-files-found: error
   vendor:
     needs:
     - guard
@@ -529,6 +598,7 @@ jobs:
     - lock-admin
     - factory
     - vendor
+    - otatools
     - publisher
     if: always() && needs.controller.result != 'skipped'
     runs-on: ubuntu-24.04

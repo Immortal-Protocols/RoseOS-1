@@ -32,7 +32,7 @@ TIMEOUT = 9000
 WORK_BYTES = 128 << 30
 RESERVE = 300 << 30
 ENTRIES = 1_000_000
-FLAGS = {'vendor_only', 'factory_only', 'lock_admin_only', 'hostdeps_only', 'source_only', 'dry_run', 'publish'}
+FLAGS = {'vendor_only', 'factory_only', 'lock_admin_only', 'hostdeps_only', 'source_only', 'dry_run', 'publish', 'otatools_only'}
 GEN10_CONFIG_SHA256 = '92dd7f9cfdb3bdef2922892048f323407b6896f5e93f7ca8f73816488254ceca'
 
 
