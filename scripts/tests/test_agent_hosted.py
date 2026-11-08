@@ -138,10 +138,10 @@ class PublicInputs(Temp):
         pin = hosted.pinned_inputs(COMMITTED)
         self.assertRegex(pin['sourceApk']['url'], r'^https://github\.com/Immortal-Protocols/pixel-ota/releases/download/'
                                                   r'rose-agent-(\d+)/dev\.pixel\.voice-\1\.apk$')
-        digests = pin['digests']
-        # connection.json and mac-screen-connection.json are the same file (scripts/configure-local.py writes both).
-        self.assertEqual(digests['workspace/rose-agent/app/assets/connection.json'],
-                         digests['workspace/rose-agent/app/assets/mac-screen-connection.json'])
+        # Exactly the current inputs: a retired one (host-app-build.RETIRED_ASSETS) is never pinned or checked.
+        build = hosted.load('host-app-build')
+        self.assertEqual(set(pin['digests']), set(build.PUBLIC_ASSETS))
+        self.assertFalse(set(pin['digests']) & set(build.RETIRED_ASSETS))
         self.assertNotIn('/home/pixelbuild', json.dumps(COMMITTED))
         # The five inputs stay git-ignored deployment files: none is committed anywhere in the tree.
         tracked = subprocess.run(['git', '-C', str(ROOT), 'ls-files'], capture_output=True, text=True, check=True).stdout

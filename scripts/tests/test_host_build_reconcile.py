@@ -42,7 +42,6 @@ class AppBuildTest(unittest.TestCase):
         root = self.root = Path(temp.name)
         self.source, self.candidate, self.release = root/'p1-inputs', root/'candidate', root/'release'
         assets = {'workspace/rose-agent/app/assets/connection.json': {'endpoint': 'https://100.64.0.1:9444', 'pin': PIN},
-            'workspace/rose-agent/app/assets/mac-screen-connection.json': {'endpoint': 'https://100.64.0.1:9445', 'pin': PIN},
             'workspace/pixel-clipboard/clipboard-connection.json': {'endpoint': 'https://100.64.0.1:9446'}}
         for relative, value in assets.items():
             write(self.source/relative, json.dumps(value))
@@ -93,6 +92,28 @@ class AppBuildTest(unittest.TestCase):
         self.assertEqual(set(hashes), {'voice'})
         self.assertEqual(sorted(p.relative_to(self.release).as_posix() for p in self.release.rglob('*')), ['unsigned', 'unsigned/voice.apk'])
         self.assertEqual((self.release/'unsigned/voice.apk').read_text().strip(), 'voice')
+
+    def test_a_directory_staged_before_the_retirement_still_builds_without_the_retired_input(self):
+        # #67: mac-screen-connection.json left PUBLIC_ASSETS. A builder's existing staged directory still holds it and
+        # lists it in its receipt; it is ignored (never verified, restored or required), so no restage is needed.
+        receipt = app_build.stage(self.source, self.assets, self.candidate)
+        self.assertNotIn(app_build.RETIRED_ASSETS[0], receipt['files'])
+        retired = self.assets/app_build.RETIRED_ASSETS[0]
+        write(retired, json.dumps({'endpoint': 'https://100.64.0.1:9445', 'pin': PIN}))
+        receipt['files'][app_build.RETIRED_ASSETS[0]] = hashlib.sha256(retired.read_bytes()).hexdigest()
+        (self.assets/app_build.RECEIPT).write_text(json.dumps(receipt))
+        app_build.build(self.candidate, self.release, self.sdk, self.root/'jdk', self.assets, run=self.run_fake, voice_only=True)
+        self.assertFalse((self.candidate/app_build.RETIRED_ASSETS[0]).exists(), 'a retired input is never restored')
+        # Anything else extra still refuses, as does a missing current input.
+        receipt['files']['workspace/rose-agent/app/assets/other.json'] = '0' * 64
+        (self.assets/app_build.RECEIPT).write_text(json.dumps(receipt))
+        with self.assertRaisesRegex(SystemExit, 'exactly the public inputs'):
+            app_build.build(self.candidate, self.root/'release-2', self.sdk, self.root/'jdk', self.assets, run=self.run_fake)
+        receipt['files'].pop('workspace/rose-agent/app/assets/other.json')
+        receipt['files'].pop(app_build.PUBLIC_ASSETS[0])
+        (self.assets/app_build.RECEIPT).write_text(json.dumps(receipt))
+        with self.assertRaisesRegex(SystemExit, 'exactly the public inputs'):
+            app_build.build(self.candidate, self.root/'release-3', self.sdk, self.root/'jdk', self.assets, run=self.run_fake)
 
     def test_tampered_staged_input_or_unsafe_asset_is_refused(self):
         app_build.stage(self.source, self.assets, self.candidate)
