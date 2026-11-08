@@ -174,8 +174,8 @@
         "frankel",
         "agent"
       ],
-      "store": "scripts/release-allocate.py: pixel-ota releases (drafts included), this host's attempt directories and its rose-actions reservations, read and written under the host lock",
-      "note": "latest-beta and app-only both allocate dev.pixel.voice versionCodes. Run on separate hosts with this store, they could choose the same version. So the ledger must first move to a store every lane can update atomically; that is the one cross-lane serialization the plan allows."
+      "store": "scripts/release-allocate.py on the Frankel builder (pixel-ota releases including drafts, this host's attempt directories and its rose-actions reservations, read and written under the host lock), joined by the shared pixel-ota tag ledger (decision D2, scripts/app_reservation_store.py): the builder counts every ledger reservation and floor as consumed, and its hosted app-ledger job writes the run's floor and fresh version there before the builder builds",
+      "note": "latest-beta and app-only both allocate dev.pixel.voice versionCodes, and the hosted agent modes allocate them from the shared ledger alone. The ledger's create-if-absent ref is the one atomic step every lane takes before it builds a version, so one version never names two APKs; until the hosted modes have their own queue they also share the os-release queue. The lanes still list the Frankel host because app-only and latest-beta allocate there."
     }
   },
   "parallelToday": [],

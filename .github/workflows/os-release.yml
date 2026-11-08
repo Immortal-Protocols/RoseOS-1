@@ -575,6 +575,11 @@ jobs:
           path: ${{ runner.temp }}/allocation.json
           retention-days: 7
           if-no-files-found: error
+      # D2: the hosted app-ledger job writes this run's Rose Agent floor (and its fresh version) to the shared ledger;
+      # nothing is built or signed until the ledger holds exactly those records (anonymous git read, bounded wait).
+      - name: The shared version ledger holds this run's Rose Agent versions
+        if: (inputs.mode == 'latest-beta' || inputs.mode == 'latest-draft')
+        run: python3 scripts/app-ledger.py wait --allocation "$RUNNER_TEMP/allocation.json" --timeout 900
       - name: Prepare stage receipts
         run: |
           set -euo pipefail
@@ -827,6 +832,18 @@ jobs:
         id: allocate
         if: env.APPS == 'auto'
         run: python3 scripts/release-allocate.py app --out "$ROSE_BASE/app-allocation.json"
+      - name: App allocation record
+        if: env.APPS == 'auto'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: os-release-app-allocation-${{ github.run_id }}
+          path: ${{ env.ROSE_BASE }}/app-allocation.json
+          retention-days: 7
+          if-no-files-found: error
+      # D2: as for latest-beta, the allocated version must be in the shared ledger before any signer access.
+      - name: The shared version ledger holds this run's Rose Agent versions
+        if: env.APPS == 'auto' && env.APP_SKIP != 'true'
+        run: python3 scripts/app-ledger.py wait --allocation "$ROSE_BASE/app-allocation.json" --timeout 900
       - name: Signer access for app signing
         if: env.APP_SKIP != 'true'
         run: python3 scripts/actions-gcp-login.py login "$GCP_SIGNER_SERVICE_ACCOUNT"
@@ -1749,6 +1766,46 @@ jobs:
           path: ${{ runner.temp }}/app-public
           retention-days: 7
           if-no-files-found: error
+
+  # D2 (scripts/app-ledger.py): the builder routes that allocate Rose Agent versions (latest-beta, latest-draft and
+  # app-only with apps=auto) record them in the shared ledger from this hosted job, which alone holds the pixel-ota
+  # publisher token. It waits for the run's own allocation artifact, then writes the floor and, for a fresh version, its
+  # reservation; the builder waits for both before it builds. A lane that took the version first stops this run.
+  app-ledger:
+    needs: controller
+    if: inputs.mode == 'latest-beta' || inputs.mode == 'latest-draft' || (inputs.mode == 'app-only' && inputs.apps == 'auto')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    permissions:
+      contents: read
+      actions: read  # this run's own allocation artifact only
+    env:
+      ALLOCATION_ARTIFACT: ${{ inputs.mode == 'app-only' && format('os-release-app-allocation-{0}', github.run_id) || format('os-release-allocation-{0}', github.run_id) }}
+      BUILDER_JOB: ${{ inputs.mode == 'app-only' && 'app-builder' || 'builder' }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: This run's allocation record
+        id: allocation
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 scripts/app-ledger.py fetch-allocation --name "$ALLOCATION_ARTIFACT" --job "$BUILDER_JOB" --out "$RUNNER_TEMP/ledger-allocation" --timeout 1800
+      - name: Mint pixel-ota publisher token (the shared ledger)
+        id: app
+        if: steps.allocation.outputs.found == 'true'
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ vars.PIXEL_OTA_APP_ID }}
+          private-key: ${{ secrets.PIXEL_OTA_APP_PRIVATE_KEY }}
+          owner: Immortal-Protocols
+          repositories: pixel-ota
+          permission-contents: write
+      - name: Record this run's Rose Agent floor and fresh version in the shared ledger
+        if: steps.allocation.outputs.found == 'true'
+        env:
+          PIXEL_OTA_TOKEN: ${{ steps.app.outputs.token }}
+        run: python3 scripts/app-ledger.py record --allocation "$RUNNER_TEMP/ledger-allocation/allocation.json"
 
   # 1F hosted Agent route (agent-hosted, agent-hosted-probe; scripts/agent-hosted.py): GitHub-hosted runners only, with
   # no controller, builder, host lock or Frankel path. The signer probe runs first, so nothing is reserved unless this

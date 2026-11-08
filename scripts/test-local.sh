@@ -132,6 +132,7 @@ python3 scripts/tests/test_hosted_app_signing_reuse.py
 python3 scripts/tests/test_agent_hosted_release.py
 python3 scripts/tests/test_app_reservation_store.py
 python3 scripts/tests/test_agent_hosted.py
+python3 scripts/tests/test_app_ledger.py
 python3 workspace/rose-agent/tests/test_portable_build.py
 python3 scripts/tests/test_app_reuse.py
 python3 scripts/tests/test_device_contract.py

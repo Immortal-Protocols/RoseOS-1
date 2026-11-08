@@ -615,15 +615,31 @@ and attempt 1 only. The jobs:
 | `agent-build` | both | Installs the pinned SDK archives (`scripts/setup-android-sdk.sh`), the pinned public inputs and App's portable record (`portable-build.py prepare` and `inputs`), then runs `host-app-release.py --check --hosted`. Probe: an unsigned Agent-only build of the dispatch commit plus `check-apk`. agent-hosted: `bind` (the same candidate, re-derived, owned by this run, held by the ledger), signer login, `host-app-release.py --hosted`, then `check-apk` on the signed APK. |
 | `agent-publisher` | agent-hosted with `app_publish` | Confirms the ledger still holds the reservation, mints the token and runs `app_release_publisher.py --hosted`. Publishes its own prerelease, never Latest. |
 
-**What remains (decision D2).** The Frankel builder must record its consumed versions in the ledger: a floor once,
-and a reservation for each fresh Rose Agent version, before it builds. Its allocator must also count the ledger's
-versions as consumed. Until that floor exists, `agent-reserve` refuses (exit 4) and no hosted version is ever issued.
-`agent-hosted-probe` needs none of it.
+**Frankel in the shared ledger (decision D2, `scripts/app-ledger.py`).** Every builder route that allocates Rose Agent
+versions records them in the same ledger before it builds: latest-beta, latest-draft and app-only with `apps=auto`.
+- **Reading:** `release-allocate.py` reads the ledger the source commit binds, anonymously with git, under the host
+  lock. It counts every reservation and everything at or below the highest floor as consumed. An unreadable ledger
+  refuses. Each package now also records `consumedThrough`, the highest version that observation consumed.
+- **Writing:** the builder never holds the publisher token, so the hosted `app-ledger` job does the writing. It waits
+  for the run's own allocation artifact, using only its job token with `actions: read`. It then writes the run's
+  floor (`consumedThrough` of `dev.pixel.voice`) and, when the version is fresh, its reservation (a latest-beta
+  `changedSinceRelease`, or any app-only allocation). If the builder finishes without an allocation, there is
+  nothing to record and the job ends.
+- **Waiting:** before any build or signer access, the builder runs `app-ledger.py wait` (bounded, 15 minutes). The
+  wait passes only when the ledger holds exactly this run's records, both derived from the allocation alone. If
+  another lane already holds the run's fresh version, the run stops at once and its next run allocates above it.
+- **Ordering:** whichever lane creates the ref first owns the version, in either order. A fresh hosted reservation
+  makes Frankel's next allocation exceed it, and a Frankel floor makes every later hosted allocation exceed it.
+- **Gate:** the first D2 Frankel run's floor is also what opens `agent-reserve`, which refuses until a floor exists.
+
+Explicit app-only (`apps` given as `[["dev.pixel.voice", N]]`) is unchanged and does not write to the ledger. It still
+must exceed the committed floors and every builder allocation. A version it builds and never publishes must not be
+distributed, because a later hosted allocation cannot see it.
 
 `scripts/tests/test_agent_hosted_release.py` checks the entry point and `PublisherHostedTest` in
 `scripts/tests/test_app_release_publisher.py` its publication. `scripts/tests/test_app_reservation_store.py` checks the
-ledger against a real local git repository, and `scripts/tests/test_agent_hosted.py` checks the route and workflow.
-All use fakes only.
+ledger against a real local git repository, `scripts/tests/test_agent_hosted.py` the route and workflow, and
+`scripts/tests/test_app_ledger.py` Frankel's ledger records, wait and artifact fetch. All use fakes only.
 
 ## Retained Rango signing and separate release (source only, runtime unbound)
 

@@ -8,7 +8,11 @@ earlier allocation reservations), this derives one fresh candidate:
 - build number YYYYMMDDNN (UTC date of the dispatch clock, NN above every known build of that day, and above every
   known build overall) and BUILD_DATETIME above every known timestamp;
 - per OS app: the previous release's version when none of the package's source paths changed since that release
-  (os/latest-beta/allocation.json), else a fresh versionCode above every version ever consumed;
+  (os/latest-beta/allocation.json), else a fresh versionCode above every version ever consumed, the shared Rose Agent
+  version ledger included (decision D2: os/release-pipeline/agent/hosted.json reservation.store, read anonymously with
+  git through scripts/app_reservation_store.py; its reservations and everything at or below its highest floor). Each
+  package also records consumedThrough, the highest version this observation consumed, which the run's ledger floor
+  (scripts/app-ledger.py) carries to lanes that cannot read this builder;
 - the exact manifest delta those versions need, as content hashes, and a deterministic local commit (source + delta,
   fixed identity and dates) so the compiled source really carries the allocated versions. Nothing is pushed.
 
@@ -53,6 +57,7 @@ OBSERVATION_SCHEMA = 'roseos.release-observation.v1'
 APP_SCHEMA = 'roseos.app-allocation.v1'
 APP_RESERVATIONS = 'app-allocations'
 APP_PACKAGE = 'dev.pixel.voice'
+LEDGER_CONFIG = 'os/release-pipeline/agent/hosted.json'  # its reservation.store binds the shared app version ledger (D2)
 SHA = re.compile(r'[0-9a-f]{40}')
 BUILD = re.compile(r'(\d{8})(\d{2})')
 VERSION_CODE = re.compile(r'android:versionCode="(\d+)"')
@@ -111,6 +116,12 @@ def check_observation(observation):
     apps = observation.get('appReservations')
     if apps is not None and (not isinstance(apps, dict) or apps.get('complete') is not True or not isinstance(apps.get('items'), list)):
         raise Refused('state_unavailable: incomplete appReservations (maxima are never guessed)')
+    ledger = observation.get('ledger')
+    if ledger is not None and (not isinstance(ledger, dict) or ledger.get('complete') is not True
+            or not isinstance(ledger.get('package'), str) or not isinstance(ledger.get('reservations'), list)
+            or not all(type(v) is int and v > 0 for v in ledger['reservations'])
+            or type(ledger.get('floor')) is not int or ledger['floor'] < 0):
+        raise Refused('state_unavailable: incomplete shared version ledger (maxima are never guessed)')
 
 
 def known_identities(observation, pipeline, tag_pattern):
@@ -167,6 +178,11 @@ def consumed_versions(package, pipeline, observation):
         versions.update(int(row['versionCode']) for row in (observation.get('appReservations') or {}).get('items', [])
             if row.get('packageName') == package)
         versions.update(app_tag_versions(observation, pipeline))
+    ledger = observation.get('ledger')
+    if ledger and ledger['package'] == package:
+        # D2: every version another lane holds in the shared ledger, and everything at or below its highest floor.
+        versions.update(ledger['reservations'])
+        versions.update(range(1, ledger['floor'] + 1))
     return versions
 
 
@@ -244,9 +260,9 @@ def allocate(source, observation, now_epoch, run_id, run_attempt, repo=ROOT, rec
         if prev_code is None:
             prev_code, _ = manifest_version(show(repo, previous['sourceSha'], manifest), manifest)
         changed = bool(git(repo, 'diff', '--name-only', previous['sourceSha'], source, '--', *package['sources']).strip())
+        consumed = consumed_versions(name, pipeline, observation) | {code, prev_code}
         if changed:
-            floor = consumed_versions(name, pipeline, observation) | {code, prev_code}
-            new_code = max(floor) + 1
+            new_code = max(consumed) + 1
         else:
             new_code = prev_code
             if new_code < code:
@@ -257,7 +273,7 @@ def allocate(source, observation, now_epoch, run_id, run_attempt, repo=ROOT, rec
         elif new_code != code and version_name.startswith(f'{code}-'):
             new_name = f'{new_code}-' + version_name[len(f'{code}-'):]
         packages[name] = {'changedSinceRelease': changed, 'sourceVersionCode': code, 'previousVersionCode': prev_code,
-            'versionCode': new_code, 'versionName': new_name}
+            'versionCode': new_code, 'versionName': new_name, 'consumedThrough': max(consumed | {new_code})}
         apps.append([name, new_code])
         if (new_code, new_name) != (code, version_name):
             after = set_manifest_version(text, new_code, new_name)
@@ -416,8 +432,34 @@ def _fetch_json(url):
         raise Refused(f'state_unavailable: release listing failed ({type(error).__name__})') from None
 
 
-def observe(home, device, repository, api, fetch=None):
-    """Consumed identities on this builder (attempt directories, earlier reservations) plus the public release list."""
+def ledger_part(found, package=APP_PACKAGE):
+    """The observation part of the shared ledger (scripts/app_reservation_store.py read()): its reserved versions and the
+    highest floor, for one package."""
+    return {'complete': True, 'package': package, 'reservations': sorted(found['reservations']),
+            'floor': max([f['consumedThrough'] for f in found['floors']], default=0)}
+
+
+def shared_ledger(repo, source, reader=None):
+    """The shared Rose Agent version ledger the source commit binds (LEDGER_CONFIG reservation.store), read anonymously
+    with git (reader: store -> an object with read(package); app_reservation_store.GitReader by default). A missing
+    binding or an unreadable ledger refuses: maxima are never guessed."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import app_reservation_store  # noqa: PLC0415
+    try:
+        store = (json.loads(show(repo, source, LEDGER_CONFIG)).get('reservation') or {}).get('store')
+    except (Refused, ValueError):
+        store = None
+    if not store:
+        raise Refused('state_unavailable: the source binds no shared version ledger (reservation.store)')
+    try:
+        return (reader or app_reservation_store.GitReader)(store).read(APP_PACKAGE)
+    except app_reservation_store.Refused as error:
+        raise Refused(f'state_unavailable: the shared version ledger is unreadable ({error})') from None
+
+
+def observe(home, device, repository, api, fetch=None, ledger=None):
+    """Consumed identities on this builder (attempt directories, earlier reservations) plus the public release list and,
+    when given, the shared version ledger (ledger_part)."""
     base = Path(home)/'rose-actions'
     if not base.is_dir():
         raise Refused('state_unavailable: the builder attempt storage is missing')
@@ -441,7 +483,8 @@ def observe(home, device, repository, api, fetch=None):
                      'items': list_releases(repository, api, fetch)},
         'attempts': {'complete': True, 'items': attempts},
         'reservations': {'complete': True, 'items': reservations},
-        'appReservations': {'complete': True, 'items': read_app_reservations(base/APP_RESERVATIONS)}}
+        'appReservations': {'complete': True, 'items': read_app_reservations(base/APP_RESERVATIONS)},
+        **({'ledger': ledger_part(ledger)} if ledger is not None else {})}
 
 
 def read_app_reservations(directory):
@@ -475,7 +518,7 @@ def shared_lock(path):
         os.close(fd)
 
 
-def latest(out, env, repo=ROOT, fetch=None, clock=time.time, lock=shared_lock):
+def latest(out, env, repo=ROOT, fetch=None, clock=time.time, lock=shared_lock, ledger=None):
     """The normal button on the builder: one fresh candidate from the dispatch commit, reserved before it is used."""
     source = env.get('GITHUB_SHA', '')
     pipeline = json.loads(show(repo, source, PIPELINE_CONFIG)) if SHA.fullmatch(source) else None
@@ -486,7 +529,7 @@ def latest(out, env, repo=ROOT, fetch=None, clock=time.time, lock=shared_lock):
         raise Refused(f'invalid: the normal button builds {cfg["device"]} only')
     with lock(pipeline['host']['lockPath']):
         observation = observe(env['HOME'], cfg['device'], pipeline['publication']['repository'],
-            pipeline['publication']['api'], fetch)
+            pipeline['publication']['api'], fetch, ledger=(ledger or shared_ledger)(repo, source))
         allocation = allocate(source, observation, int(clock()), env.get('GITHUB_RUN_ID', ''), env.get('GITHUB_RUN_ATTEMPT', ''),
             repo=repo)
         candidate = derive(allocation, repo)
@@ -540,7 +583,8 @@ def allocate_app(source, observation, now_epoch, run_id, run_attempt, repo=ROOT,
             'reason': f'rose-agent-{newest} is already published from the same Rose Agent sources ({record["sourceSha"][:12]})'}
     if type(floor) is not int or floor < 0 or not re.fullmatch(r'[a-z][a-z0-9-]{0,30}', name_suffix):
         raise Refused('invalid: the ledger floor and versionName suffix')
-    new_code = max(consumed_versions(APP_PACKAGE, pipeline, observation) | {code, floor}) + 1
+    consumed = consumed_versions(APP_PACKAGE, pipeline, observation) | {code, floor}
+    new_code = max(consumed) + 1
     new_name = f'{new_code}-{name_suffix}'
     after = set_manifest_version(text, new_code, new_name)
     delta = [{'path': package['manifest'], 'beforeSha256': hashlib.sha256(text.encode()).hexdigest(),
@@ -548,7 +592,7 @@ def allocate_app(source, observation, now_epoch, run_id, run_attempt, repo=ROOT,
         'versionName': [version_name, new_name]}]
     allocation = {'schema': APP_SCHEMA, 'packageName': APP_PACKAGE, 'sourceSha': source,
         'run': {'id': str(run_id), 'attempt': str(run_attempt)}, 'clock': int(now_epoch), 'versionCode': new_code,
-        'versionName': new_name, 'previous': previous, 'delta': delta,
+        'versionName': new_name, 'previous': previous, 'delta': delta, 'consumedThrough': new_code,
         'observationSha256': hashlib.sha256(canonical(observation)).hexdigest()}
     allocation['allocationSha256'] = hashlib.sha256(canonical(allocation)).hexdigest()
     return dict(allocation, verdict='allocated')
@@ -591,7 +635,7 @@ def reserve_app(directory, allocation, candidate):
     return record
 
 
-def app_latest(out, env, repo=ROOT, fetch=None, clock=time.time, lock=shared_lock):
+def app_latest(out, env, repo=ROOT, fetch=None, clock=time.time, lock=shared_lock, ledger=None):
     """Builder, app-only with apps=auto: under the shared lock, observe, then skip (already published) or allocate,
     derive and reserve one fresh Rose Agent candidate from the dispatched main commit (CANDIDATE_SHA)."""
     source = env.get('CANDIDATE_SHA', '')
@@ -600,7 +644,8 @@ def app_latest(out, env, repo=ROOT, fetch=None, clock=time.time, lock=shared_loc
         raise Refused('invalid: CANDIDATE_SHA is not a commit')
     cfg = json.loads(show(repo, source, ALLOCATION_CONFIG))
     with lock(pipeline['host']['lockPath']):
-        observation = observe(env['HOME'], cfg['device'], pipeline['publication']['repository'], pipeline['publication']['api'], fetch)
+        observation = observe(env['HOME'], cfg['device'], pipeline['publication']['repository'], pipeline['publication']['api'], fetch,
+                              ledger=(ledger or shared_ledger)(repo, source))
         allocation = allocate_app(source, observation, int(clock()), env.get('GITHUB_RUN_ID', ''), env.get('GITHUB_RUN_ATTEMPT', ''), repo)
         if allocation['verdict'] == 'unchanged':
             record, exported = allocation, {'APP_SKIP': 'true', 'APP_SOURCE_SHA': source}
