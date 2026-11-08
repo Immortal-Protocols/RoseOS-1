@@ -70,6 +70,61 @@ class HostdepsTest(unittest.TestCase):
         self.assertEqual(clean['TMPDIR'], '/attempt/tmp')
         self.assertEqual(clean['GIT_CONFIG_GLOBAL'], '/dev/null')
 
+    def failure_environment(self, directory):
+        event = Path(directory)/'event.json'
+        event.write_text(json.dumps({'inputs': {'hostdeps_only': True}}))
+        return dict(self.env(), RUNNER_TEMP=directory, GITHUB_EVENT_PATH=str(event))
+
+    def test_pre_attempt_failure_gets_a_minimal_unattested_summary(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            env = self.failure_environment(tmp)
+            with patch.dict(os.environ, env, clear=True), \
+                    patch.object(deps, 'execute', side_effect=ValueError('Mustang builder lock is absent; host preparation required')):
+                self.assertEqual(deps.main(['run', '--execute']), 4)
+            summary = json.loads((Path(tmp)/'hostdeps-failure.json').read_text())
+            self.assertEqual(summary['failureCode'], 'lock-absent')
+            self.assertEqual(summary['run']['source'], 'a'*40)
+            self.assertEqual(summary['expectedBuilder']['instanceId'], '5585425566393384049')
+            for key in ('success', 'guestIdentityVerified', 'makeSuccessAttested',
+                        'distributionAttested', 'authenticatedStop', 'otaAuthorized'):
+                self.assertFalse(summary[key])
+            self.assertNotIn('distribution', summary)
+
+    def test_failure_summary_never_serializes_untrusted_exception_text_or_inherited_secrets(self):
+        for error, code in [(PermissionError('secret access token'), 'permission-denied'),
+                            (ValueError('secret private path'), 'admission-or-build-refused'),
+                            (subprocess.CalledProcessError(1, ['secret-command']), 'process-error')]:
+            with self.subTest(code=code), tempfile.TemporaryDirectory() as tmp:
+                env = dict(self.failure_environment(tmp), GH_TOKEN='secret-inherited')
+                deps.report_failure(error, env)
+                content = (Path(tmp)/'hostdeps-failure.json').read_text()
+                self.assertNotIn('secret', content)
+                self.assertEqual(json.loads(content)['failureCode'], code)
+
+    def test_failure_summary_is_write_once_and_refuses_foreign_runs_or_linked_temp(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            env = self.failure_environment(tmp)
+            for change in ({'GITHUB_RUN_ATTEMPT': '2'}, {'GITHUB_JOB': 'builder'},
+                           {'GITHUB_REPOSITORY_ID': 'other'}):
+                with self.assertRaises(ValueError):
+                    deps.report_failure(ValueError('hostdeps Make failed'), dict(env, **change))
+                self.assertFalse((Path(tmp)/'hostdeps-failure.json').exists())
+            linked = Path(tmp)/'linked'
+            linked.symlink_to(tmp, target_is_directory=True)
+            with self.assertRaises(deps.readers._Refused):
+                deps.report_failure(ValueError('hostdeps Make failed'), dict(env, RUNNER_TEMP=str(linked)))
+            deps.report_failure(ValueError('hostdeps Make failed'), env)
+            original = (Path(tmp)/'hostdeps-failure.json').read_bytes()
+            with self.assertRaises(FileExistsError):
+                deps.report_failure(ValueError('hostdeps cancelled'), env)
+            self.assertEqual((Path(tmp)/'hostdeps-failure.json').read_bytes(), original)
+
+    def test_failure_summary_write_error_preserves_the_failed_cli_exit(self):
+        with patch.dict(os.environ, self.env(), clear=True), \
+                patch.object(deps, 'execute', side_effect=PermissionError('private-path')), \
+                patch.object(deps, 'report_failure', side_effect=OSError('cannot write')):
+            self.assertEqual(deps.main(['run', '--execute']), 4)
+
     def test_recipe_cannot_become_a_foreign_output_path_or_arbitrary_make_option(self):
         original = deps.readers.recipe()
         for value in ('../other-output', '/home/other-builder/out'):

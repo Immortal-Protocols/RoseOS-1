@@ -429,6 +429,64 @@ def report(env, destination):
     receipt(destination, parsed)
 
 
+def report_failure(error, env):
+    """A minimal job outcome, even when guest/lock admission produced no receipt.
+
+    This records expected identities, not guest observations. Never serialize
+    exception text: OS/process errors can contain credentials or private paths.
+    The build receipt remains the only distribution/Make evidence.
+    """
+    if env.get('GITHUB_JOB') != 'hostdeps' or env.get('GITHUB_REPOSITORY_ID') != '1428996648':
+        raise ValueError('failure summary requires the dedicated hostdeps job')
+    lane = mustang_lane.validate(mustang_lane.configuration())
+    run = controller.invocation(lane, env)
+    require_selection(read_event(env))
+    directory = Path(env['RUNNER_TEMP'])
+    plain_dir(directory)
+    reasons = {
+        'Mustang builder lock is absent; host preparation required': 'lock-absent',
+        'Mustang builder lock is busy': 'lock-busy',
+        'hostdeps lock is not a plain file': 'lock-not-regular',
+        'hostdeps output already exists; preserve and reconcile it': 'output-exists',
+        'hostdeps checkout differs from captured clean source': 'checkout-differs',
+        'hostdeps requires its dedicated guest job and runner user': 'wrong-job-or-user',
+        'runner is not the admitted dedicated VM': 'instance-differs',
+        'dedicated data filesystem is not the admitted mounted disk': 'filesystem-differs',
+        'dedicated data mount differs': 'mount-differs',
+        'dedicated path traverses a link': 'linked-guest-path',
+        'hostdeps path leaves the dedicated data filesystem': 'foreign-filesystem',
+        'pinned project HEAD or worktree differs': 'source-differs',
+        'hostdeps source inspection failed': 'source-inspection-failed',
+        'hostdeps Make failed': 'make-failed',
+        'hostdeps total timeout': 'timeout',
+        'hostdeps space or inode bound exceeded': 'space-bound',
+        'hostdeps output byte bound exceeded': 'output-bound',
+        'hostdeps output entry bound exceeded': 'entry-bound',
+        'hostdeps log bound exceeded': 'log-bound',
+        'hostdeps cancelled': 'cancelled',
+    }
+    if type(error) is ValueError:
+        code = reasons.get(str(error), 'admission-or-build-refused')
+    elif isinstance(error, PermissionError):
+        code = 'permission-denied'
+    elif isinstance(error, FileNotFoundError):
+        code = 'path-not-found'
+    elif isinstance(error, subprocess.TimeoutExpired):
+        code = 'process-timeout'
+    elif isinstance(error, subprocess.SubprocessError):
+        code = 'process-error'
+    elif isinstance(error, OSError):
+        code = 'filesystem-or-io-error'
+    else:
+        code = 'invalid-input-or-unreadable-path'
+    receipt(directory/'hostdeps-failure.json', {
+        'schema': 'roseos.mustang-hostdeps-failure.v1', 'run': run,
+        'expectedBuilder': lane['vm'], 'success': False, 'failureCode': code,
+        'guestIdentityVerified': False, 'makeSuccessAttested': False,
+        'distributionAttested': False, 'authenticatedStop': False,
+        'otaAuthorized': False, 'signAuthorized': False, 'publishAuthorized': False})
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('action', choices=('plan', 'run', 'report'), default='plan', nargs='?')
@@ -453,6 +511,13 @@ def main(argv=None):
                 signal.signal(signal.SIGTERM, previous)
         return 0
     except (ValueError, OSError, KeyError, TypeError, subprocess.SubprocessError, readers._Refused) as error:
+        if args.action == 'run':
+            try:
+                report_failure(error, os.environ)
+            except (ValueError, OSError, KeyError, TypeError, subprocess.SubprocessError, readers._Refused):
+                # Preserve the original failed exit. A summary is best effort;
+                # identity/temp-path failure must never become a success.
+                print('Hostdeps failure summary unavailable', file=sys.stderr)
         print(json.dumps({'success': False, 'failure': str(error) if isinstance(error, ValueError) else type(error).__name__,
                           'authenticatedStop': False}), file=sys.stderr)
         return 4
