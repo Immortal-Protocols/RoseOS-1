@@ -103,7 +103,7 @@ def stop(adapter, lane, run, record):
 
 
 def start_gate(runtime, env):
-    """Admit a real build, or an infrastructure host check that writes no evidence."""
+    """Admit a bound OTA run, or the workflow's separately guarded preparation scope."""
     if env.get('MUSTANG_DRY_RUN') == 'true':
         if env.get('MUSTANG_PUBLISH') == 'true':
             raise ValueError('dry run cannot publish')

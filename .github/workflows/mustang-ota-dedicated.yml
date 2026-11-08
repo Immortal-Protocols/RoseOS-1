@@ -1,4 +1,4 @@
-# Manual only. OTA runtime stays unbound. Separate source, dry-run and hostdeps scopes use the owned controller.
+# Manual only. OTA runtime stays unbound. Preparation and administration scopes use the owned controller.
 # Builder job is self-hosted on roseos-mustang-builder and has no signer token.
 # The signer job is the only job that may OIDC-login as the existing signer.
 # It targets group roseos-mustang-signer and label mustang-signer-4core. Admission stays closed.
@@ -26,6 +26,10 @@ on:
         description: Build generic adevtool dependencies only, with bounded receipts; no vendor, OTA or signing
         type: boolean
         default: false
+      lock_admin_only:
+        description: Ten-minute handoff for separately authorized lock administration; job runs no sudo or initializer
+        type: boolean
+        default: false
 permissions:
   contents: read
 concurrency:
@@ -33,8 +37,9 @@ concurrency:
   cancel-in-progress: false
 env:
   MUSTANG_PUBLISH: ${{ inputs.publish }}
-  MUSTANG_DRY_RUN: ${{ inputs.dry_run || inputs.source_only || inputs.hostdeps_only }}
+  MUSTANG_DRY_RUN: ${{ inputs.dry_run || inputs.source_only || inputs.hostdeps_only || inputs.lock_admin_only }}
   MUSTANG_HOSTDEPS_ONLY: ${{ inputs.hostdeps_only }}
+  MUSTANG_LOCK_ADMIN_ONLY: ${{ inputs.lock_admin_only }}
 jobs:
   guard:
     runs-on: ubuntu-24.04
@@ -176,7 +181,7 @@ jobs:
     - guard
     - controller
     - enroll
-    if: inputs.source_only == false && inputs.hostdeps_only == false
+    if: inputs.source_only == false && inputs.hostdeps_only == false && inputs.lock_admin_only == false
     runs-on:
       group: ${{ needs.guard.outputs.runner_group }}
       labels: ${{ needs.guard.outputs.runner_label }}
@@ -254,7 +259,7 @@ jobs:
   signer:
     needs:
     - builder
-    if: inputs.dry_run == false && inputs.source_only == false && inputs.hostdeps_only == false && needs.builder.result == 'success'
+    if: inputs.dry_run == false && inputs.source_only == false && inputs.hostdeps_only == false && inputs.lock_admin_only == false && needs.builder.result == 'success'
     runs-on:
       group: roseos-mustang-signer
       labels: mustang-signer-4core
@@ -403,6 +408,44 @@ jobs:
           ${{ runner.temp }}/hostdeps-failure.json
         retention-days: 14
         if-no-files-found: warn
+  lock-admin:
+    needs:
+    - guard
+    - controller
+    - enroll
+    if: inputs.lock_admin_only
+    runs-on:
+      group: ${{ needs.guard.outputs.runner_group }}
+      labels: ${{ needs.guard.outputs.runner_label }}
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        ref: ${{ github.sha }}
+        persist-credentials: false
+    - name: Verify guest and publish public host-key pin; no privileged execution
+      timeout-minutes: 2
+      run: python3 scripts/mustang_lock_admin.py ready --execute
+    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: mustang-lock-admin-ready-${{ github.run_id }}-${{ github.run_attempt }}
+        path: ${{ runner.temp }}/mustang-lock-admin-ready.json
+        retention-days: 14
+        if-no-files-found: error
+    - name: Observe the canonical lock for at most ten minutes
+      timeout-minutes: 11
+      run: python3 scripts/mustang_lock_admin.py wait --execute
+    - if: always()
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: mustang-lock-admin-${{ github.run_id }}-${{ github.run_attempt }}
+        path: |
+          ${{ runner.temp }}/mustang-lock-admin-ready.json
+          ${{ runner.temp }}/mustang-lock-admin-result.json
+        retention-days: 14
+        if-no-files-found: warn
   cleanup:
     needs:
     - guard
@@ -411,6 +454,7 @@ jobs:
     - signer
     - source
     - hostdeps
+    - lock-admin
     - publisher
     if: always() && needs.controller.result != 'skipped'
     runs-on: ubuntu-24.04
