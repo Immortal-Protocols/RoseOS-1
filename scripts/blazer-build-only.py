@@ -420,10 +420,15 @@ def commands(recipe, op, root=ROOT):
                 'timeoutSeconds': recipe['compile']['timeoutSeconds']}
     return rendered
 
+def open_shared_lock(path):
+    """Default lock mechanism; a private device adapter may bind an existing file."""
+    return open(path,'a')
+
+
 def lock_free(path):
     """True when nobody holds the builder lock (probed without keeping it)."""
     try:
-        with open(path, 'a') as handle:
+        with open_shared_lock(path) as handle:
             fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
             fcntl.flock(handle, fcntl.LOCK_UN)
         return True
@@ -756,10 +761,11 @@ def source_preflight(recipe, src, production, problems, facts):
         problems.append(f'the production source root {production} is not an existing, link-free directory')
     return nearest_existing(src)
 
-def preflight(recipe, stage, op, statvfs=os.statvfs, lock_probe=lock_free, root=ROOT, wall=time.time):
+def preflight(recipe, stage, op, statvfs=os.statvfs, lock_probe=None, root=ROOT, wall=time.time):
     """{'ready': bool, 'problems': [...], 'facts': {...}} for one stage. Reads only; writes and runs nothing."""
     if stage not in STAGES:
         raise InvalidInput(f'stage must be one of {STAGES}')
+    if lock_probe is None:lock_probe=lock_free
     prep = recipe['preparation']
     production = pointer(root, prep['productionSourceRootFrom'])
     src, download = op['sourceRoot'], op['downloadDir']
@@ -1946,7 +1952,7 @@ def run(recipe, stage, op, receipt_dir, now=time.time, fetcher=fetch, clock=time
     base = {'stage': stage, 'device': DEVICE, 'signed': False, 'releaseReady': False}
     if reduced_mustang_sprint(recipe):
         base['sprint'] = recipe['sprint']
-    with open(op['lock'], 'a') as lock:
+    with open_shared_lock(op['lock']) as lock:
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:

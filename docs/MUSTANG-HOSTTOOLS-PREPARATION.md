@@ -8,6 +8,16 @@ acknowledgment from Saba.
 
 ## Lock prepared and fresh host-dependency run
 
+The dedicated full-build compiler and allocator must also reuse the existing
+canonical lock through a read-only, no-follow descriptor. The private Mustang
+compiler adapter binds both its preflight probe and execution stream to that
+exact lock; the dedicated allocator binds the same nonblocking flock mechanism.
+Neither may create, write, truncate, chmod or chown it. Missing, linked, nonempty
+or busy locks refuse the operation. The shared compiler's default lock mechanism
+and explicit allocator test/operator injection remain available to their existing
+callers. This fixes a consumer mismatch with the prepared root-owned 0644 lock;
+it does not bind or admit the full OTA runtime or production numbering.
+
 [Run 42508016844](https://github.com/Immortal-Protocols/RoseOS-1/actions/runs/42508016844)
 completed successfully at `efa46b7ebf8c3cafa35053c66f3a4fab37e026f4`.
 The user explicitly approved one temporary OS Login key and one controlled IAP
