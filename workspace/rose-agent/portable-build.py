@@ -2,14 +2,14 @@
 """Rose Agent's portable, Agent-only unsigned build (App Product). Source only: it builds nothing by itself on import.
 
 The build path for independent (for example GitHub-hosted) capacity. It reuses scripts/host-app-build.py unchanged:
-restore() of the five public connection inputs, build(voice_only=True) with its locked `npm ci --ignore-scripts`, the
+restore() of the public connection inputs, build(voice_only=True) with its locked `npm ci --ignore-scripts`, the
 candidate's SHA-pinned scripts/setup-zxing.sh (ZXing core 3.5.4), and workspace/rose-agent/build.sh. What it adds is
 explicit inputs instead of the Frankel builder's config, checked before anything runs:
 
   prepare --sdk-root ABS --build-tools-version 35.0.0 --java-home ABS --public-assets ABS --work ABS
           [--public-asset-digests FILE]
       Verify an Android SDK (platform API 35, the exact build-tools revision), a JDK 21 with jdk.compiler, and a
-      public-input directory holding exactly the five PUBLIC_ASSETS plus their digest receipt (no extra, missing,
+      public-input directory holding exactly the PUBLIC_ASSETS plus their digest receipt (no extra, missing,
       symlinked or tampered file; the repository's check-public-assets.mjs passes). Then make WORK/sdk-view, a
       symlinked layout with the platforms/android-35 and build-tools/android-15 paths build.sh and host-app-build
       expect, and write WORK/d3.json: the six absolute values the hosted release route consumes
@@ -25,7 +25,7 @@ explicit inputs instead of the Frankel builder's config, checked before anything
       Release's; no path is committed.
 
 Every path is absolute; every output (WORK, RELEASE_DIR, OUT) must not exist yet. Nothing reads a key, password or
-credential, and no default or loopback connection data is ever invented: the five inputs come only from the caller.
+credential, and no default or loopback connection data is ever invented: the inputs come only from the caller.
 """
 import argparse
 import hashlib
@@ -138,10 +138,12 @@ def check_jdk(java_home):
 
 
 def check_inputs(assets, pinned=None, checker=ROOT/'scripts/check-public-assets.mjs'):
-    """Exactly the five public inputs and their receipt: present, regular, not symlinked, matching the receipt (and
-    the pinned digests when given), nothing else in the directory, and the repository's checker passes."""
+    """Exactly the public inputs and their receipt: present, regular, not symlinked, matching the receipt (and the
+    pinned digests when given), nothing else in the directory, and the repository's checker passes. A directory
+    staged before an input was retired may still hold it and list it (host-app-build.RETIRED_ASSETS, as restore()
+    allows): it is ignored, never checked, copied or required, so retiring an input needs no restage."""
     hab = load_host_app_build()
-    expected = set(hab.PUBLIC_ASSETS) | {hab.RECEIPT}
+    expected, retired = set(hab.PUBLIC_ASSETS) | {hab.RECEIPT}, set(getattr(hab, 'RETIRED_ASSETS', ()))
     if not assets.is_dir() or assets.is_symlink():
         raise Refused(f'public input directory {assets} missing')
     found = set()
@@ -150,19 +152,20 @@ def check_inputs(assets, pinned=None, checker=ROOT/'scripts/check-public-assets.
             raise Refused(f'public input {path.relative_to(assets)} is a symlink')
         if path.is_file():
             found.add(str(path.relative_to(assets)))
-    missing, unexpected = sorted(expected - found), sorted(found - expected)
+    missing, unexpected = sorted(expected - found), sorted(found - expected - retired)
     if missing:
         raise Refused('missing public inputs: ' + ', '.join(missing))
     if unexpected:
         raise Refused('unexpected files among the public inputs: ' + ', '.join(unexpected))
     receipt = json.loads((assets/hab.RECEIPT).read_text())
     if set(receipt) != {'receiptType', 'files'} or receipt['receiptType'] != 'public-connection-assets' \
-            or set(receipt['files']) != set(hab.PUBLIC_ASSETS):
-        raise Refused('the public input receipt does not list exactly the five inputs')
+            or set(receipt['files']) - retired != set(hab.PUBLIC_ASSETS):
+        raise Refused('the public input receipt does not list exactly the public inputs')
+    files = {relative: receipt['files'][relative] for relative in hab.PUBLIC_ASSETS}
     for relative in hab.PUBLIC_ASSETS:
         if sha256(assets/relative) != receipt['files'][relative]:
             raise Refused(f'public input {relative} does not match its recorded digest')
-    if pinned is not None and pinned != receipt['files']:
+    if pinned is not None and pinned != files:
         raise Refused('the public inputs do not match the pinned digests')
     staging = Path(tempfile.mkdtemp(prefix='rose-public-check-'))  # private; never beside the (possibly read-only) inputs
     try:
@@ -174,7 +177,7 @@ def check_inputs(assets, pinned=None, checker=ROOT/'scripts/check-public-assets.
             raise Refused('public connection inputs failed check-public-assets.mjs')
     finally:
         shutil.rmtree(staging, ignore_errors=True)
-    return dict(receipt['files'])
+    return files
 
 
 def toolchain_facts(view, java_home, jdk_version, revision):
@@ -277,8 +280,8 @@ def run_version(run, command):
 
 
 def overlay(d3):
-    """Release's portable-inputs record: one flat object with exactly the schema and the six D3 fields. The five path
-    fields are absolute and normalized; publicAssetDigests holds exactly the five PUBLIC_ASSETS with lowercase 64-hex
+    """Release's portable-inputs record: one flat object with exactly the schema and the six D3 fields. The path
+    fields are absolute and normalized; publicAssetDigests holds exactly the PUBLIC_ASSETS with lowercase 64-hex
     SHA-256 values. Nothing else: no hosted config, reservation, signer, secret, package or minimum-OS field."""
     record = {'schema': SCHEMA_INPUTS, **{key: d3[key] for key in D3_FIELDS}}
     for key in PATH_FIELDS:
@@ -286,7 +289,7 @@ def overlay(d3):
     digests = record['publicAssetDigests']
     if not isinstance(digests, dict) or set(digests) != set(load_host_app_build().PUBLIC_ASSETS) \
             or not all(isinstance(v, str) and re.fullmatch(r'[0-9a-f]{64}', v) for v in digests.values()):
-        raise Refused('publicAssetDigests must map exactly the five public inputs to lowercase SHA-256 values')
+        raise Refused('publicAssetDigests must map exactly the public inputs to lowercase SHA-256 values')
     return record
 
 

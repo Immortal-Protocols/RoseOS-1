@@ -857,7 +857,10 @@ class DedicatedRuntimeTest(unittest.TestCase):
         self.assertTrue({'runtime-unbound','runner-unregistered','allocation-unresolved',
                          'baseline-not-on-disk','signing-route-unadmitted','publication-disabled'}<=codes)
         self.assertNotIn('app-inputs-unadmitted', codes)
-        self.assertNotIn('app-inputs-stale', codes)
+        # The accepted export is reported stale exactly when this checkout's app sources moved past its producer: an
+        # app-source change merges before the Frankel build and re-export that refresh it, so main may carry either.
+        drift = readiness.bound_app_freshness(json.loads((ROOT/runtime['appInputsRecord']).read_text()), ROOT)
+        self.assertEqual('app-inputs-stale' in codes, bool(drift))
         self.assertEqual(runtime['appInputsRecord'], readiness.ACCEPTED_APP_EXPORT['path'])
         self.assertEqual(runtime['status'], 'unbound')
         self.assertIsNone(runtime['signingRouteEvidence'])
@@ -883,8 +886,9 @@ class DedicatedRuntimeTest(unittest.TestCase):
         self.assertIn('not an OTA extraction', runtime['basis'])
         head=subprocess.check_output(['git','-C',str(ROOT),'-c','protocol.allow=never','rev-parse','HEAD'],text=True).strip()
         self.assertNotIn('app-inputs-history-unavailable', codes)
-        self.assertEqual(readiness.bound_app_freshness(record), [])
-        self.assertEqual(readiness.app_source_drift(record, head), [])
+        # HEAD may be past the producer's app sources (see above), so only consistency is pinned at HEAD; the fixed
+        # commit below has none of the producer's app sources changed.
+        self.assertEqual(readiness.bound_app_freshness(record), readiness.app_source_drift(record, head))
         self.assertEqual(readiness.app_source_drift(record, '149dd4e1d8fb4003aa16b51385b4780cbdc45d66'), [])
         self.assertEqual(readiness.app_source_drift(record, head, diff=lambda *args:'workspace/rose-agent/changed\n'),
                          ['dev.pixel.voice','dev.pixel.calculator.agent','dev.pixel.backgroundcontrol'])

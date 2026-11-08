@@ -36,7 +36,7 @@ before any worktree, build or secret.
 
 --portable-inputs PATH (with --hosted only) is App's nonsecret runtime record (roseos.agent-portable-inputs.v1, written
 by App's bind step on the runner and never committed). It holds exactly App's six fields and nothing else: appSdkRoot,
-javaHome, publicAssetsDir, publicAssetDigests (exactly the five public connection inputs, lowercase sha256) and the
+javaHome, publicAssetsDir, publicAssetDigests (exactly the public connection inputs, lowercase sha256) and the
 aapt and apksigner tools, as absolute normalized paths. It fills those fields of the committed hosted config only;
 a field the committed config already binds is never replaced. Every other value (signing identity, secret names and
 version, minimumTestedOs, the reservation store) comes from the committed config alone. The receipt records the
@@ -100,7 +100,7 @@ def portable_path(value):
         and os.path.normpath(value) == value and not value.startswith('//')
 
 def asset_digests(value):
-    """Exactly the five public connection inputs host-app-build restores, each pinned by its lowercase sha256."""
+    """Exactly the public connection inputs host-app-build restores, each pinned by its lowercase sha256."""
     return isinstance(value, dict) and set(value) == set(load('host-app-build').PUBLIC_ASSETS) \
         and all(isinstance(v, str) and re.fullmatch(r'[0-9a-f]{64}', v) for v in value.values())
 
@@ -151,7 +151,7 @@ def hosted_config(config_path=HOSTED_CONFIG, inputs_path=None):
     bad = [key for _, key in PORTABLE_FIELDS if key != 'publicAssetDigests' and not portable_path(inputs[key])]
     bad += [] if asset_digests(inputs['publicAssetDigests']) else ['publicAssetDigests']
     if bad:
-        raise AdapterFailed('--portable-inputs needs absolute normalized paths and the five pinned public input '
+        raise AdapterFailed('--portable-inputs needs absolute normalized paths and the pinned public input '
                             'digests: ' + ', '.join(bad))
     effective = json.loads(json.dumps(config))
     for section, key in PORTABLE_FIELDS:
