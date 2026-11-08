@@ -382,7 +382,12 @@ def main():
     parser.add_argument('--ownership-record'); parser.add_argument('--publish',action='store_true')
     args=parser.parse_args()
     args.publish=args.publish or (args.action=='guard' and os.environ.get('MUSTANG_PUBLISH')=='true')
-    if args.action=='guard' and os.environ.get('MUSTANG_VENDOR_ONLY')=='true':
+    if args.action=='guard' and os.environ.get('MUSTANG_OTATOOLS_ONLY')=='true':
+        import mustang_otatools_prep
+        mustang_otatools_prep.guard(os.environ,mustang_otatools_prep.deps.read_event(os.environ))
+        if os.environ.get('MUSTANG_DRY_RUN')!='true':
+            raise ValueError('otatools preparation must keep the OTA runtime path closed')
+    elif args.action=='guard' and os.environ.get('MUSTANG_VENDOR_ONLY')=='true':
         import mustang_vendor_prep
         mustang_vendor_prep.guard(os.environ,mustang_vendor_prep.deps.read_event(os.environ))
         if os.environ.get('MUSTANG_DRY_RUN')!='true':

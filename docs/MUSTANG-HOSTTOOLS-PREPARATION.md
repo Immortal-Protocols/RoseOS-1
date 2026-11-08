@@ -188,6 +188,55 @@ enter generation. All project HEAD/worktree checks still run in full, including
 untracked files. Future vendor receipts report a failing project's pinned
 relative path and fixed category without raw status output or file contents.
 
+### Successful pinned-source vendor generation
+
+[Run 42522784617](https://github.com/Immortal-Protocols/RoseOS-1/actions/runs/42522784617)
+completed vendor generation at `55c085ade9d0ef8fa792df1e824720130997b29b`
+in 228.479 seconds. Its [hash-verified receipt](../os/build-only/mustang-vendor-42522784617.json)
+records preservation of the actual 2,802-byte incremental cache and 203-entry
+partial compiled tree in the original failed attempt. The completed dependency
+install was not repeated or changed. All 1,057 project checks passed, the full
+host distribution and stock archive were rehashed, and integrity checking,
+source-loader startup and generation each exited 0. The generated vendor tree
+contains 7,722 catalog entries and 1,773,869,278 regular-file bytes. Owned
+cleanup succeeded and a fresh numeric-ID read confirmed TERMINATED at
+`2026-11-08T13:04:32.732-08:00`, with the four-hour STOP safeguard unchanged.
+This qualifies vendor generation; it does not attest all ignored source content
+or admit an OTA, signing runtime or publication.
+
+## Independent Mustang otatools preparation
+
+The `otatools_only` adapter is gated by
+[mustang-otatools-preparation.json](../os/build-only/mustang-otatools-preparation.json).
+Its vendor evidence is bound to successful run 42522784617, its hash-verified
+receipt and independent cleanup/STOP observation. The hosted guard refuses
+START if that binding is absent or unsuccessful. It requires all
+other manual scopes false and keeps the ordinary OTA builder and signer excluded.
+
+The dedicated unprivileged job rechecks its VM, data disk, captured checkout
+and canonical lock. It checks all 1,057 project HEADs/worktrees, verifies the
+actual successful vendor receipt on disk, rehashes the generated vendor tree,
+installed dependencies and source loader, and rehashes the complete generic
+host-tool distribution. It refuses an existing `out_mustang_otatools_proof`.
+A fixed wrapper uses `mustang-cur-user`, queries the actual four lunch values,
+and builds only `m -j24 otatools-package` in that separate output. Its build
+number is a non-release proof label; no release allocation or signing occurs.
+The job is bounded to 9,000 seconds, 128 GiB watched work, a 300-GiB reserve,
+one million output entries and a 16-MiB private log. Bounds sample the process
+group and are not a hard quota or detached-child containment. Partial output
+and receipts remain if it fails; no automatic output adoption or rebuild exists.
+
+Success requires one actual pinned Soong-module `otatools.zip`, at most 4 GiB,
+its complete file hash, and another source/vendor input check. The guest exports
+only that measured package and its structured receipt from the same run. A
+separate GitHub-hosted job downloads this new artifact, checks run/source/module
+identity, independently hashes the actual bytes and uploads a small readback
+receipt. It has no OIDC or signer credentials and never executes the package.
+VM cleanup waits for the native job and does not wait for the hosted byte check.
+These new artifacts are independent of the denied historical installer read;
+that read is not retried. Tool execution closure, signing pins, signing capacity,
+the baseline and full OTA runtime remain separate unbound prerequisites.
+
 ## Candidate continuity input access
 
 The old Mustang installer artifact `13280698927` remains indexed, with recorded

@@ -44,7 +44,7 @@ def guard(env, event):
     lane = mustang_lane.validate(mustang_lane.configuration())
     run = controller.invocation(lane, env)
     inputs = event.get('inputs') if isinstance(event, dict) else None
-    known = {'lock_admin_only', 'publish', 'dry_run', 'source_only', 'hostdeps_only', 'factory_only', 'vendor_only'}
+    known = {'lock_admin_only', 'publish', 'dry_run', 'source_only', 'hostdeps_only', 'factory_only', 'vendor_only', 'otatools_only'}
     disabled = lambda value: value is None or value is False or (type(value) is str and value == 'false')
     if env.get('GITHUB_REPOSITORY_ID') != '1428996648' or not isinstance(inputs, dict) \
             or set(inputs)-known or not (inputs.get('lock_admin_only') is True or inputs.get('lock_admin_only') == 'true') \
