@@ -487,9 +487,73 @@ def report_failure(error, env):
         'otaAuthorized': False, 'signAuthorized': False, 'publishAuthorized': False})
 
 
+def inspect_guest(env):
+    """Current read-only prerequisites via the existing infrastructure dry run.
+
+    Does not read old attempt logs, create a lock, adopt an output or run Make.
+    The only write is the structured observation in this job's temp directory.
+    """
+    event = read_event(env)
+    inputs = event.get('inputs') if isinstance(event, dict) else None
+    disabled = lambda value: value is False or value is None or (type(value) is str and value == 'false')
+    if not isinstance(inputs, dict) or not (inputs.get('dry_run') is True or inputs.get('dry_run') == 'true') \
+            or any(not disabled(inputs.get(k, False)) for k in ('publish', 'source_only', 'hostdeps_only')):
+        raise ValueError('inspection requires the exclusive infrastructure dry run')
+    lane = mustang_lane.validate(mustang_lane.configuration())
+    run = controller.invocation(lane, env)
+    if env.get('GITHUB_REPOSITORY_ID') != '1428996648' or env.get('GITHUB_JOB') != 'builder' \
+            or env.get('MUSTANG_DRY_RUN') != 'true' or pwd.getpwuid(os.geteuid()).pw_name != 'mustang-runner':
+        raise ValueError('inspection requires the dedicated infrastructure builder job')
+    dedicated = __import__('mustang_ota').module('mustang_inspect_dedicated', 'mustang-dedicated.py')
+    cfg = json.loads((ROOT/'os/build-only/mustang-runtime.json').read_text())
+    paths = dedicated.host_identity(lane, cfg['dataFilesystemUuid'], mount=cfg['dataMount'])
+    source = Path(lane['sourceRoot'])
+    for path in (source, paths['storageRoot']):
+        if plain_dir(path).st_dev != plain_dir(paths['home']).st_dev:
+            raise ValueError('hostdeps path leaves the dedicated data filesystem')
+    directory = Path(env['RUNNER_TEMP'])
+    plain_dir(directory)
+    def entry(path):
+        try:
+            info = path.lstat()
+        except FileNotFoundError:
+            return {'state': 'absent'}
+        except PermissionError:
+            return {'state': 'permission-denied'}
+        kind = 'regular' if stat.S_ISREG(info.st_mode) else 'directory' if stat.S_ISDIR(info.st_mode) else 'other'
+        return {'state': kind, 'mode': stat.S_IMODE(info.st_mode), 'uid': info.st_uid,
+                'gid': info.st_gid, 'linkCount': info.st_nlink}
+    lock_state = entry(Path(lane['lockPath']))
+    if lock_state['state'] == 'regular':
+        try:
+            with lock(Path(lane['lockPath'])):
+                lock_state['availability'] = 'available'
+        except PermissionError:
+            lock_state['availability'] = 'permission-denied'
+        except ValueError as error:
+            lock_state['availability'] = 'busy' if str(error) == 'Mustang builder lock is busy' else 'refused'
+        except OSError:
+            lock_state['availability'] = 'unreadable'
+    output = entry(source/recipe()['outDir'])
+    space = os.statvfs(source)
+    observation = {'schema': 'roseos.mustang-hostdeps-preflight.v1',
+        'identity': dict(run=run, builder=lane['vm'], diskUuid=cfg['dataFilesystemUuid']),
+        'guestIdentityVerified': True, 'readOnlyGuestObservation': True,
+        'lock': lock_state, 'dependencyOutput': output,
+        'availableBytes': space.f_bavail*(space.f_frsize or space.f_bsize),
+        'availableInodes': space.f_favail, 'makeStarted': False,
+        'pristineRuntimeAttestation': False, 'authenticatedStop': False,
+        'otaAuthorized': False, 'signAuthorized': False, 'publishAuthorized': False}
+    receipt(directory/'hostdeps-preflight.json', observation)
+    # Only fixed state vocabulary, never paths, exception text or old logs.
+    print('::notice title=Mustang host-dependency preflight::lock='+lock_state['state']+
+          '; availability='+lock_state.get('availability', 'not-tested')+'; output='+output['state'])
+    return observation
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('action', choices=('plan', 'run', 'report'), default='plan', nargs='?')
+    parser.add_argument('action', choices=('plan', 'run', 'report', 'inspect'), default='plan', nargs='?')
     parser.add_argument('--execute', action='store_true')
     parser.add_argument('--out')
     args = parser.parse_args(argv)
@@ -497,7 +561,11 @@ def main(argv=None):
         print(json.dumps(dict(recipe=recipe(), execute=False, argv=None), sort_keys=True))
         return 4
     try:
-        if args.action == 'report':
+        if args.action == 'inspect':
+            if not args.execute:
+                raise ValueError('guest inspection requires explicit execution')
+            inspect_guest(os.environ)
+        elif args.action == 'report':
             if not args.out:
                 raise ValueError('hostdeps report destination is required')
             report(os.environ, args.out)

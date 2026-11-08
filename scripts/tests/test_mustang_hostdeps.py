@@ -1,5 +1,6 @@
 """Offline adversarial checks for the bounded generic dependency adapter."""
 import importlib.util
+import contextlib
 import json
 import os
 from pathlib import Path
@@ -18,6 +19,7 @@ import mustang_hostdeps as deps
 import mustang_ephemeral as ephemeral
 import mustang_lane
 import mustang_route
+import mustang_ota
 import os_release_shape as workflow_shape
 
 
@@ -51,6 +53,7 @@ class HostdepsTest(unittest.TestCase):
             self.assertEqual(deps.main([]), 4)
             self.assertEqual(deps.main(['run']), 4)
             self.assertEqual(deps.main(['run', '--execute']), 4)
+            self.assertEqual(deps.main(['inspect']), 4)
         recipe = deps.recipe()
         self.assertEqual(recipe['jobs'], 24)
         self.assertLess(recipe['timeoutSeconds']+2*deps.KILL_GRACE, 155*60)
@@ -124,6 +127,88 @@ class HostdepsTest(unittest.TestCase):
                 patch.object(deps, 'execute', side_effect=PermissionError('private-path')), \
                 patch.object(deps, 'report_failure', side_effect=OSError('cannot write')):
             self.assertEqual(deps.main(['run', '--execute']), 4)
+
+    def inspection_fixture(self, tmp, stack):
+        root = Path(tmp)
+        source, storage, jobtmp = (root/name for name in ('source', 'storage', 'jobtmp'))
+        for path in (source, storage, jobtmp):
+            path.mkdir()
+        env = self.failure_environment(str(jobtmp))
+        Path(env['GITHUB_EVENT_PATH']).write_text(json.dumps({'inputs': {'dry_run': True}}))
+        env.update(GITHUB_JOB='builder', MUSTANG_DRY_RUN='true')
+        lane = json.loads(json.dumps(mustang_lane.configuration()))
+        lane.update(sourceRoot=str(source), lockPath=str(root/'mustang.lock'))
+        paths = {'home': root, 'sourceRoot': source, 'storageRoot': storage}
+        stack.enter_context(patch.object(deps.mustang_lane, 'configuration', return_value=lane))
+        stack.enter_context(patch.object(deps.mustang_lane, 'validate', side_effect=lambda value: value))
+        identity = SimpleNamespace(host_identity=lambda *args, **kwargs: paths)
+        stack.enter_context(patch.object(mustang_ota, 'module', return_value=identity))
+        stack.enter_context(patch.object(deps.pwd, 'getpwuid', return_value=SimpleNamespace(pw_name='mustang-runner')))
+        stack.enter_context(patch.object(deps, 'supervise', side_effect=AssertionError('Make started')))
+        stack.enter_context(patch.object(deps.subprocess, 'run', side_effect=AssertionError('process started')))
+        return env, lane, paths
+
+    def test_inspection_observes_missing_lock_without_creating_it_or_output(self):
+        with tempfile.TemporaryDirectory() as tmp, contextlib.ExitStack() as stack:
+            env, lane, paths = self.inspection_fixture(tmp, stack)
+            result = deps.inspect_guest(env)
+            self.assertEqual(result['lock'], {'state': 'absent'})
+            self.assertEqual(result['dependencyOutput'], {'state': 'absent'})
+            self.assertTrue(result['guestIdentityVerified'])
+            self.assertFalse(result['makeStarted'])
+            self.assertFalse(result['pristineRuntimeAttestation'])
+            self.assertFalse(Path(lane['lockPath']).exists())
+            self.assertEqual(list(paths['sourceRoot'].iterdir()), [])
+            self.assertEqual(list(paths['storageRoot'].iterdir()), [])
+            self.assertEqual(json.loads((Path(env['RUNNER_TEMP'])/'hostdeps-preflight.json').read_text()), result)
+
+    def test_inspection_reports_busy_lock_and_preserves_existing_output(self):
+        with tempfile.TemporaryDirectory() as tmp, contextlib.ExitStack() as stack:
+            env, lane, paths = self.inspection_fixture(tmp, stack)
+            lock = Path(lane['lockPath'])
+            lock.write_text('existing lock bytes')
+            output = paths['sourceRoot']/deps.recipe()['outDir']
+            output.mkdir()
+            partial = output/'partial'
+            partial.write_text('preserve me')
+            before = lock.stat().st_mtime_ns
+            with deps.lock(lock):
+                result = deps.inspect_guest(env)
+            self.assertEqual(result['lock']['availability'], 'busy')
+            self.assertEqual(result['dependencyOutput']['state'], 'directory')
+            self.assertEqual(partial.read_text(), 'preserve me')
+            self.assertEqual(lock.read_text(), 'existing lock bytes')
+            self.assertEqual(lock.stat().st_mtime_ns, before)
+
+    def test_inspection_does_not_follow_output_links_or_repair_lock_links(self):
+        with tempfile.TemporaryDirectory() as tmp, contextlib.ExitStack() as stack:
+            env, lane, paths = self.inspection_fixture(tmp, stack)
+            Path(lane['lockPath']).symlink_to('/unreadable-other-lock')
+            (paths['sourceRoot']/deps.recipe()['outDir']).symlink_to('/unreadable-other-output')
+            result = deps.inspect_guest(env)
+            self.assertEqual(result['lock']['state'], 'other')
+            self.assertNotIn('availability', result['lock'])
+            self.assertEqual(result['dependencyOutput']['state'], 'other')
+            self.assertTrue(Path(lane['lockPath']).is_symlink())
+
+    def test_inspection_requires_its_exclusive_scope_and_identity_before_observation(self):
+        for change in ({'hostdeps_only': True}, {'source_only': True}, {'publish': True}, {'dry_run': False}):
+            with tempfile.TemporaryDirectory() as tmp, contextlib.ExitStack() as stack:
+                env, _lane, _paths = self.inspection_fixture(tmp, stack)
+                Path(env['GITHUB_EVENT_PATH']).write_text(json.dumps({'inputs': {'dry_run': True, **change}}))
+                with self.assertRaises(ValueError):
+                    deps.inspect_guest(env)
+                self.assertFalse((Path(env['RUNNER_TEMP'])/'hostdeps-preflight.json').exists())
+        with tempfile.TemporaryDirectory() as tmp, contextlib.ExitStack() as stack:
+            env, _lane, _paths = self.inspection_fixture(tmp, stack)
+            for change in ({'GITHUB_JOB': 'hostdeps'}, {'GITHUB_RUN_ATTEMPT': '2'}, {'MUSTANG_DRY_RUN': 'false'}):
+                with self.assertRaises(ValueError):
+                    deps.inspect_guest(dict(env, **change))
+            with patch.object(mustang_ota, 'module', return_value=SimpleNamespace(
+                    host_identity=lambda *args, **kwargs: (_ for _ in ()).throw(ValueError('wrong VM')))):
+                with self.assertRaisesRegex(ValueError, 'wrong VM'):
+                    deps.inspect_guest(env)
+            self.assertFalse((Path(env['RUNNER_TEMP'])/'hostdeps-preflight.json').exists())
 
     def test_recipe_cannot_become_a_foreign_output_path_or_arbitrary_make_option(self):
         original = deps.readers.recipe()

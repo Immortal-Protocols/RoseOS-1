@@ -39,6 +39,17 @@ Make success, distribution nor STOP; it never serializes exception text or raw
 logs. This is prospective failure reporting, not recovery of this run's missing
 receipt or an explanation of its failure.
 
+The existing exclusive infrastructure `dry_run` also gains a current read-only
+guest observation. After verifying guest/disk identity, it records lock
+existence/type and nonblocking availability, dependency-output existence/type,
+and current free bytes/inodes. It neither reads old attempt logs nor runs Make,
+creates a lock, changes permissions, adopts output or repairs the host. The
+only written file is `hostdeps-preflight.json` in the job's temporary directory,
+uploaded as `mustang-preflight-RUN_ID-1`. A notice annotation contains only the
+fixed observed lock/availability/output state vocabulary. This independent
+current-state check can establish the next preparation action even when a
+historical log cannot be retrieved; it does not establish that run's cause.
+
 ## Verified starting point
 
 | Item | Evidence and limit |
