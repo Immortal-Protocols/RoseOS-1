@@ -50,8 +50,7 @@ pin = hashlib.sha256(der).hexdigest()
 root = Path(__file__).resolve().parents[1]/'workspace'
 assets = root/'rose-agent/app/assets'
 assets.mkdir(parents=True,exist_ok=True)
-for name in ['connection.json','mac-screen-connection.json']:
-    (assets/name).write_text(json.dumps({'endpoint':a.endpoint,'pin':pin},indent=2)+'\n')
+(assets/'connection.json').write_text(json.dumps({'endpoint':a.endpoint,'pin':pin},indent=2)+'\n')
 if a.installer_cert_sha256:
     (assets/'installer-identity.json').write_text(json.dumps({'sha256':a.installer_cert_sha256.lower()},indent=2)+'\n')
 (root/'pixel-clipboard/clipboard-connection.json').write_text(json.dumps({'endpoint':a.endpoint},indent=2)+'\n')

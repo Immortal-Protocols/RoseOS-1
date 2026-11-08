@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 const assets = process.argv[2];
 if (!assets) throw Error('Usage: node scripts/check-public-assets.mjs ASSETS_DIRECTORY');
-for (const name of ['connection.json', 'clipboard-connection.json', 'mac-screen-connection.json']) {
+for (const name of ['connection.json', 'clipboard-connection.json']) {
   const value = JSON.parse(fs.readFileSync(path.join(assets, name), 'utf8'));
   const allowed = name === 'clipboard-connection.json' ? ['endpoint'] : ['endpoint', 'pin'];
   if (Object.keys(value).some(key => !allowed.includes(key))) throw Error('Unexpected connection field: ' + name);
