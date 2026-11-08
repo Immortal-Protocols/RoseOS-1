@@ -103,6 +103,28 @@ class VendorPreparationTest(unittest.TestCase):
             self.assertIn('inputs.vendor_only == false',jobs[role])
         self.assertEqual(ephemeral.queue_decision([{'name':'vendor','status':'in_progress'}],100),'ready')
 
+    def test_recovery_preserves_metadata_then_still_requires_full_source_check(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)/'checkout';(root/'os/build-only').mkdir(parents=True)
+            (root/'os/build-only/mustang.json').write_bytes((ROOT/'os/build-only/mustang.json').read_bytes())
+            (root/'os/build-only/mustang-vendor-preparation.json').write_text('{"bootstrapRecoveryEvidence":"selected"}')
+            source=Path(tmp)/'source';source.mkdir();attempt=Path(tmp)/'attempt';attempt.mkdir();order=[]
+            def retain(*_args,**_kwargs):order.append('retain');return {'completed':True,'usedForGeneration':False}
+            def strict_check(*_args,**_kwargs):
+                order.append('source-check');raise vendor.deps.SourceMismatch('other/project','worktree')
+            free=SimpleNamespace(f_bavail=1 << 40,f_frsize=1,f_favail=1000000)
+            with patch.object(vendor.recovery,'retain_build_metadata',side_effect=retain), \
+                    patch.object(vendor.deps,'source_check',side_effect=strict_check), \
+                    patch.object(vendor.os,'statvfs',return_value=free), \
+                    patch.object(vendor.mustang_yarn,'install',side_effect=AssertionError('network')):
+                with self.assertRaises(vendor.deps.SourceMismatch):
+                    vendor.prepare(source,attempt,{}, {},{},root=root)
+            self.assertEqual(order,['retain','source-check'])
+            result=json.loads((attempt/vendor.RECEIPT).read_text())
+            self.assertEqual(result['phase'],'pinned-source-check');self.assertFalse(result['success'])
+            self.assertEqual(result['commands'],[])
+            self.assertEqual(result['sourceMismatch'],{'project':'other/project','kind':'worktree','rawStatusIncluded':False})
+
     def test_successful_sequence_uses_measured_inputs_and_records_generated_bytes(self):
         with tempfile.TemporaryDirectory() as tmp:
             source=Path(tmp)/'source';source.mkdir();attempt=Path(tmp)/'attempt';attempt.mkdir()
@@ -217,6 +239,77 @@ class BootstrapRecoveryTest(unittest.TestCase):
         changed['receipt']['commands'][0]['exitCode']=1
         with patch.object(vendor.recovery.Path,'read_text',return_value=json.dumps(changed)):
             with self.assertRaises(ValueError):vendor.recovery.evidence()
+
+    def metadata_fixture(self,tmp):
+        source,storage,old,record,identity=self.fixture(tmp)
+        adev=source/'vendor/adevtool';git=['git','-C',str(adev)]
+        subprocess.run(git+['init','-q'],check=True)
+        (adev/'.gitignore').write_text('/node_modules/\n/lib/\n')
+        (adev/'tsconfig.json').write_text('{}')
+        subprocess.run(git+['add','.gitignore','tsconfig.json'],check=True)
+        subprocess.run(git+['-c','user.name=t','-c','user.email=t@example.com','commit','-qm','fixture'],check=True)
+        revision=subprocess.check_output(git+['rev-parse','HEAD'],text=True).strip()
+        cache=adev/'tsconfig.tsbuildinfo';cache.write_bytes(b'untrusted incremental build cache')
+        return source,storage,old,record,identity,revision,cache
+
+    def retain_metadata(self,source,storage,record,identity,revision):
+        with patch.object(vendor.recovery,'evidence',return_value=record), \
+                patch.object(vendor.deps,'recipe',return_value={'adevtoolRevision':revision}):
+            return vendor.recovery.retain_build_metadata(source,storage,identity,
+                vendor.deps.child_env(source,storage),time.monotonic()+20)
+
+    def test_incremental_cache_is_preserved_before_full_strict_source_check(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source,storage,old,record,identity,revision,cache=self.metadata_fixture(tmp)
+            before=cache.stat();content=cache.read_bytes()
+            with patch.object(vendor.deps.sync,'project_identities',return_value=[('adev','vendor/adevtool','r',revision)]):
+                with self.assertRaises(vendor.deps.SourceMismatch):
+                    vendor.deps.source_check(source,vendor.deps.child_env(source,storage),time.monotonic()+20)
+                result=self.retain_metadata(source,storage,record,identity,revision)
+                target=old/'retained-tsconfig.tsbuildinfo'
+                self.assertEqual(target.read_bytes(),content);self.assertEqual(target.stat().st_ino,before.st_ino)
+                self.assertFalse(cache.exists());self.assertTrue(result['completed'])
+                self.assertFalse(result['usedForGeneration'])
+                self.assertEqual(self.retain_metadata(source,storage,record,identity,revision),result)
+                self.assertEqual(vendor.deps.source_check(source,vendor.deps.child_env(source,storage),
+                    time.monotonic()+20)['projectCount'],1)
+                (source/'vendor/adevtool/unrelated').write_text('not exempted')
+                with self.assertRaises(vendor.deps.SourceMismatch) as error:
+                    vendor.deps.source_check(source,vendor.deps.child_env(source,storage),time.monotonic()+20)
+                self.assertEqual(error.exception.observation,{'project':'vendor/adevtool','kind':'worktree','rawStatusIncluded':False})
+
+    def test_incremental_cache_retention_refuses_unsafe_or_unrelated_state(self):
+        for change in ('receipt','revision','tracked','dirty','symlink','hardlink','mode','oversize','orphan'):
+            with self.subTest(change=change),tempfile.TemporaryDirectory() as tmp:
+                source,storage,old,record,identity,revision,cache=self.metadata_fixture(tmp)
+                if change=='receipt':(old/vendor.RECEIPT).write_text('changed')
+                if change=='revision':revision='0'*40
+                if change=='tracked':subprocess.run(['git','-C',str(cache.parent),'add',cache.name],check=True)
+                if change=='dirty':(cache.parent/'tsconfig.json').write_text('changed')
+                if change=='symlink':cache.unlink();cache.symlink_to('tsconfig.json')
+                if change=='hardlink':os.link(cache,cache.parent/'another-link')
+                if change=='mode':cache.chmod(0o666)
+                if change=='oversize':
+                    with open(cache,'r+b') as stream:stream.truncate((16 << 20)+1)
+                if change=='orphan':(old/'retained-tsconfig.tsbuildinfo').write_bytes(b'preserved other bytes')
+                with self.assertRaises((ValueError,vendor.deps.readers._Refused)):
+                    self.retain_metadata(source,storage,record,identity,revision)
+                self.assertTrue(os.path.lexists(cache))
+
+    def test_incremental_cache_interruption_and_tampering_stop_reuse(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source,storage,old,record,identity,revision,cache=self.metadata_fixture(tmp)
+            with patch.object(vendor.deps,'rename_noreplace',side_effect=OSError('fixture interrupted')):
+                with self.assertRaises(OSError):self.retain_metadata(source,storage,record,identity,revision)
+            with self.assertRaises(vendor.deps.readers._Refused):
+                self.retain_metadata(source,storage,record,identity,revision)
+            self.assertTrue(cache.exists())
+        with tempfile.TemporaryDirectory() as tmp:
+            source,storage,old,record,identity,revision,cache=self.metadata_fixture(tmp)
+            self.retain_metadata(source,storage,record,identity,revision)
+            (old/'retained-tsconfig.tsbuildinfo').write_text('changed after preservation')
+            with self.assertRaisesRegex(ValueError,'reconciliation'):
+                self.retain_metadata(source,storage,record,identity,revision)
 
 
 if __name__=='__main__':unittest.main()
