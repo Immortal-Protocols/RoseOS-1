@@ -1,10 +1,10 @@
-# Manual only. The lane is identity-bound; runtime stays unbound, so guard refuses before any VM start.
+# Manual only. OTA runtime stays unbound. Separate source, dry-run and hostdeps scopes use the owned controller.
 # Builder job is self-hosted on roseos-mustang-builder and has no signer token.
 # The signer job is the only job that may OIDC-login as the existing signer.
 # It targets group roseos-mustang-signer and label mustang-signer-4core. Admission stays closed.
 # Guard, controller, publisher and cleanup are GitHub-hosted.
-# Lifetime is selected only by real registration evidence. The VM STOPs itself after four hours if cleanup does not.
-# No provisioning, runner registration, key bootstrap or policy reclaim.
+# Existing group-5 protected JIT route only. The VM STOPs itself after four hours if cleanup does not.
+# No provisioning, key bootstrap or policy reclaim.
 name: Mustang dedicated OTA
 run-name: mustang-dedicated-ota ${{ github.run_id }}
 on:
@@ -22,6 +22,10 @@ on:
         description: Sync the pinned tree on the guest only. The guest cannot stop the VM; cleanup does.
         type: boolean
         default: false
+      hostdeps_only:
+        description: Build generic adevtool dependencies only, with bounded receipts; no vendor, OTA or signing
+        type: boolean
+        default: false
 permissions:
   contents: read
 concurrency:
@@ -29,7 +33,8 @@ concurrency:
   cancel-in-progress: false
 env:
   MUSTANG_PUBLISH: ${{ inputs.publish }}
-  MUSTANG_DRY_RUN: ${{ inputs.dry_run || inputs.source_only }}
+  MUSTANG_DRY_RUN: ${{ inputs.dry_run || inputs.source_only || inputs.hostdeps_only }}
+  MUSTANG_HOSTDEPS_ONLY: ${{ inputs.hostdeps_only }}
 jobs:
   guard:
     runs-on: ubuntu-24.04
@@ -171,7 +176,7 @@ jobs:
     - guard
     - controller
     - enroll
-    if: inputs.source_only == false
+    if: inputs.source_only == false && inputs.hostdeps_only == false
     runs-on:
       group: ${{ needs.guard.outputs.runner_group }}
       labels: ${{ needs.guard.outputs.runner_label }}
@@ -239,7 +244,7 @@ jobs:
   signer:
     needs:
     - builder
-    if: inputs.dry_run == false && inputs.source_only == false && needs.builder.result == 'success'
+    if: inputs.dry_run == false && inputs.source_only == false && inputs.hostdeps_only == false && needs.builder.result == 'success'
     runs-on:
       group: roseos-mustang-signer
       labels: mustang-signer-4core
@@ -355,6 +360,37 @@ jobs:
       env:
         MUSTANG_SOURCE_ONLY: 'true'
       run: python3 scripts/mustang_source_sync.py run --execute
+  hostdeps:
+    needs:
+    - guard
+    - controller
+    - enroll
+    if: inputs.hostdeps_only
+    runs-on:
+      group: ${{ needs.guard.outputs.runner_group }}
+      labels: ${{ needs.guard.outputs.runner_label }}
+    timeout-minutes: 165
+    permissions:
+      contents: read
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        ref: ${{ github.sha }}
+        fetch-depth: 0
+        persist-credentials: false
+    - name: Build the pinned generic adevtool dependencies on Mustang only
+      timeout-minutes: 155
+      run: python3 scripts/mustang_hostdeps.py run --execute
+    - if: always()
+      name: Copy only this attempt's structured receipt after fresh host identity checks
+      run: python3 scripts/mustang_hostdeps.py report --out "$RUNNER_TEMP/hostdeps-receipt.json"
+    - if: always()
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: mustang-hostdeps-${{ github.run_id }}-${{ github.run_attempt }}
+        path: ${{ runner.temp }}/hostdeps-receipt.json
+        retention-days: 14
+        if-no-files-found: warn
   cleanup:
     needs:
     - guard
@@ -362,6 +398,7 @@ jobs:
     - builder
     - signer
     - source
+    - hostdeps
     - publisher
     if: always() && needs.controller.result != 'skipped'
     runs-on: ubuntu-24.04
