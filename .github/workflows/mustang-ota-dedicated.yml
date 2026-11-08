@@ -76,6 +76,9 @@ jobs:
     - id: inputs
       name: Admit exact manual run, routes and actual dedicated inputs before host start
       run: python3 scripts/mustang-dedicated.py guard
+    - name: Check the fixed read-only otatools observation binding before START
+      if: inputs.dry_run
+      run: python3 scripts/mustang_otatools_observation.py --check-binding
   controller:
     needs: guard
     runs-on: ubuntu-24.04
@@ -215,11 +218,17 @@ jobs:
     - name: Observe current dependency lock and output without building
       if: inputs.dry_run
       run: python3 scripts/mustang_hostdeps.py inspect --execute
+    - name: Observe only the fixed failed otatools attempt without rebuilding
+      if: inputs.dry_run
+      timeout-minutes: 2
+      run: python3 scripts/mustang_otatools_observation.py --execute
     - if: always() && inputs.dry_run
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
       with:
         name: mustang-preflight-${{ github.run_id }}-${{ github.run_attempt }}
-        path: ${{ runner.temp }}/hostdeps-preflight.json
+        path: |
+          ${{ runner.temp }}/hostdeps-preflight.json
+          ${{ runner.temp }}/otatools-failure-observation.json
         retention-days: 14
         if-no-files-found: warn
     - name: Check actual baseline updater and trust before a new compile

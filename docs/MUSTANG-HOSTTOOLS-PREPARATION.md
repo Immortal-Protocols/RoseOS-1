@@ -237,6 +237,34 @@ These new artifacts are independent of the denied historical installer read;
 that read is not retried. Tool execution closure, signing pins, signing capacity,
 the baseline and full OTA runtime remain separate unbound prerequisites.
 
+### First tool-proof wrapper failure
+
+[Run 42524960701](https://github.com/Immortal-Protocols/RoseOS-1/actions/runs/42524960701)
+at `6a532d4ff5cc6c55c338da36344b172c4fcb3cf1` passed all 1,057 project
+checks and rehashed the actual generated vendor, source loader and complete
+485-entry host distribution. Its fixed build wrapper exited 1 after 91.301
+seconds. The [verified receipt](../os/build-only/mustang-otatools-42524960701.json)
+records `makeStarted: null`; neither actual Make start nor a failing setup/lunch/
+Make substage is established. There was no package export or independent hosted
+readback. Output remains intact. Owned cleanup succeeded and a fresh numeric-ID
+read confirmed TERMINATED at `2026-11-08T13:27:26.566-08:00`.
+
+The existing exclusive infrastructure dry run gains one fixed-attempt observer.
+Its failed-receipt binding is checked before START. The guest independently
+verifies its identity, disk and captured checkout, holds the canonical lock,
+then checks the exact on-disk failed receipt against the uploaded SHA-256.
+It observes only that attempt's structured lunch fields, a bounded metadata-only
+walk of the tool output and fixed diagnostic categories/source locations from
+that attempt's private Make log. Log bytes, messages, arbitrary paths and
+unexpected lunch values are not exported. The private log is limited to 16 MiB,
+lines to 4 KiB, locations to 32 and the output metadata walk to 100,000 entries/
+30 seconds; the step is limited to two minutes. Missing records and omitted long
+lines are explicit. Other attempts, changed receipts, links and special-file
+logs refuse observation. This adds no Make, move, deletion, output adoption,
+credential, signing or publication action, and never reads the denied historical
+log endpoints or installer. Classification is diagnostic evidence, not a build
+or tool admission. The next correction must follow the observed result.
+
 ## Candidate continuity input access
 
 The old Mustang installer artifact `13280698927` remains indexed, with recorded
