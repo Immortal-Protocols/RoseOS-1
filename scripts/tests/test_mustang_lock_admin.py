@@ -33,7 +33,7 @@ class LockAdminTest(unittest.TestCase):
             lane, run = admin.guard(self.env(), event)
             self.assertEqual(lane['vm']['instanceId'], '5585425566393384049')
             self.assertEqual(run['runAttempt'], '1')
-            for key in ('publish', 'dry_run', 'source_only', 'hostdeps_only', 'unknown'):
+            for key in ('publish', 'dry_run', 'source_only', 'hostdeps_only', 'factory_only', 'unknown'):
                 with self.subTest(key=key), self.assertRaises(ValueError):
                     admin.guard(self.env(), {'inputs': {'lock_admin_only': True, key: True}})
             for change in ({'GITHUB_RUN_ATTEMPT': '2'}, {'GITHUB_REF': 'refs/heads/other'},

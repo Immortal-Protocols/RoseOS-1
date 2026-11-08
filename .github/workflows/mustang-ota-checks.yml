@@ -1,10 +1,10 @@
 name: Mustang OTA checks
 on:
   pull_request:
-    paths: ['os/**', 'scripts/mustang*', 'scripts/host-*.py', 'scripts/host_secrets.py', 'scripts/agent-beta-auto.py', 'scripts/release-pipeline.py', 'scripts/release-allocate.py', 'scripts/github_release_publisher.py', 'scripts/apply-os-changes.py', 'scripts/app-inputs-verify.py', 'scripts/tests/test_app_inputs_export.py', 'scripts/host-reconcile.py', 'scripts/tests/test_mustang_ota.py', 'scripts/tests/test_mustang_edge_gate.py', 'scripts/tests/test_mustang_hosttools.py', 'scripts/tests/test_mustang_hostdeps.py', 'scripts/tests/test_mustang_prepare_lock.py', 'scripts/tests/test_mustang_lock_admin.py', 'scripts/edge_artifact.py', 'scripts/signing-bootstrap.py', 'scripts/tests/test_edge_artifact.py', 'scripts/tests/dex_fixture.py', 'workspace/rose-agent/**', '.github/workflows/os-release.yml', '.github/workflows/mustang-ota-*.yml']
+    paths: ['os/**', 'scripts/mustang*', 'scripts/host-*.py', 'scripts/host_secrets.py', 'scripts/agent-beta-auto.py', 'scripts/release-pipeline.py', 'scripts/release-allocate.py', 'scripts/github_release_publisher.py', 'scripts/apply-os-changes.py', 'scripts/app-inputs-verify.py', 'scripts/tests/test_app_inputs_export.py', 'scripts/host-reconcile.py', 'scripts/tests/test_mustang_ota.py', 'scripts/tests/test_mustang_edge_gate.py', 'scripts/tests/test_mustang_hosttools.py', 'scripts/tests/test_mustang_hostdeps.py', 'scripts/tests/test_mustang_prepare_lock.py', 'scripts/tests/test_mustang_lock_admin.py', 'scripts/tests/test_mustang_factory_input.py', 'scripts/edge_artifact.py', 'scripts/signing-bootstrap.py', 'scripts/tests/test_edge_artifact.py', 'scripts/tests/dex_fixture.py', 'workspace/rose-agent/**', '.github/workflows/os-release.yml', '.github/workflows/mustang-ota-*.yml']
   push:
     branches: [main]
-    paths: ['os/**', 'scripts/mustang*', 'scripts/host-*.py', 'scripts/host_secrets.py', 'scripts/agent-beta-auto.py', 'scripts/release-pipeline.py', 'scripts/release-allocate.py', 'scripts/github_release_publisher.py', 'scripts/apply-os-changes.py', 'scripts/app-inputs-verify.py', 'scripts/tests/test_app_inputs_export.py', 'scripts/host-reconcile.py', 'scripts/tests/test_mustang_ota.py', 'scripts/tests/test_mustang_edge_gate.py', 'scripts/tests/test_mustang_hosttools.py', 'scripts/tests/test_mustang_hostdeps.py', 'scripts/tests/test_mustang_prepare_lock.py', 'scripts/tests/test_mustang_lock_admin.py', 'scripts/edge_artifact.py', 'scripts/signing-bootstrap.py', 'scripts/tests/test_edge_artifact.py', 'scripts/tests/dex_fixture.py', 'workspace/rose-agent/**', '.github/workflows/os-release.yml', '.github/workflows/mustang-ota-*.yml']
+    paths: ['os/**', 'scripts/mustang*', 'scripts/host-*.py', 'scripts/host_secrets.py', 'scripts/agent-beta-auto.py', 'scripts/release-pipeline.py', 'scripts/release-allocate.py', 'scripts/github_release_publisher.py', 'scripts/apply-os-changes.py', 'scripts/app-inputs-verify.py', 'scripts/tests/test_app_inputs_export.py', 'scripts/host-reconcile.py', 'scripts/tests/test_mustang_ota.py', 'scripts/tests/test_mustang_edge_gate.py', 'scripts/tests/test_mustang_hosttools.py', 'scripts/tests/test_mustang_hostdeps.py', 'scripts/tests/test_mustang_prepare_lock.py', 'scripts/tests/test_mustang_lock_admin.py', 'scripts/tests/test_mustang_factory_input.py', 'scripts/edge_artifact.py', 'scripts/signing-bootstrap.py', 'scripts/tests/test_edge_artifact.py', 'scripts/tests/dex_fixture.py', 'workspace/rose-agent/**', '.github/workflows/os-release.yml', '.github/workflows/mustang-ota-*.yml']
 permissions:
   contents: read
 jobs:
@@ -22,6 +22,7 @@ jobs:
       - run: python3 scripts/tests/test_mustang_hostdeps.py
       - run: python3 scripts/tests/test_mustang_prepare_lock.py
       - run: python3 scripts/tests/test_mustang_lock_admin.py
+      - run: python3 scripts/tests/test_mustang_factory_input.py
       - run: python3 os/tests/test_updater_channels.py && python3 os/tests/test_updater_releases.py
       - run: |
           mkdir -p "$RUNNER_TEMP/updater-tests"

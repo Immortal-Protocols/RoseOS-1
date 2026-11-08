@@ -35,7 +35,7 @@ class HostdepsTest(unittest.TestCase):
         lane, run = deps.guard(self.env(), event)
         self.assertEqual(lane['vm']['instanceId'], '5585425566393384049')
         self.assertEqual(run['runAttempt'], '1')
-        for key in ('source_only', 'dry_run', 'publish', 'lock_admin_only'):
+        for key in ('source_only', 'dry_run', 'publish', 'lock_admin_only', 'factory_only'):
             for value in (True, 'true', 'yes', 1):
                 with self.subTest(key=key, value=value), self.assertRaises(ValueError):
                     deps.guard(self.env(), {'inputs': dict(event['inputs'], **{key: value})})

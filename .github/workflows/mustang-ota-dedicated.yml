@@ -30,6 +30,10 @@ on:
         description: Ten-minute handoff for separately authorized lock administration; job runs no sudo or initializer
         type: boolean
         default: false
+      factory_only:
+        description: Download and verify the pinned public stock archive on Mustang only; no extraction or build
+        type: boolean
+        default: false
 permissions:
   contents: read
 concurrency:
@@ -37,9 +41,10 @@ concurrency:
   cancel-in-progress: false
 env:
   MUSTANG_PUBLISH: ${{ inputs.publish }}
-  MUSTANG_DRY_RUN: ${{ inputs.dry_run || inputs.source_only || inputs.hostdeps_only || inputs.lock_admin_only }}
+  MUSTANG_DRY_RUN: ${{ inputs.dry_run || inputs.source_only || inputs.hostdeps_only || inputs.lock_admin_only || inputs.factory_only }}
   MUSTANG_HOSTDEPS_ONLY: ${{ inputs.hostdeps_only }}
   MUSTANG_LOCK_ADMIN_ONLY: ${{ inputs.lock_admin_only }}
+  MUSTANG_FACTORY_ONLY: ${{ inputs.factory_only }}
 jobs:
   guard:
     runs-on: ubuntu-24.04
@@ -181,7 +186,7 @@ jobs:
     - guard
     - controller
     - enroll
-    if: inputs.source_only == false && inputs.hostdeps_only == false && inputs.lock_admin_only == false
+    if: inputs.source_only == false && inputs.hostdeps_only == false && inputs.lock_admin_only == false && inputs.factory_only == false
     runs-on:
       group: ${{ needs.guard.outputs.runner_group }}
       labels: ${{ needs.guard.outputs.runner_label }}
@@ -259,7 +264,7 @@ jobs:
   signer:
     needs:
     - builder
-    if: inputs.dry_run == false && inputs.source_only == false && inputs.hostdeps_only == false && inputs.lock_admin_only == false && needs.builder.result == 'success'
+    if: inputs.dry_run == false && inputs.source_only == false && inputs.hostdeps_only == false && inputs.lock_admin_only == false && inputs.factory_only == false && needs.builder.result == 'success'
     runs-on:
       group: roseos-mustang-signer
       labels: mustang-signer-4core
@@ -408,6 +413,37 @@ jobs:
           ${{ runner.temp }}/hostdeps-failure.json
         retention-days: 14
         if-no-files-found: warn
+  factory:
+    needs:
+    - guard
+    - controller
+    - enroll
+    if: inputs.factory_only
+    runs-on:
+      group: ${{ needs.guard.outputs.runner_group }}
+      labels: ${{ needs.guard.outputs.runner_label }}
+    timeout-minutes: 75
+    permissions:
+      contents: read
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        ref: ${{ github.sha }}
+        fetch-depth: 0
+        persist-credentials: false
+    - name: Download and hash only the exact pinned public Mustang archive
+      timeout-minutes: 65
+      run: python3 scripts/mustang_factory_input.py run --execute
+    - if: always()
+      name: Copy only this attempt's structured factory receipt
+      run: python3 scripts/mustang_factory_input.py report --out "$RUNNER_TEMP/factory-input-receipt.json"
+    - if: always()
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: mustang-factory-input-${{ github.run_id }}-${{ github.run_attempt }}
+        path: ${{ runner.temp }}/factory-input-receipt.json
+        retention-days: 14
+        if-no-files-found: warn
   lock-admin:
     needs:
     - guard
@@ -455,6 +491,7 @@ jobs:
     - source
     - hostdeps
     - lock-admin
+    - factory
     - publisher
     if: always() && needs.controller.result != 'skipped'
     runs-on: ubuntu-24.04

@@ -382,7 +382,12 @@ def main():
     parser.add_argument('--ownership-record'); parser.add_argument('--publish',action='store_true')
     args=parser.parse_args()
     args.publish=args.publish or (args.action=='guard' and os.environ.get('MUSTANG_PUBLISH')=='true')
-    if args.action=='guard' and os.environ.get('MUSTANG_LOCK_ADMIN_ONLY')=='true':
+    if args.action=='guard' and os.environ.get('MUSTANG_FACTORY_ONLY')=='true':
+        import mustang_factory_input
+        mustang_factory_input.guard(os.environ,mustang_factory_input.deps.read_event(os.environ))
+        if os.environ.get('MUSTANG_DRY_RUN')!='true':
+            raise ValueError('factory input must keep the OTA runtime path closed')
+    elif args.action=='guard' and os.environ.get('MUSTANG_LOCK_ADMIN_ONLY')=='true':
         import mustang_lock_admin
         mustang_lock_admin.guard(os.environ,mustang_lock_admin.deps.read_event(os.environ))
         if os.environ.get('MUSTANG_DRY_RUN')!='true':

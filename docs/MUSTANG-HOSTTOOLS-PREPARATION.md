@@ -6,6 +6,52 @@ preparation design and fresh readback, not an execution receipt or a runtime
 binding. Saba is unavailable; continued engineering does not depend on an
 acknowledgment from Saba.
 
+## Lock prepared and fresh host-dependency run
+
+[Run 42508016844](https://github.com/Immortal-Protocols/RoseOS-1/actions/runs/42508016844)
+completed successfully at `efa46b7ebf8c3cafa35053c66f3a4fab37e026f4`.
+The user explicitly approved one temporary OS Login key and one controlled IAP
+session using the existing dev-infra identity. The pinned no-overwrite
+initializer exclusively created the empty root:root 0644 canonical lock, and
+the job independently observed the valid file on the admitted VM/disk. The
+10-minute key was removed and its local files deleted; no IAM or firewall
+change occurred. Hosted cleanup passed and a fresh numeric-ID Compute read
+confirmed TERMINATED at `2026-11-08T10:08:04.444-08:00`, with the unchanged
+four-hour STOP safeguard. The [evidence record](../os/build-only/mustang-lock-preparation-42508016844.json)
+keeps the administrator receipt, independent observation, artifact identity,
+access cleanup and separate STOP observation distinct.
+
+A fresh host-dependency-only [run 42508459503](https://github.com/Immortal-Protocols/RoseOS-1/actions/runs/42508459503)
+then started on that source. Its in-progress status is not a successful tool
+receipt. No new SSH credential or administrator session is required by the
+next preparation stages.
+
+## Pinned factory-input download adapter
+
+`factory_only=true` exclusively selects the new unprivileged `factory` job in
+the existing manual-main workflow and `mustang-ota` FIFO. Set `publish`,
+`dry_run`, `source_only`, `hostdeps_only` and `lock_admin_only` false. Guard,
+owned controller START, group-5 JIT enrollment, watchdog and hosted cleanup
+remain the same lifecycle. Neither the ordinary builder nor signer is selected.
+
+The adapter checks the live VM/disk, captured checkout and canonical lock,
+then exclusively creates `rose-actions/mustang-factory-inputs` on Mustang's
+data disk. Existing directories or archive/partial names are refused and
+preserved. It requests only the recipe's public Google HTTPS archive, checks
+HTTP identity and exact length, streams at most 11,366,092,596 bytes through
+SHA-256, fsyncs and publishes without replacement only after the pinned hash
+matches, then performs a separate streaming readback. The bound is 3,600
+seconds with a 300-GiB reserve; writes and network reads are bounded, with
+60-second socket timeouts. A failed partial and write-once receipt stay on
+Mustang; no resume or automatic retry exists. The workflow uploads only the
+same-run structured receipt, never the archive or raw network errors.
+
+This adapter does not extract stock images, generate vendor, run Make, bind
+production pins, sign or stop the VM. Vendor generation must consume this
+verified input and an actual successful host-dependency receipt in a later
+bounded stage. The former box-only record remains historical evidence, not a
+claim that those bytes were transferred.
+
 ## First live preparation result: 2026-11-08
 
 After the user's explicit authorization, [PR #687](https://github.com/Immortal-Protocols/RoseOS-1/pull/687)
