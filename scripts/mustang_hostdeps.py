@@ -387,6 +387,9 @@ def retain_interrupted_output(source, storage, identity, root=ROOT):
               'failedReceiptSha256': evidence['receiptSha256'], 'completed': False,
               'oldOutputUsedForBuild': False}
     receipt(attempt/'retention-intent.json', intent)
+    fd = readers._walk_dir(readers._body(str(attempt)))
+    try: os.fsync(fd)
+    finally: os.close(fd)
     rename_noreplace(output, target)
     after = plain_dir(target)
     if (after.st_dev, after.st_ino) != (before.st_dev, before.st_ino) or os.path.lexists(output):
@@ -397,13 +400,18 @@ def retain_interrupted_output(source, storage, identity, root=ROOT):
         finally: os.close(fd)
     result = dict(intent, completed=True)
     receipt(attempt/'retention-result.json', result)
+    fd = readers._walk_dir(readers._body(str(attempt)))
+    try: os.fsync(fd)
+    finally: os.close(fd)
     return result
 
 
 def require_completed_retention(storage):
     attempt = storage/'mustang-hostdeps-42508459503-1'
     intent = attempt/'retention-intent.json'
-    if os.path.lexists(intent):
+    if any(os.path.lexists(attempt/name) for name in ('retention-intent.json', 'retention-result.json', 'retained-output')):
+        if not os.path.lexists(intent):
+            raise ValueError('interrupted hostdeps retention intent requires reconciliation')
         # An interruption or failed no-replace rename is never an invitation
         # to retry the move or assume the old output was preserved elsewhere.
         result = json.loads(readers.read_regular(str(storage), str(attempt/'retention-result.json'), 65536))

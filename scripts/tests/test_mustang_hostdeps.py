@@ -594,6 +594,9 @@ class HostdepsTest(unittest.TestCase):
             with self.assertRaises(FileExistsError):deps.rename_noreplace(output, other)
             self.assertEqual((other/'untouched').read_bytes(), b'keep')
             self.assertTrue(output.exists())
+            (old/'retention-intent.json').unlink();(old/'retained-output').mkdir()
+            with self.assertRaisesRegex(ValueError, 'intent requires reconciliation'):
+                deps.require_completed_retention(storage)
 
     def test_space_observations_record_actual_free_space_and_watched_bytes(self):
         with tempfile.TemporaryDirectory() as tmp:
