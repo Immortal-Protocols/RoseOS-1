@@ -99,7 +99,7 @@ git rev-parse HEAD
 git status --short
 python3 scripts/mustang-prepare-lock.py
 # Only in the existing authorized administrator session, after the checks:
-sudo python3 scripts/mustang-prepare-lock.py --execute
+sudo -n /usr/bin/python3 -B scripts/mustang-prepare-lock.py --execute
 ```
 
 The current agent environment has no existing SSH key or agent; the build
@@ -121,6 +121,73 @@ a fixed status and exit code. Raw policy/error output is discarded. A positive
 list result does not attest passwordless execution; a later actual operation
 would still require explicit guarded execution and its own noninteractive sudo
 admission. No denied privilege is retried through another command or identity.
+
+## Bounded external administrator handoff
+
+[Run 42499529813](https://github.com/Immortal-Protocols/RoseOS-1/actions/runs/42499529813)
+at #689's merge `b1dc69b271b6bc97e3a289343283323a8e892133` completed successfully.
+Its [verified observation](../os/build-only/mustang-preflight-42499529813.json)
+still records the lock/output absent and reports the exact-command sudo policy
+query exit 1 (`policy-not-confirmed`). The query did not execute the initializer
+or establish a passwordless runner route. Owned cleanup passed, followed by a
+fresh numeric VM read of `TERMINATED`, last stop
+`2026-11-08T08:24:24.927-08:00`. The 807-byte artifact `13625116235` matched
+SHA-256 `596fb264dd702f5e234fcb920fa518ef366fd4a0a23c26cfbc5063eb8cba6306`.
+
+The new exclusive `lock_admin_only` selection provides a separately named
+maintenance window on the existing controller/group-5 JIT/queue/owned STOP
+route. It keeps normal OTA runtime admission closed. Every other manual input
+must be false; reruns and foreign repositories/workflows refuse before START.
+The ordinary builder, source, hostdeps and signer are not selected. Queue-watch
+recognizes `lock-admin`, and cleanup waits for it.
+
+The unprivileged job verifies the guest/disk and clean captured recipe checkout,
+checks the existing root-owned parent, and publishes a write-once readiness
+record. If the lock is absent, it reads only the root-owned, non-writable public
+`/etc/ssh/ssh_host_ed25519_key.pub`, bounded to 4 KiB, without following links.
+It validates the ed25519 wire format, strips comments and publishes the public
+key/fingerprint alongside the exact initializer hash and run identity. It never
+reads a private host key. A valid already-present lock requires no external
+action or host-key read.
+
+`mustang-lock-admin-ready-RUN_ID-1` contains only
+`mustang-lock-admin-ready.json`. A local operator must match its run/main
+source/attempt, exact VM/disk and helper hash against the authenticated GitHub
+run/artifact metadata before using its public host-key pin. Root authentication
+and any credential creation require the executing user's applicable authority;
+the dispatch flag and this document do not grant them. Honor already-provided
+authorization without asking for it again.
+
+```sh
+gh workflow run mustang-ota-dedicated.yml \
+  --repo Immortal-Protocols/RoseOS-1 --ref main \
+  -f lock_admin_only=true -f dry_run=false -f source_only=false \
+  -f hostdeps_only=false -f publish=false
+```
+
+The separately authorized operator can use the normal approved IAP/OS Login
+route and a clean, source-verified copy of the initializer. Use `python3 -B`
+for root execution so imported modules do not write root-owned bytecode into
+the source copy. Preserve strict host-key checking against the readiness pin.
+Only the canonical no-overwrite operation is intended; no IAM, firewall,
+project SSH-key, parent-permission, signing-key or bootstrap changes are made by
+this workflow. A denied login is not retried through another route or identity.
+
+The observation loop polls for at most 600 seconds; its step is 11 minutes and
+the whole guest job is 15 minutes including admission, uploads and reporting.
+It accepts only an available, empty, single-link regular file owned by root:root
+with mode `0644`. Any other entry is preserved and refused. A final guest/disk
+and source check precedes success. The job never runs sudo, the initializer,
+Make or a credential operation. Its result explicitly does not attest who
+created the lock. `mustang-lock-admin-RUN_ID-1` contains only the readiness and
+observation JSON files; fixed error annotations cover pre-readiness failures.
+
+The operator separately preserves the actual initializer/session result,
+removes only their own temporary credential when one was authorized, and checks
+owned cleanup plus a fresh numeric `TERMINATED` read. The four-hour STOP remains
+a backstop. These receipts establish prerequisite observations only; pristine
+source, tool/otatools, allocation, signing, OTA and publication admission stay
+separate. No maintenance boot or privileged operation is claimed by this source.
 
 ## Verified starting point
 

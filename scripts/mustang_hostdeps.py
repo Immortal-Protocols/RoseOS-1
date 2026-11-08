@@ -67,7 +67,7 @@ def require_selection(event):
     enabled = inputs.get('hostdeps_only')
     disabled = lambda value: value is False or value is None or (type(value) is str and value == 'false')
     if not (enabled is True or (type(enabled) is str and enabled == 'true')) \
-            or any(not disabled(inputs.get(k, False)) for k in ('publish', 'source_only', 'dry_run')):
+            or any(not disabled(inputs.get(k, False)) for k in ('publish', 'source_only', 'dry_run', 'lock_admin_only')):
         raise ValueError('hostdeps_only must be the sole selected manual scope')
 
 
@@ -521,7 +521,7 @@ def inspect_guest(env):
     inputs = event.get('inputs') if isinstance(event, dict) else None
     disabled = lambda value: value is False or value is None or (type(value) is str and value == 'false')
     if not isinstance(inputs, dict) or not (inputs.get('dry_run') is True or inputs.get('dry_run') == 'true') \
-            or any(not disabled(inputs.get(k, False)) for k in ('publish', 'source_only', 'hostdeps_only')):
+            or any(not disabled(inputs.get(k, False)) for k in ('publish', 'source_only', 'hostdeps_only', 'lock_admin_only')):
         raise ValueError('inspection requires the exclusive infrastructure dry run')
     lane = mustang_lane.validate(mustang_lane.configuration())
     run = controller.invocation(lane, env)

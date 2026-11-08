@@ -35,7 +35,7 @@ class HostdepsTest(unittest.TestCase):
         lane, run = deps.guard(self.env(), event)
         self.assertEqual(lane['vm']['instanceId'], '5585425566393384049')
         self.assertEqual(run['runAttempt'], '1')
-        for key in ('source_only', 'dry_run', 'publish'):
+        for key in ('source_only', 'dry_run', 'publish', 'lock_admin_only'):
             for value in (True, 'true', 'yes', 1):
                 with self.subTest(key=key, value=value), self.assertRaises(ValueError):
                     deps.guard(self.env(), {'inputs': dict(event['inputs'], **{key: value})})
@@ -223,7 +223,8 @@ class HostdepsTest(unittest.TestCase):
             self.assertTrue(Path(lane['lockPath']).is_symlink())
 
     def test_inspection_requires_its_exclusive_scope_and_identity_before_observation(self):
-        for change in ({'hostdeps_only': True}, {'source_only': True}, {'publish': True}, {'dry_run': False}):
+        for change in ({'hostdeps_only': True}, {'source_only': True}, {'publish': True}, {'dry_run': False},
+                       {'lock_admin_only': True}):
             with tempfile.TemporaryDirectory() as tmp, contextlib.ExitStack() as stack:
                 env, _lane, _paths = self.inspection_fixture(tmp, stack)
                 Path(env['GITHUB_EVENT_PATH']).write_text(json.dumps({'inputs': {'dry_run': True, **change}}))

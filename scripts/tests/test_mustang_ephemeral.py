@@ -238,6 +238,10 @@ class EnrollmentTest(unittest.TestCase):
             enroll.cancel_path('44', '45')
 
     def test_missing_runner_stops_after_the_bound_and_an_accepted_job_does_not(self):
+        for name in ('hostdeps', 'lock-admin'):
+            self.assertEqual(enroll.queue_decision([{'name': name, 'status': 'queued'}], 30), 'wait')
+            self.assertEqual(enroll.queue_decision([{'name': name, 'status': 'queued'}], enroll.QUEUE_LIMIT_SECONDS), 'stop')
+            self.assertEqual(enroll.queue_decision([{'name': name, 'status': 'in_progress'}], enroll.QUEUE_LIMIT_SECONDS), 'ready')
         queued = [{'name': 'builder', 'status': 'queued'}]
         self.assertEqual(enroll.queue_decision(queued, 30), 'wait')
         self.assertEqual(enroll.queue_decision(queued, enroll.QUEUE_LIMIT_SECONDS), 'stop')
