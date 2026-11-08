@@ -61,7 +61,7 @@ def apk_bytes(entries=None, extra=()):
 def pin_for(data, compiled=COMPILED, endpoint=ENDPOINT):
     """The publicInputs pin a hosted.json would carry for this synthetic source APK."""
     with zipfile.ZipFile(io.BytesIO(data)) as archive:
-        files = {rel: archive.read(entry) for rel, entry in hosted.APK_ENTRIES.items()}
+        files = {rel: archive.read(entry) for rel, entry in hosted.apk_entries().items()}
     files[hosted.NETWORK] = hosted.network_config(endpoint)
     return {'sourceApk': {'url': 'https://github.com/Immortal-Protocols/pixel-ota/releases/download/rose-agent-1/x.apk',
                           'size': len(data), 'sha256': hashlib.sha256(data).hexdigest()},
@@ -87,7 +87,7 @@ class PublicInputs(Temp):
         result = hosted.public_inputs(self.write_apk(data), self.tmp/'out', cfg)
         out = self.tmp/'out'
         found = sorted(str(p.relative_to(out)) for p in out.rglob('*') if p.is_file())
-        self.assertEqual(found, sorted([*hosted.APK_ENTRIES, hosted.RECEIPT]))
+        self.assertEqual(found, sorted([*hosted.apk_entries(), hosted.RECEIPT]))
         self.assertEqual((out/'workspace/rose-agent/app/assets/connection.json').read_bytes(), connection())
         self.assertEqual((out/hosted.NETWORK).read_text(), hosted.NETWORK_HEAD + '100.64.0.9' + hosted.NETWORK_TAIL)
         receipt = json.loads((out/hosted.RECEIPT).read_text())
@@ -131,16 +131,17 @@ class PublicInputs(Temp):
         source = (ROOT/'scripts/configure-local.py').read_text()
         self.assertIn("network.write_text('" + hosted.NETWORK_HEAD + "'+escape(u.hostname)+'"
                       + hosted.NETWORK_TAIL.replace('\n', '\\n') + "')", source)
-        self.assertEqual(set(hosted.APK_ENTRIES), set(hosted.load('host-app-build').PUBLIC_ASSETS))
+        self.assertEqual(set(hosted.apk_entries()), set(hosted.load('host-app-build').PUBLIC_ASSETS))
+        self.assertLessEqual(set(hosted.apk_entries()), set(hosted.KNOWN_APK_ENTRIES))
 
     def test_the_committed_pin_is_one_public_release_asset(self):
         pin = hosted.pinned_inputs(COMMITTED)
         self.assertRegex(pin['sourceApk']['url'], r'^https://github\.com/Immortal-Protocols/pixel-ota/releases/download/'
                                                   r'rose-agent-(\d+)/dev\.pixel\.voice-\1\.apk$')
-        digests = pin['digests']
-        # connection.json and mac-screen-connection.json are the same file (scripts/configure-local.py writes both).
-        self.assertEqual(digests['workspace/rose-agent/app/assets/connection.json'],
-                         digests['workspace/rose-agent/app/assets/mac-screen-connection.json'])
+        # Exactly the current inputs: a retired one (host-app-build.RETIRED_ASSETS) is never pinned or checked.
+        build = hosted.load('host-app-build')
+        self.assertEqual(set(pin['digests']), set(build.PUBLIC_ASSETS))
+        self.assertFalse(set(pin['digests']) & set(build.RETIRED_ASSETS))
         self.assertNotIn('/home/pixelbuild', json.dumps(COMMITTED))
         # The five inputs stay git-ignored deployment files: none is committed anywhere in the tree.
         tracked = subprocess.run(['git', '-C', str(ROOT), 'ls-files'], capture_output=True, text=True, check=True).stdout

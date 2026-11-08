@@ -59,8 +59,9 @@ PACKAGE = 'dev.pixel.voice'
 SECRETS = ('keystore', 'config', 'storePassword', 'keyPassword')
 RECEIPT = 'public-assets-receipt.json'
 NETWORK = 'workspace/rose-agent/app/res/xml/mac_screen_network.xml'
-# Where the published APK carries each input (workspace/rose-agent/build.sh copies the first four unchanged).
-APK_ENTRIES = {'workspace/rose-agent/app/assets/connection.json': 'assets/connection.json',
+# Where a published APK carries each public input it has ever had (workspace/rose-agent/build.sh copies the stored ones
+# unchanged); the inputs host-app-build.PUBLIC_ASSETS names now are taken from it (apk_entries()).
+KNOWN_APK_ENTRIES = {'workspace/rose-agent/app/assets/connection.json': 'assets/connection.json',
                'workspace/rose-agent/app/assets/mac-screen-connection.json': 'assets/mac-screen-connection.json',
                'workspace/pixel-clipboard/clipboard-connection.json': 'assets/clipboard-connection.json',
                'workspace/rose-agent/app/res/raw/mac_screen_cert.pem': 'res/raw/mac_screen_cert.pem',
@@ -104,13 +105,20 @@ def config(path=HOSTED):
     return json.loads(Path(path).read_text())
 
 
+def apk_entries():
+    """{candidate-relative input: APK entry} for exactly the inputs host-app-build.PUBLIC_ASSETS names now."""
+    assets = load('host-app-build').PUBLIC_ASSETS
+    unknown = [a for a in assets if a not in KNOWN_APK_ENTRIES]
+    if unknown or NETWORK not in assets:
+        raise Refused('the public-input map does not cover host-app-build.PUBLIC_ASSETS: ' + ', '.join(unknown or [NETWORK]))
+    return {a: KNOWN_APK_ENTRIES[a] for a in assets}
+
+
 def pinned_inputs(cfg):
-    """The committed public-input pin: the source APK {url, size, sha256}, the five digests and the compiled config's."""
+    """The committed public-input pin: the source APK {url, size, sha256}, each input's digest and the compiled config's."""
     pin = cfg.get('publicInputs') or {}
     apk, digests = pin.get('sourceApk') or {}, pin.get('digests')
-    assets = load('host-app-build').PUBLIC_ASSETS
-    if set(APK_ENTRIES) != set(assets):
-        raise Refused('the public-input map does not cover exactly host-app-build.PUBLIC_ASSETS')
+    assets = list(apk_entries())
     if not isinstance(apk.get('url'), str) or not apk['url'].startswith('https://github.com/') \
             or type(apk.get('size')) is not int or not 0 < apk['size'] <= APK_MAX_BYTES \
             or not re.fullmatch(r'[0-9a-f]{64}', str(apk.get('sha256'))):
@@ -137,9 +145,10 @@ def source_entries(apk_path, pin):
         raise Refused('the public-input source is not the pinned APK (size and sha256)')
     with zipfile.ZipFile(apk_path) as apk:
         names = apk.namelist()
-        if any(names.count(entry) != 1 for entry in APK_ENTRIES.values()):
+        entries = apk_entries()
+        if any(names.count(entry) != 1 for entry in entries.values()):
             raise Refused('the pinned APK does not carry each public input exactly once')
-        found = {relative: apk.read(entry) for relative, entry in APK_ENTRIES.items()}
+        found = {relative: apk.read(entry) for relative, entry in entries.items()}
     endpoint = json.loads(found['workspace/rose-agent/app/assets/connection.json'])['endpoint']
     compiled = found[NETWORK]
     found[NETWORK] = network_config(endpoint)
@@ -172,9 +181,10 @@ def check_apk(apk_path, cfg):
     pin = pinned_inputs(cfg)
     with zipfile.ZipFile(apk_path) as apk:
         names = apk.namelist()
-        if any(names.count(entry) != 1 for entry in APK_ENTRIES.values()):
+        entries = apk_entries()
+        if any(names.count(entry) != 1 for entry in entries.values()):
             raise Refused('the built APK does not carry each public input exactly once')
-        found = {relative: sha256(apk.read(entry)) for relative, entry in APK_ENTRIES.items()}
+        found = {relative: sha256(apk.read(entry)) for relative, entry in entries.items()}
     expected = dict(pin['digests'], **{NETWORK: pin['compiledNetworkSha256']})
     wrong = sorted(r for r in expected if found[r] != expected[r])
     if wrong:

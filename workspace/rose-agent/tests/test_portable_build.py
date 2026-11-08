@@ -64,7 +64,6 @@ class Fixture:
         self.assets = base/'public-assets'
         contents = {
             'workspace/rose-agent/app/assets/connection.json': json.dumps({'endpoint': 'https://rose.example.test/', 'pin': PIN}),
-            'workspace/rose-agent/app/assets/mac-screen-connection.json': json.dumps({'endpoint': 'https://mac.example.test/', 'pin': PIN}),
             'workspace/pixel-clipboard/clipboard-connection.json': json.dumps({'endpoint': 'https://clip.example.test/'}),
             'workspace/rose-agent/app/res/raw/mac_screen_cert.pem': 'synthetic fixture, not a certificate\n',
             'workspace/rose-agent/app/res/xml/mac_screen_network.xml': '<network-security-config/>\n'}
@@ -171,17 +170,36 @@ class PortableBuildTest(unittest.TestCase):
         self.refused('unexpected files', self.fx.prepare)
 
     def test_symlinked_input_is_refused(self):
-        target = self.fx.assets/HAB.PUBLIC_ASSETS[4]
+        target = self.fx.assets/'workspace/rose-agent/app/res/xml/mac_screen_network.xml'
         moved = self.tmp/'elsewhere.xml'
         shutil.move(target, moved)
         os.symlink(moved, target)
         self.refused('is a symlink', self.fx.prepare)
 
+    def test_a_retired_input_staged_before_its_retirement_is_ignored(self):
+        # A directory staged with the retired Mac screen file still in it, and in its receipt, keeps working with no
+        # restage (host-app-build.RETIRED_ASSETS, which restore() ignores the same way): never checked or required.
+        self.assertEqual(HAB.RETIRED_ASSETS, ('workspace/rose-agent/app/assets/mac-screen-connection.json',))
+        self.assertNotIn(HAB.RETIRED_ASSETS[0], HAB.PUBLIC_ASSETS)
+        current = self.fx.write_receipt()
+        retired = self.fx.assets/HAB.RETIRED_ASSETS[0]
+        retired.write_text('not even JSON: never read')
+        receipt = json.loads((self.fx.assets/HAB.RECEIPT).read_text())
+        receipt['files'][HAB.RETIRED_ASSETS[0]] = sha(b'whatever it was')
+        (self.fx.assets/HAB.RECEIPT).write_text(json.dumps(receipt))
+        self.assertEqual(PB.check_inputs(self.fx.assets), current)
+        # The file alone, without a receipt entry, is ignored too; any other extra file still refuses.
+        receipt['files'].pop(HAB.RETIRED_ASSETS[0])
+        (self.fx.assets/HAB.RECEIPT).write_text(json.dumps(receipt))
+        self.assertEqual(PB.check_inputs(self.fx.assets), current)
+        (self.fx.assets/'workspace/rose-agent/app/assets/extra.json').write_text('{}')
+        self.refused('unexpected files', PB.check_inputs, self.fx.assets)
+
     def test_receipt_listing_other_files_is_refused(self):
         receipt = json.loads((self.fx.assets/HAB.RECEIPT).read_text())
         receipt['files'].pop(HAB.PUBLIC_ASSETS[1])
         (self.fx.assets/HAB.RECEIPT).write_text(json.dumps(receipt))
-        self.refused('exactly the five inputs', self.fx.prepare)
+        self.refused('exactly the public inputs', self.fx.prepare)
 
     def test_pinned_digest_mismatch_is_refused(self):
         pinned = self.fx.write_receipt()
@@ -355,7 +373,7 @@ class PortableBuildTest(unittest.TestCase):
 
     def test_inputs_refuses_bad_digests_or_paths_in_d3(self):
         d3 = self.fx.prepare()
-        for mutate, fragment in ((lambda d: d['publicAssetDigests'].pop(HAB.PUBLIC_ASSETS[0]), 'exactly the five'),
+        for mutate, fragment in ((lambda d: d['publicAssetDigests'].pop(HAB.PUBLIC_ASSETS[0]), 'exactly the public inputs'),
                                  (lambda d: d['publicAssetDigests'].update({HAB.PUBLIC_ASSETS[0]: 'A' * 64}), 'lowercase'),
                                  (lambda d: d.update(aapt=d['aapt'] + '/'), 'normalized')):
             bad = json.loads(json.dumps(d3))

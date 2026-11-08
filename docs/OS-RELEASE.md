@@ -542,7 +542,7 @@ digest, allocation, source and store instead of `mustExceed`. `main()`'s cleanup
 **Its config, `os/release-pipeline/agent/hosted.json`,** keeps the committed signing values and pin unchanged: the
 project, secret version, four secret names and `appSignerSha256`. It binds two more things:
 - `reservation.store`: the shared version ledger (decision D1, below);
-- `publicInputs`: where the five public connection inputs come from (below).
+- `publicInputs`: where the public connection inputs come from (below).
 
 App's portable SDK, JDK, public-input directory and tools stay null: they are absolute paths on the hosted runner,
 bound at run time by App's record. Without that record, `--check --hosted` exits 4 and names each one.
@@ -551,7 +551,7 @@ bound at run time by App's record. Without that record, `--check --hosted` exits
 runtime record on the runner; it is never committed. Schema `roseos.agent-portable-inputs.v1`, exactly these keys:
 - `schema`;
 - `appSdkRoot`, `javaHome` and `publicAssetsDir`: absolute normalized paths (no trailing slash, `.`, `..` or `//`);
-- `publicAssetDigests`: exactly the five public connection inputs of `host-app-build.PUBLIC_ASSETS`, each mapped to
+- `publicAssetDigests`: exactly the public connection inputs of `host-app-build.PUBLIC_ASSETS`, each mapped to
   its lowercase sha256;
 - `aapt` and `apksigner`: absolute normalized paths to the independent verifier tools.
 
@@ -560,7 +560,7 @@ fields of the committed config, and never one the committed config already binds
 committed config alone: the signing identity, secret names and version, `minimumTestedOs` and the reservation store.
 The reservation and ownership checks and the cleanup are unchanged, and the builder route refuses the option.
 `host-app-build.build()` still checks the SDK layout (`platforms/android-35`, `build-tools/android-15`) and the JDK.
-Its `restore()` checks the five inputs against `public-assets-receipt.json` and these pins. The receipt records
+Its `restore()` checks the inputs against `public-assets-receipt.json` and these pins. The receipt records
 `portableInputs` (the record's schema and sha256, no paths). With a valid record, `--check --hosted` exits 0.
 
 **Its publication (`scripts/app_release_publisher.py --hosted --reservation PATH`, 1F).** The publisher admits a
@@ -594,13 +594,13 @@ reservation before the build and again before publication (`agent-hosted.py bind
 - **No side effects.** pixel-ota has no workflows, so a ledger tag triggers nothing. Ledger tags are not releases,
   so the OTA feed, Latest and the app's release listing never see them.
 
-**Public connection inputs (`publicInputs`).** The five inputs stay git-ignored deployment files. The hosted build
+**Public connection inputs (`publicInputs`).** The inputs stay git-ignored deployment files. The hosted build
 takes them from one public, immutable release asset, pinned by URL, size and sha256: the `rose-agent-352` APK.
-Its four stored entries are byte-identical to those of the Rose Agent 368 that Frankel 2026110704 and 2026110705
-bundle, and both APKs carry the same compiled network security config. `agent-hosted.py public-inputs` copies the four
+Its stored entries are byte-identical to those of the Rose Agent 368 that Frankel 2026110704 and 2026110705
+bundle, and both APKs carry the same compiled network security config. `agent-hosted.py public-inputs` copies the
 stored files out and regenerates the network security config with App's `scripts/configure-local.py` template for
-the endpoint host. Each of the five must equal its committed digest. After the build, `agent-hosted.py check-apk`
-requires the built APK to carry all five entries exactly as the pinned APK does, compiled config included. A new
+the endpoint host. Each must equal its committed digest. After the build, `agent-hosted.py check-apk`
+requires the built APK to carry every input entry exactly as the pinned APK does, compiled config included. A new
 endpoint or input set is a new pin.
 
 **The workflow (os-release.yml modes `agent-hosted` and `agent-hosted-probe`, manual only).** Both run only on
@@ -1739,7 +1739,7 @@ That includes any source-tree recipe input the host adapters still need.
 
 The host adapters implement the retained recipe:
 
-- **`host-app-build.py`:** restores the five staged public connection inputs,
+- **`host-app-build.py`:** restores the staged public connection inputs,
   checking them against their digest receipt and `check-public-assets.mjs`. It
   then runs `npm ci --ignore-scripts`, both app `build.sh` scripts and the
   controller compile with the stable SDK layout, and captures each new output by
