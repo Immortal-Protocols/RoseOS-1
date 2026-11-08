@@ -7,6 +7,7 @@ explicit reduced checklist. No Blazer/Rango source tree, receipt or artifact is
 an input. No signing, secret, IAM, publication or phone operation exists here.
 """
 import importlib.util
+import functools
 import json
 from pathlib import Path
 import sys
@@ -16,6 +17,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT/'scripts'))
 import mustang_integration
 import mustang_lane
+import mustang_existing_lock
 
 OTATOOLS_PATTERN = 'soong/.intermediates/build/make/tools/otatools_package/otatools-package/*/gen/otatools.zip'
 
@@ -94,6 +96,9 @@ def engine():
     module.ALLOCATION_HELPER = 'scripts/mustang-allocate.py'
     module.blazer_integration = mustang_integration
     module.collect_compile_outputs = collect_outputs
+    canonical=mustang_lane.validate(mustang_lane.configuration())['lockPath']
+    module.open_shared_lock=functools.partial(mustang_existing_lock.open_stream,expected=canonical)
+    module.lock_free=functools.partial(mustang_existing_lock.probe,expected=canonical)
     return module
 
 

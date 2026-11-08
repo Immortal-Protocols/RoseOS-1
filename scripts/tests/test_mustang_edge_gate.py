@@ -1141,6 +1141,8 @@ class DedicatedRuntimeTest(unittest.TestCase):
         apps=self.driver.load(self.root/cfg['appInputsRecord']); apps['apps']=[dict(package='dev.pixel.voice',versionCode=1)]
         (self.root/cfg['appInputsRecord']).write_text(json.dumps(apps))
         inputs=self.root/'app-inputs'; inputs.mkdir()
+        # The dedicated lock is prepared separately; production cannot create or write it.
+        Path(self.lane['lockPath']).touch();Path(self.lane['lockPath']).chmod(0o444)
         with patch.object(pipeline,'ROOT',self.root),patch.object(pipeline,'head',return_value=SOURCE), \
                 patch.object(pipeline,'module',side_effect=dependency),patch.object(pipeline,'call',side_effect=call), \
                 patch.object(pipeline,'omissions',return_value=['unrelated sprint omissions']), \
