@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """os-release host.integrate.appBuildCommand: build the unsigned apps from the exact candidate checkout.
 
-stage SOURCE_DIR DEST_DIR   copy only the five public connection inputs (verified with the candidate's
+stage SOURCE_DIR DEST_DIR   copy only the public connection inputs (verified with the candidate's
                             check-public-assets.mjs) into DEST_DIR with a nonsecret digest receipt
-build CANDIDATE RELEASE_DIR restore those five inputs into the candidate, then with the stable SDK and JDK:
+build CANDIDATE RELEASE_DIR restore those inputs into the candidate, then with the stable SDK and JDK:
                             npm ci --ignore-scripts, the candidate's scripts/setup-zxing.sh when present,
                             both app build.sh scripts and the controller compile;
                             each new output is captured by before/after directory sets (exactly one each) and
@@ -21,9 +21,12 @@ import subprocess
 import sys
 
 # Candidate-relative input paths that workspace/rose-agent/build.sh requires.
-PUBLIC_ASSETS = ('workspace/rose-agent/app/assets/connection.json', 'workspace/rose-agent/app/assets/mac-screen-connection.json',
-    'workspace/pixel-clipboard/clipboard-connection.json', 'workspace/rose-agent/app/res/raw/mac_screen_cert.pem',
-    'workspace/rose-agent/app/res/xml/mac_screen_network.xml')
+PUBLIC_ASSETS = ('workspace/rose-agent/app/assets/connection.json', 'workspace/pixel-clipboard/clipboard-connection.json',
+    'workspace/rose-agent/app/res/raw/mac_screen_cert.pem', 'workspace/rose-agent/app/res/xml/mac_screen_network.xml')
+# Retired inputs (#67): a directory staged before their retirement may still hold them and list them in its receipt. They
+# are ignored there (never verified, restored or required), so retiring one needs no builder restage. Any other extra or
+# missing input still refuses.
+RETIRED_ASSETS = ('workspace/rose-agent/app/assets/mac-screen-connection.json',)
 RECEIPT = 'public-assets-receipt.json'
 ZXING_SETUP = 'scripts/setup-zxing.sh'  # candidate-relative; verifies .tools/zxing/core-3.5.4.jar by SHA-256
 
@@ -62,8 +65,8 @@ def stage(source, destination, candidate):
 def restore(candidate, asset_dir, pinned=None):
     asset_dir = Path(asset_dir)
     receipt = json.loads((asset_dir/RECEIPT).read_text())['files']
-    if set(receipt) != set(PUBLIC_ASSETS):
-        raise SystemExit('public asset receipt does not list exactly the five inputs')
+    if set(receipt) - set(RETIRED_ASSETS) != set(PUBLIC_ASSETS):
+        raise SystemExit('public asset receipt does not list exactly the public inputs')
     for relative in PUBLIC_ASSETS:
         digest = sha256(asset_dir/relative)
         if digest != receipt[relative] or (pinned and pinned.get(relative) != digest):

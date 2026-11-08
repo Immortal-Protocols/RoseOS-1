@@ -23,6 +23,7 @@ keys/
 local.properties
 workspace/rose-agent/app/assets/connection.json
 workspace/rose-agent/app/assets/clipboard-connection.json
+# Retired input (no longer built or read); stays ignored so a stale local copy is never committed.
 workspace/rose-agent/app/assets/mac-screen-connection.json
 workspace/rose-agent/app/assets/installer-identity.json
 workspace/rose-agent/app/res/xml/mac_screen_network.xml
