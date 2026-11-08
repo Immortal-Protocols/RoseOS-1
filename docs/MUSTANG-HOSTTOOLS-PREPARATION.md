@@ -37,8 +37,33 @@ dependency output under the available canonical lock: at most 100,000 entries,
 ownership, mode, inode and size. It never opens files/FIFOs/sockets or follows
 links, and records incomplete walks explicitly. No old build logs are read;
 no output is deleted, adopted or admitted by this observation. This is the
-next diagnostic step before changing the live sampler or retrying Make.
+diagnostic step before changing the live sampler or retrying Make.
 No new SSH credential or administrator session is required.
+
+[Observation 42510553234](https://github.com/Immortal-Protocols/RoseOS-1/actions/runs/42510553234)
+completed successfully at `93a3c95748164afa2cce4f4a9b02925b71a53291`.
+Its complete 2,087-entry metadata walk found exactly one special entry:
+`.path_interposer_log`, a zero-byte, single-link Unix socket, uid 999/gid 988,
+mode 0755, device 2064/inode 67408980. The canonical lock was available.
+Owned cleanup succeeded and a fresh numeric-ID read observed TERMINATED at
+`2026-11-08T10:35:27.982-08:00`. This socket matches the path-interposer
+logger in pinned Soong `250710f7f87acfbb8e3c517d90abde8b4a08fe1e`
+`ui/build/path.go`. The same pin's `ui/build/ninja.go` also creates the
+separate `.ninja_fifo` status pipe; that pipe was not present in this observation.
+
+The corrected live storage sampler permits only those exact top-level
+runner-owned communication entries, with one link, zero size and controlled
+modes, and never opens or connects to them. Other special entries and all
+special files in the final host distribution remain refused. The failed
+output is not reused. The [recovery binding](../os/build-only/mustang-hostdeps-recovery.json)
+requires the exact failed receipt hash and unchanged observed special-entry
+metadata, then moves the entire output into that failed attempt's
+`retained-output` using Linux `renameat2(RENAME_NOREPLACE)`. It records intent,
+syncs both parents, verifies the same directory inode and records completion.
+A pending or uncertain move blocks another build. A fresh admitted
+`hostdeps_only` run then rebuilds into the absent canonical dependency output
+and includes the retention result in its new receipt. This preserves the
+interrupted bytes and all prior evidence; it does not resume or attest them.
 
 ## Pinned factory-input download adapter
 
