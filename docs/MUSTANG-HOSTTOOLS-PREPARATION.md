@@ -18,8 +18,9 @@ used that exact main revision and attempt 1.
 Admission, controller START, group-5 JIT enrollment, queue watch and owned
 cleanup succeeded. The guest build step and its later receipt-copy step each
 exited 4. Artifact metadata reports zero artifacts. The GitHub job-log download
-returned HTTP 403 from its log-storage endpoint; no alternative access path or
-retry was used. Check annotations contain only the step exit code and missing
+returned HTTP 403 from its log-storage endpoint. After the run completed (a new
+availability state), one retry of the same endpoint also returned Forbidden;
+no alternative access path was used. Check annotations contain only the step exit code and missing
 receipt warning. The exact guest refusal and whether Make began are therefore
 **unknown**. A missing lock is a possible preflight failure, not an observation.
 
