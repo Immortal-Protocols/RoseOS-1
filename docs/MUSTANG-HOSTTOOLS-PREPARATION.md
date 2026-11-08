@@ -24,12 +24,19 @@ no alternative access path was used. Check annotations contain only the step exi
 receipt warning. The exact guest refusal and whether Make began are therefore
 **unknown**. A missing lock is a possible preflight failure, not an observation.
 
+The user subsequently supplied the failed step's screenshot. It confirms the
+exact error `Mustang builder lock is absent; host preparation required`, with
+exit 4; the report step emitted `_Refused`. At this run's captured source the
+lock check precedes attempt creation and Make, so this refusal did not start
+the dependency build. The earlier log-storage denial was not bypassed or
+retried again to obtain that evidence.
+
 A fresh Compute API read after cleanup confirmed VM ID `5585425566393384049`
 `TERMINATED`, last stop `2026-11-08T07:03:55.483-08:00`, with the unchanged
 14,400-second STOP safeguard. No host-tool distribution, vendor generation,
 otatools proof, new OTA, signing or publication is claimed. No second run was
-dispatched. Obtain the failed step's actual error through authorized access
-before choosing a correction or retry.
+dispatched at that point. The actual refusal was later established through the
+user's screenshot, followed by the independent current-state observation below.
 
 The follow-up source retains a separate, write-once `hostdeps-failure.json`
 from the admitted job's runner temporary directory if execution fails before
@@ -49,6 +56,71 @@ uploaded as `mustang-preflight-RUN_ID-1`. A notice annotation contains only the
 fixed observed lock/availability/output state vocabulary. This independent
 current-state check can establish the next preparation action even when a
 historical log cannot be retrieved; it does not establish that run's cause.
+
+## Current observed blocker and narrow administrator preparation
+
+[Infrastructure run 42495821311](https://github.com/Immortal-Protocols/RoseOS-1/actions/runs/42495821311)
+completed successfully at PR #688's merge
+`437f6f8964eb008eb689c6d05fd9ba80d7538deb`, attempt 1. The exact
+[observation and provenance](../os/build-only/mustang-preflight-42495821311.json)
+record the verified VM/disk identities, an absent canonical lock and absent
+`out_adevtool_deps`, 1,288,262,631,424 available bytes and 94,443,027 available
+inodes. The lock parent is UID/GID 0, mode `0755`; runner UID 999 has no write
+access. This establishes a current preparation blocker independently of the
+inaccessible historical log. No dependency build was repeated.
+
+Guard, controller, enrollment, builder observation, queue watch and cleanup
+passed. The downloaded 716-byte artifact `13623243595` was verified against
+SHA-256 `ff42aca4dfedf98d0b3f6318634abec1bf21a38bb0b7b6daae5a2d9f50812ba8`;
+the extracted observation hash is
+`f5f626be482a3e0cbb8cdc612cd95b7fba51f1fcfe94d41f027e95ee5ed61b39`.
+A fresh post-cleanup read confirmed the numeric VM `TERMINATED`, last stop
+`2026-11-08T07:40:51.033-08:00`. The artifact admits neither compilation nor
+the OTA runtime.
+
+`scripts/mustang-prepare-lock.py` supplies a separate, narrow operation for an
+**existing authorized administrator session**. Its default is a non-executing
+plan. Explicit execution requires root, verifies the exact guest and mounted
+UUID, rejects linked paths and a non-root-owned or group/world-writable parent,
+then exclusively creates the one canonical empty lock, sets mode `0644`, and
+syncs the file and directory. Any existing file, link or FIFO refuses without
+replacement. A sync failure can leave a created file: preserve it and observe
+the outcome before any retry. No parent permission/ownership repair, login,
+credential creation, START/STOP or bootstrap rerun is provided.
+
+After source review/integration and normal ownership reconciliation, an
+administrator with an existing authorized session on that exact VM can run
+these commands from a clean checkout of the reviewed source. Record the actual
+checkout SHA and command result outside Git. A controlled START/STOP still
+belongs to the existing authorized lifecycle; this helper does not manage it.
+
+```sh
+git rev-parse HEAD
+git status --short
+python3 scripts/mustang-prepare-lock.py
+# Only in the existing authorized administrator session, after the checks:
+sudo python3 scripts/mustang-prepare-lock.py --execute
+```
+
+The current agent environment has no existing SSH key or agent; the build
+runner lacks parent-directory write access. No privileged guest operation has
+been attempted. An existing authorized administrator route is required to
+perform this step; do not create credentials or use startup metadata, another
+lock path or relaxed permissions to get around it. Once the preparation's
+actual result and STOP are verified, one fresh host-dependency attempt can
+recheck the guest/lock/output before Make. Vendor, otatools, pristine source,
+fresh common-app export, numbering recovery and signer admission remain later
+work; this root operation alone does not produce an OTA.
+
+The user does not know an existing administrator route. To check the runner's
+existing permission without changing it, the infrastructure observation also
+queries `sudo -n -l -- /usr/bin/python3 <reviewed-helper> --execute`. The `-l`
+mode only lists policy for that exact command; it never runs the initializer.
+The probe has a ten-second bound and minimal child environment and records only
+a fixed status and exit code. Raw policy/error output is discarded. A positive
+list result does not attest passwordless execution; a later actual operation
+would still require explicit guarded execution and its own noninteractive sudo
+admission. No denied privilege is retried through another command or identity.
 
 ## Verified starting point
 

@@ -111,6 +111,7 @@ python3 scripts/tests/test_yogi_replacement_recover.py
 python3 scripts/tests/test_mustang_edge_gate.py
 python3 scripts/tests/test_mustang_hosttools.py
 python3 scripts/tests/test_mustang_hostdeps.py
+python3 scripts/tests/test_mustang_prepare_lock.py
 python3 scripts/tests/test_agent_beta_auto.py
 # 1F daily release dispatcher (canned API answers; no network, token, dispatch or host).
 python3 scripts/tests/test_daily_release.py

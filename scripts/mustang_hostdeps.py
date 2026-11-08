@@ -487,6 +487,30 @@ def report_failure(error, env):
         'otaAuthorized': False, 'signAuthorized': False, 'publishAuthorized': False})
 
 
+def admin_policy():
+    """List existing permission for the exact initializer; never execute it.
+
+    A positive policy read does not prove passwordless execution. Actual use
+    would still require its own explicit guarded action and sudo -n admission.
+    """
+    command = ['/usr/bin/sudo', '-n', '-l', '--', '/usr/bin/python3',
+               str(ROOT/'scripts/mustang-prepare-lock.py'), '--execute']
+    result = {'probe': 'sudo-policy-list-command-only', 'listedCommandExecuted': False,
+              'initializerExecuted': False, 'passwordlessExecutionAttested': False}
+    if not Path('/usr/bin/sudo').is_file():
+        return dict(result, state='sudo-unavailable')
+    try:
+        proc = subprocess.run(command, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                              stderr=subprocess.DEVNULL, timeout=10,
+                              env={'PATH': '/usr/bin:/bin', 'LANG': 'C.UTF-8', 'LC_ALL': 'C.UTF-8'})
+    except subprocess.TimeoutExpired:
+        return dict(result, state='probe-timeout')
+    except OSError:
+        return dict(result, state='probe-unavailable')
+    return dict(result, state='policy-allows-command' if proc.returncode == 0 else 'policy-not-confirmed',
+                policyExitCode=proc.returncode)
+
+
 def inspect_guest(env):
     """Current read-only prerequisites via the existing infrastructure dry run.
 
@@ -544,12 +568,14 @@ def inspect_guest(env):
         'dependencyOutput': output,
         'availableBytes': space.f_bavail*(space.f_frsize or space.f_bsize),
         'availableInodes': space.f_favail, 'makeStarted': False,
+        'administratorPolicy': admin_policy(),
         'pristineRuntimeAttestation': False, 'authenticatedStop': False,
         'otaAuthorized': False, 'signAuthorized': False, 'publishAuthorized': False}
     receipt(directory/'hostdeps-preflight.json', observation)
     # Only fixed state vocabulary, never paths, exception text or old logs.
     print('::notice title=Mustang host-dependency preflight::lock='+lock_state['state']+
-          '; availability='+lock_state.get('availability', 'not-tested')+'; output='+output['state'])
+          '; availability='+lock_state.get('availability', 'not-tested')+'; output='+output['state']+
+          '; admin-policy='+observation['administratorPolicy']['state'])
     return observation
 
 
