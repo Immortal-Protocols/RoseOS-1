@@ -178,11 +178,14 @@ def prepare(source, attempt, host_record, factory_record, identity, *, root=ROOT
         space = os.statvfs(source)
         if space.f_bavail*space.f_frsize < RESERVE+WORK_BYTES:
             raise ValueError('vendor preparation initial reserve headroom is insufficient')
+        storage = attempt.parent
+        if recovering:
+            result['phase']='retain-extra-build-metadata'
+            result['buildMetadataRetention']=recovery.retain_build_metadata(source,storage,identity,env,deadline,root=root)
         result['phase'] = 'pinned-source-check'
         result['source'] = deps.source_check(source,env,deadline,root)
         result['phase'] = 'stock-configuration-check'
         result['factoryConfiguration'] = factory_configuration(source,deadline,root)
-        storage = attempt.parent
         result['phase'] = 'host-dependency-rehash'
         result['hostDependencies'] = inputs.host_dependencies(source,storage,host_record,identity,deadline=deadline,root=root)
         result['phase'] = 'factory-input-rehash'
@@ -247,7 +250,8 @@ def prepare(source, attempt, host_record, factory_record, identity, *, root=ROOT
         check();result['success'] = True;result['phase'] = 'complete'
     except BaseException as error:
         result['failureType'] = type(error).__name__
-        result['failureCode'] = str(error) if type(error) is ValueError else 'vendor-preparation-operation-failed'
+        result['failureCode'] = str(error) if type(error) is ValueError or isinstance(error,deps.SourceMismatch) else 'vendor-preparation-operation-failed'
+        if isinstance(error,deps.SourceMismatch):result['sourceMismatch']=error.observation
         if isinstance(error,urllib.error.HTTPError):
             result['failureCode'] = 'pinned-public-tool-http-refused'
             result['httpStatus'] = error.code

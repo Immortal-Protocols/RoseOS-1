@@ -41,18 +41,88 @@ def evidence(root=ROOT):
     return record
 
 
-def qualify(source,storage,identity,*,root=ROOT,catalog,deadline,host_sha,factory_sha):
+def original_attempt(source,storage,identity,root=ROOT):
     record=evidence(root);r=record['receipt'];run=r['identity']['run']
     if r['identity']['builder']!=identity['builder'] or r['identity']['diskUuid']!=identity['diskUuid']:
         raise ValueError('bootstrap recovery belongs to another builder or disk')
     if str(source)!=r['sourceRoot'] or storage!=source.parent/'rose-actions':
         raise ValueError('bootstrap recovery source or storage path differs')
-    if r['hostDependencies']['receiptSha256']!=host_sha or r['factoryInput']['receiptSha256']!=factory_sha:
-        raise ValueError('bootstrap recovery belongs to different prepared inputs')
     old=storage/'mustang-vendor-42516700216-1'
     raw=deps.readers.read_regular(str(storage),str(old/'vendor-preparation-receipt.json'),1 << 20)
     if hashlib.sha256(raw).hexdigest()!=record['receiptSha256'] or json.loads(raw)!=r:
         raise ValueError('bootstrap recovery receipt differs from uploaded evidence')
+    return record,old
+
+
+def sync_directory(path):
+    fd=deps.readers._walk_dir(deps.readers._body(str(path)))
+    try:os.fsync(fd)
+    finally:os.close(fd)
+
+
+def retain_build_metadata(source,storage,identity,env,deadline,*,root=ROOT):
+    """Preserve only tsc's fixed untracked cache; never exempt it from git status.
+
+    The failed extra tsc -b invocation can emit this file outside ignored lib/.
+    Its bytes are never executed or adopted. Identity and the original receipt
+    are checked before a no-replace move. A full source check follows the move.
+    """
+    record,old=original_attempt(source,storage,identity,root)
+    adev=source/'vendor/adevtool';path=adev/'tsconfig.tsbuildinfo'
+    git=['/usr/bin/git','-c','core.fsmonitor=false','-c','core.hooksPath=/dev/null','-C',str(adev)]
+    deps.plain_dir(adev)
+    if deps.checked(git+['rev-parse','--show-toplevel'],source,env,deadline)!=str(adev) \
+            or deps.checked(git+['rev-parse','HEAD'],source,env,deadline)!=deps.recipe(root)['adevtoolRevision'] \
+            or deps.checked(git+['status','--porcelain','--untracked-files=no'],source,env,deadline) \
+            or deps.checked(git+['ls-files','--','tsconfig.tsbuildinfo'],source,env,deadline):
+        raise ValueError('build-metadata retention requires the unchanged pinned adevtool project')
+    intent=old/'build-metadata-retention-intent.json'
+    completion=old/'build-metadata-retention-result.json'
+    target=old/'retained-tsconfig.tsbuildinfo'
+
+    def measured(base,file):
+        fd,info=deps.readers._open_regular(str(base),str(file))
+        try:
+            if info.st_uid!=os.geteuid() or info.st_gid!=os.getegid() or info.st_nlink!=1 \
+                    or info.st_dev!=deps.plain_dir(old).st_dev or stat.S_IMODE(info.st_mode)&0o022 \
+                    or info.st_size>16 << 20:
+                raise ValueError('build-metadata ownership, size or filesystem differs')
+        finally:os.close(fd)
+        return info,deps.fingerprint(base,file,deadline)
+
+    if any(os.path.lexists(p) for p in (intent,completion,target)):
+        planned=json.loads(deps.readers.read_regular(str(storage),str(intent),65536))
+        saved=json.loads(deps.readers.read_regular(str(storage),str(completion),65536))
+        info,actual=measured(storage,target)
+        if planned.get('schema')!='roseos.mustang-vendor-build-metadata-retention.v1' \
+                or planned.get('completed') is not False \
+                or planned.get('failedReceiptSha256')!=record['receiptSha256'] \
+                or planned.get('source')!=str(path) or planned.get('destination')!=str(target) \
+                or saved!=dict(planned,completed=True) or os.path.lexists(path) \
+                or (info.st_dev,info.st_ino)!=(planned.get('device'),planned.get('inode')) \
+                or actual!=planned.get('fingerprint'):
+            raise ValueError('build-metadata retention requires reconciliation')
+        return saved
+    if not os.path.lexists(path):return {'state':'absent','usedForGeneration':False}
+    info,actual=measured(source,path)
+    planned={'schema':'roseos.mustang-vendor-build-metadata-retention.v1','completed':False,
+             'source':str(path),'destination':str(target),'device':info.st_dev,'inode':info.st_ino,
+             'fingerprint':actual,'failedReceiptSha256':record['receiptSha256'],
+             'toRun':identity['run'],'usedForGeneration':False}
+    deps.receipt(intent,planned);sync_directory(old)
+    deps.rename_noreplace(path,target)
+    after,observed=measured(storage,target)
+    if (after.st_dev,after.st_ino)!=(info.st_dev,info.st_ino) or observed!=actual or os.path.lexists(path):
+        raise ValueError('build-metadata retention outcome requires reconciliation')
+    sync_directory(adev);sync_directory(old)
+    saved=dict(planned,completed=True);deps.receipt(completion,saved);sync_directory(old)
+    return saved
+
+
+def qualify(source,storage,identity,*,root=ROOT,catalog,deadline,host_sha,factory_sha):
+    record,old=original_attempt(source,storage,identity,root);r=record['receipt'];run=r['identity']['run']
+    if r['hostDependencies']['receiptSha256']!=host_sha or r['factoryInput']['receiptSha256']!=factory_sha:
+        raise ValueError('bootstrap recovery belongs to different prepared inputs')
     adev=source/'vendor/adevtool';modules=adev/'node_modules';lib=adev/'lib'
     info=deps.plain_dir(modules)
     if info.st_uid!=os.geteuid() or info.st_gid!=os.getegid() or stat.S_IMODE(info.st_mode)&0o022 \

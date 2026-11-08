@@ -120,6 +120,12 @@ def checked(command, source, env, deadline):
     return proc.stdout.decode('utf-8', errors='strict').strip()
 
 
+class SourceMismatch(ValueError):
+    def __init__(self,project,kind):
+        super().__init__('pinned project HEAD or worktree differs')
+        self.observation={'project':project,'kind':kind,'rawStatusIncluded':False}
+
+
 def source_check(source, env, deadline, root=ROOT):
     """HEAD + git status for every pinned project; no pristine-runtime attestation."""
     projects = sync.project_identities((Path(root)/'os/pinned-manifest.xml').read_bytes())
@@ -130,10 +136,11 @@ def source_check(source, env, deadline, root=ROOT):
         target = source/path
         plain_dir(target)
         git = ['/usr/bin/git', '-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null', '-C', str(target)]
-        if checked(git+['rev-parse', '--show-toplevel'], source, env, deadline) != str(target) \
-                or checked(git+['rev-parse', 'HEAD'], source, env, deadline) != revision \
-                or checked(git+['status', '--porcelain', '--untracked-files=all'], source, env, deadline):
-            raise ValueError('pinned project HEAD or worktree differs')
+        for arguments,expected,kind in ((['rev-parse','--show-toplevel'],str(target),'project-root'),
+                (['rev-parse','HEAD'],revision,'revision'),
+                (['status','--porcelain','--untracked-files=all'],'','worktree')):
+            if checked(git+arguments,source,env,deadline)!=expected:
+                raise SourceMismatch(relative,kind)
     return {'projectCount': len(projects), 'check': 'project-heads-and-git-status',
             'ignoredContentUnchecked': True, 'pristineRuntimeAttestation': False}
 

@@ -163,6 +163,31 @@ source without shadowing compiled output, and confirm the dependency catalog
 is unchanged after generation. A completed substage is qualified explicitly;
 the failed overall run is never represented as successful vendor generation.
 
+### Source-check refusal and incremental metadata retention
+
+[Run 42520903084](https://github.com/Immortal-Protocols/RoseOS-1/actions/runs/42520903084)
+failed after 1.76 seconds at the strict project HEAD/worktree check. Its
+[hash-verified receipt](../os/build-only/mustang-vendor-42520903084.json)
+contains no child commands; the source loader and vendor generation never ran.
+Cleanup succeeded and a fresh numeric-ID read confirmed TERMINATED at
+`2026-11-08T12:37:58.487-08:00`. That receipt does not identify the mismatching
+project or path, so it does not establish a specific guest file as the cause.
+
+A local reproduction of the failed extra build on the pinned public adevtool
+source, Node 24.19.0 and Yarn 1.22.22 exits 1 and leaves untracked
+`tsconfig.tsbuildinfo` outside the ignored `lib/` directory. This is a reproduced
+cause of the strict refusal, not a guest-path observation. The recovery now
+checks the unchanged pinned adevtool project and original failed receipt,
+then conditionally preserves only that fixed untracked file before the full
+source check. It requires a regular single-link runner-owned file, the same
+filesystem, controlled permissions and at most 16 MiB. Intent/result records,
+file hashes, inode checks, directory sync and a no-replace move preserve it in
+the original failed attempt. Missing metadata invents no move; incomplete,
+conflicting or changed retention state stops the attempt. Its bytes never
+enter generation. All project HEAD/worktree checks still run in full, including
+untracked files. Future vendor receipts report a failing project's pinned
+relative path and fixed category without raw status output or file contents.
+
 ## Candidate continuity input access
 
 The old Mustang installer artifact `13280698927` remains indexed, with recorded
