@@ -830,3 +830,35 @@ commands are not instructions to redispatch that failed attempt blindly.
    retry are separate actions with their own applicable scope. No blind
    redispatch, automatic deletion, credential creation or access workaround
    is part of this plan.
+
+## Successful Mustang tool qualification and prepared-input consumer
+
+[Run 42531345133](https://github.com/Immortal-Protocols/RoseOS-1/actions/runs/42531345133)
+at `b80dd7ac93e94b3592f9e6770a8930a63c38e735` completed the bounded
+`m -j24 otatools-package` qualification in 593.455 seconds. The actual lunch
+identity was `mustang-cur-user`. The [structured evidence](../os/build-only/mustang-otatools-42531345133.json)
+records Make exit 0, both 1,057-project source checks, vendor rehashes and the
+485-entry dependency distribution. All 732 entries of the failed attempt's
+output were preserved by moving its directory with the same inode into that
+attempt's `retained-output`; none supplied the fresh build.
+
+The new `otatools.zip` is 536,801,287 bytes, SHA-256
+`9f0f1c8b906641cf262526fb8877adf5f711504c2ab6d508c437bd1005c1cc32`.
+An independent hosted job downloaded the same-run artifact and matched those
+bytes and the native receipt hash without executing the package. Cleanup
+succeeded. A separate numeric-ID Compute read observed the VM terminated at
+`2026-11-08T14:52:26.664-08:00`, retaining the four-hour STOP safeguard.
+This qualifies tool production and transfer; signing pins and full OTA
+admission remain closed.
+
+The dedicated full-build pipeline consumes the successful vendor and generic
+dependency preparations through `mustang_vendor_consumer.py`. Its hosted guard
+requires completed evidence for the same builder, disk, source root and pinned
+recipe. After the normal isolated source copy, it holds the existing read-only
+canonical lock and rehashes both original preparations and their copies,
+including generated vendor files, source loader, dependency modules and the
+complete host distribution. It records `vendor-inputs-completed.json` before
+lunch. It neither downloads nor regenerates vendor files and does not apply the
+legacy input-hash omission patch. Changed bytes refuse before allocation.
+The runtime stays unbound pending the separate pristine-source, app freshness,
+allocation and signing requirements; this consumer has only offline validation.

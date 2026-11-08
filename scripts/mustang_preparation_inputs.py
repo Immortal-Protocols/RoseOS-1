@@ -61,6 +61,14 @@ def host_dependencies(source, storage, record, identity, *, deadline=None, root=
             or previous.get('source', {}).get('projectCount') != 1057 \
             or previous['source'].get('check') != 'project-heads-and-git-status':
         raise ValueError('host-dependency recipe, manifest or successful Make proof differs')
+    measured=verify_host_distribution(source,previous,deadline=deadline,root=root)
+    return dict(measured,receiptSha256=record['receiptSha256'],run=previous['identity']['run'])
+
+
+def verify_host_distribution(source,previous,*,deadline=None,root=ROOT):
+    """Rehash the original distribution or its isolated byte copy, without executing it."""
+    deadline=deadline if deadline is not None else time.monotonic()+900
+    spec=deps.recipe(root);output=source/spec['outDir']
     marker_path = output/'adevtool_revision'
     marker = deps.readers.read_regular(str(source), str(marker_path), 128)
     if marker != (spec['adevtoolRevision']+'\n').encode() \
@@ -73,8 +81,7 @@ def host_dependencies(source, storage, record, identity, *, deadline=None, root=
         item = distribution.get('host/linux-x86/bin/'+name, {})
         if not item.get('sizeBytes') or not item.get('mode', 0) & 0o111:
             raise ValueError('host-dependency executable entrypoint is absent')
-    return {'receiptSha256': record['receiptSha256'], 'run': previous['identity']['run'],
-            'distributionEntries': len(distribution), 'distributionRehashed': True,
+    return {'distributionEntries': len(distribution), 'distributionRehashed': True,
             'adevtoolRevision': spec['adevtoolRevision'], 'otaAdmitted': False}
 
 
