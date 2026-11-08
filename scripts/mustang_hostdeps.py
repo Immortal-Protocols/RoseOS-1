@@ -511,6 +511,55 @@ def admin_policy():
                 policyExitCode=proc.returncode)
 
 
+def inspect_output_entries(output):
+    """Bounded lstat-only observation; never open files, sockets or FIFOs.
+
+    This diagnoses the retained current output after a sampled-stop refusal.
+    It does not consume old attempt logs, alter output, or admit any special
+    file to a subsequent build or distribution.
+    """
+    result = {'metadataOnly': True, 'complete': False, 'entryCount': 0,
+              'specialEntries': [], 'maxEntries': MAX_ENTRIES, 'timeoutSeconds': 30}
+    started = time.monotonic();fd = None
+    try:
+        body = readers._body(str(output))
+        if not body:
+            raise ValueError('observation-path-refused')
+        fd = readers._walk_dir(body)
+        device = os.fstat(fd).st_dev
+        def onerror(_error):
+            raise ValueError('observation-walk-failed')
+        for directory, dirs, files, parent in os.fwalk('.', dir_fd=fd, follow_symlinks=False, onerror=onerror):
+            for name in dirs+files:
+                result['entryCount'] += 1
+                if result['entryCount'] > MAX_ENTRIES or time.monotonic()-started >= 30:
+                    raise ValueError('observation-bound-exceeded')
+                info = os.stat(name, dir_fd=parent, follow_symlinks=False)
+                if info.st_dev != device:
+                    raise ValueError('observation-crosses-filesystem')
+                if stat.S_ISREG(info.st_mode) or stat.S_ISDIR(info.st_mode) or stat.S_ISLNK(info.st_mode):
+                    continue
+                relative = str(Path(directory)/name)
+                if len(relative.encode('utf-8')) > 512 or len(result['specialEntries']) >= 32:
+                    raise ValueError('observation-special-entry-bound')
+                kind = ('fifo' if stat.S_ISFIFO(info.st_mode) else 'socket' if stat.S_ISSOCK(info.st_mode)
+                        else 'character-device' if stat.S_ISCHR(info.st_mode) else
+                        'block-device' if stat.S_ISBLK(info.st_mode) else 'other')
+                result['specialEntries'].append({'relativePath': relative, 'type': kind,
+                    'mode': stat.S_IMODE(info.st_mode), 'uid': info.st_uid, 'gid': info.st_gid,
+                    'sizeBytes': info.st_size, 'device': info.st_dev, 'inode': info.st_ino,
+                    'linkCount': info.st_nlink})
+        result['complete'] = True
+    except ValueError as error:
+        result['failureCode'] = str(error)
+    except (OSError, UnicodeError, readers._Refused):
+        result['failureCode'] = 'observation-unavailable'
+    finally:
+        if fd is not None: os.close(fd)
+        result['elapsedSeconds'] = round(time.monotonic()-started, 3)
+    return result
+
+
 def inspect_guest(env):
     """Current read-only prerequisites via the existing infrastructure dry run.
 
@@ -559,6 +608,12 @@ def inspect_guest(env):
         except OSError:
             lock_state['availability'] = 'unreadable'
     output = entry(source/recipe()['outDir'])
+    if output['state'] == 'directory':
+        try:
+            with lock(Path(lane['lockPath'])):
+                output['entries'] = inspect_output_entries(source/recipe()['outDir'])
+        except (OSError, ValueError):
+            output['entries'] = {'metadataOnly': True, 'complete': False, 'failureCode': 'canonical-lock-unavailable'}
     space = os.statvfs(source)
     observation = {'schema': 'roseos.mustang-hostdeps-preflight.v1',
         'identity': dict(run=run, builder=lane['vm'], diskUuid=cfg['dataFilesystemUuid']),

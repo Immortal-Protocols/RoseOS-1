@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import socket
 import sys
 import tempfile
 import time
@@ -469,6 +470,35 @@ class HostdepsTest(unittest.TestCase):
             self.assertEqual(removed, [True])
             (root/'outside-link').symlink_to('/etc')
             self.assertEqual(deps.tree_bytes(root), 4+len('/etc'))
+
+    def test_special_output_observation_is_metadata_only_and_does_not_follow_links(self):
+        with tempfile.TemporaryDirectory() as tmp, socket.socket(socket.AF_UNIX) as sock:
+            root = Path(tmp);(root/'ordinary').write_bytes(b'ordinary')
+            os.mkfifo(root/'ninja.fifo');sock.bind(str(root/'build.sock'))
+            (root/'outside').symlink_to('/etc')
+            before = (root/'ninja.fifo').stat()
+            with patch.object(deps.readers, 'read_regular', side_effect=AssertionError('read file')):
+                result = deps.inspect_output_entries(root)
+            self.assertTrue(result['complete'])
+            self.assertTrue(result['metadataOnly'])
+            self.assertEqual(result['entryCount'], 4)
+            self.assertEqual({r['relativePath']:r['type'] for r in result['specialEntries']},
+                             {'ninja.fifo':'fifo','build.sock':'socket'})
+            self.assertEqual((root/'ninja.fifo').stat().st_ino, before.st_ino)
+            self.assertTrue((root/'outside').is_symlink())
+
+    def test_special_output_observation_bounds_fail_closed_without_removing_entries(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp);os.mkfifo(root/'first');os.mkfifo(root/'second')
+            with patch.object(deps, 'MAX_ENTRIES', 1):
+                result = deps.inspect_output_entries(root)
+            self.assertFalse(result['complete'])
+            self.assertEqual(result['failureCode'], 'observation-bound-exceeded')
+            self.assertEqual(len(list(root.iterdir())), 2)
+            (root/'linked').symlink_to(root, target_is_directory=True)
+            self.assertFalse(deps.inspect_output_entries(root/'linked')['complete'])
+            self.assertFalse(deps.inspect_output_entries(root/'missing')['complete'])
+            self.assertFalse(deps.inspect_output_entries(Path('relative'))['complete'])
 
     def test_space_observations_record_actual_free_space_and_watched_bytes(self):
         with tempfile.TemporaryDirectory() as tmp:

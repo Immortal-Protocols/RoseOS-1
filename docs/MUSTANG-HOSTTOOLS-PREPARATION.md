@@ -22,9 +22,23 @@ keeps the administrator receipt, independent observation, artifact identity,
 access cleanup and separate STOP observation distinct.
 
 A fresh host-dependency-only [run 42508459503](https://github.com/Immortal-Protocols/RoseOS-1/actions/runs/42508459503)
-then started on that source. Its in-progress status is not a successful tool
-receipt. No new SSH credential or administrator session is required by the
-next preparation stages.
+then ran on that source. It checked HEAD and worktree status for all 1,057
+pinned projects and launched Make, but stopped after 332.46 seconds with
+`hostdeps special output refused`. The structured receipt was uploaded and
+owned cleanup succeeded; a fresh numeric-ID read confirmed TERMINATED at
+`2026-11-08T10:16:41.894-08:00`. The [evidence record](../os/build-only/mustang-hostdeps-42508459503.json)
+binds the failed receipt and artifact to that attempt. Its partial dependency
+output is preserved. The receipt does not identify the special entry's type
+or path and does not prove Make success or a complete distribution.
+
+The exclusive infrastructure dry run now observes metadata of the retained
+dependency output under the available canonical lock: at most 100,000 entries,
+30 seconds and 32 special entries with relative paths, fixed type vocabulary,
+ownership, mode, inode and size. It never opens files/FIFOs/sockets or follows
+links, and records incomplete walks explicitly. No old build logs are read;
+no output is deleted, adopted or admitted by this observation. This is the
+next diagnostic step before changing the live sampler or retrying Make.
+No new SSH credential or administrator session is required.
 
 ## Pinned factory-input download adapter
 
