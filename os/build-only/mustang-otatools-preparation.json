@@ -12,5 +12,6 @@
   "workBytes": 137438953472,
   "reserveBytes": 322122547200,
   "otaAdmitted": false,
-  "signerPinsAdmitted": false
+  "signerPinsAdmitted": false,
+  "outputRecoveryEvidence": "os/build-only/mustang-otatools-output-recovery.json"
 }

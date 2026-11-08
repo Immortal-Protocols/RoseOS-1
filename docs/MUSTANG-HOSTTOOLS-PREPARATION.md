@@ -275,6 +275,40 @@ credential, signing or publication action, and never reads the denied historical
 log endpoints or installer. Classification is diagnostic evidence, not a build
 or tool admission. The next correction must follow the observed result.
 
+### Observed release-probe failure and correction
+
+[Observation 42527536373](https://github.com/Immortal-Protocols/RoseOS-1/actions/runs/42527536373)
+completed successfully at `a7956fa4f13520bb89d403fb42e41e243bf314c3`.
+Its [hash-verified structured result](../os/build-only/mustang-otatools-observation-42527536373.json)
+identifies the lunch assertion: product/device were `mustang`, variant was `user`,
+but `get_build_var TARGET_RELEASE` returned an empty string. The private diagnostic
+classified `lunch-identity-assertion`; no raw text was exported. In the fixed
+wrapper that assertion precedes `m`, so the Make goal was not reached. Its
+732-entry output metadata walk was complete and contained no special entries.
+Nothing was moved or rebuilt. Cleanup succeeded and a fresh numeric-ID read
+confirmed TERMINATED at `2026-11-08T13:57:09.942-08:00`.
+
+Pinned [envsetup.sh line 515](https://github.com/GrapheneOS/platform_build/blob/b0f697df8cc9519408ca0a404e918cd51bde0735/envsetup.sh#L515)
+(Git blob `27f15f8da9f8ddcc1af70b03fc3bd48de10a0c13`) explicitly exports
+`TARGET_RELEASE=$release`. The corrected wrapper reads that exported variable
+and still requires `cur`; product, variant and device checks remain exact.
+A regression fixture models the observed empty Make query and exported `cur`:
+the old probe fails and the corrected one reaches only the fixed Make goal.
+Missing/wrong exported releases still refuse. A separate local experiment used
+the actual pinned `_lunch_meat` function with native build helpers stubbed and
+confirmed its export behavior; it ran no Android native build.
+
+The [output recovery binding](../os/build-only/mustang-otatools-output-recovery.json)
+requires that exact failed receipt and completed observation. A future admitted
+attempt first repeats the full source/vendor/host input checks, then rechecks
+the failed on-disk receipt, diagnostic hashes and bounded output metadata under
+the canonical lock. It moves the entire failed output without replacement into
+that attempt's `retained-output`, synchronizes intent/result records and both
+parents, and verifies the same directory inode. Retained bytes are never build
+inputs. Missing, changed, conflicting or incomplete state refuses the move or
+another build. Only an absent canonical output permits the corrected wrapper.
+No new Make attempt is established by these source changes.
+
 ## Candidate continuity input access
 
 The old Mustang installer artifact `13280698927` remains indexed, with recorded

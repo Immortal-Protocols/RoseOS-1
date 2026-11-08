@@ -19,6 +19,11 @@ import os_release_shape as shape
 
 
 class OtatoolsTest(unittest.TestCase):
+    def fixture_root(self,home,*,recovering=False):
+        root=Path(home)/'checkout';(root/'os/build-only').mkdir(parents=True)
+        (root/prep.BINDING).write_text(json.dumps({'outputRecoveryEvidence':prep.recovery.BINDING if recovering else None}))
+        return root
+
     def env(self,job='otatools'):
         return {'GITHUB_EVENT_NAME':'workflow_dispatch','GITHUB_REF':'refs/heads/main',
                 'GITHUB_WORKFLOW_REF':'Immortal-Protocols/RoseOS-1/.github/workflows/mustang-ota-dedicated.yml@refs/heads/main',
@@ -51,12 +56,16 @@ class OtatoolsTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             source=Path(tmp);(source/'build').mkdir();script=source/'proof.sh';script.write_bytes(prep.SCRIPT)
             envsetup=source/'build/envsetup.sh'
-            envsetup.write_text('''lunch() { test "$1" = mustang-cur-user; }
+            envsetup.write_text('''lunch() { test "$1" = mustang-cur-user && export TARGET_RELEASE="${FIXTURE_RELEASE-cur}"; }
 get_build_var() {
-case "$1" in TARGET_PRODUCT|TARGET_DEVICE) echo mustang;; TARGET_RELEASE) echo cur;; TARGET_BUILD_VARIANT) echo user;; *) return 1;; esac
+case "$1" in TARGET_PRODUCT|TARGET_DEVICE) echo mustang;; TARGET_RELEASE) echo;; TARGET_BUILD_VARIANT) echo user;; *) return 1;; esac
 }
 m() { printf '%s\\n' "$@" > make-arguments; }
 ''')
+            old=source/'old-probe.sh';old.write_bytes(prep.SCRIPT.replace(b'"${TARGET_RELEASE:?lunch release missing}"',b'"$(get_build_var TARGET_RELEASE)"'))
+            old_result=subprocess.run(['/bin/bash',str(old),prep.OUT,str(source/'old-identity.json')],cwd=source,
+                                      env={'PATH':'/usr/bin:/bin'},capture_output=True,timeout=10)
+            self.assertNotEqual(old_result.returncode,0);self.assertFalse((source/'make-arguments').exists())
             result=subprocess.run(['/bin/bash',str(script),prep.OUT,str(source/'identity.json')],cwd=source,
                                   env={'PATH':'/usr/bin:/bin'},capture_output=True,timeout=10)
             self.assertEqual(result.returncode,0,result.stderr.decode())
@@ -67,6 +76,11 @@ m() { printf '%s\\n' "$@" > make-arguments; }
             result=subprocess.run(['/bin/bash',str(script),prep.OUT,str(source/'wrong-identity.json')],cwd=source,
                                   env={'PATH':'/usr/bin:/bin'},capture_output=True,timeout=10)
             self.assertNotEqual(result.returncode,0);self.assertFalse((source/'make-arguments').exists())
+            envsetup.write_text(envsetup.read_text().replace('echo frankel','echo mustang'))
+            for release in ('trunk_staging',''):
+                result=subprocess.run(['/bin/bash',str(script),prep.OUT,str(source/('release-'+(release or 'empty')+'.json'))],cwd=source,
+                                      env={'PATH':'/usr/bin:/bin','FIXTURE_RELEASE':release},capture_output=True,timeout=10)
+                self.assertNotEqual(result.returncode,0);self.assertFalse((source/'make-arguments').exists())
 
     def package(self,source,data=b'new tool package fixture'):
         path=source/prep.OUT/'soong/.intermediates/build/make/tools/otatools_package/otatools-package/host/gen/otatools.zip'
@@ -165,7 +179,7 @@ m() { printf '%s\\n' "$@" > make-arguments; }
                     patch.object(prep.os,'statvfs',return_value=free), \
                     patch.dict(os.environ,{'GH_TOKEN':'private','GCP_SERVICE_ACCOUNT_JSON':'private',
                                            'ACTIONS_ID_TOKEN_REQUEST_TOKEN':'private','BASH_ENV':'private'}):
-                result=prep.build(source,attempt,{}, {},self.identity())
+                result=prep.build(source,attempt,{}, {},self.identity(),root=self.fixture_root(tmp))
             self.assertTrue(result['success']);self.assertEqual(result['makeExitCode'],0);self.assertEqual(len(calls),1)
             self.assertFalse(result['allocated']);self.assertFalse(result['signingStarted'])
             self.assertFalse(result['signerPinsAdmitted']);self.assertFalse(result['otaAdmitted'])
@@ -196,7 +210,7 @@ m() { printf '%s\\n' "$@" > make-arguments; }
             attempt=Path(tmp)/'attempt';attempt.mkdir()
             with patch.object(prep.deps,'supervise',side_effect=AssertionError('Make started')):
                 with self.assertRaisesRegex(ValueError,'output exists'):
-                    prep.build(source,attempt,{}, {},self.identity())
+                    prep.build(source,attempt,{}, {},self.identity(),root=self.fixture_root(tmp))
             result=json.loads((attempt/prep.RECEIPT).read_text())
             self.assertFalse(result['success']);self.assertFalse(result['makeStarted'])
             self.assertEqual(path.read_bytes(),b'new tool package fixture')
@@ -213,6 +227,114 @@ m() { printf '%s\\n' "$@" > make-arguments; }
         self.assertIn('actions/download-artifact@',jobs['otatools-verify'])
         self.assertEqual(prep.ephemeral.queue_decision([{'name':'otatools','status':'in_progress'}],100),'ready')
         self.assertEqual(prep.ephemeral.queue_decision([{'name':'otatools-verify','status':'in_progress'}],100),'wait')
+
+
+class OutputRecoveryTest(unittest.TestCase):
+    def fixture(self,tmp):
+        source=Path(tmp)/'source';source.mkdir();storage=Path(tmp)/'rose-actions';storage.mkdir()
+        old=storage/'mustang-otatools-42524960701-1';old.mkdir()
+        output=source/prep.OUT;output.mkdir();(output/'keep').write_bytes(b'preserve failed lunch bytes')
+        (old/'lunch-identity.json').write_bytes(b'synthetic observed lunch fields')
+        (old/'make.log').write_bytes(b'synthetic observed assertion marker')
+        cfg,failed,observed=copy.deepcopy(prep.recovery.binding());r=failed['receipt'];o=observed['receipt']
+        r.update(sourceRoot=str(source),outDir=str(output))
+        raw=json.dumps(r,sort_keys=True).encode()+b'\n';(old/prep.RECEIPT).write_bytes(raw)
+        failed['receiptSha256']=hashlib.sha256(raw).hexdigest();o['failedReceiptSha256']=failed['receiptSha256']
+        o['lunch']['sha256']=hashlib.sha256((old/'lunch-identity.json').read_bytes()).hexdigest()
+        o['privateDiagnostic']['logSha256']=hashlib.sha256((old/'make.log').read_bytes()).hexdigest()
+        o['output']=prep.deps.inspect_output_entries(output)
+        observed['receiptSha256']=hashlib.sha256(json.dumps(o,sort_keys=True).encode()).hexdigest()
+        identity=dict(r['identity'],run=dict(r['identity']['run'],runId='789'))
+        return source,storage,old,(cfg,failed,observed),identity
+
+    def retain(self,source,storage,records,identity):
+        with patch.object(prep.recovery,'binding',return_value=records):
+            return prep.recovery.retain(source,storage,identity)
+
+    def test_preservation_keeps_the_whole_directory_inode_and_never_uses_its_bytes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source,storage,old,records,identity=self.fixture(tmp)
+            output=source/prep.OUT;before=output.stat();result=self.retain(source,storage,records,identity)
+            target=old/'retained-output'
+            self.assertFalse(output.exists());self.assertEqual(target.stat().st_ino,before.st_ino)
+            self.assertEqual((target/'keep').read_bytes(),b'preserve failed lunch bytes')
+            self.assertTrue(result['completed']);self.assertFalse(result['oldOutputUsedForBuild'])
+            self.assertEqual(self.retain(source,storage,records,identity),result)
+
+    def test_changed_receipt_diagnostics_metadata_identity_and_collision_refuse(self):
+        for change in ('receipt','lunch','log','metadata','identity','collision','missing-output'):
+            with self.subTest(change=change),tempfile.TemporaryDirectory() as tmp:
+                source,storage,old,records,identity=self.fixture(tmp);output=source/prep.OUT
+                if change=='receipt':(old/prep.RECEIPT).write_bytes(b'changed')
+                if change=='lunch':(old/'lunch-identity.json').write_bytes(b'changed')
+                if change=='log':(old/'make.log').write_bytes(b'changed')
+                if change=='metadata':(output/'extra').write_bytes(b'unexpected')
+                if change=='identity':identity['diskUuid']='other'
+                if change=='collision':(old/'retained-output').mkdir()
+                if change=='missing-output':(output/'keep').unlink();output.rmdir()
+                with self.assertRaises((ValueError,prep.deps.readers._Refused)):
+                    self.retain(source,storage,records,identity)
+                if change!='missing-output':self.assertEqual((output/'keep').read_bytes(),b'preserve failed lunch bytes')
+
+    def test_interrupted_or_conflicting_retention_never_resets_or_moves_again(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source,storage,old,records,identity=self.fixture(tmp)
+            with patch.object(prep.deps,'rename_noreplace',side_effect=OSError('fixture interrupted')):
+                with self.assertRaises(OSError):self.retain(source,storage,records,identity)
+            with self.assertRaises(prep.deps.readers._Refused):self.retain(source,storage,records,identity)
+            self.assertTrue((source/prep.OUT/'keep').exists())
+        with tempfile.TemporaryDirectory() as tmp:
+            source,storage,old,records,identity=self.fixture(tmp);self.retain(source,storage,records,identity)
+            (source/prep.OUT).mkdir()
+            with self.assertRaisesRegex(ValueError,'reconciliation'):self.retain(source,storage,records,identity)
+
+    def test_actual_binding_qualifies_only_observed_assertion_and_same_prepared_inputs(self):
+        _cfg,failed,observed=prep.recovery.binding()
+        self.assertEqual(failed['runId'],'42524960701');self.assertEqual(observed['runId'],'42527536373')
+        record,host=prep.binding()
+        self.assertEqual(record['runId'],'42522784617');self.assertEqual(host['runId'],'42512135815')
+
+    def test_measured_inputs_are_required_before_retention_and_a_fresh_make(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home=Path(tmp);source=home/'source';source.mkdir();storage=home/'rose-actions';storage.mkdir()
+            attempt=storage/'new-attempt';attempt.mkdir();old=storage/'old-attempt';old.mkdir()
+            output=source/prep.OUT;output.mkdir();(output/'keep').write_bytes(b'old unqualified bytes')
+            events=[];fixture=OtatoolsTest();root=fixture.fixture_root(tmp,recovering=True)
+            def checked_source(*_args,**_kwargs):events.append('source');return {'projectCount':1057}
+            def vendor(*_args,**_kwargs):events.append('vendor');return {'generatedTreesRehashed':True}
+            def host(*_args,**_kwargs):events.append('host');return {'distributionRehashed':True}
+            def retain(*_args,**_kwargs):
+                self.assertEqual(events,['source','vendor','host']);events.append('retain')
+                os.rename(output,old/'retained-output');return {'completed':True,'oldOutputUsedForBuild':False}
+            def make(_command,_source,_env,_log,_deadline,monitor,*,outcome,**_kwargs):
+                events.append('make');self.assertFalse(output.exists());fixture.package(source)
+                (attempt/'lunch-identity.json').write_text(json.dumps({'TARGET_PRODUCT':'mustang','TARGET_RELEASE':'cur',
+                    'TARGET_BUILD_VARIANT':'user','TARGET_DEVICE':'mustang'}))
+                outcome.update(processStarted=True,exitCode=0);monitor()
+            free=SimpleNamespace(f_bavail=1 << 40,f_frsize=1,f_favail=1000000)
+            with patch.object(prep.deps,'source_check',side_effect=checked_source), \
+                    patch.object(prep,'vendor_input',side_effect=vendor), \
+                    patch.object(prep.inputs,'host_dependencies',side_effect=host), \
+                    patch.object(prep.recovery,'retain',side_effect=retain), \
+                    patch.object(prep.deps,'supervise',side_effect=make),patch.object(prep.os,'statvfs',return_value=free):
+                result=prep.build(source,attempt,{}, {},fixture.identity(),root=root)
+            self.assertTrue(result['success']);self.assertEqual(events[:5],['source','vendor','host','retain','make'])
+            self.assertEqual((old/'retained-output/keep').read_bytes(),b'old unqualified bytes')
+
+    def test_failed_input_rehash_keeps_partial_output_and_does_not_move_or_make(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home=Path(tmp);source=home/'source';source.mkdir();attempt=home/'attempt';attempt.mkdir()
+            output=source/prep.OUT;output.mkdir();(output/'keep').write_bytes(b'preserved')
+            fixture=OtatoolsTest();root=fixture.fixture_root(tmp,recovering=True)
+            free=SimpleNamespace(f_bavail=1 << 40,f_frsize=1,f_favail=1000000)
+            with patch.object(prep.deps,'source_check',return_value={}),patch.object(prep,'vendor_input',return_value={}), \
+                    patch.object(prep.inputs,'host_dependencies',side_effect=ValueError('changed input')), \
+                    patch.object(prep.recovery,'retain',side_effect=AssertionError('moved output')), \
+                    patch.object(prep.deps,'supervise',side_effect=AssertionError('Make started')), \
+                    patch.object(prep.os,'statvfs',return_value=free):
+                with self.assertRaisesRegex(ValueError,'changed input'):
+                    prep.build(source,attempt,{}, {},fixture.identity(),root=root)
+            self.assertEqual((output/'keep').read_bytes(),b'preserved')
 
 
 if __name__=='__main__':unittest.main()

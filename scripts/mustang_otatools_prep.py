@@ -21,6 +21,7 @@ import mustang_lane
 import mustang_ota
 import mustang_preparation_inputs as inputs
 import mustang_vendor_prep as vendor
+import mustang_otatools_recovery as recovery
 
 ROOT=Path(__file__).resolve().parents[1]
 BINDING='os/build-only/mustang-otatools-preparation.json'
@@ -39,7 +40,7 @@ export ANDROID_QUIET_BUILD=true
 export OUT_DIR="$1"
 source build/envsetup.sh
 lunch mustang-cur-user
-/usr/bin/python3 - "$2" "$(get_build_var TARGET_PRODUCT)" "$(get_build_var TARGET_RELEASE)" "$(get_build_var TARGET_BUILD_VARIANT)" "$(get_build_var TARGET_DEVICE)" <<'PY'
+/usr/bin/python3 - "$2" "$(get_build_var TARGET_PRODUCT)" "${TARGET_RELEASE:?lunch release missing}" "$(get_build_var TARGET_BUILD_VARIANT)" "$(get_build_var TARGET_DEVICE)" <<'PY'
 import json,os,sys
 identity=dict(zip(('TARGET_PRODUCT','TARGET_RELEASE','TARGET_BUILD_VARIANT','TARGET_DEVICE'),sys.argv[2:],strict=True))
 with open(sys.argv[1],'x') as f:
@@ -76,6 +77,13 @@ def binding(root=ROOT):
     if receipt.get('hostDependencies',{}).get('receiptSha256')!=host['receiptSha256'] \
             or receipt.get('factoryInput',{}).get('receiptSha256')!=factory['receiptSha256']:
         raise ValueError('vendor generation belongs to different prepared inputs')
+    selected=cfg.get('outputRecoveryEvidence')
+    if selected is not None:
+        if selected!=recovery.BINDING:raise ValueError('otatools recovery evidence path differs')
+        _cfg,old,_observed=recovery.binding(root)
+        if old['receipt']['vendorInput']['receiptSha256']!=record['receiptSha256'] \
+                or old['receipt']['hostDependencies']['receiptSha256']!=host['receiptSha256']:
+            raise ValueError('otatools recovery requires unchanged qualified inputs')
     return record,host
 
 
@@ -155,6 +163,7 @@ def collect(source,output,deadline):
 
 def build(source,attempt,record,host,identity,root=ROOT):
     started=time.monotonic();deadline=started+TIMEOUT;output=source/OUT
+    recovering=json.loads((Path(root)/BINDING).read_text()).get('outputRecoveryEvidence') is not None
     result={'schema':'roseos.mustang-otatools-preparation-run.v1','identity':identity,'success':False,
             'sourceRoot':str(source),'outDir':str(output),'product':'mustang-cur-user','goals':['otatools-package'],
             'jobs':24,'timeoutSeconds':TIMEOUT,'workBytes':WORK_BYTES,'reserveBytes':RESERVE,
@@ -166,13 +175,17 @@ def build(source,attempt,record,host,identity,root=ROOT):
     env['BUILD_NUMBER']='mustang-otatools-proof-'+identity['run']['runId']
     check=lambda:monitor(source,attempt,output,deadline,result['spaceObservations'])
     try:
-        if os.path.lexists(output):raise ValueError('otatools output exists; preserve and reconcile it')
+        if os.path.lexists(output) and not recovering:raise ValueError('otatools output exists; preserve and reconcile it')
         check();space=os.statvfs(source)
         if space.f_bavail*space.f_frsize<RESERVE+WORK_BYTES:raise ValueError('otatools reserve headroom is insufficient')
         result['phase']='pinned-source-check';result['source']=deps.source_check(source,env,deadline,root)
         result['phase']='vendor-input-rehash';result['vendorInput']=vendor_input(source,attempt.parent,record,identity,deadline)
         result['phase']='host-dependency-rehash'
         result['hostDependencies']=inputs.host_dependencies(source,attempt.parent,host,identity,deadline=deadline,root=root)
+        if recovering:
+            result['phase']='retain-failed-output'
+            result['outputRetention']=recovery.retain(source,attempt.parent,identity,root=root)
+        if os.path.lexists(output):raise ValueError('otatools output still exists after retention')
         script=attempt/'build-otatools.sh';script.write_bytes(SCRIPT)
         result['buildScript']=deps.fingerprint(attempt,script,deadline)
         command=['/bin/bash',str(script),OUT,str(attempt/'lunch-identity.json')]
