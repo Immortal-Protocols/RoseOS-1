@@ -152,5 +152,33 @@ class QualificationTest(unittest.TestCase):
         self.archive.write_bytes(data.replace(b'fixture bytes',b'changed bytes',1));self.bind_archive()
         with self.assertRaises(zipfile.BadZipFile):self.inspect()
 
+    def test_actual_inspection_record_binds_the_complete_inventory_and_stays_unadmitted(self):
+        record=qualification.inspection_record(root=ROOT)
+        self.assertEqual(record['entryCount'],500)
+        self.assertEqual(record['expandedBytes'],927318429)
+        self.assertEqual(len(record['inventory']),500)
+        self.assertEqual(record['inventorySha256'],'7e69d987fd0384e169467f1f9ded8c4986d6e9f8e0538f7aa6b4402808dd9912')
+        self.assertIs(record['packageExecuted'],False);self.assertIs(record['signerPinsAdmitted'],False)
+
+    def test_inspection_record_refuses_tampered_inventory_counts_identity_and_execution(self):
+        original=json.loads((ROOT/qualification.INSPECTION).read_text())
+        mutations=[lambda r:r.update(entryCount=501),lambda r:r.update(expandedBytes=42),
+            lambda r:r['inventory'][0].update(sha256='f'*64),
+            lambda r:r['run'].update(runId='999'),lambda r:r.update(packageExecuted=True),
+            lambda r:r['requiredExecutables'][qualification.REQUIRED[0]].update(mode=0o644),
+            lambda r:r['outerArtifactReadback'].update(artifactId=999)]
+        metadata={'inspectorSource','inspectorScriptSha256','inspectionReceiptSha256','recordedAt','outerArtifactReadback'}
+        for i,mutate in enumerate(mutations):
+            record=copy.deepcopy(original);mutate(record)
+            record['inspectionReceiptSha256']=qualification.canonical_sha({k:v for k,v in record.items() if k not in metadata})
+            (self.root/qualification.INSPECTION).write_text(json.dumps(record))
+            with self.subTest(mutation=i),self.assertRaises(ValueError):qualification.inspection_record(root=self.root)
+
+    def test_encrypted_flag_is_refused_before_member_read(self):
+        self.package();data=bytearray(self.archive.read_bytes())
+        offset=data.index(b'PK\x01\x02')+8;data[offset]|=1
+        self.archive.write_bytes(data);self.bind_archive()
+        with self.assertRaisesRegex(ValueError,'unsafe'):self.inspect()
+
 
 if __name__=='__main__':unittest.main()

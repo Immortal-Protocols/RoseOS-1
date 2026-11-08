@@ -213,6 +213,7 @@ class ToolClosureTest(unittest.TestCase):
             shutil.rmtree(base)
         for relative in (closure.RECEIPT, closure.PIN, closure.CAPACITY,
                          'os/build-only/mustang-otatools-42531345133.json','os/build-only/mustang-lane.json',
+                         'os/build-only/mustang-otatools-inspection-42531345133.json',
                          'script/LICENSE', 'script/generate-release.sh', 'script/common.sh',
                          'script/generate-metadata', 'device/common/clear-factory-images-variables.sh'):
             source = ROOT / relative

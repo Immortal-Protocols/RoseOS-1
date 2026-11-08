@@ -16,6 +16,7 @@ import mustang_otatools_prep as prep
 
 ROOT=Path(__file__).resolve().parents[1]
 EVIDENCE='os/build-only/mustang-otatools-42531345133.json'
+INSPECTION='os/build-only/mustang-otatools-inspection-42531345133.json'
 REQUIRED=('bin/ota_from_target_files','bin/sign_target_files_apks')
 MAX_ENTRIES=20000
 MAX_EXPANDED=4 << 30
@@ -155,6 +156,52 @@ def inspect_package(archive_path,reference=EVIDENCE,*,root=ROOT):
     return dict(proof,schema='roseos.mustang-otatools-package-inspection.v1',packageBytesReadThisInvocation=True,
         entryCount=len(inventory),expandedBytes=expanded,inventorySha256=canonical_sha(inventory),
         requiredExecutables={name:rows[name] for name in REQUIRED},inventory=inventory)
+
+
+def inspection_record(reference=INSPECTION,*,root=ROOT):
+    """Validate a committed inspection inventory; this does not reread or admit a package."""
+    parts=str(reference).split('/')
+    if parts[:2]!=['os','build-only'] or any(p in ('','.','..') for p in parts):
+        raise ValueError('tool inspection must be committed build-only evidence')
+    record=json.loads(readers.read_regular(str(root),str(Path(root)/reference),12 << 20))
+    proof=binding(record.get('evidence'),root=root)
+    if record.get('schema')!='roseos.mustang-otatools-package-inspection.v1' \
+            or record.get('packageBytesReadThisInvocation') is not True \
+            or any(record.get(k) is not False for k in ('packageExecuted','pristineRuntimeAttestation','signerPinsAdmitted','otaAdmitted')) \
+            or any(record.get(k)!=v for k,v in proof.items() if k not in ('schema','packageBytesReadThisInvocation')):
+        raise ValueError('tool inspection differs from the bound qualification')
+    metadata={'inspectorSource','inspectorScriptSha256','inspectionReceiptSha256','recordedAt','outerArtifactReadback'}
+    outer=record.get('outerArtifactReadback',{});artifact=proof['packageArtifact']
+    if canonical_sha({k:v for k,v in record.items() if k not in metadata})!=record.get('inspectionReceiptSha256') \
+            or not re.fullmatch(r'[0-9a-f]{40}',str(record.get('inspectorSource',''))) \
+            or not digest(record.get('inspectorScriptSha256')) \
+            or outer.get('complete') is not True or outer.get('packageExecuted') is not False \
+            or outer.get('artifactId')!=artifact['id'] or outer.get('artifactBytes')!=artifact['sizeBytes'] \
+            or outer.get('artifactSha256')!=artifact['sha256'] \
+            or outer.get('nativeReceiptSha256')!=proof['nativeReceiptSha256'] \
+            or outer.get('packageSha256')!=proof['packageSha256'] or outer.get('packageBytes')!=proof['packageBytes']:
+        raise ValueError('tool inspection receipt or artifact readback differs')
+    inventory=record.get('inventory');count=record.get('entryCount');expanded=record.get('expandedBytes')
+    if not isinstance(inventory,list) or type(count) is not int or not 0<count<=MAX_ENTRIES \
+            or count!=len(inventory) or type(expanded) is not int or not 0<expanded<=MAX_EXPANDED \
+            or canonical_sha(inventory)!=record.get('inventorySha256'):
+        raise ValueError('tool inspection inventory identity or bounds differ')
+    names=[row.get('path') for row in inventory]
+    if any(not isinstance(n,str) for n in names) or names!=sorted(set(names)):
+        raise ValueError('tool inspection inventory paths differ')
+    if any(row.get('type') not in ('file','directory') or type(row.get('mode')) is not int \
+           or not 0<=row['mode']<=0o777 for row in inventory):
+        raise ValueError('tool inspection inventory type or mode differs')
+    files=[row for row in inventory if row.get('type')=='file']
+    if any(type(row.get('sizeBytes')) is not int or row['sizeBytes']<0 or not digest(row.get('sha256')) for row in files) \
+            or sum(row['sizeBytes'] for row in files)!=expanded:
+        raise ValueError('tool inspection file inventory differs')
+    rows={row['path']:row for row in inventory}
+    if record.get('requiredExecutables')!={name:rows.get(name) for name in REQUIRED} \
+            or any(name not in rows or rows[name].get('type')!='file' or not rows[name]['sizeBytes'] \
+                   or type(rows[name].get('mode')) is not int or not rows[name]['mode']&0o111 for name in REQUIRED):
+        raise ValueError('tool inspection required executables differ')
+    return record
 
 
 def main():

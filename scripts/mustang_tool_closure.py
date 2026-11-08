@@ -132,6 +132,9 @@ def verify_closure(root=ROOT):
     if otatools.get('qualificationEvidence') is not None:
         import mustang_otatools_qualification
         mustang_otatools_qualification.binding(otatools['qualificationEvidence'],root=root)
+    if otatools.get('inspectionEvidence') is not None:
+        import mustang_otatools_qualification
+        mustang_otatools_qualification.inspection_record(otatools['inspectionEvidence'],root=root)
     files = receipt.get('files')
     if not isinstance(files, list) or not files:
         raise ClosureError('tool closure has no files')

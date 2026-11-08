@@ -38,10 +38,20 @@ path or execution. A later signer must perform its own admitted input checks.
 `mustang_tool_closure.verify_closure` validates this qualification reference
 while continuing to require null production hashes/executable, held trust,
 unbound output bounds and closed signer admission. An executable inventory is
-provenance for review, not authority to fill those fields. The optional local
-package transfer is still incomplete; synthetic ZIP tests do not replace an
-actual inspection result. The existing same-run hosted byte readback remains
-successful independently of that local transfer.
+provenance for review, not authority to fill those fields.
+
+The [actual read-only inspection](../os/build-only/mustang-otatools-inspection-42531345133.json)
+now records all **500 entries** and **927,318,429 expanded bytes**, inventory
+SHA-256 `7e69d987fd0384e169467f1f9ded8c4986d6e9f8e0538f7aa6b4402808dd9912`.
+Supported range reads from the new qualified artifact's returned file
+reference completed the interrupted local transfer. The complete outer
+artifact matched GitHub's `8ace301a...9bbb4d` digest; its embedded native
+receipt and inner package also matched their exact recorded hashes. The full
+inventory and inspector source/hash are retained. `inspection_record` checks
+the committed inventory hash, counts, byte totals, receipt encoding, required
+entries and package/run/artifact binding. This metadata check does not reread
+a ZIP or admit execution. No package member was extracted or executed, and
+the historical installer-storage Forbidden was not retried.
 
 ## Reconciliation at main 48c08db2
 
