@@ -87,6 +87,8 @@ def guard(lane, cfg, env, publish=False, root=ROOT, diff=None, dry_run=False):
             or source.get('manifestSha256')!=manifest or source.get('pristine') is not True \
             or source.get('adevtoolRevision')!=load(Path(root)/'os/build-only/mustang.json')['pins']['vendor/adevtool']:
         raise ValueError('dedicated pristine pinned source/bootstrap evidence differs')
+    import mustang_vendor_consumer
+    mustang_vendor_consumer.binding(lane,cfg,root)
     runner=cfg['runner']
     if str(runner.get('groupId'))=='5':
         import mustang_ephemeral

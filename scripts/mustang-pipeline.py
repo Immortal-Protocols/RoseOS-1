@@ -26,6 +26,7 @@ import mustang_integration as integration
 import release_receipts
 import mustang_lane
 import mustang_paths
+import mustang_vendor_consumer
 
 PLAN = 'https://app.notion.com/p/40d7c646c81b81198e60cb76ca2ea603'
 SCRUBBED = ('JAVA_TOOL_OPTIONS', 'JDK_JAVA_OPTIONS', '_JAVA_OPTIONS', 'CLASSPATH', 'JAVA_HOME', 'LD_PRELOAD',
@@ -198,15 +199,25 @@ def run(run_id, attempt, lane=None, runtime=None, inputs_dir=None):
     try:
         for name in ('source', 'git-meta'):
             stage(name)
-        current = 'vendor-sprint-patch'
-        patch = ROOT/'os/build-only/mustang-inputs/adevtool-no-input-hash.patch'
-        # The pinned adevtool also verifies the factory hash inside unpackFactoryImage.
-        # Apply the deliberate omission only to this new Mustang tree, never production.
-        outcome, _ = call(engine, ['git','-C',str(src/'vendor/adevtool'),'apply',str(patch)],120,ROOT,env)
-        report['stages'][current] = {'result':outcome, 'patch':str(patch),
-            'downloadedInputHashVerification':'omitted in helper and pinned adevtool unpacker'}
-        for name in ('download', 'vendor', 'lunch'):
-            stage(name)
+        if lane is not None:
+            current = 'vendor-inputs'
+            progress(current,'entered')
+            reused=mustang_vendor_consumer.consume(lane,runtime,src,
+                dict(runId=run_id,runAttempt=attempt,source=source,
+                     workflow='Immortal-Protocols/RoseOS-1/'+lane['workflow']+'@refs/heads/main'),root=ROOT)
+            directory=receipts/current;directory.mkdir(mode=0o700)
+            release_receipts.write_once(directory/'completed.json',reused)
+            report['stages'][current]={'receipt':str(directory/'completed.json'),'result':reused}
+            progress(current,'complete')
+        else:
+            current = 'vendor-sprint-patch'
+            patch = ROOT/'os/build-only/mustang-inputs/adevtool-no-input-hash.patch'
+            outcome, _ = call(engine, ['git','-C',str(src/'vendor/adevtool'),'apply',str(patch)],120,ROOT,env)
+            report['stages'][current] = {'result':outcome, 'patch':str(patch),
+                'downloadedInputHashVerification':'omitted in helper and pinned adevtool unpacker'}
+            for name in ('download', 'vendor'):
+                stage(name)
+        stage('lunch')
         current = 'allocate'
         progress(current,'entered')
         alloc = module('mustang_allocate', 'mustang-allocate.py')
@@ -288,7 +299,7 @@ def collect_reports(run_id, attempt, out, lane=None):
         path = base/name
         if path.is_file() and not path.is_symlink():
             shutil.copyfile(path, out/name)
-    for name in ('source','git-meta','download','vendor','lunch','compile'):
+    for name in ('source','git-meta','download','vendor','vendor-inputs','lunch','compile'):
         for filename in ('preflight.json','started.json','completed.json'):
             path = base/'receipts'/name/filename
             if path.is_file() and not path.is_symlink():

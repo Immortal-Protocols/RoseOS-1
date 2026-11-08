@@ -123,6 +123,13 @@ def vendor_input(source,storage,record,identity,deadline):
     previous=inputs.receipt_on_disk(record,storage,'vendor',vendor.RECEIPT,identity)
     if previous.get('sourceRoot')!=str(source) or previous.get('phase')!='complete':
         raise ValueError('vendor source or completion differs')
+    verify_vendor_payload(source,previous,deadline)
+    return {'receiptSha256':record['receiptSha256'],'run':previous['identity']['run'],
+            'generatedTreesRehashed':True,'sourceLoaderRehashed':True,'otaAdmitted':False}
+
+
+def verify_vendor_payload(source,previous,deadline):
+    """Check an original or isolated byte copy without executing generation."""
     for key,relative in (('vendorTree','vendor/google_devices/mustang'),
                          ('nodeModules','vendor/adevtool/node_modules'),('adevtoolSource','vendor/adevtool/src')):
         if vendor.catalog(source,source/relative,deadline)!=previous.get(key):
@@ -133,8 +140,7 @@ def vendor_input(source,storage,record,identity,deadline):
     if deps.fingerprint(source,source/'vendor/google_devices/mustang/mustang.mk',deadline)!=previous.get('productMakefile') \
             or os.path.lexists(source/'vendor/adevtool/lib'):
         raise ValueError('generated product or source-only runtime changed')
-    return {'receiptSha256':record['receiptSha256'],'run':previous['identity']['run'],
-            'generatedTreesRehashed':True,'sourceLoaderRehashed':True,'otaAdmitted':False}
+    return {'generatedTreesRehashed':True,'sourceLoaderRehashed':True,'otaAdmitted':False}
 
 
 def monitor(source,attempt,output,deadline,observations):

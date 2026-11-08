@@ -748,6 +748,17 @@ class DedicatedRuntimeTest(unittest.TestCase):
             baselineTargetFiles=dict(archive,path=str(self.host/'baseline.zip')),
             runner=dict(groupName='fixture-mustang',groupId='99',lifetime='persistent',registrationEvidence=registration),
             signingRouteEvidence=signing,publication=dict(enabled=False,authorityRecord=None))
+        for key,name in (('vendorEvidence','mustang-vendor-42522784617.json'),
+                         ('hostDependenciesEvidence','mustang-hostdeps-42512135815.json')):
+            value=json.loads((ROOT/'os/build-only'/name).read_text())
+            value['receipt']['identity']['builder']=self.lane['vm']
+            value['receipt']['identity']['diskUuid']='fixture-uuid'
+            value['receipt']['sourceRoot']=self.lane['sourceRoot']
+            if key=='hostDependenciesEvidence':
+                value['receipt']['outDir']=str(self.host/'source/out_adevtool_deps')
+            value['stopObservation']['instanceId']=self.lane['vm']['instanceId']
+            path=Path('os/build-only')/name
+            (self.root/path).write_text(json.dumps(value));self.cfg[key]=str(path)
 
     def record(self,name,value):
         path=Path('os/fixtures')/(name+'.json'); (self.root/path).parent.mkdir(parents=True,exist_ok=True)
@@ -785,6 +796,15 @@ class DedicatedRuntimeTest(unittest.TestCase):
         ref=self.record('sync', {'schema':'roseos.mustang-source-sync-evidence.v1', 'pristine':False})
         with self.assertRaisesRegex(ValueError, 'not pristine bootstrap'):
             self.admitted(dict(self.cfg, sourceEvidence=ref))
+
+    def test_prepared_vendor_binding_is_required_before_start(self):
+        with self.assertRaisesRegex(ValueError,'vendor and host-dependency evidence'):
+            self.admitted(dict(self.cfg,vendorEvidence=None))
+        path=self.root/self.cfg['vendorEvidence'];record=self.driver.load(path)
+        record['receipt']['identity']['builder']['instanceId']='999'
+        path.write_text(json.dumps(record))
+        with self.assertRaisesRegex(ValueError,'another source, builder, disk'):
+            self.admitted()
 
     def test_copy_time_frankel_snapshot_is_not_a_source_pin(self):
         path=self.root/self.cfg['sourceEvidence']
@@ -1147,13 +1167,20 @@ class DedicatedRuntimeTest(unittest.TestCase):
                 patch.object(pipeline,'module',side_effect=dependency),patch.object(pipeline,'call',side_effect=call), \
                 patch.object(pipeline,'omissions',return_value=['unrelated sprint omissions']), \
                 patch.object(pipeline,'print',create=True), \
+                patch.object(pipeline.mustang_vendor_consumer,'consume',return_value={'generationStarted':False}) as consume, \
                 patch.object(pipeline.mustang_paths,'compiler_recipe',return_value=recipe), \
                 patch.object(pipeline.integration,'admit',side_effect=admit), \
                 patch.object(pipeline.integration,'render',return_value=({},['synthetic-integrate'])), \
                 patch.object(allocate,'observe',return_value=(set(),{})):
             self.assertEqual(pipeline.run('123','1',self.lane,cfg,inputs),0)
         result=self.driver.load(self.host/'rose-actions/mustang-prep-123-1/candidate-receipt.json')
-        self.assertEqual(stages,['source','git-meta','download','vendor','lunch','compile'])
+        self.assertEqual(stages,['source','git-meta','lunch','compile'])
+        consume.assert_called_once()
+        self.assertFalse(result['stages']['vendor-inputs']['result']['generationStarted'])
+        self.assertNotIn('vendor-sprint-patch',result['stages'])
+        self.assertNotIn('adevtool-no-input-hash.patch',str(commands))
+        exported=self.root/'reports';pipeline.collect_reports('123','1',exported,lane=self.lane)
+        self.assertTrue((exported/'vendor-inputs-completed.json').is_file())
         self.assertEqual(result['builder'],self.lane['vm'])
         self.assertEqual(result['workflow'],self.lane['workflow'])
         self.assertFalse(result['stages']['seed']['priorReconcileSeed'])
