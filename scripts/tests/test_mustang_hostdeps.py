@@ -500,6 +500,104 @@ class HostdepsTest(unittest.TestCase):
             self.assertFalse(deps.inspect_output_entries(root/'missing')['complete'])
             self.assertFalse(deps.inspect_output_entries(Path('relative'))['complete'])
 
+    def test_live_sampler_only_allows_the_pinned_soong_status_fifo_explicitly(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp);fifo = root/'.ninja_fifo';os.mkfifo(fifo, 0o600)
+            with self.assertRaisesRegex(ValueError, 'special'):
+                deps.tree_bytes(root)
+            self.assertEqual(deps.tree_bytes(root, allow_soong_ipc=True), 0)
+            for mode in (0o644, 0o600):
+                fifo.chmod(mode)
+                self.assertEqual(deps.tree_bytes(root, allow_soong_ipc=True), 0)
+            fifo.chmod(0o666)
+            with self.assertRaisesRegex(ValueError, 'special'):
+                deps.tree_bytes(root, allow_soong_ipc=True)
+
+            fifo.chmod(0o600);os.link(fifo, root/'fifo-alias')
+            with self.assertRaisesRegex(ValueError, 'special'):
+                deps.tree_bytes(root, allow_soong_ipc=True)
+            (root/'fifo-alias').unlink();fifo.unlink();(root/'sub').mkdir()
+            os.mkfifo(root/'sub/.ninja_fifo', 0o600)
+            with self.assertRaisesRegex(ValueError, 'special'):
+                deps.tree_bytes(root, allow_soong_ipc=True)
+
+    def recovery_fixture(self, directory):
+        root = Path(directory)/'checkout';metadata = root/'os/build-only';metadata.mkdir(parents=True)
+        (metadata/'mustang.json').write_bytes((ROOT/'os/build-only/mustang.json').read_bytes())
+        manifest = (ROOT/'os/pinned-manifest.xml').read_bytes();(root/'os/pinned-manifest.xml').write_bytes(manifest)
+        source = Path(directory)/'source';source.mkdir();storage = Path(directory)/'storage';storage.mkdir()
+        output = source/deps.recipe()['outDir'];output.mkdir();(output/'partial.bin').write_bytes(b'preserved bytes')
+        sock = socket.socket(socket.AF_UNIX);sock.bind(str(output/'.path_interposer_log'));sock.close()
+        (output/'.path_interposer_log').chmod(0o755)
+        lane, current = deps.guard(self.env(), {'inputs': {'hostdeps_only': True}})
+        identity = {'run':current,'builder':lane['vm'],'diskUuid':'fixture-disk'}
+        old_run = dict(current, runId='42508459503')
+        failed = {'identity':dict(identity, run=old_run),'success':False,
+                  'failure':'hostdeps special output refused','outDir':str(output),'sourceRoot':str(source),
+                  'manifestSha256':deps.hashlib.sha256(manifest).hexdigest()}
+        attempt = storage/'mustang-hostdeps-42508459503-1';attempt.mkdir()
+        deps.receipt(attempt/'hostdeps-receipt.json', failed)
+        evidence = {'receipt':failed,'receiptSha256':deps.hashlib.sha256((attempt/'hostdeps-receipt.json').read_bytes()).hexdigest()}
+        (metadata/'mustang-hostdeps-42508459503.json').write_text(json.dumps(evidence))
+        observation = {'schema':'roseos.mustang-hostdeps-preflight.v1','guestIdentityVerified':True,
+                       'identity':identity,'lock':{'availability':'available'},
+                       'dependencyOutput':{'entries':deps.inspect_output_entries(output)}}
+        binding = {'schema':'roseos.mustang-hostdeps-recovery.v1','failedRunId':'42508459503','observation':observation}
+        (metadata/'mustang-hostdeps-recovery.json').write_text(json.dumps(binding))
+        return root, source, storage, output, attempt, identity
+
+    def test_live_sampler_only_allows_the_exact_owned_soong_log_socket(self):
+        with tempfile.TemporaryDirectory() as tmp, socket.socket(socket.AF_UNIX) as sock:
+            root = Path(tmp);path = root/'.path_interposer_log';sock.bind(str(path));path.chmod(0o755)
+            self.assertEqual(deps.tree_bytes(root, allow_soong_ipc=True), 0)
+            with self.assertRaisesRegex(ValueError, 'special'):
+                deps.tree_bytes(root)
+            path.chmod(0o777)
+            with self.assertRaisesRegex(ValueError, 'special'):
+                deps.tree_bytes(root, allow_soong_ipc=True)
+            path.chmod(0o755);path.rename(root/'unexpected.sock')
+            with self.assertRaisesRegex(ValueError, 'special'):
+                deps.tree_bytes(root, allow_soong_ipc=True)
+
+    def test_recovery_moves_the_whole_output_without_reusing_or_deleting_it(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root, source, storage, output, old, identity = self.recovery_fixture(tmp)
+            inode = output.stat().st_ino
+            result = deps.retain_interrupted_output(source, storage, identity, root)
+            self.assertTrue(result['completed']);self.assertFalse(result['oldOutputUsedForBuild'])
+            self.assertFalse(output.exists());self.assertEqual((old/'retained-output').stat().st_ino, inode)
+            self.assertEqual((old/'retained-output/partial.bin').read_bytes(), b'preserved bytes')
+            self.assertTrue((old/'retention-intent.json').is_file())
+            self.assertTrue((old/'retention-result.json').is_file())
+            deps.require_completed_retention(storage)
+
+    def test_recovery_refuses_changed_evidence_or_fifo_and_preserves_output(self):
+        for change in ('receipt', 'entry', 'target'):
+            with self.subTest(change=change), tempfile.TemporaryDirectory() as tmp:
+                root, source, storage, output, old, identity = self.recovery_fixture(tmp)
+                if change == 'receipt':(old/'hostdeps-receipt.json').write_text('different')
+                if change == 'entry':(output/'.path_interposer_log').chmod(0o777)
+                if change == 'target':(old/'retained-output').mkdir()
+                with self.assertRaises((ValueError, OSError)):
+                    deps.retain_interrupted_output(source, storage, identity, root)
+                self.assertEqual((output/'partial.bin').read_bytes(), b'preserved bytes')
+                self.assertFalse((old/'retention-result.json').exists())
+
+    def test_interrupted_retention_and_atomic_rename_collision_do_not_retry(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root, source, storage, output, old, identity = self.recovery_fixture(tmp)
+            with patch.object(deps, 'rename_noreplace', side_effect=OSError('fixture interrupted')):
+                with self.assertRaises(OSError):deps.retain_interrupted_output(source, storage, identity, root)
+            with self.assertRaises(deps.readers._Refused):deps.require_completed_retention(storage)
+            self.assertTrue(output.exists())
+            other = source/'exists';other.mkdir();(other/'untouched').write_bytes(b'keep')
+            with self.assertRaises(FileExistsError):deps.rename_noreplace(output, other)
+            self.assertEqual((other/'untouched').read_bytes(), b'keep')
+            self.assertTrue(output.exists())
+            (old/'retention-intent.json').unlink();(old/'retained-output').mkdir()
+            with self.assertRaisesRegex(ValueError, 'intent requires reconciliation'):
+                deps.require_completed_retention(storage)
+
     def test_space_observations_record_actual_free_space_and_watched_bytes(self):
         with tempfile.TemporaryDirectory() as tmp:
             source, attempt = self.fixtures(tmp)

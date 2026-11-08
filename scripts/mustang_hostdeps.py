@@ -7,6 +7,7 @@ VM. The existing hosted ownership cleanup remains responsible for STOP.
 """
 import argparse
 import contextlib
+import ctypes
 import fcntl
 import hashlib
 import json
@@ -161,11 +162,13 @@ def fingerprint(source, path, deadline):
         os.close(fd)
 
 
-def tree_bytes(path, deadline=None):
+def tree_bytes(path, deadline=None, *, allow_soong_ipc=False):
     """Approximate one live sample. Rename/unlink races are normal during Make.
 
     Walk from a no-follow directory descriptor. Disappearing entries may be
-    missed by this sample; permission/I/O errors and special files still refuse.
+    missed by this sample. The explicit live-output mode permits only Soong's
+    runner-owned top-level Soong status FIFO and path-interposer socket, without opening either. All
+    other special files and every special distribution entry still refuse.
     """
     if not path.exists() and not path.is_symlink():
         return 0
@@ -194,6 +197,13 @@ def tree_bytes(path, deadline=None):
                     raise ValueError('hostdeps sampling crosses a filesystem')
                 if stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode):
                     total += info.st_size
+                elif allow_soong_ipc and _directory == '.' and info.st_uid == os.geteuid() \
+                        and info.st_gid == os.getegid() and info.st_nlink == 1 and info.st_size == 0 \
+                        and ((name == '.ninja_fifo' and stat.S_ISFIFO(info.st_mode) \
+                              and stat.S_IMODE(info.st_mode) in (0o600, 0o644)) \
+                             or (name == '.path_interposer_log' and stat.S_ISSOCK(info.st_mode) \
+                                 and stat.S_IMODE(info.st_mode) in (0o700, 0o755))):
+                    pass
                 elif not stat.S_ISDIR(info.st_mode):
                     raise ValueError('hostdeps special output refused')
                 if total > WORK_BYTES:
@@ -204,7 +214,7 @@ def tree_bytes(path, deadline=None):
 
 
 def sample(source, output, attempt, log, deadline=None, observations=None):
-    usage = tree_bytes(output, deadline)+tree_bytes(attempt, deadline)
+    usage = tree_bytes(output, deadline, allow_soong_ipc=True)+tree_bytes(attempt, deadline)
     available = os.statvfs(source)
     free = available.f_bavail*(available.f_frsize or available.f_bsize)
     if observations is not None:
@@ -313,6 +323,106 @@ def receipt(path, data):
         os.fsync(out.fileno())
 
 
+def rename_noreplace(source, destination):
+    """One Linux same-filesystem rename; never replace an existing target."""
+    libc = ctypes.CDLL(None, use_errno=True)
+    rename = libc.renameat2
+    rename.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
+    rename.restype = ctypes.c_int
+    if rename(-100, os.fsencode(source), -100, os.fsencode(destination), 1) != 0:
+        code = ctypes.get_errno()
+        raise OSError(code, os.strerror(code))
+
+
+def retain_interrupted_output(source, storage, identity, root=ROOT):
+    """Preserve exactly the reviewed failed attempt before a fresh build.
+
+    Requires a committed successful observation and the exact failed receipt.
+    This moves the complete output into that attempt without copying, deleting,
+    resuming or using its bytes. Intent/result records make interruption visible.
+    The caller must hold the canonical lock on the verified dedicated guest.
+    """
+    binding = json.loads((Path(root)/'os/build-only/mustang-hostdeps-recovery.json').read_text())
+    evidence = json.loads((Path(root)/'os/build-only/mustang-hostdeps-42508459503.json').read_text())
+    observed = binding['observation']
+    expected = evidence['receipt']
+    run = expected['identity']['run']
+    output = source/recipe(root)['outDir']
+    attempt = storage/('mustang-hostdeps-'+run['runId']+'-'+run['runAttempt'])
+    target = attempt/'retained-output'
+    if binding.get('schema') != 'roseos.mustang-hostdeps-recovery.v1' \
+            or binding.get('failedRunId') != '42508459503' or run['runId'] != '42508459503' \
+            or run['runAttempt'] != '1' or expected['success'] is not False \
+            or expected['failure'] != 'hostdeps special output refused' \
+            or expected['outDir'] != str(output) or expected['sourceRoot'] != str(source) \
+            or expected['identity']['builder'] != identity['builder'] \
+            or expected['identity']['diskUuid'] != identity['diskUuid'] \
+            or expected['manifestSha256'] != hashlib.sha256((Path(root)/'os/pinned-manifest.xml').read_bytes()).hexdigest() \
+            or observed.get('schema') != 'roseos.mustang-hostdeps-preflight.v1' \
+            or observed.get('guestIdentityVerified') is not True \
+            or observed['identity']['builder'] != identity['builder'] \
+            or observed['identity']['diskUuid'] != identity['diskUuid'] \
+            or observed['lock'].get('availability') != 'available':
+        raise ValueError('interrupted hostdeps recovery binding differs')
+    entries = observed['dependencyOutput']['entries']
+    specials = entries['specialEntries']
+    if not entries.get('complete') or len(specials) != 1 \
+            or specials[0]['relativePath'] != '.path_interposer_log' or specials[0]['type'] != 'socket':
+        raise ValueError('interrupted hostdeps special entry was not established')
+    raw = readers.read_regular(str(storage), str(attempt/'hostdeps-receipt.json'), INVENTORY_BYTES+(1 << 20))
+    if hashlib.sha256(raw).hexdigest() != evidence['receiptSha256']:
+        raise ValueError('interrupted hostdeps receipt differs from the uploaded evidence')
+    before = plain_dir(output)
+    if before.st_dev != plain_dir(attempt).st_dev or before.st_uid != os.geteuid() \
+            or before.st_gid != os.getegid() or stat.S_IMODE(before.st_mode) & 0o022:
+        raise ValueError('interrupted hostdeps output ownership or filesystem differs')
+    current = inspect_output_entries(output)
+    if not current['complete'] or current['specialEntries'] != specials:
+        raise ValueError('interrupted hostdeps output changed since observation')
+    # Validate the same narrow Soong IPC exceptions the live sampler will permit.
+    tree_bytes(output, time.monotonic()+60, allow_soong_ipc=True)
+    intent = {'schema': 'roseos.mustang-hostdeps-retention.v1', 'fromRun': run,
+              'toRun': identity['run'], 'source': str(output), 'destination': str(target),
+              'device': before.st_dev, 'inode': before.st_ino,
+              'failedReceiptSha256': evidence['receiptSha256'], 'completed': False,
+              'oldOutputUsedForBuild': False}
+    receipt(attempt/'retention-intent.json', intent)
+    fd = readers._walk_dir(readers._body(str(attempt)))
+    try: os.fsync(fd)
+    finally: os.close(fd)
+    rename_noreplace(output, target)
+    after = plain_dir(target)
+    if (after.st_dev, after.st_ino) != (before.st_dev, before.st_ino) or os.path.lexists(output):
+        raise ValueError('interrupted hostdeps retention outcome requires reconciliation')
+    for parent in (source, attempt):
+        fd = readers._walk_dir(readers._body(str(parent)))
+        try: os.fsync(fd)
+        finally: os.close(fd)
+    result = dict(intent, completed=True)
+    receipt(attempt/'retention-result.json', result)
+    fd = readers._walk_dir(readers._body(str(attempt)))
+    try: os.fsync(fd)
+    finally: os.close(fd)
+    return result
+
+
+def require_completed_retention(storage):
+    attempt = storage/'mustang-hostdeps-42508459503-1'
+    intent = attempt/'retention-intent.json'
+    if any(os.path.lexists(attempt/name) for name in ('retention-intent.json', 'retention-result.json', 'retained-output')):
+        if not os.path.lexists(intent):
+            raise ValueError('interrupted hostdeps retention intent requires reconciliation')
+        # An interruption or failed no-replace rename is never an invitation
+        # to retry the move or assume the old output was preserved elsewhere.
+        result = json.loads(readers.read_regular(str(storage), str(attempt/'retention-result.json'), 65536))
+        if result.get('schema') != 'roseos.mustang-hostdeps-retention.v1' or result.get('completed') is not True \
+                or result.get('destination') != str(attempt/'retained-output'):
+            raise ValueError('interrupted hostdeps retention requires reconciliation')
+        observed = plain_dir(attempt/'retained-output')
+        if (observed.st_dev, observed.st_ino) != (result.get('device'), result.get('inode')):
+            raise ValueError('interrupted hostdeps retained output identity differs')
+
+
 def mark_revision(source, output, attempt, revision, deadline):
     if time.monotonic() >= deadline:
         raise ValueError('hostdeps total timeout')
@@ -329,7 +439,7 @@ def mark_revision(source, output, attempt, revision, deadline):
         temporary.unlink()
 
 
-def build(source, attempt, spec, env, root=ROOT, identity=None):
+def build(source, attempt, spec, env, root=ROOT, identity=None, retention=None):
     started = time.monotonic()
     deadline = started+spec['timeoutSeconds']
     output = source/spec['outDir']
@@ -341,6 +451,8 @@ def build(source, attempt, spec, env, root=ROOT, identity=None):
               'success': False, 'otaAuthorized': False, 'signAuthorized': False, 'publishAuthorized': False,
               'authenticatedStop': False, 'boundEnforcement': 'sampled-process-group-stop',
               'detachedDescendantsContained': False, 'spaceObservations': {}}
+    if retention is not None:
+        result['retainedInterruptedOutput'] = retention
     log = attempt/'build.log'
     try:
         monitor = lambda: sample(source, output, attempt, log, deadline, result['spaceObservations'])
@@ -406,12 +518,18 @@ def execute(env):
             or checked(['/usr/bin/git', '-C', str(ROOT), 'status', '--porcelain'], ROOT, checkout_env, time.monotonic()+60):
         raise ValueError('hostdeps checkout differs from captured clean source')
     with lock(Path(lane['lockPath'])):
+        require_completed_retention(paths['storageRoot'])
+        retention = None
+        if os.path.lexists(source/recipe()['outDir']):
+            retention = retain_interrupted_output(source, paths['storageRoot'],
+                dict(run=run, builder=lane['vm'], diskUuid=cfg['dataFilesystemUuid']))
         attempt = paths['storageRoot']/('mustang-hostdeps-'+run['runId']+'-'+run['runAttempt'])
         attempt.mkdir(mode=0o750)
         plain_dir(attempt)
         (attempt/'tmp').mkdir(mode=0o700)
         identity = dict(run=run, builder=lane['vm'], diskUuid=cfg['dataFilesystemUuid'])
-        result = build(source, attempt, recipe(), child_env(paths['home']/'runner', attempt/'tmp'), identity=identity)
+        result = build(source, attempt, recipe(), child_env(paths['home']/'runner', attempt/'tmp'),
+                       identity=identity, retention=retention)
         return dict(run=run, builder=lane['vm'], diskUuid=cfg['dataFilesystemUuid'],
                     receipt=str(attempt/'hostdeps-receipt.json'), success=result['success'])
 
