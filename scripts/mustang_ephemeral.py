@@ -415,7 +415,7 @@ def selected_guest_jobs(jobs):
     """The unselected guest job is completed with conclusion skipped. That is not acceptance."""
     found = []
     for job in jobs or []:
-        if not isinstance(job, dict) or job.get('name') not in ('builder', 'source', 'hostdeps', 'lock-admin', 'factory'):
+        if not isinstance(job, dict) or job.get('name') not in ('builder', 'source', 'hostdeps', 'lock-admin', 'factory', 'vendor'):
             continue
         if job.get('status') == 'skipped' or job.get('conclusion') == 'skipped':
             continue

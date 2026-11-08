@@ -674,6 +674,14 @@ class HostdepsTest(unittest.TestCase):
                     with self.assertRaises(ProcessLookupError):
                         os.kill(proc.pid, 0)
 
+    def test_supervisor_captures_actual_child_exit_without_dumping_output(self):
+        with tempfile.TemporaryDirectory() as tmp,patch.object(deps,'SAMPLE_SECONDS',0.01):
+            path=Path(tmp);outcome={'processStarted':False,'exitCode':None}
+            with self.assertRaisesRegex(ValueError,'vendor child failed'):
+                deps.supervise([sys.executable,'-c','raise SystemExit(7)'],path,os.environ.copy(),path/'log',
+                               time.monotonic()+10,lambda:None,outcome=outcome,failure_message='vendor child failed')
+            self.assertTrue(outcome['processStarted']);self.assertEqual(outcome['exitCode'],7)
+
     def test_workflow_wires_exclusive_guest_job_into_queue_watch_and_cleanup(self):
         jobs = workflow_shape.jobs((ROOT/'.github/workflows/mustang-ota-dedicated.yml').read_text())
         host = jobs['hostdeps']

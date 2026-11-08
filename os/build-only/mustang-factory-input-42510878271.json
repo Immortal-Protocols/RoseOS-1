@@ -1,0 +1,70 @@
+{
+  "schema": "roseos.mustang-factory-input-evidence.v1",
+  "runId": "42510878271",
+  "runAttempt": "1",
+  "source": "93a3c95748164afa2cce4f4a9b02925b71a53291",
+  "workflowConclusion": "success",
+  "cleanupConclusion": "success",
+  "artifact": {
+    "id": 13628429808,
+    "name": "mustang-factory-input-42510878271-1",
+    "sizeBytes": 913,
+    "sha256": "f978814d2c7b795948b43df24e9663277931e3e24644f0a7d79323b65d3f3235"
+  },
+  "receiptSha256": "3df0cc64971ba39272b547378177162355e5487b5a17e1c5566b192b4c0ae01c",
+  "receipt": {
+    "authenticatedStop": false,
+    "buildStarted": false,
+    "download": {
+      "availableBytesAfter": 1276688515072,
+      "availableBytesBefore": 1288054599680,
+      "downloadedBytes": 11366092596,
+      "elapsedSeconds": 82.295,
+      "expectedBytes": 11366092596,
+      "expectedSha256": "099acc44e2f87fe2735d92952081d64550ff08b4a6390bb6b001c8451695657e",
+      "file": "mustang-cp3a.261005.005-factory-099acc44.zip",
+      "partialPath": "/mnt/disks/mustang-data/roseos/rose-actions/mustang-factory-inputs/mustang-cp3a.261005.005-factory-099acc44.zip.part",
+      "partialPreservedOnFailure": true,
+      "path": "/mnt/disks/mustang-data/roseos/rose-actions/mustang-factory-inputs/mustang-cp3a.261005.005-factory-099acc44.zip",
+      "reserveBytes": 322122547200,
+      "sha256": "099acc44e2f87fe2735d92952081d64550ff08b4a6390bb6b001c8451695657e",
+      "timeoutSeconds": 3600,
+      "url": "https://dl.google.com/dl/android/aosp/mustang-cp3a.261005.005-factory-099acc44.zip",
+      "verified": true
+    },
+    "extracted": false,
+    "identity": {
+      "builder": {
+        "instance": "roseos-mustang-builder-20261107-a",
+        "instanceId": "5585425566393384049",
+        "project": "protocols-465723",
+        "zone": "us-west2-a"
+      },
+      "diskUuid": "4183bff8-6be4-46bb-a641-2193d19813ee",
+      "run": {
+        "runAttempt": "1",
+        "runId": "42510878271",
+        "source": "93a3c95748164afa2cce4f4a9b02925b71a53291",
+        "workflow": "Immortal-Protocols/RoseOS-1/.github/workflows/mustang-ota-dedicated.yml@refs/heads/main"
+      }
+    },
+    "readback": {
+      "admitsOtatools": false,
+      "matchesPinnedFactory": true,
+      "problems": []
+    },
+    "schema": "roseos.mustang-factory-input.v1",
+    "scope": "pinned-public-factory-download-only",
+    "signingStarted": false,
+    "success": true,
+    "vendorGenerated": false
+  },
+  "stopObservation": {
+    "instanceId": "5585425566393384049",
+    "status": "TERMINATED",
+    "lastStartTimestamp": "2026-11-08T10:37:20.274-08:00",
+    "lastStopTimestamp": "2026-11-08T10:41:07.771-08:00",
+    "maxRunDurationSeconds": 14400,
+    "terminationAction": "STOP"
+  }
+}

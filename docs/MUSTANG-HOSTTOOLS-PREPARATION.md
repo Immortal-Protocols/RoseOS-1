@@ -65,6 +65,66 @@ A pending or uncertain move blocks another build. A fresh admitted
 and includes the retention result in its new receipt. This preserves the
 interrupted bytes and all prior evidence; it does not resume or attest them.
 
+## Successful generic dependency build and vendor preparation adapter
+
+[Host-dependency run 42512135815](https://github.com/Immortal-Protocols/RoseOS-1/actions/runs/42512135815)
+completed successfully at `78d5ebdfd4f3fc1dd99d8cb98bbf44316b9eb54f`,
+attempt 1. Its [receipt and provenance](../os/build-only/mustang-hostdeps-42512135815.json)
+record all 1,057 pinned project checks, Make exit 0, all fourteen executable
+entrypoints and 485 fully inventoried distribution entries. The bounded
+24-job attempt took 609.023 seconds and watched 16,281,600,535 output bytes.
+The complete interrupted directory was first moved, with its inode preserved,
+into run 42508459503's `retained-output`; none of those bytes supplied the fresh
+build. Cleanup succeeded and a fresh numeric-ID Compute read observed
+TERMINATED at `2026-11-08T11:05:01.963-08:00`, with the four-hour safeguard.
+
+[Factory-input run 42510878271](https://github.com/Immortal-Protocols/RoseOS-1/actions/runs/42510878271)
+also succeeded. The [record](../os/build-only/mustang-factory-input-42510878271.json)
+binds its 11,366,092,596-byte download and independent readback to SHA-256
+`099acc44e2f87fe2735d92952081d64550ff08b4a6390bb6b001c8451695657e`.
+The archive is under `rose-actions/mustang-factory-inputs` on Mustang's data
+disk. Cleanup and a separate STOP read succeeded at
+`2026-11-08T10:41:07.771-08:00`.
+
+The exclusive `vendor_only` job consumes these successful receipts through
+[mustang-vendor-preparation.json](../os/build-only/mustang-vendor-preparation.json).
+Its hosted guard requires both successful completed-run records before START.
+The guest rechecks the VM/disk, clean captured checkout, canonical lock and
+all pinned project HEADs/worktrees, rehashes the entire host distribution and
+marker, then rehashes the actual factory archive. A marker or historical
+receipt alone cannot supply an input. The fixed stock device configuration,
+CP3A build selection and factory-index block must also match the source pin.
+
+The job verifies the installed pinned Node 24 binary and bootstraps official
+Yarn 1.22.22 only inside its fresh attempt. The public NPM archive was checked
+against registry SHA-512 metadata and is pinned by exact size and SHA-256 in
+[mustang-yarn-1.22.22.json](../os/build-only/mustang-yarn-1.22.22.json).
+Runtime downloading rejects redirects, wrong size/hash and unsafe tar members,
+limits extraction to 32 entries/8 MiB, and records every extracted file hash.
+A local real-bundle validation extracted all eleven files (5,340,487 bytes)
+and observed version 1.22.22. This installs no system package or credential.
+
+Preparation invokes the pinned Yarn with the lockfile frozen, builds adevtool's
+TypeScript, then runs `vendor/adevtool/bin/run generate-all -d mustang` with
+`ADEVTOOL_SKIP_DEP_BUILD=1` and the verified factory directory. Children receive
+an environment allowlist and fresh private HOME/cache/tmp paths. Existing
+`node_modules`, `lib`, Mustang vendor output or unpack cache refuse the attempt;
+partials remain on failure. Tracked adevtool source must remain unchanged.
+The final receipt records actual command starts/exits and complete canonical
+file/mode/link hash catalogs for vendor, node modules and generated JavaScript,
+plus runtime binary hashes before/after use and the generated product makefile.
+Only that structured receipt is uploaded; raw logs and proprietary input bytes
+remain on the dedicated disk.
+
+This separate stage is bounded to 9,000 seconds, 128 GiB watched work and a
+300-GiB reserve, with at most one million entries per watched tree and a
+16-MiB bound on each private command log. Enforcement samples process-group
+work; it is not a hard quota or containment of detached descendants. The
+existing owned controller/JIT/watchdog/cleanup route remains responsible for
+STOP. `vendor_only=true` requires every other manual flag false and excludes
+the ordinary builder and signer. Vendor success will be a new receipt; the
+records above establish stock input and generic host dependencies only.
+
 ## Pinned factory-input download adapter
 
 `factory_only=true` exclusively selects the new unprivileged `factory` job in

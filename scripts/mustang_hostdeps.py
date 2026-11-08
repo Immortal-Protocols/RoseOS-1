@@ -68,7 +68,7 @@ def require_selection(event):
     enabled = inputs.get('hostdeps_only')
     disabled = lambda value: value is False or value is None or (type(value) is str and value == 'false')
     if not (enabled is True or (type(enabled) is str and enabled == 'true')) \
-            or any(not disabled(inputs.get(k, False)) for k in ('publish', 'source_only', 'dry_run', 'lock_admin_only', 'factory_only')):
+            or any(not disabled(inputs.get(k, False)) for k in ('publish', 'source_only', 'dry_run', 'lock_admin_only', 'factory_only', 'vendor_only')):
         raise ValueError('hostdeps_only must be the sole selected manual scope')
 
 
@@ -162,7 +162,7 @@ def fingerprint(source, path, deadline):
         os.close(fd)
 
 
-def tree_bytes(path, deadline=None, *, allow_soong_ipc=False):
+def tree_bytes(path, deadline=None, *, allow_soong_ipc=False, max_entries=None):
     """Approximate one live sample. Rename/unlink races are normal during Make.
 
     Walk from a no-follow directory descriptor. Disappearing entries may be
@@ -174,6 +174,7 @@ def tree_bytes(path, deadline=None, *, allow_soong_ipc=False):
         return 0
     total = 0
     count = 1
+    entry_bound = MAX_ENTRIES if max_entries is None else max_entries
     fd = readers._walk_dir(readers._body(str(path)) or [])
     def onerror(error):
         if not isinstance(error, FileNotFoundError):
@@ -187,7 +188,7 @@ def tree_bytes(path, deadline=None, *, allow_soong_ipc=False):
                 if deadline is not None and time.monotonic() >= deadline:
                     raise ValueError('hostdeps total timeout')
                 count += 1
-                if count > MAX_ENTRIES:
+                if count > entry_bound:
                     raise ValueError('hostdeps output entry bound exceeded')
                 try:
                     info = os.stat(name, dir_fd=parent, follow_symlinks=False)
@@ -247,11 +248,12 @@ def stop_group(proc):
     proc.wait(timeout=KILL_GRACE)
 
 
-def supervise(command, source, env, log, deadline, monitor):
+def supervise(command, source, env, log, deadline, monitor, *, outcome=None, failure_message='hostdeps Make failed'):
     monitor()
     with open(log, 'xb') as stream:
         proc = subprocess.Popen(command, cwd=source, env=env, stdout=stream,
                                 stderr=subprocess.STDOUT, start_new_session=True)
+        if outcome is not None:outcome['processStarted'] = True
         try:
             while proc.poll() is None:
                 if time.monotonic() >= deadline:
@@ -260,9 +262,11 @@ def supervise(command, source, env, log, deadline, monitor):
                 time.sleep(min(SAMPLE_SECONDS, max(0, deadline-time.monotonic())))
             monitor()
             if proc.returncode:
-                raise ValueError('hostdeps Make failed')
+                raise ValueError(failure_message)
         finally:
-            stop_group(proc)
+            try:stop_group(proc)
+            finally:
+                if outcome is not None:outcome['exitCode'] = proc.returncode
     return 0
 
 
@@ -688,7 +692,7 @@ def inspect_guest(env):
     inputs = event.get('inputs') if isinstance(event, dict) else None
     disabled = lambda value: value is False or value is None or (type(value) is str and value == 'false')
     if not isinstance(inputs, dict) or not (inputs.get('dry_run') is True or inputs.get('dry_run') == 'true') \
-            or any(not disabled(inputs.get(k, False)) for k in ('publish', 'source_only', 'hostdeps_only', 'lock_admin_only', 'factory_only')):
+            or any(not disabled(inputs.get(k, False)) for k in ('publish', 'source_only', 'hostdeps_only', 'lock_admin_only', 'factory_only', 'vendor_only')):
         raise ValueError('inspection requires the exclusive infrastructure dry run')
     lane = mustang_lane.validate(mustang_lane.configuration())
     run = controller.invocation(lane, env)

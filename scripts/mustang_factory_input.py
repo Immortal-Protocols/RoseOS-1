@@ -30,7 +30,7 @@ TIMEOUT = 3600
 RESERVE = 300 << 30
 DIRECTORY = 'mustang-factory-inputs'
 RECEIPT = 'factory-input-receipt.json'
-FLAGS = {'factory_only', 'lock_admin_only', 'hostdeps_only', 'source_only', 'dry_run', 'publish'}
+FLAGS = {'factory_only', 'lock_admin_only', 'hostdeps_only', 'source_only', 'dry_run', 'publish', 'vendor_only'}
 
 
 def guard(env, event):
