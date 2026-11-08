@@ -10,8 +10,12 @@ archive, allocation reconciliation, signing-route approval, or publication.
 The builder job has to be a self-hosted runner on this VM. Guard, controller,
 publisher and cleanup stay on GitHub-hosted runners. Runner group 5,
 `roseos-mustang-builder`, allows only this public repository and
-`mustang-ota-dedicated.yml` at `refs/heads/main`. It has zero runners.
-Lifetime is not selected and no runner is enrolled. The VM's own safeguard is a four-hour `maxRunDuration` STOP.
+`mustang-ota-dedicated.yml` at `refs/heads/main`. Idle group 5 has zero runners;
+the existing route enrolls a JIT runner on each owned start and removes it in
+cleanup. Null or `ephemeral` lifetime and null registration evidence are valid
+for that route. They are not missing build-admission proofs. Source-only run
+42409634329 exercised enrollment and cleanup successfully. The VM's own
+safeguard is a four-hour `maxRunDuration` STOP.
 Mustang must never use Frankel's `immortal-os-builder` again; Yogi also has its own VM.
 The earlier [proposal](../os/build-only/mustang-builder-proposal.json) (c3-standard-44,
 2 TiB balanced, 12-hour STOP) is not this machine and is not deployed.
@@ -191,13 +195,19 @@ measurements would still START through the existing controller, enroll on the
 existing path, and STOP in the existing cleanup job. This proposal does not
 perform that START.
 
+The next [host-tools preparation handoff](MUSTANG-HOSTTOOLS-PREPARATION.md)
+records the fresh stopped-VM readback, separates the generic adevtool dependency
+build from Mustang's otatools proof, and identifies the missing bounded
+preparation adapter on the existing workflow.
+
 The hosted guard checks the exact repository ID, main workflow, attempt 1,
 actual binding evidence and app-source freshness before any controller login.
 The controller validates the exact VM through Infra's API, records ownership
 before start and refuses to adopt an already-running/unowned builder. One
-builder job works with either a persistent runner or an approved protected
-registration route that prepares an ephemeral runner on **every** VM start;
-the lifetime remains an unselected binding, not a registration operation here.
+builder job uses group 5's existing protected JIT route, which prepares an
+ephemeral runner on **every** VM start. `require_group5` refuses a persistent
+or pre-registered runner; null lifetime and null registration evidence stay
+valid for this route.
 
 The builder checks its non-secret guest instance ID and mounted filesystem UUID,
 then available bytes/inodes and tool paths. It observes the committed baseline
@@ -272,7 +282,7 @@ name, a copied device label or a guessed value as readback.
 | `jobs`, `tools`, `dataFilesystemUuid`, `automaticStopHours` | Approved Make parallelism, executable aapt/apksigner/Node paths, the dedicated data UUID and the confirmed four-hour STOP. The UUID and four-hour STOP are already recorded; jobs and tools are not. |
 | `networkEvidence` | JSON with matching `builder`, `githubEgressVerified: true` and the actual `approvedRoute`; no denied lookup retry or implicit NAT/proxy. |
 | `sourceEvidence` | A build still requires matching `builder`/`sourceRoot`, pinned manifest SHA-256, pinned `adevtoolRevision` and `pristine: true` bootstrap readback. This attestation is not a full copy-byte revision verification. A `roseos.mustang-source-sync-evidence.v1` record may cite one source-only run receipt instead. That record does not satisfy the pristine bootstrap requirement and does not admit a build. |
-| `runner` | Actual group name/ID and chosen persistent/ephemeral lifetime; registration evidence matching VM, workflow and repository `1428996648`, with `publicRepositoryAdmitted: true` and `readyOnEveryStart: true`. The protected registration implementation remains Infra-owned. |
+| `runner` | Group 5 uses the existing protected JIT route: lifetime null or `ephemeral`, registration evidence null. Idle zero runners is expected; persistent/pre-registered runners are refused. The generic evidence contract for other groups is not this lane's next admission requirement. |
 | `signingRouteEvidence` | Actual approved admission of this workflow to the **existing** signer, matching `builder`/workflow, `identityVariable: GCP_SIGNER_SERVICE_ACCOUNT`, `providerVariable: MUSTANG_SIGNER_WORKLOAD_IDENTITY_PROVIDER`, `approved: true`, `establishedMustangIdentityPreserved: true`. No new IAM/key/credential operation is performed by source or inferred from these field names. |
 | `appInputsRecord` | An actual `roseos.app-inputs-record.v1` Actions export, or the explicit `roseos.app-inputs-private-record.v1` private archive contract below, with the exact committed producer allocation and APK/receipt/policy identities. |
 | `baselineTargetFiles` | Actual own-disk path with the **same** SHA-256/size as the committed Mustang baseline signing receipt; the archive is rechecked on the guest. |
