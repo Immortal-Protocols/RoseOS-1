@@ -6,6 +6,50 @@ preparation design and fresh readback, not an execution receipt or a runtime
 binding. Saba is unavailable; continued engineering does not depend on an
 acknowledgment from Saba.
 
+## First live preparation result: 2026-11-08
+
+After the user's explicit authorization, [PR #687](https://github.com/Immortal-Protocols/RoseOS-1/pull/687)
+merged as `27c72f08032d0d23e6163d30cfb18fcec8a381f1` with Mustang OTA
+checks, Release verification and App offline tests passing. The manual
+`hostdeps_only=true`, `source_only=false`, `dry_run=false`, `publish=false`
+[run 42492662025](https://github.com/Immortal-Protocols/RoseOS-1/actions/runs/42492662025)
+used that exact main revision and attempt 1.
+
+Admission, controller START, group-5 JIT enrollment, queue watch and owned
+cleanup succeeded. The guest build step and its later receipt-copy step each
+exited 4. Artifact metadata reports zero artifacts. The GitHub job-log download
+returned HTTP 403 from its log-storage endpoint. After the run completed (a new
+availability state), one retry of the same endpoint also returned Forbidden;
+no alternative access path was used. Check annotations contain only the step exit code and missing
+receipt warning. The exact guest refusal and whether Make began are therefore
+**unknown**. A missing lock is a possible preflight failure, not an observation.
+
+A fresh Compute API read after cleanup confirmed VM ID `5585425566393384049`
+`TERMINATED`, last stop `2026-11-08T07:03:55.483-08:00`, with the unchanged
+14,400-second STOP safeguard. No host-tool distribution, vendor generation,
+otatools proof, new OTA, signing or publication is claimed. No second run was
+dispatched. Obtain the failed step's actual error through authorized access
+before choosing a correction or retry.
+
+The follow-up source retains a separate, write-once `hostdeps-failure.json`
+from the admitted job's runner temporary directory if execution fails before
+the full receipt can be copied. It contains fixed failure categories and
+**expected** identities only. It explicitly attests neither guest identity,
+Make success, distribution nor STOP; it never serializes exception text or raw
+logs. This is prospective failure reporting, not recovery of this run's missing
+receipt or an explanation of its failure.
+
+The existing exclusive infrastructure `dry_run` also gains a current read-only
+guest observation. After verifying guest/disk identity, it records lock
+existence/type and nonblocking availability, dependency-output existence/type,
+and current free bytes/inodes. It neither reads old attempt logs nor runs Make,
+creates a lock, changes permissions, adopts output or repairs the host. The
+only written file is `hostdeps-preflight.json` in the job's temporary directory,
+uploaded as `mustang-preflight-RUN_ID-1`. A notice annotation contains only the
+fixed observed lock/availability/output state vocabulary. This independent
+current-state check can establish the next preparation action even when a
+historical log cannot be retrieved; it does not establish that run's cause.
+
 ## Verified starting point
 
 | Item | Evidence and limit |
@@ -200,12 +244,10 @@ environment before claiming full-suite validation for integration.
 
 ## Integration and first preparation run
 
-These are prepared operator steps, not actions performed by this handoff.
-The source is on local branch `codex/mustang-hostdeps-adapter`. The earlier
-draft-PR creation was denied by automatic approval review because external
-repository publication lacked explicit authorization. That action has not
-been retried. Source publication/integration and a live preparation run are
-separate pending actions.
+The steps below preserve the original integration/run plan. The user's later
+explicit authorization resolved the earlier PR-creation approval rejection;
+PR #687 is merged and the first preparation run is recorded above. These
+commands are not instructions to redispatch that failed attempt blindly.
 
 1. **Reconcile and review the complete branch.** After the local changes are
    committed, use the following read/reconciliation commands. The branch
