@@ -104,14 +104,17 @@ limits extraction to 32 entries/8 MiB, and records every extracted file hash.
 A local real-bundle validation extracted all eleven files (5,340,487 bytes)
 and observed version 1.22.22. This installs no system package or credential.
 
-Preparation invokes the pinned Yarn with the lockfile frozen, builds adevtool's
-TypeScript, then runs `vendor/adevtool/bin/run generate-all -d mustang` with
+Fresh preparation invokes the pinned Yarn with the lockfile frozen. The recorded
+bootstrap recovery qualifies the already completed install and runs Yarn integrity
+checking. Both check `vendor/adevtool/bin/run --help` from pinned TypeScript
+source, then run `vendor/adevtool/bin/run generate-all -d mustang` with
 `ADEVTOOL_SKIP_DEP_BUILD=1` and the verified factory directory. Children receive
 an environment allowlist and fresh private HOME/cache/tmp paths. Existing
-`node_modules`, `lib`, Mustang vendor output or unpack cache refuse the attempt;
-partials remain on failure. Tracked adevtool source must remain unchanged.
+`node_modules` and `lib` require absence for a fresh install or the exact reviewed
+bootstrap recovery below. Existing Mustang vendor output or unpack cache refuse
+the attempt; partials remain on failure. Tracked adevtool source must remain unchanged.
 The final receipt records actual command starts/exits and complete canonical
-file/mode/link hash catalogs for vendor, node modules and generated JavaScript,
+file/mode/link hash catalogs for vendor, node modules and pinned TypeScript source,
 plus runtime binary hashes before/after use and the generated product makefile.
 Only that structured receipt is uploaded; raw logs and proprietary input bytes
 remain on the dedicated disk.
@@ -124,6 +127,54 @@ existing owned controller/JIT/watchdog/cleanup route remains responsible for
 STOP. `vendor_only=true` requires every other manual flag false and excludes
 the ordinary builder and signer. Vendor success will be a new receipt; the
 records above establish stock input and generic host dependencies only.
+
+## Vendor bootstrap failure and supported source-loader recovery
+
+[Run 42516700216](https://github.com/Immortal-Protocols/RoseOS-1/actions/runs/42516700216)
+at `8fbcc1486318210e39fb20a6301b1d51bc43190f` freshly rehashed all
+485 host-distribution entries and the complete factory archive. Node 24.22.2
+and the pinned Yarn 1.22.22 bundle passed their identity/version checks.
+Dependency installation exited 0, but the extra `yarn run build` step added by
+this adapter exited 1. Generation never started. The [failed receipt](../os/build-only/mustang-vendor-42516700216.json)
+records the actual commands, exits and preserved partial state. Cleanup passed;
+a fresh numeric-ID read observed TERMINATED at
+`2026-11-08T11:50:48.152-08:00`.
+
+The pinned upstream setup calls for installing dependencies and running the
+tool. The correction removes the unnecessary separate TypeScript build.
+An isolated public-source fixture at adevtool
+`17df3b79a73e67ad68387b35c7d41c85e1d8103c`, using Node 24.19.0 and
+Yarn 1.22.22, completed installation, ran `bin/run --help` successfully with
+no `lib` directory, and passed `yarn check --integrity`. Its native build
+wrapper was stubbed and `ADEVTOOL_SKIP_DEP_BUILD=1` was set. This checks the
+JavaScript loader, not Mustang generation or the exact guest Node binary.
+The next dedicated run repeats the startup check with the admitted guest runtime.
+
+The explicit recovery binding accepts only the exact failed run's completed
+install substage, current prepared-input identities, pinned Node/Yarn versions,
+and unchanged on-disk receipt hash. Under the canonical lock it catalogs the
+installed dependency tree and checks its ownership/filesystem. Any partial
+`lib` is moved without replacement into that failed attempt's
+`retained-tsc-lib`, with intent/result receipts, directory synchronization and
+inode checks. Incomplete or conflicting retention state refuses the run.
+The installed dependency directory remains in place; dependency installation
+is not repeated. The new job must pass Yarn integrity checking, run from
+source without shadowing compiled output, and confirm the dependency catalog
+is unchanged after generation. A completed substage is qualified explicitly;
+the failed overall run is never represented as successful vendor generation.
+
+## Candidate continuity input access
+
+The old Mustang installer artifact `13280698927` remains indexed, with recorded
+outer SHA-256 `c6aea80e23b5aeb775454692ff2da28ca8ff27495d79603e67ec2c0dfc1a6dae`.
+It exceeds the GitHub connector's 512-MiB transfer capability. One standard
+GitHub CLI API stream then reached artifact storage and returned Forbidden,
+with zero payload bytes transferred. That read stopped without a retry or
+alternate data route. A Library lookup did not resolve an existing matching
+installer ZIP. An accessible previously preserved copy or an access resolution
+is still needed for that candidate-continuity input; the native vendor/tool
+preparation can progress independently. No baseline admission is claimed from
+artifact metadata alone.
 
 ## Pinned factory-input download adapter
 

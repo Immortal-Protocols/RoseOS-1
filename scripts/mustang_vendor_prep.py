@@ -23,6 +23,7 @@ import mustang_lane
 import mustang_ota
 import mustang_preparation_inputs as inputs
 import mustang_yarn
+import mustang_vendor_recovery as recovery
 
 ROOT = Path(__file__).resolve().parents[1]
 BINDING = 'os/build-only/mustang-vendor-preparation.json'
@@ -47,6 +48,13 @@ def binding(root=ROOT):
             or host['receipt'].get('makeExitCode') != 0 \
             or factory['receipt'].get('success') is not True:
         raise ValueError('failed preparations cannot admit vendor generation')
+    selected=record.get('bootstrapRecoveryEvidence')
+    if selected is not None:
+        if selected!=recovery.EVIDENCE:raise ValueError('bootstrap recovery evidence path differs')
+        old=recovery.evidence(root)['receipt']
+        if old['hostDependencies']['receiptSha256']!=host['receiptSha256'] \
+                or old['factoryInput']['receiptSha256']!=factory['receiptSha256']:
+            raise ValueError('bootstrap recovery requires the same successful prepared inputs')
     return host, factory
 
 
@@ -151,6 +159,7 @@ def prepare(source, attempt, host_record, factory_record, identity, *, root=ROOT
     product = source/'vendor/google_devices/mustang'
     unpack = source/spec['preparation']['vendor']['collisionPaths'][1]
     watched = [product,unpack,adev/'node_modules',adev/'lib']
+    recovering=json.loads((Path(root)/BINDING).read_text()).get('bootstrapRecoveryEvidence') is not None
     result = {'schema':'roseos.mustang-vendor-preparation-run.v1','identity':identity,'success':False,
               'sourceRoot':str(source),'timeoutSeconds':TIMEOUT,'workBytes':WORK_BYTES,'reserveBytes':RESERVE,
               'commands':[],'spaceObservations':{},'makeStarted':False,'allocated':False,'signingStarted':False,
@@ -163,7 +172,7 @@ def prepare(source, attempt, host_record, factory_record, identity, *, root=ROOT
                npm_config_cache=str(attempt/'npm-cache'),CI='true')
     check = lambda: monitor(source,attempt,watched,deadline,result['spaceObservations'])
     try:
-        if any(os.path.lexists(p) for p in watched):
+        if any(os.path.lexists(p) for p in watched[:2]) or (not recovering and any(os.path.lexists(p) for p in watched[2:])):
             raise ValueError('vendor preparation output exists; preserve and reconcile it')
         check()
         space = os.statvfs(source)
@@ -178,6 +187,10 @@ def prepare(source, attempt, host_record, factory_record, identity, *, root=ROOT
         result['hostDependencies'] = inputs.host_dependencies(source,storage,host_record,identity,deadline=deadline,root=root)
         result['phase'] = 'factory-input-rehash'
         result['factoryInput'] = inputs.factory_archive(storage,factory_record,identity,root=root)
+        if recovering:
+            result['phase']='qualify-completed-install'
+            result['bootstrapRecovery']=recovery.qualify(source,storage,identity,root=root,catalog=catalog,deadline=deadline,
+                host_sha=result['hostDependencies']['receiptSha256'],factory_sha=result['factoryInput']['receiptSha256'])
         env['ADEVTOOL_IMG_DOWNLOAD_DIR'] = str(Path(result['factoryInput']['path']).parent)
         node = Path(ephemeral.NODE['install'])
         result['phase'] = 'node-runtime-check'
@@ -193,18 +206,23 @@ def prepare(source, attempt, host_record, factory_record, identity, *, root=ROOT
         if yarn_version != result['yarnDistribution']['version']:
             raise ValueError('vendor Yarn version differs from the pinned public CLI')
         result.update(nodeVersion=version,yarnVersion=yarn_version)
-        commands = [[str(node),str(yarn),'install','--cwd','vendor/adevtool','--frozen-lockfile','--non-interactive'],
-                    [str(node),str(yarn),'--cwd','vendor/adevtool','run','build'],
+        if os.path.lexists(adev/'lib'):
+            raise ValueError('compiled JavaScript must not shadow the pinned source loader')
+        result['executionMode']='pinned-typescript-source-loader'
+        setup=[str(node),str(yarn),*(['check','--integrity','--cwd','vendor/adevtool'] if recovering else
+               ['install','--cwd','vendor/adevtool','--frozen-lockfile','--non-interactive'])]
+        commands = [setup,
+                    ['vendor/adevtool/bin/run','--help'],
                     ['vendor/adevtool/bin/run','generate-all','-d','mustang']]
         for number, command in enumerate(commands):
-            result['phase'] = ('yarn-install','adevtool-typescript-build','vendor-generate')[number]
+            result['phase'] = (('yarn-integrity-check' if recovering else 'yarn-install'),'source-loader-startup','vendor-generate')[number]
             outcome = {'argv':command,'processStarted':False,'exitCode':None}
             result['commands'].append(outcome)
             deps.supervise(command,source,env,attempt/f'{number}.log',deadline,check,
                            outcome=outcome,failure_message='vendor preparation child command failed')
             if number == 1 and deps.checked(['/usr/bin/git','-c','core.fsmonitor=false','-c','core.hooksPath=/dev/null',
                     '-C',str(adev),'status','--porcelain','--untracked-files=no'],source,env,deadline):
-                raise ValueError('adevtool tracked source changed during dependency bootstrap')
+                raise ValueError('adevtool tracked source changed during dependency bootstrap or source startup')
         if deps.checked(['/usr/bin/git','-C',str(adev),'rev-parse','HEAD'],source,env,deadline) != spec['pins']['vendor/adevtool']:
             raise ValueError('adevtool pin changed during vendor preparation')
         if deps.checked(['/usr/bin/git','-c','core.fsmonitor=false','-c','core.hooksPath=/dev/null',
@@ -217,7 +235,11 @@ def prepare(source, attempt, host_record, factory_record, identity, *, root=ROOT
         result['phase'] = 'output-catalogs'
         result['vendorTree'] = catalog(source,product,deadline)
         result['nodeModules'] = catalog(source,adev/'node_modules',deadline)
-        result['adevtoolJavascript'] = catalog(source,adev/'lib',deadline)
+        if recovering and result['nodeModules']!=result['bootstrapRecovery']['nodeModulesBefore']:
+            raise ValueError('qualified installed dependencies changed during generation')
+        result['adevtoolSource']=catalog(source,adev/'src',deadline)
+        result['sourceLoader']={name:deps.fingerprint(source,path,deadline) for name,path in
+            (('binRun',adev/'bin/run'),('packageJson',adev/'package.json'),('yarnLock',adev/'yarn.lock'))}
         result['productMakefile'] = deps.fingerprint(source,product/'mustang.mk',deadline)
         if deps.fingerprint(node.parent,node,deadline) != result['node'] \
                 or deps.fingerprint(attempt,yarn,deadline) != result['yarn']:

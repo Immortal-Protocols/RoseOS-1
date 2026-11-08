@@ -1,0 +1,233 @@
+{
+  "schema": "roseos.mustang-vendor-evidence.v1",
+  "runId": "42516700216",
+  "runAttempt": "1",
+  "source": "8fbcc1486318210e39fb20a6301b1d51bc43190f",
+  "workflowConclusion": "failure",
+  "cleanupConclusion": "success",
+  "receiptSha256": "2be8e204a1e763a0256f540d046af5605f4b7aba1f3d03b270d93b39060da21f",
+  "receipt": {
+    "allocated": false,
+    "authenticatedStop": false,
+    "boundEnforcement": "sampled-process-group-stop",
+    "commands": [
+      {
+        "argv": [
+          "/mnt/disks/mustang-data/roseos/tools/node/node-v24.22.2-linux-x64/bin/node",
+          "/mnt/disks/mustang-data/roseos/rose-actions/mustang-vendor-42516700216-1/yarn-tools/package/bin/yarn.js",
+          "install",
+          "--cwd",
+          "vendor/adevtool",
+          "--frozen-lockfile",
+          "--non-interactive"
+        ],
+        "exitCode": 0,
+        "processStarted": true
+      },
+      {
+        "argv": [
+          "/mnt/disks/mustang-data/roseos/tools/node/node-v24.22.2-linux-x64/bin/node",
+          "/mnt/disks/mustang-data/roseos/rose-actions/mustang-vendor-42516700216-1/yarn-tools/package/bin/yarn.js",
+          "--cwd",
+          "vendor/adevtool",
+          "run",
+          "build"
+        ],
+        "exitCode": 1,
+        "processStarted": true
+      }
+    ],
+    "detachedDescendantsContained": false,
+    "elapsedSeconds": 122.487,
+    "factoryConfiguration": {
+      "buildIndex": {
+        "mode": 384,
+        "sha256": "a108c6dd08afe9ad5e3fe09f36ae513b2fac34c7d18a2a66d5a90ebb742933f4",
+        "sizeBytes": 414014
+      },
+      "buildSelection": {
+        "mode": 384,
+        "sha256": "92dd7f9cfdb3bdef2922892048f323407b6896f5e93f7ca8f73816488254ceca",
+        "sizeBytes": 80
+      },
+      "device": {
+        "mode": 384,
+        "sha256": "21df5be6eb5c2ba3c2095b70b7136802155c33925315f8488e7dc1be143a2cbc",
+        "sizeBytes": 225
+      }
+    },
+    "factoryInput": {
+      "archiveRehashed": true,
+      "otaAdmitted": false,
+      "path": "/mnt/disks/mustang-data/roseos/rose-actions/mustang-factory-inputs/mustang-cp3a.261005.005-factory-099acc44.zip",
+      "receiptSha256": "3df0cc64971ba39272b547378177162355e5487b5a17e1c5566b192b4c0ae01c",
+      "run": {
+        "runAttempt": "1",
+        "runId": "42510878271",
+        "source": "93a3c95748164afa2cce4f4a9b02925b71a53291",
+        "workflow": "Immortal-Protocols/RoseOS-1/.github/workflows/mustang-ota-dedicated.yml@refs/heads/main"
+      },
+      "sha256": "099acc44e2f87fe2735d92952081d64550ff08b4a6390bb6b001c8451695657e",
+      "sizeBytes": 11366092596
+    },
+    "failureCode": "vendor preparation child command failed",
+    "failureType": "ValueError",
+    "hostDependencies": {
+      "adevtoolRevision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c",
+      "distributionEntries": 485,
+      "distributionRehashed": true,
+      "otaAdmitted": false,
+      "receiptSha256": "1324d6d8d4bd6c54ec93792f08695e597ca77986b79f023754944b6424a14977",
+      "run": {
+        "runAttempt": "1",
+        "runId": "42512135815",
+        "source": "78d5ebdfd4f3fc1dd99d8cb98bbf44316b9eb54f",
+        "workflow": "Immortal-Protocols/RoseOS-1/.github/workflows/mustang-ota-dedicated.yml@refs/heads/main"
+      }
+    },
+    "identity": {
+      "builder": {
+        "instance": "roseos-mustang-builder-20261107-a",
+        "instanceId": "5585425566393384049",
+        "project": "protocols-465723",
+        "zone": "us-west2-a"
+      },
+      "diskUuid": "4183bff8-6be4-46bb-a641-2193d19813ee",
+      "run": {
+        "runAttempt": "1",
+        "runId": "42516700216",
+        "source": "8fbcc1486318210e39fb20a6301b1d51bc43190f",
+        "workflow": "Immortal-Protocols/RoseOS-1/.github/workflows/mustang-ota-dedicated.yml@refs/heads/main"
+      }
+    },
+    "makeStarted": false,
+    "maxEntriesPerWatchedTree": 1000000,
+    "node": {
+      "mode": 493,
+      "sha256": "904a6d3484241d466989f9df9ba3aab822b1496191bdb28230eb491a55c32a52",
+      "sizeBytes": 126881248
+    },
+    "nodeVersion": "v24.22.2",
+    "otaAdmitted": false,
+    "partialsPreserved": true,
+    "phase": "adevtool-typescript-build",
+    "reserveBytes": 322122547200,
+    "schema": "roseos.mustang-vendor-preparation-run.v1",
+    "signingStarted": false,
+    "source": {
+      "check": "project-heads-and-git-status",
+      "ignoredContentUnchecked": true,
+      "pristineRuntimeAttestation": false,
+      "projectCount": 1057
+    },
+    "sourceRoot": "/mnt/disks/mustang-data/roseos/source",
+    "spaceObservations": {
+      "minimumAvailableBytes": 1259680219136,
+      "peakWatchedBytes": 379715975,
+      "samples": 9
+    },
+    "success": false,
+    "timeoutSeconds": 9000,
+    "workBytes": 137438953472,
+    "yarn": {
+      "mode": 448,
+      "sha256": "148e19db309ec9eaf7720b28df811337906eea8a1758deaa54afee60a6305e04",
+      "sizeBytes": 1015
+    },
+    "yarnDistribution": {
+      "archiveBytes": 1238429,
+      "archiveSha256": "c17d3797fb9a9115bf375e31bfd30058cac6bc9c3b8807a3d8cb2094794b51ca",
+      "catalog": [
+        {
+          "mode": 384,
+          "path": "package/LICENSE",
+          "sha256": "ae09761b5d27e237571245437653b483bbb85de3cc64b802e8ef47d03aabec1e",
+          "sizeBytes": 1355
+        },
+        {
+          "mode": 448,
+          "path": "package/bin/yarn",
+          "sha256": "9207642def40f4e6a8ebf027d89a2fbc4e874db2c1bd1b85f097bf49ab40fae6",
+          "sizeBytes": 1025
+        },
+        {
+          "mode": 448,
+          "path": "package/bin/yarnpkg",
+          "sha256": "b0761f6de0fe5517f021f9ca1aeabd7db8c5bac9fdfdbf91affa8be0729f4fcb",
+          "sizeBytes": 42
+        },
+        {
+          "mode": 448,
+          "path": "package/bin/yarn.cmd",
+          "sha256": "f7c7edcdd3e8e97707ad6dfc2e8f21a8ccd2ed7e96b3f64e31d9c88a7b32e3ff",
+          "sizeBytes": 34
+        },
+        {
+          "mode": 448,
+          "path": "package/bin/yarnpkg.cmd",
+          "sha256": "a6197aae45c4501a3d6a48d813b5fffdacc3fa52cef6b52f1d2c9cb37a120011",
+          "sizeBytes": 30
+        },
+        {
+          "mode": 448,
+          "path": "package/lib/cli.js",
+          "sha256": "443ed69e76443b89afddccfc9faec1ff16eb5e500979cc079c696dec4c3d94ee",
+          "sizeBytes": 5320747
+        },
+        {
+          "mode": 384,
+          "path": "package/preinstall.js",
+          "sha256": "4641ced6ee6ee791b97e2f80b0298f5194ab757e1c4a9abb5c359b37d67f922b",
+          "sizeBytes": 2342
+        },
+        {
+          "mode": 384,
+          "path": "package/lib/v8-compile-cache.js",
+          "sha256": "ec1d7229ff64232637f255f2f042daf9aeb59b3dd3c66db64e2c2b75cb4562d6",
+          "sizeBytes": 9910
+        },
+        {
+          "mode": 448,
+          "path": "package/bin/yarn.js",
+          "sha256": "148e19db309ec9eaf7720b28df811337906eea8a1758deaa54afee60a6305e04",
+          "sizeBytes": 1015
+        },
+        {
+          "mode": 384,
+          "path": "package/package.json",
+          "sha256": "9533b84eaaeea708ab99bcf92772bc81c7389f90a04f8b0188c163f9b3b621c3",
+          "sizeBytes": 634
+        },
+        {
+          "mode": 384,
+          "path": "package/README.md",
+          "sha256": "20d87dd37f90fcc119246142907fc9014bd8850bf43298499ad1b3f6faed687b",
+          "sizeBytes": 3353
+        }
+      ],
+      "credentialsUsed": false,
+      "path": "/mnt/disks/mustang-data/roseos/rose-actions/mustang-vendor-42516700216-1/yarn-tools/package/bin/yarn.js",
+      "systemPackagesChanged": false,
+      "unpackedBytes": 5340487,
+      "url": "https://registry.npmjs.org/yarn/-/yarn-1.22.22.tgz",
+      "version": "1.22.22"
+    },
+    "yarnVersion": "1.22.22"
+  },
+  "artifact": {
+    "id": 13631787427,
+    "name": "mustang-vendor-42516700216-1",
+    "sizeBytes": 2476,
+    "sha256": "4faa926069706f80ad0cb79f8d424b20eaac7902023b21093a1bbdebf7bb4dec"
+  },
+  "stopObservation": {
+    "instanceId": "5585425566393384049",
+    "status": "TERMINATED",
+    "lastStartTimestamp": "2026-11-08T11:46:50.352-08:00",
+    "lastStopTimestamp": "2026-11-08T11:50:48.152-08:00",
+    "maxRunDurationSeconds": 14400,
+    "terminationAction": "STOP"
+  },
+  "vendorGenerated": false,
+  "qualifiedCompletedSubstage": "dependency installation only; requires fresh catalog and integrity check"
+}

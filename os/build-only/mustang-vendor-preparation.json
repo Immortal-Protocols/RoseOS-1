@@ -2,8 +2,9 @@
   "schema": "roseos.mustang-vendor-preparation.v1",
   "hostDependenciesEvidence": "os/build-only/mustang-hostdeps-42512135815.json",
   "factoryInputEvidence": "os/build-only/mustang-factory-input-42510878271.json",
-  "status": "successful-input-receipts-bound-requires-fresh-guest-rehash",
+  "status": "source-loader-recovery-requires-fresh-guest-qualification",
   "scope": "pinned adevtool bootstrap and Mustang vendor generation only",
   "sourceRoot": "/mnt/disks/mustang-data/roseos/source",
-  "otaAdmitted": false
+  "otaAdmitted": false,
+  "bootstrapRecoveryEvidence": "os/build-only/mustang-vendor-42516700216.json"
 }
