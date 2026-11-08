@@ -6,8 +6,8 @@ one VM the controller starts and stops), frankel.json's host lock and the builde
 say exactly that. The rules that a lane's move to its own host must satisfy are checked too: its jobs' runner, a queue
 keyed by host, a lane-aware controller, owned stops wherever a host's lanes do not share one queue, and the shared app
 version ledger. Yogi's own route (yogi-ota.yml and os/ota/yogi.json) is checked against its host and kept apart from the
-Frankel host. The standalone harness has its own manual workflow (launcher3-compile.yml), routed only through its
-unbound dedicated binding, so it claims no capacity. A host builds only when it is in service. Synthetic splits show
+Frankel host. The standalone harness has its own manual workflow (launcher3-compile.yml). Its compile binding can be
+source-bound without claiming release or OTA capacity. A host builds only when it is in service. Synthetic splits show
 each rule refuses an unsafe move. Source only: no runner, VM or API is touched.
 """
 import copy
@@ -266,7 +266,7 @@ class MapTest(unittest.TestCase):
         self.assertNotEqual(binding['vm']['instance'], 'immortal-os-builder')
         self.assertEqual(runtime['status'], 'unbound')
         self.assertFalse(runtime['publication']['enabled'])
-        self.assertIsNone(runtime['appInputsRecord'])
+        self.assertEqual(runtime['appInputsRecord'], 'os/app-inputs/frankel-2026110704.json')
         self.assertIsNone(runtime['baselineTargetFiles'])
         self.assertTrue(json.loads((ROOT/runtime['allocationState']).read_text())['unknown'])
         self.assertEqual(lane['dedicatedRuntimeStatus'], 'unbound')
@@ -278,12 +278,14 @@ class MapTest(unittest.TestCase):
         mislabeled['lanes']['mustang'].pop('runtimeStatus')
         self.assertIn(['mustang','yogi'], independent_pairs(mislabeled, live=False))
 
-    def test_the_harness_runs_only_on_its_own_unbound_lane(self):
+    def test_the_harness_source_binding_claims_no_release_or_ota_capacity(self):
         lane = CONTRACT['lanes']['harness']
         self.assertEqual((lane['workflow'], lane['modes'], lane['runtimeStatus']),
                          ('.github/workflows/launcher3-compile.yml', [], 'retired-shared-host'))
         binding = json.loads((ROOT/lane['activeBinding']).read_text())
-        self.assertEqual((binding['lane']['status'], binding['lane']['workflow']), ('unbound', lane['workflow']))
+        self.assertEqual((binding['lane']['status'], binding['lane']['workflow'], binding['branch']),
+                         ('bound', lane['workflow'], 'verifyIntegrated'))
+        self.assertNotEqual(binding['lane']['queue'], CONTRACT['hosts']['frankel-builder']['queue'])
         self.assertNotIn('launcher3-compile', shape.modes())  # the os-release.yml mode is removed
         for live in (True, False):
             self.assertFalse(any('harness' in pair for pair in independent_pairs(CONTRACT, live)))

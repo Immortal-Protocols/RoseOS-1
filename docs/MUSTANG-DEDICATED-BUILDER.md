@@ -167,10 +167,29 @@ API for STOP. It performs no login or provisioning.
 The manual `.github/workflows/mustang-ota-dedicated.yml` source now wires hosted
 admission, the dedicated controller, one builder job, optional publication and
 ownership cleanup. **`mustang-lane.json` is identity-bound and
-`mustang-runtime.json` remains unbound. No runner, source, signing route, or
-publication is activated.** The old source-only inspector is
-superseded by `scripts/mustang-dedicated.py guard`. No workflow dispatch or real
-candidate has been performed to prove this implementation.
+`mustang-runtime.json` remains unbound. No runner, signing route, or
+publication is activated.** The source-only receipt for run 42409634329 is
+bound and does not admit a build. The old source-only inspector is
+superseded by `scripts/mustang-dedicated.py guard`. That source-only dispatch
+is not a build candidate.
+
+`scripts/mustang_hosttools.py` is a non-executing proposal.
+`readyForControlledStart` stays false and it emits no Make command; a
+declaration of paths, hashes, or `deliberate: true` cannot clear it. The
+prerequisite readers measure a tree and still do not admit otatools. Factory
+transfer has to be a regular file reached with no `..` and no symlink
+component, whose size and sha256 match `mustang.json` (the committed record
+is still box-only and unextracted). The adevtool revision marker is the pin
+plus one newline, read from that same descriptor. Opening the fourteen
+`depsTools` paths as regular files is not provenance of those binaries; the
+product makefile include is not a vendor-tree proof. None of those reads uses
+the otatools pin. The fourteen tools are built by adevtool `run-build.sh` as
+`sdk_phone64_x86_64` into `out_adevtool_deps` before `generate-all` writes the
+Mustang product tree. Mustang's vendor stage sets `ADEVTOOL_SKIP_DEP_BUILD=1`
+and does not perform that build. The builder VM is stopped; a later run that has those
+measurements would still START through the existing controller, enroll on the
+existing path, and STOP in the existing cleanup job. This proposal does not
+perform that START.
 
 The hosted guard checks the exact repository ID, main workflow, attempt 1,
 actual binding evidence and app-source freshness before any controller login.
@@ -186,7 +205,11 @@ archive's updater/trust before starting a compile. It downloads the exact app
 artifact by ID, verifies its producer-run metadata and ZIP digest, and runs the
 existing per-file/APK/receipt/policy admission. The app producer's source must
 match the current three-app source paths in the existing allocation contract;
-later OS-only source changes do not require rebuilding unchanged apps.
+later OS-only source changes do not require rebuilding unchanged apps. The
+comparison reads both commits from the local checkout and does not fetch. A
+missing producer or head commit fails closed and is not an empty change list.
+The offline checks job and the dedicated guard checkout fetch full history
+before that comparison runs.
 
 The native producer copies only its own admitted pristine pinned base, fetches
 the existing pinned metadata, prepares vendor inputs, allocates under its own
@@ -248,7 +271,7 @@ name, a copied device label or a guessed value as readback.
 | --- | --- |
 | `jobs`, `tools`, `dataFilesystemUuid`, `automaticStopHours` | Approved Make parallelism, executable aapt/apksigner/Node paths, the dedicated data UUID and the confirmed four-hour STOP. The UUID and four-hour STOP are already recorded; jobs and tools are not. |
 | `networkEvidence` | JSON with matching `builder`, `githubEgressVerified: true` and the actual `approvedRoute`; no denied lookup retry or implicit NAT/proxy. |
-| `sourceEvidence` | Matching `builder`/`sourceRoot`, pinned manifest SHA-256, pinned `adevtoolRevision` and `pristine: true` bootstrap readback. This attestation is not a full copy-byte revision verification. |
+| `sourceEvidence` | A build still requires matching `builder`/`sourceRoot`, pinned manifest SHA-256, pinned `adevtoolRevision` and `pristine: true` bootstrap readback. This attestation is not a full copy-byte revision verification. A `roseos.mustang-source-sync-evidence.v1` record may cite one source-only run receipt instead. That record does not satisfy the pristine bootstrap requirement and does not admit a build. |
 | `runner` | Actual group name/ID and chosen persistent/ephemeral lifetime; registration evidence matching VM, workflow and repository `1428996648`, with `publicRepositoryAdmitted: true` and `readyOnEveryStart: true`. The protected registration implementation remains Infra-owned. |
 | `signingRouteEvidence` | Actual approved admission of this workflow to the **existing** signer, matching `builder`/workflow, `identityVariable: GCP_SIGNER_SERVICE_ACCOUNT`, `providerVariable: MUSTANG_SIGNER_WORKLOAD_IDENTITY_PROVIDER`, `approved: true`, `establishedMustangIdentityPreserved: true`. No new IAM/key/credential operation is performed by source or inferred from these field names. |
 | `appInputsRecord` | An actual `roseos.app-inputs-record.v1` Actions export, or the explicit `roseos.app-inputs-private-record.v1` private archive contract below, with the exact committed producer allocation and APK/receipt/policy identities. |

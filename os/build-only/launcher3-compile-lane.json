@@ -1,26 +1,26 @@
 {
   "schemaVersion": 4,
   "kind": "rose-launcher3-independent-compile",
-  "basis": "Active independent Launcher3 binding. Capacity, source provenance and public-fetch/runtime authorization are separate requirements. Infra supplies verified VM, disk, runner, storage and controller evidence; null values are never guessed. The v3 launcher3-compile-host.json is retained only as a legacy cleanup reference and cannot authorize this adapter. This document provisions nothing and activates no workflow.",
+  "basis": "Source binding for the first standalone verifyIntegrated Launcher3 compile. It does not gate, start, or authorize any OTA or release workflow: os-release.yml, yogi-ota.yml, and the Mustang workflows do not read this file, and the capacity-map harness lane stays retired-shared-host with no os-release mode. Controller check reports runtimeAuthorized false. Schema 4 lane.disk is the boot disk only: roseos-launcher3-compile-01 id 5299228702637505657. The attached data disk roseos-launcher3-compile-data-01 (263837443130866785) and source disk roseos-launcher3-src-02 (7922451502759869665) are observed and are not that field. taskParent and lockPath stay the original paths under storageRoot; the schema does not name tasks/ or locks/. Integrated source is RoseOS-1 5454c2f1f0797fd69452da613cfd1934c0808fb0 on runner branch rose-integrated-5454c2f1. Resolved manifest sha256 43dc8a6b0689f85599a4cd1dd82e54816e3b18ceec3930c3db9afc208f9b69ed. Tree pins have no schema field: frameworks/base 6fb4b6fad176c50025fa18e11b4615e69de41d56, build/make 6d3e9fe61a63b14d99ec240a1328199879cae6d2, build/release 82869bb9b22785588dc9501055d31362dc14198c, Launcher3 5bcda53c843e355376b8f7a4a7cdf5fa8f446102, Updater 6ee911e5ecfdf7957d57c6f8c595a4b78ea63a71, Permission f1b2ad113f43609d839e7d897892ff59398cf7c5. Policy export run 42408244069, artifact 13588167823, producer frankel-2026110704. verifyIntegrated forbids bundleReport and reconstructSource, so both stay null. runnerName is the instance and label. queue launcher3-compile is this workflow's concurrency group. adevtoolGit public-fetch is the only class check accepts for frankel-cur-user. Frankel's reclaim policy still covers only the legacy host task parent.",
   "lane": {
-    "status": "unbound",
+    "status": "bound",
     "workflow": ".github/workflows/launcher3-compile.yml",
-    "runnerName": null,
-    "runnerLabel": null,
-    "vm": {"project": null, "zone": null, "instance": null, "instanceId": null},
-    "disk": {"resource": null, "id": null},
-    "storageRoot": null,
-    "lockPath": null,
-    "queue": null,
-    "controller": {"identityVariable": null, "providerVariable": null},
-    "infraEvidence": null
+    "runnerName": "roseos-launcher3-compile-01",
+    "runnerLabel": "roseos-launcher3-compile-01",
+    "vm": {"project": "protocols-465723", "zone": "us-west2-b", "instance": "roseos-launcher3-compile-01", "instanceId": "8380049696571473017"},
+    "disk": {"resource": "projects/protocols-465723/zones/us-west2-b/disks/roseos-launcher3-compile-01", "id": "5299228702637505657"},
+    "storageRoot": "/srv/rose-launcher3",
+    "lockPath": "/srv/rose-launcher3/launcher3.lock",
+    "queue": "launcher3-compile",
+    "controller": {"identityVariable": "LAUNCHER3_CONTROLLER_SERVICE_ACCOUNT", "providerVariable": "LAUNCHER3_CONTROLLER_WORKLOAD_IDENTITY_PROVIDER"},
+    "infraEvidence": "Infra gcloud readback 2026-11-07, VM TERMINATED, no start: roseos-launcher3-compile-01 in protocols-465723/us-west2-b, instanceId 8380049696571473017. Schema-4 lane.disk is the boot disk roseos-launcher3-compile-01 id 5299228702637505657 (100 GB). Attached data disk roseos-launcher3-compile-data-01 id 263837443130866785 and source disk roseos-launcher3-src-02 id 7922451502759869665 are not that field. Runner label roseos-launcher3-compile-01. Source /srv/rose-launcher3/src at RoseOS-1 5454c2f1f0797fd69452da613cfd1934c0808fb0 branch rose-integrated-5454c2f1. Resolved manifest sha256 43dc8a6b0689f85599a4cd1dd82e54816e3b18ceec3930c3db9afc208f9b69ed. Policy /srv/rose-launcher3/inputs/export-20261107T204240Z/background-policy.json sha256 4b3faede5e309ac71cd00b9a642f84e244eee3186f3c355bf26aea3f5226446c, export run 42408244069, artifact 13588167823, producer frankel-2026110704."
   },
-  "taskParent": null,
-  "branch": "verifyBaseApplyCandidate",
-  "sourceTree": null,
-  "lunch": null,
-  "policyReceipt": {"path": null, "sha256": null},
+  "taskParent": "/srv/rose-launcher3/rose-actions",
+  "branch": "verifyIntegrated",
+  "sourceTree": "/srv/rose-launcher3/src",
+  "lunch": "frankel-cur-user",
+  "policyReceipt": {"path": "/srv/rose-launcher3/inputs/export-20261107T204240Z/background-policy.json", "sha256": "4b3faede5e309ac71cd00b9a642f84e244eee3186f3c355bf26aea3f5226446c"},
   "bundleReport": {"path": null, "sha256": null},
   "reconstructSource": null,
-  "adevtoolGit": null
+  "adevtoolGit": "public-fetch"
 }

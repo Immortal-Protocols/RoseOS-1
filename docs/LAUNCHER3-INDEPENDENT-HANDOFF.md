@@ -1,9 +1,10 @@
 # Independent Launcher3 source handoff
 
 This is an integration handoff, not runtime authorization or a compile result.
-The active binding is `os/build-only/launcher3-compile-lane.json` (schema 4).
-Every real capacity and source value remains unbound. The compile contracts and
-the #536 interruption, process containment, reports and cleanup rules are retained.
+The active binding is `os/build-only/launcher3-compile-lane.json` (schema 4),
+source-bound for `verifyIntegrated`. It does not gate any OTA or release workflow.
+The compile contracts and the #536 interruption, process containment, reports
+and cleanup rules are retained.
 
 ## Source boundary
 
@@ -11,8 +12,8 @@ The harness owner supplies `launcher3_lane.py`, `launcher3_controller.py`, the
 compile adapter, the new binding and tests in the existing adapter suite. Infra
 owns `Production.control_builder` in `release-pipeline.py`; this patch does not
 change that API. Release owns workflow, routing, capacity-map and reclaim policy
-integration. No workflow, capacity map, CI registration or reclaim policy is
-changed by this patch.
+integration. The source binding does not change workflow jobs, reclaim policy,
+CI registration, or os-release/OTA routing.
 
 `launcher3-compile.py` now reads the schema-4 binding by default. A schema-3
 `launcher3-compile-host.json` is rejected for execution. The old file remains
@@ -22,8 +23,8 @@ reclaim policy at the new disk or remove its coverage of old Frankel runs.
 
 The adapter rejects any GitHub workflow context except
 `Immortal-Protocols/RoseOS-1/.github/workflows/launcher3-compile.yml@refs/heads/main`.
-Consequently the old `os-release.yml` hosted guard cannot start Frankel even if
-the new binding is later populated. An old run checked out at an older commit
+Consequently the old `os-release.yml` hosted guard cannot start Frankel even
+with this binding populated. An old run checked out at an older commit
 retains its old finish implementation; this patch performs no live cleanup.
 
 ## Release integration, coordinated before runtime
@@ -96,14 +97,10 @@ size. The existing `-j8`, 120-minute compile ceiling and sampled 64 GiB RSS /
 150 GiB output stops are first-measurement ceilings, not measured capacity or
 hard isolation guarantees.
 
-The selected `verifyBaseApplyCandidate` branch still needs a qualified base tree,
-`frankel-cur-user` lunch inputs, the integrating policy receipt and its SHA-256,
-and a producer-generated bundle report with its SHA-256. The report requires
-reviewed run ID/attempt/commit/label/timestamps in
-`os/build-only/launcher3-bundle-run.json`, matching receipt, patcher and recipe
-evidence. These remain unbound. The public adevtool fetch needs its separate
-runtime authorization before `adevtoolGit` is bound. If no qualified base tree
-exists, Product must supply a contract-backed preparation route; `reconstruct`
+The committed binding selects `verifyIntegrated`, so `bundleReport` and
+`reconstructSource` stay null. Lunch is `frankel-cur-user`. `adevtoolGit` is
+`public-fetch` because that is the only class `check` accepts for this lunch;
+the controller check still reports `runtimeAuthorized` false. `reconstruct`
 remains refused. No production-tree preparation is included in this handoff.
 
 Source completion is this reviewed, offline-tested migration and its coordinated
@@ -112,16 +109,29 @@ on the verified independent capacity and a successful compile/classpath/flag
 report plus cleanup evidence. A setup refusal is a blocker, not completion.
 Physical-phone testing is not a completion gate.
 
-## SWAP WHEN FRESH EXPORT LANDS
+## Fresh export bound for verifyIntegrated (2026-11-07)
 
-The integrating-run provenance for the verifyIntegrated binding (Infra binds these into
-`os/build-only/launcher3-compile-lane.json` only after Product approves; the lane stays `unbound` here).
-Replace this whole block when Release's fresh common-APK export from current main lands.
+Schema 4 has no fields for the commit, tree pins, resolved manifest, or export
+ids. Those values are recorded here and in the binding `basis`. `policyReceipt`
+holds only the path and sha256. `lane.disk` is the boot disk only. The attached
+data and source disks are observed and are not that field.
 
-| Field | Value (2026-11-07) |
+| Field | Value |
 | --- | --- |
-| policyReceipt sha256 (`--background-policy`) | `a4841230581abcad543636786bc088f8cfa49c410e52f523e24e8c3f7f10f71b` |
-| app-inputs export run | `42392772006` — **STALE**: Mustang's guard rejected it (voice versionCode 366 behind current rose-agent source) |
-| producer run / build | `42389218389` / `2026110701` |
-| producer candidateSha | `f00d576473058c2e83a9fb0ded2c96a243b81152` — not on the remote as of 2026-11-07 |
-| integrated RoseOS-1 commit | `2ac24c5475de121ebe4e9e6a5c1a404ef44aa9c8` |
+| policyReceipt path | `/srv/rose-launcher3/inputs/export-20261107T204240Z/background-policy.json` |
+| policyReceipt sha256 (`--background-policy`) | `4b3faede5e309ac71cd00b9a642f84e244eee3186f3c355bf26aea3f5226446c` |
+| app-inputs export run / artifact | `42408244069` / `13588167823` |
+| producer | `frankel-2026110704` |
+| integrated RoseOS-1 commit | `5454c2f1f0797fd69452da613cfd1934c0808fb0` |
+| runner branch | `rose-integrated-5454c2f1` |
+| resolved manifest sha256 | `43dc8a6b0689f85599a4cd1dd82e54816e3b18ceec3930c3db9afc208f9b69ed` |
+| frameworks/base | `6fb4b6fad176c50025fa18e11b4615e69de41d56` |
+| build/make | `6d3e9fe61a63b14d99ec240a1328199879cae6d2` |
+| build/release | `82869bb9b22785588dc9501055d31362dc14198c` |
+| Launcher3 | `5bcda53c843e355376b8f7a4a7cdf5fa8f446102` |
+| Updater | `6ee911e5ecfdf7957d57c6f8c595a4b78ea63a71` |
+| Permission | `f1b2ad113f43609d839e7d897892ff59398cf7c5` |
+| VM instanceId | `8380049696571473017` |
+| lane.disk (boot only) | `roseos-launcher3-compile-01` / `5299228702637505657` |
+| taskParent | `/srv/rose-launcher3/rose-actions` |
+| lockPath | `/srv/rose-launcher3/launcher3.lock` |

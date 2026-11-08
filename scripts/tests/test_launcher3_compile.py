@@ -2,7 +2,7 @@
 contract (os/compile-contracts/launcher3-quickstep-lib.json, scripts/launcher3-compile-contract.py).
 
 Synthetic trees, a synthetic contract where bytes are needed, stand-in processes and fake locks only: no host, copy of
-a real tree, lunch, build or network; git runs only as hash-object (no -w) and apply on synthetic temporary trees. Exercised: the pinned contract and the binding (unbound exits 4), the
+a real tree, lunch, build or network; git runs only as hash-object (no -w) and apply on synthetic temporary trees. Exercised: the pinned contract and the committed verifyIntegrated binding (check passes; a missing input still exits 4), the
 branch classification (verifyIntegrated only on the exact post-state; mixed, pre, unknown and missing refuse; config.xml
 only through OS Product's bound-policy check, never normalised on a mismatch), the copy bounds, the contained
 environment, the sampled stops, the aconfig reader, the source and classpath proof and the write-once report.
@@ -54,7 +54,10 @@ lane = adapter.launcher3_lane
 def dedicated_binding():
     """Only synthetic capacity; never a proposed or observed host binding."""
     binding = json.loads(json.dumps(BINDING))
-    binding['taskParent'] = '/home/pixelbuild/rose-actions'
+    binding.update(taskParent='/home/pixelbuild/rose-actions', branch='verifyBaseApplyCandidate',
+                   sourceTree=None, lunch=None, reconstructSource=None, adevtoolGit=None,
+                   policyReceipt={'path': None, 'sha256': None},
+                   bundleReport={'path': None, 'sha256': None})
     binding['lane'].update(status='bound', runnerName='synthetic-launcher3', runnerLabel='synthetic-launcher3',
                            vm={'project': 'synthetic-project', 'zone': 'test-zone-a',
                                'instance': 'synthetic-launcher3', 'instanceId': '123456789'},
@@ -395,16 +398,29 @@ class Contract(unittest.TestCase):
         with self.assertRaisesRegex(adapter.Invalid, 'compressed'):
             adapter.load_listing(pin, root)
 
-    def test_committed_binding_is_unbound_and_the_hosted_check_exits_4(self):
-        self.assertEqual([BINDING[k] for k in ('sourceTree', 'lunch', 'reconstructSource', 'adevtoolGit')], [None] * 4)
-        self.assertEqual(BINDING['policyReceipt'], {'path': None, 'sha256': None})
+    def test_committed_binding_is_verify_integrated_and_the_hosted_check_passes(self):
+        self.assertEqual(BINDING['branch'], 'verifyIntegrated')
+        self.assertEqual(BINDING['lunch'], 'frankel-cur-user')
+        self.assertEqual(BINDING['sourceTree'], '/srv/rose-launcher3/src')
+        self.assertEqual(BINDING['adevtoolGit'], 'public-fetch')
+        self.assertIsNone(BINDING['reconstructSource'])
+        self.assertEqual(BINDING['policyReceipt'], {
+            'path': '/srv/rose-launcher3/inputs/export-20261107T204240Z/background-policy.json',
+            'sha256': '4b3faede5e309ac71cd00b9a642f84e244eee3186f3c355bf26aea3f5226446c'})
+        # verifyIntegrated forbids a bundle report; the candidate delta stays empty and is not applied
         self.assertEqual(BINDING['bundleReport'], {'path': None, 'sha256': None})
-        # the selected branch: no patcher registers the candidate delta, so only base-plus-delta can reach the final images
-        self.assertEqual(BINDING['branch'], 'verifyBaseApplyCandidate')
+        self.assertEqual(BINDING['lane']['status'], 'bound')
+        self.assertEqual(BINDING['lane']['queue'], 'launcher3-compile')
+        self.assertEqual(BINDING['lane']['vm']['instanceId'], '8380049696571473017')
+        self.assertEqual(BINDING['lane']['disk'], {
+            'resource': 'projects/protocols-465723/zones/us-west2-b/disks/roseos-launcher3-compile-01',
+            'id': '5299228702637505657'})
+        self.assertEqual(BINDING['taskParent'], '/srv/rose-launcher3/rose-actions')
+        self.assertEqual(BINDING['lane']['lockPath'], '/srv/rose-launcher3/launcher3.lock')
         self.assertIn('candidateDelta is retired and empty', MANIFEST['candidatePatches'])
         result = run_cli('check')
-        self.assertEqual((result.returncode, result.stdout), (4, ''))
-        self.assertIn('independent harness capacity is unbound', result.stderr)
+        self.assertEqual((result.returncode, result.stdout),
+                         (0, 'outer_seconds=21720\nfinish_seconds=1800\njob_minutes=403\n'))
 
     def binding(self, **change):
         path = Path(tempfile.mkdtemp())/'binding.json'
@@ -3493,9 +3509,9 @@ class Fetch(unittest.TestCase):
 
 
 class DedicatedLane(unittest.TestCase):
-    def test_capacity_is_unbound_and_legacy_binding_cannot_activate_the_adapter(self):
-        with self.assertRaisesRegex(lane.Unbound, 'capacity is unbound'):
-            lane.validate(BINDING)
+    def test_committed_capacity_validates_and_legacy_binding_cannot_activate_the_adapter(self):
+        self.assertEqual(lane.validate(BINDING)['status'], 'bound')
+        self.assertEqual(lane.validate(BINDING)['runnerLabel'], 'roseos-launcher3-compile-01')
         legacy = ROOT/'os/build-only/launcher3-compile-host.json'
         with self.assertRaisesRegex(adapter.Invalid, 'legacy host binding is retired'):
             adapter.check(legacy)
@@ -3685,7 +3701,9 @@ class DedicatedController(unittest.TestCase):
         self.assertEqual(observed, [True, True])
 
     def test_incomplete_or_foreign_capacity_never_reaches_common_control(self):
-        for binding in (BINDING, {**self.binding, 'lane': {**self.binding['lane'],
+        unbound = json.loads(json.dumps(BINDING))
+        unbound['lane']['status'] = 'unbound'
+        for binding in (unbound, {**self.binding, 'lane': {**self.binding['lane'],
                             'vm': {**self.binding['lane']['vm'], 'instanceId': lane.FRANKEL_INSTANCE_ID}}}):
             with self.subTest(binding=binding['lane']['status']), self.assertRaises(ValueError):
                 controller.start(self.api, binding, self.env, self.record)

@@ -4,7 +4,7 @@ run-name: launcher3-compile ${{ github.run_id }}
 # 1E: the standalone Launcher3 compile harness on its own capacity, never a release builder
 # (docs/LAUNCHER3-INDEPENDENT-HANDOFF.md, docs/OS-RELEASE.md "Launcher3 compile harness"). Manual dispatch from main
 # only, attempt 1 only; no schedule or other trigger. Its binding, os/build-only/launcher3-compile-lane.json, is
-# unbound: the hosted guard then exits 4 before any login, VM start or self-hosted routing. Every job checks out this
+# source-bound for verifyIntegrated. This workflow does not gate any OTA or release workflow. Every job checks out this
 # run's own commit. The worker's runner, the VM and the controller identity all come from that one reviewed,
 # Infra-evidenced binding; nothing here names a host. A passing compile report is not a build, signature, install or
 # release. Runtime is not approved.
