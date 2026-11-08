@@ -32,7 +32,13 @@ class OtatoolsTest(unittest.TestCase):
 
     def test_unbound_vendor_blocks_before_start_and_scope_is_exclusive(self):
         event={'inputs':{'otatools_only':True}}
-        with self.assertRaisesRegex(ValueError,'unbound'):prep.guard(self.env(),event)
+        self.assertEqual(prep.binding()[0]['runId'],'42522784617')
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);(root/'os/build-only').mkdir(parents=True)
+            cfg=json.loads((ROOT/prep.BINDING).read_text());cfg['vendorEvidence']=None
+            (root/prep.BINDING).write_text(json.dumps(cfg))
+            (root/'os/build-only/mustang-runtime.json').write_bytes((ROOT/'os/build-only/mustang-runtime.json').read_bytes())
+            with self.assertRaisesRegex(ValueError,'unbound'):prep.guard(self.env(),event,root=root)
         with patch.object(prep,'binding',return_value=({},{})):
             self.assertEqual(prep.guard(self.env(),event)[1]['runId'],'123')
             for flag in prep.FLAGS-{'otatools_only'} | {'unknown'}:
