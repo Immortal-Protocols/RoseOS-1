@@ -112,6 +112,7 @@
   "otatools": {
     "sha256": null,
     "executable": null,
-    "basis": "Independent CompileHarness otatools receipt is queued after 669 regeneration and has not been reviewed. No historical or guest hash is a pin."
+    "qualificationEvidence": "os/build-only/mustang-otatools-42531345133.json",
+    "basis": "Dedicated tool-only run 42531345133 succeeded; its independent same-run hosted download matched 536801287 bytes and SHA-256 9f0f1c8b906641cf262526fb8877adf5f711504c2ab6d508c437bd1005c1cc32. The read-only qualification verifier binds both receipts and can inspect a supplied matching ZIP without execution. Local package inspection remains incomplete; no executable or production signing pin is admitted."
   }
 }

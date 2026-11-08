@@ -126,8 +126,12 @@ def verify_closure(root=ROOT):
         raise ClosureError('tool closure receipt schema mismatch')
     if receipt.get('admission') is not False or receipt.get('productionPins') != 'unbound' or receipt.get('trust') != 'held':
         raise ClosureError('tool closure receipt enables admission')
-    if (receipt.get('otatools') or {}).get('sha256') is not None:
+    otatools=receipt.get('otatools') or {}
+    if any(otatools.get(key) is not None for key in ('sha256','executable')):
         raise ClosureError('otatools receipt was filled without the independent builder')
+    if otatools.get('qualificationEvidence') is not None:
+        import mustang_otatools_qualification
+        mustang_otatools_qualification.binding(otatools['qualificationEvidence'],root=root)
     files = receipt.get('files')
     if not isinstance(files, list) or not files:
         raise ClosureError('tool closure has no files')

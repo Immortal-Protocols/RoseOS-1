@@ -32,6 +32,7 @@ class ToolClosureTest(unittest.TestCase):
         self.assertEqual(receipt['files'][1]['sha256'],
                          '01f7847ecdc6600bd2e3ffebe45cf79cee4fead1d6b61686c4d3c70e9c548311')
         self.assertIsNone(receipt['otatools']['sha256'])
+        self.assertEqual(receipt['otatools']['qualificationEvidence'],'os/build-only/mustang-otatools-42531345133.json')
         self.assertFalse(receipt['jdk']['committed'])
         pin = json.loads((ROOT / closure.PIN).read_text())
         for key in closure.PIN_KEYS:
@@ -70,6 +71,21 @@ class ToolClosureTest(unittest.TestCase):
             capacity['admission'] = True
             (base / closure.CAPACITY).write_text(json.dumps(capacity))
             with self.assertRaisesRegex(closure.ClosureError, 'admission is not held'):
+                closure.verify_closure(base)
+
+    def test_qualification_is_provenance_and_cannot_silently_fill_an_executable_pin(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base=Path(temporary);self.copy_checkout(base)
+            receipt=json.loads((base/closure.RECEIPT).read_text())
+            receipt['otatools']['executable']='bin/ota_from_target_files'
+            (base/closure.RECEIPT).write_text(json.dumps(receipt))
+            with self.assertRaisesRegex(closure.ClosureError,'otatools receipt was filled'):
+                closure.verify_closure(base)
+            self.copy_checkout(base)
+            evidence=base/'os/build-only/mustang-otatools-42531345133.json'
+            value=json.loads(evidence.read_text());value['independentReadback']['receipt']['byteReadbackMatches']=False
+            evidence.write_text(json.dumps(value))
+            with self.assertRaisesRegex(ValueError,'independent same-run'):
                 closure.verify_closure(base)
 
     def test_release_script_closure_is_only_the_imported_helpers(self):
@@ -196,6 +212,7 @@ class ToolClosureTest(unittest.TestCase):
         if base.exists():
             shutil.rmtree(base)
         for relative in (closure.RECEIPT, closure.PIN, closure.CAPACITY,
+                         'os/build-only/mustang-otatools-42531345133.json','os/build-only/mustang-lane.json',
                          'script/LICENSE', 'script/generate-release.sh', 'script/common.sh',
                          'script/generate-metadata', 'device/common/clear-factory-images-variables.sh'):
             source = ROOT / relative
