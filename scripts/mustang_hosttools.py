@@ -193,17 +193,36 @@ def read_regular(root, path, limit):
 
 
 def measure_factory(mount, path, root=ROOT):
-    """Read a factory archive. The expected hash and size come from mustang.json, not the caller."""
+    """Stream one pinned factory archive through its contained regular descriptor."""
     pin = recipe(root)['factory']
+    fd = None
     try:
-        data = read_regular(mount, path, pin['sizeBytes'])
+        fd, before = _open_regular(mount, path)
+        if before.st_size != pin['sizeBytes']:
+            raise _Refused('factory-size-differs')
+        remaining = before.st_size
+        digest = hashlib.sha256()
+        while remaining:
+            block = os.read(fd, min(1 << 20, remaining))
+            if not block:
+                raise _Refused('factory-size-differs')
+            digest.update(block)
+            remaining -= len(block)
+        if os.read(fd, 1):
+            raise _Refused('factory-size-differs')
+        after = os.fstat(fd)
+        identity = lambda info: (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+        if identity(before) != identity(after):
+            raise _Refused('factory-changed-during-read')
     except _Refused as refused:
-        code = 'factory-size-differs' if refused.code == 'over-bound' else 'factory-not-contained'
+        code = refused.code if refused.code in ('factory-size-differs', 'factory-changed-during-read') else 'factory-not-contained'
         return {'matchesPinnedFactory': False, 'admitsOtatools': False, 'problems': [code]}
-    if len(data) != pin['sizeBytes']:
-        return {'matchesPinnedFactory': False, 'admitsOtatools': False, 'problems': ['factory-size-differs']}
+    except OSError:
+        return {'matchesPinnedFactory': False, 'admitsOtatools': False, 'problems': ['factory-read-failed']}
+    finally:
+        _close(fd)
     problems = []
-    if hashlib.sha256(data).hexdigest() != pin['sha256']:
+    if digest.hexdigest() != pin['sha256']:
         problems.append('factory-hash-differs')
     return {'matchesPinnedFactory': not problems, 'admitsOtatools': False, 'problems': problems}
 
