@@ -550,7 +550,7 @@ project, secret version, four secret names and `appSignerSha256`. Everything els
 runtime record on the runner; it is never committed. Schema `roseos.agent-portable-inputs.v1`, exactly these keys:
 - `schema`;
 - `appSdkRoot`, `javaHome` and `publicAssetsDir`: absolute normalized paths (no trailing slash, `.`, `..` or `//`);
-- `publicAssetDigests`: exactly the five public connection inputs of `host-app-build.PUBLIC_ASSETS`, each mapped to
+- `publicAssetDigests`: exactly the public connection inputs of `host-app-build.PUBLIC_ASSETS`, each mapped to
   its lowercase sha256;
 - `aapt` and `apksigner`: absolute normalized paths to the independent verifier tools.
 
@@ -559,7 +559,7 @@ fields of the committed config, and never one the committed config already binds
 committed config alone: the signing identity, secret names and version, `minimumTestedOs` and the reservation store.
 The reservation and ownership checks and the cleanup are unchanged, and the builder route refuses the option.
 `host-app-build.build()` still checks the SDK layout (`platforms/android-35`, `build-tools/android-15`) and the JDK.
-Its `restore()` checks the five inputs against `public-assets-receipt.json` and these pins. The receipt records
+Its `restore()` checks the inputs against `public-assets-receipt.json` and these pins. The receipt records
 `portableInputs` (the record's schema and sha256, no paths). With a valid record, `--check --hosted` names only the
 reservation store.
 
