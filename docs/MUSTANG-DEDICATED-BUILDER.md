@@ -197,8 +197,9 @@ perform that START.
 
 The next [host-tools preparation handoff](MUSTANG-HOSTTOOLS-PREPARATION.md)
 records the fresh stopped-VM readback, separates the generic adevtool dependency
-build from Mustang's otatools proof, and identifies the missing bounded
-preparation adapter on the existing workflow.
+build from Mustang's otatools proof, and describes the bounded host-dependency
+adapter on this branch's existing dedicated workflow. It is not a live-run
+receipt or OTA admission.
 
 The hosted guard checks the exact repository ID, main workflow, attempt 1,
 actual binding evidence and app-source freshness before any controller login.

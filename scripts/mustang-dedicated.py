@@ -382,6 +382,11 @@ def main():
     parser.add_argument('--ownership-record'); parser.add_argument('--publish',action='store_true')
     args=parser.parse_args()
     args.publish=args.publish or (args.action=='guard' and os.environ.get('MUSTANG_PUBLISH')=='true')
+    if args.action=='guard' and os.environ.get('MUSTANG_HOSTDEPS_ONLY')=='true':
+        import mustang_hostdeps
+        mustang_hostdeps.guard(os.environ,mustang_hostdeps.read_event(os.environ))
+        if os.environ.get('MUSTANG_DRY_RUN')!='true':
+            raise ValueError('hostdeps scope must keep the OTA runtime path closed')
     refuse_dry_run(args.action)
     if args.action in ('sign','_execute'):
         raise ValueError('guest signing is closed; only the hosted ubuntu signer may sign')

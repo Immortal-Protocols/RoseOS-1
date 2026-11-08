@@ -80,22 +80,51 @@ following attempt; retained partial output is not a successful receipt.
 
 ## Required execution adapter
 
-There is currently **no host-dependency preparation mode** in
-`mustang-ota-dedicated.yml`. `source_only` runs the exact pinned sync recipe;
-`dry_run` performs host checks; the normal builder path requires the complete
-runtime binding and enters baseline/allocation/OTA production. None can be
-repurposed as an arbitrary command carrier.
+This branch adds `scripts/mustang_hostdeps.py` and a separate `hostdeps_only`
+Boolean selection on the **existing** dedicated workflow. Its guard accepts
+only that selection, the exact manual main workflow, numeric repository ID and
+attempt 1; combining it with source, dry-run or publication is refused before
+the controller. Only the `hostdeps` guest job running as `mustang-runner` can
+execute. The ordinary OTA runtime gate stays unbound.
 
-The next source implementation is a separately guarded preparation stage on
-that same workflow. Reuse the controller ownership file, group-5 JIT enrollment,
-queue serialization and dedicated lock, guest instance/mount checks,
-credential-stripped child environment, process-group supervision, allowlisted
-receipts and hosted cleanup. Its guard must admit only its exact preparation
-scope and reject mixed source/dry-run/OTA/publication selections. Its Make and
-storage bounds must be explicit inputs from a reviewed preparation contract,
-not inherited defaults. Queue-watch and cleanup must include the new job and
-handle queue timeout, cancellation and partial failure before any dispatch.
-No guest-side local command is an authenticated VM STOP.
+The stage reuses the controller ownership file, group-5 JIT enrollment, queue
+serialization, existing dedicated lock and hosted cleanup. The guest checks
+instance ID, disk UUID/mount, filesystem device, clean recipe checkout and the
+HEAD/worktree of every pinned project. Git status leaves ignored content
+unchecked; the receipt explicitly does not claim a pristine-runtime
+attestation. The lock must already exist as a regular no-link file. Missing or
+busy locks refuse before output changes; the adapter does not repair parent
+permissions or create/chown a lock in the protected data home.
+
+`recipe()` makes the proposed bounds explicit: 24 Make jobs, 9,000 seconds
+including source inspection/build/output observation, 128 GiB of watched
+output/attempt files, 300 GiB free reserve, a 16 MiB raw-log ceiling and
+100,000 entries. The workflow step is 155 minutes and its job is 165 minutes.
+Checks run every five seconds; this is sampled process-group supervision,
+not a filesystem quota or containment of descendants that detach into a new
+session. Bounds are ceilings, not measured costs. Inodes and free space are
+rechecked during work. Timeout, cancellation or monitor failure kills the
+build process group; guest code never claims an authenticated VM STOP.
+
+The output directory must be absent. Existing or partial output is preserved
+for explicit reconciliation. The child receives an environment allowlist and
+its own temporary directory, without inherited job tokens, injected GCP
+credentials, shell startup variables or workflow output channels. After a
+successful Make, the adapter hashes the complete host distribution, records
+contained links and requires fourteen real executable entrypoints. Only then
+does it atomically create the pinned revision marker. The write-once attempt
+receipt binds source/run/builder/disk, command, bounds, manifest, wrapper,
+distribution, marker and result. Failure retains its own files and a failed
+receipt. The report step rechecks guest identity and copies only that run's
+structured receipt; raw logs are not uploaded.
+
+Queue-watch recognizes `hostdeps`, cleanup waits for it, and the ordinary
+builder and signer are excluded. This implements preparation step 2's source
+adapter; it is not a live run, a successful tool build, vendor generation or
+the later Mustang otatools proof. `source_only` still runs the pinned sync
+recipe and `dry_run` still performs host checks. Review and merge of this
+source, followed by an appropriately scoped manual dispatch and actual guest
+readback, remain necessary before claiming live preparation success.
 
 Keep the current `mustang_hosttools.py` proposal fail-closed while implementing
 and testing that adapter. Do not weaken `guard()` or change `status` to `bound`
