@@ -2,7 +2,7 @@
 
 No default target or mutation of the common BUILDER global. The caller persists
 run/binding/VM ownership before a start request and refuses every foreign STOP.
-The checked-in binding is unbound. Source checks do not authorize runtime.
+The checked-in binding is source configuration for the compile workflow only. Source checks do not authorize runtime.
 """
 import argparse
 import importlib.util
