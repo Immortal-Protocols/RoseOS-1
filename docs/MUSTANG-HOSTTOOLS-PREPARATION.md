@@ -24,12 +24,19 @@ no alternative access path was used. Check annotations contain only the step exi
 receipt warning. The exact guest refusal and whether Make began are therefore
 **unknown**. A missing lock is a possible preflight failure, not an observation.
 
+The user subsequently supplied the failed step's screenshot. It confirms the
+exact error `Mustang builder lock is absent; host preparation required`, with
+exit 4; the report step emitted `_Refused`. At this run's captured source the
+lock check precedes attempt creation and Make, so this refusal did not start
+the dependency build. The earlier log-storage denial was not bypassed or
+retried again to obtain that evidence.
+
 A fresh Compute API read after cleanup confirmed VM ID `5585425566393384049`
 `TERMINATED`, last stop `2026-11-08T07:03:55.483-08:00`, with the unchanged
 14,400-second STOP safeguard. No host-tool distribution, vendor generation,
 otatools proof, new OTA, signing or publication is claimed. No second run was
-dispatched at that point. Obtain the failed step's actual error through authorized access
-before choosing a correction or retry.
+dispatched at that point. The actual refusal was later established through the
+user's screenshot, followed by the independent current-state observation below.
 
 The follow-up source retains a separate, write-once `hostdeps-failure.json`
 from the admitted job's runner temporary directory if execution fails before
@@ -104,6 +111,16 @@ actual result and STOP are verified, one fresh host-dependency attempt can
 recheck the guest/lock/output before Make. Vendor, otatools, pristine source,
 fresh common-app export, numbering recovery and signer admission remain later
 work; this root operation alone does not produce an OTA.
+
+The user does not know an existing administrator route. To check the runner's
+existing permission without changing it, the infrastructure observation also
+queries `sudo -n -l -- /usr/bin/python3 <reviewed-helper> --execute`. The `-l`
+mode only lists policy for that exact command; it never runs the initializer.
+The probe has a ten-second bound and minimal child environment and records only
+a fixed status and exit code. Raw policy/error output is discarded. A positive
+list result does not attest passwordless execution; a later actual operation
+would still require explicit guarded execution and its own noninteractive sudo
+admission. No denied privilege is retried through another command or identity.
 
 ## Verified starting point
 

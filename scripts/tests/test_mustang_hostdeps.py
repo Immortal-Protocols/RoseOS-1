@@ -146,7 +146,38 @@ class HostdepsTest(unittest.TestCase):
         stack.enter_context(patch.object(deps.pwd, 'getpwuid', return_value=SimpleNamespace(pw_name='mustang-runner')))
         stack.enter_context(patch.object(deps, 'supervise', side_effect=AssertionError('Make started')))
         stack.enter_context(patch.object(deps.subprocess, 'run', side_effect=AssertionError('process started')))
+        stack.enter_context(patch.object(deps, 'admin_policy', return_value={'state': 'fixture-not-probed'}))
         return env, lane, paths
+
+    def test_admin_policy_only_lists_the_exact_initializer_and_drops_inherited_secrets(self):
+        for code, state in ((0, 'policy-allows-command'), (1, 'policy-not-confirmed')):
+            with self.subTest(code=code), patch.object(deps.Path, 'is_file', return_value=True), \
+                    patch.object(deps.subprocess, 'run', return_value=SimpleNamespace(
+                        returncode=code, stdout=b'secret policy text', stderr=b'secret error')) as run, \
+                    patch.dict(os.environ, {'GH_TOKEN': 'secret', 'BASH_ENV': '/untrusted'}):
+                result = deps.admin_policy()
+            self.assertEqual(result['state'], state)
+            self.assertFalse(result['initializerExecuted'])
+            self.assertFalse(result['listedCommandExecuted'])
+            self.assertFalse(result['passwordlessExecutionAttested'])
+            self.assertNotIn('secret', json.dumps(result))
+            self.assertEqual(run.call_args.args[0], ['/usr/bin/sudo', '-n', '-l', '--', '/usr/bin/python3',
+                                                    str(ROOT/'scripts/mustang-prepare-lock.py'), '--execute'])
+            self.assertEqual(set(run.call_args.kwargs['env']), {'PATH', 'LANG', 'LC_ALL'})
+            self.assertEqual(run.call_args.kwargs['timeout'], 10)
+            for stream in ('stdin', 'stdout', 'stderr'):
+                self.assertEqual(run.call_args.kwargs[stream], subprocess.DEVNULL)
+
+    def test_admin_policy_unavailable_and_timeout_do_not_execute_the_initializer(self):
+        with patch.object(deps.Path, 'is_file', return_value=False), \
+                patch.object(deps.subprocess, 'run', side_effect=AssertionError('process started')):
+            self.assertEqual(deps.admin_policy()['state'], 'sudo-unavailable')
+        with patch.object(deps.Path, 'is_file', return_value=True), \
+                patch.object(deps.subprocess, 'run', side_effect=subprocess.TimeoutExpired('secret-command', 10)):
+            result = deps.admin_policy()
+        self.assertEqual(result['state'], 'probe-timeout')
+        self.assertFalse(result['initializerExecuted'])
+        self.assertNotIn('secret', json.dumps(result))
 
     def test_inspection_observes_missing_lock_without_creating_it_or_output(self):
         with tempfile.TemporaryDirectory() as tmp, contextlib.ExitStack() as stack:
