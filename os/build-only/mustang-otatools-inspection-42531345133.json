@@ -1,0 +1,3561 @@
+{
+  "entryCount": 500,
+  "evidence": "os/build-only/mustang-otatools-42531345133.json",
+  "expandedBytes": 927318429,
+  "independentReceiptSha256": "43ec5b760985bf99bbe7cf949906476a25a8da59cf21775e64125ab44ee8c661",
+  "inspectionReceiptSha256": "0ccd685cb76c7456763fc4e4d336350a4699046015d9058e531ffb201b8e3eb1",
+  "inspectorScriptSha256": "0c5efbb9a97221f1a2e38fbedaa0c4830b7b280e44fb3c52dae3abd66fbdf818",
+  "inspectorSource": "eb87e5e40a2f1f87a85d45068a88b8a1483117b6",
+  "inventory": [
+    {
+      "mode": 493,
+      "path": "bin/aapt2",
+      "sha256": "506f6adc10a52a7ff43bde9d824f74952e826fdcdb262c56bbb316e4b1881cf5",
+      "sizeBytes": 24355952,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "bin/add_img_to_target_files",
+      "sha256": "4e1584b8f312dbb55817855d0ee0d82670aaae8a245c56fcbbd0039119da26f9",
+      "sizeBytes": 25195759,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "bin/apex_compression_tool",
+      "sha256": "af86bdb0cc7a9f0760ead8262cc76e0cf1f698a8286f390ae0c080b09d695922",
+      "sizeBytes": 23169412,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "bin/apexd_host",
+      "sha256": "ad64abe2b8ec7a782526ad8662f15def8b7099d73223b4e19c752b302a46ab13",
+      "sizeBytes": 23171312,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "bin/apexer",
+      "sha256": "e1eb189f0da745ae97516eb79b1b005383f83904ba08037b7699572ae6a43ff7",
+      "sizeBytes": 23190114,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "bin/apksigner",
+      "sha256": "b47549e373b895ce6ca620d0c7887e674d9615ffa837a86ac601dcfd04adb0f0",
+      "sizeBytes": 2959,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "bin/append2simg",
+      "sha256": "645f6ec11975452a727d34b6534b48e474fffadc965b98419758cc099eb38ed3",
+      "sizeBytes": 314384,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "bin/avbtool",
+      "sha256": "e32e02591c36e4c2871578c3f57f377766b1366f84e6197b4cfb7f34c63fa6d5",
+      "sizeBytes": 22921531,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "bin/blk_alloc_to_base_fs",
+      "sha256": "8b2654b088c22e99fdad4fc3d92f4ac07763ac9a362b1cef200f96dada00d980",
+      "sizeBytes": 15328,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "bin/boot_signer",
+      "sha256": "fd1f035b6a3d068f459202c893ef385bd87275c0a0d3d5b9e752381fb7e2ff6d",
+      "sizeBytes": 1646,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "bin/brillo_update_payload",
+      "sha256": "38498c8ee6d862a9482726568860c940792dbdc3319e2f7e2da24a4d38319e86",
+      "sizeBytes": 34544,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "bin/brotli",
+      "sha256": "c5caa4ba9edbc2e3860ce3b7c7c060089718bf696b649fedcbabf5ead97b0fe0",
+      "sizeBytes": 1404288,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "bin/bsdiff",
+      "sha256": "83e43d1f9a5a6df0d36ca2860bb33d348a841045a09cf8224ef3f88d779a5619",
+      "sizeBytes": 1934792,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "bin/build_image",
+      "sha256": "2b7ac649f04aee1d3f3f3ebbfd0e004f1353f63f6a9d0b1d3cf9f034251a60dc",
+      "sizeBytes": 25070163,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "bin/build_super_image",
+      "sha256": "01fda18f46981f19ce6fc8b51295809ec98a0e1b25ebda7becd1c9ec2a7def34",
+      "sizeBytes": 24719132,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "bin/build_verity_metadata",
+      "sha256": "552b233cd11d08372454b0f2e5cd71935cb002ce59698d7eef60a2df9c551b52",
+      "sizeBytes": 22843342,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "bin/build_verity_tree",
+      "sha256": "62dd629ef564743a116244d6823ec7f49eac6afa269d397ab73f66e118320e78",
+      "sizeBytes": 462728,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "bin/care_map_generator",
+      "sha256": "b156894afaab17ec19966ba1d82b9be039b58f709a48ea149111ee013ccef305",
+      "sizeBytes": 23178536,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "bin/check_ota_package_signature",
+      "sha256": "e1dee82859cbdfd5fb55f23b0d9fe3ae91c2685b37c3073f45380a91d2451714",
+      "sizeBytes": 24718914,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "bin/check_target_files_signatures",
+      "sha256": "75fb4ac9488ca49e2fc819901eedb8f3d9d7867637d99bd05897aa956c2f5cab",
+      "sizeBytes": 24726638,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "bin/check_target_files_vintf",
+      "sha256": "cf13fa9f11b56e0ba1ac5803f4eac9f352cfdf873d18d18081cd21806ebe0689",
+      "sizeBytes": 25060978,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "bin/checkvintf",
+      "sha256": "3c4e73c5b6d76f640314c99c948b22433c4d966c286c62ab942a3936f4ca9ee6",
+      "sizeBytes": 6056520,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "bin/create_brick_ota",
+      "sha256": "e87f692f8d57801a432eb1f2e7acb8d6a8c2a2fe47fdd94dcdeaeeab744d3a96",
+      "sizeBytes": 24745393,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "bin/deapexer",
+      "sha256": "3f316f2969918dc24391e8f40512d3549505e903d04a617cc1d028458837b927",
+      "sizeBytes": 23177728,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "bin/debugfs_static",
+      "sha256": "979ab11b3ad8bd6d36b97701d82e6b55314266db14d8e5bf764e39c383948a3a",
+      "sizeBytes": 1431176,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "bin/delta_generator",
+      "sha256": "092df5683fecc33d9cc5cc176a03fe5f63914d2f6bb82a04b9314f60ae41312d",
+      "sizeBytes": 14373848,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "bin/e2fsck",
+      "sha256": "94f3dcf05bc2e77ebef6597101e5b9d42f8341a1633159110e3839a836f9b4bf",
+      "sizeBytes": 701608,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "bin/e2fsdroid",
+      "sha256": "b36a0d00ea06b6aac81da00b8921bc10427a882f0309c5983e6af643487f62f3",
+      "sizeBytes": 3012504,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "bin/fastboot",
+      "sha256": "d3337064728accc4f3da73fb0319568ed14f31f9cff193c0e99c28e3f44ac149",
+      "sizeBytes": 7724800,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "bin/fc_sort",
+      "sha256": "b8ae69618c89f2f4ba97414eede6b4e91bbd993f375447fdda31d2a3930e50e1",
+      "sizeBytes": 22843615,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "bin/fec",
+      "sha256": "625441e7af53d78d2b01b775b7ff36227e77249992807ec5a6fc5fc422d95060",
+      "sizeBytes": 4111584,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "bin/fs_config",
+      "sha256": "6fc1c63491913ef0ffe10a27eab86338bb1cd086acab3abf4423ffb107f98573",
+      "sizeBytes": 14008,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "bin/fsck.erofs",
+      "sha256": "37341a0310dce3bb5e5a07abd81acf1f5f76381dd357d5a3f2dac4f67a0c0901",
+      "sizeBytes": 1225920,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "bin/fsck.f2fs",
+      "sha256": "63bedf92bbfbf3b8249cabc5763119bfec83db1783e75e8956114b7333d5b3ce",
+      "sizeBytes": 687552,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "bin/generate_verity_key",
+      "sha256": "0de839316a7e18ac5ea36e4a9f696900fb0eaf0d1564c2b48ce0c440ff62071b",
+      "sizeBytes": 18464,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "bin/host_init_verifier",
+      "sha256": "a6dfac538f375126e4dac426f480da456b5dcbef39d778b708d3eaea9694f5e5",
+      "sizeBytes": 3374416,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "bin/img2simg",
+      "sha256": "dba3335ae828e2a6b2fb590c66450bd17f331e1b1baa1f07042c37f16a676dca",
+      "sizeBytes": 314192,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "bin/img_from_target_files",
+      "sha256": "b9cd10e1f9e7380dc0159892242df10b478ac347c62f1c701b4044dfeaa54e4d",
+      "sizeBytes": 24724732,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "bin/imgdiff",
+      "sha256": "734dae4188490aa33fa4a42f0af9c118c317933df4b40d589f2109df407ef9dc",
+      "sizeBytes": 2706968,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "bin/initrd_bootconfig",
+      "sha256": "ffbc04467a200b022074b1da7b828fc286383f5a454ca75960226b181c4acf8c",
+      "sizeBytes": 2229408,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "bin/lpmake",
+      "sha256": "9ca07f716d2a603d6700cca980a73270e02dc5734c8cb25d2aa9808bb753f63f",
+      "sizeBytes": 181328,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "bin/lpunpack",
+      "sha256": "51f0cb01d5751a021bd8e2f3b9d3a68dbd9c626e263fb8567da37b0db9ebb71b",
+      "sizeBytes": 183384,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "bin/lz4",
+      "sha256": "a887672f43a468351117635108064c15695664abc0fb82fa169b9a6bb8aac637",
+      "sizeBytes": 574856,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "bin/make_f2fs",
+      "sha256": "d7a75b071f810917ffef33094bd0062d5cf6aab4018604e5bc234b2064bfdc9c",
+      "sizeBytes": 537112,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "bin/make_f2fs_casefold",
+      "sha256": "95084b709c73dcb7b682a509d4756dfe2309360d9d52115b260720af8faff0ea",
+      "sizeBytes": 537144,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "bin/merge_ota",
+      "sha256": "003f93fa0f679c46c4aedebf19c79cdfe8c12609759a84ee8be1061909025b97",
+      "sizeBytes": 25118452,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "bin/merge_target_files",
+      "sha256": "785558bc1084e6d7e6f5dccf2468d1646c87c7bb324f674015cc1323e6fffc2c",
+      "sizeBytes": 25330060,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "bin/merge_zips",
+      "sha256": "6832767f85fc81e433a4b37b8a51900497dd315e7efd17c58d5d78eba4603fc5",
+      "sizeBytes": 3075596,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "bin/mk_combined_img",
+      "sha256": "2f4a1b5032883d90501c9b914cfe0f401b7bc747a1f2cd394a90bc4201037b0e",
+      "sizeBytes": 22845141,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "bin/mkbootfs",
+      "sha256": "a9450f347830db02d2404480ba5408ba2cd05f9a62d84d53180764dd56a08ce6",
+      "sizeBytes": 1374688,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "bin/mkbootimg",
+      "sha256": "4e51a4dd7d4a1f5b9b03380ef1247a3fa4f15528afbde8d5c4899b4d1f75dfbd",
+      "sizeBytes": 22855693,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "bin/mke2fs",
+      "sha256": "233180cbd1f1a3f724e86c6a4775bad3eda1be50d7ef57b0700918f0e4ab34b1",
+      "sizeBytes": 1929416,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "bin/mkf2fsuserimg",
+      "sha256": "0bc1e0fa412de274e015466328cf1863e0b3a24eeed963f2d97f62ef70d3e5a4",
+      "sizeBytes": 4175,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "bin/mkfs.erofs",
+      "sha256": "6858a3b4d1ae1cc0e7a573b167418ce7f8cb2e69e1ea79daa2bd01ae2843b258",
+      "sizeBytes": 2812232,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "bin/mksquashfs",
+      "sha256": "836ab3f7e7c7b1628723f9c85df0ef142515513397e67efb9ece20ab76fb3395",
+      "sizeBytes": 2366744,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "bin/mkuserimg_mke2fs",
+      "sha256": "4665c7d40cd2a24ca479f3876a0a70a21228d5c0ef45812477cf3d00d01fabf2",
+      "sizeBytes": 22846308,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "bin/ota_extractor",
+      "sha256": "84913234993525675750b42e0c1acaa719e679e4b01059f91523bd1d7078f0ad",
+      "sizeBytes": 6790680,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "bin/ota_from_target_files",
+      "sha256": "6e0d9f0d68d9a3c11ffcb5d78e8f0fb71c3edb544f89fbf7a4dbc6a127d42c20",
+      "sizeBytes": 25151213,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "bin/repack_bootimg",
+      "sha256": "3f7391d7677f759316b8f2944f5a3a7b1c81e8ca99c419933189a7524d63a97b",
+      "sizeBytes": 22848291,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "bin/resize2fs",
+      "sha256": "26e27dc1a7d327b1fa79946e4d8649e117504db1735f0a452ee8cf196ba1b9db",
+      "sizeBytes": 840008,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "bin/secilc",
+      "sha256": "bb8629137237cee39a1a1cabc245913a9890d5a9241dff620b4907dfb2388c1f",
+      "sizeBytes": 1367456,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "bin/sefcontext_compile",
+      "sha256": "140fb3e560e243039d99fca7b5a6e13b37c1865fe479d891641ca60671ce6a03",
+      "sizeBytes": 1354624,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "bin/sgdisk",
+      "sha256": "9ce4d9d202ae8120c359a340a4289f18b8f724b2bfc827b5e858467a060ed799",
+      "sizeBytes": 751008,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "bin/shflags",
+      "sha256": "ce5f13d6e6c83a5ba0871ba56d52980a87c2a4d7f9d93831feaa12bc10ee2e0f",
+      "sizeBytes": 38007,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "bin/sign_apex",
+      "sha256": "3adaa3debc64c8f3bf47d5ee3cd063b8b71261d8ccc6edc1aca13baaf41a3312",
+      "sizeBytes": 25056671,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "bin/sign_target_files_apks",
+      "sha256": "cccf60869cb418eedc4c851a5516c9c45fd80104f23a1bd69562443e99a97920",
+      "sizeBytes": 25310980,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "bin/sign_virt_apex",
+      "sha256": "5f7c41d58203b7faed9d41c94cee8075b197d442f13b298d3f3f10ce2d9461b6",
+      "sizeBytes": 22860507,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "bin/signapk",
+      "sha256": "fd1f035b6a3d068f459202c893ef385bd87275c0a0d3d5b9e752381fb7e2ff6d",
+      "sizeBytes": 1646,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "bin/simg2img",
+      "sha256": "c18174a93fae172df655d4f73072580ca1800498ff74dae6a8dca6c7d797df91",
+      "sizeBytes": 312952,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "bin/sload_f2fs",
+      "sha256": "ba2231091e53145612f9c05e46d0fec8aa2375bc2818875177458ed9c88a2c90",
+      "sizeBytes": 2038088,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "bin/soong_zip",
+      "sha256": "494a787df8e260a8dd3ec6afb77345629a72c2bb8974328dc12ea2208e74776f",
+      "sizeBytes": 3696641,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "bin/toybox",
+      "sha256": "400576be36c890a408cf7bda2a1e4c19e8bb326c4a9edeb3ee3175cf2846acd2",
+      "sizeBytes": 3554240,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "bin/treble_labeling_tests",
+      "sha256": "1c4d8a7f13038c5009b729c609e4e0ef7be8d5dc0a5005fc6c92f57a8d1fc69c",
+      "sizeBytes": 23711584,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "bin/trusty_vm_signing_tool",
+      "sha256": "76005dc97a67e4c477150b2d179f8afe8fa7af5231885c3669a2e391351d5326",
+      "sizeBytes": 2344152,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "bin/tune2fs",
+      "sha256": "c66953f9801772c2ac2a9c305fcc2228c19942cc89d6387f60376bd8f0db14bd",
+      "sizeBytes": 132680,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "bin/unpack_bootimg",
+      "sha256": "cd593feb19dcf2cce2c6a559a09553da957f447774fea0f5ed1cc3fecf98f7a0",
+      "sizeBytes": 22851857,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "bin/update_device",
+      "sha256": "38493b344c8100a9ec57ab3c9ff9acf63962ad12e329e16c164b898e1ce0e9e1",
+      "sizeBytes": 23217849,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "bin/update_host_simulator",
+      "sha256": "5dec8a9a8db4fa8903b7f10fe624f98f396928fa01fb4ebcd0424667cdf6177f",
+      "sizeBytes": 6923488,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "bin/validate_target_files",
+      "sha256": "7af6ba1866e876c2a8f6a70605a5a6a4cc1bb641f690df073e5a516c7b8e7bb3",
+      "sizeBytes": 24725981,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "bin/verity_signer",
+      "sha256": "fd1f035b6a3d068f459202c893ef385bd87275c0a0d3d5b9e752381fb7e2ff6d",
+      "sizeBytes": 1646,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "bin/verity_verifier",
+      "sha256": "0c266af17f00e0043155edc53afbd351501cdec53478b44977b36f5173a4c2f9",
+      "sizeBytes": 4059624,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "bin/zip2zip",
+      "sha256": "75ade34dbdd8133365c29332f65c5c6778284b05d53de0ac638fef73048183fe",
+      "sizeBytes": 2972967,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "bin/zipalign",
+      "sha256": "edf7f450fc87d5517ef3e6621d6b5b58c41a5d47aa2418ec7aa7e39d78b8ddde",
+      "sizeBytes": 746128,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "bin/zucchini",
+      "sha256": "ad58651f1f24e2cba8e56d4feeea268d658fd776b420365084dcde95973a5eab",
+      "sizeBytes": 5930720,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "build/make/target/product/security/bluetooth.pk8",
+      "sha256": "a471fd99794def737b9f824032a78a80e59e0bd1a0333f1696fed1a117854a6f",
+      "sizeBytes": 2374,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "build/make/target/product/security/bluetooth.x509.pem",
+      "sha256": "167cd77fa7d2b86755bdf645c3dc25c5a09e727a75db65f0ad76ca7cb0cb534a",
+      "sizeBytes": 2220,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "build/make/target/product/security/cts_uicc_2021.pk8",
+      "sha256": "e32e232318d819932340f87efc5390eb2f1453b70093bebae9ec067be50ea39e",
+      "sizeBytes": 1217,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "build/make/target/product/security/cts_uicc_2021.x509.pem",
+      "sha256": "eb95cc5eff8d8bb7be8b0a6e0d67c4d87c7e4004894f2b9bb71107e31ed233a2",
+      "sizeBytes": 1464,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "build/make/target/product/security/gmscompat_lib.pk8",
+      "sha256": "2d06e113646b7499a94d76a40ffab12cf9382f4e0d10ee7acb0036e9c7c84924",
+      "sizeBytes": 2373,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "build/make/target/product/security/gmscompat_lib.x509.pem",
+      "sha256": "bc834ca01b6c115dc0d0d70a131bef9fce28dd9f25fc745fca6479951d646aea",
+      "sizeBytes": 2159,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "build/make/target/product/security/media.pk8",
+      "sha256": "ab578e1fcc9297cc33202dd1806bd33575c405a5daba34d096da7d7fe30752fc",
+      "sizeBytes": 1216,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "build/make/target/product/security/media.x509.pem",
+      "sha256": "84c279d163d2ff27b63d1b63bb648bc413216f4a97bf716023d1fe480020dddc",
+      "sizeBytes": 1675,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "build/make/target/product/security/networkstack.pk8",
+      "sha256": "b1b50ff711c9c137593d16b970540d27187fe569ff110da32062c5324ee7b007",
+      "sizeBytes": 2375,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "build/make/target/product/security/networkstack.x509.pem",
+      "sha256": "d9c9eebb1732bbabb500573b3df26c0af63ee1ecea80c39a1f62b96aede067aa",
+      "sizeBytes": 2094,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "build/make/target/product/security/nfc.pk8",
+      "sha256": "23a018823d64aabecf2c91da0cef7f7bedf06df67122f88e202bb9f4b3d62970",
+      "sizeBytes": 2374,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "build/make/target/product/security/nfc.x509.pem",
+      "sha256": "8b027801f493f9ca96f53f6638df24461959d12b996b786f5ffffce98513ac54",
+      "sizeBytes": 2110,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "build/make/target/product/security/platform.pk8",
+      "sha256": "1ad8ef556870edb70f69a9d3c112544c07de5162ba440d84d33f8bb0c5962875",
+      "sizeBytes": 1216,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "build/make/target/product/security/platform.x509.pem",
+      "sha256": "9837de028f460c35cc8d3fa45f14eecce30f6fbfe4b93d399aef1acb80c20d14",
+      "sizeBytes": 1675,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "build/make/target/product/security/sdk_sandbox.pk8",
+      "sha256": "dbc66a830a79a95438016ca5dce12ae624f90d82ab32f5b8b84357b6cc40ba04",
+      "sizeBytes": 1219,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "build/make/target/product/security/sdk_sandbox.x509.pem",
+      "sha256": "a4ccc13b9d8e3084114a4e7a205dde7685cde983432edb7881b869b9f026da38",
+      "sizeBytes": 1464,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "build/make/target/product/security/shared.pk8",
+      "sha256": "561dae618ceeb3b97fe92d71c7af8c30b05bfcda661dbb29dcb3883a772c4685",
+      "sizeBytes": 1218,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "build/make/target/product/security/shared.x509.pem",
+      "sha256": "d72c27d4375f37c2bc0631a873eb115e030781753846aa2073e0c20e49c45832",
+      "sizeBytes": 1675,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "build/make/target/product/security/testkey.pk8",
+      "sha256": "495675d32e89a149d5abe191f4e9c0e218b9068714e9b53a7c91e164a0741a23",
+      "sizeBytes": 1217,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "build/make/target/product/security/testkey.x509.pem",
+      "sha256": "a4384ba815b9499a5ce349b4e33c1755278873fe2eac150a068823f526e6dbde",
+      "sizeBytes": 1675,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "device/common/clear-factory-images-variables.sh",
+      "sha256": "4311f6435e74c8b1f4941bfc6580ffe0bf8dc021a177dca66ebeb8e4ddf3c353",
+      "sizeBytes": 1033,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "device/common/generate-factory-images-common.sh",
+      "sha256": "33e8c16f9a2669d6d385d2eb7939a0d02f9160965db9b4d8c7a8914cd89dca49",
+      "sizeBytes": 15252,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "device/generic/trusty/apex/keys/com.google.trusty-qemu.apex.avbpubkey",
+      "sha256": "f029d48339ef94654d991ec343376aacaacba87e0a2dc5215bc4a2e9c01fbe92",
+      "sizeBytes": 1032,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "device/generic/trusty/apex/keys/com.google.trusty-qemu.apex.pem",
+      "sha256": "929a8644601dbd88db2c50bd8ff0ab0682355292f4d52b5a23c8efd78afa8c2f",
+      "sizeBytes": 3272,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "device/generic/trusty/apex/keys/com.google.trusty-qemu.apex.pk8",
+      "sha256": "0c6b91946b24fd4bf38e4129d908b8a9efcbfbd215db79b7c274e776215f2898",
+      "sizeBytes": 1217,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "device/generic/trusty/apex/keys/com.google.trusty-qemu.apex.x509.pem",
+      "sha256": "2500338b95ab4b8352a7246d055fd93d7458fc6896873e5085b233f0da70da28",
+      "sizeBytes": 1164,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "device/google/cuttlefish/apex/keys/com.google.cf.apex.avbpubkey",
+      "sha256": "f5dad6b020e07dbfa97eaddca604767454dcfd936ac5eeb4d6f3294a1976c736",
+      "sizeBytes": 1032,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "device/google/cuttlefish/apex/keys/com.google.cf.apex.pem",
+      "sha256": "075f0d992cffdd14422717dd18bdab72bf66e66cd61ac88e45d929fadac17501",
+      "sizeBytes": 3243,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "device/google/cuttlefish/apex/keys/com.google.cf.apex.pk8",
+      "sha256": "bf1e84a42283de0e311489fd1e1ae85a0cbc2cb701fdfbd290dfe8830abc7f16",
+      "sizeBytes": 2375,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "device/google/cuttlefish/apex/keys/com.google.cf.apex.x509.pem",
+      "sha256": "e4a201c9226426684ff722592cb075484b3ed5d772f07cfaf389119e258b7476",
+      "sizeBytes": 2065,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "device/google/cuttlefish/guest/hals/npu/apex/com.android.hardware.npu.test.avbpubkey",
+      "sha256": "7b1eb3d026952c322093af2d614b392b217b49e3f620481d5d104c3aeb86119a",
+      "sizeBytes": 1032,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "device/google/cuttlefish/guest/hals/npu/apex/com.android.hardware.npu.test.pem",
+      "sha256": "7a9b3aa0b3e8ef504c4fbb4fa2afcd39522dc2428fb3863ee478827060346ba0",
+      "sizeBytes": 3272,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "device/google/cuttlefish/guest/hals/vehicle/apex/com.android.hardware.automotive.vehicle.test.avbpubkey",
+      "sha256": "650453f22363d5590c4b324af38fad4052af7462b8ede7e82e325de49b6300fb",
+      "sizeBytes": 1032,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "device/google/cuttlefish/guest/hals/vehicle/apex/com.android.hardware.automotive.vehicle.test.pem",
+      "sha256": "5ec0b465a60fe69bd9189412e7739b09b162d08d57c047590a5a7d9ddc31a618",
+      "sizeBytes": 3268,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "device/google/cuttlefish/host/frontend/webrtc_operator/certs/trusted.pem",
+      "sha256": "27d663627cbfb969eb3546ef4a0b17c17ca6ad5f878234a483542343496cfb02",
+      "sizeBytes": 4029,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "device/google/cuttlefish_prebuilts/bootloader/testkey_rsa2048.avbpubkey",
+      "sha256": "22de3994532196f61c039e90260d78a93a4c57362c7e789be928036e80b77c8c",
+      "sizeBytes": 520,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "device/google/cuttlefish_prebuilts/bootloader/testkey_rsa4096.avbpubkey",
+      "sha256": "7728e30f50bfa5cea165f473175a08803f6a8346642b5aa10913e9d9e6defef6",
+      "sizeBytes": 1032,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "external/avb/test/data/testkey_cert_pik.pem",
+      "sha256": "00cf0151a0b1bbfba40fcdcdcf9ae66eebb89cdc52c78beb01f28f93b128b472",
+      "sizeBytes": 3272,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "external/avb/test/data/testkey_cert_prk.pem",
+      "sha256": "0cfeea2307f6398d6be32482f81ae821e667e346af6f21ca76a2d1746d473565",
+      "sizeBytes": 3272,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "external/avb/test/data/testkey_cert_psk.pem",
+      "sha256": "ec01fb737ced5200ce22f0fee9558a82c265bd8bcebc8694f9e532a7254aff8c",
+      "sizeBytes": 3272,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "external/avb/test/data/testkey_cert_puk.pem",
+      "sha256": "8e3683687bd5e2b142de944787820974686a8d8a68335bf5c9d7ace1d2f5001c",
+      "sizeBytes": 3272,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "external/avb/test/data/testkey_mldsa65.pem",
+      "sha256": "61d61ecc86c6e38a30bc40c2594ddc08f6353898218abc55a71fecb93c7f2cb8",
+      "sizeBytes": 5604,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "external/avb/test/data/testkey_mldsa87.pem",
+      "sha256": "d5aeac80155688dce57597e78449a667946b694ac1e6ffa4c6cb153e432e5ab2",
+      "sizeBytes": 6774,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "external/avb/test/data/testkey_rsa2048.pem",
+      "sha256": "f1d5765a2bdfb92fb08aee021107c7ac1a7a3f590dafd853771c85375ef0fbd7",
+      "sizeBytes": 1675,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "external/avb/test/data/testkey_rsa2048_2.pem",
+      "sha256": "c7011836c52fdeb024f4b5865620133bb3e15df4452bf5bfe709150e289aa21c",
+      "sizeBytes": 1704,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "external/avb/test/data/testkey_rsa4096.pem",
+      "sha256": "6a224754880a57ab9cbd308267cd157d94cf05a1c8cb851aec4090e045d24121",
+      "sizeBytes": 3243,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "external/avb/test/data/testkey_rsa4096_pub.pem",
+      "sha256": "6f897d4a56162fa622458514d206894b0a577961a99d87e45398cbd19b290d67",
+      "sizeBytes": 800,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "external/avb/test/data/testkey_rsa8192.pem",
+      "sha256": "a7a9b2eaa8a39867e6c0592b522f4e79210fad5bdfdb618eca1637b95d9983ec",
+      "sizeBytes": 6367,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "framework/apksigner.jar",
+      "sha256": "203af510ab8eafc5b0e102a06f9e2e9550ce26888d2f30f416f9f237d5bfe0a9",
+      "sizeBytes": 1196815,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "framework/boot_signer.jar",
+      "sha256": "d6a6e32de15c0c8aa6d31251ec0b89cf2869025282db37299834a6fef50b4fb1",
+      "sizeBytes": 2075243,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "framework/signapk.jar",
+      "sha256": "3146ff9adec8f8919e188388c72535cb921ddd70f1cf5c6282c01743238b2a93",
+      "sizeBytes": 3407031,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "framework/verity_signer.jar",
+      "sha256": "bb38cec78ebbb61338d4b7e823568808a4a365fb6e38ad1dbcee15602bf0422d",
+      "sizeBytes": 2070392,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "lib64/libbase.so",
+      "sha256": "e7eaaee446266580b5b403e377a81f53f738f1a88c4854129c370a292d4fa0aa",
+      "sizeBytes": 851296,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "lib64/libbrillo-stream.so",
+      "sha256": "6abf423dd66948438c073072d25af9bea04ef6d24464394146e899269118c5a2",
+      "sizeBytes": 484432,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "lib64/libbrillo.so",
+      "sha256": "af6323f5455ad34959da1440faa1110e24807245848d1a71a3fda5dcd9fab6a4",
+      "sizeBytes": 770448,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "lib64/libc++.so",
+      "sha256": "acca15da090d439bbd4f6d7bbfb43bd53652639ad20487ea87304c8d00edb306",
+      "sizeBytes": 1759704,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "lib64/libchrome.so",
+      "sha256": "6299bb99bd3b30a04fde8a432984b6ae34a702c65a9a241c6fdaa7c59303868c",
+      "sizeBytes": 6651048,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "lib64/libconscrypt_openjdk_jni.so",
+      "sha256": "27f4e89133676d21f4ff951d1bae94a2432615c685db76695cdae8e95becc03f",
+      "sizeBytes": 7997904,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "lib64/libcrypto-host.so",
+      "sha256": "cba5720788e0a464648b73dd62079ddcf4107021f5ed65d0e3baade3034cf6a3",
+      "sizeBytes": 5771280,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "lib64/libcrypto_utils.so",
+      "sha256": "99089f13a0987708f9adf84b21ac7e614e3f8b4851b08ca7a03b58f434db6314",
+      "sizeBytes": 21080,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "lib64/libcutils.so",
+      "sha256": "4c77ab3d7accaee087a38440f43420cab35891138ea217e1672092df5ae0978e",
+      "sizeBytes": 210424,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "lib64/libevent-host.so",
+      "sha256": "4d244d616b02228960debf63daf712789f5daf70e71b209cffda282aee7fbebe",
+      "sizeBytes": 710400,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "lib64/libext2_blkid-host.so",
+      "sha256": "ffbbaee5ac9e6df1e2f900879dcff7b2392f08874a555df8bf64dc8784465107",
+      "sizeBytes": 123224,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "lib64/libext2_com_err-host.so",
+      "sha256": "78f2e2e7ce29c75dd49abcb6ebccb36ca6a9fb1835cf7dedfab3bde327b98602",
+      "sizeBytes": 24640,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "lib64/libext2_e2p-host.so",
+      "sha256": "77b7a46257e5f5b8cddbc1cf5dc91097e2ec04a150894cf6fd3b5999ff2c1fab",
+      "sizeBytes": 74888,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "lib64/libext2_quota-host.so",
+      "sha256": "bbba6fcff1035ca6087e073f40de8e35ded5d0e6d8470fe7ba0dff3a7e98c848",
+      "sizeBytes": 148776,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "lib64/libext2_uuid-host.so",
+      "sha256": "8d1a2c1b000a2d723ec107d581280c1ca6623ecc5619f96a4e165282fa21f2a5",
+      "sizeBytes": 31720,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "lib64/libext2fs-host.so",
+      "sha256": "f3ddfa88c60bb3f6e37da85276e54decdd8d91e0d6e6821c062f42fcd1fe1be8",
+      "sizeBytes": 909032,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "lib64/libext4_utils.so",
+      "sha256": "4cb7ea92b0f2c209e2a7f7dd0d39b5400ef264f1fbc0be506ef1a4ca8163cb24",
+      "sizeBytes": 35472,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "lib64/libfec.so",
+      "sha256": "31b5a5991b6ea84a3ebab3f6d9062b47efc16ca921d17efdbee999db148684d0",
+      "sizeBytes": 318304,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "lib64/libfec_rs.so",
+      "sha256": "e4c6f952222ed1782a73dcae12dead94501913e817aa47b593b1a7ad821dbb35",
+      "sizeBytes": 32776,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "lib64/libhidl-gen-utils.so",
+      "sha256": "7e9bfa3da12faba8ba48f3dd6eccd52ec4d9d65448e330b22750da243ca65606",
+      "sizeBytes": 221472,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "lib64/libhidlmetadata.so",
+      "sha256": "bfff68b73e74570cb6899df9ecb89f113cb070a252b1dc9cbd4123f056f373c0",
+      "sizeBytes": 204312,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "lib64/libicui18n-host.so",
+      "sha256": "af0a5e4ef122e56c32b9b7f3262e4dcdb757b7f8e443196deb4f89f18b51d341",
+      "sizeBytes": 9010760,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "lib64/libicuuc-host.so",
+      "sha256": "524c628aae20a65bb5a43cbc9a45f0bc63a9e2c77d409287428031506251758d",
+      "sizeBytes": 6054064,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "lib64/liblog.so",
+      "sha256": "936872310a280e215e254c0b327731ebfd0d4000c8b98e92258ab4278e74a912",
+      "sizeBytes": 190080,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "lib64/liblp.so",
+      "sha256": "eb4d7b4b335d6a60a1e1e16a06d2878690feb70b48ff621e1a6503f3b1acff97",
+      "sizeBytes": 863728,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "lib64/liblz4.so",
+      "sha256": "c7758e39cd70f75dd76360b8907a394f1df81683b40dd65238f2fed88e38c47a",
+      "sizeBytes": 403616,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "lib64/libpcre2.so",
+      "sha256": "14a6c40343c83bb619ac807360378285e86e300efdb3eb8ff152e5cde481e0d8",
+      "sizeBytes": 680072,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "lib64/libprocessgroup.so",
+      "sha256": "8168f6a564a9a476addb23e03526ba9b49d64c3c27805973e3028e74257a5f9a",
+      "sizeBytes": 1423680,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "lib64/libprotobuf-cpp-lite-6.33.5.so",
+      "sha256": "312b200f004cbf43685624362674c8e37e1cbb3b94b3c0dd253790b8fbf8169b",
+      "sizeBytes": 6136688,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "lib64/libselinux.so",
+      "sha256": "1b6884cd55b45b14343e10a09c5d94294e409013487bad722defc05ff74b6e3b",
+      "sizeBytes": 303432,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "lib64/libsparse-host.so",
+      "sha256": "af13849b06fe6634350c258eab9c2a026d330803b79b77e1aca926b6ceafc333",
+      "sizeBytes": 105128,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "lib64/libsqlite.so",
+      "sha256": "5035684dbaf8723627c6e26a5d9975b9a6d4057e9af1f5168d1f766ede87cc97",
+      "sizeBytes": 3436376,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "lib64/libsquashfs_utils.so",
+      "sha256": "9c9c1fb524c92666b766d616e2c36341250975e8caae327ab9881c1d39844932",
+      "sizeBytes": 12144,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "lib64/libssl-host.so",
+      "sha256": "ba003f12209189bdb287616d7bef1e3f61fffdb8429fa163fe7aad535daa3612",
+      "sizeBytes": 2276208,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "lib64/libz-host.so",
+      "sha256": "1240c7319a148dcb58a5c5dac9550bc9dd10c3fe71772d5c0853059ed7e816f2",
+      "sizeBytes": 210872,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "lib64/libziparchive.so",
+      "sha256": "d6d25b49f8826a09eeb41824eff53b1e65a7370aad8574fe1c26b4eb63667d02",
+      "sizeBytes": 324200,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/AdServices/adservices/apk/com.android.adservices.api.pk8",
+      "sha256": "5e0ecbbeb57bf850daf44c8dffff2c8ccbb6ab9c738d7d2a5d6ca7563daac70e",
+      "sizeBytes": 1219,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/AdServices/adservices/apk/com.android.adservices.api.x509.pem",
+      "sha256": "6c1247e6f8cc71dd2d055d0e44a88b7be908d980a4a035016bc283d6e90d4bb3",
+      "sizeBytes": 1464,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/AdServices/apex/com.android.adservices.avbpubkey",
+      "sha256": "1b4586f44859ffa508419b9cbb5483e15e78adbbdfc5d0ec5bf1517e43ea79fc",
+      "sizeBytes": 1032,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/AdServices/apex/com.android.adservices.pem",
+      "sha256": "86e24f2fe6999f3312003ac3661bc2008f5f27e84dd3e8913239eb9edc61c061",
+      "sizeBytes": 3243,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/AdServices/apex/com.android.adservices.pk8",
+      "sha256": "5c49aa067d54a0bf0382c2bd0b4b0ab89f4a72b5949e3af726409c9ce32acd88",
+      "sizeBytes": 2376,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/AdServices/apex/com.android.adservices.x509.pem",
+      "sha256": "d03bfaf0187914380712c0a2330c68fd33c01c7161c7242a0a176d2e13178436",
+      "sizeBytes": 2078,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/AdServices/sdksandbox/tests/keys/sdksandbox-test.pk8",
+      "sha256": "0c42e980ecc14dd25a8a4fa956a7b8e241bd93fc71257f41f5b9dd86ae4945a6",
+      "sizeBytes": 1217,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/AdServices/sdksandbox/tests/keys/sdksandbox-test.x509.pem",
+      "sha256": "2da1fa642c492f77d2a94f91f522a496628c1248409b048226a18fce8f16f7a7",
+      "sizeBytes": 1505,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/AppSearch/apk/com.android.appsearch.apk.pk8",
+      "sha256": "0b6f0ba073593f13a12d2bbcd6c7ddd3070e1279f56c78e394ad2ec573b3de1c",
+      "sizeBytes": 1218,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/AppSearch/apk/com.android.appsearch.apk.x509.pem",
+      "sha256": "2d9e46229c82cd26d1ae800f7aeff61aefeecb399481c5d0dd5512a389437b2a",
+      "sizeBytes": 1428,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/AppSearch/com.android.appsearch.avbpubkey",
+      "sha256": "9265226cb215fc5922aef760662e607f0107a8abf7a20c3ae1f87dd57498cd99",
+      "sizeBytes": 1032,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/AppSearch/com.android.appsearch.pem",
+      "sha256": "9e3a7a0a8f2842fbfd3eb35daf389343e0549f8a4a842c4caa1a04002447e272",
+      "sizeBytes": 3243,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/AppSearch/com.android.appsearch.pk8",
+      "sha256": "247ae58c12d5d4be314c0512f754c9dd06792dde1c247061d0d136346ed85fe6",
+      "sizeBytes": 2373,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/AppSearch/com.android.appsearch.x509.pem",
+      "sha256": "538c0b3390f00184529fe14b756a112b7e68cda1f9d0e73c39d4a5b7c36be938",
+      "sizeBytes": 2163,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/Bluetooth/android/app/certs/com.android.bluetooth.pk8",
+      "sha256": "a471fd99794def737b9f824032a78a80e59e0bd1a0333f1696fed1a117854a6f",
+      "sizeBytes": 2374,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/Bluetooth/android/app/certs/com.android.bluetooth.x509.pem",
+      "sha256": "167cd77fa7d2b86755bdf645c3dc25c5a09e727a75db65f0ad76ca7cb0cb534a",
+      "sizeBytes": 2220,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/Bluetooth/android/app/certs/key.pem",
+      "sha256": "cbe8ac5469ef555e856add737c7eef3248eeca62f342263bfa59da879abb2573",
+      "sizeBytes": 3272,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/Bluetooth/apex/key/com.android.bt.avbpubkey",
+      "sha256": "47a4c1119d2a825ee9d4dd46c8c39577e8d7673a7cc507643bcad4d9638bde81",
+      "sizeBytes": 1032,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/Bluetooth/apex/key/com.android.bt.pem",
+      "sha256": "e493baa601a9dd357ef9885dff5fa3f2dafdf4c3b0eaf591b9ac756277fef325",
+      "sizeBytes": 3268,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/Bluetooth/apex/key/com.android.bt.pk8",
+      "sha256": "6a3b517e1f4f94fb6521fad42afac1a49f5e0e1bf07d8008238b6648a4221398",
+      "sizeBytes": 2374,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/Bluetooth/apex/key/com.android.bt.x509.pem",
+      "sha256": "348bc144b89175a7ea4e22029e4d5ab9d365a199ef9519f0c640501ab5483290",
+      "sizeBytes": 2110,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/ConfigInfrastructure/apex/com.android.configinfrastructure.avbpubkey",
+      "sha256": "44482ef4656dc3696d0b4ca4568e600f673702767090898ac3ea45dff0515eb3",
+      "sizeBytes": 1032,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/ConfigInfrastructure/apex/com.android.configinfrastructure.pem",
+      "sha256": "08d0a12e3ec8de570eb6e39adab56455ef1764565abce27aa282b94acb9ca84e",
+      "sizeBytes": 3272,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/ConfigInfrastructure/apex/com.android.configinfrastructure.pk8",
+      "sha256": "01d6b4eaa368948833f8324cc9412fa81a461ed9a5cb119debef6c3fa623cb01",
+      "sizeBytes": 2375,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/ConfigInfrastructure/apex/com.android.configinfrastructure.x509.pem",
+      "sha256": "1c3e428ab51ad3fd3c889c0dcf22f0ee107662f81344e43cb16f818f6f5f901a",
+      "sizeBytes": 2106,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/Connectivity/Tethering/apex/com.android.tethering.avbpubkey",
+      "sha256": "8995ab29dbf062f8bf799e9a80660b9db629872fe3c673b54715c750feb897b9",
+      "sizeBytes": 1032,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/Connectivity/Tethering/apex/com.android.tethering.pem",
+      "sha256": "97510dba7a0a23860767d05985d909921c1452d886763256c98372fbe882cc1f",
+      "sizeBytes": 3247,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/Connectivity/Tethering/apex/com.android.tethering.pk8",
+      "sha256": "fbcd7f66d8305d20d31ca98595b9f32638e6b7770c3d2505dbe77b54cab34ade",
+      "sizeBytes": 2375,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/Connectivity/Tethering/apex/com.android.tethering.x509.pem",
+      "sha256": "58abc799d42dbda5fb76244407bf6a2a29de3e3b5c8e2df386ea8e4592b9faa7",
+      "sizeBytes": 2195,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/Connectivity/Vcn/tests/unit/assets/client-end-cert.pem",
+      "sha256": "93ec411e2bed5cbb6ac61c991d559eefb8927744cd0b56badd17750d484fa45f",
+      "sizeBytes": 1240,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/Connectivity/Vcn/tests/unit/assets/self-signed-ca.pem",
+      "sha256": "0dfae771b3881ba47eb84b53c17b66e0be05467463333b38e7bf68d3b2e25b31",
+      "sizeBytes": 1183,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/Connectivity/service/ServiceConnectivityResources/res/raw/ct_public_keys.pem",
+      "sha256": "57eb0883c0713d7ab091589f3b5e7a0381efb0c7720a3689f86645643a507f81",
+      "sizeBytes": 7200,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/Connectivity/service/ServiceConnectivityResources/resources-certs/com.android.connectivity.resources.pk8",
+      "sha256": "26bdf2c99b6a15b18e2ad1351756deb31e0e22109ac516fb490518efca45d941",
+      "sizeBytes": 2375,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/Connectivity/service/ServiceConnectivityResources/resources-certs/com.android.connectivity.resources.x509.pem",
+      "sha256": "61be12131bd5241e1d7015c84c70c620163061c2829cd585c0005b073067cc45",
+      "sizeBytes": 2232,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/Connectivity/service/ServiceConnectivityResources/resources-certs/key.pem",
+      "sha256": "74746aefd38e1b6f1e15bd3250abd309b9c3fe958027bc98b466e35ba8d6e518",
+      "sizeBytes": 3272,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/CrashRecovery/apex/com.android.crashrecovery.avbpubkey",
+      "sha256": "70f67c12861a3366f7110ad2d3cbcbd7ece5fa05c7e7395fb8b92f6b946f2436",
+      "sizeBytes": 1032,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/CrashRecovery/apex/com.android.crashrecovery.pem",
+      "sha256": "46cdc418efd5186014ccee8ced6782d7c42647f820a41699e7d7eb75f1c42396",
+      "sizeBytes": 3272,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/CrashRecovery/apex/com.android.crashrecovery.pk8",
+      "sha256": "507915745fa8da7823c4ff94cea76dddc6fb755dc0459fd451c86a91df5c0ee6",
+      "sizeBytes": 2373,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/CrashRecovery/apex/com.android.crashrecovery.x509.pem",
+      "sha256": "c4dc05e85465330e5f6c6f4a41d4089d88689e19b00d95136ab5c59e51780074",
+      "sizeBytes": 2086,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/DeviceLock/apex/com.android.devicelock.avbpubkey",
+      "sha256": "5d918ddb9b092bafcb16b5e44dbc87297ad016383d3974061645ad6beaa47717",
+      "sizeBytes": 1032,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/DeviceLock/apex/com.android.devicelock.pem",
+      "sha256": "eef70ac702126f18f5819041300768be0cf2f9a7327ce15c13e4584ec399882b",
+      "sizeBytes": 3243,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/DeviceLock/apex/com.android.devicelock.pk8",
+      "sha256": "3c42a48cba51006049c91d59be3a98f7a4b10ac81c721a3e54db2d723060d96a",
+      "sizeBytes": 2376,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/DeviceLock/apex/com.android.devicelock.x509.pem",
+      "sha256": "ee273434b4895fc2edffb6fa27c227566cfbf39e54219f6e24a4daa3e23551d2",
+      "sizeBytes": 2078,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/DnsResolver/apex/com.android.resolv.avbpubkey",
+      "sha256": "d44daeb7cd9ca1478a71e5dec958ddd7cdb57e32ab404037f607c7d06931ac12",
+      "sizeBytes": 1032,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/DnsResolver/apex/com.android.resolv.pem",
+      "sha256": "3f776cbf977403e0f5d531b87db30cd1e69c5cc348036b82d995065214457d9e",
+      "sizeBytes": 3243,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/DnsResolver/apex/com.android.resolv.pk8",
+      "sha256": "8aa57b2c05318dbc454b1e370cdd0369a30b16b4efbdf68b470b69046f212a85",
+      "sizeBytes": 2375,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/DnsResolver/apex/com.android.resolv.x509.pem",
+      "sha256": "e44f7f431177ccb32bee503debbdf8137ed7c4a0ba6cdca465b7980d827b10e2",
+      "sizeBytes": 2143,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/ExtServices/apex/com.android.extservices.avbpubkey",
+      "sha256": "2b0fe1b21ab3d7abb193502f7314a8b63d28d0be6dba4dd5e62f555898877e8e",
+      "sizeBytes": 1032,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/ExtServices/apex/com.android.extservices.pem",
+      "sha256": "83246c5f27673f30fbce41e6e17365ac2e018b99c20e92a018ed5194045b36ba",
+      "sizeBytes": 3243,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/ExtServices/apex/com.android.extservices.pk8",
+      "sha256": "eff25e96ea9fe76d254c11c5983583b8890be82bddfa0864a9fca7e19145c6c6",
+      "sizeBytes": 2376,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/ExtServices/apex/com.android.extservices.x509.pem",
+      "sha256": "15cd1992c04a095a9bbef025681ebb0c7e53698105de32fc8b7d8e0070fe7ecb",
+      "sizeBytes": 2204,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/GeoTZ/apex/com.android.geotz/com.android.geotz.avbpubkey",
+      "sha256": "9cd49ba03f1678236ec27b491f7b32b9e7891c8e40fd032f237364d852acd12b",
+      "sizeBytes": 1032,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/GeoTZ/apex/com.android.geotz/com.android.geotz.pem",
+      "sha256": "5e07b74a356c8c88e9c98e835dc953f5e5494b86ec05e76bd8992136d7dab9d9",
+      "sizeBytes": 3243,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/GeoTZ/apex/com.android.geotz/com.android.geotz.pk8",
+      "sha256": "df773f810a8b4293330894d9c3df33e286e79e369ded4326061ef1c7d82672d5",
+      "sizeBytes": 2374,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/GeoTZ/apex/com.android.geotz/com.android.geotz.x509.pem",
+      "sha256": "b758af949ccd9f9d60be3ddfca2d947e79f3a3285fb9907299fd321314af8c79",
+      "sizeBytes": 2065,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/HealthFitness/apex/com.android.healthfitness.avbpubkey",
+      "sha256": "638b41d50112decb7c35543975148b495aa43993f8dc7b9b94c73d82e70ba71e",
+      "sizeBytes": 1032,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/HealthFitness/apex/com.android.healthfitness.pem",
+      "sha256": "085f19bca73a28320661f2489a3c76460e258d7a6652b0aaed480c24b95edc97",
+      "sizeBytes": 3268,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/HealthFitness/apex/com.android.healthfitness.pk8",
+      "sha256": "607dd5a0ab3f5f0ad60d7ddd91f3d445c9460a4eb08cd10ba4392db71b368b99",
+      "sizeBytes": 2375,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/HealthFitness/apex/com.android.healthfitness.x509.pem",
+      "sha256": "13dd78e497f6771d2b660be12c224f6886ef7f7adb43509cf11dcf27cdde9dd2",
+      "sizeBytes": 2086,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/HealthFitness/apk/com.android.healthconnect.controller.pk8",
+      "sha256": "e58edf461e6602c4fc9c7be259929ba3eff2cae62213f79943c6f2077e909c4c",
+      "sizeBytes": 2374,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/HealthFitness/apk/com.android.healthconnect.controller.x509.pem",
+      "sha256": "154317b3fba245537ba1bda4fbd4c8512676429046a907ef87bf2adc303fb882",
+      "sizeBytes": 2236,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/HealthFitness/backuprestore/com.android.health.connect.backuprestore.pk8",
+      "sha256": "196d48f61c1cb35a29076e9bf6387fea9ac8fe604ef1ff9b9816e50ecc9c1270",
+      "sizeBytes": 2374,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/HealthFitness/backuprestore/com.android.health.connect.backuprestore.x509.pem",
+      "sha256": "3e7500dbe39d3925cfc0b31d22896e62c1009860ef42e51d2a849a8a86ad7e14",
+      "sizeBytes": 2126,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/IPsec/apex/com.android.ipsec.avbpubkey",
+      "sha256": "9a319964ef0c54e7c2bddadd6aa12222476e7cf775710c32276c1486951a9895",
+      "sizeBytes": 1032,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/IPsec/apex/com.android.ipsec.pem",
+      "sha256": "4beb590f6dff097b253ed02af77bfe44a431d34bda68a27a6a2263aaf4170d74",
+      "sizeBytes": 3243,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/IPsec/apex/com.android.ipsec.pk8",
+      "sha256": "e1ffb35282643452a63f755eece3d41a8528365ea9a2a17b183b9e4ff3137e60",
+      "sizeBytes": 2373,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/IPsec/apex/com.android.ipsec.x509.pem",
+      "sha256": "5e53ddf09dfd9083f8d5717f808d213c90b4e0ffb0910eda6ca51d600354ac8c",
+      "sizeBytes": 2187,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/IPsec/tests/cts/assets/pem/client-a-end-cert.pem",
+      "sha256": "93ec411e2bed5cbb6ac61c991d559eefb8927744cd0b56badd17750d484fa45f",
+      "sizeBytes": 1240,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/IPsec/tests/cts/assets/pem/client-a-intermediate-ca-one.pem",
+      "sha256": "50a38548f6b26698f66a9273d73385be1c9a42887c56df8a657ec19970203973",
+      "sizeBytes": 1240,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/IPsec/tests/cts/assets/pem/client-a-intermediate-ca-two.pem",
+      "sha256": "9d009671d1fa89eb47c274324f0e92541baa4bf4cbaa864f235d991a829d51ab",
+      "sizeBytes": 1240,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/IPsec/tests/cts/assets/pem/server-a-self-signed-ca.pem",
+      "sha256": "3d280efa52485b4e29a9bb474e0a7ca6353ad15c946a0e298819108a4c78f878",
+      "sizeBytes": 1199,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/IPsec/tests/iketests/assets/pem/end-cert-a.pem",
+      "sha256": "209979958c59082a1b38e3fe6e8c57f8030067e6c448c48402c21c173fea3754",
+      "sizeBytes": 1200,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/IPsec/tests/iketests/assets/pem/end-cert-b.pem",
+      "sha256": "8e3c33203ccc5ee880b8e82d1968cc5f16e589f4c789331cc28a40cdb168ccad",
+      "sizeBytes": 1224,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/IPsec/tests/iketests/assets/pem/end-cert-small-2.pem",
+      "sha256": "98e66803f9a119fc709ff4cc57f95c8a2c17d6c37fec639af8037529607774f2",
+      "sizeBytes": 656,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/IPsec/tests/iketests/assets/pem/end-cert-small.pem",
+      "sha256": "8a432e712851c4c0ef84aa2aed7d3fe00d21b8df361c167f95687ae90efd2826",
+      "sizeBytes": 655,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/IPsec/tests/iketests/assets/pem/intermediate-ca-b-one.pem",
+      "sha256": "138242eae783890c200771bd0ea1fe1f8801c3766ea075ed56ba104aa27d356b",
+      "sizeBytes": 1245,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/IPsec/tests/iketests/assets/pem/intermediate-ca-b-two.pem",
+      "sha256": "edd60308c4ec6bc6791c2ba5122fdf2d7a5e74d85ab316f26a314559c8db55cd",
+      "sizeBytes": 1245,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/IPsec/tests/iketests/assets/pem/self-signed-ca-a.pem",
+      "sha256": "a2aeca77511cdf6229d876b0ab17f88d74c080c25a8a2a21275082882c2fd005",
+      "sizeBytes": 1188,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/IPsec/tests/iketests/assets/pem/self-signed-ca-b.pem",
+      "sha256": "b2e877f25f258046c4fa3a79f98f678573f0dd4ba4fbd3b411545307b3790cb8",
+      "sizeBytes": 1200,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/IPsec/tests/iketests/assets/pem/self-signed-ca-small-2.pem",
+      "sha256": "5a2b79d4bada45b52bef966a1bfcabc45941088781591ea047504bc579f874c7",
+      "sizeBytes": 672,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/IPsec/tests/iketests/assets/pem/self-signed-ca-small.pem",
+      "sha256": "5c3e34194b76d85efd2e7b64ae5af1958b9c746e511e8c5dd319c1c714b6cb3f",
+      "sizeBytes": 667,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/NeuralNetworks/apex/com.android.neuralnetworks.avbpubkey",
+      "sha256": "0153febd117af97414c2be741bf3c53d63af42b55fc95775e4290424cf47d69a",
+      "sizeBytes": 1032,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/NeuralNetworks/apex/com.android.neuralnetworks.pem",
+      "sha256": "140088a8c606f0844bfa2bf255f93833919399cf068b432b96305b6814974533",
+      "sizeBytes": 3247,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/NeuralNetworks/apex/com.android.neuralnetworks.pk8",
+      "sha256": "fb83b428315bbe63f29a219bfe9f75f179bb5842189171d73c2baa565ab8cc33",
+      "sizeBytes": 2376,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/NeuralNetworks/apex/com.android.neuralnetworks.x509.pem",
+      "sha256": "ceb95eb3f115aa7769b18c3a77272e2056ee1cf47c853481cf68b386a4b14de3",
+      "sizeBytes": 1944,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/Nfc/apex/com.android.nfcservices.avbpubkey",
+      "sha256": "db929734a7059bf5431c73a1c17a62bd7f6c7ffa21cd9a8e6b31de52c4c05790",
+      "sizeBytes": 1032,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/Nfc/apex/com.android.nfcservices.pem",
+      "sha256": "f234dbc036859c31bcc387dc01f079294904d3bd23ceb132d5fc46828554d669",
+      "sizeBytes": 3272,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/Nfc/apex/com.android.nfcservices.pk8",
+      "sha256": "53846b8aaa8b73cff333801d09564d338c146e46c3cbbb5dce6167c6548e5d41",
+      "sizeBytes": 2374,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/Nfc/apex/com.android.nfcservices.x509.pem",
+      "sha256": "61ae4b52dd8734fca8592b3c4e5d3e5c1506b8838afad221178973a029a68fd6",
+      "sizeBytes": 2057,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/NpuManager/apex/com.android.npumanager.avbpubkey",
+      "sha256": "a1618ffb9e5526adbb97ac967df0339d336527a8241d00557e865a5d3ff19dc1",
+      "sizeBytes": 1032,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/NpuManager/apex/com.android.npumanager.pem",
+      "sha256": "d342796f868e0dfd60abc1b6aca6c648efceb4a552812aa38853f5ba9d73a4e8",
+      "sizeBytes": 3272,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/NpuManager/apex/com.android.npumanager.pk8",
+      "sha256": "a3371c14ecb337cce91215d1bfd5e9b9ac6db25f6738b8f5d73ade873eccf6de",
+      "sizeBytes": 2375,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/NpuManager/apex/com.android.npumanager.x509.pem",
+      "sha256": "71d3f7d7153cec37f1993e2ff6e9988c85d1df4aeaae31d35e7b065ecae28f9f",
+      "sizeBytes": 2130,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/OnDevicePersonalization/apex/com.android.ondevicepersonalization.avbpubkey",
+      "sha256": "b2bc5a28f9baea1ae46dfc6fca2db9d7f173f8bbdfcae8f186018d217a5e7cbb",
+      "sizeBytes": 1032,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/OnDevicePersonalization/apex/com.android.ondevicepersonalization.pem",
+      "sha256": "be722675a5c35e88c06a1c59f346de51fd69c4da034908ea18d29d5623aa43cb",
+      "sizeBytes": 3243,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/OnDevicePersonalization/apex/com.android.ondevicepersonalization.pk8",
+      "sha256": "fdcd6fe31045dad210eb3c1ae2c3179707d97ee08370b31d1d63d74c0f4a9362",
+      "sizeBytes": 2376,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/OnDevicePersonalization/apex/com.android.ondevicepersonalization.x509.pem",
+      "sha256": "bf95bcb6d344f5729596624e5a7fbdedc339b70d398dc25dcb52e293ffbcbf63",
+      "sizeBytes": 2114,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/OnDevicePersonalization/federatedcompute/apk/com.android.federatedcompute.pk8",
+      "sha256": "602f798bdaa95d491118f78a7a7f34b7ebd1562f91f68aeccd4cdd72230b17f8",
+      "sizeBytes": 2376,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/OnDevicePersonalization/federatedcompute/apk/com.android.federatedcompute.x509.pem",
+      "sha256": "866086adfdf9ba56d5d4f0d149f7a73e82fd9543c5fb87a439fb7924629e1c34",
+      "sizeBytes": 2094,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/Permission/SafetyCenter/Resources/com.android.safetycenter.resources.pem",
+      "sha256": "d4544fcc0798c21e70ed017817b0f7cd98f8f2117b59426281a7f65285ac0efe",
+      "sizeBytes": 3272,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/Permission/SafetyCenter/Resources/com.android.safetycenter.resources.pk8",
+      "sha256": "3b55e4facb4e57b742883a9a4b4adaea7920d3244d91cfc818628d301eefb2d7",
+      "sizeBytes": 2374,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/Permission/SafetyCenter/Resources/com.android.safetycenter.resources.x509.pem",
+      "sha256": "ad4b4e29c7cb4a86efe11da1e02bf57fad641de9192b66a362ab0a023dd2afda",
+      "sizeBytes": 2232,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/Permission/com.android.permission.avbpubkey",
+      "sha256": "1ab7920a9fcfc8611cbb8fdee454ff6d4b4d6d09d70ee0a90aaf05cd4b84e3ab",
+      "sizeBytes": 1032,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/Permission/com.android.permission.pem",
+      "sha256": "db0726969c51d89df29ff527a65654bb436692fbdc2457fca52beea00ede1b46",
+      "sizeBytes": 3247,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/Permission/com.android.permission.pk8",
+      "sha256": "14c4e44609659c6bb48a1601734c072d86d797702d827849ad05cf12ad380d69",
+      "sizeBytes": 2376,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/Permission/com.android.permission.x509.pem",
+      "sha256": "9363063415db6070f095f923019537b3bf597977ce0127ad1bf151399b51d8de",
+      "sizeBytes": 2199,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/Profiling/apex/com.android.profiling.avbpubkey",
+      "sha256": "57db20cd3d0dd86bb50eb664c831d012462a9868f382e5f1eaeed85f43c93d0b",
+      "sizeBytes": 1032,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/Profiling/apex/com.android.profiling.pem",
+      "sha256": "1d01b74a64129ae30ca15bd928b3b7d11e6970fd5e762a1f3d0d3967187a34ff",
+      "sizeBytes": 3272,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/Profiling/apex/com.android.profiling.pk8",
+      "sha256": "f976574404339ae9bf48a9383edaa2180a93d8df5c947352c379ba7742c327bd",
+      "sizeBytes": 2375,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/Profiling/apex/com.android.profiling.x509.pem",
+      "sha256": "efcf6423e78a030bf2ae63535900f355fcde83251e01162866fd564a8b6625da",
+      "sizeBytes": 2074,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/RemoteKeyProvisioning/apex/com.android.rkpd.avbpubkey",
+      "sha256": "12338c2704a6446aa8d9247a2e08a7296d32f6940e79ff85f967f1e82cfdbb04",
+      "sizeBytes": 1032,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/RemoteKeyProvisioning/apex/com.android.rkpd.pem",
+      "sha256": "bddc87e8efd42253dc0ecac060c93a1c499c755a9c16933ecdd658e57fa2f800",
+      "sizeBytes": 3272,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/RemoteKeyProvisioning/apex/com.android.rkpd.pk8",
+      "sha256": "313ade19d279c5c1aa5c73a0ff6cd1dc4ed101b68ab84dcd97667b8046156352",
+      "sizeBytes": 2374,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/RemoteKeyProvisioning/apex/com.android.rkpd.x509.pem",
+      "sha256": "2e1f12068b4865fc25f505f85b081083733e9f161a6d5ca24d4b20875e70a1ba",
+      "sizeBytes": 2029,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/RuntimeI18n/apex/com.android.i18n.avbpubkey",
+      "sha256": "f1d1003fe5b0c62fefb4fb2810db6fc1e6ced2bc2b7c6df5ca10b1da9e20ecc7",
+      "sizeBytes": 1032,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/RuntimeI18n/apex/com.android.i18n.pem",
+      "sha256": "15e96927446b2c9dc526efa175cd13997c2ca90a1f5dbe58b3dc6fddf192555c",
+      "sizeBytes": 3247,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/RuntimeI18n/apex/com.android.i18n.pk8",
+      "sha256": "240d73f5f86a00343e7f39915315ede71a55f919bd31cab42a7f36d533cc4fc4",
+      "sizeBytes": 2374,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/RuntimeI18n/apex/com.android.i18n.x509.pem",
+      "sha256": "134003578f3081bac7997f475333d66e6e83606162800ddbccd99f0b6ffaaa6f",
+      "sizeBytes": 1903,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/Scheduling/apex/com.android.scheduling.avbpubkey",
+      "sha256": "0e9c2e0669f438ba314cb6f00c5a0c5103afc7275eba7461584eb7d34446d0ac",
+      "sizeBytes": 1032,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/Scheduling/apex/com.android.scheduling.pem",
+      "sha256": "caaa67443704548a70e25fa9f8887d01676a1e8838cba7d35080b30d63a8457c",
+      "sizeBytes": 3243,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/Scheduling/apex/com.android.scheduling.pk8",
+      "sha256": "d7fe30786914c34227b79d8f8d186cd1c6fc899952fe50806ddce49480a68778",
+      "sizeBytes": 2375,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/Scheduling/apex/com.android.scheduling.x509.pem",
+      "sha256": "a9fa37e64ff7a803a9c65f1f6f1c0998e40fba544283dd3bc6b7a4b4e9dc320c",
+      "sizeBytes": 2078,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/SdkExtensions/com.android.sdkext.avbpubkey",
+      "sha256": "e32a2dde3428263946053fc92fd8f0e6a92c1da37732ae3b685022947389cecb",
+      "sizeBytes": 1032,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/SdkExtensions/com.android.sdkext.pem",
+      "sha256": "383fda07145c95d81562955fde1b831cb5f268d18c285d63de0a21a28eac1644",
+      "sizeBytes": 3243,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/SdkExtensions/com.android.sdkext.pk8",
+      "sha256": "1a853e03f0bb3bbfa488e74a10515a6866bbb067af2d8a378178ab91544fca7f",
+      "sizeBytes": 2375,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/SdkExtensions/com.android.sdkext.x509.pem",
+      "sha256": "93f3e19b76d5a7a60184fb2a05284aef72630514acf7e394c854aa0d25025aff",
+      "sizeBytes": 2187,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/StatsD/apex/com.android.os.statsd.avbpubkey",
+      "sha256": "8be0b98cb064cf24733ca1918157685c3765bc432b44545ea1bbf2cbffbf6b9d",
+      "sizeBytes": 1032,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/StatsD/apex/com.android.os.statsd.pem",
+      "sha256": "bc1dbc231e8148b0e4ce98e8bfae1baf12111357b45a47e92eda82599d623d0d",
+      "sizeBytes": 3247,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/StatsD/apex/com.android.os.statsd.pk8",
+      "sha256": "3b3067f999887ad13aaf734dccc912e31d289d76fedd95a3db981f16977f670f",
+      "sizeBytes": 2375,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/StatsD/apex/com.android.os.statsd.x509.pem",
+      "sha256": "7f5655dd260bba21ca7fe2d8283eba49f5e9ba5c626b2eaf686a0d866c7a773e",
+      "sizeBytes": 1814,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/Telecom/apex/com.android.telecom.avbpubkey",
+      "sha256": "0e7d5d298c328b4f481195a1102868be067fc89dafecfca6566a8e8571532dca",
+      "sizeBytes": 1032,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/Telecom/apex/com.android.telecom.pem",
+      "sha256": "673524502000378e57e7051a91421c92d381d1d51648446a5288fc6177f49781",
+      "sizeBytes": 3272,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/Telecom/apex/com.android.telecom.pk8",
+      "sha256": "002b5cfb1264f79678c2c9724ed5bcd4d455f2fe69844cc916690897c1b60d97",
+      "sizeBytes": 2375,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/Telecom/apex/com.android.telecom.x509.pem",
+      "sha256": "e25b03a261524bb174a2a629137a4989125702eb013dacccac9fe0cb4ec91743",
+      "sizeBytes": 2122,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/Telephony/apex/com.android.telecom.resources.pk8",
+      "sha256": "1daf4c2b5c01d3a43bbcdd27df6cb7e1bddfde49ae7f8dc236cf5b2136b9b4b2",
+      "sizeBytes": 1218,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/Telephony/apex/com.android.telecom.resources.x509.pem",
+      "sha256": "d2bab1cfaf4c4fe44775f8cc50fad6e4e8a3c33becb97dacb81722759b1733d8",
+      "sizeBytes": 1440,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/Telephony/apex/com.android.telecomui.pk8",
+      "sha256": "2b9d3db8b49ab49e8a793fc510290300c4341e2cc00260486e8ee6bd680b79b6",
+      "sizeBytes": 1216,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/Telephony/apex/com.android.telecomui.x509.pem",
+      "sha256": "88c75b1a6907698143a7c8ca02fcdd9dc3457bb80b59c4209dee22b34d243449",
+      "sizeBytes": 1415,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/Telephony/apex/com.android.telephonycore.avbpubkey",
+      "sha256": "eda93e6f9223c2bea16882ab6fbc51edb18b0a24982abe28aa88f9341e1ccb13",
+      "sizeBytes": 1032,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/Telephony/apex/com.android.telephonycore.pem",
+      "sha256": "6f00dee7838f8e2a506853c01c74053fc1eb584982362f30b863f0a35ced1453",
+      "sizeBytes": 3268,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/Telephony/apex/com.android.telephonycore.pk8",
+      "sha256": "f4dc42564e740d5b5fa8f524e130d1ca0bab199014c601dd5ba80f7d102b0dbc",
+      "sizeBytes": 2375,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/Telephony/apex/com.android.telephonycore.x509.pem",
+      "sha256": "00d5c701c66aae77b7fd9f7a741c6ae6cab04c2e6ff32ec77d3ff3d32c086630",
+      "sizeBytes": 2139,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/ThreadNetwork/apex/com.android.threadnetwork.avbpubkey",
+      "sha256": "2a3c0e395f71b57d676fb5ed024184a053b0f3480ba4473b0a688a9fee77c383",
+      "sizeBytes": 1032,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/ThreadNetwork/apex/com.android.threadnetwork.pem",
+      "sha256": "13117f80fff6d15f90ba995e317e9b354cb2f8600588f3a0f1e5baffa4a49611",
+      "sizeBytes": 3268,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/ThreadNetwork/apex/com.android.threadnetwork.pk8",
+      "sha256": "09b79f8d2ef68e3d63104a9962a9fb7534a78f2000ed4b8be83a91304d362341",
+      "sizeBytes": 2373,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/ThreadNetwork/apex/com.android.threadnetwork.x509.pem",
+      "sha256": "282acbdd7117106e62b0959d0b96912554044080affe1960676b1d800d66d6e9",
+      "sizeBytes": 2086,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/UprobeStats/apex/com.android.uprobestats.avbpubkey",
+      "sha256": "bb9bf95eafdbce9afea819e779c7d88d376f7da3e5a8f61ab69921f0530feac2",
+      "sizeBytes": 1032,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/UprobeStats/apex/com.android.uprobestats.pem",
+      "sha256": "246fcdfaa5a3aca04cc79dee0b538ae39a63a673d75b50f072a81177849109e6",
+      "sizeBytes": 3247,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/UprobeStats/apex/com.android.uprobestats.pk8",
+      "sha256": "cac89104299db024d19fbb5e42ae3df7f6965bc280a390aa16bf805ba2acb570",
+      "sizeBytes": 2376,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/UprobeStats/apex/com.android.uprobestats.x509.pem",
+      "sha256": "14f67dd150a3542d32c5f762b4a84fd3033e0d14ba0720ff7da808a2ccea0e6c",
+      "sizeBytes": 2082,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/Uwb/apex/com.android.uwb.avbpubkey",
+      "sha256": "0ca4f98aa0a6208cbc2d4a37bafa5efa75d95a491e666b6a46bc7c2ec7eb536f",
+      "sizeBytes": 1032,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/Uwb/apex/com.android.uwb.pem",
+      "sha256": "8462451e085d490141892100a8c2e9c8df7a2064553bb5712a4c7d9aad1b2dc3",
+      "sizeBytes": 3243,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/Uwb/apex/com.android.uwb.pk8",
+      "sha256": "019f1476a799fe5f66d760be089e4dadcc332d89dfbbdc15e80266399e5c5473",
+      "sizeBytes": 2376,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/Uwb/apex/com.android.uwb.x509.pem",
+      "sha256": "38398a691978f772f2c394014d1023aa78e4609a6463872cbed169111bd9d16f",
+      "sizeBytes": 2057,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/Uwb/ranging/test_app/com.android.ranging.rangingtestapp.pem",
+      "sha256": "05dcf4493a255caf62d6dc251d532ed5121702efc978a35ece622cf5631bd4f1",
+      "sizeBytes": 4616,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/Uwb/ranging/test_app/com.android.ranging.rangingtestapp.pk8",
+      "sha256": "8e8721b1033ae6e01aa4968eb14ba926a0c00672d7c41e8171a3507bdc2458b6",
+      "sizeBytes": 2375,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/Uwb/ranging/test_app/com.android.ranging.rangingtestapp.x509.pem",
+      "sha256": "e7d0eb7d9ee8e9cd98ad15facec09499fc62e4a27ac39fb62d201959c8e391f9",
+      "sizeBytes": 2126,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/Uwb/service/ServiceUwbResources/resources-certs/com.android.uwb.resources.pk8",
+      "sha256": "c83fd07a6e3274587e6e37f7bf73f3920d7c7b8cd016a7f2fa098bba7706f426",
+      "sizeBytes": 2374,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/Uwb/service/ServiceUwbResources/resources-certs/com.android.uwb.resources.x509.pem",
+      "sha256": "b79eb4d913d628991c10dc197c8a42ad4127653cf523a061a65d272beff950a2",
+      "sizeBytes": 2191,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/Uwb/service/ServiceUwbResources/resources-certs/key.pem",
+      "sha256": "209bfe4b4a220f93126f02250818d46310d8a39cf18431b528e99d6f96b807f1",
+      "sizeBytes": 3272,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/Virtualization/build/apex/com.android.virt.avbpubkey",
+      "sha256": "ca339b6e842c63686b54f20c91ebfcdc950975af2191e08efb9dee96109f938a",
+      "sizeBytes": 1032,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/Virtualization/build/apex/com.android.virt.pem",
+      "sha256": "43a29e72e5693c047ccf84465b56245a80c5341072b67836d734e9e2386e3fdc",
+      "sizeBytes": 3243,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/Virtualization/build/apex/com.android.virt.pk8",
+      "sha256": "d8048360fdcfa2e149c0eb153b1b49e0e0c077b393e8d6be7c2f086329536d32",
+      "sizeBytes": 2375,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/Virtualization/build/apex/com.android.virt.x509.pem",
+      "sha256": "e619752b181c63085fda793067122881b75d22a117c7333ae885f23fefd5eddb",
+      "sizeBytes": 2183,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/Virtualization/build/apex/test.com.android.virt.pem",
+      "sha256": "a44adf4b2593aae406f1e8895630d2080a586526c6ad04092d7f2a7815b60e8f",
+      "sizeBytes": 3243,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/Virtualization/build/apex/test2.com.android.virt.pem",
+      "sha256": "d4eaefb2bed73dd6f5402fec10354b3e3ad6c7aa5a33dfd3b5a6e3355ad181e0",
+      "sizeBytes": 3243,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/Virtualization/build/compos/com.android.compos.avbpubkey",
+      "sha256": "670033b1be109b5ea0c3b3eeb62947dc68d417f41cfc11330c957a14d1b6a83e",
+      "sizeBytes": 1032,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/Virtualization/build/compos/com.android.compos.pem",
+      "sha256": "c45e0350336fa199fa97f3cfdfa469605c2be6f84250de81c1e36a83f48a6b09",
+      "sizeBytes": 3243,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/Virtualization/build/compos/com.android.compos.pk8",
+      "sha256": "4d644207bb14be6f0fb5ac9711087419be273a3d23c20c354eefcc2b4ff5ca00",
+      "sizeBytes": 2373,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/Virtualization/build/compos/com.android.compos.x509.pem",
+      "sha256": "4c8f76120e2a78d56e79db6e64103560ac5a0ed3c628df20e8d8704bbe6d225f",
+      "sizeBytes": 2065,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/Virtualization/microfuchsia/apex/com.android.microfuchsia.avbpubkey",
+      "sha256": "b50b0a53034965bb6a1f4b6a8c055675b3c94bc9f713427c61f490ecdc3f9cc0",
+      "sizeBytes": 1032,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/Virtualization/microfuchsia/apex/com.android.microfuchsia.pem",
+      "sha256": "e518c4d54bec7ed48b95aa9d15392cfe82f37d7b092ec1e65c8bb44034f5097a",
+      "sizeBytes": 3268,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/Virtualization/tests/authfs/testdata/cert.pem",
+      "sha256": "9da58c2fbb2ebc3317abeab4d53e1dfe18b1ffcf35b77219c137fb62a43e5bf4",
+      "sizeBytes": 2004,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/Virtualization/tests/authfs/testdata/key.pem",
+      "sha256": "f6dd643d3ca16342011c020933eb06d0a04ec08cbec36bfd071edf98504f83ab",
+      "sizeBytes": 3272,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/Virtualization/tests/com.android.microdroid.test.tenant0/com.android.microdroid.test.tenant0.avbpubkey",
+      "sha256": "04e850feddd5dd52c3d71ea1995d72b79bb276ca0b895423b93cb50798c46dfb",
+      "sizeBytes": 1032,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/Virtualization/tests/com.android.microdroid.test.tenant0/com.android.microdroid.test.tenant0.pem",
+      "sha256": "c997fc2dffdd221932683891bbaea6a51c369bc43a9f186bd0176cacb1f8f5ed",
+      "sizeBytes": 3272,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/Virtualization/tests/com.android.microdroid.test.tenant0/com.android.microdroid.test.tenant0.pk8",
+      "sha256": "0efbfb2b0eb8d35e3c507fda83d3fd0366e0a0f66ac38c8e15982b3d7d74212f",
+      "sizeBytes": 2375,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/Virtualization/tests/com.android.microdroid.test.tenant0/com.android.microdroid.test.tenant0.x509.pem",
+      "sha256": "2a40bf2f0a091159696608166d7ab645fdd661e5d8940072d7c874474c15ac1e",
+      "sizeBytes": 2167,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/Virtualization/tests/testapk/microdroid_test_app.pk8",
+      "sha256": "33bc256f0a0ff61ee26db37be43b1d8e02485c6a3bef0753ce2fc1af79f4f421",
+      "sizeBytes": 1216,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/Virtualization/tests/testapk/microdroid_test_app.x509.pem",
+      "sha256": "31e728e0bb5e9186185ec3a0a3488b7e8a624fbc9b440127b97610e50de55f7d",
+      "sizeBytes": 1143,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/WebApp/apex/com.android.webapp.avbpubkey",
+      "sha256": "ba8c85ea93cc14ddcfa72bf411bbb200295b7f746f099e44e58b1cc52b318553",
+      "sizeBytes": 1032,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/WebApp/apex/com.android.webapp.pem",
+      "sha256": "25aed6ede2356d078e1b0374c683b831deca02975735888f3d2fea75ce03b376",
+      "sizeBytes": 3272,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/WebApp/apex/com.android.webapp.pk8",
+      "sha256": "ad7aff1c7969de147e1e14009bb5e6ee3018fe5d661f1bc5806c9b1b8224e662",
+      "sizeBytes": 2375,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/WebApp/apex/com.android.webapp.x509.pem",
+      "sha256": "fc7b8ee446a4d8c126858e144a5686cc9d3767101962852f6fb635641ea4ffca",
+      "sizeBytes": 2122,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/WebViewBootstrap/apex/com.android.webview.bootstrap.avbpubkey",
+      "sha256": "7cc7d7bed38b5928490df1344737b9da5404280107608c89bbd95354be72a104",
+      "sizeBytes": 1032,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/WebViewBootstrap/apex/com.android.webview.bootstrap.pem",
+      "sha256": "246d738171792b1bdd1adf641f3fa7f3d9990b1ae027d1d56acf255c5182e417",
+      "sizeBytes": 3272,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/WebViewBootstrap/apex/com.android.webview.bootstrap.pk8",
+      "sha256": "f76a5c094047ee00d02c69cd56e87807ffc9097983c3898032320a1143003eb4",
+      "sizeBytes": 2374,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/WebViewBootstrap/apex/com.android.webview.bootstrap.x509.pem",
+      "sha256": "f41ba656b26d930981fd494430e335a44db449cc6d504cdb70062cbfe0fb0028",
+      "sizeBytes": 2098,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/Wifi/OsuLogin/certs/com.android.hotspot2.osulogin.pk8",
+      "sha256": "f2c56b40c1299d88b25b0c46bf683cc5b3fd89891156522838b7d24f3643699a",
+      "sizeBytes": 2374,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/Wifi/OsuLogin/certs/com.android.hotspot2.osulogin.x509.pem",
+      "sha256": "268963f3d78b7b0b652368bc029f725a0f5f7f7631c76be99933765b21de3f6f",
+      "sizeBytes": 2163,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/Wifi/OsuLogin/certs/key.pem",
+      "sha256": "f474115e1e065f0bab572009e5ef628623aec38c013ce5a660068e2eab6629a0",
+      "sizeBytes": 3272,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/Wifi/WifiDialog/certs/com.android.wifi.dialog.pk8",
+      "sha256": "1a970ff44a0238d845bd80613317718077855ff4ae122ddf153e194027efab9f",
+      "sizeBytes": 2375,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/Wifi/WifiDialog/certs/com.android.wifi.dialog.x509.pem",
+      "sha256": "f1f21a67fc05e33a363748d23ac33bdd96ad3e9e4ab384ad19e405488492fe7d",
+      "sizeBytes": 2204,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/Wifi/WifiDialog/certs/key.pem",
+      "sha256": "07a7aa4dec12afe48cac2dc51759c79de969eb767eeb78a5c595af58764f55b2",
+      "sizeBytes": 3272,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/Wifi/apex/com.android.wifi.avbpubkey",
+      "sha256": "a32544679c7ac51cc40179c8c641d664444df95db6cc3ab49409766091bae691",
+      "sizeBytes": 1032,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/Wifi/apex/com.android.wifi.pem",
+      "sha256": "8a3149d21ca6d5610f82e5f43847d57480c5a70acc82cf42128310a9c23b77c1",
+      "sizeBytes": 3243,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/Wifi/apex/com.android.wifi.pk8",
+      "sha256": "ad1a5413d26f3214e225b47abf937ae2e3d2a5d3b068f872f0bfa6d8b342276b",
+      "sizeBytes": 2375,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/Wifi/apex/com.android.wifi.x509.pem",
+      "sha256": "56e9bb37d7363c500f62e77673d52820b91f9a923ddff69485d24ba789f9a2e1",
+      "sizeBytes": 2195,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/Wifi/service/ServiceWifiResources/resources-certs/com.android.wifi.resources.pk8",
+      "sha256": "609a28455da316712efc36c859041add67e3d4ca62cfa38d406085a614cc4d19",
+      "sizeBytes": 2376,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/Wifi/service/ServiceWifiResources/resources-certs/com.android.wifi.resources.x509.pem",
+      "sha256": "7829039d2e9153af29583c2cfafef4446f612c1df5195c4f0d6f0286e33eee77",
+      "sizeBytes": 2195,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/Wifi/service/ServiceWifiResources/resources-certs/key.pem",
+      "sha256": "ae55b6a5147c5b92f5a71d8dda7e45737a9350f2ddc3e25793cede5acebbdcc5",
+      "sizeBytes": 3272,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/adb/apex/com.android.adbd.avbpubkey",
+      "sha256": "d143f42063024b2e4404d31d237fadd58cb71c54e9f98435d39025034d246e3f",
+      "sizeBytes": 1032,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/adb/apex/com.android.adbd.pem",
+      "sha256": "14d57668593c9959b60b0dad287175ca70a8d608be54c32ff6da011cb4487d71",
+      "sizeBytes": 3243,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/adb/apex/com.android.adbd.pk8",
+      "sha256": "e7ef3bc1f2aa53b528176d38e0b73bca79aa10b39e39cbe814da35856c9e7e95",
+      "sizeBytes": 2374,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/adb/apex/com.android.adbd.x509.pem",
+      "sha256": "15a7f2eeff034528f93feb5476487f835e7856b2f78a06ff27806f78165d4e60",
+      "sizeBytes": 2183,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/common/javatests/com/android/modules/apkinapex/apex/test_com.android.modules.apkinapex.avbpubkey",
+      "sha256": "86d8c937dcd5527d15c136bfb66839e21cdb43443821f242a823083d25bab0bb",
+      "sizeBytes": 1032,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/common/javatests/com/android/modules/apkinapex/apex/test_com.android.modules.apkinapex.pem",
+      "sha256": "4202c869db1aa4e51c4cbc63cccd7ddf033f52c4130d54b8c6743692334d4cc0",
+      "sizeBytes": 3243,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/common/javatests/com/android/modules/apkinapex/apex/test_com.android.modules.apkinapex.pk8",
+      "sha256": "81d94d03b32655de4cc12c3f8e61ea097554bb4a00295ef6d75ba81a062ac89d",
+      "sizeBytes": 2376,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/common/javatests/com/android/modules/apkinapex/apex/test_com.android.modules.apkinapex.x509.pem",
+      "sha256": "fa128ad5b315eab0d29b3b7c6171e8be0cfd6aa36483f72f202c2183691c950a",
+      "sizeBytes": 2110,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/common/javatests/com/android/modules/updatablesharedlibs/apex/com.android.modules.updatablesharedlibs.avbpubkey",
+      "sha256": "5d5592b811771c1ca5bb2f1af64841882515f2856f85b98dec5c55ca56fb1b77",
+      "sizeBytes": 1032,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/common/javatests/com/android/modules/updatablesharedlibs/apex/com.android.modules.updatablesharedlibs.pem",
+      "sha256": "9a5d96c8880f1636e7211ac661d6d337851cc8b38729e65b3e65b8e18abc87da",
+      "sizeBytes": 3243,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/common/javatests/com/android/modules/updatablesharedlibs/apex/com.android.modules.updatablesharedlibs.pk8",
+      "sha256": "8be65e5b9580fb2819103943510b0201808b93fc479236667bf7d19e2be8524f",
+      "sizeBytes": 2375,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/common/javatests/com/android/modules/updatablesharedlibs/apex/com.android.modules.updatablesharedlibs.x509.pem",
+      "sha256": "039971814298e63e2c9aefff34816c13e056316b83d479b181e162116dfd1540",
+      "sizeBytes": 2122,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/vndk/apex/com.android.vndk.pem",
+      "sha256": "11c92ca7f61979ded64f724e97590d86cfa4bc501ed45777cb1eafebfc60f014",
+      "sizeBytes": 3243,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/vndk/apex/com.android.vndk.pk8",
+      "sha256": "55177bcd9c6ed55afe39c66325c2a06c937eea662b02b96249867c6bcbb19bec",
+      "sizeBytes": 2373,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "packages/modules/vndk/apex/com.android.vndk.x509.pem",
+      "sha256": "88ced17ee71e3f03334a12bdb7fd7cf8c94e2ab86e926c089eca21f71873e5c5",
+      "sizeBytes": 2183,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "releasetools/Android.bp",
+      "sha256": "4a458e0d4816e8dc0a26d34f69bf596cc47d118dc70f9cff949589e821ffb482",
+      "sizeBytes": 14459,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "releasetools/OWNERS",
+      "sha256": "e17346ffceae043ac1cb25865986ea47813e18ebe7a296a30f517d3700b30a2f",
+      "sizeBytes": 55,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "releasetools/add_img_to_target_files.py",
+      "sha256": "8bbe720532c3cf3cdd8fd6a108c3efd0c282bf16e2929d5f9946b2db9dbb7f71",
+      "sizeBytes": 48441,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "releasetools/apex_utils.py",
+      "sha256": "cba4dcffb78e0dd3eb26ddfa7cbf5de8c17f132991824de93ca71430a01502e5",
+      "sizeBytes": 23271,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "releasetools/blockimgdiff.py",
+      "sha256": "da4580e522999f0750bb7bc78803022899404f00bfefc6579af8f788beb0a0a1",
+      "sizeBytes": 62516,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "releasetools/build_image.py",
+      "sha256": "e8c387d9887b07219cbc8b30076195b56d4a3f304006367b562bea861075ef6a",
+      "sizeBytes": 38620,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "releasetools/build_super_image.py",
+      "sha256": "b9c72c94e573080fef4356e761688000dd63e0d9e4e1554ce782f552a7ce9c9f",
+      "sizeBytes": 6533,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "releasetools/care_map_pb2.py",
+      "sha256": "0ad1da0d68312d62789f56b4b487aba8aa11995cc186dd3c6abceaa82f26257e",
+      "sizeBytes": 4926,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "releasetools/check_ota_package_signature.py",
+      "sha256": "c86406df363216c3abdc0f7ccd23d7938959eb639560c9cfdd7b29312f694f24",
+      "sizeBytes": 6059,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "releasetools/check_partition_sizes.py",
+      "sha256": "dffb63ae64d51d3993d0ab716244edb00735b0cdd7f0e4967bc8cbf761f96338",
+      "sizeBytes": 10300,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "releasetools/check_target_files_signatures.py",
+      "sha256": "c58b011df51c70db0d9a5ffc394fc40bab1d0113e2a0fabb6f9fec09640ec8e9",
+      "sizeBytes": 17659,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "releasetools/check_target_files_vintf.py",
+      "sha256": "df247272684b97b77ae8d6d556c4a9e3df70e394d9738b907363bf5cb496424a",
+      "sizeBytes": 11705,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "releasetools/common.py",
+      "sha256": "2cb306baa8f44c7ea55a590e905e6b10a906c3fa40cf5c71420f51f23e9d2c8d",
+      "sizeBytes": 156450,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "releasetools/create_brick_ota.py",
+      "sha256": "2ccee1ae3803d752516eb012514b2b33739d10a41b7a6f4801f87430a167440c",
+      "sizeBytes": 4244,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "releasetools/edify_generator.py",
+      "sha256": "56be1b16b51d86ab0a0fa48123f113b4e38e5558863dd33ab0a2702b0673118a",
+      "sizeBytes": 17500,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "releasetools/find_shareduid_violation.py",
+      "sha256": "d4c8790e6f864742db413ba85e9d94eff6a5666acdf0bb636c6b27d0aa2e0366",
+      "sizeBytes": 4453,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "releasetools/fsverity_metadata_generator.py",
+      "sha256": "d24ec03df0158eb3e1b6e43fd70e5f01b163dfcb1c5b5b8014bb9a91f2bd4638",
+      "sizeBytes": 8271,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "releasetools/images.py",
+      "sha256": "b453a389eaa60b64e8a34a0b2d8855a5fc15981ac7a838d83aee003de500be19",
+      "sizeBytes": 6647,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "releasetools/img_from_target_files.py",
+      "sha256": "259a54729c8d31e7193c2bd510bee29b2ee6b002b26d9c7382f3076b0b66cd0a",
+      "sizeBytes": 9146,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "releasetools/jarjar-rules.txt",
+      "sha256": "f89c7c238b1f1d5b36e048e8b9f2d286bb7f62eb4d2e222956a3a5e95f620e7b",
+      "sizeBytes": 72,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "releasetools/make_recovery_patch.py",
+      "sha256": "bbf9df96ca73d7f55635bd3b74b9f9574938bf40a9a480c78fb7976fac73ffc6",
+      "sizeBytes": 1853,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "releasetools/merge/Android.bp",
+      "sha256": "a65b24bb2363fd13327ceb1ef6f3995b10e5960eb413490a887ee0d17a3932a8",
+      "sizeBytes": 2543,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "releasetools/merge/OWNERS",
+      "sha256": "940f083167356a62fe05f4926595194aa8b9e24c0f0385533bf96cdfcce6e3a6",
+      "sizeBytes": 77,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "releasetools/merge/merge_builds.py",
+      "sha256": "0c8939abb95f4f5529787a38ead6895532d9c605ae81955292fb7405f032370c",
+      "sizeBytes": 7359,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "releasetools/merge/merge_compatibility_checks.py",
+      "sha256": "118ab509180fac6c7188de7a5655952add8632741c14dd83e3e3f8a7ae7204cd",
+      "sizeBytes": 12383,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "releasetools/merge/merge_dexopt.py",
+      "sha256": "00b8f996240c1a52adbc1a78b48ff1f350d2063b8f8fa0e8464853930931dcab",
+      "sizeBytes": 10148,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "releasetools/merge/merge_meta.py",
+      "sha256": "6f07193c8e05e05951ceee26bbba6775599ce41053760629e22e14b0c0b47031",
+      "sizeBytes": 14746,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "releasetools/merge/merge_target_files.py",
+      "sha256": "6be5f52fd8da6370a0ff827ed093b3a7823116e779f27b6f5f6fc1fac54597ef",
+      "sizeBytes": 25145,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "releasetools/merge/merge_utils.py",
+      "sha256": "bcd94e405bb05975e77358b12fa90381cac38d9fb61ab49d9e763e4c3b60663f",
+      "sizeBytes": 10805,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "releasetools/merge/test_merge_compatibility_checks.py",
+      "sha256": "466a4ec7f94a66e7511904030e4b39bf7afed3997ddec12759f3933e154d5805",
+      "sizeBytes": 7444,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "releasetools/merge/test_merge_meta.py",
+      "sha256": "6a0414c73f9d88552b7ebea943ccefeb2cf7d7a55eab629c19dc2d9f3bbf2226",
+      "sizeBytes": 3731,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "releasetools/merge/test_merge_utils.py",
+      "sha256": "ceb1102ac0705600fbb22e023770243dd90ccb5d48e4a74d99df20f21dc79873",
+      "sizeBytes": 7730,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "releasetools/merge_ota.py",
+      "sha256": "eaed5cd9c1334cd15077ad7c76d2e8c3742dbb7e9fed977586da5d12befb5e17",
+      "sizeBytes": 11437,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "releasetools/non_ab_ota.py",
+      "sha256": "1440018964b1ca38fe954da4b8889ea9327a89f84ffa2b34433a2ac133a532db",
+      "sizeBytes": 26320,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "releasetools/ota_from_raw_img.py",
+      "sha256": "d7aa24a07d59bfb1f680b4ad9b5058a55b017f28aeaf0b5baa1360eac76bc8a5",
+      "sizeBytes": 6302,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "releasetools/ota_from_target_files.py",
+      "sha256": "52d581a170a609bc6dd063cf4034c3ad93954e00f9573cecac64df3f95cd604f",
+      "sizeBytes": 64246,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "releasetools/ota_metadata.proto",
+      "sha256": "aaddeb03f3de22761d5b4d218028859d2863befacf4d69464f77a469f6a90601",
+      "sizeBytes": 4104,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "releasetools/ota_metadata_pb2.py",
+      "sha256": "d94746cc4f8236aa6402cd7d8a4d0c93575f248d2a9f78ddee163564a93cf8bb",
+      "sizeBytes": 19780,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "releasetools/ota_package_parser.py",
+      "sha256": "535cba1ab337957299a7a4121e45e98cc4ec7d45dc64d48e4fab78893833ef77",
+      "sizeBytes": 8909,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "releasetools/ota_signing_utils.py",
+      "sha256": "b4bd29c512f66471a6b514a1bca8168742a846ccb6fe946606b880704e889d67",
+      "sizeBytes": 2150,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "releasetools/ota_utils.py",
+      "sha256": "6b4e21573899ec6e82228a313def3574ed7cd3a0e018ed8cf212865a447c7312",
+      "sizeBytes": 43746,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "releasetools/payload_signer.py",
+      "sha256": "9361b9533aad49ac6cac0c0e65c77c07481748af94bb12c07408b69686e62b78",
+      "sizeBytes": 9029,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "releasetools/pylintrc",
+      "sha256": "62ce5db0522813b06e5ebcd28c2f0c34a37c53df0fd90b77a14f4b70fdacccd1",
+      "sizeBytes": 11618,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "releasetools/rangelib.py",
+      "sha256": "4405370eef1b4e7102960a7e170a2f448a80f21f587f41ab825768127cea2e18",
+      "sizeBytes": 9805,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "releasetools/sign_apex.py",
+      "sha256": "a7f1e5163ee38121d050f0d42842b6e69ae8caacea26b3e6e4b7317c0a97ad39",
+      "sizeBytes": 5123,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "releasetools/sign_target_files_apks.py",
+      "sha256": "066729a5083916d43e23616dc8b7b1b363cc18d2a2c0a661745b3209d1fe014d",
+      "sizeBytes": 83425,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "releasetools/sparse_img.py",
+      "sha256": "af34daf2114e78f6946fc477e013f0ce89239e0a64d66f515e114cb259556c25",
+      "sizeBytes": 12954,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "releasetools/target_files_diff.py",
+      "sha256": "9b24a59a8345cc0df04b82fa18ee8cc064b92faa87ef1ee06da9fdb6672ff9c3",
+      "sizeBytes": 6905,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "releasetools/test_add_img_to_target_files.py",
+      "sha256": "811917eae87c07875158545e2efcd6366dd5011601e7565355d92bb394ebfe4d",
+      "sizeBytes": 15583,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "releasetools/test_apex_utils.py",
+      "sha256": "8d62491847d055436d86cd9c6d98f2c3d4f5fa0e1ad9dd0e5c1c6373010004bf",
+      "sizeBytes": 8471,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "releasetools/test_blockimgdiff.py",
+      "sha256": "9a03aa3885de5d2c1febd2c24fb2340fde1a35cadf5a7a76f7c9722cf06f1cd1",
+      "sizeBytes": 10664,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "releasetools/test_build_image.py",
+      "sha256": "ee28131f3520d9c3b8938925d9a605d4d2ac1fd0c4f1a60ebb8b6d3d646ae057",
+      "sizeBytes": 7049,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "releasetools/test_check_partition_sizes.py",
+      "sha256": "8856ee3c6f40a2dcda7aca8201ff82e0b1fd138f50219182128ae02f39d7068f",
+      "sizeBytes": 3417,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "releasetools/test_check_target_files_vintf.py",
+      "sha256": "c75b930524d80b42aeeaf292bc5157415d27d0ee0dfe8d83267b0561b20fea55",
+      "sizeBytes": 7901,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "releasetools/test_common.py",
+      "sha256": "c96a05853c631046e9704df3a0deee767452acc7fed8a367ba27196baedcc080",
+      "sizeBytes": 92282,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "releasetools/test_merge_ota.py",
+      "sha256": "5593d0cca3fd0e940db4d07367918c495165bae1b901dfedb1c817e6c374eb10",
+      "sizeBytes": 3706,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "releasetools/test_non_ab_ota.py",
+      "sha256": "58c88a7b6d6c476e2775ef3963f88fbc7d9140a58532f20f0db656b375ccf9af",
+      "sizeBytes": 6658,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "releasetools/test_ota_from_target_files.py",
+      "sha256": "30a2d3adb6f61877cebb906e3fb4e3aeae79dcbe76908033a013f92b6d8fc8bb",
+      "sizeBytes": 71767,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "releasetools/test_ota_utils.py",
+      "sha256": "c05f004b06f8ce860337373154e36c253f34b979fe75ba6b616af18894f8e933",
+      "sizeBytes": 2546,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "releasetools/test_rangelib.py",
+      "sha256": "5f4c4cc540ff7cb7d7926f1fff4e2365c0098ed03d31c883d5a35b9a639b68d2",
+      "sizeBytes": 6035,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "releasetools/test_sign_apex.py",
+      "sha256": "64c3a61df84351bfaa34b7a32d03294ad9d307d96e1501b4313cebedb6d8dc23",
+      "sizeBytes": 2547,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "releasetools/test_sign_target_files_apks.py",
+      "sha256": "6cfa03f731a2cc867cea9d14cc1abe0b3d68dc50bcbf5b1fe0dec421a557973a",
+      "sizeBytes": 23472,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "releasetools/test_utils.py",
+      "sha256": "31fb572eda9077e1aed69dd5b0acd88b51a8819e777e9d92676768f5ef41f49d",
+      "sizeBytes": 9342,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "releasetools/test_validate_target_files.py",
+      "sha256": "f1d9f287c4dae522c8e231235b2030abeb24b629516a3c96959620cda9675430",
+      "sizeBytes": 13609,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "releasetools/test_verity_utils.py",
+      "sha256": "bf5e680ef6ac87dfb948674ad89d8b27caebee0422ed7e04e7f434defba19411",
+      "sizeBytes": 7144,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "releasetools/testdata/TestApp.apk",
+      "sha256": "56a6e3cba1ebb0c6e1257e3d15f715b39174bfc259ece918cfb353dc7b6d208c",
+      "sizeBytes": 4817,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "releasetools/testdata/apexkeys_framework.txt",
+      "sha256": "65d6ac449d9c6d0bfc9877df70589dbc9349d413dd6306dcb8b5cfcb346310f5",
+      "sizeBytes": 2022,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "releasetools/testdata/apexkeys_framework_conflict.txt",
+      "sha256": "56bcf4035a2416d93ae147d170373d6ba959f8be45a63cfbce0890d668d2ad97",
+      "sizeBytes": 339,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "releasetools/testdata/apexkeys_merge.txt",
+      "sha256": "3435792a1efdb426f633ea582738aebbdaf2bb725c9d4429a5e3dc31f1c8b3f9",
+      "sizeBytes": 2202,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "releasetools/testdata/apexkeys_vendor.txt",
+      "sha256": "118f6ca11ffb33287b967bf8ffd210e3d098aae5511f36422ac7abd7cf18eee1",
+      "sizeBytes": 1464,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "releasetools/testdata/apkcerts_framework.txt",
+      "sha256": "af466c0b662d453223dbca5f00c953ee7fe3463dd2bffc3465482c6dc9489cef",
+      "sizeBytes": 867,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "releasetools/testdata/apkcerts_merge.txt",
+      "sha256": "7a04a3d18490e46f4d903c99963d5cd245b2551ffd2b4718bbc387873b2bcff5",
+      "sizeBytes": 1013,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "releasetools/testdata/apkcerts_vendor.txt",
+      "sha256": "502a0a2045eecdbcc0ef60132c57d5e9e3d45a840ca78751110239751ec6ab06",
+      "sizeBytes": 721,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "releasetools/testdata/foo.apex",
+      "sha256": "864aed867c94593755b6b4001087b1056f730c3286ae4f0e36aca8bb1006bc8e",
+      "sizeBytes": 3302090,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "releasetools/testdata/has_apk.apex",
+      "sha256": "c4625447212d6a8a5593f7201364c97f881344310fc5b13b6cb2e16a1f70939a",
+      "sizeBytes": 2470531,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "releasetools/testdata/media.x509.pem",
+      "sha256": "84c279d163d2ff27b63d1b63bb648bc413216f4a97bf716023d1fe480020dddc",
+      "sizeBytes": 1675,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "releasetools/testdata/merge_config_framework_item_list",
+      "sha256": "a74baeea5bcd3f2ce1f1ca31955d66265e1f0f007488a22dad808c085a941ff6",
+      "sizeBytes": 181,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "releasetools/testdata/payload_signer.sh",
+      "sha256": "71e3d422b0fd421d320b58680ece22378af648ea5aeb57c1176b19fbb25d02be",
+      "sizeBytes": 180,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "releasetools/testdata/platform.x509.pem",
+      "sha256": "9837de028f460c35cc8d3fa45f14eecce30f6fbfe4b93d399aef1acb80c20d14",
+      "sizeBytes": 1675,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "releasetools/testdata/sigfile.bin",
+      "sha256": "f65580d6eebac3af9245a5f6acd0b2de61176e69b59bae2886e8ef9f20f5746f",
+      "sizeBytes": 32,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "releasetools/testdata/signed-sigfile.bin",
+      "sha256": "673b7b39480a5d77abdae122f6319d0d8329f4ef5e249736903d5b7ed18aa7b9",
+      "sizeBytes": 256,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "releasetools/testdata/signing_helper.sh",
+      "sha256": "53eb2363d4932b972b741aa22a13da145345a270d21a848fc3d629a5e06906f9",
+      "sizeBytes": 719,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "releasetools/testdata/testkey.key",
+      "sha256": "b268d3a73878ed22fdc38dfe4e2f59018581bd639d83f76d0c59ba37b655cf66",
+      "sizeBytes": 1704,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "releasetools/testdata/testkey.pk8",
+      "sha256": "176eb4440f92d881ac3cf246a3f499152090ba14ba6fbffeae055bb6ea4e5e27",
+      "sizeBytes": 1216,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "releasetools/testdata/testkey.pubkey.pem",
+      "sha256": "e44d06e79905b6145974a07aaadf46e9f82d902ec3e62761f6ac4fa30a9b8862",
+      "sizeBytes": 451,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "releasetools/testdata/testkey.x509.pem",
+      "sha256": "10709b81c5cfe80b5b97ce7682aedc9a273797624f9558d6e80eb254287ff300",
+      "sizeBytes": 1448,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "releasetools/testdata/testkey_EC.key",
+      "sha256": "95e7c8c54fe5cb50f30e982fe1afba9ecf4d7f4870d9956aff3cea588d311b9c",
+      "sizeBytes": 241,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "releasetools/testdata/testkey_RSA4096.key",
+      "sha256": "269660ec8ba0c1cca02078297655637541efc7cd516ae681c7225bb429141e98",
+      "sizeBytes": 3272,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "releasetools/testdata/testkey_mincrypt",
+      "sha256": "9028a65293977dd134c224ac73aa4a2adbdd612fae0a8b586d3f6c3d4e6ed258",
+      "sizeBytes": 524,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "releasetools/testdata/testkey_with_passwd.key",
+      "sha256": "a0664e42a757d3cbe390ab0808e496e3fc6162e1dd1309f8b966eca51bb3c9a3",
+      "sizeBytes": 1708,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "releasetools/testdata/testkey_with_passwd.pk8",
+      "sha256": "96aa55ee00e777a4822152ac0af4f3a302828fe96cbd9ee6d8bc7f60f9f4736f",
+      "sizeBytes": 1329,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "releasetools/testdata/testkey_with_passwd.x509.pem",
+      "sha256": "38829c333e818d5b25c2200a5334583e079d196b3844243d28ff61e618b8f1cb",
+      "sizeBytes": 1448,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "releasetools/testdata/tuna_vbmeta.zip",
+      "sha256": "a344025e1a8f946aa9028f0f5568e8b4475976f6956145fc7b2faf708514c4d1",
+      "sizeBytes": 7099,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "releasetools/testdata/tuna_vbmeta_system.zip",
+      "sha256": "57c5fad84846cc67e708eef9bf7d154f39acecef6e59dd3386e8028e339124b0",
+      "sizeBytes": 6295,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "releasetools/testdata/tuna_vbmeta_vendor.zip",
+      "sha256": "da2734689d7b9dfc62c652ff86d1e08b5e815a77c748c662c03c96c652e56acc",
+      "sizeBytes": 6262,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "releasetools/testdata/verity.x509.pem",
+      "sha256": "ea9e433bb502a3ddef2c85460b499ab1bf8b2ff3f776b468199e5aa358932d9c",
+      "sizeBytes": 1444,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "releasetools/testdata/verity_mincrypt",
+      "sha256": "5b5790b5632958cc53ad4358eec77a40f9d4ee09e338280726113d3e13759d3d",
+      "sizeBytes": 524,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "releasetools/testdata/vintf/kernel/SYSTEM/etc/vintf/compatibility_matrix.1.xml",
+      "sha256": "b3dfe6818e8a945f244489ca78163dbf4b8d3ecaca5d277a6b68f68824e1dfa4",
+      "sizeBytes": 261,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "releasetools/testdata/vintf/matrix_incompat/SYSTEM/etc/vintf/compatibility_matrix.1.xml",
+      "sha256": "c0559f56e1dbc416de204cbb1222210599dfd4163a32c5f4113179920d4ce593",
+      "sizeBytes": 229,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "releasetools/testdata/vintf/sku_compat/ODM/etc/vintf/manifest_sku.xml",
+      "sha256": "dff8a9bb440491846dcfbc2cd0a4e969f3f5c6ee3f79ea1b1030c0d725b8589e",
+      "sizeBytes": 195,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "releasetools/testdata/vintf/sku_compat/SYSTEM/etc/vintf/compatibility_matrix.1.xml",
+      "sha256": "1ab441b63dcb7baa9398a49816a4caee68cd51ab70e549d6298053e1cb70e1b3",
+      "sizeBytes": 449,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "releasetools/testdata/vintf/sku_incompat/ODM/etc/vintf/manifest_sku.xml",
+      "sha256": "dff8a9bb440491846dcfbc2cd0a4e969f3f5c6ee3f79ea1b1030c0d725b8589e",
+      "sizeBytes": 195,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "releasetools/testdata/vintf/sku_incompat/SYSTEM/etc/vintf/compatibility_matrix.1.xml",
+      "sha256": "79cb4f16d8b9a46416279b4aea52336de8a82c4f804045d4bcc9d287e06e1a87",
+      "sizeBytes": 449,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "releasetools/validate_target_files.py",
+      "sha256": "7d177c3692aaa34d04da50c7e933d5598be47f625db20e00ad546c29d69f52ec",
+      "sizeBytes": 22638,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "releasetools/verity_utils.py",
+      "sha256": "3b846d0d2e34a4d7131d2276708d871ccf7da6c13fe32b412afb7d4629d0d1c8",
+      "sizeBytes": 12324,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "script/common.sh",
+      "sha256": "d6ff8cd70b065af7e129a95d026ff5ddd8564a6e12fa340cd02fd93deba76262",
+      "sizeBytes": 4979,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "script/decrypt-keys",
+      "sha256": "c0109995fe2c64d0f0010bcdecd2db3dd285a17e330aee101077eb6b7d347e4c",
+      "sizeBytes": 971,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "script/encrypt-keys",
+      "sha256": "70bc26f545bbbd2509d3fd8dc11e7c21054c170116781e87804003153222e861",
+      "sizeBytes": 1312,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "script/generate-delta.sh",
+      "sha256": "2e0f80721588ff8f45b298f8242e8af658297c1916ff276b9456c1b4e957ef63",
+      "sizeBytes": 1026,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "script/generate-metadata",
+      "sha256": "061e28fc4f65300b8c24bba7056d09a7dc9eced4fdaecf0a5c1e09866b833f20",
+      "sizeBytes": 757,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "script/generate-release.sh",
+      "sha256": "01f7847ecdc6600bd2e3ffebe45cf79cee4fead1d6b61686c4d3c70e9c548311",
+      "sizeBytes": 10840,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "vendor/google_devices/mustang/proprietary/vendor/etc/gnss/ca.pem",
+      "sha256": "730fc9a6b512cf2782351b22f870f83cbf79bd51a1891f22edb3bb987a5f2422",
+      "sizeBytes": 12586,
+      "type": "file"
+    }
+  ],
+  "inventorySha256": "7e69d987fd0384e169467f1f9ded8c4986d6e9f8e0538f7aa6b4402808dd9912",
+  "nativeReceiptSha256": "3489ad84429727ce9f3625e95af9482f64ef9deca60557fe9b06db2e645fd2d2",
+  "otaAdmitted": false,
+  "outerArtifactReadback": {
+    "artifactBytes": 535696877,
+    "artifactId": 13637213612,
+    "artifactSha256": "8ace301a7e02323d294d8b9ae70b5b3b62f3599d831e998f5ab17c271d9bbb4d",
+    "complete": true,
+    "nativeReceiptSha256": "3489ad84429727ce9f3625e95af9482f64ef9deca60557fe9b06db2e645fd2d2",
+    "packageBytes": 536801287,
+    "packageExecuted": false,
+    "packageSha256": "9f0f1c8b906641cf262526fb8877adf5f711504c2ab6d508c437bd1005c1cc32",
+    "supportedSameReferenceRangeRead": true
+  },
+  "packageArtifact": {
+    "id": 13637213612,
+    "name": "mustang-otatools-package-42531345133-1",
+    "sha256": "8ace301a7e02323d294d8b9ae70b5b3b62f3599d831e998f5ab17c271d9bbb4d",
+    "sizeBytes": 535696877
+  },
+  "packageBytes": 536801287,
+  "packageBytesReadThisInvocation": true,
+  "packageExecuted": false,
+  "packageSha256": "9f0f1c8b906641cf262526fb8877adf5f711504c2ab6d508c437bd1005c1cc32",
+  "pristineRuntimeAttestation": false,
+  "recordedAt": "2026-11-08T23:32:57.064148+00:00",
+  "requiredExecutables": {
+    "bin/ota_from_target_files": {
+      "mode": 493,
+      "path": "bin/ota_from_target_files",
+      "sha256": "6e0d9f0d68d9a3c11ffcb5d78e8f0fb71c3edb544f89fbf7a4dbc6a127d42c20",
+      "sizeBytes": 25151213,
+      "type": "file"
+    },
+    "bin/sign_target_files_apks": {
+      "mode": 493,
+      "path": "bin/sign_target_files_apks",
+      "sha256": "cccf60869cb418eedc4c851a5516c9c45fd80104f23a1bd69562443e99a97920",
+      "sizeBytes": 25310980,
+      "type": "file"
+    }
+  },
+  "run": {
+    "runAttempt": "1",
+    "runId": "42531345133",
+    "source": "b80dd7ac93e94b3592f9e6770a8930a63c38e735",
+    "workflow": "Immortal-Protocols/RoseOS-1/.github/workflows/mustang-ota-dedicated.yml@refs/heads/main"
+  },
+  "schema": "roseos.mustang-otatools-package-inspection.v1",
+  "signerPinsAdmitted": false
+}

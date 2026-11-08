@@ -112,6 +112,8 @@
   "otatools": {
     "sha256": null,
     "executable": null,
-    "basis": "Independent CompileHarness otatools receipt is queued after 669 regeneration and has not been reviewed. No historical or guest hash is a pin."
+    "qualificationEvidence": "os/build-only/mustang-otatools-42531345133.json",
+    "inspectionEvidence": "os/build-only/mustang-otatools-inspection-42531345133.json",
+    "basis": "Dedicated tool-only run 42531345133 succeeded; its independent same-run hosted download matched 536801287 bytes and SHA-256 9f0f1c8b906641cf262526fb8877adf5f711504c2ab6d508c437bd1005c1cc32. Independent local artifact/package hash checks and read-only inspection now cover all 500 entries and 927318429 expanded bytes, including both required executable entry hashes. No package member was extracted or executed. Production executable/hash pins and signing admission remain unbound."
   }
 }
