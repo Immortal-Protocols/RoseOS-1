@@ -98,6 +98,16 @@ class LockPreparationTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'wrong VM'):
                 lock.prepare()
 
+    def test_root_host_command_has_an_absolute_tool_and_does_not_inherit_credentials(self):
+        with patch.dict(os.environ, {'PATH': '/untrusted', 'GH_TOKEN': 'secret', 'BASH_ENV': '/untrusted'}), \
+                patch.object(lock.subprocess, 'run', return_value='observed') as run:
+            self.assertEqual(lock.host_command(['findmnt', '--noheadings'], capture_output=True, text=True), 'observed')
+        self.assertEqual(run.call_args.args[0][0], '/usr/bin/findmnt')
+        self.assertEqual(set(run.call_args.kwargs['env']), {'PATH', 'LANG', 'LC_ALL'})
+        with patch.object(lock.subprocess, 'run', side_effect=AssertionError('unexpected command ran')):
+            with self.assertRaises(ValueError):
+                lock.host_command(['/untrusted/findmnt'])
+
     def test_linked_parent_is_refused_without_following_it(self):
         with tempfile.TemporaryDirectory() as tmp:
             linked = Path(tmp)/'linked'

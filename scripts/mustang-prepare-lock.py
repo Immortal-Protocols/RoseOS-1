@@ -10,6 +10,7 @@ import json
 import os
 from pathlib import Path
 import stat
+import subprocess
 import sys
 
 import mustang_hosttools as readers
@@ -56,13 +57,20 @@ def create_at(directory):
         os.close(fd)
 
 
+def host_command(argv, **kwargs):
+    if not argv or argv[0] != 'findmnt':
+        raise ValueError('unexpected host identity command')
+    return subprocess.run(['/usr/bin/findmnt', *argv[1:]],
+                          env={'PATH': '/usr/bin:/bin', 'LANG': 'C.UTF-8', 'LC_ALL': 'C.UTF-8'}, **kwargs)
+
+
 def prepare():
     if os.geteuid() != 0:
         raise ValueError('lock preparation requires an existing authorized root session')
     lane = mustang_lane.validate(mustang_lane.configuration())
     cfg = json.loads((ROOT/'os/build-only/mustang-runtime.json').read_text())
     dedicated = mustang_ota.module('mustang_lock_identity', 'mustang-dedicated.py')
-    paths = dedicated.host_identity(lane, cfg['dataFilesystemUuid'], mount=cfg['dataMount'])
+    paths = dedicated.host_identity(lane, cfg['dataFilesystemUuid'], execute=host_command, mount=cfg['dataMount'])
     target = Path(lane['lockPath'])
     if target.parent != paths['home'] or target.name != NAME:
         raise ValueError('canonical lock path differs')
