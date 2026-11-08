@@ -105,6 +105,12 @@ not a filesystem quota or containment of descendants that detach into a new
 session. Bounds are ceilings, not measured costs. Inodes and free space are
 rechecked during work. Timeout, cancellation or monitor failure kills the
 build process group; guest code never claims an authenticated VM STOP.
+The structured receipt records the first, last and minimum available bytes,
+minimum available inodes, peak watched bytes and sample count. Its filesystem
+available-byte drop is a disk observation, not RSS or a unique-process cost.
+Live samples tolerate entries being renamed or removed while Make runs and
+walk from directory descriptors without following links. Final inventory
+requires readable supporting directories; an incomplete walk fails.
 
 The output directory must be absent. Existing or partial output is preserved
 for explicit reconciliation. The child receives an environment allowlist and
@@ -126,8 +132,8 @@ recipe and `dry_run` still performs host checks. Review and merge of this
 source, followed by an appropriately scoped manual dispatch and actual guest
 readback, remain necessary before claiming live preparation success.
 
-Keep the current `mustang_hosttools.py` proposal fail-closed while implementing
-and testing that adapter. Do not weaken `guard()` or change `status` to `bound`
+Keep the current `mustang_hosttools.py` proposal fail-closed when integrating
+and running this adapter. Do not weaken `guard()` or change `status` to `bound`
 to reach a prep stage. Do not rerun the guest bootstrap as a diagnostic: it
 installs packages, replaces runner files and changes system configuration.
 
@@ -146,3 +152,158 @@ The previous Codex thread ID is
 tool, so its complete transcript was not independently retrieved here. This
 handoff uses the delegated summary, current repository, recent room receipts
 and fresh GitHub/GCP reads; it does not claim unseen owner acknowledgment.
+
+## Local review results
+
+The self-review tightened the execution boundary to the exact fourteen pinned
+host goals; another syntactically valid Make goal such as `droid` is refused
+before controller START. The recipe's adevtool pin must match the manifest.
+Live disk sampling now tolerates disappearing temporary entries while using
+descriptor-based walks. Final distribution inventory refuses unreadable
+supporting directories. The receipt includes measured disk/inode observations,
+and revision-marker observation shares the original stage deadline. The
+existing Mustang signer label was added to Actionlint's label metadata; no
+runner or access binding was created.
+
+Verification on this environment:
+
+- **205 affected tests passed**, covering the adapter, source-sync, available
+  ephemeral-runner cases, edge/runtime admission, hosted signing, app binding
+  and test-path coverage. The source-sync tests used an official Repo checkout
+  installed in `/tmp`, with its config also under `/tmp`.
+- **Two additional ephemeral-runner permission fixtures are unavailable**:
+  `test_health_check_uses_the_runner_when_parents_are_not_searchable` and
+  `test_source_dirs_are_runner_writable_under_a_root_owned_parent` require
+  `sudo`, which is absent. They were attempted and their missing prerequisite
+  was recorded; they are not counted as passes.
+- **Actionlint 1.7.12 passed all repository workflows**; its official release
+  archive was checksum-verified before local use. Both Mustang YAML files parse,
+  the changed Python files compile, and `git diff --check` passes.
+- The ordinary full offline suite was attempted. Java's real compiler module
+  was exposed through a temporary `javac` launcher; fixture package construction
+  required a process-local umask of 022. The suite then stopped on missing
+  `mke2fs`. A diagnostic copy of the suite continued its original commands to
+  record every failing unit, without changing the repository's test script.
+  It finished with four failing units: `test_release_pipeline.py`,
+  `test_permission_apex.py` and `test_emulator_alpha.py` require missing
+  `mke2fs`; `test_yogi_direct.py` has an OpenSSH-9.2/OpenSSL-3.5 qualification
+  failure, four read-only-home fixture errors and two unresolved process-death
+  assertions. The latter assertions are not declared environment-only without
+  further evidence. The full suite is therefore **not green**.
+
+The detailed local logs are `/tmp/mustang-review-final-affected.log`,
+`/tmp/mustang-review-actionlint.log`, `/tmp/mustang-review-suite-all.log` and
+`/tmp/mustang-review-suite-failures.log`. These are local check records, not
+live compilation, cryptographic signing or device acceptance evidence. The
+remaining prerequisite/fixture results must be resolved on a suitable check
+environment before claiming full-suite validation for integration.
+
+## Integration and first preparation run
+
+These are prepared operator steps, not actions performed by this handoff.
+The source is on local branch `codex/mustang-hostdeps-adapter`. The earlier
+draft-PR creation was denied by automatic approval review because external
+repository publication lacked explicit authorization. That action has not
+been retried. Source publication/integration and a live preparation run are
+separate pending actions.
+
+1. **Reconcile and review the complete branch.** After the local changes are
+   committed, use the following read/reconciliation commands. The branch
+   includes the initial documentation commit and the adapter commit; review
+   the full diff rather than only its latest commit. If main has advanced,
+   reconcile on an isolated branch and rerun the affected checks.
+
+   ```sh
+   git status --short
+   git fetch origin main
+   git log --oneline origin/main..codex/mustang-hostdeps-adapter
+   git diff --stat origin/main...codex/mustang-hostdeps-adapter
+   git diff origin/main...codex/mustang-hostdeps-adapter
+   ```
+
+2. **Publish for review only after the external action is authorized.** The
+   exact branch publication would be:
+
+   ```sh
+   git push --set-upstream origin codex/mustang-hostdeps-adapter
+   ```
+
+   Proposed draft PR title: **Add bounded Mustang adevtool host-dependency
+   preparation**. Proposed description: “The dedicated Mustang workflow has
+   source-sync and OTA paths but no stage for preparing adevtool's generic
+   host dependencies. Add an exclusive manual `hostdeps_only` job using the
+   existing owned controller, group-5 JIT route, dedicated lock and hosted
+   cleanup. Check pinned projects and the exact fourteen goals before Make;
+   enforce explicit job/time/disk/log bounds and retain run-bound distribution
+   and space observations. Vendor generation, OTA allocation, signing and
+   publication remain outside this stage. Validation and remaining local
+   environment gaps are recorded in this handoff.” Add the actual final check
+   results to that description. Normal review/CI and merge must finish before
+   a main-only dispatch; a feature-branch dispatch is refused by the adapter.
+
+3. **Before any authorized dispatch, recheck ownership and exact resources.**
+   Record the integrated main SHA and check that there is no queued or active
+   dedicated Mustang run:
+
+   ```sh
+   git ls-remote origin refs/heads/main
+   gh run list --repo Immortal-Protocols/RoseOS-1 \
+     --workflow mustang-ota-dedicated.yml --branch main --limit 20 \
+     --json databaseId,event,headSha,status,conclusion,createdAt
+   gcloud compute instances describe roseos-mustang-builder-20261107-a \
+     --project protocols-465723 --zone us-west2-a \
+     --format='json(name,id,status,scheduling,disks)'
+   gcloud compute disks describe roseos-mustang-data-20261107-a \
+     --project protocols-465723 --zone us-west2-a \
+     --format='json(name,id,sizeGb,type,users)'
+   ```
+
+   Require VM ID `5585425566393384049`, disk ID `4322966418460195960`, the
+   recorded attachment, VM `TERMINATED`, and `maxRunDuration.seconds=14400`
+   with termination action `STOP`. An active or foreign-owned VM/run is a
+   reconciliation blocker, not a reason to adopt or cancel healthy work.
+   These control-plane reads do not inspect the stopped filesystem. Existing
+   lock presence/permissions, source state and output absence are still guest
+   preflight checks; no successful readback of those paths is claimed here.
+
+4. **If the one preparation run is authorized, dispatch only its scope.**
+
+   ```sh
+   gh workflow run mustang-ota-dedicated.yml \
+     --repo Immortal-Protocols/RoseOS-1 --ref main \
+     -f hostdeps_only=true -f source_only=false \
+     -f dry_run=false -f publish=false
+   ```
+
+   Capture the actual new run ID from GitHub, verify its head SHA equals the
+   reviewed integrated main SHA, and require attempt 1. Do not rerun an old
+   attempt. Monitor that exact run's controller, enroll, queue-watch, hostdeps
+   and cleanup jobs with `gh run view RUN_ID --repo
+   Immortal-Protocols/RoseOS-1 --json url,headSha,status,conclusion,jobs`.
+   `RUN_ID` here means the observed numeric ID, not a preselected value.
+   Controller ownership must precede guest work. Queue timeout or a refused
+   preflight must retain the existing cleanup path; do not route through SSH
+   or the guest bootstrap to get past the refusal.
+
+5. **Collect evidence and verify STOP before planning another action.** The
+   only uploaded preparation artifact is `mustang-hostdeps-RUN_ID-1`; its
+   file is `hostdeps-receipt.json`. Download that exact artifact into a fresh
+   directory and record its digest. Require the receipt's run/source/attempt,
+   builder and disk identities to match GitHub and the lane; Make exit 0;
+   `success: true`; the exact fourteen real executable entrypoints and their
+   supporting distribution; the pinned wrapper/manifest/revision marker;
+   and measured headroom within the recorded bounds. The ignored-content and
+   detached-descendant limitations remain part of that evidence. A successful
+   dependency receipt does not set the OTA runtime or otatools pins.
+
+   Require cleanup's owned STOP and group-5 sweep results, then make a fresh
+   control-plane read of the same numeric VM ID and observe `TERMINATED`.
+   The four-hour safeguard is a backstop, not evidence that cleanup succeeded.
+   If a lock is missing/busy or output already exists, Make must not start.
+   A refusal before attempt creation may have no receipt artifact; retain the
+   fixed step error and cleanup result instead of fabricating a receipt.
+   Existing or partial output stays in place for explicit reconciliation.
+   Root-owned lock preparation, input deletion, permission changes and any
+   retry are separate actions with their own applicable scope. No blind
+   redispatch, automatic deletion, credential creation or access workaround
+   is part of this plan.

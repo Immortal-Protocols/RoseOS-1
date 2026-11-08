@@ -77,11 +77,13 @@ class HostdepsTest(unittest.TestCase):
             changed['adevtool']['depsDir'] = value
             with patch.object(deps.readers, 'recipe', return_value=changed), self.assertRaisesRegex(ValueError, 'recipe'):
                 deps.recipe()
-        for value in ('--eval=bad', '../../target', 'aapt2;bad', 'apksigner'):
+        for value in ('--eval=bad', '../../target', 'aapt2;bad', 'apksigner', 'droid', 'otatools-package', 'vendorbootimage'):
             changed = json.loads(json.dumps(original))
             changed['adevtool']['depsTools'][0] = value
             with patch.object(deps.readers, 'recipe', return_value=changed), self.assertRaisesRegex(ValueError, 'recipe'):
                 deps.recipe()
+            with patch.object(deps.readers, 'recipe', return_value=changed), self.assertRaisesRegex(ValueError, 'recipe'):
+                deps.guard(self.env(), {'inputs': {'hostdeps_only': True}})
 
     def test_dedicated_guard_rejects_mixed_scope_before_any_process(self):
         spec = importlib.util.spec_from_file_location('hostdeps_guard_test', ROOT/'scripts/mustang-dedicated.py')
@@ -178,6 +180,14 @@ class HostdepsTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'already exists'):
                 deps.build(source, attempt, spec, {})
 
+    def test_revision_marker_does_not_extend_an_expired_stage_deadline(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source, attempt = self.fixtures(tmp)
+            output = self.emit_outputs(source, deps.recipe())
+            with self.assertRaisesRegex(ValueError, 'total timeout'):
+                deps.mark_revision(source, output, attempt, deps.recipe()['adevtoolRevision'], time.monotonic()-1)
+            self.assertFalse((output/'adevtool_revision').exists())
+
     def test_failure_retains_output_writes_failed_receipt_and_no_revision_marker(self):
         for failure in ('make', 'missing-tool', 'inventory-link'):
             with self.subTest(failure=failure), tempfile.TemporaryDirectory() as tmp:
@@ -205,6 +215,7 @@ class HostdepsTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             source, attempt = self.fixtures(tmp)
             with patch.object(deps, 'source_check', side_effect=ValueError('pinned project HEAD or worktree differs')), \
+                    patch.object(deps, 'sample', return_value=123), \
                     patch.object(deps, 'supervise', side_effect=AssertionError('Make started')):
                 with self.assertRaisesRegex(ValueError, 'worktree'):
                     deps.build(source, attempt, deps.recipe(), {})
@@ -268,6 +279,55 @@ class HostdepsTest(unittest.TestCase):
             with patch.object(deps.os, 'statvfs', return_value=ample), patch.object(deps, 'LOG_BYTES', 4):
                 with self.assertRaisesRegex(ValueError, 'log bound'):
                     deps.sample(source, output, attempt, log)
+
+    def test_live_sampler_tolerates_a_file_unlinked_between_readdir_and_stat(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root/'stable').write_bytes(b'1234')
+            (root/'transient').write_bytes(b'56789')
+            original_stat = os.stat
+            removed = []
+            def stat_during_build(path, *args, **kwargs):
+                if path == 'transient' and kwargs.get('dir_fd') is not None and not removed:
+                    os.unlink(path, dir_fd=kwargs['dir_fd'])
+                    removed.append(True)
+                return original_stat(path, *args, **kwargs)
+            with patch.object(deps.os, 'stat', side_effect=stat_during_build):
+                self.assertEqual(deps.tree_bytes(root), 4)
+            self.assertEqual(removed, [True])
+            (root/'outside-link').symlink_to('/etc')
+            self.assertEqual(deps.tree_bytes(root), 4+len('/etc'))
+
+    def test_space_observations_record_actual_free_space_and_watched_bytes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source, attempt = self.fixtures(tmp)
+            output = source/'out_adevtool_deps'
+            log = attempt/'log'
+            observations = {}
+            initial = SimpleNamespace(f_bavail=1000, f_frsize=4096, f_favail=100)
+            later = SimpleNamespace(f_bavail=990, f_frsize=4096, f_favail=97)
+            with patch.object(deps, 'RESERVE_BYTES', 1), patch.object(deps.os, 'statvfs', side_effect=[initial, later]):
+                deps.sample(source, output, attempt, log, observations=observations)
+                log.write_bytes(b'1234')
+                deps.sample(source, output, attempt, log, observations=observations)
+            self.assertEqual(observations['samples'], 2)
+            self.assertEqual(observations['filesystemAvailableDropBytes'], 10*4096)
+            self.assertEqual(observations['minimumAvailableInodes'], 97)
+            self.assertEqual(observations['peakWatchedBytes'], 4)
+
+    def test_inventory_refuses_an_unreadable_supporting_directory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source, _attempt = self.fixtures(tmp)
+            output = self.emit_outputs(source, deps.recipe())
+            blocked = output/'host/linux-x86/framework'
+            original_scandir = os.scandir
+            def denied(path):
+                if os.fspath(path) == str(blocked):
+                    raise PermissionError('fixture unreadable supporting directory')
+                return original_scandir(path)
+            with patch.object(deps.os, 'scandir', side_effect=denied):
+                with self.assertRaisesRegex(ValueError, 'inventory is incomplete'):
+                    deps.inventory(source, output, time.monotonic()+20)
 
     def test_report_rejects_foreign_identity_and_never_copies_raw_logs(self):
         with tempfile.TemporaryDirectory() as tmp:

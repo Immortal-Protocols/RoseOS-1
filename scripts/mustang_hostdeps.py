@@ -13,7 +13,6 @@ import json
 import os
 from pathlib import Path
 import pwd
-import re
 import signal
 import stat
 import subprocess
@@ -37,15 +36,18 @@ MAX_ENTRIES = 100000
 INVENTORY_BYTES = 8 << 20
 SAMPLE_SECONDS = 5
 KILL_GRACE = 30
+HOST_TOOLS = ('aapt2', 'apksigner', 'aprotoc', 'arsclib', 'debugfs', 'dispol',
+              'fsck.erofs', 'lpdump', 'lpunpack', 'lz4', 'ota_extractor',
+              'simg2img', 'sqlite3', 'toybox')
 
 
 def recipe(root=ROOT):
     spec = readers.recipe(root)
     tools = spec['adevtool']['depsTools']
-    if spec['adevtool']['depsDir'] != 'out_adevtool_deps' or not isinstance(tools, list) \
-            or len(tools) != 14 or any(type(name) is not str or not re.fullmatch(r'[a-z0-9][a-z0-9_.-]*', name)
-                                     or name in ('.', '..') for name in tools) or len(set(tools)) != 14 \
-            or not re.fullmatch(r'[0-9a-f]{40}', spec['pins']['vendor/adevtool']):
+    projects = sync.project_identities((Path(root)/'os/pinned-manifest.xml').read_bytes())
+    revisions = [row[3] for row in projects if row[1] == 'vendor/adevtool']
+    if spec['adevtool']['depsDir'] != 'out_adevtool_deps' or tools != list(HOST_TOOLS) \
+            or revisions != [spec['pins']['vendor/adevtool']]:
         raise ValueError('hostdeps recipe path, goals or revision differs')
     return {'schema': 'roseos.mustang-hostdeps-recipe.v1', 'scope': 'adevtool-host-dependencies-only',
             'product': 'sdk_phone64_x86_64', 'outDir': spec['adevtool']['depsDir'],
@@ -75,6 +77,7 @@ def guard(env, event, root=ROOT):
     if env.get('GITHUB_REPOSITORY_ID') != '1428996648':
         raise ValueError('hostdeps repository ID differs')
     require_selection(event)
+    recipe(root)  # Reject a changed goal/path/pin before the hosted controller START.
     ephemeral.require_group5(json.loads((Path(root)/'os/build-only/mustang-runtime.json').read_text()))
     accepted = json.loads((Path(root)/route.ACCEPTED_SOURCE_SYNC['path']).read_text())
     if not route.accepted_source_sync(accepted, route.ACCEPTED_SOURCE_SYNC['path'], root):
@@ -159,35 +162,60 @@ def fingerprint(source, path, deadline):
 
 
 def tree_bytes(path, deadline=None):
-    """No link following. Includes all output, not just the fourteen entrypoints."""
+    """Approximate one live sample. Rename/unlink races are normal during Make.
+
+    Walk from a no-follow directory descriptor. Disappearing entries may be
+    missed by this sample; permission/I/O errors and special files still refuse.
+    """
     if not path.exists() and not path.is_symlink():
         return 0
     total = 0
-    stack = [path]
-    count = 0
-    while stack:
-        if deadline is not None and time.monotonic() >= deadline:
-            raise ValueError('hostdeps total timeout')
-        current = stack.pop()
-        info = current.lstat()
-        count += 1
-        if count > MAX_ENTRIES:
-            raise ValueError('hostdeps output entry bound exceeded')
-        if stat.S_ISDIR(info.st_mode):
-            stack.extend(current.iterdir())
-        elif stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode):
-            total += info.st_size
-        else:
-            raise ValueError('hostdeps special output refused')
-        if total > WORK_BYTES:
-            raise ValueError('hostdeps output byte bound exceeded')
+    count = 1
+    fd = readers._walk_dir(readers._body(str(path)) or [])
+    def onerror(error):
+        if not isinstance(error, FileNotFoundError):
+            raise ValueError('hostdeps output sampling failed') from None
+    try:
+        device = os.fstat(fd).st_dev
+        for _directory, dirs, files, parent in os.fwalk('.', dir_fd=fd, follow_symlinks=False, onerror=onerror):
+            if deadline is not None and time.monotonic() >= deadline:
+                raise ValueError('hostdeps total timeout')
+            for name in dirs+files:
+                if deadline is not None and time.monotonic() >= deadline:
+                    raise ValueError('hostdeps total timeout')
+                count += 1
+                if count > MAX_ENTRIES:
+                    raise ValueError('hostdeps output entry bound exceeded')
+                try:
+                    info = os.stat(name, dir_fd=parent, follow_symlinks=False)
+                except FileNotFoundError:
+                    continue
+                if info.st_dev != device:
+                    raise ValueError('hostdeps sampling crosses a filesystem')
+                if stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode):
+                    total += info.st_size
+                elif not stat.S_ISDIR(info.st_mode):
+                    raise ValueError('hostdeps special output refused')
+                if total > WORK_BYTES:
+                    raise ValueError('hostdeps output byte bound exceeded')
+    finally:
+        os.close(fd)
     return total
 
 
-def sample(source, output, attempt, log, deadline=None):
+def sample(source, output, attempt, log, deadline=None, observations=None):
     usage = tree_bytes(output, deadline)+tree_bytes(attempt, deadline)
     available = os.statvfs(source)
-    if usage > WORK_BYTES or available.f_bavail*available.f_frsize < RESERVE_BYTES or available.f_favail <= 0:
+    free = available.f_bavail*(available.f_frsize or available.f_bsize)
+    if observations is not None:
+        observations.setdefault('firstAvailableBytes', free)
+        observations['samples'] = observations.get('samples', 0)+1
+        observations['lastAvailableBytes'] = free
+        observations['minimumAvailableBytes'] = min(observations.get('minimumAvailableBytes', free), free)
+        observations['minimumAvailableInodes'] = min(observations.get('minimumAvailableInodes', available.f_favail), available.f_favail)
+        observations['peakWatchedBytes'] = max(observations.get('peakWatchedBytes', 0), usage)
+        observations['filesystemAvailableDropBytes'] = observations['firstAvailableBytes']-free
+    if usage > WORK_BYTES or free < RESERVE_BYTES or available.f_favail <= 0:
         raise ValueError('hostdeps space or inode bound exceeded')
     if log.exists() and log.stat().st_size > LOG_BYTES:
         raise ValueError('hostdeps log bound exceeded')
@@ -232,7 +260,9 @@ def inventory(source, output, deadline):
     distribution = output/'host/linux-x86'
     plain_dir(distribution)
     rows = {}
-    for directory, dirs, files in os.walk(distribution, followlinks=False):
+    def onerror(_error):
+        raise ValueError('hostdeps distribution inventory is incomplete')
+    for directory, dirs, files in os.walk(distribution, followlinks=False, onerror=onerror):
         for name in sorted(dirs+files):
             path = Path(directory)/name
             relative = str(path.relative_to(output))
@@ -283,7 +313,9 @@ def receipt(path, data):
         os.fsync(out.fileno())
 
 
-def mark_revision(source, output, attempt, revision):
+def mark_revision(source, output, attempt, revision, deadline):
+    if time.monotonic() >= deadline:
+        raise ValueError('hostdeps total timeout')
     plain_dir(output)
     temporary = attempt/'.adevtool_revision'
     with open(temporary, 'x') as marker:
@@ -292,7 +324,7 @@ def mark_revision(source, output, attempt, revision):
         os.fsync(marker.fileno())
     try:
         os.link(temporary, output/'adevtool_revision', follow_symlinks=False)
-        return fingerprint(source, output/'adevtool_revision', time.monotonic()+60)
+        return fingerprint(source, output/'adevtool_revision', deadline)
     finally:
         temporary.unlink()
 
@@ -308,9 +340,11 @@ def build(source, attempt, spec, env, root=ROOT, identity=None):
               'manifestSha256': hashlib.sha256((Path(root)/'os/pinned-manifest.xml').read_bytes()).hexdigest(),
               'success': False, 'otaAuthorized': False, 'signAuthorized': False, 'publishAuthorized': False,
               'authenticatedStop': False, 'boundEnforcement': 'sampled-process-group-stop',
-              'detachedDescendantsContained': False}
+              'detachedDescendantsContained': False, 'spaceObservations': {}}
     log = attempt/'build.log'
     try:
+        monitor = lambda: sample(source, output, attempt, log, deadline, result['spaceObservations'])
+        monitor()
         result['source'] = source_check(source, env, deadline, root)
         if checked(['/usr/bin/git', '-C', str(source/'vendor/adevtool'), 'rev-parse', 'HEAD'], source, env, deadline) != spec['adevtoolRevision']:
             raise ValueError('adevtool revision differs')
@@ -320,7 +354,7 @@ def build(source, attempt, spec, env, root=ROOT, identity=None):
         if not info.st_mode & 0o111:
             raise ValueError('adevtool build wrapper is not executable')
         result['wrapper'] = fingerprint(source, source/'vendor/adevtool/scripts/run-build.sh', deadline)
-        result['makeExitCode'] = supervise(argv(spec), source, env, log, deadline, lambda: sample(source, output, attempt, log, deadline))
+        result['makeExitCode'] = supervise(argv(spec), source, env, log, deadline, monitor)
         result['distribution'] = inventory(source, output, deadline)
         # All entrypoints must be real, executable files. Full distribution above
         # includes supporting JARs, libraries, scripts and contained links.
@@ -330,9 +364,9 @@ def build(source, attempt, spec, env, root=ROOT, identity=None):
                 raise ValueError('adevtool entrypoint missing or not executable')
         if checked(['/usr/bin/git', '-C', str(source/'vendor/adevtool'), 'rev-parse', 'HEAD'], source, env, deadline) != spec['adevtoolRevision']:
             raise ValueError('adevtool revision changed during build')
-        result['outputBytes'] = sample(source, output, attempt, log, deadline)
+        result['outputBytes'] = monitor()
         # This marker is never a substitute for this attempt's Make/output proof.
-        result['revisionMarker'] = mark_revision(source, output, attempt, spec['adevtoolRevision'])
+        result['revisionMarker'] = mark_revision(source, output, attempt, spec['adevtoolRevision'], deadline)
         result['success'] = True
     except BaseException as error:
         result['failure'] = str(error) if isinstance(error, ValueError) else type(error).__name__
