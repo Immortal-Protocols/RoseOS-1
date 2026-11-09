@@ -423,19 +423,20 @@ retained-tree work run on one host, `roseos-frankel-builder`, where Mustang's re
 - one queue, `os-release-frankel`;
 - one controller.
 
-**The hosted Agent lane (`agent-hosted`, 1F)** has no host: its target is `github-hosted`. Its two modes run only on
-GitHub-hosted runners, so the map binds no VM, disk, lock or controller for it, only its runner (`ubuntu-24.04`) and
-its own queue (`os-release-agent-hosted`). The test checks that:
+**The hosted Agent route (`agent.hostedRoute`, 1F).** The `agent` lane keeps the Frankel builder as its host. That is
+where `app-only` builds, and it is what the Mustang and harness lanes' own checks read for every lane. Its two hosted
+modes are its `hostedRoute`. They run only on GitHub-hosted runners, so the map binds no VM, disk, lock or controller
+for them, only their runner (`ubuntu-24.04`) and their own queue (`os-release-agent-hosted`). The test checks that:
 
 - only these two modes join that queue, and every other `os-release.yml` mode joins the builder's;
 - every job of these modes runs on `ubuntu-24.04`, and no self-hosted job serves them;
 - the controller (the only job that starts the builder) never runs for them, and cleanup (the only job that stops
   it) runs only after a controller that ran, so a hosted run can never stop a builder another queue's run is using;
-- the one thing the lane shares with a builder lane is the version ledger, through the shared store alone.
+- the one thing the route shares with a builder route is the version ledger, through the shared store alone.
 
-By route it is independent of every builder lane (`parallelByRoute`). It stays `inactive`, claiming no capacity, until
-a reviewed change makes it `active`: once the route is merged, the signer probe has passed (D4) and the ledger holds a
-builder floor (D2).
+By route it is independent of every builder route (`parallelByRoute` names it `agent/hosted`). It stays `inactive`,
+claiming no capacity, until a reviewed change makes it `active`: once the route is merged, the signer probe has passed
+(D4) and the ledger holds a builder floor (D2).
 
 **Yogi** has its own host in its committed route (#558): `yogi-ota.yml` and `os/ota/yogi.json`. The test checks every
 part of it against the map:
@@ -479,9 +480,9 @@ strings on two machines, because each VM has its own disk.
 (`scripts/release-allocate.py`). Each allocation reads pixel-ota releases (drafts included), this host's attempt
 directories and its `rose-actions` reservations, under the host lock. On two hosts that store would let both pick
 the same version. So the builder's Agent route (`app-only`) stays on the ledger's host, and the test refuses moving
-it. The shared pixel-ota ledger (D1, below) is the store every lane can update atomically: the hosted lane allocates
-through it alone (`hostedLanes`), so it may run off the host. Its create-if-absent ref is the one cross-lane
-serialization the plan allows.
+it. The shared pixel-ota ledger (D1, below) is the store every lane can update atomically: the hosted route allocates
+through it alone, so it may run off the host. Its create-if-absent ref is the one cross-lane serialization the plan
+allows.
 
 ## Launcher3 compile harness (1E, dedicated workflow, source-bound)
 
@@ -626,7 +627,7 @@ runners: no controller, builder, storage or host lock, and the controller and cl
 workflow keys its concurrency group by mode. These two modes have their own non-cancelling queue,
 `os-release-agent-hosted` (`queue: max`), and every other mode stays in `os-release-frankel`. A hosted run never waits
 behind an OS build and can never start or stop the builder. The version is the one thing it shares with the builder
-lanes, and the ledger decides it, not the queue (below). The lane map keeps the lane `inactive`, so it claims no
+lanes, and the ledger decides it, not the queue (below). The lane map keeps the route `inactive`, so it claims no
 parallel capacity until it is activated.
 
 The guard admits a dispatch from main only: no build, timestamp or apps pin, no resume, campaign or other mode's

@@ -369,11 +369,13 @@ class Workflow(unittest.TestCase):
     def setUp(self):
         self.jobs = shape.jobs(WORKFLOW)
 
-    def test_the_two_modes_are_the_hosted_agent_lane_in_its_own_queue(self):
+    def test_the_two_modes_are_the_agent_lanes_hosted_route_in_its_own_queue(self):
         self.assertEqual(shape.modes()[-2:], ['agent-hosted', 'agent-hosted-probe'])
-        lanes = json.loads((ROOT/'os/release-pipeline/lanes/capacity.json').read_text())['lanes']
-        self.assertEqual(lanes['agent-hosted']['modes'], ['agent-hosted', 'agent-hosted-probe'])
-        self.assertEqual(lanes['agent']['modes'], ['app-only'])  # the builder route stays on the builder and its queue
+        lane = json.loads((ROOT/'os/release-pipeline/lanes/capacity.json').read_text())['lanes']['agent']
+        self.assertEqual(lane['modes'], ['app-only', 'agent-hosted', 'agent-hosted-probe'])
+        self.assertEqual(lane['hostedRoute'], {'modes': ['agent-hosted', 'agent-hosted-probe'], 'runner': 'ubuntu-24.04',
+                                               'queue': 'os-release-agent-hosted', 'runtimeStatus': 'inactive'})
+        # app-only, the builder route, stays on the builder and its queue
         self.assertEqual({mode: shape.queue(mode) for mode in ('agent-hosted', 'agent-hosted-probe', 'app-only')},
                          {'agent-hosted': 'os-release-agent-hosted', 'agent-hosted-probe': 'os-release-agent-hosted',
                           'app-only': 'os-release-frankel'})
