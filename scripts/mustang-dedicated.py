@@ -8,7 +8,6 @@ manual workflow run. Publication requires its explicit manual input.
 import argparse
 import base64
 import hashlib
-import io
 import json
 import os
 from pathlib import Path
@@ -18,6 +17,8 @@ import stat
 import subprocess
 import sys
 import tarfile
+import urllib.error
+import urllib.parse
 import urllib.request
 import zipfile
 
@@ -190,7 +191,7 @@ def host_identity(lane,filesystem_uuid,observe_id=metadata_id,execute=subprocess
     return paths
 
 
-DRY_RUN_BLOCKED=frozenset(('prepare-artifact-cli','fetch-inputs','baseline','produce','collect','sign','_execute','stage','verify-staged','publish','report'))
+DRY_RUN_BLOCKED=frozenset(('fetch-inputs','baseline','produce','collect','sign','_execute','stage','verify-staged','publish','report'))
 
 
 def refuse_dry_run(action):
@@ -204,7 +205,7 @@ def infrastructure_tool_paths():
     return (mustang_ephemeral.NODE['install'], mustang_ephemeral.SDK['aapt'], mustang_ephemeral.SDK['apksigner'])
 
 
-def host_check(lane,cfg,observe_id=metadata_id,execute=subprocess.run,*,artifact_cli_required=True):
+def host_check(lane,cfg,observe_id=metadata_id,execute=subprocess.run):
     observed=observe_id()
     paths=host_identity(lane,cfg['dataFilesystemUuid'],lambda:observed,execute,cfg.get('dataMount'))
     space=os.statvfs(paths['home'])
@@ -223,53 +224,59 @@ def host_check(lane,cfg,observe_id=metadata_id,execute=subprocess.run,*,artifact
     for tool in tools:
         if not isinstance(tool,str) or not Path(tool).is_file() or not os.access(tool,os.X_OK):
             raise ValueError('dedicated tool unavailable')
-    if not infrastructure and artifact_cli_required and shutil.which('gh') is None:
-        raise ValueError('artifact CLI unavailable before compile')
 
 
-ARTIFACT_CLI = dict(version='2.103.3',
-    url='https://github.com/cli/cli/releases/download/v2.103.3/gh_2.103.3_linux_amd64.tar.gz',
-    archiveBytes=15031972,archiveSha256='4c806978ffce1cec70853302a56d70ac6da4f19bae7adca4e1a8ab00633dd91d',
-    member='gh_2.103.3_linux_amd64/bin/gh',binaryBytes=41070752,
-    binarySha256='b768184570b12536be4ac1528893f6340d1c6a7b40b56ad45bca9cd0e87ad34d')
+class NoArtifactRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, request, response, code, message, headers, url):
+        return None
 
 
-def prepare_artifact_cli(lane,cfg,env,fetch=urllib.request.urlopen):
-    """Pinned public CLI in this job's private temp directory; no root or credentials."""
-    run=controller.invocation(lane,env)
-    if env.get('GITHUB_JOB')!='builder' or env.get('MUSTANG_DRY_RUN')!='false':
-        raise ValueError('artifact CLI setup requires the full native builder job')
-    # Validate the real guest/disk/tools before any download or write. The
-    # following workflow step repeats the complete check with the CLI required.
-    host_check(lane,cfg,artifact_cli_required=False)
-    temporary=Path(env.get('RUNNER_TEMP',''))
-    home=mustang_paths.layout(lane)['home']
-    if not temporary.is_dir() or not temporary.is_relative_to(home) \
-            or any(p.is_symlink() for p in (temporary,*temporary.parents)) \
-            or os.stat(temporary).st_dev!=os.stat(home).st_dev:
-        raise ValueError('artifact CLI temp directory is not on the admitted disk')
-    pin=ARTIFACT_CLI
-    with fetch(pin['url'],timeout=60) as response:
-        archive=response.read(pin['archiveBytes']+1)
-    if len(archive)!=pin['archiveBytes'] or hashlib.sha256(archive).hexdigest()!=pin['archiveSha256']:
-        raise ValueError('artifact CLI archive differs from official pin')
-    with tarfile.open(fileobj=io.BytesIO(archive),mode='r:gz') as package:
-        rows=[m for m in package.getmembers() if m.name==pin['member']]
-        if len(rows)!=1 or not rows[0].isreg() or rows[0].mode&0o7000 or rows[0].size!=pin['binaryBytes']:
-            raise ValueError('artifact CLI executable member differs')
-        with package.extractfile(rows[0]) as source:
-            binary=source.read(pin['binaryBytes']+1)
-    if len(binary)!=pin['binaryBytes'] or hashlib.sha256(binary).hexdigest()!=pin['binarySha256']:
-        raise ValueError('artifact CLI executable hash differs')
-    directory=temporary/('mustang-gh-'+run['runId']+'-'+run['runAttempt'])
-    directory.mkdir(mode=0o700)  # No overwrite or reuse of a previous attempt.
-    target=directory/'gh'
-    with target.open('xb') as output:
-        output.write(binary);output.flush();os.fsync(output.fileno())
-    target.chmod(0o755)
-    with open(env['GITHUB_PATH'],'a') as path_output:
-        path_output.write(str(directory)+'\n')
-    return dict(version=pin['version'],path=str(target),sha256=pin['binarySha256'],run=run)
+def app_artifact_reader(artifact_id, token, open_http=None):
+    """Two fixed Actions endpoints, then one unauthenticated signed-storage GET.
+
+    No CLI/package installation, retries, inherited auth on redirects, or access
+    to other artifacts. HTTP failures expose only phase/status, never signed URLs.
+    """
+    if not re.fullmatch(r'[1-9][0-9]*',str(artifact_id)) or not isinstance(token,str) or not token:
+        raise ValueError('app artifact ID/token unavailable')
+    endpoint='https://api.github.com/repos/Immortal-Protocols/RoseOS-1/actions/artifacts/'+str(artifact_id)
+    open_http=open_http or urllib.request.build_opener(NoArtifactRedirect()).open
+    def read(suffix,limit):
+        if suffix not in ('','/zip') or type(limit) is not int or not 0<limit<=256<<20:
+            raise ValueError('app artifact request scope/bound differs')
+        phase='metadata' if not suffix else 'archive-api'
+        request=urllib.request.Request(endpoint+suffix,headers={
+            'Authorization':'Bearer '+token,'Accept':'application/vnd.github+json',
+            'X-GitHub-Api-Version':'2026-03-10','User-Agent':'RoseOS-Mustang-artifact-consumer'})
+        try:
+            try:
+                response=open_http(request,timeout=60)
+            except urllib.error.HTTPError as error:
+                if error.code!=302 or suffix!='/zip':
+                    raise ValueError('app artifact '+phase+' HTTP '+str(error.code)+'; no retry') from None
+                location=error.headers.get('Location','');error.close()
+                try:
+                    target=urllib.parse.urlsplit(location);port=target.port
+                except ValueError:
+                    raise ValueError('app artifact storage redirect differs') from None
+                host=target.hostname or ''
+                if target.scheme!='https' or target.username or target.password or port not in (None,443) \
+                        or target.fragment or not any(host.endswith('.'+domain) for domain in
+                            ('blob.core.windows.net','actions.githubusercontent.com','githubusercontent.com')):
+                    raise ValueError('app artifact storage redirect differs')
+                phase='archive-storage'
+                # A fresh Request deliberately carries no API credentials.
+                response=open_http(urllib.request.Request(location),timeout=60)
+            with response:
+                if response.status!=200: raise ValueError('app artifact '+phase+' response differs')
+                raw=response.read(limit+1)
+        except urllib.error.HTTPError as error:
+            raise ValueError('app artifact '+phase+' HTTP '+str(error.code)+'; no retry') from None
+        except urllib.error.URLError:
+            raise ValueError('app artifact '+phase+' transport failed; no retry') from None
+        if len(raw)>limit: raise ValueError('app artifact '+phase+' exceeds byte bound')
+        return raw
+    return read
 
 
 def private_binding(record,lane,cfg,root=ROOT):
@@ -374,7 +381,7 @@ def import_private(record,out,lane,cfg,root=ROOT):
     return extracted
 
 
-def fetch_inputs(record_path,out,execute=subprocess.run,lane=None,cfg=None,root=ROOT):
+def fetch_inputs(record_path,out,read=None,lane=None,cfg=None,root=ROOT):
     rec=load(record_path)
     if rec.get('schema')==PRIVATE_RECORD:
         if lane is None or cfg is None: raise ValueError('private import requires the actual dedicated lane')
@@ -382,17 +389,18 @@ def fetch_inputs(record_path,out,execute=subprocess.run,lane=None,cfg=None,root=
     export=rec['export']; artifact=export['artifact']; out=Path(out)
     if not re.fullmatch(r'[1-9][0-9]*',str(artifact['id'])) or not re.fullmatch(r'sha256:[0-9a-f]{64}',artifact['digest']):
         raise ValueError('immutable artifact ID/digest required')
-    endpoint=f'/repos/Immortal-Protocols/RoseOS-1/actions/artifacts/{artifact["id"]}'
-    meta=execute(['gh','api',endpoint],capture_output=True,text=True)
-    if meta.returncode: raise ValueError('app artifact metadata read failed; no retry')
-    observed=json.loads(meta.stdout)
-    if str(observed['workflow_run']['id'])!=str(export['run']) or observed.get('expired') is not False \
-            or observed.get('digest')!=artifact['digest'] or observed.get('name')!=artifact['name']:
+    read=read or app_artifact_reader(artifact['id'],os.environ.get('GH_TOKEN',''))
+    observed=json.loads(read('',2<<20))
+    bound=sum(f['sizeBytes'] for f in rec['files'])+(9<<20)
+    size=observed.get('size_in_bytes')
+    if str(observed.get('id'))!=str(artifact['id']) or str(observed['workflow_run']['id'])!=str(export['run']) \
+            or observed.get('expired') is not False or observed.get('digest')!=artifact['digest'] \
+            or observed.get('name')!=artifact['name'] or type(size) is not int or not 0<size<=bound:
         raise ValueError('app artifact metadata differs from committed export')
     out.mkdir(mode=0o700); archive_path=out/'download.zip'; extracted=out/'files'; extracted.mkdir()
     with open(archive_path,'xb') as destination:
-        downloaded=execute(['gh','api',endpoint+'/zip'],stdout=destination,stderr=subprocess.PIPE)
-    if downloaded.returncode or 'sha256:'+ota.digest(archive_path)!=artifact['digest']:
+        destination.write(read('/zip',size))
+    if archive_path.stat().st_size!=size or 'sha256:'+ota.digest(archive_path)!=artifact['digest']:
         raise ValueError('app artifact download/digest failed; inputs retained, no retry')
     rows={f['path']:f for f in rec['files']}
     expected=set(rows)|{'app-inputs-export.json','SHA256SUMS'}
@@ -432,7 +440,7 @@ def verify(directory,lane,cfg,publish=False):
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('action',choices=('guard','host-check','prepare-artifact-cli','fetch-inputs','baseline','produce','collect','sign',
+    parser.add_argument('action',choices=('guard','host-check','fetch-inputs','baseline','produce','collect','sign',
         '_execute','stage','verify-staged','publish','report','ownership-output','cleanup-prepare','require-owned','preflight'))
     parser.add_argument('--dir'); parser.add_argument('--out'); parser.add_argument('--config')
     parser.add_argument('--ownership-record'); parser.add_argument('--publish',action='store_true')
@@ -537,9 +545,6 @@ def main():
             if path.is_file() and not path.is_symlink(): shutil.copyfile(path,out/name)
         if args.dir and Path(args.dir).is_file(): shutil.copyfile(args.dir,out/'baseline.json')
     else:
-        if args.action=='prepare-artifact-cli':
-            print(json.dumps(prepare_artifact_cli(lane,cfg,os.environ),sort_keys=True))
-            return 0
         host_check(lane,cfg)
         if args.action=='host-check': return 0
         if args.action=='fetch-inputs':
