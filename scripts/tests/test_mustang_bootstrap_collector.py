@@ -1,5 +1,6 @@
 """Offline synthetic repositories, guest stand-ins and process fixtures only."""
 import copy
+import contextlib
 import hashlib
 import io
 import json
@@ -227,6 +228,17 @@ class CollectorTest(unittest.TestCase):
         self.assertEqual(result['receipt']['failure'],'collector-canonical-lock-changed')
         self.assertTrue((self.home/'retained-canonical-lock').exists())
         self.assertEqual(list((self.storage/'mustang-bootstrap-observation-999-1').iterdir()),[])
+
+    def test_lock_path_must_name_the_actual_held_inode_before_any_guest_probe(self):
+        original=locks.shared
+        @contextlib.contextmanager
+        def replaced(*args,**kwargs):
+            with original(*args,**kwargs) as held:
+                self.lock.rename(self.home/'retained-original-lock');self.lock.touch();self.lock.chmod(0o444)
+                yield held
+        with patch.object(locks,'shared',new=replaced):result=self.collect()
+        self.assertFalse(result['receiptWritten']);self.assertEqual(self.probe.calls,0)
+        self.assertEqual(result['receipt']['failure'],'collector-canonical-lock-changed')
 
     def test_captured_lane_and_runtime_arguments_must_match_checkout_bytes(self):
         self.cfg['unused-caller-input']='not-in-captured-config'

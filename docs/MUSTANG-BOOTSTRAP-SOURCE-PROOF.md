@@ -75,7 +75,7 @@ The ceilings are 7,200 seconds, 2,000,000 selected/expected entries and 150 GiB
 of source-data reads. Git output is bounded to 128 MiB per command and 512 MiB
 in total, commit data to 4 MiB, each Git command to 60 seconds, and manifest,
 recipe and policy inputs to 4 MiB.
-Build-definition scans have a 16 MiB per-file limit. Smaller bounds may be used;
+Build-definition scans have a 16 MiB per-file limit. Smaller bounds may be used.
 Symlink text reads, including intermediate link resolution, count toward the
 source-data byte limit. A collector can pass an earlier overall deadline;
 the source reader cannot restart that time budget.

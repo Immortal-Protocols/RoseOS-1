@@ -260,8 +260,10 @@ def collect(lane,cfg,env,event,*,root=ROOT,limits=None,source_limits=None,probe=
                         limits=asdict(limits),sourceLimits=asdict(source_limits),
                         boundsKind='proposal-ceilings-not-measurements')
         stage='lock'
-        with locks.shared(paths['lockPath'],expected=paths['lockPath']):
-            canonical_lock=lock_signature(paths['lockPath'])
+        with locks.shared(paths['lockPath'],expected=paths['lockPath']) as held_lock:
+            canonical_lock=proof.signature(os.fstat(held_lock.fileno()))
+            if lock_signature(paths['lockPath'])!=canonical_lock:
+                raise git.Refused('collector-canonical-lock-changed')
             stage='guest-before'
             identity,space=guest(lane,cfg,paths,root,probe,deadline)
             document.update(identity=identity,spaceBefore=space)
