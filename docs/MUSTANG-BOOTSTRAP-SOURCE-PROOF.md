@@ -40,7 +40,9 @@ on completion or refusal. See Git's documentation for the
 
 The adapter calls the existing shared `source_selection` mechanism with a
 bounded descriptor-based planner. It retains the committed copy exclusions
-and explicit dependency includes. Unknown selected files or directories refuse
+and explicit dependency includes. Resource paths and the supported exclusion
+contract are checked before Git/source reads; the policy is captured once from
+a bounded checkout file, with no fallback pointer. Unknown selected files or directories refuse
 before their payloads are opened. It handles manifest-created links and copies,
 checks raw link text and file bytes against Git blob IDs, and verifies Git's
 owner-executable bit. Link components are resolved in filesystem order within
@@ -68,7 +70,8 @@ There is no receipt writer or live dispatch path.
 
 The ceilings are 7,200 seconds, 2,000,000 selected/expected entries and 150 GiB
 of source-data reads. Git output is bounded to 128 MiB per command and 512 MiB
-in total, commit data to 4 MiB, each Git command to 60 seconds, and manifest/recipe inputs to 4 MiB.
+in total, commit data to 4 MiB, each Git command to 60 seconds, and manifest,
+recipe and policy inputs to 4 MiB.
 Build-definition scans have a 16 MiB per-file limit. Smaller bounds may be used;
 raising these ceilings requires a source change. These are proposal ceilings,
 not measurements of Mustang's actual tree. Deadlines are checked between reads;

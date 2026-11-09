@@ -359,5 +359,21 @@ class SourceProofTest(unittest.TestCase):
         self.assertEqual(by_path(original),by_path(bounded))
         self.assertEqual(original['excluded'],bounded['excluded'])
 
+    def test_recipe_and_policy_cannot_redirect_reads_or_add_exclusion_exceptions(self):
+        mutations=[lambda r:r['adevtool'].update(depsDir='../outside'),
+            lambda r:r['adevtool'].update(depsTools=['../../outside']),
+            lambda r:r['preparation']['source'].update(includePaths=['../outside']),
+            lambda r:r['preparation']['source'].update(exclusionsFrom='os/elsewhere.json data')]
+        for mutate in mutations:
+            recipe=copy.deepcopy(self.recipe);mutate(recipe)
+            with patch.object(git.LocalGit,'project',side_effect=AssertionError('Git read preceded path validation')):
+                with self.assertRaisesRegex(git.Refused,'unsupported-source-selection-contract'):
+                    proof.inspect_source(self.source,self.manifest,self.vendor,self.host,recipe,root=self.root)
+        policy=self.root/'os/release-pipeline/cuttlefish-alpha.json';data=json.loads(policy.read_text())
+        data['preparation']['exclusions']['rootNames'].append('unknown-secret-input')
+        policy.write_text(json.dumps(data))
+        with patch.object(git.LocalGit,'project',side_effect=AssertionError('Git read preceded policy validation')):
+            with self.assertRaisesRegex(git.Refused,'unsupported-source-exclusion-policy'):self.inspect()
+
 
 if __name__=='__main__':unittest.main()

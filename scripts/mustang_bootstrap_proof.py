@@ -292,9 +292,35 @@ def catalog(rows,prefix):
                 method='sorted-tree-path-mode-link-and-file-sha256-v1')
 
 
+def source_policy(recipe,root):
+    """Capture one bounded policy and reject resource-path changes before any source read."""
+    pointer='os/release-pipeline/cuttlefish-alpha.json preparation.exclusions'
+    spec=recipe.get('preparation',{}).get('source',{})
+    if recipe.get('adevtool',{}).get('depsDir')!='out_adevtool_deps' \
+            or recipe['adevtool'].get('depsTools')!=list(deps.HOST_TOOLS) \
+            or spec.get('includePaths')!=['out_adevtool_deps/adevtool_revision','out_adevtool_deps/host/linux-x86'] \
+            or spec.get('exclusionsFrom')!=pointer:
+        raise git.Refused('unsupported-source-selection-contract')
+    data=json.loads(readers.read_regular(str(root),str(Path(root)/pointer.split()[0]),4 << 20))
+    policy=data['preparation']['exclusions'];boundaries=policy.get('cacheBoundaries',[])
+    if policy.get('rootNames')!=['.repo','keys','releases','out'] \
+            or policy.get('rootPrefixes')!=['out-','out_'] or policy.get('anywhereNames')!=['.git','.repo'] \
+            or policy.get('externalLinks')!=[] or len(boundaries)!=1 \
+            or boundaries[0].get('path')!='vendor/adevtool/dl/unpacked' \
+            or boundaries[0].get('pruneMarker')!='vendor/adevtool/dl/.find-ignore' \
+            or boundaries[0].get('referenceMarkers')!=['adevtool/dl/unpacked','dl/unpacked/']:
+        raise git.Refused('unsupported-source-exclusion-policy')
+    return pointer,policy
+
+
 def inspect_source(source,manifest,vendor,host,recipe,*,root=ROOT,limits=None):
     """Check selected bytes and prepared payloads. Identity/bootstrap/admission stay false."""
     source=Path(source);limits=(limits or Limits()).validate();observation=Observation(source,limits)
+    pointer,policy=source_policy(recipe,root);engine=shared_engine()
+    def captured_policy(checkout,reference):
+        if Path(checkout)!=Path(root) or reference!=pointer:raise git.Refused('unexpected-source-policy-pointer')
+        return policy
+    engine.pointer=captured_policy
     reader=git.LocalGit(observation.deadline,output_bytes=limits.git_output_bytes,
         total_output_bytes=limits.git_total_output_bytes,command_seconds=limits.git_command_seconds)
     projects,expected,pinned_directories=expected_files(source,manifest,reader,limits)
@@ -310,7 +336,6 @@ def inspect_source(source,manifest,vendor,host,recipe,*,root=ROOT,limits=None):
     directories.update(generated);directories.add(host_prefix)
     observation.known_files=set(expected)|{marker};observation.known_directories=directories
     observation.prepared_prefixes=(*generated,host_prefix)
-    engine=shared_engine();policy=engine.pointer(Path(root),recipe['preparation']['source']['exclusionsFrom'])
     selection=engine.source_selection(recipe,source,Path(root),planner=observation.plan)
     if selection['problems']:raise git.Refused('shared-copy-selection-refused')
     # The unchanged selection helper independently reads this exact successful marker once.
