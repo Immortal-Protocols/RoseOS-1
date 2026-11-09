@@ -147,3 +147,9 @@ Historical readiness prose about absent runners, factory inputs or vendor
 generation is not a reason to repeat those completed operations. Current
 guard fields, receipt limits and owner holds still apply. Public publication
 stays separate and disabled.
+
+Run42604053622 stopped before copy/allocation/Make on the root source-sync
+manifest, `resolved-manifest.xml`. Its failure record includes successful
+cleanup and direct stopped-VM evidence. The correction binds the file to the
+exact captured pinned manifest and retains copy readback; this source change
+is not evidence that native compilation, signing or publication succeeded.

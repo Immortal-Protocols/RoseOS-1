@@ -373,6 +373,15 @@ def inspect_source(source,manifest,vendor,host,recipe,*,root=ROOT,limits=None,de
     reader=git.LocalGit(observation.deadline,output_bytes=limits.git_output_bytes,
         total_output_bytes=limits.git_total_output_bytes,command_seconds=limits.git_command_seconds)
     projects,expected,pinned_directories,gitlinks=expected_files(source,manifest,reader,limits)
+    # The source-sync recipe writes this root file with `repo manifest -r`.
+    # It is selected by the shared copier, but belongs to no project Git tree.
+    # Bind its exact bytes to the captured pinned manifest, never just its name
+    # or parsed project list. It participates in ordinary readback/copy checks.
+    resolved='resolved-manifest.xml'
+    if resolved in expected or resolved in pinned_directories:
+        raise git.Refused('resolved-manifest-overlaps-pinned-project')
+    expected[resolved]=dict(path=resolved,mode='100644',oid=git.object_id('blob',manifest),origin='source-sync-manifest')
+    if len(expected)+len(pinned_directories)>limits.entries:raise git.Refused('expected-source-entry-bound')
     adev=[revision for path,revision in projects if path=='vendor/adevtool']
     if adev!=[recipe['pins']['vendor/adevtool']]:raise git.Refused('manifest-adevtool-pin-differs')
     generated=('vendor/google_devices/mustang','vendor/adevtool/node_modules')
@@ -439,7 +448,8 @@ def inspect_source(source,manifest,vendor,host,recipe,*,root=ROOT,limits=None,de
         gitlinkBoundaryCount=len(gitlinks),gitlinkPolicy='manifest-matched-child-or-no-selected-content',
         expectedEntryCount=len(expected)+len(pinned_directories),
         selectedEntryCount=len(inventory),selectedPinnedEntries=pinned_count,selectedPreparedEntries=prepared_count,
-        selectedManifestTransferEntries=sum(expected[name]['origin']!='git' for name in seen_expected),
+        selectedManifestTransferEntries=sum(expected[name]['origin'] in ('manifest-copy','manifest-link') for name in seen_expected),
+        selectedResolvedManifestEntries=sum(expected[name]['origin']=='source-sync-manifest' for name in seen_expected),
         selectedInventorySha256=hashlib.sha256(canonical(inventory)).hexdigest(),sourceDataBytesRead=observation.bytes,
         portableInventorySha256=portable_inventory(inventory,source),
         copyRecipeSha256=hashlib.sha256(canonical(recipe)).hexdigest(),

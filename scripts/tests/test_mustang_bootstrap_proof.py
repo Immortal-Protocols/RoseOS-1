@@ -54,6 +54,7 @@ class SourceProofTest(unittest.TestCase):
                 ET.SubElement(project,'copyfile',src='README',dest='README.fixture')
         self.manifest=ET.tostring(document)
         (self.root/'os/pinned-manifest.xml').write_bytes(self.manifest)
+        (self.source/'resolved-manifest.xml').write_bytes(self.manifest)
         (self.source/'build/envsetup.sh').symlink_to('make/envsetup.sh')
         shutil.copyfile(make/'README',self.source/'README.fixture')
         self.recipe['pins']['vendor/adevtool']=self.adev_revision
@@ -97,6 +98,7 @@ class SourceProofTest(unittest.TestCase):
         self.assertEqual(result['projectCount'],3);self.assertTrue(result['selectedPinnedBytesVerified'])
         self.assertTrue(result['preparedPayloadsVerified']);self.assertGreater(result['selectedPreparedEntries'],14)
         self.assertEqual(result['selectedManifestTransferEntries'],2)
+        self.assertEqual(result['selectedResolvedManifestEntries'],1)
         self.assertEqual(before,self.command(self.source/'vendor/adevtool','status','--porcelain','--untracked-files=no'))
         for key in ('guestIdentityObserved','fullBootstrapVerified','pristine','pristineRuntimeAttestation',
                     'otaAdmitted','signingStarted','gitIndexTrusted','preparedReceiptProvenanceVerified'):
@@ -111,6 +113,18 @@ class SourceProofTest(unittest.TestCase):
             with self.subTest(flag=flag),self.assertRaisesRegex(git.Refused,'pinned-blob-or-mode'):self.inspect()
             path.write_bytes(original)
             self.command(path.parent,'update-index',flag.replace('--','--no-',1),'README')
+
+    def test_source_sync_manifest_requires_exact_captured_bytes_regular_type_and_mode(self):
+        target=self.source/'resolved-manifest.xml'
+        for mutation in ('changed','missing','link','executable'):
+            if mutation=='changed':target.write_bytes(self.manifest+b'\n')
+            elif mutation=='missing':target.unlink()
+            elif mutation=='link':
+                target.unlink();target.symlink_to('README.fixture')
+            else:target.chmod(0o755)
+            with self.subTest(mutation=mutation),self.assertRaises(git.Refused):self.inspect()
+            if target.exists() or target.is_symlink():target.unlink()
+            target.write_bytes(self.manifest)
 
     def test_unknown_ignored_file_or_empty_directory_is_not_silently_selected(self):
         adev=self.source/'vendor/adevtool'
@@ -263,6 +277,7 @@ class SourceProofTest(unittest.TestCase):
             ET.SubElement(document,'project',name='child-fixture',path='build/make/submodule-fixture',
                 revision='1'*40 if wrong_pin else target)
         self.manifest=ET.tostring(document);(self.root/'os/pinned-manifest.xml').write_bytes(self.manifest)
+        (self.source/'resolved-manifest.xml').write_bytes(self.manifest)
         return child,target
 
     def test_uninitialized_gitlink_authenticates_tree_but_selects_no_unpinned_bytes(self):
@@ -431,6 +446,7 @@ class SourceProofTest(unittest.TestCase):
         for node in document.findall('project'):
             if node.get('path')=='build/make':node.set('revision',revision)
         self.manifest=ET.tostring(document)
+        (self.source/'resolved-manifest.xml').write_bytes(self.manifest)
         rows=git.LocalGit(time.monotonic()+30).project(project,revision,max_entries=100)
         self.assertIn(name,rows);self.assertTrue(self.inspect()['selectedPinnedBytesVerified'])
 
