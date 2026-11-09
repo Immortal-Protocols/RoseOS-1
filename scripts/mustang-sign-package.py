@@ -76,7 +76,7 @@ def builder_lock(host,lock,lane):
     return host.shared_lock(lock)
 
 
-def collect(compile_receipt,run_id,attempt,lane=None):
+def collect(compile_receipt,run_id,attempt,lane=None,*,retained=None):
     """Read-only collection before signer login; never retry make or edit its original receipts."""
     if (run_id,attempt)!=(os.environ.get('GITHUB_RUN_ID'),os.environ.get('GITHUB_RUN_ATTEMPT')):
         raise ValueError('collection must name this workflow run/attempt')
@@ -92,6 +92,15 @@ def collect(compile_receipt,run_id,attempt,lane=None):
         'makeReturncode':value['stages']['compile']['result']['returncode'],'label':LABEL,
         'omittedChecks':value['omittedChecks'],'originalReceiptsModified':False,'makeRerun':False}
     if lane is not None: report.update(builder=dict(lane['vm']),workflow=lane['workflow'])
+    if retained is not None:
+        import mustang_retained
+        if lane is None or not mustang_retained.selected(os.environ):
+            raise ValueError('retained collection requires the explicit dedicated route')
+        mustang_retained.proof_identity(retained['producer'])
+        if str(value['runId'])!=mustang_retained.RUN or value['source']!=mustang_retained.SOURCE:
+            raise ValueError('retained collection producer differs')
+        report.update(retainedProducer=retained['producer'],retainedGuest=retained['guest'],
+                      originalWorkflowConclusion='failure')
     try:
         hp=module('mustang_factory_host','host-factory-package.py')
         adapter=module('mustang_output_collection','mustang-build-only.py')
@@ -123,7 +132,7 @@ def collect(compile_receipt,run_id,attempt,lane=None):
     finally:
         release_receipts.write_once(out/'compile-collection.json',report)
         print(json.dumps({'collectionReceipt':str(out/'compile-collection.json'),'status':report['status'],
-                          'collectionRecovery':recovery}))
+                          'collectionRecovery':recovery,'retainedCompile':retained is not None}))
 
 
 def compile_binding(path,lane=None):

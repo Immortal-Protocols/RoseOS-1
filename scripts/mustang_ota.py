@@ -470,11 +470,13 @@ def stage_hosted(bundle,unsigned,signed,ota,public,extracted,java_home,out,*,roo
         mustang_clock.require_bundle(bundle,mustang_lane.configuration(),runtime,root)
     baseline=candidate_continuity(read(root/runtime['candidateContinuity']))
     lane=read(root/'os/build-only/mustang-lane.json');pins=identities()
+    import mustang_retained
+    compile_run,compile_attempt,compile_source=mustang_retained.compile_context(bundle)
     build,epoch=bundle['build'],bundle['timestamp'];run=str(bundle['runId']);attempt=str(bundle['runAttempt'])
     if attempt!='1' or bundle.get('workflow')!=lane['workflow'] or not re.fullmatch(r'[1-9][0-9]{9}',build):
         raise ValueError('full hosted staging run/build differs')
     unsigned,signed,ota,public=map(Path,(unsigned,signed,ota,public));binary=Path(extracted)/'bin'
-    bound=mustang_edge.binding(bundle['sourceSha'],bundle['sourceSha'],build,epoch,run,attempt,run,attempt)
+    bound=mustang_edge.binding(compile_source,bundle['sourceSha'],build,epoch,run,attempt,compile_run,compile_attempt)
     unsigned_archive=mustang_edge.observed_archive(unsigned);signed_archive=mustang_edge.observed_archive(signed)
     unsigned_proof=bundle.get('unsignedRaisedEdge')
     mustang_edge.require(unsigned_proof,'unsigned',bound,unsigned_archive)
@@ -499,8 +501,8 @@ def stage_hosted(bundle,unsigned,signed,ota,public,extracted,java_home,out,*,roo
     (out/'mustang-stable').write_text(f'{build} {epoch} mustang stable\n')
     baseline_raw=(json.dumps(baseline,indent=2,sort_keys=True)+'\n').encode()
     receipt=dict(schema='roseos.mustang-ota-stage.v1',device='mustang',build=build,timestamp=epoch,
-        candidateSource=bundle['sourceSha'],recipeSource=bundle['sourceSha'],runId=run,runAttempt=attempt,
-        compileRunId=run,compileRunAttempt=attempt,label=LABEL,contentFingerprint=fingerprint(bundle['sourceSha']),
+        candidateSource=compile_source,recipeSource=bundle['sourceSha'],runId=run,runAttempt=attempt,
+        compileRunId=compile_run,compileRunAttempt=compile_attempt,label=LABEL,contentFingerprint=fingerprint(compile_source),
         roseEdge=dict(unsigned=unsigned_proof,signed=signed_proof),
         edgeTargetFiles=dict(unsigned=unsigned_archive,signed=signed_archive),
         baselineObservation=baseline,baselineObservationSha256=hashlib.sha256(baseline_raw).hexdigest(),
@@ -512,6 +514,8 @@ def stage_hosted(bundle,unsigned,signed,ota,public,extracted,java_home,out,*,roo
         builder=lane['vm'],workflow=lane['workflow'],ota=dict(file=ota.name,sizeBytes=ota.stat().st_size,sha256=digest(ota)))
     if 'clockAllocation' in bundle:
         receipt['clockAllocation']=bundle['clockAllocation']
+    if bundle.get('retainedProducer') is not None:
+        receipt['retainedProducer']=bundle['retainedProducer']
     release_receipts.write_once(out/'mustang-ota-receipt.json',receipt)
     (out/'SHA256SUMS').write_text(''.join(f'{digest(p)}  {p.name}\n' for p in sorted(out.iterdir())))
     verify_staged(out,cfg,publication=False)
@@ -532,7 +536,9 @@ def verify_staged(directory, cfg, publication=True):
     if r.get('clockAllocation') is not None or (runtime.get('status')=='bound' and runtime.get('clockNumbering') is not None):
         import mustang_clock, mustang_lane
         mustang_clock.require_bundle(dict(clockAllocation=r.get('clockAllocation'),build=r['build'],timestamp=r['timestamp'],
-            runId=r['runId'],runAttempt=r['runAttempt'],sourceSha=r['recipeSource']),mustang_lane.configuration(),runtime,ROOT)
+            runId=r['runId'],runAttempt=r['runAttempt'],sourceSha=r['recipeSource'],
+            **({'retainedProducer':r['retainedProducer']} if r.get('retainedProducer') is not None else {})),
+            mustang_lane.configuration(),runtime,ROOT)
     factory=r.get('baselineFactoryEvidence')
     if r.get('baselineObservation') is not None:
         baseline=require_staged_baseline(r['baselineObservation'])

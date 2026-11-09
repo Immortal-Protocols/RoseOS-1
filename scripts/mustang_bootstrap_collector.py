@@ -95,14 +95,21 @@ def invocation(lane,env,event):
     return run
 
 
-def full_scope(lane,env,event):
+def full_scope(lane,env,event,*,retained=False):
     """The existing full-delivery button; no fabricated job/scope environment."""
     run=controller.invocation(lane,env)
     selected=event.get('inputs') if isinstance(event,dict) else None
     disabled=lambda value:value is None or value is False or (type(value) is str and value=='false')
     publish=selected.get('publish') if isinstance(selected,dict) else None
     boolean=publish is None or type(publish) is bool or (type(publish) is str and publish in ('true','false'))
-    if not isinstance(selected,dict) or set(selected)-FLAGS \
+    retained_input=selected.get('retained_compile_run','') if isinstance(selected,dict) else None
+    if retained:
+        import mustang_retained
+        if retained_input!=mustang_retained.RUN or not mustang_retained.selected(env):
+            raise git.Refused('retained-delivery-source-scope-differs')
+    elif retained_input not in (None,'') or env.get('MUSTANG_RETAINED_COMPILE_RUN',''):
+        raise git.Refused('retained-delivery-cannot-enter-normal-producer')
+    if not isinstance(selected,dict) or set(selected)-(FLAGS|{'retained_compile_run'}) \
             or any(not disabled(selected.get(k)) for k in FLAGS-{'publish'}) \
             or not boolean or env.get('MUSTANG_PUBLISH','false')!=('true' if publish is True or publish=='true' else 'false') \
             or env.get('GITHUB_REPOSITORY')!='Immortal-Protocols/RoseOS-1' \
@@ -112,8 +119,8 @@ def full_scope(lane,env,event):
     return run
 
 
-def full_invocation(lane,env,event):
-    run=full_scope(lane,env,event);uid,user=runner_identity()
+def full_invocation(lane,env,event,*,retained=False):
+    run=full_scope(lane,env,event,retained=retained);uid,user=runner_identity()
     encoded=env.get('MUSTANG_OWNER_B64','')
     if env.get('GITHUB_JOB')!='builder' or uid<=0 or user!='mustang-runner' or not sys.dont_write_bytecode \
             or not isinstance(encoded,str) or not 0<len(encoded)<=8192:
@@ -445,7 +452,7 @@ def emit_sha(value):
 
 def lifecycle(lane,env,event,directory):
     """Summarize the existing cleanup's successful calls; no live operation here."""
-    run=full_scope(lane,env,event);directory=Path(directory)
+    run=full_scope(lane,env,event,retained=bool(env.get('MUSTANG_RETAINED_COMPILE_RUN','')));directory=Path(directory)
     if env.get('GITHUB_JOB')!='cleanup':raise git.Refused('full-run-cleanup-context-differs')
     def read(name):
         raw=readers.read_regular(str(directory),str(directory/name),1 << 20)
