@@ -296,6 +296,24 @@ class SourceProofTest(unittest.TestCase):
         self.pinned_gitlink(manifest_child=True,wrong_pin=True)
         with self.assertRaisesRegex(git.Refused,'gitlink-manifest-revision-differs'):self.inspect()
 
+    def test_unclassified_sibling_paths_are_reported_without_opening_their_payloads(self):
+        unknown=['unknown-cache-one','unknown-cache-two']
+        for name in unknown:(self.source/name).write_bytes(b'PRIVATE-FIXTURE-MUST-NOT-BE-READ')
+        measured=[];original=proof.Observation.measure
+        def measure(observation,path,*args,**kwargs):
+            measured.append(str(path));return original(observation,path,*args,**kwargs)
+        with patch.object(proof.Observation,'measure',new=measure), \
+                self.assertRaisesRegex(git.Refused,'unclassified-selected-file') as raised:
+            self.inspect()
+        self.assertEqual(raised.exception.paths,unknown)
+        self.assertEqual(raised.exception.path,unknown[0])
+        for name in unknown:self.assertNotIn(str(self.source/name),measured)
+
+    def test_failure_path_list_is_bounded_and_cannot_expose_urls_or_escape_paths(self):
+        refused=git.Refused('fixture',paths=['https://private.test/?token=secret','../escape','/absolute','safe/file']*40)
+        self.assertLessEqual(len(refused.paths),git.MAX_FAILURE_PATHS)
+        self.assertTrue(refused.paths);self.assertEqual(set(refused.paths),{'safe/file'})
+
     def test_missing_pinned_project_reports_the_manifest_path(self):
         shutil.rmtree(self.source/'empty-project')
         with self.assertRaisesRegex(git.Refused,'pinned-project-directory-unavailable') as raised:self.inspect()
