@@ -15,6 +15,7 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[2]
 sys.path[:0] = [str(ROOT/'scripts'), str(Path(__file__).resolve().parent)]
 import mustang_clock as clock
+import mustang_ota as ota
 import test_mustang_edge_gate as edge_fixtures
 import test_mustang_full_delivery as full_fixtures
 
@@ -72,6 +73,56 @@ class ClockAllocationTest(unittest.TestCase):
         clock.require_bundle(bundle,self.lane,self.cfg,self.root)
         with self.assertRaisesRegex(ValueError,'compiled timestamp'):
             clock.require_bundle(dict(bundle,timestamp='1793755348'),self.lane,self.cfg,self.root)
+
+    def compiler_operator(self,record):
+        source=self.home/'rose-actions'/('mustang-prep-'+record['runId']+'-1')/'source';source.mkdir(parents=True)
+        inputs=Path(record['workDir'])/'inputs/local-inputs.json';inputs.parent.mkdir(parents=True)
+        inputs.write_text(json.dumps({'candidate':{'build':record['build']}}))
+        return dict(buildNumber=record['build'],buildDatetime=str(int(clock.utc(record['reservedAt']).timestamp())),
+            sourceRoot=source,inputsReceipt=inputs,integrationDir=Path(record['integrationDir']))
+
+    def test_real_compiler_identity_accepts_clock_journal_without_legacy_date_or_record(self):
+        record=self.reserve();op=self.compiler_operator(record)
+        engine=ota.module('clock_compile_regression','mustang-build-only.py').engine()
+        now=lambda:clock.utc('2026-11-09T04:21:00Z').timestamp()
+        old,_facts=engine.identity_problems(op,now)
+        self.assertTrue(any('before build' in problem for problem in old))
+        self.assertTrue(any('no readable reservation' in problem for problem in old))
+        before={str(p.relative_to(self.journal)):p.read_bytes() for p in self.journal.rglob('*') if p.is_file()}
+        clock.bind_compiler(engine,self.lane,self.cfg,root=self.root,env=self.env)
+        problems,facts=engine.identity_problems(op,now)
+        self.assertEqual(problems,[]);self.assertEqual(facts['clockAllocationSha256'],clock.digest(record))
+        self.assertEqual(Path(facts['reservation']),self.journal/'reservations'/('2611090400.json'))
+        self.assertEqual(before,{str(p.relative_to(self.journal)):p.read_bytes() for p in self.journal.rglob('*') if p.is_file()})
+        self.assertFalse((self.home/'rose-actions/mustang-allocations').exists())
+        self.assertEqual((self.root/self.cfg['allocationState']).read_bytes(),self.initial)
+
+    def test_compiler_refuses_missing_or_corrupt_clock_state_without_initialization_or_repair(self):
+        record=self.reserve();op=self.compiler_operator(record)
+        engine=ota.module('clock_compile_readonly','mustang-build-only.py').engine()
+        clock.bind_compiler(engine,self.lane,self.cfg,root=self.root,env=self.env)
+        now=lambda:clock.utc('2026-11-09T04:21:00Z').timestamp()
+        head=self.journal/'head.json';raw=head.read_bytes();head.write_text('{}')
+        self.assertTrue(engine.identity_problems(op,now)[0]);self.assertEqual(head.read_bytes(),b'{}')
+        head.write_bytes(raw);shutil.rmtree(self.journal)
+        self.assertTrue(engine.identity_problems(op,now)[0]);self.assertFalse(self.journal.exists())
+
+    def test_compiler_binds_run_source_inputs_paths_time_and_current_head(self):
+        record=self.reserve();op=self.compiler_operator(record)
+        engine=ota.module('clock_compile_bindings','mustang-build-only.py').engine()
+        clock.bind_compiler(engine,self.lane,self.cfg,root=self.root,env=self.env)
+        now=lambda:clock.utc('2026-11-09T04:21:00Z').timestamp()
+        for field,value in (('integrationDir',self.home/'foreign'),('sourceRoot',self.home/'foreign'),
+                            ('inputsReceipt',self.home/'foreign'),('buildDatetime',str(int(op['buildDatetime'])+1))):
+            with self.subTest(field=field):self.assertTrue(engine.identity_problems(dict(op,**{field:value}),now)[0])
+        with patch.dict(self.env,GITHUB_SHA='b'*40):self.assertTrue(engine.identity_problems(op,now)[0])
+        self.assertTrue(engine.identity_problems(op,lambda:clock.utc('2026-11-09T04:19:00Z').timestamp())[0])
+        Path(op['inputsReceipt']).write_text(json.dumps({'candidate':{'build':'2611090500'}}))
+        self.assertTrue(engine.identity_problems(op,now)[0])
+        Path(op['inputsReceipt']).write_text(json.dumps({'candidate':{'build':record['build']}}))
+        later=self.environment('124',self.policy['initializationRunNumber']+1,'2026-11-09T05:10:00Z')
+        self.reserve(later,now='2026-11-09T05:20:00Z')
+        self.assertTrue(engine.identity_problems(op,now)[0])
 
     def test_one_attempt_per_dispatch_hour_and_next_hour_increases(self):
         first = self.reserve()

@@ -382,3 +382,30 @@ publication, cloud operation, held artifact retrieval or phone change occurs.
 Source and protocol tests are evidence for the listed boundaries. They do not
 prove a full Android build, every native/vendor consumer, real image contents,
 AVB/bootloader compatibility, installation or phone acceptance.
+
+## Compiler binding after the first consumed clock allocation
+
+Run42622314509 (workflow number35, source8d6cb543) completed source observation,
+copy/readback, vendor reuse and lunch, returned allocation and entered
+integration, then failed the compile stage. Its completed log and successful
+owned cleanup are recorded in os/build-only/mustang-full-run-42622314509.json.
+The receipt archive download failed; its full native preflight problem list
+and allocation bytes are not represented as retrieved/verified.
+
+Source regression independently proves that the old compiler still looked in
+`mustang-allocations` and parsed build prefixes as YYYYMMDDNN. The clock issuer
+writes `mustang-clock-hour00-v1/reservations` and uses YYMMDDHH00, so those
+checks reject its real reservations. The dedicated producer now binds its
+private compiler to the clock journal: validate the chain/current head, exact
+run/source, source and integration/input paths, admitted input build and the
+reservation's compiled timestamp. The journal check is read-only and refuses
+missing/corrupt state, even on the initial run; it cannot initialize or repair.
+Other device/legacy compiler instances retain their own behavior.
+
+**Keep initialization fence35 and the existing policy hash unchanged.** The
+first allocation returned, so its number stays consumed. Do not reset, advance
+the fence, reconstruct an empty ledger or reuse the failed attempt. A later
+full attempt must read the existing journal and issue a fresh monotonic number.
+Offline tests exercise the actual private compiler interface with real local
+reservations, reproduce both old refusals and verify unchanged journal/legacy
+state plus wrong identity/path/input/time/head and missing/corrupt state refusal.

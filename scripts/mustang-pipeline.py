@@ -163,6 +163,8 @@ def run(run_id, attempt, lane=None, runtime=None, inputs_dir=None):
         base = home/'rose-actions'
     else:
         recipe = mustang_paths.compiler_recipe(engine,lane,ROOT)
+        if runtime.get('clockNumbering') is not None:
+            mustang_clock.bind_compiler(engine,lane,runtime,root=ROOT)
         engine.SOURCE_PROVENANCE=dict(engine.SOURCE_PROVENANCE,
             integration='copy of the admitted pristine pinned Mustang base on its dedicated VM; no other-device seed')
         lock, home, base = str(paths['lockPath']), paths['home'], paths['storageRoot']
