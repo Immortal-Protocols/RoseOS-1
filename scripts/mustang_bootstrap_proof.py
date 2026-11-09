@@ -168,7 +168,15 @@ class Observation:
         boundaries=policy.get('cacheBoundaries',[])
         for boundary in boundaries:
             self.check();directory=base/boundary['path']
-            fd=readers._walk_dir(readers._body(str(directory)));os.close(fd)
+            parent=readers._walk_dir(readers._body(str(directory.parent)))
+            try:
+                try:info=os.stat(directory.name,dir_fd=parent,follow_symlinks=False)
+                except FileNotFoundError:info=None
+                if info is not None:
+                    if not stat.S_ISDIR(info.st_mode):
+                        raise git.Refused('cache-boundary-not-plain-directory',path=boundary['path'])
+                    fd=os.open(directory.name,readers._DIR_FLAGS,dir_fd=parent);os.close(fd)
+            finally:os.close(parent)
             marker=base/boundary['pruneMarker']
             if readers.read_regular(str(self.source),str(marker),1)!=b'':
                 raise git.Refused('cache-prune-marker-differs')
@@ -270,7 +278,10 @@ def expected_files(source,manifest,reader,limits):
     projects,transfers=manifest_projects(manifest);expected={};pinned_directories=set();gitlinks={}
     project_pins=dict(projects)
     for path,revision in projects:
-        fd=readers._walk_dir(readers._body(str(source/path)));os.close(fd)
+        try:
+            fd=readers._walk_dir(readers._body(str(source/path)));os.close(fd)
+        except (OSError,readers._Refused) as error:
+            raise git.Refused('pinned-project-directory-unavailable',path=path) from error
         try:
             rows=reader.project(source/path,revision,max_entries=limits.entries-len(expected)-len(pinned_directories),allow_gitlinks=True)
         except git.Refused as error:

@@ -142,6 +142,16 @@ class SourceProofTest(unittest.TestCase):
         (self.source/'build/make/README').unlink()
         with self.assertRaisesRegex(git.Refused,'pinned-file-missing'):self.inspect()
 
+    def test_absent_excluded_cache_is_valid_but_symlink_and_bad_marker_refuse(self):
+        directory=self.source/'vendor/adevtool/dl/unpacked';shutil.rmtree(directory)
+        self.assertTrue(self.inspect()['selectedPinnedBytesVerified'])
+        outside=self.home/'outside-cache';outside.mkdir();(outside/'private').write_bytes(b'never read')
+        directory.symlink_to(outside,target_is_directory=True)
+        with self.assertRaisesRegex(git.Refused,'cache-boundary-not-plain-directory'):self.inspect()
+        directory.unlink()
+        (self.source/'vendor/adevtool/dl/.find-ignore').write_bytes(b'changed marker')
+        with self.assertRaises((git.Refused,proof.readers._Refused)):self.inspect()
+
     def test_selected_special_file_bounds_and_cache_reference_refuse(self):
         fifo=self.source/'unexpected-fifo';os.mkfifo(fifo)
         with self.assertRaisesRegex(git.Refused,'unclassified-selected-file'):self.inspect()
@@ -285,6 +295,12 @@ class SourceProofTest(unittest.TestCase):
     def test_gitlink_child_revision_must_equal_the_explicit_manifest_pin(self):
         self.pinned_gitlink(manifest_child=True,wrong_pin=True)
         with self.assertRaisesRegex(git.Refused,'gitlink-manifest-revision-differs'):self.inspect()
+
+    def test_missing_pinned_project_reports_the_manifest_path(self):
+        shutil.rmtree(self.source/'empty-project')
+        with self.assertRaisesRegex(git.Refused,'pinned-project-directory-unavailable') as raised:self.inspect()
+        self.assertEqual(raised.exception.path,'empty-project')
+        self.assertIsNotNone(raised.exception.__cause__)
 
     def test_gitlinks_and_non_sha1_repositories_refuse(self):
         project=self.source/'build/make'
