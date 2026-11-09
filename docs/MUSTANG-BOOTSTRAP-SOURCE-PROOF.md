@@ -180,23 +180,40 @@ use `text=auto` and explicit `eol=crlf` rules. Git documents that checkout
 source-model correction, not a claim that native line endings were separately
 read or that the next observation has passed.
 
-Only `external/angle` with authenticated root attribute blob
-`cfe87039336838421bed95ad0b5169abe2225be2` can use this bounded model. It covers
-the declared .sln/.vcxproj/.vcxproj.filters/.bat/.rc and compiled-header rules,
-retains later LF overrides, and refuses conversion under descendant attributes.
-A mismatch may read the original raw blob by object ID (8MiB per object within
-the unchanged aggregate Git budget), hash it back to that ID, derive the full
-CRLF representation and require its exact identity. The supported text subset
-has no control bytes except TAB/LF; bare CR, NUL and other controls refuse.
-Raw pinned bytes remain valid. Neither arbitrary worktree normalization nor
-Git filters, hooks, encoding/ident transforms, info attributes or global/local
-checkout configuration are used. Git's [raw cat-file form](https://git-scm.com/docs/git-cat-file)
-is distinct from its --filters/--textconv forms, which are never invoked.
+The initial #721 model recognized only ANGLE's exact root attribute blob.
+Run42614456651 then identified `external/bc/vs/bc.sln`, whose
+[pinned attributes](https://android.googlesource.com/platform/external/bc/+/683fc6fd48adab655b30f96ffdb931ba192047cb/.gitattributes)
+also declare CRLF. Both native refusals preceded copy/allocation/Make; no
+separate native line-ending dump or complete candidate is claimed.
 
-Converted entry count and an inventory digest bind original and checkout blob
-identities. The actual CRLF bytes remain in the selected SHA-256 inventory and
-pass ordinary namespace and full copied-byte readback. Synthetic tests use
-Git itself to generate batch, project/BOM and compiled-header checkouts, then
-exercise the collector and actual shared copier. Changed/mixed/unattributed
-bytes, descendant overrides, other project scope, corrupted objects and byte
-limits retain their refusals. No native source file is rewritten.
+The current model evaluates each pinned project's applicable attribute hierarchy
+with Git's [check-attr](https://git-scm.com/docs/git-check-attr), in private
+exclusive scratch metadata. Only fixed HEAD/config and independently hash-verified
+raw pinned .gitattributes blobs are written there. Source config, info attributes,
+index, hooks, filters, global/system attributes, credentials and transport are
+not used. Nested rules and macros are evaluated by Git rather than a custom
+pattern matcher. Source files are never rewritten. Owned scratch is removed
+on success or refusal; no existing directory is adopted or deleted.
+
+Only explicit eol=crlf with supported text semantics can derive checkout bytes;
+filter, ident, encoding and legacy crlf transforms remain unsupported. A raw blob
+is read by ID, hashed back to its pin and converted LF-to-CRLF only within a
+conservative non-control-byte text subset (TAB/LF allowed). The complete derived
+blob identity must match the measured worktree. Changed, mixed or unattributed
+bytes still refuse; raw pinned identity remains valid. No Git --filters,
+--textconv, checkout or source program is invoked.
+
+Raw blobs retain the8MiB per-object and existing aggregate/time limits. Attribute
+blobs are at most1MiB; private scratch is capped at1024projects,4096files,
+8192directories and16MiB of file payload, including fixed metadata. Attribute
+query output is capped at128KiB within the existing Git budget; each NUL-delimited
+path input is at most4096bytes. These are engineering limits, not capacity
+measurements. Receipts report limits and charged usage.
+
+Conversion count/inventory digest bind original and checkout blob identities plus
+the pinned attribute binding. Actual checkout bytes stay in the selected SHA-256
+inventory and pass namespace and copied-byte readback. Offline tests use real Git
+checkout for ANGLE, BC and macro/override fixtures, then exercise the full collector
+and shared copier. Negative cases cover changed/mixed/unattributed bytes, pinned
+filter refusal, corrupted objects, bounds, ignored source info/config overrides,
+non-execution of configured filters and scratch cleanup on success/refusal.

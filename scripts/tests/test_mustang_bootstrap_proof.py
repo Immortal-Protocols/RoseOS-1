@@ -92,10 +92,11 @@ class SourceProofTest(unittest.TestCase):
     def inspect(self,**kwargs):
         return proof.inspect_source(self.source,self.manifest,self.vendor,self.host,self.recipe,root=self.root,**kwargs)
 
-    def angle_checkout(self,*,project_path='external/angle',nested=False):
-        project=self.source/project_path;(project/'scripts').mkdir(parents=True)
-        (project/'.gitattributes').write_bytes((ROOT/'scripts/tests/fixtures/mustang-angle.gitattributes').read_bytes())
-        files={'scripts/trigger.bat':b'@echo off\necho NEVER EXECUTE FIXTURE\n',
+    def angle_checkout(self,*,project_path='external/angle',nested=False,attributes=None,files=None):
+        project=self.source/project_path;project.mkdir(parents=True)
+        (project/'.gitattributes').write_bytes(attributes if attributes is not None else
+            (ROOT/'scripts/tests/fixtures/mustang-angle.gitattributes').read_bytes())
+        files=files or {'scripts/trigger.bat':b'@echo off\necho NEVER EXECUTE FIXTURE\n',
                'scripts/project.vcxproj':b'\xef\xbb\xbf<Project>fixture</Project>\n',
                'src/compiled/shader.h':b'// fixture header\n',
                'README.txt':b'ordinary pinned text\n'}
@@ -117,16 +118,17 @@ class SourceProofTest(unittest.TestCase):
         project,files=self.angle_checkout();marker=self.home/'filter-must-not-run'
         self.command(project,'config','filter.bad.smudge','touch '+str(marker))
         self.command(project,'config','filter.bad.clean','touch '+str(marker))
-        (project/'.git/info/attributes').write_text('* filter=bad\n')
+        (project/'.git/info/attributes').write_text('* filter=bad -text eol=lf ident working-tree-encoding=UTF-16\n')
         for name in ('scripts/trigger.bat','scripts/project.vcxproj','src/compiled/shader.h'):
             self.assertEqual((project/name).read_bytes(),files[name].replace(b'\n',b'\r\n'))
         result=self.inspect();self.assertEqual(result['selectedCheckoutConvertedEntries'],3)
         self.assertFalse(marker.exists())
-        self.assertEqual(result['checkoutConversionPolicy'],'pinned-angle-crlf-v1')
+        self.assertEqual(result['checkoutConversionPolicy'],'pinned-attributes-isolated-crlf-v2')
         original=git.LocalGit.read
         def corrupt(reader,project,operation,revision=None):
             raw=original(reader,project,operation,revision)
-            return raw+b'changed raw object' if operation=='blob' else raw
+            return raw+b'changed raw object' if operation=='blob' and revision!=git.object_id('blob',
+                (ROOT/'scripts/tests/fixtures/mustang-angle.gitattributes').read_bytes()) else raw
         with patch.object(git.LocalGit,'read',new=corrupt):
             with self.assertRaisesRegex(git.Refused,'pinned-checkout-blob-differs'):self.inspect()
 
@@ -145,13 +147,52 @@ class SourceProofTest(unittest.TestCase):
         (project/'scripts/trigger.bat').write_bytes(files['scripts/trigger.bat'].replace(b'\n',b'\r\n'))
         with self.assertRaisesRegex(git.Refused,'pinned-blob-or-mode-differs-blob'):self.inspect()
 
-    def test_other_project_cannot_use_angle_conversion_and_raw_reads_remain_bounded(self):
+    def test_other_pinned_project_uses_its_own_attributes_and_raw_reads_remain_bounded(self):
         project,_files=self.angle_checkout(project_path='external/not-angle')
-        with self.assertRaisesRegex(git.Refused,'pinned-blob-or-mode-differs-blob'):self.inspect()
+        self.assertEqual(self.inspect()['selectedCheckoutConvertedEntries'],3)
         # The raw reader is also bounded and never runs --filters or textconv.
         blob=self.command(project,'rev-parse','HEAD:scripts/trigger.bat').decode().strip()
         with self.assertRaisesRegex(git.Refused,'git-output-bound'):
             git.LocalGit(time.monotonic()+30,output_bytes=1).read(project,'blob',blob)
+
+    def test_bc_pinned_rules_and_generic_attribute_macros_match_real_checkout(self):
+        project,files=self.angle_checkout(project_path='external/bc',
+            attributes=(ROOT/'scripts/tests/fixtures/mustang-bc.gitattributes').read_bytes(),
+            files={'vs/bc.sln':b'Visual Studio fixture\n','vs/bc.vcxproj':b'<Project/>\n'})
+        self.assertEqual((project/'vs/bc.sln').read_bytes(),files['vs/bc.sln'].replace(b'\n',b'\r\n'))
+        self.assertEqual(self.inspect()['selectedCheckoutConvertedEntries'],2)
+        project,files=self.angle_checkout(project_path='external/macros',nested=True,
+            attributes=b'[attr]windows text eol=crlf\n*.bat windows\n*.vcxproj windows\n')
+        # Pinned descendant eol=lf overrides the root macro for the batch file.
+        self.assertEqual((project/'scripts/trigger.bat').read_bytes(),files['scripts/trigger.bat'])
+        self.assertEqual(self.inspect()['selectedCheckoutConvertedEntries'],3)
+
+    def test_pinned_filter_is_refused_without_execution_or_source_rewrites(self):
+        project,files=self.angle_checkout(attributes=b'*.bat text eol=crlf filter=bad\n')
+        marker=self.home/'filter-must-not-run'
+        self.command(project,'config','filter.bad.smudge','touch '+str(marker))
+        self.command(project,'config','filter.bad.clean','touch '+str(marker))
+        before=(project/'scripts/trigger.bat').read_bytes()
+        with self.assertRaisesRegex(git.Refused,'pinned-blob-or-mode-differs-blob'):self.inspect()
+        self.assertFalse(marker.exists());self.assertEqual((project/'scripts/trigger.bat').read_bytes(),before)
+
+    def test_pinned_attribute_objects_are_authenticated_and_private_scratch_is_removed(self):
+        project,_files=self.angle_checkout();homes=[];original=git.tempfile.TemporaryDirectory
+        def temporary(*args,**kwargs):
+            directory=original(*args,**kwargs);homes.append(Path(directory.name));return directory
+        with patch.object(git.tempfile,'TemporaryDirectory',side_effect=temporary):self.inspect()
+        self.assertTrue(homes);self.assertTrue(all(not home.exists() for home in homes))
+        read=git.LocalGit.read
+        attribute=git.object_id('blob',(ROOT/'scripts/tests/fixtures/mustang-angle.gitattributes').read_bytes())
+        def corrupted(reader,project,operation,revision=None):
+            raw=read(reader,project,operation,revision)
+            return raw+b'changed attribute object' if operation=='blob' and revision==attribute else raw
+        with patch.object(git.LocalGit,'read',new=corrupted),patch.object(git.tempfile,'TemporaryDirectory',side_effect=temporary):
+            with self.assertRaisesRegex(git.Refused,'pinned-attribute-blob-differs'):self.inspect()
+        self.assertTrue(all(not home.exists() for home in homes))
+        with patch.dict(git.PinnedAttributes.LIMITS,bytes=128),patch.object(git.tempfile,'TemporaryDirectory',side_effect=temporary):
+            with self.assertRaisesRegex(git.Refused,'pinned-attribute-scratch-bytes-bound'):self.inspect()
+        self.assertTrue(all(not home.exists() for home in homes))
 
     def test_complete_selected_bytes_and_prepared_payloads_match_without_bootstrap_admission(self):
         before=self.command(self.source/'vendor/adevtool','status','--porcelain','--untracked-files=no')
