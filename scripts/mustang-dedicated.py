@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
-"""Dedicated Mustang build/OTA steps. The lane is identity-bound; runtime stays unbound.
+"""Dedicated Mustang build/OTA steps on the identity-bound dedicated route.
 
 No provisioning, IAM, key bootstrap, global reclaim, automatic dispatch or phone
 operation. Runtime actions require actual admitted bindings and this one fresh
-manual workflow run. Public publication is separately default-off.
+manual workflow run. Publication requires its explicit manual input.
 """
 import argparse
 import base64
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
@@ -189,7 +190,7 @@ def host_identity(lane,filesystem_uuid,observe_id=metadata_id,execute=subprocess
     return paths
 
 
-DRY_RUN_BLOCKED=frozenset(('fetch-inputs','baseline','produce','collect','sign','_execute','stage','verify-staged','publish','report'))
+DRY_RUN_BLOCKED=frozenset(('prepare-artifact-cli','fetch-inputs','baseline','produce','collect','sign','_execute','stage','verify-staged','publish','report'))
 
 
 def refuse_dry_run(action):
@@ -203,7 +204,7 @@ def infrastructure_tool_paths():
     return (mustang_ephemeral.NODE['install'], mustang_ephemeral.SDK['aapt'], mustang_ephemeral.SDK['apksigner'])
 
 
-def host_check(lane,cfg,observe_id=metadata_id,execute=subprocess.run):
+def host_check(lane,cfg,observe_id=metadata_id,execute=subprocess.run,*,artifact_cli_required=True):
     observed=observe_id()
     paths=host_identity(lane,cfg['dataFilesystemUuid'],lambda:observed,execute,cfg.get('dataMount'))
     space=os.statvfs(paths['home'])
@@ -222,8 +223,53 @@ def host_check(lane,cfg,observe_id=metadata_id,execute=subprocess.run):
     for tool in tools:
         if not isinstance(tool,str) or not Path(tool).is_file() or not os.access(tool,os.X_OK):
             raise ValueError('dedicated tool unavailable')
-    if not infrastructure and shutil.which('gh') is None:
+    if not infrastructure and artifact_cli_required and shutil.which('gh') is None:
         raise ValueError('artifact CLI unavailable before compile')
+
+
+ARTIFACT_CLI = dict(version='2.103.3',
+    url='https://github.com/cli/cli/releases/download/v2.103.3/gh_2.103.3_linux_amd64.tar.gz',
+    archiveBytes=15031972,archiveSha256='4c806978ffce1cec70853302a56d70ac6da4f19bae7adca4e1a8ab00633dd91d',
+    member='gh_2.103.3_linux_amd64/bin/gh',binaryBytes=41070752,
+    binarySha256='b768184570b12536be4ac1528893f6340d1c6a7b40b56ad45bca9cd0e87ad34d')
+
+
+def prepare_artifact_cli(lane,cfg,env,fetch=urllib.request.urlopen):
+    """Pinned public CLI in this job's private temp directory; no root or credentials."""
+    run=controller.invocation(lane,env)
+    if env.get('GITHUB_JOB')!='builder' or env.get('MUSTANG_DRY_RUN')!='false':
+        raise ValueError('artifact CLI setup requires the full native builder job')
+    # Validate the real guest/disk/tools before any download or write. The
+    # following workflow step repeats the complete check with the CLI required.
+    host_check(lane,cfg,artifact_cli_required=False)
+    temporary=Path(env.get('RUNNER_TEMP',''))
+    home=mustang_paths.layout(lane)['home']
+    if not temporary.is_dir() or not temporary.is_relative_to(home) \
+            or any(p.is_symlink() for p in (temporary,*temporary.parents)) \
+            or os.stat(temporary).st_dev!=os.stat(home).st_dev:
+        raise ValueError('artifact CLI temp directory is not on the admitted disk')
+    pin=ARTIFACT_CLI
+    with fetch(pin['url'],timeout=60) as response:
+        archive=response.read(pin['archiveBytes']+1)
+    if len(archive)!=pin['archiveBytes'] or hashlib.sha256(archive).hexdigest()!=pin['archiveSha256']:
+        raise ValueError('artifact CLI archive differs from official pin')
+    with tarfile.open(fileobj=io.BytesIO(archive),mode='r:gz') as package:
+        rows=[m for m in package.getmembers() if m.name==pin['member']]
+        if len(rows)!=1 or not rows[0].isreg() or rows[0].mode&0o7000 or rows[0].size!=pin['binaryBytes']:
+            raise ValueError('artifact CLI executable member differs')
+        with package.extractfile(rows[0]) as source:
+            binary=source.read(pin['binaryBytes']+1)
+    if len(binary)!=pin['binaryBytes'] or hashlib.sha256(binary).hexdigest()!=pin['binarySha256']:
+        raise ValueError('artifact CLI executable hash differs')
+    directory=temporary/('mustang-gh-'+run['runId']+'-'+run['runAttempt'])
+    directory.mkdir(mode=0o700)  # No overwrite or reuse of a previous attempt.
+    target=directory/'gh'
+    with target.open('xb') as output:
+        output.write(binary);output.flush();os.fsync(output.fileno())
+    target.chmod(0o755)
+    with open(env['GITHUB_PATH'],'a') as path_output:
+        path_output.write(str(directory)+'\n')
+    return dict(version=pin['version'],path=str(target),sha256=pin['binarySha256'],run=run)
 
 
 def private_binding(record,lane,cfg,root=ROOT):
@@ -386,7 +432,7 @@ def verify(directory,lane,cfg,publish=False):
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('action',choices=('guard','host-check','fetch-inputs','baseline','produce','collect','sign',
+    parser.add_argument('action',choices=('guard','host-check','prepare-artifact-cli','fetch-inputs','baseline','produce','collect','sign',
         '_execute','stage','verify-staged','publish','report','ownership-output','cleanup-prepare','require-owned','preflight'))
     parser.add_argument('--dir'); parser.add_argument('--out'); parser.add_argument('--config')
     parser.add_argument('--ownership-record'); parser.add_argument('--publish',action='store_true')
@@ -491,6 +537,9 @@ def main():
             if path.is_file() and not path.is_symlink(): shutil.copyfile(path,out/name)
         if args.dir and Path(args.dir).is_file(): shutil.copyfile(args.dir,out/'baseline.json')
     else:
+        if args.action=='prepare-artifact-cli':
+            print(json.dumps(prepare_artifact_cli(lane,cfg,os.environ),sort_keys=True))
+            return 0
         host_check(lane,cfg)
         if args.action=='host-check': return 0
         if args.action=='fetch-inputs':

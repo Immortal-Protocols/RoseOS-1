@@ -48,8 +48,12 @@ consumed reservation stays consumed even when the build fails or nothing is
 published. Unknown files, broken chains, missing heads and linked paths refuse.
 
 One authenticated dedicated workflow number may initialize this new local series:
-workflow ID 408460629, run number 23, selected from the observed latest completed
-run 42531345133 / number 22. This is an initialization fence, not the OS ID or
+workflow ID 408460629, run number 24. Full run42576627118 / number23 failed
+at its initial host check because gh was absent; baseline, app fetch and produce
+were skipped, so it did not attempt allocation or Make. Its completed cleanup
+and exact numeric stopped-VM read are recorded in
+`os/build-only/mustang-full-run-42576627118.json`. The journal was not observed
+on disk and no journal is reset by this source-pin update. This is an initialization fence, not the OS ID or
 version authority. Later runs cannot recreate an absent ledger; loss requires
 owner-led reconciliation. Attempt >1 refuses. If a preparation-only run consumes
 the initialization window first, update the source pin from its actual verified

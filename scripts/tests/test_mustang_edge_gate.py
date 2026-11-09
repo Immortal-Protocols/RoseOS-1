@@ -1,6 +1,7 @@
 """Offline adapter boundaries only: synthetic archives, signer/generator stand-ins, no live actions."""
 import copy
 import functools
+import hashlib
 import importlib.util
 import io
 import json
@@ -462,6 +463,7 @@ class DedicatedPathsTest(unittest.TestCase):
         self.assertLess(jobs['signer'].index('mustang_hosted_sign.py preflight'), jobs['signer'].index('actions-gcp-login.py login'))
         self.assertLess(jobs['builder'].index('mustang-dedicated.py collect'), jobs['builder'].index('mustang_hosted_sign.py export-bundle'))
         self.assertLess(jobs['builder'].index('mustang-dedicated.py baseline'),jobs['builder'].index('mustang-dedicated.py produce'))
+        self.assertLess(jobs['builder'].index('prepare-artifact-cli'),jobs['builder'].index('mustang-dedicated.py host-check'))
         self.assertLess(jobs['publisher'].index('verify-staged'),jobs['publisher'].index('actions/create-github-app-token'))
         self.assertLess(jobs['cleanup'].index('cleanup-prepare'),jobs['cleanup'].index('actions-gcp-login.py login'))
         env=dict(PATH=os.environ['PATH'])
@@ -777,6 +779,46 @@ class DedicatedRuntimeTest(unittest.TestCase):
                 patch.object(self.driver.shutil,'which',side_effect=lambda tool:'/usr/bin/gh' if tool=='gh' else None) as which:
             self.driver.host_check(self.lane,self.cfg,observe_id=lambda:self.lane['vm']['instanceId'],execute=execute)
         self.assertEqual(which.call_args_list,[unittest.mock.call('gh')])
+
+    def artifact_cli_fixture(self):
+        import io,tarfile
+        binary=b'pinned public CLI fixture'
+        pin=dict(self.driver.ARTIFACT_CLI,binaryBytes=len(binary),binarySha256=hashlib.sha256(binary).hexdigest())
+        stream=io.BytesIO()
+        with tarfile.open(fileobj=stream,mode='w:gz') as package:
+            member=tarfile.TarInfo(pin['member']);member.size=len(binary);member.mode=0o755
+            package.addfile(member,io.BytesIO(binary))
+        data=stream.getvalue();pin.update(archiveBytes=len(data),archiveSha256=hashlib.sha256(data).hexdigest())
+        temporary=self.host/'runner-temp';temporary.mkdir()
+        path_file=self.root/'github-path';path_file.write_text('')
+        env=dict(self.env,GITHUB_JOB='builder',MUSTANG_DRY_RUN='false',RUNNER_TEMP=str(temporary),GITHUB_PATH=str(path_file))
+        return pin,data,binary,env,path_file
+
+    def test_pinned_artifact_cli_is_installed_without_a_preexisting_cli_or_root(self):
+        import io
+        pin,data,binary,env,path_file=self.artifact_cli_fixture()
+        with patch.object(self.driver,'ARTIFACT_CLI',pin),patch.object(self.driver,'host_check') as checked:
+            result=self.driver.prepare_artifact_cli(self.lane,self.cfg,env,fetch=lambda *a,**k:io.BytesIO(data))
+        checked.assert_called_once_with(self.lane,self.cfg,artifact_cli_required=False)
+        target=Path(result['path']);self.assertEqual(target.read_bytes(),binary)
+        self.assertEqual(target.stat().st_mode&0o777,0o755)
+        self.assertEqual(path_file.read_text(),str(target.parent)+'\n')
+
+    def test_artifact_cli_hash_failure_exposes_no_executable_or_path(self):
+        import io
+        pin,data,_binary,env,path_file=self.artifact_cli_fixture()
+        with patch.object(self.driver,'ARTIFACT_CLI',pin),patch.object(self.driver,'host_check'):
+            with self.assertRaisesRegex(ValueError,'archive differs'):
+                self.driver.prepare_artifact_cli(self.lane,self.cfg,env,fetch=lambda *a,**k:io.BytesIO(data+b'changed'))
+        self.assertEqual(path_file.read_text(),'')
+        self.assertEqual(list(Path(env['RUNNER_TEMP']).iterdir()),[])
+
+    def test_artifact_cli_setup_refuses_wrong_guest_before_download(self):
+        pin,_data,_binary,env,path_file=self.artifact_cli_fixture();fetched=[]
+        with patch.object(self.driver,'host_check',side_effect=ValueError('wrong guest')):
+            with self.assertRaisesRegex(ValueError,'wrong guest'):
+                self.driver.prepare_artifact_cli(self.lane,self.cfg,env,fetch=lambda *a,**k:fetched.append(True))
+        self.assertEqual(fetched,[]);self.assertEqual(path_file.read_text(),'')
 
     def test_actual_evidence_guard_allows_private_and_refuses_stale_or_unbound(self):
         self.assertEqual(self.admitted()['consumedBuilds'],['2026110402'])

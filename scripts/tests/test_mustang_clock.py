@@ -34,7 +34,7 @@ class ClockAllocationTest(unittest.TestCase):
         self.policy = clock.policy(self.lane, self.cfg, self.root)
         self.source = 'a'*40
         self.initial = (self.root/self.cfg['allocationState']).read_bytes()
-        self.env = self.environment('123', 23, '2026-11-09T04:10:00Z')
+        self.env = self.environment('123', self.policy['initializationRunNumber'], '2026-11-09T04:10:00Z')
         self.channel = b'2026110401 1793755347 mustang stable\n'
         self.rows = [dict(tag_name='mustang-2026110401',draft=False,prerelease=False,assets=[dict(
             id=1,name='mustang-stable',size=len(self.channel),digest='sha256:'+hashlib.sha256(self.channel).hexdigest(),
@@ -75,10 +75,10 @@ class ClockAllocationTest(unittest.TestCase):
 
     def test_one_attempt_per_dispatch_hour_and_next_hour_increases(self):
         first = self.reserve()
-        same = self.environment('124',24,'2026-11-09T04:25:00Z')
+        same = self.environment('124',self.policy['initializationRunNumber']+1,'2026-11-09T04:25:00Z')
         with self.assertRaisesRegex(ValueError,'hour already consumed'):
             self.reserve(same,now='2026-11-09T04:30:00Z')
-        later = self.environment('125',25,'2026-11-09T05:10:00Z')
+        later = self.environment('125',self.policy['initializationRunNumber']+2,'2026-11-09T05:10:00Z')
         second = self.reserve(later,now='2026-11-09T05:20:00Z')
         self.assertGreater(second['build'],first['build'])
         self.assertEqual(second['observed']['clock']['previous'],clock.digest(first))
@@ -86,14 +86,14 @@ class ClockAllocationTest(unittest.TestCase):
 
     def test_loss_of_whole_ledger_does_not_reinitialize_on_later_run(self):
         self.reserve(); shutil.rmtree(self.journal)
-        later = self.environment('124',24,'2026-11-09T05:10:00Z')
+        later = self.environment('124',self.policy['initializationRunNumber']+1,'2026-11-09T05:10:00Z')
         with self.assertRaisesRegex(ValueError,'recovery required'):
             self.reserve(later,now='2026-11-09T05:20:00Z')
         self.assertFalse(self.journal.exists())
 
     def test_missing_head_and_orphaned_reservation_refuse_without_new_id(self):
         self.reserve(); (self.journal/'head.json').unlink()
-        later = self.environment('124',24,'2026-11-09T05:10:00Z')
+        later = self.environment('124',self.policy['initializationRunNumber']+1,'2026-11-09T05:10:00Z')
         with self.assertRaises((ValueError,OSError,clock.readers._Refused)):
             self.reserve(later,now='2026-11-09T05:20:00Z')
         self.assertEqual(len(list((self.journal/'reservations').iterdir())),1)
@@ -106,17 +106,17 @@ class ClockAllocationTest(unittest.TestCase):
         with patch.object(clock,'new_file',side_effect=fail):
             with self.assertRaises(OSError):self.reserve()
         self.assertTrue((self.journal/'reservations/2611090400.json').is_file())
-        later = self.environment('124',24,'2026-11-09T05:10:00Z')
+        later = self.environment('124',self.policy['initializationRunNumber']+1,'2026-11-09T05:10:00Z')
         with self.assertRaisesRegex(ValueError,'consumption uncertain'):
             self.reserve(later,now='2026-11-09T05:20:00Z')
 
     def test_clock_rollback_known_future_id_and_rerun_are_refused(self):
         self.reserve()
-        earlier = self.environment('124',24,'2026-11-09T03:10:00Z')
+        earlier = self.environment('124',self.policy['initializationRunNumber']+1,'2026-11-09T03:10:00Z')
         with self.assertRaisesRegex(ValueError,'clock behind'):
             self.reserve(earlier,now='2026-11-09T04:30:00Z')
         with self.assertRaises(ValueError):self.reserve(dict(self.env,GITHUB_RUN_ATTEMPT='2'))
-        later = self.environment('125',25,'2026-11-09T05:10:00Z')
+        later = self.environment('125',self.policy['initializationRunNumber']+2,'2026-11-09T05:10:00Z')
         self.rows.append(dict(tag_name='mustang-9999123199',draft=True,prerelease=False,assets=[]))
         with self.assertRaisesRegex(ValueError,'clock behind'):
             self.reserve(later,now='2026-11-09T05:20:00Z')
@@ -135,7 +135,7 @@ class ClockAllocationTest(unittest.TestCase):
     def test_linked_journal_state_is_refused(self):
         self.reserve(); head=self.journal/'head.json'; raw=head.read_bytes(); head.unlink()
         outside=self.root/'outside.json';outside.write_bytes(raw);head.symlink_to(outside)
-        later = self.environment('124',24,'2026-11-09T05:10:00Z')
+        later = self.environment('124',self.policy['initializationRunNumber']+1,'2026-11-09T05:10:00Z')
         with self.assertRaises((ValueError,OSError,clock.readers._Refused)):
             self.reserve(later,now='2026-11-09T05:20:00Z')
         self.assertEqual(outside.read_bytes(),raw)
@@ -159,7 +159,7 @@ class ClockAllocationTest(unittest.TestCase):
             changed=dict(context,**{field:value})
             bad=dict(self.env,MUSTANG_CLOCK_CONTEXT=base64.b64encode(clock.canonical(changed)).decode())
             with self.assertRaises(ValueError):self.reserve(bad)
-        later=self.environment('124',24,'2026-11-09T05:10:00Z')
+        later=self.environment('124',self.policy['initializationRunNumber']+1,'2026-11-09T05:10:00Z')
         with self.assertRaisesRegex(ValueError,'recovery required'):
             self.reserve(later,now='2026-11-09T05:20:00Z')
 
@@ -187,7 +187,7 @@ class ClockAllocationTest(unittest.TestCase):
             target=fixture.root/relative;target.parent.mkdir(parents=True,exist_ok=True)
             target.write_bytes((ROOT/relative).read_bytes())
         (fixture.root/'os/build-only/mustang-runtime.json').write_bytes(clock.canonical(cfg))
-        actual,jobs=fixture.metadata();actual.update(workflow_id=408460629,run_number=23,created_at='2026-11-09T04:10:00Z')
+        actual,jobs=fixture.metadata();actual.update(workflow_id=408460629,run_number=24,created_at='2026-11-09T04:10:00Z')
         env=dict(fixture.env)
         ctx=clock.actions_context(actual,env,self.policy)
         env['MUSTANG_CLOCK_CONTEXT']=base64.b64encode(clock.canonical(ctx)).decode()
@@ -204,7 +204,7 @@ class ClockAllocationTest(unittest.TestCase):
         with patch.object(full_fixtures.collector.mustang_lane,'configuration',return_value=fixture.lane):
             admitted=full_fixtures.hosted.authenticate_full_run(bundle,env,api=api,root=fixture.root)
             self.assertTrue(admitted['actionsRunIdentityVerified'])
-            actual['run_number']=24
+            actual['run_number']=25
             with self.assertRaisesRegex(ValueError,'authenticated Actions run'):
                 full_fixtures.hosted.authenticate_full_run(bundle,env,api=api,root=fixture.root)
 
