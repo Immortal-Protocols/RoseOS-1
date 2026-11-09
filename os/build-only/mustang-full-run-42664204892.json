@@ -1,0 +1,65 @@
+{
+  "schema": "roseos.mustang-full-run-failure.v1",
+  "runId": "42664204892",
+  "runNumber": 36,
+  "runAttempt": 1,
+  "source": "4e6d35cd4ecc249a0c133c3bf5a7a536dd3be49b",
+  "workflow": ".github/workflows/mustang-ota-dedicated.yml",
+  "builderJobId": 129324047950,
+  "observedStages": {
+    "sourceCompleted": "2026-11-09T18:04:02Z",
+    "gitMetadataCompleted": "2026-11-09T18:05:13Z",
+    "sourceCopyReadbackCompleted": "2026-11-09T18:21:30Z",
+    "vendorReuseCompleted": "2026-11-09T18:21:57Z",
+    "lunchCompleted": "2026-11-09T18:22:08Z",
+    "assemblyEnteredAfterAllocationReturned": "2026-11-09T18:22:09Z",
+    "integrationEntered": "2026-11-09T18:22:11Z",
+    "compileEntered": "2026-11-09T18:22:29Z",
+    "compileCompleted": "2026-11-09T20:31:57Z"
+  },
+  "unsignedCompileComplete": true,
+  "allocationReturned": true,
+  "derivedClockBuild": "2611091700",
+  "derivedBuildBasis": "Authenticated dispatch created_at 2026-11-09T17:23:51Z and captured YYMMDDHH00 formatter; allocation archive bytes not downloaded.",
+  "failedStage": "post-compile collection",
+  "observedException": "mustang_factory_host.Refused: lock_unavailable: the shared builder lock cannot be opened",
+  "sourceCause": "Dedicated collector selected host-factory-package.shared_lock, which opens O_RDWR|O_CREAT, instead of the established existing canonical read-only FD/flock adapter. The failure occurs on entering that lock before collection of output bytes.",
+  "signerConclusion": "skipped",
+  "publisherConclusion": "skipped",
+  "cleanupConclusion": "success",
+  "cleanupCompletedAt": "2026-11-09T20:33:43Z",
+  "directStopObservation": {
+    "observedAt": "2026-11-09T20:36:22.545071+00:00",
+    "value": {
+      "id": "5585425566393384049",
+      "status": "TERMINATED",
+      "metadata": {
+        "items": [
+          {
+            "key": "block-project-ssh-keys"
+          },
+          {
+            "key": "enable-guest-attributes"
+          },
+          {
+            "key": "enable-oslogin"
+          }
+        ]
+      },
+      "lastStopTimestamp": "2026-11-09T12:33:24.874-08:00"
+    }
+  },
+  "runnerRemoval": {
+    "cleanupJobStep": "success",
+    "independentRepositoryRunnerListing": "HTTP403; stopped without retry/alternate route"
+  },
+  "initializationFenceRetained": 35,
+  "receiptArtifact": {
+    "id": 13708411788,
+    "sizeBytes": 30778,
+    "metadataDigest": "sha256:0a35e679c31667151814357b9e1ba5a11c84b33035ac178aaa1159dba355570a",
+    "bytesVerified": false
+  },
+  "preservation": "No source/output/lock/journal mutation or runtime retry performed by diagnosis. Completed logs and collection admission establish the successful compile; no fresh artifact-byte or signature/publication proof is claimed.",
+  "remedy": "Use existing read-only canonical lock adapter for dedicated collection/sign/package, preserving legacy defaults and all source/output admission checks. Dedicated retained delivery is not currently implemented: hosted signer binds source, clock, controller, native proof and producer to its one in-progress run. Do not substitute old output or route via retired shared capacity."
+}

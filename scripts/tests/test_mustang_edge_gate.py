@@ -1364,6 +1364,7 @@ class AdapterTest(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         self.actions = self.root/'rose-actions'; self.actions.mkdir()
+        self.canonical_lock=self.root/'mustang.lock';self.canonical_lock.touch();self.canonical_lock.chmod(0o444)
         self.source = self.actions/'mustang-prep-222-1/source'; self.source.mkdir(parents=True)
         (self.source/'script').mkdir()
         (self.source/'script/generate-release.sh').write_text('synthetic source fixture, never executed')
@@ -1508,14 +1509,15 @@ class AdapterTest(unittest.TestCase):
         profile=DedicatedPathsTest().profile(self.root)
         self.candidate.update(builder=dict(profile['vm']),workflow=profile['workflow'])
         self.receipt.write_text(json.dumps(self.candidate))
-        locks=[]; previous=self.hp.shared_lock
-        def take_lock(path):
+        locks=[]; previous=adapter.mustang_existing_lock.shared
+        def take_lock(path,*,expected):
             locks.append(str(path))
-            return previous(path)
-        self.hp.shared_lock=take_lock
+            return previous(path,expected=expected)
+        self.hp.shared_lock=lambda path:(_ for _ in ()).throw(AssertionError('dedicated stage selected write-open lock'))
         with patch.object(adapter,'BASE',self.root/'retired'), \
                 patch.object(adapter.mustang_collection,'BASE',self.root/'retired'), \
-                patch.object(adapter,'LOCK',str(self.root/'retired.lock')):
+                patch.object(adapter,'LOCK',str(self.root/'retired.lock')), \
+                patch.object(adapter.mustang_existing_lock,'shared',side_effect=take_lock):
             adapter.collect(str(self.receipt),'333','1',lane=profile)
             signed=adapter.sign(str(self.receipt),str(self.bootstrap),'333','1',lane=profile)
             result=adapter.package('333','1','333','1',lane=profile)
@@ -1524,6 +1526,27 @@ class AdapterTest(unittest.TestCase):
         self.assertEqual(self.calls,['signer stand-in','factory'])
         self.assertFalse((self.root/'retired').exists())
         self.assertFalse((self.root/'retired.lock').exists())
+
+    def test_dedicated_collection_refuses_busy_or_missing_lock_without_creation(self):
+        profile=DedicatedPathsTest().profile(self.root)
+        self.candidate.update(builder=dict(profile['vm']),workflow=profile['workflow'])
+        self.receipt.write_text(json.dumps(self.candidate))
+        original=self.receipt.read_bytes()
+        before=self.canonical_lock.stat()
+        real=adapter.mustang_existing_lock
+        with real.shared(self.canonical_lock,expected=self.canonical_lock):
+            with self.assertRaisesRegex(real.LockUnavailable,'held'):
+                adapter.collect(str(self.receipt),'333','1',lane=profile)
+        report=self.actions/'mustang-collect-333-1/compile-collection.json'
+        self.assertEqual(json.loads(report.read_text())['status'],'failed')
+        self.assertEqual(self.calls,[])
+        self.assertEqual(self.receipt.read_bytes(),original)
+        self.assertEqual((self.canonical_lock.stat().st_ino,self.canonical_lock.stat().st_mode),
+                         (before.st_ino,before.st_mode))
+        self.canonical_lock.unlink()
+        with self.assertRaises(real.LockUnavailable):
+            with adapter.builder_lock(self.hp,self.canonical_lock,profile):pass
+        self.assertFalse(self.canonical_lock.exists())
 
     def test_dedicated_collection_refuses_old_or_foreign_builder_receipts(self):
         profile=DedicatedPathsTest().profile(self.root)
