@@ -35,9 +35,9 @@ class ProposalTest(unittest.TestCase):
         import mustang_tool_closure
         for name, value in mustang_tool_closure.qualified_pins(ROOT).items():
             self.assertEqual(pins[name], value)
-        self.assertFalse(json.loads((ROOT/'os/build-only/mustang-hosted-signer-capacity.json').read_text())['admission'])
+        self.assertTrue(json.loads((ROOT/'os/build-only/mustang-hosted-signer-capacity.json').read_text())['admission'])
         runtime = json.loads((ROOT/'os/build-only/mustang-runtime.json').read_text())
-        self.assertEqual(runtime['status'], 'unbound')
+        self.assertEqual(runtime['status'], 'bound')
         self.assertTrue(runtime['publication']['enabled'])
         self.assertEqual(runtime['jobs'], 24)
         self.assertTrue(all(Path(value).is_absolute() for value in runtime['tools'].values()))

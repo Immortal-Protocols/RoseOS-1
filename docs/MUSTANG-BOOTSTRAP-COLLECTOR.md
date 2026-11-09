@@ -170,7 +170,7 @@ reconciliation is an outer evidence step after the workflow ends.
 
 This source change performs no dispatch, credential creation, IAM mutation,
 allocation, signing or publication. Known runtime source/tool/identity bindings
-are selected; final runtime and signer capacity admission remain closed. An
+are selected and final runtime/signer source admission is bound. An
 actual successful full run and its completed-run reconciliation are still needed.
 Nathan added the dedicated provider trust; metadata readback verified the existing
 `mustang-actions/providers/mustang-main` route and signer access to both required

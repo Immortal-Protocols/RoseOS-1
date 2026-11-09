@@ -1,6 +1,6 @@
 {
   "schema": "roseos.mustang-dedicated-runtime.v1",
-  "status": "unbound",
+  "status": "bound",
   "jobs": 24,
   "tools": {
     "aapt": "/mnt/disks/mustang-data/roseos/source/out_adevtool_deps/host/linux-x86/bin/aapt2",
@@ -30,6 +30,6 @@
     "enabled": true,
     "authorityRecord": "os/build-only/mustang-dedicated-publication-authority.json"
   },
-  "basis": "Known bindings selected from actual dedicated qualification/native host distribution, same-run GitHub JIT evidence, source/copy admission contract and independently verified existing signer policy. Jobs24 matches completed native otatools qualification. Actual source/copy bytes and native tools are rechecked on the guest. Status remains unbound pending admitted hosted capacity/output bounds and final runtime reconciliation. Fresh Frankel2026110901 export is verified by Release and immutable record303f6982; this consumer independently matched its record/allocation hashes and live artifact metadata and rechecked source freshness. Existing legacy unknown allocation is preserved; date/hour policy controls new reservations. Common export artifact13649846651 is1865637 bytes, digest e14607d7385952a19c9b78977d0c3dd6f84f1e8d76cc31bb7ae35bf09c4bc3d0; it is not an OTA extraction. Build SDK37 and targetSdk35 remain distinct. Nathan has now confirmed existing signer group6/hosted runner3 Ready with the expected4CPU/16GB/150GB profile. Explicit output budgets are selected. Runtime and signer delivery admission remain closed pending repository/exact-workflow scheduling confirmation; profile bytes are not measured free space.",
+  "basis": "Dedicated full-delivery source bindings selected: exact VM/disk, group5 ephemeral JIT, jobs24, measured native/hosted tool pins, fresh Frankel2026110901 app export, source/copy verification contract, original v1 signer and manual publication authority. Nathan confirmed existing group6/hosted runner3 Ready, Ubuntu24.04 Linux x64,4CPU/16GB/150GB plus public-repository and exact main-workflow scheduling access. Explicit output budgets are caps, not measurements. Source admission does not establish current hardware/free bytes, native success, allocation, signing, publication or phone compatibility. All same-run checks and owned STOP/cleanup remain mandatory; no runtime dispatch occurs in this source change. Fresh common artifact13649846651 is1865637 bytes, archive digest e14607d7385952a19c9b78977d0c3dd6f84f1e8d76cc31bb7ae35bf09c4bc3d0; it is not an OTA extraction.",
   "candidateContinuity": "os/build-only/mustang-candidate-continuity-20261107.json"
 }

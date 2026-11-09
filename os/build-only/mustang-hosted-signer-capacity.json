@@ -1,6 +1,6 @@
 {
   "schema": "roseos.mustang-hosted-signer-capacity.v1",
-  "admission": false,
+  "admission": true,
   "trust": "held",
   "activeRunner": {
     "kind": "github-larger-runner",
@@ -77,7 +77,7 @@
       "scratchBytes": 17179869184,
       "reserveBytes": 17179869184
     },
-    "basis": "Administrator confirmed the configured existing runner/profile. Matching proposed budgets are selected as limits; they are not measurements. Delivery admission remains closed for unconfirmed repository/workflow scheduling. Actual hardware, filesystem size and free bytes remain same-run checks before login."
+    "basis": "Existing administrator-confirmed profile and scheduling scopes are selected with explicit engineering budgets. Actual hardware/filesystem/free bytes remain mandatory same-run pre-login checks; budget ceilings are not measurements."
   },
   "previousStockRunner": {
     "label": "ubuntu-24.04",
@@ -89,10 +89,10 @@
   "schedulingAccess": {
     "repository": "Immortal-Protocols/RoseOS-1",
     "workflow": "Immortal-Protocols/RoseOS-1/.github/workflows/mustang-ota-dedicated.yml@refs/heads/main",
-    "verified": false,
-    "repositoryAllowed": null,
-    "workflowAllowed": null,
-    "evidenceRef": null,
-    "basis": "Neither the administrator profile report nor retained permitted records explicitly confirms group repository/exact-workflow scheduling access. Chief owns the narrow administrator follow-up. No denied-read retry or grant inferred."
+    "verified": true,
+    "repositoryAllowed": true,
+    "workflowAllowed": true,
+    "evidenceRef": "os/build-only/mustang-signer-runner-admin-20261109.json",
+    "basis": "Nathan explicitly confirmed both public repository and exact main-workflow scheduling scopes. No worker API read or permission change."
   }
 }

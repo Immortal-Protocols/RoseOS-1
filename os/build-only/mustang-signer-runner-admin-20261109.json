@@ -21,7 +21,13 @@
   "workerQueriedDeniedGroup": false,
   "actualHardwareMeasured": false,
   "actualFreeBytes": null,
-  "repositorySchedulingConfirmed": false,
-  "workflowSchedulingConfirmed": false,
-  "basis": "Administrator report confirms the existing configured profile, not guest free space or group scheduling restrictions. No permissions/provisioning/runtime changes. The worker group6 GET remains denied and is not retried."
+  "repositorySchedulingConfirmed": true,
+  "workflowSchedulingConfirmed": true,
+  "basis": "Nathan confirmed the existing configured profile and separately answered Yes to both public-repository and main-workflow scheduling scopes. This is administrator evidence; actual hardware/free bytes remain same-run checks. Worker group6 GET remains denied and untouched.",
+  "schedulingConfirmation": {
+    "sourceThread": "01a1a7a0-cd3c-77ed-9b5f-6beda888d027",
+    "receivedAt": "2026-11-09T06:24:27.383138+00:00",
+    "question": "Thanks, the engineer has the runner details and is finishing the binding. One access detail is still unconfirmed: does runner group 6 allow the public Immortal-Protocols/RoseOS-1 repository and its specific workflow .github/workflows/mustang-ota-dedicated.yml on main to use it?",
+    "userAnswer": "Yes"
+  }
 }

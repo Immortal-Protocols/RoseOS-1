@@ -213,6 +213,7 @@ class FullDeliveryTest(unittest.TestCase):
         for name in ('check_ota_package_signature','delta_generator'):(binary/name).write_bytes(b'NEVER EXECUTE: verifier stand-in')
         cfg=json.loads((self.root/'os/build-only/mustang-runtime.json').read_text())
         cfg['candidateContinuity']='os/build-only/mustang-candidate-continuity-20261107.json'
+        cfg['status']='unbound'  # Synthetic pre-clock staging fixture only.
         (self.root/'os/build-only/mustang-runtime.json').write_text(json.dumps(cfg))
         (self.root/cfg['candidateContinuity']).write_bytes((ROOT/cfg['candidateContinuity']).read_bytes())
         bundle=dict(build=build,timestamp=stamp,runId='999',runAttempt='1',sourceSha=self.f.revision,
@@ -223,7 +224,11 @@ class FullDeliveryTest(unittest.TestCase):
             calls.append(argv);self.assertEqual(argv[0],str(binary/'check_ota_package_signature'))
             self.assertNotIn('GH_TOKEN',kwargs['env']);return SimpleNamespace(returncode=0)
         signed_out=self.home/'hosted-output';signed_out.mkdir();stage=signed_out/'staged'
+        live_read=ota.read
+        def read_fixture(path):
+            return cfg if Path(path)==ota.ROOT/'os/build-only/mustang-runtime.json' else live_read(path)
         with patch.object(ota,'fingerprint',return_value='f'*64),patch.object(ota,'digest',side_effect=digest), \
+                patch.object(ota,'read',side_effect=read_fixture), \
                 patch.object(ota.host_secrets,'certificate_sha256',return_value=pins['otaCertificateSha256']), \
                 patch.object(ota.host_secrets,'fetch_secret',side_effect=AssertionError('staging read a secret')), \
                 patch.object(ota,'observe_target',return_value={'packagedUpdaterVerified':True}):

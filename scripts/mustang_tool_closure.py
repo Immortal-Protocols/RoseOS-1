@@ -349,8 +349,8 @@ def verify_archive_members(blob):
 
 def main(argv):
     if argv == ['verify']:
-        receipt = verify_closure(ROOT)
-        print(json.dumps({'status': 'held', 'files': len(receipt['files']),
+        receipt = verify_closure(ROOT,require_unbound=False)
+        print(json.dumps({'status': 'provenance-verified', 'executionAdmitted': False, 'files': len(receipt['files']),
                           'jdkArchiveSha256': receipt['jdk']['archiveSha256']}, sort_keys=True))
         return 0
     print('usage: mustang_tool_closure.py verify', file=sys.stderr)

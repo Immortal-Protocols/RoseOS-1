@@ -1,7 +1,7 @@
-# Manual only. OTA runtime stays unbound. Preparation and administration scopes use the owned controller.
+# Manual only. Full OTA source inputs are bound; every run must satisfy native/signing checks.
 # Builder job is self-hosted on roseos-mustang-builder and has no signer token.
 # The signer job is the only job that may OIDC-login as the existing signer.
-# It targets group roseos-mustang-signer and label mustang-signer-4core. Admission stays closed.
+# It targets the administrator-confirmed group roseos-mustang-signer and label mustang-signer-4core.
 # Guard, controller, publisher and cleanup are GitHub-hosted.
 # Existing group-5 protected JIT route only. The VM STOPs itself after four hours if cleanup does not.
 # No provisioning, key bootstrap or policy reclaim.

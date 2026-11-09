@@ -34,15 +34,17 @@ output maxima or evidence that80GiB is free. Same-run hardware/filesystem and
 actual bundle/expansion/free-space checks still precede signer login; actual
 outputs must remain within their selected limits.
 
-The narrow missing fact is group6 scheduling access for public repository
-`Immortal-Protocols/RoseOS-1` and
-`Immortal-Protocols/RoseOS-1/.github/workflows/mustang-ota-dedicated.yml@refs/heads/main`.
-The profile report and retained permitted records do not state those access
-settings. `schedulingAccess.repositoryAllowed`, `workflowAllowed`, `verified`
-and its evidence reference remain unset/false; runtime status and delivery
-admission stay closed. A configured runner cannot substitute for those facts.
-Chief owns the administrator follow-up; this worker repeats no denied read and
-requests no permission change or new infrastructure.
+Nathan separately confirmed that group6 allows the public repository
+`Immortal-Protocols/RoseOS-1` and its dedicated workflow on main. The exact
+question and Yes response are preserved in the same administrator record.
+Repository/workflow scheduling fields and runtime/delivery source admission
+are now selected. No group read was retried and no permission was changed.
+Source admission does not establish a successful native build, live capacity,
+allocation, signing, publication or physical-device acceptance. Every full run
+still supplies its native source/copy and reservation proofs, measured signer
+hardware/filesystem/free space, qualified bundle, signatures/output bounds and
+owned lifecycle/STOP receipts. Dispatch remains a separate action within the
+current authorized scope; this source change dispatches nothing.
 
 The sections below retain the historical qualification review and its original
 unbound-state observations; they are not a second claim about current pin values.
