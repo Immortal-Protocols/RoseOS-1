@@ -1,0 +1,53 @@
+{
+  "schema": "roseos.mustang-full-run-failure.v1",
+  "runId": "42604053622",
+  "runNumber": 30,
+  "runAttempt": 1,
+  "source": "84577ff033bf333ef969c9a603ffc9012d855f91",
+  "workflow": ".github/workflows/mustang-ota-dedicated.yml",
+  "builderJobId": 129115895445,
+  "builderGroupId": 5,
+  "hostCheckConclusion": "success",
+  "baselineConclusion": "success",
+  "appInputDownloadAndVerificationConclusion": "success",
+  "collectorStage": "source",
+  "collectorFailureCode": "unclassified-selected-file",
+  "failurePath": "resolved-manifest.xml",
+  "failurePaths": [
+    "resolved-manifest.xml"
+  ],
+  "exceptionType": "Refused",
+  "collectorReceiptWritten": true,
+  "errorObservedAt": "2026-11-09T10:52:23Z",
+  "sourceCopyStarted": false,
+  "allocationAttemptedByThisRun": false,
+  "makeStarted": false,
+  "journalOnDiskObserved": false,
+  "signerConclusion": "skipped",
+  "publisherConclusion": "skipped",
+  "cleanupJobId": 129116615034,
+  "cleanupConclusion": "success",
+  "directStopObservation": {
+    "observedAt": "2026-11-09T10:54:50.706266+00:00",
+    "value": {
+      "id": "5585425566393384049",
+      "status": "TERMINATED",
+      "metadata": {
+        "items": [
+          {
+            "key": "block-project-ssh-keys"
+          },
+          {
+            "key": "enable-guest-attributes"
+          },
+          {
+            "key": "enable-oslogin"
+          }
+        ]
+      },
+      "lastStopTimestamp": "2026-11-09T02:53:31.676-08:00"
+    }
+  },
+  "nextInitializationRunNumber": 31,
+  "basis": "Completed native diagnostic identified exactly the root resolved-manifest.xml file. The existing source-sync recipe creates this file; its committed receipt records the pinned manifest SHA-256. Classify only this file by the exact captured manifest Git blob, required regular/nonexecutable type, namespace readback and actual copier inventory verification. No arbitrary generated paths, ignored payloads, journal reset or held access retry. Source copy/allocation/Make did not begin. Cleanup succeeded and the numeric VM was directly observed terminated without JIT metadata."
+}

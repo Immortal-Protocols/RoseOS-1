@@ -149,3 +149,15 @@ refusal. Unknown payloads are never opened and unknown directories are not
 traversed; the same refusal remains mandatory. Paths are canonical relative
 ASCII metadata, with URLs/absolute/escape paths rejected. No unknown file is
 excluded, moved, deleted, trusted or compiled by this diagnostic change.
+
+## Resolved source-sync manifest
+
+Run42604053622 identified `resolved-manifest.xml` as the refused root file
+before copy, allocation or Make. The existing source-sync recipe writes this
+file with `repo manifest -r`; its committed receipt records the same SHA-256 as
+`os/pinned-manifest.xml`. The source observer now classifies only that exact
+root name by the captured manifest's exact blob bytes. The file is required,
+regular and nonexecutable; modified bytes, links or absence refuse. Ordinary
+namespace readback and the shared copier's actual inventory verification cover
+it. Parsed project equivalence alone cannot admit different manifest bytes.
+Other unclassified names still refuse before their contents are opened.

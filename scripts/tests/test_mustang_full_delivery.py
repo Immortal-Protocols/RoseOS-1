@@ -103,6 +103,7 @@ class FullDeliveryTest(unittest.TestCase):
         self.assertTrue(checked['sourceCopyVerified']);self.assertFalse(checked['otaAdmitted'])
         self.assertFalse(checked['pristine']);self.assertEqual(checked['portableInventorySha256'],result['receipt']['sourceCandidate']['portableInventorySha256'])
         self.assertEqual((target/'build/make/README').read_bytes(),(self.f.fixture.source/'build/make/README').read_bytes())
+        self.assertEqual((target/'resolved-manifest.xml').read_bytes(),self.f.fixture.manifest)
         # Mutation after the shared copy's own hash is detected before Make.
         (target/'build/make/README').write_bytes(b'changed after copy')
         with self.assertRaisesRegex(proof.git.Refused,'copied-source-readback-differs'):
