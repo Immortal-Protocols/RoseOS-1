@@ -1,0 +1,58 @@
+{
+  "schema": "roseos.mustang-full-run-failure.v1",
+  "runId": "42584970482",
+  "runNumber": 25,
+  "runAttempt": 1,
+  "source": "1039b30c7e4e686d849bfe677779ba66e951b66a",
+  "workflow": ".github/workflows/mustang-ota-dedicated.yml",
+  "guardConclusion": "success",
+  "controllerConclusion": "success",
+  "enrollConclusion": "success",
+  "builderJobId": 129052973932,
+  "builderGroupId": 5,
+  "builderRunner": "mustang-42584970482",
+  "hostCheckConclusion": "success",
+  "baselineConclusion": "success",
+  "appInputDownloadAndVerificationConclusion": "success",
+  "appArtifactId": 13649846651,
+  "failedStep": "Prepare, allocate, integrate and compile once on Mustang disk",
+  "error": "full-run bootstrap source observation refused; no source copy, allocation or Make",
+  "errorObservedAt": "2026-11-09T08:19:45Z",
+  "allocationAttemptedByThisRun": false,
+  "makeStarted": false,
+  "journalOnDiskObserved": false,
+  "collectorFailureCodeObserved": false,
+  "collectorReceiptPayloadObserved": false,
+  "signerConclusion": "skipped",
+  "publisherConclusion": "skipped",
+  "cleanupJobId": 129053071563,
+  "cleanupConclusion": "success",
+  "ownedStopStepConclusion": "success",
+  "metadataCleanupStepConclusion": "success",
+  "runnerCleanupStepConclusion": "success",
+  "lifecycleBindingStepConclusion": "success",
+  "directStopObservation": {
+    "observedAt": "2026-11-09T08:26:23.358835+00:00",
+    "instance": {
+      "id": "5585425566393384049",
+      "status": "TERMINATED",
+      "metadata": {
+        "items": [
+          {
+            "key": "block-project-ssh-keys"
+          },
+          {
+            "key": "enable-guest-attributes"
+          },
+          {
+            "key": "enable-oslogin"
+          }
+        ]
+      },
+      "lastStopTimestamp": "2026-11-09T00:20:57.569-08:00"
+    }
+  },
+  "nextInitializationRunNumber": 26,
+  "basis": "Permitted exact-run job metadata and error prove native host checks, baseline and fresh-app admission passed, then bootstrap collector refused before source copy/allocation/Make. Existing pipeline suppressed the returned failure stage/code and did not export the collector receipt before prep existed. Exact collector cause is unknown, not inferred from a fixture. Completed cleanup and exact numeric stopped-VM read are independent of artifact payloads. No journal reset or disk absence claim. Advance only the unused initialization fence; preserve conflicting-origin refusal.",
+  "sourceReviewFinding": "guard() always added legacy consumedBuilds to runtime, including null for the clock route. The collector requires exact equality with committed runtime JSON, so the real handoff deterministically differs. Offline regression reproduces collector-captured-binding-differs at bindings. The exact live code was not logged; this is a source-proven defect consistent with that refusal, not a recovered native receipt."
+}

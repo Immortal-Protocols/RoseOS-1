@@ -171,7 +171,10 @@ class ClockAllocationTest(unittest.TestCase):
             target.write_bytes((ROOT/relative).read_bytes())
         state=fixture.root/fixture.cfg['allocationState'];state.write_bytes(self.initial)
         cfg=dict(fixture.cfg,clockNumbering=clock.POLICY)
-        self.assertIsNone(fixture.admitted(cfg)['consumedBuilds'])
+        admitted=fixture.admitted(cfg)
+        self.assertEqual(admitted,cfg)
+        self.assertNotIn('consumedBuilds',admitted)
+        self.assertTrue(json.loads((fixture.root/cfg['allocationState']).read_text())['unknown'])
         with self.assertRaisesRegex(ValueError,'allocation state remains unresolved'):
             fixture.admitted(fixture.cfg)
         self.assertEqual(state.read_bytes(),self.initial)
@@ -187,7 +190,7 @@ class ClockAllocationTest(unittest.TestCase):
             target=fixture.root/relative;target.parent.mkdir(parents=True,exist_ok=True)
             target.write_bytes((ROOT/relative).read_bytes())
         (fixture.root/'os/build-only/mustang-runtime.json').write_bytes(clock.canonical(cfg))
-        actual,jobs=fixture.metadata();actual.update(workflow_id=408460629,run_number=25,created_at='2026-11-09T04:10:00Z')
+        actual,jobs=fixture.metadata();actual.update(workflow_id=408460629,run_number=26,created_at='2026-11-09T04:10:00Z')
         env=dict(fixture.env)
         ctx=clock.actions_context(actual,env,self.policy)
         env['MUSTANG_CLOCK_CONTEXT']=base64.b64encode(clock.canonical(ctx)).decode()
@@ -204,7 +207,7 @@ class ClockAllocationTest(unittest.TestCase):
         with patch.object(full_fixtures.collector.mustang_lane,'configuration',return_value=fixture.lane):
             admitted=full_fixtures.hosted.authenticate_full_run(bundle,env,api=api,root=fixture.root)
             self.assertTrue(admitted['actionsRunIdentityVerified'])
-            actual['run_number']=26
+            actual['run_number']=27
             with self.assertRaisesRegex(ValueError,'authenticated Actions run'):
                 full_fixtures.hosted.authenticate_full_run(bundle,env,api=api,root=fixture.root)
 

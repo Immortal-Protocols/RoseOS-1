@@ -116,6 +116,19 @@ def call(engine, argv, seconds, cwd, env):
     return result, output
 
 
+def require_bootstrap_observation(result):
+    """Surface only the collector's bounded fixed codes, including pre-claim failures."""
+    receipt=result.get('receipt',{})
+    if result.get('receiptWritten') is True and receipt.get('success') is True:
+        return
+    safe=lambda value,fallback:value if isinstance(value,str) and re.fullmatch(r'[a-z][a-z0-9-]{0,95}',value) else fallback
+    failure=safe(receipt.get('failure'),'collector-refused')
+    stage=safe(receipt.get('stage'),'unknown')
+    print(json.dumps(dict(stage='bootstrap-source',status='refused',collectorStage=stage,
+        failureCode=failure,receiptWritten=result.get('receiptWritten') is True)),flush=True)
+    raise ValueError('full-run bootstrap source observation refused ('+stage+': '+failure+'); no source copy, allocation or Make')
+
+
 def run(run_id, attempt, lane=None, runtime=None, inputs_dir=None):
     if not all(re.fullmatch(r'[1-9][0-9]{0,19}', x) for x in (run_id, attempt)):
         raise ValueError('run id and attempt must be positive numeric identifiers')
@@ -155,8 +168,7 @@ def run(run_id, attempt, lane=None, runtime=None, inputs_dir=None):
         print(json.dumps({'stage':'bootstrap-source','status':'entered','runId':run_id}),flush=True)
         bootstrap=bootstrap_collector.collect(lane,runtime,os.environ,
             bootstrap_collector.proof.deps.read_event(os.environ),root=ROOT,full_run=True)
-        if not bootstrap['receiptWritten'] or bootstrap['receipt'].get('success') is not True:
-            raise ValueError('full-run bootstrap source observation refused; no source copy, allocation or Make')
+        require_bootstrap_observation(bootstrap)
         bootstrap_collector.require_full_result(bootstrap,lane,os.environ,
             bootstrap_collector.proof.deps.read_event(os.environ))
         verifier = module('mustang_app_input_verify','app-inputs-verify.py')
@@ -330,6 +342,18 @@ def collect_reports(run_id, attempt, out, lane=None):
         path = base/name
         if path.is_file() and not path.is_symlink():
             shutil.copyfile(path, out/name)
+    if lane is not None:
+        import mustang_bootstrap_collector as collector
+        import mustang_hosttools as readers
+        storage=mustang_paths.layout(lane)['storageRoot']
+        path=storage/f'mustang-bootstrap-observation-{run_id}-{attempt}'/collector.RESULT
+        if path.exists() and not path.is_symlink():
+            raw=readers.read_regular(str(storage),str(path),1 << 20)
+            document=json.loads(raw);observed_run=document.get('run',{})
+            if document.get('schema')!=collector.SCHEMA or observed_run.get('runId')!=run_id \
+                    or observed_run.get('runAttempt')!=attempt or document.get('workflowJob')!='builder':
+                raise ValueError('bootstrap report identity differs')
+            with (out/collector.RESULT).open('xb') as destination:destination.write(raw)
     for name in ('source','git-meta','download','vendor','vendor-inputs','lunch','compile'):
         for filename in ('preflight.json','started.json','completed.json'):
             path = base/'receipts'/name/filename
