@@ -46,6 +46,17 @@ hardware/filesystem/free space, qualified bundle, signatures/output bounds and
 owned lifecycle/STOP receipts. Dispatch remains a separate action within the
 current authorized scope; this source change dispatches nothing.
 
+The first full attempt42576627118 passed admission/start/JIT but stopped at the
+initial host check because gh was missing. The workflow now installs public
+GitHub CLI2.103.3 into this attempt's private temp directory, after native guest,
+disk and other-tool checks. Both the official archive and extracted regular
+executable hashes are pinned before the directory is added to GITHUB_PATH.
+No root/system installation, credential creation or prior-attempt reuse occurs.
+The following host check still requires the CLI. Run23 never reached produce;
+the first clock initialization fence is24, without resetting any journal.
+The failure/cleanup facts and unavailable lifecycle payload are recorded in
+`os/build-only/mustang-full-run-42576627118.json`.
+
 The sections below retain the historical qualification review and its original
 unbound-state observations; they are not a second claim about current pin values.
 
