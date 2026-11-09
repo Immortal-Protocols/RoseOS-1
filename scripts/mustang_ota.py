@@ -465,6 +465,9 @@ def stage_hosted(bundle,unsigned,signed,ota,public,extracted,java_home,out,*,roo
     if runtime.get('baselineTargetFiles') is not None or runtime.get('baselineFactoryEvidence') is not None \
             or runtime.get('candidateContinuity')!='os/build-only/mustang-candidate-continuity-20261107.json':
         raise ValueError('full hosted staging requires the explicitly selected candidate continuity contract')
+    if runtime.get('clockNumbering') is not None:
+        import mustang_clock, mustang_lane
+        mustang_clock.require_bundle(bundle,mustang_lane.configuration(),runtime,root)
     baseline=candidate_continuity(read(root/runtime['candidateContinuity']))
     lane=read(root/'os/build-only/mustang-lane.json');pins=identities()
     build,epoch=bundle['build'],bundle['timestamp'];run=str(bundle['runId']);attempt=str(bundle['runAttempt'])
@@ -507,6 +510,8 @@ def stage_hosted(bundle,unsigned,signed,ota,public,extracted,java_home,out,*,roo
         verificationTools=dict(checkOtaSignatureSha256=digest(checker),deltaGeneratorSha256=digest(binary/'delta_generator')),
         phoneUpdatePassed=False,currentPhone=False,automationDemonstrated=False,sprintOmissions=[],
         builder=lane['vm'],workflow=lane['workflow'],ota=dict(file=ota.name,sizeBytes=ota.stat().st_size,sha256=digest(ota)))
+    if 'clockAllocation' in bundle:
+        receipt['clockAllocation']=bundle['clockAllocation']
     release_receipts.write_once(out/'mustang-ota-receipt.json',receipt)
     (out/'SHA256SUMS').write_text(''.join(f'{digest(p)}  {p.name}\n' for p in sorted(out.iterdir())))
     verify_staged(out,cfg,publication=False)
@@ -523,6 +528,11 @@ def verify_staged(directory, cfg, publication=True):
             or any(v is not True for v in r['checks'].values()) \
             or r.get('publicIdentity') != identities() or r.get('baselineBuild') != cfg['baseline']['installedBuild']:
         raise ValueError('complete Mustang OTA-specific verification required')
+    runtime=read(ROOT/'os/build-only/mustang-runtime.json')
+    if r.get('clockAllocation') is not None or (runtime.get('status')=='bound' and runtime.get('clockNumbering') is not None):
+        import mustang_clock, mustang_lane
+        mustang_clock.require_bundle(dict(clockAllocation=r.get('clockAllocation'),build=r['build'],timestamp=r['timestamp'],
+            runId=r['runId'],runAttempt=r['runAttempt'],sourceSha=r['recipeSource']),mustang_lane.configuration(),runtime,ROOT)
     factory=r.get('baselineFactoryEvidence')
     if r.get('baselineObservation') is not None:
         baseline=require_staged_baseline(r['baselineObservation'])

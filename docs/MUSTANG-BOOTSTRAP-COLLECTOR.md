@@ -181,10 +181,12 @@ background policy, allocation proof and producer-source freshness. A hosted
 producer schema change must be coordinated with the consumer, which currently
 requires a Frankel producer. Held app-owner drafts are untouched.
 
-Numbering still needs an independently durable authority/epoch and authenticated
-atomic issue/recovery semantics. The live producer still requires reconciled
-allocation state; the lost legacy allocation is never guessed or changed to
-known. No production allocation or obsolete pilot activation is performed here.
+The selected first-OTA numbering path uses the existing dedicated disk and
+canonical lock with UTC date/hour IDs and a reserved 00 suffix. It preserves the
+lost legacy value as unknown and binds each immutable reservation through actual
+compiled/signing/staging receipts. See the [numbering route](MUSTANG-NUMBERING-RECOVERY.md#current-first-ota-route-utc-date-and-hour).
+No production allocation or obsolete pilot activation is performed by this source
+change; the remaining runtime/app/capacity bindings remain required.
 
 Neither the source gate nor creation of a new full payload needs the historical
 installer or old target-files. Installed-device compatibility remains a separate
