@@ -217,7 +217,7 @@ class HostedSignGateTest(unittest.TestCase):
         def link(secret_access):
             hosted.evaluate(linked[0], ROOT, free=10 ** 18, files=linked[1], secret_access=secret_access,
                             pin=linked[2], env=ENV, capacity_config=self.admitted())
-        self.assert_secret_closed(link, 'unsafe zip symlink')
+        self.assert_secret_closed(link, 'unsigned archive: unsafe zip symlink: "link"')
         absent_bundle, absent_files, absent_pin = self.tiny_bundle()
         absent_files.pop('jdk')
         def absent(secret_access):

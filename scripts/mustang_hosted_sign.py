@@ -504,7 +504,7 @@ def zip_members(path):
                 rows.append((key, None, 0, True, None))
                 continue
             if stat.S_ISLNK(info.external_attr >> 16):
-                raise ValueError('unsafe zip symlink')
+                raise ValueError('unsafe zip symlink: ' + json.dumps(info.filename[:256]))
             mode = approved_mode(info)
             total += info.file_size
             rows.append((key, mode, info.file_size, False, info))
@@ -719,8 +719,11 @@ def evaluate(bundle, root, free, files=None, secret_access=None, pin=None, capac
             raise CapacityExceeded('; '.join(early)) if early[0].startswith('hosted signer capacity') else ValueError('; '.join(early))
         raise ValueError('signing bundle files are absent')
     verify_files(bundle, files)
-    for path in (files['otatools'], files['jdk'], files['unsigned']):
-        reject_unsafe_zip(path, free)
+    for name in ('otatools', 'jdk', 'unsigned'):
+        try:
+            reject_unsafe_zip(files[name], free)
+        except ValueError as error:
+            raise ValueError(f'{name} archive: {error}') from None
     if missing_bounds:
         text = 'output bound is missing: ' + ','.join(missing_bounds)
         if config.get('admission') is not True:
