@@ -78,11 +78,11 @@ class SourceProofTest(unittest.TestCase):
         self.host=dict(revisionMarker=proof.deps.fingerprint(self.source,marker,deadline),
             distribution=proof.deps.inventory(self.source,out,deadline))
 
-    def command(self,directory,*arguments,env=None):
+    def command(self,directory,*arguments,env=None,input=None):
         safe=dict(git.environment(),GIT_AUTHOR_NAME='Fixture',GIT_AUTHOR_EMAIL='fixture@example.invalid',
                   GIT_COMMITTER_NAME='Fixture',GIT_COMMITTER_EMAIL='fixture@example.invalid',GIT_DEFAULT_HASH='sha1')
         if env:safe.update(env)
-        return subprocess.check_output(['/usr/bin/git','-C',str(directory),*arguments],env=safe,stderr=subprocess.DEVNULL)
+        return subprocess.check_output(['/usr/bin/git','-C',str(directory),*arguments],env=safe,input=input,stderr=subprocess.DEVNULL)
 
     def init_project(self,directory):
         self.command(directory,'init','--quiet');self.command(directory,'add','--all')
@@ -96,7 +96,7 @@ class SourceProofTest(unittest.TestCase):
         project=self.source/project_path;project.mkdir(parents=True)
         (project/'.gitattributes').write_bytes(attributes if attributes is not None else
             (ROOT/'scripts/tests/fixtures/mustang-angle.gitattributes').read_bytes())
-        files=files or {'scripts/trigger.bat':b'@echo off\necho NEVER EXECUTE FIXTURE\n',
+        files=files or {'scripts/trigger.bat':b'@echo off\necho \x1b[31mNEVER EXECUTE FIXTURE\x1b[0m\n',
                'scripts/project.vcxproj':b'\xef\xbb\xbf<Project>fixture</Project>\n',
                'src/compiled/shader.h':b'// fixture header\n',
                'README.txt':b'ordinary pinned text\n'}
@@ -123,7 +123,7 @@ class SourceProofTest(unittest.TestCase):
             self.assertEqual((project/name).read_bytes(),files[name].replace(b'\n',b'\r\n'))
         result=self.inspect();self.assertEqual(result['selectedCheckoutConvertedEntries'],3)
         self.assertFalse(marker.exists())
-        self.assertEqual(result['checkoutConversionPolicy'],'pinned-attributes-isolated-crlf-v2')
+        self.assertEqual(result['checkoutConversionPolicy'],'pinned-attributes-isolated-crlf-v3')
         original=git.LocalGit.read
         def corrupt(reader,project,operation,revision=None):
             raw=original(reader,project,operation,revision)
@@ -166,6 +166,34 @@ class SourceProofTest(unittest.TestCase):
         # Pinned descendant eol=lf overrides the root macro for the batch file.
         self.assertEqual((project/'scripts/trigger.bat').read_bytes(),files['scripts/trigger.bat'])
         self.assertEqual(self.inspect()['selectedCheckoutConvertedEntries'],3)
+
+    def test_explicit_and_auto_text_semantics_match_git_for_control_binary_and_mixed_blobs(self):
+        cases={'escape.bat':b'echo \x1b[31mcolor\x1b[0m\n',
+               'binary.bat':b'\0binary\n', 'mixed.bat':b'one\r\ntwo\n',
+               'bare-cr.bat':b'one\rtwo\n', 'eof.bat':b'echo text\n\x1a',
+               'controls.bat':b'line\n\x01', 'rare-control.bat':b'x'*256+b'\x01\n'}
+        files={mode+'/'+name:raw for mode in ('auto','explicit') for name,raw in cases.items()}
+        project,_files=self.angle_checkout(project_path='external/pigweed',files=files,
+            attributes=b'auto/* text=auto eol=crlf\nexplicit/* text eol=crlf\n')
+        # Pin raw objects directly, including intentionally unnormalized blobs;
+        # Git itself then supplies the independent expected checkout bytes.
+        for name,raw in files.items():
+            blob=self.command(project,'hash-object','-w','--stdin',input=raw).decode().strip()
+            self.command(project,'update-index','--cacheinfo','100644,'+blob+','+name)
+            (project/name).unlink()
+        self.command(project,'commit','--quiet','-m','raw text-semantics fixture')
+        self.command(project,'checkout-index','--all','--force')
+        document=ET.fromstring(self.manifest)
+        next(p for p in document.findall('project') if p.get('path')=='external/pigweed').set(
+            'revision',self.command(project,'rev-parse','HEAD').decode().strip())
+        self.manifest=ET.tostring(document)
+        (self.root/'os/pinned-manifest.xml').write_bytes(self.manifest)
+        (self.source/'resolved-manifest.xml').write_bytes(self.manifest)
+        for name,raw in files.items():
+            with self.subTest(path=name):
+                self.assertEqual(proof.crlf_checkout(raw,'auto' if name.startswith('auto/') else 'set'),
+                                 (project/name).read_bytes())
+        self.assertTrue(self.inspect()['selectedPinnedBytesVerified'])
 
     def test_pinned_filter_is_refused_without_execution_or_source_rewrites(self):
         project,files=self.angle_checkout(attributes=b'*.bat text eol=crlf filter=bad\n')

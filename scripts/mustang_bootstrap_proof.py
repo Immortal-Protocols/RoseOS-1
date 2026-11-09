@@ -66,6 +66,23 @@ def signature(info):
     return tuple(getattr(info,k) for k in ('st_dev','st_ino','st_size','st_mode','st_mtime_ns','st_ctime_ns'))
 
 
+def crlf_checkout(raw,text):
+    """Git's declared CRLF checkout, applied only to authenticated blob bytes.
+
+    text=auto skips existing CR/CRLF or blobs Git classifies as binary. Explicit text
+    converts naked LF even in files with control bytes, preserving existing CRLF.
+    See git/convert.c gather_stats, convert_is_binary, will_convert_lf_to_crlf.
+    """
+    if b'\n' not in raw:return raw
+    if text=='auto':
+        if b'\r' in raw or b'\0' in raw:return raw
+        printable=sum(byte in (8,9,12,27) or (byte>=32 and byte!=127) for byte in raw)
+        nonprintable=sum(byte!=10 and byte not in (8,9,12,27) and (byte<32 or byte==127) for byte in raw)
+        if raw.endswith(b'\x1a'):nonprintable-=1
+        if (printable >> 7)<nonprintable:return raw
+    return raw.replace(b'\r\n',b'\n').replace(b'\n',b'\r\n')
+
+
 def require_pinned(name,kind,measured,known,reader=None,attributes=None):
     """Authenticate raw or explicitly declared checkout bytes, type and mode."""
     identity=known.get('checkoutOid',known['oid'])
@@ -78,11 +95,7 @@ def require_pinned(name,kind,measured,known,reader=None,attributes=None):
             if allowed:
                 raw=reader.read(known['checkoutProject']['path'],'blob',known['oid'])
                 if git.object_id('blob',raw)!=known['oid']:raise git.Refused('pinned-checkout-blob-differs')
-                # Conservative text=auto subset, consistent with Git's stats:
-                # no controls except TAB/LF; bytes >=128 count as printable.
-                if any(byte not in (9,10) and (byte<32 or byte==127) for byte in raw):
-                    raise git.Refused('unsupported-pinned-crlf-text')
-                identity=git.object_id('blob',raw.replace(b'\n',b'\r\n'))
+                identity=git.object_id('blob',crlf_checkout(raw,values['text']))
                 known['checkoutOid']=identity
                 known['checkoutAttributeBindingSha256']=hashlib.sha256(canonical(
                     dict(attributes=values,blobs=bindings))).hexdigest()
@@ -493,7 +506,7 @@ def _inspect_source(source,manifest,vendor,host,recipe,*,root,limits,deadline,sc
         selectedEntryCount=len(inventory),selectedPinnedEntries=pinned_count,selectedPreparedEntries=prepared_count,
         selectedManifestTransferEntries=sum(expected[name]['origin'] in ('manifest-copy','manifest-link') for name in seen_expected),
         selectedResolvedManifestEntries=sum(expected[name]['origin']=='source-sync-manifest' for name in seen_expected),
-        selectedCheckoutConvertedEntries=len(conversions),checkoutConversionPolicy='pinned-attributes-isolated-crlf-v2',
+        selectedCheckoutConvertedEntries=len(conversions),checkoutConversionPolicy='pinned-attributes-isolated-crlf-v3',
         checkoutConversionInventorySha256=hashlib.sha256(canonical(conversions)).hexdigest(),
         attributeScratchLimits=dict(git.PinnedAttributes.LIMITS),attributeScratchCharged=dict(observation.attributes.charged),
         selectedInventorySha256=hashlib.sha256(canonical(inventory)).hexdigest(),sourceDataBytesRead=observation.bytes,
