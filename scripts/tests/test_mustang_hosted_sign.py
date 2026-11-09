@@ -236,7 +236,11 @@ class HostedSignGateTest(unittest.TestCase):
             self.assertEqual(config['host']['sign']['keysSecret'], hosted.KEYS)
             self.assertEqual(config['host']['sign']['secretVersion'], '1')
             java = Path(config['host']['sign']['javaHome']) / 'bin' / 'java'
-            tool = Path(config['host']['sign']['otatools']) / 'bin' / 'delta_generator'
+            archive = Path(config['host']['sign']['otatools'])
+            self.assertTrue(archive.is_file() and zipfile.is_zipfile(archive))
+            self.assertEqual(env['ROSE_SIGN_OTATOOLS'], str(archive))
+            self.assertTrue((Path(env['ROSE_RELEASE_DIR']) / 'unsigned-target_files.zip').is_file())
+            tool = archive.parent / 'otatools-extracted' / 'bin' / 'delta_generator'
             self.assertTrue(java.is_file() and os.access(java, os.X_OK))
             self.assertEqual(java.read_bytes(), b'java-stub')
             self.assertTrue(tool.is_file() and os.access(tool, os.X_OK))
@@ -431,7 +435,7 @@ class HostedSignGateTest(unittest.TestCase):
         self.assertNotIn('mustang-signer-linux-4-core', workflow)
         self.assertIn('--out "$RUNNER_TEMP/mustang-hosted-signed"', signer)
         signer_jobs = [name for name, body in jobs.items()
-                       if 'MUSTANG_SIGNER_WORKLOAD_IDENTITY_PROVIDER' in body and 'id-token: write' in body]
+                       if '/mustang-actions/providers/mustang-main' in body and 'id-token: write' in body]
         self.assertEqual(signer_jobs, ['signer'])
         self.assertNotIn('id-token', jobs['guard'])
         self.assertIn('needs: signer', publisher.split('steps:', 1)[0])
@@ -635,8 +639,12 @@ class HostedSignGateTest(unittest.TestCase):
             self.assertTrue(managed_decrypted_keys)
             config = json.loads(Path(config_path).read_text())
             java = Path(config['host']['sign']['javaHome']) / 'bin' / 'java'
-            tool = Path(config['host']['sign']['otatools']) / 'bin' / 'delta_generator'
-            readme = Path(config['host']['sign']['otatools']) / 'bin' / 'readme.txt'
+            archive = Path(config['host']['sign']['otatools'])
+            self.assertTrue(archive.is_file() and zipfile.is_zipfile(archive))
+            self.assertEqual(env['ROSE_SIGN_OTATOOLS'], str(archive))
+            self.assertTrue((Path(env['ROSE_RELEASE_DIR']) / 'unsigned-target_files.zip').is_file())
+            tool = archive.parent / 'otatools-extracted' / 'bin' / 'delta_generator'
+            readme = archive.parent / 'otatools-extracted' / 'bin' / 'readme.txt'
             self.assertTrue(java.is_file() and os.access(java, os.X_OK))
             self.assertTrue(tool.is_file() and os.access(tool, os.X_OK))
             self.assertTrue(readme.is_file() and not os.access(readme, os.X_OK))

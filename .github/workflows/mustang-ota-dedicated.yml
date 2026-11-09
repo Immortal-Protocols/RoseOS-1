@@ -65,7 +65,7 @@ jobs:
     env:
       MUSTANG_CONTROLLER_SERVICE_ACCOUNT: ${{ vars.MUSTANG_CONTROLLER_SERVICE_ACCOUNT }}
       MUSTANG_CONTROLLER_WORKLOAD_IDENTITY_PROVIDER: ${{ vars.MUSTANG_CONTROLLER_WORKLOAD_IDENTITY_PROVIDER }}
-      MUSTANG_SIGNER_WORKLOAD_IDENTITY_PROVIDER: ${{ vars.MUSTANG_SIGNER_WORKLOAD_IDENTITY_PROVIDER }}
+      MUSTANG_SIGNER_WORKLOAD_IDENTITY_PROVIDER: projects/1072799993443/locations/global/workloadIdentityPools/mustang-actions/providers/mustang-main
       GCP_SIGNER_SERVICE_ACCOUNT: ${{ vars.GCP_SIGNER_SERVICE_ACCOUNT }}
     steps:
     - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -204,9 +204,14 @@ jobs:
       group: ${{ needs.guard.outputs.runner_group }}
       labels: ${{ needs.guard.outputs.runner_label }}
     timeout-minutes: 200
+    outputs:
+      bundle_sha256: ${{ steps.bundle.outputs.bundle_sha256 }}
     permissions:
       contents: read
       actions: read
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+      MUSTANG_OWNER_B64: ${{ needs.controller.outputs.ownership }}
     steps:
     - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
@@ -251,6 +256,7 @@ jobs:
       run: python3 scripts/mustang-dedicated.py collect
     - name: Bundle the same-run unsigned target-files, otatools, and JDK bytes
       if: inputs.dry_run == false
+      id: bundle
       run: python3 scripts/mustang_hosted_sign.py export-bundle --collection "${{ steps.collect.outputs.collection_receipt }}" --out "$RUNNER_TEMP/mustang-signing-bundle"
     - id: preliminary
       if: inputs.dry_run == false
@@ -283,6 +289,7 @@ jobs:
   signer:
     needs:
     - builder
+    - controller
     if: inputs.dry_run == false && inputs.source_only == false && inputs.hostdeps_only == false && inputs.lock_admin_only == false && inputs.factory_only == false && inputs.vendor_only == false && inputs.otatools_only == false && needs.builder.result == 'success'
     runs-on:
       group: roseos-mustang-signer
@@ -293,8 +300,10 @@ jobs:
       actions: read
       id-token: write
     env:
-      GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ vars.MUSTANG_SIGNER_WORKLOAD_IDENTITY_PROVIDER }}
+      GCP_WORKLOAD_IDENTITY_PROVIDER: projects/1072799993443/locations/global/workloadIdentityPools/mustang-actions/providers/mustang-main
       GCP_SIGNER_SERVICE_ACCOUNT: ${{ vars.GCP_SIGNER_SERVICE_ACCOUNT }}
+      EXPECTED_FULL_BUNDLE_SHA256: ${{ needs.builder.outputs.bundle_sha256 }}
+      MUSTANG_OWNER_B64: ${{ needs.controller.outputs.ownership }}
     steps:
     - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
@@ -307,6 +316,8 @@ jobs:
         path: ${{ runner.temp }}/mustang-signing-bundle
     - id: preliminary
       name: Metadata gate only; no payload byte verification
+      env:
+        GH_TOKEN: ${{ github.token }}
       run: python3 scripts/mustang_hosted_sign.py preliminary --bundle "$RUNNER_TEMP/mustang-signing-bundle"
     - name: Download the same-run input bytes only after the metadata gate
       if: steps.preliminary.outputs.allow == 'true'
@@ -317,6 +328,8 @@ jobs:
     - id: verified
       name: Full byte, hash, archive, and peak preflight before any signer secret
       if: steps.preliminary.outputs.allow == 'true'
+      env:
+        GH_TOKEN: ${{ github.token }}
       run: python3 scripts/mustang_hosted_sign.py preflight --bundle "$RUNNER_TEMP/mustang-signing-bundle"
     - name: OIDC login only after the full preflight admits this checkout
       if: steps.verified.outputs.admit == 'true'
@@ -324,6 +337,8 @@ jobs:
       run: python3 scripts/actions-gcp-login.py login "$GCP_SIGNER_SERVICE_ACCOUNT"
     - name: Sign with the checkout entry point, never a guest-supplied executable
       if: steps.verified.outputs.admit == 'true'
+      env:
+        GH_TOKEN: ${{ github.token }}
       run: python3 scripts/mustang_hosted_sign.py sign --bundle "$RUNNER_TEMP/mustang-signing-bundle" --out "$RUNNER_TEMP/mustang-hosted-signed"
     - if: always() && steps.login.outcome == 'success'
       run: python3 scripts/actions-gcp-login.py logout
@@ -356,7 +371,7 @@ jobs:
     - name: Require exact hosted signed outputs before publisher credentials
       run: python3 scripts/mustang_hosted_sign.py bind-outputs --dir "$RUNNER_TEMP/mustang-ota"
     - name: Verify same-run hashes and both proofs before publisher credentials
-      run: python3 scripts/mustang-dedicated.py verify-staged --publish --dir "$RUNNER_TEMP/mustang-ota"
+      run: python3 scripts/mustang-dedicated.py verify-staged --publish --dir "$RUNNER_TEMP/mustang-ota/staged"
     - id: app
       uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510
       with:
@@ -368,7 +383,7 @@ jobs:
     - name: Fresh OTA, metadata last, preserve Latest
       env:
         PIXEL_OTA_TOKEN: ${{ steps.app.outputs.token }}
-      run: python3 scripts/mustang-dedicated.py publish --publish --dir "$RUNNER_TEMP/mustang-ota" --out "$RUNNER_TEMP/mustang-publication"
+      run: python3 scripts/mustang-dedicated.py publish --publish --dir "$RUNNER_TEMP/mustang-ota/staged" --out "$RUNNER_TEMP/mustang-publication"
     - if: always()
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
       with:
@@ -631,9 +646,19 @@ jobs:
       if: steps.owned.outputs.started == 'true'
       run: python3 scripts/actions-gcp-login.py login "$MUSTANG_CONTROLLER_SERVICE_ACCOUNT"
     - if: steps.owned.outputs.started == 'true'
-      run: python3 scripts/mustang_controller.py stop --ownership-record "$RUNNER_TEMP/mustang-owner.json"
+      run: |
+        if [[ "$MUSTANG_DRY_RUN" == false ]]; then
+          python3 scripts/mustang_controller.py stop --ownership-record "$RUNNER_TEMP/mustang-owner.json" --stop-receipt "$RUNNER_TEMP/bootstrap-stop.json"
+        else
+          python3 scripts/mustang_controller.py stop --ownership-record "$RUNNER_TEMP/mustang-owner.json"
+        fi
     - if: always() && steps.login.outcome == 'success'
-      run: python3 scripts/mustang_ephemeral.py clear-metadata --execute
+      run: |
+        if [[ "$MUSTANG_DRY_RUN" == false ]]; then
+          python3 scripts/mustang_ephemeral.py clear-metadata --execute > "$RUNNER_TEMP/bootstrap-metadata-cleanup.json"
+        else
+          python3 scripts/mustang_ephemeral.py clear-metadata --execute
+        fi
     - if: always() && steps.login.outcome == 'success'
       run: python3 scripts/actions-gcp-login.py logout
     - id: app
@@ -647,4 +672,21 @@ jobs:
       if: always() && steps.app.outcome == 'success'
       env:
         GH_TOKEN: ${{ steps.app.outputs.token }}
-      run: python3 scripts/mustang_ephemeral.py sweep --execute --run-id "$GITHUB_RUN_ID"
+      run: |
+        if [[ "$MUSTANG_DRY_RUN" == false ]]; then
+          python3 scripts/mustang_ephemeral.py sweep --execute --run-id "$GITHUB_RUN_ID" > "$RUNNER_TEMP/bootstrap-runner-cleanup.json"
+        else
+          python3 scripts/mustang_ephemeral.py sweep --execute --run-id "$GITHUB_RUN_ID"
+        fi
+    - name: Bind the full run's owned STOP and completed cleanup results
+      if: always() && env.MUSTANG_DRY_RUN == 'false'
+      run: python3 scripts/mustang_bootstrap_collector.py lifecycle --execute
+    - if: always() && env.MUSTANG_DRY_RUN == 'false'
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: mustang-bootstrap-lifecycle-${{ github.run_id }}-${{ github.run_attempt }}
+        path: |
+          ${{ runner.temp }}/bootstrap-stop.json
+          ${{ runner.temp }}/bootstrap-lifecycle-receipt.json
+        retention-days: 14
+        if-no-files-found: warn

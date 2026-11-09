@@ -339,7 +339,7 @@ class CollectorTest(unittest.TestCase):
         self.assertFalse(result['receipt']['success']);self.assertFalse(result['receiptWritten'])
         self.assertEqual(result['receipt']['failure'],'collector-deadline')
 
-    def test_default_cli_has_no_execution_or_root_override_and_workflow_has_no_hook(self):
+    def test_default_cli_cannot_observe_and_workflow_only_calls_cleanup_summary(self):
         script=ROOT/'scripts/mustang_bootstrap_collector.py'
         result=subprocess.run([sys.executable,str(script)],capture_output=True,text=True,check=True)
         plan=json.loads(result.stdout);self.assertFalse(plan['execute']);self.assertFalse(plan['liveObservationEnabled'])
@@ -347,7 +347,8 @@ class CollectorTest(unittest.TestCase):
             result=subprocess.run([sys.executable,str(script),flag],capture_output=True)
             self.assertNotEqual(result.returncode,0)
         workflow=(ROOT/'.github/workflows/mustang-ota-dedicated.yml').read_text()
-        self.assertNotIn('mustang_bootstrap_collector',workflow);self.assertNotIn(collector.SCOPE,workflow)
+        self.assertIn('mustang_bootstrap_collector.py lifecycle --execute',workflow)
+        self.assertNotIn(collector.SCOPE,workflow);self.assertNotIn('  bootstrap-observe:',workflow)
 
 
 class ProbeTest(unittest.TestCase):

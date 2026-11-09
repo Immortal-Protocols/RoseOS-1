@@ -83,7 +83,10 @@ def guard(lane, cfg, env, publish=False, root=ROOT, diff=None, dry_run=False):
         raise ValueError('source-only sync receipt is not pristine bootstrap evidence')
     route.reject_copy_time_source(source)
     manifest=hashlib.sha256((Path(root)/'os/pinned-manifest.xml').read_bytes()).hexdigest()
-    if source.get('builder')!=lane['vm'] or source.get('sourceRoot')!=lane['sourceRoot'] \
+    if source.get('schema')=='roseos.mustang-full-run-source-contract.v1':
+        import mustang_bootstrap_collector
+        mustang_bootstrap_collector.source_contract(lane,cfg,source,root=root)
+    elif source.get('builder')!=lane['vm'] or source.get('sourceRoot')!=lane['sourceRoot'] \
             or source.get('manifestSha256')!=manifest or source.get('pristine') is not True \
             or source.get('adevtoolRevision')!=load(Path(root)/'os/build-only/mustang.json')['pins']['vendor/adevtool']:
         raise ValueError('dedicated pristine pinned source/bootstrap evidence differs')

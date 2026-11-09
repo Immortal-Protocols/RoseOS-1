@@ -1163,6 +1163,10 @@ class DedicatedRuntimeTest(unittest.TestCase):
         inputs=self.root/'app-inputs'; inputs.mkdir()
         # The dedicated lock is prepared separately; production cannot create or write it.
         Path(self.lane['lockPath']).touch();Path(self.lane['lockPath']).chmod(0o444)
+        import mustang_bootstrap_collector as bootstrap
+        import mustang_bootstrap_proof as source_proof
+        bootstrap_result=dict(receiptWritten=True,receiptFile=dict(sha256='e'*64),
+            receipt=dict(success=True,sourceCandidate={},run=dict(runId='123',runAttempt='1',source=SOURCE)))
         with patch.object(pipeline,'ROOT',self.root),patch.object(pipeline,'head',return_value=SOURCE), \
                 patch.object(pipeline,'module',side_effect=dependency),patch.object(pipeline,'call',side_effect=call), \
                 patch.object(pipeline,'omissions',return_value=['unrelated sprint omissions']), \
@@ -1171,11 +1175,17 @@ class DedicatedRuntimeTest(unittest.TestCase):
                 patch.object(pipeline.mustang_paths,'compiler_recipe',return_value=recipe), \
                 patch.object(pipeline.integration,'admit',side_effect=admit), \
                 patch.object(pipeline.integration,'render',return_value=({},['synthetic-integrate'])), \
-                patch.object(allocate,'observe',return_value=(set(),{})):
+                patch.object(allocate,'observe',return_value=(set(),{})), \
+                patch.object(bootstrap.proof.deps,'read_event',return_value={'inputs':{'publish':False}}), \
+                patch.object(bootstrap,'collect',return_value=bootstrap_result) as observed, \
+                patch.object(bootstrap,'require_full_result'), \
+                patch.object(source_proof,'verify_copy',return_value={'sourceCopyVerified':True}) as copied:
             self.assertEqual(pipeline.run('123','1',self.lane,cfg,inputs),0)
         result=self.driver.load(self.host/'rose-actions/mustang-prep-123-1/candidate-receipt.json')
         self.assertEqual(stages,['source','git-meta','lunch','compile'])
         consume.assert_called_once()
+        observed.assert_called_once();copied.assert_called_once()
+        self.assertTrue(result['stages']['source-copy']['result']['sourceCopyVerified'])
         self.assertFalse(result['stages']['vendor-inputs']['result']['generationStarted'])
         self.assertNotIn('vendor-sprint-patch',result['stages'])
         self.assertNotIn('adevtool-no-input-hash.patch',str(commands))

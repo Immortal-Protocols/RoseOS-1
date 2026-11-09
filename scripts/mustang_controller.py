@@ -15,6 +15,7 @@ import os
 from pathlib import Path
 import re
 import sys
+import subprocess
 
 import mustang_lane
 
@@ -102,6 +103,32 @@ def stop(adapter, lane, run, record):
     return {'observed':adapter.control_builder('stop', builder=dict(lane['vm']))}
 
 
+def stop_with_receipt(adapter,lane,run,record,destination,execute=subprocess.run):
+    """Existing owned STOP plus one fixed numeric-ID readback; no fallback/retry."""
+    import mustang_hosttools as readers
+    if not read_ownership(record,lane,run):raise ValueError('owned STOP receipt needs this operation start')
+    result=stop(adapter,lane,run,record)
+    if result.get('observed')!='TERMINATED':raise ValueError('owned STOP did not reach TERMINATED')
+    vm=lane['vm']
+    observed=execute(['gcloud','compute','instances','describe',vm['instance'],'--project='+vm['project'],
+        '--zone='+vm['zone'],'--format=json(id,name,status)'],capture_output=True,text=True,timeout=30)
+    if observed.returncode:raise ValueError('owned STOP readback unavailable')
+    try:body=json.loads(observed.stdout)
+    except (TypeError,ValueError):raise ValueError('owned STOP readback malformed') from None
+    if body!={'id':vm['instanceId'],'name':vm['instance'],'status':'TERMINATED'}:
+        raise ValueError('owned STOP numeric identity or final state differs')
+    receipt=dict(schema='roseos.mustang-owned-stop.v1',run=run,builder=vm,
+                 startedByThisOperation=True,readback=body,otaAdmitted=False)
+    destination=Path(destination);parent=readers._walk_dir(readers._body(str(destination.parent)))
+    try:
+        fd=os.open(destination.name,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600,dir_fd=parent)
+        with os.fdopen(fd,'w') as output:
+            json.dump(receipt,output,sort_keys=True);output.write('\n');output.flush();os.fsync(output.fileno())
+        os.fsync(parent)
+    finally:os.close(parent)
+    return receipt
+
+
 def start_gate(runtime, env):
     """Admit a bound OTA run, or the workflow's separately guarded preparation scope."""
     if env.get('MUSTANG_DRY_RUN') == 'true':
@@ -120,7 +147,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('action', choices=('check', 'plan', 'start', 'ownership', 'stop'))
     parser.add_argument('--ownership-record')
+    parser.add_argument('--stop-receipt')
     args = parser.parse_args()
+    if args.stop_receipt and args.action!='stop':parser.error('--stop-receipt is only for stop')
     try:
         lane = mustang_lane.validate(mustang_lane.configuration())
         if args.action == 'plan':
@@ -139,7 +168,9 @@ def main():
                 result = {'startedByThisOperation':read_ownership(args.ownership_record, lane, run)}
             else:
                 adapter = require_explicit_target(common_controller())
-                result = (start if args.action == 'start' else stop)(adapter, lane, run, args.ownership_record)
+                if args.action=='stop' and args.stop_receipt:
+                    result=stop_with_receipt(adapter,lane,run,args.ownership_record,args.stop_receipt)
+                else:result = (start if args.action == 'start' else stop)(adapter, lane, run, args.ownership_record)
         print(json.dumps(result, sort_keys=True))
         return 0
     except (OSError, TypeError, ValueError) as error:
