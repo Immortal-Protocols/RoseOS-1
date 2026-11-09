@@ -65,6 +65,8 @@ def guard(lane, cfg, env, publish=False, root=ROOT, diff=None, dry_run=False):
     if cfg.get('status')!='bound':
         raise ValueError('dedicated Mustang runtime inputs are unbound')
     controller.require_explicit_target(controller.common_controller())
+    import mustang_hosted_sign
+    mustang_hosted_sign.require_delivery_capacity(root)
     if type(cfg.get('jobs')) is not int or not 1<=cfg['jobs']<=256 \
             or set(cfg.get('tools',{}))!={'aapt','apksigner','node'}:
         raise ValueError('actual dedicated Make job count required')
@@ -220,8 +222,8 @@ def host_check(lane,cfg,observe_id=metadata_id,execute=subprocess.run):
     for tool in tools:
         if not isinstance(tool,str) or not Path(tool).is_file() or not os.access(tool,os.X_OK):
             raise ValueError('dedicated tool unavailable')
-    if not infrastructure and any(shutil.which(tool) is None for tool in ('gh','gcloud')):
-        raise ValueError('artifact/signing CLI unavailable before compile')
+    if not infrastructure and shutil.which('gh') is None:
+        raise ValueError('artifact CLI unavailable before compile')
 
 
 def private_binding(record,lane,cfg,root=ROOT):

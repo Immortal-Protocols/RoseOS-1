@@ -2,11 +2,11 @@
   "schema": "roseos.mustang-hosted-sign-script.v1",
   "entryPoint": "scripts/mustang_hosted_sign.py",
   "generateReleasePath": "script/generate-release.sh",
-  "generateReleaseSha256": null,
-  "jdkSha256": null,
-  "otatoolsSha256": null,
-  "otatoolsExecutable": null,
-  "status": "unbound",
+  "generateReleaseSha256": "01f7847ecdc6600bd2e3ffebe45cf79cee4fead1d6b61686c4d3c70e9c548311",
+  "jdkSha256": "533336f6494c0c15897da6f2d0f475249a7c96dda76f6f8cab20a8539724b1cc",
+  "otatoolsSha256": "9f0f1c8b906641cf262526fb8877adf5f711504c2ab6d508c437bd1005c1cc32",
+  "otatoolsExecutable": "bin/ota_from_target_files",
+  "status": "qualified",
   "trust": "held",
-  "basis": "Reviewed helpers are in this checkout and hashed in os/build-only/mustang-hosted-tool-closure.json. generateReleaseSha256, jdkSha256, otatoolsSha256 and otatoolsExecutable stay null until the independent otatools receipt and parent review. Admission is not enabled. A guest-uploaded copy is not executed."
+  "basis": "Hashes bound from the reviewed helper closure, canonical pinned JDK and actual500-file inspection of qualified native run42531345133. These pins establish tooling provenance only; capacity admission and runtime status remain independently controlled. No archive member is executed by this binding."
 }

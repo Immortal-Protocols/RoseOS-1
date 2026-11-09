@@ -1,5 +1,38 @@
 # Mustang tool qualification and remaining admission work
 
+Current source selection binds the reviewed release script, canonical JDK and
+actual qualified otatools hashes in `mustang-hosted-sign-script.json`. This does
+not execute the package or enable signer capacity. The historical qualification
+receipts retain their original `signerPinsAdmitted=false` observation.
+
+Runtime bindings select the measured host-distribution aapt2/apksigner, the pinned
+JIT Node installation, jobs=24 from the completed native qualification, the
+full-run source/copy contract, historical same-VM JIT egress and the independently
+read existing signer policies. Native APK verification follows source/tool byte
+observation. Its Java path uses the pinned source JDK; cloud signing CLI presence
+is not required on the guest.
+
+The accepted common input is the Release-verified Frankel2026110901 export from
+42561803703 attempt1, artifact13649846651, archive digest
+`e14607d7385952a19c9b78977d0c3dd6f84f1e8d76cc31bb7ae35bf09c4bc3d0`.
+Build SDK37 and actual targetSdk35 are distinct. The old export and held app
+stack are untouched. Existing manual full-delivery authority is reconciled to
+the dedicated workflow; publish still requires its explicit input and all proofs.
+
+The remaining runtime admission dependency is actual configuration evidence for
+the existing `roseos-mustang-signer` / `mustang-signer-4core` larger-runner route.
+The worker's administrative group6 GET returned403 and remains held. Purchase,
+configuration and free space are not inferred. Current active capacity/admission
+remain unchanged. Source supports a confirmed four-vCPU Ubuntu24.04 x64/150GB
+profile, correlates this run's signer group/label, and checks actual hardware and
+available space before login. The pending output values are a proposed budget
+envelope, not measured output maxima. Closed capacity now refuses before native
+START/Make rather than after a long successful compile. Runtime status remains
+unbound until those final capacity/runtime fields are honestly admitted.
+
+The sections below retain the historical qualification review and its original
+unbound-state observations; they are not a second claim about current pin values.
+
 The read-only `scripts/mustang_otatools_qualification.py` bridges the successful
 dedicated tool build to the held hosted-tool closure. It does not enable a
 signer, execute a package, allocate a build number or start a VM.

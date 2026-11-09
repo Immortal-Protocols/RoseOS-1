@@ -33,7 +33,7 @@ class ContinuityTest(unittest.TestCase):
         runtime = json.loads((ROOT/'os/build-only/mustang-runtime.json').read_text())
         self.assertEqual(runtime['status'], 'unbound')
         self.assertIsNone(runtime.get('baselineTargetFiles'))
-        self.assertNotIn('candidateContinuity', runtime)
+        self.assertEqual(runtime['candidateContinuity'], 'os/build-only/mustang-candidate-continuity-20261107.json')
 
     def test_mismatched_bytes_or_a_phone_claim_fail_closed(self):
         bad = self.record()

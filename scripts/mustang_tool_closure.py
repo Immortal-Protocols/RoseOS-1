@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
-"""Reviewed hosted-signer tooling closure. Production pins stay unbound.
+"""Reviewed hosted-signer tooling closure and measured input pins.
 
 The files under script/ and device/common/ are the upstream helpers the hosted
 signer actually reads or executes. script/decrypt-keys is replaced before
 execution, and device/common/generate-factory-images-common.sh is after the
 img_from_target_files cut, so neither is imported. The JDK section records a
 deterministic zip of the official prebuilts/jdk/jdk21 linux-x86 tree. That zip
-is not committed, and jdkSha256 in the admission pin stays null.
+is not committed. A separate current pin may select its measured hash while
+capacity and execution admission remain closed.
 """
 import hashlib
 import json
@@ -57,13 +58,30 @@ def load_json(root, relative):
     return json.loads(path.read_text())
 
 
+def qualified_pins(root=ROOT):
+    import mustang_otatools_qualification as qualification
+    receipt=load_json(root,RECEIPT)
+    script=[row for row in receipt['files'] if row['path']=='script/generate-release.sh']
+    if len(script)!=1:raise ClosureError('release-script closure differs')
+    try:inspected=qualification.inspection_record(root=root)
+    except ValueError as error:raise ClosureError(str(error)) from None
+    return dict(generateReleaseSha256=script[0]['sha256'],jdkSha256=receipt['jdk']['archiveSha256'],
+        otatoolsSha256=inspected['packageSha256'],otatoolsExecutable='bin/ota_from_target_files')
+
+
 def production_unbound(root=ROOT):
     """Admission pin config stays closed. A provenance receipt is not a pin."""
     pin = load_json(root, PIN)
-    for key in PIN_KEYS:
-        if pin.get(key) is not None:
-            raise ClosureError(f'production pin {key} is filled')
-    if pin.get('trust') != 'held' or pin.get('status') != 'unbound':
+    if pin.get('trust') != 'held':
+        raise ClosureError('production script trust is not held')
+    if pin.get('status') == 'unbound':
+        if any(pin.get(key) is not None for key in PIN_KEYS):
+            raise ClosureError('unbound production pin is filled')
+    elif pin.get('status') == 'qualified':
+        expected = qualified_pins(root)
+        if any(pin.get(key) != expected[key] for key in PIN_KEYS):
+            raise ClosureError('qualified production pin differs from measured provenance')
+    else:
         raise ClosureError('production script trust is not held')
     capacity = load_json(root, CAPACITY)
     if capacity.get('admission') is not False or capacity.get('trust') != 'held':

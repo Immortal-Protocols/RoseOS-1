@@ -71,6 +71,36 @@ class HostedSignGateTest(unittest.TestCase):
         config['outputBounds'] = {name: 4096 for name in hosted.OUTPUT_BOUNDS}
         return config
 
+    def larger(self):
+        config=self.admitted()
+        config['activeRunner']=dict(kind='github-larger-runner',groupName='roseos-mustang-signer',groupId=6,
+            label='mustang-signer-4core',image='ubuntu-24.04',vcpu=4,ssdBytes=150000000000,
+            configured=True,approved=True,approvalRef='synthetic owner approval',configurationRef='synthetic route observation')
+        return config
+
+    def test_larger_profile_requires_configuration_and_matches_only_the_selected_route(self):
+        value=self.larger()
+        with tempfile.TemporaryDirectory() as temporary:
+            path=Path(temporary)/'capacity.json';path.write_text(json.dumps(value))
+            self.assertEqual(hosted.load_capacity(path)['activeRunner']['groupId'],6)
+            for field,wrong in (('configured',False),('approvalRef',None),('groupName','other-group'),('vcpu',8)):
+                changed=json.loads(json.dumps(value));changed['activeRunner'][field]=wrong
+                path.write_text(json.dumps(changed))
+                with self.assertRaisesRegex(ValueError,'larger-runner identity/approval'):
+                    hosted.load_capacity(path)
+
+    def test_actual_wrong_signer_capacity_stops_before_secret_access(self):
+        bundle,files,pin=self.tiny_bundle();root=self.checkout(files['generateRelease'].read_bytes())
+        def call(secret_access):
+            hosted.evaluate(bundle,root,free=10**18,files=files,pin=pin,
+                env=dict(ENV,GITHUB_JOB='signer'),capacity_config=self.larger(),secret_access=secret_access)
+        with patch.object(hosted.os,'cpu_count',return_value=8):
+            self.assert_secret_closed(call,'actual signer CPU/memory/disk')
+
+    def test_closed_signer_admission_is_known_before_any_native_build(self):
+        with self.assertRaisesRegex(ValueError,'hosted signer admission is closed; no native build'):
+            hosted.require_delivery_capacity(ROOT)
+
     def bundle(self, **changes):
         measured, _ = self.measured_peak()
         value = {
@@ -122,15 +152,16 @@ class HostedSignGateTest(unittest.TestCase):
 
         self.assert_secret_closed(call, 'unmeasured signer inputs: jdk,generateRelease')
 
-    def test_script_pin_stays_unbound_and_blocks_secret_access(self):
+    def test_missing_script_pin_blocks_secret_access_even_with_capacity(self):
         pin = json.loads((ROOT / hosted.SCRIPT_PIN).read_text())
-        self.assertIsNone(pin['generateReleaseSha256'])
+        self.assertEqual(pin['status'],'qualified')
+        pin=dict(pin,generateReleaseSha256=None)
         self.assertEqual(pin['entryPoint'], hosted.ENTRY)
         bundle, files, _ = self.tiny_bundle()
 
         def call(secret_access):
             hosted.evaluate(bundle, ROOT, free=10 ** 18, files=files, secret_access=secret_access, env=ENV,
-                            capacity_config=self.admitted())
+                            capacity_config=self.admitted(),pin=pin)
 
         self.assert_secret_closed(call, 'sign script pin is unbound')
 
@@ -446,9 +477,9 @@ class HostedSignGateTest(unittest.TestCase):
         self.assertIn("always() && needs.controller.result != 'skipped'", cleanup)
         runtime = json.loads((ROOT / 'os/build-only/mustang-runtime.json').read_text())
         self.assertEqual(runtime['status'], 'unbound')
-        self.assertIsNone(runtime['signingRouteEvidence'])
-        self.assertEqual(runtime['sourceEvidence'], 'os/build-only/mustang-source-sync-42409634329.json')
-        self.assertFalse(runtime['publication']['enabled'])
+        self.assertEqual(runtime['signingRouteEvidence'],'os/build-only/mustang-dedicated-signing-route.json')
+        self.assertEqual(runtime['sourceEvidence'], 'os/build-only/mustang-full-run-source.json')
+        self.assertTrue(runtime['publication']['enabled'])
 
     def test_each_peak_term_and_a_missing_bound_deny_before_secrets(self):
         bundle, files, pin = self.tiny_bundle()

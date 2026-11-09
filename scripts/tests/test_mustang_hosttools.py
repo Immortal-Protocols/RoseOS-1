@@ -32,14 +32,16 @@ class ProposalTest(unittest.TestCase):
                      'mustang-product-config-absent', 'host-dependency-closure-absent', 'out-dir-unspecified'):
             self.assertIn(code, decision['problems'])
         pins = json.loads((ROOT/'os/build-only/mustang-hosted-sign-script.json').read_text())
-        for name in ('generateReleaseSha256', 'jdkSha256', 'otatoolsSha256', 'otatoolsExecutable'):
-            self.assertIsNone(pins[name])
+        import mustang_tool_closure
+        for name, value in mustang_tool_closure.qualified_pins(ROOT).items():
+            self.assertEqual(pins[name], value)
+        self.assertFalse(json.loads((ROOT/'os/build-only/mustang-hosted-signer-capacity.json').read_text())['admission'])
         runtime = json.loads((ROOT/'os/build-only/mustang-runtime.json').read_text())
         self.assertEqual(runtime['status'], 'unbound')
-        self.assertFalse(runtime['publication']['enabled'])
-        self.assertIsNone(runtime['jobs'])
-        self.assertEqual(runtime['tools'], {'aapt': None, 'apksigner': None, 'node': None})
-        self.assertIsNone(runtime['runner']['lifetime'])
+        self.assertTrue(runtime['publication']['enabled'])
+        self.assertEqual(runtime['jobs'], 24)
+        self.assertTrue(all(Path(value).is_absolute() for value in runtime['tools'].values()))
+        self.assertEqual(runtime['runner']['lifetime'], 'ephemeral')
         self.assertIsNone(runtime['runner']['registrationEvidence'])
         self.assertEqual(runtime['runner']['groupId'], '5')
         self.assertEqual(runtime['automaticStopHours'], 4)
