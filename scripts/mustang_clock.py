@@ -135,11 +135,13 @@ def read(directory, name):
     return json.loads(raw)
 
 
-def load_journal(directory, value, lane, cfg, ctx):
+def load_journal(directory, value, lane, cfg, ctx, *, initialize=True):
     parent = directory.parent
     fd = readers._walk_dir(readers._body(str(parent)))
     try:
         if not os.path.lexists(directory):
+            if not initialize:
+                raise ValueError('clock ledger absent; read-only validation cannot initialize it')
             # This one observed workflow number may initialize once. After loss,
             # later runs cannot manufacture an empty replacement authority.
             if ctx['runNumber'] != value['initializationRunNumber']:
@@ -206,6 +208,60 @@ def load_journal(directory, value, lane, cfg, ctx):
     if type(head.get('count')) is not int or head != expected:
         raise ValueError('clock head/reservations differ; consumption uncertain, no retry')
     return origin, head, records
+
+
+def compile_identity(op, wall, *, lane, cfg, root=ROOT, env=None):
+    """Read-only compiler binding to this run's existing durable clock record.
+
+    Clock IDs are YYMMDDHH00, not the old YYYYMMDDNN format. Their timestamp
+    comes from the authenticated reservation, never from a guessed ID prefix.
+    Missing/corrupt journal state is refused without initialization or repair.
+    """
+    env=os.environ if env is None else env
+    number,stamp=op['buildNumber'],op['buildDatetime']
+    facts=dict(buildNumber=number,buildDatetime=stamp);phase='policy'
+    try:
+        value=policy(lane,cfg,root);ctx=context(value,env);paths=mustang_paths.layout(lane)
+        directory=paths['storageRoot']/JOURNAL
+        phase='journal'
+        with mustang_existing_lock.shared(paths['lockPath'],expected=str(paths['lockPath'])):
+            _origin,_head,records=load_journal(directory,value,lane,cfg,ctx,initialize=False)
+        phase='reservation'
+        matches=[record for record in records if record['build']==number]
+        if len(matches)!=1 or not records or records[-1]['build']!=number:
+            return ['clock compile requires the current durable reservation'],facts
+        record=matches[0]
+        facts['reservation']=str(directory/'reservations'/(number+'.json'))
+        require_allocation(record,lane,cfg,root=root,value=value,env=env,timestamp=stamp)
+        if str(op['integrationDir'])!=record['integrationDir']:
+            return ['clock compile integration directory differs from its reservation'],facts
+        source=mustang_paths.attempt(lane,'prep',ctx['runId'],ctx['runAttempt'])/'source'
+        if Path(op['sourceRoot'])!=source:
+            return ['clock compile source directory differs from its reserved run'],facts
+        phase='inputs'
+        inputs=Path(record['workDir'])/'inputs/local-inputs.json'
+        if Path(op['inputsReceipt'])!=inputs:
+            return ['clock compile input receipt is outside its reserved work directory'],facts
+        document=json.loads(readers.read_regular(str(paths['storageRoot']),str(inputs),4 << 20))
+        bound=str((document.get('candidate') or {}).get('build'));facts['inputsReceiptBuild']=bound
+        if bound!=number:return ['clock compile inputs differ from the reserved build'],facts
+        phase='timestamp'
+        when=int(stamp)
+        if when>int(wall()):return ['clock compile timestamp is in the future'],facts
+        facts.update(buildDatetimeUtc=record['reservedAt'],clockAllocationSha256=digest(record),
+            clockSequence=record['observed']['clock']['sequence'])
+        return [],facts
+    except (OSError,ValueError,KeyError,TypeError,AttributeError) as error:
+        # Never expose arbitrary record contents or exception text.
+        return ['clock compile identity refused at '+phase+': '+type(error).__name__],facts
+
+
+def bind_compiler(engine,lane,cfg,*,root=ROOT,env=None):
+    """Bind only this private Mustang engine; legacy/other-device engines stay independent."""
+    if cfg.get('clockNumbering') is not None:
+        import functools
+        engine.identity_problems=functools.partial(compile_identity,lane=lane,cfg=cfg,root=root,env=env)
+    return engine
 
 
 def require_allocation(record, lane, cfg, *, root=ROOT, value=None, env=None, timestamp=None):

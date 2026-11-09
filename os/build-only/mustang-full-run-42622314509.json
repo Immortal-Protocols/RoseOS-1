@@ -1,0 +1,67 @@
+{
+  "schema": "roseos.mustang-full-run-failure.v1",
+  "runId": "42622314509",
+  "runNumber": 35,
+  "runAttempt": 1,
+  "source": "8d6cb5434e2595b6166ded713b1542dfe33f0798",
+  "workflow": ".github/workflows/mustang-ota-dedicated.yml",
+  "builderJobId": 129177878611,
+  "observedStages": {
+    "sourceObservationPassedBefore": "2026-11-09T13:37:42Z",
+    "sourceCopyCompleted": "2026-11-09T13:51:11Z",
+    "gitMetadataCompleted": "2026-11-09T13:52:39Z",
+    "copyReadbackCompleted": "2026-11-09T14:09:10Z",
+    "vendorReuseCompleted": "2026-11-09T14:09:37Z",
+    "lunchCompleted": "2026-11-09T14:09:50Z",
+    "allocationEntered": "2026-11-09T14:09:50Z",
+    "assemblyEnteredAfterAllocationReturned": "2026-11-09T14:09:51Z",
+    "integrationEntered": "2026-11-09T14:09:53Z",
+    "compileEntered": "2026-11-09T14:10:13Z",
+    "compileFailed": "2026-11-09T14:10:13Z"
+  },
+  "allocationReturned": true,
+  "derivedClockBuild": "2611091300",
+  "derivedBuildBasis": "Authenticated dispatch created_at 2026-11-09T13:04:51Z and captured clock formatter YYMMDDHH00; allocation archive bytes were not retrieved.",
+  "makeStartedObserved": false,
+  "unsignedCompileComplete": false,
+  "nativePreflightProblemListVerified": false,
+  "sourceReproducedRefusals": [
+    "Compiler reads legacy mustang-allocations instead of the clock journal.",
+    "Compiler parses YYMMDDHH00 as YYYYMMDDNN, producing a future UTC-day floor."
+  ],
+  "signerConclusion": "skipped",
+  "publisherConclusion": "skipped",
+  "cleanupJobId": 129210509681,
+  "cleanupConclusion": "success",
+  "cleanupCompletedAt": "2026-11-09T14:11:56Z",
+  "directStopObservation": {
+    "observedAt": "2026-11-09T16:45:19.886414+00:00",
+    "value": {
+      "id": "5585425566393384049",
+      "status": "TERMINATED",
+      "metadata": {
+        "items": [
+          {
+            "key": "block-project-ssh-keys"
+          },
+          {
+            "key": "enable-guest-attributes"
+          },
+          {
+            "key": "enable-oslogin"
+          }
+        ]
+      },
+      "lastStopTimestamp": "2026-11-09T06:11:40.532-08:00"
+    }
+  },
+  "initializationFenceRetained": 35,
+  "receiptArtifact": {
+    "id": 13680558765,
+    "sizeBytes": 20410,
+    "metadataDigest": "sha256:6be49536d32dad30a15ea7676959c1e5797d969682046c75f5c69ce3ed716cfd",
+    "bytesVerified": false,
+    "downloadOutcome": "CLI download failed; HTTP detail not retained; no retry or alternate route used."
+  },
+  "basis": "Completed-job progress and trace identify compile-stage refusal after source/copy/vendor/lunch and allocation. Private-engine regression with an actual synthetic clock reservation independently reproduces both old compiler identity refusals. Bind the compiler to read-only authenticated clock-journal validation and reservation time. Do not initialize/reset/copy the journal or advance fence35. Complete native preflight problem strings and Make launch were not separately verified from artifact bytes. No new OTA was signed or published by this run."
+}
