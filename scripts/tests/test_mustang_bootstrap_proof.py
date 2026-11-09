@@ -146,7 +146,8 @@ class SourceProofTest(unittest.TestCase):
         fifo=self.source/'unexpected-fifo';os.mkfifo(fifo)
         with self.assertRaisesRegex(git.Refused,'unclassified-selected-file'):self.inspect()
         fifo.unlink()
-        with self.assertRaisesRegex(git.Refused,'entry-bound'):self.inspect(limits=proof.Limits(entries=1))
+        with self.assertRaisesRegex(git.Refused,r'git-tree-entry-bound-[0-9]+-max-1'):
+            self.inspect(limits=proof.Limits(entries=1))
         with self.assertRaisesRegex(git.Refused,'source-byte-bound'):self.inspect(limits=proof.Limits(bytes=1))
         (self.source/'build/make/Build.mk').write_text('vendor/adevtool/dl/unpacked')
         with self.assertRaisesRegex(git.Refused,'excluded-cache-referenced'):self.inspect()
@@ -212,7 +213,8 @@ class SourceProofTest(unittest.TestCase):
             git.LocalGit(time.monotonic()+30,output_bytes=1).read(project,'head')
         with self.assertRaisesRegex(git.Refused,'source-proof-deadline'):
             git.LocalGit(time.monotonic()-1).read(project,'head')
-        for limits in (proof.Limits(entries=True),proof.Limits(seconds=0),proof.Limits(bytes=(150 << 30)+1)):
+        for limits in (proof.Limits(entries=True),proof.Limits(entries=proof.Limits().entries+1),
+                       proof.Limits(seconds=0),proof.Limits(bytes=(150 << 30)+1)):
             with self.subTest(limits=limits),self.assertRaises(git.Refused):limits.validate()
         reader=git.LocalGit(time.monotonic()+30,total_output_bytes=80)
         reader.read(project,'head')

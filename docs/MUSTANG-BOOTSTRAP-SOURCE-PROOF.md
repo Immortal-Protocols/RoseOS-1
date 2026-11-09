@@ -88,7 +88,7 @@ internal already-locked reader so the same lock spans the entire observation.
 
 ## Limits and remaining proof
 
-The ceilings are 7,200 seconds, 2,000,000 selected/expected entries and 150 GiB
+The ceilings are 7,200 seconds, 4,000,000 selected/expected entries and 150 GiB
 of source-data reads. Git output is bounded to 128 MiB per command and 512 MiB
 in total, commit data to 4 MiB, each Git command to 60 seconds, and manifest,
 recipe and policy inputs to 4 MiB.
@@ -96,6 +96,13 @@ Build-definition scans have a 16 MiB per-file limit. Smaller bounds may be used.
 Symlink text reads, including intermediate link resolution, count toward the
 source-data byte limit. A collector can pass an earlier overall deadline;
 the source reader cannot restart that time budget.
+Run42592596300 reached the original2,000,000-entry ceiling at
+toolchain/pgo-profiles before copy/allocation/Make. The entry ceiling alone is
+now4,000,000; Compute metadata independently confirms the existing n2-highmem-32
+profile has32vCPU and262144MiB RAM. This is configured capacity, not measured
+process memory. No VM/resource or other reader budget is changed. Tree-bound
+refusals now include observed/allowed counts, and successful receipts include
+expectedEntryCount.
 Raising these ceilings requires a source change. These are proposal ceilings,
 not measurements of Mustang's actual tree. Deadlines are checked between reads;
 they do not make a blocked kernel filesystem operation cancellable.
