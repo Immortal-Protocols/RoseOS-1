@@ -412,12 +412,13 @@ def observe_prepared(lane,cfg,run,*,root=ROOT,limits=None):
         raise git.Refused('declared-observation-run-differs')
     git.oid(run.get('source'))
     with locks.shared(paths['lockPath'],expected=paths['lockPath']):
+        # Bound these checkout inputs before existing binding helpers read them.
+        manifest=readers.read_regular(str(root),str(Path(root)/'os/pinned-manifest.xml'),4 << 20)
+        recipe=json.loads(readers.read_regular(str(root),str(Path(root)/'os/build-only/mustang.json'),4 << 20))
         vendor,host=prepared.binding(lane,cfg,root)
         identity=dict(builder=lane['vm'],diskUuid=cfg['dataFilesystemUuid'],run=run)
         v=inputs.receipt_on_disk(vendor,paths['storageRoot'],'vendor','vendor-preparation-receipt.json',identity)
         h=inputs.receipt_on_disk(host,paths['storageRoot'],'hostdeps','hostdeps-receipt.json',identity)
-        manifest=readers.read_regular(str(root),str(Path(root)/'os/pinned-manifest.xml'),4 << 20)
-        recipe=json.loads(readers.read_regular(str(root),str(Path(root)/'os/build-only/mustang.json'),4 << 20))
         result=inspect_source(paths['sourceRoot'],manifest,v,h,recipe,root=root,limits=limits)
     return dict(result,sourceRoot=str(paths['sourceRoot']),declaredBuilder=lane['vm'],
                 observationRun=run,runIdentityObserved=False,preparedReceiptProvenanceVerified=True,

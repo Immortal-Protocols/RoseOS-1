@@ -375,5 +375,16 @@ class SourceProofTest(unittest.TestCase):
         with patch.object(git.LocalGit,'project',side_effect=AssertionError('Git read preceded policy validation')):
             with self.assertRaisesRegex(git.Refused,'unsupported-source-exclusion-policy'):self.inspect()
 
+    def test_wrapper_bounds_checkout_metadata_before_existing_binding_helpers(self):
+        import test_mustang_edge_gate as fixture
+        lane=fixture.DedicatedPathsTest().profile(self.home)
+        lock=Path(lane['lockPath']);lock.touch();lock.chmod(0o444)
+        run=dict(runId='999',runAttempt='1',source='b'*40,
+            workflow='Immortal-Protocols/RoseOS-1/'+lane['workflow']+'@refs/heads/main')
+        (self.root/'os/pinned-manifest.xml').write_bytes(b'x'*((4 << 20)+1))
+        with patch.object(proof.prepared,'binding',side_effect=AssertionError('metadata guard was late')):
+            with self.assertRaises(proof.readers._Refused):
+                proof.observe_prepared(lane,dict(dataFilesystemUuid='fixture'),run,root=self.root)
+
 
 if __name__=='__main__':unittest.main()
