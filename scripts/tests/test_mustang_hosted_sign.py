@@ -60,14 +60,16 @@ class HostedSignGateTest(unittest.TestCase):
         self.assertEqual(config['proposedRunner']['usdPerMinute'], '0.012')
         self.assertEqual(config['proposedRunner']['ssdBytes'], 150000000000)
         self.assertGreater(config['proposedRunner']['ssdBytes'], required)
-        self.assertEqual(config['activeRunner']['label'], 'ubuntu-24.04')
-        self.assertEqual(config['activeRunner']['ssdBytes'], hosted.STOCK_SSD_BYTES)
+        self.assertEqual(config['activeRunner']['label'], 'mustang-signer-4core')
+        self.assertEqual(config['activeRunner']['ssdBytes'], 150000000000)
+        self.assertEqual(config['activeRunner']['groupId'], 6)
+        self.assertFalse(config['schedulingAccess']['verified'])
         return measured, required
 
     def admitted(self):
         config = hosted.load_capacity()
         config['admission'] = True
-        config['activeRunner'] = dict(config['activeRunner'], ssdBytes=10 ** 18)
+        config['activeRunner'] = dict(label='synthetic-large', ssdBytes=10 ** 18)
         config['outputBounds'] = {name: 4096 for name in hosted.OUTPUT_BOUNDS}
         return config
 
@@ -101,6 +103,20 @@ class HostedSignGateTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'hosted signer admission is closed; no native build'):
             hosted.require_delivery_capacity(ROOT)
 
+    def test_configured_profile_cannot_replace_repository_workflow_scheduling_evidence(self):
+        config=hosted.load_capacity();config['admission']=True
+        with patch.object(hosted,'load_capacity',return_value=config):
+            with self.assertRaisesRegex(ValueError,'scheduling access is unconfirmed'):
+                hosted.require_delivery_capacity(ROOT)
+            config['schedulingAccess'].update(verified=True,repositoryAllowed=True,workflowAllowed=True,
+                evidenceRef='synthetic administrator scheduling confirmation')
+            self.assertEqual(hosted.require_delivery_capacity(ROOT)['activeRunner']['groupId'],6)
+            for key in ('verified','repositoryAllowed','workflowAllowed','evidenceRef'):
+                original=config['schedulingAccess'][key];config['schedulingAccess'][key]=None
+                with self.assertRaisesRegex(ValueError,'scheduling access is unconfirmed'):
+                    hosted.require_delivery_capacity(ROOT)
+                config['schedulingAccess'][key]=original
+
     def bundle(self, **changes):
         measured, _ = self.measured_peak()
         value = {
@@ -131,13 +147,16 @@ class HostedSignGateTest(unittest.TestCase):
         _, required = self.measured_peak()
         bundle = self.bundle()
         bundle['capacity'] = 'ok'
+        stock=hosted.load_capacity()
+        stock['activeRunner']=dict(label='ubuntu-24.04',ssdBytes=hosted.STOCK_SSD_BYTES)
+        stock['outputBounds']={name:None for name in hosted.OUTPUT_BOUNDS}
 
         def call(secret_access):
-            hosted.evaluate(bundle, ROOT, free=10 ** 18, secret_access=secret_access, env=ENV)
+            hosted.evaluate(bundle, ROOT, free=10 ** 18, secret_access=secret_access, env=ENV,capacity_config=stock)
 
         self.assert_secret_closed(call, 'output bound is missing')
         with self.assertRaises(hosted.CapacityExceeded) as caught:
-            hosted.capacity(bundle, free=10 ** 18, config=hosted.load_capacity())
+            hosted.capacity(bundle, free=10 ** 18, config=stock)
         self.assertIn(f'required {required} bytes', str(caught.exception))
         self.assertIn(f'stock SSD {hosted.STOCK_SSD_BYTES} bytes', str(caught.exception))
         self.assertIn('hosted signer admission is closed', str(caught.exception))
@@ -380,7 +399,7 @@ class HostedSignGateTest(unittest.TestCase):
                                      'preflight', '--bundle', str(path)],
                                     env=env, capture_output=True, text=True, timeout=20)
             self.assertEqual(result.returncode, 4, result.stderr)
-            self.assertIn('output bound is missing', result.stderr)
+            self.assertIn('unmeasured signer inputs: jdk,generateRelease', result.stderr)
             self.assertIn('hosted signer admission is closed', result.stderr)
             self.assertNotIn(str(required), result.stderr)
             self.assertEqual(output.read_text(), '')

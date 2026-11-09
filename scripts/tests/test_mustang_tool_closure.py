@@ -42,7 +42,8 @@ class ToolClosureTest(unittest.TestCase):
         capacity = json.loads((ROOT / closure.CAPACITY).read_text())
         self.assertFalse(capacity['admission'])
         self.assertEqual(capacity['trust'], 'held')
-        self.assertTrue(all(value is None for value in capacity['outputBounds'].values()))
+        self.assertTrue(all(type(value) is int and value>0 for value in capacity['outputBounds'].values()))
+        self.assertFalse(capacity['schedulingAccess']['verified'])
         self.assertFalse(any(capacity['proposedRunner'][key] for key in
                              ('purchased', 'configured', 'selected', 'approved', 'sizingProof')))
         self.assertFalse((ROOT / 'script/decrypt-keys').exists())

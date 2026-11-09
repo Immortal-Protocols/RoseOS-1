@@ -87,9 +87,14 @@ def production_unbound(root=ROOT):
     if capacity.get('admission') is not False or capacity.get('trust') != 'held':
         raise ClosureError('hosted signer admission is not held')
     bounds = capacity.get('outputBounds') or {}
-    for key in OUTPUT_BOUNDS:
-        if bounds.get(key) is not None:
-            raise ClosureError(f'output bound {key} is filled')
+    if any(bounds.get(key) is not None for key in OUTPUT_BOUNDS):
+        runner=capacity.get('activeRunner') or {}
+        if pin.get('status')!='qualified' or runner.get('kind')!='github-larger-runner' \
+                or runner.get('configured') is not True:
+            raise ClosureError('selected output budgets require qualified tools/configured larger profile')
+        for key in OUTPUT_BOUNDS:
+            if type(bounds.get(key)) is not int or bounds[key]<=0:
+                raise ClosureError(f'output budget {key} is invalid')
     proposed = capacity.get('proposedRunner') or {}
     if any(proposed.get(key) is not False for key in ('purchased', 'configured', 'selected', 'approved', 'sizingProof')):
         raise ClosureError('paid runner is recorded as activated')

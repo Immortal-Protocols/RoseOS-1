@@ -19,16 +19,30 @@ Build SDK37 and actual targetSdk35 are distinct. The old export and held app
 stack are untouched. Existing manual full-delivery authority is reconciled to
 the dedicated workflow; publish still requires its explicit input and all proofs.
 
-The remaining runtime admission dependency is actual configuration evidence for
-the existing `roseos-mustang-signer` / `mustang-signer-4core` larger-runner route.
-The worker's administrative group6 GET returned403 and remains held. Purchase,
-configuration and free space are not inferred. Current active capacity/admission
-remain unchanged. Source supports a confirmed four-vCPU Ubuntu24.04 x64/150GB
-profile, correlates this run's signer group/label, and checks actual hardware and
-available space before login. The pending output values are a proposed budget
-envelope, not measured output maxima. Closed capacity now refuses before native
-START/Make rather than after a long successful compile. Runtime status remains
-unbound until those final capacity/runtime fields are honestly admitted.
+Nathan's current administrator report is recorded in
+`os/build-only/mustang-signer-runner-admin-20261109.json`: existing group6,
+hosted runner3, Ready, `mustang-signer-4core`, Ubuntu24.04 Linux x64,4CPU,
+16GB RAM,150GB disk, maximum1runner and no public IP. The active profile now
+selects those reported facts. This is administrator evidence, not an independent
+worker API read or measurement of actual hardware/free bytes. The denied group6
+administrative GET remains untouched.
+
+Explicit output budgets are selected: signed target16GiB plus copy16GiB,
+OTA8GiB plus copy8GiB, scratch16GiB and reserve16GiB. Their80GiB sum excludes
+separately accounted input copies and expansion. They are limits, not measured
+output maxima or evidence that80GiB is free. Same-run hardware/filesystem and
+actual bundle/expansion/free-space checks still precede signer login; actual
+outputs must remain within their selected limits.
+
+The narrow missing fact is group6 scheduling access for public repository
+`Immortal-Protocols/RoseOS-1` and
+`Immortal-Protocols/RoseOS-1/.github/workflows/mustang-ota-dedicated.yml@refs/heads/main`.
+The profile report and retained permitted records do not state those access
+settings. `schedulingAccess.repositoryAllowed`, `workflowAllowed`, `verified`
+and its evidence reference remain unset/false; runtime status and delivery
+admission stay closed. A configured runner cannot substitute for those facts.
+Chief owns the administrator follow-up; this worker repeats no denied read and
+requests no permission change or new infrastructure.
 
 The sections below retain the historical qualification review and its original
 unbound-state observations; they are not a second claim about current pin values.

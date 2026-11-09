@@ -3,18 +3,33 @@
   "admission": false,
   "trust": "held",
   "activeRunner": {
-    "label": "ubuntu-24.04",
-    "ssdBytes": 15032385536,
-    "ssdLabel": "14 GB",
-    "basis": "Standard GitHub-hosted ubuntu-24.04 whole-disk label, read as 14 GiB. Not a measured free-space figure."
+    "kind": "github-larger-runner",
+    "groupName": "roseos-mustang-signer",
+    "groupId": 6,
+    "hostedRunnerId": 3,
+    "label": "mustang-signer-4core",
+    "image": "ubuntu-24.04",
+    "platform": "linux-x64",
+    "vcpu": 4,
+    "memoryLabel": "16 GB",
+    "ssdBytes": 150000000000,
+    "ssdLabel": "150 GB",
+    "maximumRunners": 1,
+    "publicIp": false,
+    "status": "Ready",
+    "configured": true,
+    "approved": true,
+    "approvalRef": "Nathan existing Mustang full-delivery authority and administrator confirmation in coordinator thread01a1a7a0-cd3c-77ed-9b5f-6beda888d027",
+    "configurationRef": "os/build-only/mustang-signer-runner-admin-20261109.json",
+    "basis": "Existing administrator-verified profile, not measured hardware/free bytes. No new runner or payment configuration created."
   },
   "outputBounds": {
-    "signedTargetFilesBytes": null,
-    "otaBytes": null,
-    "signedTargetFilesCopyBytes": null,
-    "otaCopyBytes": null,
-    "scratchBytes": null,
-    "reserveBytes": null
+    "signedTargetFilesBytes": 17179869184,
+    "otaBytes": 8589934592,
+    "signedTargetFilesCopyBytes": 17179869184,
+    "otaCopyBytes": 8589934592,
+    "scratchBytes": 17179869184,
+    "reserveBytes": 17179869184
   },
   "historicalLowerBoundBytes": 22868848092,
   "historicalSource": "os/mustang-delivery/41738359336/sign.json",
@@ -37,7 +52,8 @@
     "usdPerMinute": "0.012",
     "jobCapMinutes": 360,
     "computeBoundUsd": "4.32",
-    "eligibility": "GitHub Team or GitHub Enterprise Cloud only. Larger runners are not free on public repositories and require a payment method. One organization owner creates this runner in a group limited to Immortal-Protocols/RoseOS-1 and .github/workflows/mustang-ota-dedicated.yml."
+    "eligibility": "GitHub Team or GitHub Enterprise Cloud only. Larger runners are not free on public repositories and require a payment method. One organization owner creates this runner in a group limited to Immortal-Protocols/RoseOS-1 and .github/workflows/mustang-ota-dedicated.yml.",
+    "status": "Historical unselected proposal with a different label; retained flags are not the current existing profile."
   },
   "storage": {
     "includedAllowancesAreNotPerArtifactLimits": true,
@@ -51,8 +67,8 @@
     "image": "ubuntu-24.04",
     "vcpu": 4,
     "ssdBytes": 150000000000,
-    "configurationVerified": false,
-    "confirmationEvidence": null,
+    "configurationVerified": true,
+    "confirmationEvidence": "os/build-only/mustang-signer-runner-admin-20261109.json",
     "proposedOutputBounds": {
       "signedTargetFilesBytes": 17179869184,
       "otaBytes": 8589934592,
@@ -61,6 +77,22 @@
       "scratchBytes": 17179869184,
       "reserveBytes": 17179869184
     },
-    "basis": "Supports the existing named workflow route. Before login, actual signer CPU/memory/disk and same-run runner group/label are checked. Administrative group6 read remains denied and is not retried. Current configuration/purchase/capacity are unverified; the proposed output values are budget limits, not measured output sizes. Active profile and admission remain unchanged pending actual owner evidence."
+    "basis": "Administrator confirmed the configured existing runner/profile. Matching proposed budgets are selected as limits; they are not measurements. Delivery admission remains closed for unconfirmed repository/workflow scheduling. Actual hardware, filesystem size and free bytes remain same-run checks before login."
+  },
+  "previousStockRunner": {
+    "label": "ubuntu-24.04",
+    "ssdBytes": 15032385536,
+    "ssdLabel": "14 GB",
+    "basis": "Standard GitHub-hosted ubuntu-24.04 whole-disk label, read as 14 GiB. Not a measured free-space figure."
+  },
+  "outputBoundsBasis": "Explicit engineering limits: signed target16GiB + copy16GiB, OTA8GiB + copy8GiB, scratch16GiB, reserve16GiB. Their80GiB sum excludes separately accounted input copies/expansion. These are budget ceilings, not output measurements or free-space evidence. Actual bundle sizes/expansion/free space are checked before signer login; actual outputs must remain within their limits.",
+  "schedulingAccess": {
+    "repository": "Immortal-Protocols/RoseOS-1",
+    "workflow": "Immortal-Protocols/RoseOS-1/.github/workflows/mustang-ota-dedicated.yml@refs/heads/main",
+    "verified": false,
+    "repositoryAllowed": null,
+    "workflowAllowed": null,
+    "evidenceRef": null,
+    "basis": "Neither the administrator profile report nor retained permitted records explicitly confirms group repository/exact-workflow scheduling access. Chief owns the narrow administrator follow-up. No denied-read retry or grant inferred."
   }
 }
