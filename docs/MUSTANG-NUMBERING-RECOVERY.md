@@ -48,11 +48,12 @@ consumed reservation stays consumed even when the build fails or nothing is
 published. Unknown files, broken chains, missing heads and linked paths refuse.
 
 One authenticated dedicated workflow number may initialize this new local series:
-workflow ID 408460629, run number 26. Full runs42576627118 / number23 and
+workflow ID 408460629, run number 27. Full runs42576627118 / number23 and
 42581537518 / number24 failed before produce (missing gh and CLI HTTPError,
 respectively). Run42584970482 / number25 passed host/baseline/fresh-app admission, then refused
-bootstrap source observation before copy/allocation/Make. All three skipped
-allocation and Make. Completed cleanup and direct
+bootstrap source observation before copy/allocation/Make. Run42588478372 /
+number26 passed the corrected binding and refused unsupported-git-tree-mode at
+the prepared-source stage. All four skipped copy/allocation/Make. Completed cleanup and direct
 numeric stopped-VM observations are recorded in their os/build-only failure
 records. No on-disk journal absence is asserted and no journal is reset.
 This is an initialization fence, not the OS ID or

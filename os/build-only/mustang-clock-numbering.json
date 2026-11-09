@@ -10,7 +10,7 @@
   "legacySourceProof": "os/tests/fixtures/mustang-numbering/sources.json",
   "legacySourceProofSha256": "5eb94c78b2646d9b618877257345df6a30651d55375f187b839578588d85ff59",
   "initializationWorkflowId": 408460629,
-  "initializationRunNumber": 26,
+  "initializationRunNumber": 27,
   "journal": "mustang-clock-hour00-v1",
   "maximumReservations": 100000
 }

@@ -53,15 +53,16 @@ class FullDeliveryTest(unittest.TestCase):
         pipeline=ota.module('full_delivery_reporting','mustang-pipeline.py')
         for written in (False,True):
             result=dict(receiptWritten=written,receipt=dict(success=False,stage='guest-before',
-                failure='collector-data-mount-differs',payload='MUST-NOT-PRINT'))
+                failure='collector-data-mount-differs',failurePath='build/make/submodule-fixture',payload='MUST-NOT-PRINT'))
             output=io.StringIO()
             with patch('sys.stdout',output),self.assertRaisesRegex(ValueError,'guest-before: collector-data-mount-differs'):
                 pipeline.require_bootstrap_observation(result)
             report=json.loads(output.getvalue())
             self.assertEqual(report['failureCode'],'collector-data-mount-differs')
+            self.assertEqual(report['failurePath'],'build/make/submodule-fixture')
             self.assertEqual(report['receiptWritten'],written)
             self.assertNotIn('MUST-NOT-PRINT',output.getvalue())
-        result['receipt'].update(stage='https://sensitive.test',failure='token=value')
+        result['receipt'].update(stage='https://sensitive.test',failure='token=value',failurePath='https://sensitive.test?secret=token')
         with patch('sys.stdout',io.StringIO()) as output,self.assertRaisesRegex(ValueError,'unknown: collector-refused'):
             pipeline.require_bootstrap_observation(result)
         self.assertNotIn('sensitive',output.getvalue());self.assertNotIn('token',output.getvalue())

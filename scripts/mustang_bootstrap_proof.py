@@ -74,7 +74,7 @@ class Observation:
         if readers._body(str(self.source)) is None:raise git.Refused('absolute-source-root-required')
         self.device=deps.plain_dir(self.source).st_dev;self.entries=0;self.bytes=0
         self.excluded=[];self.measured={};self.signatures={}
-        self.known_files=None;self.known_directories=set();self.prepared_prefixes=()
+        self.known_files=None;self.known_directories=set();self.prepared_prefixes=();self.empty_gitlinks=set()
 
     def check(self):
         if time.monotonic()>=self.deadline:raise git.Refused('source-proof-deadline')
@@ -181,6 +181,8 @@ class Observation:
                 dirs.sort();files.sort();self.check()
                 prefix='' if directory=='.' else directory[2:]
                 directory_path=base/prefix
+                if str(directory_path.relative_to(self.source)) in self.empty_gitlinks and (dirs or files):
+                    raise git.Refused('unpinned-gitlink-contents',path=str(directory_path.relative_to(self.source)))
                 self.signatures[str(directory_path.relative_to(self.source))]=signature(os.fstat(parent))
                 for name in sorted(dirs+files):
                     self.count();rel=prefix+'/'+name if prefix else name
@@ -265,13 +267,23 @@ def manifest_projects(raw):
 
 
 def expected_files(source,manifest,reader,limits):
-    projects,transfers=manifest_projects(manifest);expected={};pinned_directories=set()
+    projects,transfers=manifest_projects(manifest);expected={};pinned_directories=set();gitlinks={}
+    project_pins=dict(projects)
     for path,revision in projects:
         fd=readers._walk_dir(readers._body(str(source/path)));os.close(fd)
-        rows=reader.project(source/path,revision,max_entries=limits.entries-len(expected)-len(pinned_directories))
+        try:
+            rows=reader.project(source/path,revision,max_entries=limits.entries-len(expected)-len(pinned_directories),allow_gitlinks=True)
+        except git.Refused as error:
+            raise git.Refused(error.code,path=path+('/'+error.path if error.path else '')) from None
         for relative,row in rows.items():
             name=path+'/'+relative
-            if row['kind']=='tree':
+            if row['kind']=='commit':
+                if name in project_pins and project_pins[name]!=row['oid']:
+                    raise git.Refused('gitlink-manifest-revision-differs',path=name)
+                if name not in project_pins and any(p.startswith(name+'/') for p in project_pins):
+                    raise git.Refused('gitlink-parent-not-manifest-pinned',path=name)
+                gitlinks[name]=dict(oid=row['oid'],manifestPinned=name in project_pins)
+            if row['kind'] in ('tree','commit'):
                 pinned_directories.add(name)
                 if len(expected)+len(pinned_directories)>limits.entries:raise git.Refused('expected-source-entry-bound')
                 continue
@@ -292,7 +304,7 @@ def expected_files(source,manifest,reader,limits):
             expected[dest]=dict(path=dest,mode='120000',oid=git.object_id('blob',os.fsencode(text)),
                                 origin='manifest-link')
     if len(expected)+len(pinned_directories)>limits.entries:raise git.Refused('expected-source-entry-bound')
-    return projects,expected,pinned_directories
+    return projects,expected,pinned_directories,gitlinks
 
 
 def shared_engine():
@@ -343,7 +355,7 @@ def inspect_source(source,manifest,vendor,host,recipe,*,root=ROOT,limits=None,de
     engine.pointer=captured_policy
     reader=git.LocalGit(observation.deadline,output_bytes=limits.git_output_bytes,
         total_output_bytes=limits.git_total_output_bytes,command_seconds=limits.git_command_seconds)
-    projects,expected,pinned_directories=expected_files(source,manifest,reader,limits)
+    projects,expected,pinned_directories,gitlinks=expected_files(source,manifest,reader,limits)
     adev=[revision for path,revision in projects if path=='vendor/adevtool']
     if adev!=[recipe['pins']['vendor/adevtool']]:raise git.Refused('manifest-adevtool-pin-differs')
     generated=('vendor/google_devices/mustang','vendor/adevtool/node_modules')
@@ -354,6 +366,7 @@ def inspect_source(source,manifest,vendor,host,recipe,*,root=ROOT,limits=None,de
     directories.update(str(parent) for path,_revision in projects for parent in Path(path).parents if str(parent)!='.')
     directories.update(str(parent) for name in (*generated,host_prefix,marker) for parent in Path(name).parents if str(parent)!='.')
     directories.update(generated);directories.add(host_prefix)
+    observation.empty_gitlinks={name for name,row in gitlinks.items() if not row['manifestPinned']}
     observation.known_files=set(expected)|{marker};observation.known_directories=directories
     observation.prepared_prefixes=(*generated,host_prefix)
     selection=engine.source_selection(recipe,source,Path(root),planner=observation.plan)
@@ -406,6 +419,7 @@ def inspect_source(source,manifest,vendor,host,recipe,*,root=ROOT,limits=None,de
     inventory.sort(key=lambda row:row['path'])
     return dict(schema='roseos.mustang-bootstrap-source-candidate.v1',success=True,
         manifestSha256=hashlib.sha256(manifest).hexdigest(),projectCount=len(projects),
+        gitlinkBoundaryCount=len(gitlinks),gitlinkPolicy='manifest-matched-child-or-no-selected-content',
         selectedEntryCount=len(inventory),selectedPinnedEntries=pinned_count,selectedPreparedEntries=prepared_count,
         selectedManifestTransferEntries=sum(expected[name]['origin']!='git' for name in seen_expected),
         selectedInventorySha256=hashlib.sha256(canonical(inventory)).hexdigest(),sourceDataBytesRead=observation.bytes,
