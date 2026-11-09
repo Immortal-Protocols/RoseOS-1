@@ -95,7 +95,7 @@ def environment():
 
 
 class LocalGit:
-    """Only the four fixed metadata read forms below can reach subprocess.Popen."""
+    """Only fixed metadata/raw-object read forms below reach subprocess.Popen."""
     def __init__(self,deadline,*,output_bytes=128 << 20,total_output_bytes=512 << 20,command_seconds=60):
         self.deadline=deadline;self.output_bytes=output_bytes;self.command_seconds=command_seconds
         self.total_output_bytes=total_output_bytes;self.bytes_read=0
@@ -106,10 +106,10 @@ class LocalGit:
         commands={'root':['rev-parse','--show-toplevel'],
                   'head':['rev-parse','--verify','HEAD'],
                   'format':['rev-parse','--show-object-format']}
-        if operation in ('commit','tree'):
+        if operation in ('commit','tree','blob'):
             oid(revision)
-            arguments=(['cat-file','commit',revision] if operation=='commit' else
-                       ['ls-tree','-r','-t','-z','--full-tree',revision])
+            arguments=(['ls-tree','-r','-t','-z','--full-tree',revision] if operation=='tree' else
+                       ['cat-file',operation,revision])
         elif operation in commands:arguments=commands[operation]
         else:raise Refused('git-read-operation-not-allowed')
         project=Path(project)
@@ -119,6 +119,7 @@ class LocalGit:
         limit=min(self.deadline,time.monotonic()+self.command_seconds)
         if time.monotonic()>=limit:raise Refused('source-proof-deadline')
         maximum=min(self.output_bytes,4 << 20) if operation=='commit' else self.output_bytes
+        if operation=='blob':maximum=min(maximum,8 << 20)
         proc=subprocess.Popen(argv,env=environment(),stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,
                               stderr=subprocess.DEVNULL,start_new_session=True)
         chunks=[];used=0

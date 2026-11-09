@@ -28,6 +28,25 @@ import mustang_preparation_inputs as inputs
 import mustang_vendor_consumer as prepared
 
 ROOT=Path(__file__).resolve().parents[1]
+ANGLE_ATTRIBUTES_BLOB='cfe87039336838421bed95ad0b5169abe2225be2'
+
+
+def angle_crlf_path(name,rows):
+    """Only the explicit CRLF rules in this exact authenticated attribute blob.
+
+    Local config/info attributes are never consulted. Descendant attributes
+    make this bounded model inapplicable; unknown transformations still refuse.
+    """
+    attributes=rows.get('.gitattributes',{})
+    if attributes.get('mode')!='100644' or attributes.get('oid')!=ANGLE_ATTRIBUTES_BLOB:return False
+    if any(str(parent/'.gitattributes') in rows for parent in Path(name).parents if str(parent)!='.'):
+        return False
+    # Later eol=lf rules in the captured file take precedence over extensions.
+    if name.startswith(('src/compiler/preprocessor/preprocessor_',
+                        'src/compiler/translator/glslang_',
+                        'src/tests/capture_tests/expected/')):return False
+    return name.endswith(('.sln','.vcxproj','.vcxproj.filters','.bat','.rc')) or \
+        (Path(name).parent.name=='compiled' and name.endswith('.h'))
 
 
 @dataclass(frozen=True)
@@ -67,10 +86,22 @@ def signature(info):
     return tuple(getattr(info,k) for k in ('st_dev','st_ino','st_size','st_mode','st_mtime_ns','st_ctime_ns'))
 
 
-def require_pinned(name,kind,measured,known):
-    """Same byte/type/owner-execute check, with only a bounded path/category."""
+def require_pinned(name,kind,measured,known,reader=None):
+    """Authenticate raw or explicitly declared checkout bytes, type and mode."""
+    identity=known.get('checkoutOid',known['oid'])
+    if kind=='file' and measured['blob']!=identity and known.get('crlfProject') and reader is not None:
+        try:raw=reader.read(known['crlfProject'],'blob',known['oid'])
+        except git.Refused as error:raise git.Refused(error.code,path=name) from None
+        if git.object_id('blob',raw)!=known['oid']:raise git.Refused('pinned-checkout-blob-differs',path=name)
+        # Conservative text=auto subset: no controls except TAB and LF.
+        # Git counts bytes >=128 as printable, including a UTF-8 BOM.
+        # Never normalize arbitrary worktree bytes or execute an attribute filter.
+        if any(byte not in (9,10) and (byte<32 or byte==127) for byte in raw):
+            raise git.Refused('unsupported-pinned-crlf-text',path=name)
+        identity=git.object_id('blob',raw.replace(b'\n',b'\r\n'))
+        known['checkoutOid']=identity
     reason='type' if (known['mode']=='120000')!=(kind=='link') else \
-        'blob' if measured['blob']!=known['oid'] else \
+        'blob' if measured['blob']!=identity else \
         'mode' if kind=='file' and bool(measured['mode']&0o100)!=(known['mode']=='100755') else None
     if reason:raise git.Refused('selected-pinned-blob-or-mode-differs-'+reason,path=name)
 
@@ -84,6 +115,7 @@ class Observation:
         self.excluded=[];self.measured={};self.signatures={}
         self.known_files=None;self.known_directories=set();self.prepared_prefixes=();self.empty_gitlinks=set()
         self.pinned_files={}
+        self.git_reader=None
 
     def check(self):
         if time.monotonic()>=self.deadline:raise git.Refused('source-proof-deadline')
@@ -249,7 +281,7 @@ class Observation:
                         entries.append(dict(path=rel,type='link',text=text,kind=kind,target=target,exists=exists))
                     else:raise git.Refused('selected-special-file',path=full)
                     if full in self.pinned_files and not stat.S_ISDIR(info.st_mode):
-                        require_pinned(full,entries[-1]['type'],self.measured[full],self.pinned_files[full])
+                        require_pinned(full,entries[-1]['type'],self.measured[full],self.pinned_files[full],self.git_reader)
                 if unclassified:
                     raise git.Refused('unclassified-selected-'+unclassified[0][1],path=unclassified[0][0],
                         paths=[name for name,_kind in unclassified])
@@ -317,6 +349,8 @@ def expected_files(source,manifest,reader,limits):
                 continue
             if name in expected:raise git.Refused('overlapping-pinned-project-bytes')
             expected[name]=dict(row,path=name,origin='git')
+            if path=='external/angle' and row['mode'] in ('100644','100755') and angle_crlf_path(relative,rows):
+                expected[name]['crlfProject']=str(source/path)
             if len(expected)+len(pinned_directories)>limits.entries:raise git.Refused('expected-source-entry-bound')
     for transfer in transfers:
         src=transfer['project']+'/'+transfer['source'];dest=transfer['destination']
@@ -406,6 +440,7 @@ def inspect_source(source,manifest,vendor,host,recipe,*,root=ROOT,limits=None,de
     observation.empty_gitlinks={name for name,row in gitlinks.items() if not row['manifestPinned']}
     observation.known_files=set(expected)|{marker};observation.known_directories=directories
     observation.pinned_files=expected
+    observation.git_reader=reader
     observation.prepared_prefixes=(*generated,host_prefix)
     selection=engine.source_selection(recipe,source,Path(root),planner=observation.plan)
     if selection['problems']:raise git.Refused('shared-copy-selection-refused')
@@ -430,7 +465,7 @@ def inspect_source(source,manifest,vendor,host,recipe,*,root=ROOT,limits=None,de
                 if name!=marker:raise git.Refused('selected-measurement-absent')
                 measured=observation.measure(source/name);observation.measured[name]=measured
             if known is not None:
-                require_pinned(name,kind,measured,known)
+                require_pinned(name,kind,measured,known,reader)
                 seen_expected.add(name);pinned_count+=1
             elif not in_generated and not in_host:raise git.Refused('unclassified-selected-file',path=name)
             if in_generated or in_host:prepared_count+=1
@@ -453,6 +488,8 @@ def inspect_source(source,manifest,vendor,host,recipe,*,root=ROOT,limits=None,de
     for project,revision in projects:reader.check_head(source/project,revision)
     observation.verify_namespace()
     inventory.sort(key=lambda row:row['path'])
+    conversions=[dict(path=name,gitBlob=row['oid'],checkoutBlob=row['checkoutOid'])
+                 for name,row in sorted(expected.items()) if 'checkoutOid' in row]
     return dict(schema='roseos.mustang-bootstrap-source-candidate.v1',success=True,
         manifestSha256=hashlib.sha256(manifest).hexdigest(),projectCount=len(projects),
         gitlinkBoundaryCount=len(gitlinks),gitlinkPolicy='manifest-matched-child-or-no-selected-content',
@@ -460,6 +497,8 @@ def inspect_source(source,manifest,vendor,host,recipe,*,root=ROOT,limits=None,de
         selectedEntryCount=len(inventory),selectedPinnedEntries=pinned_count,selectedPreparedEntries=prepared_count,
         selectedManifestTransferEntries=sum(expected[name]['origin'] in ('manifest-copy','manifest-link') for name in seen_expected),
         selectedResolvedManifestEntries=sum(expected[name]['origin']=='source-sync-manifest' for name in seen_expected),
+        selectedCheckoutConvertedEntries=len(conversions),checkoutConversionPolicy='pinned-angle-crlf-v1',
+        checkoutConversionInventorySha256=hashlib.sha256(canonical(conversions)).hexdigest(),
         selectedInventorySha256=hashlib.sha256(canonical(inventory)).hexdigest(),sourceDataBytesRead=observation.bytes,
         portableInventorySha256=portable_inventory(inventory,source),
         copyRecipeSha256=hashlib.sha256(canonical(recipe)).hexdigest(),

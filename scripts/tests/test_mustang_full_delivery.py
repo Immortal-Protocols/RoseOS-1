@@ -117,6 +117,21 @@ class FullDeliveryTest(unittest.TestCase):
         self.assertFalse((target/'vendor/adevtool/dl/unpacked').exists())
         self.assertEqual((target/'vendor/adevtool/dl/.find-ignore').read_bytes(),b'')
 
+    def test_pinned_crlf_checkout_passes_collector_actual_copy_and_readback(self):
+        project,files=self.f.fixture.angle_checkout()
+        self.f.fixture.command(self.root,'add','--all')
+        self.f.fixture.command(self.root,'commit','--quiet','-m','pinned CRLF checkout fixture')
+        revision=self.f.fixture.command(self.root,'rev-parse','HEAD').decode().strip()
+        self.f.run['source']=revision
+        self.env.update(GITHUB_SHA=revision,GITHUB_WORKFLOW_SHA=revision)
+        self.env['MUSTANG_OWNER_B64']=base64.b64encode(proof.canonical(self.owner)).decode()
+        result=self.observe();collector.require_full_result(result,self.lane,self.env,self.event)
+        target,_outcome,checked=self.copy_source(result)
+        self.assertTrue(checked['sourceCopyVerified'])
+        self.assertEqual(result['receipt']['sourceCandidate']['selectedCheckoutConvertedEntries'],3)
+        self.assertEqual((target/'external/angle/scripts/trigger.bat').read_bytes(),
+                         files['scripts/trigger.bat'].replace(b'\n',b'\r\n'))
+
     def test_foreign_owner_and_other_preparation_scope_stop_before_guest(self):
         for change in (dict(GITHUB_JOB='source'),dict(MUSTANG_OWNER_B64=''),dict(MUSTANG_PUBLISH='false')):
             result=collector.collect(self.lane,self.f.cfg,dict(self.env,**change),self.event,root=self.root,probe=self.probe,full_run=True)

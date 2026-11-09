@@ -48,7 +48,7 @@ consumed reservation stays consumed even when the build fails or nothing is
 published. Unknown files, broken chains, missing heads and linked paths refuse.
 
 One authenticated dedicated workflow number may initialize this new local series:
-workflow ID 408460629, run number 32. Full runs42576627118 / number23 and
+workflow ID 408460629, run number 33. Full runs42576627118 / number23 and
 42581537518 / number24 failed before produce (missing gh and CLI HTTPError,
 respectively). Run42584970482 / number25 passed host/baseline/fresh-app admission, then refused
 bootstrap source observation before copy/allocation/Make. Run42588478372 /
@@ -61,6 +61,8 @@ selected file; no copy/allocation/Make began. Run42604053622 / number30
 identified that file as resolved-manifest.xml, again before copy/allocation/Make.
 Run42605954394 / number31 then refused a pinned blob-or-mode mismatch,
 also before copy/allocation/Make; its old diagnostic omitted the path.
+Run42611455205 / number32 identified a blob mismatch at
+external/angle/scripts/trigger.bat, also before copy/allocation/Make.
 Completed cleanup and direct numeric stopped-VM observations are recorded in their os/build-only failure
 records. No on-disk journal absence is asserted and no journal is reset.
 This is an initialization fence, not the OS ID or

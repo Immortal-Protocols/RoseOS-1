@@ -2,12 +2,11 @@
 
 The source-only adapter in `scripts/mustang_bootstrap_proof.py` checks a
 candidate source selection against pinned Git objects and prepared payload
-receipts. Its implementation and tests use synthetic local repositories.
-**No observation of the dedicated VM has been performed by this change.**
-The existing runtime remains unbound and still references the source-only
-sync evidence. The full producer now calls the collector and copy verifier
-inside its existing native job, after runtime admission. The proof CLI retains
-no execution switch:
+receipts. Offline tests use synthetic local repositories. The bound full
+producer calls the collector and copy verifier inside its existing native job,
+after runtime admission. Native attempts and their actual refusals are recorded
+below and in os/build-only failure evidence; a successful native build, signing
+and publication remain unestablished. The proof CLI retains no execution switch:
 
 ```sh
 python3 scripts/mustang_bootstrap_proof.py
@@ -170,3 +169,34 @@ bounded relative path and one of `type`, `blob` or `mode`, and retains the final
 comparison and namespace readback. It does not print payloads, raw exceptions
 or source text. The affected path and correction remain unclaimed until actual
 native evidence is available.
+
+## Pinned ANGLE checkout line endings
+
+Run42611455205 identified a blob mismatch at
+`external/angle/scripts/trigger.bat`, before copy/allocation/Make. The
+[pinned ANGLE attributes](https://android.googlesource.com/platform/external/angle/+/1f4500d3906c24de59eec5b9cda17a2ad2a8ba2d/.gitattributes)
+use `text=auto` and explicit `eol=crlf` rules. Git documents that checkout
+[converts LF to CRLF](https://git-scm.com/docs/gitattributes#_eol). This is a
+source-model correction, not a claim that native line endings were separately
+read or that the next observation has passed.
+
+Only `external/angle` with authenticated root attribute blob
+`cfe87039336838421bed95ad0b5169abe2225be2` can use this bounded model. It covers
+the declared .sln/.vcxproj/.vcxproj.filters/.bat/.rc and compiled-header rules,
+retains later LF overrides, and refuses conversion under descendant attributes.
+A mismatch may read the original raw blob by object ID (8MiB per object within
+the unchanged aggregate Git budget), hash it back to that ID, derive the full
+CRLF representation and require its exact identity. The supported text subset
+has no control bytes except TAB/LF; bare CR, NUL and other controls refuse.
+Raw pinned bytes remain valid. Neither arbitrary worktree normalization nor
+Git filters, hooks, encoding/ident transforms, info attributes or global/local
+checkout configuration are used. Git's [raw cat-file form](https://git-scm.com/docs/git-cat-file)
+is distinct from its --filters/--textconv forms, which are never invoked.
+
+Converted entry count and an inventory digest bind original and checkout blob
+identities. The actual CRLF bytes remain in the selected SHA-256 inventory and
+pass ordinary namespace and full copied-byte readback. Synthetic tests use
+Git itself to generate batch, project/BOM and compiled-header checkouts, then
+exercise the collector and actual shared copier. Changed/mixed/unattributed
+bytes, descendant overrides, other project scope, corrupted objects and byte
+limits retain their refusals. No native source file is rewritten.
