@@ -30,6 +30,7 @@ import mustang_collection
 import mustang_edge
 import mustang_lane
 import mustang_paths
+import mustang_existing_lock
 
 PROFILE = 'pro-mustang-v1'
 PROJECT = 'protocols-465723'
@@ -69,6 +70,12 @@ def source_sha():
     return subprocess.check_output(['git','-C',str(ROOT),'rev-parse','HEAD'],text=True).strip()
 
 
+def builder_lock(host,lock,lane):
+    if lane is not None:
+        return mustang_existing_lock.shared(lock,expected=mustang_paths.layout(lane)['lockPath'])
+    return host.shared_lock(lock)
+
+
 def collect(compile_receipt,run_id,attempt,lane=None):
     """Read-only collection before signer login; never retry make or edit its original receipts."""
     if (run_id,attempt)!=(os.environ.get('GITHUB_RUN_ID'),os.environ.get('GITHUB_RUN_ATTEMPT')):
@@ -88,7 +95,7 @@ def collect(compile_receipt,run_id,attempt,lane=None):
     try:
         hp=module('mustang_factory_host','host-factory-package.py')
         adapter=module('mustang_output_collection','mustang-build-only.py')
-        with hp.shared_lock(lock):
+        with builder_lock(hp,lock,lane):
             if read(source.parent/'allocation.json')!=value['allocation']:
                 raise ValueError('retained allocation differs from its producer receipt')
             if (source/'releases'/build).exists():
@@ -237,7 +244,7 @@ def sign(compile_receipt,bootstrap_receipt,run_id,attempt,lane=None):
             ROSE_RELEASE_DIR=str(release),ROSE_SIGN_OTATOOLS=outputs['otatools']['path'],OUT_DIR=f'out-mustang-build-{build}')
         bounded=module('mustang_build','mustang-build-only.py').engine()
         hp=module('mustang_factory_host','host-factory-package.py')
-        with hp.shared_lock(lock):
+        with builder_lock(hp,lock,lane):
             executor=ROOT/'scripts/mustang-dedicated.py' if lane is not None else Path(__file__).resolve()
             result=bounded.supervise([sys.executable,str(executor),'_execute','--config',str(config_path)],
                 str(source),env,10800,{'sampleSeconds':5,'killGraceSeconds':30,'boundBytes':1<<60,
@@ -283,7 +290,7 @@ def package(sign_run,sign_attempt,run_id,attempt,lane=None):
         'roseEdge':signed['roseEdge'],'edgeTargetFiles':signed['edgeTargetFiles']}
     if lane is not None: receipt.update(builder=dict(lane['vm']),workflow=lane['workflow'])
     try:
-        with hp.shared_lock(lock):
+        with builder_lock(hp,lock,lane):
             tf=Path(signed['outputs']['targetFiles']['path']);ota=Path(signed['compileArtifacts']['otatools']['path'])
             for p,expected in [(tf,signed['outputs']['targetFiles']['sha256']),
                                (ota,signed['compileArtifacts']['otatools']['sha256'])]:
