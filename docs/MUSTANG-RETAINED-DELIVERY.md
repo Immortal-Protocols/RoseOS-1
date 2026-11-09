@@ -14,10 +14,16 @@ no JIT metadata. The original workflow remains failed.
 
 The retained contract pins receipt artifact `13708411788`, 30,778 bytes,
 SHA-256 `0a35e679c31667151814357b9e1ba5a11c84b33035ac178aaa1159dba355570a`.
-These are observed metadata pins. The engineer has not downloaded that archive
-or independently rehashed its native output bytes. Future execution must
-authenticate those bytes; unavailable, denied or differing evidence refuses
-without retry or an alternate route. Historical denied resources stay held.
+The archive was subsequently downloaded through the authorized GitHub connector;
+its byte count, SHA-256, actual receipt cohort and authentication contract with
+observed producer metadata passed. It confirms Make=0, build `2611091700`,
+compiled timestamp `1794248529`, and complete declared output identities. The
+actual source-bound evidence is recorded in
+`os/build-only/mustang-full-run-42664204892.json`. This is receipt-byte evidence,
+not a new observation or rehash of the retained native files/journal. Future
+execution must reauthenticate the archive and rehash the native bytes;
+unavailable, denied or differing evidence refuses without retry or an alternate
+route. No held resource was retried; historical denials stay held.
 
 ## Producer and delivery remain distinct
 
