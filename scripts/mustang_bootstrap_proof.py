@@ -33,7 +33,7 @@ ROOT=Path(__file__).resolve().parents[1]
 @dataclass(frozen=True)
 class Limits:
     seconds:int=7200
-    entries:int=2_000_000
+    entries:int=4_000_000
     bytes:int=150 << 30
     git_output_bytes:int=128 << 20
     git_total_output_bytes:int=512 << 20
@@ -420,6 +420,7 @@ def inspect_source(source,manifest,vendor,host,recipe,*,root=ROOT,limits=None,de
     return dict(schema='roseos.mustang-bootstrap-source-candidate.v1',success=True,
         manifestSha256=hashlib.sha256(manifest).hexdigest(),projectCount=len(projects),
         gitlinkBoundaryCount=len(gitlinks),gitlinkPolicy='manifest-matched-child-or-no-selected-content',
+        expectedEntryCount=len(expected)+len(pinned_directories),
         selectedEntryCount=len(inventory),selectedPinnedEntries=pinned_count,selectedPreparedEntries=prepared_count,
         selectedManifestTransferEntries=sum(expected[name]['origin']!='git' for name in seen_expected),
         selectedInventorySha256=hashlib.sha256(canonical(inventory)).hexdigest(),sourceDataBytesRead=observation.bytes,

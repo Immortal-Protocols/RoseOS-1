@@ -51,7 +51,7 @@ def tree_rows(commit,listing,revision,*,max_entries,include_trees=False,allow_gi
     except UnicodeError:raise Refused('commit-tree-header-differs') from None
     if listing and not listing.endswith(b'\0'):raise Refused('unterminated-tree-listing')
     records=listing.split(b'\0')[:-1] if listing else []
-    if len(records)>max_entries:raise Refused('git-tree-entry-bound')
+    if len(records)>max_entries:raise Refused('git-tree-entry-bound-'+str(len(records))+'-max-'+str(max_entries))
     rows={};children={'':[]};trees={'':root_tree}
     for raw in records:
         try:
