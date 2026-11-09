@@ -80,6 +80,23 @@ class CollectorTest(unittest.TestCase):
         return collector.collect(self.lane,self.cfg,kwargs.pop('env',self.env),kwargs.pop('event',self.event),
                                  root=self.root,probe=kwargs.pop('probe',self.probe),**kwargs)
 
+    def test_full_builder_failure_diagnostic_omits_exception_text_paths_and_locals(self):
+        import base64
+        owner=dict(schema=collector.controller.SCHEMA,run=self.run,
+            owner=dict(vm=self.lane['vm'],startedByThisOperation=True))
+        env=dict(self.env,GITHUB_JOB='builder',MUSTANG_DRY_RUN='false',MUSTANG_PUBLISH='true',
+            MUSTANG_OWNER_B64=base64.b64encode(proof.canonical(owner)).decode())
+        failure=PermissionError(13,'MUST-NOT-PRINT','https://private.test/?token=MUST-NOT-PRINT')
+        output=io.StringIO()
+        with patch.object(proof,'_observe_prepared_locked',side_effect=failure),contextlib.redirect_stdout(output):
+            result=self.collect(env=env,event={'inputs':{'publish':True}},full_run=True)
+        self.assertTrue(result['receiptWritten']);self.assertFalse(result['receipt']['success'])
+        observed=json.loads(output.getvalue())
+        self.assertEqual(observed['failureType'],'PermissionError');self.assertEqual(observed['failureErrno'],13)
+        self.assertTrue(observed['failureFrames'])
+        self.assertNotIn('MUST-NOT-PRINT',output.getvalue());self.assertNotIn('https:',output.getvalue())
+        self.assertNotIn('MUST-NOT-PRINT',json.dumps(result['receipt']))
+
     def test_complete_fixture_writes_hash_verified_candidate_receipt_without_admission(self):
         before=self.lock.stat();result=self.collect();r=result['receipt']
         self.assertTrue(r['success'],r);self.assertTrue(result['receiptWritten'])

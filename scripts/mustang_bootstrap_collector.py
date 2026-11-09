@@ -293,6 +293,27 @@ class Attempt:
         self.fd=self.parent=None
 
 
+def failure_diagnostics(error):
+    """Typed failure facts and our code locations; never exception text or locals."""
+    safe=lambda value:value if isinstance(value,str) and re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]{0,63}',value) else 'Exception'
+    result=dict(failureType=safe(type(error).__name__));frames=[];current=error;seen=set()
+    for _ in range(4):
+        if current is None or id(current) in seen:break
+        seen.add(id(current));result['failureCauseType']=safe(type(current).__name__)
+        number=getattr(current,'errno',None)
+        if type(number) is int and 0<number<256:result['failureErrno']=number
+        trace=current.__traceback__
+        while trace is not None:
+            code=trace.tb_frame.f_code;path=Path(code.co_filename)
+            if path.is_relative_to(ROOT/'scripts') and re.fullmatch(r'[A-Za-z0-9_.-]{1,96}\.py',path.name) \
+                    and re.fullmatch(r'[A-Za-z0-9_<>.]{1,96}',code.co_name):
+                frames.append(path.name+':'+str(trace.tb_lineno)+':'+code.co_name)
+            trace=trace.tb_next
+        current=current.__cause__ or current.__context__
+    if frames:result['failureFrames']=frames[-8:]
+    return result
+
+
 def collect(lane,cfg,env,event,*,root=ROOT,limits=None,source_limits=None,probe=None,full_run=False):
     """Unwired library entry point. Future activation requires separate authorization.
 
@@ -360,6 +381,7 @@ def collect(lane,cfg,env,event,*,root=ROOT,limits=None,source_limits=None,probe=
                     document.update(success=True,guestChecksPassed=True,checkoutBytesVerified=True,
                         guestIdentityObserved=native,dataFilesystemIdentityObserved=native)
                 except Exception as error:
+                    document.update(failure_diagnostics(error))
                     document['failure']=error.code if isinstance(error,git.Refused) else 'collector-check-failed'
                     if isinstance(error,git.Refused) and error.path:document['failurePath']=error.path
                 document.update(stage=stage,completedChecks=completed,elapsedSeconds=round(time.monotonic()-started,3))
@@ -370,9 +392,13 @@ def collect(lane,cfg,env,event,*,root=ROOT,limits=None,source_limits=None,probe=
     except Exception as error:
         # Do not include arbitrary exception text, subprocess stderr, payloads,
         # tokens or provider URLs. A receipt-write refusal never claims success.
+        document.update(failure_diagnostics(error))
         if isinstance(error,git.Refused) and error.path:document['failurePath']=error.path
         document.update(success=False,failure=error.code if isinstance(error,git.Refused) else 'collector-refused',
                         stage=stage,completedChecks=completed,elapsedSeconds=round(time.monotonic()-started,3))
+    if full_run and document.get('success') is not True:
+        print(json.dumps(dict(stage='bootstrap-source-diagnostic',**{key:value for key,value in document.items()
+            if key in ('failure','failurePath','failureType','failureCauseType','failureErrno','failureFrames')})),flush=True)
     return dict(receipt=document,receiptWritten=record is not None,receiptFile=record)
 
 

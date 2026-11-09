@@ -127,3 +127,13 @@ not remeasure the old Updater, its APK signer or installed-device compatibility.
 The existing candidate-continuity validator remains a separate source contract.
 App-owner drafts, numbering/signing operations, the historical installer-storage
 denial and the group-6 signer metadata 403 remain untouched.
+
+Run42594685959 returned collector-check-failed in source observation, before
+copy/allocation/Make; the old helper omitted the exception category/location.
+Full-run failures now emit only type, numeric errno and bounded repository code
+frames, with no exception text, locals, source text or URLs. Pinned project
+directory failures also identify the committed manifest path.
+The source planner now permits an absent excluded unpacked-cache directory; its
+parent and an existing directory must remain plain paths, and the pinned empty
+prune marker remains mandatory. Offline absence/symlink/marker regressions
+establish this correction; the exact old native exception is not inferred.
