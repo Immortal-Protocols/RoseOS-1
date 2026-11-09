@@ -463,7 +463,7 @@ class DedicatedPathsTest(unittest.TestCase):
         self.assertLess(jobs['signer'].index('mustang_hosted_sign.py preflight'), jobs['signer'].index('actions-gcp-login.py login'))
         self.assertLess(jobs['builder'].index('mustang-dedicated.py collect'), jobs['builder'].index('mustang_hosted_sign.py export-bundle'))
         self.assertLess(jobs['builder'].index('mustang-dedicated.py baseline'),jobs['builder'].index('mustang-dedicated.py produce'))
-        self.assertLess(jobs['builder'].index('prepare-artifact-cli'),jobs['builder'].index('mustang-dedicated.py host-check'))
+        self.assertNotIn('prepare-artifact-cli',jobs['builder'])
         self.assertLess(jobs['publisher'].index('verify-staged'),jobs['publisher'].index('actions/create-github-app-token'))
         self.assertLess(jobs['cleanup'].index('cleanup-prepare'),jobs['cleanup'].index('actions-gcp-login.py login'))
         env=dict(PATH=os.environ['PATH'])
@@ -773,52 +773,62 @@ class DedicatedRuntimeTest(unittest.TestCase):
         with patch.object(mustang_hosted_sign,'require_delivery_capacity',return_value={}):
             return self.driver.guard(self.lane,cfg or self.cfg,self.env,publish,root=self.root,diff=diff or (lambda *args:''))
 
-    def test_native_host_check_needs_artifact_cli_and_no_cloud_signing_cli(self):
+    def test_native_host_check_uses_prepared_tools_without_cli_installation(self):
         def execute(*args,**kwargs):return SimpleNamespace(returncode=0,stdout='fixture-uuid')
         with patch.object(self.driver.route,'evaluate_guest',return_value={}), \
-                patch.object(self.driver.shutil,'which',side_effect=lambda tool:'/usr/bin/gh' if tool=='gh' else None) as which:
+                patch.object(self.driver.shutil,'which',return_value=None) as which:
             self.driver.host_check(self.lane,self.cfg,observe_id=lambda:self.lane['vm']['instanceId'],execute=execute)
-        self.assertEqual(which.call_args_list,[unittest.mock.call('gh')])
+        which.assert_not_called()
 
-    def artifact_cli_fixture(self):
-        import io,tarfile
-        binary=b'pinned public CLI fixture'
-        pin=dict(self.driver.ARTIFACT_CLI,binaryBytes=len(binary),binarySha256=hashlib.sha256(binary).hexdigest())
-        stream=io.BytesIO()
-        with tarfile.open(fileobj=stream,mode='w:gz') as package:
-            member=tarfile.TarInfo(pin['member']);member.size=len(binary);member.mode=0o755
-            package.addfile(member,io.BytesIO(binary))
-        data=stream.getvalue();pin.update(archiveBytes=len(data),archiveSha256=hashlib.sha256(data).hexdigest())
-        temporary=self.host/'runner-temp';temporary.mkdir()
-        path_file=self.root/'github-path';path_file.write_text('')
-        env=dict(self.env,GITHUB_JOB='builder',MUSTANG_DRY_RUN='false',RUNNER_TEMP=str(temporary),GITHUB_PATH=str(path_file))
-        return pin,data,binary,env,path_file
+    def test_artifact_transport_strips_credentials_from_the_one_storage_redirect(self):
+        import urllib.error
+        requests=[]
+        def open_http(request,**kwargs):
+            requests.append(request)
+            if len(requests)==1:
+                raise urllib.error.HTTPError(request.full_url,302,'Found',
+                    {'Location':'https://fixture.blob.core.windows.net/artifact?sig=private-fixture'},None)
+            response=io.BytesIO(b'archive');response.status=200;return response
+        read=self.driver.app_artifact_reader(9,'fixture-token',open_http)
+        self.assertEqual(read('/zip',7),b'archive')
+        self.assertEqual(requests[0].get_header('Authorization'),'Bearer fixture-token')
+        self.assertEqual(requests[1].header_items(),[])
+        self.assertEqual(len(requests),2)
+        with self.assertRaisesRegex(ValueError,'scope'):read('/other',7)
+        self.assertEqual(len(requests),2)
 
-    def test_pinned_artifact_cli_is_installed_without_a_preexisting_cli_or_root(self):
-        import io
-        pin,data,binary,env,path_file=self.artifact_cli_fixture()
-        with patch.object(self.driver,'ARTIFACT_CLI',pin),patch.object(self.driver,'host_check') as checked:
-            result=self.driver.prepare_artifact_cli(self.lane,self.cfg,env,fetch=lambda *a,**k:io.BytesIO(data))
-        checked.assert_called_once_with(self.lane,self.cfg,artifact_cli_required=False)
-        target=Path(result['path']);self.assertEqual(target.read_bytes(),binary)
-        self.assertEqual(target.stat().st_mode&0o777,0o755)
-        self.assertEqual(path_file.read_text(),str(target.parent)+'\n')
+    def test_artifact_transport_denial_is_single_attempt_and_sanitized(self):
+        import urllib.error
+        for stage in ('metadata','archive-api','archive-storage'):
+            calls=[]
+            def open_http(request,**kwargs):
+                calls.append(request)
+                if stage=='archive-storage' and len(calls)==1:
+                    raise urllib.error.HTTPError(request.full_url,302,'Found',
+                        {'Location':'https://fixture.blob.core.windows.net/artifact?sig=secret-signature'},None)
+                raise urllib.error.HTTPError(request.full_url,403,'sensitive-url-token',{},None)
+            read=self.driver.app_artifact_reader(9,'secret-token',open_http)
+            with self.subTest(stage=stage),self.assertRaisesRegex(ValueError,stage+' HTTP 403; no retry') as raised:
+                read('' if stage=='metadata' else '/zip',7)
+            self.assertNotIn('secret',str(raised.exception))
+            self.assertNotIn('sensitive',str(raised.exception))
+            self.assertEqual(len(calls),2 if stage=='archive-storage' else 1)
 
-    def test_artifact_cli_hash_failure_exposes_no_executable_or_path(self):
-        import io
-        pin,data,_binary,env,path_file=self.artifact_cli_fixture()
-        with patch.object(self.driver,'ARTIFACT_CLI',pin),patch.object(self.driver,'host_check'):
-            with self.assertRaisesRegex(ValueError,'archive differs'):
-                self.driver.prepare_artifact_cli(self.lane,self.cfg,env,fetch=lambda *a,**k:io.BytesIO(data+b'changed'))
-        self.assertEqual(path_file.read_text(),'')
-        self.assertEqual(list(Path(env['RUNNER_TEMP']).iterdir()),[])
-
-    def test_artifact_cli_setup_refuses_wrong_guest_before_download(self):
-        pin,_data,_binary,env,path_file=self.artifact_cli_fixture();fetched=[]
-        with patch.object(self.driver,'host_check',side_effect=ValueError('wrong guest')):
-            with self.assertRaisesRegex(ValueError,'wrong guest'):
-                self.driver.prepare_artifact_cli(self.lane,self.cfg,env,fetch=lambda *a,**k:fetched.append(True))
-        self.assertEqual(fetched,[]);self.assertEqual(path_file.read_text(),'')
+    def test_artifact_transport_rejects_redirect_target_and_oversized_response(self):
+        import urllib.error
+        for target in ('http://fixture.blob.core.windows.net/file','https://attacker.test/file',
+                       'https://name:password@fixture.blob.core.windows.net/file'):
+            calls=[]
+            def open_http(request,**kwargs):
+                calls.append(request)
+                raise urllib.error.HTTPError(request.full_url,302,'Found',{'Location':target},None)
+            with self.subTest(target=target),self.assertRaisesRegex(ValueError,'redirect differs'):
+                self.driver.app_artifact_reader(9,'fixture-token',open_http)('/zip',7)
+            self.assertEqual(len(calls),1)
+        def oversized(*args,**kwargs):
+            response=io.BytesIO(b'12345678');response.status=200;return response
+        with self.assertRaisesRegex(ValueError,'byte bound'):
+            self.driver.app_artifact_reader(9,'fixture-token',oversized)('',7)
 
     def test_actual_evidence_guard_allows_private_and_refuses_stale_or_unbound(self):
         self.assertEqual(self.admitted()['consumedBuilds'],['2026110402'])
@@ -1131,25 +1141,23 @@ class DedicatedRuntimeTest(unittest.TestCase):
         observed_artifact=copy.deepcopy(artifact)
         rec=dict(export=dict(run='222',artifact=artifact),files=[dict(path='signed-apps/app.apk',sizeBytes=13)])
         path=self.root/'record.json'; path.write_text(json.dumps(rec)); calls=[]
-        def process(argv,**kwargs):
-            calls.append(argv)
-            if argv[-1].endswith('/zip'):
-                kwargs['stdout'].write(archive.read_bytes()); return SimpleNamespace(returncode=0)
-            return SimpleNamespace(returncode=0,stdout=json.dumps(dict(observed_artifact,expired=False,workflow_run=dict(id=222))))
-        out=self.driver.fetch_inputs(path,self.root/'download',execute=process)
+        def read(suffix,limit):
+            calls.append(suffix)
+            if suffix=='/zip': return archive.read_bytes()
+            return json.dumps(dict(observed_artifact,expired=False,workflow_run=dict(id=222),size_in_bytes=archive.stat().st_size)).encode()
+        out=self.driver.fetch_inputs(path,self.root/'download',read=read)
         self.assertEqual((out/'signed-apps/app.apk').read_bytes(),b'fixture bytes')
-        self.assertEqual(len(calls),2)
+        self.assertEqual(calls,['','/zip'])
         rec['export']['artifact']['digest']='sha256:'+'0'*64; path.write_text(json.dumps(rec))
         with self.assertRaisesRegex(ValueError,'metadata differs'):
-            self.driver.fetch_inputs(path,self.root/'foreign',execute=process)
+            self.driver.fetch_inputs(path,self.root/'foreign',read=read)
         self.assertFalse((self.root/'foreign').exists())
         rec['export']['artifact']['digest']=observed_artifact['digest']; path.write_text(json.dumps(rec))
-        def corrupt(argv,**kwargs):
-            if argv[-1].endswith('/zip'):
-                kwargs['stdout'].write(b'changed download'); return SimpleNamespace(returncode=0)
-            return process(argv,**kwargs)
+        def corrupt(suffix,limit):
+            if suffix=='/zip':return b'changed download'
+            return read(suffix,limit)
         with self.assertRaisesRegex(ValueError,'download/digest failed'):
-            self.driver.fetch_inputs(path,self.root/'corrupt',execute=corrupt)
+            self.driver.fetch_inputs(path,self.root/'corrupt',read=corrupt)
         self.assertEqual((self.root/'corrupt/download.zip').read_bytes(),b'changed download')
 
     def test_internal_signing_executor_rechecks_scope_and_proof_before_key_access(self):

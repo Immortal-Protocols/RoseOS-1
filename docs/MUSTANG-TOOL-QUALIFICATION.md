@@ -46,16 +46,18 @@ hardware/filesystem/free space, qualified bundle, signatures/output bounds and
 owned lifecycle/STOP receipts. Dispatch remains a separate action within the
 current authorized scope; this source change dispatches nothing.
 
-The first full attempt42576627118 passed admission/start/JIT but stopped at the
-initial host check because gh was missing. The workflow now installs public
-GitHub CLI2.103.3 into this attempt's private temp directory, after native guest,
-disk and other-tool checks. Both the official archive and extracted regular
-executable hashes are pinned before the directory is added to GITHUB_PATH.
-No root/system installation, credential creation or prior-attempt reuse occurs.
-The following host check still requires the CLI. Run23 never reached produce;
-the first clock initialization fence is24, without resetting any journal.
-The failure/cleanup facts and unavailable lifecycle payload are recorded in
-`os/build-only/mustang-full-run-42576627118.json`.
+Full attempt42576627118 stopped because the native guest lacked gh. The next
+attempt42581537518 stopped while downloading the pinned public CLI, reporting
+HTTPError without status. Both attempts stopped before allocation or Make; their
+cleanup jobs succeeded and direct numeric VM reads confirmed TERMINATED.
+The native app consumer now uses Python's standard HTTP client for the same
+committed artifact metadata/download endpoints. It checks the run, ID, name,
+expiry, archive size/digest and exact safe ZIP inventory before APK admission.
+API authorization is never forwarded to signed storage, HTTP failures stop
+without retry, and errors expose phase/status rather than signed URLs. No CLI
+resource or previously denied artifact is retried through this change.
+Failure records are under os/build-only/mustang-full-run-*.json. The first clock
+initialization fence is25, without observing or resetting an existing journal.
 
 The sections below retain the historical qualification review and its original
 unbound-state observations; they are not a second claim about current pin values.
