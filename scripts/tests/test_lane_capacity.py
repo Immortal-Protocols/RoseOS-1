@@ -278,7 +278,7 @@ class MapTest(unittest.TestCase):
         for name, lane in CONTRACT['lanes'].items():
             with self.subTest(lane=name):
                 self.assertTrue((ROOT/lane['workflow']).is_file())
-                # Every lane names a host of the map: scripts/mustang_lane.py and scripts/launcher3_lane.py read each
+                # Every lane names a host of the map: the Mustang and harness lanes' own capacity checks read each
                 # lane's host to keep their own builders apart.
                 self.assertIn(lane['host'], CONTRACT['hosts'])
                 self.assertIn(lane['target'], [*CONTRACT['hosts'], 'own'])
