@@ -27,6 +27,7 @@ import mustang_hosted_sign as hosted
 import mustang_otatools_qualification as qualification
 import mustang_tool_closure as closure
 import mustang_ota as ota
+import mustang_retained as retained
 import test_mustang_edge_gate as edge_fixture
 import test_mustang_bootstrap_collector as fixture_module
 
@@ -315,6 +316,302 @@ class FullDeliveryTest(unittest.TestCase):
         delivered=hosted.write_hosted_receipt(release,signed_out,bundle)
         self.assertEqual(hosted.bind_outputs(signed_out,env=self.env),delivered)
         self.assertEqual(delivered['outputs']['ota']['file'],'staged/'+package.name)
+
+
+class RetainedDeliveryTest(unittest.TestCase):
+    """Real local journal, output ZIP/hash/edge collection and two-run admission.
+
+    Original API/archive responses are offline stand-ins; the production artifact
+    bytes have not been read by this test or represented as independently proved.
+    """
+    def setUp(self):
+        import test_mustang_clock as clocks
+        self.f=clocks.ClockAllocationTest('test_actual_local_reservation_keeps_lost_legacy_unknown_and_binds_compiled_time')
+        self.f.setUp();self.addCleanup(self.f.doCleanups)
+        self.root,self.home,self.lane=self.f.root,self.f.home,self.f.lane
+        self.f.source=retained.SOURCE
+        first=self.f.environment('42622314509',35,'2026-11-09T13:04:51Z')
+        self.f.reserve(first,now='2026-11-09T14:09:50Z')
+        old=self.f.environment(retained.RUN,36,'2026-11-09T17:23:51Z')
+        self.allocation=self.f.reserve(old,now='2026-11-09T18:22:08Z')
+        op=self.f.compiler_operator(self.allocation)
+        self.source=Path(op['sourceRoot']);self.build=self.allocation['build'];self.stamp=op['buildDatetime']
+        (self.source.parent/'allocation.json').write_bytes(proof.canonical(self.allocation))
+        Path(self.allocation['integrationDir']).mkdir()
+        out=self.source/f'out-mustang-build-{self.build}';product=out/'target/product/mustang'
+        package=product/'obj/PACKAGING/target_files_intermediates/mustang-target_files.zip'
+        package.parent.mkdir(parents=True)
+        edge_fixture.fixtures.target_files(package,extra={'VENDOR/build.prop':
+            f'ro.product.vendor.device=mustang\nro.vendor.build.version.incremental={self.build}\nro.vendor.build.date.utc={self.stamp}\n'})
+        for name in ('vendor_boot.img','vendor_kernel_boot.img'):(product/name).write_bytes(b'fixture image')
+        tools=out/'soong/.intermediates/build/make/tools/otatools_package/otatools-package/linux_glibc_x86_64/gen/otatools.zip'
+        tools.parent.mkdir(parents=True);tools.write_bytes(b'fixture tools, never executed')
+        adapter=ota.module('retained_output_fixture','mustang-build-only.py')
+        self.outputs=adapter.collect_outputs(self.source,out.name);self.assertEqual(self.outputs['verdict'],'complete')
+        self.cfg=dict(self.f.cfg,dataMount=str(self.home.parent),appInputsRecord='os/app-inputs/frankel-2026110901.json')
+        for name in ('os/pinned-manifest.xml',self.cfg['appInputsRecord']):
+            target=self.root/name;target.parent.mkdir(parents=True,exist_ok=True);target.write_bytes((ROOT/name).read_bytes())
+        (self.root/'os/build-only/mustang-runtime.json').write_text(json.dumps(self.cfg))
+        (self.root/'os/build-only/mustang-lane.json').write_text(json.dumps(self.lane))
+        record=json.loads((self.root/self.cfg['appInputsRecord']).read_text())
+        run=dict(runId=retained.RUN,runAttempt='1',source=retained.SOURCE,
+            workflow='Immortal-Protocols/RoseOS-1/'+self.lane['workflow']+'@refs/heads/main')
+        native=dict(schema=collector.SCHEMA,run=run,workflowJob='builder',observationKind='native-read-only',
+            success=True,guestIdentityObserved=True,dataFilesystemIdentityObserved=True,checkoutBytesVerified=True,
+            workflowContextValidated=True,fullBootstrapVerified=False,pristine=False,otaAdmitted=False,signingStarted=False,
+            controllerOwnershipSha256='a'*64,sourceCandidate=dict(manifestSha256=hosted.sha256_file(self.root/'os/pinned-manifest.xml'),
+                portableInventorySha256='b'*64))
+        copied=dict(schema='roseos.mustang-full-run-source-copy.v1',run=run,builder=self.lane['vm'],sourceCopyVerified=True,
+            portableInventorySha256='b'*64,nativeReceiptSha256=hashlib.sha256(proof.canonical(native)).hexdigest())
+        completed=dict(device='mustang',stage='compile',returncode=0,stopped=None,ok=True,
+            buildIdentity=dict(buildNumber=self.build,buildDatetime=self.stamp),outputs=self.outputs)
+        self.candidate=dict(schema='roseos.mustang-candidate-run.v1',device='mustang',source=retained.SOURCE,
+            runId=retained.RUN,runAttempt='1',builder=self.lane['vm'],workflow=self.lane['workflow'],
+            root=str(self.source.parent),allocation=self.allocation,unsignedCompileComplete=True,omittedChecks=[],
+            appInputAdmission=dict(verdict='ADMITTED',producer=record['producer']['tag'],export=record['export'],apps=record['apps'],toolsRechecked=True),
+            stages={'integrate':dict(source=retained.SOURCE,result=dict(returncode=0,stopped=None)),
+                'compile':dict(result=completed),'bootstrap-source':dict(result=native,receipt=dict(sha256=copied['nativeReceiptSha256'])),
+                'source-copy':dict(result=copied)})
+        failed=dict(status='failed',error=retained.ERROR,candidate=self.candidate,collectorSource=retained.SOURCE,
+            runId=retained.RUN,runAttempt='1',makeReturncode=0,makeRerun=False,originalReceiptsModified=False,collectionRecovery=False)
+        self.docs=dict(zip(retained.FILES,(self.candidate,completed,self.allocation,failed)))
+        self.delivery='42699999999';self.sha='c'*40
+        self.current=dict(runId=self.delivery,runAttempt='1',source=self.sha,workflow=run['workflow'])
+        owner=dict(schema=controller.SCHEMA,run=self.current,owner=dict(vm=self.lane['vm'],startedByThisOperation=True))
+        self.env=dict(GITHUB_RUN_ID=self.delivery,GITHUB_RUN_ATTEMPT='1',GITHUB_SHA=self.sha,
+            GITHUB_WORKSPACE=str(self.root),
+            GITHUB_WORKFLOW_SHA=self.sha,GITHUB_WORKFLOW_REF=run['workflow'],GITHUB_REF='refs/heads/main',
+            GITHUB_EVENT_NAME='workflow_dispatch',GITHUB_REPOSITORY='Immortal-Protocols/RoseOS-1',GITHUB_REPOSITORY_ID='1428996648',
+            GITHUB_JOB='builder',MUSTANG_DRY_RUN='false',MUSTANG_PUBLISH='true',MUSTANG_RETAINED_COMPILE_RUN=retained.RUN,
+            MUSTANG_OWNER_B64=base64.b64encode(proof.canonical(owner)).decode())
+        self.event={'inputs':dict(publish=True,retained_compile_run=retained.RUN)}
+        self.facts=dict(instanceId=self.lane['vm']['instanceId'],filesystemUuid=self.cfg['dataFilesystemUuid'],
+            mount=self.cfg['dataMount'],availableBytes=10**12,availableInodes=10**6,totalInodes=10**7,euid=999)
+        self.actual=dict(id=int(retained.RUN),run_attempt=1,run_number=36,head_sha=retained.SOURCE,head_branch='main',
+            path=retained.WORKFLOW,workflow_id=408460629,event='workflow_dispatch',created_at='2026-11-09T17:23:51Z',
+            status='completed',conclusion='failure',repository=dict(id=1428996648),head_repository=dict(id=1428996648))
+        self.jobs=[]
+        for i,(name,conclusion) in enumerate((('guard','success'),('controller','success'),('enroll','success'),
+                ('builder','failure'),('cleanup','success'),('signer','skipped'),('publisher','skipped'))):
+            self.jobs.append(dict(id=129324047950 if name=='builder' else i+1,name=name,run_id=int(retained.RUN),
+                head_sha=retained.SOURCE,status='completed',conclusion=conclusion,runner_group_id=5,
+                runner_name='mustang-'+retained.RUN,labels=[self.lane['runnerLabel']],steps=[
+                    dict(name='Prepare, allocate, integrate and compile once on Mustang disk',conclusion='success'),
+                    dict(name='Require unsigned raised-edge proof before the hosted signing bundle',conclusion='failure')]))
+        self.calls=[];self.repack()
+        self.live_compatible=retained.compatible
+        def compatible(source,root=ROOT,git=None):
+            return self.live_compatible(source,root,git=lambda args:SimpleNamespace(returncode=0,stdout='scripts/mustang_retained.py\n'))
+        for patcher in (patch.dict(os.environ,self.env,clear=True),patch.object(retained,'compatible',side_effect=compatible),
+                patch.object(collector,'runner_identity',return_value=(999,'mustang-runner')),
+                patch.object(sys,'dont_write_bytecode',True),patch.object(collector.mustang_lane,'configuration',return_value=self.lane)):
+            patcher.start();self.addCleanup(patcher.stop)
+        self.auth=retained.authenticate
+        def authenticate(env,root=ROOT):return self.auth(env,self.root,api=self.api,read=self.read)
+        patcher=patch.object(retained,'authenticate',side_effect=authenticate);patcher.start();self.addCleanup(patcher.stop)
+
+    def repack(self):
+        data=io.BytesIO();self.raw={name:proof.canonical(value) for name,value in self.docs.items()}
+        with zipfile.ZipFile(data,'w') as zipped:
+            for name,raw in self.raw.items():zipped.writestr(name,raw)
+        self.blob=data.getvalue()
+        retained.ARTIFACT=dict(retained.ARTIFACT,sizeBytes=len(self.blob),sha256=hashlib.sha256(self.blob).hexdigest())
+        self.addCleanup(setattr,retained,'ARTIFACT',dict(id=13708411788,name='mustang-dedicated-receipts-42664204892-1',sizeBytes=30778,
+            sha256='0a35e679c31667151814357b9e1ba5a11c84b33035ac178aaa1159dba355570a'))
+        original=self.source.parent/'delivery-inputs';original.mkdir(exist_ok=True)
+        for name in retained.FILES[:3]:(original/name).write_bytes(self.raw[name])
+        failure=self.f.home/'rose-actions'/('mustang-collect-'+retained.RUN+'-1');failure.mkdir(exist_ok=True)
+        (failure/'compile-collection.json').write_bytes(self.raw['compile-collection.json'])
+
+    def api(self,path):
+        self.calls.append(path)
+        self.assertIn(path,('/repos/Immortal-Protocols/RoseOS-1/actions/runs/'+retained.RUN,
+            '/repos/Immortal-Protocols/RoseOS-1/actions/runs/'+retained.RUN+'/attempts/1/jobs?per_page=100'))
+        return copy.deepcopy(dict(total_count=len(self.jobs),jobs=self.jobs) if '/jobs?' in path else self.actual)
+
+    def read(self,suffix,limit):
+        self.calls.append(suffix)
+        if suffix=='/zip':return self.blob
+        self.assertEqual(suffix,'')
+        return json.dumps(dict(id=retained.ARTIFACT['id'],name=retained.ARTIFACT['name'],expired=False,
+            digest='sha256:'+retained.ARTIFACT['sha256'],size_in_bytes=len(self.blob),workflow_run=dict(id=int(retained.RUN),head_sha=retained.SOURCE))).encode()
+
+    def preserved(self):
+        paths=list(self.f.journal.rglob('*.json'))+list((self.source.parent/'delivery-inputs').iterdir())
+        return {str(p):p.read_bytes() for p in paths}
+
+    def collect(self):
+        with patch.object(ota.module('retained_sign_loader','mustang-sign-package.py').mustang_collection,'ROOT',self.root):
+            original=ota.module
+            def module(name,file):
+                value=original(name,file)
+                if file=='mustang-sign-package.py':value.source_sha=lambda:self.sha
+                return value
+            with patch.object(ota,'module',side_effect=module):
+                return retained.collect(self.lane,self.cfg,self.env,self.event,self.facts,self.root)
+
+    def test_authenticate_real_archive_and_collect_rehash_without_make_allocation_or_mutation(self):
+        before=self.preserved()
+        with patch.object(retained.mustang_clock,'reserve',side_effect=AssertionError('allocated again')):
+            report=self.collect()
+        self.assertEqual(report['status'],'complete');self.assertEqual(report['compileRunId'],retained.RUN)
+        self.assertEqual(report['runId'],self.delivery);self.assertEqual(report['originalWorkflowConclusion'],'failure')
+        self.assertFalse(report['makeRerun']);self.assertEqual(before,self.preserved())
+        self.assertEqual(report['roseEdge']['binding']['candidateSource'],retained.SOURCE)
+        self.assertEqual(report['roseEdge']['binding']['recipeSource'],self.sha)
+        self.assertEqual(retained.compile_context(dict(retainedProducer=report['retainedProducer'],
+            runId=self.delivery,runAttempt='1',sourceSha=self.sha)),(retained.RUN,'1',retained.SOURCE))
+        with self.assertRaisesRegex(ValueError,'attempt exists'):self.collect()
+
+    def test_wrong_original_outcome_steps_archive_clock_apps_and_cleanup_are_refused(self):
+        for change in (dict(conclusion='success'),dict(head_sha='d'*40),dict(run_attempt=2),dict(run_number=37)):
+            with self.subTest(change=change),patch.dict(self.actual,change):
+                with self.assertRaises(ValueError):retained.authenticate(self.env,self.root)
+        self.jobs[4]['conclusion']='failure'
+        with self.assertRaises(ValueError):retained.authenticate(self.env,self.root)
+        self.jobs[4]['conclusion']='success';self.jobs[3]['steps'][0]['conclusion']='failure'
+        with self.assertRaises(ValueError):retained.authenticate(self.env,self.root)
+        self.jobs[3]['steps'][0]['conclusion']='success'
+        bad=self.blob;self.blob=bad[:-1]+bytes([bad[-1]^1])
+        with self.assertRaisesRegex(ValueError,'archive digest'):retained.authenticate(self.env,self.root)
+        self.blob=bad;self.docs['candidate-receipt.json']['appInputAdmission']['apps']=[];self.repack()
+        with self.assertRaisesRegex(ValueError,'signed-app'):retained.authenticate(self.env,self.root)
+
+    def test_guest_journal_and_retained_bytes_fail_closed_without_repair(self):
+        before=self.preserved()
+        with self.assertRaises(ValueError):
+            retained.guest_receipt(self.lane,self.cfg,self.env,self.event,dict(self.facts,instanceId='wrong'))
+        head=self.f.journal/'head.json';raw=head.read_bytes();head.write_text('{}')
+        with self.assertRaisesRegex(ValueError,'journal'):self.collect()
+        self.assertEqual(head.read_text(),'{}');head.write_bytes(raw)
+        target=Path(self.outputs['artifacts']['targetFiles']['path']);target.write_bytes(b'changed retained output')
+        with self.assertRaisesRegex(ValueError,'identity incomplete|changed during collection'):self.collect()
+        self.assertEqual(before,self.preserved())
+
+    def test_compatibility_and_scope_do_not_allow_os_drift_make_or_preparation_modes(self):
+        for changed in ('os/pinned-manifest.xml','workspace/rose-agent/app/build.gradle','os/build-only/mustang-clock-numbering.json'):
+            with self.subTest(path=changed),self.assertRaises(ValueError):
+                self.live_compatible(self.sha,self.root,git=lambda args:SimpleNamespace(returncode=0,
+                    stdout=changed+'\n' if args[0]=='diff' else ''))
+        with self.assertRaises(ValueError):retained.selected(dict(MUSTANG_RETAINED_COMPILE_RUN='any-other-run'))
+        with self.assertRaises(collector.git.Refused):collector.full_invocation(self.lane,self.env,self.event)
+        bad=dict(inputs=dict(self.event['inputs'],dry_run=True))
+        with self.assertRaises(collector.git.Refused):collector.full_invocation(self.lane,self.env,bad,retained=True)
+
+    def test_denied_read_stops_once_before_native_collection(self):
+        calls=[]
+        def denied(*args):calls.append(args);raise ValueError('fixture HTTP403; no retry')
+        with self.assertRaisesRegex(ValueError,'HTTP403'):
+            self.auth(self.env,self.root,api=denied,read=self.read)
+        self.assertEqual(len(calls),1)
+        self.assertFalse((self.home/'rose-actions'/('mustang-collect-'+self.delivery+'-1')).exists())
+
+    def test_newer_journal_reservation_is_preserved_and_blocks_retained_delivery(self):
+        later=self.f.environment('42699999998',37,'2026-11-09T20:00:00Z')
+        self.f.reserve(later,now='2026-11-09T20:20:00Z');before=self.preserved()
+        with self.assertRaisesRegex(ValueError,'journal'):self.collect()
+        self.assertEqual(before,self.preserved())
+        self.assertFalse((self.home/'rose-actions'/('mustang-retained-'+self.delivery+'-1')).exists())
+
+    def test_archive_denial_has_no_retry_or_alternate_read(self):
+        calls=[]
+        def read(suffix,limit):
+            calls.append(suffix)
+            if suffix=='/zip':raise ValueError('fixture archive HTTP403; no retry')
+            return self.read(suffix,limit)
+        with self.assertRaisesRegex(ValueError,'archive HTTP403'):
+            self.auth(self.env,self.root,api=self.api,read=read)
+        self.assertEqual(calls,['','/zip'])
+
+    def bundle(self):
+        report=self.collect()
+        _package,inspected,provenance=FullDeliveryTest.tool_fixture(self,self.source)
+        path=self.home/'rose-actions'/('mustang-collect-'+self.delivery+'-1')/'compile-collection.json'
+        with patch.object(hosted,'public_identity',return_value={'fixtureOnly':True}), \
+                patch.object(qualification,'inspection_record',return_value=inspected), \
+                patch.object(qualification,'inspect_package',return_value=inspected), \
+                patch.object(closure,'verify_closure',return_value=provenance):
+            bundle=hosted.export_bundle(path,self.home/'new-delivery-bundle',root=self.root)
+        self.assertEqual(bundle['retainedProducer'],report['retainedProducer'])
+        return bundle
+
+    def test_hosted_bundle_authenticates_two_runs_and_rejects_provenance_substitution(self):
+        before=self.preserved();bundle=self.bundle()
+        current=dict(id=int(self.delivery),run_attempt=1,head_sha=self.sha,head_branch='main',path=retained.WORKFLOW,
+            event='workflow_dispatch',workflow_id=408460629,run_number=37,created_at='2026-11-09T21:00:00Z',
+            status='in_progress',conclusion=None,repository=dict(id=1428996648),head_repository=dict(id=1428996648))
+        jobs=[]
+        for i,name in enumerate(('guard','controller','enroll','builder','signer')):
+            jobs.append(dict(id=i+1,name=name,run_id=int(self.delivery),head_sha=self.sha,run_attempt=1,
+                status='in_progress' if name=='signer' else 'completed',conclusion=None if name=='signer' else 'success',
+                runner_group_id=5,runner_name='mustang-'+self.delivery,labels=[self.lane['runnerLabel']]))
+        def api(path):
+            self.assertIn('/'+self.delivery,path)
+            return copy.deepcopy(dict(total_count=len(jobs),jobs=jobs) if '/jobs?' in path else current)
+        env=dict(self.env,GITHUB_JOB='signer',EXPECTED_FULL_BUNDLE_SHA256='a'*64)
+        checked=hosted.authenticate_full_run(bundle,env,api=api,root=self.root)
+        self.assertTrue(checked['actionsRunIdentityVerified']);self.assertFalse(checked['otaAdmitted'])
+        self.assertTrue(checked['retainedProducerVerified']);self.assertEqual(checked['retainedProducerRunId'],retained.RUN)
+        self.assertEqual(before,self.preserved())
+        self.assertEqual(bundle['fullRunSource']['nativeReceipt']['run']['runId'],retained.RUN)
+        self.assertEqual(bundle['retainedGuest']['run']['runId'],self.delivery)
+        self.assertEqual(bundle['clockAllocation'],self.allocation)
+        for broken in (dict(retainedProducer=dict(bundle['retainedProducer'],source=self.sha)),
+                       dict(retainedGuest=dict(bundle['retainedGuest'],controllerOwnershipSha256='0'*64)),
+                       dict(sourceSha=retained.SOURCE),dict(runId=retained.RUN)):
+            with self.subTest(change=broken),self.assertRaises(ValueError):
+                hosted.authenticate_full_run(dict(bundle,**broken),env,api=api,root=self.root)
+        self.actual['conclusion']='cancelled'
+        with self.assertRaises(ValueError):hosted.authenticate_full_run(bundle,env,api=api,root=self.root)
+
+    def test_retained_clock_and_edge_bindings_survive_publication_receipt_shape(self):
+        bundle=self.bundle()
+        # The public stage carries delivery identity plus the old producer proof,
+        # never a newly issued allocation for the new run.
+        receipt=dict(clockAllocation=bundle['clockAllocation'],build=self.build,timestamp=self.stamp,
+            runId=self.delivery,runAttempt='1',sourceSha=self.sha,retainedProducer=bundle['retainedProducer'])
+        retained.mustang_clock.require_bundle(receipt,self.lane,self.cfg,self.root)
+        with self.assertRaises(ValueError):
+            retained.mustang_clock.require_bundle(dict(receipt,retainedProducer=None),self.lane,self.cfg,self.root)
+        hosted.require_full_bundle_source(bundle,self.root)
+        wrong=copy.deepcopy(bundle);wrong['unsignedRaisedEdge']['binding']['recipeSource']=retained.SOURCE
+        with self.assertRaises(ValueError):hosted.require_full_bundle_source(wrong,self.root)
+
+    def test_retained_hosted_staging_keeps_producer_and_delivery_separate(self):
+        bundle=self.bundle();unsigned=self.home/'new-delivery-bundle'/bundle['unsigned']['file']
+        signed=self.home/'signed-target_files.zip';shutil.copyfile(unsigned,signed)
+        public=self.home/'public';public.mkdir();ota_path=public/f'mustang-ota_update-{self.build}.zip'
+        with zipfile.ZipFile(ota_path,'w') as zipped:
+            zipped.writestr('META-INF/com/android/metadata',
+                f'pre-device=mustang\npost-build-incremental={self.build}\npost-timestamp={self.stamp}\npost-build=brand/mustang/{self.build}:user/release-keys\nota-type=AB\n')
+        (public/'releasekey.x509.pem').write_bytes(b'public certificate fixture')
+        avb=public/'avb_pkmd.bin';avb.write_bytes(b'public AVB fixture')
+        binary=self.home/'extracted/bin';binary.mkdir(parents=True)
+        for name in ('check_ota_package_signature','delta_generator'):(binary/name).write_bytes(b'NEVER EXECUTE: verifier fixture')
+        java=self.home/'jdk';java.mkdir()
+        self.cfg.update(candidateContinuity='os/build-only/mustang-candidate-continuity-20261107.json',status='bound')
+        (self.root/'os/build-only/mustang-runtime.json').write_text(json.dumps(self.cfg))
+        (self.root/self.cfg['candidateContinuity']).write_bytes((ROOT/self.cfg['candidateContinuity']).read_bytes())
+        pins=ota.identities();actual_digest=ota.digest;commands=[]
+        def digest(path):return pins['avbPublicKeySha256'] if Path(path)==avb else actual_digest(path)
+        def verify(argv,**kwargs):
+            commands.append(argv);self.assertEqual(argv[0],str(binary/'check_ota_package_signature'))
+            self.assertNotIn('GH_TOKEN',kwargs['env']);return SimpleNamespace(returncode=0)
+        stage=self.home/'staged'
+        live_read=ota.read
+        def read(path):
+            return self.cfg if Path(path)==ROOT/'os/build-only/mustang-runtime.json' else live_read(path)
+        with patch.object(ota,'read',side_effect=read),patch.object(ota,'identities',return_value=pins), \
+                patch.object(ota,'fingerprint',return_value='f'*64),patch.object(ota,'digest',side_effect=digest), \
+                patch.object(ota.host_secrets,'certificate_sha256',return_value=pins['otaCertificateSha256']), \
+                patch.object(ota,'observe_target',return_value={'packagedUpdaterVerified':True}):
+            receipt=ota.stage_hosted(bundle,unsigned,signed,ota_path,public,binary.parent,java,stage,
+                root=self.root,execute=verify)
+            self.assertEqual(ota.verify_staged(stage,ota.config(),publication=False),receipt)
+        self.assertTrue(commands);self.assertEqual(receipt['candidateSource'],retained.SOURCE)
+        self.assertEqual(receipt['recipeSource'],self.sha);self.assertEqual(receipt['runId'],self.delivery)
+        self.assertEqual(receipt['compileRunId'],retained.RUN);self.assertEqual(receipt['clockAllocation'],self.allocation)
+        self.assertEqual(receipt['roseEdge']['signed']['binding']['candidateSource'],retained.SOURCE)
 
 
 if __name__=='__main__':unittest.main()

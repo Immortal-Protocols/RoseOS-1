@@ -10,6 +10,10 @@ run-name: mustang-dedicated-ota ${{ github.run_id }}
 on:
   workflow_dispatch:
     inputs:
+      retained_compile_run:
+        description: Exact retained producer 42664204892 only; recheck and deliver without Make or allocation
+        type: string
+        default: ''
       publish:
         description: Public publication needs separate recorded authority; default is private
         type: boolean
@@ -48,6 +52,7 @@ concurrency:
   group: mustang-ota
   cancel-in-progress: false
 env:
+  MUSTANG_RETAINED_COMPILE_RUN: ${{ inputs.retained_compile_run }}
   MUSTANG_PUBLISH: ${{ inputs.publish }}
   MUSTANG_DRY_RUN: ${{ inputs.dry_run || inputs.source_only || inputs.hostdeps_only || inputs.lock_admin_only || inputs.factory_only || inputs.vendor_only || inputs.otatools_only }}
   MUSTANG_HOSTDEPS_ONLY: ${{ inputs.hostdeps_only }}
@@ -250,20 +255,27 @@ jobs:
       if: inputs.dry_run == false
       run: python3 scripts/mustang-dedicated.py baseline --out "$RUNNER_TEMP/mustang-baseline.json"
     - name: Admit exact fresh app artifact or prepositioned private archive
-      if: inputs.dry_run == false
+      if: inputs.dry_run == false && inputs.retained_compile_run == ''
       id: apps
       env:
         GH_TOKEN: ${{ github.token }}
       run: python3 scripts/mustang-dedicated.py fetch-inputs --out "$RUNNER_TEMP/mustang-inputs"
     - name: Prepare, allocate, integrate and compile once on Mustang disk
-      if: inputs.dry_run == false
+      if: inputs.dry_run == false && inputs.retained_compile_run == ''
       env:
         APP_INPUTS: ${{ steps.apps.outputs.inputs_dir }}
       run: python3 scripts/mustang-dedicated.py produce --dir "$APP_INPUTS"
     - name: Require unsigned raised-edge proof before the hosted signing bundle
       if: inputs.dry_run == false
       id: collect
-      run: python3 scripts/mustang-dedicated.py collect
+      env:
+        GH_TOKEN: ${{ inputs.retained_compile_run != '' && github.token || '' }}
+      run: |
+        if [[ -n "$MUSTANG_RETAINED_COMPILE_RUN" ]]; then
+          python3 scripts/mustang-dedicated.py recover
+        else
+          python3 scripts/mustang-dedicated.py collect
+        fi
     - name: Bundle the same-run unsigned target-files, otatools, and JDK bytes
       if: inputs.dry_run == false
       id: bundle

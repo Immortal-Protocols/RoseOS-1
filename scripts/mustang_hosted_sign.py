@@ -205,8 +205,16 @@ def require_full_bundle_source(bundle,root=ROOT):
     import mustang_bootstrap_proof as source_proof
     lane=mustang_lane.configuration();bound=bundle.get('fullRunSource',{})
     native=bound.get('nativeReceipt',{});copied=bound.get('copyReceipt',{})
-    run=dict(runId=bundle['runId'],runAttempt=str(bundle['runAttempt']),source=bundle['sourceSha'],
+    import mustang_retained
+    compile_run,compile_attempt,compile_source=mustang_retained.compile_context(bundle)
+    run=dict(runId=compile_run,runAttempt=compile_attempt,source=compile_source,
         workflow='Immortal-Protocols/RoseOS-1/'+lane['workflow']+'@refs/heads/main')
+    if bundle.get('retainedProducer') is not None:
+        mustang_retained.compatible(bundle['sourceSha'],root)
+        delivery=dict(runId=str(bundle['runId']),runAttempt=str(bundle['runAttempt']),source=bundle['sourceSha'],
+            workflow=run['workflow'])
+        mustang_retained.require_guest(bundle.get('retainedGuest',{}),lane,delivery,
+            read_json(Path(root)/'os/build-only/mustang-runtime.json'),root)
     manifest=Path(root)/'os/pinned-manifest.xml'
     candidate=native.get('sourceCandidate',{})
     if native.get('schema')!='roseos.mustang-bootstrap-collector.v1' or native.get('run')!=run \
@@ -222,8 +230,8 @@ def require_full_bundle_source(bundle,root=ROOT):
             or copied.get('portableInventorySha256')!=candidate.get('portableInventorySha256'):
         raise ValueError('full-run source observation/copy receipt binding differs')
     import mustang_edge
-    bound_edge=mustang_edge.binding(bundle['sourceSha'],bundle['sourceSha'],bundle['build'],bundle['timestamp'],
-        bundle['runId'],str(bundle['runAttempt']),bundle['runId'],str(bundle['runAttempt']))
+    bound_edge=mustang_edge.binding(compile_source,bundle['sourceSha'],bundle['build'],bundle['timestamp'],
+        bundle['runId'],str(bundle['runAttempt']),compile_run,compile_attempt)
     mustang_edge.require(bundle.get('unsignedRaisedEdge'),'unsigned',bound_edge,bundle['unsigned'])
     return bound
 
@@ -241,10 +249,21 @@ def authenticate_full_run(bundle,env,*,api=None,root=ROOT):
     if not 0<len(encoded)<=8192:raise ValueError('full-run controller ownership absent')
     try:raw=base64.b64decode(encoded,validate=True);owner=json.loads(raw)
     except (TypeError,ValueError):raise ValueError('full-run controller ownership malformed') from None
-    run=bound['nativeReceipt']['run']
+    retained=bundle.get('retainedProducer') is not None
+    observation=bundle['retainedGuest'] if retained else bound['nativeReceipt']
+    run=observation['run']
+    if retained:
+        import mustang_retained
+        authenticated,documents,_raw=mustang_retained.authenticate(env,root)
+        original=documents['candidate-receipt.json'];outputs=documents['compile-completed.json']['outputs']
+        if authenticated!=bundle['retainedProducer'] or original['allocation']!=bundle.get('clockAllocation') \
+                or bound['nativeReceipt']!=original['stages']['bootstrap-source']['result'] \
+                or bound['copyReceipt']!=original['stages']['source-copy']['result'] \
+                or any(bundle['unsigned'][key]!=outputs['artifacts']['targetFiles'][key] for key in ('sha256','sizeBytes')):
+            raise ValueError('retained signing bundle differs from the authenticated producer archive')
     if owner.get('schema')!=collector.controller.SCHEMA or owner.get('run')!=run \
             or not mustang_lane.owned_start(owner.get('owner'),lane) \
-            or hashlib.sha256(raw).hexdigest()!=bound['nativeReceipt'].get('controllerOwnershipSha256'):
+            or hashlib.sha256(raw).hexdigest()!=observation.get('controllerOwnershipSha256'):
         raise ValueError('full-run controller ownership differs')
     api=api or collector.github_reader(run,env.get('GH_TOKEN',''))
     base='/repos/Immortal-Protocols/RoseOS-1/actions/runs/'+run['runId'];actual=api(base)
@@ -254,12 +273,17 @@ def authenticate_full_run(bundle,env,*,api=None,root=ROOT):
             or actual.get('status')!='in_progress' or actual.get('conclusion') is not None \
             or any((actual.get(k) or {}).get('id')!=1428996648 for k in ('repository','head_repository')):
         raise ValueError('full-run Actions metadata differs')
+    if retained and (actual.get('workflow_id')!=408460629 or type(actual.get('run_number')) is not int \
+            or actual['run_number']<=36 or int(run['runId'])<=int(mustang_retained.RUN) \
+            or mustang_retained.mustang_clock.utc(actual.get('created_at'))<=
+                mustang_retained.mustang_clock.utc('2026-11-09T17:23:51Z')):
+        raise ValueError('retained delivery Actions epoch/order differs')
     if 'clockAllocation' in bundle:
         import mustang_clock
         cfg=read_json(Path(root)/'os/build-only/mustang-runtime.json')
         proof=mustang_clock.require_bundle(bundle,lane,cfg,root)
         ctx=proof['context']
-        if (actual.get('workflow_id'),actual.get('run_number'),actual.get('created_at')) != (
+        if not retained and (actual.get('workflow_id'),actual.get('run_number'),actual.get('created_at')) != (
                 ctx['workflowId'],ctx['runNumber'],ctx['createdAt']):
             raise ValueError('UTC-hour allocation differs from authenticated Actions run')
     jobs=collector.listing(api(base+'/attempts/1/jobs?per_page=100'),'jobs');observed={}
@@ -284,7 +308,11 @@ def authenticate_full_run(bundle,env,*,api=None,root=ROOT):
     for job in jobs:
         if job.get('name') in ('source','hostdeps','lock-admin','factory','vendor','otatools') and job.get('conclusion')!='skipped':
             raise ValueError('full-run competing preparation scope selected')
-    return dict(actionsRunIdentityVerified=True,producerJobIds=observed,completedRunVerified=False,otaAdmitted=False)
+    result=dict(actionsRunIdentityVerified=True,producerJobIds=observed,completedRunVerified=False,otaAdmitted=False)
+    if retained:
+        result.update(retainedProducerVerified=True,retainedProducerRunId=mustang_retained.RUN,
+                      retainedProducerArtifactId=mustang_retained.ARTIFACT['id'])
+    return result
 
 
 def full_bundle_gate(bundle,path,env,root):
@@ -755,7 +783,15 @@ def full_run_tools(collection,inputs,root):
     if not re.fullmatch(r'[1-9][0-9]{0,19}',run) or attempt!='1' \
             or collection.get('builder')!=lane['vm'] or collection.get('workflow')!=lane['workflow']:
         raise ValueError('full-run bundle differs from the dedicated producer')
-    source=paths['storageRoot']/f'mustang-prep-{run}-1/source'
+    retained=collection.get('retainedProducer')
+    if retained is not None:
+        import mustang_retained
+        mustang_retained.proof_identity(retained)
+        if str(collection.get('compileRunId'))!=mustang_retained.RUN or collection.get('compileSource')!=mustang_retained.SOURCE:
+            raise ValueError('retained collection compile identity differs')
+    compile_run=str(collection.get('compileRunId')) if retained is not None else run
+    compile_source=collection['compileSource'] if retained is not None else collection['collectorSource']
+    source=paths['storageRoot']/f'mustang-prep-{compile_run}-1/source'
     if collection['outputs'].get('outDir')!=str(source/f"out-mustang-build-{collection['build']}"):
         raise ValueError('full-run bundle source path differs')
     identity=collection['outputs'].get('actualBuildIdentity',{})
@@ -799,8 +835,10 @@ def full_run_tools(collection,inputs,root):
         import mustang_clock
         allocation=collection.get('candidate',{}).get('allocation')
         mustang_clock.require_allocation(allocation,lane,cfg,root=root,
-            env=dict(GITHUB_RUN_ID=run,GITHUB_RUN_ATTEMPT=attempt,GITHUB_SHA=collection['collectorSource']),timestamp=stamp)
+            env=dict(GITHUB_RUN_ID=compile_run,GITHUB_RUN_ATTEMPT='1',GITHUB_SHA=compile_source),timestamp=stamp)
         clock_fields['clockAllocation']=allocation
+    if retained is not None:
+        clock_fields.update(retainedProducer=retained,retainedGuest=collection['retainedGuest'])
     return dict(**clock_fields,otatools=tools,jdk=jdk,generateRelease=generated,otatoolsExtractedBytes=inspected['expandedBytes'],
         jdkExtractedBytes=jdk_expanded,toolQualification=dict(evidence=qualification.EVIDENCE,
         inspection=qualification.INSPECTION,packageSha256=inspected['packageSha256'],inventorySha256=inspected['inventorySha256']),
@@ -1030,9 +1068,11 @@ def run_host_sign(source_root, release_dir, extracted, jdk_home, bundle, env, ho
     config_path.write_text(json.dumps(config, sort_keys=True) + '\n')
     sign_env = {k:v for k,v in env.items() if k not in ('GH_TOKEN','GITHUB_TOKEN',
         'ACTIONS_ID_TOKEN_REQUEST_TOKEN','ACTIONS_ID_TOKEN_REQUEST_URL')}
+    import mustang_retained
+    _compile_run,_compile_attempt,compile_source=mustang_retained.compile_context(bundle)
     sign_env.update(ROSE_RELEASE_DIR=str(release_dir), ROSE_SIGN_OTATOOLS=str(tools_archive),
                     BUILD_NUMBER=str(bundle.get('build') or '0'), BUILD_DATETIME=str(bundle.get('timestamp') or '0'),
-                    ROSE_CANDIDATE_SHA=bundle['sourceSha'])
+                    ROSE_CANDIDATE_SHA=compile_source)
     previous = Path.cwd()
     os.chdir(source_root)
     try:

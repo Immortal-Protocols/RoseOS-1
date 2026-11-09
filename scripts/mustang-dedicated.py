@@ -54,6 +54,10 @@ def reference(value, root=ROOT):
 def guard(lane, cfg, env, publish=False, root=ROOT, diff=None, dry_run=False):
     run=controller.invocation(lane,env)
     paths=mustang_paths.layout(lane)
+    import mustang_retained
+    if mustang_retained.selected(env):
+        if dry_run:raise ValueError('retained delivery cannot select a preparation-only scope')
+        mustang_retained.compatible(run['source'],root)
     if env.get('GITHUB_REPOSITORY_ID')!='1428996648':
         raise ValueError('dedicated workflow repository ID differs')
     if lane['workflow']!=WORKFLOW or lane['queue']!='mustang-ota' \
@@ -193,7 +197,7 @@ def host_identity(lane,filesystem_uuid,observe_id=metadata_id,execute=subprocess
     return paths
 
 
-DRY_RUN_BLOCKED=frozenset(('fetch-inputs','baseline','produce','collect','sign','_execute','stage','verify-staged','publish','report'))
+DRY_RUN_BLOCKED=frozenset(('fetch-inputs','baseline','produce','recover','collect','sign','_execute','stage','verify-staged','publish','report'))
 
 
 def refuse_dry_run(action):
@@ -226,6 +230,8 @@ def host_check(lane,cfg,observe_id=metadata_id,execute=subprocess.run):
     for tool in tools:
         if not isinstance(tool,str) or not Path(tool).is_file() or not os.access(tool,os.X_OK):
             raise ValueError('dedicated tool unavailable')
+    return dict(instanceId=observed,filesystemUuid=cfg['dataFilesystemUuid'],mount=cfg.get('dataMount'),
+        availableBytes=space.f_bavail*frsize,availableInodes=space.f_favail,totalInodes=space.f_files,euid=os.geteuid())
 
 
 class NoArtifactRedirect(urllib.request.HTTPRedirectHandler):
@@ -442,7 +448,7 @@ def verify(directory,lane,cfg,publish=False):
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('action',choices=('guard','host-check','fetch-inputs','baseline','produce','collect','sign',
+    parser.add_argument('action',choices=('guard','host-check','fetch-inputs','baseline','produce','recover','collect','sign',
         '_execute','stage','verify-staged','publish','report','ownership-output','cleanup-prepare','require-owned','preflight'))
     parser.add_argument('--dir'); parser.add_argument('--out'); parser.add_argument('--config')
     parser.add_argument('--ownership-record'); parser.add_argument('--publish',action='store_true')
@@ -502,6 +508,12 @@ def main():
         if not dry and os.environ['GCP_SIGNER_SERVICE_ACCOUNT']!=ota.module('mustang_route_identity','mustang-sign-package.py').SIGNER:
             raise ValueError('existing Mustang signer identity differs; no host start')
         values=dict(runner_group=cfg['runner']['groupName'],runner_label=lane['runnerLabel'])
+        import mustang_retained
+        if mustang_retained.selected(os.environ):
+            import mustang_bootstrap_collector
+            mustang_bootstrap_collector.full_scope(lane,os.environ,
+                mustang_bootstrap_collector.proof.deps.read_event(os.environ),retained=True)
+            mustang_retained.authenticate(os.environ,ROOT)
         if not dry and cfg.get('clockNumbering') is not None:
             import mustang_clock
             import mustang_bootstrap_collector
@@ -547,9 +559,13 @@ def main():
             if path.is_file() and not path.is_symlink(): shutil.copyfile(path,out/name)
         if args.dir and Path(args.dir).is_file(): shutil.copyfile(args.dir,out/'baseline.json')
     else:
-        host_check(lane,cfg)
+        facts=host_check(lane,cfg)
         if args.action=='host-check': return 0
-        if args.action=='fetch-inputs':
+        if args.action=='recover':
+            import mustang_retained, mustang_bootstrap_collector
+            mustang_retained.collect(lane,cfg,os.environ,
+                mustang_bootstrap_collector.proof.deps.read_event(os.environ),facts,ROOT)
+        elif args.action=='fetch-inputs':
             inputs=fetch_inputs(ROOT/cfg['appInputsRecord'],args.out,lane=lane,cfg=cfg,root=ROOT)
             ota.module('mustang_verify_apps','app-inputs-verify.py').verify(ROOT/cfg['appInputsRecord'],inputs,cfg['tools'])
             emit(inputs_dir=str(inputs))
@@ -560,6 +576,8 @@ def main():
                 factory=reference(cfg['baselineFactoryEvidence']) if cfg.get('baselineFactoryEvidence') is not None else None
                 ota.observe_baseline(args.out,lane,cfg['tools'],cfg.get('baselineTargetFiles'),factory=factory,runtime=cfg)
         elif args.action=='produce':
+            import mustang_retained
+            if mustang_retained.selected(os.environ):raise ValueError('retained delivery cannot run Make or allocate')
             # This process has no further authenticated download/signing work.
             # Do not forward job tokens or auth/env-output capabilities to Make
             # or vendor tools. Later steps get their normal fresh job environment.

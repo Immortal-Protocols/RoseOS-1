@@ -389,6 +389,7 @@ def require_bundle(bundle, lane, cfg, root=ROOT):
     record = bundle.get('clockAllocation')
     if not isinstance(record, dict) or record.get('build') != bundle.get('build'):
         raise ValueError('UTC-hour allocation proof missing from signing/staging bundle')
-    env = dict(GITHUB_RUN_ID=str(bundle['runId']), GITHUB_RUN_ATTEMPT=str(bundle['runAttempt']),
-        GITHUB_SHA=bundle['sourceSha'])
+    import mustang_retained
+    run,attempt,source=mustang_retained.compile_context(bundle)
+    env = dict(GITHUB_RUN_ID=run, GITHUB_RUN_ATTEMPT=attempt,GITHUB_SHA=source)
     return require_allocation(record, lane, cfg, root=root, env=env, timestamp=bundle['timestamp'])

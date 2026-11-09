@@ -442,10 +442,10 @@ def workflow_trust(text):
         if re.search(r'(?m)^  %s:\n' % kind, body):
             problems.append(kind)
     expressions = re.findall(r'\$\{\{(.*?)\}\}', body, re.DOTALL)
-    if any(re.search(r'(?<![\w.])(?:inputs\.(?!(?:publish|dry_run|source_only|hostdeps_only|lock_admin_only|factory_only|vendor_only|otatools_only)\b)|github\.event)', expression)
+    if any(re.search(r'(?<![\w.])(?:inputs\.(?!(?:publish|dry_run|source_only|hostdeps_only|lock_admin_only|factory_only|vendor_only|otatools_only|retained_compile_run)\b)|github\.event)', expression)
            for expression in expressions):
         problems.append('untrusted expression reaches the workflow')
-    if re.search(r'(?m)^[ ]+run:.*inputs\.(?:publish|dry_run|source_only|hostdeps_only|lock_admin_only|factory_only|vendor_only|otatools_only)', body):
+    if re.search(r'(?m)^[ ]+run:.*inputs\.(?:publish|dry_run|source_only|hostdeps_only|lock_admin_only|factory_only|vendor_only|otatools_only|retained_compile_run)', body):
         problems.append('workflow input is interpolated into a shell script')
     blocks = body.split('- uses: actions/checkout@')
     if len(blocks) < 2:

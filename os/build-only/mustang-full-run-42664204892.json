@@ -20,7 +20,7 @@
   "unsignedCompileComplete": true,
   "allocationReturned": true,
   "derivedClockBuild": "2611091700",
-  "derivedBuildBasis": "Authenticated dispatch created_at 2026-11-09T17:23:51Z and captured YYMMDDHH00 formatter; allocation archive bytes not downloaded.",
+  "derivedBuildBasis": "Confirmed by the hash-verified original receipt archive; build/time and output identities are now receipt evidence, not a new native-disk observation.",
   "failedStage": "post-compile collection",
   "observedException": "mustang_factory_host.Refused: lock_unavailable: the shared builder lock cannot be opened",
   "sourceCause": "Dedicated collector selected host-factory-package.shared_lock, which opens O_RDWR|O_CREAT, instead of the established existing canonical read-only FD/flock adapter. The failure occurs on entering that lock before collection of output bytes.",
@@ -58,8 +58,48 @@
     "id": 13708411788,
     "sizeBytes": 30778,
     "metadataDigest": "sha256:0a35e679c31667151814357b9e1ba5a11c84b33035ac178aaa1159dba355570a",
-    "bytesVerified": false
+    "bytesVerified": true,
+    "verification": "Authorized GitHub connector ZIP download; exact byte count and SHA-256, required receipt cohort and observed-metadata authentication contract verified offline. No held resource retried.",
+    "receiptSha256": {
+      "candidate-receipt.json": "851d3e26747f787ddfa81428981f962139f410e7ccb5a622c3aaf7977c7d661a",
+      "compile-completed.json": "2ae49c174bf1e58fd15cb1d9724bba7ea36f40a25519f3ffb6d2850d7b785f38",
+      "allocation.json": "5f8574ee16cbc55345f38533d44880ce4fa0974608796f893dc16d249cf41ba1",
+      "compile-collection.json": "ce1acc8e3b1b2f664df1d53b731988716abbc5ad7958f48b472ad6af04b8adb3"
+    }
   },
-  "preservation": "No source/output/lock/journal mutation or runtime retry performed by diagnosis. Completed logs and collection admission establish the successful compile; no fresh artifact-byte or signature/publication proof is claimed.",
-  "remedy": "Use existing read-only canonical lock adapter for dedicated collection/sign/package, preserving legacy defaults and all source/output admission checks. Dedicated retained delivery is not currently implemented: hosted signer binds source, clock, controller, native proof and producer to its one in-progress run. Do not substitute old output or route via retired shared capacity."
+  "preservation": "No production source/output/lock/journal mutation or runtime retry performed by diagnosis. Completed logs and hash-verified receipt cohort establish successful unsigned compile. Current native bytes/journal still require read-only admission; no signature or publication proof is claimed.",
+  "remedy": "Use existing read-only canonical lock adapter for dedicated collection/sign/package, preserving legacy defaults and all source/output admission checks. Dedicated retained delivery is not currently implemented: hosted signer binds source, clock, controller, native proof and producer to its one in-progress run. Do not substitute old output or route via retired shared capacity.",
+  "confirmedCompiledIdentityFromReceipt": {
+    "build": "2611091700",
+    "device": "mustang",
+    "timestamp": "1794248529"
+  },
+  "makeReturncodeFromVerifiedReceipt": 0,
+  "declaredOutputIdentitiesFromVerifiedReceipt": {
+    "otatools": {
+      "path": "/mnt/disks/mustang-data/roseos/rose-actions/mustang-prep-42664204892-1/source/out-mustang-build-2611091700/soong/.intermediates/build/make/tools/otatools_package/otatools-package/linux_glibc_x86_64/gen/otatools.zip",
+      "sha256": "7030e3319ef08f46eb43ef25bc9d43521b2acc404335beb907cb2a6f1356b49a",
+      "sizeBytes": 536804921,
+      "state": "collected"
+    },
+    "targetFiles": {
+      "path": "/mnt/disks/mustang-data/roseos/rose-actions/mustang-prep-42664204892-1/source/out-mustang-build-2611091700/target/product/mustang/obj/PACKAGING/target_files_intermediates/mustang-target_files.zip",
+      "sha256": "c9ddbb123af3f41e1ae8c803fc52ba1fe4b64b2a3386c0c91ab015f468ec76b3",
+      "sizeBytes": 4340380118,
+      "state": "collected"
+    },
+    "vendorBootImage": {
+      "path": "/mnt/disks/mustang-data/roseos/rose-actions/mustang-prep-42664204892-1/source/out-mustang-build-2611091700/target/product/mustang/vendor_boot.img",
+      "sha256": "7ee900479a39544415144f4ed766572fced6e5de4cf609bc37ecfb8c376d6d80",
+      "sizeBytes": 67108864,
+      "state": "collected"
+    },
+    "vendorKernelBootImage": {
+      "path": "/mnt/disks/mustang-data/roseos/rose-actions/mustang-prep-42664204892-1/source/out-mustang-build-2611091700/target/product/mustang/vendor_kernel_boot.img",
+      "sha256": "3dca37d90a5e1670463ed7aa6c929b8c5448f5cc954439ebd8248066d551d819",
+      "sizeBytes": 67108864,
+      "state": "collected"
+    }
+  },
+  "currentNativeOutputBytesRehashed": false
 }
