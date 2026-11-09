@@ -64,7 +64,10 @@ dedicated lane, holds the existing read-only canonical lock, validates the
 committed successful vendor/host bindings, and matches their actual on-disk
 receipt bytes before calling the core. It records the builder/run as declared
 metadata. It does not establish the guest, filesystem UUID or run identity.
-There is no receipt writer or live dispatch path.
+The separate [inactive collector](MUSTANG-BOOTSTRAP-COLLECTOR.md) now integrates
+the candidate with guarded guest checks and immutable receipts. It is tested
+with offline fixtures and has no live dispatch path. The collector calls the
+internal already-locked reader so the same lock spans the entire observation.
 
 ## Limits and remaining proof
 
@@ -72,8 +75,11 @@ The ceilings are 7,200 seconds, 2,000,000 selected/expected entries and 150 GiB
 of source-data reads. Git output is bounded to 128 MiB per command and 512 MiB
 in total, commit data to 4 MiB, each Git command to 60 seconds, and manifest,
 recipe and policy inputs to 4 MiB.
-Build-definition scans have a 16 MiB per-file limit. Smaller bounds may be used;
-raising these ceilings requires a source change. These are proposal ceilings,
+Build-definition scans have a 16 MiB per-file limit. Smaller bounds may be used.
+Symlink text reads, including intermediate link resolution, count toward the
+source-data byte limit. A collector can pass an earlier overall deadline;
+the source reader cannot restart that time budget.
+Raising these ceilings requires a source change. These are proposal ceilings,
 not measurements of Mustang's actual tree. Deadlines are checked between reads;
 they do not make a blocked kernel filesystem operation cancellable.
 

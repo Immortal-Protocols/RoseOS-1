@@ -32,7 +32,7 @@ def shared(path,*,expected):
         try:fcntl.flock(handle,fcntl.LOCK_EX|fcntl.LOCK_NB)
         except BlockingIOError:
             raise LockUnavailable('dedicated canonical lock is held') from None
-        yield
+        yield handle
 
 
 def probe(path,*,expected):
