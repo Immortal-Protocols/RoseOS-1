@@ -3,25 +3,35 @@
 
 After a successful push-to-main run of the relevant CI ('App offline tests', which runs the Rose Agent suites), the
 hosted job .github/workflows/agent-beta-auto.yml runs `dispatch` with only actions:write on its short-lived
-GITHUB_TOKEN. It holds no stored token and no secret. It dispatches the existing os-release.yml app-only route once:
-  {mode: app-only, candidate_sha: <the exact tested SHA>, apps: auto, app_publish: true} on ref main.
-The builder then allocates a fresh Rose Agent version above every consumed one, or skips when these sources are already
-published (scripts/release-allocate.py app). The shared os-release-frankel FIFO queue and host lock serialize it with
-every OS run.
+GITHUB_TOKEN. It holds no stored token and no secret. It dispatches the existing os-release.yml hosted Agent route
+(1F) once:
+  {mode: agent-hosted, candidate_sha: <the exact tested SHA>, app_publish: true} on ref main.
+agent-hosted builds its own dispatch commit, so its guard admits the pin only as exactly that commit, and this
+dispatcher dispatches only while main's head is still the tested SHA. The route then holds one fresh Rose Agent
+version in the shared pixel-ota ledger for that run, or skips when these sources are already published
+(scripts/agent-hosted.py reserve). It runs on GitHub-hosted runners in os-release's own hosted Agent queue
+(os-release-agent-hosted), with no builder, host lock or OS run; the shared ledger's create-if-absent ref, not a queue,
+keeps its version apart from every builder allocation. The builder's app-only apps=auto route is unchanged and stays
+available to a manual dispatch.
 
 `dispatch` dispatches only when every condition holds; otherwise it exits 0 and says why:
-  - the repository variable AGENT_BETA_AUTO is exactly 'on' (the activation switch; anything else is off);
+  - the repository variable AGENT_BETA_AUTO is exactly 'on' (the activation switch; anything else is off, and off
+    is decided first: no API request is made at all);
   - the CI run, read back from the API rather than trusted from the event, is 'App offline tests' from
     .github/workflows/app-tests.yml, event push, branch main, completed with conclusion success;
   - no newer push-to-main run of that CI is pending or succeeded (coalescing: the newest tested SHA releases once);
   - no os-release run already carries this SHA's auto run-name (duplicate events);
   - Rose Agent sources (os/latest-beta/allocation.json, dev.pixel.voice) changed since the newest successful
-    'Agent Beta auto <sha>' run, read from the compare API; unchanged content is skipped before any host starts.
-    A first auto release, an unreadable or truncated (300+ files) comparison or a non-ancestor dispatches anyway:
-    the builder's allocator still skips sources that are already published.
+    'Agent Beta auto <sha>' run of either route, read from the compare API; unchanged content is skipped before any
+    runner starts. A first auto release, an unreadable or truncated (300+ files) comparison or a non-ancestor
+    dispatches anyway: the hosted reserve still skips sources that are already published;
+  - main's head, read last, right before the one request, is still the tested SHA. Otherwise the run is superseded:
+    nothing untested is dispatched, and when the newer commits touched no path of that CI (so no newer CI run comes)
+    these changes wait for the next App offline tests run or a manual agent-hosted dispatch.
 It dispatches once. An uncertain outcome is looked for once and otherwise fails visibly; it never retries blindly.
 
   dispatch   env: GITHUB_API_URL, GITHUB_REPOSITORY, GH_TOKEN, CI_RUN_ID, AGENT_BETA_AUTO
+The transport (api, read, Refused) is shared with scripts/mustang-ota-auto.py and is unchanged by the hosted route.
 Exit status: 0 dispatched or deliberately not dispatched, 1 refused or uncertain, 2 invalid input.
 """
 import argparse
@@ -39,6 +49,8 @@ SHA = re.compile(r'[0-9a-f]{40}')
 ROOT = Path(__file__).resolve().parents[1]
 ALLOCATION = 'os/latest-beta/allocation.json'
 AUTO_PREFIX = 'Agent Beta auto '
+MODE = 'agent-hosted'
+OFF = 'off: repository variable AGENT_BETA_AUTO is not on'
 
 
 class Refused(Exception):
@@ -72,7 +84,7 @@ def read(env, path, opener, what):
 def decide(ci, newer_runs, existing_titles, switch):
     """(sha, None) to dispatch, or (None, reason)."""
     if switch != 'on':
-        return None, 'off: repository variable AGENT_BETA_AUTO is not on'
+        return None, OFF
     if (ci.get('name'), ci.get('path'), ci.get('event'), ci.get('head_branch')) != (CI_NAME, CI_PATH, 'push', 'main'):
         return None, 'not relevant: only a push-to-main App offline tests run releases'
     if (ci.get('status'), ci.get('conclusion')) != ('completed', 'success'):
@@ -114,7 +126,18 @@ def unchanged_since(env, sha, release_runs, sources, opener):
     return None if changed else previous
 
 
+def main_head(env, opener):
+    """The commit main points at now: the one a dispatch on ref main runs, and so the one agent-hosted builds."""
+    found = read(env, '/git/ref/heads/main', opener, 'main_ref').get('object')
+    sha = found.get('sha') if isinstance(found, dict) else None
+    if not isinstance(sha, str) or not SHA.fullmatch(sha):
+        raise Refused('main_ref_unreadable: main has no full head SHA; nothing dispatched')
+    return sha
+
+
 def dispatch(env, opener=urllib.request.urlopen, pause=time.sleep, sources=None):
+    if env.get('AGENT_BETA_AUTO', '') != 'on':
+        return None, OFF  # the switch first: while it is off, nothing is read and nothing is sent
     run_id = env.get('CI_RUN_ID', '')
     if not run_id.isdigit():
         raise Refused('invalid: CI_RUN_ID')
@@ -131,7 +154,11 @@ def dispatch(env, opener=urllib.request.urlopen, pause=time.sleep, sources=None)
     previous = unchanged_since(env, sha, runs_now, voice_sources() if sources is None else sources, opener)
     if previous:
         return None, f'unchanged: no Rose Agent source changed since {AUTO_PREFIX}{previous}'
-    body = {'ref': 'main', 'inputs': {'mode': 'app-only', 'candidate_sha': sha, 'apps': 'auto', 'app_publish': 'true'}}
+    head = main_head(env, opener)  # last, right before the one request: the run builds the commit main is at
+    if head != sha:
+        return None, (f'superseded: main moved to {head[:12]} after the tested {sha[:12]}; '
+                      'agent-hosted builds only its dispatch commit, so nothing is dispatched')
+    body = {'ref': 'main', 'inputs': {'mode': MODE, 'candidate_sha': sha, 'app_publish': 'true'}}
     try:
         status, _ = api(env, 'POST', f'/actions/workflows/{WORKFLOW}/dispatches', body, opener=opener)
     except urllib.error.HTTPError as error:

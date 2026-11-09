@@ -22,8 +22,9 @@ committed value comes from os/release-pipeline/agent/hosted.json; nothing here r
       names is read, with the same helper the signing uses, into an owner-only RAM directory that is overwritten and
       removed at once. The nonsecret receipt names each secret and whether it was read; no payload, size or digest.
   reserve --out DIR
-      From the dispatch commit (GITHUB_SHA): either the newest published rose-agent release already has these Rose Agent
-      sources (app_skip=true; nothing is reserved), or one fresh versionCode above everything consumed (the shared
+      From the dispatch commit (GITHUB_SHA; a candidate_sha pin, the automatic dispatcher's tested SHA, must be exactly
+      that commit, as the guard also requires): either the newest published rose-agent release already has these Rose
+      Agent sources (app_skip=true; nothing is reserved), or one fresh versionCode above everything consumed (the shared
       ledger's reservations and its highest builder floor, every pixel-ota release including drafts, the committed
       Frankel config and allocation records), derived as release-allocate.py's version-only candidate and held
       atomically in the shared ledger (scripts/app_reservation_store.py) for this run. It refuses with exit 4 while the
@@ -285,6 +286,8 @@ def reserve(out, env, cfg, ledger, releases_fetch, clock=time.time, repo=ROOT):
     source = env.get('GITHUB_SHA', '')
     if not re.fullmatch(r'[0-9a-f]{40}', source):
         raise Refused('GITHUB_SHA is not a commit')
+    if env.get('CANDIDATE_SHA', '') not in ('', source):
+        raise Refused('candidate_sha is not this run\'s dispatch commit; nothing is reserved')
     store = cfg['reservation']['store']
     run_owner = ledger_store.owner(env)
     out = Path(out)

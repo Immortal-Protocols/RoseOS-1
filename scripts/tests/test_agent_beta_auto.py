@@ -41,9 +41,9 @@ class Response:
 
 
 class FakeGitHub:
-    def __init__(self, ci=CI, ci_runs=(), release_runs=(), dispatch=204, appear=True, compare=None):
+    def __init__(self, ci=CI, ci_runs=(), release_runs=(), dispatch=204, appear=True, compare=None, main=SHA):
         self.ci, self.ci_runs, self.release_runs, self.dispatch, self.appear = ci, list(ci_runs), list(release_runs), dispatch, appear
-        self.compare = compare
+        self.compare, self.main = compare, main
         self.calls = []
 
     def __call__(self, request, timeout):
@@ -64,6 +64,8 @@ class FakeGitHub:
             return Response(200, {'workflow_runs': self.release_runs})
         if '/compare/' in url and self.compare is not None:
             return Response(200, self.compare)
+        if url.endswith('/git/ref/heads/main') and self.main is not None:
+            return Response(200, {'ref': 'refs/heads/main', 'object': {'sha': self.main, 'type': 'commit'}})
         return Response(404)
 
     def posts(self):
@@ -97,12 +99,29 @@ class Dispatch(unittest.TestCase):
                 self.assertEqual(self.run_dispatch(gh), (SHA, None), why)
                 self.assertEqual(len(gh.posts()), 1)
 
-    def test_a_healthy_main_ci_dispatches_the_app_route_once_for_the_tested_sha(self):
+    def test_a_healthy_main_ci_dispatches_the_hosted_route_once_for_the_tested_sha(self):
         gh = FakeGitHub()
         self.assertEqual(self.run_dispatch(gh), (SHA, None))
         (method, url, body), = gh.posts()
         self.assertTrue(url.endswith('/actions/workflows/os-release.yml/dispatches'))
-        self.assertEqual(body, {'ref': 'main', 'inputs': {'mode': 'app-only', 'candidate_sha': SHA, 'apps': 'auto', 'app_publish': 'true'}})
+        # Publication policy unchanged: an automatic Agent release publishes its own prerelease, as before.
+        self.assertEqual(body, {'ref': 'main', 'inputs': {'mode': 'agent-hosted', 'candidate_sha': SHA, 'app_publish': 'true'}})
+        # main's head is read last, right before the one request.
+        self.assertTrue(gh.calls[-2][1].endswith('/git/ref/heads/main'), gh.calls[-2])
+        self.assertEqual([c[0] for c in gh.calls[:-1]], ['GET'] * (len(gh.calls) - 1))
+
+    def test_a_moved_main_dispatches_nothing_untested(self):
+        # agent-hosted builds its dispatch commit, so a tested SHA that is no longer main's head is never dispatched.
+        gh = FakeGitHub(main='b' * 40)
+        self.assertEqual(self.run_dispatch(gh), (None, f'superseded: main moved to {"b" * 12} after the tested {SHA[:12]}; '
+                                                       'agent-hosted builds only its dispatch commit, so nothing is dispatched'))
+        self.assertEqual(gh.posts(), [])
+        for main, why in ((None, 'unreadable'), ('main', 'not a SHA'), (SHA.upper(), 'not a lowercase SHA')):
+            with self.subTest(why):
+                gh = FakeGitHub(main=main)
+                with self.assertRaisesRegex(aba.Refused, 'main_ref_unreadable'):
+                    self.run_dispatch(gh)
+                self.assertEqual(gh.posts(), [])
 
     def test_off_irrelevant_or_unhealthy_ci_never_dispatches(self):
         for change, env, reason in (
@@ -116,6 +135,8 @@ class Dispatch(unittest.TestCase):
                 self.assertIsNone(sha)
                 self.assertTrue(why.startswith(reason), why)
                 self.assertEqual(gh.posts(), [])
+                if reason == 'off':
+                    self.assertEqual(gh.calls, [], 'off reads and sends nothing')
 
     def test_a_newer_pending_or_successful_main_ci_coalesces(self):
         for newer, dispatched in (({'id': 501, 'status': 'in_progress', 'conclusion': None, 'head_sha': 'b' * 40}, False),
@@ -170,8 +191,15 @@ class Workflow(unittest.TestCase):
         self.assertEqual(re.findall(r'python3 (\S+)', WORKFLOW), ['scripts/agent-beta-auto.py'])
 
     def test_os_release_names_auto_app_runs_for_dedupe(self):
-        self.assertIn("inputs.mode == 'app-only' && inputs.apps == 'auto' && format('Agent Beta auto {0}', inputs.candidate_sha)", OS_RELEASE)
+        # Both routes' automatic runs share one title, so the duplicate and unchanged checks span the move to agent-hosted.
+        run_name = re.search(r'(?m)^run-name: (.+)$', OS_RELEASE)[1]
+        builder = "inputs.mode == 'app-only' && inputs.apps == 'auto' && format('Agent Beta auto {0}', inputs.candidate_sha)"
+        hosted = "inputs.mode == 'agent-hosted' && inputs.candidate_sha != '' && format('Agent Beta auto {0}', inputs.candidate_sha)"
+        self.assertIn(f'{builder} || {hosted} || ', run_name)
+        self.assertEqual(run_name.count("format('Agent Beta auto {0}'"), 2)  # the probe and a bare dispatch are not auto runs
+        self.assertLess(run_name.index(hosted), run_name.index("format('os-release {0} {1}'"))
         self.assertEqual(aba.run_name(SHA), f'Agent Beta auto {SHA}')
+        self.assertEqual(aba.MODE, 'agent-hosted')
 
 
 def job_starts(condition, context):
@@ -238,6 +266,48 @@ class TemporaryHold(unittest.TestCase):
             job_starts("a.b != 'push'", context)
 
 
+class BothHolds(unittest.TestCase):
+    """The source hold and the AGENT_BETA_AUTO switch both stay, and each one alone keeps the retargeted dispatcher from
+    sending anything: lifting either one is not enough."""
+    HELD = re.search(r'(?m)^    if: (.*)$', WORKFLOW)[1]
+
+    def test_the_source_hold_still_guards_the_only_place_the_retargeted_dispatcher_runs(self):
+        jobs = dict(re.findall(r'(?ms)^  ([\w-]+):\n(.*?)(?=^  [\w-]+:\n|\Z)', WORKFLOW.split('\njobs:\n', 1)[1]))
+        self.assertEqual(list(jobs), ['dispatch'])
+        self.assertIn('        run: python3 scripts/agent-beta-auto.py dispatch\n', jobs['dispatch'])
+        self.assertTrue(self.HELD.startswith('false && '), self.HELD)
+        for switch in ('on', 'off', ''):  # the variable cannot lift it
+            self.assertFalse(job_starts(self.HELD, {'github.event.workflow_run.event': 'push',
+                                                    'github.event.workflow_run.conclusion': 'success',
+                                                    'vars.AGENT_BETA_AUTO': switch}))
+        self.assertIn("'mode': MODE, 'candidate_sha': sha, 'app_publish': 'true'", (ROOT/'scripts/agent-beta-auto.py').read_text())
+
+    def test_without_the_source_hold_the_switch_alone_still_sends_nothing(self):
+        lifted = self.HELD.partition(' && ')[2]  # what deleting `false && ` would leave
+        self.assertTrue(job_starts(lifted, {'github.event.workflow_run.event': 'push',
+                                            'github.event.workflow_run.conclusion': 'success'}))
+        for switch in ('', 'off', 'On', 'ON', 'true', '1', 'yes', ' on', 'on ', None):
+            with self.subTest(switch=switch):
+                env = dict(ENV)
+                if switch is None:
+                    env.pop('AGENT_BETA_AUTO')
+                else:
+                    env['AGENT_BETA_AUTO'] = switch
+                gh = FakeGitHub()
+                self.assertEqual(aba.dispatch(env, opener=gh, pause=lambda s: None), (None, aba.OFF))
+                self.assertEqual(gh.calls, [], 'not one request, read or write')
+        self.assertIn('          AGENT_BETA_AUTO: ${{ vars.AGENT_BETA_AUTO }}\n', WORKFLOW)  # the switch is the variable
+
+    def test_the_cli_reads_the_switch_before_any_request(self):
+        import os
+        import subprocess
+        env = {k: v for k, v in os.environ.items() if k != 'AGENT_BETA_AUTO'}
+        env.update({k: v for k, v in ENV.items() if k != 'AGENT_BETA_AUTO'}, GITHUB_API_URL='http://127.0.0.1:9')
+        result = subprocess.run([sys.executable, str(ROOT/'scripts/agent-beta-auto.py'), 'dispatch'], env=env,
+                                capture_output=True, text=True, timeout=60)
+        self.assertEqual((result.returncode, json.loads(result.stdout)), (0, {'dispatched': None, 'reason': aba.OFF}))
+
+
 class RealGuard(unittest.TestCase):
     """The whole os-release guard step 'Candidate is an exact commit on main', run with the dispatcher's own payload.
     git is a stub that answers only the exact-commit-on-main ancestry check (MAIN_SHAS); everything else is the real
@@ -255,7 +325,8 @@ class RealGuard(unittest.TestCase):
         self.assertIn('git merge-base --is-ancestor "$CANDIDATE_SHA" origin/main', match[1], 'the exact-commit check is part of the step')
         return 'set -euo pipefail\n' + '\n'.join(line[10:] for line in match[1].splitlines()) + '\n'
 
-    def run_guard(self, inputs, on_main=(SHA,)):
+    def run_guard(self, inputs, on_main=(SHA,), dispatch_sha=SHA, attempt='1'):
+        """DISPATCH_SHA is the commit ref main pointed at when the dispatch was made: the run's GITHUB_SHA."""
         import os
         import subprocess
         import tempfile
@@ -264,7 +335,8 @@ class RealGuard(unittest.TestCase):
             git.write_text('#!/bin/sh\n[ "$1 $2 $4" = "merge-base --is-ancestor origin/main" ] || exit 97\n'
                            'case " $MAIN_SHAS " in *" $3 "*) exit 0;; *) exit 1;; esac\n')
             git.chmod(0o755)
-            env = dict(self.DEFAULTS, PATH=f'{tmp}:{os.environ["PATH"]}', GITHUB_SHA='f' * 40, MAIN_SHAS=' '.join(on_main))
+            env = dict(self.DEFAULTS, PATH=f'{tmp}:{os.environ["PATH"]}', GITHUB_SHA=dispatch_sha, MAIN_SHAS=' '.join(on_main),
+                       GITHUB_RUN_ATTEMPT=attempt)
             for key, value in inputs.items():
                 env[self.INPUT_ENV[key]] = value
             return subprocess.run(['bash', '-c', self.step()], env=env, cwd=ROOT, capture_output=True, text=True).returncode
@@ -277,23 +349,38 @@ class RealGuard(unittest.TestCase):
         return dict(body['inputs'], **change)
 
     def test_the_dispatchers_exact_payload_passes_the_real_guard(self):
+        # Dispatched on main while main's head is the tested SHA (the dispatcher's last check).
+        self.assertEqual(self.payload(), {'mode': 'agent-hosted', 'candidate_sha': SHA, 'app_publish': 'true'})
         self.assertEqual(self.run_guard(self.payload()), 0)
 
     def test_stale_malformed_or_pinned_auto_requests_are_refused(self):
-        for name, inputs, on_main in (
-                ('candidate not on main (stale or foreign)', self.payload(), ()),
-                ('short sha', self.payload(candidate_sha=SHA[:39]), (SHA[:39],)),
-                ('branch name', self.payload(candidate_sha='main'), ('main',)),
-                ('uppercase sha', self.payload(candidate_sha=SHA.upper()), (SHA.upper(),)),
-                ('empty candidate', self.payload(candidate_sha=''), ('',)),
-                ('build pin on auto', self.payload(build_number='2026110101'), (SHA,)),
-                ('timestamp pin on auto', self.payload(build_timestamp='1793550000'), (SHA,)),
-                ('auto outside app-only', self.payload(mode='os-release'), (SHA,)),
-                ('promotion', self.payload(promote='true'), (SHA,)),
-                ('campaign', self.payload(campaign='start'), (SHA,)),
-                ('resume', self.payload(resume_failed_stage='sign'), (SHA,))):
+        moved = 'f' * 40
+        for name, inputs, on_main, dispatch_sha in (
+                ('main moved between the read and the dispatch', self.payload(), (SHA, moved), moved),
+                ('dispatch commit not on main (stale or foreign)', self.payload(), (), SHA),
+                ('short sha', self.payload(candidate_sha=SHA[:39]), (SHA,), SHA),
+                ('branch name', self.payload(candidate_sha='main'), (SHA,), SHA),
+                ('uppercase sha', self.payload(candidate_sha=SHA.upper()), (SHA,), SHA),
+                ('the probe takes no pin', self.payload(mode='agent-hosted-probe', app_publish='false'), (SHA,), SHA),
+                ('apps on the hosted route', self.payload(apps='auto'), (SHA,), SHA),
+                ('build pin on auto', self.payload(build_number='2026110101'), (SHA,), SHA),
+                ('timestamp pin on auto', self.payload(build_timestamp='1793550000'), (SHA,), SHA),
+                ('auto outside the agent routes', self.payload(mode='os-release'), (SHA,), SHA),
+                ('promotion', self.payload(promote='true'), (SHA,), SHA),
+                ('campaign', self.payload(campaign='start'), (SHA,), SHA),
+                ('resume', self.payload(resume_failed_stage='sign'), (SHA,), SHA)):
             with self.subTest(name):
-                self.assertNotEqual(self.run_guard(inputs, on_main), 0, name)
+                self.assertNotEqual(self.run_guard(inputs, on_main, dispatch_sha), 0, name)
+
+    def test_a_re_run_of_an_automatic_run_is_refused(self):
+        self.assertEqual(self.run_guard(self.payload(), attempt='1'), 0)
+        self.assertNotEqual(self.run_guard(self.payload(), attempt='2'), 0)  # its reservation is owned by attempt 1
+
+    def test_the_builder_auto_route_is_unchanged_for_a_manual_dispatch(self):
+        # The builder's app-only apps=auto route (no longer dispatched automatically) still admits an exact main commit.
+        builder = {'mode': 'app-only', 'candidate_sha': SHA, 'apps': 'auto', 'app_publish': 'true'}
+        self.assertEqual(self.run_guard(builder, on_main=(SHA, 'f' * 40), dispatch_sha='f' * 40), 0)
+        self.assertNotEqual(self.run_guard(builder, on_main=('f' * 40,), dispatch_sha='f' * 40), 0)
 
     def test_explicit_app_only_keeps_its_pins(self):
         explicit = {'mode': 'app-only', 'candidate_sha': SHA, 'apps': '[["dev.pixel.voice", 400]]'}

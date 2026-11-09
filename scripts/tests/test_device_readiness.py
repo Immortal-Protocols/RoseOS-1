@@ -99,7 +99,7 @@ class WorkflowTest(unittest.TestCase):
         # The controller, runner label, group and lock are the existing ones; no new runner or workflow trust.
         self.assertIn('    needs: guard\n', JOBS['controller'])
         self.assertEqual(sorted(set(re.findall(r'runs-on: \[self-hosted, ([\w-]+)\]', WORKFLOW))), ['roseos-frankel-builder'])
-        self.assertIn('  group: os-release-frankel\n', WORKFLOW)
+        self.assertEqual(shape.queue('device-readiness', WORKFLOW), 'os-release-frankel')
         self.assertIn("    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'\n", JOBS['guard'])
         self.assertEqual(readiness.check()['lock'], '/home/pixelbuild/frankel-build.lock')
 

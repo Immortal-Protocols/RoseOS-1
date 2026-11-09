@@ -336,6 +336,18 @@ class Reservation(unittest.TestCase):
         with self.assertRaises(Exception):
             hosted.bind(self.out, self.env, self.cfg, self.memory.ledger(), repo=self.repo.path)
 
+    def test_a_pin_is_admitted_only_as_this_runs_dispatch_commit(self):
+        # AGENT-BETA-AUTO dispatches with candidate_sha = the tested SHA; the source is still the dispatch commit.
+        self.add_floor(368)
+        for pin in ('f' * 40, self.repo.source.upper(), self.repo.source[:12], 'main'):
+            with self.subTest(pin=pin):
+                with self.assertRaisesRegex(hosted.Refused, 'candidate_sha is not this run\'s dispatch commit'):
+                    self.reserve(env=dict(self.env, CANDIDATE_SHA=pin))
+                self.assertEqual(self.memory.read('dev.pixel.voice')['reservations'], {})
+                self.assertFalse(self.out.exists())
+        result = self.reserve(env=dict(self.env, CANDIDATE_SHA=self.repo.source))
+        self.assertEqual((result['app_skip'], result['source'], result['version_code']), ('false', self.repo.source, '369'))
+
     def test_the_cli_refuses_before_any_write_without_a_token(self):
         result = subprocess.run([sys.executable, str(ROOT/'scripts/agent-hosted.py'), 'reserve', '--out',
                                  str(self.home/'cli')], capture_output=True, text=True,
@@ -357,10 +369,14 @@ class Workflow(unittest.TestCase):
     def setUp(self):
         self.jobs = shape.jobs(WORKFLOW)
 
-    def test_the_two_modes_are_manual_options_of_the_agent_lane(self):
+    def test_the_two_modes_are_the_hosted_agent_lane_in_its_own_queue(self):
         self.assertEqual(shape.modes()[-2:], ['agent-hosted', 'agent-hosted-probe'])
         lanes = json.loads((ROOT/'os/release-pipeline/lanes/capacity.json').read_text())['lanes']
-        self.assertEqual(lanes['agent']['modes'], ['app-only', 'agent-hosted', 'agent-hosted-probe'])
+        self.assertEqual(lanes['agent-hosted']['modes'], ['agent-hosted', 'agent-hosted-probe'])
+        self.assertEqual(lanes['agent']['modes'], ['app-only'])  # the builder route stays on the builder and its queue
+        self.assertEqual({mode: shape.queue(mode) for mode in ('agent-hosted', 'agent-hosted-probe', 'app-only')},
+                         {'agent-hosted': 'os-release-agent-hosted', 'agent-hosted-probe': 'os-release-agent-hosted',
+                          'app-only': 'os-release-frankel'})
         self.assertLessEqual({'agent-hosted', 'agent-hosted-probe'}, shape.main_check_exempt_modes())
 
     def test_every_agent_job_is_github_hosted_and_never_touches_the_builder(self):
@@ -429,6 +445,11 @@ class Workflow(unittest.TestCase):
                       '"$RUNNER_TEMP/agent-reservation/reservation.json" --artifact-dir "$RUNNER_TEMP/app-artifact"', job)
 
 
+def main_head():
+    head = subprocess.run(['git', '-C', str(ROOT), 'rev-parse', '--verify', '-q', 'origin/main'], capture_output=True, text=True)
+    return head.stdout.strip() if head.returncode == 0 else None
+
+
 class Guard(unittest.TestCase):
     def run_guard(self, mode, **change):
         block = re.search(r'(?ms)^        run: \|\n(.*)', step(shape.jobs(WORKFLOW)['guard'], 'Candidate is an exact commit on main'))[1]
@@ -460,6 +481,25 @@ class Guard(unittest.TestCase):
                     self.assertNotEqual(self.run_guard(mode, **change), 0)
         self.assertEqual(self.run_guard('agent-hosted', APP_PUBLISH='true'), 0)
         self.assertNotEqual(self.run_guard('agent-hosted-probe', APP_PUBLISH='true'), 0)
+
+    def test_agent_hosted_admits_the_dispatchers_pin_only_as_the_dispatch_commit(self):
+        sha = main_head()
+        if sha is None:
+            self.skipTest('no origin/main in this checkout')
+        # run_guard dispatches on main at origin/main: GITHUB_SHA is that commit.
+        self.assertEqual(self.run_guard('agent-hosted', CANDIDATE_SHA=sha, APP_PUBLISH='true'), 0)
+        self.assertNotEqual(self.run_guard('agent-hosted-probe', CANDIDATE_SHA=sha), 0, 'the probe takes no pin')
+        other = 'e' * 40 if sha != 'e' * 40 else 'd' * 40
+        for pin in (other, sha.upper(), sha[:39], sha[:12], 'main', ' ' + sha, sha + ' '):
+            with self.subTest(pin=pin):
+                self.assertNotEqual(self.run_guard('agent-hosted', CANDIDATE_SHA=pin, APP_PUBLISH='true'), 0)
+        # A moved main: the tested SHA is no longer the dispatch commit, so the run refuses before any job.
+        self.assertNotEqual(self.run_guard('agent-hosted', CANDIDATE_SHA=other, GITHUB_SHA=sha, APP_PUBLISH='true'), 0)
+        # The pin lifts no other refusal.
+        for change in ({'BUILD_NUMBER': '2026110801'}, {'APPS': '[["dev.pixel.voice",369]]'}, {'APPS': 'auto'},
+                       {'GITHUB_RUN_ATTEMPT': '2'}, {'CAMPAIGN': 'start'}, {'PROMOTE': 'true'}):
+            with self.subTest(change=change):
+                self.assertNotEqual(self.run_guard('agent-hosted', CANDIDATE_SHA=sha, **change), 0)
 
 
 if __name__ == '__main__':

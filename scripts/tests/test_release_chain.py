@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import unittest
 import re
+import sys
 import urllib.error
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -210,7 +211,8 @@ class Workflow(unittest.TestCase):
         self.assertRegex(inputs, r"campaign:\n        description: [^\n]+\n        type: string\n        default: ''\n")
 
     def test_run_name_matches_the_successor_lookup(self):
-        # AGENT-BETA-AUTO: an apps=auto app-only run is named for its tested SHA (the dispatcher's duplicate check).
+        # AGENT-BETA-AUTO: an apps=auto app-only run, or an agent-hosted run pinned to its tested dispatch commit, is
+        # named for its tested SHA (the dispatcher's duplicate check).
         # Mustang build/delivery duplicate checks also use their exact run names.
         # Keep the whole expression pinned, including branch order. 1E: only latest-beta keeps the normal button's
         # title (the daily dispatcher's Frankel lane); every other mode is titled 'os-release <mode> <run id>'.
@@ -219,7 +221,8 @@ class Workflow(unittest.TestCase):
             "inputs.mustang_publish_ota && format('mustang-delivery ota-{0}', inputs.mustang_compile_run) || "
             "startsWith(inputs.mode, 'mustang-') && format('{0} {1}', inputs.mode, github.run_id) || "
             "inputs.campaign && format('%s - campaign {0}', inputs.campaign) || inputs.mode == 'app-only' && "
-            "inputs.apps == 'auto' && format('Agent Beta auto {0}', inputs.candidate_sha) || inputs.mode == 'latest-beta' && "
+            "inputs.apps == 'auto' && format('Agent Beta auto {0}', inputs.candidate_sha) || inputs.mode == 'agent-hosted' && "
+            "inputs.candidate_sha != '' && format('Agent Beta auto {0}', inputs.candidate_sha) || inputs.mode == 'latest-beta' && "
             "'%s' || format('os-release {0} {1}', inputs.mode, github.run_id) }}\n" % (rc.TITLE, rc.TITLE), WORKFLOW)
         self.assertEqual(rc.run_name('7.1793380000.2'), f'{rc.TITLE} - campaign 7.1793380000.2')
 
@@ -232,12 +235,18 @@ class Workflow(unittest.TestCase):
 
 class Concurrency(unittest.TestCase):
     """One run at a time in os-release-frankel, and every waiting run keeps its place: with the default single pending
-    slot a campaign successor queued behind a running gen cancels an unrelated pending run (e.g. signing-bootstrap)."""
+    slot a campaign successor queued behind a running gen cancels an unrelated pending run (e.g. signing-bootstrap).
+    Only the two GitHub-hosted Agent modes (1F) take their own queue, which keeps its order the same way."""
 
     def test_the_shared_group_queues_every_pending_run_and_never_cancels_one_in_progress(self):
-        block = re.search(r'(?m)^concurrency:\n((?:  .*\n)+)', WORKFLOW)[1]
-        settings = dict(re.findall(r'(?m)^  ([\w-]+): (.*)$', block))
-        self.assertEqual(settings, {'group': 'os-release-frankel', 'cancel-in-progress': 'false', 'queue': 'max'})
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import os_release_shape as shape
+        settings = shape.concurrency(WORKFLOW)
+        self.assertEqual(sorted(settings), ['cancel-in-progress', 'group', 'queue'])
+        self.assertEqual((settings['cancel-in-progress'], settings['queue']), ('false', 'max'))
+        self.assertEqual(shape.queues(WORKFLOW), ('os-release-frankel', {'agent-hosted': 'os-release-agent-hosted',
+                                                                         'agent-hosted-probe': 'os-release-agent-hosted'}))
+        self.assertEqual(shape.queue('latest-beta', WORKFLOW), 'os-release-frankel')  # every campaign run
         self.assertEqual(re.findall(r'(?m)^ +concurrency:', WORKFLOW), [])  # no job overrides the workflow group
 
     def test_actionlint_ignores_only_the_unknown_queue_key_in_this_workflow(self):

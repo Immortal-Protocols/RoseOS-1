@@ -399,8 +399,9 @@ only today: before their lanes are enabled, their owners must admit this automat
 (Mustang's publication authority requires `automatic: false`).
 
 **Isolation:** each lane has its own entry and queue. Frankel shares `os-release-frankel` with the other
-`os-release.yml` modes, which wait in order (`queue: max`) rather than cancel each other. Independent capacity per
-flavor comes from each route's own builder binding, not from this dispatcher.
+`os-release.yml` builder modes, which wait in order (`queue: max`) rather than cancel each other. Only the two
+GitHub-hosted Agent modes have their own queue, `os-release-agent-hosted` (below). Independent capacity per flavor
+comes from each route's own builder binding, not from this dispatcher.
 
 ## Lane capacity map (1A, source only)
 
@@ -408,8 +409,8 @@ flavor comes from each route's own builder binding, not from this dispatcher.
 host each `os-release.yml` mode runs on today, and what each lane still needs to build on its own capacity.
 `scripts/tests/test_lane_capacity.py` derives the actual route and checks it against the map. It reads:
 
-- from `os-release.yml`: each self-hosted job's runner label and the modes its `if:` names, the workflow queue, and
-  the controller and cleanup identity;
+- from `os-release.yml`: each self-hosted job's runner label and the modes its `if:` names, the queue each mode joins
+  (the concurrency group is keyed by mode), and the controller and cleanup identity;
 - from `release-pipeline.py`: `BUILDER`, the one VM the controller starts and stops;
 - the host lock in `frankel.json`, and the storage root of `storage/builder-reclaim.json`.
 
@@ -421,6 +422,20 @@ retained-tree work run on one host, `roseos-frankel-builder`, where Mustang's re
 - one lock;
 - one queue, `os-release-frankel`;
 - one controller.
+
+**The hosted Agent lane (`agent-hosted`, 1F)** has no host: its target is `github-hosted`. Its two modes run only on
+GitHub-hosted runners, so the map binds no VM, disk, lock or controller for it, only its runner (`ubuntu-24.04`) and
+its own queue (`os-release-agent-hosted`). The test checks that:
+
+- only these two modes join that queue, and every other `os-release.yml` mode joins the builder's;
+- every job of these modes runs on `ubuntu-24.04`, and no self-hosted job serves them;
+- the controller (the only job that starts the builder) never runs for them, and cleanup (the only job that stops
+  it) runs only after a controller that ran, so a hosted run can never stop a builder another queue's run is using;
+- the one thing the lane shares with a builder lane is the version ledger, through the shared store alone.
+
+By route it is independent of every builder lane (`parallelByRoute`). It stays `inactive`, claiming no capacity, until
+a reviewed change makes it `active`: once the route is merged, the signer probe has passed (D4) and the ledger holds a
+builder floor (D2).
 
 **Yogi** has its own host in its committed route (#558): `yogi-ota.yml` and `os/ota/yogi.json`. The test checks every
 part of it against the map:
@@ -451,7 +466,8 @@ No value is invented: the only host listed is the one the committed route alread
 
 - the lane's `host` in the map;
 - every job of its modes, to the new `runs-on` label;
-- the workflow queue, keyed by host. One literal queue cannot serve lanes on several hosts.
+- the workflow queue, keyed by host: the group is evaluated for each mode, and every mode of a host's lanes must
+  join that host's queue.
 - the controller and cleanup, made lane-aware. Today they start and stop only `BUILDER`.
 - owned stops for every mode of a host whose lanes no longer share one queue. Today ordinary modes stop the
   builder unconditionally, which is safe only because every mode shares the queue.
@@ -462,8 +478,10 @@ strings on two machines, because each VM has its own disk.
 **The shared app version ledger.** `latest-beta` and `app-only` both allocate `dev.pixel.voice` versionCodes
 (`scripts/release-allocate.py`). Each allocation reads pixel-ota releases (drafts included), this host's attempt
 directories and its `rose-actions` reservations, under the host lock. On two hosts that store would let both pick
-the same version. So Agent stays on the ledger's host until the ledger moves to a store every lane can update
-atomically. That is the one cross-lane serialization the plan allows, and the test refuses an Agent move before it.
+the same version. So the builder's Agent route (`app-only`) stays on the ledger's host, and the test refuses moving
+it. The shared pixel-ota ledger (D1, below) is the store every lane can update atomically: the hosted lane allocates
+through it alone (`hostedLanes`), so it may run off the host. Its create-if-absent ref is the one cross-lane
+serialization the plan allows.
 
 ## Launcher3 compile harness (1E, dedicated workflow, source-bound)
 
@@ -603,11 +621,18 @@ the endpoint host. Each must equal its committed digest. After the build, `agent
 requires the built APK to carry every input entry exactly as the pinned APK does, compiled config included. A new
 endpoint or input set is a new pin.
 
-**The workflow (os-release.yml modes `agent-hosted` and `agent-hosted-probe`, manual only).** Both run only on
-GitHub-hosted runners: no controller, builder, storage or host lock, and the controller and cleanup jobs are skipped.
-They share the workflow's one queue (`os-release-frankel`), so they claim no parallel capacity yet. The guard admits a
-bare dispatch from main only: no candidate, build, timestamp or apps pin, no resume, campaign or other mode's input,
-and attempt 1 only. The jobs:
+**The workflow (os-release.yml modes `agent-hosted` and `agent-hosted-probe`).** Both run only on GitHub-hosted
+runners: no controller, builder, storage or host lock, and the controller and cleanup jobs are skipped. So the
+workflow keys its concurrency group by mode. These two modes have their own non-cancelling queue,
+`os-release-agent-hosted` (`queue: max`), and every other mode stays in `os-release-frankel`. A hosted run never waits
+behind an OS build and can never start or stop the builder. The version is the one thing it shares with the builder
+lanes, and the ledger decides it, not the queue (below). The lane map keeps the lane `inactive`, so it claims no
+parallel capacity until it is activated.
+
+The guard admits a dispatch from main only: no build, timestamp or apps pin, no resume, campaign or other mode's
+input, and attempt 1 only. `agent-hosted` also admits `candidate_sha`, but only as exactly the dispatch commit (the
+automatic dispatcher's pin, below). `agent-reserve` checks the same again before it reserves. The probe admits no pin.
+The jobs:
 
 | Job | Modes | What it does |
 | --- | --- | --- |
@@ -615,6 +640,38 @@ and attempt 1 only. The jobs:
 | `agent-reserve` | agent-hosted | Mints the publisher token. Either skips, because the newest published rose-agent release already has these Rose Agent sources, or allocates one fresh version and holds it in the ledger for this run. The fresh version clears the ledger's reservations and highest floor, every pixel-ota release (drafts included), and the committed Frankel config and allocation records. It is derived as `release-allocate.py`'s version-only candidate, named `N-hosted-beta`. Exits 4 while the ledger holds no builder floor. |
 | `agent-build` | both | Installs the pinned SDK archives (`scripts/setup-android-sdk.sh`), the pinned public inputs and App's portable record (`portable-build.py prepare` and `inputs`), then runs `host-app-release.py --check --hosted`. Probe: an unsigned Agent-only build of the dispatch commit plus `check-apk`. agent-hosted: `bind` (the same candidate, re-derived, owned by this run, held by the ledger), signer login, `host-app-release.py --hosted`, then `check-apk` on the signed APK. |
 | `agent-publisher` | agent-hosted with `app_publish` | Confirms the ledger still holds the reservation, mints the token and runs `app_release_publisher.py --hosted`. Publishes its own prerelease, never Latest. |
+
+**Automatic Agent Beta releases (`agent-beta-auto.yml`, held).** The existing dispatcher, `scripts/agent-beta-auto.py`,
+now targets this route. After a successful push-to-main `App offline tests` run, it dispatches
+`{mode: agent-hosted, candidate_sha: <tested SHA>, app_publish: true}` on main once. Publication is unchanged: an
+automatic release publishes its own prerelease, never Latest, as the builder route did. It dispatches only when all of
+these hold, and otherwise exits 0 with the reason:
+- `AGENT_BETA_AUTO` is exactly `on`. This is checked first: while it is off, the dispatcher makes no request at all.
+- The CI run, read back from the API, is that workflow's successful push-to-main run.
+- No newer main CI run is pending or has succeeded (coalescing).
+- No `Agent Beta auto <sha>` run exists yet. Both routes' automatic runs carry that title, so the duplicate and
+  unchanged checks span the move from the builder route.
+- Rose Agent sources changed since the newest successful automatic run.
+- **main's head, read last, right before the request, is still the tested SHA.** `agent-hosted` builds its dispatch
+  commit, so a tested SHA that main has moved past is never dispatched (`superseded`). If main moves between that read
+  and the request, the guard refuses the run.
+
+Two holds stay in place, and each alone stops every request:
+- the source hold (the dispatch job's literal `false &&`), which no variable can lift;
+- the `AGENT_BETA_AUTO` switch.
+
+The builder's `app-only` `apps=auto` route is unchanged and stays available to a manual dispatch.
+
+A superseded tested SHA is released by the next `App offline tests` run, which only runs when one of its paths changes,
+or by a manual `agent-hosted` dispatch.
+
+With separate queues, a hosted run and a Frankel run can pick the same next version within the same few minutes:
+between a Frankel allocation and its ledger record. The ledger's create-if-absent ref gives that version to exactly one
+of them, and nothing is built twice under one version:
+- If the hosted reservation lands first, the Frankel run stops before building (D2 below), and its next run allocates
+  above the hosted version.
+- If Frankel's record lands first, `agent-reserve` refuses. That tested SHA then waits for a later automatic or manual
+  run, because the dispatcher never re-dispatches a title it has already used.
 
 **Frankel in the shared ledger (decision D2, `scripts/app-ledger.py`).** Every builder route that allocates Rose Agent
 versions records them in the same ledger before it builds: latest-beta, latest-draft and app-only with `apps=auto`.

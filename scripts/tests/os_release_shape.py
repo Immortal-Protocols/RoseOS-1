@@ -49,6 +49,39 @@ def modes(workflow=None):
     return options
 
 
+CONCURRENCY = re.compile(r'(?ms)^concurrency:\n(.*?)(?=^\S|\Z)')
+KEYED_GROUP = re.compile(r"\$\{\{ \((.+)\) && '([\w-]+)' \|\| '([\w-]+)' \}\}")
+
+
+def concurrency(workflow=None):
+    """The workflow-level concurrency settings {key: value}, comment lines skipped."""
+    head = (workflow or text()).split('\njobs:\n', 1)[0]
+    block = CONCURRENCY.search(head)
+    assert block, 'no workflow-level concurrency'
+    return dict(re.findall(r'(?m)^  ([\w-]+): (.+)$', block[1]))
+
+
+def queues(workflow=None):
+    """(default queue, {mode: queue}) of the workflow-level concurrency group: one literal group, or exactly the
+    mode-keyed shape `${{ (inputs.mode == 'a' || inputs.mode == 'b') && 'own' || 'default' }}` (os-release.yml's
+    hosted Agent modes). Any other expression refuses, so no run's queue is guessed."""
+    group = concurrency(workflow).get('group')
+    assert group, 'no concurrency group'
+    if re.fullmatch(r'[\w-]+', group):
+        return group, {}
+    keyed = KEYED_GROUP.fullmatch(group)
+    assert keyed, f'a concurrency group this reader does not evaluate: {group}'
+    modes = _modes_of(keyed[1], MODE_EQ, ' || ')
+    assert keyed[2] != keyed[3], 'a mode-keyed group must name two queues'
+    return keyed[3], {mode: keyed[2] for mode in sorted(modes)}
+
+
+def queue(mode, workflow=None):
+    """The concurrency group a dispatch of MODE joins."""
+    default, keyed = queues(workflow)
+    return keyed.get(mode, default)
+
+
 def dispatch_env(workflow=None, **change):
     """The workflow-level env exactly as GitHub derives it for a dispatch that leaves every input at its declared
     default (a boolean renders as 'true'/'false'; `inputs.x || 'v'` falls back on an empty or false value), then CHANGE.

@@ -550,7 +550,9 @@ class Workflow(unittest.TestCase):
         self.assertIn('not the production channel; older releases stay for rollback', WORKFLOW)
         self.assertNotIn('schedule:', WORKFLOW)
         self.assertNotIn('push:', WORKFLOW.split('\njobs:', 1)[0])
-        self.assertIn('  group: os-release-frankel\n  cancel-in-progress: false\n', WORKFLOW)
+        import os_release_shape as shape
+        self.assertEqual(shape.queue('latest-beta', WORKFLOW), 'os-release-frankel')
+        self.assertEqual(shape.concurrency(WORKFLOW)['cancel-in-progress'], 'false')
 
     def test_guard_admits_the_normal_button_only_without_pins(self):
         base = dict(os.environ, MODE='latest-beta', ROSE_DEVICE='frankel', CHANNEL='beta', CANDIDATE_SHA='', BUILD_NUMBER='',
