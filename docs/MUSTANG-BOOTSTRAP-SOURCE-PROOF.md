@@ -161,3 +161,12 @@ regular and nonexecutable; modified bytes, links or absence refuse. Ordinary
 namespace readback and the shared copier's actual inventory verification cover
 it. Parsed project equivalence alone cannot admit different manifest bytes.
 Other unclassified names still refuse before their contents are opened.
+
+Run42605954394 reached the pinned-file comparison after its source walk and
+refused `selected-pinned-blob-or-mode-differs`, before copy/allocation/Make.
+Its old diagnostic omitted the affected path and subtype. The same comparison
+now also runs immediately after each pinned file/link is measured, reports a
+bounded relative path and one of `type`, `blob` or `mode`, and retains the final
+comparison and namespace readback. It does not print payloads, raw exceptions
+or source text. The affected path and correction remain unclaimed until actual
+native evidence is available.

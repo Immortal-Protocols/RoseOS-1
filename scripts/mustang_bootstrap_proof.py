@@ -67,6 +67,14 @@ def signature(info):
     return tuple(getattr(info,k) for k in ('st_dev','st_ino','st_size','st_mode','st_mtime_ns','st_ctime_ns'))
 
 
+def require_pinned(name,kind,measured,known):
+    """Same byte/type/owner-execute check, with only a bounded path/category."""
+    reason='type' if (known['mode']=='120000')!=(kind=='link') else \
+        'blob' if measured['blob']!=known['oid'] else \
+        'mode' if kind=='file' and bool(measured['mode']&0o100)!=(known['mode']=='100755') else None
+    if reason:raise git.Refused('selected-pinned-blob-or-mode-differs-'+reason,path=name)
+
+
 class Observation:
     def __init__(self,source,limits,*,deadline=None):
         self.source=Path(source);self.limits=limits.validate()
@@ -75,6 +83,7 @@ class Observation:
         self.device=deps.plain_dir(self.source).st_dev;self.entries=0;self.bytes=0
         self.excluded=[];self.measured={};self.signatures={}
         self.known_files=None;self.known_directories=set();self.prepared_prefixes=();self.empty_gitlinks=set()
+        self.pinned_files={}
 
     def check(self):
         if time.monotonic()>=self.deadline:raise git.Refused('source-proof-deadline')
@@ -239,6 +248,8 @@ class Observation:
                         self.signatures[full]=signature(info)
                         entries.append(dict(path=rel,type='link',text=text,kind=kind,target=target,exists=exists))
                     else:raise git.Refused('selected-special-file',path=full)
+                    if full in self.pinned_files and not stat.S_ISDIR(info.st_mode):
+                        require_pinned(full,entries[-1]['type'],self.measured[full],self.pinned_files[full])
                 if unclassified:
                     raise git.Refused('unclassified-selected-'+unclassified[0][1],path=unclassified[0][0],
                         paths=[name for name,_kind in unclassified])
@@ -394,6 +405,7 @@ def inspect_source(source,manifest,vendor,host,recipe,*,root=ROOT,limits=None,de
     directories.update(generated);directories.add(host_prefix)
     observation.empty_gitlinks={name for name,row in gitlinks.items() if not row['manifestPinned']}
     observation.known_files=set(expected)|{marker};observation.known_directories=directories
+    observation.pinned_files=expected
     observation.prepared_prefixes=(*generated,host_prefix)
     selection=engine.source_selection(recipe,source,Path(root),planner=observation.plan)
     if selection['problems']:raise git.Refused('shared-copy-selection-refused')
@@ -418,9 +430,7 @@ def inspect_source(source,manifest,vendor,host,recipe,*,root=ROOT,limits=None,de
                 if name!=marker:raise git.Refused('selected-measurement-absent')
                 measured=observation.measure(source/name);observation.measured[name]=measured
             if known is not None:
-                if measured['blob']!=known['oid'] or (known['mode']=='120000')!=(kind=='link') \
-                        or (kind=='file' and bool(measured['mode']&0o100)!=(known['mode']=='100755')):
-                    raise git.Refused('selected-pinned-blob-or-mode-differs')
+                require_pinned(name,kind,measured,known)
                 seen_expected.add(name);pinned_count+=1
             elif not in_generated and not in_host:raise git.Refused('unclassified-selected-file',path=name)
             if in_generated or in_host:prepared_count+=1
@@ -429,7 +439,7 @@ def inspect_source(source,manifest,vendor,host,recipe,*,root=ROOT,limits=None,de
         if name.startswith(host_prefix+'/') and kind!='dir':host_rows[name[len(depsdir)+1:]]=row
     for name in expected:
         if name not in seen_expected and not alpha_source.inside_excluded(name,policy):
-            raise git.Refused('selected-pinned-file-missing')
+            raise git.Refused('selected-pinned-file-missing',path=name)
     for key,prefix in (('vendorTree',generated[0]),('nodeModules',generated[1]),('adevtoolSource','vendor/adevtool/src')):
         if catalog(payload_rows,prefix)!=vendor.get(key):raise git.Refused('prepared-vendor-catalog-differs')
     measured=observation.measured

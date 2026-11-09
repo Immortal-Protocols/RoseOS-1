@@ -114,6 +114,23 @@ class SourceProofTest(unittest.TestCase):
             path.write_bytes(original)
             self.command(path.parent,'update-index',flag.replace('--','--no-',1),'README')
 
+    def test_pinned_mismatch_reports_path_and_category_before_later_payload_reads(self):
+        target=self.source/'build/make/README';before=target.read_bytes()
+        original=proof.Observation.measure;opened=[]
+        def measure(observation,path,*args,**kwargs):
+            opened.append(path)
+            return original(observation,path,*args,**kwargs)
+        for reason in ('blob','mode','type'):
+            if reason=='blob':target.write_bytes(b'changed tracked input must not enter copy')
+            elif reason=='mode':target.chmod(0o755)
+            else:target.unlink();target.symlink_to('Build.mk')
+            opened.clear()
+            with self.subTest(reason=reason),patch.object(proof.Observation,'measure',new=measure):
+                with self.assertRaisesRegex(git.Refused,'selected-pinned-blob-or-mode-differs-'+reason) as raised:self.inspect()
+                self.assertEqual(raised.exception.path,'build/make/README')
+                self.assertNotIn(self.source/'vendor/adevtool/src/index.ts',opened)
+            target.unlink();target.write_bytes(before)
+
     def test_source_sync_manifest_requires_exact_captured_bytes_regular_type_and_mode(self):
         target=self.source/'resolved-manifest.xml'
         for mutation in ('changed','missing','link','executable'):
