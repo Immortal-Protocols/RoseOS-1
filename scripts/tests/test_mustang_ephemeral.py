@@ -320,9 +320,9 @@ class EnrollmentTest(unittest.TestCase):
     def test_infrastructure_host_check_starts_without_fabricated_inputs(self):
         runtime = json.loads((ROOT/'os/build-only/mustang-runtime.json').read_text())
         self.assertEqual(runtime['status'], 'unbound')
-        self.assertEqual(runtime['appInputsRecord'], 'os/app-inputs/frankel-2026110704.json')
-        self.assertIsNone(runtime['signingRouteEvidence'])
-        self.assertEqual(runtime['sourceEvidence'], 'os/build-only/mustang-source-sync-42409634329.json')
+        self.assertEqual(runtime['appInputsRecord'], 'os/app-inputs/frankel-2026110901.json')
+        self.assertEqual(runtime['signingRouteEvidence'], 'os/build-only/mustang-dedicated-signing-route.json')
+        self.assertEqual(runtime['sourceEvidence'], 'os/build-only/mustang-full-run-source.json')
         self.assertIsNone(runtime['baselineTargetFiles'])
         self.assertEqual(controller.start_gate(runtime, {'MUSTANG_DRY_RUN': 'true'}), 'infrastructure-host-check')
         with self.assertRaisesRegex(ValueError, 'not admitted'):
@@ -390,8 +390,8 @@ class EnrollmentTest(unittest.TestCase):
                    GITHUB_WORKFLOW_REF='Immortal-Protocols/RoseOS-1/.github/workflows/mustang-ota-dedicated.yml@refs/heads/main')
         cfg = json.loads((ROOT/'os/build-only/mustang-runtime.json').read_text())
         bound = lane.configuration()
-        self.assertIsNone(cfg['runner']['lifetime'])
-        self.assertEqual(cfg['appInputsRecord'], 'os/app-inputs/frankel-2026110704.json')
+        self.assertEqual(cfg['runner']['lifetime'], 'ephemeral')
+        self.assertEqual(cfg['appInputsRecord'], 'os/app-inputs/frankel-2026110901.json')
         got = dedicated.guard(bound, cfg, env, dry_run=True)
         self.assertIsNone(got['baselineTargetFiles'])
         with self.assertRaisesRegex(ValueError, 'cannot publish'):
