@@ -44,5 +44,23 @@
     "accountPlan": null,
     "overageUsdPerGbMonth": "0.25",
     "budgetCanBlock": true
+  },
+  "pendingLargerRunner": {
+    "groupName": "roseos-mustang-signer",
+    "label": "mustang-signer-4core",
+    "image": "ubuntu-24.04",
+    "vcpu": 4,
+    "ssdBytes": 150000000000,
+    "configurationVerified": false,
+    "confirmationEvidence": null,
+    "proposedOutputBounds": {
+      "signedTargetFilesBytes": 17179869184,
+      "otaBytes": 8589934592,
+      "signedTargetFilesCopyBytes": 17179869184,
+      "otaCopyBytes": 8589934592,
+      "scratchBytes": 17179869184,
+      "reserveBytes": 17179869184
+    },
+    "basis": "Supports the existing named workflow route. Before login, actual signer CPU/memory/disk and same-run runner group/label are checked. Administrative group6 read remains denied and is not retried. Current configuration/purchase/capacity are unverified; the proposed output values are budget limits, not measured output sizes. Active profile and admission remain unchanged pending actual owner evidence."
   }
 }

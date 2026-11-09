@@ -472,7 +472,7 @@ class DedicatedPathsTest(unittest.TestCase):
         self.assertFalse(readiness['buildAuthorized'])
         self.assertFalse(readiness['publicationAuthorized'])
         self.assertEqual(readiness['stopSafeguard']['seconds'],14400)
-        self.assertIn('runner-unregistered',{item['code'] for item in readiness['blockers']})
+        self.assertIn('signer-capacity-unadmitted',{item['code'] for item in readiness['blockers']})
         for action in ('guard','host-check','fetch-inputs','baseline','produce','collect','sign','_execute','stage',
                        'verify-staged','publish','report','ownership-output','cleanup-prepare','require-owned'):
             result=subprocess.run([sys.executable,str(ROOT/'scripts/mustang-dedicated.py'),action],env=env,
@@ -765,7 +765,18 @@ class DedicatedRuntimeTest(unittest.TestCase):
         (self.root/path).write_text(json.dumps(value)); return str(path)
 
     def admitted(self,cfg=None,publish=False,diff=None):
-        return self.driver.guard(self.lane,cfg or self.cfg,self.env,publish,root=self.root,diff=diff or (lambda *args:''))
+        # These fixtures isolate native input admission. Real signer capacity
+        # and its pre-secret failure boundary have their own integrated tests.
+        import mustang_hosted_sign
+        with patch.object(mustang_hosted_sign,'require_delivery_capacity',return_value={}):
+            return self.driver.guard(self.lane,cfg or self.cfg,self.env,publish,root=self.root,diff=diff or (lambda *args:''))
+
+    def test_native_host_check_needs_artifact_cli_and_no_cloud_signing_cli(self):
+        def execute(*args,**kwargs):return SimpleNamespace(returncode=0,stdout='fixture-uuid')
+        with patch.object(self.driver.route,'evaluate_guest',return_value={}), \
+                patch.object(self.driver.shutil,'which',side_effect=lambda tool:'/usr/bin/gh' if tool=='gh' else None) as which:
+            self.driver.host_check(self.lane,self.cfg,observe_id=lambda:self.lane['vm']['instanceId'],execute=execute)
+        self.assertEqual(which.call_args_list,[unittest.mock.call('gh')])
 
     def test_actual_evidence_guard_allows_private_and_refuses_stale_or_unbound(self):
         self.assertEqual(self.admitted()['consumedBuilds'],['2026110402'])
@@ -874,8 +885,8 @@ class DedicatedRuntimeTest(unittest.TestCase):
                     readiness.evaluate_guest(bad,lane_binding,runtime)
         report=readiness.report()
         codes={item['code'] for item in report['blockers']}
-        self.assertTrue({'runtime-unbound','runner-unregistered','allocation-unresolved',
-                         'baseline-not-on-disk','signing-route-unadmitted','publication-disabled'}<=codes)
+        self.assertTrue({'runtime-unbound','signer-capacity-unadmitted'}<=codes)
+        self.assertTrue({'runner-unregistered','allocation-unresolved','baseline-not-on-disk','signing-route-unadmitted'}.isdisjoint(codes))
         self.assertNotIn('app-inputs-unadmitted', codes)
         # The accepted export is reported stale exactly when this checkout's app sources moved past its producer: an
         # app-source change merges before the Frankel build and re-export that refresh it, so main may carry either.
@@ -883,11 +894,9 @@ class DedicatedRuntimeTest(unittest.TestCase):
         self.assertEqual('app-inputs-stale' in codes, bool(drift))
         self.assertEqual(runtime['appInputsRecord'], readiness.ACCEPTED_APP_EXPORT['path'])
         self.assertEqual(runtime['status'], 'unbound')
-        self.assertIsNone(runtime['signingRouteEvidence'])
-        self.assertEqual(runtime['sourceEvidence'], readiness.ACCEPTED_SOURCE_SYNC['path'])
-        self.assertTrue(readiness.accepted_source_sync(
-            json.loads((ROOT/runtime['sourceEvidence']).read_text()), runtime['sourceEvidence']))
-        self.assertIn('source-unprovisioned', codes)
+        self.assertEqual(runtime['signingRouteEvidence'],'os/build-only/mustang-dedicated-signing-route.json')
+        self.assertEqual(runtime['sourceEvidence'],'os/build-only/mustang-full-run-source.json')
+        self.assertNotIn('source-unprovisioned', codes)
         self.assertNotIn('source-sync-unverified', codes)
         self.assertTrue(report['sourceSync']['bound'])
         self.assertFalse(report['sourceSync']['buildAuthorized'])
@@ -899,9 +908,9 @@ class DedicatedRuntimeTest(unittest.TestCase):
         export=readiness.ACCEPTED_APP_EXPORT
         self.assertTrue(readiness.accepted_app_export(record, runtime['appInputsRecord']))
         self.assertEqual(record['apps'], [
-            {'package':'dev.pixel.backgroundcontrol','versionCode':40,'apkSha256':'14f0f842e3ba8266939d6fa63d0f6a6b7355b34388d5e6af5cc492e464e7cf04'},
-            {'package':'dev.pixel.voice','versionCode':368,'apkSha256':'21d6be95065ec7f0568711b457dacdf0e63442c293bc1f35938864ec403d8da5'},
-            {'package':'dev.pixel.calculator.agent','versionCode':5,'apkSha256':'37649ab5b977b9418556f63576a92e9b755757a6b403ac5304194ea92733b699'}])
+            {'package':'dev.pixel.backgroundcontrol','versionCode':41,'apkSha256':'6dbcb57947897338aa02c4c2fdffa5414ca49787b3f6140ed6886dc38f90ab82'},
+            {'package':'dev.pixel.voice','versionCode':369,'apkSha256':'268134653b5c83100e982c7ed04a611446bee248d65889dfcd0fd8642542c220'},
+            {'package':'dev.pixel.calculator.agent','versionCode':6,'apkSha256':'2c6ff4972535fedb4ad5c6af674152328c1384849acba64166c2fc56bce6a498'}])
         self.assertIn(str(export['archiveBytes']), runtime['basis'])
         self.assertIn('not an OTA extraction', runtime['basis'])
         head=subprocess.check_output(['git','-C',str(ROOT),'-c','protocol.allow=never','rev-parse','HEAD'],text=True).strip()
@@ -909,7 +918,7 @@ class DedicatedRuntimeTest(unittest.TestCase):
         # HEAD may be past the producer's app sources (see above), so only consistency is pinned at HEAD; the fixed
         # commit below has none of the producer's app sources changed.
         self.assertEqual(readiness.bound_app_freshness(record), readiness.app_source_drift(record, head))
-        self.assertEqual(readiness.app_source_drift(record, '149dd4e1d8fb4003aa16b51385b4780cbdc45d66'), [])
+        self.assertEqual(readiness.app_source_drift(record, '303f69823b0ca0f92a61fa3b95f9a2e8364da812'), [])
         self.assertEqual(readiness.app_source_drift(record, head, diff=lambda *args:'workspace/rose-agent/changed\n'),
                          ['dev.pixel.voice','dev.pixel.calculator.agent','dev.pixel.backgroundcontrol'])
         missing='0000000000000000000000000000000000000000'
@@ -943,16 +952,15 @@ class DedicatedRuntimeTest(unittest.TestCase):
         self.assertIsNone(readiness.enrollment()['github']['lifetime'])
         self.assertIsNone(readiness.enrollment()['github']['runnerId'])
         self.assertEqual(readiness.enrollment()['github']['runnerCount'],0)
-        self.assertIn('4884085713',' '.join(item['detail'] for item in report['blockers']))
-        self.assertIn('signed-target_files.zip', ' '.join(item['detail'] for item in report['blockers']))
-        self.assertIn('mustang-candidate-continuity-20261107.json', ' '.join(item['detail'] for item in report['blockers']))
-        self.assertIn('Runtime stays unbound', ' '.join(item['detail'] for item in report['blockers']))
-        self.assertIn('no authoritative ledger', ' '.join(item['detail'] for item in report['blockers']))
-        self.assertIn('copy-time only', ' '.join(item['detail'] for item in report['blockers']))
+        self.assertNotIn('baseline-not-on-disk',codes)
+        continuity=report['otaContinuity']['currentContinuity']
+        self.assertEqual(continuity['record'],'os/build-only/mustang-candidate-continuity-20261107.json')
+        self.assertFalse(continuity['currentPhone']);self.assertFalse(continuity['admitsRuntime'])
         self.assertFalse(report['numberStrategy']['selectsBuildNumber'])
         self.assertIsNone(report['numberStrategy']['allocatedBuild'])
-        self.assertEqual(report['numberStrategy']['selectedMode'], 'retired-legacy-epoch')
-        self.assertEqual(report['numberStrategy']['proposalStart'], '2026130001')
+        self.assertEqual(report['numberStrategy']['selectedMode'], 'UTC-hour00-local')
+        self.assertEqual(report['numberStrategy']['legacySuffixExcluded'],'01..99')
+        self.assertFalse(report['numberStrategy']['legacyAllocationKnown'])
         self.assertFalse(report['numberStrategy']['reserved'])
         self.assertIsNone(report['numberStrategy']['authority'])
         self.assertFalse(report['numberStrategy']['issued'])

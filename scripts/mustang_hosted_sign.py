@@ -272,6 +272,12 @@ def authenticate_full_run(bundle,env,*,api=None,root=ROOT):
                 or job.get('run_attempt',1)!=1 or type(job.get('id')) is not int or job['id']<=0:
             raise ValueError('full-run Actions producer/job identity differs')
         observed[name]=job['id']
+        capacity_path=Path(root)/'os/build-only/mustang-hosted-signer-capacity.json'
+        if name=='signer' and capacity_path.is_file():
+            route=larger_route(load_capacity(root=root))
+            if route is not None and (job.get('runner_group_id')!=route['groupId']
+                    or route['label'] not in job.get('labels',[])):
+                raise ValueError('hosted signer job differs from configured larger route')
         if name=='builder' and (job.get('runner_group_id')!=5 or job.get('runner_name')!='mustang-'+run['runId'] \
                 or lane['runnerLabel'] not in job.get('labels',[])):
             raise ValueError('full-run native producer runner differs')
@@ -295,8 +301,20 @@ def trusted_paths():
     return ROOT, CAPACITY, ROOT / SCRIPT_PIN
 
 
-def load_capacity(path=None):
-    data = json.loads(Path(path or trusted_paths()[1]).read_text())
+def larger_route(data):
+    runner=data.get('activeRunner') or {}
+    if runner.get('kind')!='github-larger-runner':return None
+    expected=dict(groupName='roseos-mustang-signer',label='mustang-signer-4core',
+        image='ubuntu-24.04',vcpu=4,ssdBytes=150000000000,configured=True,approved=True)
+    if any(runner.get(k)!=v for k,v in expected.items()) or type(runner.get('groupId')) is not int \
+            or runner['groupId']<=0 or not runner.get('approvalRef') or not runner.get('configurationRef'):
+        raise ValueError('configured larger-runner identity/approval is absent')
+    return runner
+
+
+def load_capacity(path=None, root=None):
+    selected=path or (Path(root)/'os/build-only/mustang-hosted-signer-capacity.json' if root is not None else trusted_paths()[1])
+    data = json.loads(Path(selected).read_text())
     if data.get('schema') != 'roseos.mustang-hosted-signer-capacity.v1' or data.get('trust') != 'held':
         raise ValueError('hosted signer capacity config is missing')
     runner = data.get('activeRunner')
@@ -305,12 +323,42 @@ def load_capacity(path=None):
     if not isinstance(runner, dict) or not isinstance(runner.get('ssdBytes'), int) or isinstance(runner.get('ssdBytes'), bool) \
             or runner['ssdBytes'] <= 0 or data.get('admission') not in (True, False):
         raise ValueError('hosted signer capacity config is missing')
-    if proposed.get('selected') is True or proposed.get('purchased') is True or proposed.get('configured') is True \
-            or proposed.get('approved') is True or proposed.get('sizingProof') is True:
+    route=larger_route(data)
+    if route is None and (proposed.get('selected') is True or proposed.get('purchased') is True or proposed.get('configured') is True \
+            or proposed.get('approved') is True or proposed.get('sizingProof') is True):
         raise ValueError('hosted signer capacity config is missing')
-    if storage.get('accountPlan') is not None or storage.get('includedAllowancesAreNotPerArtifactLimits') is not True:
+    if (route is None and storage.get('accountPlan') is not None) or storage.get('includedAllowancesAreNotPerArtifactLimits') is not True:
         raise ValueError('hosted signer capacity config is missing')
     return data
+
+
+def require_delivery_capacity(root=ROOT):
+    config=load_capacity(root=root)
+    if config.get('admission') is not True:
+        raise ValueError('hosted signer admission is closed; no native build')
+    if larger_route(config) is None:
+        raise ValueError('configured dedicated larger signer required before native build')
+    _bounds,missing=bound_values(config)
+    if missing:raise ValueError('output bound is missing: '+','.join(missing))
+    import mustang_tool_closure
+    expected=mustang_tool_closure.qualified_pins(root)
+    pin=load_pin(root,json.loads((Path(root)/SCRIPT_PIN).read_text()))
+    if pin.get('status')!='qualified' or any(pin.get(k)!=v for k,v in expected.items()):
+        raise ValueError('measured signing tool pins are not selected')
+    return config
+
+
+def actual_signer_capacity(config, env, directory):
+    if config.get('activeRunner',{}).get('kind')!='github-larger-runner' or env.get('GITHUB_JOB')!='signer':
+        return None
+    space=os.statvfs(directory);total=space.f_blocks*space.f_frsize
+    memory=None
+    for line in Path('/proc/meminfo').read_text().splitlines():
+        if line.startswith('MemTotal:'):memory=int(line.split()[1])*1024
+    if os.cpu_count()!=4 or os.uname().machine!='x86_64' or memory is None or memory<14*1024**3 or total<128*1024**3:
+        raise ValueError('actual signer CPU/memory/disk differs from selected larger profile')
+    return dict(vcpu=os.cpu_count(),memoryBytes=memory,totalBytes=total,
+        freeBytes=space.f_bavail*space.f_frsize)
 
 
 def capacity(bundle, free, config, measured=None):
@@ -617,6 +665,7 @@ def evaluate(bundle, root, free, files=None, secret_access=None, pin=None, capac
     config = load_capacity() if capacity_config is None else capacity_config
     require_bundle_identity(bundle, env, root)
     require_entry(root)
+    actual_signer_capacity(config,env,Path(files['otatools']).parent if files else root)
     stock = config['activeRunner']['ssdBytes']
     historical = config.get('historicalLowerBoundBytes')
     _bound_values, missing_bounds = bound_values(config)
@@ -878,13 +927,14 @@ def declared_integer(bundle, name):
 
 def preliminary(bundle_path, root=None, env=None, capacity_config=None, pin=None, free=None):
     """Metadata only. Declared sizes, pins, run identity, and admission. No payload bytes."""
-    bundle, _directory = bundle_document(bundle_path)
+    bundle, directory = bundle_document(bundle_path)
     env = os.environ if env is None else env
     root = trusted_paths()[0] if root is None else root
     config = load_capacity() if capacity_config is None else capacity_config
     if free is None:
-        space = os.statvfs('/')
+        space = os.statvfs(directory)
         free = space.f_bavail * space.f_frsize
+    actual_signer_capacity(config,env,directory)
     require_bundle_identity(bundle, env, root)
     full_bundle_gate(bundle,Path(bundle_path)/'mustang-signing-bundle.json' if Path(bundle_path).is_dir() else Path(bundle_path),env,root)
     require_entry(root)
@@ -931,7 +981,7 @@ def preflight(bundle_path, root=None, env=None, capacity_config=None, pin=None, 
     bundle, directory = bundle_document(bundle_path)
     root = trusted_paths()[0] if root is None else root
     if free is None:
-        space = os.statvfs('/')
+        space = os.statvfs(directory)
         free = space.f_bavail * space.f_frsize
     actual_env=os.environ if env is None else env
     full_bundle_gate(bundle,directory/'mustang-signing-bundle.json',actual_env,root)
@@ -1023,7 +1073,7 @@ def sign(bundle_path, out_dir, root=None, env=None, capacity_config=None, host_s
     bundle, directory = bundle_document(bundle_path)
     root = trusted_paths()[0] if root is None else root
     if free is None:
-        space = os.statvfs('/')
+        space = os.statvfs(directory)
         free = space.f_bavail * space.f_frsize
     files = bundle_files(directory, bundle)
     full_bundle_gate(bundle,directory/'mustang-signing-bundle.json',os.environ if env is None else env,root)

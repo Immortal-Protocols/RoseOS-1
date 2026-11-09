@@ -217,6 +217,7 @@ jobs:
       actions: read
     env:
       PYTHONDONTWRITEBYTECODE: '1'
+      JAVA_HOME: /mnt/disks/mustang-data/roseos/source/prebuilts/jdk/jdk21/linux-x86
       MUSTANG_CLOCK_CONTEXT: ${{ needs.guard.outputs.clock_context }}
       MUSTANG_OWNER_B64: ${{ needs.controller.outputs.ownership }}
     steps:
@@ -225,6 +226,8 @@ jobs:
         ref: ${{ github.sha }}
         fetch-depth: 0
         persist-credentials: false
+    - name: Use the pinned source JDK for APK tool subprocesses
+      run: printf '%s\n' "$JAVA_HOME/bin" >> "$GITHUB_PATH"
     - name: Verify guest ID, mounted data disk, bytes/inodes and tools
       run: python3 scripts/mustang-dedicated.py host-check
     - name: Observe current dependency lock and output without building

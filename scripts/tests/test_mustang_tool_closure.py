@@ -27,7 +27,7 @@ FIXTURE_SHA = '8a88df24adfb652c11ab62fc5c9bc7098f27d33c1dc2cf7a0183e1226f2bb55f'
 
 
 class ToolClosureTest(unittest.TestCase):
-    def test_checkout_matches_the_receipt_and_production_pins_stay_null(self):
+    def test_checkout_matches_receipt_and_qualified_pins_keep_execution_closed(self):
         receipt = closure.verify_closure(ROOT)
         self.assertEqual(receipt['files'][1]['sha256'],
                          '01f7847ecdc6600bd2e3ffebe45cf79cee4fead1d6b61686c4d3c70e9c548311')
@@ -35,8 +35,10 @@ class ToolClosureTest(unittest.TestCase):
         self.assertEqual(receipt['otatools']['qualificationEvidence'],'os/build-only/mustang-otatools-42531345133.json')
         self.assertFalse(receipt['jdk']['committed'])
         pin = json.loads((ROOT / closure.PIN).read_text())
+        self.assertEqual(pin['status'],'qualified')
+        expected=closure.qualified_pins(ROOT)
         for key in closure.PIN_KEYS:
-            self.assertIsNone(pin[key])
+            self.assertEqual(pin[key],expected[key])
         capacity = json.loads((ROOT / closure.CAPACITY).read_text())
         self.assertFalse(capacity['admission'])
         self.assertEqual(capacity['trust'], 'held')
@@ -64,7 +66,7 @@ class ToolClosureTest(unittest.TestCase):
             pin = json.loads((base / closure.PIN).read_text())
             pin['jdkSha256'] = 'a' * 64
             (base / closure.PIN).write_text(json.dumps(pin))
-            with self.assertRaisesRegex(closure.ClosureError, 'production pin jdkSha256 is filled'):
+            with self.assertRaisesRegex(closure.ClosureError, 'qualified production pin differs'):
                 closure.verify_closure(base)
             self.copy_checkout(base)
             capacity = json.loads((base / closure.CAPACITY).read_text())

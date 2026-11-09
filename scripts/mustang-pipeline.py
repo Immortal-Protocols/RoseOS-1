@@ -133,8 +133,7 @@ def run(run_id, attempt, lane=None, runtime=None, inputs_dir=None):
         elif not isinstance(consumed, list) or not consumed or any(
                 not isinstance(build, str) or not re.fullmatch(r'[1-9][0-9]{9}', build) for build in consumed):
             raise ValueError('prior failed Mustang allocation state remains unresolved; no new build number')
-        verifier = module('mustang_app_input_verify','app-inputs-verify.py')
-        admission = verifier.verify(ROOT/runtime['appInputsRecord'], inputs_dir, runtime['tools'])
+        admission = None  # verified after native source/tool bytes are observed
         cfg = dict(runtime['tools'],host=lane['vm']['instance'],jobs=runtime['jobs'],
                    appsDir=str(Path(inputs_dir)/'signed-apps'),policy=str(Path(inputs_dir)/'background-policy.json'),
                    signingBlocker='separate same-run signing stage after unsigned proof')
@@ -160,6 +159,8 @@ def run(run_id, attempt, lane=None, runtime=None, inputs_dir=None):
             raise ValueError('full-run bootstrap source observation refused; no source copy, allocation or Make')
         bootstrap_collector.require_full_result(bootstrap,lane,os.environ,
             bootstrap_collector.proof.deps.read_event(os.environ))
+        verifier = module('mustang_app_input_verify','app-inputs-verify.py')
+        admission = verifier.verify(ROOT/runtime['appInputsRecord'], inputs_dir, runtime['tools'])
     run_root = base/f'mustang-prep-{run_id}-{attempt}'
     # Basic overwrite/access protections remain; no independent safe-path test suite is run.
     if not base.is_dir() or engine.symlink_in(run_root) or os.path.lexists(run_root):

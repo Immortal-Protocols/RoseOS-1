@@ -169,11 +169,13 @@ collection continues to report `authenticatedStop=false`; completed-run/STOP
 reconciliation is an outer evidence step after the workflow ends.
 
 This source change performs no dispatch, credential creation, IAM mutation,
-allocation, signing or publication. Runtime bindings and signing admission remain
-unbound. An actual successful full run and its completed-run reconciliation are
-still needed. The signer provider URI in source names the verified existing
-`mustang-actions/providers/mustang-main`; its missing signer IAM binding requires
-separate action-time approval. No existing legacy trust binding is removed.
+allocation, signing or publication. Known runtime source/tool/identity bindings
+are selected; final runtime and signer capacity admission remain closed. An
+actual successful full run and its completed-run reconciliation are still needed.
+Nathan added the dedicated provider trust; metadata readback verified the existing
+`mustang-actions/providers/mustang-main` route and signer access to both required
+secrets. The existing legacy trust member is preserved. No secret payload or
+signer impersonation was used for that readback.
 
 The app owner must provide a fresh immutable export of backgroundcontrol, voice
 and calculator with their existing signer, SDK 37, APK/idsig/receipt files,

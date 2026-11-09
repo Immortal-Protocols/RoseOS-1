@@ -1,22 +1,35 @@
 {
   "schema": "roseos.mustang-dedicated-runtime.v1",
   "status": "unbound",
-  "jobs": null,
-  "tools": {"aapt": null, "apksigner": null, "node": null},
+  "jobs": 24,
+  "tools": {
+    "aapt": "/mnt/disks/mustang-data/roseos/source/out_adevtool_deps/host/linux-x86/bin/aapt2",
+    "apksigner": "/mnt/disks/mustang-data/roseos/source/out_adevtool_deps/host/linux-x86/bin/apksigner",
+    "node": "/mnt/disks/mustang-data/roseos/tools/node/node-v24.22.2-linux-x64/bin/node"
+  },
   "dataFilesystemUuid": "4183bff8-6be4-46bb-a641-2193d19813ee",
   "dataMount": "/mnt/disks/mustang-data",
   "automaticStopHours": 4,
-  "networkEvidence": null,
-  "sourceEvidence": "os/build-only/mustang-source-sync-42409634329.json",
+  "networkEvidence": "os/build-only/mustang-runtime-network-evidence.json",
+  "sourceEvidence": "os/build-only/mustang-full-run-source.json",
   "vendorEvidence": "os/build-only/mustang-vendor-42522784617.json",
   "hostDependenciesEvidence": "os/build-only/mustang-hostdeps-42512135815.json",
   "allocationState": "os/build-only/mustang-allocation-state-20261107.json",
   "clockNumbering": "os/build-only/mustang-clock-numbering.json",
-  "appInputsRecord": "os/app-inputs/frankel-2026110704.json",
+  "appInputsRecord": "os/app-inputs/frankel-2026110901.json",
   "baselineTargetFiles": null,
   "baselineFactoryEvidence": null,
-  "runner": {"groupName": "roseos-mustang-builder", "groupId": "5", "lifetime": null, "registrationEvidence": null},
-  "signingRouteEvidence": null,
-  "publication": {"enabled": false, "authorityRecord": null},
-  "basis": "UUID, mount, four-hour STOP, and runner group 5 are recorded. Status stays unbound: group 5 has zero runners, so lifetime and registration evidence stay null. The common-APK input is export 42408244069 artifact 13588167823, archive sha256 24596d4dd26889e705988a4fa2462c2d2d4890945aec6c139664532f5e213dac, 1865839 bytes, recorded by c89d530cda33354ec593c1fb1338aa50e5dc7484. It is not an OTA extraction. Source evidence is the source-only receipt for run 42409634329 attempt 1: Rose 2ac24c5475de121ebe4e9e6a5c1a404ef44aa9c8, manifest 32d30e70ee59d373a17fe8090bdded898afa80651f27c331caca4578b3008888, 1057 projects, VM 5585425566393384049. It is not a pristine bootstrap, tool attestation, or build admission. No tools, Make job count, signing-route admission, on-disk baseline, allocation reconciliation, output bounds, or publication authority is recorded."
+  "runner": {
+    "groupName": "roseos-mustang-builder",
+    "groupId": "5",
+    "lifetime": "ephemeral",
+    "registrationEvidence": null
+  },
+  "signingRouteEvidence": "os/build-only/mustang-dedicated-signing-route.json",
+  "publication": {
+    "enabled": true,
+    "authorityRecord": "os/build-only/mustang-dedicated-publication-authority.json"
+  },
+  "basis": "Known bindings selected from actual dedicated qualification/native host distribution, same-run GitHub JIT evidence, source/copy admission contract and independently verified existing signer policy. Jobs24 matches completed native otatools qualification. Actual source/copy bytes and native tools are rechecked on the guest. Status remains unbound pending admitted hosted capacity/output bounds and final runtime reconciliation. Fresh Frankel2026110901 export is verified by Release and immutable record303f6982; this consumer independently matched its record/allocation hashes and live artifact metadata and rechecked source freshness. Existing legacy unknown allocation is preserved; date/hour policy controls new reservations. Common export artifact13649846651 is1865637 bytes, digest e14607d7385952a19c9b78977d0c3dd6f84f1e8d76cc31bb7ae35bf09c4bc3d0; it is not an OTA extraction. Build SDK37 and targetSdk35 remain distinct.",
+  "candidateContinuity": "os/build-only/mustang-candidate-continuity-20261107.json"
 }
