@@ -1,8 +1,9 @@
 """Bounded local Git reads and raw object verification for source-proof candidates.
 
-No index/worktree command, filter, hook, transport, checkout or source program
-is invoked. Git's tree listing is reconstructed and hashed back to the pinned
-commit rather than trusting object-file names or index status.
+No source index, filter, hook, transport, checkout or source program is invoked.
+Git's tree listing is reconstructed and hashed back to the pinned commit.
+Attribute queries use private metadata containing only authenticated attribute
+blobs, never the source repository's config, info attributes or index.
 """
 import hashlib
 import os
@@ -11,6 +12,7 @@ import re
 import selectors
 import signal
 import subprocess
+import tempfile
 import time
 
 
@@ -116,14 +118,18 @@ class LocalGit:
         if not project.is_absolute():raise Refused('absolute-project-path-required')
         argv=['/usr/bin/git','--no-pager','-c','core.fsmonitor=false','-c','core.hooksPath=/dev/null',
               '-c','protocol.allow=never','-C',str(project),*arguments]
-        limit=min(self.deadline,time.monotonic()+self.command_seconds)
-        if time.monotonic()>=limit:raise Refused('source-proof-deadline')
         maximum=min(self.output_bytes,4 << 20) if operation=='commit' else self.output_bytes
         if operation=='blob':maximum=min(maximum,8 << 20)
-        proc=subprocess.Popen(argv,env=environment(),stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,
+        return self._run(argv,maximum)
+
+    def _run(self,argv,maximum,input_bytes=None):
+        limit=min(self.deadline,time.monotonic()+self.command_seconds)
+        if time.monotonic()>=limit:raise Refused('source-proof-deadline')
+        proc=subprocess.Popen(argv,env=environment(),stdin=subprocess.PIPE if input_bytes is not None else subprocess.DEVNULL,stdout=subprocess.PIPE,
                               stderr=subprocess.DEVNULL,start_new_session=True)
         chunks=[];used=0
         try:
+            if input_bytes is not None:proc.stdin.write(input_bytes);proc.stdin.close()
             with selectors.DefaultSelector() as selector:
                 selector.register(proc.stdout,selectors.EVENT_READ)
                 while True:
@@ -146,6 +152,7 @@ class LocalGit:
             except ProcessLookupError:pass
             proc.wait()
             proc.stdout.close()
+            if proc.stdin is not None and not proc.stdin.closed:proc.stdin.close()
 
     def check_head(self,project,revision):
         if self.read(project,'head').strip()!=oid(revision).encode():raise Refused('project-head-differs')
@@ -156,3 +163,67 @@ class LocalGit:
         self.check_head(project,revision)
         return tree_rows(self.read(project,'commit',revision),self.read(project,'tree',revision),revision,
                          max_entries=max_entries,include_trees=True,allow_gitlinks=allow_gitlinks)
+
+
+class PinnedAttributes:
+    """Evaluate pinned hierarchy/macros with Git, without source metadata access.
+
+    Scratch directories are private, exclusive and owned by the caller's exit
+    stack. Only fixed HEAD/config and hash-verified .gitattributes are written.
+    No source file is written and no Git checkout/filter command is executed.
+    """
+    NAMES=('text','eol','filter','ident','working-tree-encoding','crlf')
+    LIMITS=dict(projects=1024,files=4096,bytes=16 << 20,directories=8192)
+
+    def __init__(self,reader,stack):
+        self.reader=reader;self.stack=stack;self.projects={};self.charged={key:0 for key in self.LIMITS}
+
+    def charge(self,key,amount):
+        self.charged[key]+=amount
+        if self.charged[key]>self.LIMITS[key]:raise Refused('pinned-attribute-scratch-'+key+'-bound')
+
+    def query(self,project,name):
+        name=relative(name);encoded=os.fsencode(name)
+        if len(encoded)>4096:raise Refused('attribute-path-bound')
+        key=project['path']
+        if key not in self.projects:
+            head=b'ref: refs/heads/probe\n';config=b'[core]\nrepositoryformatversion = 0\nbare = false\n'
+            for category,amount in (('projects',1),('directories',5),('files',2),('bytes',len(head)+len(config))):
+                self.charge(category,amount)
+            home=Path(self.stack.enter_context(tempfile.TemporaryDirectory(prefix='mustang-pinned-attributes-')))
+            metadata=home/'git';tree=home/'tree';metadata.mkdir(mode=0o700);tree.mkdir(mode=0o700)
+            (metadata/'objects').mkdir();(metadata/'refs').mkdir()
+            (metadata/'HEAD').write_bytes(head)
+            (metadata/'config').write_bytes(config)
+            self.projects[key]=dict(metadata=metadata,tree=tree,loaded={})
+        scratch=self.projects[key];bindings=[]
+        for parent in reversed(Path(name).parents):
+            attribute=str(parent/'.gitattributes');row=project['attributes'].get(attribute)
+            if row is None:continue
+            if row['mode'] not in ('100644','100755'):raise Refused('pinned-attribute-not-regular')
+            bindings.append(dict(path=attribute,oid=row['oid']))
+            if attribute not in scratch['loaded']:
+                raw=self.reader.read(key,'blob',row['oid'])
+                if len(raw)>1 << 20:raise Refused('pinned-attribute-byte-bound')
+                if object_id('blob',raw)!=row['oid']:raise Refused('pinned-attribute-blob-differs')
+                self.charge('files',1);self.charge('bytes',len(raw))
+                directory=scratch['tree']
+                for component in Path(attribute).parts[:-1]:
+                    directory=directory/component
+                    if not directory.exists():self.charge('directories',1);directory.mkdir(mode=0o700)
+                target=scratch['tree']/attribute
+                with target.open('xb') as stream:stream.write(raw)
+                scratch['loaded'][attribute]=row['oid']
+        argv=['/usr/bin/git','--no-pager','-c','core.fsmonitor=false','-c','core.hooksPath=/dev/null',
+              '-c','protocol.allow=never','-c','core.attributesFile=/dev/null','-c','core.autocrlf=false',
+              '-c','core.eol=lf','-c','core.ignorecase=false','--git-dir='+str(scratch['metadata']),
+              '--work-tree='+str(scratch['tree']),'check-attr','--stdin','-z',*self.NAMES]
+        raw=self.reader._run(argv,min(self.reader.output_bytes,128 << 10),encoded+b'\0')
+        fields=raw.split(b'\0')
+        if len(fields)!=len(self.NAMES)*3+1 or fields[-1]!=b'':raise Refused('pinned-attribute-response-differs')
+        result={}
+        for i,attribute in enumerate(self.NAMES):
+            path,key,value=fields[i*3:i*3+3]
+            if path!=encoded or key!=attribute.encode():raise Refused('pinned-attribute-response-differs')
+            result[attribute]=value.decode('utf-8','surrogateescape')
+        return result,bindings
