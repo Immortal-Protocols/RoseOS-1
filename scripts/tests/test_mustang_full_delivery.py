@@ -117,8 +117,9 @@ class FullDeliveryTest(unittest.TestCase):
         self.assertFalse((target/'vendor/adevtool/dl/unpacked').exists())
         self.assertEqual((target/'vendor/adevtool/dl/.find-ignore').read_bytes(),b'')
 
-    def test_pinned_crlf_checkout_passes_collector_actual_copy_and_readback(self):
-        project,files=self.f.fixture.angle_checkout()
+    def test_pinned_text_checkout_passes_collector_actual_copy_and_readback(self):
+        project,files=self.f.fixture.angle_checkout(project_path='external/pigweed',
+            attributes=b'* text=auto\n*.bat text eol=crlf\n*.vcxproj eol=crlf\n**/compiled/*.h eol=crlf\n')
         self.f.fixture.command(self.root,'add','--all')
         self.f.fixture.command(self.root,'commit','--quiet','-m','pinned CRLF checkout fixture')
         revision=self.f.fixture.command(self.root,'rev-parse','HEAD').decode().strip()
@@ -129,7 +130,7 @@ class FullDeliveryTest(unittest.TestCase):
         target,_outcome,checked=self.copy_source(result)
         self.assertTrue(checked['sourceCopyVerified'])
         self.assertEqual(result['receipt']['sourceCandidate']['selectedCheckoutConvertedEntries'],3)
-        self.assertEqual((target/'external/angle/scripts/trigger.bat').read_bytes(),
+        self.assertEqual((target/'external/pigweed/scripts/trigger.bat').read_bytes(),
                          files['scripts/trigger.bat'].replace(b'\n',b'\r\n'))
 
     def test_foreign_owner_and_other_preparation_scope_stop_before_guest(self):

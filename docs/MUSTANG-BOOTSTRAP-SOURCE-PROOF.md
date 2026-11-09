@@ -197,9 +197,10 @@ on success or refusal; no existing directory is adopted or deleted.
 
 Only explicit eol=crlf with supported text semantics can derive checkout bytes;
 filter, ident, encoding and legacy crlf transforms remain unsupported. A raw blob
-is read by ID, hashed back to its pin and converted LF-to-CRLF only within a
-conservative non-control-byte text subset (TAB/LF allowed). The complete derived
-blob identity must match the measured worktree. Changed, mixed or unattributed
+is read by ID and hashed back to its pin. Explicit text converts naked LF while
+preserving existing CRLF. text=auto additionally retains existing CR/CRLF and
+binary blobs using Git's printable/nonprintable/NUL/EOF heuristic. Only the
+exact derived blob identity can match the measured worktree. Changed, mixed or unattributed
 bytes still refuse; raw pinned identity remains valid. No Git --filters,
 --textconv, checkout or source program is invoked.
 
@@ -217,3 +218,18 @@ checkout for ANGLE, BC and macro/override fixtures, then exercise the full colle
 and shared copier. Negative cases cover changed/mixed/unattributed bytes, pinned
 filter refusal, corrupted objects, bounds, ignored source info/config overrides,
 non-execution of configured filters and scratch cleanup on success/refusal.
+
+Run42618172377 refused `external/pigweed/bootstrap.bat` under the initial
+conservative text subset, before copy/allocation/Make. Its pinned blob contains
+two ESC bytes and its
+[pinned rule](https://android.googlesource.com/platform/external/pigweed/+/db5cb0db8513b2598ae7c1fa8a6441ff7f8808b5/.gitattributes)
+is explicit `text eol=crlf`. The refusal is reproducible: the old subset rejected
+ESC even though Git permits it, and explicit text should not use the auto binary
+heuristic. The corrected model follows Git's
+[conversion implementation](https://github.com/git/git/blob/master/convert.c)
+(gather_stats, convert_is_binary and will_convert_lf_to_crlf). Real Git checkouts
+from pinned raw objects independently verify explicit/auto behavior with ESC,
+EOF, NUL/binary data, mixed endings, bare CR and binary-threshold cases. The
+full collector/copier/readback fixture includes the explicit-text ESC case.
+This changes only the authenticated blob-to-checkout model, never normalizes
+arbitrary worktree bytes, and does not claim a successful native candidate yet.

@@ -1,0 +1,50 @@
+{
+  "schema": "roseos.mustang-full-run-failure.v1",
+  "runId": "42618172377",
+  "runNumber": 34,
+  "runAttempt": 1,
+  "source": "ce51e65d91b1afa998d634e7aa7dff2f5dd004bc",
+  "workflow": ".github/workflows/mustang-ota-dedicated.yml",
+  "builderJobId": 129163773520,
+  "builderGroupId": 5,
+  "hostCheckConclusion": "success",
+  "baselineConclusion": "success",
+  "appInputDownloadAndVerificationConclusion": "success",
+  "collectorStage": "source",
+  "collectorFailureCode": "unsupported-pinned-crlf-text",
+  "failurePath": "external/pigweed/bootstrap.bat",
+  "exceptionType": "Refused",
+  "collectorReceiptWritten": true,
+  "errorObservedAt": "2026-11-09T12:48:42Z",
+  "sourceCopyStarted": false,
+  "allocationAttemptedByThisRun": false,
+  "makeStarted": false,
+  "journalOnDiskObserved": false,
+  "signerConclusion": "skipped",
+  "publisherConclusion": "skipped",
+  "cleanupJobId": 129169746795,
+  "cleanupConclusion": "success",
+  "directStopObservation": {
+    "observedAt": "2026-11-09T12:53:18.184949+00:00",
+    "value": {
+      "id": "5585425566393384049",
+      "status": "TERMINATED",
+      "metadata": {
+        "items": [
+          {
+            "key": "block-project-ssh-keys"
+          },
+          {
+            "key": "enable-guest-attributes"
+          },
+          {
+            "key": "enable-oslogin"
+          }
+        ]
+      },
+      "lastStopTimestamp": "2026-11-09T04:49:54.273-08:00"
+    }
+  },
+  "nextInitializationRunNumber": 35,
+  "basis": "Native diagnostic refused the raw pinned Pigweed batch-file text subset before copy/allocation/Make. The authenticated pinned file contains two ESC bytes; pinned *.bat text eol=crlf is explicit text. The conservative observer incorrectly rejected controls without distinguishing explicit text from text=auto. Match Git conversion semantics for explicit text and its documented automatic text/binary heuristic, then require the exact derived identity. Real Git checkout fixtures independently cover ESC, EOF, binary, mixed endings, bare CR and control-byte threshold cases; actual copied-byte readback includes the explicit-text ESC case. No arbitrary worktree normalization, source rewrite, filter execution, journal reset, access change or held retry; a complete native candidate/compile/sign/publication remains unclaimed."
+}
