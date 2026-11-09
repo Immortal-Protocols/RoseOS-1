@@ -58,6 +58,12 @@ def admit(path, env, lane=None):
         raise ValueError('foreign source root')
     epoch = str(int(datetime.datetime.strptime(a['reservedAt'], '%Y-%m-%dT%H:%M:%SZ')
                     .replace(tzinfo=datetime.timezone.utc).timestamp()))
+    if lane is not None and a.get('observed',{}).get('clock') is not None:
+        import mustang_clock
+        cfg=read(ROOT/'os/build-only/mustang-runtime.json')
+        mustang_clock.require_allocation(a,lane,cfg,root=ROOT,
+            env=dict(GITHUB_RUN_ID=str(v['runId']),GITHUB_RUN_ATTEMPT=str(v['runAttempt']),GITHUB_SHA=v['source']),
+            timestamp=epoch)
     integrate = v['stages']['integrate']
     c = v['stages']['compile']['result']
     if integrate.get('source') != v['source'] or integrate['result'].get('returncode') != 0 \

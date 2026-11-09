@@ -172,6 +172,10 @@ def require_bundle_identity(bundle, env, root=ROOT):
     if runtime.is_file() and read_json(runtime).get('status')=='bound':
         require_qualified_bundle(bundle,root)
         require_full_bundle_source(bundle,root)
+        cfg=read_json(runtime)
+        if cfg.get('clockNumbering') is not None:
+            import mustang_clock, mustang_lane
+            mustang_clock.require_bundle(bundle,mustang_lane.configuration(),cfg,root)
 
 
 def require_qualified_bundle(bundle,root=ROOT):
@@ -250,6 +254,14 @@ def authenticate_full_run(bundle,env,*,api=None,root=ROOT):
             or actual.get('status')!='in_progress' or actual.get('conclusion') is not None \
             or any((actual.get(k) or {}).get('id')!=1428996648 for k in ('repository','head_repository')):
         raise ValueError('full-run Actions metadata differs')
+    if 'clockAllocation' in bundle:
+        import mustang_clock
+        cfg=read_json(Path(root)/'os/build-only/mustang-runtime.json')
+        proof=mustang_clock.require_bundle(bundle,lane,cfg,root)
+        ctx=proof['context']
+        if (actual.get('workflow_id'),actual.get('run_number'),actual.get('created_at')) != (
+                ctx['workflowId'],ctx['runNumber'],ctx['createdAt']):
+            raise ValueError('UTC-hour allocation differs from authenticated Actions run')
     jobs=collector.listing(api(base+'/attempts/1/jobs?per_page=100'),'jobs');observed={}
     for name in ('guard','controller','enroll','builder','signer'):
         rows=[job for job in jobs if job.get('name')==name]
@@ -726,7 +738,15 @@ def full_run_tools(collection,inputs,root):
     script=Path(root)/'script/generate-release.sh'
     generated=_collected(dict(state='collected',path=str(script),sizeBytes=script.stat().st_size,
         sha256=sha256_file(script)),'generateRelease',inputs,'generate-release.sh')
-    return dict(otatools=tools,jdk=jdk,generateRelease=generated,otatoolsExtractedBytes=inspected['expandedBytes'],
+    clock_fields={}
+    cfg=read_json(Path(root)/'os/build-only/mustang-runtime.json')
+    if cfg.get('clockNumbering') is not None:
+        import mustang_clock
+        allocation=collection.get('candidate',{}).get('allocation')
+        mustang_clock.require_allocation(allocation,lane,cfg,root=root,
+            env=dict(GITHUB_RUN_ID=run,GITHUB_RUN_ATTEMPT=attempt,GITHUB_SHA=collection['collectorSource']),timestamp=stamp)
+        clock_fields['clockAllocation']=allocation
+    return dict(**clock_fields,otatools=tools,jdk=jdk,generateRelease=generated,otatoolsExtractedBytes=inspected['expandedBytes'],
         jdkExtractedBytes=jdk_expanded,toolQualification=dict(evidence=qualification.EVIDENCE,
         inspection=qualification.INSPECTION,packageSha256=inspected['packageSha256'],inventorySha256=inspected['inventorySha256']),
         fullRunSource=dict(nativeReceipt=observed['result'],nativeReceiptSha256=observed['receipt']['sha256'],copyReceipt=copied),

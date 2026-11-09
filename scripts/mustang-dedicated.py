@@ -111,7 +111,10 @@ def guard(lane, cfg, env, publish=False, root=ROOT, diff=None, dry_run=False):
             or signing.get('establishedMustangIdentityPreserved') is not True or signing.get('approved') is not True:
         raise ValueError('existing signer admission for the dedicated workflow is not established')
     state=reference(cfg.get('allocationState'),root)
-    if str(state.get('failedRun'))!='41884368820' or state.get('unknown') is not False \
+    if cfg.get('clockNumbering') is not None:
+        import mustang_clock
+        mustang_clock.policy(lane,cfg,root)
+    elif str(state.get('failedRun'))!='41884368820' or state.get('unknown') is not False \
             or state.get('builder')!=lane['vm'] or state.get('dataFilesystemUuid')!=cfg['dataFilesystemUuid'] \
             or not isinstance(state.get('consumedBuilds'),list) or any(
                 not isinstance(b,str) or not re.fullmatch(r'[1-9][0-9]{9}',b) for b in state['consumedBuilds']):
@@ -440,7 +443,16 @@ def main():
             if not os.environ.get(name): raise ValueError(name+' is unbound; no host start')
         if not dry and os.environ['GCP_SIGNER_SERVICE_ACCOUNT']!=ota.module('mustang_route_identity','mustang-sign-package.py').SIGNER:
             raise ValueError('existing Mustang signer identity differs; no host start')
-        emit(runner_group=cfg['runner']['groupName'],runner_label=lane['runnerLabel'])
+        values=dict(runner_group=cfg['runner']['groupName'],runner_label=lane['runnerLabel'])
+        if not dry and cfg.get('clockNumbering') is not None:
+            import mustang_clock
+            import mustang_bootstrap_collector
+            policy=mustang_clock.policy(lane,cfg,ROOT)
+            api=mustang_bootstrap_collector.github_reader(dict(runId=run),os.environ.get('GH_TOKEN',''))
+            actual=api('/repos/Immortal-Protocols/RoseOS-1/actions/runs/'+run)
+            clock_context=mustang_clock.actions_context(actual,os.environ,policy)
+            values['clock_context']=base64.b64encode(mustang_clock.canonical(clock_context)).decode()
+        emit(**values)
     elif args.action=='cleanup-prepare':
         encoded=os.environ.get('MUSTANG_OWNER_B64','')
         if len(encoded)>8192: raise ValueError('oversized controller ownership refused')

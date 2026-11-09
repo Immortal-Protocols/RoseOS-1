@@ -58,10 +58,14 @@ env:
 jobs:
   guard:
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: read
     timeout-minutes: 5
     outputs:
       runner_group: ${{ steps.inputs.outputs.runner_group }}
       runner_label: ${{ steps.inputs.outputs.runner_label }}
+      clock_context: ${{ steps.inputs.outputs.clock_context }}
     env:
       MUSTANG_CONTROLLER_SERVICE_ACCOUNT: ${{ vars.MUSTANG_CONTROLLER_SERVICE_ACCOUNT }}
       MUSTANG_CONTROLLER_WORKLOAD_IDENTITY_PROVIDER: ${{ vars.MUSTANG_CONTROLLER_WORKLOAD_IDENTITY_PROVIDER }}
@@ -75,6 +79,8 @@ jobs:
         persist-credentials: false
     - id: inputs
       name: Admit exact manual run, routes and actual dedicated inputs before host start
+      env:
+        GH_TOKEN: ${{ github.token }}
       run: python3 scripts/mustang-dedicated.py guard
     - name: Check the fixed read-only otatools observation binding before START
       if: inputs.dry_run
@@ -211,6 +217,7 @@ jobs:
       actions: read
     env:
       PYTHONDONTWRITEBYTECODE: '1'
+      MUSTANG_CLOCK_CONTEXT: ${{ needs.guard.outputs.clock_context }}
       MUSTANG_OWNER_B64: ${{ needs.controller.outputs.ownership }}
     steps:
     - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262

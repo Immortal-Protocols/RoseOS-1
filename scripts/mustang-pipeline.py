@@ -127,7 +127,10 @@ def run(run_id, attempt, lane=None, runtime=None, inputs_dir=None):
         if runtime is None or inputs_dir is None:
             raise ValueError('dedicated Mustang needs admitted runtime bindings and app inputs')
         consumed = runtime.get('consumedBuilds')
-        if not isinstance(consumed, list) or not consumed or any(
+        if runtime.get('clockNumbering') is not None:
+            import mustang_clock
+            mustang_clock.policy(lane,runtime,ROOT)
+        elif not isinstance(consumed, list) or not consumed or any(
                 not isinstance(build, str) or not re.fullmatch(r'[1-9][0-9]{9}', build) for build in consumed):
             raise ValueError('prior failed Mustang allocation state remains unresolved; no new build number')
         verifier = module('mustang_app_input_verify','app-inputs-verify.py')
@@ -245,8 +248,11 @@ def run(run_id, attempt, lane=None, runtime=None, inputs_dir=None):
         current = 'allocate'
         progress(current,'entered')
         alloc = module('mustang_allocate', 'mustang-allocate.py')
-        allocation = alloc.reserve(str(home), run_id, attempt, source, **(
-            {'lane':lane,'consumed':runtime['consumedBuilds']} if lane is not None else {}))
+        if lane is not None and runtime.get('clockNumbering') is not None:
+            allocation = mustang_clock.reserve(lane,runtime,os.environ,root=ROOT)
+        else:
+            allocation = alloc.reserve(str(home), run_id, attempt, source, **(
+                {'lane':lane,'consumed':runtime['consumedBuilds']} if lane is not None else {}))
         release_receipts.write_once(run_root/'allocation.json', allocation)
         report['allocation'] = allocation
         work, reconcile = Path(allocation['workDir']), Path(allocation['integrationDir'])
