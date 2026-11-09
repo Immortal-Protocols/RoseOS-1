@@ -332,6 +332,27 @@ jobs:
         ref: ${{ github.sha }}
         fetch-depth: 0
         persist-credentials: false
+    - name: Remove only the unused image Android SDK on this disposable hosted signer
+      shell: bash
+      run: |
+        set -euo pipefail
+        test "$RUNNER_ENVIRONMENT" = github-hosted
+        test "$GITHUB_JOB" = signer
+        test "$RUNNER_OS" = Linux
+        test "${ANDROID_HOME:-/usr/local/lib/android/sdk}" = /usr/local/lib/android/sdk
+        test "${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}" = /usr/local/lib/android/sdk
+        df -B1 "$RUNNER_TEMP"
+        if [[ -e /usr/local/lib/android/sdk || -L /usr/local/lib/android/sdk ]]; then
+          test -d /usr/local/lib/android/sdk
+          test ! -L /usr/local/lib/android/sdk
+          test "$(realpath /usr/local/lib/android/sdk)" = /usr/local/lib/android/sdk
+          if mountpoint -q /usr/local/lib/android/sdk; then
+            echo 'Refusing mounted Android SDK' >&2
+            exit 4
+          fi
+          sudo -n rm -rf --one-file-system -- /usr/local/lib/android/sdk
+        fi
+        df -B1 "$RUNNER_TEMP"
     - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
       with:
         name: mustang-signing-bundle-${{ github.run_id }}-${{ github.run_attempt }}
