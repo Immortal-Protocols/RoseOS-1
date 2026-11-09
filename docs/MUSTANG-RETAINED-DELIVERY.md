@@ -88,3 +88,21 @@ the merged source, artifact availability, unchanged input/source compatibility,
 exclusive queue/ownership, stopped dedicated VM/disk, current journal and
 publication floor still need actual admission within the applicable authority.
 The source-only preparation instruction is not runtime dispatch authorization.
+
+## First delivery and hosted image space
+
+Delivery `42711277712` at `c1985730` successfully collected the retained output,
+verified the unsigned proof and uploaded its signing inputs. The hosted signer
+then refused at its metadata gate: its unchanged current peak budget required
+98,069,563,537 bytes, with only 92,057,849,856 bytes free. No payload download,
+OIDC login, secret access, signing or publication occurred. Owned cleanup passed;
+the numeric dedicated VM was independently observed stopped without JIT metadata.
+
+The signer removes only the unused preinstalled Android SDK at the documented
+Ubuntu image path `/usr/local/lib/android/sdk` before metadata admission. This
+step is restricted to the disposable GitHub-hosted signer, refuses a redirected
+or mounted SDK root, and reports free bytes before and after. Signing uses the
+qualified otatools and JDK bundle, not that image SDK. No native builder files,
+compiled outputs, journal, qualified tools, disk budgets or capacity checks are
+changed. Freed space is not assumed: the existing actual hardware/free-space,
+peak and byte checks must pass before any signer login on the next full attempt.
