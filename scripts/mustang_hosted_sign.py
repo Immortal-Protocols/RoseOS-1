@@ -20,6 +20,7 @@ file. A guest-supplied script is hashed and never executed.
 """
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -167,6 +168,114 @@ def require_bundle_identity(bundle, env, root=ROOT):
     extracted = bundle['otatoolsExtractedBytes']
     if extracted is not None and (not isinstance(extracted, int) or isinstance(extracted, bool) or extracted < 0):
         raise ValueError('size is not a byte count')
+    runtime=Path(root)/'os/build-only/mustang-runtime.json'
+    if runtime.is_file() and read_json(runtime).get('status')=='bound':
+        require_qualified_bundle(bundle,root)
+        require_full_bundle_source(bundle,root)
+
+
+def require_qualified_bundle(bundle,root=ROOT):
+    """Admission uses the measured qualification, not guest-chosen executable pins."""
+    import mustang_otatools_qualification as qualification
+    import mustang_tool_closure as closure
+    inspected=qualification.inspection_record(root=root)
+    provenance=closure.verify_closure(root,require_unbound=False)
+    required=('bin/ota_from_target_files','bin/sign_target_files_apks','bin/aapt2',
+              'bin/apksigner','bin/check_ota_package_signature','bin/delta_generator')
+    inventory={row['path']:row for row in inspected.get('inventory',[])}
+    if any(inventory.get(name,{}).get('type')!='file' or not inventory[name].get('mode',0)&0o100 for name in required):
+        raise ValueError('full-run qualified signing/verification tools are incomplete')
+    expected=dict(evidence=qualification.EVIDENCE,inspection=qualification.INSPECTION,
+        packageSha256=inspected['packageSha256'],inventorySha256=inspected['inventorySha256'])
+    if bundle.get('toolQualification')!=expected or bundle['otatools']['sha256']!=inspected['packageSha256'] \
+            or bundle['otatools']['sizeBytes']!=inspected['packageBytes'] \
+            or bundle.get('otatoolsExtractedBytes')!=inspected['expandedBytes'] \
+            or bundle['jdk']['sha256']!=provenance['jdk']['archiveSha256'] \
+            or bundle['jdk']['sizeBytes']!=provenance['jdk']['archiveSizeBytes']:
+        raise ValueError('full-run signing tools differ from measured qualification')
+    return inspected,provenance
+
+
+def require_full_bundle_source(bundle,root=ROOT):
+    import mustang_lane
+    import mustang_bootstrap_proof as source_proof
+    lane=mustang_lane.configuration();bound=bundle.get('fullRunSource',{})
+    native=bound.get('nativeReceipt',{});copied=bound.get('copyReceipt',{})
+    run=dict(runId=bundle['runId'],runAttempt=str(bundle['runAttempt']),source=bundle['sourceSha'],
+        workflow='Immortal-Protocols/RoseOS-1/'+lane['workflow']+'@refs/heads/main')
+    manifest=Path(root)/'os/pinned-manifest.xml'
+    candidate=native.get('sourceCandidate',{})
+    if native.get('schema')!='roseos.mustang-bootstrap-collector.v1' or native.get('run')!=run \
+            or native.get('workflowJob')!='builder' or native.get('observationKind')!='native-read-only' \
+            or any(native.get(k) is not True for k in ('success','guestIdentityObserved','dataFilesystemIdentityObserved',
+                'checkoutBytesVerified','workflowContextValidated')) \
+            or any(native.get(k) is not False for k in ('fullBootstrapVerified','pristine','otaAdmitted','signingStarted')) \
+            or candidate.get('manifestSha256')!=sha256_file(manifest) \
+            or copied.get('schema')!='roseos.mustang-full-run-source-copy.v1' \
+            or copied.get('run')!=run or copied.get('builder')!=lane['vm'] or copied.get('sourceCopyVerified') is not True \
+            or copied.get('nativeReceiptSha256')!=bound.get('nativeReceiptSha256') \
+            or hashlib.sha256(source_proof.canonical(native)).hexdigest()!=bound.get('nativeReceiptSha256') \
+            or copied.get('portableInventorySha256')!=candidate.get('portableInventorySha256'):
+        raise ValueError('full-run source observation/copy receipt binding differs')
+    import mustang_edge
+    bound_edge=mustang_edge.binding(bundle['sourceSha'],bundle['sourceSha'],bundle['build'],bundle['timestamp'],
+        bundle['runId'],str(bundle['runAttempt']),bundle['runId'],str(bundle['runAttempt']))
+    mustang_edge.require(bundle.get('unsignedRaisedEdge'),'unsigned',bound_edge,bundle['unsigned'])
+    return bound
+
+
+def authenticate_full_run(bundle,env,*,api=None,root=ROOT):
+    """Correlate completed native producer with this in-progress hosted signer."""
+    import base64
+    import mustang_bootstrap_collector as collector
+    import mustang_lane
+    bound=require_full_bundle_source(bundle,root);lane=mustang_lane.configuration()
+    if env.get('GITHUB_JOB')!='signer':raise ValueError('full-run metadata admission requires the hosted signer')
+    expected=env.get('EXPECTED_FULL_BUNDLE_SHA256','')
+    if not HEX64.fullmatch(expected):raise ValueError('full-run producer bundle hash output absent')
+    encoded=env.get('MUSTANG_OWNER_B64','')
+    if not 0<len(encoded)<=8192:raise ValueError('full-run controller ownership absent')
+    try:raw=base64.b64decode(encoded,validate=True);owner=json.loads(raw)
+    except (TypeError,ValueError):raise ValueError('full-run controller ownership malformed') from None
+    run=bound['nativeReceipt']['run']
+    if owner.get('schema')!=collector.controller.SCHEMA or owner.get('run')!=run \
+            or not mustang_lane.owned_start(owner.get('owner'),lane) \
+            or hashlib.sha256(raw).hexdigest()!=bound['nativeReceipt'].get('controllerOwnershipSha256'):
+        raise ValueError('full-run controller ownership differs')
+    api=api or collector.github_reader(run,env.get('GH_TOKEN',''))
+    base='/repos/Immortal-Protocols/RoseOS-1/actions/runs/'+run['runId'];actual=api(base)
+    if actual.get('id')!=int(run['runId']) or actual.get('run_attempt')!=1 \
+            or actual.get('head_sha')!=run['source'] or actual.get('head_branch')!='main' \
+            or actual.get('path')!=WORKFLOW or actual.get('event')!='workflow_dispatch' \
+            or actual.get('status')!='in_progress' or actual.get('conclusion') is not None \
+            or any((actual.get(k) or {}).get('id')!=1428996648 for k in ('repository','head_repository')):
+        raise ValueError('full-run Actions metadata differs')
+    jobs=collector.listing(api(base+'/attempts/1/jobs?per_page=100'),'jobs');observed={}
+    for name in ('guard','controller','enroll','builder','signer'):
+        rows=[job for job in jobs if job.get('name')==name]
+        if len(rows)!=1:raise ValueError('full-run Actions job is missing or ambiguous')
+        job=rows[0]
+        if (job.get('status'),job.get('conclusion'))!=(('in_progress',None) if name=='signer' else ('completed','success')) \
+                or job.get('run_id')!=int(run['runId']) or job.get('head_sha')!=run['source'] \
+                or job.get('run_attempt',1)!=1 or type(job.get('id')) is not int or job['id']<=0:
+            raise ValueError('full-run Actions producer/job identity differs')
+        observed[name]=job['id']
+        if name=='builder' and (job.get('runner_group_id')!=5 or job.get('runner_name')!='mustang-'+run['runId'] \
+                or lane['runnerLabel'] not in job.get('labels',[])):
+            raise ValueError('full-run native producer runner differs')
+    for job in jobs:
+        if job.get('name') in ('source','hostdeps','lock-admin','factory','vendor','otatools') and job.get('conclusion')!='skipped':
+            raise ValueError('full-run competing preparation scope selected')
+    return dict(actionsRunIdentityVerified=True,producerJobIds=observed,completedRunVerified=False,otaAdmitted=False)
+
+
+def full_bundle_gate(bundle,path,env,root):
+    if 'fullRunSource' not in bundle:return None
+    require_full_bundle_source(bundle,root)
+    if env.get('GITHUB_JOB')=='builder':return None  # no metadata token reaches Make
+    if sha256_file(path)!=env.get('EXPECTED_FULL_BUNDLE_SHA256'):
+        raise ValueError('downloaded full-run bundle differs from the native job hash output')
+    return authenticate_full_run(bundle,env,root=root)
 
 
 def trusted_paths():
@@ -342,7 +451,7 @@ def current_peak_terms(unsigned, otatools_zip, otatools_uncompressed, jdk_zip, j
     terms = {
         'unsignedCopies': 2 * unsigned,
         'otatoolsCopies': 2 * otatools_zip,
-        'otatoolsExpansion': otatools_uncompressed,
+        'otatoolsExpansion': 2 * otatools_uncompressed,  # preflight plus generate-release's own unzip
         'jdkArchive': jdk_zip,
         'jdkExpansion': jdk_uncompressed,
         'script': script,
@@ -568,6 +677,62 @@ def _collected(row, name, dest, filename):
     return {'sha256': row['sha256'], 'sizeBytes': row['sizeBytes'], 'file': 'inputs/' + filename}
 
 
+def full_run_tools(collection,inputs,root):
+    """Reuse the qualified archive and pack the copied pinned JDK, without execution."""
+    import mustang_lane
+    import mustang_paths
+    import mustang_otatools_qualification as qualification
+    import mustang_tool_closure as closure
+    lane=mustang_lane.configuration();paths=mustang_paths.layout(lane)
+    run=str(collection.get('runId',''));attempt=str(collection.get('runAttempt',''))
+    if not re.fullmatch(r'[1-9][0-9]{0,19}',run) or attempt!='1' \
+            or collection.get('builder')!=lane['vm'] or collection.get('workflow')!=lane['workflow']:
+        raise ValueError('full-run bundle differs from the dedicated producer')
+    source=paths['storageRoot']/f'mustang-prep-{run}-1/source'
+    if collection['outputs'].get('outDir')!=str(source/f"out-mustang-build-{collection['build']}"):
+        raise ValueError('full-run bundle source path differs')
+    identity=collection['outputs'].get('actualBuildIdentity',{})
+    stamp=identity.get('timestamp')
+    if identity.get('device')!='mustang' or identity.get('build')!=collection['build'] \
+            or not isinstance(stamp,str) or not re.fullmatch(r'[1-9][0-9]{0,18}',stamp) or int(stamp)>=2**63:
+        raise ValueError('full-run bundle compiled timestamp is absent or differs')
+    stages=collection.get('candidate',{}).get('stages',{})
+    observed=stages.get('bootstrap-source',{});copied=stages.get('source-copy',{}).get('result',{})
+    if observed.get('result',{}).get('success') is not True or copied.get('sourceCopyVerified') is not True \
+            or copied.get('nativeReceiptSha256')!=observed.get('receipt',{}).get('sha256') \
+            or copied.get('portableInventorySha256')!=observed['result'].get('sourceCandidate',{}).get('portableInventorySha256'):
+        raise ValueError('full-run signing bundle has no observed-and-copied source proof')
+    provenance=closure.verify_closure(root,require_unbound=False)
+    inspected=qualification.inspection_record(root=root)
+    record=read_json(Path(root)/qualification.EVIDENCE)
+    package=record['receipt']['package'];path=Path(package['path'])
+    actual=qualification.inspect_package(path,root=root)
+    if actual['inventorySha256']!=inspected['inventorySha256'] or actual['expandedBytes']!=inspected['expandedBytes']:
+        raise ValueError('retained otatools bytes differ from measured qualification')
+    tools=_collected(dict(package,state='collected'),'otatools',inputs,'otatools.zip')
+    # The JDK tree is already part of the pinned source copy. No extra fetch,
+    # tool execution, installed host JDK or guest-provided script is required.
+    jdk_tree=source/'prebuilts/jdk/jdk21/linux-x86'
+    members=closure.collect_members(jdk_tree)
+    if len(members)!=provenance['jdk']['entryCount'] or sum(p.stat().st_size for _,p in members)>4 << 30:
+        raise ValueError('copied JDK inventory differs from provenance')
+    blob=closure.pack_tree(jdk_tree)
+    if len(blob)!=provenance['jdk']['archiveSizeBytes'] \
+            or hashlib.sha256(blob).hexdigest()!=provenance['jdk']['archiveSha256']:
+        raise ValueError('copied pinned JDK differs from canonical package')
+    with (inputs/'jdk.zip').open('xb') as output:output.write(blob)
+    with zipfile.ZipFile(inputs/'jdk.zip') as archive:jdk_expanded=sum(row.file_size for row in archive.infolist())
+    jdk=dict(file='inputs/jdk.zip',sha256=provenance['jdk']['archiveSha256'],sizeBytes=len(blob))
+    script=Path(root)/'script/generate-release.sh'
+    generated=_collected(dict(state='collected',path=str(script),sizeBytes=script.stat().st_size,
+        sha256=sha256_file(script)),'generateRelease',inputs,'generate-release.sh')
+    return dict(otatools=tools,jdk=jdk,generateRelease=generated,otatoolsExtractedBytes=inspected['expandedBytes'],
+        jdkExtractedBytes=jdk_expanded,toolQualification=dict(evidence=qualification.EVIDENCE,
+        inspection=qualification.INSPECTION,packageSha256=inspected['packageSha256'],inventorySha256=inspected['inventorySha256']),
+        fullRunSource=dict(nativeReceipt=observed['result'],nativeReceiptSha256=observed['receipt']['sha256'],copyReceipt=copied),
+        unsignedRaisedEdge=collection.get('roseEdge'),timestamp=stamp)
+
+
 def export_bundle(collection_path, out_path, root=ROOT):
     if guest_secret_path(out_path) or guest_secret_path(collection_path):
         raise ValueError('signing material is refused on the guest')
@@ -583,10 +748,10 @@ def export_bundle(collection_path, out_path, root=ROOT):
     artifacts = collection['outputs']['artifacts']
     jdk = {'sha256': None, 'sizeBytes': None, 'file': None}
     script = {'sha256': None, 'sizeBytes': None, 'file': None}
-    if isinstance(artifacts.get('jdk'), dict) and artifacts['jdk'].get('state') == 'collected':
+    if collection.get('builder') is None and isinstance(artifacts.get('jdk'), dict) and artifacts['jdk'].get('state') == 'collected':
         jdk = _collected(artifacts['jdk'], 'jdk', inputs, 'jdk.zip')
     script_path = collection.get('generateReleasePath')
-    if isinstance(script_path, str):
+    if collection.get('builder') is None and isinstance(script_path, str):
         script_file = Path(script_path)
         if not guest_secret_path(script_file) and script_file.is_file() and not script_file.is_symlink():
             copied = _collected({'state': 'collected', 'path': str(script_file), 'sizeBytes': script_file.stat().st_size,
@@ -601,14 +766,21 @@ def export_bundle(collection_path, out_path, root=ROOT):
         'sourceSha': collection['collectorSource'],
         'build': collection.get('build'),
         'unsigned': _collected(artifacts.get('targetFiles'), 'unsigned', inputs, 'unsigned-target_files.zip'),
-        'otatools': _collected(artifacts.get('otatools'), 'otatools', inputs, 'otatools.zip'),
+        'otatools': None,
         'jdk': jdk,
         'generateRelease': script,
         'otatoolsExtractedBytes': None,
         'jdkExtractedBytes': None,
         'identity': public_identity(root),
     }
+    if collection.get('builder') is not None:
+        bundle.update(full_run_tools(collection,inputs,root))
+        require_qualified_bundle(bundle,root)
+    else:bundle['otatools']=_collected(artifacts.get('otatools'),'otatools',inputs,'otatools.zip')
     write_json(out / 'mustang-signing-bundle.json', bundle)
+    if collection.get('builder') is not None and os.environ.get('GITHUB_OUTPUT'):
+        with open(os.environ['GITHUB_OUTPUT'],'a') as output:
+            output.write('bundle_sha256='+sha256_file(out/'mustang-signing-bundle.json')+'\n')
     return bundle
 
 
@@ -633,14 +805,23 @@ def bind_outputs(directory, env=None):
     for name in ('signedTargetFiles', 'ota'):
         row = outputs.get(name)
         filename = row.get('file') if isinstance(row, dict) else None
-        if not isinstance(filename, str) or filename != Path(filename).name or filename in ('.', '..') \
+        staged=name=='ota' and isinstance(receipt.get('publicStage'),dict)
+        safe_name=isinstance(filename,str) and (filename==Path(filename).name and filename not in ('.','..')
+            if not staged else len(Path(filename).parts)==2 and Path(filename).parts[0]=='staged' and '..' not in Path(filename).parts)
+        if not safe_name \
                 or not HEX64.fullmatch(row.get('sha256') or ''):
             raise ValueError('hosted signed output left the receipt directory')
         path = directory / filename
-        if path.is_symlink() or not path.is_file() or path.resolve().parent != root \
+        parent=root/'staged' if staged else root
+        if parent.is_symlink() or path.is_symlink() or not path.is_file() or path.resolve().parent != parent \
                 or path.stat().st_size != row.get('sizeBytes') or sha256_file(path) != row['sha256']:
             raise ValueError('hosted signed output hash differs' if path.is_file() and not path.is_symlink()
                              else 'hosted signed output left the receipt directory')
+    if receipt.get('publicStage') is not None:
+        stage=receipt['publicStage'];path=directory/'staged/mustang-ota-receipt.json'
+        if stage.get('path')!='staged' or not path.is_file() or path.is_symlink() \
+                or sha256_file(path)!=stage.get('receiptSha256'):
+            raise ValueError('hosted public stage receipt differs')
     return receipt
 
 
@@ -685,6 +866,7 @@ def preliminary(bundle_path, root=None, env=None, capacity_config=None, pin=None
         space = os.statvfs('/')
         free = space.f_bavail * space.f_frsize
     require_bundle_identity(bundle, env, root)
+    full_bundle_gate(bundle,Path(bundle_path)/'mustang-signing-bundle.json' if Path(bundle_path).is_dir() else Path(bundle_path),env,root)
     require_entry(root)
     loaded = load_pin(root, pin)
     reasons = []
@@ -731,16 +913,28 @@ def preflight(bundle_path, root=None, env=None, capacity_config=None, pin=None, 
     if free is None:
         space = os.statvfs('/')
         free = space.f_bavail * space.f_frsize
+    actual_env=os.environ if env is None else env
+    full_bundle_gate(bundle,directory/'mustang-signing-bundle.json',actual_env,root)
     return evaluate(bundle, root, free, files=bundle_files(directory, bundle),
                     secret_access=None, pin=pin, env=env, capacity_config=capacity_config)
 
 
+def host_sign_entry(source_root):
+    """Load the actual reviewed hyphenated entry point, never an import alias."""
+    path=Path(source_root)/'scripts/host-sign.py'
+    if path.is_symlink() or not path.is_file():raise ValueError('reviewed host-sign entry is absent')
+    spec=importlib.util.spec_from_file_location('mustang_reviewed_host_sign',path)
+    module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+    return module.main
+
+
 def run_host_sign(source_root, release_dir, extracted, jdk_home, bundle, env, host_sign_main=None):
     if host_sign_main is None:
-        import host_sign as signer
-        host_sign_main = signer.main
+        host_sign_main = host_sign_entry(source_root)
     release_dir = Path(release_dir)
     release_dir.mkdir(mode=0o700, exist_ok=True)
+    # host-sign copies a ZIP into releases/BUILD, not the preflight extraction directory.
+    tools_archive=Path(extracted).parent/Path(bundle['otatools']['file']).name
     config = {
         'target': {'device': 'mustang'},
         'host': {'sign': {
@@ -749,7 +943,7 @@ def run_host_sign(source_root, release_dir, extracted, jdk_home, bundle, env, ho
             'passphraseSecret': PASSPHRASE,
             'secretVersion': SECRET_VERSION,
             'passphraseSecretVersion': SECRET_VERSION,
-            'otatools': str(extracted),
+            'otatools': str(tools_archive),
             'javaHome': str(jdk_home),
             'updateNotes': str(Path(source_root) / 'script' / 'generate-release.sh'),
         }},
@@ -758,8 +952,9 @@ def run_host_sign(source_root, release_dir, extracted, jdk_home, bundle, env, ho
     }
     config_path = release_dir / 'hosted-sign-config.json'
     config_path.write_text(json.dumps(config, sort_keys=True) + '\n')
-    sign_env = dict(env)
-    sign_env.update(ROSE_RELEASE_DIR=str(release_dir), ROSE_SIGN_OTATOOLS=str(extracted),
+    sign_env = {k:v for k,v in env.items() if k not in ('GH_TOKEN','GITHUB_TOKEN',
+        'ACTIONS_ID_TOKEN_REQUEST_TOKEN','ACTIONS_ID_TOKEN_REQUEST_URL')}
+    sign_env.update(ROSE_RELEASE_DIR=str(release_dir), ROSE_SIGN_OTATOOLS=str(tools_archive),
                     BUILD_NUMBER=str(bundle.get('build') or '0'), BUILD_DATETIME=str(bundle.get('timestamp') or '0'),
                     ROSE_CANDIDATE_SHA=bundle['sourceSha'])
     previous = Path.cwd()
@@ -782,8 +977,10 @@ def write_hosted_receipt(release_dir, out_dir, bundle):
     out.mkdir(mode=0o700, exist_ok=True)
     copied = {}
     for source, name in ((signed, 'signed-target_files.zip'), (otas[0], otas[0].name)):
-        target = out / name
-        shutil.copyfile(source, target)
+        target = out / ('staged/'+name if 'fullRunSource' in bundle and source==otas[0] else name)
+        if source==otas[0] and 'fullRunSource' in bundle:
+            if not target.is_file() or sha256_file(target)!=sha256_file(source):raise ValueError('staged OTA bytes differ')
+        else:shutil.copyfile(source, target)
         copied[name] = target
     receipt = {
         'schema': RECEIPT_SCHEMA, 'device': 'mustang', 'signer': SIGNER, 'secretVersion': SECRET_VERSION,
@@ -792,10 +989,12 @@ def write_hosted_receipt(release_dir, out_dir, bundle):
         'outputs': {
             'signedTargetFiles': {'file': 'signed-target_files.zip', 'sizeBytes': copied['signed-target_files.zip'].stat().st_size,
                                   'sha256': sha256_file(copied['signed-target_files.zip'])},
-            'ota': {'file': otas[0].name, 'sizeBytes': copied[otas[0].name].stat().st_size,
+            'ota': {'file': ('staged/' if 'fullRunSource' in bundle else '')+otas[0].name, 'sizeBytes': copied[otas[0].name].stat().st_size,
                     'sha256': sha256_file(copied[otas[0].name])},
         },
     }
+    if 'fullRunSource' in bundle:
+        receipt['publicStage']=dict(path='staged',receiptSha256=sha256_file(out/'staged/mustang-ota-receipt.json'))
     write_json(out / 'mustang-hosted-sign-receipt.json', receipt)
     return receipt
 
@@ -807,9 +1006,22 @@ def sign(bundle_path, out_dir, root=None, env=None, capacity_config=None, host_s
         space = os.statvfs('/')
         free = space.f_bavail * space.f_frsize
     files = bundle_files(directory, bundle)
+    full_bundle_gate(bundle,directory/'mustang-signing-bundle.json',os.environ if env is None else env,root)
     result = evaluate(bundle, root, free, files=files, secret_access=None, pin=pin, capacity_config=capacity_config, env=env)
     release = Path(out_dir).parent / 'hosted-sign-work'
+    release.mkdir(mode=0o700,exist_ok=False)
+    # Same-filesystem link avoids a third physical unsigned input copy. Never
+    # overwrite or adopt another signing attempt, and fail if linking is unavailable.
+    os.link(files['unsigned'],release/'unsigned-target_files.zip',follow_symlinks=False)
     run_host_sign(root, release, result['extracted'], result['javaHome'], bundle, env or os.environ, host_sign_main)
+    if 'fullRunSource' in bundle:
+        import mustang_ota
+        public=release/'public'
+        matches=list(public.glob('mustang-ota_update-*.zip'))
+        if len(matches)!=1:raise ValueError('exactly one newly signed OTA required for staging')
+        out=Path(out_dir);out.mkdir(mode=0o700,exist_ok=False)
+        mustang_ota.stage_hosted(bundle,files['unsigned'],release/'signed-target_files.zip',matches[0],public,
+            result['extracted'],result['javaHome'],out/'staged',root=root)
     return write_hosted_receipt(release, out_dir, bundle)
 
 

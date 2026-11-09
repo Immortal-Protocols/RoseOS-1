@@ -118,9 +118,9 @@ def further_sources(path):
             raise ClosureError(f'{path.name} sources another helper')
 
 
-def verify_closure(root=ROOT):
+def verify_closure(root=ROOT,*,require_unbound=True):
     root = Path(root)
-    production_unbound(root)
+    if require_unbound:production_unbound(root)
     receipt = load_json(root, RECEIPT)
     if receipt.get('schema') != 'roseos.mustang-hosted-tool-closure.v1':
         raise ClosureError('tool closure receipt schema mismatch')

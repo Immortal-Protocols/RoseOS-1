@@ -1,12 +1,13 @@
-# Inactive Mustang bootstrap source-proof adapter
+# Mustang bootstrap source-proof checks
 
 The source-only adapter in `scripts/mustang_bootstrap_proof.py` checks a
 candidate source selection against pinned Git objects and prepared payload
 receipts. Its implementation and tests use synthetic local repositories.
 **No observation of the dedicated VM has been performed by this change.**
 The existing runtime remains unbound and still references the source-only
-sync evidence. No workflow invokes the adapter, and the CLI has no execution
-switch:
+sync evidence. The full producer now calls the collector and copy verifier
+inside its existing native job, after runtime admission. The proof CLI retains
+no execution switch:
 
 ```sh
 python3 scripts/mustang_bootstrap_proof.py
@@ -64,9 +65,9 @@ dedicated lane, holds the existing read-only canonical lock, validates the
 committed successful vendor/host bindings, and matches their actual on-disk
 receipt bytes before calling the core. It records the builder/run as declared
 metadata. It does not establish the guest, filesystem UUID or run identity.
-The separate [inactive collector](MUSTANG-BOOTSTRAP-COLLECTOR.md) now integrates
-the candidate with guarded guest checks and immutable receipts. It is tested
-with offline fixtures and has no live dispatch path. The collector calls the
+The [full-run collector](MUSTANG-BOOTSTRAP-COLLECTOR.md) integrates the candidate
+with guarded guest checks, immutable receipts and actual copied-byte verification.
+Its tests use offline fixtures; no live run has been dispatched by this change. The collector calls the
 internal already-locked reader so the same lock spans the entire observation.
 
 ## Limits and remaining proof

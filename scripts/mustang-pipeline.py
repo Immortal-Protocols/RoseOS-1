@@ -147,6 +147,16 @@ def run(run_id, attempt, lane=None, runtime=None, inputs_dir=None):
         engine.SOURCE_PROVENANCE=dict(engine.SOURCE_PROVENANCE,
             integration='copy of the admitted pristine pinned Mustang base on its dedicated VM; no other-device seed')
         lock, home, base = str(paths['lockPath']), paths['home'], paths['storageRoot']
+    bootstrap=None
+    if lane is not None:
+        import mustang_bootstrap_collector as bootstrap_collector
+        print(json.dumps({'stage':'bootstrap-source','status':'entered','runId':run_id}),flush=True)
+        bootstrap=bootstrap_collector.collect(lane,runtime,os.environ,
+            bootstrap_collector.proof.deps.read_event(os.environ),root=ROOT,full_run=True)
+        if not bootstrap['receiptWritten'] or bootstrap['receipt'].get('success') is not True:
+            raise ValueError('full-run bootstrap source observation refused; no source copy, allocation or Make')
+        bootstrap_collector.require_full_result(bootstrap,lane,os.environ,
+            bootstrap_collector.proof.deps.read_event(os.environ))
     run_root = base/f'mustang-prep-{run_id}-{attempt}'
     # Basic overwrite/access protections remain; no independent safe-path test suite is run.
     if not base.is_dir() or engine.symlink_in(run_root) or os.path.lexists(run_root):
@@ -163,6 +173,7 @@ def run(run_id, attempt, lane=None, runtime=None, inputs_dir=None):
         report.update(builder=dict(lane['vm']),workflow=lane['workflow'],appInputAdmission=admission,
                       sourceEvidence=runtime['sourceEvidence'],allocationState=runtime['allocationState'])
         report['signing']={'status':'same-run-signing-pending-unsigned-proof','reason':cfg['signingBlocker']}
+        report['stages']['bootstrap-source']={'receipt':bootstrap['receiptFile'],'result':bootstrap['receipt']}
     env = {k:v for k,v in os.environ.items() if k not in SCRUBBED and not k.startswith('GIT_')}
     current = 'source'
 
@@ -200,6 +211,19 @@ def run(run_id, attempt, lane=None, runtime=None, inputs_dir=None):
         for name in ('source', 'git-meta'):
             stage(name)
         if lane is not None:
+            current='source-copy'
+            progress(current,'entered')
+            import mustang_bootstrap_proof as source_proof
+            import mustang_existing_lock as source_lock
+            with source_lock.shared(paths['lockPath'],expected=paths['lockPath']):
+                verified=source_proof.verify_copy(paths['sourceRoot'],src,
+                    report['stages']['source']['result']['selectionRecord'],bootstrap['receipt']['sourceCandidate'])
+            verified.update(run=bootstrap['receipt']['run'],builder=lane['vm'],
+                nativeReceiptSha256=bootstrap['receiptFile']['sha256'],sourceRoot=str(src))
+            directory=receipts/current;directory.mkdir(mode=0o700)
+            release_receipts.write_once(directory/'completed.json',verified)
+            report['stages'][current]={'receipt':str(directory/'completed.json'),'result':verified}
+            progress(current,'complete')
             current = 'vendor-inputs'
             progress(current,'entered')
             reused=mustang_vendor_consumer.consume(lane,runtime,src,

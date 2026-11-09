@@ -454,6 +454,65 @@ def stage(sign_run, attempt, baseline_file, out, lane=None, tools=None, publicat
     return receipt
 
 
+def stage_hosted(bundle,unsigned,signed,ota,public,extracted,java_home,out,*,root=ROOT,execute=subprocess.run):
+    """Verify and stage a newly signed full OTA on the isolated hosted signer.
+
+    Uses the same Updater, OTA metadata, v1 identity and raised-edge verifiers
+    as native staging. No old target-files/installer or native-disk path is read.
+    """
+    cfg=config();guard(cfg,publication=False);root=Path(root)
+    runtime=read(root/'os/build-only/mustang-runtime.json')
+    if runtime.get('baselineTargetFiles') is not None or runtime.get('baselineFactoryEvidence') is not None \
+            or runtime.get('candidateContinuity')!='os/build-only/mustang-candidate-continuity-20261107.json':
+        raise ValueError('full hosted staging requires the explicitly selected candidate continuity contract')
+    baseline=candidate_continuity(read(root/runtime['candidateContinuity']))
+    lane=read(root/'os/build-only/mustang-lane.json');pins=identities()
+    build,epoch=bundle['build'],bundle['timestamp'];run=str(bundle['runId']);attempt=str(bundle['runAttempt'])
+    if attempt!='1' or bundle.get('workflow')!=lane['workflow'] or not re.fullmatch(r'[1-9][0-9]{9}',build):
+        raise ValueError('full hosted staging run/build differs')
+    unsigned,signed,ota,public=map(Path,(unsigned,signed,ota,public));binary=Path(extracted)/'bin'
+    bound=mustang_edge.binding(bundle['sourceSha'],bundle['sourceSha'],build,epoch,run,attempt,run,attempt)
+    unsigned_archive=mustang_edge.observed_archive(unsigned);signed_archive=mustang_edge.observed_archive(signed)
+    unsigned_proof=bundle.get('unsignedRaisedEdge')
+    mustang_edge.require(unsigned_proof,'unsigned',bound,unsigned_archive)
+    signed_proof=mustang_edge.inspect(signed,'signed',bound,signed_archive)
+    mustang_edge.require(signed_proof,'signed',bound,signed_archive)
+    clean=dict(PATH=str(Path(java_home)/'bin')+':'+str(binary)+':/usr/bin:/bin',JAVA_HOME=str(java_home),LANG='C',LC_ALL='C')
+    def checked(argv,**kwargs):return execute(argv,**dict(kwargs,env=clean))
+    tools=dict(aapt=str(binary/'aapt2'),apksigner=str(binary/'apksigner'))
+    observed=observe_target(signed,build,epoch,tools,pins,execute=checked)
+    metadata=ota_metadata(ota,build,epoch,cfg['baseline'])
+    cert=public/'releasekey.x509.pem';avb=public/'avb_pkmd.bin'
+    if host_secrets.certificate_sha256(cert)!=pins['otaCertificateSha256'] or digest(avb)!=pins['avbPublicKeySha256']:
+        raise ValueError('hosted public signing identity differs from Mustang v1')
+    checker=binary/'check_ota_package_signature'
+    if not checker.is_file() or not (binary/'delta_generator').is_file():
+        raise ValueError('qualified OTA signature verifier is unavailable')
+    result=checked([str(checker),str(cert),str(ota)],capture_output=True,text=True,timeout=1800)
+    if result.returncode:raise ValueError('hosted OTA package/payload signature verification failed')
+    out=Path(out);out.mkdir(mode=0o700)
+    # Preserve the signed output and avoid a third physical OTA copy.
+    os.link(ota,out/ota.name,follow_symlinks=False)
+    (out/'mustang-stable').write_text(f'{build} {epoch} mustang stable\n')
+    baseline_raw=(json.dumps(baseline,indent=2,sort_keys=True)+'\n').encode()
+    receipt=dict(schema='roseos.mustang-ota-stage.v1',device='mustang',build=build,timestamp=epoch,
+        candidateSource=bundle['sourceSha'],recipeSource=bundle['sourceSha'],runId=run,runAttempt=attempt,
+        compileRunId=run,compileRunAttempt=attempt,label=LABEL,contentFingerprint=fingerprint(bundle['sourceSha']),
+        roseEdge=dict(unsigned=unsigned_proof,signed=signed_proof),
+        edgeTargetFiles=dict(unsigned=unsigned_archive,signed=signed_archive),
+        baselineObservation=baseline,baselineObservationSha256=hashlib.sha256(baseline_raw).hexdigest(),
+        baselineEvidenceKind='candidate-installer-continuity',baselineBuild=baseline['build'],
+        packagedUpdater=observed,otaMetadata=metadata,publicIdentity=pins,
+        checks=dict(targetVersion=True,baselineTrust=True,otaSignatures=True,packagedUpdater=True,roseEdge=True),
+        verificationTools=dict(checkOtaSignatureSha256=digest(checker),deltaGeneratorSha256=digest(binary/'delta_generator')),
+        phoneUpdatePassed=False,currentPhone=False,automationDemonstrated=False,sprintOmissions=[],
+        builder=lane['vm'],workflow=lane['workflow'],ota=dict(file=ota.name,sizeBytes=ota.stat().st_size,sha256=digest(ota)))
+    release_receipts.write_once(out/'mustang-ota-receipt.json',receipt)
+    (out/'SHA256SUMS').write_text(''.join(f'{digest(p)}  {p.name}\n' for p in sorted(out.iterdir())))
+    verify_staged(out,cfg,publication=False)
+    return receipt
+
+
 def verify_staged(directory, cfg, publication=True):
     guard(cfg,publication=publication)
     directory = Path(directory)
@@ -465,6 +524,11 @@ def verify_staged(directory, cfg, publication=True):
             or r.get('publicIdentity') != identities() or r.get('baselineBuild') != cfg['baseline']['installedBuild']:
         raise ValueError('complete Mustang OTA-specific verification required')
     factory=r.get('baselineFactoryEvidence')
+    if r.get('baselineObservation') is not None:
+        baseline=require_staged_baseline(r['baselineObservation'])
+        raw=(json.dumps(baseline,indent=2,sort_keys=True)+'\n').encode()
+        if hashlib.sha256(raw).hexdigest()!=r.get('baselineObservationSha256'):
+            raise ValueError('embedded candidate baseline receipt hash differs')
     selected=read(ROOT/'os/build-only/mustang-runtime.json').get('baselineFactoryEvidence') is not None
     if selected or factory is not None:
         if not isinstance(factory,dict): raise ValueError('selected factory baseline proof missing')

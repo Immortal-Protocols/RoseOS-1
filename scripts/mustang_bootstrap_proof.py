@@ -51,6 +51,18 @@ def canonical(value):
     return json.dumps(value,sort_keys=True,separators=(',',':')).encode()+b'\n'
 
 
+def portable_inventory(rows,source):
+    """Copy rebases absolute in-tree links; compare their root-independent text."""
+    prefix=str(source).rstrip('/')+'/'
+    normalized=[]
+    for row in rows:
+        item=dict(row)
+        if 'link' in item and item['link'].startswith(prefix):item['link']='@source/'+item['link'][len(prefix):]
+        normalized.append(item)
+    normalized.sort(key=lambda item:item['path'])
+    return hashlib.sha256(canonical(normalized)).hexdigest()
+
+
 def signature(info):
     return tuple(getattr(info,k) for k in ('st_dev','st_ino','st_size','st_mode','st_mtime_ns','st_ctime_ns'))
 
@@ -397,6 +409,7 @@ def inspect_source(source,manifest,vendor,host,recipe,*,root=ROOT,limits=None,de
         selectedEntryCount=len(inventory),selectedPinnedEntries=pinned_count,selectedPreparedEntries=prepared_count,
         selectedManifestTransferEntries=sum(expected[name]['origin']!='git' for name in seen_expected),
         selectedInventorySha256=hashlib.sha256(canonical(inventory)).hexdigest(),sourceDataBytesRead=observation.bytes,
+        portableInventorySha256=portable_inventory(inventory,source),
         copyRecipeSha256=hashlib.sha256(canonical(recipe)).hexdigest(),
         copyExclusionPolicySha256=hashlib.sha256(canonical(policy)).hexdigest(),
         gitOutputBytesRead=reader.bytes_read,
@@ -438,6 +451,77 @@ def _observe_prepared_locked(lane,cfg,run,*,root=ROOT,limits=None,deadline=None)
     return dict(result,sourceRoot=str(paths['sourceRoot']),declaredBuilder=lane['vm'],
                 observationRun=run,runIdentityObserved=False,preparedReceiptProvenanceVerified=True,
                 vendorReceiptSha256=vendor['receiptSha256'],hostDependenciesReceiptSha256=host['receiptSha256'])
+
+
+def verify_copy(source,candidate,selection,observed,*,limits=None):
+    """Bridge the actual shared copy and its readback to the observed pinned bytes.
+
+    Call before allocation/Make, while holding the dedicated canonical lock.
+    Git metadata subsequently installed by git-meta is excluded; source payload
+    names, modes, bytes and link text must exactly match the copy record.
+    """
+    limits=(limits or Limits()).validate();source=Path(source);candidate=Path(candidate)
+    path=candidate.parent/(candidate.name+'.selection.tsv')
+    if selection.get('path')!=str(path) or observed.get('sourceRoot')!=str(source) \
+            or observed.get('success') is not True or observed.get('selectedPinnedBytesVerified') is not True \
+            or observed.get('preparedReceiptProvenanceVerified') is not True:
+        raise git.Refused('full-run-source-copy-binding-differs')
+    def unescape(raw):
+        result=bytearray();i=0;table={ord('t'):9,ord('n'):10,ord('r'):13,ord('\\'):92}
+        while i<len(raw):
+            if raw[i]==92:
+                i+=1
+                if i==len(raw) or raw[i] not in table:raise git.Refused('copy-record-escape-differs')
+                result.append(table[raw[i]])
+            else:result.append(raw[i])
+            i+=1
+        return os.fsdecode(bytes(result))
+    fd,info=readers._open_regular(str(candidate.parent),str(path));rows=[];names=set();digest=hashlib.sha256();size=0
+    if info.st_size>512 << 20:
+        os.close(fd);raise git.Refused('copy-record-byte-bound')
+    with os.fdopen(fd,'rb') as stream:
+        for line in iter(lambda:stream.readline((1 << 20)+1),b''):
+            if len(line)>1 << 20 or not line.endswith(b'\n'):raise git.Refused('copy-record-line-bound')
+            digest.update(line);size+=len(line);fields=line[:-1].split(b'\t')
+            if len(fields)<2:raise git.Refused('copy-record-fields-differ')
+            name=git.relative(unescape(fields[0]));kind=fields[1]
+            if name in names or len(names)>=limits.entries:raise git.Refused('copy-record-entry-bound')
+            names.add(name)
+            if kind in (b'dir',b'file'):
+                if len(fields)!=(3 if kind==b'dir' else 5) or not re.fullmatch(rb'[0-7]{1,4}',fields[2]):
+                    raise git.Refused('copy-record-fields-differ')
+                mode=int(fields[2],8)
+                if mode&0o7000:raise git.Refused('copy-record-mode-differs')
+                if kind==b'dir':row=dict(directory=True,mode=mode)
+                else:
+                    if not re.fullmatch(rb'(0|[1-9][0-9]*)',fields[3]) or not re.fullmatch(rb'[0-9a-f]{64}',fields[4]):
+                        raise git.Refused('copy-record-fields-differ')
+                    row=dict(mode=mode,sizeBytes=int(fields[3]),sha256=fields[4].decode())
+            elif kind==b'link' and len(fields)==3:row=dict(link=unescape(fields[2]))
+            else:raise git.Refused('copy-record-fields-differ')
+            rows.append(dict(row,path=name))
+        if signature(info)!=signature(os.fstat(stream.fileno())):raise git.Refused('copy-record-changed')
+    if digest.hexdigest()!=selection.get('sha256') or size!=selection.get('bytes') or len(rows)!=selection.get('lines') \
+            or len(rows)!=observed.get('selectedEntryCount') \
+            or portable_inventory(rows,candidate)!=observed.get('portableInventorySha256'):
+        raise git.Refused('copied-selection-differs-from-observed-source')
+    check=Observation(candidate,limits)
+    check.known_files={row['path'] for row in rows if not row.get('directory')}
+    check.known_directories={row['path'] for row in rows if row.get('directory')}
+    policy=dict(rootNames=[],rootPrefixes=[],anywhereNames=['.git','.repo'],externalLinks=[],cacheBoundaries=[])
+    planned=check.plan(candidate,policy);actual=[]
+    for entry in planned['entries']:
+        name=entry['path']
+        value=dict(directory=True,mode=entry['mode']) if entry['type']=='dir' else {
+            k:v for k,v in check.measured[name].items() if k!='blob'}
+        actual.append(dict(value,path=name))
+    check.verify_namespace()
+    if portable_inventory(actual,candidate)!=observed['portableInventorySha256']:
+        raise git.Refused('copied-source-readback-differs')
+    return dict(schema='roseos.mustang-full-run-source-copy.v1',sourceCopyVerified=True,
+        selectedEntryCount=len(actual),portableInventorySha256=observed['portableInventorySha256'],
+        selectionRecordSha256=selection['sha256'],copyDataBytesRead=check.bytes,
+        gitMetadataExcluded=True,otaAdmitted=False,pristine=False)
 
 
 def main():

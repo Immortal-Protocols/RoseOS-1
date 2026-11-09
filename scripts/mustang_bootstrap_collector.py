@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
-"""Inactive controlled collector integration; CLI prints a plan only.
+"""Full-run source admission and owned cleanup; the default CLI prints a plan.
 
 The library combines the guest probe, captured checkout, prepared source
 candidate and a fresh attempt receipt under one existing read-only lock.
-Offline fixtures are explicitly identified. No workflow invokes it. Workflow
-context checks are not independent run authentication or bootstrap admission.
+Offline fixtures are explicitly identified. Workflow context checks are not
+independent run authentication or bootstrap admission. Dispatch is separate.
 """
 from dataclasses import asdict,dataclass
 import hashlib
+import base64
 import json
 import os
 from pathlib import Path
@@ -16,6 +17,8 @@ import re
 import stat
 import sys
 import time
+import urllib.request
+import urllib.error
 
 import mustang_bootstrap_git as git
 import mustang_bootstrap_probe as probe_module
@@ -24,10 +27,13 @@ import mustang_controller as controller
 import mustang_existing_lock as locks
 import mustang_hosttools as readers
 import mustang_paths
+import mustang_ephemeral as ephemeral
+import mustang_lane
 
 ROOT=Path(__file__).resolve().parents[1]
 SCHEMA='roseos.mustang-bootstrap-collector.v1'
 RESULT='bootstrap-observation-receipt.json'
+LIFECYCLE='bootstrap-lifecycle-receipt.json'
 JOB='bootstrap-observe'
 SCOPE='bootstrap_observe_only'
 FLAGS=frozenset(('publish','source_only','dry_run','lock_admin_only','factory_only',
@@ -63,7 +69,7 @@ def runner_identity():
     return uid,pwd.getpwuid(uid).pw_name
 
 
-def invocation(lane,env,event):
+def scope(lane,env,event):
     run=controller.invocation(lane,env)
     selected=event.get('inputs') if isinstance(event,dict) else None
     enabled=lambda value:value is True or (type(value) is str and value=='true')
@@ -71,16 +77,70 @@ def invocation(lane,env,event):
     if not isinstance(selected,dict) or set(selected)-FLAGS or not enabled(selected.get(SCOPE)) \
             or any(not disabled(selected.get(k)) for k in FLAGS-{SCOPE}):
         raise git.Refused('collector-exclusive-scope-required')
-    uid,user=runner_identity()
     if env.get('GITHUB_REPOSITORY')!='Immortal-Protocols/RoseOS-1' \
-            or env.get('GITHUB_REPOSITORY_ID')!='1428996648' or env.get('GITHUB_JOB')!=JOB \
+            or env.get('GITHUB_REPOSITORY_ID')!='1428996648' \
             or env.get('GITHUB_WORKFLOW_SHA')!=run['source'] \
             or env.get('MUSTANG_BOOTSTRAP_OBSERVE_ONLY')!='true' \
-            or any(env.get(k) not in (None,'false') for k in ('MUSTANG_PUBLISH','MUSTANG_DRY_RUN')) \
-            or uid<=0 or user!='mustang-runner' or not sys.dont_write_bytecode:
+            or env.get('MUSTANG_PUBLISH') not in (None,'false'):
         raise git.Refused('collector-workflow-context-differs')
     git.oid(run['source'])
     return run
+
+
+def invocation(lane,env,event):
+    run=scope(lane,env,event);uid,user=runner_identity()
+    if env.get('GITHUB_JOB')!=JOB or env.get('MUSTANG_DRY_RUN') not in (None,'false') \
+            or uid<=0 or user!='mustang-runner' or not sys.dont_write_bytecode:
+        raise git.Refused('collector-workflow-context-differs')
+    return run
+
+
+def full_scope(lane,env,event):
+    """The existing full-delivery button; no fabricated job/scope environment."""
+    run=controller.invocation(lane,env)
+    selected=event.get('inputs') if isinstance(event,dict) else None
+    disabled=lambda value:value is None or value is False or (type(value) is str and value=='false')
+    publish=selected.get('publish') if isinstance(selected,dict) else None
+    boolean=publish is None or type(publish) is bool or (type(publish) is str and publish in ('true','false'))
+    if not isinstance(selected,dict) or set(selected)-FLAGS \
+            or any(not disabled(selected.get(k)) for k in FLAGS-{'publish'}) \
+            or not boolean or env.get('MUSTANG_PUBLISH','false')!=('true' if publish is True or publish=='true' else 'false') \
+            or env.get('GITHUB_REPOSITORY')!='Immortal-Protocols/RoseOS-1' \
+            or env.get('GITHUB_REPOSITORY_ID')!='1428996648' \
+            or env.get('GITHUB_WORKFLOW_SHA')!=run['source'] or env.get('MUSTANG_DRY_RUN')!='false':
+        raise git.Refused('full-delivery-source-scope-differs')
+    return run
+
+
+def full_invocation(lane,env,event):
+    run=full_scope(lane,env,event);uid,user=runner_identity()
+    encoded=env.get('MUSTANG_OWNER_B64','')
+    if env.get('GITHUB_JOB')!='builder' or uid<=0 or user!='mustang-runner' or not sys.dont_write_bytecode \
+            or not isinstance(encoded,str) or not 0<len(encoded)<=8192:
+        raise git.Refused('full-delivery-builder-context-differs')
+    try:owner=json.loads(base64.b64decode(encoded,validate=True))
+    except (ValueError,TypeError):raise git.Refused('full-delivery-owner-differs') from None
+    if owner.get('schema')!=controller.SCHEMA or owner.get('run')!=run \
+            or not mustang_lane.owned_start(owner.get('owner'),lane):
+        raise git.Refused('full-delivery-owner-differs')
+    return run
+
+
+def source_contract(lane,cfg,value,*,root=ROOT):
+    """Validate a plan, never represent that plan as observed bootstrap evidence."""
+    manifest=readers.read_regular(str(root),str(Path(root)/'os/pinned-manifest.xml'),4 << 20)
+    expected=dict(schema='roseos.mustang-full-run-source-contract.v1',
+        status='observe-before-copy-required',builder=lane['vm'],sourceRoot=lane['sourceRoot'],
+        manifestSha256=hashlib.sha256(manifest).hexdigest(),
+        vendorEvidence=cfg.get('vendorEvidence'),hostDependenciesEvidence=cfg.get('hostDependenciesEvidence'),
+        qualifiedToolsEvidence='os/build-only/mustang-otatools-42531345133.json',
+        toolInspectionEvidence='os/build-only/mustang-otatools-inspection-42531345133.json',
+        verifyCopiedBytesBeforeAllocation=True,liveEvidencePresent=False,otaAdmitted=False)
+    if value!=expected:raise git.Refused('full-delivery-source-contract-differs')
+    proof.prepared.binding(lane,cfg,root)
+    import mustang_otatools_qualification as qualification
+    qualification.inspection_record(expected['toolInspectionEvidence'],root=root)
+    return expected
 
 
 def guest(lane,cfg,paths,root,probe,deadline):
@@ -233,7 +293,7 @@ class Attempt:
         self.fd=self.parent=None
 
 
-def collect(lane,cfg,env,event,*,root=ROOT,limits=None,source_limits=None,probe=None):
+def collect(lane,cfg,env,event,*,root=ROOT,limits=None,source_limits=None,probe=None,full_run=False):
     """Unwired library entry point. Future activation requires separate authorization.
 
     A refusal before a safe fresh attempt exists is returned without a receipt.
@@ -248,7 +308,7 @@ def collect(lane,cfg,env,event,*,root=ROOT,limits=None,source_limits=None,probe=
         dataFilesystemIdentityObserved=False,authenticatedStop=False,stopOwnedByCollector=False,
         hostedLifecyclePending=True)
     try:
-        run=invocation(lane,env,event);limits=(limits or Limits()).validate()
+        run=(full_invocation if full_run else invocation)(lane,env,event);limits=(limits or Limits()).validate()
         source_limits=(source_limits or proof.Limits()).validate()
         deadline=started+limits.seconds;paths=mustang_paths.layout(lane);root=Path(root)
         if env.get('GITHUB_WORKSPACE')!=str(root) or root==paths['sourceRoot'] \
@@ -259,6 +319,9 @@ def collect(lane,cfg,env,event,*,root=ROOT,limits=None,source_limits=None,probe=
         document.update(run=run,workflowContextValidated=True,observationKind=probe.kind,
                         limits=asdict(limits),sourceLimits=asdict(source_limits),
                         boundsKind='proposal-ceilings-not-measurements')
+        if full_run:
+            document.update(workflowJob='builder',controllerOwnershipSha256=hashlib.sha256(
+                base64.b64decode(env['MUSTANG_OWNER_B64'],validate=True)).hexdigest())
         stage='lock'
         with locks.shared(paths['lockPath'],expected=paths['lockPath']) as held_lock:
             canonical_lock=proof.signature(os.fstat(held_lock.fileno()))
@@ -311,12 +374,128 @@ def collect(lane,cfg,env,event,*,root=ROOT,limits=None,source_limits=None,probe=
     return dict(receipt=document,receiptWritten=record is not None,receiptFile=record)
 
 
+def require_full_result(result,lane,env,event):
+    """The real builder cannot proceed on fixture, partial or foreign receipts."""
+    run=full_invocation(lane,env,event);document=result.get('receipt',{});record=result.get('receiptFile') or {}
+    path=mustang_paths.layout(lane)['storageRoot']/f"mustang-bootstrap-observation-{run['runId']}-1"/RESULT
+    if result.get('receiptWritten') is not True or record.get('path')!=str(path) \
+            or document.get('run')!=run or document.get('workflowJob')!='builder' \
+            or document.get('observationKind')!='native-read-only' \
+            or any(document.get(k) is not True for k in ('success','guestIdentityObserved',
+                'dataFilesystemIdentityObserved','checkoutBytesVerified')) \
+            or any(document.get(k) is not False for k in ('otaAdmitted','fullBootstrapVerified','pristine')):
+        raise git.Refused('full-run-bootstrap-receipt-differs')
+    raw=readers.read_regular(str(path.parent),str(path),1 << 20)
+    if hashlib.sha256(raw).hexdigest()!=record.get('sha256') or len(raw)!=record.get('sizeBytes') or json.loads(raw)!=document:
+        raise git.Refused('full-run-bootstrap-receipt-readback-differs')
+    return document
+
+
+def write_bytes(directory,name,raw):
+    """Fixed-name, exclusive private export; no directory creation or overwrite."""
+    if name!=LIFECYCLE or len(raw)>1 << 20:
+        raise git.Refused('collector-export-bound-differs')
+    fd=readers._walk_dir(readers._body(str(directory)))
+    try:
+        child=os.open(name,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600,dir_fd=fd)
+        with os.fdopen(child,'wb') as out:out.write(raw);out.flush();os.fsync(out.fileno())
+        os.fsync(fd)
+    finally:os.close(fd)
+    if readers.read_regular(str(directory),str(Path(directory)/name),1 << 20)!=raw:
+        raise git.Refused('collector-export-readback-differs')
+    return dict(sha256=hashlib.sha256(raw).hexdigest(),sizeBytes=len(raw))
+
+
+def emit_sha(value):
+    if os.environ.get('GITHUB_OUTPUT'):
+        with open(os.environ['GITHUB_OUTPUT'],'a') as output:
+            output.write('receipt_sha256='+value+'\n')
+
+
+def lifecycle(lane,env,event,directory):
+    """Summarize the existing cleanup's successful calls; no live operation here."""
+    run=full_scope(lane,env,event);directory=Path(directory)
+    if env.get('GITHUB_JOB')!='cleanup':raise git.Refused('full-run-cleanup-context-differs')
+    def read(name):
+        raw=readers.read_regular(str(directory),str(directory/name),1 << 20)
+        return json.loads(raw),hashlib.sha256(raw).hexdigest()
+    stop,stop_hash=read('bootstrap-stop.json')
+    metadata,metadata_hash=read('bootstrap-metadata-cleanup.json')
+    runner,runner_hash=read('bootstrap-runner-cleanup.json')
+    if stop.get('schema')!='roseos.mustang-owned-stop.v1' or stop.get('run')!=run \
+            or stop.get('builder')!=lane['vm'] or stop.get('startedByThisOperation') is not True \
+            or stop.get('readback')!={'id':lane['vm']['instanceId'],'name':lane['vm']['instance'],'status':'TERMINATED'} \
+            or stop.get('otaAdmitted') is not False:
+        raise git.Refused('collector-owned-stop-differs')
+    if set(metadata)!={'cleared','state'} or metadata.get('cleared')!=ephemeral.METADATA_KEY \
+            or metadata.get('state') not in ('absent','removed') \
+            or runner.get('groupId')!=5 or runner.get('runId')!=run['runId'] \
+            or not isinstance(runner.get('deleted'),list) \
+            or any(type(v) is not int or v<=0 for v in runner['deleted']):
+        raise git.Refused('collector-cleanup-result-differs')
+    result=dict(schema='roseos.mustang-bootstrap-lifecycle.v1',run=run,builder=lane['vm'],
+        stop=stop,stopReceiptSha256=stop_hash,metadataRemovalSucceeded=True,metadataAbsentVerified=True,
+        metadataResultSha256=metadata_hash,runnerCleanupSucceeded=True,runnerResultSha256=runner_hash,
+        runtimeWired=False,fullBootstrapVerified=False,otaAdmitted=False)
+    descriptor=write_bytes(directory,LIFECYCLE,proof.canonical(result));emit_sha(descriptor['sha256'])
+    return result
+
+
+class NoApiRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self,*args,**kwargs):raise git.Refused('collector-api-redirect-refused')
+
+
+def github_reader(run,token):
+    """Only the fixed run and attempt-jobs GETs. Denial stops without retry."""
+    base='/repos/Immortal-Protocols/RoseOS-1/actions/runs/'+run['runId']
+    allowed={base,base+'/attempts/1/jobs?per_page=100'}
+    def read(path):
+        if path not in allowed or not isinstance(token,str) or not token:
+            raise git.Refused('collector-api-scope-differs')
+        request=urllib.request.Request('https://api.github.com'+path,
+            headers={'Authorization':'Bearer '+token,'Accept':'application/vnd.github+json',
+                     'X-GitHub-Api-Version':'2026-03-10'})
+        try:
+            with urllib.request.build_opener(NoApiRedirect()).open(request,timeout=30) as response:
+                raw=response.read((2 << 20)+1)
+                if response.status!=200:raise git.Refused('collector-api-response-differs')
+        except urllib.error.HTTPError as error:
+            raise git.Refused('collector-api-http-'+str(error.code)) from None
+        if len(raw)>2 << 20:raise git.Refused('collector-api-output-bound')
+        value=json.loads(raw)
+        if not isinstance(value,dict):raise git.Refused('collector-api-response-differs')
+        return value
+    return read
+
+
+def listing(value,key):
+    rows=value.get(key);count=value.get('total_count')
+    if type(count) is not int or not 0<=count<=100 or not isinstance(rows,list) or len(rows)!=count \
+            or any(not isinstance(row,dict) for row in rows):
+        raise git.Refused('collector-api-list-incomplete')
+    return rows
+
+
 def main():
     import argparse
-    argparse.ArgumentParser(description=__doc__).parse_args()
-    print(json.dumps(dict(schema=SCHEMA,execute=False,runtimeWired=False,liveObservationEnabled=False,
-        scopeInput=SCOPE,job=JOB,limits=asdict(Limits()),sourceLimits=asdict(proof.Limits()),
-        readyForControlledStart=False,fullBootstrapVerified=False,otaAdmitted=False),sort_keys=True))
+    parser=argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('action',nargs='?',default='plan',choices=('plan','lifecycle'))
+    parser.add_argument('--execute',action='store_true')
+    args=parser.parse_args()
+    if args.action=='plan':
+        if args.execute:parser.error('plan has no execution switch')
+        print(json.dumps(dict(schema=SCHEMA,execute=False,runtimeWired=False,liveObservationEnabled=False,
+            scopeInput=SCOPE,job=JOB,limits=asdict(Limits()),sourceLimits=asdict(proof.Limits()),
+            readyForControlledStart=False,fullBootstrapVerified=False,otaAdmitted=False),sort_keys=True));return 0
+    if not args.execute:parser.error('explicit --execute is required')
+    lane=mustang_lane.configuration()
+    event=proof.deps.read_event(os.environ)
+    result=lifecycle(lane,os.environ,event,Path(os.environ['RUNNER_TEMP']))
+    print(json.dumps(result,sort_keys=True));return 0
 
 
-if __name__=='__main__':main()
+if __name__=='__main__':
+    try:sys.exit(main())
+    except Exception as error:
+        print(json.dumps(dict(success=False,failure=error.code if isinstance(error,git.Refused) else
+            'collector-operation-refused',otaAdmitted=False),sort_keys=True));sys.exit(4)
