@@ -361,6 +361,7 @@ def collect(lane,cfg,env,event,*,root=ROOT,limits=None,source_limits=None,probe=
                         guestIdentityObserved=native,dataFilesystemIdentityObserved=native)
                 except Exception as error:
                     document['failure']=error.code if isinstance(error,git.Refused) else 'collector-check-failed'
+                    if isinstance(error,git.Refused) and error.path:document['failurePath']=error.path
                 document.update(stage=stage,completedChecks=completed,elapsedSeconds=round(time.monotonic()-started,3))
                 stage='receipt'
                 if lock_signature(paths['lockPath'])!=canonical_lock:
@@ -369,6 +370,7 @@ def collect(lane,cfg,env,event,*,root=ROOT,limits=None,source_limits=None,probe=
     except Exception as error:
         # Do not include arbitrary exception text, subprocess stderr, payloads,
         # tokens or provider URLs. A receipt-write refusal never claims success.
+        if isinstance(error,git.Refused) and error.path:document['failurePath']=error.path
         document.update(success=False,failure=error.code if isinstance(error,git.Refused) else 'collector-refused',
                         stage=stage,completedChecks=completed,elapsedSeconds=round(time.monotonic()-started,3))
     return dict(receipt=document,receiptWritten=record is not None,receiptFile=record)

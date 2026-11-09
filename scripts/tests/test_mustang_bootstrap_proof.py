@@ -236,6 +236,54 @@ class SourceProofTest(unittest.TestCase):
         self.command(project,'replace',self.make_revision,replacement)
         self.assertTrue(self.inspect()['selectedPinnedBytesVerified'])
 
+    def pinned_gitlink(self,*,manifest_child=False,wrong_pin=False):
+        project=self.source/'build/make';child=project/'submodule-fixture';child.mkdir()
+        if manifest_child:
+            (child/'child.c').write_bytes(b'pinned child source fixture')
+            target=self.init_project(child)
+        else:target=self.make_revision
+        self.command(project,'update-index','--add','--cacheinfo','160000,'+target+',submodule-fixture')
+        self.command(project,'commit','--quiet','-m','pinned gitlink boundary fixture')
+        self.make_revision=self.command(project,'rev-parse','HEAD').decode().strip()
+        document=ET.fromstring(self.manifest)
+        next(p for p in document.findall('project') if p.get('path')=='build/make').set('revision',self.make_revision)
+        if manifest_child:
+            ET.SubElement(document,'project',name='child-fixture',path='build/make/submodule-fixture',
+                revision='1'*40 if wrong_pin else target)
+        self.manifest=ET.tostring(document);(self.root/'os/pinned-manifest.xml').write_bytes(self.manifest)
+        return child,target
+
+    def test_uninitialized_gitlink_authenticates_tree_but_selects_no_unpinned_bytes(self):
+        child,target=self.pinned_gitlink()
+        self.assertEqual(self.inspect()['gitlinkBoundaryCount'],1)
+        child.rmdir()  # Git need not materialize an uninitialized submodule directory.
+        self.assertTrue(self.inspect()['selectedPinnedBytesVerified'])
+        project=self.source/'build/make';reader=git.LocalGit(time.monotonic()+30)
+        commit=reader.read(project,'commit',self.make_revision);listing=reader.read(project,'tree',self.make_revision)
+        with self.assertRaisesRegex(git.Refused,'reconstructed-tree-differs'):
+            git.tree_rows(commit,listing.replace(target.encode(),b'1'*40),self.make_revision,
+                max_entries=100,include_trees=True,allow_gitlinks=True)
+
+    def test_unmanifested_populated_gitlink_refuses_including_hidden_git_metadata(self):
+        child,_target=self.pinned_gitlink()
+        (child/'.git').write_bytes(b'not an admitted initialized submodule')
+        with self.assertRaisesRegex(git.Refused,'unpinned-gitlink-contents') as raised:self.inspect()
+        self.assertEqual(raised.exception.path,'build/make/submodule-fixture')
+        (child/'.git').unlink();(child/'unexpected.c').write_bytes(b'unpinned code must not enter Make')
+        with self.assertRaisesRegex(git.Refused,'unpinned-gitlink-contents') as raised:self.inspect()
+        self.assertEqual(raised.exception.path,'build/make/submodule-fixture')
+
+    def test_manifest_pinned_gitlink_child_is_verified_as_its_own_repository(self):
+        child,_target=self.pinned_gitlink(manifest_child=True)
+        result=self.inspect();self.assertEqual(result['gitlinkBoundaryCount'],1)
+        self.assertEqual(result['projectCount'],4)
+        (child/'child.c').write_bytes(b'changed uncommitted child source')
+        with self.assertRaises(git.Refused):self.inspect()
+
+    def test_gitlink_child_revision_must_equal_the_explicit_manifest_pin(self):
+        self.pinned_gitlink(manifest_child=True,wrong_pin=True)
+        with self.assertRaisesRegex(git.Refused,'gitlink-manifest-revision-differs'):self.inspect()
+
     def test_gitlinks_and_non_sha1_repositories_refuse(self):
         project=self.source/'build/make'
         self.command(project,'update-index','--add','--cacheinfo','160000,'+self.make_revision+',submodule-fixture')

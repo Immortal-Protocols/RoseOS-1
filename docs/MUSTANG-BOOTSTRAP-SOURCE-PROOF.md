@@ -26,8 +26,24 @@ It verifies each project root, object format and HEAD. The local Git reader
 uses fixed metadata commands only: `rev-parse`, raw `cat-file commit`, and
 NUL-delimited recursive `ls-tree` including trees. It hashes the raw commit
 back to the pin and reconstructs every tree's serialized bytes and object ID.
-Missing or altered object data, unsupported gitlinks, duplicate paths and
+Missing or altered object data, unsupported modes, duplicate paths and
 unresolved manifest directives refuse. The index is not trusted or read.
+
+For prepared-source projects, authenticated mode160000 gitlinks are treated as
+boundaries, consistent with the [Git format](https://git-scm.com/docs/git-fast-import#_filemodify).
+A populated child must be explicitly pinned by the resolved manifest to that
+same commit and independently pass the ordinary project/byte checks. Otherwise
+a selected gitlink directory must be empty (or absent); hidden metadata and
+unpinned contents refuse. Parent tree reconstruction still binds the gitlink
+commit ID. The generic reader and workflow-checkout observer continue refusing
+gitlinks by default. No submodule is initialized or fetched.
+
+Full run42588478372 passed runtime binding, host/baseline/app checks, then
+reported unsupported-git-tree-mode in source observation before copy/allocation/
+Make. Cleanup succeeded and the exact VM was independently observed stopped.
+This change adds the missing standard gitlink policy; the next native run must
+establish its actual source result. The old error did not include mode/path, so
+it is not represented as a recovered per-project receipt.
 
 Git runs with an explicit environment that excludes inherited credentials,
 injected Git paths, shell initialization and library overrides. System/global

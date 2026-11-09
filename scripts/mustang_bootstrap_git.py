@@ -15,9 +15,11 @@ import time
 
 
 class Refused(ValueError):
-    def __init__(self,code):
+    def __init__(self,code,*,path=None):
         super().__init__(code)
         self.code=code
+        self.path=path if isinstance(path,str) and re.fullmatch(r'[A-Za-z0-9_+./-]{1,256}',path) \
+            and not path.startswith('/') and not any(p in ('','.','..') for p in path.split('/')) else None
 
 
 def relative(value):
@@ -37,7 +39,7 @@ def object_id(kind,data):
     return hashlib.sha1(kind.encode()+b' '+str(len(data)).encode()+b'\0'+data).hexdigest()
 
 
-def tree_rows(commit,listing,revision,*,max_entries,include_trees=False):
+def tree_rows(commit,listing,revision,*,max_entries,include_trees=False,allow_gitlinks=False):
     """Verify the commit and every reconstructed tree, then return blob identities."""
     oid(revision)
     if object_id('commit',commit)!=revision or b'\0' in commit or b'\n\n' not in commit:
@@ -57,8 +59,10 @@ def tree_rows(commit,listing,revision,*,max_entries,include_trees=False):
             name=relative(os.fsdecode(path));identity=oid(identity.decode('ascii'))
         except (ValueError,UnicodeError):raise Refused('malformed-tree-listing') from None
         if name in rows:raise Refused('duplicate-git-tree-path')
-        if (mode,kind) not in ((b'040000',b'tree'),(b'100644',b'blob'),(b'100755',b'blob'),(b'120000',b'blob')):
-            raise Refused('unsupported-git-tree-mode')
+        if (mode,kind) not in ((b'040000',b'tree'),(b'100644',b'blob'),(b'100755',b'blob'),(b'120000',b'blob')) \
+                and not (allow_gitlinks and (mode,kind)==(b'160000',b'commit')):
+            detail=mode.decode('ascii') if re.fullmatch(rb'[0-7]{6}',mode) else 'invalid'
+            raise Refused('unsupported-git-tree-mode-'+detail,path=name)
         parent,_,basename=name.rpartition('/')
         row={'path':name,'mode':mode.decode('ascii'),'oid':identity,'kind':kind.decode('ascii')}
         rows[name]=row;children.setdefault(parent,[]).append((os.fsencode(basename),row))
@@ -136,9 +140,9 @@ class LocalGit:
     def check_head(self,project,revision):
         if self.read(project,'head').strip()!=oid(revision).encode():raise Refused('project-head-differs')
 
-    def project(self,project,revision,*,max_entries):
+    def project(self,project,revision,*,max_entries,allow_gitlinks=False):
         if self.read(project,'root').removesuffix(b'\n')!=os.fsencode(project):raise Refused('project-root-differs')
         if self.read(project,'format').strip()!=b'sha1':raise Refused('git-object-format-differs')
         self.check_head(project,revision)
         return tree_rows(self.read(project,'commit',revision),self.read(project,'tree',revision),revision,
-                         max_entries=max_entries,include_trees=True)
+                         max_entries=max_entries,include_trees=True,allow_gitlinks=allow_gitlinks)

@@ -59,7 +59,7 @@ def policy(lane, cfg, root=ROOT):
         minimumYear=2026, maximumYear=2099, minimumTimestamp='1793755347',
         legacyFailedRun='41884368820', legacyAllocationKnown=False,
         legacySourceProof=PROOF, legacySourceProofSha256=PROOF_SHA,
-        initializationWorkflowId=408460629, initializationRunNumber=26,
+        initializationWorkflowId=408460629, initializationRunNumber=27,
         journal=JOURNAL, maximumReservations=100000)
     if value != expected or hashlib.sha256((root / PROOF).read_bytes()).hexdigest() != PROOF_SHA:
         raise ValueError('UTC-hour numbering policy/legacy source proof differs')

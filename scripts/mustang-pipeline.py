@@ -124,8 +124,12 @@ def require_bootstrap_observation(result):
     safe=lambda value,fallback:value if isinstance(value,str) and re.fullmatch(r'[a-z][a-z0-9-]{0,95}',value) else fallback
     failure=safe(receipt.get('failure'),'collector-refused')
     stage=safe(receipt.get('stage'),'unknown')
-    print(json.dumps(dict(stage='bootstrap-source',status='refused',collectorStage=stage,
-        failureCode=failure,receiptWritten=result.get('receiptWritten') is True)),flush=True)
+    report=dict(stage='bootstrap-source',status='refused',collectorStage=stage,
+        failureCode=failure,receiptWritten=result.get('receiptWritten') is True)
+    path=receipt.get('failurePath')
+    if isinstance(path,str) and re.fullmatch(r'[A-Za-z0-9_+./-]{1,256}',path) and not path.startswith('/') \
+            and not any(p in ('','.','..') for p in path.split('/')):report['failurePath']=path
+    print(json.dumps(report),flush=True)
     raise ValueError('full-run bootstrap source observation refused ('+stage+': '+failure+'); no source copy, allocation or Make')
 
 
