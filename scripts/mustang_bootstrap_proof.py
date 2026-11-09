@@ -56,8 +56,9 @@ def signature(info):
 
 
 class Observation:
-    def __init__(self,source,limits):
-        self.source=Path(source);self.limits=limits.validate();self.deadline=time.monotonic()+limits.seconds
+    def __init__(self,source,limits,*,deadline=None):
+        self.source=Path(source);self.limits=limits.validate()
+        self.deadline=min(time.monotonic()+limits.seconds,deadline) if deadline is not None else time.monotonic()+limits.seconds
         if readers._body(str(self.source)) is None:raise git.Refused('absolute-source-root-required')
         self.device=deps.plain_dir(self.source).st_dev;self.entries=0;self.bytes=0
         self.excluded=[];self.measured={};self.signatures={}
@@ -69,6 +70,12 @@ class Observation:
     def count(self):
         self.check();self.entries+=1
         if self.entries>self.limits.entries:raise git.Refused('source-entry-bound')
+
+    def link_text(self,name,parent):
+        self.check();text=os.readlink(name,dir_fd=parent)
+        self.bytes+=len(os.fsencode(text))
+        if self.bytes>self.limits.bytes:raise git.Refused('source-byte-bound')
+        return text
 
     def measure(self,path,expected=None):
         self.check();fd,before=readers._open_regular(str(self.source),str(path))
@@ -118,7 +125,7 @@ class Observation:
                 if stat.S_ISLNK(info.st_mode):
                     hops+=1
                     if hops>40:raise git.Refused('selected-link-cycle')
-                    target=os.readlink(part,dir_fd=parent)
+                    target=self.link_text(part,parent)
                     if signature(info)!=signature(os.stat(part,dir_fd=parent,follow_symlinks=False)):
                         raise git.Refused('selected-link-changed')
                     if os.path.isabs(target):
@@ -197,7 +204,7 @@ class Observation:
                             if any(marker.encode() in raw for b in boundaries for marker in b['referenceMarkers']):
                                 raise git.Refused('excluded-cache-referenced-by-build')
                     elif stat.S_ISLNK(info.st_mode):
-                        text=os.readlink(name,dir_fd=parent)
+                        text=self.link_text(name,parent)
                         if signature(info)!=signature(os.stat(name,dir_fd=parent,follow_symlinks=False)):
                             raise git.Refused('selected-link-changed')
                         kind,target,exists=self.resolve_link(base,rel,text)
@@ -313,9 +320,10 @@ def source_policy(recipe,root):
     return pointer,policy
 
 
-def inspect_source(source,manifest,vendor,host,recipe,*,root=ROOT,limits=None):
+def inspect_source(source,manifest,vendor,host,recipe,*,root=ROOT,limits=None,deadline=None):
     """Check selected bytes and prepared payloads. Identity/bootstrap/admission stay false."""
-    source=Path(source);limits=(limits or Limits()).validate();observation=Observation(source,limits)
+    started=time.monotonic()
+    source=Path(source);limits=(limits or Limits()).validate();observation=Observation(source,limits,deadline=deadline)
     pointer,policy=source_policy(recipe,root);engine=shared_engine()
     def captured_policy(checkout,reference):
         if Path(checkout)!=Path(root) or reference!=pointer:raise git.Refused('unexpected-source-policy-pointer')
@@ -400,26 +408,33 @@ def inspect_source(source,manifest,vendor,host,recipe,*,root=ROOT,limits=None):
         dataFilesystemIdentityObserved=False,runtimeWired=False,readyForControlledStart=False,
         pristineRuntimeAttestation=False,otaAdmitted=False,signingStarted=False,
         bounds=asdict(limits),boundsKind='proposal-ceilings-not-measurements',
-        elapsedSeconds=round(limits.seconds-(observation.deadline-time.monotonic()),3))
+        elapsedSeconds=round(time.monotonic()-started,3))
 
 
 def observe_prepared(lane,cfg,run,*,root=ROOT,limits=None):
     """Unwired library adapter. A future controlled guest caller must establish identity."""
+    paths=mustang_paths.layout(lane)
+    with locks.shared(paths['lockPath'],expected=paths['lockPath']):
+        return _observe_prepared_locked(lane,cfg,run,root=root,limits=limits)
+
+
+def _observe_prepared_locked(lane,cfg,run,*,root=ROOT,limits=None,deadline=None):
+    """Internal collector integration; caller must hold the existing canonical lock."""
     paths=mustang_paths.layout(lane);limits=(limits or Limits()).validate()
     if not isinstance(run,dict) or any(not re.fullmatch(r'[1-9][0-9]{0,19}',str(run.get(k,'')))
                                      for k in ('runId','runAttempt')) \
             or run.get('workflow')!='Immortal-Protocols/RoseOS-1/'+lane['workflow']+'@refs/heads/main':
         raise git.Refused('declared-observation-run-differs')
     git.oid(run.get('source'))
-    with locks.shared(paths['lockPath'],expected=paths['lockPath']):
-        # Bound these checkout inputs before existing binding helpers read them.
-        manifest=readers.read_regular(str(root),str(Path(root)/'os/pinned-manifest.xml'),4 << 20)
-        recipe=json.loads(readers.read_regular(str(root),str(Path(root)/'os/build-only/mustang.json'),4 << 20))
-        vendor,host=prepared.binding(lane,cfg,root)
-        identity=dict(builder=lane['vm'],diskUuid=cfg['dataFilesystemUuid'],run=run)
-        v=inputs.receipt_on_disk(vendor,paths['storageRoot'],'vendor','vendor-preparation-receipt.json',identity)
-        h=inputs.receipt_on_disk(host,paths['storageRoot'],'hostdeps','hostdeps-receipt.json',identity)
-        result=inspect_source(paths['sourceRoot'],manifest,v,h,recipe,root=root,limits=limits)
+    # Bound these checkout inputs before existing binding helpers read them.
+    manifest=readers.read_regular(str(root),str(Path(root)/'os/pinned-manifest.xml'),4 << 20)
+    recipe=json.loads(readers.read_regular(str(root),str(Path(root)/'os/build-only/mustang.json'),4 << 20))
+    vendor,host=prepared.binding(lane,cfg,root)
+    identity=dict(builder=lane['vm'],diskUuid=cfg['dataFilesystemUuid'],run=run)
+    v=inputs.receipt_on_disk(vendor,paths['storageRoot'],'vendor','vendor-preparation-receipt.json',identity)
+    h=inputs.receipt_on_disk(host,paths['storageRoot'],'hostdeps','hostdeps-receipt.json',identity)
+    if deadline is not None and time.monotonic()>=deadline:raise git.Refused('source-proof-deadline')
+    result=inspect_source(paths['sourceRoot'],manifest,v,h,recipe,root=root,limits=limits,deadline=deadline)
     return dict(result,sourceRoot=str(paths['sourceRoot']),declaredBuilder=lane['vm'],
                 observationRun=run,runIdentityObserved=False,preparedReceiptProvenanceVerified=True,
                 vendorReceiptSha256=vendor['receiptSha256'],hostDependenciesReceiptSha256=host['receiptSha256'])
