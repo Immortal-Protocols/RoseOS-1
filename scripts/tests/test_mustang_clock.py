@@ -171,7 +171,10 @@ class ClockAllocationTest(unittest.TestCase):
             target.write_bytes((ROOT/relative).read_bytes())
         state=fixture.root/fixture.cfg['allocationState'];state.write_bytes(self.initial)
         cfg=dict(fixture.cfg,clockNumbering=clock.POLICY)
-        self.assertIsNone(fixture.admitted(cfg)['consumedBuilds'])
+        admitted=fixture.admitted(cfg)
+        self.assertEqual(admitted,cfg)
+        self.assertNotIn('consumedBuilds',admitted)
+        self.assertTrue(json.loads((fixture.root/cfg['allocationState']).read_text())['unknown'])
         with self.assertRaisesRegex(ValueError,'allocation state remains unresolved'):
             fixture.admitted(fixture.cfg)
         self.assertEqual(state.read_bytes(),self.initial)

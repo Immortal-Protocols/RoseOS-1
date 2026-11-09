@@ -63,8 +63,12 @@ Run42584970482 passed the native host, baseline and fresh-app byte/signature
 checks, then bootstrap source observation refused before copy/allocation/Make.
 The pipeline now exposes only sanitized collector phase/failure codes and its
 reporter exports the exact same-run bounded collector receipt even before the
-prep directory exists. The underlying refusal is not claimed resolved by this
-reporting change. Source validation remains mandatory.
+prep directory exists. Source review found that guard added the legacy consumedBuilds projection
+to clock runtime JSON, which deterministically violates the collector exact
+binding. The clock guard now returns the captured runtime unchanged; legacy
+allocation behavior and strict binding remain intact. An offline full collector
+regression reproduces the old mismatch. The exact live code was not logged; the
+next native result must establish the corrected handoff.
 
 The sections below retain the historical qualification review and its original
 unbound-state observations; they are not a second claim about current pin values.

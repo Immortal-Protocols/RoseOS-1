@@ -114,6 +114,16 @@ class FullDeliveryTest(unittest.TestCase):
             root=self.root,probe=self.probe,full_run=True)
         self.assertFalse(result['receiptWritten']);self.assertEqual(self.probe.calls,0)
 
+    def test_legacy_guard_projection_is_refused_by_the_exact_runtime_binding(self):
+        # Mirrors the clock guard's pre-fix output: adding null still changes
+        # the captured JSON. The collector must keep rejecting that mutation.
+        projected=dict(self.f.cfg,consumedBuilds=None)
+        result=collector.collect(self.lane,projected,self.env,self.event,root=self.root,probe=self.probe,full_run=True)
+        self.assertTrue(result['receiptWritten'])
+        self.assertEqual(result['receipt']['stage'],'bindings')
+        self.assertEqual(result['receipt']['failure'],'collector-captured-binding-differs')
+        self.assertFalse(result['receipt']['success'])
+
     def test_copy_record_cannot_launder_changed_pinned_input(self):
         result=self.observe();(self.f.fixture.source/'build/make/README').write_bytes(b'changed before shared copy')
         with self.assertRaisesRegex(proof.git.Refused,'copied-selection-differs'):

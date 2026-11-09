@@ -830,6 +830,18 @@ class DedicatedRuntimeTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'byte bound'):
             self.driver.app_artifact_reader(9,'fixture-token',oversized)('',7)
 
+    def test_clock_guard_preserves_exact_captured_runtime_without_legacy_fields(self):
+        import mustang_clock
+        cfg=dict(self.cfg,clockNumbering='os/fixtures/clock.json')
+        with patch.object(mustang_clock,'policy',return_value={}) as clock_policy:
+            admitted=self.admitted(cfg)
+        clock_policy.assert_called_once_with(self.lane,cfg,self.root)
+        self.assertEqual(admitted,cfg)
+        self.assertNotIn('consumedBuilds',admitted)
+        # The real collector rejects this legacy projection; do not weaken it
+        # to accept extra fields in order to hide a guard/caller mismatch.
+        self.assertNotEqual(dict(admitted,consumedBuilds=None),cfg)
+
     def test_actual_evidence_guard_allows_private_and_refuses_stale_or_unbound(self):
         self.assertEqual(self.admitted()['consumedBuilds'],['2026110402'])
         for change in (dict(status='unbound'),dict(jobs=None),dict(sourceEvidence=None),dict(signingRouteEvidence=None),

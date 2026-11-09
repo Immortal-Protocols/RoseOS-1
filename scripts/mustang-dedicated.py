@@ -157,7 +157,9 @@ def guard(lane, cfg, env, publish=False, root=ROOT, diff=None, dry_run=False):
                 or authority.get('workflow')!=WORKFLOW or authority.get('automatic') is not False:
             raise ValueError('dedicated public OTA publication remains disabled')
     ota.guard(ota.config(),access=True,publication=publish)
-    return dict(cfg,consumedBuilds=state['consumedBuilds'])
+    # The clock route must retain byte-equivalent captured runtime bindings.
+    # consumedBuilds is a legacy derived value, not a field in its committed JSON.
+    return cfg if cfg.get('clockNumbering') is not None else dict(cfg,consumedBuilds=state['consumedBuilds'])
 
 
 def emit(**values):
