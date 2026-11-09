@@ -11,6 +11,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import shutil
 import sys
 import unittest
 from types import SimpleNamespace
@@ -106,6 +107,14 @@ class FullDeliveryTest(unittest.TestCase):
         (target/'build/make/README').write_bytes(b'changed after copy')
         with self.assertRaisesRegex(proof.git.Refused,'copied-source-readback-differs'):
             proof.verify_copy(self.f.fixture.source,target,outcome['selectionRecord'],result['receipt']['sourceCandidate'])
+
+    def test_absent_optional_cache_passes_observation_shared_copy_and_readback(self):
+        shutil.rmtree(self.f.fixture.source/'vendor/adevtool/dl/unpacked')
+        result=self.observe();collector.require_full_result(result,self.lane,self.env,self.event)
+        target,_outcome,checked=self.copy_source(result)
+        self.assertTrue(checked['sourceCopyVerified'])
+        self.assertFalse((target/'vendor/adevtool/dl/unpacked').exists())
+        self.assertEqual((target/'vendor/adevtool/dl/.find-ignore').read_bytes(),b'')
 
     def test_foreign_owner_and_other_preparation_scope_stop_before_guest(self):
         for change in (dict(GITHUB_JOB='source'),dict(MUSTANG_OWNER_B64=''),dict(MUSTANG_PUBLISH='false')):

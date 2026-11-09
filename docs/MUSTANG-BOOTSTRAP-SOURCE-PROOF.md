@@ -137,3 +137,8 @@ The source planner now permits an absent excluded unpacked-cache directory; its
 parent and an existing directory must remain plain paths, and the pinned empty
 prune marker remains mandatory. Offline absence/symlink/marker regressions
 establish this correction; the exact old native exception is not inferred.
+
+The shared copier uses the same absent-cache rule, so source observation and
+construction cannot disagree on this optional directory. An integrated fixture
+runs observation, actual shared copy and copied-byte readback with the cache
+absent. Observation errors remain refusals; only FileNotFoundError means absent.
