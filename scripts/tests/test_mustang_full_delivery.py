@@ -49,6 +49,39 @@ class FullDeliveryTest(unittest.TestCase):
         self.assertTrue(result['receiptWritten'],result)
         return result
 
+    def test_pipeline_refusal_reports_safe_stage_code_before_any_allocation(self):
+        pipeline=ota.module('full_delivery_reporting','mustang-pipeline.py')
+        for written in (False,True):
+            result=dict(receiptWritten=written,receipt=dict(success=False,stage='guest-before',
+                failure='collector-data-mount-differs',payload='MUST-NOT-PRINT'))
+            output=io.StringIO()
+            with patch('sys.stdout',output),self.assertRaisesRegex(ValueError,'guest-before: collector-data-mount-differs'):
+                pipeline.require_bootstrap_observation(result)
+            report=json.loads(output.getvalue())
+            self.assertEqual(report['failureCode'],'collector-data-mount-differs')
+            self.assertEqual(report['receiptWritten'],written)
+            self.assertNotIn('MUST-NOT-PRINT',output.getvalue())
+        result['receipt'].update(stage='https://sensitive.test',failure='token=value')
+        with patch('sys.stdout',io.StringIO()) as output,self.assertRaisesRegex(ValueError,'unknown: collector-refused'):
+            pipeline.require_bootstrap_observation(result)
+        self.assertNotIn('sensitive',output.getvalue());self.assertNotIn('token',output.getvalue())
+
+    def test_failure_report_exports_exact_existing_collector_receipt_without_resuming(self):
+        result=self.observe()
+        pipeline=ota.module('full_delivery_receipt_report','mustang-pipeline.py')
+        # No prep directory exists yet, as in the real early failure.
+        self.assertFalse((self.f.storage/'mustang-prep-999-1').exists())
+        document=copy.deepcopy(result['receipt']);document.update(success=False,failure='collector-checkout-blob-differs')
+        path=Path(result['receiptFile']['path']);path.write_bytes(proof.canonical(document))
+        out=self.home/'failure-report'
+        pipeline.collect_reports('999','1',out,lane=self.lane)
+        self.assertEqual((out/collector.RESULT).read_bytes(),path.read_bytes())
+        self.assertEqual(path.read_bytes(),proof.canonical(document))
+        document['run']['runId']='888';path.write_bytes(proof.canonical(document))
+        with self.assertRaisesRegex(ValueError,'identity differs'):
+            pipeline.collect_reports('999','1',self.home/'foreign-report',lane=self.lane)
+        self.assertFalse((self.home/'foreign-report'/collector.RESULT).exists())
+
     def copy_source(self,result):
         source=self.f.fixture.source
         target=self.f.storage/'mustang-prep-999-1/source'

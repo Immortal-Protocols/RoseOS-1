@@ -57,7 +57,14 @@ API authorization is never forwarded to signed storage, HTTP failures stop
 without retry, and errors expose phase/status rather than signed URLs. No CLI
 resource or previously denied artifact is retried through this change.
 Failure records are under os/build-only/mustang-full-run-*.json. The first clock
-initialization fence is25, without observing or resetting an existing journal.
+initialization fence is26, without observing or resetting an existing journal.
+
+Run42584970482 passed the native host, baseline and fresh-app byte/signature
+checks, then bootstrap source observation refused before copy/allocation/Make.
+The pipeline now exposes only sanitized collector phase/failure codes and its
+reporter exports the exact same-run bounded collector receipt even before the
+prep directory exists. The underlying refusal is not claimed resolved by this
+reporting change. Source validation remains mandatory.
 
 The sections below retain the historical qualification review and its original
 unbound-state observations; they are not a second claim about current pin values.
