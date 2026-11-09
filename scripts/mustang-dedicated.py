@@ -510,6 +510,9 @@ def main():
         values=dict(runner_group=cfg['runner']['groupName'],runner_label=lane['runnerLabel'])
         import mustang_retained
         if mustang_retained.selected(os.environ):
+            import mustang_bootstrap_collector
+            mustang_bootstrap_collector.full_scope(lane,os.environ,
+                mustang_bootstrap_collector.proof.deps.read_event(os.environ),retained=True)
             mustang_retained.authenticate(os.environ,ROOT)
         if not dry and cfg.get('clockNumbering') is not None:
             import mustang_clock
