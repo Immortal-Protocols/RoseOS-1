@@ -14,12 +14,21 @@ import subprocess
 import time
 
 
+MAX_FAILURE_PATHS=32
+
+
+def diagnostic_path(value):
+    return value if isinstance(value,str) and re.fullmatch(r'[A-Za-z0-9_+./-]{1,256}',value) \
+        and not value.startswith('/') and not any(p in ('','.','..') for p in value.split('/')) else None
+
+
 class Refused(ValueError):
-    def __init__(self,code,*,path=None):
+    def __init__(self,code,*,path=None,paths=()):
         super().__init__(code)
         self.code=code
-        self.path=path if isinstance(path,str) and re.fullmatch(r'[A-Za-z0-9_+./-]{1,256}',path) \
-            and not path.startswith('/') and not any(p in ('','.','..') for p in path.split('/')) else None
+        self.path=diagnostic_path(path)
+        self.paths=[clean for value in (paths[:MAX_FAILURE_PATHS] if isinstance(paths,(tuple,list)) else ())
+                    if (clean:=diagnostic_path(value)) is not None]
 
 
 def relative(value):

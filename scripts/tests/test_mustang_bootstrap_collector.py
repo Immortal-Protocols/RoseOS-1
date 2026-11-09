@@ -97,6 +97,23 @@ class CollectorTest(unittest.TestCase):
         self.assertNotIn('MUST-NOT-PRINT',output.getvalue());self.assertNotIn('https:',output.getvalue())
         self.assertNotIn('MUST-NOT-PRINT',json.dumps(result['receipt']))
 
+    def test_full_builder_exports_unknown_names_without_their_contents(self):
+        import base64
+        names=['unknown-cache-one','unknown-cache-two']
+        for name in names:(self.fixture.source/name).write_bytes(b'MUST-NOT-READ-OR-PRINT')
+        owner=dict(schema=collector.controller.SCHEMA,run=self.run,
+            owner=dict(vm=self.lane['vm'],startedByThisOperation=True))
+        env=dict(self.env,GITHUB_JOB='builder',MUSTANG_DRY_RUN='false',MUSTANG_PUBLISH='true',
+            MUSTANG_OWNER_B64=base64.b64encode(proof.canonical(owner)).decode())
+        output=io.StringIO()
+        with contextlib.redirect_stdout(output):
+            result=self.collect(env=env,event={'inputs':{'publish':True}},full_run=True)
+        self.assertTrue(result['receiptWritten']);self.assertFalse(result['receipt']['success'])
+        self.assertEqual(result['receipt']['failurePaths'],names)
+        self.assertEqual(json.loads(output.getvalue())['failurePaths'],names)
+        self.assertNotIn('MUST-NOT-READ-OR-PRINT',output.getvalue())
+        self.assertNotIn('sourceCandidate',result['receipt'])
+
     def test_complete_fixture_writes_hash_verified_candidate_receipt_without_admission(self):
         before=self.lock.stat();result=self.collect();r=result['receipt']
         self.assertTrue(r['success'],r);self.assertTrue(result['receiptWritten'])

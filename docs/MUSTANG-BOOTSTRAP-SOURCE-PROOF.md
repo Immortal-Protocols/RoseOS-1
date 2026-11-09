@@ -142,3 +142,10 @@ The shared copier uses the same absent-cache rule, so source observation and
 construction cannot disagree on this optional directory. An integrated fixture
 runs observation, actual shared copy and copied-byte readback with the cache
 absent. Observation errors remain refusals; only FileNotFoundError means absent.
+
+Run42600298676 exposed unclassified-selected-file before source copy/allocation/
+Make. The scanner now records up to32 bounded sibling metadata paths on that
+refusal. Unknown payloads are never opened and unknown directories are not
+traversed; the same refusal remains mandatory. Paths are canonical relative
+ASCII metadata, with URLs/absolute/escape paths rejected. No unknown file is
+excluded, moved, deleted, trusted or compiled by this diagnostic change.

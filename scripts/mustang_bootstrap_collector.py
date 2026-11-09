@@ -297,6 +297,9 @@ def failure_diagnostics(error):
     """Typed failure facts and our code locations; never exception text or locals."""
     safe=lambda value:value if isinstance(value,str) and re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]{0,63}',value) else 'Exception'
     result=dict(failureType=safe(type(error).__name__));frames=[];current=error;seen=set()
+    if isinstance(error,git.Refused):
+        if error.path:result['failurePath']=error.path
+        if error.paths:result['failurePaths']=error.paths
     for _ in range(4):
         if current is None or id(current) in seen:break
         seen.add(id(current));result['failureCauseType']=safe(type(current).__name__)
@@ -398,7 +401,7 @@ def collect(lane,cfg,env,event,*,root=ROOT,limits=None,source_limits=None,probe=
                         stage=stage,completedChecks=completed,elapsedSeconds=round(time.monotonic()-started,3))
     if full_run and document.get('success') is not True:
         print(json.dumps(dict(stage='bootstrap-source-diagnostic',**{key:value for key,value in document.items()
-            if key in ('failure','failurePath','failureType','failureCauseType','failureErrno','failureFrames')})),flush=True)
+            if key in ('failure','failurePath','failurePaths','failureType','failureCauseType','failureErrno','failureFrames')})),flush=True)
     return dict(receipt=document,receiptWritten=record is not None,receiptFile=record)
 
 

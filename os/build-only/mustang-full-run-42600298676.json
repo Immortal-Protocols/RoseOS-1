@@ -1,0 +1,57 @@
+{
+  "schema": "roseos.mustang-full-run-failure.v1",
+  "runId": "42600298676",
+  "runNumber": 29,
+  "runAttempt": 1,
+  "source": "1fc5e452bfd081dc22d634090604d2108e67760c",
+  "workflow": ".github/workflows/mustang-ota-dedicated.yml",
+  "builderJobId": 129103447125,
+  "builderGroupId": 5,
+  "hostCheckConclusion": "success",
+  "baselineConclusion": "success",
+  "appInputDownloadAndVerificationConclusion": "success",
+  "collectorStage": "source",
+  "collectorFailureCode": "unclassified-selected-file",
+  "exceptionType": "Refused",
+  "failureFrames": [
+    "mustang_bootstrap_collector.py:365:collect",
+    "mustang_bootstrap_proof.py:476:_observe_prepared_locked",
+    "mustang_bootstrap_proof.py:383:inspect_source",
+    "blazer-build-only.py:1052:source_selection",
+    "mustang_bootstrap_proof.py:212:plan"
+  ],
+  "unclassifiedPathObserved": false,
+  "collectorReceiptWritten": true,
+  "errorObservedAt": "2026-11-09T10:24:46Z",
+  "sourceCopyStarted": false,
+  "allocationAttemptedByThisRun": false,
+  "makeStarted": false,
+  "journalOnDiskObserved": false,
+  "signerConclusion": "skipped",
+  "publisherConclusion": "skipped",
+  "cleanupJobId": 129104109541,
+  "cleanupConclusion": "success",
+  "directStopObservation": {
+    "observedAt": "2026-11-09T10:33:55.495067+00:00",
+    "value": {
+      "id": "5585425566393384049",
+      "status": "TERMINATED",
+      "metadata": {
+        "items": [
+          {
+            "key": "block-project-ssh-keys"
+          },
+          {
+            "key": "enable-guest-attributes"
+          },
+          {
+            "key": "enable-oslogin"
+          }
+        ]
+      },
+      "lastStopTimestamp": "2026-11-09T02:25:55.558-08:00"
+    }
+  },
+  "nextInitializationRunNumber": 30,
+  "basis": "Exact native diagnostic identifies unclassified-selected-file at the scanner classification check. The old refusal omitted the path; no filename or contents are guessed. Source update attaches at most32 sibling metadata names without opening unknown payloads or traversing unknown directories. Refusal and every admission/integrity/resource check remain. Cleanup and direct exact stopped-VM observation succeeded. No journal reset or disk-absence claim; all prior held denied resources remain untouched."
+}

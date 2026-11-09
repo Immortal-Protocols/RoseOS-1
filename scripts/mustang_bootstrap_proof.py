@@ -187,7 +187,7 @@ class Observation:
         try:
             for directory,dirs,files,parent in os.fwalk('.',topdown=True,dir_fd=rootfd,follow_symlinks=False,onerror=failed):
                 dirs.sort();files.sort();self.check()
-                prefix='' if directory=='.' else directory[2:]
+                prefix='' if directory=='.' else directory[2:];unclassified=[]
                 directory_path=base/prefix
                 if str(directory_path.relative_to(self.source)) in self.empty_gitlinks and (dirs or files):
                     raise git.Refused('unpinned-gitlink-contents',path=str(directory_path.relative_to(self.source)))
@@ -207,9 +207,12 @@ class Observation:
                         qualified=any(full==p or full.startswith(p+'/') for p in self.prepared_prefixes)
                         if stat.S_ISDIR(info.st_mode):
                             if full not in self.known_directories and not qualified:
-                                raise git.Refused('unclassified-selected-directory')
+                                if len(unclassified)<git.MAX_FAILURE_PATHS:unclassified.append((full,'directory'))
+                                if name in dirs:dirs.remove(name)
+                                continue
                         elif full not in self.known_files and not qualified:
-                            raise git.Refused('unclassified-selected-file')
+                            if len(unclassified)<git.MAX_FAILURE_PATHS:unclassified.append((full,'file'))
+                            continue
                     if stat.S_ISDIR(info.st_mode):
                         self.signatures[full]=signature(info)
                         entries.append(dict(path=rel,type='dir',mode=mode))
@@ -235,7 +238,10 @@ class Observation:
                         self.measured[full]=dict(link=text,blob=git.object_id('blob',os.fsencode(text)))
                         self.signatures[full]=signature(info)
                         entries.append(dict(path=rel,type='link',text=text,kind=kind,target=target,exists=exists))
-                    else:raise git.Refused('selected-special-file')
+                    else:raise git.Refused('selected-special-file',path=full)
+                if unclassified:
+                    raise git.Refused('unclassified-selected-'+unclassified[0][1],path=unclassified[0][0],
+                        paths=[name for name,_kind in unclassified])
         finally:os.close(rootfd)
         return dict(entries=entries,excluded=excluded,problems=[])
 
@@ -407,7 +413,7 @@ def inspect_source(source,manifest,vendor,host,recipe,*,root=ROOT,limits=None,de
                         or (kind=='file' and bool(measured['mode']&0o100)!=(known['mode']=='100755')):
                     raise git.Refused('selected-pinned-blob-or-mode-differs')
                 seen_expected.add(name);pinned_count+=1
-            elif not in_generated and not in_host:raise git.Refused('unclassified-selected-file')
+            elif not in_generated and not in_host:raise git.Refused('unclassified-selected-file',path=name)
             if in_generated or in_host:prepared_count+=1
             row={k:v for k,v in measured.items() if k!='blob'}
         payload_rows.append((name,row));inventory.append(dict(row,path=name))

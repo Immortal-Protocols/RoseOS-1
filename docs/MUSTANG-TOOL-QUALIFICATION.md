@@ -57,7 +57,7 @@ API authorization is never forwarded to signed storage, HTTP failures stop
 without retry, and errors expose phase/status rather than signed URLs. No CLI
 resource or previously denied artifact is retried through this change.
 Failure records are under os/build-only/mustang-full-run-*.json. The first clock
-initialization fence is29, without observing or resetting an existing journal.
+initialization fence is30, without observing or resetting an existing journal.
 
 Run42584970482 passed the native host, baseline and fresh-app byte/signature
 checks, then bootstrap source observation refused before copy/allocation/Make.
