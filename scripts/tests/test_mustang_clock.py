@@ -190,7 +190,7 @@ class ClockAllocationTest(unittest.TestCase):
             target=fixture.root/relative;target.parent.mkdir(parents=True,exist_ok=True)
             target.write_bytes((ROOT/relative).read_bytes())
         (fixture.root/'os/build-only/mustang-runtime.json').write_bytes(clock.canonical(cfg))
-        actual,jobs=fixture.metadata();actual.update(workflow_id=408460629,run_number=32,created_at='2026-11-09T04:10:00Z')
+        actual,jobs=fixture.metadata();actual.update(workflow_id=408460629,run_number=33,created_at='2026-11-09T04:10:00Z')
         env=dict(fixture.env)
         ctx=clock.actions_context(actual,env,self.policy)
         env['MUSTANG_CLOCK_CONTEXT']=base64.b64encode(clock.canonical(ctx)).decode()
@@ -207,7 +207,7 @@ class ClockAllocationTest(unittest.TestCase):
         with patch.object(full_fixtures.collector.mustang_lane,'configuration',return_value=fixture.lane):
             admitted=full_fixtures.hosted.authenticate_full_run(bundle,env,api=api,root=fixture.root)
             self.assertTrue(admitted['actionsRunIdentityVerified'])
-            actual['run_number']=33
+            actual['run_number']=34
             with self.assertRaisesRegex(ValueError,'authenticated Actions run'):
                 full_fixtures.hosted.authenticate_full_run(bundle,env,api=api,root=fixture.root)
 

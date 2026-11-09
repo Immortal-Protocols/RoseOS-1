@@ -92,6 +92,67 @@ class SourceProofTest(unittest.TestCase):
     def inspect(self,**kwargs):
         return proof.inspect_source(self.source,self.manifest,self.vendor,self.host,self.recipe,root=self.root,**kwargs)
 
+    def angle_checkout(self,*,project_path='external/angle',nested=False):
+        project=self.source/project_path;(project/'scripts').mkdir(parents=True)
+        (project/'.gitattributes').write_bytes((ROOT/'scripts/tests/fixtures/mustang-angle.gitattributes').read_bytes())
+        files={'scripts/trigger.bat':b'@echo off\necho NEVER EXECUTE FIXTURE\n',
+               'scripts/project.vcxproj':b'\xef\xbb\xbf<Project>fixture</Project>\n',
+               'src/compiled/shader.h':b'// fixture header\n',
+               'README.txt':b'ordinary pinned text\n'}
+        for name,raw in files.items():
+            target=project/name;target.parent.mkdir(parents=True,exist_ok=True);target.write_bytes(raw)
+        if nested:(project/'scripts/.gitattributes').write_text('*.bat eol=lf\n')
+        revision=self.init_project(project)
+        # Use Git itself to produce the checkout representation under test.
+        for name in files:(project/name).unlink()
+        self.command(project,'checkout-index','--all','--force')
+        document=ET.fromstring(self.manifest)
+        ET.SubElement(document,'project',name=project_path,path=project_path,revision=revision)
+        self.manifest=ET.tostring(document)
+        (self.root/'os/pinned-manifest.xml').write_bytes(self.manifest)
+        (self.source/'resolved-manifest.xml').write_bytes(self.manifest)
+        return project,files
+
+    def test_pinned_angle_crlf_matches_real_git_checkout_without_executing_filters(self):
+        project,files=self.angle_checkout();marker=self.home/'filter-must-not-run'
+        self.command(project,'config','filter.bad.smudge','touch '+str(marker))
+        self.command(project,'config','filter.bad.clean','touch '+str(marker))
+        (project/'.git/info/attributes').write_text('* filter=bad\n')
+        for name in ('scripts/trigger.bat','scripts/project.vcxproj','src/compiled/shader.h'):
+            self.assertEqual((project/name).read_bytes(),files[name].replace(b'\n',b'\r\n'))
+        result=self.inspect();self.assertEqual(result['selectedCheckoutConvertedEntries'],3)
+        self.assertFalse(marker.exists())
+        self.assertEqual(result['checkoutConversionPolicy'],'pinned-angle-crlf-v1')
+        original=git.LocalGit.read
+        def corrupt(reader,project,operation,revision=None):
+            raw=original(reader,project,operation,revision)
+            return raw+b'changed raw object' if operation=='blob' else raw
+        with patch.object(git.LocalGit,'read',new=corrupt):
+            with self.assertRaisesRegex(git.Refused,'pinned-checkout-blob-differs'):self.inspect()
+
+    def test_crlf_conversion_does_not_hide_changed_mixed_or_unattributed_bytes(self):
+        project,files=self.angle_checkout();target=project/'scripts/trigger.bat';original=target.read_bytes()
+        for value in (original+b'changed payload\r\n',original.replace(b'\r\n',b'\n',1)):
+            target.write_bytes(value)
+            with self.assertRaisesRegex(git.Refused,'pinned-blob-or-mode-differs-blob'):self.inspect()
+        target.write_bytes(original)
+        (project/'README.txt').write_bytes(files['README.txt'].replace(b'\n',b'\r\n'))
+        with self.assertRaisesRegex(git.Refused,'pinned-blob-or-mode-differs-blob'):self.inspect()
+
+    def test_nested_pinned_attribute_override_prevents_root_crlf_conversion(self):
+        project,files=self.angle_checkout(nested=True)
+        self.assertEqual((project/'scripts/trigger.bat').read_bytes(),files['scripts/trigger.bat'])
+        (project/'scripts/trigger.bat').write_bytes(files['scripts/trigger.bat'].replace(b'\n',b'\r\n'))
+        with self.assertRaisesRegex(git.Refused,'pinned-blob-or-mode-differs-blob'):self.inspect()
+
+    def test_other_project_cannot_use_angle_conversion_and_raw_reads_remain_bounded(self):
+        project,_files=self.angle_checkout(project_path='external/not-angle')
+        with self.assertRaisesRegex(git.Refused,'pinned-blob-or-mode-differs-blob'):self.inspect()
+        # The raw reader is also bounded and never runs --filters or textconv.
+        blob=self.command(project,'rev-parse','HEAD:scripts/trigger.bat').decode().strip()
+        with self.assertRaisesRegex(git.Refused,'git-output-bound'):
+            git.LocalGit(time.monotonic()+30,output_bytes=1).read(project,'blob',blob)
+
     def test_complete_selected_bytes_and_prepared_payloads_match_without_bootstrap_admission(self):
         before=self.command(self.source/'vendor/adevtool','status','--porcelain','--untracked-files=no')
         result=self.inspect()
