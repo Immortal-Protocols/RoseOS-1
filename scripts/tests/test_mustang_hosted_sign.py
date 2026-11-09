@@ -36,6 +36,15 @@ def write_zip(path, name='payload.txt', data=b'payload', mode=0o644, members=Non
 
 
 class HostedSignGateTest(unittest.TestCase):
+    def setUp(self):
+        # Synthetic legacy bundles are deliberately not the current qualified
+        # full-run bundle; full-route qualification has separate integration tests.
+        original=hosted.read_json
+        def read_legacy(path):
+            value=original(path)
+            return dict(value,status='unbound') if Path(path)==ROOT/'os/build-only/mustang-runtime.json' else value
+        reader=patch.object(hosted,'read_json',side_effect=read_legacy)
+        reader.start();self.addCleanup(reader.stop)
     def measured_peak(self):
         measured = hosted.measured_inputs()
         self.assertEqual(measured['unsigned'], 4340146868)
@@ -49,7 +58,7 @@ class HostedSignGateTest(unittest.TestCase):
         self.assertGreater(required, 14 * 10 ** 9)
         self.assertEqual(hosted.STOCK_SSD_BYTES, 14 * 1024 ** 3)
         config = hosted.load_capacity()
-        self.assertFalse(config['admission'])
+        self.assertTrue(config['admission'])
         self.assertEqual(config['trust'], 'held')
         self.assertIsNone(config['storage']['accountPlan'])
         self.assertTrue(config['storage']['includedAllowancesAreNotPerArtifactLimits'])
@@ -60,15 +69,21 @@ class HostedSignGateTest(unittest.TestCase):
         self.assertEqual(config['proposedRunner']['usdPerMinute'], '0.012')
         self.assertEqual(config['proposedRunner']['ssdBytes'], 150000000000)
         self.assertGreater(config['proposedRunner']['ssdBytes'], required)
-        self.assertEqual(config['activeRunner']['label'], 'ubuntu-24.04')
-        self.assertEqual(config['activeRunner']['ssdBytes'], hosted.STOCK_SSD_BYTES)
+        self.assertEqual(config['activeRunner']['label'], 'mustang-signer-4core')
+        self.assertEqual(config['activeRunner']['ssdBytes'], 150000000000)
+        self.assertEqual(config['activeRunner']['groupId'], 6)
+        self.assertTrue(config['schedulingAccess']['verified'])
         return measured, required
 
     def admitted(self):
         config = hosted.load_capacity()
         config['admission'] = True
-        config['activeRunner'] = dict(config['activeRunner'], ssdBytes=10 ** 18)
+        config['activeRunner'] = dict(label='synthetic-large', ssdBytes=10 ** 18)
         config['outputBounds'] = {name: 4096 for name in hosted.OUTPUT_BOUNDS}
+        return config
+
+    def closed(self):
+        config=hosted.load_capacity();config['admission']=False
         return config
 
     def larger(self):
@@ -98,8 +113,23 @@ class HostedSignGateTest(unittest.TestCase):
             self.assert_secret_closed(call,'actual signer CPU/memory/disk')
 
     def test_closed_signer_admission_is_known_before_any_native_build(self):
-        with self.assertRaisesRegex(ValueError,'hosted signer admission is closed; no native build'):
-            hosted.require_delivery_capacity(ROOT)
+        with patch.object(hosted,'load_capacity',return_value=self.closed()):
+            with self.assertRaisesRegex(ValueError,'hosted signer admission is closed; no native build'):
+                hosted.require_delivery_capacity(ROOT)
+
+    def test_configured_profile_cannot_replace_repository_workflow_scheduling_evidence(self):
+        config=hosted.load_capacity();config['schedulingAccess']['verified']=False
+        with patch.object(hosted,'load_capacity',return_value=config):
+            with self.assertRaisesRegex(ValueError,'scheduling access is unconfirmed'):
+                hosted.require_delivery_capacity(ROOT)
+            config['schedulingAccess'].update(verified=True,repositoryAllowed=True,workflowAllowed=True,
+                evidenceRef='synthetic administrator scheduling confirmation')
+            self.assertEqual(hosted.require_delivery_capacity(ROOT)['activeRunner']['groupId'],6)
+            for key in ('verified','repositoryAllowed','workflowAllowed','evidenceRef'):
+                original=config['schedulingAccess'][key];config['schedulingAccess'][key]=None
+                with self.assertRaisesRegex(ValueError,'scheduling access is unconfirmed'):
+                    hosted.require_delivery_capacity(ROOT)
+                config['schedulingAccess'][key]=original
 
     def bundle(self, **changes):
         measured, _ = self.measured_peak()
@@ -131,13 +161,17 @@ class HostedSignGateTest(unittest.TestCase):
         _, required = self.measured_peak()
         bundle = self.bundle()
         bundle['capacity'] = 'ok'
+        stock=hosted.load_capacity()
+        stock['activeRunner']=dict(label='ubuntu-24.04',ssdBytes=hosted.STOCK_SSD_BYTES)
+        stock['outputBounds']={name:None for name in hosted.OUTPUT_BOUNDS}
+        stock['admission']=False
 
         def call(secret_access):
-            hosted.evaluate(bundle, ROOT, free=10 ** 18, secret_access=secret_access, env=ENV)
+            hosted.evaluate(bundle, ROOT, free=10 ** 18, secret_access=secret_access, env=ENV,capacity_config=stock)
 
         self.assert_secret_closed(call, 'output bound is missing')
         with self.assertRaises(hosted.CapacityExceeded) as caught:
-            hosted.capacity(bundle, free=10 ** 18, config=hosted.load_capacity())
+            hosted.capacity(bundle, free=10 ** 18, config=stock)
         self.assertIn(f'required {required} bytes', str(caught.exception))
         self.assertIn(f'stock SSD {hosted.STOCK_SSD_BYTES} bytes', str(caught.exception))
         self.assertIn('hosted signer admission is closed', str(caught.exception))
@@ -285,7 +319,7 @@ class HostedSignGateTest(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, 'hosted signer admission is closed'):
             hosted.sign(self.write_bundle(bundle, files), Path(self.directory.name) / 'closed-out', root=root,
-                        env=ENV, host_sign_main=host_sign_main, free=10 ** 18, pin=pin)
+                        env=ENV, host_sign_main=host_sign_main, free=10 ** 18, pin=pin,capacity_config=self.closed())
         self.assertEqual(calls, [])
         out = Path(self.directory.name) / 'signed-out'
         receipt = hosted.sign(self.write_bundle(bundle, files), out, root=root, env=ENV,
@@ -355,8 +389,7 @@ class HostedSignGateTest(unittest.TestCase):
                                      'preflight', '--bundle', str(out)],
                                     env=env, capture_output=True, text=True, timeout=20)
             self.assertEqual(result.returncode, 4, result.stderr)
-            self.assertIn('hosted signer admission is closed', result.stderr)
-            self.assertIn('unmeasured signer inputs', result.stderr)
+            self.assertIn('full-run signing tools differ from measured qualification', result.stderr)
             self.assertNotIn('admit=true', result.stdout)
             self.assertNotIn('gcloud', result.stderr)
             output = root / 'github-output'
@@ -380,8 +413,7 @@ class HostedSignGateTest(unittest.TestCase):
                                      'preflight', '--bundle', str(path)],
                                     env=env, capture_output=True, text=True, timeout=20)
             self.assertEqual(result.returncode, 4, result.stderr)
-            self.assertIn('output bound is missing', result.stderr)
-            self.assertIn('hosted signer admission is closed', result.stderr)
+            self.assertIn('full-run signing tools differ from measured qualification', result.stderr)
             self.assertNotIn(str(required), result.stderr)
             self.assertEqual(output.read_text(), '')
             self.assertNotIn('gcloud', result.stderr)
@@ -476,7 +508,7 @@ class HostedSignGateTest(unittest.TestCase):
         self.assertLess(cleanup.index('mustang_controller.py stop'), cleanup.index('sweep --execute'))
         self.assertIn("always() && needs.controller.result != 'skipped'", cleanup)
         runtime = json.loads((ROOT / 'os/build-only/mustang-runtime.json').read_text())
-        self.assertEqual(runtime['status'], 'unbound')
+        self.assertEqual(runtime['status'], 'bound')
         self.assertEqual(runtime['signingRouteEvidence'],'os/build-only/mustang-dedicated-signing-route.json')
         self.assertEqual(runtime['sourceEvidence'], 'os/build-only/mustang-full-run-source.json')
         self.assertTrue(runtime['publication']['enabled'])
@@ -547,7 +579,7 @@ class HostedSignGateTest(unittest.TestCase):
         closed = subprocess.run([sys.executable, script, 'preliminary', '--bundle', str(signer)],
                                 env=closed_env, capture_output=True, text=True, timeout=30)
         self.assertEqual(closed.returncode, 4, closed.stderr)
-        self.assertIn('hosted signer admission is closed', closed.stderr)
+        self.assertIn('full-run signing tools differ from measured qualification', closed.stderr)
         self.assertNotIn('signing bundle hash differs', closed.stderr)
         self.assertNotIn('resumed file', closed.stderr)
         self.assertNotIn('allow=true', output.read_text())

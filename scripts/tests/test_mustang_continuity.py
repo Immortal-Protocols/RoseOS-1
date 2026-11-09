@@ -31,7 +31,7 @@ class ContinuityTest(unittest.TestCase):
         self.assertFalse(got['apkSignerRemeasured'])
         self.assertEqual(got['historicalUpdaterSignerSha256'], '93cc757e7f4e4e5c4ef7726fbeec9acc77b1f97d471c1cd0d62753cf94e471a8')
         runtime = json.loads((ROOT/'os/build-only/mustang-runtime.json').read_text())
-        self.assertEqual(runtime['status'], 'unbound')
+        self.assertEqual(runtime['status'], 'bound')
         self.assertIsNone(runtime.get('baselineTargetFiles'))
         self.assertEqual(runtime['candidateContinuity'], 'os/build-only/mustang-candidate-continuity-20261107.json')
 

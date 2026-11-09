@@ -87,9 +87,14 @@ def production_unbound(root=ROOT):
     if capacity.get('admission') is not False or capacity.get('trust') != 'held':
         raise ClosureError('hosted signer admission is not held')
     bounds = capacity.get('outputBounds') or {}
-    for key in OUTPUT_BOUNDS:
-        if bounds.get(key) is not None:
-            raise ClosureError(f'output bound {key} is filled')
+    if any(bounds.get(key) is not None for key in OUTPUT_BOUNDS):
+        runner=capacity.get('activeRunner') or {}
+        if pin.get('status')!='qualified' or runner.get('kind')!='github-larger-runner' \
+                or runner.get('configured') is not True:
+            raise ClosureError('selected output budgets require qualified tools/configured larger profile')
+        for key in OUTPUT_BOUNDS:
+            if type(bounds.get(key)) is not int or bounds[key]<=0:
+                raise ClosureError(f'output budget {key} is invalid')
     proposed = capacity.get('proposedRunner') or {}
     if any(proposed.get(key) is not False for key in ('purchased', 'configured', 'selected', 'approved', 'sizingProof')):
         raise ClosureError('paid runner is recorded as activated')
@@ -344,8 +349,8 @@ def verify_archive_members(blob):
 
 def main(argv):
     if argv == ['verify']:
-        receipt = verify_closure(ROOT)
-        print(json.dumps({'status': 'held', 'files': len(receipt['files']),
+        receipt = verify_closure(ROOT,require_unbound=False)
+        print(json.dumps({'status': 'provenance-verified', 'executionAdmitted': False, 'files': len(receipt['files']),
                           'jdkArchiveSha256': receipt['jdk']['archiveSha256']}, sort_keys=True))
         return 0
     print('usage: mustang_tool_closure.py verify', file=sys.stderr)

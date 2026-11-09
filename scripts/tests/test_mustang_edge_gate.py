@@ -358,7 +358,7 @@ class DedicatedControllerTest(unittest.TestCase):
         start = subprocess.run([sys.executable,str(ROOT/'scripts/mustang_controller.py'), 'start'],
                                env=env, capture_output=True, text=True, timeout=10)
         self.assertEqual(start.returncode, 4)
-        self.assertIn('runtime is not admitted', start.stderr)
+        self.assertIn('requires its exact main workflow and a fresh attempt', start.stderr)
         self.assertNotIn('gcloud', start.stderr)
         for action in ('ownership','stop'):
             result = subprocess.run([sys.executable,str(ROOT/'scripts/mustang_controller.py'), action],
@@ -472,7 +472,7 @@ class DedicatedPathsTest(unittest.TestCase):
         self.assertFalse(readiness['buildAuthorized'])
         self.assertFalse(readiness['publicationAuthorized'])
         self.assertEqual(readiness['stopSafeguard']['seconds'],14400)
-        self.assertIn('signer-capacity-unadmitted',{item['code'] for item in readiness['blockers']})
+        self.assertNotIn('signer-capacity-unadmitted',{item['code'] for item in readiness['blockers']})
         for action in ('guard','host-check','fetch-inputs','baseline','produce','collect','sign','_execute','stage',
                        'verify-staged','publish','report','ownership-output','cleanup-prepare','require-owned'):
             result=subprocess.run([sys.executable,str(ROOT/'scripts/mustang-dedicated.py'),action],env=env,
@@ -885,7 +885,7 @@ class DedicatedRuntimeTest(unittest.TestCase):
                     readiness.evaluate_guest(bad,lane_binding,runtime)
         report=readiness.report()
         codes={item['code'] for item in report['blockers']}
-        self.assertTrue({'runtime-unbound','signer-capacity-unadmitted'}<=codes)
+        self.assertTrue({'runtime-unbound','signer-capacity-unadmitted'}.isdisjoint(codes))
         self.assertTrue({'runner-unregistered','allocation-unresolved','baseline-not-on-disk','signing-route-unadmitted'}.isdisjoint(codes))
         self.assertNotIn('app-inputs-unadmitted', codes)
         # The accepted export is reported stale exactly when this checkout's app sources moved past its producer: an
@@ -893,7 +893,7 @@ class DedicatedRuntimeTest(unittest.TestCase):
         drift = readiness.bound_app_freshness(json.loads((ROOT/runtime['appInputsRecord']).read_text()), ROOT)
         self.assertEqual('app-inputs-stale' in codes, bool(drift))
         self.assertEqual(runtime['appInputsRecord'], readiness.ACCEPTED_APP_EXPORT['path'])
-        self.assertEqual(runtime['status'], 'unbound')
+        self.assertEqual(runtime['status'], 'bound')
         self.assertEqual(runtime['signingRouteEvidence'],'os/build-only/mustang-dedicated-signing-route.json')
         self.assertEqual(runtime['sourceEvidence'],'os/build-only/mustang-full-run-source.json')
         self.assertNotIn('source-unprovisioned', codes)
@@ -1000,7 +1000,7 @@ class DedicatedRuntimeTest(unittest.TestCase):
         self.assertEqual(current['certificateDerSha256'], '93cc757e7f4e4e5c4ef7726fbeec9acc77b1f97d471c1cd0d62753cf94e471a8')
         self.assertFalse(current['apkSignerRemeasured'])
         self.assertFalse(current['currentPhone'])
-        self.assertEqual(current['runtimeStatus'], 'unbound')
+        self.assertEqual(current['runtimeStatus'], 'bound')
         self.assertFalse(report['otaContinuity']['phoneUpdatePassed'])
         self.assertEqual(report['otaContinuity']['updater']['otaCertificateSha256'],
                          '93cc757e7f4e4e5c4ef7726fbeec9acc77b1f97d471c1cd0d62753cf94e471a8')
@@ -1530,7 +1530,14 @@ class AdapterTest(unittest.TestCase):
             raise AssertionError(filename)
         cfg=ota.config()
         if not publication: cfg=dict(cfg,publicationEnabled=False)
+        # This fixture tests retained pre-clock edge staging, not a current
+        # full-run allocation. Production clock validation is unchanged.
+        live_read=ota.read
+        def read_legacy(path):
+            value=live_read(path)
+            return dict(value,status='unbound') if Path(path)==ota.ROOT/'os/build-only/mustang-runtime.json' else value
         with patch.object(ota,'config',return_value=cfg),patch.object(ota,'module',side_effect=module),patch.object(ota,'identities',return_value=pins), \
+                patch.object(ota,'read',side_effect=read_legacy), \
                 patch.object(ota.host_secrets,'certificate_sha256',return_value=pin), \
                 patch.object(ota,'observe_target',return_value={'packagedUpdaterVerified':True}), \
                 patch.object(ota,'ota_metadata',return_value={'pre-device':'mustang'}), \

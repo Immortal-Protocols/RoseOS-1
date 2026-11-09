@@ -299,7 +299,7 @@ def current_runtime_blockers(root, runtime):
     signing=load(root/runtime['signingRouteEvidence']) if runtime.get('signingRouteEvidence') else {}
     if signing.get('builder')!=lane['vm'] or signing.get('approved') is not True:
         items.append(dict(code='signing-route-unadmitted',detail='Existing dedicated signing identity route is not bound.'))
-    check('signer-capacity-unadmitted','Actual selected larger-signer configuration/output budget is not yet admitted.',
+    check('signer-capacity-unadmitted','Signer capacity, scheduling evidence or qualified tool binding is invalid.',
         lambda:mustang_hosted_sign.require_delivery_capacity(root))
     if runtime.get('publication',{}).get('enabled') is not True or not runtime['publication'].get('authorityRecord'):
         items.append(dict(code='publication-disabled',detail='Public publication remains default-off until its current dedicated authority is reconciled.'))

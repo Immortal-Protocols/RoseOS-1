@@ -319,14 +319,14 @@ class EnrollmentTest(unittest.TestCase):
 
     def test_infrastructure_host_check_starts_without_fabricated_inputs(self):
         runtime = json.loads((ROOT/'os/build-only/mustang-runtime.json').read_text())
-        self.assertEqual(runtime['status'], 'unbound')
+        self.assertEqual(runtime['status'], 'bound')
         self.assertEqual(runtime['appInputsRecord'], 'os/app-inputs/frankel-2026110901.json')
         self.assertEqual(runtime['signingRouteEvidence'], 'os/build-only/mustang-dedicated-signing-route.json')
         self.assertEqual(runtime['sourceEvidence'], 'os/build-only/mustang-full-run-source.json')
         self.assertIsNone(runtime['baselineTargetFiles'])
         self.assertEqual(controller.start_gate(runtime, {'MUSTANG_DRY_RUN': 'true'}), 'infrastructure-host-check')
         with self.assertRaisesRegex(ValueError, 'not admitted'):
-            controller.start_gate(runtime, {})
+            controller.start_gate(dict(runtime,status='unbound'), {})
         with self.assertRaisesRegex(ValueError, 'cannot publish'):
             controller.start_gate(runtime, {'MUSTANG_DRY_RUN': 'true', 'MUSTANG_PUBLISH': 'true'})
         for action in dedicated.DRY_RUN_BLOCKED:

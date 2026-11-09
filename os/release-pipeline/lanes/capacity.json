@@ -90,7 +90,7 @@
       "activeBinding": "os/build-only/mustang-lane.json",
       "dedicatedHost": "mustang-builder",
       "dedicatedRuntime": "os/build-only/mustang-runtime.json",
-      "dedicatedRuntimeStatus": "unbound",
+      "dedicatedRuntimeStatus": "bound",
       "unbound": [
         "runnerLabel",
         "vm",
@@ -99,7 +99,7 @@
         "queue",
         "controller"
       ],
-      "note": "The host/workflow/modes above describe retired legacy jobs only, not executable capacity or permission to use Frankel. Legacy entry points refuse before controller start or STOP. The dedicated host is identity-bound and its runtime is unbound, so it is not in service and claims no parallel capacity. No retained Frankel-local source or path is a substitute."
+      "note": "The legacy host/workflow/modes above stay retired and cannot execute or use Frankel. The separate dedicated Mustang runtime is now source-bound for manual delivery with verified existing signer profile/scheduling and explicit budgets. Actual native/signer identity, capacity, source and output checks remain same-run requirements. No successful full run or extra parallel capacity is claimed."
     },
     "agent": {
       "workflow": ".github/workflows/os-release.yml",

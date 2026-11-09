@@ -27,8 +27,8 @@ FIXTURE_SHA = '8a88df24adfb652c11ab62fc5c9bc7098f27d33c1dc2cf7a0183e1226f2bb55f'
 
 
 class ToolClosureTest(unittest.TestCase):
-    def test_checkout_matches_receipt_and_qualified_pins_keep_execution_closed(self):
-        receipt = closure.verify_closure(ROOT)
+    def test_checkout_matches_historical_receipt_and_current_qualified_pins(self):
+        receipt = closure.verify_closure(ROOT,require_unbound=False)
         self.assertEqual(receipt['files'][1]['sha256'],
                          '01f7847ecdc6600bd2e3ffebe45cf79cee4fead1d6b61686c4d3c70e9c548311')
         self.assertIsNone(receipt['otatools']['sha256'])
@@ -40,9 +40,10 @@ class ToolClosureTest(unittest.TestCase):
         for key in closure.PIN_KEYS:
             self.assertEqual(pin[key],expected[key])
         capacity = json.loads((ROOT / closure.CAPACITY).read_text())
-        self.assertFalse(capacity['admission'])
+        self.assertTrue(capacity['admission'])
         self.assertEqual(capacity['trust'], 'held')
-        self.assertTrue(all(value is None for value in capacity['outputBounds'].values()))
+        self.assertTrue(all(type(value) is int and value>0 for value in capacity['outputBounds'].values()))
+        self.assertTrue(capacity['schedulingAccess']['verified'])
         self.assertFalse(any(capacity['proposedRunner'][key] for key in
                              ('purchased', 'configured', 'selected', 'approved', 'sizingProof')))
         self.assertFalse((ROOT / 'script/decrypt-keys').exists())
@@ -222,6 +223,11 @@ class ToolClosureTest(unittest.TestCase):
             target = base / relative
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(source, target)
+        # These mutations exercise the explicitly held-validation mode even
+        # when the real checkout has admitted source configuration.
+        capacity=json.loads((base/closure.CAPACITY).read_text())
+        capacity['admission']=False
+        (base/closure.CAPACITY).write_text(json.dumps(capacity))
 
 
 if __name__ == '__main__':

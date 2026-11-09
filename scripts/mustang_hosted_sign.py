@@ -340,6 +340,12 @@ def require_delivery_capacity(root=ROOT):
         raise ValueError('configured dedicated larger signer required before native build')
     _bounds,missing=bound_values(config)
     if missing:raise ValueError('output bound is missing: '+','.join(missing))
+    scheduling=config.get('schedulingAccess') or {}
+    if scheduling.get('repository')!='Immortal-Protocols/RoseOS-1' \
+            or scheduling.get('workflow')!='Immortal-Protocols/RoseOS-1/'+WORKFLOW+'@refs/heads/main' \
+            or any(scheduling.get(key) is not True for key in ('verified','repositoryAllowed','workflowAllowed')) \
+            or not scheduling.get('evidenceRef'):
+        raise ValueError('signer repository/workflow scheduling access is unconfirmed; no native build')
     import mustang_tool_closure
     expected=mustang_tool_closure.qualified_pins(root)
     pin=load_pin(root,json.loads((Path(root)/SCRIPT_PIN).read_text()))
