@@ -593,16 +593,14 @@ class CodexConductor:
         undone and never applied twice."""
         if not isinstance(result, dict):
             return
-        if result.get('ok') and name == 'rename_assistant':
-            what = f'your name is now {result.get("name")} (saved)'
-        elif result.get('ok') and result.get('changed'):
-            what = 'your voice changed and was saved; the owner is hearing it now'
-        elif result.get('ok'):
-            what = 'the voice is unchanged and now also the saved choice'
-        else:
-            what = 'nothing changed: ' + str(result.get('message') or result.get('reason'))
+        # The whole outcome the model never saw: what changed, what could not be matched, any offered alternative.
+        keys = ('ok', 'changed', 'name', 'voice', 'previous_voice', 'saved', 'match', 'met', 'unmet', 'judged_among',
+                'measured_changes', 'limits', 'closer_unavailable', 'alternative', 'reason', 'message', 'note')
+        outcome = json.dumps({k: result[k] for k in keys if k in result}, ensure_ascii=False)
+        follow = (' The reply that would have let the owner hear it was cut off: say in one short sentence, in this '
+                  'voice, what changed and ask whether it suits them.' if result.get('changed') else '')
         note = (s.conversation, f'[Before this message, your {name} call that was answered as cancelled finished: '
-                f'{what}]')
+                f'{outcome}.{follow}]')
         with self._lock:
             if self._bridge_cancelled.pop(call_id, None):
                 self._late_note(note)

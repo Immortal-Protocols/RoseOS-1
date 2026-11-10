@@ -43,10 +43,12 @@ UNREQUESTED_WEIGHT = 0.5
 UNAVAILABLE_RETRY_S = 300.0  # a voice that failed to load (a download, a network blip) is tried again after this  # keep what the owner did not ask to change close to the current voice
 def american(accent: str) -> bool:
     """Whether an accent request names the accent every available voice has (US English), or none."""
-    words = set(re.findall(r'[a-z]+', accent.lower().replace('u.s.', 'us').replace('en-us', 'us')))
+    text = accent.lower().replace('u.s.', 'us').replace('en_us', 'us').replace('en-us', 'us')
+    words = set(re.findall(r'[a-z]+', text))
     words -= {'accent', 'a', 'an', 'the', 'standard', 'general', 'plain', 'neutral', 'north', 'any', 'same',
-              'none', 'unchanged', 'current', 'no', 'change'}
-    us = {'american', 'us', 'usa', 'united', 'states'}
+              'none', 'unchanged', 'current', 'no', 'change', 'keep', 'it', 'as', 'now', 'is', 'one', 'please', 'like',
+              'sounding', 'sound', 'voice', 'my', 'your', 'this', 'that', 'fine', 'ok', 'okay', 'just', 'still'}
+    us = {'american', 'america', 'us', 'usa', 'united', 'states'}
     if words & us:  # "American English", "US English": English names the language here
         words.discard('english')
     return not words or words <= us  # a bare "English" accent usually means England's, which no voice has
@@ -146,12 +148,12 @@ def match(current: str, request: dict, available, traits: dict = TRAITS) -> list
                     if dim == 'pitch' and asked_switch:
                         unmet.append('same_pitch')  # another gender asked for: its pitch cannot be kept; say so
                     else:
-                        if abs(real[dim]) > spec['step']:
+                        if abs(real[dim]) >= spec['least']:  # as much as Rose would report as a change
                             unmet.append('same_' + dim)
                             against.append('same_' + dim)
                         score += (real[dim] / spec['scale']) ** 2
-                else:  # only a gender change the owner asked for excuses its pitch change
-                    score += UNREQUESTED_WEIGHT * ((d if among or dim != 'pitch' else real)[dim] / spec['scale']) ** 2
+                elif not (dim == 'pitch' and asked_switch):  # only an asked gender change excuses its pitch change
+                    score += UNREQUESTED_WEIGHT * (real[dim] / spec['scale']) ** 2  # stay near the current voice
                 continue
             target = math.copysign(spec['large'] if abs(level) == 2 else spec['step'], level)
             miss = d[dim] - target
@@ -377,10 +379,12 @@ class VoiceIdentity:
             best = next((e for e in wider if e['toward'] and not e['against']), None)
         scope = '' if request['gender'] in ('either',) else f'{request["gender"] if changing_gender else gender} '
         kept = ' and '.join(request['keep'])
-        blocked_by_keep = bool(request['keep']) and any(
-            e['met'] and all(a.startswith('same_') for a in e['against']) for e in ranked)
-        if blocked_by_keep:
-            message = f'Every available {scope}voice that fits also changes the {kept} you asked to keep.'
+        blocked = [e for e in ranked if e['met'] and e['against'] and all(a.startswith('same_') for a in e['against'])]
+        if request['keep'] and blocked:
+            common = set.intersection(*(set(e['against']) for e in blocked)) or set.union(*(set(e['against'])
+                                                                                       for e in blocked))
+            names = ' and '.join(a[len('same_'):] for a in sorted(common))
+            message = f'Every available {scope}voice that fits also changes the {names} you asked to keep.'
         elif request['wanted']:
             message = (f'No available {scope}voice is ' + ' and '.join(w.replace('_', ' ')
                                                                     for w in self._words(request['wanted']))
@@ -458,7 +462,8 @@ class VoiceIdentity:
                 skipped.append(voice)
                 continue
             with self.lock:
-                if not self._save(self.name, voice, current):
+                measured = current in self.traits['voices']
+                if not self._save(self.name, voice, current if measured else self.previous):
                     try:
                         speaker.set_voice(current)
                     except Exception:
@@ -466,10 +471,10 @@ class VoiceIdentity:
                     return {'ok': False, 'reason': 'not_saved', 'changed': False, 'voice': current,
                             'message': 'The new voice could not be saved, so the current voice was kept.'
                             + (self.UNREADABLE if self.unreadable else '')}
-                self.voice, self.previous, self.offered = voice, current, None
+                self.voice, self.previous, self.offered = voice, current if measured else self.previous, None
                 self.unavailable.pop(voice, None)
             changes = entry['changes'] if entry['changes'] is not None else describe_changes(
-                deltas(self.traits['voices'][current], self.traits['voices'][voice]))
+                deltas(self.traits['voices'][current], self.traits['voices'][voice])) if measured else []
             result = {'ok': True, 'changed': True, 'voice': voice, 'previous_voice': current, 'saved': True,
                       'match': label or ('close' if not entry['unmet'] else 'partial'),
                       'met': entry['met'], 'unmet': entry['unmet'], 'measured_changes': changes,

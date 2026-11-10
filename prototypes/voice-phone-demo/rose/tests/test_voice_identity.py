@@ -266,6 +266,46 @@ class Matching(unittest.TestCase):
                 d = vi.deltas(vi.TRAITS['voices'][current], vi.TRAITS['voices'][voice])['pitch']
                 self.assertLessEqual(abs(d), vi.DIMENSIONS['pitch']['step'], r)
 
+    def test_a_kept_aspect_never_moves_more_than_rose_would_report(self):
+        for current in ALL:
+            for keep in vi.DIMENSIONS:
+                for ask in vi.DIMENSIONS:
+                    if ask == keep:
+                        continue
+                    for word in (vi.DIMENSIONS[ask]['less'], vi.DIMENSIONS[ask]['more']):
+                        r, _ = self.change(current, **{keep: 'same', ask: word})
+                        if r['ok']:
+                            d = vi.deltas(vi.TRAITS['voices'][current], vi.TRAITS['voices'][r['voice']])[keep]
+                            self.assertLess(abs(d), vi.DIMENSIONS[keep]['least'], (current, keep, ask, word, r))
+
+    def test_an_asked_gender_change_stays_near_the_current_voice_otherwise(self):
+        women = [n for n, v in vi.TRAITS['voices'].items() if v['gender'] == 'female']
+        for man in ('easton', 'micah', 'miles'):
+            def distance(w):  # the unrequested aspects, from the current voice (pitch excused by the asked change)
+                d = vi.deltas(vi.TRAITS['voices'][man], vi.TRAITS['voices'][w])
+                return sum((d[k] / vi.DIMENSIONS[k]['scale']) ** 2 for k in ('warmth', 'liveliness', 'pace'))
+            pick = vi.VoiceIdentity().change_voice(Speaker(man), {'gender': 'female'})['voice']
+            self.assertEqual(pick, min(women, key=distance), man)
+
+    def test_a_revert_from_an_unmeasured_voice_reports_success(self):
+        identity = vi.VoiceIdentity()
+        identity.previous = 'miles'
+        speaker = Speaker('NbpkqMVS3CJeq2j8', voices=ALL + ['NbpkqMVS3CJeq2j8'])
+        r = identity.revert(speaker)
+        self.assertTrue(r['ok'])
+        self.assertEqual((speaker.voice, r['measured_changes']), ('miles', []))
+
+    def test_keep_blocked_message_names_only_what_blocks(self):
+        for current in ALL:
+            r, _ = self.change(current, pitch='lower', liveliness='same', pace='same')
+            if r['ok'] or 'you asked to keep' not in r['message']:
+                continue
+            fits = [e for e in vi.match(current, vi.request_from({'pitch': 'lower', 'liveliness': 'same',
+                                                                  'pace': 'same'}), ALL) if e['met']]
+            for kept in ('liveliness', 'pace'):
+                if kept in r['message']:  # every fitting voice really changes it
+                    self.assertTrue(all('same_' + kept in e['against'] for e in fits), (current, kept, r))
+
     def test_a_gender_change_cannot_keep_the_pitch_and_says_so(self):
         r, _ = self.change('zoey', gender='male', pitch='same')
         self.assertTrue(r['ok'])
@@ -288,7 +328,8 @@ class Matching(unittest.TestCase):
         self.assertTrue('alternative' not in r or r['alternative']['gender'] == 'male', r)
 
     def test_american_accents_are_recognised(self):
-        for accent in ('American', 'American English', 'US English', 'a General American accent', 'en-US', 'U.S.'):
+        for accent in ('American', 'American English', 'US English', 'a General American accent', 'en-US', 'U.S.',
+                       'keep it American', 'same as now', 'America', 'American-sounding', 'an American one', 'en_US'):
             r, speaker = self.change('zoey', accent=accent)
             self.assertEqual((r['reason'], speaker.calls), ('already', []), accent)
             r, _ = self.change('zoey', accent=accent, pitch='lower')
@@ -560,12 +601,27 @@ class Conversation(unittest.TestCase):
         self.assertTrue(r['ok'])
         notes = [n for c, n in self.engine._late_notes if c == s.conversation]
         self.assertEqual(len(notes), 1)
-        self.assertIn('change_voice call that was answered as cancelled finished: your voice changed and was saved',
-                      notes[0])
+        self.assertIn('change_voice call that was answered as cancelled finished: {', notes[0])
+        self.assertIn('"changed": true', notes[0])
+        self.assertIn('ask whether it suits them', notes[0])
         # Not cancelled: no note (the model saw the result).
         self.engine._late_notes = []
         self.tool('rename_assistant', name='Nova')
         self.assertEqual(self.engine._late_notes, [])
+
+    def test_a_cancelled_change_note_keeps_limits_and_the_offered_alternative(self):
+        s = self.engine.sessions['conversation']
+        self.engine._event({'event': 'tool_cancelled', 'callId': 'ipc-change_voice'})
+        self.tool('change_voice', pitch='lower', other=['raspy'])
+        note = [n for c, n in self.engine._late_notes if c == s.conversation][-1]
+        self.assertIn('raspy could not be matched', note)
+        self.engine._late_notes = []
+        self.speaker.voice = 'easton'
+        self.engine._event({'event': 'tool_cancelled', 'callId': 'ipc-change_voice'})
+        self.tool('change_voice', warmth='warmer')
+        note = [n for c, n in self.engine._late_notes if c == s.conversation][-1]
+        self.assertIn('"alternative"', note)
+        self.assertIn(self.identity.offered['voice'], note)
 
     def test_unavailable_closest_voice_is_reported_not_claimed(self):
         r = self.tool('change_voice', accent='Scottish')
