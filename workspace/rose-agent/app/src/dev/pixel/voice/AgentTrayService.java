@@ -10,7 +10,18 @@ import java.util.*;
 public final class AgentTrayService extends Service {
  private static volatile AgentTrayService instance;
  private long lastRegisterAt;
- @Override public void onCreate(){super.onCreate();instance=this;}
+ @Override public void onCreate(){super.onCreate();instance=this;TrayReturn.INSTANCE.attach(returnPort);}
+ /** 1C: the shell's return target and answers arrive on this link (TrayReturn); Rose sends only to that client. */
+ private final TrayReturn.Port returnPort=new TrayReturn.Port(){
+  public boolean send(Object client,int what,int request,long token){
+   Messenger to=clients.get(client);
+   if(to==null)return false;
+   Message m=Message.obtain(null,what,request,0);
+   if(what==TrayReturn.RETURN){Bundle b=new Bundle();b.putLong("token",token);m.setData(b);}
+   try{to.send(m);return true;}catch(RemoteException e){main.post(()->removeClient((IBinder)client));return false;}
+  }
+  public void schedule(Runnable task,long delayMs){main.postDelayed(task,delayMs);}
+ };
  static org.json.JSONObject diagnostics() throws org.json.JSONException {
   AgentTrayService service=instance;
   VoiceService voice=VoiceService.instance;
@@ -54,6 +65,16 @@ public final class AgentTrayService extends Service {
    main.removeCallbacks(poll);main.post(poll);return;
   }
   if(m.what==UNREGISTER&&m.replyTo!=null){removeClient(m.replyTo.getBinder());return;}
+  // 1C: only a registered client's target counts; it names the client Rose's RETURN goes to.
+  if(m.what==TrayReturn.TARGET){
+   IBinder from=m.replyTo==null?null:m.replyTo.getBinder();
+   if(from==null||!clients.containsKey(from))return;
+   Bundle d=m.getData();
+   TrayReturn.INSTANCE.target(from,d.getInt("protocolVersion"),d.getLong("token"),d.getString("package"),
+     d.getInt("userId",-1),d.getString("label"),android.os.Process.myUid()/100000,getPackageName());
+   return;
+  }
+  if(m.what==TrayReturn.RESULT){TrayReturn.INSTANCE.result(m.arg1,m.arg2);return;}
   // Rose's microphone-input mute (RoseMicInput): recorded, and applied to a live call; idle it starts nothing.
   if(m.what==MUTE||m.what==UNMUTE){RoseMicState.request(this,m.what==MUTE);publish(true);return;}
   String action=m.what==START?"talk":m.what==END?"end":null;
@@ -94,9 +115,9 @@ public final class AgentTrayService extends Service {
   try{client.send(response);}catch(RemoteException e){removeClient(client.getBinder());}
  }
  private void removeClient(IBinder binder){
-  clients.remove(binder);chinReachable.remove(binder);IBinder.DeathRecipient death=deaths.remove(binder);
+  clients.remove(binder);chinReachable.remove(binder);TrayReturn.INSTANCE.lost(binder);IBinder.DeathRecipient death=deaths.remove(binder);
   if(death!=null)binder.unlinkToDeath(death,0);
   if(clients.isEmpty())main.removeCallbacks(poll);
  }
- @Override public void onDestroy(){if(instance==this)instance=null;for(IBinder binder:new ArrayList<>(clients.keySet()))removeClient(binder);main.removeCallbacksAndMessages(null);super.onDestroy();}
+ @Override public void onDestroy(){if(instance==this)instance=null;TrayReturn.INSTANCE.lost(null);for(IBinder binder:new ArrayList<>(clients.keySet()))removeClient(binder);main.removeCallbacksAndMessages(null);super.onDestroy();}
 }
