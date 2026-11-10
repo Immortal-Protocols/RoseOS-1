@@ -155,7 +155,7 @@ test('Rose\'s apps shows exactly the apps currently under Rose\'s control, never
  // #410: the upper-right Background Work entry opens it (it was the third tray well).
  assert.match(activity,/work\.setOnClickListener\(v->openOverview\(\)\)/,'the work entry opens the overview');
  assert.match(activity,/overview=new WorkspaceOverviewPanel\(this,new OxbloodField\(OxbloodField\.ROSE\),statusInset\(\)\)/);
- assert.match(activity,/public void onBackPressed\(\)\{if\(overview!=null&&overview\.isOpen\(\)\)\{overview\.close\(\);return;\}super\.onBackPressed\(\);\}/,'Back closes the overview first');
+ assert.match(activity,/public void onBackPressed\(\)\{if\(overview!=null&&overview\.isOpen\(\)\)\{overview\.close\(\);return;\}\n  if\(returnState\.phase==ReturnModel\.Phase\.PENDING\)\{returnState=returnState\.cancelled\(SystemClock\.uptimeMillis\(\)\);renderReturn\(\);return;\}super\.onBackPressed\(\);\}/,'Back closes the overview first, then cancels a pending return (1C)');
  // Membership: App Core's phone-local current_apps (PR355), one complete reply per read, shown only when attested.
  const read=block.slice(block.indexOf('CurrentApps.Snapshot readCurrentApps()'));
  assert.match(read,/client\.call\("current_apps",null,extras\)/,'the controller\'s own phone-local membership call');
@@ -213,4 +213,35 @@ test('#225 live preview: the overview reads only the controller\'s local read-on
  assert.match(panel,/if\(a==null\|\|a\.preview==null\|\|!a\.preview\.complete\(\)\|\|!a\.sessionId\.isEmpty\(\)\)return null;/,'no handle, no Watch; bound apps wait for the per-session viewer');
  assert.match(panel,/void close\(\)\{setVisibility\(GONE\);closeSheet\(\);cancelPreviews\(\);\}/,'Back cancels');
  assert.ok(!/preview/.test(source('PhoneControl.java').replace(/"preview"\.equals[^;]*;/,'').replace(/\/\/[^\n]*preview[^\n]*/g,'')),'no second preview route through PhoneControl');
+});
+
+// 1C (Nathan's Nov 9–10 plan, V3): the compact named return control at the bottom left of Rose's content.
+test('the return control goes back to the exact previous live task only, never a guessed app or a launch (1C)',()=>{
+ const activity=source('RoseConversationActivity.java'),control=source('ReturnControl.java'),model=source('ReturnModel.java'),src=source('ReturnSource.java');
+ const strip=t=>t.replace(/\/\*[\s\S]*?\*\//g,'').replace(/\/\/.*$/gm,'');
+ // Placement: bottom left of the content (30dp in, the pill's 14dp padding outside), above Connect and the chin, and
+ // above an open keyboard; the content makes room while the control shows.
+ assert.match(activity,/new FrameLayout\.LayoutParams\(-2,dp\(ReturnControl\.HEIGHT_DP\),Gravity\.BOTTOM\|Gravity\.START\);rcp\.bottomMargin=dp\(RETURN_BOTTOM_DP\);rcp\.leftMargin=dp\(30-14\);/);
+ assert.match(activity,/int bottom=Math\.max\(dp\(RETURN_BOTTOM_DP\)\+navInset,imeInset\+dp\(12\)\);/);
+ assert.match(activity,/navInset=nav;imeInset=i\.getInsets\(WindowInsets\.Type\.ime\(\)\)\.bottom;layoutReturn\(\);/);
+ assert.match(activity,/int contentBottom=dp\(110\)\+navInset\+\(returnState\.visible\(\)\?dp\(ReturnControl\.HEIGHT_DP\+8\):0\);/);
+ // An accessible 48dp target, a spoken name, a live region; no fade under reduced motion.
+ assert.match(control,/HEIGHT_DP = 48, PILL_DP = 40/);
+ assert.match(control,/setContentDescription\(ReturnModel\.spoken\(s\)\);/);
+ assert.match(control,/setAccessibilityLiveRegion\(ACCESSIBILITY_LIVE_REGION_POLITE\);/);
+ assert.match(control,/if \(reducedMotion\) \{ setAlpha\(1f\); setTranslationY\(0\); return; \}/);
+ assert.match(control,/PROVISIONAL STYLING/,'provisional until Designer\'s V3 handoff');
+ // Only App Core's task restoration supplies the app and the return; until then nothing is offered.
+ assert.match(activity,/static volatile ReturnSource returnSource=ReturnSource\.NONE;/);
+ assert.match(src,/public ReturnModel\.Target current\(\) \{ return null; \}/);
+ for(const text of [strip(activity.slice(activity.indexOf('static volatile ReturnSource returnSource'),activity.indexOf('void layoutReturn()'))),strip(control),strip(model),strip(src)])
+  assert.doesNotMatch(text,/getLaunchIntentForPackage|startActivity|moveTaskToFront|FLAG_ACTIVITY_NEW_TASK/,'no launch stands in for the exact live task');
+ // Cancellation: a second tap (ReturnModel), Back, or leaving the screen before the return is asked for.
+ assert.match(activity,/if\(returnState\.phase==ReturnModel\.Phase\.PENDING\)\{returnState=returnState\.cancelled\(SystemClock\.uptimeMillis\(\)\);renderReturn\(\);return;\}/);
+ assert.match(activity,/stopBreath\(\);returnState=returnState\.cancelled\(SystemClock\.uptimeMillis\(\)\);/);
+ // The return is asked once per attempt and only that attempt's answer is applied; silence becomes a failure.
+ assert.match(activity,/source\.returnTo\(returnState\.target,a->runOnUiThread\(\(\)->\{returnState=returnState\.answered\(attempt,a,SystemClock\.uptimeMillis\(\)\);renderReturn\(\);\}\)\);/);
+ assert.match(activity,/handler\.postDelayed\(this::updateReturn,ReturnModel\.ANSWER_MS\);/);
+ // Rose's work keeps going: nothing in the return path ends the call, finishes the screen or stops a task.
+ assert.doesNotMatch(strip(activity.slice(activity.indexOf('void returnTapped()'),activity.indexOf('void layoutReturn()'))),/finish|send\(|command\(|stop|end\b/i);
 });

@@ -133,13 +133,17 @@ public final class RoseConversationActivity extends Activity {
   mic.addView(micGlyph,new FrameLayout.LayoutParams(-1,-1));mic.setOnClickListener(v->{if(state!=null&&state.active())send(state.muted?"tray_unmute":"tray_mute");});
   mic.setForeground(HomeAppTile.focusRing(density,OxbloodEdge.Well.RADIUS_DP));
   FrameLayout.LayoutParams mcp=new FrameLayout.LayoutParams(dp(48),dp(48),Gravity.BOTTOM|Gravity.START);mcp.bottomMargin=dp(40);mcp.leftMargin=dp(30);root.addView(mic,mcp);
+  // 1C (V3): the compact named return control, bottom left of Rose's content, above the bottom row and the chin.
+  returnControl=new ReturnControl(this);returnControl.setOnClickListener(v->returnTapped());
+  FrameLayout.LayoutParams rcp=new FrameLayout.LayoutParams(-2,dp(ReturnControl.HEIGHT_DP),Gravity.BOTTOM|Gravity.START);rcp.bottomMargin=dp(RETURN_BOTTOM_DP);rcp.leftMargin=dp(30-14);
+  rcp.rightMargin=dp(30);root.addView(returnControl,rcp);
   root.setOnApplyWindowInsetsListener((v,i)->{int nav=i.getSystemWindowInsetBottom();
    // Side insets (a landscape navigation bar, a cutout): every control lays out inside them; the field stays full-bleed.
    int left=i.getSystemWindowInsetLeft(),right=i.getSystemWindowInsetRight();
    if(i.getDisplayCutout()!=null){left=Math.max(left,i.getDisplayCutout().getSafeInsetLeft());right=Math.max(right,i.getDisplayCutout().getSafeInsetRight());}
    if(v.getPaddingLeft()!=left||v.getPaddingRight()!=right)v.setPadding(left,0,right,0);
    for(View c:new View[]{connect,mic,failure}){FrameLayout.LayoutParams l=(FrameLayout.LayoutParams)c.getLayoutParams();int base=c==failure?dp(42+44+6):dp(40);if(l.bottomMargin!=base+nav){l.bottomMargin=base+nav;c.setLayoutParams(l);}}
-   FrameLayout.LayoutParams l=(FrameLayout.LayoutParams)content.getLayoutParams();if(l.bottomMargin!=dp(110)+nav){l.bottomMargin=dp(110)+nav;content.setLayoutParams(l);}
+   navInset=nav;imeInset=i.getInsets(WindowInsets.Type.ime()).bottom;layoutReturn();
    return i;});
   overview=new WorkspaceOverviewPanel(this,new OxbloodField(OxbloodField.ROSE),statusInset());
   overview.bind(overviewSource(),overviewActions());overview.setIcons(this::appIcon);overview.setLabels(this::appLabel);
@@ -155,7 +159,7 @@ public final class RoseConversationActivity extends Activity {
  /** True between onResume and onPause: the presence animates only while this screen is visible. */
  boolean resumed;
  @Override protected void onResume(){super.onResume();resumed=true;resumedAt=SystemClock.uptimeMillis();ctlPolledAt=0;appsPolledAt=0;notices.reset();handler.removeCallbacks(tick);handler.post(tick);if(overview!=null)overview.resume();}
- @Override protected void onPause(){resumed=false;handler.removeCallbacks(tick);stopBreath();if(overview!=null){if(isFinishing())overview.teardown();else overview.pause();}clearNotice();super.onPause();}
+ @Override protected void onPause(){resumed=false;handler.removeCallbacks(tick);stopBreath();returnState=returnState.cancelled(SystemClock.uptimeMillis());if(overview!=null){if(isFinishing())overview.teardown();else overview.pause();}clearNotice();super.onPause();}
 
  void refresh(){
   VoiceService s=VoiceService.instance;
@@ -189,6 +193,7 @@ public final class RoseConversationActivity extends Activity {
   // the button never repeats a state from before a pause, lock or user switch, nor holds one while reads stall.
   workGlyph.set(ctl.working(resumedAt,SystemClock.uptimeMillis()),reducedMotion());
   renderTask(s);
+  updateReturn();
   if(overview!=null&&overview.isOpen()){pollApps();overview.refresh();}
  }
  /** The current task from VoiceService's copy of the server's task projection, which outlives this
@@ -292,7 +297,48 @@ public final class RoseConversationActivity extends Activity {
  /** Re-entry starts from a fresh read: the last visit's reply is dropped first, so nothing it listed comes back. */
  void openOverview(){appsEpoch++;appsSnapshot=null;appsPolledAt=0;if(overview!=null)overview.open();}
  /** Back closes the overview first; the work, its selection and the human's foreground app are unchanged. */
- @Override public void onBackPressed(){if(overview!=null&&overview.isOpen()){overview.close();return;}super.onBackPressed();}
+ @Override public void onBackPressed(){if(overview!=null&&overview.isOpen()){overview.close();return;}
+  if(returnState.phase==ReturnModel.Phase.PENDING){returnState=returnState.cancelled(SystemClock.uptimeMillis());renderReturn();return;}super.onBackPressed();}
+ /** 1C: the app the owner was using before Rose, and the exact-task return, come from App Core's task restoration
+  * (ReturnSource). Until it is installed the source offers nothing and the control stays hidden: no app is guessed
+  * and no launch intent stands in for the exact live task. */
+ static volatile ReturnSource returnSource=ReturnSource.NONE;
+ /** The control's bottom edge sits 110dp up (the content's bottom), above Connect and the chin; content makes room. */
+ static final int RETURN_BOTTOM_DP=110;
+ ReturnControl returnControl;ReturnModel.State returnState=ReturnModel.initial();int navInset,imeInset;
+ String returnIconFor;android.graphics.drawable.Drawable returnIcon;
+ void returnTapped(){
+  long now=SystemClock.uptimeMillis();returnState=returnState.tapped(now);renderReturn();
+  if(returnState.phase==ReturnModel.Phase.PENDING)handler.postDelayed(this::updateReturn,ReturnModel.COMMIT_MS);
+ }
+ void updateReturn(){
+  long now=SystemClock.uptimeMillis();ReturnSource source=returnSource;ReturnModel.State before=returnState;
+  returnState=before.observed(resumed?source.current():null,now).committed(now).timedOut(now).expired(now);
+  if(returnState.phase==ReturnModel.Phase.RETURNING&&before.phase!=ReturnModel.Phase.RETURNING){
+   final int attempt=returnState.attempt;
+   handler.postDelayed(this::updateReturn,ReturnModel.ANSWER_MS);
+   // The answer is applied on the main thread, and only to this attempt (ReturnModel.State.answered).
+   source.returnTo(returnState.target,a->runOnUiThread(()->{returnState=returnState.answered(attempt,a,SystemClock.uptimeMillis());renderReturn();}));
+  }
+  if(returnState.phase==ReturnModel.Phase.UNAVAILABLE&&before.phase!=ReturnModel.Phase.UNAVAILABLE)handler.postDelayed(this::updateReturn,ReturnModel.UNAVAILABLE_MS);
+  renderReturn();
+ }
+ void renderReturn(){
+  if(returnControl==null)return;
+  String pkg=returnState.target==null?null:returnState.target.packageName;
+  if(pkg==null){returnIconFor=null;returnIcon=null;}else if(!pkg.equals(returnIconFor)){returnIconFor=pkg;returnIcon=appIcon(pkg);}
+  returnControl.show(returnState,returnIcon,reducedMotion());layoutReturn();
+ }
+ /** Above the bottom row and the chin (the navigation inset), and above the keyboard when one is open. */
+ void layoutReturn(){
+  if(returnControl==null||content==null)return;
+  FrameLayout.LayoutParams r=(FrameLayout.LayoutParams)returnControl.getLayoutParams();
+  int bottom=Math.max(dp(RETURN_BOTTOM_DP)+navInset,imeInset+dp(12));
+  if(r.bottomMargin!=bottom){r.bottomMargin=bottom;returnControl.setLayoutParams(r);}
+  FrameLayout.LayoutParams l=(FrameLayout.LayoutParams)content.getLayoutParams();
+  int contentBottom=dp(110)+navInset+(returnState.visible()?dp(ReturnControl.HEIGHT_DP+8):0);
+  if(l.bottomMargin!=contentBottom){l.bottomMargin=contentBottom;content.setLayoutParams(l);}
+ }
  /** Live: the local Rose connection is up; its tasks come only from App Core's onLocalTasks list (PR321). */
  boolean localLive(){VoiceService s=VoiceService.instance;return s!=null&&s.connected&&s.live;}
  WorkspaceOverview.Workspace overviewWorkspace(TaskControl.ControllerRead r,WorkspaceOverview.Scope scope){
