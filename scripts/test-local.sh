@@ -416,6 +416,8 @@ java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-option
  workspace/rose-agent/app/src/dev/pixel/voice/ReturnModel.java workspace/rose-agent/app/src/dev/pixel/voice/ReturnSource.java \
  workspace/rose-agent/app/src/dev/pixel/voice/TrayReturn.java workspace/rose-agent/app/tests/TrayReturnTest.java
 java -cp "$JAVA_TESTS/TrayReturn" dev.pixel.voice.TrayReturnTest
+# 1C: Rose's side and the shell's (when present) speak exactly protocol v1: codes, results, Bundle keys and replyTo.
+python3 workspace/rose-agent/app/tests/tray_return_wire_test.py
 # Native glasses-button duplicate suppression (media-button handling on the native side).
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/Button" \
  workspace/rose-agent/app/src/dev/pixel/voice/GlassesButtonGate.java workspace/rose-agent/tests/java/dev/pixel/voice/ButtonTest.java
