@@ -794,6 +794,8 @@ class HostedSignGateTest(unittest.TestCase):
         self.assertEqual(secret, ['sign'])
         self.assertEqual(hosted.bind_outputs(out, env=ENV)['sourceSha'], ENV['GITHUB_SHA'])
         self.assertEqual(receipt['outputs']['signedTargetFiles']['sha256'], digest(out / 'signed-target_files.zip'))
+        self.assertEqual(receipt['targetArchiveValidation']['artifact']['sha256'], bundle['unsigned']['sha256'])
+        self.assertFalse(receipt['targetArchiveValidation']['targetFilesExtractedByPreflight'])
 
     def test_zip_traversal_symlink_duplicate_bomb_modes_and_resume(self):
         bundle, files, pin = self.tiny_bundle()
@@ -822,6 +824,237 @@ class HostedSignGateTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'zip expansion exceeds capacity'):
             hosted.reject_unsafe_zip(files['otatools'], 1)
         self.assert_secret_closed(attempt, 'resumed file does not match the trusted archive')
+
+    def target_archive(self, entries):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        path = Path(directory.name) / 'target.zip'
+        with zipfile.ZipFile(path, 'w', compression=zipfile.ZIP_DEFLATED) as archive:
+            for name, mode, data in entries:
+                info = zipfile.ZipInfo(name)
+                info.create_system = 3
+                info.external_attr = mode << 16
+                archive.writestr(info, data)
+        return path
+
+    def test_target_links_are_metadata_and_pinned_writer_semantics_remain_intact(self):
+        path = self.target_archive([
+            ('SYSTEM/bin/toybox', stat.S_IFREG | 0o755, b'trusted-fixture'),
+            ('SYSTEM/bin/sh', stat.S_IFLNK | 0o777, b'toybox'),
+            ('SYSTEM/bin/shell', stat.S_IFLNK | 0o777, b'./sh'),
+            ('SYSTEM/lib64/lib.so', stat.S_IFREG | 0o644, b'library'),
+            ('SYSTEM/lib', stat.S_IFLNK | 0o777, b'lib64'),
+            ('ROOT/bin', stat.S_IFLNK | 0o777, b'../SYSTEM/bin'),
+        ])
+        before = digest(path)
+        with patch.object(os, 'symlink', side_effect=AssertionError('preflight must not materialize links')):
+            proof = hosted.validate_target_zip(path, 10**9)
+        self.assertEqual(proof['symlinkCount'], 4)
+        self.assertEqual(proof['artifact']['sha256'], before)
+        self.assertFalse(proof['preflightFollowedPayloadLinksOnHost'])
+        self.assertFalse(proof['targetFilesExtractedByPreflight'])
+        self.assertEqual(digest(path), before)
+        out = path.parent / 'pinned-writer-fixture'
+        out.mkdir()
+        # Minimal behavior fixture for the pinned sign_target_files_apks
+        # WriteOutputData: mkdir parents, preserve link text via os.symlink,
+        # and write ordinary member bytes. This is not execution of otatools.
+        with zipfile.ZipFile(path) as archive:
+            for info in archive.infolist():
+                dest = out / info.filename
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                if stat.S_ISLNK(info.external_attr >> 16):
+                    os.symlink(archive.read(info).decode(), dest)
+                else:
+                    dest.write_bytes(archive.read(info))
+        self.assertEqual(os.readlink(out / 'SYSTEM/bin/shell'), './sh')
+        self.assertEqual((out / 'SYSTEM/bin/shell').read_bytes(), b'trusted-fixture')
+        self.assertEqual((out / 'ROOT/bin/sh').read_bytes(), b'trusted-fixture')
+        self.assertEqual(digest(path), before)
+        # The pinned CollectDirToZip uses zip -y -r: verify the real command
+        # preserves file and directory aliases rather than dereferencing them.
+        repacked = path.parent / 'repacked.zip'
+        subprocess.run(['zip', '-q', '-y', '-r', str(repacked), '.'], cwd=out, check=True)
+        with zipfile.ZipFile(repacked) as archive:
+            for name,target in [('SYSTEM/bin/sh',b'toybox'),('SYSTEM/lib',b'lib64'),
+                                ('ROOT/bin',b'../SYSTEM/bin')]:
+                self.assertTrue(stat.S_ISLNK(archive.getinfo(name).external_attr >> 16))
+                self.assertEqual(archive.read(name),target)
+        self.assertEqual(hosted.validate_target_zip(repacked,10**9)['symlinkCount'],4)
+        for operation in (
+                lambda: hosted.reject_unsafe_zip(path, 10**9),
+                lambda: hosted.safe_extract(path, path.parent / 'executable', 10**9)):
+            with self.assertRaisesRegex(ValueError, 'unsafe zip symlink'):
+                operation()
+        self.assertFalse((path.parent / 'executable').exists())
+
+    def test_absolute_android_targets_require_current_absent_host_observation(self):
+        path = self.target_archive([
+            ('SYSTEM/bin/toybox', stat.S_IFREG | 0o755, b'tool'),
+            ('SYSTEM/bin/sh', stat.S_IFLNK | 0o777, b'/system/bin/toybox'),
+            ('SYSTEM/lib64/runtime.so', stat.S_IFLNK | 0o777, b'/apex/com.android.runtime/lib64/runtime.so'),
+        ])
+        observed = []
+        def absent(root):
+            observed.append(root)
+            return False
+        proof = hosted.validate_target_zip(path, 10**9, host_root_exists=absent)
+        self.assertEqual(proof['absoluteLinkCount'], 2)
+        self.assertEqual(proof['observedAbsentHostRoots'], ['apex', 'system'])
+        self.assertEqual(set(observed), {'apex', 'system'})
+        for observation, pattern in ((lambda _r: True, 'existing host namespace'),
+                                     (lambda _r: None, 'observation unavailable')):
+            with self.assertRaisesRegex(ValueError, pattern):
+                hosted.validate_target_zip(path, 10**9, host_root_exists=observation)
+        with patch.object(hosted.os, 'geteuid', return_value=0):
+            with self.assertRaisesRegex(ValueError, 'nonroot signer'):
+                hosted._host_root_exists('system')
+        with patch.object(hosted.os, 'geteuid', return_value=1001), \
+                patch.object(hosted.os, 'access', return_value=True):
+            with self.assertRaisesRegex(ValueError, 'protected host root'):
+                hosted._host_root_exists('system')
+        with patch.object(hosted.os, 'geteuid', return_value=1001), \
+                patch.object(hosted.os, 'access', return_value=False), \
+                patch.object(Path, 'read_text', return_value='CapEff:\t0000000000000000\n'):
+            with patch.object(Path, 'lstat', side_effect=FileNotFoundError):
+                self.assertFalse(hosted._host_root_exists('system'))
+            with patch.object(Path, 'lstat', side_effect=PermissionError):
+                with self.assertRaisesRegex(ValueError, 'could not be checked'):
+                    hosted._host_root_exists('system')
+            with patch.object(Path, 'lstat', return_value=object()):
+                self.assertTrue(hosted._host_root_exists('system'))
+        with patch.object(hosted.os, 'geteuid', return_value=1001), \
+                patch.object(hosted.os, 'access', return_value=False):
+            for status in ('CapEff:\t0000000000000001\n', 'No capability observation\n'):
+                with patch.object(Path, 'read_text', return_value=status):
+                    with self.assertRaisesRegex(ValueError, 'unprivileged signer'):
+                        hosted._host_root_exists('system')
+
+    def test_target_link_traversal_host_paths_text_and_normalization_refuse(self):
+        targets = ['../../../tmp/sentinel', '../../META/key', '../../OTA/key',
+                   '/tmp/sentinel', '/home/runner/key', '/proc/self/environ',
+                   '/systematic/bin/x', '/system/../home/key', '/system//bin/x',
+                   '//system/bin/x', '/system/./bin/x', '/', 'C:/Windows/file',
+                   'dir//file', '..\\..\\host', 'bad\x00target', 'bad\ntarget', b'\xff']
+        for target in targets:
+            with self.subTest(target=target):
+                path = self.target_archive([('SYSTEM/bin/link', stat.S_IFLNK | 0o777, target)])
+                with self.assertRaisesRegex(ValueError, 'unsafe zip symlink'):
+                    hosted.validate_target_zip(path, 10**9, host_root_exists=lambda _r: False)
+        names = ['/SYSTEM/bin/a', '../SYSTEM/bin/a', 'SYSTEM/../bin/a',
+                 'SYSTEM//bin/a', 'SYSTEM/./bin/a', 'SYSTEM\\bin\\a', 'C:/SYSTEM/a']
+        for name in names:
+            with self.subTest(name=name):
+                path = self.target_archive([(name, stat.S_IFREG | 0o644, b'file')])
+                with self.assertRaisesRegex(ValueError, 'unsafe zip member'):
+                    hosted.validate_target_zip(path, 10**9)
+        path=self.target_archive([('SYSTEM/aXb',stat.S_IFREG|0o644,b'file')])
+        path.write_bytes(path.read_bytes().replace(b'SYSTEM/aXb',b'SYSTEM/a\x00b'))
+        with self.assertRaisesRegex(ValueError,'unsafe zip member'):
+            hosted.validate_target_zip(path,10**9)
+
+    def test_target_link_chains_resolve_before_dotdot_and_cycles_refuse(self):
+        cases = [
+            [('SYSTEM/a', 'a')],
+            [('SYSTEM/a', 'b'), ('SYSTEM/b', 'a')],
+            [('SYSTEM/a', '/system/b'), ('SYSTEM/b', '/system/a')],
+            [('SYSTEM/inside/alias', '..'), ('SYSTEM/inside/entry', 'alias/../../tmp/sentinel')],
+            [('SYSTEM/inside/Dir', '..'), ('SYSTEM/inside/entry', 'dir/../../tmp/sentinel')],
+            [('SYSTEM/alias', '/system/dir'), ('SYSTEM/entry', 'alias/../../home/runner')],
+            [('SYSTEM/a', '/system/b'), ('SYSTEM/b', '/data/file')],
+        ]
+        for links in cases:
+            with self.subTest(links=links):
+                path = self.target_archive([(n, stat.S_IFLNK | 0o777, t) for n,t in links])
+                with self.assertRaisesRegex(ValueError, 'unsafe zip symlink'):
+                    hosted.validate_target_zip(path, 10**9, host_root_exists=lambda r: r == 'data')
+        path = self.target_archive([
+            (f'SYSTEM/a{i}', stat.S_IFLNK | 0o777, f'a{i+1}') for i in range(66)])
+        with self.assertRaisesRegex(ValueError, 'link chain exceeds bound'):
+            hosted.validate_target_zip(path, 10**9)
+        path = self.target_archive([
+            ('SYSTEM/alias', stat.S_IFLNK | 0o777, '.'),
+            ('SYSTEM/file', stat.S_IFREG | 0o644, b'data'),
+            ('SYSTEM/repeated', stat.S_IFLNK | 0o777, 'alias/alias/file'),
+        ])
+        self.assertEqual(hosted.validate_target_zip(path, 10**9)['symlinkCount'], 2)
+
+    def test_target_symlink_parents_control_members_and_modes_refuse_before_extraction(self):
+        for rows in ([('SYSTEM/dir',stat.S_IFLNK|0o777,b'/system/safe'),
+                      ('SYSTEM/dir/file',stat.S_IFREG|0o644,b'payload')],
+                     [('SYSTEM/dir/file',stat.S_IFREG|0o644,b'payload'),
+                      ('SYSTEM/dir',stat.S_IFLNK|0o777,b'/system/safe')]):
+            path=self.target_archive(rows)
+            with self.assertRaisesRegex(ValueError, 'symlink parent'):
+                hosted.validate_target_zip(path,10**9,
+                    host_root_exists=lambda _r: (_ for _ in ()).throw(AssertionError('must refuse before host lookup')))
+        rows=[('SYSTEM/file',stat.S_IFREG|0o644,b'x'),
+              ('SYSTEM/file/child',stat.S_IFREG|0o644,b'y')]
+        with self.assertRaisesRegex(ValueError,'non-directory parent'):
+            hosted.validate_target_zip(self.target_archive(rows),10**9)
+        with self.assertRaisesRegex(ValueError,'symlink parent'):
+            hosted.validate_target_zip(self.target_archive([
+                ('SYSTEM/Dir',stat.S_IFLNK|0o777,b'other'),
+                ('SYSTEM/dir/file',stat.S_IFREG|0o644,b'x')]),10**9)
+        with self.assertRaisesRegex(ValueError,'case-ambiguous link names'):
+            hosted.validate_target_zip(self.target_archive([
+                ('SYSTEM/A',stat.S_IFLNK|0o777,b'other'),
+                ('SYSTEM/a',stat.S_IFLNK|0o777,b'other')]),10**9)
+        for name in ['META/key','OTA/key','IMAGES/system.img','PREBUILT_IMAGES/boot.img','scripts/tool']:
+            with self.subTest(name=name):
+                with self.assertRaisesRegex(ValueError,'outside Android payload'):
+                    hosted.validate_target_zip(self.target_archive([(name,stat.S_IFLNK|0o777,b'target')]),10**9)
+        for mode,name in [(stat.S_IFLNK|0o777,'SYSTEM/dir/'),
+                          (stat.S_IFIFO|0o644,'SYSTEM/fifo'),
+                          (stat.S_IFREG|0o4755,'SYSTEM/setuid')]:
+            with self.assertRaises(ValueError):
+                hosted.validate_target_zip(self.target_archive([(name,mode,b'target')]),10**9)
+        path=self.target_archive([('SYSTEM/link/',stat.S_IFLNK|0o777,b'target')])
+        with self.assertRaisesRegex(ValueError,'unsafe zip symlink'):
+            hosted.reject_unsafe_zip(path,10**9)
+        path=self.target_archive([('SYSTEM/link',stat.S_IFLNK|0o777,b'x'*4097)])
+        with self.assertRaisesRegex(ValueError,'metadata exceeds bound'):
+            hosted.validate_target_zip(path,10**9)
+        path=self.target_archive([('SYSTEM/file',stat.S_IFREG|0o644,b'data')])
+        with self.assertRaisesRegex(ValueError,'zip expansion exceeds capacity'):
+            hosted.validate_target_zip(path,1)
+        with self.assertWarns(UserWarning):
+            duplicate=self.target_archive([('SYSTEM/file',stat.S_IFREG|0o644,b'one'),
+                                           ('SYSTEM/file',stat.S_IFREG|0o644,b'two')])
+        with self.assertRaisesRegex(ValueError,'duplicate zip member'):
+            hosted.validate_target_zip(duplicate,10**9)
+        import struct
+        encrypted=self.target_archive([('SYSTEM/file',stat.S_IFREG|0o644,b'file')])
+        raw=bytearray(encrypted.read_bytes())
+        for signature,offset in [(b'PK\x03\x04',6),(b'PK\x01\x02',8)]:
+            at=raw.index(signature)+offset
+            struct.pack_into('<H',raw,at,struct.unpack_from('<H',raw,at)[0]|1)
+        encrypted.write_bytes(raw)
+        with self.assertRaisesRegex(ValueError,'mode or encryption'):
+            hosted.validate_target_zip(encrypted,10**9)
+
+    def test_payload_links_admit_only_in_unsigned_role_and_still_bind_hashes(self):
+        path=self.target_archive([('SYSTEM/bin/tool',stat.S_IFREG|0o755,b'tool'),
+                                  ('SYSTEM/bin/link',stat.S_IFLNK|0o777,b'tool')])
+        bundle,files,pin=self.tiny_bundle()
+        files['unsigned'].write_bytes(path.read_bytes())
+        bundle['unsigned'].update(sha256=digest(files['unsigned']),sizeBytes=files['unsigned'].stat().st_size)
+        root=self.checkout(files['generateRelease'].read_bytes())
+        result=hosted.evaluate(bundle,root,10**18,files=files,pin=pin,env=ENV,
+                               capacity_config=self.admitted())
+        self.assertTrue(result['admit'])
+        self.assertEqual(result['targetArchiveValidation']['artifact'],
+                         {k:bundle['unsigned'][k] for k in ('sha256','sizeBytes')})
+        self.assertEqual(result['targetArchiveValidation']['symlinkCount'],1)
+        for kind,pin_name in [('otatools','otatoolsSha256'),('jdk','jdkSha256')]:
+            b,f,p=self.tiny_bundle()
+            f[kind].write_bytes(path.read_bytes())
+            b[kind].update(sha256=digest(f[kind]),sizeBytes=f[kind].stat().st_size)
+            p[pin_name]=b[kind]['sha256']
+            def call(secret_access,b=b,f=f,p=p):
+                hosted.evaluate(b,root,10**18,files=f,pin=p,env=ENV,
+                                capacity_config=self.admitted(),secret_access=secret_access)
+            self.assert_secret_closed(call,kind+' archive: unsafe zip symlink')
 
     def tiny_bundle(self, zip_member='payload.txt', symlink=False):
         self.directory = tempfile.TemporaryDirectory()
