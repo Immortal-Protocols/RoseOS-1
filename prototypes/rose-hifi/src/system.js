@@ -117,7 +117,7 @@
     const rs = $('reply-send'); if (rs) rs.disabled = !fields.reply.text.trim() || shade.reply.state === 'sending';
     if (kb.open) { buildKeys(); renderStrip(); }
     const st = $('h-sysstate');
-    if (st) { const s = fields[kb.target || 'msg']; st.innerHTML = 'Keyboard <b>' + (kb.open ? 'shown · ' + kb.target : 'hidden') + '</b> · page ' + s.page + ' · shift ' + s.shift + '<br>Shade <b>' + (shade.open ? 'open' : 'closed') + '</b> · reply ' + shade.reply.state + '<br>Return <b>' + (ret.origin ? ret.state + ' → ' + originName() : 'none') + '</b>'; }
+    if (st) { const s = fields[kb.target || 'msg']; st.innerHTML = 'Keyboard <b>' + (kb.open ? 'shown · ' + kb.target : 'hidden') + '</b> · page ' + s.page + ' · shift ' + s.shift + '<br>Shade <b>' + (shade.open ? 'open' : 'closed') + '</b> · reply ' + shade.reply.state + '<br>Return <b>' + (ret.origin ? ret.phase + ' → ' + originName() : 'none') + '</b>'; }
   }
   function showKb(target) {
     if (!kb.open || kb.target !== target) { kb.open = true; kb.target = target; kb.keysKey = ''; note('keyboard shown (' + target + ')'); }
@@ -283,8 +283,11 @@
     const t = msgThread(); if (!t || t.dataset.bound) return;
     t.dataset.bound = '1'; t.tabIndex = -1;
     const atBottom = () => t.scrollHeight - t.clientHeight - t.scrollTop <= 4;
-    t.addEventListener('scroll', () => { if (atBottom()) follow.msg = true; else if (t.scrollTop < follow.last - 2) follow.msg = false; follow.last = t.scrollTop; }, { passive: true });
-    if (window.ResizeObserver) new ResizeObserver(() => { if (follow.msg) { t.scrollTop = t.scrollHeight; follow.last = t.scrollTop; } }).observe(t);
+    // A person's scroll decides: at the bottom → follow; anywhere else → keep their place. Scrolls caused
+    // by the window resizing (keyboard/chin animation) are not the person's and are ignored.
+    let resizedAt = -1e9;
+    t.addEventListener('scroll', () => { if (now() - resizedAt > 120) follow.msg = atBottom(); follow.last = t.scrollTop; }, { passive: true });
+    if (window.ResizeObserver) new ResizeObserver(() => { resizedAt = now(); if (follow.msg) { t.scrollTop = t.scrollHeight; follow.last = t.scrollTop; } }).observe(t);
     // A tap on blank conversation space hides the keyboard; messages, scrolls and drags never do.
     let blank = null;
     t.addEventListener('pointerdown', (e) => { blank = e.target === t && !e.button ? { x: e.clientX, y: e.clientY, t: now(), top: t.scrollTop } : null; });
@@ -442,52 +445,118 @@
   let pullTouch = false;
 
   // =====================================================================================
-  // V3 return control
+  // V3 return control — reconciled to the exact V3 source (Library v3, HTML SHA-256 798c9a30…):
+  // a tap requests return directly; pending reads “Returning…”, ignores repeats and offers a separate
+  // Cancel that invalidates the request; only a correlated, acknowledged success to the exact live task
+  // departs (Rose fades/moves down 8px over 200ms; reduced motion replaces instantly) and restores the
+  // retained editor; a missing/replaced task or failed transfer stays in Rose behind the exact sheet
+  // (Stay in Rose · Open switcher · Go Home), never relaunches and never summons the keyboard.
+  // The acknowledgement itself is simulated by the review harness (explicit there; not a UX timing rule).
   // =====================================================================================
-  const ret = { origin: null, state: 'idle', timer: 0, unavailable: false };
-  const originName = () => ret.origin ? (ret.origin.view === 'app' ? window.RoseModel.APPS[ret.origin.app].name : window.RoseModel.APPS[window.RoseModel.WINDOWS[ret.origin.window].app].name) : '';
-  const originArt = () => ret.origin ? I.appArt(ret.origin.view === 'app' ? ret.origin.app : window.RoseModel.WINDOWS[ret.origin.window].app, 'mono') : '';
+  const ret = { origin: null, phase: 'idle', status: null, pending: null, seq: 0, cond: 'alive', gen: 1, ack: 'success-420', press: null, suppress: false };
+  const appOf = (o) => (o.view === 'app' ? o.app : window.RoseModel.WINDOWS[o.window].app);
+  const originName = () => (ret.origin ? window.RoseModel.APPS[appOf(ret.origin)].name : '');
+  // The exact live task: same task identity and generation, still open.
+  const valid = () => !!ret.origin && ret.cond === 'alive' && ret.origin.gen === ret.gen;
   let lastView = null, lastCtx = null;
-  // Read at the moment of leaving, from the live screen: scroll, follow state and keyboard.
+  // Departure captures, from the live screen: task identity/generation, draft selection, scroll, follow, keyboard.
   function snapshot(c) {
     const t = c.app === 'messages' ? msgThread() : null, d = c.view === 'app' ? $('appdetail') : $('wdetail');
-    return { view: c.view, app: c.app, window: c.window, kb: kb.open && kb.target === 'msg', scroll: t ? t.scrollTop : null, follow: follow.msg, detailScroll: d ? d.scrollTop : 0 };
+    return { view: c.view, app: c.app, window: c.window, gen: ret.gen, kb: kb.open && kb.target === 'msg', sel: [fields.msg.a, fields.msg.b], scroll: t ? t.scrollTop : null, follow: follow.msg, detailScroll: d ? d.scrollTop : 0 };
   }
   function renderReturn(s) {
     const b = $('rose-return'); if (!b) return;
     const show = s.view === 'rose' && !!ret.origin;
-    b.hidden = !show;
-    if (!show) return;
-    const name = originName(), un = ret.unavailable;
-    b.dataset.state = un ? 'unavailable' : ret.state;
-    b.innerHTML = '<span class="rr-chev" aria-hidden="true">' + IC.back + '</span><span class="rr-ico" aria-hidden="true">' + originArt() + '</span><span class="rr-label">' +
-      (un ? esc(name) + ' closed' : ret.state === 'pending' ? 'Returning…' : esc(name)) + '</span>';
-    b.setAttribute('aria-label', un ? name + ' is no longer open' : ret.state === 'pending' ? 'Returning to ' + name + '. Activate Cancel to stay in Rose.' : 'Return to ' + name);
-    $('rose-return-cancel').hidden = ret.state !== 'pending';
+    $('rose-footer').hidden = !show;
+    const pending = ret.phase === 'pending', name = originName();
+    b.querySelector('.source-label').textContent = pending ? 'Returning…' : name;
+    b.setAttribute('aria-label', 'Return to ' + name); b.title = 'Return to ' + name;
+    b.setAttribute('aria-busy', String(pending)); b.setAttribute('aria-disabled', String(pending));
+    b.classList.toggle('is-pressed', ret.phase === 'pressed');
+    $('rose-return-cancel').hidden = !pending;
+    const sheet = $('ret-sheet'), overlay = ret.phase === 'unavailable' && s.view === 'rose';
+    sheet.hidden = !overlay;
+    $('ret-sheet-title').textContent = ret.status === 'failed' ? 'Could not return.' : ret.origin ? 'Your source app is unavailable.' : 'No previous app.';
+    const ok = $('h-ack-ok'), no = $('h-ack-fail'); if (ok) { ok.disabled = !pending; no.disabled = !pending; }
+    const ev = $('h-retstate'); if (ev) ev.textContent = 'Return: ' + ret.phase + (ret.status ? ' · last ' + ret.status : '') + (ret.pending ? ' · request #' + ret.pending.id : '') + ' · origin ' + (ret.origin ? name + ' (' + ret.cond + ')' : 'none');
   }
-  function returnTap() {
-    if (!ret.origin) return;
-    if (ret.unavailable) { toast(originName() + ' isn’t open anymore. Open it from Home.'); note('return: origin unavailable (stayed in Rose)'); return; }
-    if (ret.state === 'pending') return;
-    ret.state = 'pending'; note('return pending → ' + originName()); renderReturn(R.getState());
-    ret.timer = setTimeout(() => {
-      const o = ret.origin; if (!o || ret.state !== 'pending') return;
-      ret.state = 'idle';
-      R.dispatch({ type: 'returnTo', view: o.view, app: o.app, window: o.window });
-      const s = R.getState();
-      if (s.view !== o.view || s.app !== o.app || s.window !== o.window) { toast('Couldn’t return · stayed in Rose'); note('return failed'); return; }
-      // Correlated success: restore the exact context, then the keyboard if it was up.
-      const origin = o; ret.origin = null;
-      requestAnimationFrame(() => {
-        const t = msgThread();
-        if (t && origin.scroll !== null) { follow.msg = origin.follow; t.scrollTop = origin.scroll; follow.last = t.scrollTop; }
-        const d = origin.view === 'app' ? $('appdetail') : $('wdetail'); if (d) d.scrollTop = origin.detailScroll;
-        if (origin.kb) { showKb('msg'); const f = $('f-msg'); if (f) f.focus({ preventScroll: true }); }
-        note('returned to ' + (origin.app || origin.window));
-      });
-    }, reduced() ? 80 : 650);
+  function announce(t) { const a = $('announcer'); if (a) a.textContent = t; }
+  function returnRequest() {
+    if (!ret.origin || ret.pending || !['idle', 'pressed'].includes(ret.phase)) return;
+    if (!valid()) { ret.phase = 'unavailable'; ret.status = 'unavailable'; note('return: origin unavailable (stayed in Rose)'); renderReturn(R.getState()); $('ret-stay').focus({ preventScroll: true }); announce('Source app unavailable. Stay here or choose a system destination.'); return; }
+    ret.seq += 1; ret.pending = { id: ret.seq, origin: { ...ret.origin } }; ret.phase = 'pending'; ret.status = 'pending';
+    note('return requested #' + ret.seq + ' → ' + originName()); announce('Return requested. Rose remains available until confirmation.');
+    renderReturn(R.getState());
+    const id = ret.seq;
+    // Review-harness simulation of the platform's acknowledgement (explicit, selectable; default 420 ms
+    // as in the V3 fixture). “Manual” holds pending until Acknowledge success/failure is pressed.
+    if (ret.ack !== 'manual') setTimeout(() => returnComplete(id, ret.ack === 'success-420'), 420);
   }
-  function returnCancel() { if (ret.state !== 'pending') return; clearTimeout(ret.timer); ret.state = 'idle'; note('return cancelled (stayed in Rose)'); toast('Staying in Rose'); renderReturn(R.getState()); const b = $('rose-return'); if (b) b.focus({ preventScroll: true }); }
+  function sameTask(a, b) { return !!(a && b && a.view === b.view && a.app === b.app && a.window === b.window && a.gen === b.gen); }
+  function returnComplete(id, success) {
+    if (ret.phase !== 'pending' || !ret.pending || id !== ret.pending.id) { note('late/mismatched acknowledgement #' + id + ' ignored'); return; }
+    const req = ret.pending; ret.pending = null;
+    if (valid() && sameTask(req.origin, ret.origin) && success === true) {
+      ret.status = 'succeeded'; ret.phase = 'idle';
+      const o = ret.origin, rose = $('v-rose');
+      const go = () => {
+        rose.classList.remove('departing');
+        ret.origin = null;
+        R.dispatch({ type: 'returnTo', view: o.view, app: o.app, window: o.window });
+        const s = R.getState();
+        if (s.view !== o.view) { note('return: platform did not reach the task'); return; }
+        requestAnimationFrame(() => {
+          if (o.app === 'messages') { const f = fields.msg; f.a = o.sel[0]; f.b = o.sel[1]; }
+          const t = msgThread();
+          if (t && o.scroll !== null) { follow.msg = o.follow; t.scrollTop = o.scroll; follow.last = t.scrollTop; }
+          const d = o.view === 'app' ? $('appdetail') : $('wdetail'); if (d) d.scrollTop = o.detailScroll;
+          if (o.kb) { showKb('msg'); const fe = $('f-msg'); if (fe) fe.focus({ preventScroll: true }); }   // a hidden keyboard stays hidden
+          else renderKb();
+          note('returned to ' + (o.app || o.window) + ' (acknowledged #' + req.id + ')');
+        });
+      };
+      if (reduced()) go(); else { rose.classList.add('departing'); setTimeout(go, 200); }
+      return;
+    }
+    ret.phase = 'unavailable'; ret.status = valid() ? 'failed' : 'unavailable';
+    note('return ' + ret.status + ' (stayed in Rose)'); renderReturn(R.getState());
+    $('ret-stay').focus({ preventScroll: true });
+    announce(ret.status === 'failed' ? 'Transfer failed. You remain in Rose; keyboard stays hidden.' : 'Source app unavailable. Nothing was relaunched.');
+  }
+  function returnCancel(message, status) {
+    if (ret.press) ret.suppress = true;
+    ret.press = null;
+    const was = ret.phase;
+    ret.phase = 'idle'; ret.pending = null;   // invalidates the request id: late confirmations are ignored
+    if (was === 'pending') ret.status = status || 'cancelled';
+    note('return cancelled (' + (message || 'stay in Rose') + ')');
+    renderReturn(R.getState());
+    if (R.getState().view === 'rose') { const b = $('rose-return'); if (b && !b.closest('[hidden]')) b.focus({ preventScroll: true }); }
+    announce(message || 'Return cancelled. You remain in Rose.');
+  }
+  function bindReturn() {
+    const c = $('rose-return');
+    const inside = (e) => { const r = c.getBoundingClientRect(); return e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom; };
+    c.addEventListener('click', (e) => { if (ret.suppress) { ret.suppress = false; e.preventDefault(); return; } returnRequest(); });
+    c.addEventListener('pointerdown', (e) => {
+      if (!e.isPrimary || e.button !== 0 || R.getState().view !== 'rose' || ret.phase !== 'idle') return;
+      ret.suppress = false; ret.press = { id: e.pointerId }; try { c.setPointerCapture(e.pointerId); } catch (_) {}
+      ret.phase = 'pressed'; renderReturn(R.getState());
+    });
+    c.addEventListener('pointermove', (e) => { if (ret.press && ret.press.id === e.pointerId && !inside(e)) returnCancel('Press moved off the return control. Cancelled.'); });
+    c.addEventListener('pointerup', (e) => {
+      if (!ret.press || ret.press.id !== e.pointerId) return;
+      if (!inside(e)) returnCancel('Press released outside the control. Cancelled.');
+      else { ret.press = null; ret.phase = 'idle'; renderReturn(R.getState()); }
+    });
+    c.addEventListener('pointercancel', () => { if (ret.press) returnCancel('Pointer interrupted. Return cancelled.'); setTimeout(() => { ret.suppress = false; }, 0); });
+    c.addEventListener('blur', () => { if (ret.phase === 'pressed') { ret.suppress = true; ret.press = null; ret.phase = 'idle'; renderReturn(R.getState()); } });
+    $('rose-return-cancel').addEventListener('click', () => returnCancel('Return request cancelled. Late confirmation will be ignored.'));
+    $('ret-stay').addEventListener('click', () => returnCancel());
+    $('ret-switcher').addEventListener('click', () => { ret.phase = 'idle'; R.dispatch({ type: 'switcher' }); });
+    $('ret-home').addEventListener('click', () => { ret.phase = 'idle'; R.dispatch({ type: 'home' }); });
+    document.addEventListener('visibilitychange', () => { if (document.hidden && (ret.phase === 'pending' || ret.press)) returnCancel('App hidden. Return cancelled.'); });
+  }
   function toast(t) { const el = $('sys-toast'); el.textContent = t; el.classList.add('on'); clearTimeout(el._t); el._t = setTimeout(() => el.classList.remove('on'), 2200); }
 
   // =====================================================================================
@@ -496,8 +565,11 @@
   function beforeRender(s) {
     // Leaving an app/window for Rose: remember the exact context (and whether the keyboard was up).
     if (lastView && s.view !== lastView) {
-      if (s.view === 'rose' && (lastView === 'app' || lastView === 'window') && lastCtx) { ret.origin = snapshot(lastCtx); ret.state = 'idle'; note('origin kept: ' + (lastCtx.app || lastCtx.window)); }
-      else if (s.view !== 'rose' && s.view !== 'agents') { if (ret.origin) note('return cleared'); ret.origin = null; clearTimeout(ret.timer); ret.state = 'idle'; }
+      if (s.view === 'rose' && (lastView === 'app' || lastView === 'window') && lastCtx) { ret.cond = 'alive'; syncOriginHarness(); ret.origin = snapshot(lastCtx); ret.phase = 'idle'; ret.status = null; note('origin kept: ' + (lastCtx.app || lastCtx.window)); }
+      else if (s.view !== 'rose' && s.view !== 'agents') {
+        if (ret.phase === 'pending') { ret.pending = null; ret.status = 'cancelled'; note('return cancelled (left Rose)'); }
+        if (ret.origin) note('return cleared'); ret.origin = null; ret.phase = 'idle';
+      }
       if (kb.open && kb.target === 'msg' && s.view !== 'app') { kb.open = false; kb.editHold = false; note('keyboard hidden (leaving app)'); }
     }
   }
@@ -512,8 +584,9 @@
     lastView = s.view;
     if (s.view === 'app' || s.view === 'window') lastCtx = { view: s.view, app: s.app, window: s.window };
   }
+  function syncOriginHarness() { const h = $('h-origin'); if (h) h.value = ret.cond; }
   function escape() {
-    if (ret.state === 'pending') { returnCancel(); return true; }
+    if (ret.phase === 'pending' || ret.phase === 'pressed' || ret.phase === 'unavailable') { returnCancel(); return true; }
     if (shade.open) { const c = $('sh-confirm'); if (c && !c.hidden) { c.hidden = true; return true; } if (kb.open) { hideKb('Esc'); return true; } closeShade('Esc'); return true; }
     if (kb.open) { hideKb('Esc'); return true; }
     return false;
@@ -525,9 +598,9 @@
       '<div class="kb-rail" aria-hidden="true"></div>' +
       '<section class="shade" id="shade" role="dialog" aria-label="Notifications" hidden></section>' +
       '<div class="sys-toast" id="sys-toast" role="status" aria-live="polite"></div>');
-    $('v-rose').insertAdjacentHTML('beforeend', '<div class="rose-return-wrap"><button class="rose-return" id="rose-return" hidden></button><button class="rr-cancel" id="rose-return-cancel" hidden>Cancel</button></div>');
-    $('rose-return').addEventListener('click', returnTap);
-    $('rose-return-cancel').addEventListener('click', returnCancel);
+    $('v-rose').insertAdjacentHTML('beforeend', '<footer class="rose-footer" id="rose-footer" hidden><button class="return-control" id="rose-return"><svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="m10 3-5 5 5 5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg><span class="source-label"></span></button><button class="cancel-pending" id="rose-return-cancel" hidden>Cancel</button></footer>');
+    screen.insertAdjacentHTML('beforeend', '<div class="ret-sheet-backdrop" id="ret-sheet" hidden><section class="ret-sheet" role="dialog" aria-modal="true" aria-labelledby="ret-sheet-title" aria-describedby="ret-sheet-desc"><h2 id="ret-sheet-title">Your source app is unavailable.</h2><p id="ret-sheet-desc">You are still in Rose. Choose where to go; Rose keeps working.</p><div class="row"><button class="sbtn ret-btn primary" id="ret-stay">Stay in Rose</button></div><div class="row"><button class="sbtn ret-btn" id="ret-switcher">Open switcher</button><button class="sbtn ret-btn" id="ret-home">Go Home</button></div></section></div>');
+    bindReturn();
     bindKeys(); bindShade();
     document.addEventListener('keydown', onKey);
     // Harness (outside the phone).
@@ -536,10 +609,19 @@
       $('h-shade').onclick = () => (shade.open ? closeShade('harness') : openShade('harness'));
       $('h-empty').onclick = () => { shade.items = shade.items.length ? [] : ITEMS(); shade.undo = null; renderShade(); };
       $('h-fail').onchange = (e) => { shade.failNext = e.target.checked; };
-      $('h-unavail').onchange = (e) => { ret.unavailable = e.target.checked; renderReturn(R.getState()); };
+      $('h-origin').onchange = (e) => {
+        ret.cond = e.target.value; if (ret.cond === 'replaced') ret.gen += 1;
+        note('origin task: ' + ret.cond);
+        // A change while pending is validated like the platform would: an invalid task cannot be returned to.
+        if ((ret.phase === 'pending' || ret.phase === 'pressed') && !valid()) { ret.pending = null; ret.phase = 'unavailable'; ret.status = 'unavailable'; }
+        renderReturn(R.getState());
+      };
+      $('h-ack').onchange = (e) => { ret.ack = e.target.value; };
+      $('h-ack-ok').onclick = () => { if (ret.pending) returnComplete(ret.pending.id, true); };
+      $('h-ack-fail').onclick = () => { if (ret.pending) returnComplete(ret.pending.id, false); };
     }
     afterRender(R.getState());
   }
-  window.RoseSystem = { init, beforeRender, afterRender, escape, kbOpen: () => kb.open, state: () => ({ kb: { ...kb }, fields, shade, ret }), openShade, closeShade, hideKb, showKb };
+  window.RoseSystem = { init, beforeRender, afterRender, escape, kbOpen: () => kb.open, state: () => ({ kb: { ...kb }, fields, shade, ret, follow: { ...follow } }), openShade, closeShade, hideKb, showKb };
   if (window.__rose) init(window.__rose);
 })();

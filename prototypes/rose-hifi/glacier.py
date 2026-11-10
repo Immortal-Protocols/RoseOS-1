@@ -7,20 +7,22 @@ blue graphite; warm ivory ink → sunlit silver). Geometry, icons and interactio
 Rules that carry warning, destructive or microphone-muted meaning keep their warm colours, so those
 states stay distinguishable from blue selection.
 
-PALETTE below is PROVISIONAL until the Illustrator's GLACIER-1E-1110 palette lands; final values
-replace these anchors without touching the mapping code.
+PALETTE anchors follow the Illustrator's final GLACIER-1E-1110 palette (glacier.tokens.json).
 """
 import colorsys, re
 
 # ---- Provisional palette anchors (replace with Illustrator's final semantic palette) ----
 PALETTE = {
-    'status': 'provisional',          # becomes 'final' with the Illustrator's palette
-    'hue': 211,                       # mineral blue (deg); avoids neon cyan (~185–195)
-    'neutral_hue': 214,               # blue graphite / sunlit silver neutrals
-    'chroma_cap': 0.52,               # saturation ceiling for chromatic colours
-    'chroma_scale': 0.72,             # saturation scale for chromatic colours
-    'neutral_scale': 0.85,            # saturation scale for low-chroma (ink/hairline) colours
-    'dark_lift': 0.018,               # lightness lift for very dark recesses (graphite, not black)
+    'status': 'final · Illustrator GLACIER-1E-1110-ILL-DELIVERY-v1',
+    'hue': 205,                       # mineral blue between surface #142536 and accent #A6D8F5
+    'neutral_hue': 205,               # ivory #F0F6FA / secondary #B8CAD8 family
+    'chroma_cap': 0.58,
+    'chroma_scale': 0.78,
+    'neutral_scale': 0.9,
+    'dark_lift': 0.03,                # recesses toward graphite #0B141D, not black
+    'light_pull': 0.45,               # bright accents pulled toward accent lightness (#A6D8F5 ≈ 0.81)
+    'accent_l': 0.81,
+    'destructive': (255, 171, 172),   # #FFABAC — destructive and mic-muted text/icons/rings
 }
 
 # Selectors whose colours keep their Oxblood (warm) meaning in Glacier.
@@ -42,6 +44,8 @@ def _map_rgb(r, g, b):
         s2 = s * P['neutral_scale']; h2 = P['neutral_hue']
     if l < 0.12:
         l = min(0.12, l + P['dark_lift'])
+    elif s2 > 0.3 and l > 0.45:
+        l = l + (P['accent_l'] - l) * P['light_pull']
     rr, gg, bb = colorsys.hls_to_rgb(h2 / 360, l, s2)
     return round(rr * 255), round(gg * 255), round(bb * 255)
 
@@ -61,6 +65,22 @@ def map_colors(text):
         r, g, b = _map_rgb(int(m.group(2)), int(m.group(3)), int(m.group(4)))
         return '%s(%d,%d,%d' % (m.group(1), r, g, b)
     return re.sub(r'(rgba?)\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)', rgb, text)
+
+
+def warm_colors(text):
+    """Keep warm meaning; light warm foregrounds (L >= 0.6) take the palette's destructive colour."""
+    d = PALETTE['destructive']
+    def fix(r, g, b):
+        h, l, s = colorsys.rgb_to_hls(r / 255, g / 255, b / 255)
+        return d if s > 0.35 and l >= 0.6 and (h * 360 >= 300 or h * 360 <= 30) else (r, g, b)
+    def hx(m):
+        v = m.group(1)
+        if len(v) in (3, 4):
+            v = ''.join(c * 2 for c in v)
+        r, g, b = fix(int(v[0:2], 16), int(v[2:4], 16), int(v[4:6], 16))
+        return '#%02x%02x%02x%s' % (r, g, b, v[6:8] if len(v) == 8 else '')
+    text = re.sub(r'#([0-9a-fA-F]{8}|[0-9a-fA-F]{6}|[0-9a-fA-F]{3,4})\b(?![\w-])', hx, text)
+    return re.sub(r'(rgba?)\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)', lambda m: '%s(%d,%d,%d' % ((m.group(1),) + fix(int(m.group(2)), int(m.group(3)), int(m.group(4)))), text)
 
 
 COLOR_RE = re.compile(r'#[0-9a-fA-F]{3,8}\b|rgba?\(')
@@ -83,7 +103,7 @@ def derive_css(oxblood_css):
         # as in Oxblood; only colours change. Warm-meaning rules are replayed with their colours kept.
         if SCOPE not in sel:
             return None
-        body2 = body if KEEP_WARM.search(sel) else map_colors(body)
+        body2 = warm_colors(body) if KEEP_WARM.search(sel) else map_colors(body)
         for a, b in renamed.items():
             body2 = re.sub(r'\b%s\b' % re.escape(a), b, body2)
         return sel.replace(SCOPE, GLACIER_SCOPE).strip() + '{' + body2 + '}'

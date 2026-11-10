@@ -83,7 +83,12 @@
  <fieldset id="h-system"><legend>System surfaces</legend>
   <div class="row"><button class="hbtn" id="h-shade">Notifications</button><button class="hbtn" id="h-empty">Empty / refill</button></div>
   <label class="hcheck"><input type="checkbox" id="h-fail">Next reply fails to send</label>
-  <label class="hcheck"><input type="checkbox" id="h-unavail">Return origin no longer open</label>
+  <label class="hcheck" for="h-origin">Return origin task</label>
+  <select id="h-origin" class="hbtn" aria-label="Return origin task"><option value="alive">Alive (exact live task)</option><option value="closed">Closed (no longer open)</option><option value="replaced">Replaced (new task)</option></select>
+  <label class="hcheck" for="h-ack">Return acknowledgement (simulated)</label>
+  <select id="h-ack" class="hbtn" aria-label="Simulated return acknowledgement"><option value="success-420">Success after 420 ms (V3 fixture)</option><option value="failure-420">Failure after 420 ms</option><option value="manual">Manual (hold pending)</option></select>
+  <div class="row"><button class="hbtn" id="h-ack-ok" disabled>Acknowledge success</button><button class="hbtn" id="h-ack-fail" disabled>Acknowledge failure</button></div>
+  <p class="hstatus" id="h-retstate"></p>
   <p class="hstatus" id="h-sysstate"></p>
   <ol class="hstatus hlog" id="h-syslog" aria-label="Recent system events"></ol>
  </fieldset>

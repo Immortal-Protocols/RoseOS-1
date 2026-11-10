@@ -11,13 +11,27 @@
   --kb-strip:44px;--kb-key:46px;--kb-gap:8px;--kb-pad:6px;
   --kb-h:calc(var(--kb-strip) + 4 * var(--kb-key) + 3 * var(--kb-gap) + 2 * var(--kb-pad) + 4px);
 }
+/* Glacier: Illustrator palette v1 (glacier.tokens.json). Opaque surfaces behind all text. */
 #device[data-palette=glacier]{
-  --sys-ink:#e9eff5;--sys-ink-2:#c4d0dc;--sys-ink-3:#9aa9b8;--sys-line:rgba(205,222,240,.17);
-  --sys-surface:#132030;--sys-surface-2:#1a2a3c;--sys-shade:rgba(9,15,23,.95);
-  --sys-accent:#3a6c9c;--sys-accent-hi:#7fb2e0;--sys-on-accent:#fff;--sys-tile-on:#2c5680;
-  --sys-key:#1c2938;--sys-key-hi:#263649;--sys-key-fn:#142030;--sys-kb:#0c141e;--sys-kb-top:#122030;
-  --sys-sel:rgba(127,178,224,.42);--sys-caret:#a4cdf2;--sys-focus:#a4cdf2;
+  --sys-ink:#F0F6FA;--sys-ink-2:#B8CAD8;--sys-ink-3:#899DAE;--sys-line:#405B70;--sys-control:#7897AE;
+  --sys-surface:#142536;--sys-surface-2:#20374A;--sys-shade:#0B141D;
+  --sys-accent:#A6D8F5;--sys-accent-hi:#A6D8F5;--sys-on-accent:#08131D;--sys-tile-on:#A6D8F5;--sys-pressed:#7BAAC8;
+  --sys-key:#20374A;--sys-key-hi:#29475D;--sys-key-fn:#142536;--sys-kb:#0B141D;--sys-kb-top:#0F1B27;
+  --sys-sel:rgba(166,216,245,.38);--sys-caret:#D5EDFF;--sys-focus:#D5EDFF;
+  --sys-warm:#FFABAC;--sys-warm-line:#FFABAC;
 }
+/* Glacier states per palette: selected = accent fill with dark glyph; actionable outlines use the control border. */
+#device[data-palette=glacier] .qs[aria-pressed=true]{color:var(--sys-on-accent);box-shadow:none}
+#device[data-palette=glacier] .kb .key[data-k=shift][data-state=lock]{color:var(--sys-on-accent);box-shadow:none}
+#device[data-palette=glacier] .kb .key.action{background:var(--sys-accent);color:var(--sys-on-accent)}
+#device[data-palette=glacier] .field{background:var(--sys-surface);box-shadow:inset 0 0 0 1px var(--sys-control)}
+#device[data-palette=glacier] .sh-btn{box-shadow:inset 0 0 0 1px var(--sys-control)}
+#device[data-palette=glacier] .sh-btn.primary{box-shadow:none}
+#device[data-palette=glacier] .shade{-webkit-backdrop-filter:none;backdrop-filter:none}
+#device[data-palette=glacier] .return-control::before{box-shadow:inset 0 0 0 1px var(--sys-control)}
+#device[data-palette=glacier] .return-control.is-pressed::before{background:var(--sys-pressed)}
+#device[data-palette=glacier] .return-control.is-pressed{color:var(--sys-on-accent)}
+#device[data-palette=glacier] .kb .key.down{filter:none;background:var(--sys-pressed);color:var(--sys-on-accent)}
 
 /* ---------- Text fields (custom-rendered; no native IME) ---------- */
 #device[data-theme] .field{min-width:0;min-height:38px;max-height:118px;overflow:auto;scrollbar-width:none;border-radius:19px;padding:9px 14px;font-size:16px;line-height:20px;white-space:pre-wrap;overflow-wrap:anywhere;cursor:text;-webkit-user-select:none;user-select:none;touch-action:pan-y;
@@ -143,21 +157,31 @@
 #device[data-theme] .shade button:focus-visible{outline:2px solid var(--sys-focus);outline-offset:2px}
 #device[data-theme] .screen[data-shade=open] .notices{opacity:0}
 
-/* ---------- V3 return: compact, named, bottom-left of Rose content above the chin ---------- */
-#device[data-theme] .rose-return-wrap{position:absolute;left:16px;bottom:96px;z-index:6;display:flex;align-items:center;gap:4px}
-#device[data-theme] .screen[data-kb=on] #v-rose .rose-return-wrap{bottom:calc(var(--kb-h) + 24px + 16px)}
-#device[data-theme] .rose-return{position:relative;display:inline-flex;align-items:center;gap:6px;height:36px;padding:0 13px 0 6px;border-radius:18px;font-size:14px;font-weight:600;color:var(--sys-ink);
-  background:color-mix(in srgb,var(--sys-surface-2) 82%,transparent);-webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px);box-shadow:inset 0 0 0 1px var(--sys-line),0 6px 16px rgba(0,0,0,.35)}
-#device[data-theme] .rose-return::after{content:'';position:absolute;left:-4px;right:-4px;top:-4px;bottom:-4px}
-#device[data-theme] .rose-return .rr-chev{width:18px;height:18px;color:var(--sys-ink-2)}
-#device[data-theme] .rose-return .rr-chev svg{width:18px;height:18px}
-#device[data-theme] .rose-return .rr-ico{width:22px;height:22px;border-radius:6px;display:grid;place-items:center;overflow:hidden;color:var(--sys-ink)}
-#device[data-theme] .rose-return .rr-ico svg,#device[data-theme] .rose-return .rr-ico img{width:18px;height:18px}
-#device[data-theme] .rose-return[data-state=pending]{box-shadow:inset 0 0 0 1.4px var(--sys-accent-hi),0 6px 16px rgba(0,0,0,.35)}
-#device[data-theme] .rose-return[data-state=unavailable]{color:var(--sys-ink-3);background:none;box-shadow:inset 0 0 0 1px var(--sys-line)}
-#device[data-theme] .rose-return[data-state=unavailable] .rr-ico{opacity:.5}
-#device[data-theme] .rr-cancel{min-height:36px;padding:0 10px;font-size:13.5px;font-weight:600;color:var(--sys-ink-2);text-decoration:underline}
-#device[data-theme] .rose-return:focus-visible,#device[data-theme] .rr-cancel:focus-visible{outline:2px solid var(--sys-focus);outline-offset:2px}
+/* ---------- V3 return (exact V3 source): footer return control, Cancel, unavailable sheet ----------
+   Leading edge of Rose's lower content, above the chin and Disconnect; 36px visible surface inside a
+   48px hit area; chevron + source name only (no invented icon); 12px label that truncates. */
+#device[data-theme] .rose-footer{position:absolute;left:12px;right:12px;bottom:84px;z-index:6;display:flex;align-items:center;gap:8px;min-width:0;pointer-events:none}
+#device[data-theme] .rose-footer>*{pointer-events:auto}
+#device[data-theme] .screen[data-kb=on] #v-rose .rose-footer{bottom:calc(var(--kb-h) + 24px + 8px)}
+#device[data-theme] .return-control{position:relative;display:inline-flex;align-items:center;gap:8px;max-width:calc(100% - 72px);min-width:0;min-height:48px;padding:6px 12px;border-radius:9px;color:var(--sys-ink);font-size:12px;text-align:left;user-select:none;touch-action:manipulation}
+#device[data-theme] .return-control::before{content:'';position:absolute;inset:6px 0;border-radius:7px;background:var(--sys-surface-2);box-shadow:inset 0 0 0 1px var(--sys-line);transition:background 100ms}
+#device[data-theme] .return-control>*{position:relative}
+#device[data-theme] .return-control svg{width:14px;height:14px;flex:none}
+#device[data-theme] .return-control .source-label{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+#device[data-theme] .return-control.is-pressed::before{background:var(--sys-tile-on)}
+#device[data-theme] .return-control[aria-disabled=true]{cursor:default;color:var(--sys-ink-2)}
+#device[data-theme] .cancel-pending{flex:none;min-height:48px;padding:6px 8px;border-radius:7px;font-size:12px;color:var(--sys-ink-2)}
+#device[data-theme] .return-control:focus-visible,#device[data-theme] .cancel-pending:focus-visible{outline:2px solid var(--sys-focus);outline-offset:2px}
+#device[data-theme] #v-rose.departing{pointer-events:none;animation:sys-depart 200ms cubic-bezier(.2,.7,.3,1) both}
+@keyframes sys-depart{from{opacity:1;transform:translateY(0)}to{opacity:0;transform:translateY(8px)}}
+#device[data-theme] .ret-sheet-backdrop{position:absolute;inset:0;z-index:85;display:grid;align-items:end;background:rgba(0,0,0,.42);padding:0 12px 96px}
+#device[data-theme] .ret-sheet{border-radius:18px;padding:18px;background:var(--sys-surface-2);color:var(--sys-ink);box-shadow:0 18px 40px rgba(0,0,0,.55),inset 0 0 0 1px var(--sys-line);display:grid;gap:10px}
+#device[data-theme] .ret-sheet h2{margin:0;font-size:18px;font-weight:600}
+#device[data-theme] .ret-sheet p{margin:0;font-size:14px;color:var(--sys-ink-2);line-height:1.4}
+#device[data-theme] .ret-sheet .row{display:flex;gap:8px}
+#device[data-theme] .ret-btn{flex:1;min-height:44px;border-radius:12px;font-size:14px;font-weight:600;color:var(--sys-ink);background:var(--sys-surface);box-shadow:inset 0 0 0 1px var(--sys-line)}
+#device[data-theme] .ret-btn.primary{background:var(--sys-accent);color:var(--sys-on-accent);box-shadow:none}
+#device[data-theme] .ret-btn:focus-visible{outline:2px solid var(--sys-focus);outline-offset:2px}
 #device[data-theme] .sys-toast{position:absolute;left:50%;top:104px;transform:translateX(-50%);z-index:90;max-width:calc(100% - 32px);padding:8px 14px;border-radius:14px;background:var(--sys-surface-2);color:var(--sys-ink);box-shadow:inset 0 0 0 1px var(--sys-line);font-size:13px;text-align:center;opacity:0;pointer-events:none;transition:opacity 200ms}
 #device[data-theme] .sys-toast.on{opacity:1}
 .static-motion .shade{animation:none}

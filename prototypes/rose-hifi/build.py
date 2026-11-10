@@ -23,13 +23,12 @@ BRUSH_SVG = ("<svg xmlns='http://www.w3.org/2000/svg' width='640' height='160'>"
 
 import glacier
 
-def glacier_field(which):
-    # Final Illustrator artwork (src/assets/glacier/home|rose.png/jpg/svg) replaces the provisional field.
-    for ext, mime in (('.png', 'image/png'), ('.jpg', 'image/jpeg'), ('.svg', 'image/svg+xml')):
-        f = SRC / 'assets' / 'glacier' / (which + ext)
-        if f.exists():
-            return 'data:%s;base64,%s' % (mime, base64.b64encode(f.read_bytes()).decode())
-    svg = glacier.derive_svg((SRC / 'assets' / ('oxblood-%s.svg' % which)).read_text())
+def glacier_field():
+    # Final Illustrator artwork (GLACIER-1E-1110-ILL-DELIVERY-v1): glacier-portrait.png, embedded unchanged.
+    f = SRC / 'assets' / 'glacier' / 'field.png'
+    if f.exists():
+        return 'data:image/png;base64,' + base64.b64encode(f.read_bytes()).decode()
+    svg = glacier.derive_svg((SRC / 'assets' / 'oxblood-home.svg').read_text())   # provisional fallback
     return 'data:image/svg+xml;base64,' + base64.b64encode(svg.encode()).decode()
 
 def build():
@@ -47,8 +46,7 @@ def build():
     html = html.replace('%%WALLPAPER%%', data_uri('wallpaper.jpg', 'image/jpeg'))
     html = html.replace('%%OX_HOME%%', data_uri('oxblood-home.svg', 'image/svg+xml'))
     html = html.replace('%%OX_ROSE%%', data_uri('oxblood-rose.svg', 'image/svg+xml'))
-    html = html.replace('%%GL_HOME%%', glacier_field('home'))
-    html = html.replace('%%GL_ROSE%%', glacier_field('rose'))
+    html = html.replace('%%GL_FIELD%%', glacier_field())
     html = html.replace('%%BRUSH%%', '"data:image/svg+xml,' + urllib.parse.quote(BRUSH_SVG, safe="/:=' ") + '"')
     for name in ('firefox', 'thunderbird', 'vlc'):
         html = html.replace('%%ICON_' + name.upper() + '%%', data_uri(name + '.png', 'image/png'))

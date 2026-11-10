@@ -1,7 +1,10 @@
 /* ---------- Glacier semantic layer (GLACIER-1E-1110) ----------
    Hand-written exceptions on top of the build-derived Glacier copy of the Oxblood rules (glacier.py).
-   PROVISIONAL until the Illustrator's final palette/background land (src/assets/glacier/). */
-#device[data-palette=glacier]{--ox-home:url(%%GL_HOME%%);--ox-rose:url(%%GL_ROSE%%)}
+   Palette and field: Illustrator GLACIER-1E-1110-ILL-DELIVERY-v1 (src/assets/glacier/, provenance in
+   manifest.json; field.png = glacier-portrait.png, SHA-256 98c7b166…). */
+#device[data-palette=glacier]{--gl-field:url(%%GL_FIELD%%);--ox-home:var(--gl-field);--ox-rose:var(--gl-field)}
+/* Placement per the Illustrator handoff: cover; top-aligned so the light stays below content. */
+#device[data-palette=glacier] .screen .wall,#device[data-palette=glacier] .screen .ivory-bg{background-color:#0B141D;background-position:50% 0%;background-size:cover}
 /* Switcher glyph: silver planes with a cool working edge (Oxblood's ruby edge). */
 #device[data-palette=glacier] .stacks-glyph [stroke="#eadbcd"]{stroke:#dde6ee}
 #device[data-palette=glacier] .stacks-glyph [fill="#331019"]{fill:#142130}
