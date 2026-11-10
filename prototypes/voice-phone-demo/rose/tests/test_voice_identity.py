@@ -772,6 +772,24 @@ class Conversation(unittest.TestCase):
         self.tool('rename_assistant', name='Nova')
         self.assertEqual(self.engine._late_notes, [])
 
+    def test_a_retry_after_a_timed_out_change_is_answered_by_it_not_applied_again(self):
+        s = self.engine.sessions['conversation']
+        self.engine._event({'event': 'tool_cancelled', 'callId': 'ipc-change_voice'})  # the bridge's timeout
+        first = self.tool('change_voice', pace='slower')
+        self.assertTrue(first['ok'])
+        saved = (Path(self.tmp.name) / 'identity.json').read_text()
+        e = {'callId': 'ipc-retry', 'params': {'tool': 'change_voice', 'arguments': {'pace': 'slower'},
+                                                'turnId': s.turn, 'callId': 'tool-retry'}}
+        self.engine._tool(s, e)  # the model retries in the same turn
+        r = json.loads(self.engine.client.results[-1]['result']['contentItems'][0]['text'])
+        self.assertEqual((r['reason'], r['changed']), ('earlier_call_finished', False))
+        self.assertIn('"voice": "%s"' % first['voice'], r['message'])
+        self.assertEqual(self.speaker.voice, first['voice'])  # one step, not two
+        self.assertEqual((Path(self.tmp.name) / 'identity.json').read_text(), saved)
+        self.assertEqual([n for c, n in self.engine._late_notes if c == s.conversation], [])  # told now, once
+        r = self.tool('change_voice', pace='slower')  # once seen, a new request applies again
+        self.assertNotEqual(r.get('reason'), 'earlier_call_finished')
+
     def test_a_cancelled_change_note_keeps_limits_and_the_offered_alternative(self):
         s = self.engine.sessions['conversation']
         self.engine._event({'event': 'tool_cancelled', 'callId': 'ipc-change_voice'})

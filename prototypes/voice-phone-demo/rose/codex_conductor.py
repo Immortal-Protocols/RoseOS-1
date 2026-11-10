@@ -133,6 +133,7 @@ class CodexConductor:
         # first submit after that. No turn waits for it. Bridge call id -> (conversation, note) / reported ids:
         self._late_notes = []
         self._copy_outcomes, self._bridge_cancelled = {}, {}
+        self._identity_notes = set()  # the notes above that are a name or voice outcome
         self.client = client_factory(self._events.put)
         self._worker = threading.Thread(target=self._loop, name='codex-conductor', daemon=True)
 
@@ -206,6 +207,7 @@ class CodexConductor:
             with self._lock:
                 notes = [n for c, n in self._late_notes if c == s.conversation]
                 self._late_notes = []
+                self._identity_notes &= set(self._copy_outcomes.values())  # only those still awaiting a report
         try:
             result = self.client.request('submit', s.name, text='\n'.join(notes + [text]) if notes else text)
         except Exception:
@@ -547,7 +549,17 @@ class CodexConductor:
                     logged = ({'text_characters': len(args['text'])} if name == 'copy_to_phone_clipboard'
                               and isinstance(args, dict) and isinstance(args.get('text'), str) else args)
                     self.log(s, 'tool_call', call_id=p['callId'], name=name, arguments=logged)
-                    result, image = self._app_tool(s, name, args) if s.task else self._conversation_tool(name, args)
+                    earlier = self._unseen_identity(s) if name in voice_identity.NAMES and not s.task else None
+                    if earlier:
+                        # A retry after a timeout: the earlier call already finished, so its outcome answers this one
+                        # and nothing is applied on top of it.
+                        result = {'ok': False, 'reason': 'earlier_call_finished', 'changed': False,
+                                  'message': 'An earlier call that was answered as cancelled had already finished, so '
+                                             'nothing more was applied. ' + ' '.join(earlier) + ' Tell the owner what '
+                                             'that changed, and ask before changing anything more.'}
+                    else:
+                        result, image = (self._app_tool(s, name, args) if s.task
+                                         else self._conversation_tool(name, args))
                     if name == 'copy_to_phone_clipboard' and not s.task:
                         self._copy_finished(s, str(e['callId']), result)
                     elif name in voice_identity.NAMES and not s.task:
@@ -602,10 +614,19 @@ class CodexConductor:
         note = (s.conversation, f'[Before this message, your {name} call that was answered as cancelled finished: '
                 f'{outcome}.{follow}]')
         with self._lock:
+            self._identity_notes.add(note)
             if self._bridge_cancelled.pop(call_id, None):
                 self._late_note(note)
             else:
                 self._keep(self._copy_outcomes, call_id, note)
+
+    def _unseen_identity(self, s):
+        """Take this conversation's name or voice outcomes the model has not seen yet (queued as late notes)."""
+        with self._lock:
+            taken = [n for n in self._late_notes if n in self._identity_notes and n[0] == s.conversation]
+            self._late_notes = [n for n in self._late_notes if n not in taken]
+            self._identity_notes.difference_update(taken)
+        return [n[1] for n in taken]
 
     def _cancelled_by_bridge(self, call_id):
         with self._lock:
@@ -839,6 +860,7 @@ class CodexConductor:
             with self._lock:
                 self._late_notes = []  # the new conversation never made those calls
                 self._copy_outcomes.clear()
+                self._identity_notes.clear()
             self.identity.offered = None  # the new conversation was offered no voice
             s = self.sessions['conversation'] = Session('conversation', conversation=self.conversation)
             self._open(s, self._policy(), CONVERSATION_TOOLS)
