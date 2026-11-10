@@ -349,6 +349,41 @@ class Matching(unittest.TestCase):
             r, _ = self.change('zoey', accent=accent)
             self.assertNotEqual(r['reason'], 'already', accent)
 
+    def test_accent_from_the_schema_values(self):
+        r, speaker = self.change('zoey', accent='american')
+        self.assertEqual((r['reason'], speaker.calls), ('already', []))
+        r, _ = self.change('zoey', accent='american', pitch='lower')
+        self.assertTrue(r['ok'])
+        self.assertNotIn('limits', r)
+        r, _ = self.change('zoey', accent='other', accent_name='British', pitch='lower')
+        self.assertTrue(r['ok'])
+        self.assertEqual(r['limits'][0], 'Every available voice has an American (en-US) accent; none is British.')
+        r, _ = self.change('zoey', accent='other')  # no name given: still honest
+        self.assertEqual(r['reason'], 'no_close_match')
+        self.assertIn('none is another accent', r['limits'][0])
+        r, _ = self.change('zoey', accent_name='British', pitch='lower')  # a name alone is read as the accent
+        self.assertIn('none is British', r['limits'][0])
+        props = vi.TOOLS[[t['name'] for t in vi.TOOLS].index('change_voice')]['inputSchema']['properties']
+        self.assertEqual(props['accent']['enum'], ['american', 'other'])
+        self.assertIn('accent_name', props)
+
+    def test_contrast_exclusion_and_less_american_accents(self):
+        for accent in ('American rather than British', 'American instead of British', 'any accent except British',
+                       'any accent other than British', 'anything but British', 'something other than British',
+                       "I'd like an American accent", "I'm fine with American", "we'll keep American",
+                       'stay American', 'less strong'):
+            r, speaker = self.change('zoey', accent=accent)
+            self.assertEqual((r['reason'], speaker.calls), ('already', []), accent)
+            r, _ = self.change('zoey', pitch='lower', accent=accent)
+            self.assertNotIn('limits', r, accent)
+        for accent in ('less American', 'a little less American', 'less American-sounding', 'a less American accent',
+                       'not as American', 'British rather than American', 'British instead of American',
+                       'some other accent', 'anything but American', 'British but softer'):
+            r, _ = self.change('zoey', pitch='lower', accent=accent)
+            self.assertIn('none is ' + accent, r['limits'][0], accent)
+            r, _ = self.change('zoey', accent=accent)
+            self.assertNotEqual(r['reason'], 'already', accent)
+
     def test_either_gender_keep_blocked_offer_may_be_another_gender(self):
         r = vi.VoiceIdentity().change_voice(Speaker('miles'), {'liveliness': 'calmer', 'pitch': 'same',
                                                                'gender': 'either'})

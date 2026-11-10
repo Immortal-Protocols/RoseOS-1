@@ -42,8 +42,10 @@ GENDERS = ('same', 'female', 'male', 'either')
 UNREQUESTED_WEIGHT = 0.5
 UNAVAILABLE_RETRY_S = 300.0  # a voice that failed to load (a download, a network blip) is tried again after this  # keep what the owner did not ask to change close to the current voice
 US = frozenset({'american', 'america', 'us', 'usa', 'united', 'states'})
+# What follows one of these in its alternative is ruled out ("not a British accent", "American rather than British",
+# "any accent except British").
 NEGATIONS = frozenset({'not', 'no', 'non', 'without', 'never', 'nor', 'neither', 'doesn', 'don', 'isn', 'aren',
-                       'wasn', 'nothing'})
+                       'wasn', 'nothing', 'than', 'instead', 'except', 'besides'})
 # "doesn't matter", "don't mind": the negation ends there, and what follows is accepted, not refused.
 INDIFFERENT = frozenset({'matter', 'matters', 'mind', 'care'})
 FILLER = frozenset({
@@ -51,10 +53,10 @@ FILLER = frozenset({
     'same', 'none', 'unchanged', 'current', 'usual', 'default', 'regular', 'typical', 'normal', 'particular',
     'preference', 'whatever', 'either', 'change', 'keep', 'it', 'as', 'now', 'is', 'are', 'be', 'one', 'please',
     'like', 'sounding', 'sound', 'sounds', 'voice', 'my', 'your', 'this', 'that', 'fine', 'good', 'ok', 'okay', 'just',
-    'still', 'more', 'less', 'bit', 'little', 'slight', 'slightly', 'very', 'too', 'quite', 'strong', 'stronger',
+    'still', 'more', 'bit', 'little', 'slight', 'slightly', 'very', 'too', 'quite', 'strong', 'stronger',
     'light', 'lighter', 'mild', 'heavy', 'thick', 'have', 'has', 'had', 'you', 'i', 'me', 'we', 'of', 'with', 'in',
     'to', 'for', 'if', 'would', 'could', 'should', 'want', 'prefer', 'rather', 'kind', 'sort', 'something', 'sure',
-    's', 't', 'really', 'much', 'all', 'at', 'else', 'works'})
+    's', 't', 'd', 'm', 'll', 've', 're', 'really', 'much', 'all', 'at', 'else', 'works', 'stay', 'remain', 'other'})
 
 
 def _alternative(tokens: list[str]):
@@ -72,8 +74,11 @@ def _alternative(tokens: list[str]):
         return False
     asked -= FILLER
     if asked & US:  # "American English", "US English": English names the language here
+        if 'less' in asked:  # "less American": an accent no voice has
+            return False
         asked -= US | {'english'}
         return not asked
+    asked.discard('less')  # "less strong": no accent named
     return None if not asked else False  # a bare "English" accent usually means England's, which no voice has
 
 
@@ -83,6 +88,8 @@ def american(accent: str) -> bool:
     Clauses (split at punctuation and "but") must all hold; within one, any of its alternatives ("or") may. A negation
     covers the rest of its alternative ("not a British accent"), so a negated accent is not asked for."""
     text = accent.lower().replace('u.s.', 'us').replace('en_us', 'us').replace('en-us', 'us')
+    # "anything but British" excludes, unlike "British but warmer", which joins two clauses.
+    text = re.sub(r'\b(anything|any\s+accent|any\s+one|anyone|any)\s+but\b', r'\1 except', text)
     for clause in re.split(r'[,;.!?/]|\bbut\b|\bthough\b', text):
         tokens = re.findall(r'[a-z]+', clause)
         alternatives, current = [], []
@@ -152,11 +159,20 @@ def request_from(args: dict) -> dict:
     if gender not in GENDERS:
         raise ValueError('gender must be same, female, male or either')
     accent = str(args.get('accent') or '').strip()
+    accent_name = str(args.get('accent_name') or '').strip()
+    if accent.lower() == 'american':
+        accent, accent_american = 'American', True
+    elif accent.lower() == 'other':
+        accent, accent_american = accent_name or 'another accent', False
+    else:  # not one of the schema's values: read the owner's words
+        accent = accent or accent_name
+        accent_american = american(accent)
     raw = args.get('other') or []
     other = [str(q).strip() for q in ([raw] if isinstance(raw, str) else raw) if str(q).strip()]
     if not wanted and gender in ('same', 'either') and not accent and not other:
         raise ValueError('Describe how the voice should change.')
-    return {'wanted': wanted, 'keep': keep, 'gender': gender, 'accent': accent, 'other': other}
+    return {'wanted': wanted, 'keep': keep, 'gender': gender, 'accent': accent, 'accent_american': accent_american,
+            'other': other}
 
 
 def match(current: str, request: dict, available, traits: dict = TRAITS) -> list[dict]:
@@ -370,7 +386,7 @@ class VoiceIdentity:
         offered, self.offered = self.offered, None  # an offer answers only the very next call
         if named:
             # Only the alternative the last result offered, on its own, never a voice chosen by its name.
-            if any(args.get(k) and args.get(k) != 'same' for k in (*DIMENSIONS, 'accent', 'other')) \
+            if any(args.get(k) and args.get(k) != 'same' for k in (*DIMENSIONS, 'accent', 'accent_name', 'other')) \
                     or args.get('gender') not in (None, 'same'):
                 self.offered = offered  # the offer still stands
                 return {'ok': False, 'reason': 'invalid_request', 'changed': False, 'voice': current,
@@ -391,7 +407,7 @@ class VoiceIdentity:
         limits = self._limits(request)
         gender = self._gender(current)
         if not request['wanted'] and request['gender'] in ('same', 'either', gender):
-            if not request['other'] and request['accent'] and american(request['accent']):
+            if not request['other'] and request['accent'] and request['accent_american']:
                 return {'ok': False, 'reason': 'already', 'changed': False, 'voice': current,
                         'message': 'The current voice already has an American (en-US) accent, like every available '
                                    'voice.'}
@@ -501,7 +517,7 @@ class VoiceIdentity:
     def _limits(self, request) -> list[str]:
         """What a description asked for that these voices cannot be matched on."""
         limits = []
-        if not american(request['accent']):
+        if not request['accent_american']:
             limits.append(f'Every available voice has an American (en-US) accent; none is {request["accent"]}.')
         if request['other']:
             limits.append('Only pitch, warmth, liveliness and pace were measured from the voices\' samples; '
@@ -581,8 +597,12 @@ TOOLS = [
          **DIRECTIONS,
          'gender': {'type': 'string', 'enum': list(GENDERS),
                     'description': 'same (default) keeps the current gender; either only if the owner does not mind.'},
-         'accent': {'type': 'string', 'description': 'Only an accent the owner asked for, in their words; '
-                                                       'omit it when they do not mind.'},
+         'accent': {'type': 'string', 'enum': ['american', 'other'],
+                    'description': 'american when the owner asks for an American (US) accent or to keep the current '
+                                   'one; other when they want any other accent or a less American one, named in '
+                                   'accent_name. Omit it when they do not mind or only rule out a non-American one.'},
+         'accent_name': {'type': 'string', 'description': 'With accent other: that accent in the owner\'s words, for '
+                                                            'example British.'},
          'other': {'type': 'array', 'items': {'type': 'string'}},
          'voice': {'type': 'string', 'description': 'Only a voice a previous change_voice result offered.'}},
          'additionalProperties': False}},
