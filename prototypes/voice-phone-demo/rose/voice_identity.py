@@ -41,25 +41,62 @@ DIMENSIONS = {
 GENDERS = ('same', 'female', 'male', 'either')
 UNREQUESTED_WEIGHT = 0.5
 UNAVAILABLE_RETRY_S = 300.0  # a voice that failed to load (a download, a network blip) is tried again after this  # keep what the owner did not ask to change close to the current voice
-def american(accent: str) -> bool:
-    """Whether an accent request names the accent every available voice has (US English), or none."""
-    text = accent.lower().replace('u.s.', 'us').replace('en_us', 'us').replace('en-us', 'us')
-    tokens = re.findall(r'[a-z]+', text)
-    us = {'american', 'america', 'us', 'usa', 'united', 'states'}
-    indifferent = {'matter', 'matters', 'preference', 'care', 'whatever', 'mind', 'normal', 'particular', 'either'}
-    if indifferent & set(tokens):  # "doesn't matter", "no preference", "normal": no accent asked for
-        return True
-    negated = {tokens[i + 1] for i, t in enumerate(tokens[:-1]) if t in ('not', 'no', 'non', 'without')}
-    if negated & us:  # "not American": an accent no voice has
+US = frozenset({'american', 'america', 'us', 'usa', 'united', 'states'})
+NEGATIONS = frozenset({'not', 'no', 'non', 'without', 'never', 'nor', 'neither', 'doesn', 'don', 'isn', 'aren',
+                       'wasn', 'nothing'})
+# "doesn't matter", "don't mind": the negation ends there, and what follows is accepted, not refused.
+INDIFFERENT = frozenset({'matter', 'matters', 'mind', 'care'})
+FILLER = frozenset({
+    'accent', 'accents', 'a', 'an', 'the', 'standard', 'general', 'plain', 'neutral', 'north', 'any', 'anything',
+    'same', 'none', 'unchanged', 'current', 'usual', 'default', 'regular', 'typical', 'normal', 'particular',
+    'preference', 'whatever', 'either', 'change', 'keep', 'it', 'as', 'now', 'is', 'are', 'be', 'one', 'please',
+    'like', 'sounding', 'sound', 'sounds', 'voice', 'my', 'your', 'this', 'that', 'fine', 'good', 'ok', 'okay', 'just',
+    'still', 'more', 'less', 'bit', 'little', 'slight', 'slightly', 'very', 'too', 'quite', 'strong', 'stronger',
+    'light', 'lighter', 'mild', 'heavy', 'thick', 'have', 'has', 'had', 'you', 'i', 'me', 'we', 'of', 'with', 'in',
+    'to', 'for', 'if', 'would', 'could', 'should', 'want', 'prefer', 'rather', 'kind', 'sort', 'something', 'sure',
+    's', 't', 'really', 'much', 'all', 'at', 'else', 'works'})
+
+
+def _alternative(tokens: list[str]):
+    """One alternative of an accent clause: True when every voice has it, False when none does, None when it asks for
+    no accent at all."""
+    asked, refused, negating = set(), set(), False
+    for t in tokens:
+        if t in NEGATIONS:
+            negating = True
+        elif t in INDIFFERENT:
+            negating = False
+        else:
+            (refused if negating else asked).add(t)
+    if refused & US:  # "not American": an accent no voice has
         return False
-    # "not British": a negated accent is not asked for
-    words = set(t for t in tokens if t not in negated and t not in ('not', 'non', 'without'))
-    words -= {'accent', 'a', 'an', 'the', 'standard', 'general', 'plain', 'neutral', 'north', 'any', 'same',
-              'none', 'unchanged', 'current', 'no', 'change', 'keep', 'it', 'as', 'now', 'is', 'one', 'please', 'like',
-              'sounding', 'sound', 'voice', 'my', 'your', 'this', 'that', 'fine', 'ok', 'okay', 'just', 'still'}
-    if words & us:  # "American English", "US English": English names the language here
-        words.discard('english')
-    return not words or words <= us  # a bare "English" accent usually means England's, which no voice has
+    asked -= FILLER
+    if asked & US:  # "American English", "US English": English names the language here
+        asked -= US | {'english'}
+        return not asked
+    return None if not asked else False  # a bare "English" accent usually means England's, which no voice has
+
+
+def american(accent: str) -> bool:
+    """Whether an accent request names the accent every available voice has (US English), or none.
+
+    Clauses (split at punctuation and "but") must all hold; within one, any of its alternatives ("or") may. A negation
+    covers the rest of its alternative ("not a British accent"), so a negated accent is not asked for."""
+    text = accent.lower().replace('u.s.', 'us').replace('en_us', 'us').replace('en-us', 'us')
+    for clause in re.split(r'[,;.!?/]|\bbut\b|\bthough\b', text):
+        tokens = re.findall(r'[a-z]+', clause)
+        alternatives, current = [], []
+        for t in tokens:
+            if t == 'or':
+                alternatives.append(current)
+                current = []
+            else:
+                current.append(t)
+        alternatives.append(current)
+        results = [_alternative(a) for a in alternatives if a]
+        if results and not any(r is not False for r in results):
+            return False
+    return True
 
 
 def load_traits(path: Path = TRAITS_FILE) -> dict:
@@ -391,7 +428,8 @@ class VoiceIdentity:
             # in its unmet so the owner decides.
             near = [e for e in ranked if all(a.startswith('same_') for a in e['against'])
                     and (e['met'] or changing_gender)
-                    and (changing_gender or self._gender(e['voice']) == gender)]  # no unasked gender change
+                    and (changing_gender or request['gender'] == 'either'
+                         or self._gender(e['voice']) == gender)]  # no unasked gender change
             best = min(near, key=lambda e: (len(e['against']), e['score']), default=None)
         scope = '' if request['gender'] in ('either',) else f'{request["gender"] if changing_gender else gender} '
         kept = ' and '.join(request['keep'])
@@ -543,7 +581,8 @@ TOOLS = [
          **DIRECTIONS,
          'gender': {'type': 'string', 'enum': list(GENDERS),
                     'description': 'same (default) keeps the current gender; either only if the owner does not mind.'},
-         'accent': {'type': 'string'},
+         'accent': {'type': 'string', 'description': 'Only an accent the owner asked for, in their words; '
+                                                       'omit it when they do not mind.'},
          'other': {'type': 'array', 'items': {'type': 'string'}},
          'voice': {'type': 'string', 'description': 'Only a voice a previous change_voice result offered.'}},
          'additionalProperties': False}},

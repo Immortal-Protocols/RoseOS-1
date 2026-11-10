@@ -266,7 +266,8 @@ class Matching(unittest.TestCase):
                 d = vi.deltas(vi.TRAITS['voices'][current], vi.TRAITS['voices'][voice])['pitch']
                 if r['ok'] or 'same_pitch' not in r['alternative']['unmet']:  # applied, or offered as keeping it
                     self.assertLessEqual(abs(d), vi.DIMENSIONS['pitch']['step'], r)
-                else:  # an offered voice that breaks the keep says so, and keeps the gender
+                elif args.get('gender') != 'either':  # an offered voice that breaks the keep says so, and keeps
+                    # the gender unless the owner does not mind it
                     self.assertEqual(vi.TRAITS['voices'][voice]['gender'], vi.TRAITS['voices'][current]['gender'])
 
     def test_a_kept_aspect_never_moves_more_than_rose_would_report(self):
@@ -329,6 +330,31 @@ class Matching(unittest.TestCase):
             self.assertNotIn('limits', r, accent)
         r, _ = self.change('zoey', pitch='lower', accent='not American')
         self.assertIn('limits', r)
+
+    def test_accent_alternatives_negation_and_indifference(self):
+        for accent in ('American or British', 'British or American', 'more American', 'a slightly more American accent',
+                       'not Scottish or Irish', 'the one you have', 'not too strong', 'not a British accent',
+                       'without a Southern accent', 'not an English accent', 'neither British nor Irish',
+                       "I don't mind", 'American or British, either is fine'):
+            r, speaker = self.change('zoey', accent=accent)
+            self.assertEqual((r['reason'], speaker.calls), ('already', []), accent)
+            r, _ = self.change('zoey', pitch='lower', accent=accent)
+            self.assertNotIn('limits', r, accent)
+        # Indifference never hides an accent that was named; a negation never hides one named after it.
+        for accent in ('British or Australian, either is fine', 'not American, either British or Irish',
+                       'a normal British accent', "British, if you don't mind", 'Irish in particular',
+                       "I don't mind British", 'Southern American', 'not American or British', 'no, British'):
+            r, _ = self.change('zoey', pitch='lower', accent=accent)
+            self.assertIn('none is ' + accent, r['limits'][0], accent)
+            r, _ = self.change('zoey', accent=accent)
+            self.assertNotEqual(r['reason'], 'already', accent)
+
+    def test_either_gender_keep_blocked_offer_may_be_another_gender(self):
+        r = vi.VoiceIdentity().change_voice(Speaker('miles'), {'liveliness': 'calmer', 'pitch': 'same',
+                                                               'gender': 'either'})
+        self.assertFalse(r['ok'])
+        self.assertIn('alternative', r)  # the voice the message says fits is offered
+        self.assertIn('same_pitch', r['alternative']['unmet'])
 
     def test_a_gender_change_cannot_keep_the_pitch_and_says_so(self):
         r, _ = self.change('zoey', gender='male', pitch='same')
