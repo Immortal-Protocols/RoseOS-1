@@ -321,8 +321,12 @@ final class LocalRoseLink {
         while (running) {
             LocalRoseSocket w;
             retry.attempt();
+            final String identityScope = LocalAssistantIdentity.scope(context);
             try {
                 w = LocalRoseConnection.open(context, "/ws/events");
+                if (!identityScope.equals(LocalAssistantIdentity.scope(context))) {
+                    w.close(); LocalRoseConnection.closed(w); continue;
+                }
                 if (!adopt(w)) break;
             } catch (LocalRoseConnection.Unpaired e) {
                 retry.parked();  // the audio loop tells the page
@@ -338,6 +342,10 @@ final class LocalRoseLink {
                 public void onText(String text) {
                     try {
                         JSONObject m = new JSONObject(text);
+                        synchronized (LocalRoseLink.class) {
+                            if (current != LocalRoseLink.this || !running) return;
+                            LocalAssistantIdentity.accept(context, identityScope, m);
+                        }
                         String kind = m.optString("kind");
                         if (m.optBoolean("replay")) return;
                         if (kind.equals("user_turn") && !m.optBoolean("hold")) {

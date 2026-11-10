@@ -1068,6 +1068,7 @@ class Server:
     def snapshot(self) -> dict:
         return {"mode": self.mode, "ready": self.ready, "status": self.state,
                 "voice": self.current_voice(), "voices": self.voices(),
+                "assistant_name": self.identity.name if self.identity else "Rose",
                 "phone": self.phone.snapshot(), "ui_tree": self.phone.ui_tree(),
                 "tasks": self.task_list(), "load_s": self.load_s,
                 "metrics": list(getattr(self.conductor, "turn_metrics", []))[-50:],
