@@ -69,11 +69,12 @@ final class OxbloodEdge {
    float t = b.top;
    paint.reset(); paint.setAntiAlias(true); paint.setDither(true);
    // linear-gradient(180deg, #4a141a until 34px, #3c0e13 at 46px, #330c10 at 92px): stops in dp from the edge top.
-   paint.setShader(new LinearGradient(0, t, 0, t + HEIGHT_DP * d, new int[]{PLATE_TOP, PLATE_TOP, PLATE_MID, PLATE_BOTTOM},
+   paint.setShader(new LinearGradient(0, t, 0, t + HEIGHT_DP * d, RoseThemeNow.c(new int[]{PLATE_TOP, PLATE_TOP, PLATE_MID, PLATE_BOTTOM}),
      new float[]{0, 34f / 92f, 46f / 92f, 1}, Shader.TileMode.CLAMP));
    c.drawPath(outline, paint);
    // Sheen: rgba(255,150,165,.07) fading out over the top 40% of the 92dp box.
-   paint.setShader(new LinearGradient(0, t, 0, t + .4f * HEIGHT_DP * d, SHEEN, SHEEN & 0x00ffffff, Shader.TileMode.CLAMP));
+   int sheen = RoseThemeNow.c(SHEEN);
+   paint.setShader(new LinearGradient(0, t, 0, t + .4f * HEIGHT_DP * d, sheen, sheen & 0x00ffffff, Shader.TileMode.CLAMP));
    c.drawPath(outline, paint);
    paint.setShader(null);
    // The ::after's box-shadows along the concave contour: a soft dark falloff (0 4px 10px) and a 1px ruby line (0 1px 0).
@@ -92,7 +93,7 @@ final class OxbloodEdge {
    paint.setMaskFilter(null);
    paint.setStyle(Paint.Style.STROKE);
    paint.setStrokeWidth(Math.max(1f, d));
-   paint.setColor(HAIRLINE);
+   paint.setColor(RoseThemeNow.c(HAIRLINE));
    Path line = new Path(top); line.offset(0, .5f * Math.max(1f, d));
    c.drawPath(line, paint);
    c.restoreToCount(save);
@@ -129,7 +130,7 @@ final class OxbloodEdge {
    if (plate.isEmpty()) return;
    float r = radius * d;
    paint.reset(); paint.setAntiAlias(true);
-   paint.setShader(new LinearGradient(0, plate.top, 0, plate.bottom, FILL_TOP, FILL_BOTTOM, Shader.TileMode.CLAMP));
+   paint.setShader(new LinearGradient(0, plate.top, 0, plate.bottom, RoseThemeNow.c(FILL_TOP), RoseThemeNow.c(FILL_BOTTOM), Shader.TileMode.CLAMP));
    c.drawRoundRect(plate, r, r, paint);
    paint.setShader(null);
    // inset 0 1px 2px rgba(0,0,0,.4): a soft dark band just inside the top edge.
@@ -145,7 +146,7 @@ final class OxbloodEdge {
    // inset 0 0 0 1px: the warm ring just inside the edge.
    float s = Math.max(1f, d), h = s / 2;
    paint.setStrokeWidth(s);
-   paint.setColor(RING);
+   paint.setColor(RoseThemeNow.c(RING));
    c.drawRoundRect(plate.left + h, plate.top + h, plate.right - h, plate.bottom - h, r - h, r - h, paint);
   }
 
@@ -180,18 +181,18 @@ final class OxbloodEdge {
     float h = MIC_PLATE_DP * d, r = MIC_RADIUS_DP * d, w = 1.4f * d;
     RectF plate = new RectF(cx - h / 2 + w / 2, cy - h / 2 + w / 2, cx + h / 2 - w / 2, cy + h / 2 - w / 2);
     paint.reset(); paint.setAntiAlias(true); paint.setStyle(Paint.Style.STROKE);
-    paint.setStrokeWidth(4 * d); paint.setColor(GLOW);
+    paint.setStrokeWidth(4 * d); paint.setColor(RoseThemeNow.w(GLOW));
     paint.setMaskFilter(new BlurMaskFilter(5 * d, BlurMaskFilter.Blur.NORMAL));
     c.drawRoundRect(plate, r, r, paint);
     paint.setMaskFilter(null);
-    paint.setStrokeWidth(w); paint.setColor(RING);
+    paint.setStrokeWidth(w); paint.setColor(RoseThemeNow.w(RING));
     c.drawRoundRect(plate, r - w / 2, r - w / 2, paint);
    }
    int save = c.save();
    float s = GLYPH_DP * d / 24f;
    c.translate(cx - 12 * s, cy - 12 * s);
    c.scale(s, s);
-   int ink = muted ? MUTED_INK : INK;
+   int ink = muted ? RoseThemeNow.w(MUTED_INK) : RoseThemeNow.c(INK);
    int body = muted ? (ink & 0x00ffffff) | (Math.round(.55f * 255) << 24) : ink;
    paint.reset(); paint.setAntiAlias(true);
    paint.setColor(body);
@@ -202,7 +203,7 @@ final class OxbloodEdge {
    c.drawLine(8.8f, 20.8f, 15.2f, 20.8f, paint);
    if (muted) {
     // The slash, knocked out of the well (the reference's white under-stroke, here the well's own dark) then drawn.
-    paint.setStrokeWidth(3.4f); paint.setColor(0xff1c0609);
+    paint.setStrokeWidth(3.4f); paint.setColor(RoseThemeNow.c(0xff1c0609));
     c.drawLine(4.5f, 3.5f, 19.5f, 20.5f, paint);
     paint.setStrokeWidth(1.9f); paint.setColor(ink);
     c.drawLine(4.5f, 3.5f, 19.5f, 20.5f, paint);
@@ -241,12 +242,12 @@ final class OxbloodEdge {
     for (String[] card : CARDS) {
      Path p = HomeGlyph.Svg.parse(card[0]);
      boolean front = "front".equals(card[1]);
-     if (front && pass == 1) { paint.reset(); paint.setAntiAlias(true); paint.setColor(CARD); paint.setStyle(Paint.Style.FILL); c.drawPath(p, paint); }
+     if (front && pass == 1) { paint.reset(); paint.setAntiAlias(true); paint.setColor(RoseThemeNow.c(CARD)); paint.setStyle(Paint.Style.FILL); c.drawPath(p, paint); }
      paint.reset(); paint.setAntiAlias(true); paint.setStyle(Paint.Style.STROKE); paint.setStrokeWidth(2);
      paint.setStrokeJoin(Paint.Join.ROUND); paint.setStrokeCap(Paint.Cap.ROUND);
      if (pass == 0) { paint.setColor(SHADOW); paint.setMaskFilter(new BlurMaskFilter(.6f, BlurMaskFilter.Blur.NORMAL)); }
-     else if ("ruby".equals(card[1])) paint.setShader(new LinearGradient(34, 0, 62, 0, new int[]{INK, INK, RUBY, RUBY}, new float[]{0, .5f, .8f, 1}, Shader.TileMode.CLAMP));
-     else paint.setColor(INK);
+     else if ("ruby".equals(card[1])) paint.setShader(new LinearGradient(34, 0, 62, 0, RoseThemeNow.c(new int[]{INK, INK, RUBY, RUBY}), new float[]{0, .5f, .8f, 1}, Shader.TileMode.CLAMP));
+     else paint.setColor(RoseThemeNow.c(INK));
      c.drawPath(p, paint);
     }
     if (pass == 0) c.restore();

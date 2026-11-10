@@ -11,6 +11,8 @@ package com.android.wm.shell;
  */
 public final class AgentTrayLink {
     static final int REGISTER = 1, UNREGISTER = 2;
+    /** Plan 1E: SystemUI tells Rose Agent which theme it now draws (data RoseTheme.TRAY_KEY); see RoseThemeMirror. */
+    static final int THEME_SHOWN = 9;
 
     /** Side effects, performed by AgentTrayPrototype on the main thread. */
     interface Port {

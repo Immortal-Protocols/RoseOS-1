@@ -71,9 +71,17 @@ public final class RoseAgentStrip extends LinearLayout {
     private List<String> shownKeys = new ArrayList<>();
     /** Re-reads the platform while a live view is on screen; never decides membership or attribution. */
     private final Runnable previewTick = this::refresh;
+    /** Plan 1E: the theme the row draws (RoseThemeSetting, SystemUI's mirror); the pearl it set on the link. */
+    private String theme;
+    /** Plan 1E: each card's Oxblood ring (current or neutral), so a theme change recolours it in place. */
+    private final java.util.Map<View, Integer> rings = new java.util.WeakHashMap<>();
+    private final GradientDrawable pearl;
+    private final Runnable themeChanged = this::onThemeChanged;
 
     public RoseAgentStrip(Context context, AttributeSet attrs) {
         super(context, attrs);
+        theme = RoseThemeSetting.current(context);
+        field.setTheme(context, theme);
         setOrientation(VERTICAL);
         int pad = dp(12);
         setPadding(pad, pad, pad, 0);
@@ -84,12 +92,12 @@ public final class RoseAgentStrip extends LinearLayout {
         row.setOrientation(HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
         connector = new View(context);
-        GradientDrawable pearl = new GradientDrawable();
+        pearl = new GradientDrawable();
         pearl.setShape(GradientDrawable.OVAL);
         pearl.setGradientType(GradientDrawable.RADIAL_GRADIENT);
         pearl.setGradientCenter(0.34f, 0.28f);
         pearl.setGradientRadius(PEARL_RADIUS_DP * getResources().getDisplayMetrics().density);
-        pearl.setColors(PEARL_COLORS, PEARL_STOPS);
+        pearl.setColors(RoseTheme.map(theme, PEARL_COLORS), PEARL_STOPS);
         connector.setBackground(pearl);
         connector.setAlpha(IDLE);
         connector.setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_NO);
@@ -305,6 +313,44 @@ public final class RoseAgentStrip extends LinearLayout {
             scrim = (ScrimView) found;
             scrim.setDrawingController(fieldOnScrim);
         }
+        RoseThemeSetting.listen(getContext(), themeChanged);
+        // A change while detached is picked up now.
+        onThemeChanged();
+    }
+
+    /**
+     * Plan 1E: the mirrored theme changed (or the row was attached). Colour only: the pearl, the link and status ink,
+     * each card's plate and ink and the field are recoloured in place in the new theme. The platform is not re-read and
+     * nothing is captured: nothing about membership, capture, selection or layout changes.
+     */
+    private void onThemeChanged() {
+        String next = RoseThemeSetting.current(getContext());
+        if (next.equals(theme)) return;
+        theme = next;
+        pearl.setColors(RoseTheme.map(theme, PEARL_COLORS), PEARL_STOPS);
+        link.setTextColor(RoseTheme.map(theme, TEXT));
+        status.setTextColor(RoseTheme.map(theme, TEXT));
+        for (int i = 0; i < cards.getChildCount(); i++) {
+            View card = cards.getChildAt(i);
+            if (card.getBackground() instanceof GradientDrawable) {
+                ((GradientDrawable) card.getBackground()).setColor(RoseTheme.map(theme, CARD_FILL));
+            }
+            Integer ring = rings.get(card);
+            if (ring != null && card.getForeground() instanceof GradientDrawable) {
+                ((GradientDrawable) card.getForeground()).setStroke(Math.max(1, dp(1)), RoseTheme.map(theme, ring));
+            }
+            if (!(card instanceof LinearLayout)) continue;
+            LinearLayout content = (LinearLayout) card;
+            int last = content.getChildCount() - 1;
+            for (int j = 0; j <= last; j++) {
+                // bind(): the reason a card has no live view comes first (muted ink); the name is last (TEXT).
+                if (content.getChildAt(j) instanceof TextView) {
+                    ((TextView) content.getChildAt(j)).setTextColor(RoseTheme.map(theme, j == last ? TEXT : TEXT_MUTED));
+                }
+            }
+        }
+        field.setTheme(getContext(), theme);
+        if (scrim != null) scrim.invalidate();
     }
 
     @Override
@@ -319,6 +365,7 @@ public final class RoseAgentStrip extends LinearLayout {
             scrim.setDrawingController(null);
             scrim = null;
         }
+        RoseThemeSetting.unlisten(themeChanged);
         removeCallbacks(previewTick);
         generation++;
         selection++;
@@ -564,7 +611,7 @@ public final class RoseAgentStrip extends LinearLayout {
         card.setGravity(Gravity.CENTER_HORIZONTAL);
         GradientDrawable plate = new GradientDrawable();
         plate.setCornerRadius(dp(RoseFan.CARD_RADIUS_DP));
-        plate.setColor(CARD_FILL);
+        plate.setColor(RoseTheme.map(theme, CARD_FILL));
         card.setBackground(plate);
         card.setClipToOutline(true);
         card.setElevation(dp(6));
@@ -589,7 +636,7 @@ public final class RoseAgentStrip extends LinearLayout {
         } else {
             TextView none = text(why, 12);
             none.setGravity(Gravity.CENTER);
-            none.setTextColor(TEXT_MUTED);
+            none.setTextColor(RoseTheme.map(theme, TEXT_MUTED));
             none.setPadding(dp(8), 0, dp(8), 0);
             body = none;
         }
@@ -606,8 +653,9 @@ public final class RoseAgentStrip extends LinearLayout {
         GradientDrawable edge = new GradientDrawable();
         edge.setCornerRadius(dp(RoseFan.CARD_RADIUS_DP));
         edge.setColor(0);
-        if (task.topOfDisplay) edge.setStroke(Math.max(1, dp(1)), CURRENT_RING);
-        else edge.setStroke(Math.max(1, dp(1)), CARD_RING);
+        if (task.topOfDisplay) edge.setStroke(Math.max(1, dp(1)), RoseTheme.map(theme, CURRENT_RING));
+        else edge.setStroke(Math.max(1, dp(1)), RoseTheme.map(theme, CARD_RING));
+        rings.put(card, task.topOfDisplay ? CURRENT_RING : CARD_RING);
         card.setForeground(edge);
         card.setContentDescription(task.label + (task.topOfDisplay ? ", Rose is working in it now" : ", in Rose's background")
                 + (why == null ? ", live view" : ", " + why));
@@ -658,7 +706,7 @@ public final class RoseAgentStrip extends LinearLayout {
         TextView view = new TextView(getContext());
         view.setText(value);
         view.setTextSize(sp);
-        view.setTextColor(TEXT);
+        view.setTextColor(RoseTheme.map(theme, TEXT));
         return view;
     }
 

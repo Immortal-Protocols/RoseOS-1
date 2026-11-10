@@ -1,8 +1,12 @@
 /* Copyright 2026. SPDX-License-Identifier: Apache-2.0 */
 package com.android.quickstep.fallback;
 
+import android.content.Context;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.graphics.BlurMaskFilter;
 import android.graphics.Canvas;
+import android.graphics.Color;
 import android.graphics.ColorFilter;
 import android.graphics.LinearGradient;
 import android.graphics.Matrix;
@@ -34,7 +38,12 @@ import android.graphics.drawable.Drawable;
  * </ul>
  * Placement is the contract's: scale = max(W/390, H/844), centred across, top-aligned. Gradients in the SVG are in
  * each shape's objectBoundingBox, so each is built in unit space and mapped to its box with a local matrix. Static
- * artwork: nothing animates, so reduced motion changes nothing. Pure Android graphics; no state, no I/O.
+ * artwork: nothing animates, so reduced motion changes nothing. Pure Android graphics; no I/O in Oxblood.
+ *
+ * <p>Plan 1E: the field follows the theme its owner gives it (setTheme; RoseThemeSetting). Oxblood draws the geometry
+ * above unchanged. A theme with a raster wallpaper (Glacier) draws that raster instead, the package's
+ * rose_glacier_field, on the theme's field colour, scaled to cover, centred across and top-aligned like the geometry;
+ * if it cannot be loaded, the geometry is drawn in the theme's colours (RoseTheme.map).
  */
 final class RoseOxbloodField extends Drawable {
     static final float VIEW_W = 390, VIEW_H = 844;
@@ -53,18 +62,20 @@ final class RoseOxbloodField extends Drawable {
     private final Paint line = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Path sheet = polygon(SHEET), plane = polygon(PLANE);
     private final Path edge = new Path(), lower = new Path(), sheetLine = new Path();
-    private final Shader base, sheetShader, planeShader, glint;
+    private Shader base, sheetShader, planeShader, glint;
     private final BlurMaskFilter soft;
     private int alpha = 255;
+    /** Plan 1E: the theme drawn, and (raster themes) the package context its raster is loaded from. */
+    private String theme = RoseTheme.DEFAULT;
+    private Context resources;
+    /** The theme's raster, decoded once on first need; null when not loaded (or not loadable: rasterFailed). */
+    private Bitmap raster;
+    private boolean rasterFailed;
+    private final Paint art = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG | Paint.DITHER_FLAG);
+    private final RectF artBounds = new RectF();
 
     RoseOxbloodField() {
-        base = new LinearGradient(0, 0, 0, VIEW_H, BASE, BASE_STOPS, Shader.TileMode.CLAMP);
-        // objectBoundingBox gradients: (1,0)->(0,1) and (0,0)->(1,1) in unit space, mapped onto each polygon's box.
-        sheetShader = new LinearGradient(1, 0, 0, 1, SHEET_COLORS, null, Shader.TileMode.CLAMP);
-        sheetShader.setLocalMatrix(box(SHEET));
-        planeShader = new LinearGradient(0, 0, 1, 1, PLANE_COLORS, PLANE_STOPS, Shader.TileMode.CLAMP);
-        planeShader.setLocalMatrix(box(PLANE));
-        glint = new RadialGradient(GLINT_X, GLINT_Y, GLINT_R, GLINT, null, Shader.TileMode.CLAMP);
+        shade();
         // SVG feGaussianBlur stdDeviation 3 as a blur mask; Skia converts a blur radius r to sigma = 0.57735 r + 0.5.
         soft = new BlurMaskFilter((BLUR_STD_DEV - 0.5f) / 0.57735f, BlurMaskFilter.Blur.NORMAL);
         edge.moveTo(206, 642);
@@ -75,6 +86,54 @@ final class RoseOxbloodField extends Drawable {
         sheetLine.moveTo(390, 292);
         sheetLine.lineTo(295, 580);
         line.setStyle(Paint.Style.STROKE);
+    }
+
+    /** The geometry's shaders in the current theme (identity in Oxblood: exactly the SVG's colours). */
+    private void shade() {
+        base = new LinearGradient(0, 0, 0, VIEW_H, RoseTheme.map(theme, BASE), BASE_STOPS, Shader.TileMode.CLAMP);
+        // objectBoundingBox gradients: (1,0)->(0,1) and (0,0)->(1,1) in unit space, mapped onto each polygon's box.
+        sheetShader = new LinearGradient(1, 0, 0, 1, RoseTheme.map(theme, SHEET_COLORS), null, Shader.TileMode.CLAMP);
+        sheetShader.setLocalMatrix(box(SHEET));
+        planeShader = new LinearGradient(0, 0, 1, 1, RoseTheme.map(theme, PLANE_COLORS), PLANE_STOPS, Shader.TileMode.CLAMP);
+        planeShader.setLocalMatrix(box(PLANE));
+        glint = new RadialGradient(GLINT_X, GLINT_Y, GLINT_R, RoseTheme.map(theme, GLINT), null, Shader.TileMode.CLAMP);
+    }
+
+    /**
+     * Plan 1E: draws in this theme from now on (normalized; unknown is Oxblood). A change drops the cached shaders and
+     * raster and invalidates; the same theme changes nothing. The context is kept as its application context only to
+     * load the theme's raster.
+     */
+    void setTheme(Context context, String id) {
+        String next = RoseTheme.normalize(id);
+        if (context != null) {
+            resources = context.getApplicationContext() != null ? context.getApplicationContext() : context;
+        }
+        if (next.equals(theme)) return;
+        theme = next;
+        raster = null;
+        rasterFailed = false;
+        shade();
+        invalidateSelf();
+    }
+
+    String theme() { return theme; }
+
+    /** The theme's raster wallpaper, or null to draw the geometry (Oxblood, no context, or it cannot be loaded). */
+    private Bitmap raster() {
+        if (!RoseTheme.rasterWallpaper(theme) || resources == null || rasterFailed) return null;
+        if (raster != null) return raster;
+        try {
+            int id = resources.getResources().getIdentifier("rose_glacier_field", "drawable",
+                    resources.getPackageName());
+            BitmapFactory.Options options = new BitmapFactory.Options();
+            options.inScaled = false;
+            raster = id == 0 ? null : BitmapFactory.decodeResource(resources.getResources(), id, options);
+        } catch (RuntimeException | OutOfMemoryError e) {
+            raster = null;
+        }
+        rasterFailed = raster == null;
+        return raster;
     }
 
     private static Path polygon(float[] points) {
@@ -111,6 +170,22 @@ final class RoseOxbloodField extends Drawable {
         if (b.isEmpty() || alpha == 0) return;
         int save = canvas.save();
         canvas.clipRect(b);
+        Bitmap image = raster();
+        if (image != null) {
+            // The raster theme: its field colour, then the image scaled to cover, centred across, top-aligned.
+            art.setShader(null);
+            art.setColor(RoseTheme.Field.color(theme, RoseTheme.Field.BACKGROUND));
+            art.setAlpha(Math.round(Color.alpha(art.getColor()) * alpha / 255f));
+            canvas.drawRect(b, art);
+            float s = Math.max(b.width() / (float) image.getWidth(), b.height() / (float) image.getHeight());
+            float w = image.getWidth() * s, left = b.left + (b.width() - w) / 2f;
+            artBounds.set(left, b.top, left + w, b.top + image.getHeight() * s);
+            art.setColor(Color.BLACK);
+            art.setAlpha(alpha);
+            canvas.drawBitmap(image, null, artBounds, art);
+            canvas.restoreToCount(save);
+            return;
+        }
         float s = scale(b.width(), b.height());
         canvas.translate(b.left + offsetX(b.width(), s), b.top);
         canvas.scale(s, s);
@@ -159,7 +234,7 @@ final class RoseOxbloodField extends Drawable {
     }
 
     private void stroke(Canvas canvas, Path path, int color, float width, BlurMaskFilter filter) {
-        line.setColor(color);
+        line.setColor(RoseTheme.map(theme, color));
         line.setAlpha(Math.round((color >>> 24) * alpha / 255f));
         line.setStrokeWidth(width);
         line.setMaskFilter(filter);
@@ -175,6 +250,9 @@ final class RoseOxbloodField extends Drawable {
     }
 
     @Override public int getAlpha() { return alpha; }
-    @Override public void setColorFilter(ColorFilter colorFilter) { paint.setColorFilter(colorFilter); }
+    @Override public void setColorFilter(ColorFilter colorFilter) {
+        paint.setColorFilter(colorFilter);
+        art.setColorFilter(colorFilter);
+    }
     @Override public int getOpacity() { return alpha == 255 ? PixelFormat.OPAQUE : PixelFormat.TRANSLUCENT; }
 }

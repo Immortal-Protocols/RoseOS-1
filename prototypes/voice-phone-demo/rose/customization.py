@@ -1,4 +1,4 @@
-"""Rose's four live customization controls (Nov 7 plan 1O) as conversation tools: the producer side of Rose Agent's
+"""Rose's live customization controls (Nov 7 plan 1O; the theme is plan 1E) as conversation tools: the producer side of Rose Agent's
 ``customization_*`` app commands (workspace/rose-agent/app/src/dev/pixel/voice/CustomizationConfig.java).
 
 One catalog, ``workspace/rose-agent/app/assets/customization-agent-tools.json``, defines the controls for every
@@ -7,8 +7,9 @@ caller: Rose Agent serves it as its app-tool capabilities, this module turns it 
 ``app_command`` to ``dev.pixel.voice`` with the tool's operation and the validated arguments, over the existing phone
 link. Nothing here adds an endpoint or a phone action.
 
-The controls are the Home column count (0 = automatic), a curated Oxblood wallpaper variant, a bundled font, and the
-glasses-on hook. The hook's signal is any Bluetooth audio device connecting (glasses on) or the last one
+The controls are the Home column count (0 = automatic), a curated Oxblood wallpaper variant, a bundled font, the
+glasses-on hook, and the Rose theme (Oxblood or Glacier: colours and wallpaper across Home, Rose and the system
+surfaces; columns and font are kept). The hook's signal is any Bluetooth audio device connecting (glasses on) or the last one
 disconnecting (removal), the owner's choice; ``customization_state`` names it in ``glassesWear.basis``.
 
 Success is the phone's own ``verified``/``ok`` after it stored the value. Anything else, a lost or late reply
@@ -27,10 +28,12 @@ CATALOG = Path(__file__).resolve().parents[3] / 'workspace/rose-agent/app/assets
 TIMEOUT_S = 12.0  # SettingsAgentProvider allows 8 s per operation; the link adds its own round trip.
 
 POLICY_LINE = ('Use the customization tools only when the owner asks to change or check Rose Home columns, the Oxblood '
-               'wallpaper variant, the font or the glasses-on hook; read customization_state for relative requests and '
+               'wallpaper variant, the font, the glasses-on hook or the theme (for example "switch to Glacier" or "switch '
+               'back to Oxblood" is customization_theme); read customization_state for relative requests and '
                'report the returned state: a saved preference is not a visible change, so give Home\'s effectiveColumns, say so '
                'when home.applied is false. The glasses-on hook runs when a Bluetooth audio device connects. Report each '
-               'result by its outcome: applied (done and visible), saved_not_shown (saved, not yet shown), saved (hook '
+               'result by its outcome: applied (done and visible), saved_not_shown (saved, not yet shown), '
+               'shown_on_home (a theme Home and Rose show but the system surfaces have not confirmed), saved (hook '
                'setting stored), rejected, unavailable or uncertain, using its message; never say a change is done '
                'unless the outcome is applied.')
 
@@ -98,7 +101,9 @@ def command(name: str, args) -> dict:
     return {'action': 'app_command', 'packageName': PACKAGE, 'operation': name, 'params': validate(name, args)}
 
 
-HOME_TOOLS = frozenset({'customization_home_columns', 'customization_wallpaper', 'customization_font'})
+HOME_TOOLS = frozenset({'customization_home_columns', 'customization_wallpaper', 'customization_font', 'customization_theme'})
+# A theme is done only when Home drew it and SystemUI acknowledged drawing it (tray, chin, notifications, keyboard).
+SYSTEM_TOOLS = frozenset({'customization_theme'})
 UNAVAILABLE = frozenset({'offline', 'disconnected'})
 UNCERTAIN = frozenset({'timeout', 'uncertain', 'running', 'expired'})
 APPLY_WAIT_S, APPLY_POLL_S = 3.0, 0.5  # Home redraws within a frame or two of the saved change while Rose Agent runs
@@ -108,6 +113,8 @@ MESSAGES = {
     'saved_not_shown': ('Saved on the phone, but Home has not shown it yet. It appears when Rose Home next draws; '
                         'nothing else is needed.'),
     'saved': 'Saved on the phone.',
+    'shown_on_home': ('Home and Rose show it now, but the tray, notifications and keyboard have not confirmed it yet; '
+                      'they follow when the screen is on and the system bar is connected.'),
     'unavailable': 'The phone is not connected, so nothing was changed.',
     'uncertain': 'The phone did not confirm the change; it may or may not have happened. Read customization_state to check.',
 }
@@ -127,12 +134,18 @@ def outcome(name: str, result) -> dict:
     if not isinstance(result, dict):
         result = {'status': 'uncertain'}
     status = str(result.get('status', ''))
-    out = {k: result[k] for k in ('status', 'changed', 'customization', 'home', 'glassesWear', 'reason')
+    out = {k: result[k] for k in ('status', 'changed', 'customization', 'home', 'system', 'glassesWear', 'reason')
            if k in result}
     out['tool'] = name
     home = result.get('home') if isinstance(result.get('home'), dict) else {}
     if status == 'ok' and name == 'customization_state':
         kind = 'applied'
+    elif status == 'verified' and name in SYSTEM_TOOLS:
+        system = result.get('system') if isinstance(result.get('system'), dict) else {}
+        if home.get('applied') is not True:
+            kind = 'saved_not_shown'
+        else:
+            kind = 'applied' if system.get('applied') is True else 'shown_on_home'
     elif status == 'verified' and name in HOME_TOOLS:
         kind = 'applied' if home.get('applied') is True else 'saved_not_shown'
     elif status == 'verified':
@@ -154,6 +167,9 @@ def outcome(name: str, result) -> dict:
         asked = (result.get('customization') or {}).get('homeColumns') if isinstance(result.get('customization'), dict) else None
         out['message'] = ('Done: Home now shows ' + str(cols) + ' columns.' +
                           (' That is as many as fit this screen.' if asked not in (None, 0, cols) else ''))
+    elif kind == 'applied' and name == 'customization_theme':
+        custom = result.get('customization') if isinstance(result.get('customization'), dict) else {}
+        out['message'] = 'Done: Rose is now ' + str(custom.get('themeLabel') or custom.get('theme')) + ' everywhere.'
     else:
         out['message'] = MESSAGES[kind]
     return out
@@ -162,6 +178,17 @@ def outcome(name: str, result) -> dict:
 def _drawn(state, revision) -> bool:
     home = state.get('home') if isinstance(state, dict) and isinstance(state.get('home'), dict) else {}
     return home.get('applied') is True and home.get('appliedRevision') == revision
+
+
+def _system_shows(state, theme) -> bool:
+    system = state.get('system') if isinstance(state, dict) and isinstance(state.get('system'), dict) else {}
+    return theme is not None and system.get('applied') is True and system.get('shown') == theme
+
+
+def _settled(name, result) -> bool:
+    if not (result.get('home') or {}).get('applied'):
+        return False
+    return name not in SYSTEM_TOOLS or (result.get('system') or {}).get('applied') is True
 
 
 def call(phone, name: str, args) -> dict:
@@ -182,10 +209,12 @@ def call(phone, name: str, args) -> dict:
     except Exception as error:  # a lost link is not success, and the change may or may not have happened
         return {'ok': False, 'status': 'uncertain', 'outcome': 'uncertain', 'tool': name,
                 'message': 'The phone did not confirm the change (' + type(error).__name__ + '); read customization_state before retrying.'}
-    # A saved Home change is reported as applied only once Home has drawn that exact revision: re-read state briefly.
+    # A saved Home change is reported as applied only once Home has drawn that exact revision, and a theme only once
+    # SystemUI acknowledged drawing it too: re-read state briefly.
     if (name in HOME_TOOLS and isinstance(result, dict) and result.get('status') == 'verified'
-            and not (result.get('home') or {}).get('applied')):
+            and not _settled(name, result)):
         revision = (result.get('customization') or {}).get('revision')
+        theme = (result.get('customization') or {}).get('theme')
         deadline = clock() + APPLY_WAIT_S
         while revision is not None and clock() < deadline:
             sleep(APPLY_POLL_S)
@@ -198,5 +227,9 @@ def call(phone, name: str, args) -> dict:
                 break
             if _drawn(state, revision):
                 result = dict(result, home=state['home'])
-                break
+                if name not in SYSTEM_TOOLS:
+                    break
+                if _system_shows(state, theme):
+                    result = dict(result, system=state['system'])
+                    break
     return outcome(name, result)

@@ -421,7 +421,7 @@ test('app labels and page dots follow the Oxblood type and dot treatment (#410)'
  // oxblood.css:43 with style.css:590: 11.5px, weight 500, #d2b9ab, text-shadow 0 1px 4px rgba(0,0,0,.7). Inter falls
  // back to the system UI sans; no font asset is added.
  const label=cell.slice(cell.indexOf(' static TextView label('));
- assert.match(label,/name\.setTextSize\(11\.5f\);\n  name\.setTextColor\(0xffd2b9ab\);\n  name\.setTypeface\(CustomizationVisuals\.labelTypeface\(context, 500\)\); \/\/ 1O font choice; default SANS_SERIF 500/);
+ assert.match(label,/name\.setTextSize\(11\.5f\);\n  name\.setTextColor\(RoseThemeNow\.c\(0xffd2b9ab\)\); \/\/ plan 1E: the theme's label ink \(identity in Oxblood\)\n  name\.setTypeface\(CustomizationVisuals\.labelTypeface\(context, 500\)\); \/\/ 1O font choice; default SANS_SERIF 500/);
  assert.match(label,/name\.setShadowLayer\(dp\(density, 2\), 0, dp\(density, 1\), 0xb3000000\);/);
  assert.match(cell,/static int dp\(float density, float value\) \{ return \(int\) \(value \* density\); \}/,'MainActivity.dp\'s truncation, so cells keep their sizes');
  assert.ok(!/chatFont\(800\)/.test(label),'not the rounded 800 face');

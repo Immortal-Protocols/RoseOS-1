@@ -32,7 +32,7 @@ final class HomeGlassTile extends Drawable {
  HomeGlassTile(float density) {
   this.density = density;
   radius = RADIUS_DP * density;
-  fill.setColor(FILL);
+  fill.setColor(RoseThemeNow.c(FILL));
   line.setStyle(Paint.Style.STROKE);
   line.setStrokeWidth(Math.max(1f, density));
  }
@@ -76,13 +76,14 @@ final class HomeGlassTile extends Drawable {
  @Override public void draw(Canvas canvas) {
   if (box.isEmpty()) return;
   drawBackdrop(canvas);
+  fill.setColor(RoseThemeNow.c(FILL)); // plan 1E: resolved per draw, so a theme change needs no rebuild
   canvas.drawRoundRect(box, radius, radius, fill);
   // box-shadow inset 0 0 0 1px: a ring just inside the edge.
   float w = line.getStrokeWidth(), half = w / 2;
-  line.setColor(RING);
+  line.setColor(RoseThemeNow.c(RING));
   canvas.drawRoundRect(box.left + half, box.top + half, box.right - half, box.bottom - half, radius - half, radius - half, line);
   // box-shadow inset 0 1px 0: a brighter line along the inside of the top edge, between the corners.
-  line.setColor(TOP_EDGE);
+  line.setColor(RoseThemeNow.c(TOP_EDGE));
   canvas.drawLine(box.left + radius, box.top + w + half, box.right - radius, box.top + w + half, line);
  }
 

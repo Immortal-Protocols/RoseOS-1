@@ -28,15 +28,18 @@ GOLDEN = THEMES / 'reference' / 'glacier-map-golden.txt'
 
 TARGETS = {
     'app': ('workspace/rose-agent/app/src/dev/pixel/voice/RoseTheme.java', 'dev.pixel.voice'),
+    'shell': ('os/overlays/frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/RoseTheme.java',
+              'com.android.wm.shell'),
+    'launcher3': ('os/overlays/packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseTheme.java',
+                  'com.android.quickstep.fallback'),
+    'keyboard': ('os/overlays/packages/apps/RoseKeyboard/src/dev/pixel/rose/keyboard/RoseTheme.java',
+                 'dev.pixel.rose.keyboard'),
 }
-# The OS packages get their copies when their renderers adopt the theme (each copy is a compile-contract input):
-#   shell     os/overlays/frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/RoseTheme.java
-#   launcher3 os/overlays/packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseTheme.java
-#   keyboard  os/overlays/packages/apps/RoseKeyboard/src/dev/pixel/rose/keyboard/RoseTheme.java
 
 # Raster wallpapers are copied byte for byte into the packages that draw them (checked like the Java copies).
 ASSET_COPIES = {
-    'glacier/field.png': ['workspace/rose-agent/app/res/drawable-nodpi/rose_glacier_field.png'],
+    'glacier/field.png': ['workspace/rose-agent/app/res/drawable-nodpi/rose_glacier_field.png',
+                          'os/overlays/packages/apps/Launcher3/quickstep/res/drawable-nodpi/rose_glacier_field.png'],
 }
 
 # Every colour literal the native renderers draw with is a golden input; these sources are scanned.

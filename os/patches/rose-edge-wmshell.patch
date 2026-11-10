@@ -1,9 +1,9 @@
 diff --git a/libs/WindowManager/Shell/src/com/android/wm/shell/RoseEdgeMicSlot.java b/libs/WindowManager/Shell/src/com/android/wm/shell/RoseEdgeMicSlot.java
 new file mode 100644
-index 0000000..0aa0b49
+index 0000000..00157ba
 --- /dev/null
 +++ b/libs/WindowManager/Shell/src/com/android/wm/shell/RoseEdgeMicSlot.java
-@@ -0,0 +1,395 @@
+@@ -0,0 +1,412 @@
 +/*
 + * Copyright 2026
 + * SPDX-License-Identifier: Apache-2.0
@@ -252,6 +252,9 @@ index 0000000..0aa0b49
 +        static final int KNOCKOUT = 0xff1c0609;
 +        static final int UNKNOWN_ALPHA = 110;
 +
++        /** Plan 1E: the theme this draw uses (RoseThemeMirror); muted keeps its warm meaning (RoseTheme.warm). */
++        private String mTheme = RoseTheme.DEFAULT;
++        private final Runnable mThemeChanged = this::invalidate;
 +        private final Paint mPlate = new Paint();
 +        private final Paint mPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
 +        private final RectF mWell = new RectF();
@@ -261,6 +264,18 @@ index 0000000..0aa0b49
 +            setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_YES);
 +            setClickable(true);
 +            refresh();
++        }
++
++        @Override
++        protected void onAttachedToWindow() {
++            super.onAttachedToWindow();
++            RoseThemeMirror.listen(mThemeChanged);
++        }
++
++        @Override
++        protected void onDetachedFromWindow() {
++            RoseThemeMirror.unlisten(mThemeChanged);
++            super.onDetachedFromWindow();
 +        }
 +
 +        /** Home's spoken names (HomeTray, RoseConversationActivity): the action a tap takes. */
@@ -273,10 +288,12 @@ index 0000000..0aa0b49
 +        @Override
 +        protected void onDraw(Canvas canvas) {
 +            final float d = mWindowContext.getResources().getDisplayMetrics().density;
++            mTheme = RoseThemeMirror.current();
 +            // Opaque edge plate over the whole slot, continuous with Launcher3's edge around it.
 +            final float[] positions = new float[PLATE_STOPS_DP.length];
 +            for (int i = 0; i < positions.length; i++) positions[i] = PLATE_STOPS_DP[i] / EDGE_HEIGHT_DP;
-+            mPlate.setShader(new LinearGradient(0, mPlateTop, 0, mPlateTop + dp(EDGE_HEIGHT_DP), PLATE_COLORS,
++            mPlate.setShader(new LinearGradient(0, mPlateTop, 0, mPlateTop + dp(EDGE_HEIGHT_DP),
++                    RoseTheme.map(mTheme, PLATE_COLORS),
 +                    positions, Shader.TileMode.CLAMP));
 +            canvas.drawRect(0, 0, getWidth(), getHeight(), mPlate);
 +            final int layer = mKnown ? -1 : canvas.saveLayerAlpha(0, 0, getWidth(), getHeight(), UNKNOWN_ALPHA);
@@ -294,8 +311,8 @@ index 0000000..0aa0b49
 +            mWell.set(cx - h / 2, cy - h / 2, cx + h / 2, cy + h / 2);
 +            mPaint.reset();
 +            mPaint.setAntiAlias(true);
-+            mPaint.setShader(new LinearGradient(0, mWell.top, 0, mWell.bottom, FILL_TOP, FILL_BOTTOM,
-+                    Shader.TileMode.CLAMP));
++            mPaint.setShader(new LinearGradient(0, mWell.top, 0, mWell.bottom, RoseTheme.map(mTheme, FILL_TOP),
++                    RoseTheme.map(mTheme, FILL_BOTTOM), Shader.TileMode.CLAMP));
 +            c.drawRoundRect(mWell, r, r, mPaint);
 +            mPaint.setShader(null);
 +            // inset 0 1px 2px rgba(0,0,0,.4): a soft dark band just inside the top edge.
@@ -315,7 +332,7 @@ index 0000000..0aa0b49
 +            final float s = Math.max(1f, d);
 +            final float half = s / 2;
 +            mPaint.setStrokeWidth(s);
-+            mPaint.setColor(RING);
++            mPaint.setColor(RoseTheme.map(mTheme, RING));
 +            c.drawRoundRect(mWell.left + half, mWell.top + half, mWell.right - half, mWell.bottom - half, r - half,
 +                    r - half, mPaint);
 +        }
@@ -334,19 +351,19 @@ index 0000000..0aa0b49
 +                mPaint.setAntiAlias(true);
 +                mPaint.setStyle(Paint.Style.STROKE);
 +                mPaint.setStrokeWidth(4 * d);
-+                mPaint.setColor(MUTED_GLOW);
++                mPaint.setColor(RoseTheme.warm(mTheme, MUTED_GLOW));
 +                mPaint.setMaskFilter(new BlurMaskFilter(5 * d, BlurMaskFilter.Blur.NORMAL));
 +                c.drawRoundRect(plate, r, r, mPaint);
 +                mPaint.setMaskFilter(null);
 +                mPaint.setStrokeWidth(w);
-+                mPaint.setColor(MUTED_RING);
++                mPaint.setColor(RoseTheme.warm(mTheme, MUTED_RING));
 +                c.drawRoundRect(plate, r - w / 2, r - w / 2, mPaint);
 +            }
 +            final int save = c.save();
 +            final float s = GLYPH_DP * d / 24f;
 +            c.translate(cx - 12 * s, cy - 12 * s);
 +            c.scale(s, s);
-+            final int ink = muted ? MUTED_INK : INK;
++            final int ink = muted ? RoseTheme.warm(mTheme, MUTED_INK) : RoseTheme.map(mTheme, INK);
 +            final int body = muted ? (ink & 0x00ffffff) | (Math.round(.55f * 255) << 24) : ink;
 +            mPaint.reset();
 +            mPaint.setAntiAlias(true);
@@ -361,7 +378,7 @@ index 0000000..0aa0b49
 +            if (muted) {
 +                // The slash, knocked out of the well (the well's own dark) and then drawn.
 +                mPaint.setStrokeWidth(3.4f);
-+                mPaint.setColor(KNOCKOUT);
++                mPaint.setColor(RoseTheme.map(mTheme, KNOCKOUT));
 +                c.drawLine(4.5f, 3.5f, 19.5f, 20.5f, mPaint);
 +                mPaint.setStrokeWidth(1.9f);
 +                mPaint.setColor(ink);

@@ -68,16 +68,16 @@ final class RosePearl extends Drawable {
    if (breath >= 0) {
     float blur = 8 + 6 * t, spread = 3 + 3 * t;
     int glowA = Math.round((.25f + .10f * t) * 255);
-    paint.setColor((glowA << 24) | 0xe65064);
+    paint.setColor(RoseThemeNow.c((glowA << 24) | 0xe65064));
     paint.setMaskFilter(new BlurMaskFilter(Math.max(.1f, (blur / 2 * d - .5f) / .57735f), BlurMaskFilter.Blur.NORMAL));
     c.drawCircle(cx, cy, r + spread * d, paint);
     paint.setMaskFilter(null);
     int ringA = Math.round((.5f + .25f * t) * 255);
     int rgb = blend(0xe65064, 0xff788c, t);
-    paint.setColor((ringA << 24) | rgb);
-   } else paint.setColor(LISTEN_RING);
+    paint.setColor(RoseThemeNow.c((ringA << 24) | rgb));
+   } else paint.setColor(RoseThemeNow.c(LISTEN_RING));
    c.drawCircle(cx, cy, r + ring * d, paint);
-   paint.setColor(RING_GAP);
+   paint.setColor(RoseThemeNow.c(RING_GAP));
    c.drawCircle(cx, cy, r + gap * d, paint);
   }
   // 0 2px 3px rgba(0,0,0,.6)
@@ -89,7 +89,7 @@ final class RosePearl extends Drawable {
   float gx = cx - r + .34f * 2 * r, gy = cy - r + .28f * 2 * r;
   float far = (float) Math.hypot(cx + r - gx, cy + r - gy);
   paint.setColor(0xff000000); // opaque: the shader alone colours the pearl
-  paint.setShader(new RadialGradient(gx, gy, far, silver ? SILVER : RUBY, silver ? SILVER_STOPS : RUBY_STOPS, Shader.TileMode.CLAMP));
+  paint.setShader(new RadialGradient(gx, gy, far, silver ? SILVER : RoseThemeNow.c(RUBY), silver ? SILVER_STOPS : RUBY_STOPS, Shader.TileMode.CLAMP));
   c.drawCircle(cx, cy, r, paint);
   paint.setShader(null);
   // inset 0 -1px 2px rgba(0,0,0,.35): a soft shade just inside the lower rim.

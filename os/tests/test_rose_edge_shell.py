@@ -136,9 +136,11 @@ class RoseEdgeShellTest(unittest.TestCase):
             (gen/f'{name}.java').write_text(aidl_to_java(self.source[f'{name}.aidl']))
         sources = [str(p) for p in sorted((HARNESS/'stubs').rglob('*.java'))]
         sources += [str(p) for p in sorted((self.tmp/'gen').rglob('*.java'))]
-        # The tray's real AgentTrayLink (an overlay, unchanged) is compiled with the slot that reuses it.
+        # The tray's real AgentTrayLink (an overlay, unchanged) is compiled with the slot that reuses it, and so are
+        # plan 1E's pure RoseTheme and RoseThemeMirror (overlays) that the slot draws its theme with.
         sources += [str(self.tree/EDGE/'RoseEdgePolicy.java'), str(self.tree/EDGE/'RoseEdgeController.java'),
-            str(self.tree/MIC), str(TRAY/'AgentTrayLink.java'), str(HARNESS/'RoseEdgePolicyTest.java')]
+            str(self.tree/MIC), str(TRAY/'AgentTrayLink.java'), str(TRAY/'RoseTheme.java'), str(TRAY/'RoseThemeMirror.java'),
+            str(HARNESS/'RoseEdgePolicyTest.java')]
         compiled = subprocess.run(['java', '-m', 'jdk.compiler/com.sun.tools.javac.Main', '-nowarn', '-d', str(out),
             *sources], capture_output=True, text=True)
         self.assertEqual(compiled.returncode, 0, compiled.stderr)

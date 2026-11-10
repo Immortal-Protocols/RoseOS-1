@@ -20,6 +20,11 @@ import android.graphics.drawable.Drawable;
  * blurs (the beam's soft glow and the join's bloom). The 390x844 artwork is placed as the reference CSS places it
  * (background-size cover, background-position center top): scaled to cover, centred across and top-aligned, never stretched. HOME is Home and the app pages; ROSE is the
  * conversation and Background Work. Decorative: no text, no touch, no state.
+ *
+ * <p>Plan 1E: the field belongs to the theme it was built in (RoseThemeNow at construction). A theme with a raster
+ * wallpaper (Glacier) draws that image instead, on its field colour, placed the same way (cover, centred across,
+ * top-aligned); Oxblood draws this geometry. If the raster is unavailable the geometry is drawn in the theme's own
+ * colours (RoseTheme.map), the approved prototype's fallback; another theme's wallpaper is never drawn.
  */
 final class OxbloodField extends Drawable {
  static final int HOME = 0, ROSE = 1;
@@ -28,6 +33,10 @@ final class OxbloodField extends Drawable {
  final int kind;
  final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.DITHER_FLAG);
  float scale = 1, dx, dy;
+
+ /** Plan 1E: the theme this field draws, and its raster wallpaper (null for a procedural theme). */
+ final String theme = RoseThemeNow.id;
+ final android.graphics.Bitmap art = RoseThemeNow.raster(theme);
 
  OxbloodField(int kind) { this.kind = kind; }
 
@@ -119,6 +128,7 @@ final class OxbloodField extends Drawable {
  private static int index(int line, int i, int w, boolean horizontal) { return horizontal ? line * w + i : i * w + line; }
 
  private void paintField(Canvas canvas) {
+  if (art != null) { paintArt(canvas); return; }
   int save = canvas.save();
   canvas.clipRect(getBounds());
   canvas.translate(dx, dy);
@@ -127,26 +137,38 @@ final class OxbloodField extends Drawable {
   canvas.restoreToCount(save);
  }
 
+ /** The theme's raster wallpaper: its field colour, then the image scaled to cover, centred across, top-aligned. */
+ private void paintArt(Canvas canvas) {
+  Rect b = getBounds();
+  paint.reset();
+  paint.setColor(RoseTheme.Field.color(theme, RoseTheme.Field.BACKGROUND));
+  canvas.drawRect(b, paint);
+  float s = Math.max(b.width() / (float) art.getWidth(), b.height() / (float) art.getHeight());
+  float w = art.getWidth() * s, left = b.left + (b.width() - w) / 2f;
+  paint.reset(); paint.setFilterBitmap(true); paint.setDither(true);
+  canvas.drawBitmap(art, null, new RectF(left, b.top, left + w, b.top + art.getHeight() * s), paint);
+ }
+
  // ---- oxblood-home.svg ----
  private void home(Canvas c) {
-  fill(c, rect(0, 0, VIEW_W, VIEW_H), 0xff170104);
+  fill(c, rect(0, 0, VIEW_W, VIEW_H), RoseTheme.map(theme, 0xff170104));
   Path pane = poly(0, 0, 290, 0, 208, 226, 0, 297);
-  linear(c, pane, 0, 0, .55f, 1, new int[]{0xff5a514f, 0xff2a2221, 0xff171110}, new float[]{0, .5f, 1});
-  fill(c, poly(0, 297, 208, 226, 127, 391, 63, 414, 0, 610), 0xff0f0606);
+  linear(c, pane, 0, 0, .55f, 1, RoseTheme.map(theme, new int[]{0xff5a514f, 0xff2a2221, 0xff171110}), new float[]{0, .5f, 1});
+  fill(c, poly(0, 297, 208, 226, 127, 391, 63, 414, 0, 610), RoseTheme.map(theme, 0xff0f0606));
   Path right = poly(290, 0, 390, 0, 390, 300, 63, 414, 127, 391);
-  linear(c, right, 1, 0, 0, .8f, new int[]{0xff2a0309, 0xff46040f, 0xff5e0a1a}, new float[]{0, .55f, 1});
+  linear(c, right, 1, 0, 0, .8f, RoseTheme.map(theme, new int[]{0xff2a0309, 0xff46040f, 0xff5e0a1a}), new float[]{0, .55f, 1});
   Path fan = poly(127, 391, 390, 190, 390, 300, 63, 414);
-  linear(c, fan, 0, 1, 1, 0, new int[]{argb(.9f, 0x8a1426), argb(.3f, 0x5e0a1a), argb(0, 0x2a0309)}, new float[]{0, .6f, 1});
+  linear(c, fan, 0, 1, 1, 0, RoseTheme.map(theme, new int[]{argb(.9f, 0x8a1426), argb(.3f, 0x5e0a1a), argb(0, 0x2a0309)}), new float[]{0, .6f, 1});
   Path lower = poly(63, 414, 390, 300, 390, 844, 0, 844, 0, 610);
-  linear(c, lower, 0, 0, 0, 1, new int[]{0xff3b020c, 0xff250207, 0xff1b0104, 0xff170104}, new float[]{0, .45f, .8f, 1});
+  linear(c, lower, 0, 0, 0, 1, RoseTheme.map(theme, new int[]{0xff3b020c, 0xff250207, 0xff1b0104, 0xff170104}), new float[]{0, .45f, .8f, 1});
   Path beam = poly(284, 0, 312, 0, 136, 392, 120, 392);
-  linear(c, beam, 0, 0, 0, 1, new int[]{argb(.26f, 0xf4dccf), argb(.12f, 0xf4dccf), argb(.3f, 0xffd2c8)}, new float[]{0, .7f, 1});
-  line(c, 286, 0, 121, 392, 0xfff1e6, .45f, 3.5f, 2.5f);
-  line(c, 286, 0, 121, 392, 0xfff1e6, 1, 1.3f, 0);
-  line(c, 312, 0, 136, 392, 0xf0cfc2, .45f, .8f, 0);
-  line(c, 63, 414, 390, 300, 0xd65a69, .55f, 1, 0);
-  line(c, 63, 414, 0, 610, 0xa0283c, .7f, 1, 0);
-  line(c, 208, 226, 0, 297, 0xc9b6ad, .22f, .8f, 0);
+  linear(c, beam, 0, 0, 0, 1, RoseTheme.map(theme, new int[]{argb(.26f, 0xf4dccf), argb(.12f, 0xf4dccf), argb(.3f, 0xffd2c8)}), new float[]{0, .7f, 1});
+  line(c, 286, 0, 121, 392, RoseTheme.map(theme, 0xfff1e6), .45f, 3.5f, 2.5f);
+  line(c, 286, 0, 121, 392, RoseTheme.map(theme, 0xfff1e6), 1, 1.3f, 0);
+  line(c, 312, 0, 136, 392, RoseTheme.map(theme, 0xf0cfc2), .45f, .8f, 0);
+  line(c, 63, 414, 390, 300, RoseTheme.map(theme, 0xd65a69), .55f, 1, 0);
+  line(c, 63, 414, 0, 610, RoseTheme.map(theme, 0xa0283c), .7f, 1, 0);
+  line(c, 208, 226, 0, 297, RoseTheme.map(theme, 0xc9b6ad), .22f, .8f, 0);
   // The hot join: a broad bloom and a small bright core, both tilted -20 degrees.
   int save = c.save();
   c.rotate(-20, 128, 388);
@@ -155,7 +177,7 @@ final class OxbloodField extends Drawable {
   // objectBoundingBox radial (r=.5 of a 140x80 box) is an ellipse: the gradient is squashed by its own local
   // matrix, so the blur stays round as in SVG, where the filter blurs the drawn ellipse in user space.
   RadialGradient join = new RadialGradient(128, 388, 70,
-    new int[]{0xfffff3ea, argb(.85f, 0xff6a78), argb(.45f, 0xc0283f), argb(0, 0xc0283f)}, new float[]{0, .25f, .55f, 1}, Shader.TileMode.CLAMP);
+    RoseTheme.map(theme, new int[]{0xfffff3ea, argb(.85f, 0xff6a78), argb(.45f, 0xc0283f), argb(0, 0xc0283f)}), new float[]{0, .25f, .55f, 1}, Shader.TileMode.CLAMP);
   android.graphics.Matrix squash = new android.graphics.Matrix(); squash.setScale(1, 40f / 70f, 128, 388); join.setLocalMatrix(squash);
   paint.setShader(join);
   paint.setAlpha(Math.round(.9f * 255));
@@ -165,25 +187,25 @@ final class OxbloodField extends Drawable {
   save = c.save();
   c.rotate(-20, 127, 390);
   paint.reset(); paint.setAntiAlias(true);
-  paint.setColor(0xfffff3ea); paint.setAlpha(Math.round(.85f * 255)); paint.setMaskFilter(blur(2.5f));
+  paint.setColor(RoseTheme.map(theme, 0xfffff3ea)); paint.setAlpha(Math.round(.85f * 255)); paint.setMaskFilter(blur(2.5f));
   c.drawOval(new RectF(127 - 16, 390 - 7, 127 + 16, 390 + 7), paint);
   c.restoreToCount(save);
  }
 
  // ---- oxblood-rose.svg ----
  private void rose(Canvas c) {
-  linear(c, rect(0, 0, VIEW_W, VIEW_H), 0, 0, 0, 1, new int[]{0xff120a0d, 0xff0e080b, 0xff12060a}, new float[]{0, .6f, 1});
+  linear(c, rect(0, 0, VIEW_W, VIEW_H), 0, 0, 0, 1, RoseTheme.map(theme, new int[]{0xff120a0d, 0xff0e080b, 0xff12060a}), new float[]{0, .6f, 1});
   Path sheet = poly(390, 118, 390, 292, 295, 580);
-  linear(c, sheet, 1, 0, 0, 1, new int[]{argb(.35f, 0x8a3a4c), argb(0, 0x8a3a4c)}, new float[]{0, 1});
-  line(c, 390, 292, 295, 580, 0xffb3bd, .7f, 1, 0);
+  linear(c, sheet, 1, 0, 0, 1, RoseTheme.map(theme, new int[]{argb(.35f, 0x8a3a4c), argb(0, 0x8a3a4c)}), new float[]{0, 1});
+  line(c, 390, 292, 295, 580, RoseTheme.map(theme, 0xffb3bd), .7f, 1, 0);
   Path plane = poly(295, 580, 390, 515, 390, 844, 123, 844, 206, 642);
-  linear(c, plane, 0, 0, 1, 1, new int[]{argb(.9f, 0x7a1428), 0xff36020d, 0xff1a0207}, new float[]{0, .45f, 1});
+  linear(c, plane, 0, 0, 1, 1, RoseTheme.map(theme, new int[]{argb(.9f, 0x7a1428), 0xff36020d, 0xff1a0207}), new float[]{0, .45f, 1});
   Path edge = new Path(); edge.moveTo(206, 642); edge.lineTo(295, 580); edge.lineTo(390, 515);
-  stroke(c, edge, 0xffc4c8, .5f, 4, 3);
-  stroke(c, edge, 0xffc4c8, 1, 1.2f, 0);
-  line(c, 206, 642, 123, 844, 0xc2384c, .55f, 1, 0);
+  stroke(c, edge, RoseTheme.map(theme, 0xffc4c8), .5f, 4, 3);
+  stroke(c, edge, RoseTheme.map(theme, 0xffc4c8), 1, 1.2f, 0);
+  line(c, 206, 642, 123, 844, RoseTheme.map(theme, 0xc2384c), .55f, 1, 0);
   paint.reset(); paint.setAntiAlias(true); paint.setDither(true);
-  paint.setShader(new RadialGradient(295, 580, 26, new int[]{argb(.9f, 0xfff0f0), argb(0, 0xff8a9a)}, null, Shader.TileMode.CLAMP));
+  paint.setShader(new RadialGradient(295, 580, 26, RoseTheme.map(theme, new int[]{argb(.9f, 0xfff0f0), argb(0, 0xff8a9a)}), null, Shader.TileMode.CLAMP));
   c.drawCircle(295, 580, 26, paint);
  }
 
