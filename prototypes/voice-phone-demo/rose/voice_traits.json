@@ -1,0 +1,179 @@
+{
+ "source": {
+  "repo": "gradium/phonon-voices",
+  "revision": "0ee17205f254b5abc43b266c8a0f215565c352f7",
+  "model": "31m",
+  "prompts": [
+   "exclamation_02",
+   "happy_01",
+   "question_01",
+   "support_01",
+   "support_04"
+  ],
+  "method": "scripts/describe_voices.py"
+ },
+ "voices": {
+  "zoey": {
+   "voice_id": "NbpkqMVS3CJeq2j8",
+   "language": "en",
+   "locale": "en-us",
+   "gender": "female",
+   "samples": {
+    "exclamation_02": "4d625336fa20fa256ed8adead4a2bac68045a754ea23c9fc9093718acd946bd0",
+    "happy_01": "e6bf3752abd3e9ec69e7c6e83fa0c6c0ec91fcce0ca6f6c5d4b39ba7d186b4bd",
+    "question_01": "37a1295d9bf76c75d9c072c5edeb5fc1a6d6cdf08cfa4bffa4255d2410ed1297",
+    "support_01": "af1b11ccb58b748de43e3e25baaffe69aa3366fb5896bd94569e8d92f17aa36f",
+    "support_04": "fa72f82bb1808869c7194db5bad81fca0a6217365e51718b239c8f2bff0f1bc2"
+   },
+   "pitch_hz": 199.7,
+   "pitch_range_st": 5.31,
+   "brightness_db": -12.72,
+   "speech_s": 16.11,
+   "voiced_frames": 967
+  },
+  "harper": {
+   "voice_id": "4SZHfMpw-p46Ywgs",
+   "language": "en",
+   "locale": "en-us",
+   "gender": "female",
+   "samples": {
+    "exclamation_02": "9e0f3f125435249fd4629d30194ce9fb82ed3b2c5e10c04e337feb2d30ab8c9d",
+    "happy_01": "a6ad7e61ceac04a013d5ba88183e229f1fd68f7d3ec52107375eda34c1dc7839",
+    "question_01": "96b4beb987e38c767f569426301e0f663df1fa138ca3a06b62563d63eae524b5",
+    "support_01": "6ae58725938928c893261640cf41dbff73beaf0a9f273cdf69dc0ba038250f80",
+    "support_04": "487f6e354ab4436eace63bee7589ef5ffd770661a39516e55beef5ab1617436c"
+   },
+   "pitch_hz": 193.0,
+   "pitch_range_st": 5.03,
+   "brightness_db": -15.92,
+   "speech_s": 16.35,
+   "voiced_frames": 960
+  },
+  "everly": {
+   "voice_id": "vjFyp2BcCyTlUmYb",
+   "language": "en",
+   "locale": "en-us",
+   "gender": "female",
+   "samples": {
+    "exclamation_02": "6acd7506e63564b48e0a7453bc94e858e22430a586717fa68587d09d8fdf5083",
+    "happy_01": "8530fa4f641609f585821aee520840404d2e56ceb1d00be43a85a3e415144485",
+    "question_01": "4c8f5d09bb1a66deaa973703616c12febe7eb8e864a5533759eed5747c17188c",
+    "support_01": "ca68a120c6d0bcaa25fa9b13d8fe16cbe3f52ffed868ff1dc0e6abab91dbc1e0",
+    "support_04": "6d8a2857424c2a0a53273afe794b1d23efeaa93c8e8b4475b83597907951a8ec"
+   },
+   "pitch_hz": 182.2,
+   "pitch_range_st": 4.19,
+   "brightness_db": -12.55,
+   "speech_s": 17.14,
+   "voiced_frames": 937
+  },
+  "juniper": {
+   "voice_id": "NIWIOv5vTi5eRMj8",
+   "language": "en",
+   "locale": "en-us",
+   "gender": "female",
+   "samples": {
+    "exclamation_02": "0e7d2e962a5391b3fd736522c58f6d6b7af01abb7eb8645f27dda72c15f6928c",
+    "happy_01": "dedeeeb112e017cd20d32841f9a25cfe5ba26091dd70716003d7a6ab0a359833",
+    "question_01": "555915011bf6e1da4c6e2256733dad25d6ff1afb70dddba5f6318d353c8d97a8",
+    "support_01": "48ee1af137d70bffdad41d6db8ed7d93a8e63bdf77dda6b5b3ffb8db306feb8a",
+    "support_04": "595e0668a9a76acd49e256ce38eab2e66f47375f5b5b9a6a63678f93fd7a8364"
+   },
+   "pitch_hz": 166.9,
+   "pitch_range_st": 6.66,
+   "brightness_db": -14.24,
+   "speech_s": 16.56,
+   "voiced_frames": 986
+  },
+  "hadley": {
+   "voice_id": "bXwrkHhURL1VFJdG",
+   "language": "en",
+   "locale": "en-us",
+   "gender": "female",
+   "samples": {
+    "exclamation_02": "c93132c7784ab8a545f945c7f1b5df7ea5e90b539b99ad23e65d6dc5838652e8",
+    "happy_01": "6e5bee749019e5d2f354eb1b5c11871b8745424bf053de41238f5a0e41647def",
+    "question_01": "764f8f5f48f11668d4b9b6cb164877554fd10fbbdb1b3c3fc0a91daa7f17915e",
+    "support_01": "6c3440228bc56849a35e1eb6853a51a91eff30f33c97df8fd705625a42134487",
+    "support_04": "d867a99ab40c87bead9c1ef98c1bead2840ccab31fd6dfcee896a9225c6db565"
+   },
+   "pitch_hz": 178.8,
+   "pitch_range_st": 6.07,
+   "brightness_db": -14.51,
+   "speech_s": 17.59,
+   "voiced_frames": 1055
+  },
+  "delia": {
+   "voice_id": "nGzMHMPAWGaJFHOo",
+   "language": "en",
+   "locale": "en-us",
+   "gender": "female",
+   "samples": {
+    "exclamation_02": "9f46070dfa975087196b766232f60b8b4e41b26d92002fb9ffe501453b176b8a",
+    "happy_01": "d8d7ce275646310782be2889190785050971c0401e137676bb2e0fd69b525abc",
+    "question_01": "838688048660fe999c2ab19012747fd9027f197c5985bdaaff6ad22d6fe5be04",
+    "support_01": "7f3b8ee8f00cc306cbc0e99cd922eb2678d4ca182bbdfff8841857b8a34712f3",
+    "support_04": "8b56b7ebb19ce35bd18d1d424b2719bb62f6331d5cd04a560fd23aa741b6c77f"
+   },
+   "pitch_hz": 184.3,
+   "pitch_range_st": 7.07,
+   "brightness_db": -15.02,
+   "speech_s": 16.74,
+   "voiced_frames": 872
+  },
+  "easton": {
+   "voice_id": "LMDIYE0Oa377Qh6Z",
+   "language": "en",
+   "locale": "en-us",
+   "gender": "male",
+   "samples": {
+    "exclamation_02": "c4d18acad9999337fee64a940aa89f2eff79706d1847a9f892de513475f6d8a2",
+    "happy_01": "a6013696e53188aa69f8a85dba634749cb5c9be676711c6239ae0702b7635372",
+    "question_01": "69804c073fbbb025eaf5f8fac7a3f185f3eaeddf9a6dbf47f92502ba41c2ad83",
+    "support_01": "6915544c64de129ac20f5236d18e78e200a7793347b998b3e4cffc5f93b9688a",
+    "support_04": "68171eaaa0b0cdff9fdf11ea0afb12de726965e4f5cf2ccd08473b0421f3f448"
+   },
+   "pitch_hz": 143.4,
+   "pitch_range_st": 7.5,
+   "brightness_db": -13.22,
+   "speech_s": 14.33,
+   "voiced_frames": 851
+  },
+  "micah": {
+   "voice_id": "40QrMVgAxFiUnP9f",
+   "language": "en",
+   "locale": "en-us",
+   "gender": "male",
+   "samples": {
+    "exclamation_02": "cfff716bf3ffcdd60f46f0200c7f167cf53254463660f642ddd1d221ec493aef",
+    "happy_01": "9e8428d4027d4b960be09e48e05089801de467ef10203284dba96b20752d6cbb",
+    "question_01": "954f7c5978ffb2e776cdde77dbd98c28ce6db40406fc5e5d622e7841d9aaafca",
+    "support_01": "d0882d383a87ab565eab6681127d01a97c4ffd73c9b7a5293cce67f88bd8b206",
+    "support_04": "006b9f8dd5d325705223a817838e72d46d89a61026a429a2f844ddb0a77aee72"
+   },
+   "pitch_hz": 140.4,
+   "pitch_range_st": 4.47,
+   "brightness_db": -7.77,
+   "speech_s": 14.82,
+   "voiced_frames": 658
+  },
+  "miles": {
+   "voice_id": "d9XCyhjo4JhkHF1d",
+   "language": "en",
+   "locale": "en-us",
+   "gender": "male",
+   "samples": {
+    "exclamation_02": "956d227d80f3ff2a3dba47e010d9bb5b1d502164d69c9e6b96d284dde8a518c9",
+    "happy_01": "09a43ed5ade6bf063bdc97ca30ca85252c2d91654d461429653258631cade924",
+    "question_01": "442cbc24f28010ad0cc5fd6c8ca5227555e36577ccc5d3f511178399e6fb8a66",
+    "support_01": "b9204ac13f348d7b0da491cd00d9fbb47eb92203d232ca95d8a25f2e93e26bb6",
+    "support_04": "ec7624e5cfa87f0da8db899358bb0eeb389a81f9d733e96bb24424e015423b45"
+   },
+   "pitch_hz": 139.8,
+   "pitch_range_st": 4.75,
+   "brightness_db": -9.86,
+   "speech_s": 15.51,
+   "voiced_frames": 640
+  }
+ }
+}

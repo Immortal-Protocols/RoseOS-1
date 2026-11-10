@@ -810,7 +810,13 @@ class Server:
         if getattr(args, "vision_control", False):
             self.phone.vision_control = True  # parse_args allows it only with --brain codex --phone real
         self.mic = MicFeed(self.bus)
-        self.voice = args.voice
+        # Nov 9 plan 1D: with Codex, the owner's chosen name and voice persist in the config directory; an explicit
+        # --voice still wins for this run.
+        self.identity = None
+        if getattr(args, 'brain', 'local') == 'codex':
+            from .voice_identity import IdentityStore, VoiceIdentity
+            self.identity = VoiceIdentity(IdentityStore())
+        self.voice = self.identity.startup_voice(args.voice) if self.identity else (args.voice or "zoey")
         self.ready = False
         self.state: dict = {"state": "loading", "detail": "Starting"}
         self.load_s: dict[str, float] = {}
@@ -880,6 +886,17 @@ class Server:
         print(f"[rose] {name}: {self.load_s[name]:.1f} s", flush=True)
         return result
 
+    def _load_voice(self) -> None:
+        """Load the speaker with this run's voice; a saved voice that no longer loads falls back to the default."""
+        try:
+            self.speaker.load(self.voice)
+        except (ValueError, RuntimeError) as exc:
+            if not self.identity or self.args.voice or self.voice == "zoey":
+                raise
+            print(f"[rose] saved voice {self.voice} could not be loaded ({type(exc).__name__}); using zoey", flush=True)
+            self.voice = "zoey"
+            self.speaker.load(self.voice)
+
     def _load(self) -> None:
         t0 = time.monotonic()
         try:
@@ -914,13 +931,19 @@ class Server:
             self.speaker = Speaker(rt, self.bus, self.transport)
             self.speaker.on_audible = self.listener.set_rose_audible  # echo guard
             if cloud:
-                from .cloud_audio import load
+                from .cloud_audio import load, voices as cloud_voices
+                if self.identity and self.voice not in cloud_voices(cloud) and not self.args.voice:
+                    print(f"[rose] saved voice {self.voice} is not configured on this backend; using zoey", flush=True)
+                    self.voice = "zoey"
                 self._step("voice", "Loading Linux voice providers", lambda: load(cloud, rt, self.listener, self.speaker, self.voice))
             else:
-                self._step("speaker", f"Loading the voice ({self.voice})", lambda: self.speaker.load(self.voice))
+                self._step("speaker", f"Loading the voice ({self.voice})", self._load_voice)
+            if self.identity:
+                self.identity.loaded(getattr(self.speaker, 'voice', None) or self.voice)
             if codex:
                 from .codex_conductor import CodexConductor
-                self.conductor = CodexConductor(self.phone, self.bus, self.speaker, self.transcripts)
+                self.conductor = CodexConductor(self.phone, self.bus, self.speaker, self.transcripts,
+                                                identity=self.identity)
                 self.tasks = self.conductor
             else:
                 self.tasks = TaskManager(rt, self.task_brain, self.phone, self.bus, on_done=self._on_task_done)
@@ -1082,6 +1105,7 @@ class Server:
     def set_voice(self, voice: str) -> tuple[dict, int]:
         if voice not in self.voices():
             return {"ok": False, "error": f"unknown voice; choose from {', '.join(self.voices())}"}, 400
+        before = getattr(self.speaker, "voice", None)
         if self.speaker is not None:
             try:
                 self.speaker.set_voice(voice)  # loads the voice prompt on the runtime thread
@@ -1089,6 +1113,9 @@ class Server:
                 return {"ok": False, "error": f"voice change failed: {type(exc).__name__}"}, 500
         self.voice = voice
         self.bus.emit("voice", voice=voice)
+        if self.identity is not None and self.speaker is not None:
+            # The owner's pick here is the saved choice too (Nov 9 plan 1D), so revert and the next start follow it.
+            return {"ok": True, "voice": voice, "saved": self.identity.adopt(before, voice)}, 200
         return {"ok": True, "voice": voice}, 200
 
     # ----------------------------------------------------------- websockets
@@ -1403,7 +1430,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--cloud-audio", help="Linux voice provider JSON with existing local model paths")
     p.add_argument("--pair-host", action="append", default=[], help="Tailscale MagicDNS/IPv4 host for the shared QR; repeatable")
     p.add_argument("--port", type=int, default=8091)
-    p.add_argument("--voice", default="zoey", help="Phonon voice name (see /api/state voices)")
+    p.add_argument("--voice", default=None,
+                   help="Phonon voice name (see /api/state voices); default zoey, or with --brain codex the voice the "
+                        "owner chose in conversation")
     p.add_argument("--no-browser-audio", dest="browser_audio", action="store_false",
                    help="do not use the browser for audio; Rose's speech plays silently in real time")
     p.add_argument("--local-audio", action="store_true",

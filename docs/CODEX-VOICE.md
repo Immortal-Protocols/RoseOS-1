@@ -64,6 +64,34 @@ Conversation instructions keep short preferences, corrections and delegated choi
 
 Local task progress also feeds Rose Agent's main native task card through its existing version-1 presentation contract. Parallel running tasks share a summary; when all finish, the latest result is rendered as bounded plain text. The card is read-only and does not call the separate Node backend's Watch/Stop routes. The backend publishes activity before slow phone operations and resends current scoped task snapshots after the events socket reconnects. This client-side card adapter requires an updated Rose Agent APK; restarting only the Python backend does not replace packaged WebView assets.
 
+## Name and voice, by conversation
+
+The owner can rename the assistant ("I'd like to call you Nova") and describe the voice they want ("a warmer, lower
+voice"). There is no catalog, menu or settings screen. Codex calls `rename_assistant`, `change_voice` or `revert_voice`
+(`rose/voice_identity.py`); a change is confirmed only once it has been applied and saved.
+
+- **Name.** A short name of letters, saved and used for every new thread. Rose's phone app, pairing, About and any
+  wake word are unchanged.
+- **Voice.** The description becomes directions relative to the current voice: pitch, warmth, liveliness, pace,
+  gender, accent. The closest voice the running backend can load is applied, and the reply that follows is spoken in
+  it, so the owner hears the result and can refine it or revert. Gender stays the same unless the owner asks.
+- **No close match.** The voice is kept, Rose says what could not be matched, and the nearest alternative is offered
+  (applied only if the owner agrees). Every voice has an American accent, and only pitch, warmth, liveliness and pace
+  were measured, so "British" or "raspy" are named as limits rather than guessed.
+- **Grounding.** Matching reads `rose/voice_traits.json`: the provider's metadata (locale and gender) and the pitch,
+  pitch range, spectral tilt and pace measured from its own Phonon S (31M) samples at the revision the cloud already
+  pins (`scripts/describe_voices.py` reproduces it and records each sample's sha256). Voice names play no part.
+- **Availability.** On the Mac, a voice must load (cached, or a small download); on Linux/cloud, only the voices the
+  audio config gives files for exist. A closer voice that will not load is skipped and said.
+- **Persistence.** Both choices are saved in `identity.json` (0600) in `ROSE_CONFIG_DIR` (default
+  `~/.config/rose-local`) and restored at start with `--brain codex`. An explicit `--voice` wins for that run; a
+  saved voice that no longer loads falls back to Zoey. A file that exists but cannot be read is left alone: changes
+  are then refused and Rose says so, rather than overwriting the owner's saved choice.
+- **Another gender.** A qualifier given with a gender change ("a deeper man's voice") is judged among that gender's
+  voices; what Rose reports is always the measured change from the current voice.
+
+Nothing generates or clones a voice.
+
 ## Sessions, stop and transcripts
 
 One conversation thread coordinates up to two independent app threads. On the real phone
