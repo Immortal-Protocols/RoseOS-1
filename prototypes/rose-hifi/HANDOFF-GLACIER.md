@@ -70,11 +70,13 @@ time and never edited.
     working.", with Stay in Rose · Open switcher · Go Home. Nothing is relaunched and the keyboard never
     appears.
   - Rose work continues throughout.
+  - The 200 ms departure is re-validated when it runs: if the origin was closed or replaced meanwhile,
+    Rose stays with the unavailable sheet and no keyboard; if the person went Home, it is abandoned.
   - **Harness only:** the platform acknowledgement is simulated and selectable in the review harness:
     success or failure after 420 ms (the V3 fixture value) or manual. This is not a UX timing rule. The
     origin task can be set to alive, closed or replaced there too.
 
-## Evidence (see `out/glacier/glacier-check.json` for the bound run)
+## Evidence (bound run: `evidence/glacier-330277ed/glacier-check.json`)
 
 - **Rendered (genuine) evidence.**
   - Headless Chromium + SwiftShader screenshots at 384×832 design, iPhone 13 (390 wide, 654 pt screen),
@@ -82,7 +84,11 @@ time and never edited.
   - Real clicks, and CDP touch on phones.
   - Contrast: the foreground is the computed text colour with transitions frozen; the background is the
     rendered pixels beneath the hidden text; the reported figure is the 5th percentile.
-  - Results: every measured text pair is at least 5.9:1 (warm error text), and every glyph at least 9.7:1.
+  - Results (bound run on `330277ed`, 234/234 checks): every measured text pair is at least 5.90:1 (warm
+    error text) and every glyph at least 10.09:1. An earlier run on `da83a139` measured the Home tray mic
+    glyph at 9.72:1; the bound run supersedes it.
+  - Bound evidence is committed in `evidence/glacier-330277ed/`: `glacier-check.json`, the
+    reading-position and return evidence, the review sheet and a SHA-256 manifest.
 - **Source-only checks.**
   - The V3 HTML was read and its hash verified; the integration matches its documented contract.
   - Model checks: `verify.cjs` (27) and the keyboard study's model checks.
