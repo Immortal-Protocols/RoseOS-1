@@ -7,6 +7,12 @@ Return only a JSON object with summary (at most 1200 characters), body (at most 
 and unfinished (at most 1200 characters). Cite source URLs in the body. Report uncertainty honestly.
 Do not claim a note was saved or invent visits, meals, meetings or experiences. The host saves and verifies notes.`;
 
+export function supportsResearchVersion(value) {
+ const m=/^codex-cli (\d+)\.(\d+)\.(\d+)(?:[-+][A-Za-z0-9.-]+)?\s*$/.exec(value);
+ // Reject unknown/older contracts; runtime capability checks still apply.
+ return !!m && (Number(m[1])>0 || Number(m[2])>=167);
+}
+
 /** Completed native tool evidence only. Assistant prose is never a source receipt.
  * This proves an observed page-open operation, not that every generated claim is true.
  */

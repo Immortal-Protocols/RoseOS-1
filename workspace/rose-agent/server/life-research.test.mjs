@@ -3,9 +3,15 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {EventEmitter} from 'node:events';
 import {Codex} from './codex.mjs';
-import {publicPageReceipt,lifeResearchPolicy,researchConfig,verifyResearchMcp} from './life-research.mjs';
+import {publicPageReceipt,lifeResearchPolicy,researchConfig,verifyResearchMcp,supportsResearchVersion} from './life-research.mjs';
 
 const opened=url=>({type:'webSearch',action:{type:'openPage',url},status:'completed'});
+test('unknown or older native contracts fail closed before research process startup',()=>{
+ for(const version of ['codex-cli 0.163.0','codex-cli 0.166.9','unknown','0.167.0'])assert.equal(supportsResearchVersion(version),false);
+ for(const version of ['codex-cli 0.167.0-alpha.4\n','codex-cli 0.167.0','codex-cli 1.0.0'])assert.equal(supportsResearchVersion(version),true);
+ const source=readFileSync(new URL('./codex.mjs',import.meta.url),'utf8');
+ assert.ok(source.indexOf('supportsResearchVersion(version.stdout')<source.indexOf('this.child=spawn('));
+});
 test('only observed completed public page operations produce receipts',()=>{
  assert.deepEqual(publicPageReceipt(opened('https://example.com/source')),
   {url:'https://example.com/source',title:'example.com',evidence:'completed_public_page_open'});

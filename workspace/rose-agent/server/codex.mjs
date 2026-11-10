@@ -1,4 +1,4 @@
-import {spawn} from 'node:child_process';
+import {spawn,spawnSync} from 'node:child_process';
 import {createInterface} from 'node:readline';
 import {EventEmitter} from 'node:events';
 import {readFileSync,writeFileSync,mkdirSync,copyFileSync,renameSync} from 'node:fs';
@@ -12,11 +12,16 @@ import {calculatorCapability} from './calculator-capability.mjs';
 import {BasetenGateway,BASETEN_MODEL,BASETEN_PROVIDER} from './baseten/gateway.mjs';
 import {CerebrasGateway,CEREBRAS_MODEL,CEREBRAS_PROVIDER} from './cerebras/gateway.mjs';
 import {EvaluationGateway,EVALUATION_PROVIDER} from './evaluation-gateway.mjs';
-import {researchConfig,verifyResearchMcp} from './life-research.mjs';
+import {researchConfig,verifyResearchMcp,supportsResearchVersion} from './life-research.mjs';
 export class Codex extends EventEmitter {
  constructor(root,state,apiKeyFile=null,runtime={}){super();this.root=root;this.state=state;this.apiKeyFile=apiKeyFile;this.runtime=runtime;this.authMode=null;this.seq=0;this.pending=new Map();this.active=null;this.thread=null;this.starting=null;this.switchingTurns=new Set();this.endedTurns=new Set();this.provider='openai';this.providerThreads={};this.policyHashes={};this.memoryRevisions={};this.unstartedThread=false;}
  async init(){
   if(this.runtime.externalPhone&&this.apiKeyFile)throw Object.assign(Error('Sign in with ChatGPT is required'),{code:'chatgpt_login_required'});
+  if(this.runtime.publicResearch){
+   const version=spawnSync(process.env.PIXEL_CODEX_BIN||'codex',['--version'],{encoding:'utf8',timeout:3000,maxBuffer:4096});
+   if(version.status!==0||!supportsResearchVersion(version.stdout||''))
+    throw Object.assign(Error('Research requires a compatible Codex tool-isolation contract'),{code:'research_isolation_unavailable'});
+  }
   // Keep service tools outside macOS-protected Documents for background execution.
   const phoneTools=join(homedir(),'.local/share/rose-agent/phone');
   if(!this.runtime.externalPhone){

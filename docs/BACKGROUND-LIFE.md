@@ -63,7 +63,8 @@ so this guard requires stable backend configuration during the session; it is no
 a new OS-level isolation sandbox or a guarantee against concurrent host changes. This does
 not change persistent account configuration or create credentials. The stricter
 inventory contract was inspected in local Codex 0.167.0-alpha.4 offline schemas;
-older Codex versions may refuse research until they provide compatible evidence.
+research requires Codex 0.167 or newer and compatible runtime evidence. Older
+versions are refused before starting the research process; ordinary voice is unchanged.
 
 The model is asked for at most six public web calls; observing a seventh or an
 unexpected native tool rejects the result and interrupts the thread. An already
