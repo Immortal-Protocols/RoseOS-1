@@ -20,9 +20,8 @@ ALL = ['zoey', 'harper', 'everly', 'juniper', 'hadley', 'delia', 'easton', 'mica
 
 
 def speaker_voices() -> dict:
-    tree = ast.parse((ROOT / 'rose/speaker.py').read_text())
-    node = next(n for n in tree.body if isinstance(n, ast.Assign) and getattr(n.targets[0], 'id', '') == 'VOICES')
-    return ast.literal_eval(node.value)
+    from rose.voice_catalog import VOICES
+    return dict(VOICES)
 
 
 class Speaker:
@@ -72,14 +71,15 @@ class Grounding(unittest.TestCase):
         self.assertEqual(set(traits['voices']), set(catalog))
         for name, v in traits['voices'].items():
             self.assertEqual(v['voice_id'], catalog[name], name)
-            self.assertEqual((v['language'], v['locale']), ('en', 'en-us'), name)
+            self.assertEqual(v['language'], 'en', name)
+            self.assertIn(v['locale'], ('en-us', 'en-gb'), name)
             self.assertIn(v['gender'], ('female', 'male'), name)
             self.assertEqual(list(v['samples']), src['prompts'])
             self.assertTrue(all(re.fullmatch(r'[0-9a-f]{64}', h) for h in v['samples'].values()), name)
             for key in ('pitch_hz', 'pitch_range_st', 'brightness_db', 'speech_s'):
                 self.assertIsInstance(v[key], (int, float), (name, key))
             self.assertGreater(v['voiced_frames'], 500, name)
-        self.assertEqual({n for n, v in traits['voices'].items() if v['gender'] == 'male'}, {'easton', 'micah', 'miles'})
+        self.assertTrue({'easton', 'micah', 'miles'} <= {n for n, v in traits['voices'].items() if v['gender'] == 'male'})
 
     def test_octave_errors_are_folded_not_counted_as_range(self):
         import importlib.util
@@ -229,7 +229,7 @@ class Matching(unittest.TestCase):
         self.assertNotIn('much_', r['message'])
 
     def test_another_gender_with_a_pitch_qualifier_is_judged_among_that_gender(self):
-        females = sorted(v['pitch_hz'] for v in vi.TRAITS['voices'].values() if v['gender'] == 'female')
+        females = sorted(v['pitch_hz'] for n, v in vi.TRAITS['voices'].items() if n in ALL and v['gender'] == 'female')
         r, _ = self.change('easton', gender='female', pitch='lower')  # "a woman with a deeper voice"
         self.assertTrue(r['ok'])
         self.assertLess(vi.TRAITS['voices'][r['voice']]['pitch_hz'], females[len(females) // 2])
@@ -238,7 +238,7 @@ class Matching(unittest.TestCase):
         r, _ = self.change('easton', gender='female', pitch='higher')  # "a woman with a higher voice"
         self.assertGreater(vi.TRAITS['voices'][r['voice']]['pitch_hz'], females[len(females) // 2])
         r, _ = self.change('zoey', gender='male', warmth='warmer')  # "a warmer man's voice": the warmest man
-        males = {n: v for n, v in vi.TRAITS['voices'].items() if v['gender'] == 'male'}
+        males = {n: v for n, v in vi.TRAITS['voices'].items() if n in ALL and v['gender'] == 'male'}
         self.assertEqual(r['voice'], min(males, key=lambda n: males[n]['brightness_db']))
 
     def test_a_kept_aspect_is_kept_from_the_current_voice_across_a_gender_change(self):
@@ -314,7 +314,7 @@ class Matching(unittest.TestCase):
         r, speaker = self.change('zoey', gender='male', pace='same')
         self.assertEqual((r['reason'], speaker.calls), ('no_close_match', []))
         self.assertIn('same_pace', r['alternative']['unmet'])  # disclosed, the owner decides
-        males = {n: v for n, v in vi.TRAITS['voices'].items() if v['gender'] == 'male'}
+        males = {n: v for n, v in vi.TRAITS['voices'].items() if n in ALL and v['gender'] == 'male'}
         zoey = vi.TRAITS['voices']['zoey']['speech_s']
         self.assertEqual(r['alternative']['voice'], min(males, key=lambda n: abs(males[n]['speech_s'] - zoey)))
 
@@ -356,15 +356,15 @@ class Matching(unittest.TestCase):
         self.assertTrue(r['ok'])
         self.assertNotIn('limits', r)
         r, _ = self.change('zoey', accent='other', accent_name='British', pitch='lower')
-        self.assertTrue(r['ok'])
-        self.assertEqual(r['limits'][0], 'Every available voice has an American (en-US) accent; none is British.')
+        self.assertFalse(r['ok'])  # no requested British voice is configured in this legacy fixture
+        self.assertIn('none is British', r['limits'][0])
         r, _ = self.change('zoey', accent='other')  # no name given: still honest
         self.assertEqual(r['reason'], 'no_close_match')
         self.assertIn('none is another accent', r['limits'][0])
         r, _ = self.change('zoey', accent_name='British', pitch='lower')  # a name alone is read as the accent
         self.assertIn('none is British', r['limits'][0])
         props = vi.TOOLS[[t['name'] for t in vi.TOOLS].index('change_voice')]['inputSchema']['properties']
-        self.assertEqual(props['accent']['enum'], ['american', 'other'])
+        self.assertEqual(props['accent']['enum'], ['same', 'american', 'british', 'either', 'other'])
         self.assertIn('accent_name', props)
 
     def test_contrast_exclusion_and_less_american_accents(self):
@@ -384,18 +384,16 @@ class Matching(unittest.TestCase):
             r, _ = self.change('zoey', accent=accent)
             self.assertNotEqual(r['reason'], 'already', accent)
 
-    def test_fitting_voices_that_will_not_load_keep_limits_and_offer_the_nearest(self):
+    def test_unavailable_requested_accent_never_offers_a_forbidden_fallback(self):
         identity = vi.VoiceIdentity()
         speaker = Speaker('zoey', missing=['juniper', 'everly', 'hadley', 'delia', 'harper'])
         args = {'pitch': 'lower', 'accent': 'other', 'accent_name': 'British'}
         r = identity.change_voice(speaker, args)
-        self.assertEqual((r['reason'], speaker.voice), ('unavailable', 'zoey'))
+        self.assertEqual((r['reason'], speaker.voice, speaker.calls), ('no_close_match', 'zoey', []))
         self.assertIn('none is British', r['limits'][0])
-        self.assertIn('lower', r['alternative']['met'])
-        again = identity.change_voice(speaker, args)  # a repeat gives the same limit and offer
-        self.assertEqual((again['limits'], again['alternative']['voice']), (r['limits'], r['alternative']['voice']))
-        r = identity.change_voice(speaker, {'voice': again['alternative']['voice']})
-        self.assertTrue(r['ok'])
+        self.assertNotIn('alternative', r)  # an American voice cannot satisfy this constraint
+        again = identity.change_voice(speaker, args)
+        self.assertEqual(again, r)
 
     def test_no_match_message_names_a_keep_only_when_it_blocks(self):
         for current, args in (('miles', {'pitch': 'lower', 'warmth': 'same'}),
@@ -422,7 +420,7 @@ class Matching(unittest.TestCase):
 
     def test_keep_blocked_offer_meets_most_and_breaks_the_keep_least(self):
         r, _ = self.change('zoey', pitch='lower', liveliness='same')
-        cands = [v for v in vi.TRAITS['voices'] if vi.TRAITS['voices'][v]['gender'] == 'female' and v != 'zoey'
+        cands = [v for v in ALL if vi.TRAITS['voices'][v]['gender'] == 'female' and v != 'zoey'
                  and vi.deltas(vi.TRAITS['voices']['zoey'], vi.TRAITS['voices'][v])['pitch']
                  <= -vi.DIMENSIONS['pitch']['least']]
         live = lambda v: abs(vi.deltas(vi.TRAITS['voices']['zoey'], vi.TRAITS['voices'][v])['liveliness'])
@@ -471,7 +469,7 @@ class Matching(unittest.TestCase):
     def test_an_asked_gender_alternative_is_never_another_gender(self):
         r, _ = self.change('zoey', gender='male', pitch='higher')  # no man's voice is higher than a typical man's
         self.assertFalse(r['ok'])
-        males = {n: v for n, v in vi.TRAITS['voices'].items() if v['gender'] == 'male'}
+        males = {n: v for n, v in vi.TRAITS['voices'].items() if n in ALL and v['gender'] == 'male'}
         self.assertEqual(r['alternative']['voice'], max(males, key=lambda n: males[n]['pitch_hz']))  # the highest man
         r, _ = self.change('easton', gender='male', pitch='higher')  # named, the current gender: still only men
         self.assertTrue('alternative' not in r or r['alternative']['gender'] == 'male', r)
