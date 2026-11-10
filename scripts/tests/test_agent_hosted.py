@@ -297,21 +297,109 @@ class Reservation(unittest.TestCase):
         self.assertEqual(sorted(self.memory.read('dev.pixel.voice')['reservations']), [int(first['version_code'])])
         self.assertFalse((self.out/'reservation.json').exists())
 
-    def test_a_version_another_run_holds_first_is_never_shared(self):
-        self.add_floor(368)
+    def racing(self, losses, winner='4999', source='a' * 40):
+        """A ledger in which another run creates each requested ref just before this run does, LOSSES times."""
+        creates, test = [], self
 
         class Racing(MemoryLedger):
-            def create(inner, ref, record, head):  # another run creates the same ref just before this one
-                inner.tags[ref] = ('tag', store_module.message(dict(store_module.reservation(
-                    'dev.pixel.voice', record['versionCode'], 'a' * 40, 'b' * 40, 'c' * 64,
-                    {'workflowRef': REF, 'runId': '4999', 'runAttempt': '1'}, STORE))))
+            def create(inner, ref, record, head):
+                creates.append(record['versionCode'])
+                if len(creates) > losses:
+                    return MemoryLedger.create(inner, ref, record, head)
+                inner.tags[ref] = ('tag', store_module.message(test.rival(record['versionCode'], winner, source)))
                 return False
         racing = Racing()
         racing.tags = dict(self.memory.tags)
-        with self.assertRaisesRegex(store_module.Refused, 'already held by another record'):
+        return racing, creates
+
+    def rival(self, version, run='4999', source='a' * 40):
+        return store_module.reservation('dev.pixel.voice', version, source, 'b' * 40, 'c' * 64,
+                                        {'workflowRef': REF, 'runId': run, 'runAttempt': '1'}, STORE)
+
+    def test_a_version_another_run_holds_first_is_never_shared(self):
+        # Every attempt loses its version to another run: three attempts in all, then a refusal holding nothing.
+        self.add_floor(368)
+        racing, creates = self.racing(losses=99)
+        with self.assertRaisesRegex(store_module.Held, 'already held by another record'):
             hosted.reserve(self.out, self.env, self.cfg, racing.ledger(), trl.app_listing(), clock=lambda: trl.NOW,
                            repo=self.repo.path)
+        self.assertEqual(creates, [369, 370, 371], 'at most three attempts, each above the version just lost')
+        held = racing.read('dev.pixel.voice')['reservations']
+        self.assertEqual(held, {v: self.rival(v) for v in (369, 370, 371)}, 'each winner stands, byte for byte')
         self.assertFalse((self.out/'reservation.json').exists())
+
+    def test_a_lost_version_is_allocated_again_above_it_from_a_fresh_read(self):
+        self.add_floor(368)
+        racing, creates = self.racing(losses=1)
+        reads = []
+        read = racing.read
+        racing.read = lambda package: reads.append(package) or read(package)
+        result = hosted.reserve(self.out, self.env, self.cfg, racing.ledger(), trl.app_listing(), clock=lambda: trl.NOW,
+                                repo=self.repo.path)
+        self.assertEqual((result['app_skip'], result['version_code'], creates), ('false', '370', [369, 370]))
+        record = json.loads((self.out/'reservation.json').read_text())
+        held = racing.read('dev.pixel.voice')['reservations']
+        self.assertEqual(held, {369: self.rival(369), 370: record}, 'the winner of 369 stands; this run holds 370')
+        self.assertEqual((record['owner']['runId'], record['sourceSha']), ('4300', self.repo.source))
+        allocation = json.loads((self.out/'allocation.json').read_text())
+        self.assertEqual((allocation['versionCode'], hosted.ALLOC.derive_app(allocation, self.repo.path)),
+                         (370, record['candidateSha']))
+        self.assertGreaterEqual(len(reads), 2, 'the ledger is read again before the second attempt')
+        exported = hosted.bind(self.out, self.env, self.cfg, racing.ledger(), repo=self.repo.path)
+        self.assertEqual(exported['APPS'], '[["dev.pixel.voice",370]]')
+        self.assertEqual(hosted.confirm(self.out/'reservation.json', self.env, self.cfg, racing.ledger()), record)
+
+    def test_a_retry_that_finds_these_sources_published_skips(self):
+        # A twin run of this commit wins 369 and publishes it before the second attempt: nothing is left to build.
+        self.add_floor(368)
+        racing, creates = self.racing(losses=1, source=self.repo.source)
+        listings = [trl.app_listing(), trl.app_listing({'tag_name': 'rose-agent-369', 'draft': False, 'prerelease': True})]
+        calls = []
+
+        def fetch(url):
+            calls.append(url)
+            return listings[min(len(calls), 2) - 1](url)
+        result = hosted.reserve(self.out, self.env, self.cfg, racing.ledger(), fetch, clock=lambda: trl.NOW,
+                                repo=self.repo.path)
+        self.assertEqual((result['app_skip'], creates), ('true', [369]))
+        self.assertEqual(racing.read('dev.pixel.voice')['reservations'], {369: self.rival(369, source=self.repo.source)})
+        self.assertFalse((self.out/'reservation.json').exists())
+
+    def test_only_a_version_held_by_another_record_is_retried(self):
+        self.add_floor(368)
+
+        class Uncertain(MemoryLedger):  # created, but never reads back: an uncertain write
+            def create(inner, ref, record, head):
+                creates.append(record['versionCode'])
+                return True
+
+        class Unreadable(MemoryLedger):  # 422 with no readable holder
+            def create(inner, ref, record, head):
+                creates.append(record['versionCode'])
+                return False
+
+        class Failing(MemoryLedger):  # the write itself fails
+            def create(inner, ref, record, head):
+                creates.append(record['versionCode'])
+                raise store_module.Refused('create ledger ref failed (HTTP 500)')
+
+        class Malformed(MemoryLedger):  # the ref holds something that is not a ledger record
+            def create(inner, ref, record, head):
+                creates.append(record['versionCode'])
+                inner.tags[ref] = ('tag', 'not a record')
+                return False
+        for kind, pattern in ((Uncertain, 'does not read back'), (Unreadable, 'holds no readable record'),
+                              (Failing, 'HTTP 500'), (Malformed, 'does not hold a JSON ledger record')):
+            with self.subTest(kind.__name__):
+                creates, ledger = [], kind()
+                ledger.tags = dict(self.memory.tags)
+                out = self.home/f'reservation-{kind.__name__}'
+                with self.assertRaisesRegex(store_module.Refused, pattern) as caught:
+                    hosted.reserve(out, self.env, self.cfg, ledger.ledger(), trl.app_listing(), clock=lambda: trl.NOW,
+                                   repo=self.repo.path)
+                self.assertNotIsInstance(caught.exception, store_module.Held)
+                self.assertEqual(creates, [369], 'one write: an uncertain or failed write is never retried')
+                self.assertFalse((out/'reservation.json').exists())
 
     def test_bind_and_confirm_admit_only_this_runs_held_reservation(self):
         self.add_floor(368)

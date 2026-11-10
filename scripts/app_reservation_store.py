@@ -9,7 +9,8 @@ Reservation: versionCode N is held by the annotated tag <reservationPrefix>N who
 JSON (sorted keys, no spaces) of its roseos.app-version-reservation.v1 record (scripts/app_reservation.py) naming this
 store. Creating that ref is the one atomic step: GitHub creates a ref only when none exists (HTTP 422 otherwise), so
 exactly one run ever holds N, whichever route asks first. Nothing here moves, replaces, deletes or reuses a
-reservation; a failed or other run's reservation stays consumed.
+reservation; a failed or other run's reservation stays consumed. Losing N to another record refuses as Held, the one
+refusal a caller may answer by allocating again above it; every other refusal, an uncertain write included, is final.
 
 Floor: the annotated tag <floorPrefix><runId>-<runAttempt> holds a roseos.app-version-floor.v1 record: the highest
 versionCode a builder route's own ledger (its allocation records, attempt directories and app reservations) had
@@ -49,6 +50,12 @@ READBACK_TRIES, READBACK_DELAY = 5, 2.0  # a just-created ref is normally visibl
 
 class Refused(Exception):
     """The ledger is unreadable, malformed or holds the requested version already; nothing was changed."""
+
+
+class Held(Refused):
+    """Exactly one case of Refused: the ref already existed (HTTP 422) and reads back as another record. Nothing was
+    written and the holder's record stands, so a caller may allocate again above it. An uncertain write (a created
+    ref that does not read back, a 422 with no readable holder, any error) is plain Refused and is never retried."""
 
 
 def canonical(data):
@@ -280,7 +287,9 @@ class Ledger:
                 break
             self.sleep(READBACK_DELAY)
         if held != record:
-            raise Refused(f'{ref[:120]} is already held by another record' if not created
+            if not created and held is not None:
+                raise Held(f'{ref[:120]} is already held by another record')
+            raise Refused(f'{ref[:120]} already exists but holds no readable record' if not created
                           else f'{ref[:120]} does not read back as the record just written')
         return {'ref': ref, 'created': created}
 

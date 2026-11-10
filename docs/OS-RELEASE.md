@@ -638,13 +638,14 @@ The jobs:
 | Job | Modes | What it does |
 | --- | --- | --- |
 | `agent-signer` | both | Logs in as the signer identity through WIF (decision D4). Reads each of the four `PIXEL_APP_SIGNING_*` versions into owner-only RAM, then overwrites and removes it at once. Uploads a receipt naming each secret and a fixed result category (`read`, `token-exchange-refused`, `permission-denied` and so on), never a payload or gcloud's text. Nothing else runs unless all four were read. |
-| `agent-reserve` | agent-hosted | Mints the publisher token. Either skips, because the newest published rose-agent release already has these Rose Agent sources, or allocates one fresh version and holds it in the ledger for this run. The fresh version clears the ledger's reservations and highest floor, every pixel-ota release (drafts included), and the committed Frankel config and allocation records. It is derived as `release-allocate.py`'s version-only candidate, named `N-hosted-beta`. Exits 4 while the ledger holds no builder floor. |
+| `agent-reserve` | agent-hosted | Mints the publisher token. Either skips, because the newest published rose-agent release already has these Rose Agent sources, or allocates one fresh version and holds it in the ledger for this run. The fresh version clears the ledger's reservations and highest floor, every pixel-ota release (drafts included), and the committed Frankel config and allocation records. It is derived as `release-allocate.py`'s version-only candidate, named `N-hosted-beta`. A version another run holds first is allocated again above it, from a fresh read (three attempts in all; below). Exits 4 while the ledger holds no builder floor. |
 | `agent-build` | both | Installs the pinned SDK archives (`scripts/setup-android-sdk.sh`), the pinned public inputs and App's portable record (`portable-build.py prepare` and `inputs`), then runs `host-app-release.py --check --hosted`. Probe: an unsigned Agent-only build of the dispatch commit plus `check-apk`. agent-hosted: `bind` (the same candidate, re-derived, owned by this run, held by the ledger), signer login, `host-app-release.py --hosted`, then `check-apk` on the signed APK. |
 | `agent-publisher` | agent-hosted with `app_publish` | Confirms the ledger still holds the reservation, mints the token and runs `app_release_publisher.py --hosted`. Publishes its own prerelease, never Latest. |
 
 **Automatic Agent Beta releases (`agent-beta-auto.yml`, held).** The existing dispatcher, `scripts/agent-beta-auto.py`,
 now targets this route. After a successful push-to-main `App offline tests` run, it dispatches
-`{mode: agent-hosted, candidate_sha: <tested SHA>, app_publish: true}` on main once. Publication is unchanged: an
+`{mode: agent-hosted, candidate_sha: <main's head>, app_publish: true}` on main once: the tested SHA, or a head proven
+equivalent to it (below), always pinned to the commit the run builds. Publication is unchanged: an
 automatic release publishes its own prerelease, never Latest, as the builder route did. It dispatches only when all of
 these hold, and otherwise exits 0 with the reason:
 - `AGENT_BETA_AUTO` is exactly `on`. This is checked first: while it is off, the dispatcher makes no request at all.
@@ -653,9 +654,21 @@ these hold, and otherwise exits 0 with the reason:
 - No `Agent Beta auto <sha>` run exists yet. Both routes' automatic runs carry that title, so the duplicate and
   unchanged checks span the move from the builder route.
 - Rose Agent sources changed since the newest successful automatic run.
-- **main's head, read last, right before the request, is still the tested SHA.** `agent-hosted` builds its dispatch
-  commit, so a tested SHA that main has moved past is never dispatched (`superseded`). If main moves between that read
-  and the request, the guard refuses the run.
+- **main's head, read last, right before the request, is the tested SHA or proven equivalent to it.** `agent-hosted`
+  builds its dispatch commit, so the request pins main's head itself, and the guard admits nothing else. If main moves
+  between that read and the request, the guard refuses the run; nothing retries it.
+
+When main has moved from the tested commit T to H, H is dispatched only when the dispatcher proves it carries exactly
+what `App offline tests` checked at T, and fails closed otherwise:
+- **Checked paths:** T's own push paths filter (`.github/workflows/app-tests.yml` at T) and T's Rose Agent sources
+  (`os/latest-beta/allocation.json` at T), both read through the API and read exactly, plus those two files. A filter
+  with syntax it does not read (negation, `?`, classes, braces, `paths-ignore`, a flow list) proves nothing.
+- **Comparison:** `T...H` must show H as a descendant of T and list every changed file (under the API's 300), with a
+  renamed file counted by both names.
+- **Result:** no checked path changed, and main is still at H when read again, so H is dispatched with its basis in
+  the output. A checked path changed (`superseded`): that change's own `App offline tests` run decides, because every
+  checked path is on that workflow's triggers (a test checks this). Anything unreadable, incomplete, not a descendant,
+  or a main that moved during the proof refuses (`unproven`), with nothing sent.
 
 Two holds stay in place, and each alone stops every request:
 - the source hold (the dispatch job's literal `false &&`), which no variable can lift;
@@ -663,16 +676,20 @@ Two holds stay in place, and each alone stops every request:
 
 The builder's `app-only` `apps=auto` route is unchanged and stays available to a manual dispatch.
 
-A superseded tested SHA is released by the next `App offline tests` run, which only runs when one of its paths changes,
-or by a manual `agent-hosted` dispatch.
+So a Rose Agent change is never left waiting by unrelated commits: either main's head is proven equivalent and
+dispatched, or a later commit changed a checked path and its own `App offline tests` run releases both. Every Rose Agent
+source and `os/latest-beta/allocation.json` is on that workflow's push and pull_request triggers for this reason.
 
 With separate queues, a hosted run and a Frankel run can pick the same next version within the same few minutes:
 between a Frankel allocation and its ledger record. The ledger's create-if-absent ref gives that version to exactly one
 of them, and nothing is built twice under one version:
 - If the hosted reservation lands first, the Frankel run stops before building (D2 below), and its next run allocates
   above the hosted version.
-- If Frankel's record lands first, `agent-reserve` refuses. That tested SHA then waits for a later automatic or manual
-  run, because the dispatcher never re-dispatches a title it has already used.
+- If Frankel's record lands first, `agent-reserve` gets `Held`: the ref existed and holds another record. It reads the
+  ledger and the releases again and allocates above that version, three attempts in all; the winner's record is never
+  touched. Only `Held` is retried. An uncertain write (a created ref that does not read back, a 422 with no readable
+  holder, a failed request) refuses at once. One competing builder allocation can be in flight, because the builder
+  queue runs one at a time, so the second attempt suffices; the third covers a ref not yet visible to a fresh read.
 
 **Frankel in the shared ledger (decision D2, `scripts/app-ledger.py`).** Every builder route that allocates Rose Agent
 versions records them in the same ledger before it builds: latest-beta, latest-draft and app-only with `apps=auto`.
