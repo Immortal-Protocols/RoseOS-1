@@ -42,13 +42,13 @@ final class OxbloodRose {
    float r = 10 * d, w = 1.5f * d;
    paint.reset(); paint.setAntiAlias(true); paint.setStyle(Paint.Style.STROKE);
    if (working) {
-    paint.setColor(WORK_GLOW); paint.setStrokeWidth(4 * d);
+    paint.setColor(RoseThemeNow.c(WORK_GLOW)); paint.setStrokeWidth(4 * d);
     paint.setMaskFilter(new BlurMaskFilter(Math.max(.1f, (6 * d - .5f) / .57735f), BlurMaskFilter.Blur.OUTER));
     c.drawRoundRect(sq, r, r, paint);
     paint.setMaskFilter(null);
    }
    paint.setStrokeWidth(w);
-   paint.setColor(working ? WORK_RING : IDLE_RING);
+   paint.setColor(RoseThemeNow.c(working ? WORK_RING : IDLE_RING));
    c.drawRoundRect(sq.left + w / 2, sq.top + w / 2, sq.right - w / 2, sq.bottom - w / 2, r - w / 2, r - w / 2, paint);
    // 2x2 panes of 8dp, 4dp apart, radius 2, 1.5dp white outline, centred.
    paint.setColor(INK);
@@ -61,13 +61,13 @@ final class OxbloodRose {
     float cx = b.right - 4.5f * d, cy = b.top + 4.5f * d, br = 4.5f * d;
     paint.setStyle(Paint.Style.FILL);
     if (!reducedMotion) { // prefers-reduced-motion drops only the badge's glow (oxblood.css:161)
-     paint.setColor(BADGE_GLOW);
+     paint.setColor(RoseThemeNow.w(BADGE_GLOW)); // plan 1E: the running badge is an attention mark, warm in every theme
      paint.setMaskFilter(new BlurMaskFilter(Math.max(.1f, (4 * d - .5f) / .57735f), BlurMaskFilter.Blur.NORMAL));
      c.drawCircle(cx, cy, br, paint);
      paint.setMaskFilter(null);
     }
-    paint.setColor(BADGE_RING); c.drawCircle(cx, cy, br + 2 * d, paint);
-    paint.setColor(BADGE); c.drawCircle(cx, cy, br, paint);
+    paint.setColor(RoseThemeNow.c(BADGE_RING)); c.drawCircle(cx, cy, br + 2 * d, paint);
+    paint.setColor(RoseThemeNow.w(BADGE)); c.drawCircle(cx, cy, br, paint);
    }
   }
   @Override public void setAlpha(int alpha) {}
@@ -86,9 +86,9 @@ final class OxbloodRose {
    if (b.isEmpty()) return;
    float h = 36 * d, r = 10 * d, s = Math.max(1f, d);
    RectF plate = new RectF(b.left, b.exactCenterY() - h / 2, b.right, b.exactCenterY() + h / 2);
-   paint.reset(); paint.setAntiAlias(true); paint.setColor(FILL);
+   paint.reset(); paint.setAntiAlias(true); paint.setColor(RoseThemeNow.c(FILL));
    c.drawRoundRect(plate, r, r, paint);
-   paint.setStyle(Paint.Style.STROKE); paint.setStrokeWidth(s); paint.setColor(RING);
+   paint.setStyle(Paint.Style.STROKE); paint.setStrokeWidth(s); paint.setColor(RoseThemeNow.c(RING));
    c.drawRoundRect(plate.left + s / 2, plate.top + s / 2, plate.right - s / 2, plate.bottom - s / 2, r - s / 2, r - s / 2, paint);
   }
   @Override public void setAlpha(int alpha) {}
@@ -110,14 +110,14 @@ final class OxbloodRose {
    paint.reset(); paint.setAntiAlias(true);
    if (live) {
     float u = 15 * d / 24f;
-    paint.setStyle(Paint.Style.STROKE); paint.setStrokeCap(Paint.Cap.ROUND); paint.setStrokeWidth(Math.max(1f, 1.6f * u)); paint.setColor(X);
+    paint.setStyle(Paint.Style.STROKE); paint.setStrokeCap(Paint.Cap.ROUND); paint.setStrokeWidth(Math.max(1f, 1.6f * u)); paint.setColor(RoseThemeNow.w(X));
     float a = 5.8f * u;
     c.drawLine(cx - a, cy - a, cx + a, cy + a, paint);
     c.drawLine(cx + a, cy - a, cx - a, cy + a, paint);
    } else {
     float r = 6 * d;
     paint.setShader(new RadialGradient(cx - r + .34f * 2 * r, cy - r + .30f * 2 * r, 2 * r * 1.0f,
-      new int[]{0xffffffff, 0xffffb3bf, 0xffe04a62, 0xff8e1a2e}, new float[]{0, .18f, .5f, 1}, Shader.TileMode.CLAMP));
+      RoseThemeNow.c(new int[]{0xffffffff, 0xffffb3bf, 0xffe04a62, 0xff8e1a2e}), new float[]{0, .18f, .5f, 1}, Shader.TileMode.CLAMP));
     c.drawCircle(cx, cy, r, paint);
    }
   }

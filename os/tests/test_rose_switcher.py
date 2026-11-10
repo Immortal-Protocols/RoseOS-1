@@ -203,7 +203,9 @@ class RoseSwitcherTest(unittest.TestCase):
                 'public abstract android.content.pm.PackageManager getPackageManager(); '
                 'public abstract <T> T getSystemService(Class<T> c); '
                 'public void startActivityAsUser(Intent i, android.os.UserHandle u) {} '
-                'public abstract android.content.res.Resources getResources(); }',
+                'public abstract android.content.res.Resources getResources(); '
+                'public abstract android.content.ContentResolver getContentResolver(); '
+                'public abstract String getPackageName(); }',
             'android/os/UserHandle.java': 'package android.os; public final class UserHandle { '
                 'public static UserHandle of(int u){return null;} public int getIdentifier(){return 0;} }',
             'com/android/launcher3/R.java': 'package com.android.launcher3; public final class R { '
@@ -233,7 +235,8 @@ class RoseSwitcherTest(unittest.TestCase):
         result = subprocess.run(['javac', '-source', '11', '-target', '11', '-Xlint:-options', '-implicit:none',
             '-sourcepath', str(tmp/'src'), '-cp', str(jars[-1]), '-d', str(tmp/'out'),
             str(OVERLAY/'RoseAgentStrip.java'), str(OVERLAY/'RoseAgentWork.java'), str(OVERLAY/'RoseAgentFan.java'),
-            str(OVERLAY/'RoseFan.java'), str(OVERLAY/'RoseOxbloodField.java'), str(OVERLAY/'RoseEdgeGesture.java')],
+            str(OVERLAY/'RoseFan.java'), str(OVERLAY/'RoseOxbloodField.java'), str(OVERLAY/'RoseEdgeGesture.java'),
+            str(OVERLAY/'RoseTheme.java'), str(OVERLAY/'RoseThemeSetting.java')],
             capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
 
@@ -318,9 +321,9 @@ class RoseSwitcherInteractionTest(unittest.TestCase):
         self.assertIn('connector.setAlpha(working ? 1f : IDLE);', working)
         for animated in ('ObjectAnimator', 'setRepeatCount', 'ValueAnimator.INFINITE', 'pulse'):
             self.assertNotIn(animated, self.STRIP, animated)
-        self.assertIn('if (task.topOfDisplay) edge.setStroke(Math.max(1, dp(1)), CURRENT_RING);', show,
+        self.assertIn('if (task.topOfDisplay) edge.setStroke(Math.max(1, dp(1)), RoseTheme.map(theme, CURRENT_RING));', show,
             'the current screen of Rose\'s display is marked')
-        self.assertIn('else edge.setStroke(Math.max(1, dp(1)), CARD_RING);', show)
+        self.assertIn('else edge.setStroke(Math.max(1, dp(1)), RoseTheme.map(theme, CARD_RING));', show)
         self.assertNotIn('RUBY_EDGE', self.STRIP, 'no running edge: Launcher3 cannot see authoritative running state')
         self.assertIn('Rose is working in it now', show)
 

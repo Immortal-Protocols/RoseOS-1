@@ -74,7 +74,7 @@ final class HomeAppTile {
   TextView name = new TextView(context);
   name.setText(label);
   name.setTextSize(11.5f);
-  name.setTextColor(0xffd2b9ab);
+  name.setTextColor(RoseThemeNow.c(0xffd2b9ab)); // plan 1E: the theme's label ink (identity in Oxblood)
   name.setTypeface(CustomizationVisuals.labelTypeface(context, 500)); // 1O font choice; default SANS_SERIF 500
   name.setShadowLayer(dp(density, 2), 0, dp(density, 1), 0xb3000000);
   name.setIncludeFontPadding(false);
@@ -110,7 +110,7 @@ final class HomeAppTile {
  static Drawable focusRing(float density, float radiusDp) {
   android.graphics.drawable.GradientDrawable ring = new android.graphics.drawable.GradientDrawable();
   ring.setCornerRadius(radiusDp * density);
-  ring.setStroke(Math.max(1, Math.round(3 * density)), 0xfff2c9b6);
+  ring.setStroke(Math.max(1, Math.round(3 * density)), RoseThemeNow.c(0xfff2c9b6));
   android.graphics.drawable.StateListDrawable states = new android.graphics.drawable.StateListDrawable();
   states.addState(new int[]{android.R.attr.state_focused}, ring);
   return states;

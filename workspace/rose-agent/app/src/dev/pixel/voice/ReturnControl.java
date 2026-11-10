@@ -63,7 +63,7 @@ final class ReturnControl extends LinearLayout {
   button.addView(chevron, new LayoutParams(dp(CHEVRON_DP), dp(CHEVRON_DP)));
   label = new TextView(context);
   label.setTextSize(12);
-  label.setTextColor(INK);
+  label.setTextColor(themed(INK));
   label.setTypeface(Typeface.create("sans-serif", Typeface.NORMAL));
   label.setIncludeFontPadding(false);
   label.setSingleLine(true);
@@ -78,7 +78,7 @@ final class ReturnControl extends LinearLayout {
   cancel.setTag(CANCEL_TAG);
   cancel.setText(ReturnModel.CANCEL);
   cancel.setTextSize(12);
-  cancel.setTextColor(CANCEL_INK);
+  cancel.setTextColor(themed(CANCEL_INK));
   cancel.setGravity(Gravity.CENTER);
   cancel.setMinHeight(dp(HEIGHT_DP));
   cancel.setMinWidth(dp(HEIGHT_DP));
@@ -87,7 +87,7 @@ final class ReturnControl extends LinearLayout {
   StateListDrawable cb = new StateListDrawable();
   GradientDrawable cp = new GradientDrawable();
   cp.setCornerRadius(dp(RADIUS_DP));
-  cp.setColor(0x335c2a39);
+  cp.setColor(themed(0x335c2a39));
   cb.addState(new int[]{android.R.attr.state_pressed}, cp);
   cancel.setBackground(cb);
   cancel.setPadding(dp(8), dp(6), dp(8), dp(6));
@@ -100,6 +100,15 @@ final class ReturnControl extends LinearLayout {
 
  int dp(float v) { return Math.round(v * density); }
 
+ /** Plan 1E: the current theme's exact RoseTheme.ReturnControl token for one of V3's Oxblood colours above (the
+  * Oxblood token table holds exactly these values, each once), so Oxblood is unchanged and Glacier draws its own
+  * table. A colour outside the table is returned as given. */
+ static int themed(int oxblood) {
+  for (int key = RoseTheme.ReturnControl.INK; key <= RoseTheme.ReturnControl.CANCEL_PRESSED; key++)
+   if (RoseTheme.ReturnControl.color(RoseTheme.OXBLOOD, key) == oxblood) return RoseTheme.ReturnControl.color(RoseThemeNow.id, key);
+  return oxblood;
+ }
+
  /** V3's surface, drawn 6dp in from the 48dp target, top and bottom; pressed changes colour only. */
  Drawable surface() {
   StateListDrawable s = new StateListDrawable();
@@ -109,12 +118,12 @@ final class ReturnControl extends LinearLayout {
  }
 
  Drawable plate(int[] fill, int edge, int topEdge) {
-  GradientDrawable body = new GradientDrawable(GradientDrawable.Orientation.TL_BR, fill);
+  GradientDrawable body = new GradientDrawable(GradientDrawable.Orientation.TL_BR, new int[]{themed(fill[0]), themed(fill[1])});
   body.setCornerRadius(dp(RADIUS_DP));
-  body.setStroke(Math.max(1, dp(1)), edge);
+  body.setStroke(Math.max(1, dp(1)), themed(edge));
   // The lighter top edge (V3 border-top-color) over the hairline, between the rounded corners.
   GradientDrawable top = new GradientDrawable();
-  top.setColor(topEdge);
+  top.setColor(themed(topEdge));
   LayerDrawable layers = new LayerDrawable(new Drawable[]{body, top});
   layers.setLayerHeight(1, Math.max(1, dp(1)));
   layers.setLayerGravity(1, Gravity.TOP | Gravity.FILL_HORIZONTAL);
@@ -128,8 +137,8 @@ final class ReturnControl extends LinearLayout {
   setVisibility(VISIBLE);
   String t = ReturnModel.text(s);
   if (!t.contentEquals(label.getText())) label.setText(t);
-  label.setTextColor(s.pending() ? PENDING_INK : INK);
-  ((Chevron) chevron.getBackground()).setColor(s.pending() ? PENDING_INK : INK);
+  label.setTextColor(themed(s.pending() ? PENDING_INK : INK));
+  ((Chevron) chevron.getBackground()).setColor(themed(s.pending() ? PENDING_INK : INK));
   button.setContentDescription(ReturnModel.spoken(s));
   button.setStateDescription(s.pending() ? "Returning" : null);
   button.setTooltipText(ReturnModel.HELP);
@@ -145,7 +154,7 @@ final class ReturnControl extends LinearLayout {
    paint.setStyle(Paint.Style.STROKE);
    paint.setStrokeCap(Paint.Cap.ROUND);
    paint.setStrokeJoin(Paint.Join.ROUND);
-   paint.setColor(INK);
+   paint.setColor(themed(INK));
    this.density = density;
   }
   final float density;

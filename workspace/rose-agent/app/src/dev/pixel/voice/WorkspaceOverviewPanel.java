@@ -84,7 +84,7 @@ final class WorkspaceOverviewPanel extends FrameLayout {
   pearl=new RosePearl(density,18);View pv=new View(c);pv.setBackground(pearl);pv.setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_NO);
   head.addView(pv,new LinearLayout.LayoutParams(dp(30),dp(30)));
   FrameLayout back=new FrameLayout(c);
-  GradientDrawable plate=new GradientDrawable();plate.setColor(0x40140a0c);plate.setCornerRadius(dp(10));plate.setStroke(Math.max(1,Math.round(1.25f*density)),0xd9beb4ae);
+  GradientDrawable plate=new GradientDrawable();plate.setColor(RoseThemeNow.c(0x40140a0c));plate.setCornerRadius(dp(10));plate.setStroke(Math.max(1,Math.round(1.25f*density)),RoseThemeNow.c(0xd9beb4ae));
   android.graphics.drawable.InsetDrawable inset=new android.graphics.drawable.InsetDrawable(plate,dp(2));back.setBackground(inset);
   back.addView(new WorkspaceOverviewView.Glyph(c,WorkspaceOverviewView.Glyph.BACK,WorkspaceOverviewView.OX_INK),new LayoutParams(-1,-1));
   back.setClickable(true);back.setFocusable(true);back.setContentDescription("Back to Rose");back.setOnClickListener(v->close());back.setForeground(HomeAppTile.focusRing(density,10));
@@ -177,12 +177,12 @@ final class WorkspaceOverviewPanel extends FrameLayout {
   for(CurrentApps.App o:apps.apps())if(sid.equals(o.sessionId)){if(names.length()>0)names.append(", ");names.append(label(o.packageName));}
   closeSheet();
   FrameLayout host=new FrameLayout(getContext());host.setTag("stop-sheet");
-  View scrim=new View(getContext());scrim.setBackgroundColor(0x80080203);scrim.setOnClickListener(v->{closeSheet();});
+  View scrim=new View(getContext());scrim.setBackgroundColor(RoseThemeNow.c(0x80080203));scrim.setOnClickListener(v->{closeSheet();});
   host.addView(scrim,new LayoutParams(-1,-1));
   LinearLayout box=new LinearLayout(getContext());box.setOrientation(LinearLayout.VERTICAL);box.setPadding(dp(22),dp(26),dp(22),dp(20));
-  GradientDrawable bg=new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,new int[]{0xff3a1219,0xff24090e});bg.setCornerRadius(dp(32));box.setBackground(bg);box.setElevation(dp(16));
-  TextView title=new TextView(getContext());title.setText(STOP_SHEET_TITLE);title.setTextSize(22);title.setLetterSpacing(-.02f);title.setTextColor(WorkspaceOverviewView.OX_INK);title.setAccessibilityHeading(true);box.addView(title);
-  TextView desc=new TextView(getContext());desc.setText("Rose stops its session for "+names+". Its apps may stay listed until Android closes them.");desc.setTextSize(15);desc.setLineSpacing(0,1.45f);desc.setTextColor(WorkspaceOverviewView.OX_INK2);desc.setPadding(0,dp(8),0,dp(20));box.addView(desc);
+  GradientDrawable bg=new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,RoseThemeNow.c(new int[]{0xff3a1219,0xff24090e}));bg.setCornerRadius(dp(32));box.setBackground(bg);box.setElevation(dp(16));
+  TextView title=new TextView(getContext());title.setText(STOP_SHEET_TITLE);title.setTextSize(22);title.setLetterSpacing(-.02f);title.setTextColor(RoseThemeNow.c(WorkspaceOverviewView.OX_INK));title.setAccessibilityHeading(true);box.addView(title);
+  TextView desc=new TextView(getContext());desc.setText("Rose stops its session for "+names+". Its apps may stay listed until Android closes them.");desc.setTextSize(15);desc.setLineSpacing(0,1.45f);desc.setTextColor(RoseThemeNow.c(WorkspaceOverviewView.OX_INK2));desc.setPadding(0,dp(8),0,dp(20));box.addView(desc);
   LinearLayout row=new LinearLayout(getContext());
   TextView keep=sheetButton("Keep working",false),stop=sheetButton("Stop",true);
   keep.setOnClickListener(v->closeSheet());
@@ -196,8 +196,8 @@ final class WorkspaceOverviewPanel extends FrameLayout {
  }
  private TextView sheetButton(String text,boolean danger){
   TextView b=new TextView(getContext());b.setText(text);b.setGravity(Gravity.CENTER);b.setTextSize(15);b.setClickable(true);b.setFocusable(true);
-  GradientDrawable g=new GradientDrawable();g.setCornerRadius(dp(26));g.setColor(danger?0xffc42a3a:0x47000000);if(!danger)g.setStroke(Math.max(1,dp(1)),0x47ecd5c6);b.setBackground(g);
-  b.setTextColor(danger?0xffffffff:WorkspaceOverviewView.OX_INK);b.setForeground(HomeAppTile.focusRing(getResources().getDisplayMetrics().density,26));b.setTag(danger?"sheet-stop":"sheet-keep");return b;
+  GradientDrawable g=new GradientDrawable();g.setCornerRadius(dp(26));g.setColor(danger?RoseThemeNow.w(0xffc42a3a):RoseThemeNow.c(0x47000000));if(!danger)g.setStroke(Math.max(1,dp(1)),RoseThemeNow.c(0x47ecd5c6));b.setBackground(g);
+  b.setTextColor(danger?0xffffffff:RoseThemeNow.c(WorkspaceOverviewView.OX_INK));b.setForeground(HomeAppTile.focusRing(getResources().getDisplayMetrics().density,26));b.setTag(danger?"sheet-stop":"sheet-keep");return b;
  }
  void closeSheet(){if(sheet!=null){removeView(sheet);sheet=null;}}
  private WorkspaceOverviewView.Labels labels;

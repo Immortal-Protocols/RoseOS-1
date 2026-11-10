@@ -169,7 +169,7 @@ final class WorkspaceOverviewView extends LinearLayout {
  /** One window card: body (index 0), identity chip, state chip and Stop, and the running edge as its foreground. */
  FrameLayout card(Drawable icon,String label,String state,boolean running,View stopView){
   FrameLayout card=new FrameLayout(getContext());card.setClickable(true);card.setFocusable(true);
-  GradientDrawable bg=new GradientDrawable();bg.setColor(CARD);bg.setCornerRadius(dp(RADIUS_DP));bg.setStroke(Math.max(1,dp(1)),RING);card.setBackground(bg);
+  GradientDrawable bg=new GradientDrawable();bg.setColor(RoseThemeNow.c(CARD));bg.setCornerRadius(dp(RADIUS_DP));bg.setStroke(Math.max(1,dp(1)),RoseThemeNow.c(RING));card.setBackground(bg);
   card.setClipToOutline(true);
   // Body: no live frame yet, so the app's name and the plain statement (below the chip), never a stand-in picture.
   LinearLayout b=new LinearLayout(getContext());b.setOrientation(VERTICAL);b.setPadding(dp(14),dp(58),dp(14),dp(56));
@@ -180,14 +180,14 @@ final class WorkspaceOverviewView extends LinearLayout {
   // Identity chip (oxblood.css:424-425): 9dp in, 7dp padding, radius 10, frosted, the app's real 24dp icon.
   if(icon!=null){
    FrameLayout chip=new FrameLayout(getContext());chip.setPadding(dp(7),dp(7),dp(7),dp(7));
-   GradientDrawable cg=new GradientDrawable();cg.setColor(0x61281e1a);cg.setCornerRadius(dp(10));cg.setStroke(Math.max(1,dp(1)),0x8cecded6);
+   GradientDrawable cg=new GradientDrawable();cg.setColor(RoseThemeNow.c(0x61281e1a));cg.setCornerRadius(dp(10));cg.setStroke(Math.max(1,dp(1)),RoseThemeNow.c(0x8cecded6));
    chip.setBackground(new android.graphics.drawable.LayerDrawable(new Drawable[]{new BlurUnder(chip,14,0,dp(10),1.3f,density()),cg}));chip.setTag("identity-chip");
    ImageView iv=new ImageView(getContext());iv.setImageDrawable(icon);iv.setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_NO);chip.addView(iv,new FrameLayout.LayoutParams(dp(24),dp(24)));
    FrameLayout.LayoutParams clp=new FrameLayout.LayoutParams(-2,-2,Gravity.TOP|Gravity.START);clp.leftMargin=clp.topMargin=dp(9);card.addView(chip,clp);
   }
   // State chip (oxblood.css:302-306): bottom left, frosted; hidden while the app is simply running.
   TextView chip=text(state,11.5f,OX_INK,false);chip.setSingleLine(true);chip.setEllipsize(TextUtils.TruncateAt.END);chip.setPadding(dp(9),dp(4),dp(9),dp(4));
-  GradientDrawable sg=new GradientDrawable();sg.setColor(0x8c1e0e10);sg.setCornerRadius(dp(9));sg.setStroke(Math.max(1,dp(1)),0x38ffece0);
+  GradientDrawable sg=new GradientDrawable();sg.setColor(RoseThemeNow.c(0x8c1e0e10));sg.setCornerRadius(dp(9));sg.setStroke(Math.max(1,dp(1)),RoseThemeNow.c(0x38ffece0));
   chip.setBackground(new android.graphics.drawable.LayerDrawable(new Drawable[]{new BlurUnder(chip,10,0,dp(9),1f,density()),sg}));chip.setTag("state-chip");
   if(running)chip.setVisibility(INVISIBLE);
   FrameLayout.LayoutParams sp=new FrameLayout.LayoutParams(-2,-2,Gravity.BOTTOM|Gravity.START);sp.leftMargin=dp(8);sp.bottomMargin=dp(8)+dp(11);sp.rightMargin=dp(8+44);card.addView(chip,sp);
@@ -283,9 +283,9 @@ final class WorkspaceOverviewView extends LinearLayout {
   FrostedStop(float density,boolean can){d=density;this.can=can;}
   @Override public void draw(Canvas c){
    android.graphics.Rect b=getBounds();float cx=b.exactCenterX(),cy=b.exactCenterY(),h=17*d,r=8*d,w=1.25f*d;
-   p.reset();p.setAntiAlias(true);p.setColor(0x9e34221c);c.drawRoundRect(cx-h,cy-h,cx+h,cy+h,r,r,p);
-   p.setStyle(android.graphics.Paint.Style.STROKE);p.setStrokeWidth(w);p.setColor(0xc7ecded6);c.drawRoundRect(cx-h+w/2,cy-h+w/2,cx+h-w/2,cy+h-w/2,r-w/2,r-w/2,p);
-   p.setStyle(android.graphics.Paint.Style.FILL);p.setColor(can?0xfff9304a:0xff8a7a76);float q=6.4f*d;c.drawRoundRect(cx-q,cy-q,cx+q,cy+q,1.2f*d,1.2f*d,p);
+   p.reset();p.setAntiAlias(true);p.setColor(RoseThemeNow.c(0x9e34221c));c.drawRoundRect(cx-h,cy-h,cx+h,cy+h,r,r,p);
+   p.setStyle(android.graphics.Paint.Style.STROKE);p.setStrokeWidth(w);p.setColor(RoseThemeNow.c(0xc7ecded6));c.drawRoundRect(cx-h+w/2,cy-h+w/2,cx+h-w/2,cy+h-w/2,r-w/2,r-w/2,p);
+   p.setStyle(android.graphics.Paint.Style.FILL);p.setColor(can?RoseThemeNow.w(0xfff9304a):RoseThemeNow.c(0xff8a7a76));float q=6.4f*d;c.drawRoundRect(cx-q,cy-q,cx+q,cy+q,1.2f*d,1.2f*d,p);
   }
   @Override public void setAlpha(int alpha){}
   @Override public void setColorFilter(android.graphics.ColorFilter f){}
@@ -312,13 +312,13 @@ final class WorkspaceOverviewView extends LinearLayout {
    float w=2*d,r=RADIUS_DP*d;android.graphics.RectF ring=new android.graphics.RectF(b.left+w/2,b.top+w/2,b.right-w/2,b.bottom-w/2);
    p.reset();p.setAntiAlias(true);p.setStyle(android.graphics.Paint.Style.STROKE);
    // Glow: 0 0 18px rgba(200,40,70,.22), inside the card here (the card clips to its outline).
-   p.setStrokeWidth(6*d);p.setColor(0x38c82846);p.setMaskFilter(new android.graphics.BlurMaskFilter(Math.max(.1f,(9*d-.5f)/.57735f),android.graphics.BlurMaskFilter.Blur.NORMAL));
+   p.setStrokeWidth(6*d);p.setColor(RoseThemeNow.c(0x38c82846));p.setMaskFilter(new android.graphics.BlurMaskFilter(Math.max(.1f,(9*d-.5f)/.57735f),android.graphics.BlurMaskFilter.Blur.NORMAL));
    c.drawRoundRect(ring,r,r,p);p.setMaskFilter(null);
    p.setStrokeWidth(w);
-   p.setShader(new android.graphics.LinearGradient(0,b.top,0,b.bottom,new int[]{0xfff1cfc8,0xffc44a5e,0xff9a3848,0xffc4574e},new float[]{0,.14f,.55f,1},android.graphics.Shader.TileMode.CLAMP));
+   p.setShader(new android.graphics.LinearGradient(0,b.top,0,b.bottom,RoseThemeNow.c(new int[]{0xfff1cfc8,0xffc44a5e,0xff9a3848,0xffc4574e}),new float[]{0,.14f,.55f,1},android.graphics.Shader.TileMode.CLAMP));
    c.drawRoundRect(ring,r,r,p);
    // conic-gradient(from angle): transparent to 300deg, platinum at 330, rose at 348, transparent at 360.
-   android.graphics.SweepGradient sweep=new android.graphics.SweepGradient(b.exactCenterX(),b.exactCenterY(),new int[]{0x00ffffff,0x00ffffff,0xe6ffece4,0xffff6a80,0x00ff6a80},new float[]{0,300f/360,330f/360,348f/360,1});
+   android.graphics.SweepGradient sweep=new android.graphics.SweepGradient(b.exactCenterX(),b.exactCenterY(),RoseThemeNow.c(new int[]{0x00ffffff,0x00ffffff,0xe6ffece4,0xffff6a80,0x00ff6a80}),new float[]{0,300f/360,330f/360,348f/360,1});
    android.graphics.Matrix m=new android.graphics.Matrix();m.setRotate(angle-90,b.exactCenterX(),b.exactCenterY());sweep.setLocalMatrix(m);
    p.setShader(sweep);c.drawRoundRect(ring,r,r,p);p.setShader(null);
   }
@@ -330,13 +330,14 @@ final class WorkspaceOverviewView extends LinearLayout {
  View dot(WorkspaceOverview.Dot d){
   View v=new View(getContext());GradientDrawable g=new GradientDrawable();g.setShape(GradientDrawable.OVAL);
   switch(d){
-   case RUNNING:g.setColor(OK);break;case ATTENTION:g.setColor(ATTN);break;case DONE:g.setColor(DONE);break;case STOPPED:g.setColor(STOPPED);break;
-   case STOPPING:g.setColor(Color.TRANSPARENT);g.setStroke(dp(2),STOP);break;default:g.setColor(IDLE);
+   // Plan 1E: attention and stopping stay warm (RoseThemeNow.w); the others are artwork colours (already cool or grey).
+   case RUNNING:g.setColor(RoseThemeNow.c(OK));break;case ATTENTION:g.setColor(RoseThemeNow.w(ATTN));break;case DONE:g.setColor(RoseThemeNow.c(DONE));break;case STOPPED:g.setColor(RoseThemeNow.c(STOPPED));break;
+   case STOPPING:g.setColor(Color.TRANSPARENT);g.setStroke(dp(2),RoseThemeNow.w(STOP));break;default:g.setColor(RoseThemeNow.c(IDLE));
   }
   v.setBackground(g);v.setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_NO);return v;
  }
  TextView text(String s,float sp,int color,boolean bold){
-  TextView t=new TextView(getContext());t.setText(s);t.setTextSize(TypedValue.COMPLEX_UNIT_SP,sp);t.setTextColor(color);t.setIncludeFontPadding(false);
+  TextView t=new TextView(getContext());t.setText(s);t.setTextSize(TypedValue.COMPLEX_UNIT_SP,sp);t.setTextColor(RoseThemeNow.c(color));t.setIncludeFontPadding(false);
   t.setLineSpacing(0,1.15f);if(bold)t.setTypeface(Typeface.create("sans-serif-medium",Typeface.NORMAL));return t;
  }
  int dp(float v){return Math.round(v*getResources().getDisplayMetrics().density);}
@@ -350,13 +351,13 @@ final class WorkspaceOverviewView extends LinearLayout {
   @Override protected void onDraw(Canvas c){
    float size=kind==STOP?20:kind==ROSE?24:28,d=getResources().getDisplayMetrics().density,s=size*d/24f;
    c.save();c.translate((getWidth()-size*d)/2f,(getHeight()-size*d)/2f);c.scale(s,s);
-   p.setColor(color);p.setStrokeCap(Paint.Cap.ROUND);p.setStrokeJoin(Paint.Join.ROUND);
+   p.setColor(kind==STOP?RoseThemeNow.w(color):RoseThemeNow.c(color));p.setStrokeCap(Paint.Cap.ROUND);p.setStrokeJoin(Paint.Join.ROUND);
    switch(kind){
     case BACK:{p.setStyle(Paint.Style.STROKE);p.setStrokeWidth(2.2f);Path a=new Path();a.moveTo(15,5);a.lineTo(8,12);a.lineTo(15,19);c.drawPath(a,p);break;}
     case END:p.setStyle(Paint.Style.STROKE);p.setStrokeWidth(2.2f);c.drawLine(6,6,18,18,p);c.drawLine(18,6,6,18,p);break;
     case GRID:p.setStyle(Paint.Style.FILL);for(float[] r:new float[][]{{3.5f,3.5f},{13,3.5f},{3.5f,13},{13,13}})c.drawRoundRect(new RectF(r[0],r[1],r[0]+7.5f,r[1]+7.5f),2.2f,2.2f,p);break;
     case STOP:p.setStyle(Paint.Style.FILL);c.drawRoundRect(new RectF(6.5f,6.5f,17.5f,17.5f),2.4f,2.4f,p);break;
-    default:{p.setStyle(Paint.Style.FILL);p.setShader(new android.graphics.RadialGradient(9,8,13,new int[]{0xfffbe3e7,color,0xff8e4c5d},new float[]{0f,.55f,1f},android.graphics.Shader.TileMode.CLAMP));
+    default:{p.setStyle(Paint.Style.FILL);p.setShader(new android.graphics.RadialGradient(9,8,13,RoseThemeNow.c(new int[]{0xfffbe3e7,color,0xff8e4c5d}),new float[]{0f,.55f,1f},android.graphics.Shader.TileMode.CLAMP));
      c.drawCircle(12,12,10,p);p.setShader(null);}
    }
    c.restore();

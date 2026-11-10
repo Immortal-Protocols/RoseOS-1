@@ -125,6 +125,8 @@ public final class AgentTrayPrototype implements DisplayManager.DisplayListener 
         if (message.what != 100) return true;
         Bundle data = message.getData();
         if (data.getInt("protocolVersion") != 1) return true;
+        // Plan 1E: Rose Agent's theme choice; SystemUI applies, mirrors and acknowledges it (RoseThemeMirror).
+        theme.fromRose(data.getString(RoseTheme.TRAY_KEY));
         listening = data.getBoolean("listening");
         muted = data.getBoolean("muted");
         if (view != null) view.describe();
@@ -145,6 +147,20 @@ public final class AgentTrayPrototype implements DisplayManager.DisplayListener 
         @Override public void onBindingDied(ComponentName name) { link.bindingDied(); }
         @Override public void onNullBinding(ComponentName name) { link.bindingDied(); }
     };
+    // Plan 1E: the Rose theme SystemUI draws, mirrored to Settings.Global for Launcher3 and the keyboard.
+    private final RoseThemeMirror theme = new RoseThemeMirror(new RoseThemeMirror.Port() {
+        @Override public String read() {
+            return Settings.Global.getString(context.getContentResolver(), RoseTheme.SETTING_KEY);
+        }
+        @Override public boolean write(String id) {
+            try { return Settings.Global.putString(context.getContentResolver(), RoseTheme.SETTING_KEY, id); }
+            catch (RuntimeException e) {
+                Log.w(TAG, "Rose theme setting not written", e);
+                return false;
+            }
+        }
+        @Override public void acknowledge(String id) { sendThemeShown(id); }
+    });
     // Subscribed only while the screen is on (OS-TRAY-LIFECYCLE-001); see AgentTrayLink.
     private final AgentTrayLink link = new AgentTrayLink(new AgentTrayLink.Port() {
         @Override public boolean bind(int user) {
@@ -213,6 +229,14 @@ public final class AgentTrayPrototype implements DisplayManager.DisplayListener 
                     @Override public void onChange(boolean selfChange) { chinMaybeChanged(); }
                 }, UserHandle.SYSTEM);
         SystemProperties.addChangeCallback(() -> handler.post(this::chinMaybeChanged));
+        // Plan 1E: the last theme is drawn before Rose answers, and an outside change of the setting is followed.
+        theme.start();
+        RoseThemeMirror.listen(() -> { if (view != null) view.invalidate(); });
+        context.getContentResolver().registerContentObserver(
+                Settings.Global.getUriFor(RoseTheme.SETTING_KEY), false,
+                new ContentObserver(handler) {
+                    @Override public void onChange(boolean selfChange) { theme.settingChanged(); }
+                });
         handler.post(() -> {
             if (!screenOff) link.screenOn(ActivityManager.getCurrentUser());
             reconcile();
@@ -240,6 +264,8 @@ public final class AgentTrayPrototype implements DisplayManager.DisplayListener 
         Message message = Message.obtain(null, action);
         // F08: Rose Agent hides its own mute only where the chin can stand in for it.
         if (action == AgentTrayLink.REGISTER) message.arg2 = sentChin = chinArg();
+        // Plan 1E: a new subscription is acknowledged afresh, so Rose never keeps a stale theme answer.
+        if (action == AgentTrayLink.REGISTER) theme.resubscribed();
         message.replyTo = reply;
         try { voice.send(message); } catch (RemoteException e) { return false; }
         // 1C: each REGISTER is followed by the current return target, so a new subscriber never holds a stale one.
@@ -267,6 +293,17 @@ public final class AgentTrayPrototype implements DisplayManager.DisplayListener 
     private void sendReturnResult(int attempt, int result) {
         if (voice == null) return;
         Message message = Message.obtain(null, AgentTrayLink.Return.RESULT, attempt, result);
+        message.replyTo = reply;
+        try { voice.send(message); } catch (RemoteException e) { link.disconnected(); }
+    }
+
+    /** Plan 1E: THEME_SHOWN, the theme SystemUI's Rose surfaces now draw. */
+    private void sendThemeShown(String id) {
+        if (voice == null || !link.subscribed()) return;
+        Message message = Message.obtain(null, AgentTrayLink.THEME_SHOWN);
+        Bundle data = new Bundle();
+        data.putString(RoseTheme.TRAY_KEY, id);
+        message.setData(data);
         message.replyTo = reply;
         try { voice.send(message); } catch (RemoteException e) { link.disconnected(); }
     }
@@ -361,11 +398,13 @@ public final class AgentTrayPrototype implements DisplayManager.DisplayListener 
             final float glyph = h - dp(4);
             final float width = dp(6) + glyph + dp(4) + micOffPaint.measureText(label) + dp(8);
             final RectF pill = new RectF(left, top, left + width, top + h);
-            micOffPaint.setColor(MUTED_FILL);
+            // Plan 1E: muted keeps its warm meaning in every theme (RoseTheme.warm).
+            final String t = RoseThemeMirror.current();
+            micOffPaint.setColor(RoseTheme.warm(t, MUTED_FILL));
             canvas.drawRoundRect(pill, h / 2, h / 2, micOffPaint);
             micOffPaint.setStyle(Paint.Style.STROKE);
             micOffPaint.setStrokeWidth(dp(1));
-            micOffPaint.setColor(MUTED_RING);
+            micOffPaint.setColor(RoseTheme.warm(t, MUTED_RING));
             canvas.drawRoundRect(pill, h / 2, h / 2, micOffPaint);
             // The chin's 24-unit mic glyph, scaled to the pill, with its slash.
             final int save = canvas.save();
@@ -373,7 +412,7 @@ public final class AgentTrayPrototype implements DisplayManager.DisplayListener 
             canvas.translate(left + dp(6), top + (h - glyph) / 2f);
             canvas.scale(s, s);
             micOffPaint.setStyle(Paint.Style.FILL);
-            micOffPaint.setColor((MUTED_INK & 0x00ffffff) | (Math.round(.55f * 255) << 24));
+            micOffPaint.setColor((RoseTheme.warm(t, MUTED_INK) & 0x00ffffff) | (Math.round(.55f * 255) << 24));
             canvas.drawRoundRect(new RectF(8.6f, 2.5f, 15.4f, 15f), 3.4f, 3.4f, micOffPaint);
             micOffPaint.setStyle(Paint.Style.STROKE);
             micOffPaint.setStrokeWidth(1.9f);
@@ -388,11 +427,11 @@ public final class AgentTrayPrototype implements DisplayManager.DisplayListener 
             micOffPath.reset();
             micOffPath.moveTo(4.5f, 3.5f);
             micOffPath.lineTo(19.5f, 20.5f);
-            micOffPaint.setColor(MUTED_INK);
+            micOffPaint.setColor(RoseTheme.warm(t, MUTED_INK));
             canvas.drawPath(micOffPath, micOffPaint);
             canvas.restoreToCount(save);
             micOffPaint.setStyle(Paint.Style.FILL);
-            micOffPaint.setColor(MUTED_INK);
+            micOffPaint.setColor(RoseTheme.warm(t, MUTED_INK));
             final Paint.FontMetrics m = micOffPaint.getFontMetrics();
             canvas.drawText(label, left + dp(6) + glyph + dp(4), top + h / 2f - (m.ascent + m.descent) / 2f,
                     micOffPaint);

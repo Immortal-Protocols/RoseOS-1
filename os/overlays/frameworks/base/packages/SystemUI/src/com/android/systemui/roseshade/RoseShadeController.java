@@ -57,6 +57,9 @@ import android.widget.TextView;
 import android.window.OnBackInvokedCallback;
 import android.window.OnBackInvokedDispatcher;
 
+import com.android.wm.shell.RoseTheme;
+import com.android.wm.shell.RoseThemeMirror;
+
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -135,6 +138,10 @@ final class RoseShadeController {
     private boolean mImeVisible;
     private boolean mRestoringScroll;
     private OnBackInvokedCallback mBack;
+    /** RoseOS (1E): the theme the shown views were built in (the palette above is Oxblood's token values). */
+    private String mTheme = RoseTheme.DEFAULT;
+    private TextView mTitle;
+    private ImageView mMore;
 
     RoseShadeController(Context context, Canceller canceller) {
         mContext = context.createWindowContext(WindowManager.LayoutParams.TYPE_STATUS_BAR_ADDITIONAL, null);
@@ -157,6 +164,39 @@ final class RoseShadeController {
                 if (mAttached) close();
             }
         }, filter, null, mHandler, Context.RECEIVER_EXPORTED);
+        // A theme change while the shade shows recolours it in place; a closed shade picks it up when built.
+        RoseThemeMirror.listen(this::onThemeChanged);
+    }
+
+    // ---- Theme (1E) ----
+
+    /** This theme's shade token (RoseTheme.Shade); Oxblood's equal the palette constants above. */
+    private int c(int key) {
+        return RoseTheme.Shade.color(mTheme, key);
+    }
+
+    /**
+     * A quick-settings tile's state line: TEXT2 on an off tile; on an on tile, Oxblood keeps today's TEXT2 (pale
+     * ink on the dark ruby fill) while other themes, whose accent fill is pale, use ACCENT_INK so it stays readable.
+     */
+    private int onAccentSecondary(boolean on) {
+        if (!on || RoseTheme.OXBLOOD.equals(RoseTheme.normalize(mTheme))) return c(RoseTheme.Shade.TEXT2);
+        return c(RoseTheme.Shade.ACCENT_INK);
+    }
+
+    /** RoseThemeMirror's listener, on the main thread: recolours the open shade without touching its state. */
+    private void onThemeChanged() {
+        final String theme = RoseThemeMirror.current();
+        if (theme.equals(mTheme)) return;
+        mTheme = theme;
+        if (!mAttached || mPanel == null) return;
+        mScrim.setBackgroundColor(c(RoseTheme.Shade.SCRIM));
+        ((GradientDrawable) mPanel.getBackground()).setColor(c(RoseTheme.Shade.PANEL));
+        mTitle.setTextColor(c(RoseTheme.Shade.TEXT));
+        mMore.setImageDrawable(new RoseShadeIcons(RoseShadeIcons.Glyph.CHEVRON_DOWN, c(RoseTheme.Shade.TEXT2),
+                dp(1.8f)));
+        for (ReplyRow row : mReplyRows.values()) row.recolor();
+        render();
     }
 
     static boolean enabled() {
@@ -285,6 +325,7 @@ final class RoseShadeController {
 
     private void attach() {
         if (mAttached) return;
+        mTheme = RoseThemeMirror.current();
         buildViews();
         final WindowManager.LayoutParams params = new WindowManager.LayoutParams(
                 WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT,
@@ -441,14 +482,14 @@ final class RoseShadeController {
     }
 
     private TextView pill(String label, boolean primary, View.OnClickListener click) {
-        final TextView b = text(label, 14, TEXT, false);
+        final TextView b = text(label, 14, c(primary ? RoseTheme.Shade.ACCENT_INK : RoseTheme.Shade.TEXT), false);
         b.setGravity(Gravity.CENTER);
         b.setPadding(dp(18), dp(8), dp(18), dp(8));
         // Touch targets of at least 48dp (F09 handoff).
         b.setMinHeight(dp(48));
         b.setMinWidth(dp(48));
-        final GradientDrawable bg = round(primary ? RUBY : 0x00000000, dp(24));
-        if (!primary) bg.setStroke(dp(1), 0x66F4EEEE);
+        final GradientDrawable bg = round(primary ? c(RoseTheme.Shade.ACCENT) : 0x00000000, dp(24));
+        if (!primary) bg.setStroke(dp(1), c(RoseTheme.Shade.LINE));
         b.setBackground(bg);
         b.setOnClickListener(click);
         return b;
@@ -487,7 +528,7 @@ final class RoseShadeController {
         };
         mRoot.setFocusableInTouchMode(true);
         mScrim = new View(mContext);
-        mScrim.setBackgroundColor(SCRIM);
+        mScrim.setBackgroundColor(c(RoseTheme.Shade.SCRIM));
         mScrim.setAlpha(0f);
         mScrim.setOnClickListener(v -> close());
         mRoot.addView(mScrim, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
@@ -495,7 +536,7 @@ final class RoseShadeController {
 
         mPanel = new LinearLayout(mContext);
         mPanel.setOrientation(LinearLayout.VERTICAL);
-        mPanel.setBackground(round(PANEL, dp(28)));
+        mPanel.setBackground(round(c(RoseTheme.Shade.PANEL), dp(28)));
         mPanel.setPadding(dp(18), dp(12), dp(18), dp(18));
         mPanel.setClickable(true);  // taps inside never reach the scrim
         final FrameLayout.LayoutParams panel = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
@@ -518,10 +559,13 @@ final class RoseShadeController {
             }
         };
         header.setGravity(Gravity.CENTER_VERTICAL);
-        final TextView title = text("Notifications", 28, TEXT, false);
+        final TextView title = text("Notifications", 28, c(RoseTheme.Shade.TEXT), false);
+        mTitle = title;
         header.addView(title, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
         // Opens or folds the labelled quick settings view (board panel 04); a tile long press does the same.
-        final ImageView more = button(RoseShadeIcons.Glyph.CHEVRON_DOWN, TEXT_2, 28, "Quick settings");
+        final ImageView more = button(RoseShadeIcons.Glyph.CHEVRON_DOWN, c(RoseTheme.Shade.TEXT2), 28,
+                "Quick settings");
+        mMore = more;
         more.setOnClickListener(v -> toggleQuickSettings());
         header.addView(more);
         mPanel.addView(header);
@@ -607,10 +651,10 @@ final class RoseShadeController {
         if (undo != null) {
             final LinearLayout row = new LinearLayout(mContext);
             row.setGravity(Gravity.CENTER_VERTICAL);
-            row.setBackground(round(TILE, dp(22)));
+            row.setBackground(round(c(RoseTheme.Shade.TILE), dp(22)));
             row.setPadding(dp(16), dp(4), dp(8), dp(4));
             row.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
-            row.addView(text(undo, 15, TEXT, false),
+            row.addView(text(undo, 15, c(RoseTheme.Shade.TEXT), false),
                     new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
             row.addView(pill(RoseShadeModel.UNDO, false, v -> {
                 if (mModel.undo()) render();
@@ -623,9 +667,9 @@ final class RoseShadeController {
             empty.setOrientation(LinearLayout.VERTICAL);
             empty.setGravity(Gravity.CENTER);
             empty.setPadding(0, dp(56), 0, dp(56));
-            final TextView title = text(RoseShadeModel.EMPTY_TITLE, 24, TEXT, false);
+            final TextView title = text(RoseShadeModel.EMPTY_TITLE, 24, c(RoseTheme.Shade.TEXT), false);
             title.setGravity(Gravity.CENTER);
-            final TextView body = text(RoseShadeModel.EMPTY_BODY, 16, TEXT_2, false);
+            final TextView body = text(RoseShadeModel.EMPTY_BODY, 16, c(RoseTheme.Shade.TEXT2), false);
             body.setGravity(Gravity.CENTER);
             empty.addView(title);
             empty.addView(body);
@@ -694,13 +738,13 @@ final class RoseShadeController {
     private LinearLayout row(RoseShadeIcons.Glyph lead, String label, RoseShadeIcons.Glyph trail) {
         final LinearLayout row = new LinearLayout(mContext);
         row.setGravity(Gravity.CENTER_VERTICAL);
-        row.setBackground(round(CARD, dp(22)));
+        row.setBackground(round(c(RoseTheme.Shade.CARD), dp(22)));
         row.setPadding(dp(16), dp(14), dp(16), dp(14));
-        row.addView(icon(lead, TEXT, 22));
-        final TextView t = text(label, 16, TEXT, false);
+        row.addView(icon(lead, c(RoseTheme.Shade.TEXT), 22));
+        final TextView t = text(label, 16, c(RoseTheme.Shade.TEXT), false);
         t.setPadding(dp(12), 0, 0, 0);
         row.addView(t, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
-        if (trail != null) row.addView(icon(trail, TEXT, 20));
+        if (trail != null) row.addView(icon(trail, c(RoseTheme.Shade.TEXT), 20));
         return row;
     }
 
@@ -713,9 +757,11 @@ final class RoseShadeController {
             final LinearLayout tiles = new LinearLayout(mContext);
             for (RoseQuickSettings.Tile tile : RoseQuickSettings.TILES) {
                 final FrameLayout t = new FrameLayout(mContext);
-                t.setBackground(round(mQuickSettings.isOn(tile) ? RUBY : TILE, dp(18)));
+                final boolean on = mQuickSettings.isOn(tile);
+                t.setBackground(round(c(on ? RoseTheme.Shade.ACCENT : RoseTheme.Shade.TILE), dp(18)));
                 t.setContentDescription(tile.label + " " + mQuickSettings.stateLabel(tile));
-                final ImageView i = icon(glyphs[tile.ordinal()], TEXT, 24);
+                final ImageView i = icon(glyphs[tile.ordinal()], c(on ? RoseTheme.Shade.ACCENT_INK
+                        : RoseTheme.Shade.TEXT), 24);
                 t.addView(i, new FrameLayout.LayoutParams(dp(24), dp(24), Gravity.CENTER));
                 t.setOnClickListener(v -> mSystem.toggle(tile));
                 // A long press opens the labelled quick settings view (board panel 04).
@@ -736,13 +782,16 @@ final class RoseShadeController {
                     final LinearLayout t = new LinearLayout(mContext);
                     t.setGravity(Gravity.CENTER_VERTICAL);
                     t.setPadding(dp(14), dp(14), dp(14), dp(14));
-                    t.setBackground(round(mQuickSettings.isOn(tile) ? RUBY : TILE, dp(20)));
-                    t.addView(icon(glyphs[tile.ordinal()], TEXT, 24));
+                    final boolean on = mQuickSettings.isOn(tile);
+                    t.setBackground(round(c(on ? RoseTheme.Shade.ACCENT : RoseTheme.Shade.TILE), dp(20)));
+                    t.addView(icon(glyphs[tile.ordinal()], c(on ? RoseTheme.Shade.ACCENT_INK
+                            : RoseTheme.Shade.TEXT), 24));
                     final LinearLayout labels = new LinearLayout(mContext);
                     labels.setOrientation(LinearLayout.VERTICAL);
                     labels.setPadding(dp(12), 0, 0, 0);
-                    labels.addView(text(tile.label, 15, TEXT, false));
-                    labels.addView(text(mQuickSettings.stateLabel(tile), 13, TEXT_2, false));
+                    labels.addView(text(tile.label, 15, c(on ? RoseTheme.Shade.ACCENT_INK : RoseTheme.Shade.TEXT),
+                            false));
+                    labels.addView(text(mQuickSettings.stateLabel(tile), 13, onAccentSecondary(on), false));
                     t.addView(labels);
                     t.setOnClickListener(v -> mSystem.toggle(tile));
                     final LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, dp(72), 1);
@@ -754,9 +803,9 @@ final class RoseShadeController {
         }
         final LinearLayout brightness = new LinearLayout(mContext);
         brightness.setGravity(Gravity.CENTER_VERTICAL);
-        brightness.setBackground(round(CARD, dp(20)));
+        brightness.setBackground(round(c(RoseTheme.Shade.CARD), dp(20)));
         brightness.setPadding(dp(14), dp(6), dp(14), dp(6));
-        brightness.addView(icon(RoseShadeIcons.Glyph.SUN, TEXT, 22));
+        brightness.addView(icon(RoseShadeIcons.Glyph.SUN, c(RoseTheme.Shade.TEXT), 22));
         final SeekBar slider = new SeekBar(mContext);
         slider.setMax(1000);
         final float level = mQuickSettings.brightness();
@@ -777,7 +826,7 @@ final class RoseShadeController {
         });
         brightness.addView(slider, new LinearLayout.LayoutParams(0, dp(48), 1));
         if (expanded) {
-            final ImageView settings = button(RoseShadeIcons.Glyph.GEAR, TEXT, 24, "Settings");
+            final ImageView settings = button(RoseShadeIcons.Glyph.GEAR, c(RoseTheme.Shade.TEXT), 24, "Settings");
             settings.setOnClickListener(v -> {
                 // The shade runs only for the owner (user 0), SystemUI's own user.
                 mContext.startActivity(new Intent(Settings.ACTION_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
@@ -796,7 +845,7 @@ final class RoseShadeController {
         // A collapsed group or a card swipes away as a whole; an expanded group's rows swipe alone.
         final boolean whole = !entry.isGroup() || !entry.expanded;
         card.setOrientation(LinearLayout.VERTICAL);
-        card.setBackground(round(CARD, dp(22)));
+        card.setBackground(round(c(RoseTheme.Shade.CARD), dp(22)));
         card.setPadding(dp(16), dp(14), dp(16), dp(14));
 
         final LinearLayout head = new LinearLayout(mContext);
@@ -804,17 +853,17 @@ final class RoseShadeController {
         final RoseShadeModel.Item newest = entry.items.get(0);
         if (ROSE_PACKAGE.equals(newest.packageName)) {
             final View dot = new View(mContext);
-            dot.setBackground(round(RUBY_LIGHT, dp(9)));
+            dot.setBackground(round(c(RoseTheme.Shade.ROSE_DOT), dp(9)));
             head.addView(dot, new LinearLayout.LayoutParams(dp(18), dp(18)));
         } else if (entry.isGroup()) {
-            head.addView(icon(RoseShadeIcons.Glyph.BUBBLE, TEXT, 22));
+            head.addView(icon(RoseShadeIcons.Glyph.BUBBLE, c(RoseTheme.Shade.TEXT), 22));
         }
-        final TextView label = text(entry.header(), 15, TEXT, false);
+        final TextView label = text(entry.header(), 15, c(RoseTheme.Shade.TEXT), false);
         label.setPadding(dp(10), 0, 0, 0);
         head.addView(label, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
         if (entry.isGroup()) {
             head.addView(icon(entry.expanded ? RoseShadeIcons.Glyph.CHEVRON_UP : RoseShadeIcons.Glyph.CHEVRON_DOWN,
-                    TEXT, 20));
+                    c(RoseTheme.Shade.TEXT), 20));
             head.setMinimumHeight(dp(48));
             head.setContentDescription(entry.header() + (entry.expanded ? ", collapse" : ", expand"));
             head.setOnClickListener(v -> {
@@ -822,13 +871,13 @@ final class RoseShadeController {
                 render();
             });
         } else {
-            head.addView(text(RoseShadeModel.age(newest.postedAt, now), 13, TEXT_2, false));
+            head.addView(text(RoseShadeModel.age(newest.postedAt, now), 13, c(RoseTheme.Shade.TEXT2), false));
         }
         card.addView(head);
 
         if (!entry.isGroup()) {
-            card.addView(text(newest.title, 17, TEXT, false));
-            if (!newest.text.isEmpty()) card.addView(text(newest.text, 14, TEXT_2, false));
+            card.addView(text(newest.title, 17, c(RoseTheme.Shade.TEXT), false));
+            if (!newest.text.isEmpty()) card.addView(text(newest.text, 14, c(RoseTheme.Shade.TEXT2), false));
             card.setOnClickListener(v -> open(newest.key));
             addActions(card, newest);
             addConfirm(card, entry.id);
@@ -837,8 +886,8 @@ final class RoseShadeController {
                 final RoseShadeModel.Item item = entry.items.get(i);
                 final LinearLayout line = new LinearLayout(mContext);
                 line.setPadding(0, dp(6), 0, 0);
-                line.addView(text(item.title, 14, TEXT, true));
-                final TextView body = text("  " + item.text, 14, TEXT_2, false);
+                line.addView(text(item.title, 14, c(RoseTheme.Shade.TEXT), true));
+                final TextView body = text("  " + item.text, 14, c(RoseTheme.Shade.TEXT2), false);
                 body.setSingleLine(true);
                 body.setEllipsize(TextUtils.TruncateAt.END);
                 line.addView(body);
@@ -856,14 +905,14 @@ final class RoseShadeController {
                 one.setPadding(0, dp(12), 0, 0);
                 final LinearLayout top = new LinearLayout(mContext);
                 top.setGravity(Gravity.CENTER_VERTICAL);
-                top.addView(icon(RoseShadeIcons.Glyph.PERSON, TEXT, 28));
+                top.addView(icon(RoseShadeIcons.Glyph.PERSON, c(RoseTheme.Shade.TEXT), 28));
                 final LinearLayout words = new LinearLayout(mContext);
                 words.setOrientation(LinearLayout.VERTICAL);
                 words.setPadding(dp(12), 0, 0, 0);
-                words.addView(text(item.title, 16, TEXT, false));
-                words.addView(text(item.text, 14, TEXT_2, false));
+                words.addView(text(item.title, 16, c(RoseTheme.Shade.TEXT), false));
+                words.addView(text(item.text, 14, c(RoseTheme.Shade.TEXT2), false));
                 top.addView(words, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
-                top.addView(text(RoseShadeModel.age(item.postedAt, now), 13, TEXT_2, false));
+                top.addView(text(RoseShadeModel.age(item.postedAt, now), 13, c(RoseTheme.Shade.TEXT2), false));
                 top.setOnClickListener(v -> open(item.key));
                 one.addView(top);
                 addActions(one, item);
@@ -881,7 +930,7 @@ final class RoseShadeController {
         box.setOrientation(LinearLayout.VERTICAL);
         box.setPadding(0, dp(10), 0, 0);
         box.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
-        box.addView(text(RoseShadeModel.CONFIRM_DRAFT_LINE, 14, TEXT, false));
+        box.addView(text(RoseShadeModel.CONFIRM_DRAFT_LINE, 14, c(RoseTheme.Shade.TEXT), false));
         final LinearLayout buttons = new LinearLayout(mContext);
         buttons.setPadding(0, dp(8), 0, 0);
         buttons.addView(pill(RoseShadeModel.KEEP_DRAFT, true, v -> {
@@ -1222,12 +1271,10 @@ final class RoseShadeController {
             field.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
                     | InputType.TYPE_TEXT_FLAG_AUTO_CORRECT);
             field.setImeOptions(EditorInfo.IME_ACTION_SEND);
-            field.setTextColor(TEXT);
-            field.setHintTextColor(TEXT_2);
             field.setHint("Reply");
             final GradientDrawable bg = round(0x00000000, dp(18));
-            bg.setStroke(dp(1), 0x66F4EEEE);
             field.setBackground(bg);
+            colorField();
             field.setPadding(dp(14), dp(8), dp(14), dp(8));
             field.setMinHeight(dp(48));
             // Dragging in the field moves its cursor and selection; it never swipes the card or scrolls the list.
@@ -1266,7 +1313,7 @@ final class RoseShadeController {
             sp.leftMargin = dp(10);
             line.addView(sendButton, sp);
             view.addView(line);
-            status = text("", 13, TEXT_2, false);
+            status = text("", 13, c(RoseTheme.Shade.TEXT2), false);
             status.setPadding(dp(4), dp(6), 0, 0);
             // Sending, Sent and the failures are announced as they happen.
             status.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
@@ -1294,7 +1341,23 @@ final class RoseShadeController {
             status.setText(line == null ? "" : line);
             status.setVisibility(line == null ? View.GONE : View.VISIBLE);
             status.setTextColor(draft.status == RoseShadeReplies.Status.FAILED
-                    || draft.status == RoseShadeReplies.Status.UNCONFIRMED ? RUBY_LIGHT : TEXT_2);
+                    || draft.status == RoseShadeReplies.Status.UNCONFIRMED ? c(RoseTheme.Shade.ERROR)
+                    : c(RoseTheme.Shade.TEXT2));
+        }
+
+        /** The field's ink and outline in the current theme. */
+        private void colorField() {
+            field.setTextColor(c(RoseTheme.Shade.TEXT));
+            field.setHintTextColor(c(RoseTheme.Shade.TEXT2));
+            ((GradientDrawable) field.getBackground()).setStroke(dp(1), c(RoseTheme.Shade.LINE));
+        }
+
+        /** The theme changed while this row is kept: same views, draft and focus, new colours. */
+        void recolor() {
+            colorField();
+            sendButton.setTextColor(c(RoseTheme.Shade.ACCENT_INK));
+            ((GradientDrawable) sendButton.getBackground()).setColor(c(RoseTheme.Shade.ACCENT));
+            updateControls();
         }
     }
 }

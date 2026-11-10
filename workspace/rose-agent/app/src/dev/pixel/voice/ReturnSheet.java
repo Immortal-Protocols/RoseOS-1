@@ -31,14 +31,14 @@ final class ReturnSheet extends FrameLayout {
   super(context);
   density = context.getResources().getDisplayMetrics().density;
   setTag(TAG);
-  setBackgroundColor(0xa814070d);
+  setBackgroundColor(RoseThemeNow.c(0xa814070d));
   setClickable(true); // the backdrop takes touches: Rose stays put underneath until a choice
   setVisibility(GONE);
   LinearLayout sheet = new LinearLayout(context);
   sheet.setOrientation(LinearLayout.VERTICAL);
-  GradientDrawable g = new GradientDrawable(GradientDrawable.Orientation.TL_BR, new int[]{0xff56313b, 0xff2b1924});
+  GradientDrawable g = new GradientDrawable(GradientDrawable.Orientation.TL_BR, RoseThemeNow.c(new int[]{0xff56313b, 0xff2b1924}));
   g.setCornerRadius(dp(14));
-  g.setStroke(Math.max(1, dp(1)), 0x77c39a85);
+  g.setStroke(Math.max(1, dp(1)), RoseThemeNow.c(0x77c39a85));
   sheet.setBackground(g);
   sheet.setPadding(dp(22), dp(22), dp(22), dp(22));
   sheet.setElevation(dp(12));
@@ -78,7 +78,7 @@ final class ReturnSheet extends FrameLayout {
  TextView text(int sp, int color, String family) {
   TextView t = new TextView(getContext());
   t.setTextSize(sp);
-  t.setTextColor(color);
+  t.setTextColor(RoseThemeNow.c(color)); // plan 1E: every sheet text colour is artwork ink
   t.setTypeface(Typeface.create(family, Typeface.NORMAL));
   return t;
  }
@@ -102,9 +102,9 @@ final class ReturnSheet extends FrameLayout {
 
  GradientDrawable fill(int color, int edge) {
   GradientDrawable d = new GradientDrawable();
-  d.setColor(color);
+  d.setColor(RoseThemeNow.c(color));
   d.setCornerRadius(dp(7));
-  d.setStroke(Math.max(1, dp(1)), edge);
+  d.setStroke(Math.max(1, dp(1)), RoseThemeNow.c(edge));
   return d;
  }
 

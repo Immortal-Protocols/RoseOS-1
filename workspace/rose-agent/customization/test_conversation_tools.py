@@ -1,4 +1,4 @@
-"""rose.customization (prototypes/voice-phone-demo): the conversation side of Rose's four customization controls,
+"""rose.customization (prototypes/voice-phone-demo): the conversation side of Rose's customization controls,
 offline with a fake phone link. Kept beside the CLI so the offline suite runs it under the existing workspace/** CI
 trigger (scripts/tests/test_app_tests_paths.py); stdlib only."""
 from __future__ import annotations
@@ -36,12 +36,18 @@ class CatalogTest(unittest.TestCase):
         raw = json.loads(c.CATALOG.read_text(encoding='utf-8'))
         self.assertEqual([t['name'] for t in c.TOOLS], [t['name'] for t in raw])
         self.assertEqual(c.NAMES, {'customization_state', 'customization_home_columns', 'customization_wallpaper',
-                                   'customization_font', 'customization_glasses_hook'})
+                                   'customization_font', 'customization_glasses_hook', 'customization_theme'})
         for tool, spec in zip(c.TOOLS, raw):
             self.assertEqual(tool['inputSchema'], spec['inputSchema'])
             self.assertEqual(tool['description'], spec['description'])
             self.assertEqual(spec['operation'], spec['name'])
             self.assertIs(spec['inputSchema']['additionalProperties'], False)
+
+    def test_themes_are_the_shared_definition(self):
+        defined = json.loads((Path(__file__).resolve().parents[3] / 'themes/rose-themes.json').read_text())
+        themes = c.SPECS['customization_theme']['inputSchema']['properties']['theme']['enum']
+        self.assertEqual(themes, [t['id'] for t in defined['themes']])
+        self.assertIn('customization_theme', c.POLICY_LINE)
 
     def test_wallpaper_is_oxblood_only(self):
         variants = c.SPECS['customization_wallpaper']['inputSchema']['properties']['variant']['enum']
@@ -69,7 +75,9 @@ class ValidateTest(unittest.TestCase):
                 ('customization_font', {'font': 'comic'}, 'Unsupported argument: font'),
                 ('customization_glasses_hook', {}, 'Supply enabled, action or packageName'),
                 ('customization_glasses_hook', {'enabled': 'yes'}, 'Invalid argument: enabled'),
-                ('customization_theme', {}, 'Unknown customization tool'),
+                ('customization_theme', {}, 'Missing argument: theme'),
+                ('customization_theme', {'theme': 'ocean'}, 'Unsupported argument: theme'),
+                ('customization_aurora', {}, 'Unknown customization tool'),
                 ('customization_state', [], 'Arguments must be an object')]:
             with self.assertRaises(c.CustomizationRefused, msg=name) as caught:
                 c.validate(name, args)
@@ -125,6 +133,42 @@ class CallTest(unittest.TestCase):
         link = FakeLink(drawn)
         out = c.call(FakePhone(link), 'customization_font', {'font': 'serif'})
         self.assertEqual((out['ok'], out['outcome'], len(link.calls)), (True, 'applied', 1))
+
+    THEMED = {'status': 'verified', 'changed': True,
+              'customization': {'theme': 'glacier', 'themeLabel': 'Glacier', 'revision': 9},
+              'home': {'appliedRevision': 8, 'applied': False}, 'system': {'shown': 'oxblood', 'applied': False}}
+
+    def test_a_theme_is_done_only_when_home_and_the_system_show_it(self):
+        home_only = {'status': 'ok', 'home': {'appliedRevision': 9, 'applied': True}, 'system': {'shown': 'oxblood', 'applied': False}}
+        both = {'status': 'ok', 'home': {'appliedRevision': 9, 'applied': True}, 'system': {'shown': 'glacier', 'applied': True}}
+        link = FakeLink(self.THEMED, states=[home_only, both])
+        out = c.call(FakePhone(link), 'customization_theme', {'theme': 'glacier'})
+        self.assertEqual(link.calls[0]['params'], {'theme': 'glacier'})
+        self.assertEqual((out['ok'], out['outcome']), (True, 'applied'))
+        self.assertEqual(out['message'], 'Done: Rose is now Glacier everywhere.')
+        self.assertEqual(out['system'], both['system'])
+
+    def test_a_theme_home_shows_but_the_system_never_confirms_is_not_done(self):
+        home_only = {'status': 'ok', 'home': {'appliedRevision': 9, 'applied': True}, 'system': {'shown': 'oxblood', 'applied': False}}
+        out = c.call(FakePhone(FakeLink(self.THEMED, states=[home_only])), 'customization_theme', {'theme': 'glacier'})
+        self.assertEqual((out['ok'], out['outcome']), (False, 'shown_on_home'))
+        self.assertIn('have not confirmed', out['message'])
+
+    def test_a_theme_the_system_acknowledges_for_another_value_is_not_done(self):
+        wrong = {'status': 'ok', 'home': {'appliedRevision': 9, 'applied': True}, 'system': {'shown': 'oxblood', 'applied': True}}
+        out = c.call(FakePhone(FakeLink(self.THEMED, states=[wrong])), 'customization_theme', {'theme': 'glacier'})
+        self.assertEqual(out['outcome'], 'shown_on_home')
+
+    def test_a_theme_not_drawn_on_home_is_saved_not_shown(self):
+        never = {'status': 'ok', 'home': {'appliedRevision': 8, 'applied': False}, 'system': {'shown': 'glacier', 'applied': True}}
+        out = c.call(FakePhone(FakeLink(self.THEMED, states=[never])), 'customization_theme', {'theme': 'glacier'})
+        self.assertEqual((out['ok'], out['outcome']), (False, 'saved_not_shown'))
+
+    def test_an_oxblood_wallpaper_refused_in_glacier_is_rejected(self):
+        refused = {'status': 'error', 'reason': 'That wallpaper belongs to Oxblood; Glacier draws its own. Switch to Oxblood first'}
+        out = c.call(FakePhone(FakeLink(refused)), 'customization_wallpaper', {'variant': 'velvet'})
+        self.assertEqual((out['ok'], out['outcome']), (False, 'rejected'))
+        self.assertIn('Switch to Oxblood first', out['message'])
 
     def test_hook_setting_is_saved_not_applied(self):
         link = FakeLink({'status': 'verified', 'customization': {'revision': 3}, 'glassesWear': {'source': 'bluetooth_audio_connection'}})

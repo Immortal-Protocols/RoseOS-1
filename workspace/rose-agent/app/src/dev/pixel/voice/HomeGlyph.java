@@ -56,7 +56,7 @@ final class HomeGlyph extends Drawable {
 
  HomeGlyph(String key) {
   this.key = key;
-  paint.setColor(CREAM);
+  paint.setColor(RoseThemeNow.c(CREAM));
   paint.setStrokeCap(Paint.Cap.ROUND);
   paint.setStrokeJoin(Paint.Join.ROUND);
   build(key);
@@ -78,6 +78,10 @@ final class HomeGlyph extends Drawable {
 
  @Override public void draw(Canvas canvas) {
   if (getBounds().isEmpty()) return;
+  // Plan 1E: the theme's glyph ink, resolved per draw; the alpha set through setAlpha is kept.
+  int alpha = paint.getAlpha();
+  paint.setColor(RoseThemeNow.c(CREAM));
+  paint.setAlpha(alpha);
   for (int i = 0; i < drawn.size(); i++) {
    float w = widths.get(i);
    paint.setStyle(w == 0 ? Paint.Style.FILL : Paint.Style.STROKE);

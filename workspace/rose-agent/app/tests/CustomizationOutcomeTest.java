@@ -38,6 +38,16 @@ public final class CustomizationOutcomeTest {
   expect(json.equals("{\"appliedRevision\":" + six.revision + ",\"applied\":true,\"effectiveColumns\":5}"), json);
   expect(CustomizationConfig.json(before).contains("\"effectiveColumns\":null"), CustomizationConfig.json(before));
 
+  // Plan 1E: the theme counts as shown on the system surfaces only when SystemUI acknowledged exactly it.
+  expect(Boolean.TRUE.equals(CustomizationOutcome.system("glacier", "glacier").get("applied"))
+    && !CustomizationOutcome.system("glacier", "glacier").containsKey("note"), "SystemUI shows the stored theme");
+  expect(Boolean.FALSE.equals(CustomizationOutcome.system("glacier", "oxblood").get("applied"))
+    && CustomizationOutcome.SYSTEM_PENDING_NOTE.equals(CustomizationOutcome.system("glacier", "oxblood").get("note")), "another theme shown is not applied");
+  expect(Boolean.FALSE.equals(CustomizationOutcome.system("glacier", null).get("applied"))
+    && CustomizationOutcome.system("glacier", null).get("shown") == MiniJson.NULL, "no acknowledgment is not applied");
+  expect(CustomizationConfig.json(CustomizationOutcome.system("oxblood", "oxblood")).equals("{\"shown\":\"oxblood\",\"applied\":true}"),
+    CustomizationConfig.json(CustomizationOutcome.system("oxblood", "oxblood")));
+
   // Argument conversion.
   expect(Long.valueOf(5).equals(CustomizationOutcome.plain(5)) && Long.valueOf(5).equals(CustomizationOutcome.plain(5L))
     && Long.valueOf(5).equals(CustomizationOutcome.plain(new BigInteger("5"))) && Long.valueOf(5).equals(CustomizationOutcome.plain(new BigDecimal("5.0"))),

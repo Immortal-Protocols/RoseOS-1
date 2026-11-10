@@ -75,6 +75,8 @@ public final class CustomizationConfigTest {
         expect(wantColumns.equals(columns.get("enum")), "columns enum is 0 and MIN..MAX: " + columns.get("enum"));
         Map<String, Object> variant = prop(byName.get(CustomizationConfig.WALLPAPER), "variant");
         expect("string".equals(variant.get("type")) && OxbloodVariants.IDS.equals(variant.get("enum")), "variant enum is OxbloodVariants.IDS");
+        Map<String, Object> theme = prop(byName.get(CustomizationConfig.THEME), "theme");
+        expect("string".equals(theme.get("type")) && RoseTheme.IDS.equals(theme.get("enum")), "theme enum is RoseTheme.IDS (themes/rose-themes.json)");
         Map<String, Object> font = prop(byName.get(CustomizationConfig.FONT), "font");
         expect("string".equals(font.get("type")) && RoseFonts.IDS.equals(font.get("enum")), "font enum is RoseFonts.IDS");
         Map<String, Object> hook = byName.get(CustomizationConfig.GLASSES_HOOK);
@@ -86,13 +88,41 @@ public final class CustomizationConfigTest {
         expect(((List<Object>) ((Map<String, Object>) hook.get("inputSchema")).get("required")).isEmpty(), "hook requires none (at least one is checked by the model)");
     }
 
+    /** Plan 1E: the theme changes only itself; Oxblood's wallpaper belongs to Oxblood and comes back with it. */
+    static void theme() {
+        String th = CustomizationConfig.THEME, wp = CustomizationConfig.WALLPAPER;
+        CustomizationConfig d = CustomizationConfig.DEFAULTS;
+        expect("oxblood".equals(d.theme) && "classic".equals(d.shownWallpaper()), "the default theme is Oxblood with its classic field");
+        CustomizationConfig chosen = d.apply(CustomizationConfig.HOME_COLUMNS, args("columns", 5L)).apply(CustomizationConfig.FONT, args("font", "serif"))
+                .apply(wp, args("variant", "velvet")).apply(CustomizationConfig.GLASSES_HOOK, args("enabled", true));
+        CustomizationConfig glacier = chosen.apply(th, args("theme", "glacier"));
+        expect("glacier".equals(glacier.theme) && glacier.revision == chosen.revision + 1, "switching theme is one change");
+        expect(glacier.homeColumns == 5 && "serif".equals(glacier.font) && glacier.hookEnabled, "the theme keeps columns, font and the hook");
+        expect("velvet".equals(glacier.wallpaper) && "glacier".equals(glacier.shownWallpaper()), "Glacier draws its own field; Oxblood's choice is kept");
+        expect(glacier.apply(th, args("theme", "glacier")) == glacier, "the same theme again is not a change");
+        rejects(glacier, wp, args("variant", "garnet"), "an Oxblood wallpaper while Glacier is shown");
+        CustomizationConfig back = glacier.apply(th, args("theme", "oxblood"));
+        expect("oxblood".equals(back.theme) && "velvet".equals(back.shownWallpaper()) && back.homeColumns == 5 && "serif".equals(back.font),
+                "back to Oxblood restores its wallpaper and keeps the rest");
+        rejects(d, th, args("theme", "ocean"), "an unknown theme");
+        rejects(d, th, args("theme", "Glacier"), "theme ids are exact");
+        rejects(d, th, args("theme", 1L), "a non-string theme");
+        rejects(d, th, args("theme", "glacier", "x", 1L), "an extra argument");
+        CustomizationConfig stored = CustomizationConfig.parse(glacier.toJson());
+        expect(stored.sameValues(glacier) && "glacier".equals(stored.theme), "the theme survives a restart (stored form)");
+        expect("oxblood".equals(CustomizationConfig.parse("{\"theme\":\"aurora\",\"font\":\"mono\"}").theme)
+                && "mono".equals(CustomizationConfig.parse("{\"theme\":\"aurora\",\"font\":\"mono\"}").font), "an unknown stored theme falls back alone");
+        expect(!glacier.sameValues(chosen), "a theme change is a change of value");
+    }
+
     static void model() {
         CustomizationConfig d = CustomizationConfig.DEFAULTS;
         expect(d.homeColumns == 0 && "classic".equals(d.wallpaper) && "default".equals(d.font), "visual defaults are shipped behaviour");
         expect(!d.hookEnabled && "tray".equals(d.hookAction) && "".equals(d.hookPackage) && d.revision == 0, "hook defaults off, tray, revision 0");
         expect(d.apply(CustomizationConfig.STATE, null) == d && d.apply(CustomizationConfig.STATE, args()) == d, "state is unchanged");
         rejects(d, CustomizationConfig.STATE, args("x", 1L), "state with an argument");
-        rejects(d, "customization_theme", args(), "unknown operation");
+        rejects(d, "customization_aurora", args(), "unknown operation");
+        rejects(d, CustomizationConfig.THEME, args(), "theme needs a theme");
         rejects(d, null, args(), "null operation");
 
         // Home columns.
@@ -182,7 +212,8 @@ public final class CustomizationConfigTest {
         // Stored form.
         String json = all.toJson();
         expect(json.equals("{\"homeColumns\":6,\"wallpaper\":\"dusk\",\"font\":\"mono\",\"glassesHook\":{\"enabled\":true,\"action\":\"app\","
-                + "\"packageName\":\"dev.pixel.glassescamera\"},\"revision\":4}"), "stable stored JSON: " + json);
+                + "\"packageName\":\"dev.pixel.glassescamera\"},\"theme\":\"oxblood\",\"themeLabel\":\"Oxblood\",\"shownWallpaper\":\"dusk\",\"revision\":4}"),
+                "stable stored JSON: " + json);
         CustomizationConfig back = CustomizationConfig.parse(json);
         expect(back.sameValues(all) && back.revision == all.revision && back.toJson().equals(json), "round trip");
         expect(MiniJson.parse(json) instanceof Map, "stored JSON is valid JSON");
@@ -317,6 +348,7 @@ public final class CustomizationConfigTest {
         if (a.length < 1) throw new IllegalArgumentException("usage: CustomizationConfigTest <customization-agent-tools.json>");
         catalog(a[0]);
         model();
+        theme();
         columns();
         reflow();
         capacity();

@@ -1,0 +1,68 @@
+{
+  "task": "GLACIER-1E-1110",
+  "version": 1,
+  "files": [
+    {
+      "name": "HANDOFF.md",
+      "bytes": 4172,
+      "sha256": "273b006eef1b13ffc0b56f0669d8079434cab6a7125985b69dccc43677912a11"
+    },
+    {
+      "name": "build_tokens.py",
+      "bytes": 2012,
+      "sha256": "53a0785e465381a6a794745c38d08c03db1d68b189d9d917adf37823ec7a843b"
+    },
+    {
+      "name": "contrast.json",
+      "bytes": 1032,
+      "sha256": "3360580399893aab3e8d3b1284a5e4a0eff9013041f363999cb6f1b47bc8bfa1"
+    },
+    {
+      "name": "glacier-context-study.png",
+      "bytes": 1391130,
+      "sha256": "915dd6d6177cbbe3a5b0bac135418ad4b9e37e98864635bedb6645d21cee0785",
+      "dimensions": [
+        1536,
+        1024
+      ]
+    },
+    {
+      "name": "glacier-portrait.png",
+      "bytes": 1404081,
+      "sha256": "98c7b166df806d0205396c5c2dd80fb470d96dbe2b619662cbd64a8d1099ba3e",
+      "dimensions": [
+        852,
+        1846
+      ]
+    },
+    {
+      "name": "glacier-wide.png",
+      "bytes": 1285161,
+      "sha256": "d2dbd5cde73b1d95ecc248d7689925c65a49bed41bfc16a2a46f30626927cebf",
+      "dimensions": [
+        1672,
+        941
+      ]
+    },
+    {
+      "name": "glacier.tokens.css",
+      "bytes": 1169,
+      "sha256": "490373288981ee26fb3cd80967d0743163ceae75f4b5b3b1ee1cde2334744536"
+    },
+    {
+      "name": "glacier.tokens.json",
+      "bytes": 721,
+      "sha256": "562f99dda2172252d41b140aad8ec4ae19172bd1be153a66b1a5fd064046f1fc"
+    },
+    {
+      "name": "package.py",
+      "bytes": 882,
+      "sha256": "32199a869f1716c7a20e96fec963b9459a3ce1e7b5808d04ad3c01ad84b99fd9"
+    },
+    {
+      "name": "prompts.json",
+      "bytes": 5203,
+      "sha256": "52a2109f5d12f7cecda3291aaa0f040ce873a200e1efa2924b265e2ed658a307"
+    }
+  ]
+}

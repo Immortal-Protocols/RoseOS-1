@@ -1,0 +1,50 @@
+{
+  "method": "sRGB relative luminance; opaque token pairs only, not composited UI certification",
+  "pairs": [
+    {
+      "foreground": "text-primary",
+      "background": "surface",
+      "ratio": 14.3
+    },
+    {
+      "foreground": "text-secondary",
+      "background": "surface-raised",
+      "ratio": 7.31
+    },
+    {
+      "foreground": "selected-fg",
+      "background": "selected-bg",
+      "ratio": 12.27
+    },
+    {
+      "foreground": "pressed-fg",
+      "background": "pressed-bg",
+      "ratio": 7.52
+    },
+    {
+      "foreground": "border-control",
+      "background": "surface",
+      "ratio": 5.07
+    },
+    {
+      "foreground": "focus",
+      "background": "surface-raised",
+      "ratio": 10.19
+    },
+    {
+      "foreground": "warning",
+      "background": "surface",
+      "ratio": 11.01
+    },
+    {
+      "foreground": "destructive",
+      "background": "surface",
+      "ratio": 8.66
+    },
+    {
+      "foreground": "disabled-fg",
+      "background": "disabled-bg",
+      "ratio": 4.83
+    }
+  ]
+}

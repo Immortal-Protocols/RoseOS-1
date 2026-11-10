@@ -31,6 +31,11 @@ public final class AgentTrayService extends Service {
   return result;
  }
  public static final int REGISTER=1, UNREGISTER=2, START=3, MUTE=4, UNMUTE=5, END=6, STATE=100;
+ /** Plan 1E: SystemUI acknowledges the Rose theme it now draws (data "theme"); STATE carries Rose's choice. */
+ public static final int THEME_SHOWN=9;
+ private static volatile String shownTheme;
+ /** The theme SystemUI last acknowledged drawing, or null when none has (or no SystemUI is linked any more). */
+ static String shownTheme(){return shownTheme;}
  private final Handler main=new Handler(Looper.getMainLooper());
  private final Map<IBinder,Messenger> clients=new HashMap<>();
  private final Map<IBinder,IBinder.DeathRecipient> deaths=new HashMap<>();
@@ -75,6 +80,12 @@ public final class AgentTrayService extends Service {
    return;
   }
   if(m.what==TrayReturn.RESULT){TrayReturn.INSTANCE.result(m.arg1,m.arg2);return;}
+  if(m.what==THEME_SHOWN){
+   IBinder from=m.replyTo==null?null:m.replyTo.getBinder();
+   if(from==null||!clients.containsKey(from))return;
+   String t=m.getData().getString(RoseTheme.TRAY_KEY);
+   shownTheme=RoseTheme.known(t)?t:null;return;
+  }
   // Rose's microphone-input mute (RoseMicInput): recorded, and applied to a live call; idle it starts nothing.
   if(m.what==MUTE||m.what==UNMUTE){RoseMicState.request(this,m.what==MUTE);publish(true);return;}
   String action=m.what==START?"talk":m.what==END?"end":null;
@@ -103,9 +114,10 @@ public final class AgentTrayService extends Service {
   b.putFloat("outputLevel",fresh&&c.active()?v.trayOutputLevel:0f);
   b.putLong("audioObservedAt",v==null?0L:v.trayAudioObservedAt);
   b.putString("status",c.trayStatus(v!=null));
+  if(context!=null)b.putString(RoseTheme.TRAY_KEY,CustomizationStore.read(context).theme);
   return b;
  }
- private String signature(Bundle b){return b.getBoolean("connected")+":"+b.getBoolean("listening")+":"+b.getBoolean("muted")+":"+b.getString("status")+":"+Math.round(b.getFloat("inputLevel")*50)+":"+Math.round(b.getFloat("outputLevel")*50)+":"+(b.getLong("audioObservedAt")/400);}
+ private String signature(Bundle b){return b.getBoolean("connected")+":"+b.getBoolean("listening")+":"+b.getBoolean("muted")+":"+b.getString("status")+":"+Math.round(b.getFloat("inputLevel")*50)+":"+Math.round(b.getFloat("outputLevel")*50)+":"+(b.getLong("audioObservedAt")/400)+":"+b.getString(RoseTheme.TRAY_KEY);}
  private void publish(boolean force){
   Bundle b=state(this);String next=signature(b);if(!force&&lastState.equals(next))return;lastState=next;
   for(Messenger client:new ArrayList<>(clients.values()))send(client,b);
@@ -117,7 +129,7 @@ public final class AgentTrayService extends Service {
  private void removeClient(IBinder binder){
   clients.remove(binder);chinReachable.remove(binder);TrayReturn.INSTANCE.lost(binder);IBinder.DeathRecipient death=deaths.remove(binder);
   if(death!=null)binder.unlinkToDeath(death,0);
-  if(clients.isEmpty())main.removeCallbacks(poll);
+  if(clients.isEmpty()){main.removeCallbacks(poll);shownTheme=null;}
  }
  @Override public void onDestroy(){if(instance==this)instance=null;TrayReturn.INSTANCE.lost(null);for(IBinder binder:new ArrayList<>(clients.keySet()))removeClient(binder);main.removeCallbacksAndMessages(null);super.onDestroy();}
 }

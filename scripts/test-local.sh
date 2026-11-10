@@ -247,6 +247,13 @@ java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-option
  os/overlays/frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/AgentTrayLink.java \
  os/tests/AgentTrayLinkTest.java
 java -cp "$JAVA_TESTS/AgentTrayLink" com.android.wm.shell.AgentTrayLinkTest
+# Plan 1E: SystemUI follows Rose Agent's theme, mirrors it to Settings.Global for Launcher3 and the keyboard, and
+# acknowledges only what it shows.
+java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/RoseThemeMirror" \
+ os/overlays/frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/RoseTheme.java \
+ os/overlays/frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/RoseThemeMirror.java \
+ os/tests/RoseThemeMirrorTest.java
+java -cp "$JAVA_TESTS/RoseThemeMirror" com.android.wm.shell.RoseThemeMirrorTest
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -encoding UTF-8 -d "$JAVA_TESTS/RoseShade" \
  os/overlays/frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeModel.java \
  os/overlays/frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeReplies.java \
@@ -393,22 +400,29 @@ java -cp "$JAVA_TESTS/CallbackOwner" dev.pixel.voice.CallbackOwnerTest
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/PhoneCommandGate" \
  workspace/rose-agent/app/src/dev/pixel/voice/PhoneCommandGate.java workspace/rose-agent/app/tests/PhoneCommandGateTest.java
 java -cp "$JAVA_TESTS/PhoneCommandGate" dev.pixel.voice.PhoneCommandGateTest
+# Plan 1E: the shared theme definition (themes/rose-themes.json), its generated RoseTheme copies, Glacier's assets
+# and contrast, and the Java colour map against the approved prototype's own map (golden values).
+python3 -I scripts/tests/test_rose_themes.py
+java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/RoseTheme" \
+ workspace/rose-agent/app/src/dev/pixel/voice/OxbloodVariants.java workspace/rose-agent/app/src/dev/pixel/voice/RoseTheme.java \
+ workspace/rose-agent/app/tests/RoseThemeTest.java
+java -cp "$JAVA_TESTS/RoseTheme" dev.pixel.voice.RoseThemeTest themes/reference/glacier-map-golden.txt
 # Nov 7 plan 1O: the shared customization catalog and model, curated Oxblood variants, and the glasses-on hook.
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/CustomizationConfig" \
  workspace/rose-agent/app/src/dev/pixel/voice/MiniJson.java workspace/rose-agent/app/src/dev/pixel/voice/HomeAppLayout.java workspace/rose-agent/app/src/dev/pixel/voice/OxbloodVariants.java \
- workspace/rose-agent/app/src/dev/pixel/voice/RoseFonts.java workspace/rose-agent/app/src/dev/pixel/voice/CustomizationConfig.java workspace/rose-agent/app/tests/CustomizationConfigTest.java
+ workspace/rose-agent/app/src/dev/pixel/voice/RoseFonts.java workspace/rose-agent/app/src/dev/pixel/voice/RoseTheme.java workspace/rose-agent/app/src/dev/pixel/voice/CustomizationConfig.java workspace/rose-agent/app/tests/CustomizationConfigTest.java
 java -cp "$JAVA_TESTS/CustomizationConfig" dev.pixel.voice.CustomizationConfigTest workspace/rose-agent/app/assets/customization-agent-tools.json
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/OxbloodVariants" \
  workspace/rose-agent/app/src/dev/pixel/voice/OxbloodVariants.java workspace/rose-agent/app/tests/OxbloodVariantsTest.java
 java -cp "$JAVA_TESTS/OxbloodVariants" dev.pixel.voice.OxbloodVariantsTest workspace/rose-agent/app/src/dev/pixel/voice/OxbloodField.java
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/GlassesWearHook" \
  workspace/rose-agent/app/src/dev/pixel/voice/MiniJson.java workspace/rose-agent/app/src/dev/pixel/voice/HomeAppLayout.java workspace/rose-agent/app/src/dev/pixel/voice/OxbloodVariants.java \
- workspace/rose-agent/app/src/dev/pixel/voice/RoseFonts.java workspace/rose-agent/app/src/dev/pixel/voice/CustomizationConfig.java workspace/rose-agent/app/src/dev/pixel/voice/GlassesWearHook.java \
+ workspace/rose-agent/app/src/dev/pixel/voice/RoseFonts.java workspace/rose-agent/app/src/dev/pixel/voice/RoseTheme.java workspace/rose-agent/app/src/dev/pixel/voice/CustomizationConfig.java workspace/rose-agent/app/src/dev/pixel/voice/GlassesWearHook.java \
  workspace/rose-agent/app/tests/GlassesWearHookTest.java
 java -cp "$JAVA_TESTS/GlassesWearHook" dev.pixel.voice.GlassesWearHookTest
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/CustomizationOutcome" \
  workspace/rose-agent/app/src/dev/pixel/voice/MiniJson.java workspace/rose-agent/app/src/dev/pixel/voice/HomeAppLayout.java workspace/rose-agent/app/src/dev/pixel/voice/OxbloodVariants.java \
- workspace/rose-agent/app/src/dev/pixel/voice/RoseFonts.java workspace/rose-agent/app/src/dev/pixel/voice/CustomizationConfig.java workspace/rose-agent/app/src/dev/pixel/voice/CustomizationOutcome.java \
+ workspace/rose-agent/app/src/dev/pixel/voice/RoseFonts.java workspace/rose-agent/app/src/dev/pixel/voice/RoseTheme.java workspace/rose-agent/app/src/dev/pixel/voice/CustomizationConfig.java workspace/rose-agent/app/src/dev/pixel/voice/CustomizationOutcome.java \
  workspace/rose-agent/app/tests/CustomizationOutcomeTest.java
 java -cp "$JAVA_TESTS/CustomizationOutcome" dev.pixel.voice.CustomizationOutcomeTest
 # 1C: the return control's exact-task source over the SystemUI tray link (protocol v1, OS Core's shell side).

@@ -18,6 +18,7 @@ Every change is app-side in Rose Agent: no OS rebuild.
 | Oxblood wallpaper | `customization_wallpaper` | classic (the shipped field, unchanged), garnet, ember, velvet, dusk |
 | Bundled font | `customization_font` | default (shipped type), nunito (app asset), sans, serif, condensed, mono (platform families) |
 | Glasses-on hook | `customization_glasses_hook` | enabled; action `tray` (Rose Home and its tray forward) or `app` + packageName |
+| Theme (plan 1E) | `customization_theme` | `oxblood` (default) or `glacier`. See "Theme (plan 1E)" below. |
 
 `customization_state` reads all four, plus Home's applied revision and the glasses-on signal's state.
 
@@ -40,7 +41,25 @@ The owner's phone check also found two other problems:
   their gap.
 - Font: the Home page shows no labels. The Home date now carries a chosen font; the default is unchanged.
 
-Excluded: theme switching, web-app shortcuts, motion controls and general widgets. Also excluded: an exported or
+## Theme (plan 1E)
+
+Owner: OS Core (`session_015TFqkUBnNiWWDvKDuGw3hi`), as one implementation owner. The theme is added to this catalog;
+the four controls above are unchanged.
+
+- **Definition.** `themes/rose-themes.json` (see `themes/README.md`) defines each theme: stable id, its own wallpapers,
+  per-surface colours and Glacier's derivation, the approved prototype's colour map.
+- **What a switch changes.** "Switch to Glacier" (`customization_theme`) recolours Home, the Rose screen, the tray and
+  chin, notifications and the keyboard. Columns, font, app icons and the hook are kept.
+- **Wallpapers belong to their theme.** Glacier draws its own field; Oxblood's chosen variant is remembered and comes
+  back with Oxblood. A wallpaper request in another theme is refused with the reason.
+- **Reaching other processes.** Rose Agent stores the choice beside the other controls and sends it on the existing
+  SystemUI tray link. SystemUI applies it, mirrors it to `Settings.Global rose_theme` with its existing permission for
+  Launcher3 and the keyboard, and acknowledges what it shows.
+- **Truthful outcomes.** A theme is reported `applied` only when Home drew that revision (`home.applied`) and SystemUI
+  acknowledged drawing it (`system.applied`). Otherwise the outcome is `shown_on_home` or `saved_not_shown`.
+- No new permission, exported component or endpoint.
+
+Excluded from 1O (the theme came later, as 1E): web-app shortcuts, motion controls and general widgets. Also excluded: an exported or
 permissioned API that raises the OS edge, a direct command endpoint, and any trust expansion.
 
 ## File ownership

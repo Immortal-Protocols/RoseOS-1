@@ -1,4 +1,4 @@
-// Nov 7 plan 1O: the four Rose customization controls (designed to change live,
+// Nov 7 plan 1O (and plan 1E's theme): the Rose customization controls (designed to change live,
 // with no OS rebuild, once the app dispatch and Home seams land), shared by
 // conversation and this CLI. One catalog (app/assets/customization-agent-tools.json)
 // defines them; conversation registers it as dev.pixel.voice app tools and the
@@ -45,7 +45,7 @@ export function appCommand(toolName, args) {
 
 const SUBCOMMANDS = {
  state: 'customization_state', columns: 'customization_home_columns', wallpaper: 'customization_wallpaper',
- font: 'customization_font', 'glasses-hook': 'customization_glasses_hook',
+ font: 'customization_font', 'glasses-hook': 'customization_glasses_hook', theme: 'customization_theme',
 };
 
 function one(rest, name, what) {
@@ -68,6 +68,7 @@ export function parseArgv(argv) {
  }
  if (name === 'wallpaper') return {kind: 'tool', tool, args: {variant: one(rest, name, 'variant')}};
  if (name === 'font') return {kind: 'tool', tool, args: {font: one(rest, name, 'font')}};
+ if (name === 'theme') return {kind: 'tool', tool, args: {theme: one(rest, name, 'theme')}};
  const args = {};
  for (let i = 0; i < rest.length; i++) {
   const flag = rest[i];
