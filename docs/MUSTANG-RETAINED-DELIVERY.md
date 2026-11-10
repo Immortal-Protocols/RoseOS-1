@@ -185,3 +185,21 @@ identity; it must not reuse the original consumed number or reset its journal.
 Existing preparation and qualified-tool inputs may be reused only through their
 normal authenticated checks. This source assessment does not authorize an app
 build, export, allocation or Mustang runtime dispatch.
+
+The normal route now selects the committed `frankel-2026111001` export from
+producer `42813894214`, source `6bab12cdf9a6ac2fa2267966447b9820297650ec`.
+Export `42851073284`, attempt 1, artifact `13781175876` contains voice 370,
+calculator 6 and background control 41. Its 1,875,279-byte archive, digest
+`4cb8c4ff5ed801210f687071ea5e48442ee11712e7e4f3877495456ee07376ef`,
+12-member inventory, receipt and checksums were independently checked against
+the merged record. The allocation file-byte hash is
+`32c59f8bd4a73d0ed8c2683d78ecb7a34308896a8bd0b7122c27c3d0d916e6a8`;
+it differs from the allocation's canonical identity hash. Source freshness
+passed at record merge `07c890df8462407bc6233f89791496102786773a`.
+
+Release rechecked APK identities with aapt/apksigner; the consumer preparation
+here rechecked record and archive bytes, with no local APK tools available.
+The dedicated native consumer still reruns its own APK tools before use and
+checks freshness against the actual captured run source. This selection does
+not authorize dispatch or admit an old compiled target; a fresh full compile,
+actual output/link validation, signing and publication remain unperformed.

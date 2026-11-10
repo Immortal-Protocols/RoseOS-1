@@ -109,18 +109,18 @@ def enrollment():
 
 
 ACCEPTED_APP_EXPORT = {
-    'path': 'os/app-inputs/frankel-2026110901.json',
-    'run': '42561803703',
-    'artifact': 13649846651,
-    'digest': 'sha256:e14607d7385952a19c9b78977d0c3dd6f84f1e8d76cc31bb7ae35bf09c4bc3d0',
-    'producerRun': '42559170713',
-    'sourceSha': '9882edf0a68b640c24e6c0d0de119e663c6ac573',
-    'recordMerge': '303f69823b0ca0f92a61fa3b95f9a2e8364da812',
-    'archiveBytes': 1865637,
+    'path': 'os/app-inputs/frankel-2026111001.json',
+    'run': '42851073284',
+    'artifact': 13781175876,
+    'digest': 'sha256:4cb8c4ff5ed801210f687071ea5e48442ee11712e7e4f3877495456ee07376ef',
+    'producerRun': '42813894214',
+    'sourceSha': '6bab12cdf9a6ac2fa2267966447b9820297650ec',
+    'recordMerge': '07c890df8462407bc6233f89791496102786773a',
+    'archiveBytes': 1875279,
     'sdk': 37,
     'signerSha256': '650d47f91b7f5af3c530fef53fe92018aa4521efba065bcb1d6fc9b699060bfb',
     'targetSdk': 35,
-    'apps': {'dev.pixel.backgroundcontrol': 41, 'dev.pixel.calculator.agent': 6, 'dev.pixel.voice': 369},
+    'apps': {'dev.pixel.backgroundcontrol': 41, 'dev.pixel.calculator.agent': 6, 'dev.pixel.voice': 370},
 }
 
 
