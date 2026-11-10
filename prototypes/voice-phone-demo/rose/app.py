@@ -943,9 +943,11 @@ class Server:
             if codex:
                 from .codex_conductor import CodexConductor
                 from .life import Diary, Life
+                from .life_executor import PhoneResearchExecutor
                 from .remote import config_dir
                 try:
-                    life = Life(Diary(config_dir() / "rosie-life"))
+                    life = Life(Diary(config_dir() / "rosie-life"),
+                                executor=PhoneResearchExecutor(self.phone, config_dir() / "rosie-life"))
                 except Exception:
                     # A damaged/unwritable diary cannot take down conversation.
                     life = None

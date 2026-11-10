@@ -74,7 +74,7 @@ class LifeTest(unittest.TestCase):
         self.assertTrue(result['activities'][0]['result']['content_is_untrusted'])
         self.assertEqual(self.diary.path.stat().st_mode & 0o777, 0o600)
         self.assertEqual(self.diary.directory.stat().st_mode & 0o777, 0o700)
-        self.assertEqual([e['state'] for e in self.events], ['running', 'settled'])
+        self.assertEqual([e['state'] for e in self.events], ['queued', 'running', 'settled'])
 
     def test_unconfigured_never_fabricates_work(self):
         life = Life(self.diary, clock=self.clock)
@@ -116,7 +116,7 @@ class LifeTest(unittest.TestCase):
         self.finish()
         self.assertTrue(self.executor.stopped.wait(2))
         self.assertEqual(self.executor.cancelled, [tid])
-        self.assertIsNone(self.latest()['result'])
+        self.assertTrue(self.latest()['result']['phone_note']['verified'])
 
     def test_pause_persists_across_restart(self):
         self.life.call({'action': 'pause'})
@@ -127,7 +127,7 @@ class LifeTest(unittest.TestCase):
         self.start(); self.clock.now += 21
         self.life.tick(connected=True); self.finish()
         self.assertEqual(self.latest()['state'], 'interrupted')
-        self.assertIsNone(self.latest()['result'])
+        self.assertTrue(self.latest()['result']['phone_note']['verified'])
 
     def test_crash_claim_is_not_replayed(self):
         job = self.diary.claim(self.clock(), 10, 100, 20)
@@ -157,7 +157,7 @@ class LifeTest(unittest.TestCase):
         self.executor.omit_start = True
         self.start(); self.finish()
         self.assertEqual(self.latest()['state'], 'failed')
-        self.assertEqual([e['state'] for e in self.events], ['settled'])
+        self.assertEqual([e['state'] for e in self.events], ['queued', 'settled'])
 
     def test_adapter_exception_is_bounded_and_redacted(self):
         self.executor.fail = True
@@ -185,7 +185,16 @@ class LifeTest(unittest.TestCase):
         self.assertFalse(self.life.tick(connected=True))
         self.finish()
         self.assertEqual(self.latest()['state'], 'interrupted')
-        self.assertIsNone(self.latest()['result'])
+        self.assertTrue(self.latest()['result']['phone_note']['verified'])
+
+    def test_shutdown_waits_for_worker_and_marks_timeout_uncertain(self):
+        self.start()
+        self.assertFalse(self.life.shutdown(timeout=.01))
+        self.assertFalse(self.diary.snapshot()['enabled'])
+        self.assertEqual(self.latest()['state'], 'stopping')
+        self.assertEqual(self.latest()['reason'], 'shutdown_unconfirmed')
+        self.finish()
+        self.assertTrue(self.life.shutdown(timeout=.01))
 
     def test_sql_text_is_data(self):
         self.life.call({'action': 'interest', 'interest': "photography'); DROP TABLE activities; --"})

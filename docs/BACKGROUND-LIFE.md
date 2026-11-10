@@ -25,10 +25,11 @@ cancellation latch before submitting the conversation turn. A slow interruption
 acknowledgment never holds up the user's request. Unknown stop results remain
 visible, not reported as confirmed stops.
 
-Execution is intentionally unavailable in normal startup until a verified adapter
-is supplied. Resume saves intent but reports `waiting_for_phone_executor` and
-executes nothing. There is no placeholder success, guessed endpoint, copied login,
-new Models/cloud-QR service, Mac dependency or production fallback.
+Normal Codex startup now installs a capability-gated `PhoneResearchExecutor`.
+Research remains paused by default. Explicit resume with an interest admits one
+bounded session only after the paired phone proves the private notebook and
+schema-4 alongside controller contracts. Missing capabilities report unavailable
+without opening owner Notes, taking over Home, or inventing a workspace ID.
 
 The existing Codex app-task stream now carries additive version-1 activity
 receipts: a monotonic sample and `executing` boolean. A running, accepted background
@@ -45,30 +46,68 @@ Reduced-motion, hidden and released views are still. The hit target and ordinary
 switcher tap are unchanged. The drawable and color path are unchanged, preserving
 the Glacier owner's theme changes instead of duplicating them.
 
-## Still required for 1F delivery
+## Private research executor (1F source)
 
-Implement and verify an adapter for the **existing authorized cloud-to-phone
-route**. `Life(executor=...)` expects:
+`rose/life_executor.py` uses the existing paired `app_command` transport and a
+separate ephemeral Codex ChatGPT research process. It sends only the selected
+public interest, never the owner's conversation or phone content. The existing
+Terra Fast account/model checks remain. Research has no dynamic phone tools.
+Shell, apps/plugins, multi-agent, image reads, hooks and memories are disabled;
+environment access and project instruction bytes are empty. Inherited base
+instructions/instruction files and enabled or unknown ambient MCP entries are
+refused before thread creation. Already-disabled named entries are checked in the
+thread snapshot, never through wildcard discovery that could connect other servers.
+The effective configuration is rechecked after creation before a topic is submitted.
+Unsupported checks fail closed. Codex has no atomic per-thread MCP deny-all field,
+so this guard requires stable backend configuration during the session; it is not
+a new OS-level isolation sandbox or a guarantee against concurrent host changes. This does
+not change persistent account configuration or create credentials. The stricter
+inventory contract was inspected in local Codex 0.167.0-alpha.4 offline schemas;
+research requires Codex 0.167 or newer and compatible runtime evidence. Older
+versions are refused before starting the research process; ordinary voice is unchanged.
 
-- `research(job, cancelled, started)`: access only public research and Rosie's own
-  isolated phone notes. Honor the absolute deadline and check cancellation before
-  every action. Call `started()` only when actual execution begins, and abort if it
-  returns false. Do not read owner screens, personal tabs, messages, files or memory.
-- Return observed `public_research` receipts for this exact task: bounded summary
-  and note body, HTTPS source/title/read times, and the phone's verified note ID,
-  workspace ID, save time and SHA-256 of the exact saved note body. The adapter must
-  verify these against actual phone replies, not merely model claims. The scheduler
-  validates and stores complete receipts, but cannot prove an adapter's honesty.
-- `cancel(task_id)`: scoped interruption; return True only after confirmed stop.
-  A dispatched write may already have happened. Never retry an uncertain write.
-- No messages, purchases, real-money trades, external sharing, arbitrary shell or
-  unbounded browsing. Keep research separate from owner-request task sessions.
+The model is asked for at most six public web calls; observing a seventh or an
+unexpected native tool rejects the result and interrupts the thread. An already
+started read may finish. The hard host bound is the session deadline, also checked
+with a monotonic clock. Only completed native HTTPS page-open events become
+source receipts. They prove observed page-open operations, not that every generated
+claim is correct or that an opened page was readable. Model-written citations or
+phone receipts are never substituted for these events.
 
-The adapter, its cloud service route and real phone research → saved phone note →
-restart → conversational recall demo are **not implemented/verified here**. The
-scheduler emits execution-state callbacks, but autonomous research task cards and
-inspect/stop UI binding to the existing workspace list still require adapter work.
-Saved interests alone are not completed research.
+The new `workspace/rosie-notes/` ordinary app (`dev.pixel.rosienotes`) owns only
+Rosie's immutable research notes. It has no permissions, Internet/WebView, owner
+Notes access or backup. Its exported command provider checks same signing identity;
+its read-only launcher surface shows stored notes and refreshes when one arrives.
+See [the exact notebook contract](PRIVATE-LIFE-NOTES.md). This separate package is
+necessary because the existing controller correctly refuses Rose Agent's Home
+package as a background target. That Home safety gate is unchanged.
+
+The host starts one actual alongside controller session with the diary task ID,
+checks the returned task/session/package, and carries that real session ID to the
+notebook. The provider independently validates the ready controller binding before
+staging and publishing a new note. One immutable put is followed by exact-body,
+SHA-256 and identity readback. A lost reply never causes a second put. Cancellation
+or deadline during a possible write still gets one bounded read-only reconciliation
+and targeted workspace Stop. Unknown cleanup pauses future admission. A verified
+note may remain on an interrupted/failed diary entry without claiming task completion
+or confirmed Stop. Shutdown waits boundedly for cleanup and persists uncertainty.
+
+Research tasks use the existing task feed, inspect binding and targeted Stop path.
+Only actual execution emits working receipts. No unsolicited speech is generated.
+Diary recall and suggested-interest rotation remain separate from owner memory.
+The combined synthetic test covers research → actual controller-ID-shaped fixture
+→ note put/readback → diary restart → recall, plus isolation, interruption, missing
+capabilities, uncertain writes, cleanup and source rejection.
+
+## Still required for 1F device delivery
+
+Publish/install the notebook signed with the existing authorized app/controller
+identity and update the backend/client through their authorized delivery owners.
+No signing key, provisioning, app install or deployment was performed here.
+Verify with the real paired cloud backend and phone: public hobby research,
+visible saved note, restart recall, interest follow-through, task inspection/Stop,
+owner priority and all unavailable/uncertain paths. No live Codex provider, native
+Android compilation or physical-device acceptance was run for this source slice.
 
 ## Still required for 1G delivery
 
@@ -101,8 +140,9 @@ views and reduced motion. A host-JVM/source check is not native phone acceptance
 
 - `python3 -m unittest discover -s os/tests -p test_raised_tray_activity.py`: 34 host-JVM projection/mirror/lifecycle assertions plus source seam checks.
 
-- `bash scripts/test-background-life.sh`: synthetic scheduler, diary and
-  conversation integration plus real Java lifecycle/feed model checks.
+- `bash scripts/test-background-life.sh`: synthetic scheduler, executor, diary and
+  conversation integration, restricted research IPC/config, private notebook restart/
+  binding tests and real Java lifecycle/feed model checks.
 - `PYTHONPATH=prototypes/voice-phone-demo python3 -m unittest rose.tests.test_codex`
 - `node --test workspace/rose-agent/voice-providers/local-tasks.test.cjs
   workspace/rose-agent/tests/local-task-feed.test.mjs
@@ -113,7 +153,7 @@ views and reduced motion. A host-JVM/source check is not native phone acceptance
 All tests use synthetic data. They do not call a provider, access a phone, alter
 credentials, publish a release, or prove perceptual/native acceptance.
 
-## Validation receipt for this source slice
+## Historical validation receipt for the initial foundation
 
 On base `2532ddc54ced172107d13f45854d0f1f49b81d70` in an isolated Linux checkout:
 20 new Python tests, 112 existing Codex tests, 23 Java lifecycle assertions and
