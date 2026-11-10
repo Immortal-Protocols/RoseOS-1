@@ -33,7 +33,7 @@ POLICY_LINE = ('Use the customization tools only when the owner asks to change o
                'report the returned state: a saved preference is not a visible change, so give Home\'s effectiveColumns, say so '
                'when home.applied is false. The glasses-on hook runs when a Bluetooth audio device connects. Report each '
                'result by its outcome: applied (done and visible), saved_not_shown (saved, not yet shown), '
-               'shown_on_home (a theme Home and Rose show but the system surfaces have not confirmed), saved (hook '
+               'shown_on_home (Home shows the theme but Rose or the system surfaces have not confirmed), saved (hook '
                'setting stored), rejected, unavailable or uncertain, using its message; never say a change is done '
                'unless the outcome is applied.')
 
@@ -102,7 +102,7 @@ def command(name: str, args) -> dict:
 
 
 HOME_TOOLS = frozenset({'customization_home_columns', 'customization_wallpaper', 'customization_font', 'customization_theme'})
-# A theme is done only when Home drew it and SystemUI acknowledged drawing it (tray, chin, notifications, keyboard).
+# A theme is done only when Home, the conversation frame and SystemUI independently acknowledge it.
 SYSTEM_TOOLS = frozenset({'customization_theme'})
 UNAVAILABLE = frozenset({'offline', 'disconnected'})
 UNCERTAIN = frozenset({'timeout', 'uncertain', 'running', 'expired'})
@@ -113,8 +113,7 @@ MESSAGES = {
     'saved_not_shown': ('Saved on the phone, but Home has not shown it yet. It appears when Rose Home next draws; '
                         'nothing else is needed.'),
     'saved': 'Saved on the phone.',
-    'shown_on_home': ('Home and Rose show it now, but the tray, notifications and keyboard have not confirmed it yet; '
-                      'they follow when the screen is on and the system bar is connected.'),
+    'shown_on_home': 'Home shows it now, but Rose or the system surfaces have not confirmed it yet.',
     'unavailable': 'The phone is not connected, so nothing was changed.',
     'uncertain': 'The phone did not confirm the change; it may or may not have happened. Read customization_state to check.',
 }
@@ -123,8 +122,9 @@ MESSAGES = {
 def outcome(name: str, result) -> dict:
     """The conversation's view of the phone's reply, as one honest ``outcome``:
 
-    - ``applied``: the phone stored it and Home drew that exact revision (a Home control), or the state was read;
-    - ``saved_not_shown``: stored, but Home has not drawn it yet; not a success to report as visible;
+    - ``applied``: Home drew that revision; a theme also needs the matching Rose and SystemUI frames, or a state was read;
+    - ``saved_not_shown``: stored, but Home has not drawn that revision or newer settings superseded it;
+    - ``shown_on_home``: Home drew it, but Rose or SystemUI has not confirmed the matching theme;
     - ``saved``: the glasses-on hook's setting was stored (it acts on the next Bluetooth audio connection);
     - ``rejected``: the phone or the argument check refused it, with the reason; nothing changed;
     - ``unavailable``: the phone is not connected; nothing changed;
@@ -134,18 +134,19 @@ def outcome(name: str, result) -> dict:
     if not isinstance(result, dict):
         result = {'status': 'uncertain'}
     status = str(result.get('status', ''))
-    out = {k: result[k] for k in ('status', 'changed', 'customization', 'home', 'system', 'glassesWear', 'reason')
+    out = {k: result[k] for k in ('status', 'changed', 'customization', 'currentCustomization', 'home', 'conversation', 'system', 'glassesWear', 'reason')
            if k in result}
     out['tool'] = name
     home = result.get('home') if isinstance(result.get('home'), dict) else {}
     if status == 'ok' and name == 'customization_state':
         kind = 'applied'
     elif status == 'verified' and name in SYSTEM_TOOLS:
-        system = result.get('system') if isinstance(result.get('system'), dict) else {}
-        if home.get('applied') is not True:
+        custom = result.get('customization') if isinstance(result.get('customization'), dict) else {}
+        theme = custom.get('theme')
+        if result.get('currentCustomization') or not _drawn(result, custom.get('revision')):
             kind = 'saved_not_shown'
         else:
-            kind = 'applied' if system.get('applied') is True else 'shown_on_home'
+            kind = 'applied' if _system_shows(result, theme) and _conversation_shows(result, theme) else 'shown_on_home'
     elif status == 'verified' and name in HOME_TOOLS:
         kind = 'applied' if home.get('applied') is True else 'saved_not_shown'
     elif status == 'verified':
@@ -167,6 +168,29 @@ def outcome(name: str, result) -> dict:
         asked = (result.get('customization') or {}).get('homeColumns') if isinstance(result.get('customization'), dict) else None
         out['message'] = ('Done: Home now shows ' + str(cols) + ' columns.' +
                           (' That is as many as fit this screen.' if asked not in (None, 0, cols) else ''))
+    elif name == 'customization_theme' and result.get('currentCustomization'):
+        out['message'] = ('The theme was saved, but newer customization settings are now current. '
+                          'Read customization_state to check the latest setting.')
+    elif kind == 'saved_not_shown' and name == 'customization_theme':
+        out['message'] = MESSAGES[kind]
+        conversation = result.get('conversation') if isinstance(result.get('conversation'), dict) else {}
+        if conversation.get('state') == 'deferred':
+            out['message'] += ' Rose will finish the theme change after Return, Stop or Background Work closes.'
+    elif kind == 'shown_on_home' and name == 'customization_theme':
+        custom = result.get('customization') if isinstance(result.get('customization'), dict) else {}
+        theme = custom.get('theme')
+        pending = ['Home shows it now.']
+        if not _conversation_shows(result, theme):
+            conversation = result.get('conversation') if isinstance(result.get('conversation'), dict) else {}
+            if conversation.get('state') == 'deferred' and conversation.get('requested') == theme:
+                pending.append('Rose will finish the theme change after Return, Stop or Background Work closes.')
+            elif conversation.get('state') == 'not_open':
+                pending.append('The Rose screen has not drawn it yet; it will use the theme when next opened.')
+            else:
+                pending.append('The Rose screen has not confirmed this theme yet.')
+        if not _system_shows(result, theme):
+            pending.append('The tray, notifications and keyboard have not confirmed it yet.')
+        out['message'] = ' '.join(pending)
     elif kind == 'applied' and name == 'customization_theme':
         custom = result.get('customization') if isinstance(result.get('customization'), dict) else {}
         out['message'] = 'Done: Rose is now ' + str(custom.get('themeLabel') or custom.get('theme')) + ' everywhere.'
@@ -177,7 +201,7 @@ def outcome(name: str, result) -> dict:
 
 def _drawn(state, revision) -> bool:
     home = state.get('home') if isinstance(state, dict) and isinstance(state.get('home'), dict) else {}
-    return home.get('applied') is True and home.get('appliedRevision') == revision
+    return revision is not None and home.get('applied') is True and home.get('appliedRevision') == revision
 
 
 def _system_shows(state, theme) -> bool:
@@ -185,10 +209,18 @@ def _system_shows(state, theme) -> bool:
     return theme is not None and system.get('applied') is True and system.get('shown') == theme
 
 
+def _conversation_shows(state, theme) -> bool:
+    conversation = state.get('conversation') if isinstance(state, dict) and isinstance(state.get('conversation'), dict) else {}
+    return (theme is not None and conversation.get('applied') is True and conversation.get('state') == 'applied'
+            and conversation.get('requested') == theme and conversation.get('shown') == theme)
+
+
 def _settled(name, result) -> bool:
-    if not (result.get('home') or {}).get('applied'):
-        return False
-    return name not in SYSTEM_TOOLS or (result.get('system') or {}).get('applied') is True
+    if name not in SYSTEM_TOOLS:
+        return (result.get('home') or {}).get('applied') is True
+    custom = result.get('customization') if isinstance(result.get('customization'), dict) else {}
+    return (_drawn(result, custom.get('revision')) and _system_shows(result, custom.get('theme'))
+            and _conversation_shows(result, custom.get('theme')))
 
 
 def call(phone, name: str, args) -> dict:
@@ -210,11 +242,10 @@ def call(phone, name: str, args) -> dict:
         return {'ok': False, 'status': 'uncertain', 'outcome': 'uncertain', 'tool': name,
                 'message': 'The phone did not confirm the change (' + type(error).__name__ + '); read customization_state before retrying.'}
     # A saved Home change is reported as applied only once Home has drawn that exact revision, and a theme only once
-    # SystemUI acknowledged drawing it too: re-read state briefly.
+    # the conversation and SystemUI acknowledged drawing it too: re-read state briefly, never retry the write.
     if (name in HOME_TOOLS and isinstance(result, dict) and result.get('status') == 'verified'
             and not _settled(name, result)):
         revision = (result.get('customization') or {}).get('revision')
-        theme = (result.get('customization') or {}).get('theme')
         deadline = clock() + APPLY_WAIT_S
         while revision is not None and clock() < deadline:
             sleep(APPLY_POLL_S)
@@ -225,11 +256,20 @@ def call(phone, name: str, args) -> dict:
                 break
             if not isinstance(state, dict) or state.get('status') != 'ok':
                 break
-            if _drawn(state, revision):
+            if name in SYSTEM_TOOLS:
+                # Use one fresh snapshot, not a union of acknowledgments from different revisions or activity lifetimes.
+                result = dict(result, home=state.get('home'), system=state.get('system'),
+                              conversation=state.get('conversation'))
+                current = state.get('customization')
+                requested = (result.get('customization') or {}).get('theme')
+                newer = (isinstance(current, dict) and isinstance(current.get('revision'), int)
+                         and isinstance(revision, int) and current['revision'] > revision)
+                if isinstance(current, dict) and (newer or current.get('theme') not in (None, requested)):
+                    result = dict(result, currentCustomization=current)
+                    break
+                if _settled(name, result):
+                    break
+            elif _drawn(state, revision):
                 result = dict(result, home=state['home'])
-                if name not in SYSTEM_TOOLS:
-                    break
-                if _system_shows(state, theme):
-                    result = dict(result, system=state['system'])
-                    break
+                break
     return outcome(name, result)

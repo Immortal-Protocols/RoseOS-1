@@ -48,7 +48,10 @@ public final class RoseConversationActivity extends Activity {
   PixelAppearance.attach(this);super.onCreate(b);shown=new java.lang.ref.WeakReference<>(this);
   // Plan 1E: read the stored theme (and decode Glacier's field) before any view or field is built; a later change
   // rebuilds the screen in the new theme. Colours only: layout, voice, tasks and return are untouched.
-  RoseThemeNow.prepare(this);builtTheme=RoseThemeNow.id;CustomizationStore.register(this,themeChanged);
+  RoseThemeNow.prepare(this);builtTheme=RoseThemeNow.id;ConversationThemeState.LIVE.opened(themeToken);CustomizationStore.register(this,themeChanged);
+  Object retained=getLastNonConfigurationInstance();
+  if(retained instanceof ConversationThemeState.Context){ConversationThemeState.Context kept=(ConversationThemeState.Context)retained;
+   returnState=kept.returnState;shownTaskId=kept.taskId;stopMessage=kept.stopMessage;}
   setVolumeControlStream(android.media.AudioManager.STREAM_VOICE_CALL);
   // #410: the Oxblood Rose field (OxbloodField.ROSE) in either system theme, with light bar icons over it.
   getWindow().setStatusBarColor(RoseThemeNow.c(0xff120a0d));getWindow().setNavigationBarColor(RoseThemeNow.c(0xff12060a));
@@ -154,6 +157,14 @@ public final class RoseConversationActivity extends Activity {
   returnSheet=new ReturnSheet(this,this::returnChoice);root.addView(returnSheet,new FrameLayout.LayoutParams(-1,-1));
   root.addView(overview,new FrameLayout.LayoutParams(-1,-1));
   setContentView(root);
+  // Acknowledge this instance's built theme only after its first draw, never at setContentView or recreate.
+  root.getViewTreeObserver().addOnDrawListener(new ViewTreeObserver.OnDrawListener(){
+   boolean posted;
+   public void onDraw(){if(posted)return;posted=true;root.post(()->{
+    if(root.getViewTreeObserver().isAlive())root.getViewTreeObserver().removeOnDrawListener(this);
+    if(!isFinishing()&&!isDestroyed()&&!themeRecreating)ConversationThemeState.LIVE.drawn(themeToken,builtTheme);
+   });}
+  });
  }
  TextView taskAction(String text,int color){TextView t=presentedText(15,color,"sans-serif-medium");t.setText(text);t.setGravity(Gravity.CENTER);t.setMinHeight(dp(44));
   t.setPadding(dp(16),0,dp(16),0);GradientDrawable g=new GradientDrawable();g.setColor(RoseThemeNow.c(0x8c0e080b));g.setCornerRadius(dp(10));g.setStroke(Math.max(1,dp(1)),RoseThemeNow.c(0x38f1e9e1));t.setBackground(g);t.setClickable(true);t.setFocusable(true);return t;}
@@ -169,11 +180,13 @@ public final class RoseConversationActivity extends Activity {
  /** Plan 1E: a theme change rebuilds this screen in the new theme, but never while it holds something the owner is in
   * the middle of (Background Work open, a return pending or its sheet shown, a Stop being confirmed or sent): then the
   * rebuild waits (themePending) and refresh() retries on its tick, so no return, choice or Stop result is lost. */
- boolean themePending;android.app.Dialog stopDialog;
+ boolean themePending,themeRecreating;final Object themeToken=new Object();android.app.Dialog stopDialog;
  boolean themeBusy(){return overview!=null&&overview.isOpen()||returnState.pending()||returnState.sheetShown()||stopInFlight||stopPendingFor!=null||stopDialog!=null&&stopDialog.isShowing();}
- void maybeRetheme(){if(isFinishing()||isDestroyed())return;if(CustomizationStore.read(this).theme.equals(builtTheme)){themePending=false;return;}if(themeBusy()){themePending=true;return;}themePending=false;recreate();}
+ void maybeRetheme(){if(isFinishing()||isDestroyed()||themeRecreating)return;if(CustomizationStore.read(this).theme.equals(builtTheme)){themePending=false;ConversationThemeState.LIVE.deferred(themeToken,false);return;}if(themeBusy()){themePending=true;ConversationThemeState.LIVE.deferred(themeToken,true);return;}themePending=false;ConversationThemeState.LIVE.deferred(themeToken,false);themeRecreating=true;recreate();}
  final Runnable themeChanged=this::maybeRetheme;
- @Override protected void onDestroy(){CustomizationStore.unregister(this,themeChanged);super.onDestroy();}
+ @Override public Object onRetainNonConfigurationInstance(){return themeRecreating&&!themeBusy()
+  ?new ConversationThemeState.Context(returnState,shownTaskId,stopMessage):null;}
+ @Override protected void onDestroy(){ConversationThemeState.LIVE.closed(themeToken);CustomizationStore.unregister(this,themeChanged);super.onDestroy();}
  @Override protected void onPause(){resumed=false;handler.removeCallbacks(tick);stopBreath();if(overview!=null){if(isFinishing())overview.teardown();else overview.pause();}clearNotice();super.onPause();}
 
  void refresh(){
