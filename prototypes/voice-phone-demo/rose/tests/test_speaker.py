@@ -439,6 +439,20 @@ def test_duck(rig: Rig) -> None:
     assert not sp.ducked and utt.heard() == text
 
 
+def test_smart_quotes(rig: Rig) -> None:
+    rig.reset()
+    text = "I’ll switch it back to Ember. Done. Ember is back on Home."
+    utt = rig.sp.utterance(7, t_user_end=None)
+    stream(utt, text)
+    utt.finish()
+    assert utt.done.wait(20.0)
+    says = [e for e in rig.events if e["kind"] == "rose_say"]
+    assert says and says[0]["spoken"] == "I'll switch it back to Ember.", says
+    assert says[0]["text"] == "I’ll switch it back to Ember."
+    assert utt.heard() == text, utt.heard()
+    RESULTS["smart_quotes"] = {"spoken": says[0]["spoken"], "transcript_preserved": True}
+
+
 def test_time(rig: Rig) -> None:
     sp, tr = rig.sp, rig.tr
     rig.reset()
@@ -462,7 +476,7 @@ def main() -> None:
     RESULTS["load"] = {"tts_load_s": round(rig.tts_load_s, 2)}
     try:
         for test in (test_stream, test_latency, test_interrupt, test_interrupt_later, test_overlap,
-                     test_duck, test_time):
+                     test_duck, test_time, test_smart_quotes):
             test(rig)
             print(test.__name__, json.dumps(RESULTS[test.__name__[5:]]), flush=True)
         RESULTS["runtime"] = rig.rt.stats()
