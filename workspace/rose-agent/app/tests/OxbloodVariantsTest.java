@@ -55,7 +55,9 @@ public final class OxbloodVariantsTest {
         for (String id : OxbloodVariants.IDS) {
             float[] p = OxbloodVariants.parameters(id);
             expect(p.length == 3 && Math.abs(p[0]) <= OxbloodVariants.MAX_HUE_TURN_DEG, "hue turn bounded: " + id);
-            expect(p[1] >= 0.75f && p[1] <= 1.25f && p[2] >= 0.75f && p[2] <= 1.25f, "saturation and brightness bounded to 0.75..1.25: " + id);
+            // Wide enough to be seen on the near-black field (the owner saw no change at 0.95..1.12, Nov 10); the family
+            // checks below keep every variant Oxblood.
+            expect(p[1] >= 0.5f && p[1] <= 1.6f && p[2] >= 0.5f && p[2] <= 1.6f, "saturation and brightness bounded to 0.5..1.6: " + id);
             expect(!OxbloodVariants.label(id).isEmpty(), "label: " + id);
             if (id.equals(OxbloodVariants.CLASSIC)) continue;
             float[] m = OxbloodVariants.matrix(id);

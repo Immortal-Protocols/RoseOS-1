@@ -1,0 +1,637 @@
+"""Offline synthetic repositories only. No native VM, archive program, access or signer."""
+import copy
+import hashlib
+import json
+import os
+from pathlib import Path
+import shutil
+import stat
+import subprocess
+import sys
+import tempfile
+import time
+import unittest
+from unittest.mock import patch
+import xml.etree.ElementTree as ET
+
+ROOT=Path(__file__).resolve().parents[2]
+sys.path[:0]=[str(ROOT/'scripts'),str(Path(__file__).resolve().parent)]
+import mustang_bootstrap_git as git
+import mustang_bootstrap_proof as proof
+import mustang_vendor_prep as vendor_prep
+
+
+class SourceProofTest(unittest.TestCase):
+    def setUp(self):
+        self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup)
+        self.home=Path(self.temp.name);self.source=self.home/'source';self.source.mkdir()
+        self.root=self.home/'checkout';(self.root/'os/build-only').mkdir(parents=True)
+        (self.root/'os/release-pipeline').mkdir()
+        shutil.copyfile(ROOT/'os/release-pipeline/cuttlefish-alpha.json',self.root/'os/release-pipeline/cuttlefish-alpha.json')
+        self.recipe=json.loads((ROOT/'os/build-only/mustang.json').read_text())
+        adev=self.source/'vendor/adevtool';(adev/'src').mkdir(parents=True);(adev/'bin').mkdir();(adev/'dl').mkdir()
+        (adev/'src/index.ts').write_bytes(b'tracked typescript fixture\n')
+        (adev/'bin/run').write_bytes(b'NEVER EXECUTE: source-loader fixture\n');(adev/'bin/run').chmod(0o755)
+        for name in ('package.json','yarn.lock'):(adev/name).write_bytes(b'tracked fixture\n')
+        (adev/'.gitignore').write_text('node_modules/\nlib/\ndl/*\n!dl/.find-ignore\n')
+        (adev/'dl/.find-ignore').write_bytes(b'')
+        self.adev_revision=self.init_project(adev)
+        make=self.source/'build/make';make.mkdir(parents=True)
+        (make/'envsetup.sh').write_text('NEVER EXECUTE: envsetup fixture\n')
+        (make/'README').write_text('pinned copy-file fixture\n')
+        (make/'tab\tand\nnewline').write_bytes(b'NUL-delimited metadata fixture')
+        (make/'a').mkdir();(make/'a/child').write_bytes(b'directory sort fixture')
+        (make/'a.c').write_bytes(b'Git sorts this before directory a')
+        (make/'Build.mk').write_bytes(b'# tracked build definition fixture\n')
+        self.make_revision=self.init_project(make)
+        empty=self.source/'empty-project';empty.mkdir();self.empty_revision=self.init_project(empty)
+        self.projects=[('vendor/adevtool',self.adev_revision),('build/make',self.make_revision),('empty-project',self.empty_revision)]
+        document=ET.Element('manifest')
+        for path,revision in self.projects:
+            project=ET.SubElement(document,'project',name=path,path=path,revision=revision)
+            if path=='build/make':
+                ET.SubElement(project,'linkfile',src='envsetup.sh',dest='build/envsetup.sh')
+                ET.SubElement(project,'copyfile',src='README',dest='README.fixture')
+        self.manifest=ET.tostring(document)
+        (self.root/'os/pinned-manifest.xml').write_bytes(self.manifest)
+        (self.source/'resolved-manifest.xml').write_bytes(self.manifest)
+        (self.source/'build/envsetup.sh').symlink_to('make/envsetup.sh')
+        shutil.copyfile(make/'README',self.source/'README.fixture')
+        self.recipe['pins']['vendor/adevtool']=self.adev_revision
+        (self.root/'os/build-only/mustang.json').write_text(json.dumps(self.recipe))
+        unpacked=adev/'dl/unpacked';unpacked.mkdir();os.mkfifo(unpacked/'excluded-fifo')
+        generated=self.source/'vendor/google_devices/mustang';generated.mkdir(parents=True)
+        (generated/'mustang.mk').write_bytes(b'generated fixture\n')
+        modules=adev/'node_modules';(modules/'pkg').mkdir(parents=True);(modules/'pkg/data').write_bytes(b'dependency fixture')
+        (modules/'alias').symlink_to('pkg')
+        out=self.source/self.recipe['adevtool']['depsDir'];binary=out/'host/linux-x86/bin';binary.mkdir(parents=True)
+        for name in self.recipe['adevtool']['depsTools']:
+            p=binary/name;p.write_bytes(b'NEVER EXECUTE: host dependency fixture');p.chmod(0o755)
+        marker=out/'adevtool_revision';marker.write_text(self.adev_revision+'\n')
+        deadline=time.monotonic()+30
+        self.vendor={key:vendor_prep.catalog(self.source,self.source/path,deadline) for key,path in
+            (('vendorTree','vendor/google_devices/mustang'),('nodeModules','vendor/adevtool/node_modules'),
+             ('adevtoolSource','vendor/adevtool/src'))}
+        self.vendor['productMakefile']=proof.deps.fingerprint(self.source,generated/'mustang.mk',deadline)
+        self.vendor['sourceLoader']={key:proof.deps.fingerprint(self.source,adev/path,deadline) for key,path in
+            (('binRun','bin/run'),('packageJson','package.json'),('yarnLock','yarn.lock'))}
+        self.host=dict(revisionMarker=proof.deps.fingerprint(self.source,marker,deadline),
+            distribution=proof.deps.inventory(self.source,out,deadline))
+
+    def command(self,directory,*arguments,env=None,input=None):
+        safe=dict(git.environment(),GIT_AUTHOR_NAME='Fixture',GIT_AUTHOR_EMAIL='fixture@example.invalid',
+                  GIT_COMMITTER_NAME='Fixture',GIT_COMMITTER_EMAIL='fixture@example.invalid',GIT_DEFAULT_HASH='sha1')
+        if env:safe.update(env)
+        return subprocess.check_output(['/usr/bin/git','-C',str(directory),*arguments],env=safe,input=input,stderr=subprocess.DEVNULL)
+
+    def init_project(self,directory):
+        self.command(directory,'init','--quiet');self.command(directory,'add','--all')
+        self.command(directory,'commit','--allow-empty','--quiet','-m','synthetic source fixture')
+        return self.command(directory,'rev-parse','HEAD').decode().strip()
+
+    def inspect(self,**kwargs):
+        return proof.inspect_source(self.source,self.manifest,self.vendor,self.host,self.recipe,root=self.root,**kwargs)
+
+    def angle_checkout(self,*,project_path='external/angle',nested=False,attributes=None,files=None):
+        project=self.source/project_path;project.mkdir(parents=True)
+        (project/'.gitattributes').write_bytes(attributes if attributes is not None else
+            (ROOT/'scripts/tests/fixtures/mustang-angle.gitattributes').read_bytes())
+        files=files or {'scripts/trigger.bat':b'@echo off\necho \x1b[31mNEVER EXECUTE FIXTURE\x1b[0m\n',
+               'scripts/project.vcxproj':b'\xef\xbb\xbf<Project>fixture</Project>\n',
+               'src/compiled/shader.h':b'// fixture header\n',
+               'README.txt':b'ordinary pinned text\n'}
+        for name,raw in files.items():
+            target=project/name;target.parent.mkdir(parents=True,exist_ok=True);target.write_bytes(raw)
+        if nested:(project/'scripts/.gitattributes').write_text('*.bat eol=lf\n')
+        revision=self.init_project(project)
+        # Use Git itself to produce the checkout representation under test.
+        for name in files:(project/name).unlink()
+        self.command(project,'checkout-index','--all','--force')
+        document=ET.fromstring(self.manifest)
+        ET.SubElement(document,'project',name=project_path,path=project_path,revision=revision)
+        self.manifest=ET.tostring(document)
+        (self.root/'os/pinned-manifest.xml').write_bytes(self.manifest)
+        (self.source/'resolved-manifest.xml').write_bytes(self.manifest)
+        return project,files
+
+    def test_pinned_angle_crlf_matches_real_git_checkout_without_executing_filters(self):
+        project,files=self.angle_checkout();marker=self.home/'filter-must-not-run'
+        self.command(project,'config','filter.bad.smudge','touch '+str(marker))
+        self.command(project,'config','filter.bad.clean','touch '+str(marker))
+        (project/'.git/info/attributes').write_text('* filter=bad -text eol=lf ident working-tree-encoding=UTF-16\n')
+        for name in ('scripts/trigger.bat','scripts/project.vcxproj','src/compiled/shader.h'):
+            self.assertEqual((project/name).read_bytes(),files[name].replace(b'\n',b'\r\n'))
+        result=self.inspect();self.assertEqual(result['selectedCheckoutConvertedEntries'],3)
+        self.assertFalse(marker.exists())
+        self.assertEqual(result['checkoutConversionPolicy'],'pinned-attributes-isolated-crlf-v3')
+        original=git.LocalGit.read
+        def corrupt(reader,project,operation,revision=None):
+            raw=original(reader,project,operation,revision)
+            return raw+b'changed raw object' if operation=='blob' and revision!=git.object_id('blob',
+                (ROOT/'scripts/tests/fixtures/mustang-angle.gitattributes').read_bytes()) else raw
+        with patch.object(git.LocalGit,'read',new=corrupt):
+            with self.assertRaisesRegex(git.Refused,'pinned-checkout-blob-differs'):self.inspect()
+
+    def test_crlf_conversion_does_not_hide_changed_mixed_or_unattributed_bytes(self):
+        project,files=self.angle_checkout();target=project/'scripts/trigger.bat';original=target.read_bytes()
+        for value in (original+b'changed payload\r\n',original.replace(b'\r\n',b'\n',1)):
+            target.write_bytes(value)
+            with self.assertRaisesRegex(git.Refused,'pinned-blob-or-mode-differs-blob'):self.inspect()
+        target.write_bytes(original)
+        (project/'README.txt').write_bytes(files['README.txt'].replace(b'\n',b'\r\n'))
+        with self.assertRaisesRegex(git.Refused,'pinned-blob-or-mode-differs-blob'):self.inspect()
+
+    def test_nested_pinned_attribute_override_prevents_root_crlf_conversion(self):
+        project,files=self.angle_checkout(nested=True)
+        self.assertEqual((project/'scripts/trigger.bat').read_bytes(),files['scripts/trigger.bat'])
+        (project/'scripts/trigger.bat').write_bytes(files['scripts/trigger.bat'].replace(b'\n',b'\r\n'))
+        with self.assertRaisesRegex(git.Refused,'pinned-blob-or-mode-differs-blob'):self.inspect()
+
+    def test_other_pinned_project_uses_its_own_attributes_and_raw_reads_remain_bounded(self):
+        project,_files=self.angle_checkout(project_path='external/not-angle')
+        self.assertEqual(self.inspect()['selectedCheckoutConvertedEntries'],3)
+        # The raw reader is also bounded and never runs --filters or textconv.
+        blob=self.command(project,'rev-parse','HEAD:scripts/trigger.bat').decode().strip()
+        with self.assertRaisesRegex(git.Refused,'git-output-bound'):
+            git.LocalGit(time.monotonic()+30,output_bytes=1).read(project,'blob',blob)
+
+    def test_bc_pinned_rules_and_generic_attribute_macros_match_real_checkout(self):
+        project,files=self.angle_checkout(project_path='external/bc',
+            attributes=(ROOT/'scripts/tests/fixtures/mustang-bc.gitattributes').read_bytes(),
+            files={'vs/bc.sln':b'Visual Studio fixture\n','vs/bc.vcxproj':b'<Project/>\n'})
+        self.assertEqual((project/'vs/bc.sln').read_bytes(),files['vs/bc.sln'].replace(b'\n',b'\r\n'))
+        self.assertEqual(self.inspect()['selectedCheckoutConvertedEntries'],2)
+        project,files=self.angle_checkout(project_path='external/macros',nested=True,
+            attributes=b'[attr]windows text eol=crlf\n*.bat windows\n*.vcxproj windows\n')
+        # Pinned descendant eol=lf overrides the root macro for the batch file.
+        self.assertEqual((project/'scripts/trigger.bat').read_bytes(),files['scripts/trigger.bat'])
+        self.assertEqual(self.inspect()['selectedCheckoutConvertedEntries'],3)
+
+    def test_explicit_and_auto_text_semantics_match_git_for_control_binary_and_mixed_blobs(self):
+        cases={'escape.bat':b'echo \x1b[31mcolor\x1b[0m\n',
+               'binary.bat':b'\0binary\n', 'mixed.bat':b'one\r\ntwo\n',
+               'bare-cr.bat':b'one\rtwo\n', 'eof.bat':b'echo text\n\x1a',
+               'controls.bat':b'line\n\x01', 'rare-control.bat':b'x'*256+b'\x01\n'}
+        files={mode+'/'+name:raw for mode in ('auto','explicit') for name,raw in cases.items()}
+        project,_files=self.angle_checkout(project_path='external/pigweed',files=files,
+            attributes=b'auto/* text=auto eol=crlf\nexplicit/* text eol=crlf\n')
+        # Pin raw objects directly, including intentionally unnormalized blobs;
+        # Git itself then supplies the independent expected checkout bytes.
+        for name,raw in files.items():
+            blob=self.command(project,'hash-object','-w','--stdin',input=raw).decode().strip()
+            self.command(project,'update-index','--cacheinfo','100644,'+blob+','+name)
+            (project/name).unlink()
+        self.command(project,'commit','--quiet','-m','raw text-semantics fixture')
+        self.command(project,'checkout-index','--all','--force')
+        document=ET.fromstring(self.manifest)
+        next(p for p in document.findall('project') if p.get('path')=='external/pigweed').set(
+            'revision',self.command(project,'rev-parse','HEAD').decode().strip())
+        self.manifest=ET.tostring(document)
+        (self.root/'os/pinned-manifest.xml').write_bytes(self.manifest)
+        (self.source/'resolved-manifest.xml').write_bytes(self.manifest)
+        for name,raw in files.items():
+            with self.subTest(path=name):
+                self.assertEqual(proof.crlf_checkout(raw,'auto' if name.startswith('auto/') else 'set'),
+                                 (project/name).read_bytes())
+        self.assertTrue(self.inspect()['selectedPinnedBytesVerified'])
+
+    def test_pinned_filter_is_refused_without_execution_or_source_rewrites(self):
+        project,files=self.angle_checkout(attributes=b'*.bat text eol=crlf filter=bad\n')
+        marker=self.home/'filter-must-not-run'
+        self.command(project,'config','filter.bad.smudge','touch '+str(marker))
+        self.command(project,'config','filter.bad.clean','touch '+str(marker))
+        before=(project/'scripts/trigger.bat').read_bytes()
+        with self.assertRaisesRegex(git.Refused,'pinned-blob-or-mode-differs-blob'):self.inspect()
+        self.assertFalse(marker.exists());self.assertEqual((project/'scripts/trigger.bat').read_bytes(),before)
+
+    def test_pinned_attribute_objects_are_authenticated_and_private_scratch_is_removed(self):
+        project,_files=self.angle_checkout();homes=[];original=git.tempfile.TemporaryDirectory
+        def temporary(*args,**kwargs):
+            directory=original(*args,**kwargs);homes.append(Path(directory.name));return directory
+        with patch.object(git.tempfile,'TemporaryDirectory',side_effect=temporary):self.inspect()
+        self.assertTrue(homes);self.assertTrue(all(not home.exists() for home in homes))
+        read=git.LocalGit.read
+        attribute=git.object_id('blob',(ROOT/'scripts/tests/fixtures/mustang-angle.gitattributes').read_bytes())
+        def corrupted(reader,project,operation,revision=None):
+            raw=read(reader,project,operation,revision)
+            return raw+b'changed attribute object' if operation=='blob' and revision==attribute else raw
+        with patch.object(git.LocalGit,'read',new=corrupted),patch.object(git.tempfile,'TemporaryDirectory',side_effect=temporary):
+            with self.assertRaisesRegex(git.Refused,'pinned-attribute-blob-differs'):self.inspect()
+        self.assertTrue(all(not home.exists() for home in homes))
+        with patch.dict(git.PinnedAttributes.LIMITS,bytes=128),patch.object(git.tempfile,'TemporaryDirectory',side_effect=temporary):
+            with self.assertRaisesRegex(git.Refused,'pinned-attribute-scratch-bytes-bound'):self.inspect()
+        self.assertTrue(all(not home.exists() for home in homes))
+
+    def test_complete_selected_bytes_and_prepared_payloads_match_without_bootstrap_admission(self):
+        before=self.command(self.source/'vendor/adevtool','status','--porcelain','--untracked-files=no')
+        result=self.inspect()
+        self.assertEqual(result['projectCount'],3);self.assertTrue(result['selectedPinnedBytesVerified'])
+        self.assertTrue(result['preparedPayloadsVerified']);self.assertGreater(result['selectedPreparedEntries'],14)
+        self.assertEqual(result['selectedManifestTransferEntries'],2)
+        self.assertEqual(result['selectedResolvedManifestEntries'],1)
+        self.assertEqual(before,self.command(self.source/'vendor/adevtool','status','--porcelain','--untracked-files=no'))
+        for key in ('guestIdentityObserved','fullBootstrapVerified','pristine','pristineRuntimeAttestation',
+                    'otaAdmitted','signingStarted','gitIndexTrusted','preparedReceiptProvenanceVerified'):
+            self.assertIs(result[key],False)
+        self.assertTrue(result['excludedContentUnchecked'])
+
+    def test_changed_pinned_blob_cannot_be_hidden_by_assume_unchanged_or_skip_worktree(self):
+        path=self.source/'build/make/README';original=path.read_bytes()
+        for flag in ('--assume-unchanged','--skip-worktree'):
+            self.command(path.parent,'update-index',flag,'README');path.write_bytes(b'hidden changed bytes')
+            self.assertEqual(self.command(path.parent,'status','--porcelain','--untracked-files=no'),b'')
+            with self.subTest(flag=flag),self.assertRaisesRegex(git.Refused,'pinned-blob-or-mode'):self.inspect()
+            path.write_bytes(original)
+            self.command(path.parent,'update-index',flag.replace('--','--no-',1),'README')
+
+    def test_pinned_mismatch_reports_path_and_category_before_later_payload_reads(self):
+        target=self.source/'build/make/README';before=target.read_bytes()
+        original=proof.Observation.measure;opened=[]
+        def measure(observation,path,*args,**kwargs):
+            opened.append(path)
+            return original(observation,path,*args,**kwargs)
+        for reason in ('blob','mode','type'):
+            if reason=='blob':target.write_bytes(b'changed tracked input must not enter copy')
+            elif reason=='mode':target.chmod(0o755)
+            else:target.unlink();target.symlink_to('Build.mk')
+            opened.clear()
+            with self.subTest(reason=reason),patch.object(proof.Observation,'measure',new=measure):
+                with self.assertRaisesRegex(git.Refused,'selected-pinned-blob-or-mode-differs-'+reason) as raised:self.inspect()
+                self.assertEqual(raised.exception.path,'build/make/README')
+                self.assertNotIn(self.source/'vendor/adevtool/src/index.ts',opened)
+            target.unlink();target.write_bytes(before)
+
+    def test_source_sync_manifest_requires_exact_captured_bytes_regular_type_and_mode(self):
+        target=self.source/'resolved-manifest.xml'
+        for mutation in ('changed','missing','link','executable'):
+            if mutation=='changed':target.write_bytes(self.manifest+b'\n')
+            elif mutation=='missing':target.unlink()
+            elif mutation=='link':
+                target.unlink();target.symlink_to('README.fixture')
+            else:target.chmod(0o755)
+            with self.subTest(mutation=mutation),self.assertRaises(git.Refused):self.inspect()
+            if target.exists() or target.is_symlink():target.unlink()
+            target.write_bytes(self.manifest)
+
+    def test_unknown_ignored_file_or_empty_directory_is_not_silently_selected(self):
+        adev=self.source/'vendor/adevtool'
+        self.command(adev,'config','core.excludesFile',str(self.home/'ignore'))
+        (self.home/'ignore').write_text('unqualified*\n')
+        for directory in (False,True):
+            p=adev/('unqualified-dir' if directory else 'unqualified-file')
+            p.mkdir() if directory else p.write_bytes(b'unknown ignored content')
+            with self.subTest(directory=directory),self.assertRaisesRegex(git.Refused,'unclassified-selected'):self.inspect()
+            p.rmdir() if directory else p.unlink()
+
+    def test_generated_vendor_dependency_and_host_changes_refuse(self):
+        for relative in ('vendor/google_devices/mustang/mustang.mk','vendor/adevtool/node_modules/pkg/data',
+                         'out_adevtool_deps/host/linux-x86/bin/aapt2'):
+            p=self.source/relative;before=p.read_bytes();p.write_bytes(b'changed prepared bytes')
+            with self.subTest(relative=relative),self.assertRaises(git.Refused):self.inspect()
+            p.write_bytes(before)
+
+    def test_manifest_copy_link_missing_file_and_executable_mode_changes_refuse(self):
+        copyfile=self.source/'README.fixture';data=copyfile.read_bytes();copyfile.write_bytes(b'wrong copy')
+        with self.assertRaisesRegex(git.Refused,'pinned-blob-or-mode'):self.inspect()
+        copyfile.write_bytes(data)
+        link=self.source/'build/envsetup.sh';link.unlink();link.symlink_to('make/README')
+        with self.assertRaisesRegex(git.Refused,'pinned-blob-or-mode'):self.inspect()
+        link.unlink();link.symlink_to('make/envsetup.sh')
+        file=self.source/'vendor/adevtool/bin/run';file.chmod(0o644)
+        with self.assertRaisesRegex(git.Refused,'pinned-blob-or-mode'):self.inspect()
+        file.chmod(0o755)
+        (self.source/'build/make/README').unlink()
+        with self.assertRaisesRegex(git.Refused,'pinned-file-missing'):self.inspect()
+
+    def test_absent_excluded_cache_is_valid_but_symlink_and_bad_marker_refuse(self):
+        directory=self.source/'vendor/adevtool/dl/unpacked';shutil.rmtree(directory)
+        self.assertTrue(self.inspect()['selectedPinnedBytesVerified'])
+        outside=self.home/'outside-cache';outside.mkdir();(outside/'private').write_bytes(b'never read')
+        directory.symlink_to(outside,target_is_directory=True)
+        with self.assertRaisesRegex(git.Refused,'cache-boundary-not-plain-directory'):self.inspect()
+        directory.unlink()
+        (self.source/'vendor/adevtool/dl/.find-ignore').write_bytes(b'changed marker')
+        with self.assertRaises((git.Refused,proof.readers._Refused)):self.inspect()
+
+    def test_selected_special_file_bounds_and_cache_reference_refuse(self):
+        fifo=self.source/'unexpected-fifo';os.mkfifo(fifo)
+        with self.assertRaisesRegex(git.Refused,'unclassified-selected-file'):self.inspect()
+        fifo.unlink()
+        with self.assertRaisesRegex(git.Refused,r'git-tree-entry-bound-[0-9]+-max-1'):
+            self.inspect(limits=proof.Limits(entries=1))
+        with self.assertRaisesRegex(git.Refused,'source-byte-bound'):self.inspect(limits=proof.Limits(bytes=1))
+        (self.source/'build/make/Build.mk').write_text('vendor/adevtool/dl/unpacked')
+        with self.assertRaisesRegex(git.Refused,'excluded-cache-referenced'):self.inspect()
+
+    def test_git_reads_never_invoke_configured_filters_hooks_or_inherited_credentials(self):
+        project=self.source/'build/make';marker=self.home/'source-program-ran'
+        self.command(project,'config','filter.bad.clean','touch '+str(marker))
+        self.command(project,'config','core.fsmonitor','touch '+str(marker))
+        self.command(project,'config','core.hooksPath',str(self.home/'hooks'))
+        # Attributes are untracked and rejected, but never interpreted by the reader.
+        (project/'.gitattributes').write_text('* filter=bad\n')
+        with patch.dict(os.environ,dict(GH_TOKEN='not-forwarded',GIT_DIR='/not-the-source',BASH_ENV='/never-source')):
+            reader=git.LocalGit(time.monotonic()+30)
+            rows=reader.project(project,self.make_revision,max_entries=100)
+        self.assertIn('README',rows);self.assertFalse(marker.exists())
+        self.assertNotIn('GH_TOKEN',git.environment());self.assertNotIn('GIT_DIR',git.environment())
+        self.assertEqual(git.environment()['GIT_ALLOW_PROTOCOL'],'')
+
+    def test_corrupt_commit_and_tree_listing_are_rejected(self):
+        project=self.source/'build/make';reader=git.LocalGit(time.monotonic()+30)
+        commit=reader.read(project,'commit',self.make_revision);listing=reader.read(project,'tree',self.make_revision)
+        with self.assertRaisesRegex(git.Refused,'commit-object-differs'):
+            git.tree_rows(commit+b'x',listing,self.make_revision,max_entries=100)
+        altered=listing.replace(b'README',b'READMX')
+        with self.assertRaisesRegex(git.Refused,'reconstructed-tree-differs'):
+            git.tree_rows(commit,altered,self.make_revision,max_entries=100)
+        with self.assertRaisesRegex(git.Refused,'operation-not-allowed'):
+            reader.read(project,'status')
+
+    def test_component_resolution_does_not_hide_an_escape_behind_alias_parent(self):
+        base=self.source/'links';base.mkdir();(base/'x/y').mkdir(parents=True)
+        (base/'x/value').write_bytes(b'correct target');(base/'value').write_bytes(b'lexical target')
+        (base/'alias').symlink_to('x/y')
+        obs=proof.Observation(self.source,proof.Limits())
+        self.assertEqual(obs.resolve_link(base,'link','alias/../value'),('relative','x/value',True))
+        outside=self.home/'outside';outside.mkdir();(outside/'secret').write_bytes(b'never read')
+        (base/'escape').symlink_to('../../outside')
+        with self.assertRaisesRegex(git.Refused,'selected-link-escapes'):
+            obs.resolve_link(base,'link','escape/../value')
+        (base/'cycle').symlink_to('cycle')
+        with self.assertRaisesRegex(git.Refused,'selected-link-cycle'):
+            obs.resolve_link(base,'link','cycle')
+
+    def test_plan_has_no_runtime_or_execution_switch(self):
+        result=subprocess.run([sys.executable,str(ROOT/'scripts/mustang_bootstrap_proof.py')],capture_output=True,text=True,timeout=10)
+        self.assertEqual(result.returncode,0);plan=json.loads(result.stdout)
+        for key in ('execute','runtimeWired','readyForControlledStart','fullBootstrapVerified','pristine','otaAdmitted'):
+            self.assertIs(plan[key],False)
+        rejected=subprocess.run([sys.executable,str(ROOT/'scripts/mustang_bootstrap_proof.py'),'--execute'],capture_output=True,timeout=10)
+        self.assertNotEqual(rejected.returncode,0)
+
+    def test_nested_tree_hashes_and_git_directory_sort_order_are_verified(self):
+        project=self.source/'build/make';reader=git.LocalGit(time.monotonic()+30)
+        commit=reader.read(project,'commit',self.make_revision);listing=reader.read(project,'tree',self.make_revision)
+        result=git.tree_rows(commit,listing,self.make_revision,max_entries=100)
+        self.assertIn('a/child',result);self.assertIn('a.c',result)
+        with self.assertRaisesRegex(git.Refused,'reconstructed-tree-differs'):
+            git.tree_rows(commit,listing.replace(b'a/child',b'a/other'),self.make_revision,max_entries=100)
+
+    def test_git_output_deadline_and_entry_bounds_are_enforced(self):
+        project=self.source/'build/make'
+        with self.assertRaisesRegex(git.Refused,'git-output-bound'):
+            git.LocalGit(time.monotonic()+30,output_bytes=1).read(project,'head')
+        with self.assertRaisesRegex(git.Refused,'source-proof-deadline'):
+            git.LocalGit(time.monotonic()-1).read(project,'head')
+        for limits in (proof.Limits(entries=True),proof.Limits(entries=proof.Limits().entries+1),
+                       proof.Limits(seconds=0),proof.Limits(bytes=(150 << 30)+1)):
+            with self.subTest(limits=limits),self.assertRaises(git.Refused):limits.validate()
+        reader=git.LocalGit(time.monotonic()+30,total_output_bytes=80)
+        reader.read(project,'head')
+        with self.assertRaisesRegex(git.Refused,'git-total-output-bound'):reader.read(project,'head')
+
+    def test_source_namespace_addition_after_measurement_is_detected(self):
+        original=git.LocalGit.check_head;calls=[]
+        def check(reader,project,revision):
+            original(reader,project,revision);calls.append(project)
+            if len(calls)==2*len(self.projects):
+                (self.source/'added-after-walk').write_bytes(b'new unclassified bytes')
+        with patch.object(git.LocalGit,'check_head',new=check):
+            with self.assertRaisesRegex(git.Refused,'source-namespace-changed'):self.inspect()
+
+    def test_object_replacements_do_not_change_the_pinned_object_reader(self):
+        project=self.source/'build/make';p=project/'README'
+        p.write_bytes(b'replacement commit fixture')
+        self.command(project,'add','README');self.command(project,'commit','--quiet','-m','replacement fixture')
+        replacement=self.command(project,'rev-parse','HEAD').decode().strip()
+        self.command(project,'reset','--hard',self.make_revision)
+        self.command(project,'replace',self.make_revision,replacement)
+        self.assertTrue(self.inspect()['selectedPinnedBytesVerified'])
+
+    def pinned_gitlink(self,*,manifest_child=False,wrong_pin=False):
+        project=self.source/'build/make';child=project/'submodule-fixture';child.mkdir()
+        if manifest_child:
+            (child/'child.c').write_bytes(b'pinned child source fixture')
+            target=self.init_project(child)
+        else:target=self.make_revision
+        self.command(project,'update-index','--add','--cacheinfo','160000,'+target+',submodule-fixture')
+        self.command(project,'commit','--quiet','-m','pinned gitlink boundary fixture')
+        self.make_revision=self.command(project,'rev-parse','HEAD').decode().strip()
+        document=ET.fromstring(self.manifest)
+        next(p for p in document.findall('project') if p.get('path')=='build/make').set('revision',self.make_revision)
+        if manifest_child:
+            ET.SubElement(document,'project',name='child-fixture',path='build/make/submodule-fixture',
+                revision='1'*40 if wrong_pin else target)
+        self.manifest=ET.tostring(document);(self.root/'os/pinned-manifest.xml').write_bytes(self.manifest)
+        (self.source/'resolved-manifest.xml').write_bytes(self.manifest)
+        return child,target
+
+    def test_uninitialized_gitlink_authenticates_tree_but_selects_no_unpinned_bytes(self):
+        child,target=self.pinned_gitlink()
+        self.assertEqual(self.inspect()['gitlinkBoundaryCount'],1)
+        child.rmdir()  # Git need not materialize an uninitialized submodule directory.
+        self.assertTrue(self.inspect()['selectedPinnedBytesVerified'])
+        project=self.source/'build/make';reader=git.LocalGit(time.monotonic()+30)
+        commit=reader.read(project,'commit',self.make_revision);listing=reader.read(project,'tree',self.make_revision)
+        with self.assertRaisesRegex(git.Refused,'reconstructed-tree-differs'):
+            git.tree_rows(commit,listing.replace(target.encode(),b'1'*40),self.make_revision,
+                max_entries=100,include_trees=True,allow_gitlinks=True)
+
+    def test_unmanifested_populated_gitlink_refuses_including_hidden_git_metadata(self):
+        child,_target=self.pinned_gitlink()
+        (child/'.git').write_bytes(b'not an admitted initialized submodule')
+        with self.assertRaisesRegex(git.Refused,'unpinned-gitlink-contents') as raised:self.inspect()
+        self.assertEqual(raised.exception.path,'build/make/submodule-fixture')
+        (child/'.git').unlink();(child/'unexpected.c').write_bytes(b'unpinned code must not enter Make')
+        with self.assertRaisesRegex(git.Refused,'unpinned-gitlink-contents') as raised:self.inspect()
+        self.assertEqual(raised.exception.path,'build/make/submodule-fixture')
+
+    def test_manifest_pinned_gitlink_child_is_verified_as_its_own_repository(self):
+        child,_target=self.pinned_gitlink(manifest_child=True)
+        result=self.inspect();self.assertEqual(result['gitlinkBoundaryCount'],1)
+        self.assertEqual(result['projectCount'],4)
+        (child/'child.c').write_bytes(b'changed uncommitted child source')
+        with self.assertRaises(git.Refused):self.inspect()
+
+    def test_gitlink_child_revision_must_equal_the_explicit_manifest_pin(self):
+        self.pinned_gitlink(manifest_child=True,wrong_pin=True)
+        with self.assertRaisesRegex(git.Refused,'gitlink-manifest-revision-differs'):self.inspect()
+
+    def test_unclassified_sibling_paths_are_reported_without_opening_their_payloads(self):
+        unknown=['unknown-cache-one','unknown-cache-two']
+        for name in unknown:(self.source/name).write_bytes(b'PRIVATE-FIXTURE-MUST-NOT-BE-READ')
+        measured=[];original=proof.Observation.measure
+        def measure(observation,path,*args,**kwargs):
+            measured.append(str(path));return original(observation,path,*args,**kwargs)
+        with patch.object(proof.Observation,'measure',new=measure), \
+                self.assertRaisesRegex(git.Refused,'unclassified-selected-file') as raised:
+            self.inspect()
+        self.assertEqual(raised.exception.paths,unknown)
+        self.assertEqual(raised.exception.path,unknown[0])
+        for name in unknown:self.assertNotIn(str(self.source/name),measured)
+
+    def test_failure_path_list_is_bounded_and_cannot_expose_urls_or_escape_paths(self):
+        refused=git.Refused('fixture',paths=['https://private.test/?token=secret','../escape','/absolute','safe/file']*40)
+        self.assertLessEqual(len(refused.paths),git.MAX_FAILURE_PATHS)
+        self.assertTrue(refused.paths);self.assertEqual(set(refused.paths),{'safe/file'})
+
+    def test_missing_pinned_project_reports_the_manifest_path(self):
+        shutil.rmtree(self.source/'empty-project')
+        with self.assertRaisesRegex(git.Refused,'pinned-project-directory-unavailable') as raised:self.inspect()
+        self.assertEqual(raised.exception.path,'empty-project')
+        self.assertIsNotNone(raised.exception.__cause__)
+
+    def test_gitlinks_and_non_sha1_repositories_refuse(self):
+        project=self.source/'build/make'
+        self.command(project,'update-index','--add','--cacheinfo','160000,'+self.make_revision+',submodule-fixture')
+        self.command(project,'commit','--quiet','-m','unsupported gitlink fixture')
+        revision=self.command(project,'rev-parse','HEAD').decode().strip()
+        with self.assertRaisesRegex(git.Refused,'unsupported-git-tree-mode'):
+            git.LocalGit(time.monotonic()+30).project(project,revision,max_entries=100)
+        other=self.home/'sha256-repository';other.mkdir()
+        self.command(other,'init','--quiet','--object-format=sha256')
+        self.command(other,'commit','--allow-empty','--quiet','-m','sha256 fixture')
+        with self.assertRaisesRegex(git.Refused,'git-object-format-differs'):
+            git.LocalGit(time.monotonic()+30).project(other,self.make_revision,max_entries=100)
+
+    def test_missing_promisor_object_is_not_fetched(self):
+        project=self.source/'build/make'
+        self.command(project,'config','extensions.partialClone','origin')
+        self.command(project,'config','remote.origin.promisor','true')
+        self.command(project,'config','remote.origin.url','file:///definitely-not-an-authorized-source')
+        object_file=project/'.git/objects'/self.make_revision[:2]/self.make_revision[2:]
+        self.assertTrue(object_file.exists());object_file.unlink()
+        with self.assertRaisesRegex(git.Refused,'local-git-read-failed'):
+            git.LocalGit(time.monotonic()+30).read(project,'commit',self.make_revision)
+        self.assertFalse(object_file.exists())
+
+    def test_prepared_adapter_uses_existing_read_only_lock_and_exact_disk_receipts(self):
+        import test_mustang_edge_gate as fixture
+        lane=fixture.DedicatedPathsTest().profile(self.home)
+        storage=self.home/'rose-actions';storage.mkdir()
+        lock=Path(lane['lockPath']);lock.touch();lock.chmod(0o444)
+        cfg=dict(dataFilesystemUuid='fixture')
+        run=dict(runId='999',runAttempt='1',source='b'*40,
+            workflow='Immortal-Protocols/RoseOS-1/'+lane['workflow']+'@refs/heads/main')
+        def record(kind,number,payload,filename):
+            old=dict(run,runId=number,source='a'*40)
+            payload=dict(payload,identity=dict(builder=lane['vm'],diskUuid='fixture',run=old),success=True)
+            raw=(json.dumps(payload,sort_keys=True)+'\n').encode()
+            directory=storage/('mustang-'+kind+'-'+number+'-1');directory.mkdir();(directory/filename).write_bytes(raw)
+            return dict(receipt=payload,receiptSha256=hashlib.sha256(raw).hexdigest(),runId=number,
+                source='a'*40,stopObservation=dict(instanceId=lane['vm']['instanceId']))
+        vendor=record('vendor','111',self.vendor,'vendor-preparation-receipt.json')
+        host=record('hostdeps','112',self.host,'hostdeps-receipt.json')
+        before=lock.stat()
+        with patch.object(proof.prepared,'binding',return_value=(vendor,host)):
+            result=proof.observe_prepared(lane,cfg,run,root=self.root)
+            self.assertTrue(result['preparedReceiptProvenanceVerified'])
+            self.assertFalse(result['guestIdentityObserved']);self.assertFalse(result['runIdentityObserved'])
+            self.assertFalse(result['fullBootstrapVerified']);self.assertFalse(result['pristine'])
+            path=storage/'mustang-vendor-111-1/vendor-preparation-receipt.json';path.write_text('{}')
+            with self.assertRaisesRegex(ValueError,'uploaded run evidence'):
+                proof.observe_prepared(lane,cfg,run,root=self.root)
+        after=lock.stat()
+        self.assertEqual((before.st_ino,before.st_mode,before.st_size),(after.st_ino,after.st_mode,after.st_size))
+        lock.unlink()
+        with self.assertRaisesRegex(ValueError,'canonical lock'):
+            proof.observe_prepared(lane,cfg,run,root=self.root)
+
+    def test_snapshot_readback_detects_a_rewritten_pinned_file_after_its_hash(self):
+        original=proof.Observation.verify_namespace
+        def changed(observation):
+            (self.source/'build/make/README').write_bytes(b'changed after pinned-byte check')
+            return original(observation)
+        with patch.object(proof.Observation,'verify_namespace',new=changed):
+            with self.assertRaisesRegex(git.Refused,'source-namespace-changed'):self.inspect()
+
+    def test_unknown_selected_file_is_refused_without_reading_its_bytes(self):
+        unknown=self.source/'unclassified-private-input';unknown.write_bytes(b'never opened by the observer')
+        original=proof.Observation.measure
+        def measured(observation,path,expected=None):
+            self.assertNotEqual(path,unknown,'unknown input bytes were opened')
+            return original(observation,path,expected)
+        with patch.object(proof.Observation,'measure',new=measured):
+            with self.assertRaisesRegex(git.Refused,'unclassified-selected-file'):self.inspect()
+
+    def test_selected_pinned_fifo_is_refused_without_blocking(self):
+        path=self.source/'build/make/README';path.unlink();os.mkfifo(path)
+        with self.assertRaisesRegex(git.Refused,'selected-special-file'):self.inspect()
+
+    def test_git_executable_mode_uses_owner_execute_bit(self):
+        path=self.source/'vendor/adevtool/bin/run';path.chmod(0o654)
+        with self.assertRaisesRegex(git.Refused,'pinned-blob-or-mode'):self.inspect()
+
+    def test_git_read_timeout_ends_only_its_owned_fixture_process(self):
+        original=subprocess.Popen;children=[]
+        def surrogate(argv,**kwargs):
+            self.assertEqual(argv[0],'/usr/bin/git')
+            child=original([sys.executable,'-c','import time; time.sleep(30)'],**kwargs)
+            children.append(child);return child
+        started=time.monotonic()
+        with patch.object(git.subprocess,'Popen',side_effect=surrogate):
+            with self.assertRaisesRegex(git.Refused,'git-read-deadline'):
+                git.LocalGit(time.monotonic()+10,command_seconds=1).read(self.source/'build/make','head')
+        self.assertLess(time.monotonic()-started,5)
+        self.assertEqual(len(children),1);self.assertIsNotNone(children[0].poll())
+
+    def test_manifest_must_be_bounded_resolved_and_unambiguous(self):
+        for value in (b'',b'x'*((4 << 20)+1),b'<manifest><include name="elsewhere"/></manifest>',
+                      b'<manifest><project path="../outside" revision="'+b'a'*40+b'"/></manifest>'):
+            with self.subTest(value=value[:60]),self.assertRaises(git.Refused):proof.manifest_projects(value)
+        document=ET.fromstring(self.manifest);document.append(copy.deepcopy(document.find('project')))
+        with self.assertRaisesRegex(git.Refused,'duplicate-manifest-project'):
+            proof.manifest_projects(ET.tostring(document))
+
+    def test_non_utf8_git_filename_round_trips_without_quoting_or_payload_execution(self):
+        project=self.source/'build/make';name=os.fsdecode(b'non-utf8-\xff.dat')
+        (project/name).write_bytes(b'raw filename fixture')
+        self.command(project,'add','--all');self.command(project,'commit','--quiet','-m','filename fixture')
+        revision=self.command(project,'rev-parse','HEAD').decode().strip()
+        document=ET.fromstring(self.manifest)
+        for node in document.findall('project'):
+            if node.get('path')=='build/make':node.set('revision',revision)
+        self.manifest=ET.tostring(document)
+        (self.source/'resolved-manifest.xml').write_bytes(self.manifest)
+        rows=git.LocalGit(time.monotonic()+30).project(project,revision,max_entries=100)
+        self.assertIn(name,rows);self.assertTrue(self.inspect()['selectedPinnedBytesVerified'])
+
+    def test_bounded_planner_selects_the_same_input_paths_and_attributes_as_the_shared_copier(self):
+        engine=proof.shared_engine();observation=proof.Observation(self.source,proof.Limits())
+        original=engine.source_selection(self.recipe,self.source,self.root)
+        bounded=engine.source_selection(self.recipe,self.source,self.root,planner=observation.plan)
+        self.assertEqual(original['problems'],[]);self.assertEqual(bounded['problems'],[])
+        by_path=lambda plan:{row['path']:row for row in plan['entries']}
+        self.assertEqual(by_path(original),by_path(bounded))
+        self.assertEqual(original['excluded'],bounded['excluded'])
+
+    def test_recipe_and_policy_cannot_redirect_reads_or_add_exclusion_exceptions(self):
+        mutations=[lambda r:r['adevtool'].update(depsDir='../outside'),
+            lambda r:r['adevtool'].update(depsTools=['../../outside']),
+            lambda r:r['preparation']['source'].update(includePaths=['../outside']),
+            lambda r:r['preparation']['source'].update(exclusionsFrom='os/elsewhere.json data')]
+        for mutate in mutations:
+            recipe=copy.deepcopy(self.recipe);mutate(recipe)
+            with patch.object(git.LocalGit,'project',side_effect=AssertionError('Git read preceded path validation')):
+                with self.assertRaisesRegex(git.Refused,'unsupported-source-selection-contract'):
+                    proof.inspect_source(self.source,self.manifest,self.vendor,self.host,recipe,root=self.root)
+        policy=self.root/'os/release-pipeline/cuttlefish-alpha.json';data=json.loads(policy.read_text())
+        data['preparation']['exclusions']['rootNames'].append('unknown-secret-input')
+        policy.write_text(json.dumps(data))
+        with patch.object(git.LocalGit,'project',side_effect=AssertionError('Git read preceded policy validation')):
+            with self.assertRaisesRegex(git.Refused,'unsupported-source-exclusion-policy'):self.inspect()
+
+    def test_wrapper_bounds_checkout_metadata_before_existing_binding_helpers(self):
+        import test_mustang_edge_gate as fixture
+        lane=fixture.DedicatedPathsTest().profile(self.home)
+        lock=Path(lane['lockPath']);lock.touch();lock.chmod(0o444)
+        run=dict(runId='999',runAttempt='1',source='b'*40,
+            workflow='Immortal-Protocols/RoseOS-1/'+lane['workflow']+'@refs/heads/main')
+        (self.root/'os/pinned-manifest.xml').write_bytes(b'x'*((4 << 20)+1))
+        with patch.object(proof.prepared,'binding',side_effect=AssertionError('metadata guard was late')):
+            with self.assertRaises(proof.readers._Refused):
+                proof.observe_prepared(lane,dict(dataFilesystemUuid='fixture'),run,root=self.root)
+
+
+if __name__=='__main__':unittest.main()

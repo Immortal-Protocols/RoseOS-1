@@ -1,0 +1,24 @@
+{
+  "schema": "roseos.mustang-native-network-evidence.v1",
+  "builder": {
+    "project": "protocols-465723",
+    "zone": "us-west2-a",
+    "instance": "roseos-mustang-builder-20261107-a",
+    "instanceId": "5585425566393384049"
+  },
+  "dataFilesystemUuid": "4183bff8-6be4-46bb-a641-2193d19813ee",
+  "githubEgressVerified": true,
+  "approvedRoute": "Existing dedicated Mustang ephemeral external-IPv4 route; no network change",
+  "evidence": {
+    "runId": "42531345133",
+    "runAttempt": "1",
+    "source": "b80dd7ac93e94b3592f9e6770a8930a63c38e735",
+    "workflowConclusion": "success",
+    "nativeReceiptSha256": "3489ad84429727ce9f3625e95af9482f64ef9deca60557fe9b06db2e645fd2d2",
+    "independentReadbackSha256": "43ec5b760985bf99bbe7cf949906476a25a8da59cf21775e64125ab44ee8c661",
+    "runnerGroupId": 5,
+    "runnerName": "mustang-42531345133",
+    "runnerJobId": 128886303090
+  },
+  "basis": "Successful same-VM group5 JIT qualification included GitHub checkout and artifact upload, with native guest/disk identity and independent package readback. Historical observation, not a new connectivity probe; each admitted run repeats guest identity and requires actual JIT job delivery. Existing four-hour STOP and queue watcher retained."
+}

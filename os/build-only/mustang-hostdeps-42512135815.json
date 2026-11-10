@@ -1,0 +1,2582 @@
+{
+  "schema": "roseos.mustang-hostdeps-evidence.v1",
+  "runId": "42512135815",
+  "runAttempt": "1",
+  "source": "78d5ebdfd4f3fc1dd99d8cb98bbf44316b9eb54f",
+  "workflowConclusion": "success",
+  "cleanupConclusion": "success",
+  "artifact": {
+    "id": 13629947664,
+    "name": "mustang-hostdeps-42512135815-1",
+    "sizeBytes": 18293,
+    "sha256": "24bfad926ffddf4c605e31a9d80c7182fcb9995cdf8ad9b155f367f6969f7d1d"
+  },
+  "receiptSha256": "1324d6d8d4bd6c54ec93792f08695e597ca77986b79f023754944b6424a14977",
+  "receipt": {
+    "argv": [
+      "/bin/bash",
+      "vendor/adevtool/scripts/run-build.sh",
+      "sdk_phone64_x86_64",
+      "out_adevtool_deps",
+      "-j24",
+      "aapt2",
+      "apksigner",
+      "aprotoc",
+      "arsclib",
+      "debugfs",
+      "dispol",
+      "fsck.erofs",
+      "lpdump",
+      "lpunpack",
+      "lz4",
+      "ota_extractor",
+      "simg2img",
+      "sqlite3",
+      "toybox"
+    ],
+    "authenticatedStop": false,
+    "boundEnforcement": "sampled-process-group-stop",
+    "detachedDescendantsContained": false,
+    "distribution": {
+      "host/linux-x86/.installable_test_files.previous": {
+        "mode": 420,
+        "sha256": "4c8ec518eaf9970cc09096011462b4e3691e44182ea6c2a5a72926675111719f",
+        "sizeBytes": 3443086
+      },
+      "host/linux-x86/bin/aapt2": {
+        "mode": 493,
+        "sha256": "370f567c520dd3e9828ea113b9737f64eb57051927cb35e792c0b715fa7d8d37",
+        "sizeBytes": 24355536
+      },
+      "host/linux-x86/bin/aconfig": {
+        "mode": 493,
+        "sha256": "1d64f52177020b23700a75f383b1425f4f69f128538d872ac2f685cdf4e28198",
+        "sizeBytes": 7666320
+      },
+      "host/linux-x86/bin/aidl": {
+        "mode": 493,
+        "sha256": "05a4173adaa2990855cce9249db6655c3987592d89eab4c3c4a28f17e1bc6e25",
+        "sizeBytes": 9949336
+      },
+      "host/linux-x86/bin/aidl-cpp": {
+        "mode": 493,
+        "sha256": "2533c7ce439af4d2136b371c64816de87fa36bf02bdac641cc4fa82dc41cb899",
+        "sizeBytes": 9949336
+      },
+      "host/linux-x86/bin/aidl_hash_tool": {
+        "mode": 493,
+        "sha256": "351b7fe53bbfe09fe8d753880e1e11bfd1be7230f517ca8d0e0029f44740e23e",
+        "sizeBytes": 2887586
+      },
+      "host/linux-x86/bin/apksigner": {
+        "mode": 457,
+        "sha256": "b47549e373b895ce6ca620d0c7887e674d9615ffa837a86ac601dcfd04adb0f0",
+        "sizeBytes": 2959
+      },
+      "host/linux-x86/bin/aprotoc": {
+        "mode": 493,
+        "sha256": "3f866d9f2c12f22c0f693f443d57b012a4aee461b5889d673b364b4216c480d8",
+        "sizeBytes": 35579016
+      },
+      "host/linux-x86/bin/arsclib": {
+        "mode": 457,
+        "sha256": "fd1f035b6a3d068f459202c893ef385bd87275c0a0d3d5b9e752381fb7e2ff6d",
+        "sizeBytes": 1646
+      },
+      "host/linux-x86/bin/bssl_inject_hash": {
+        "mode": 493,
+        "sha256": "2a904d154acbe6008ab29d9d49132c091f9c5d1962b42e4c9508269abe2fcc86",
+        "sizeBytes": 3386414
+      },
+      "host/linux-x86/bin/cp_if_changed": {
+        "mode": 493,
+        "sha256": "27f428d703360661679b7b8df64a1c2520e1f39af8db3d66a0a89a754fbc6013",
+        "sizeBytes": 2599988
+      },
+      "host/linux-x86/bin/debugfs": {
+        "mode": 493,
+        "sha256": "a275fce506b342bad7a7fb09c4e58d9617db6d356224bf6cc10d299ae83b5d5e",
+        "sizeBytes": 436640
+      },
+      "host/linux-x86/bin/dep_fixer": {
+        "mode": 493,
+        "sha256": "d06204f0c7e4b8b3e27fd95f707a6068e45ee508cf34bcaaea6ca08154e6c5aa",
+        "sizeBytes": 2750986
+      },
+      "host/linux-x86/bin/depfile_verifier": {
+        "mode": 493,
+        "sha256": "6a96be5aa9dd57320402adfdd8599cf4d3a2c15c5a643a0c9e416fea59da0b50",
+        "sizeBytes": 2734048
+      },
+      "host/linux-x86/bin/dispol": {
+        "mode": 493,
+        "sha256": "6ab6ffdb9a67ad57684da2f1d8762ee93282e46884fc6b83b5d7afd218c2f6f9",
+        "sizeBytes": 512320
+      },
+      "host/linux-x86/bin/find_input_delta": {
+        "mode": 493,
+        "sha256": "b14141fbb632117566dcf242b0b8e052adae55302f4cae0b7c592c48f967add4",
+        "sizeBytes": 7428041
+      },
+      "host/linux-x86/bin/fsck.erofs": {
+        "mode": 493,
+        "sha256": "37341a0310dce3bb5e5a07abd81acf1f5f76381dd357d5a3f2dac4f67a0c0901",
+        "sizeBytes": 1225920
+      },
+      "host/linux-x86/bin/go/aidl-soong-rules/pkg/android/soong/aidl.a": {
+        "mode": 420,
+        "sha256": "597c4684a2d1b46e9dfac478a45227dc630b7f162261229e8d804cb7d3c43b51",
+        "sizeBytes": 21090786
+      },
+      "host/linux-x86/bin/go/aidl-soong-rules/pkg/android/soong/aidl.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/aidl_hash_tool/linux_glibc_x86_64/pkg/aidl_hash_tool": {
+        "mode": 493,
+        "sha256": "351b7fe53bbfe09fe8d753880e1e11bfd1be7230f517ca8d0e0029f44740e23e",
+        "sizeBytes": 2887586
+      },
+      "host/linux-x86/bin/go/aidl_hash_tool/linux_glibc_x86_64/pkg/aidl_hash_tool.a": {
+        "mode": 420,
+        "sha256": "9044dd45aedeec2338b7894ed5f58e0566db9450365cf84bde8ae61ed7f71bf7",
+        "sizeBytes": 137236
+      },
+      "host/linux-x86/bin/go/android-archive-zip/linux_glibc_x86_64/pkg/android/soong/third_party/zip.a": {
+        "mode": 420,
+        "sha256": "834496d3ffaa7714be7f17545186aede494968cf928ad369afcc342a3308a10a",
+        "sizeBytes": 735568
+      },
+      "host/linux-x86/bin/go/androidmk-parser/linux_glibc_x86_64/pkg/android/soong/androidmk/parser.a": {
+        "mode": 420,
+        "sha256": "b7edd5df04d9281219a6b6cf301ad3c3265b0e4acc24c23b9dfbf8eae00c60fd",
+        "sizeBytes": 459228
+      },
+      "host/linux-x86/bin/go/androidmk-parser/pkg/android/soong/androidmk/parser.a": {
+        "mode": 420,
+        "sha256": "b7edd5df04d9281219a6b6cf301ad3c3265b0e4acc24c23b9dfbf8eae00c60fd",
+        "sizeBytes": 459228
+      },
+      "host/linux-x86/bin/go/androidmk-parser/pkg/android/soong/androidmk/parser.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/arm_compute_library_nn_driver/pkg/arm_compute_library_nn_driver.a": {
+        "mode": 420,
+        "sha256": "8806db8031034616fcdca2ea270f3c1884e35396d8ba61417ea97a556dcc6862",
+        "sizeBytes": 7986166
+      },
+      "host/linux-x86/bin/go/arm_compute_library_nn_driver/pkg/arm_compute_library_nn_driver.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/blueprint-bootstrap-bpdoc/pkg/github.com/google/blueprint/bootstrap/bpdoc.a": {
+        "mode": 420,
+        "sha256": "9f889bfde9ff8d64da155040d507be380ac37450a24929559e99217f84ce1d94",
+        "sizeBytes": 461284
+      },
+      "host/linux-x86/bin/go/blueprint-bootstrap-bpdoc/pkg/github.com/google/blueprint/bootstrap/bpdoc.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/blueprint-bootstrap/pkg/github.com/google/blueprint/bootstrap.a": {
+        "mode": 420,
+        "sha256": "d64ddd16048f212fa991c54b1858370910df0d8714cd39c38517ce6a5358e125",
+        "sizeBytes": 5297716
+      },
+      "host/linux-x86/bin/go/blueprint-bootstrap/pkg/github.com/google/blueprint/bootstrap.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/blueprint-bpmodify/pkg/github.com/google/blueprint/bpmodify.a": {
+        "mode": 420,
+        "sha256": "275ba4beb882b6efadb4e273879d1e5ca88b525b27179aaefac1c80b328de69d",
+        "sizeBytes": 243638
+      },
+      "host/linux-x86/bin/go/blueprint-bpmodify/pkg/github.com/google/blueprint/bpmodify.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/blueprint-dbtools/pkg/github.com/google/blueprint/dbtools.a": {
+        "mode": 420,
+        "sha256": "4cfebc26a6cc627ba26e688bf55701125ac262a949346f0f35225d33098dcd7a",
+        "sizeBytes": 708106
+      },
+      "host/linux-x86/bin/go/blueprint-dbtools/pkg/github.com/google/blueprint/dbtools.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/blueprint-depset/pkg/github.com/google/blueprint/depset.a": {
+        "mode": 420,
+        "sha256": "a2e6d35d668251a58407a737343d58df815636332d4910967d48ea29e47bb0ee",
+        "sizeBytes": 231920
+      },
+      "host/linux-x86/bin/go/blueprint-depset/pkg/github.com/google/blueprint/depset.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/blueprint-deptools/linux_glibc_x86_64/pkg/github.com/google/blueprint/deptools.a": {
+        "mode": 420,
+        "sha256": "fe65251b92826b45752b612f1d2769a8daf153985750c6c33d27c059bb045836",
+        "sizeBytes": 65180
+      },
+      "host/linux-x86/bin/go/blueprint-deptools/pkg/github.com/google/blueprint/deptools.a": {
+        "mode": 420,
+        "sha256": "fe65251b92826b45752b612f1d2769a8daf153985750c6c33d27c059bb045836",
+        "sizeBytes": 65180
+      },
+      "host/linux-x86/bin/go/blueprint-deptools/pkg/github.com/google/blueprint/deptools.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/blueprint-gobtools-test/pkg/github.com/google/blueprint/gobtools/test.a": {
+        "mode": 420,
+        "sha256": "0431ed1fe541a5bfcf009560695da4904d645b7f2b761d242c3633c8829ff659",
+        "sizeBytes": 130008
+      },
+      "host/linux-x86/bin/go/blueprint-gobtools-test/pkg/github.com/google/blueprint/gobtools/test.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/blueprint-gobtools/pkg/github.com/google/blueprint/gobtools.a": {
+        "mode": 420,
+        "sha256": "43dc9754a5765a9f96cd3928412b2149eb574aa8df8628859f1d15498a9be99d",
+        "sizeBytes": 1194744
+      },
+      "host/linux-x86/bin/go/blueprint-gobtools/pkg/github.com/google/blueprint/gobtools.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/blueprint-metrics/pkg/github.com/google/blueprint/metrics.a": {
+        "mode": 420,
+        "sha256": "9492e40f36bb521d2d76dadcc75e23f8c47c06be35893787be066e603b59de1a",
+        "sizeBytes": 59628
+      },
+      "host/linux-x86/bin/go/blueprint-metrics/pkg/github.com/google/blueprint/metrics.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/blueprint-optional/pkg/github.com/google/blueprint/optional.a": {
+        "mode": 420,
+        "sha256": "b8c8cba9d4fefe623f94bb913127be5978dddf369e6a7ea1e730941879c8852f",
+        "sizeBytes": 2316
+      },
+      "host/linux-x86/bin/go/blueprint-optional/pkg/github.com/google/blueprint/optional.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/blueprint-parser/pkg/github.com/google/blueprint/parser.a": {
+        "mode": 420,
+        "sha256": "b93dcb205d87d5190a523bf69453a7cd1b2f231ae5f58fa8a39ff00ead12b42a",
+        "sizeBytes": 1089260
+      },
+      "host/linux-x86/bin/go/blueprint-parser/pkg/github.com/google/blueprint/parser.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/blueprint-pathtools/linux_glibc_x86_64/pkg/github.com/google/blueprint/pathtools.a": {
+        "mode": 420,
+        "sha256": "49c234e1020c370c4a25008eb1b2a6e2cbf9e5f15161856251d3d37b8a193ae1",
+        "sizeBytes": 1002766
+      },
+      "host/linux-x86/bin/go/blueprint-pathtools/pkg/github.com/google/blueprint/pathtools.a": {
+        "mode": 420,
+        "sha256": "49c234e1020c370c4a25008eb1b2a6e2cbf9e5f15161856251d3d37b8a193ae1",
+        "sizeBytes": 1002766
+      },
+      "host/linux-x86/bin/go/blueprint-pathtools/pkg/github.com/google/blueprint/pathtools.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/blueprint-pool/pkg/github.com/google/blueprint/pool.a": {
+        "mode": 420,
+        "sha256": "757c3442595ea2da3de74a65ec979d237a597886968ba2074019f8bad26d08ee",
+        "sizeBytes": 9284
+      },
+      "host/linux-x86/bin/go/blueprint-pool/pkg/github.com/google/blueprint/pool.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/blueprint-proptools-type_test1/pkg/github.com/google/blueprint/proptools/type_test1/type_test.a": {
+        "mode": 420,
+        "sha256": "6e19bc6fc744f810b34a28adcc718f4a34d57ddd268ce69a09af96355059f80c",
+        "sizeBytes": 2500
+      },
+      "host/linux-x86/bin/go/blueprint-proptools-type_test1/pkg/github.com/google/blueprint/proptools/type_test1/type_test.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/blueprint-proptools-type_test2/pkg/github.com/google/blueprint/proptools/type_test2/type_test.a": {
+        "mode": 420,
+        "sha256": "ecf77ee8e4a4ca104cbe0746809b1853fb3c38633f5d1826d05861733c01e28f",
+        "sizeBytes": 2500
+      },
+      "host/linux-x86/bin/go/blueprint-proptools-type_test2/pkg/github.com/google/blueprint/proptools/type_test2/type_test.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/blueprint-proptools/pkg/github.com/google/blueprint/proptools.a": {
+        "mode": 420,
+        "sha256": "d73532341152c32e48ec061b08291fe62092e28db47e71c2b36c201bb82606f9",
+        "sizeBytes": 3868634
+      },
+      "host/linux-x86/bin/go/blueprint-proptools/pkg/github.com/google/blueprint/proptools.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/blueprint-syncmap/pkg/github.com/google/blueprint/syncmap.a": {
+        "mode": 420,
+        "sha256": "d29dcf6e7d5e656d4682980c0891c036b8739422506e1d89a95cf294719bf6cb",
+        "sizeBytes": 55424
+      },
+      "host/linux-x86/bin/go/blueprint-syncmap/pkg/github.com/google/blueprint/syncmap.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/blueprint-uniquelist/pkg/github.com/google/blueprint/uniquelist.a": {
+        "mode": 420,
+        "sha256": "fd57aaafc527c7409edeabd8bf8374568f28ed3567e5f2211e22e4a52b5c2d1d",
+        "sizeBytes": 898086
+      },
+      "host/linux-x86/bin/go/blueprint-uniquelist/pkg/github.com/google/blueprint/uniquelist.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/blueprint/pkg/github.com/google/blueprint.a": {
+        "mode": 420,
+        "sha256": "ff3013fdd8ab0c2b3f3291ee045303ef5af5330e952206af98aa1c16a6a525f2",
+        "sizeBytes": 9571388
+      },
+      "host/linux-x86/bin/go/blueprint/pkg/github.com/google/blueprint.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/bssl_ar/linux_glibc_x86_64/pkg/boringssl.googlesource.com/boringssl.git/util/ar.a": {
+        "mode": 420,
+        "sha256": "c90c20f2f92ba55bffd22c51a7c977a051ed64eed8ce0cdb9522eb5a8025f2d5",
+        "sizeBytes": 32600
+      },
+      "host/linux-x86/bin/go/bssl_fipscommon/linux_glibc_x86_64/pkg/boringssl.googlesource.com/boringssl.git/util/fipstools/fipscommon.a": {
+        "mode": 420,
+        "sha256": "ae2575a90303d714108094f294ab19dfe51db3ea35ea0e84a27800e58ff1b05a",
+        "sizeBytes": 3442
+      },
+      "host/linux-x86/bin/go/bssl_inject_hash/linux_glibc_x86_64/pkg/bssl_inject_hash": {
+        "mode": 493,
+        "sha256": "2a904d154acbe6008ab29d9d49132c091f9c5d1962b42e4c9508269abe2fcc86",
+        "sizeBytes": 3386414
+      },
+      "host/linux-x86/bin/go/bssl_inject_hash/linux_glibc_x86_64/pkg/bssl_inject_hash.a": {
+        "mode": 420,
+        "sha256": "0a2228f9bff7e76ffe15941c9c3af54aa9ec07a4ab22b4437eaa3a5db75de076",
+        "sizeBytes": 127844
+      },
+      "host/linux-x86/bin/go/cp_if_changed/linux_glibc_x86_64/pkg/cp_if_changed": {
+        "mode": 493,
+        "sha256": "27f428d703360661679b7b8df64a1c2520e1f39af8db3d66a0a89a754fbc6013",
+        "sizeBytes": 2599988
+      },
+      "host/linux-x86/bin/go/cp_if_changed/linux_glibc_x86_64/pkg/cp_if_changed.a": {
+        "mode": 420,
+        "sha256": "4a0102f2bfabb223db84c444b2de9dbd2e31f60e6aaf6c0a2f1784a366c47bd6",
+        "sizeBytes": 86122
+      },
+      "host/linux-x86/bin/go/cuttlefish-soong-rules/pkg/android/soong/cuttlefish.a": {
+        "mode": 420,
+        "sha256": "473d833c30f203a7254c06edacf96d24cd702044f10a8b3c9848f7a8491e1a0e",
+        "sizeBytes": 10791836
+      },
+      "host/linux-x86/bin/go/cuttlefish-soong-rules/pkg/android/soong/cuttlefish.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/dep_fixer/linux_glibc_x86_64/pkg/dep_fixer": {
+        "mode": 493,
+        "sha256": "d06204f0c7e4b8b3e27fd95f707a6068e45ee508cf34bcaaea6ca08154e6c5aa",
+        "sizeBytes": 2750986
+      },
+      "host/linux-x86/bin/go/dep_fixer/linux_glibc_x86_64/pkg/dep_fixer.a": {
+        "mode": 420,
+        "sha256": "feeb0478e78649dbcfd1089f02ae540c527bf78cca09fda163b2f32729730ffe",
+        "sizeBytes": 65742
+      },
+      "host/linux-x86/bin/go/depfile_verifier/linux_glibc_x86_64/pkg/depfile_verifier": {
+        "mode": 493,
+        "sha256": "6a96be5aa9dd57320402adfdd8599cf4d3a2c15c5a643a0c9e416fea59da0b50",
+        "sizeBytes": 2734048
+      },
+      "host/linux-x86/bin/go/depfile_verifier/linux_glibc_x86_64/pkg/depfile_verifier.a": {
+        "mode": 420,
+        "sha256": "5c9a64ae9c0abee0eacaeab8c62ac45aac9a5772629e5cc1ab353ca9ca054a9f",
+        "sizeBytes": 153572
+      },
+      "host/linux-x86/bin/go/ferrochrome-soong-rules/pkg/android/soong/ferrochrome.a": {
+        "mode": 420,
+        "sha256": "65be504331be5f12fbd79106973fa3db88140d0efad604afcd2eeb0a11229807",
+        "sizeBytes": 8412040
+      },
+      "host/linux-x86/bin/go/ferrochrome-soong-rules/pkg/android/soong/ferrochrome.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/find_input_delta/linux_glibc_x86_64/pkg/find_input_delta": {
+        "mode": 493,
+        "sha256": "b14141fbb632117566dcf242b0b8e052adae55302f4cae0b7c592c48f967add4",
+        "sizeBytes": 7428041
+      },
+      "host/linux-x86/bin/go/find_input_delta/linux_glibc_x86_64/pkg/find_input_delta.a": {
+        "mode": 420,
+        "sha256": "bab706843346778173b79cb1c4a549e61a50acb596f33c07974b94b54457dffc",
+        "sizeBytes": 92652
+      },
+      "host/linux-x86/bin/go/go-cmp-internal-diff/linux_glibc_x86_64/pkg/github.com/google/go-cmp/cmp/internal/diff.a": {
+        "mode": 420,
+        "sha256": "88ca1227bd6e1a10749bf0a3dfae90db4b5a70edef0ceb65b337b67d2514a3d4",
+        "sizeBytes": 140510
+      },
+      "host/linux-x86/bin/go/go-cmp-internal-diff/pkg/github.com/google/go-cmp/cmp/internal/diff.a": {
+        "mode": 420,
+        "sha256": "88ca1227bd6e1a10749bf0a3dfae90db4b5a70edef0ceb65b337b67d2514a3d4",
+        "sizeBytes": 140510
+      },
+      "host/linux-x86/bin/go/go-cmp-internal-diff/pkg/github.com/google/go-cmp/cmp/internal/diff.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/go-cmp-internal-flags/linux_glibc_x86_64/pkg/github.com/google/go-cmp/cmp/internal/flags.a": {
+        "mode": 420,
+        "sha256": "8f37ef3795ba52361a6ec8d42054d109306ecb8bc96df8906e1636d9b39cce0c",
+        "sizeBytes": 1418
+      },
+      "host/linux-x86/bin/go/go-cmp-internal-flags/pkg/github.com/google/go-cmp/cmp/internal/flags.a": {
+        "mode": 420,
+        "sha256": "8f37ef3795ba52361a6ec8d42054d109306ecb8bc96df8906e1636d9b39cce0c",
+        "sizeBytes": 1418
+      },
+      "host/linux-x86/bin/go/go-cmp-internal-flags/pkg/github.com/google/go-cmp/cmp/internal/flags.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/go-cmp-internal-function/linux_glibc_x86_64/pkg/github.com/google/go-cmp/cmp/internal/function.a": {
+        "mode": 420,
+        "sha256": "846199948cacaaf19f1c164c4b75aaae003ae2fa95a0333d1fba5b30af9a8a94",
+        "sizeBytes": 94670
+      },
+      "host/linux-x86/bin/go/go-cmp-internal-function/pkg/github.com/google/go-cmp/cmp/internal/function.a": {
+        "mode": 420,
+        "sha256": "846199948cacaaf19f1c164c4b75aaae003ae2fa95a0333d1fba5b30af9a8a94",
+        "sizeBytes": 94670
+      },
+      "host/linux-x86/bin/go/go-cmp-internal-function/pkg/github.com/google/go-cmp/cmp/internal/function.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/go-cmp-internal-testprotos/linux_glibc_x86_64/pkg/github.com/google/go-cmp/cmp/internal/testprotos.a": {
+        "mode": 420,
+        "sha256": "cc982ff74bb77da407713c4801ab356484e8fb4b7774f2d4edb4de9df7e2454e",
+        "sizeBytes": 118812
+      },
+      "host/linux-x86/bin/go/go-cmp-internal-testprotos/pkg/github.com/google/go-cmp/cmp/internal/testprotos.a": {
+        "mode": 420,
+        "sha256": "cc982ff74bb77da407713c4801ab356484e8fb4b7774f2d4edb4de9df7e2454e",
+        "sizeBytes": 118812
+      },
+      "host/linux-x86/bin/go/go-cmp-internal-testprotos/pkg/github.com/google/go-cmp/cmp/internal/testprotos.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/go-cmp-internal-teststructs/linux_glibc_x86_64/pkg/github.com/google/go-cmp/cmp/internal/teststructs.a": {
+        "mode": 420,
+        "sha256": "2bcaaa825f51679e4020c218e3b56a5392ba883c82f73acee24dcd290525ba8a",
+        "sizeBytes": 758428
+      },
+      "host/linux-x86/bin/go/go-cmp-internal-teststructs/pkg/github.com/google/go-cmp/cmp/internal/teststructs.a": {
+        "mode": 420,
+        "sha256": "2bcaaa825f51679e4020c218e3b56a5392ba883c82f73acee24dcd290525ba8a",
+        "sizeBytes": 758428
+      },
+      "host/linux-x86/bin/go/go-cmp-internal-teststructs/pkg/github.com/google/go-cmp/cmp/internal/teststructs.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/go-cmp-internal-value/linux_glibc_x86_64/pkg/github.com/google/go-cmp/cmp/internal/value.a": {
+        "mode": 420,
+        "sha256": "d199dbc1b40d10059cff8991f0c007c18069db31f5d87e978c25326ea15538c6",
+        "sizeBytes": 162926
+      },
+      "host/linux-x86/bin/go/go-cmp-internal-value/pkg/github.com/google/go-cmp/cmp/internal/value.a": {
+        "mode": 420,
+        "sha256": "d199dbc1b40d10059cff8991f0c007c18069db31f5d87e978c25326ea15538c6",
+        "sizeBytes": 162926
+      },
+      "host/linux-x86/bin/go/go-cmp-internal-value/pkg/github.com/google/go-cmp/cmp/internal/value.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/go-cmp/linux_glibc_x86_64/pkg/github.com/google/go-cmp/cmp.a": {
+        "mode": 420,
+        "sha256": "86add572a9d8e61bdf3a5ad3416b3d99bfa7157dd2c77f568af056ac27b1dc23",
+        "sizeBytes": 1804900
+      },
+      "host/linux-x86/bin/go/go-cmp/pkg/github.com/google/go-cmp/cmp.a": {
+        "mode": 420,
+        "sha256": "86add572a9d8e61bdf3a5ad3416b3d99bfa7157dd2c77f568af056ac27b1dc23",
+        "sizeBytes": 1804900
+      },
+      "host/linux-x86/bin/go/go-cmp/pkg/github.com/google/go-cmp/cmp.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/gob_gen/pkg/gob_gen": {
+        "mode": 493,
+        "sha256": "304eb1159763902c02bebd5c046962b4f6050bc325b1602d903417bdc58aa2d5",
+        "sizeBytes": 4359501
+      },
+      "host/linux-x86/bin/go/gob_gen/pkg/gob_gen.a": {
+        "mode": 420,
+        "sha256": "90356f8be7f1332ae6015a8cd65c047173d6402ec58aa8abebbc66ddc0851d2d",
+        "sizeBytes": 10373508
+      },
+      "host/linux-x86/bin/go/gob_gen/pkg/gob_gen.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/golang-protobuf-android/pkg/google.golang.org/protobuf/android.a": {
+        "mode": 420,
+        "sha256": "4398f2194b5932fb29b9533775f3e687aecaacdcf979d051efd1edbd0e940a6c",
+        "sizeBytes": 6140
+      },
+      "host/linux-x86/bin/go/golang-protobuf-android/pkg/google.golang.org/protobuf/android.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/golang-protobuf-encoding-prototext/linux_glibc_x86_64/pkg/google.golang.org/protobuf/encoding/prototext.a": {
+        "mode": 420,
+        "sha256": "e1c8473a045daf88c5e8b13a7934bbae3a4b76500ccc66dfba86165d2cbaf03a",
+        "sizeBytes": 672856
+      },
+      "host/linux-x86/bin/go/golang-protobuf-encoding-prototext/pkg/google.golang.org/protobuf/encoding/prototext.a": {
+        "mode": 420,
+        "sha256": "e1c8473a045daf88c5e8b13a7934bbae3a4b76500ccc66dfba86165d2cbaf03a",
+        "sizeBytes": 672856
+      },
+      "host/linux-x86/bin/go/golang-protobuf-encoding-prototext/pkg/google.golang.org/protobuf/encoding/prototext.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/golang-protobuf-encoding-protowire/linux_glibc_x86_64/pkg/google.golang.org/protobuf/encoding/protowire.a": {
+        "mode": 420,
+        "sha256": "c404ba8fb60b7f3a0223c26860786b9c7f7ae67468b1769b2155f53312b1145b",
+        "sizeBytes": 95352
+      },
+      "host/linux-x86/bin/go/golang-protobuf-encoding-protowire/pkg/google.golang.org/protobuf/encoding/protowire.a": {
+        "mode": 420,
+        "sha256": "c404ba8fb60b7f3a0223c26860786b9c7f7ae67468b1769b2155f53312b1145b",
+        "sizeBytes": 95352
+      },
+      "host/linux-x86/bin/go/golang-protobuf-encoding-protowire/pkg/google.golang.org/protobuf/encoding/protowire.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/golang-protobuf-internal-descfmt/linux_glibc_x86_64/pkg/google.golang.org/protobuf/internal/descfmt.a": {
+        "mode": 420,
+        "sha256": "7b363de008883bb36e0ccb8a19b65eeb0a84c4ee7f4404e24b4bc9fd2be0a7fa",
+        "sizeBytes": 234708
+      },
+      "host/linux-x86/bin/go/golang-protobuf-internal-descfmt/pkg/google.golang.org/protobuf/internal/descfmt.a": {
+        "mode": 420,
+        "sha256": "7b363de008883bb36e0ccb8a19b65eeb0a84c4ee7f4404e24b4bc9fd2be0a7fa",
+        "sizeBytes": 234708
+      },
+      "host/linux-x86/bin/go/golang-protobuf-internal-descfmt/pkg/google.golang.org/protobuf/internal/descfmt.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/golang-protobuf-internal-descopts/linux_glibc_x86_64/pkg/google.golang.org/protobuf/internal/descopts.a": {
+        "mode": 420,
+        "sha256": "5dc2ca5e3cbc587e1a633b69c8a10abfd9dee349df87e8f83a1ffed1bae59a83",
+        "sizeBytes": 29994
+      },
+      "host/linux-x86/bin/go/golang-protobuf-internal-descopts/pkg/google.golang.org/protobuf/internal/descopts.a": {
+        "mode": 420,
+        "sha256": "5dc2ca5e3cbc587e1a633b69c8a10abfd9dee349df87e8f83a1ffed1bae59a83",
+        "sizeBytes": 29994
+      },
+      "host/linux-x86/bin/go/golang-protobuf-internal-descopts/pkg/google.golang.org/protobuf/internal/descopts.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/golang-protobuf-internal-detrand/linux_glibc_x86_64/pkg/google.golang.org/protobuf/internal/detrand.a": {
+        "mode": 420,
+        "sha256": "20b7ba61d5e940f37218a88a2d03795ad353a0b255df87e94f701cb950a9c4cd",
+        "sizeBytes": 61444
+      },
+      "host/linux-x86/bin/go/golang-protobuf-internal-detrand/pkg/google.golang.org/protobuf/internal/detrand.a": {
+        "mode": 420,
+        "sha256": "20b7ba61d5e940f37218a88a2d03795ad353a0b255df87e94f701cb950a9c4cd",
+        "sizeBytes": 61444
+      },
+      "host/linux-x86/bin/go/golang-protobuf-internal-detrand/pkg/google.golang.org/protobuf/internal/detrand.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/golang-protobuf-internal-encoding-defval/linux_glibc_x86_64/pkg/google.golang.org/protobuf/internal/encoding/defval.a": {
+        "mode": 420,
+        "sha256": "fa4f3e9788e55dc2b02139edd0aaf04093473c2ea43cd60641ee0e0a3bc3d825",
+        "sizeBytes": 85228
+      },
+      "host/linux-x86/bin/go/golang-protobuf-internal-encoding-defval/pkg/google.golang.org/protobuf/internal/encoding/defval.a": {
+        "mode": 420,
+        "sha256": "fa4f3e9788e55dc2b02139edd0aaf04093473c2ea43cd60641ee0e0a3bc3d825",
+        "sizeBytes": 85228
+      },
+      "host/linux-x86/bin/go/golang-protobuf-internal-encoding-defval/pkg/google.golang.org/protobuf/internal/encoding/defval.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/golang-protobuf-internal-encoding-messageset/linux_glibc_x86_64/pkg/google.golang.org/protobuf/internal/encoding/messageset.a": {
+        "mode": 420,
+        "sha256": "28fb0bc8da62be2d8bbfd6ee984f52beb8183e230cd8f69a1d3aeb9c83dc38fc",
+        "sizeBytes": 98586
+      },
+      "host/linux-x86/bin/go/golang-protobuf-internal-encoding-messageset/pkg/google.golang.org/protobuf/internal/encoding/messageset.a": {
+        "mode": 420,
+        "sha256": "28fb0bc8da62be2d8bbfd6ee984f52beb8183e230cd8f69a1d3aeb9c83dc38fc",
+        "sizeBytes": 98586
+      },
+      "host/linux-x86/bin/go/golang-protobuf-internal-encoding-messageset/pkg/google.golang.org/protobuf/internal/encoding/messageset.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/golang-protobuf-internal-encoding-tag/linux_glibc_x86_64/pkg/google.golang.org/protobuf/internal/encoding/tag.a": {
+        "mode": 420,
+        "sha256": "6cebe87fbf4c1b937774a9d2b034d0d8534000b51bd31a782f3edccc29a8e551",
+        "sizeBytes": 152404
+      },
+      "host/linux-x86/bin/go/golang-protobuf-internal-encoding-tag/pkg/google.golang.org/protobuf/internal/encoding/tag.a": {
+        "mode": 420,
+        "sha256": "6cebe87fbf4c1b937774a9d2b034d0d8534000b51bd31a782f3edccc29a8e551",
+        "sizeBytes": 152404
+      },
+      "host/linux-x86/bin/go/golang-protobuf-internal-encoding-tag/pkg/google.golang.org/protobuf/internal/encoding/tag.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/golang-protobuf-internal-encoding-text/linux_glibc_x86_64/pkg/google.golang.org/protobuf/internal/encoding/text.a": {
+        "mode": 420,
+        "sha256": "7214eb558a4c8fb741a7f6956dbc698528a2c509e4f6632129306504a382b2fa",
+        "sizeBytes": 433140
+      },
+      "host/linux-x86/bin/go/golang-protobuf-internal-encoding-text/pkg/google.golang.org/protobuf/internal/encoding/text.a": {
+        "mode": 420,
+        "sha256": "7214eb558a4c8fb741a7f6956dbc698528a2c509e4f6632129306504a382b2fa",
+        "sizeBytes": 433140
+      },
+      "host/linux-x86/bin/go/golang-protobuf-internal-encoding-text/pkg/google.golang.org/protobuf/internal/encoding/text.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/golang-protobuf-internal-errors/linux_glibc_x86_64/pkg/google.golang.org/protobuf/internal/errors.a": {
+        "mode": 420,
+        "sha256": "a65e9bc37e0916dc31ba6a6c6edd3ebacc017f018a5147d602703df184cfcbf8",
+        "sizeBytes": 53764
+      },
+      "host/linux-x86/bin/go/golang-protobuf-internal-errors/pkg/google.golang.org/protobuf/internal/errors.a": {
+        "mode": 420,
+        "sha256": "a65e9bc37e0916dc31ba6a6c6edd3ebacc017f018a5147d602703df184cfcbf8",
+        "sizeBytes": 53764
+      },
+      "host/linux-x86/bin/go/golang-protobuf-internal-errors/pkg/google.golang.org/protobuf/internal/errors.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/golang-protobuf-internal-filedesc/linux_glibc_x86_64/pkg/google.golang.org/protobuf/internal/filedesc.a": {
+        "mode": 420,
+        "sha256": "e6af609c4d8e4b083df0375ad28108bc169582a124e6286662c24a3ac5986885",
+        "sizeBytes": 2260202
+      },
+      "host/linux-x86/bin/go/golang-protobuf-internal-filedesc/pkg/google.golang.org/protobuf/internal/filedesc.a": {
+        "mode": 420,
+        "sha256": "e6af609c4d8e4b083df0375ad28108bc169582a124e6286662c24a3ac5986885",
+        "sizeBytes": 2260202
+      },
+      "host/linux-x86/bin/go/golang-protobuf-internal-filedesc/pkg/google.golang.org/protobuf/internal/filedesc.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/golang-protobuf-internal-filetype/linux_glibc_x86_64/pkg/google.golang.org/protobuf/internal/filetype.a": {
+        "mode": 420,
+        "sha256": "2dcdbfd95538e27b683432e8dd5e6e97e40ce8969bf74d047ca613d3e0cabd61",
+        "sizeBytes": 313508
+      },
+      "host/linux-x86/bin/go/golang-protobuf-internal-filetype/pkg/google.golang.org/protobuf/internal/filetype.a": {
+        "mode": 420,
+        "sha256": "2dcdbfd95538e27b683432e8dd5e6e97e40ce8969bf74d047ca613d3e0cabd61",
+        "sizeBytes": 313508
+      },
+      "host/linux-x86/bin/go/golang-protobuf-internal-filetype/pkg/google.golang.org/protobuf/internal/filetype.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/golang-protobuf-internal-flags/linux_glibc_x86_64/pkg/google.golang.org/protobuf/internal/flags.a": {
+        "mode": 420,
+        "sha256": "135f1a084cb3f6178748ed7d22b21a38a94fc6f75a15293247a3eba0e9a22915",
+        "sizeBytes": 1316
+      },
+      "host/linux-x86/bin/go/golang-protobuf-internal-flags/pkg/google.golang.org/protobuf/internal/flags.a": {
+        "mode": 420,
+        "sha256": "135f1a084cb3f6178748ed7d22b21a38a94fc6f75a15293247a3eba0e9a22915",
+        "sizeBytes": 1316
+      },
+      "host/linux-x86/bin/go/golang-protobuf-internal-flags/pkg/google.golang.org/protobuf/internal/flags.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/golang-protobuf-internal-genid/linux_glibc_x86_64/pkg/google.golang.org/protobuf/internal/genid.a": {
+        "mode": 420,
+        "sha256": "747479aa668aaf1d51ce5a208b540ca5783a381056cc873d118ce3045e09f432",
+        "sizeBytes": 120454
+      },
+      "host/linux-x86/bin/go/golang-protobuf-internal-genid/pkg/google.golang.org/protobuf/internal/genid.a": {
+        "mode": 420,
+        "sha256": "747479aa668aaf1d51ce5a208b540ca5783a381056cc873d118ce3045e09f432",
+        "sizeBytes": 120454
+      },
+      "host/linux-x86/bin/go/golang-protobuf-internal-genid/pkg/google.golang.org/protobuf/internal/genid.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/golang-protobuf-internal-impl/linux_glibc_x86_64/pkg/google.golang.org/protobuf/internal/impl.a": {
+        "mode": 420,
+        "sha256": "35c85b981709da3e25624a6273324790191ed749ad0fcfdf0f664c6f379345d9",
+        "sizeBytes": 5359062
+      },
+      "host/linux-x86/bin/go/golang-protobuf-internal-impl/pkg/google.golang.org/protobuf/internal/impl.a": {
+        "mode": 420,
+        "sha256": "35c85b981709da3e25624a6273324790191ed749ad0fcfdf0f664c6f379345d9",
+        "sizeBytes": 5359062
+      },
+      "host/linux-x86/bin/go/golang-protobuf-internal-impl/pkg/google.golang.org/protobuf/internal/impl.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/golang-protobuf-internal-order/linux_glibc_x86_64/pkg/google.golang.org/protobuf/internal/order.a": {
+        "mode": 420,
+        "sha256": "2e1b30869bb3906beca6880aa19caf1cb874bea8a3e7d9f3ea595685ef00f9b5",
+        "sizeBytes": 152388
+      },
+      "host/linux-x86/bin/go/golang-protobuf-internal-order/pkg/google.golang.org/protobuf/internal/order.a": {
+        "mode": 420,
+        "sha256": "2e1b30869bb3906beca6880aa19caf1cb874bea8a3e7d9f3ea595685ef00f9b5",
+        "sizeBytes": 152388
+      },
+      "host/linux-x86/bin/go/golang-protobuf-internal-order/pkg/google.golang.org/protobuf/internal/order.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/golang-protobuf-internal-pragma/linux_glibc_x86_64/pkg/google.golang.org/protobuf/internal/pragma.a": {
+        "mode": 420,
+        "sha256": "aac6dc2cddf5a77a5bd8d13f5e14a0eadffcc2db098dde202c5ca202999aeda6",
+        "sizeBytes": 11858
+      },
+      "host/linux-x86/bin/go/golang-protobuf-internal-pragma/pkg/google.golang.org/protobuf/internal/pragma.a": {
+        "mode": 420,
+        "sha256": "aac6dc2cddf5a77a5bd8d13f5e14a0eadffcc2db098dde202c5ca202999aeda6",
+        "sizeBytes": 11858
+      },
+      "host/linux-x86/bin/go/golang-protobuf-internal-pragma/pkg/google.golang.org/protobuf/internal/pragma.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/golang-protobuf-internal-set/linux_glibc_x86_64/pkg/google.golang.org/protobuf/internal/set.a": {
+        "mode": 420,
+        "sha256": "9cbc9f9d4db8a51d953e4346b09355f16252708619f2f31ce53ea4c30fb7f470",
+        "sizeBytes": 32474
+      },
+      "host/linux-x86/bin/go/golang-protobuf-internal-set/pkg/google.golang.org/protobuf/internal/set.a": {
+        "mode": 420,
+        "sha256": "9cbc9f9d4db8a51d953e4346b09355f16252708619f2f31ce53ea4c30fb7f470",
+        "sizeBytes": 32474
+      },
+      "host/linux-x86/bin/go/golang-protobuf-internal-set/pkg/google.golang.org/protobuf/internal/set.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/golang-protobuf-internal-strs/linux_glibc_x86_64/pkg/google.golang.org/protobuf/internal/strs.a": {
+        "mode": 420,
+        "sha256": "168c846a49c40020d4eef308db24cc6391c168220e557356b963a0dd35ecca79",
+        "sizeBytes": 100704
+      },
+      "host/linux-x86/bin/go/golang-protobuf-internal-strs/pkg/google.golang.org/protobuf/internal/strs.a": {
+        "mode": 420,
+        "sha256": "168c846a49c40020d4eef308db24cc6391c168220e557356b963a0dd35ecca79",
+        "sizeBytes": 100704
+      },
+      "host/linux-x86/bin/go/golang-protobuf-internal-strs/pkg/google.golang.org/protobuf/internal/strs.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/golang-protobuf-internal-version/linux_glibc_x86_64/pkg/google.golang.org/protobuf/internal/version.a": {
+        "mode": 420,
+        "sha256": "166de6cca82b18abac800c03573822572de8085fcf47812c70a97706148004c0",
+        "sizeBytes": 10894
+      },
+      "host/linux-x86/bin/go/golang-protobuf-internal-version/pkg/google.golang.org/protobuf/internal/version.a": {
+        "mode": 420,
+        "sha256": "166de6cca82b18abac800c03573822572de8085fcf47812c70a97706148004c0",
+        "sizeBytes": 10894
+      },
+      "host/linux-x86/bin/go/golang-protobuf-internal-version/pkg/google.golang.org/protobuf/internal/version.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/golang-protobuf-proto/linux_glibc_x86_64/pkg/google.golang.org/protobuf/proto.a": {
+        "mode": 420,
+        "sha256": "622bef5645d1459ab1b00040460703f52484f9d1cc83848f06125d114aa087da",
+        "sizeBytes": 768168
+      },
+      "host/linux-x86/bin/go/golang-protobuf-proto/pkg/google.golang.org/protobuf/proto.a": {
+        "mode": 420,
+        "sha256": "622bef5645d1459ab1b00040460703f52484f9d1cc83848f06125d114aa087da",
+        "sizeBytes": 768168
+      },
+      "host/linux-x86/bin/go/golang-protobuf-proto/pkg/google.golang.org/protobuf/proto.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/golang-protobuf-reflect-protoreflect/linux_glibc_x86_64/pkg/google.golang.org/protobuf/reflect/protoreflect.a": {
+        "mode": 420,
+        "sha256": "f6f3fdf6a9722bfcc9a34161a9f1a767361c77bf4641189964d11ec3c5bbf65e",
+        "sizeBytes": 1426956
+      },
+      "host/linux-x86/bin/go/golang-protobuf-reflect-protoreflect/pkg/google.golang.org/protobuf/reflect/protoreflect.a": {
+        "mode": 420,
+        "sha256": "f6f3fdf6a9722bfcc9a34161a9f1a767361c77bf4641189964d11ec3c5bbf65e",
+        "sizeBytes": 1426956
+      },
+      "host/linux-x86/bin/go/golang-protobuf-reflect-protoreflect/pkg/google.golang.org/protobuf/reflect/protoreflect.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/golang-protobuf-reflect-protoregistry/linux_glibc_x86_64/pkg/google.golang.org/protobuf/reflect/protoregistry.a": {
+        "mode": 420,
+        "sha256": "51e35a6d4231068d4b327f1df13d3047cb0daecf619c1dafb4a54a7d53111ee1",
+        "sizeBytes": 433640
+      },
+      "host/linux-x86/bin/go/golang-protobuf-reflect-protoregistry/pkg/google.golang.org/protobuf/reflect/protoregistry.a": {
+        "mode": 420,
+        "sha256": "51e35a6d4231068d4b327f1df13d3047cb0daecf619c1dafb4a54a7d53111ee1",
+        "sizeBytes": 433640
+      },
+      "host/linux-x86/bin/go/golang-protobuf-reflect-protoregistry/pkg/google.golang.org/protobuf/reflect/protoregistry.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/golang-protobuf-runtime-protoiface/linux_glibc_x86_64/pkg/google.golang.org/protobuf/runtime/protoiface.a": {
+        "mode": 420,
+        "sha256": "205cf63c12500a7e2fb60e1f42807f9e8808eb8a603906b5f2cd8488b95a6ac4",
+        "sizeBytes": 78896
+      },
+      "host/linux-x86/bin/go/golang-protobuf-runtime-protoiface/pkg/google.golang.org/protobuf/runtime/protoiface.a": {
+        "mode": 420,
+        "sha256": "205cf63c12500a7e2fb60e1f42807f9e8808eb8a603906b5f2cd8488b95a6ac4",
+        "sizeBytes": 78896
+      },
+      "host/linux-x86/bin/go/golang-protobuf-runtime-protoiface/pkg/google.golang.org/protobuf/runtime/protoiface.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/golang-protobuf-runtime-protoimpl/linux_glibc_x86_64/pkg/google.golang.org/protobuf/runtime/protoimpl.a": {
+        "mode": 420,
+        "sha256": "928e109901d9311fd4d41deb5f497d2f68e8ec59e66ab0f4e4b211e3128965e6",
+        "sizeBytes": 178174
+      },
+      "host/linux-x86/bin/go/golang-protobuf-runtime-protoimpl/pkg/google.golang.org/protobuf/runtime/protoimpl.a": {
+        "mode": 420,
+        "sha256": "928e109901d9311fd4d41deb5f497d2f68e8ec59e66ab0f4e4b211e3128965e6",
+        "sizeBytes": 178174
+      },
+      "host/linux-x86/bin/go/golang-protobuf-runtime-protoimpl/pkg/google.golang.org/protobuf/runtime/protoimpl.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/hidl-soong-rules/pkg/android/soong/hidl.a": {
+        "mode": 420,
+        "sha256": "d12650673a543b819fe11b8e255c919ebc3bd73cbf0ecb82e262ddba03e0051b",
+        "sizeBytes": 13061346
+      },
+      "host/linux-x86/bin/go/hidl-soong-rules/pkg/android/soong/hidl.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/kernel-config-soong-rules/pkg/android/soong/kernel/configs.a": {
+        "mode": 420,
+        "sha256": "32b2475a4025bf111471de055072362e3e01e1c64c9dfd52ec29d6a53aaaf14a",
+        "sizeBytes": 9032728
+      },
+      "host/linux-x86/bin/go/kernel-config-soong-rules/pkg/android/soong/kernel/configs.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/loadplugins/pkg/loadplugins": {
+        "mode": 493,
+        "sha256": "3b8b0cbf061f341ae3c04826e5faef299e5b3b109446ce760a1ae619add029eb",
+        "sizeBytes": 4201104
+      },
+      "host/linux-x86/bin/go/loadplugins/pkg/loadplugins.a": {
+        "mode": 420,
+        "sha256": "65b196c9add8ad1c1a8f4819bebde3374ee60536bccac5c1023e1a7b113c36f7",
+        "sizeBytes": 105614
+      },
+      "host/linux-x86/bin/go/loadplugins/pkg/loadplugins.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/merge_zips/linux_glibc_x86_64/pkg/merge_zips": {
+        "mode": 493,
+        "sha256": "6832767f85fc81e433a4b37b8a51900497dd315e7efd17c58d5d78eba4603fc5",
+        "sizeBytes": 3075596
+      },
+      "host/linux-x86/bin/go/merge_zips/linux_glibc_x86_64/pkg/merge_zips.a": {
+        "mode": 420,
+        "sha256": "54e3dec63773f8be28aa6aed6634636e51a5c51200a0a91b946e820a43b5a6c5",
+        "sizeBytes": 433674
+      },
+      "host/linux-x86/bin/go/pogreb-fs/pkg/github.com/akrylysov/pogreb/fs.a": {
+        "mode": 420,
+        "sha256": "93336cf43f80e058b76e4f2938f54cd208dc9a4d1944e92f85fe1b35d050a5d5",
+        "sizeBytes": 1041842
+      },
+      "host/linux-x86/bin/go/pogreb-fs/pkg/github.com/akrylysov/pogreb/fs.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/pogreb-internal-assert/pkg/github.com/akrylysov/pogreb/internal/assert.a": {
+        "mode": 420,
+        "sha256": "079941e7cacbe2cea6ef5d01934d917ebfc9299db893b406258dca6613fd9c20",
+        "sizeBytes": 90062
+      },
+      "host/linux-x86/bin/go/pogreb-internal-assert/pkg/github.com/akrylysov/pogreb/internal/assert.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/pogreb-internal-errors/pkg/github.com/akrylysov/pogreb/internal/errors.a": {
+        "mode": 420,
+        "sha256": "5eec45f45fd8caf1126228173cd3eeac7a0dc38f1ca662b3a198c14c5b874435",
+        "sizeBytes": 29778
+      },
+      "host/linux-x86/bin/go/pogreb-internal-errors/pkg/github.com/akrylysov/pogreb/internal/errors.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/pogreb-internal-hash/pkg/github.com/akrylysov/pogreb/internal/hash.a": {
+        "mode": 420,
+        "sha256": "c5891c5b750dfa846d2af91f15ab577880b2444068fe5cb0aa6db567f07449ce",
+        "sizeBytes": 13120
+      },
+      "host/linux-x86/bin/go/pogreb-internal-hash/pkg/github.com/akrylysov/pogreb/internal/hash.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/pogreb/pkg/github.com/akrylysov/pogreb.a": {
+        "mode": 420,
+        "sha256": "475d4feedbf1fefa83d9bf989576dc830bcb4b17375894d83434fc30f43e9ff8",
+        "sizeBytes": 999248
+      },
+      "host/linux-x86/bin/go/pogreb/pkg/github.com/akrylysov/pogreb.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/rustc_linker/linux_glibc_x86_64/pkg/rustc_linker": {
+        "mode": 493,
+        "sha256": "1909e650169a217435dfb107d03675bebef2487f181e9826ee20adf2ba6832de",
+        "sizeBytes": 2812165
+      },
+      "host/linux-x86/bin/go/rustc_linker/linux_glibc_x86_64/pkg/rustc_linker.a": {
+        "mode": 420,
+        "sha256": "581a874c3202c190060f662f3950e137e54643661347821537c5c28cf7647fc5",
+        "sizeBytes": 99314
+      },
+      "host/linux-x86/bin/go/rustc_wrapper/linux_glibc_x86_64/pkg/rustc_wrapper": {
+        "mode": 493,
+        "sha256": "30993945f74f53215f8c228eedcd3cb7407d3174a25a5afc862b0bcfa71ca18e",
+        "sizeBytes": 2823576
+      },
+      "host/linux-x86/bin/go/rustc_wrapper/linux_glibc_x86_64/pkg/rustc_wrapper.a": {
+        "mode": 420,
+        "sha256": "ae632796321143bbde58454d02a89ba04c621479b3f19f2ff38e54c2688a9bac",
+        "sizeBytes": 90582
+      },
+      "host/linux-x86/bin/go/sbox/linux_glibc_x86_64/pkg/sbox": {
+        "mode": 493,
+        "sha256": "fa91f53cf985a84281d3777a65520c25af160fa7b283458961be951736e35e7d",
+        "sizeBytes": 7050364
+      },
+      "host/linux-x86/bin/go/sbox/linux_glibc_x86_64/pkg/sbox.a": {
+        "mode": 420,
+        "sha256": "9434644c662b57f7498bca4aba84f30d4fbf85bf3c9da3798dae47ccd792f5c4",
+        "sizeBytes": 309102
+      },
+      "host/linux-x86/bin/go/sbox_proto/linux_glibc_x86_64/pkg/android/soong/cmd/sbox/sbox_proto.a": {
+        "mode": 420,
+        "sha256": "dc76769516d0dae6eca2abaa95ed7794926034cef4950f24b7620ebb09a58eca",
+        "sizeBytes": 349368
+      },
+      "host/linux-x86/bin/go/sbox_proto/pkg/android/soong/cmd/sbox/sbox_proto.a": {
+        "mode": 420,
+        "sha256": "dc76769516d0dae6eca2abaa95ed7794926034cef4950f24b7620ebb09a58eca",
+        "sizeBytes": 349368
+      },
+      "host/linux-x86/bin/go/sbox_proto/pkg/android/soong/cmd/sbox/sbox_proto.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/soong-aconfig-build_flags/pkg/android/soong/aconfig/build_flags.a": {
+        "mode": 420,
+        "sha256": "c6f4d0a99c6d97193da53c93b9c39a4dd552402eba36ecb959c4bcfa5ae4b414",
+        "sizeBytes": 11030988
+      },
+      "host/linux-x86/bin/go/soong-aconfig-build_flags/pkg/android/soong/aconfig/build_flags.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/soong-aconfig-codegen/pkg/android/soong/aconfig/codegen.a": {
+        "mode": 420,
+        "sha256": "0683ad43dbd1d951c056faae48fc3f21bd8a098a1af3961fd1a25bb97c161a11",
+        "sizeBytes": 18333758
+      },
+      "host/linux-x86/bin/go/soong-aconfig-codegen/pkg/android/soong/aconfig/codegen.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/soong-aconfig/pkg/android/soong/aconfig.a": {
+        "mode": 420,
+        "sha256": "c92bf77a9531047588075b9ff3da257f5d1bd1cea1b21422cb4f363a570928c9",
+        "sizeBytes": 11473232
+      },
+      "host/linux-x86/bin/go/soong-aconfig/pkg/android/soong/aconfig.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/soong-aidl-library/pkg/android/soong/aidl_library.a": {
+        "mode": 420,
+        "sha256": "082450bcdd4a24180701bc7267b07c1f86f32988311ad93a0f8bf899658d7626",
+        "sizeBytes": 11422056
+      },
+      "host/linux-x86/bin/go/soong-aidl-library/pkg/android/soong/aidl_library.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/soong-android-allowlists/pkg/android/soong/android/allowlists.a": {
+        "mode": 420,
+        "sha256": "67cd982052ede8b6b29cc22237bd65269b3985d81bb4384b51fec96e0ddae3ae",
+        "sizeBytes": 8318
+      },
+      "host/linux-x86/bin/go/soong-android-allowlists/pkg/android/soong/android/allowlists.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/soong-android-cipd/pkg/android/soong/android/cipd.a": {
+        "mode": 420,
+        "sha256": "d649c4e1a812225765f8d52155cd97b25eda671e25c4399ecf0af7a5027cfb8d",
+        "sizeBytes": 9054604
+      },
+      "host/linux-x86/bin/go/soong-android-cipd/pkg/android/soong/android/cipd.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/soong-android-sdk/pkg/android/soong/android_sdk.a": {
+        "mode": 420,
+        "sha256": "9b41849fab9c4135c9941a7d676a929d324fe097b8b6fbee455831b269d20af6",
+        "sizeBytes": 9063144
+      },
+      "host/linux-x86/bin/go/soong-android-sdk/pkg/android/soong/android_sdk.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/soong-android-soongconfig/pkg/android/soong/android/soongconfig.a": {
+        "mode": 420,
+        "sha256": "706cc7ab9f3efd5e001495f6e6c0a65ca926015a04c15173f5e9d84118f4a4b5",
+        "sizeBytes": 415632
+      },
+      "host/linux-x86/bin/go/soong-android-soongconfig/pkg/android/soong/android/soongconfig.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/soong-android/pkg/android/soong/android.a": {
+        "mode": 420,
+        "sha256": "a1c9c2b02836fd930e2fa4e8d479be4f917b16e091a86eaae19d93d0afdf6982",
+        "sizeBytes": 58877864
+      },
+      "host/linux-x86/bin/go/soong-android/pkg/android/soong/android.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/soong-android_team_proto/pkg/android/soong/android/team_proto.a": {
+        "mode": 420,
+        "sha256": "c33cbe83babf0e917455055bdb0b15c8cede25b952dbeae8adbcd7a26c770839",
+        "sizeBytes": 209758
+      },
+      "host/linux-x86/bin/go/soong-android_team_proto/pkg/android/soong/android/team_proto.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/soong-apex/pkg/android/soong/apex.a": {
+        "mode": 420,
+        "sha256": "f3d2ece54a299a70c2420da31c072de1615e7e26d9bc0eaf74ed6f822dd92c08",
+        "sizeBytes": 32708464
+      },
+      "host/linux-x86/bin/go/soong-apex/pkg/android/soong/apex.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/soong-api/pkg/android/soong/api.a": {
+        "mode": 420,
+        "sha256": "2ab28b38bc3d35fe6d16efb0893fb358ea9383188b89b0dcb8d38ff29d478d36",
+        "sizeBytes": 16066864
+      },
+      "host/linux-x86/bin/go/soong-api/pkg/android/soong/api.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/soong-art/pkg/android/soong/art.a": {
+        "mode": 420,
+        "sha256": "4c07b2c12896c51590e3dd963dbc934da210a4a490549ee1b816393cc9cbb096",
+        "sizeBytes": 11039150
+      },
+      "host/linux-x86/bin/go/soong-art/pkg/android/soong/art.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/soong-atomsapigen/pkg/android/soong/atomsapigen.a": {
+        "mode": 420,
+        "sha256": "a8651151d7292302a5d28dac2c2d2eb082cffa8da6c92004d34776f8fd9cf355",
+        "sizeBytes": 15429602
+      },
+      "host/linux-x86/bin/go/soong-atomsapigen/pkg/android/soong/atomsapigen.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/soong-bloaty/pkg/android/soong/bloaty.a": {
+        "mode": 420,
+        "sha256": "6682b7a62df09e99bd5f16161675ea437eb0312b033eb95f786c1fb766aeaecf",
+        "sizeBytes": 11090674
+      },
+      "host/linux-x86/bin/go/soong-bloaty/pkg/android/soong/bloaty.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/soong-bpf/pkg/android/soong/bpf.a": {
+        "mode": 420,
+        "sha256": "ad6df574db53a78c97650798ad028ab44ba1d3ebff93eeb3468e5e9c3e1ce014",
+        "sizeBytes": 9717008
+      },
+      "host/linux-x86/bin/go/soong-bpf/pkg/android/soong/bpf.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/soong-cc-config/pkg/android/soong/cc/config.a": {
+        "mode": 420,
+        "sha256": "130edccbf8b0d964721c463c202aaa3a08f1fc95b65cc21f82d1b5f95f0cbc2f",
+        "sizeBytes": 11614122
+      },
+      "host/linux-x86/bin/go/soong-cc-config/pkg/android/soong/cc/config.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/soong-cc/pkg/android/soong/cc.a": {
+        "mode": 420,
+        "sha256": "a9feba7ef796aa8f1f4b2164125b3826bcbea9966090ede509a966001bfaf262",
+        "sizeBytes": 40593252
+      },
+      "host/linux-x86/bin/go/soong-cc/pkg/android/soong/cc.a.embedcfg": {
+        "mode": 420,
+        "sha256": "7341f3176c69a8bbdc9801f93903273cda1cf5fe036fd110c613d6e39d4d5185",
+        "sizeBytes": 609
+      },
+      "host/linux-x86/bin/go/soong-cc/pkg/android/soong/cc.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/soong-ci-tests/pkg/android/soong/ci_tests.a": {
+        "mode": 420,
+        "sha256": "4a3e2f7d61affa9d8624133421e9935f0c6f9074a554daa979cf36a1c1de54e8",
+        "sizeBytes": 11337130
+      },
+      "host/linux-x86/bin/go/soong-ci-tests/pkg/android/soong/ci_tests.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/soong-clang-prebuilts/pkg/android/soong/prebuilts/clang/host/linux-x86/clangprebuilts.a": {
+        "mode": 420,
+        "sha256": "85908553138a286212a5b02975318a88198c9b5897b84d20a04287f092bff9ef",
+        "sizeBytes": 10283490
+      },
+      "host/linux-x86/bin/go/soong-clang-prebuilts/pkg/android/soong/prebuilts/clang/host/linux-x86/clangprebuilts.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/soong-clang/pkg/android/soong/external/clang.a": {
+        "mode": 420,
+        "sha256": "f2400a2eb38f4233d9d7e33dad9c8ef5647439a2fe196af5f5a571f1c9b626b0",
+        "sizeBytes": 10370486
+      },
+      "host/linux-x86/bin/go/soong-clang/pkg/android/soong/external/clang.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/soong-cmd-find_input_delta-lib/linux_glibc_x86_64/pkg/android/soong/cmd/find_input_delta/find_input_delta_lib.a": {
+        "mode": 420,
+        "sha256": "bb9bfc73a31410128f212998f336643a62ebf57008289b7b56d02e2389ef3b97",
+        "sizeBytes": 374904
+      },
+      "host/linux-x86/bin/go/soong-cmd-find_input_delta-proto/linux_glibc_x86_64/pkg/android/soong/cmd/find_input_delta/find_input_delta_proto.a": {
+        "mode": 420,
+        "sha256": "efb705d5c190d5cc849ef847c02c954c9c832115247f66d0930586d1a2d7e0bc",
+        "sizeBytes": 242836
+      },
+      "host/linux-x86/bin/go/soong-cmd-find_input_delta-proto_internal/linux_glibc_x86_64/pkg/android/soong/cmd/find_input_delta/find_input_delta_proto_internal.a": {
+        "mode": 420,
+        "sha256": "47c850ca9c596d4e149577fbc18e52da61b2ae5369000175a57fff3c5b0127c4",
+        "sizeBytes": 215198
+      },
+      "host/linux-x86/bin/go/soong-compliance/pkg/android/soong/compliance.a": {
+        "mode": 420,
+        "sha256": "cf9548f478ac79dce0313c239df2968fed34e7a46bdcc6d9815bdecd23308ef0",
+        "sizeBytes": 11178680
+      },
+      "host/linux-x86/bin/go/soong-compliance/pkg/android/soong/compliance.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/soong-csuite/pkg/android/soong/csuite.a": {
+        "mode": 420,
+        "sha256": "c35bef3e59a7492f2522708ba67417435a74ed4766a138f8f1effd09b0b45622",
+        "sizeBytes": 16227532
+      },
+      "host/linux-x86/bin/go/soong-csuite/pkg/android/soong/csuite.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/soong-dexpreopt/pkg/android/soong/dexpreopt.a": {
+        "mode": 420,
+        "sha256": "f36626d30fab5c86904714d2e1a093f29da199e91be2ff3b842c79f657f0f4dd",
+        "sizeBytes": 11203946
+      },
+      "host/linux-x86/bin/go/soong-dexpreopt/pkg/android/soong/dexpreopt.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/soong-elf/linux_glibc_x86_64/pkg/android/soong/elf.a": {
+        "mode": 420,
+        "sha256": "f4b8e311675222901c141ff19c56fc86ee6cbe64f9c0ad5ebdb74ba955094fcb",
+        "sizeBytes": 149186
+      },
+      "host/linux-x86/bin/go/soong-etc/pkg/android/soong/etc.a": {
+        "mode": 420,
+        "sha256": "165b78b8799ab86569b33b3c6c789a71a82060870b6f6994c9f53e9d501e185e",
+        "sizeBytes": 11424284
+      },
+      "host/linux-x86/bin/go/soong-etc/pkg/android/soong/etc.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/soong-filesystem-ramdisk_16k-common/pkg/android/soong/filesystem/ramdisk_16k/common.a": {
+        "mode": 420,
+        "sha256": "22b2ad13e0d91d3dc7b6eebec47120a3b6eedb00a731d2464961f67132974c17",
+        "sizeBytes": 13074
+      },
+      "host/linux-x86/bin/go/soong-filesystem-ramdisk_16k-common/pkg/android/soong/filesystem/ramdisk_16k/common.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/soong-filesystem/pkg/android/soong/filesystem.a": {
+        "mode": 420,
+        "sha256": "463ce35f988798e71e824793216734f84e434a5b18ef9ac46733ea1779ab6b85",
+        "sizeBytes": 30218652
+      },
+      "host/linux-x86/bin/go/soong-filesystem/pkg/android/soong/filesystem.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/soong-fs_config/pkg/android/soong/fs_config.a": {
+        "mode": 420,
+        "sha256": "c7fa276360245c3f08cdcc06ab016d7135dfd5bdef6d1ff97c1ef12166d3494a",
+        "sizeBytes": 8276972
+      },
+      "host/linux-x86/bin/go/soong-fs_config/pkg/android/soong/fs_config.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/soong-fsgen/pkg/android/soong/fsgen.a": {
+        "mode": 420,
+        "sha256": "566325a578692361e82d867e7314d060caa97aad92a96f929b4296b51b01af4a",
+        "sizeBytes": 15420172
+      },
+      "host/linux-x86/bin/go/soong-fsgen/pkg/android/soong/fsgen.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/soong-fuzz/pkg/android/soong/fuzz.a": {
+        "mode": 420,
+        "sha256": "4912e84742b425fd67371c1c6b2ecd2a5028e2a8259eb30fc0ba8412e9bf00dd",
+        "sizeBytes": 9379526
+      },
+      "host/linux-x86/bin/go/soong-fuzz/pkg/android/soong/fuzz.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/soong-genrule/pkg/android/soong/genrule.a": {
+        "mode": 420,
+        "sha256": "641a6233ea6c34dcf9f571ad5e539be65f21f63e2998e1b774f1a2bacdc06f1d",
+        "sizeBytes": 11072088
+      },
+      "host/linux-x86/bin/go/soong-genrule/pkg/android/soong/genrule.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/soong-golang/pkg/android/soong/golang.a": {
+        "mode": 420,
+        "sha256": "5678a70156b6e550965fecdc02bb76b8ad81d27e7a49c9f5f1d07b2bd13e1727",
+        "sizeBytes": 9259672
+      },
+      "host/linux-x86/bin/go/soong-golang/pkg/android/soong/golang.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/soong-icu/pkg/android/soong/icu.a": {
+        "mode": 420,
+        "sha256": "43ba27e475f57561272a27f60e848fa5d8b4c96f338ca09e4809a8e67a51a548",
+        "sizeBytes": 3374580
+      },
+      "host/linux-x86/bin/go/soong-icu/pkg/android/soong/icu.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/soong-jar/linux_glibc_x86_64/pkg/android/soong/jar.a": {
+        "mode": 420,
+        "sha256": "fd1c607b5c4fd3c99bcb12d95749f1e070be4c42bce3c2e62e438d26e41bb9a4",
+        "sizeBytes": 131060
+      },
+      "host/linux-x86/bin/go/soong-java-config-error_prone/pkg/android/soong/java/config/error_prone.a": {
+        "mode": 420,
+        "sha256": "593f75c29d23fc2531dcb56c35c3bffa4161ed36dfc29afb02a9986f0156b8cb",
+        "sizeBytes": 53764
+      },
+      "host/linux-x86/bin/go/soong-java-config-error_prone/pkg/android/soong/java/config/error_prone.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/soong-java-config/pkg/android/soong/java/config.a": {
+        "mode": 420,
+        "sha256": "506a7cfb8e86e02bc20f4854f47d50ea978eb2cdad439d8b8be8e76eb81c36ef",
+        "sizeBytes": 8738362
+      },
+      "host/linux-x86/bin/go/soong-java-config/pkg/android/soong/java/config.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/soong-java/pkg/android/soong/java.a": {
+        "mode": 420,
+        "sha256": "f504e6ac36364ce4e145a58d7d8a1cce45b283a739cec465269b730c639fbe39",
+        "sizeBytes": 72514960
+      },
+      "host/linux-x86/bin/go/soong-java/pkg/android/soong/java.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/soong-kernel-common/pkg/android/soong/kernel/common.a": {
+        "mode": 420,
+        "sha256": "4190dd387f610b310c6c514ef22ac10dd364e88453e74d82777d7f65bae7d1d5",
+        "sizeBytes": 14986
+      },
+      "host/linux-x86/bin/go/soong-kernel-common/pkg/android/soong/kernel/common.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/soong-kernel/pkg/android/soong/kernel.a": {
+        "mode": 420,
+        "sha256": "6822c554a4a3fc872d03034164c57c6d49386cf99c1663ff056965e9a9a1163e",
+        "sizeBytes": 9282226
+      },
+      "host/linux-x86/bin/go/soong-kernel/pkg/android/soong/kernel.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/soong-libbpf/pkg/android/soong/bpf/libbpf.a": {
+        "mode": 420,
+        "sha256": "ca50b64f1e14b8e77587ecadc3138f57ea367a102cf470ed1ff349406a207aa3",
+        "sizeBytes": 11768876
+      },
+      "host/linux-x86/bin/go/soong-libbpf/pkg/android/soong/bpf/libbpf.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/soong-libchrome/pkg/android/soong/external/libchrome.a": {
+        "mode": 420,
+        "sha256": "1f966dfdce1b337888c9ef7a8b37e601b9a43fd5cd9ba19babb8ce3f1b0fed10",
+        "sizeBytes": 9715102
+      },
+      "host/linux-x86/bin/go/soong-libchrome/pkg/android/soong/external/libchrome.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/soong-linkerconfig/pkg/android/soong/linkerconfig.a": {
+        "mode": 420,
+        "sha256": "e857f8a5eff165902d889b97754686d135a7b555a01b4c32c34d58d62c2a18cd",
+        "sizeBytes": 13417538
+      },
+      "host/linux-x86/bin/go/soong-linkerconfig/pkg/android/soong/linkerconfig.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/soong-llvm/pkg/android/soong/external/llvm.a": {
+        "mode": 420,
+        "sha256": "28a90822955cc01fea9c2f70d401b2c9f18e61d65b0c31cc34895c2483637a93",
+        "sizeBytes": 8331836
+      },
+      "host/linux-x86/bin/go/soong-llvm/pkg/android/soong/external/llvm.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/soong-makedeps/linux_glibc_x86_64/pkg/android/soong/makedeps.a": {
+        "mode": 420,
+        "sha256": "d6ab73c0262dc71d80c4b5c32de2b47f23968719e389a5c06fd2f4de2b5a8985",
+        "sizeBytes": 36954
+      },
+      "host/linux-x86/bin/go/soong-phony/pkg/android/soong/phony.a": {
+        "mode": 420,
+        "sha256": "4e53b393bd2670cc69b54bf084c08ae6e430542c608be7229956ded6cfebf562",
+        "sizeBytes": 10628446
+      },
+      "host/linux-x86/bin/go/soong-phony/pkg/android/soong/phony.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/soong-provenance/pkg/android/soong/provenance.a": {
+        "mode": 420,
+        "sha256": "64593560af7a9dcf8bcdf5886a55f717fc6c47850bf90d47cfd279b3809d3a5d",
+        "sizeBytes": 11093100
+      },
+      "host/linux-x86/bin/go/soong-provenance/pkg/android/soong/provenance.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/soong-python/pkg/android/soong/python.a": {
+        "mode": 420,
+        "sha256": "ab3723a06a3b79285df1ab42befe452f73de1ceb4a375368c62427df3202ca56",
+        "sizeBytes": 19794582
+      },
+      "host/linux-x86/bin/go/soong-python/pkg/android/soong/python.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/soong-remoteexec/pkg/android/soong/remoteexec.a": {
+        "mode": 420,
+        "sha256": "4f0225bf1041226ebf54344f1cc8b6cef2bec5f95034fbbed585df68079b1f3d",
+        "sizeBytes": 40988
+      },
+      "host/linux-x86/bin/go/soong-remoteexec/pkg/android/soong/remoteexec.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/soong-response/linux_glibc_x86_64/pkg/android/soong/response.a": {
+        "mode": 420,
+        "sha256": "213e4b5d40cbfba9b8670a6c99ac21f97f8f447d4beec42d4faa8d4f84a214f8",
+        "sizeBytes": 28164
+      },
+      "host/linux-x86/bin/go/soong-response/pkg/android/soong/response.a": {
+        "mode": 420,
+        "sha256": "213e4b5d40cbfba9b8670a6c99ac21f97f8f447d4beec42d4faa8d4f84a214f8",
+        "sizeBytes": 28164
+      },
+      "host/linux-x86/bin/go/soong-response/pkg/android/soong/response.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/soong-robolectric/pkg/android/soong/robolectric.a": {
+        "mode": 420,
+        "sha256": "edbd9e08cc7121e0e16a16e10b9c440d6be54bad5a39372efbac0edd9d148dc8",
+        "sizeBytes": 8291002
+      },
+      "host/linux-x86/bin/go/soong-robolectric/pkg/android/soong/robolectric.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/soong-rust-config/pkg/android/soong/rust/config.a": {
+        "mode": 420,
+        "sha256": "08a4a5dc115230e21f9d8607d161b0af257ceff01cbfd0a4cb6bf248d0bdf0a6",
+        "sizeBytes": 10107756
+      },
+      "host/linux-x86/bin/go/soong-rust-config/pkg/android/soong/rust/config.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/soong-rust/pkg/android/soong/rust.a": {
+        "mode": 420,
+        "sha256": "4f2a7e41ca3ce5700ceee09cb379d5bf0e9fd91f0f31134aeba083de1942c0da",
+        "sizeBytes": 25378810
+      },
+      "host/linux-x86/bin/go/soong-rust/pkg/android/soong/rust.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/soong-sdk/pkg/android/soong/sdk.a": {
+        "mode": 420,
+        "sha256": "36da013d6f4de7ad26abe7921c562a392537bb13fd3c5cb67d66368ab55a63ab",
+        "sizeBytes": 20163094
+      },
+      "host/linux-x86/bin/go/soong-sdk/pkg/android/soong/sdk.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/soong-selinux/pkg/android/soong/selinux.a": {
+        "mode": 420,
+        "sha256": "a02138f3fe54552902c8a9facf178ee55249a6263851d5dbc46e7a20ecbe3362",
+        "sizeBytes": 15493782
+      },
+      "host/linux-x86/bin/go/soong-selinux/pkg/android/soong/selinux.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/soong-sh/pkg/android/soong/sh.a": {
+        "mode": 420,
+        "sha256": "e6c8e2b21c96cc10b2574f9d7c605e0c55195b1c7e0362970db1b5964af9d112",
+        "sizeBytes": 14782816
+      },
+      "host/linux-x86/bin/go/soong-sh/pkg/android/soong/sh.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/soong-shared/pkg/android/soong/shared.a": {
+        "mode": 420,
+        "sha256": "066edca5cceb331c41a8c0bf75c2d1afc4ea5e7951261f4c7fd2953901b1ff26",
+        "sizeBytes": 148868
+      },
+      "host/linux-x86/bin/go/soong-shared/pkg/android/soong/shared.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/soong-snapshot/pkg/android/soong/snapshot.a": {
+        "mode": 420,
+        "sha256": "c57cb13635bbc2f12fb00b187d0026c0d3eacd0d75f1a8094e6049d3ada6621a",
+        "sizeBytes": 8539104
+      },
+      "host/linux-x86/bin/go/soong-snapshot/pkg/android/soong/snapshot.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/soong-soong-api/pkg/android/soong/soong_api.a": {
+        "mode": 420,
+        "sha256": "82d3a03a5d4e7f37f156784881c55a71ac8a74951170d0034beea38d812978fd",
+        "sizeBytes": 19471128
+      },
+      "host/linux-x86/bin/go/soong-soong-api/pkg/android/soong/soong_api.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/soong-suite-harness/pkg/android/soong/tradefed/suite_harness.a": {
+        "mode": 420,
+        "sha256": "4ee1412261556c6b4d10cbc77aa9b2cf369065f0fb17692c7911cb33e86e88de",
+        "sizeBytes": 8338122
+      },
+      "host/linux-x86/bin/go/soong-suite-harness/pkg/android/soong/tradefed/suite_harness.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/soong-symbol_inject/linux_glibc_x86_64/pkg/android/soong/symbol_inject.a": {
+        "mode": 420,
+        "sha256": "ffea0603fb264c2e194b8bf3ffc2fc5d809f79ab872b79095eeb71e9a3b60c01",
+        "sizeBytes": 401858
+      },
+      "host/linux-x86/bin/go/soong-sysprop/pkg/android/soong/sysprop.a": {
+        "mode": 420,
+        "sha256": "0ec121e9c439b0e1b075883aeff63a6c45b49dcb7f3d9592b32522b3b9f3aab1",
+        "sizeBytes": 13759822
+      },
+      "host/linux-x86/bin/go/soong-sysprop/pkg/android/soong/sysprop.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/soong-systemfeatures/pkg/android/soong/systemfeatures.a": {
+        "mode": 420,
+        "sha256": "8e0c4fe2e25afcf429ebc35b0752b679158d536c75b2645a39f3f2a166c3fbfb",
+        "sizeBytes": 8916274
+      },
+      "host/linux-x86/bin/go/soong-systemfeatures/pkg/android/soong/systemfeatures.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/soong-test_suites/pkg/android/soong/test_suites.a": {
+        "mode": 420,
+        "sha256": "b54efc3114f12d533bdcc4831f2d6c9326c04adfff5fc073f9f411ec7af61af5",
+        "sizeBytes": 16834826
+      },
+      "host/linux-x86/bin/go/soong-test_suites/pkg/android/soong/test_suites.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/soong-testconfigs/pkg/android/soong/testconfigs.a": {
+        "mode": 420,
+        "sha256": "bceb40eee2570b0eae6c6101690f354453f35d8d912d8b79d298019ab36cdd7c",
+        "sizeBytes": 13229972
+      },
+      "host/linux-x86/bin/go/soong-testconfigs/pkg/android/soong/testconfigs.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/soong-tradefed-modules/pkg/android/soong/tradefed_modules.a": {
+        "mode": 420,
+        "sha256": "e6a08803ee5d58adfc62406efdf7f3cdcc59643b38314951aeb71acda7aec97c",
+        "sizeBytes": 9554680
+      },
+      "host/linux-x86/bin/go/soong-tradefed-modules/pkg/android/soong/tradefed_modules.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/soong-tradefed/pkg/android/soong/tradefed.a": {
+        "mode": 420,
+        "sha256": "1e4935a064e842fb92ada4acd0be2bc2cee65d375f7a4eae6b8126bc39bf938e",
+        "sizeBytes": 8834544
+      },
+      "host/linux-x86/bin/go/soong-tradefed/pkg/android/soong/tradefed.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/soong-ui-metrics_proto/pkg/android/soong/ui/metrics/metrics_proto.a": {
+        "mode": 420,
+        "sha256": "aed2e3e0db9b718db79b80650c06ee19e90f59e5f7109b0052ea394409b55eef",
+        "sizeBytes": 1260152
+      },
+      "host/linux-x86/bin/go/soong-ui-metrics_proto/pkg/android/soong/ui/metrics/metrics_proto.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/soong-unbundled/pkg/android/soong/unbundled.a": {
+        "mode": 420,
+        "sha256": "f76c78cd1dc936733912ddae14491565dbd0ad301e77ada10daa201e0658ee9c",
+        "sizeBytes": 10897470
+      },
+      "host/linux-x86/bin/go/soong-unbundled/pkg/android/soong/unbundled.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/soong-xml/pkg/android/soong/xml.a": {
+        "mode": 420,
+        "sha256": "6a1ea422948d23dce78703d6472c763903bfcf331e651be122f30b5c9f5480cc",
+        "sizeBytes": 9201910
+      },
+      "host/linux-x86/bin/go/soong-xml/pkg/android/soong/xml.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/soong-zip/linux_glibc_x86_64/pkg/android/soong/zip.a": {
+        "mode": 420,
+        "sha256": "9f5f34e04ed2261186d24ce540d3e904c2127affa9b1b9f0ee20e8a0f760323d",
+        "sizeBytes": 644544
+      },
+      "host/linux-x86/bin/go/soong/pkg/android/soong.a": {
+        "mode": 420,
+        "sha256": "7098d92cd9f5f3030b84d184fd1b9896a4aec95f4377c82547a81990606f9196",
+        "sizeBytes": 780
+      },
+      "host/linux-x86/bin/go/soong/pkg/android/soong.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/soong_build/gen/plugin.go": {
+        "mode": 420,
+        "sha256": "5ff4258206a269c59dc1ef0fe73bdee083ee58d81c12bea4116dbcf884200488",
+        "sizeBytes": 2009
+      },
+      "host/linux-x86/bin/go/soong_build/pkg/soong_build": {
+        "mode": 493,
+        "sha256": "81ac0772ea786d8a5775cb4b3913415027c50fbd3c03b003af26f5625911bc4d",
+        "sizeBytes": 60577550
+      },
+      "host/linux-x86/bin/go/soong_build/pkg/soong_build.a": {
+        "mode": 420,
+        "sha256": "bac1a312b0dcac4930856827a8b1fa1be172542d6d32fc38224c4fe1e67463ad",
+        "sizeBytes": 8381926
+      },
+      "host/linux-x86/bin/go/soong_build/pkg/soong_build.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/soong_env/linux_glibc_x86_64/pkg/soong_env": {
+        "mode": 493,
+        "sha256": "381dbdb05b2ee5978b2c82b03985e4300e974b8be8b2b189a51e497d5a1bc638",
+        "sizeBytes": 2830911
+      },
+      "host/linux-x86/bin/go/soong_env/linux_glibc_x86_64/pkg/soong_env.a": {
+        "mode": 420,
+        "sha256": "1bc6ec23b1dba1c9e165d935ba6863b91323f780938d8f336bee3f62cf753eba",
+        "sizeBytes": 88612
+      },
+      "host/linux-x86/bin/go/soong_javac_wrapper/linux_glibc_x86_64/pkg/soong_javac_wrapper": {
+        "mode": 493,
+        "sha256": "0d8c57f68e9e5e8fe371cefc3889890c542588c940c7d3fc4d1d34c158bff36f",
+        "sizeBytes": 3145600
+      },
+      "host/linux-x86/bin/go/soong_javac_wrapper/linux_glibc_x86_64/pkg/soong_javac_wrapper.a": {
+        "mode": 420,
+        "sha256": "bff49871fa139d9be8b3d2f86008e352150243a04af814e313a55b2bf9db22ad",
+        "sizeBytes": 106850
+      },
+      "host/linux-x86/bin/go/soong_zip/linux_glibc_x86_64/pkg/soong_zip": {
+        "mode": 493,
+        "sha256": "494a787df8e260a8dd3ec6afb77345629a72c2bb8974328dc12ea2208e74776f",
+        "sizeBytes": 3696641
+      },
+      "host/linux-x86/bin/go/soong_zip/linux_glibc_x86_64/pkg/soong_zip.a": {
+        "mode": 420,
+        "sha256": "e4ea1637cd5428013d236a2d78bbd28af3489546291f0205f7c32e3b180fd3f5",
+        "sizeBytes": 200146
+      },
+      "host/linux-x86/bin/go/symbol_inject/linux_glibc_x86_64/pkg/symbol_inject": {
+        "mode": 493,
+        "sha256": "e464053a1918e749b84583625ec25044165c4b099a65a9173e55c1102e392e21",
+        "sizeBytes": 3410687
+      },
+      "host/linux-x86/bin/go/symbol_inject/linux_glibc_x86_64/pkg/symbol_inject.a": {
+        "mode": 420,
+        "sha256": "64ad5ece835163030fab07f4e5646dc94a5f15bdd3615e0321de90e692831e32",
+        "sizeBytes": 68564
+      },
+      "host/linux-x86/bin/go/symbols_map/linux_glibc_x86_64/pkg/symbols_map": {
+        "mode": 493,
+        "sha256": "3c97b526003446cc3ce8c62cf3c05e42ec57ff1886bd89e75ec91a6315a89147",
+        "sizeBytes": 6650387
+      },
+      "host/linux-x86/bin/go/symbols_map/linux_glibc_x86_64/pkg/symbols_map.a": {
+        "mode": 420,
+        "sha256": "9f04e6f172a84d7ad9376fdfbd74013f613b47bbd360039c25f77303e7b1c2a8",
+        "sizeBytes": 156950
+      },
+      "host/linux-x86/bin/go/symbols_map_proto/linux_glibc_x86_64/pkg/android/soong/cmd/symbols_map/symbols_map_proto.a": {
+        "mode": 420,
+        "sha256": "cdf064b438c7018f5e281cae445609762db0a2d595f2000288d3aff7f305f581",
+        "sizeBytes": 305964
+      },
+      "host/linux-x86/bin/go/test_configs_proto/pkg/android/soong/testconfigs/protos.a": {
+        "mode": 420,
+        "sha256": "83adac150d5d256ff8ff776fb0e9ea0c9896e2c94f3c6a65ebcd4a992b84e422",
+        "sizeBytes": 439266
+      },
+      "host/linux-x86/bin/go/test_configs_proto/pkg/android/soong/testconfigs/protos.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/treble_report_app/pkg/tools/treble/build/report/app.a": {
+        "mode": 420,
+        "sha256": "1f210b63057209a0bd1bf27ae3c8baee388abb499bd19c32508b4cba514c2dc0",
+        "sizeBytes": 77036
+      },
+      "host/linux-x86/bin/go/treble_report_app/pkg/tools/treble/build/report/app.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/treble_report_local/pkg/tools/treble/build/report/local.a": {
+        "mode": 420,
+        "sha256": "338ccc4a26358598215b2190dfe75428b006657ac443c5ec41dbd7eaca970888",
+        "sizeBytes": 427326
+      },
+      "host/linux-x86/bin/go/treble_report_local/pkg/tools/treble/build/report/local.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/treble_report_module/pkg/tools/treble/build/report/report.a": {
+        "mode": 420,
+        "sha256": "40ee159105eeef2d85f9f3985cc45b083de8c93f1849ce7b73649ee6bb291c75",
+        "sizeBytes": 262630
+      },
+      "host/linux-x86/bin/go/treble_report_module/pkg/tools/treble/build/report/report.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/vintf-compatibility-matrix-soong-rules/pkg/android/soong/vintf-compatibility-matrix.a": {
+        "mode": 420,
+        "sha256": "5653b34001c0e9bf5149b9f4a5b666bed157e9a0871891bb14414d4625a1262e",
+        "sizeBytes": 10643074
+      },
+      "host/linux-x86/bin/go/vintf-compatibility-matrix-soong-rules/pkg/android/soong/vintf-compatibility-matrix.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/xsdc-soong-rules/pkg/android/soong/xsdc.a": {
+        "mode": 420,
+        "sha256": "e548b722fddb8713ab50529fc81f1f4f6e938172c3b13fcc980633e0387d7db1",
+        "sizeBytes": 8506670
+      },
+      "host/linux-x86/bin/go/xsdc-soong-rules/pkg/android/soong/xsdc.a.verify_serializers": {
+        "mode": 420,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "sizeBytes": 0
+      },
+      "host/linux-x86/bin/go/zip2zip/linux_glibc_x86_64/pkg/zip2zip": {
+        "mode": 493,
+        "sha256": "75ade34dbdd8133365c29332f65c5c6778284b05d53de0ac638fef73048183fe",
+        "sizeBytes": 2972967
+      },
+      "host/linux-x86/bin/go/zip2zip/linux_glibc_x86_64/pkg/zip2zip.a": {
+        "mode": 420,
+        "sha256": "595cc1231a18621df8fe98e88c6aa6555d79471c7638592c196b02ea68163447",
+        "sizeBytes": 228526
+      },
+      "host/linux-x86/bin/go/zipsync/linux_glibc_x86_64/pkg/zipsync": {
+        "mode": 493,
+        "sha256": "88fe054222ddc3ea52b723c53eb6537d19aeab2a36bf24358eac3e9426ebc01e",
+        "sizeBytes": 2957247
+      },
+      "host/linux-x86/bin/go/zipsync/linux_glibc_x86_64/pkg/zipsync.a": {
+        "mode": 420,
+        "sha256": "3794a222e31271c6399b301b711c607b4b2928d2aa9c2cd527652bc55460d893",
+        "sizeBytes": 140362
+      },
+      "host/linux-x86/bin/gob_gen": {
+        "mode": 493,
+        "sha256": "304eb1159763902c02bebd5c046962b4f6050bc325b1602d903417bdc58aa2d5",
+        "sizeBytes": 4359501
+      },
+      "host/linux-x86/bin/hidl-gen": {
+        "mode": 493,
+        "sha256": "cc4d9f286e80495fa017b740188c5945f7c29e5a9be4d667076d657a01efc9e3",
+        "sizeBytes": 9224128
+      },
+      "host/linux-x86/bin/loadplugins": {
+        "mode": 493,
+        "sha256": "3b8b0cbf061f341ae3c04826e5faef299e5b3b109446ce760a1ae619add029eb",
+        "sizeBytes": 4201104
+      },
+      "host/linux-x86/bin/lpdump": {
+        "mode": 493,
+        "sha256": "3d73bb3350df8f3de0dc9d976c0e308a30022d59324f58162448ad7df2cff989",
+        "sizeBytes": 9080
+      },
+      "host/linux-x86/bin/lpunpack": {
+        "mode": 493,
+        "sha256": "51f0cb01d5751a021bd8e2f3b9d3a68dbd9c626e263fb8567da37b0db9ebb71b",
+        "sizeBytes": 183384
+      },
+      "host/linux-x86/bin/lz4": {
+        "mode": 493,
+        "sha256": "a887672f43a468351117635108064c15695664abc0fb82fa169b9a6bb8aac637",
+        "sizeBytes": 574856
+      },
+      "host/linux-x86/bin/merge_zips": {
+        "mode": 493,
+        "sha256": "6832767f85fc81e433a4b37b8a51900497dd315e7efd17c58d5d78eba4603fc5",
+        "sizeBytes": 3075596
+      },
+      "host/linux-x86/bin/ndkstubgen": {
+        "mode": 493,
+        "sha256": "6d5976816a9931c72075037c305bfa683596d78720273f845a97bd1be22c9306",
+        "sizeBytes": 22855936
+      },
+      "host/linux-x86/bin/ota_extractor": {
+        "mode": 493,
+        "sha256": "c00cb2b400aafc76fa053b483b5a7cb8f4e579588d9fdc56019ceeaf823aec45",
+        "sizeBytes": 6790824
+      },
+      "host/linux-x86/bin/protoc-gen-rs": {
+        "mode": 493,
+        "sha256": "d550e99bf9650b03f7dda2d6f500f26c7af0a34ab6bcaa5bad1354b2cef73850",
+        "sizeBytes": 10966592
+      },
+      "host/linux-x86/bin/rustc_linker": {
+        "mode": 493,
+        "sha256": "1909e650169a217435dfb107d03675bebef2487f181e9826ee20adf2ba6832de",
+        "sizeBytes": 2812165
+      },
+      "host/linux-x86/bin/rustc_wrapper": {
+        "mode": 493,
+        "sha256": "30993945f74f53215f8c228eedcd3cb7407d3174a25a5afc862b0bcfa71ca18e",
+        "sizeBytes": 2823576
+      },
+      "host/linux-x86/bin/sbox": {
+        "mode": 493,
+        "sha256": "fa91f53cf985a84281d3777a65520c25af160fa7b283458961be951736e35e7d",
+        "sizeBytes": 7050364
+      },
+      "host/linux-x86/bin/simg2img": {
+        "mode": 493,
+        "sha256": "c18174a93fae172df655d4f73072580ca1800498ff74dae6a8dca6c7d797df91",
+        "sizeBytes": 312952
+      },
+      "host/linux-x86/bin/soong_build": {
+        "mode": 493,
+        "sha256": "81ac0772ea786d8a5775cb4b3913415027c50fbd3c03b003af26f5625911bc4d",
+        "sizeBytes": 60577550
+      },
+      "host/linux-x86/bin/soong_env": {
+        "mode": 493,
+        "sha256": "381dbdb05b2ee5978b2c82b03985e4300e974b8be8b2b189a51e497d5a1bc638",
+        "sizeBytes": 2830911
+      },
+      "host/linux-x86/bin/soong_javac_wrapper": {
+        "mode": 493,
+        "sha256": "0d8c57f68e9e5e8fe371cefc3889890c542588c940c7d3fc4d1d34c158bff36f",
+        "sizeBytes": 3145600
+      },
+      "host/linux-x86/bin/soong_zip": {
+        "mode": 493,
+        "sha256": "494a787df8e260a8dd3ec6afb77345629a72c2bb8974328dc12ea2208e74776f",
+        "sizeBytes": 3696641
+      },
+      "host/linux-x86/bin/sqlite3": {
+        "mode": 493,
+        "sha256": "3c69507dff74feadf64945963d4db2e4413753779fee6287e4f7931449059984",
+        "sizeBytes": 8932728
+      },
+      "host/linux-x86/bin/symbol_inject": {
+        "mode": 493,
+        "sha256": "e464053a1918e749b84583625ec25044165c4b099a65a9173e55c1102e392e21",
+        "sizeBytes": 3410687
+      },
+      "host/linux-x86/bin/symbols_map": {
+        "mode": 493,
+        "sha256": "3c97b526003446cc3ce8c62cf3c05e42ec57ff1886bd89e75ec91a6315a89147",
+        "sizeBytes": 6650387
+      },
+      "host/linux-x86/bin/sysprop_cpp": {
+        "mode": 493,
+        "sha256": "53d3674ac6553ae990785356ee4bb79d5b7ea0b6c2eecd0b1fa0b23f7a7ecdcc",
+        "sizeBytes": 827912
+      },
+      "host/linux-x86/bin/toybox": {
+        "mode": 493,
+        "sha256": "400576be36c890a408cf7bda2a1e4c19e8bb326c4a9edeb3ee3175cf2846acd2",
+        "sizeBytes": 3554240
+      },
+      "host/linux-x86/bin/zip2zip": {
+        "mode": 493,
+        "sha256": "75ade34dbdd8133365c29332f65c5c6778284b05d53de0ac638fef73048183fe",
+        "sizeBytes": 2972967
+      },
+      "host/linux-x86/bin/zipsync": {
+        "mode": 493,
+        "sha256": "88fe054222ddc3ea52b723c53eb6537d19aeab2a36bf24358eac3e9426ebc01e",
+        "sizeBytes": 2957247
+      },
+      "host/linux-x86/com.android.i18n/etc/icu/icudt78l.dat": {
+        "mode": 384,
+        "sha256": "41773c64bbdb518d4f84de8abbc80194623b590dd4c034629b0edf09757c4845",
+        "sizeBytes": 30533808
+      },
+      "host/linux-x86/framework/apksigner.jar": {
+        "mode": 420,
+        "sha256": "203af510ab8eafc5b0e102a06f9e2e9550ce26888d2f30f416f9f237d5bfe0a9",
+        "sizeBytes": 1196815
+      },
+      "host/linux-x86/framework/arsclib.jar": {
+        "mode": 420,
+        "sha256": "8a2e0b340c990e462583d320c2ff7563718d7517b5aa916962930631de91067e",
+        "sizeBytes": 6480597
+      },
+      "host/linux-x86/lib64/libbase.so": {
+        "mode": 493,
+        "sha256": "e7eaaee446266580b5b403e377a81f53f738f1a88c4854129c370a292d4fa0aa",
+        "sizeBytes": 851296
+      },
+      "host/linux-x86/lib64/libbrillo-stream.so": {
+        "mode": 493,
+        "sha256": "7ef4693614db66387a53274b3c234a38c2e6f51daa917c099d374d0ef18e9947",
+        "sizeBytes": 484472
+      },
+      "host/linux-x86/lib64/libbrillo.so": {
+        "mode": 493,
+        "sha256": "50ec5f022fa0fd4916510d049a8a296ff5d153980bdf7550b7de3ad204d914a2",
+        "sizeBytes": 770424
+      },
+      "host/linux-x86/lib64/libc++.so": {
+        "mode": 457,
+        "sha256": "acca15da090d439bbd4f6d7bbfb43bd53652639ad20487ea87304c8d00edb306",
+        "sizeBytes": 1759704
+      },
+      "host/linux-x86/lib64/libchrome.so": {
+        "mode": 493,
+        "sha256": "6299bb99bd3b30a04fde8a432984b6ae34a702c65a9a241c6fdaa7c59303868c",
+        "sizeBytes": 6651048
+      },
+      "host/linux-x86/lib64/libcrypto-host.so": {
+        "mode": 493,
+        "sha256": "cba5720788e0a464648b73dd62079ddcf4107021f5ed65d0e3baade3034cf6a3",
+        "sizeBytes": 5771280
+      },
+      "host/linux-x86/lib64/libcrypto_utils.so": {
+        "mode": 493,
+        "sha256": "99089f13a0987708f9adf84b21ac7e614e3f8b4851b08ca7a03b58f434db6314",
+        "sizeBytes": 21080
+      },
+      "host/linux-x86/lib64/libcutils.so": {
+        "mode": 493,
+        "sha256": "4c77ab3d7accaee087a38440f43420cab35891138ea217e1672092df5ae0978e",
+        "sizeBytes": 210424
+      },
+      "host/linux-x86/lib64/libevent-host.so": {
+        "mode": 493,
+        "sha256": "4d244d616b02228960debf63daf712789f5daf70e71b209cffda282aee7fbebe",
+        "sizeBytes": 710400
+      },
+      "host/linux-x86/lib64/libext2_blkid-host.so": {
+        "mode": 493,
+        "sha256": "ffbbaee5ac9e6df1e2f900879dcff7b2392f08874a555df8bf64dc8784465107",
+        "sizeBytes": 123224
+      },
+      "host/linux-x86/lib64/libext2_com_err-host.so": {
+        "mode": 493,
+        "sha256": "78f2e2e7ce29c75dd49abcb6ebccb36ca6a9fb1835cf7dedfab3bde327b98602",
+        "sizeBytes": 24640
+      },
+      "host/linux-x86/lib64/libext2_e2p-host.so": {
+        "mode": 493,
+        "sha256": "77b7a46257e5f5b8cddbc1cf5dc91097e2ec04a150894cf6fd3b5999ff2c1fab",
+        "sizeBytes": 74888
+      },
+      "host/linux-x86/lib64/libext2_misc.so": {
+        "mode": 493,
+        "sha256": "d92c7dabf5972cd18207e1810b63d799b2e9a0df04d4eb16254db18bb0a5e1fd",
+        "sizeBytes": 44640
+      },
+      "host/linux-x86/lib64/libext2_quota-host.so": {
+        "mode": 493,
+        "sha256": "bbba6fcff1035ca6087e073f40de8e35ded5d0e6d8470fe7ba0dff3a7e98c848",
+        "sizeBytes": 148776
+      },
+      "host/linux-x86/lib64/libext2_ss-host.so": {
+        "mode": 493,
+        "sha256": "e39c7117ffee46ec6a77eaf03e20c34c25bf50609762ee5d8981088b36edb302",
+        "sizeBytes": 52896
+      },
+      "host/linux-x86/lib64/libext2_support.so": {
+        "mode": 493,
+        "sha256": "2af7eb9650ca71c53015534735ce8c5d022e2974a46b805d0978df0b8a8bb221",
+        "sizeBytes": 11552
+      },
+      "host/linux-x86/lib64/libext2_uuid-host.so": {
+        "mode": 493,
+        "sha256": "8d1a2c1b000a2d723ec107d581280c1ca6623ecc5619f96a4e165282fa21f2a5",
+        "sizeBytes": 31720
+      },
+      "host/linux-x86/lib64/libext2fs-host.so": {
+        "mode": 493,
+        "sha256": "f3ddfa88c60bb3f6e37da85276e54decdd8d91e0d6e6821c062f42fcd1fe1be8",
+        "sizeBytes": 909032
+      },
+      "host/linux-x86/lib64/libext4_utils.so": {
+        "mode": 493,
+        "sha256": "4cb7ea92b0f2c209e2a7f7dd0d39b5400ef264f1fbc0be506ef1a4ca8163cb24",
+        "sizeBytes": 35472
+      },
+      "host/linux-x86/lib64/libfec.so": {
+        "mode": 493,
+        "sha256": "31b5a5991b6ea84a3ebab3f6d9062b47efc16ca921d17efdbee999db148684d0",
+        "sizeBytes": 318304
+      },
+      "host/linux-x86/lib64/libfec_rs.so": {
+        "mode": 493,
+        "sha256": "e4c6f952222ed1782a73dcae12dead94501913e817aa47b593b1a7ad821dbb35",
+        "sizeBytes": 32776
+      },
+      "host/linux-x86/lib64/libicui18n-host.so": {
+        "mode": 493,
+        "sha256": "af0a5e4ef122e56c32b9b7f3262e4dcdb757b7f8e443196deb4f89f18b51d341",
+        "sizeBytes": 9010760
+      },
+      "host/linux-x86/lib64/libicuuc-host.so": {
+        "mode": 493,
+        "sha256": "524c628aae20a65bb5a43cbc9a45f0bc63a9e2c77d409287428031506251758d",
+        "sizeBytes": 6054064
+      },
+      "host/linux-x86/lib64/liblog.so": {
+        "mode": 493,
+        "sha256": "936872310a280e215e254c0b327731ebfd0d4000c8b98e92258ab4278e74a912",
+        "sizeBytes": 190080
+      },
+      "host/linux-x86/lib64/liblp.so": {
+        "mode": 493,
+        "sha256": "eb4d7b4b335d6a60a1e1e16a06d2878690feb70b48ff621e1a6503f3b1acff97",
+        "sizeBytes": 863728
+      },
+      "host/linux-x86/lib64/liblpdump.so": {
+        "mode": 493,
+        "sha256": "e18f21bbb1d73f29fb893613f0ee0ef27091bfb50b250cc86c937032775a90a8",
+        "sizeBytes": 371896
+      },
+      "host/linux-x86/lib64/liblz4.so": {
+        "mode": 493,
+        "sha256": "c7758e39cd70f75dd76360b8907a394f1df81683b40dd65238f2fed88e38c47a",
+        "sizeBytes": 403616
+      },
+      "host/linux-x86/lib64/libprotobuf-cpp-full-6.33.5.so": {
+        "mode": 493,
+        "sha256": "3d6be086299ca0db7510a582b42533b27626a075296a4cbb1fddb62419379f13",
+        "sizeBytes": 16628192
+      },
+      "host/linux-x86/lib64/libprotobuf-cpp-lite-6.33.5.so": {
+        "mode": 493,
+        "sha256": "5c50816dec42150379c8809e289286963793e6661a923b40f3f1e111c07b0e4a",
+        "sizeBytes": 6137088
+      },
+      "host/linux-x86/lib64/libsparse-host.so": {
+        "mode": 493,
+        "sha256": "af13849b06fe6634350c258eab9c2a026d330803b79b77e1aca926b6ceafc333",
+        "sizeBytes": 105128
+      },
+      "host/linux-x86/lib64/libsqlite.so": {
+        "mode": 493,
+        "sha256": "5035684dbaf8723627c6e26a5d9975b9a6d4057e9af1f5168d1f766ede87cc97",
+        "sizeBytes": 3436376
+      },
+      "host/linux-x86/lib64/libssl-host.so": {
+        "mode": 493,
+        "sha256": "ba003f12209189bdb287616d7bef1e3f61fffdb8429fa163fe7aad535daa3612",
+        "sizeBytes": 2276208
+      },
+      "host/linux-x86/lib64/libz-host.so": {
+        "mode": 493,
+        "sha256": "1240c7319a148dcb58a5c5dac9550bc9dd10c3fe71772d5c0853059ed7e816f2",
+        "sizeBytes": 210872
+      },
+      "host/linux-x86/lib64/libziparchive.so": {
+        "mode": 493,
+        "sha256": "d6d25b49f8826a09eeb41824eff53b1e65a7370aad8574fe1c26b4eb63667d02",
+        "sizeBytes": 324200
+      },
+      "host/linux-x86/obj/EXECUTABLES/aapt2_intermediates/aapt2": {
+        "mode": 493,
+        "sha256": "370f567c520dd3e9828ea113b9737f64eb57051927cb35e792c0b715fa7d8d37",
+        "sizeBytes": 24355536
+      },
+      "host/linux-x86/obj/EXECUTABLES/aprotoc_intermediates/aprotoc": {
+        "mode": 493,
+        "sha256": "3f866d9f2c12f22c0f693f443d57b012a4aee461b5889d673b364b4216c480d8",
+        "sizeBytes": 35579016
+      },
+      "host/linux-x86/obj/EXECUTABLES/debugfs_intermediates/debugfs": {
+        "mode": 493,
+        "sha256": "a275fce506b342bad7a7fb09c4e58d9617db6d356224bf6cc10d299ae83b5d5e",
+        "sizeBytes": 436640
+      },
+      "host/linux-x86/obj/EXECUTABLES/dispol_intermediates/dispol": {
+        "mode": 493,
+        "sha256": "6ab6ffdb9a67ad57684da2f1d8762ee93282e46884fc6b83b5d7afd218c2f6f9",
+        "sizeBytes": 512320
+      },
+      "host/linux-x86/obj/EXECUTABLES/fsck.erofs_intermediates/fsck.erofs": {
+        "mode": 493,
+        "sha256": "37341a0310dce3bb5e5a07abd81acf1f5f76381dd357d5a3f2dac4f67a0c0901",
+        "sizeBytes": 1225920
+      },
+      "host/linux-x86/obj/EXECUTABLES/lpdump_intermediates/lpdump": {
+        "mode": 493,
+        "sha256": "3d73bb3350df8f3de0dc9d976c0e308a30022d59324f58162448ad7df2cff989",
+        "sizeBytes": 9080
+      },
+      "host/linux-x86/obj/EXECUTABLES/lpunpack_intermediates/lpunpack": {
+        "mode": 493,
+        "sha256": "51f0cb01d5751a021bd8e2f3b9d3a68dbd9c626e263fb8567da37b0db9ebb71b",
+        "sizeBytes": 183384
+      },
+      "host/linux-x86/obj/EXECUTABLES/lz4_intermediates/lz4": {
+        "mode": 493,
+        "sha256": "a887672f43a468351117635108064c15695664abc0fb82fa169b9a6bb8aac637",
+        "sizeBytes": 574856
+      },
+      "host/linux-x86/obj/EXECUTABLES/ota_extractor_intermediates/ota_extractor": {
+        "mode": 493,
+        "sha256": "c00cb2b400aafc76fa053b483b5a7cb8f4e579588d9fdc56019ceeaf823aec45",
+        "sizeBytes": 6790824
+      },
+      "host/linux-x86/obj/EXECUTABLES/simg2img_intermediates/simg2img": {
+        "mode": 493,
+        "sha256": "c18174a93fae172df655d4f73072580ca1800498ff74dae6a8dca6c7d797df91",
+        "sizeBytes": 312952
+      },
+      "host/linux-x86/obj/EXECUTABLES/sqlite3_intermediates/sqlite3": {
+        "mode": 493,
+        "sha256": "3c69507dff74feadf64945963d4db2e4413753779fee6287e4f7931449059984",
+        "sizeBytes": 8932728
+      },
+      "host/linux-x86/obj/EXECUTABLES/toybox_intermediates/toybox": {
+        "mode": 493,
+        "sha256": "400576be36c890a408cf7bda2a1e4c19e8bb326c4a9edeb3ee3175cf2846acd2",
+        "sizeBytes": 3554240
+      },
+      "host/linux-x86/obj/PACKAGING/elf_symbol_mapping_intermediates/bin/aapt2.textproto": {
+        "mode": 420,
+        "sha256": "dcfdaf3a8c2127cdfc6092aa15f4936ea11e8c63772b24cfe8b00ce9663b82db",
+        "sizeBytes": 120
+      },
+      "host/linux-x86/obj/PACKAGING/elf_symbol_mapping_intermediates/bin/aprotoc.textproto": {
+        "mode": 420,
+        "sha256": "f2d50bdb0bdbd60845065fd296089042c37e44c12386125391a7e69b5fe15f65",
+        "sizeBytes": 122
+      },
+      "host/linux-x86/obj/PACKAGING/elf_symbol_mapping_intermediates/bin/debugfs.textproto": {
+        "mode": 420,
+        "sha256": "d6cce11811190c80831fc8513f20aa225d8bec7c0f08b3780b2307988abc3fef",
+        "sizeBytes": 122
+      },
+      "host/linux-x86/obj/PACKAGING/elf_symbol_mapping_intermediates/bin/dispol.textproto": {
+        "mode": 420,
+        "sha256": "85a7684824d4a798c0f97cf5e2660632dd32ef804666f78d00e0d97824437b0a",
+        "sizeBytes": 121
+      },
+      "host/linux-x86/obj/PACKAGING/elf_symbol_mapping_intermediates/bin/fsck.erofs.textproto": {
+        "mode": 420,
+        "sha256": "1b12f32bc6471d362e41ccb0552deb5fe0e34ecf2a47c45022758712cebb0116",
+        "sizeBytes": 125
+      },
+      "host/linux-x86/obj/PACKAGING/elf_symbol_mapping_intermediates/bin/lpdump.textproto": {
+        "mode": 420,
+        "sha256": "5016eb640872e8d0b76fb0365897ddb8700f19ae0b6eb73d38f9c1454f82b826",
+        "sizeBytes": 121
+      },
+      "host/linux-x86/obj/PACKAGING/elf_symbol_mapping_intermediates/bin/lpunpack.textproto": {
+        "mode": 420,
+        "sha256": "e97f59415af23b468248d2d5c34628b6c3665279a1a187a7a0008eab2f977117",
+        "sizeBytes": 123
+      },
+      "host/linux-x86/obj/PACKAGING/elf_symbol_mapping_intermediates/bin/lz4.textproto": {
+        "mode": 420,
+        "sha256": "5b8b4a07da43e4ce3fcf6edefb79fe4be05ab844f61989b86a90f8fabe153786",
+        "sizeBytes": 118
+      },
+      "host/linux-x86/obj/PACKAGING/elf_symbol_mapping_intermediates/bin/ota_extractor.textproto": {
+        "mode": 420,
+        "sha256": "5cc422c9b860d319c10568cdb8de5c88292c21a5a3f35713e5cba428e93f6764",
+        "sizeBytes": 128
+      },
+      "host/linux-x86/obj/PACKAGING/elf_symbol_mapping_intermediates/bin/simg2img.textproto": {
+        "mode": 420,
+        "sha256": "934d0e2a4637409570a1830523d8e66c73adf350d0905d0cfab03a7c4f2331b0",
+        "sizeBytes": 123
+      },
+      "host/linux-x86/obj/PACKAGING/elf_symbol_mapping_intermediates/bin/sqlite3.textproto": {
+        "mode": 420,
+        "sha256": "ba00c2846916143b04b543a2dca362942bee13b3816bdb602d5c136efb5d7e50",
+        "sizeBytes": 122
+      },
+      "host/linux-x86/obj/PACKAGING/elf_symbol_mapping_intermediates/bin/toybox.textproto": {
+        "mode": 420,
+        "sha256": "fe979291fe79700da9df1cd1178b75e2822aae16674d071ec0b51982b08bcf34",
+        "sizeBytes": 121
+      },
+      "host/linux-x86/symbols/bin/aapt2": {
+        "mode": 493,
+        "sha256": "370f567c520dd3e9828ea113b9737f64eb57051927cb35e792c0b715fa7d8d37",
+        "sizeBytes": 24355536
+      },
+      "host/linux-x86/symbols/bin/aprotoc": {
+        "mode": 493,
+        "sha256": "3f866d9f2c12f22c0f693f443d57b012a4aee461b5889d673b364b4216c480d8",
+        "sizeBytes": 35579016
+      },
+      "host/linux-x86/symbols/bin/debugfs": {
+        "mode": 493,
+        "sha256": "a275fce506b342bad7a7fb09c4e58d9617db6d356224bf6cc10d299ae83b5d5e",
+        "sizeBytes": 436640
+      },
+      "host/linux-x86/symbols/bin/dispol": {
+        "mode": 493,
+        "sha256": "6ab6ffdb9a67ad57684da2f1d8762ee93282e46884fc6b83b5d7afd218c2f6f9",
+        "sizeBytes": 512320
+      },
+      "host/linux-x86/symbols/bin/fsck.erofs": {
+        "mode": 493,
+        "sha256": "37341a0310dce3bb5e5a07abd81acf1f5f76381dd357d5a3f2dac4f67a0c0901",
+        "sizeBytes": 1225920
+      },
+      "host/linux-x86/symbols/bin/lpdump": {
+        "mode": 493,
+        "sha256": "3d73bb3350df8f3de0dc9d976c0e308a30022d59324f58162448ad7df2cff989",
+        "sizeBytes": 9080
+      },
+      "host/linux-x86/symbols/bin/lpunpack": {
+        "mode": 493,
+        "sha256": "51f0cb01d5751a021bd8e2f3b9d3a68dbd9c626e263fb8567da37b0db9ebb71b",
+        "sizeBytes": 183384
+      },
+      "host/linux-x86/symbols/bin/lz4": {
+        "mode": 493,
+        "sha256": "a887672f43a468351117635108064c15695664abc0fb82fa169b9a6bb8aac637",
+        "sizeBytes": 574856
+      },
+      "host/linux-x86/symbols/bin/ota_extractor": {
+        "mode": 493,
+        "sha256": "c00cb2b400aafc76fa053b483b5a7cb8f4e579588d9fdc56019ceeaf823aec45",
+        "sizeBytes": 6790824
+      },
+      "host/linux-x86/symbols/bin/simg2img": {
+        "mode": 493,
+        "sha256": "c18174a93fae172df655d4f73072580ca1800498ff74dae6a8dca6c7d797df91",
+        "sizeBytes": 312952
+      },
+      "host/linux-x86/symbols/bin/sqlite3": {
+        "mode": 493,
+        "sha256": "3c69507dff74feadf64945963d4db2e4413753779fee6287e4f7931449059984",
+        "sizeBytes": 8932728
+      },
+      "host/linux-x86/symbols/bin/toybox": {
+        "mode": 493,
+        "sha256": "400576be36c890a408cf7bda2a1e4c19e8bb326c4a9edeb3ee3175cf2846acd2",
+        "sizeBytes": 3554240
+      }
+    },
+    "elapsedSeconds": 609.023,
+    "identity": {
+      "builder": {
+        "instance": "roseos-mustang-builder-20261107-a",
+        "instanceId": "5585425566393384049",
+        "project": "protocols-465723",
+        "zone": "us-west2-a"
+      },
+      "diskUuid": "4183bff8-6be4-46bb-a641-2193d19813ee",
+      "run": {
+        "runAttempt": "1",
+        "runId": "42512135815",
+        "source": "78d5ebdfd4f3fc1dd99d8cb98bbf44316b9eb54f",
+        "workflow": "Immortal-Protocols/RoseOS-1/.github/workflows/mustang-ota-dedicated.yml@refs/heads/main"
+      }
+    },
+    "makeExitCode": 0,
+    "manifestSha256": "32d30e70ee59d373a17fe8090bdded898afa80651f27c331caca4578b3008888",
+    "otaAuthorized": false,
+    "outDir": "/mnt/disks/mustang-data/roseos/source/out_adevtool_deps",
+    "outputBytes": 16281600535,
+    "publishAuthorized": false,
+    "recipe": {
+      "adevtoolRevision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c",
+      "boundsKind": "proposal-ceilings-not-measurements",
+      "jobs": 24,
+      "logBytes": 16777216,
+      "otaAuthorized": false,
+      "outDir": "out_adevtool_deps",
+      "product": "sdk_phone64_x86_64",
+      "publishAuthorized": false,
+      "reserveBytes": 322122547200,
+      "schema": "roseos.mustang-hostdeps-recipe.v1",
+      "scope": "adevtool-host-dependencies-only",
+      "signAuthorized": false,
+      "timeoutSeconds": 9000,
+      "tools": [
+        "aapt2",
+        "apksigner",
+        "aprotoc",
+        "arsclib",
+        "debugfs",
+        "dispol",
+        "fsck.erofs",
+        "lpdump",
+        "lpunpack",
+        "lz4",
+        "ota_extractor",
+        "simg2img",
+        "sqlite3",
+        "toybox"
+      ],
+      "workBytes": 137438953472
+    },
+    "retainedInterruptedOutput": {
+      "completed": true,
+      "destination": "/mnt/disks/mustang-data/roseos/rose-actions/mustang-hostdeps-42508459503-1/retained-output",
+      "device": 2064,
+      "failedReceiptSha256": "808cd762af25093b283257eaf2bc2749d2fd388d9c0538df8242639eeb233397",
+      "fromRun": {
+        "runAttempt": "1",
+        "runId": "42508459503",
+        "source": "efa46b7ebf8c3cafa35053c66f3a4fab37e026f4",
+        "workflow": "Immortal-Protocols/RoseOS-1/.github/workflows/mustang-ota-dedicated.yml@refs/heads/main"
+      },
+      "inode": 67408922,
+      "oldOutputUsedForBuild": false,
+      "schema": "roseos.mustang-hostdeps-retention.v1",
+      "source": "/mnt/disks/mustang-data/roseos/source/out_adevtool_deps",
+      "toRun": {
+        "runAttempt": "1",
+        "runId": "42512135815",
+        "source": "78d5ebdfd4f3fc1dd99d8cb98bbf44316b9eb54f",
+        "workflow": "Immortal-Protocols/RoseOS-1/.github/workflows/mustang-ota-dedicated.yml@refs/heads/main"
+      }
+    },
+    "revisionMarker": {
+      "mode": 384,
+      "sha256": "c63abf51c8106e14f25b821a62b7e7318a82df7fcf9dc203ffe4bcb1d3590894",
+      "sizeBytes": 41
+    },
+    "schema": "roseos.mustang-hostdeps-run.v1",
+    "scope": "adevtool-host-dependencies-only",
+    "signAuthorized": false,
+    "source": {
+      "check": "project-heads-and-git-status",
+      "ignoredContentUnchecked": true,
+      "pristineRuntimeAttestation": false,
+      "projectCount": 1057
+    },
+    "sourceRoot": "/mnt/disks/mustang-data/roseos/source",
+    "spaceObservations": {
+      "filesystemAvailableDropBytes": 16476844032,
+      "firstAvailableBytes": 1276688138240,
+      "lastAvailableBytes": 1260211294208,
+      "minimumAvailableBytes": 1260184190976,
+      "minimumAvailableInodes": 94362777,
+      "peakWatchedBytes": 16281600535,
+      "samples": 109
+    },
+    "success": true,
+    "wrapper": {
+      "mode": 448,
+      "sha256": "02183ec2528b0305007e9a2f0d6dacc5312e72d483b18ccd7653cab47e06c785",
+      "sizeBytes": 125
+    }
+  },
+  "stopObservation": {
+    "instanceId": "5585425566393384049",
+    "status": "TERMINATED",
+    "lastStartTimestamp": "2026-11-08T10:52:48.674-08:00",
+    "lastStopTimestamp": "2026-11-08T11:05:01.963-08:00",
+    "maxRunDurationSeconds": 14400,
+    "terminationAction": "STOP"
+  }
+}

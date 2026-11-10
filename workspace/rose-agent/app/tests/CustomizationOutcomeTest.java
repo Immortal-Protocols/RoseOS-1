@@ -21,7 +21,7 @@ public final class CustomizationOutcomeTest {
   // The review case: 6 requested on a 336dp inset width, Home can fit only 4.
   CustomizationConfig six = CustomizationConfig.DEFAULTS.apply(CustomizationConfig.HOME_COLUMNS, Collections.<String, Object>singletonMap("columns", 6L));
   int drawn = CustomizationConfig.effectiveHomeColumns(six.homeColumns, 336);
-  expect(six.homeColumns == 6 && drawn == 4, "6 requested, 4 fit: " + drawn);
+  expect(six.homeColumns == 6 && drawn == 5, "6 requested, 5 fit a phone: " + drawn);
   Map<String, Object> before = CustomizationOutcome.home(six.revision, CustomizationOutcome.NEVER_APPLIED, 0);
   expect(before.get("applied") == Boolean.FALSE && before.get("effectiveColumns") == MiniJson.NULL && before.get("appliedRevision") == MiniJson.NULL
     && CustomizationOutcome.HOME_PENDING_NOTE.equals(before.get("note")), "never drawn: no column claim, a note");
@@ -31,11 +31,11 @@ public final class CustomizationOutcomeTest {
   Map<String, Object> ahead = CustomizationOutcome.home(0, 5, 4);
   expect(ahead.get("applied") == Boolean.FALSE && ahead.get("effectiveColumns") == MiniJson.NULL, "a mark above a reset revision is not proof");
   Map<String, Object> shown = CustomizationOutcome.home(six.revision, six.revision, drawn);
-  expect(shown.get("applied") == Boolean.TRUE && Long.valueOf(4).equals(shown.get("effectiveColumns")) && !shown.containsKey("note"),
-    "drawn: Home's own count (4), not the preference (6)");
+  expect(shown.get("applied") == Boolean.TRUE && Long.valueOf(5).equals(shown.get("effectiveColumns")) && !shown.containsKey("note"),
+    "drawn: Home's own count (5), not the preference (6)");
   expect(CustomizationOutcome.home(3, 3, 0).get("effectiveColumns") == MiniJson.NULL, "a drawn revision without a column report claims no count");
   String json = CustomizationConfig.json(shown);
-  expect(json.equals("{\"appliedRevision\":" + six.revision + ",\"applied\":true,\"effectiveColumns\":4}"), json);
+  expect(json.equals("{\"appliedRevision\":" + six.revision + ",\"applied\":true,\"effectiveColumns\":5}"), json);
   expect(CustomizationConfig.json(before).contains("\"effectiveColumns\":null"), CustomizationConfig.json(before));
 
   // Argument conversion.

@@ -1,0 +1,17 @@
+{
+  "schema": "roseos.mustang-otatools-preparation.v1",
+  "status": "vendor-evidence-qualified-pending-otatools-build",
+  "vendorEvidence": "os/build-only/mustang-vendor-42522784617.json",
+  "outDir": "out_mustang_otatools_proof",
+  "product": "mustang-cur-user",
+  "jobs": 24,
+  "goals": [
+    "otatools-package"
+  ],
+  "timeoutSeconds": 9000,
+  "workBytes": 137438953472,
+  "reserveBytes": 322122547200,
+  "otaAdmitted": false,
+  "signerPinsAdmitted": false,
+  "outputRecoveryEvidence": "os/build-only/mustang-otatools-output-recovery.json"
+}

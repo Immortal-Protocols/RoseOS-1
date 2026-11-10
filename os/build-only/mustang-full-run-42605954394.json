@@ -1,0 +1,55 @@
+{
+  "schema": "roseos.mustang-full-run-failure.v1",
+  "runId": "42605954394",
+  "runNumber": 31,
+  "runAttempt": 1,
+  "source": "3312b2d03d0c06fb2bbd5c7481939bf3806d0828",
+  "workflow": ".github/workflows/mustang-ota-dedicated.yml",
+  "builderJobId": 129122552279,
+  "builderGroupId": 5,
+  "hostCheckConclusion": "success",
+  "baselineConclusion": "success",
+  "appInputDownloadAndVerificationConclusion": "success",
+  "collectorStage": "source",
+  "collectorFailureCode": "selected-pinned-blob-or-mode-differs",
+  "exceptionType": "Refused",
+  "failureFrames": [
+    "mustang_bootstrap_collector.py:368:collect",
+    "mustang_bootstrap_proof.py:492:_observe_prepared_locked",
+    "mustang_bootstrap_proof.py:423:inspect_source"
+  ],
+  "mismatchPathObserved": false,
+  "collectorReceiptWritten": true,
+  "errorObservedAt": "2026-11-09T11:32:48Z",
+  "sourceCopyStarted": false,
+  "allocationAttemptedByThisRun": false,
+  "makeStarted": false,
+  "journalOnDiskObserved": false,
+  "signerConclusion": "skipped",
+  "publisherConclusion": "skipped",
+  "cleanupJobId": 129135343298,
+  "cleanupConclusion": "success",
+  "directStopObservation": {
+    "observedAt": "2026-11-09T11:35:42.893471+00:00",
+    "value": {
+      "id": "5585425566393384049",
+      "status": "TERMINATED",
+      "metadata": {
+        "items": [
+          {
+            "key": "block-project-ssh-keys"
+          },
+          {
+            "key": "enable-guest-attributes"
+          },
+          {
+            "key": "enable-oslogin"
+          }
+        ]
+      },
+      "lastStopTimestamp": "2026-11-09T03:33:58.521-08:00"
+    }
+  },
+  "nextInitializationRunNumber": 32,
+  "basis": "Completed native diagnostic reports a pinned blob-or-mode mismatch at the post-walk comparison after about27 minutes. The old diagnostic omitted path/category; neither is guessed. Retain the identical comparison while adding sanitized path/type/blob/mode category and checking immediately after each pinned entry measurement, before later payloads are read. Keep final comparison, namespace readback, all byte/resource/copy/admission checks and unknown-file refusals. No source repair, reset, credential/access change or held retry is claimed."
+}

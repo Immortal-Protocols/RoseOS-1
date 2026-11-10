@@ -1,0 +1,96 @@
+{
+  "schema": "roseos.mustang-lock-preparation-evidence.v1",
+  "source": "efa46b7ebf8c3cafa35053c66f3a4fab37e026f4",
+  "runId": "42508016844",
+  "runAttempt": "1",
+  "runUrl": "https://github.com/Immortal-Protocols/RoseOS-1/actions/runs/42508016844",
+  "workflowConclusion": "success",
+  "initializer": {
+    "authenticatedStop": false,
+    "buildStarted": false,
+    "builder": {
+      "instance": "roseos-mustang-builder-20261107-a",
+      "instanceId": "5585425566393384049",
+      "project": "protocols-465723",
+      "zone": "us-west2-a"
+    },
+    "created": {
+      "gid": 0,
+      "mode": 420,
+      "sizeBytes": 0,
+      "uid": 0
+    },
+    "createdExclusively": true,
+    "diskUuid": "4183bff8-6be4-46bb-a641-2193d19813ee",
+    "fileAndDirectorySynced": true,
+    "lockPath": "/mnt/disks/mustang-data/roseos/mustang.lock",
+    "schema": "roseos.mustang-lock-preparation.v1"
+  },
+  "independentObservation": {
+    "authenticatedStop": false,
+    "buildStarted": false,
+    "creatorAttested": false,
+    "credentialsCreatedByJob": false,
+    "elapsedSeconds": 135.023,
+    "externalActionExecutedByJob": false,
+    "finalGuestIdentityVerified": true,
+    "identity": {
+      "builder": {
+        "instance": "roseos-mustang-builder-20261107-a",
+        "instanceId": "5585425566393384049",
+        "project": "protocols-465723",
+        "zone": "us-west2-a"
+      },
+      "diskUuid": "4183bff8-6be4-46bb-a641-2193d19813ee",
+      "run": {
+        "runAttempt": "1",
+        "runId": "42508016844",
+        "source": "efa46b7ebf8c3cafa35053c66f3a4fab37e026f4",
+        "workflow": "Immortal-Protocols/RoseOS-1/.github/workflows/mustang-ota-dedicated.yml@refs/heads/main"
+      }
+    },
+    "initialGuestIdentityVerified": true,
+    "observedLock": {
+      "available": true,
+      "device": 2064,
+      "gid": 0,
+      "inode": 65554223,
+      "mode": 420,
+      "sizeBytes": 0,
+      "uid": 0
+    },
+    "readySha256": "2c676e6e0ad16a53f969275760a6a935e93f43e1c671cd6088fe383a4dccbce6",
+    "schema": "roseos.mustang-lock-admin-observation.v1",
+    "scope": "canonical-lock-administration-only",
+    "success": true
+  },
+  "artifact": {
+    "id": 13628307509,
+    "name": "mustang-lock-admin-42508016844-1",
+    "sha256": "73ac01a6762d67791c22296a62b1a3e0092ca84ea688745c4f6474b0b8b1ceb5",
+    "sizeBytes": 1599
+  },
+  "temporaryAccess": {
+    "userExceptionApproved": true,
+    "account": "dev-infra@protocols-465723.iam.gserviceaccount.com",
+    "keyTtlSeconds": 600,
+    "keysCreated": 1,
+    "sessionsAttempted": 1,
+    "sessionExit": 0,
+    "keyRemoved": true,
+    "localKeyFilesRemoved": true,
+    "iamChanged": false,
+    "firewallChanged": false
+  },
+  "stopObservation": {
+    "instanceId": "5585425566393384049",
+    "status": "TERMINATED",
+    "lastStartTimestamp": "2026-11-08T10:03:54.566-08:00",
+    "lastStopTimestamp": "2026-11-08T10:08:04.444-08:00",
+    "maxRunDurationSeconds": 14400,
+    "terminationAction": "STOP"
+  },
+  "hostDependenciesBuiltByThisRun": false,
+  "vendorGenerated": false,
+  "otaCreated": false
+}

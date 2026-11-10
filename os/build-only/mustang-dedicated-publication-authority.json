@@ -1,0 +1,21 @@
+{
+  "schema": "roseos.mustang-dedicated-publication-authority.v1",
+  "approved": true,
+  "device": "mustang",
+  "workflow": ".github/workflows/mustang-ota-dedicated.yml",
+  "automatic": false,
+  "approvalRef": "Nathan existing full Mustang build/sign/publish direction in coordinator thread01a1a7a0-cd3c-77ed-9b5f-6beda888d027",
+  "sourceThread": "01a1a7a0-cd3c-77ed-9b5f-6beda888d027",
+  "userDirection": [
+    "Keep working until you successfully create a mustang ota update",
+    "yes. why no buld sign and publish?",
+    "ok tell the eng to stop testing every last little piece and instead put everything together and run the full thing. If signer is hitting a 403 then fix that instead of running around wasting time"
+  ],
+  "scope": "One fresh manual full Mustang OTA on the existing dedicated builder, current verified Frankel common inputs, original Mustang v1 identity, newly reserved UTC-hour ID, verified hosted signer and existing pixel-ota metadata-last publication. The caller still explicitly selects publish=true; automatic publication remains disabled.",
+  "preserveLatest": true,
+  "preserveRollback": true,
+  "permissionChanges": false,
+  "provisioning": false,
+  "publicationPerformed": false,
+  "basis": "Reconciles existing explicit user full-delivery authority with the dedicated workflow and fresh inputs; this record is source preparation, not a new permission grant or evidence of publication. All current native/signature/output/capacity checks remain required."
+}

@@ -212,17 +212,33 @@ public final class CustomizationConfigTest {
             for (int bad : new int[]{1, 2, 9, -1}) expect(CustomizationConfig.effectiveHomeColumns(bad, w) == HomeAppLayout.homeColumns(w), "invalid preference is automatic at " + w);
             for (int p = 3; p <= 8; p++) {
                 int e = CustomizationConfig.effectiveHomeColumns(p, w);
-                int fit = (int) Math.floor((w + HomeAppLayout.HOME_COL_GAP_DP) / (HomeAppLayout.HOME_CELL_DP + HomeAppLayout.HOME_COL_GAP_DP));
+                int fit = (int) Math.floor((w + HomeAppLayout.COL_GAP_DP) / (HomeAppLayout.HOME_CELL_DP + HomeAppLayout.COL_GAP_DP));
                 expect(e >= 3 && e <= p, "effective in [3, preferred] at " + w + " for " + p);
                 expect(e == Math.max(3, Math.min(p, fit)), "honoured down to what fits at " + w + " for " + p);
-                if (fit >= 3) expect(e * HomeAppLayout.HOME_CELL_DP + (e - 1) * HomeAppLayout.HOME_COL_GAP_DP <= w + 1e-3f, "cells fit at " + w + " for " + p);
+                if (fit >= 3) {
+                    float gap = HomeAppLayout.fitGap(w, e, HomeAppLayout.HOME_CELL_DP, HomeAppLayout.HOME_COL_GAP_DP, HomeAppLayout.COL_GAP_DP);
+                    expect(gap >= HomeAppLayout.COL_GAP_DP - 1e-3f && e * HomeAppLayout.HOME_CELL_DP + (e - 1) * gap <= w + 1e-3f, "cells fit with a gap of at least 6dp at " + w + " for " + p);
+                }
             }
         }
         expect(HomeAppLayout.homeColumns(336) == 4 && HomeAppLayout.homeColumns(364) == 4, "phone automatic is four");
-        expect(CustomizationConfig.effectiveHomeColumns(5, 336) == 4, "five on 336dp clamps to four");
+        // The owner's phone check (Nov 10): 4..8 all clamped to four on a phone, so only three showed. Five now fits by
+        // narrowing the gap; six does not fit 60dp cells.
+        expect(CustomizationConfig.effectiveHomeColumns(5, 336) == 5 && CustomizationConfig.effectiveHomeColumns(5, 364) == 5, "five fits a phone");
+        expect(CustomizationConfig.effectiveHomeColumns(6, 364) == 5 && CustomizationConfig.effectiveHomeColumns(8, 364) == 5, "six or more clamp to five on a phone");
+        float g5 = HomeAppLayout.fitGap(364, 5, HomeAppLayout.HOME_CELL_DP, HomeAppLayout.HOME_COL_GAP_DP, HomeAppLayout.COL_GAP_DP);
+        expect(Math.abs(g5 - 16f) < 1e-3f, "five on 364dp keeps a 16dp gap: " + g5);
+        for (float w : new float[]{290, 336, 364, 400, 552, 784, 1000}) {
+            int auto = HomeAppLayout.homeColumns(w);
+            expect(HomeAppLayout.fitGap(w, auto, HomeAppLayout.HOME_CELL_DP, HomeAppLayout.HOME_COL_GAP_DP, HomeAppLayout.COL_GAP_DP) == HomeAppLayout.HOME_COL_GAP_DP,
+                "automatic Home keeps its 17.5dp gap at " + w);
+            int apps = HomeAppLayout.columns(w);
+            expect(HomeAppLayout.fitGap(w, apps, HomeAppLayout.CELL_DP, HomeAppLayout.COL_GAP_DP, HomeAppLayout.COL_GAP_DP) == HomeAppLayout.COL_GAP_DP,
+                "app pages keep their 6dp gap at " + w);
+        }
         expect(CustomizationConfig.effectiveHomeColumns(3, 336) == 3 && CustomizationConfig.effectiveHomeColumns(3, 784) == 3, "three honoured");
         expect(CustomizationConfig.effectiveHomeColumns(8, 784) == 8, "eight on 784dp");
-        expect(CustomizationConfig.effectiveHomeColumns(8, 552) == 7, "eight on 552dp is seven");
+        expect(CustomizationConfig.effectiveHomeColumns(8, 552) == 8, "eight on 552dp fits with a narrower gap");
         expect(CustomizationConfig.effectiveHomeColumns(4, 200) == 3 && CustomizationConfig.effectiveHomeColumns(8, 100) == 3, "never below three");
     }
 

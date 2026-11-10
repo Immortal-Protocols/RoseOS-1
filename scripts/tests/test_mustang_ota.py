@@ -96,6 +96,16 @@ class Client:
 
 class PublicationTest(unittest.TestCase):
     def setUp(self):
+        # These retained publication fixtures predate UTC-hour allocation.
+        # Keep their runtime context explicit; the current-route refusal is
+        # checked separately below, without changing production validation.
+        self.live_read=ota.read
+        runtime_path=ota.ROOT/'os/build-only/mustang-runtime.json'
+        def read_legacy(path):
+            value=self.live_read(path)
+            return dict(value,status='unbound') if Path(path)==runtime_path else value
+        reader=patch.object(ota,'read',side_effect=read_legacy)
+        reader.start();self.addCleanup(reader.stop)
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
@@ -103,6 +113,12 @@ class PublicationTest(unittest.TestCase):
         self.r = staged(self.assets)
         self.out = self.root/'receipt'
         self.cfg = enabled()
+    def test_current_bound_runtime_requires_clock_proof_before_publication(self):
+        client=Client()
+        with patch.object(ota,'read',side_effect=self.live_read):
+            with self.assertRaisesRegex(ValueError,'UTC-hour allocation proof missing'):
+                ota.publish(client,self.assets,self.cfg,self.out)
+        self.assertEqual(client.log,[])
     def test_order_downloads_before_channel_and_never_moves_other_releases(self):
         client = Client()
         result = ota.publish(client, self.assets, self.cfg, self.out)
@@ -751,7 +767,7 @@ class FactoryBaselineTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'exclusive dedicated'):
             ota.observe_baseline(Path(self.temp.name)/'legacy.json',factory=self.value,runtime=self.runtime)
         current=json.loads((ota.ROOT/'os/build-only/mustang-runtime.json').read_text())
-        self.assertIsNone(current['baselineFactoryEvidence']); self.assertEqual(current['status'],'unbound')
+        self.assertIsNone(current['baselineFactoryEvidence']); self.assertEqual(current['status'],'bound')
         with self.assertRaisesRegex(ValueError,'explicitly selected'): ota.require_factory_baseline({})
 
     def test_embedded_factory_proof_is_checked_before_staged_publication_can_pass(self):

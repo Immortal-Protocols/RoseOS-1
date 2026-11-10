@@ -226,7 +226,21 @@ class PreparationTest(unittest.TestCase):
         self.assertEqual(sorted(alpha_source.verify_tree(tree, manifest, receipt['changedFiles'])),
             [f'build/make/{MEDIA}: file differs', 'tools/run.sh: file differs'])
 
+    def test_optional_cache_does_not_hide_observation_errors(self):
+        boundary = dict(path='vendor/dl/unpacked', pruneMarker='vendor/dl/.find-ignore', referenceMarkers=[])
+        (self.base/boundary['pruneMarker']).write_bytes(b'')
+        original = os.lstat
+        def denied(path, *args, **kwargs):
+            if Path(path) == self.base/boundary['path']:
+                raise PermissionError(13, 'fixture refusal')
+            return original(path, *args, **kwargs)
+        with mock.patch.object(alpha_source.os, 'lstat', side_effect=denied):
+            problems = alpha_source.boundary_problems(self.base, boundary, POLICY)
+        self.assertTrue(any('cannot be observed' in value for value in problems))
+
     def test_mode_restoration_is_limited_to_the_declared_changed_files(self):
+        for path in (GENERIC, MEDIA):
+            os.chmod(self.base/'build/make'/path, 0o644)
         old = os.umask(0o077)
         chmods = []
         real_chmod = os.chmod
@@ -237,7 +251,11 @@ class PreparationTest(unittest.TestCase):
         def apply_then_watch(directory, patch, ceiling):
             real_apply(directory, patch, ceiling)
             if 'staging' in str(directory):
-                chmods.clear()  # count only what happens after the delta is applied in the copy
+                # Exercise restoration independently of whether this patch
+                # version preserves copied modes under the restrictive umask.
+                for path in (GENERIC, MEDIA):
+                    real_chmod(Path(directory)/path, 0o600)
+                chmods.clear()  # count only restoration after the controlled drift
         try:
             with mock.patch.object(alpha_source, 'apply_patch', apply_then_watch), mock.patch.object(alpha_source.os, 'chmod', record):
                 receipt = self.prepare()

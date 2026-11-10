@@ -1,0 +1,71 @@
+{
+  "schema": "roseos.mustang-vendor-evidence.v1",
+  "runId": "42520903084",
+  "runAttempt": "1",
+  "source": "5e82e061acc5f47f0d42918843432adeacb3cf0e",
+  "workflowConclusion": "failure",
+  "cleanupConclusion": "success",
+  "receiptSha256": "686f1346a39641e7b0ebab178c307ee60aeaea5f18b0b3482b0b8820e46ece3c",
+  "receipt": {
+    "allocated": false,
+    "authenticatedStop": false,
+    "boundEnforcement": "sampled-process-group-stop",
+    "commands": [],
+    "detachedDescendantsContained": false,
+    "elapsedSeconds": 1.76,
+    "failureCode": "pinned project HEAD or worktree differs",
+    "failureType": "ValueError",
+    "identity": {
+      "builder": {
+        "instance": "roseos-mustang-builder-20261107-a",
+        "instanceId": "5585425566393384049",
+        "project": "protocols-465723",
+        "zone": "us-west2-a"
+      },
+      "diskUuid": "4183bff8-6be4-46bb-a641-2193d19813ee",
+      "run": {
+        "runAttempt": "1",
+        "runId": "42520903084",
+        "source": "5e82e061acc5f47f0d42918843432adeacb3cf0e",
+        "workflow": "Immortal-Protocols/RoseOS-1/.github/workflows/mustang-ota-dedicated.yml@refs/heads/main"
+      }
+    },
+    "makeStarted": false,
+    "maxEntriesPerWatchedTree": 1000000,
+    "otaAdmitted": false,
+    "partialsPreserved": true,
+    "phase": "pinned-source-check",
+    "reserveBytes": 322122547200,
+    "schema": "roseos.mustang-vendor-preparation-run.v1",
+    "signingStarted": false,
+    "sourceRoot": "/mnt/disks/mustang-data/roseos/source",
+    "spaceObservations": {
+      "minimumAvailableBytes": 1259679842304,
+      "peakWatchedBytes": 157278906,
+      "samples": 1
+    },
+    "success": false,
+    "timeoutSeconds": 9000,
+    "workBytes": 137438953472
+  },
+  "artifact": {
+    "id": 13632999254,
+    "name": "mustang-vendor-42520903084-1",
+    "sizeBytes": 848,
+    "sha256": "b0f1973b61109b77c2ad56252bf6a25c27715c5365b6abb0c554dbbccde4b17a"
+  },
+  "stopObservation": {
+    "instanceId": "5585425566393384049",
+    "status": "TERMINATED",
+    "lastStopTimestamp": "2026-11-08T12:37:58.487-08:00",
+    "maxRunDurationSeconds": 14400,
+    "terminationAction": "STOP"
+  },
+  "vendorGenerated": false,
+  "diagnosis": {
+    "actualFailure": "strict project HEAD/worktree check refused before any child command",
+    "guestProjectAndPath": "not recorded by this receipt",
+    "localReproduction": "pinned adevtool yarn run build exits 1 and leaves untracked tsconfig.tsbuildinfo outside ignored lib/",
+    "correctionQualification": "preserve only fixed untracked build cache from the exact failed extra-build attempt, then repeat full strict source check; do not assume this is the only guest mismatch"
+  }
+}

@@ -1,0 +1,94 @@
+{
+  "schema": "roseos.mustang-otatools-observation-evidence.v1",
+  "runId": "42527536373",
+  "runAttempt": "1",
+  "source": "a7956fa4f13520bb89d403fb42e41e243bf314c3",
+  "workflowConclusion": "success",
+  "cleanupConclusion": "success",
+  "receiptSha256": "b81ab79abb2199d835862d1292c2da6315b800402395e8ac0a0ab367fc1aca6d",
+  "receipt": {
+    "authenticatedStop": false,
+    "failedReceiptSha256": "853d64f90c93d0f57b330cd1c503a5c5a3b2894c6b7d8c6a655ad3610c5177ab",
+    "failedRun": {
+      "runAttempt": "1",
+      "runId": "42524960701",
+      "source": "6a532d4ff5cc6c55c338da36344b172c4fcb3cf1",
+      "workflow": "Immortal-Protocols/RoseOS-1/.github/workflows/mustang-ota-dedicated.yml@refs/heads/main"
+    },
+    "identity": {
+      "builder": {
+        "instance": "roseos-mustang-builder-20261107-a",
+        "instanceId": "5585425566393384049",
+        "project": "protocols-465723",
+        "zone": "us-west2-a"
+      },
+      "diskUuid": "4183bff8-6be4-46bb-a641-2193d19813ee",
+      "run": {
+        "runAttempt": "1",
+        "runId": "42527536373",
+        "source": "a7956fa4f13520bb89d403fb42e41e243bf314c3",
+        "workflow": "Immortal-Protocols/RoseOS-1/.github/workflows/mustang-ota-dedicated.yml@refs/heads/main"
+      }
+    },
+    "lunch": {
+      "fields": {
+        "TARGET_BUILD_VARIANT": "user",
+        "TARGET_DEVICE": "mustang",
+        "TARGET_PRODUCT": "mustang",
+        "TARGET_RELEASE": ""
+      },
+      "matchesExpected": false,
+      "sha256": "2847d0959604719bf610915a976c3e3b835646874dd716fec7e33e4fc6a1a1b9",
+      "state": "present"
+    },
+    "makeStarted": false,
+    "otaAdmitted": false,
+    "output": {
+      "complete": true,
+      "elapsedSeconds": 0.111,
+      "entryCount": 732,
+      "maxEntries": 100000,
+      "metadataOnly": true,
+      "specialEntries": [],
+      "timeoutSeconds": 30
+    },
+    "outputMoved": false,
+    "privateDiagnostic": {
+      "categories": [
+        "lunch-identity-assertion",
+        "make-error"
+      ],
+      "logBytes": 481,
+      "logSha256": "fc2661b80c91404ad8ccc668070d4e54bc209f54bc8ac4518ef88ce5bfeb38a5",
+      "longLinesOmitted": 0,
+      "rawTextExported": false,
+      "sourceLocations": []
+    },
+    "readOnly": true,
+    "schema": "roseos.mustang-otatools-failure-observation.v1"
+  },
+  "artifact": {
+    "id": 13635584269,
+    "name": "mustang-preflight-42527536373-1",
+    "sizeBytes": 1969,
+    "sha256": "2df64b2230686b302ed9535e5159ce53ad83ca9bc7be773a514e8d8085ee2fac"
+  },
+  "stopObservation": {
+    "instanceId": "5585425566393384049",
+    "status": "TERMINATED",
+    "lastStartTimestamp": "2026-11-08T13:55:13.058-08:00",
+    "lastStopTimestamp": "2026-11-08T13:57:09.942-08:00",
+    "maxRunDurationSeconds": 14400,
+    "terminationAction": "STOP"
+  },
+  "diagnosis": {
+    "failedSubstage": "lunch-identity-assertion",
+    "field": "TARGET_RELEASE",
+    "failedRead": "get_build_var TARGET_RELEASE",
+    "observedValue": "",
+    "expectedValue": "cur",
+    "makeGoalReached": false,
+    "correctProbe": "exported TARGET_RELEASE, as set by pinned envsetup.sh _lunch_meat"
+  },
+  "otaAdmitted": false
+}

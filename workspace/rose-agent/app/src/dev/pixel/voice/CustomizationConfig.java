@@ -49,12 +49,14 @@ final class CustomizationConfig {
  static boolean validColumns(int c) { return c == AUTO_COLUMNS || c >= MIN_COLUMNS && c <= MAX_COLUMNS; }
 
  /** Home's column count for this preference at an inset content width (dp, like HomeAppLayout.homeColumns):
-  * automatic is today's width rule; a chosen count is honoured down to MIN_COLUMNS, but never more 60dp cells
-  * than fit across with their gaps, so cells never overlap or overflow. */
+  * automatic is today's width rule; a chosen count is honoured down to MIN_COLUMNS, but never more 60dp cells than
+  * fit across with the gap narrowed to the app pages' 6dp (HomeAppLayout.fitGap; five on a phone), so cells never
+  * overlap or overflow. */
  static int effectiveHomeColumns(int preferred, float widthDp) {
   int auto = HomeAppLayout.homeColumns(widthDp);
   if (preferred == AUTO_COLUMNS || !validColumns(preferred)) return auto;
-  int fit = (int) Math.floor((widthDp + HomeAppLayout.HOME_COL_GAP_DP) / (HomeAppLayout.HOME_CELL_DP + HomeAppLayout.HOME_COL_GAP_DP));
+  // A chosen count may narrow the gap down to the app pages' 6dp (HomeAppLayout.fitGap), never the 60dp cells.
+  int fit = (int) Math.floor((widthDp + HomeAppLayout.COL_GAP_DP) / (HomeAppLayout.HOME_CELL_DP + HomeAppLayout.COL_GAP_DP));
   return Math.max(MIN_COLUMNS, Math.min(preferred, Math.min(MAX_COLUMNS, fit)));
  }
 

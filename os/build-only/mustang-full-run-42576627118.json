@@ -1,0 +1,71 @@
+{
+  "schema": "roseos.mustang-full-run-failure.v1",
+  "runId": "42576627118",
+  "runNumber": 23,
+  "runAttempt": 1,
+  "source": "d64ca301031e7c1662b501af90d92083d18b30b1",
+  "workflow": ".github/workflows/mustang-ota-dedicated.yml",
+  "inputs": {
+    "publish": true,
+    "dry_run": false,
+    "source_only": false,
+    "hostdeps_only": false,
+    "lock_admin_only": false,
+    "factory_only": false,
+    "vendor_only": false,
+    "otatools_only": false
+  },
+  "guardConclusion": "success",
+  "controllerConclusion": "success",
+  "enrollConclusion": "success",
+  "builderJobId": 129026116048,
+  "builderGroupId": 5,
+  "builderRunner": "mustang-42576627118",
+  "failedStep": "Verify guest ID, mounted data disk, bytes/inodes and tools",
+  "error": "artifact CLI unavailable before compile",
+  "errorObservedAt": "2026-11-09T07:02:35Z",
+  "produceStep": "skipped",
+  "allocationAttemptedByThisRun": false,
+  "makeStarted": false,
+  "journalOnDiskObserved": false,
+  "signerConclusion": "skipped",
+  "publisherConclusion": "skipped",
+  "cleanupJobId": 129026168555,
+  "cleanupConclusion": "success",
+  "ownedStopStepConclusion": "success",
+  "metadataCleanupStepConclusion": "success",
+  "runnerCleanupStepConclusion": "success",
+  "lifecycleBindingStepConclusion": "success",
+  "directStopObservation": {
+    "observedAt": "2026-11-09T07:16:14.062864+00:00",
+    "instance": {
+      "id": "5585425566393384049",
+      "name": "roseos-mustang-builder-20261107-a",
+      "status": "TERMINATED",
+      "metadata": {
+        "items": [
+          {
+            "key": "block-project-ssh-keys"
+          },
+          {
+            "key": "enable-guest-attributes"
+          },
+          {
+            "key": "enable-oslogin"
+          }
+        ]
+      },
+      "lastStartTimestamp": "2026-11-08T23:01:52.762-08:00",
+      "lastStopTimestamp": "2026-11-08T23:03:45.301-08:00"
+    }
+  },
+  "lifecycleArtifact": {
+    "id": 13655502962,
+    "sha256": "5bca890d6b1f50c1e9cdf87f8c122a3eae982a5ff312718951fac6fab0fc0aff",
+    "sizeBytes": 1227,
+    "payloadByteVerified": false,
+    "downloadStatus": "403 Forbidden; held, no retry or alternate route"
+  },
+  "nextInitializationRunNumber": 24,
+  "basis": "Completed exact-run Actions step metadata and permitted job error establish failure before produce. Cleanup step outcomes and fresh exact numeric VM metadata establish stopped state and absent JIT metadata. The lifecycle archive payload is unavailable; its metadata digest is not a claim of payload verification. No on-disk journal absence or reset is asserted. Updating the initialization fence from23 to24 follows this verified unused window; an existing conflicting origin still refuses."
+}

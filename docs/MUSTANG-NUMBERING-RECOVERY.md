@@ -7,6 +7,84 @@ The existing allocation guard still refuses an unresolved state. Target-files
 and factory-image baseline alternatives from #593 remain intact. PR #592's
 shared private-input verifier is a separate dependency owned by Release.
 
+## Current first-OTA route: UTC date and hour
+
+Nathan selected the existing local date/hour approach instead of a bucket.
+`scripts/mustang_clock.py` is integrated with the dedicated guard, producer,
+collection, hosted signing and public staging. The runtime remains unbound;
+this source change performs no initialization, allocation, dispatch or IAM write.
+The GCS and synthetic counter/Git pilots below remain inactive.
+
+The ten-digit OS incremental ID is **YYMMDDHH00**, from the authenticated Actions
+run's UTC creation hour. For example, `2611090400` denotes the 04:00 UTC dispatch
+hour on November 9, 2026; this is an example, not an issued build. Exactly one
+reservation is available per dispatch hour. An occupied hour refuses; another
+fresh run in a later hour can allocate after a failed build. Reruns do not allocate.
+2026..2099 is the explicit supported year range; century rollover refuses.
+
+The suffix `00` is the collision boundary: the captured normal legacy allocator
+produces Gregorian YYYYMMDD plus sequences **01..99**, so it cannot produce a
+value ending in 00. The lost exact allocation stays unknown, and its record is
+never edited into an empty consumed list or marked reconciled. This proves
+exclusion from that captured generator, not arbitrary out-of-contract host edits.
+The new value is not claimed larger than every possible unpublished unknown
+legacy value. It must exceed every actually observed release/reservation/path
+and every prior value in the new series, and its real timestamp must exceed
+known public/installed and local timestamp floors.
+
+The allocator reuses the existing dedicated read-only canonical lock, public
+release listing and native persistent disk. It independently reads published
+`mustang-stable` assets against their API digest to establish the current public
+timestamp high-water mark. Actual build time remains a separate positive Unix
+timestamp, checked again against the compiled and signed output; it is not the
+incremental ID. Guest/source/copy checks still precede allocation and Make.
+No cloud write credential or signer token reaches the native allocator.
+
+`rose-actions/mustang-clock-hour00-v1` holds a write-once origin, immutable
+reservations and an atomically replaced head. Files and the containing directory
+are fsynced and read back before exposing an ID. A crash between reservation and
+head update leaves consumption uncertain and refuses another allocation. A
+consumed reservation stays consumed even when the build fails or nothing is
+published. Unknown files, broken chains, missing heads and linked paths refuse.
+
+One authenticated dedicated workflow number may initialize this new local series:
+workflow ID 408460629, run number 35. Full runs42576627118 / number23 and
+42581537518 / number24 failed before produce (missing gh and CLI HTTPError,
+respectively). Run42584970482 / number25 passed host/baseline/fresh-app admission, then refused
+bootstrap source observation before copy/allocation/Make. Run42588478372 /
+number26 passed the corrected binding and refused unsupported-git-tree-mode at
+the prepared-source stage. Run42592596300 / number27 then reached the source
+entry budget at toolchain/pgo-profiles. Run42594685959 / number28 reached
+a generic source helper failure after the larger entry budget. All six skipped
+copy/allocation/Make. Run42600298676 / number29 then refused an unclassified
+selected file; no copy/allocation/Make began. Run42604053622 / number30
+identified that file as resolved-manifest.xml, again before copy/allocation/Make.
+Run42605954394 / number31 then refused a pinned blob-or-mode mismatch,
+also before copy/allocation/Make; its old diagnostic omitted the path.
+Run42611455205 / number32 identified a blob mismatch at
+external/angle/scripts/trigger.bat, also before copy/allocation/Make.
+Run42614456651 / number33 then identified external/bc/vs/bc.sln,
+also before copy/allocation/Make; its pinned attributes likewise declare CRLF.
+Run42618172377 / number34 then refused a conservative text check on
+external/pigweed/bootstrap.bat, before copy/allocation/Make.
+Completed cleanup and direct numeric stopped-VM observations are recorded in their os/build-only failure
+records. No on-disk journal absence is asserted and no journal is reset.
+This is an initialization fence, not the OS ID or
+version authority. Later runs cannot recreate an absent ledger; loss requires
+owner-led reconciliation. Attempt >1 refuses. If a preparation-only run consumes
+the initialization window first, update the source pin from its actual verified
+scope before first initialization; never change an already initialized epoch to
+hide missing state. An existing origin binds the policy hash, VM and disk UUID.
+This adds no infrastructure or administrative approval operation.
+
+The same allocation record is bound into the collected unsigned output, the
+protected hosted signing bundle, authenticated Actions metadata and the staged
+OTA receipt. Signer and publisher admission require its actual build/time/run/SHA.
+Unbound app, capacity/tool, runtime and publication inputs are still enforced.
+Fresh Frankel export versionCodes need no schema change; the Mustang owner repins
+the truthful immutable export once its Release owner supplies it. Held app PRs
+are not modified by this route.
+
 ## Failed run and a clock-independent legacy ceiling
 
 The committed failure record identifies run `41884368820`, attempt 1, source
@@ -304,3 +382,30 @@ publication, cloud operation, held artifact retrieval or phone change occurs.
 Source and protocol tests are evidence for the listed boundaries. They do not
 prove a full Android build, every native/vendor consumer, real image contents,
 AVB/bootloader compatibility, installation or phone acceptance.
+
+## Compiler binding after the first consumed clock allocation
+
+Run42622314509 (workflow number35, source8d6cb543) completed source observation,
+copy/readback, vendor reuse and lunch, returned allocation and entered
+integration, then failed the compile stage. Its completed log and successful
+owned cleanup are recorded in os/build-only/mustang-full-run-42622314509.json.
+The receipt archive download failed; its full native preflight problem list
+and allocation bytes are not represented as retrieved/verified.
+
+Source regression independently proves that the old compiler still looked in
+`mustang-allocations` and parsed build prefixes as YYYYMMDDNN. The clock issuer
+writes `mustang-clock-hour00-v1/reservations` and uses YYMMDDHH00, so those
+checks reject its real reservations. The dedicated producer now binds its
+private compiler to the clock journal: validate the chain/current head, exact
+run/source, source and integration/input paths, admitted input build and the
+reservation's compiled timestamp. The journal check is read-only and refuses
+missing/corrupt state, even on the initial run; it cannot initialize or repair.
+Other device/legacy compiler instances retain their own behavior.
+
+**Keep initialization fence35 and the existing policy hash unchanged.** The
+first allocation returned, so its number stays consumed. Do not reset, advance
+the fence, reconstruct an empty ledger or reuse the failed attempt. A later
+full attempt must read the existing journal and issue a fresh monotonic number.
+Offline tests exercise the actual private compiler interface with real local
+reservations, reproduce both old refusals and verify unchanged journal/legacy
+state plus wrong identity/path/input/time/head and missing/corrupt state refusal.
