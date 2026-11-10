@@ -833,6 +833,10 @@ class Conversation(unittest.TestCase):
         b.start()
         b.join(0.3)
         self.assertTrue(b.is_alive())  # the new conversation's call waits for the slow one
+        other = threading.Thread(target=call, args=(s2, 'C', 'list_tasks', {}))
+        other.start()
+        other.join(2)
+        self.assertFalse(other.is_alive())  # its other tools do not
         gate.set()
         a.join(5)
         b.join(5)
@@ -840,7 +844,19 @@ class Conversation(unittest.TestCase):
         self.assertTrue(results['A']['ok'])
         self.assertEqual(results['B']['reason'], 'earlier_call_finished')  # told, not overwritten
         self.assertIn('From the previous conversation', results['B']['message'])
+        self.assertEqual(results['B']['message'].count('From the previous conversation'), 1)
         self.assertEqual((self.speaker.voice, self.identity.voice), (results['A']['voice'],) * 2)
+
+    def test_a_note_carried_while_a_reset_switches_is_not_carried_twice(self):
+        old = self.engine.conversation
+        note = (old, '[Before this message, your change_voice call that was answered as cancelled finished: {}.]')
+        self.engine._identity_notes[note] = 'voice'
+        self.engine.conversation = 'new'  # the reset has switched but not yet taken the lock
+        with self.engine._lock:
+            self.engine._late_note(note)
+        carried = self.engine._late_notes[-1]
+        self.assertEqual(self.engine._carried(carried), carried)
+        self.engine.conversation = old
 
     def test_a_cancelled_change_note_keeps_limits_and_the_offered_alternative(self):
         s = self.engine.sessions['conversation']

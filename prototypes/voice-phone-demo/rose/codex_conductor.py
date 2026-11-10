@@ -546,7 +546,9 @@ class CodexConductor:
         name, args = p['tool'], p['arguments']
         result, image = None, None
         try:
-            with s.lock, (self._identity_lock if name in voice_identity.NAMES else contextlib.nullcontext()):
+            # The conductor-wide identity lock first, so a voice call waiting on a slow one holds nothing this
+            # conversation's other tools need.
+            with (self._identity_lock if name in voice_identity.NAMES else contextlib.nullcontext()), s.lock:
                 if s.cancelled.is_set() or self._stopped.is_set() or p['turnId'] in s.ignored_turns or (s.turn and p['turnId'] != s.turn):
                     result = {'ok': False, 'reason': 'Cancelled or stale turn; no action executed'}
                 else:
@@ -661,6 +663,8 @@ class CodexConductor:
             self._late_notes.append(note)
 
     def _carried(self, note):
+        if note[0] == self.conversation:  # already carried (it finished while the reset was switching)
+            return note
         return (self.conversation, '[From the previous conversation] ' + note[1])
 
     @staticmethod
