@@ -712,6 +712,25 @@ class PrivateInputImportTest(app_fixture.Fixture):
 
 
 class DedicatedRuntimeTest(unittest.TestCase):
+    def test_frozen_apps_are_exactly_the_requested_export_and_one_attempt(self):
+        driver = self.driver
+        cfg = json.loads((ROOT/'os/build-only/mustang-runtime.json').read_text())
+        record = json.loads((ROOT/cfg['appInputsRecord']).read_text())
+        choice = cfg['frozenAppInputs']
+        source = choice['reviewedSource']
+        drift = ['dev.pixel.voice']
+        allowed = lambda c=cfg,e={'GITHUB_RUN_NUMBER':'40'},r=record,d=drift,df=None: \
+            driver.frozen_app_inputs_allowed(r,source,c,e,d,ROOT,df)
+        self.assertTrue(allowed())
+        self.assertFalse(allowed(e={'GITHUB_RUN_NUMBER':'41'}))
+        self.assertFalse(allowed(e={}))
+        self.assertFalse(allowed(d=['dev.pixel.calculator.agent']))
+        wrong = dict(cfg,frozenAppInputs=dict(choice,recordSha256='0'*64))
+        self.assertFalse(allowed(c=wrong))
+        wrong_record = dict(record,export=dict(record['export'],run='1'))
+        self.assertFalse(allowed(r=wrong_record))
+        self.assertFalse(allowed(df=lambda *_:'workspace/rose-agent/new-change\n'))
+
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory(); self.addCleanup(self.temp.cleanup)
         self.root=Path(self.temp.name); self.host=self.root/'host'
