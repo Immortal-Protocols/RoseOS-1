@@ -82,6 +82,29 @@ def _alternative(tokens: list[str]):
     return None if not asked else False  # a bare "English" accent usually means England's, which no voice has
 
 
+# Regional accents within the US: none of them is the general American every voice has.
+REGIONS = frozenset({
+    'southern', 'south', 'texan', 'texas', 'boston', 'york', 'yorker', 'brooklyn', 'bronx', 'jersey', 'midwest',
+    'midwestern', 'appalachian', 'cajun', 'creole', 'valley', 'california', 'californian', 'chicago', 'minnesota',
+    'minnesotan', 'philly', 'philadelphia', 'baltimore', 'pittsburgh', 'hawaiian', 'alaskan', 'country', 'twang',
+    'drawl', 'redneck', 'hillbilly', 'cowboy', 'western', 'eastern', 'northeastern', 'southwestern', 'louisiana',
+    'georgia', 'alabama', 'kentucky', 'tennessee', 'carolina', 'virginia', 'maine', 'wisconsin', 'dakota'})
+NOT_PLACES = frozenset({'modern', 'stern', 'pattern', 'median', 'musician', 'civilian'})
+
+
+def names_another(name: str) -> bool:
+    """Whether an accent name given with american names a regional or another country's accent ("Southern",
+    "Texan", "British"), not just how American it is ("natural", "clear", "standard American")."""
+    tokens = re.findall(r'[a-z]+', name.lower().replace('u.s.', 'us'))
+    us = bool(US & set(tokens))
+    for t in tokens:
+        if t in US or (us and t == 'english'):
+            continue
+        if t in REGIONS or (len(t) >= 5 and t not in NOT_PLACES and re.search(r'(ish|ian|ese|ean|ern)$', t)):
+            return True
+    return False
+
+
 def american(accent: str) -> bool:
     """Whether an accent request names the accent every available voice has (US English), or none.
 
@@ -160,9 +183,9 @@ def request_from(args: dict) -> dict:
         raise ValueError('gender must be same, female, male or either')
     accent = str(args.get('accent') or '').strip()
     accent_name = str(args.get('accent_name') or '').strip()
-    if accent.lower() == 'american' and accent_name:  # a named American accent ("Southern") decides
-        accent, accent_american = accent_name, american(accent_name)
-    elif accent.lower() == 'american':
+    if accent.lower() == 'american' and accent_name and names_another(accent_name):  # "Southern": not general
+        accent, accent_american = accent_name, False
+    elif accent.lower() == 'american':  # "a natural American accent": every voice has it
         accent, accent_american = 'American', True
     elif accent.lower() == 'other':
         accent, accent_american = accent_name or 'another accent', False

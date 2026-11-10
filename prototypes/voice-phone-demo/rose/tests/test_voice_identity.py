@@ -438,8 +438,15 @@ class Matching(unittest.TestCase):
         self.assertIn('none is Southern', r['limits'][0])
         r, _ = self.change('zoey', accent='american', accent_name='Southern')
         self.assertNotEqual(r['reason'], 'already')
-        r, speaker = self.change('zoey', accent='american', accent_name='General American')
-        self.assertEqual((r['reason'], speaker.calls), ('already', []))
+        for name in ('General American', 'natural American', 'clear American', 'a subtle American accent', 'American',
+                     'mainstream American', 'American English', 'real American', 'US'):
+            r, speaker = self.change('zoey', accent='american', accent_name=name)
+            self.assertEqual((r['reason'], speaker.calls), ('already', []), name)
+            r, _ = self.change('zoey', accent='american', accent_name=name, pitch='lower')
+            self.assertNotIn('limits', r, name)
+        for name in ('Texan', 'New York', 'a Southern drawl', 'Boston', 'Midwestern', 'British', 'Canadian'):
+            r, _ = self.change('zoey', accent='american', accent_name=name, pitch='lower')
+            self.assertIn('none is ' + name, r['limits'][0], name)
 
     def test_either_gender_keep_blocked_offer_may_be_another_gender(self):
         r = vi.VoiceIdentity().change_voice(Speaker('miles'), {'liveliness': 'calmer', 'pitch': 'same',
