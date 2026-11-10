@@ -39,14 +39,9 @@ from rose.bus import Bus
 from rose.runtime import SPEAK, Job, Runtime, Sleep
 from rose.textnorm import speakable
 from rose.transport import Transport
+from rose.voice_catalog import VOICES, VOICE_REPO, VOICE_REVISION, verify_voice_file
 
 REPO = os.environ.get("ROSE_TTS", "gradium/phonon-31m-en")
-VOICE_REPO = "gradium/phonon-voices"
-VOICES = {
-    "zoey": "NbpkqMVS3CJeq2j8", "harper": "4SZHfMpw-p46Ywgs", "everly": "vjFyp2BcCyTlUmYb",
-    "juniper": "NIWIOv5vTi5eRMj8", "hadley": "bXwrkHhURL1VFJdG", "delia": "nGzMHMPAWGaJFHOo",
-    "easton": "LMDIYE0Oa377Qh6Z", "micah": "40QrMVgAxFiUnP9f", "miles": "d9XCyhjo4JhkHF1d",
-}
 
 RATE = 24000
 PIECE = 1920              # send once >= 80 ms is pending (pieces are 80-160 ms)
@@ -678,10 +673,11 @@ def _voice_file(voice_id: str) -> str:
 
     name = f"voices/{voice_id}.safetensors"
     try:
-        return hf_hub_download(VOICE_REPO, name, local_files_only=True)
+        path = hf_hub_download(VOICE_REPO, name, revision=VOICE_REVISION, local_files_only=True)
     except Exception:
         try:
-            return hf_hub_download(VOICE_REPO, name)
+            path = hf_hub_download(VOICE_REPO, name, revision=VOICE_REVISION)
         except Exception as exc:
             raise RuntimeError(f"voice {voice_id} is not cached and could not be downloaded "
                                f"({type(exc).__name__})") from None
+    return verify_voice_file(voice_id, path)

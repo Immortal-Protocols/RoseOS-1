@@ -52,61 +52,106 @@ FILLER = frozenset({
     'accent', 'accents', 'a', 'an', 'the', 'standard', 'general', 'plain', 'neutral', 'north', 'any', 'anything',
     'same', 'none', 'unchanged', 'current', 'usual', 'default', 'regular', 'typical', 'normal', 'particular',
     'preference', 'whatever', 'either', 'change', 'keep', 'it', 'as', 'now', 'is', 'are', 'be', 'one', 'please',
-    'like', 'sounding', 'sound', 'sounds', 'voice', 'my', 'your', 'this', 'that', 'fine', 'good', 'ok', 'okay', 'just',
+    'do', 'does', 'did', 'like', 'sounding', 'sound', 'sounds', 'voice', 'my', 'your', 'this', 'that', 'fine', 'good', 'ok', 'okay', 'just',
     'still', 'more', 'bit', 'little', 'slight', 'slightly', 'very', 'too', 'quite', 'strong', 'stronger',
     'light', 'lighter', 'mild', 'heavy', 'thick', 'have', 'has', 'had', 'you', 'i', 'me', 'we', 'of', 'with', 'in',
     'to', 'for', 'if', 'would', 'could', 'should', 'want', 'prefer', 'rather', 'kind', 'sort', 'something', 'sure',
     's', 't', 'd', 'm', 'll', 've', 're', 'really', 'much', 'all', 'at', 'else', 'works', 'stay', 'remain', 'other'})
 
 
-def _alternative(tokens: list[str]):
-    """One alternative of an accent clause: True when every voice has it, False when none does, None when it asks for
-    no accent at all."""
-    asked, refused, negating = set(), set(), False
-    for t in tokens:
-        if t in NEGATIONS:
-            negating = True
-        elif t in INDIFFERENT:
-            negating = False
-        else:
-            (refused if negating else asked).add(t)
-    if refused & US:  # "not American": an accent no voice has
-        return False
-    asked -= FILLER
-    if asked & US:  # "American English", "US English": English names the language here
-        if 'less' in asked:  # "less American": an accent no voice has
-            return False
-        asked -= US | {'english'}
-        return not asked
-    asked.discard('less')  # "less strong": no accent named
-    return None if not asked else False  # a bare "English" accent usually means England's, which no voice has
+ACCENT_NOTE = ('Only the broad American (en-US) and British (en-GB) catalog labels are supported; '
+               'regional accents and accent strength were not measured.')
 
 
-ACCENT_NOTE = 'Every available voice has a general American (en-US) accent; none has a regional or other accent.'
+LOCALES = {'en-us': 'American (en-US)', 'en-gb': 'British (en-GB)'}
+LOCALE_WORDS = {'en-us': US, 'en-gb': frozenset({'british', 'britain', 'uk', 'england', 'english'})}
 
 
-def american(accent: str) -> bool:
-    """Whether an accent request names the accent every available voice has (US English), or none.
+def accent_locales(accent: str) -> set[str]:
+    """Supported broad accents satisfying all clauses and exclusions.
 
-    Clauses (split at punctuation and "but") must all hold; within one, any of its alternatives ("or") may. A negation
-    covers the rest of its alternative ("not a British accent"), so a negated accent is not asked for."""
+    This deliberately does not invent regional or character traits. Explicit
+    exclusions are hard constraints, including across a negated list.
+    """
     text = accent.lower().replace('u.s.', 'us').replace('en_us', 'us').replace('en-us', 'us')
-    # "anything but British" excludes, unlike "British but warmer", which joins two clauses.
+    text = text.replace('en_gb', 'british').replace('en-gb', 'british').replace('u.k.', 'uk')
+    text = text.replace('united kingdom', 'british').replace('united states', 'american')
+    text = re.sub(r'\b(american|america|us|usa)\s+english\b', r'\1', text)
     text = re.sub(r'\b(anything|any\s+accent|any\s+one|anyone|any)\s+but\b', r'\1 except', text)
+    allowed, excluded = set(LOCALES), set()
     for clause in re.split(r'[,;.!?/]|\bbut\b|\bthough\b', text):
         tokens = re.findall(r'[a-z]+', clause)
         alternatives, current = [], []
-        for t in tokens:
-            if t == 'or':
+        for token in tokens:
+            if token == 'or':
                 alternatives.append(current)
                 current = []
             else:
-                current.append(t)
+                current.append(token)
         alternatives.append(current)
-        results = [_alternative(a) for a in alternatives if a]
-        if results and not any(r is not False for r in results):
-            return False
-    return True
+        if not tokens:
+            continue
+        # "not American or British" excludes both; a new clause resets this.
+        inherited_negative = False
+        for token in alternatives[0]:
+            if token in NEGATIONS:
+                inherited_negative = True
+            elif token in INDIFFERENT:
+                inherited_negative = False
+            elif token not in FILLER:
+                break
+        accepted = set(LOCALES) if inherited_negative else set()
+        for alternative in alternatives:
+            if not alternative:
+                continue
+            asked, refused, negating = set(), set(), inherited_negative
+            for token in alternative:
+                if token in NEGATIONS:
+                    negating = True
+                elif token in INDIFFERENT:
+                    negating = False
+                else:
+                    (refused if negating else asked).add(token)
+            if 'less' in asked and asked & set.union(*(set(v) for v in LOCALE_WORDS.values())):
+                refused.update(asked - FILLER - {'less'})
+                asked = set()
+            asked -= FILLER | {'less'}
+            # In "American English", English names the language, not England.
+            if asked & US:
+                asked.discard('english')
+            alternative_locales = set()
+            for locale, words in LOCALE_WORDS.items():
+                if refused & words:
+                    excluded.add(locale)
+                    continue
+                if not asked or (asked & words and not asked - words):
+                    alternative_locales.add(locale)
+            if inherited_negative:
+                accepted &= alternative_locales
+            else:
+                accepted |= alternative_locales
+        allowed &= accepted
+    return allowed - excluded
+
+
+def request_locales(request: dict, current: dict) -> set[str]:
+    accent = request['accent']
+    if not accent or accent.lower() in ('same', 'current', 'unchanged'):
+        return {current['locale']}
+    if accent.lower() in ('either', 'any'):
+        return set(LOCALES)
+    allowed = accent_locales(accent)
+    tokens = set(re.findall(r'[a-z]+', accent.lower()))
+    if tokens & {'same', 'current', 'unchanged', 'usual', 'default'}:
+        # A natural-language keep request is as binding as the schema's `same`.
+        normalized = accent.lower().replace('’', "'").replace('‘', "'")
+        normalized = normalized.replace("don't", 'do not').replace("doesn't", 'does not')
+        negated_same = re.search(r'\b(?:not|no|without)\s+'
+                                 r'(?:(?:want|keep|use|have|the|my|your|a|an|this|that)\s+)*'
+                                 r'(?:same|current|unchanged|usual|default)\b', normalized)
+        keep = set(LOCALES) - {current['locale']} if negated_same else {current['locale']}
+        return allowed & keep  # contradictory accent constraints must not silently choose one
+    return allowed
 
 
 def load_traits(path: Path = TRAITS_FILE) -> dict:
@@ -114,6 +159,12 @@ def load_traits(path: Path = TRAITS_FILE) -> dict:
     voices = data.get('voices')
     if not isinstance(voices, dict) or not voices:
         raise ValueError('voice traits must list voices')
+    for entry in voices.values():
+        for key in ('pitch_hz', 'brightness_db', 'pitch_range_st', 'speech_s'):
+            if not isinstance(entry.get(key), (int, float)) or not math.isfinite(entry[key]):
+                raise ValueError('voice traits must contain finite measurements')
+        if entry['pitch_hz'] <= 0 or entry['speech_s'] <= 0:
+            raise ValueError('voice pitch and duration must be positive')
     return data
 
 
@@ -165,19 +216,19 @@ def request_from(args: dict) -> dict:
     accent_name = str(args.get('accent_name') or '').strip()
     accent_note = False
     if accent.lower() == 'american':
-        # The model judged it American. A name with it is said back as what every voice has (a general American
-        # accent, no regional one), which is true whether it was "natural American" or "Southern".
-        accent, accent_american, accent_note = 'American', True, bool(accent_name)
+        # A schema-level broad accent never substantiates a regional name attached to it.
+        accent, accent_note = 'American', bool(accent_name)
+    elif accent.lower() == 'british':
+        accent, accent_note = 'British', bool(accent_name)
     elif accent.lower() == 'other':
-        accent, accent_american = accent_name or 'another accent', False
+        accent = accent_name or 'another accent'
     else:  # not one of the schema's values: read the owner's words
         accent = accent or accent_name
-        accent_american = american(accent)
     raw = args.get('other') or []
     other = [str(q).strip() for q in ([raw] if isinstance(raw, str) else raw) if str(q).strip()]
     if not wanted and gender in ('same', 'either') and not accent and not other:
         raise ValueError('Describe how the voice should change.')
-    return {'wanted': wanted, 'keep': keep, 'gender': gender, 'accent': accent, 'accent_american': accent_american,
+    return {'wanted': wanted, 'keep': keep, 'gender': gender, 'accent': accent,
             'accent_note': accent_note,
             'other': other}
 
@@ -195,11 +246,17 @@ def match(current: str, request: dict, available, traits: dict = TRAITS) -> list
     cur = voices[current]
     gender = cur['gender'] if request['gender'] == 'same' else request['gender']
     keep = request.get('keep', [])
+    locales = request_locales(request, cur)
+    available = tuple(available)
+    reference = {n: v for n, v in voices.items() if n in available and v['locale'] in locales
+                 and v.get('category', 'ordinary') == 'ordinary'}
     out = []
     for name in available:
         if name == current or name not in voices:
             continue
         cand = voices[name]
+        if cand.get('category', 'ordinary') != 'ordinary' or cand['locale'] not in locales:
+            continue
         if gender != 'either' and cand['gender'] != gender:
             continue
         real = deltas(cur, cand)  # what the owner will hear change: always the reported measurements
@@ -207,7 +264,7 @@ def match(current: str, request: dict, available, traits: dict = TRAITS) -> list
         # Asking for another gender changes register: every qualifier ("a deeper woman's voice", "a warmer man's")
         # is judged among that gender's voices, from their typical voice, not from the current voice.
         asked_switch = switched and request['gender'] in ('female', 'male')  # the owner asked for this gender
-        d = deltas(typical(voices, cand['gender']), cand) if asked_switch else real
+        d = deltas(typical(reference, cand['gender']), cand) if asked_switch else real
         among = d is not real
         score, met, unmet, against, toward = 0.0, [], [], [], []
         for dim, spec in DIMENSIONS.items():
@@ -411,14 +468,24 @@ class VoiceIdentity:
         now = time.monotonic()
         available = [v for v in getattr(speaker, 'voices', self.traits['voices'])
                      if now - self.unavailable.get(v, -UNAVAILABLE_RETRY_S) >= UNAVAILABLE_RETRY_S]
-        limits = self._limits(request)
+        available = [v for v in available if v in self.traits['voices']
+                     and self.traits['voices'][v].get('category', 'ordinary') == 'ordinary']
+        locales = request_locales(request, self.traits['voices'][current])
+        matching_locales = [v for v in available if self.traits['voices'][v]['locale'] in locales]
+        limits = self._limits(request, available, current)
         gender = self._gender(current)
-        if not request['wanted'] and request['gender'] in ('same', 'either', gender):
-            if not request['other'] and request['accent'] and request['accent_american']:
+        changing_accent = self.traits['voices'][current]['locale'] not in locales
+        if not matching_locales:
+            return {'ok': False, 'reason': 'no_close_match', 'changed': False, 'voice': current, 'limits': limits,
+                    'message': 'No measured voice on this backend satisfies the requested accent and exclusions; '
+                               'the current voice was kept.'}
+
+        if not request['wanted'] and not changing_accent and request['gender'] in ('same', 'either', gender):
+            if not request['other'] and request['accent']:
                 return {'ok': False, 'reason': 'already', 'changed': False, 'voice': current,
                         **({'limits': limits} if limits else {}),
-                        'message': 'The current voice already has an American (en-US) accent, like every available '
-                                   'voice.'}
+                        'message': f'The current voice already satisfies that accent request '
+                                   f'({LOCALES.get(self.traits["voices"][current]["locale"], "unknown accent")}).'}
             if request['gender'] == gender:
                 return {'ok': False, 'reason': 'already', 'changed': False, 'voice': current, 'limits': limits,
                         'message': f'The current voice is already {gender}; ask how it should sound different.'}
@@ -430,7 +497,8 @@ class VoiceIdentity:
         # A voice qualifies when it moves in no asked direction the wrong way and, for a description, meets at least
         # one of them; a change of gender asked for alone qualifies by gender.
         changing_gender = request['gender'] in ('female', 'male') and request['gender'] != gender
-        fits = [e for e in ranked if not e['against'] and (e['met'] or (changing_gender and not request['wanted']))]
+        fits = [e for e in ranked if not e['against']
+                and (e['met'] or ((changing_gender or changing_accent) and not request['wanted']))]
         if fits:
             result = self._apply(speaker, current, fits, limits=limits)
             if result.get('reason') != 'unavailable':
@@ -455,7 +523,7 @@ class VoiceIdentity:
             return result
         if changing_gender and not ranked:
             return {'ok': False, 'reason': 'no_match', 'changed': False, 'voice': current, 'limits': limits,
-                    'message': f'No {request["gender"]} voice is available on this backend.'}
+                    'message': f'No {request["gender"]} voice with the requested accent is available on this backend.'}
         # Nothing qualifies: keep the voice and offer the nearest voice that moves the asked way, even short of a
         # much_ step: of the asked (or current) gender first, another gender's only when none does.
         wider = match(current, {**request, 'gender': 'either'}, available, self.traits)
@@ -504,6 +572,7 @@ class VoiceIdentity:
         if best is not None:
             self.offered = best
             result['alternative'] = {'voice': best['voice'], 'gender': self._gender(best['voice']),
+                                     'locale': self.traits['voices'][best['voice']]['locale'],
                                      'met': best['met'], 'unmet': best['unmet'], 'changes': best['changes']}
             if best.get('judged_among'):
                 result['alternative']['judged_among'] = best['judged_among']
@@ -549,11 +618,14 @@ class VoiceIdentity:
     def _gender(self, voice):
         return self.traits['voices'].get(voice, {}).get('gender')
 
-    def _limits(self, request) -> list[str]:
+    def _limits(self, request, available, current) -> list[str]:
         """What a description asked for that these voices cannot be matched on."""
         limits = []
-        if not request['accent_american']:
-            limits.append(f'Every available voice has an American (en-US) accent; none is {request["accent"]}.')
+        locales = {self.traits['voices'][v]['locale'] for v in available}
+        wanted = request_locales(request, self.traits['voices'][current])
+        if not wanted & locales:
+            accents = ', '.join(LOCALES.get(v, v) for v in sorted(locales)) or 'no measured accents'
+            limits.append(f'Available voices have {accents}; none is {request["accent"] or "the current accent"}.')
         elif request.get('accent_note'):
             limits.append(ACCENT_NOTE)
         if request['other']:
@@ -583,7 +655,11 @@ class VoiceIdentity:
                     try:
                         speaker.set_voice(current)
                     except Exception:
-                        pass
+                        actual = getattr(speaker, 'voice', voice)
+                        return {'ok': False, 'reason': 'not_saved', 'changed': actual != current, 'voice': actual,
+                                'saved': False, 'rollback_failed': True,
+                                'message': 'The new voice could not be saved and restoring the previous live voice '
+                                           'also failed. The saved choice is unchanged; the live voice may differ.'}
                     return {'ok': False, 'reason': 'not_saved', 'changed': False, 'voice': current,
                             'message': 'The new voice could not be saved, so the current voice was kept.'
                             + (self.UNREADABLE if self.unreadable else '')}
@@ -594,6 +670,7 @@ class VoiceIdentity:
             result = {'ok': True, 'changed': True, 'voice': voice, 'previous_voice': current, 'saved': True,
                       'match': label or ('close' if not entry['unmet'] else 'partial'),
                       'met': entry['met'], 'unmet': entry['unmet'], 'measured_changes': changes,
+                      'locale': self.traits['voices'][voice]['locale'],
                       **({'judged_among': entry['judged_among']} if entry.get('judged_among') else {}),
                       'note': 'Reply now with one short sentence in this voice so the owner hears it, and ask '
                               'whether it suits them.'}
@@ -635,13 +712,12 @@ TOOLS = [
          **DIRECTIONS,
          'gender': {'type': 'string', 'enum': list(GENDERS),
                     'description': 'same (default) keeps the current gender; either only if the owner does not mind.'},
-         'accent': {'type': 'string', 'enum': ['american', 'other'],
-                    'description': 'american when the owner asks for a general American (US) accent or to keep the '
-                                   'current one; other when they want any other accent, a regional one (Southern, New '
-                                   'York) or a less American one, named in accent_name. Omit it when they do not mind '
-                                   'or only rule out a non-American one.'},
-         'accent_name': {'type': 'string', 'description': 'With accent other: that accent in the owner\'s words, for '
-                                                            'example British or Southern.'},
+         'accent': {'type': 'string', 'enum': ['same', 'american', 'british', 'either', 'other'],
+                    'description': 'same (default) preserves the current accent; american and british select '
+                                   'those broad catalog accents; either permits both. Use other plus accent_name '
+                                   'for regional/unsupported accents or exclusions. Never infer a regional accent.'},
+         'accent_name': {'type': 'string', 'description': 'With accent other: the exact requested accent or exclusions, '
+                                                            'for example Australian or not American.'},
          'other': {'type': 'array', 'items': {'type': 'string'}},
          'voice': {'type': 'string', 'description': 'Only a voice a previous change_voice result offered.'}},
          'additionalProperties': False}},
