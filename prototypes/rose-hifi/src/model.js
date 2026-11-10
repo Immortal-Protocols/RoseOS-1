@@ -192,6 +192,10 @@ function transition(previous, event) {
       break;
     }
     case 'switcher': if (s.view !== 'switcher') go('switcher'); break;
+    // Return from Rose to the exact live context the person came from (V3 return control).
+    case 'returnTo':
+      if ((event.view === 'app' && APPS[event.app]) || (event.view === 'window' && WINDOWS[event.window])) go(event.view, { app: event.app || null, window: event.window || null });
+      break;
     case 'agents': go('agents', { window: null }); break;
     case 'openApp':
       if (APPS[event.value]) {

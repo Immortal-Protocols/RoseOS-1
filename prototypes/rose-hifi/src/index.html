@@ -80,6 +80,13 @@
   <div class="row"><button class="hbtn" id="h-tasks">Start 3 tasks</button><button class="hbtn" id="h-attn">Needs choice</button><button class="hbtn" id="h-done">Finish one</button></div>
   <div class="tasklist hstatus" id="h-tasklist"></div>
  </fieldset>
+ <fieldset id="h-system"><legend>System surfaces</legend>
+  <div class="row"><button class="hbtn" id="h-shade">Notifications</button><button class="hbtn" id="h-empty">Empty / refill</button></div>
+  <label class="hcheck"><input type="checkbox" id="h-fail">Next reply fails to send</label>
+  <label class="hcheck"><input type="checkbox" id="h-unavail">Return origin no longer open</label>
+  <p class="hstatus" id="h-sysstate"></p>
+  <ol class="hstatus hlog" id="h-syslog" aria-label="Recent system events"></ol>
+ </fieldset>
  <fieldset><legend>Visual direction</legend>
   <select id="h-theme" class="hbtn" aria-label="Visual direction">
    <option value="oxblood">Oxblood (selected for the prototype)</option>

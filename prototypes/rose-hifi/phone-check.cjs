@@ -23,8 +23,9 @@ await swipe(cx,r.bottom-8,r.bottom-8-90*r.height/g.sh);
 let s=await st();ok(name+' touch swipe up raises edge, app stays',s.peek&&s.view==='app',JSON.stringify(s));
 await p.screenshot({path:path.join(OUT,name+'-peek.png')});
 // type in composer while raised
-await p.locator('#v-app .ab-input').tap();await p.keyboard.type('Hi');await p.locator('#v-app .ab-send').tap();await p.waitForTimeout(300);
+await p.locator('#f-msg').tap();await p.waitForTimeout(400);for(const ch of 'hi')await p.locator('#keys [data-k="'+ch+'"]').tap();await p.locator('#v-app .ab-send').tap();await p.waitForTimeout(300);
 ok(name+' composer works with edge up',(await p.locator('#v-app .c-msg p').count())===4&&(await st()).peek);
+await p.locator('#strip [data-tool=hide]').tap();await p.waitForTimeout(400);
 // swipe down on edge
 await swipe(cx,r.bottom-60*r.height/g.sh,r.bottom-60*r.height/g.sh+40);
 s=await st();ok(name+' touch swipe down lowers edge',!s.peek&&s.view==='app',JSON.stringify(s));

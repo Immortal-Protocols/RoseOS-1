@@ -299,6 +299,7 @@
   let peek = false, peekDrag = null, suppressHomeTap = false;
   function render() {
     if (shownView !== state.view) rememberFocus(shownView);
+    if (window.RoseSystem) window.RoseSystem.beforeRender(state);
     device.classList.toggle('unfolded', state.layout === 'unfolded');
     document.documentElement.style.setProperty('--screen-w', state.layout === 'unfolded' ? '748px' : '384px');
     screen.classList.toggle('static-motion', reduced());
@@ -378,6 +379,7 @@
     $('h-result').disabled = state.connection !== 'connected';
     $('h-tasklist').innerHTML = Object.entries(state.tasks).map(([id, t]) => '<div><span>' + M.TASKS[id].title + '</span><span>' + t.state + (t.state === 'running' ? ' · ' + t.step + '/' + M.MAX_STEP : '') + '</span></div>').join('');
     if (window.RoseViews) window.RoseViews.render(state, ctx);
+    if (window.RoseSystem) window.RoseSystem.afterRender(state);
     fit();
     if (peek && !peekable()) setPeek(false);
     if (pendingFocus) requestAnimationFrame(applyFocus);
@@ -487,14 +489,18 @@
     edgeTouch = false;
     if (device.dataset.theme !== 'oxblood' || e.touches.length !== 1) return;
     const r = screen.getBoundingClientRect(), k = r.height / screen.offsetHeight, up = (r.bottom - e.touches[0].clientY) / k;
-    edgeTouch = peek ? up <= 104 : up <= 56 && (peekable() || state.view === 'switcher');
+    const sys = window.RoseSystem, kbUp = sys && sys.kbOpen();
+    if (e.target.closest && e.target.closest('#kb,#shade')) return;
+    edgeTouch = peek ? up <= 104 : up <= (kbUp ? 24 : 56) && (peekable() || state.view === 'switcher');
   }, { passive: true });
   screen.addEventListener('touchmove', (e) => { if (edgeTouch && e.cancelable) e.preventDefault(); }, { passive: false });
   screen.addEventListener('touchend', () => { edgeTouch = false; }, { passive: true });
   screen.addEventListener('pointerdown', (e) => {
     if (device.dataset.theme !== 'oxblood' || (e.button && e.button !== 0)) return;
     const r = screen.getBoundingClientRect(), k = r.height / screen.offsetHeight;
-    const fromEdge = (r.bottom - e.clientY) / k <= 56;
+    // With the keyboard open the edge zone is its 24pt rail; swipes on the keyboard or shade belong to them.
+    if (e.target.closest && e.target.closest('#kb,#shade')) return;
+    const fromEdge = (r.bottom - e.clientY) / k <= (window.RoseSystem && window.RoseSystem.kbOpen() ? 24 : 56);
     // With the edge up, only a drag that starts on the edge itself moves it; the app above scrolls and taps normally.
     const onRaisedEdge = peek && (r.bottom - e.clientY) / k <= 104;
     if (onRaisedEdge || (!peek && fromEdge && (peekable() || state.view === 'switcher'))) peekDrag = { y: e.clientY, t: performance.now(), k, wasPeek: peek, moved: false };
@@ -544,6 +550,7 @@
   document.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape' || state.locked) return;
     if (peek) { setPeek(false); return; }
+    if (window.RoseSystem && window.RoseSystem.escape()) return;
     if (state.pendingStop) dispatch({ type: 'cancelStop' });
     else if (state.view !== 'home') dispatch({ type: 'back' });
   });
@@ -650,5 +657,6 @@
   buildHome(); bindHomeGestures();
   renderer.attach($('slot-tray'));
   render(); startClock();
-  window.__rose = { getState: () => state, dispatch, renderer, ctx };
+  window.__rose = { getState: () => state, dispatch, renderer, ctx, setPeek: (on) => setPeek(on), isPeek: () => peek };
+  if (window.RoseSystem) window.RoseSystem.init(window.__rose);
 })();

@@ -383,7 +383,8 @@
   };
   const TAB_ON = { clock: 1, phone: 1 };
   function appBar(kind) {
-    if (kind === 'messages') return '<form class="app-bar composer" data-composer><button type="button" class="ab-plus" aria-label="Add attachment">+</button><input type="text" class="ab-input" placeholder="Message" aria-label="Message" autocomplete="off"><button type="submit" class="ab-send" aria-label="Send">↑</button></form>';
+    // Messages uses the system keyboard (system.js): a custom-rendered field, never a native input.
+    if (kind === 'messages') return '<div class="app-bar composer" data-composer><button type="button" class="ab-plus" aria-label="Add attachment" tabindex="-1">+</button><div class="field ab-field" id="f-msg" role="textbox" aria-label="Message" aria-multiline="false" tabindex="0" data-placeholder="Message"></div><button type="button" class="ab-send" id="ab-send" aria-label="Send" disabled>↑</button></div>';
     if (kind === 'maps') return '<div class="app-bar composer"><input type="search" class="ab-input" placeholder="Search Maps" aria-label="Search Maps" autocomplete="off"></div>';
     const tabs = TABS[kind];
     if (!tabs) return '';
