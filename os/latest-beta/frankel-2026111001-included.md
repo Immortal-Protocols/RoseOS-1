@@ -14,6 +14,7 @@
   - That artifact is 13764345147 (a 1198-byte zip), digest `sha256:cf238c0ca7343fdf0c43881d59ca6eb634731fbc3fa44c4d3c877809e437b13d`.
   - The `allocation.json` sha256 is `32c59f8bd4a73d0ed8c2683d78ecb7a34308896a8bd0b7122c27c3d0d916e6a8`.
 - **Result:** run 42813894214 succeeded on attempt 1. It was signed, verified, published and promoted to Beta Latest at 12:48:46Z.
+  - Its three signed apps are exported in run 42851073284 and recorded in [`os/app-inputs/frankel-2026111001.json`](../app-inputs/frankel-2026111001.json).
 
 ## What this build adds
 
@@ -88,6 +89,26 @@ In builder job 129822356286:
 - Cleanup job 129839160987 `stop-builder` succeeded.
 - A read-only Compute read afterwards showed `immortal-os-builder` TERMINATED, with lastStopTimestamp 2026-11-10T12:49:27.849Z.
 
+## App-inputs export (for Mustang)
+
+Nathan approved one export of this build's signed apps (relayed by Chief; his reply at 16:01:06Z). It was one `os-release.yml` dispatch on main `b3764041e335071f3bc07605bfe791563a9924ab` with `{"mode": "app-inputs-export", "build_number": "2026111001"}`.
+
+- **Run:** 42851073284, attempt 1. Dispatched 16:05:27Z, created 16:05:32Z, completed 16:07:16Z, success.
+- **Builder:**
+  - the controller started `immortal-os-builder` (16:05:57 to 16:06:13Z);
+  - the export job ran on it from 16:06:25 to 16:06:35Z and copied the original attempt's signed apps unchanged (16:06:29 to 16:06:30Z);
+  - the owned cleanup stopped it (16:06:47 to 16:07:13Z, `"observed": "TERMINATED"`);
+  - Compute shows lastStartTimestamp 16:06:13.010Z and lastStopTimestamp 16:07:06.701Z.
+- **Artifact:** `app-inputs-frankel-2026111001-42851073284-1`, id 13781175876, 1875279 bytes.
+  - Digest `sha256:4cb8c4ff5ed801210f687071ea5e48442ee11712e7e4f3877495456ee07376ef`; expires 2026-11-24T16:06:30Z.
+  - It holds 12 files: the nine signed-app files, `background-policy.json`, the receipt `app-inputs-export.json` (sha256 `7f601b8fc6719df85f334a235901f57924bdd3a1fd83b9a87617588b7b7ca733`) and `SHA256SUMS`.
+- **Record:** [`os/app-inputs/frankel-2026111001.json`](../app-inputs/frankel-2026111001.json), written by `scripts/app-inputs-verify.py record` from the artifact's own receipt and the run's metadata.
+  - It binds the allocation record by its file-byte sha256 `32c59f8bd4a73d0ed8c2683d78ecb7a34308896a8bd0b7122c27c3d0d916e6a8`, not by the canonical `allocationSha256` (`51f142b1…`).
+- **Admission:** `scripts/app-inputs-verify.py verify` with independent `aapt` and `apksigner` returned `ADMITTED` (`toolsRechecked: true`).
+  - Versions: voice 370 (`370-os-beta-2026111001`), calculator agent 6, background control 41.
+  - Signer `650d47f91b7f5af3c530fef53fe92018aa4521efba065bcb1d6fc9b699060bfb`; SDK 37.
+  - Mustang's `app_source_drift` against main is empty for all three apps.
+
 ## Main commits since the previous Beta (16, first parent, newest first)
 
 - `6bab12cdf9a6` Merge #735: 1D: name the assistant and describe its voice in conversation
@@ -110,5 +131,5 @@ In builder job 129822356286:
 **Evidence limits:**
 - The release workflow built, signed and verified this build (image, signature, version and download checks).
 - The publication evidence is the publisher's own receipt; pixel-ota is not read directly from this session.
-- No app-inputs export was run for this build.
+- The app-inputs export re-checked and copied the original attempt's signed apps; it built, signed and published nothing.
 - Nothing here claims phone runtime acceptance.
