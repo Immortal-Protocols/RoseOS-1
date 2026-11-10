@@ -254,6 +254,24 @@ class Matching(unittest.TestCase):
                 d = vi.deltas(vi.TRAITS['voices'][current], vi.TRAITS['voices'][r['voice']])[kept]
                 self.assertLessEqual(abs(d), vi.DIMENSIONS[kept]['step'], r)
 
+    def test_keep_pitch_holds_for_either_gender_and_the_fallback(self):
+        for current, args in (('harper', {'gender': 'either', 'pitch': 'same', 'warmth': 'brighter', 'pace': 'faster'}),
+                              ('zoey', {'gender': 'either', 'pitch': 'same', 'warmth': 'brighter'}),
+                              ('zoey', {'pitch': 'same', 'pace': 'faster'}), ('juniper', {'pitch': 'same', 'pace': 'faster'})):
+            with self.subTest(current=current, args=args):
+                r, _ = self.change(current, **args)
+                voice = r['voice'] if r['ok'] else (r.get('alternative') or {}).get('voice')
+                if voice is None:
+                    continue
+                d = vi.deltas(vi.TRAITS['voices'][current], vi.TRAITS['voices'][voice])['pitch']
+                self.assertLessEqual(abs(d), vi.DIMENSIONS['pitch']['step'], r)
+
+    def test_a_gender_change_cannot_keep_the_pitch_and_says_so(self):
+        r, _ = self.change('zoey', gender='male', pitch='same')
+        self.assertTrue(r['ok'])
+        self.assertEqual(r['match'], 'partial')
+        self.assertIn('same_pitch', r['unmet'])
+
     def test_a_result_judged_among_another_gender_says_so(self):
         r, _ = self.change('easton', gender='female', pitch='lower')
         self.assertEqual(r['judged_among'], 'female')
@@ -435,6 +453,19 @@ class Persistence(unittest.TestCase):
             (self.dir / 'identity.json').write_text(json.dumps(saved))
             one = self.identity()
             self.assertEqual((one.name, one.startup_voice(None)), ('Rose', 'zoey'), saved)
+
+    def test_reverting_to_the_voice_this_run_already_speaks_saves_it(self):
+        (self.dir / 'identity.json').write_text(json.dumps({'voice': 'harper', 'previous_voice': 'zoey'}))
+        one = self.identity()
+        speaker = Speaker('zoey')  # a startup fallback or a one-run --voice zoey
+        r = one.revert(speaker, 'original')
+        self.assertTrue(r['ok'])
+        self.assertEqual((r['changed'], speaker.calls), (False, []))
+        self.assertEqual(self.identity().startup_voice(None), 'zoey')
+
+    def test_american_with_a_kept_aspect_is_already(self):
+        r = vi.VoiceIdentity().change_voice(Speaker('zoey'), {'accent': 'American', 'pitch': 'same'})
+        self.assertEqual(r['reason'], 'already')
 
     def test_accent_same_is_no_accent_request(self):
         identity, speaker = vi.VoiceIdentity(), Speaker('zoey')

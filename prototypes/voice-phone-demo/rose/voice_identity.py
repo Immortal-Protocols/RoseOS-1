@@ -132,21 +132,23 @@ def match(current: str, request: dict, available, traits: dict = TRAITS) -> list
         switched = cand['gender'] != cur['gender']
         # Asking for another gender changes register: every qualifier ("a deeper woman's voice", "a warmer man's")
         # is judged among that gender's voices, from their typical voice, not from the current voice.
-        d = deltas(typical(voices, cand['gender']), cand) if switched and request['gender'] in ('female', 'male') \
-            else real
+        asked_switch = switched and request['gender'] in ('female', 'male')  # the owner asked for this gender
+        d = deltas(typical(voices, cand['gender']), cand) if asked_switch else real
         among = d is not real
         score, met, unmet, against, toward = 0.0, [], [], [], []
         for dim, spec in DIMENSIONS.items():
             level = request['wanted'].get(dim)
             if level is None:
                 if dim in keep:  # "keep the same" is always about the current voice, whatever the gender
-                    if not (dim == 'pitch' and switched) and abs(real[dim]) > spec['step']:
-                        unmet.append('same_' + dim)
-                        against.append('same_' + dim)
-                    if not (dim == 'pitch' and switched):
+                    if dim == 'pitch' and asked_switch:
+                        unmet.append('same_pitch')  # another gender asked for: its pitch cannot be kept; say so
+                    else:
+                        if abs(real[dim]) > spec['step']:
+                            unmet.append('same_' + dim)
+                            against.append('same_' + dim)
                         score += (real[dim] / spec['scale']) ** 2
-                elif not (dim == 'pitch' and switched and not among):  # another gender's pitch is not "a change"
-                    score += UNREQUESTED_WEIGHT * (d[dim] / spec['scale']) ** 2
+                else:  # only a gender change the owner asked for excuses its pitch change
+                    score += UNREQUESTED_WEIGHT * ((d if among or dim != 'pitch' else real)[dim] / spec['scale']) ** 2
                 continue
             target = math.copysign(spec['large'] if abs(level) == 2 else spec['step'], level)
             miss = d[dim] - target
@@ -338,7 +340,7 @@ class VoiceIdentity:
         limits = self._limits(request)
         gender = self._gender(current)
         if not request['wanted'] and request['gender'] in ('same', 'either', gender):
-            if not request['other'] and not request['keep'] and request['accent'] and american(request['accent']):
+            if not request['other'] and request['accent'] and american(request['accent']):
                 return {'ok': False, 'reason': 'already', 'changed': False, 'voice': current,
                         'message': 'The current voice already has an American (en-US) accent, like every available '
                                    'voice.'}
@@ -403,6 +405,15 @@ class VoiceIdentity:
             return {'ok': False, 'reason': 'no_voice', 'message': 'This backend has no voice to change.'}
         current = getattr(speaker, 'voice', None) or self.voice or DEFAULT_VOICE
         target = DEFAULT_VOICE if to == 'original' else self.previous
+        if target is not None and target == current and self.voice not in (None, target):
+            # This run already speaks it (a one-run --voice or a startup fallback): make it the saved choice too.
+            with self.lock:
+                if not self._save(self.name, target, self.voice):
+                    return {'ok': False, 'reason': 'not_saved', 'changed': False, 'voice': current,
+                            'message': 'The choice could not be saved.' + (self.UNREADABLE if self.unreadable else '')}
+                self.voice, self.previous = target, self.voice
+            return {'ok': True, 'changed': False, 'voice': target, 'saved': True, 'match': 'reverted',
+                    'note': 'This voice is already speaking; it is now also the saved choice for the next start.'}
         if target is None or target == current:
             return {'ok': False, 'reason': 'nothing_to_revert', 'changed': False, 'voice': current,
                     'message': 'This is already the ' + ('original' if to == 'original' else 'only chosen') + ' voice.'}
