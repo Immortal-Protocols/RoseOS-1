@@ -103,7 +103,7 @@
     },
     {
      "name": "rose-edge-wmshell.patch",
-     "sha256": "03f7537f388369bc785432cd67125d55011113376374dd6576006e63a9a9be6b"
+     "sha256": "42fcc4fc3d2c93295b3b12805e6e580c2b1615d91df09ec64e05dc705cf26cbd"
     },
     {
      "name": "rose-shade-systemui.patch",
@@ -907,17 +907,17 @@
      "path": "libs/WindowManager/Shell/src/com/android/wm/shell/roseedge/RoseEdgeController.java",
      "pre": null,
      "post": {
-      "sha256": "e9b3a43c9624f6d8cdb4aa27711529d6abcbfc4c99e69cda7f46b22cef881d98",
-      "gitBlob": "6d064bbf87b06bcc5052f5b68d00e506c587225f"
+      "sha256": "429757cf3fa31af70238d2010764cc730436b165632b7ca31ff90636b5b8578c",
+      "gitBlob": "8fd02b96f9b059f72df3e112f27cd84e036196ad"
      },
      "chain": [
       {
        "patch": "rose-edge-wmshell.patch",
        "before": null,
-       "after": "6d064bbf87b06bcc5052f5b68d00e506c587225f",
+       "after": "8fd02b96f9b059f72df3e112f27cd84e036196ad",
        "index": [
         "0000000",
-        "6d064bb"
+        "8fd02b9"
        ],
        "base": "exact"
       }
@@ -927,17 +927,17 @@
      "path": "libs/WindowManager/Shell/src/com/android/wm/shell/roseedge/RoseEdgePolicy.java",
      "pre": null,
      "post": {
-      "sha256": "6e5178564ce92ac3ab0ce41847365ad3020d5c7bb88a4495bc5d5b5782032bdd",
-      "gitBlob": "6d9df5fa1c265fcbf501c95b3aad3633ac4a83b0"
+      "sha256": "a9cd77478dae0cccd0e9ecbdc37877369d1b1f81f55a758b6a1a4829dfae333e",
+      "gitBlob": "a4003dcc986bd33c78572f33f33e38697e34123e"
      },
      "chain": [
       {
        "patch": "rose-edge-wmshell.patch",
        "before": null,
-       "after": "6d9df5fa1c265fcbf501c95b3aad3633ac4a83b0",
+       "after": "a4003dcc986bd33c78572f33f33e38697e34123e",
        "index": [
         "0000000",
-        "6d9df5f"
+        "a4003dc"
        ],
        "base": "exact"
       }
@@ -1804,7 +1804,7 @@
     {
      "project": "frameworks/base",
      "name": "rose-edge-wmshell.patch",
-     "sha256": "03f7537f388369bc785432cd67125d55011113376374dd6576006e63a9a9be6b"
+     "sha256": "42fcc4fc3d2c93295b3b12805e6e580c2b1615d91df09ec64e05dc705cf26cbd"
     },
     {
      "project": "frameworks/base",
@@ -1946,7 +1946,7 @@
      },
      {
       "name": "rose-edge-wmshell.patch",
-      "sha256": "03f7537f388369bc785432cd67125d55011113376374dd6576006e63a9a9be6b"
+      "sha256": "42fcc4fc3d2c93295b3b12805e6e580c2b1615d91df09ec64e05dc705cf26cbd"
      },
      {
       "name": "rose-shade-systemui.patch",
@@ -2750,17 +2750,17 @@
       "path": "libs/WindowManager/Shell/src/com/android/wm/shell/roseedge/RoseEdgeController.java",
       "pre": null,
       "post": {
-       "sha256": "e9b3a43c9624f6d8cdb4aa27711529d6abcbfc4c99e69cda7f46b22cef881d98",
-       "gitBlob": "6d064bbf87b06bcc5052f5b68d00e506c587225f"
+       "sha256": "429757cf3fa31af70238d2010764cc730436b165632b7ca31ff90636b5b8578c",
+       "gitBlob": "8fd02b96f9b059f72df3e112f27cd84e036196ad"
       },
       "chain": [
        {
         "patch": "rose-edge-wmshell.patch",
         "before": null,
-        "after": "6d064bbf87b06bcc5052f5b68d00e506c587225f",
+        "after": "8fd02b96f9b059f72df3e112f27cd84e036196ad",
         "index": [
          "0000000",
-         "6d064bb"
+         "8fd02b9"
         ],
         "base": "exact"
        }
@@ -2770,17 +2770,17 @@
       "path": "libs/WindowManager/Shell/src/com/android/wm/shell/roseedge/RoseEdgePolicy.java",
       "pre": null,
       "post": {
-       "sha256": "6e5178564ce92ac3ab0ce41847365ad3020d5c7bb88a4495bc5d5b5782032bdd",
-       "gitBlob": "6d9df5fa1c265fcbf501c95b3aad3633ac4a83b0"
+       "sha256": "a9cd77478dae0cccd0e9ecbdc37877369d1b1f81f55a758b6a1a4829dfae333e",
+       "gitBlob": "a4003dcc986bd33c78572f33f33e38697e34123e"
       },
       "chain": [
        {
         "patch": "rose-edge-wmshell.patch",
         "before": null,
-        "after": "6d9df5fa1c265fcbf501c95b3aad3633ac4a83b0",
+        "after": "a4003dcc986bd33c78572f33f33e38697e34123e",
         "index": [
          "0000000",
-         "6d9df5f"
+         "a4003dc"
         ],
         "base": "exact"
        }
