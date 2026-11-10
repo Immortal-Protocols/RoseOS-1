@@ -602,7 +602,9 @@ class HostedSignGateTest(unittest.TestCase):
         with patch.object(Path,'stat',sparse):
             self.assertEqual(hosted.resident_archive_bytes(bundle,files,directory),
                              sum(original[n].st_size for n in ('otatools','jdk')))
-        duplicate=dict(files,jdk=files['otatools'])
+        linked = directory / 'hardlinked-jdk.zip'
+        os.link(files['otatools'], linked)
+        duplicate=dict(files,jdk=linked)
         duplicate_bundle=dict(bundle,jdk=bundle['otatools'])
         self.assertEqual(hosted.resident_archive_bytes(duplicate_bundle,duplicate,directory),
                          original['unsigned'].st_size+original['otatools'].st_size)
