@@ -133,7 +133,7 @@ class CodexConductor:
         # first submit after that. No turn waits for it. Bridge call id -> (conversation, note) / reported ids:
         self._late_notes = []
         self._copy_outcomes, self._bridge_cancelled = {}, {}
-        self._identity_notes = set()  # the notes above that are a name or voice outcome
+        self._identity_notes = {}  # the notes above that are a name or voice outcome -> (turn, tool)
         self.client = client_factory(self._events.put)
         self._worker = threading.Thread(target=self._loop, name='codex-conductor', daemon=True)
 
@@ -207,7 +207,8 @@ class CodexConductor:
             with self._lock:
                 notes = [n for c, n in self._late_notes if c == s.conversation]
                 self._late_notes = []
-                self._identity_notes &= set(self._copy_outcomes.values())  # only those still awaiting a report
+                pending = set(self._copy_outcomes.values())  # only those still awaiting a report
+                self._identity_notes = {n: k for n, k in self._identity_notes.items() if n in pending}
         try:
             result = self.client.request('submit', s.name, text='\n'.join(notes + [text]) if notes else text)
         except Exception:
@@ -549,7 +550,8 @@ class CodexConductor:
                     logged = ({'text_characters': len(args['text'])} if name == 'copy_to_phone_clipboard'
                               and isinstance(args, dict) and isinstance(args.get('text'), str) else args)
                     self.log(s, 'tool_call', call_id=p['callId'], name=name, arguments=logged)
-                    earlier = self._unseen_identity(s) if name in voice_identity.NAMES and not s.task else None
+                    earlier = (self._unseen_identity(s, p['turnId'], name) if name in voice_identity.NAMES
+                               and not s.task else None)
                     if earlier:
                         # A retry after a timeout: the earlier call already finished, so its outcome answers this one
                         # and nothing is applied on top of it.
@@ -563,7 +565,7 @@ class CodexConductor:
                     if name == 'copy_to_phone_clipboard' and not s.task:
                         self._copy_finished(s, str(e['callId']), result)
                     elif name in voice_identity.NAMES and not s.task:
-                        self._identity_finished(s, str(e['callId']), name, result)
+                        self._identity_finished(s, str(e['callId']), name, result, p['turnId'])
         except PhoneTaskError as exc:
             result = {'ok': False, 'reason': exc.code, 'message': str(exc)}
         except Exception:
@@ -599,7 +601,7 @@ class CodexConductor:
             else:
                 self._keep(self._copy_outcomes, call_id, note)
 
-    def _identity_finished(self, s, call_id, name, result):
+    def _identity_finished(self, s, call_id, name, result, turn=None):
         """A name or voice tool returned. Like a copy, its outcome becomes a note only if the bridge answered this
         call as cancelled (a barge-in or timeout during a slow voice load), so a saved change is never reported as
         undone and never applied twice."""
@@ -614,18 +616,21 @@ class CodexConductor:
         note = (s.conversation, f'[Before this message, your {name} call that was answered as cancelled finished: '
                 f'{outcome}.{follow}]')
         with self._lock:
-            self._identity_notes.add(note)
+            self._identity_notes[note] = (turn, name)
             if self._bridge_cancelled.pop(call_id, None):
                 self._late_note(note)
             else:
                 self._keep(self._copy_outcomes, call_id, note)
 
-    def _unseen_identity(self, s):
-        """Take this conversation's name or voice outcomes the model has not seen yet (queued as late notes)."""
+    def _unseen_identity(self, s, turn, name):
+        """Take the unseen outcomes (queued as late notes) of earlier calls of this tool in this same turn: a retry
+        after the bridge timed one out. A new owner turn, or another tool, is never answered this way."""
         with self._lock:
-            taken = [n for n in self._late_notes if n in self._identity_notes and n[0] == s.conversation]
+            taken = [n for n in self._late_notes if n[0] == s.conversation
+                     and self._identity_notes.get(n) == (turn, name)]
             self._late_notes = [n for n in self._late_notes if n not in taken]
-            self._identity_notes.difference_update(taken)
+            for n in taken:
+                self._identity_notes.pop(n, None)
         return [n[1] for n in taken]
 
     def _cancelled_by_bridge(self, call_id):

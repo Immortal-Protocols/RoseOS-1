@@ -433,20 +433,20 @@ class Matching(unittest.TestCase):
         self.assertIn('same_warmth', r['alternative']['unmet'])
         self.assertIn('much_lower', r['alternative']['unmet'])
 
-    def test_a_named_american_accent_decides(self):
-        r, _ = self.change('zoey', accent='american', accent_name='Southern', pitch='lower')
-        self.assertIn('none is Southern', r['limits'][0])
-        r, _ = self.change('zoey', accent='american', accent_name='Southern')
-        self.assertNotEqual(r['reason'], 'already')
-        for name in ('General American', 'natural American', 'clear American', 'a subtle American accent', 'American',
-                     'mainstream American', 'American English', 'real American', 'US'):
+    def test_an_american_accent_with_a_name_is_said_back_honestly(self):
+        # accent american is the model's judgement; any name with it gets the true statement of what every voice has.
+        for name in ('General American', 'natural American', 'clear American', 'a clean American accent', 'Southern',
+                     'New England', 'Mexican American', 'American, not British', 'American without a drawl'):
             r, speaker = self.change('zoey', accent='american', accent_name=name)
             self.assertEqual((r['reason'], speaker.calls), ('already', []), name)
+            self.assertEqual(r['limits'], [vi.ACCENT_NOTE], name)
             r, _ = self.change('zoey', accent='american', accent_name=name, pitch='lower')
-            self.assertNotIn('limits', r, name)
-        for name in ('Texan', 'New York', 'a Southern drawl', 'Boston', 'Midwestern', 'British', 'Canadian'):
-            r, _ = self.change('zoey', accent='american', accent_name=name, pitch='lower')
-            self.assertIn('none is ' + name, r['limits'][0], name)
+            self.assertTrue(r['ok'], name)
+            self.assertEqual(r['limits'], [vi.ACCENT_NOTE], name)
+        r, _ = self.change('zoey', accent='american', pitch='lower')  # no name: nothing to say
+        self.assertNotIn('limits', r)
+        r, _ = self.change('zoey', accent='other', accent_name='Southern', pitch='lower')
+        self.assertIn('none is Southern', r['limits'][0])
 
     def test_either_gender_keep_blocked_offer_may_be_another_gender(self):
         r = vi.VoiceIdentity().change_voice(Speaker('miles'), {'liveliness': 'calmer', 'pitch': 'same',
@@ -789,6 +789,19 @@ class Conversation(unittest.TestCase):
         self.assertEqual([n for c, n in self.engine._late_notes if c == s.conversation], [])  # told now, once
         r = self.tool('change_voice', pace='slower')  # once seen, a new request applies again
         self.assertNotEqual(r.get('reason'), 'earlier_call_finished')
+
+    def test_the_retry_guard_never_blocks_another_tool_or_a_new_turn(self):
+        s = self.engine.sessions['conversation']
+        self.engine._event({'event': 'tool_cancelled', 'callId': 'ipc-change_voice'})
+        first = self.tool('change_voice', pace='slower')
+        r = self.tool('rename_assistant', name='Nova')  # another tool in the same turn applies
+        self.assertTrue(r['ok'])
+        notes = [n for c, n in self.engine._late_notes if c == s.conversation]
+        self.assertEqual(len(notes), 1)  # the voice outcome is still owed to the model
+        s.turn = 'a-later-turn'  # the owner spoke again before the slow call's note was queued
+        r = self.tool('change_voice', pace='slower')
+        self.assertNotEqual(r.get('reason'), 'earlier_call_finished')
+        self.assertNotEqual(self.speaker.voice, first['voice'])
 
     def test_a_cancelled_change_note_keeps_limits_and_the_offered_alternative(self):
         s = self.engine.sessions['conversation']

@@ -82,27 +82,7 @@ def _alternative(tokens: list[str]):
     return None if not asked else False  # a bare "English" accent usually means England's, which no voice has
 
 
-# Regional accents within the US: none of them is the general American every voice has.
-REGIONS = frozenset({
-    'southern', 'south', 'texan', 'texas', 'boston', 'york', 'yorker', 'brooklyn', 'bronx', 'jersey', 'midwest',
-    'midwestern', 'appalachian', 'cajun', 'creole', 'valley', 'california', 'californian', 'chicago', 'minnesota',
-    'minnesotan', 'philly', 'philadelphia', 'baltimore', 'pittsburgh', 'hawaiian', 'alaskan', 'country', 'twang',
-    'drawl', 'redneck', 'hillbilly', 'cowboy', 'western', 'eastern', 'northeastern', 'southwestern', 'louisiana',
-    'georgia', 'alabama', 'kentucky', 'tennessee', 'carolina', 'virginia', 'maine', 'wisconsin', 'dakota'})
-NOT_PLACES = frozenset({'modern', 'stern', 'pattern', 'median', 'musician', 'civilian'})
-
-
-def names_another(name: str) -> bool:
-    """Whether an accent name given with american names a regional or another country's accent ("Southern",
-    "Texan", "British"), not just how American it is ("natural", "clear", "standard American")."""
-    tokens = re.findall(r'[a-z]+', name.lower().replace('u.s.', 'us'))
-    us = bool(US & set(tokens))
-    for t in tokens:
-        if t in US or (us and t == 'english'):
-            continue
-        if t in REGIONS or (len(t) >= 5 and t not in NOT_PLACES and re.search(r'(ish|ian|ese|ean|ern)$', t)):
-            return True
-    return False
+ACCENT_NOTE = 'Every available voice has a general American (en-US) accent; none has a regional or other accent.'
 
 
 def american(accent: str) -> bool:
@@ -183,10 +163,11 @@ def request_from(args: dict) -> dict:
         raise ValueError('gender must be same, female, male or either')
     accent = str(args.get('accent') or '').strip()
     accent_name = str(args.get('accent_name') or '').strip()
-    if accent.lower() == 'american' and accent_name and names_another(accent_name):  # "Southern": not general
-        accent, accent_american = accent_name, False
-    elif accent.lower() == 'american':  # "a natural American accent": every voice has it
-        accent, accent_american = 'American', True
+    accent_note = False
+    if accent.lower() == 'american':
+        # The model judged it American. A name with it is said back as what every voice has (a general American
+        # accent, no regional one), which is true whether it was "natural American" or "Southern".
+        accent, accent_american, accent_note = 'American', True, bool(accent_name)
     elif accent.lower() == 'other':
         accent, accent_american = accent_name or 'another accent', False
     else:  # not one of the schema's values: read the owner's words
@@ -197,6 +178,7 @@ def request_from(args: dict) -> dict:
     if not wanted and gender in ('same', 'either') and not accent and not other:
         raise ValueError('Describe how the voice should change.')
     return {'wanted': wanted, 'keep': keep, 'gender': gender, 'accent': accent, 'accent_american': accent_american,
+            'accent_note': accent_note,
             'other': other}
 
 
@@ -434,6 +416,7 @@ class VoiceIdentity:
         if not request['wanted'] and request['gender'] in ('same', 'either', gender):
             if not request['other'] and request['accent'] and request['accent_american']:
                 return {'ok': False, 'reason': 'already', 'changed': False, 'voice': current,
+                        **({'limits': limits} if limits else {}),
                         'message': 'The current voice already has an American (en-US) accent, like every available '
                                    'voice.'}
             if request['gender'] == gender:
@@ -571,6 +554,8 @@ class VoiceIdentity:
         limits = []
         if not request['accent_american']:
             limits.append(f'Every available voice has an American (en-US) accent; none is {request["accent"]}.')
+        elif request.get('accent_note'):
+            limits.append(ACCENT_NOTE)
         if request['other']:
             limits.append('Only pitch, warmth, liveliness and pace were measured from the voices\' samples; '
                           + ', '.join(request['other']) + ' could not be matched.')
@@ -654,7 +639,7 @@ TOOLS = [
                                    'current one; other when they want any other accent, a regional one (Southern, New '
                                    'York) or a less American one, named in accent_name. Omit it when they do not mind '
                                    'or only rule out a non-American one.'},
-         'accent_name': {'type': 'string', 'description': 'The accent in the owner\'s words when they named one, for '
+         'accent_name': {'type': 'string', 'description': 'With accent other: that accent in the owner\'s words, for '
                                                             'example British or Southern.'},
          'other': {'type': 'array', 'items': {'type': 'string'}},
          'voice': {'type': 'string', 'description': 'Only a voice a previous change_voice result offered.'}},
