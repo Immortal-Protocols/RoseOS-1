@@ -33,6 +33,13 @@ async function measure(page, label, sel, min) {
   // Hide the element's own text so the rendered background beneath it can be sampled.
   // Hide the element's text, its descendants' text and its glyphs, so only the rendered background remains.
   await page.evaluate((sel) => { const el = document.querySelector(sel); [el, ...el.querySelectorAll('*')].forEach((n) => { n.dataset.cprev = n.style.color || ''; n.style.setProperty('color', 'transparent', 'important'); }); (el.matches('svg,img') ? [el] : [...el.querySelectorAll('svg,img')]).forEach((s) => { s.dataset.cvis = s.style.visibility; s.style.visibility = 'hidden'; }); }, sel);
+  // The node may be re-rendered (e.g. the suggestion strip) between hiding and capture: confirm it is
+  // still hidden immediately before the screenshot, re-hiding a replaced node.
+  for (let i = 0; i < 3; i++) {
+    const hidden = await page.evaluate((sel) => { const el = document.querySelector(sel); return !!el && [el, ...el.querySelectorAll('*')].every((n) => n.style.color === 'transparent'); }, sel);
+    if (hidden) break;
+    await page.evaluate((sel) => { const el = document.querySelector(sel); [el, ...el.querySelectorAll('*')].forEach((n) => { n.dataset.cprev = n.style.color || ''; n.style.setProperty('transition', 'none', 'important'); n.style.setProperty('color', 'transparent', 'important'); }); }, sel);
+  }
   const buf = await page.screenshot({ clip: { x: info.x, y: info.y, width: Math.max(1, info.w), height: Math.max(1, info.h) } });
   await page.evaluate((sel) => { const el = document.querySelector(sel); [el, ...el.querySelectorAll('*')].forEach((n) => { n.style.color = n.dataset.cprev || ''; n.style.removeProperty('transition'); }); (el.matches('svg,img') ? [el] : [...el.querySelectorAll('svg,img')]).forEach((s) => { s.style.visibility = s.dataset.cvis || ''; }); }, sel);
   const { PNG } = await pngTools();
