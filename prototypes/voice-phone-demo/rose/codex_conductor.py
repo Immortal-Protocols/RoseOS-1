@@ -133,7 +133,7 @@ class CodexConductor:
         # first submit after that. No turn waits for it. Bridge call id -> (conversation, note) / reported ids:
         self._late_notes = []
         self._copy_outcomes, self._bridge_cancelled = {}, {}
-        self._identity_notes = {}  # the notes above that are a name or voice outcome -> (turn, tool)
+        self._identity_notes = {}  # the notes above that are a name or voice outcome -> 'name' or 'voice'
         self.client = client_factory(self._events.put)
         self._worker = threading.Thread(target=self._loop, name='codex-conductor', daemon=True)
 
@@ -550,22 +550,24 @@ class CodexConductor:
                     logged = ({'text_characters': len(args['text'])} if name == 'copy_to_phone_clipboard'
                               and isinstance(args, dict) and isinstance(args.get('text'), str) else args)
                     self.log(s, 'tool_call', call_id=p['callId'], name=name, arguments=logged)
-                    earlier = (self._unseen_identity(s, p['turnId'], name) if name in voice_identity.NAMES
+                    earlier = (self._unseen_identity(s, self._identity_kind(name)) if name in voice_identity.NAMES
                                and not s.task else None)
                     if earlier:
-                        # A retry after a timeout: the earlier call already finished, so its outcome answers this one
-                        # and nothing is applied on top of it.
+                        # An earlier call of this kind was answered as cancelled (a timeout or a barge-in) but went
+                        # through, and the model has not seen it: a retry, in this turn or the next, would apply on
+                        # top of it. Show it that outcome first; the next call applies normally.
                         result = {'ok': False, 'reason': 'earlier_call_finished', 'changed': False,
-                                  'message': 'An earlier call that was answered as cancelled had already finished, so '
-                                             'nothing more was applied. ' + ' '.join(earlier) + ' Tell the owner what '
-                                             'that changed, and ask before changing anything more.'}
+                                  'message': 'An earlier call that was answered as cancelled had already finished; '
+                                             'nothing was applied for this call. ' + ' '.join(earlier) + ' Tell the '
+                                             'owner what that changed. If they asked for more than that, call the '
+                                             'tool again.'}
                     else:
                         result, image = (self._app_tool(s, name, args) if s.task
                                          else self._conversation_tool(name, args))
                     if name == 'copy_to_phone_clipboard' and not s.task:
                         self._copy_finished(s, str(e['callId']), result)
                     elif name in voice_identity.NAMES and not s.task:
-                        self._identity_finished(s, str(e['callId']), name, result, p['turnId'])
+                        self._identity_finished(s, str(e['callId']), name, result)
         except PhoneTaskError as exc:
             result = {'ok': False, 'reason': exc.code, 'message': str(exc)}
         except Exception:
@@ -601,7 +603,7 @@ class CodexConductor:
             else:
                 self._keep(self._copy_outcomes, call_id, note)
 
-    def _identity_finished(self, s, call_id, name, result, turn=None):
+    def _identity_finished(self, s, call_id, name, result):
         """A name or voice tool returned. Like a copy, its outcome becomes a note only if the bridge answered this
         call as cancelled (a barge-in or timeout during a slow voice load), so a saved change is never reported as
         undone and never applied twice."""
@@ -616,18 +618,22 @@ class CodexConductor:
         note = (s.conversation, f'[Before this message, your {name} call that was answered as cancelled finished: '
                 f'{outcome}.{follow}]')
         with self._lock:
-            self._identity_notes[note] = (turn, name)
+            self._identity_notes[note] = self._identity_kind(name)
             if self._bridge_cancelled.pop(call_id, None):
                 self._late_note(note)
             else:
                 self._keep(self._copy_outcomes, call_id, note)
 
-    def _unseen_identity(self, s, turn, name):
-        """Take the unseen outcomes (queued as late notes) of earlier calls of this tool in this same turn: a retry
-        after the bridge timed one out. A new owner turn, or another tool, is never answered this way."""
+    @staticmethod
+    def _identity_kind(name):
+        return 'name' if name == 'rename_assistant' else 'voice'  # change_voice and revert_voice act on one voice
+
+    def _unseen_identity(self, s, kind):
+        """Take this conversation's name or voice outcomes of this kind that the model has not seen yet (queued as
+        late notes): a call answered as cancelled that still went through. A rename and a voice change never answer
+        each other."""
         with self._lock:
-            taken = [n for n in self._late_notes if n[0] == s.conversation
-                     and self._identity_notes.get(n) == (turn, name)]
+            taken = [n for n in self._late_notes if n[0] == s.conversation and self._identity_notes.get(n) == kind]
             self._late_notes = [n for n in self._late_notes if n not in taken]
             for n in taken:
                 self._identity_notes.pop(n, None)

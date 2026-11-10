@@ -790,7 +790,7 @@ class Conversation(unittest.TestCase):
         r = self.tool('change_voice', pace='slower')  # once seen, a new request applies again
         self.assertNotEqual(r.get('reason'), 'earlier_call_finished')
 
-    def test_the_retry_guard_never_blocks_another_tool_or_a_new_turn(self):
+    def test_the_retry_guard_spares_a_rename_and_answers_once_across_turns(self):
         s = self.engine.sessions['conversation']
         self.engine._event({'event': 'tool_cancelled', 'callId': 'ipc-change_voice'})
         first = self.tool('change_voice', pace='slower')
@@ -798,9 +798,14 @@ class Conversation(unittest.TestCase):
         self.assertTrue(r['ok'])
         notes = [n for c, n in self.engine._late_notes if c == s.conversation]
         self.assertEqual(len(notes), 1)  # the voice outcome is still owed to the model
-        s.turn = 'a-later-turn'  # the owner spoke again before the slow call's note was queued
-        r = self.tool('change_voice', pace='slower')
-        self.assertNotEqual(r.get('reason'), 'earlier_call_finished')
+        s.turn = 'a-later-turn'  # a barge-in: the owner spoke again before the slow call's note was queued
+        r = self.tool('revert_voice')  # either voice tool is first shown the unseen change, never stacked on it
+        self.assertEqual(r['reason'], 'earlier_call_finished')
+        self.assertIn('call the tool again', r['message'])
+        self.assertEqual(self.speaker.voice, first['voice'])
+        self.assertEqual([n for c, n in self.engine._late_notes if c == s.conversation], [])
+        r = self.tool('change_voice', pace='slower')  # now seen: a further change applies
+        self.assertTrue(r['ok'])
         self.assertNotEqual(self.speaker.voice, first['voice'])
 
     def test_a_cancelled_change_note_keeps_limits_and_the_offered_alternative(self):
