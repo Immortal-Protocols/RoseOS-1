@@ -37,7 +37,7 @@ WORKFLOW = (ROOT/'.github/workflows/os-release.yml').read_text()
 # the publisher takes that identity, re-derives the allocation and promotes only latest-beta or an explicit --promote.
 # + RELEASE020 M2/M2c: opt-in packaging and the default-off dedicated-signer route (publisher also needs signed-builder)
 # + latest-draft: same allocator/signing jobs, allocation-bound unpublished draft; behavioral tests in test_release_allocate.
-OS_JOBS_AT_BASE = {'builder': '990899e120abc4d6fa3e3477cb878b0843f0de78755a8ae34ba5f8ec823d0136',
+OS_JOBS_AT_BASE = {'builder': 'a92e57e12cf9908f7f79383755e4826a48c75eb20a25211fa82748bdec3f4030',
     'publisher': 'f2c53fc786f3e51c0b4c5f81491b25d2a2992409b06730ddf7482aa6dd9985ca'}
 
 def script(path, body):
@@ -445,6 +445,7 @@ class WorkflowAppOnlyTest(unittest.TestCase):
             'python3 scripts/builder-reclaim.py apply --current-run "$GITHUB_RUN_ID" --label "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-app-builder"',
             'python3 scripts/host-app-release.py --check',
             '|', 'python3 scripts/release-allocate.py app --out "$ROSE_BASE/app-allocation.json"',
+            'python3 scripts/app-ledger.py wait --allocation "$ROSE_BASE/app-allocation.json" --timeout 900',  # D2
             'python3 scripts/actions-gcp-login.py login "$GCP_SIGNER_SERVICE_ACCOUNT"',
             'ROSE_CANDIDATE_SHA="$CANDIDATE_SHA" ROSE_RELEASE_DIR="$ROSE_BASE/work" python3 scripts/host-app-release.py --artifact-dir "$ROSE_BASE/artifact"',
             'python3 scripts/actions-gcp-login.py logout', 'test -z "${ROSE_BASE:-}" || rm -rf "$ROSE_BASE"'])

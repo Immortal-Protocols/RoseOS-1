@@ -20,6 +20,10 @@ spec = importlib.util.spec_from_file_location('release_allocate', SCRIPTS/'relea
 ra = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(ra)
 CONFIG = json.loads((ROOT/ra.ALLOCATION_CONFIG).read_text())
+# D2: the builder reads the shared version ledger its source binds. These synthetic histories bind none, so every test
+# reads an empty ledger unless it passes its own (class SharedLedger).
+EMPTY_LEDGER = {'reservations': {}, 'floors': []}
+ra.shared_ledger = lambda repo, source, reader=None: EMPTY_LEDGER
 
 
 def epoch(text):

@@ -276,8 +276,7 @@ def observation(alloc, source, releases, ledger, repo=ROOT):
             'appReservations': {'complete': True, 'items': [
                 {'packageName': r['packageName'], 'versionCode': v, 'sourceSha': r['sourceSha']}
                 for v, r in sorted(ledger['reservations'].items())]},
-            'ledger': {'complete': True, 'reservations': sorted(ledger['reservations']),
-                       'floor': max(f['consumedThrough'] for f in ledger['floors'])}}
+            'ledger': alloc.ledger_part(ledger)}
 
 
 def reserve(out, env, cfg, ledger, releases_fetch, clock=time.time, repo=ROOT):
