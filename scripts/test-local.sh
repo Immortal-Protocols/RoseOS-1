@@ -420,6 +420,16 @@ java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-option
  workspace/rose-agent/app/src/dev/pixel/voice/RoseFonts.java workspace/rose-agent/app/src/dev/pixel/voice/RoseTheme.java workspace/rose-agent/app/src/dev/pixel/voice/CustomizationConfig.java workspace/rose-agent/app/src/dev/pixel/voice/GlassesWearHook.java \
  workspace/rose-agent/app/tests/GlassesWearHookTest.java
 java -cp "$JAVA_TESTS/GlassesWearHook" dev.pixel.voice.GlassesWearHookTest
+# Bluetooth audio adapter: real signal/decision code with synthetic Android callbacks, no phone or launch.
+java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/BluetoothAudioWear" -sourcepath workspace/rose-agent/app/src \
+ workspace/rose-agent/app/src/dev/pixel/voice/MiniJson.java workspace/rose-agent/app/src/dev/pixel/voice/HomeAppLayout.java workspace/rose-agent/app/src/dev/pixel/voice/OxbloodVariants.java \
+ workspace/rose-agent/app/src/dev/pixel/voice/RoseFonts.java workspace/rose-agent/app/src/dev/pixel/voice/CustomizationConfig.java workspace/rose-agent/app/src/dev/pixel/voice/GlassesWearHook.java \
+ workspace/rose-agent/app/src/dev/pixel/voice/BluetoothAudioWear.java workspace/rose-agent/app/tests/BluetoothAudioWearHostTest.java \
+ workspace/rose-agent/app/tests/bluetooth-audio-wear/stubs/android/content/*.java \
+ workspace/rose-agent/app/tests/bluetooth-audio-wear/stubs/android/media/*.java \
+ workspace/rose-agent/app/tests/bluetooth-audio-wear/stubs/android/os/*.java \
+ workspace/rose-agent/app/tests/bluetooth-audio-wear/stubs/dev/pixel/voice/*.java
+java -cp "$JAVA_TESTS/BluetoothAudioWear" dev.pixel.voice.BluetoothAudioWearHostTest
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/CustomizationOutcome" \
  workspace/rose-agent/app/src/dev/pixel/voice/MiniJson.java workspace/rose-agent/app/src/dev/pixel/voice/HomeAppLayout.java workspace/rose-agent/app/src/dev/pixel/voice/OxbloodVariants.java \
  workspace/rose-agent/app/src/dev/pixel/voice/RoseFonts.java workspace/rose-agent/app/src/dev/pixel/voice/RoseTheme.java workspace/rose-agent/app/src/dev/pixel/voice/CustomizationConfig.java workspace/rose-agent/app/src/dev/pixel/voice/CustomizationOutcome.java \
