@@ -512,10 +512,10 @@ index 0000000..08838b1
 +}
 diff --git a/libs/WindowManager/Shell/src/com/android/wm/shell/roseedge/RoseEdgeController.java b/libs/WindowManager/Shell/src/com/android/wm/shell/roseedge/RoseEdgeController.java
 new file mode 100644
-index 0000000..6d064bb
+index 0000000..e44a987
 --- /dev/null
 +++ b/libs/WindowManager/Shell/src/com/android/wm/shell/roseedge/RoseEdgeController.java
-@@ -0,0 +1,520 @@
+@@ -0,0 +1,734 @@
 +/*
 + * Copyright 2026
 + * SPDX-License-Identifier: Apache-2.0
@@ -529,16 +529,27 @@ index 0000000..6d064bb
 +import static android.app.WindowConfiguration.WINDOWING_MODE_FULLSCREEN;
 +import static android.app.WindowConfiguration.WINDOWING_MODE_UNDEFINED;
 +import static android.view.WindowManager.TRANSIT_CHANGE;
++import static android.view.WindowManager.TRANSIT_CLOSE;
++import static android.view.WindowManager.TRANSIT_OPEN;
++import static android.view.WindowManager.TRANSIT_TO_BACK;
++import static android.view.WindowManager.TRANSIT_TO_FRONT;
 +
++import android.animation.Animator;
++import android.animation.AnimatorListenerAdapter;
++import android.animation.ValueAnimator;
 +import android.annotation.NonNull;
 +import android.annotation.Nullable;
++import android.app.ActivityManager;
 +import android.app.ActivityManager.RunningTaskInfo;
 +import android.app.KeyguardManager;
 +import android.content.BroadcastReceiver;
 +import android.content.Intent;
 +import android.content.IntentFilter;
++import android.content.ComponentName;
 +import android.content.Context;
++import android.content.pm.PackageManager;
 +import android.content.res.Configuration;
++import android.graphics.Point;
 +import android.graphics.Rect;
 +import android.os.IBinder;
 +import android.os.RemoteException;
@@ -547,11 +558,13 @@ index 0000000..6d064bb
 +import android.util.Slog;
 +import android.view.Display;
 +import android.view.SurfaceControl;
++import android.view.animation.PathInterpolator;
 +import android.window.DisplayAreaInfo;
 +import android.window.TransitionInfo;
 +import android.window.TransitionRequestInfo;
 +import android.window.WindowContainerTransaction;
 +
++import com.android.wm.shell.AgentTrayLink;
 +import com.android.wm.shell.RootTaskDisplayAreaOrganizer;
 +import com.android.wm.shell.RoseEdgeMicSlot;
 +import com.android.wm.shell.ShellTaskOrganizer;
@@ -567,6 +580,8 @@ index 0000000..6d064bb
 +import com.android.wm.shell.sysui.UserChangeListener;
 +import com.android.wm.shell.transition.Transitions;
 +
++import java.security.SecureRandom;
++
 +/**
 + * RoseOS (#410): the shell side of the Rose raised edge (resize on release).
 + *
@@ -581,6 +596,14 @@ index 0000000..6d064bb
 + * or caller trust is added. The edge is owned by the listener that raised it and comes down on its own when that task
 + * leaves the front, Home or recents opens, the keyguard shows, the display changes, the IME shows, the user switches or
 + * the owner dies.
++ *
++ * <p>1C (agreed with App Core and Home/App): the exact-task return. From its own focus changes the shell records the
++ * app the owner left when Rose came forward ({@link RoseEdgePolicy.Return}) and publishes it, as an opaque token, to
++ * Rose Agent over the status-bar tray's existing authenticated link ({@link AgentTrayLink.Return}). A return quoting
++ * the current token reorders exactly that live task to the front, in this controller's own TRANSIT_TO_FRONT
++ * transition, and answers RETURNED only once focus is on it. Nothing is started or launched, and Rose's task stays
++ * alive behind it. No permission, interface or caller trust is added: the task organizer and transitions are the
++ * shell's own.
 + */
 +public class RoseEdgeController implements RemoteCallable<RoseEdgeController>, Transitions.TransitionHandler,
 +        ShellTaskOrganizer.FocusListener, ShellTaskOrganizer.TaskInfoChangedListener,
@@ -609,6 +632,31 @@ index 0000000..6d064bb
 +    @Nullable private RoseEdgeMicSlot mMicSlot;
 +    private boolean mKeyguardVisible;
 +    private boolean mImeVisible;
++
++    // 1C: the exact-task return.
++    /** The longest a return may take to answer, and the grace for focus once its transition finished. */
++    static final long RETURN_DEADLINE_MS = 1500, RETURN_SETTLE_MS = 300;
++    /** V3's departure (Home/App): Rose fades and drops 8dp over 200 ms; the source app stays still. */
++    static final long DEPART_MS = 200;
++    static final float DEPART_DP = 8;
++    private final RoseEdgePolicy.Return mReturn = new RoseEdgePolicy.Return(new SecureRandom()::nextLong);
++    /** The one return in flight: answered exactly once (RETURNED, or REFUSED at its deadline). */
++    @Nullable private PendingReturn mPendingReturn;
++
++    /** One return: the attempt Rose Agent numbered, the exact task it brings back and where its answer goes. */
++    private static final class PendingReturn {
++        final int mAttempt;
++        @NonNull final RoseEdgePolicy.Return.Task mTask;
++        @NonNull final AgentTrayLink.Return.Answer mAnswer;
++        @Nullable IBinder mTransition;
++
++        PendingReturn(int attempt, @NonNull RoseEdgePolicy.Return.Task task,
++                @NonNull AgentTrayLink.Return.Answer answer) {
++            mAttempt = attempt;
++            mTask = task;
++            mAnswer = answer;
++        }
++    }
 +
 +    /** What one of this controller's transitions does. */
 +    private static final class Applied {
@@ -659,6 +707,10 @@ index 0000000..6d064bb
 +        mImeController.addPositionProcessor(this);
 +        mTransitions.addHandler(this);
 +        mRootTdaOrganizer.registerListener(Display.DEFAULT_DISPLAY, this);
++        // 1C: the tray carries returns to this controller's main thread; it publishes nothing until Rose comes forward.
++        AgentTrayLink.Return.install((token, attempt, answer) ->
++                mMainExecutor.execute(() -> startReturn(token, attempt, answer)));
++        AgentTrayLink.Return.publish(AgentTrayLink.Return.Target.NONE);
 +        // Lowered reason 3 is "keyguard or screen off": without a secure lock the keyguard may never show.
 +        mContext.registerReceiver(new BroadcastReceiver() {
 +            @Override
@@ -796,13 +848,19 @@ index 0000000..6d064bb
 +        lowered(applied.mListener, applied.mDisplayId, applied.mReason);
 +    }
 +
-+    // Transitions.TransitionHandler: only this controller's own transitions, played without animation.
++    // Transitions.TransitionHandler: only this controller's own transitions. A raise or lower plays without animation;
++    // a return plays V3's departure.
 +
 +    @Override
 +    public boolean startAnimation(@NonNull IBinder transition, @NonNull TransitionInfo info,
 +            @NonNull SurfaceControl.Transaction startTransaction,
 +            @NonNull SurfaceControl.Transaction finishTransaction,
 +            @NonNull Transitions.TransitionFinishCallback finishCallback) {
++        final PendingReturn pending = mPendingReturn;
++        if (pending != null && transition == pending.mTransition) {
++            depart(pending, info, startTransaction, finishTransaction, finishCallback);
++            return true;
++        }
 +        final Applied applied = mOwnTransitions.remove(transition);
 +        if (applied == null) return false;
 +        // No scale and no screenshot: the app appears at its new size once it has drawn at that size.
@@ -822,6 +880,16 @@ index 0000000..6d064bb
 +    @Override
 +    public void onTransitionConsumed(@NonNull IBinder transition, boolean aborted,
 +            @Nullable SurfaceControl.Transaction finishTransaction) {
++        final PendingReturn pending = mPendingReturn;
++        if (pending != null && transition == pending.mTransition) {
++            // Aborted: nothing moved. Merged into another transition: the reorder was applied, so focus decides.
++            if (aborted) {
++                answerReturn(pending, RoseEdgePolicy.Return.REFUSED);
++            } else {
++                settleReturn(pending);
++            }
++            return;
++        }
 +        final Applied applied = mOwnTransitions.remove(transition);
 +        if (applied == null) return;
 +        if (aborted) {
@@ -841,6 +909,13 @@ index 0000000..6d064bb
 +            final int type = taskInfo == null ? -1 : taskInfo.getActivityType();
 +            lowerIfNeeded(mState.onFocusChanged(taskState(taskInfo),
 +                    type == ACTIVITY_TYPE_HOME || type == ACTIVITY_TYPE_RECENTS));
++            // 1C: a return is answered only when focus has reached its exact task.
++            final RoseEdgePolicy.Return.Task focused = returnTask(taskInfo);
++            final PendingReturn pending = mPendingReturn;
++            if (pending != null && RoseEdgePolicy.Return.same(pending.mTask, focused)) {
++                answerReturn(pending, RoseEdgePolicy.Return.RETURNED);
++            }
++            if (mReturn.onFocusChanged(focused, ActivityManager.getCurrentUser())) publishReturnTarget();
 +        });
 +    }
 +
@@ -849,6 +924,7 @@ index 0000000..6d064bb
 +        mMainExecutor.execute(() -> {
 +            if (mFocused != null && taskInfo.taskId == mFocused.taskId) mFocused = taskInfo;
 +            lowerIfNeeded(mState.onTaskInfoChanged(taskState(taskInfo)));
++            if (mReturn.onTaskInfoChanged(returnTask(taskInfo))) publishReturnTarget();
 +        });
 +    }
 +
@@ -857,6 +933,7 @@ index 0000000..6d064bb
 +        mMainExecutor.execute(() -> {
 +            if (mFocused != null && taskInfo.taskId == mFocused.taskId) mFocused = null;
 +            lowerIfNeeded(mState.onTaskVanished(taskInfo.taskId));
++            if (mReturn.onTaskVanished(taskInfo.taskId)) publishReturnTarget();
 +        });
 +    }
 +
@@ -869,6 +946,7 @@ index 0000000..6d064bb
 +    @Override
 +    public void onUserChanged(int newUserId, @NonNull Context userContext) {
 +        lowerIfNeeded(mState.onUserChanged());
++        if (mReturn.onUserChanged()) publishReturnTarget();
 +    }
 +
 +    @Override
@@ -903,6 +981,142 @@ index 0000000..6d064bb
 +        final WindowContainerTransaction wct = new WindowContainerTransaction();
 +        wct.setBounds(displayAreaInfo.token, new Rect());
 +        mRootTdaOrganizer.applyTransaction(wct);
++    }
++
++    // 1C: the exact-task return, on the main executor.
++
++    /** A RETURN_TO from Rose Agent, through the tray's trusted link. Exactly one answer, at once or when it lands. */
++    private void startReturn(long token, int attempt, @NonNull AgentTrayLink.Return.Answer answer) {
++        final RoseEdgePolicy.Return.Task target = mReturn.target();
++        final RunningTaskInfo running = target == null ? null : mTaskOrganizer.getRunningTaskInfo(target.taskId);
++        int check = mReturn.check(token, mKeyguardVisible || keyguardLocked(), returnTask(mFocused),
++                returnTask(running), ActivityManager.getCurrentUser());
++        // One return at a time: Rose numbers its attempts and the control allows one.
++        if (check == RoseEdgePolicy.Return.GO && mPendingReturn != null) check = RoseEdgePolicy.Return.REFUSED;
++        if (check != RoseEdgePolicy.Return.GO) {
++            answer.answer(attempt, check);
++            return;
++        }
++        final PendingReturn pending = new PendingReturn(attempt, returnTask(running), answer);
++        mPendingReturn = pending;
++        // Exactly that task, in front; never a start, launch intent, NEW_TASK or moveTaskToFront.
++        final WindowContainerTransaction wct = new WindowContainerTransaction();
++        wct.reorder(running.token, true /* onTop */);
++        pending.mTransition = mTransitions.startTransition(TRANSIT_TO_FRONT, wct, this);
++        mMainExecutor.executeDelayed(() -> answerReturn(pending, RoseEdgePolicy.Return.REFUSED),
++                RETURN_DEADLINE_MS);
++    }
++
++    /** Answers pending once; any later answer for it (focus, its deadline) is ignored. */
++    private void answerReturn(@NonNull PendingReturn pending, int result) {
++        if (mPendingReturn != pending) return;
++        mPendingReturn = null;
++        pending.mAnswer.answer(pending.mAttempt, result);
++    }
++
++    /** The reorder was applied: RETURNED when focus arrives, otherwise REFUSED after a short grace. */
++    private void settleReturn(@NonNull PendingReturn pending) {
++        if (mPendingReturn != pending) return;
++        if (RoseEdgePolicy.Return.same(pending.mTask, returnTask(mFocused))) {
++            answerReturn(pending, RoseEdgePolicy.Return.RETURNED);
++            return;
++        }
++        mMainExecutor.executeDelayed(() -> answerReturn(pending, RoseEdgePolicy.Return.REFUSED), RETURN_SETTLE_MS);
++    }
++
++    /**
++     * V3's departure: only Rose's leaving task moves, fading and dropping 8dp over 200 ms; the source app is shown in
++     * place at full opacity, unanimated. With animations off (reduced motion) the switch is immediate.
++     */
++    private void depart(@NonNull PendingReturn pending, @NonNull TransitionInfo info,
++            @NonNull SurfaceControl.Transaction startTransaction,
++            @NonNull SurfaceControl.Transaction finishTransaction,
++            @NonNull Transitions.TransitionFinishCallback finishCallback) {
++        SurfaceControl rose = null;
++        Point at = null;
++        for (TransitionInfo.Change change : info.getChanges()) {
++            final int mode = change.getMode();
++            final RoseEdgePolicy.Return.Task task = returnTask(change.getTaskInfo());
++            if ((mode == TRANSIT_TO_BACK || mode == TRANSIT_CLOSE) && task != null
++                    && RoseEdgePolicy.Return.ROSE_PACKAGE.equals(task.packageName)) {
++                rose = change.getLeash();
++                at = change.getEndRelOffset();
++            } else if (mode == TRANSIT_TO_FRONT || mode == TRANSIT_OPEN) {
++                // Transitions.setupStartState leaves an opening leash transparent for its handler to fade in: the
++                // source app is instead shown as it is.
++                startTransaction.setAlpha(change.getLeash(), 1f);
++            }
++        }
++        final boolean animate = rose != null && at != null && ValueAnimator.areAnimatorsEnabled();
++        if (animate) {
++            // Above the source for its 200 ms (setupAnimHierarchy puts the opening app on top); hidden at the end by
++            // setupStartState's finish transaction, and put back as it was for the next time Rose shows.
++            startTransaction.setLayer(rose, Integer.MAX_VALUE);
++            finishTransaction.setAlpha(rose, 1f);
++            finishTransaction.setPosition(rose, at.x, at.y);
++        }
++        startTransaction.apply();
++        final Runnable done = () -> {
++            finishCallback.onTransitionFinished(null);
++            settleReturn(pending);
++        };
++        if (!animate) {
++            done.run();
++            return;
++        }
++        final SurfaceControl leash = rose;
++        final float x = at.x, y = at.y;
++        final float drop = DEPART_DP * mContext.getResources().getDisplayMetrics().density;
++        final ValueAnimator departure = ValueAnimator.ofFloat(0f, 1f);
++        departure.setDuration(DEPART_MS);
++        departure.setInterpolator(new PathInterpolator(.2f, .7f, .3f, 1f));
++        departure.addUpdateListener(animation -> {
++            final float f = (float) animation.getAnimatedValue();
++            final SurfaceControl.Transaction t = new SurfaceControl.Transaction();
++            t.setAlpha(leash, 1f - f);
++            t.setPosition(leash, x, y + drop * f);
++            t.apply();
++        });
++        departure.addListener(new AnimatorListenerAdapter() {
++            @Override
++            public void onAnimationEnd(Animator animation) {
++                done.run();
++            }
++        });
++        departure.start();
++    }
++
++    /** Publishes the current target (or none) to the tray, which sends it to Rose Agent as RETURN_TARGET. */
++    private void publishReturnTarget() {
++        final RoseEdgePolicy.Return.Task target = mReturn.target();
++        if (target == null) {
++            AgentTrayLink.Return.publish(AgentTrayLink.Return.Target.NONE);
++            return;
++        }
++        AgentTrayLink.Return.publish(new AgentTrayLink.Return.Target(mReturn.token(), target.packageName,
++                target.userId, label(target.packageName, target.userId)));
++    }
++
++    /** The app's own label for its user, or its package name when it has none. */
++    @NonNull
++    private String label(@NonNull String packageName, int userId) {
++        try {
++            final PackageManager pm = mContext.getPackageManager();
++            final CharSequence label = pm.getApplicationLabel(pm.getApplicationInfoAsUser(packageName, 0, userId));
++            return label == null ? packageName : label.toString();
++        } catch (PackageManager.NameNotFoundException | RuntimeException e) {
++            return packageName;
++        }
++    }
++
++    @Nullable
++    private static RoseEdgePolicy.Return.Task returnTask(@Nullable RunningTaskInfo task) {
++        if (task == null) return null;
++        final ComponentName root = task.baseActivity != null ? task.baseActivity
++                : task.baseIntent != null ? task.baseIntent.getComponent() : null;
++        return new RoseEdgePolicy.Return.Task(task.taskId, task.userId, task.displayId,
++                root == null ? null : root.getPackageName(), task.getActivityType() == ACTIVITY_TYPE_STANDARD,
++                task.getWindowingMode() == WINDOWING_MODE_FULLSCREEN, task.token);
 +    }
 +
 +    // Helpers.
@@ -1038,10 +1252,10 @@ index 0000000..6d064bb
 +}
 diff --git a/libs/WindowManager/Shell/src/com/android/wm/shell/roseedge/RoseEdgePolicy.java b/libs/WindowManager/Shell/src/com/android/wm/shell/roseedge/RoseEdgePolicy.java
 new file mode 100644
-index 0000000..6d9df5f
+index 0000000..0aefd33
 --- /dev/null
 +++ b/libs/WindowManager/Shell/src/com/android/wm/shell/roseedge/RoseEdgePolicy.java
-@@ -0,0 +1,319 @@
+@@ -0,0 +1,485 @@
 +/*
 + * Copyright 2026
 + * SPDX-License-Identifier: Apache-2.0
@@ -1358,6 +1572,172 @@ index 0000000..6d9df5f
 +        /** An explicit lower; lowering is always safe, so any permitted caller may ask. */
 +        public int onLowerRequested(int displayId) {
 +            return raised() && displayId == mDisplayId ? LOWERED_REQUESTED : KEEP;
++        }
++    }
++
++    /**
++     * 1C (agreed with App Core and Home/App): the app the owner left when Rose came forward, and whether a return to
++     * that exact live task may run. The shell records it from its own focus changes; Rose Agent only ever quotes the
++     * token of the current record, so it can never name a task. Anything ambiguous fails closed, and nothing here
++     * starts or launches anything: the controller only reorders the recorded task.
++     */
++    public static final class Return {
++        // RETURN_RESULT answers (the tray's arg2).
++        public static final int RETURNED = 0;
++        public static final int UNAVAILABLE = 1;
++        public static final int REFUSED = 2;
++        /** Not an answer: the return may run. */
++        public static final int GO = -1;
++        public static final String ROSE_PACKAGE = "dev.pixel.voice";
++
++        /** What the shell knows about one task. container is that task's own window container, never reused. */
++        public static final class Task {
++            public final int taskId;
++            public final int userId;
++            public final int displayId;
++            /** The package of the task's root activity, or null when unknown. */
++            public final String packageName;
++            /** An ordinary app task: not Home, recents, an assistant or a dream. */
++            public final boolean standard;
++            public final boolean fullscreen;
++            public final Object container;
++
++            public Task(int taskId, int userId, int displayId, String packageName, boolean standard,
++                    boolean fullscreen, Object container) {
++                this.taskId = taskId;
++                this.userId = userId;
++                this.displayId = displayId;
++                this.packageName = packageName;
++                this.standard = standard;
++                this.fullscreen = fullscreen;
++                this.container = container;
++            }
++        }
++
++        private final java.util.function.LongSupplier mTokens;
++        private Task mLast;
++        private Task mTarget;
++        private long mToken;
++        // The last task ever recorded and its token, so recording the same live task again keeps its token.
++        private Task mRecorded;
++        private long mRecordedToken;
++
++        /** tokens supplies fresh random values; 0 is never used as a token. */
++        public Return(java.util.function.LongSupplier tokens) {
++            mTokens = tokens;
++        }
++
++        /** The same live task: same id, user, display, root package and window container. */
++        public static boolean same(Task a, Task b) {
++            return a != null && b != null && a.taskId == b.taskId && a.userId == b.userId
++                    && a.displayId == b.displayId && java.util.Objects.equals(a.packageName, b.packageName)
++                    && a.container != null && a.container.equals(b.container);
++        }
++
++        static boolean rose(Task t, int user) {
++            return t != null && ROSE_PACKAGE.equals(t.packageName) && t.userId == user
++                    && t.displayId == DEFAULT_DISPLAY;
++        }
++
++        /** An app a return may bring back: ordinary, fullscreen, not Rose, the owner's, on the default display. */
++        static boolean app(Task t, int user) {
++            return t != null && t.standard && t.fullscreen && t.packageName != null
++                    && !ROSE_PACKAGE.equals(t.packageName) && t.userId == user && t.displayId == DEFAULT_DISPLAY
++                    && t.container != null;
++        }
++
++        /** The recorded task, or null. */
++        public Task target() {
++            return mTarget;
++        }
++
++        /** The current record's token; 0 when there is none. */
++        public long token() {
++            return mToken;
++        }
++
++        /**
++         * Focus moved to focused on behalf of currentUser. When it moves to Rose from something else, the task focused
++         * just before becomes the target if it is an app; Home, recents, an assistant, a dream or nothing gives none,
++         * never an older app. Focus anywhere else clears it. Other displays (Rose's background workspace) and unknown
++         * focus change nothing. True when the target (its token) changed.
++         */
++        public boolean onFocusChanged(Task focused, int currentUser) {
++            if (focused == null || focused.displayId != DEFAULT_DISPLAY) return false;
++            final long before = mToken;
++            if (rose(focused, currentUser)) {
++                if (!rose(mLast, currentUser)) {
++                    if (app(mLast, currentUser)) {
++                        record(mLast);
++                    } else {
++                        clear();
++                    }
++                }
++            } else {
++                clear();
++            }
++            mLast = focused;
++            return mToken != before;
++        }
++
++        /** A task's info changed: the target is dropped if it is no longer the same live task. */
++        public boolean onTaskInfoChanged(Task task) {
++            if (task == null) return false;
++            if (mLast != null && mLast.taskId == task.taskId) mLast = task;
++            if (mTarget == null || mTarget.taskId != task.taskId || same(mTarget, task)) return false;
++            clear();
++            return true;
++        }
++
++        public boolean onTaskVanished(int taskId) {
++            if (mLast != null && mLast.taskId == taskId) mLast = null;
++            if (mRecorded != null && mRecorded.taskId == taskId) mRecorded = null;
++            if (mTarget == null || mTarget.taskId != taskId) return false;
++            clear();
++            return true;
++        }
++
++        public boolean onUserChanged() {
++            mLast = null;
++            mRecorded = null;
++            final boolean had = mTarget != null;
++            clear();
++            return had;
++        }
++
++        /**
++         * Whether a RETURN_TO quoting token may run now (GO), or the answer to give at once. focused is the task in
++         * front; running is the recorded task as the shell sees it now, or null when it is not running.
++         */
++        public int check(long token, boolean keyguardLocked, Task focused, Task running, int currentUser) {
++            if (mTarget == null) return UNAVAILABLE;
++            if (token == 0 || token != mToken) return REFUSED;
++            if (keyguardLocked || !rose(focused, currentUser)) return REFUSED;
++            if (!same(mTarget, running)) return UNAVAILABLE;
++            if (!app(running, currentUser)) return REFUSED;
++            return GO;
++        }
++
++        /**
++         * The same live task keeps its token (a return quoting it stays valid, and the control does not reset);
++         * any other task gets a fresh one.
++         */
++        private void record(Task task) {
++            if (!same(mRecorded, task)) {
++                long token;
++                do {
++                    token = mTokens.getAsLong();
++                } while (token == 0 || token == mRecordedToken);
++                mRecordedToken = token;
++            }
++            mRecorded = task;
++            mTarget = task;
++            mToken = mRecordedToken;
++        }
++
++        private void clear() {
++            mTarget = null;
++            mToken = 0;
 +        }
 +    }
 +}

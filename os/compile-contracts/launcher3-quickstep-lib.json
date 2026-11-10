@@ -103,7 +103,7 @@
     },
     {
      "name": "rose-edge-wmshell.patch",
-     "sha256": "03f7537f388369bc785432cd67125d55011113376374dd6576006e63a9a9be6b"
+     "sha256": "0c62fdeea2b06867c9d4587c15e74bffd533c03bddf1a5e708bb18573188b7f7"
     },
     {
      "name": "rose-shade-systemui.patch",
@@ -907,17 +907,17 @@
      "path": "libs/WindowManager/Shell/src/com/android/wm/shell/roseedge/RoseEdgeController.java",
      "pre": null,
      "post": {
-      "sha256": "e9b3a43c9624f6d8cdb4aa27711529d6abcbfc4c99e69cda7f46b22cef881d98",
-      "gitBlob": "6d064bbf87b06bcc5052f5b68d00e506c587225f"
+      "sha256": "87a84d8514a737ef75ef59df47728618399c16025be67225614c4224b9b6c67e",
+      "gitBlob": "e44a987f49b9aec79a20344d627d4fba2ab9468c"
      },
      "chain": [
       {
        "patch": "rose-edge-wmshell.patch",
        "before": null,
-       "after": "6d064bbf87b06bcc5052f5b68d00e506c587225f",
+       "after": "e44a987f49b9aec79a20344d627d4fba2ab9468c",
        "index": [
         "0000000",
-        "6d064bb"
+        "e44a987"
        ],
        "base": "exact"
       }
@@ -927,17 +927,17 @@
      "path": "libs/WindowManager/Shell/src/com/android/wm/shell/roseedge/RoseEdgePolicy.java",
      "pre": null,
      "post": {
-      "sha256": "6e5178564ce92ac3ab0ce41847365ad3020d5c7bb88a4495bc5d5b5782032bdd",
-      "gitBlob": "6d9df5fa1c265fcbf501c95b3aad3633ac4a83b0"
+      "sha256": "c7672a5b8a0637ff0853cf77113c6550ce4c2206f2259c80c0b448889bc6fe9d",
+      "gitBlob": "0aefd331dc3f08d55071e8ce046d0c1676dc8506"
      },
      "chain": [
       {
        "patch": "rose-edge-wmshell.patch",
        "before": null,
-       "after": "6d9df5fa1c265fcbf501c95b3aad3633ac4a83b0",
+       "after": "0aefd331dc3f08d55071e8ce046d0c1676dc8506",
        "index": [
         "0000000",
-        "6d9df5f"
+        "0aefd33"
        ],
        "base": "exact"
       }
@@ -1804,7 +1804,7 @@
     {
      "project": "frameworks/base",
      "name": "rose-edge-wmshell.patch",
-     "sha256": "03f7537f388369bc785432cd67125d55011113376374dd6576006e63a9a9be6b"
+     "sha256": "0c62fdeea2b06867c9d4587c15e74bffd533c03bddf1a5e708bb18573188b7f7"
     },
     {
      "project": "frameworks/base",
@@ -1946,7 +1946,7 @@
      },
      {
       "name": "rose-edge-wmshell.patch",
-      "sha256": "03f7537f388369bc785432cd67125d55011113376374dd6576006e63a9a9be6b"
+      "sha256": "0c62fdeea2b06867c9d4587c15e74bffd533c03bddf1a5e708bb18573188b7f7"
      },
      {
       "name": "rose-shade-systemui.patch",
@@ -2750,17 +2750,17 @@
       "path": "libs/WindowManager/Shell/src/com/android/wm/shell/roseedge/RoseEdgeController.java",
       "pre": null,
       "post": {
-       "sha256": "e9b3a43c9624f6d8cdb4aa27711529d6abcbfc4c99e69cda7f46b22cef881d98",
-       "gitBlob": "6d064bbf87b06bcc5052f5b68d00e506c587225f"
+       "sha256": "87a84d8514a737ef75ef59df47728618399c16025be67225614c4224b9b6c67e",
+       "gitBlob": "e44a987f49b9aec79a20344d627d4fba2ab9468c"
       },
       "chain": [
        {
         "patch": "rose-edge-wmshell.patch",
         "before": null,
-        "after": "6d064bbf87b06bcc5052f5b68d00e506c587225f",
+        "after": "e44a987f49b9aec79a20344d627d4fba2ab9468c",
         "index": [
          "0000000",
-         "6d064bb"
+         "e44a987"
         ],
         "base": "exact"
        }
@@ -2770,17 +2770,17 @@
       "path": "libs/WindowManager/Shell/src/com/android/wm/shell/roseedge/RoseEdgePolicy.java",
       "pre": null,
       "post": {
-       "sha256": "6e5178564ce92ac3ab0ce41847365ad3020d5c7bb88a4495bc5d5b5782032bdd",
-       "gitBlob": "6d9df5fa1c265fcbf501c95b3aad3633ac4a83b0"
+       "sha256": "c7672a5b8a0637ff0853cf77113c6550ce4c2206f2259c80c0b448889bc6fe9d",
+       "gitBlob": "0aefd331dc3f08d55071e8ce046d0c1676dc8506"
       },
       "chain": [
        {
         "patch": "rose-edge-wmshell.patch",
         "before": null,
-        "after": "6d9df5fa1c265fcbf501c95b3aad3633ac4a83b0",
+        "after": "0aefd331dc3f08d55071e8ce046d0c1676dc8506",
         "index": [
          "0000000",
-         "6d9df5f"
+         "0aefd33"
         ],
         "base": "exact"
        }
