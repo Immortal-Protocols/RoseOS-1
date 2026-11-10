@@ -500,11 +500,11 @@ def zip_members(path):
             if key in seen:
                 raise ValueError('duplicate zip member')
             seen.add(key)
+            if stat.S_ISLNK(info.external_attr >> 16):
+                raise ValueError('unsafe zip symlink: ' + json.dumps(info.filename[:256]))
             if name.endswith('/'):
                 rows.append((key, None, 0, True, None))
                 continue
-            if stat.S_ISLNK(info.external_attr >> 16):
-                raise ValueError('unsafe zip symlink: ' + json.dumps(info.filename[:256]))
             mode = approved_mode(info)
             total += info.file_size
             rows.append((key, mode, info.file_size, False, info))
@@ -516,6 +516,204 @@ def reject_unsafe_zip(path, max_uncompressed):
     if total > max_uncompressed:
         raise ValueError('zip expansion exceeds capacity')
     return total
+
+
+# The pinned platform_build b0f697df8cc9519408ca0a404e918cd51bde0735
+# signer WriteOutputData and common.UnzipSingleFile materialize ZIP symlinks.
+# Payload links therefore need a complete graph check, not the executable ZIP
+# extractor's blanket rejection. This validator itself never creates/follows
+# payload links. The executable/JDK extractor continues using zip_members.
+TARGET_PAYLOAD_ROOTS = frozenset(('SYSTEM', 'SYSTEM_EXT', 'SYSTEM_OTHER', 'VENDOR',
+    'PRODUCT', 'ODM', 'VENDOR_DLKM', 'ODM_DLKM', 'SYSTEM_DLKM', 'ROOT'))
+TARGET_RAMDISKS = frozenset(('BOOT', 'VENDOR_BOOT', 'INIT_BOOT', 'RECOVERY'))
+ANDROID_LINK_ROOTS = dict(system='SYSTEM', system_ext='SYSTEM_EXT', system_other='SYSTEM_OTHER',
+    vendor='VENDOR', product='PRODUCT', odm='ODM', vendor_dlkm='VENDOR_DLKM',
+    odm_dlkm='ODM_DLKM', system_dlkm='SYSTEM_DLKM', apex=None, data=None,
+    storage=None, cache=None, metadata=None, linkerconfig=None, sdcard=None)
+
+
+def _payload_location(parts, *, source=False):
+    if parts and parts[0] in TARGET_PAYLOAD_ROOTS:
+        return len(parts) >= (2 if source else 1)
+    return (len(parts) >= (3 if source else 2) and parts[0] in TARGET_RAMDISKS
+            and parts[1] == 'RAMDISK')
+
+
+def _target_link_error(name, reason, target=None):
+    detail = 'unsafe zip symlink: ' + json.dumps(name[:256])
+    if target is not None:
+        detail += ' -> ' + json.dumps(target[:256])
+    return ValueError(detail + '; ' + reason)
+
+
+def _host_root_exists(root):
+    if os.geteuid() == 0 or os.access('/', os.W_OK):
+        raise ValueError('absolute payload links require a nonroot signer with a protected host root')
+    try:
+        status = Path('/proc/self/status').read_text()
+        effective = re.search(r'^CapEff:\s*([0-9a-fA-F]+)\s*$', status, re.MULTILINE)
+        if effective is None or int(effective[1], 16) != 0:
+            raise ValueError('absolute payload links require an unprivileged signer')
+    except OSError:
+        raise ValueError('signer privilege observation unavailable') from None
+    try:
+        Path('/' + root).lstat()
+    except FileNotFoundError:
+        return False
+    except OSError:
+        raise ValueError('Android host namespace could not be checked') from None
+    return True
+
+
+def validate_target_zip(path, max_uncompressed, *, artifact=None, host_root_exists=None):
+    """Validate Android payload links without extracting the target-files ZIP.
+
+    Unlike safe_extract's executable inputs, an Android target ZIP can contain
+    OS symlinks. Member paths remain canonical; no member can have a symlink
+    parent. Relative targets resolve component by component, following links
+    before '..', and may not leave payload trees. Absolute targets must use a
+    recognized Android namespace observed absent on this signer; an existing
+    host root (including a broken symlink) is never treated as Android data.
+    The production caller supplies artifact identity only after verify_files;
+    standalone callers receive a freshly computed ZIP identity instead.
+    """
+    host_root_exists = _host_root_exists if host_root_exists is None else host_root_exists
+    entries, links, total, link_bytes = {}, {}, 0, 0
+    with zipfile.ZipFile(path) as archive:
+        rows = archive.infolist()
+        if len(rows) > 200000:
+            raise ValueError('target ZIP member count exceeds bound')
+        for info in rows:
+            raw = info.filename
+            name = raw[:-1] if raw.endswith('/') else raw
+            parts = name.split('/')
+            if (not name or raw.startswith('/') or '\\' in raw or ':' in parts[0]
+                    or '\x00' in info.orig_filename or len(raw.encode('utf-8')) > 4096
+                    or len(parts) > 128 or any(p in ('', '.', '..') for p in parts)
+                    or EXTRACT_MARKER in parts or any(ord(c) < 32 or ord(c) == 127 for c in raw)):
+                raise ValueError('unsafe zip member')
+            if name in entries:
+                raise ValueError('duplicate zip member')
+            mode = info.external_attr >> 16
+            kind = stat.S_IFMT(mode)
+            if info.flag_bits & 1 or mode & 0o7000 or kind not in (0, stat.S_IFREG, stat.S_IFDIR, stat.S_IFLNK):
+                raise ValueError('unsafe target ZIP mode or encryption')
+            if raw.endswith('/') and kind not in (0, stat.S_IFDIR):
+                raise ValueError('target ZIP directory mode differs')
+            if kind == stat.S_IFDIR and not raw.endswith('/'):
+                raise ValueError('target ZIP directory name differs')
+            entries[name] = info
+            total += info.file_size
+            if total > max_uncompressed:
+                raise ValueError('zip expansion exceeds capacity')
+            if kind == stat.S_IFLNK:
+                if not _payload_location(parts, source=True):
+                    raise _target_link_error(name, 'outside Android payload')
+                if len(links) >= 20000 or not 0 < info.file_size <= 4096 or info.compress_size > 8192:
+                    raise _target_link_error(name, 'link metadata exceeds bound')
+                link_bytes += info.file_size
+                if link_bytes > 8 << 20:
+                    raise ValueError('target ZIP link metadata exceeds bound')
+                links[name] = None
+        folded_links = {}
+        for name in links:
+            folded = name.casefold()
+            if folded in folded_links:
+                raise _target_link_error(name, 'case-ambiguous link names')
+            folded_links[folded] = name
+        # A regular parent must also be refused: the pinned writer calls mkdir
+        # on member parents, and cannot turn a file/link into a directory safely.
+        for name in entries:
+            parts = name.split('/')
+            for end in range(1, len(parts)):
+                parent = '/'.join(parts[:end])
+                if parent.casefold() in folded_links:
+                    raise _target_link_error(folded_links[parent.casefold()], 'archive member has a symlink parent')
+                row = entries.get(parent)
+                if row is not None and not row.filename.endswith('/'):
+                    raise ValueError('target ZIP member has a non-directory parent')
+        for name in links:
+            info = entries[name]
+            with archive.open(info) as source:
+                data = source.read(4097)
+            if len(data) != info.file_size:
+                raise _target_link_error(name, 'link metadata size differs')
+            try:
+                target = data.decode('utf-8')
+            except UnicodeDecodeError:
+                raise _target_link_error(name, 'link target is not UTF-8') from None
+            if (not target or '\\' in target or '\x00' in target
+                    or any(ord(c) < 32 or ord(c) == 127 for c in target)):
+                raise _target_link_error(name, 'link target contains unsafe text')
+            links[name] = target
+
+    absent_roots, steps = set(), [0]
+
+    def lookup(context, stack):
+        if context is None:
+            return '/'.join(stack)
+        partition = ANDROID_LINK_ROOTS[context]
+        return '/'.join([partition, *stack]) if partition else None
+
+    def resolve_target(context, parent, target, active, depth):
+        if depth > 64:
+            raise _target_link_error(active[-1], 'link chain exceeds bound', target)
+        if target.startswith('/'):
+            tokens = target[1:].split('/')
+            if (any(p in ('', '.', '..') for p in tokens) or tokens[0] not in ANDROID_LINK_ROOTS):
+                raise _target_link_error(active[-1], 'absolute target is not canonical Android data', target)
+            context, parent = tokens[0], []
+            if context not in absent_roots:
+                try:
+                    exists = host_root_exists(context)
+                except (OSError, ValueError):
+                    raise _target_link_error(active[-1], 'host namespace observation refused', target) from None
+                if not isinstance(exists, bool):
+                    raise _target_link_error(active[-1], 'host namespace observation unavailable', target)
+                if exists:
+                    raise _target_link_error(active[-1], 'absolute target reaches an existing host namespace', target)
+                absent_roots.add(context)
+            tokens = tokens[1:]
+        else:
+            tokens = target.split('/')
+            if any(p == '' for p in tokens) or ':' in tokens[0]:
+                raise _target_link_error(active[-1], 'relative target is not canonical', target)
+        stack = list(parent)
+        for part in tokens:
+            steps[0] += 1
+            if steps[0] > 1000000:
+                raise ValueError('target ZIP link graph exceeds work bound')
+            if part == '.':
+                continue
+            if part == '..':
+                if not stack:
+                    raise _target_link_error(active[-1], 'link escapes its archive or Android namespace', target)
+                stack.pop()
+                continue
+            candidate = lookup(context, [*stack, part])
+            if candidate is not None and candidate not in links and candidate.casefold() in folded_links:
+                raise _target_link_error(active[-1], 'case-ambiguous link component', target)
+            if candidate in links:
+                if candidate in active:
+                    raise _target_link_error(candidate, 'link cycle', links[candidate])
+                context, stack = resolve_target(context, stack, links[candidate], (*active, candidate), depth + 1)
+            else:
+                stack.append(part)
+        if context is None and not _payload_location(stack):
+            raise _target_link_error(active[-1], 'link reaches signer metadata or leaves Android payload', target)
+        return context, stack
+
+    for name, target in links.items():
+        resolve_target(None, name.split('/')[:-1], target, (name,), 0)
+    identity = ({'sha256': artifact['sha256'], 'sizeBytes': artifact['sizeBytes']} if artifact is not None
+                else {'sha256': sha256_file(path), 'sizeBytes': Path(path).stat().st_size})
+    inventory = [(name, entries[name].external_attr >> 16, target) for name, target in sorted(links.items())]
+    return {'schema': 'roseos.mustang-target-archive-validation.v1', 'artifact': identity,
+            'memberCount': len(entries), 'symlinkCount': len(links),
+            'absoluteLinkCount': sum(t.startswith('/') for t in links.values()),
+            'linkMetadataSha256': hashlib.sha256(json.dumps(inventory, separators=(',', ':')).encode()).hexdigest(),
+            'observedAbsentHostRoots': sorted(absent_roots), 'preflightFollowedPayloadLinksOnHost': False,
+            'targetFilesExtractedByPreflight': False}
 
 
 OUTPUT_BOUNDS = (
@@ -739,11 +937,15 @@ def evaluate(bundle, root, free, files=None, secret_access=None, pin=None, capac
             raise CapacityExceeded('; '.join(early)) if early[0].startswith('hosted signer capacity') else ValueError('; '.join(early))
         raise ValueError('signing bundle files are absent')
     verify_files(bundle, files)
-    for name in ('otatools', 'jdk', 'unsigned'):
+    for name in ('otatools', 'jdk'):
         try:
             reject_unsafe_zip(files[name], free)
         except ValueError as error:
             raise ValueError(f'{name} archive: {error}') from None
+    try:
+        target_validation = validate_target_zip(files['unsigned'], free, artifact=bundle['unsigned'])
+    except ValueError as error:
+        raise ValueError(f'unsigned archive: {error}') from None
     if missing_bounds:
         text = 'output bound is missing: ' + ','.join(missing_bounds)
         if config.get('admission') is not True:
@@ -776,6 +978,7 @@ def evaluate(bundle, root, free, files=None, secret_access=None, pin=None, capac
     if secret_access is not None:
         secret_access()
     return {'admit': True, 'requiredBytes': current, 'currentPeakBytes': current,
+            'targetArchiveValidation': target_validation,
             'verifiedResidentInputBytes': resident, 'additionalRequiredBytes': current - resident,
             'historicalEstimateBytes': historical, 'extracted': extracted, 'javaHome': jdk_home}
 
@@ -1108,7 +1311,7 @@ def run_host_sign(source_root, release_dir, extracted, jdk_home, bundle, env, ho
     return release_dir
 
 
-def write_hosted_receipt(release_dir, out_dir, bundle):
+def write_hosted_receipt(release_dir, out_dir, bundle, target_validation=None):
     signed = Path(release_dir) / 'signed-target_files.zip'
     public = Path(release_dir) / 'public'
     otas = [path for path in public.glob('mustang-ota_update-*.zip') if path.is_file() and not path.is_symlink()] \
@@ -1137,6 +1340,8 @@ def write_hosted_receipt(release_dir, out_dir, bundle):
     }
     if 'fullRunSource' in bundle:
         receipt['publicStage']=dict(path='staged',receiptSha256=sha256_file(out/'staged/mustang-ota-receipt.json'))
+    if target_validation is not None:
+        receipt['targetArchiveValidation'] = target_validation
     write_json(out / 'mustang-hosted-sign-receipt.json', receipt)
     return receipt
 
@@ -1165,7 +1370,7 @@ def sign(bundle_path, out_dir, root=None, env=None, capacity_config=None, host_s
         out=Path(out_dir);out.mkdir(mode=0o700,exist_ok=False)
         mustang_ota.stage_hosted(bundle,files['unsigned'],release/'signed-target_files.zip',matches[0],public,
             result['extracted'],result['javaHome'],out/'staged',root=root)
-    return write_hosted_receipt(release, out_dir, bundle)
+    return write_hosted_receipt(release, out_dir, bundle, result['targetArchiveValidation'])
 
 
 def step_output(name, value):
