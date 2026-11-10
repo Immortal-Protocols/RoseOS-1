@@ -808,6 +808,40 @@ class Conversation(unittest.TestCase):
         self.assertTrue(r['ok'])
         self.assertNotEqual(self.speaker.voice, first['voice'])
 
+    def test_a_reset_during_a_slow_voice_call_waits_for_it_and_carries_its_outcome(self):
+        gate, entered = threading.Event(), threading.Event()
+        original = self.speaker.set_voice
+
+        def slow(voice):
+            if not entered.is_set():
+                entered.set()
+                gate.wait(5)
+            original(voice)
+        self.speaker.set_voice = slow
+        s = self.engine.sessions['conversation']
+
+        def call(session, cid, tool, args):
+            self.engine._tool(session, {'callId': cid, 'params': {'tool': tool, 'arguments': args,
+                                                                   'turnId': session.turn, 'callId': 't' + cid}})
+        a = threading.Thread(target=call, args=(s, 'A', 'change_voice', {'pace': 'slower'}))
+        a.start()
+        self.assertTrue(entered.wait(5))
+        self.engine._event({'event': 'tool_cancelled', 'callId': 'A'})
+        self.engine.reset()
+        s2 = self.engine.sessions['conversation']
+        b = threading.Thread(target=call, args=(s2, 'B', 'change_voice', {'pace': 'slower'}))
+        b.start()
+        b.join(0.3)
+        self.assertTrue(b.is_alive())  # the new conversation's call waits for the slow one
+        gate.set()
+        a.join(5)
+        b.join(5)
+        results = {m['callId']: json.loads(m['result']['contentItems'][0]['text']) for m in self.engine.client.results}
+        self.assertTrue(results['A']['ok'])
+        self.assertEqual(results['B']['reason'], 'earlier_call_finished')  # told, not overwritten
+        self.assertIn('From the previous conversation', results['B']['message'])
+        self.assertEqual((self.speaker.voice, self.identity.voice), (results['A']['voice'],) * 2)
+
     def test_a_cancelled_change_note_keeps_limits_and_the_offered_alternative(self):
         s = self.engine.sessions['conversation']
         self.engine._event({'event': 'tool_cancelled', 'callId': 'ipc-change_voice'})

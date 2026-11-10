@@ -6,6 +6,7 @@ only committed ASR is sent. Barge-in interrupts speech/conversation, not app wor
 from __future__ import annotations
 
 import base64
+import contextlib
 import io
 import itertools
 import json
@@ -134,6 +135,9 @@ class CodexConductor:
         self._late_notes = []
         self._copy_outcomes, self._bridge_cancelled = {}, {}
         self._identity_notes = {}  # the notes above that are a name or voice outcome -> 'name' or 'voice'
+        # One name or voice call at a time across conversations: a reset never lets a new call run beside a slow
+        # one from the conversation it replaced.
+        self._identity_lock = threading.Lock()
         self.client = client_factory(self._events.put)
         self._worker = threading.Thread(target=self._loop, name='codex-conductor', daemon=True)
 
@@ -542,7 +546,7 @@ class CodexConductor:
         name, args = p['tool'], p['arguments']
         result, image = None, None
         try:
-            with s.lock:
+            with s.lock, (self._identity_lock if name in voice_identity.NAMES else contextlib.nullcontext()):
                 if s.cancelled.is_set() or self._stopped.is_set() or p['turnId'] in s.ignored_turns or (s.turn and p['turnId'] != s.turn):
                     result = {'ok': False, 'reason': 'Cancelled or stale turn; no action executed'}
                 else:
@@ -648,8 +652,16 @@ class CodexConductor:
                 self._keep(self._bridge_cancelled, call_id, True)
 
     def _late_note(self, note):
-        if note[0] == self.conversation:  # a reset conversation's calls never reach the new one
+        kind = self._identity_notes.pop(note, None)
+        if kind and note[0] != self.conversation:
+            note = self._carried(note)  # a saved name or voice outlives a reset
+        if kind:
+            self._identity_notes[note] = kind
+        if note[0] == self.conversation:  # a reset conversation's other calls never reach the new one
             self._late_notes.append(note)
+
+    def _carried(self, note):
+        return (self.conversation, '[From the previous conversation] ' + note[1])
 
     @staticmethod
     def _keep(table, key, value, limit=64):
@@ -869,9 +881,15 @@ class CodexConductor:
             self.client.request('close', s.name)
             self.conversation = self.store.new(self.model)
             with self._lock:
-                self._late_notes = []  # the new conversation never made those calls
-                self._copy_outcomes.clear()
-                self._identity_notes.clear()
+                # The new conversation never made those calls, but a name or voice its predecessor saved unseen is
+                # still in effect: it is told, and its next call of that kind is answered by it.
+                kept = [n for n in self._late_notes if n in self._identity_notes]
+                waiting = {c: n for c, n in self._copy_outcomes.items() if n in self._identity_notes}
+                kinds = self._identity_notes
+                self._late_notes = [self._carried(n) for n in kept]
+                self._identity_notes = {self._carried(n): kinds[n] for n in kept}
+                self._identity_notes.update({n: kinds[n] for n in waiting.values()})  # carried when reported
+                self._copy_outcomes = waiting
             self.identity.offered = None  # the new conversation was offered no voice
             s = self.sessions['conversation'] = Session('conversation', conversation=self.conversation)
             self._open(s, self._policy(), CONVERSATION_TOOLS)
