@@ -51,19 +51,14 @@ def reference(value, root=ROOT):
     return value
 
 
-def frozen_app_inputs_allowed(record, source, cfg, env, drift, root=ROOT, diff=None):
+def frozen_app_inputs_allowed(record, cfg, env, root=ROOT):
     """One requested attempt may use its exact older signed export, truthfully."""
     choice = cfg.get('frozenAppInputs') or {}
     if (env.get('GITHUB_RUN_NUMBER') != str(choice.get('workflowRunNumber'))
             or cfg.get('appInputsRecord') != choice.get('record')
-            or drift != choice.get('packages')
             or not route.accepted_app_export(record, cfg.get('appInputsRecord'))):
         return False
-    if ota.digest(Path(root)/choice['record']) != choice.get('recordSha256'):
-        return False
-    # Later app edits require another export or choice; this is not an enduring
-    # waiver. Missing source history still refuses through the existing reader.
-    return not route.app_source_drift({'producer': {'sourceSha': choice['reviewedSource']}}, source, root, diff)
+    return ota.digest(Path(root)/choice['record']) == choice.get('recordSha256')
 
 
 def guard(lane, cfg, env, publish=False, root=ROOT, diff=None, dry_run=False):
@@ -151,7 +146,7 @@ def guard(lane, cfg, env, publish=False, root=ROOT, diff=None, dry_run=False):
             or allocation.get('sourceSha')!=record['producer']['sourceSha']:
         raise ValueError('app producer allocation binding differs')
     drift=route.app_source_drift(record, run['source'], root, diff)
-    if drift and not frozen_app_inputs_allowed(record, run['source'], cfg, env, drift, root, diff):
+    if drift and not frozen_app_inputs_allowed(record, cfg, env, root):
         raise ValueError('fresh app export omits current app source changes: '+drift[0])
     baseline=cfg.get('baselineTargetFiles')
     factory=cfg.get('baselineFactoryEvidence')

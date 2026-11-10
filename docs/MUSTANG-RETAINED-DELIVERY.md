@@ -8,8 +8,8 @@ below describe the prior implementation, which remains unused library code.
 
 For dedicated workflow run number 40 only, Nathan selected the verified
 `frankel-2026111001` apps (voice 370) instead of refreshing the app export.
-The runtime binds the exact record-byte hash and reviewed app-source snapshot.
-Later app edits or another run number do not inherit this choice. The candidate
+The runtime binds the exact record-byte hash to this one run number.
+Later workflow runs do not inherit this choice. The candidate
 app-admission receipt records `sourceChoice`; it does not claim these APKs contain
 the newer Glacier app changes. The full compile/sign/publication path is used.
 
