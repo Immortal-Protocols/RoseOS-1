@@ -14,7 +14,7 @@
   {
     "name": "customization_home_columns",
     "operation": "customization_home_columns",
-    "description": "Set how many columns Rose Home uses, live, with no OS rebuild. 0 restores the automatic count (four on a phone). Apps keep their order and reflow intact; none are added or removed. Home uses fewer columns if that many cells cannot fit the screen. verified means the preference is saved, not that Home shows it: report home.effectiveColumns as the count Home draws, and when home.applied is false say Home has not shown the change yet.",
+    "description": "Set how many columns Rose Home uses, live, with no OS rebuild. 0 restores the automatic count (four on a phone). Apps keep their order and reflow intact; none are added or removed. Home uses fewer columns if that many cells cannot fit the screen: a phone fits three to five. verified means the preference is saved, not that Home shows it: report home.effectiveColumns as the count Home draws, and when home.applied is false say Home has not shown the change yet.",
     "foregroundRequired": false,
     "inputSchema": {
       "type": "object",
@@ -31,7 +31,7 @@
   {
     "name": "customization_wallpaper",
     "operation": "customization_wallpaper",
-    "description": "Choose one of Rose's curated Oxblood wallpaper variations for Home, live. classic is the shipped Oxblood field; garnet is brighter, ember warmer, velvet deeper and dusk cooler. All are Oxblood. Other themes or arbitrary images are not supported.",
+    "description": "Choose one of Rose's curated Oxblood wallpaper variations for Home, live. classic is the shipped Oxblood field; garnet is a brighter red, ember a warmer orange-red, velvet much deeper and dusk a cooler wine. All are Oxblood. Other themes or arbitrary images are not supported.",
     "foregroundRequired": false,
     "inputSchema": {
       "type": "object",
@@ -48,7 +48,7 @@
   {
     "name": "customization_font",
     "operation": "customization_font",
-    "description": "Choose Rose's font from the fonts bundled on the phone, live. default restores Rose's shipped type: Nunito for conversation text and the system sans-serif for Home labels. nunito, sans, serif, condensed and mono apply one family to Home and folder labels and to Rose's conversation text and cards drawn after the change; some built-in controls and widgets keep their own faces, and other apps are not affected.",
+    "description": "Choose Rose's font from the fonts bundled on the phone, live. default restores Rose's shipped type: Nunito for conversation text and the system sans-serif for Home labels. nunito, sans, serif, condensed and mono apply one family to the Home date, Home and folder labels, and Rose's conversation text and cards drawn after the change; some built-in controls and widgets keep their own faces, and other apps are not affected.",
     "foregroundRequired": false,
     "inputSchema": {
       "type": "object",

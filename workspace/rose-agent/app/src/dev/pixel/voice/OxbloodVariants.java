@@ -19,14 +19,14 @@ final class OxbloodVariants {
 
  static final String CLASSIC = "classic", GARNET = "garnet", EMBER = "ember", VELVET = "velvet", DUSK = "dusk";
  static final List<String> IDS = Collections.unmodifiableList(Arrays.asList(CLASSIC, GARNET, EMBER, VELVET, DUSK));
- static final float MAX_HUE_TURN_DEG = 12;
+ static final float MAX_HUE_TURN_DEG = 15;
 
  /** hue turn (degrees, + toward orange), saturation factor, brightness factor; classic is the identity. */
  static float[] parameters(String id) {
-  if (GARNET.equals(id)) return new float[]{0, 1.15f, 1.12f};
-  if (EMBER.equals(id)) return new float[]{8, 1.05f, 1.06f};
-  if (VELVET.equals(id)) return new float[]{0, 1.05f, 0.78f};
-  if (DUSK.equals(id)) return new float[]{-10, 0.9f, 0.95f};
+  if (GARNET.equals(id)) return new float[]{0, 1.35f, 1.35f};
+  if (EMBER.equals(id)) return new float[]{12, 1.15f, 1.3f};
+  if (VELVET.equals(id)) return new float[]{0, 1.1f, 0.55f};
+  if (DUSK.equals(id)) return new float[]{-14, 0.85f, 1.25f};
   if (CLASSIC.equals(id)) return new float[]{0, 1, 1};
   throw new IllegalArgumentException("Unsupported wallpaper variant");
  }
