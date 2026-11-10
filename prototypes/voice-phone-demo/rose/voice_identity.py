@@ -44,9 +44,12 @@ UNAVAILABLE_RETRY_S = 300.0  # a voice that failed to load (a download, a networ
 def american(accent: str) -> bool:
     """Whether an accent request names the accent every available voice has (US English), or none."""
     words = set(re.findall(r'[a-z]+', accent.lower().replace('u.s.', 'us').replace('en-us', 'us')))
-    words -= {'english', 'accent', 'a', 'an', 'the', 'standard', 'general', 'plain', 'neutral', 'north', 'any', 'same',
+    words -= {'accent', 'a', 'an', 'the', 'standard', 'general', 'plain', 'neutral', 'north', 'any', 'same',
               'none', 'unchanged', 'current', 'no', 'change'}
-    return not words or words <= {'american', 'us', 'usa', 'united', 'states'}
+    us = {'american', 'us', 'usa', 'united', 'states'}
+    if words & us:  # "American English", "US English": English names the language here
+        words.discard('english')
+    return not words or words <= us  # a bare "English" accent usually means England's, which no voice has
 
 
 def load_traits(path: Path = TRAITS_FILE) -> dict:

@@ -550,6 +550,8 @@ class CodexConductor:
                     result, image = self._app_tool(s, name, args) if s.task else self._conversation_tool(name, args)
                     if name == 'copy_to_phone_clipboard' and not s.task:
                         self._copy_finished(s, str(e['callId']), result)
+                    elif name in voice_identity.NAMES and not s.task:
+                        self._identity_finished(s, str(e['callId']), name, result)
         except PhoneTaskError as exc:
             result = {'ok': False, 'reason': exc.code, 'message': str(exc)}
         except Exception:
@@ -579,6 +581,28 @@ class CodexConductor:
             return
         note = (s.conversation, '[Before this message, your copy_to_phone_clipboard call that was answered as cancelled '
                 'finished: ' + str(result.get('message') or result['status']) + ']')
+        with self._lock:
+            if self._bridge_cancelled.pop(call_id, None):
+                self._late_note(note)
+            else:
+                self._keep(self._copy_outcomes, call_id, note)
+
+    def _identity_finished(self, s, call_id, name, result):
+        """A name or voice tool returned. Like a copy, its outcome becomes a note only if the bridge answered this
+        call as cancelled (a barge-in or timeout during a slow voice load), so a saved change is never reported as
+        undone and never applied twice."""
+        if not isinstance(result, dict):
+            return
+        if result.get('ok') and name == 'rename_assistant':
+            what = f'your name is now {result.get("name")} (saved)'
+        elif result.get('ok') and result.get('changed'):
+            what = 'your voice changed and was saved; the owner is hearing it now'
+        elif result.get('ok'):
+            what = 'the voice is unchanged and now also the saved choice'
+        else:
+            what = 'nothing changed: ' + str(result.get('message') or result.get('reason'))
+        note = (s.conversation, f'[Before this message, your {name} call that was answered as cancelled finished: '
+                f'{what}]')
         with self._lock:
             if self._bridge_cancelled.pop(call_id, None):
                 self._late_note(note)

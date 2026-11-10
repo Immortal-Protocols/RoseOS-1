@@ -296,6 +296,11 @@ class Matching(unittest.TestCase):
             self.assertNotIn('limits', r, accent)
         r, _ = self.change('zoey', accent='British English', pitch='lower')
         self.assertIn('none is British English', r['limits'][0])
+        for accent in ('English', 'an English accent', 'Standard English'):  # usually England's, which no voice has
+            r, _ = self.change('zoey', accent=accent, pitch='lower')
+            self.assertIn('none is ' + accent, r['limits'][0], accent)
+            r, _ = self.change('zoey', accent=accent)
+            self.assertNotEqual(r['reason'], 'already', accent)
 
     def test_an_offer_answers_only_the_next_call_and_alone(self):
         identity, speaker = vi.VoiceIdentity(), Speaker('easton')
@@ -547,6 +552,20 @@ class Conversation(unittest.TestCase):
         self.assertIn('alternative', self.tool('change_voice', warmth='warmer'))
         self.engine.reset()
         self.assertIsNone(self.identity.offered)
+
+    def test_a_change_that_finishes_after_the_bridge_cancelled_it_becomes_a_note(self):
+        s = self.engine.sessions['conversation']
+        self.engine._event({'event': 'tool_cancelled', 'callId': 'ipc-change_voice'})  # barge-in during the load
+        r = self.tool('change_voice', warmth='warmer')
+        self.assertTrue(r['ok'])
+        notes = [n for c, n in self.engine._late_notes if c == s.conversation]
+        self.assertEqual(len(notes), 1)
+        self.assertIn('change_voice call that was answered as cancelled finished: your voice changed and was saved',
+                      notes[0])
+        # Not cancelled: no note (the model saw the result).
+        self.engine._late_notes = []
+        self.tool('rename_assistant', name='Nova')
+        self.assertEqual(self.engine._late_notes, [])
 
     def test_unavailable_closest_voice_is_reported_not_claimed(self):
         r = self.tool('change_voice', accent='Scottish')
