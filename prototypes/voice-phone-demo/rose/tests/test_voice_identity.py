@@ -733,6 +733,17 @@ class Conversation(unittest.TestCase):
         self.assertTrue(self.opened_instructions()[-1].startswith('You are Nova,'))
         self.assertIn('Rose', self.opened_instructions()[-1])  # the rest of the policy is unchanged
 
+    def test_only_successful_saved_renames_publish_a_visible_identity(self):
+        events = []
+        self.engine.bus.subscribe(lambda event: events.append(event))
+        self.assertTrue(self.tool('rename_assistant', name='Nova')['ok'])
+        self.assertEqual([e['name'] for e in events if e['kind'] == 'assistant_name'], ['Nova'])
+        self.assertFalse(self.tool('rename_assistant', name='<invalid>')['ok'])
+        with patch.object(self.identity, '_save', return_value=False):
+            self.assertFalse(self.tool('rename_assistant', name='Iris')['ok'])
+        self.assertEqual(self.identity.name, 'Nova')
+        self.assertEqual([e['name'] for e in events if e['kind'] == 'assistant_name'], ['Nova'])
+
     def test_the_reply_after_a_voice_change_is_spoken_in_the_new_voice(self):
         s = self.engine.sessions['conversation']
         self.engine._user_turn('Could you use a warmer, lower voice?')
@@ -923,6 +934,24 @@ class Startup(unittest.TestCase):
         self.assertEqual(b.voice, 'miles')
         c = self.app([], {'voice': 'everly'})  # the local brain keeps its own default
         self.assertEqual((c.voice, c.identity), ('zoey', None))
+
+    def test_reconnect_hello_restores_saved_identity_without_replaying_a_rename(self):
+        import asyncio
+        a = self.app(['--brain', 'codex'], {'name': 'Nova', 'voice': 'everly'})
+        # History can contain an older name; clients must use the current hello and ignore replay.
+        a.bus.emit('assistant_name', name='Iris')
+        frames = []
+        class Socket:
+            async def accept(self): pass
+            async def send_text(self, raw): frames.append(json.loads(raw))
+            async def receive(self): return {'type': 'websocket.disconnect'}
+        asyncio.run(a.serve_events(Socket()))
+        self.assertEqual(frames[0]['kind'], 'hello')
+        self.assertEqual(frames[0]['state']['assistant_name'], 'Nova')
+        replay = [e for e in frames if e.get('kind') == 'assistant_name']
+        self.assertTrue(replay and all(e.get('replay') for e in replay))
+        self.assertEqual(self.app([]).snapshot()['assistant_name'], 'Rose')
+        self.assertEqual(self.app(['--brain', 'codex'], {'name': 'Iris'}).snapshot()['assistant_name'], 'Iris')
 
     def test_a_saved_voice_that_will_not_load_falls_back_to_the_default(self):
         a = self.app(['--brain', 'codex'], {'voice': 'everly'})

@@ -942,8 +942,16 @@ class Server:
                 self.identity.loaded(getattr(self.speaker, 'voice', None) or self.voice)
             if codex:
                 from .codex_conductor import CodexConductor
+                from .life import Diary, Life
+                from .remote import config_dir
+                try:
+                    life = Life(Diary(config_dir() / "rosie-life"))
+                except Exception:
+                    # A damaged/unwritable diary cannot take down conversation.
+                    life = None
+                    self.bus.emit('error', message="Rosie's diary is unavailable; background research is disabled.")
                 self.conductor = CodexConductor(self.phone, self.bus, self.speaker, self.transcripts,
-                                                identity=self.identity)
+                                                identity=self.identity, life=life)
                 self.tasks = self.conductor
             else:
                 self.tasks = TaskManager(rt, self.task_brain, self.phone, self.bus, on_done=self._on_task_done)
@@ -1068,6 +1076,7 @@ class Server:
     def snapshot(self) -> dict:
         return {"mode": self.mode, "ready": self.ready, "status": self.state,
                 "voice": self.current_voice(), "voices": self.voices(),
+                "assistant_name": self.identity.name if self.identity else "Rose",
                 "phone": self.phone.snapshot(), "ui_tree": self.phone.ui_tree(),
                 "tasks": self.task_list(), "load_s": self.load_s,
                 "metrics": list(getattr(self.conductor, "turn_metrics", []))[-50:],

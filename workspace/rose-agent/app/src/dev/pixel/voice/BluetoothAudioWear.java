@@ -11,9 +11,10 @@ import android.os.Looper;
  * output device connecting counts as glasses on, and the last one disconnecting counts as removal. It is not a worn
  * sensor.
  *
- * <p>It watches AudioManager's device list, which needs no permission. Android calls the callback once with the current
- * devices on registration, which gives the hook its baseline, then on every change. GlassesWearHook turns those reports
- * into once-per-transition decisions and ignores blips shorter than its minimum removal. Started once per process from
+ * <p>It watches AudioManager's device list, which needs no permission. Sample the baseline synchronously before
+ * registering: Android posts its initial callback, and the device list may already have changed before it runs.
+ * The callback reports later changes. GlassesWearHook turns reports into once-per-transition decisions and ignores
+ * blips shorter than its minimum removal. Started once per process from
  * RoseAgentApplication. */
 final class BluetoothAudioWear {
  private BluetoothAudioWear() {}
@@ -26,6 +27,9 @@ final class BluetoothAudioWear {
   final Context app = context.getApplicationContext();
   final AudioManager audio = app.getSystemService(AudioManager.class);
   if (audio == null) return;
+  // Establish the startup state now, not when the queued initial callback eventually runs. A headset that connects
+  // while the main thread is busy must not become an already-connected baseline and lose its first transition.
+  report(app, audio);
   started = true;
   audio.registerAudioDeviceCallback(new AudioDeviceCallback() {
    @Override public void onAudioDevicesAdded(AudioDeviceInfo[] added) { report(app, audio); }

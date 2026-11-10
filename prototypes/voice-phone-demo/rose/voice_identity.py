@@ -436,8 +436,8 @@ class VoiceIdentity:
                         + (self.UNREADABLE if self.unreadable else '')}
             old, self.name = self.name, name
         return {'ok': True, 'name': name, 'previous_name': old, 'saved': True,
-                'note': (f'Call yourself {name} from now on. Rose\'s phone app, pairing, About and any wake word '
-                         'are unchanged.')}
+                'note': (f'Call yourself {name} from now on. This is the saved conversational and visible agent identity. '
+                         'RoseOS, the app package, pairing, About and any wake word are unchanged.')}
 
     def change_voice(self, speaker, args: dict, _retried: bool = False) -> dict:
         if speaker is None:
@@ -694,8 +694,9 @@ DIRECTIONS = {name: {'type': 'string', 'enum': ['same', d['less'], d['more'], 'm
               for name, d in DIMENSIONS.items()}
 TOOLS = [
     {'type': 'function', 'name': 'rename_assistant',
-     'description': 'Change the name you call yourself, when the owner gives you one. Saved across restarts. Rose\'s '
-                    'app, pairing, About and wake word stay unchanged. Say the name changed only when ok is true.',
+     'description': 'Change your conversational and visible agent name when the owner gives you one. Saved across '
+                    'restarts. RoseOS, the app package, pairing, About and wake word stay unchanged. '
+                    'Say the name changed only when ok is true.',
      'inputSchema': {'type': 'object', 'properties': {'name': {'type': 'string'}}, 'required': ['name'],
                      'additionalProperties': False}},
     {'type': 'function', 'name': 'change_voice',

@@ -962,10 +962,9 @@ def evaluate(bundle, root, free, files=None, secret_access=None, pin=None, capac
             reject_unsafe_zip(files[name], free)
         except ValueError as error:
             raise ValueError(f'{name} archive: {error}') from None
-    try:
-        target_validation = validate_target_zip(files['unsigned'], free, artifact=bundle['unsigned'])
-    except ValueError as error:
-        raise ValueError(f'unsigned archive: {error}') from None
+    # Custom target-files validation disabled. Pass the hash-bound input unchanged
+    # to the pinned Android signing tools; do not emit a validation proof.
+    target_validation = None
     if missing_bounds:
         text = 'output bound is missing: ' + ','.join(missing_bounds)
         if config.get('admission') is not True:

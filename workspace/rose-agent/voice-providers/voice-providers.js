@@ -229,12 +229,14 @@
   const text=v=>typeof v==='string'?v.slice(0,500):'',running=t.status==='running';
   return {key:(t.server?t.server+'#':'@'+t.started+'#')+t.id,id:t.id,server:t.server||null,kind:t.kind,goal:text(t.goal),status:t.status,detail:running?text(t.detail):'',result:running?'':text(t.result),
    background:t.background===true,onScreen:t.on_screen===true,awaitingSend:t.status==='done'&&!!t.ready_to_send,started:t.started,finished:typeof t.finished==='number'&&Number.isFinite(t.finished)?t.finished:null,
+   ...(t.activity&&t.activity.version===1&&Number.isSafeInteger(t.activity.sample)&&t.activity.sample>=0
+    &&typeof t.activity.executing==='boolean'?{activity:{version:1,sample:t.activity.sample,executing:t.activity.executing}}:{}),
    contract:t.contract===1?1:null,connection,binding:t.contract===1&&t.server?localBinding(t.workspace):null};
  }
  function localTasks(callback,keep=20,connection=''){
   const deliver=callback&&(list=>{try{callback(list);}catch(e){console.warn('local task consumer failed');}});
   const tasks=new Map();let open=true,live=false,sent='[]';
-  const copy=t=>({...t,binding:t.binding&&{...t.binding}});
+  const copy=t=>({...t,binding:t.binding&&{...t.binding},...(t.activity?{activity:{...t.activity}}:{})});
   const publish=()=>{if(!open||!live||!deliver)return;const list=[...tasks.values()].sort((a,b)=>a.started-b.started||a.id-b.id),sig=JSON.stringify(list);if(sig===sent)return;sent=sig;deliver(list.map(copy));};
   const trim=()=>{const ended=[...tasks.values()].filter(t=>t.status!=='running').sort((a,b)=>(a.finished||0)-(b.finished||0)||a.started-b.started);while(ended.length>keep)tasks.delete(ended.shift().key);};
   return {

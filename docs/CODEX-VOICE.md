@@ -70,8 +70,11 @@ The owner can rename the assistant ("I'd like to call you Nova") and describe th
 voice"). There is no catalog, menu or settings screen. Codex calls `rename_assistant`, `change_voice` or `revert_voice`
 (`rose/voice_identity.py`); a change is confirmed only once it has been applied and saved.
 
-- **Name.** A short name of letters, saved and used for every new thread. Rose's phone app, pairing, About and any
-  wake word are unchanged.
+- **Name.** A short name of letters, saved and used for every new thread and the native conversation header,
+  status caption and accessible controls. Successful renames update the phone through the existing events link;
+  reconnect sends the current saved name, and the phone caches it per pairing for offline display and restart.
+  Invalid or unsaved changes do not publish a name. Long names are truncated visually, with the full accessible
+  name retained. RoseOS, the installed app/package, pairing, About and any wake word are unchanged.
 - **Voice.** The description becomes directions relative to the current voice: pitch, warmth, liveliness, pace,
   gender, accent. The closest voice the running backend can load is applied, and the reply that follows is spoken in
   it, so the owner hears the result and can refine it or revert. Gender stays the same unless the owner asks.

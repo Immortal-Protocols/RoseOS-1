@@ -17,6 +17,12 @@
   "allocationState": "os/build-only/mustang-allocation-state-20261107.json",
   "clockNumbering": "os/build-only/mustang-clock-numbering.json",
   "appInputsRecord": "os/app-inputs/frankel-2026111001.json",
+  "frozenAppInputs": {
+    "workflowRunNumber": 40,
+    "record": "os/app-inputs/frankel-2026111001.json",
+    "recordSha256": "68572407da9a396bc8217a4baa971c3f997b84913583b032ceec8d533c5a778a",
+    "reason": "Nathan selected the verified voice370 export for this attempt, omitting newer app changes; do not claim those APKs are source-current."
+  },
   "baselineTargetFiles": null,
   "baselineFactoryEvidence": null,
   "runner": {

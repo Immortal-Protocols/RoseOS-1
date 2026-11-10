@@ -3,6 +3,8 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
+# Nov 10 1F/1G: bounded private life and real background-task lifecycle.
+bash scripts/test-background-life.sh
 # Shared Codex voice adapter: synthetic account/model/turn replies, no provider access.
 node --test workspace/rose-agent/server/codex-voice.test.mjs workspace/rose-agent/server/codex-provider-start.test.mjs
 # Rose Agent page voice state, loaded with its real assets and a fake provider.
@@ -13,6 +15,8 @@ node --test workspace/rose-agent/tests/local-rose-auth.test.mjs
 # Nov 7 plan 1O: the customization CLI drives the same catalog operations as conversation.
 node --test workspace/rose-agent/customization/rose-customize.test.mjs
 python3 -I workspace/rose-agent/customization/test_conversation_tools.py
+# #744 deferred controls and per-activity conversation theme acknowledgment.
+python3 -I workspace/rose-agent/customization/test_deferred_theme.py
 # Local Rose task events from the real PR318 producer, through the local() provider bridge.
 node --test workspace/rose-agent/voice-providers/local-tasks.test.cjs
 # #410 item 6: microphone-input mute on the capture side, and the provider contract it relies on.
@@ -27,7 +31,7 @@ node --test workspace/rose-agent/tests/page-regressions.test.mjs workspace/rose-
 # APP-REMOVE-001: retired DeepSeek, Luna-first and ARTEMIS trial controls stay removed; shared paths stay.
 node --test workspace/rose-agent/tests/trial-removal.test.mjs
 node --test workspace/rose-agent/tests/trial-menu-removal.test.mjs
-node --test workspace/rose-agent/tests/rose-presence.test.mjs
+node --test workspace/rose-agent/tests/rose-presence.test.mjs workspace/rose-agent/tests/assistant-name.test.mjs
 # APP-BUG-OPEN-001: the shell open_app refusal stays fail-closed; registered launches keep their turn's task.
 node --test workspace/rose-agent/server/unbound-shell-open.test.mjs
 # APP-BUG-OPEN-002: registered phone navigation and input run as the current request and honour Stop.
@@ -420,6 +424,16 @@ java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-option
  workspace/rose-agent/app/src/dev/pixel/voice/RoseFonts.java workspace/rose-agent/app/src/dev/pixel/voice/RoseTheme.java workspace/rose-agent/app/src/dev/pixel/voice/CustomizationConfig.java workspace/rose-agent/app/src/dev/pixel/voice/GlassesWearHook.java \
  workspace/rose-agent/app/tests/GlassesWearHookTest.java
 java -cp "$JAVA_TESTS/GlassesWearHook" dev.pixel.voice.GlassesWearHookTest
+# Bluetooth audio adapter: real signal/decision code with synthetic Android callbacks, no phone or launch.
+java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/BluetoothAudioWear" -sourcepath workspace/rose-agent/app/src \
+ workspace/rose-agent/app/src/dev/pixel/voice/MiniJson.java workspace/rose-agent/app/src/dev/pixel/voice/HomeAppLayout.java workspace/rose-agent/app/src/dev/pixel/voice/OxbloodVariants.java \
+ workspace/rose-agent/app/src/dev/pixel/voice/RoseFonts.java workspace/rose-agent/app/src/dev/pixel/voice/CustomizationConfig.java workspace/rose-agent/app/src/dev/pixel/voice/GlassesWearHook.java \
+ workspace/rose-agent/app/src/dev/pixel/voice/BluetoothAudioWear.java workspace/rose-agent/app/tests/BluetoothAudioWearHostTest.java \
+ workspace/rose-agent/app/tests/bluetooth-audio-wear/stubs/android/content/*.java \
+ workspace/rose-agent/app/tests/bluetooth-audio-wear/stubs/android/media/*.java \
+ workspace/rose-agent/app/tests/bluetooth-audio-wear/stubs/android/os/*.java \
+ workspace/rose-agent/app/tests/bluetooth-audio-wear/stubs/dev/pixel/voice/*.java
+java -cp "$JAVA_TESTS/BluetoothAudioWear" dev.pixel.voice.BluetoothAudioWearHostTest
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/CustomizationOutcome" \
  workspace/rose-agent/app/src/dev/pixel/voice/MiniJson.java workspace/rose-agent/app/src/dev/pixel/voice/HomeAppLayout.java workspace/rose-agent/app/src/dev/pixel/voice/OxbloodVariants.java \
  workspace/rose-agent/app/src/dev/pixel/voice/RoseFonts.java workspace/rose-agent/app/src/dev/pixel/voice/RoseTheme.java workspace/rose-agent/app/src/dev/pixel/voice/CustomizationConfig.java workspace/rose-agent/app/src/dev/pixel/voice/CustomizationOutcome.java \
