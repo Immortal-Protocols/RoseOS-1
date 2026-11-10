@@ -126,7 +126,7 @@ public final class AgentTrayPrototype implements DisplayManager.DisplayListener 
         Bundle data = message.getData();
         if (data.getInt("protocolVersion") != 1) { mirrorBackgroundActivity(null); return true; }
         // Plan 1E: Rose Agent's theme choice; SystemUI applies, mirrors and acknowledges it (RoseThemeMirror).
-        theme.fromRose(data.getString(RoseTheme.TRAY_KEY));
+        this.theme.fromRose(data.getString(RoseTheme.TRAY_KEY));
         mirrorBackgroundActivity(data.getString("backgroundActivity"));
         listening = data.getBoolean("listening");
         muted = data.getBoolean("muted");
