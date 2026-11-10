@@ -160,7 +160,14 @@ Builds that carry it:
   registers `BluetoothAudioWear` and forwards `customization_*`. Release's record:
   `os/latest-beta/frankel-2026110703-included.md`. The first attempt (run 42399788831) failed in SystemUI on an OS Core
   shade bug, fixed by #665.
-- Later Frankel builds from main (the daily lane, #621) carry all four controls too.
+- **Frankel 2026111001** (Beta Latest; daily os-release run 42813894214 on main `6bab12c`; integrated candidate
+  `ace876a`; Rose Agent `voice` versionCode 370, `370-os-beta-2026111001`). This is the first build with the fixes
+  from the owner's Nov 10 phone check: #729 makes columns (3–5 on a phone), wallpaper and font visible. Its source also
+  contains #732, whose honest outcomes take effect on the producer, not the phone. The candidate's Rose Agent sources
+  and assets are identical to main `6bab12c`.
+- **Producer.** The Mac mini producer was running `149dd4e1` (Nov 7) at the owner's 10:38Z Nov 10 receipt. That
+  includes #627 and #661 but not #732. Columns, wallpaper, font and the hook can be phone-checked on it. Honest-outcome
+  acceptance needs it redeployed from main at `8676ae2` or later by its existing owner.
 
 This workstream checked these build records and sources only; it has not installed a build or run one on a device. The identities above come from the
 Release lane's run record.
