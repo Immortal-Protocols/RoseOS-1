@@ -126,3 +126,41 @@ peak must still fit the selected disk. Output, extraction, scratch and reserve
 budgets are not credited or reduced, and the metadata gate remains unchanged.
 This correction does not change symlink policy or resolve the unidentified
 target-files member. No runtime or publication follows from the source change.
+
+## Android payload links and executable archives
+
+The pinned `platform_build` revision
+`b0f697df8cc9519408ca0a404e918cd51bde0735` explicitly preserves symlinks in
+`sign_target_files_apks.WriteOutputData`, materializes them in
+`common.UnzipSingleFile`, and repacks with `zip -y`. A target-files archive is
+therefore validated separately from the JDK and otatools archives. Those
+executable inputs still reject every symlink, including directory-shaped ones.
+
+The target validator does not extract, follow on the host, rewrite or remove
+payload links. It checks canonical member names, duplicate paths, file types,
+encryption, expansion and bounded link metadata. Links are confined to Android
+payload trees; signer control paths remain regular data. No member may have a
+symlink or regular-file parent. The complete graph resolves components in
+filesystem order, following a link before processing `..`; cycles, excessive
+chains and paths leaving the payload or reaching signer metadata refuse.
+
+Absolute links are not automatically accepted as Android data. They require a
+recognized Android namespace and a fresh observation that the corresponding
+host root is absent. Existing roots, broken host symlinks, unavailable facts,
+root execution, a writable host root or effective capabilities refuse. This
+keeps such targets inert on the signer. Absolute links into real host namespaces
+remain refused even when they might be valid on an Android device.
+
+These checks run after authenticated input-byte checks and before signer login;
+signing repeats them before reading key payloads. Capacity and source/input
+bindings remain mandatory. The hosted receipt records the unsigned ZIP identity,
+link-inventory digest, counts and observed absent host roots. Expected source
+does not prove that the retained ZIP's unknown member passes this policy.
+
+Offline coverage includes relative and absolute chains, cycles, link parents,
+component-order traversal, canonicalization, actual host-observation refusal,
+malformed ZIP metadata, executable-role rejection and the pinned writer/repack
+behavior on small controlled fixtures. It does not execute the qualified
+otatools archive or establish actual retained-input admission, signing,
+publication or device compatibility. App-source freshness and the retained
+delivery-only source contract are unchanged.
