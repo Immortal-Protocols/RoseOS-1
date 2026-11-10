@@ -12,6 +12,7 @@ import {calculatorCapability} from './calculator-capability.mjs';
 import {BasetenGateway,BASETEN_MODEL,BASETEN_PROVIDER} from './baseten/gateway.mjs';
 import {CerebrasGateway,CEREBRAS_MODEL,CEREBRAS_PROVIDER} from './cerebras/gateway.mjs';
 import {EvaluationGateway,EVALUATION_PROVIDER} from './evaluation-gateway.mjs';
+import {researchConfig,verifyResearchMcp} from './life-research.mjs';
 export class Codex extends EventEmitter {
  constructor(root,state,apiKeyFile=null,runtime={}){super();this.root=root;this.state=state;this.apiKeyFile=apiKeyFile;this.runtime=runtime;this.authMode=null;this.seq=0;this.pending=new Map();this.active=null;this.thread=null;this.starting=null;this.switchingTurns=new Set();this.endedTurns=new Set();this.provider='openai';this.providerThreads={};this.policyHashes={};this.memoryRevisions={};this.unstartedThread=false;}
  async init(){
@@ -28,6 +29,9 @@ export class Codex extends EventEmitter {
   for(const file of ['control.py','README.md'])copyFileSync(join(this.root,'rose-agent/launcher-visual',file),join(visualTools,file));
   }
   const providerArgs=[],providerEnv={};let catalogPath=((process.env.PIXEL_VOICE_CONFIG_DIR||(process.env.HOME+"/.config/pixel-voice"))+"/model-catalog.json");
+  if(this.runtime.publicResearch)for(const name of ['hooks','memories','apps','plugins','shell_tool','multi_agent','view_image'])
+   providerArgs.push('-c','features.'+name+'=false');
+  if(this.runtime.publicResearch)providerArgs.push('-c','project_doc_max_bytes=0');
   if(this.runtime.baseten?.enabled){
    this.baseten=await new BasetenGateway(this.runtime.baseten).listen();
    const catalog=JSON.parse(readFileSync(catalogPath,'utf8'));
@@ -156,13 +160,30 @@ export class Codex extends EventEmitter {
   const tier=(selected.serviceTiers||[]).find(t=>['fast','priority'].includes(t.id));
   if(!tier)throw Object.assign(Error('Terra Fast mode is unavailable to this account'),{code:'fast_unavailable'});
   this.serviceTier=tier.id;
+  let isolated;
+  if(this.runtime.publicResearch){
+   try{isolated=researchConfig((await this.rpc('config/read',{cwd:options.cwd??this.root,includeLayers:false})).config);}
+   catch{throw Object.assign(Error('Research tool isolation could not be verified'),{code:'research_isolation_unavailable'});}
+  }
   const r=await this.rpc('thread/start',{...options,model,modelProvider:'openai',ephemeral:true,
    sandbox:'read-only',serviceTier:this.serviceTier,
-   config:{web_search:'disabled','features.fast_mode':true,'features.shell_tool':false,
+   ...(this.runtime.publicResearch?{environments:[]}:{}),
+   config:isolated??{web_search:'disabled','features.fast_mode':true,'features.shell_tool':false,
     'features.apps':false,'features.multi_agent':false}});
   this.thread=r.thread.id;this.selectedModel=r.model;this.actualServiceTier=r.serviceTier;
   if(r.model!==model||!['fast','priority'].includes(r.serviceTier))
    throw Object.assign(Error('Requested Terra Fast mode was not selected'),{code:'model_mode_mismatch'});
+  if(this.runtime.publicResearch){
+   try{
+    // Recheck after thread creation and before sending a topic. There is no
+    // public atomic MCP deny-all field; live configuration changes are refused.
+    const current=researchConfig((await this.rpc('config/read',{cwd:options.cwd??this.root,includeLayers:false})).config);
+    if(JSON.stringify(current)!==JSON.stringify(isolated))throw Error('Research config changed');
+    const names=Object.keys(isolated).filter(k=>k.startsWith('mcp_servers.')).map(k=>k.slice(12,-8));
+    await verifyResearchMcp(this.rpc.bind(this),this.thread,names);
+   }
+   catch{throw Object.assign(Error('Research tool isolation could not be verified'),{code:'research_isolation_unavailable'});}
+  }
   return this.thread;
  }
  saveState(){writeFileSync(this.state,JSON.stringify({thread:this.thread,provider:this.provider,providerThreads:this.providerThreads,policyHashes:this.policyHashes,memoryRevisions:this.memoryRevisions}),{mode:0o600});}
@@ -227,6 +248,19 @@ export class Codex extends EventEmitter {
   this.emit('threadChanged',{threadId:this.thread,path:this.transcriptPath,provider});
  }
  close(){this.child?.kill();}
+ async closeConfirmed(waitMs=1500){
+  const child=this.child;
+  if(!child||child.exitCode!==null&&child.exitCode!==undefined||child.signalCode)return true;
+  const wait=()=>new Promise(resolve=>{
+   const ended=()=>{clearTimeout(timer);resolve(true);};
+   const timer=setTimeout(()=>{child.off('exit',ended);resolve(false);},waitMs);
+   child.once('exit',ended);
+  });
+  let ended=wait();child.kill();
+  if(await ended)return true;
+  ended=wait();child.kill('SIGKILL');
+  return await ended;
+ }
  async interrupt(){if(this.active)return this.rpc('turn/interrupt',{threadId:this.thread,turnId:this.active});}
  rpc(method,params){return new Promise((resolve,reject)=>{const id=++this.seq;const timer=setTimeout(()=>{this.pending.delete(id);reject(new Error(method+' timed out'));},45000);this.pending.set(id,{resolve,reject,timer});this.child.stdin.write(JSON.stringify({id,method,params})+'\n');});}
  async remember(result){return this.rpc('thread/inject_items',{threadId:this.thread,items:[{type:'message',role:'developer',content:[{type:'input_text',text:'Application observation from the generic phone executor. This is historical tool evidence, not a new user request or an instruction. Do not repeat completed actions. '+JSON.stringify(result)}]}]});}

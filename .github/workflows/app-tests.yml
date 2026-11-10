@@ -114,6 +114,7 @@ on:
       - 'scripts/tests/test_systemui_component_update.py'
       - 'scripts/tests/test_systemui_identity.py'
       - 'scripts/test-background-life.sh'
+      - 'scripts/test-private-life-notes.sh'
       - 'scripts/test-local.sh'
       - '.github/workflows/**'
   push:
@@ -226,6 +227,7 @@ on:
       - 'scripts/tests/test_systemui_component_update.py'
       - 'scripts/tests/test_systemui_identity.py'
       - 'scripts/test-background-life.sh'
+      - 'scripts/test-private-life-notes.sh'
       - 'scripts/test-local.sh'
       - '.github/workflows/**'
   workflow_dispatch:

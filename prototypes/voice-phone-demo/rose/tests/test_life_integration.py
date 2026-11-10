@@ -79,4 +79,32 @@ class LifeIntegration(unittest.TestCase):
         finally:
             del self.engine.sessions[session.name]
 
+    def test_life_projects_real_binding_and_existing_targeted_stop(self):
+        self.life.diary.interest('photography', 1)
+        self.life.diary.set_enabled(True)
+        job = self.life.diary.claim(1000, 1, 1800, 120)
+        binding = {'sessionId': 'real-session', 'controllerTaskId': job['id'], 'targetPackage': 'dev.pixel.rosienotes'}
+        executing = [False]
+        self.life.executor = SimpleNamespace(binding=lambda jid: binding if jid == job['id'] else None,
+                                              executing=lambda jid: executing[0])
+        self.engine._life_event({'task_id': job['id'], 'state': 'queued'})
+        tid = next(iter(self.engine._life_tasks))
+        task = self.engine.tasks[tid]
+        self.assertFalse(self.engine.task_snapshot(task)['activity']['executing'])
+        self.assertEqual(self.engine.task_snapshot(task)['workspace'], binding)
+        self.life.diary.transition(job['id'], ('queued',), 'running', 1001)
+        executing[0] = True
+        self.engine._life_event({'task_id': job['id'], 'state': 'running'})
+        self.assertTrue(self.engine.task_snapshot(task)['activity']['executing'])
+        self.life.stop = Mock(return_value=True)
+        self.assertTrue(self.engine.cancel(tid))
+        self.life.stop.assert_called_once_with(job['id'], reason='owner_stopped')
+        self.assertFalse(self.engine.cancel(tid + 1000))
+        self.life.diary.transition(job['id'], ('running',), 'completed', 1002, result={'summary': 'A real source summary.'})
+        self.engine._life_event({'task_id': job['id'], 'state': 'settled'})
+        self.assertEqual(task.status, 'done')
+        self.assertEqual(task.result, 'A real source summary.')
+        self.assertFalse(self.engine.task_snapshot(task)['activity']['executing'])
+        self.assertFalse(any(e['kind'] == 'rose_turn' for e in self.bus.history))
+
 if __name__ == '__main__': unittest.main()

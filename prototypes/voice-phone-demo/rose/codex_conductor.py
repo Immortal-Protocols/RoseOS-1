@@ -122,11 +122,14 @@ class CodexConductor:
         self.conversation = transcripts.new(model)
         self.sessions = {'conversation': Session('conversation', conversation=self.conversation)}
         self.tasks = {}
+        self._life_tasks, self._life_conversations = {}, {}
         self.turn_metrics = []
         self._ids, self._reply_ids = itertools.count(1), itertools.count(1)
         self._lock = threading.RLock()
         self._session_lock = threading.Lock()
         self._events = queue.Queue()
+        if self.life is not None:
+            self.life.emit = lambda event: self._events.put({'event': 'life', **event})
         self._stopped = threading.Event()
         self._user_speaking = False
         self._backchannel_candidate = False
@@ -357,6 +360,9 @@ class CodexConductor:
         return s.task
 
     def cancel(self, task_id):
+        life_id = self._life_tasks.get(task_id)
+        if life_id is not None:
+            return self.life.stop(life_id, reason='owner_stopped')
         s = next((s for s in list(self.sessions.values()) if s.task and s.task.id == task_id), None)
         if not s or s.cancelled.is_set():
             return False
@@ -419,6 +425,15 @@ class CodexConductor:
 
     def task_snapshot(self, task):
         data = task.to_dict()
+        life_id = self._life_tasks.get(task.id)
+        if life_id is not None:
+            executor = self.life.executor
+            binding = executor.binding(life_id) if executor and hasattr(executor, 'binding') else None
+            executing = executor.executing(life_id) if executor and hasattr(executor, 'executing') else False
+            data.update(contract=1, server=self._life_conversations[task.id], workspace=binding,
+                        activity={'version': 1, 'sample': time.monotonic_ns() // 1000000,
+                                  'executing': bool(executing and task.status == 'running')})
+            return redact(data)
         s = next((s for s in list(self.sessions.values()) if s.task is task), None)
         ws = getattr(s.view, 'workspace', None) if s else None
         binding = None
@@ -435,6 +450,30 @@ class CodexConductor:
     def _task_event(self, s):
         self.bus.emit('task', task=self.task_snapshot(s.task))
 
+    def _life_event(self, event):
+        # Reuse the existing task feed and scoped native inspect/Stop path.
+        from .tasks import Task
+        job = next((j for j in self.life.diary.snapshot()['activities'] if j['id'] == event['task_id']), None)
+        if job is None:
+            return
+        tid = next((tid for tid, jid in self._life_tasks.items() if jid == job['id']), None)
+        if tid is None:
+            tid = next(self._ids)
+            self._life_tasks[tid], self._life_conversations[tid] = job['id'], self.conversation
+            self.tasks[tid] = Task(tid, 'phone', 'Research ' + job['interest'], background=True, started=job['started'])
+        task = self.tasks[tid]
+        state = job['state']
+        task.status = {'completed': 'done', 'failed': 'failed', 'interrupted': 'cancelled'}.get(state, 'running')
+        task.detail = ('Stopping; waiting for research and workspace acknowledgment.' if event['state'] == 'stopping'
+                       else 'Researching public sources in Rosie’s private workspace.' if state == 'running'
+                       else 'Waiting for a private notes workspace.' if state == 'queued' else '')
+        if task.status != 'running':
+            task.finished = job['updated']
+            summary = (job.get('result') or {}).get('summary', '')
+            reason = job['reason'].replace('_', ' ')
+            task.result = summary if state == 'completed' else reason + ('; a saved note was verified: ' + summary if summary else '')
+        self.bus.emit('task', task=self.task_snapshot(task))
+
     def _activity_heartbeat(self):
         # Revalidate actual executing app turns; an idle retained workspace is
         # never activity. No timers in the phone fabricate continuing work.
@@ -445,6 +484,10 @@ class CodexConductor:
         for session in list(self.sessions.values()):
             if session.task and session.busy and session.turn and session.task.status == 'running':
                 self._task_event(session)
+        for tid in list(self._life_tasks):
+            task = self.tasks.get(tid)
+            if task and task.status == 'running':
+                self.bus.emit('task', task=self.task_snapshot(task))
 
     def _loop(self):
         while not self._stopped.is_set():
@@ -466,6 +509,9 @@ class CodexConductor:
                 self.bus.emit('error', message='Codex event handling failed')
 
     def _event(self, e):
+        if e['event'] == 'life':
+            self._life_event(e)
+            return
         if e['event'] == 'tool_cancelled':
             self._cancelled_by_bridge(str(e.get('callId')))
             return
@@ -958,7 +1004,7 @@ class CodexConductor:
 
     def stop(self):
         if self.life is not None:
-            self.life.stop(reason='shutdown')
+            self.life.shutdown()
         for tid in list(self.tasks):
             self.cancel(tid)
         try:
