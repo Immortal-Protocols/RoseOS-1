@@ -201,7 +201,7 @@ class RoseEdgeShellTest(unittest.TestCase):
         self.assertEqual(self.controller.count('mTransitions.startTransition(TRANSIT_CHANGE, wct, this)'), 1)
         anim = method(self.controller, 'public boolean startAnimation(')
         self.assertIn('if (applied == null) return false;', anim, 'other transitions are not ours')
-        self.assertLess(anim.index('transition == pending.mTransition'), anim.index('mOwnTransitions.remove'),
+        self.assertLess(anim.index('mReturnTransitions.remove(transition)'), anim.index('mOwnTransitions.remove'),
             'a return transition is recognised before raise and lower')
         self.assertIn('startTransaction.apply(); finishCallback.onTransitionFinished(null);', flat(anim))
         # 1C: only V3's departure animates, and only Rose's own leaving leash (its alpha and an 8dp drop). Everything
@@ -386,7 +386,13 @@ class RoseEdgeShellTest(unittest.TestCase):
         self.assertLess(start.index('answer.answer(attempt, check); return;'), start.index('wct.reorder('),
             'a refusal or unavailability moves nothing')
         self.assertIn('wct.reorder(running.token, true /* onTop */);', start)
-        self.assertIn('pending.mTransition = mTransitions.startTransition(TRANSIT_TO_FRONT, wct, this);', start)
+        self.assertIn('mReturnTransitions.put(mTransitions.startTransition(TRANSIT_TO_FRONT, wct, this), pending);', start)
+        # Its departure plays even when focus arrived (RETURNED) before the transition was handed over: the transition
+        # is tracked apart from the answer.
+        anim = flat(method(self.controller, 'public boolean startAnimation('))
+        self.assertIn('final PendingReturn pending = mReturnTransitions.remove(transition); if (pending != null) { '
+            'depart(', anim)
+        self.assertNotIn('mPendingReturn', anim)
         self.assertIn('RETURN_DEADLINE_MS);', start)
         self.assertIn('static final long RETURN_DEADLINE_MS = 1500, RETURN_SETTLE_MS = 300;', self.controller)
         self.assertEqual(code.count('mTransitions.startTransition(TRANSIT_TO_FRONT, wct, this)'), 1)

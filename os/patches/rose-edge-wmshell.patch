@@ -512,10 +512,10 @@ index 0000000..08838b1
 +}
 diff --git a/libs/WindowManager/Shell/src/com/android/wm/shell/roseedge/RoseEdgeController.java b/libs/WindowManager/Shell/src/com/android/wm/shell/roseedge/RoseEdgeController.java
 new file mode 100644
-index 0000000..e44a987
+index 0000000..8fd02b9
 --- /dev/null
 +++ b/libs/WindowManager/Shell/src/com/android/wm/shell/roseedge/RoseEdgeController.java
-@@ -0,0 +1,734 @@
+@@ -0,0 +1,738 @@
 +/*
 + * Copyright 2026
 + * SPDX-License-Identifier: Apache-2.0
@@ -642,13 +642,17 @@ index 0000000..e44a987
 +    private final RoseEdgePolicy.Return mReturn = new RoseEdgePolicy.Return(new SecureRandom()::nextLong);
 +    /** The one return in flight: answered exactly once (RETURNED, or REFUSED at its deadline). */
 +    @Nullable private PendingReturn mPendingReturn;
++    /**
++     * Return transitions this controller started, until it plays or is told they were consumed. Kept apart from the
++     * answer: focus can reach the task (RETURNED) before the transition is handed over, and its departure still plays.
++     */
++    private final ArrayMap<IBinder, PendingReturn> mReturnTransitions = new ArrayMap<>();
 +
 +    /** One return: the attempt Rose Agent numbered, the exact task it brings back and where its answer goes. */
 +    private static final class PendingReturn {
 +        final int mAttempt;
 +        @NonNull final RoseEdgePolicy.Return.Task mTask;
 +        @NonNull final AgentTrayLink.Return.Answer mAnswer;
-+        @Nullable IBinder mTransition;
 +
 +        PendingReturn(int attempt, @NonNull RoseEdgePolicy.Return.Task task,
 +                @NonNull AgentTrayLink.Return.Answer answer) {
@@ -856,8 +860,8 @@ index 0000000..e44a987
 +            @NonNull SurfaceControl.Transaction startTransaction,
 +            @NonNull SurfaceControl.Transaction finishTransaction,
 +            @NonNull Transitions.TransitionFinishCallback finishCallback) {
-+        final PendingReturn pending = mPendingReturn;
-+        if (pending != null && transition == pending.mTransition) {
++        final PendingReturn pending = mReturnTransitions.remove(transition);
++        if (pending != null) {
 +            depart(pending, info, startTransaction, finishTransaction, finishCallback);
 +            return true;
 +        }
@@ -880,8 +884,8 @@ index 0000000..e44a987
 +    @Override
 +    public void onTransitionConsumed(@NonNull IBinder transition, boolean aborted,
 +            @Nullable SurfaceControl.Transaction finishTransaction) {
-+        final PendingReturn pending = mPendingReturn;
-+        if (pending != null && transition == pending.mTransition) {
++        final PendingReturn pending = mReturnTransitions.remove(transition);
++        if (pending != null) {
 +            // Aborted: nothing moved. Merged into another transition: the reorder was applied, so focus decides.
 +            if (aborted) {
 +                answerReturn(pending, RoseEdgePolicy.Return.REFUSED);
@@ -1002,7 +1006,7 @@ index 0000000..e44a987
 +        // Exactly that task, in front; never a start, launch intent, NEW_TASK or moveTaskToFront.
 +        final WindowContainerTransaction wct = new WindowContainerTransaction();
 +        wct.reorder(running.token, true /* onTop */);
-+        pending.mTransition = mTransitions.startTransition(TRANSIT_TO_FRONT, wct, this);
++        mReturnTransitions.put(mTransitions.startTransition(TRANSIT_TO_FRONT, wct, this), pending);
 +        mMainExecutor.executeDelayed(() -> answerReturn(pending, RoseEdgePolicy.Return.REFUSED),
 +                RETURN_DEADLINE_MS);
 +    }
