@@ -45,6 +45,7 @@ public final class AgentTrayService extends Service {
   @Override public void handleMessage(Message m){receive(m);}
  });
  private String lastState="";
+ private static final TrayBackgroundActivity backgroundActivity=new TrayBackgroundActivity();
  private final Runnable poll=new Runnable(){public void run(){publish(false);if(!clients.isEmpty())main.postDelayed(this,80);}};
  @Override public IBinder onBind(Intent intent){return endpoint.getBinder();}
  private boolean trusted(int uid){
@@ -115,9 +116,12 @@ public final class AgentTrayService extends Service {
   b.putLong("audioObservedAt",v==null?0L:v.trayAudioObservedAt);
   b.putString("status",c.trayStatus(v!=null));
   if(context!=null)b.putString(RoseTheme.TRAY_KEY,CustomizationStore.read(context).theme);
+  long now=WorkspaceOverviewFeed.activityClock();
+  // nanoTime is shared across app/SystemUI/Launcher on this boot; never restamp duplicate evidence.
+  b.putString("backgroundActivity",backgroundActivity.state(WorkspaceOverviewFeed.activitySnapshot(now),now));
   return b;
  }
- private String signature(Bundle b){return b.getBoolean("connected")+":"+b.getBoolean("listening")+":"+b.getBoolean("muted")+":"+b.getString("status")+":"+Math.round(b.getFloat("inputLevel")*50)+":"+Math.round(b.getFloat("outputLevel")*50)+":"+(b.getLong("audioObservedAt")/400)+":"+b.getString(RoseTheme.TRAY_KEY);}
+ private String signature(Bundle b){return b.getBoolean("connected")+":"+b.getBoolean("listening")+":"+b.getBoolean("muted")+":"+b.getString("status")+":"+Math.round(b.getFloat("inputLevel")*50)+":"+Math.round(b.getFloat("outputLevel")*50)+":"+(b.getLong("audioObservedAt")/400)+":"+b.getString(RoseTheme.TRAY_KEY)+":"+b.getString("backgroundActivity");}
  private void publish(boolean force){
   Bundle b=state(this);String next=signature(b);if(!force&&lastState.equals(next))return;lastState=next;
   for(Messenger client:new ArrayList<>(clients.values()))send(client,b);
