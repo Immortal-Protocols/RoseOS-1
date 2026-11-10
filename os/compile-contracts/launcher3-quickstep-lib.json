@@ -103,7 +103,7 @@
     },
     {
      "name": "rose-edge-wmshell.patch",
-     "sha256": "1296c28bf3f59dbb8824930364149ffe339d838ff01a728cc48be0c391db4bc8"
+     "sha256": "666679820cd54dc980287c4dd07de8482b77e1606f39e651fe96803c0ef1bbf2"
     },
     {
      "name": "rose-shade-systemui.patch",
@@ -824,17 +824,17 @@
      "path": "libs/WindowManager/Shell/src/com/android/wm/shell/RoseEdgeMicSlot.java",
      "pre": null,
      "post": {
-      "sha256": "60cbd2a3b71ded615159910c6750f17d3de545944d3a62638b7c916ba69ca66c",
-      "gitBlob": "00157ba5443c07fa447c6d7bac1bf3e5f4e88804"
+      "sha256": "c178b08e4d0ce8cecb2f5da7a640ab3f26d93aad63372926ecc6103539d9daef",
+      "gitBlob": "f8e557e537a395c27be11aff0fad847da02e44ec"
      },
      "chain": [
       {
        "patch": "rose-edge-wmshell.patch",
        "before": null,
-       "after": "00157ba5443c07fa447c6d7bac1bf3e5f4e88804",
+       "after": "f8e557e537a395c27be11aff0fad847da02e44ec",
        "index": [
         "0000000",
-        "00157ba"
+        "f8e557e"
        ],
        "base": "exact"
       }
@@ -1716,7 +1716,7 @@
   },
   {
    "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseAgentStrip.java",
-   "sha256": "d8ba42e08bec8ed4f7fdefafe6ad9f5a9f68f3267d80e29537643bebfd7b8f07",
+   "sha256": "c7eb0c3d7b54d0fd403233a507a0674963888d529ac22d25fe6c1caab61051be",
    "role": "required"
   },
   {
@@ -1761,7 +1761,7 @@
   },
   {
    "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseOxbloodField.java",
-   "sha256": "352139798573dfac21c5cdb9d081058ecba651a8e5870400838161ff8467148b",
+   "sha256": "6e38717882e7492eec18c6a6d5367e1fa8789b0334619e7b7ac233d0098fc269",
    "role": "required"
   },
   {
@@ -1771,7 +1771,7 @@
   },
   {
    "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseThemeSetting.java",
-   "sha256": "d7d018c0c3acde72a318e017a3a41746a2ee7b210890fedec673e20d8e7f475c",
+   "sha256": "a39c8f0d779f9619b21e3620b84ad3d926076c2113226e65826bfdcd4d099392",
    "role": "required"
   }
  ],
@@ -1832,7 +1832,7 @@
     {
      "project": "frameworks/base",
      "name": "rose-edge-wmshell.patch",
-     "sha256": "1296c28bf3f59dbb8824930364149ffe339d838ff01a728cc48be0c391db4bc8"
+     "sha256": "666679820cd54dc980287c4dd07de8482b77e1606f39e651fe96803c0ef1bbf2"
     },
     {
      "project": "frameworks/base",
@@ -1887,7 +1887,7 @@
     },
     {
      "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseAgentStrip.java",
-     "sha256": "d8ba42e08bec8ed4f7fdefafe6ad9f5a9f68f3267d80e29537643bebfd7b8f07"
+     "sha256": "c7eb0c3d7b54d0fd403233a507a0674963888d529ac22d25fe6c1caab61051be"
     },
     {
      "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseAgentWork.java",
@@ -1923,7 +1923,7 @@
     },
     {
      "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseOxbloodField.java",
-     "sha256": "352139798573dfac21c5cdb9d081058ecba651a8e5870400838161ff8467148b"
+     "sha256": "6e38717882e7492eec18c6a6d5367e1fa8789b0334619e7b7ac233d0098fc269"
     },
     {
      "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseTheme.java",
@@ -1931,7 +1931,7 @@
     },
     {
      "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseThemeSetting.java",
-     "sha256": "d7d018c0c3acde72a318e017a3a41746a2ee7b210890fedec673e20d8e7f475c"
+     "sha256": "a39c8f0d779f9619b21e3620b84ad3d926076c2113226e65826bfdcd4d099392"
     }
    ],
    "notAnInputOverlays": [
@@ -1988,7 +1988,7 @@
      },
      {
       "name": "rose-edge-wmshell.patch",
-      "sha256": "1296c28bf3f59dbb8824930364149ffe339d838ff01a728cc48be0c391db4bc8"
+      "sha256": "666679820cd54dc980287c4dd07de8482b77e1606f39e651fe96803c0ef1bbf2"
      },
      {
       "name": "rose-shade-systemui.patch",
@@ -2709,17 +2709,17 @@
       "path": "libs/WindowManager/Shell/src/com/android/wm/shell/RoseEdgeMicSlot.java",
       "pre": null,
       "post": {
-       "sha256": "60cbd2a3b71ded615159910c6750f17d3de545944d3a62638b7c916ba69ca66c",
-       "gitBlob": "00157ba5443c07fa447c6d7bac1bf3e5f4e88804"
+       "sha256": "c178b08e4d0ce8cecb2f5da7a640ab3f26d93aad63372926ecc6103539d9daef",
+       "gitBlob": "f8e557e537a395c27be11aff0fad847da02e44ec"
       },
       "chain": [
        {
         "patch": "rose-edge-wmshell.patch",
         "before": null,
-        "after": "00157ba5443c07fa447c6d7bac1bf3e5f4e88804",
+        "after": "f8e557e537a395c27be11aff0fad847da02e44ec",
         "index": [
          "0000000",
-         "00157ba"
+         "f8e557e"
         ],
         "base": "exact"
        }
@@ -3601,7 +3601,7 @@
    },
    {
     "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseAgentStrip.java",
-    "sha256": "d8ba42e08bec8ed4f7fdefafe6ad9f5a9f68f3267d80e29537643bebfd7b8f07",
+    "sha256": "c7eb0c3d7b54d0fd403233a507a0674963888d529ac22d25fe6c1caab61051be",
     "role": "required"
    },
    {
@@ -3646,7 +3646,7 @@
    },
    {
     "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseOxbloodField.java",
-    "sha256": "352139798573dfac21c5cdb9d081058ecba651a8e5870400838161ff8467148b",
+    "sha256": "6e38717882e7492eec18c6a6d5367e1fa8789b0334619e7b7ac233d0098fc269",
     "role": "required"
    },
    {
@@ -3656,7 +3656,7 @@
    },
    {
     "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseThemeSetting.java",
-    "sha256": "d7d018c0c3acde72a318e017a3a41746a2ee7b210890fedec673e20d8e7f475c",
+    "sha256": "a39c8f0d779f9619b21e3620b84ad3d926076c2113226e65826bfdcd4d099392",
     "role": "required"
    }
   ],

@@ -29,7 +29,7 @@
   "javacfix": "OS Core to OS Product, 2026-11-07 18:26 UTC, commit 31c00a7 on 081164b (the Frankel 2026110702 SystemUI-core javac error, roseshade/RoseShadeController.java:990: inside the SwipeFrame FrameLayout the bare mContext is View's own field and cannot be read before super): only the required overlay RoseShadeController.java changes (1ec7b902..., blob 16b634ee), its super call now RoseShadeController.this.mContext; OS Product checked every m-prefixed name used in SwipeFrame and the three anonymous View subclasses against the pinned View, ViewGroup, FrameLayout, LinearLayout, TextView and EditText fields, and none other resolves to a framework field; no patch, no new file, no new import; goals and flagEvidence (none) unchanged",
   "chininset": "OS Core to OS Product, 2026-11-07 18:42 UTC, commit 8142ffb on 31c00a7 (the chin inset, items 3-4, with OS Product's RoseEdgeWindow systemOverlays() inset in the same carrier): only the required overlay RoseShadeController.java changes (7978a7c1..., blob 1d3d8ad9), its panel inset now ime() | navigationBars() | systemOverlays() and its scrim's bottom margin the systemOverlays() bottom, a no-op while the chin provides nothing; systemOverlays() is public API 34; no patch, no new file, no new import; goals and flagEvidence (none) unchanged",
   "exactreturn": "OS Core in #734, 2026-11-10 UTC, commits 47c8208, 589407e then f0dcd60 (1C, the exact-task return, protocol v1 agreed with App Core and Home/App; Rose's HOME task counts as Home, per Home/App): rose-edge-wmshell.patch sha256 42fcc4fc3d2c93295b3b12805e6e580c2b1615d91df09ec64e05dc705cf26cbd, only roseedge/RoseEdgeController.java (429757cf..., blob 8fd02b96) and roseedge/RoseEdgePolicy.java (a9cd7747..., blob a4003dcc) changing; the required overlays AgentTrayPrototype.java (4bac21a0..., blob ba75ed1b) and AgentTrayLink.java (90e9b648..., blob 48495c62, now public for its in-process Return seam) change; the other after-images, the WMShellModule pre-image, the goals and flagEvidence (none) unchanged; no new file, flag or classpath input (the new imports, android.animation.Animator, AnimatorListenerAdapter and ValueAnimator, android.app.ActivityManager, android.content.ComponentName, android.content.pm.PackageManager, android.graphics.Point, android.view.animation.PathInterpolator, java.security.SecureRandom, the WindowManager TRANSIT_OPEN, TRANSIT_CLOSE, TRANSIT_TO_FRONT and TRANSIT_TO_BACK constants and com.android.wm.shell.AgentTrayLink, are framework, JDK or Shell classes)",
-  "glacier": "OS Core in #744, 2026-11-10 UTC, commit 3e0b602 (1E, native Glacier and spoken theme switching; colour only): rose-edge-wmshell.patch sha256 1296c28bf3f59dbb8824930364149ffe339d838ff01a728cc48be0c391db4bc8, only RoseEdgeMicSlot.java (60cbd2a3..., blob 00157ba5) changing, to draw its plate, well and glyph in the theme RoseThemeMirror reports (muted stays warm); the required overlays AgentTrayPrototype.java (f026cf31..., blob 403f7e39: applies, mirrors to Settings.Global rose_theme and acknowledges the theme on the existing tray link, and themes the Mic off pill), AgentTrayLink.java (5c2541f2..., blob 789c07aa: THEME_SHOWN = 9) and roseshade/RoseShadeController.java (2da46e97..., blob cb583235: per-theme shade tokens) change; two new required overlays, the generated pure RoseTheme.java (765c7c83..., blob a23c693f) and RoseThemeMirror.java (47142edd..., blob e5d538c0), both in com.android.wm.shell with only JDK imports; the other after-images, the WMShellModule pre-image, the goals and flagEvidence (none) unchanged; no new flag, permission or classpath input (android.provider.Settings.Global and android.database.ContentObserver are framework classes)"
+  "glacier": "OS Core in #744, 2026-11-10 UTC, commits 3e0b602 then 8ed43f1 (1E, native Glacier and spoken theme switching; colour only; the self-review fix posts the slot's redraw and acknowledges an outside setting change): rose-edge-wmshell.patch sha256 666679820cd54dc980287c4dd07de8482b77e1606f39e651fe96803c0ef1bbf2, only RoseEdgeMicSlot.java (c178b08e..., blob f8e557e5) changing, to draw its plate, well and glyph in the theme RoseThemeMirror reports (muted stays warm); the required overlays AgentTrayPrototype.java (f026cf31..., blob 403f7e39: applies, mirrors to Settings.Global rose_theme and acknowledges the theme on the existing tray link, and themes the Mic off pill), AgentTrayLink.java (5c2541f2..., blob 789c07aa: THEME_SHOWN = 9) and roseshade/RoseShadeController.java (2da46e97..., blob cb583235: per-theme shade tokens) change; two new required overlays, the generated pure RoseTheme.java (765c7c83..., blob a23c693f) and RoseThemeMirror.java (857315df..., blob d83ee4ba), both in com.android.wm.shell with only JDK imports; the other after-images, the WMShellModule pre-image, the goals and flagEvidence (none) unchanged; no new flag, permission or classpath input (android.provider.Settings.Global and android.database.ContentObserver are framework classes)"
  },
  "registration": {
   "state": "unregistered",
@@ -97,7 +97,7 @@
     },
     {
      "name": "rose-edge-wmshell.patch",
-     "sha256": "1296c28bf3f59dbb8824930364149ffe339d838ff01a728cc48be0c391db4bc8"
+     "sha256": "666679820cd54dc980287c4dd07de8482b77e1606f39e651fe96803c0ef1bbf2"
     }
    ],
    "files": [
@@ -814,17 +814,17 @@
      "path": "libs/WindowManager/Shell/src/com/android/wm/shell/RoseEdgeMicSlot.java",
      "pre": null,
      "post": {
-      "sha256": "60cbd2a3b71ded615159910c6750f17d3de545944d3a62638b7c916ba69ca66c",
-      "gitBlob": "00157ba5443c07fa447c6d7bac1bf3e5f4e88804"
+      "sha256": "c178b08e4d0ce8cecb2f5da7a640ab3f26d93aad63372926ecc6103539d9daef",
+      "gitBlob": "f8e557e537a395c27be11aff0fad847da02e44ec"
      },
      "chain": [
       {
        "patch": "rose-edge-wmshell.patch",
        "before": null,
-       "after": "00157ba5443c07fa447c6d7bac1bf3e5f4e88804",
+       "after": "f8e557e537a395c27be11aff0fad847da02e44ec",
        "index": [
         "0000000",
-        "00157ba"
+        "f8e557e"
        ],
        "base": "exact"
       }
@@ -1166,7 +1166,7 @@
   },
   {
    "target": "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/RoseThemeMirror.java",
-   "sha256": "47142edd27c415a8a5d113d85e6d337932daedb0ccfb5ca8256aad3fea42f3c3",
+   "sha256": "857315dfef9b3e59024ddc14497812cac46a5ce7ca1550912e7fc9b76c54ff3f",
    "role": "required"
   },
   {
@@ -1326,7 +1326,7 @@
     },
     {
      "target": "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/RoseThemeMirror.java",
-     "sha256": "47142edd27c415a8a5d113d85e6d337932daedb0ccfb5ca8256aad3fea42f3c3"
+     "sha256": "857315dfef9b3e59024ddc14497812cac46a5ce7ca1550912e7fc9b76c54ff3f"
     },
     {
      "target": "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/StatusVoiceGlow.java",
@@ -2355,7 +2355,7 @@
    },
    {
     "target": "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/RoseThemeMirror.java",
-    "sha256": "47142edd27c415a8a5d113d85e6d337932daedb0ccfb5ca8256aad3fea42f3c3",
+    "sha256": "857315dfef9b3e59024ddc14497812cac46a5ce7ca1550912e7fc9b76c54ff3f",
     "role": "required"
    },
    {
@@ -2427,11 +2427,11 @@
  },
  "candidateDelta": {
   "pr": 744,
-  "commit": "3e0b602f3c0ba2b2e644c10765228d153af00389",
+  "commit": "8ed43f1762e690b5db1ff9f9226d9ff9fa760a3f",
   "patches": [
    {
     "name": "rose-edge-wmshell.patch",
-    "sha256": "1296c28bf3f59dbb8824930364149ffe339d838ff01a728cc48be0c391db4bc8",
+    "sha256": "666679820cd54dc980287c4dd07de8482b77e1606f39e651fe96803c0ef1bbf2",
     "project": "frameworks/base",
     "strip": 1,
     "bundlePath": "os/tests/fixtures/launcher3-compile-contract/candidate-pr744/patches/rose-edge-wmshell.patch"
@@ -2460,8 +2460,8 @@
     "path": "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/RoseEdgeMicSlot.java",
     "before": null,
     "after": {
-     "sha256": "60cbd2a3b71ded615159910c6750f17d3de545944d3a62638b7c916ba69ca66c",
-     "gitBlob": "00157ba5443c07fa447c6d7bac1bf3e5f4e88804"
+     "sha256": "c178b08e4d0ce8cecb2f5da7a640ab3f26d93aad63372926ecc6103539d9daef",
+     "gitBlob": "f8e557e537a395c27be11aff0fad847da02e44ec"
     }
    },
    {
@@ -2512,7 +2512,7 @@
   "bundle": [
    {
     "path": "os/tests/fixtures/launcher3-compile-contract/candidate-pr744/patches/rose-edge-wmshell.patch",
-    "sha256": "1296c28bf3f59dbb8824930364149ffe339d838ff01a728cc48be0c391db4bc8"
+    "sha256": "666679820cd54dc980287c4dd07de8482b77e1606f39e651fe96803c0ef1bbf2"
    }
   ],
   "pathConvention": "files[].path and overlays[].target are relative to the source tree root (project path first); projects[].files[].path and base.projects[].files[].path are relative to their project; bundlePath and bundle[].path are relative to the repository root"

@@ -36,7 +36,7 @@ class Launcher3CompileContractTest(unittest.TestCase):
     SCRIPT = ROOT/'scripts/launcher3-compile-contract.py'
     MANIFEST = ROOT/'os/compile-contracts/launcher3-quickstep-lib.json'
     # The agreed version (#410). Changing the manifest changes this, and the change needs re-agreement with Release.
-    AGREED_SHA256 = '66b1a051c87b2a8053861c95f565ab8f656cab61da223e25a4c6d10b715cfffa'
+    AGREED_SHA256 = '9de2c0ee23b5662c92c458a85bcaee3d35e13548fcb9c4083788b133df808a9c'
 
     def contract(self):
         import importlib.util

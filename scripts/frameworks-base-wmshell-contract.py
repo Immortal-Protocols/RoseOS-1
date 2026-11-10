@@ -53,7 +53,7 @@ C.SCHEMA = 2
 C.MANIFEST = ROOT/'os/compile-contracts/frameworks-base-wmshell.json'
 # The reviewed candidate: the commit holding the patch's current bytes (#516, #523, #528, #540's fix for the first
 # real compile's javac error, then #551's chin marker on REGISTER for Rose Agent, F08).
-C.CANDIDATE = {'pr': 744, 'commit': '3e0b602f3c0ba2b2e644c10765228d153af00389'}
+C.CANDIDATE = {'pr': 744, 'commit': '8ed43f1762e690b5db1ff9f9226d9ff9fa760a3f'}
 C.BUNDLE = C.FIXTURES/'candidate-pr744'
 C.CANDIDATE_PATCHES = ['rose-edge-wmshell.patch']
 # frameworks/base: apply-os-changes.py's --background-policy order (as in the Launcher3 contract), then the candidate.
@@ -185,15 +185,16 @@ CONFIRMATION = {
         'android.view.animation.PathInterpolator, java.security.SecureRandom, the WindowManager TRANSIT_OPEN, '
         'TRANSIT_CLOSE, TRANSIT_TO_FRONT and TRANSIT_TO_BACK constants and com.android.wm.shell.AgentTrayLink, are '
         'framework, JDK or Shell classes)',
-    'glacier': 'OS Core in #744, 2026-11-10 UTC, commit 3e0b602 (1E, native Glacier and spoken theme switching; '
-        'colour only): rose-edge-wmshell.patch sha256 '
-        '1296c28bf3f59dbb8824930364149ffe339d838ff01a728cc48be0c391db4bc8, only RoseEdgeMicSlot.java (60cbd2a3..., '
-        'blob 00157ba5) changing, to draw its plate, well and glyph in the theme RoseThemeMirror reports (muted stays '
+    'glacier': 'OS Core in #744, 2026-11-10 UTC, commits 3e0b602 then 8ed43f1 (1E, native Glacier and spoken theme '
+        'switching; colour only; the self-review fix posts the slot\'s redraw and acknowledges an outside setting '
+        'change): rose-edge-wmshell.patch sha256 '
+        '666679820cd54dc980287c4dd07de8482b77e1606f39e651fe96803c0ef1bbf2, only RoseEdgeMicSlot.java (c178b08e..., '
+        'blob f8e557e5) changing, to draw its plate, well and glyph in the theme RoseThemeMirror reports (muted stays '
         'warm); the required overlays AgentTrayPrototype.java (f026cf31..., blob 403f7e39: applies, mirrors to '
         'Settings.Global rose_theme and acknowledges the theme on the existing tray link, and themes the Mic off pill), '
         'AgentTrayLink.java (5c2541f2..., blob 789c07aa: THEME_SHOWN = 9) and roseshade/RoseShadeController.java '
         '(2da46e97..., blob cb583235: per-theme shade tokens) change; two new required overlays, the generated pure '
-        'RoseTheme.java (765c7c83..., blob a23c693f) and RoseThemeMirror.java (47142edd..., blob e5d538c0), both in '
+        'RoseTheme.java (765c7c83..., blob a23c693f) and RoseThemeMirror.java (857315df..., blob d83ee4ba), both in '
         'com.android.wm.shell with only JDK imports; the other after-images, the WMShellModule pre-image, the goals and '
         'flagEvidence (none) unchanged; no new flag, permission or classpath input (android.provider.Settings.Global and '
         'android.database.ContentObserver are framework classes)',
