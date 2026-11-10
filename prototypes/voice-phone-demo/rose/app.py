@@ -1105,6 +1105,7 @@ class Server:
     def set_voice(self, voice: str) -> tuple[dict, int]:
         if voice not in self.voices():
             return {"ok": False, "error": f"unknown voice; choose from {', '.join(self.voices())}"}, 400
+        before = getattr(self.speaker, "voice", None)
         if self.speaker is not None:
             try:
                 self.speaker.set_voice(voice)  # loads the voice prompt on the runtime thread
@@ -1112,6 +1113,9 @@ class Server:
                 return {"ok": False, "error": f"voice change failed: {type(exc).__name__}"}, 500
         self.voice = voice
         self.bus.emit("voice", voice=voice)
+        if self.identity is not None and self.speaker is not None:
+            # The owner's pick here is the saved choice too (Nov 9 plan 1D), so revert and the next start follow it.
+            return {"ok": True, "voice": voice, "saved": self.identity.adopt(before, voice)}, 200
         return {"ok": True, "voice": voice}, 200
 
     # ----------------------------------------------------------- websockets

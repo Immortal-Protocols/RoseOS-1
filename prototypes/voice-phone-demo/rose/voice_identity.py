@@ -101,7 +101,8 @@ def match(current: str, request: dict, available, traits: dict = TRAITS) -> list
     """Every available voice other than current that can be measured and has the requested gender (same: the
     current voice's), best first, with how well it fits.
 
-    Each entry: voice, score (lower is closer), met and unmet requested aspects, and the measured changes."""
+    Each entry: voice, score (lower is closer), met and unmet requested aspects, against (requested aspects it moves
+    the opposite way, also unmet), and the measured changes. A much_ request is met only by at least one full step."""
     voices = traits['voices']
     cur = voices[current]
     gender = cur['gender'] if request['gender'] == 'same' else request['gender']
@@ -114,7 +115,7 @@ def match(current: str, request: dict, available, traits: dict = TRAITS) -> list
             continue
         d = deltas(cur, cand)
         switched = cand['gender'] != cur['gender']
-        score, met, unmet = 0.0, [], []
+        score, met, unmet, against = 0.0, [], [], []
         for dim, spec in DIMENSIONS.items():
             level = request['wanted'].get(dim)
             if level is None:
@@ -124,10 +125,16 @@ def match(current: str, request: dict, available, traits: dict = TRAITS) -> list
             target = math.copysign(spec['large'] if abs(level) == 2 else spec['step'], level)
             score += ((d[dim] - target) / spec['scale']) ** 2
             word = (('much_' if abs(level) == 2 else '') + (spec['more'] if level > 0 else spec['less']))
-            (met if d[dim] * level > 0 and abs(d[dim]) >= spec['least'] else unmet).append(word)
-        out.append({'voice': name, 'score': round(score, 3), 'met': met, 'unmet': unmet,
+            enough = spec['step'] if abs(level) == 2 else spec['least']
+            if d[dim] * level > 0 and abs(d[dim]) >= enough:
+                met.append(word)
+            else:
+                unmet.append(word)
+                if d[dim] * level < 0 and abs(d[dim]) >= spec['least']:
+                    against.append(word)
+        out.append({'voice': name, 'score': round(score, 3), 'met': met, 'unmet': unmet, 'against': against,
                     'changes': describe_changes(d)})
-    out.sort(key=lambda e: (len(e['unmet']), e['score']))
+    out.sort(key=lambda e: (len(e['against']), len(e['unmet']), e['score']))
     return out
 
 
@@ -196,10 +203,13 @@ class VoiceIdentity:
         except ValueError:
             self.name = DEFAULT_NAME
         voice = saved.get('voice')
-        self.voice = voice if voice in traits['voices'] else None  # None: the producer's own choice
+        # The owner's chosen voice as saved (None: never chosen). Only a change the owner made replaces it: a one-run
+        # --voice or a startup fallback changes what is spoken, never the choice.
+        self.voice = voice if voice in traits['voices'] else None
         previous = saved.get('previous_voice')
         self.previous = previous if previous in traits['voices'] else None
         self.unavailable: set[str] = set()
+        self.offered: dict | None = None  # the alternative the last no_close_match offered
 
     # -------------------------------------------------------------- persistence
     def _save(self, name, voice, previous) -> bool:
@@ -217,9 +227,19 @@ class VoiceIdentity:
         return explicit or self.voice or DEFAULT_VOICE
 
     def loaded(self, voice: str) -> None:
-        """Record the voice the speaker actually loaded at start (a saved one may have failed)."""
-        if self.voice is None or voice != self.voice:
-            self.voice = voice if voice in self.traits['voices'] else self.voice
+        """The speaker loaded voice at start. The saved choice is kept as is: matching starts from what is spoken."""
+
+    def adopt(self, before: str | None, voice: str) -> bool:
+        """A voice chosen outside conversation (the loopback dashboard's /api/voice) becomes the saved choice, so a
+        revert and the next start follow what the owner last picked. False when it could not be saved."""
+        if voice not in self.traits['voices']:
+            return False
+        with self.lock:
+            previous = before if before in self.traits['voices'] and before != voice else self.previous
+            if not self._save(self.name, voice, previous):
+                return False
+            self.voice, self.previous, self.offered = voice, previous, None
+        return True
 
     # --------------------------------------------------------------------- tools
     def rename(self, raw) -> dict:
@@ -244,42 +264,54 @@ class VoiceIdentity:
                     'message': 'The current voice has no measurements, so a description cannot be matched to it.'}
         named = args.get('voice')
         if named:
-            return self._apply(speaker, current, [{'voice': str(named).lower(), 'met': [], 'unmet': [],
-                                                   'changes': None}], {'wanted': {}, 'gender': 'any',
-                                                                       'accent': '', 'other': []})
+            # Only the alternative the last result offered, never a voice chosen by its name.
+            offered = self.offered
+            if not offered or str(named).lower() != offered['voice'] or offered['voice'] == current:
+                return {'ok': False, 'reason': 'not_offered', 'changed': False, 'voice': current,
+                        'message': 'Only the alternative a previous change_voice result offered can be applied; '
+                                   'otherwise describe the voice.'}
+            return self._apply(speaker, current, [offered], label='alternative')
         try:
             request = request_from(args)
         except ValueError as exc:
             return {'ok': False, 'reason': 'invalid_request', 'message': str(exc)}
         available = [v for v in getattr(speaker, 'voices', self.traits['voices']) if v not in self.unavailable]
-        ranked = match(current, request, available, self.traits)
         limits = self._limits(request)
-        if not request['wanted'] and request['gender'] in ('same', 'either', self._gender(current)):
+        gender = self._gender(current)
+        if not request['wanted'] and request['gender'] in ('same', 'either', gender):
+            if request['gender'] == gender:
+                return {'ok': False, 'reason': 'already', 'changed': False, 'voice': current, 'limits': limits,
+                        'message': f'The current voice is already {gender}; ask how it should sound different.'}
             # Only an accent or unmeasured qualities: nothing measured to move toward, so keep the voice.
             return {'ok': False, 'reason': 'no_close_match', 'changed': False, 'voice': current, 'limits': limits,
                     'message': 'Nothing in that description can be matched to the available voices; the current '
                                'voice was kept.'}
-        if request['gender'] in ('female', 'male') and request['gender'] != self._gender(current):
-            if not ranked:
-                return {'ok': False, 'reason': 'no_match', 'changed': False, 'voice': current, 'limits': limits,
-                        'message': f'No {request["gender"]} voice is available on this backend.'}
-            return self._apply(speaker, current, ranked, request, limits)
-        if not ranked or not ranked[0]['met']:
-            # Nothing of this gender moves in any asked direction: keep the voice and offer the nearest alternative,
-            # another gender's only if the owner would accept one.
-            wider = match(current, {**request, 'gender': 'either'}, available, self.traits)
-            best = next((e for e in wider if e['met']), ranked[0] if ranked else None)
-            result = {'ok': False, 'reason': 'no_close_match', 'changed': False, 'voice': current, 'limits': limits,
-                      'message': ('No available ' + ('' if request['gender'] == 'either' else
-                                                     f'{self._gender(current)} ') + 'voice is '
-                                  + ' and '.join(self._words(request['wanted'])) + ' than the current one.')}
-            if best is not None:
-                result['alternative'] = {'voice': best['voice'], 'gender': self._gender(best['voice']),
-                                         'met': best['met'], 'unmet': best['unmet'], 'changes': best['changes']}
-                result['message'] += (' The nearest alternative is offered; apply it only if the owner agrees '
-                                       '(change_voice with its voice).')
-            return result
-        return self._apply(speaker, current, ranked, request, limits)
+        ranked = match(current, request, available, self.traits)
+        # A voice qualifies when it moves in no asked direction the wrong way and, for a description, meets at least
+        # one of them; a change of gender asked for alone qualifies by gender.
+        changing_gender = request['gender'] in ('female', 'male') and request['gender'] != gender
+        fits = [e for e in ranked if not e['against'] and (e['met'] or (changing_gender and not request['wanted']))]
+        if fits:
+            return self._apply(speaker, current, fits, limits=limits)
+        if changing_gender and not ranked:
+            return {'ok': False, 'reason': 'no_match', 'changed': False, 'voice': current, 'limits': limits,
+                    'message': f'No {request["gender"]} voice is available on this backend.'}
+        # Nothing qualifies: keep the voice and offer the nearest voice of any gender that moves the asked way only.
+        wider = match(current, {**request, 'gender': 'either'}, available, self.traits)
+        best = next((e for e in wider if e['met'] and not e['against']), None)
+        scope = '' if request['gender'] in ('either',) else f'{request["gender"] if changing_gender else gender} '
+        result = {'ok': False, 'reason': 'no_close_match', 'changed': False, 'voice': current, 'limits': limits,
+                  'message': (f'No available {scope}voice is ' + ' and '.join(self._words(request['wanted']))
+                              + ' than the current one without moving the other way.' if request['wanted'] else
+                              f'No available {scope}voice fits that description.')}
+        self.offered = None
+        if best is not None:
+            self.offered = best
+            result['alternative'] = {'voice': best['voice'], 'gender': self._gender(best['voice']),
+                                     'met': best['met'], 'unmet': best['unmet'], 'changes': best['changes']}
+            result['message'] += (' The nearest alternative is offered; apply it only if the owner agrees '
+                                   '(change_voice with its voice).')
+        return result
 
     def revert(self, speaker, to: str = 'previous') -> dict:
         if speaker is None:
@@ -289,8 +321,8 @@ class VoiceIdentity:
         if target is None or target == current:
             return {'ok': False, 'reason': 'nothing_to_revert', 'changed': False, 'voice': current,
                     'message': 'This is already the ' + ('original' if to == 'original' else 'only chosen') + ' voice.'}
-        return self._apply(speaker, current, [{'voice': target, 'met': [], 'unmet': [], 'changes': None}],
-                           {'wanted': {}, 'gender': 'any', 'accent': '', 'other': []}, reverted=True)
+        return self._apply(speaker, current, [{'voice': target, 'met': [], 'unmet': [], 'against': [],
+                                               'changes': None}], label='reverted')
 
     # ------------------------------------------------------------------ helpers
     @staticmethod
@@ -312,11 +344,13 @@ class VoiceIdentity:
                           + ', '.join(request['other']) + ' could not be matched.')
         return limits
 
-    def _apply(self, speaker, current, ranked, request, limits=None, reverted=False) -> dict:
+    def _apply(self, speaker, current, candidates, limits=None, label=None) -> dict:
+        """Switch to the first candidate this backend can load, then save it; only qualifying candidates are given,
+        so a failure to load never falls through to a voice that does not fit."""
         skipped = []
-        for entry in ranked:
+        for entry in candidates:
             voice = entry['voice']
-            if voice not in self.traits['voices'] and voice not in getattr(speaker, 'voices', ()):
+            if voice not in self.traits['voices']:
                 skipped.append(voice)
                 continue
             try:
@@ -333,12 +367,11 @@ class VoiceIdentity:
                         pass
                     return {'ok': False, 'reason': 'not_saved', 'changed': False, 'voice': current,
                             'message': 'The new voice could not be saved, so the current voice was kept.'}
-                self.voice, self.previous = voice, current
+                self.voice, self.previous, self.offered = voice, current, None
             changes = entry['changes'] if entry['changes'] is not None else describe_changes(
-                deltas(self.traits['voices'][current], self.traits['voices'][voice])) \
-                if voice in self.traits['voices'] else []
+                deltas(self.traits['voices'][current], self.traits['voices'][voice]))
             result = {'ok': True, 'changed': True, 'voice': voice, 'previous_voice': current, 'saved': True,
-                      'match': 'reverted' if reverted else ('close' if not entry['unmet'] else 'partial'),
+                      'match': label or ('close' if not entry['unmet'] else 'partial'),
                       'met': entry['met'], 'unmet': entry['unmet'], 'measured_changes': changes,
                       'note': 'Reply now with one short sentence in this voice so the owner hears it, and ask '
                               'whether it suits them.'}
@@ -349,8 +382,8 @@ class VoiceIdentity:
                 result['note'] += (' A closer voice could not be loaded on this backend; say this is the closest '
                                    'available one.')
             return result
-        return {'ok': False, 'reason': 'unavailable', 'changed': False, 'voice': current,
-                'message': 'No matching voice could be loaded on this backend; the current voice was kept.'}
+        return {'ok': False, 'reason': 'unavailable', 'changed': False, 'voice': current, 'unavailable': skipped,
+                'message': 'No voice that fits could be loaded on this backend; the current voice was kept.'}
 
 
 DIRECTIONS = {name: {'type': 'string', 'enum': ['same', d['less'], d['more'], 'much_' + d['less'], 'much_' + d['more']],

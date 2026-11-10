@@ -81,6 +81,15 @@ class Grounding(unittest.TestCase):
             self.assertGreater(v['voiced_frames'], 500, name)
         self.assertEqual({n for n, v in traits['voices'].items() if v['gender'] == 'male'}, {'easton', 'micah', 'miles'})
 
+    def test_octave_errors_are_folded_not_counted_as_range(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location('describe_voices', ROOT / 'scripts/describe_voices.py')
+        dv = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(dv)
+        fixed = dv.octave_fixed([140, 141, 139, 280, 70, 142, 600])
+        self.assertEqual(len(fixed), 6)  # 600 Hz cannot be folded near 140 and is dropped
+        self.assertTrue(all(abs(12 * __import__('math').log2(f / 140)) <= 7 for f in fixed))
+
     def test_the_matcher_reads_measurements_only(self):
         source = (ROOT / 'rose/voice_identity.py').read_text()
         for name in ALL:  # no voice is special-cased by name, except the default
@@ -138,12 +147,25 @@ class Matching(unittest.TestCase):
         self.assertFalse(r['ok'])
         self.assertEqual((r['reason'], r['voice'], speaker.calls), ('no_close_match', 'zoey', []))
         self.assertIn('higher', r['message'])
-        self.assertIn('voice', r['alternative'])
-        # Accepted: the owner says yes to the offered alternative.
-        identity, speaker = vi.VoiceIdentity(), Speaker('zoey')
-        applied = identity.change_voice(speaker, {'voice': r['alternative']['voice']})
+        self.assertNotIn('alternative', r)  # no voice of either gender is higher: nothing to offer
+        r, speaker = self.change('easton', warmth='warmer')  # no warmer male voice, but a warmer female one
+        self.assertEqual((r['reason'], speaker.calls), ('no_close_match', []))
+        self.assertIn('warmer', r['alternative']['met'])
+
+    def test_only_the_offered_alternative_can_be_applied_by_name(self):
+        identity, speaker = vi.VoiceIdentity(), Speaker('easton')
+        for name in ('miles', 'juniper', 'easton', 'nobody'):  # nothing offered yet
+            r = identity.change_voice(speaker, {'voice': name})
+            self.assertEqual((r['reason'], speaker.calls), ('not_offered', []), name)
+        offer = identity.change_voice(speaker, {'warmth': 'warmer'})  # no warmer male voice: an offer
+        alt = offer['alternative']['voice']
+        self.assertEqual(identity.change_voice(speaker, {'voice': 'miles' if alt != 'miles' else 'micah'})['reason'],
+                         'not_offered')
+        applied = identity.change_voice(speaker, {'voice': alt})
         self.assertTrue(applied['ok'])
-        self.assertEqual(speaker.voice, r['alternative']['voice'])
+        self.assertEqual((applied['match'], speaker.voice, applied['unmet']), ('alternative', alt, offer['alternative']['unmet']))
+        self.assertEqual(identity.change_voice(speaker, {'voice': alt})['reason'], 'not_offered')  # used once
+        self.assertEqual((identity.previous, identity.revert(speaker)['ok'], speaker.voice), ('easton', True, 'easton'))
 
     def test_unmatchable_qualities_are_named_not_faked(self):
         r, speaker = self.change('zoey', accent='British')
@@ -155,6 +177,41 @@ class Matching(unittest.TestCase):
         self.assertIn('raspy could not be matched', r['limits'][0])
         r, _ = self.change('zoey', accent='American', warmth='warmer')
         self.assertNotIn('limits', r)
+
+    def test_no_voice_moving_the_wrong_way_is_applied_or_offered(self):
+        for current in ALL:
+            for dim, spec in vi.DIMENSIONS.items():
+                for word in (spec['less'], spec['more'], 'much_' + spec['less'], 'much_' + spec['more']):
+                    for extra in ({}, {'warmth': 'warmer'}, {'pitch': 'lower'}):
+                        args = {**extra, dim: word}
+                        with self.subTest(current=current, args=args):
+                            r, _ = self.change(current, **args)
+                            voice = r['voice'] if r['ok'] else (r.get('alternative') or {}).get('voice')
+                            if voice is None:
+                                continue
+                            d = vi.deltas(vi.TRAITS['voices'][current], vi.TRAITS['voices'][voice])
+                            for k, w in args.items():
+                                sign = 1 if w.replace('much_', '') == vi.DIMENSIONS[k]['more'] else -1
+                                self.assertFalse(d[k] * sign < 0 and abs(d[k]) >= vi.DIMENSIONS[k]['least'], (r, k))
+
+    def test_a_much_request_needs_a_full_step(self):
+        r, speaker = self.change('easton', pitch='much_lower')  # the male voices are within a semitone
+        self.assertFalse(r['ok'])
+        self.assertEqual(speaker.calls, [])
+        r, _ = self.change('zoey', pitch='much_lower')
+        if r['ok']:
+            d = vi.deltas(vi.TRAITS['voices']['zoey'], vi.TRAITS['voices'][r['voice']])['pitch']
+            self.assertLessEqual(d, -vi.DIMENSIONS['pitch']['step'])
+
+    def test_warmer_lower_from_easton_is_not_a_much_brighter_voice(self):
+        r, speaker = self.change('easton', warmth='warmer', pitch='lower')
+        self.assertNotEqual(speaker.voice, 'micah')  # 5.5 dB brighter: the opposite of warmer
+        self.assertFalse(r['ok'])
+
+    def test_asking_for_the_current_gender_says_so(self):
+        r, speaker = self.change('zoey', gender='female')
+        self.assertEqual((r['reason'], speaker.calls), ('already', []))
+        self.assertIn('already female', r['message'])
 
     def test_invalid_or_empty_requests_change_nothing(self):
         for args in ({}, {'pitch': 'sideways'}, {'gender': 'robot'}, {'pitch': 'same'}):
@@ -182,6 +239,15 @@ class Matching(unittest.TestCase):
         r = vi.VoiceIdentity().change_voice(speaker, {'warmth': 'warmer'})
         self.assertFalse(r['ok'])
         self.assertEqual((r['reason'], speaker.voice), ('unavailable', 'zoey'))
+
+    def test_when_every_fitting_voice_fails_nothing_unfitting_is_applied(self):
+        fitting = [e['voice'] for e in vi.match('zoey', vi.request_from({'warmth': 'warmer'}), ALL)
+                   if e['met'] and not e['against']]
+        speaker = Speaker('zoey', missing=set(fitting))
+        r = vi.VoiceIdentity().change_voice(speaker, {'warmth': 'warmer'})
+        self.assertFalse(r['ok'])
+        self.assertEqual((r['reason'], speaker.voice), ('unavailable', 'zoey'))
+        self.assertEqual(set(speaker.calls), set(fitting))
 
 
 class Persistence(unittest.TestCase):
@@ -239,6 +305,28 @@ class Persistence(unittest.TestCase):
                 vi.valid_name(bad)
             r = self.identity().rename(bad)
             self.assertEqual(r['reason'], 'invalid_name', bad)
+
+    def test_a_one_run_voice_or_fallback_never_replaces_the_saved_choice(self):
+        (self.dir / 'identity.json').write_text(json.dumps({'voice': 'harper', 'previous_voice': 'zoey'}))
+        one = self.identity()
+        self.assertEqual(one.startup_voice('miles'), 'miles')
+        one.loaded('miles')  # --voice miles for this run (or a fallback to zoey)
+        self.assertTrue(one.rename('Nova')['ok'])
+        saved = json.loads((self.dir / 'identity.json').read_text())
+        self.assertEqual((saved['voice'], saved['previous_voice']), ('harper', 'zoey'))
+        self.assertEqual(self.identity().startup_voice(None), 'harper')
+
+    def test_a_dashboard_pick_becomes_the_saved_choice(self):
+        one = self.identity()
+        speaker = Speaker('zoey')
+        self.assertTrue(one.change_voice(speaker, {'warmth': 'warmer'})['ok'])
+        warmer = speaker.voice
+        self.assertTrue(one.adopt(warmer, 'miles'))
+        speaker.voice = 'miles'
+        self.assertEqual(self.identity().startup_voice(None), 'miles')
+        self.assertTrue(one.revert(speaker)['ok'])
+        self.assertEqual(speaker.voice, warmer)  # back to the voice before the dashboard pick
+        self.assertFalse(one.adopt('zoey', 'gandalf'))
 
     def test_a_damaged_or_foreign_file_falls_back_to_defaults(self):
         (self.dir / 'identity.json').write_text('{not json')

@@ -7,7 +7,8 @@ provider publishes for it at a pinned revision. Every voice speaks the same five
 voices directly. Voice names play no part.
 
 Measured, per voice, over all five samples:
-- pitch_hz: median fundamental frequency of voiced frames (normalized autocorrelation, 60-400 Hz).
+- pitch_hz: median fundamental frequency of voiced frames (normalized autocorrelation, 60-400 Hz). Octave errors are
+  folded back toward each sample's median, and a frame still more than 7 semitones from it is dropped.
 - pitch_range_st: spread of that pitch, the 20th to 80th percentile in semitones (flat vs lively intonation).
 - brightness_db: spectral tilt of voiced frames, energy at 1.5-5 kHz relative to 0.1-1 kHz in dB (lower reads warmer
   and darker, higher brighter and crisper).
@@ -96,6 +97,20 @@ def pitch(frame: np.ndarray) -> float | None:
     return RATE / lag
 
 
+def octave_fixed(f0s: list[float]) -> list[float]:
+    """One sample's frame pitches with halving and doubling errors folded toward its median; outliers dropped."""
+    if not f0s:
+        return []
+    median = float(np.median(f0s))
+    out = []
+    for f0 in f0s:
+        for candidate in (f0, f0 / 2, f0 * 2):
+            if abs(12 * np.log2(candidate / median)) <= 7:
+                out.append(candidate)
+                break
+    return out
+
+
 def measure(samples: list[np.ndarray]) -> dict:
     f0s, speech = [], 0.0
     window = np.hanning(FRAME)
@@ -103,6 +118,7 @@ def measure(samples: list[np.ndarray]) -> dict:
     low, high = (freqs >= 100) & (freqs < 1000), (freqs >= 1500) & (freqs <= 5000)
     spectrum = np.zeros(len(freqs))
     for x in samples:
+        sample_f0 = []
         fr = frames(x)
         rms = np.sqrt((fr ** 2).mean(axis=1))
         gate = rms > max(rms.max() * 0.05, 1e-4)
@@ -113,8 +129,9 @@ def measure(samples: list[np.ndarray]) -> dict:
             f0 = pitch(fr[i])
             if f0 is None:
                 continue
-            f0s.append(f0)
+            sample_f0.append(f0)
             spectrum += np.abs(np.fft.rfft(fr[i] * window)) ** 2
+        f0s.extend(octave_fixed(sample_f0))
     f0s = np.array(f0s)
     st = 12 * np.log2(f0s / np.median(f0s))
     return {

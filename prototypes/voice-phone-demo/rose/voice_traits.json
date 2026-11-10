@@ -25,8 +25,8 @@
     "support_01": "af1b11ccb58b748de43e3e25baaffe69aa3366fb5896bd94569e8d92f17aa36f",
     "support_04": "fa72f82bb1808869c7194db5bad81fca0a6217365e51718b239c8f2bff0f1bc2"
    },
-   "pitch_hz": 203.5,
-   "pitch_range_st": 5.45,
+   "pitch_hz": 199.7,
+   "pitch_range_st": 5.31,
    "brightness_db": -12.72,
    "speech_s": 16.11,
    "voiced_frames": 967
@@ -43,8 +43,8 @@
     "support_01": "6ae58725938928c893261640cf41dbff73beaf0a9f273cdf69dc0ba038250f80",
     "support_04": "487f6e354ab4436eace63bee7589ef5ffd770661a39516e55beef5ab1617436c"
    },
-   "pitch_hz": 194.6,
-   "pitch_range_st": 5.15,
+   "pitch_hz": 193.0,
+   "pitch_range_st": 5.03,
    "brightness_db": -15.92,
    "speech_s": 16.35,
    "voiced_frames": 960
@@ -61,7 +61,7 @@
     "support_01": "ca68a120c6d0bcaa25fa9b13d8fe16cbe3f52ffed868ff1dc0e6abab91dbc1e0",
     "support_04": "6d8a2857424c2a0a53273afe794b1d23efeaa93c8e8b4475b83597907951a8ec"
    },
-   "pitch_hz": 182.4,
+   "pitch_hz": 182.2,
    "pitch_range_st": 4.19,
    "brightness_db": -12.55,
    "speech_s": 17.14,
@@ -79,8 +79,8 @@
     "support_01": "48ee1af137d70bffdad41d6db8ed7d93a8e63bdf77dda6b5b3ffb8db306feb8a",
     "support_04": "595e0668a9a76acd49e256ce38eab2e66f47375f5b5b9a6a63678f93fd7a8364"
    },
-   "pitch_hz": 169.2,
-   "pitch_range_st": 6.83,
+   "pitch_hz": 166.9,
+   "pitch_range_st": 6.66,
    "brightness_db": -14.24,
    "speech_s": 16.56,
    "voiced_frames": 986
@@ -97,8 +97,8 @@
     "support_01": "6c3440228bc56849a35e1eb6853a51a91eff30f33c97df8fd705625a42134487",
     "support_04": "d867a99ab40c87bead9c1ef98c1bead2840ccab31fd6dfcee896a9225c6db565"
    },
-   "pitch_hz": 181.2,
-   "pitch_range_st": 6.03,
+   "pitch_hz": 178.8,
+   "pitch_range_st": 6.07,
    "brightness_db": -14.51,
    "speech_s": 17.59,
    "voiced_frames": 1055
@@ -115,8 +115,8 @@
     "support_01": "7f3b8ee8f00cc306cbc0e99cd922eb2678d4ca182bbdfff8841857b8a34712f3",
     "support_04": "8b56b7ebb19ce35bd18d1d424b2719bb62f6331d5cd04a560fd23aa741b6c77f"
    },
-   "pitch_hz": 190.0,
-   "pitch_range_st": 7.36,
+   "pitch_hz": 184.3,
+   "pitch_range_st": 7.07,
    "brightness_db": -15.02,
    "speech_s": 16.74,
    "voiced_frames": 872
@@ -133,8 +133,8 @@
     "support_01": "6915544c64de129ac20f5236d18e78e200a7793347b998b3e4cffc5f93b9688a",
     "support_04": "68171eaaa0b0cdff9fdf11ea0afb12de726965e4f5cf2ccd08473b0421f3f448"
    },
-   "pitch_hz": 142.8,
-   "pitch_range_st": 7.52,
+   "pitch_hz": 143.4,
+   "pitch_range_st": 7.5,
    "brightness_db": -13.22,
    "speech_s": 14.33,
    "voiced_frames": 851
@@ -151,8 +151,8 @@
     "support_01": "d0882d383a87ab565eab6681127d01a97c4ffd73c9b7a5293cce67f88bd8b206",
     "support_04": "006b9f8dd5d325705223a817838e72d46d89a61026a429a2f844ddb0a77aee72"
    },
-   "pitch_hz": 135.8,
-   "pitch_range_st": 7.33,
+   "pitch_hz": 140.4,
+   "pitch_range_st": 4.47,
    "brightness_db": -7.77,
    "speech_s": 14.82,
    "voiced_frames": 658
@@ -169,8 +169,8 @@
     "support_01": "b9204ac13f348d7b0da491cd00d9fbb47eb92203d232ca95d8a25f2e93e26bb6",
     "support_04": "ec7624e5cfa87f0da8db899358bb0eeb389a81f9d733e96bb24424e015423b45"
    },
-   "pitch_hz": 138.8,
-   "pitch_range_st": 6.8,
+   "pitch_hz": 139.8,
+   "pitch_range_st": 4.75,
    "brightness_db": -9.86,
    "speech_s": 15.51,
    "voiced_frames": 640
