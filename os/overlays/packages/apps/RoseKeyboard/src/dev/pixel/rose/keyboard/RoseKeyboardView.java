@@ -103,7 +103,9 @@ public final class RoseKeyboardView extends View {
     private final android.util.SparseArray<float[]> downAt = new android.util.SparseArray<>();
     private int spacePointer = -1;
     private float spaceAnchorX;
-    private boolean caretMoving, stripSwipe;
+    private boolean caretMoving;
+    /** The pointer that went down on the strip (a tap or a swipe down there), or -1; only its own release acts. */
+    private int stripPointer = -1;
     private float stripDownY;
     private long deleteDownAt;
     private boolean deleteRepeated;
@@ -427,8 +429,10 @@ public final class RoseKeyboardView extends View {
         switch (action) {
             case MotionEvent.ACTION_DOWN:
             case MotionEvent.ACTION_POINTER_DOWN: {
+                // A new gesture's pointer ids start again at 0: a strip finger from an unfinished one is gone.
+                if (action == MotionEvent.ACTION_DOWN) stripPointer = -1;
                 if (y < STRIP_DP * density) {
-                    stripSwipe = true;
+                    stripPointer = id;
                     stripDownY = y;
                     return true;
                 }
@@ -489,8 +493,9 @@ public final class RoseKeyboardView extends View {
             }
             case MotionEvent.ACTION_UP:
             case MotionEvent.ACTION_POINTER_UP: {
-                if (stripSwipe && action == MotionEvent.ACTION_UP) {
-                    stripSwipe = false;
+                if (id == stripPointer) {
+                    // Only the strip's own finger taps or swipes it: a key finger lifting meanwhile types its key.
+                    stripPointer = -1;
                     if (y - stripDownY > 24 * density) listener.onHide();
                     else if (Math.abs(y - stripDownY) < 12 * density) tapStrip(x);
                     return true;
@@ -522,7 +527,7 @@ public final class RoseKeyboardView extends View {
                 downAt.clear();
                 spacePointer = -1;
                 caretMoving = false;
-                stripSwipe = false;
+                stripPointer = -1;
                 invalidate();
                 return true;
             }
