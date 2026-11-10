@@ -12,10 +12,15 @@ package dev.pixel.voice;
  * <li>SystemUI to Rose: 7 RETURN_TARGET {protocolVersion 1, token (0 = none), package, userId, label resolved by
  * SystemUI for the task's user}; the token is stable while the recorded task is unchanged. 8 RETURN_RESULT, arg1 the
  * attempt, arg2 0 RETURNED (exactly that task focused, identity rechecked), 1 UNAVAILABLE (gone, replaced, moved or
- * user changed), 2 REFUSED (stale token, keyguard, Rose not in focus, timeout).</li>
- * <li>Rose to SystemUI: 101 RETURN_TO, arg1 the attempt, {token}; 102 RETURN_CANCEL, arg1 the attempt.</li>
+ * user changed), 2 REFUSED (stale or unknown token, keyguard, Rose not in focus, the task no longer fullscreen and
+ * standard (PiP or split), another return already in flight, or a timeout).</li>
+ * <li>Rose to SystemUI: 101 RETURN_TO, arg1 the attempt, {token}; 102 RETURN_CANCEL, arg1 the attempt. The shell
+ * ignores 102 (it starts the reorder when 101 arrives); only Rose's own pending state cancels, and a later answer for
+ * that attempt is ignored.</li>
  * <li>The shell reorders exactly that task (no launch of any kind) and answers within 1.5 s; Rose waits 4 s, then
  * sends 102 and reports REFUSED. The shell plays V3's departure (ReturnModel.DEPART_*) on the applied reorder only.</li>
+ * <li>Opening Rose from Rose Home offers no return (V3: origin null from Home): the shell clears the target, token 0,
+ * when focus moves to Rose's HOME task.</li>
  * </ul>
  */
 interface ReturnSource {
