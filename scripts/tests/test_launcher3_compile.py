@@ -282,7 +282,8 @@ class Contract(unittest.TestCase):
         manifest = adapter.load_manifest()
         self.assertEqual({p['path']: len(p['files']) for p in manifest['projects']},
                          {'frameworks/base': 34, 'packages/apps/Launcher3': 16, 'build/release': 1})
-        self.assertEqual(sum(o['role'] == 'required' for o in manifest['overlays']), 15)
+        # 15, then 1E's Launcher3 RoseTheme.java, RoseThemeSetting.java and the Glacier field.
+        self.assertEqual(sum(o['role'] == 'required' for o in manifest['overlays']), 18)
         self.assertEqual(manifest['schemaVersion'], 3)
         # 2026-11-07 re-pin: base is the live patcher's registration; #440's delta is retired (empty).
         self.assertEqual(manifest['candidateDelta']['patches'], [])
