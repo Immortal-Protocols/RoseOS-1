@@ -1,4 +1,4 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="dev.pixel.voice" android:versionCode="311" android:versionName="311-hifi-visual-beta">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="dev.pixel.voice" android:versionCode="370" android:versionName="370-os-beta-2026111001">
 <permission android:name="dev.pixel.voice.permission.MEMORY_REVIEW" android:protectionLevel="signature"/>
 <permission android:name="dev.pixel.voice.permission.MESSAGES_CONNECTION" android:protectionLevel="signature"/>
 <permission android:name="dev.pixel.voice.permission.MIGRATION_EXPORT" android:protectionLevel="signature"/>
