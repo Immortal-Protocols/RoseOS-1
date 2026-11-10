@@ -615,14 +615,20 @@ def validate_target_zip(path, max_uncompressed, *, artifact=None, host_root_exis
                 if link_bytes > 8 << 20:
                     raise ValueError('target ZIP link metadata exceeds bound')
                 links[name] = None
+        folded_links = {}
+        for name in links:
+            folded = name.casefold()
+            if folded in folded_links:
+                raise _target_link_error(name, 'case-ambiguous link names')
+            folded_links[folded] = name
         # A regular parent must also be refused: the pinned writer calls mkdir
         # on member parents, and cannot turn a file/link into a directory safely.
         for name in entries:
             parts = name.split('/')
             for end in range(1, len(parts)):
                 parent = '/'.join(parts[:end])
-                if parent in links:
-                    raise _target_link_error(parent, 'archive member has a symlink parent')
+                if parent.casefold() in folded_links:
+                    raise _target_link_error(folded_links[parent.casefold()], 'archive member has a symlink parent')
                 row = entries.get(parent)
                 if row is not None and not row.filename.endswith('/'):
                     raise ValueError('target ZIP member has a non-directory parent')
@@ -685,6 +691,8 @@ def validate_target_zip(path, max_uncompressed, *, artifact=None, host_root_exis
                 stack.pop()
                 continue
             candidate = lookup(context, [*stack, part])
+            if candidate is not None and candidate not in links and candidate.casefold() in folded_links:
+                raise _target_link_error(active[-1], 'case-ambiguous link component', target)
             if candidate in links:
                 if candidate in active:
                     raise _target_link_error(candidate, 'link cycle', links[candidate])

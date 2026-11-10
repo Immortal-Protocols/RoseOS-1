@@ -959,6 +959,7 @@ class HostedSignGateTest(unittest.TestCase):
             [('SYSTEM/a', 'b'), ('SYSTEM/b', 'a')],
             [('SYSTEM/a', '/system/b'), ('SYSTEM/b', '/system/a')],
             [('SYSTEM/inside/alias', '..'), ('SYSTEM/inside/entry', 'alias/../../tmp/sentinel')],
+            [('SYSTEM/inside/Dir', '..'), ('SYSTEM/inside/entry', 'dir/../../tmp/sentinel')],
             [('SYSTEM/alias', '/system/dir'), ('SYSTEM/entry', 'alias/../../home/runner')],
             [('SYSTEM/a', '/system/b'), ('SYSTEM/b', '/data/file')],
         ]
@@ -991,6 +992,14 @@ class HostedSignGateTest(unittest.TestCase):
               ('SYSTEM/file/child',stat.S_IFREG|0o644,b'y')]
         with self.assertRaisesRegex(ValueError,'non-directory parent'):
             hosted.validate_target_zip(self.target_archive(rows),10**9)
+        with self.assertRaisesRegex(ValueError,'symlink parent'):
+            hosted.validate_target_zip(self.target_archive([
+                ('SYSTEM/Dir',stat.S_IFLNK|0o777,b'other'),
+                ('SYSTEM/dir/file',stat.S_IFREG|0o644,b'x')]),10**9)
+        with self.assertRaisesRegex(ValueError,'case-ambiguous link names'):
+            hosted.validate_target_zip(self.target_archive([
+                ('SYSTEM/A',stat.S_IFLNK|0o777,b'other'),
+                ('SYSTEM/a',stat.S_IFLNK|0o777,b'other')]),10**9)
         for name in ['META/key','OTA/key','IMAGES/system.img','PREBUILT_IMAGES/boot.img','scripts/tool']:
             with self.subTest(name=name):
                 with self.assertRaisesRegex(ValueError,'outside Android payload'):

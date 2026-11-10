@@ -164,3 +164,24 @@ behavior on small controlled fixtures. It does not execute the qualified
 otatools archive or establish actual retained-input admission, signing,
 publication or device compatibility. App-source freshness and the retained
 delivery-only source contract are unchanged.
+
+## Source freshness after the compiled producer
+
+PR #729 (`060f837aa11f47c435f7e107b7fcb8d8eeadaeaf`) changes the
+`workspace/rose-agent/app` customization asset, Java implementation and tests.
+That subtree is a declared source of `dev.pixel.voice` in the existing app
+allocation contract. The accepted `frankel-2026110901` export predates those
+changes, so current app freshness reports voice drift. The retained-delivery
+source comparison independently refuses the app changes; its original compiled
+app-admission proof also remains bound to the old export.
+
+A new export cannot change the APK bytes already inside the retained OS.
+Without reverting the app work or weakening freshness, delivery therefore needs
+the existing Release owner to produce and commit a fresh common app export,
+followed by consistent Mustang consumer pins in `mustang_route.py` and
+`mustang-runtime.json`, then the normal full compile/sign/publication path with
+`retained_compile_run` empty. That path issues a new clock allocation and build
+identity; it must not reuse the original consumed number or reset its journal.
+Existing preparation and qualified-tool inputs may be reused only through their
+normal authenticated checks. This source assessment does not authorize an app
+build, export, allocation or Mustang runtime dispatch.
