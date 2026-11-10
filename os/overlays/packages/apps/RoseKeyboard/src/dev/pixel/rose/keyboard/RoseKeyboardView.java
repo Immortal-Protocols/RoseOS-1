@@ -92,6 +92,9 @@ public final class RoseKeyboardView extends View {
     private final List<RectF> editRects = new ArrayList<>();
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final android.graphics.Matrix rowShift = new android.graphics.Matrix();
+    /** RoseOS (1E): the theme the colours come from (the constants above are Oxblood's), and its watcher. */
+    private final RoseKeyboardTheme themeWatch;
+    private String theme = RoseTheme.DEFAULT;
 
     // State the service sets.
     private String page = RoseKeys.LETTERS, shift = RoseKeys.OFF, actionLabel = "Return";
@@ -119,26 +122,78 @@ public final class RoseKeyboardView extends View {
         this.listener = listener;
         density = context.getResources().getDisplayMetrics().density;
         keyPaint.setStyle(Paint.Style.FILL);
-        fnPaint.setColor(FUNCTION);
-        label.setColor(TEXT);
         label.setTextAlign(Paint.Align.CENTER);
         label.setTextSize(22 * density);
-        small.setColor(TEXT);
         small.setTextAlign(Paint.Align.CENTER);
         small.setTextSize(14 * density);
-        strip.setColor(TEXT);
         strip.setTextAlign(Paint.Align.CENTER);
         strip.setTextSize(16 * density);
-        underline.setColor(CORRECTION);
         underline.setStrokeWidth(2 * density);
-        glyph.setColor(TEXT);
         glyph.setStyle(Paint.Style.STROKE);
         glyph.setStrokeWidth(2 * density);
         glyph.setStrokeCap(Paint.Cap.ROUND);
         glyph.setStrokeJoin(Paint.Join.ROUND);
-        preview.setColor(KEY_TOP);
+        themeWatch = new RoseKeyboardTheme(context, new Runnable() {
+            @Override
+            public void run() {
+                applyTheme();
+            }
+        });
+        applyTheme();
         setContentDescription("Rose keyboard");
         setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_YES);
+    }
+
+    // ---------- theme ----------
+
+    /** One of this theme's keyboard tokens (RoseTheme.Keyboard; Oxblood's equal the constants above). */
+    private int tok(int key) {
+        return RoseTheme.Keyboard.color(theme, key);
+    }
+
+    /** Re-reads the theme and re-resolves every paint and shader from it. */
+    void applyTheme() {
+        theme = RoseKeyboardTheme.current(getContext());
+        fnPaint.setColor(tok(RoseTheme.Keyboard.FUNCTION));
+        label.setColor(tok(RoseTheme.Keyboard.TEXT));
+        small.setColor(tok(RoseTheme.Keyboard.TEXT));
+        strip.setColor(tok(RoseTheme.Keyboard.TEXT));
+        underline.setColor(tok(RoseTheme.Keyboard.CORRECTION));
+        glyph.setColor(tok(RoseTheme.Keyboard.TEXT));
+        preview.setColor(tok(RoseTheme.Keyboard.KEY_TOP));
+        if (getHeight() > 0) buildShaders(getHeight());  // before the first size, onSizeChanged builds them
+        invalidate();
+    }
+
+    private void buildShaders(int h) {
+        board.setShader(new LinearGradient(0, 0, 0, h, tok(RoseTheme.Keyboard.BOARD_TOP),
+                tok(RoseTheme.Keyboard.BOARD_BOTTOM), Shader.TileMode.CLAMP));
+        keyPaint.setShader(new LinearGradient(0, 0, 0, KEY_DP * density, tok(RoseTheme.Keyboard.KEY_TOP),
+                tok(RoseTheme.Keyboard.KEY_BOTTOM), Shader.TileMode.CLAMP));
+        actionPaint.setShader(new LinearGradient(0, 0, 0, KEY_DP * density, tok(RoseTheme.Keyboard.ACTION_TOP),
+                tok(RoseTheme.Keyboard.ACTION_BOTTOM), Shader.TileMode.CLAMP));
+    }
+
+    /** Draws with the paint's colour set to the action key's ink, keeping its current alpha, then restores it. */
+    private int inkOn(Paint p) {
+        int was = p.getColor();
+        int alpha = p.getAlpha();
+        p.setColor(tok(RoseTheme.Keyboard.ACTION_INK));
+        p.setAlpha(alpha);
+        return was;
+    }
+
+    private static void restore(Paint p, int color) {
+        int alpha = p.getAlpha();
+        p.setColor(color);
+        p.setAlpha(alpha);
+    }
+
+    @Override
+    protected void onAttachedToWindow() {
+        super.onAttachedToWindow();
+        themeWatch.register();
+        applyTheme();
     }
 
     // ---------- state from the service ----------
@@ -204,10 +259,7 @@ public final class RoseKeyboardView extends View {
     protected void onSizeChanged(int w, int h, int oldw, int oldh) {
         layoutKeys(w);
         layoutStrip(w);
-        board.setShader(new LinearGradient(0, 0, 0, h, BOARD_TOP, BOARD_BOTTOM, Shader.TileMode.CLAMP));
-        keyPaint.setShader(new LinearGradient(0, 0, 0, KEY_DP * density, KEY_TOP, KEY_BOTTOM, Shader.TileMode.CLAMP));
-        actionPaint.setShader(new LinearGradient(0, 0, 0, KEY_DP * density, ACTION_TOP, ACTION_BOTTOM,
-                Shader.TileMode.CLAMP));
+        buildShaders(h);
     }
 
     /** Width units per key: 1 for a letter; shift, delete, the page keys and the action key 1.5; space 5. */
@@ -311,11 +363,19 @@ public final class RoseKeyboardView extends View {
             glyph.setAlpha(dim);
             String text = keyLabel(k.id);
             float cy = k.bounds.centerY();
+            boolean action = "action".equals(k.id);
+            int glyphWas = action ? inkOn(glyph) : 0, smallWas = action ? inkOn(small) : 0,
+                    labelWas = action ? inkOn(label) : 0;
             if ("shift".equals(k.id)) drawShift(canvas, k.bounds);
             else if ("bksp".equals(k.id)) drawDelete(canvas, k.bounds);
-            else if ("action".equals(k.id) && actionIsSend) drawSend(canvas, k.bounds);
+            else if (action && actionIsSend) drawSend(canvas, k.bounds);
             else if (text.length() > 1) canvas.drawText(text, k.bounds.centerX(), cy + small.getTextSize() / 3, small);
             else if (!text.isEmpty()) canvas.drawText(text, k.bounds.centerX(), cy + label.getTextSize() / 3, label);
+            if (action) {
+                restore(glyph, glyphWas);
+                restore(small, smallWas);
+                restore(label, labelWas);
+            }
         }
         label.setAlpha(0xFF);
         small.setAlpha(0xFF);
@@ -566,6 +626,7 @@ public final class RoseKeyboardView extends View {
     @Override
     protected void onDetachedFromWindow() {
         handler.removeCallbacks(deleteRepeat);
+        themeWatch.unregister();
         super.onDetachedFromWindow();
     }
 

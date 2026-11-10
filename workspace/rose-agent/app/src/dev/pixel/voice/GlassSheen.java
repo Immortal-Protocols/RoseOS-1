@@ -35,12 +35,15 @@ final class GlassSheen extends Drawable {
  float band = -1;
  LinearGradient bands, sweepBand;
  RadialGradient glow;
+ /** Plan 1E: the theme the gradients were built in; they are rebuilt when the theme changes. */
+ String builtTheme;
 
  GlassSheen(float opacity) { this.opacity = opacity; }
 
  @Override protected void onBoundsChange(Rect b) {
   float w = b.width(), h = b.height();
   if (w <= 0 || h <= 0) return;
+  builtTheme = RoseThemeNow.id;
   // linear-gradient(118deg, ...) on a 240% x 240% box positioned at 26% 30%.
   float bw = 2.4f * w, bh = 2.4f * h, bx = b.left + (w - bw) * .26f, by = b.top + (h - bh) * .30f;
   double a = Math.toRadians(118);
@@ -55,7 +58,7 @@ final class GlassSheen extends Drawable {
   Matrix squash = new Matrix(); squash.setScale(1, ry / rx, b.left + .06f * w, b.top); glow.setLocalMatrix(squash);
   // The sweep band: 42% of the width, 0 .26 .12 0 across it.
   float sw = .42f * w;
-  sweepBand = new LinearGradient(0, 0, sw, 0, new int[]{0, 0x42ffffff, 0x1ffffaf0, 0}, new float[]{0, .44f, .56f, 1}, Shader.TileMode.CLAMP);
+  sweepBand = new LinearGradient(0, 0, sw, 0, RoseThemeNow.c(new int[]{0, 0x42ffffff, 0x1ffffaf0, 0}), new float[]{0, .44f, .56f, 1}, Shader.TileMode.CLAMP);
  }
 
  @Override public boolean setVisible(boolean visible, boolean restart) {
@@ -84,6 +87,7 @@ final class GlassSheen extends Drawable {
 
  @Override public void draw(Canvas c) {
   Rect b = getBounds();
+  if (!b.isEmpty() && bands != null && !RoseThemeNow.id.equals(builtTheme)) onBoundsChange(b);
   if (b.isEmpty() || bands == null) return;
   int layer = c.saveLayerAlpha(b.left, b.top, b.right, b.bottom, Math.round(opacity * 255));
   // Opaque paint for the shaders: a shader is modulated by the paint's alpha, and the highlight lines below leave it at

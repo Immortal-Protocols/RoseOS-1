@@ -113,6 +113,9 @@ public final class RoseEdgeWindow implements RoseEdgeState.Listener {
     static final String TRAY_PROPERTY = "persist.wm.debug.pixel_agent_tray";
     /** Identifies this window's inset source to the window manager (as the taskbar's insets owner does). */
     private final Binder mInsetsOwner = new Binder();
+    /** Plan 1E: the theme the edge draws (RoseThemeSetting, SystemUI's mirror); every shown edge follows a change. */
+    private String mTheme = RoseTheme.DEFAULT;
+    private final Runnable mThemeChanged = this::onThemeChanged;
 
     public RoseEdgeWindow(Context context, Actions actions) {
         mContext = context.getApplicationContext() != null ? context.getApplicationContext() : context;
@@ -121,6 +124,8 @@ public final class RoseEdgeWindow implements RoseEdgeState.Listener {
 
     /** Starts drawing raised edges: from now on the edge may rise (RoseEdgeState.hasListener). */
     public void start() {
+        mTheme = RoseThemeSetting.current(mContext);
+        RoseThemeSetting.listen(mContext, mThemeChanged);
         RoseEdgeState.addListener(this);
         KeyboardDefault.applyOnce(mContext);
     }
@@ -184,8 +189,17 @@ public final class RoseEdgeWindow implements RoseEdgeState.Listener {
 
     /** Stops: removes every shown edge and stops listening, so the edge can no longer rise. */
     public void stop() {
+        RoseThemeSetting.unlisten(mThemeChanged);
         RoseEdgeState.removeListener(this);
         for (int i = mShown.size() - 1; i >= 0; i--) remove(mShown.keyAt(i));
+    }
+
+    /** Plan 1E: the mirrored theme changed: each shown edge redraws in it (colour only). */
+    private void onThemeChanged() {
+        String next = RoseThemeSetting.current(mContext);
+        if (next.equals(mTheme)) return;
+        mTheme = next;
+        for (int i = 0; i < mShown.size(); i++) mShown.valueAt(i).setTheme(next);
     }
 
     @Override
@@ -300,6 +314,8 @@ public final class RoseEdgeWindow implements RoseEdgeState.Listener {
         private int mDownTarget = -1;
         /** A drag up on the open tray has passed TRAY_TO_SWITCHER_DP (and not come back below its exit). */
         private boolean mSwitcherArmed;
+        /** Plan 1E: the theme this edge draws in; Oxblood is today's colours exactly (RoseTheme.map is identity). */
+        private String mTheme = RoseEdgeWindow.this.mTheme;
 
         /**
          * The tray as a drag reveals it: it rises from below with reveal, and fades as the drag approaches the
@@ -319,18 +335,32 @@ public final class RoseEdgeWindow implements RoseEdgeState.Listener {
             mSlop = ViewConfiguration.get(context).getScaledTouchSlop();
             mHairline.setStyle(Paint.Style.STROKE);
             mHairline.setStrokeWidth(1 * mDensity);
-            mHairline.setColor(0xA6D65468);
             mHairline.setShadowLayer(10 * mDensity, 0, 4 * mDensity, 0x73000000);
             mRing.setStyle(Paint.Style.STROKE);
             mRing.setStrokeWidth(1 * mDensity);
-            mRing.setColor(0x66ECCDBE);
             mGlyph.setStyle(Paint.Style.STROKE);
             mGlyph.setStrokeWidth(2 * mDensity);
             mGlyph.setStrokeJoin(Paint.Join.ROUND);
-            mGlyph.setColor(0xFFEADBCD);
-            mFront.setColor(0xFF331019);
-            mArmed.setColor(0x66FF4A5E);
+            colour();
             setContentDescription("System tray");
+        }
+
+        /** The edge's flat colours in its theme (RoseTheme.map: identity in Oxblood). */
+        private void colour() {
+            mHairline.setColor(RoseTheme.map(mTheme, 0xA6D65468));
+            mRing.setColor(RoseTheme.map(mTheme, 0x66ECCDBE));
+            mGlyph.setColor(RoseTheme.map(mTheme, 0xFFEADBCD));
+            mFront.setColor(RoseTheme.map(mTheme, 0xFF331019));
+            mArmed.setColor(RoseTheme.map(mTheme, 0x66FF4A5E));
+        }
+
+        /** Plan 1E: draws in this theme from now on: colours and shaders are rebuilt, nothing else changes. */
+        void setTheme(String theme) {
+            if (theme.equals(mTheme)) return;
+            mTheme = theme;
+            colour();
+            if (getWidth() > 0) shade();
+            invalidate();
         }
 
         Rect control(int which) {
@@ -410,7 +440,7 @@ public final class RoseEdgeWindow implements RoseEdgeState.Listener {
         @Override
         protected void onLayout(boolean changed, int left, int top, int right, int bottom) {
             super.onLayout(changed, left, top, right, bottom);
-            float h = RoseEdgeLayout.EDGE_HEIGHT_DP * mDensity, flat = RoseEdgeLayout.FLAT_TOP_DP * mDensity;
+            float flat = RoseEdgeLayout.FLAT_TOP_DP * mDensity;
             float r = RoseEdgeLayout.FILLET_DP * mDensity, w = getWidth();
             // homeEdge.outline: M0,0 arc r34 (centre 34,0) to 34,34; L W-34,34; arc r34 (centre W-34,0) to W,0; L W,H.
             mOutline.reset();
@@ -421,19 +451,7 @@ public final class RoseEdgeWindow implements RoseEdgeState.Listener {
             mOutline.lineTo(w, getHeight());
             mOutline.lineTo(0, getHeight());
             mOutline.close();
-            mPlate.setShader(new LinearGradient(0, 0, 0, h, new int[] {0xFF4A141A, 0xFF4A141A, 0xFF3C0E13, 0xFF330C10},
-                    new float[] {0, 34 / 92f, 46 / 92f, 1}, Shader.TileMode.CLAMP));
-            mSheen.setShader(new LinearGradient(0, 0, 0, h * 0.4f, 0x12FF96A5, 0x00FF96A5, Shader.TileMode.CLAMP));
-            mWell.setShader(new LinearGradient(0, 0, 0, RoseEdgeLayout.WELL_HEIGHT_DP * mDensity, 0x47140407, 0x1F46121C,
-                    Shader.TileMode.CLAMP));
-            Rect rose = control(RoseEdgeLayout.ROSE);
-            // pearl.ruby: radial, centred at (34%, 28%) of the 16dp pearl, radius the distance to its farthest corner.
-            float pr = 8 * mDensity, gx = rose.exactCenterX() - pr + 0.34f * 2 * pr;
-            float gy = rose.exactCenterY() - pr + 0.28f * 2 * pr;
-            float far = (float) Math.hypot((1 - 0.34f) * 2 * pr, (1 - 0.28f) * 2 * pr);
-            mPearl.setShader(new RadialGradient(gx, gy, far,
-                    new int[] {0xFFFFE6E8, 0xFFFFE6E8, 0xFFE8606F, 0xFFC43048, 0xFF8A1428, 0xFF4A0612},
-                    new float[] {0, 0.07f, 0.2f, 0.46f, 0.76f, 1}, Shader.TileMode.CLAMP));
+            shade();
             Display display = getDisplay();
             android.util.DisplayMetrics metrics = new android.util.DisplayMetrics();
             if (display != null) display.getRealMetrics(metrics);
@@ -441,6 +459,26 @@ public final class RoseEdgeWindow implements RoseEdgeState.Listener {
             // its top on screen is the display height less that height.
             Rect slot = RoseEdgeLayout.micSlotOnScreen(getWidth(), mDensity, 0, metrics.heightPixels - getHeight());
             RoseEdgeState.setMicSlot(mDisplayId, slot, metrics.widthPixels, metrics.heightPixels, mDensity);
+        }
+
+        /** The plate, sheen, well and pearl shaders for the current size, in the edge's theme. */
+        private void shade() {
+            float h = RoseEdgeLayout.EDGE_HEIGHT_DP * mDensity;
+            mPlate.setShader(new LinearGradient(0, 0, 0, h, RoseTheme.map(mTheme,
+                    new int[] {0xFF4A141A, 0xFF4A141A, 0xFF3C0E13, 0xFF330C10}),
+                    new float[] {0, 34 / 92f, 46 / 92f, 1}, Shader.TileMode.CLAMP));
+            mSheen.setShader(new LinearGradient(0, 0, 0, h * 0.4f, RoseTheme.map(mTheme, 0x12FF96A5),
+                    RoseTheme.map(mTheme, 0x00FF96A5), Shader.TileMode.CLAMP));
+            mWell.setShader(new LinearGradient(0, 0, 0, RoseEdgeLayout.WELL_HEIGHT_DP * mDensity,
+                    RoseTheme.map(mTheme, 0x47140407), RoseTheme.map(mTheme, 0x1F46121C), Shader.TileMode.CLAMP));
+            Rect rose = control(RoseEdgeLayout.ROSE);
+            // pearl.ruby: radial, centred at (34%, 28%) of the 16dp pearl, radius the distance to its farthest corner.
+            float pr = 8 * mDensity, gx = rose.exactCenterX() - pr + 0.34f * 2 * pr;
+            float gy = rose.exactCenterY() - pr + 0.28f * 2 * pr;
+            float far = (float) Math.hypot((1 - 0.34f) * 2 * pr, (1 - 0.28f) * 2 * pr);
+            mPearl.setShader(new RadialGradient(gx, gy, far, RoseTheme.map(mTheme,
+                    new int[] {0xFFFFE6E8, 0xFFFFE6E8, 0xFFE8606F, 0xFFC43048, 0xFF8A1428, 0xFF4A0612}),
+                    new float[] {0, 0.07f, 0.2f, 0.46f, 0.76f, 1}, Shader.TileMode.CLAMP));
         }
 
         @Override
@@ -485,14 +523,14 @@ public final class RoseEdgeWindow implements RoseEdgeState.Listener {
             RectF well = new RectF(cx - h / 2, cy - h / 2, cx + h / 2, cy + h / 2);
             mMicPaint.reset();
             mMicPaint.setAntiAlias(true);
-            mMicPaint.setShader(new LinearGradient(0, well.top, 0, well.bottom, 0x47140407, 0x1F46121C,
-                    Shader.TileMode.CLAMP));
+            mMicPaint.setShader(new LinearGradient(0, well.top, 0, well.bottom, RoseTheme.map(mTheme, 0x47140407),
+                    RoseTheme.map(mTheme, 0x1F46121C), Shader.TileMode.CLAMP));
             canvas.drawRoundRect(well, r, r, mMicPaint);
             mMicPaint.setShader(null);
             mMicPaint.setStyle(Paint.Style.STROKE);
             float ring = Math.max(1f, d), half = ring / 2;
             mMicPaint.setStrokeWidth(ring);
-            mMicPaint.setColor(0x66ECCDBE);
+            mMicPaint.setColor(RoseTheme.map(mTheme, 0x66ECCDBE));
             canvas.drawRoundRect(well.left + half, well.top + half, well.right - half, well.bottom - half, r - half,
                     r - half, mMicPaint);
             // OxbloodEdge.MicGlyph, unmuted ink, in its 24-unit box scaled to 20dp.
@@ -501,7 +539,7 @@ public final class RoseEdgeWindow implements RoseEdgeState.Listener {
             canvas.scale(s, s);
             mMicPaint.reset();
             mMicPaint.setAntiAlias(true);
-            mMicPaint.setColor(0xFFE6D4C3);
+            mMicPaint.setColor(RoseTheme.map(mTheme, 0xFFE6D4C3));
             canvas.drawRoundRect(new RectF(8.6f, 2.5f, 15.4f, 15f), 3.4f, 3.4f, mMicPaint);
             mMicPaint.setStyle(Paint.Style.STROKE);
             mMicPaint.setStrokeWidth(1.9f);
@@ -524,8 +562,9 @@ public final class RoseEdgeWindow implements RoseEdgeState.Listener {
             for (float x : new float[] {0, 32}) {
                 Path back = card(x, 11), front = card(x, 5);
                 // switcherGlyph.rubyEdge: the right back card's stroke runs ink to ruby, user space x 34 to 62.
-                mGlyph.setShader(x == 0 ? null : new LinearGradient(34, 0, 62, 0, new int[] {0xFFEADBCD, 0xFFEADBCD,
-                        0xFFFF4A5E, 0xFFFF4A5E}, new float[] {0, 0.5f, 0.8f, 1}, Shader.TileMode.CLAMP));
+                mGlyph.setShader(x == 0 ? null : new LinearGradient(34, 0, 62, 0, RoseTheme.map(mTheme,
+                        new int[] {0xFFEADBCD, 0xFFEADBCD, 0xFFFF4A5E, 0xFFFF4A5E}), new float[] {0, 0.5f, 0.8f, 1},
+                        Shader.TileMode.CLAMP));
                 canvas.drawPath(back, mGlyph);
                 mGlyph.setShader(null);
                 canvas.drawPath(front, mFront);

@@ -39,7 +39,8 @@ final class CustomizationAgent {
     CustomizationStore.homeAppliedRevision(ctx), CustomizationStore.homeAppliedColumns(ctx))));
   return new JSONObject().put("status", status).put("operation", operation).put("changed", changed)
     .put("customization", new JSONObject(stored.toJson())).put("home", home)
-    .put("glassesWear", GlassesWearHookRunner.status(ctx));
+    .put("glassesWear", GlassesWearHookRunner.status(ctx))
+    .put("system", new JSONObject(CustomizationConfig.json(CustomizationOutcome.system(stored.theme, AgentTrayService.shownTheme()))));
  }
 
  /** org.json arguments as CustomizationConfig expects them; a null object is no arguments. */

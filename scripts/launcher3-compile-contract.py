@@ -98,6 +98,9 @@ NOT_AN_INPUT = (
     'frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/AgentStatusControls.java',
     'frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/AgentTrayLink.java',
     'frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/AgentTrayPrototype.java',
+    # Plan 1E: the generated RoseTheme and SystemUI's RoseThemeMirror (OS Core), Shell sources like the tray's.
+    'frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/RoseTheme.java',
+    'frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/RoseThemeMirror.java',
     'frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/StatusVoiceGlow.java',
     'frameworks/base/packages/SystemUI/assets/fonts/Nunito.ttf',
     'frameworks/base/packages/SystemUI/assets/licenses/Nunito-OFL.txt',

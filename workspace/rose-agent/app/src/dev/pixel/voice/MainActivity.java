@@ -393,7 +393,9 @@ public class MainActivity extends Activity {
   int count=pages.size();homePage=HomePages.HOME;ourAppsPage=count>HomePages.FIRST_APPS?HomePages.FIRST_APPS:HomePages.HOME;
   selected=HomePages.restore(selected,count);
   // One Oxblood field behind every page (#410), drawn at the scroll position so it stays put while the pages slide.
-  pageDots.clear();launcherPager=new LauncherPager(this);launcherPager.setBackground(new OxbloodField(OxbloodField.HOME));launcherPager.getBackground().setColorFilter(CustomizationVisuals.wallpaperFilter(plannedCustomization.wallpaper));
+  // Plan 1E: the field is the theme's (Glacier's raster field, or Oxblood's with its variant); prepare decodes it first.
+  RoseThemeNow.prepare(this);
+  pageDots.clear();launcherPager=new LauncherPager(this);launcherPager.setBackground(new OxbloodField(OxbloodField.HOME));launcherPager.getBackground().setColorFilter(CustomizationVisuals.wallpaperFilter(plannedCustomization.shownWallpaper()));
   HomeGlassTile.Backdrop.set((OxbloodField)launcherPager.getBackground(),launcherPager); // the tiles' backdrop blur samples this field (#410)
   launcherPager.permission=this::canSwipePages;
   launcherPager.listener=index->{launcherPager.setContentDescription(titles.get(index));for(TextView dot:pageDots)dot.setSelected(((Integer)dot.getTag())==index);};
@@ -448,15 +450,15 @@ public class MainActivity extends Activity {
  Runnable homePlanCheck;
  /** Nov 7 plan 1O: the customization Home planned with and last drew. A change (a new revision in CustomizationStore)
   * re-plans Home, coalesced on the main thread, and rebuilds it once only when what Home draws differs: the effective
-  * plan (columns and capacity, so 0 -> 4 where automatic is already 4 is not a rebuild), the wallpaper variant or the
-  * font. Other changes are acknowledged without a rebuild. A change waits while the visual card or the Mac screen is
+  * plan (columns and capacity, so 0 -> 4 where automatic is already 4 is not a rebuild), the wallpaper shown, the
+  * font or the theme (plan 1E: a theme rebuilds Home in its colours; columns and font are kept). Other changes are acknowledged without a rebuild. A change waits while the visual card or the Mac screen is
   * open (both re-post it on close), and never runs on a destroyed instance. A user change bypasses homePlanBreaker,
   * which still governs automatic re-plans. */
  CustomizationConfig plannedCustomization=CustomizationConfig.DEFAULTS,drawnCustomization=null;
  final Runnable applyCustomization=()->{if(launcherPager==null||isFinishing()||isDestroyed()||visualDetail!=null)return;
   CustomizationConfig drawn=drawnCustomization;if(drawn!=null&&CustomizationStore.read(this).revision==drawn.revision)return;
   int[] kept={homeColumns,homeCapacity,appColumns,appPerPage};planAppPages();CustomizationConfig next=plannedCustomization;
-  if(drawn!=null&&homeColumns==kept[0]&&homeCapacity==kept[1]&&appColumns==kept[2]&&appPerPage==kept[3]&&next.wallpaper.equals(drawn.wallpaper)&&next.font.equals(drawn.font)){drawnCustomization=next;CustomizationStore.markHomeApplied(this,next.revision,homeColumns);return;}
+  if(drawn!=null&&homeColumns==kept[0]&&homeCapacity==kept[1]&&appColumns==kept[2]&&appPerPage==kept[3]&&next.shownWallpaper().equals(drawn.shownWallpaper())&&next.font.equals(drawn.font)&&next.theme.equals(drawn.theme)){drawnCustomization=next;CustomizationStore.markHomeApplied(this,next.revision,homeColumns);return;}
   if(homePlanCheck!=null){handler.removeCallbacks(homePlanCheck);homePlanCheck=null;}attachLauncherPages(true);};
  final Runnable customizationChanged=()->{handler.removeCallbacks(applyCustomization);handler.post(applyCustomization);};
  boolean homePlanStale(){float density=getResources().getDisplayMetrics().density;

@@ -1,6 +1,6 @@
 # Rose customization CLI
 
-Nov 7 plan 1O. Rose's four customization controls change live, with no OS
+Nov 7 plan 1O (the theme is plan 1E). Rose's customization controls change live, with no OS
 rebuild. Rose Agent dispatches them, Home applies them and Rose's conversation
 registers them in this source (#626, #627). On a phone they still need an
 installed Agent build and a Rose backend restarted from main (limitation e).
@@ -12,8 +12,9 @@ Host tests here are not device evidence:
 | Oxblood wallpaper variant | `customization_wallpaper` | `variant`: classic, garnet, ember, velvet, dusk (all Oxblood) |
 | Bundled font | `customization_font` | `font`: default, nunito, sans, serif, condensed, mono |
 | Glasses-on hook | `customization_glasses_hook` | `enabled`, `action` tray or app, `packageName` |
+| Theme (plan 1E) | `customization_theme` | `theme`: oxblood, glacier (`themes/rose-themes.json`) |
 
-`customization_state` reads all four.
+`customization_state` reads them all.
 
 ## One catalog, one command
 
@@ -50,6 +51,7 @@ node rose-customize.mjs columns auto           # dry run (default): prints the a
 node rose-customize.mjs columns 6
 node rose-customize.mjs wallpaper velvet
 node rose-customize.mjs font serif
+node rose-customize.mjs theme glacier          # Glacier everywhere; 'theme oxblood' switches back
 node rose-customize.mjs glasses-hook --on --tray
 node rose-customize.mjs glasses-hook --app com.example.notes
 node rose-customize.mjs --say columns 5        # ask Rose (this Mac, port 8091) to make the change

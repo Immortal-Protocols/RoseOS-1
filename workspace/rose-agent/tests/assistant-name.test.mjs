@@ -30,6 +30,8 @@ test('native event consumer handles hello and live updates without historical or
 });
 test('conversation identity refreshes from persisted name, leaves package branding and color code alone',()=>{
  const activity=src('RoseConversationActivity');
+ assert.match(activity,/if\(themePending\)\{maybeRetheme\(\);if\(isFinishing\(\)\|\|isDestroyed\(\)\)return;\}\s*String agentName=LocalAssistantIdentity.name\(this\);/);
+ for(const guard of ['overview.isOpen()','returnState.pending()','returnState.sheetShown()','stopInFlight','stopPendingFor!=null','stopDialog.isShowing()'])assert.ok(activity.includes(guard),'preserve Glacier rebuild guard '+guard);
  assert.match(activity,/String agentName=LocalAssistantIdentity.name\(this\);/);
  assert.match(activity,/agentTitle.setText\(agentName\)/);
  assert.match(activity,/title.setSingleLine\(true\);title.setEllipsize\(android.text.TextUtils.TruncateAt.END\)/);
