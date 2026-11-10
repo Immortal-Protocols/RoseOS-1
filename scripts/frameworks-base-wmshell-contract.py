@@ -53,7 +53,7 @@ C.SCHEMA = 2
 C.MANIFEST = ROOT/'os/compile-contracts/frameworks-base-wmshell.json'
 # The reviewed candidate: the commit holding the patch's current bytes (#516, #523, #528, #540's fix for the first
 # real compile's javac error, then #551's chin marker on REGISTER for Rose Agent, F08).
-C.CANDIDATE = {'pr': 734, 'commit': '589407e1328327452ca320b4a71b3384b3859fe2'}
+C.CANDIDATE = {'pr': 734, 'commit': 'f0dcd60f047c856214ef7b1ddbef1c20c4d56c6b'}
 C.BUNDLE = C.FIXTURES/'candidate-pr734'
 C.CANDIDATE_PATCHES = ['rose-edge-wmshell.patch']
 # frameworks/base: apply-os-changes.py's --background-policy order (as in the Launcher3 contract), then the candidate.
@@ -171,14 +171,15 @@ CONFIRMATION = {
         'systemOverlays() and its scrim\'s bottom margin the systemOverlays() bottom, a no-op while the chin provides '
         'nothing; systemOverlays() is public API 34; no patch, no new file, no new import; goals and flagEvidence '
         '(none) unchanged',
-    'exactreturn': 'OS Core in #734, 2026-11-10 UTC, commit 47c8208 then 589407e (1C, the exact-task return, protocol '
-        'v1 agreed with App Core and Home/App; Rose\'s HOME task counts as Home, per Home/App): rose-edge-wmshell.patch '
-        'sha256 e43e03bf6a410c1fe0f8f7d59a41084f90e4edfe51efe7faac9618b4a218b513, only '
-        'roseedge/RoseEdgeController.java (87a84d85..., blob e44a987f) and roseedge/RoseEdgePolicy.java (a9cd7747..., '
+    'exactreturn': 'OS Core in #734, 2026-11-10 UTC, commits 47c8208, 589407e then f0dcd60 (1C, the exact-task '
+        'return, protocol v1 agreed with App Core and Home/App; Rose\'s HOME task counts as Home, per Home/App): '
+        'rose-edge-wmshell.patch sha256 42fcc4fc3d2c93295b3b12805e6e580c2b1615d91df09ec64e05dc705cf26cbd, only '
+        'roseedge/RoseEdgeController.java (429757cf..., blob 8fd02b96) and roseedge/RoseEdgePolicy.java (a9cd7747..., '
         'blob a4003dcc) changing; the '
         'required overlays AgentTrayPrototype.java (4bac21a0..., blob ba75ed1b) and AgentTrayLink.java (90e9b648..., '
-        'blob 48495c62, now public for its in-process Return seam) change; the other after-images, the WMShellModule '
-        'pre-image, the goals and flagEvidence (none) unchanged; no new file, flag or classpath input (the new imports, '
+        'blob 48495c62, now public for its in-process Return seam) change; the other after-images, the '
+        'WMShellModule pre-image, the goals and flagEvidence (none) unchanged; no new file, flag or classpath input '
+        '(the new imports, '
         'android.animation.Animator, AnimatorListenerAdapter and ValueAnimator, android.app.ActivityManager, '
         'android.content.ComponentName, android.content.pm.PackageManager, android.graphics.Point, '
         'android.view.animation.PathInterpolator, java.security.SecureRandom, the WindowManager TRANSIT_OPEN, '

@@ -103,7 +103,7 @@
     },
     {
      "name": "rose-edge-wmshell.patch",
-     "sha256": "e43e03bf6a410c1fe0f8f7d59a41084f90e4edfe51efe7faac9618b4a218b513"
+     "sha256": "42fcc4fc3d2c93295b3b12805e6e580c2b1615d91df09ec64e05dc705cf26cbd"
     },
     {
      "name": "rose-shade-systemui.patch",
@@ -907,17 +907,17 @@
      "path": "libs/WindowManager/Shell/src/com/android/wm/shell/roseedge/RoseEdgeController.java",
      "pre": null,
      "post": {
-      "sha256": "87a84d8514a737ef75ef59df47728618399c16025be67225614c4224b9b6c67e",
-      "gitBlob": "e44a987f49b9aec79a20344d627d4fba2ab9468c"
+      "sha256": "429757cf3fa31af70238d2010764cc730436b165632b7ca31ff90636b5b8578c",
+      "gitBlob": "8fd02b96f9b059f72df3e112f27cd84e036196ad"
      },
      "chain": [
       {
        "patch": "rose-edge-wmshell.patch",
        "before": null,
-       "after": "e44a987f49b9aec79a20344d627d4fba2ab9468c",
+       "after": "8fd02b96f9b059f72df3e112f27cd84e036196ad",
        "index": [
         "0000000",
-        "e44a987"
+        "8fd02b9"
        ],
        "base": "exact"
       }
@@ -1804,7 +1804,7 @@
     {
      "project": "frameworks/base",
      "name": "rose-edge-wmshell.patch",
-     "sha256": "e43e03bf6a410c1fe0f8f7d59a41084f90e4edfe51efe7faac9618b4a218b513"
+     "sha256": "42fcc4fc3d2c93295b3b12805e6e580c2b1615d91df09ec64e05dc705cf26cbd"
     },
     {
      "project": "frameworks/base",
@@ -1946,7 +1946,7 @@
      },
      {
       "name": "rose-edge-wmshell.patch",
-      "sha256": "e43e03bf6a410c1fe0f8f7d59a41084f90e4edfe51efe7faac9618b4a218b513"
+      "sha256": "42fcc4fc3d2c93295b3b12805e6e580c2b1615d91df09ec64e05dc705cf26cbd"
      },
      {
       "name": "rose-shade-systemui.patch",
@@ -2750,17 +2750,17 @@
       "path": "libs/WindowManager/Shell/src/com/android/wm/shell/roseedge/RoseEdgeController.java",
       "pre": null,
       "post": {
-       "sha256": "87a84d8514a737ef75ef59df47728618399c16025be67225614c4224b9b6c67e",
-       "gitBlob": "e44a987f49b9aec79a20344d627d4fba2ab9468c"
+       "sha256": "429757cf3fa31af70238d2010764cc730436b165632b7ca31ff90636b5b8578c",
+       "gitBlob": "8fd02b96f9b059f72df3e112f27cd84e036196ad"
       },
       "chain": [
        {
         "patch": "rose-edge-wmshell.patch",
         "before": null,
-        "after": "e44a987f49b9aec79a20344d627d4fba2ab9468c",
+        "after": "8fd02b96f9b059f72df3e112f27cd84e036196ad",
         "index": [
          "0000000",
-         "e44a987"
+         "8fd02b9"
         ],
         "base": "exact"
        }

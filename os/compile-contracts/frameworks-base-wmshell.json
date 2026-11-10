@@ -28,7 +28,7 @@
   "chinoverkeyboard": "OS Core to OS Product, 2026-11-07 18:05 and 18:10 UTC, commit 081164b (e638d34 on main 735f990, then the RoseEdgePolicy.java index line corrected to its content's blob 6d9df5f; the Rose keyboard's rules 1-2, carried in #665 with OS Product's Launcher3 half): rose-edge-wmshell.patch sha256 03f7537f388369bc785432cd67125d55011113376374dd6576006e63a9a9be6b, only roseedge/RoseEdgePolicy.java's after-image changing (6e517856..., blob 6d9df5fa: no busy refusal for a visible IME, onImeVisibility keeps the chin, LOWERED_IME keeps its number unsent); the other after-images, the WMShellModule pre-image, the overlays, the goals and flagEvidence (none) unchanged; no new files, imports or flags; the patch edit is line-count neutral (hunk headers unchanged)",
   "javacfix": "OS Core to OS Product, 2026-11-07 18:26 UTC, commit 31c00a7 on 081164b (the Frankel 2026110702 SystemUI-core javac error, roseshade/RoseShadeController.java:990: inside the SwipeFrame FrameLayout the bare mContext is View's own field and cannot be read before super): only the required overlay RoseShadeController.java changes (1ec7b902..., blob 16b634ee), its super call now RoseShadeController.this.mContext; OS Product checked every m-prefixed name used in SwipeFrame and the three anonymous View subclasses against the pinned View, ViewGroup, FrameLayout, LinearLayout, TextView and EditText fields, and none other resolves to a framework field; no patch, no new file, no new import; goals and flagEvidence (none) unchanged",
   "chininset": "OS Core to OS Product, 2026-11-07 18:42 UTC, commit 8142ffb on 31c00a7 (the chin inset, items 3-4, with OS Product's RoseEdgeWindow systemOverlays() inset in the same carrier): only the required overlay RoseShadeController.java changes (7978a7c1..., blob 1d3d8ad9), its panel inset now ime() | navigationBars() | systemOverlays() and its scrim's bottom margin the systemOverlays() bottom, a no-op while the chin provides nothing; systemOverlays() is public API 34; no patch, no new file, no new import; goals and flagEvidence (none) unchanged",
-  "exactreturn": "OS Core in #734, 2026-11-10 UTC, commit 47c8208 then 589407e (1C, the exact-task return, protocol v1 agreed with App Core and Home/App; Rose's HOME task counts as Home, per Home/App): rose-edge-wmshell.patch sha256 e43e03bf6a410c1fe0f8f7d59a41084f90e4edfe51efe7faac9618b4a218b513, only roseedge/RoseEdgeController.java (87a84d85..., blob e44a987f) and roseedge/RoseEdgePolicy.java (a9cd7747..., blob a4003dcc) changing; the required overlays AgentTrayPrototype.java (4bac21a0..., blob ba75ed1b) and AgentTrayLink.java (90e9b648..., blob 48495c62, now public for its in-process Return seam) change; the other after-images, the WMShellModule pre-image, the goals and flagEvidence (none) unchanged; no new file, flag or classpath input (the new imports, android.animation.Animator, AnimatorListenerAdapter and ValueAnimator, android.app.ActivityManager, android.content.ComponentName, android.content.pm.PackageManager, android.graphics.Point, android.view.animation.PathInterpolator, java.security.SecureRandom, the WindowManager TRANSIT_OPEN, TRANSIT_CLOSE, TRANSIT_TO_FRONT and TRANSIT_TO_BACK constants and com.android.wm.shell.AgentTrayLink, are framework, JDK or Shell classes)"
+  "exactreturn": "OS Core in #734, 2026-11-10 UTC, commits 47c8208, 589407e then f0dcd60 (1C, the exact-task return, protocol v1 agreed with App Core and Home/App; Rose's HOME task counts as Home, per Home/App): rose-edge-wmshell.patch sha256 42fcc4fc3d2c93295b3b12805e6e580c2b1615d91df09ec64e05dc705cf26cbd, only roseedge/RoseEdgeController.java (429757cf..., blob 8fd02b96) and roseedge/RoseEdgePolicy.java (a9cd7747..., blob a4003dcc) changing; the required overlays AgentTrayPrototype.java (4bac21a0..., blob ba75ed1b) and AgentTrayLink.java (90e9b648..., blob 48495c62, now public for its in-process Return seam) change; the other after-images, the WMShellModule pre-image, the goals and flagEvidence (none) unchanged; no new file, flag or classpath input (the new imports, android.animation.Animator, AnimatorListenerAdapter and ValueAnimator, android.app.ActivityManager, android.content.ComponentName, android.content.pm.PackageManager, android.graphics.Point, android.view.animation.PathInterpolator, java.security.SecureRandom, the WindowManager TRANSIT_OPEN, TRANSIT_CLOSE, TRANSIT_TO_FRONT and TRANSIT_TO_BACK constants and com.android.wm.shell.AgentTrayLink, are framework, JDK or Shell classes)"
  },
  "registration": {
   "state": "unregistered",
@@ -96,7 +96,7 @@
     },
     {
      "name": "rose-edge-wmshell.patch",
-     "sha256": "e43e03bf6a410c1fe0f8f7d59a41084f90e4edfe51efe7faac9618b4a218b513"
+     "sha256": "42fcc4fc3d2c93295b3b12805e6e580c2b1615d91df09ec64e05dc705cf26cbd"
     }
    ],
    "files": [
@@ -896,17 +896,17 @@
      "path": "libs/WindowManager/Shell/src/com/android/wm/shell/roseedge/RoseEdgeController.java",
      "pre": null,
      "post": {
-      "sha256": "87a84d8514a737ef75ef59df47728618399c16025be67225614c4224b9b6c67e",
-      "gitBlob": "e44a987f49b9aec79a20344d627d4fba2ab9468c"
+      "sha256": "429757cf3fa31af70238d2010764cc730436b165632b7ca31ff90636b5b8578c",
+      "gitBlob": "8fd02b96f9b059f72df3e112f27cd84e036196ad"
      },
      "chain": [
       {
        "patch": "rose-edge-wmshell.patch",
        "before": null,
-       "after": "e44a987f49b9aec79a20344d627d4fba2ab9468c",
+       "after": "8fd02b96f9b059f72df3e112f27cd84e036196ad",
        "index": [
         "0000000",
-        "e44a987"
+        "8fd02b9"
        ],
        "base": "exact"
       }
@@ -2394,11 +2394,11 @@
  },
  "candidateDelta": {
   "pr": 734,
-  "commit": "589407e1328327452ca320b4a71b3384b3859fe2",
+  "commit": "f0dcd60f047c856214ef7b1ddbef1c20c4d56c6b",
   "patches": [
    {
     "name": "rose-edge-wmshell.patch",
-    "sha256": "e43e03bf6a410c1fe0f8f7d59a41084f90e4edfe51efe7faac9618b4a218b513",
+    "sha256": "42fcc4fc3d2c93295b3b12805e6e580c2b1615d91df09ec64e05dc705cf26cbd",
     "project": "frameworks/base",
     "strip": 1,
     "bundlePath": "os/tests/fixtures/launcher3-compile-contract/candidate-pr734/patches/rose-edge-wmshell.patch"
@@ -2462,8 +2462,8 @@
     "path": "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/roseedge/RoseEdgeController.java",
     "before": null,
     "after": {
-     "sha256": "87a84d8514a737ef75ef59df47728618399c16025be67225614c4224b9b6c67e",
-     "gitBlob": "e44a987f49b9aec79a20344d627d4fba2ab9468c"
+     "sha256": "429757cf3fa31af70238d2010764cc730436b165632b7ca31ff90636b5b8578c",
+     "gitBlob": "8fd02b96f9b059f72df3e112f27cd84e036196ad"
     }
    },
    {
@@ -2479,7 +2479,7 @@
   "bundle": [
    {
     "path": "os/tests/fixtures/launcher3-compile-contract/candidate-pr734/patches/rose-edge-wmshell.patch",
-    "sha256": "e43e03bf6a410c1fe0f8f7d59a41084f90e4edfe51efe7faac9618b4a218b513"
+    "sha256": "42fcc4fc3d2c93295b3b12805e6e580c2b1615d91df09ec64e05dc705cf26cbd"
    }
   ],
   "pathConvention": "files[].path and overlays[].target are relative to the source tree root (project path first); projects[].files[].path and base.projects[].files[].path are relative to their project; bundlePath and bundle[].path are relative to the repository root"
