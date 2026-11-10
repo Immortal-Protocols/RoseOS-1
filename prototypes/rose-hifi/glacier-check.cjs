@@ -280,6 +280,41 @@ async function run(browser, name, ctxOpts, phone) {
   await run(browser, 'iphone13-390', { ...devices['iPhone 13'] }, true);
   await run(browser, 'iphoneSE-320', { ...devices['iPhone SE'] }, true);
   await run(browser, 'short-390x600', { ...devices['iPhone 13'], viewport: { width: 390, height: 600 } }, true);
+  // ---------- Regressions (Designer review of be74288d) ----------
+  for (const variant of ['closed', 'replaced', 'home', 'control']) {
+    const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 } }); const p = await ctx.newPage();
+    const errs = []; p.on('pageerror', (e) => errs.push(e.message));
+    await p.goto(FILE); await p.waitForTimeout(800);
+    const R = (f, a) => p.evaluate(f, a);
+    await R(() => window.__rose.dispatch({ type: 'openApp', value: 'messages' })); await p.waitForTimeout(500);
+    await p.locator('#f-msg').click(); await p.waitForTimeout(300);
+    await R(() => window.__rose.dispatch({ type: 'openRose' })); await p.waitForTimeout(1500);
+    await R(() => { const c = document.getElementById('h-ack'); c.value = 'manual'; c.dispatchEvent(new Event('change')); });
+    await p.locator('#rose-return').click(); await p.waitForTimeout(100);
+    await R((v) => { document.getElementById('h-ack-ok').click();
+      if (v === 'closed' || v === 'replaced') { const c = document.getElementById('h-origin'); c.value = v; c.dispatchEvent(new Event('change')); }
+      if (v === 'home') window.__rose.dispatch({ type: 'home' }); }, variant);
+    await p.waitForTimeout(600);
+    const r = await R(() => ({ view: window.__rose.getState().view, kb: window.RoseSystem.kbOpen(), sheet: !document.getElementById('ret-sheet').hidden }));
+    const ok = variant === 'control' ? r.view === 'app' && r.kb : variant === 'home' ? r.view === 'home' && !r.kb && !r.sheet : r.view === 'rose' && !r.kb && r.sheet;
+    check('departure race (' + variant + ' during the 200 ms departure): ' + (variant === 'control' ? 'acknowledged return departs' : variant === 'home' ? 'Home wins; no stale return' : 'stays in Rose with the unavailable sheet; no keyboard'), ok && !errs.length, { r, errs });
+    await ctx.close();
+  }
+  {
+    const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 } }); const p = await ctx.newPage();
+    await p.goto(FILE); await p.waitForTimeout(800);
+    const R = (f, a) => p.evaluate(f, a);
+    await R(() => window.__rose.dispatch({ type: 'openApp', value: 'messages' })); await p.waitForTimeout(500);
+    await R(() => { const t = document.querySelector('#v-app .c-msg'); for (let i = 0; i < 20; i++) { const q = document.createElement('p'); q.className = i % 2 ? 'out' : 'in'; q.textContent = 'Earlier message ' + i; t.prepend(q); } t.scrollTop = t.scrollHeight; });
+    await p.waitForTimeout(300);
+    const tb = await p.locator('#v-app .c-msg').boundingBox();
+    await p.locator('#f-msg').click(); await p.waitForTimeout(60);
+    await p.mouse.move(tb.x + tb.width / 2, tb.y + 60); await p.mouse.wheel(0, -400);
+    await p.waitForTimeout(700);
+    const r = await R(() => { const t = document.querySelector('#v-app .c-msg'); return { gap: t.scrollHeight - t.clientHeight - t.scrollTop, follow: window.RoseSystem.state().follow.msg }; });
+    check('a scroll up during the keyboard animation is kept (not re-pinned to the bottom)', r.gap > 100 && r.follow === false, r);
+    await ctx.close();
+  }
   // Oxblood stays available from the same file (harness).
   const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 } }); const p = await ctx.newPage();
   await p.goto(FILE + '?theme=oxblood'); await p.waitForTimeout(800);

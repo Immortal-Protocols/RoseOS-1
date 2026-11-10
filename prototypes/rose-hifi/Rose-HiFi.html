@@ -4353,9 +4353,17 @@ void main(){
     const atBottom = () => t.scrollHeight - t.clientHeight - t.scrollTop <= 4;
     // A person's scroll decides: at the bottom → follow; anywhere else → keep their place. Scrolls caused
     // by the window resizing (keyboard/chin animation) are not the person's and are ignored.
-    let resizedAt = -1e9;
-    t.addEventListener('scroll', () => { if (now() - resizedAt > 120) follow.msg = atBottom(); follow.last = t.scrollTop; }, { passive: true });
-    if (window.ResizeObserver) new ResizeObserver(() => { resizedAt = now(); if (follow.msg) { t.scrollTop = t.scrollHeight; follow.last = t.scrollTop; } }).observe(t);
+    // The person's own scroll input (wheel, touch, pointer drag, scroll keys) always decides, even while
+    // the window is animating; pinning to the bottom pauses while they scroll.
+    let resizedAt = -1e9, userAt = -1e9;
+    const userInput = () => { userAt = now(); };
+    for (const ev of ['wheel', 'touchstart', 'touchmove', 'pointerdown']) t.addEventListener(ev, userInput, { passive: true });
+    t.addEventListener('keydown', (e) => { if (['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' '].includes(e.key)) userInput(); });
+    t.addEventListener('scroll', () => {
+      if (now() - userAt < 400 || now() - resizedAt > 120) follow.msg = atBottom();
+      follow.last = t.scrollTop;
+    }, { passive: true });
+    if (window.ResizeObserver) new ResizeObserver(() => { resizedAt = now(); if (follow.msg && now() - userAt >= 400) { t.scrollTop = t.scrollHeight; follow.last = t.scrollTop; } }).observe(t);
     // A tap on blank conversation space hides the keyboard; messages, scrolls and drags never do.
     let blank = null;
     t.addEventListener('pointerdown', (e) => { blank = e.target === t && !e.button ? { x: e.clientX, y: e.clientY, t: now(), top: t.scrollTop } : null; });
@@ -4521,7 +4529,7 @@ void main(){
   // (Stay in Rose · Open switcher · Go Home), never relaunches and never summons the keyboard.
   // The acknowledgement itself is simulated by the review harness (explicit there; not a UX timing rule).
   // =====================================================================================
-  const ret = { origin: null, phase: 'idle', status: null, pending: null, seq: 0, cond: 'alive', gen: 1, ack: 'success-420', press: null, suppress: false };
+  const ret = { origin: null, phase: 'idle', status: null, pending: null, seq: 0, cond: 'alive', gen: 1, ack: 'success-420', press: null, suppress: false, departing: null };
   const appOf = (o) => (o.view === 'app' ? o.app : window.RoseModel.WINDOWS[o.window].app);
   const originName = () => (ret.origin ? window.RoseModel.APPS[appOf(ret.origin)].name : '');
   // The exact live task: same task identity and generation, still open.
@@ -4566,9 +4574,16 @@ void main(){
     const req = ret.pending; ret.pending = null;
     if (valid() && sameTask(req.origin, ret.origin) && success === true) {
       ret.status = 'succeeded'; ret.phase = 'idle';
-      const o = ret.origin, rose = $('v-rose');
+      const o = ret.origin, rose = $('v-rose'), token = {};
+      ret.departing = token;
       const go = () => {
         rose.classList.remove('departing');
+        // Re-validate at the moment of departure: the same departure, still in Rose, and still the exact
+        // live task (identity + generation). Leaving Rose abandons it; an invalidated task stays in Rose.
+        if (ret.departing !== token) { note('departure abandoned'); return; }
+        ret.departing = null;
+        if (R.getState().view !== 'rose') { note('departure abandoned: left Rose'); return; }
+        if (!valid() || !sameTask(o, ret.origin)) { departureInvalid(); return; }
         ret.origin = null;
         R.dispatch({ type: 'returnTo', view: o.view, app: o.app, window: o.window });
         const s = R.getState();
@@ -4590,6 +4605,13 @@ void main(){
     note('return ' + ret.status + ' (stayed in Rose)'); renderReturn(R.getState());
     $('ret-stay').focus({ preventScroll: true });
     announce(ret.status === 'failed' ? 'Transfer failed. You remain in Rose; keyboard stays hidden.' : 'Source app unavailable. Nothing was relaunched.');
+  }
+  function departureInvalid() {
+    ret.departing = null; $('v-rose').classList.remove('departing');
+    ret.phase = 'unavailable'; ret.status = 'unavailable';
+    note('departure stopped: origin no longer the exact live task (stayed in Rose)'); renderReturn(R.getState());
+    const st = $('ret-stay'); if (st) st.focus({ preventScroll: true });
+    announce('Source app unavailable. Nothing was relaunched.');
   }
   function returnCancel(message, status) {
     if (ret.press) ret.suppress = true;
@@ -4635,6 +4657,7 @@ void main(){
     if (lastView && s.view !== lastView) {
       if (s.view === 'rose' && (lastView === 'app' || lastView === 'window') && lastCtx) { ret.cond = 'alive'; syncOriginHarness(); ret.origin = snapshot(lastCtx); ret.phase = 'idle'; ret.status = null; note('origin kept: ' + (lastCtx.app || lastCtx.window)); }
       else if (s.view !== 'rose' && s.view !== 'agents') {
+        if (ret.departing) { ret.departing = null; $('v-rose').classList.remove('departing'); note('departure abandoned (left Rose)'); }
         if (ret.phase === 'pending') { ret.pending = null; ret.status = 'cancelled'; note('return cancelled (left Rose)'); }
         if (ret.origin) note('return cleared'); ret.origin = null; ret.phase = 'idle';
       }
@@ -4682,6 +4705,7 @@ void main(){
         note('origin task: ' + ret.cond);
         // A change while pending is validated like the platform would: an invalid task cannot be returned to.
         if ((ret.phase === 'pending' || ret.phase === 'pressed') && !valid()) { ret.pending = null; ret.phase = 'unavailable'; ret.status = 'unavailable'; }
+        if (ret.departing && !valid()) { departureInvalid(); return; }
         renderReturn(R.getState());
       };
       $('h-ack').onchange = (e) => { ret.ack = e.target.value; };
