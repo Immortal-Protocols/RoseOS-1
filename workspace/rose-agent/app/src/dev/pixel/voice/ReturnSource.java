@@ -5,6 +5,18 @@ package dev.pixel.voice;
  * supplies the implementation (task restoration, within existing permissions); until it does, {@link #NONE} offers
  * nothing, so the control stays hidden rather than guessing an app. A package launch is never a substitute: only the
  * captured live task counts, and a closed or replaced task is answered UNAVAILABLE.
+ *
+ * <p>Agreed seam, final v1 (OS Core 00:58 UTC 2026-11-10; ACKed by App Core and Home/App), on the existing always-on
+ * status-bar tray link (unchanged trust, no new permission or exported surface):
+ * <ul>
+ * <li>SystemUI to Rose: 7 RETURN_TARGET {protocolVersion 1, token (0 = none), package, userId, label resolved by
+ * SystemUI for the task's user}; the token is stable while the recorded task is unchanged. 8 RETURN_RESULT, arg1 the
+ * attempt, arg2 0 RETURNED (exactly that task focused, identity rechecked), 1 UNAVAILABLE (gone, replaced, moved or
+ * user changed), 2 REFUSED (stale token, keyguard, Rose not in focus, timeout).</li>
+ * <li>Rose to SystemUI: 101 RETURN_TO, arg1 the attempt, {token}; 102 RETURN_CANCEL, arg1 the attempt.</li>
+ * <li>The shell reorders exactly that task (no launch of any kind) and answers within 1.5 s; Rose waits 4 s, then
+ * sends 102 and reports REFUSED. The shell plays V3's departure (ReturnModel.DEPART_*) on the applied reorder only.</li>
+ * </ul>
  */
 interface ReturnSource {
  /** The owner's live source task from before Rose came forward (never Rose, Home, the background workspace or system
