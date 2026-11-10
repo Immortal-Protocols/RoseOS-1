@@ -5,6 +5,8 @@ updated on its own. These checks keep both sides of the Messenger protocol and t
 voice-glow shader in step."""
 from pathlib import Path
 import re
+import subprocess
+import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -32,6 +34,48 @@ class TrayContractTest(unittest.TestCase):
         self.tray = (SHELL/'AgentTrayPrototype.java').read_text()
         self.controls = (SHELL/'AgentStatusControls.java').read_text()
         self.link = (SHELL/'AgentTrayLink.java').read_text()
+
+    def test_reply_theme_callback_compiles_and_runs_with_later_field(self):
+        # Frankel 2026111002: Java rejects a simple-name forward reference even
+        # inside a deferred lambda. Compile the actual production statement in
+        # the same field order, without requiring an Android tree or device.
+        reply = self.tray.split('private final Messenger reply =', 1)[1].split(
+            'private final ServiceConnection connection', 1)[0]
+        statement = re.search(r'^\s*((?:this\.)?theme\.fromRose\([^\n]+;)', reply, re.M)
+        self.assertIsNotNone(statement)
+        source = '''package com.android.wm.shell;
+public class TrayThemeCallbackTest {
+    static class Bundle {
+        String getString(String key) { return RoseTheme.DEFAULT; }
+    }
+    private final java.util.function.Consumer<Bundle> reply = data -> {
+        %s
+    };
+    private String acknowledged;
+    private final RoseThemeMirror theme = new RoseThemeMirror(new RoseThemeMirror.Port() {
+        public String read() { return RoseTheme.DEFAULT; }
+        public boolean write(String id) { return true; }
+        public void acknowledge(String id) { acknowledged = id; }
+    });
+    public static void main(String[] args) {
+        TrayThemeCallbackTest tray = new TrayThemeCallbackTest();
+        tray.reply.accept(new Bundle());
+        if (!RoseTheme.DEFAULT.equals(tray.acknowledged)) throw new AssertionError();
+    }
+}
+''' % statement.group(1)
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Path(directory)/'TrayThemeCallbackTest.java'
+            fixture.write_text(source)
+            compile_result = subprocess.run([
+                'java', '-m', 'jdk.compiler/com.sun.tools.javac.Main', '-d', directory,
+                str(SHELL/'RoseTheme.java'), str(SHELL/'RoseThemeMirror.java'), str(fixture)
+            ], capture_output=True, text=True)
+            self.assertEqual(compile_result.returncode, 0, compile_result.stderr)
+            run = subprocess.run(['java', '-cp', directory,
+                                  'com.android.wm.shell.TrayThemeCallbackTest'],
+                                 capture_output=True, text=True)
+            self.assertEqual(run.returncode, 0, run.stderr)
 
     def test_the_tray_draws_nothing_at_rest(self):
         # #224: the idle grey lines across the status bar read as artifacts and are not in the HiFi design.
