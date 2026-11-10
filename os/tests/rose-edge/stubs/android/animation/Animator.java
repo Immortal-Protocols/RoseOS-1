@@ -1,0 +1,1 @@
+package android.animation; public abstract class Animator { public interface AnimatorListener { void onAnimationStart(Animator a); void onAnimationEnd(Animator a); void onAnimationCancel(Animator a); void onAnimationRepeat(Animator a); } public void addListener(AnimatorListener l) {} public void start() {} }

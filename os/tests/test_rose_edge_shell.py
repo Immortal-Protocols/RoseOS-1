@@ -201,11 +201,20 @@ class RoseEdgeShellTest(unittest.TestCase):
         self.assertEqual(self.controller.count('mTransitions.startTransition(TRANSIT_CHANGE, wct, this)'), 1)
         anim = method(self.controller, 'public boolean startAnimation(')
         self.assertIn('if (applied == null) return false;', anim, 'other transitions are not ours')
+        self.assertLess(anim.index('transition == pending.mTransition'), anim.index('mOwnTransitions.remove'),
+            'a return transition is recognised before raise and lower')
         self.assertIn('startTransaction.apply(); finishCallback.onTransitionFinished(null);', flat(anim))
-        code = re.sub(r'//[^\n]*', '', re.sub(r'/\*.*?\*/', '', self.controller, flags=re.S))
+        # 1C: only V3's departure animates, and only Rose's own leaving leash (its alpha and an 8dp drop). Everything
+        # else, the raise and lower included, still never moves, scales, crops or captures anything.
+        depart = method(self.controller, 'private void depart(')
+        uncomment = lambda text: re.sub(r'//[^\n]*', '', re.sub(r'/\*.*?\*/', '', text, flags=re.S))
+        code = re.sub(r'(?m)^import .*$', '', uncomment(self.controller.replace(depart, '')))
         for token in ('setScale', 'setMatrix', 'setWindowCrop', 'setWindowingMode', 'setPosition', 'Animator',
                 'ScreenCapture', 'screenshot', 'captureLayers'):
             self.assertFalse(token in code, token)
+        for token in ('setScale', 'setMatrix', 'setWindowCrop', 'setWindowingMode', 'ScreenCapture', 'screenshot',
+                'captureLayers', 'setBounds'):
+            self.assertFalse(token in uncomment(depart), token)
         # Only the default task display area organized by the shell is ever changed.
         self.assertEqual(len(re.findall(r'wct\.setBounds\(', self.controller)), 3, 'raise, lower and the restart reset')
         self.assertEqual(self.controller.count('mRootTdaOrganizer.getDisplayAreaInfo(displayId)'), 2)
@@ -365,6 +374,72 @@ class RoseEdgeShellTest(unittest.TestCase):
         self.assertIn('@ShellCreateTriggerOverride', self.module[self.module.rindex('@WMSingleton',
             0, self.module.index('static Object provideIndependentShellComponentsToCreate(')):])
         self.assertIn('RoseEdgeController roseEdgeController) {', create, 'created with the shell')
+
+    def test_the_exact_task_return_reorders_only_the_recorded_task(self):
+        # 1C (agreed with App Core and Home/App): the shell records the task and Rose Agent only quotes its token.
+        code = flat(self.controller)
+        start = flat(method(self.controller, 'private void startReturn(long token, int attempt'))
+        self.assertIn('final RunningTaskInfo running = target == null ? null : '
+            'mTaskOrganizer.getRunningTaskInfo(target.taskId);', start)
+        self.assertIn('int check = mReturn.check(token, mKeyguardVisible || keyguardLocked(), returnTask(mFocused), '
+            'returnTask(running), ActivityManager.getCurrentUser());', start)
+        self.assertLess(start.index('answer.answer(attempt, check); return;'), start.index('wct.reorder('),
+            'a refusal or unavailability moves nothing')
+        self.assertIn('wct.reorder(running.token, true /* onTop */);', start)
+        self.assertIn('pending.mTransition = mTransitions.startTransition(TRANSIT_TO_FRONT, wct, this);', start)
+        self.assertIn('RETURN_DEADLINE_MS);', start)
+        self.assertIn('static final long RETURN_DEADLINE_MS = 1500, RETURN_SETTLE_MS = 300;', self.controller)
+        self.assertEqual(code.count('mTransitions.startTransition(TRANSIT_TO_FRONT, wct, this)'), 1)
+        self.assertEqual(code.count('.reorder('), 1)
+        # Never a substitute for the exact task: no start, launch intent, new task or task move.
+        bare = re.sub(r'//[^\n]*', '', re.sub(r'/\*.*?\*/', '', self.controller, flags=re.S))
+        for token in ('startActivity', 'moveTaskToFront', 'FLAG_ACTIVITY_NEW_TASK', 'NEW_TASK', 'new Intent(',
+                'getLaunchIntentForPackage', 'PendingIntent', 'moveRootTaskToDisplay'):
+            self.assertNotIn(token, bare)
+        # RETURNED only once focus is on that same task, from the focus listener or as the transition settles.
+        self.assertEqual(code.count('answerReturn(pending, RoseEdgePolicy.Return.RETURNED);'), 2)
+        focus = flat(method(self.controller, 'public void onFocusTaskChanged(RunningTaskInfo taskInfo)'))
+        self.assertIn('if (pending != null && RoseEdgePolicy.Return.same(pending.mTask, focused)) { '
+            'answerReturn(pending, RoseEdgePolicy.Return.RETURNED); }', focus)
+        settle = flat(method(self.controller, 'private void settleReturn(@NonNull PendingReturn pending)'))
+        self.assertIn('if (RoseEdgePolicy.Return.same(pending.mTask, returnTask(mFocused))) { '
+            'answerReturn(pending, RoseEdgePolicy.Return.RETURNED); return; }', settle)
+        self.assertIn('if (mPendingReturn != pending) return; mPendingReturn = null;',
+            flat(method(self.controller, 'private void answerReturn(')), 'exactly one answer')
+        consumed = flat(method(self.controller, 'public void onTransitionConsumed('))
+        self.assertIn('if (aborted) { answerReturn(pending, RoseEdgePolicy.Return.REFUSED); } else { '
+            'settleReturn(pending); }', consumed)
+        # The record follows the shell's own task events and is published to the tray on every change.
+        self.assertIn('if (mReturn.onFocusChanged(focused, ActivityManager.getCurrentUser())) publishReturnTarget();',
+            focus)
+        for hook in ('if (mReturn.onTaskInfoChanged(returnTask(taskInfo))) publishReturnTarget();',
+                'if (mReturn.onTaskVanished(taskInfo.taskId)) publishReturnTarget();',
+                'if (mReturn.onUserChanged()) publishReturnTarget();'):
+            self.assertIn(hook, code)
+        init = flat(method(self.controller, 'private void onInit()'))
+        self.assertIn('AgentTrayLink.Return.install((token, attempt, answer) -> '
+            'mMainExecutor.execute(() -> startReturn(token, attempt, answer)));', init)
+        self.assertIn('new RoseEdgePolicy.Return(new SecureRandom()::nextLong)', self.controller)
+        # No new interface or caller trust: IRoseEdge is unchanged, and the tray link is the only way in.
+        self.assertNotIn('return', flat(self.source['IRoseEdge.aidl']).lower().replace('returns', ''))
+
+    def test_the_departure_is_v3s_and_moves_only_rose(self):
+        depart = flat(re.sub(r'//[^\n]*', '', method(self.controller, 'private void depart(')))
+        self.assertIn('static final long DEPART_MS = 200;', self.controller)
+        self.assertIn('static final float DEPART_DP = 8;', self.controller)
+        self.assertIn('departure.setInterpolator(new PathInterpolator(.2f, .7f, .3f, 1f));', depart)
+        self.assertIn('if ((mode == TRANSIT_TO_BACK || mode == TRANSIT_CLOSE) && task != null && '
+            'RoseEdgePolicy.Return.ROSE_PACKAGE.equals(task.packageName)) {', depart)
+        # The source app is shown in place at full opacity, never animated.
+        self.assertIn('} else if (mode == TRANSIT_TO_FRONT || mode == TRANSIT_OPEN) { '
+            'startTransaction.setAlpha(change.getLeash(), 1f); }', depart)
+        self.assertIn('t.setAlpha(leash, 1f - f); t.setPosition(leash, x, y + drop * f);', depart)
+        # Reduced motion: no animation at all.
+        self.assertIn('final boolean animate = rose != null && at != null && ValueAnimator.areAnimatorsEnabled();',
+            depart)
+        self.assertIn('if (!animate) { done.run(); return; }', depart)
+        # Rose's leash is put back for the next time it shows.
+        self.assertIn('finishTransaction.setAlpha(rose, 1f); finishTransaction.setPosition(rose, at.x, at.y);', depart)
 
 
 if __name__ == '__main__':

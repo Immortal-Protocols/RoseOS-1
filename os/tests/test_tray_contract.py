@@ -116,7 +116,11 @@ class TrayContractTest(unittest.TestCase):
         send = self.tray[self.tray.index('private boolean send(int action) {'):]
         send = send[:send.index('\n    }\n') + 6]
         self.assertIn('if (action == AgentTrayLink.REGISTER) message.arg2 = sentChin = chinArg();', send)
-        self.assertNotIn('arg1', self.tray)
+        self.assertNotIn('arg1', send)
+        # 1C's RETURN_TO attempt is the tray's only arg1.
+        code = re.sub(r'//[^\n]*', '', re.sub(r'/\*.*?\*/', '', self.tray, flags=re.S))
+        self.assertEqual(code.count('arg1'), 1)
+        self.assertIn('AgentTrayLink.Return.returnTo(message.getData().getLong("token"), message.arg1,', code)
         self.assertIn('return AgentStatusControls.chinArg(SystemProperties.getBoolean(EDGE_PROPERTY, false), '
             'link.user(),', self.tray)
         self.assertIn('Settings.Secure.getIntForUser(context.getContentResolver(), Settings.Secure.NAVIGATION_MODE, 0,',
@@ -155,6 +159,37 @@ class TrayContractTest(unittest.TestCase):
 
     def test_app_glow_shader_matches_the_os_copy(self):
         self.assertEqual(shader(APP/'StatusVoiceGlow.java'), shader(SHELL/'StatusVoiceGlow.java'))
+    def test_the_return_protocol_rides_the_trusted_link(self):
+        # 1C v1, pinned with App Core and Home/App: SystemUI to Rose 7 RETURN_TARGET and 8 RETURN_RESULT (0 RETURNED,
+        # 1 UNAVAILABLE, 2 REFUSED); Rose to SystemUI 101 RETURN_TO and 102 RETURN_CANCEL.
+        self.assertIn('public static final int TARGET = 7, RESULT = 8;', self.link)
+        self.assertIn('public static final int RETURN_TO = 101, CANCEL = 102;', self.link)
+        self.assertIn('public static final int RETURNED = 0, UNAVAILABLE = 1, REFUSED = 2;', self.link)
+        # Rose's requests pass the same gates as STATE: subscribed, and Rose Agent's uid for the bound user.
+        reply = self.tray[self.tray.index('private final Messenger reply'):
+            self.tray.index('private final ServiceConnection')]
+        self.assertLess(reply.index('if (!this.link.subscribed() || !trusted(message.sendingUid)) return true;'),
+            reply.index('AgentTrayLink.Return.RETURN_TO'))
+        self.assertIn('if (message.what == AgentTrayLink.Return.CANCEL) return true;', reply)
+        self.assertIn('(attempt, result) -> handler.post(() -> sendReturnResult(attempt, result)));', reply)
+        # RETURN_TARGET goes out after each REGISTER and on every change, with the tray's reply Messenger.
+        self.assertIn('if (action == AgentTrayLink.REGISTER) handler.post(this::sendReturnTarget);', self.tray)
+        self.assertIn('AgentTrayLink.Return.listen(() -> handler.post(this::sendReturnTarget));', self.tray)
+        target = self.tray[self.tray.index('private void sendReturnTarget()'):]
+        target = target[:target.index('\n    }\n')]
+        for field in ('data.putInt("protocolVersion", 1);', 'data.putLong("token", target.token);',
+                'data.putString("package", target.packageName);', 'data.putInt("userId", target.userId);',
+                'data.putString("label", target.label);', 'message.replyTo = reply;',
+                'if (voice == null || !link.subscribed()) return;'):
+            self.assertIn(field, target)
+        self.assertIn('Message.obtain(null, AgentTrayLink.Return.RESULT, attempt, result);', self.tray)
+        # Without the shell installed a return is refused, never guessed; the seam stays inside SystemUI's process.
+        self.assertIn('if (s == null) { answer.answer(attempt, REFUSED); return; }', re.sub(r'\s+', ' ', self.link))
+        self.assertIn('public static final Target NONE = new Target(0, "", 0, "");', self.link)
+        # Nothing new is exported: the service keeps its single STATUS_BAR_SERVICE-protected export.
+        manifest = (ROOT/'workspace/rose-agent/app/AndroidManifest.xml').read_text()
+        self.assertEqual(manifest.count('android:name=".AgentTrayService"'), 1)
+
 
 if __name__ == '__main__':
     unittest.main()
