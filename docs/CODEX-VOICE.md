@@ -85,7 +85,10 @@ voice"). There is no catalog, menu or settings screen. Codex calls `rename_assis
   audio config gives files for exist. A closer voice that will not load is skipped and said.
 - **Persistence.** Both choices are saved in `identity.json` (0600) in `ROSE_CONFIG_DIR` (default
   `~/.config/rose-local`) and restored at start with `--brain codex`. An explicit `--voice` wins for that run; a
-  saved voice that no longer loads falls back to Zoey.
+  saved voice that no longer loads falls back to Zoey. A file that exists but cannot be read is left alone: changes
+  are then refused and Rose says so, rather than overwriting the owner's saved choice.
+- **Another gender.** A qualifier given with a gender change ("a deeper man's voice") is judged among that gender's
+  voices; what Rose reports is always the measured change from the current voice.
 
 Nothing generates or clones a voice.
 

@@ -39,12 +39,13 @@ DIMENSIONS = {
 }
 # same keeps the current voice's gender (the default: the owner did not ask to change it); either allows both.
 GENDERS = ('same', 'female', 'male', 'either')
-UNREQUESTED_WEIGHT = 0.25
+UNREQUESTED_WEIGHT = 0.5
 UNAVAILABLE_RETRY_S = 300.0  # a voice that failed to load (a download, a network blip) is tried again after this  # keep what the owner did not ask to change close to the current voice
 def american(accent: str) -> bool:
     """Whether an accent request names the accent every available voice has (US English), or none."""
     words = set(re.findall(r'[a-z]+', accent.lower().replace('u.s.', 'us').replace('en-us', 'us')))
-    words -= {'english', 'accent', 'a', 'an', 'the', 'standard', 'general', 'plain', 'neutral', 'north', 'any'}
+    words -= {'english', 'accent', 'a', 'an', 'the', 'standard', 'general', 'plain', 'neutral', 'north', 'any', 'same',
+              'none', 'unchanged', 'current', 'no', 'change'}
     return not words or words <= {'american', 'us', 'usa', 'united', 'states'}
 
 
@@ -127,15 +128,13 @@ def match(current: str, request: dict, available, traits: dict = TRAITS) -> list
         cand = voices[name]
         if gender != 'either' and cand['gender'] != gender:
             continue
-        d = deltas(cur, cand)
+        real = deltas(cur, cand)  # what the owner will hear change: always the reported measurements
         switched = cand['gender'] != cur['gender']
-        level = request['wanted'].get('pitch')
-        if switched and request['gender'] in ('female', 'male') and level:
-            # "A lower male voice" from a woman's voice is lower than now; "a deeper woman's voice" from a man's is
-            # deeper among women: either reading in the asked direction counts, the stronger one is used.
-            peers = sorted(v['pitch_hz'] for v in voices.values() if v['gender'] == cand['gender'])
-            among = 12 * math.log2(cand['pitch_hz'] / peers[len(peers) // 2])
-            d['pitch'] = max((d['pitch'], among), key=lambda x: x * level)
+        # Asking for another gender changes register: every qualifier ("a deeper woman's voice", "a warmer man's")
+        # is judged among that gender's voices, from their typical voice, not from the current voice.
+        d = deltas(typical(voices, cand['gender']), cand) if switched and request['gender'] in ('female', 'male') \
+            else real
+        among = d is not real
         score, met, unmet, against, toward = 0.0, [], [], [], []
         for dim, spec in DIMENSIONS.items():
             level = request['wanted'].get(dim)
@@ -145,11 +144,13 @@ def match(current: str, request: dict, available, traits: dict = TRAITS) -> list
                         unmet.append('same_' + dim)
                         against.append('same_' + dim)
                     score += (d[dim] / spec['scale']) ** 2
-                elif not (dim == 'pitch' and switched):  # another gender's pitch is not "a change" to keep small
+                elif not (dim == 'pitch' and switched and not among):  # another gender's pitch is not "a change"
                     score += UNREQUESTED_WEIGHT * (d[dim] / spec['scale']) ** 2
                 continue
             target = math.copysign(spec['large'] if abs(level) == 2 else spec['step'], level)
-            score += ((d[dim] - target) / spec['scale']) ** 2
+            miss = d[dim] - target
+            # Going further the asked way is a smaller miss than falling short of it.
+            score += (miss / spec['scale'] / (2 if miss * level > 0 else 1)) ** 2
             word = (('much_' if abs(level) == 2 else '') + (spec['more'] if level > 0 else spec['less']))
             enough = spec['step'] if abs(level) == 2 else spec['least']
             if d[dim] * level > 0 and abs(d[dim]) >= spec['least']:
@@ -160,10 +161,19 @@ def match(current: str, request: dict, available, traits: dict = TRAITS) -> list
                 unmet.append(word)
                 if d[dim] * level < 0 and abs(d[dim]) >= spec['least']:
                     against.append(word)
+        progress = sum(d[dim] * math.copysign(1, level) / DIMENSIONS[dim]['scale']
+                       for dim, level in request['wanted'].items())  # how far it goes the asked ways, in steps
         out.append({'voice': name, 'score': round(score, 3), 'met': met, 'unmet': unmet, 'against': against,
-                    'toward': toward, 'changes': describe_changes(d)})
+                    'toward': toward, 'progress': round(progress, 3), 'changes': describe_changes(real)})
     out.sort(key=lambda e: (len(e['against']), len(e['unmet']), e['score']))
     return out
+
+
+def typical(voices: dict, gender: str) -> dict:
+    """The median voice of a gender, measure by measure (a reference, not a voice)."""
+    group = [v for v in voices.values() if v['gender'] == gender]
+    mid = lambda key: sorted(v[key] for v in group)[len(group) // 2]
+    return {key: mid(key) for key in ('pitch_hz', 'brightness_db', 'pitch_range_st', 'speech_s')}
 
 
 def describe_changes(d: dict) -> list[str]:
@@ -218,7 +228,12 @@ class IdentityStore:
 class VoiceIdentity:
     """The assistant's current name and voice, the tools that change them, and their persistence.
 
+    An identity.json that exists but cannot be read is never overwritten: changes are then refused, not saved over it.
+
     store None keeps everything in memory (tests, and conductors built without a producer)."""
+
+    UNREADABLE = (' The saved name and voice file could not be read, so it was left as it is; the producer\'s operator '
+                  'can check its config directory.')
 
     def __init__(self, store: IdentityStore | None = None, traits: dict = TRAITS):
         self.store, self.traits = store, traits
@@ -243,6 +258,8 @@ class VoiceIdentity:
     def _save(self, name, voice, previous) -> bool:
         if self.store is None:
             return True
+        if self.unreadable:  # never overwrite a saved choice that could not be read
+            return False
         data = {'name': name, 'voice': voice, 'previous_voice': previous}
         try:
             self.store.write({k: v for k, v in data.items() if v is not None})
@@ -278,7 +295,8 @@ class VoiceIdentity:
             return {'ok': False, 'reason': 'invalid_name', 'message': str(exc)}
         with self.lock:
             if not self._save(name, self.voice, self.previous):
-                return {'ok': False, 'reason': 'not_saved', 'message': 'The name could not be saved; it is unchanged.'}
+                return {'ok': False, 'reason': 'not_saved', 'message': 'The name could not be saved; it is unchanged.'
+                        + (self.UNREADABLE if self.unreadable else '')}
             old, self.name = self.name, name
         return {'ok': True, 'name': name, 'previous_name': old, 'saved': True,
                 'note': (f'Call yourself {name} from now on. Rose\'s phone app, pairing, About and any wake word '
@@ -342,13 +360,18 @@ class VoiceIdentity:
         wider = match(current, {**request, 'gender': 'either'}, available, self.traits)
         same = [e for e in ranked if e['toward'] and not e['against']]
         best = same[0] if same else None
-        if best is None and not changing_gender:  # another gender only when the owner did not name one
+        if best is None and changing_gender:
+            # The owner asked for this gender: of its voices that move nothing the wrong way, the one that goes
+            # furthest the asked way.
+            best = max((e for e in ranked if not e['against']), key=lambda e: e['progress'], default=None)
+        if best is None and request['gender'] in ('same', 'either'):  # another gender only when none was named
             best = next((e for e in wider if e['toward'] and not e['against']), None)
         scope = '' if request['gender'] in ('either',) else f'{request["gender"] if changing_gender else gender} '
         result = {'ok': False, 'reason': 'no_close_match', 'changed': False, 'voice': current, 'limits': limits,
                   'message': (f'No available {scope}voice is ' + ' and '.join(w.replace('_', ' ')
                                                                          for w in self._words(request['wanted']))
-                              + ' than the current one without moving the other way.' if request['wanted'] else
+                              + (f' than a typical {request["gender"]} voice.' if changing_gender
+                                 else ' than the current one without moving the other way.') if request['wanted'] else
                               f'No available {scope}voice fits that description.')}
         if best is not None:
             self.offered = best
@@ -411,7 +434,8 @@ class VoiceIdentity:
                     except Exception:
                         pass
                     return {'ok': False, 'reason': 'not_saved', 'changed': False, 'voice': current,
-                            'message': 'The new voice could not be saved, so the current voice was kept.'}
+                            'message': 'The new voice could not be saved, so the current voice was kept.'
+                            + (self.UNREADABLE if self.unreadable else '')}
                 self.voice, self.previous, self.offered = voice, current, None
                 self.unavailable.pop(voice, None)
             changes = entry['changes'] if entry['changes'] is not None else describe_changes(
@@ -445,6 +469,8 @@ TOOLS = [
      'description': 'Change your voice to the closest available one when the owner describes how it should sound. '
                     'Give only what they asked for, relative to your current voice: pitch lower/higher (deeper is '
                     'lower), warmth warmer/brighter, liveliness calmer/livelier, pace slower/faster, gender, an accent, '
+                    'and with a gender change only qualifiers the owner gave about that gender\'s voice ("a deeper '
+                    'man\'s voice"), never one implied by the change itself, '
                     'and in other any quality none of these cover (for example raspy). Voices were measured from their '
                     'own samples. voice applies an alternative a previous result offered, once the owner agrees. '
                     'Saved across restarts.',

@@ -133,7 +133,7 @@ class Matching(unittest.TestCase):
                                          vi.TRAITS['voices'][current]['gender'])
 
     def test_gender_changes_only_when_asked(self):
-        r, _ = self.change('zoey', gender='male', pitch='lower')
+        r, _ = self.change('zoey', gender='male')
         self.assertTrue(r['ok'])
         self.assertEqual(vi.TRAITS['voices'][r['voice']]['gender'], 'male')
         r, speaker = self.change('easton', warmth='warmer')  # no warmer male voice exists
@@ -229,17 +229,24 @@ class Matching(unittest.TestCase):
         self.assertNotIn('much_', r['message'])
 
     def test_another_gender_with_a_pitch_qualifier_is_judged_among_that_gender(self):
+        females = sorted(v['pitch_hz'] for v in vi.TRAITS['voices'].values() if v['gender'] == 'female')
         r, _ = self.change('easton', gender='female', pitch='lower')  # "a woman with a deeper voice"
         self.assertTrue(r['ok'])
-        females = sorted((v['pitch_hz'], n) for n, v in vi.TRAITS['voices'].items() if v['gender'] == 'female')
-        self.assertLess(vi.TRAITS['voices'][r['voice']]['pitch_hz'], females[len(females) // 2][0])
-        r, _ = self.change('zoey', gender='male', pitch='lower')  # "a lower, male voice"
-        self.assertTrue(r['ok'])
-        self.assertEqual(vi.TRAITS['voices'][r['voice']]['gender'], 'male')
+        self.assertLess(vi.TRAITS['voices'][r['voice']]['pitch_hz'], females[len(females) // 2])
+        # The reported change is the real one from the current voice: a woman's voice is higher than Easton's.
+        self.assertTrue(any('higher' in c and 'semitones' in c for c in r['measured_changes']), r)
+        r, _ = self.change('easton', gender='female', pitch='higher')  # "a woman with a higher voice"
+        self.assertGreater(vi.TRAITS['voices'][r['voice']]['pitch_hz'], females[len(females) // 2])
+        r, _ = self.change('zoey', gender='male', warmth='warmer')  # "a warmer man's voice": the warmest man
+        males = {n: v for n, v in vi.TRAITS['voices'].items() if v['gender'] == 'male'}
+        self.assertEqual(r['voice'], min(males, key=lambda n: males[n]['brightness_db']))
 
     def test_an_asked_gender_alternative_is_never_another_gender(self):
-        r, _ = self.change('zoey', gender='male', warmth='warmer')
+        r, _ = self.change('zoey', gender='male', pitch='higher')  # no man's voice is higher than a typical man's
         self.assertFalse(r['ok'])
+        males = {n: v for n, v in vi.TRAITS['voices'].items() if v['gender'] == 'male'}
+        self.assertEqual(r['alternative']['voice'], max(males, key=lambda n: males[n]['pitch_hz']))  # the highest man
+        r, _ = self.change('easton', gender='male', pitch='higher')  # named, the current gender: still only men
         self.assertTrue('alternative' not in r or r['alternative']['gender'] == 'male', r)
 
     def test_american_accents_are_recognised(self):
@@ -391,6 +398,23 @@ class Persistence(unittest.TestCase):
         self.assertTrue(one.revert(speaker)['ok'])
         self.assertEqual(speaker.voice, warmer)  # back to the voice before the dashboard pick
         self.assertFalse(one.adopt('zoey', 'gandalf'))
+
+    def test_an_unreadable_file_is_never_overwritten(self):
+        path = self.dir / 'identity.json'
+        path.write_text('{not json')
+        one = self.identity()
+        r = one.rename('Nova')
+        self.assertFalse(r['ok'])
+        self.assertIn('could not be read', r['message'])
+        speaker = Speaker('zoey')
+        self.assertFalse(one.change_voice(speaker, {'warmth': 'warmer'})['ok'])
+        self.assertEqual((speaker.voice, path.read_text()), ('zoey', '{not json'))
+
+    def test_accent_same_is_no_accent_request(self):
+        identity, speaker = vi.VoiceIdentity(), Speaker('zoey')
+        r = identity.change_voice(speaker, {'warmth': 'warmer', 'accent': 'same'})
+        self.assertTrue(r['ok'])
+        self.assertNotIn('limits', r)
 
     def test_a_damaged_or_foreign_file_falls_back_to_defaults(self):
         (self.dir / 'identity.json').write_text('{not json')
