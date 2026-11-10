@@ -524,11 +524,12 @@ class HostedSignGateTest(unittest.TestCase):
             files['unsigned'].stat().st_size, files['otatools'].stat().st_size, otatools_uncompressed,
             files['jdk'].stat().st_size, jdk_uncompressed, files['generateRelease'].stat().st_size, bounds)
         total = sum(terms.values())
+        resident = sum(files[name].stat().st_size for name in ('unsigned', 'otatools', 'jdk'))
         self.assertGreater(total, 0)
         for name, value in terms.items():
             self.assertGreater(value, 0, name)
             without = total - value
-            def tight(secret_access, free=without):
+            def tight(secret_access, free=without - resident):
                 hosted.evaluate(bundle, root, free, files=files, secret_access=secret_access, pin=pin,
                                 env=ENV, capacity_config=config)
             self.assert_secret_closed(tight, f'current peak {total} bytes')
@@ -544,6 +545,72 @@ class HostedSignGateTest(unittest.TestCase):
                     self.assertIn('output bound is missing: ' + missing_name, str(error))
                     raise
             self.assert_secret_closed(missing, 'output bound is missing: ' + name)
+
+    def test_verified_resident_inputs_cover_preflight_then_sign_without_lowering_peak(self):
+        bundle, files, pin = self.tiny_bundle()
+        root = self.checkout(files['generateRelease'].read_bytes())
+        config = self.admitted()
+        tools_size, _ = hosted.zip_members(files['otatools'])
+        jdk_size, _ = hosted.zip_members(files['jdk'])
+        total = hosted.current_peak_bytes(
+            files['unsigned'].stat().st_size, files['otatools'].stat().st_size, tools_size,
+            files['jdk'].stat().st_size, jdk_size, files['generateRelease'].stat().st_size,
+            config['outputBounds'])
+        resident = sum(files[name].stat().st_size for name in ('unsigned', 'otatools', 'jdk'))
+        # Existing input archives are already allocated before the free-space
+        # observation. Repeated evaluation also retains both verified extracts.
+        first = hosted.evaluate(bundle, root, total - resident + tools_size + jdk_size,
+                                files=files, pin=pin, env=ENV, capacity_config=config)
+        second = hosted.evaluate(bundle, root, total - resident, files=files, pin=pin,
+                                 env=ENV, capacity_config=config)
+        self.assertEqual(first['currentPeakBytes'], total)
+        self.assertEqual(second['currentPeakBytes'], total)
+        self.assertEqual(second['verifiedResidentInputBytes'], resident)
+        self.assertEqual(second['additionalRequiredBytes'], total - resident)
+        def short(secret_access):
+            hosted.evaluate(bundle, root, total - resident - 1, files=files, pin=pin,
+                            env=ENV, capacity_config=config, secret_access=secret_access)
+        self.assert_secret_closed(short, 'hosted signer capacity exceeded')
+        small = self.admitted()
+        small['activeRunner']['ssdBytes'] = total - 1
+        def whole_disk(secret_access):
+            hosted.evaluate(bundle, root, 10**18, files=files, pin=pin, env=ENV,
+                            capacity_config=small, secret_access=secret_access)
+        self.assert_secret_closed(whole_disk, 'hosted signer capacity exceeded')
+
+    def test_resident_credit_excludes_foreign_sparse_shared_and_excess_bytes(self):
+        from types import SimpleNamespace
+        bundle, files, _pin = self.tiny_bundle()
+        real_stat = Path.stat
+        original = {name:real_stat(files[name]) for name in ('unsigned','otatools','jdk')}
+        directory = files['otatools'].parent
+        def observed(path, *args, **kwargs):
+            if path == files['unsigned']:
+                i=original['unsigned']
+                return SimpleNamespace(st_dev=i.st_dev+1,st_ino=i.st_ino,st_mode=i.st_mode,
+                                       st_size=i.st_size,st_blocks=i.st_blocks)
+            return real_stat(path,*args,**kwargs)
+        with patch.object(Path,'stat',observed):
+            self.assertEqual(hosted.resident_archive_bytes(bundle,files,directory),
+                             sum(original[n].st_size for n in ('otatools','jdk')))
+        def sparse(path,*args,**kwargs):
+            if path == files['unsigned']:
+                i=original['unsigned']
+                return SimpleNamespace(st_dev=i.st_dev,st_ino=i.st_ino,st_mode=i.st_mode,
+                                       st_size=i.st_size,st_blocks=0)
+            return real_stat(path,*args,**kwargs)
+        with patch.object(Path,'stat',sparse):
+            self.assertEqual(hosted.resident_archive_bytes(bundle,files,directory),
+                             sum(original[n].st_size for n in ('otatools','jdk')))
+        linked = directory / 'hardlinked-jdk.zip'
+        os.link(files['otatools'], linked)
+        duplicate=dict(files,jdk=linked)
+        duplicate_bundle=dict(bundle,jdk=bundle['otatools'])
+        self.assertEqual(hosted.resident_archive_bytes(duplicate_bundle,duplicate,directory),
+                         original['unsigned'].st_size+original['otatools'].st_size)
+        capped=json.loads(json.dumps(bundle));capped['unsigned']['sizeBytes']=1
+        self.assertEqual(hosted.resident_archive_bytes(capped,files,directory),
+                         1+original['otatools'].st_size+original['jdk'].st_size)
 
     def test_workflow_cli_downloads_payload_only_after_metadata_gate(self):
         bundle, files, pin = self.tiny_bundle()

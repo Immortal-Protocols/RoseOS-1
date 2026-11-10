@@ -693,8 +693,28 @@ def verify_files(bundle, files):
             raise ValueError('signing bundle hash differs')
 
 
+def resident_archive_bytes(bundle, files, directory):
+    """Credit only already-hash-verified archives on the free-space filesystem.
+
+    Never credit output, extraction, scratch or reserve budgets. Count each
+    inode once, and cap credit by declared size and allocated blocks so sparse
+    or foreign-volume files cannot inflate available physical space.
+    """
+    device = Path(directory).stat().st_dev
+    seen, resident = set(), 0
+    for name in ('unsigned', 'otatools', 'jdk'):
+        info = Path(files[name]).stat(follow_symlinks=False)
+        key = (info.st_dev, info.st_ino)
+        if info.st_dev != device or not stat.S_ISREG(info.st_mode) or key in seen:
+            continue
+        seen.add(key)
+        resident += min(bundle[name]['sizeBytes'], info.st_size,
+                        max(0, getattr(info, 'st_blocks', 0)) * 512)
+    return resident
+
+
 def evaluate(bundle, root, free, files=None, secret_access=None, pin=None, capacity_config=None,
-             env=None, measured=None):
+             env=None, measured=None, space_directory=None):
     env = os.environ if env is None else env
     config = load_capacity() if capacity_config is None else capacity_config
     require_bundle_identity(bundle, env, root)
@@ -739,11 +759,12 @@ def evaluate(bundle, root, free, files=None, secret_access=None, pin=None, capac
     current = current_peak_bytes(
         files['unsigned'].stat().st_size, files['otatools'].stat().st_size, otatools_uncompressed,
         files['jdk'].stat().st_size, jdk_uncompressed, files['generateRelease'].stat().st_size, _bound_values)
+    resident = resident_archive_bytes(bundle, files, space_directory or Path(files['otatools']).parent)
     reasons = []
     if config.get('admission') is not True:
         reasons.append('hosted signer admission is closed')
-    if current > stock or current > free:
-        reasons.insert(0, f'hosted signer capacity exceeded: current peak {current} bytes, stock SSD {stock} bytes, free {free} bytes')
+    if current > stock or current > free + resident:
+        reasons.insert(0, f'hosted signer capacity exceeded: current peak {current} bytes, stock SSD {stock} bytes, free {free} bytes, verified resident input {resident} bytes')
     if reasons:
         raise CapacityExceeded('; '.join(reasons)) if reasons[0].startswith('hosted signer capacity') else ValueError('; '.join(reasons))
     trusted = require_trusted_pins(bundle, root, files, pin)
@@ -755,6 +776,7 @@ def evaluate(bundle, root, free, files=None, secret_access=None, pin=None, capac
     if secret_access is not None:
         secret_access()
     return {'admit': True, 'requiredBytes': current, 'currentPeakBytes': current,
+            'verifiedResidentInputBytes': resident, 'additionalRequiredBytes': current - resident,
             'historicalEstimateBytes': historical, 'extracted': extracted, 'javaHome': jdk_home}
 
 
@@ -1033,7 +1055,8 @@ def preflight(bundle_path, root=None, env=None, capacity_config=None, pin=None, 
     actual_env=os.environ if env is None else env
     full_bundle_gate(bundle,directory/'mustang-signing-bundle.json',actual_env,root)
     return evaluate(bundle, root, free, files=bundle_files(directory, bundle),
-                    secret_access=None, pin=pin, env=env, capacity_config=capacity_config)
+                    secret_access=None, pin=pin, env=env, capacity_config=capacity_config,
+                    space_directory=directory)
 
 
 def host_sign_entry(source_root):
@@ -1126,7 +1149,8 @@ def sign(bundle_path, out_dir, root=None, env=None, capacity_config=None, host_s
         free = space.f_bavail * space.f_frsize
     files = bundle_files(directory, bundle)
     full_bundle_gate(bundle,directory/'mustang-signing-bundle.json',os.environ if env is None else env,root)
-    result = evaluate(bundle, root, free, files=files, secret_access=None, pin=pin, capacity_config=capacity_config, env=env)
+    result = evaluate(bundle, root, free, files=files, secret_access=None, pin=pin,
+                      capacity_config=capacity_config, env=env, space_directory=directory)
     release = Path(out_dir).parent / 'hosted-sign-work'
     release.mkdir(mode=0o700,exist_ok=False)
     # Same-filesystem link avoids a third physical unsigned input copy. Never

@@ -106,3 +106,23 @@ qualified otatools and JDK bundle, not that image SDK. No native builder files,
 compiled outputs, journal, qualified tools, disk budgets or capacity checks are
 changed. Freed space is not assumed: the existing actual hardware/free-space,
 peak and byte checks must pass before any signer login on the next full attempt.
+
+## Resident signing inputs and the physical space budget
+
+The complete peak budget includes the downloaded unsigned target ZIP, qualified
+otatools ZIP and JDK ZIP. Those archives already consume space when full
+preflight observes free bytes. Preflight also leaves its verified extractions
+for the signing entry point, which performs the same checks again. Comparing
+the complete footprint with only remaining free space charges these resident
+archives twice. With the recorded run-38 sizes, the first check has a modeled
+98.81 GB free and the second 97.53 GB, against an unchanged 98.07 GB peak. This
+is a source-level projection, not a runtime failure observed after the link gate.
+
+After hash and archive validation, capacity admission credits only the three
+verified input archives already resident on the filesystem where free space was
+measured. Credit is capped by declared size, actual size and allocated blocks;
+hardlinked inodes count once and other filesystems receive no credit. The full
+peak must still fit the selected disk. Output, extraction, scratch and reserve
+budgets are not credited or reduced, and the metadata gate remains unchanged.
+This correction does not change symlink policy or resolve the unidentified
+target-files member. No runtime or publication follows from the source change.
