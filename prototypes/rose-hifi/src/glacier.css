@@ -1,0 +1,9 @@
+/* ---------- Glacier semantic layer (GLACIER-1E-1110) ----------
+   Hand-written exceptions on top of the build-derived Glacier copy of the Oxblood rules (glacier.py).
+   PROVISIONAL until the Illustrator's final palette/background land (src/assets/glacier/). */
+#device[data-palette=glacier]{--ox-home:url(%%GL_HOME%%);--ox-rose:url(%%GL_ROSE%%)}
+/* Switcher glyph: silver planes with a cool working edge (Oxblood's ruby edge). */
+#device[data-palette=glacier] .stacks-glyph [stroke="#eadbcd"]{stroke:#dde6ee}
+#device[data-palette=glacier] .stacks-glyph [fill="#331019"]{fill:#142130}
+#device[data-palette=glacier] .stacks-glyph stop:first-child{stop-color:#dde6ee}
+#device[data-palette=glacier] .stacks-glyph stop:last-child{stop-color:#8fc0ea}

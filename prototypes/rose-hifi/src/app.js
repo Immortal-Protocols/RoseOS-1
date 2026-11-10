@@ -562,10 +562,14 @@
   // Visual direction: Oxblood (Nathan, 2026-11-02) is the prototype default; ?theme=classic keeps the
   // previous HiFi look, where the ten tray options (?tray=N) remain available unchanged.
   const params = new URLSearchParams(location.search);
+  // Glacier (GLACIER-1E-1110) is a palette of the Oxblood system: same geometry, icons and logic,
+  // its own colours and field. It is chosen only from the review harness or the Rose-Glacier launch
+  // file — there is no product-facing theme setting.
   function setTheme(v) {
     const t = v === 'classic' ? 'classic' : 'oxblood';
     device.dataset.theme = t;
-    $('h-theme').value = t;
+    if (v === 'glacier') device.dataset.palette = 'glacier'; else delete device.dataset.palette;
+    $('h-theme').value = v === 'glacier' ? 'glacier' : t;
     $('h-tray').disabled = t === 'oxblood';
     if (t === 'oxblood') setTray('');
     if (homeBuilt) { buildHome(); render(); }
@@ -580,7 +584,7 @@
   }
   $('h-tray').onchange = (e) => setTray(e.target.value);
   $('h-theme').onchange = (e) => setTheme(e.target.value);
-  setTheme(params.get('theme') || (params.get('tray') ? 'classic' : 'oxblood'));
+  setTheme(params.get('theme') || (params.get('tray') ? 'classic' : (window.ROSE_DEFAULT_THEME || 'oxblood')));
   setTray(params.get('tray'));
   $('h-reduced').checked = media.matches;
   $('h-reduced').onchange = (e) => { reducedOverride = e.target.checked; render(); };
