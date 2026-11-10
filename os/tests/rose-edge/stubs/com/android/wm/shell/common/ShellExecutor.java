@@ -1,1 +1,1 @@
-package com.android.wm.shell.common; import java.util.concurrent.Executor; public interface ShellExecutor extends Executor { default void executeBlocking(Runnable r) throws InterruptedException { r.run(); } }
+package com.android.wm.shell.common; import java.util.concurrent.Executor; public interface ShellExecutor extends Executor { default void executeBlocking(Runnable r) throws InterruptedException { r.run(); } void executeDelayed(Runnable runnable, long delayMillis); }
