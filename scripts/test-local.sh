@@ -29,7 +29,7 @@ node --test workspace/rose-agent/tests/page-regressions.test.mjs workspace/rose-
 # APP-REMOVE-001: retired DeepSeek, Luna-first and ARTEMIS trial controls stay removed; shared paths stay.
 node --test workspace/rose-agent/tests/trial-removal.test.mjs
 node --test workspace/rose-agent/tests/trial-menu-removal.test.mjs
-node --test workspace/rose-agent/tests/rose-presence.test.mjs
+node --test workspace/rose-agent/tests/rose-presence.test.mjs workspace/rose-agent/tests/assistant-name.test.mjs
 # APP-BUG-OPEN-001: the shell open_app refusal stays fail-closed; registered launches keep their turn's task.
 node --test workspace/rose-agent/server/unbound-shell-open.test.mjs
 # APP-BUG-OPEN-002: registered phone navigation and input run as the current request and honour Stop.

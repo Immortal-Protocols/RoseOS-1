@@ -25,7 +25,7 @@ public final class RoseConversationActivity extends Activity {
  final Handler handler=new Handler(Looper.getMainLooper());
  final ConversationState.Notices notices=new ConversationState.Notices();
  ConversationState state;
- RosePearl pearl;View pearlView;TextView caption,prompt;FrameLayout work,connect,mic;OxbloodRose.WorkButton workGlyph;OxbloodRose.PillGlyph connectGlyph;TextView connectLabel;LinearLayout notice;TextView noticeIcon,noticeText,failure;
+ RosePearl pearl;View pearlView;TextView agentTitle,caption,prompt;FrameLayout work,connect,mic;OxbloodRose.WorkButton workGlyph;OxbloodRose.PillGlyph connectGlyph;TextView connectLabel;LinearLayout notice;TextView noticeIcon,noticeText,failure;
  LinearLayout content;ScrollView presentedScroll;TextView taskEyebrow,taskTitle,taskBody,taskNote;String lastTaskKey="",shownTaskId="";boolean shownTaskActive;
  // Watch/Stop for the selected task (APP-P5-001). Controller fields come from its get_state provider.
  LinearLayout taskActions;TextView watch,stopTask,stopNote;
@@ -63,9 +63,10 @@ public final class RoseConversationActivity extends Activity {
   LinearLayout head=new LinearLayout(this);head.setGravity(Gravity.CENTER_VERTICAL);head.setClipChildren(false);
   pearl=new RosePearl(density,16);pearlView=new View(this);pearlView.setBackground(pearl);pearlView.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_YES);
   head.addView(pearlView,new LinearLayout.LayoutParams(dp(28),dp(28)));
-  TextView title=presentedText(23,ink(),"sans-serif");title.setText("Rose");title.setAccessibilityHeading(true);title.setIncludeFontPadding(false);
-  LinearLayout.LayoutParams tlp=new LinearLayout.LayoutParams(-2,-2);tlp.leftMargin=dp(7);head.addView(title,tlp);
-  FrameLayout.LayoutParams hp=new FrameLayout.LayoutParams(-2,dp(44),Gravity.TOP|Gravity.START);hp.topMargin=headTop;hp.leftMargin=dp(24);root.addView(head,hp);
+  TextView title=agentTitle=presentedText(23,ink(),"sans-serif");title.setText(LocalAssistantIdentity.name(this));title.setAccessibilityHeading(true);title.setIncludeFontPadding(false);
+  title.setSingleLine(true);title.setEllipsize(android.text.TextUtils.TruncateAt.END);
+  LinearLayout.LayoutParams tlp=new LinearLayout.LayoutParams(0,-2,1);tlp.leftMargin=dp(7);head.addView(title,tlp);
+  FrameLayout.LayoutParams hp=new FrameLayout.LayoutParams(-1,dp(44),Gravity.TOP|Gravity.START);hp.topMargin=headTop;hp.leftMargin=dp(24);hp.rightMargin=dp(16+48+48);root.addView(head,hp);
   // Upper right (oxblood.css:406-410,500-503): the Background Work entry, lit only while Rose's controller reports a
   // running workspace (ready or launching), never from a timer or a guess.
   work=new FrameLayout(this);workGlyph=new OxbloodRose.WorkButton(density);work.setBackground(workGlyph);
@@ -177,6 +178,10 @@ public final class RoseConversationActivity extends Activity {
 
  void refresh(){
   if(themePending){maybeRetheme();if(isFinishing()||isDestroyed())return;}
+  String agentName=LocalAssistantIdentity.name(this);
+  if(!agentName.contentEquals(agentTitle.getText()))agentTitle.setText(agentName);
+  agentTitle.setContentDescription(agentName);
+  work.setContentDescription("Open "+agentName+"’s background work");
   VoiceService s=VoiceService.instance;
   state=s==null?ConversationState.of(false,false,false,false,false,null,null,null)
    :ConversationState.of(true,s.live,s.connected,s.muted,s.communicating,s.lastEndReason,s.lastStartError,s.backendReachable);
@@ -185,11 +190,11 @@ public final class RoseConversationActivity extends Activity {
   boolean live=state.active()||state.phase==ConversationState.Phase.CONNECTING;
   connectGlyph.set(live);
   String label=live?"Disconnect":"Connect";if(!label.contentEquals(connectLabel.getText()))connectLabel.setText(label);
-  connect.setContentDescription(live?(state.phase==ConversationState.Phase.CONNECTING?"Cancel connecting to Rose":"Disconnect from Rose"):"Connect to Rose");
+  connect.setContentDescription(live?(state.phase==ConversationState.Phase.CONNECTING?"Cancel connecting to "+agentName:"Disconnect from "+agentName):"Connect to "+agentName);
   // F08: Rose's own mute gives way only where the OS Rose chin is reachable (RoseChin); the mute itself is unchanged.
   mic.setVisibility(state.active()&&RoseChin.showInAppMute(AgentTrayService.chinReachable(),navigationMode())?View.VISIBLE:View.GONE);
   ((TextView)mic.findViewWithTag("mic-glyph")).setText(state.muted?"🔇":"🎙");
-  mic.setContentDescription(state.muted?"Rose’s microphone is muted. Unmute":"Mute Rose’s microphone");
+  mic.setContentDescription(state.muted?agentName+"’s microphone is muted. Unmute":"Mute "+agentName+"’s microphone");
   failure.setText(state.failureText());
   // Core's RoseVisualState maps the session and VoiceService's own measured levels (stale or absent levels are
   // NaN, never invented) into the presence's three independent axes; this screen only draws them.
@@ -197,9 +202,9 @@ public final class RoseConversationActivity extends Activity {
   RoseVisualState visual=RoseVisualState.from(state,s==null?Float.NaN:RoseVisualState.fresh(s.trayInputLevel,seen,now),
    s==null?Float.NaN:RoseVisualState.fresh(s.trayOutputLevel,seen,now),reducedMotion(),resumed);
   showPearl(visual);
-  String cap=OxbloodRose.caption(state,visual);if(!cap.contentEquals(caption.getText()))caption.setText(cap);
+  String cap=OxbloodRose.caption(state,visual);cap=AssistantName.inText(cap,agentName);if(!cap.contentEquals(caption.getText()))caption.setText(cap);
   // The pearl is the screen's spoken state (the caption is its visible twin, hidden so it isn't read twice).
-  String said=RosePresenceModel.describe(visual);if(!said.contentEquals(pearlView.getContentDescription()==null?"":pearlView.getContentDescription()))pearlView.setContentDescription(said);
+  String said=AssistantName.inText(RosePresenceModel.describe(visual),agentName);if(!said.contentEquals(pearlView.getContentDescription()==null?"":pearlView.getContentDescription()))pearlView.setContentDescription(said);
   // Working while at least one of Rose's sessions, in any slot, is authoritatively running (status exactly ready; #410
   // rose.workButton.working), the same definition as Background Work's running edge, from a read begun since this
   // screen last resumed and still current: never while launching, waiting or holding a failed close, never from a
