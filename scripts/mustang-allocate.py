@@ -29,6 +29,7 @@ import time
 import datetime
 import mustang_lane
 import mustang_paths
+import mustang_existing_lock
 
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location('release_allocate', ROOT/'scripts/release-allocate.py')
@@ -114,6 +115,13 @@ def reserve(home, run_id, run_attempt, source, fetch=None, clock=time.time, lock
         raise Refused('invalid: --source must be the dispatch commit')
     pipeline = json.loads((root/'os/release-pipeline/frankel.json').read_text())
     base = Path(home)/'rose-actions'
+    if lock is None and paths is not None:
+        @contextlib.contextmanager
+        def lock(path):
+            try:
+                with mustang_existing_lock.shared(path,expected=str(paths['lockPath'])):yield
+            except mustang_existing_lock.LockUnavailable as error:
+                raise Refused(str(error)) from None
     with (lock or allocator.shared_lock)(str(paths['lockPath']) if paths is not None else pipeline['host']['lockPath']):
         builds, observed = observe(home, pipeline['publication']['repository'], pipeline['publication']['api'], fetch, root)
         if any(not BUILD.fullmatch(str(value)) for value in consumed):

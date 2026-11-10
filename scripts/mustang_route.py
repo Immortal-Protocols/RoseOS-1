@@ -109,18 +109,18 @@ def enrollment():
 
 
 ACCEPTED_APP_EXPORT = {
-    'path': 'os/app-inputs/frankel-2026110704.json',
-    'run': '42408244069',
-    'artifact': 13588167823,
-    'digest': 'sha256:24596d4dd26889e705988a4fa2462c2d2d4890945aec6c139664532f5e213dac',
-    'producerRun': '42403912447',
-    'sourceSha': 'f5b1210c358a31f305b004d8b9dc98a3906f398f',
-    'recordMerge': 'c89d530cda33354ec593c1fb1338aa50e5dc7484',
-    'archiveBytes': 1865839,
+    'path': 'os/app-inputs/frankel-2026110901.json',
+    'run': '42561803703',
+    'artifact': 13649846651,
+    'digest': 'sha256:e14607d7385952a19c9b78977d0c3dd6f84f1e8d76cc31bb7ae35bf09c4bc3d0',
+    'producerRun': '42559170713',
+    'sourceSha': '9882edf0a68b640c24e6c0d0de119e663c6ac573',
+    'recordMerge': '303f69823b0ca0f92a61fa3b95f9a2e8364da812',
+    'archiveBytes': 1865637,
     'sdk': 37,
     'signerSha256': '650d47f91b7f5af3c530fef53fe92018aa4521efba065bcb1d6fc9b699060bfb',
     'targetSdk': 35,
-    'apps': {'dev.pixel.backgroundcontrol': 40, 'dev.pixel.calculator.agent': 5, 'dev.pixel.voice': 368},
+    'apps': {'dev.pixel.backgroundcontrol': 41, 'dev.pixel.calculator.agent': 6, 'dev.pixel.voice': 369},
 }
 
 
@@ -269,10 +269,49 @@ def accepted_app_export(record, path):
         and (producer.get('run') or {}).get('id') == ACCEPTED_APP_EXPORT['producerRun']
 
 
+def current_runtime_blockers(root, runtime):
+    """Current full-route contracts; historical empty-host snapshots stay historical."""
+    items=[]
+    def check(code, detail, function):
+        try:function()
+        except (ValueError,OSError,KeyError,TypeError):items.append(dict(code=code,detail=detail))
+    lane=load(root/'os/build-only/mustang-lane.json')
+    if runtime.get('status')!='bound':items.append(dict(code='runtime-unbound',detail='Final runtime admission remains unbound.'))
+    import mustang_bootstrap_collector, mustang_clock, mustang_ephemeral, mustang_ota, mustang_hosted_sign
+    check('source-contract-unbound','Fresh native source/copy verification contract is invalid.',
+        lambda:mustang_bootstrap_collector.source_contract(lane,runtime,load(root/runtime['sourceEvidence']),root=root))
+    check('runner-route-unbound','Dedicated group5 one-job JIT route differs.',lambda:mustang_ephemeral.require_group5(runtime))
+    check('allocation-unresolved','UTC-hour legacy-exclusion or local initialization policy differs.',lambda:mustang_clock.policy(lane,runtime,root))
+    if runtime.get('jobs')!=24:items.append(dict(code='jobs-unbound',detail='Selected jobs differ from completed native qualification.'))
+    if any(not isinstance(runtime.get('tools',{}).get(k),str) for k in ('aapt','apksigner','node')):
+        items.append(dict(code='tools-unbound',detail='Native tool paths are not selected.'))
+    network=load(root/runtime['networkEvidence']) if runtime.get('networkEvidence') else {}
+    if network.get('builder')!=lane['vm'] or network.get('githubEgressVerified') is not True:
+        items.append(dict(code='network-runner-egress-unverified',detail='Same-builder runner egress evidence is not bound.'))
+    app_ref=runtime.get('appInputsRecord');record=load(root/app_ref) if app_ref else {}
+    if not accepted_app_export(record,app_ref):items.append(dict(code='app-inputs-unadmitted',detail='Immutable fresh common export is not selected.'))
+    else:
+        drift=bound_app_freshness(record,root)
+        if drift is None:items.append(dict(code='app-inputs-history-unavailable',detail='Producer source history unavailable.'))
+        elif drift:items.append(dict(code='app-inputs-stale',detail='Common app sources changed after the verified producer.'))
+    check('baseline-contract-unbound','Candidate continuity contract is invalid; no installed-device compatibility is inferred.',
+        lambda:mustang_ota.candidate_continuity(load(root/runtime['candidateContinuity'])))
+    signing=load(root/runtime['signingRouteEvidence']) if runtime.get('signingRouteEvidence') else {}
+    if signing.get('builder')!=lane['vm'] or signing.get('approved') is not True:
+        items.append(dict(code='signing-route-unadmitted',detail='Existing dedicated signing identity route is not bound.'))
+    check('signer-capacity-unadmitted','Signer capacity, scheduling evidence or qualified tool binding is invalid.',
+        lambda:mustang_hosted_sign.require_delivery_capacity(root))
+    if runtime.get('publication',{}).get('enabled') is not True or not runtime['publication'].get('authorityRecord'):
+        items.append(dict(code='publication-disabled',detail='Public publication remains default-off until its current dedicated authority is reconciled.'))
+    return items
+
+
 def blockers(root=ROOT):
     """Every fact that still blocks a build or a public release. None of these are guesses to fill in."""
     root = Path(root)
     runtime = load(root/'os/build-only/mustang-runtime.json')
+    if runtime.get('sourceEvidence')=='os/build-only/mustang-full-run-source.json':
+        return current_runtime_blockers(root,runtime)
     evidence = load(root/mustang_lane.READBACK)
     state = load(root/runtime['allocationState'])
     baseline = load(root/'os/mustang-delivery/41738359336/sign.json')['outputs']['targetFiles']
@@ -402,9 +441,11 @@ def workflow_trust(text):
     for kind in ('pull_request', 'pull_request_target', 'workflow_call', 'workflow_run', 'schedule'):
         if re.search(r'(?m)^  %s:\n' % kind, body):
             problems.append(kind)
-    if re.search(r'\$\{\{\s*(inputs\.(?!(?:publish|dry_run)\b)|github\.event)', body):
+    expressions = re.findall(r'\$\{\{(.*?)\}\}', body, re.DOTALL)
+    if any(re.search(r'(?<![\w.])(?:inputs\.(?!(?:publish|dry_run|source_only|hostdeps_only|lock_admin_only|factory_only|vendor_only|otatools_only|retained_compile_run)\b)|github\.event)', expression)
+           for expression in expressions):
         problems.append('untrusted expression reaches the workflow')
-    if re.search(r'(?m)^[ ]+run:.*inputs\.(?:publish|dry_run)', body):
+    if re.search(r'(?m)^[ ]+run:.*inputs\.(?:publish|dry_run|source_only|hostdeps_only|lock_admin_only|factory_only|vendor_only|otatools_only|retained_compile_run)', body):
         problems.append('workflow input is interpolated into a shell script')
     blocks = body.split('- uses: actions/checkout@')
     if len(blocks) < 2:
@@ -523,6 +564,17 @@ def number_strategy(root=ROOT):
             or policy.get('epoch') is not None or policy.get('authority') is not None \
             or policy.get('legacyCeiling') != '9999123199':
         raise ValueError('legacy allocation stays unknown')
+    runtime=load(Path(root)/'os/build-only/mustang-runtime.json')
+    if runtime.get('clockNumbering') is not None:
+        import mustang_clock
+        configured=mustang_clock.policy(load(Path(root)/mustang_lane.CONFIG),runtime,root)
+        return dict(selectsBuildNumber=False,selectedMode='UTC-hour00-local',format=configured['format'],
+            reserved=False,authority=None,configuredAuthority='dedicated persistent disk/canonical lock',
+            issued=False,allocatedBuild=None,authoritativeLedger=False,guessSpentAllocation=False,backfill=False,
+            inspectFrankel=False,failedRun='41884368820',legacyAllocationKnown=False,
+            legacySuffixExcluded='01..99',initializationRunNumber=configured['initializationRunNumber'],
+            legacyCeiling='9999123199',legacyCeilingMeaning='Captured normal legacy generator bound; not the next BUILD_NUMBER. The selected clock route excludes its01..99 suffixes.',
+            basis='Source configuration only: no on-disk allocation observed. Missing initialized state cannot be reset automatically.')
     chosen = mustang_epoch.describe()
     return {
         'selectsBuildNumber': False,
@@ -672,8 +724,7 @@ def current_continuity(root, updater, certificate):
     runtime = load(root/'os/build-only/mustang-runtime.json')
     if record.get('candidateOnly') is not True or record.get('currentPhone') is not False \
             or obs.get('updaterSha256') != updater or obs.get('updaterBytes') != 5752573 \
-            or der != certificate or certs[0].get('derBytes') != 1297 \
-            or runtime.get('status') != 'unbound' or runtime.get('candidateContinuity') is not None:
+            or der != certificate or certs[0].get('derBytes') != 1297:
         raise ValueError('current continuity receipt does not match the installed updater and v1 certificate')
     return {
         'record': 'os/build-only/mustang-candidate-continuity-20261107.json',
@@ -687,7 +738,7 @@ def current_continuity(root, updater, certificate):
         'currentPhone': False,
         'phoneObserved': False,
         'admitsRuntime': False,
-        'runtimeStatus': 'unbound',
+        'runtimeStatus': runtime.get('status'),
         'tools': {'lpunpackSha256': record['tools']['lpunpackSha256'], 'rawBytes': record['tools']['rawBytes']},
     }
 

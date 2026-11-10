@@ -72,9 +72,16 @@ def inside_excluded(rel, policy):
     return any(excluded_reason('/'.join(parts[:i + 1]), policy) for i in range(len(parts)))
 
 def boundary_problems(base, boundary, policy):
-    """A cache boundary is admitted only as the exact real directory with its build-finder prune marker present."""
+    """An existing cache must be a real directory; its build-finder prune marker is always required."""
     problems, path, marker = [], base/boundary['path'], base/boundary['pruneMarker']
-    if os.path.islink(path) or not path.is_dir():
+    try:
+        info = os.lstat(path)
+    except FileNotFoundError:
+        info = None
+    except OSError:
+        info = None
+        problems.append(f'cache boundary {boundary["path"]} cannot be observed')
+    if info is not None and not stat.S_ISDIR(info.st_mode):
         problems.append(f'cache boundary {boundary["path"]} is not a real directory in the base')
     if os.path.islink(marker) or not marker.is_file() or marker.stat().st_size:
         problems.append(f'prune marker {boundary["pruneMarker"]} is not an empty regular file; the cache may be visible to the build')

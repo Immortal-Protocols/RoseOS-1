@@ -1,0 +1,50 @@
+{
+  "schema": "roseos.mustang-full-run-failure.v1",
+  "runId": "42594685959",
+  "runNumber": 28,
+  "runAttempt": 1,
+  "source": "2cf8ac0ca6e865e8d5ab0eabaee754ead164fb89",
+  "workflow": ".github/workflows/mustang-ota-dedicated.yml",
+  "builderJobId": 129084930308,
+  "builderGroupId": 5,
+  "hostCheckConclusion": "success",
+  "baselineConclusion": "success",
+  "appInputDownloadAndVerificationConclusion": "success",
+  "collectorStage": "source",
+  "collectorFailureCode": "collector-check-failed",
+  "collectorReceiptWritten": true,
+  "errorObservedAt": "2026-11-09T09:39:08Z",
+  "exceptionTypeObserved": false,
+  "exceptionLocationObserved": false,
+  "sourceCopyStarted": false,
+  "allocationAttemptedByThisRun": false,
+  "makeStarted": false,
+  "journalOnDiskObserved": false,
+  "signerConclusion": "skipped",
+  "publisherConclusion": "skipped",
+  "cleanupJobId": 129085585717,
+  "cleanupConclusion": "success",
+  "directStopObservation": {
+    "observedAt": "2026-11-09T09:48:32.398832+00:00",
+    "value": {
+      "id": "5585425566393384049",
+      "status": "TERMINATED",
+      "metadata": {
+        "items": [
+          {
+            "key": "block-project-ssh-keys"
+          },
+          {
+            "key": "enable-guest-attributes"
+          },
+          {
+            "key": "enable-oslogin"
+          }
+        ]
+      },
+      "lastStopTimestamp": "2026-11-09T01:40:17.920-08:00"
+    }
+  },
+  "nextInitializationRunNumber": 29,
+  "basis": "Completed native log reports a generic source helper failure after84 seconds, before copy/allocation/Make. The exact type/site was suppressed and is not invented. A source-proven independent defect requires an excluded optional cache directory to exist; offline regression confirms absence should be valid while its marker and no-symlink checks remain. Add typed errno/repository-frame diagnostics, not arbitrary exception text. The initial running-job log read returned404 BlobNotFound; only after job completion changed availability was the same endpoint read successfully. No held403 target was retried. Cleanup and direct exact VM stopped observation succeeded. No journal reset or on-disk absence claim."
+}

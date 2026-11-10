@@ -1,0 +1,87 @@
+{
+  "schema": "roseos.mustang-preflight-evidence.v1",
+  "runtimeAdmitted": false,
+  "compileAttested": false,
+  "signingAttested": false,
+  "publicationAttested": false,
+  "observationSha256": "f5f626be482a3e0cbb8cdc612cd95b7fba51f1fcfe94d41f027e95ee5ed61b39",
+  "observation": {
+    "authenticatedStop": false,
+    "availableBytes": 1288262631424,
+    "availableInodes": 94443027,
+    "dependencyOutput": {
+      "state": "absent"
+    },
+    "guestIdentityVerified": true,
+    "identity": {
+      "builder": {
+        "instance": "roseos-mustang-builder-20261107-a",
+        "instanceId": "5585425566393384049",
+        "project": "protocols-465723",
+        "zone": "us-west2-a"
+      },
+      "diskUuid": "4183bff8-6be4-46bb-a641-2193d19813ee",
+      "run": {
+        "runAttempt": "1",
+        "runId": "42495821311",
+        "source": "437f6f8964eb008eb689c6d05fd9ba80d7538deb",
+        "workflow": "Immortal-Protocols/RoseOS-1/.github/workflows/mustang-ota-dedicated.yml@refs/heads/main"
+      }
+    },
+    "lock": {
+      "state": "absent"
+    },
+    "lockParent": {
+      "gid": 0,
+      "linkCount": 9,
+      "mode": 493,
+      "state": "directory",
+      "uid": 0
+    },
+    "makeStarted": false,
+    "otaAuthorized": false,
+    "pristineRuntimeAttestation": false,
+    "publishAuthorized": false,
+    "readOnlyGuestObservation": true,
+    "runnerCanCreateLock": false,
+    "runnerUid": 999,
+    "schema": "roseos.mustang-hostdeps-preflight.v1",
+    "signAuthorized": false
+  },
+  "provenance": {
+    "repository": "Immortal-Protocols/RoseOS-1",
+    "runId": "42495821311",
+    "runAttempt": "1",
+    "headSha": "437f6f8964eb008eb689c6d05fd9ba80d7538deb",
+    "event": "workflow_dispatch",
+    "scope": "infrastructure-dry-run",
+    "conclusion": "success",
+    "builderJobId": 128778139332,
+    "cleanupJobId": 128778182752,
+    "artifactId": 13623243595,
+    "artifactBytes": 716,
+    "artifactSha256": "ff42aca4dfedf98d0b3f6318634abec1bf21a38bb0b7b6daae5a2d9f50812ba8"
+  },
+  "postCleanupControlPlane": {
+    "id": "5585425566393384049",
+    "lastStopTimestamp": "2026-11-08T07:40:51.033-08:00",
+    "name": "roseos-mustang-builder-20261107-a",
+    "scheduling": {
+      "automaticRestart": true,
+      "instanceTerminationAction": "STOP",
+      "maxRunDuration": {
+        "nanos": 0,
+        "seconds": "14400"
+      },
+      "onHostMaintenance": "MIGRATE",
+      "preemptible": false,
+      "provisioningModel": "STANDARD"
+    },
+    "status": "TERMINATED"
+  },
+  "limits": [
+    "Current prerequisite metadata only; no historical job-log read.",
+    "No Make, vendor generation, otatools proof, allocation, signing, OTA or publication.",
+    "No pristine source or current physical-device observation."
+  ]
+}

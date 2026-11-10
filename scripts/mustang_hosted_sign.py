@@ -20,6 +20,7 @@ file. A guest-supplied script is hashed and never executed.
 """
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -167,6 +168,160 @@ def require_bundle_identity(bundle, env, root=ROOT):
     extracted = bundle['otatoolsExtractedBytes']
     if extracted is not None and (not isinstance(extracted, int) or isinstance(extracted, bool) or extracted < 0):
         raise ValueError('size is not a byte count')
+    runtime=Path(root)/'os/build-only/mustang-runtime.json'
+    if runtime.is_file() and read_json(runtime).get('status')=='bound':
+        require_qualified_bundle(bundle,root)
+        require_full_bundle_source(bundle,root)
+        cfg=read_json(runtime)
+        if cfg.get('clockNumbering') is not None:
+            import mustang_clock, mustang_lane
+            mustang_clock.require_bundle(bundle,mustang_lane.configuration(),cfg,root)
+
+
+def require_qualified_bundle(bundle,root=ROOT):
+    """Admission uses the measured qualification, not guest-chosen executable pins."""
+    import mustang_otatools_qualification as qualification
+    import mustang_tool_closure as closure
+    inspected=qualification.inspection_record(root=root)
+    provenance=closure.verify_closure(root,require_unbound=False)
+    required=('bin/ota_from_target_files','bin/sign_target_files_apks','bin/aapt2',
+              'bin/apksigner','bin/check_ota_package_signature','bin/delta_generator')
+    inventory={row['path']:row for row in inspected.get('inventory',[])}
+    if any(inventory.get(name,{}).get('type')!='file' or not inventory[name].get('mode',0)&0o100 for name in required):
+        raise ValueError('full-run qualified signing/verification tools are incomplete')
+    expected=dict(evidence=qualification.EVIDENCE,inspection=qualification.INSPECTION,
+        packageSha256=inspected['packageSha256'],inventorySha256=inspected['inventorySha256'])
+    if bundle.get('toolQualification')!=expected or bundle['otatools']['sha256']!=inspected['packageSha256'] \
+            or bundle['otatools']['sizeBytes']!=inspected['packageBytes'] \
+            or bundle.get('otatoolsExtractedBytes')!=inspected['expandedBytes'] \
+            or bundle['jdk']['sha256']!=provenance['jdk']['archiveSha256'] \
+            or bundle['jdk']['sizeBytes']!=provenance['jdk']['archiveSizeBytes']:
+        raise ValueError('full-run signing tools differ from measured qualification')
+    return inspected,provenance
+
+
+def require_full_bundle_source(bundle,root=ROOT):
+    import mustang_lane
+    import mustang_bootstrap_proof as source_proof
+    lane=mustang_lane.configuration();bound=bundle.get('fullRunSource',{})
+    native=bound.get('nativeReceipt',{});copied=bound.get('copyReceipt',{})
+    import mustang_retained
+    compile_run,compile_attempt,compile_source=mustang_retained.compile_context(bundle)
+    run=dict(runId=compile_run,runAttempt=compile_attempt,source=compile_source,
+        workflow='Immortal-Protocols/RoseOS-1/'+lane['workflow']+'@refs/heads/main')
+    if bundle.get('retainedProducer') is not None:
+        mustang_retained.compatible(bundle['sourceSha'],root)
+        delivery=dict(runId=str(bundle['runId']),runAttempt=str(bundle['runAttempt']),source=bundle['sourceSha'],
+            workflow=run['workflow'])
+        mustang_retained.require_guest(bundle.get('retainedGuest',{}),lane,delivery,
+            read_json(Path(root)/'os/build-only/mustang-runtime.json'),root)
+    manifest=Path(root)/'os/pinned-manifest.xml'
+    candidate=native.get('sourceCandidate',{})
+    if native.get('schema')!='roseos.mustang-bootstrap-collector.v1' or native.get('run')!=run \
+            or native.get('workflowJob')!='builder' or native.get('observationKind')!='native-read-only' \
+            or any(native.get(k) is not True for k in ('success','guestIdentityObserved','dataFilesystemIdentityObserved',
+                'checkoutBytesVerified','workflowContextValidated')) \
+            or any(native.get(k) is not False for k in ('fullBootstrapVerified','pristine','otaAdmitted','signingStarted')) \
+            or candidate.get('manifestSha256')!=sha256_file(manifest) \
+            or copied.get('schema')!='roseos.mustang-full-run-source-copy.v1' \
+            or copied.get('run')!=run or copied.get('builder')!=lane['vm'] or copied.get('sourceCopyVerified') is not True \
+            or copied.get('nativeReceiptSha256')!=bound.get('nativeReceiptSha256') \
+            or hashlib.sha256(source_proof.canonical(native)).hexdigest()!=bound.get('nativeReceiptSha256') \
+            or copied.get('portableInventorySha256')!=candidate.get('portableInventorySha256'):
+        raise ValueError('full-run source observation/copy receipt binding differs')
+    import mustang_edge
+    bound_edge=mustang_edge.binding(compile_source,bundle['sourceSha'],bundle['build'],bundle['timestamp'],
+        bundle['runId'],str(bundle['runAttempt']),compile_run,compile_attempt)
+    mustang_edge.require(bundle.get('unsignedRaisedEdge'),'unsigned',bound_edge,bundle['unsigned'])
+    return bound
+
+
+def authenticate_full_run(bundle,env,*,api=None,root=ROOT):
+    """Correlate completed native producer with this in-progress hosted signer."""
+    import base64
+    import mustang_bootstrap_collector as collector
+    import mustang_lane
+    bound=require_full_bundle_source(bundle,root);lane=mustang_lane.configuration()
+    if env.get('GITHUB_JOB')!='signer':raise ValueError('full-run metadata admission requires the hosted signer')
+    expected=env.get('EXPECTED_FULL_BUNDLE_SHA256','')
+    if not HEX64.fullmatch(expected):raise ValueError('full-run producer bundle hash output absent')
+    encoded=env.get('MUSTANG_OWNER_B64','')
+    if not 0<len(encoded)<=8192:raise ValueError('full-run controller ownership absent')
+    try:raw=base64.b64decode(encoded,validate=True);owner=json.loads(raw)
+    except (TypeError,ValueError):raise ValueError('full-run controller ownership malformed') from None
+    retained=bundle.get('retainedProducer') is not None
+    observation=bundle['retainedGuest'] if retained else bound['nativeReceipt']
+    run=observation['run']
+    if retained:
+        import mustang_retained
+        authenticated,documents,_raw=mustang_retained.authenticate(env,root)
+        original=documents['candidate-receipt.json'];outputs=documents['compile-completed.json']['outputs']
+        if authenticated!=bundle['retainedProducer'] or original['allocation']!=bundle.get('clockAllocation') \
+                or bound['nativeReceipt']!=original['stages']['bootstrap-source']['result'] \
+                or bound['copyReceipt']!=original['stages']['source-copy']['result'] \
+                or any(bundle['unsigned'][key]!=outputs['artifacts']['targetFiles'][key] for key in ('sha256','sizeBytes')):
+            raise ValueError('retained signing bundle differs from the authenticated producer archive')
+    if owner.get('schema')!=collector.controller.SCHEMA or owner.get('run')!=run \
+            or not mustang_lane.owned_start(owner.get('owner'),lane) \
+            or hashlib.sha256(raw).hexdigest()!=observation.get('controllerOwnershipSha256'):
+        raise ValueError('full-run controller ownership differs')
+    api=api or collector.github_reader(run,env.get('GH_TOKEN',''))
+    base='/repos/Immortal-Protocols/RoseOS-1/actions/runs/'+run['runId'];actual=api(base)
+    if actual.get('id')!=int(run['runId']) or actual.get('run_attempt')!=1 \
+            or actual.get('head_sha')!=run['source'] or actual.get('head_branch')!='main' \
+            or actual.get('path')!=WORKFLOW or actual.get('event')!='workflow_dispatch' \
+            or actual.get('status')!='in_progress' or actual.get('conclusion') is not None \
+            or any((actual.get(k) or {}).get('id')!=1428996648 for k in ('repository','head_repository')):
+        raise ValueError('full-run Actions metadata differs')
+    if retained and (actual.get('workflow_id')!=408460629 or type(actual.get('run_number')) is not int \
+            or actual['run_number']<=36 or int(run['runId'])<=int(mustang_retained.RUN) \
+            or mustang_retained.mustang_clock.utc(actual.get('created_at'))<=
+                mustang_retained.mustang_clock.utc('2026-11-09T17:23:51Z')):
+        raise ValueError('retained delivery Actions epoch/order differs')
+    if 'clockAllocation' in bundle:
+        import mustang_clock
+        cfg=read_json(Path(root)/'os/build-only/mustang-runtime.json')
+        proof=mustang_clock.require_bundle(bundle,lane,cfg,root)
+        ctx=proof['context']
+        if not retained and (actual.get('workflow_id'),actual.get('run_number'),actual.get('created_at')) != (
+                ctx['workflowId'],ctx['runNumber'],ctx['createdAt']):
+            raise ValueError('UTC-hour allocation differs from authenticated Actions run')
+    jobs=collector.listing(api(base+'/attempts/1/jobs?per_page=100'),'jobs');observed={}
+    for name in ('guard','controller','enroll','builder','signer'):
+        rows=[job for job in jobs if job.get('name')==name]
+        if len(rows)!=1:raise ValueError('full-run Actions job is missing or ambiguous')
+        job=rows[0]
+        if (job.get('status'),job.get('conclusion'))!=(('in_progress',None) if name=='signer' else ('completed','success')) \
+                or job.get('run_id')!=int(run['runId']) or job.get('head_sha')!=run['source'] \
+                or job.get('run_attempt',1)!=1 or type(job.get('id')) is not int or job['id']<=0:
+            raise ValueError('full-run Actions producer/job identity differs')
+        observed[name]=job['id']
+        capacity_path=Path(root)/'os/build-only/mustang-hosted-signer-capacity.json'
+        if name=='signer' and capacity_path.is_file():
+            route=larger_route(load_capacity(root=root))
+            if route is not None and (job.get('runner_group_id')!=route['groupId']
+                    or route['label'] not in job.get('labels',[])):
+                raise ValueError('hosted signer job differs from configured larger route')
+        if name=='builder' and (job.get('runner_group_id')!=5 or job.get('runner_name')!='mustang-'+run['runId'] \
+                or lane['runnerLabel'] not in job.get('labels',[])):
+            raise ValueError('full-run native producer runner differs')
+    for job in jobs:
+        if job.get('name') in ('source','hostdeps','lock-admin','factory','vendor','otatools') and job.get('conclusion')!='skipped':
+            raise ValueError('full-run competing preparation scope selected')
+    result=dict(actionsRunIdentityVerified=True,producerJobIds=observed,completedRunVerified=False,otaAdmitted=False)
+    if retained:
+        result.update(retainedProducerVerified=True,retainedProducerRunId=mustang_retained.RUN,
+                      retainedProducerArtifactId=mustang_retained.ARTIFACT['id'])
+    return result
+
+
+def full_bundle_gate(bundle,path,env,root):
+    if 'fullRunSource' not in bundle:return None
+    require_full_bundle_source(bundle,root)
+    if env.get('GITHUB_JOB')=='builder':return None  # no metadata token reaches Make
+    if sha256_file(path)!=env.get('EXPECTED_FULL_BUNDLE_SHA256'):
+        raise ValueError('downloaded full-run bundle differs from the native job hash output')
+    return authenticate_full_run(bundle,env,root=root)
 
 
 def trusted_paths():
@@ -174,8 +329,20 @@ def trusted_paths():
     return ROOT, CAPACITY, ROOT / SCRIPT_PIN
 
 
-def load_capacity(path=None):
-    data = json.loads(Path(path or trusted_paths()[1]).read_text())
+def larger_route(data):
+    runner=data.get('activeRunner') or {}
+    if runner.get('kind')!='github-larger-runner':return None
+    expected=dict(groupName='roseos-mustang-signer',label='mustang-signer-4core',
+        image='ubuntu-24.04',vcpu=4,ssdBytes=150000000000,configured=True,approved=True)
+    if any(runner.get(k)!=v for k,v in expected.items()) or type(runner.get('groupId')) is not int \
+            or runner['groupId']<=0 or not runner.get('approvalRef') or not runner.get('configurationRef'):
+        raise ValueError('configured larger-runner identity/approval is absent')
+    return runner
+
+
+def load_capacity(path=None, root=None):
+    selected=path or (Path(root)/'os/build-only/mustang-hosted-signer-capacity.json' if root is not None else trusted_paths()[1])
+    data = json.loads(Path(selected).read_text())
     if data.get('schema') != 'roseos.mustang-hosted-signer-capacity.v1' or data.get('trust') != 'held':
         raise ValueError('hosted signer capacity config is missing')
     runner = data.get('activeRunner')
@@ -184,12 +351,48 @@ def load_capacity(path=None):
     if not isinstance(runner, dict) or not isinstance(runner.get('ssdBytes'), int) or isinstance(runner.get('ssdBytes'), bool) \
             or runner['ssdBytes'] <= 0 or data.get('admission') not in (True, False):
         raise ValueError('hosted signer capacity config is missing')
-    if proposed.get('selected') is True or proposed.get('purchased') is True or proposed.get('configured') is True \
-            or proposed.get('approved') is True or proposed.get('sizingProof') is True:
+    route=larger_route(data)
+    if route is None and (proposed.get('selected') is True or proposed.get('purchased') is True or proposed.get('configured') is True \
+            or proposed.get('approved') is True or proposed.get('sizingProof') is True):
         raise ValueError('hosted signer capacity config is missing')
-    if storage.get('accountPlan') is not None or storage.get('includedAllowancesAreNotPerArtifactLimits') is not True:
+    if (route is None and storage.get('accountPlan') is not None) or storage.get('includedAllowancesAreNotPerArtifactLimits') is not True:
         raise ValueError('hosted signer capacity config is missing')
     return data
+
+
+def require_delivery_capacity(root=ROOT):
+    config=load_capacity(root=root)
+    if config.get('admission') is not True:
+        raise ValueError('hosted signer admission is closed; no native build')
+    if larger_route(config) is None:
+        raise ValueError('configured dedicated larger signer required before native build')
+    _bounds,missing=bound_values(config)
+    if missing:raise ValueError('output bound is missing: '+','.join(missing))
+    scheduling=config.get('schedulingAccess') or {}
+    if scheduling.get('repository')!='Immortal-Protocols/RoseOS-1' \
+            or scheduling.get('workflow')!='Immortal-Protocols/RoseOS-1/'+WORKFLOW+'@refs/heads/main' \
+            or any(scheduling.get(key) is not True for key in ('verified','repositoryAllowed','workflowAllowed')) \
+            or not scheduling.get('evidenceRef'):
+        raise ValueError('signer repository/workflow scheduling access is unconfirmed; no native build')
+    import mustang_tool_closure
+    expected=mustang_tool_closure.qualified_pins(root)
+    pin=load_pin(root,json.loads((Path(root)/SCRIPT_PIN).read_text()))
+    if pin.get('status')!='qualified' or any(pin.get(k)!=v for k,v in expected.items()):
+        raise ValueError('measured signing tool pins are not selected')
+    return config
+
+
+def actual_signer_capacity(config, env, directory):
+    if config.get('activeRunner',{}).get('kind')!='github-larger-runner' or env.get('GITHUB_JOB')!='signer':
+        return None
+    space=os.statvfs(directory);total=space.f_blocks*space.f_frsize
+    memory=None
+    for line in Path('/proc/meminfo').read_text().splitlines():
+        if line.startswith('MemTotal:'):memory=int(line.split()[1])*1024
+    if os.cpu_count()!=4 or os.uname().machine!='x86_64' or memory is None or memory<14*1024**3 or total<128*1024**3:
+        raise ValueError('actual signer CPU/memory/disk differs from selected larger profile')
+    return dict(vcpu=os.cpu_count(),memoryBytes=memory,totalBytes=total,
+        freeBytes=space.f_bavail*space.f_frsize)
 
 
 def capacity(bundle, free, config, measured=None):
@@ -297,11 +500,11 @@ def zip_members(path):
             if key in seen:
                 raise ValueError('duplicate zip member')
             seen.add(key)
+            if stat.S_ISLNK(info.external_attr >> 16):
+                raise ValueError('unsafe zip symlink: ' + json.dumps(info.filename[:256]))
             if name.endswith('/'):
                 rows.append((key, None, 0, True, None))
                 continue
-            if stat.S_ISLNK(info.external_attr >> 16):
-                raise ValueError('unsafe zip symlink')
             mode = approved_mode(info)
             total += info.file_size
             rows.append((key, mode, info.file_size, False, info))
@@ -313,6 +516,204 @@ def reject_unsafe_zip(path, max_uncompressed):
     if total > max_uncompressed:
         raise ValueError('zip expansion exceeds capacity')
     return total
+
+
+# The pinned platform_build b0f697df8cc9519408ca0a404e918cd51bde0735
+# signer WriteOutputData and common.UnzipSingleFile materialize ZIP symlinks.
+# Payload links therefore need a complete graph check, not the executable ZIP
+# extractor's blanket rejection. This validator itself never creates/follows
+# payload links. The executable/JDK extractor continues using zip_members.
+TARGET_PAYLOAD_ROOTS = frozenset(('SYSTEM', 'SYSTEM_EXT', 'SYSTEM_OTHER', 'VENDOR',
+    'PRODUCT', 'ODM', 'VENDOR_DLKM', 'ODM_DLKM', 'SYSTEM_DLKM', 'ROOT'))
+TARGET_RAMDISKS = frozenset(('BOOT', 'VENDOR_BOOT', 'INIT_BOOT', 'RECOVERY'))
+ANDROID_LINK_ROOTS = dict(system='SYSTEM', system_ext='SYSTEM_EXT', system_other='SYSTEM_OTHER',
+    vendor='VENDOR', product='PRODUCT', odm='ODM', vendor_dlkm='VENDOR_DLKM',
+    odm_dlkm='ODM_DLKM', system_dlkm='SYSTEM_DLKM', apex=None, data=None,
+    storage=None, cache=None, metadata=None, linkerconfig=None, sdcard=None)
+
+
+def _payload_location(parts, *, source=False):
+    if parts and parts[0] in TARGET_PAYLOAD_ROOTS:
+        return len(parts) >= (2 if source else 1)
+    return (len(parts) >= (3 if source else 2) and parts[0] in TARGET_RAMDISKS
+            and parts[1] == 'RAMDISK')
+
+
+def _target_link_error(name, reason, target=None):
+    detail = 'unsafe zip symlink: ' + json.dumps(name[:256])
+    if target is not None:
+        detail += ' -> ' + json.dumps(target[:256])
+    return ValueError(detail + '; ' + reason)
+
+
+def _host_root_exists(root):
+    if os.geteuid() == 0 or os.access('/', os.W_OK):
+        raise ValueError('absolute payload links require a nonroot signer with a protected host root')
+    try:
+        status = Path('/proc/self/status').read_text()
+        effective = re.search(r'^CapEff:\s*([0-9a-fA-F]+)\s*$', status, re.MULTILINE)
+        if effective is None or int(effective[1], 16) != 0:
+            raise ValueError('absolute payload links require an unprivileged signer')
+    except OSError:
+        raise ValueError('signer privilege observation unavailable') from None
+    try:
+        Path('/' + root).lstat()
+    except FileNotFoundError:
+        return False
+    except OSError:
+        raise ValueError('Android host namespace could not be checked') from None
+    return True
+
+
+def validate_target_zip(path, max_uncompressed, *, artifact=None, host_root_exists=None):
+    """Validate Android payload links without extracting the target-files ZIP.
+
+    Unlike safe_extract's executable inputs, an Android target ZIP can contain
+    OS symlinks. Member paths remain canonical; no member can have a symlink
+    parent. Relative targets resolve component by component, following links
+    before '..', and may not leave payload trees. Absolute targets must use a
+    recognized Android namespace observed absent on this signer; an existing
+    host root (including a broken symlink) is never treated as Android data.
+    The production caller supplies artifact identity only after verify_files;
+    standalone callers receive a freshly computed ZIP identity instead.
+    """
+    host_root_exists = _host_root_exists if host_root_exists is None else host_root_exists
+    entries, links, total, link_bytes = {}, {}, 0, 0
+    with zipfile.ZipFile(path) as archive:
+        rows = archive.infolist()
+        if len(rows) > 200000:
+            raise ValueError('target ZIP member count exceeds bound')
+        for info in rows:
+            raw = info.filename
+            name = raw[:-1] if raw.endswith('/') else raw
+            parts = name.split('/')
+            if (not name or raw.startswith('/') or '\\' in raw or ':' in parts[0]
+                    or '\x00' in info.orig_filename or len(raw.encode('utf-8')) > 4096
+                    or len(parts) > 128 or any(p in ('', '.', '..') for p in parts)
+                    or EXTRACT_MARKER in parts or any(ord(c) < 32 or ord(c) == 127 for c in raw)):
+                raise ValueError('unsafe zip member')
+            if name in entries:
+                raise ValueError('duplicate zip member')
+            mode = info.external_attr >> 16
+            kind = stat.S_IFMT(mode)
+            if info.flag_bits & 1 or mode & 0o7000 or kind not in (0, stat.S_IFREG, stat.S_IFDIR, stat.S_IFLNK):
+                raise ValueError('unsafe target ZIP mode or encryption')
+            if raw.endswith('/') and kind not in (0, stat.S_IFDIR):
+                raise ValueError('target ZIP directory mode differs')
+            if kind == stat.S_IFDIR and not raw.endswith('/'):
+                raise ValueError('target ZIP directory name differs')
+            entries[name] = info
+            total += info.file_size
+            if total > max_uncompressed:
+                raise ValueError('zip expansion exceeds capacity')
+            if kind == stat.S_IFLNK:
+                if not _payload_location(parts, source=True):
+                    raise _target_link_error(name, 'outside Android payload')
+                if len(links) >= 20000 or not 0 < info.file_size <= 4096 or info.compress_size > 8192:
+                    raise _target_link_error(name, 'link metadata exceeds bound')
+                link_bytes += info.file_size
+                if link_bytes > 8 << 20:
+                    raise ValueError('target ZIP link metadata exceeds bound')
+                links[name] = None
+        folded_links = {}
+        for name in links:
+            folded = name.casefold()
+            if folded in folded_links:
+                raise _target_link_error(name, 'case-ambiguous link names')
+            folded_links[folded] = name
+        # A regular parent must also be refused: the pinned writer calls mkdir
+        # on member parents, and cannot turn a file/link into a directory safely.
+        for name in entries:
+            parts = name.split('/')
+            for end in range(1, len(parts)):
+                parent = '/'.join(parts[:end])
+                if parent.casefold() in folded_links:
+                    raise _target_link_error(folded_links[parent.casefold()], 'archive member has a symlink parent')
+                row = entries.get(parent)
+                if row is not None and not row.filename.endswith('/'):
+                    raise ValueError('target ZIP member has a non-directory parent')
+        for name in links:
+            info = entries[name]
+            with archive.open(info) as source:
+                data = source.read(4097)
+            if len(data) != info.file_size:
+                raise _target_link_error(name, 'link metadata size differs')
+            try:
+                target = data.decode('utf-8')
+            except UnicodeDecodeError:
+                raise _target_link_error(name, 'link target is not UTF-8') from None
+            if (not target or '\\' in target or '\x00' in target
+                    or any(ord(c) < 32 or ord(c) == 127 for c in target)):
+                raise _target_link_error(name, 'link target contains unsafe text')
+            links[name] = target
+
+    absent_roots, steps = set(), [0]
+
+    def lookup(context, stack):
+        if context is None:
+            return '/'.join(stack)
+        partition = ANDROID_LINK_ROOTS[context]
+        return '/'.join([partition, *stack]) if partition else None
+
+    def resolve_target(context, parent, target, active, depth):
+        if depth > 64:
+            raise _target_link_error(active[-1], 'link chain exceeds bound', target)
+        if target.startswith('/'):
+            tokens = target[1:].split('/')
+            if (any(p in ('', '.', '..') for p in tokens) or tokens[0] not in ANDROID_LINK_ROOTS):
+                raise _target_link_error(active[-1], 'absolute target is not canonical Android data', target)
+            context, parent = tokens[0], []
+            if context not in absent_roots:
+                try:
+                    exists = host_root_exists(context)
+                except (OSError, ValueError):
+                    raise _target_link_error(active[-1], 'host namespace observation refused', target) from None
+                if not isinstance(exists, bool):
+                    raise _target_link_error(active[-1], 'host namespace observation unavailable', target)
+                if exists:
+                    raise _target_link_error(active[-1], 'absolute target reaches an existing host namespace', target)
+                absent_roots.add(context)
+            tokens = tokens[1:]
+        else:
+            tokens = target.split('/')
+            if any(p == '' for p in tokens) or ':' in tokens[0]:
+                raise _target_link_error(active[-1], 'relative target is not canonical', target)
+        stack = list(parent)
+        for part in tokens:
+            steps[0] += 1
+            if steps[0] > 1000000:
+                raise ValueError('target ZIP link graph exceeds work bound')
+            if part == '.':
+                continue
+            if part == '..':
+                if not stack:
+                    raise _target_link_error(active[-1], 'link escapes its archive or Android namespace', target)
+                stack.pop()
+                continue
+            candidate = lookup(context, [*stack, part])
+            if candidate is not None and candidate not in links and candidate.casefold() in folded_links:
+                raise _target_link_error(active[-1], 'case-ambiguous link component', target)
+            if candidate in links:
+                if candidate in active:
+                    raise _target_link_error(candidate, 'link cycle', links[candidate])
+                context, stack = resolve_target(context, stack, links[candidate], (*active, candidate), depth + 1)
+            else:
+                stack.append(part)
+        if context is None and not _payload_location(stack):
+            raise _target_link_error(active[-1], 'link reaches signer metadata or leaves Android payload', target)
+        return context, stack
+
+    for name, target in links.items():
+        resolve_target(None, name.split('/')[:-1], target, (name,), 0)
+    identity = ({'sha256': artifact['sha256'], 'sizeBytes': artifact['sizeBytes']} if artifact is not None
+                else {'sha256': sha256_file(path), 'sizeBytes': Path(path).stat().st_size})
+    inventory = [(name, entries[name].external_attr >> 16, target) for name, target in sorted(links.items())]
+    return {'schema': 'roseos.mustang-target-archive-validation.v1', 'artifact': identity,
+            'memberCount': len(entries), 'symlinkCount': len(links),
+            'absoluteLinkCount': sum(t.startswith('/') for t in links.values()),
+            'linkMetadataSha256': hashlib.sha256(json.dumps(inventory, separators=(',', ':')).encode()).hexdigest(),
+            'observedAbsentHostRoots': sorted(absent_roots), 'preflightFollowedPayloadLinksOnHost': False,
+            'targetFilesExtractedByPreflight': False}
 
 
 OUTPUT_BOUNDS = (
@@ -342,7 +743,7 @@ def current_peak_terms(unsigned, otatools_zip, otatools_uncompressed, jdk_zip, j
     terms = {
         'unsignedCopies': 2 * unsigned,
         'otatoolsCopies': 2 * otatools_zip,
-        'otatoolsExpansion': otatools_uncompressed,
+        'otatoolsExpansion': 2 * otatools_uncompressed,  # preflight plus generate-release's own unzip
         'jdkArchive': jdk_zip,
         'jdkExpansion': jdk_uncompressed,
         'script': script,
@@ -490,12 +891,33 @@ def verify_files(bundle, files):
             raise ValueError('signing bundle hash differs')
 
 
+def resident_archive_bytes(bundle, files, directory):
+    """Credit only already-hash-verified archives on the free-space filesystem.
+
+    Never credit output, extraction, scratch or reserve budgets. Count each
+    inode once, and cap credit by declared size and allocated blocks so sparse
+    or foreign-volume files cannot inflate available physical space.
+    """
+    device = Path(directory).stat().st_dev
+    seen, resident = set(), 0
+    for name in ('unsigned', 'otatools', 'jdk'):
+        info = Path(files[name]).stat(follow_symlinks=False)
+        key = (info.st_dev, info.st_ino)
+        if info.st_dev != device or not stat.S_ISREG(info.st_mode) or key in seen:
+            continue
+        seen.add(key)
+        resident += min(bundle[name]['sizeBytes'], info.st_size,
+                        max(0, getattr(info, 'st_blocks', 0)) * 512)
+    return resident
+
+
 def evaluate(bundle, root, free, files=None, secret_access=None, pin=None, capacity_config=None,
-             env=None, measured=None):
+             env=None, measured=None, space_directory=None):
     env = os.environ if env is None else env
     config = load_capacity() if capacity_config is None else capacity_config
     require_bundle_identity(bundle, env, root)
     require_entry(root)
+    actual_signer_capacity(config,env,Path(files['otatools']).parent if files else root)
     stock = config['activeRunner']['ssdBytes']
     historical = config.get('historicalLowerBoundBytes')
     _bound_values, missing_bounds = bound_values(config)
@@ -515,8 +937,15 @@ def evaluate(bundle, root, free, files=None, secret_access=None, pin=None, capac
             raise CapacityExceeded('; '.join(early)) if early[0].startswith('hosted signer capacity') else ValueError('; '.join(early))
         raise ValueError('signing bundle files are absent')
     verify_files(bundle, files)
-    for path in (files['otatools'], files['jdk'], files['unsigned']):
-        reject_unsafe_zip(path, free)
+    for name in ('otatools', 'jdk'):
+        try:
+            reject_unsafe_zip(files[name], free)
+        except ValueError as error:
+            raise ValueError(f'{name} archive: {error}') from None
+    try:
+        target_validation = validate_target_zip(files['unsigned'], free, artifact=bundle['unsigned'])
+    except ValueError as error:
+        raise ValueError(f'unsigned archive: {error}') from None
     if missing_bounds:
         text = 'output bound is missing: ' + ','.join(missing_bounds)
         if config.get('admission') is not True:
@@ -532,11 +961,12 @@ def evaluate(bundle, root, free, files=None, secret_access=None, pin=None, capac
     current = current_peak_bytes(
         files['unsigned'].stat().st_size, files['otatools'].stat().st_size, otatools_uncompressed,
         files['jdk'].stat().st_size, jdk_uncompressed, files['generateRelease'].stat().st_size, _bound_values)
+    resident = resident_archive_bytes(bundle, files, space_directory or Path(files['otatools']).parent)
     reasons = []
     if config.get('admission') is not True:
         reasons.append('hosted signer admission is closed')
-    if current > stock or current > free:
-        reasons.insert(0, f'hosted signer capacity exceeded: current peak {current} bytes, stock SSD {stock} bytes, free {free} bytes')
+    if current > stock or current > free + resident:
+        reasons.insert(0, f'hosted signer capacity exceeded: current peak {current} bytes, stock SSD {stock} bytes, free {free} bytes, verified resident input {resident} bytes')
     if reasons:
         raise CapacityExceeded('; '.join(reasons)) if reasons[0].startswith('hosted signer capacity') else ValueError('; '.join(reasons))
     trusted = require_trusted_pins(bundle, root, files, pin)
@@ -548,6 +978,8 @@ def evaluate(bundle, root, free, files=None, secret_access=None, pin=None, capac
     if secret_access is not None:
         secret_access()
     return {'admit': True, 'requiredBytes': current, 'currentPeakBytes': current,
+            'targetArchiveValidation': target_validation,
+            'verifiedResidentInputBytes': resident, 'additionalRequiredBytes': current - resident,
             'historicalEstimateBytes': historical, 'extracted': extracted, 'javaHome': jdk_home}
 
 
@@ -568,6 +1000,80 @@ def _collected(row, name, dest, filename):
     return {'sha256': row['sha256'], 'sizeBytes': row['sizeBytes'], 'file': 'inputs/' + filename}
 
 
+def full_run_tools(collection,inputs,root):
+    """Reuse the qualified archive and pack the copied pinned JDK, without execution."""
+    import mustang_lane
+    import mustang_paths
+    import mustang_otatools_qualification as qualification
+    import mustang_tool_closure as closure
+    lane=mustang_lane.configuration();paths=mustang_paths.layout(lane)
+    run=str(collection.get('runId',''));attempt=str(collection.get('runAttempt',''))
+    if not re.fullmatch(r'[1-9][0-9]{0,19}',run) or attempt!='1' \
+            or collection.get('builder')!=lane['vm'] or collection.get('workflow')!=lane['workflow']:
+        raise ValueError('full-run bundle differs from the dedicated producer')
+    retained=collection.get('retainedProducer')
+    if retained is not None:
+        import mustang_retained
+        mustang_retained.proof_identity(retained)
+        if str(collection.get('compileRunId'))!=mustang_retained.RUN or collection.get('compileSource')!=mustang_retained.SOURCE:
+            raise ValueError('retained collection compile identity differs')
+    compile_run=str(collection.get('compileRunId')) if retained is not None else run
+    compile_source=collection['compileSource'] if retained is not None else collection['collectorSource']
+    source=paths['storageRoot']/f'mustang-prep-{compile_run}-1/source'
+    if collection['outputs'].get('outDir')!=str(source/f"out-mustang-build-{collection['build']}"):
+        raise ValueError('full-run bundle source path differs')
+    identity=collection['outputs'].get('actualBuildIdentity',{})
+    stamp=identity.get('timestamp')
+    if identity.get('device')!='mustang' or identity.get('build')!=collection['build'] \
+            or not isinstance(stamp,str) or not re.fullmatch(r'[1-9][0-9]{0,18}',stamp) or int(stamp)>=2**63:
+        raise ValueError('full-run bundle compiled timestamp is absent or differs')
+    stages=collection.get('candidate',{}).get('stages',{})
+    observed=stages.get('bootstrap-source',{});copied=stages.get('source-copy',{}).get('result',{})
+    if observed.get('result',{}).get('success') is not True or copied.get('sourceCopyVerified') is not True \
+            or copied.get('nativeReceiptSha256')!=observed.get('receipt',{}).get('sha256') \
+            or copied.get('portableInventorySha256')!=observed['result'].get('sourceCandidate',{}).get('portableInventorySha256'):
+        raise ValueError('full-run signing bundle has no observed-and-copied source proof')
+    provenance=closure.verify_closure(root,require_unbound=False)
+    inspected=qualification.inspection_record(root=root)
+    record=read_json(Path(root)/qualification.EVIDENCE)
+    package=record['receipt']['package'];path=Path(package['path'])
+    actual=qualification.inspect_package(path,root=root)
+    if actual['inventorySha256']!=inspected['inventorySha256'] or actual['expandedBytes']!=inspected['expandedBytes']:
+        raise ValueError('retained otatools bytes differ from measured qualification')
+    tools=_collected(dict(package,state='collected'),'otatools',inputs,'otatools.zip')
+    # The JDK tree is already part of the pinned source copy. No extra fetch,
+    # tool execution, installed host JDK or guest-provided script is required.
+    jdk_tree=source/'prebuilts/jdk/jdk21/linux-x86'
+    members=closure.collect_members(jdk_tree)
+    if len(members)!=provenance['jdk']['entryCount'] or sum(p.stat().st_size for _,p in members)>4 << 30:
+        raise ValueError('copied JDK inventory differs from provenance')
+    blob=closure.pack_tree(jdk_tree)
+    if len(blob)!=provenance['jdk']['archiveSizeBytes'] \
+            or hashlib.sha256(blob).hexdigest()!=provenance['jdk']['archiveSha256']:
+        raise ValueError('copied pinned JDK differs from canonical package')
+    with (inputs/'jdk.zip').open('xb') as output:output.write(blob)
+    with zipfile.ZipFile(inputs/'jdk.zip') as archive:jdk_expanded=sum(row.file_size for row in archive.infolist())
+    jdk=dict(file='inputs/jdk.zip',sha256=provenance['jdk']['archiveSha256'],sizeBytes=len(blob))
+    script=Path(root)/'script/generate-release.sh'
+    generated=_collected(dict(state='collected',path=str(script),sizeBytes=script.stat().st_size,
+        sha256=sha256_file(script)),'generateRelease',inputs,'generate-release.sh')
+    clock_fields={}
+    cfg=read_json(Path(root)/'os/build-only/mustang-runtime.json')
+    if cfg.get('clockNumbering') is not None:
+        import mustang_clock
+        allocation=collection.get('candidate',{}).get('allocation')
+        mustang_clock.require_allocation(allocation,lane,cfg,root=root,
+            env=dict(GITHUB_RUN_ID=compile_run,GITHUB_RUN_ATTEMPT='1',GITHUB_SHA=compile_source),timestamp=stamp)
+        clock_fields['clockAllocation']=allocation
+    if retained is not None:
+        clock_fields.update(retainedProducer=retained,retainedGuest=collection['retainedGuest'])
+    return dict(**clock_fields,otatools=tools,jdk=jdk,generateRelease=generated,otatoolsExtractedBytes=inspected['expandedBytes'],
+        jdkExtractedBytes=jdk_expanded,toolQualification=dict(evidence=qualification.EVIDENCE,
+        inspection=qualification.INSPECTION,packageSha256=inspected['packageSha256'],inventorySha256=inspected['inventorySha256']),
+        fullRunSource=dict(nativeReceipt=observed['result'],nativeReceiptSha256=observed['receipt']['sha256'],copyReceipt=copied),
+        unsignedRaisedEdge=collection.get('roseEdge'),timestamp=stamp)
+
+
 def export_bundle(collection_path, out_path, root=ROOT):
     if guest_secret_path(out_path) or guest_secret_path(collection_path):
         raise ValueError('signing material is refused on the guest')
@@ -583,10 +1089,10 @@ def export_bundle(collection_path, out_path, root=ROOT):
     artifacts = collection['outputs']['artifacts']
     jdk = {'sha256': None, 'sizeBytes': None, 'file': None}
     script = {'sha256': None, 'sizeBytes': None, 'file': None}
-    if isinstance(artifacts.get('jdk'), dict) and artifacts['jdk'].get('state') == 'collected':
+    if collection.get('builder') is None and isinstance(artifacts.get('jdk'), dict) and artifacts['jdk'].get('state') == 'collected':
         jdk = _collected(artifacts['jdk'], 'jdk', inputs, 'jdk.zip')
     script_path = collection.get('generateReleasePath')
-    if isinstance(script_path, str):
+    if collection.get('builder') is None and isinstance(script_path, str):
         script_file = Path(script_path)
         if not guest_secret_path(script_file) and script_file.is_file() and not script_file.is_symlink():
             copied = _collected({'state': 'collected', 'path': str(script_file), 'sizeBytes': script_file.stat().st_size,
@@ -601,14 +1107,21 @@ def export_bundle(collection_path, out_path, root=ROOT):
         'sourceSha': collection['collectorSource'],
         'build': collection.get('build'),
         'unsigned': _collected(artifacts.get('targetFiles'), 'unsigned', inputs, 'unsigned-target_files.zip'),
-        'otatools': _collected(artifacts.get('otatools'), 'otatools', inputs, 'otatools.zip'),
+        'otatools': None,
         'jdk': jdk,
         'generateRelease': script,
         'otatoolsExtractedBytes': None,
         'jdkExtractedBytes': None,
         'identity': public_identity(root),
     }
+    if collection.get('builder') is not None:
+        bundle.update(full_run_tools(collection,inputs,root))
+        require_qualified_bundle(bundle,root)
+    else:bundle['otatools']=_collected(artifacts.get('otatools'),'otatools',inputs,'otatools.zip')
     write_json(out / 'mustang-signing-bundle.json', bundle)
+    if collection.get('builder') is not None and os.environ.get('GITHUB_OUTPUT'):
+        with open(os.environ['GITHUB_OUTPUT'],'a') as output:
+            output.write('bundle_sha256='+sha256_file(out/'mustang-signing-bundle.json')+'\n')
     return bundle
 
 
@@ -633,14 +1146,23 @@ def bind_outputs(directory, env=None):
     for name in ('signedTargetFiles', 'ota'):
         row = outputs.get(name)
         filename = row.get('file') if isinstance(row, dict) else None
-        if not isinstance(filename, str) or filename != Path(filename).name or filename in ('.', '..') \
+        staged=name=='ota' and isinstance(receipt.get('publicStage'),dict)
+        safe_name=isinstance(filename,str) and (filename==Path(filename).name and filename not in ('.','..')
+            if not staged else len(Path(filename).parts)==2 and Path(filename).parts[0]=='staged' and '..' not in Path(filename).parts)
+        if not safe_name \
                 or not HEX64.fullmatch(row.get('sha256') or ''):
             raise ValueError('hosted signed output left the receipt directory')
         path = directory / filename
-        if path.is_symlink() or not path.is_file() or path.resolve().parent != root \
+        parent=root/'staged' if staged else root
+        if parent.is_symlink() or path.is_symlink() or not path.is_file() or path.resolve().parent != parent \
                 or path.stat().st_size != row.get('sizeBytes') or sha256_file(path) != row['sha256']:
             raise ValueError('hosted signed output hash differs' if path.is_file() and not path.is_symlink()
                              else 'hosted signed output left the receipt directory')
+    if receipt.get('publicStage') is not None:
+        stage=receipt['publicStage'];path=directory/'staged/mustang-ota-receipt.json'
+        if stage.get('path')!='staged' or not path.is_file() or path.is_symlink() \
+                or sha256_file(path)!=stage.get('receiptSha256'):
+            raise ValueError('hosted public stage receipt differs')
     return receipt
 
 
@@ -677,14 +1199,16 @@ def declared_integer(bundle, name):
 
 def preliminary(bundle_path, root=None, env=None, capacity_config=None, pin=None, free=None):
     """Metadata only. Declared sizes, pins, run identity, and admission. No payload bytes."""
-    bundle, _directory = bundle_document(bundle_path)
+    bundle, directory = bundle_document(bundle_path)
     env = os.environ if env is None else env
     root = trusted_paths()[0] if root is None else root
     config = load_capacity() if capacity_config is None else capacity_config
     if free is None:
-        space = os.statvfs('/')
+        space = os.statvfs(directory)
         free = space.f_bavail * space.f_frsize
+    actual_signer_capacity(config,env,directory)
     require_bundle_identity(bundle, env, root)
+    full_bundle_gate(bundle,Path(bundle_path)/'mustang-signing-bundle.json' if Path(bundle_path).is_dir() else Path(bundle_path),env,root)
     require_entry(root)
     loaded = load_pin(root, pin)
     reasons = []
@@ -729,18 +1253,31 @@ def preflight(bundle_path, root=None, env=None, capacity_config=None, pin=None, 
     bundle, directory = bundle_document(bundle_path)
     root = trusted_paths()[0] if root is None else root
     if free is None:
-        space = os.statvfs('/')
+        space = os.statvfs(directory)
         free = space.f_bavail * space.f_frsize
+    actual_env=os.environ if env is None else env
+    full_bundle_gate(bundle,directory/'mustang-signing-bundle.json',actual_env,root)
     return evaluate(bundle, root, free, files=bundle_files(directory, bundle),
-                    secret_access=None, pin=pin, env=env, capacity_config=capacity_config)
+                    secret_access=None, pin=pin, env=env, capacity_config=capacity_config,
+                    space_directory=directory)
+
+
+def host_sign_entry(source_root):
+    """Load the actual reviewed hyphenated entry point, never an import alias."""
+    path=Path(source_root)/'scripts/host-sign.py'
+    if path.is_symlink() or not path.is_file():raise ValueError('reviewed host-sign entry is absent')
+    spec=importlib.util.spec_from_file_location('mustang_reviewed_host_sign',path)
+    module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+    return module.main
 
 
 def run_host_sign(source_root, release_dir, extracted, jdk_home, bundle, env, host_sign_main=None):
     if host_sign_main is None:
-        import host_sign as signer
-        host_sign_main = signer.main
+        host_sign_main = host_sign_entry(source_root)
     release_dir = Path(release_dir)
     release_dir.mkdir(mode=0o700, exist_ok=True)
+    # host-sign copies a ZIP into releases/BUILD, not the preflight extraction directory.
+    tools_archive=Path(extracted).parent/Path(bundle['otatools']['file']).name
     config = {
         'target': {'device': 'mustang'},
         'host': {'sign': {
@@ -749,7 +1286,7 @@ def run_host_sign(source_root, release_dir, extracted, jdk_home, bundle, env, ho
             'passphraseSecret': PASSPHRASE,
             'secretVersion': SECRET_VERSION,
             'passphraseSecretVersion': SECRET_VERSION,
-            'otatools': str(extracted),
+            'otatools': str(tools_archive),
             'javaHome': str(jdk_home),
             'updateNotes': str(Path(source_root) / 'script' / 'generate-release.sh'),
         }},
@@ -758,10 +1295,13 @@ def run_host_sign(source_root, release_dir, extracted, jdk_home, bundle, env, ho
     }
     config_path = release_dir / 'hosted-sign-config.json'
     config_path.write_text(json.dumps(config, sort_keys=True) + '\n')
-    sign_env = dict(env)
-    sign_env.update(ROSE_RELEASE_DIR=str(release_dir), ROSE_SIGN_OTATOOLS=str(extracted),
+    sign_env = {k:v for k,v in env.items() if k not in ('GH_TOKEN','GITHUB_TOKEN',
+        'ACTIONS_ID_TOKEN_REQUEST_TOKEN','ACTIONS_ID_TOKEN_REQUEST_URL')}
+    import mustang_retained
+    _compile_run,_compile_attempt,compile_source=mustang_retained.compile_context(bundle)
+    sign_env.update(ROSE_RELEASE_DIR=str(release_dir), ROSE_SIGN_OTATOOLS=str(tools_archive),
                     BUILD_NUMBER=str(bundle.get('build') or '0'), BUILD_DATETIME=str(bundle.get('timestamp') or '0'),
-                    ROSE_CANDIDATE_SHA=bundle['sourceSha'])
+                    ROSE_CANDIDATE_SHA=compile_source)
     previous = Path.cwd()
     os.chdir(source_root)
     try:
@@ -771,7 +1311,7 @@ def run_host_sign(source_root, release_dir, extracted, jdk_home, bundle, env, ho
     return release_dir
 
 
-def write_hosted_receipt(release_dir, out_dir, bundle):
+def write_hosted_receipt(release_dir, out_dir, bundle, target_validation=None):
     signed = Path(release_dir) / 'signed-target_files.zip'
     public = Path(release_dir) / 'public'
     otas = [path for path in public.glob('mustang-ota_update-*.zip') if path.is_file() and not path.is_symlink()] \
@@ -782,8 +1322,10 @@ def write_hosted_receipt(release_dir, out_dir, bundle):
     out.mkdir(mode=0o700, exist_ok=True)
     copied = {}
     for source, name in ((signed, 'signed-target_files.zip'), (otas[0], otas[0].name)):
-        target = out / name
-        shutil.copyfile(source, target)
+        target = out / ('staged/'+name if 'fullRunSource' in bundle and source==otas[0] else name)
+        if source==otas[0] and 'fullRunSource' in bundle:
+            if not target.is_file() or sha256_file(target)!=sha256_file(source):raise ValueError('staged OTA bytes differ')
+        else:shutil.copyfile(source, target)
         copied[name] = target
     receipt = {
         'schema': RECEIPT_SCHEMA, 'device': 'mustang', 'signer': SIGNER, 'secretVersion': SECRET_VERSION,
@@ -792,10 +1334,14 @@ def write_hosted_receipt(release_dir, out_dir, bundle):
         'outputs': {
             'signedTargetFiles': {'file': 'signed-target_files.zip', 'sizeBytes': copied['signed-target_files.zip'].stat().st_size,
                                   'sha256': sha256_file(copied['signed-target_files.zip'])},
-            'ota': {'file': otas[0].name, 'sizeBytes': copied[otas[0].name].stat().st_size,
+            'ota': {'file': ('staged/' if 'fullRunSource' in bundle else '')+otas[0].name, 'sizeBytes': copied[otas[0].name].stat().st_size,
                     'sha256': sha256_file(copied[otas[0].name])},
         },
     }
+    if 'fullRunSource' in bundle:
+        receipt['publicStage']=dict(path='staged',receiptSha256=sha256_file(out/'staged/mustang-ota-receipt.json'))
+    if target_validation is not None:
+        receipt['targetArchiveValidation'] = target_validation
     write_json(out / 'mustang-hosted-sign-receipt.json', receipt)
     return receipt
 
@@ -804,13 +1350,27 @@ def sign(bundle_path, out_dir, root=None, env=None, capacity_config=None, host_s
     bundle, directory = bundle_document(bundle_path)
     root = trusted_paths()[0] if root is None else root
     if free is None:
-        space = os.statvfs('/')
+        space = os.statvfs(directory)
         free = space.f_bavail * space.f_frsize
     files = bundle_files(directory, bundle)
-    result = evaluate(bundle, root, free, files=files, secret_access=None, pin=pin, capacity_config=capacity_config, env=env)
+    full_bundle_gate(bundle,directory/'mustang-signing-bundle.json',os.environ if env is None else env,root)
+    result = evaluate(bundle, root, free, files=files, secret_access=None, pin=pin,
+                      capacity_config=capacity_config, env=env, space_directory=directory)
     release = Path(out_dir).parent / 'hosted-sign-work'
+    release.mkdir(mode=0o700,exist_ok=False)
+    # Same-filesystem link avoids a third physical unsigned input copy. Never
+    # overwrite or adopt another signing attempt, and fail if linking is unavailable.
+    os.link(files['unsigned'],release/'unsigned-target_files.zip',follow_symlinks=False)
     run_host_sign(root, release, result['extracted'], result['javaHome'], bundle, env or os.environ, host_sign_main)
-    return write_hosted_receipt(release, out_dir, bundle)
+    if 'fullRunSource' in bundle:
+        import mustang_ota
+        public=release/'public'
+        matches=list(public.glob('mustang-ota_update-*.zip'))
+        if len(matches)!=1:raise ValueError('exactly one newly signed OTA required for staging')
+        out=Path(out_dir);out.mkdir(mode=0o700,exist_ok=False)
+        mustang_ota.stage_hosted(bundle,files['unsigned'],release/'signed-target_files.zip',matches[0],public,
+            result['extracted'],result['javaHome'],out/'staged',root=root)
+    return write_hosted_receipt(release, out_dir, bundle, result['targetArchiveValidation'])
 
 
 def step_output(name, value):
