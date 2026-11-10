@@ -53,7 +53,7 @@ C.SCHEMA = 2
 C.MANIFEST = ROOT/'os/compile-contracts/frameworks-base-wmshell.json'
 # The reviewed candidate: the commit holding the patch's current bytes (#516, #523, #528, #540's fix for the first
 # real compile's javac error, then #551's chin marker on REGISTER for Rose Agent, F08).
-C.CANDIDATE = {'pr': 734, 'commit': '47c82084dc46d2b0da8936deb217791277360a4a'}
+C.CANDIDATE = {'pr': 734, 'commit': '589407e1328327452ca320b4a71b3384b3859fe2'}
 C.BUNDLE = C.FIXTURES/'candidate-pr734'
 C.CANDIDATE_PATCHES = ['rose-edge-wmshell.patch']
 # frameworks/base: apply-os-changes.py's --background-policy order (as in the Launcher3 contract), then the candidate.
@@ -171,10 +171,11 @@ CONFIRMATION = {
         'systemOverlays() and its scrim\'s bottom margin the systemOverlays() bottom, a no-op while the chin provides '
         'nothing; systemOverlays() is public API 34; no patch, no new file, no new import; goals and flagEvidence '
         '(none) unchanged',
-    'exactreturn': 'OS Core in #734, 2026-11-10 UTC, commit 47c8208 (1C, the exact-task return, protocol v1 agreed with '
-        'App Core and Home/App): rose-edge-wmshell.patch sha256 '
-        '0c62fdeea2b06867c9d4587c15e74bffd533c03bddf1a5e708bb18573188b7f7, only roseedge/RoseEdgeController.java '
-        '(87a84d85..., blob e44a987f) and roseedge/RoseEdgePolicy.java (c7672a5b..., blob 0aefd331) changing; the '
+    'exactreturn': 'OS Core in #734, 2026-11-10 UTC, commit 47c8208 then 589407e (1C, the exact-task return, protocol '
+        'v1 agreed with App Core and Home/App; Rose\'s HOME task counts as Home, per Home/App): rose-edge-wmshell.patch '
+        'sha256 e43e03bf6a410c1fe0f8f7d59a41084f90e4edfe51efe7faac9618b4a218b513, only '
+        'roseedge/RoseEdgeController.java (87a84d85..., blob e44a987f) and roseedge/RoseEdgePolicy.java (a9cd7747..., '
+        'blob a4003dcc) changing; the '
         'required overlays AgentTrayPrototype.java (4bac21a0..., blob ba75ed1b) and AgentTrayLink.java (90e9b648..., '
         'blob 48495c62, now public for its in-process Return seam) change; the other after-images, the WMShellModule '
         'pre-image, the goals and flagEvidence (none) unchanged; no new file, flag or classpath input (the new imports, '

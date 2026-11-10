@@ -1252,10 +1252,10 @@ index 0000000..e44a987
 +}
 diff --git a/libs/WindowManager/Shell/src/com/android/wm/shell/roseedge/RoseEdgePolicy.java b/libs/WindowManager/Shell/src/com/android/wm/shell/roseedge/RoseEdgePolicy.java
 new file mode 100644
-index 0000000..0aefd33
+index 0000000..a4003dc
 --- /dev/null
 +++ b/libs/WindowManager/Shell/src/com/android/wm/shell/roseedge/RoseEdgePolicy.java
-@@ -0,0 +1,485 @@
+@@ -0,0 +1,489 @@
 +/*
 + * Copyright 2026
 + * SPDX-License-Identifier: Apache-2.0
@@ -1634,8 +1634,12 @@ index 0000000..0aefd33
 +                    && a.container != null && a.container.equals(b.container);
 +        }
 +
++        /**
++         * Rose's own ordinary task coming forward, such as its conversation. Rose's HOME task is Home (Home/App, 1C:
++         * pressing Home leaves the app behind), so it clears the target like any other Home.
++         */
 +        static boolean rose(Task t, int user) {
-+            return t != null && ROSE_PACKAGE.equals(t.packageName) && t.userId == user
++            return t != null && t.standard && ROSE_PACKAGE.equals(t.packageName) && t.userId == user
 +                    && t.displayId == DEFAULT_DISPLAY;
 +        }
 +
@@ -1657,10 +1661,10 @@ index 0000000..0aefd33
 +        }
 +
 +        /**
-+         * Focus moved to focused on behalf of currentUser. When it moves to Rose from something else, the task focused
-+         * just before becomes the target if it is an app; Home, recents, an assistant, a dream or nothing gives none,
-+         * never an older app. Focus anywhere else clears it. Other displays (Rose's background workspace) and unknown
-+         * focus change nothing. True when the target (its token) changed.
++         * Focus moved to focused on behalf of currentUser. When it moves to Rose from something else, the task
++         * focused just before becomes the target if it is an app; Home (Rose's own HOME task included), recents, an
++         * assistant, a dream or nothing gives none, never an older app. Focus anywhere else clears it. Other displays
++         * (Rose's background workspace) and unknown focus change nothing. True when the target (its token) changed.
 +         */
 +        public boolean onFocusChanged(Task focused, int currentUser) {
 +            if (focused == null || focused.displayId != DEFAULT_DISPLAY) return false;
