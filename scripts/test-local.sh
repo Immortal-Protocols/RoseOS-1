@@ -3,6 +3,8 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
+# Nov 10 1F/1G: bounded private life and real background-task lifecycle.
+bash scripts/test-background-life.sh
 # Shared Codex voice adapter: synthetic account/model/turn replies, no provider access.
 node --test workspace/rose-agent/server/codex-voice.test.mjs workspace/rose-agent/server/codex-provider-start.test.mjs
 # Rose Agent page voice state, loaded with its real assets and a fake provider.
