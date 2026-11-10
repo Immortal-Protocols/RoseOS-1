@@ -44,11 +44,19 @@ UNAVAILABLE_RETRY_S = 300.0  # a voice that failed to load (a download, a networ
 def american(accent: str) -> bool:
     """Whether an accent request names the accent every available voice has (US English), or none."""
     text = accent.lower().replace('u.s.', 'us').replace('en_us', 'us').replace('en-us', 'us')
-    words = set(re.findall(r'[a-z]+', text))
+    tokens = re.findall(r'[a-z]+', text)
+    us = {'american', 'america', 'us', 'usa', 'united', 'states'}
+    indifferent = {'matter', 'matters', 'preference', 'care', 'whatever', 'mind', 'normal', 'particular', 'either'}
+    if indifferent & set(tokens):  # "doesn't matter", "no preference", "normal": no accent asked for
+        return True
+    negated = {tokens[i + 1] for i, t in enumerate(tokens[:-1]) if t in ('not', 'no', 'non', 'without')}
+    if negated & us:  # "not American": an accent no voice has
+        return False
+    # "not British": a negated accent is not asked for
+    words = set(t for t in tokens if t not in negated and t not in ('not', 'non', 'without'))
     words -= {'accent', 'a', 'an', 'the', 'standard', 'general', 'plain', 'neutral', 'north', 'any', 'same',
               'none', 'unchanged', 'current', 'no', 'change', 'keep', 'it', 'as', 'now', 'is', 'one', 'please', 'like',
               'sounding', 'sound', 'voice', 'my', 'your', 'this', 'that', 'fine', 'ok', 'okay', 'just', 'still'}
-    us = {'american', 'america', 'us', 'usa', 'united', 'states'}
     if words & us:  # "American English", "US English": English names the language here
         words.discard('english')
     return not words or words <= us  # a bare "English" accent usually means England's, which no voice has
@@ -107,7 +115,8 @@ def request_from(args: dict) -> dict:
     if gender not in GENDERS:
         raise ValueError('gender must be same, female, male or either')
     accent = str(args.get('accent') or '').strip()
-    other = [str(q).strip() for q in (args.get('other') or []) if str(q).strip()]
+    raw = args.get('other') or []
+    other = [str(q).strip() for q in ([raw] if isinstance(raw, str) else raw) if str(q).strip()]
     if not wanted and gender in ('same', 'either') and not accent and not other:
         raise ValueError('Describe how the voice should change.')
     return {'wanted': wanted, 'keep': keep, 'gender': gender, 'accent': accent, 'other': other}
@@ -291,7 +300,7 @@ class VoiceIdentity:
         if voice not in self.traits['voices']:
             return False
         with self.lock:
-            previous = before if before in self.traits['voices'] and before != voice else self.previous
+            previous = before if before in self.traits['voices'] and before != voice else self._fallback_previous(voice)
             if not self._save(self.name, voice, previous):
                 return False
             self.voice, self.previous, self.offered = voice, previous, None
@@ -377,6 +386,13 @@ class VoiceIdentity:
             best = max((e for e in ranked if not e['against']), key=lambda e: e['progress'], default=None)
         if best is None and request['gender'] in ('same', 'either'):  # another gender only when none was named
             best = next((e for e in wider if e['toward'] and not e['against']), None)
+        if best is None and request['keep']:
+            # Only a kept aspect stands in the way: offer the voice that breaks the keep least, the broken keep named
+            # in its unmet so the owner decides.
+            near = [e for e in ranked if all(a.startswith('same_') for a in e['against'])
+                    and (e['met'] or changing_gender)
+                    and (changing_gender or self._gender(e['voice']) == gender)]  # no unasked gender change
+            best = min(near, key=lambda e: (len(e['against']), e['score']), default=None)
         scope = '' if request['gender'] in ('either',) else f'{request["gender"] if changing_gender else gender} '
         kept = ' and '.join(request['keep'])
         blocked = [e for e in ranked if e['met'] and e['against'] and all(a.startswith('same_') for a in e['against'])]
@@ -428,6 +444,14 @@ class VoiceIdentity:
                                                'changes': None}], label='reverted')
 
     # ------------------------------------------------------------------ helpers
+    def _fallback_previous(self, voice):
+        """The voice to go back to when the voice being left is not a measured one: the saved choice, else the one
+        before it, never the voice being applied."""
+        for candidate in (self.voice, self.previous):
+            if candidate in self.traits['voices'] and candidate != voice:
+                return candidate
+        return None
+
     @staticmethod
     def _words(wanted: dict) -> list[str]:
         return [('much_' if abs(level) == 2 else '') + (DIMENSIONS[dim]['more'] if level > 0 else DIMENSIONS[dim]['less'])
@@ -463,7 +487,8 @@ class VoiceIdentity:
                 continue
             with self.lock:
                 measured = current in self.traits['voices']
-                if not self._save(self.name, voice, current if measured else self.previous):
+                previous = current if measured else self._fallback_previous(voice)
+                if not self._save(self.name, voice, previous):
                     try:
                         speaker.set_voice(current)
                     except Exception:
@@ -471,7 +496,7 @@ class VoiceIdentity:
                     return {'ok': False, 'reason': 'not_saved', 'changed': False, 'voice': current,
                             'message': 'The new voice could not be saved, so the current voice was kept.'
                             + (self.UNREADABLE if self.unreadable else '')}
-                self.voice, self.previous, self.offered = voice, current if measured else self.previous, None
+                self.voice, self.previous, self.offered = voice, previous, None
                 self.unavailable.pop(voice, None)
             changes = entry['changes'] if entry['changes'] is not None else describe_changes(
                 deltas(self.traits['voices'][current], self.traits['voices'][voice])) if measured else []

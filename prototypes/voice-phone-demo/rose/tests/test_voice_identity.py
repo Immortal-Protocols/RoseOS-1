@@ -264,7 +264,10 @@ class Matching(unittest.TestCase):
                 if voice is None:
                     continue
                 d = vi.deltas(vi.TRAITS['voices'][current], vi.TRAITS['voices'][voice])['pitch']
-                self.assertLessEqual(abs(d), vi.DIMENSIONS['pitch']['step'], r)
+                if r['ok'] or 'same_pitch' not in r['alternative']['unmet']:  # applied, or offered as keeping it
+                    self.assertLessEqual(abs(d), vi.DIMENSIONS['pitch']['step'], r)
+                else:  # an offered voice that breaks the keep says so, and keeps the gender
+                    self.assertEqual(vi.TRAITS['voices'][voice]['gender'], vi.TRAITS['voices'][current]['gender'])
 
     def test_a_kept_aspect_never_moves_more_than_rose_would_report(self):
         for current in ALL:
@@ -305,6 +308,27 @@ class Matching(unittest.TestCase):
             for kept in ('liveliness', 'pace'):
                 if kept in r['message']:  # every fitting voice really changes it
                     self.assertTrue(all('same_' + kept in e['against'] for e in fits), (current, kept, r))
+
+    def test_a_keep_that_blocks_everything_still_offers_the_nearest(self):
+        r, speaker = self.change('zoey', gender='male', pace='same')
+        self.assertEqual((r['reason'], speaker.calls), ('no_close_match', []))
+        self.assertIn('same_pace', r['alternative']['unmet'])  # disclosed, the owner decides
+        males = {n: v for n, v in vi.TRAITS['voices'].items() if v['gender'] == 'male'}
+        zoey = vi.TRAITS['voices']['zoey']['speech_s']
+        self.assertEqual(r['alternative']['voice'], min(males, key=lambda n: abs(males[n]['speech_s'] - zoey)))
+
+    def test_other_given_as_a_string_is_one_quality(self):
+        r, _ = self.change('zoey', warmth='warmer', other='raspy')
+        self.assertIn('raspy could not be matched', r['limits'][0])
+        self.assertNotIn('r, a', r['limits'][0])
+
+    def test_indifferent_or_negated_accents(self):
+        for accent in ('not British', 'American, not British', "doesn't matter", 'no preference', 'normal',
+                       'no particular accent'):
+            r, _ = self.change('zoey', pitch='lower', accent=accent)
+            self.assertNotIn('limits', r, accent)
+        r, _ = self.change('zoey', pitch='lower', accent='not American')
+        self.assertIn('limits', r)
 
     def test_a_gender_change_cannot_keep_the_pitch_and_says_so(self):
         r, _ = self.change('zoey', gender='male', pitch='same')
@@ -512,6 +536,20 @@ class Persistence(unittest.TestCase):
     def test_american_with_a_kept_aspect_is_already(self):
         r = vi.VoiceIdentity().change_voice(Speaker('zoey'), {'accent': 'American', 'pitch': 'same'})
         self.assertEqual(r['reason'], 'already')
+
+    def test_previous_is_never_the_voice_being_applied(self):
+        (self.dir / 'identity.json').write_text(json.dumps({'voice': 'harper', 'previous_voice': 'miles'}))
+        one = self.identity()
+        speaker = Speaker('NbpkqMVS3CJeq2j8', voices=ALL + ['NbpkqMVS3CJeq2j8'])  # a raw --voice id this run
+        self.assertTrue(one.revert(speaker)['ok'])
+        saved = json.loads((self.dir / 'identity.json').read_text())
+        self.assertEqual((saved['voice'], saved['previous_voice']), ('miles', 'harper'))
+        self.assertTrue(one.revert(speaker)['ok'])  # still a way back
+        self.assertEqual(speaker.voice, 'harper')
+        two = self.identity()
+        self.assertTrue(two.adopt('miles', 'miles'))
+        saved = json.loads((self.dir / 'identity.json').read_text())
+        self.assertNotEqual(saved.get('previous_voice'), saved['voice'])
 
     def test_accent_same_is_no_accent_request(self):
         identity, speaker = vi.VoiceIdentity(), Speaker('zoey')
