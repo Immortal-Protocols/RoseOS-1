@@ -165,11 +165,18 @@ public final class RoseConversationActivity extends Activity {
  @Override protected void onResume(){super.onResume();resumed=true;resumedAt=SystemClock.uptimeMillis();ctlPolledAt=0;appsPolledAt=0;notices.reset();handler.removeCallbacks(tick);handler.post(tick);if(overview!=null)overview.resume();}
  /** Plan 1E: the theme this screen was built in; a stored change to another theme rebuilds it (recreate). */
  String builtTheme=RoseTheme.DEFAULT;
- final Runnable themeChanged=()->{if(isFinishing()||isDestroyed())return;if(!CustomizationStore.read(this).theme.equals(builtTheme))recreate();};
+ /** Plan 1E: a theme change rebuilds this screen in the new theme, but never while it holds something the owner is in
+  * the middle of (Background Work open, a return pending or its sheet shown, a Stop being confirmed or sent): then the
+  * rebuild waits (themePending) and refresh() retries on its tick, so no return, choice or Stop result is lost. */
+ boolean themePending;android.app.Dialog stopDialog;
+ boolean themeBusy(){return overview!=null&&overview.isOpen()||returnState.pending()||returnState.sheetShown()||stopInFlight||stopPendingFor!=null||stopDialog!=null&&stopDialog.isShowing();}
+ void maybeRetheme(){if(isFinishing()||isDestroyed())return;if(CustomizationStore.read(this).theme.equals(builtTheme)){themePending=false;return;}if(themeBusy()){themePending=true;return;}themePending=false;recreate();}
+ final Runnable themeChanged=this::maybeRetheme;
  @Override protected void onDestroy(){CustomizationStore.unregister(this,themeChanged);super.onDestroy();}
  @Override protected void onPause(){resumed=false;handler.removeCallbacks(tick);stopBreath();if(overview!=null){if(isFinishing())overview.teardown();else overview.pause();}clearNotice();super.onPause();}
 
  void refresh(){
+  if(themePending){maybeRetheme();if(isFinishing()||isDestroyed())return;}
   VoiceService s=VoiceService.instance;
   state=s==null?ConversationState.of(false,false,false,false,false,null,null,null)
    :ConversationState.of(true,s.live,s.connected,s.muted,s.communicating,s.lastEndReason,s.lastStartError,s.backendReachable);
@@ -538,7 +545,7 @@ public final class RoseConversationActivity extends Activity {
  /** Confirms Stop for the task shown now. The id is captured here, so a later task is never stopped by this dialog. */
  void confirmStop(){
   final String id=shownTaskId;final String title=taskTitle.getText().toString();if(id.isEmpty())return;
-  new android.app.AlertDialog.Builder(this).setTitle("Stop this task?").setMessage(title+"\n\nThis stops only this task. Your voice conversation is not affected.")
+  stopDialog=new android.app.AlertDialog.Builder(this).setTitle("Stop this task?").setMessage(title+"\n\nThis stops only this task. Your voice conversation is not affected.")
    .setNegativeButton("Cancel",null).setPositiveButton("Stop task",(d,w)->sendStop(id)).show();
  }
  /** The existing authenticated Owner Stop: POST /task/stop {taskId}. Its answer is shown as it is. */

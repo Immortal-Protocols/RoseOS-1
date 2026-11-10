@@ -122,9 +122,13 @@ class OxbloodUnchangedTest(unittest.TestCase):
                          BY_ID['oxblood']['surfaces']['keyboard'].values())
 
     def test_shade(self):
+        # The outline was an inline 0x66F4EEEE (TEXT at 40%) before 1E; the shade now draws it from Shade.LINE, whose
+        # Oxblood value must stay exactly that. Every other Oxblood value is still a declared shade constant.
+        shade = dict(BY_ID['oxblood']['surfaces']['shade'])
+        self.assertEqual(shade.pop('line'), '#66F4EEEE')
         self.assertDrawn(
             'os/overlays/frameworks/base/packages/SystemUI/src/com/android/systemui/roseshade/RoseShadeController.java',
-            BY_ID['oxblood']['surfaces']['shade'].values())
+            shade.values())
 
     def test_return_control(self):
         self.assertDrawn('workspace/rose-agent/app/src/dev/pixel/voice/ReturnControl.java',

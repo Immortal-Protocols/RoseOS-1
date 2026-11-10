@@ -3,7 +3,6 @@ package com.android.quickstep.fallback;
 
 import android.content.Context;
 import android.graphics.Bitmap;
-import android.graphics.BitmapFactory;
 import android.graphics.BlurMaskFilter;
 import android.graphics.Canvas;
 import android.graphics.Color;
@@ -68,9 +67,8 @@ final class RoseOxbloodField extends Drawable {
     /** Plan 1E: the theme drawn, and (raster themes) the package context its raster is loaded from. */
     private String theme = RoseTheme.DEFAULT;
     private Context resources;
-    /** The theme's raster, decoded once on first need; null when not loaded (or not loadable: rasterFailed). */
-    private Bitmap raster;
-    private boolean rasterFailed;
+    /** Redraws the surface this field is drawn on once the raster is ready (the strip's scrim). */
+    private Runnable onRaster;
     private final Paint art = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG | Paint.DITHER_FLAG);
     private final RectF artBounds = new RectF();
 
@@ -111,29 +109,26 @@ final class RoseOxbloodField extends Drawable {
         }
         if (next.equals(theme)) return;
         theme = next;
-        raster = null;
-        rasterFailed = false;
         shade();
         invalidateSelf();
     }
 
     String theme() { return theme; }
 
-    /** The theme's raster wallpaper, or null to draw the geometry (Oxblood, no context, or it cannot be loaded). */
+    /** Called on the main thread when the raster becomes ready, so the owner redraws its surface. */
+    void setOnRaster(Runnable redraw) { onRaster = redraw; }
+
+    /**
+     * The theme's raster wallpaper, or null to draw the geometry (Oxblood, no context, not decoded yet or unloadable).
+     * The image is decoded once per process off the UI thread (RoseThemeSetting.glacierField), never in draw; until it
+     * is ready the geometry draws in the theme's own colours, and onRaster redraws the surface when it arrives.
+     */
     private Bitmap raster() {
-        if (!RoseTheme.rasterWallpaper(theme) || resources == null || rasterFailed) return null;
-        if (raster != null) return raster;
-        try {
-            int id = resources.getResources().getIdentifier("rose_glacier_field", "drawable",
-                    resources.getPackageName());
-            BitmapFactory.Options options = new BitmapFactory.Options();
-            options.inScaled = false;
-            raster = id == 0 ? null : BitmapFactory.decodeResource(resources.getResources(), id, options);
-        } catch (RuntimeException | OutOfMemoryError e) {
-            raster = null;
-        }
-        rasterFailed = raster == null;
-        return raster;
+        if (!RoseTheme.rasterWallpaper(theme) || resources == null) return null;
+        return RoseThemeSetting.glacierField(resources, () -> {
+            invalidateSelf();
+            if (onRaster != null) onRaster.run();
+        });
     }
 
     private static Path polygon(float[] points) {

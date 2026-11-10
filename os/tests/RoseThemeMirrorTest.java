@@ -78,6 +78,10 @@ public final class RoseThemeMirrorTest {
         port.setting = "oxblood";
         mirror.settingChanged();
         check(RoseThemeMirror.current().equals("oxblood"), "SystemUI follows the setting");
+        check(port.acks.get(port.acks.size() - 1).equals("oxblood"), "an outside change is acknowledged, so Rose never keeps a stale answer");
+        int acks = port.acks.size();
+        mirror.settingChanged();
+        check(port.acks.size() == acks, "an unchanged setting is not acknowledged again");
         port.setting = "garbage";
         mirror.settingChanged();
         check(RoseThemeMirror.current().equals(RoseTheme.DEFAULT), "a damaged setting draws the default");

@@ -64,4 +64,36 @@ final class RoseThemeSetting {
     static void unlisten(Runnable listener) {
         LISTENERS.remove(listener);
     }
+
+    // Plan 1E: Glacier's raster field, decoded once per process off the UI thread and shared by every strip.
+    private static volatile android.graphics.Bitmap sField;
+    private static volatile boolean sFieldLoading, sFieldFailed;
+
+    /**
+     * The decoded Glacier field, or null while it loads (or if it cannot be loaded). The first call starts one
+     * background decode; ready runs on the main thread when it finishes, so the caller redraws. Never blocks.
+     */
+    static android.graphics.Bitmap glacierField(Context context, Runnable ready) {
+        android.graphics.Bitmap field = sField;
+        if (field != null || sFieldFailed || sFieldLoading) return field;
+        sFieldLoading = true;
+        final Context app = context.getApplicationContext() != null ? context.getApplicationContext() : context;
+        final Handler main = new Handler(Looper.getMainLooper());
+        new Thread(() -> {
+            android.graphics.Bitmap decoded = null;
+            try {
+                int id = app.getResources().getIdentifier("rose_glacier_field", "drawable", app.getPackageName());
+                android.graphics.BitmapFactory.Options options = new android.graphics.BitmapFactory.Options();
+                options.inScaled = false;
+                decoded = id == 0 ? null : android.graphics.BitmapFactory.decodeResource(app.getResources(), id, options);
+            } catch (RuntimeException | OutOfMemoryError e) {
+                decoded = null;
+            }
+            sField = decoded;
+            sFieldFailed = decoded == null;
+            sFieldLoading = false;
+            if (ready != null) main.post(ready);
+        }, "rose-glacier-field").start();
+        return null;
+    }
 }

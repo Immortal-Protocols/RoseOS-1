@@ -82,6 +82,7 @@ public final class RoseAgentStrip extends LinearLayout {
         super(context, attrs);
         theme = RoseThemeSetting.current(context);
         field.setTheme(context, theme);
+        field.setOnRaster(() -> { if (scrim != null) scrim.invalidate(); });
         setOrientation(VERTICAL);
         int pad = dp(12);
         setPadding(pad, pad, pad, 0);

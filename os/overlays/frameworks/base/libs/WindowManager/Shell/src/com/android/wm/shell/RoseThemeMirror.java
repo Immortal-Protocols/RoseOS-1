@@ -68,10 +68,14 @@ public final class RoseThemeMirror {
         acknowledge();
     }
 
-    /** The setting changed (Rose through SystemUI, or adb); SystemUI follows it. */
+    /**
+     * The setting changed (Rose through SystemUI, or adb); SystemUI follows it and tells Rose what it now shows, so
+     * Rose never reports a theme as shown that SystemUI no longer draws.
+     */
     void settingChanged() {
         String id = RoseTheme.normalize(port.read());
         if (!id.equals(theme)) show(id);
+        acknowledge();
     }
 
     /** The tray link resubscribed: acknowledge again on the next STATE, so Rose never keeps a stale answer. */

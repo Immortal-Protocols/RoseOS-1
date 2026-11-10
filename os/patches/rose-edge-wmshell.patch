@@ -1,9 +1,9 @@
 diff --git a/libs/WindowManager/Shell/src/com/android/wm/shell/RoseEdgeMicSlot.java b/libs/WindowManager/Shell/src/com/android/wm/shell/RoseEdgeMicSlot.java
 new file mode 100644
-index 0000000..00157ba
+index 0000000..f8e557e
 --- /dev/null
 +++ b/libs/WindowManager/Shell/src/com/android/wm/shell/RoseEdgeMicSlot.java
-@@ -0,0 +1,412 @@
+@@ -0,0 +1,413 @@
 +/*
 + * Copyright 2026
 + * SPDX-License-Identifier: Apache-2.0
@@ -254,7 +254,8 @@ index 0000000..00157ba
 +
 +        /** Plan 1E: the theme this draw uses (RoseThemeMirror); muted keeps its warm meaning (RoseTheme.warm). */
 +        private String mTheme = RoseTheme.DEFAULT;
-+        private final Runnable mThemeChanged = this::invalidate;
++        // RoseThemeMirror notifies on SystemUI's main thread; this view lives on the shell's, so post the redraw.
++        private final Runnable mThemeChanged = this::postInvalidate;
 +        private final Paint mPlate = new Paint();
 +        private final Paint mPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
 +        private final RectF mWell = new RectF();
