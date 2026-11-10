@@ -93,6 +93,10 @@ final class ReturnModel {
    SHEET_BODY = "You are still in Rose. Choose where to go; Rose keeps working.",
    STAY = "Stay in Rose", SWITCHER = "Open switcher", HOME = "Go Home";
 
- /** V3 motion: on acknowledged success Rose fades and moves down 8dp over 200 ms; reduced motion has none. */
+ /** V3 motion, for the platform's transition on the exact-task reorder (OS Core's shell transition; a WMShell
+  * reorder carries no ActivityOptions): only on acknowledged success, Rose fades and moves down 8dp over 200 ms with
+  * cubic-bezier(.2,.7,.3,1) while the source stays still; reduced motion is immediate. Rose never departs before the
+  * acknowledgement: an unacknowledged return stays in Rose. */
  static final int DEPART_MS = 200, DEPART_DP = 8;
+ static final float[] DEPART_EASE = {0.2f, 0.7f, 0.3f, 1f};
 }

@@ -218,7 +218,7 @@ test('#225 live preview: the overview reads only the controller\'s local read-on
 // 1C (Nathan's Nov 9–10 plan): Designer's approved V3 return control (Rose-F11-Return.html, SHA-256 798c9a30…955ae5).
 test('the V3 return control goes back to the exact previous live task only, never a guessed app or a relaunch (1C)',()=>{
  const activity=source('RoseConversationActivity.java'),control=source('ReturnControl.java'),model=source('ReturnModel.java');
- const src=source('ReturnSource.java'),sheet=source('ReturnSheet.java'),transition=source('ReturnTransition.java');
+ const src=source('ReturnSource.java'),sheet=source('ReturnSheet.java');
  const strip=t=>t.replace(/\/\*[\s\S]*?\*\//g,'').replace(/\/\/.*$/gm,'');
  // Placement: the leading edge of Rose's content footer, above Connect and the chin, above an open keyboard; the
  // content makes room while it shows and is never overlaid.
@@ -248,11 +248,10 @@ test('the V3 return control goes back to the exact previous live task only, neve
  // Missing, replaced or failed: Stay, Open switcher (Home's existing recents route) or Go Home; no relaunch.
  assert.match(sheet,/STAY, true/);assert.match(sheet,/ReturnModel\.SWITCHER, false/);assert.match(sheet,/ReturnModel\.HOME, false/);
  assert.match(activity,/a\.performGlobalAction\(android\.accessibilityservice\.AccessibilityService\.GLOBAL_ACTION_RECENTS\)/);
- // V3 motion: Rose departs 8dp down and fades over 200 ms with cubic-bezier(.2,.7,.3,1); reduced motion is immediate.
- assert.match(transition,/if \(reducedMotion\) return ActivityOptions\.makeCustomAnimation\(c, 0, 0\)\.toBundle\(\);/);
- const depart=fs.readFileSync(new URL('../app/res/anim/rose_return_depart.xml',import.meta.url),'utf8');
- assert.match(depart,/android:duration="200"/);assert.match(depart,/android:toYDelta="8dp"/);assert.match(depart,/android:toAlpha="0"/);
- assert.match(fs.readFileSync(new URL('../app/res/interpolator/rose_return_ease.xml',import.meta.url),'utf8'),/controlX1="0\.2" android:controlY1="0\.7" android:controlX2="0\.3" android:controlY2="1"/);
+ // V3 motion is the platform's transition on the exact-task reorder, after acknowledgement only: the spec is
+ // carried as constants, and Rose itself never animates away before the answer.
+ assert.match(model,/static final int DEPART_MS = 200, DEPART_DP = 8;\n static final float\[\] DEPART_EASE = \{0\.2f, 0\.7f, 0\.3f, 1f\};/);
+ assert.doesNotMatch(path,/animate\(\)|overridePendingTransition|ActivityOptions/,'no departure before the acknowledged return');
  // Rose's work keeps going: nothing in the return path ends the call, finishes the screen or stops a task.
  assert.doesNotMatch(path.replace(/returnCancelled|cancelled\(\)|cancel\(target\)|CANCELLED/g,''),/finish|send\(|command\(|ownerStop|\/task\/stop/);
  // A successful return pauses Rose before its answer: leaving the screen never cancels a pending request.
