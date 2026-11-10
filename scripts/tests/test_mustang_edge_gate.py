@@ -972,9 +972,9 @@ class DedicatedRuntimeTest(unittest.TestCase):
         export=readiness.ACCEPTED_APP_EXPORT
         self.assertTrue(readiness.accepted_app_export(record, runtime['appInputsRecord']))
         self.assertEqual(record['apps'], [
-            {'package':'dev.pixel.backgroundcontrol','versionCode':41,'apkSha256':'6dbcb57947897338aa02c4c2fdffa5414ca49787b3f6140ed6886dc38f90ab82'},
-            {'package':'dev.pixel.voice','versionCode':369,'apkSha256':'268134653b5c83100e982c7ed04a611446bee248d65889dfcd0fd8642542c220'},
-            {'package':'dev.pixel.calculator.agent','versionCode':6,'apkSha256':'2c6ff4972535fedb4ad5c6af674152328c1384849acba64166c2fc56bce6a498'}])
+            {'package':'dev.pixel.backgroundcontrol','versionCode':41,'apkSha256':'7746c5b6724e5fd6aa732a3e2bf6d303c16d7d2704c88b136fd4222a8675d5d6'},
+            {'package':'dev.pixel.voice','versionCode':370,'apkSha256':'6cf2c3baacb01032e156ed5bcb79ec44e586a459a57eb7e5aa2a0dad86758ed5'},
+            {'package':'dev.pixel.calculator.agent','versionCode':6,'apkSha256':'19309b3ea65e31fe531f46e7c5bd677b2ebf1fa8a15798e5c1581840972e0b2d'}])
         self.assertIn(str(export['archiveBytes']), runtime['basis'])
         self.assertIn('not an OTA extraction', runtime['basis'])
         head=subprocess.check_output(['git','-C',str(ROOT),'-c','protocol.allow=never','rev-parse','HEAD'],text=True).strip()
@@ -982,7 +982,7 @@ class DedicatedRuntimeTest(unittest.TestCase):
         # HEAD may be past the producer's app sources (see above), so only consistency is pinned at HEAD; the fixed
         # commit below has none of the producer's app sources changed.
         self.assertEqual(readiness.bound_app_freshness(record), readiness.app_source_drift(record, head))
-        self.assertEqual(readiness.app_source_drift(record, '303f69823b0ca0f92a61fa3b95f9a2e8364da812'), [])
+        self.assertEqual(readiness.app_source_drift(record, export['recordMerge']), [])
         self.assertEqual(readiness.app_source_drift(record, head, diff=lambda *args:'workspace/rose-agent/changed\n'),
                          ['dev.pixel.voice','dev.pixel.calculator.agent','dev.pixel.backgroundcontrol'])
         missing='0000000000000000000000000000000000000000'

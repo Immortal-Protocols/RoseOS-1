@@ -320,7 +320,7 @@ class EnrollmentTest(unittest.TestCase):
     def test_infrastructure_host_check_starts_without_fabricated_inputs(self):
         runtime = json.loads((ROOT/'os/build-only/mustang-runtime.json').read_text())
         self.assertEqual(runtime['status'], 'bound')
-        self.assertEqual(runtime['appInputsRecord'], 'os/app-inputs/frankel-2026110901.json')
+        self.assertEqual(runtime['appInputsRecord'], 'os/app-inputs/frankel-2026111001.json')
         self.assertEqual(runtime['signingRouteEvidence'], 'os/build-only/mustang-dedicated-signing-route.json')
         self.assertEqual(runtime['sourceEvidence'], 'os/build-only/mustang-full-run-source.json')
         self.assertIsNone(runtime['baselineTargetFiles'])
@@ -350,7 +350,7 @@ class EnrollmentTest(unittest.TestCase):
         workflow = (ROOT/'.github/workflows/mustang-ota-dedicated.yml').read_text()
         builder = workflow.split('builder:', 1)[1].split('publisher:', 1)[0]
         self.assertIn('if: inputs.dry_run == false\n      run: python3 scripts/mustang-dedicated.py baseline', builder)
-        self.assertIn('if: inputs.dry_run == false\n      env:\n        APP_INPUTS: ${{ steps.apps.outputs.inputs_dir }}\n      run: python3 scripts/mustang-dedicated.py produce', builder)
+        self.assertIn("if: inputs.dry_run == false && inputs.retained_compile_run == ''\n      env:\n        APP_INPUTS: ${{ steps.apps.outputs.inputs_dir }}\n      run: python3 scripts/mustang-dedicated.py produce", builder)
         self.assertIn("if: always() && inputs.dry_run == false\n      run: python3 scripts/mustang-dedicated.py report", builder)
         self.assertNotIn('mustang-dedicated.py baseline', builder.split('if: inputs.dry_run == false', 1)[0])
 
@@ -391,7 +391,7 @@ class EnrollmentTest(unittest.TestCase):
         cfg = json.loads((ROOT/'os/build-only/mustang-runtime.json').read_text())
         bound = lane.configuration()
         self.assertEqual(cfg['runner']['lifetime'], 'ephemeral')
-        self.assertEqual(cfg['appInputsRecord'], 'os/app-inputs/frankel-2026110901.json')
+        self.assertEqual(cfg['appInputsRecord'], 'os/app-inputs/frankel-2026111001.json')
         got = dedicated.guard(bound, cfg, env, dry_run=True)
         self.assertIsNone(got['baselineTargetFiles'])
         with self.assertRaisesRegex(ValueError, 'cannot publish'):
@@ -474,19 +474,28 @@ class EnrollmentTest(unittest.TestCase):
     def cleanup_steps(self, job):
         steps = []
         current = None
+        run_block = False
         body = job.split('\n    steps:\n', 1)[1]
         for line in body.splitlines():
             if line.startswith('    - '):
                 if current:
                     steps.append(current)
                 current = {'if': None, 'id': None, 'run': '', 'uses': ''}
+                run_block = False
                 key, _, value = line[6:].partition(':')
                 if key in ('if', 'id', 'run', 'uses'):
                     current[key] = value.strip()
+                    if key == 'run' and value.strip() == '|':
+                        current['run'], run_block = '', True
+            elif current is not None and run_block and line.startswith('        '):
+                current['run'] += line.strip() + '\n'
             elif current is not None and line.startswith('      ') and not line.startswith('        '):
+                run_block = False
                 key, _, value = line.strip().partition(':')
                 if key in ('if', 'id', 'run', 'uses'):
                     current[key] = value.strip()
+                    if key == 'run' and value.strip() == '|':
+                        current['run'], run_block = '', True
         if current:
             steps.append(current)
         return steps
@@ -709,7 +718,15 @@ class WorkflowCliContractTest(unittest.TestCase):
         for line in (ROOT/'.github/workflows/mustang-ota-dedicated.yml').read_text().splitlines():
             if marker not in line:
                 continue
-            found.append(shlex.split(line.split(marker, 1)[1].strip()))
+            argv = shlex.split(line.split(marker, 1)[1].strip())
+            if '>' in argv:
+                # The shell consumes stdout redirection; it is not a CLI argument.
+                # Keep checking the real command, with only this explicit syntax.
+                self.assertEqual(argv[-2], '>')
+                self.assertIn(argv[-1], ('$RUNNER_TEMP/bootstrap-metadata-cleanup.json',
+                                          '$RUNNER_TEMP/bootstrap-runner-cleanup.json'))
+                argv = argv[:-2]
+            found.append(argv)
         self.assertGreaterEqual(len(found), 8)
         self.assertIn(['put-metadata', '--execute', '--file', '$RUNNER_TEMP/mustang-jit'], found)
         return found

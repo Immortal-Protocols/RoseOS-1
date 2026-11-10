@@ -16,7 +16,7 @@
   "hostDependenciesEvidence": "os/build-only/mustang-hostdeps-42512135815.json",
   "allocationState": "os/build-only/mustang-allocation-state-20261107.json",
   "clockNumbering": "os/build-only/mustang-clock-numbering.json",
-  "appInputsRecord": "os/app-inputs/frankel-2026110901.json",
+  "appInputsRecord": "os/app-inputs/frankel-2026111001.json",
   "baselineTargetFiles": null,
   "baselineFactoryEvidence": null,
   "runner": {
@@ -30,6 +30,6 @@
     "enabled": true,
     "authorityRecord": "os/build-only/mustang-dedicated-publication-authority.json"
   },
-  "basis": "Dedicated full-delivery source bindings selected: exact VM/disk, group5 ephemeral JIT, jobs24, measured native/hosted tool pins, fresh Frankel2026110901 app export, source/copy verification contract, original v1 signer and manual publication authority. Nathan confirmed existing group6/hosted runner3 Ready, Ubuntu24.04 Linux x64,4CPU/16GB/150GB plus public-repository and exact main-workflow scheduling access. Explicit output budgets are caps, not measurements. Source admission does not establish current hardware/free bytes, native success, allocation, signing, publication or phone compatibility. All same-run checks and owned STOP/cleanup remain mandatory; no runtime dispatch occurs in this source change. Fresh common artifact13649846651 is1865637 bytes, archive digest e14607d7385952a19c9b78977d0c3dd6f84f1e8d76cc31bb7ae35bf09c4bc3d0; it is not an OTA extraction.",
+  "basis": "Dedicated full-delivery source bindings selected: exact VM/disk, group5 ephemeral JIT, jobs24, measured native/hosted tool pins, fresh Frankel2026111001 app export, source/copy verification contract, original v1 signer and manual publication authority. Nathan confirmed existing group6/hosted runner3 Ready, Ubuntu24.04 Linux x64,4CPU/16GB/150GB plus public-repository and exact main-workflow scheduling access. Explicit output budgets are caps, not measurements. Source admission does not establish current hardware/free bytes, native success, allocation, signing, publication or phone compatibility. All same-run checks and owned STOP/cleanup remain mandatory; no runtime dispatch occurs in this source change. Fresh common artifact13781175876 is1875279 bytes, archive digest 4cb8c4ff5ed801210f687071ea5e48442ee11712e7e4f3877495456ee07376ef; it is not an OTA extraction. This selects voice370, calculator6 and background control41 from producer42813894214/source6bab12cd; the old retained compile/export and its consumed clock journal remain unchanged and cannot substitute for a fresh full compile.",
   "candidateContinuity": "os/build-only/mustang-candidate-continuity-20261107.json"
 }
