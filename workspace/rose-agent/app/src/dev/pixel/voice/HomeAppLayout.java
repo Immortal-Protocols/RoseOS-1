@@ -134,6 +134,15 @@ final class HomeAppLayout {
   return dateTop + dateLine + BELOW_DATE_DP * density;
  }
 
+ /** The gap between cells for columns cells of cellWidth across an inner width (one unit): the page's reference gap,
+  * narrowed only as far as minGap when that many cells would not otherwise fit (Nov 7 plan 1O: a chosen Home column
+  * count). Whenever the reference gap fits, as it does for every automatic plan, it is returned unchanged. */
+ static float fitGap(float innerWidth, int columns, float cellWidth, float gap, float minGap) {
+  if (columns <= 1) return gap;
+  float spare = (innerWidth - columns * cellWidth) / (columns - 1);
+  return Math.max(Math.min(gap, minGap), Math.min(gap, spare));
+ }
+
  /** Where a row of columns cells of cellWidth with gap starts inside width: centred. */
  static float gridLeft(float width, int columns, float cellWidth, float gap) {
   return (width - (columns * cellWidth + Math.max(0, columns - 1) * gap)) / 2;

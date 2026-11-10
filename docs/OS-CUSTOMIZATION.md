@@ -30,8 +30,15 @@ Each result reports three things separately, as decided by `CustomizationOutcome
 So a 6-column request on a screen that fits 4 is never reported as 6. Home reports what it drew through
 `CustomizationStore.markHomeApplied(revision, effectiveColumns)`, which is part of the Home seam.
 
-The wallpaper variants are bounded colour transforms of the shipped Oxblood field: a hue turn of at most 12° and
-saturation/brightness factors in 0.75–1.25. `OxbloodVariantsTest` checks them against `OxbloodField`'s own palette.
+The wallpaper variants are bounded colour transforms of the shipped Oxblood field: a hue turn of at most 15° and
+saturation/brightness factors in 0.5–1.6. They were strengthened after the owner's phone check (Nov 10) found the first
+set, 0.95–1.12, invisible. `OxbloodVariantsTest` checks every variant against `OxbloodField`'s own palette.
+
+The owner's phone check also found two other problems:
+- Columns: a phone fits only four 60dp Home cells at the 17.5dp gap, so 4–8 all clamped to four and only 3 showed. A
+  chosen count may now narrow the gap toward 6dp (`HomeAppLayout.fitGap`), so a phone fits 3–5. Automatic plans keep
+  their gap.
+- Font: the Home page shows no labels. The Home date now carries a chosen font; the default is unchanged.
 
 Excluded: theme switching, web-app shortcuts, motion controls and general widgets. Also excluded: an exported or
 permissioned API that raises the OS edge, a direct command endpoint, and any trust expansion.
