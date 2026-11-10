@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "scope": "prototype-only",
+  "colors": {
+    "background": "#0B141D",
+    "surface": "#142536",
+    "surface-raised": "#20374A",
+    "surface-pressed": "#29475D",
+    "text-primary": "#F0F6FA",
+    "text-secondary": "#B8CAD8",
+    "text-on-accent": "#08131D",
+    "border-decorative": "#405B70",
+    "border-control": "#7897AE",
+    "accent": "#A6D8F5",
+    "focus": "#D5EDFF",
+    "selected-bg": "#A6D8F5",
+    "selected-fg": "#08131D",
+    "pressed-bg": "#7BAAC8",
+    "pressed-fg": "#08131D",
+    "disabled-bg": "#20303D",
+    "disabled-fg": "#899DAE",
+    "warning": "#FFD28A",
+    "destructive": "#FFABAC",
+    "mic-muted": "#FFABAC",
+    "success": "#AFE0C0",
+    "silver-edge": "#CBDCE7"
+  }
+}
