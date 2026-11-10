@@ -1,5 +1,11 @@
 # Dedicated retained-output delivery
 
+Current policy: Nathan disabled the custom target-files archive validator. The
+runtime passes authenticated, hash-checked target files unchanged to the pinned
+Android signing tools and emits no custom target-validation proof. Executable
+archive, provenance, capacity and signature checks remain. The validator sections
+below describe the prior implementation, which remains unused library code.
+
 This is source integration for one producer, not a dispatch or a new OTA claim.
 PR #725 fixes the canonical lock selection. The dedicated workflow's optional
 `retained_compile_run` accepts only `42664204892`; its empty default preserves

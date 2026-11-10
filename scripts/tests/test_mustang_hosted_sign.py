@@ -209,15 +209,19 @@ class HostedSignGateTest(unittest.TestCase):
 
         self.assert_secret_closed(hashed, 'signing bundle hash differs')
         unsafe = self.tiny_bundle(zip_member='../escape')
+        unsafe[1]['otatools'].write_bytes(unsafe[1]['unsigned'].read_bytes())
+        unsafe[0]['otatools'].update(sha256=digest(unsafe[1]['otatools']),sizeBytes=unsafe[1]['otatools'].stat().st_size)
         def slipped(secret_access):
             hosted.evaluate(unsafe[0], ROOT, free=10 ** 18, files=unsafe[1], secret_access=secret_access,
                             pin=unsafe[2], env=ENV, capacity_config=self.admitted())
-        self.assert_secret_closed(slipped, 'unsafe zip member')
+        self.assert_secret_closed(slipped, 'otatools archive: unsafe zip member')
         linked = self.tiny_bundle(symlink=True)
+        linked[1]['jdk'].write_bytes(linked[1]['unsigned'].read_bytes())
+        linked[0]['jdk'].update(sha256=digest(linked[1]['jdk']),sizeBytes=linked[1]['jdk'].stat().st_size)
         def link(secret_access):
             hosted.evaluate(linked[0], ROOT, free=10 ** 18, files=linked[1], secret_access=secret_access,
                             pin=linked[2], env=ENV, capacity_config=self.admitted())
-        self.assert_secret_closed(link, 'unsigned archive: unsafe zip symlink: "link"')
+        self.assert_secret_closed(link, 'jdk archive: unsafe zip symlink: "link"')
         absent_bundle, absent_files, absent_pin = self.tiny_bundle()
         absent_files.pop('jdk')
         def absent(secret_access):
@@ -794,8 +798,7 @@ class HostedSignGateTest(unittest.TestCase):
         self.assertEqual(secret, ['sign'])
         self.assertEqual(hosted.bind_outputs(out, env=ENV)['sourceSha'], ENV['GITHUB_SHA'])
         self.assertEqual(receipt['outputs']['signedTargetFiles']['sha256'], digest(out / 'signed-target_files.zip'))
-        self.assertEqual(receipt['targetArchiveValidation']['artifact']['sha256'], bundle['unsigned']['sha256'])
-        self.assertFalse(receipt['targetArchiveValidation']['targetFilesExtractedByPreflight'])
+        self.assertNotIn('targetArchiveValidation', receipt)
 
     def test_zip_traversal_symlink_duplicate_bomb_modes_and_resume(self):
         bundle, files, pin = self.tiny_bundle()
@@ -1088,12 +1091,11 @@ class HostedSignGateTest(unittest.TestCase):
         files['unsigned'].write_bytes(path.read_bytes())
         bundle['unsigned'].update(sha256=digest(files['unsigned']),sizeBytes=files['unsigned'].stat().st_size)
         root=self.checkout(files['generateRelease'].read_bytes())
-        result=hosted.evaluate(bundle,root,10**18,files=files,pin=pin,env=ENV,
-                               capacity_config=self.admitted())
+        with patch.object(hosted,'validate_target_zip',side_effect=AssertionError('validator is disabled')):
+            result=hosted.evaluate(bundle,root,10**18,files=files,pin=pin,env=ENV,
+                                   capacity_config=self.admitted())
         self.assertTrue(result['admit'])
-        self.assertEqual(result['targetArchiveValidation']['artifact'],
-                         {k:bundle['unsigned'][k] for k in ('sha256','sizeBytes')})
-        self.assertEqual(result['targetArchiveValidation']['symlinkCount'],1)
+        self.assertIsNone(result['targetArchiveValidation'])
         for kind,pin_name in [('otatools','otatoolsSha256'),('jdk','jdkSha256')]:
             b,f,p=self.tiny_bundle()
             f[kind].write_bytes(path.read_bytes())
