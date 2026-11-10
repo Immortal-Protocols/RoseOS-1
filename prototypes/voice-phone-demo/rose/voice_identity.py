@@ -160,7 +160,9 @@ def request_from(args: dict) -> dict:
         raise ValueError('gender must be same, female, male or either')
     accent = str(args.get('accent') or '').strip()
     accent_name = str(args.get('accent_name') or '').strip()
-    if accent.lower() == 'american':
+    if accent.lower() == 'american' and accent_name:  # a named American accent ("Southern") decides
+        accent, accent_american = accent_name, american(accent_name)
+    elif accent.lower() == 'american':
         accent, accent_american = 'American', True
     elif accent.lower() == 'other':
         accent, accent_american = accent_name or 'another accent', False
@@ -460,13 +462,18 @@ class VoiceIdentity:
         if best is None and request['gender'] in ('same', 'either'):  # another gender only when none was named
             best = next((e for e in wider if e['toward'] and not e['against']), None)
         if best is None and request['keep']:
-            # Only a kept aspect stands in the way: offer the voice that breaks the keep least, the broken keep named
-            # in its unmet so the owner decides.
+            # Only a kept aspect stands in the way: offer the voice that moves the asked way and, of those, meets the
+            # most and breaks the keep least, the broken keep named in its unmet so the owner decides.
             near = [e for e in ranked if all(a.startswith('same_') for a in e['against'])
-                    and (e['met'] or changing_gender)
+                    and (e['toward'] or changing_gender)
                     and (changing_gender or request['gender'] == 'either'
                          or self._gender(e['voice']) == gender)]  # no unasked gender change
-            best = min(near, key=lambda e: (len(e['against']), e['score']), default=None)
+
+            def breach(e):
+                real = deltas(self.traits['voices'][current], self.traits['voices'][e['voice']])
+                return sum(abs(real[a[len('same_'):]]) / DIMENSIONS[a[len('same_'):]]['scale'] for a in e['against'])
+            best = min(near, key=lambda e: (len(e['against']), sum(not u.startswith('same_') for u in e['unmet']),
+                                            breach(e), e['score']), default=None)
         scope = '' if request['gender'] in ('either',) else f'{request["gender"] if changing_gender else gender} '
         kept = ' and '.join(request['keep'])
         blocked = [e for e in ranked if e['met'] and e['against'] and all(a.startswith('same_') for a in e['against'])]
@@ -476,14 +483,13 @@ class VoiceIdentity:
             names = ' and '.join(a[len('same_'):] for a in sorted(common))
             message = f'Every available {scope}voice that fits also changes the {names} you asked to keep.'
         elif request['wanted']:
-            # Name a kept aspect only when it is what stops a voice that moves the asked way.
-            moving = [e for e in ranked if e['toward']]
-            stopping = sorted({a[len('same_'):] for e in moving for a in e['against'] if a.startswith('same_')})
+            # No voice is stopped by a keep alone (that is the message above), so none is named here; "the other
+            # way" only when a voice that goes far enough also moves another asked aspect the wrong way.
+            contrary = any(e['met'] and any(not a.startswith('same_') for a in e['against']) for e in ranked)
             message = (f'No available {scope}voice is ' + ' and '.join(w.replace('_', ' ')
                                                                     for w in self._words(request['wanted']))
                        + (f' than a typical {request["gender"]} voice' if changing_gender else ' than the current one')
-                       + (f' while keeping the same {" and ".join(stopping)}.' if stopping else
-                          ('.' if changing_gender or not moving else ' without moving the other way.')))
+                       + (' without moving the other way.' if contrary and not changing_gender else '.'))
         else:
             message = f'No available {scope}voice fits that description' + (f' while keeping the same {kept}.'
                                                                             if kept else '.')
@@ -621,11 +627,12 @@ TOOLS = [
          'gender': {'type': 'string', 'enum': list(GENDERS),
                     'description': 'same (default) keeps the current gender; either only if the owner does not mind.'},
          'accent': {'type': 'string', 'enum': ['american', 'other'],
-                    'description': 'american when the owner asks for an American (US) accent or to keep the current '
-                                   'one; other when they want any other accent or a less American one, named in '
-                                   'accent_name. Omit it when they do not mind or only rule out a non-American one.'},
-         'accent_name': {'type': 'string', 'description': 'With accent other: that accent in the owner\'s words, for '
-                                                            'example British.'},
+                    'description': 'american when the owner asks for a general American (US) accent or to keep the '
+                                   'current one; other when they want any other accent, a regional one (Southern, New '
+                                   'York) or a less American one, named in accent_name. Omit it when they do not mind '
+                                   'or only rule out a non-American one.'},
+         'accent_name': {'type': 'string', 'description': 'The accent in the owner\'s words when they named one, for '
+                                                            'example British or Southern.'},
          'other': {'type': 'array', 'items': {'type': 'string'}},
          'voice': {'type': 'string', 'description': 'Only a voice a previous change_voice result offered.'}},
          'additionalProperties': False}},

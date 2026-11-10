@@ -408,6 +408,39 @@ class Matching(unittest.TestCase):
         r, _ = self.change('everly', pitch='lower', warmth='same')  # a lower voice exists but changes the warmth
         self.assertIn('warmth you asked to keep', r['message'])
 
+    def test_no_match_message_has_no_false_cause(self):
+        # Voices that are livelier break the warmth keep and are also slower: the keep is not the cause.
+        r, _ = self.change('zoey', warmth='same', liveliness='livelier', pace='faster', gender='female')
+        self.assertNotIn('keeping', r['message'])
+        self.assertIn('the other way', r['message'])
+        for current, args in (('everly', {'pitch': 'much_lower'}), ('harper', {'liveliness': 'much_calmer'}),
+                              ('everly', {'pitch': 'much_higher'}), ('delia', {'pitch': 'much_lower', 'warmth': 'same'})):
+            r, _ = self.change(current, **args)  # short of a full step, not moving anything the wrong way
+            self.assertEqual(r['reason'], 'no_close_match', (current, args))
+            self.assertNotIn('the other way', r['message'], (current, args))
+            self.assertNotIn('keeping', r['message'], (current, args))
+
+    def test_keep_blocked_offer_meets_most_and_breaks_the_keep_least(self):
+        r, _ = self.change('zoey', pitch='lower', liveliness='same')
+        cands = [v for v in vi.TRAITS['voices'] if vi.TRAITS['voices'][v]['gender'] == 'female' and v != 'zoey'
+                 and vi.deltas(vi.TRAITS['voices']['zoey'], vi.TRAITS['voices'][v])['pitch']
+                 <= -vi.DIMENSIONS['pitch']['least']]
+        live = lambda v: abs(vi.deltas(vi.TRAITS['voices']['zoey'], vi.TRAITS['voices'][v])['liveliness'])
+        self.assertEqual(r['alternative']['voice'], min(cands, key=live))
+        r, _ = self.change('everly', pitch='lower', warmth='warmer', pace='same')
+        self.assertEqual(set(r['alternative']['met']), {'lower', 'warmer'})
+        r, _ = self.change('delia', pitch='much_lower', warmth='same')  # a partial that breaks the keep is offered
+        self.assertIn('same_warmth', r['alternative']['unmet'])
+        self.assertIn('much_lower', r['alternative']['unmet'])
+
+    def test_a_named_american_accent_decides(self):
+        r, _ = self.change('zoey', accent='american', accent_name='Southern', pitch='lower')
+        self.assertIn('none is Southern', r['limits'][0])
+        r, _ = self.change('zoey', accent='american', accent_name='Southern')
+        self.assertNotEqual(r['reason'], 'already')
+        r, speaker = self.change('zoey', accent='american', accent_name='General American')
+        self.assertEqual((r['reason'], speaker.calls), ('already', []))
+
     def test_either_gender_keep_blocked_offer_may_be_another_gender(self):
         r = vi.VoiceIdentity().change_voice(Speaker('miles'), {'liveliness': 'calmer', 'pitch': 'same',
                                                                'gender': 'either'})
