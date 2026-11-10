@@ -126,3 +126,62 @@ peak must still fit the selected disk. Output, extraction, scratch and reserve
 budgets are not credited or reduced, and the metadata gate remains unchanged.
 This correction does not change symlink policy or resolve the unidentified
 target-files member. No runtime or publication follows from the source change.
+
+## Android payload links and executable archives
+
+The pinned `platform_build` revision
+`b0f697df8cc9519408ca0a404e918cd51bde0735` explicitly preserves symlinks in
+`sign_target_files_apks.WriteOutputData`, materializes them in
+`common.UnzipSingleFile`, and repacks with `zip -y`. A target-files archive is
+therefore validated separately from the JDK and otatools archives. Those
+executable inputs still reject every symlink, including directory-shaped ones.
+
+The target validator does not extract, follow on the host, rewrite or remove
+payload links. It checks canonical member names, duplicate paths, file types,
+encryption, expansion and bounded link metadata. Links are confined to Android
+payload trees; signer control paths remain regular data. No member may have a
+symlink or regular-file parent. The complete graph resolves components in
+filesystem order, following a link before processing `..`; cycles, excessive
+chains and paths leaving the payload or reaching signer metadata refuse.
+
+Absolute links are not automatically accepted as Android data. They require a
+recognized Android namespace and a fresh observation that the corresponding
+host root is absent. Existing roots, broken host symlinks, unavailable facts,
+root execution, a writable host root or effective capabilities refuse. This
+keeps such targets inert on the signer. Absolute links into real host namespaces
+remain refused even when they might be valid on an Android device.
+
+These checks run after authenticated input-byte checks and before signer login;
+signing repeats them before reading key payloads. Capacity and source/input
+bindings remain mandatory. The hosted receipt records the unsigned ZIP identity,
+link-inventory digest, counts and observed absent host roots. Expected source
+does not prove that the retained ZIP's unknown member passes this policy.
+
+Offline coverage includes relative and absolute chains, cycles, link parents,
+component-order traversal, canonicalization, actual host-observation refusal,
+malformed ZIP metadata, executable-role rejection and the pinned writer/repack
+behavior on small controlled fixtures. It does not execute the qualified
+otatools archive or establish actual retained-input admission, signing,
+publication or device compatibility. App-source freshness and the retained
+delivery-only source contract are unchanged.
+
+## Source freshness after the compiled producer
+
+PR #729 (`060f837aa11f47c435f7e107b7fcb8d8eeadaeaf`) changes the
+`workspace/rose-agent/app` customization asset, Java implementation and tests.
+That subtree is a declared source of `dev.pixel.voice` in the existing app
+allocation contract. The accepted `frankel-2026110901` export predates those
+changes, so current app freshness reports voice drift. The retained-delivery
+source comparison independently refuses the app changes; its original compiled
+app-admission proof also remains bound to the old export.
+
+A new export cannot change the APK bytes already inside the retained OS.
+Without reverting the app work or weakening freshness, delivery therefore needs
+the existing Release owner to produce and commit a fresh common app export,
+followed by consistent Mustang consumer pins in `mustang_route.py` and
+`mustang-runtime.json`, then the normal full compile/sign/publication path with
+`retained_compile_run` empty. That path issues a new clock allocation and build
+identity; it must not reuse the original consumed number or reset its journal.
+Existing preparation and qualified-tool inputs may be reused only through their
+normal authenticated checks. This source assessment does not authorize an app
+build, export, allocation or Mustang runtime dispatch.

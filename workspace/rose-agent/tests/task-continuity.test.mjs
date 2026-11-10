@@ -155,7 +155,7 @@ test('Rose\'s apps shows exactly the apps currently under Rose\'s control, never
  // #410: the upper-right Background Work entry opens it (it was the third tray well).
  assert.match(activity,/work\.setOnClickListener\(v->openOverview\(\)\)/,'the work entry opens the overview');
  assert.match(activity,/overview=new WorkspaceOverviewPanel\(this,new OxbloodField\(OxbloodField\.ROSE\),statusInset\(\)\)/);
- assert.match(activity,/public void onBackPressed\(\)\{if\(overview!=null&&overview\.isOpen\(\)\)\{overview\.close\(\);return;\}super\.onBackPressed\(\);\}/,'Back closes the overview first');
+ assert.match(activity,/public void onBackPressed\(\)\{if\(overview!=null&&overview\.isOpen\(\)\)\{overview\.close\(\);return;\}\n  if\(returnState\.sheetShown\(\)\)\{returnChoice\(ReturnModel\.STAY\);return;\}if\(returnState\.pending\(\)\)\{returnCancelled\(\);return;\}super\.onBackPressed\(\);\}/,'Back closes the overview first, then the return sheet (Stay), then cancels a pending return (1C)');
  // Membership: App Core's phone-local current_apps (PR355), one complete reply per read, shown only when attested.
  const read=block.slice(block.indexOf('CurrentApps.Snapshot readCurrentApps()'));
  assert.match(read,/client\.call\("current_apps",null,extras\)/,'the controller\'s own phone-local membership call');
@@ -213,4 +213,47 @@ test('#225 live preview: the overview reads only the controller\'s local read-on
  assert.match(panel,/if\(a==null\|\|a\.preview==null\|\|!a\.preview\.complete\(\)\|\|!a\.sessionId\.isEmpty\(\)\)return null;/,'no handle, no Watch; bound apps wait for the per-session viewer');
  assert.match(panel,/void close\(\)\{setVisibility\(GONE\);closeSheet\(\);cancelPreviews\(\);\}/,'Back cancels');
  assert.ok(!/preview/.test(source('PhoneControl.java').replace(/"preview"\.equals[^;]*;/,'').replace(/\/\/[^\n]*preview[^\n]*/g,'')),'no second preview route through PhoneControl');
+});
+
+// 1C (Nathan's Nov 9–10 plan): Designer's approved V3 return control (Rose-F11-Return.html, SHA-256 798c9a30…955ae5).
+test('the V3 return control goes back to the exact previous live task only, never a guessed app or a relaunch (1C)',()=>{
+ const activity=source('RoseConversationActivity.java'),control=source('ReturnControl.java'),model=source('ReturnModel.java');
+ const src=source('ReturnSource.java'),sheet=source('ReturnSheet.java');
+ const strip=t=>t.replace(/\/\*[\s\S]*?\*\//g,'').replace(/\/\/.*$/gm,'');
+ // Placement: the leading edge of Rose's content footer, above Connect and the chin, above an open keyboard; the
+ // content makes room while it shows and is never overlaid.
+ assert.match(activity,/new FrameLayout\.LayoutParams\(-2,dp\(ReturnControl\.HEIGHT_DP\),Gravity\.BOTTOM\|Gravity\.START\);rcp\.bottomMargin=dp\(RETURN_BOTTOM_DP\);rcp\.leftMargin=dp\(16\);/);
+ assert.match(activity,/int bottom=Math\.max\(dp\(RETURN_BOTTOM_DP\)\+navInset,imeInset\+dp\(12\)\);/);
+ assert.match(activity,/navInset=nav;imeInset=i\.getInsets\(WindowInsets\.Type\.ime\(\)\)\.bottom;layoutReturn\(\);/);
+ assert.match(activity,/int contentBottom=dp\(110\)\+navInset\+\(returnState\.controlShown\(\)\?dp\(ReturnControl\.HEIGHT_DP\+8\):0\);/);
+ // V3 fidelity: a 36dp surface in a 48dp target, its colours, the chevron, no invented icon, a separate Cancel.
+ assert.match(control,/HEIGHT_DP = 48, SURFACE_DP = 36, RADIUS_DP = 7, CHEVRON_DP = 14;/);
+ assert.match(control,/INK = 0xffe9cfbf, PENDING_INK = 0xffcdb4a6, CANCEL_INK = 0xffc9b3a6;/);
+ assert.match(control,/plate\(new int\[\]\{0xbb49202c, 0xcc29111d\}, 0x80b1737c, 0x90d4a0a5\)/);
+ assert.match(control,/plate\(new int\[\]\{0xff633040, 0xff633040\}, 0xffe1b0b2, 0xffe1b0b2\)/);
+ assert.match(control,/return new InsetDrawable\(s, 0, dp\(6\), 0, dp\(6\)\);/);
+ assert.doesNotMatch(strip(control),/ImageView|loadIcon|getApplicationIcon/,'V3 invents no app icon');
+ assert.match(model,/if \(s\.pending\(\)\) return "Returning…";/);
+ assert.match(model,/return n == null \? "Return to previous app" : "Return to " \+ n;/);
+ // Only App Core's task restoration supplies the source and the return; until then nothing is offered.
+ assert.match(activity,/static volatile ReturnSource returnSource=ReturnSource\.NONE;/);
+ assert.match(src,/public ReturnModel\.Target current\(\) \{ return null; \}/);
+ const path=strip(activity.slice(activity.indexOf('static volatile ReturnSource returnSource'),activity.indexOf('void layoutReturn()')));
+ for(const text of [path,strip(control),strip(model),strip(src),strip(sheet)])
+  assert.doesNotMatch(text,/getLaunchIntentForPackage|moveTaskToFront|target\.packageName|setPackage\(|setClassName\(/,'no relaunch stands in for the exact live task');
+ // A tap requests directly; only that request's answer is applied; Cancel and Back invalidate it.
+ assert.match(activity,/returnSource\.returnTo\(target,a->runOnUiThread\(\(\)->\{returnState=returnState\.answered\(request,a\);renderReturn\(\);\}\)\);/);
+ assert.match(activity,/returnSource\.cancel\(target\);returnControl\.announceForAccessibility\(ReturnModel\.CANCELLED\);/);
+ assert.match(activity,/if\(returnState\.sheetShown\(\)\)\{returnChoice\(ReturnModel\.STAY\);return;\}if\(returnState\.pending\(\)\)\{returnCancelled\(\);return;\}super\.onBackPressed\(\);\}/);
+ // Missing, replaced or failed: Stay, Open switcher (Home's existing recents route) or Go Home; no relaunch.
+ assert.match(sheet,/STAY, true/);assert.match(sheet,/ReturnModel\.SWITCHER, false/);assert.match(sheet,/ReturnModel\.HOME, false/);
+ assert.match(activity,/a\.performGlobalAction\(android\.accessibilityservice\.AccessibilityService\.GLOBAL_ACTION_RECENTS\)/);
+ // V3 motion is the platform's transition on the exact-task reorder, after acknowledgement only: the spec is
+ // carried as constants, and Rose itself never animates away before the answer.
+ assert.match(model,/static final int DEPART_MS = 200, DEPART_DP = 8;\n static final float\[\] DEPART_EASE = \{0\.2f, 0\.7f, 0\.3f, 1f\};/);
+ assert.doesNotMatch(path,/animate\(\)|overridePendingTransition|ActivityOptions/,'no departure before the acknowledged return');
+ // Rose's work keeps going: nothing in the return path ends the call, finishes the screen or stops a task.
+ assert.doesNotMatch(path.replace(/returnCancelled|cancelled\(\)|cancel\(target\)|CANCELLED/g,''),/finish|send\(|command\(|ownerStop|\/task\/stop/);
+ // A successful return pauses Rose before its answer: leaving the screen never cancels a pending request.
+ assert.doesNotMatch(strip(activity.slice(activity.indexOf('protected void onPause()'),activity.indexOf('void refresh()'))),/returnState/);
 });

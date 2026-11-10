@@ -310,6 +310,9 @@ java -cp "$JAVA_TESTS/HomePlan" dev.pixel.voice.HomePlanTest
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/AppRemoval" \
  workspace/rose-agent/app/src/dev/pixel/voice/AppRemoval.java workspace/rose-agent/app/tests/AppRemovalTest.java
 java -cp "$JAVA_TESTS/AppRemoval" dev.pixel.voice.AppRemovalTest
+java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/ReturnModel" \
+ workspace/rose-agent/app/src/dev/pixel/voice/ReturnModel.java workspace/rose-agent/app/tests/ReturnModelTest.java
+java -cp "$JAVA_TESTS/ReturnModel" dev.pixel.voice.ReturnModelTest
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/HomeAppGroups" \
  workspace/rose-agent/app/src/dev/pixel/voice/HomeAppGroups.java workspace/rose-agent/app/tests/HomeAppGroupsTest.java
 java -cp "$JAVA_TESTS/HomeAppGroups" dev.pixel.voice.HomeAppGroupsTest
