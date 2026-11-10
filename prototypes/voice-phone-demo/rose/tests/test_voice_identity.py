@@ -213,6 +213,70 @@ class Matching(unittest.TestCase):
         self.assertEqual((r['reason'], speaker.calls), ('already', []))
         self.assertIn('already female', r['message'])
 
+    def test_same_keeps_that_aspect(self):
+        r, _ = self.change('zoey', warmth='warmer', pitch='same')
+        self.assertTrue(r['ok'])
+        d = vi.deltas(vi.TRAITS['voices']['zoey'], vi.TRAITS['voices'][r['voice']])
+        self.assertLessEqual(abs(d['pitch']), vi.DIMENSIONS['pitch']['step'])
+        self.assertGreater(d['warmth'], 0)
+
+    def test_a_much_request_offers_a_same_gender_voice_that_moves_part_way(self):
+        r, speaker = self.change('delia', pitch='much_higher')
+        self.assertEqual((r['reason'], speaker.calls), ('no_close_match', []))
+        alt = r['alternative']
+        self.assertEqual(alt['gender'], 'female')
+        self.assertGreater(vi.deltas(vi.TRAITS['voices']['delia'], vi.TRAITS['voices'][alt['voice']])['pitch'], 0)
+        self.assertNotIn('much_', r['message'])
+
+    def test_another_gender_with_a_pitch_qualifier_is_judged_among_that_gender(self):
+        r, _ = self.change('easton', gender='female', pitch='lower')  # "a woman with a deeper voice"
+        self.assertTrue(r['ok'])
+        females = sorted((v['pitch_hz'], n) for n, v in vi.TRAITS['voices'].items() if v['gender'] == 'female')
+        self.assertLess(vi.TRAITS['voices'][r['voice']]['pitch_hz'], females[len(females) // 2][0])
+        r, _ = self.change('zoey', gender='male', pitch='lower')  # "a lower, male voice"
+        self.assertTrue(r['ok'])
+        self.assertEqual(vi.TRAITS['voices'][r['voice']]['gender'], 'male')
+
+    def test_an_asked_gender_alternative_is_never_another_gender(self):
+        r, _ = self.change('zoey', gender='male', warmth='warmer')
+        self.assertFalse(r['ok'])
+        self.assertTrue('alternative' not in r or r['alternative']['gender'] == 'male', r)
+
+    def test_american_accents_are_recognised(self):
+        for accent in ('American', 'American English', 'US English', 'a General American accent', 'en-US', 'U.S.'):
+            r, speaker = self.change('zoey', accent=accent)
+            self.assertEqual((r['reason'], speaker.calls), ('already', []), accent)
+            r, _ = self.change('zoey', accent=accent, pitch='lower')
+            self.assertTrue(r['ok'], accent)
+            self.assertNotIn('limits', r, accent)
+        r, _ = self.change('zoey', accent='British English', pitch='lower')
+        self.assertIn('none is British English', r['limits'][0])
+
+    def test_an_offer_answers_only_the_next_call_and_alone(self):
+        identity, speaker = vi.VoiceIdentity(), Speaker('easton')
+        alt = identity.change_voice(speaker, {'warmth': 'warmer'})['alternative']['voice']
+        mixed = identity.change_voice(speaker, {'voice': alt, 'pace': 'slower'})
+        self.assertEqual((mixed['reason'], speaker.calls), ('invalid_request', []))
+        self.assertTrue(identity.change_voice(speaker, {'voice': alt})['ok'])  # the offer still stood
+        identity, speaker = vi.VoiceIdentity(), Speaker('easton')
+        alt = identity.change_voice(speaker, {'warmth': 'warmer'})['alternative']['voice']
+        identity.change_voice(speaker, {'accent': 'British'})  # another result in between
+        self.assertEqual(identity.change_voice(speaker, {'voice': alt})['reason'], 'not_offered')
+
+    def test_a_voice_that_failed_to_load_is_retried_later_or_once_it_loads(self):
+        best = vi.match('zoey', vi.request_from({'warmth': 'warmer'}), ALL)[0]['voice']
+        identity, speaker = vi.VoiceIdentity(), Speaker('zoey', missing={best})
+        self.assertNotEqual(identity.change_voice(speaker, {'warmth': 'warmer'})['voice'], best)
+        speaker.missing.clear()
+        speaker.voice = 'zoey'
+        self.assertNotEqual(identity.change_voice(speaker, {'warmth': 'warmer'})['voice'], best)  # still skipped
+        with patch('rose.voice_identity.time.monotonic', return_value=time.monotonic() + vi.UNAVAILABLE_RETRY_S + 1):
+            speaker.voice = 'zoey'
+            self.assertEqual(identity.change_voice(speaker, {'warmth': 'warmer'})['voice'], best)
+        identity.unavailable[best] = time.monotonic()
+        self.assertTrue(identity.adopt('zoey', best))
+        self.assertNotIn(best, identity.unavailable)
+
     def test_invalid_or_empty_requests_change_nothing(self):
         for args in ({}, {'pitch': 'sideways'}, {'gender': 'robot'}, {'pitch': 'same'}):
             r, speaker = self.change('zoey', **args)
@@ -396,6 +460,12 @@ class Conversation(unittest.TestCase):
         back = self.tool('revert_voice')
         self.assertTrue(back['ok'])
         self.assertEqual(self.speaker.voice, 'zoey')
+
+    def test_a_new_conversation_has_no_standing_offer(self):
+        self.speaker.voice = 'easton'
+        self.assertIn('alternative', self.tool('change_voice', warmth='warmer'))
+        self.engine.reset()
+        self.assertIsNone(self.identity.offered)
 
     def test_unavailable_closest_voice_is_reported_not_claimed(self):
         r = self.tool('change_voice', accent='Scottish')

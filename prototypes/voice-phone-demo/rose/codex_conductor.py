@@ -817,6 +817,7 @@ class CodexConductor:
             with self._lock:
                 self._late_notes = []  # the new conversation never made those calls
                 self._copy_outcomes.clear()
+            self.identity.offered = None  # the new conversation was offered no voice
             s = self.sessions['conversation'] = Session('conversation', conversation=self.conversation)
             self._open(s, self._policy(), CONVERSATION_TOOLS)
             self.bus.emit('reset')
