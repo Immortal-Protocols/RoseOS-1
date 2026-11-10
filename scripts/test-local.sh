@@ -411,6 +411,11 @@ java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-option
  workspace/rose-agent/app/src/dev/pixel/voice/RoseFonts.java workspace/rose-agent/app/src/dev/pixel/voice/CustomizationConfig.java workspace/rose-agent/app/src/dev/pixel/voice/CustomizationOutcome.java \
  workspace/rose-agent/app/tests/CustomizationOutcomeTest.java
 java -cp "$JAVA_TESTS/CustomizationOutcome" dev.pixel.voice.CustomizationOutcomeTest
+# 1C: the return control's exact-task source over the SystemUI tray link (protocol v1, OS Core's shell side).
+java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/TrayReturn" \
+ workspace/rose-agent/app/src/dev/pixel/voice/ReturnModel.java workspace/rose-agent/app/src/dev/pixel/voice/ReturnSource.java \
+ workspace/rose-agent/app/src/dev/pixel/voice/TrayReturn.java workspace/rose-agent/app/tests/TrayReturnTest.java
+java -cp "$JAVA_TESTS/TrayReturn" dev.pixel.voice.TrayReturnTest
 # Native glasses-button duplicate suppression (media-button handling on the native side).
 java -m jdk.compiler/com.sun.tools.javac.Main -source 8 -target 8 -Xlint:-options -d "$JAVA_TESTS/Button" \
  workspace/rose-agent/app/src/dev/pixel/voice/GlassesButtonGate.java workspace/rose-agent/tests/java/dev/pixel/voice/ButtonTest.java
