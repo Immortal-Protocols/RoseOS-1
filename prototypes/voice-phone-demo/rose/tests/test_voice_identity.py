@@ -847,6 +847,31 @@ class Conversation(unittest.TestCase):
         self.assertEqual(results['B']['message'].count('From the previous conversation'), 1)
         self.assertEqual((self.speaker.voice, self.identity.voice), (results['A']['voice'],) * 2)
 
+    def test_a_stale_voice_call_queued_behind_a_slow_tool_blocks_no_new_conversation(self):
+        s = self.engine.sessions['conversation']
+
+        def call(session, cid, tool, args):
+            self.engine._tool(session, {'callId': cid, 'params': {'tool': tool, 'arguments': args,
+                                                                   'turnId': session.turn, 'callId': 't' + cid}})
+        s.lock.acquire()  # a slow phone tool (a copy, a screen read) in the old conversation
+        try:
+            stale = threading.Thread(target=call, args=(s, 'R', 'rename_assistant', {'name': 'Nova'}))
+            stale.start()
+            stale.join(0.2)
+            self.engine.reset()
+            s2 = self.engine.sessions['conversation']
+            new = threading.Thread(target=call, args=(s2, 'B', 'rename_assistant', {'name': 'Iris'}))
+            new.start()
+            new.join(2)
+            self.assertFalse(new.is_alive())  # not held up by the old conversation's slow tool
+        finally:
+            s.lock.release()
+        stale.join(5)
+        results = {m['callId']: json.loads(m['result']['contentItems'][0]['text']) for m in self.engine.client.results}
+        self.assertTrue(results['B']['ok'])
+        self.assertIn('Cancelled or stale', results['R']['reason'])
+        self.assertEqual(self.identity.name, 'Iris')
+
     def test_a_note_carried_while_a_reset_switches_is_not_carried_twice(self):
         old = self.engine.conversation
         note = (old, '[Before this message, your change_voice call that was answered as cancelled finished: {}.]')

@@ -546,9 +546,7 @@ class CodexConductor:
         name, args = p['tool'], p['arguments']
         result, image = None, None
         try:
-            # The conductor-wide identity lock first, so a voice call waiting on a slow one holds nothing this
-            # conversation's other tools need.
-            with (self._identity_lock if name in voice_identity.NAMES else contextlib.nullcontext()), s.lock:
+            with self._tool_locks(s, name in voice_identity.NAMES):
                 if s.cancelled.is_set() or self._stopped.is_set() or p['turnId'] in s.ignored_turns or (s.turn and p['turnId'] != s.turn):
                     result = {'ok': False, 'reason': 'Cancelled or stale turn; no action executed'}
                 else:
@@ -661,6 +659,28 @@ class CodexConductor:
             self._identity_notes[note] = kind
         if note[0] == self.conversation:  # a reset conversation's other calls never reach the new one
             self._late_notes.append(note)
+
+    @contextlib.contextmanager
+    def _tool_locks(self, s, identity):
+        """The session's lock and, for a name or voice call, the conductor-wide identity lock. Neither is held while
+        waiting for the other, so a call queued behind a slow one blocks neither its conversation's other tools nor
+        another conversation's name or voice calls."""
+        if not identity:
+            with s.lock:
+                yield
+            return
+        while True:
+            s.lock.acquire()
+            if self._identity_lock.acquire(blocking=False):
+                break
+            s.lock.release()
+            with self._identity_lock:  # wait for the slow call, holding no session lock
+                pass
+        try:
+            yield
+        finally:
+            self._identity_lock.release()
+            s.lock.release()
 
     def _carried(self, note):
         if note[0] == self.conversation:  # already carried (it finished while the reset was switching)
