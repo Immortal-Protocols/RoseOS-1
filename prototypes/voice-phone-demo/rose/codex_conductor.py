@@ -16,6 +16,7 @@ import time
 from dataclasses import dataclass, field
 
 from . import customization, voice_identity
+from . import life as rosie_life
 from .codex_client import CodexClient
 from .transcripts import redact
 
@@ -70,6 +71,8 @@ CONVERSATION_POLICY += customization.POLICY_LINE + '\n'
 # Nov 9 plan 1D: the owner names the assistant and describes its voice (rose/voice_identity.py).
 CONVERSATION_TOOLS += voice_identity.TOOLS
 CONVERSATION_POLICY += voice_identity.POLICY_LINE + '\n'
+CONVERSATION_TOOLS += rosie_life.TOOLS
+CONVERSATION_POLICY += rosie_life.POLICY + '\n'
 
 
 @dataclass
@@ -109,10 +112,12 @@ class TaskAnnouncement:
 
 class CodexConductor:
     def __init__(self, phone, bus, speaker, transcripts, model='gpt-6.1-terra', client_factory=CodexClient,
-                 identity=None):
+                 identity=None, life=None):
         self.phone, self.bus, self.speaker, self.store = phone, bus, speaker, transcripts
         # The owner's name and voice for the assistant; in memory unless the producer passes its saved one.
         self.identity = identity or voice_identity.VoiceIdentity()
+        self.life = life
+        self._activity_heartbeat_at = 0.0
         self.model = model
         self.conversation = transcripts.new(model)
         self.sessions = {'conversation': Session('conversation', conversation=self.conversation)}
@@ -182,6 +187,8 @@ class CodexConductor:
         self._background(self._user_turn, text)
 
     def _user_turn(self, text):
+        if self.life is not None:
+            self.life.user_active()
         s = self.sessions['conversation']
         try:
             with s.submit_lock:
@@ -419,11 +426,25 @@ class CodexConductor:
         if held and controller_task:
             binding = {'sessionId': held['sessionId'], 'targetPackage': held['targetPackage'],
                        'controllerTaskId': controller_task}
-        data.update(contract=1, server=s.conversation if s else self.conversation, workspace=binding)
+        data.update(contract=1, server=s.conversation if s else self.conversation, workspace=binding,
+                    activity={'version': 1, 'sample': time.monotonic_ns() // 1000000,
+                              'executing': bool(s and s.busy and s.turn and task.status == 'running'
+                                                and task.background)})
         return redact(data)
 
     def _task_event(self, s):
         self.bus.emit('task', task=self.task_snapshot(s.task))
+
+    def _activity_heartbeat(self):
+        # Revalidate actual executing app turns; an idle retained workspace is
+        # never activity. No timers in the phone fabricate continuing work.
+        now = time.monotonic()
+        if now - self._activity_heartbeat_at < 1:
+            return
+        self._activity_heartbeat_at = now
+        for session in list(self.sessions.values()):
+            if session.task and session.busy and session.turn and session.task.status == 'running':
+                self._task_event(session)
 
     def _loop(self):
         while not self._stopped.is_set():
@@ -432,8 +453,15 @@ class CodexConductor:
                     event = self._events.get(timeout=0.05)
                 except queue.Empty:
                     self._announce()
+                    if self.life is not None:
+                        conversation = self.sessions['conversation']
+                        self.life.tick(user_busy=self._user_speaking or conversation.busy
+                                       or bool(self.running())
+                                       or bool(self.speaker and self.speaker.audible),
+                                       connected=bool(getattr(self.phone, 'connected', False)))
                 else:
                     self._event(event)
+                self._activity_heartbeat()
             except Exception:
                 self.bus.emit('error', message='Codex event handling failed')
 
@@ -462,6 +490,8 @@ class CodexConductor:
         if kind == 'started':
             s.turn = e['turnId']
             self.log(s, 'turn_started')
+            if s.task:
+                self._task_event(s)
         elif e.get('turnId') and s.turn and e['turnId'] != s.turn:
             return
         elif kind == 'delta':
@@ -694,6 +724,9 @@ class CodexConductor:
             table.pop(next(iter(table)))
 
     def _conversation_tool(self, name, a):
+        if name == 'rosie_life':
+            return (self.life.call(a) if self.life is not None else
+                    {'ok': False, 'reason': 'life_not_configured'}), None
         if name == 'phone_task':
             task = self.start_phone(str(a['app']), str(a['goal']))
             return {'ok': True, 'task_id': task.id, 'status': task.status}, None
@@ -835,6 +868,8 @@ class CodexConductor:
     def on_listen(self, ev):
         from .conductor import is_backchannel, is_hold
         if ev.kind == 'speech_start':
+            if self.life is not None:
+                self.life.user_active()
             self._user_speaking, self._speech_start = True, time.monotonic()
             self._backchannel_candidate = bool(self.sessions['conversation'].busy or
                                                (self.speaker and self.speaker.audible))
@@ -896,6 +931,8 @@ class CodexConductor:
         pass  # Server wires playback reports directly to the shared Speaker
 
     def reset(self):
+        if self.life is not None:
+            self.life.user_active()
         s = self.sessions['conversation']
         with s.submit_lock:
             self._interrupt_reply('reset')
@@ -920,6 +957,8 @@ class CodexConductor:
             self.bus.emit('reset')
 
     def stop(self):
+        if self.life is not None:
+            self.life.stop(reason='shutdown')
         for tid in list(self.tasks):
             self.cancel(tid)
         try:
