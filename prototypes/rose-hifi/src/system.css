@@ -21,17 +21,19 @@
   --sys-warm:#FFABAC;--sys-warm-line:#FFABAC;
 }
 /* Glacier states per palette: selected = accent fill with dark glyph; actionable outlines use the control border. */
-#device[data-palette=glacier] .qs[aria-pressed=true]{color:var(--sys-on-accent);box-shadow:none}
-#device[data-palette=glacier] .kb .key[data-k=shift][data-state=lock]{color:var(--sys-on-accent);box-shadow:none}
-#device[data-palette=glacier] .kb .key.action{background:var(--sys-accent);color:var(--sys-on-accent)}
-#device[data-palette=glacier] .field{background:var(--sys-surface);box-shadow:inset 0 0 0 1px var(--sys-control)}
-#device[data-palette=glacier] .sh-btn{box-shadow:inset 0 0 0 1px var(--sys-control)}
-#device[data-palette=glacier] .sh-btn.primary{box-shadow:none}
-#device[data-palette=glacier] .shade{-webkit-backdrop-filter:none;backdrop-filter:none}
-#device[data-palette=glacier] .return-control::before{box-shadow:inset 0 0 0 1px var(--sys-control)}
-#device[data-palette=glacier] .return-control.is-pressed::before{background:var(--sys-pressed)}
-#device[data-palette=glacier] .return-control.is-pressed{color:var(--sys-on-accent)}
-#device[data-palette=glacier] .kb .key.down{filter:none;background:var(--sys-pressed);color:var(--sys-on-accent)}
+#device[data-palette=glacier][data-theme] .qs[aria-pressed=true]{color:var(--sys-on-accent);box-shadow:none}
+#device[data-palette=glacier][data-theme] .kb .key[data-k=shift][data-state=lock]{color:var(--sys-on-accent);box-shadow:none}
+#device[data-palette=glacier][data-theme] .kb .key.action{background:var(--sys-accent);color:var(--sys-on-accent)}
+#device[data-palette=glacier][data-theme] .field{background:var(--sys-surface);box-shadow:inset 0 0 0 1px var(--sys-control)}
+#device[data-palette=glacier][data-theme] .sh-btn{box-shadow:inset 0 0 0 1px var(--sys-control)}
+#device[data-palette=glacier][data-theme] .sh-btn.primary{box-shadow:none}
+#device[data-palette=glacier][data-theme] .shade{-webkit-backdrop-filter:none;backdrop-filter:none}
+#device[data-palette=glacier][data-theme] .return-control::before{box-shadow:inset 0 0 0 1px var(--sys-control)}
+/* Designer guidance: neutral controls press to surface-pressed; accent controls to pressed-bg/pressed-fg. */
+#device[data-palette=glacier][data-theme] .kb .key.down{filter:none;background:#29475D;color:var(--sys-ink)}
+#device[data-palette=glacier][data-theme] .kb .key.action.down{background:var(--sys-pressed);color:var(--sys-on-accent)}
+#device[data-palette=glacier][data-theme] .return-control.is-pressed::before{background:#29475D}
+#device[data-palette=glacier][data-theme] .return-control.is-pressed{color:var(--sys-ink)}
 
 /* ---------- Text fields (custom-rendered; no native IME) ---------- */
 #device[data-theme] .field{min-width:0;min-height:38px;max-height:118px;overflow:auto;scrollbar-width:none;border-radius:19px;padding:9px 14px;font-size:16px;line-height:20px;white-space:pre-wrap;overflow-wrap:anywhere;cursor:text;-webkit-user-select:none;user-select:none;touch-action:pan-y;
@@ -117,7 +119,7 @@
 #device[data-theme] .sh-ico{width:22px;height:22px;color:var(--sys-ink-2)}
 #device[data-theme] .sh-ico svg{width:22px;height:22px}
 #device[data-theme] .sh-pearl{width:16px;height:16px;border-radius:50%;margin:0 3px;background:radial-gradient(circle at 34% 30%,#fff 0,#ffb3bf 18%,#e04a62 50%,#8e1a2e 100%)}
-#device[data-palette=glacier] .sh-pearl{background:radial-gradient(circle at 34% 30%,#fff 0,#d6e8f8 18%,#7fb2e0 50%,#2c5680 100%)}
+#device[data-palette=glacier][data-theme] .sh-pearl{background:radial-gradient(circle at 34% 30%,#fff 0,#d6e8f8 18%,#7fb2e0 50%,#2c5680 100%)}
 #device[data-theme] .sh-x,#device[data-theme] .sh-chev{width:44px;height:36px;margin:-4px -8px -4px 0;display:grid;place-items:center;color:var(--sys-ink-3)}
 #device[data-theme] .sh-x svg,#device[data-theme] .sh-chev svg{width:18px;height:18px}
 #device[data-theme] .sh-open{display:grid;gap:2px;text-align:left;width:100%;padding:2px 0 0 30px;color:var(--sys-ink)}
