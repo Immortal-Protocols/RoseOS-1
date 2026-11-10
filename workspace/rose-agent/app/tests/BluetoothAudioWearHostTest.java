@@ -19,6 +19,7 @@ public final class BluetoothAudioWearHostTest {
         started.setAccessible(true);
         started.setBoolean(null,false);
         GlassesWearHookRunner.reset();
+        android.os.Looper.getMainLooper().reset();
     }
     static void devices(AudioManager audio,int... types) {
         audio.outputs=new AudioDeviceInfo[types.length];
@@ -92,10 +93,39 @@ public final class BluetoothAudioWearHostTest {
         expect("tray".equals(GlassesWearHookRunner.lastFire.action),"delayed callback retains configured action");
     }
 
+    static void uiBacklogDoesNotHideReconnect() throws Exception {
+        reset();
+        AudioManager audio=new AudioManager();
+        devices(audio,AudioDeviceInfo.TYPE_BLUETOOTH_A2DP);
+        BluetoothAudioWear.start(new Context(audio));
+        audio.queueInitial();
+        expect(fires()==0,"steady-state fixture starts already connected, with no fire");
+        android.os.Looper main=android.os.Looper.getMainLooper();
+        main.setBlocked(true);
+        // UI work spans a real five-second disconnect/reconnect. Audio notifications can be delivered
+        // independently, but callbacks bound to the UI both run later against the final connected list.
+        at(5_000); devices(audio); audio.queueRemoved();
+        at(10_000); devices(audio,AudioDeviceInfo.TYPE_BLUETOOTH_A2DP); audio.queueAdded();
+        expect(fires()==1,"a blocked UI must not hide a qualifying steady-state reconnect");
+        at(11_000); main.setBlocked(false);
+        expect(fires()==1,"UI recovery must not fire the same reconnect again");
+        expect(audio.handler.getLooper()!=main,"audio observations use an independent callback looper");
+        main.setBlocked(true);
+        at(12_000); devices(audio); audio.queueRemoved();
+        at(13_000); devices(audio,AudioDeviceInfo.TYPE_BLUETOOTH_A2DP); audio.queueAdded();
+        expect(fires()==1,"short reconnect remains a blip while UI is blocked");
+        config("enabled",false);
+        at(14_000); devices(audio); audio.queueRemoved();
+        at(18_000); devices(audio,AudioDeviceInfo.TYPE_BLUETOOTH_A2DP); audio.queueAdded();
+        expect(fires()==1,"disable still prevents launch decisions while UI is blocked");
+        at(19_000); main.setBlocked(false);
+    }
+
     public static void main(String[] args) throws Exception {
         existingContracts();
         System.out.println("BluetoothAudioWearHostTest existing contracts: "+checks+" checks passed");
         delayedInitialCallback();
+        uiBacklogDoesNotHideReconnect();
         System.out.println("BluetoothAudioWearHostTest: "+checks+" checks passed");
     }
 }
