@@ -14,6 +14,7 @@ import android.graphics.Color;
 import android.graphics.Rect;
 import android.os.Looper;
 import android.os.SystemClock;
+import android.os.SystemProperties;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewTreeObserver;
@@ -81,6 +82,7 @@ public class RoseEdgeWindowNativeTest {
         window.stop();
         RoseEdgeState.lower(DISPLAY);
         RoseEdgeShell.setShell(null);
+        SystemProperties.set(RoseEdgeWindow.TRAY_PROPERTY, "");
     }
 
     static void idle() {
@@ -232,6 +234,7 @@ public class RoseEdgeWindowNativeTest {
 
     @Test
     public void theMicIsDrawnInTheSlotAsStatusUnavailableAndThePlateAroundIt() throws Exception {
+        SystemProperties.set(RoseEdgeWindow.TRAY_PROPERTY, "1");  // Frankel's image (frankel.json)
         RoseEdgeWindow.EdgeView view = raise();
         Bitmap bitmap = Bitmap.createBitmap(dp(384), dp(92), Bitmap.Config.ARGB_8888);
         view.draw(new Canvas(bitmap));
@@ -327,6 +330,20 @@ public class RoseEdgeWindowNativeTest {
         shell.listener.onRaised(DISPLAY, TASK, new Rect(0, 0, dp(384), dp(832 - 58)));
         idle();
         assertNull(window.shownOn(DISPLAY));
+    }
+
+    @Test
+    public void withTheStatusTrayOffNoMicIsDrawnOnlyThePlate() throws Exception {
+        SystemProperties.set(RoseEdgeWindow.TRAY_PROPERTY, "");
+        RoseEdgeWindow.EdgeView view = raise();
+        Bitmap bitmap = Bitmap.createBitmap(dp(384), dp(92), Bitmap.Config.ARGB_8888);
+        view.draw(new Canvas(bitmap));
+        Rect mic = view.control(RoseEdgeLayout.MIC);
+        float s = 20 * density / 24f;
+        int plate = bitmap.getPixel(mic.left + dp(2), mic.centerY());
+        int glyph = bitmap.getPixel(mic.centerX(), Math.round(mic.exactCenterY() - 12 * s + 9 * s));
+        assertEquals("no SystemUI mic control on this build, so no stand-in: only the plate", Color.red(plate),
+                Color.red(glyph), 6);
     }
 
     MotionEvent touch(int action, float x, float y) {

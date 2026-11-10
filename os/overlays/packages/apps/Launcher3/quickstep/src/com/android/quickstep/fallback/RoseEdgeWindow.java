@@ -21,6 +21,7 @@ import android.graphics.Region;
 import android.graphics.Shader;
 import android.hardware.display.DisplayManager;
 import android.os.Binder;
+import android.os.SystemProperties;
 import android.provider.Settings;
 import android.util.SparseArray;
 import android.view.Display;
@@ -52,7 +53,9 @@ import android.view.inputmethod.InputMethodManager;
  * (while a drag reveals or reverses the tray, and between a release and the shell's onRaised), this window draws the
  * mic button in the slot with the other buttons, in the control's own "status unavailable" look (its well and glyph
  * at UNKNOWN_ALPHA), so the mic rises and falls with the tray without claiming muted or unmuted (1A). SystemUI's opaque
- * control, added later over the slot, hides it. This window never reads or changes microphone state.
+ * control, added later over the slot, hides it. Like that control, the stand-in shows only while the Rose status tray
+ * is enabled (TRAY_PROPERTY): with no control to come, a mic would be a button that does nothing. This window never
+ * reads or changes microphone state.
  *
  * Taps: Rose lowers the edge and asks the host to open Rose; the switcher lowers it and asks for the switcher. A swipe
  * down of more than RoseEdgeGesture.RAISE_DP lowers it. A drag up on the open tray goes on toward the switcher: past
@@ -106,6 +109,8 @@ public final class RoseEdgeWindow implements RoseEdgeState.Listener {
     /** SystemUI's mic control (RoseEdgeMicSlot.Control): its well (OxbloodEdge.Well.mic) and unknown-state alpha. */
     static final float MIC_WELL_DP = 32, MIC_WELL_RADIUS_DP = 9;
     static final int MIC_UNKNOWN_ALPHA = 110;
+    /** The Rose status tray switch SystemUI's mic control is gated on (RoseEdgeMicSlot, default off). */
+    static final String TRAY_PROPERTY = "persist.wm.debug.pixel_agent_tray";
     /** Identifies this window's inset source to the window manager (as the taskbar's insets owner does). */
     private final Binder mInsetsOwner = new Binder();
 
@@ -287,6 +292,8 @@ public final class RoseEdgeWindow implements RoseEdgeState.Listener {
         private final Paint mRing = new Paint(Paint.ANTI_ALIAS_FLAG), mPearl = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final Paint mGlyph = new Paint(Paint.ANTI_ALIAS_FLAG), mFront = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final Paint mArmed = new Paint(Paint.ANTI_ALIAS_FLAG), mMicPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        /** SystemUI's mic control exists on this build (TRAY_PROPERTY): only then is its stand-in drawn. */
+        private final boolean mMicStandIn = SystemProperties.getBoolean(TRAY_PROPERTY, false);
         private final Path mOutline = new Path();
         private final int mSlop;
         private float mDownY = Float.NaN;
@@ -462,7 +469,7 @@ public final class RoseEdgeWindow implements RoseEdgeState.Listener {
             Rect rose = control(RoseEdgeLayout.ROSE);
             canvas.drawCircle(rose.exactCenterX(), rose.exactCenterY(), 8 * mDensity, mPearl);
             drawSwitcherGlyph(canvas, control(RoseEdgeLayout.SWITCHER));
-            drawMicUnavailable(canvas, control(RoseEdgeLayout.MIC));
+            if (mMicStandIn) drawMicUnavailable(canvas, control(RoseEdgeLayout.MIC));
             canvas.restore();
         }
 
