@@ -1,0 +1,19 @@
+{
+  "schema": "roseos.mustang-full-run-source-contract.v1",
+  "status": "observe-before-copy-required",
+  "builder": {
+    "project": "protocols-465723",
+    "zone": "us-west2-a",
+    "instance": "roseos-mustang-builder-20261107-a",
+    "instanceId": "5585425566393384049"
+  },
+  "sourceRoot": "/mnt/disks/mustang-data/roseos/source",
+  "manifestSha256": "32d30e70ee59d373a17fe8090bdded898afa80651f27c331caca4578b3008888",
+  "vendorEvidence": "os/build-only/mustang-vendor-42522784617.json",
+  "hostDependenciesEvidence": "os/build-only/mustang-hostdeps-42512135815.json",
+  "qualifiedToolsEvidence": "os/build-only/mustang-otatools-42531345133.json",
+  "toolInspectionEvidence": "os/build-only/mustang-otatools-inspection-42531345133.json",
+  "verifyCopiedBytesBeforeAllocation": true,
+  "liveEvidencePresent": false,
+  "otaAdmitted": false
+}

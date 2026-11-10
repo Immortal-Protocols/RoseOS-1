@@ -1,0 +1,10 @@
+{
+  "schema": "roseos.mustang-otatools-output-recovery.v1",
+  "failedEvidence": "os/build-only/mustang-otatools-42524960701.json",
+  "observationEvidence": "os/build-only/mustang-otatools-observation-42527536373.json",
+  "failedRunId": "42524960701",
+  "failedRunAttempt": "1",
+  "outDir": "out_mustang_otatools_proof",
+  "oldOutputUsedForBuild": false,
+  "method": "same-filesystem-renameat2-RENAME_NOREPLACE-with-durable-intent-and-result"
+}

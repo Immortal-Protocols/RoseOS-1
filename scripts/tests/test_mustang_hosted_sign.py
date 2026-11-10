@@ -36,6 +36,15 @@ def write_zip(path, name='payload.txt', data=b'payload', mode=0o644, members=Non
 
 
 class HostedSignGateTest(unittest.TestCase):
+    def setUp(self):
+        # Synthetic legacy bundles are deliberately not the current qualified
+        # full-run bundle; full-route qualification has separate integration tests.
+        original=hosted.read_json
+        def read_legacy(path):
+            value=original(path)
+            return dict(value,status='unbound') if Path(path)==ROOT/'os/build-only/mustang-runtime.json' else value
+        reader=patch.object(hosted,'read_json',side_effect=read_legacy)
+        reader.start();self.addCleanup(reader.stop)
     def measured_peak(self):
         measured = hosted.measured_inputs()
         self.assertEqual(measured['unsigned'], 4340146868)
@@ -49,7 +58,7 @@ class HostedSignGateTest(unittest.TestCase):
         self.assertGreater(required, 14 * 10 ** 9)
         self.assertEqual(hosted.STOCK_SSD_BYTES, 14 * 1024 ** 3)
         config = hosted.load_capacity()
-        self.assertFalse(config['admission'])
+        self.assertTrue(config['admission'])
         self.assertEqual(config['trust'], 'held')
         self.assertIsNone(config['storage']['accountPlan'])
         self.assertTrue(config['storage']['includedAllowancesAreNotPerArtifactLimits'])
@@ -60,16 +69,67 @@ class HostedSignGateTest(unittest.TestCase):
         self.assertEqual(config['proposedRunner']['usdPerMinute'], '0.012')
         self.assertEqual(config['proposedRunner']['ssdBytes'], 150000000000)
         self.assertGreater(config['proposedRunner']['ssdBytes'], required)
-        self.assertEqual(config['activeRunner']['label'], 'ubuntu-24.04')
-        self.assertEqual(config['activeRunner']['ssdBytes'], hosted.STOCK_SSD_BYTES)
+        self.assertEqual(config['activeRunner']['label'], 'mustang-signer-4core')
+        self.assertEqual(config['activeRunner']['ssdBytes'], 150000000000)
+        self.assertEqual(config['activeRunner']['groupId'], 6)
+        self.assertTrue(config['schedulingAccess']['verified'])
         return measured, required
 
     def admitted(self):
         config = hosted.load_capacity()
         config['admission'] = True
-        config['activeRunner'] = dict(config['activeRunner'], ssdBytes=10 ** 18)
+        config['activeRunner'] = dict(label='synthetic-large', ssdBytes=10 ** 18)
         config['outputBounds'] = {name: 4096 for name in hosted.OUTPUT_BOUNDS}
         return config
+
+    def closed(self):
+        config=hosted.load_capacity();config['admission']=False
+        return config
+
+    def larger(self):
+        config=self.admitted()
+        config['activeRunner']=dict(kind='github-larger-runner',groupName='roseos-mustang-signer',groupId=6,
+            label='mustang-signer-4core',image='ubuntu-24.04',vcpu=4,ssdBytes=150000000000,
+            configured=True,approved=True,approvalRef='synthetic owner approval',configurationRef='synthetic route observation')
+        return config
+
+    def test_larger_profile_requires_configuration_and_matches_only_the_selected_route(self):
+        value=self.larger()
+        with tempfile.TemporaryDirectory() as temporary:
+            path=Path(temporary)/'capacity.json';path.write_text(json.dumps(value))
+            self.assertEqual(hosted.load_capacity(path)['activeRunner']['groupId'],6)
+            for field,wrong in (('configured',False),('approvalRef',None),('groupName','other-group'),('vcpu',8)):
+                changed=json.loads(json.dumps(value));changed['activeRunner'][field]=wrong
+                path.write_text(json.dumps(changed))
+                with self.assertRaisesRegex(ValueError,'larger-runner identity/approval'):
+                    hosted.load_capacity(path)
+
+    def test_actual_wrong_signer_capacity_stops_before_secret_access(self):
+        bundle,files,pin=self.tiny_bundle();root=self.checkout(files['generateRelease'].read_bytes())
+        def call(secret_access):
+            hosted.evaluate(bundle,root,free=10**18,files=files,pin=pin,
+                env=dict(ENV,GITHUB_JOB='signer'),capacity_config=self.larger(),secret_access=secret_access)
+        with patch.object(hosted.os,'cpu_count',return_value=8):
+            self.assert_secret_closed(call,'actual signer CPU/memory/disk')
+
+    def test_closed_signer_admission_is_known_before_any_native_build(self):
+        with patch.object(hosted,'load_capacity',return_value=self.closed()):
+            with self.assertRaisesRegex(ValueError,'hosted signer admission is closed; no native build'):
+                hosted.require_delivery_capacity(ROOT)
+
+    def test_configured_profile_cannot_replace_repository_workflow_scheduling_evidence(self):
+        config=hosted.load_capacity();config['schedulingAccess']['verified']=False
+        with patch.object(hosted,'load_capacity',return_value=config):
+            with self.assertRaisesRegex(ValueError,'scheduling access is unconfirmed'):
+                hosted.require_delivery_capacity(ROOT)
+            config['schedulingAccess'].update(verified=True,repositoryAllowed=True,workflowAllowed=True,
+                evidenceRef='synthetic administrator scheduling confirmation')
+            self.assertEqual(hosted.require_delivery_capacity(ROOT)['activeRunner']['groupId'],6)
+            for key in ('verified','repositoryAllowed','workflowAllowed','evidenceRef'):
+                original=config['schedulingAccess'][key];config['schedulingAccess'][key]=None
+                with self.assertRaisesRegex(ValueError,'scheduling access is unconfirmed'):
+                    hosted.require_delivery_capacity(ROOT)
+                config['schedulingAccess'][key]=original
 
     def bundle(self, **changes):
         measured, _ = self.measured_peak()
@@ -101,13 +161,17 @@ class HostedSignGateTest(unittest.TestCase):
         _, required = self.measured_peak()
         bundle = self.bundle()
         bundle['capacity'] = 'ok'
+        stock=hosted.load_capacity()
+        stock['activeRunner']=dict(label='ubuntu-24.04',ssdBytes=hosted.STOCK_SSD_BYTES)
+        stock['outputBounds']={name:None for name in hosted.OUTPUT_BOUNDS}
+        stock['admission']=False
 
         def call(secret_access):
-            hosted.evaluate(bundle, ROOT, free=10 ** 18, secret_access=secret_access, env=ENV)
+            hosted.evaluate(bundle, ROOT, free=10 ** 18, secret_access=secret_access, env=ENV,capacity_config=stock)
 
         self.assert_secret_closed(call, 'output bound is missing')
         with self.assertRaises(hosted.CapacityExceeded) as caught:
-            hosted.capacity(bundle, free=10 ** 18, config=hosted.load_capacity())
+            hosted.capacity(bundle, free=10 ** 18, config=stock)
         self.assertIn(f'required {required} bytes', str(caught.exception))
         self.assertIn(f'stock SSD {hosted.STOCK_SSD_BYTES} bytes', str(caught.exception))
         self.assertIn('hosted signer admission is closed', str(caught.exception))
@@ -122,15 +186,16 @@ class HostedSignGateTest(unittest.TestCase):
 
         self.assert_secret_closed(call, 'unmeasured signer inputs: jdk,generateRelease')
 
-    def test_script_pin_stays_unbound_and_blocks_secret_access(self):
+    def test_missing_script_pin_blocks_secret_access_even_with_capacity(self):
         pin = json.loads((ROOT / hosted.SCRIPT_PIN).read_text())
-        self.assertIsNone(pin['generateReleaseSha256'])
+        self.assertEqual(pin['status'],'qualified')
+        pin=dict(pin,generateReleaseSha256=None)
         self.assertEqual(pin['entryPoint'], hosted.ENTRY)
         bundle, files, _ = self.tiny_bundle()
 
         def call(secret_access):
             hosted.evaluate(bundle, ROOT, free=10 ** 18, files=files, secret_access=secret_access, env=ENV,
-                            capacity_config=self.admitted())
+                            capacity_config=self.admitted(),pin=pin)
 
         self.assert_secret_closed(call, 'sign script pin is unbound')
 
@@ -152,7 +217,7 @@ class HostedSignGateTest(unittest.TestCase):
         def link(secret_access):
             hosted.evaluate(linked[0], ROOT, free=10 ** 18, files=linked[1], secret_access=secret_access,
                             pin=linked[2], env=ENV, capacity_config=self.admitted())
-        self.assert_secret_closed(link, 'unsafe zip symlink')
+        self.assert_secret_closed(link, 'unsigned archive: unsafe zip symlink: "link"')
         absent_bundle, absent_files, absent_pin = self.tiny_bundle()
         absent_files.pop('jdk')
         def absent(secret_access):
@@ -236,7 +301,11 @@ class HostedSignGateTest(unittest.TestCase):
             self.assertEqual(config['host']['sign']['keysSecret'], hosted.KEYS)
             self.assertEqual(config['host']['sign']['secretVersion'], '1')
             java = Path(config['host']['sign']['javaHome']) / 'bin' / 'java'
-            tool = Path(config['host']['sign']['otatools']) / 'bin' / 'delta_generator'
+            archive = Path(config['host']['sign']['otatools'])
+            self.assertTrue(archive.is_file() and zipfile.is_zipfile(archive))
+            self.assertEqual(env['ROSE_SIGN_OTATOOLS'], str(archive))
+            self.assertTrue((Path(env['ROSE_RELEASE_DIR']) / 'unsigned-target_files.zip').is_file())
+            tool = archive.parent / 'otatools-extracted' / 'bin' / 'delta_generator'
             self.assertTrue(java.is_file() and os.access(java, os.X_OK))
             self.assertEqual(java.read_bytes(), b'java-stub')
             self.assertTrue(tool.is_file() and os.access(tool, os.X_OK))
@@ -250,7 +319,7 @@ class HostedSignGateTest(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, 'hosted signer admission is closed'):
             hosted.sign(self.write_bundle(bundle, files), Path(self.directory.name) / 'closed-out', root=root,
-                        env=ENV, host_sign_main=host_sign_main, free=10 ** 18, pin=pin)
+                        env=ENV, host_sign_main=host_sign_main, free=10 ** 18, pin=pin,capacity_config=self.closed())
         self.assertEqual(calls, [])
         out = Path(self.directory.name) / 'signed-out'
         receipt = hosted.sign(self.write_bundle(bundle, files), out, root=root, env=ENV,
@@ -320,8 +389,7 @@ class HostedSignGateTest(unittest.TestCase):
                                      'preflight', '--bundle', str(out)],
                                     env=env, capture_output=True, text=True, timeout=20)
             self.assertEqual(result.returncode, 4, result.stderr)
-            self.assertIn('hosted signer admission is closed', result.stderr)
-            self.assertIn('unmeasured signer inputs', result.stderr)
+            self.assertIn('full-run signing tools differ from measured qualification', result.stderr)
             self.assertNotIn('admit=true', result.stdout)
             self.assertNotIn('gcloud', result.stderr)
             output = root / 'github-output'
@@ -345,8 +413,7 @@ class HostedSignGateTest(unittest.TestCase):
                                      'preflight', '--bundle', str(path)],
                                     env=env, capture_output=True, text=True, timeout=20)
             self.assertEqual(result.returncode, 4, result.stderr)
-            self.assertIn('output bound is missing', result.stderr)
-            self.assertIn('hosted signer admission is closed', result.stderr)
+            self.assertIn('full-run signing tools differ from measured qualification', result.stderr)
             self.assertNotIn(str(required), result.stderr)
             self.assertEqual(output.read_text(), '')
             self.assertNotIn('gcloud', result.stderr)
@@ -431,7 +498,7 @@ class HostedSignGateTest(unittest.TestCase):
         self.assertNotIn('mustang-signer-linux-4-core', workflow)
         self.assertIn('--out "$RUNNER_TEMP/mustang-hosted-signed"', signer)
         signer_jobs = [name for name, body in jobs.items()
-                       if 'MUSTANG_SIGNER_WORKLOAD_IDENTITY_PROVIDER' in body and 'id-token: write' in body]
+                       if '/mustang-actions/providers/mustang-main' in body and 'id-token: write' in body]
         self.assertEqual(signer_jobs, ['signer'])
         self.assertNotIn('id-token', jobs['guard'])
         self.assertIn('needs: signer', publisher.split('steps:', 1)[0])
@@ -441,10 +508,10 @@ class HostedSignGateTest(unittest.TestCase):
         self.assertLess(cleanup.index('mustang_controller.py stop'), cleanup.index('sweep --execute'))
         self.assertIn("always() && needs.controller.result != 'skipped'", cleanup)
         runtime = json.loads((ROOT / 'os/build-only/mustang-runtime.json').read_text())
-        self.assertEqual(runtime['status'], 'unbound')
-        self.assertIsNone(runtime['signingRouteEvidence'])
-        self.assertEqual(runtime['sourceEvidence'], 'os/build-only/mustang-source-sync-42409634329.json')
-        self.assertFalse(runtime['publication']['enabled'])
+        self.assertEqual(runtime['status'], 'bound')
+        self.assertEqual(runtime['signingRouteEvidence'],'os/build-only/mustang-dedicated-signing-route.json')
+        self.assertEqual(runtime['sourceEvidence'], 'os/build-only/mustang-full-run-source.json')
+        self.assertTrue(runtime['publication']['enabled'])
 
     def test_each_peak_term_and_a_missing_bound_deny_before_secrets(self):
         bundle, files, pin = self.tiny_bundle()
@@ -457,11 +524,12 @@ class HostedSignGateTest(unittest.TestCase):
             files['unsigned'].stat().st_size, files['otatools'].stat().st_size, otatools_uncompressed,
             files['jdk'].stat().st_size, jdk_uncompressed, files['generateRelease'].stat().st_size, bounds)
         total = sum(terms.values())
+        resident = sum(files[name].stat().st_size for name in ('unsigned', 'otatools', 'jdk'))
         self.assertGreater(total, 0)
         for name, value in terms.items():
             self.assertGreater(value, 0, name)
             without = total - value
-            def tight(secret_access, free=without):
+            def tight(secret_access, free=without - resident):
                 hosted.evaluate(bundle, root, free, files=files, secret_access=secret_access, pin=pin,
                                 env=ENV, capacity_config=config)
             self.assert_secret_closed(tight, f'current peak {total} bytes')
@@ -477,6 +545,72 @@ class HostedSignGateTest(unittest.TestCase):
                     self.assertIn('output bound is missing: ' + missing_name, str(error))
                     raise
             self.assert_secret_closed(missing, 'output bound is missing: ' + name)
+
+    def test_verified_resident_inputs_cover_preflight_then_sign_without_lowering_peak(self):
+        bundle, files, pin = self.tiny_bundle()
+        root = self.checkout(files['generateRelease'].read_bytes())
+        config = self.admitted()
+        tools_size, _ = hosted.zip_members(files['otatools'])
+        jdk_size, _ = hosted.zip_members(files['jdk'])
+        total = hosted.current_peak_bytes(
+            files['unsigned'].stat().st_size, files['otatools'].stat().st_size, tools_size,
+            files['jdk'].stat().st_size, jdk_size, files['generateRelease'].stat().st_size,
+            config['outputBounds'])
+        resident = sum(files[name].stat().st_size for name in ('unsigned', 'otatools', 'jdk'))
+        # Existing input archives are already allocated before the free-space
+        # observation. Repeated evaluation also retains both verified extracts.
+        first = hosted.evaluate(bundle, root, total - resident + tools_size + jdk_size,
+                                files=files, pin=pin, env=ENV, capacity_config=config)
+        second = hosted.evaluate(bundle, root, total - resident, files=files, pin=pin,
+                                 env=ENV, capacity_config=config)
+        self.assertEqual(first['currentPeakBytes'], total)
+        self.assertEqual(second['currentPeakBytes'], total)
+        self.assertEqual(second['verifiedResidentInputBytes'], resident)
+        self.assertEqual(second['additionalRequiredBytes'], total - resident)
+        def short(secret_access):
+            hosted.evaluate(bundle, root, total - resident - 1, files=files, pin=pin,
+                            env=ENV, capacity_config=config, secret_access=secret_access)
+        self.assert_secret_closed(short, 'hosted signer capacity exceeded')
+        small = self.admitted()
+        small['activeRunner']['ssdBytes'] = total - 1
+        def whole_disk(secret_access):
+            hosted.evaluate(bundle, root, 10**18, files=files, pin=pin, env=ENV,
+                            capacity_config=small, secret_access=secret_access)
+        self.assert_secret_closed(whole_disk, 'hosted signer capacity exceeded')
+
+    def test_resident_credit_excludes_foreign_sparse_shared_and_excess_bytes(self):
+        from types import SimpleNamespace
+        bundle, files, _pin = self.tiny_bundle()
+        real_stat = Path.stat
+        original = {name:real_stat(files[name]) for name in ('unsigned','otatools','jdk')}
+        directory = files['otatools'].parent
+        def observed(path, *args, **kwargs):
+            if path == files['unsigned']:
+                i=original['unsigned']
+                return SimpleNamespace(st_dev=i.st_dev+1,st_ino=i.st_ino,st_mode=i.st_mode,
+                                       st_size=i.st_size,st_blocks=i.st_blocks)
+            return real_stat(path,*args,**kwargs)
+        with patch.object(Path,'stat',observed):
+            self.assertEqual(hosted.resident_archive_bytes(bundle,files,directory),
+                             sum(original[n].st_size for n in ('otatools','jdk')))
+        def sparse(path,*args,**kwargs):
+            if path == files['unsigned']:
+                i=original['unsigned']
+                return SimpleNamespace(st_dev=i.st_dev,st_ino=i.st_ino,st_mode=i.st_mode,
+                                       st_size=i.st_size,st_blocks=0)
+            return real_stat(path,*args,**kwargs)
+        with patch.object(Path,'stat',sparse):
+            self.assertEqual(hosted.resident_archive_bytes(bundle,files,directory),
+                             sum(original[n].st_size for n in ('otatools','jdk')))
+        linked = directory / 'hardlinked-jdk.zip'
+        os.link(files['otatools'], linked)
+        duplicate=dict(files,jdk=linked)
+        duplicate_bundle=dict(bundle,jdk=bundle['otatools'])
+        self.assertEqual(hosted.resident_archive_bytes(duplicate_bundle,duplicate,directory),
+                         original['unsigned'].st_size+original['otatools'].st_size)
+        capped=json.loads(json.dumps(bundle));capped['unsigned']['sizeBytes']=1
+        self.assertEqual(hosted.resident_archive_bytes(capped,files,directory),
+                         1+original['otatools'].st_size+original['jdk'].st_size)
 
     def test_workflow_cli_downloads_payload_only_after_metadata_gate(self):
         bundle, files, pin = self.tiny_bundle()
@@ -512,7 +646,7 @@ class HostedSignGateTest(unittest.TestCase):
         closed = subprocess.run([sys.executable, script, 'preliminary', '--bundle', str(signer)],
                                 env=closed_env, capture_output=True, text=True, timeout=30)
         self.assertEqual(closed.returncode, 4, closed.stderr)
-        self.assertIn('hosted signer admission is closed', closed.stderr)
+        self.assertIn('full-run signing tools differ from measured qualification', closed.stderr)
         self.assertNotIn('signing bundle hash differs', closed.stderr)
         self.assertNotIn('resumed file', closed.stderr)
         self.assertNotIn('allow=true', output.read_text())
@@ -635,8 +769,12 @@ class HostedSignGateTest(unittest.TestCase):
             self.assertTrue(managed_decrypted_keys)
             config = json.loads(Path(config_path).read_text())
             java = Path(config['host']['sign']['javaHome']) / 'bin' / 'java'
-            tool = Path(config['host']['sign']['otatools']) / 'bin' / 'delta_generator'
-            readme = Path(config['host']['sign']['otatools']) / 'bin' / 'readme.txt'
+            archive = Path(config['host']['sign']['otatools'])
+            self.assertTrue(archive.is_file() and zipfile.is_zipfile(archive))
+            self.assertEqual(env['ROSE_SIGN_OTATOOLS'], str(archive))
+            self.assertTrue((Path(env['ROSE_RELEASE_DIR']) / 'unsigned-target_files.zip').is_file())
+            tool = archive.parent / 'otatools-extracted' / 'bin' / 'delta_generator'
+            readme = archive.parent / 'otatools-extracted' / 'bin' / 'readme.txt'
             self.assertTrue(java.is_file() and os.access(java, os.X_OK))
             self.assertTrue(tool.is_file() and os.access(tool, os.X_OK))
             self.assertTrue(readme.is_file() and not os.access(readme, os.X_OK))
@@ -656,6 +794,8 @@ class HostedSignGateTest(unittest.TestCase):
         self.assertEqual(secret, ['sign'])
         self.assertEqual(hosted.bind_outputs(out, env=ENV)['sourceSha'], ENV['GITHUB_SHA'])
         self.assertEqual(receipt['outputs']['signedTargetFiles']['sha256'], digest(out / 'signed-target_files.zip'))
+        self.assertEqual(receipt['targetArchiveValidation']['artifact']['sha256'], bundle['unsigned']['sha256'])
+        self.assertFalse(receipt['targetArchiveValidation']['targetFilesExtractedByPreflight'])
 
     def test_zip_traversal_symlink_duplicate_bomb_modes_and_resume(self):
         bundle, files, pin = self.tiny_bundle()
@@ -684,6 +824,237 @@ class HostedSignGateTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'zip expansion exceeds capacity'):
             hosted.reject_unsafe_zip(files['otatools'], 1)
         self.assert_secret_closed(attempt, 'resumed file does not match the trusted archive')
+
+    def target_archive(self, entries):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        path = Path(directory.name) / 'target.zip'
+        with zipfile.ZipFile(path, 'w', compression=zipfile.ZIP_DEFLATED) as archive:
+            for name, mode, data in entries:
+                info = zipfile.ZipInfo(name)
+                info.create_system = 3
+                info.external_attr = mode << 16
+                archive.writestr(info, data)
+        return path
+
+    def test_target_links_are_metadata_and_pinned_writer_semantics_remain_intact(self):
+        path = self.target_archive([
+            ('SYSTEM/bin/toybox', stat.S_IFREG | 0o755, b'trusted-fixture'),
+            ('SYSTEM/bin/sh', stat.S_IFLNK | 0o777, b'toybox'),
+            ('SYSTEM/bin/shell', stat.S_IFLNK | 0o777, b'./sh'),
+            ('SYSTEM/lib64/lib.so', stat.S_IFREG | 0o644, b'library'),
+            ('SYSTEM/lib', stat.S_IFLNK | 0o777, b'lib64'),
+            ('ROOT/bin', stat.S_IFLNK | 0o777, b'../SYSTEM/bin'),
+        ])
+        before = digest(path)
+        with patch.object(os, 'symlink', side_effect=AssertionError('preflight must not materialize links')):
+            proof = hosted.validate_target_zip(path, 10**9)
+        self.assertEqual(proof['symlinkCount'], 4)
+        self.assertEqual(proof['artifact']['sha256'], before)
+        self.assertFalse(proof['preflightFollowedPayloadLinksOnHost'])
+        self.assertFalse(proof['targetFilesExtractedByPreflight'])
+        self.assertEqual(digest(path), before)
+        out = path.parent / 'pinned-writer-fixture'
+        out.mkdir()
+        # Minimal behavior fixture for the pinned sign_target_files_apks
+        # WriteOutputData: mkdir parents, preserve link text via os.symlink,
+        # and write ordinary member bytes. This is not execution of otatools.
+        with zipfile.ZipFile(path) as archive:
+            for info in archive.infolist():
+                dest = out / info.filename
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                if stat.S_ISLNK(info.external_attr >> 16):
+                    os.symlink(archive.read(info).decode(), dest)
+                else:
+                    dest.write_bytes(archive.read(info))
+        self.assertEqual(os.readlink(out / 'SYSTEM/bin/shell'), './sh')
+        self.assertEqual((out / 'SYSTEM/bin/shell').read_bytes(), b'trusted-fixture')
+        self.assertEqual((out / 'ROOT/bin/sh').read_bytes(), b'trusted-fixture')
+        self.assertEqual(digest(path), before)
+        # The pinned CollectDirToZip uses zip -y -r: verify the real command
+        # preserves file and directory aliases rather than dereferencing them.
+        repacked = path.parent / 'repacked.zip'
+        subprocess.run(['zip', '-q', '-y', '-r', str(repacked), '.'], cwd=out, check=True)
+        with zipfile.ZipFile(repacked) as archive:
+            for name,target in [('SYSTEM/bin/sh',b'toybox'),('SYSTEM/lib',b'lib64'),
+                                ('ROOT/bin',b'../SYSTEM/bin')]:
+                self.assertTrue(stat.S_ISLNK(archive.getinfo(name).external_attr >> 16))
+                self.assertEqual(archive.read(name),target)
+        self.assertEqual(hosted.validate_target_zip(repacked,10**9)['symlinkCount'],4)
+        for operation in (
+                lambda: hosted.reject_unsafe_zip(path, 10**9),
+                lambda: hosted.safe_extract(path, path.parent / 'executable', 10**9)):
+            with self.assertRaisesRegex(ValueError, 'unsafe zip symlink'):
+                operation()
+        self.assertFalse((path.parent / 'executable').exists())
+
+    def test_absolute_android_targets_require_current_absent_host_observation(self):
+        path = self.target_archive([
+            ('SYSTEM/bin/toybox', stat.S_IFREG | 0o755, b'tool'),
+            ('SYSTEM/bin/sh', stat.S_IFLNK | 0o777, b'/system/bin/toybox'),
+            ('SYSTEM/lib64/runtime.so', stat.S_IFLNK | 0o777, b'/apex/com.android.runtime/lib64/runtime.so'),
+        ])
+        observed = []
+        def absent(root):
+            observed.append(root)
+            return False
+        proof = hosted.validate_target_zip(path, 10**9, host_root_exists=absent)
+        self.assertEqual(proof['absoluteLinkCount'], 2)
+        self.assertEqual(proof['observedAbsentHostRoots'], ['apex', 'system'])
+        self.assertEqual(set(observed), {'apex', 'system'})
+        for observation, pattern in ((lambda _r: True, 'existing host namespace'),
+                                     (lambda _r: None, 'observation unavailable')):
+            with self.assertRaisesRegex(ValueError, pattern):
+                hosted.validate_target_zip(path, 10**9, host_root_exists=observation)
+        with patch.object(hosted.os, 'geteuid', return_value=0):
+            with self.assertRaisesRegex(ValueError, 'nonroot signer'):
+                hosted._host_root_exists('system')
+        with patch.object(hosted.os, 'geteuid', return_value=1001), \
+                patch.object(hosted.os, 'access', return_value=True):
+            with self.assertRaisesRegex(ValueError, 'protected host root'):
+                hosted._host_root_exists('system')
+        with patch.object(hosted.os, 'geteuid', return_value=1001), \
+                patch.object(hosted.os, 'access', return_value=False), \
+                patch.object(Path, 'read_text', return_value='CapEff:\t0000000000000000\n'):
+            with patch.object(Path, 'lstat', side_effect=FileNotFoundError):
+                self.assertFalse(hosted._host_root_exists('system'))
+            with patch.object(Path, 'lstat', side_effect=PermissionError):
+                with self.assertRaisesRegex(ValueError, 'could not be checked'):
+                    hosted._host_root_exists('system')
+            with patch.object(Path, 'lstat', return_value=object()):
+                self.assertTrue(hosted._host_root_exists('system'))
+        with patch.object(hosted.os, 'geteuid', return_value=1001), \
+                patch.object(hosted.os, 'access', return_value=False):
+            for status in ('CapEff:\t0000000000000001\n', 'No capability observation\n'):
+                with patch.object(Path, 'read_text', return_value=status):
+                    with self.assertRaisesRegex(ValueError, 'unprivileged signer'):
+                        hosted._host_root_exists('system')
+
+    def test_target_link_traversal_host_paths_text_and_normalization_refuse(self):
+        targets = ['../../../tmp/sentinel', '../../META/key', '../../OTA/key',
+                   '/tmp/sentinel', '/home/runner/key', '/proc/self/environ',
+                   '/systematic/bin/x', '/system/../home/key', '/system//bin/x',
+                   '//system/bin/x', '/system/./bin/x', '/', 'C:/Windows/file',
+                   'dir//file', '..\\..\\host', 'bad\x00target', 'bad\ntarget', b'\xff']
+        for target in targets:
+            with self.subTest(target=target):
+                path = self.target_archive([('SYSTEM/bin/link', stat.S_IFLNK | 0o777, target)])
+                with self.assertRaisesRegex(ValueError, 'unsafe zip symlink'):
+                    hosted.validate_target_zip(path, 10**9, host_root_exists=lambda _r: False)
+        names = ['/SYSTEM/bin/a', '../SYSTEM/bin/a', 'SYSTEM/../bin/a',
+                 'SYSTEM//bin/a', 'SYSTEM/./bin/a', 'SYSTEM\\bin\\a', 'C:/SYSTEM/a']
+        for name in names:
+            with self.subTest(name=name):
+                path = self.target_archive([(name, stat.S_IFREG | 0o644, b'file')])
+                with self.assertRaisesRegex(ValueError, 'unsafe zip member'):
+                    hosted.validate_target_zip(path, 10**9)
+        path=self.target_archive([('SYSTEM/aXb',stat.S_IFREG|0o644,b'file')])
+        path.write_bytes(path.read_bytes().replace(b'SYSTEM/aXb',b'SYSTEM/a\x00b'))
+        with self.assertRaisesRegex(ValueError,'unsafe zip member'):
+            hosted.validate_target_zip(path,10**9)
+
+    def test_target_link_chains_resolve_before_dotdot_and_cycles_refuse(self):
+        cases = [
+            [('SYSTEM/a', 'a')],
+            [('SYSTEM/a', 'b'), ('SYSTEM/b', 'a')],
+            [('SYSTEM/a', '/system/b'), ('SYSTEM/b', '/system/a')],
+            [('SYSTEM/inside/alias', '..'), ('SYSTEM/inside/entry', 'alias/../../tmp/sentinel')],
+            [('SYSTEM/inside/Dir', '..'), ('SYSTEM/inside/entry', 'dir/../../tmp/sentinel')],
+            [('SYSTEM/alias', '/system/dir'), ('SYSTEM/entry', 'alias/../../home/runner')],
+            [('SYSTEM/a', '/system/b'), ('SYSTEM/b', '/data/file')],
+        ]
+        for links in cases:
+            with self.subTest(links=links):
+                path = self.target_archive([(n, stat.S_IFLNK | 0o777, t) for n,t in links])
+                with self.assertRaisesRegex(ValueError, 'unsafe zip symlink'):
+                    hosted.validate_target_zip(path, 10**9, host_root_exists=lambda r: r == 'data')
+        path = self.target_archive([
+            (f'SYSTEM/a{i}', stat.S_IFLNK | 0o777, f'a{i+1}') for i in range(66)])
+        with self.assertRaisesRegex(ValueError, 'link chain exceeds bound'):
+            hosted.validate_target_zip(path, 10**9)
+        path = self.target_archive([
+            ('SYSTEM/alias', stat.S_IFLNK | 0o777, '.'),
+            ('SYSTEM/file', stat.S_IFREG | 0o644, b'data'),
+            ('SYSTEM/repeated', stat.S_IFLNK | 0o777, 'alias/alias/file'),
+        ])
+        self.assertEqual(hosted.validate_target_zip(path, 10**9)['symlinkCount'], 2)
+
+    def test_target_symlink_parents_control_members_and_modes_refuse_before_extraction(self):
+        for rows in ([('SYSTEM/dir',stat.S_IFLNK|0o777,b'/system/safe'),
+                      ('SYSTEM/dir/file',stat.S_IFREG|0o644,b'payload')],
+                     [('SYSTEM/dir/file',stat.S_IFREG|0o644,b'payload'),
+                      ('SYSTEM/dir',stat.S_IFLNK|0o777,b'/system/safe')]):
+            path=self.target_archive(rows)
+            with self.assertRaisesRegex(ValueError, 'symlink parent'):
+                hosted.validate_target_zip(path,10**9,
+                    host_root_exists=lambda _r: (_ for _ in ()).throw(AssertionError('must refuse before host lookup')))
+        rows=[('SYSTEM/file',stat.S_IFREG|0o644,b'x'),
+              ('SYSTEM/file/child',stat.S_IFREG|0o644,b'y')]
+        with self.assertRaisesRegex(ValueError,'non-directory parent'):
+            hosted.validate_target_zip(self.target_archive(rows),10**9)
+        with self.assertRaisesRegex(ValueError,'symlink parent'):
+            hosted.validate_target_zip(self.target_archive([
+                ('SYSTEM/Dir',stat.S_IFLNK|0o777,b'other'),
+                ('SYSTEM/dir/file',stat.S_IFREG|0o644,b'x')]),10**9)
+        with self.assertRaisesRegex(ValueError,'case-ambiguous link names'):
+            hosted.validate_target_zip(self.target_archive([
+                ('SYSTEM/A',stat.S_IFLNK|0o777,b'other'),
+                ('SYSTEM/a',stat.S_IFLNK|0o777,b'other')]),10**9)
+        for name in ['META/key','OTA/key','IMAGES/system.img','PREBUILT_IMAGES/boot.img','scripts/tool']:
+            with self.subTest(name=name):
+                with self.assertRaisesRegex(ValueError,'outside Android payload'):
+                    hosted.validate_target_zip(self.target_archive([(name,stat.S_IFLNK|0o777,b'target')]),10**9)
+        for mode,name in [(stat.S_IFLNK|0o777,'SYSTEM/dir/'),
+                          (stat.S_IFIFO|0o644,'SYSTEM/fifo'),
+                          (stat.S_IFREG|0o4755,'SYSTEM/setuid')]:
+            with self.assertRaises(ValueError):
+                hosted.validate_target_zip(self.target_archive([(name,mode,b'target')]),10**9)
+        path=self.target_archive([('SYSTEM/link/',stat.S_IFLNK|0o777,b'target')])
+        with self.assertRaisesRegex(ValueError,'unsafe zip symlink'):
+            hosted.reject_unsafe_zip(path,10**9)
+        path=self.target_archive([('SYSTEM/link',stat.S_IFLNK|0o777,b'x'*4097)])
+        with self.assertRaisesRegex(ValueError,'metadata exceeds bound'):
+            hosted.validate_target_zip(path,10**9)
+        path=self.target_archive([('SYSTEM/file',stat.S_IFREG|0o644,b'data')])
+        with self.assertRaisesRegex(ValueError,'zip expansion exceeds capacity'):
+            hosted.validate_target_zip(path,1)
+        with self.assertWarns(UserWarning):
+            duplicate=self.target_archive([('SYSTEM/file',stat.S_IFREG|0o644,b'one'),
+                                           ('SYSTEM/file',stat.S_IFREG|0o644,b'two')])
+        with self.assertRaisesRegex(ValueError,'duplicate zip member'):
+            hosted.validate_target_zip(duplicate,10**9)
+        import struct
+        encrypted=self.target_archive([('SYSTEM/file',stat.S_IFREG|0o644,b'file')])
+        raw=bytearray(encrypted.read_bytes())
+        for signature,offset in [(b'PK\x03\x04',6),(b'PK\x01\x02',8)]:
+            at=raw.index(signature)+offset
+            struct.pack_into('<H',raw,at,struct.unpack_from('<H',raw,at)[0]|1)
+        encrypted.write_bytes(raw)
+        with self.assertRaisesRegex(ValueError,'mode or encryption'):
+            hosted.validate_target_zip(encrypted,10**9)
+
+    def test_payload_links_admit_only_in_unsigned_role_and_still_bind_hashes(self):
+        path=self.target_archive([('SYSTEM/bin/tool',stat.S_IFREG|0o755,b'tool'),
+                                  ('SYSTEM/bin/link',stat.S_IFLNK|0o777,b'tool')])
+        bundle,files,pin=self.tiny_bundle()
+        files['unsigned'].write_bytes(path.read_bytes())
+        bundle['unsigned'].update(sha256=digest(files['unsigned']),sizeBytes=files['unsigned'].stat().st_size)
+        root=self.checkout(files['generateRelease'].read_bytes())
+        result=hosted.evaluate(bundle,root,10**18,files=files,pin=pin,env=ENV,
+                               capacity_config=self.admitted())
+        self.assertTrue(result['admit'])
+        self.assertEqual(result['targetArchiveValidation']['artifact'],
+                         {k:bundle['unsigned'][k] for k in ('sha256','sizeBytes')})
+        self.assertEqual(result['targetArchiveValidation']['symlinkCount'],1)
+        for kind,pin_name in [('otatools','otatoolsSha256'),('jdk','jdkSha256')]:
+            b,f,p=self.tiny_bundle()
+            f[kind].write_bytes(path.read_bytes())
+            b[kind].update(sha256=digest(f[kind]),sizeBytes=f[kind].stat().st_size)
+            p[pin_name]=b[kind]['sha256']
+            def call(secret_access,b=b,f=f,p=p):
+                hosted.evaluate(b,root,10**18,files=f,pin=p,env=ENV,
+                                capacity_config=self.admitted(),secret_access=secret_access)
+            self.assert_secret_closed(call,kind+' archive: unsafe zip symlink')
 
     def tiny_bundle(self, zip_member='payload.txt', symlink=False):
         self.directory = tempfile.TemporaryDirectory()

@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
-"""Reviewed hosted-signer tooling closure. Production pins stay unbound.
+"""Reviewed hosted-signer tooling closure and measured input pins.
 
 The files under script/ and device/common/ are the upstream helpers the hosted
 signer actually reads or executes. script/decrypt-keys is replaced before
 execution, and device/common/generate-factory-images-common.sh is after the
 img_from_target_files cut, so neither is imported. The JDK section records a
 deterministic zip of the official prebuilts/jdk/jdk21 linux-x86 tree. That zip
-is not committed, and jdkSha256 in the admission pin stays null.
+is not committed. A separate current pin may select its measured hash while
+capacity and execution admission remain closed.
 """
 import hashlib
 import json
@@ -57,21 +58,43 @@ def load_json(root, relative):
     return json.loads(path.read_text())
 
 
+def qualified_pins(root=ROOT):
+    import mustang_otatools_qualification as qualification
+    receipt=load_json(root,RECEIPT)
+    script=[row for row in receipt['files'] if row['path']=='script/generate-release.sh']
+    if len(script)!=1:raise ClosureError('release-script closure differs')
+    try:inspected=qualification.inspection_record(root=root)
+    except ValueError as error:raise ClosureError(str(error)) from None
+    return dict(generateReleaseSha256=script[0]['sha256'],jdkSha256=receipt['jdk']['archiveSha256'],
+        otatoolsSha256=inspected['packageSha256'],otatoolsExecutable='bin/ota_from_target_files')
+
+
 def production_unbound(root=ROOT):
     """Admission pin config stays closed. A provenance receipt is not a pin."""
     pin = load_json(root, PIN)
-    for key in PIN_KEYS:
-        if pin.get(key) is not None:
-            raise ClosureError(f'production pin {key} is filled')
-    if pin.get('trust') != 'held' or pin.get('status') != 'unbound':
+    if pin.get('trust') != 'held':
+        raise ClosureError('production script trust is not held')
+    if pin.get('status') == 'unbound':
+        if any(pin.get(key) is not None for key in PIN_KEYS):
+            raise ClosureError('unbound production pin is filled')
+    elif pin.get('status') == 'qualified':
+        expected = qualified_pins(root)
+        if any(pin.get(key) != expected[key] for key in PIN_KEYS):
+            raise ClosureError('qualified production pin differs from measured provenance')
+    else:
         raise ClosureError('production script trust is not held')
     capacity = load_json(root, CAPACITY)
     if capacity.get('admission') is not False or capacity.get('trust') != 'held':
         raise ClosureError('hosted signer admission is not held')
     bounds = capacity.get('outputBounds') or {}
-    for key in OUTPUT_BOUNDS:
-        if bounds.get(key) is not None:
-            raise ClosureError(f'output bound {key} is filled')
+    if any(bounds.get(key) is not None for key in OUTPUT_BOUNDS):
+        runner=capacity.get('activeRunner') or {}
+        if pin.get('status')!='qualified' or runner.get('kind')!='github-larger-runner' \
+                or runner.get('configured') is not True:
+            raise ClosureError('selected output budgets require qualified tools/configured larger profile')
+        for key in OUTPUT_BOUNDS:
+            if type(bounds.get(key)) is not int or bounds[key]<=0:
+                raise ClosureError(f'output budget {key} is invalid')
     proposed = capacity.get('proposedRunner') or {}
     if any(proposed.get(key) is not False for key in ('purchased', 'configured', 'selected', 'approved', 'sizingProof')):
         raise ClosureError('paid runner is recorded as activated')
@@ -118,16 +141,23 @@ def further_sources(path):
             raise ClosureError(f'{path.name} sources another helper')
 
 
-def verify_closure(root=ROOT):
+def verify_closure(root=ROOT,*,require_unbound=True):
     root = Path(root)
-    production_unbound(root)
+    if require_unbound:production_unbound(root)
     receipt = load_json(root, RECEIPT)
     if receipt.get('schema') != 'roseos.mustang-hosted-tool-closure.v1':
         raise ClosureError('tool closure receipt schema mismatch')
     if receipt.get('admission') is not False or receipt.get('productionPins') != 'unbound' or receipt.get('trust') != 'held':
         raise ClosureError('tool closure receipt enables admission')
-    if (receipt.get('otatools') or {}).get('sha256') is not None:
+    otatools=receipt.get('otatools') or {}
+    if any(otatools.get(key) is not None for key in ('sha256','executable')):
         raise ClosureError('otatools receipt was filled without the independent builder')
+    if otatools.get('qualificationEvidence') is not None:
+        import mustang_otatools_qualification
+        mustang_otatools_qualification.binding(otatools['qualificationEvidence'],root=root)
+    if otatools.get('inspectionEvidence') is not None:
+        import mustang_otatools_qualification
+        mustang_otatools_qualification.inspection_record(otatools['inspectionEvidence'],root=root)
     files = receipt.get('files')
     if not isinstance(files, list) or not files:
         raise ClosureError('tool closure has no files')
@@ -319,8 +349,8 @@ def verify_archive_members(blob):
 
 def main(argv):
     if argv == ['verify']:
-        receipt = verify_closure(ROOT)
-        print(json.dumps({'status': 'held', 'files': len(receipt['files']),
+        receipt = verify_closure(ROOT,require_unbound=False)
+        print(json.dumps({'status': 'provenance-verified', 'executionAdmitted': False, 'files': len(receipt['files']),
                           'jdkArchiveSha256': receipt['jdk']['archiveSha256']}, sort_keys=True))
         return 0
     print('usage: mustang_tool_closure.py verify', file=sys.stderr)

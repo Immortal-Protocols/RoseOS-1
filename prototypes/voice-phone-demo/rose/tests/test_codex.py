@@ -945,8 +945,15 @@ class ConversationCustomization(Integration):
         result, link = self.use('customization_home_columns', {'columns': 5}, reply)
         self.assertEqual(link.sent, [('app_command', {'timeout': 12.0, 'packageName': 'dev.pixel.voice',
                                                       'operation': 'customization_home_columns', 'params': {'columns': 5}})])
-        self.assertTrue(result['ok'])
+        # 1B: saved but not yet drawn by Home is not success (no revision in this reply, so no state re-read).
+        self.assertFalse(result['ok'])
+        self.assertEqual(result['outcome'], 'saved_not_shown')
         self.assertEqual(result['home'], {'applied': False, 'effectiveColumns': None})
+        self.assertFalse(self.engine.client.results[-1]['result']['success'])
+        drawn = {'status': 'verified', 'changed': True, 'customization': {'homeColumns': 5, 'revision': 7},
+                 'home': {'applied': True, 'appliedRevision': 7, 'effectiveColumns': 5}}
+        result, link = self.use('customization_home_columns', {'columns': 5}, drawn)
+        self.assertEqual((result['ok'], result['outcome'], len(link.sent)), (True, 'applied', 1))
         self.assertTrue(self.engine.client.results[-1]['result']['success'])
         for status in ('uncertain', 'unavailable', 'error', 'running', 'timeout', 'offline'):
             with self.subTest(status=status):

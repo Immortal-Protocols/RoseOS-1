@@ -1075,6 +1075,19 @@ class OpenSsh92Test(unittest.TestCase):
             known.write_text(f'[127.0.0.1]:{port} {(base / "host.pub").read_text().strip()}\n')
             proc = subprocess.Popen([str(self.sshd), '-f', str(config), '-E', str(base / 'log'), '-D'])
             try:
+                # Popen returns before sshd binds its socket. Require a live
+                # listener before the first authenticated assertion.
+                import socket
+                deadline = time.monotonic() + 5
+                while True:
+                    if proc.poll() is not None or time.monotonic() >= deadline:
+                        log = (base / 'log').read_text()[-4000:] if (base / 'log').exists() else 'no server log'
+                        self.fail('OpenSSH9.2 fixture did not become ready: ' + log)
+                    try:
+                        with socket.create_connection(('127.0.0.1', port), timeout=0.1):
+                            break
+                    except OSError:
+                        time.sleep(0.02)
                 auth.write_text(f'restrict,command="echo FORCED92",expiry-time="{future}" ssh-ed25519 {pub} client\n')
                 os.chmod(auth, 0o600)
                 good = _ssh92(port, base, known)

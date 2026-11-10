@@ -14,9 +14,11 @@ import android.graphics.Color;
 import android.graphics.Rect;
 import android.os.Looper;
 import android.os.SystemClock;
+import android.os.SystemProperties;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewTreeObserver;
+import android.view.InsetsFrameProvider;
 import android.view.WindowInsets;
 import android.view.WindowManager;
 import com.android.wm.shell.roseedge.IRoseEdge;
@@ -80,6 +82,7 @@ public class RoseEdgeWindowNativeTest {
         window.stop();
         RoseEdgeState.lower(DISPLAY);
         RoseEdgeShell.setShell(null);
+        SystemProperties.set(RoseEdgeWindow.TRAY_PROPERTY, "");
     }
 
     static void idle() {
@@ -230,7 +233,8 @@ public class RoseEdgeWindowNativeTest {
     }
 
     @Test
-    public void theSlotIsLeftTransparentAndThePlateIsDrawnAroundIt() throws Exception {
+    public void theMicIsDrawnInTheSlotAsStatusUnavailableAndThePlateAroundIt() throws Exception {
+        SystemProperties.set(RoseEdgeWindow.TRAY_PROPERTY, "1");  // Frankel's image (frankel.json)
         RoseEdgeWindow.EdgeView view = raise();
         Bitmap bitmap = Bitmap.createBitmap(dp(384), dp(92), Bitmap.Config.ARGB_8888);
         view.draw(new Canvas(bitmap));
@@ -243,7 +247,15 @@ public class RoseEdgeWindowNativeTest {
             }
         }
         Rect mic = view.control(RoseEdgeLayout.MIC);
-        assertEquals("nothing drawn in the slot", 0, Color.alpha(bitmap.getPixel(mic.centerX(), mic.centerY())));
+        // 1A: the mic is visible with the tray (no transparent hole), in SystemUI's own "status unavailable" look.
+        float s = 20 * density / 24f;
+        int plate = bitmap.getPixel(mic.left + dp(2), mic.centerY());
+        int glyph = bitmap.getPixel(mic.centerX(), Math.round(mic.exactCenterY() - 12 * s + 9 * s));
+        assertEquals("the plate runs through the slot", 255, Color.alpha(plate));
+        assertEquals("the mic is drawn on it, opaque", 255, Color.alpha(glyph));
+        assertTrue("the mic glyph shows against the plate", Color.red(glyph) > Color.red(plate) + 40);
+        assertTrue("at the unknown-state alpha: never the full ink a known state shows",
+                Color.red(glyph) < 0xE6 - 40);
         assertEquals("the plate is opaque below the flat top", 255, Color.alpha(bitmap.getPixel(dp(4), dp(88))));
         assertEquals("the concave fillet leaves its inside clear", 0, Color.alpha(bitmap.getPixel(dp(30), dp(2))));
         assertEquals("on both sides", 0, Color.alpha(bitmap.getPixel(dp(384 - 30), dp(2))));
@@ -262,15 +274,35 @@ public class RoseEdgeWindowNativeTest {
         assertEquals(List.of("raise", "slot " + expected), shell.calls);
     }
 
+    /**
+     * The window manager's rule for a relayout (pinned frameworks/base 84183aff, WindowManagerService.relayoutWindow,
+     * lines 2630-2660): the providers a window declared when it was added can be resized, never added, removed or
+     * re-identified; anything else throws IllegalArgumentException into the caller. Robolectric does not enforce it.
+     */
+    static void assertRelayoutAllowed(InsetsFrameProvider[] added, InsetsFrameProvider[] now) {
+        if (added == null && now == null) return;
+        assertTrue("Insets amount can not be changed after the window is added",
+                added != null && now != null && added.length == now.length);
+        for (int i = 0; i < now.length; i++) {
+            assertTrue("Insets ID can not be changed after the window is added", added[i].idEquals(now[i]));
+            assertTrue("Insets override types can not be changed",
+                    (added[i].getInsetsSizeOverrides() == null) == (now[i].getInsetsSizeOverrides() == null));
+        }
+    }
+
     @Test
     public void theInsetIsProvidedOnlyOnceTheShellShortenedTheApp() throws Exception {
         RoseEdgeWindow.EdgeView view = raise();
         WindowManager.LayoutParams lp = (WindowManager.LayoutParams) view.getLayoutParams();
+        // Frankel 2026110705 crash: the provider must exist from addView, so the onRaised relayout only resizes it.
+        InsetsFrameProvider[] added = lp.providedInsets;
+        assertNotNull("the chin declares its inset provider when the window is added", added);
         assertEquals("raised but not yet resized: the full-height app must not see an inset", 0,
                 RoseEdgeWindow.insetPx(lp));
         shell.listener.onRaised(DISPLAY, TASK, new Rect(0, 0, dp(384), dp(832 - 58)));
         idle();
         lp = (WindowManager.LayoutParams) window.shownOn(DISPLAY).getLayoutParams();
+        assertRelayoutAllowed(added, lp.providedInsets);
         assertEquals("the lift, as a systemOverlays inset", RoseEdgeGesture.raisedInsetPx(density),
                 RoseEdgeWindow.insetPx(lp));
         assertEquals(1, lp.providedInsets.length);
@@ -298,6 +330,20 @@ public class RoseEdgeWindowNativeTest {
         shell.listener.onRaised(DISPLAY, TASK, new Rect(0, 0, dp(384), dp(832 - 58)));
         idle();
         assertNull(window.shownOn(DISPLAY));
+    }
+
+    @Test
+    public void withTheStatusTrayOffNoMicIsDrawnOnlyThePlate() throws Exception {
+        SystemProperties.set(RoseEdgeWindow.TRAY_PROPERTY, "");
+        RoseEdgeWindow.EdgeView view = raise();
+        Bitmap bitmap = Bitmap.createBitmap(dp(384), dp(92), Bitmap.Config.ARGB_8888);
+        view.draw(new Canvas(bitmap));
+        Rect mic = view.control(RoseEdgeLayout.MIC);
+        float s = 20 * density / 24f;
+        int plate = bitmap.getPixel(mic.left + dp(2), mic.centerY());
+        int glyph = bitmap.getPixel(mic.centerX(), Math.round(mic.exactCenterY() - 12 * s + 9 * s));
+        assertEquals("no SystemUI mic control on this build, so no stand-in: only the plate", Color.red(plate),
+                Color.red(glyph), 6);
     }
 
     MotionEvent touch(int action, float x, float y) {

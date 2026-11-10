@@ -1,0 +1,96 @@
+{
+  "schema": "roseos.mustang-preflight-evidence.v1",
+  "runtimeAdmitted": false,
+  "compileAttested": false,
+  "signingAttested": false,
+  "publicationAttested": false,
+  "observationSha256": "3df069c0e3c19db411682ed108d384b2ff85317ccccea829e0cbe3b4d456a5ad",
+  "observation": {
+    "administratorPolicy": {
+      "initializerExecuted": false,
+      "listedCommandExecuted": false,
+      "passwordlessExecutionAttested": false,
+      "policyExitCode": 1,
+      "probe": "sudo-policy-list-command-only",
+      "state": "policy-not-confirmed"
+    },
+    "authenticatedStop": false,
+    "availableBytes": 1288262090752,
+    "availableInodes": 94442973,
+    "dependencyOutput": {
+      "state": "absent"
+    },
+    "guestIdentityVerified": true,
+    "identity": {
+      "builder": {
+        "instance": "roseos-mustang-builder-20261107-a",
+        "instanceId": "5585425566393384049",
+        "project": "protocols-465723",
+        "zone": "us-west2-a"
+      },
+      "diskUuid": "4183bff8-6be4-46bb-a641-2193d19813ee",
+      "run": {
+        "runAttempt": "1",
+        "runId": "42499529813",
+        "source": "b1dc69b271b6bc97e3a289343283323a8e892133",
+        "workflow": "Immortal-Protocols/RoseOS-1/.github/workflows/mustang-ota-dedicated.yml@refs/heads/main"
+      }
+    },
+    "lock": {
+      "state": "absent"
+    },
+    "lockParent": {
+      "gid": 0,
+      "linkCount": 9,
+      "mode": 493,
+      "state": "directory",
+      "uid": 0
+    },
+    "makeStarted": false,
+    "otaAuthorized": false,
+    "pristineRuntimeAttestation": false,
+    "publishAuthorized": false,
+    "readOnlyGuestObservation": true,
+    "runnerCanCreateLock": false,
+    "runnerUid": 999,
+    "schema": "roseos.mustang-hostdeps-preflight.v1",
+    "signAuthorized": false
+  },
+  "provenance": {
+    "repository": "Immortal-Protocols/RoseOS-1",
+    "runId": "42499529813",
+    "runAttempt": "1",
+    "headSha": "b1dc69b271b6bc97e3a289343283323a8e892133",
+    "event": "workflow_dispatch",
+    "scope": "infrastructure-dry-run-with-sudo-policy-query",
+    "conclusion": "success",
+    "builderJobId": 128789323717,
+    "cleanupJobId": 128789366031,
+    "artifactId": 13625116235,
+    "artifactBytes": 807,
+    "artifactSha256": "596fb264dd702f5e234fcb920fa518ef366fd4a0a23c26cfbc5063eb8cba6306"
+  },
+  "postCleanupControlPlane": {
+    "id": "5585425566393384049",
+    "lastStartTimestamp": "2026-11-08T08:22:37.060-08:00",
+    "lastStopTimestamp": "2026-11-08T08:24:24.927-08:00",
+    "name": "roseos-mustang-builder-20261107-a",
+    "scheduling": {
+      "automaticRestart": true,
+      "instanceTerminationAction": "STOP",
+      "maxRunDuration": {
+        "nanos": 0,
+        "seconds": "14400"
+      },
+      "onHostMaintenance": "MIGRATE",
+      "preemptible": false,
+      "provisioningModel": "STANDARD"
+    },
+    "status": "TERMINATED"
+  },
+  "limits": [
+    "sudo -n -l only listed policy for the exact command; it did not execute the initializer.",
+    "Exit 1 leaves a permitted noninteractive runner route unconfirmed; no privileged execution was attempted.",
+    "No credentials, access changes, Make, vendor generation, otatools proof, allocation, signing or OTA."
+  ]
+}

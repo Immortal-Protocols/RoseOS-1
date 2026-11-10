@@ -1,0 +1,343 @@
+{
+  "schema": "roseos.mustang-vendor-evidence.v1",
+  "runId": "42522784617",
+  "runAttempt": "1",
+  "source": "55c085ade9d0ef8fa792df1e824720130997b29b",
+  "workflowConclusion": "success",
+  "cleanupConclusion": "success",
+  "receiptSha256": "53397baa8dcb211da3413c100b916521a8078b77ff7ce0d8b5bb7161e827eb95",
+  "receipt": {
+    "adevtoolSource": {
+      "complete": true,
+      "entries": 124,
+      "fileBytes": 891690,
+      "method": "sorted-tree-path-mode-link-and-file-sha256-v1",
+      "sha256": "86e57c935f04fef40f78b4a0f9f630f5fbe86226fd5dd16c6d6b161551694f1e"
+    },
+    "adevtoolTrackedWorktreeUnchanged": true,
+    "allocated": false,
+    "authenticatedStop": false,
+    "bootstrapRecovery": {
+      "compiledJavascriptUsed": false,
+      "fromRun": {
+        "runAttempt": "1",
+        "runId": "42516700216",
+        "source": "8fbcc1486318210e39fb20a6301b1d51bc43190f",
+        "workflow": "Immortal-Protocols/RoseOS-1/.github/workflows/mustang-ota-dedicated.yml@refs/heads/main"
+      },
+      "installExitCode": 0,
+      "installRepeated": false,
+      "libRetention": {
+        "catalog": {
+          "complete": true,
+          "entries": 203,
+          "fileBytes": 1067216,
+          "method": "sorted-tree-path-mode-link-and-file-sha256-v1",
+          "sha256": "20006cc33e71c5dca14a0c9f6f3ce9470fc12e03d114b216e20dfb6252c37460"
+        },
+        "completed": true,
+        "destination": "/mnt/disks/mustang-data/roseos/rose-actions/mustang-vendor-42516700216-1/retained-tsc-lib",
+        "device": 2064,
+        "failedReceiptSha256": "2be8e204a1e763a0256f540d046af5605f4b7aba1f3d03b270d93b39060da21f",
+        "inode": 73307316,
+        "schema": "roseos.mustang-vendor-lib-retention.v1",
+        "source": "/mnt/disks/mustang-data/roseos/source/vendor/adevtool/lib",
+        "toRun": {
+          "runAttempt": "1",
+          "runId": "42522784617",
+          "source": "55c085ade9d0ef8fa792df1e824720130997b29b",
+          "workflow": "Immortal-Protocols/RoseOS-1/.github/workflows/mustang-ota-dedicated.yml@refs/heads/main"
+        }
+      },
+      "nodeModulesBefore": {
+        "complete": true,
+        "entries": 23026,
+        "fileBytes": 156209330,
+        "method": "sorted-tree-path-mode-link-and-file-sha256-v1",
+        "sha256": "65149ff53a7062f0ff3fa018dcadb85c66ad6fb11a03ff41bdcff69b272326e0"
+      }
+    },
+    "boundEnforcement": "sampled-process-group-stop",
+    "buildMetadataRetention": {
+      "completed": true,
+      "destination": "/mnt/disks/mustang-data/roseos/rose-actions/mustang-vendor-42516700216-1/retained-tsconfig.tsbuildinfo",
+      "device": 2064,
+      "failedReceiptSha256": "2be8e204a1e763a0256f540d046af5605f4b7aba1f3d03b270d93b39060da21f",
+      "fingerprint": {
+        "mode": 384,
+        "sha256": "e9c2388f7fb0403d3493974be91b1c5e359e7f7b4994b2c2b1f640f5fa65e31c",
+        "sizeBytes": 2802
+      },
+      "inode": 67409102,
+      "schema": "roseos.mustang-vendor-build-metadata-retention.v1",
+      "source": "/mnt/disks/mustang-data/roseos/source/vendor/adevtool/tsconfig.tsbuildinfo",
+      "toRun": {
+        "runAttempt": "1",
+        "runId": "42522784617",
+        "source": "55c085ade9d0ef8fa792df1e824720130997b29b",
+        "workflow": "Immortal-Protocols/RoseOS-1/.github/workflows/mustang-ota-dedicated.yml@refs/heads/main"
+      },
+      "usedForGeneration": false
+    },
+    "commands": [
+      {
+        "argv": [
+          "/mnt/disks/mustang-data/roseos/tools/node/node-v24.22.2-linux-x64/bin/node",
+          "/mnt/disks/mustang-data/roseos/rose-actions/mustang-vendor-42522784617-1/yarn-tools/package/bin/yarn.js",
+          "check",
+          "--integrity",
+          "--cwd",
+          "vendor/adevtool"
+        ],
+        "exitCode": 0,
+        "processStarted": true
+      },
+      {
+        "argv": [
+          "vendor/adevtool/bin/run",
+          "--help"
+        ],
+        "exitCode": 0,
+        "processStarted": true
+      },
+      {
+        "argv": [
+          "vendor/adevtool/bin/run",
+          "generate-all",
+          "-d",
+          "mustang"
+        ],
+        "exitCode": 0,
+        "processStarted": true
+      }
+    ],
+    "detachedDescendantsContained": false,
+    "elapsedSeconds": 228.479,
+    "executionMode": "pinned-typescript-source-loader",
+    "factoryConfiguration": {
+      "buildIndex": {
+        "mode": 384,
+        "sha256": "a108c6dd08afe9ad5e3fe09f36ae513b2fac34c7d18a2a66d5a90ebb742933f4",
+        "sizeBytes": 414014
+      },
+      "buildSelection": {
+        "mode": 384,
+        "sha256": "92dd7f9cfdb3bdef2922892048f323407b6896f5e93f7ca8f73816488254ceca",
+        "sizeBytes": 80
+      },
+      "device": {
+        "mode": 384,
+        "sha256": "21df5be6eb5c2ba3c2095b70b7136802155c33925315f8488e7dc1be143a2cbc",
+        "sizeBytes": 225
+      }
+    },
+    "factoryInput": {
+      "archiveRehashed": true,
+      "otaAdmitted": false,
+      "path": "/mnt/disks/mustang-data/roseos/rose-actions/mustang-factory-inputs/mustang-cp3a.261005.005-factory-099acc44.zip",
+      "receiptSha256": "3df0cc64971ba39272b547378177162355e5487b5a17e1c5566b192b4c0ae01c",
+      "run": {
+        "runAttempt": "1",
+        "runId": "42510878271",
+        "source": "93a3c95748164afa2cce4f4a9b02925b71a53291",
+        "workflow": "Immortal-Protocols/RoseOS-1/.github/workflows/mustang-ota-dedicated.yml@refs/heads/main"
+      },
+      "sha256": "099acc44e2f87fe2735d92952081d64550ff08b4a6390bb6b001c8451695657e",
+      "sizeBytes": 11366092596
+    },
+    "hostDependencies": {
+      "adevtoolRevision": "17df3b79a73e67ad68387b35c7d41c85e1d8103c",
+      "distributionEntries": 485,
+      "distributionRehashed": true,
+      "otaAdmitted": false,
+      "receiptSha256": "1324d6d8d4bd6c54ec93792f08695e597ca77986b79f023754944b6424a14977",
+      "run": {
+        "runAttempt": "1",
+        "runId": "42512135815",
+        "source": "78d5ebdfd4f3fc1dd99d8cb98bbf44316b9eb54f",
+        "workflow": "Immortal-Protocols/RoseOS-1/.github/workflows/mustang-ota-dedicated.yml@refs/heads/main"
+      }
+    },
+    "identity": {
+      "builder": {
+        "instance": "roseos-mustang-builder-20261107-a",
+        "instanceId": "5585425566393384049",
+        "project": "protocols-465723",
+        "zone": "us-west2-a"
+      },
+      "diskUuid": "4183bff8-6be4-46bb-a641-2193d19813ee",
+      "run": {
+        "runAttempt": "1",
+        "runId": "42522784617",
+        "source": "55c085ade9d0ef8fa792df1e824720130997b29b",
+        "workflow": "Immortal-Protocols/RoseOS-1/.github/workflows/mustang-ota-dedicated.yml@refs/heads/main"
+      }
+    },
+    "makeStarted": false,
+    "maxEntriesPerWatchedTree": 1000000,
+    "node": {
+      "mode": 493,
+      "sha256": "904a6d3484241d466989f9df9ba3aab822b1496191bdb28230eb491a55c32a52",
+      "sizeBytes": 126881248
+    },
+    "nodeModules": {
+      "complete": true,
+      "entries": 23026,
+      "fileBytes": 156209330,
+      "method": "sorted-tree-path-mode-link-and-file-sha256-v1",
+      "sha256": "65149ff53a7062f0ff3fa018dcadb85c66ad6fb11a03ff41bdcff69b272326e0"
+    },
+    "nodeVersion": "v24.22.2",
+    "otaAdmitted": false,
+    "partialsPreserved": true,
+    "phase": "complete",
+    "productMakefile": {
+      "mode": 384,
+      "sha256": "76fb32fb05849fc535eb26b2fe7e80138b9bd5a233bf11b56ded0458f7169daf",
+      "sizeBytes": 834799
+    },
+    "reserveBytes": 322122547200,
+    "schema": "roseos.mustang-vendor-preparation-run.v1",
+    "signingStarted": false,
+    "source": {
+      "check": "project-heads-and-git-status",
+      "ignoredContentUnchecked": true,
+      "pristineRuntimeAttestation": false,
+      "projectCount": 1057
+    },
+    "sourceLoader": {
+      "binRun": {
+        "mode": 448,
+        "sha256": "77e8f75550f3694dddaa4ea695aedfd00704a4a3399200dc6ac9c17d84c7930a",
+        "sizeBytes": 1552
+      },
+      "packageJson": {
+        "mode": 384,
+        "sha256": "baf12dfd26de6e24649aeed82504d4955ad06eb7f8ddf8af3210ffef25a390de",
+        "sizeBytes": 2575
+      },
+      "yarnLock": {
+        "mode": 384,
+        "sha256": "69475c004b6271a3817e7c79bebf7459e9e3c80684864cd60bdf88d944904f8f",
+        "sizeBytes": 232023
+      }
+    },
+    "sourceRoot": "/mnt/disks/mustang-data/roseos/source",
+    "spaceObservations": {
+      "minimumAvailableBytes": 1245173035008,
+      "peakWatchedBytes": 1939058120,
+      "samples": 30
+    },
+    "success": true,
+    "timeoutSeconds": 9000,
+    "vendorTree": {
+      "complete": true,
+      "entries": 7722,
+      "fileBytes": 1773869278,
+      "method": "sorted-tree-path-mode-link-and-file-sha256-v1",
+      "sha256": "796e11dd6cc0d127a6348fe3a59e81df249a1cbb9384ce6474f3d00176521b1f"
+    },
+    "workBytes": 137438953472,
+    "yarn": {
+      "mode": 448,
+      "sha256": "148e19db309ec9eaf7720b28df811337906eea8a1758deaa54afee60a6305e04",
+      "sizeBytes": 1015
+    },
+    "yarnDistribution": {
+      "archiveBytes": 1238429,
+      "archiveSha256": "c17d3797fb9a9115bf375e31bfd30058cac6bc9c3b8807a3d8cb2094794b51ca",
+      "catalog": [
+        {
+          "mode": 384,
+          "path": "package/LICENSE",
+          "sha256": "ae09761b5d27e237571245437653b483bbb85de3cc64b802e8ef47d03aabec1e",
+          "sizeBytes": 1355
+        },
+        {
+          "mode": 448,
+          "path": "package/bin/yarn",
+          "sha256": "9207642def40f4e6a8ebf027d89a2fbc4e874db2c1bd1b85f097bf49ab40fae6",
+          "sizeBytes": 1025
+        },
+        {
+          "mode": 448,
+          "path": "package/bin/yarnpkg",
+          "sha256": "b0761f6de0fe5517f021f9ca1aeabd7db8c5bac9fdfdbf91affa8be0729f4fcb",
+          "sizeBytes": 42
+        },
+        {
+          "mode": 448,
+          "path": "package/bin/yarn.cmd",
+          "sha256": "f7c7edcdd3e8e97707ad6dfc2e8f21a8ccd2ed7e96b3f64e31d9c88a7b32e3ff",
+          "sizeBytes": 34
+        },
+        {
+          "mode": 448,
+          "path": "package/bin/yarnpkg.cmd",
+          "sha256": "a6197aae45c4501a3d6a48d813b5fffdacc3fa52cef6b52f1d2c9cb37a120011",
+          "sizeBytes": 30
+        },
+        {
+          "mode": 448,
+          "path": "package/lib/cli.js",
+          "sha256": "443ed69e76443b89afddccfc9faec1ff16eb5e500979cc079c696dec4c3d94ee",
+          "sizeBytes": 5320747
+        },
+        {
+          "mode": 384,
+          "path": "package/preinstall.js",
+          "sha256": "4641ced6ee6ee791b97e2f80b0298f5194ab757e1c4a9abb5c359b37d67f922b",
+          "sizeBytes": 2342
+        },
+        {
+          "mode": 384,
+          "path": "package/lib/v8-compile-cache.js",
+          "sha256": "ec1d7229ff64232637f255f2f042daf9aeb59b3dd3c66db64e2c2b75cb4562d6",
+          "sizeBytes": 9910
+        },
+        {
+          "mode": 448,
+          "path": "package/bin/yarn.js",
+          "sha256": "148e19db309ec9eaf7720b28df811337906eea8a1758deaa54afee60a6305e04",
+          "sizeBytes": 1015
+        },
+        {
+          "mode": 384,
+          "path": "package/package.json",
+          "sha256": "9533b84eaaeea708ab99bcf92772bc81c7389f90a04f8b0188c163f9b3b621c3",
+          "sizeBytes": 634
+        },
+        {
+          "mode": 384,
+          "path": "package/README.md",
+          "sha256": "20d87dd37f90fcc119246142907fc9014bd8850bf43298499ad1b3f6faed687b",
+          "sizeBytes": 3353
+        }
+      ],
+      "credentialsUsed": false,
+      "path": "/mnt/disks/mustang-data/roseos/rose-actions/mustang-vendor-42522784617-1/yarn-tools/package/bin/yarn.js",
+      "systemPackagesChanged": false,
+      "unpackedBytes": 5340487,
+      "url": "https://registry.npmjs.org/yarn/-/yarn-1.22.22.tgz",
+      "version": "1.22.22"
+    },
+    "yarnVersion": "1.22.22"
+  },
+  "artifact": {
+    "id": 13633874194,
+    "name": "mustang-vendor-42522784617-1",
+    "sizeBytes": 3329,
+    "sha256": "8652883e97b1dc7026569db72266bc8c9bd3a654aafe2537fb01260c816e4b0f"
+  },
+  "stopObservation": {
+    "instanceId": "5585425566393384049",
+    "status": "TERMINATED",
+    "lastStartTimestamp": "2026-11-08T12:58:52.964-08:00",
+    "lastStopTimestamp": "2026-11-08T13:04:32.732-08:00",
+    "maxRunDurationSeconds": 14400,
+    "terminationAction": "STOP"
+  },
+  "vendorGenerated": true,
+  "otaAdmitted": false,
+  "basis": "Hash-verified same-run structured receipt and independent numeric-ID STOP observation. Vendor generation is qualified; ignored source content remains unchecked and no pristine runtime, tool-package, OTA, signing or publication admission is claimed."
+}

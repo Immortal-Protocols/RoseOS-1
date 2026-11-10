@@ -26,6 +26,7 @@ import mustang_integration as integration
 import release_receipts
 import mustang_lane
 import mustang_paths
+import mustang_vendor_consumer
 
 PLAN = 'https://app.notion.com/p/40d7c646c81b81198e60cb76ca2ea603'
 SCRUBBED = ('JAVA_TOOL_OPTIONS', 'JDK_JAVA_OPTIONS', '_JAVA_OPTIONS', 'CLASSPATH', 'JAVA_HOME', 'LD_PRELOAD',
@@ -115,6 +116,23 @@ def call(engine, argv, seconds, cwd, env):
     return result, output
 
 
+def require_bootstrap_observation(result):
+    """Surface only the collector's bounded fixed codes, including pre-claim failures."""
+    receipt=result.get('receipt',{})
+    if result.get('receiptWritten') is True and receipt.get('success') is True:
+        return
+    safe=lambda value,fallback:value if isinstance(value,str) and re.fullmatch(r'[a-z][a-z0-9-]{0,95}',value) else fallback
+    failure=safe(receipt.get('failure'),'collector-refused')
+    stage=safe(receipt.get('stage'),'unknown')
+    report=dict(stage='bootstrap-source',status='refused',collectorStage=stage,
+        failureCode=failure,receiptWritten=result.get('receiptWritten') is True)
+    path=receipt.get('failurePath')
+    if isinstance(path,str) and re.fullmatch(r'[A-Za-z0-9_+./-]{1,256}',path) and not path.startswith('/') \
+            and not any(p in ('','.','..') for p in path.split('/')):report['failurePath']=path
+    print(json.dumps(report),flush=True)
+    raise ValueError('full-run bootstrap source observation refused ('+stage+': '+failure+'); no source copy, allocation or Make')
+
+
 def run(run_id, attempt, lane=None, runtime=None, inputs_dir=None):
     if not all(re.fullmatch(r'[1-9][0-9]{0,19}', x) for x in (run_id, attempt)):
         raise ValueError('run id and attempt must be positive numeric identifiers')
@@ -126,11 +144,13 @@ def run(run_id, attempt, lane=None, runtime=None, inputs_dir=None):
         if runtime is None or inputs_dir is None:
             raise ValueError('dedicated Mustang needs admitted runtime bindings and app inputs')
         consumed = runtime.get('consumedBuilds')
-        if not isinstance(consumed, list) or not consumed or any(
+        if runtime.get('clockNumbering') is not None:
+            import mustang_clock
+            mustang_clock.policy(lane,runtime,ROOT)
+        elif not isinstance(consumed, list) or not consumed or any(
                 not isinstance(build, str) or not re.fullmatch(r'[1-9][0-9]{9}', build) for build in consumed):
             raise ValueError('prior failed Mustang allocation state remains unresolved; no new build number')
-        verifier = module('mustang_app_input_verify','app-inputs-verify.py')
-        admission = verifier.verify(ROOT/runtime['appInputsRecord'], inputs_dir, runtime['tools'])
+        admission = None  # verified after native source/tool bytes are observed
         cfg = dict(runtime['tools'],host=lane['vm']['instance'],jobs=runtime['jobs'],
                    appsDir=str(Path(inputs_dir)/'signed-apps'),policy=str(Path(inputs_dir)/'background-policy.json'),
                    signingBlocker='separate same-run signing stage after unsigned proof')
@@ -143,9 +163,22 @@ def run(run_id, attempt, lane=None, runtime=None, inputs_dir=None):
         base = home/'rose-actions'
     else:
         recipe = mustang_paths.compiler_recipe(engine,lane,ROOT)
+        if runtime.get('clockNumbering') is not None:
+            mustang_clock.bind_compiler(engine,lane,runtime,root=ROOT)
         engine.SOURCE_PROVENANCE=dict(engine.SOURCE_PROVENANCE,
             integration='copy of the admitted pristine pinned Mustang base on its dedicated VM; no other-device seed')
         lock, home, base = str(paths['lockPath']), paths['home'], paths['storageRoot']
+    bootstrap=None
+    if lane is not None:
+        import mustang_bootstrap_collector as bootstrap_collector
+        print(json.dumps({'stage':'bootstrap-source','status':'entered','runId':run_id}),flush=True)
+        bootstrap=bootstrap_collector.collect(lane,runtime,os.environ,
+            bootstrap_collector.proof.deps.read_event(os.environ),root=ROOT,full_run=True)
+        require_bootstrap_observation(bootstrap)
+        bootstrap_collector.require_full_result(bootstrap,lane,os.environ,
+            bootstrap_collector.proof.deps.read_event(os.environ))
+        verifier = module('mustang_app_input_verify','app-inputs-verify.py')
+        admission = verifier.verify(ROOT/runtime['appInputsRecord'], inputs_dir, runtime['tools'])
     run_root = base/f'mustang-prep-{run_id}-{attempt}'
     # Basic overwrite/access protections remain; no independent safe-path test suite is run.
     if not base.is_dir() or engine.symlink_in(run_root) or os.path.lexists(run_root):
@@ -162,6 +195,7 @@ def run(run_id, attempt, lane=None, runtime=None, inputs_dir=None):
         report.update(builder=dict(lane['vm']),workflow=lane['workflow'],appInputAdmission=admission,
                       sourceEvidence=runtime['sourceEvidence'],allocationState=runtime['allocationState'])
         report['signing']={'status':'same-run-signing-pending-unsigned-proof','reason':cfg['signingBlocker']}
+        report['stages']['bootstrap-source']={'receipt':bootstrap['receiptFile'],'result':bootstrap['receipt']}
     env = {k:v for k,v in os.environ.items() if k not in SCRUBBED and not k.startswith('GIT_')}
     current = 'source'
 
@@ -198,20 +232,46 @@ def run(run_id, attempt, lane=None, runtime=None, inputs_dir=None):
     try:
         for name in ('source', 'git-meta'):
             stage(name)
-        current = 'vendor-sprint-patch'
-        patch = ROOT/'os/build-only/mustang-inputs/adevtool-no-input-hash.patch'
-        # The pinned adevtool also verifies the factory hash inside unpackFactoryImage.
-        # Apply the deliberate omission only to this new Mustang tree, never production.
-        outcome, _ = call(engine, ['git','-C',str(src/'vendor/adevtool'),'apply',str(patch)],120,ROOT,env)
-        report['stages'][current] = {'result':outcome, 'patch':str(patch),
-            'downloadedInputHashVerification':'omitted in helper and pinned adevtool unpacker'}
-        for name in ('download', 'vendor', 'lunch'):
-            stage(name)
+        if lane is not None:
+            current='source-copy'
+            progress(current,'entered')
+            import mustang_bootstrap_proof as source_proof
+            import mustang_existing_lock as source_lock
+            with source_lock.shared(paths['lockPath'],expected=paths['lockPath']):
+                verified=source_proof.verify_copy(paths['sourceRoot'],src,
+                    report['stages']['source']['result']['selectionRecord'],bootstrap['receipt']['sourceCandidate'])
+            verified.update(run=bootstrap['receipt']['run'],builder=lane['vm'],
+                nativeReceiptSha256=bootstrap['receiptFile']['sha256'],sourceRoot=str(src))
+            directory=receipts/current;directory.mkdir(mode=0o700)
+            release_receipts.write_once(directory/'completed.json',verified)
+            report['stages'][current]={'receipt':str(directory/'completed.json'),'result':verified}
+            progress(current,'complete')
+            current = 'vendor-inputs'
+            progress(current,'entered')
+            reused=mustang_vendor_consumer.consume(lane,runtime,src,
+                dict(runId=run_id,runAttempt=attempt,source=source,
+                     workflow='Immortal-Protocols/RoseOS-1/'+lane['workflow']+'@refs/heads/main'),root=ROOT)
+            directory=receipts/current;directory.mkdir(mode=0o700)
+            release_receipts.write_once(directory/'completed.json',reused)
+            report['stages'][current]={'receipt':str(directory/'completed.json'),'result':reused}
+            progress(current,'complete')
+        else:
+            current = 'vendor-sprint-patch'
+            patch = ROOT/'os/build-only/mustang-inputs/adevtool-no-input-hash.patch'
+            outcome, _ = call(engine, ['git','-C',str(src/'vendor/adevtool'),'apply',str(patch)],120,ROOT,env)
+            report['stages'][current] = {'result':outcome, 'patch':str(patch),
+                'downloadedInputHashVerification':'omitted in helper and pinned adevtool unpacker'}
+            for name in ('download', 'vendor'):
+                stage(name)
+        stage('lunch')
         current = 'allocate'
         progress(current,'entered')
         alloc = module('mustang_allocate', 'mustang-allocate.py')
-        allocation = alloc.reserve(str(home), run_id, attempt, source, **(
-            {'lane':lane,'consumed':runtime['consumedBuilds']} if lane is not None else {}))
+        if lane is not None and runtime.get('clockNumbering') is not None:
+            allocation = mustang_clock.reserve(lane,runtime,os.environ,root=ROOT)
+        else:
+            allocation = alloc.reserve(str(home), run_id, attempt, source, **(
+                {'lane':lane,'consumed':runtime['consumedBuilds']} if lane is not None else {}))
         release_receipts.write_once(run_root/'allocation.json', allocation)
         report['allocation'] = allocation
         work, reconcile = Path(allocation['workDir']), Path(allocation['integrationDir'])
@@ -288,7 +348,19 @@ def collect_reports(run_id, attempt, out, lane=None):
         path = base/name
         if path.is_file() and not path.is_symlink():
             shutil.copyfile(path, out/name)
-    for name in ('source','git-meta','download','vendor','lunch','compile'):
+    if lane is not None:
+        import mustang_bootstrap_collector as collector
+        import mustang_hosttools as readers
+        storage=mustang_paths.layout(lane)['storageRoot']
+        path=storage/f'mustang-bootstrap-observation-{run_id}-{attempt}'/collector.RESULT
+        if path.exists() and not path.is_symlink():
+            raw=readers.read_regular(str(storage),str(path),1 << 20)
+            document=json.loads(raw);observed_run=document.get('run',{})
+            if document.get('schema')!=collector.SCHEMA or observed_run.get('runId')!=run_id \
+                    or observed_run.get('runAttempt')!=attempt or document.get('workflowJob')!='builder':
+                raise ValueError('bootstrap report identity differs')
+            with (out/collector.RESULT).open('xb') as destination:destination.write(raw)
+    for name in ('source','git-meta','download','vendor','vendor-inputs','lunch','compile'):
         for filename in ('preflight.json','started.json','completed.json'):
             path = base/'receipts'/name/filename
             if path.is_file() and not path.is_symlink():

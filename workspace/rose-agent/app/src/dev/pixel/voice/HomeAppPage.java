@@ -34,9 +34,16 @@ final class HomeAppPage extends ViewGroup {
   setClipChildren(false);
  }
 
+ /** The gap between cells: the reference gap, narrowed toward COL_GAP_DP only when the column count would not fit
+  * otherwise (HomeAppLayout.fitGap); automatic plans always fit at the reference gap. */
+ int gap(int innerWidth) {
+  return Math.round(HomeAppLayout.fitGap(innerWidth, columns, cellWidthDp * density, gapDp * density,
+    Math.min(gapDp, HomeAppLayout.COL_GAP_DP) * density));
+ }
+
  int cellWidth(int innerWidth) {
   // Never wider than an equal share of the width (a very narrow screen), else the reference cell width.
-  int gap = Math.round(gapDp * density);
+  int gap = gap(innerWidth);
   return Math.max(1, Math.min(Math.round(cellWidthDp * density), (innerWidth - (columns - 1) * gap) / columns));
  }
 
@@ -67,7 +74,7 @@ final class HomeAppPage extends ViewGroup {
   if (count == 0) return;
   int innerWidth = Math.max(0, getWidth() - getPaddingLeft() - getPaddingRight());
   int innerHeight = Math.max(0, getHeight() - getPaddingTop() - getPaddingBottom());
-  int cellWidth = cellWidth(innerWidth), gap = Math.round(gapDp * density);
+  int cellWidth = cellWidth(innerWidth), gap = gap(innerWidth);
   int used = HomeAppLayout.usedRows(count, columns), fit = HomeAppLayout.rows(innerHeight, cellHeight, density);
   // The pitch of a page of fit rows; content beyond them (before a re-plan lands) keeps the plain gap.
   float pitch = used > fit ? cellHeight + HomeAppLayout.rowGap(density) : HomeAppLayout.rowPitch(innerHeight, fit, cellHeight, density);

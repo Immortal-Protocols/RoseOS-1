@@ -1,6 +1,7 @@
 """Offline adapter boundaries only: synthetic archives, signer/generator stand-ins, no live actions."""
 import copy
 import functools
+import hashlib
 import importlib.util
 import io
 import json
@@ -358,7 +359,7 @@ class DedicatedControllerTest(unittest.TestCase):
         start = subprocess.run([sys.executable,str(ROOT/'scripts/mustang_controller.py'), 'start'],
                                env=env, capture_output=True, text=True, timeout=10)
         self.assertEqual(start.returncode, 4)
-        self.assertIn('runtime is not admitted', start.stderr)
+        self.assertIn('requires its exact main workflow and a fresh attempt', start.stderr)
         self.assertNotIn('gcloud', start.stderr)
         for action in ('ownership','stop'):
             result = subprocess.run([sys.executable,str(ROOT/'scripts/mustang_controller.py'), action],
@@ -433,7 +434,7 @@ class DedicatedPathsTest(unittest.TestCase):
     def test_dedicated_workflow_orders_proofs_and_ownership_before_credentials(self):
         workflow=(ROOT/'.github/workflows/mustang-ota-dedicated.yml').read_text()
         jobs=workflow_shape.jobs(workflow)
-        self.assertEqual(set(jobs),{'guard','controller','enroll','queue-watch','builder','signer','source','publisher','cleanup'})
+        self.assertEqual(set(jobs),{'guard','controller','enroll','queue-watch','builder','signer','source','hostdeps','lock-admin','factory','vendor','otatools','otatools-verify','publisher','cleanup'})
         self.assertNotIn('id-token', jobs['source'])
         self.assertNotIn('actions-gcp-login', jobs['source'])
         self.assertIn('mustang_source_sync.py run --execute', jobs['source'])
@@ -462,6 +463,7 @@ class DedicatedPathsTest(unittest.TestCase):
         self.assertLess(jobs['signer'].index('mustang_hosted_sign.py preflight'), jobs['signer'].index('actions-gcp-login.py login'))
         self.assertLess(jobs['builder'].index('mustang-dedicated.py collect'), jobs['builder'].index('mustang_hosted_sign.py export-bundle'))
         self.assertLess(jobs['builder'].index('mustang-dedicated.py baseline'),jobs['builder'].index('mustang-dedicated.py produce'))
+        self.assertNotIn('prepare-artifact-cli',jobs['builder'])
         self.assertLess(jobs['publisher'].index('verify-staged'),jobs['publisher'].index('actions/create-github-app-token'))
         self.assertLess(jobs['cleanup'].index('cleanup-prepare'),jobs['cleanup'].index('actions-gcp-login.py login'))
         env=dict(PATH=os.environ['PATH'])
@@ -472,7 +474,7 @@ class DedicatedPathsTest(unittest.TestCase):
         self.assertFalse(readiness['buildAuthorized'])
         self.assertFalse(readiness['publicationAuthorized'])
         self.assertEqual(readiness['stopSafeguard']['seconds'],14400)
-        self.assertIn('runner-unregistered',{item['code'] for item in readiness['blockers']})
+        self.assertNotIn('signer-capacity-unadmitted',{item['code'] for item in readiness['blockers']})
         for action in ('guard','host-check','fetch-inputs','baseline','produce','collect','sign','_execute','stage',
                        'verify-staged','publish','report','ownership-output','cleanup-prepare','require-owned'):
             result=subprocess.run([sys.executable,str(ROOT/'scripts/mustang-dedicated.py'),action],env=env,
@@ -748,13 +750,97 @@ class DedicatedRuntimeTest(unittest.TestCase):
             baselineTargetFiles=dict(archive,path=str(self.host/'baseline.zip')),
             runner=dict(groupName='fixture-mustang',groupId='99',lifetime='persistent',registrationEvidence=registration),
             signingRouteEvidence=signing,publication=dict(enabled=False,authorityRecord=None))
+        for key,name in (('vendorEvidence','mustang-vendor-42522784617.json'),
+                         ('hostDependenciesEvidence','mustang-hostdeps-42512135815.json')):
+            value=json.loads((ROOT/'os/build-only'/name).read_text())
+            value['receipt']['identity']['builder']=self.lane['vm']
+            value['receipt']['identity']['diskUuid']='fixture-uuid'
+            value['receipt']['sourceRoot']=self.lane['sourceRoot']
+            if key=='hostDependenciesEvidence':
+                value['receipt']['outDir']=str(self.host/'source/out_adevtool_deps')
+            value['stopObservation']['instanceId']=self.lane['vm']['instanceId']
+            path=Path('os/build-only')/name
+            (self.root/path).write_text(json.dumps(value));self.cfg[key]=str(path)
 
     def record(self,name,value):
         path=Path('os/fixtures')/(name+'.json'); (self.root/path).parent.mkdir(parents=True,exist_ok=True)
         (self.root/path).write_text(json.dumps(value)); return str(path)
 
     def admitted(self,cfg=None,publish=False,diff=None):
-        return self.driver.guard(self.lane,cfg or self.cfg,self.env,publish,root=self.root,diff=diff or (lambda *args:''))
+        # These fixtures isolate native input admission. Real signer capacity
+        # and its pre-secret failure boundary have their own integrated tests.
+        import mustang_hosted_sign
+        with patch.object(mustang_hosted_sign,'require_delivery_capacity',return_value={}):
+            return self.driver.guard(self.lane,cfg or self.cfg,self.env,publish,root=self.root,diff=diff or (lambda *args:''))
+
+    def test_native_host_check_uses_prepared_tools_without_cli_installation(self):
+        def execute(*args,**kwargs):return SimpleNamespace(returncode=0,stdout='fixture-uuid')
+        with patch.object(self.driver.route,'evaluate_guest',return_value={}), \
+                patch.object(self.driver.shutil,'which',return_value=None) as which:
+            self.driver.host_check(self.lane,self.cfg,observe_id=lambda:self.lane['vm']['instanceId'],execute=execute)
+        which.assert_not_called()
+
+    def test_artifact_transport_strips_credentials_from_the_one_storage_redirect(self):
+        import urllib.error
+        requests=[]
+        def open_http(request,**kwargs):
+            requests.append(request)
+            if len(requests)==1:
+                raise urllib.error.HTTPError(request.full_url,302,'Found',
+                    {'Location':'https://fixture.blob.core.windows.net/artifact?sig=private-fixture'},None)
+            response=io.BytesIO(b'archive');response.status=200;return response
+        read=self.driver.app_artifact_reader(9,'fixture-token',open_http)
+        self.assertEqual(read('/zip',7),b'archive')
+        self.assertEqual(requests[0].get_header('Authorization'),'Bearer fixture-token')
+        self.assertEqual(requests[1].header_items(),[])
+        self.assertEqual(len(requests),2)
+        with self.assertRaisesRegex(ValueError,'scope'):read('/other',7)
+        self.assertEqual(len(requests),2)
+
+    def test_artifact_transport_denial_is_single_attempt_and_sanitized(self):
+        import urllib.error
+        for stage in ('metadata','archive-api','archive-storage'):
+            calls=[]
+            def open_http(request,**kwargs):
+                calls.append(request)
+                if stage=='archive-storage' and len(calls)==1:
+                    raise urllib.error.HTTPError(request.full_url,302,'Found',
+                        {'Location':'https://fixture.blob.core.windows.net/artifact?sig=secret-signature'},None)
+                raise urllib.error.HTTPError(request.full_url,403,'sensitive-url-token',{},None)
+            read=self.driver.app_artifact_reader(9,'secret-token',open_http)
+            with self.subTest(stage=stage),self.assertRaisesRegex(ValueError,stage+' HTTP 403; no retry') as raised:
+                read('' if stage=='metadata' else '/zip',7)
+            self.assertNotIn('secret',str(raised.exception))
+            self.assertNotIn('sensitive',str(raised.exception))
+            self.assertEqual(len(calls),2 if stage=='archive-storage' else 1)
+
+    def test_artifact_transport_rejects_redirect_target_and_oversized_response(self):
+        import urllib.error
+        for target in ('http://fixture.blob.core.windows.net/file','https://attacker.test/file',
+                       'https://name:password@fixture.blob.core.windows.net/file'):
+            calls=[]
+            def open_http(request,**kwargs):
+                calls.append(request)
+                raise urllib.error.HTTPError(request.full_url,302,'Found',{'Location':target},None)
+            with self.subTest(target=target),self.assertRaisesRegex(ValueError,'redirect differs'):
+                self.driver.app_artifact_reader(9,'fixture-token',open_http)('/zip',7)
+            self.assertEqual(len(calls),1)
+        def oversized(*args,**kwargs):
+            response=io.BytesIO(b'12345678');response.status=200;return response
+        with self.assertRaisesRegex(ValueError,'byte bound'):
+            self.driver.app_artifact_reader(9,'fixture-token',oversized)('',7)
+
+    def test_clock_guard_preserves_exact_captured_runtime_without_legacy_fields(self):
+        import mustang_clock
+        cfg=dict(self.cfg,clockNumbering='os/fixtures/clock.json')
+        with patch.object(mustang_clock,'policy',return_value={}) as clock_policy:
+            admitted=self.admitted(cfg)
+        clock_policy.assert_called_once_with(self.lane,cfg,self.root)
+        self.assertEqual(admitted,cfg)
+        self.assertNotIn('consumedBuilds',admitted)
+        # The real collector rejects this legacy projection; do not weaken it
+        # to accept extra fields in order to hide a guard/caller mismatch.
+        self.assertNotEqual(dict(admitted,consumedBuilds=None),cfg)
 
     def test_actual_evidence_guard_allows_private_and_refuses_stale_or_unbound(self):
         self.assertEqual(self.admitted()['consumedBuilds'],['2026110402'])
@@ -785,6 +871,15 @@ class DedicatedRuntimeTest(unittest.TestCase):
         ref=self.record('sync', {'schema':'roseos.mustang-source-sync-evidence.v1', 'pristine':False})
         with self.assertRaisesRegex(ValueError, 'not pristine bootstrap'):
             self.admitted(dict(self.cfg, sourceEvidence=ref))
+
+    def test_prepared_vendor_binding_is_required_before_start(self):
+        with self.assertRaisesRegex(ValueError,'vendor and host-dependency evidence'):
+            self.admitted(dict(self.cfg,vendorEvidence=None))
+        path=self.root/self.cfg['vendorEvidence'];record=self.driver.load(path)
+        record['receipt']['identity']['builder']['instanceId']='999'
+        path.write_text(json.dumps(record))
+        with self.assertRaisesRegex(ValueError,'another source, builder, disk'):
+            self.admitted()
 
     def test_copy_time_frankel_snapshot_is_not_a_source_pin(self):
         path=self.root/self.cfg['sourceEvidence']
@@ -854,20 +949,18 @@ class DedicatedRuntimeTest(unittest.TestCase):
                     readiness.evaluate_guest(bad,lane_binding,runtime)
         report=readiness.report()
         codes={item['code'] for item in report['blockers']}
-        self.assertTrue({'runtime-unbound','runner-unregistered','allocation-unresolved',
-                         'baseline-not-on-disk','signing-route-unadmitted','publication-disabled'}<=codes)
+        self.assertTrue({'runtime-unbound','signer-capacity-unadmitted'}.isdisjoint(codes))
+        self.assertTrue({'runner-unregistered','allocation-unresolved','baseline-not-on-disk','signing-route-unadmitted'}.isdisjoint(codes))
         self.assertNotIn('app-inputs-unadmitted', codes)
         # The accepted export is reported stale exactly when this checkout's app sources moved past its producer: an
         # app-source change merges before the Frankel build and re-export that refresh it, so main may carry either.
         drift = readiness.bound_app_freshness(json.loads((ROOT/runtime['appInputsRecord']).read_text()), ROOT)
         self.assertEqual('app-inputs-stale' in codes, bool(drift))
         self.assertEqual(runtime['appInputsRecord'], readiness.ACCEPTED_APP_EXPORT['path'])
-        self.assertEqual(runtime['status'], 'unbound')
-        self.assertIsNone(runtime['signingRouteEvidence'])
-        self.assertEqual(runtime['sourceEvidence'], readiness.ACCEPTED_SOURCE_SYNC['path'])
-        self.assertTrue(readiness.accepted_source_sync(
-            json.loads((ROOT/runtime['sourceEvidence']).read_text()), runtime['sourceEvidence']))
-        self.assertIn('source-unprovisioned', codes)
+        self.assertEqual(runtime['status'], 'bound')
+        self.assertEqual(runtime['signingRouteEvidence'],'os/build-only/mustang-dedicated-signing-route.json')
+        self.assertEqual(runtime['sourceEvidence'],'os/build-only/mustang-full-run-source.json')
+        self.assertNotIn('source-unprovisioned', codes)
         self.assertNotIn('source-sync-unverified', codes)
         self.assertTrue(report['sourceSync']['bound'])
         self.assertFalse(report['sourceSync']['buildAuthorized'])
@@ -879,9 +972,9 @@ class DedicatedRuntimeTest(unittest.TestCase):
         export=readiness.ACCEPTED_APP_EXPORT
         self.assertTrue(readiness.accepted_app_export(record, runtime['appInputsRecord']))
         self.assertEqual(record['apps'], [
-            {'package':'dev.pixel.backgroundcontrol','versionCode':40,'apkSha256':'14f0f842e3ba8266939d6fa63d0f6a6b7355b34388d5e6af5cc492e464e7cf04'},
-            {'package':'dev.pixel.voice','versionCode':368,'apkSha256':'21d6be95065ec7f0568711b457dacdf0e63442c293bc1f35938864ec403d8da5'},
-            {'package':'dev.pixel.calculator.agent','versionCode':5,'apkSha256':'37649ab5b977b9418556f63576a92e9b755757a6b403ac5304194ea92733b699'}])
+            {'package':'dev.pixel.backgroundcontrol','versionCode':41,'apkSha256':'6dbcb57947897338aa02c4c2fdffa5414ca49787b3f6140ed6886dc38f90ab82'},
+            {'package':'dev.pixel.voice','versionCode':369,'apkSha256':'268134653b5c83100e982c7ed04a611446bee248d65889dfcd0fd8642542c220'},
+            {'package':'dev.pixel.calculator.agent','versionCode':6,'apkSha256':'2c6ff4972535fedb4ad5c6af674152328c1384849acba64166c2fc56bce6a498'}])
         self.assertIn(str(export['archiveBytes']), runtime['basis'])
         self.assertIn('not an OTA extraction', runtime['basis'])
         head=subprocess.check_output(['git','-C',str(ROOT),'-c','protocol.allow=never','rev-parse','HEAD'],text=True).strip()
@@ -889,7 +982,7 @@ class DedicatedRuntimeTest(unittest.TestCase):
         # HEAD may be past the producer's app sources (see above), so only consistency is pinned at HEAD; the fixed
         # commit below has none of the producer's app sources changed.
         self.assertEqual(readiness.bound_app_freshness(record), readiness.app_source_drift(record, head))
-        self.assertEqual(readiness.app_source_drift(record, '149dd4e1d8fb4003aa16b51385b4780cbdc45d66'), [])
+        self.assertEqual(readiness.app_source_drift(record, '303f69823b0ca0f92a61fa3b95f9a2e8364da812'), [])
         self.assertEqual(readiness.app_source_drift(record, head, diff=lambda *args:'workspace/rose-agent/changed\n'),
                          ['dev.pixel.voice','dev.pixel.calculator.agent','dev.pixel.backgroundcontrol'])
         missing='0000000000000000000000000000000000000000'
@@ -923,16 +1016,15 @@ class DedicatedRuntimeTest(unittest.TestCase):
         self.assertIsNone(readiness.enrollment()['github']['lifetime'])
         self.assertIsNone(readiness.enrollment()['github']['runnerId'])
         self.assertEqual(readiness.enrollment()['github']['runnerCount'],0)
-        self.assertIn('4884085713',' '.join(item['detail'] for item in report['blockers']))
-        self.assertIn('signed-target_files.zip', ' '.join(item['detail'] for item in report['blockers']))
-        self.assertIn('mustang-candidate-continuity-20261107.json', ' '.join(item['detail'] for item in report['blockers']))
-        self.assertIn('Runtime stays unbound', ' '.join(item['detail'] for item in report['blockers']))
-        self.assertIn('no authoritative ledger', ' '.join(item['detail'] for item in report['blockers']))
-        self.assertIn('copy-time only', ' '.join(item['detail'] for item in report['blockers']))
+        self.assertNotIn('baseline-not-on-disk',codes)
+        continuity=report['otaContinuity']['currentContinuity']
+        self.assertEqual(continuity['record'],'os/build-only/mustang-candidate-continuity-20261107.json')
+        self.assertFalse(continuity['currentPhone']);self.assertFalse(continuity['admitsRuntime'])
         self.assertFalse(report['numberStrategy']['selectsBuildNumber'])
         self.assertIsNone(report['numberStrategy']['allocatedBuild'])
-        self.assertEqual(report['numberStrategy']['selectedMode'], 'retired-legacy-epoch')
-        self.assertEqual(report['numberStrategy']['proposalStart'], '2026130001')
+        self.assertEqual(report['numberStrategy']['selectedMode'], 'UTC-hour00-local')
+        self.assertEqual(report['numberStrategy']['legacySuffixExcluded'],'01..99')
+        self.assertFalse(report['numberStrategy']['legacyAllocationKnown'])
         self.assertFalse(report['numberStrategy']['reserved'])
         self.assertIsNone(report['numberStrategy']['authority'])
         self.assertFalse(report['numberStrategy']['issued'])
@@ -972,7 +1064,7 @@ class DedicatedRuntimeTest(unittest.TestCase):
         self.assertEqual(current['certificateDerSha256'], '93cc757e7f4e4e5c4ef7726fbeec9acc77b1f97d471c1cd0d62753cf94e471a8')
         self.assertFalse(current['apkSignerRemeasured'])
         self.assertFalse(current['currentPhone'])
-        self.assertEqual(current['runtimeStatus'], 'unbound')
+        self.assertEqual(current['runtimeStatus'], 'bound')
         self.assertFalse(report['otaContinuity']['phoneUpdatePassed'])
         self.assertEqual(report['otaContinuity']['updater']['otaCertificateSha256'],
                          '93cc757e7f4e4e5c4ef7726fbeec9acc77b1f97d471c1cd0d62753cf94e471a8')
@@ -1061,25 +1153,23 @@ class DedicatedRuntimeTest(unittest.TestCase):
         observed_artifact=copy.deepcopy(artifact)
         rec=dict(export=dict(run='222',artifact=artifact),files=[dict(path='signed-apps/app.apk',sizeBytes=13)])
         path=self.root/'record.json'; path.write_text(json.dumps(rec)); calls=[]
-        def process(argv,**kwargs):
-            calls.append(argv)
-            if argv[-1].endswith('/zip'):
-                kwargs['stdout'].write(archive.read_bytes()); return SimpleNamespace(returncode=0)
-            return SimpleNamespace(returncode=0,stdout=json.dumps(dict(observed_artifact,expired=False,workflow_run=dict(id=222))))
-        out=self.driver.fetch_inputs(path,self.root/'download',execute=process)
+        def read(suffix,limit):
+            calls.append(suffix)
+            if suffix=='/zip': return archive.read_bytes()
+            return json.dumps(dict(observed_artifact,expired=False,workflow_run=dict(id=222),size_in_bytes=archive.stat().st_size)).encode()
+        out=self.driver.fetch_inputs(path,self.root/'download',read=read)
         self.assertEqual((out/'signed-apps/app.apk').read_bytes(),b'fixture bytes')
-        self.assertEqual(len(calls),2)
+        self.assertEqual(calls,['','/zip'])
         rec['export']['artifact']['digest']='sha256:'+'0'*64; path.write_text(json.dumps(rec))
         with self.assertRaisesRegex(ValueError,'metadata differs'):
-            self.driver.fetch_inputs(path,self.root/'foreign',execute=process)
+            self.driver.fetch_inputs(path,self.root/'foreign',read=read)
         self.assertFalse((self.root/'foreign').exists())
         rec['export']['artifact']['digest']=observed_artifact['digest']; path.write_text(json.dumps(rec))
-        def corrupt(argv,**kwargs):
-            if argv[-1].endswith('/zip'):
-                kwargs['stdout'].write(b'changed download'); return SimpleNamespace(returncode=0)
-            return process(argv,**kwargs)
+        def corrupt(suffix,limit):
+            if suffix=='/zip':return b'changed download'
+            return read(suffix,limit)
         with self.assertRaisesRegex(ValueError,'download/digest failed'):
-            self.driver.fetch_inputs(path,self.root/'corrupt',execute=corrupt)
+            self.driver.fetch_inputs(path,self.root/'corrupt',read=corrupt)
         self.assertEqual((self.root/'corrupt/download.zip').read_bytes(),b'changed download')
 
     def test_internal_signing_executor_rechecks_scope_and_proof_before_key_access(self):
@@ -1141,17 +1231,36 @@ class DedicatedRuntimeTest(unittest.TestCase):
         apps=self.driver.load(self.root/cfg['appInputsRecord']); apps['apps']=[dict(package='dev.pixel.voice',versionCode=1)]
         (self.root/cfg['appInputsRecord']).write_text(json.dumps(apps))
         inputs=self.root/'app-inputs'; inputs.mkdir()
+        # The dedicated lock is prepared separately; production cannot create or write it.
+        Path(self.lane['lockPath']).touch();Path(self.lane['lockPath']).chmod(0o444)
+        import mustang_bootstrap_collector as bootstrap
+        import mustang_bootstrap_proof as source_proof
+        bootstrap_result=dict(receiptWritten=True,receiptFile=dict(sha256='e'*64),
+            receipt=dict(success=True,sourceCandidate={},run=dict(runId='123',runAttempt='1',source=SOURCE)))
         with patch.object(pipeline,'ROOT',self.root),patch.object(pipeline,'head',return_value=SOURCE), \
                 patch.object(pipeline,'module',side_effect=dependency),patch.object(pipeline,'call',side_effect=call), \
                 patch.object(pipeline,'omissions',return_value=['unrelated sprint omissions']), \
                 patch.object(pipeline,'print',create=True), \
+                patch.object(pipeline.mustang_vendor_consumer,'consume',return_value={'generationStarted':False}) as consume, \
                 patch.object(pipeline.mustang_paths,'compiler_recipe',return_value=recipe), \
                 patch.object(pipeline.integration,'admit',side_effect=admit), \
                 patch.object(pipeline.integration,'render',return_value=({},['synthetic-integrate'])), \
-                patch.object(allocate,'observe',return_value=(set(),{})):
+                patch.object(allocate,'observe',return_value=(set(),{})), \
+                patch.object(bootstrap.proof.deps,'read_event',return_value={'inputs':{'publish':False}}), \
+                patch.object(bootstrap,'collect',return_value=bootstrap_result) as observed, \
+                patch.object(bootstrap,'require_full_result'), \
+                patch.object(source_proof,'verify_copy',return_value={'sourceCopyVerified':True}) as copied:
             self.assertEqual(pipeline.run('123','1',self.lane,cfg,inputs),0)
         result=self.driver.load(self.host/'rose-actions/mustang-prep-123-1/candidate-receipt.json')
-        self.assertEqual(stages,['source','git-meta','download','vendor','lunch','compile'])
+        self.assertEqual(stages,['source','git-meta','lunch','compile'])
+        consume.assert_called_once()
+        observed.assert_called_once();copied.assert_called_once()
+        self.assertTrue(result['stages']['source-copy']['result']['sourceCopyVerified'])
+        self.assertFalse(result['stages']['vendor-inputs']['result']['generationStarted'])
+        self.assertNotIn('vendor-sprint-patch',result['stages'])
+        self.assertNotIn('adevtool-no-input-hash.patch',str(commands))
+        exported=self.root/'reports';pipeline.collect_reports('123','1',exported,lane=self.lane)
+        self.assertTrue((exported/'vendor-inputs-completed.json').is_file())
         self.assertEqual(result['builder'],self.lane['vm'])
         self.assertEqual(result['workflow'],self.lane['workflow'])
         self.assertFalse(result['stages']['seed']['priorReconcileSeed'])
@@ -1255,6 +1364,7 @@ class AdapterTest(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         self.actions = self.root/'rose-actions'; self.actions.mkdir()
+        self.canonical_lock=self.root/'mustang.lock';self.canonical_lock.touch();self.canonical_lock.chmod(0o444)
         self.source = self.actions/'mustang-prep-222-1/source'; self.source.mkdir(parents=True)
         (self.source/'script').mkdir()
         (self.source/'script/generate-release.sh').write_text('synthetic source fixture, never executed')
@@ -1399,14 +1509,15 @@ class AdapterTest(unittest.TestCase):
         profile=DedicatedPathsTest().profile(self.root)
         self.candidate.update(builder=dict(profile['vm']),workflow=profile['workflow'])
         self.receipt.write_text(json.dumps(self.candidate))
-        locks=[]; previous=self.hp.shared_lock
-        def take_lock(path):
+        locks=[]; previous=adapter.mustang_existing_lock.shared
+        def take_lock(path,*,expected):
             locks.append(str(path))
-            return previous(path)
-        self.hp.shared_lock=take_lock
+            return previous(path,expected=expected)
+        self.hp.shared_lock=lambda path:(_ for _ in ()).throw(AssertionError('dedicated stage selected write-open lock'))
         with patch.object(adapter,'BASE',self.root/'retired'), \
                 patch.object(adapter.mustang_collection,'BASE',self.root/'retired'), \
-                patch.object(adapter,'LOCK',str(self.root/'retired.lock')):
+                patch.object(adapter,'LOCK',str(self.root/'retired.lock')), \
+                patch.object(adapter.mustang_existing_lock,'shared',side_effect=take_lock):
             adapter.collect(str(self.receipt),'333','1',lane=profile)
             signed=adapter.sign(str(self.receipt),str(self.bootstrap),'333','1',lane=profile)
             result=adapter.package('333','1','333','1',lane=profile)
@@ -1415,6 +1526,27 @@ class AdapterTest(unittest.TestCase):
         self.assertEqual(self.calls,['signer stand-in','factory'])
         self.assertFalse((self.root/'retired').exists())
         self.assertFalse((self.root/'retired.lock').exists())
+
+    def test_dedicated_collection_refuses_busy_or_missing_lock_without_creation(self):
+        profile=DedicatedPathsTest().profile(self.root)
+        self.candidate.update(builder=dict(profile['vm']),workflow=profile['workflow'])
+        self.receipt.write_text(json.dumps(self.candidate))
+        original=self.receipt.read_bytes()
+        before=self.canonical_lock.stat()
+        real=adapter.mustang_existing_lock
+        with real.shared(self.canonical_lock,expected=self.canonical_lock):
+            with self.assertRaisesRegex(real.LockUnavailable,'held'):
+                adapter.collect(str(self.receipt),'333','1',lane=profile)
+        report=self.actions/'mustang-collect-333-1/compile-collection.json'
+        self.assertEqual(json.loads(report.read_text())['status'],'failed')
+        self.assertEqual(self.calls,[])
+        self.assertEqual(self.receipt.read_bytes(),original)
+        self.assertEqual((self.canonical_lock.stat().st_ino,self.canonical_lock.stat().st_mode),
+                         (before.st_ino,before.st_mode))
+        self.canonical_lock.unlink()
+        with self.assertRaises(real.LockUnavailable):
+            with adapter.builder_lock(self.hp,self.canonical_lock,profile):pass
+        self.assertFalse(self.canonical_lock.exists())
 
     def test_dedicated_collection_refuses_old_or_foreign_builder_receipts(self):
         profile=DedicatedPathsTest().profile(self.root)
@@ -1483,7 +1615,14 @@ class AdapterTest(unittest.TestCase):
             raise AssertionError(filename)
         cfg=ota.config()
         if not publication: cfg=dict(cfg,publicationEnabled=False)
+        # This fixture tests retained pre-clock edge staging, not a current
+        # full-run allocation. Production clock validation is unchanged.
+        live_read=ota.read
+        def read_legacy(path):
+            value=live_read(path)
+            return dict(value,status='unbound') if Path(path)==ota.ROOT/'os/build-only/mustang-runtime.json' else value
         with patch.object(ota,'config',return_value=cfg),patch.object(ota,'module',side_effect=module),patch.object(ota,'identities',return_value=pins), \
+                patch.object(ota,'read',side_effect=read_legacy), \
                 patch.object(ota.host_secrets,'certificate_sha256',return_value=pin), \
                 patch.object(ota,'observe_target',return_value={'packagedUpdaterVerified':True}), \
                 patch.object(ota,'ota_metadata',return_value={'pre-device':'mustang'}), \

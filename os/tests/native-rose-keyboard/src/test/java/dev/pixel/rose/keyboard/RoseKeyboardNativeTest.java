@@ -282,6 +282,53 @@ public class RoseKeyboardNativeTest {
         assertEquals("lowered again", base, heightAfter(view, bottoms(0, 24)));
     }
 
+    MotionEvent pointers(int action, int index, float[] xs, float[] ys) {
+        int[] ids = new int[xs.length];
+        for (int i = 0; i < ids.length; i++) ids[i] = i;
+        return pointers(action, index, ids, xs, ys);
+    }
+
+    /** A MotionEvent whose pointers carry these ids (a remaining finger keeps its id, as on a device). */
+    MotionEvent pointers(int action, int index, int[] ids, float[] xs, float[] ys) {
+        long t = SystemClock.uptimeMillis();
+        MotionEvent.PointerProperties[] props = new MotionEvent.PointerProperties[xs.length];
+        MotionEvent.PointerCoords[] coords = new MotionEvent.PointerCoords[xs.length];
+        for (int i = 0; i < xs.length; i++) {
+            props[i] = new MotionEvent.PointerProperties();
+            props[i].id = ids[i];
+            coords[i] = new MotionEvent.PointerCoords();
+            coords[i].x = xs[i];
+            coords[i].y = ys[i];
+        }
+        return MotionEvent.obtain(t, t, action | (index << MotionEvent.ACTION_POINTER_INDEX_SHIFT), xs.length, props,
+                coords, 0, 0, 1, 1, 0, 0, 0, 0);
+    }
+
+    @Test
+    public void aKeyFingerLiftingAfterAStripFingerTypesAndNeverHides() {
+        RoseKeyboardView view = laidOut();
+        RoseKeyboardView.Key q = keyNamed(view, "q");
+        float d = context.getResources().getDisplayMetrics().density;
+        float sx = view.getWidth() / 2f, sy = 10 * d;
+        float[] xs = {sx, q.bounds.centerX()}, ys = {sy, q.bounds.centerY()};
+        // Finger 0 on the strip, finger 1 on q; the strip finger lifts first (its own tap), then the key finger
+        // lifts last, far below the strip. Before 1A that last release read as a swipe down on the strip and hid.
+        view.dispatchTouchEvent(pointers(MotionEvent.ACTION_DOWN, 0, new float[] {sx}, new float[] {sy}));
+        view.dispatchTouchEvent(pointers(MotionEvent.ACTION_POINTER_DOWN, 1, xs, ys));
+        view.dispatchTouchEvent(pointers(MotionEvent.ACTION_POINTER_UP, 0, xs, ys));
+        session.selectionChanged(field.getSelectionStart(), field.getSelectionEnd());
+        String afterStrip = text();
+        view.dispatchTouchEvent(pointers(MotionEvent.ACTION_UP, 0, new int[] {1}, new float[] {xs[1]},
+                new float[] {ys[1]}));
+        session.selectionChanged(field.getSelectionStart(), field.getSelectionEnd());
+        assertFalse("a key finger lifting below the strip is not a swipe down on it", hidden);
+        assertTrue("the key typed: " + text(), text().equalsIgnoreCase(afterStrip + "q"));
+        // A real swipe down on the strip by its own finger still hides.
+        view.dispatchTouchEvent(pointers(MotionEvent.ACTION_DOWN, 0, new float[] {sx}, new float[] {sy}));
+        view.dispatchTouchEvent(pointers(MotionEvent.ACTION_UP, 0, new float[] {sx}, new float[] {sy + 40 * d}));
+        assertTrue("a swipe down on the strip hides", hidden);
+    }
+
     @Test
     public void theViewIs268dpWithTheDesignsRowsAndNoMicOrNumberRow() {
         RoseKeyboardView view = laidOut();

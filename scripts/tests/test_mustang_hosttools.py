@@ -4,6 +4,9 @@ import os
 import sys
 import tempfile
 import unittest
+import hashlib
+import tracemalloc
+from unittest.mock import patch
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -29,14 +32,16 @@ class ProposalTest(unittest.TestCase):
                      'mustang-product-config-absent', 'host-dependency-closure-absent', 'out-dir-unspecified'):
             self.assertIn(code, decision['problems'])
         pins = json.loads((ROOT/'os/build-only/mustang-hosted-sign-script.json').read_text())
-        for name in ('generateReleaseSha256', 'jdkSha256', 'otatoolsSha256', 'otatoolsExecutable'):
-            self.assertIsNone(pins[name])
+        import mustang_tool_closure
+        for name, value in mustang_tool_closure.qualified_pins(ROOT).items():
+            self.assertEqual(pins[name], value)
+        self.assertTrue(json.loads((ROOT/'os/build-only/mustang-hosted-signer-capacity.json').read_text())['admission'])
         runtime = json.loads((ROOT/'os/build-only/mustang-runtime.json').read_text())
-        self.assertEqual(runtime['status'], 'unbound')
-        self.assertFalse(runtime['publication']['enabled'])
-        self.assertIsNone(runtime['jobs'])
-        self.assertEqual(runtime['tools'], {'aapt': None, 'apksigner': None, 'node': None})
-        self.assertIsNone(runtime['runner']['lifetime'])
+        self.assertEqual(runtime['status'], 'bound')
+        self.assertTrue(runtime['publication']['enabled'])
+        self.assertEqual(runtime['jobs'], 24)
+        self.assertTrue(all(Path(value).is_absolute() for value in runtime['tools'].values()))
+        self.assertEqual(runtime['runner']['lifetime'], 'ephemeral')
         self.assertIsNone(runtime['runner']['registrationEvidence'])
         self.assertEqual(runtime['runner']['groupId'], '5')
         self.assertEqual(runtime['automaticStopHours'], 4)
@@ -51,6 +56,57 @@ class ProposalTest(unittest.TestCase):
 
 
 class ReaderTest(unittest.TestCase):
+    def test_factory_hash_streams_with_bounded_memory_and_still_checks_the_digest(self):
+        size = 12 << 20
+        chunk = b'x'*(1 << 20)
+        digest = hashlib.sha256()
+        with tempfile.TemporaryDirectory() as tmp:
+            mount = Path(tmp)
+            archive = mount/'factory.zip'
+            with archive.open('wb') as out:
+                for _ in range(12):
+                    out.write(chunk)
+                    digest.update(chunk)
+            pin = {'factory': {'sizeBytes': size, 'sha256': digest.hexdigest()}}
+            with patch.object(host, 'recipe', return_value=pin):
+                tracemalloc.start()
+                try:
+                    measured = host.measure_factory(mount, archive)
+                    _current, peak = tracemalloc.get_traced_memory()
+                finally:
+                    tracemalloc.stop()
+                self.assertTrue(measured['matchesPinnedFactory'])
+                self.assertFalse(measured['admitsOtatools'])
+                self.assertLess(peak, 4 << 20)
+                pin['factory']['sha256'] = '0'*64
+                self.assertIn('factory-hash-differs', host.measure_factory(mount, archive)['problems'])
+
+    def test_factory_cannot_match_when_bytes_change_after_their_read(self):
+        for mutation in ('append', 'already-read-prefix'):
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as tmp:
+                mount = Path(tmp)
+                archive = mount/'factory.zip'
+                data = b'x'*(2 << 20)
+                archive.write_bytes(data)
+                pin = {'factory': {'sizeBytes': len(data), 'sha256': hashlib.sha256(data).hexdigest()}}
+                original_read = os.read
+                changed = []
+                def read_then_change(fd, count):
+                    block = original_read(fd, count)
+                    if not changed:
+                        changed.append(True)
+                        if mutation == 'append':
+                            with archive.open('ab') as out:
+                                out.write(b'y')
+                        else:
+                            with archive.open('r+b') as out:
+                                out.write(b'y')
+                    return block
+                with patch.object(host, 'recipe', return_value=pin), patch.object(host.os, 'read', side_effect=read_then_change):
+                    measured = host.measure_factory(mount, archive)
+                self.assertFalse(measured['matchesPinnedFactory'])
+                self.assertFalse(measured['admitsOtatools'])
+
     def bounded(self, call):
         import signal
         def handler(signum, frame):

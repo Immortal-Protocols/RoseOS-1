@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Dedicated Mustang build/OTA steps. The lane is identity-bound; runtime stays unbound.
+"""Dedicated Mustang build/OTA steps on the identity-bound dedicated route.
 
 No provisioning, IAM, key bootstrap, global reclaim, automatic dispatch or phone
 operation. Runtime actions require actual admitted bindings and this one fresh
-manual workflow run. Public publication is separately default-off.
+manual workflow run. Publication requires its explicit manual input.
 """
 import argparse
 import base64
@@ -17,6 +17,8 @@ import stat
 import subprocess
 import sys
 import tarfile
+import urllib.error
+import urllib.parse
 import urllib.request
 import zipfile
 
@@ -52,6 +54,10 @@ def reference(value, root=ROOT):
 def guard(lane, cfg, env, publish=False, root=ROOT, diff=None, dry_run=False):
     run=controller.invocation(lane,env)
     paths=mustang_paths.layout(lane)
+    import mustang_retained
+    if mustang_retained.selected(env):
+        if dry_run:raise ValueError('retained delivery cannot select a preparation-only scope')
+        mustang_retained.compatible(run['source'],root)
     if env.get('GITHUB_REPOSITORY_ID')!='1428996648':
         raise ValueError('dedicated workflow repository ID differs')
     if lane['workflow']!=WORKFLOW or lane['queue']!='mustang-ota' \
@@ -65,6 +71,8 @@ def guard(lane, cfg, env, publish=False, root=ROOT, diff=None, dry_run=False):
     if cfg.get('status')!='bound':
         raise ValueError('dedicated Mustang runtime inputs are unbound')
     controller.require_explicit_target(controller.common_controller())
+    import mustang_hosted_sign
+    mustang_hosted_sign.require_delivery_capacity(root)
     if type(cfg.get('jobs')) is not int or not 1<=cfg['jobs']<=256 \
             or set(cfg.get('tools',{}))!={'aapt','apksigner','node'}:
         raise ValueError('actual dedicated Make job count required')
@@ -83,10 +91,15 @@ def guard(lane, cfg, env, publish=False, root=ROOT, diff=None, dry_run=False):
         raise ValueError('source-only sync receipt is not pristine bootstrap evidence')
     route.reject_copy_time_source(source)
     manifest=hashlib.sha256((Path(root)/'os/pinned-manifest.xml').read_bytes()).hexdigest()
-    if source.get('builder')!=lane['vm'] or source.get('sourceRoot')!=lane['sourceRoot'] \
+    if source.get('schema')=='roseos.mustang-full-run-source-contract.v1':
+        import mustang_bootstrap_collector
+        mustang_bootstrap_collector.source_contract(lane,cfg,source,root=root)
+    elif source.get('builder')!=lane['vm'] or source.get('sourceRoot')!=lane['sourceRoot'] \
             or source.get('manifestSha256')!=manifest or source.get('pristine') is not True \
             or source.get('adevtoolRevision')!=load(Path(root)/'os/build-only/mustang.json')['pins']['vendor/adevtool']:
         raise ValueError('dedicated pristine pinned source/bootstrap evidence differs')
+    import mustang_vendor_consumer
+    mustang_vendor_consumer.binding(lane,cfg,root)
     runner=cfg['runner']
     if str(runner.get('groupId'))=='5':
         import mustang_ephemeral
@@ -106,7 +119,10 @@ def guard(lane, cfg, env, publish=False, root=ROOT, diff=None, dry_run=False):
             or signing.get('establishedMustangIdentityPreserved') is not True or signing.get('approved') is not True:
         raise ValueError('existing signer admission for the dedicated workflow is not established')
     state=reference(cfg.get('allocationState'),root)
-    if str(state.get('failedRun'))!='41884368820' or state.get('unknown') is not False \
+    if cfg.get('clockNumbering') is not None:
+        import mustang_clock
+        mustang_clock.policy(lane,cfg,root)
+    elif str(state.get('failedRun'))!='41884368820' or state.get('unknown') is not False \
             or state.get('builder')!=lane['vm'] or state.get('dataFilesystemUuid')!=cfg['dataFilesystemUuid'] \
             or not isinstance(state.get('consumedBuilds'),list) or any(
                 not isinstance(b,str) or not re.fullmatch(r'[1-9][0-9]{9}',b) for b in state['consumedBuilds']):
@@ -145,7 +161,9 @@ def guard(lane, cfg, env, publish=False, root=ROOT, diff=None, dry_run=False):
                 or authority.get('workflow')!=WORKFLOW or authority.get('automatic') is not False:
             raise ValueError('dedicated public OTA publication remains disabled')
     ota.guard(ota.config(),access=True,publication=publish)
-    return dict(cfg,consumedBuilds=state['consumedBuilds'])
+    # The clock route must retain byte-equivalent captured runtime bindings.
+    # consumedBuilds is a legacy derived value, not a field in its committed JSON.
+    return cfg if cfg.get('clockNumbering') is not None else dict(cfg,consumedBuilds=state['consumedBuilds'])
 
 
 def emit(**values):
@@ -179,7 +197,7 @@ def host_identity(lane,filesystem_uuid,observe_id=metadata_id,execute=subprocess
     return paths
 
 
-DRY_RUN_BLOCKED=frozenset(('fetch-inputs','baseline','produce','collect','sign','_execute','stage','verify-staged','publish','report'))
+DRY_RUN_BLOCKED=frozenset(('fetch-inputs','baseline','produce','recover','collect','sign','_execute','stage','verify-staged','publish','report'))
 
 
 def refuse_dry_run(action):
@@ -212,8 +230,61 @@ def host_check(lane,cfg,observe_id=metadata_id,execute=subprocess.run):
     for tool in tools:
         if not isinstance(tool,str) or not Path(tool).is_file() or not os.access(tool,os.X_OK):
             raise ValueError('dedicated tool unavailable')
-    if not infrastructure and any(shutil.which(tool) is None for tool in ('gh','gcloud')):
-        raise ValueError('artifact/signing CLI unavailable before compile')
+    return dict(instanceId=observed,filesystemUuid=cfg['dataFilesystemUuid'],mount=cfg.get('dataMount'),
+        availableBytes=space.f_bavail*frsize,availableInodes=space.f_favail,totalInodes=space.f_files,euid=os.geteuid())
+
+
+class NoArtifactRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, request, response, code, message, headers, url):
+        return None
+
+
+def app_artifact_reader(artifact_id, token, open_http=None):
+    """Two fixed Actions endpoints, then one unauthenticated signed-storage GET.
+
+    No CLI/package installation, retries, inherited auth on redirects, or access
+    to other artifacts. HTTP failures expose only phase/status, never signed URLs.
+    """
+    if not re.fullmatch(r'[1-9][0-9]*',str(artifact_id)) or not isinstance(token,str) or not token:
+        raise ValueError('app artifact ID/token unavailable')
+    endpoint='https://api.github.com/repos/Immortal-Protocols/RoseOS-1/actions/artifacts/'+str(artifact_id)
+    open_http=open_http or urllib.request.build_opener(NoArtifactRedirect()).open
+    def read(suffix,limit):
+        if suffix not in ('','/zip') or type(limit) is not int or not 0<limit<=256<<20:
+            raise ValueError('app artifact request scope/bound differs')
+        phase='metadata' if not suffix else 'archive-api'
+        request=urllib.request.Request(endpoint+suffix,headers={
+            'Authorization':'Bearer '+token,'Accept':'application/vnd.github+json',
+            'X-GitHub-Api-Version':'2026-03-10','User-Agent':'RoseOS-Mustang-artifact-consumer'})
+        try:
+            try:
+                response=open_http(request,timeout=60)
+            except urllib.error.HTTPError as error:
+                if error.code!=302 or suffix!='/zip':
+                    raise ValueError('app artifact '+phase+' HTTP '+str(error.code)+'; no retry') from None
+                location=error.headers.get('Location','');error.close()
+                try:
+                    target=urllib.parse.urlsplit(location);port=target.port
+                except ValueError:
+                    raise ValueError('app artifact storage redirect differs') from None
+                host=target.hostname or ''
+                if target.scheme!='https' or target.username or target.password or port not in (None,443) \
+                        or target.fragment or not any(host.endswith('.'+domain) for domain in
+                            ('blob.core.windows.net','actions.githubusercontent.com','githubusercontent.com')):
+                    raise ValueError('app artifact storage redirect differs')
+                phase='archive-storage'
+                # A fresh Request deliberately carries no API credentials.
+                response=open_http(urllib.request.Request(location),timeout=60)
+            with response:
+                if response.status!=200: raise ValueError('app artifact '+phase+' response differs')
+                raw=response.read(limit+1)
+        except urllib.error.HTTPError as error:
+            raise ValueError('app artifact '+phase+' HTTP '+str(error.code)+'; no retry') from None
+        except urllib.error.URLError:
+            raise ValueError('app artifact '+phase+' transport failed; no retry') from None
+        if len(raw)>limit: raise ValueError('app artifact '+phase+' exceeds byte bound')
+        return raw
+    return read
 
 
 def private_binding(record,lane,cfg,root=ROOT):
@@ -318,7 +389,7 @@ def import_private(record,out,lane,cfg,root=ROOT):
     return extracted
 
 
-def fetch_inputs(record_path,out,execute=subprocess.run,lane=None,cfg=None,root=ROOT):
+def fetch_inputs(record_path,out,read=None,lane=None,cfg=None,root=ROOT):
     rec=load(record_path)
     if rec.get('schema')==PRIVATE_RECORD:
         if lane is None or cfg is None: raise ValueError('private import requires the actual dedicated lane')
@@ -326,17 +397,18 @@ def fetch_inputs(record_path,out,execute=subprocess.run,lane=None,cfg=None,root=
     export=rec['export']; artifact=export['artifact']; out=Path(out)
     if not re.fullmatch(r'[1-9][0-9]*',str(artifact['id'])) or not re.fullmatch(r'sha256:[0-9a-f]{64}',artifact['digest']):
         raise ValueError('immutable artifact ID/digest required')
-    endpoint=f'/repos/Immortal-Protocols/RoseOS-1/actions/artifacts/{artifact["id"]}'
-    meta=execute(['gh','api',endpoint],capture_output=True,text=True)
-    if meta.returncode: raise ValueError('app artifact metadata read failed; no retry')
-    observed=json.loads(meta.stdout)
-    if str(observed['workflow_run']['id'])!=str(export['run']) or observed.get('expired') is not False \
-            or observed.get('digest')!=artifact['digest'] or observed.get('name')!=artifact['name']:
+    read=read or app_artifact_reader(artifact['id'],os.environ.get('GH_TOKEN',''))
+    observed=json.loads(read('',2<<20))
+    bound=sum(f['sizeBytes'] for f in rec['files'])+(9<<20)
+    size=observed.get('size_in_bytes')
+    if str(observed.get('id'))!=str(artifact['id']) or str(observed['workflow_run']['id'])!=str(export['run']) \
+            or observed.get('expired') is not False or observed.get('digest')!=artifact['digest'] \
+            or observed.get('name')!=artifact['name'] or type(size) is not int or not 0<size<=bound:
         raise ValueError('app artifact metadata differs from committed export')
     out.mkdir(mode=0o700); archive_path=out/'download.zip'; extracted=out/'files'; extracted.mkdir()
     with open(archive_path,'xb') as destination:
-        downloaded=execute(['gh','api',endpoint+'/zip'],stdout=destination,stderr=subprocess.PIPE)
-    if downloaded.returncode or 'sha256:'+ota.digest(archive_path)!=artifact['digest']:
+        destination.write(read('/zip',size))
+    if archive_path.stat().st_size!=size or 'sha256:'+ota.digest(archive_path)!=artifact['digest']:
         raise ValueError('app artifact download/digest failed; inputs retained, no retry')
     rows={f['path']:f for f in rec['files']}
     expected=set(rows)|{'app-inputs-export.json','SHA256SUMS'}
@@ -376,12 +448,37 @@ def verify(directory,lane,cfg,publish=False):
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('action',choices=('guard','host-check','fetch-inputs','baseline','produce','collect','sign',
+    parser.add_argument('action',choices=('guard','host-check','fetch-inputs','baseline','produce','recover','collect','sign',
         '_execute','stage','verify-staged','publish','report','ownership-output','cleanup-prepare','require-owned','preflight'))
     parser.add_argument('--dir'); parser.add_argument('--out'); parser.add_argument('--config')
     parser.add_argument('--ownership-record'); parser.add_argument('--publish',action='store_true')
     args=parser.parse_args()
     args.publish=args.publish or (args.action=='guard' and os.environ.get('MUSTANG_PUBLISH')=='true')
+    if args.action=='guard' and os.environ.get('MUSTANG_OTATOOLS_ONLY')=='true':
+        import mustang_otatools_prep
+        mustang_otatools_prep.guard(os.environ,mustang_otatools_prep.deps.read_event(os.environ))
+        if os.environ.get('MUSTANG_DRY_RUN')!='true':
+            raise ValueError('otatools preparation must keep the OTA runtime path closed')
+    elif args.action=='guard' and os.environ.get('MUSTANG_VENDOR_ONLY')=='true':
+        import mustang_vendor_prep
+        mustang_vendor_prep.guard(os.environ,mustang_vendor_prep.deps.read_event(os.environ))
+        if os.environ.get('MUSTANG_DRY_RUN')!='true':
+            raise ValueError('vendor preparation must keep the OTA runtime path closed')
+    elif args.action=='guard' and os.environ.get('MUSTANG_FACTORY_ONLY')=='true':
+        import mustang_factory_input
+        mustang_factory_input.guard(os.environ,mustang_factory_input.deps.read_event(os.environ))
+        if os.environ.get('MUSTANG_DRY_RUN')!='true':
+            raise ValueError('factory input must keep the OTA runtime path closed')
+    elif args.action=='guard' and os.environ.get('MUSTANG_LOCK_ADMIN_ONLY')=='true':
+        import mustang_lock_admin
+        mustang_lock_admin.guard(os.environ,mustang_lock_admin.deps.read_event(os.environ))
+        if os.environ.get('MUSTANG_DRY_RUN')!='true':
+            raise ValueError('lock administration must keep the OTA runtime path closed')
+    elif args.action=='guard' and os.environ.get('MUSTANG_HOSTDEPS_ONLY')=='true':
+        import mustang_hostdeps
+        mustang_hostdeps.guard(os.environ,mustang_hostdeps.read_event(os.environ))
+        if os.environ.get('MUSTANG_DRY_RUN')!='true':
+            raise ValueError('hostdeps scope must keep the OTA runtime path closed')
     refuse_dry_run(args.action)
     if args.action in ('sign','_execute'):
         raise ValueError('guest signing is closed; only the hosted ubuntu signer may sign')
@@ -410,7 +507,22 @@ def main():
             if not os.environ.get(name): raise ValueError(name+' is unbound; no host start')
         if not dry and os.environ['GCP_SIGNER_SERVICE_ACCOUNT']!=ota.module('mustang_route_identity','mustang-sign-package.py').SIGNER:
             raise ValueError('existing Mustang signer identity differs; no host start')
-        emit(runner_group=cfg['runner']['groupName'],runner_label=lane['runnerLabel'])
+        values=dict(runner_group=cfg['runner']['groupName'],runner_label=lane['runnerLabel'])
+        import mustang_retained
+        if mustang_retained.selected(os.environ):
+            import mustang_bootstrap_collector
+            mustang_bootstrap_collector.full_scope(lane,os.environ,
+                mustang_bootstrap_collector.proof.deps.read_event(os.environ),retained=True)
+            mustang_retained.authenticate(os.environ,ROOT)
+        if not dry and cfg.get('clockNumbering') is not None:
+            import mustang_clock
+            import mustang_bootstrap_collector
+            policy=mustang_clock.policy(lane,cfg,ROOT)
+            api=mustang_bootstrap_collector.github_reader(dict(runId=run),os.environ.get('GH_TOKEN',''))
+            actual=api('/repos/Immortal-Protocols/RoseOS-1/actions/runs/'+run)
+            clock_context=mustang_clock.actions_context(actual,os.environ,policy)
+            values['clock_context']=base64.b64encode(mustang_clock.canonical(clock_context)).decode()
+        emit(**values)
     elif args.action=='cleanup-prepare':
         encoded=os.environ.get('MUSTANG_OWNER_B64','')
         if len(encoded)>8192: raise ValueError('oversized controller ownership refused')
@@ -447,9 +559,13 @@ def main():
             if path.is_file() and not path.is_symlink(): shutil.copyfile(path,out/name)
         if args.dir and Path(args.dir).is_file(): shutil.copyfile(args.dir,out/'baseline.json')
     else:
-        host_check(lane,cfg)
+        facts=host_check(lane,cfg)
         if args.action=='host-check': return 0
-        if args.action=='fetch-inputs':
+        if args.action=='recover':
+            import mustang_retained, mustang_bootstrap_collector
+            mustang_retained.collect(lane,cfg,os.environ,
+                mustang_bootstrap_collector.proof.deps.read_event(os.environ),facts,ROOT)
+        elif args.action=='fetch-inputs':
             inputs=fetch_inputs(ROOT/cfg['appInputsRecord'],args.out,lane=lane,cfg=cfg,root=ROOT)
             ota.module('mustang_verify_apps','app-inputs-verify.py').verify(ROOT/cfg['appInputsRecord'],inputs,cfg['tools'])
             emit(inputs_dir=str(inputs))
@@ -460,6 +576,8 @@ def main():
                 factory=reference(cfg['baselineFactoryEvidence']) if cfg.get('baselineFactoryEvidence') is not None else None
                 ota.observe_baseline(args.out,lane,cfg['tools'],cfg.get('baselineTargetFiles'),factory=factory,runtime=cfg)
         elif args.action=='produce':
+            import mustang_retained
+            if mustang_retained.selected(os.environ):raise ValueError('retained delivery cannot run Make or allocate')
             # This process has no further authenticated download/signing work.
             # Do not forward job tokens or auth/env-output capabilities to Make
             # or vendor tools. Later steps get their normal fresh job environment.
