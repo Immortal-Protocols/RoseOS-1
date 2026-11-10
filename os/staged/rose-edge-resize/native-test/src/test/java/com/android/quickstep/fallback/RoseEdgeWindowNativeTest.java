@@ -17,6 +17,7 @@ import android.os.SystemClock;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewTreeObserver;
+import android.view.InsetsFrameProvider;
 import android.view.WindowInsets;
 import android.view.WindowManager;
 import com.android.wm.shell.roseedge.IRoseEdge;
@@ -262,15 +263,35 @@ public class RoseEdgeWindowNativeTest {
         assertEquals(List.of("raise", "slot " + expected), shell.calls);
     }
 
+    /**
+     * The window manager's rule for a relayout (pinned frameworks/base 84183aff, WindowManagerService.relayoutWindow,
+     * lines 2630-2660): the providers a window declared when it was added can be resized, never added, removed or
+     * re-identified; anything else throws IllegalArgumentException into the caller. Robolectric does not enforce it.
+     */
+    static void assertRelayoutAllowed(InsetsFrameProvider[] added, InsetsFrameProvider[] now) {
+        if (added == null && now == null) return;
+        assertTrue("Insets amount can not be changed after the window is added",
+                added != null && now != null && added.length == now.length);
+        for (int i = 0; i < now.length; i++) {
+            assertTrue("Insets ID can not be changed after the window is added", added[i].idEquals(now[i]));
+            assertTrue("Insets override types can not be changed",
+                    (added[i].getInsetsSizeOverrides() == null) == (now[i].getInsetsSizeOverrides() == null));
+        }
+    }
+
     @Test
     public void theInsetIsProvidedOnlyOnceTheShellShortenedTheApp() throws Exception {
         RoseEdgeWindow.EdgeView view = raise();
         WindowManager.LayoutParams lp = (WindowManager.LayoutParams) view.getLayoutParams();
+        // Frankel 2026110705 crash: the provider must exist from addView, so the onRaised relayout only resizes it.
+        InsetsFrameProvider[] added = lp.providedInsets;
+        assertNotNull("the chin declares its inset provider when the window is added", added);
         assertEquals("raised but not yet resized: the full-height app must not see an inset", 0,
                 RoseEdgeWindow.insetPx(lp));
         shell.listener.onRaised(DISPLAY, TASK, new Rect(0, 0, dp(384), dp(832 - 58)));
         idle();
         lp = (WindowManager.LayoutParams) window.shownOn(DISPLAY).getLayoutParams();
+        assertRelayoutAllowed(added, lp.providedInsets);
         assertEquals("the lift, as a systemOverlays inset", RoseEdgeGesture.raisedInsetPx(density),
                 RoseEdgeWindow.insetPx(lp));
         assertEquals(1, lp.providedInsets.length);

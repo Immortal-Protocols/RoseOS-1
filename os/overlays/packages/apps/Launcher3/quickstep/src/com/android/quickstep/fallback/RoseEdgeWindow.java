@@ -61,7 +61,10 @@ import android.view.inputmethod.InputMethodManager;
  * reach the bottom of the display, the keyboard and the shade, can stand clear of the raised edge. Never before the
  * shell's onRaised: until then the app is full height and an app padding by systemBars() would lift twice. Never
  * navigationBars(): the focused app controls those, and an immersive app would hide the edge. The shortened app does
- * not overlap the source frame, so it gets none. The inset goes with the window when the edge lowers.
+ * not overlap the source frame, so it gets none. The inset goes with the window when the edge lowers. The window
+ * declares its one provider when it is added, at size 0, and a relayout only resizes it: the window manager refuses a
+ * relayout that adds, removes or re-identifies a provider ("Insets amount can not be changed after the window is
+ * added", WindowManagerService.relayoutWindow), which would crash this process on every raise.
  */
 public final class RoseEdgeWindow implements RoseEdgeState.Listener {
     /** What the host (TouchInteractionService, via rose-edge-launcher3.patch) does for the edge's two own controls. */
@@ -190,10 +193,17 @@ public final class RoseEdgeWindow implements RoseEdgeState.Listener {
         WindowManager.LayoutParams lp = (WindowManager.LayoutParams) view.getLayoutParams();
         int lift = RoseEdgeGesture.raisedInsetPx(view.mDensity);
         if (insetPx(lp) == lift) return;
-        lp.providedInsets = new InsetsFrameProvider[] {
-                new InsetsFrameProvider(mInsetsOwner, 0, WindowInsets.Type.systemOverlays())
-                        .setInsetsSize(Insets.of(0, 0, 0, lift))};
+        lp.providedInsets = chinInsets(lift);  // the same provider (owner, index, type) as at add: only its size changes
         view.getContext().getSystemService(WindowManager.class).updateViewLayout(view, lp);
+    }
+
+    /**
+     * The window's one inset provider, bottomPx tall: a systemOverlays() source along its bottom, identified by this
+     * window's owner, index 0 and type, exactly as when it was added.
+     */
+    InsetsFrameProvider[] chinInsets(int bottomPx) {
+        return new InsetsFrameProvider[] {new InsetsFrameProvider(mInsetsOwner, 0, WindowInsets.Type.systemOverlays())
+                .setInsetsSize(Insets.of(0, 0, 0, bottomPx))};
     }
 
     /** The bottom systemOverlays() inset these layout params provide, or 0 (tests read it). */
@@ -242,6 +252,8 @@ public final class RoseEdgeWindow implements RoseEdgeState.Listener {
         lp.gravity = Gravity.BOTTOM;
         lp.setTitle("RoseEdge");
         lp.setFitInsetsTypes(0);
+        // Declared now, empty; onResized only resizes it (a provider added on relayout is refused by the system).
+        lp.providedInsets = chinInsets(0);
         window.getSystemService(WindowManager.class).addView(view, lp);
         mShown.put(displayId, view);
         return view;

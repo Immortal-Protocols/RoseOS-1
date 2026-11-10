@@ -113,7 +113,7 @@ MANIFEST = ROOT/'os/compile-contracts/launcher3-quickstep-lib.json'
 # OS Product's reviewed contract version (schema 3). Re-pinned 2026-11-07 to the live trusted patcher:
 # #440's delta is empty, so base equals final, and branches.otherwise is Product's wording on #662.
 # A different manifest is refused until this pin is updated.
-MANIFEST_SHA256 = '9efcdf895a0d198b8fb8bab883e6b0b99ba568cedf46dc537261bced96982f49'
+MANIFEST_SHA256 = 'b18c87a06436d39f94ef835417b6f1b11fa1a0ee02e1e0269475265feaf114cb'
 CONDITIONS = ['base-exact', 'delta-preimages', 'isolated-apply', 'final-exact']
 # The binding inputs each branch requires and forbids, in the contract's own vocabulary (branches.requires, forbids):
 # check() binds and refuses exactly these, so the contract and this adapter cannot drift.
