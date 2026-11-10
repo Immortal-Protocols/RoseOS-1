@@ -46,9 +46,12 @@ public final class RoseConversationActivity extends Activity {
  int navigationMode(){try{int id=getResources().getIdentifier("config_navBarInteractionMode","integer","android");return id==0?-1:getResources().getInteger(id);}catch(RuntimeException unknown){return -1;}}
  @Override protected void onCreate(Bundle b){
   PixelAppearance.attach(this);super.onCreate(b);shown=new java.lang.ref.WeakReference<>(this);
+  // Plan 1E: read the stored theme (and decode Glacier's field) before any view or field is built; a later change
+  // rebuilds the screen in the new theme. Colours only: layout, voice, tasks and return are untouched.
+  RoseThemeNow.prepare(this);builtTheme=RoseThemeNow.id;CustomizationStore.register(this,themeChanged);
   setVolumeControlStream(android.media.AudioManager.STREAM_VOICE_CALL);
   // #410: the Oxblood Rose field (OxbloodField.ROSE) in either system theme, with light bar icons over it.
-  getWindow().setStatusBarColor(0xff120a0d);getWindow().setNavigationBarColor(0xff12060a);
+  getWindow().setStatusBarColor(RoseThemeNow.c(0xff120a0d));getWindow().setNavigationBarColor(RoseThemeNow.c(0xff12060a));
   View decor=getWindow().getDecorView();decor.setSystemUiVisibility(decor.getSystemUiVisibility()&~(View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR|View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR));
   float density=getResources().getDisplayMetrics().density;
   FrameLayout root=new FrameLayout(this);
@@ -96,16 +99,16 @@ public final class RoseConversationActivity extends Activity {
   LinearLayout.LayoutParams snp=new LinearLayout.LayoutParams(-1,-2);snp.topMargin=dp(12);presented.addView(stopNote,snp);
   taskActions=new LinearLayout(this);taskActions.setGravity(Gravity.START);
   watch=taskAction("View workspace",ink());watch.setContentDescription("View this task's background workspace");watch.setOnClickListener(v->openWorkspace());taskActions.addView(watch);
-  stopTask=taskAction("Stop task",endInk());stopTask.setOnClickListener(v->confirmStop());
+  stopTask=taskAction("Stop task",RoseThemeNow.w(endInk()));stopTask.setOnClickListener(v->confirmStop());
   LinearLayout.LayoutParams sp=new LinearLayout.LayoutParams(-2,-2);sp.leftMargin=dp(12);taskActions.addView(stopTask,sp);
   LinearLayout.LayoutParams tap=new LinearLayout.LayoutParams(-1,-2);tap.topMargin=dp(16);presented.addView(taskActions,tap);
   presentedScroll.addView(presented);content.addView(presentedScroll,new LinearLayout.LayoutParams(-1,0,1f));
   FrameLayout.LayoutParams cp=new FrameLayout.LayoutParams(-1,-1);cp.topMargin=headTop+dp(121);cp.bottomMargin=dp(110);cp.leftMargin=dp(30);cp.rightMargin=dp(30);root.addView(content,cp);
 
   notice=new LinearLayout(this);notice.setGravity(Gravity.CENTER_VERTICAL);notice.setPadding(dp(18),dp(12),dp(18),dp(12));notice.setMinimumHeight(dp(48));
-  GradientDrawable nb=new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,new int[]{0xf03a141b,0xf0220b0f});nb.setCornerRadius(dp(26));nb.setStroke(Math.max(1,dp(1)),0x38ecd5c6);notice.setBackground(nb);notice.setElevation(dp(6));
+  GradientDrawable nb=new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,RoseThemeNow.c(new int[]{0xf03a141b,0xf0220b0f}));nb.setCornerRadius(dp(26));nb.setStroke(Math.max(1,dp(1)),RoseThemeNow.c(0x38ecd5c6));notice.setBackground(nb);notice.setElevation(dp(6));
   noticeIcon=new TextView(this);noticeIcon.setTextSize(18);noticeIcon.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);notice.addView(noticeIcon);
-  noticeText=new TextView(this);noticeText.setTextSize(15);noticeText.setTextColor(0xfff2e6d9);noticeText.setTypeface(Typeface.create("sans-serif-medium",Typeface.NORMAL));
+  noticeText=new TextView(this);noticeText.setTextSize(15);noticeText.setTextColor(RoseThemeNow.c(0xfff2e6d9));noticeText.setTypeface(Typeface.create("sans-serif-medium",Typeface.NORMAL));
   LinearLayout.LayoutParams tp=new LinearLayout.LayoutParams(-2,-2);tp.leftMargin=dp(12);notice.addView(noticeText,tp);
   notice.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);notice.setVisibility(View.GONE);
   FrameLayout.LayoutParams np=new FrameLayout.LayoutParams(-2,-2,Gravity.TOP|Gravity.END);np.rightMargin=dp(24);np.topMargin=headTop+dp(69);root.addView(notice,np);
@@ -152,7 +155,7 @@ public final class RoseConversationActivity extends Activity {
   setContentView(root);
  }
  TextView taskAction(String text,int color){TextView t=presentedText(15,color,"sans-serif-medium");t.setText(text);t.setGravity(Gravity.CENTER);t.setMinHeight(dp(44));
-  t.setPadding(dp(16),0,dp(16),0);GradientDrawable g=new GradientDrawable();g.setColor(0x8c0e080b);g.setCornerRadius(dp(10));g.setStroke(Math.max(1,dp(1)),0x38f1e9e1);t.setBackground(g);t.setClickable(true);t.setFocusable(true);return t;}
+  t.setPadding(dp(16),0,dp(16),0);GradientDrawable g=new GradientDrawable();g.setColor(RoseThemeNow.c(0x8c0e080b));g.setCornerRadius(dp(10));g.setStroke(Math.max(1,dp(1)),RoseThemeNow.c(0x38f1e9e1));t.setBackground(g);t.setClickable(true);t.setFocusable(true);return t;}
  static int eyebrow(){return OxbloodRose.INK_2;}
  TextView presentedText(int size,int color,String family){TextView t=new TextView(this);t.setTextSize(size);t.setTextColor(color);t.setTypeface(Typeface.create(family,Typeface.NORMAL));return t;}
  int statusInset(){int id=getResources().getIdentifier("status_bar_height","dimen","android");return id>0?getResources().getDimensionPixelSize(id):dp(24);}
@@ -160,9 +163,20 @@ public final class RoseConversationActivity extends Activity {
  /** True between onResume and onPause: the presence animates only while this screen is visible. */
  boolean resumed;
  @Override protected void onResume(){super.onResume();resumed=true;resumedAt=SystemClock.uptimeMillis();ctlPolledAt=0;appsPolledAt=0;notices.reset();handler.removeCallbacks(tick);handler.post(tick);if(overview!=null)overview.resume();}
+ /** Plan 1E: the theme this screen was built in; a stored change to another theme rebuilds it (recreate). */
+ String builtTheme=RoseTheme.DEFAULT;
+ /** Plan 1E: a theme change rebuilds this screen in the new theme, but never while it holds something the owner is in
+  * the middle of (Background Work open, a return pending or its sheet shown, a Stop being confirmed or sent): then the
+  * rebuild waits (themePending) and refresh() retries on its tick, so no return, choice or Stop result is lost. */
+ boolean themePending;android.app.Dialog stopDialog;
+ boolean themeBusy(){return overview!=null&&overview.isOpen()||returnState.pending()||returnState.sheetShown()||stopInFlight||stopPendingFor!=null||stopDialog!=null&&stopDialog.isShowing();}
+ void maybeRetheme(){if(isFinishing()||isDestroyed())return;if(CustomizationStore.read(this).theme.equals(builtTheme)){themePending=false;return;}if(themeBusy()){themePending=true;return;}themePending=false;recreate();}
+ final Runnable themeChanged=this::maybeRetheme;
+ @Override protected void onDestroy(){CustomizationStore.unregister(this,themeChanged);super.onDestroy();}
  @Override protected void onPause(){resumed=false;handler.removeCallbacks(tick);stopBreath();if(overview!=null){if(isFinishing())overview.teardown();else overview.pause();}clearNotice();super.onPause();}
 
  void refresh(){
+  if(themePending){maybeRetheme();if(isFinishing()||isDestroyed())return;}
   VoiceService s=VoiceService.instance;
   state=s==null?ConversationState.of(false,false,false,false,false,null,null,null)
    :ConversationState.of(true,s.live,s.connected,s.muted,s.communicating,s.lastEndReason,s.lastStartError,s.backendReachable);
@@ -531,7 +545,7 @@ public final class RoseConversationActivity extends Activity {
  /** Confirms Stop for the task shown now. The id is captured here, so a later task is never stopped by this dialog. */
  void confirmStop(){
   final String id=shownTaskId;final String title=taskTitle.getText().toString();if(id.isEmpty())return;
-  new android.app.AlertDialog.Builder(this).setTitle("Stop this task?").setMessage(title+"\n\nThis stops only this task. Your voice conversation is not affected.")
+  stopDialog=new android.app.AlertDialog.Builder(this).setTitle("Stop this task?").setMessage(title+"\n\nThis stops only this task. Your voice conversation is not affected.")
    .setNegativeButton("Cancel",null).setPositiveButton("Stop task",(d,w)->sendStop(id)).show();
  }
  /** The existing authenticated Owner Stop: POST /task/stop {taskId}. Its answer is shown as it is. */

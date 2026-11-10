@@ -103,7 +103,7 @@
     },
     {
      "name": "rose-edge-wmshell.patch",
-     "sha256": "42fcc4fc3d2c93295b3b12805e6e580c2b1615d91df09ec64e05dc705cf26cbd"
+     "sha256": "666679820cd54dc980287c4dd07de8482b77e1606f39e651fe96803c0ef1bbf2"
     },
     {
      "name": "rose-shade-systemui.patch",
@@ -824,17 +824,17 @@
      "path": "libs/WindowManager/Shell/src/com/android/wm/shell/RoseEdgeMicSlot.java",
      "pre": null,
      "post": {
-      "sha256": "a613e6ee144b3be77eddf8490c545e11f96bf3a831ef87d8000c6e33d904b3ec",
-      "gitBlob": "0aa0b49d3da30819e3ae2ba63f5f292e23cc2110"
+      "sha256": "c178b08e4d0ce8cecb2f5da7a640ab3f26d93aad63372926ecc6103539d9daef",
+      "gitBlob": "f8e557e537a395c27be11aff0fad847da02e44ec"
      },
      "chain": [
       {
        "patch": "rose-edge-wmshell.patch",
        "before": null,
-       "after": "0aa0b49d3da30819e3ae2ba63f5f292e23cc2110",
+       "after": "f8e557e537a395c27be11aff0fad847da02e44ec",
        "index": [
         "0000000",
-        "0aa0b49"
+        "f8e557e"
        ],
        "base": "exact"
       }
@@ -993,6 +993,8 @@
       "libs/WindowManager/Shell/src/com/android/wm/shell/AgentTrayPrototype.java",
       "libs/WindowManager/Shell/src/com/android/wm/shell/RootTaskDisplayAreaOrganizer.java",
       "libs/WindowManager/Shell/src/com/android/wm/shell/RoseEdgeMicSlot.java",
+      "libs/WindowManager/Shell/src/com/android/wm/shell/RoseTheme.java",
+      "libs/WindowManager/Shell/src/com/android/wm/shell/RoseThemeMirror.java",
       "libs/WindowManager/Shell/src/com/android/wm/shell/StatusVoiceGlow.java",
       "libs/WindowManager/Shell/src/com/android/wm/shell/dagger/WMShellBaseModule.java",
       "libs/WindowManager/Shell/src/com/android/wm/shell/dagger/WMShellModule.java",
@@ -1456,6 +1458,7 @@
     "unlisted": {
      "excludedPaths": [
       "quickstep/res/color/rose_oxblood_chip_state_fg.xml",
+      "quickstep/res/drawable-nodpi/rose_glacier_field.png",
       "quickstep/res/drawable/rose_oxblood_arrow_background.xml",
       "quickstep/res/drawable/rose_oxblood_chip_fg.xml",
       "quickstep/res/layout/fallback_recents_activity.xml",
@@ -1480,6 +1483,8 @@
       "quickstep/src/com/android/quickstep/fallback/RoseEdgeWindow.java",
       "quickstep/src/com/android/quickstep/fallback/RoseFan.java",
       "quickstep/src/com/android/quickstep/fallback/RoseOxbloodField.java",
+      "quickstep/src/com/android/quickstep/fallback/RoseTheme.java",
+      "quickstep/src/com/android/quickstep/fallback/RoseThemeSetting.java",
       "quickstep/src/com/android/quickstep/views/OverviewActionsView.java",
       "quickstep/src/com/android/quickstep/window/RecentsWindowSwipeHandler.java"
      ],
@@ -1640,6 +1645,14 @@
    "role": "notAnInput"
   },
   {
+   "target": "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/RoseTheme.java",
+   "role": "notAnInput"
+  },
+  {
+   "target": "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/RoseThemeMirror.java",
+   "role": "notAnInput"
+  },
+  {
    "target": "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/StatusVoiceGlow.java",
    "role": "notAnInput"
   },
@@ -1692,13 +1705,18 @@
    "role": "notAnInput"
   },
   {
+   "target": "packages/apps/Launcher3/quickstep/res/drawable-nodpi/rose_glacier_field.png",
+   "sha256": "98c7b166df806d0205396c5c2dd80fb470d96dbe2b619662cbd64a8d1099ba3e",
+   "role": "required"
+  },
+  {
    "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseAgentFan.java",
    "sha256": "21db4354e7b31c9bf23a2c79a622b9f8f530720d64332ff8869b9443e809b7ea",
    "role": "required"
   },
   {
    "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseAgentStrip.java",
-   "sha256": "58c9896780c70bebc75dddb2a562d3bde6d24f7da1dbc3e3d3febec2bc19cc19",
+   "sha256": "c7eb0c3d7b54d0fd403233a507a0674963888d529ac22d25fe6c1caab61051be",
    "role": "required"
   },
   {
@@ -1733,7 +1751,7 @@
   },
   {
    "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeWindow.java",
-   "sha256": "b1b19f6b8ac9d8663014af0ddce131c2864dece07ada12d914da5e437357fa84",
+   "sha256": "6e3c46e08fd286327073912022412c9b2f5fc81cd825a680c6205fb13fe43237",
    "role": "required"
   },
   {
@@ -1743,7 +1761,17 @@
   },
   {
    "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseOxbloodField.java",
-   "sha256": "7d822296cb2c71c201052ea4e7658db81d851fca5e3e66e09484a5834b5104ee",
+   "sha256": "6e38717882e7492eec18c6a6d5367e1fa8789b0334619e7b7ac233d0098fc269",
+   "role": "required"
+  },
+  {
+   "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseTheme.java",
+   "sha256": "5a1c3bb9c27e46397ed4ca3d4370403cb2278916815e3d754ae11c19fe648d95",
+   "role": "required"
+  },
+  {
+   "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseThemeSetting.java",
+   "sha256": "a39c8f0d779f9619b21e3620b84ad3d926076c2113226e65826bfdcd4d099392",
    "role": "required"
   }
  ],
@@ -1804,7 +1832,7 @@
     {
      "project": "frameworks/base",
      "name": "rose-edge-wmshell.patch",
-     "sha256": "42fcc4fc3d2c93295b3b12805e6e580c2b1615d91df09ec64e05dc705cf26cbd"
+     "sha256": "666679820cd54dc980287c4dd07de8482b77e1606f39e651fe96803c0ef1bbf2"
     },
     {
      "project": "frameworks/base",
@@ -1850,12 +1878,16 @@
      "sha256": "bdaff12f1cd200b3793dabd32633de7489033e890be7c9fc6a055b1d6bf1811a"
     },
     {
+     "target": "packages/apps/Launcher3/quickstep/res/drawable-nodpi/rose_glacier_field.png",
+     "sha256": "98c7b166df806d0205396c5c2dd80fb470d96dbe2b619662cbd64a8d1099ba3e"
+    },
+    {
      "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseAgentFan.java",
      "sha256": "21db4354e7b31c9bf23a2c79a622b9f8f530720d64332ff8869b9443e809b7ea"
     },
     {
      "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseAgentStrip.java",
-     "sha256": "58c9896780c70bebc75dddb2a562d3bde6d24f7da1dbc3e3d3febec2bc19cc19"
+     "sha256": "c7eb0c3d7b54d0fd403233a507a0674963888d529ac22d25fe6c1caab61051be"
     },
     {
      "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseAgentWork.java",
@@ -1883,7 +1915,7 @@
     },
     {
      "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeWindow.java",
-     "sha256": "b1b19f6b8ac9d8663014af0ddce131c2864dece07ada12d914da5e437357fa84"
+     "sha256": "6e3c46e08fd286327073912022412c9b2f5fc81cd825a680c6205fb13fe43237"
     },
     {
      "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseFan.java",
@@ -1891,13 +1923,23 @@
     },
     {
      "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseOxbloodField.java",
-     "sha256": "7d822296cb2c71c201052ea4e7658db81d851fca5e3e66e09484a5834b5104ee"
+     "sha256": "6e38717882e7492eec18c6a6d5367e1fa8789b0334619e7b7ac233d0098fc269"
+    },
+    {
+     "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseTheme.java",
+     "sha256": "5a1c3bb9c27e46397ed4ca3d4370403cb2278916815e3d754ae11c19fe648d95"
+    },
+    {
+     "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseThemeSetting.java",
+     "sha256": "a39c8f0d779f9619b21e3620b84ad3d926076c2113226e65826bfdcd4d099392"
     }
    ],
    "notAnInputOverlays": [
     "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/AgentStatusControls.java",
     "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/AgentTrayLink.java",
     "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/AgentTrayPrototype.java",
+    "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/RoseTheme.java",
+    "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/RoseThemeMirror.java",
     "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/StatusVoiceGlow.java",
     "frameworks/base/packages/SystemUI/assets/fonts/Nunito.ttf",
     "frameworks/base/packages/SystemUI/assets/licenses/Nunito-OFL.txt",
@@ -1946,7 +1988,7 @@
      },
      {
       "name": "rose-edge-wmshell.patch",
-      "sha256": "42fcc4fc3d2c93295b3b12805e6e580c2b1615d91df09ec64e05dc705cf26cbd"
+      "sha256": "666679820cd54dc980287c4dd07de8482b77e1606f39e651fe96803c0ef1bbf2"
      },
      {
       "name": "rose-shade-systemui.patch",
@@ -2667,17 +2709,17 @@
       "path": "libs/WindowManager/Shell/src/com/android/wm/shell/RoseEdgeMicSlot.java",
       "pre": null,
       "post": {
-       "sha256": "a613e6ee144b3be77eddf8490c545e11f96bf3a831ef87d8000c6e33d904b3ec",
-       "gitBlob": "0aa0b49d3da30819e3ae2ba63f5f292e23cc2110"
+       "sha256": "c178b08e4d0ce8cecb2f5da7a640ab3f26d93aad63372926ecc6103539d9daef",
+       "gitBlob": "f8e557e537a395c27be11aff0fad847da02e44ec"
       },
       "chain": [
        {
         "patch": "rose-edge-wmshell.patch",
         "before": null,
-        "after": "0aa0b49d3da30819e3ae2ba63f5f292e23cc2110",
+        "after": "f8e557e537a395c27be11aff0fad847da02e44ec",
         "index": [
          "0000000",
-         "0aa0b49"
+         "f8e557e"
         ],
         "base": "exact"
        }
@@ -2836,6 +2878,8 @@
        "libs/WindowManager/Shell/src/com/android/wm/shell/AgentTrayPrototype.java",
        "libs/WindowManager/Shell/src/com/android/wm/shell/RootTaskDisplayAreaOrganizer.java",
        "libs/WindowManager/Shell/src/com/android/wm/shell/RoseEdgeMicSlot.java",
+       "libs/WindowManager/Shell/src/com/android/wm/shell/RoseTheme.java",
+       "libs/WindowManager/Shell/src/com/android/wm/shell/RoseThemeMirror.java",
        "libs/WindowManager/Shell/src/com/android/wm/shell/StatusVoiceGlow.java",
        "libs/WindowManager/Shell/src/com/android/wm/shell/dagger/WMShellBaseModule.java",
        "libs/WindowManager/Shell/src/com/android/wm/shell/dagger/WMShellModule.java",
@@ -3299,6 +3343,7 @@
      "unlisted": {
       "excludedPaths": [
        "quickstep/res/color/rose_oxblood_chip_state_fg.xml",
+       "quickstep/res/drawable-nodpi/rose_glacier_field.png",
        "quickstep/res/drawable/rose_oxblood_arrow_background.xml",
        "quickstep/res/drawable/rose_oxblood_chip_fg.xml",
        "quickstep/res/layout/fallback_recents_activity.xml",
@@ -3323,6 +3368,8 @@
        "quickstep/src/com/android/quickstep/fallback/RoseEdgeWindow.java",
        "quickstep/src/com/android/quickstep/fallback/RoseFan.java",
        "quickstep/src/com/android/quickstep/fallback/RoseOxbloodField.java",
+       "quickstep/src/com/android/quickstep/fallback/RoseTheme.java",
+       "quickstep/src/com/android/quickstep/fallback/RoseThemeSetting.java",
        "quickstep/src/com/android/quickstep/views/OverviewActionsView.java",
        "quickstep/src/com/android/quickstep/window/RecentsWindowSwipeHandler.java"
       ],
@@ -3483,6 +3530,14 @@
     "role": "notAnInput"
    },
    {
+    "target": "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/RoseTheme.java",
+    "role": "notAnInput"
+   },
+   {
+    "target": "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/RoseThemeMirror.java",
+    "role": "notAnInput"
+   },
+   {
     "target": "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/StatusVoiceGlow.java",
     "role": "notAnInput"
    },
@@ -3535,13 +3590,18 @@
     "role": "notAnInput"
    },
    {
+    "target": "packages/apps/Launcher3/quickstep/res/drawable-nodpi/rose_glacier_field.png",
+    "sha256": "98c7b166df806d0205396c5c2dd80fb470d96dbe2b619662cbd64a8d1099ba3e",
+    "role": "required"
+   },
+   {
     "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseAgentFan.java",
     "sha256": "21db4354e7b31c9bf23a2c79a622b9f8f530720d64332ff8869b9443e809b7ea",
     "role": "required"
    },
    {
     "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseAgentStrip.java",
-    "sha256": "58c9896780c70bebc75dddb2a562d3bde6d24f7da1dbc3e3d3febec2bc19cc19",
+    "sha256": "c7eb0c3d7b54d0fd403233a507a0674963888d529ac22d25fe6c1caab61051be",
     "role": "required"
    },
    {
@@ -3576,7 +3636,7 @@
    },
    {
     "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeWindow.java",
-    "sha256": "b1b19f6b8ac9d8663014af0ddce131c2864dece07ada12d914da5e437357fa84",
+    "sha256": "6e3c46e08fd286327073912022412c9b2f5fc81cd825a680c6205fb13fe43237",
     "role": "required"
    },
    {
@@ -3586,7 +3646,17 @@
    },
    {
     "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseOxbloodField.java",
-    "sha256": "7d822296cb2c71c201052ea4e7658db81d851fca5e3e66e09484a5834b5104ee",
+    "sha256": "6e38717882e7492eec18c6a6d5367e1fa8789b0334619e7b7ac233d0098fc269",
+    "role": "required"
+   },
+   {
+    "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseTheme.java",
+    "sha256": "5a1c3bb9c27e46397ed4ca3d4370403cb2278916815e3d754ae11c19fe648d95",
+    "role": "required"
+   },
+   {
+    "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseThemeSetting.java",
+    "sha256": "a39c8f0d779f9619b21e3620b84ad3d926076c2113226e65826bfdcd4d099392",
     "role": "required"
    }
   ],
@@ -3867,6 +3937,7 @@
     "build/release/aconfig/pixel_background_control/android.companion.virtualdevice.flags/Android.bp",
     "build/release/aconfig/pixel_background_control/android.companion.virtualdevice.flags/computer_control_access_flag_values.textproto",
     "build/release/release_configs/pixel_background_control.textproto",
+    "packages/apps/Launcher3/quickstep/res/drawable-nodpi/rose_glacier_field.png",
     "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseAgentFan.java",
     "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseAgentStrip.java",
     "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseAgentWork.java",
@@ -3877,7 +3948,9 @@
     "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeSwipe.java",
     "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeWindow.java",
     "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseFan.java",
-    "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseOxbloodField.java"
+    "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseOxbloodField.java",
+    "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseTheme.java",
+    "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseThemeSetting.java"
    ],
    "rule": "present with exactly its sha256 in overlays"
   },
@@ -3886,6 +3959,8 @@
     "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/AgentStatusControls.java",
     "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/AgentTrayLink.java",
     "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/AgentTrayPrototype.java",
+    "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/RoseTheme.java",
+    "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/RoseThemeMirror.java",
     "frameworks/base/libs/WindowManager/Shell/src/com/android/wm/shell/StatusVoiceGlow.java",
     "frameworks/base/packages/SystemUI/assets/fonts/Nunito.ttf",
     "frameworks/base/packages/SystemUI/assets/licenses/Nunito-OFL.txt",

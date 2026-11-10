@@ -1,0 +1,97 @@
+{
+  "version": 1,
+  "default": "oxblood",
+  "settingKey": "rose_theme",
+  "trayKey": "theme",
+  "surfaceKeys": {
+    "keyboard": ["boardTop", "boardBottom", "keyTop", "keyBottom", "function", "actionTop", "actionBottom", "actionInk",
+      "text", "correction"],
+    "shade": ["panel", "card", "tile", "accent", "accentInk", "roseDot", "error", "text", "text2", "line", "scrim"],
+    "returnControl": ["ink", "pendingInk", "cancelInk", "plateTop", "plateBottom", "edge", "topEdge", "pressed",
+      "pressedEdge", "cancelPressed"],
+    "field": ["background"]
+  },
+  "themes": [
+    {
+      "id": "oxblood",
+      "label": "Oxblood",
+      "spoken": ["oxblood", "ox blood", "red", "the original", "default"],
+      "derive": null,
+      "wallpapers": {
+        "kind": "procedural",
+        "default": "classic",
+        "ids": ["classic", "garnet", "ember", "velvet", "dusk"]
+      },
+      "surfaces": {
+        "keyboard": {
+          "boardTop": "#FF1D1114", "boardBottom": "#FF150C0F", "keyTop": "#FF3A2A2E", "keyBottom": "#FF2C1F22",
+          "function": "#FF1E1417", "actionTop": "#FFC8304A", "actionBottom": "#FF97182E", "actionInk": "#FFF2E6D9",
+          "text": "#FFF2E6D9", "correction": "#FFE04A62"
+        },
+        "shade": {
+          "panel": "#F2141012", "card": "#FF221B1D", "tile": "#FF2A2224", "accent": "#FF7A1F2B",
+          "accentInk": "#FFF4EEEE", "roseDot": "#FFE07A88", "error": "#FFE07A88", "text": "#FFF4EEEE",
+          "text2": "#FFB9AEB0", "line": "#66F4EEEE", "scrim": "#8C000000"
+        },
+        "returnControl": {
+          "ink": "#FFE9CFBF", "pendingInk": "#FFCDB4A6", "cancelInk": "#FFC9B3A6", "plateTop": "#BB49202C",
+          "plateBottom": "#CC29111D", "edge": "#80B1737C", "topEdge": "#90D4A0A5", "pressed": "#FF633040",
+          "pressedEdge": "#FFE1B0B2", "cancelPressed": "#335C2A39"
+        },
+        "field": {
+          "background": "#FF170104"
+        }
+      }
+    },
+    {
+      "id": "glacier",
+      "label": "Glacier",
+      "spoken": ["glacier", "glacial", "blue", "ice"],
+      "derive": {
+        "source": "themes/reference/glacier.py (prototype revision 2ecceb9779cb491554a561964d753cf327acfa2e)",
+        "hue": 205,
+        "neutralHue": 205,
+        "chromaCap": 0.58,
+        "chromaScale": 0.78,
+        "neutralScale": 0.9,
+        "darkLift": 0.03,
+        "lightPull": 0.45,
+        "accentL": 0.81,
+        "destructive": "#FFABAC"
+      },
+      "wallpapers": {
+        "kind": "raster",
+        "default": "glacier",
+        "ids": ["glacier"],
+        "asset": "glacier/field.png",
+        "sha256": "98c7b166df806d0205396c5c2dd80fb470d96dbe2b619662cbd64a8d1099ba3e",
+        "width": 852,
+        "height": 1846,
+        "placement": "cover, centred horizontally, top-aligned"
+      },
+      "tokens": {
+        "source": "glacier/glacier.tokens.json (Illustrator GLACIER-1E-1110-ILL-DELIVERY-v1)"
+      },
+      "surfaces": {
+        "keyboard": {
+          "boardTop": "#FF0F1B27", "boardBottom": "#FF0B141D", "keyTop": "#FF29475D", "keyBottom": "#FF20374A",
+          "function": "#FF142536", "actionTop": "#FFA6D8F5", "actionBottom": "#FFA6D8F5", "actionInk": "#FF08131D",
+          "text": "#FFF0F6FA", "correction": "#FFA6D8F5"
+        },
+        "shade": {
+          "panel": "#FF0B141D", "card": "#FF142536", "tile": "#FF20374A", "accent": "#FFA6D8F5",
+          "accentInk": "#FF08131D", "roseDot": "#FFA6D8F5", "error": "#FFFFABAC", "text": "#FFF0F6FA",
+          "text2": "#FFB8CAD8", "line": "#FF7897AE", "scrim": "#8C000000"
+        },
+        "returnControl": {
+          "ink": "#FFF0F6FA", "pendingInk": "#FFB8CAD8", "cancelInk": "#FFB8CAD8", "plateTop": "#FF20374A",
+          "plateBottom": "#FF20374A", "edge": "#FF7897AE", "topEdge": "#FF7897AE", "pressed": "#FF29475D",
+          "pressedEdge": "#FF7897AE", "cancelPressed": "#FF29475D"
+        },
+        "field": {
+          "background": "#FF0B141D"
+        }
+      }
+    }
+  ]
+}

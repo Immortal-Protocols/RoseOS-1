@@ -49,6 +49,7 @@ final class CustomizationStore {
  static synchronized CustomizationConfig read(Context c) {
   String text = prefs(c).getString(CONFIG, null);
   if (text == null ? cachedText != null : !text.equals(cachedText)) { cached = CustomizationConfig.parse(text); cachedText = text; }
+  RoseThemeNow.id = cached.theme; // plan 1E: surfaces built after a read draw the stored theme
   return cached;
  }
 

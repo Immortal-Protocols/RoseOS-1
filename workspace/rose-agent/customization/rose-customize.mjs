@@ -15,10 +15,11 @@ const DEFAULT_PORT = 8091;    // rose.app --port default
 const HELP = `Usage: rose-customize.mjs [--dry-run | --say [--port N]] <command>
 
 Commands:
-  state                                  read all four controls
+  state                                  read all the controls
   columns <auto|0|3..8>                  Home column count (auto = 0)
   wallpaper <variant>                    curated Oxblood variant (see list)
   font <font>                            bundled font (see list)
+  theme <theme>                          Rose theme: oxblood or glacier (see list)
   glasses-hook [--on|--off] [--tray | --app <package>]
                                          glasses-on hook; give at least one option
   list                                   controls and allowed values from the catalog

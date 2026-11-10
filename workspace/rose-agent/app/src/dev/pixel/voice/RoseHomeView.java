@@ -43,7 +43,7 @@ final class RoseHomeView extends FrameLayout {
   date.setFormat12Hour(pattern);
   date.setFormat24Hour(pattern);
   date.setTextSize(DATE_SP);
-  date.setTextColor(DATE_INK);
+  date.setTextColor(RoseThemeNow.c(DATE_INK));
   // Nov 7 plan 1O: the date is the one always-visible Home text, so it carries a chosen font; default is unchanged.
   String font = CustomizationStore.read(activity).font;
   if (!RoseFonts.DEFAULT.equals(font)) date.setTypeface(CustomizationVisuals.labelTypeface(activity, font, 400));

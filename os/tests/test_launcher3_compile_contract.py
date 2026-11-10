@@ -36,7 +36,7 @@ class Launcher3CompileContractTest(unittest.TestCase):
     SCRIPT = ROOT/'scripts/launcher3-compile-contract.py'
     MANIFEST = ROOT/'os/compile-contracts/launcher3-quickstep-lib.json'
     # The agreed version (#410). Changing the manifest changes this, and the change needs re-agreement with Release.
-    AGREED_SHA256 = '4c15563d1ebf94d1a4766f784c3202bdf21b4dabd5a5bf74443742c4cce5af21'
+    AGREED_SHA256 = '9de2c0ee23b5662c92c458a85bcaee3d35e13548fcb9c4083788b133df808a9c'
 
     def contract(self):
         import importlib.util
@@ -521,13 +521,14 @@ class Launcher3CompileContractTest(unittest.TestCase):
             self.assertEqual(ids, [i for _, i in bodies], f'{project["path"]}: every tree object as git hashes it')
 
     def test_not_an_input_overlays_are_exact_excluded_and_unused(self):
-        """M4: the sixteen notAnInput overlays (seven, then 1G's nine roseshade sources) keep exact targets, are excluded from frameworks/base's treePin by exact
-        path, and none is a compile goal, a flagEvidence input or inside Launcher3 or build/release. Required overlays
-        stay pinned by sha256."""
+        """M4: the eighteen notAnInput overlays (seven, then 1G's nine roseshade sources, then 1E's RoseTheme and
+        RoseThemeMirror) keep exact targets, are excluded from frameworks/base's treePin by exact path, and none is a
+        compile goal, a flagEvidence input or inside Launcher3 or build/release. Required overlays stay pinned by
+        sha256."""
         manifest = self.manifest()
         roles = manifest['overlayRoles']
         not_input = roles['notAnInput']['targets']
-        self.assertEqual(len(not_input), 16)
+        self.assertEqual(len(not_input), 18)
         self.assertEqual(not_input, [o['target'] for o in manifest['overlays'] if o['role'] == 'notAnInput'])
         self.assertEqual(not_input, [o['target'] for o in manifest['base']['overlays'] if o['role'] == 'notAnInput'])
         self.assertEqual(not_input, manifest['base']['bundleContent']['notAnInputOverlays'])
@@ -657,7 +658,8 @@ class Launcher3CompileContractTest(unittest.TestCase):
                     self.assertNotEqual(row['pre']['sha256'], row['post']['sha256'], f'{row["path"]}: pre and post '
                         'are distinguishable, so mixed state is always detectable')
         required = [o['target'] for o in manifest['overlays'] if o['role'] == 'required']
-        self.assertEqual(len([t for t in required if t.startswith('packages/apps/Launcher3/')]), 11)
+        # Eleven, then 1E's RoseTheme.java, RoseThemeSetting.java and the Glacier field (drawable-nodpi).
+        self.assertEqual(len([t for t in required if t.startswith('packages/apps/Launcher3/')]), 14)
         self.assertEqual(len([t for t in required if t.startswith('build/release/')]), 4)
         self.assertNotIn('Agent.apk', ' '.join(o['target'] for o in manifest['overlays']))
 

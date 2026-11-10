@@ -26,21 +26,27 @@ final class HomeDot extends Drawable {
   this.density = density;
  }
 
+ /** Plan 1E: the theme the glow was built in; the glow is rebuilt when the theme changes. */
+ String glowTheme;
+
  @Override protected void onBoundsChange(android.graphics.Rect bounds) {
+  glowTheme = RoseThemeNow.id;
+  int glowColor = RoseThemeNow.c(GLOW);
   float r = CURRENT_DP * density / 2, outer = r + GLOW_DP * density;
   glow.setShader(new RadialGradient(bounds.exactCenterX(), bounds.exactCenterY(), outer,
-    new int[]{GLOW, GLOW, GLOW & 0x00ffffff}, new float[]{0f, r / outer, 1f}, Shader.TileMode.CLAMP));
+    new int[]{glowColor, glowColor, glowColor & 0x00ffffff}, new float[]{0f, r / outer, 1f}, Shader.TileMode.CLAMP));
  }
 
  @Override public void draw(Canvas canvas) {
   float cx = getBounds().exactCenterX(), cy = getBounds().exactCenterY();
+  if (!RoseThemeNow.id.equals(glowTheme)) onBoundsChange(getBounds());
   if (current) {
    float r = CURRENT_DP * density / 2, outer = r + GLOW_DP * density;
    canvas.drawCircle(cx, cy, outer, glow);
-   fill.setColor(CURRENT);
+   fill.setColor(RoseThemeNow.c(CURRENT));
    canvas.drawCircle(cx, cy, r, fill);
   } else {
-   fill.setColor(IDLE);
+   fill.setColor(RoseThemeNow.c(IDLE));
    canvas.drawCircle(cx, cy, DOT_DP * density / 2, fill);
   }
  }

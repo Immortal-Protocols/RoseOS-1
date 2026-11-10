@@ -19,9 +19,9 @@ async function serverCatalog() {
  return {...loaded, commands};
 }
 
-test('catalog loads with the four controls plus state', () => {
+test('catalog loads with the controls plus state', () => {
  assert.deepEqual(catalog.map(t => t.name), ['customization_state', 'customization_home_columns',
-  'customization_wallpaper', 'customization_font', 'customization_glasses_hook']);
+  'customization_wallpaper', 'customization_font', 'customization_glasses_hook', 'customization_theme']);
  for (const t of catalog) assert.equal(t.operation, t.name);
 });
 
@@ -92,11 +92,14 @@ test('CLI argv parsing', () => {
  assert.equal(check(['wallpaper', 'garnet']).err, null);
  assert.equal(check(['wallpaper', 'teal']).err, 'Unsupported argument: variant');
  assert.equal(check(['font', 'condensed']).err, null);
+ assert.deepEqual(check(['theme', 'glacier']), {p: {kind: 'tool', tool: 'customization_theme', args: {theme: 'glacier'}}, err: null});
+ assert.equal(check(['theme', 'oxblood']).err, null);
+ assert.equal(check(['theme', 'dark']).err, 'Unsupported argument: theme');
  assert.deepEqual(parseArgv(['glasses-hook', '--app', 'com.example.notes']).args, {action: 'app', packageName: 'com.example.notes'});
  assert.deepEqual(parseArgv(['glasses-hook', '--on', '--tray']).args, {enabled: true, action: 'tray'});
  assert.deepEqual(parseArgv(['glasses-hook', '--off']).args, {enabled: false});
  for (const bad of [['glasses-hook'], ['glasses-hook', '--on', '--off'], ['glasses-hook', '--app'],
-  ['glasses-hook', '--tray', '--app', 'x.y'], ['glasses-hook', '--worn'], ['glasses-hook', '--app', 'foo'], ['glasses-hook', '--app', '1x.y'], ['columns'], ['wallpaper', 'a', 'b'], ['theme', 'dark'], ['state', 'x']])
+  ['glasses-hook', '--tray', '--app', 'x.y'], ['glasses-hook', '--worn'], ['glasses-hook', '--app', 'foo'], ['glasses-hook', '--app', '1x.y'], ['columns'], ['wallpaper', 'a', 'b'], ['theme'], ['theme', 'glacier', 'x'], ['palette', 'dark'], ['state', 'x']])
   assert.throws(() => parseArgv(bad), UsageError, JSON.stringify(bad));
  assert.deepEqual(parseArgv([]), {kind: 'help'});
  assert.deepEqual(parseArgv(['list']), {kind: 'list'});
