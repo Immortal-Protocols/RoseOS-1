@@ -123,6 +123,9 @@ def _integer(m: re.Match) -> str:
 
 
 _MD = re.compile(r"(\*\*|__|`|#+\s|^\s*[-*•]\s+)", re.M)
+# Phonon's tokenizer falls back to UTF-8 byte tokens for smart quotes. Use
+# its ordinary punctuation tokens for speech; the displayed text stays intact.
+_SPEECH_QUOTES = str.maketrans({"‘": "'", "’": "'", "“": '"', "”": '"'})
 _SYMBOLS = [("&", " and "), ("%", " percent"), ("+", " plus "), ("=", " equals "),
             ("°F", " degrees"), ("°C", " degrees Celsius"), ("°", " degrees"),
             ("w/", "with "), ("e.g.", "for example"), ("i.e.", "that is"), ("etc.", "et cetera"),
@@ -130,7 +133,7 @@ _SYMBOLS = [("&", " and "), ("%", " percent"), ("+", " plus "), ("=", " equals "
 
 
 def speakable(text: str) -> str:
-    t = _MD.sub("", text)
+    t = _MD.sub("", text.translate(_SPEECH_QUOTES))
     t = re.sub(r"\[(.*?)\]\((.*?)\)", r"\1", t)  # links
     t = re.sub(r"[\U0001F300-\U0001FAFF☀-➿]", "", t)  # emoji
     t = re.sub(r"\b(\d{1,2}):(\d{2})(?:\s*([AaPp]\.?[Mm])\b)?", _time, t)
