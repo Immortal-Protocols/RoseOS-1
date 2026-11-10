@@ -16,6 +16,11 @@ def prepare():
     install()
 
 
+def voices(path) -> set[str]:
+    """The voices this backend's configuration gives files for (the only ones it can speak)."""
+    return set(json.loads(Path(path).read_text())['speech']['voices'])
+
+
 def load(path, runtime, listener, speaker, voice):
     from rose_cloud import listen, speech
     from rose_cloud.phonon import PhononProvider
@@ -28,5 +33,7 @@ def load(path, runtime, listener, speaker, voice):
                 turn=listen.SmartTurn(ears['turn'], runtime=runtime),
                 final=listen.Parakeet(ears['final'], runtime=runtime, device=ears.get('device', 'cuda')),
                 stream=listen.NemotronStreaming(ears['stream'], device=ears.get('device', 'cuda')))
+    # Only the configured voices exist here: matching and /api/voice offer no other (Nov 9 plan 1D).
+    speaker.voices = {name: vid for name, vid in speaker.voices.items() if name in config['speech']['voices']}
     speech.bind(speaker_module, speaker,
                 PhononProvider(config['speech']['model'], config['speech']['voices'], runtime=runtime), voice)
