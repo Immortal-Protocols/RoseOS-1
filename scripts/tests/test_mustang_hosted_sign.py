@@ -930,6 +930,54 @@ class HostedSignGateTest(unittest.TestCase):
                     with self.assertRaisesRegex(ValueError, 'unprivileged signer'):
                         hosted._host_root_exists('system')
 
+    def test_observed_root_debug_link_is_terminal_metadata_and_repacked_without_following(self):
+        path = self.target_archive([('ROOT/d', stat.S_IFLNK | 0o777, b'/sys/kernel/debug')])
+        with patch.object(hosted.os, 'geteuid', return_value=1001), \
+                patch.object(hosted.os, 'access', return_value=False), \
+                patch.object(Path, 'read_text', return_value='CapEff:\t0000000000000000\n'), \
+                patch.object(os, 'symlink', side_effect=AssertionError('preflight must not create links')):
+            proof = hosted.validate_target_zip(path, 10**9,
+                host_root_exists=lambda _r: self.fail('debug alias must not grant access to a host namespace'))
+        self.assertEqual(proof['metadataOnlyLinks'], [{'member':'ROOT/d','target':'/sys/kernel/debug'}])
+        self.assertEqual(proof['observedAbsentHostRoots'], [])
+        self.assertFalse(proof['preflightFollowedPayloadLinksOnHost'])
+        out = path.parent/'writer'; (out/'ROOT').mkdir(parents=True)
+        # Pinned WriteOutputData and mkbootfs preserve the link's text; no host
+        # debug data is read. The real zip -y repack must retain only this entry.
+        os.symlink('/sys/kernel/debug', out/'ROOT/d')
+        self.assertEqual(os.readlink(out/'ROOT/d'), '/sys/kernel/debug')
+        repacked = path.parent/'debug-repacked.zip'
+        subprocess.run(['zip','-q','-y','-r',str(repacked),'.'],cwd=out,check=True)
+        with zipfile.ZipFile(repacked) as z:
+            self.assertEqual([i.filename for i in z.infolist() if not i.is_dir()], ['ROOT/d'])
+            self.assertTrue(stat.S_ISLNK(z.getinfo('ROOT/d').external_attr>>16))
+            self.assertEqual(z.read('ROOT/d'), b'/sys/kernel/debug')
+        with self.assertRaisesRegex(ValueError, 'unsafe zip symlink'):
+            hosted.reject_unsafe_zip(path,10**9)
+
+    def test_root_debug_exception_never_grants_a_host_path_or_link_traversal(self):
+        cases = [[('ROOT/d', '/sys/kernel/debug'),('ROOT/ref', 'd')],
+                 [('ROOT/d', '/sys/kernel/debug'),('ROOT/ref', 'd/../kernel')],
+                 [('ROOT/d', '/sys/kernel/debug'),('SYSTEM/ref', '../ROOT/d/file')],
+                 [('ROOT/d', '/sys/kernel/debug'),('ROOT/ref', 'D/file')]]
+        cases += [[(name,target)] for name,target in [
+            ('ROOT/other','/sys/kernel/debug'),('SYSTEM/d','/sys/kernel/debug'),
+            ('ROOT/d','/sys/kernel/debug/'),('ROOT/d','/sys/kernel/debug/file'),
+            ('ROOT/d','/sys/../home/runner'),('ROOT/d','/proc/self/environ')]]
+        for entries in cases:
+            with self.subTest(entries=entries), patch.object(hosted,'_require_protected_host'):
+                with self.assertRaisesRegex(ValueError,'unsafe zip symlink'):
+                    hosted.validate_target_zip(self.target_archive([
+                        (n,stat.S_IFLNK|0o777,t) for n,t in entries]),10**9)
+        with self.assertRaisesRegex(ValueError,'symlink parent'):
+            hosted.validate_target_zip(self.target_archive([
+                ('ROOT/d',stat.S_IFLNK|0o777,b'/sys/kernel/debug'),
+                ('ROOT/d/child',stat.S_IFREG|0o644,b'forbidden')]),10**9)
+        with patch.object(hosted.os,'geteuid',return_value=0):
+            with self.assertRaisesRegex(ValueError,'privilege observation refused'):
+                hosted.validate_target_zip(self.target_archive([
+                    ('ROOT/d',stat.S_IFLNK|0o777,b'/sys/kernel/debug')]),10**9)
+
     def test_target_link_traversal_host_paths_text_and_normalization_refuse(self):
         targets = ['../../../tmp/sentinel', '../../META/key', '../../OTA/key',
                    '/tmp/sentinel', '/home/runner/key', '/proc/self/environ',

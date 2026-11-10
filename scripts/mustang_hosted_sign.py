@@ -530,6 +530,10 @@ ANDROID_LINK_ROOTS = dict(system='SYSTEM', system_ext='SYSTEM_EXT', system_other
     vendor='VENDOR', product='PRODUCT', odm='ODM', vendor_dlkm='VENDOR_DLKM',
     odm_dlkm='ODM_DLKM', system_dlkm='SYSTEM_DLKM', apex=None, data=None,
     storage=None, cache=None, metadata=None, linkerconfig=None, sdcard=None)
+# Observed in authenticated run 42860845139. The pinned Android writer and
+# mkbootfs preserve this link with symlink/readlink; zip -y does not descend it.
+# It is terminal metadata, never an allowed host namespace or traversal route.
+ANDROID_METADATA_LINKS = {'ROOT/d': '/sys/kernel/debug'}
 
 
 def _payload_location(parts, *, source=False):
@@ -546,7 +550,7 @@ def _target_link_error(name, reason, target=None):
     return ValueError(detail + '; ' + reason)
 
 
-def _host_root_exists(root):
+def _require_protected_host():
     if os.geteuid() == 0 or os.access('/', os.W_OK):
         raise ValueError('absolute payload links require a nonroot signer with a protected host root')
     try:
@@ -556,6 +560,10 @@ def _host_root_exists(root):
             raise ValueError('absolute payload links require an unprivileged signer')
     except OSError:
         raise ValueError('signer privilege observation unavailable') from None
+
+
+def _host_root_exists(root):
+    _require_protected_host()
     try:
         Path('/' + root).lstat()
     except FileNotFoundError:
@@ -574,6 +582,8 @@ def validate_target_zip(path, max_uncompressed, *, artifact=None, host_root_exis
     before '..', and may not leave payload trees. Absolute targets must use a
     recognized Android namespace observed absent on this signer; an existing
     host root (including a broken symlink) is never treated as Android data.
+    The exact observed ROOT/d debug alias is terminal metadata only: no archive
+    children or other links may reference/traverse it, and it grants no host root.
     The production caller supplies artifact identity only after verify_files;
     standalone callers receive a freshly computed ZIP identity instead.
     """
@@ -647,7 +657,7 @@ def validate_target_zip(path, max_uncompressed, *, artifact=None, host_root_exis
                 raise _target_link_error(name, 'link target contains unsafe text')
             links[name] = target
 
-    absent_roots, steps = set(), [0]
+    absent_roots, metadata_links, steps = set(), set(), [0]
 
     def lookup(context, stack):
         if context is None:
@@ -658,6 +668,15 @@ def validate_target_zip(path, max_uncompressed, *, artifact=None, host_root_exis
     def resolve_target(context, parent, target, active, depth):
         if depth > 64:
             raise _target_link_error(active[-1], 'link chain exceeds bound', target)
+        if ANDROID_METADATA_LINKS.get(active[-1]) == target:
+            if len(active) != 1:
+                raise _target_link_error(active[-1], 'Android metadata link cannot be referenced or traversed', target)
+            try:
+                _require_protected_host()
+            except ValueError:
+                raise _target_link_error(active[-1], 'host privilege observation refused', target) from None
+            metadata_links.add(active[-1])
+            return context, list(parent) + [active[-1].split('/')[-1]]
         if target.startswith('/'):
             tokens = target[1:].split('/')
             if (any(p in ('', '.', '..') for p in tokens) or tokens[0] not in ANDROID_LINK_ROOTS):
@@ -712,6 +731,7 @@ def validate_target_zip(path, max_uncompressed, *, artifact=None, host_root_exis
             'memberCount': len(entries), 'symlinkCount': len(links),
             'absoluteLinkCount': sum(t.startswith('/') for t in links.values()),
             'linkMetadataSha256': hashlib.sha256(json.dumps(inventory, separators=(',', ':')).encode()).hexdigest(),
+            'metadataOnlyLinks': [{'member': name, 'target': links[name]} for name in sorted(metadata_links)],
             'observedAbsentHostRoots': sorted(absent_roots), 'preflightFollowedPayloadLinksOnHost': False,
             'targetFilesExtractedByPreflight': False}
 
