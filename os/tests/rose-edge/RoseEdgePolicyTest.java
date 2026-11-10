@@ -183,7 +183,8 @@ public final class RoseEdgePolicyTest {
     static void returns() {
         final long[] next = {0, 0, 41, 41, 42, 43, 44};  // 0 is never a token; a repeat is never the new token
         final int[] at = {0};
-        Return r = new Return(() -> next[Math.min(at[0]++, next.length - 1)]);
+        // After the scripted values, fresh distinct ones.
+        Return r = new Return(() -> at[0] < next.length ? next[at[0]++] : 100 + at[0]++);
         final Object mailBox = new Object(), roseBox = new Object(), homeBox = new Object();
         final Return.Task mail = task(7, "com.example.mail", true, mailBox);
         final Return.Task rose = task(3, Return.ROSE_PACKAGE, true, roseBox);
@@ -222,6 +223,23 @@ public final class RoseEdgePolicyTest {
         r.onFocusChanged(maps, OWNER);
         expect(r.onFocusChanged(rose, OWNER) && Return.same(r.target(), maps) && r.token() == 42,
                 "another app gets a new token, never a repeat of the last");
+
+        // Home/App (1C): Rose's own HOME task is Home. Pressing Home from an app, then opening Rose's conversation,
+        // offers no return; the conversation coming forward directly over the app records it.
+        final Return.Task roseHome = task(2, Return.ROSE_PACKAGE, false, new Object());
+        r.onFocusChanged(mail, OWNER);
+        expect(!r.onFocusChanged(roseHome, OWNER) && r.target() == null, "app to Rose's HOME task: no target");
+        expect(!r.onFocusChanged(rose, OWNER) && r.target() == null, "then Rose's conversation: still none");
+        expect(r.onFocusChanged(roseHome, OWNER) == false && r.target() == null, "back to Rose's Home: none");
+        r.onFocusChanged(mail, OWNER);
+        expect(r.onFocusChanged(rose, OWNER) && Return.same(r.target(), mail), "app to the conversation: recorded");
+        expect(r.onFocusChanged(roseHome, OWNER) && r.target() == null && r.token() == 0,
+                "pressing Home from the conversation clears it (RETURN_TARGET token 0)");
+        expect(r.check(41, false, roseHome, mail, OWNER) == Return.UNAVAILABLE, "nothing to return to from Home");
+        r.onFocusChanged(mail, OWNER);
+        r.onFocusChanged(rose, OWNER);
+        expect(r.check(r.token(), false, roseHome, mail, OWNER) == Return.REFUSED,
+                "a return asked while Rose's HOME task is in front is refused");
 
         // Only an app counts; never an older app behind Home, recents or Rose's own screens.
         r.onFocusChanged(home, OWNER);
