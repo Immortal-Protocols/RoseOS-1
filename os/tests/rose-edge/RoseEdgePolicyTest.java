@@ -7,8 +7,9 @@ import java.util.Arrays;
 /**
  * RoseOS (#410): runs the patched production RoseEdgePolicy (os/patches/rose-edge-wmshell.patch) through the raise
  * refusals, the lift bound, single ownership, every lowering rule and the microphone slot (option a: bottom band,
- * 32-64dp, mute or unmute only, tap and spacing, owned by the current raise) agreed with OS Product. Pure Java: no
- * Android, no device.
+ * 32-64dp, mute or unmute only, tap and spacing, owned by the current raise) agreed with OS Product, and 1C's
+ * exact-task return (the target rule, token stability, lifecycle and every answer) agreed with App Core and
+ * Home/App. Pure Java: no Android, no device.
  */
 public final class RoseEdgePolicyTest {
     static int checks;
@@ -172,12 +173,111 @@ public final class RoseEdgePolicyTest {
         expect(s.micSlot() == null && !s.acceptsMicSlot(0), "every lower drops it; Launcher3 re-sends after onRaised");
     }
 
+    static final int OWNER = 0;
+
+    /** A focused or running task; each distinct container stands for one live task instance. */
+    static Return.Task task(int taskId, String pkg, boolean standard, Object container) {
+        return new Return.Task(taskId, OWNER, DEFAULT_DISPLAY, pkg, standard, true, container);
+    }
+
+    static void returns() {
+        final long[] next = {0, 0, 41, 41, 42, 43, 44};  // 0 is never a token; a repeat is never the new token
+        final int[] at = {0};
+        // After the scripted values, fresh distinct ones.
+        Return r = new Return(() -> at[0] < next.length ? next[at[0]++] : 100 + at[0]++);
+        final Object mailBox = new Object(), roseBox = new Object(), homeBox = new Object();
+        final Return.Task mail = task(7, "com.example.mail", true, mailBox);
+        final Return.Task rose = task(3, Return.ROSE_PACKAGE, true, roseBox);
+        final Return.Task home = task(1, "com.android.launcher3", false, homeBox);
+
+        expect(r.target() == null && r.token() == 0, "nothing recorded at first");
+        expect(!r.onFocusChanged(mail, OWNER) && r.target() == null, "an app in front is not yet a target");
+        expect(r.onFocusChanged(rose, OWNER) && Return.same(r.target(), mail) && r.token() == 41,
+                "Rose coming forward records the app focused just before it, with a fresh non-zero token");
+        expect(!r.onFocusChanged(task(4, Return.ROSE_PACKAGE, true, new Object()), OWNER) && r.token() == 41,
+                "Rose to Rose keeps the target");
+        expect(!r.onFocusChanged(null, OWNER) && r.token() == 41, "unknown focus changes nothing");
+        expect(!r.onFocusChanged(new Return.Task(9, OWNER, 5, "com.example.other", true, true, new Object()), OWNER)
+                && r.token() == 41, "Rose's background workspace (another display) changes nothing");
+
+        // Answers.
+        expect(r.check(41, false, rose, mail, OWNER) == Return.GO, "the current token, Rose in front, same live task");
+        expect(r.check(40, false, rose, mail, OWNER) == Return.REFUSED, "a stale token is refused");
+        expect(r.check(0, false, rose, mail, OWNER) == Return.REFUSED, "token 0 is refused");
+        expect(r.check(41, true, rose, mail, OWNER) == Return.REFUSED, "locked: refused");
+        expect(r.check(41, false, mail, mail, OWNER) == Return.REFUSED, "Rose not in front: refused");
+        expect(r.check(41, false, rose, null, OWNER) == Return.UNAVAILABLE, "the task is not running: unavailable");
+        expect(r.check(41, false, rose, task(7, "com.example.mail", true, new Object()), OWNER) == Return.UNAVAILABLE,
+                "another container under the same id is another task: unavailable");
+        expect(r.check(41, false, rose, new Return.Task(7, OWNER, 2, "com.example.mail", true, true, mailBox), OWNER)
+                == Return.UNAVAILABLE, "moved off the default display: unavailable");
+        expect(r.check(41, false, rose, new Return.Task(7, OWNER, DEFAULT_DISPLAY, "com.example.mail", true, false,
+                mailBox), OWNER) == Return.REFUSED, "no longer fullscreen (PiP, split): refused, never guessed");
+        expect(r.check(41, false, rose, mail, 10) == Return.REFUSED, "another user in front: refused");
+
+        // The same live task keeps its token; another task gets a new one.
+        expect(r.onFocusChanged(mail, OWNER) && r.target() == null && r.token() == 0, "the app in front clears it");
+        expect(r.onFocusChanged(rose, OWNER) && r.token() == 41, "the same task recorded again keeps its token");
+        expect(r.check(41, false, rose, mail, OWNER) == Return.GO, "so a return quoting it stays valid");
+        final Return.Task maps = task(8, "com.example.maps", true, new Object());
+        r.onFocusChanged(maps, OWNER);
+        expect(r.onFocusChanged(rose, OWNER) && Return.same(r.target(), maps) && r.token() == 42,
+                "another app gets a new token, never a repeat of the last");
+
+        // Home/App (1C): Rose's own HOME task is Home. Pressing Home from an app, then opening Rose's conversation,
+        // offers no return; the conversation coming forward directly over the app records it.
+        final Return.Task roseHome = task(2, Return.ROSE_PACKAGE, false, new Object());
+        r.onFocusChanged(mail, OWNER);
+        expect(!r.onFocusChanged(roseHome, OWNER) && r.target() == null, "app to Rose's HOME task: no target");
+        expect(!r.onFocusChanged(rose, OWNER) && r.target() == null, "then Rose's conversation: still none");
+        expect(r.onFocusChanged(roseHome, OWNER) == false && r.target() == null, "back to Rose's Home: none");
+        r.onFocusChanged(mail, OWNER);
+        expect(r.onFocusChanged(rose, OWNER) && Return.same(r.target(), mail), "app to the conversation: recorded");
+        expect(r.onFocusChanged(roseHome, OWNER) && r.target() == null && r.token() == 0,
+                "pressing Home from the conversation clears it (RETURN_TARGET token 0)");
+        expect(r.check(41, false, roseHome, mail, OWNER) == Return.UNAVAILABLE, "nothing to return to from Home");
+        r.onFocusChanged(mail, OWNER);
+        r.onFocusChanged(rose, OWNER);
+        expect(r.check(r.token(), false, roseHome, mail, OWNER) == Return.REFUSED,
+                "a return asked while Rose's HOME task is in front is refused");
+
+        // Only an app counts; never an older app behind Home, recents or Rose's own screens.
+        r.onFocusChanged(home, OWNER);
+        expect(r.target() == null, "Home in front clears it");
+        expect(!r.onFocusChanged(rose, OWNER) && r.target() == null, "from Home: no target, not the app before Home");
+        r.onFocusChanged(new Return.Task(11, OWNER, DEFAULT_DISPLAY, "com.example.mail", true, false, new Object()),
+                OWNER);
+        expect(!r.onFocusChanged(rose, OWNER) && r.target() == null, "from a split or PiP app: no target");
+        r.onFocusChanged(new Return.Task(12, 10, DEFAULT_DISPLAY, "com.example.mail", true, true, new Object()), OWNER);
+        expect(!r.onFocusChanged(rose, OWNER) && r.target() == null, "from another user's app: no target");
+        expect(r.check(41, false, rose, mail, OWNER) == Return.UNAVAILABLE, "no record: unavailable");
+
+        // Lifecycle.
+        r.onFocusChanged(maps, OWNER);
+        r.onFocusChanged(rose, OWNER);
+        expect(!r.onTaskInfoChanged(task(8, "com.example.maps", true, maps.container)) && r.target() != null,
+                "a change of the same live task keeps it");
+        expect(r.onTaskInfoChanged(new Return.Task(8, OWNER, 2, "com.example.maps", true, true, maps.container))
+                && r.target() == null, "moved to another display: dropped");
+        r.onFocusChanged(maps, OWNER);
+        r.onFocusChanged(rose, OWNER);
+        expect(!r.onTaskVanished(99) && r.target() != null, "another task vanishing changes nothing");
+        expect(r.onTaskVanished(8) && r.target() == null && r.token() == 0, "the target vanishing drops it");
+        r.onFocusChanged(mail, OWNER);
+        r.onFocusChanged(rose, OWNER);
+        expect(r.target() != null && r.onUserChanged() && r.target() == null, "a user switch drops it");
+        expect(!r.onFocusChanged(rose, OWNER) && r.target() == null, "and forgets what was focused before");
+        expect(Return.RETURNED == 0 && Return.UNAVAILABLE == 1 && Return.REFUSED == 2,
+                "RETURN_RESULT values agreed with App Core and Home/App");
+    }
+
     public static void main(String[] args) {
         refusals();
         geometry();
         ownership();
         lowering();
         micSlot();
+        returns();
         System.out.println("RoseEdgePolicyTest: " + checks + " checks passed");
     }
 }

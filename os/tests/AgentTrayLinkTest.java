@@ -200,6 +200,30 @@ public final class AgentTrayLinkTest {
         expect("a failed refresh drops the stale subscription", false, link.subscribed());
         expect("and forgets the stale state", false, port.stateShown);
 
+        // 1C: the in-process return seam between the shell and this tray (protocol v1 with App Core and Home/App).
+        final int[] answered = {-1, -1};
+        AgentTrayLink.Return.returnTo(41, 3, (attempt, result) -> { answered[0] = attempt; answered[1] = result; });
+        expect("no shell installed: refused, never guessed", "3/" + AgentTrayLink.Return.REFUSED,
+                answered[0] + "/" + answered[1]);
+        expect("no target until the shell publishes one", 0L, AgentTrayLink.Return.target().token);
+        final int[] told = {0};
+        AgentTrayLink.Return.listen(() -> told[0]++);
+        AgentTrayLink.Return.publish(new AgentTrayLink.Return.Target(41, "com.example.mail", 0, "Mail"));
+        expect("a published target reaches the tray", 1, told[0]);
+        expect("and is what RETURN_TARGET carries", "41 com.example.mail 0 Mail",
+                AgentTrayLink.Return.target().token + " " + AgentTrayLink.Return.target().packageName + " "
+                        + AgentTrayLink.Return.target().userId + " " + AgentTrayLink.Return.target().label);
+        AgentTrayLink.Return.publish(null);
+        expect("null publishes none", AgentTrayLink.Return.Target.NONE, AgentTrayLink.Return.target());
+        AgentTrayLink.Return.install((token, attempt, answer) -> answer.answer(attempt, token == 41
+                ? AgentTrayLink.Return.RETURNED : AgentTrayLink.Return.UNAVAILABLE));
+        AgentTrayLink.Return.returnTo(41, 4, (attempt, result) -> { answered[0] = attempt; answered[1] = result; });
+        expect("the installed shell answers for its attempt", "4/" + AgentTrayLink.Return.RETURNED,
+                answered[0] + "/" + answered[1]);
+        expect("v1 codes", "7 8 101 102 0 1 2", AgentTrayLink.Return.TARGET + " " + AgentTrayLink.Return.RESULT + " "
+                + AgentTrayLink.Return.RETURN_TO + " " + AgentTrayLink.Return.CANCEL + " "
+                + AgentTrayLink.Return.RETURNED + " " + AgentTrayLink.Return.UNAVAILABLE + " "
+                + AgentTrayLink.Return.REFUSED);
         System.out.println("AgentTrayLinkTest: " + checks + " checks passed");
     }
 }

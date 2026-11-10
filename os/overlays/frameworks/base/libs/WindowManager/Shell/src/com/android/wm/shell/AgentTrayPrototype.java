@@ -113,7 +113,16 @@ public final class AgentTrayPrototype implements DisplayManager.DisplayListener 
     private Waves view;
     private final Messenger reply = new Messenger(new Handler(Looper.getMainLooper(), message -> {
         // A reply queued before screen-off unsubscribed must not repopulate the suspended tray.
-        if (message.what != 100 || !this.link.subscribed() || !trusted(message.sendingUid)) return true;
+        if (!this.link.subscribed() || !trusted(message.sendingUid)) return true;
+        // 1C: a return to the task the shell recorded (RoseEdgeController), answered once on this same link.
+        if (message.what == AgentTrayLink.Return.RETURN_TO) {
+            AgentTrayLink.Return.returnTo(message.getData().getLong("token"), message.arg1,
+                    (attempt, result) -> handler.post(() -> sendReturnResult(attempt, result)));
+            return true;
+        }
+        // The shell starts a return as it arrives, so a cancel never precedes it: there is nothing to drop.
+        if (message.what == AgentTrayLink.Return.CANCEL) return true;
+        if (message.what != 100) return true;
         Bundle data = message.getData();
         if (data.getInt("protocolVersion") != 1) return true;
         listening = data.getBoolean("listening");
@@ -165,6 +174,8 @@ public final class AgentTrayPrototype implements DisplayManager.DisplayListener 
     AgentTrayPrototype(Context source, RootTaskDisplayAreaOrganizer unused,
             DisplayInsetsController unusedInsets) {
         instance = this;
+        // 1C: the shell's return target goes to Rose Agent whenever it changes.
+        AgentTrayLink.Return.listen(() -> handler.post(this::sendReturnTarget));
         context = source.createWindowContext(WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
                 null);
         windows = context.getSystemService(WindowManager.class);
@@ -230,7 +241,34 @@ public final class AgentTrayPrototype implements DisplayManager.DisplayListener 
         // F08: Rose Agent hides its own mute only where the chin can stand in for it.
         if (action == AgentTrayLink.REGISTER) message.arg2 = sentChin = chinArg();
         message.replyTo = reply;
-        try { voice.send(message); return true; } catch (RemoteException e) { return false; }
+        try { voice.send(message); } catch (RemoteException e) { return false; }
+        // 1C: each REGISTER is followed by the current return target, so a new subscriber never holds a stale one.
+        if (action == AgentTrayLink.REGISTER) handler.post(this::sendReturnTarget);
+        return true;
+    }
+
+    /** 1C: RETURN_TARGET, the shell's current record (token 0 when there is none), while subscribed. */
+    private void sendReturnTarget() {
+        if (voice == null || !link.subscribed()) return;
+        AgentTrayLink.Return.Target target = AgentTrayLink.Return.target();
+        Message message = Message.obtain(null, AgentTrayLink.Return.TARGET);
+        Bundle data = new Bundle();
+        data.putInt("protocolVersion", 1);
+        data.putLong("token", target.token);
+        data.putString("package", target.packageName);
+        data.putInt("userId", target.userId);
+        data.putString("label", target.label);
+        message.setData(data);
+        message.replyTo = reply;
+        try { voice.send(message); } catch (RemoteException e) { link.disconnected(); }
+    }
+
+    /** 1C: RETURN_RESULT, the one answer to a RETURN_TO (arg1 its attempt, arg2 RETURNED, UNAVAILABLE or REFUSED). */
+    private void sendReturnResult(int attempt, int result) {
+        if (voice == null) return;
+        Message message = Message.obtain(null, AgentTrayLink.Return.RESULT, attempt, result);
+        message.replyTo = reply;
+        try { voice.send(message); } catch (RemoteException e) { link.disconnected(); }
     }
 
     /** F08: REGISTER's arg2, read fresh for each REGISTER. */

@@ -1,0 +1,1 @@
+package android.view.animation; public class PathInterpolator implements android.animation.TimeInterpolator { public PathInterpolator(float controlX1, float controlY1, float controlX2, float controlY2) {} public float getInterpolation(float t) { return t; } }
