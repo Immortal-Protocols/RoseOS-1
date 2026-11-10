@@ -17,6 +17,18 @@ final class AgentStatusControls {
         return connected || listening || "Connecting".equals(status);
     }
 
+    /** A privacy-minimal, boot-scoped projection of the trusted producer receipt; never restamps its deadline. */
+    static String backgroundActivity(String value, int boot, long now) {
+        if (value == null || value.length() > 80 || boot < 0) return "";
+        String[] fields = value.split(":", -1);
+        try {
+            long until = fields.length == 2 ? Long.parseLong(fields[1]) : 0;
+            if (fields.length == 2 && ("working".equals(fields[0]) || "terminal".equals(fields[0]))
+                    && until >= now && until - now <= 3000) return boot + ":" + value;
+        } catch (NumberFormatException ignored) { }
+        return "";
+    }
+
     /** F08 (agreed with Home): the SystemUI tray's REGISTER arg2 when the Rose chin can be raised, else 0. */
     static final int CHIN_AVAILABLE = 1;
     /** Settings.Secure.NAVIGATION_MODE for gesture navigation (NAV_BAR_MODE_GESTURAL), the only mode staging it. */

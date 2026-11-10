@@ -72,17 +72,34 @@ Saved interests alone are not completed research.
 
 ## Still required for 1G delivery
 
-Home's existing local task feed is wired. The **raised Launcher3 tray** still needs
-these truthful lifecycle receipts through its existing trusted transport, with
-cross-process disconnect/restart handling. Do not substitute controller `ready`,
-which includes idle open apps. This work deliberately does not edit Launcher3 or
-WMShell compile contracts, the shared theme renderer or release infrastructure.
+Home and the **raised Launcher3 tray** now consume truthful receipts. Rose Agent
+projects the feed into `working`, `terminal` or still plus the original monotonic
+expiry. Its existing SystemUI-only Messenger STATE includes that projection in
+change detection. SystemUI validates it and mirrors only phase, expiry and boot
+count into `rose_background_activity_v1`, using its existing Settings.Global
+authority. No task keys, goals, notes or conversation content are mirrored.
+
+Launcher3 observes that setting only while the edge is attached. Duplicate reads
+never extend expiry; a missing, malformed, expired or other-boot receipt is still.
+SystemUI clears the mirror on startup, screen-off, disconnect and user change;
+unclean process death can retain motion only until the original three-second
+expiry. Only owner-user receipts are mirrored. Waiting and idle open workspaces
+are still, concurrent work continues until the final executing task ends, and an
+observed terminal transition settles over 240ms. Hidden, detached and reduced-motion
+views stop movement. The existing glyph moves at most 0.6dp inside its unchanged
+box; theme colors, geometry, hit targets and tap/Stop routing are unchanged.
+
+This source deliberately leaves the stopped Launcher3/WMShell compile contracts,
+shared theme renderer and release infrastructure untouched. Their pins require a
+separately authorized refresh before a native build can claim this source.
 
 Verify both themes on the phone, visual smoothness, normal tap/inspection/Stop,
 concurrent completion, stale and disconnected sockets, process restart, hidden
 views and reduced motion. A host-JVM/source check is not native phone acceptance.
 
 ## Offline checks
+
+- `python3 -m unittest discover -s os/tests -p test_raised_tray_activity.py`: 34 host-JVM projection/mirror/lifecycle assertions plus source seam checks.
 
 - `bash scripts/test-background-life.sh`: synthetic scheduler, diary and
   conversation integration plus real Java lifecycle/feed model checks.

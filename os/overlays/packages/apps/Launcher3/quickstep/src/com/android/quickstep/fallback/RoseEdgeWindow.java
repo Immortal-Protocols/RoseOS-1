@@ -299,6 +299,21 @@ public final class RoseEdgeWindow implements RoseEdgeState.Listener {
         private int mDownTarget = -1;
         /** A drag up on the open tray has passed TRAY_TO_SWITCHER_DP (and not come back below its exit). */
         private boolean mSwitcherArmed;
+        private final RoseBackgroundActivity mBackgroundActivity = new RoseBackgroundActivity();
+        private final android.database.ContentObserver mActivityObserver = new android.database.ContentObserver(
+                new android.os.Handler(android.os.Looper.getMainLooper())) {
+            @Override public void onChange(boolean selfChange) { readBackgroundActivity(); }
+        };
+        private void readBackgroundActivity() {
+            String value = null;
+            int boot = -1;
+            try {
+                value = Settings.Global.getString(getContext().getContentResolver(), RoseBackgroundActivity.KEY);
+                boot = Settings.Global.getInt(getContext().getContentResolver(), Settings.Global.BOOT_COUNT, -1);
+            } catch (RuntimeException ignored) { }
+            mBackgroundActivity.accept(value, boot, System.nanoTime() / 1000000);
+            invalidate();
+        }
         /** Plan 1E: the theme this edge draws in; Oxblood is today's colours exactly (RoseTheme.map is identity). */
         private String mTheme = RoseEdgeWindow.this.mTheme;
 
@@ -414,11 +429,32 @@ public final class RoseEdgeWindow implements RoseEdgeState.Listener {
         protected void onAttachedToWindow() {
             super.onAttachedToWindow();
             getViewTreeObserver().addOnComputeInternalInsetsListener(this);
+            try {
+                getContext().getContentResolver().registerContentObserver(
+                        Settings.Global.getUriFor(RoseBackgroundActivity.KEY), false, mActivityObserver);
+            } catch (RuntimeException ignored) { }
+            readBackgroundActivity();
+        }
+
+        @Override
+        protected void onWindowVisibilityChanged(int visibility) {
+            super.onWindowVisibilityChanged(visibility);
+            if (mBackgroundActivity != null && visibility != VISIBLE)
+                mBackgroundActivity.frame(System.nanoTime() / 1000000, false);
+        }
+
+        @Override
+        protected void onVisibilityChanged(View changedView, int visibility) {
+            super.onVisibilityChanged(changedView, visibility);
+            if (mBackgroundActivity != null && visibility != VISIBLE)
+                mBackgroundActivity.frame(System.nanoTime() / 1000000, false);
         }
 
         @Override
         protected void onDetachedFromWindow() {
             getViewTreeObserver().removeOnComputeInternalInsetsListener(this);
+            getContext().getContentResolver().unregisterContentObserver(mActivityObserver);
+            mBackgroundActivity.frame(System.nanoTime() / 1000000, false);
             super.onDetachedFromWindow();
         }
 
@@ -540,7 +576,11 @@ public final class RoseEdgeWindow implements RoseEdgeState.Listener {
             float sx = 64 * mDensity / 60f, sy = 28 * mDensity / 20f, s = Math.min(sx, sy);
             float left = box.exactCenterX() - 30 * s, top = box.exactCenterY() - 10 * s;
             canvas.save();
-            canvas.translate(left - 2 * s, top - 3 * s);
+            boolean motion = isAttachedToWindow() && isShown() && getWindowVisibility() == VISIBLE
+                    && android.animation.ValueAnimator.areAnimatorsEnabled();
+            float shift = mBackgroundActivity.frame(System.nanoTime() / 1000000, motion);
+            canvas.translate(left - 2 * s, top - 3 * s + shift * mDensity);
+            if (motion && mBackgroundActivity.animating()) postInvalidateOnAnimation();
             canvas.scale(s, s);
             float stroke = mGlyph.getStrokeWidth();
             mGlyph.setStrokeWidth(2);

@@ -20,6 +20,15 @@ controller's provider accepts only callers with its own signing certificate, so
 Rose Agent and the controller must share the app signing identity, as the policy
 already checks.
 
+Raised-edge activity uses this same trusted STATE channel, separate from voice
+state and controller readiness. SystemUI mirrors only a validated activity phase,
+producer expiry and boot count to `Settings.Global.rose_background_activity_v1`;
+Launcher3 observes it read-only. The mirror is owner-user-only and cleared on link
+reset and SystemUI startup. Cached receipts expire after at most three seconds,
+including after a process crash. No new permission or external endpoint is added.
+See [background life](BACKGROUND-LIFE.md) for lifecycle semantics and verification
+limits. This is source wiring, not an installed or visually accepted release.
+
 Before `--agent-tray`, the repository applied the tray code but never enabled it.
 Only the historical Mustang scripts and the Fold patch set the property for one
 device. The new patch sets it in `generic_system.mk`. Confirm that the target

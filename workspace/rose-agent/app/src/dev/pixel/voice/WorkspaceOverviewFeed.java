@@ -32,6 +32,7 @@ final class WorkspaceOverviewFeed {
  static final class ActivitySnapshot {
   final java.util.Set<String> running=new java.util.HashSet<>(),finished=new java.util.HashSet<>();
   boolean reliable;
+  long runningUntil,finishedUntil;
  }
  static long activityClock(){return System.nanoTime()/1000000;}
  static synchronized ActivitySnapshot activitySnapshot(long now){
@@ -39,8 +40,8 @@ final class WorkspaceOverviewFeed {
   for(ActivityReceipt r:activity.values()){
    // Keep this class independent of the renderer for the existing host tests.
    if(now<r.received||now-r.received>3000){out.reliable=false;continue;}
-   if(r.executing)out.running.add(r.key);
-   else if("done".equals(r.state)||"failed".equals(r.state)||"cancelled".equals(r.state))out.finished.add(r.key);
+   if(r.executing){out.running.add(r.key);out.runningUntil=Math.max(out.runningUntil,r.received+3000);}
+   else if("done".equals(r.state)||"failed".equals(r.state)||"cancelled".equals(r.state)){out.finished.add(r.key);out.finishedUntil=Math.max(out.finishedUntil,r.received+3000);}
   }
   // A stale task cannot hide unrelated fresh execution, but cannot manufacture
   // completion either. The renderer uses finished only for known completions.
