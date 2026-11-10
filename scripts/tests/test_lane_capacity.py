@@ -268,7 +268,7 @@ class MapTest(unittest.TestCase):
         self.assertTrue(runtime['publication']['enabled'])
         authority=json.loads((ROOT/runtime['publication']['authorityRecord']).read_text())
         self.assertFalse(authority['automatic'])
-        self.assertEqual(runtime['appInputsRecord'], 'os/app-inputs/frankel-2026110901.json')
+        self.assertEqual(runtime['appInputsRecord'], 'os/app-inputs/frankel-2026111001.json')
         self.assertIsNone(runtime['baselineTargetFiles'])
         self.assertTrue(json.loads((ROOT/runtime['allocationState']).read_text())['unknown'])
         self.assertEqual(lane['dedicatedRuntimeStatus'], 'bound')
