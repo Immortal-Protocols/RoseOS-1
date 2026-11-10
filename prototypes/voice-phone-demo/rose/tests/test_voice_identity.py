@@ -384,6 +384,30 @@ class Matching(unittest.TestCase):
             r, _ = self.change('zoey', accent=accent)
             self.assertNotEqual(r['reason'], 'already', accent)
 
+    def test_fitting_voices_that_will_not_load_keep_limits_and_offer_the_nearest(self):
+        identity = vi.VoiceIdentity()
+        speaker = Speaker('zoey', missing=['juniper', 'everly', 'hadley', 'delia', 'harper'])
+        args = {'pitch': 'lower', 'accent': 'other', 'accent_name': 'British'}
+        r = identity.change_voice(speaker, args)
+        self.assertEqual((r['reason'], speaker.voice), ('unavailable', 'zoey'))
+        self.assertIn('none is British', r['limits'][0])
+        self.assertIn('lower', r['alternative']['met'])
+        again = identity.change_voice(speaker, args)  # a repeat gives the same limit and offer
+        self.assertEqual((again['limits'], again['alternative']['voice']), (r['limits'], r['alternative']['voice']))
+        r = identity.change_voice(speaker, {'voice': again['alternative']['voice']})
+        self.assertTrue(r['ok'])
+
+    def test_no_match_message_names_a_keep_only_when_it_blocks(self):
+        for current, args in (('miles', {'pitch': 'lower', 'warmth': 'same'}),
+                              ('harper', {'warmth': 'warmer', 'liveliness': 'same'}),
+                              ('easton', {'pitch': 'higher', 'warmth': 'same'}), ('zoey', {'pitch': 'higher'})):
+            r, _ = self.change(current, **args)
+            self.assertEqual(r['reason'], 'no_close_match', (current, args))
+            self.assertNotIn('keeping', r['message'], (current, args))  # already the furthest that way
+            self.assertNotIn('the other way', r['message'], (current, args))
+        r, _ = self.change('everly', pitch='lower', warmth='same')  # a lower voice exists but changes the warmth
+        self.assertIn('warmth you asked to keep', r['message'])
+
     def test_either_gender_keep_blocked_offer_may_be_another_gender(self):
         r = vi.VoiceIdentity().change_voice(Speaker('miles'), {'liveliness': 'calmer', 'pitch': 'same',
                                                                'gender': 'either'})

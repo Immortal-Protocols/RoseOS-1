@@ -375,7 +375,7 @@ class VoiceIdentity:
                 'note': (f'Call yourself {name} from now on. Rose\'s phone app, pairing, About and any wake word '
                          'are unchanged.')}
 
-    def change_voice(self, speaker, args: dict) -> dict:
+    def change_voice(self, speaker, args: dict, _retried: bool = False) -> dict:
         if speaker is None:
             return {'ok': False, 'reason': 'no_voice', 'message': 'This backend has no voice to change.'}
         current = getattr(speaker, 'voice', None) or self.voice or DEFAULT_VOICE
@@ -424,7 +424,27 @@ class VoiceIdentity:
         changing_gender = request['gender'] in ('female', 'male') and request['gender'] != gender
         fits = [e for e in ranked if not e['against'] and (e['met'] or (changing_gender and not request['wanted']))]
         if fits:
-            return self._apply(speaker, current, fits, limits=limits)
+            result = self._apply(speaker, current, fits, limits=limits)
+            if result.get('reason') != 'unavailable':
+                return result
+            if limits:
+                result['limits'] = limits
+            if _retried:
+                return result
+            # None of the fitting voices loaded, and each is now marked unavailable: answer from the voices that are
+            # left, as repeating the request would. Another fit is applied; otherwise the nearest alternative is
+            # offered alongside the limits.
+            again = self.change_voice(speaker, args, _retried=True)
+            if again.get('ok'):
+                again['closer_unavailable'] = result['unavailable'] + again.get('closer_unavailable', [])
+                return again
+            if again.get('alternative'):
+                result['alternative'] = again['alternative']
+                result['message'] += (' The nearest alternative is offered; apply it only if the owner agrees '
+                                      '(change_voice with its voice).')
+            else:
+                self.offered = None
+            return result
         if changing_gender and not ranked:
             return {'ok': False, 'reason': 'no_match', 'changed': False, 'voice': current, 'limits': limits,
                     'message': f'No {request["gender"]} voice is available on this backend.'}
@@ -456,11 +476,14 @@ class VoiceIdentity:
             names = ' and '.join(a[len('same_'):] for a in sorted(common))
             message = f'Every available {scope}voice that fits also changes the {names} you asked to keep.'
         elif request['wanted']:
+            # Name a kept aspect only when it is what stops a voice that moves the asked way.
+            moving = [e for e in ranked if e['toward']]
+            stopping = sorted({a[len('same_'):] for e in moving for a in e['against'] if a.startswith('same_')})
             message = (f'No available {scope}voice is ' + ' and '.join(w.replace('_', ' ')
                                                                     for w in self._words(request['wanted']))
                        + (f' than a typical {request["gender"]} voice' if changing_gender else ' than the current one')
-                       + (f' while keeping the same {kept}.' if kept else
-                          ('.' if changing_gender else ' without moving the other way.')))
+                       + (f' while keeping the same {" and ".join(stopping)}.' if stopping else
+                          ('.' if changing_gender or not moving else ' without moving the other way.')))
         else:
             message = f'No available {scope}voice fits that description' + (f' while keeping the same {kept}.'
                                                                             if kept else '.')
