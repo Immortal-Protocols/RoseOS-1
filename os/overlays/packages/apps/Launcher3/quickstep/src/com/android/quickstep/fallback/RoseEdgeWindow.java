@@ -46,9 +46,13 @@ import android.view.inputmethod.InputMethodManager;
  * the Rose and switcher wells, the pearl and the switcher glyph; RoseEdgeLayout) in a TYPE_NAVIGATION_BAR_PANEL window
  * along the bottom of the display, above the shortened app (Launcher3 holds INTERNAL_SYSTEM_WINDOW; no new permission).
  *
- * The microphone-input slot is a hole (Chief's option (a), agreed with OS Core on #410): nothing is drawn there, it is
- * outside the window's touchable region, and its screen bounds go to Shell through RoseEdgeState.setMicSlot, where
- * SystemUI's existing trusted tray control draws and handles it. This window never reads or changes microphone state.
+ * The microphone-input slot belongs to SystemUI (Chief's option (a), agreed with OS Core on #410): it is outside the
+ * window's touchable region, and its screen bounds go to Shell through RoseEdgeState.setMicSlot, where SystemUI's
+ * existing trusted tray control draws and handles it once the shell has raised the edge. Until that control covers it
+ * (while a drag reveals or reverses the tray, and between a release and the shell's onRaised), this window draws the
+ * mic button in the slot with the other buttons, in the control's own "status unavailable" look (its well and glyph
+ * at UNKNOWN_ALPHA), so the mic rises and falls with the tray without claiming muted or unmuted (1A). SystemUI's opaque
+ * control, added later over the slot, hides it. This window never reads or changes microphone state.
  *
  * Taps: Rose lowers the edge and asks the host to open Rose; the switcher lowers it and asks for the switcher. A swipe
  * down of more than RoseEdgeGesture.RAISE_DP lowers it. A drag up on the open tray goes on toward the switcher: past
@@ -99,6 +103,9 @@ public final class RoseEdgeWindow implements RoseEdgeState.Listener {
     private final Context mContext;
     private final Actions mActions;
     private final SparseArray<EdgeView> mShown = new SparseArray<>();
+    /** SystemUI's mic control (RoseEdgeMicSlot.Control): its well (OxbloodEdge.Well.mic) and unknown-state alpha. */
+    static final float MIC_WELL_DP = 32, MIC_WELL_RADIUS_DP = 9;
+    static final int MIC_UNKNOWN_ALPHA = 110;
     /** Identifies this window's inset source to the window manager (as the taskbar's insets owner does). */
     private final Binder mInsetsOwner = new Binder();
 
@@ -268,7 +275,10 @@ public final class RoseEdgeWindow implements RoseEdgeState.Listener {
         view.getContext().getSystemService(WindowManager.class).removeViewImmediate(view);
     }
 
-    /** Home's edge (homeEdge), with the microphone slot left as a transparent, untouchable hole. */
+    /**
+     * Home's edge (homeEdge). The microphone slot is untouchable here (its touches are SystemUI's control's); this
+     * view draws the mic there only in the "status unavailable" look, under SystemUI's control once that is shown.
+     */
     final class EdgeView extends View implements ViewTreeObserver.OnComputeInternalInsetsListener {
         final int mDisplayId;
         final float mDensity;
@@ -276,7 +286,7 @@ public final class RoseEdgeWindow implements RoseEdgeState.Listener {
         private final Paint mHairline = new Paint(Paint.ANTI_ALIAS_FLAG), mWell = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final Paint mRing = new Paint(Paint.ANTI_ALIAS_FLAG), mPearl = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final Paint mGlyph = new Paint(Paint.ANTI_ALIAS_FLAG), mFront = new Paint(Paint.ANTI_ALIAS_FLAG);
-        private final Paint mArmed = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Paint mArmed = new Paint(Paint.ANTI_ALIAS_FLAG), mMicPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final Path mOutline = new Path();
         private final int mSlop;
         private float mDownY = Float.NaN;
@@ -429,8 +439,7 @@ public final class RoseEdgeWindow implements RoseEdgeState.Listener {
         @Override
         protected void onDraw(Canvas canvas) {
             canvas.save();
-            // The microphone slot stays empty: SystemUI's tray control is there.
-            canvas.clipOutRect(control(RoseEdgeLayout.MIC));
+            // The plate runs through the microphone slot, as SystemUI's opaque control continues it there.
             canvas.drawPath(mOutline, mPlate);
             canvas.drawPath(mOutline, mSheen);
             canvas.drawPath(mOutline, mHairline);
@@ -453,7 +462,47 @@ public final class RoseEdgeWindow implements RoseEdgeState.Listener {
             Rect rose = control(RoseEdgeLayout.ROSE);
             canvas.drawCircle(rose.exactCenterX(), rose.exactCenterY(), 8 * mDensity, mPearl);
             drawSwitcherGlyph(canvas, control(RoseEdgeLayout.SWITCHER));
+            drawMicUnavailable(canvas, control(RoseEdgeLayout.MIC));
             canvas.restore();
+        }
+
+        /**
+         * The mic button as SystemUI's control draws it before it knows the state (RoseEdgeMicSlot.Control with mKnown
+         * false: OxbloodEdge.Well.mic and the unmuted MicGlyph at UNKNOWN_ALPHA), so it reads as "status unavailable",
+         * never as muted or unmuted. SystemUI's control covers it once the edge is raised.
+         */
+        private void drawMicUnavailable(Canvas canvas, Rect slot) {
+            float cx = slot.exactCenterX(), cy = slot.exactCenterY(), d = mDensity;
+            int layer = canvas.saveLayerAlpha(slot.left, slot.top, slot.right, slot.bottom, MIC_UNKNOWN_ALPHA);
+            float h = MIC_WELL_DP * d, r = MIC_WELL_RADIUS_DP * d;
+            RectF well = new RectF(cx - h / 2, cy - h / 2, cx + h / 2, cy + h / 2);
+            mMicPaint.reset();
+            mMicPaint.setAntiAlias(true);
+            mMicPaint.setShader(new LinearGradient(0, well.top, 0, well.bottom, 0x47140407, 0x1F46121C,
+                    Shader.TileMode.CLAMP));
+            canvas.drawRoundRect(well, r, r, mMicPaint);
+            mMicPaint.setShader(null);
+            mMicPaint.setStyle(Paint.Style.STROKE);
+            float ring = Math.max(1f, d), half = ring / 2;
+            mMicPaint.setStrokeWidth(ring);
+            mMicPaint.setColor(0x66ECCDBE);
+            canvas.drawRoundRect(well.left + half, well.top + half, well.right - half, well.bottom - half, r - half,
+                    r - half, mMicPaint);
+            // OxbloodEdge.MicGlyph, unmuted ink, in its 24-unit box scaled to 20dp.
+            float s = 20 * d / 24f;
+            canvas.translate(cx - 12 * s, cy - 12 * s);
+            canvas.scale(s, s);
+            mMicPaint.reset();
+            mMicPaint.setAntiAlias(true);
+            mMicPaint.setColor(0xFFE6D4C3);
+            canvas.drawRoundRect(new RectF(8.6f, 2.5f, 15.4f, 15f), 3.4f, 3.4f, mMicPaint);
+            mMicPaint.setStyle(Paint.Style.STROKE);
+            mMicPaint.setStrokeWidth(1.9f);
+            mMicPaint.setStrokeCap(Paint.Cap.ROUND);
+            canvas.drawArc(new RectF(5.6f, 4.4f, 18.4f, 17.2f), 0, 180, false, mMicPaint);
+            canvas.drawLine(12, 17.4f, 12, 20.6f, mMicPaint);
+            canvas.drawLine(8.8f, 20.8f, 15.2f, 20.8f, mMicPaint);
+            canvas.restoreToCount(layer);
         }
 
         /** homeEdge.switcherGlyph: four cards in a 64 x 28 box, viewBox (2, 3, 60, 20). */

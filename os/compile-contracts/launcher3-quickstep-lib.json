@@ -1733,7 +1733,7 @@
   },
   {
    "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeWindow.java",
-   "sha256": "f2df326554fac64a9ababec0dffb7a2d84e534445aef792184fb6adc371aa5d4",
+   "sha256": "a5d74b746ba12dfaa280e3c39e8ffa9b0ca20221a61b456ce0b9037ee96ca0cf",
    "role": "required"
   },
   {
@@ -1883,7 +1883,7 @@
     },
     {
      "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeWindow.java",
-     "sha256": "f2df326554fac64a9ababec0dffb7a2d84e534445aef792184fb6adc371aa5d4"
+     "sha256": "a5d74b746ba12dfaa280e3c39e8ffa9b0ca20221a61b456ce0b9037ee96ca0cf"
     },
     {
      "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseFan.java",
@@ -3576,7 +3576,7 @@
    },
    {
     "target": "packages/apps/Launcher3/quickstep/src/com/android/quickstep/fallback/RoseEdgeWindow.java",
-    "sha256": "f2df326554fac64a9ababec0dffb7a2d84e534445aef792184fb6adc371aa5d4",
+    "sha256": "a5d74b746ba12dfaa280e3c39e8ffa9b0ca20221a61b456ce0b9037ee96ca0cf",
     "role": "required"
    },
    {

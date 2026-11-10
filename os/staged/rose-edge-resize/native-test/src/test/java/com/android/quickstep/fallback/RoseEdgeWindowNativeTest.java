@@ -231,7 +231,7 @@ public class RoseEdgeWindowNativeTest {
     }
 
     @Test
-    public void theSlotIsLeftTransparentAndThePlateIsDrawnAroundIt() throws Exception {
+    public void theMicIsDrawnInTheSlotAsStatusUnavailableAndThePlateAroundIt() throws Exception {
         RoseEdgeWindow.EdgeView view = raise();
         Bitmap bitmap = Bitmap.createBitmap(dp(384), dp(92), Bitmap.Config.ARGB_8888);
         view.draw(new Canvas(bitmap));
@@ -244,7 +244,15 @@ public class RoseEdgeWindowNativeTest {
             }
         }
         Rect mic = view.control(RoseEdgeLayout.MIC);
-        assertEquals("nothing drawn in the slot", 0, Color.alpha(bitmap.getPixel(mic.centerX(), mic.centerY())));
+        // 1A: the mic is visible with the tray (no transparent hole), in SystemUI's own "status unavailable" look.
+        float s = 20 * density / 24f;
+        int plate = bitmap.getPixel(mic.left + dp(2), mic.centerY());
+        int glyph = bitmap.getPixel(mic.centerX(), Math.round(mic.exactCenterY() - 12 * s + 9 * s));
+        assertEquals("the plate runs through the slot", 255, Color.alpha(plate));
+        assertEquals("the mic is drawn on it, opaque", 255, Color.alpha(glyph));
+        assertTrue("the mic glyph shows against the plate", Color.red(glyph) > Color.red(plate) + 40);
+        assertTrue("at the unknown-state alpha: never the full ink a known state shows",
+                Color.red(glyph) < 0xE6 - 40);
         assertEquals("the plate is opaque below the flat top", 255, Color.alpha(bitmap.getPixel(dp(4), dp(88))));
         assertEquals("the concave fillet leaves its inside clear", 0, Color.alpha(bitmap.getPixel(dp(30), dp(2))));
         assertEquals("on both sides", 0, Color.alpha(bitmap.getPixel(dp(384 - 30), dp(2))));
