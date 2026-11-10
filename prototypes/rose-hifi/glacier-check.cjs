@@ -31,17 +31,18 @@ async function measure(page, label, sel, min) {
   }, sel);
   if (!info || !info.vis) { check('contrast ' + label + ' (element visible)', false, sel); return; }
   // Hide the element's own text so the rendered background beneath it can be sampled.
-  // Hide the element's text, its descendants' text and its glyphs, so only the rendered background remains.
-  await page.evaluate((sel) => { const el = document.querySelector(sel); [el, ...el.querySelectorAll('*')].forEach((n) => { n.dataset.cprev = n.style.color || ''; n.style.setProperty('color', 'transparent', 'important'); }); (el.matches('svg,img') ? [el] : [...el.querySelectorAll('svg,img')]).forEach((s) => { s.dataset.cvis = s.style.visibility; s.style.visibility = 'hidden'; }); }, sel);
-  // The node may be re-rendered (e.g. the suggestion strip) between hiding and capture: confirm it is
-  // still hidden immediately before the screenshot, re-hiding a replaced node.
-  for (let i = 0; i < 3; i++) {
-    const hidden = await page.evaluate((sel) => { const el = document.querySelector(sel); return !!el && [el, ...el.querySelectorAll('*')].every((n) => n.style.color === 'transparent'); }, sel);
-    if (hidden) break;
-    await page.evaluate((sel) => { const el = document.querySelector(sel); [el, ...el.querySelectorAll('*')].forEach((n) => { n.dataset.cprev = n.style.color || ''; n.style.setProperty('transition', 'none', 'important'); n.style.setProperty('color', 'transparent', 'important'); }); }, sel);
-  }
+  // Hide the element's text, its descendants' text and its glyphs with an injected stylesheet rule, so
+  // re-rendered nodes stay hidden too (inline styles are lost when a field or strip re-renders).
+  await page.evaluate((sel) => {
+    const st = document.createElement('style'); st.id = '__cm_hide';
+    st.textContent = sel + ',' + sel + ' *{color:transparent!important;transition:none!important;caret-color:transparent!important}' +
+      sel + ' svg,' + sel + ' img{visibility:hidden!important}' + (/(^|\s)(svg|img)$/.test(sel) ? sel + '{visibility:hidden!important}' : '') +
+      sel + ' .caret{visibility:hidden!important}';
+    document.head.appendChild(st);
+  }, sel);
+  await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
   const buf = await page.screenshot({ clip: { x: info.x, y: info.y, width: Math.max(1, info.w), height: Math.max(1, info.h) } });
-  await page.evaluate((sel) => { const el = document.querySelector(sel); [el, ...el.querySelectorAll('*')].forEach((n) => { n.style.color = n.dataset.cprev || ''; n.style.removeProperty('transition'); }); (el.matches('svg,img') ? [el] : [...el.querySelectorAll('svg,img')]).forEach((s) => { s.style.visibility = s.dataset.cvis || ''; }); }, sel);
+  await page.evaluate((sel) => { const st = document.getElementById('__cm_hide'); if (st) st.remove(); const el = document.querySelector(sel); if (el) [el, ...el.querySelectorAll('*')].forEach((n) => n.style.removeProperty('transition')); }, sel);
   const { PNG } = await pngTools();
   const png = PNG(buf);
   // Ratio of the text colour against every sampled background pixel; report the 5th percentile so a
