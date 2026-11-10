@@ -139,11 +139,12 @@ def match(current: str, request: dict, available, traits: dict = TRAITS) -> list
         for dim, spec in DIMENSIONS.items():
             level = request['wanted'].get(dim)
             if level is None:
-                if dim in keep:
-                    if not (dim == 'pitch' and switched) and abs(d[dim]) > spec['step']:
+                if dim in keep:  # "keep the same" is always about the current voice, whatever the gender
+                    if not (dim == 'pitch' and switched) and abs(real[dim]) > spec['step']:
                         unmet.append('same_' + dim)
                         against.append('same_' + dim)
-                    score += (d[dim] / spec['scale']) ** 2
+                    if not (dim == 'pitch' and switched):
+                        score += (real[dim] / spec['scale']) ** 2
                 elif not (dim == 'pitch' and switched and not among):  # another gender's pitch is not "a change"
                     score += UNREQUESTED_WEIGHT * (d[dim] / spec['scale']) ** 2
                 continue
@@ -163,8 +164,11 @@ def match(current: str, request: dict, available, traits: dict = TRAITS) -> list
                     against.append(word)
         progress = sum(d[dim] * math.copysign(1, level) / DIMENSIONS[dim]['scale']
                        for dim, level in request['wanted'].items())  # how far it goes the asked ways, in steps
-        out.append({'voice': name, 'score': round(score, 3), 'met': met, 'unmet': unmet, 'against': against,
-                    'toward': toward, 'progress': round(progress, 3), 'changes': describe_changes(real)})
+        entry = {'voice': name, 'score': round(score, 3), 'met': met, 'unmet': unmet, 'against': against,
+                 'toward': toward, 'progress': round(progress, 3), 'changes': describe_changes(real)}
+        if among and request['wanted']:
+            entry['judged_among'] = cand['gender']  # met/unmet compare with a typical voice of that gender
+        out.append(entry)
     out.sort(key=lambda e: (len(e['against']), len(e['unmet']), e['score']))
     return out
 
@@ -245,11 +249,11 @@ class VoiceIdentity:
             self.name = valid_name(name) if name else DEFAULT_NAME
         except ValueError:
             self.name = DEFAULT_NAME
-        voice = saved.get('voice')
+        voice = saved.get('voice') if isinstance(saved.get('voice'), str) else None
         # The owner's chosen voice as saved (None: never chosen). Only a change the owner made replaces it: a one-run
         # --voice or a startup fallback changes what is spoken, never the choice.
         self.voice = voice if voice in traits['voices'] else None
-        previous = saved.get('previous_voice')
+        previous = saved.get('previous_voice') if isinstance(saved.get('previous_voice'), str) else None
         self.previous = previous if previous in traits['voices'] else None
         self.unavailable: dict[str, float] = {}  # voice -> when it last failed to load (retried after a while)
         self.offered: dict | None = None  # the alternative the last no_close_match offered
@@ -367,16 +371,28 @@ class VoiceIdentity:
         if best is None and request['gender'] in ('same', 'either'):  # another gender only when none was named
             best = next((e for e in wider if e['toward'] and not e['against']), None)
         scope = '' if request['gender'] in ('either',) else f'{request["gender"] if changing_gender else gender} '
+        kept = ' and '.join(request['keep'])
+        blocked_by_keep = bool(request['keep']) and any(
+            e['met'] and all(a.startswith('same_') for a in e['against']) for e in ranked)
+        if blocked_by_keep:
+            message = f'Every available {scope}voice that fits also changes the {kept} you asked to keep.'
+        elif request['wanted']:
+            message = (f'No available {scope}voice is ' + ' and '.join(w.replace('_', ' ')
+                                                                    for w in self._words(request['wanted']))
+                       + (f' than a typical {request["gender"]} voice' if changing_gender else ' than the current one')
+                       + (f' while keeping the same {kept}.' if kept else
+                          ('.' if changing_gender else ' without moving the other way.')))
+        else:
+            message = f'No available {scope}voice fits that description' + (f' while keeping the same {kept}.'
+                                                                            if kept else '.')
         result = {'ok': False, 'reason': 'no_close_match', 'changed': False, 'voice': current, 'limits': limits,
-                  'message': (f'No available {scope}voice is ' + ' and '.join(w.replace('_', ' ')
-                                                                         for w in self._words(request['wanted']))
-                              + (f' than a typical {request["gender"]} voice.' if changing_gender
-                                 else ' than the current one without moving the other way.') if request['wanted'] else
-                              f'No available {scope}voice fits that description.')}
+                  'message': message}
         if best is not None:
             self.offered = best
             result['alternative'] = {'voice': best['voice'], 'gender': self._gender(best['voice']),
                                      'met': best['met'], 'unmet': best['unmet'], 'changes': best['changes']}
+            if best.get('judged_among'):
+                result['alternative']['judged_among'] = best['judged_among']
             result['message'] += (' The nearest alternative is offered; apply it only if the owner agrees '
                                    '(change_voice with its voice).')
         return result
@@ -443,8 +459,13 @@ class VoiceIdentity:
             result = {'ok': True, 'changed': True, 'voice': voice, 'previous_voice': current, 'saved': True,
                       'match': label or ('close' if not entry['unmet'] else 'partial'),
                       'met': entry['met'], 'unmet': entry['unmet'], 'measured_changes': changes,
+                      **({'judged_among': entry['judged_among']} if entry.get('judged_among') else {}),
                       'note': 'Reply now with one short sentence in this voice so the owner hears it, and ask '
                               'whether it suits them.'}
+            if entry.get('judged_among'):
+                result['note'] += (f' met and unmet describe it among {entry["judged_among"]} voices (for example a '
+                                   f'deeper {entry["judged_among"]} voice); measured_changes are the change from the '
+                                   'previous voice.')
             if limits:
                 result['limits'] = limits
             if skipped:

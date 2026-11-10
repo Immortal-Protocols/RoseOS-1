@@ -241,6 +241,26 @@ class Matching(unittest.TestCase):
         males = {n: v for n, v in vi.TRAITS['voices'].items() if v['gender'] == 'male'}
         self.assertEqual(r['voice'], min(males, key=lambda n: males[n]['brightness_db']))
 
+    def test_a_kept_aspect_is_kept_from_the_current_voice_across_a_gender_change(self):
+        for current, args in (('micah', {'gender': 'female', 'warmth': 'same'}), ('zoey', {'gender': 'male', 'pace': 'same'}),
+                              ('zoey', {'gender': 'male', 'warmth': 'same'}), ('easton', {'gender': 'female', 'pace': 'same'})):
+            with self.subTest(current=current, args=args):
+                r, _ = self.change(current, **args)
+                if not r['ok']:
+                    self.assertEqual(r['reason'], 'no_close_match')
+                    self.assertIn('keeping the same', r['message'])
+                    continue
+                kept = next(k for k, v in args.items() if v == 'same')
+                d = vi.deltas(vi.TRAITS['voices'][current], vi.TRAITS['voices'][r['voice']])[kept]
+                self.assertLessEqual(abs(d), vi.DIMENSIONS[kept]['step'], r)
+
+    def test_a_result_judged_among_another_gender_says_so(self):
+        r, _ = self.change('easton', gender='female', pitch='lower')
+        self.assertEqual(r['judged_among'], 'female')
+        self.assertIn('among female voices', r['note'])
+        r, _ = self.change('zoey', warmth='warmer')
+        self.assertNotIn('judged_among', r)
+
     def test_an_asked_gender_alternative_is_never_another_gender(self):
         r, _ = self.change('zoey', gender='male', pitch='higher')  # no man's voice is higher than a typical man's
         self.assertFalse(r['ok'])
@@ -409,6 +429,12 @@ class Persistence(unittest.TestCase):
         speaker = Speaker('zoey')
         self.assertFalse(one.change_voice(speaker, {'warmth': 'warmer'})['ok'])
         self.assertEqual((speaker.voice, path.read_text()), ('zoey', '{not json'))
+
+    def test_a_saved_file_with_odd_types_falls_back_without_crashing(self):
+        for saved in ({'voice': ['zoey']}, {'previous_voice': {}}, {'voice': 7, 'name': ['Nova']}):
+            (self.dir / 'identity.json').write_text(json.dumps(saved))
+            one = self.identity()
+            self.assertEqual((one.name, one.startup_voice(None)), ('Rose', 'zoey'), saved)
 
     def test_accent_same_is_no_accent_request(self):
         identity, speaker = vi.VoiceIdentity(), Speaker('zoey')
