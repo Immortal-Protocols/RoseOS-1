@@ -342,7 +342,9 @@ final class LocalRoseLink {
                 public void onText(String text) {
                     try {
                         JSONObject m = new JSONObject(text);
-                        synchronized (LocalRoseLink.class) {
+                        // Use the link's end/adopt lock, not the global start lock: start() joins an
+                        // older event thread while holding the latter, so callbacks must not wait on it.
+                        synchronized (sockets) {
                             if (current != LocalRoseLink.this || !running) return;
                             LocalAssistantIdentity.accept(context, identityScope, m);
                         }

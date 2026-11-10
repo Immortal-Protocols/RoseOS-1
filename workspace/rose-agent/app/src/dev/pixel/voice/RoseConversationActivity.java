@@ -181,7 +181,7 @@ public final class RoseConversationActivity extends Activity {
   mic.setVisibility(state.active()&&RoseChin.showInAppMute(AgentTrayService.chinReachable(),navigationMode())?View.VISIBLE:View.GONE);
   ((TextView)mic.findViewWithTag("mic-glyph")).setText(state.muted?"🔇":"🎙");
   mic.setContentDescription(state.muted?agentName+"’s microphone is muted. Unmute":"Mute "+agentName+"’s microphone");
-  failure.setText(AssistantName.inText(state.failureText(),agentName));
+  failure.setText(state.failureText());
   // Core's RoseVisualState maps the session and VoiceService's own measured levels (stale or absent levels are
   // NaN, never invented) into the presence's three independent axes; this screen only draws them.
   long now=SystemClock.elapsedRealtime(),seen=s==null?0L:s.trayAudioObservedAt;

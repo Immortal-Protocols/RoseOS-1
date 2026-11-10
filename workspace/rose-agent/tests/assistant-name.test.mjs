@@ -17,7 +17,8 @@ test('name validation and agent-facing copy use the saved identity',()=>{
 test('native event consumer handles hello and live updates without historical or retired-link rollback',()=>{
  const link=src('LocalRoseLink'),identity=src('LocalAssistantIdentity');
  assert.match(link,/final String identityScope = LocalAssistantIdentity.scope\(context\);/);
- assert.match(link,/current != LocalRoseLink.this \|\| !running/);
+ assert.match(link,/synchronized \(sockets\) \{\s*if \(current != LocalRoseLink.this \|\| !running\)/);
+ assert.doesNotMatch(link.slice(link.indexOf('private void eventsLoop()')),/synchronized \(LocalRoseLink.class\)/);
  assert.match(link,/LocalAssistantIdentity.accept\(context, identityScope, m\);/);
  assert.match(identity,/event.optBoolean\("replay"\)/);
  assert.match(identity,/scope.equals\(scope\(context\)\)/);
