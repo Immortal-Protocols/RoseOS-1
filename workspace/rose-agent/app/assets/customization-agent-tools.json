@@ -2,7 +2,7 @@
   {
     "name": "customization_state",
     "operation": "customization_state",
-    "description": "Read Rose's customization controls: the theme (oxblood or glacier), the Home column count (0 means automatic), the Oxblood wallpaper variant, the font, and the glasses-on hook. Also reports whether Home has drawn the latest change (home.applied) and the column count Home actually draws (home.effectiveColumns, null until drawn), and whether this phone has a real glasses-worn signal, and which theme the system surfaces confirmed drawing (system.shown, system.applied). Read this before relative changes and to verify a change.",
+    "description": "Read Rose's customization controls: the theme (oxblood or glacier), the Home column count (0 means automatic), the Oxblood wallpaper variant, the font, and the glasses-on hook. Also reports whether Home has drawn the latest change (home.applied) and the column count Home actually draws (home.effectiveColumns, null until drawn), and whether this phone has a real glasses-worn signal, which theme the system surfaces confirmed drawing (system.shown, system.applied), and whether the Rose screen has drawn it (conversation.shown, conversation.applied, conversation.state). Read this before relative changes and to verify a change.",
     "foregroundRequired": false,
     "inputSchema": {
       "type": "object",
@@ -88,7 +88,7 @@
   {
     "name": "customization_theme",
     "operation": "customization_theme",
-    "description": "Switch Rose's theme, live: oxblood is the shipped deep red; glacier is cool mineral blue with its own wallpaper. The theme recolours Rose Home, the Rose screen, the tray and chin, notifications and the keyboard; Home columns, the font, app icons and the glasses-on hook are kept, and Oxblood's chosen wallpaper variant comes back when Oxblood does. The choice survives a restart. verified means saved: report it as done only when home.applied and system.applied are both true; until then say what has not shown it yet.",
+    "description": "Switch Rose's theme, live: oxblood is the shipped deep red; glacier is cool mineral blue with its own wallpaper. The theme recolours Rose Home, the Rose screen, the tray and chin, notifications and the keyboard; Home columns, the font, app icons and the glasses-on hook are kept, and Oxblood's chosen wallpaper variant comes back when Oxblood does. The choice survives a restart. verified means saved: report it as done only when home.applied, conversation.applied and system.applied confirm this exact theme. The Rose screen can defer until Return, Stop or Background Work closes; until then say what has not shown it yet. Missing acknowledgment is not success.",
     "foregroundRequired": false,
     "inputSchema": {
       "type": "object",

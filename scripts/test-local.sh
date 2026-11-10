@@ -13,6 +13,8 @@ node --test workspace/rose-agent/tests/local-rose-auth.test.mjs
 # Nov 7 plan 1O: the customization CLI drives the same catalog operations as conversation.
 node --test workspace/rose-agent/customization/rose-customize.test.mjs
 python3 -I workspace/rose-agent/customization/test_conversation_tools.py
+# #744 deferred controls and per-activity conversation theme acknowledgment.
+python3 -I workspace/rose-agent/customization/test_deferred_theme.py
 # Local Rose task events from the real PR318 producer, through the local() provider bridge.
 node --test workspace/rose-agent/voice-providers/local-tasks.test.cjs
 # #410 item 6: microphone-input mute on the capture side, and the provider contract it relies on.
