@@ -190,6 +190,31 @@ class TrayContractTest(unittest.TestCase):
         manifest = (ROOT/'workspace/rose-agent/app/AndroidManifest.xml').read_text()
         self.assertEqual(manifest.count('android:name=".AgentTrayService"'), 1)
 
+    def test_both_sides_speak_the_one_v1(self):
+        # 1C v1 is pinned once, here, against App Core's Rose side (#736): the same codes, results, version and keys.
+        # No other numbering may exist on either side.
+        rose = ROOT/'workspace/rose-agent/app/src/dev/pixel/voice/TrayReturn.java'
+        if not rose.exists():
+            self.skipTest('App Core\'s TrayReturn (#736) is not on this branch yet')
+        theirs = rose.read_text()
+        self.assertIn('static final int TARGET = 7, RESULT = 8, RETURN = 101, CANCEL = 102;', theirs)
+        self.assertIn('static final int RETURNED = 0, UNAVAILABLE = 1, REFUSED = 2;', theirs)
+        self.assertIn('static final int PROTOCOL = 1;', theirs)
+        self.assertIn('public static final int TARGET = 7, RESULT = 8;', self.link)
+        self.assertIn('public static final int RETURN_TO = 101, CANCEL = 102;', self.link)
+        self.assertIn('public static final int RETURNED = 0, UNAVAILABLE = 1, REFUSED = 2;', self.link)
+        # Rose reads exactly the keys the tray writes, and the tray reads the token key Rose writes.
+        service = re.sub(r'\s+', '', self.service)
+        for key, kind in (('protocolVersion', 'Int'), ('token', 'Long'), ('package', 'String'), ('userId', 'Int'),
+                ('label', 'String')):
+            self.assertIn(f'data.put{kind}("{key}",', self.tray)
+            self.assertIn(f'd.get{kind}("{key}"', service)
+        self.assertIn('b.putLong("token",token)', service)
+        self.assertIn('message.getData().getLong("token")', self.tray)
+        for stale in ('= 103', '= 104', 'RETURN = 102'):
+            self.assertNotIn(stale, theirs)
+            self.assertNotIn(stale, self.link)
+
 
 if __name__ == '__main__':
     unittest.main()
