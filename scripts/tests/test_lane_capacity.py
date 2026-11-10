@@ -1,14 +1,18 @@
 """1A lane capacity map (os/release-pipeline/lanes/capacity.json) against the committed route.
 
 The routing actually committed is derived from os-release.yml (each self-hosted job's runner label and the modes its
-if: names, the workflow's concurrency group, the controller's identity variable), release-pipeline.py's BUILDER (the
-one VM the controller starts and stops), frankel.json's host lock and the builder-reclaim storage root. The map must
-say exactly that. The rules that a lane's move to its own host must satisfy are checked too: its jobs' runner, a queue
-keyed by host, a lane-aware controller, owned stops wherever a host's lanes do not share one queue, and the shared app
-version ledger. Yogi's own route (yogi-ota.yml and os/ota/yogi.json) is checked against its host and kept apart from the
-Frankel host. The standalone harness has its own manual workflow (launcher3-compile.yml). Its compile binding can be
-source-bound without claiming release or OTA capacity. A host builds only when it is in service. Synthetic splits show
-each rule refuses an unsafe move. Source only: no runner, VM or API is touched.
+if: names, the workflow's concurrency group for each mode, the controller's identity variable), release-pipeline.py's
+BUILDER (the one VM the controller starts and stops), frankel.json's host lock and the builder-reclaim storage root. The
+map must say exactly that. The rules that a lane's move to its own host must satisfy are checked too: its jobs' runner, a
+queue keyed by host, a lane-aware controller, owned stops wherever a host's lanes do not share one queue, and the shared
+app version ledger. A lane's hosted route (agent's hostedRoute, agent-hosted and agent-hosted-probe, 1F) has no host:
+its modes need their own queue, GitHub-hosted jobs only, a controller and cleanup that never run for them, and the shared
+ledger store as the only thing it shares with a builder route; it counts as capacity only once it is active. Every lane
+keeps a host of the map, as the other lanes' own checks read it. Yogi's own route (yogi-ota.yml and os/ota/yogi.json)
+is checked against its host and kept apart from the Frankel host. The standalone harness has its own manual workflow
+(launcher3-compile.yml). Its compile binding can be source-bound without claiming release or OTA capacity. A host
+builds only when it is in service. Synthetic splits show each rule refuses an unsafe move. Source only: no runner, VM
+or API is touched.
 """
 import copy
 import importlib.util
@@ -34,6 +38,12 @@ spec = importlib.util.spec_from_file_location('yogi_ota_for_lanes', ROOT/'script
 yogi_ota = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(yogi_ota)
 FIELDS = ['runnerLabel', 'vm', 'storageRoot', 'lockPath', 'queue', 'controller']
+# A lane's hostedRoute: modes that run only on GitHub-hosted runners, in their own queue; nothing else to bind.
+HOSTED_ROUTE = {'modes', 'runner', 'queue', 'runtimeStatus'}
+# The commands that allocate dev.pixel.voice versions, and the modes for which each one allocates.
+ALLOCATORS = ((re.compile(r'scripts/release-allocate\.py (latest|app) '), {'latest-beta', 'app-only'}),
+              (re.compile(r'scripts/agent-hosted\.py reserve '), {'agent-hosted'}))
+BUILDER_LEDGER = ALLOCATORS[0][0]
 RUNS_ON = re.compile(r'(?m)^    runs-on: (.+)$')
 JOB_IF = re.compile(r'(?m)^    if: (.+)$')
 SELF_HOSTED = re.compile(r'\[self-hosted, ([\w-]+)\]')
@@ -54,14 +64,15 @@ def job_condition(block):
     return ' '.join(lines)
 
 
-def queue_of(workflow):
-    """The workflow's concurrency group, which must be one literal (no expression) for this map to read it."""
-    head = workflow.split('\njobs:\n', 1)[0]
-    block = re.search(r'(?ms)^concurrency:\n(.*?)(?=^\S|\Z)', head)
-    assert block, 'no workflow-level concurrency'
-    group = re.search(r'(?m)^  group: (\S+)$', block[1])
-    assert group, 'no concurrency group'
-    return group[1]
+def queue_of(workflow, mode=None):
+    """The concurrency group a run of MODE joins (with no mode, the workflow's default): one literal group, or
+    os-release's mode-keyed one, read by os_release_shape.queues, which refuses any other expression."""
+    return shape.queue(mode, workflow)
+
+
+def runs_on(block):
+    runs = RUNS_ON.search(block)
+    return re.sub(r'\s+#.*$', '', runs[1]).strip() if runs else ''
 
 
 def self_hosted_jobs(workflow):
@@ -69,11 +80,10 @@ def self_hosted_jobs(workflow):
     runs-on in any other shape than [self-hosted, <label>] is refused, so no job's routing is skipped unread."""
     found = {}
     for name, block in shape.jobs(workflow).items():
-        runs = RUNS_ON.search(block)
-        value = re.sub(r'\s+#.*$', '', runs[1]).strip() if runs else ''
+        value = runs_on(block)
         if 'self-hosted' in value:
             label = SELF_HOSTED.fullmatch(value)
-            assert label, f'job {name}: a self-hosted runs-on this map does not read: {runs[1]}'
+            assert label, f'job {name}: a self-hosted runs-on this map does not read: {value}'
             found[name] = (label[1], shape.MODE_EQ.findall(job_condition(block)))
     return found
 
@@ -94,6 +104,12 @@ def in_service(name, host):
     return name == 'frankel-builder'
 
 
+def hosted_routes(contract, workflow=OS_RELEASE):
+    """{route: (lane, its hostedRoute)} for every lane of WORKFLOW with a GitHub-hosted route, named <lane>/hosted."""
+    return {f'{name}/hosted': (name, lane['hostedRoute']) for name, lane in contract['lanes'].items()
+            if lane['workflow'] == workflow and 'hostedRoute' in lane}
+
+
 def lane_of(contract):
     owner = {}
     for lane, entry in contract['lanes'].items():
@@ -105,6 +121,9 @@ def lane_of(contract):
 def problems(contract, workflow, builder, lock, storage, owned):
     """Every way the map and the committed os-release route disagree, or a split is unsafe; [] when they agree."""
     found, hosts, lanes, owner = [], contract['hosts'], contract['lanes'], lane_of(contract)
+    all_jobs = shape.jobs(workflow)
+    hosted = hosted_routes(contract)
+    hosted_modes = {m for _, route in hosted.values() for m in route.get('modes', [])}
     for mode in shape.modes(workflow):
         if len(owner.get(mode, [])) != 1:
             found.append(f'mode {mode} belongs to {owner.get(mode, [])} lanes, not exactly one')
@@ -114,22 +133,27 @@ def problems(contract, workflow, builder, lock, storage, owned):
         targets = {lanes[owner[m][0]]['host'] for m in modes if len(owner.get(m, [])) == 1}
         if not modes:
             found.append(f'self-hosted job {job} names no mode, so its lane is unknown')
+        elif set(modes) & hosted_modes:
+            found.append(f'self-hosted job {job} serves a GitHub-hosted route\'s mode; that route has no self-hosted runner')
         elif len(targets) != 1:
             found.append(f'job {job} serves lanes on {sorted(map(str, targets))}; one job runs on one host')
         elif label != hosts[targets.pop()]['runnerLabel']:
             found.append(f'job {job} runs on {label}, not on its lane\'s host runner')
-    used = sorted({entry['host'] for entry in lanes.values() if entry['workflow'] == OS_RELEASE})
-    queue = queue_of(workflow)
+    os_lanes = {name: entry for name, entry in lanes.items() if entry['workflow'] == OS_RELEASE}
+    used = sorted({entry['host'] for entry in os_lanes.values()})
+    default, keyed = shape.queues(workflow)
     if len(used) != 1:
-        found.append(f'os-release has one literal queue ({queue}) but its lanes are on hosts {used}: key the queue by host')
         found.append(f'the controller starts and stops one VM ({builder["instance"]}): make it lane-aware for hosts {used}')
-        unowned = sorted(set(shape.modes(workflow)) - set(owned))
+        unowned = sorted(set(shape.modes(workflow)) - set(owned) - hosted_modes)
         if unowned:
             found.append(f'lanes on several hosts need owned stops for every mode; plain start/stop remains for {unowned}')
     for host in used:
         entry = hosts[host]
-        if entry['queue'] != queue:
-            found.append(f'host {host} queue {entry["queue"]} is not the workflow queue {queue}')
+        served = sorted({keyed.get(m, default) for lane in os_lanes.values() if lane['host'] == host
+                         for m in lane['modes'] if m not in hosted_modes})
+        if served != [entry['queue']]:
+            found.append(f'host {host} queue {entry["queue"]} is not the workflow queue {", ".join(served)} of its '
+                         'lanes\' modes: key the queue by host')
         if entry['vm'] != builder:
             found.append(f'host {host} VM {entry["vm"]} is not the VM the controller starts and stops ({builder})')
         if entry['lockPath'] != lock:
@@ -138,12 +162,45 @@ def problems(contract, workflow, builder, lock, storage, owned):
             found.append(f'host {host} storage {entry["storageRoot"]} is not the builder-reclaim root {storage}')
         if {entry['controller']['identityVariable']} != controller_variable(workflow):
             found.append(f'host {host} controller identity is not the one the controller and cleanup jobs use')
+    for name, (lane, route) in sorted(hosted.items()):
+        if set(route) != HOSTED_ROUTE:
+            found.append(f'hosted route {name} has fields {sorted(route)}, not {sorted(HOSTED_ROUTE)}')
+            continue
+        modes = set(route['modes'])
+        if not modes or not modes <= set(lanes[lane]['modes']):
+            found.append(f'hosted route {name} modes {sorted(modes)} are not modes of lane {lane}')
+        served = sorted({keyed.get(m, default) for m in modes})
+        if served != [route['queue']]:
+            found.append(f'hosted route {name} queue {route["queue"]} is not the workflow queue {", ".join(served)} of '
+                         'its modes: key the group by mode')
+        if route['queue'] == default or route['queue'] in {h['queue'] for h in hosts.values()}:
+            found.append(f'hosted route {name} shares its queue {route["queue"]} with a builder')
+        for job, block in sorted(all_jobs.items()):
+            named = set(shape.MODE_EQ.findall(job_condition(block)))
+            if not named & modes:
+                continue
+            if runs_on(block) != route['runner']:
+                found.append(f'job {job} of hosted route {name} runs on {runs_on(block)}, not {route["runner"]}')
+            if named - modes:
+                found.append(f'job {job} serves hosted route {name} and another route; one job runs on one route')
+            if BUILDER_LEDGER.search(block):
+                found.append(f'job {job} of hosted route {name} allocates with the builder-local ledger')
+    # A hosted run never starts the builder, so its cleanup never stops one: another queue's run may be using it.
+    controller = job_condition(all_jobs['controller'])
+    excluded = set(shape.MODE_NE.findall(controller)) if '||' not in controller else set()
+    for mode in sorted(hosted_modes - excluded):
+        found.append(f'the controller can start the builder for GitHub-hosted mode {mode}, and its cleanup would stop '
+                     'a builder that a run in another queue is using')
+    if hosted_modes and (job_condition(all_jobs['cleanup']) != "always() && needs.controller.result != 'skipped'"
+                         or 'controller' not in shape.cleanup_needs(workflow)):
+        found.append('cleanup no longer follows the controller, so a GitHub-hosted run could stop the builder')
     ledger = contract['shared']['appVersionLedger']
     allocating = set()
-    for name, block in shape.jobs(workflow).items():
-        if re.search(r'scripts/release-allocate\.py (latest|app) ', block):
-            allocating |= {owner[m][0] for m in shape.MODE_EQ.findall(job_condition(block)) if len(owner.get(m, [])) == 1
-                           and m in {'latest-beta', 'app-only'}}
+    for name, block in all_jobs.items():
+        for command, allocates in ALLOCATORS:
+            if command.search(block):
+                allocating |= {owner[m][0] for m in shape.MODE_EQ.findall(job_condition(block))
+                               if len(owner.get(m, [])) == 1 and m in allocates}
     if allocating != set(ledger['lanes']):
         found.append(f'the lanes that allocate app versions are {sorted(allocating)}, not the ledger lanes {ledger["lanes"]}')
     for lane in ledger['lanes']:
@@ -177,20 +234,30 @@ def yogi_problems(contract, workflow, config):
     return found
 
 
+def routes(contract, live=True):
+    """{route: what it builds on}. Each lane that is not retired builds on its host's runner label, VM and queue (with
+    live, only a host in service); a lane's hosted route, named <lane>/hosted, on its GitHub-hosted runner label and
+    own queue with no VM of its own, as GitHub gives each job a fresh machine (with live, only once it is active)."""
+    hosts, found = contract['hosts'], {}
+    for name, lane in contract['lanes'].items():
+        if lane.get('runtimeStatus') != 'retired-shared-host' and lane['host'] \
+                and (not live or in_service(lane['host'], hosts[lane['host']])):
+            found[name] = hosts[lane['host']]
+        route = lane.get('hostedRoute')
+        if route and (not live or route['runtimeStatus'] == 'active'):
+            found[f'{name}/hosted'] = {'runnerLabel': route['runner'], 'vm': None, 'queue': route['queue']}
+    return found
+
+
 def independent_pairs(contract, live=True):
-    """Pairs of lanes on known, different hosts with a different runner, VM and queue; with live, only hosts in
-    service. Storage and lock paths may be the same strings on two machines: each VM has its own disk."""
-    hosts = contract['hosts']
-    known = {k: v['host'] for k, v in contract['lanes'].items()
-             if v.get('runtimeStatus') != 'retired-shared-host' and v['host']
-             and (not live or in_service(v['host'], hosts[v['host']]))}
+    """Pairs of routes with a different runner, VM and queue; with live, only routes in service. Storage and lock
+    paths may be the same strings on two machines: each VM has its own disk."""
+    known = routes(contract, live)
     pairs = []
     for a in sorted(known):
         for b in sorted(known):
-            if a < b:
-                x, y = hosts[known[a]], hosts[known[b]]
-                if all(x[f] != y[f] for f in ('runnerLabel', 'vm', 'queue')):
-                    pairs.append([a, b])
+            if a < b and all(known[a][f] != known[b][f] for f in ('runnerLabel', 'vm', 'queue')):
+                pairs.append([a, b])
     return pairs
 
 
@@ -211,12 +278,21 @@ class MapTest(unittest.TestCase):
         for name, lane in CONTRACT['lanes'].items():
             with self.subTest(lane=name):
                 self.assertTrue((ROOT/lane['workflow']).is_file())
-                self.assertIn(lane['host'], [*CONTRACT['hosts'], None])
+                # Every lane names a host of the map: the Mustang and harness lanes' own capacity checks read each
+                # lane's host to keep their own builders apart.
+                self.assertIn(lane['host'], CONTRACT['hosts'])
                 self.assertIn(lane['target'], [*CONTRACT['hosts'], 'own'])
                 if lane['target'] == 'own':
-                    self.assertEqual(lane['unbound'] if lane['host'] else FIELDS, FIELDS)
+                    self.assertEqual(lane['unbound'], FIELDS)
                 else:
                     self.assertEqual(lane['target'], lane['host'])
+                route = lane.get('hostedRoute')
+                if route is not None:
+                    # Nothing to bind: no VM, storage, lock or controller; only GitHub-hosted runners and its own queue.
+                    self.assertEqual(set(route), HOSTED_ROUTE)
+                    self.assertLessEqual(set(route['modes']), set(lane['modes']))
+                    self.assertEqual(route['runner'], 'ubuntu-24.04')
+                    self.assertIn(route['runtimeStatus'], ('inactive', 'active'))
 
     def test_the_map_is_the_committed_route(self):
         self.assertEqual(problems(CONTRACT, *real()), [])
@@ -226,6 +302,11 @@ class MapTest(unittest.TestCase):
         self.assertEqual({label for label, _ in self_hosted_jobs(shape.text()).values()}, {host['runnerLabel']})
         self.assertEqual(host['vm'], pipeline.BUILDER)
         self.assertEqual(host['queue'], queue_of(shape.text()))
+        hosted = {m for _, route in hosted_routes(CONTRACT).values() for m in route['modes']}
+        for name, lane in CONTRACT['lanes'].items():
+            if lane['host'] == 'frankel-builder' and lane['workflow'] == OS_RELEASE:
+                for mode in set(lane['modes']) - hosted:
+                    self.assertEqual(queue_of(shape.text(), mode), host['queue'], (name, mode))
         self.assertEqual((host['lockPath'], host['storageRoot']), (FRANKEL['host']['lockPath'], RECLAIM['root']))
         self.assertEqual(controller_variable(shape.text()), {host['controller']['identityVariable']})
 
@@ -345,6 +426,65 @@ class MapTest(unittest.TestCase):
                          ['yogi-ota has no self-hosted job'])
 
 
+class HostedRouteTest(unittest.TestCase):
+    """1F: agent's hosted route runs in its own queue on GitHub-hosted runners and shares only the version ledger."""
+    ROUTE = CONTRACT['lanes']['agent']['hostedRoute']
+
+    def test_only_the_hosted_agent_modes_leave_the_builders_queue(self):
+        builder = CONTRACT['hosts']['frankel-builder']['queue']
+        self.assertEqual(list(hosted_routes(CONTRACT)), ['agent/hosted'])
+        self.assertEqual(self.ROUTE['modes'], ['agent-hosted', 'agent-hosted-probe'])
+        self.assertEqual(shape.queues(), (builder, {mode: self.ROUTE['queue'] for mode in self.ROUTE['modes']}))
+        for mode in shape.modes():  # Frankel's, the builder's app-only and Mustang's retired jobs all stay
+            with self.subTest(mode=mode):
+                self.assertEqual(queue_of(shape.text(), mode), self.ROUTE['queue'] if mode in self.ROUTE['modes'] else builder)
+        settings = shape.concurrency()
+        self.assertEqual((settings['cancel-in-progress'], settings['queue']), ('false', 'max'))  # both queues keep order
+
+    def test_a_hosted_run_never_starts_or_stops_the_builder(self):
+        jobs, hosted = shape.jobs(), set(self.ROUTE['modes'])
+        reached = sorted(name for name, block in jobs.items() if hosted & set(shape.MODE_EQ.findall(job_condition(block))))
+        self.assertEqual(reached, ['agent-build', 'agent-publisher', 'agent-reserve', 'agent-signer'])
+        for name in reached:
+            self.assertEqual(runs_on(jobs[name]), self.ROUTE['runner'], name)
+            self.assertNotRegex(jobs[name], r'(?m)^    needs: .*\bcontroller\b', name)
+        self.assertFalse(any(hosted & set(modes) for _, modes in self_hosted_jobs(shape.text()).values()))
+        # The controller (the only job that starts the builder) never runs for them, and cleanup (the only job that stops
+        # it) runs only after a controller that ran: no hosted run can stop a builder another queue's run is using.
+        terms = job_condition(jobs['controller']).split(' && ')
+        self.assertNotIn('||', job_condition(jobs['controller']))
+        self.assertLessEqual({f"inputs.mode != '{mode}'" for mode in hosted}, set(terms))
+        self.assertEqual(job_condition(jobs['cleanup']), "always() && needs.controller.result != 'skipped'")
+        self.assertIn('controller', shape.cleanup_needs())
+        starting = sorted(name for name, block in jobs.items() if shape.START in block or shape.STOP in block)
+        self.assertEqual(starting, ['cleanup', 'controller'])
+
+    def test_it_shares_only_the_version_ledger(self):
+        queue = self.ROUTE['queue']
+        self.assertNotIn(queue, [host['queue'] for host in CONTRACT['hosts'].values()])
+        for path in sorted((ROOT/'.github/workflows').glob('*.yml')):
+            if path.name != 'os-release.yml' and '\nconcurrency:\n' in path.read_text():
+                with self.subTest(workflow=path.name):
+                    self.assertNotIn('agent-hosted', shape.concurrency(path.read_text())['group'])
+        store = json.loads((ROOT/'os/release-pipeline/agent/hosted.json').read_text())['reservation']['store']
+        self.assertEqual((store['kind'], store['repository']), ('github-annotated-tags', 'Immortal-Protocols/pixel-ota'))
+        self.assertIn('agent', CONTRACT['shared']['appVersionLedger']['lanes'])
+        reserve = shape.jobs()['agent-reserve']
+        self.assertIn('python3 scripts/agent-hosted.py reserve ', reserve)
+        self.assertNotRegex(reserve, BUILDER_LEDGER)
+
+    def test_it_claims_no_capacity_until_its_committed_status_is_active(self):
+        self.assertEqual(self.ROUTE['runtimeStatus'], 'inactive')
+        self.assertFalse(any('agent/hosted' in pair for pair in independent_pairs(CONTRACT)))
+        self.assertEqual([p for p in CONTRACT['parallelByRoute'] if 'agent/hosted' in p],
+                         [['agent', 'agent/hosted'], ['agent/hosted', 'frankel'], ['agent/hosted', 'frankel-host-other'],
+                          ['agent/hosted', 'yogi']])
+        active = copy.deepcopy(CONTRACT)
+        active['lanes']['agent']['hostedRoute']['runtimeStatus'] = 'active'
+        self.assertEqual(independent_pairs(active), [['agent', 'agent/hosted'], ['agent/hosted', 'frankel'],
+                                                     ['agent/hosted', 'frankel-host-other']])  # Yogi is not in service
+
+
 class SplitTest(unittest.TestCase):
     """An unsafe move of a lane to its own host is refused until every coupled place moves with it."""
 
@@ -381,15 +521,16 @@ class SplitTest(unittest.TestCase):
 
     def test_a_split_host_pair_counts_as_parallel(self):
         pairs = independent_pairs(self.moved(), live=False)
-        self.assertEqual([p for p in pairs if 'mustang' in p], [['agent', 'mustang'], ['frankel', 'mustang'],
-            ['frankel-host-other', 'mustang'], ['mustang', 'yogi']])
+        self.assertEqual([p for p in pairs if 'mustang' in p], [['agent', 'mustang'], ['agent/hosted', 'mustang'],
+            ['frankel', 'mustang'], ['frankel-host-other', 'mustang'], ['mustang', 'yogi']])
         self.assertEqual(independent_pairs(self.moved()), [])  # a host not in service never builds in parallel
         # A second machine still on the shared queue (or runner label) does not build in parallel.
         for field, value in (('queue', 'os-release-frankel'), ('runnerLabel', 'roseos-frankel-builder')):
             with self.subTest(shared=field):
                 contract = self.moved()
                 contract['hosts']['own-host'][field] = value
-                self.assertEqual([p for p in independent_pairs(contract, live=False) if 'mustang' in p], [['mustang', 'yogi']])
+                self.assertEqual([p for p in independent_pairs(contract, live=False) if 'mustang' in p],
+                                 [['agent/hosted', 'mustang'], ['mustang', 'yogi']])
 
     def test_a_self_hosted_job_must_name_its_modes_in_a_shape_this_map_reads(self):
         workflow, builder, lock, storage, owned = real()
@@ -419,15 +560,64 @@ class SplitTest(unittest.TestCase):
         for change, expected in ((dict(builder={**builder, 'instance': 'other'}), 'is not the VM the controller starts'),
                                  (dict(lock='/tmp/other.lock'), 'is not frankel.json host.lockPath'),
                                  (dict(storage='/tmp/other'), 'is not the builder-reclaim root'),
-                                 (dict(workflow=workflow.replace('group: os-release-frankel\n', 'group: other\n', 1)),
-                                  'is not the workflow queue'),
+                                 (dict(workflow=workflow.replace("|| 'os-release-frankel' }}\n", "|| 'other' }}\n", 1)),
+                                  'host frankel-builder queue os-release-frankel is not the workflow queue other'),
                                  (dict(workflow=workflow.replace('vars.GCP_CONTROLLER_SERVICE_ACCOUNT', 'vars.OTHER_CONTROLLER')),
                                   'controller identity is not the one the controller and cleanup jobs use')):
             with self.subTest(expected=expected):
                 args = dict(workflow=workflow, builder=builder, lock=lock, storage=storage, owned=owned, **{})
                 args.update(change)
+                self.assertNotEqual(args, dict(workflow=workflow, builder=builder, lock=lock, storage=storage, owned=owned))
                 found = problems(CONTRACT, **args)
                 self.assertTrue(any(expected in p for p in found), found)
+
+    def test_a_hosted_route_that_leans_on_the_builder_is_refused(self):
+        workflow, builder, lock, storage, owned = real()
+        group = ("  group: ${{ (inputs.mode == 'agent-hosted' || inputs.mode == 'agent-hosted-probe') && "
+                 "'os-release-agent-hosted' || 'os-release-frankel' }}\n")
+        controller = ("    if: needs.guard.outputs.mustang_skip != 'true' && inputs.mode != 'agent-hosted' && "
+                      "inputs.mode != 'agent-hosted-probe'\n")
+        cleanup = "    if: always() && needs.controller.result != 'skipped'\n"
+        for text in (group, controller, cleanup):
+            self.assertEqual(workflow.count(text), 1, text)
+        route = 'hosted route agent/hosted'
+        for name, changed, expected in (
+                ('one literal queue again', workflow.replace(group, '  group: os-release-frankel\n'),
+                 f'{route} queue os-release-agent-hosted is not the workflow queue os-release-frankel of its modes'),
+                ('the probe left in the builder queue', workflow.replace(group, group.replace(" || inputs.mode == 'agent-hosted-probe'", '')),
+                 f'{route} queue os-release-agent-hosted is not the workflow queue os-release-agent-hosted, os-release-frankel'),
+                ('a hosted job on the builder', re.sub(r'(?m)^(  agent-build:\n(?:    .*\n)*?    runs-on: )ubuntu-24.04$',
+                                                       r'\1[self-hosted, roseos-frankel-builder]', workflow),
+                 "self-hosted job agent-build serves a GitHub-hosted route's mode"),
+                ('the controller runs for the probe', workflow.replace(controller, controller.replace(" && inputs.mode != 'agent-hosted-probe'", '')),
+                 'the controller can start the builder for GitHub-hosted mode agent-hosted-probe'),
+                ('an or in the controller', workflow.replace(controller, controller.replace(' && inputs.mode != ', ' || inputs.mode != ', 1)),
+                 'the controller can start the builder for GitHub-hosted mode agent-hosted'),
+                ('cleanup without the controller', workflow.replace(cleanup, '    if: always()\n'),
+                 'cleanup no longer follows the controller')):
+            with self.subTest(name):
+                self.assertNotEqual(changed, workflow)
+                self.assertIn(expected, ' | '.join(problems(CONTRACT, changed, builder, lock, storage, owned)))
+
+    def test_a_hosted_route_in_the_map_must_stay_hosted(self):
+        def route(c):
+            return c['lanes']['agent']['hostedRoute']
+        for name, change, expected in (
+                ('in the builder queue', lambda c: route(c).update(queue='os-release-frankel'),
+                 'hosted route agent/hosted shares its queue os-release-frankel with a builder'),
+                ('another runner', lambda c: route(c).update(runner='roseos-frankel-builder'),
+                 'job agent-signer of hosted route agent/hosted runs on ubuntu-24.04, not roseos-frankel-builder'),
+                ('a mode of another lane', lambda c: route(c)['modes'].append('latest-beta'),
+                 "hosted route agent/hosted modes ['agent-hosted', 'agent-hosted-probe', 'latest-beta'] are not modes of lane agent"),
+                ('the builder route relabelled hosted', lambda c: route(c)['modes'].append('app-only'),
+                 'job app-builder of hosted route agent/hosted allocates with the builder-local ledger'),
+                ('an extra binding', lambda c: route(c).update(host='frankel-builder'),
+                 "hosted route agent/hosted has fields ['host', 'modes', 'queue', 'runner', 'runtimeStatus'], "
+                 "not ['modes', 'queue', 'runner', 'runtimeStatus']")):
+            with self.subTest(name):
+                contract = copy.deepcopy(CONTRACT)
+                change(contract)
+                self.assertIn(expected, problems(contract, *real()))
 
 
 if __name__ == '__main__':

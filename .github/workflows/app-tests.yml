@@ -4,6 +4,9 @@ name: App offline tests
 # and test code. No secrets, signing inputs, phone, provider or cloud access.
 # A file a suite unit reads by name goes in both lists below unless another workflow
 # re-runs that unit when it changes; scripts/tests/test_app_tests_paths.py checks this.
+# Every dev.pixel.voice source os/latest-beta/allocation.json names, and that file, is listed too: the automatic
+# Agent Beta dispatcher acts only on a completed push run of this workflow, so each Rose Agent change must end in
+# one (scripts/tests/test_agent_beta_auto.py checks this).
 on:
   pull_request:
     paths:
@@ -46,6 +49,7 @@ on:
       - 'os/compile-contracts/frameworks-base-wmshell.json'
       - 'os/compile-contracts/frankel-lunch-inputs.json'
       - 'os/compile-contracts/launcher3-quickstep-lib.json'
+      - 'os/latest-beta/allocation.json'
       - 'os/ota/mustang.json'
       - 'os/pinned-manifest.xml'
       - 'os/release-pipeline/alpha-runtime.json'
@@ -87,6 +91,7 @@ on:
       - 'scripts/factory-archive-sign.py'
       - 'scripts/frameworks-base-wmshell-contract.py'
       - 'scripts/frankel-lunch-inputs.py'
+      - 'scripts/host-app-build.py'
       - 'scripts/host-app-reuse.py'
       - 'scripts/host-reconcile.py'
       - 'scripts/integration_copy.py'
@@ -153,6 +158,7 @@ on:
       - 'os/compile-contracts/frameworks-base-wmshell.json'
       - 'os/compile-contracts/frankel-lunch-inputs.json'
       - 'os/compile-contracts/launcher3-quickstep-lib.json'
+      - 'os/latest-beta/allocation.json'
       - 'os/ota/mustang.json'
       - 'os/pinned-manifest.xml'
       - 'os/release-pipeline/alpha-runtime.json'
@@ -194,6 +200,7 @@ on:
       - 'scripts/factory-archive-sign.py'
       - 'scripts/frameworks-base-wmshell-contract.py'
       - 'scripts/frankel-lunch-inputs.py'
+      - 'scripts/host-app-build.py'
       - 'scripts/host-app-reuse.py'
       - 'scripts/host-reconcile.py'
       - 'scripts/integration_copy.py'

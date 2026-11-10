@@ -96,7 +96,7 @@ class WorkflowTest(unittest.TestCase):
         self.assertIn('          name: os-release-${{ env.ROSE_DEVICE }}-${{ needs.builder.outputs.build_number }}\n', publisher)
         self.assertIn('python3 scripts/release-pipeline.py publish --device "$ROSE_DEVICE" ', publisher)
         self.assertNotIn('frankel-$BUILD_NUMBER', WORKFLOW)
-        self.assertIn('  group: os-release-frankel\n', WORKFLOW)
+        self.assertEqual({shape.queue(m, WORKFLOW) for m in ('latest-beta', 'latest-draft', 'os-release')}, {'os-release-frankel'})
         self.assertEqual(sorted(set(re.findall(r'runs-on: \[self-hosted, ([\w-]+)\]', WORKFLOW))), ['roseos-frankel-builder'])
         self.assertEqual(FRANKEL['host']['lockPath'], '/home/pixelbuild/frankel-build.lock')
         # The real prepare block, run with ROSE_DEVICE=frankel, creates exactly the historical attempt directory.

@@ -1,9 +1,11 @@
 name: Agent Beta auto-release
 
 # AGENT-BETA-AUTO part B. After a successful push-to-main 'App offline tests' run (the Rose Agent suites), dispatch the
-# existing os-release.yml app-only route once for that exact tested SHA with apps=auto (scripts/agent-beta-auto.py).
-# Secret-free: only the job's short-lived GITHUB_TOKEN (actions:write, contents:read). Inert unless the repository variable
-# AGENT_BETA_AUTO is 'on'. Releases are serialized with every OS run by os-release's FIFO queue and host lock.
+# existing os-release.yml hosted Agent route (agent-hosted, 1F) once, pinned to main's head: the tested SHA, or a head
+# proven to carry exactly what that CI checked (scripts/agent-beta-auto.py). Secret-free: only the job's GITHUB_TOKEN
+# (actions:write, contents:read). Inert unless the repository variable AGENT_BETA_AUTO is 'on'. agent-hosted runs on
+# GitHub-hosted runners in os-release's own hosted Agent queue; the shared pixel-ota version ledger, not a queue, keeps
+# its version apart from the builder lanes'.
 # TEMPORARILY HELD in source (2026-11-04), whatever the variable says: see the dispatch job's `if:`.
 
 on:
@@ -24,20 +26,20 @@ jobs:
     # TEMPORARY HOLD (owner-approved, 2026-11-04): automatic Agent Beta dispatch is paused here, in source, while the
     # shared builder's storage is recovered; the AGENT_BETA_AUTO variable is left as it is. The literal `false &&` keeps
     # this job from starting, so nothing is checked out and no dispatch request is sent, whatever the variable says.
-    # Manual os-release dispatches (app-only, Frankel, Mustang) never use this workflow. Resuming is an explicit,
-    # reviewed change: delete `false && ` below and the hold test in scripts/tests/test_agent_beta_auto.py.
+    # Manual os-release dispatches (agent-hosted, app-only, Frankel, Mustang) never use this workflow. Resuming is an
+    # explicit, reviewed change: delete `false && ` below and the hold test in scripts/tests/test_agent_beta_auto.py.
     if: false && github.event.workflow_run.event == 'push' && github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
       actions: write  # owner-approved (Nathan, 2026-11-01): dispatch os-release.yml and read run state
-      contents: read  # checkout of this private repository and the compare API for the unchanged-content skip
+      contents: read  # checkout of this private repository; compare and contents APIs (unchanged skip, equivalence); main's head
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: main
           persist-credentials: false
-      - name: Dispatch the app-only route for the tested SHA (once)
+      - name: Dispatch the hosted Agent route for the tested SHA (once)
         env:
           GH_TOKEN: ${{ github.token }}
           CI_RUN_ID: ${{ github.event.workflow_run.id }}

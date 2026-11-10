@@ -297,21 +297,109 @@ class Reservation(unittest.TestCase):
         self.assertEqual(sorted(self.memory.read('dev.pixel.voice')['reservations']), [int(first['version_code'])])
         self.assertFalse((self.out/'reservation.json').exists())
 
-    def test_a_version_another_run_holds_first_is_never_shared(self):
-        self.add_floor(368)
+    def racing(self, losses, winner='4999', source='a' * 40):
+        """A ledger in which another run creates each requested ref just before this run does, LOSSES times."""
+        creates, test = [], self
 
         class Racing(MemoryLedger):
-            def create(inner, ref, record, head):  # another run creates the same ref just before this one
-                inner.tags[ref] = ('tag', store_module.message(dict(store_module.reservation(
-                    'dev.pixel.voice', record['versionCode'], 'a' * 40, 'b' * 40, 'c' * 64,
-                    {'workflowRef': REF, 'runId': '4999', 'runAttempt': '1'}, STORE))))
+            def create(inner, ref, record, head):
+                creates.append(record['versionCode'])
+                if len(creates) > losses:
+                    return MemoryLedger.create(inner, ref, record, head)
+                inner.tags[ref] = ('tag', store_module.message(test.rival(record['versionCode'], winner, source)))
                 return False
         racing = Racing()
         racing.tags = dict(self.memory.tags)
-        with self.assertRaisesRegex(store_module.Refused, 'already held by another record'):
+        return racing, creates
+
+    def rival(self, version, run='4999', source='a' * 40):
+        return store_module.reservation('dev.pixel.voice', version, source, 'b' * 40, 'c' * 64,
+                                        {'workflowRef': REF, 'runId': run, 'runAttempt': '1'}, STORE)
+
+    def test_a_version_another_run_holds_first_is_never_shared(self):
+        # Every attempt loses its version to another run: three attempts in all, then a refusal holding nothing.
+        self.add_floor(368)
+        racing, creates = self.racing(losses=99)
+        with self.assertRaisesRegex(store_module.Held, 'already held by another record'):
             hosted.reserve(self.out, self.env, self.cfg, racing.ledger(), trl.app_listing(), clock=lambda: trl.NOW,
                            repo=self.repo.path)
+        self.assertEqual(creates, [369, 370, 371], 'at most three attempts, each above the version just lost')
+        held = racing.read('dev.pixel.voice')['reservations']
+        self.assertEqual(held, {v: self.rival(v) for v in (369, 370, 371)}, 'each winner stands, byte for byte')
         self.assertFalse((self.out/'reservation.json').exists())
+
+    def test_a_lost_version_is_allocated_again_above_it_from_a_fresh_read(self):
+        self.add_floor(368)
+        racing, creates = self.racing(losses=1)
+        reads = []
+        read = racing.read
+        racing.read = lambda package: reads.append(package) or read(package)
+        result = hosted.reserve(self.out, self.env, self.cfg, racing.ledger(), trl.app_listing(), clock=lambda: trl.NOW,
+                                repo=self.repo.path)
+        self.assertEqual((result['app_skip'], result['version_code'], creates), ('false', '370', [369, 370]))
+        record = json.loads((self.out/'reservation.json').read_text())
+        held = racing.read('dev.pixel.voice')['reservations']
+        self.assertEqual(held, {369: self.rival(369), 370: record}, 'the winner of 369 stands; this run holds 370')
+        self.assertEqual((record['owner']['runId'], record['sourceSha']), ('4300', self.repo.source))
+        allocation = json.loads((self.out/'allocation.json').read_text())
+        self.assertEqual((allocation['versionCode'], hosted.ALLOC.derive_app(allocation, self.repo.path)),
+                         (370, record['candidateSha']))
+        self.assertGreaterEqual(len(reads), 2, 'the ledger is read again before the second attempt')
+        exported = hosted.bind(self.out, self.env, self.cfg, racing.ledger(), repo=self.repo.path)
+        self.assertEqual(exported['APPS'], '[["dev.pixel.voice",370]]')
+        self.assertEqual(hosted.confirm(self.out/'reservation.json', self.env, self.cfg, racing.ledger()), record)
+
+    def test_a_retry_that_finds_these_sources_published_skips(self):
+        # A twin run of this commit wins 369 and publishes it before the second attempt: nothing is left to build.
+        self.add_floor(368)
+        racing, creates = self.racing(losses=1, source=self.repo.source)
+        listings = [trl.app_listing(), trl.app_listing({'tag_name': 'rose-agent-369', 'draft': False, 'prerelease': True})]
+        calls = []
+
+        def fetch(url):
+            calls.append(url)
+            return listings[min(len(calls), 2) - 1](url)
+        result = hosted.reserve(self.out, self.env, self.cfg, racing.ledger(), fetch, clock=lambda: trl.NOW,
+                                repo=self.repo.path)
+        self.assertEqual((result['app_skip'], creates), ('true', [369]))
+        self.assertEqual(racing.read('dev.pixel.voice')['reservations'], {369: self.rival(369, source=self.repo.source)})
+        self.assertFalse((self.out/'reservation.json').exists())
+
+    def test_only_a_version_held_by_another_record_is_retried(self):
+        self.add_floor(368)
+
+        class Uncertain(MemoryLedger):  # created, but never reads back: an uncertain write
+            def create(inner, ref, record, head):
+                creates.append(record['versionCode'])
+                return True
+
+        class Unreadable(MemoryLedger):  # 422 with no readable holder
+            def create(inner, ref, record, head):
+                creates.append(record['versionCode'])
+                return False
+
+        class Failing(MemoryLedger):  # the write itself fails
+            def create(inner, ref, record, head):
+                creates.append(record['versionCode'])
+                raise store_module.Refused('create ledger ref failed (HTTP 500)')
+
+        class Malformed(MemoryLedger):  # the ref holds something that is not a ledger record
+            def create(inner, ref, record, head):
+                creates.append(record['versionCode'])
+                inner.tags[ref] = ('tag', 'not a record')
+                return False
+        for kind, pattern in ((Uncertain, 'does not read back'), (Unreadable, 'holds no readable record'),
+                              (Failing, 'HTTP 500'), (Malformed, 'does not hold a JSON ledger record')):
+            with self.subTest(kind.__name__):
+                creates, ledger = [], kind()
+                ledger.tags = dict(self.memory.tags)
+                out = self.home/f'reservation-{kind.__name__}'
+                with self.assertRaisesRegex(store_module.Refused, pattern) as caught:
+                    hosted.reserve(out, self.env, self.cfg, ledger.ledger(), trl.app_listing(), clock=lambda: trl.NOW,
+                                   repo=self.repo.path)
+                self.assertNotIsInstance(caught.exception, store_module.Held)
+                self.assertEqual(creates, [369], 'one write: an uncertain or failed write is never retried')
+                self.assertFalse((out/'reservation.json').exists())
 
     def test_bind_and_confirm_admit_only_this_runs_held_reservation(self):
         self.add_floor(368)
@@ -336,6 +424,18 @@ class Reservation(unittest.TestCase):
         with self.assertRaises(Exception):
             hosted.bind(self.out, self.env, self.cfg, self.memory.ledger(), repo=self.repo.path)
 
+    def test_a_pin_is_admitted_only_as_this_runs_dispatch_commit(self):
+        # AGENT-BETA-AUTO dispatches with candidate_sha = the tested SHA; the source is still the dispatch commit.
+        self.add_floor(368)
+        for pin in ('f' * 40, self.repo.source.upper(), self.repo.source[:12], 'main'):
+            with self.subTest(pin=pin):
+                with self.assertRaisesRegex(hosted.Refused, 'candidate_sha is not this run\'s dispatch commit'):
+                    self.reserve(env=dict(self.env, CANDIDATE_SHA=pin))
+                self.assertEqual(self.memory.read('dev.pixel.voice')['reservations'], {})
+                self.assertFalse(self.out.exists())
+        result = self.reserve(env=dict(self.env, CANDIDATE_SHA=self.repo.source))
+        self.assertEqual((result['app_skip'], result['source'], result['version_code']), ('false', self.repo.source, '369'))
+
     def test_the_cli_refuses_before_any_write_without_a_token(self):
         result = subprocess.run([sys.executable, str(ROOT/'scripts/agent-hosted.py'), 'reserve', '--out',
                                  str(self.home/'cli')], capture_output=True, text=True,
@@ -357,10 +457,16 @@ class Workflow(unittest.TestCase):
     def setUp(self):
         self.jobs = shape.jobs(WORKFLOW)
 
-    def test_the_two_modes_are_manual_options_of_the_agent_lane(self):
+    def test_the_two_modes_are_the_agent_lanes_hosted_route_in_its_own_queue(self):
         self.assertEqual(shape.modes()[-2:], ['agent-hosted', 'agent-hosted-probe'])
-        lanes = json.loads((ROOT/'os/release-pipeline/lanes/capacity.json').read_text())['lanes']
-        self.assertEqual(lanes['agent']['modes'], ['app-only', 'agent-hosted', 'agent-hosted-probe'])
+        lane = json.loads((ROOT/'os/release-pipeline/lanes/capacity.json').read_text())['lanes']['agent']
+        self.assertEqual(lane['modes'], ['app-only', 'agent-hosted', 'agent-hosted-probe'])
+        self.assertEqual(lane['hostedRoute'], {'modes': ['agent-hosted', 'agent-hosted-probe'], 'runner': 'ubuntu-24.04',
+                                               'queue': 'os-release-agent-hosted', 'runtimeStatus': 'inactive'})
+        # app-only, the builder route, stays on the builder and its queue
+        self.assertEqual({mode: shape.queue(mode) for mode in ('agent-hosted', 'agent-hosted-probe', 'app-only')},
+                         {'agent-hosted': 'os-release-agent-hosted', 'agent-hosted-probe': 'os-release-agent-hosted',
+                          'app-only': 'os-release-frankel'})
         self.assertLessEqual({'agent-hosted', 'agent-hosted-probe'}, shape.main_check_exempt_modes())
 
     def test_every_agent_job_is_github_hosted_and_never_touches_the_builder(self):
@@ -429,6 +535,11 @@ class Workflow(unittest.TestCase):
                       '"$RUNNER_TEMP/agent-reservation/reservation.json" --artifact-dir "$RUNNER_TEMP/app-artifact"', job)
 
 
+def main_head():
+    head = subprocess.run(['git', '-C', str(ROOT), 'rev-parse', '--verify', '-q', 'origin/main'], capture_output=True, text=True)
+    return head.stdout.strip() if head.returncode == 0 else None
+
+
 class Guard(unittest.TestCase):
     def run_guard(self, mode, **change):
         block = re.search(r'(?ms)^        run: \|\n(.*)', step(shape.jobs(WORKFLOW)['guard'], 'Candidate is an exact commit on main'))[1]
@@ -460,6 +571,25 @@ class Guard(unittest.TestCase):
                     self.assertNotEqual(self.run_guard(mode, **change), 0)
         self.assertEqual(self.run_guard('agent-hosted', APP_PUBLISH='true'), 0)
         self.assertNotEqual(self.run_guard('agent-hosted-probe', APP_PUBLISH='true'), 0)
+
+    def test_agent_hosted_admits_the_dispatchers_pin_only_as_the_dispatch_commit(self):
+        sha = main_head()
+        if sha is None:
+            self.skipTest('no origin/main in this checkout')
+        # run_guard dispatches on main at origin/main: GITHUB_SHA is that commit.
+        self.assertEqual(self.run_guard('agent-hosted', CANDIDATE_SHA=sha, APP_PUBLISH='true'), 0)
+        self.assertNotEqual(self.run_guard('agent-hosted-probe', CANDIDATE_SHA=sha), 0, 'the probe takes no pin')
+        other = 'e' * 40 if sha != 'e' * 40 else 'd' * 40
+        for pin in (other, sha.upper(), sha[:39], sha[:12], 'main', ' ' + sha, sha + ' '):
+            with self.subTest(pin=pin):
+                self.assertNotEqual(self.run_guard('agent-hosted', CANDIDATE_SHA=pin, APP_PUBLISH='true'), 0)
+        # A moved main: the tested SHA is no longer the dispatch commit, so the run refuses before any job.
+        self.assertNotEqual(self.run_guard('agent-hosted', CANDIDATE_SHA=other, GITHUB_SHA=sha, APP_PUBLISH='true'), 0)
+        # The pin lifts no other refusal.
+        for change in ({'BUILD_NUMBER': '2026110801'}, {'APPS': '[["dev.pixel.voice",369]]'}, {'APPS': 'auto'},
+                       {'GITHUB_RUN_ATTEMPT': '2'}, {'CAMPAIGN': 'start'}, {'PROMOTE': 'true'}):
+            with self.subTest(change=change):
+                self.assertNotEqual(self.run_guard('agent-hosted', CANDIDATE_SHA=sha, **change), 0)
 
 
 if __name__ == '__main__':

@@ -538,7 +538,7 @@ class Workflow(unittest.TestCase):
         needs = re.search(r'    needs: \[([^\]]*)\]', JOBS['cleanup'])[1].split(', ')
         self.assertIn('signing-bootstrap', needs)
         self.assertIn("    if: always() && needs.controller.result != 'skipped'\n", JOBS['cleanup'])
-        self.assertIn('  group: os-release-frankel\n', WORKFLOW)
+        self.assertEqual(shape.queue('signing-bootstrap', WORKFLOW), 'os-release-frankel')  # the builder's queue
         self.assertIn("      - name: Signing-bootstrap guard\n        if: inputs.mode == 'signing-bootstrap'\n", JOBS['guard'])
         self.assertIn('options: [none, fold-rango-v1, pro-blazer-v1, fold-rango-factory-v1, pro-blazer-factory-v1]', WORKFLOW)
         self.assertNotIn('models-v0', bootstrap_options())  # Rose Models is retired (#651): no new Models key set

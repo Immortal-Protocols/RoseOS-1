@@ -22,12 +22,16 @@ committed value comes from os/release-pipeline/agent/hosted.json; nothing here r
       names is read, with the same helper the signing uses, into an owner-only RAM directory that is overwritten and
       removed at once. The nonsecret receipt names each secret and whether it was read; no payload, size or digest.
   reserve --out DIR
-      From the dispatch commit (GITHUB_SHA): either the newest published rose-agent release already has these Rose Agent
-      sources (app_skip=true; nothing is reserved), or one fresh versionCode above everything consumed (the shared
+      From the dispatch commit (GITHUB_SHA; a candidate_sha pin, the automatic dispatcher's tested SHA, must be exactly
+      that commit, as the guard also requires): either the newest published rose-agent release already has these Rose
+      Agent sources (app_skip=true; nothing is reserved), or one fresh versionCode above everything consumed (the shared
       ledger's reservations and its highest builder floor, every pixel-ota release including drafts, the committed
       Frankel config and allocation records), derived as release-allocate.py's version-only candidate and held
-      atomically in the shared ledger (scripts/app_reservation_store.py) for this run. It refuses with exit 4 while the
-      ledger holds no builder floor (decision D2: the Frankel builder's own consumed history is not yet in the ledger).
+      atomically in the shared ledger (scripts/app_reservation_store.py) for this run. A version another run holds
+      first (Held) is never shared or overwritten: the ledger and releases are read again and the allocation is made
+      above it, at most RESERVE_ATTEMPTS times in all. Any other ledger refusal, an uncertain write included, is final.
+      It refuses with exit 4 while the ledger holds no builder floor (decision D2: the Frankel builder's own consumed
+      history is not yet in the ledger).
   bind --dir DIR
       In the build job: the reserve job's allocation and reservation re-derive the same candidate, are owned by this
       run and are held by the ledger; exports ROSE_CANDIDATE_SHA, APPS and ROSE_APP_RESERVATION.
@@ -74,6 +78,9 @@ NETWORK_TAIL = ('</domain><trust-anchors><certificates src="system"/><certificat
                 '</trust-anchors></domain-config></network-security-config>\n')
 APK_MAX_BYTES = 64 * 1024**2
 VERSION_SUFFIX = 'hosted-beta'
+# One competing builder allocation can be in flight (the builder queue runs one at a time), so a second attempt
+# suffices; the third covers a just-created ref that is not yet visible to a fresh read.
+RESERVE_ATTEMPTS = 3
 RELEASES_API = 'https://api.github.com'
 
 
@@ -285,29 +292,39 @@ def reserve(out, env, cfg, ledger, releases_fetch, clock=time.time, repo=ROOT):
     source = env.get('GITHUB_SHA', '')
     if not re.fullmatch(r'[0-9a-f]{40}', source):
         raise Refused('GITHUB_SHA is not a commit')
+    if env.get('CANDIDATE_SHA', '') not in ('', source):
+        raise Refused('candidate_sha is not this run\'s dispatch commit; nothing is reserved')
     store = cfg['reservation']['store']
     run_owner = ledger_store.owner(env)
     out = Path(out)
     if out.exists():
         raise Refused(f'{out} already exists; use a new directory')
-    found = ledger.read(PACKAGE)
-    if not found['floors']:
-        raise SetupMissing(['a builder floor in the reservation store (decision D2: the Frankel builder\'s consumed '
-                            'versions are not in the ledger yet)'])
     pipeline = json.loads(alloc.show(repo, source, alloc.PIPELINE_CONFIG))
-    releases = alloc.list_releases(pipeline['publication']['repository'], pipeline['publication'].get('api', RELEASES_API),
-                                   releases_fetch)
-    seen = observation(alloc, source, releases, found, repo)
-    allocation = alloc.allocate_app(source, seen, int(clock()), run_owner['runId'], run_owner['runAttempt'], repo,
-                                    floor=seen['ledger']['floor'], name_suffix=VERSION_SUFFIX)
-    out.mkdir(parents=True)
-    if allocation['verdict'] == 'unchanged':
-        (out/'allocation.json').write_text(json.dumps(allocation, indent=2, sort_keys=True) + '\n')
-        return {'app_skip': 'true', 'source': source, 'reason': allocation['reason']}
-    candidate = alloc.derive_app(allocation, repo)
-    record = ledger_store.reservation(PACKAGE, allocation['versionCode'], source, candidate,
-                                      allocation['allocationSha256'], run_owner, store)
-    written = ledger.reserve(record)
+    for attempt in range(1, RESERVE_ATTEMPTS + 1):
+        found = ledger.read(PACKAGE)  # read afresh on every attempt: a lost version is consumed in this read
+        if not found['floors']:
+            raise SetupMissing(['a builder floor in the reservation store (decision D2: the Frankel builder\'s consumed '
+                                'versions are not in the ledger yet)'])
+        releases = alloc.list_releases(pipeline['publication']['repository'],
+                                       pipeline['publication'].get('api', RELEASES_API), releases_fetch)
+        seen = observation(alloc, source, releases, found, repo)
+        allocation = alloc.allocate_app(source, seen, int(clock()), run_owner['runId'], run_owner['runAttempt'], repo,
+                                        floor=seen['ledger']['floor'], name_suffix=VERSION_SUFFIX)
+        out.mkdir(parents=True, exist_ok=attempt > 1)
+        if allocation['verdict'] == 'unchanged':
+            (out/'allocation.json').write_text(json.dumps(allocation, indent=2, sort_keys=True) + '\n')
+            return {'app_skip': 'true', 'source': source, 'reason': allocation['reason']}
+        candidate = alloc.derive_app(allocation, repo)
+        record = ledger_store.reservation(PACKAGE, allocation['versionCode'], source, candidate,
+                                          allocation['allocationSha256'], run_owner, store)
+        try:
+            written = ledger.reserve(record)
+            break
+        except ledger_store.Held:  # another run holds this version first: never shared, never overwritten
+            if attempt == RESERVE_ATTEMPTS:
+                raise
+            print(f'reserve: {PACKAGE} {allocation["versionCode"]} is held by another run; reading the ledger again '
+                  f'(attempt {attempt + 1} of {RESERVE_ATTEMPTS})', file=sys.stderr)
     (out/'allocation.json').write_text(json.dumps(dict(allocation, candidateSha=candidate), indent=2, sort_keys=True) + '\n')
     (out/'reservation.json').write_text(json.dumps(record, indent=2, sort_keys=True) + '\n')
     return {'app_skip': 'false', 'source': source, 'candidate_sha': candidate,

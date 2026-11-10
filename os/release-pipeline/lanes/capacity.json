@@ -1,6 +1,6 @@
 {
   "schema": "roseos.lane-capacity.v1",
-  "basis": "1A (Rose daily work plan, 2026-11-05): every release lane builds on its own runner, VM, storage, queue and lifecycle controller, so one lane's failure or cleanup cannot stop another; only genuinely shared atomic steps, such as app version allocation, may be serialized across lanes. This is the committed routing map, including explicitly retired legacy jobs for source auditing, and what each lane still needs. A host is listed only with values the committed route already uses or Infra's verified readback supplies, with its evidence; nothing here is a placeholder. A host builds only when it is in service and the lane is not retired: Mustang's shared-host route is permanently retired. Its dedicated lane file is identity-bound to the confirmed 2026-11-07 VM and data disk, but that runtime is unbound and the host is not in service. Yogi's counts once os/ota/yogi.json says builder.status ready. scripts/tests/test_lane_capacity.py derives routing from os-release.yml, release-pipeline.py and host configs and excludes retired lanes from capacity claims.",
+  "basis": "1A (Rose daily work plan, 2026-11-05): every release lane builds on its own runner, VM, storage, queue and lifecycle controller, so one lane's failure or cleanup cannot stop another; only genuinely shared atomic steps, such as app version allocation, may be serialized across lanes. This is the committed routing map, including explicitly retired legacy jobs for source auditing, and what each lane still needs. A host is listed only with values the committed route already uses or Infra's verified readback supplies, with its evidence; nothing here is a placeholder. A host builds only when it is in service and the lane is not retired: Mustang's shared-host route is permanently retired. Its dedicated lane file is identity-bound to the confirmed 2026-11-07 VM and data disk, but that runtime is unbound and the host is not in service. Yogi's counts once os/ota/yogi.json says builder.status ready. A lane's hostedRoute runs only on GitHub-hosted runners: it has no VM, storage, lock or controller to bind, only its own queue, and it builds only once its runtimeStatus is active. scripts/tests/test_lane_capacity.py derives routing from os-release.yml, release-pipeline.py and host configs and excludes retired lanes from capacity claims.",
   "binding": "Infra supplies verified readback (runner label carried only by that machine, VM project/zone/instance, storage root, lock path, queue, controller identity variable) and evidence. The named source owner then moves the lane and its dedicated workflow/controller routing together. Mustang owns its capacity-map change; Infra owns the common explicit-builder API. No proposed name is an actual host binding. Mustang's existing host field describes only retired legacy jobs, which may never run on Frankel again. The dedicated host entry is the confirmed VM and is not in service; runtime admission, runner registration and publication remain unbound. There is no fallback. Other target-own lanes retain their current route until explicitly changed.",
   "unboundFields": [
     "runnerLabel",
@@ -118,7 +118,16 @@
         "queue",
         "controller"
       ],
-      "note": "app-only builds on the Frankel builder: the public SDK, the pinned ZXing jar, the staged connection inputs and esbuild there, the app signer (PIXEL_APP_SIGNING_* through the signer identity), the 300 GiB free-space reserve and the builder-local app version ledger below, so it cannot leave that host. agent-hosted and agent-hosted-probe (1F, scripts/agent-hosted.py) run only on GitHub-hosted runners, with no controller, builder, storage or host lock: App's portable seam, the pinned public inputs, the signer identity admitted by its own probe, and the shared pixel-ota ledger (os/release-pipeline/agent/hosted.json reservation.store), which refuses until the Frankel builder records its consumed versions there (decision D2). They still share this workflow's one queue, so they claim no parallel capacity."
+      "hostedRoute": {
+        "modes": [
+          "agent-hosted",
+          "agent-hosted-probe"
+        ],
+        "runner": "ubuntu-24.04",
+        "queue": "os-release-agent-hosted",
+        "runtimeStatus": "inactive"
+      },
+      "note": "The host above is app-only's: it builds on the Frankel builder with the public SDK, the pinned ZXing jar, the staged connection inputs and esbuild there, the app signer (PIXEL_APP_SIGNING_* through the signer identity), the 300 GiB free-space reserve and the builder-local app version ledger below, so it cannot leave that host and stays in its queue. Its apps=auto runs record their versions in the shared ledger (decision D2); explicit apps runs do not. hostedRoute is the independent Agent route (1F, scripts/agent-hosted.py): agent-hosted and agent-hosted-probe run every job on a GitHub-hosted runner, with no controller, builder, storage, host lock or cleanup, so os-release.yml keys their concurrency group by mode to their own queue. It shares only the version: the shared pixel-ota ledger's create-if-absent ref (os/release-pipeline/agent/hosted.json reservation.store) decides each version in every order, and agent-reserve refuses until the Frankel builder has recorded its consumed versions there (decision D2). The existing Agent Beta auto-release dispatcher (agent-beta-auto.yml) targets agent-hosted and stays held in source and by AGENT_BETA_AUTO. Inactive: the route claims no capacity today; activation is a reviewed change to active once it is merged, the signer probe has passed (decision D4) and the ledger holds a builder floor. Whether app-only retires then is an open owner decision."
     },
     "harness": {
       "workflow": ".github/workflows/launcher3-compile.yml",
@@ -175,13 +184,29 @@
         "agent"
       ],
       "store": "scripts/release-allocate.py on the Frankel builder (pixel-ota releases including drafts, this host's attempt directories and its rose-actions reservations, read and written under the host lock), joined by the shared pixel-ota tag ledger (decision D2, scripts/app_reservation_store.py): the builder counts every ledger reservation and floor as consumed, and its hosted app-ledger job writes the run's floor and fresh version there before the builder builds",
-      "note": "latest-beta and app-only both allocate dev.pixel.voice versionCodes, and the hosted agent modes allocate them from the shared ledger alone. The ledger's create-if-absent ref is the one atomic step every lane takes before it builds a version, so one version never names two APKs; until the hosted modes have their own queue they also share the os-release queue. The lanes still list the Frankel host because app-only and latest-beta allocate there."
+      "note": "latest-beta and app-only both allocate dev.pixel.voice versionCodes on the ledger host, and agent's hostedRoute allocates them from the shared ledger alone, off the host. The ledger's create-if-absent ref is the one atomic step every route takes before it builds a version, so one version never names two APKs, whatever the queues: the hosted route has its own queue. A route that allocates on the ledger host cannot leave it; only a route that allocates through the shared store alone may run off it. The lanes still list the Frankel host because app-only and latest-beta allocate there."
     }
   },
   "parallelToday": [],
   "parallelByRoute": [
     [
       "agent",
+      "agent/hosted"
+    ],
+    [
+      "agent",
+      "yogi"
+    ],
+    [
+      "agent/hosted",
+      "frankel"
+    ],
+    [
+      "agent/hosted",
+      "frankel-host-other"
+    ],
+    [
+      "agent/hosted",
       "yogi"
     ],
     [

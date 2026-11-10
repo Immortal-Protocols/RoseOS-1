@@ -1,13 +1,16 @@
 """AGENT-BETA-AUTO part B: scripts/agent-beta-auto.py and .github/workflows/agent-beta-auto.yml.
 
 A fake GitHub API only: no network, token, dispatch or release."""
+import base64
 import importlib.util
 import io
+import itertools
 import json
 from pathlib import Path
 import re
 import sys
 import unittest
+import unittest.mock
 import urllib.error
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -41,9 +44,15 @@ class Response:
 
 
 class FakeGitHub:
-    def __init__(self, ci=CI, ci_runs=(), release_runs=(), dispatch=204, appear=True, compare=None):
+    """compare answers every comparison; compares answers 'BASE...HEAD' (None: unreadable) first. contents maps
+    (path, ref) to a file's text, a raw response (dict) or None (unreadable); any other file is served from this
+    checkout. main is one head or the heads successive reads see (the last one stays)."""
+
+    def __init__(self, ci=CI, ci_runs=(), release_runs=(), dispatch=204, appear=True, compare=None, main=SHA,
+                 compares=None, contents=None, ci_list=None):
         self.ci, self.ci_runs, self.release_runs, self.dispatch, self.appear = ci, list(ci_runs), list(release_runs), dispatch, appear
-        self.compare = compare
+        self.compare, self.compares, self.contents, self.ci_list = compare, dict(compares or {}), dict(contents or {}), ci_list
+        self.heads = list(main) if isinstance(main, list) else [main]
         self.calls = []
 
     def __call__(self, request, timeout):
@@ -56,14 +65,28 @@ class FakeGitHub:
             if isinstance(self.dispatch, Exception):
                 raise self.dispatch
             return Response(self.dispatch)
-        if url.endswith('/actions/runs/500'):
+        if url.endswith(f'/actions/runs/{self.ci["id"]}'):
             return Response(200, self.ci)
         if '/actions/workflows/app-tests.yml/runs' in url:
-            return Response(200, {'workflow_runs': [CI, *self.ci_runs]})
+            return Response(200, {'workflow_runs': self.ci_list if self.ci_list is not None else [CI, *self.ci_runs]})
         if '/actions/workflows/os-release.yml/runs' in url:
             return Response(200, {'workflow_runs': self.release_runs})
-        if '/compare/' in url and self.compare is not None:
-            return Response(200, self.compare)
+        if '/compare/' in url:
+            key = url.split('/compare/', 1)[1]
+            body = self.compares[key] if key in self.compares else self.compare
+            return Response(404) if body is None else Response(200, body)
+        if '/contents/' in url:
+            path, _, ref = url.split('/contents/', 1)[1].partition('?ref=')
+            local = ROOT/path
+            body = self.contents[(path, ref)] if (path, ref) in self.contents else (
+                local.read_text() if local.is_file() else None)
+            if isinstance(body, str):
+                body = {'type': 'file', 'encoding': 'base64', 'content': base64.encodebytes(body.encode()).decode()}
+            return Response(404) if body is None else Response(200, body)
+        if url.endswith('/git/ref/heads/main'):
+            head = self.heads.pop(0) if len(self.heads) > 1 else self.heads[0]
+            if head is not None:
+                return Response(200, {'ref': 'refs/heads/main', 'object': {'sha': head, 'type': 'commit'}})
         return Response(404)
 
     def posts(self):
@@ -97,12 +120,30 @@ class Dispatch(unittest.TestCase):
                 self.assertEqual(self.run_dispatch(gh), (SHA, None), why)
                 self.assertEqual(len(gh.posts()), 1)
 
-    def test_a_healthy_main_ci_dispatches_the_app_route_once_for_the_tested_sha(self):
+    def test_a_healthy_main_ci_dispatches_the_hosted_route_once_for_the_tested_sha(self):
         gh = FakeGitHub()
         self.assertEqual(self.run_dispatch(gh), (SHA, None))
         (method, url, body), = gh.posts()
         self.assertTrue(url.endswith('/actions/workflows/os-release.yml/dispatches'))
-        self.assertEqual(body, {'ref': 'main', 'inputs': {'mode': 'app-only', 'candidate_sha': SHA, 'apps': 'auto', 'app_publish': 'true'}})
+        # Publication policy unchanged: an automatic Agent release publishes its own prerelease, as before.
+        self.assertEqual(body, {'ref': 'main', 'inputs': {'mode': 'agent-hosted', 'candidate_sha': SHA, 'app_publish': 'true'}})
+        # main's head is read last, right before the one request.
+        self.assertTrue(gh.calls[-2][1].endswith('/git/ref/heads/main'), gh.calls[-2])
+        self.assertEqual([c[0] for c in gh.calls[:-1]], ['GET'] * (len(gh.calls) - 1))
+
+    def test_a_moved_main_is_never_dispatched_on_an_unread_comparison(self):
+        # agent-hosted builds its dispatch commit: a moved main is dispatched only when proven equivalent (Equivalence).
+        gh = FakeGitHub(main='b' * 40)
+        with self.assertRaisesRegex(aba.Refused, f'^unproven: the comparison {SHA[:12]}...{"b" * 12} is unreadable; '
+                                                 'nothing dispatched$'):
+            self.run_dispatch(gh)
+        self.assertEqual(gh.posts(), [])
+        for main, why in ((None, 'unreadable'), ('main', 'not a SHA'), (SHA.upper(), 'not a lowercase SHA')):
+            with self.subTest(why):
+                gh = FakeGitHub(main=main)
+                with self.assertRaisesRegex(aba.Refused, 'main_ref_unreadable'):
+                    self.run_dispatch(gh)
+                self.assertEqual(gh.posts(), [])
 
     def test_off_irrelevant_or_unhealthy_ci_never_dispatches(self):
         for change, env, reason in (
@@ -116,6 +157,8 @@ class Dispatch(unittest.TestCase):
                 self.assertIsNone(sha)
                 self.assertTrue(why.startswith(reason), why)
                 self.assertEqual(gh.posts(), [])
+                if reason == 'off':
+                    self.assertEqual(gh.calls, [], 'off reads and sends nothing')
 
     def test_a_newer_pending_or_successful_main_ci_coalesces(self):
         for newer, dispatched in (({'id': 501, 'status': 'in_progress', 'conclusion': None, 'head_sha': 'b' * 40}, False),
@@ -157,8 +200,211 @@ class Dispatch(unittest.TestCase):
             self.run_dispatch(Down())
 
 
-class Workflow(unittest.TestCase):
-    def test_trigger_permissions_and_switch(self):
+HEAD = 'b' * 40
+# Changes outside every checked path: none is an App offline tests path or a Rose Agent source (synthetic names).
+UNRELATED = ('docs/notes.md', 'os/build-only/example-receipt.json', 'scripts/example_tool.py',
+             'os/latest-beta/frankel-2099010101-allocation.json', 'os/release-pipeline/example/route.json')
+# Changes App offline tests checks, Rose Agent sources first.
+CHECKED = ('workspace/rose-agent/app/src/main/java/dev/pixel/voice/Example.kt', 'workspace/pixel-clipboard/example.txt',
+           'workspace/experiments/example.txt', 'scripts/host-app-build.py', 'os/latest-beta/allocation.json',
+           '.github/workflows/os-release.yml', '.github/workflows/app-tests.yml', 'os/overlays/example/values.xml',
+           'scripts/test-local.sh')
+
+
+def compared(*names, status='ahead'):
+    return {'status': status, 'files': [{'filename': name, 'status': 'modified'} for name in names]}
+
+
+class Equivalence(unittest.TestCase):
+    """main moved past the tested SHA: its head is dispatched, pinned to itself, only when a complete comparison proves
+    it carries exactly what App offline tests checked at the tested SHA. Anything not proven refuses with nothing sent."""
+
+    def run_dispatch(self, gh, **env):
+        return aba.dispatch(dict(ENV, **env), opener=gh, pause=lambda s: None)
+
+    def test_unrelated_commits_dispatch_mains_head_pinned_to_itself(self):
+        gh = FakeGitHub(main=HEAD, compares={f'{SHA}...{HEAD}': compared(*UNRELATED)})
+        sha, basis = self.run_dispatch(gh)
+        self.assertEqual((sha, basis), (HEAD, f'equivalent: main {HEAD[:12]} carries exactly what App offline tests checked '
+                                              f'at {SHA[:12]} (run 500)'))
+        (_, _, body), = gh.posts()
+        self.assertEqual(body, {'ref': 'main', 'inputs': {'mode': 'agent-hosted', 'candidate_sha': HEAD, 'app_publish': 'true'}})
+        gets = [url for method, url, _ in gh.calls if method == 'GET']
+        self.assertTrue(gets[-1].endswith('/git/ref/heads/main'), 'main is read last, right before the one request')
+        self.assertEqual(sum(url.endswith('/git/ref/heads/main') for url in gets), 2, 'read, then read again after the proof')
+        # The filter and the sources are the tested commit's own, through the API, not this checkout's copy.
+        self.assertIn(f'/contents/{aba.APP_TESTS}?ref={SHA}', ' '.join(gets))
+        self.assertIn(f'/contents/{aba.ALLOCATION}?ref={SHA}', ' '.join(gets))
+        self.assertIn(f'/compare/{SHA}...{HEAD}', ' '.join(gets))
+
+    def test_the_cli_reports_the_basis_of_an_equivalent_dispatch(self):
+        gh = FakeGitHub(main=HEAD, compares={f'{SHA}...{HEAD}': compared(*UNRELATED)})
+        out = io.StringIO()
+        real = aba.dispatch
+        try:
+            aba.dispatch = lambda env: real(env, opener=gh, pause=lambda s: None)
+            with unittest.mock.patch('sys.stdout', out), unittest.mock.patch.dict('os.environ', ENV, clear=True):
+                self.assertEqual(aba.main(['dispatch']), 0)
+        finally:
+            aba.dispatch = real
+        self.assertEqual(json.loads(out.getvalue()), {'dispatched': HEAD, 'basis': f'equivalent: main {HEAD[:12]} carries '
+                                                      f'exactly what App offline tests checked at {SHA[:12]} (run 500)'})
+
+    def test_a_checked_change_supersedes_and_that_changes_own_ci_decides(self):
+        for name in CHECKED:
+            with self.subTest(name):
+                gh = FakeGitHub(main=HEAD, compares={f'{SHA}...{HEAD}': compared(*UNRELATED, name)})
+                sha, why = self.run_dispatch(gh)
+                self.assertIsNone(sha)
+                self.assertTrue(why.startswith(f'superseded: main moved to {HEAD[:12]} after the tested {SHA[:12]}, and '
+                                               f'{name} ('), why)
+                self.assertTrue(why.endswith("; that change's own App offline tests run decides"), why)
+                self.assertEqual(gh.posts(), [])
+
+    def test_a_rename_counts_by_both_its_names(self):
+        for old, new in (('workspace/rose-agent/app/Old.kt', 'docs/Old.kt'), ('docs/New.kt', 'workspace/rose-agent/app/New.kt')):
+            with self.subTest(old=old, new=new):
+                entry = {'filename': new, 'previous_filename': old, 'status': 'renamed'}
+                gh = FakeGitHub(main=HEAD, compares={f'{SHA}...{HEAD}': {'status': 'ahead', 'files': [entry]}})
+                sha, why = self.run_dispatch(gh)
+                self.assertIsNone(sha)
+                self.assertIn(', and workspace/rose-agent/app/', why)
+                self.assertEqual(gh.posts(), [])
+
+    def test_a_source_outside_the_ci_trigger_is_named_as_waiting(self):
+        # Only reachable if a source is ever listed without a matching trigger (the liveness test forbids it here).
+        allocation = json.loads((ROOT/aba.ALLOCATION).read_text())
+        voice = next(p for p in allocation['packages'] if p['packageName'] == 'dev.pixel.voice')
+        voice['sources'] = [*voice['sources'], 'tools/voice-extra']
+        gh = FakeGitHub(main=HEAD, compares={f'{SHA}...{HEAD}': compared('tools/voice-extra/build.txt')},
+                        contents={(aba.ALLOCATION, SHA): json.dumps(allocation)})
+        sha, why = self.run_dispatch(gh)
+        self.assertIsNone(sha)
+        self.assertIn('tools/voice-extra/build.txt (a Rose Agent source) changed; App offline tests never runs for it', why)
+
+    def test_anything_unproven_refuses_with_nothing_sent(self):
+        key, fine = f'{SHA}...{HEAD}', compared(*UNRELATED)
+        app_tests = (ROOT/aba.APP_TESTS).read_text()
+        push = '  push:\n    branches: [main]\n    paths:\n'
+        self.assertEqual(app_tests.count(push), 1)
+        cases = (
+            ('comparison unreadable', {key: None}, {}),
+            ('not a descendant', {key: compared('docs/notes.md', status='diverged')}, {}),
+            ('behind', {key: compared(status='behind')}, {}),
+            ('no file list', {key: {'status': 'ahead'}}, {}),
+            ('file list not a list', {key: {'status': 'ahead', 'files': 'docs/notes.md'}}, {}),
+            ('300 files may be truncated', {key: compared(*(f'docs/n{i}.md' for i in range(300)))}, {}),
+            ('entry without a path', {key: {'status': 'ahead', 'files': [{'status': 'modified'}]}}, {}),
+            ('entry not an object', {key: {'status': 'ahead', 'files': ['docs/notes.md']}}, {}),
+            ('previous name not a path', {key: {'status': 'ahead', 'files': [{'filename': 'docs/notes.md',
+                                                                             'previous_filename': None}]}}, {}),
+            ('filter unreadable at the tested commit', {key: fine}, {(aba.APP_TESTS, SHA): None}),
+            ('filter not a file', {key: fine}, {(aba.APP_TESTS, SHA): {'type': 'dir'}}),
+            ('filter not base64 text', {key: fine}, {(aba.APP_TESTS, SHA): {'type': 'file', 'encoding': 'base64',
+                                                                           'content': base64.b64encode(b'\xff\xfe').decode()}}),
+            ('filter with a negation', {key: fine}, {(aba.APP_TESTS, SHA): app_tests.replace(push, push + "      - '!docs/**'\n")}),
+            ('filter with ?', {key: fine}, {(aba.APP_TESTS, SHA): app_tests.replace(push, push + "      - 'docs/a?.md'\n")}),
+            ('filter with paths-ignore', {key: fine}, {(aba.APP_TESTS, SHA): app_tests.replace(
+                push, "  push:\n    branches: [main]\n    paths-ignore: ['docs/**']\n    paths:\n")}),
+            ('filter on another branch', {key: fine}, {(aba.APP_TESTS, SHA): app_tests.replace(
+                push, "  push:\n    branches: [release]\n    paths:\n")}),
+            ('filter without a push trigger', {key: fine}, {(aba.APP_TESTS, SHA): app_tests.replace('\n  push:\n', '\n  push-x:\n')}),
+            ('filter as a flow list', {key: fine}, {(aba.APP_TESTS, SHA): app_tests.replace(push, push.replace(
+                'paths:\n', "paths: ['docs/**']\n"))}),
+            ('sources unreadable', {key: fine}, {(aba.ALLOCATION, SHA): None}),
+            ('sources not JSON', {key: fine}, {(aba.ALLOCATION, SHA): 'not json'}),
+            ('no Rose Agent package', {key: fine}, {(aba.ALLOCATION, SHA): '{"packages": []}'}),
+            ('empty sources', {key: fine}, {(aba.ALLOCATION, SHA): json.dumps(
+                {'packages': [{'packageName': 'dev.pixel.voice', 'sources': []}]})}))
+        for why, compares, contents in cases:
+            with self.subTest(why):
+                gh = FakeGitHub(main=HEAD, compares=compares, contents=contents)
+                with self.assertRaisesRegex(aba.Refused, r'^unproven: .*; nothing dispatched$'):
+                    self.run_dispatch(gh)
+                self.assertEqual(gh.posts(), [])
+
+    def test_main_moving_again_during_the_proof_refuses_and_is_not_retried(self):
+        gh = FakeGitHub(main=[HEAD, 'f' * 40], compares={f'{SHA}...{HEAD}': compared(*UNRELATED)})
+        with self.assertRaisesRegex(aba.Refused, f'^unproven: main moved to {"f" * 12} while {HEAD[:12]} was being compared '
+                                                 f'with the tested {SHA[:12]}; nothing dispatched$'):
+            self.run_dispatch(gh)
+        self.assertEqual(gh.posts(), [])
+        self.assertFalse(any(f'...{"f" * 40}' in url for _, url, _ in gh.calls), 'no second proof: nothing is retried')
+
+    def test_an_equivalent_head_already_dispatched_is_not_dispatched_again(self):
+        gh = FakeGitHub(main=HEAD, compares={f'{SHA}...{HEAD}': compared(*UNRELATED)},
+                        release_runs=[{'display_title': aba.run_name(HEAD)}])
+        self.assertEqual(self.run_dispatch(gh), (None, f'duplicate: {aba.run_name(HEAD)} already exists'))
+        self.assertEqual(gh.posts(), [])
+
+    def test_the_real_filter_is_read_exactly_as_the_path_contract_reads_it(self):
+        import test_app_tests_paths as contract
+        text = (ROOT/aba.APP_TESTS).read_text()
+        self.assertEqual(aba.push_paths(text), contract.trigger_paths(text, 'push'))
+        for pattern in aba.push_paths(text):
+            self.assertEqual(aba.glob_regex(pattern), contract.glob_regex(pattern))
+
+    def test_every_checked_path_ends_in_an_app_ci_run(self):
+        # Liveness: equivalence leaves a checked change to that change's own App offline tests run, so every checked
+        # path must be on both of that workflow's triggers, or a change to it would wait for an unrelated one.
+        import test_app_tests_paths as contract
+        text = (ROOT/aba.APP_TESTS).read_text()
+        sources = aba.sources_at((ROOT/aba.ALLOCATION).read_text())
+        self.assertEqual(sources, aba.voice_sources())
+        for event in ('push', 'pull_request'):
+            listed = contract.trigger_paths(text, event)
+            for path in (*sources, aba.ALLOCATION, aba.APP_TESTS):
+                probe = path if (ROOT/path).is_file() else f'{path}/any/Example.kt'
+                with self.subTest(event=event, path=path):
+                    self.assertTrue(contract.covered(probe, listed), f'{probe} does not trigger App offline tests ({event})')
+
+
+class ForwardProgress(unittest.TestCase):
+    """Every history of up to three commits after the last auto release, each changing a Rose Agent source, another
+    App offline tests path or neither, with the worst order: every push lands before any CI run completes. Each CI
+    completion runs the dispatcher. A Rose Agent change is always released once, pinned to the commit main is at;
+    nothing is released when no Rose Agent source changed."""
+    KINDS = {'agent': 'workspace/rose-agent/app/Example.kt', 'checked': 'os/overlays/example/values.xml',
+             'unrelated': 'docs/notes.md'}
+    BASE = 'e' * 40
+
+    def history(self, kinds):
+        commits = [(f'{i + 1:040x}', self.KINDS[kind]) for i, kind in enumerate(kinds)]
+        shas = [self.BASE] + [sha for sha, _ in commits]
+
+        def compare(base, head):
+            if base not in shas or head not in shas or shas.index(base) > shas.index(head):
+                return {'status': 'diverged', 'files': []}
+            files = sorted({path for sha, path in commits[shas.index(base):shas.index(head)]})
+            return {'status': 'ahead' if base != head else 'identical', 'files': [{'filename': f} for f in files]}
+        return commits, shas, compare
+
+    def test_a_rose_agent_change_is_always_released_once_at_mains_head(self):
+        patterns = aba.push_paths((ROOT/aba.APP_TESTS).read_text())
+        checked = lambda path: any(re.fullmatch(aba.glob_regex(p), path) for p in patterns)
+        released = {'id': 400, 'display_title': aba.run_name(self.BASE), 'status': 'completed', 'conclusion': 'success'}
+        histories = 0
+        for size in (1, 2, 3):
+            for kinds in itertools.product(self.KINDS, repeat=size):
+                histories += 1
+                commits, shas, compare = self.history(kinds)
+                head = shas[-1]
+                ci_runs = [{'id': 600 + i, 'name': CI['name'], 'path': CI['path'], 'event': 'push', 'head_branch': 'main',
+                            'head_sha': sha} for i, (sha, path) in enumerate(commits) if checked(path)]
+                release_runs, dispatched = [released], []
+                for done, run in enumerate(ci_runs):  # completions in push order; later runs are still pending
+                    listing = [dict(r, status='completed', conclusion='success') if i <= done else
+                               dict(r, status='in_progress', conclusion=None) for i, r in enumerate(ci_runs)]
+                    pairs = {f'{a}...{b}': compare(a, b) for a in shas for b in shas}
+                    gh = FakeGitHub(ci=listing[done], ci_list=listing, release_runs=release_runs, main=head, compares=pairs)
+                    sha, _ = aba.dispatch(dict(ENV, CI_RUN_ID=str(run['id'])), opener=gh, pause=lambda s: None)
+                    release_runs = gh.release_runs  # what this event dispatched, the next one sees
+                    for _, _, body in gh.posts():
+                        self.assertEqual(body['inputs']['candidate_sha'], head, (kinds, 'pinned to the commit main is at'))
+                        dispatched.append(body['inputs']['candidate_sha'])
+                with self.subTest(kinds=kinds):
+                    self.assertEqual(dispatched, [head] if 'agent' in kinds else [], kinds)
+        self.assertEqual(histories, 39)
         self.assertIn("on:\n  workflow_run:\n    workflows: ['App offline tests']\n    types: [completed]\n    branches: [main]\n", WORKFLOW)
         self.assertIn('\npermissions: {}\n', WORKFLOW)
         self.assertEqual(re.findall(r'(?m)^      ([\w-]+): (read|write)\b', WORKFLOW), [('actions', 'write'), ('contents', 'read')])
@@ -170,8 +416,15 @@ class Workflow(unittest.TestCase):
         self.assertEqual(re.findall(r'python3 (\S+)', WORKFLOW), ['scripts/agent-beta-auto.py'])
 
     def test_os_release_names_auto_app_runs_for_dedupe(self):
-        self.assertIn("inputs.mode == 'app-only' && inputs.apps == 'auto' && format('Agent Beta auto {0}', inputs.candidate_sha)", OS_RELEASE)
+        # Both routes' automatic runs share one title, so the duplicate and unchanged checks span the move to agent-hosted.
+        run_name = re.search(r'(?m)^run-name: (.+)$', OS_RELEASE)[1]
+        builder = "inputs.mode == 'app-only' && inputs.apps == 'auto' && format('Agent Beta auto {0}', inputs.candidate_sha)"
+        hosted = "inputs.mode == 'agent-hosted' && inputs.candidate_sha != '' && format('Agent Beta auto {0}', inputs.candidate_sha)"
+        self.assertIn(f'{builder} || {hosted} || ', run_name)
+        self.assertEqual(run_name.count("format('Agent Beta auto {0}'"), 2)  # the probe and a bare dispatch are not auto runs
+        self.assertLess(run_name.index(hosted), run_name.index("format('os-release {0} {1}'"))
         self.assertEqual(aba.run_name(SHA), f'Agent Beta auto {SHA}')
+        self.assertEqual(aba.MODE, 'agent-hosted')
 
 
 def job_starts(condition, context):
@@ -238,6 +491,48 @@ class TemporaryHold(unittest.TestCase):
             job_starts("a.b != 'push'", context)
 
 
+class BothHolds(unittest.TestCase):
+    """The source hold and the AGENT_BETA_AUTO switch both stay, and each one alone keeps the retargeted dispatcher from
+    sending anything: lifting either one is not enough."""
+    HELD = re.search(r'(?m)^    if: (.*)$', WORKFLOW)[1]
+
+    def test_the_source_hold_still_guards_the_only_place_the_retargeted_dispatcher_runs(self):
+        jobs = dict(re.findall(r'(?ms)^  ([\w-]+):\n(.*?)(?=^  [\w-]+:\n|\Z)', WORKFLOW.split('\njobs:\n', 1)[1]))
+        self.assertEqual(list(jobs), ['dispatch'])
+        self.assertIn('        run: python3 scripts/agent-beta-auto.py dispatch\n', jobs['dispatch'])
+        self.assertTrue(self.HELD.startswith('false && '), self.HELD)
+        for switch in ('on', 'off', ''):  # the variable cannot lift it
+            self.assertFalse(job_starts(self.HELD, {'github.event.workflow_run.event': 'push',
+                                                    'github.event.workflow_run.conclusion': 'success',
+                                                    'vars.AGENT_BETA_AUTO': switch}))
+        self.assertIn("'mode': MODE, 'candidate_sha': sha, 'app_publish': 'true'", (ROOT/'scripts/agent-beta-auto.py').read_text())
+
+    def test_without_the_source_hold_the_switch_alone_still_sends_nothing(self):
+        lifted = self.HELD.partition(' && ')[2]  # what deleting `false && ` would leave
+        self.assertTrue(job_starts(lifted, {'github.event.workflow_run.event': 'push',
+                                            'github.event.workflow_run.conclusion': 'success'}))
+        for switch in ('', 'off', 'On', 'ON', 'true', '1', 'yes', ' on', 'on ', None):
+            with self.subTest(switch=switch):
+                env = dict(ENV)
+                if switch is None:
+                    env.pop('AGENT_BETA_AUTO')
+                else:
+                    env['AGENT_BETA_AUTO'] = switch
+                gh = FakeGitHub()
+                self.assertEqual(aba.dispatch(env, opener=gh, pause=lambda s: None), (None, aba.OFF))
+                self.assertEqual(gh.calls, [], 'not one request, read or write')
+        self.assertIn('          AGENT_BETA_AUTO: ${{ vars.AGENT_BETA_AUTO }}\n', WORKFLOW)  # the switch is the variable
+
+    def test_the_cli_reads_the_switch_before_any_request(self):
+        import os
+        import subprocess
+        env = {k: v for k, v in os.environ.items() if k != 'AGENT_BETA_AUTO'}
+        env.update({k: v for k, v in ENV.items() if k != 'AGENT_BETA_AUTO'}, GITHUB_API_URL='http://127.0.0.1:9')
+        result = subprocess.run([sys.executable, str(ROOT/'scripts/agent-beta-auto.py'), 'dispatch'], env=env,
+                                capture_output=True, text=True, timeout=60)
+        self.assertEqual((result.returncode, json.loads(result.stdout)), (0, {'dispatched': None, 'reason': aba.OFF}))
+
+
 class RealGuard(unittest.TestCase):
     """The whole os-release guard step 'Candidate is an exact commit on main', run with the dispatcher's own payload.
     git is a stub that answers only the exact-commit-on-main ancestry check (MAIN_SHAS); everything else is the real
@@ -255,7 +550,8 @@ class RealGuard(unittest.TestCase):
         self.assertIn('git merge-base --is-ancestor "$CANDIDATE_SHA" origin/main', match[1], 'the exact-commit check is part of the step')
         return 'set -euo pipefail\n' + '\n'.join(line[10:] for line in match[1].splitlines()) + '\n'
 
-    def run_guard(self, inputs, on_main=(SHA,)):
+    def run_guard(self, inputs, on_main=(SHA,), dispatch_sha=SHA, attempt='1'):
+        """DISPATCH_SHA is the commit ref main pointed at when the dispatch was made: the run's GITHUB_SHA."""
         import os
         import subprocess
         import tempfile
@@ -264,7 +560,8 @@ class RealGuard(unittest.TestCase):
             git.write_text('#!/bin/sh\n[ "$1 $2 $4" = "merge-base --is-ancestor origin/main" ] || exit 97\n'
                            'case " $MAIN_SHAS " in *" $3 "*) exit 0;; *) exit 1;; esac\n')
             git.chmod(0o755)
-            env = dict(self.DEFAULTS, PATH=f'{tmp}:{os.environ["PATH"]}', GITHUB_SHA='f' * 40, MAIN_SHAS=' '.join(on_main))
+            env = dict(self.DEFAULTS, PATH=f'{tmp}:{os.environ["PATH"]}', GITHUB_SHA=dispatch_sha, MAIN_SHAS=' '.join(on_main),
+                       GITHUB_RUN_ATTEMPT=attempt)
             for key, value in inputs.items():
                 env[self.INPUT_ENV[key]] = value
             return subprocess.run(['bash', '-c', self.step()], env=env, cwd=ROOT, capture_output=True, text=True).returncode
@@ -277,23 +574,50 @@ class RealGuard(unittest.TestCase):
         return dict(body['inputs'], **change)
 
     def test_the_dispatchers_exact_payload_passes_the_real_guard(self):
+        # Dispatched on main while main's head is the tested SHA (the dispatcher's last check).
+        self.assertEqual(self.payload(), {'mode': 'agent-hosted', 'candidate_sha': SHA, 'app_publish': 'true'})
         self.assertEqual(self.run_guard(self.payload()), 0)
 
     def test_stale_malformed_or_pinned_auto_requests_are_refused(self):
-        for name, inputs, on_main in (
-                ('candidate not on main (stale or foreign)', self.payload(), ()),
-                ('short sha', self.payload(candidate_sha=SHA[:39]), (SHA[:39],)),
-                ('branch name', self.payload(candidate_sha='main'), ('main',)),
-                ('uppercase sha', self.payload(candidate_sha=SHA.upper()), (SHA.upper(),)),
-                ('empty candidate', self.payload(candidate_sha=''), ('',)),
-                ('build pin on auto', self.payload(build_number='2026110101'), (SHA,)),
-                ('timestamp pin on auto', self.payload(build_timestamp='1793550000'), (SHA,)),
-                ('auto outside app-only', self.payload(mode='os-release'), (SHA,)),
-                ('promotion', self.payload(promote='true'), (SHA,)),
-                ('campaign', self.payload(campaign='start'), (SHA,)),
-                ('resume', self.payload(resume_failed_stage='sign'), (SHA,))):
+        moved = 'f' * 40
+        for name, inputs, on_main, dispatch_sha in (
+                ('main moved between the read and the dispatch', self.payload(), (SHA, moved), moved),
+                ('dispatch commit not on main (stale or foreign)', self.payload(), (), SHA),
+                ('short sha', self.payload(candidate_sha=SHA[:39]), (SHA,), SHA),
+                ('branch name', self.payload(candidate_sha='main'), (SHA,), SHA),
+                ('uppercase sha', self.payload(candidate_sha=SHA.upper()), (SHA,), SHA),
+                ('the probe takes no pin', self.payload(mode='agent-hosted-probe', app_publish='false'), (SHA,), SHA),
+                ('apps on the hosted route', self.payload(apps='auto'), (SHA,), SHA),
+                ('build pin on auto', self.payload(build_number='2026110101'), (SHA,), SHA),
+                ('timestamp pin on auto', self.payload(build_timestamp='1793550000'), (SHA,), SHA),
+                ('auto outside the agent routes', self.payload(mode='os-release'), (SHA,), SHA),
+                ('promotion', self.payload(promote='true'), (SHA,), SHA),
+                ('campaign', self.payload(campaign='start'), (SHA,), SHA),
+                ('resume', self.payload(resume_failed_stage='sign'), (SHA,), SHA)):
             with self.subTest(name):
-                self.assertNotEqual(self.run_guard(inputs, on_main), 0, name)
+                self.assertNotEqual(self.run_guard(inputs, on_main, dispatch_sha), 0, name)
+
+    def test_an_equivalent_heads_payload_passes_the_real_guard(self):
+        # The proven head is pinned to itself: it is the dispatch commit the run builds, so the unchanged guard admits it.
+        gh = FakeGitHub(main=HEAD, compares={f'{SHA}...{HEAD}': compared(*UNRELATED)})
+        aba.dispatch(dict(ENV), opener=gh, pause=lambda s: None)
+        (_, _, body), = gh.posts()
+        self.assertEqual(body['inputs']['candidate_sha'], HEAD)
+        self.assertEqual(self.run_guard(body['inputs'], on_main=(SHA, HEAD), dispatch_sha=HEAD), 0)
+        # Pinning the tested SHA instead would be refused: the run builds main's head, not the tested commit.
+        self.assertNotEqual(self.run_guard(dict(body['inputs'], candidate_sha=SHA), on_main=(SHA, HEAD), dispatch_sha=HEAD), 0)
+        # And had main moved again before the request reached it, the guard would refuse this pin too.
+        self.assertNotEqual(self.run_guard(body['inputs'], on_main=(SHA, HEAD, 'f' * 40), dispatch_sha='f' * 40), 0)
+
+    def test_a_re_run_of_an_automatic_run_is_refused(self):
+        self.assertEqual(self.run_guard(self.payload(), attempt='1'), 0)
+        self.assertNotEqual(self.run_guard(self.payload(), attempt='2'), 0)  # its reservation is owned by attempt 1
+
+    def test_the_builder_auto_route_is_unchanged_for_a_manual_dispatch(self):
+        # The builder's app-only apps=auto route (no longer dispatched automatically) still admits an exact main commit.
+        builder = {'mode': 'app-only', 'candidate_sha': SHA, 'apps': 'auto', 'app_publish': 'true'}
+        self.assertEqual(self.run_guard(builder, on_main=(SHA, 'f' * 40), dispatch_sha='f' * 40), 0)
+        self.assertNotEqual(self.run_guard(builder, on_main=('f' * 40,), dispatch_sha='f' * 40), 0)
 
     def test_explicit_app_only_keeps_its_pins(self):
         explicit = {'mode': 'app-only', 'candidate_sha': SHA, 'apps': '[["dev.pixel.voice", 400]]'}

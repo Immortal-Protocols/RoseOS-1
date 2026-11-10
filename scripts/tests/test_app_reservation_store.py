@@ -253,8 +253,35 @@ class Readback(unittest.TestCase):
             def create(self, ref, rec, head):
                 return True
 
-        with self.assertRaisesRegex(store_module.Refused, 'does not read back'):
+        with self.assertRaisesRegex(store_module.Refused, 'does not read back') as caught:
             store_module.Ledger(STORE, Reader(), Writer(), sleep=lambda s: None).reserve(record())
+        self.assertNotIsInstance(caught.exception, store_module.Held)  # an uncertain write is never typed retryable
+
+    def test_only_a_ref_another_record_holds_is_held(self):
+        mine, theirs = record(), record(source='d' * 40)
+
+        def ledger(created, holder):
+            class Reader:
+                def head(self):
+                    return 'f' * 40
+
+                def read(self, package):
+                    return {'reservations': {} if holder is None else {369: holder}, 'floors': []}
+
+            class Writer:
+                def create(self, ref, rec, head):
+                    return created
+            return store_module.Ledger(STORE, Reader(), Writer(), sleep=lambda s: None)
+        with self.assertRaisesRegex(store_module.Held, 'already held by another record'):
+            ledger(False, theirs).reserve(mine)
+        with self.assertRaisesRegex(store_module.Refused, 'already exists but holds no readable record') as caught:
+            ledger(False, None).reserve(mine)
+        self.assertNotIsInstance(caught.exception, store_module.Held)
+        with self.assertRaisesRegex(store_module.Refused, 'does not read back') as caught:
+            ledger(True, theirs).reserve(mine)
+        self.assertNotIsInstance(caught.exception, store_module.Held)
+        self.assertEqual(ledger(False, mine).reserve(mine)['created'], False)  # this run's own record, after a lost reply
+        self.assertTrue(issubclass(store_module.Held, store_module.Refused))  # every existing refusal path still holds
 
 
 if __name__ == '__main__':

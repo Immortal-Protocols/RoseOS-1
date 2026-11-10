@@ -8,10 +8,13 @@ import io
 import json
 from pathlib import Path
 import re
+import sys
 import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import os_release_shape as shape  # noqa: E402
 spec = importlib.util.spec_from_file_location('daily_release', ROOT/'scripts/daily-release.py')
 daily = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(daily)
@@ -90,8 +93,9 @@ class CommittedLanes(unittest.TestCase):
                          (DEDICATED, {'publish': 'true'}, 'publisher'))
         self.assertEqual((yogi['workflow'], yogi['inputs'], yogi['deliveryJob']),
                          ('yogi-ota.yml', {'stage': 'ota', 'publish': 'true'}, 'publisher'))
-        queues = {x['name']: re.search(r'(?m)^concurrency:\n(?:  #.*\n)*  group: (\S+)$',
-                                       (ROOT/'.github/workflows'/x['workflow']).read_text())[1] for x in lanes}
+        # The queue a run of the lane's committed inputs joins (os-release.yml keys its group by mode).
+        queues = {x['name']: shape.queue(x['inputs'].get('mode'), (ROOT/'.github/workflows'/x['workflow']).read_text())
+                  for x in lanes}
         self.assertEqual(queues, {'frankel': 'os-release-frankel', 'mustang': 'mustang-ota', 'yogi': 'yogi-ota'})
 
     def test_the_lane_titles_match_the_entries_run_names(self):
