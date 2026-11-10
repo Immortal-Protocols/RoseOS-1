@@ -235,7 +235,22 @@ async function run(browser, name, ctxOpts, phone) {
   check(P('inline reply types through the keyboard; shade sits above it'), s.kb && s.kbT === 'reply' && s.reply === 'Three works', s);
   g = await geo('#shade'); gk = await geo('#kb');
   check(P('shade content ends above the keyboard inset'), g.bottom >= gk.h + 24 - 1.5, { g, gk });
+  const replyVis = await R(() => { const L = document.getElementById('sh-list').getBoundingClientRect(), Kb = document.getElementById('kb').getBoundingClientRect();
+    const v = (id) => { const e = document.getElementById(id).getBoundingClientRect(); return e.height > 0 && e.top >= L.top - 1 && e.bottom <= Math.min(L.bottom, Kb.top) + 1; };
+    return { field: v('f-reply'), send: v('reply-send') }; });
+  check(P('active reply: the composer and Send are both fully visible above the keyboard'), replyVis.field && replyVis.send, replyVis);
   await shot('14-shade-reply', 'Inline reply with keyboard');
+  // The person's own scroll in the list is kept (no drag back), even when the inset changes afterwards.
+  const lb = await page.locator('#sh-list').boundingBox();
+  await page.mouse.move(lb.x + lb.width / 2, lb.y + 30); await page.mouse.wheel(0, -300); await wait(300);
+  const top0 = await R(() => document.getElementById('sh-list').scrollTop);
+  const h0 = await R(() => document.getElementById('sh-list').clientHeight);
+  await tap('#strip [data-tool=hide]'); await wait(500);   // inset changes: the list grows
+  const top1 = await R(() => document.getElementById('sh-list').scrollTop), h1 = await R(() => document.getElementById('sh-list').clientHeight);
+  check(P('a scroll in the notification list while replying is not dragged back when the inset changes'), h1 > h0 && Math.abs(top1 - top0) <= 2, { top0, top1, h0, h1 });
+  await tap('#f-reply'); await wait(450);
+  const again = await R(() => { const L = document.getElementById('sh-list').getBoundingClientRect(), e = document.getElementById('reply-send').getBoundingClientRect(); return e.top >= L.top - 1 && e.bottom <= L.bottom + 1; });
+  check(P('tapping the reply field again reveals the composer and Send'), again);
   await tap('#strip [data-tool=hide]'); await wait(300);
   s = await st(); check(P('hiding the keyboard never sends or dismisses; draft kept'), !s.kb && s.shade && s.reply === 'Three works' && s.rstate === 'draft', s);
   await page.evaluate(() => { const c = document.getElementById('h-fail'); c.checked = true; c.dispatchEvent(new Event('change')); });

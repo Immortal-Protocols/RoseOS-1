@@ -4190,6 +4190,7 @@ void main(){
   function showKb(target) {
     if (!kb.open || kb.target !== target) { kb.open = true; kb.target = target; kb.keysKey = ''; note('keyboard shown (' + target + ')'); }
     renderKb(); followAfterLayout();
+    if (target === 'reply') { replyReveal.active = true; replyReveal.userAt = -1e9; requestAnimationFrame(revealReply); setTimeout(revealReply, 340); }
   }
   function hideKb(why) {
     if (!kb.open) return;
@@ -4426,8 +4427,30 @@ void main(){
     el.innerHTML = shadeHtml();
     $('sh-list').scrollTop = top;
     if ($('f-reply')) bindField($('f-reply'), 'reply');
+    bindListReveal();
     renderKb(); renderShadeReplyStatus();
+    if (shade.reply.id) requestAnimationFrame(revealReply);
     if (shade.undo) showUndo(shade.undo.text);
+  }
+  // Active reply reveal: keep the reply field and Send inside the list's visible area (above the
+  // keyboard) when the reply opens, when the keyboard appears and while the list shrinks under it.
+  // Only the list scrolls (never the phone), and only until the person scrolls the list themselves.
+  const replyReveal = { userAt: -1e9, active: false };
+  function revealReply() {
+    const list = $('sh-list'), row = list && list.querySelector('.sh-reply');
+    if (!row || !replyReveal.active || now() - replyReveal.userAt < 600) return;
+    const lr = list.getBoundingClientRect(), rr = row.getBoundingClientRect(), k = scaleK();
+    const pad = 8 * k;
+    if (rr.bottom > lr.bottom - pad) list.scrollTop += (rr.bottom - lr.bottom + pad) / k;
+    else if (rr.top < lr.top + pad) list.scrollTop -= (lr.top + pad - rr.top) / k;
+  }
+  function bindListReveal() {
+    const list = $('sh-list'); if (!list || list.dataset.reveal) return;
+    list.dataset.reveal = '1';
+    const user = () => { replyReveal.userAt = now(); replyReveal.active = false; };   // the person's scroll wins until their next reply action
+    for (const ev of ['wheel', 'touchstart', 'touchmove']) list.addEventListener(ev, user, { passive: true });
+    list.addEventListener('pointerdown', (e) => { if (!e.target.closest('.sh-reply')) user(); });
+    if (window.ResizeObserver) new ResizeObserver(() => revealReply()).observe(list);
   }
   function renderShadeReplyStatus() {
     const st = $('sh-rstat'); if (!st) return;
@@ -4451,7 +4474,7 @@ void main(){
     setTimeout(() => {
       if (fail) { shade.reply.state = 'failed'; note('reply failed (draft kept)'); renderShadeReplyStatus(); return; }
       // Actual acknowledgement: only now is the reply sent.
-      shade.reply = { id: null, state: 'sent' }; fields.reply = K.initial();
+      shade.reply = { id: null, state: 'sent' }; fields.reply = K.initial(); replyReveal.active = false;
       const g = shade.items.find((n) => n.id === 'msgs');
       if (g) { const m = g.items.find((x) => x.id === 'm-jamie'); if (m) { m.text = 'You: ' + text; m.reply = false; m.time = 'just now'; } }
       note('reply sent'); hideKb('reply sent'); renderShade(); showUndo('Reply sent');
@@ -4488,7 +4511,7 @@ void main(){
       if (b.id === 'sh-keep') { $('sh-confirm').hidden = true; note('kept draft'); return; }
       if (b.id === 'sh-discard') { $('sh-confirm').hidden = true; return dismiss('msgs', true); }
       if (b.id === 'sh-undo-btn' && shade.undo) { shade.items.splice(shade.undo.idx, 0, shade.undo.item); shade.undo = null; note('undo dismiss'); renderShade(); return; }
-      if (b.dataset.reply) { shade.reply = { id: b.dataset.reply, state: 'draft' }; renderShade(); const f = $('f-reply'); if (f) f.focus({ preventScroll: true }); showKb('reply'); return; }
+      if (b.dataset.reply) { replyReveal.active = true; replyReveal.userAt = -1e9; shade.reply = { id: b.dataset.reply, state: 'draft' }; renderShade(); const f = $('f-reply'); if (f) f.focus({ preventScroll: true }); showKb('reply'); return; }
       if (b.dataset.markread) { const g = shade.items.find((n) => n.id === 'msgs'); if (g) { g.items = g.items.filter((m) => m.id !== b.dataset.markread); if (!g.items.length) shade.items = shade.items.filter((n) => n !== g); } renderShade(); return; }
       if (b.id === 'reply-send' || b.id === 'reply-retry') return replySend();
       if (b.id === 'sh-handle') return closeShade('handle');
