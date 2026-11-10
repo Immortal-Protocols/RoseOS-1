@@ -167,14 +167,14 @@ public class RoseEdgeWindowNativeTest {
     }
 
     @Test
-    public void roseOpensThroughRoseAgentsOwnLaunchIntentWhenItHoldsHome() {
+    public void roseOpensItsConversationDirectlyWhenItHoldsHome() {
         install("dev.pixel.voice", "dev.pixel.voice.MainActivity", android.content.Intent.CATEGORY_HOME,
                 android.content.Intent.CATEGORY_LAUNCHER);
         android.content.Intent intent = RoseEdgeWindow.openRoseIntent(context.getPackageManager());
-        assertEquals(android.content.Intent.ACTION_MAIN, intent.getAction());
-        assertTrue(intent.hasCategory(android.content.Intent.CATEGORY_LAUNCHER));
+        assertNull(intent.getAction());
+        assertFalse(intent.hasCategory(android.content.Intent.CATEGORY_LAUNCHER));
         assertFalse(intent.hasCategory(android.content.Intent.CATEGORY_HOME));
-        assertEquals(new android.content.ComponentName("dev.pixel.voice", "dev.pixel.voice.MainActivity"),
+        assertEquals(new android.content.ComponentName("dev.pixel.voice", "dev.pixel.voice.RoseTrayEntry"),
                 intent.getComponent());
         assertTrue((intent.getFlags() & android.content.Intent.FLAG_ACTIVITY_NEW_TASK) != 0);
         assertEquals("Home reads history as a relaunch", 0,
@@ -183,13 +183,14 @@ public class RoseEdgeWindowNativeTest {
     }
 
     @Test
-    public void roseFallsBackToThePlainHomeIntentWhenAnotherAppHoldsHome() {
+    public void roseNeverFallsBackThroughHomeWhenAnotherAppHoldsHome() {
         install("com.example.home", "com.example.home.Home", android.content.Intent.CATEGORY_HOME);
         install("dev.pixel.voice", "dev.pixel.voice.MainActivity", android.content.Intent.CATEGORY_LAUNCHER);
         android.content.Intent intent = RoseEdgeWindow.openRoseIntent(context.getPackageManager());
-        assertEquals(android.content.Intent.ACTION_MAIN, intent.getAction());
-        assertTrue(intent.hasCategory(android.content.Intent.CATEGORY_HOME));
-        assertNull("whichever app holds HOME decides", intent.getComponent());
+        assertNull(intent.getAction());
+        assertFalse(intent.hasCategory(android.content.Intent.CATEGORY_HOME));
+        assertEquals(new android.content.ComponentName("dev.pixel.voice", "dev.pixel.voice.RoseTrayEntry"),
+                intent.getComponent());
         assertTrue((intent.getFlags() & android.content.Intent.FLAG_ACTIVITY_NEW_TASK) != 0);
         assertTrue("no extra", intent.getExtras() == null || intent.getExtras().isEmpty());
     }

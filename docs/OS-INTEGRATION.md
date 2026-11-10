@@ -215,6 +215,16 @@ Rose Agent's own entries route in `MainActivity` (`HomeEntry`):
 - The app icon (MAIN/LAUNCHER) shows Rose Home with the Rose conversation
   (`RoseConversationActivity`) opened over it, so Back returns to Rose Home.
 
+The raised tray's Rose button instead starts `RoseTrayEntry`, an activity alias
+for the existing single-task conversation. The alias requires
+`android.permission.INTERNAL_SYSTEM_WINDOW`, which Launcher3 already holds;
+the conversation component itself remains unexported. It never starts MainActivity
+or a HOME/LAUNCHER intent. This preserves the Shell's app → Rose focus transition,
+so the unchanged exact-task return path can restore the source app rather than
+losing its target when Home intervenes. No return task identifier comes from the
+caller. A missing, disabled or permission-denied entry displays a failure notice
+and does not navigate Home. The OS and bundled Rose Agent must ship together.
+
 Agent 302 (build 2026102804) kept the legacy voice page for the app icon, which is
 why its icon showed the blue "Tap to talk" screen.
 

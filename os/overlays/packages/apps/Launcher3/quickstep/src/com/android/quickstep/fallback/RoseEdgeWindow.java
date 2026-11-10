@@ -6,7 +6,6 @@ import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
-import android.content.pm.ResolveInfo;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Insets;
@@ -84,23 +83,9 @@ public final class RoseEdgeWindow implements RoseEdgeState.Listener {
     /** Rose Agent's package: Home (#410, oxblood-contract.json homeEdge.controls.rose.destination.raisedEdge). */
     public static final String ROSE_PACKAGE = "dev.pixel.voice";
 
-    /**
-     * The intent the host starts for the Rose control, as Home's contract gives it: when Rose Agent holds HOME, its
-     * existing launch intent (the icon tap: ACTION_MAIN + CATEGORY_LAUNCHER, explicit, FLAG_ACTIVITY_NEW_TASK), which
-     * Home shows as Rose Home with the conversation over it; otherwise the plain HOME intent. No new extra, action or
-     * exported entry, and never FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY (Home reads that as a relaunch). Visibility of the
-     * two packages comes from Launcher3's existing QUERY_ALL_PACKAGES.
-     */
+    /** Direct conversation entry. Never brings Home forward and never supplies a source task to the return path. */
     public static Intent openRoseIntent(PackageManager pm) {
-        Intent home = new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
-                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-        ResolveInfo holder = pm.resolveActivity(home, PackageManager.MATCH_DEFAULT_ONLY);
-        if (holder == null || holder.activityInfo == null || !ROSE_PACKAGE.equals(holder.activityInfo.packageName)) {
-            return home;
-        }
-        Intent launch = pm.getLaunchIntentForPackage(ROSE_PACKAGE);
-        if (launch == null) return home;
-        return launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        return RoseEdgeEntry.intent();
     }
 
     private final Context mContext;
