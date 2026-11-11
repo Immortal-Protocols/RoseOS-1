@@ -163,6 +163,10 @@ def reduced_mustang_sprint(recipe):
     return DEVICE == 'mustang' and recipe.get('device') == 'mustang' and recipe.get('sprint', {}).get('plan') == \
         'https://app.notion.com/p/40d7c646c81b81198e60cb76ca2ea603'
 
+def reserve_checks(recipe):
+    """Disk protection is independent of the reduced artifact-verification policy."""
+    return not reduced_mustang_sprint(recipe) or recipe.get('sprint', {}).get('reserveChecks') is True
+
 def sha256_file(path):
     digest = hashlib.sha256()
     with open(path, 'rb') as f:
@@ -495,7 +499,7 @@ def isolation_problem(path, production, probe=True):
 
 def space(stage, recipe, where, statvfs, facts, problems):
     """available - bound >= reserve on the filesystem the stage writes."""
-    if reduced_mustang_sprint(recipe):
+    if not reserve_checks(recipe):
         facts['capacity'] = {'reserveCheck': 'omitted per Mustang sprint plan'}
         return
     bound = (recipe['preparation'][stage]['boundBytes'] if stage in PREPARATION else recipe['gitMeta']['boundBytes']
@@ -537,7 +541,7 @@ def git_meta(recipe, src, receipt_dir, statvfs, clock, sleep):
     (bounded); the working tree is never touched."""
     spec, prep = recipe['gitMeta'], recipe['preparation']
     limits = {**prep['limits'], 'boundBytes': spec['boundBytes'], 'reserveBytes': recipe['capacity']['reserveBytes'],
-              'checkReserve': not reduced_mustang_sprint(recipe)}
+              'checkReserve': reserve_checks(recipe)}
     home = Path(receipt_dir)/'git-home'
     home.mkdir(mode=0o700)
     env = git_meta_env(src, home, spec['fetchUrlPrefix'])
@@ -1179,7 +1183,7 @@ def construct(recipe, op, production, root=ROOT, statvfs=os.statvfs, clock=time.
             raise Refused(f'{len(selection["problems"])} unsupported source dependencies, first: {selection["problems"][0]}')
         if projected > spec['boundBytes']:
             raise Refused(f'the selection projects {projected} bytes, above the {spec["boundBytes"]}-byte bound')
-        if not reduced_mustang_sprint(recipe) and available - projected < reserve:
+        if reserve_checks(recipe) and available - projected < reserve:
             raise Refused(f'available {available} minus the projected {projected} is below the reserve {reserve}')
         if not os.path.lexists(src.parent):
             src.parent.mkdir(mode=0o700)
@@ -1193,7 +1197,7 @@ def construct(recipe, op, production, root=ROOT, statvfs=os.statvfs, clock=time.
         for entry in selection['entries']:
             if clock() >= sample:
                 fs = statvfs(staging)
-                if not reduced_mustang_sprint(recipe) and fs.f_bavail * fs.f_frsize < reserve:
+                if reserve_checks(recipe) and fs.f_bavail * fs.f_frsize < reserve:
                     raise StageStopped(f'available {fs.f_bavail * fs.f_frsize} fell below the reserve {reserve}')
                 sample = clock() + prep['limits']['sampleSeconds']
             destination = staging/entry['path']
@@ -1988,7 +1992,7 @@ def run(recipe, stage, op, receipt_dir, now=time.time, fetcher=fetch, clock=time
         bound = capacity['compileAllowanceBytes'] if stage == 'compile' else prep[stage]['boundBytes']
         kind = capacity['compileAllowanceKind'] if stage == 'compile' else prep['boundsKind']
         limits = {**prep['limits'], 'boundBytes': bound, 'reserveBytes': capacity['reserveBytes'],
-                  'checkReserve': not reduced_mustang_sprint(recipe)}
+                  'checkReserve': reserve_checks(recipe)}
         if stage == 'vendor':
             if file_identity(op['node']) != report['facts'].get('node') or node_binding_problem(op['node'], env['PATH']):
                 release_receipts.write_once(receipt_dir/'completed.json', {**base, 'ok': False,

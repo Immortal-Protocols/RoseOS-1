@@ -152,6 +152,83 @@ class CompilerCacheTest(unittest.TestCase):
             self.assertEqual(build.collect_outputs(source,compiler_cache.OUT)['verdict'],'incomplete')
 
 
+class DiskSpaceTest(unittest.TestCase):
+    def test_full_run_budget_includes_source_preparation_compile_and_runner_reserve(self):
+        import mustang_route
+        recipe=json.loads((ROOT/'os/build-only/mustang.json').read_text())
+        self.assertTrue(recipe['sprint']['reserveChecks'])
+        required=mustang_route.full_run_disk_budget(recipe)
+        self.assertEqual(required,844 << 30)
+        import mustang_lane
+        lane=mustang_lane.configuration();cfg=json.loads((ROOT/'os/build-only/mustang-runtime.json').read_text())
+        total=cfg.get('dataFilesystemTotalInodes',mustang_lane.CONFIRMED_TOTAL_INODES)
+        obs=dict(instanceId=lane['vm']['instanceId'],filesystemUuid=cfg['dataFilesystemUuid'],
+                 mount=cfg['dataMount'],availableBytes=required-1,availableInodes=10**6,totalInodes=total,euid=999)
+        with self.assertRaisesRegex(ValueError,'source, metadata, lunch, compile and reserve'):
+            mustang_route.evaluate_guest(obs,lane,cfg)
+        obs['availableBytes']=required
+        self.assertFalse(mustang_route.evaluate_guest(obs,lane,cfg)['admitted'])
+        cfg['dataFilesystemTotalInodes']=2*mustang_lane.CONFIRMED_TOTAL_INODES
+        with self.assertRaisesRegex(ValueError,'inode count differs'):
+            mustang_route.evaluate_guest(obs,lane,cfg)
+        obs['totalInodes']=cfg['dataFilesystemTotalInodes']
+        self.assertFalse(mustang_route.evaluate_guest(obs,lane,cfg)['admitted'])
+
+    def test_stage_preflight_and_supervisor_keep_reporting_space_before_filesystem_exhaustion(self):
+        engine=ota.module('disk_space_adapter','mustang-build-only.py').engine()
+        recipe=engine.load(ROOT/'os/build-only/mustang.json',probe=False)
+        bound=recipe['capacity']['compileAllowanceBytes'];reserve=recipe['capacity']['reserveBytes']
+        facts={};problems=[]
+        engine.space('compile',recipe,ROOT,lambda p:SimpleNamespace(f_bavail=bound+reserve-1,f_frsize=1),facts,problems)
+        self.assertEqual(len(problems),1);self.assertIn('below the reserve',problems[0])
+        self.assertEqual(facts['capacity']['reserveBytes'],reserve)
+        with tempfile.TemporaryDirectory() as directory:
+            outcome=engine.supervise([sys.executable,'-c','import time;time.sleep(10)'],directory,{'PATH':'/usr/bin:/bin'},5,
+                {'sampleSeconds':0.01,'killGraceSeconds':1,'boundBytes':100,'reserveBytes':20,
+                 'checkReserve':engine.reserve_checks(recipe)},statvfs=lambda p:SimpleNamespace(f_bavail=19,f_frsize=1))
+            self.assertIn('fell below the reserve',outcome['stopped'])
+            self.assertIsNotNone(outcome['returncode'])
+
+    def test_filesystem_growth_refuses_wrong_identity_device_or_size_before_resize(self):
+        script=(ROOT/'scripts/mustang-grow-data-filesystem.sh').read_text()
+        fake='''#!/usr/bin/python3
+import os,sys,json
+from pathlib import Path
+name=Path(sys.argv[0]).name;args=sys.argv[1:];case=os.environ['GROW_CASE']
+with open(os.environ['GROW_LOG'],'a') as out:out.write(json.dumps([name,*args])+'\\n')
+if name=='id':print('1000' if case=='nonroot' else '0')
+elif name=='curl':
+ if '-X' not in args:print('wrong' if case=='instance' else '5585425566393384049')
+elif name=='findmnt':
+ field=args[args.index('--output')+1]
+ print({'TARGET':'/mnt/disks/mustang-data','FSTYPE':'ext4','UUID':'wrong' if case=='uuid' else '4183bff8-6be4-46bb-a641-2193d19813ee','SOURCE':'/dev/sdb'}[field])
+elif name=='readlink':print('/dev/sdc' if case=='device' and 'by-id' in args[-1] else '/dev/sdb')
+elif name=='lsblk':print('part' if case=='partition' else 'disk')
+elif name=='blockdev':print('999' if case=='size' else '3221225472000')
+elif name=='timeout':os.execv(os.environ['FAKE_BIN']+'/resize2fs',[os.environ['FAKE_BIN']+'/resize2fs',*args[2:]])
+elif name=='python3':print('{"fixture":"growth-readback"}')
+elif name=='mktemp':
+ import tempfile
+ fd,path=tempfile.mkstemp(dir=Path(os.environ['GROW_LOG']).parent);os.close(fd);print(path)
+'''
+        with tempfile.TemporaryDirectory() as directory:
+            base=Path(directory);fake_bin=base/'bin';fake_bin.mkdir()
+            for name in ('id','curl','findmnt','readlink','lsblk','blockdev','timeout','resize2fs','systemctl','python3','mktemp'):
+                path=fake_bin/name;path.write_text(fake);path.chmod(0o755)
+            test_script=base/'grow.sh'
+            test_script.write_text(script.replace('export PATH=/usr/sbin:/usr/bin:/sbin:/bin',
+                                                   f'export PATH={fake_bin}:/usr/bin:/bin',1))
+            for case in ('nonroot','instance','uuid','device','partition','size','success'):
+                log=base/(case+'.jsonl')
+                run=subprocess.run(['/bin/bash',str(test_script)],env=dict(os.environ,GROW_CASE=case,GROW_LOG=str(log),FAKE_BIN=str(fake_bin),MUSTANG_GROW_OPERATION='offline-fixture'),
+                                   capture_output=True,text=True,timeout=10)
+                calls=[json.loads(line) for line in log.read_text().splitlines()]
+                resizes=[call for call in calls if call[0]=='resize2fs']
+                self.assertEqual(run.returncode,0 if case=='success' else 4,run.stderr)
+                self.assertEqual(resizes,[['resize2fs','/dev/disk/by-id/google-mustang-data']] if case=='success' else [])
+                self.assertFalse(any(call[0] in ('mkfs','parted','chown','chmod') for call in calls))
+
+
 class FullDeliveryTest(unittest.TestCase):
     def setUp(self):
         self.f=fixture_module.CollectorTest('test_complete_fixture_writes_hash_verified_candidate_receipt_without_admission')
