@@ -19,7 +19,7 @@ Android signing tools and emits no custom target-validation proof. Executable
 archive, provenance, capacity and signature checks remain. The validator sections
 below describe the prior implementation, which remains unused library code.
 
-For dedicated workflow run number 41 only, Nathan renewed the choice to use the verified
+For dedicated workflow run number 42 only, Nathan renewed the choice to use the verified
 `frankel-2026111001` apps (voice 370) instead of refreshing the app export.
 The runtime binds the exact record-byte hash to this one run number.
 Later workflow runs do not inherit this choice. The candidate
