@@ -717,10 +717,10 @@ class DedicatedRuntimeTest(unittest.TestCase):
         cfg = json.loads((ROOT/'os/build-only/mustang-runtime.json').read_text())
         record = json.loads((ROOT/cfg['appInputsRecord']).read_text())
         choice = cfg['frozenAppInputs']
-        allowed = lambda c=cfg,e={'GITHUB_RUN_NUMBER':'40'},r=record: \
+        allowed = lambda c=cfg,e={'GITHUB_RUN_NUMBER':str(choice['workflowRunNumber'])},r=record: \
             driver.frozen_app_inputs_allowed(r,c,e,ROOT)
         self.assertTrue(allowed())
-        self.assertFalse(allowed(e={'GITHUB_RUN_NUMBER':'41'}))
+        self.assertFalse(allowed(e={'GITHUB_RUN_NUMBER':str(choice['workflowRunNumber']+1)}))
         self.assertFalse(allowed(e={}))
         wrong = dict(cfg,frozenAppInputs=dict(choice,recordSha256='0'*64))
         self.assertFalse(allowed(c=wrong))
