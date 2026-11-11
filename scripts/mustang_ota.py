@@ -516,6 +516,8 @@ def stage_hosted(bundle,unsigned,signed,ota,public,extracted,java_home,out,*,roo
         receipt['clockAllocation']=bundle['clockAllocation']
     if bundle.get('retainedProducer') is not None:
         receipt['retainedProducer']=bundle['retainedProducer']
+    if bundle.get('artifactProducer') is not None:
+        receipt['artifactProducer']=bundle['artifactProducer']
     release_receipts.write_once(out/'mustang-ota-receipt.json',receipt)
     (out/'SHA256SUMS').write_text(''.join(f'{digest(p)}  {p.name}\n' for p in sorted(out.iterdir())))
     verify_staged(out,cfg,publication=False)
@@ -537,7 +539,8 @@ def verify_staged(directory, cfg, publication=True):
         import mustang_clock, mustang_lane
         mustang_clock.require_bundle(dict(clockAllocation=r.get('clockAllocation'),build=r['build'],timestamp=r['timestamp'],
             runId=r['runId'],runAttempt=r['runAttempt'],sourceSha=r['recipeSource'],
-            **({'retainedProducer':r['retainedProducer']} if r.get('retainedProducer') is not None else {})),
+            **({'retainedProducer':r['retainedProducer']} if r.get('retainedProducer') is not None else {}),
+            **({'artifactProducer':r['artifactProducer']} if r.get('artifactProducer') is not None else {})),
             mustang_lane.configuration(),runtime,ROOT)
     factory=r.get('baselineFactoryEvidence')
     if r.get('baselineObservation') is not None:
