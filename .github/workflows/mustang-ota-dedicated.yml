@@ -11,7 +11,7 @@ on:
   workflow_dispatch:
     inputs:
       retained_compile_run:
-        description: Exact retained producer 42664204892 only; recheck and deliver without Make or allocation
+        description: Retained42664204892 on native disk, or artifact-only43074045726; no Make or allocation
         type: string
         default: ''
       publish:
@@ -84,14 +84,21 @@ jobs:
         persist-credentials: false
     - id: inputs
       name: Admit exact manual run, routes and actual dedicated inputs before host start
+      if: inputs.retained_compile_run != '43074045726'
       env:
         GH_TOKEN: ${{ github.token }}
       run: python3 scripts/mustang-dedicated.py guard
+    - name: Admit the exact finalized run46 artifacts without starting a builder
+      if: inputs.retained_compile_run == '43074045726'
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: python3 scripts/mustang_artifact_delivery.py guard
     - name: Check the fixed read-only otatools observation binding before START
       if: inputs.dry_run
       run: python3 scripts/mustang_otatools_observation.py --check-binding
   controller:
     needs: guard
+    if: inputs.retained_compile_run != '43074045726'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -210,7 +217,7 @@ jobs:
     - guard
     - controller
     - enroll
-    if: inputs.source_only == false && inputs.hostdeps_only == false && inputs.lock_admin_only == false && inputs.factory_only == false && inputs.vendor_only == false && inputs.otatools_only == false
+    if: inputs.source_only == false && inputs.hostdeps_only == false && inputs.lock_admin_only == false && inputs.factory_only == false && inputs.vendor_only == false && inputs.otatools_only == false && inputs.retained_compile_run != '43074045726'
     runs-on:
       group: ${{ needs.guard.outputs.runner_group }}
       labels: ${{ needs.guard.outputs.runner_label }}
@@ -319,11 +326,72 @@ jobs:
         path: ${{ runner.temp }}/mustang-receipts
         retention-days: 14
         if-no-files-found: warn
+  artifact-admission:
+    needs: guard
+    if: inputs.retained_compile_run == '43074045726'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    env:
+      GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ vars.MUSTANG_CONTROLLER_WORKLOAD_IDENTITY_PROVIDER }}
+      MUSTANG_CONTROLLER_SERVICE_ACCOUNT: ${{ vars.MUSTANG_CONTROLLER_SERVICE_ACCOUNT }}
+    outputs:
+      bundle_sha256: ${{ steps.bundle.outputs.bundle_sha256 }}
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        ref: ${{ github.sha }}
+        fetch-depth: 0
+        persist-credentials: false
+    - name: Recover the hash-authenticated original controller ownership
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: python3 scripts/mustang_artifact_delivery.py owner --out "$RUNNER_TEMP/original-mustang-owner.json"
+    - id: login
+      run: python3 scripts/actions-gcp-login.py login "$MUSTANG_CONTROLLER_SERVICE_ACCOUNT"
+    - name: Stop only the authenticated original Mustang owner
+      run: python3 scripts/mustang_artifact_delivery.py stop --owner "$RUNNER_TEMP/original-mustang-owner.json" --out "$RUNNER_TEMP/original-mustang-stop.json"
+    - name: Clear original JIT metadata after owned STOP
+      run: python3 scripts/mustang_ephemeral.py clear-metadata --execute
+    - if: always() && steps.login.outcome == 'success'
+      run: python3 scripts/actions-gcp-login.py logout
+    - id: cleanup-app
+      uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510
+      with:
+        app-id: ${{ vars.MUSTANG_RUNNER_APP_ID }}
+        private-key: ${{ secrets.MUSTANG_RUNNER_APP_PRIVATE_KEY }}
+        owner: Immortal-Protocols
+    - name: Remove only the original offline group5 runner
+      env:
+        GH_TOKEN: ${{ steps.cleanup-app.outputs.token }}
+      run: python3 scripts/mustang_ephemeral.py sweep --execute --run-id 43074045726
+    - id: bundle
+      name: Bind original artifact bytes and allocation to this delivery
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: python3 scripts/mustang_artifact_delivery.py prepare --out "$RUNNER_TEMP/mustang-artifact-admission"
+    - name: Preserve artifact recovery metadata and owned STOP evidence
+      if: always()
+      continue-on-error: true
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: mustang-artifact-recovery-${{ github.run_id }}-${{ github.run_attempt }}
+        path: |
+          ${{ runner.temp }}/original-mustang-owner.json
+          ${{ runner.temp }}/original-mustang-stop.json
+          ${{ runner.temp }}/mustang-artifact-admission/mustang-signing-bundle.json
+        retention-days: 14
+        if-no-files-found: warn
   signer:
     needs:
     - builder
     - controller
-    if: inputs.dry_run == false && inputs.source_only == false && inputs.hostdeps_only == false && inputs.lock_admin_only == false && inputs.factory_only == false && inputs.vendor_only == false && inputs.otatools_only == false && needs.builder.result == 'success'
+    - guard
+    - artifact-admission
+    if: always() && !cancelled() && needs.guard.result == 'success' && inputs.dry_run == false && inputs.source_only == false && inputs.hostdeps_only == false && inputs.lock_admin_only == false && inputs.factory_only == false && inputs.vendor_only == false && inputs.otatools_only == false && ((inputs.retained_compile_run != '43074045726' && needs.builder.result == 'success') || (inputs.retained_compile_run == '43074045726' && needs.artifact-admission.result == 'success'))
     runs-on:
       group: roseos-mustang-signer
       labels: mustang-signer-4core
@@ -335,7 +403,7 @@ jobs:
     env:
       GCP_WORKLOAD_IDENTITY_PROVIDER: projects/1072799993443/locations/global/workloadIdentityPools/mustang-actions/providers/mustang-main
       GCP_SIGNER_SERVICE_ACCOUNT: ${{ vars.GCP_SIGNER_SERVICE_ACCOUNT }}
-      EXPECTED_FULL_BUNDLE_SHA256: ${{ needs.builder.outputs.bundle_sha256 }}
+      EXPECTED_FULL_BUNDLE_SHA256: ${{ inputs.retained_compile_run == '43074045726' && needs.artifact-admission.outputs.bundle_sha256 || needs.builder.outputs.bundle_sha256 }}
       MUSTANG_OWNER_B64: ${{ needs.controller.outputs.ownership }}
     steps:
     - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -365,9 +433,15 @@ jobs:
         fi
         df -B1 "$RUNNER_TEMP"
     - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      if: inputs.retained_compile_run != '43074045726'
       with:
         name: mustang-signing-bundle-${{ github.run_id }}-${{ github.run_attempt }}
         path: ${{ runner.temp }}/mustang-signing-bundle
+    - name: Materialize the authenticated original bundle for artifact recovery
+      if: inputs.retained_compile_run == '43074045726'
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: python3 scripts/mustang_artifact_delivery.py prepare --out "$RUNNER_TEMP/mustang-signing-bundle"
     - id: preliminary
       name: Metadata gate only; no payload byte verification
       env:
@@ -377,7 +451,9 @@ jobs:
       if: steps.preliminary.outputs.allow == 'true'
       uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
       with:
-        name: mustang-signing-inputs-${{ github.run_id }}-${{ github.run_attempt }}
+        name: mustang-signing-inputs-${{ inputs.retained_compile_run == '43074045726' && inputs.retained_compile_run || github.run_id }}-${{ github.run_attempt }}
+        run-id: ${{ inputs.retained_compile_run == '43074045726' && inputs.retained_compile_run || github.run_id }}
+        github-token: ${{ github.token }}
         path: ${{ runner.temp }}/mustang-signing-bundle/inputs
     - id: verified
       name: Full byte, hash, archive, and peak preflight before any signer secret

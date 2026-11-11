@@ -1,5 +1,55 @@
 # Dedicated retained-output delivery
 
+## Finalized artifact recovery for run 46
+
+Nathan selected salvage of run `43074045726`, build `2611111800`, rather than
+another compile. The exact bundle document is committed at
+`os/build-only/mustang-artifact-bundle-43074045726.json`, canonical SHA-256
+`939882456f53de5991fdbbce3529181927b675e54d337658cd4496ecfbdb647a`.
+Its original downloaded ZIP was 4169 bytes with SHA-256
+`a1de048194f78cc4e53b8fa8affa467af60eda3859723a35bce3801e88470842`.
+Input artifact `13889918815` is 5067975918 bytes, ZIP SHA-256
+`f7a17ed88a5e5846ccd4452f411e3b36a110981c63bd7305e9bb66147fb5afe0`.
+The user supplied the FinalizeArtifact HTML/JSON error; both artifact IDs and that
+ZIP digest were independently listed by GitHub. These are metadata and bundle
+observations; input payload verification is still required on the hosted signer.
+
+The same main workflow accepts `retained_compile_run=43074045726` with
+`publish=true` and every preparation-only flag false. This distinct route skips
+controller start, enrollment, native builder, Make and allocation. It does
+not start the VM or touch native files/cache/clock journal. Guard and artifact
+admission authenticate the exact completed original run, compile/collection
+success, upload-only failure, skipped signer/publisher, both immutable artifacts, and either successful original cleanup or its still
+queued/unexecuted cleanup. Recovery authenticates the original controller owner
+by its exact committed hash, verifies the VM’s numeric identity and original
+last-start timestamp, then uses the existing owned STOP, JIT clear and exact-name
+offline group5 sweep. All three cleanup steps must pass before the signer can
+consume the artifact. Active, failed or unknown original cleanup refuses rather
+than duplicating an uncertain action.
+No denied endpoint is retried by this route; dispatch waits for the operator's
+status-read access hold to be resolved and the old run to be reconciled.
+
+The reviewed delivery source must descend from the compile source, preserving
+signing entry points, identity, manifest, tool pins and verification policy.
+Later app/server changes on main are not included or claimed: this delivers
+source `091ea6c486f1421bf06fde571fa4c5a1feda02b6` and its already selected
+Frankel2026111001 apps (voice370, calculator6, background control41).
+Original compile run, timestamp, allocation and hashes remain unchanged. The
+new delivery run/source are separate and retained through signing/staging/publication.
+The authenticated raised-edge result is rebound to that delivery; this is not a
+new scan claim. The signer downloads the original payload using its existing
+Actions read permission, checks all four file sizes/hashes and executable tools,
+then performs the original capacity/preflight before signer login. No custom
+payload validator, credential, IAM or runner configuration change is introduced.
+
+The existing original-v1 signer, logout, OTA verification and metadata-last
+publisher remain automatic. Publication targets only the new
+`Immortal-Protocols/pixel-ota` tag `mustang-2611111800` and its tag-specific
+`mustang-stable` asset; existing releases, global Latest and rollback remain.
+Signer360-minute and publisher90-minute limits are unchanged. Recovery performs
+no native compute; no end-to-end time guarantee is inferred from source tests.
+
+
 ## Space protection and the expanded data disk
 
 Run 44 reached Ninja task170295 of170307 before the runner reported ENOSPC while

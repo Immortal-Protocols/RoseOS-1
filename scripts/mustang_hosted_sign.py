@@ -207,6 +207,10 @@ def require_full_bundle_source(bundle,root=ROOT):
     native=bound.get('nativeReceipt',{});copied=bound.get('copyReceipt',{})
     import mustang_retained
     compile_run,compile_attempt,compile_source=mustang_retained.compile_context(bundle)
+    if bundle.get('artifactProducer') is not None:
+        import mustang_artifact_delivery
+        mustang_artifact_delivery.require_bundle(bundle,root)
+        mustang_artifact_delivery.compatible(bundle['sourceSha'],root)
     run=dict(runId=compile_run,runAttempt=compile_attempt,source=compile_source,
         workflow='Immortal-Protocols/RoseOS-1/'+lane['workflow']+'@refs/heads/main')
     if bundle.get('retainedProducer') is not None:
@@ -238,6 +242,11 @@ def require_full_bundle_source(bundle,root=ROOT):
 
 def authenticate_full_run(bundle,env,*,api=None,root=ROOT):
     """Correlate completed native producer with this in-progress hosted signer."""
+    if bundle.get('artifactProducer') is not None:
+        import mustang_artifact_delivery
+        mustang_artifact_delivery.require_bundle(bundle,root)
+        event=read_json(env['GITHUB_EVENT_PATH'])
+        return mustang_artifact_delivery.authenticate(env,event,api=api,root=root)
     import base64
     import mustang_bootstrap_collector as collector
     import mustang_lane

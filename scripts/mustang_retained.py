@@ -70,6 +70,12 @@ def proof_identity(value):
 
 
 def compile_context(bundle):
+    if bundle.get('artifactProducer') is not None:
+        import mustang_artifact_delivery
+        result=mustang_artifact_delivery.proof_identity(bundle['artifactProducer'])
+        if str(bundle.get('runId'))==result[0] or str(bundle.get('runAttempt'))!='1' or bundle.get('sourceSha')==result[2]:
+            raise ValueError('artifact producer was relabelled as delivery')
+        return result
     proof=bundle.get('retainedProducer')
     if proof is None:return str(bundle['runId']),str(bundle['runAttempt']),bundle['sourceSha']
     proof_identity(proof)
