@@ -200,6 +200,7 @@ def run(run_id, attempt, lane=None, runtime=None, inputs_dir=None):
         report['stages']['bootstrap-source']={'receipt':bootstrap['receiptFile'],'result':bootstrap['receipt']}
     env = {k:v for k,v in os.environ.items() if k not in SCRUBBED and not k.startswith('GIT_')}
     current = 'source'
+    cache_state = None
 
     def progress(name,status):
         event={'device':'mustang','runId':run_id,'runAttempt':attempt,'source':source,'stage':name,'status':status,
@@ -232,6 +233,16 @@ def run(run_id, attempt, lane=None, runtime=None, inputs_dir=None):
         return result
 
     try:
+        if lane is not None:
+            import mustang_compiler_cache as compiler_cache
+            import mustang_existing_lock
+            current = 'compiler-cache'
+            with mustang_existing_lock.shared(paths['lockPath'], expected=paths['lockPath']):
+                cache_state = compiler_cache.prepare(lane, runtime, root=ROOT)
+            compiler_cache.bind_engine(engine, cache_state, root=ROOT)
+            if cache_state is not None:
+                report['compilerCache'] = cache_state
+                print(json.dumps({'stage': current, 'status': 'enabled', **cache_state}), flush=True)
         for name in ('source', 'git-meta'):
             stage(name)
         if lane is not None:
@@ -331,6 +342,13 @@ def run(run_id, attempt, lane=None, runtime=None, inputs_dir=None):
         report['error'] = f'{type(error).__name__}: {error}'
         raise
     finally:
+        if cache_state is not None:
+            try:
+                compiler_cache.finish(cache_state, root=ROOT)
+                release_receipts.write_once(run_root/'compiler-cache.json', cache_state)
+            except Exception as error:
+                # Reporting must not hide Make's result or interrupt owned cleanup.
+                report['compilerCache']['statisticsError'] = type(error).__name__
         release_receipts.write_once(run_root/'candidate-receipt.json', report)
         print(json.dumps({'device':'mustang', 'source':source, 'receipt':str(run_root/'candidate-receipt.json'),
             'failedStage':report.get('failedStage'), 'unsignedCompileComplete':report.get('unsignedCompileComplete',False),
@@ -346,7 +364,7 @@ def collect_reports(run_id, attempt, out, lane=None):
     out = Path(out)
     out.mkdir(mode=0o700)
     # Fixed receipt names only: no source, keys, APK payloads or factory inputs are uploaded.
-    for name in ('candidate-receipt.json','allocation.json','app-input-admission.json','progress.jsonl'):
+    for name in ('candidate-receipt.json','allocation.json','app-input-admission.json','progress.jsonl','compiler-cache.json'):
         path = base/name
         if path.is_file() and not path.is_symlink():
             shutil.copyfile(path, out/name)

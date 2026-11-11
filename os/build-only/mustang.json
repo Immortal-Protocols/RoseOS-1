@@ -122,7 +122,7 @@
     "allowanceRequired": true,
     "compileAllowanceBytes": 268435456000,
     "compileAllowanceKind": "first-build-proposal",
-    "basis": "Recorded existing proposals only. Reserve checks omitted for the Mustang sprint; byte/time process bounds remain. No capacity measurement is claimed."
+    "basis": "Existing 300GiB reserve and finite stage bounds are now enforced in preflight and sampled process/source-copy supervision. Cache growth counts in the same filesystem usage; this does not change target-file validation or build identities."
   },
   "preparation": {
     "stages": [
@@ -134,7 +134,7 @@
     "productionSourceRootFrom": "os/release-pipeline/frankel.json host.sourceRoot",
     "lockFrom": "os/release-pipeline/frankel.json host.lockPath",
     "boundsKind": "proposal",
-    "boundsBasis": "Existing proposal byte/time ceilings reused; reserve admission and reserve sampling are omitted for this sprint.",
+    "boundsBasis": "Existing finite byte/time ceilings with reserve admission and reserve sampling enabled after the run44 filesystem-exhaustion failure.",
     "source": {
       "boundBytes": 161061273600,
       "timeoutSeconds": 7200,
@@ -217,7 +217,7 @@
   "sprint": {
     "plan": "https://app.notion.com/p/40d7c646c81b81198e60cb76ca2ea603",
     "downloadedInputHashVerification": false,
-    "reserveChecks": false,
+    "reserveChecks": true,
     "packagedAppAndPolicyVerification": false,
     "candidateLabel": "build-and-package candidate; omitted verification remains undone; physical-device acceptance unproven"
   }

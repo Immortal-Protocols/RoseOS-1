@@ -15,6 +15,7 @@ import zipfile
 ROOT = Path(__file__).resolve().parents[2]
 sys.path[:0] = [str(ROOT / 'scripts'), str(Path(__file__).resolve().parent)]
 import mustang_hosted_sign as hosted
+import host_secrets
 import os_release_shape as workflow_shape
 
 WORKFLOW = ROOT / '.github/workflows/mustang-ota-dedicated.yml'
@@ -304,6 +305,18 @@ class HostedSignGateTest(unittest.TestCase):
             config = json.loads(Path(config_path).read_text())
             self.assertEqual(config['host']['sign']['keysSecret'], hosted.KEYS)
             self.assertEqual(config['host']['sign']['secretVersion'], '1')
+            # Exercise the real consumer contract before standing in for signing.
+            read_notes = hosted.host_sign_entry(ROOT).__globals__['release_notes']
+            notes = read_notes(config['host']['sign'], env['ROSE_CANDIDATE_SHA'],
+                               'mustang', env['BUILD_NUMBER'])
+            self.assertIn(b'Mustang 1', notes)
+            self.assertIn(ENV['GITHUB_SHA'].encode(), notes)
+            self.assertIn(b'123', notes)
+            notes_path = Path(config['host']['sign']['updateNotes']['file'])
+            notes_path.write_bytes(notes + b'changed')
+            with self.assertRaisesRegex(host_secrets.AdapterFailed, 'release notes bytes differ from their sha256'):
+                read_notes(config['host']['sign'], env['ROSE_CANDIDATE_SHA'], 'mustang', env['BUILD_NUMBER'])
+            notes_path.write_bytes(notes)
             java = Path(config['host']['sign']['javaHome']) / 'bin' / 'java'
             archive = Path(config['host']['sign']['otatools'])
             self.assertTrue(archive.is_file() and zipfile.is_zipfile(archive))

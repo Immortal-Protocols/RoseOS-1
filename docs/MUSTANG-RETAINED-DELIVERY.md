@@ -1,12 +1,86 @@
 # Dedicated retained-output delivery
 
+## Space protection and the expanded data disk
+
+Run 44 reached Ninja task170295 of170307 before the runner reported ENOSPC while
+writing its diagnostic log. This is not completed compilation. The data disk was
+still1500GiB; Make/collection completion and cache-hit statistics are unknown.
+Owned STOP and metadata/runner cleanup succeeded. Keep the partial output,
+successful run41 output, existing compiler cache and consumed allocation journal.
+
+Disk protection now independently honors `sprint.reserveChecks=true`. The existing
+300GiB reserve and finite source/metadata/lunch/compile bounds are checked before
+each stage and sampled while copying/compiling. Initial guest admission requires
+844GiB free for source, vendor, metadata, lunch, compile and reserve before the
+long source walk starts. Reduced
+target validation remains disabled; no artifact-validation policy is reintroduced.
+
+Nathan proposed increasing the same SSD data disk from1500GiB to3000GiB. Cloud
+preflight verified its unchanged numeric disk/VM identities and stopped VM.
+`scripts/mustang-grow-data-filesystem.sh` prepares the ext4 expansion: it refuses
+wrong VM, mount, UUID, attached device, partitioned device or block-device size,
+then runs only bounded `resize2fs` and emits actual filesystem/inode readback.
+It never formats, deletes build files or changes ownership/ACLs. The second owned maintenance operation completed: the same numeric disk is3000GiB,
+ext4 reports3169514168320 filesystem bytes,1586187993088 available bytes and
+196608000 total inodes. Fresh cloud readback confirms the VM stopped and startup/JIT
+metadata absent. Exact readback is in `os/build-only/mustang-data-growth-20261111.json`. The historical1500GiB infrastructure record remains historical; runtime
+can pin a separately verified expanded inode total without relaxing UUID/device identity.
+
+## Persistent compiler cache
+
+The full automatic dedicated route now enables ccache 4.12.2, pinned by archive
+and executable SHA-256, under the existing Mustang data disk at
+`roseos/rose-actions/compiler-cache-v1`. Its local object cache is capped at 20 GiB and is
+outside the disposable runner workspace. No new host, IAM, credentials, sudo,
+remote cache or disk purchase is needed. Existing compile/disk/time bounds apply.
+
+Run 43 stopped before source copy/allocation/Make because its cache path used the
+administrator-owned `roseos` parent. The cache now uses the runner's existing
+writable `rose-actions` storage, alongside its attempt directories. No ownership,
+ACL, sudo or parent-directory permission change is performed.
+
+Each attempt still gets a fresh source tree and fresh `out-mustang-cache` output
+directory. The stable relative output name, per-source base directory and debug
+prefix map let matching C/C++ compiler results be reused across attempts. Soong's
+pinned `cc/config/global.go` accepts `CC_WRAPPER`; the wrapper establishes cache
+settings after Ninja's environment filtering. Compiler content, arguments and
+headers remain checked, with no sloppy checks or hard-linked outputs. Java,
+Soong/Ninja intermediates and entire completed build archives are not cached by
+this layer. Unsupported compilations pass through ccache to the compiler.
+
+Run 41 predates ccache, so its object files cannot populate ccache after the fact.
+Its complete unsigned outputs and original allocation/journal remain untouched.
+The next build starts with a cold compiler cache and populates it for later runs.
+`compiler-cache.json`, the candidate receipt and the job log record before/after
+statistics and deltas, including hits, misses and stored size. A cold or changed
+input is not called a cache hit. Make still runs and the collected target ZIP
+must contain the current allocation's actual device/build/timestamp before the
+same automatic signing and publication stages can proceed.
+
+References: [pinned Soong wrapper](https://github.com/GrapheneOS/platform_build_soong/blob/250710f7f87acfbb8e3c517d90abde8b4a08fe1e/cc/config/global.go),
+[ccache 4.12.2](https://github.com/ccache/ccache/releases/tag/v4.12.2) and its bundled
+manual, including compiler-content checks, path normalization and local size limits.
+
+The hosted signer supplies generated, hash-bound `UPDATE.md` bytes through the
+existing host-sign release-notes contract. The notes identify the build and
+separate compile and delivery sources/runs. Run 42937365659 compiled and passed
+signer preflight, then stopped before key retrieval because the adapter supplied
+the absolute release-script path as a candidate-commit notes path. That script
+is executable input, not release notes; its existing pin remains unchanged.
+
+Mustang build-stage stdout and stderr stream directly to the GitHub Actions
+builder job log, which is retained on success and failure. Captured lunch output
+and other devices keep their existing behavior. Make's exit code, process-group
+cleanup and resource limits are unchanged. Run 42907732655 predates this fix;
+its discarded compiler stdout cannot be recovered from the uploaded receipts.
+
 Current policy: Nathan disabled the custom target-files archive validator. The
 runtime passes authenticated, hash-checked target files unchanged to the pinned
 Android signing tools and emits no custom target-validation proof. Executable
 archive, provenance, capacity and signature checks remain. The validator sections
 below describe the prior implementation, which remains unused library code.
 
-For dedicated workflow run number 40 only, Nathan selected the verified
+For dedicated workflow run number 45 only, Nathan renewed the choice to use the verified
 `frankel-2026111001` apps (voice 370) instead of refreshing the app export.
 The runtime binds the exact record-byte hash to this one run number.
 Later workflow runs do not inherit this choice. The candidate

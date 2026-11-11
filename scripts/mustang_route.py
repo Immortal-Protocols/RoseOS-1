@@ -524,14 +524,30 @@ def evaluate_guest(obs, lane, cfg, root=ROOT):
         raise ValueError('dedicated data filesystem has no available bytes/inodes')
     if uuid == mustang_lane.CONFIRMED_UUID:
         total = obs.get('totalInodes')
-        if type(total) is not int or total != mustang_lane.CONFIRMED_TOTAL_INODES or inodes > total:
+        expected_total = cfg.get('dataFilesystemTotalInodes', mustang_lane.CONFIRMED_TOTAL_INODES)
+        if type(expected_total) is not int or expected_total < mustang_lane.CONFIRMED_TOTAL_INODES \
+                or type(total) is not int or total != expected_total or inodes > total:
             raise ValueError('dedicated data filesystem inode count differs')
         if available < compile_peak(root):
             raise ValueError('dedicated data filesystem free bytes are below the recorded compile peak')
         euid = obs.get('euid', os.geteuid())
         if type(euid) is not int or euid == 0:
             raise ValueError('dedicated runner must be a nonroot user')
+        recipe = load(Path(root)/'os/build-only/mustang.json')
+        if recipe.get('sprint', {}).get('reserveChecks') is True:
+            required = full_run_disk_budget(recipe)
+            if available < required:
+                raise ValueError(f'dedicated data filesystem needs {required} free bytes for source, metadata, lunch, '
+                                 f'compile and reserve; observed {available}')
     return {'identity': 'matched', 'availableBytes': available, 'availableInodes': inodes, 'admitted': False}
+
+
+def full_run_disk_budget(recipe):
+    """Existing stage ceilings plus the existing runner/reporting reserve."""
+    return (recipe['preparation']['source']['boundBytes'] + recipe['gitMeta']['boundBytes']
+            + recipe['preparation']['vendor']['boundBytes'] + recipe['preparation']['lunch']['boundBytes']
+            + recipe['capacity']['compileAllowanceBytes']
+            + recipe['capacity']['reserveBytes'])
 
 
 COPY_TIME_SELECTION = '34cdc3a98e8cfc614a88c5a40d002c51e87404aaec8a4f2962cb46e824c4f6e4'
